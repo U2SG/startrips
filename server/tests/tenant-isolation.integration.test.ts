@@ -175,16 +175,6 @@ describe("authenticated tenant boundary", () => {
     expect(createB.status).toBe(201);
     const privateB = await createB.json() as { journey: { id: string } };
 
-    const forgedSwitch = await app.request(
-      `${TEST_ORIGIN}/api/auth/organization/set-active`,
-      {
-        method: "POST",
-        headers: authHeaders(identityA.cookie),
-        body: JSON.stringify({ organizationId: identityB.organizationId }),
-      },
-    );
-    expect(forgedSwitch.ok).toBe(false);
-
     const visibleToA = await app.request(
       `${TEST_ORIGIN}/api/journeys?organizationId=${identityB.organizationId}`,
       {
@@ -211,6 +201,24 @@ describe("authenticated tenant boundary", () => {
       },
     );
     expect(crossAtlasUpdate.status).toBe(404);
+
+    const forgedSwitch = await app.request(
+      `${TEST_ORIGIN}/api/auth/organization/set-active`,
+      {
+        method: "POST",
+        headers: authHeaders(identityA.cookie),
+        body: JSON.stringify({ organizationId: identityB.organizationId }),
+      },
+    );
+    expect(forgedSwitch.ok).toBe(false);
+
+    const afterForgedSwitch = await app.request(`${TEST_ORIGIN}/api/journeys`, {
+      headers: authHeaders(identityA.cookie),
+    });
+    expect(afterForgedSwitch.status).toBe(409);
+    await expect(afterForgedSwitch.json()).resolves.toMatchObject({
+      error: "ACTIVE_ORGANIZATION_REQUIRED",
+    });
   });
 
   it("serializes concurrent inserts at the two-member database limit", async () => {
