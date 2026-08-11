@@ -85,16 +85,12 @@ async function createVerifiedSession(label: string) {
     body: JSON.stringify({ email, password }),
   });
   expect(signIn.status).toBe(200);
+  const signInPayload = await signIn.json() as { user: { id: string } };
   const cookie = signIn.headers
     .get("set-cookie")
     ?.match(/(?:__Secure-)?startrips\.session_token=[^;,\s]+/)?.[0];
   expect(cookie).toBeTruthy();
-  const [user] = await db
-    .select({ id: authUsers.id })
-    .from(authUsers)
-    .where(eq(authUsers.email, email))
-    .limit(1);
-  return { cookie: cookie!, userId: user.id };
+  return { cookie: cookie!, userId: signInPayload.user.id };
 }
 
 async function createAuthenticatedAtlas(label: string) {
