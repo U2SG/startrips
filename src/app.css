@@ -1,0 +1,434 @@
+:root {
+  color: #d7e1dc;
+  background: #020706;
+  font-family: Inter, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-synthesis: none;
+  text-rendering: geometricPrecision;
+}
+
+@font-face {
+  font-family: "Doto Archive";
+  src: url("/fonts/Doto-ROND-wght.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+button {
+  color: inherit;
+  font: inherit;
+}
+
+.experience {
+  position: relative;
+  width: 100%;
+  min-height: 100%;
+  overflow: hidden;
+  isolation: isolate;
+  background:
+    linear-gradient(90deg, rgba(2, 7, 6, 0.16), rgba(2, 7, 6, 0.74) 78%),
+    #020706;
+}
+
+.particle-earth-scene,
+.particle-earth-scene canvas,
+.scene-vignette {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.particle-earth-scene canvas {
+  display: block;
+}
+
+.scene-vignette {
+  pointer-events: none;
+  z-index: 1;
+  background:
+    radial-gradient(circle at 32% 40%, transparent 0 28%, rgba(2, 7, 6, 0.08) 48%, rgba(2, 7, 6, 0.62) 100%),
+    linear-gradient(180deg, rgba(2, 7, 6, 0.4), transparent 22%, transparent 73%, rgba(2, 7, 6, 0.76));
+}
+
+.global-header,
+.world-nav,
+.intro-copy,
+.archive-burst-copy,
+.brand-transition,
+.surface-index,
+.personal-signal,
+.scene-telemetry,
+.signal-strip {
+  position: absolute;
+  z-index: 2;
+}
+
+.global-header {
+  top: 26px;
+  left: 34px;
+  right: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  letter-spacing: 0.26em;
+  text-transform: uppercase;
+}
+
+.global-header {
+  z-index: 6;
+}
+
+.archive-name {
+  font-size: 9px;
+  color: rgba(177, 201, 192, 0.54);
+}
+
+.profile-name {
+  color: #f2f5f3;
+  font-size: clamp(22px, 2.35vw, 32px);
+  font-weight: 350;
+  letter-spacing: -0.025em;
+  text-transform: none;
+}
+
+.world-nav {
+  top: 78px;
+  right: 36px;
+  display: flex;
+  gap: 18px;
+  align-items: center;
+  color: rgba(173, 200, 190, 0.48);
+  font-size: 9px;
+  letter-spacing: 0.22em;
+}
+
+.world-nav button,
+.world-nav span {
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
+.world-nav button {
+  cursor: pointer;
+}
+
+.world-nav button:hover,
+.world-nav button:focus-visible {
+  color: #8ff5df;
+}
+
+.intro-copy,
+.archive-burst-copy,
+.personal-signal {
+  left: clamp(36px, 5vw, 74px);
+  bottom: 92px;
+  width: min(410px, 40vw);
+}
+
+.eyebrow {
+  margin: 0 0 18px;
+  color: #73e5ce;
+  font-size: 9px;
+  line-height: 1;
+  letter-spacing: 0.23em;
+}
+
+.intro-copy h1,
+.archive-burst-copy h1,
+.personal-signal h1 {
+  margin: 0;
+  color: #e8efeb;
+  font-family: Georgia, "Songti SC", "SimSun", serif;
+  font-size: clamp(42px, 5vw, 70px);
+  font-weight: 400;
+  line-height: 1.06;
+  letter-spacing: -0.055em;
+}
+
+.lede,
+.personal-signal > p:last-child {
+  max-width: 360px;
+  margin: 20px 0 0;
+  color: rgba(189, 207, 200, 0.66);
+  font-size: 12px;
+  line-height: 1.8;
+}
+
+.primary-cta {
+  min-width: 210px;
+  margin-top: 26px;
+  padding: 13px 18px;
+  border: 1px solid rgba(108, 225, 198, 0.38);
+  border-radius: 0;
+  background: rgba(11, 55, 48, 0.54);
+  color: #dff7ef;
+  cursor: pointer;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-align: left;
+}
+
+.primary-cta:hover,
+.primary-cta:focus-visible {
+  border-color: #6ce1c6;
+  background: rgba(18, 80, 68, 0.68);
+}
+
+.brand-transition {
+  top: 70px;
+  left: 44px;
+  display: flex;
+  flex-direction: column;
+  color: #625fff;
+  font-family: "Doto Archive", monospace;
+  font-size: clamp(104px, 15.6vw, 200px);
+  font-variation-settings: "ROND" 100;
+  font-weight: 720;
+  line-height: 0.86;
+  letter-spacing: -0.075em;
+  opacity: 0.96;
+  transform: scaleX(1.14);
+  transform-origin: 0 0;
+}
+
+.state-brand-transition .archive-name,
+.state-brand-transition .world-nav,
+.state-brand-transition .scene-telemetry,
+.state-brand-transition .signal-strip {
+  display: none;
+}
+
+.state-brand-transition .particle-earth-scene {
+  transform: translate(-2%, 58%) scale(1.15);
+  transform-origin: 50% 50%;
+}
+
+.state-brand-transition .scene-vignette {
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.04), rgba(0, 0, 0, 0.18) 58%, rgba(0, 0, 0, 0.7));
+}
+
+.phase-artworkBrowser .archive-name,
+.phase-artworkDetail .archive-name {
+  opacity: 0;
+}
+
+.surface-index {
+  top: 106px;
+  left: 38px;
+  width: 194px;
+  padding: 17px 14px 15px;
+  border: 1px solid rgba(126, 173, 160, 0.18);
+  background: rgba(7, 18, 17, 0.78);
+}
+
+.surface-index-number {
+  color: rgba(224, 237, 232, 0.72);
+  font-family: Georgia, serif;
+  font-size: 52px;
+  line-height: 1;
+}
+
+.surface-index > p {
+  margin: 16px 0 8px;
+  color: #70e4cb;
+  font-size: 8px;
+  letter-spacing: 0.28em;
+}
+
+.surface-index h1 {
+  margin: 0 0 22px;
+  color: #e6eee9;
+  font-family: Georgia, "Songti SC", serif;
+  font-size: 18px;
+  font-weight: 400;
+  line-height: 1.2;
+}
+
+.surface-index dl {
+  margin: 0;
+}
+
+.surface-index dl div {
+  display: grid;
+  grid-template-columns: 60px 1fr;
+  gap: 12px;
+  padding: 8px 0;
+  border-top: 1px solid rgba(164, 195, 184, 0.09);
+}
+
+.surface-index dt,
+.surface-index dd {
+  margin: 0;
+  font-size: 8px;
+  line-height: 1.5;
+}
+
+.surface-index dt {
+  color: rgba(104, 224, 197, 0.66);
+  letter-spacing: 0.18em;
+}
+
+.surface-index dd {
+  color: rgba(200, 216, 209, 0.62);
+}
+
+.text-action {
+  margin-top: 18px;
+  padding: 8px 0;
+  border: 0;
+  border-bottom: 1px solid rgba(111, 225, 200, 0.34);
+  background: none;
+  color: #d9eee7;
+  cursor: pointer;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+}
+
+.scene-telemetry {
+  top: 46%;
+  right: 34px;
+  display: grid;
+  gap: 7px;
+  color: rgba(132, 175, 160, 0.32);
+  font-family: Consolas, monospace;
+  font-size: 8px;
+  letter-spacing: 0.12em;
+  text-align: right;
+}
+
+.signal-strip {
+  left: 34px;
+  right: 34px;
+  bottom: 20px;
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  padding: 8px 16px;
+  border: 1px solid rgba(106, 213, 111, 0.16);
+  border-left: 2px solid #75dc78;
+  background: rgba(6, 24, 14, 0.62);
+  color: rgba(198, 217, 207, 0.76);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+}
+
+.phase-archive .signal-strip,
+.phase-artworkBrowser .signal-strip,
+.phase-artworkDetail .signal-strip {
+  right: max(80px, calc((100vw - 880px) / 2));
+  bottom: 32px;
+  left: max(80px, calc((100vw - 880px) / 2));
+  z-index: 6;
+  min-height: 74px;
+  padding: 14px 20px;
+  border-radius: 12px;
+  background: rgba(4, 17, 13, 0.88);
+  font-size: 18px;
+  letter-spacing: 0.01em;
+}
+
+.phase-archive .signal-strip strong,
+.phase-artworkBrowser .signal-strip strong,
+.phase-artworkDetail .signal-strip strong {
+  font-size: 11px;
+  letter-spacing: 0.16em;
+}
+
+.signal-strip strong {
+  color: #82df7f;
+  font-size: 8px;
+  letter-spacing: 0.2em;
+}
+
+@media (max-width: 720px) {
+  .global-header {
+    top: 18px;
+    left: 20px;
+    right: 20px;
+  }
+
+  .archive-name,
+  .scene-telemetry {
+    display: none;
+  }
+
+  .world-nav {
+    top: 56px;
+    right: 20px;
+  }
+
+  .intro-copy,
+  .archive-burst-copy,
+  .personal-signal {
+    left: 22px;
+    right: 22px;
+    bottom: 92px;
+    width: auto;
+  }
+
+  .intro-copy h1,
+  .archive-burst-copy h1,
+  .personal-signal h1 {
+    font-size: 42px;
+  }
+
+  .surface-index {
+    top: 100px;
+    left: 22px;
+    width: 236px;
+  }
+
+  .brand-transition {
+    left: 20px;
+    bottom: 126px;
+    font-size: 68px;
+  }
+
+  .signal-strip {
+    left: 20px;
+    right: 20px;
+  }
+
+  .phase-archive .signal-strip,
+  .phase-artworkBrowser .signal-strip,
+  .phase-artworkDetail .signal-strip {
+    right: 20px;
+    bottom: 20px;
+    left: 20px;
+    min-height: 58px;
+    padding: 10px 14px;
+    border-radius: 0;
+    font-size: 10px;
+  }
+
+  .signal-strip span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}

@@ -1,0 +1,14 @@
+:root {
+  --archive-bg: #020706;
+  --archive-ink: #e6eee9;
+  --archive-muted: rgba(190, 209, 201, 0.56);
+  --archive-faint: rgba(150, 184, 172, 0.28);
+  --archive-line: rgba(136, 188, 172, 0.16);
+  --archive-cyan: #74e7d0;
+  --archive-green: #c8ff3d;
+  --archive-purple: #6256ef;
+  --archive-edge: clamp(24px, 3vw, 40px);
+  --archive-log-height: 76px;
+  --archive-serif: Georgia, "Songti SC", "STSong", serif;
+  --archive-sans: Inter, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+}

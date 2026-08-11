@@ -1,0 +1,54 @@
+{
+  "name": "startrips",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "packageManager": "pnpm@10.17.1",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  },
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "dev:api": "tsx watch server/index.ts",
+    "build": "vite build",
+    "test": "vitest run --maxWorkers=1",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.server.json --noEmit",
+    "typecheck:server": "tsc -p tsconfig.server.json --noEmit",
+    "auth:schema": "auth generate --config server/auth.ts --output server/db/auth-schema.ts --yes",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "qa:states": "node scripts/capture-comparison-states.mjs",
+    "qa:memory": "node scripts/check-earth-memory.mjs",
+    "qa:preview": "node scripts/preview-qa.mjs"
+  },
+  "dependencies": {
+    "@better-auth/drizzle-adapter": "1.6.23",
+    "@hono/node-server": "^2.1.0",
+    "@tabler/icons-react": "^3.46.0",
+    "better-auth": "1.6.23",
+    "drizzle-orm": "^0.45.2",
+    "hono": "^4.13.1",
+    "nodemailer": "^9.0.5",
+    "pg": "^8.23.0",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "three": "^0.179.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "@types/nodemailer": "^8.0.1",
+    "@types/pg": "^8.21.0",
+    "@types/react": "^19.1.10",
+    "@types/react-dom": "^19.1.7",
+    "@types/three": "^0.179.0",
+    "auth": "1.6.23",
+    "drizzle-kit": "^0.31.10",
+    "playwright-core": "1.55.0",
+    "tsx": "^4.23.12",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.2",
+    "vitest": "^3.2.4"
+  }
+}

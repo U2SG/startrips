@@ -1,0 +1,15 @@
+.DS_Store
+node_modules/
+dist/
+coverage/
+.env
+.env.*
+!.env.example
+.preview-*
+.qa-*.png
+/task_plan.md
+/findings.md
+/progress.md
+/docs/plans/
+/docs/qa/
+/docs/reference/

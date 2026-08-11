@@ -1,0 +1,133 @@
+import { Hono } from "hono";
+import { requireAtlasAccess } from "../authorization/atlas-access";
+import {
+  createJourneyForAtlas,
+  deleteJourneyForAtlas,
+  listJourneysForAtlas,
+  updateJourneyForAtlas,
+  type JourneyValues,
+} from "../repositories/journey-repository";
+
+const MAX_ROUTE_POINTS = 64;
+
+type JourneyInput = {
+  title?: unknown;
+  startedOn?: unknown;
+  endedOn?: unknown;
+  note?: unknown;
+  lightColor?: unknown;
+  routePoints?: unknown;
+};
+
+function validDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(parsed.valueOf())
+    && parsed.toISOString().slice(0, 10) === value;
+}
+
+function parseJourneyInput(body: JourneyInput): JourneyValues | null {
+  const title = typeof body.title === "string" ? body.title.trim() : "";
+  const startedOn = typeof body.startedOn === "string" ? body.startedOn.trim() : "";
+  const endedOn = body.endedOn === null || body.endedOn === ""
+    ? null
+    : typeof body.endedOn === "string"
+      ? body.endedOn.trim()
+      : "invalid";
+  const note = typeof body.note === "string" ? body.note.trim() : "";
+  const lightColor = typeof body.lightColor === "string"
+    ? body.lightColor.trim()
+    : "#f4ce73";
+  if (
+    !title
+    || title.length > 80
+    || !validDate(startedOn)
+    || (endedOn !== null && !validDate(endedOn))
+    || (endedOn !== null && endedOn < startedOn)
+    || note.length > 2000
+    || !/^#[0-9a-fA-F]{6}$/.test(lightColor)
+    || !Array.isArray(body.routePoints)
+    || body.routePoints.length < 1
+    || body.routePoints.length > MAX_ROUTE_POINTS
+  ) {
+    return null;
+  }
+
+  let previousOccurredAt = "";
+  const routePoints: JourneyValues["routePoints"] = [];
+  for (const rawPoint of body.routePoints) {
+    if (!rawPoint || typeof rawPoint !== "object") return null;
+    const point = rawPoint as Record<string, unknown>;
+    const latitude = Number(point.latitude);
+    const longitude = Number(point.longitude);
+    const label = typeof point.label === "string" ? point.label.trim() : "";
+    const isStop = point.isStop === true;
+    const occurredAt = point.occurredAt === null || point.occurredAt === ""
+      ? null
+      : typeof point.occurredAt === "string"
+        ? new Date(point.occurredAt)
+        : new Date(Number.NaN);
+    if (
+      !Number.isFinite(latitude)
+      || latitude < -90
+      || latitude > 90
+      || !Number.isFinite(longitude)
+      || longitude < -180
+      || longitude > 180
+      || label.length > 120
+      || (isStop && !label)
+      || (occurredAt !== null && Number.isNaN(occurredAt.valueOf()))
+    ) {
+      return null;
+    }
+    if (occurredAt) {
+      const canonical = occurredAt.toISOString();
+      if (previousOccurredAt && canonical < previousOccurredAt) return null;
+      previousOccurredAt = canonical;
+    }
+    routePoints.push({ latitude, longitude, label, isStop, occurredAt });
+  }
+
+  return { title, startedOn, endedOn, note, lightColor, routePoints };
+}
+
+export const journeyRoutes = new Hono();
+
+journeyRoutes.get("/", async (context) => {
+  const { atlas } = await requireAtlasAccess(context.req.raw, "read");
+  return context.json({ journeys: await listJourneysForAtlas(atlas.id) });
+});
+
+journeyRoutes.post("/", async (context) => {
+  const { atlas, session } = await requireAtlasAccess(context.req.raw, "create");
+  const input = parseJourneyInput(await context.req.json<JourneyInput>());
+  if (!input) {
+    return context.json(
+      { error: "INVALID_JOURNEY", message: "Invalid journey data" },
+      400,
+    );
+  }
+  const journey = await createJourneyForAtlas(atlas.id, session.user.id, input);
+  return context.json({ journey }, 201);
+});
+
+journeyRoutes.patch("/:id", async (context) => {
+  const { atlas } = await requireAtlasAccess(context.req.raw, "update");
+  const input = parseJourneyInput(await context.req.json<JourneyInput>());
+  if (!input) {
+    return context.json(
+      { error: "INVALID_JOURNEY", message: "Invalid journey data" },
+      400,
+    );
+  }
+  const journey = await updateJourneyForAtlas(context.req.param("id"), atlas.id, input);
+  if (!journey) return context.json({ error: "JOURNEY_NOT_FOUND" }, 404);
+  return context.json({ journey });
+});
+
+journeyRoutes.delete("/:id", async (context) => {
+  const { atlas } = await requireAtlasAccess(context.req.raw, "delete");
+  const journey = await deleteJourneyForAtlas(context.req.param("id"), atlas.id);
+  if (!journey) return context.json({ error: "JOURNEY_NOT_FOUND" }, 404);
+  return context.body(null, 204);
+});

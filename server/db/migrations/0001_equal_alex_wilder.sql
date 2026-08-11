@@ -1,0 +1,1 @@
+ALTER TABLE "media_uploads" ADD COLUMN "completion_attempt_id" text;

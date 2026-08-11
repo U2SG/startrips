@@ -1,0 +1,56 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: startrips_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d startrips_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      APP_ORIGIN: http://127.0.0.1:5173
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/startrips_test
+      DATABASE_SSL: "false"
+      BETTER_AUTH_SECRET: ci-only-secret-with-more-than-thirty-two-bytes
+      STORAGE_DRIVER: disabled
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.17.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Verify generated auth schema
+        run: |
+          pnpm auth:schema
+          git diff --exit-code -- server/db/auth-schema.ts
+      - name: Apply migrations to isolated PostgreSQL
+        run: pnpm db:migrate
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Test
+        run: pnpm test
+      - name: Build
+        run: pnpm build

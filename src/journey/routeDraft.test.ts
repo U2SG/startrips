@@ -1,0 +1,54 @@
+import { describe, expect, it } from "vitest";
+import {
+  appendRoutePoint,
+  moveRoutePoint,
+  removeRoutePoint,
+  routeDraftToInput,
+  toggleRouteStop,
+  updateRoutePoint,
+  type RouteDraftPoint,
+} from "./routeDraft";
+
+const beijing: RouteDraftPoint = {
+  draftId: "beijing",
+  latitude: 39.9042,
+  longitude: 116.4074,
+  label: "Beijing",
+  isStop: true,
+  occurredAt: null,
+};
+
+const ulanBator: RouteDraftPoint = {
+  draftId: "ulan-bator",
+  latitude: 47.8864,
+  longitude: 106.9057,
+  label: "Ulaanbaatar",
+  isStop: true,
+  occurredAt: null,
+};
+
+describe("route draft operations", () => {
+  it("appends, updates, reorders, toggles, and removes without mutating input", () => {
+    const original = [beijing];
+    const appended = appendRoutePoint(original, ulanBator);
+    const moved = moveRoutePoint(appended, "ulan-bator", -1);
+    const updated = updateRoutePoint(moved, "beijing", { label: " Beijing " });
+    const toggled = toggleRouteStop(updated, "ulan-bator");
+    const removed = removeRoutePoint(toggled, "beijing");
+
+    expect(original).toEqual([beijing]);
+    expect(moved.map((point) => point.draftId)).toEqual([
+      "ulan-bator",
+      "beijing",
+    ]);
+    expect(routeDraftToInput(updated)[1].label).toBe("Beijing");
+    expect(toggled[0].isStop).toBe(false);
+    expect(removed.map((point) => point.draftId)).toEqual(["ulan-bator"]);
+  });
+
+  it("leaves ordering unchanged at either boundary", () => {
+    const points = [beijing, ulanBator];
+    expect(moveRoutePoint(points, "beijing", -1)).toEqual(points);
+    expect(moveRoutePoint(points, "ulan-bator", 1)).toEqual(points);
+  });
+});

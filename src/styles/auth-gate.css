@@ -1,0 +1,121 @@
+.auth-gate {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 32px 20px;
+  color: #f0eadc;
+  background: radial-gradient(circle at 50% 0%, #192530 0, #090d11 44%, #050607 100%);
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+}
+
+.auth-card {
+  width: min(100%, 440px);
+  padding: 34px;
+  border: 1px solid rgba(240, 234, 220, 0.18);
+  background: rgba(8, 11, 14, 0.88);
+  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.42);
+}
+
+.auth-eyebrow,
+.auth-card label span,
+.auth-loading {
+  color: #bcb29f;
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.auth-card h1 { margin: 10px 0 12px; font-family: Georgia, serif; font-size: clamp(32px, 7vw, 52px); font-weight: 400; line-height: 1; }
+.auth-copy { color: #aaa498; font-size: 14px; line-height: 1.7; }
+.auth-card form { display: grid; gap: 16px; margin-top: 26px; }
+.auth-card label { display: grid; gap: 8px; }
+.auth-card input,
+.auth-card textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border: 0;
+  border-bottom: 1px solid rgba(240, 234, 220, 0.28);
+  padding: 10px 0;
+  color: #f5f0e7;
+  background: transparent;
+  font: inherit;
+  outline: none;
+}
+.auth-card input:focus,
+.auth-card textarea:focus { border-color: #e8c87a; }
+.auth-primary {
+  border: 1px solid #e8c87a;
+  padding: 13px 18px;
+  color: #15120b;
+  background: #e8c87a;
+  cursor: pointer;
+  font: inherit;
+}
+.auth-primary:disabled { cursor: wait; opacity: 0.55; }
+.auth-message { margin: 18px 0 0; color: #d7a87d; font-size: 13px; line-height: 1.5; }
+.auth-switches { display: flex; justify-content: space-between; gap: 12px; margin-top: 22px; }
+.auth-switches button,
+.auth-link { border: 0; padding: 0; color: #aaa498; background: none; cursor: pointer; font: inherit; font-size: 12px; text-decoration: underline; }
+.auth-choice-list { display: grid; gap: 10px; margin-top: 24px; }
+.auth-choice-list button { display: flex; justify-content: space-between; border: 1px solid rgba(240, 234, 220, 0.18); padding: 14px; color: inherit; background: transparent; cursor: pointer; }
+
+.account-dock {
+  position: fixed;
+  z-index: 100;
+  top: 14px;
+  right: 18px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(620px, calc(100vw - 36px));
+  padding: 8px 10px;
+  color: #d9d3c7;
+  background: rgba(5, 7, 9, 0.74);
+  border: 1px solid rgba(240, 234, 220, 0.14);
+  backdrop-filter: blur(16px);
+  font: 11px/1.2 Inter, ui-sans-serif, system-ui, sans-serif;
+}
+.account-dock button { min-height: 32px; border: 0; padding: 4px 7px; color: #e8c87a; background: none; cursor: pointer; font: inherit; }
+.account-dock button:focus-visible,
+.account-dock input:focus-visible { outline: 1px solid #c8ff3d; outline-offset: 2px; }
+.account-dock form { position: absolute; top: calc(100% + 8px); right: 0; width: 260px; padding: 14px; border: 1px solid rgba(240, 234, 220, 0.18); background: #0b0f13; }
+.account-dock form label { display: grid; gap: 6px; }
+.account-dock form input { border: 1px solid rgba(240, 234, 220, 0.2); padding: 8px; color: white; background: transparent; }
+
+body:has(.living-atlas) .account-dock {
+  z-index: 90;
+  top: 12px;
+  right: 16px;
+  max-width: 282px;
+  min-height: 42px;
+  border-color: rgba(118, 198, 188, 0.17);
+  background: rgba(1, 7, 8, 0.9);
+  color: #9bada8;
+  backdrop-filter: blur(14px);
+}
+
+body:has(.living-atlas) .account-dock button {
+  color: #c8ff3d;
+}
+
+@media (max-width: 760px) {
+  body:has(.living-atlas) .account-dock {
+    top: 66px;
+    right: 10px;
+    min-height: 44px;
+  }
+  body:has(.living-atlas) .account-dock span {
+    display: none;
+  }
+  body:has(.living-atlas) .account-dock button {
+    min-height: 44px;
+  }
+  body:has(.living-atlas) .account-dock form input {
+    min-height: 44px;
+  }
+}
+
+@media (max-width: 640px) {
+  .auth-card { padding: 26px 22px; }
+  .account-dock span { display: none; }
+}
