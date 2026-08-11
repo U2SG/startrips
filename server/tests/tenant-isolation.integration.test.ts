@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
+import { createEmailVerificationToken } from "better-auth/api";
 import { count, eq, inArray } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { app } from "../app";
+import { serverConfig } from "../config";
 import { atlases, journeys, mediaUploads } from "../db/app-schema";
 import {
   member as authMembers,
@@ -67,10 +69,16 @@ async function createVerifiedSession(label: string) {
   });
   expect(signUp.status).toBe(200);
 
-  await db
-    .update(authUsers)
-    .set({ emailVerified: true, updatedAt: new Date() })
-    .where(eq(authUsers.email, email));
+  const verificationToken = await createEmailVerificationToken(
+    serverConfig.authSecret,
+    email,
+  );
+  const verification = await app.request(
+    `${TEST_ORIGIN}/api/auth/verify-email?token=${encodeURIComponent(verificationToken)}`,
+    { headers: authHeaders() },
+  );
+  expect(verification.status).toBe(200);
+
   const signIn = await app.request(`${TEST_ORIGIN}/api/auth/sign-in/email`, {
     method: "POST",
     headers: authHeaders(),
