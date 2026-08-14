@@ -342,6 +342,7 @@ interface ParticleEarthSceneProps {
   activeJourneyRouteId?: string | null;
   onJourneyRouteActivate?: (id: string) => void;
   onJourneyRoutePointActivate?: (journeyId: string, routePointId: string) => void;
+  onReady?: () => void;
   onDetailRequested?: () => void;
   onGlobePointPick?: (point: { latitude: number; longitude: number }) => void;
   dragToRotate?: boolean;
@@ -515,6 +516,7 @@ export function ParticleEarthScene({
   activeJourneyRouteId,
   onJourneyRouteActivate,
   onJourneyRoutePointActivate,
+  onReady,
   onDetailRequested,
   onGlobePointPick,
   dragToRotate = false,
@@ -530,6 +532,7 @@ export function ParticleEarthScene({
   const latestActiveJourneyRouteId = useRef(activeJourneyRouteId);
   const latestOnJourneyRouteActivate = useRef(onJourneyRouteActivate);
   const latestOnJourneyRoutePointActivate = useRef(onJourneyRoutePointActivate);
+  const latestOnReady = useRef(onReady);
   const latestOnDetailRequested = useRef(onDetailRequested);
   const latestOnGlobePointPick = useRef(onGlobePointPick);
   const latestDragToRotate = useRef(dragToRotate);
@@ -542,6 +545,7 @@ export function ParticleEarthScene({
   latestActiveJourneyRouteId.current = activeJourneyRouteId;
   latestOnJourneyRouteActivate.current = onJourneyRouteActivate;
   latestOnJourneyRoutePointActivate.current = onJourneyRoutePointActivate;
+  latestOnReady.current = onReady;
   latestOnDetailRequested.current = onDetailRequested;
   latestOnGlobePointPick.current = onGlobePointPick;
   latestDragToRotate.current = dragToRotate;
@@ -1647,6 +1651,7 @@ export function ParticleEarthScene({
       if (coastlinePositions.length > 0) coastlineGeometry.computeBoundingSphere();
       host.dataset.coastlineVertices = String(coastlinePositions.length / 3);
       setReady(true);
+      latestOnReady.current?.();
     });
 
     applyFocusPoint(latestFocusPoint.current);

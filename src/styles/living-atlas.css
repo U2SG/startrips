@@ -59,6 +59,7 @@
 }
 
 .living-atlas-globe,
+.living-atlas-globe__layer,
 .detailed-earth-map,
 .living-atlas-globe__loading {
   position: absolute;
@@ -69,6 +70,35 @@
 
 .living-atlas-globe {
   overflow: hidden;
+}
+
+.living-atlas-globe__layer {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 900ms cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: opacity;
+}
+
+.living-atlas-globe__particle-layer {
+  z-index: 1;
+}
+
+.living-atlas-globe__detail-layer {
+  z-index: 2;
+}
+
+.living-atlas-globe.is-overview .living-atlas-globe__particle-layer,
+.living-atlas-globe.is-detail .living-atlas-globe__detail-layer,
+.living-atlas-globe.is-to-particle.is-target-ready .living-atlas-globe__particle-layer,
+.living-atlas-globe.is-to-detail.is-target-ready .living-atlas-globe__detail-layer {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.living-atlas-globe.is-to-detail.is-target-ready .living-atlas-globe__particle-layer,
+.living-atlas-globe.is-to-particle.is-target-ready .living-atlas-globe__detail-layer {
+  opacity: 0;
+  pointer-events: none;
 }
 
 .living-atlas-globe__loading {
@@ -116,6 +146,20 @@
   color: #9fb4ae;
 }
 
+.living-atlas-globe__transition-status {
+  position: absolute;
+  z-index: 7;
+  right: 28px;
+  bottom: 28px;
+  color: rgba(189, 208, 202, 0.78);
+  font: 500 9px/1 ui-monospace, "SFMono-Regular", Consolas, monospace;
+  letter-spacing: 0.12em;
+}
+
+.living-atlas-globe__transition-status.is-error {
+  color: #ffb5a9;
+}
+
 .living-atlas-globe::after {
   content: "";
   position: absolute;
@@ -127,12 +171,18 @@
     linear-gradient(180deg, rgba(1, 5, 6, 0.26), transparent 20%, transparent 80%, rgba(1, 5, 6, 0.36));
 }
 
-.living-atlas-globe__mode {
+.living-atlas-globe__controls {
   position: absolute;
   z-index: 8;
   top: 82px;
   left: calc(8vw + min(280px, 24vw));
-  min-height: 42px;
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.living-atlas-globe__mode {
+  min-height: 44px;
   display: grid;
   grid-template-columns: 18px auto auto;
   align-items: center;
@@ -143,6 +193,11 @@
   color: #bdd0ca;
   cursor: pointer;
   backdrop-filter: blur(12px);
+}
+
+.living-atlas-globe__mode:disabled {
+  cursor: wait;
+  opacity: 0.72;
 }
 
 .living-atlas-globe__mode:hover,
@@ -165,6 +220,38 @@
   color: var(--atlas-faint);
   font: 500 8px/1 ui-monospace, "SFMono-Regular", Consolas, monospace;
   letter-spacing: 0.12em;
+}
+
+.living-atlas-globe__language {
+  min-height: 44px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(52px, 1fr));
+  border: 1px solid rgba(118, 198, 188, 0.24);
+  background: rgba(2, 11, 12, 0.82);
+  backdrop-filter: blur(12px);
+}
+
+.living-atlas-globe__language button {
+  min-width: 52px;
+  min-height: 42px;
+  padding: 0 10px;
+  border: 0;
+  background: transparent;
+  color: var(--atlas-muted);
+  cursor: pointer;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+}
+
+.living-atlas-globe__language button + button {
+  border-left: 1px solid rgba(118, 198, 188, 0.16);
+}
+
+.living-atlas-globe__language button:hover,
+.living-atlas-globe__language button:focus-visible,
+.living-atlas-globe__language button.is-active {
+  background: rgba(200, 255, 61, 0.1);
+  color: var(--atlas-acid);
 }
 
 .living-atlas-globe__mode-note {
@@ -2440,10 +2527,24 @@
     transform: translateX(-18%);
   }
 
-  .living-atlas-globe__mode {
+  .living-atlas-globe__controls {
     top: 52px;
     left: calc(18% + 12px);
-    min-height: 40px;
+    max-width: calc(82% - 24px);
+    gap: 6px;
+  }
+
+  .living-atlas-globe__mode {
+    min-height: 44px;
+  }
+
+  .living-atlas-globe__language {
+    min-height: 44px;
+  }
+
+  .living-atlas-globe__language button {
+    min-width: 48px;
+    padding: 0 8px;
   }
 
   .living-atlas-globe__mode-note {
@@ -2459,6 +2560,11 @@
   .detailed-earth-map .maplibregl-ctrl-bottom-left {
     left: calc(18% + 4px);
     bottom: 74px;
+  }
+
+  .living-atlas-globe__transition-status {
+    right: calc(18% + 14px);
+    bottom: 94px;
   }
 
   .living-atlas__header {

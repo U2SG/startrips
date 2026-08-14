@@ -24,18 +24,19 @@ to the low-volume public Photon demo because it is reachable from the current ho
 demo has no availability guarantee, so production should use a contracted endpoint
 or a self-hosted compatible service.
 
-## Detailed earth tiles
+## Detailed earth map
 
-The Living Atlas keeps its particle globe in Three.js and opens a lazy-loaded
-MapLibre detail view for zoom levels up to 19. By default the overview uses NASA
-Blue Marble imagery and the detailed view uses CARTO's dark raster rendering of
-OpenStreetMap data.
+The Living Atlas keeps its particle globe in Three.js and preloads a MapLibre
+vector detail view for zoom levels up to 20. It reveals the map only after the
+initial vector tiles are ready, then releases the hidden Three.js context. The
+detail view intentionally contains no Journey overlays and defaults to Chinese
+labels with a Chinese/bilingual switch.
 
-The map renderer is provider-neutral. Set `ATLAS_DETAIL_TILE_URL`,
-`ATLAS_DETAIL_TILE_ATTRIBUTION`, and optionally `ATLAS_OVERVIEW_TILE_URL` in
-`.env.deploy` to use a contracted or self-hosted XYZ raster service without
-changing application code. The tile URL must use `{z}`, `{x}`, and `{y}`
-placeholders and allow browser CORS access from `https://${APP_HOST}`.
+The map renderer is provider-neutral. It uses OpenFreeMap's Fiord vector style by
+default. Set `ATLAS_MAP_STYLE_URL` in `.env.deploy` to use a contracted or
+self-hosted MapLibre style without changing application code. A replacement style
+must allow browser CORS access from `https://${APP_HOST}` and expose `name:zh` or
+`name:zh-Hans` fields when Chinese labels are required.
 
 ## Private media storage
 

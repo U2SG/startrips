@@ -1,36 +1,29 @@
 import { describe, expect, it } from "vitest";
-import type { JourneyRoute } from "../journey/types";
 import {
-  buildDetailedEarthData,
-  createDetailedEarthStyle,
+  createDetailedEarthLabelExpression,
+  DEFAULT_DETAILED_EARTH_STYLE_URL,
+  getDetailedEarthStyleUrl,
+  isDetailedEarthNameLabel,
 } from "./detailedEarthModel";
 
 describe("detailedEarthModel", () => {
-  it("preserves journey and route point identities in GeoJSON", () => {
-    const routes: JourneyRoute[] = [{
-      id: "journey-1",
-      color: "#77c8c2",
-      points: [
-        { id: "point-1", lat: 22.5431, lon: 114.0579, isStop: true, label: "Shenzhen" },
-        { id: "point-2", lat: 23.1291, lon: 113.2644, isStop: true, label: "Guangzhou" },
-      ],
-    }];
-
-    const data = buildDetailedEarthData(routes);
-    expect(data.routeLines.features[0].geometry.coordinates).toEqual([
-      [114.0579, 22.5431],
-      [113.2644, 23.1291],
-    ]);
-    expect(data.routePoints.features.map((feature) => feature.properties)).toEqual([
-      expect.objectContaining({ journeyId: "journey-1", routePointId: "point-1" }),
-      expect.objectContaining({ journeyId: "journey-1", routePointId: "point-2" }),
-    ]);
+  it("uses a provider-neutral vector style by default", () => {
+    expect(getDetailedEarthStyleUrl()).toBe(DEFAULT_DETAILED_EARTH_STYLE_URL);
   });
 
-  it("uses a globe projection with separate imagery and detail sources", () => {
-    const style = createDetailedEarthStyle();
-    expect(style.projection).toEqual({ type: "globe" });
-    expect(style.sources).toHaveProperty("blue-marble");
-    expect(style.sources).toHaveProperty("detail-map");
+  it("prefers simplified Chinese labels and offers an English second line", () => {
+    expect(createDetailedEarthLabelExpression("zh")).toEqual(expect.arrayContaining([
+      "coalesce",
+      ["get", "name:zh-Hans"],
+      ["get", "name:zh"],
+    ]));
+    expect(createDetailedEarthLabelExpression("bilingual")).toEqual(expect.arrayContaining([
+      "format",
+    ]));
+  });
+
+  it("only replaces map labels backed by name fields", () => {
+    expect(isDetailedEarthNameLabel(["get", "name:nonlatin"])).toBe(true);
+    expect(isDetailedEarthNameLabel(["to-string", ["get", "ref"]])).toBe(false);
   });
 });

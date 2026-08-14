@@ -118,9 +118,7 @@ services:
       dockerfile: Dockerfile
       target: web
       args:
-        VITE_ATLAS_DETAIL_TILE_URL: ${ATLAS_DETAIL_TILE_URL:-}
-        VITE_ATLAS_DETAIL_TILE_ATTRIBUTION: ${ATLAS_DETAIL_TILE_ATTRIBUTION:-}
-        VITE_ATLAS_OVERVIEW_TILE_URL: ${ATLAS_OVERVIEW_TILE_URL:-}
+        VITE_ATLAS_MAP_STYLE_URL: ${ATLAS_MAP_STYLE_URL:-}
     restart: unless-stopped
     environment:
       APP_HOST: ${APP_HOST}
