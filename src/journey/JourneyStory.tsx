@@ -29,6 +29,7 @@ type MediaReadState =
 type JourneyStoryProps = {
   journeys: readonly Journey[];
   journeyId: string;
+  routePointId?: string | null;
   onClose: () => void;
   onNavigate: (journeyId: string) => void;
   onEdit: (journeyId: string) => void;
@@ -60,12 +61,20 @@ function formatUploadError(message: string) {
 }
 
 export function journeyDeleteDescription(journey: Journey) {
-  return `路线、故事和 ${journey.media.length} 个私有媒体都会永久删除。`;
+  return `先从图谱隐藏；7 天内可撤销，之后才会清理路线和 ${journey.media.length} 个私有媒体。`;
+}
+
+export function mediaForRoutePoint(
+  journey: Journey,
+  routePointId: string | null,
+) {
+  return journey.media.filter((asset) => asset.routePointId === routePointId);
 }
 
 export function JourneyStory({
   journeys,
   journeyId,
+  routePointId = null,
   onClose,
   onNavigate,
   onEdit,
@@ -75,6 +84,9 @@ export function JourneyStory({
   const journeyIndex = journeys.findIndex((candidate) => candidate.id === journeyId);
   const journey = journeys[journeyIndex];
   const [assetIndex, setAssetIndex] = useState(0);
+  const [selectedRoutePointId, setSelectedRoutePointId] = useState<string | null>(
+    routePointId,
+  );
   const [mediaReads, setMediaReads] = useState<Record<string, MediaReadState>>({});
   const [uploadState, setUploadState] = useState<MediaUploadState>({ status: "idle" });
   const [retryFiles, setRetryFiles] = useState<File[]>([]);
@@ -97,24 +109,29 @@ export function JourneyStory({
 
   useEffect(() => {
     setAssetIndex(0);
+    setSelectedRoutePointId(routePointId);
     setUploadState({ status: "idle" });
     setRetryFiles([]);
     setCloseBlocked(false);
     setDeleteState("idle");
     setDeleteMessage("");
-  }, [journeyId]);
+  }, [journeyId, routePointId]);
 
   useEffect(() => {
     if (deleteState === "confirming") deleteCancelRef.current?.focus();
   }, [deleteState]);
 
+  const scopedMedia = useMemo(
+    () => journey ? mediaForRoutePoint(journey, selectedRoutePointId) : [],
+    [journey, selectedRoutePointId],
+  );
+
   useEffect(() => {
-    if (!journey) return;
     setAssetIndex((current) => Math.min(
       current,
-      Math.max(0, journey.media.length - 1),
+      Math.max(0, scopedMedia.length - 1),
     ));
-  }, [journey]);
+  }, [scopedMedia.length]);
 
   useEffect(() => {
     let cancelled = false;
@@ -161,7 +178,10 @@ export function JourneyStory({
   );
 
   if (!journey) return null;
-  const asset = journey.media[assetIndex] ?? null;
+  const selectedRoutePoint = selectedRoutePointId
+    ? journey.routePoints.find((point) => point.id === selectedRoutePointId) ?? null
+    : null;
+  const asset = scopedMedia[assetIndex] ?? null;
   const read = asset ? mediaReads[asset.id] : null;
   const previousJourney = journeyIndex > 0 ? journeys[journeyIndex - 1] : null;
   const nextJourney = journeyIndex < journeys.length - 1 ? journeys[journeyIndex + 1] : null;
@@ -188,9 +208,10 @@ export function JourneyStory({
       uploadedBytes: 0,
       totalBytes: files.reduce((sum, file) => sum + file.size, 0),
     });
-    const firstNewAssetIndex = journey.media.length;
+    const firstNewAssetIndex = scopedMedia.length;
     const result = await uploadJourneyMedia({
       journeyId: journey.id,
+      routePointId: selectedRoutePointId ?? undefined,
       files,
       onProgress: (progress) => setUploadState({ status: "uploading", ...progress }),
     });
@@ -199,7 +220,10 @@ export function JourneyStory({
     if (result.uploadedCount > 0) {
       try {
         const refreshedJourney = await onMediaAdded(journey.id);
-        if (refreshedJourney?.media[firstNewAssetIndex]) {
+        const refreshedMedia = refreshedJourney
+          ? mediaForRoutePoint(refreshedJourney, selectedRoutePointId)
+          : [];
+        if (refreshedMedia[firstNewAssetIndex]) {
           setAssetIndex(firstNewAssetIndex);
         } else {
           refreshFailed = true;
@@ -231,7 +255,9 @@ export function JourneyStory({
       setUploadState({
         status: "complete",
         tone: "success",
-        message: `已将 ${result.uploadedCount} 个媒体添加到这段旅程。`,
+        message: selectedRoutePoint
+          ? `已将 ${result.uploadedCount} 个媒体添加到「${selectedRoutePoint.label || `途径点 ${selectedRoutePoint.sortOrder + 1}`}」。`
+          : `已将 ${result.uploadedCount} 个媒体添加到整段旅程。`,
       });
     }
   }
@@ -258,6 +284,14 @@ export function JourneyStory({
 
   const mutationPending = uploadState.status === "uploading" || deleteState === "pending";
 
+  function selectMediaScope(routePointId: string | null) {
+    if (mutationPending) return;
+    setSelectedRoutePointId(routePointId);
+    setAssetIndex(0);
+    setRetryFiles([]);
+    setUploadState({ status: "idle" });
+  }
+
   return (
     <div className="journey-story-backdrop" role="presentation" onClick={closeFromBackdrop}>
       <article ref={dialogRef} tabIndex={-1} className="journey-story" role="dialog" aria-modal="true" aria-labelledby="journey-story-title">
@@ -273,21 +307,49 @@ export function JourneyStory({
 
         <div className="journey-story__layout">
           <section className="journey-story__media" aria-label="旅程媒体">
-            {!asset ? <div className="journey-story__empty-media"><IconPhoto size={36} stroke={1.05} style={{ color: journey.lightColor }} aria-hidden="true" />这段旅程没有附加媒体</div> : null}
+            {!asset ? <div className="journey-story__empty-media"><IconPhoto size={36} stroke={1.05} style={{ color: journey.lightColor }} aria-hidden="true" />{selectedRoutePoint ? "这个途径点还没有媒体" : "整段旅程还没有媒体"}</div> : null}
             {asset && (!read || read.status === "loading") ? <div className="journey-story__media-state">正在打开私有媒体…</div> : null}
             {asset && read?.status === "error" ? <div className="journey-story__media-state is-error">{read.message}</div> : null}
             {asset && read?.status === "ready" && asset.mimeType.startsWith("video/") ? <video key={asset.id} src={read.url} controls playsInline preload="metadata" /> : null}
             {asset && read?.status === "ready" && !asset.mimeType.startsWith("video/") ? <img key={asset.id} src={read.url} alt={asset.fileName} /> : null}
-            {journey.media.length > 1 ? (
+            {scopedMedia.length > 1 ? (
               <nav className="journey-story__media-nav" aria-label="媒体导航">
                 <button type="button" disabled={assetIndex === 0 || mutationPending} onClick={() => setAssetIndex((current) => current - 1)} aria-label="上一个媒体"><IconArrowLeft size={17} stroke={1.35} aria-hidden="true" /></button>
-                <span>{assetIndex + 1} / {journey.media.length}</span>
-                <button type="button" disabled={assetIndex === journey.media.length - 1 || mutationPending} onClick={() => setAssetIndex((current) => current + 1)} aria-label="下一个媒体"><IconArrowRight size={17} stroke={1.35} aria-hidden="true" /></button>
+                <span>{assetIndex + 1} / {scopedMedia.length}</span>
+                <button type="button" disabled={assetIndex === scopedMedia.length - 1 || mutationPending} onClick={() => setAssetIndex((current) => current + 1)} aria-label="下一个媒体"><IconArrowRight size={17} stroke={1.35} aria-hidden="true" /></button>
               </nav>
             ) : null}
           </section>
 
           <section className="journey-story__copy">
+            <nav className="journey-story__route-points" aria-label="选择旅程途径点">
+              <button
+                type="button"
+                disabled={mutationPending}
+                className={selectedRoutePointId === null ? "is-active" : ""}
+                aria-pressed={selectedRoutePointId === null}
+                onClick={() => selectMediaScope(null)}
+              >
+                <span>00</span>
+                <strong>整段旅程</strong>
+                <small>{mediaForRoutePoint(journey, null).length}</small>
+              </button>
+              {journey.routePoints.map((point, index) => (
+                <button
+                  key={point.id}
+                  type="button"
+                  disabled={mutationPending}
+                  className={selectedRoutePointId === point.id ? "is-active" : ""}
+                  aria-pressed={selectedRoutePointId === point.id}
+                  data-route-point-id={point.id}
+                  onClick={() => selectMediaScope(point.id)}
+                >
+                  <span>{String(index + 1).padStart(2, "0")}</span>
+                  <strong>{point.label || `途径点 ${index + 1}`}</strong>
+                  <small>{mediaForRoutePoint(journey, point.id).length}</small>
+                </button>
+              ))}
+            </nav>
             <dl>
               <div><dt>ROUTE POINTS</dt><dd>{journey.routePoints.length}</dd></div>
               <div><dt>STOPS</dt><dd>{namedStops.length}</dd></div>
@@ -297,8 +359,8 @@ export function JourneyStory({
             {onDelete && deleteState !== "idle" ? (
               <section className="journey-story__delete-confirmation" aria-label="确认删除旅程">
                 <div>
-                  <p>PERMANENT DELETE</p>
-                  <strong>删除后无法恢复</strong>
+                  <p>REMOVE FROM ATLAS</p>
+                  <strong>7 天内可以恢复</strong>
                   <span>{journeyDeleteDescription(journey)}</span>
                 </div>
                 <div>
@@ -311,7 +373,11 @@ export function JourneyStory({
             <div className="journey-story__media-add">
               <div>
                 <p>PRIVATE MEDIA</p>
-                <strong>{journey.media.length > 0 ? `${journey.media.length} 个媒体片段` : "为这段旅程留下影像"}</strong>
+                <strong>{scopedMedia.length > 0
+                  ? `${scopedMedia.length} 个媒体片段 · ${selectedRoutePoint?.label || (selectedRoutePoint ? `途径点 ${selectedRoutePoint.sortOrder + 1}` : "整段旅程")}`
+                  : selectedRoutePoint
+                  ? `为「${selectedRoutePoint.label || `途径点 ${selectedRoutePoint.sortOrder + 1}`}」留下影像`
+                  : "为整段旅程留下影像"}</strong>
               </div>
               <input
                 ref={fileInputRef}

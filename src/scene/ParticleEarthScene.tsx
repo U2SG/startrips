@@ -341,6 +341,7 @@ interface ParticleEarthSceneProps {
   journeyRoutes?: readonly JourneyRoute[];
   activeJourneyRouteId?: string | null;
   onJourneyRouteActivate?: (id: string) => void;
+  onJourneyRoutePointActivate?: (journeyId: string, routePointId: string) => void;
   onGlobePointPick?: (point: { latitude: number; longitude: number }) => void;
   dragToRotate?: boolean;
   reduceMotion?: boolean;
@@ -512,6 +513,7 @@ export function ParticleEarthScene({
   journeyRoutes = [],
   activeJourneyRouteId,
   onJourneyRouteActivate,
+  onJourneyRoutePointActivate,
   onGlobePointPick,
   dragToRotate = false,
   reduceMotion = false,
@@ -525,6 +527,7 @@ export function ParticleEarthScene({
   const latestJourneyRoutes = useRef(journeyRoutes);
   const latestActiveJourneyRouteId = useRef(activeJourneyRouteId);
   const latestOnJourneyRouteActivate = useRef(onJourneyRouteActivate);
+  const latestOnJourneyRoutePointActivate = useRef(onJourneyRoutePointActivate);
   const latestOnGlobePointPick = useRef(onGlobePointPick);
   const latestDragToRotate = useRef(dragToRotate);
   latestMode.current = mode;
@@ -535,6 +538,7 @@ export function ParticleEarthScene({
   latestJourneyRoutes.current = journeyRoutes;
   latestActiveJourneyRouteId.current = activeJourneyRouteId;
   latestOnJourneyRouteActivate.current = onJourneyRouteActivate;
+  latestOnJourneyRoutePointActivate.current = onJourneyRoutePointActivate;
   latestOnGlobePointPick.current = onGlobePointPick;
   latestDragToRotate.current = dragToRotate;
 
@@ -815,7 +819,7 @@ export function ParticleEarthScene({
     const lastRouteProjectionState = new Float64Array(9).fill(Number.NaN);
     let routeProjectionRevision = 0;
     let renderedRouteProjectionRevision = -1;
-    let journeyPointIds: string[] = [];
+    let journeyPointTargets: Array<{ journeyId: string; routePointId?: string }> = [];
     const routeLabelSafeArea = {
       left: 16,
       top: 74,
@@ -865,7 +869,7 @@ export function ParticleEarthScene({
         0,
       );
       const pointPositions = new Float32Array(pointCount * 3);
-      const pointIds: string[] = [];
+      const pointTargets: Array<{ journeyId: string; routePointId?: string }> = [];
       let pointIndex = 0;
       let routeVertexCount = 0;
       let routeLabelCount = 0;
@@ -905,7 +909,7 @@ export function ParticleEarthScene({
             pointPositions,
             pointIndex * 3,
           );
-          pointIds.push(route.id);
+          pointTargets.push({ journeyId: route.id, routePointId: point.id });
           pointIndex += 1;
 
           const element = document.createElementNS(
@@ -986,7 +990,7 @@ export function ParticleEarthScene({
       routePointGeometry = nextPointGeometry;
       routePointSignals.geometry = routePointGeometry;
       previousPointGeometry.dispose();
-      journeyPointIds = pointIds;
+      journeyPointTargets = pointTargets;
       host.dataset.journeyRouteCount = String(visibleRoutes.length);
       host.dataset.journeyRoutePointCount = String(pointCount);
       host.dataset.journeyRouteVectorVertices = String(routeVertexCount);
@@ -1178,7 +1182,11 @@ export function ParticleEarthScene({
     const activatePointerTarget = (event: PointerEvent) => {
       const canPickGlobe = Boolean(latestOnGlobePointPick.current);
       const canActivateJourney = Boolean(
-        latestOnJourneyRouteActivate.current && journeyPointIds.length > 0,
+        journeyPointTargets.length > 0
+        && (
+          latestOnJourneyRouteActivate.current
+          || latestOnJourneyRoutePointActivate.current
+        ),
       );
       if (
         !canPickGlobe
@@ -1224,11 +1232,18 @@ export function ParticleEarthScene({
             routeLocalPoint.fromBufferAttribute(positions, candidate.index);
             return isSphericalPointVisible(routeCameraPosition, routeLocalPoint);
           });
-        const journeyId = intersection?.index === undefined
+        const target = intersection?.index === undefined
           ? undefined
-          : journeyPointIds[intersection.index];
-        if (journeyId) {
-          latestOnJourneyRouteActivate.current?.(journeyId);
+          : journeyPointTargets[intersection.index];
+        if (target?.routePointId && latestOnJourneyRoutePointActivate.current) {
+          latestOnJourneyRoutePointActivate.current(
+            target.journeyId,
+            target.routePointId,
+          );
+          return;
+        }
+        if (target) {
+          latestOnJourneyRouteActivate.current?.(target.journeyId);
           return;
         }
       }
@@ -1715,7 +1730,9 @@ export function ParticleEarthScene({
       data-personal-point-interactive={
         centerFocusPoint && onFocusPointActivate ? "true" : "false"
       }
-      data-journey-routes-interactive={onJourneyRouteActivate ? "true" : "false"}
+      data-journey-routes-interactive={
+        onJourneyRouteActivate || onJourneyRoutePointActivate ? "true" : "false"
+      }
       data-globe-point-pick={onGlobePointPick ? "true" : "false"}
       data-drag-rotation={dragToRotate ? "true" : "false"}
       aria-label="由世界陆地轮廓与艺术信号组成的粒子地球"

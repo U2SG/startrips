@@ -823,6 +823,94 @@
   background: var(--atlas-panel-solid);
 }
 
+.journey-story__route-points {
+  display: flex;
+  gap: 7px;
+  margin: 0 0 24px;
+  padding: 0 0 12px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(203, 241, 193, 0.28) transparent;
+}
+
+.journey-story__route-points button {
+  position: relative;
+  flex: 0 0 132px;
+  min-width: 0;
+  min-height: 68px;
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) 20px;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 9px;
+  border: 1px solid rgba(203, 241, 193, 0.12);
+  background: rgba(203, 241, 193, 0.025);
+  color: var(--atlas-muted);
+  text-align: left;
+}
+
+.journey-story__route-points button::after {
+  content: "";
+  position: absolute;
+  right: 10px;
+  bottom: -1px;
+  left: 10px;
+  height: 1px;
+  background: transparent;
+}
+
+.journey-story__route-points button:hover,
+.journey-story__route-points button:focus-visible {
+  border-color: rgba(203, 241, 193, 0.34);
+  color: #edf6f2;
+}
+
+.journey-story__route-points button:disabled {
+  cursor: wait;
+  opacity: 0.56;
+}
+
+.journey-story__route-points button.is-active {
+  border-color: rgba(200, 255, 61, 0.5);
+  background: rgba(200, 255, 61, 0.08);
+  color: #f3f9f6;
+}
+
+.journey-story__route-points button.is-active::after {
+  background: var(--atlas-acid);
+  box-shadow: 0 0 12px rgba(200, 255, 61, 0.48);
+}
+
+.journey-story__route-points span,
+.journey-story__route-points small {
+  font: 500 8px/1 ui-monospace, "SFMono-Regular", Consolas, monospace;
+  letter-spacing: 0.08em;
+}
+
+.journey-story__route-points span {
+  color: var(--atlas-faint);
+}
+
+.journey-story__route-points strong {
+  overflow: hidden;
+  color: inherit;
+  font-family: var(--archive-serif);
+  font-size: 13px;
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.journey-story__route-points small {
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(203, 241, 193, 0.16);
+  border-radius: 50%;
+  color: var(--atlas-faint);
+}
+
 .journey-story__copy dl {
   display: grid;
   grid-template-columns: 1fr 1fr;

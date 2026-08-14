@@ -63,6 +63,7 @@ type JourneyMediaUploadResult = Pick<
 
 type UploadJourneyMediaOptions = {
   journeyId: string;
+  routePointId?: string;
   files: readonly File[];
   upload?: typeof uploadMediaInParts;
   onProgress?: (progress: UploadProgress) => void;
@@ -78,6 +79,7 @@ type PersistJourneyDraftOptions = {
 
 export async function uploadJourneyMedia({
   journeyId,
+  routePointId,
   files,
   upload = uploadMediaInParts,
   onProgress,
@@ -94,6 +96,7 @@ export async function uploadJourneyMedia({
         file,
         fileName: file.name,
         journeyId,
+        routePointId,
         concurrency: 2,
         onProgress: ({ uploadedBytes }) => onProgress?.({
           fileName: file.name,

@@ -45,6 +45,7 @@ export function LivingAtlasApp() {
   const [view, setView] = useState<AtlasView>("planet");
   const [activeJourneyId, setActiveJourneyId] = useState<string | null>(null);
   const [storyJourneyId, setStoryJourneyId] = useState<string | null>(null);
+  const [storyRoutePointId, setStoryRoutePointId] = useState<string | null>(null);
   const [composerOpen, setComposerOpen] = useState(false);
   const [editingJourneyId, setEditingJourneyId] = useState<string | null>(null);
   const [arrivalJourneyId, setArrivalJourneyId] = useState<string | null>(null);
@@ -135,6 +136,7 @@ export function LivingAtlasApp() {
   function editJourney(journeyId: string) {
     setActiveJourneyId(journeyId);
     setStoryJourneyId(null);
+    setStoryRoutePointId(null);
     setEditingJourneyId(journeyId);
     setView("planet");
     setComposerOpen(true);
@@ -146,6 +148,7 @@ export function LivingAtlasApp() {
     const remaining = journeys.filter((journey) => journey.id !== journeyId);
     setJourneys(remaining);
     setStoryJourneyId(null);
+    setStoryRoutePointId(null);
     setActiveJourneyId((current) => current === journeyId
       ? remaining.at(-1)?.id ?? null
       : current);
@@ -218,6 +221,12 @@ export function LivingAtlasApp() {
           onJourneyRouteActivate={(id) => {
             if (id !== "draft-route-preview") selectJourney(id);
           }}
+          onJourneyRoutePointActivate={(journeyId, routePointId) => {
+            if (journeyId === "draft-route-preview") return;
+            setActiveJourneyId(journeyId);
+            setStoryRoutePointId(routePointId);
+            setStoryJourneyId(journeyId);
+          }}
           onGlobePointPick={globePickActive ? completeGlobePick : undefined}
           dragToRotate
           reduceMotion={reduceMotion}
@@ -263,6 +272,7 @@ export function LivingAtlasApp() {
           onSelect={selectJourney}
           onOpenStory={(id) => {
             setActiveJourneyId(id);
+            setStoryRoutePointId(null);
             setStoryJourneyId(id);
           }}
           onCreate={openCreateComposer}
@@ -285,7 +295,7 @@ export function LivingAtlasApp() {
           <IconMapPin className="living-atlas__active-marker" size={18} stroke={1.25} aria-hidden="true" />
           <h2>{activeJourney.title}</h2>
           <span>{activeJourney.routePoints.length} 个路线点 · {activeJourney.routePoints.filter((point) => point.isStop).length} 次停靠</span>
-          <button type="button" onClick={() => setStoryJourneyId(activeJourney.id)}>打开故事<IconBook2 size={17} stroke={1.3} aria-hidden="true" /></button>
+          <button type="button" onClick={() => { setStoryRoutePointId(null); setStoryJourneyId(activeJourney.id); }}>打开故事<IconBook2 size={17} stroke={1.3} aria-hidden="true" /></button>
         </aside>
       ) : null}
 
@@ -319,9 +329,11 @@ export function LivingAtlasApp() {
         <JourneyStory
           journeys={journeys}
           journeyId={storyJourneyId}
-          onClose={() => setStoryJourneyId(null)}
+          routePointId={storyRoutePointId}
+          onClose={() => { setStoryJourneyId(null); setStoryRoutePointId(null); }}
           onNavigate={(id) => {
             setActiveJourneyId(id);
+            setStoryRoutePointId(null);
             setStoryJourneyId(id);
           }}
           onEdit={editJourney}

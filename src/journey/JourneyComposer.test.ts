@@ -6,6 +6,7 @@ import {
   journeyToDraftPoints,
   parseCoordinateInput,
   persistJourneyDraft,
+  uploadJourneyMedia,
 } from "./JourneyComposer";
 import type { Journey, JourneyInput } from "./types";
 
@@ -109,6 +110,33 @@ describe("persistJourneyDraft", () => {
       fileName: "a.jpg",
       message: "storage unavailable",
     }]);
+  });
+
+  it("passes route point ownership through each media upload", async () => {
+    const file = { name: "point.jpg", size: 10, type: "image/jpeg" } as File;
+    type Upload = NonNullable<Parameters<typeof uploadJourneyMedia>[0]["upload"]>;
+    const upload = vi.fn<Upload>(async () => ({
+      id: "media-1",
+      journeyId: "journey-1",
+      routePointId: "point-1",
+      storageDriver: "test",
+      storageKey: "point-1/photo.jpg",
+      fileName: "point.jpg",
+      mimeType: "image/jpeg",
+      bytes: 10,
+    }));
+
+    await uploadJourneyMedia({
+      journeyId: "journey-1",
+      routePointId: "point-1",
+      files: [file],
+      upload,
+    });
+
+    expect(upload).toHaveBeenCalledWith(expect.objectContaining({
+      journeyId: "journey-1",
+      routePointId: "point-1",
+    }));
   });
 
   it("preserves an existing journey as an editable draft", () => {
