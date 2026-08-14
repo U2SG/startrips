@@ -17,7 +17,6 @@ type DetailedEarthMapProps = {
   language: DetailedEarthLanguage;
   onGlobePointPick?: (point: { latitude: number; longitude: number }) => void;
   onReady?: () => void;
-  onError?: () => void;
 };
 
 function applyMapLanguage(map: MapLibreMap, language: DetailedEarthLanguage) {
@@ -35,18 +34,15 @@ export default function DetailedEarthMap({
   language,
   onGlobePointPick,
   onReady,
-  onError,
 }: DetailedEarthMapProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const languageRef = useRef(language);
   const onPickRef = useRef(onGlobePointPick);
   const onReadyRef = useRef(onReady);
-  const onErrorRef = useRef(onError);
   languageRef.current = language;
   onPickRef.current = onGlobePointPick;
   onReadyRef.current = onReady;
-  onErrorRef.current = onError;
 
   useEffect(() => {
     const host = hostRef.current;
@@ -94,9 +90,6 @@ export default function DetailedEarthMap({
     });
     map.on("error", (event) => {
       host.dataset.mapError = event.error?.message ?? "map-error";
-      if (initialLoadSettled) return;
-      initialLoadSettled = true;
-      onErrorRef.current?.();
     });
 
     return () => {

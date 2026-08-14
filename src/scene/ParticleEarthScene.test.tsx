@@ -23,6 +23,7 @@ import {
   buildProjectedRoutePath,
   clampGlobeTilt,
   clampGlobeZoom,
+  getJourneyRouteVisualState,
   isGlobeDrag,
   isPrimaryPointerActivation,
   isSphericalPointVisible,
@@ -86,6 +87,12 @@ describe("ParticleEarthScene contracts", () => {
     );
     expect(GLOBE_MODE_CONFIG.focusPoint.clusterOpacity).toBe(0);
     expect(GLOBE_MODE_CONFIG.archiveBurst.clusterOpacity).toBeGreaterThan(0);
+  });
+
+  it("keeps every journey neutral until one route is selected", () => {
+    expect(getJourneyRouteVisualState("journey-a", null)).toBe("is-idle");
+    expect(getJourneyRouteVisualState("journey-a", "journey-a")).toBe("is-active");
+    expect(getJourneyRouteVisualState("journey-b", "journey-a")).toBe("is-muted");
   });
 
   it("hides vector route geometry occluded by the globe", () => {

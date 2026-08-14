@@ -66,7 +66,7 @@ export function LivingAtlasApp() {
       setJourneys(loaded);
       setActiveJourneyId((current) => {
         if (current && loaded.some((journey) => journey.id === current)) return current;
-        return loaded.at(-1)?.id ?? null;
+        return null;
       });
       setLoadError("");
       setStatus("ready");
@@ -150,7 +150,7 @@ export function LivingAtlasApp() {
     setStoryJourneyId(null);
     setStoryRoutePointId(null);
     setActiveJourneyId((current) => current === journeyId
-      ? remaining.at(-1)?.id ?? null
+      ? null
       : current);
     setUndoJourney(removed);
     setNotice("旅程已从图谱移除；7 天内可以撤销，媒体尚未清理。");

@@ -105,6 +105,14 @@ export function selectRenderableJourneyRoutes(
   return selected.reverse();
 }
 
+export function getJourneyRouteVisualState(
+  routeId: string,
+  activeRouteId?: string | null,
+) {
+  if (!activeRouteId) return "is-idle";
+  return routeId === activeRouteId ? "is-active" : "is-muted";
+}
+
 export function selectRouteLabelPointIndexes(
   points: readonly { isStop: boolean; label?: string }[],
   maxLabels = MAX_RENDERED_ROUTE_LABELS,
@@ -342,6 +350,7 @@ interface ParticleEarthSceneProps {
   activeJourneyRouteId?: string | null;
   onJourneyRouteActivate?: (id: string) => void;
   onJourneyRoutePointActivate?: (journeyId: string, routePointId: string) => void;
+  showArchiveSignals?: boolean;
   onReady?: () => void;
   onDetailRequested?: () => void;
   onGlobePointPick?: (point: { latitude: number; longitude: number }) => void;
@@ -516,6 +525,7 @@ export function ParticleEarthScene({
   activeJourneyRouteId,
   onJourneyRouteActivate,
   onJourneyRoutePointActivate,
+  showArchiveSignals = true,
   onReady,
   onDetailRequested,
   onGlobePointPick,
@@ -664,18 +674,22 @@ export function ParticleEarthScene({
     atmosphere.scale.setScalar(1.07);
     globe.add(atmosphere);
 
-    const archiveGeometry = new BufferGeometry();
-    const archivePositions = buildArtworkPointPositions(archiveRecords, 1.43);
-    archiveGeometry.setAttribute("position", new BufferAttribute(archivePositions, 3));
-    archiveGeometry.setAttribute("targetPosition", new BufferAttribute(archivePositions.slice(), 3));
-    const archiveMaterial = createParticleEarthMaterial({
-      color: 0xd9fffb,
-      opacity: 0.9,
-      size: 45,
-    });
-    const archiveSignals = new Points(archiveGeometry, archiveMaterial);
-    archiveSignals.renderOrder = GLOBE_RENDER_ORDER.signal;
-    globe.add(archiveSignals);
+    const archiveMaterial = showArchiveSignals
+      ? createParticleEarthMaterial({
+          color: 0xd9fffb,
+          opacity: 0.9,
+          size: 45,
+        })
+      : null;
+    if (archiveMaterial) {
+      const archiveGeometry = new BufferGeometry();
+      const archivePositions = buildArtworkPointPositions(archiveRecords, 1.43);
+      archiveGeometry.setAttribute("position", new BufferAttribute(archivePositions, 3));
+      archiveGeometry.setAttribute("targetPosition", new BufferAttribute(archivePositions.slice(), 3));
+      const archiveSignals = new Points(archiveGeometry, archiveMaterial);
+      archiveSignals.renderOrder = GLOBE_RENDER_ORDER.signal;
+      globe.add(archiveSignals);
+    }
 
     const clusterGeometry = new BufferGeometry();
     const clusterPositions = buildRegionalClusterPositions(
@@ -891,7 +905,10 @@ export function ParticleEarthScene({
           "http://www.w3.org/2000/svg",
           "g",
         );
-        group.classList.add("particle-earth-route");
+        group.classList.add(
+          "particle-earth-route",
+          getJourneyRouteVisualState(route.id, latestActiveJourneyRouteId.current),
+        );
         group.style.color = route.color;
         const glowPath = document.createElementNS(
           "http://www.w3.org/2000/svg",
@@ -1494,7 +1511,7 @@ export function ParticleEarthScene({
       camera.aspect = targetSize.x / targetSize.y;
       camera.updateProjectionMatrix();
       particleMaterial.uniforms.uViewportHeight.value = targetSize.y;
-      archiveMaterial.uniforms.uViewportHeight.value = targetSize.y;
+      if (archiveMaterial) archiveMaterial.uniforms.uViewportHeight.value = targetSize.y;
       clusterMaterial.uniforms.uViewportHeight.value = targetSize.y;
       cyanClusterMaterial.uniforms.uViewportHeight.value = targetSize.y;
       shellMaterial.uniforms.uViewportHeight.value = targetSize.y;
@@ -1547,10 +1564,12 @@ export function ParticleEarthScene({
         target.particleOpacity,
       );
       surfaceMaterial.opacity = interpolate(surfaceMaterial.opacity, target.surfaceOpacity);
-      archiveMaterial.uniforms.uOpacity.value = interpolate(
-        archiveMaterial.uniforms.uOpacity.value,
-        target.signalOpacity,
-      );
+      if (archiveMaterial) {
+        archiveMaterial.uniforms.uOpacity.value = interpolate(
+          archiveMaterial.uniforms.uOpacity.value,
+          target.signalOpacity,
+        );
+      }
       clusterMaterial.uniforms.uOpacity.value = interpolate(
         clusterMaterial.uniforms.uOpacity.value,
         target.clusterOpacity * 0.68,
@@ -1592,7 +1611,7 @@ export function ParticleEarthScene({
         target.coastlineOpacity,
       );
       particleMaterial.uniforms.uTime.value = now / 1000;
-      archiveMaterial.uniforms.uTime.value = now / 1000;
+      if (archiveMaterial) archiveMaterial.uniforms.uTime.value = now / 1000;
       clusterMaterial.uniforms.uTime.value = now / 1000;
       cyanClusterMaterial.uniforms.uTime.value = now / 1000;
       shellMaterial.uniforms.uTime.value = now / 1000;

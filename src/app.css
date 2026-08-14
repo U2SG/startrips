@@ -76,12 +76,12 @@ button {
 }
 
 .particle-earth-route__glow {
-  opacity: 0.2;
+  opacity: 0.08;
   stroke-width: 5;
 }
 
 .particle-earth-route__core {
-  opacity: 0.92;
+  opacity: 0.28;
   stroke-width: 1.45;
 }
 
@@ -98,6 +98,35 @@ button {
 
 .particle-earth-route__point--stop {
   stroke-width: 1.4;
+}
+
+.particle-earth-route.is-active .particle-earth-route__glow {
+  opacity: 0.36;
+  stroke-width: 6;
+}
+
+.particle-earth-route.is-active .particle-earth-route__core {
+  opacity: 1;
+  stroke-width: 1.8;
+}
+
+.particle-earth-route.is-active .particle-earth-route__point {
+  opacity: 1;
+  stroke: rgba(245, 255, 251, 0.94);
+  stroke-width: 1.5;
+}
+
+.particle-earth-route.is-muted .particle-earth-route__glow {
+  opacity: 0.02;
+}
+
+.particle-earth-route.is-muted .particle-earth-route__core {
+  opacity: 0.12;
+}
+
+.particle-earth-route.is-muted .particle-earth-route__point {
+  opacity: 0.46;
+  stroke-opacity: 0.52;
 }
 
 .particle-earth-route__leader {

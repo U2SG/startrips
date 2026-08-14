@@ -76,12 +76,6 @@ export function LivingAtlasGlobe({
     setTargetReady(false);
   };
 
-  const failTransition = () => {
-    setTransitionTarget(null);
-    setTargetReady(false);
-    setTransitionError("真实地图加载失败，请重试");
-  };
-
   const showParticle = earthMode === "particle" || transitionTarget === "particle";
   const showDetail = earthMode === "detail" || transitionTarget === "detail";
   const detailMode = earthMode === "detail";
@@ -118,6 +112,7 @@ export function LivingAtlasGlobe({
             onJourneyRouteActivate={onJourneyRouteActivate}
             onJourneyRoutePointActivate={onJourneyRoutePointActivate}
             onGlobePointPick={onGlobePointPick}
+            showArchiveSignals={false}
             onReady={() => {
               if (transitionTarget === "particle") setTargetReady(true);
             }}
@@ -145,7 +140,6 @@ export function LivingAtlasGlobe({
               onReady={() => {
                 if (transitionTarget === "detail") setTargetReady(true);
               }}
-              onError={failTransition}
             />
           </Suspense>
         </div>
