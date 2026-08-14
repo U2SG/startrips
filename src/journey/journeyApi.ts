@@ -93,6 +93,18 @@ export async function deleteJourney(
   );
 }
 
+export async function restoreJourney(
+  id: string,
+  fetcher: Fetcher = fetch,
+): Promise<Journey> {
+  const payload = await requestJson<{ journey: Journey }>(
+    `/api/journeys/${encodeURIComponent(id)}/restore`,
+    { method: "POST" },
+    fetcher,
+  );
+  return payload.journey;
+}
+
 export function getPrivateMediaRead(
   assetId: string,
   fetcher: Fetcher = fetch,

@@ -71,7 +71,7 @@ function dependencies(
 }
 
 describe("journey deletion storage cleanup", () => {
-  it("persists deletion intent before deleting completed objects and the row", async () => {
+  it("persists deletion intent without physically deleting during the request", async () => {
     const events: string[] = [];
     const storage = storageWithInspection({ exists: false });
     vi.mocked(storage.deleteObject).mockImplementation(async () => {
@@ -98,10 +98,10 @@ describe("journey deletion storage cleanup", () => {
       deps,
     )).resolves.toEqual({ id: "journey-1" });
 
-    expect(storage.deleteObject).toHaveBeenCalledWith({
-      key: "atlas/journey/photo.jpg",
-    });
-    expect(events).toEqual(["marked", "object", "database"]);
+    expect(storage.deleteObject).not.toHaveBeenCalled();
+    expect(deps.getCandidate).not.toHaveBeenCalled();
+    expect(deps.deleteJourney).not.toHaveBeenCalled();
+    expect(events).toEqual(["marked"]);
   });
 
   it("aborts an unfinished multipart upload when no object exists", async () => {
@@ -115,7 +115,10 @@ describe("journey deletion storage cleanup", () => {
       }],
     }));
 
-    await deleteJourneyWithStorage("journey-1", "atlas-1", deps);
+    await reconcileJourneyDeletionCandidates(
+      [{ id: "journey-1", atlasId: "atlas-1" }],
+      deps,
+    );
 
     expect(storage.abortMultipartUpload).toHaveBeenCalledWith({
       key: "atlas/journey/video.mp4",
@@ -135,7 +138,10 @@ describe("journey deletion storage cleanup", () => {
       }],
     }));
 
-    await deleteJourneyWithStorage("journey-1", "atlas-1", deps);
+    await reconcileJourneyDeletionCandidates(
+      [{ id: "journey-1", atlasId: "atlas-1" }],
+      deps,
+    );
 
     expect(storage.deleteObject).toHaveBeenCalledWith({
       key: "atlas/journey/recovered.jpg",
@@ -158,7 +164,10 @@ describe("journey deletion storage cleanup", () => {
       }],
     }));
 
-    await deleteJourneyWithStorage("journey-1", "atlas-1", deps);
+    await reconcileJourneyDeletionCandidates(
+      [{ id: "journey-1", atlasId: "atlas-1" }],
+      deps,
+    );
 
     expect(storage.deleteObject).toHaveBeenCalledOnce();
     expect(storage.inspectObject).not.toHaveBeenCalled();
@@ -205,6 +214,11 @@ describe("journey deletion storage cleanup", () => {
       "atlas-1",
       deps,
     )).resolves.toEqual({ id: "journey-1" });
+
+    await reconcileJourneyDeletionCandidates(
+      [{ id: "journey-1", atlasId: "atlas-1" }],
+      deps,
+    );
 
     expect(deps.deleteJourney).not.toHaveBeenCalled();
     expect(deps.deferRetry).toHaveBeenCalledWith("journey-1", "atlas-1");

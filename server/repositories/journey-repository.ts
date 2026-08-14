@@ -2,9 +2,11 @@ import {
   and,
   asc,
   eq,
+  gt,
   inArray,
   isNotNull,
   isNull,
+  lte,
   notInArray,
   sql,
 } from "drizzle-orm";
@@ -33,6 +35,8 @@ export class JourneyRouteChangedError extends Error {
     this.name = "JourneyRouteChangedError";
   }
 }
+
+export const JOURNEY_DELETION_GRACE_MS = 7 * 24 * 60 * 60 * 1_000;
 
 async function loadJourneys(atlasId: string, journeyId?: string) {
   const atlasScope = journeyId
@@ -275,16 +279,43 @@ export async function markJourneyForDeletionForAtlas(
   const [journey] = await db
     .update(journeys)
     .set({ deletionStartedAt: new Date(), updatedAt: new Date() })
-    .where(and(eq(journeys.id, journeyId), eq(journeys.atlasId, atlasId)))
+    .where(and(
+      eq(journeys.id, journeyId),
+      eq(journeys.atlasId, atlasId),
+      isNull(journeys.deletionStartedAt),
+    ))
     .returning({ id: journeys.id });
   return journey;
 }
 
-export async function listJourneysPendingDeletion(limit = 25) {
+export async function restoreJourneyForAtlas(journeyId: string, atlasId: string) {
+  const graceCutoff = new Date(Date.now() - JOURNEY_DELETION_GRACE_MS);
+  const [journey] = await db
+    .update(journeys)
+    .set({ deletionStartedAt: null, updatedAt: new Date() })
+    .where(and(
+      eq(journeys.id, journeyId),
+      eq(journeys.atlasId, atlasId),
+      isNotNull(journeys.deletionStartedAt),
+      gt(journeys.deletionStartedAt, graceCutoff),
+    ))
+    .returning({ id: journeys.id });
+  if (!journey) return undefined;
+  return getJourneyForAtlas(journey.id, atlasId);
+}
+
+export async function listJourneysPendingDeletion(
+  limit = 25,
+  now = new Date(),
+) {
+  const graceCutoff = new Date(now.getTime() - JOURNEY_DELETION_GRACE_MS);
   return db
     .select({ id: journeys.id, atlasId: journeys.atlasId })
     .from(journeys)
-    .where(isNotNull(journeys.deletionStartedAt))
+    .where(and(
+      isNotNull(journeys.deletionStartedAt),
+      lte(journeys.deletionStartedAt, graceCutoff),
+    ))
     .orderBy(asc(journeys.updatedAt))
     .limit(limit);
 }

@@ -4,6 +4,7 @@ import {
   createJourneyForAtlas,
   JourneyRouteChangedError,
   listJourneysForAtlas,
+  restoreJourneyForAtlas,
   updateJourneyForAtlas,
   type JourneyValues,
 } from "../repositories/journey-repository";
@@ -180,4 +181,11 @@ journeyRoutes.delete("/:id", async (context) => {
   const journey = await deleteJourneyWithStorage(context.req.param("id"), atlas.id);
   if (!journey) return context.json({ error: "JOURNEY_NOT_FOUND" }, 404);
   return context.body(null, 204);
+});
+
+journeyRoutes.post("/:id/restore", async (context) => {
+  const { atlas } = await requireAtlasAccess(context.req.raw, "delete");
+  const journey = await restoreJourneyForAtlas(context.req.param("id"), atlas.id);
+  if (!journey) return context.json({ error: "JOURNEY_NOT_FOUND" }, 404);
+  return context.json({ journey });
 });

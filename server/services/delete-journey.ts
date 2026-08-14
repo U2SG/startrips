@@ -98,12 +98,7 @@ export async function deleteJourneyWithStorage(
 ) {
   const marked = await dependencies.markForDeletion(journeyId, atlasId);
   if (!marked) return undefined;
-
-  try {
-    await finishJourneyDeletion(journeyId, atlasId, dependencies);
-  } catch (error) {
-    await recordCleanupFailure(journeyId, atlasId, error, dependencies);
-  }
+  // The reconciler performs physical cleanup after the recovery grace period.
   return marked;
 }
 

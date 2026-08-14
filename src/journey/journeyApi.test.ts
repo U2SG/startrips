@@ -3,6 +3,7 @@ import {
   createJourney,
   deleteJourney,
   listJourneys,
+  restoreJourney,
   searchLocations,
   updateJourney,
 } from "./journeyApi";
@@ -71,6 +72,17 @@ describe("journeyApi", () => {
         method: "DELETE",
         credentials: "include",
       }),
+    );
+  });
+
+  it("restores a recoverable journey with POST", async () => {
+    const journey = { id: "journey-1", ...input, routePoints: [], media: [] };
+    const fetcher = vi.fn(async () => Response.json({ journey })) as unknown as typeof fetch;
+
+    await expect(restoreJourney("journey-1", fetcher)).resolves.toEqual(journey);
+    expect(fetcher).toHaveBeenCalledWith(
+      "/api/journeys/journey-1/restore",
+      expect.objectContaining({ method: "POST", credentials: "include" }),
     );
   });
 

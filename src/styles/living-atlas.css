@@ -613,6 +613,20 @@
   color: var(--atlas-muted);
 }
 
+.living-atlas__notice > span {
+  flex: 1;
+}
+
+.living-atlas__notice button.living-atlas__notice-undo {
+  flex: 0 0 auto;
+  width: auto;
+  padding: 0 13px;
+  border: 1px solid rgba(200, 255, 61, 0.45);
+  color: var(--atlas-accent);
+  font-size: 11px;
+  letter-spacing: 0.05em;
+}
+
 .journey-timeline__future {
   min-height: 210px;
   align-self: start;

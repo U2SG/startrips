@@ -14,9 +14,12 @@ import { db, pool } from "../db/client";
 import {
   createJourneyForAtlas,
   getJourneyDeletionCandidateForAtlas,
+  JOURNEY_DELETION_GRACE_MS,
   JourneyRouteChangedError,
+  listJourneysPendingDeletion,
   listJourneysForAtlas,
   markJourneyForDeletionForAtlas,
+  restoreJourneyForAtlas,
   updateJourneyForAtlas,
 } from "../repositories/journey-repository";
 import { finalizeUpload } from "../routes/uploads";
@@ -219,6 +222,35 @@ describe("authenticated tenant boundary", () => {
     );
     expect(crossAtlasUpdate.status).toBe(404);
 
+    const deleteA = await app.request(
+      `${TEST_ORIGIN}/api/journeys/${privateA.journey.id}`,
+      { method: "DELETE", headers: authHeaders(identityA.cookie) },
+    );
+    expect(deleteA.status).toBe(204);
+    const restoreA = await app.request(
+      `${TEST_ORIGIN}/api/journeys/${privateA.journey.id}/restore`,
+      { method: "POST", headers: authHeaders(identityA.cookie) },
+    );
+    expect(restoreA.status).toBe(200);
+    await expect(restoreA.json()).resolves.toMatchObject({
+      journey: { id: privateA.journey.id, title: "Private A" },
+    });
+    const deleteB = await app.request(
+      `${TEST_ORIGIN}/api/journeys/${privateB.journey.id}`,
+      { method: "DELETE", headers: authHeaders(identityB.cookie) },
+    );
+    expect(deleteB.status).toBe(204);
+    const crossAtlasRestore = await app.request(
+      `${TEST_ORIGIN}/api/journeys/${privateB.journey.id}/restore`,
+      { method: "POST", headers: authHeaders(identityA.cookie) },
+    );
+    expect(crossAtlasRestore.status).toBe(404);
+    const restoreB = await app.request(
+      `${TEST_ORIGIN}/api/journeys/${privateB.journey.id}/restore`,
+      { method: "POST", headers: authHeaders(identityB.cookie) },
+    );
+    expect(restoreB.status).toBe(200);
+
     const forgedSwitch = await app.request(
       `${TEST_ORIGIN}/api/auth/organization/set-active`,
       {
@@ -317,6 +349,27 @@ describe("tenant-scoped journey repository", () => {
     await expect(
       getJourneyDeletionCandidateForAtlas(created.id, atlasA),
     ).resolves.toMatchObject({ id: created.id, media: [], uploads: [] });
+
+    const immediateCandidates = await listJourneysPendingDeletion();
+    expect(immediateCandidates.some((candidate) => candidate.id === created.id)).toBe(false);
+    await db
+      .update(journeys)
+      .set({ deletionStartedAt: new Date(Date.now() - JOURNEY_DELETION_GRACE_MS - 1_000) })
+      .where(eq(journeys.id, created.id));
+    const afterGraceCandidates = await listJourneysPendingDeletion();
+    expect(afterGraceCandidates.some((candidate) => candidate.id === created.id)).toBe(true);
+    await expect(restoreJourneyForAtlas(created.id, atlasA)).resolves.toBeUndefined();
+
+    await expect(restoreJourneyForAtlas(created.id, atlasB)).resolves.toBeUndefined();
+    await db
+      .update(journeys)
+      .set({ deletionStartedAt: new Date() })
+      .where(eq(journeys.id, created.id));
+    await expect(restoreJourneyForAtlas(created.id, atlasA)).resolves.toMatchObject({
+      id: created.id,
+      title: "Pending deletion",
+    });
+    await expect(getJourneyDeletionCandidateForAtlas(created.id, atlasA)).resolves.toBeUndefined();
   });
 
   it("prevents upload finalization after deletion begins", async () => {

@@ -17,7 +17,7 @@ import {
 } from "./JourneyComposer";
 import { JourneyStory } from "./JourneyStory";
 import { JourneyTimeline } from "./JourneyTimeline";
-import { deleteJourney, listJourneys } from "./journeyApi";
+import { deleteJourney, listJourneys, restoreJourney } from "./journeyApi";
 import {
   mergeJourney,
   sortJourneysChronologically,
@@ -49,6 +49,7 @@ export function LivingAtlasApp() {
   const [editingJourneyId, setEditingJourneyId] = useState<string | null>(null);
   const [arrivalJourneyId, setArrivalJourneyId] = useState<string | null>(null);
   const [notice, setNotice] = useState("");
+  const [undoJourney, setUndoJourney] = useState<Journey | null>(null);
   const [globePickActive, setGlobePickActive] = useState(false);
   const [draftRoute, setDraftRoute] = useState<JourneyRoute | null>(null);
   const loadRevision = useRef(0);
@@ -114,6 +115,7 @@ export function LivingAtlasApp() {
     setActiveJourneyId(result.journey.id);
     if (!edited) setArrivalJourneyId(result.journey.id);
     setDraftRoute(null);
+    setUndoJourney(null);
     setNotice(edited
       ? result.mediaErrors.length > 0
         ? "旅程修改已保存；未上传成功的媒体仍可重试。"
@@ -139,6 +141,7 @@ export function LivingAtlasApp() {
   }
 
   async function removeJourney(journeyId: string) {
+    const removed = journeys.find((journey) => journey.id === journeyId) ?? null;
     await deleteJourney(journeyId);
     const remaining = journeys.filter((journey) => journey.id !== journeyId);
     setJourneys(remaining);
@@ -146,7 +149,21 @@ export function LivingAtlasApp() {
     setActiveJourneyId((current) => current === journeyId
       ? remaining.at(-1)?.id ?? null
       : current);
-    setNotice("旅程已从图谱移除，私有媒体清理已开始。");
+    setUndoJourney(removed);
+    setNotice("旅程已从图谱移除；7 天内可以撤销，媒体尚未清理。");
+  }
+
+  async function undoRemovedJourney() {
+    if (!undoJourney) return;
+    try {
+      const restored = await restoreJourney(undoJourney.id);
+      setJourneys((current) => mergeJourney(current, restored));
+      setActiveJourneyId(restored.id);
+      setUndoJourney(null);
+      setNotice("旅程已恢复到图谱。");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "无法恢复这段旅程");
+    }
   }
 
   function selectJourney(journeyId: string) {
@@ -272,7 +289,13 @@ export function LivingAtlasApp() {
         </aside>
       ) : null}
 
-      {notice ? <div className="living-atlas__notice" role="status">{notice}<button type="button" onClick={() => setNotice("")} aria-label="关闭提示"><IconX size={17} stroke={1.4} aria-hidden="true" /></button></div> : null}
+      {notice ? (
+        <div className="living-atlas__notice" role="status">
+          <span>{notice}</span>
+          {undoJourney ? <button className="living-atlas__notice-undo" type="button" onClick={() => void undoRemovedJourney()}>撤销删除</button> : null}
+          <button type="button" onClick={() => { setNotice(""); setUndoJourney(null); }} aria-label="关闭提示"><IconX size={17} stroke={1.4} aria-hidden="true" /></button>
+        </div>
+      ) : null}
 
       {composerOpen ? (
         <JourneyComposer
