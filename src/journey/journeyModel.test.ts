@@ -72,6 +72,7 @@ describe("journeyModel", () => {
       createdAt: labeledJourney.createdAt,
     }];
     expect(toJourneyRoutes([labeledJourney])[0].points[0]).toEqual({
+      id: "point-1",
       lat: 22.5431,
       lon: 114.0579,
       isStop: true,

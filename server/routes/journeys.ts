@@ -159,12 +159,6 @@ journeyRoutes.patch("/:id", async (context) => {
       400,
     );
   }
-  if (input.revision === undefined) {
-    return context.json(
-      { error: "JOURNEY_ROUTE_CHANGED", message: "Reopen this journey before saving" },
-      409,
-    );
-  }
   let journey;
   try {
     journey = await updateJourneyForAtlas(context.req.param("id"), atlas.id, input);
