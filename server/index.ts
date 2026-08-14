@@ -2,8 +2,10 @@ import { serve } from "@hono/node-server";
 import { app } from "./app";
 import { serverConfig } from "./config";
 import { startUploadReconciler } from "./routes/uploads";
+import { startJourneyDeletionReconciler } from "./services/delete-journey";
 
 startUploadReconciler();
+startJourneyDeletionReconciler();
 
 serve(
   {

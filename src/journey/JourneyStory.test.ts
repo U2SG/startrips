@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { JourneyStory } from "./JourneyStory";
+import { JourneyStory, journeyDeleteDescription } from "./JourneyStory";
 import type { Journey } from "./types";
 
 const journey: Journey = {
@@ -26,6 +26,8 @@ describe("JourneyStory", () => {
       journeyId: journey.id,
       onClose: () => undefined,
       onNavigate: () => undefined,
+      onEdit: () => undefined,
+      onDelete: () => undefined,
       onMediaAdded: () => null,
     }));
 
@@ -34,5 +36,25 @@ describe("JourneyStory", () => {
     expect(markup).toContain(">退出<");
     expect(markup).toContain("添加照片或视频");
     expect(markup).toContain('type="file"');
+    expect(markup).toContain("编辑旅程");
+    expect(markup).toContain("删除旅程");
+    expect(markup).not.toContain("确认删除");
+    expect(journeyDeleteDescription(journey)).toBe(
+      "路线、故事和 0 个私有媒体都会永久删除。",
+    );
+  });
+
+  it("hides permanent deletion when the current member lacks permission", () => {
+    const markup = renderToStaticMarkup(createElement(JourneyStory, {
+      journeys: [journey],
+      journeyId: journey.id,
+      onClose: () => undefined,
+      onNavigate: () => undefined,
+      onEdit: () => undefined,
+      onMediaAdded: () => null,
+    }));
+
+    expect(markup).toContain("编辑旅程");
+    expect(markup).not.toContain("删除旅程");
   });
 });

@@ -1,5 +1,7 @@
 import {
+  createContext,
   useEffect,
+  useContext,
   useState,
   type FormEvent,
   type ReactNode,
@@ -25,6 +27,14 @@ type GateState =
   | { kind: "bootstrap"; organization: OrganizationSummary }
   | { kind: "ready"; atlas: AtlasSummary; role: string }
   | { kind: "error"; message: string };
+
+const AtlasCapabilitiesContext = createContext({
+  canDeleteJourney: false,
+});
+
+export function useAtlasCapabilities() {
+  return useContext(AtlasCapabilitiesContext);
+}
 
 async function responseError(response: Response): Promise<string> {
   const payload = await response.json().catch(() => null) as {
@@ -373,7 +383,9 @@ function WorkspaceGate({ children, activeOrganizationId, userName }: {
           </form>
         ) : null}
       </aside>
-      {children}
+      <AtlasCapabilitiesContext.Provider value={{ canDeleteJourney: isOwner }}>
+        {children}
+      </AtlasCapabilitiesContext.Provider>
     </>
   );
 }
@@ -383,7 +395,13 @@ export function AuthGateway({ children }: { children: ReactNode }) {
   const [revision, setRevision] = useState(0);
   const qaBypass = import.meta.env.DEV && new URLSearchParams(window.location.search).has("qaState");
 
-  if (qaBypass) return children;
+  if (qaBypass) {
+    return (
+      <AtlasCapabilitiesContext.Provider value={{ canDeleteJourney: true }}>
+        {children}
+      </AtlasCapabilitiesContext.Provider>
+    );
+  }
   if (window.location.pathname === "/reset-password") return <ResetPassword />;
   if (session.isPending) return <main className="auth-gate"><p className="auth-loading">正在验证私人入口…</p></main>;
   if (!session.data) return <AuthForm onAuthenticated={() => void session.refetch()} />;

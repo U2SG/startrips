@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, desc, eq, inArray, lt, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { Hono } from "hono";
 import { requireAtlasAccess } from "../authorization/atlas-access";
 import { db } from "../db/client";
@@ -102,14 +102,19 @@ function parseParts(value: unknown, expectedCount: number): MultipartPart[] | nu
 }
 
 async function findUpload(uploadId: string, atlasId: string) {
-  const [upload] = await db
-    .select()
+  const [row] = await db
+    .select({ upload: mediaUploads })
     .from(mediaUploads)
+    .innerJoin(journeys, eq(journeys.id, mediaUploads.journeyId))
     .where(
-      and(eq(mediaUploads.id, uploadId), eq(mediaUploads.atlasId, atlasId)),
+      and(
+        eq(mediaUploads.id, uploadId),
+        eq(mediaUploads.atlasId, atlasId),
+        isNull(journeys.deletionStartedAt),
+      ),
     )
     .limit(1);
-  return upload;
+  return row?.upload;
 }
 
 export type UploadRecord = NonNullable<Awaited<ReturnType<typeof findUpload>>>;
@@ -117,6 +122,8 @@ type CompletionLease = {
   attemptId: string;
   status: "finalizing" | "reconciling";
 };
+
+class JourneyUnavailableForUploadError extends Error {}
 
 async function markCompletionUnknown(uploadId: string, attemptId: string) {
   const [marked] = await db
@@ -185,6 +192,7 @@ export async function finalizeUpload(
       select ${journeys.id} as id
       from ${journeys}
       where ${journeys.id} = ${upload.journeyId}
+        and ${journeys.deletionStartedAt} is null
       for update
     `);
     if (lockedJourney.rows.length === 0) {
@@ -364,9 +372,10 @@ export async function reconcileUploadCandidates(
 export async function reconcileStaleUploads(now = new Date()) {
   if (!hasConfiguredStorageBackends()) return;
   const cutoff = new Date(now.getTime() - STALE_UPLOAD_AFTER_MS);
-  const candidates = await db
-    .select()
+  const rows = await db
+    .select({ upload: mediaUploads })
     .from(mediaUploads)
+    .innerJoin(journeys, eq(journeys.id, mediaUploads.journeyId))
     .where(and(
       inArray(mediaUploads.status, [
         "initiated",
@@ -375,10 +384,15 @@ export async function reconcileStaleUploads(now = new Date()) {
         "reconciling",
       ]),
       lt(mediaUploads.updatedAt, cutoff),
+      isNull(journeys.deletionStartedAt),
     ))
     .limit(RECONCILE_BATCH_SIZE);
 
-  await reconcileUploadCandidates(candidates, now, cutoff);
+  await reconcileUploadCandidates(
+    rows.map((row) => row.upload),
+    now,
+    cutoff,
+  );
 }
 
 export function startUploadReconciler() {
@@ -412,38 +426,46 @@ uploadRoutes.post("/start", async (context) => {
     return context.json({ error: "INVALID_UPLOAD" }, 400);
   }
 
-  const [journey] = await db
-    .select({ id: journeys.id })
-    .from(journeys)
-    .where(and(eq(journeys.id, input.journeyId), eq(journeys.atlasId, atlas.id)))
-    .limit(1);
-  if (!journey) return context.json({ error: "JOURNEY_NOT_FOUND" }, 404);
-
   const storage = getMultipartStorage();
-  const storageKey = `${atlas.id}/${journey.id}/${randomUUID()}`;
-  const started = await storage.startMultipartUpload({
-    key: storageKey,
-    mimeType: input.mimeType,
-    bytes: input.bytes,
-  });
+  const storageKey = `${atlas.id}/${input.journeyId}/${randomUUID()}`;
+  let started: { providerUploadId: string } | undefined;
 
   try {
-    const [upload] = await db
-      .insert(mediaUploads)
-      .values({
-        atlasId: atlas.id,
-        journeyId: journey.id,
-        storageDriver: storage.driver,
-        storageKey,
-        providerUploadId: started.providerUploadId,
-        fileName: input.fileName,
+    const upload = await db.transaction(async (transaction) => {
+      const lockedJourney = await transaction.execute<{ id: string }>(sql`
+        select ${journeys.id} as id
+        from ${journeys}
+        where ${journeys.id} = ${input.journeyId}
+          and ${journeys.atlasId} = ${atlas.id}
+          and ${journeys.deletionStartedAt} is null
+        for update
+      `);
+      if (lockedJourney.rows.length === 0) return undefined;
+
+      started = await storage.startMultipartUpload({
+        key: storageKey,
         mimeType: input.mimeType,
         bytes: input.bytes,
-        partSize: PART_SIZE,
-        partCount: input.partCount,
-        createdByUserId: session.user.id,
-      })
-      .returning();
+      });
+      const [created] = await transaction
+        .insert(mediaUploads)
+        .values({
+          atlasId: atlas.id,
+          journeyId: input.journeyId,
+          storageDriver: storage.driver,
+          storageKey,
+          providerUploadId: started.providerUploadId,
+          fileName: input.fileName,
+          mimeType: input.mimeType,
+          bytes: input.bytes,
+          partSize: PART_SIZE,
+          partCount: input.partCount,
+          createdByUserId: session.user.id,
+        })
+        .returning();
+      return created;
+    });
+    if (!upload) return context.json({ error: "JOURNEY_NOT_FOUND" }, 404);
     return context.json(
       {
         uploadId: upload.id,
@@ -453,12 +475,20 @@ uploadRoutes.post("/start", async (context) => {
       201,
     );
   } catch (error) {
-    await storage
-      .abortMultipartUpload({
-        key: storageKey,
-        providerUploadId: started.providerUploadId,
-      })
-      .catch(() => undefined);
+    if (started) {
+      await storage
+        .abortMultipartUpload({
+          key: storageKey,
+          providerUploadId: started.providerUploadId,
+        })
+        .catch((abortError: unknown) => {
+          console.error(
+            "Multipart cleanup after upload start failed",
+            storageKey,
+            abortError instanceof Error ? abortError.message : "unknown error",
+          );
+        });
+    }
     throw error;
   }
 });
@@ -586,15 +616,31 @@ uploadRoutes.post("/:id/complete", async (context) => {
 
   try {
     const storage = getMultipartStorage(upload.storageDriver);
-    await withCompletionLease(upload.id, attemptId, () =>
-      storage.completeMultipartUpload({
-        key: upload.storageKey,
-        providerUploadId: upload.providerUploadId,
-        parts,
-        bytes: upload.bytes,
-      }),
-    );
+    await db.transaction(async (transaction) => {
+      const lockedJourney = await transaction.execute<{ id: string }>(sql`
+        select ${journeys.id} as id
+        from ${journeys}
+        where ${journeys.id} = ${upload.journeyId}
+          and ${journeys.deletionStartedAt} is null
+        for update
+      `);
+      if (lockedJourney.rows.length === 0) {
+        throw new JourneyUnavailableForUploadError();
+      }
+      await withCompletionLease(upload.id, attemptId, () =>
+        storage.completeMultipartUpload({
+          key: upload.storageKey,
+          providerUploadId: upload.providerUploadId,
+          parts,
+          bytes: upload.bytes,
+        }),
+      );
+    });
   } catch (error) {
+    if (error instanceof JourneyUnavailableForUploadError) {
+      await markCompletionUnknown(upload.id, attemptId);
+      return context.json({ error: "JOURNEY_DELETING" }, 409);
+    }
     const stillOwnsCompletion = await markCompletionUnknown(upload.id, attemptId);
     if (!stillOwnsCompletion) throw error;
     if (error instanceof CompletedObjectIntegrityError) {
@@ -670,6 +716,7 @@ uploadRoutes.get("/assets/:id/read-url", async (context) => {
       and(
         eq(mediaAssets.id, context.req.param("id")),
         eq(journeys.atlasId, atlas.id),
+        isNull(journeys.deletionStartedAt),
       ),
     )
     .limit(1);

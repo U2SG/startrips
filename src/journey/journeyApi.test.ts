@@ -1,5 +1,26 @@
 import { describe, expect, it, vi } from "vitest";
-import { createJourney, listJourneys, searchLocations } from "./journeyApi";
+import {
+  createJourney,
+  deleteJourney,
+  listJourneys,
+  searchLocations,
+  updateJourney,
+} from "./journeyApi";
+
+const input = {
+  title: "A",
+  startedOn: "2026-08-11",
+  endedOn: null,
+  note: "",
+  lightColor: "#f4ce73",
+  routePoints: [{
+    latitude: 1.3521,
+    longitude: 103.8198,
+    label: "",
+    isStop: false,
+    occurredAt: null,
+  }],
+};
 
 describe("journeyApi", () => {
   it("uses the credentialed tenant-scoped memory endpoint", async () => {
@@ -15,25 +36,40 @@ describe("journeyApi", () => {
       { error: "INVALID_JOURNEY", message: "Invalid journey data" },
       { status: 400 },
     )) as unknown as typeof fetch;
-    const request = createJourney({
-      title: "A",
-      startedOn: "2026-08-11",
-      endedOn: null,
-      note: "",
-      lightColor: "#f4ce73",
-      routePoints: [{
-        latitude: 1.3521,
-        longitude: 103.8198,
-        label: "",
-        isStop: false,
-        occurredAt: null,
-      }],
-    }, fetcher);
+    const request = createJourney(input, fetcher);
     await expect(request).rejects.toMatchObject({
       status: 400,
       code: "INVALID_JOURNEY",
       message: "Invalid journey data",
     });
+  });
+
+  it("updates a tenant-scoped journey with PATCH", async () => {
+    const journey = { id: "journey-1", ...input, routePoints: [], media: [] };
+    const fetcher = vi.fn(async () => Response.json({ journey })) as unknown as typeof fetch;
+
+    await expect(updateJourney("journey-1", input, fetcher)).resolves.toEqual(journey);
+    expect(fetcher).toHaveBeenCalledWith(
+      "/api/journeys/journey-1",
+      expect.objectContaining({
+        method: "PATCH",
+        credentials: "include",
+        body: JSON.stringify(input),
+      }),
+    );
+  });
+
+  it("deletes a tenant-scoped journey with DELETE", async () => {
+    const fetcher = vi.fn(async () => new Response(null, { status: 204 })) as unknown as typeof fetch;
+
+    await expect(deleteJourney("journey-1", fetcher)).resolves.toBeUndefined();
+    expect(fetcher).toHaveBeenCalledWith(
+      "/api/journeys/journey-1",
+      expect.objectContaining({
+        method: "DELETE",
+        credentials: "include",
+      }),
+    );
   });
 
   it("preserves precise location results and provider attribution", async () => {

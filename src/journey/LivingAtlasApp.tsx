@@ -8,6 +8,7 @@ import {
   IconWorld,
   IconX,
 } from "@tabler/icons-react";
+import { useAtlasCapabilities } from "../auth/AuthGateway";
 import { ParticleEarthScene } from "../scene/ParticleEarthScene";
 import {
   JourneyComposer,
@@ -16,7 +17,7 @@ import {
 } from "./JourneyComposer";
 import { JourneyStory } from "./JourneyStory";
 import { JourneyTimeline } from "./JourneyTimeline";
-import { listJourneys } from "./journeyApi";
+import { deleteJourney, listJourneys } from "./journeyApi";
 import {
   mergeJourney,
   sortJourneysChronologically,
@@ -37,6 +38,7 @@ function journeyFocus(journey: Journey | null) {
 }
 
 export function LivingAtlasApp() {
+  const { canDeleteJourney } = useAtlasCapabilities();
   const [journeys, setJourneys] = useState<Journey[]>([]);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [loadError, setLoadError] = useState("");
@@ -44,6 +46,7 @@ export function LivingAtlasApp() {
   const [activeJourneyId, setActiveJourneyId] = useState<string | null>(null);
   const [storyJourneyId, setStoryJourneyId] = useState<string | null>(null);
   const [composerOpen, setComposerOpen] = useState(false);
+  const [editingJourneyId, setEditingJourneyId] = useState<string | null>(null);
   const [arrivalJourneyId, setArrivalJourneyId] = useState<string | null>(null);
   const [notice, setNotice] = useState("");
   const [globePickActive, setGlobePickActive] = useState(false);
@@ -95,22 +98,55 @@ export function LivingAtlasApp() {
   }, [arrivalJourneyId, reduceMotion]);
 
   const activeJourney = journeys.find((journey) => journey.id === activeJourneyId) ?? null;
+  const editingJourney = journeys.find((journey) => journey.id === editingJourneyId) ?? null;
   const routes = useMemo(() => {
     const savedRoutes = toJourneyRoutes(journeys);
-    return draftRoute ? [...savedRoutes, draftRoute] : savedRoutes;
+    if (!draftRoute) return savedRoutes;
+    return savedRoutes.some((route) => route.id === draftRoute.id)
+      ? savedRoutes.map((route) => route.id === draftRoute.id ? draftRoute : route)
+      : [...savedRoutes, draftRoute];
   }, [draftRoute, journeys]);
   const focusPoint = journeyFocus(activeJourney);
 
   async function handleSaved(result: JourneySaveResult) {
+    const edited = editingJourneyId === result.journey.id;
     setJourneys((current) => mergeJourney(current, result.journey));
     setActiveJourneyId(result.journey.id);
-    setArrivalJourneyId(result.journey.id);
+    if (!edited) setArrivalJourneyId(result.journey.id);
     setDraftRoute(null);
-    setNotice(result.mediaErrors.length > 0
+    setNotice(edited
+      ? result.mediaErrors.length > 0
+        ? "旅程修改已保存；未上传成功的媒体仍可重试。"
+        : "旅程修改已保存。"
+      : result.mediaErrors.length > 0
       ? "旅程已抵达图谱；未上传成功的媒体已在创建器中列出。"
       : "旅程已抵达你的私人图谱。"
     );
     await load(true);
+  }
+
+  function openCreateComposer() {
+    setEditingJourneyId(null);
+    setComposerOpen(true);
+  }
+
+  function editJourney(journeyId: string) {
+    setActiveJourneyId(journeyId);
+    setStoryJourneyId(null);
+    setEditingJourneyId(journeyId);
+    setView("planet");
+    setComposerOpen(true);
+  }
+
+  async function removeJourney(journeyId: string) {
+    await deleteJourney(journeyId);
+    const remaining = journeys.filter((journey) => journey.id !== journeyId);
+    setJourneys(remaining);
+    setStoryJourneyId(null);
+    setActiveJourneyId((current) => current === journeyId
+      ? remaining.at(-1)?.id ?? null
+      : current);
+    setNotice("旅程已从图谱移除，私有媒体清理已开始。");
   }
 
   function selectJourney(journeyId: string) {
@@ -172,7 +208,7 @@ export function LivingAtlasApp() {
         <nav aria-label="图谱视图">
           <button type="button" className={view === "planet" ? "is-active" : ""} onClick={() => setView("planet")}><IconWorld size={16} stroke={1.35} aria-hidden="true" />地球</button>
           <button type="button" className={view === "timeline" ? "is-active" : ""} onClick={() => setView("timeline")}><IconTimeline size={16} stroke={1.35} aria-hidden="true" />时间线</button>
-          <button type="button" className="living-atlas__create" onClick={() => setComposerOpen(true)}><IconPlus size={17} stroke={1.4} aria-hidden="true" />记录旅程</button>
+          <button type="button" className="living-atlas__create" onClick={openCreateComposer}><IconPlus size={17} stroke={1.4} aria-hidden="true" />记录旅程</button>
         </nav>
       </header>
 
@@ -185,7 +221,7 @@ export function LivingAtlasApp() {
             setActiveJourneyId(id);
             setStoryJourneyId(id);
           }}
-          onCreate={() => setComposerOpen(true)}
+          onCreate={openCreateComposer}
         />
       ) : null}
 
@@ -195,7 +231,7 @@ export function LivingAtlasApp() {
           <IconRoute size={34} stroke={1.05} aria-hidden="true" />
           <h2>你的地球还没有留下路线</h2>
           <p>一次跨城移动、一段海上航行，或只停留在一个地方，都可以成为第一段旅程。</p>
-          <button type="button" onClick={() => setComposerOpen(true)}><IconPlus size={17} stroke={1.4} aria-hidden="true" />记录第一段旅程</button>
+          <button type="button" onClick={openCreateComposer}><IconPlus size={17} stroke={1.4} aria-hidden="true" />记录第一段旅程</button>
         </section>
       ) : null}
 
@@ -213,10 +249,13 @@ export function LivingAtlasApp() {
 
       {composerOpen ? (
         <JourneyComposer
+          key={editingJourney?.id ?? "new-journey"}
           open
+          journey={editingJourney}
           onClose={() => {
             cancelGlobePick();
             setDraftRoute(null);
+            setEditingJourneyId(null);
             setComposerOpen(false);
           }}
           onSaved={handleSaved}
@@ -235,6 +274,8 @@ export function LivingAtlasApp() {
             setActiveJourneyId(id);
             setStoryJourneyId(id);
           }}
+          onEdit={editJourney}
+          onDelete={canDeleteJourney ? removeJourney : undefined}
           onMediaAdded={async (id) => {
             const loaded = await load(true);
             return loaded?.find((journey) => journey.id === id) ?? null;

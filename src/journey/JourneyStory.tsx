@@ -9,7 +9,9 @@ import {
 import {
   IconArrowLeft,
   IconArrowRight,
+  IconEdit,
   IconPhoto,
+  IconTrash,
   IconUpload,
   IconX,
 } from "@tabler/icons-react";
@@ -29,6 +31,8 @@ type JourneyStoryProps = {
   journeyId: string;
   onClose: () => void;
   onNavigate: (journeyId: string) => void;
+  onEdit: (journeyId: string) => void;
+  onDelete?: (journeyId: string) => void | Promise<void>;
   onMediaAdded: (journeyId: string) => Journey | null | Promise<Journey | null>;
 };
 
@@ -55,11 +59,17 @@ function formatUploadError(message: string) {
   return message;
 }
 
+export function journeyDeleteDescription(journey: Journey) {
+  return `路线、故事和 ${journey.media.length} 个私有媒体都会永久删除。`;
+}
+
 export function JourneyStory({
   journeys,
   journeyId,
   onClose,
   onNavigate,
+  onEdit,
+  onDelete,
   onMediaAdded,
 }: JourneyStoryProps) {
   const journeyIndex = journeys.findIndex((candidate) => candidate.id === journeyId);
@@ -69,13 +79,17 @@ export function JourneyStory({
   const [uploadState, setUploadState] = useState<MediaUploadState>({ status: "idle" });
   const [retryFiles, setRetryFiles] = useState<File[]>([]);
   const [closeBlocked, setCloseBlocked] = useState(false);
+  const [deleteState, setDeleteState] = useState<"idle" | "confirming" | "pending">("idle");
+  const [deleteMessage, setDeleteMessage] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const deleteCancelRef = useRef<HTMLButtonElement>(null);
 
   function requestClose() {
     if (uploadState.status === "uploading") {
       setCloseBlocked(true);
       return;
     }
+    if (deleteState === "pending") return;
     onClose();
   }
 
@@ -86,7 +100,13 @@ export function JourneyStory({
     setUploadState({ status: "idle" });
     setRetryFiles([]);
     setCloseBlocked(false);
+    setDeleteState("idle");
+    setDeleteMessage("");
   }, [journeyId]);
+
+  useEffect(() => {
+    if (deleteState === "confirming") deleteCancelRef.current?.focus();
+  }, [deleteState]);
 
   useEffect(() => {
     if (!journey) return;
@@ -222,6 +242,22 @@ export function JourneyStory({
     if (selected.length > 0) void uploadFiles(selected);
   }
 
+  async function confirmDelete() {
+    if (!onDelete || uploadState.status === "uploading" || deleteState === "pending") {
+      return;
+    }
+    setDeleteState("pending");
+    setDeleteMessage("");
+    try {
+      await onDelete(journey.id);
+    } catch (error) {
+      setDeleteState("confirming");
+      setDeleteMessage(error instanceof Error ? error.message : "旅程删除失败，请稍后重试。");
+    }
+  }
+
+  const mutationPending = uploadState.status === "uploading" || deleteState === "pending";
+
   return (
     <div className="journey-story-backdrop" role="presentation" onClick={closeFromBackdrop}>
       <article ref={dialogRef} tabIndex={-1} className="journey-story" role="dialog" aria-modal="true" aria-labelledby="journey-story-title">
@@ -230,8 +266,8 @@ export function JourneyStory({
             <p>PRIVATE JOURNEY · {journeyRange(journey)}</p>
             <h2 id="journey-story-title">{journey.title}</h2>
           </div>
-          <button className="journey-story__close" type="button" onClick={requestClose} aria-label="退出旅程故事">
-            <span>{uploadState.status === "uploading" ? "上传中" : "退出"}</span><IconX size={19} stroke={1.35} aria-hidden="true" />
+          <button className="journey-story__close" type="button" disabled={mutationPending} onClick={requestClose} aria-label="退出旅程故事">
+            <span>{deleteState === "pending" ? "删除中" : uploadState.status === "uploading" ? "上传中" : "退出"}</span><IconX size={19} stroke={1.35} aria-hidden="true" />
           </button>
         </header>
 
@@ -244,9 +280,9 @@ export function JourneyStory({
             {asset && read?.status === "ready" && !asset.mimeType.startsWith("video/") ? <img key={asset.id} src={read.url} alt={asset.fileName} /> : null}
             {journey.media.length > 1 ? (
               <nav className="journey-story__media-nav" aria-label="媒体导航">
-                <button type="button" disabled={assetIndex === 0} onClick={() => setAssetIndex((current) => current - 1)} aria-label="上一个媒体"><IconArrowLeft size={17} stroke={1.35} aria-hidden="true" /></button>
+                <button type="button" disabled={assetIndex === 0 || mutationPending} onClick={() => setAssetIndex((current) => current - 1)} aria-label="上一个媒体"><IconArrowLeft size={17} stroke={1.35} aria-hidden="true" /></button>
                 <span>{assetIndex + 1} / {journey.media.length}</span>
-                <button type="button" disabled={assetIndex === journey.media.length - 1} onClick={() => setAssetIndex((current) => current + 1)} aria-label="下一个媒体"><IconArrowRight size={17} stroke={1.35} aria-hidden="true" /></button>
+                <button type="button" disabled={assetIndex === journey.media.length - 1 || mutationPending} onClick={() => setAssetIndex((current) => current + 1)} aria-label="下一个媒体"><IconArrowRight size={17} stroke={1.35} aria-hidden="true" /></button>
               </nav>
             ) : null}
           </section>
@@ -258,6 +294,20 @@ export function JourneyStory({
             </dl>
             {namedStops.length > 0 ? <p className="journey-story__stops">{namedStops.map((stop) => stop.label).join(" · ")}</p> : null}
             {journey.note ? <p className="journey-story__note">{journey.note}</p> : <p className="journey-story__note is-empty">没有文字，只有这条路线留下来。</p>}
+            {onDelete && deleteState !== "idle" ? (
+              <section className="journey-story__delete-confirmation" aria-label="确认删除旅程">
+                <div>
+                  <p>PERMANENT DELETE</p>
+                  <strong>删除后无法恢复</strong>
+                  <span>{journeyDeleteDescription(journey)}</span>
+                </div>
+                <div>
+                  <button ref={deleteCancelRef} type="button" disabled={deleteState === "pending"} onClick={() => { setDeleteState("idle"); setDeleteMessage(""); }}>取消</button>
+                  <button type="button" disabled={mutationPending} onClick={() => void confirmDelete()}>{deleteState === "pending" ? "正在删除…" : "确认删除"}</button>
+                </div>
+                {deleteMessage ? <p className="journey-story__delete-error" role="alert">{deleteMessage}</p> : null}
+              </section>
+            ) : null}
             <div className="journey-story__media-add">
               <div>
                 <p>PRIVATE MEDIA</p>
@@ -270,11 +320,12 @@ export function JourneyStory({
                 multiple
                 tabIndex={-1}
                 aria-hidden="true"
+                disabled={mutationPending || deleteState !== "idle"}
                 onChange={selectFiles}
               />
               <button
                 type="button"
-                disabled={uploadState.status === "uploading"}
+                disabled={mutationPending || deleteState !== "idle"}
                 onClick={() => fileInputRef.current?.click()}
               >
                 <IconUpload size={17} stroke={1.35} aria-hidden="true" />
@@ -300,7 +351,7 @@ export function JourneyStory({
                 <p className={`journey-story__upload-message is-${uploadState.tone}`} role="status">{uploadState.message}</p>
               ) : null}
               {retryFiles.length > 0 && uploadState.status !== "uploading" ? (
-                <button className="journey-story__retry" type="button" onClick={() => void uploadFiles(retryFiles)}>
+                <button className="journey-story__retry" type="button" disabled={mutationPending || deleteState !== "idle"} onClick={() => void uploadFiles(retryFiles)}>
                   重试失败的 {retryFiles.length} 个文件
                 </button>
               ) : null}
@@ -309,8 +360,14 @@ export function JourneyStory({
         </div>
 
         <footer>
-          <button type="button" disabled={!previousJourney || uploadState.status === "uploading"} onClick={() => previousJourney && onNavigate(previousJourney.id)}><IconArrowLeft size={17} stroke={1.35} aria-hidden="true" />上一段</button>
-          <button type="button" disabled={!nextJourney || uploadState.status === "uploading"} onClick={() => nextJourney && onNavigate(nextJourney.id)}>下一段<IconArrowRight size={17} stroke={1.35} aria-hidden="true" /></button>
+          <div className="journey-story__manage">
+            <button type="button" disabled={mutationPending || deleteState !== "idle"} onClick={() => onEdit(journey.id)}><IconEdit size={16} stroke={1.35} aria-hidden="true" />编辑旅程</button>
+            {onDelete ? <button className="is-destructive" type="button" disabled={mutationPending || deleteState !== "idle"} onClick={() => { setDeleteState("confirming"); setDeleteMessage(""); }}><IconTrash size={16} stroke={1.35} aria-hidden="true" />删除旅程</button> : null}
+          </div>
+          <div className="journey-story__navigation">
+            <button type="button" disabled={!previousJourney || mutationPending || deleteState !== "idle"} onClick={() => previousJourney && onNavigate(previousJourney.id)}><IconArrowLeft size={17} stroke={1.35} aria-hidden="true" />上一段</button>
+            <button type="button" disabled={!nextJourney || mutationPending || deleteState !== "idle"} onClick={() => nextJourney && onNavigate(nextJourney.id)}>下一段<IconArrowRight size={17} stroke={1.35} aria-hidden="true" /></button>
+          </div>
         </footer>
       </article>
     </div>

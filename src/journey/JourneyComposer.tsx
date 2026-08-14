@@ -18,7 +18,7 @@ import {
   IconX,
 } from "@tabler/icons-react";
 import { uploadMediaInParts } from "../api/multipartUpload";
-import { createJourney, searchLocations } from "./journeyApi";
+import { createJourney, searchLocations, updateJourney } from "./journeyApi";
 import {
   MAX_JOURNEY_FILES,
   validateJourneyFiles,
@@ -71,7 +71,7 @@ type UploadJourneyMediaOptions = {
 type PersistJourneyDraftOptions = {
   input: JourneyInput;
   files: readonly File[];
-  create?: (input: JourneyInput) => Promise<Journey>;
+  persist?: (input: JourneyInput) => Promise<Journey>;
   upload?: typeof uploadMediaInParts;
   onProgress?: (progress: UploadProgress) => void;
 };
@@ -124,11 +124,11 @@ export async function uploadJourneyMedia({
 export async function persistJourneyDraft({
   input,
   files,
-  create = createJourney,
+  persist = createJourney,
   upload = uploadMediaInParts,
   onProgress,
 }: PersistJourneyDraftOptions): Promise<JourneySaveResult> {
-  const journey = await create(input);
+  const journey = await persist(input);
   const mediaResult = await uploadJourneyMedia({
     journeyId: journey.id,
     files,
@@ -145,6 +145,7 @@ export type GlobePointPick = {
 
 type JourneyComposerProps = {
   open: boolean;
+  journey?: Journey | null;
   onClose: () => void;
   onSaved: (result: JourneySaveResult) => void | Promise<void>;
   onGlobePickRequest?: (accept: (point: GlobePointPick) => void) => void;
@@ -173,6 +174,17 @@ function toDraftPoint(
   };
 }
 
+export function journeyToDraftPoints(journey: Journey): RouteDraftPoint[] {
+  return journey.routePoints.map((point) => ({
+    draftId: `saved-${point.id}`,
+    latitude: point.latitude,
+    longitude: point.longitude,
+    label: point.label,
+    isStop: point.isStop,
+    occurredAt: point.occurredAt,
+  }));
+}
+
 function formatBytes(bytes: number) {
   if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
@@ -195,13 +207,16 @@ export function parseCoordinateInput(
 
 export function JourneyComposer({
   open,
+  journey,
   onClose,
   onSaved,
   onGlobePickRequest,
   onGlobePickCancel,
   onRoutePreviewChange,
 }: JourneyComposerProps) {
-  const [routePoints, setRoutePoints] = useState<RouteDraftPoint[]>([]);
+  const [routePoints, setRoutePoints] = useState<RouteDraftPoint[]>(
+    () => journey ? journeyToDraftPoints(journey) : [],
+  );
   const [latitude, setLatitude] = useState("");
   const [longitude, setLongitude] = useState("");
   const [pointLabel, setPointLabel] = useState("");
@@ -212,11 +227,13 @@ export function JourneyComposer({
     LocationSearchResponse["attribution"]
   >(null);
   const [searchPending, setSearchPending] = useState(false);
-  const [title, setTitle] = useState("");
-  const [startedOn, setStartedOn] = useState(() => new Date().toISOString().slice(0, 10));
-  const [endedOn, setEndedOn] = useState("");
-  const [note, setNote] = useState("");
-  const [lightColor, setLightColor] = useState(LIGHT_COLORS[0]);
+  const [title, setTitle] = useState(journey?.title ?? "");
+  const [startedOn, setStartedOn] = useState(
+    () => journey?.startedOn ?? new Date().toISOString().slice(0, 10),
+  );
+  const [endedOn, setEndedOn] = useState(journey?.endedOn ?? "");
+  const [note, setNote] = useState(journey?.note ?? "");
+  const [lightColor, setLightColor] = useState(journey?.lightColor ?? LIGHT_COLORS[0]);
   const [files, setFiles] = useState<File[]>([]);
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
@@ -239,7 +256,7 @@ export function JourneyComposer({
 
   useEffect(() => {
     onRoutePreviewChange?.(routePoints.length === 0 ? null : {
-      id: "draft-route-preview",
+      id: journey?.id ?? "draft-route-preview",
       color: lightColor,
       points: routePoints.map((point) => ({
         lat: point.latitude,
@@ -248,7 +265,7 @@ export function JourneyComposer({
         label: point.label,
       })),
     });
-  }, [lightColor, onRoutePreviewChange, routePoints]);
+  }, [journey?.id, lightColor, onRoutePreviewChange, routePoints]);
 
   useEffect(() => {
     if (!globePicking) return;
@@ -382,6 +399,9 @@ export function JourneyComposer({
       const result = await persistJourneyDraft({
         input,
         files,
+        persist: journey
+          ? (nextInput) => updateJourney(journey.id, nextInput)
+          : createJourney,
         onProgress: setProgress,
       });
       setSavedResult(result);
@@ -424,6 +444,7 @@ export function JourneyComposer({
   const progressPercent = progress && progress.totalBytes > 0
     ? Math.round((progress.uploadedBytes / progress.totalBytes) * 100)
     : 0;
+  const isEditing = Boolean(journey);
   const editorLocked = saving || savedResult !== null;
 
   return (
@@ -445,11 +466,11 @@ export function JourneyComposer({
       >
         <header className="journey-composer__header">
           <div>
-            <p>PRIVATE ATLAS · NEW JOURNEY</p>
-            <h2 id="journey-composer-title">把一段旅程，收进你的星球</h2>
-            <span>一次停留、跨城路径，或一直在路上。</span>
+            <p>PRIVATE ATLAS · {isEditing ? "EDIT JOURNEY" : "NEW JOURNEY"}</p>
+            <h2 id="journey-composer-title">{isEditing ? "重新整理这段旅程" : "把一段旅程，收进你的星球"}</h2>
+            <span>{isEditing ? "调整故事、日期和路线；已有媒体会原样保留。" : "一次停留、跨城路径，或一直在路上。"}</span>
           </div>
-          <button type="button" onClick={closeComposer} disabled={saving} aria-label="关闭创建器"><IconX size={20} stroke={1.35} aria-hidden="true" /></button>
+          <button type="button" onClick={closeComposer} disabled={saving} aria-label={isEditing ? "关闭旅程编辑器" : "关闭创建器"}><IconX size={20} stroke={1.35} aria-hidden="true" /></button>
         </header>
 
         <div className="journey-composer__body">
@@ -468,7 +489,7 @@ export function JourneyComposer({
                 <label className="journey-media-picker">
                   <IconUpload size={26} stroke={1.2} aria-hidden="true" />
                   <span>添加照片或视频</span>
-                  <strong>最多 {MAX_JOURNEY_FILES} 个文件</strong>
+                  <strong>{journey?.media.length ? `${journey.media.length} 个已有媒体 · 继续添加` : `最多 ${MAX_JOURNEY_FILES} 个文件`}</strong>
                   <input type="file" accept="image/avif,image/jpeg,image/png,image/webp,video/mp4,video/quicktime,video/webm" multiple onChange={selectFiles} />
                 </label>
                 <ul>
@@ -594,9 +615,13 @@ export function JourneyComposer({
         <footer className="journey-composer__footer">
           <div className="journey-composer__summary" aria-live="polite">
             <strong>{routePoints.length === 0 ? "还没有地点" : routePoints.length === 1 ? "1 个地点" : `${routePoints.length} 个地点 · 一段路径`}</strong>
-            <span>{files.length === 0 ? "媒体可以稍后补充" : `${files.length} 个媒体文件`}</span>
+            <span>{files.length > 0
+              ? `${files.length} 个新媒体文件`
+              : journey?.media.length
+                ? `${journey.media.length} 个已有媒体`
+                : "媒体可以稍后补充"}</span>
           </div>
-          {savedResult ? <button type="button" onClick={closeComposer}><IconCheck size={18} stroke={1.4} aria-hidden="true" />完成</button> : <button type="button" onClick={save} disabled={saving}><IconCheck size={18} stroke={1.4} aria-hidden="true" />{saving ? "正在保存…" : "保存到星球"}</button>}
+          {savedResult ? <button type="button" onClick={closeComposer}><IconCheck size={18} stroke={1.4} aria-hidden="true" />完成</button> : <button type="button" onClick={save} disabled={saving}><IconCheck size={18} stroke={1.4} aria-hidden="true" />{saving ? "正在保存…" : isEditing ? "保存修改" : "保存到星球"}</button>}
         </footer>
       </section>
     </div>

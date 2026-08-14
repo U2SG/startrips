@@ -4,7 +4,7 @@ import { count, eq, inArray } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { app } from "../app";
 import { serverConfig } from "../config";
-import { atlases, journeys, mediaUploads } from "../db/app-schema";
+import { atlases, journeys, mediaAssets, mediaUploads } from "../db/app-schema";
 import {
   member as authMembers,
   organization as authOrganizations,
@@ -13,7 +13,9 @@ import {
 import { db, pool } from "../db/client";
 import {
   createJourneyForAtlas,
+  getJourneyDeletionCandidateForAtlas,
   listJourneysForAtlas,
+  markJourneyForDeletionForAtlas,
   updateJourneyForAtlas,
 } from "../repositories/journey-repository";
 import { finalizeUpload } from "../routes/uploads";
@@ -273,6 +275,67 @@ describe("tenant-scoped journey repository", () => {
       .from(journeys)
       .where(eq(journeys.id, journeyB));
     expect(unchanged.title).toBe("Only B");
+  });
+
+  it("scopes deletion intent and hides the journey from active reads", async () => {
+    const created = await createJourneyForAtlas(atlasA, "user-a", {
+      ...baseJourney,
+      title: "Pending deletion",
+    });
+    if (!created) throw new Error("Journey fixture was not created");
+
+    await expect(
+      markJourneyForDeletionForAtlas(created.id, atlasB),
+    ).resolves.toBeUndefined();
+    await expect(
+      markJourneyForDeletionForAtlas(created.id, atlasA),
+    ).resolves.toEqual({ id: created.id });
+
+    const visible = await listJourneysForAtlas(atlasA);
+    expect(visible.some((journey) => journey.id === created.id)).toBe(false);
+    await expect(updateJourneyForAtlas(created.id, atlasA, {
+      ...baseJourney,
+      title: "Should stay hidden",
+    })).resolves.toBeUndefined();
+    await expect(
+      getJourneyDeletionCandidateForAtlas(created.id, atlasA),
+    ).resolves.toMatchObject({ id: created.id, media: [], uploads: [] });
+  });
+
+  it("prevents upload finalization after deletion begins", async () => {
+    const journey = await createJourneyForAtlas(atlasA, "user-a", {
+      ...baseJourney,
+      title: "Deletion versus completion",
+    });
+    if (!journey) throw new Error("Journey fixture was not created");
+    const [upload] = await db
+      .insert(mediaUploads)
+      .values({
+        atlasId: atlasA,
+        journeyId: journey.id,
+        storageDriver: "test",
+        storageKey: `${atlasA}/${journey.id}/${randomUUID()}`,
+        providerUploadId: randomUUID(),
+        fileName: "blocked.jpg",
+        mimeType: "image/jpeg",
+        bytes: 128,
+        partSize: 128,
+        partCount: 1,
+        status: "finalizing",
+        createdByUserId: "user-a",
+      })
+      .returning();
+
+    await markJourneyForDeletionForAtlas(journey.id, atlasA);
+    await expect(finalizeUpload(upload)).rejects.toThrow(
+      "Upload journey no longer exists",
+    );
+
+    const [assetCount] = await db
+      .select({ value: count() })
+      .from(mediaAssets)
+      .where(eq(mediaAssets.journeyId, journey.id));
+    expect(assetCount.value).toBe(0);
   });
 
   it("atomically replaces and preserves route order", async () => {

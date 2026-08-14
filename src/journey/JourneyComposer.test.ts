@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import {
   JourneyComposer,
+  journeyToDraftPoints,
   parseCoordinateInput,
   persistJourneyDraft,
 } from "./JourneyComposer";
@@ -59,7 +60,7 @@ describe("persistJourneyDraft", () => {
 
   it("creates first, uploads files sequentially with two part workers, and reports progress", async () => {
     const calls: string[] = [];
-    const create = vi.fn(async () => {
+    const persist = vi.fn(async () => {
       calls.push("create");
       return journey;
     });
@@ -75,7 +76,7 @@ describe("persistJourneyDraft", () => {
     ] as File[];
     const onProgress = vi.fn();
 
-    const result = await persistJourneyDraft({ input, files, create, upload, onProgress });
+    const result = await persistJourneyDraft({ input, files, persist, upload, onProgress });
 
     expect(calls).toEqual(["create", "a.jpg", "b.mp4"]);
     expect(result).toMatchObject({ journey, uploadedCount: 2, mediaErrors: [] });
@@ -98,7 +99,7 @@ describe("persistJourneyDraft", () => {
     const result = await persistJourneyDraft({
       input,
       files,
-      create: async () => journey,
+      persist: async () => journey,
       upload,
     });
 
@@ -108,5 +109,48 @@ describe("persistJourneyDraft", () => {
       fileName: "a.jpg",
       message: "storage unavailable",
     }]);
+  });
+
+  it("preserves an existing journey as an editable draft", () => {
+    const existing = {
+      ...journey,
+      title: "Southbound light",
+      startedOn: "2026-04-16",
+      endedOn: "2026-05-03",
+      note: "Across the water",
+      lightColor: "#77c8c2",
+      routePoints: [{
+        id: "route-point-1",
+        journeyId: journey.id,
+        sortOrder: 0,
+        latitude: 22.543096,
+        longitude: 114.057865,
+        label: "Shenzhen",
+        isStop: true,
+        occurredAt: null,
+        createdAt: "2026-04-16T00:00:00.000Z",
+      }],
+      media: [{ id: "media-1" }],
+    } as Journey;
+
+    expect(journeyToDraftPoints(existing)).toEqual([expect.objectContaining({
+      draftId: "saved-route-point-1",
+      latitude: 22.543096,
+      longitude: 114.057865,
+      label: "Shenzhen",
+      isStop: true,
+    })]);
+
+    const markup = renderToStaticMarkup(createElement(JourneyComposer, {
+      open: true,
+      journey: existing,
+      onClose: () => undefined,
+      onSaved: () => undefined,
+    }));
+    expect(markup).toContain('value="Southbound light"');
+    expect(markup).toContain('value="2026-04-16"');
+    expect(markup).toContain('value="Shenzhen"');
+    expect(markup).toContain("1 个已有媒体");
+    expect(markup).toContain("保存修改");
   });
 });

@@ -2,11 +2,11 @@ import { Hono } from "hono";
 import { requireAtlasAccess } from "../authorization/atlas-access";
 import {
   createJourneyForAtlas,
-  deleteJourneyForAtlas,
   listJourneysForAtlas,
   updateJourneyForAtlas,
   type JourneyValues,
 } from "../repositories/journey-repository";
+import { deleteJourneyWithStorage } from "../services/delete-journey";
 
 const MAX_ROUTE_POINTS = 64;
 
@@ -138,7 +138,7 @@ journeyRoutes.patch("/:id", async (context) => {
 
 journeyRoutes.delete("/:id", async (context) => {
   const { atlas } = await requireAtlasAccess(context.req.raw, "delete");
-  const journey = await deleteJourneyForAtlas(context.req.param("id"), atlas.id);
+  const journey = await deleteJourneyWithStorage(context.req.param("id"), atlas.id);
   if (!journey) return context.json({ error: "JOURNEY_NOT_FOUND" }, 404);
   return context.body(null, 204);
 });

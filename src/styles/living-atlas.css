@@ -773,6 +773,75 @@
   color: var(--atlas-faint);
 }
 
+.journey-story__delete-confirmation {
+  display: grid;
+  gap: 16px;
+  margin-top: 30px;
+  padding: 18px;
+  border: 1px solid rgba(217, 138, 112, 0.32);
+  background: rgba(78, 25, 15, 0.12);
+}
+
+.journey-story__delete-confirmation > div:first-child {
+  display: grid;
+  gap: 7px;
+}
+
+.journey-story__delete-confirmation p,
+.journey-story__delete-confirmation strong,
+.journey-story__delete-confirmation span {
+  margin: 0;
+}
+
+.journey-story__delete-confirmation p {
+  color: #d99b83;
+  font: 500 8px/1 ui-monospace, "SFMono-Regular", Consolas, monospace;
+  letter-spacing: 0.15em;
+}
+
+.journey-story__delete-confirmation strong {
+  color: #e9d6cf;
+  font-family: var(--archive-serif);
+  font-size: 18px;
+  font-weight: 400;
+}
+
+.journey-story__delete-confirmation span,
+.journey-story__delete-error {
+  color: #ae9187;
+  font-size: 10px;
+  line-height: 1.7;
+}
+
+.journey-story__delete-confirmation > div:nth-child(2) {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.journey-story__delete-confirmation button {
+  min-height: 42px;
+  border: 1px solid var(--atlas-line);
+  background: transparent;
+  color: var(--atlas-muted);
+  cursor: pointer;
+}
+
+.journey-story__delete-confirmation button:last-child {
+  border-color: rgba(217, 138, 112, 0.42);
+  background: rgba(217, 138, 112, 0.09);
+  color: #efc6b6;
+}
+
+.journey-story__delete-confirmation button:disabled {
+  cursor: wait;
+  opacity: 0.58;
+}
+
+.journey-story__delete-error {
+  color: #d9a38c;
+}
+
 .journey-story__media-add {
   display: grid;
   gap: 14px;
@@ -890,11 +959,17 @@
 .journey-story > footer {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: space-between;
   gap: 8px;
   padding: 0 22px;
   border-top: 1px solid var(--atlas-line);
   background: rgba(1, 7, 8, 0.96);
+}
+
+.journey-story__manage,
+.journey-story__navigation {
+  display: flex;
+  gap: 8px;
 }
 
 .journey-story > footer button {
@@ -909,6 +984,16 @@
   cursor: pointer;
   font-size: 10px;
   letter-spacing: 0.08em;
+}
+
+.journey-story > footer button.is-destructive {
+  border-color: rgba(217, 138, 112, 0.24);
+  color: #bd8c7a;
+}
+
+.journey-story > footer button:disabled {
+  cursor: default;
+  opacity: 0.38;
 }
 
 /* Composer */
@@ -2219,8 +2304,19 @@
 
   .journey-story > footer {
     min-height: 72px;
-    justify-content: space-between;
+    display: grid;
+    gap: 8px;
     padding: 10px 12px;
+  }
+
+  .journey-story__manage,
+  .journey-story__navigation {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .journey-story > footer button {
+    justify-content: center;
   }
 
   .journey-story > footer button,

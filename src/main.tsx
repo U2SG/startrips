@@ -75,6 +75,11 @@ function JourneyStoryQaPreview() {
           journeyId={storyQaJourney.id}
           onClose={() => setOpen(false)}
           onNavigate={() => undefined}
+          onEdit={() => undefined}
+          onDelete={() => {
+            setJourneys([]);
+            setOpen(false);
+          }}
           onMediaAdded={() => {
             const currentJourney = journeys[0];
             const nextJourney: Journey = {

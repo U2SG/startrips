@@ -1,9 +1,18 @@
-import { and, asc, eq, inArray } from "drizzle-orm";
+import {
+  and,
+  asc,
+  eq,
+  inArray,
+  isNotNull,
+  isNull,
+  notInArray,
+} from "drizzle-orm";
 import { db } from "../db/client";
 import {
   journeyRoutePoints,
   journeys,
   mediaAssets,
+  mediaUploads,
 } from "../db/app-schema";
 
 export type JourneyValues = Pick<
@@ -17,14 +26,24 @@ export type JourneyValues = Pick<
 };
 
 async function loadJourneys(atlasId: string, journeyId?: string) {
+  const atlasScope = journeyId
+    ? and(eq(journeys.atlasId, atlasId), eq(journeys.id, journeyId))
+    : eq(journeys.atlasId, atlasId);
   const journeyRows = await db
-    .select()
+    .select({
+      id: journeys.id,
+      atlasId: journeys.atlasId,
+      title: journeys.title,
+      startedOn: journeys.startedOn,
+      endedOn: journeys.endedOn,
+      note: journeys.note,
+      lightColor: journeys.lightColor,
+      createdByUserId: journeys.createdByUserId,
+      createdAt: journeys.createdAt,
+      updatedAt: journeys.updatedAt,
+    })
     .from(journeys)
-    .where(
-      journeyId
-        ? and(eq(journeys.atlasId, atlasId), eq(journeys.id, journeyId))
-        : eq(journeys.atlasId, atlasId),
-    )
+    .where(and(atlasScope, isNull(journeys.deletionStartedAt)))
     .orderBy(asc(journeys.startedOn), asc(journeys.createdAt));
   if (journeyRows.length === 0) return [];
 
@@ -119,7 +138,11 @@ export async function updateJourneyForAtlas(
         lightColor: values.lightColor,
         updatedAt: new Date(),
       })
-      .where(and(eq(journeys.id, journeyId), eq(journeys.atlasId, atlasId)))
+      .where(and(
+        eq(journeys.id, journeyId),
+        eq(journeys.atlasId, atlasId),
+        isNull(journeys.deletionStartedAt),
+      ))
       .returning({ id: journeys.id });
     if (!journey) return false;
 
@@ -138,10 +161,91 @@ export async function updateJourneyForAtlas(
   return updated ? getJourneyForAtlas(journeyId, atlasId) : undefined;
 }
 
+export async function getJourneyDeletionCandidateForAtlas(
+  journeyId: string,
+  atlasId: string,
+) {
+  const [journey] = await db
+    .select({ id: journeys.id })
+    .from(journeys)
+    .where(and(
+      eq(journeys.id, journeyId),
+      eq(journeys.atlasId, atlasId),
+      isNotNull(journeys.deletionStartedAt),
+    ))
+    .limit(1);
+  if (!journey) return undefined;
+
+  const [media, uploads] = await Promise.all([
+    db
+      .select({
+        storageDriver: mediaAssets.storageDriver,
+        storageKey: mediaAssets.storageKey,
+      })
+      .from(mediaAssets)
+      .where(eq(mediaAssets.journeyId, journey.id)),
+    db
+      .select({
+        storageDriver: mediaUploads.storageDriver,
+        storageKey: mediaUploads.storageKey,
+        providerUploadId: mediaUploads.providerUploadId,
+        status: mediaUploads.status,
+      })
+      .from(mediaUploads)
+      .where(and(
+        eq(mediaUploads.journeyId, journey.id),
+        notInArray(mediaUploads.status, ["completed", "aborted"]),
+      )),
+  ]);
+
+  return { id: journey.id, media, uploads };
+}
+
+export async function markJourneyForDeletionForAtlas(
+  journeyId: string,
+  atlasId: string,
+): Promise<{ id: string } | undefined> {
+  const [journey] = await db
+    .update(journeys)
+    .set({ deletionStartedAt: new Date(), updatedAt: new Date() })
+    .where(and(eq(journeys.id, journeyId), eq(journeys.atlasId, atlasId)))
+    .returning({ id: journeys.id });
+  return journey;
+}
+
+export async function listJourneysPendingDeletion(limit = 25) {
+  return db
+    .select({ id: journeys.id, atlasId: journeys.atlasId })
+    .from(journeys)
+    .where(isNotNull(journeys.deletionStartedAt))
+    .orderBy(asc(journeys.updatedAt))
+    .limit(limit);
+}
+
+export async function deferJourneyDeletionRetryForAtlas(
+  journeyId: string,
+  atlasId: string,
+) {
+  const [journey] = await db
+    .update(journeys)
+    .set({ updatedAt: new Date() })
+    .where(and(
+      eq(journeys.id, journeyId),
+      eq(journeys.atlasId, atlasId),
+      isNotNull(journeys.deletionStartedAt),
+    ))
+    .returning({ id: journeys.id });
+  return journey;
+}
+
 export async function deleteJourneyForAtlas(journeyId: string, atlasId: string) {
   const [journey] = await db
     .delete(journeys)
-    .where(and(eq(journeys.id, journeyId), eq(journeys.atlasId, atlasId)))
+    .where(and(
+      eq(journeys.id, journeyId),
+      eq(journeys.atlasId, atlasId),
+      isNotNull(journeys.deletionStartedAt),
+    ))
     .returning({ id: journeys.id });
   return journey;
 }

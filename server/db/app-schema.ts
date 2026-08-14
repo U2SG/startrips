@@ -49,6 +49,7 @@ export const journeys = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
+    deletionStartedAt: timestamp("deletion_started_at", { withTimezone: true }),
   },
   (table) => [
     index("journeys_atlas_start_idx").on(table.atlasId, table.startedOn),
