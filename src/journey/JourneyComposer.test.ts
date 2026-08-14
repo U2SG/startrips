@@ -2,12 +2,15 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import {
+  clearRemovedMediaTarget,
   JourneyComposer,
   journeyToDraftPoints,
   parseCoordinateInput,
   persistJourneyDraft,
+  resolvePendingMediaUploads,
   uploadJourneyMedia,
 } from "./JourneyComposer";
+import type { RouteDraftPoint } from "./routeDraft";
 import type { Journey, JourneyInput } from "./types";
 
 const input: JourneyInput = {
@@ -77,7 +80,14 @@ describe("persistJourneyDraft", () => {
     ] as File[];
     const onProgress = vi.fn();
 
-    const result = await persistJourneyDraft({ input, files, persist, upload, onProgress });
+    const result = await persistJourneyDraft({
+      input,
+      mediaFiles: files.map((file) => ({ file, routePointDraftId: null })),
+      routePoints: [],
+      persist,
+      upload,
+      onProgress,
+    });
 
     expect(calls).toEqual(["create", "a.jpg", "b.mp4"]);
     expect(result).toMatchObject({ journey, uploadedCount: 2, mediaErrors: [] });
@@ -99,7 +109,8 @@ describe("persistJourneyDraft", () => {
 
     const result = await persistJourneyDraft({
       input,
-      files,
+      mediaFiles: files.map((file) => ({ file, routePointDraftId: null })),
+      routePoints: [],
       persist: async () => journey,
       upload,
     });
@@ -137,6 +148,58 @@ describe("persistJourneyDraft", () => {
       journeyId: "journey-1",
       routePointId: "point-1",
     }));
+  });
+
+  it("resolves pending media to retained and newly persisted route points", () => {
+    const existingFile = { name: "existing.jpg", size: 10 } as File;
+    const newFile = { name: "new.jpg", size: 10 } as File;
+    const routePoints = [
+      {
+        draftId: "new-point",
+        latitude: 35.6762,
+        longitude: 139.6503,
+        label: "Tokyo",
+        isStop: true,
+        occurredAt: null,
+      },
+      {
+        draftId: "saved-existing-point",
+        id: "existing-point",
+        latitude: 22.5431,
+        longitude: 114.0579,
+        label: "Shenzhen",
+        isStop: true,
+        occurredAt: null,
+      },
+    ] satisfies RouteDraftPoint[];
+    const persisted = {
+      ...journey,
+      routePoints: [
+        { id: "new-persisted-point", sortOrder: 0 },
+        { id: "existing-point", sortOrder: 1 },
+      ],
+    } as Journey;
+
+    expect(resolvePendingMediaUploads([
+      { file: existingFile, routePointDraftId: "saved-existing-point" },
+      { file: newFile, routePointDraftId: "new-point" },
+    ], routePoints, persisted)).toEqual([
+      { file: existingFile, routePointId: "existing-point" },
+      { file: newFile, routePointId: "new-persisted-point" },
+    ]);
+  });
+
+  it("falls media back to the whole journey when its draft point is removed", () => {
+    const retainedFile = { name: "retained.jpg", size: 10 } as File;
+    const resetFile = { name: "reset.jpg", size: 10 } as File;
+
+    expect(clearRemovedMediaTarget([
+      { file: retainedFile, routePointDraftId: "point-a" },
+      { file: resetFile, routePointDraftId: "point-b" },
+    ], "point-b")).toEqual([
+      { file: retainedFile, routePointDraftId: "point-a" },
+      { file: resetFile, routePointDraftId: null },
+    ]);
   });
 
   it("preserves an existing journey as an editable draft", () => {

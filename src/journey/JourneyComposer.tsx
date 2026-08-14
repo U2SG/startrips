@@ -56,6 +56,16 @@ export type JourneySaveResult = {
   mediaErrors: Array<{ fileIndex: number; fileName: string; message: string }>;
 };
 
+export type PendingJourneyMedia = {
+  file: File;
+  routePointDraftId: string | null;
+};
+
+type JourneyMediaUploadAssignment = {
+  file: File;
+  routePointId?: string;
+};
+
 type JourneyMediaUploadResult = Pick<
   JourneySaveResult,
   "uploadedCount" | "mediaErrors"
@@ -71,26 +81,33 @@ type UploadJourneyMediaOptions = {
 
 type PersistJourneyDraftOptions = {
   input: JourneyInput;
-  files: readonly File[];
+  mediaFiles: readonly PendingJourneyMedia[];
+  routePoints: readonly RouteDraftPoint[];
   persist?: (input: JourneyInput) => Promise<Journey>;
   upload?: typeof uploadMediaInParts;
   onProgress?: (progress: UploadProgress) => void;
 };
 
-export async function uploadJourneyMedia({
+type UploadJourneyMediaAssignmentsOptions = {
+  journeyId: string;
+  assignments: readonly JourneyMediaUploadAssignment[];
+  upload?: typeof uploadMediaInParts;
+  onProgress?: (progress: UploadProgress) => void;
+};
+
+async function uploadJourneyMediaAssignments({
   journeyId,
-  routePointId,
-  files,
+  assignments,
   upload = uploadMediaInParts,
   onProgress,
-}: UploadJourneyMediaOptions): Promise<JourneyMediaUploadResult> {
-  const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
+}: UploadJourneyMediaAssignmentsOptions): Promise<JourneyMediaUploadResult> {
+  const totalBytes = assignments.reduce((sum, assignment) => sum + assignment.file.size, 0);
   const mediaErrors: JourneySaveResult["mediaErrors"] = [];
   let uploadedCount = 0;
   let completedBytes = 0;
 
-  for (let fileIndex = 0; fileIndex < files.length; fileIndex += 1) {
-    const file = files[fileIndex];
+  for (let fileIndex = 0; fileIndex < assignments.length; fileIndex += 1) {
+    const { file, routePointId } = assignments[fileIndex];
     try {
       await upload({
         file,
@@ -124,17 +141,63 @@ export async function uploadJourneyMedia({
   return { uploadedCount, mediaErrors };
 }
 
+export async function uploadJourneyMedia({
+  journeyId,
+  routePointId,
+  files,
+  upload = uploadMediaInParts,
+  onProgress,
+}: UploadJourneyMediaOptions): Promise<JourneyMediaUploadResult> {
+  return uploadJourneyMediaAssignments({
+    journeyId,
+    assignments: files.map((file) => ({ file, routePointId })),
+    upload,
+    onProgress,
+  });
+}
+
+export function resolvePendingMediaUploads(
+  mediaFiles: readonly PendingJourneyMedia[],
+  routePoints: readonly RouteDraftPoint[],
+  journey: Journey,
+): JourneyMediaUploadAssignment[] {
+  return mediaFiles.map(({ file, routePointDraftId }) => {
+    if (!routePointDraftId) return { file };
+    const draftIndex = routePoints.findIndex((point) => point.draftId === routePointDraftId);
+    const draftPoint = routePoints[draftIndex];
+    const persistedPoint = draftPoint?.id
+      ? journey.routePoints.find((point) => point.id === draftPoint.id)
+      : journey.routePoints.find((point) => point.sortOrder === draftIndex);
+    if (!persistedPoint) {
+      throw new Error("旅程已保存，但媒体归属无法确认；请重新打开旅程后添加媒体。");
+    }
+    return { file, routePointId: persistedPoint.id };
+  });
+}
+
+export function clearRemovedMediaTarget(
+  mediaFiles: readonly PendingJourneyMedia[],
+  routePointDraftId: string,
+): PendingJourneyMedia[] {
+  return mediaFiles.map((media) => (
+    media.routePointDraftId === routePointDraftId
+      ? { ...media, routePointDraftId: null }
+      : media
+  ));
+}
+
 export async function persistJourneyDraft({
   input,
-  files,
+  mediaFiles,
+  routePoints,
   persist = createJourney,
   upload = uploadMediaInParts,
   onProgress,
 }: PersistJourneyDraftOptions): Promise<JourneySaveResult> {
   const journey = await persist(input);
-  const mediaResult = await uploadJourneyMedia({
+  const mediaResult = await uploadJourneyMediaAssignments({
     journeyId: journey.id,
-    files,
+    assignments: resolvePendingMediaUploads(mediaFiles, routePoints, journey),
     upload,
     onProgress,
   });
@@ -238,12 +301,12 @@ export function JourneyComposer({
   const [endedOn, setEndedOn] = useState(journey?.endedOn ?? "");
   const [note, setNote] = useState(journey?.note ?? "");
   const [lightColor, setLightColor] = useState(journey?.lightColor ?? LIGHT_COLORS[0]);
-  const [files, setFiles] = useState<File[]>([]);
+  const [mediaFiles, setMediaFiles] = useState<PendingJourneyMedia[]>([]);
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
   const [progress, setProgress] = useState<UploadProgress | null>(null);
   const [savedResult, setSavedResult] = useState<JourneySaveResult | null>(null);
-  const [retryFiles, setRetryFiles] = useState<File[]>([]);
+  const [retryAssignments, setRetryAssignments] = useState<JourneyMediaUploadAssignment[]>([]);
   const [globePicking, setGlobePicking] = useState(false);
   const dialogRef = useModalFocus<HTMLElement>(() => {
     if (!saving) closeComposer();
@@ -378,20 +441,32 @@ export function JourneyComposer({
 
   function selectFiles(event: ChangeEvent<HTMLInputElement>) {
     const selected = [...(event.currentTarget.files ?? [])];
-    const next = [...files, ...selected];
-    const validation = validateJourneyFiles(next);
+    const next = [
+      ...mediaFiles,
+      ...selected.map((file) => ({ file, routePointDraftId: null })),
+    ];
+    const validation = validateJourneyFiles(next.map((media) => media.file));
     if (!validation.accepted) {
       setMessage(validation.errors[0]);
     } else {
-      setFiles(next);
+      setMediaFiles(next);
       setMessage("");
     }
     event.currentTarget.value = "";
   }
 
+  function removeDraftPoint(draftPointId: string) {
+    const resetsMediaScope = mediaFiles.some(
+      (media) => media.routePointDraftId === draftPointId,
+    );
+    setRoutePoints((current) => removeRoutePoint(current, draftPointId));
+    setMediaFiles((current) => clearRemovedMediaTarget(current, draftPointId));
+    if (resetsMediaScope) setMessage("已删除该途径点；关联媒体已改为整段旅程。");
+  }
+
   async function save() {
     const validation = validateJourneyInput(input);
-    const mediaValidation = validateJourneyFiles(files);
+    const mediaValidation = validateJourneyFiles(mediaFiles.map((media) => media.file));
     const error = validation.errors[0] ?? mediaValidation.errors[0];
     if (error) {
       setMessage(error);
@@ -403,14 +478,22 @@ export function JourneyComposer({
     try {
       const result = await persistJourneyDraft({
         input,
-        files,
+        mediaFiles,
+        routePoints,
         persist: journey
           ? (nextInput) => updateJourney(journey.id, nextInput)
           : createJourney,
         onProgress: setProgress,
       });
+      const resolvedAssignments = resolvePendingMediaUploads(
+        mediaFiles,
+        routePoints,
+        result.journey,
+      );
       setSavedResult(result);
-      setRetryFiles(result.mediaErrors.map((error) => files[error.fileIndex]));
+      setRetryAssignments(
+        result.mediaErrors.map((error) => resolvedAssignments[error.fileIndex]),
+      );
       await onSaved(result);
       if (result.mediaErrors.length === 0) closeComposer();
     } catch (errorValue) {
@@ -421,14 +504,14 @@ export function JourneyComposer({
   }
 
   async function retryFailedMedia() {
-    if (!savedResult || retryFiles.length === 0) return;
+    if (!savedResult || retryAssignments.length === 0) return;
     setSaving(true);
     setMessage("");
     setProgress(null);
     try {
-      const retried = await uploadJourneyMedia({
+      const retried = await uploadJourneyMediaAssignments({
         journeyId: savedResult.journey.id,
-        files: retryFiles,
+        assignments: retryAssignments,
         onProgress: setProgress,
       });
       const nextResult: JourneySaveResult = {
@@ -437,7 +520,9 @@ export function JourneyComposer({
         mediaErrors: retried.mediaErrors,
       };
       setSavedResult(nextResult);
-      setRetryFiles(retried.mediaErrors.map((error) => retryFiles[error.fileIndex]));
+      setRetryAssignments(
+        retried.mediaErrors.map((error) => retryAssignments[error.fileIndex]),
+      );
       await onSaved(nextResult);
     } catch (errorValue) {
       setMessage(errorValue instanceof Error ? errorValue.message : "媒体重试失败");
@@ -498,13 +583,30 @@ export function JourneyComposer({
                   <input type="file" accept="image/avif,image/jpeg,image/png,image/webp,video/mp4,video/quicktime,video/webm" multiple onChange={selectFiles} />
                 </label>
                 <ul>
-                  {files.map((file, index) => (
-                    <li key={`${file.name}-${file.lastModified}-${index}`}>
-                      <span>{file.name}<small>{formatBytes(file.size)}</small></span>
-                      <button type="button" onClick={() => setFiles((current) => current.filter((_, candidate) => candidate !== index))}>移除</button>
+                  {mediaFiles.map((media, index) => (
+                    <li key={`${media.file.name}-${media.file.lastModified}-${index}`}>
+                      <span>{media.file.name}<small>{formatBytes(media.file.size)}</small></span>
+                      <select
+                        aria-label={`${media.file.name} 的媒体归属`}
+                        value={media.routePointDraftId ?? ""}
+                        onChange={(event) => setMediaFiles((current) => current.map((candidate, candidateIndex) => (
+                          candidateIndex === index
+                            ? { ...candidate, routePointDraftId: event.target.value || null }
+                            : candidate
+                        )))}
+                      >
+                        <option value="">整段旅程</option>
+                        {routePoints.map((point, pointIndex) => (
+                          <option key={point.draftId} value={point.draftId}>
+                            {String(pointIndex + 1).padStart(2, "0")} · {point.label || `途径点 ${pointIndex + 1}`}
+                          </option>
+                        ))}
+                      </select>
+                      <button type="button" onClick={() => setMediaFiles((current) => current.filter((_, candidate) => candidate !== index))}>移除</button>
                     </li>
                   ))}
                 </ul>
+                {mediaFiles.length > 0 ? <p>每个文件都可以归到整段旅程，或一个具体途径点。</p> : null}
               </div>
 
               <div className="journey-composer__section-heading journey-composer__story-heading">
@@ -580,7 +682,7 @@ export function JourneyComposer({
                     <div className="journey-route-draft__actions">
                       <button type="button" disabled={index === 0} onClick={() => setRoutePoints((current) => moveRoutePoint(current, point.draftId, -1))} aria-label="向前移动"><IconArrowUp size={15} stroke={1.4} aria-hidden="true" /></button>
                       <button type="button" disabled={index === routePoints.length - 1} onClick={() => setRoutePoints((current) => moveRoutePoint(current, point.draftId, 1))} aria-label="向后移动"><IconArrowDown size={15} stroke={1.4} aria-hidden="true" /></button>
-                      <button type="button" onClick={() => setRoutePoints((current) => removeRoutePoint(current, point.draftId))} aria-label="删除地点"><IconTrash size={15} stroke={1.4} aria-hidden="true" /></button>
+                      <button type="button" onClick={() => removeDraftPoint(point.draftId)} aria-label="删除地点"><IconTrash size={15} stroke={1.4} aria-hidden="true" /></button>
                     </div>
                   </li>
                 ))}
@@ -611,7 +713,7 @@ export function JourneyComposer({
                 <button type="button" onClick={retryFailedMedia} disabled={saving}>{saving ? "正在重试…" : "重试失败媒体"}</button>
               </div>
             ) : null}
-            {savedResult && savedResult.mediaErrors.length === 0 && files.length > 0 ? (
+            {savedResult && savedResult.mediaErrors.length === 0 && mediaFiles.length > 0 ? (
               <div className="journey-save-complete" role="status">媒体已经全部上传完成，可以返回地球查看这段旅程。</div>
             ) : null}
           </div>
@@ -620,8 +722,8 @@ export function JourneyComposer({
         <footer className="journey-composer__footer">
           <div className="journey-composer__summary" aria-live="polite">
             <strong>{routePoints.length === 0 ? "还没有地点" : routePoints.length === 1 ? "1 个地点" : `${routePoints.length} 个地点 · 一段路径`}</strong>
-            <span>{files.length > 0
-              ? `${files.length} 个新媒体文件`
+            <span>{mediaFiles.length > 0
+              ? `${mediaFiles.length} 个新媒体文件`
               : journey?.media.length
                 ? `${journey.media.length} 个已有媒体`
                 : "媒体可以稍后补充"}</span>
