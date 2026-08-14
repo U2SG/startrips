@@ -21,9 +21,14 @@
     "db:migrate": "drizzle-kit migrate",
     "qa:states": "node scripts/capture-comparison-states.mjs",
     "qa:memory": "node scripts/check-earth-memory.mjs",
-    "qa:preview": "node scripts/preview-qa.mjs"
+    "qa:preview": "node scripts/preview-qa.mjs",
+    "qa:live-globe": "node scripts/qa-live-globe.mjs",
+    "qa:composer": "node scripts/capture-journey-composer.mjs",
+    "qa:story": "node scripts/qa-journey-story.mjs"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1108.0",
+    "@aws-sdk/s3-request-presigner": "^3.1108.0",
     "@better-auth/drizzle-adapter": "1.6.23",
     "@hono/node-server": "^2.1.0",
     "@tabler/icons-react": "^3.46.0",

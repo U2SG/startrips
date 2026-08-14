@@ -26,7 +26,22 @@ function validDate(value: string): boolean {
     && parsed.toISOString().slice(0, 10) === value;
 }
 
-function parseJourneyInput(body: JourneyInput): JourneyValues | null {
+function coordinateValue(value: unknown, minimum: number, maximum: number) {
+  if (
+    (typeof value !== "number" && typeof value !== "string")
+    || (typeof value === "string" && !value.trim())
+  ) {
+    return null;
+  }
+  const coordinate = Number(value);
+  return Number.isFinite(coordinate)
+    && coordinate >= minimum
+    && coordinate <= maximum
+    ? coordinate
+    : null;
+}
+
+export function parseJourneyInput(body: JourneyInput): JourneyValues | null {
   const title = typeof body.title === "string" ? body.title.trim() : "";
   const startedOn = typeof body.startedOn === "string" ? body.startedOn.trim() : "";
   const endedOn = body.endedOn === null || body.endedOn === ""
@@ -58,8 +73,8 @@ function parseJourneyInput(body: JourneyInput): JourneyValues | null {
   for (const rawPoint of body.routePoints) {
     if (!rawPoint || typeof rawPoint !== "object") return null;
     const point = rawPoint as Record<string, unknown>;
-    const latitude = Number(point.latitude);
-    const longitude = Number(point.longitude);
+    const latitude = coordinateValue(point.latitude, -90, 90);
+    const longitude = coordinateValue(point.longitude, -180, 180);
     const label = typeof point.label === "string" ? point.label.trim() : "";
     const isStop = point.isStop === true;
     const occurredAt = point.occurredAt === null || point.occurredAt === ""
@@ -68,12 +83,8 @@ function parseJourneyInput(body: JourneyInput): JourneyValues | null {
         ? new Date(point.occurredAt)
         : new Date(Number.NaN);
     if (
-      !Number.isFinite(latitude)
-      || latitude < -90
-      || latitude > 90
-      || !Number.isFinite(longitude)
-      || longitude < -180
-      || longitude > 180
+      latitude === null
+      || longitude === null
       || label.length > 120
       || (isStop && !label)
       || (occurredAt !== null && Number.isNaN(occurredAt.valueOf()))

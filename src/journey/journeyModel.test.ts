@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   groupJourneysByYear,
   sortJourneysChronologically,
+  toJourneyRoutes,
   validateJourneyFiles,
   validateJourneyInput,
 } from "./journeyModel";
@@ -54,6 +55,27 @@ describe("journeyModel", () => {
     ]);
     expect(journeys.map((item) => item.id)).toEqual(["later", "first"]);
     expect(groupJourneysByYear(journeys).map((group) => group.year)).toEqual([2024, 2026]);
+  });
+
+  it("preserves place labels in the globe route projection", () => {
+    const labeledJourney = journey("labeled", "2026-08-11");
+    labeledJourney.routePoints = [{
+      id: "point-1",
+      journeyId: labeledJourney.id,
+      sortOrder: 0,
+      latitude: 22.5431,
+      longitude: 114.0579,
+      label: "Shenzhen",
+      isStop: true,
+      occurredAt: null,
+      createdAt: labeledJourney.createdAt,
+    }];
+    expect(toJourneyRoutes([labeledJourney])[0].points[0]).toEqual({
+      lat: 22.5431,
+      lon: 114.0579,
+      isStop: true,
+      label: "Shenzhen",
+    });
   });
 
   it("accepts a single unnamed point and a multi-city route", () => {

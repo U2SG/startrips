@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createJourney, listJourneys } from "./journeyApi";
+import { createJourney, listJourneys, searchLocations } from "./journeyApi";
 
 describe("journeyApi", () => {
   it("uses the credentialed tenant-scoped memory endpoint", async () => {
@@ -34,5 +34,29 @@ describe("journeyApi", () => {
       code: "INVALID_JOURNEY",
       message: "Invalid journey data",
     });
+  });
+
+  it("preserves precise location results and provider attribution", async () => {
+    const response = {
+      results: [{
+        id: "node:456",
+        label: "National Gallery Singapore",
+        context: "St Andrew's Road, Singapore",
+        countryCode: "SG",
+        latitude: 1.2905434,
+        longitude: 103.8515221,
+      }],
+      attribution: {
+        label: "© OpenStreetMap contributors",
+        url: "https://www.openstreetmap.org/copyright",
+      },
+    };
+    const fetcher = vi.fn(async () => Response.json(response)) as unknown as typeof fetch;
+
+    await expect(searchLocations("National Gallery Singapore", fetcher)).resolves.toEqual(response);
+    expect(fetcher).toHaveBeenCalledWith(
+      "/api/locations/search?q=National%20Gallery%20Singapore",
+      expect.objectContaining({ credentials: "include" }),
+    );
   });
 });

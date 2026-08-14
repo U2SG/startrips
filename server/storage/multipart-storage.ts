@@ -29,11 +29,16 @@ export interface MultipartStorage {
     key: string;
     providerUploadId: string;
     parts: MultipartPart[];
+    bytes: number;
   }): Promise<void>;
 
   abortMultipartUpload(input: {
     key: string;
     providerUploadId: string;
+  }): Promise<void>;
+
+  deleteObject(input: {
+    key: string;
   }): Promise<void>;
 
   inspectObject(input: {
@@ -48,6 +53,12 @@ export interface MultipartStorage {
 
 export class StorageUnavailableError extends Error {
   constructor(message = "Object storage is not configured") {
+    super(message);
+  }
+}
+
+export class CompletedObjectIntegrityError extends Error {
+  constructor(message = "Completed object does not match the upload record") {
     super(message);
   }
 }

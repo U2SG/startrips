@@ -1,7 +1,7 @@
 import type {
   Journey,
   JourneyInput,
-  LocationSearchResult,
+  LocationSearchResponse,
   PrivateMediaRead,
 } from "./types";
 
@@ -107,11 +107,10 @@ export function getPrivateMediaRead(
 export async function searchLocations(
   query: string,
   fetcher: Fetcher = fetch,
-): Promise<LocationSearchResult[]> {
-  const payload = await requestJson<{ results: LocationSearchResult[] }>(
+): Promise<LocationSearchResponse> {
+  return requestJson<LocationSearchResponse>(
     `/api/locations/search?q=${encodeURIComponent(query.trim())}`,
     {},
     fetcher,
   );
-  return payload.results;
 }

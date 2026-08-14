@@ -1,0 +1,15 @@
+.git
+.github
+node_modules
+dist
+coverage
+.env
+.env.*
+task_plan.md
+findings.md
+progress.md
+docs
+scripts
+**/*.test.ts
+**/*.test.tsx
+server/tests

@@ -184,7 +184,7 @@ export function App() {
         <>
           <ParticleEarthScene
             mode={state.globeMode}
-            quality="low"
+            quality="high"
             focusPoint={state.focusedPoint}
             focusColor={selectedMoment?.lightColor}
             centerFocusPoint={!state.qaState && state.phase === "earthReturn"}

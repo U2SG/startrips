@@ -1,9 +1,11 @@
 import { Vector3 } from "three";
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
 import {
   buildArtworkPointPositions,
   buildSeededSpherePoints,
   buildSphericalRouteSegments,
+  buildSphericalRingSegments,
   formatLatitude,
   formatLongitude,
   latLonToVector3,
@@ -89,5 +91,72 @@ describe("spherical route geometry", () => {
       10,
     );
     expect(positions.length / 3).toBeLessThanOrEqual(10);
+  });
+});
+
+describe("spherical coastline geometry", () => {
+  it("converts closed geographic rings into adjacent line segments", () => {
+    const positions = buildSphericalRingSegments(
+      [[
+        [0, 0],
+        [90, 0],
+        [0, 90],
+        [0, 0],
+      ]],
+      2,
+    );
+    expect(positions.length / 3).toBe(6);
+    for (let index = 0; index < positions.length; index += 3) {
+      expect(new Vector3(
+        positions[index],
+        positions[index + 1],
+        positions[index + 2],
+      ).length()).toBeCloseTo(2);
+    }
+  });
+
+  it("respects the coastline vertex budget", () => {
+    const positions = buildSphericalRingSegments(
+      [[[0, 0], [45, 0], [90, 0], [0, 0]]],
+      1,
+      4,
+    );
+    expect(positions.length / 3).toBe(4);
+  });
+
+  it("uses the short chord across the antimeridian", () => {
+    const positions = buildSphericalRingSegments(
+      [[[179, 0], [-179, 0]]],
+      1,
+    );
+    const start = new Vector3(positions[0], positions[1], positions[2]);
+    const end = new Vector3(positions[3], positions[4], positions[5]);
+    expect(start.distanceTo(end)).toBeLessThan(0.04);
+  });
+
+  it("keeps the bundled Natural Earth coastline inside the GPU budget", () => {
+    const collection = JSON.parse(readFileSync(
+      new URL("../../public/earth/ne_110m_land.geojson", import.meta.url),
+      "utf8",
+    )) as {
+      features: Array<{
+        geometry: null | {
+          type: "Polygon" | "MultiPolygon";
+          coordinates: number[][][] | number[][][][];
+        };
+      }>;
+    };
+    const rings: number[][][] = [];
+    collection.features.forEach(({ geometry }) => {
+      if (!geometry) return;
+      const polygons = geometry.type === "Polygon"
+        ? [geometry.coordinates as number[][][]]
+        : geometry.coordinates as number[][][][];
+      polygons.forEach((polygon) => rings.push(...polygon));
+    });
+
+    const positions = buildSphericalRingSegments(rings, 1.405, 20_000);
+    expect(positions.length / 3).toBe(10_030);
+    expect(positions.length / 3).toBeLessThanOrEqual(20_000);
   });
 });

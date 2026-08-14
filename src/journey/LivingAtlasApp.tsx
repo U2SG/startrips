@@ -65,6 +65,7 @@ export function LivingAtlasApp() {
       });
       setLoadError("");
       setStatus("ready");
+      return loaded;
     } catch (error) {
       if (revision !== loadRevision.current) return;
       if (quiet) {
@@ -73,6 +74,7 @@ export function LivingAtlasApp() {
         setLoadError(error instanceof Error ? error.message : "无法读取旅程");
         setStatus("error");
       }
+      return null;
     }
   }, []);
 
@@ -150,15 +152,17 @@ export function LivingAtlasApp() {
       <div className="living-atlas__globe" aria-hidden={view !== "planet"}>
         <ParticleEarthScene
           mode="focusPoint"
-          quality="low"
+          quality="high"
           focusPoint={focusPoint}
           focusColor={activeJourney?.lightColor}
           centerFocusPoint
           journeyRoutes={routes}
+          activeJourneyRouteId={draftRoute?.id ?? activeJourneyId}
           onJourneyRouteActivate={(id) => {
             if (id !== "draft-route-preview") selectJourney(id);
           }}
           onGlobePointPick={globePickActive ? completeGlobePick : undefined}
+          dragToRotate
           reduceMotion={reduceMotion}
         />
       </div>
@@ -230,6 +234,10 @@ export function LivingAtlasApp() {
           onNavigate={(id) => {
             setActiveJourneyId(id);
             setStoryJourneyId(id);
+          }}
+          onMediaAdded={async (id) => {
+            const loaded = await load(true);
+            return loaded?.find((journey) => journey.id === id) ?? null;
           }}
         />
       ) : null}

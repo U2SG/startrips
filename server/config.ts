@@ -31,6 +31,38 @@ export function loadServerConfig(
   const smtpUrl = environment.SMTP_URL?.trim() || null;
   const mailFrom = environment.MAIL_FROM?.trim() || null;
   const apiPort = Number(environment.API_PORT ?? 8787);
+  const storageDriver = environment.STORAGE_DRIVER?.trim() || "disabled";
+  const s3BackendId = environment.S3_BACKEND_ID?.trim() || null;
+  const s3Endpoint = environment.S3_ENDPOINT?.trim().replace(/\/$/, "") || null;
+  const s3KeyPrefix = environment.S3_KEY_PREFIX?.trim()
+    .replace(/^\/+|\/+$/g, "") || null;
+  const s3Region = environment.S3_REGION?.trim() || null;
+  const s3Bucket = environment.S3_BUCKET?.trim() || null;
+  const s3AccessKeyId = environment.S3_ACCESS_KEY_ID?.trim() || null;
+  const s3SecretAccessKey = environment.S3_SECRET_ACCESS_KEY?.trim() || null;
+  const s3SessionToken = environment.S3_SESSION_TOKEN?.trim() || null;
+  const s3ForcePathStyle = booleanValue(environment.S3_FORCE_PATH_STYLE, false);
+  const s3UploadPartExpiresInSeconds = Number(
+    environment.S3_UPLOAD_PART_EXPIRES_IN_SECONDS ?? 15 * 60,
+  );
+  const s3ConfigurationPresent = Boolean(
+    s3BackendId
+    || s3Endpoint
+    || s3KeyPrefix
+    || s3Region
+    || s3Bucket
+    || s3AccessKeyId
+    || s3SecretAccessKey
+    || s3SessionToken,
+  );
+  const locationSearchDriver =
+    environment.LOCATION_SEARCH_DRIVER?.trim() || "disabled";
+  const locationSearchBaseUrl = (
+    environment.LOCATION_SEARCH_BASE_URL?.trim()
+    || "https://nominatim.openstreetmap.org"
+  ).replace(/\/$/, "");
+  const locationSearchUserAgent = environment.LOCATION_SEARCH_USER_AGENT?.trim()
+    || `Startrips/1.0 (${appOrigin})`;
 
   if (production && (!smtpUrl || !mailFrom)) {
     throw new Error("SMTP_URL and MAIL_FROM are required in production");
@@ -49,6 +81,63 @@ export function loadServerConfig(
   }
   if (!Number.isInteger(apiPort) || apiPort < 1 || apiPort > 65535) {
     throw new Error("API_PORT must be an integer between 1 and 65535");
+  }
+  if (storageDriver !== "disabled" && storageDriver !== "s3") {
+    throw new Error(`STORAGE_DRIVER "${storageDriver}" is not installed`);
+  }
+  if (
+    !Number.isInteger(s3UploadPartExpiresInSeconds)
+    || s3UploadPartExpiresInSeconds < 60
+    || s3UploadPartExpiresInSeconds > 60 * 60
+  ) {
+    throw new Error(
+      "S3_UPLOAD_PART_EXPIRES_IN_SECONDS must be between 60 and 3600",
+    );
+  }
+  if (storageDriver === "s3" || s3ConfigurationPresent) {
+    const missing = [
+      ["S3_BACKEND_ID", s3BackendId],
+      ["S3_REGION", s3Region],
+      ["S3_BUCKET", s3Bucket],
+      ["S3_ACCESS_KEY_ID", s3AccessKeyId],
+      ["S3_SECRET_ACCESS_KEY", s3SecretAccessKey],
+    ].filter(([, value]) => !value).map(([name]) => name);
+    if (missing.length > 0) {
+      throw new Error(
+        `${missing.join(", ")} required when STORAGE_DRIVER=s3`,
+      );
+    }
+    if (
+      s3BackendId === "disabled"
+      || s3BackendId === "s3"
+      || !/^[a-z0-9][a-z0-9._-]{0,63}$/.test(s3BackendId as string)
+    ) {
+      throw new Error(
+        "S3_BACKEND_ID must be a stable lowercase identifier other than s3 or disabled",
+      );
+    }
+  }
+  if (s3Endpoint) {
+    const parsedS3Endpoint = new URL(s3Endpoint);
+    if (production && parsedS3Endpoint.protocol !== "https:") {
+      throw new Error("S3_ENDPOINT must use HTTPS in production");
+    }
+  }
+  if (
+    s3KeyPrefix
+    && s3KeyPrefix
+      .split("/")
+      .some((part) => !part || part === "." || part === "..")
+  ) {
+    throw new Error("S3_KEY_PREFIX must contain normal non-empty path segments");
+  }
+  const parsedLocationSearchBaseUrl = new URL(locationSearchBaseUrl);
+  if (
+    locationSearchDriver !== "disabled"
+    && production
+    && parsedLocationSearchBaseUrl.protocol !== "https:"
+  ) {
+    throw new Error("LOCATION_SEARCH_BASE_URL must use HTTPS in production");
   }
 
   const authSecret = requiredInProduction(
@@ -83,9 +172,20 @@ export function loadServerConfig(
     authSecret,
     smtpUrl,
     mailFrom,
-    storageDriver: environment.STORAGE_DRIVER?.trim() || "disabled",
-    locationSearchDriver:
-      environment.LOCATION_SEARCH_DRIVER?.trim() || "disabled",
+    storageDriver,
+    s3BackendId,
+    s3Endpoint,
+    s3KeyPrefix,
+    s3Region,
+    s3Bucket,
+    s3AccessKeyId,
+    s3SecretAccessKey,
+    s3SessionToken,
+    s3ForcePathStyle,
+    s3UploadPartExpiresInSeconds,
+    locationSearchDriver,
+    locationSearchBaseUrl,
+    locationSearchUserAgent,
   } as const;
 }
 

@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { requireAtlasAccess } from "../authorization/atlas-access";
 import { serverConfig } from "../config";
-import { createLocationSearch } from "../location/disabled-location-search";
+import { createLocationSearch } from "../location/create-location-search";
 import type { LocationSearch } from "../location/location-search";
 
 const MIN_QUERY_LENGTH = 2;
@@ -30,12 +30,16 @@ export function createLocationRoutes(
       limit: RESULT_LIMIT,
       signal: context.req.raw.signal,
     });
-    return context.json({ results });
+    return context.json({ results, attribution: locationSearch.attribution });
   });
 
   return routes;
 }
 
 export const locationRoutes = createLocationRoutes(
-  createLocationSearch(serverConfig.locationSearchDriver),
+  createLocationSearch({
+    driver: serverConfig.locationSearchDriver,
+    baseUrl: serverConfig.locationSearchBaseUrl,
+    userAgent: serverConfig.locationSearchUserAgent,
+  }),
 );

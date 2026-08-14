@@ -9,6 +9,12 @@ const FOCUSABLE = [
   "[tabindex]:not([tabindex='-1'])",
 ].join(",");
 
+export function isModalFocusCandidate(candidate: HTMLElement) {
+  return !candidate.closest("[inert]")
+    && candidate.getClientRects().length > 0
+    && getComputedStyle(candidate).visibility !== "hidden";
+}
+
 export function useModalFocus<T extends HTMLElement>(
   onClose: () => void,
   active = true,
@@ -44,8 +50,9 @@ export function useModalFocus<T extends HTMLElement>(
       accountDock.inert = true;
     }
 
-    const focusable = () => [...root.querySelectorAll<HTMLElement>(FOCUSABLE)];
-    (focusable()[0] ?? root).focus();
+    const focusable = () => [...root.querySelectorAll<HTMLElement>(FOCUSABLE)]
+      .filter(isModalFocusCandidate);
+    root.focus({ preventScroll: true });
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
@@ -65,10 +72,18 @@ export function useModalFocus<T extends HTMLElement>(
       const first = candidates[0];
       const last = candidates[candidates.length - 1];
       const current = document.activeElement;
-      if (event.shiftKey && (current === first || !root.contains(current))) {
+      if (event.shiftKey && (
+        current === root
+        || current === first
+        || !root.contains(current)
+      )) {
         event.preventDefault();
         last.focus();
-      } else if (!event.shiftKey && (current === last || !root.contains(current))) {
+      } else if (!event.shiftKey && (
+        current === root
+        || current === last
+        || !root.contains(current)
+      )) {
         event.preventDefault();
         first.focus();
       }

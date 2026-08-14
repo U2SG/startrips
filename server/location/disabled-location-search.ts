@@ -7,6 +7,7 @@ import {
 
 export class DisabledLocationSearch implements LocationSearch {
   readonly driver = "disabled";
+  readonly attribution = null;
 
   async search(
     _query: string,
@@ -14,9 +15,4 @@ export class DisabledLocationSearch implements LocationSearch {
   ): Promise<LocationSearchResult[]> {
     throw new LocationSearchUnavailableError();
   }
-}
-
-export function createLocationSearch(driver: string): LocationSearch {
-  if (driver === "disabled") return new DisabledLocationSearch();
-  throw new Error(`Location search driver "${driver}" has no installed adapter`);
 }

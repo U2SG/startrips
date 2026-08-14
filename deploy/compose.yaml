@@ -1,0 +1,145 @@
+name: startrips
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-api-environment: &api-environment
+  NODE_ENV: production
+  APP_ORIGIN: https://${APP_HOST}
+  API_HOST: 0.0.0.0
+  API_PORT: 8787
+  DATABASE_URL: postgresql://startrips:${POSTGRES_PASSWORD}@postgres:5432/startrips
+  DATABASE_SSL: "false"
+  BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET}
+  SMTP_URL: smtp://mailpit:1025
+  MAIL_FROM: Startrips Preview <no-reply@startrips.invalid>
+  STORAGE_DRIVER: ${STORAGE_DRIVER:-disabled}
+  S3_BACKEND_ID: ${S3_BACKEND_ID:-}
+  S3_ENDPOINT: ${S3_ENDPOINT:-}
+  S3_KEY_PREFIX: ${S3_KEY_PREFIX:-}
+  S3_REGION: ${S3_REGION:-}
+  S3_BUCKET: ${S3_BUCKET:-}
+  S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
+  S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
+  S3_SESSION_TOKEN: ${S3_SESSION_TOKEN:-}
+  S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-false}
+  S3_UPLOAD_PART_EXPIRES_IN_SECONDS: ${S3_UPLOAD_PART_EXPIRES_IN_SECONDS:-900}
+  LOCATION_SEARCH_DRIVER: ${LOCATION_SEARCH_DRIVER:-disabled}
+  LOCATION_SEARCH_BASE_URL: ${LOCATION_SEARCH_BASE_URL:-https://photon.komoot.io}
+  LOCATION_SEARCH_USER_AGENT: ${LOCATION_SEARCH_USER_AGENT:-}
+
+x-migrate-environment: &migrate-environment
+  NODE_ENV: production
+  DATABASE_URL: postgresql://startrips:${POSTGRES_PASSWORD}@postgres:5432/startrips
+  DATABASE_SSL: "false"
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: startrips
+      POSTGRES_USER: startrips
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U startrips -d startrips"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    mem_limit: 768m
+    shm_size: 128m
+    logging: *default-logging
+    networks:
+      - backend
+
+  mailpit:
+    image: axllent/mailpit:v1.30.7
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8025:8025"
+    mem_limit: 128m
+    logging: *default-logging
+    networks:
+      - backend
+
+  migrate:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: api
+    command: ["./node_modules/.bin/drizzle-kit", "migrate"]
+    environment: *migrate-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    logging: *default-logging
+    networks:
+      - backend
+
+  api:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: api
+    restart: unless-stopped
+    environment: *api-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mailpit:
+        condition: service_started
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:8787/api/health').then((response)=>{if(!response.ok)process.exit(1)}).catch(()=>process.exit(1))
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    mem_limit: 1g
+    logging: *default-logging
+    networks:
+      - backend
+      - edge
+
+  web:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: web
+    restart: unless-stopped
+    environment:
+      APP_HOST: ${APP_HOST}
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    mem_limit: 256m
+    logging: *default-logging
+    networks:
+      - edge
+
+volumes:
+  postgres_data:
+  caddy_data:
+  caddy_config:
+
+networks:
+  backend:
+    internal: true
+  edge:

@@ -1,0 +1,36 @@
+{
+	default_sni {$APP_HOST}
+}
+
+{$APP_HOST} {
+	tls {
+		issuer acme {
+			profile shortlived
+			disable_tlsalpn_challenge
+		}
+	}
+
+	encode zstd gzip
+
+	@api path /api/*
+	handle @api {
+		reverse_proxy api:8787
+	}
+
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		-Server
+	}
+
+	log
+}

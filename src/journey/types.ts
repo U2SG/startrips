@@ -67,6 +67,7 @@ export type JourneyRoute = {
     lat: number;
     lon: number;
     isStop: boolean;
+    label?: string;
   }>;
 };
 
@@ -77,4 +78,9 @@ export type LocationSearchResult = {
   countryCode: string;
   latitude: number;
   longitude: number;
+};
+
+export type LocationSearchResponse = {
+  results: LocationSearchResult[];
+  attribution: { label: string; url: string } | null;
 };

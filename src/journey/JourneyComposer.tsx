@@ -9,8 +9,7 @@ import {
   IconArrowDown,
   IconArrowUp,
   IconCheck,
-  IconChevronLeft,
-  IconChevronRight,
+  IconChevronDown,
   IconMapPin,
   IconPlus,
   IconSearch,
@@ -38,11 +37,11 @@ import type {
   Journey,
   JourneyInput,
   JourneyRoute,
+  LocationSearchResponse,
   LocationSearchResult,
 } from "./types";
 import { useModalFocus } from "./useModalFocus";
 
-const STEPS = ["路线", "故事", "媒体", "确认"] as const;
 const LIGHT_COLORS = ["#f4ce73", "#e99578", "#77c8c2", "#8ca8df", "#c49bd8"];
 
 type UploadProgress = {
@@ -179,6 +178,21 @@ function formatBytes(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+export function parseCoordinateInput(
+  value: string,
+  minimum: number,
+  maximum: number,
+) {
+  const normalized = value.trim();
+  if (!normalized) return null;
+  const coordinate = Number(normalized);
+  return Number.isFinite(coordinate)
+    && coordinate >= minimum
+    && coordinate <= maximum
+    ? coordinate
+    : null;
+}
+
 export function JourneyComposer({
   open,
   onClose,
@@ -187,7 +201,6 @@ export function JourneyComposer({
   onGlobePickCancel,
   onRoutePreviewChange,
 }: JourneyComposerProps) {
-  const [step, setStep] = useState(0);
   const [routePoints, setRoutePoints] = useState<RouteDraftPoint[]>([]);
   const [latitude, setLatitude] = useState("");
   const [longitude, setLongitude] = useState("");
@@ -195,6 +208,9 @@ export function JourneyComposer({
   const [pointIsStop, setPointIsStop] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<LocationSearchResult[]>([]);
+  const [searchAttribution, setSearchAttribution] = useState<
+    LocationSearchResponse["attribution"]
+  >(null);
   const [searchPending, setSearchPending] = useState(false);
   const [title, setTitle] = useState("");
   const [startedOn, setStartedOn] = useState(() => new Date().toISOString().slice(0, 10));
@@ -229,6 +245,7 @@ export function JourneyComposer({
         lat: point.latitude,
         lon: point.longitude,
         isStop: point.isStop,
+        label: point.label,
       })),
     });
   }, [lightColor, onRoutePreviewChange, routePoints]);
@@ -254,17 +271,10 @@ export function JourneyComposer({
   }
 
   function addManualPoint() {
-    const parsedLatitude = Number(latitude);
-    const parsedLongitude = Number(longitude);
-    if (
-      !Number.isFinite(parsedLatitude)
-      || parsedLatitude < -90
-      || parsedLatitude > 90
-      || !Number.isFinite(parsedLongitude)
-      || parsedLongitude < -180
-      || parsedLongitude > 180
-    ) {
-      setMessage("请输入有效的纬度（-90 到 90）和经度（-180 到 180）。");
+    const parsedLatitude = parseCoordinateInput(latitude, -90, 90);
+    const parsedLongitude = parseCoordinateInput(longitude, -180, 180);
+    if (parsedLatitude === null || parsedLongitude === null) {
+      setMessage("请填写有效的纬度（-90 到 90）和经度（-180 到 180）；也可以使用上方搜索直接选择地点。");
       return;
     }
     if (pointIsStop && !pointLabel.trim()) {
@@ -293,9 +303,12 @@ export function JourneyComposer({
     setSearchPending(true);
     setMessage("");
     try {
-      setSearchResults(await searchLocations(query));
+      const response = await searchLocations(query);
+      setSearchResults(response.results);
+      setSearchAttribution(response.attribution);
     } catch (error) {
       setSearchResults([]);
+      setSearchAttribution(null);
       setMessage(error instanceof Error ? error.message : "地点搜索暂时不可用");
     } finally {
       setSearchPending(false);
@@ -319,8 +332,13 @@ export function JourneyComposer({
     setMessage("请在地球上点击一个位置。");
     onGlobePickRequest((point) => {
       setGlobePicking(false);
-      addPoint(toDraftPoint(point.latitude, point.longitude));
-      setMessage("已从地球添加路线点，可继续补充名称或标记为停靠点。");
+      addPoint(toDraftPoint(
+        point.latitude,
+        point.longitude,
+        "",
+        routePoints.length === 0,
+      ));
+      setMessage("已从地球添加地点；首个地点会默认标记为停留，可继续补充精确名称。");
     });
   }
 
@@ -347,33 +365,6 @@ export function JourneyComposer({
       setMessage("");
     }
     event.currentTarget.value = "";
-  }
-
-  function validateCurrentStep() {
-    if (step === 0) {
-      if (routePoints.length === 0) return "请至少添加一个路线点。";
-      const invalidStop = routePoints.find((point) => point.isStop && !point.label.trim());
-      if (invalidStop) return "每个停靠点都需要地点名称。";
-    }
-    if (step === 1) {
-      const validation = validateJourneyInput(input);
-      if (!validation.accepted) return validation.errors[0];
-    }
-    if (step === 2) {
-      const validation = validateJourneyFiles(files);
-      if (!validation.accepted) return validation.errors[0];
-    }
-    return "";
-  }
-
-  function nextStep() {
-    const error = validateCurrentStep();
-    if (error) {
-      setMessage(error);
-      return;
-    }
-    setMessage("");
-    setStep((current) => Math.min(current + 1, STEPS.length - 1));
   }
 
   async function save() {
@@ -433,6 +424,7 @@ export function JourneyComposer({
   const progressPercent = progress && progress.totalBytes > 0
     ? Math.round((progress.uploadedBytes / progress.totalBytes) * 100)
     : 0;
+  const editorLocked = saving || savedResult !== null;
 
   return (
     <div className={`journey-composer-backdrop${globePicking ? " is-globe-picking" : ""}`} role="presentation">
@@ -453,145 +445,158 @@ export function JourneyComposer({
       >
         <header className="journey-composer__header">
           <div>
-            <p>NEW JOURNEY · {String(step + 1).padStart(2, "0")}</p>
-            <h2 id="journey-composer-title">记录一段真实的移动</h2>
+            <p>PRIVATE ATLAS · NEW JOURNEY</p>
+            <h2 id="journey-composer-title">把一段旅程，收进你的星球</h2>
+            <span>一次停留、跨城路径，或一直在路上。</span>
           </div>
           <button type="button" onClick={closeComposer} disabled={saving} aria-label="关闭创建器"><IconX size={20} stroke={1.35} aria-hidden="true" /></button>
         </header>
 
-        <ol className="journey-composer__steps" aria-label="创建进度">
-          {STEPS.map((label, index) => (
-            <li key={label} className={index === step ? "is-active" : index < step ? "is-complete" : ""}>
-              <span>{index + 1}</span>{label}
-            </li>
-          ))}
-        </ol>
-
         <div className="journey-composer__body">
-          {step === 0 ? (
-            <div className="journey-composer__route">
+          <div
+            className="journey-composer__editor"
+            aria-disabled={editorLocked}
+            inert={editorLocked}
+          >
+            <section className="journey-composer__narrative" aria-labelledby="journey-story-heading">
+              <div className="journey-composer__section-heading">
+                <p>01 · MEMORY</p>
+                <h3>照片与影像</h3>
+                <span>可选，旅程会先保存，媒体按文件分块上传。</span>
+              </div>
+              <div className="journey-media-fields">
+                <label className="journey-media-picker">
+                  <IconUpload size={26} stroke={1.2} aria-hidden="true" />
+                  <span>添加照片或视频</span>
+                  <strong>最多 {MAX_JOURNEY_FILES} 个文件</strong>
+                  <input type="file" accept="image/avif,image/jpeg,image/png,image/webp,video/mp4,video/quicktime,video/webm" multiple onChange={selectFiles} />
+                </label>
+                <ul>
+                  {files.map((file, index) => (
+                    <li key={`${file.name}-${file.lastModified}-${index}`}>
+                      <span>{file.name}<small>{formatBytes(file.size)}</small></span>
+                      <button type="button" onClick={() => setFiles((current) => current.filter((_, candidate) => candidate !== index))}>移除</button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+
+              <div className="journey-composer__section-heading journey-composer__story-heading">
+                <p>02 · JOURNEY</p>
+                <h3 id="journey-story-heading">这段旅程</h3>
+              </div>
+              <div className="journey-story-fields">
+                <label className="journey-title-field"><span>旅程标题</span><input required maxLength={80} value={title} onChange={(event) => setTitle(event.target.value)} placeholder="穿过北方的夜车" /></label>
+                <div className="journey-story-fields__dates">
+                  <label><span>开始日期</span><input type="date" required value={startedOn} onChange={(event) => setStartedOn(event.target.value)} /></label>
+                  <label><span>结束日期 <small>可选</small></span><input type="date" min={startedOn} value={endedOn} onChange={(event) => setEndedOn(event.target.value)} /></label>
+                </div>
+                <label><span>旅程故事 <small>可选</small></span><textarea rows={5} maxLength={2000} value={note} onChange={(event) => setNote(event.target.value)} placeholder="记下沿途发生了什么，也可以留白。" /></label>
+                <fieldset className="journey-light-colors">
+                  <legend>这段旅程的光</legend>
+                  {LIGHT_COLORS.map((color) => <button key={color} type="button" className={lightColor === color ? "is-selected" : ""} style={{ backgroundColor: color }} onClick={() => setLightColor(color)} aria-label={`选择颜色 ${color}`} aria-pressed={lightColor === color} />)}
+                </fieldset>
+              </div>
+            </section>
+
+            <section className="journey-composer__route" aria-labelledby="journey-route-heading">
+              <div className="journey-composer__section-heading">
+                <p>03 · TRACE</p>
+                <h3 id="journey-route-heading">在地图上留下它</h3>
+                <span>一个地点就是一次停留；继续添加会自然连成路径。</span>
+              </div>
+
               <div className="journey-composer__route-tools">
                 <form onSubmit={runSearch} className="journey-location-search">
                   <label>
-                    <span>搜索地点</span>
-                    <input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} maxLength={120} placeholder="城市、车站或地标" />
+                    <span>搜索地点、建筑或城市</span>
+                    <input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} maxLength={120} placeholder="建筑、景点、街道、街区或城市" />
                   </label>
                   <button type="submit" disabled={searchPending}><IconSearch size={16} stroke={1.4} aria-hidden="true" />{searchPending ? "搜索中…" : "搜索"}</button>
                 </form>
                 {searchResults.length > 0 ? (
-                  <ul className="journey-location-results">
-                    {searchResults.map((result) => (
-                      <li key={result.id}>
-                        <button type="button" onClick={() => chooseSearchResult(result)}>
-                          <strong>{result.label}</strong><span>{[result.context, result.countryCode].filter(Boolean).join(" · ")}</span>
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
+                  <>
+                    <ul className="journey-location-results">
+                      {searchResults.map((result) => (
+                        <li key={result.id}>
+                          <button type="button" onClick={() => chooseSearchResult(result)}>
+                            <strong>{result.label}</strong><span>{[result.context, result.countryCode].filter(Boolean).join(" · ")}</span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                    {searchAttribution ? (
+                      <a className="journey-location-attribution" href={searchAttribution.url} target="_blank" rel="noreferrer">
+                        地点数据 {searchAttribution.label}
+                      </a>
+                    ) : null}
+                  </>
                 ) : null}
-
-                <div className="journey-coordinate-fields">
-                  <label><span>纬度</span><input inputMode="decimal" value={latitude} onChange={(event) => setLatitude(event.target.value)} placeholder="31.2304" /></label>
-                  <label><span>经度</span><input inputMode="decimal" value={longitude} onChange={(event) => setLongitude(event.target.value)} placeholder="121.4737" /></label>
-                  <label className="journey-coordinate-fields__label"><span>地点名称（可选）</span><input maxLength={120} value={pointLabel} onChange={(event) => setPointLabel(event.target.value)} /></label>
-                  <label className="journey-checkbox"><input type="checkbox" checked={pointIsStop} onChange={(event) => setPointIsStop(event.target.checked)} />这是一次停靠</label>
-                  <button type="button" onClick={addManualPoint}><IconPlus size={16} stroke={1.4} aria-hidden="true" />添加路线点</button>
-                  {onGlobePickRequest ? <button type="button" onClick={requestGlobePoint}><IconMapPin size={16} stroke={1.4} aria-hidden="true" />在地球上取点</button> : null}
-                </div>
+                {onGlobePickRequest ? <button className="journey-globe-pick-button" type="button" onClick={requestGlobePoint}><IconMapPin size={17} stroke={1.35} aria-hidden="true" /><span><strong>直接在地球上取点</strong><small>适合在路上、海上或没有准确名称的位置</small></span></button> : null}
               </div>
 
-              <ol className="journey-route-draft" aria-label="已添加的路线点">
-                {routePoints.length === 0 ? <li className="is-empty">路线仍是空的。依次添加你经过的位置。</li> : null}
+              <ol className="journey-route-draft" aria-label="已添加的地点">
+                {routePoints.length === 0 ? <li className="is-empty"><IconMapPin size={22} stroke={1.15} aria-hidden="true" /><span>还没有地点</span><small>先搜索一个地点，或直接在地球上取点。</small></li> : null}
                 {routePoints.map((point, index) => (
                   <li key={point.draftId}>
                     <span className="journey-route-draft__index">{String(index + 1).padStart(2, "0")}</span>
                     <div>
                       <input
-                        aria-label={`路线点 ${index + 1} 名称`}
+                        aria-label={`地点 ${index + 1} 名称`}
                         maxLength={120}
-                        placeholder="途经点（可不命名）"
+                        placeholder="地点名称（可精确到建筑或景点）"
                         value={point.label}
                         onChange={(event) => setRoutePoints((current) => updateRoutePoint(current, point.draftId, { label: event.target.value }))}
                       />
-                      <small>{point.latitude.toFixed(4)}, {point.longitude.toFixed(4)}</small>
+                      <small>{point.latitude.toFixed(6)}, {point.longitude.toFixed(6)}</small>
                     </div>
                     <label className="journey-checkbox"><input type="checkbox" checked={point.isStop} onChange={() => setRoutePoints((current) => toggleRouteStop(current, point.draftId))} />停靠</label>
                     <div className="journey-route-draft__actions">
                       <button type="button" disabled={index === 0} onClick={() => setRoutePoints((current) => moveRoutePoint(current, point.draftId, -1))} aria-label="向前移动"><IconArrowUp size={15} stroke={1.4} aria-hidden="true" /></button>
                       <button type="button" disabled={index === routePoints.length - 1} onClick={() => setRoutePoints((current) => moveRoutePoint(current, point.draftId, 1))} aria-label="向后移动"><IconArrowDown size={15} stroke={1.4} aria-hidden="true" /></button>
-                      <button type="button" onClick={() => setRoutePoints((current) => removeRoutePoint(current, point.draftId))} aria-label="删除路线点"><IconTrash size={15} stroke={1.4} aria-hidden="true" /></button>
+                      <button type="button" onClick={() => setRoutePoints((current) => removeRoutePoint(current, point.draftId))} aria-label="删除地点"><IconTrash size={15} stroke={1.4} aria-hidden="true" /></button>
                     </div>
                   </li>
                 ))}
               </ol>
-            </div>
-          ) : null}
 
-          {step === 1 ? (
-            <div className="journey-story-fields">
-              <label><span>旅程标题</span><input required maxLength={80} value={title} onChange={(event) => setTitle(event.target.value)} placeholder="穿过北方的夜车" /></label>
-              <div className="journey-story-fields__dates">
-                <label><span>开始日期</span><input type="date" required value={startedOn} onChange={(event) => setStartedOn(event.target.value)} /></label>
-                <label><span>结束日期（可选）</span><input type="date" min={startedOn} value={endedOn} onChange={(event) => setEndedOn(event.target.value)} /></label>
-              </div>
-              <label><span>故事（可选）</span><textarea rows={7} maxLength={2000} value={note} onChange={(event) => setNote(event.target.value)} placeholder="记下沿途发生了什么，也可以留白。" /></label>
-              <fieldset className="journey-light-colors">
-                <legend>这段旅程的光</legend>
-                {LIGHT_COLORS.map((color) => <button key={color} type="button" className={lightColor === color ? "is-selected" : ""} style={{ backgroundColor: color }} onClick={() => setLightColor(color)} aria-label={`选择颜色 ${color}`} aria-pressed={lightColor === color} />)}
-              </fieldset>
-            </div>
-          ) : null}
-
-          {step === 2 ? (
-            <div className="journey-media-fields">
-              <label className="journey-media-picker">
-                <IconUpload size={28} stroke={1.2} aria-hidden="true" />
-                <span>添加照片或视频</span>
-                <strong>最多 {MAX_JOURNEY_FILES} 个文件；视频会分块上传，不会整段读入内存。</strong>
-                <input type="file" accept="image/avif,image/jpeg,image/png,image/webp,video/mp4,video/quicktime,video/webm" multiple onChange={selectFiles} />
-              </label>
-              <ul>
-                {files.map((file, index) => (
-                  <li key={`${file.name}-${file.lastModified}-${index}`}>
-                    <span>{file.name}<small>{formatBytes(file.size)}</small></span>
-                    <button type="button" onClick={() => setFiles((current) => current.filter((_, candidate) => candidate !== index))}>移除</button>
-                  </li>
-                ))}
-              </ul>
-              {files.length === 0 ? <p>媒体不是必填项。你可以先保存路线与故事。</p> : null}
-            </div>
-          ) : null}
-
-          {step === 3 ? (
-            <div className="journey-review">
-              <p>JOURNEY READY</p>
-              <h3>{title || "未命名旅程"}</h3>
-              <dl>
-                <div><dt>日期</dt><dd>{startedOn}{endedOn ? ` — ${endedOn}` : ""}</dd></div>
-                <div><dt>路线</dt><dd>{routePoints.length} 个点，{routePoints.filter((point) => point.isStop).length} 次停靠</dd></div>
-                <div><dt>媒体</dt><dd>{files.length} 个文件</dd></div>
-              </dl>
-              {note ? <blockquote>{note}</blockquote> : null}
-              {progress ? <div className="journey-upload-progress" aria-live="polite"><span>{progress.fileName}</span><progress max={100} value={progressPercent} /> <strong>{progressPercent}%</strong></div> : null}
-              {savedResult?.mediaErrors.length ? (
-                <div className="journey-save-partial" role="status">
-                  <h4>旅程已保存，部分媒体没有上传成功</h4>
-                  <p>成功 {savedResult.uploadedCount} 个，失败 {savedResult.mediaErrors.length} 个。路线和故事不会丢失。</p>
-                  <ul>{savedResult.mediaErrors.map((error) => <li key={`${error.fileIndex}-${error.fileName}`}><strong>{error.fileName}</strong>：{error.message}</li>)}</ul>
-                  <button type="button" onClick={retryFailedMedia} disabled={saving}>{saving ? "正在重试…" : "重试失败媒体"}</button>
+              <details className="journey-precise-location">
+                <summary><span><IconMapPin size={17} stroke={1.35} aria-hidden="true" />精确位置</span><small>手动输入经纬度</small><IconChevronDown className="journey-precise-location__chevron" size={17} stroke={1.35} aria-hidden="true" /></summary>
+                <div className="journey-coordinate-fields">
+                  <label className="journey-coordinate-fields__label"><span>地点名称</span><input maxLength={120} value={pointLabel} onChange={(event) => setPointLabel(event.target.value)} placeholder="可精确到建筑、景点或沿途位置" /></label>
+                  <label><span>纬度</span><input inputMode="decimal" value={latitude} onChange={(event) => setLatitude(event.target.value)} placeholder="31.2304" /></label>
+                  <label><span>经度</span><input inputMode="decimal" value={longitude} onChange={(event) => setLongitude(event.target.value)} placeholder="121.4737" /></label>
+                  <label className="journey-checkbox"><input type="checkbox" checked={pointIsStop} onChange={(event) => setPointIsStop(event.target.checked)} />这是一个停留地点</label>
+                  <button type="button" onClick={addManualPoint}><IconPlus size={16} stroke={1.4} aria-hidden="true" />添加精确位置</button>
                 </div>
-              ) : null}
-              {savedResult && savedResult.mediaErrors.length === 0 && files.length > 0 ? (
-                <div className="journey-save-complete" role="status">媒体已经全部上传完成，可以返回地球查看这段旅程。</div>
-              ) : null}
-            </div>
-          ) : null}
+              </details>
+            </section>
+          </div>
         </div>
 
+        {progress || savedResult ? (
+          <div className="journey-composer__save-status">
+            {progress ? <div className="journey-upload-progress" aria-live="polite"><span>{progress.fileName}</span><progress max={100} value={progressPercent} /> <strong>{progressPercent}%</strong></div> : null}
+            {savedResult?.mediaErrors.length ? (
+              <div className="journey-save-partial" role="status">
+                <h4>旅程已保存，部分媒体没有上传成功</h4>
+                <p>成功 {savedResult.uploadedCount} 个，失败 {savedResult.mediaErrors.length} 个。路线和故事不会丢失。</p>
+                <ul>{savedResult.mediaErrors.map((error) => <li key={`${error.fileIndex}-${error.fileName}`}><strong>{error.fileName}</strong>：{error.message}</li>)}</ul>
+                <button type="button" onClick={retryFailedMedia} disabled={saving}>{saving ? "正在重试…" : "重试失败媒体"}</button>
+              </div>
+            ) : null}
+            {savedResult && savedResult.mediaErrors.length === 0 && files.length > 0 ? (
+              <div className="journey-save-complete" role="status">媒体已经全部上传完成，可以返回地球查看这段旅程。</div>
+            ) : null}
+          </div>
+        ) : null}
         {message ? <p className="journey-composer__message" role="alert">{message}</p> : null}
         <footer className="journey-composer__footer">
-          <button type="button" onClick={() => setStep((current) => Math.max(0, current - 1))} disabled={step === 0 || saving || savedResult !== null}><IconChevronLeft size={17} stroke={1.4} aria-hidden="true" />上一步</button>
-          {savedResult ? <button type="button" onClick={closeComposer}><IconCheck size={17} stroke={1.4} aria-hidden="true" />完成</button> : step < STEPS.length - 1 ? <button type="button" onClick={nextStep}>下一步<IconChevronRight size={17} stroke={1.4} aria-hidden="true" /></button> : <button type="button" onClick={save} disabled={saving}><IconCheck size={17} stroke={1.4} aria-hidden="true" />{saving ? "正在保存…" : "保存旅程"}</button>}
+          <div className="journey-composer__summary" aria-live="polite">
+            <strong>{routePoints.length === 0 ? "还没有地点" : routePoints.length === 1 ? "1 个地点" : `${routePoints.length} 个地点 · 一段路径`}</strong>
+            <span>{files.length === 0 ? "媒体可以稍后补充" : `${files.length} 个媒体文件`}</span>
+          </div>
+          {savedResult ? <button type="button" onClick={closeComposer}><IconCheck size={18} stroke={1.4} aria-hidden="true" />完成</button> : <button type="button" onClick={save} disabled={saving}><IconCheck size={18} stroke={1.4} aria-hidden="true" />{saving ? "正在保存…" : "保存到星球"}</button>}
         </footer>
       </section>
     </div>

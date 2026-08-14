@@ -1,22 +1,31 @@
 import { randomUUID } from "node:crypto";
-import { and, desc, eq, lt, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, lt, or, sql } from "drizzle-orm";
 import { Hono } from "hono";
 import { requireAtlasAccess } from "../authorization/atlas-access";
-import { serverConfig } from "../config";
 import { db } from "../db/client";
 import {
   mediaAssets,
   mediaUploads,
   journeys,
 } from "../db/app-schema";
-import { getMultipartStorage } from "../storage/storage-registry";
-import type { MultipartPart } from "../storage/multipart-storage";
+import {
+  getMultipartStorage,
+  hasConfiguredStorageBackends,
+} from "../storage/storage-registry";
+import {
+  CompletedObjectIntegrityError,
+  type MultipartPart,
+  type MultipartStorage,
+} from "../storage/multipart-storage";
 
 const PART_SIZE = 8 * 1024 * 1024;
 const MAX_UPLOAD_BYTES = 2_000_000_000;
 const MAX_PARTS = 10_000;
 const FINALIZATION_LEASE_MS = 20_000;
 const FINALIZATION_HEARTBEAT_MS = 5_000;
+const STALE_UPLOAD_AFTER_MS = 24 * 60 * 60 * 1_000;
+const RECONCILE_INTERVAL_MS = 60 * 60 * 1_000;
+const RECONCILE_BATCH_SIZE = 25;
 const ALLOWED_MIME_TYPES = new Set([
   "image/avif",
   "image/jpeg",
@@ -103,10 +112,14 @@ async function findUpload(uploadId: string, atlasId: string) {
   return upload;
 }
 
-type UploadRecord = NonNullable<Awaited<ReturnType<typeof findUpload>>>;
+export type UploadRecord = NonNullable<Awaited<ReturnType<typeof findUpload>>>;
+type CompletionLease = {
+  attemptId: string;
+  status: "finalizing" | "reconciling";
+};
 
 async function markCompletionUnknown(uploadId: string, attemptId: string) {
-  await db
+  const [marked] = await db
     .update(mediaUploads)
     .set({ status: "completion_unknown", updatedAt: new Date() })
     .where(
@@ -115,7 +128,9 @@ async function markCompletionUnknown(uploadId: string, attemptId: string) {
         eq(mediaUploads.status, "finalizing"),
         eq(mediaUploads.completionAttemptId, attemptId),
       ),
-    );
+    )
+    .returning({ id: mediaUploads.id });
+  return Boolean(marked);
 }
 
 async function withCompletionLease<T>(
@@ -148,8 +163,24 @@ async function withCompletionLease<T>(
   }
 }
 
-export async function finalizeUpload(upload: UploadRecord) {
+export async function finalizeUpload(
+  upload: UploadRecord,
+  lease?: CompletionLease,
+) {
   return db.transaction(async (transaction) => {
+    if (lease) {
+      const lockedUpload = await transaction.execute<{ id: string }>(sql`
+        select ${mediaUploads.id} as id
+        from ${mediaUploads}
+        where ${mediaUploads.id} = ${upload.id}
+          and ${mediaUploads.status} = ${lease.status}
+          and ${mediaUploads.completionAttemptId} = ${lease.attemptId}
+        for update
+      `);
+      if (lockedUpload.rows.length === 0) {
+        throw new Error("Upload completion lease was lost");
+      }
+    }
     const lockedJourney = await transaction.execute<{ id: string }>(sql`
       select ${journeys.id} as id
       from ${journeys}
@@ -212,6 +243,164 @@ async function recoverCompletedUpload(upload: UploadRecord) {
     throw new Error("Completed object size does not match the upload record");
   }
   return finalizeUpload(upload);
+}
+
+async function markUploadAborted(uploadId: string, attemptId: string) {
+  await db
+    .update(mediaUploads)
+    .set({
+      status: "aborted",
+      completionAttemptId: null,
+      updatedAt: new Date(),
+    })
+    .where(and(
+      eq(mediaUploads.id, uploadId),
+      eq(mediaUploads.status, "reconciling"),
+      eq(mediaUploads.completionAttemptId, attemptId),
+    ));
+}
+
+async function markUploadRetryable(uploadId: string, attemptId: string) {
+  await db
+    .update(mediaUploads)
+    .set({
+      status: "completion_unknown",
+      completionAttemptId: null,
+      updatedAt: new Date(),
+    })
+    .where(and(
+      eq(mediaUploads.id, uploadId),
+      eq(mediaUploads.status, "reconciling"),
+      eq(mediaUploads.completionAttemptId, attemptId),
+    ));
+}
+
+export type ReconciliationDependencies = {
+  claim: (
+    candidate: UploadRecord,
+    attemptId: string,
+    now: Date,
+    cutoff: Date,
+  ) => Promise<UploadRecord | undefined>;
+  storageForBackend: (backendId: string) => MultipartStorage;
+  finalize: (
+    upload: UploadRecord,
+    lease: CompletionLease,
+  ) => Promise<unknown>;
+  markAborted: (uploadId: string, attemptId: string) => Promise<void>;
+  markRetryable: (uploadId: string, attemptId: string) => Promise<void>;
+  onError: (upload: UploadRecord, error: unknown) => void;
+};
+
+const reconciliationDependencies: ReconciliationDependencies = {
+  async claim(candidate, attemptId, now, cutoff) {
+    const [claimed] = await db
+      .update(mediaUploads)
+      .set({
+        status: "reconciling",
+        completionAttemptId: attemptId,
+        updatedAt: now,
+      })
+      .where(and(
+        eq(mediaUploads.id, candidate.id),
+        eq(mediaUploads.status, candidate.status),
+        lt(mediaUploads.updatedAt, cutoff),
+      ))
+      .returning();
+    return claimed;
+  },
+  storageForBackend: getMultipartStorage,
+  finalize: finalizeUpload,
+  markAborted: markUploadAborted,
+  markRetryable: markUploadRetryable,
+  onError(upload, error) {
+    console.error(
+      "Stale upload reconciliation failed",
+      upload.id,
+      error instanceof Error ? error.message : "unknown error",
+    );
+  },
+};
+
+export async function reconcileUploadCandidates(
+  candidates: UploadRecord[],
+  now: Date,
+  cutoff: Date,
+  dependencies: ReconciliationDependencies = reconciliationDependencies,
+) {
+  for (const candidate of candidates) {
+    const attemptId = randomUUID();
+    const claimed = await dependencies.claim(candidate, attemptId, now, cutoff);
+    if (!claimed) continue;
+
+    try {
+      const storage = dependencies.storageForBackend(claimed.storageDriver);
+      const inspected = await storage.inspectObject({ key: claimed.storageKey });
+      if (inspected.exists) {
+        if (inspected.bytes !== claimed.bytes) {
+          await storage.deleteObject({ key: claimed.storageKey });
+          await dependencies.markAborted(claimed.id, attemptId);
+          continue;
+        }
+        await dependencies.finalize(claimed, {
+          status: "reconciling",
+          attemptId,
+        });
+        continue;
+      }
+
+      await storage.abortMultipartUpload({
+        key: claimed.storageKey,
+        providerUploadId: claimed.providerUploadId,
+      });
+      await dependencies.markAborted(claimed.id, attemptId);
+    } catch (error) {
+      await dependencies.markRetryable(claimed.id, attemptId);
+      dependencies.onError(claimed, error);
+    }
+  }
+}
+
+export async function reconcileStaleUploads(now = new Date()) {
+  if (!hasConfiguredStorageBackends()) return;
+  const cutoff = new Date(now.getTime() - STALE_UPLOAD_AFTER_MS);
+  const candidates = await db
+    .select()
+    .from(mediaUploads)
+    .where(and(
+      inArray(mediaUploads.status, [
+        "initiated",
+        "finalizing",
+        "completion_unknown",
+        "reconciling",
+      ]),
+      lt(mediaUploads.updatedAt, cutoff),
+    ))
+    .limit(RECONCILE_BATCH_SIZE);
+
+  await reconcileUploadCandidates(candidates, now, cutoff);
+}
+
+export function startUploadReconciler() {
+  if (!hasConfiguredStorageBackends()) return;
+  let running = false;
+  const run = async () => {
+    if (running) return;
+    running = true;
+    try {
+      await reconcileStaleUploads();
+    } catch (error) {
+      console.error(
+        "Upload reconciliation pass failed",
+        error instanceof Error ? error.message : "unknown error",
+      );
+    } finally {
+      running = false;
+    }
+  };
+  void run();
+  const interval = setInterval(run, RECONCILE_INTERVAL_MS);
+  interval.unref();
 }
 
 export const uploadRoutes = new Hono();
@@ -295,6 +484,17 @@ uploadRoutes.post("/:id/parts/:partNumber", async (context) => {
     upload.partSize,
     upload.bytes - (partNumber - 1) * upload.partSize,
   );
+  const [active] = await db
+    .update(mediaUploads)
+    .set({ updatedAt: new Date() })
+    .where(and(
+      eq(mediaUploads.id, upload.id),
+      eq(mediaUploads.atlasId, atlas.id),
+      eq(mediaUploads.status, "initiated"),
+    ))
+    .returning({ id: mediaUploads.id });
+  if (!active) return context.json({ error: "UPLOAD_NOT_ACTIVE" }, 409);
+
   const signed = await getMultipartStorage(upload.storageDriver).signUploadPart({
     key: upload.storageKey,
     providerUploadId: upload.providerUploadId,
@@ -385,15 +585,39 @@ uploadRoutes.post("/:id/complete", async (context) => {
   if (!claimed) return context.json({ error: "UPLOAD_ALREADY_FINALIZING" }, 409);
 
   try {
+    const storage = getMultipartStorage(upload.storageDriver);
     await withCompletionLease(upload.id, attemptId, () =>
-      getMultipartStorage(upload.storageDriver).completeMultipartUpload({
+      storage.completeMultipartUpload({
         key: upload.storageKey,
         providerUploadId: upload.providerUploadId,
         parts,
+        bytes: upload.bytes,
       }),
     );
   } catch (error) {
-    await markCompletionUnknown(upload.id, attemptId);
+    const stillOwnsCompletion = await markCompletionUnknown(upload.id, attemptId);
+    if (!stillOwnsCompletion) throw error;
+    if (error instanceof CompletedObjectIntegrityError) {
+      const storage = getMultipartStorage(upload.storageDriver);
+      try {
+        await storage.deleteObject({ key: upload.storageKey });
+        await db
+          .update(mediaUploads)
+          .set({
+            status: "aborted",
+            completionAttemptId: null,
+            updatedAt: new Date(),
+          })
+          .where(and(
+            eq(mediaUploads.id, upload.id),
+            eq(mediaUploads.status, "completion_unknown"),
+            eq(mediaUploads.completionAttemptId, attemptId),
+          ));
+      } catch {
+        // Leave completion_unknown for the reconciler to retry deletion.
+      }
+      throw error;
+    }
     const recovered = await recoverCompletedUpload(upload).catch(() => null);
     if (recovered) {
       return context.json({ asset: recovered, completed: true });
@@ -403,7 +627,10 @@ uploadRoutes.post("/:id/complete", async (context) => {
 
   let asset;
   try {
-    asset = await finalizeUpload(upload);
+    asset = await finalizeUpload(upload, {
+      status: "finalizing",
+      attemptId,
+    });
   } catch (error) {
     await markCompletionUnknown(upload.id, attemptId);
     throw error;

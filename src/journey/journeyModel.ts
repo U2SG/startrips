@@ -75,6 +75,7 @@ export function toJourneyRoutes(journeys: readonly Journey[]): JourneyRoute[] {
       lat: point.latitude,
       lon: point.longitude,
       isStop: point.isStop,
+      label: point.label,
     })),
   }));
 }

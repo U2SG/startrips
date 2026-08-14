@@ -1,5 +1,11 @@
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import { persistJourneyDraft } from "./JourneyComposer";
+import {
+  JourneyComposer,
+  parseCoordinateInput,
+  persistJourneyDraft,
+} from "./JourneyComposer";
 import type { Journey, JourneyInput } from "./types";
 
 const input: JourneyInput = {
@@ -24,6 +30,33 @@ const journey = {
 } as unknown as Journey;
 
 describe("persistJourneyDraft", () => {
+  it("does not silently turn an empty coordinate into zero", () => {
+    expect(parseCoordinateInput("", -90, 90)).toBeNull();
+    expect(parseCoordinateInput("   ", -180, 180)).toBeNull();
+    expect(parseCoordinateInput("0", -90, 90)).toBe(0);
+    expect(parseCoordinateInput("22.543096", -90, 90)).toBe(22.543096);
+    expect(parseCoordinateInput("-90", -90, 90)).toBe(-90);
+    expect(parseCoordinateInput("180", -180, 180)).toBe(180);
+    expect(parseCoordinateInput("90.000001", -90, 90)).toBeNull();
+    expect(parseCoordinateInput("-180.000001", -180, 180)).toBeNull();
+  });
+
+  it("renders one composer surface with precise coordinates collapsed", () => {
+    const markup = renderToStaticMarkup(createElement(JourneyComposer, {
+      open: true,
+      onClose: () => undefined,
+      onSaved: () => undefined,
+      onGlobePickRequest: () => undefined,
+    }));
+
+    expect(markup).not.toContain("journey-composer__steps");
+    expect(markup).toContain("01 · MEMORY");
+    expect(markup).toContain("02 · JOURNEY");
+    expect(markup).toContain("03 · TRACE");
+    expect(markup).toContain('<details class="journey-precise-location">');
+    expect(markup).toContain("保存到星球");
+  });
+
   it("creates first, uploads files sequentially with two part workers, and reports progress", async () => {
     const calls: string[] = [];
     const create = vi.fn(async () => {

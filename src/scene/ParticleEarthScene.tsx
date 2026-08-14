@@ -31,6 +31,7 @@ import {
   buildArtworkPointPositions,
   buildSeededSpherePoints,
   buildSphericalRouteSegments,
+  buildSphericalRingSegments,
   latLonToVector3,
   rotationYForLongitude,
   vector3ToLatLon,
@@ -40,12 +41,54 @@ import { disposeSceneGraph, useThreeScene } from "./useThreeScene";
 
 export const QUALITY_PROFILE = {
   low: { particleCount: 12_000, maxDpr: 1 },
-  high: { particleCount: 28_000, maxDpr: 1.25 },
+  high: { particleCount: 28_000, maxDpr: Number.POSITIVE_INFINITY },
 } as const;
 
 export const MAX_RENDERED_JOURNEYS = 64;
 export const MAX_RENDERED_ROUTE_POINTS = 512;
 export const MAX_RENDERED_ROUTE_LINE_VERTICES = 8192;
+export const MAX_RENDERED_ROUTE_LABELS = 6;
+export const MAX_RENDERED_MOBILE_ROUTE_LABELS = 3;
+export const MAX_RENDERED_COASTLINE_VERTICES = 20_000;
+export const GLOBE_RENDER_ORDER = {
+  coastline: 1,
+  signal: 2,
+  routeLine: 3,
+  routePoint: 4,
+  personalPoint: 5,
+} as const;
+export const GLOBE_DRAG_THRESHOLD_PX = 6;
+export const GLOBE_TILT_LIMIT_RADIANS = 0.62;
+export const GLOBE_ZOOM_MIN = 0.72;
+export const GLOBE_ZOOM_MAX = 1.55;
+export const GLOBE_SURFACE_RADIUS = 1.39;
+
+const GLOBE_DRAG_RADIANS_PER_PIXEL = 0.005;
+const GLOBE_MAX_ROTATION_SPEED = 4.2;
+const GLOBE_INERTIA_FRICTION = 5.2;
+const GLOBE_WHEEL_ZOOM_SPEED = 0.0012;
+
+export function clampGlobeTilt(rotation: number) {
+  return Math.max(
+    -GLOBE_TILT_LIMIT_RADIANS,
+    Math.min(GLOBE_TILT_LIMIT_RADIANS, rotation),
+  );
+}
+
+export function isGlobeDrag(distance: number) {
+  return distance >= GLOBE_DRAG_THRESHOLD_PX;
+}
+
+export function isPrimaryPointerActivation(
+  event: Pick<PointerEvent, "button" | "isPrimary" | "pointerType">,
+) {
+  return event.isPrimary
+    && (event.pointerType !== "mouse" || event.button === 0);
+}
+
+export function clampGlobeZoom(zoom: number) {
+  return Math.max(GLOBE_ZOOM_MIN, Math.min(GLOBE_ZOOM_MAX, zoom));
+}
 
 export function selectRenderableJourneyRoutes(
   routes: readonly JourneyRoute[],
@@ -60,6 +103,147 @@ export function selectRenderableJourneyRoutes(
     pointCount += route.points.length;
   }
   return selected.reverse();
+}
+
+export function selectRouteLabelPointIndexes(
+  points: readonly { isStop: boolean; label?: string }[],
+  maxLabels = MAX_RENDERED_ROUTE_LABELS,
+) {
+  if (maxLabels <= 0) return [];
+  const candidates = points.flatMap((point, index) => (
+    point.label?.trim() && (point.isStop || points.length === 1) ? [index] : []
+  ));
+  if (candidates.length <= maxLabels) return candidates;
+  if (maxLabels === 1) return [candidates[0]];
+  return Array.from({ length: maxLabels }, (_, slot) => (
+    candidates[Math.round(slot * (candidates.length - 1) / (maxLabels - 1))]
+  ));
+}
+
+type ProjectedRoutePoint = { x: number; y: number };
+
+export function isSphericalPointVisible(
+  camera: Vector3,
+  point: Vector3,
+  occluderRadius = GLOBE_SURFACE_RADIUS,
+) {
+  const directionX = point.x - camera.x;
+  const directionY = point.y - camera.y;
+  const directionZ = point.z - camera.z;
+  const directionLengthSquared =
+    directionX * directionX
+    + directionY * directionY
+    + directionZ * directionZ;
+  if (directionLengthSquared === 0) return true;
+  const closestProgress = -(
+    camera.x * directionX
+    + camera.y * directionY
+    + camera.z * directionZ
+  ) / directionLengthSquared;
+  if (closestProgress <= 0 || closestProgress >= 1) return true;
+  const closestX = camera.x + directionX * closestProgress;
+  const closestY = camera.y + directionY * closestProgress;
+  const closestZ = camera.z + directionZ * closestProgress;
+  return (
+    closestX * closestX
+    + closestY * closestY
+    + closestZ * closestZ
+  ) >= occluderRadius * occluderRadius;
+}
+
+export function buildProjectedRoutePath(
+  segments: Float32Array,
+  projectPoint: (
+    x: number,
+    y: number,
+    z: number,
+    target: ProjectedRoutePoint,
+  ) => boolean,
+) {
+  const start = { x: 0, y: 0 };
+  const end = { x: 0, y: 0 };
+  const commands: string[] = [];
+  let previousEndX = Number.NaN;
+  let previousEndY = Number.NaN;
+
+  for (let index = 0; index + 5 < segments.length; index += 6) {
+    const startVisible = projectPoint(
+      segments[index],
+      segments[index + 1],
+      segments[index + 2],
+      start,
+    );
+    const endVisible = projectPoint(
+      segments[index + 3],
+      segments[index + 4],
+      segments[index + 5],
+      end,
+    );
+    if (!startVisible || !endVisible) {
+      previousEndX = Number.NaN;
+      previousEndY = Number.NaN;
+      continue;
+    }
+    const startX = start.x.toFixed(1);
+    const startY = start.y.toFixed(1);
+    const endX = end.x.toFixed(1);
+    const endY = end.y.toFixed(1);
+    if (
+      !Number.isFinite(previousEndX)
+      || Math.abs(previousEndX - start.x) > 0.11
+      || Math.abs(previousEndY - start.y) > 0.11
+    ) {
+      commands.push(`M${startX} ${startY}`);
+    }
+    commands.push(`L${endX} ${endY}`);
+    previousEndX = end.x;
+    previousEndY = end.y;
+  }
+
+  return commands.join("");
+}
+
+type ProjectedRouteLabelBox = {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+};
+
+function routeLabelBoxesOverlap(
+  left: ProjectedRouteLabelBox,
+  right: ProjectedRouteLabelBox,
+  padding = 8,
+) {
+  return !(
+    left.right + padding < right.left
+    || right.right + padding < left.left
+    || left.bottom + padding < right.top
+    || right.bottom + padding < left.top
+  );
+}
+
+function routeLabelCharacterWidth(character: string) {
+  return /^[\x20-\x7e]$/.test(character) ? 6.5 : 11.5;
+}
+
+function formatRouteLabel(label: string) {
+  let width = 0;
+  let result = "";
+  for (const character of label.trim()) {
+    const nextWidth = routeLabelCharacterWidth(character) + (result ? 0.9 : 0);
+    if (width + nextWidth > 172) return `${result}…`;
+    result += character;
+    width += nextWidth;
+  }
+  return result;
+}
+
+function estimateRouteLabelWidth(label: string) {
+  const width = [...label].reduce((total, character, index) => (
+    total + routeLabelCharacterWidth(character) + (index > 0 ? 0.9 : 0)
+  ), 0);
+  return Math.min(184, Math.max(42, width));
 }
 
 export const GLOBE_MODE_CONFIG: Record<
@@ -78,6 +262,7 @@ export const GLOBE_MODE_CONFIG: Record<
     personalOpacity: number;
     rotationY: number;
     wireOpacity: number;
+    coastlineOpacity: number;
   }
 > = {
   particleSphere: {
@@ -94,6 +279,7 @@ export const GLOBE_MODE_CONFIG: Record<
     personalOpacity: 0.72,
     rotationY: 0,
     wireOpacity: 0.025,
+    coastlineOpacity: 0.12,
   },
   archiveBurst: {
     x: 0.25,
@@ -109,6 +295,7 @@ export const GLOBE_MODE_CONFIG: Record<
     personalOpacity: 1,
     rotationY: -1.92,
     wireOpacity: 0.022,
+    coastlineOpacity: 0.18,
   },
   surfaceEarth: {
     x: 0.12,
@@ -124,6 +311,7 @@ export const GLOBE_MODE_CONFIG: Record<
     personalOpacity: 0,
     rotationY: -1.92,
     wireOpacity: 0,
+    coastlineOpacity: 0.42,
   },
   focusPoint: {
     x: 0.7,
@@ -135,10 +323,11 @@ export const GLOBE_MODE_CONFIG: Record<
     haloOpacity: 0.05,
     surfaceOpacity: 0.08,
     signalOpacity: 0.72,
-    clusterOpacity: 1,
+    clusterOpacity: 0,
     personalOpacity: 1,
     rotationY: -1.57,
     wireOpacity: 0.018,
+    coastlineOpacity: 0.3,
   },
 };
 
@@ -150,8 +339,10 @@ interface ParticleEarthSceneProps {
   centerFocusPoint?: boolean;
   onFocusPointActivate?: () => void;
   journeyRoutes?: readonly JourneyRoute[];
+  activeJourneyRouteId?: string | null;
   onJourneyRouteActivate?: (id: string) => void;
   onGlobePointPick?: (point: { latitude: number; longitude: number }) => void;
+  dragToRotate?: boolean;
   reduceMotion?: boolean;
 }
 
@@ -204,18 +395,29 @@ function drawPolygonMask(
   }
 }
 
-async function buildLandParticlePositions(count: number) {
+async function buildLandVisualData(count: number) {
   const width = 720;
   const height = 360;
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
   const context = canvas.getContext("2d", { willReadFrequently: true });
-  if (!context) return buildSeededSpherePoints(count, 1908);
+  if (!context) {
+    return {
+      particlePositions: buildSeededSpherePoints(count, 1908),
+      coastlinePositions: new Float32Array(),
+    };
+  }
 
   const response = await fetch("/earth/ne_110m_land.geojson");
-  if (!response.ok) return buildSeededSpherePoints(count, 1908);
+  if (!response.ok) {
+    return {
+      particlePositions: buildSeededSpherePoints(count, 1908),
+      coastlinePositions: new Float32Array(),
+    };
+  }
   const collection = (await response.json()) as LandFeatureCollection;
+  const rings: number[][][] = [];
   context.clearRect(0, 0, width, height);
   context.fillStyle = "#fff";
 
@@ -225,7 +427,10 @@ async function buildLandParticlePositions(count: number) {
       geometry.type === "Polygon"
         ? [geometry.coordinates as number[][][]]
         : (geometry.coordinates as number[][][][]);
-    polygons.forEach((polygon) => drawPolygonMask(context, polygon, width));
+    polygons.forEach((polygon) => {
+      drawPolygonMask(context, polygon, width);
+      rings.push(...polygon);
+    });
   });
 
   const mask = context.getImageData(0, 0, width, height).data;
@@ -253,7 +458,14 @@ async function buildLandParticlePositions(count: number) {
     }
   }
 
-  return points;
+  return {
+    particlePositions: points,
+    coastlinePositions: buildSphericalRingSegments(
+      rings,
+      1.405,
+      MAX_RENDERED_COASTLINE_VERTICES,
+    ),
+  };
 }
 
 function createBurstTargets(source: Float32Array) {
@@ -298,8 +510,10 @@ export function ParticleEarthScene({
   centerFocusPoint = false,
   onFocusPointActivate,
   journeyRoutes = [],
+  activeJourneyRouteId,
   onJourneyRouteActivate,
   onGlobePointPick,
+  dragToRotate = false,
   reduceMotion = false,
 }: ParticleEarthSceneProps) {
   const [ready, setReady] = useState(false);
@@ -309,16 +523,20 @@ export function ParticleEarthScene({
   const latestCenterFocusPoint = useRef(centerFocusPoint);
   const latestOnFocusPointActivate = useRef(onFocusPointActivate);
   const latestJourneyRoutes = useRef(journeyRoutes);
+  const latestActiveJourneyRouteId = useRef(activeJourneyRouteId);
   const latestOnJourneyRouteActivate = useRef(onJourneyRouteActivate);
   const latestOnGlobePointPick = useRef(onGlobePointPick);
+  const latestDragToRotate = useRef(dragToRotate);
   latestMode.current = mode;
   latestFocusPoint.current = focusPoint;
   latestFocusColor.current = focusColor;
   latestCenterFocusPoint.current = centerFocusPoint;
   latestOnFocusPointActivate.current = onFocusPointActivate;
   latestJourneyRoutes.current = journeyRoutes;
+  latestActiveJourneyRouteId.current = activeJourneyRouteId;
   latestOnJourneyRouteActivate.current = onJourneyRouteActivate;
   latestOnGlobePointPick.current = onGlobePointPick;
+  latestDragToRotate.current = dragToRotate;
 
   const { hostRef, controllerRef } = useThreeScene((host) => {
     let disposed = false;
@@ -340,12 +558,27 @@ export function ParticleEarthScene({
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, QUALITY_PROFILE[quality].maxDpr));
     renderer.domElement.dataset.threeScene = "particle-earth";
     host.appendChild(renderer.domElement);
+    const routeVectorLayer = document.createElementNS(
+      "http://www.w3.org/2000/svg",
+      "svg",
+    );
+    routeVectorLayer.classList.add("particle-earth-route-layer");
+    routeVectorLayer.setAttribute("aria-hidden", "true");
+    routeVectorLayer.setAttribute("focusable", "false");
+    routeVectorLayer.setAttribute("preserveAspectRatio", "none");
+    routeVectorLayer.style.opacity = "0";
+    host.appendChild(routeVectorLayer);
     const debugWindow = window as Window & {
       __particleEarthDebug?: () => {
         canvases: number;
         geometries: number;
         textures: number;
         mode: GlobeMode;
+        rotationX: number;
+        rotationY: number;
+        zoom: number;
+        scale: number;
+        coastlineVertices: number;
       };
     };
     debugWindow.__particleEarthDebug = () => ({
@@ -353,6 +586,11 @@ export function ParticleEarthScene({
       geometries: renderer.info.memory.geometries,
       textures: renderer.info.memory.textures,
       mode: currentMode,
+      rotationX: globe.rotation.x,
+      rotationY: globe.rotation.y,
+      zoom: interactiveZoom,
+      scale: globe.scale.x,
+      coastlineVertices: coastlineGeometry.getAttribute("position")?.count ?? 0,
     });
 
     scene.add(new AmbientLight(0x69736f, 0.72));
@@ -363,6 +601,15 @@ export function ParticleEarthScene({
     const globe = new Group();
     globe.rotation.set(0.08, GLOBE_MODE_CONFIG[currentMode].rotationY, -0.03);
     scene.add(globe);
+    let baseRotationY = globe.rotation.y;
+    let interactiveRotationX = globe.rotation.x;
+    let interactiveRotationY = 0;
+    let interactiveZoom = 1;
+    let rotationVelocityX = 0;
+    let rotationVelocityY = 0;
+    let centeredFocusKey = latestFocusPoint.current
+      ? `${latestFocusPoint.current.lat}:${latestFocusPoint.current.lon}`
+      : "";
 
     const sphereGeometry = new SphereGeometry(1.39, 64, 40);
     const surfaceMaterial = new MeshPhongMaterial({
@@ -387,6 +634,19 @@ export function ParticleEarthScene({
     wire.scale.setScalar(1.006);
     globe.add(wire);
 
+    const coastlineGeometry = new BufferGeometry();
+    const coastlineMaterial = new LineBasicMaterial({
+      blending: AdditiveBlending,
+      color: 0x7af4ed,
+      depthTest: true,
+      depthWrite: false,
+      opacity: 0,
+      transparent: true,
+    });
+    const coastlines = new LineSegments(coastlineGeometry, coastlineMaterial);
+    coastlines.renderOrder = GLOBE_RENDER_ORDER.coastline;
+    globe.add(coastlines);
+
     const atmosphereMaterial = createAtmosphereMaterial();
     const atmosphere = new Mesh(sphereGeometry, atmosphereMaterial);
     atmosphere.scale.setScalar(1.07);
@@ -402,6 +662,7 @@ export function ParticleEarthScene({
       size: 45,
     });
     const archiveSignals = new Points(archiveGeometry, archiveMaterial);
+    archiveSignals.renderOrder = GLOBE_RENDER_ORDER.signal;
     globe.add(archiveSignals);
 
     const clusterGeometry = new BufferGeometry();
@@ -421,6 +682,7 @@ export function ParticleEarthScene({
       size: 28,
     });
     const archiveCluster = new Points(clusterGeometry, clusterMaterial);
+    archiveCluster.renderOrder = GLOBE_RENDER_ORDER.signal;
     globe.add(archiveCluster);
 
     const cyanClusterGeometry = new BufferGeometry();
@@ -443,6 +705,7 @@ export function ParticleEarthScene({
       size: 22,
     });
     const cyanArchiveCluster = new Points(cyanClusterGeometry, cyanClusterMaterial);
+    cyanArchiveCluster.renderOrder = GLOBE_RENDER_ORDER.signal;
     globe.add(cyanArchiveCluster);
 
     const shellGeometry = new BufferGeometry();
@@ -511,32 +774,89 @@ export function ParticleEarthScene({
     );
     host.dataset.focusColor = `#${personalMaterial.uniforms.uColor.value.getHexString()}`;
     const personalSignal = new Points(personalGeometry, personalMaterial);
+    personalSignal.renderOrder = GLOBE_RENDER_ORDER.personalPoint;
     globe.add(personalSignal);
     const personalScreenPosition = new Vector3();
 
     let routePointGeometry = new BufferGeometry();
     const routePointMaterial = new PointsMaterial({
-      blending: AdditiveBlending,
+      colorWrite: false,
       depthWrite: false,
-      opacity: 0,
       size: 0.09,
       sizeAttenuation: true,
-      transparent: true,
-      vertexColors: true,
     });
     const routePointSignals = new Points(routePointGeometry, routePointMaterial);
+    routePointSignals.renderOrder = GLOBE_RENDER_ORDER.routePoint;
     globe.add(routePointSignals);
-    let routeLineGeometry = new BufferGeometry();
-    const routeLineMaterial = new LineBasicMaterial({
-      blending: AdditiveBlending,
-      depthWrite: false,
-      opacity: 0,
-      transparent: true,
-      vertexColors: true,
-    });
-    const routeLines = new LineSegments(routeLineGeometry, routeLineMaterial);
-    globe.add(routeLines);
+    type RouteVectorLabel = {
+      element: SVGGElement;
+      leader: SVGPathElement;
+      text: SVGTextElement;
+      width: number;
+      priority: number;
+      pointIndex: number;
+    };
+    type RouteVectorEntry = {
+      segments: Float32Array;
+      glowPath: SVGPathElement;
+      corePath: SVGPathElement;
+      points: Array<{
+        element: SVGCircleElement;
+        position: Vector3;
+        label?: RouteVectorLabel;
+      }>;
+    };
+    let routeVectorEntries: RouteVectorEntry[] = [];
+    let routeVectorOpacity = 0;
+    const routeCameraPosition = new Vector3();
+    const routeLocalPoint = new Vector3();
+    const routeScreenPoint = new Vector3();
+    const routeProjectedPoint = { x: 0, y: 0 };
+    const lastRouteProjectionState = new Float64Array(9).fill(Number.NaN);
+    let routeProjectionRevision = 0;
+    let renderedRouteProjectionRevision = -1;
     let journeyPointIds: string[] = [];
+    const routeLabelSafeArea = {
+      left: 16,
+      top: 74,
+      right: 16,
+      bottom: 18,
+    };
+
+    const updateRouteLabelSafeArea = () => {
+      const hostBounds = host.getBoundingClientRect();
+      const atlas = host.closest(".living-atlas");
+      const headerBounds = atlas
+        ?.querySelector(".living-atlas__header")
+        ?.getBoundingClientRect();
+      const cardBounds = atlas
+        ?.querySelector(".living-atlas__active")
+        ?.getBoundingClientRect();
+      const compact = window.innerWidth <= 760;
+      routeLabelSafeArea.left = 16;
+      routeLabelSafeArea.top = headerBounds
+        ? Math.max(16, headerBounds.bottom - hostBounds.top + 10)
+        : compact ? 62 : 74;
+      routeLabelSafeArea.right = hostBounds.width - 16;
+      routeLabelSafeArea.bottom = hostBounds.height - 18;
+      if (!cardBounds) return;
+      const overlapsHorizontally = cardBounds.left < hostBounds.right
+        && cardBounds.right > hostBounds.left;
+      const overlapsVertically = cardBounds.top < hostBounds.bottom
+        && cardBounds.bottom > hostBounds.top;
+      if (!overlapsHorizontally || !overlapsVertically) return;
+      if (compact && cardBounds.top > hostBounds.top) {
+        routeLabelSafeArea.bottom = Math.min(
+          routeLabelSafeArea.bottom,
+          cardBounds.top - hostBounds.top - 16,
+        );
+      } else if (!compact && cardBounds.left > hostBounds.left) {
+        routeLabelSafeArea.right = Math.min(
+          routeLabelSafeArea.right,
+          cardBounds.left - hostBounds.left - 18,
+        );
+      }
+    };
 
     const applyJourneyRoutes = (routes: readonly JourneyRoute[]) => {
       const visibleRoutes = selectRenderableJourneyRoutes(routes);
@@ -545,36 +865,115 @@ export function ParticleEarthScene({
         0,
       );
       const pointPositions = new Float32Array(pointCount * 3);
-      const pointColors = new Float32Array(pointCount * 3);
-      const linePositions: number[] = [];
-      const lineColors: number[] = [];
       const pointIds: string[] = [];
       let pointIndex = 0;
+      let routeVertexCount = 0;
+      let routeLabelCount = 0;
+
+      routeVectorLayer.replaceChildren();
+      routeVectorEntries = [];
+      routeProjectionRevision += 1;
 
       visibleRoutes.forEach((route) => {
-        const color = new Color(route.color);
-        route.points.forEach((point) => {
-          latLonToVector3(point.lat, point.lon, 1.46).toArray(
+        const group = document.createElementNS(
+          "http://www.w3.org/2000/svg",
+          "g",
+        );
+        group.classList.add("particle-earth-route");
+        group.style.color = route.color;
+        const glowPath = document.createElementNS(
+          "http://www.w3.org/2000/svg",
+          "path",
+        );
+        glowPath.classList.add("particle-earth-route__glow");
+        const corePath = document.createElementNS(
+          "http://www.w3.org/2000/svg",
+          "path",
+        );
+        corePath.classList.add("particle-earth-route__core");
+        group.append(glowPath, corePath);
+        const vectorPoints: RouteVectorEntry["points"] = [];
+        const routeLabelIndexes = route.id === latestActiveJourneyRouteId.current
+          ? selectRouteLabelPointIndexes(route.points)
+          : [];
+        const routeLabelIndexSet = new Set(routeLabelIndexes);
+        const routeLabelElements: SVGGElement[] = [];
+
+        route.points.forEach((point, routePointIndex) => {
+          const position = latLonToVector3(point.lat, point.lon, 1.46);
+          position.toArray(
             pointPositions,
             pointIndex * 3,
           );
-          color.toArray(pointColors, pointIndex * 3);
           pointIds.push(route.id);
           pointIndex += 1;
+
+          const element = document.createElementNS(
+            "http://www.w3.org/2000/svg",
+            "circle",
+          );
+          element.classList.add(
+            "particle-earth-route__point",
+            point.isStop
+              ? "particle-earth-route__point--stop"
+              : "particle-earth-route__point--transit",
+          );
+          element.setAttribute("r", point.isStop ? "4.4" : "2.8");
+          group.appendChild(element);
+          let label: RouteVectorLabel | undefined;
+          if (routeLabelIndexSet.has(routePointIndex) && point.label?.trim()) {
+            const labelElement = document.createElementNS(
+              "http://www.w3.org/2000/svg",
+              "g",
+            );
+            labelElement.classList.add("particle-earth-route__label");
+            const leader = document.createElementNS(
+              "http://www.w3.org/2000/svg",
+              "path",
+            );
+            leader.classList.add("particle-earth-route__leader");
+            const text = document.createElementNS(
+              "http://www.w3.org/2000/svg",
+              "text",
+            );
+            const displayLabel = formatRouteLabel(point.label);
+            text.textContent = displayLabel;
+            labelElement.setAttribute("data-route-label", displayLabel);
+            labelElement.append(leader, text);
+            routeLabelElements.push(labelElement);
+            label = {
+              element: labelElement,
+              leader,
+              text,
+              width: estimateRouteLabelWidth(displayLabel),
+              priority: routePointIndex === routeLabelIndexes[0]
+                || routePointIndex === routeLabelIndexes.at(-1)
+                ? 2
+                : 1,
+              pointIndex: routePointIndex,
+            };
+            routeLabelCount += 1;
+          }
+          vectorPoints.push({ element, position, label });
         });
+        group.append(...routeLabelElements);
 
         const remainingVertices = MAX_RENDERED_ROUTE_LINE_VERTICES
-          - linePositions.length / 3;
+          - routeVertexCount;
         const routeSegments = buildSphericalRouteSegments(
           route.points,
           1.445,
-          Math.PI / 24,
+          Math.PI / 96,
           remainingVertices,
         );
-        linePositions.push(...routeSegments);
-        for (let index = 0; index < routeSegments.length / 3; index += 1) {
-          lineColors.push(color.r, color.g, color.b);
-        }
+        routeVertexCount += routeSegments.length / 3;
+        routeVectorLayer.appendChild(group);
+        routeVectorEntries.push({
+          segments: routeSegments,
+          glowPath,
+          corePath,
+          points: vectorPoints,
+        });
       });
 
       const nextPointGeometry = new BufferGeometry();
@@ -582,39 +981,201 @@ export function ParticleEarthScene({
         "position",
         new BufferAttribute(pointPositions, 3),
       );
-      nextPointGeometry.setAttribute(
-        "color",
-        new BufferAttribute(pointColors, 3),
-      );
-      const nextLineGeometry = new BufferGeometry();
-      nextLineGeometry.setAttribute(
-        "position",
-        new BufferAttribute(new Float32Array(linePositions), 3),
-      );
-      nextLineGeometry.setAttribute(
-        "color",
-        new BufferAttribute(new Float32Array(lineColors), 3),
-      );
       if (pointCount > 0) nextPointGeometry.computeBoundingSphere();
-      if (linePositions.length > 0) nextLineGeometry.computeBoundingSphere();
       const previousPointGeometry = routePointGeometry;
-      const previousLineGeometry = routeLineGeometry;
       routePointGeometry = nextPointGeometry;
-      routeLineGeometry = nextLineGeometry;
       routePointSignals.geometry = routePointGeometry;
-      routeLines.geometry = routeLineGeometry;
       previousPointGeometry.dispose();
-      previousLineGeometry.dispose();
       journeyPointIds = pointIds;
       host.dataset.journeyRouteCount = String(visibleRoutes.length);
       host.dataset.journeyRoutePointCount = String(pointCount);
+      host.dataset.journeyRouteVectorVertices = String(routeVertexCount);
+      host.dataset.journeyRouteLabelCount = String(routeLabelCount);
       host.dataset.journeyRouteOverflow = String(routes.length - visibleRoutes.length);
+      updateRouteLabelSafeArea();
+    };
+
+    const projectRoutePoint = (
+      x: number,
+      y: number,
+      z: number,
+      target: ProjectedRoutePoint,
+    ) => {
+      routeLocalPoint.set(x, y, z);
+      if (!isSphericalPointVisible(routeCameraPosition, routeLocalPoint)) return false;
+      routeScreenPoint
+        .copy(routeLocalPoint)
+        .applyMatrix4(globe.matrixWorld)
+        .project(camera);
+      if (
+        !Number.isFinite(routeScreenPoint.x)
+        || !Number.isFinite(routeScreenPoint.y)
+        || routeScreenPoint.z < -1
+        || routeScreenPoint.z > 1
+      ) {
+        return false;
+      }
+      target.x = ((routeScreenPoint.x + 1) * targetSize.x) / 2;
+      target.y = ((1 - routeScreenPoint.y) * targetSize.y) / 2;
+      return true;
+    };
+
+    const updateRouteVectorLayer = () => {
+      if (routeVectorOpacity <= 0.01 || routeVectorEntries.length === 0) return;
+      const projectionState = [
+        globe.position.x,
+        globe.position.y,
+        globe.scale.x,
+        globe.rotation.x,
+        globe.rotation.y,
+        targetSize.x,
+        targetSize.y,
+        camera.aspect,
+        window.innerWidth,
+      ];
+      const projectionChanged = projectionState.some((value, index) => (
+        Math.abs(value - lastRouteProjectionState[index]) > 0.00001
+      ));
+      if (
+        !projectionChanged
+        && renderedRouteProjectionRevision === routeProjectionRevision
+      ) {
+        return;
+      }
+      lastRouteProjectionState.set(projectionState);
+      renderedRouteProjectionRevision = routeProjectionRevision;
+      camera.updateMatrixWorld();
+      globe.updateWorldMatrix(true, false);
+      globe.worldToLocal(routeCameraPosition.copy(camera.position));
+
+      const labelBoxes: ProjectedRouteLabelBox[] = [];
+      const compactRouteLabels = window.innerWidth <= 760;
+      const labelLimit = compactRouteLabels
+        ? MAX_RENDERED_MOBILE_ROUTE_LABELS
+        : MAX_RENDERED_ROUTE_LABELS;
+      let visibleLabelCount = 0;
+
+      routeVectorEntries.forEach((entry) => {
+        const path = buildProjectedRoutePath(entry.segments, projectRoutePoint);
+        entry.glowPath.setAttribute("d", path);
+        entry.corePath.setAttribute("d", path);
+        const labelCandidates: Array<{
+          label: RouteVectorLabel;
+          x: number;
+          y: number;
+        }> = [];
+        entry.points.forEach(({ element, position, label }) => {
+          if (!projectRoutePoint(
+            position.x,
+            position.y,
+            position.z,
+            routeProjectedPoint,
+          )) {
+            element.style.display = "none";
+            if (label) label.element.style.display = "none";
+            return;
+          }
+          element.style.removeProperty("display");
+          element.setAttribute("cx", routeProjectedPoint.x.toFixed(1));
+          element.setAttribute("cy", routeProjectedPoint.y.toFixed(1));
+          if (label) {
+            labelCandidates.push({
+              label,
+              x: routeProjectedPoint.x,
+              y: routeProjectedPoint.y,
+            });
+          }
+        });
+
+        labelCandidates
+          .sort((left, right) => (
+            right.label.priority - left.label.priority
+            || left.label.pointIndex - right.label.pointIndex
+          ))
+          .forEach(({ label, x, y }) => {
+            if (
+              visibleLabelCount >= labelLimit
+              || x < 0
+              || x > targetSize.x
+              || y < 0
+              || y > targetSize.y
+            ) {
+              label.element.style.display = "none";
+              return;
+            }
+            const preferredHorizontal = x + label.width + 38 <= routeLabelSafeArea.right
+              ? 1
+              : -1;
+            const preferredVertical = y - 34 >= routeLabelSafeArea.top ? -1 : 1;
+            const directions = [
+              [preferredHorizontal, preferredVertical],
+              [preferredHorizontal, -preferredVertical],
+              [-preferredHorizontal, preferredVertical],
+              [-preferredHorizontal, -preferredVertical],
+            ];
+            let placement: {
+              box: ProjectedRouteLabelBox;
+              horizontal: number;
+              vertical: number;
+              textX: number;
+              textY: number;
+            } | null = null;
+            for (const [horizontal, vertical] of directions) {
+              const textX = x + horizontal * 24;
+              const textY = y + vertical * 22 + (vertical > 0 ? 5 : 0);
+              const box = {
+                left: horizontal > 0 ? textX : textX - label.width,
+                top: textY - 13,
+                right: horizontal > 0 ? textX + label.width : textX,
+                bottom: textY + 4,
+              };
+              if (
+                box.left < routeLabelSafeArea.left
+                || box.right > routeLabelSafeArea.right
+                || box.top < routeLabelSafeArea.top
+                || box.bottom > routeLabelSafeArea.bottom
+                || labelBoxes.some((candidate) => routeLabelBoxesOverlap(candidate, box))
+              ) {
+                continue;
+              }
+              placement = { box, horizontal, vertical, textX, textY };
+              break;
+            }
+            if (!placement) {
+              label.element.style.display = "none";
+              return;
+            }
+
+            const elbowX = x + placement.horizontal * 10;
+            const elbowY = y + placement.vertical * 10;
+            const leaderEndX = placement.textX - placement.horizontal * 5;
+            const leaderEndY = placement.textY - 4;
+            label.leader.setAttribute(
+              "d",
+              `M${x.toFixed(1)} ${y.toFixed(1)}`
+                + `L${elbowX.toFixed(1)} ${elbowY.toFixed(1)}`
+                + `L${leaderEndX.toFixed(1)} ${leaderEndY.toFixed(1)}`,
+            );
+            label.text.setAttribute("x", placement.textX.toFixed(1));
+            label.text.setAttribute("y", placement.textY.toFixed(1));
+            label.text.setAttribute(
+              "text-anchor",
+              placement.horizontal > 0 ? "start" : "end",
+            );
+            label.element.style.removeProperty("display");
+            labelBoxes.push(placement.box);
+            visibleLabelCount += 1;
+          });
+      });
+      host.dataset.journeyRouteVisibleLabelCount = String(visibleLabelCount);
+      host.dataset.journeyRouteLabelSafeRight = routeLabelSafeArea.right.toFixed(1);
+      host.dataset.journeyRouteLabelSafeBottom = routeLabelSafeArea.bottom.toFixed(1);
     };
 
     const personalRaycaster = new Raycaster();
     personalRaycaster.params.Points = { threshold: 0.18 };
     const personalPointer = new Vector2();
-    const onPersonalPointerUp = (event: PointerEvent) => {
+    const activatePointerTarget = (event: PointerEvent) => {
       const canPickGlobe = Boolean(latestOnGlobePointPick.current);
       const canActivateJourney = Boolean(
         latestOnJourneyRouteActivate.current && journeyPointIds.length > 0,
@@ -650,10 +1211,19 @@ export function ParticleEarthScene({
         return;
       }
       if (canActivateJourney) {
-        const [intersection] = personalRaycaster.intersectObject(
-          routePointSignals,
-          false,
-        );
+        camera.updateMatrixWorld();
+        globe.updateWorldMatrix(true, false);
+        globe.worldToLocal(routeCameraPosition.copy(camera.position));
+        const positions = routePointSignals.geometry.getAttribute("position") as
+          | BufferAttribute
+          | undefined;
+        const intersection = personalRaycaster
+          .intersectObject(routePointSignals, false)
+          .find((candidate) => {
+            if (candidate.index === undefined || !positions) return false;
+            routeLocalPoint.fromBufferAttribute(positions, candidate.index);
+            return isSphericalPointVisible(routeCameraPosition, routeLocalPoint);
+          });
         const journeyId = intersection?.index === undefined
           ? undefined
           : journeyPointIds[intersection.index];
@@ -666,7 +1236,186 @@ export function ParticleEarthScene({
         latestOnFocusPointActivate.current?.();
       }
     };
-    renderer.domElement.addEventListener("pointerup", onPersonalPointerUp);
+    const activePointers = new Map<number, { x: number; y: number }>();
+    let dragPointerId: number | null = null;
+    let dragLastX = 0;
+    let dragLastY = 0;
+    let dragLastTime = 0;
+    let dragTravel = 0;
+    let dragStarted = false;
+    let gestureConsumed = false;
+    let pinchDistance = 0;
+
+    const currentPinchDistance = () => {
+      const [first, second] = [...activePointers.values()];
+      return first && second ? Math.hypot(second.x - first.x, second.y - first.y) : 0;
+    };
+
+    const clearDragState = () => {
+      dragPointerId = null;
+      dragTravel = 0;
+      dragStarted = false;
+      gestureConsumed = false;
+      pinchDistance = 0;
+      delete host.dataset.dragging;
+    };
+
+    const beginRotationFrom = (
+      pointerId: number,
+      pointer: { x: number; y: number },
+      timeStamp: number,
+      alreadyConsumed = false,
+    ) => {
+      dragPointerId = pointerId;
+      dragLastX = pointer.x;
+      dragLastY = pointer.y;
+      dragLastTime = timeStamp;
+      dragTravel = alreadyConsumed ? GLOBE_DRAG_THRESHOLD_PX : 0;
+      dragStarted = alreadyConsumed;
+    };
+
+    const onPointerDown = (event: PointerEvent) => {
+      if (
+        !latestDragToRotate.current
+        || (event.pointerType === "mouse" && event.button !== 0)
+      ) {
+        return;
+      }
+      activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      rotationVelocityX = 0;
+      rotationVelocityY = 0;
+      renderer.domElement.setPointerCapture?.(event.pointerId);
+      if (activePointers.size === 1) {
+        beginRotationFrom(
+          event.pointerId,
+          { x: event.clientX, y: event.clientY },
+          event.timeStamp,
+        );
+      } else if (activePointers.size === 2) {
+        gestureConsumed = true;
+        dragStarted = true;
+        dragPointerId = null;
+        pinchDistance = currentPinchDistance();
+        host.dataset.dragging = "true";
+      }
+    };
+
+    const onPointerMove = (event: PointerEvent) => {
+      if (!activePointers.has(event.pointerId)) return;
+      activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      if (activePointers.size >= 2) {
+        event.preventDefault();
+        const nextDistance = currentPinchDistance();
+        if (pinchDistance > 0 && nextDistance > 0) {
+          interactiveZoom = clampGlobeZoom(
+            interactiveZoom * (nextDistance / pinchDistance),
+          );
+        }
+        pinchDistance = nextDistance;
+        gestureConsumed = true;
+        dragStarted = true;
+        host.dataset.dragging = "true";
+        return;
+      }
+      if (event.pointerId !== dragPointerId) return;
+      const deltaX = event.clientX - dragLastX;
+      const deltaY = event.clientY - dragLastY;
+      const elapsed = Math.max(
+        0.008,
+        Math.min(0.064, (event.timeStamp - dragLastTime) / 1000),
+      );
+      dragLastX = event.clientX;
+      dragLastY = event.clientY;
+      dragLastTime = event.timeStamp;
+      dragTravel += Math.hypot(deltaX, deltaY);
+      if (!dragStarted && isGlobeDrag(dragTravel)) {
+        dragStarted = true;
+        gestureConsumed = true;
+        host.dataset.dragging = "true";
+      }
+      if (!dragStarted) return;
+
+      event.preventDefault();
+      const rotationDeltaX = deltaY * GLOBE_DRAG_RADIANS_PER_PIXEL;
+      const rotationDeltaY = deltaX * GLOBE_DRAG_RADIANS_PER_PIXEL;
+      interactiveRotationX = clampGlobeTilt(interactiveRotationX + rotationDeltaX);
+      interactiveRotationY += rotationDeltaY;
+      const nextVelocityX = rotationDeltaX / elapsed;
+      const nextVelocityY = rotationDeltaY / elapsed;
+      rotationVelocityX = Math.max(
+        -GLOBE_MAX_ROTATION_SPEED,
+        Math.min(GLOBE_MAX_ROTATION_SPEED, nextVelocityX),
+      );
+      rotationVelocityY = Math.max(
+        -GLOBE_MAX_ROTATION_SPEED,
+        Math.min(GLOBE_MAX_ROTATION_SPEED, nextVelocityY),
+      );
+    };
+
+    const finishPointer = (event: PointerEvent, allowActivation: boolean) => {
+      if (!activePointers.has(event.pointerId)) return;
+      const wasGesture = gestureConsumed || dragStarted || activePointers.size > 1;
+      activePointers.delete(event.pointerId);
+      if (renderer.domElement.hasPointerCapture?.(event.pointerId)) {
+        renderer.domElement.releasePointerCapture?.(event.pointerId);
+      }
+      if (activePointers.size === 1) {
+        const [remainingId, remainingPointer] = [...activePointers.entries()][0];
+        gestureConsumed = wasGesture;
+        pinchDistance = 0;
+        beginRotationFrom(
+          remainingId,
+          remainingPointer,
+          event.timeStamp,
+          wasGesture,
+        );
+        return;
+      }
+
+      if (!wasGesture || reduceMotion) {
+        rotationVelocityX = 0;
+        rotationVelocityY = 0;
+      }
+      clearDragState();
+      if (allowActivation && !wasGesture) activatePointerTarget(event);
+    };
+
+    const onPointerUp = (event: PointerEvent) => {
+      if (activePointers.has(event.pointerId)) {
+        finishPointer(event, isPrimaryPointerActivation(event));
+      } else if (isPrimaryPointerActivation(event)) {
+        activatePointerTarget(event);
+      }
+    };
+    const onPointerCancel = (event: PointerEvent) => finishPointer(event, false);
+    const onLostPointerCapture = (event: PointerEvent) => {
+      if (!activePointers.has(event.pointerId)) return;
+      activePointers.delete(event.pointerId);
+      rotationVelocityX = 0;
+      rotationVelocityY = 0;
+      if (activePointers.size === 0) {
+        clearDragState();
+      } else {
+        const [remainingId, remainingPointer] = [...activePointers.entries()][0];
+        gestureConsumed = true;
+        beginRotationFrom(remainingId, remainingPointer, event.timeStamp, true);
+      }
+    };
+
+    const onWheel = (event: WheelEvent) => {
+      if (!latestDragToRotate.current) return;
+      event.preventDefault();
+      interactiveZoom = clampGlobeZoom(
+        interactiveZoom * Math.exp(-event.deltaY * GLOBE_WHEEL_ZOOM_SPEED),
+      );
+    };
+
+    renderer.domElement.addEventListener("pointerdown", onPointerDown);
+    renderer.domElement.addEventListener("pointermove", onPointerMove);
+    renderer.domElement.addEventListener("pointerup", onPointerUp);
+    renderer.domElement.addEventListener("pointercancel", onPointerCancel);
+    renderer.domElement.addEventListener("lostpointercapture", onLostPointerCapture);
+    renderer.domElement.addEventListener("wheel", onWheel, { passive: false });
 
     let particleMaterial = createParticleEarthMaterial({
       color: 0x61e4dc,
@@ -706,7 +1455,15 @@ export function ParticleEarthScene({
     const resize = () => {
       const bounds = host.getBoundingClientRect();
       targetSize.set(Math.max(1, bounds.width), Math.max(1, bounds.height));
+      renderer.setPixelRatio(
+        Math.min(window.devicePixelRatio, QUALITY_PROFILE[quality].maxDpr),
+      );
       renderer.setSize(targetSize.x, targetSize.y, false);
+      routeVectorLayer.setAttribute(
+        "viewBox",
+        `0 0 ${targetSize.x} ${targetSize.y}`,
+      );
+      updateRouteLabelSafeArea();
       camera.aspect = targetSize.x / targetSize.y;
       camera.updateProjectionMatrix();
       particleMaterial.uniforms.uViewportHeight.value = targetSize.y;
@@ -719,6 +1476,7 @@ export function ParticleEarthScene({
     };
     const resizeObserver = new ResizeObserver(resize);
     resizeObserver.observe(host);
+    window.addEventListener("resize", resize);
     resize();
 
     const render = (now: number) => {
@@ -726,7 +1484,7 @@ export function ParticleEarthScene({
       const delta = Math.min(0.05, Math.max(0, (now - lastTime) / 1000));
       lastTime = now;
       const target = GLOBE_MODE_CONFIG[currentMode];
-      const targetRotationY =
+      const targetBaseRotationY =
         currentMode === "focusPoint"
         && latestCenterFocusPoint.current
         && latestFocusPoint.current
@@ -738,8 +1496,21 @@ export function ParticleEarthScene({
 
       globe.position.x = interpolate(globe.position.x, target.x);
       globe.position.y = interpolate(globe.position.y, target.y);
-      globe.scale.setScalar(interpolate(globe.scale.x, target.scale));
-      globe.rotation.y = interpolate(globe.rotation.y, targetRotationY);
+      globe.scale.setScalar(interpolate(globe.scale.x, target.scale * interactiveZoom));
+      baseRotationY = interpolate(baseRotationY, targetBaseRotationY);
+      if (activePointers.size === 0 && !reduceMotion) {
+        interactiveRotationX = clampGlobeTilt(
+          interactiveRotationX + rotationVelocityX * delta,
+        );
+        interactiveRotationY += rotationVelocityY * delta;
+        const inertia = Math.exp(-GLOBE_INERTIA_FRICTION * delta);
+        rotationVelocityX *= inertia;
+        rotationVelocityY *= inertia;
+        if (Math.abs(rotationVelocityX) < 0.001) rotationVelocityX = 0;
+        if (Math.abs(rotationVelocityY) < 0.001) rotationVelocityY = 0;
+      }
+      globe.rotation.x = interactiveRotationX;
+      globe.rotation.y = baseRotationY + interactiveRotationY;
       particleMaterial.uniforms.uMorph.value = interpolate(
         particleMaterial.uniforms.uMorph.value,
         target.burst,
@@ -782,19 +1553,17 @@ export function ParticleEarthScene({
         : currentMode === "focusPoint"
           ? 0.96
           : 0.66;
-      routePointMaterial.opacity = interpolate(
-        routePointMaterial.opacity,
-        routeOpacity,
-      );
-      routeLineMaterial.opacity = interpolate(
-        routeLineMaterial.opacity,
-        routeOpacity * 0.72,
-      );
+      routeVectorOpacity = interpolate(routeVectorOpacity, routeOpacity);
+      routeVectorLayer.style.opacity = String(routeVectorOpacity);
       atmosphereMaterial.uniforms.uOpacity.value = interpolate(
         atmosphereMaterial.uniforms.uOpacity.value,
         currentMode === "surfaceEarth" ? 0.05 : currentMode === "particleSphere" ? 0.5 : 0.36,
       );
       wireMaterial.opacity = interpolate(wireMaterial.opacity, target.wireOpacity);
+      coastlineMaterial.opacity = interpolate(
+        coastlineMaterial.opacity,
+        target.coastlineOpacity,
+      );
       particleMaterial.uniforms.uTime.value = now / 1000;
       archiveMaterial.uniforms.uTime.value = now / 1000;
       clusterMaterial.uniforms.uTime.value = now / 1000;
@@ -802,6 +1571,8 @@ export function ParticleEarthScene({
       shellMaterial.uniforms.uTime.value = now / 1000;
       haloMaterial.uniforms.uTime.value = now / 1000;
       personalMaterial.uniforms.uTime.value = now / 1000;
+
+      updateRouteVectorLayer();
 
       if (latestCenterFocusPoint.current && latestFocusPoint.current) {
         const positionAttribute = personalGeometry.getAttribute("position") as BufferAttribute;
@@ -830,16 +1601,28 @@ export function ParticleEarthScene({
     };
     document.addEventListener("visibilitychange", onVisibilityChange);
 
-    void buildLandParticlePositions(QUALITY_PROFILE[quality].particleCount).then((positions) => {
+    void buildLandVisualData(QUALITY_PROFILE[quality].particleCount).then(({
+      particlePositions,
+      coastlinePositions,
+    }) => {
       if (disposed) return;
       particleGeometry = new BufferGeometry();
-      particleGeometry.setAttribute("position", new BufferAttribute(positions, 3));
+      particleGeometry.setAttribute(
+        "position",
+        new BufferAttribute(particlePositions, 3),
+      );
       particleGeometry.setAttribute(
         "targetPosition",
-        new BufferAttribute(createBurstTargets(positions), 3),
+        new BufferAttribute(createBurstTargets(particlePositions), 3),
       );
       particles = new Points(particleGeometry, particleMaterial);
       globe.add(particles);
+      coastlineGeometry.setAttribute(
+        "position",
+        new BufferAttribute(coastlinePositions, 3),
+      );
+      if (coastlinePositions.length > 0) coastlineGeometry.computeBoundingSphere();
+      host.dataset.coastlineVertices = String(coastlinePositions.length / 3);
       setReady(true);
     });
 
@@ -857,13 +1640,29 @@ export function ParticleEarthScene({
         }
       },
       setFocusPoint(point: { lat: number; lon: number } | null | undefined) {
+        const nextFocusKey = point ? `${point.lat}:${point.lon}` : "";
+        if (
+          latestDragToRotate.current
+          && latestCenterFocusPoint.current
+          && nextFocusKey !== centeredFocusKey
+        ) {
+          interactiveRotationX = 0.08;
+          interactiveRotationY = 0;
+          rotationVelocityX = 0;
+          rotationVelocityY = 0;
+        }
+        centeredFocusKey = nextFocusKey;
         applyFocusPoint(point);
       },
       setFocusColor(color: string | undefined) {
         personalMaterial.uniforms.uColor.value.set(color ?? 0xffdc72);
         host.dataset.focusColor = `#${personalMaterial.uniforms.uColor.value.getHexString()}`;
       },
-      setJourneyRoutes(routes: readonly JourneyRoute[]) {
+      setJourneyRoutes(
+        routes: readonly JourneyRoute[],
+        activeRouteId: string | null | undefined,
+      ) {
+        latestActiveJourneyRouteId.current = activeRouteId;
         applyJourneyRoutes(routes);
       },
       dispose() {
@@ -871,7 +1670,13 @@ export function ParticleEarthScene({
         cancelAnimationFrame(animationFrame);
         document.removeEventListener("visibilitychange", onVisibilityChange);
         resizeObserver.disconnect();
-        renderer.domElement.removeEventListener("pointerup", onPersonalPointerUp);
+        window.removeEventListener("resize", resize);
+        renderer.domElement.removeEventListener("pointerdown", onPointerDown);
+        renderer.domElement.removeEventListener("pointermove", onPointerMove);
+        renderer.domElement.removeEventListener("pointerup", onPointerUp);
+        renderer.domElement.removeEventListener("pointercancel", onPointerCancel);
+        renderer.domElement.removeEventListener("lostpointercapture", onLostPointerCapture);
+        renderer.domElement.removeEventListener("wheel", onWheel);
         texture.dispose();
         if (particles) globe.remove(particles);
         if (particleGeometry) particleGeometry.dispose();
@@ -879,6 +1684,7 @@ export function ParticleEarthScene({
         disposeSceneGraph(scene);
         renderer.dispose();
         renderer.forceContextLoss();
+        routeVectorLayer.remove();
         renderer.domElement.remove();
         Reflect.deleteProperty(debugWindow, "__particleEarthDebug");
       },
@@ -898,8 +1704,8 @@ export function ParticleEarthScene({
   }, [controllerRef, focusColor]);
 
   useEffect(() => {
-    controllerRef.current?.setJourneyRoutes(journeyRoutes);
-  }, [controllerRef, journeyRoutes]);
+    controllerRef.current?.setJourneyRoutes(journeyRoutes, activeJourneyRouteId);
+  }, [activeJourneyRouteId, controllerRef, journeyRoutes]);
 
   return (
     <div
@@ -911,6 +1717,7 @@ export function ParticleEarthScene({
       }
       data-journey-routes-interactive={onJourneyRouteActivate ? "true" : "false"}
       data-globe-point-pick={onGlobePointPick ? "true" : "false"}
+      data-drag-rotation={dragToRotate ? "true" : "false"}
       aria-label="由世界陆地轮廓与艺术信号组成的粒子地球"
       role="img"
     />
