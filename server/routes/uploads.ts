@@ -4,6 +4,7 @@ import { Hono } from "hono";
 import { requireAtlasAccess } from "../authorization/atlas-access";
 import { db } from "../db/client";
 import {
+  journeyRoutePoints,
   mediaAssets,
   mediaUploads,
   journeys,
@@ -38,6 +39,7 @@ const ALLOWED_MIME_TYPES = new Set([
 
 type StartUploadInput = {
   journeyId?: unknown;
+  routePointId?: unknown;
   fileName?: unknown;
   mimeType?: unknown;
   bytes?: unknown;
@@ -45,6 +47,11 @@ type StartUploadInput = {
 
 function parseStartUpload(body: StartUploadInput) {
   const journeyId = typeof body.journeyId === "string" ? body.journeyId : "";
+  const routePointId = body.routePointId === undefined || body.routePointId === null
+    ? null
+    : typeof body.routePointId === "string"
+      ? body.routePointId
+      : "invalid";
   const fileName = typeof body.fileName === "string" ? body.fileName.trim() : "";
   const mimeType = typeof body.mimeType === "string" ? body.mimeType : "";
   const bytes = Number(body.bytes);
@@ -54,6 +61,7 @@ function parseStartUpload(body: StartUploadInput) {
     !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
       journeyId,
     ) ||
+    (routePointId !== null && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(routePointId)) ||
     !fileName ||
     fileName.length > 180 ||
     !ALLOWED_MIME_TYPES.has(mimeType) ||
@@ -66,7 +74,7 @@ function parseStartUpload(body: StartUploadInput) {
     return null;
   }
 
-  return { journeyId, fileName, mimeType, bytes, partCount };
+  return { journeyId, routePointId, fileName, mimeType, bytes, partCount };
 }
 
 function parseParts(value: unknown, expectedCount: number): MultipartPart[] | null {
@@ -199,6 +207,17 @@ export async function finalizeUpload(
       throw new Error("Upload journey no longer exists");
     }
 
+    const [routePoint] = upload.routePointId
+      ? await transaction
+        .select({ id: journeyRoutePoints.id })
+        .from(journeyRoutePoints)
+        .where(and(
+          eq(journeyRoutePoints.id, upload.routePointId),
+          eq(journeyRoutePoints.journeyId, upload.journeyId),
+        ))
+        .limit(1)
+      : [];
+
     const [lastAsset] = await transaction
       .select({ sortOrder: mediaAssets.sortOrder })
       .from(mediaAssets)
@@ -209,6 +228,7 @@ export async function finalizeUpload(
       .insert(mediaAssets)
       .values({
         journeyId: upload.journeyId,
+        routePointId: routePoint?.id ?? null,
         storageDriver: upload.storageDriver,
         storageKey: upload.storageKey,
         fileName: upload.fileName,
@@ -442,6 +462,18 @@ uploadRoutes.post("/start", async (context) => {
       `);
       if (lockedJourney.rows.length === 0) return undefined;
 
+      if (input.routePointId) {
+        const [routePoint] = await transaction
+          .select({ id: journeyRoutePoints.id })
+          .from(journeyRoutePoints)
+          .where(and(
+            eq(journeyRoutePoints.id, input.routePointId),
+            eq(journeyRoutePoints.journeyId, input.journeyId),
+          ))
+          .limit(1);
+        if (!routePoint) return undefined;
+      }
+
       started = await storage.startMultipartUpload({
         key: storageKey,
         mimeType: input.mimeType,
@@ -452,6 +484,7 @@ uploadRoutes.post("/start", async (context) => {
         .values({
           atlasId: atlas.id,
           journeyId: input.journeyId,
+          routePointId: input.routePointId,
           storageDriver: storage.driver,
           storageKey,
           providerUploadId: started.providerUploadId,

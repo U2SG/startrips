@@ -1,6 +1,7 @@
 export type JourneyMediaAsset = {
   id: string;
   journeyId: string;
+  routePointId: string | null;
   storageDriver: string;
   storageKey: string;
   fileName: string;
@@ -26,7 +27,9 @@ export type RoutePoint = {
 export type RoutePointInput = Pick<
   RoutePoint,
   "latitude" | "longitude" | "label" | "isStop" | "occurredAt"
->;
+> & {
+  id?: string;
+};
 
 export type Journey = {
   id: string;
@@ -36,6 +39,7 @@ export type Journey = {
   endedOn: string | null;
   note: string;
   lightColor: string;
+  revision: number;
   createdByUserId: string;
   createdAt: string;
   updatedAt: string;
@@ -47,6 +51,7 @@ export type JourneyInput = Pick<
   Journey,
   "title" | "startedOn" | "endedOn" | "note" | "lightColor"
 > & {
+  revision?: number;
   routePoints: RoutePointInput[];
 };
 
@@ -64,6 +69,7 @@ export type JourneyRoute = {
   id: string;
   color: string;
   points: Array<{
+    id?: string;
     lat: number;
     lon: number;
     isStop: boolean;

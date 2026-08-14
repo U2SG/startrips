@@ -72,6 +72,7 @@ export function toJourneyRoutes(journeys: readonly Journey[]): JourneyRoute[] {
     id: journey.id,
     color: journey.lightColor,
     points: journey.routePoints.map((point) => ({
+      id: point.id,
       lat: point.latitude,
       lon: point.longitude,
       isStop: point.isStop,

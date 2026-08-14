@@ -9,7 +9,7 @@ A private collection of journeys shared by its members.
 _Avoid_: Gallery, archive, account
 
 **Journey**:
-A bounded travel experience that may remain in one area, cross many places, or consist mainly of movement. A journey owns one route and its overall story and media.
+A bounded travel experience that may remain in one area, cross many places, or consist mainly of movement. A journey owns one route, its overall story, and any media that is not tied to a single route point.
 _Avoid_: Memory, city visit, location
 
 **Route**:
@@ -17,8 +17,12 @@ The ordered geographic path of a journey. It may be defined sparsely or precisel
 _Avoid_: Location, destination, city list
 
 **Route Point**:
-An ordered coordinate that shapes a route. It may represent a stop, an unnamed pass-through position, or a point recorded while in transit.
+An ordered coordinate that shapes a route. It may represent a stop, an unnamed pass-through position, or a point recorded while in transit, and may own media captured there.
 _Avoid_: City, place
+
+**Route Point Media**:
+A private photo or video attached to one exact route point. Media that describes the whole journey may remain attached only to the journey.
+_Avoid_: Stop media, city media
 
 **Route Segment**:
 The portion of a route between two consecutive route points. A journey can be entirely composed of movement across route segments.
@@ -37,7 +41,7 @@ _Avoid_: Journey title, route
 - Browser payload order defines Route Point order; clients never provide database `sortOrder` values.
 - Atlas ownership is derived from the authenticated active Organization on the server, never from a browser-supplied atlas or organization ID.
 - Journey metadata and its complete ordered Route are written atomically.
-- Media belongs to a Journey, stays private, and is read through short-lived signed URLs only after tenant authorization.
+- Media belongs to a Journey and may additionally belong to one Route Point in that Journey. It stays private and is read through short-lived signed URLs only after tenant authorization.
 - Persisted Route size and rendered geometry budgets are separate. The client may simplify or omit old geometry without changing the saved Journey.
 - Sparse routes are approximate paths, not a claim that every point was GPS-recorded.
 - Location search and object storage are optional deployment adapters. Their absence must degrade truthfully, without fake results or fake persistence.

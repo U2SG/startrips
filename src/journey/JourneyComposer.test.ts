@@ -135,6 +135,7 @@ describe("persistJourneyDraft", () => {
 
     expect(journeyToDraftPoints(existing)).toEqual([expect.objectContaining({
       draftId: "saved-route-point-1",
+      id: "route-point-1",
       latitude: 22.543096,
       longitude: 114.057865,
       label: "Shenzhen",

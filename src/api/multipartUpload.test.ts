@@ -4,9 +4,14 @@ import { uploadMediaInParts } from "./multipartUpload";
 describe("uploadMediaInParts", () => {
   it("uploads bounded chunks and completes them in order", async () => {
     const uploadedSizes: number[] = [];
+    const routePointId = "11111111-1111-4111-8111-111111111111";
     const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url === "/api/uploads/start") {
+        expect(JSON.parse(String(init?.body))).toMatchObject({
+          journeyId: "journey-1",
+          routePointId,
+        });
         return Response.json({ uploadId: "upload-1", partSize: 4, partCount: 3 });
       }
       if (url.includes("/parts/")) {
@@ -37,6 +42,7 @@ describe("uploadMediaInParts", () => {
       file: new Blob(["abcdefghij"], { type: "image/webp" }),
       fileName: "memory.webp",
       journeyId: "journey-1",
+      routePointId,
       concurrency: 2,
       fetcher,
     });

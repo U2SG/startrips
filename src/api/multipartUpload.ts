@@ -1,6 +1,7 @@
 export type UploadedMediaAsset = {
   id: string;
   journeyId: string;
+  routePointId: string | null;
   storageDriver: string;
   storageKey: string;
   fileName: string;
@@ -14,6 +15,7 @@ type MultipartUploadOptions = {
   file: Blob;
   fileName: string;
   journeyId: string;
+  routePointId?: string | null;
   concurrency?: number;
   signal?: AbortSignal;
   onProgress?: (progress: { uploadedBytes: number; totalBytes: number }) => void;
@@ -140,6 +142,7 @@ export async function uploadMediaInParts({
   file,
   fileName,
   journeyId,
+  routePointId,
   concurrency = 3,
   signal,
   onProgress,
@@ -154,6 +157,7 @@ export async function uploadMediaInParts({
     method: "POST",
     body: JSON.stringify({
       journeyId,
+      routePointId: routePointId ?? null,
       fileName,
       mimeType: file.type,
       bytes: file.size,

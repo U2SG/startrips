@@ -12,6 +12,7 @@ const journey: Journey = {
   endedOn: null,
   note: "A quiet route home.",
   lightColor: "#f4ce73",
+  revision: 1,
   createdByUserId: "user-1",
   createdAt: "2026-08-11T00:00:00.000Z",
   updatedAt: "2026-08-11T00:00:00.000Z",

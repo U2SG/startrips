@@ -177,6 +177,7 @@ function toDraftPoint(
 export function journeyToDraftPoints(journey: Journey): RouteDraftPoint[] {
   return journey.routePoints.map((point) => ({
     draftId: `saved-${point.id}`,
+    id: point.id,
     latitude: point.latitude,
     longitude: point.longitude,
     label: point.label,
@@ -251,8 +252,9 @@ export function JourneyComposer({
     endedOn: endedOn || null,
     note: note.trim(),
     lightColor,
+    revision: journey?.revision,
     routePoints: routeDraftToInput(routePoints),
-  }), [endedOn, lightColor, note, routePoints, startedOn, title]);
+  }), [endedOn, journey?.revision, lightColor, note, routePoints, startedOn, title]);
 
   useEffect(() => {
     onRoutePreviewChange?.(routePoints.length === 0 ? null : {

@@ -166,6 +166,88 @@
   background: rgba(57, 82, 32, 0.56);
 }
 
+.living-atlas__journey-rail {
+  position: absolute;
+  z-index: 18;
+  top: 92px;
+  left: 24px;
+  width: min(236px, 22vw);
+  max-height: calc(100vh - 124px);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 10px;
+}
+
+.living-atlas__journey-rail > p {
+  margin: 0;
+  color: #6f8781;
+  font: 500 8px/1 ui-monospace, "SFMono-Regular", Consolas, monospace;
+  letter-spacing: 0.17em;
+}
+
+.living-atlas__journey-rail ol {
+  min-height: 0;
+  display: grid;
+  align-content: start;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(122, 244, 237, 0.28) transparent;
+}
+
+.living-atlas__journey-rail button {
+  --journey-color: var(--atlas-warm);
+  width: 100%;
+  min-height: 48px;
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 10px;
+  border: 1px solid transparent;
+  background: rgba(2, 10, 10, 0.52);
+  color: #81958f;
+  text-align: left;
+  cursor: pointer;
+  backdrop-filter: blur(10px);
+}
+
+.living-atlas__journey-rail button:hover,
+.living-atlas__journey-rail button.is-active {
+  border-color: color-mix(in srgb, var(--journey-color) 48%, transparent);
+  background: rgba(6, 20, 18, 0.76);
+  color: var(--atlas-text);
+}
+
+.living-atlas__journey-rail button > span {
+  width: 6px;
+  height: 6px;
+  border: 1px solid var(--journey-color);
+  border-radius: 50%;
+  box-shadow: 0 0 9px color-mix(in srgb, var(--journey-color) 68%, transparent);
+}
+
+.living-atlas__journey-rail button.is-active > span {
+  background: var(--journey-color);
+}
+
+.living-atlas__journey-rail strong {
+  overflow: hidden;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.living-atlas__journey-rail small {
+  color: #60746f;
+  font: 500 8px/1 ui-monospace, "SFMono-Regular", Consolas, monospace;
+}
+
 .living-atlas__active {
   --journey-color: var(--atlas-warm);
   position: absolute;
@@ -2188,6 +2270,33 @@
     width: auto;
     min-height: 230px;
     padding: 17px;
+  }
+
+  .living-atlas__journey-rail {
+    top: 72px;
+    right: 10px;
+    left: 10px;
+    width: auto;
+    max-height: none;
+    display: block;
+  }
+
+  .living-atlas__journey-rail > p {
+    margin: 0 0 7px 2px;
+  }
+
+  .living-atlas__journey-rail ol {
+    display: flex;
+    gap: 6px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding-bottom: 4px;
+    scroll-snap-type: x proximity;
+  }
+
+  .living-atlas__journey-rail li {
+    flex: 0 0 min(210px, 66vw);
+    scroll-snap-align: start;
   }
 
   .living-atlas__active::before {

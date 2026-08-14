@@ -14,6 +14,7 @@ import { db, pool } from "../db/client";
 import {
   createJourneyForAtlas,
   getJourneyDeletionCandidateForAtlas,
+  JourneyRouteChangedError,
   listJourneysForAtlas,
   markJourneyForDeletionForAtlas,
   updateJourneyForAtlas,
@@ -175,7 +176,21 @@ describe("authenticated tenant boundary", () => {
     });
     expect(createA.status).toBe(201);
     expect(createB.status).toBe(201);
+    const privateA = await createA.json() as { journey: { id: string } };
     const privateB = await createB.json() as { journey: { id: string } };
+
+    const legacyUpdate = await app.request(
+      `${TEST_ORIGIN}/api/journeys/${privateA.journey.id}`,
+      {
+        method: "PATCH",
+        headers: authHeaders(identityA.cookie),
+        body: JSON.stringify({ ...baseJourney, title: "Legacy overwrite" }),
+      },
+    );
+    expect(legacyUpdate.status).toBe(409);
+    await expect(legacyUpdate.json()).resolves.toMatchObject({
+      error: "JOURNEY_ROUTE_CHANGED",
+    });
 
     const visibleToA = await app.request(
       `${TEST_ORIGIN}/api/journeys?organizationId=${identityB.organizationId}`,
@@ -267,6 +282,7 @@ describe("tenant-scoped journey repository", () => {
     const result = await updateJourneyForAtlas(journeyB, atlasA, {
       ...baseJourney,
       title: "Leaked update",
+      revision: 1,
     });
     expect(result).toBeUndefined();
 
@@ -296,6 +312,7 @@ describe("tenant-scoped journey repository", () => {
     await expect(updateJourneyForAtlas(created.id, atlasA, {
       ...baseJourney,
       title: "Should stay hidden",
+      revision: created.revision,
     })).resolves.toBeUndefined();
     await expect(
       getJourneyDeletionCandidateForAtlas(created.id, atlasA),
@@ -344,13 +361,42 @@ describe("tenant-scoped journey repository", () => {
       title: "Route edit",
     });
     if (!created) throw new Error("Journey fixture was not created");
+    const originalIds = created.routePoints.map((point) => point.id);
     const updated = await updateJourneyForAtlas(created.id, atlasA, {
       ...baseJourney,
       title: "Route edit",
-      routePoints: [...baseJourney.routePoints].reverse(),
+      revision: created.revision,
+      routePoints: [...created.routePoints]
+        .reverse()
+        .map(({ id, latitude, longitude, label, isStop, occurredAt }) => ({
+          id,
+          latitude,
+          longitude,
+          label,
+          isStop,
+          occurredAt,
+        })),
     });
     expect(updated?.routePoints.map((point) => point.sortOrder)).toEqual([0, 1]);
     expect(updated?.routePoints.map((point) => point.label)).toEqual(["", "Singapore"]);
+    expect(updated?.routePoints.map((point) => point.id)).toEqual([...originalIds].reverse());
+
+    await expect(updateJourneyForAtlas(created.id, atlasA, {
+      ...baseJourney,
+      title: "Stale route edit",
+      revision: created.revision,
+    })).rejects.toBeInstanceOf(JourneyRouteChangedError);
+
+    const [foreignJourney] = await listJourneysForAtlas(atlasB);
+    await expect(updateJourneyForAtlas(created.id, atlasA, {
+      ...baseJourney,
+      title: "Route edit",
+      revision: updated!.revision,
+      routePoints: [{
+        ...baseJourney.routePoints[0],
+        id: foreignJourney.routePoints[0].id,
+      }],
+    })).rejects.toBeInstanceOf(JourneyRouteChangedError);
   });
 
   it("serializes media finalization into a stable story order", async () => {
@@ -364,6 +410,7 @@ describe("tenant-scoped journey repository", () => {
       .values(["first.jpg", "second.mp4"].map((fileName) => ({
         atlasId: atlasA,
         journeyId: journey.id,
+        routePointId: journey.routePoints[0].id,
         storageDriver: "test",
         storageKey: `${atlasA}/${journey.id}/${randomUUID()}`,
         providerUploadId: randomUUID(),
@@ -384,6 +431,9 @@ describe("tenant-scoped journey repository", () => {
     expect(ordered?.media.map((asset) => asset.sortOrder)).toEqual([0, 1]);
     expect(new Set(ordered?.media.map((asset) => asset.fileName))).toEqual(
       new Set(["first.jpg", "second.mp4"]),
+    );
+    expect(new Set(ordered?.media.map((asset) => asset.routePointId))).toEqual(
+      new Set([journey.routePoints[0].id]),
     );
   });
 });

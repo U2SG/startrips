@@ -42,6 +42,7 @@ export const journeys = pgTable(
     endedOn: date("ended_on", { mode: "string" }),
     note: text("note").notNull().default(""),
     lightColor: text("light_color").notNull().default("#f4ce73"),
+    revision: integer("revision").notNull().default(1),
     createdByUserId: text("created_by_user_id").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
@@ -92,6 +93,9 @@ export const mediaAssets = pgTable(
     journeyId: uuid("journey_id")
       .notNull()
       .references(() => journeys.id, { onDelete: "cascade" }),
+    routePointId: uuid("route_point_id").references(() => journeyRoutePoints.id, {
+      onDelete: "set null",
+    }),
     storageDriver: text("storage_driver").notNull(),
     storageKey: text("storage_key").notNull(),
     fileName: text("file_name").notNull(),
@@ -109,6 +113,10 @@ export const mediaAssets = pgTable(
       table.journeyId,
       table.sortOrder,
     ),
+    index("media_assets_route_point_order_idx").on(
+      table.routePointId,
+      table.sortOrder,
+    ),
   ],
 );
 
@@ -122,6 +130,9 @@ export const mediaUploads = pgTable(
     journeyId: uuid("journey_id")
       .notNull()
       .references(() => journeys.id, { onDelete: "cascade" }),
+    routePointId: uuid("route_point_id").references(() => journeyRoutePoints.id, {
+      onDelete: "set null",
+    }),
     mediaAssetId: uuid("media_asset_id").references(() => mediaAssets.id, {
       onDelete: "set null",
     }),
@@ -147,5 +158,6 @@ export const mediaUploads = pgTable(
     uniqueIndex("media_uploads_storage_key_unique").on(table.storageKey),
     index("media_uploads_atlas_status_idx").on(table.atlasId, table.status),
     index("media_uploads_journey_idx").on(table.journeyId),
+    index("media_uploads_route_point_idx").on(table.routePointId),
   ],
 );

@@ -11,6 +11,7 @@ import {
 
 const beijing: RouteDraftPoint = {
   draftId: "beijing",
+  id: "11111111-1111-4111-8111-111111111111",
   latitude: 39.9042,
   longitude: 116.4074,
   label: "Beijing",
@@ -42,6 +43,7 @@ describe("route draft operations", () => {
       "beijing",
     ]);
     expect(routeDraftToInput(updated)[1].label).toBe("Beijing");
+    expect(routeDraftToInput(updated)[1].id).toBe(beijing.id);
     expect(toggled[0].isStop).toBe(false);
     expect(removed.map((point) => point.draftId)).toEqual(["ulan-bator"]);
   });

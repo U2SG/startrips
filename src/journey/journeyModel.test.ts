@@ -38,6 +38,7 @@ function journey(id: string, startedOn: string): Journey {
     endedOn: null,
     note: "",
     lightColor: "#f4ce73",
+    revision: 1,
     createdByUserId: "user-1",
     createdAt,
     updatedAt: createdAt,

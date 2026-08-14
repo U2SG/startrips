@@ -27,6 +27,7 @@ describe("journeyApi", () => {
     const fetcher = vi.fn(async () => Response.json({ journeys: [] })) as unknown as typeof fetch;
     await expect(listJourneys(fetcher)).resolves.toEqual([]);
     expect(fetcher).toHaveBeenCalledWith("/api/journeys", expect.objectContaining({
+      cache: "no-store",
       credentials: "include",
     }));
   });
@@ -47,14 +48,15 @@ describe("journeyApi", () => {
   it("updates a tenant-scoped journey with PATCH", async () => {
     const journey = { id: "journey-1", ...input, routePoints: [], media: [] };
     const fetcher = vi.fn(async () => Response.json({ journey })) as unknown as typeof fetch;
+    const updateInput = { ...input, revision: 3 };
 
-    await expect(updateJourney("journey-1", input, fetcher)).resolves.toEqual(journey);
+    await expect(updateJourney("journey-1", updateInput, fetcher)).resolves.toEqual(journey);
     expect(fetcher).toHaveBeenCalledWith(
       "/api/journeys/journey-1",
       expect.objectContaining({
         method: "PATCH",
         credentials: "include",
-        body: JSON.stringify(input),
+        body: JSON.stringify(updateInput),
       }),
     );
   });

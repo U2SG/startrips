@@ -6,6 +6,7 @@ import {
   isNotNull,
   isNull,
   notInArray,
+  sql,
 } from "drizzle-orm";
 import { db } from "../db/client";
 import {
@@ -19,11 +20,19 @@ export type JourneyValues = Pick<
   typeof journeys.$inferInsert,
   "title" | "startedOn" | "endedOn" | "note" | "lightColor"
 > & {
+  revision?: number;
   routePoints: Array<Pick<
     typeof journeyRoutePoints.$inferInsert,
     "latitude" | "longitude" | "label" | "isStop" | "occurredAt"
-  >>;
+  > & { id?: string }>;
 };
+
+export class JourneyRouteChangedError extends Error {
+  constructor() {
+    super("Journey route changed while it was being edited");
+    this.name = "JourneyRouteChangedError";
+  }
+}
 
 async function loadJourneys(atlasId: string, journeyId?: string) {
   const atlasScope = journeyId
@@ -38,6 +47,7 @@ async function loadJourneys(atlasId: string, journeyId?: string) {
       endedOn: journeys.endedOn,
       note: journeys.note,
       lightColor: journeys.lightColor,
+      revision: journeys.revision,
       createdByUserId: journeys.createdByUserId,
       createdAt: journeys.createdAt,
       updatedAt: journeys.updatedAt,
@@ -136,26 +146,83 @@ export async function updateJourneyForAtlas(
         endedOn: values.endedOn,
         note: values.note,
         lightColor: values.lightColor,
+        revision: sql`${journeys.revision} + 1`,
         updatedAt: new Date(),
       })
       .where(and(
         eq(journeys.id, journeyId),
         eq(journeys.atlasId, atlasId),
+        eq(journeys.revision, values.revision ?? -1),
         isNull(journeys.deletionStartedAt),
       ))
       .returning({ id: journeys.id });
-    if (!journey) return false;
+    if (!journey) {
+      const [activeJourney] = await transaction
+        .select({ id: journeys.id })
+        .from(journeys)
+        .where(and(
+          eq(journeys.id, journeyId),
+          eq(journeys.atlasId, atlasId),
+          isNull(journeys.deletionStartedAt),
+        ))
+        .limit(1);
+      if (activeJourney) throw new JourneyRouteChangedError();
+      return false;
+    }
+
+    const existingPoints = await transaction
+      .select({ id: journeyRoutePoints.id })
+      .from(journeyRoutePoints)
+      .where(eq(journeyRoutePoints.journeyId, journey.id));
+    const existingIds = new Set(existingPoints.map((point) => point.id));
+    const retainedIds = values.routePoints.flatMap((point) => point.id ? [point.id] : []);
+    if (retainedIds.some((id) => !existingIds.has(id))) {
+      throw new JourneyRouteChangedError();
+    }
 
     await transaction
-      .delete(journeyRoutePoints)
+      .update(journeyRoutePoints)
+      .set({ sortOrder: sql`${journeyRoutePoints.sortOrder} + 1000` })
       .where(eq(journeyRoutePoints.journeyId, journey.id));
-    await transaction.insert(journeyRoutePoints).values(
-      values.routePoints.map((point, sortOrder) => ({
-        journeyId: journey.id,
+
+    if (retainedIds.length === 0) {
+      await transaction
+        .delete(journeyRoutePoints)
+        .where(eq(journeyRoutePoints.journeyId, journey.id));
+    } else {
+      await transaction
+        .delete(journeyRoutePoints)
+        .where(and(
+          eq(journeyRoutePoints.journeyId, journey.id),
+          notInArray(journeyRoutePoints.id, retainedIds),
+        ));
+    }
+
+    for (let sortOrder = 0; sortOrder < values.routePoints.length; sortOrder += 1) {
+      const point = values.routePoints[sortOrder];
+      const pointValues = {
         sortOrder,
-        ...point,
-      })),
-    );
+        latitude: point.latitude,
+        longitude: point.longitude,
+        label: point.label,
+        isStop: point.isStop,
+        occurredAt: point.occurredAt,
+      };
+      if (point.id) {
+        await transaction
+          .update(journeyRoutePoints)
+          .set(pointValues)
+          .where(and(
+            eq(journeyRoutePoints.id, point.id),
+            eq(journeyRoutePoints.journeyId, journey.id),
+          ));
+      } else {
+        await transaction.insert(journeyRoutePoints).values({
+          journeyId: journey.id,
+          ...pointValues,
+        });
+      }
+    }
     return true;
   });
   return updated ? getJourneyForAtlas(journeyId, atlasId) : undefined;

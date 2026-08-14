@@ -184,7 +184,11 @@ export function LivingAtlasApp() {
   }
 
   return (
-    <main className={`living-atlas${arrivalJourneyId ? " has-arrival" : ""}${globePickActive ? " is-globe-picking" : ""}`} data-arrival-journey={arrivalJourneyId ?? undefined}>
+    <main
+      className={`living-atlas${arrivalJourneyId ? " has-arrival" : ""}${globePickActive ? " is-globe-picking" : ""}`}
+      data-arrival-journey={arrivalJourneyId ?? undefined}
+      data-journey-count={journeys.length}
+    >
       <div className="living-atlas__globe" aria-hidden={view !== "planet"}>
         <ParticleEarthScene
           mode="focusPoint"
@@ -211,6 +215,29 @@ export function LivingAtlasApp() {
           <button type="button" className="living-atlas__create" onClick={openCreateComposer}><IconPlus size={17} stroke={1.4} aria-hidden="true" />记录旅程</button>
         </nav>
       </header>
+
+      {view === "planet" && journeys.length > 0 ? (
+        <nav className="living-atlas__journey-rail" aria-label={`全部旅程，共 ${journeys.length} 段`}>
+          <p>{String(journeys.length).padStart(2, "0")} JOURNEYS</p>
+          <ol>
+            {journeys.map((journey) => (
+              <li key={journey.id}>
+                <button
+                  type="button"
+                  className={journey.id === activeJourneyId ? "is-active" : ""}
+                  aria-current={journey.id === activeJourneyId ? "true" : undefined}
+                  style={{ "--journey-color": journey.lightColor } as React.CSSProperties}
+                  onClick={() => selectJourney(journey.id)}
+                >
+                  <span aria-hidden="true" />
+                  <strong>{journey.title}</strong>
+                  <small>{journey.startedOn}</small>
+                </button>
+              </li>
+            ))}
+          </ol>
+        </nav>
+      ) : null}
 
       {view === "timeline" ? (
         <JourneyTimeline

@@ -42,6 +42,7 @@ const storyQaJourney: Journey = {
   endedOn: null,
   note: "灯光沿着海岸慢慢退远，路途本身成为这一晚的记忆。",
   lightColor: "#77c8c2",
+  revision: 1,
   createdByUserId: "00000000-0000-4000-8000-000000000003",
   createdAt: "2026-08-11T00:00:00.000Z",
   updatedAt: "2026-08-11T00:00:00.000Z",
@@ -87,6 +88,7 @@ function JourneyStoryQaPreview() {
               media: [...currentJourney.media, {
                 id: "00000000-0000-4000-8000-000000000005",
                 journeyId: storyQaJourney.id,
+                routePointId: null,
                 storageDriver: "qa",
                 storageKey: "qa/story-media",
                 fileName: "night-route.png",

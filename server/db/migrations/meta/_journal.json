@@ -29,6 +29,20 @@
       "when": 1786694912785,
       "tag": "0003_journey_deletion_state",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1786701239171,
+      "tag": "0004_route_point_media",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1786701730537,
+      "tag": "0005_journey_revision",
+      "breakpoints": true
     }
   ]
 }

@@ -51,7 +51,7 @@ async function requestJson<T>(
 export async function listJourneys(fetcher: Fetcher = fetch): Promise<Journey[]> {
   const payload = await requestJson<{ journeys: Journey[] }>(
     "/api/journeys",
-    {},
+    { cache: "no-store" },
     fetcher,
   );
   return payload.journeys;
