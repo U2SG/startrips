@@ -24,6 +24,19 @@ to the low-volume public Photon demo because it is reachable from the current ho
 demo has no availability guarantee, so production should use a contracted endpoint
 or a self-hosted compatible service.
 
+## Detailed earth tiles
+
+The Living Atlas keeps its particle globe in Three.js and opens a lazy-loaded
+MapLibre detail view for zoom levels up to 19. By default the overview uses NASA
+Blue Marble imagery and the detailed view uses CARTO's dark raster rendering of
+OpenStreetMap data.
+
+The map renderer is provider-neutral. Set `ATLAS_DETAIL_TILE_URL`,
+`ATLAS_DETAIL_TILE_ATTRIBUTION`, and optionally `ATLAS_OVERVIEW_TILE_URL` in
+`.env.deploy` to use a contracted or self-hosted XYZ raster service without
+changing application code. The tile URL must use `{z}`, `{x}`, and `{y}`
+placeholders and allow browser CORS access from `https://${APP_HOST}`.
+
 ## Private media storage
 
 Media uses the existing multipart API with an `s3` protocol adapter. The browser

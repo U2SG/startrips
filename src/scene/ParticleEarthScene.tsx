@@ -60,7 +60,7 @@ export const GLOBE_RENDER_ORDER = {
 export const GLOBE_DRAG_THRESHOLD_PX = 6;
 export const GLOBE_TILT_LIMIT_RADIANS = 0.62;
 export const GLOBE_ZOOM_MIN = 0.72;
-export const GLOBE_ZOOM_MAX = 1.55;
+export const GLOBE_ZOOM_MAX = 2.2;
 export const GLOBE_SURFACE_RADIUS = 1.39;
 
 const GLOBE_DRAG_RADIANS_PER_PIXEL = 0.005;
@@ -321,7 +321,7 @@ export const GLOBE_MODE_CONFIG: Record<
     particleOpacity: 0.62,
     shellOpacity: 0.18,
     haloOpacity: 0.05,
-    surfaceOpacity: 0.08,
+    surfaceOpacity: 0.22,
     signalOpacity: 0.72,
     clusterOpacity: 0,
     personalOpacity: 1,
@@ -342,6 +342,7 @@ interface ParticleEarthSceneProps {
   activeJourneyRouteId?: string | null;
   onJourneyRouteActivate?: (id: string) => void;
   onJourneyRoutePointActivate?: (journeyId: string, routePointId: string) => void;
+  onDetailRequested?: () => void;
   onGlobePointPick?: (point: { latitude: number; longitude: number }) => void;
   dragToRotate?: boolean;
   reduceMotion?: boolean;
@@ -514,6 +515,7 @@ export function ParticleEarthScene({
   activeJourneyRouteId,
   onJourneyRouteActivate,
   onJourneyRoutePointActivate,
+  onDetailRequested,
   onGlobePointPick,
   dragToRotate = false,
   reduceMotion = false,
@@ -528,6 +530,7 @@ export function ParticleEarthScene({
   const latestActiveJourneyRouteId = useRef(activeJourneyRouteId);
   const latestOnJourneyRouteActivate = useRef(onJourneyRouteActivate);
   const latestOnJourneyRoutePointActivate = useRef(onJourneyRoutePointActivate);
+  const latestOnDetailRequested = useRef(onDetailRequested);
   const latestOnGlobePointPick = useRef(onGlobePointPick);
   const latestDragToRotate = useRef(dragToRotate);
   latestMode.current = mode;
@@ -539,6 +542,7 @@ export function ParticleEarthScene({
   latestActiveJourneyRouteId.current = activeJourneyRouteId;
   latestOnJourneyRouteActivate.current = onJourneyRouteActivate;
   latestOnJourneyRoutePointActivate.current = onJourneyRoutePointActivate;
+  latestOnDetailRequested.current = onDetailRequested;
   latestOnGlobePointPick.current = onGlobePointPick;
   latestDragToRotate.current = dragToRotate;
 
@@ -1420,9 +1424,13 @@ export function ParticleEarthScene({
     const onWheel = (event: WheelEvent) => {
       if (!latestDragToRotate.current) return;
       event.preventDefault();
-      interactiveZoom = clampGlobeZoom(
-        interactiveZoom * Math.exp(-event.deltaY * GLOBE_WHEEL_ZOOM_SPEED),
-      );
+      const requestedZoom = interactiveZoom
+        * Math.exp(-event.deltaY * GLOBE_WHEEL_ZOOM_SPEED);
+      if (requestedZoom > GLOBE_ZOOM_MAX && latestOnDetailRequested.current) {
+        latestOnDetailRequested.current();
+        return;
+      }
+      interactiveZoom = clampGlobeZoom(requestedZoom);
     };
 
     renderer.domElement.addEventListener("pointerdown", onPointerDown);
@@ -1734,6 +1742,7 @@ export function ParticleEarthScene({
         onJourneyRouteActivate || onJourneyRoutePointActivate ? "true" : "false"
       }
       data-globe-point-pick={onGlobePointPick ? "true" : "false"}
+      data-detail-transition={onDetailRequested ? "true" : "false"}
       data-drag-rotation={dragToRotate ? "true" : "false"}
       aria-label="由世界陆地轮廓与艺术信号组成的粒子地球"
       role="img"

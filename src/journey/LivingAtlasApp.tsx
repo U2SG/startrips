@@ -9,7 +9,7 @@ import {
   IconX,
 } from "@tabler/icons-react";
 import { useAtlasCapabilities } from "../auth/AuthGateway";
-import { ParticleEarthScene } from "../scene/ParticleEarthScene";
+import { LivingAtlasGlobe } from "../scene/LivingAtlasGlobe";
 import {
   JourneyComposer,
   type GlobePointPick,
@@ -210,12 +210,9 @@ export function LivingAtlasApp() {
       data-journey-count={journeys.length}
     >
       <div className="living-atlas__globe" aria-hidden={view !== "planet"}>
-        <ParticleEarthScene
-          mode="focusPoint"
-          quality="high"
+        <LivingAtlasGlobe
           focusPoint={focusPoint}
           focusColor={activeJourney?.lightColor}
-          centerFocusPoint
           journeyRoutes={routes}
           activeJourneyRouteId={draftRoute?.id ?? activeJourneyId}
           onJourneyRouteActivate={(id) => {
@@ -228,7 +225,6 @@ export function LivingAtlasApp() {
             setStoryJourneyId(journeyId);
           }}
           onGlobePointPick={globePickActive ? completeGlobePick : undefined}
-          dragToRotate
           reduceMotion={reduceMotion}
         />
       </div>
