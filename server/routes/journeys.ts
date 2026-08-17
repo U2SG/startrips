@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { requireAtlasAccess } from "../authorization/atlas-access";
 import {
   createJourneyForAtlas,
+  getJourneyForAtlas,
   JourneyRouteChangedError,
   listJourneysForAtlas,
   restoreJourneyForAtlas,
@@ -130,6 +131,14 @@ journeyRoutes.get("/", async (context) => {
   const { atlas } = await requireAtlasAccess(context.req.raw, "read");
   context.header("Cache-Control", JOURNEY_CACHE_CONTROL);
   return context.json({ journeys: await listJourneysForAtlas(atlas.id) });
+});
+
+journeyRoutes.get("/:id", async (context) => {
+  const { atlas } = await requireAtlasAccess(context.req.raw, "read");
+  context.header("Cache-Control", JOURNEY_CACHE_CONTROL);
+  const journey = await getJourneyForAtlas(context.req.param("id"), atlas.id);
+  if (!journey) return context.json({ error: "JOURNEY_NOT_FOUND" }, 404);
+  return context.json({ journey });
 });
 
 journeyRoutes.post("/", async (context) => {

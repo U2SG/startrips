@@ -10,6 +10,7 @@ import {
   journeys,
 } from "../db/app-schema";
 import { deleteMediaAssetForAtlas } from "../services/delete-media";
+import { getJourneyForAtlas } from "../repositories/journey-repository";
 import {
   getMultipartStorage,
   hasConfiguredStorageBackends,
@@ -23,11 +24,13 @@ import {
 const PART_SIZE = 8 * 1024 * 1024;
 const MAX_UPLOAD_BYTES = 2_000_000_000;
 const MAX_PARTS = 10_000;
+const MAX_REORDER_ASSETS = 256;
 const FINALIZATION_LEASE_MS = 20_000;
 const FINALIZATION_HEARTBEAT_MS = 5_000;
 const STALE_UPLOAD_AFTER_MS = 24 * 60 * 60 * 1_000;
 const RECONCILE_INTERVAL_MS = 60 * 60 * 1_000;
 const RECONCILE_BATCH_SIZE = 25;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const ALLOWED_MIME_TYPES = new Set([
   "image/avif",
   "image/jpeg",
@@ -46,7 +49,7 @@ type StartUploadInput = {
   bytes?: unknown;
 };
 
-function parseStartUpload(body: StartUploadInput) {
+export function parseStartUpload(body: StartUploadInput) {
   const journeyId = typeof body.journeyId === "string" ? body.journeyId : "";
   const routePointId = body.routePointId === undefined || body.routePointId === null
     ? null
@@ -78,8 +81,10 @@ function parseStartUpload(body: StartUploadInput) {
   return { journeyId, routePointId, fileName, mimeType, bytes, partCount };
 }
 
-function parseParts(value: unknown, expectedCount: number): MultipartPart[] | null {
-  if (!Array.isArray(value) || value.length !== expectedCount) return null;
+export function parseParts(value: unknown, expectedCount: number): MultipartPart[] | null {
+  if (expectedCount < 1 || !Array.isArray(value) || value.length !== expectedCount) {
+    return null;
+  }
 
   const parts = value
     .map((part) => {
@@ -108,6 +113,30 @@ function parseParts(value: unknown, expectedCount: number): MultipartPart[] | nu
     return null;
   }
   return parts as MultipartPart[];
+}
+
+type ReorderMediaInput = {
+  journeyId?: unknown;
+  assetIds?: unknown;
+};
+
+export function parseReorderInput(body: ReorderMediaInput) {
+  const journeyId = typeof body.journeyId === "string" ? body.journeyId : "";
+  if (
+    !UUID_PATTERN.test(journeyId)
+    || !Array.isArray(body.assetIds)
+    || body.assetIds.length < 1
+    || body.assetIds.length > MAX_REORDER_ASSETS
+  ) {
+    return null;
+  }
+  const assetIds: string[] = [];
+  for (const raw of body.assetIds) {
+    if (typeof raw !== "string" || !UUID_PATTERN.test(raw)) return null;
+    assetIds.push(raw);
+  }
+  if (new Set(assetIds).size !== assetIds.length) return null;
+  return { journeyId, assetIds };
 }
 
 async function findUpload(uploadId: string, atlasId: string) {
@@ -776,4 +805,64 @@ uploadRoutes.delete("/assets/:id", async (context) => {
   );
   if (!deleted) return context.json({ error: "MEDIA_NOT_FOUND" }, 404);
   return context.body(null, 204);
+});
+
+uploadRoutes.post("/assets/reorder", async (context) => {
+  const { atlas } = await requireAtlasAccess(context.req.raw, "update");
+  const input = parseReorderInput(await context.req.json<ReorderMediaInput>());
+  if (!input) {
+    return context.json(
+      { error: "INVALID_MEDIA_ORDER", message: "Invalid media order" },
+      400,
+    );
+  }
+
+  const ordered = await db.transaction(async (transaction) => {
+    const lockedJourney = await transaction.execute<{ id: string }>(sql`
+      select ${journeys.id} as id
+      from ${journeys}
+      where ${journeys.id} = ${input.journeyId}
+        and ${journeys.atlasId} = ${atlas.id}
+        and ${journeys.deletionStartedAt} is null
+      for update
+    `);
+    if (lockedJourney.rows.length === 0) return undefined;
+
+    const owned = await transaction
+      .select({ id: mediaAssets.id })
+      .from(mediaAssets)
+      .where(and(
+        eq(mediaAssets.journeyId, input.journeyId),
+        inArray(mediaAssets.id, input.assetIds),
+      ));
+    if (owned.length !== input.assetIds.length) return false;
+
+    await transaction
+      .update(mediaAssets)
+      .set({ sortOrder: sql`${mediaAssets.sortOrder} + 1000` })
+      .where(eq(mediaAssets.journeyId, input.journeyId));
+    for (let index = 0; index < input.assetIds.length; index += 1) {
+      await transaction
+        .update(mediaAssets)
+        .set({ sortOrder: index })
+        .where(eq(mediaAssets.id, input.assetIds[index]));
+    }
+    return true;
+  });
+
+  if (ordered === undefined) {
+    return context.json({ error: "JOURNEY_NOT_FOUND" }, 404);
+  }
+  if (ordered === false) {
+    return context.json(
+      {
+        error: "INVALID_MEDIA_ORDER",
+        message: "Media assets do not belong to this journey",
+      },
+      400,
+    );
+  }
+  return context.json({
+    journey: await getJourneyForAtlas(input.journeyId, atlas.id),
+  });
 });
