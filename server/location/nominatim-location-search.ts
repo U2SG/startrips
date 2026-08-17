@@ -6,6 +6,7 @@ import {
   type LocationSearch,
   type LocationSearchOptions,
   type LocationSearchResult,
+  type ReverseLocationOptions,
 } from "./location-search";
 
 type NominatimPlace = {
@@ -19,9 +20,9 @@ type NominatimPlace = {
   address?: Record<string, unknown>;
 };
 
-type CachedResults = {
+type CachedPayload = {
   expiresAt: number;
-  results: LocationSearchResult[];
+  payload: unknown;
 };
 
 type NominatimLocationSearchOptions = {
@@ -89,7 +90,7 @@ export class NominatimLocationSearch implements LocationSearch {
   private readonly requestIntervalMs: number;
   private readonly cacheTtlMs: number;
   private readonly requestTimeoutMs: number;
-  private readonly cache = new Map<string, CachedResults>();
+  private readonly cache = new Map<string, CachedPayload>();
   private queue: Promise<void> = Promise.resolve();
   private nextRequestAt = 0;
   private pendingRequests = 0;
@@ -107,31 +108,71 @@ export class NominatimLocationSearch implements LocationSearch {
     query: string,
     options: LocationSearchOptions,
   ): Promise<LocationSearchResult[]> {
+    const normalizedQuery = query.trim().replace(/\s+/g, " ");
+    const url = new URL("search", this.baseUrl);
+    url.searchParams.set("q", normalizedQuery);
+    url.searchParams.set("format", "jsonv2");
+    url.searchParams.set("addressdetails", "1");
+    url.searchParams.set("namedetails", "1");
+    url.searchParams.set("accept-language", "zh-CN,zh,en");
+    url.searchParams.set("limit", String(options.limit));
+    return this.requestPayload(
+      url,
+      `search:${normalizedQuery.toLocaleLowerCase()}::${options.limit}`,
+      options.signal,
+    ).then((payload) => {
+      if (!Array.isArray(payload)) {
+        throw new LocationSearchUnavailableError("Location search returned invalid data");
+      }
+      return payload
+        .map((place) => toLocationResult(place as NominatimPlace))
+        .filter((result): result is LocationSearchResult => result !== null)
+        .slice(0, options.limit);
+    });
+  }
+
+  reverse(
+    latitude: number,
+    longitude: number,
+    options: ReverseLocationOptions,
+  ): Promise<LocationSearchResult | null> {
+    const url = new URL("reverse", this.baseUrl);
+    url.searchParams.set("lat", String(latitude));
+    url.searchParams.set("lon", String(longitude));
+    url.searchParams.set("format", "jsonv2");
+    url.searchParams.set("addressdetails", "1");
+    url.searchParams.set("namedetails", "1");
+    url.searchParams.set("accept-language", "zh-CN,zh,en");
+    return this.requestPayload(
+      url,
+      `reverse:${latitude}:${longitude}`,
+      options.signal,
+    ).then((payload) => {
+      if (!payload || typeof payload !== "object") return null;
+      return toLocationResult(payload as NominatimPlace);
+    });
+  }
+
+  private requestPayload(
+    url: URL,
+    cacheKey: string,
+    signal?: AbortSignal,
+  ): Promise<unknown> {
     if (this.pendingRequests >= MAX_PENDING_REQUESTS) {
       return Promise.reject(
         new LocationSearchUnavailableError("Location search is busy; try again shortly"),
       );
     }
     this.pendingRequests += 1;
-    const normalizedQuery = query.trim().replace(/\s+/g, " ");
-    const cacheKey = `${normalizedQuery.toLocaleLowerCase()}::${options.limit}`;
     const task = this.queue.then(async () => {
-      throwIfLocationSearchAborted(options.signal);
+      throwIfLocationSearchAborted(signal);
       const cached = this.cache.get(cacheKey);
-      if (cached && cached.expiresAt > Date.now()) return cached.results;
+      if (cached && cached.expiresAt > Date.now()) return cached.payload;
 
       const waitMs = Math.max(0, this.nextRequestAt - Date.now());
-      await waitForLocationSearchDelay(waitMs, options.signal);
-      throwIfLocationSearchAborted(options.signal);
+      await waitForLocationSearchDelay(waitMs, signal);
+      throwIfLocationSearchAborted(signal);
       this.nextRequestAt = Date.now() + this.requestIntervalMs;
-
-      const url = new URL("search", this.baseUrl);
-      url.searchParams.set("q", normalizedQuery);
-      url.searchParams.set("format", "jsonv2");
-      url.searchParams.set("addressdetails", "1");
-      url.searchParams.set("namedetails", "1");
-      url.searchParams.set("accept-language", "zh-CN,zh,en");
-      url.searchParams.set("limit", String(options.limit));
 
       let response: Response;
       try {
@@ -140,7 +181,7 @@ export class NominatimLocationSearch implements LocationSearch {
             Accept: "application/json",
             "User-Agent": this.userAgent,
           },
-          signal: options.signal,
+          signal,
         }, this.requestTimeoutMs);
       } catch {
         throw new LocationSearchUnavailableError("Location search request failed");
@@ -157,13 +198,6 @@ export class NominatimLocationSearch implements LocationSearch {
       } catch {
         throw new LocationSearchUnavailableError("Location search returned invalid data");
       }
-      if (!Array.isArray(payload)) {
-        throw new LocationSearchUnavailableError("Location search returned invalid data");
-      }
-      const results = payload
-        .map((place) => toLocationResult(place as NominatimPlace))
-        .filter((result): result is LocationSearchResult => result !== null)
-        .slice(0, options.limit);
 
       if (this.cache.size >= MAX_CACHE_ENTRIES) {
         const oldestKey = this.cache.keys().next().value;
@@ -171,9 +205,9 @@ export class NominatimLocationSearch implements LocationSearch {
       }
       this.cache.set(cacheKey, {
         expiresAt: Date.now() + this.cacheTtlMs,
-        results,
+        payload,
       });
-      return results;
+      return payload;
     }).finally(() => {
       this.pendingRequests -= 1;
     });

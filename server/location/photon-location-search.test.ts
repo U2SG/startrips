@@ -77,4 +77,54 @@ describe("PhotonLocationSearch", () => {
       LocationSearchUnavailableError,
     );
   });
+
+  it("resolves a coordinate to the nearest named place", async () => {
+    const fetchMock = vi.fn(async () => Response.json({
+      features: [
+        {
+          geometry: { coordinates: [114.0545429, 22.5445741] },
+          properties: {
+            osm_type: "R",
+            osm_id: 123,
+            name: "Shenzhen",
+            city: "Shenzhen",
+            country: "China",
+            countrycode: "CN",
+          },
+        },
+      ],
+    }));
+    const search = new PhotonLocationSearch({
+      baseUrl: "https://photon.example.test",
+      userAgent: "Startrips/1.0",
+      fetcher: fetchMock as unknown as typeof fetch,
+      requestIntervalMs: 0,
+    });
+
+    const result = await search.reverse(22.5445741, 114.0545429, {});
+
+    expect(result).toMatchObject({
+      id: "R:123",
+      label: "Shenzhen",
+      countryCode: "CN",
+      latitude: 22.5445741,
+      longitude: 114.0545429,
+    });
+    const [requestUrl] = fetchMock.mock.calls[0] as unknown as [URL];
+    expect(requestUrl.pathname).toBe("/reverse");
+    expect(requestUrl.searchParams.get("lat")).toBe("22.5445741");
+    expect(requestUrl.searchParams.get("lon")).toBe("114.0545429");
+    expect(requestUrl.searchParams.get("limit")).toBe("1");
+  });
+
+  it("returns null when the provider has no place at the coordinate", async () => {
+    const search = new PhotonLocationSearch({
+      baseUrl: "https://photon.example.test",
+      userAgent: "Startrips/1.0",
+      fetcher: vi.fn(async () => Response.json({ features: [] })) as unknown as typeof fetch,
+      requestIntervalMs: 0,
+    });
+
+    await expect(search.reverse(0, 0, {})).resolves.toBeNull();
+  });
 });

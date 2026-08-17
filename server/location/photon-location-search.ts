@@ -6,6 +6,7 @@ import {
   type LocationSearch,
   type LocationSearchOptions,
   type LocationSearchResult,
+  type ReverseLocationOptions,
 } from "./location-search";
 
 type PhotonFeature = {
@@ -130,14 +131,44 @@ export class PhotonLocationSearch implements LocationSearch {
     query: string,
     options: LocationSearchOptions,
   ): Promise<LocationSearchResult[]> {
+    const normalizedQuery = query.trim().replace(/\s+/g, " ");
+    const url = new URL("api/", this.baseUrl);
+    url.searchParams.set("q", normalizedQuery);
+    url.searchParams.set("limit", String(options.limit));
+    return this.requestFeatures(
+      url,
+      `search:${normalizedQuery.toLocaleLowerCase()}::${options.limit}`,
+      { limit: options.limit, signal: options.signal },
+    );
+  }
+
+  reverse(
+    latitude: number,
+    longitude: number,
+    options: ReverseLocationOptions,
+  ): Promise<LocationSearchResult | null> {
+    const url = new URL("reverse", this.baseUrl);
+    url.searchParams.set("lat", String(latitude));
+    url.searchParams.set("lon", String(longitude));
+    url.searchParams.set("limit", "1");
+    return this.requestFeatures(
+      url,
+      `reverse:${latitude}:${longitude}`,
+      { signal: options.signal },
+    ).then((results) => results[0] ?? null);
+  }
+
+  private requestFeatures(
+    url: URL,
+    cacheKey: string,
+    options: { limit?: number; signal?: AbortSignal },
+  ): Promise<LocationSearchResult[]> {
     if (this.pendingRequests >= MAX_PENDING_REQUESTS) {
       return Promise.reject(
         new LocationSearchUnavailableError("Location search is busy; try again shortly"),
       );
     }
     this.pendingRequests += 1;
-    const normalizedQuery = query.trim().replace(/\s+/g, " ");
-    const cacheKey = `${normalizedQuery.toLocaleLowerCase()}::${options.limit}`;
     const task = this.queue.then(async () => {
       throwIfLocationSearchAborted(options.signal);
       const cached = this.cache.get(cacheKey);
@@ -147,10 +178,6 @@ export class PhotonLocationSearch implements LocationSearch {
       await waitForLocationSearchDelay(waitMs, options.signal);
       throwIfLocationSearchAborted(options.signal);
       this.nextRequestAt = Date.now() + this.requestIntervalMs;
-
-      const url = new URL("api/", this.baseUrl);
-      url.searchParams.set("q", normalizedQuery);
-      url.searchParams.set("limit", String(options.limit));
 
       let response: Response;
       try {
@@ -182,7 +209,7 @@ export class PhotonLocationSearch implements LocationSearch {
       const results = payload.features
         .map((feature) => toLocationResult(feature as PhotonFeature))
         .filter((result): result is LocationSearchResult => result !== null)
-        .slice(0, options.limit);
+        .slice(0, options.limit ?? 1);
 
       if (this.cache.size >= MAX_CACHE_ENTRIES) {
         const oldestKey = this.cache.keys().next().value;

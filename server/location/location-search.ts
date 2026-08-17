@@ -12,6 +12,10 @@ export type LocationSearchOptions = {
   signal?: AbortSignal;
 };
 
+export type ReverseLocationOptions = {
+  signal?: AbortSignal;
+};
+
 export type LocationSearchAttribution = {
   label: string;
   url: string;
@@ -24,6 +28,11 @@ export interface LocationSearch {
     query: string,
     options: LocationSearchOptions,
   ): Promise<LocationSearchResult[]>;
+  reverse(
+    latitude: number,
+    longitude: number,
+    options: ReverseLocationOptions,
+  ): Promise<LocationSearchResult | null>;
 }
 
 export class LocationSearchUnavailableError extends Error {
