@@ -326,42 +326,22 @@ describe("API robustness", () => {
 });
 
 describe("media and atlas HTTP endpoints", () => {
-  it("updates and then deletes the current atlas through the tenant API", async () => {
-    const identity = await createAuthenticatedAtlas("Editable");
-    const patch = await app.request(`${TEST_ORIGIN}/api/atlases/current`, {
-      method: "PATCH",
-      headers: authHeaders(identity.cookie),
-      body: JSON.stringify({ title: "Renamed Atlas", dedication: "still private" }),
-    });
-    expect(patch.status).toBe(200);
-    await expect(patch.json()).resolves.toMatchObject({
-      atlas: { title: "Renamed Atlas", dedication: "still private" },
-    });
+  // One shared identity keeps sign-ups under the auth rate limit; the
+  // atlas-deletion test runs last because it removes the shared atlas.
+  let identity: Awaited<ReturnType<typeof createAuthenticatedAtlas>>;
+  let sharedJourneyId = "";
 
-    const invalid = await app.request(`${TEST_ORIGIN}/api/atlases/current`, {
-      method: "PATCH",
-      headers: authHeaders(identity.cookie),
-      body: JSON.stringify({ title: "", dedication: "" }),
+  beforeAll(async () => {
+    identity = await createAuthenticatedAtlas("EndpointShared");
+    const shared = await createJourneyForAtlas(identity.atlasId, identity.userId, {
+      ...baseJourney,
+      title: "Shared degradation journey",
     });
-    expect(invalid.status).toBe(400);
-
-    const deleteResponse = await app.request(
-      `${TEST_ORIGIN}/api/atlases/current`,
-      { method: "DELETE", headers: authHeaders(identity.cookie) },
-    );
-    expect(deleteResponse.status).toBe(204);
-    const afterDelete = await app.request(`${TEST_ORIGIN}/api/atlases/current`, {
-      headers: authHeaders(identity.cookie),
-    });
-    expect(afterDelete.status).toBe(404);
-    const journeysAfterDelete = await app.request(`${TEST_ORIGIN}/api/journeys`, {
-      headers: authHeaders(identity.cookie),
-    });
-    expect(journeysAfterDelete.status).toBe(404);
+    if (!shared) throw new Error("Shared journey fixture was not created");
+    sharedJourneyId = shared.id;
   });
 
   it("reads a single tenant-scoped journey and rejects foreign ids", async () => {
-    const identity = await createAuthenticatedAtlas("Reader");
     const created = await createJourneyForAtlas(identity.atlasId, identity.userId, {
       ...baseJourney,
       title: "Single read",
@@ -385,7 +365,6 @@ describe("media and atlas HTTP endpoints", () => {
   });
 
   it("reorders journey media through the tenant-scoped endpoint", async () => {
-    const identity = await createAuthenticatedAtlas("Orderer");
     const journey = await createJourneyForAtlas(identity.atlasId, identity.userId, {
       ...baseJourney,
       title: "Reorder story",
@@ -445,12 +424,11 @@ describe("media and atlas HTTP endpoints", () => {
   });
 
   it("degrades truthfully when media storage is disabled", async () => {
-    const identity = await createAuthenticatedAtlas("NoStorage");
     const start = await app.request(`${TEST_ORIGIN}/api/uploads/start`, {
       method: "POST",
       headers: authHeaders(identity.cookie),
       body: JSON.stringify({
-        journeyId: journeyB,
+        journeyId: sharedJourneyId,
         fileName: "memory.jpg",
         mimeType: "image/jpeg",
         bytes: 128,
@@ -474,7 +452,6 @@ describe("media and atlas HTTP endpoints", () => {
   });
 
   it("degrades truthfully when location search is disabled", async () => {
-    const identity = await createAuthenticatedAtlas("NoSearch");
     const search = await app.request(
       `${TEST_ORIGIN}/api/locations/search?q=Singapore`,
       { headers: authHeaders(identity.cookie) },
@@ -498,6 +475,39 @@ describe("media and atlas HTTP endpoints", () => {
     await expect(invalidReverse.json()).resolves.toMatchObject({
       error: "INVALID_LOCATION_COORDINATES",
     });
+  });
+
+  it("updates and then deletes the current atlas through the tenant API", async () => {
+    const patch = await app.request(`${TEST_ORIGIN}/api/atlases/current`, {
+      method: "PATCH",
+      headers: authHeaders(identity.cookie),
+      body: JSON.stringify({ title: "Renamed Atlas", dedication: "still private" }),
+    });
+    expect(patch.status).toBe(200);
+    await expect(patch.json()).resolves.toMatchObject({
+      atlas: { title: "Renamed Atlas", dedication: "still private" },
+    });
+
+    const invalid = await app.request(`${TEST_ORIGIN}/api/atlases/current`, {
+      method: "PATCH",
+      headers: authHeaders(identity.cookie),
+      body: JSON.stringify({ title: "", dedication: "" }),
+    });
+    expect(invalid.status).toBe(400);
+
+    const deleteResponse = await app.request(
+      `${TEST_ORIGIN}/api/atlases/current`,
+      { method: "DELETE", headers: authHeaders(identity.cookie) },
+    );
+    expect(deleteResponse.status).toBe(204);
+    const afterDelete = await app.request(`${TEST_ORIGIN}/api/atlases/current`, {
+      headers: authHeaders(identity.cookie),
+    });
+    expect(afterDelete.status).toBe(404);
+    const journeysAfterDelete = await app.request(`${TEST_ORIGIN}/api/journeys`, {
+      headers: authHeaders(identity.cookie),
+    });
+    expect(journeysAfterDelete.status).toBe(404);
   });
 });
 
