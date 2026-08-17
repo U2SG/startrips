@@ -1,17 +1,41 @@
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
+import { sql } from "drizzle-orm";
 import { auth } from "./auth";
 import { AtlasAccessError } from "./authorization/atlas-access";
+import { serverConfig } from "./config";
+import { db } from "./db/client";
+import { LocationSearchUnavailableError } from "./location/location-search";
+import { createAnonymousRateLimiter } from "./rate-limit";
 import { atlasRoutes } from "./routes/atlases";
 import { journeyRoutes } from "./routes/journeys";
 import { locationRoutes } from "./routes/locations";
 import { uploadRoutes } from "./routes/uploads";
-import { LocationSearchUnavailableError } from "./location/location-search";
-import { createAnonymousRateLimiter } from "./rate-limit";
 import { StorageUnavailableError } from "./storage/multipart-storage";
-import { serverConfig } from "./config";
 
 export const app = new Hono();
+
+app.use("*", async (context, next) => {
+  const started = performance.now();
+  let failed = false;
+  try {
+    await next();
+  } catch (error) {
+    failed = true;
+    console.error(
+      `${context.req.method} ${context.req.path} failed`,
+      error instanceof Error ? error.message : "unknown error",
+    );
+    throw error;
+  } finally {
+    if (!failed) {
+      console.info(
+        `${context.req.method} ${context.req.path} ${context.res.status} `
+        + `${Math.round(performance.now() - started)}ms`,
+      );
+    }
+  }
+});
 
 app.use(
   "/api/*",
@@ -29,9 +53,17 @@ app.use(
   }),
 );
 
-app.get("/api/health", (context) =>
-  context.json({ status: "ok" }),
-);
+app.get("/api/health", async (context) => {
+  try {
+    await db.execute(sql`select 1`);
+  } catch {
+    return context.json(
+      { status: "unavailable", database: "unreachable" },
+      503,
+    );
+  }
+  return context.json({ status: "ok" });
+});
 
 app.on(["GET", "POST"], "/api/auth/*", (context) =>
   auth.handler(context.req.raw),
@@ -63,6 +95,12 @@ app.onError((error, context) => {
     return context.json(
       { error: "LOCATION_SEARCH_UNAVAILABLE", message: error.message },
       503,
+    );
+  }
+  if (error instanceof SyntaxError) {
+    return context.json(
+      { error: "INVALID_JSON", message: "Request body is not valid JSON" },
+      400,
     );
   }
   console.error("API request failed", error.message);
