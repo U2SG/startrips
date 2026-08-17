@@ -421,6 +421,10 @@ describe("media and atlas HTTP endpoints", () => {
       },
     );
     expect(unknownJourney.status).toBe(404);
+
+    // The fake backend rows exist only for this reorder assertion; remove
+    // them so the later atlas-deletion test sees no storage references.
+    await db.delete(mediaAssets).where(eq(mediaAssets.journeyId, journey.id));
   });
 
   it("degrades truthfully when media storage is disabled", async () => {
@@ -494,6 +498,31 @@ describe("media and atlas HTTP endpoints", () => {
       body: JSON.stringify({ title: "", dedication: "" }),
     });
     expect(invalid.status).toBe(400);
+
+    // Deletion fails closed while any stored object cannot be cleaned up.
+    const [blockingAsset] = await db
+      .insert(mediaAssets)
+      .values({
+        journeyId: sharedJourneyId,
+        routePointId: null,
+        storageDriver: "unavailable-backend",
+        storageKey: `${identity.atlasId}/blocking.jpg`,
+        fileName: "blocking.jpg",
+        mimeType: "image/jpeg",
+        bytes: 128,
+        sortOrder: 0,
+        uploadedByUserId: identity.userId,
+      })
+      .returning({ id: mediaAssets.id });
+    const blocked = await app.request(
+      `${TEST_ORIGIN}/api/atlases/current`,
+      { method: "DELETE", headers: authHeaders(identity.cookie) },
+    );
+    expect(blocked.status).toBe(503);
+    await expect(blocked.json()).resolves.toMatchObject({
+      error: "STORAGE_UNAVAILABLE",
+    });
+    await db.delete(mediaAssets).where(eq(mediaAssets.id, blockingAsset.id));
 
     const deleteResponse = await app.request(
       `${TEST_ORIGIN}/api/atlases/current`,
