@@ -304,6 +304,203 @@ describe("authenticated tenant boundary", () => {
   });
 });
 
+describe("API robustness", () => {
+  it("reports database health through the public probe", async () => {
+    const response = await app.request(`${TEST_ORIGIN}/api/health`);
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ status: "ok" });
+  });
+
+  it("returns 400 for malformed JSON bodies instead of 500", async () => {
+    const identity = await createAuthenticatedAtlas("Malformed");
+    const response = await app.request(`${TEST_ORIGIN}/api/journeys`, {
+      method: "POST",
+      headers: authHeaders(identity.cookie),
+      body: '{"title": ',
+    });
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "INVALID_JSON",
+    });
+  });
+});
+
+describe("media and atlas HTTP endpoints", () => {
+  it("updates and then deletes the current atlas through the tenant API", async () => {
+    const identity = await createAuthenticatedAtlas("Editable");
+    const patch = await app.request(`${TEST_ORIGIN}/api/atlases/current`, {
+      method: "PATCH",
+      headers: authHeaders(identity.cookie),
+      body: JSON.stringify({ title: "Renamed Atlas", dedication: "still private" }),
+    });
+    expect(patch.status).toBe(200);
+    await expect(patch.json()).resolves.toMatchObject({
+      atlas: { title: "Renamed Atlas", dedication: "still private" },
+    });
+
+    const invalid = await app.request(`${TEST_ORIGIN}/api/atlases/current`, {
+      method: "PATCH",
+      headers: authHeaders(identity.cookie),
+      body: JSON.stringify({ title: "", dedication: "" }),
+    });
+    expect(invalid.status).toBe(400);
+
+    const deleteResponse = await app.request(
+      `${TEST_ORIGIN}/api/atlases/current`,
+      { method: "DELETE", headers: authHeaders(identity.cookie) },
+    );
+    expect(deleteResponse.status).toBe(204);
+    const afterDelete = await app.request(`${TEST_ORIGIN}/api/atlases/current`, {
+      headers: authHeaders(identity.cookie),
+    });
+    expect(afterDelete.status).toBe(404);
+    const journeysAfterDelete = await app.request(`${TEST_ORIGIN}/api/journeys`, {
+      headers: authHeaders(identity.cookie),
+    });
+    expect(journeysAfterDelete.status).toBe(404);
+  });
+
+  it("reads a single tenant-scoped journey and rejects foreign ids", async () => {
+    const identity = await createAuthenticatedAtlas("Reader");
+    const created = await createJourneyForAtlas(identity.atlasId, identity.userId, {
+      ...baseJourney,
+      title: "Single read",
+    });
+    if (!created) throw new Error("Journey fixture was not created");
+
+    const own = await app.request(
+      `${TEST_ORIGIN}/api/journeys/${created.id}`,
+      { headers: authHeaders(identity.cookie) },
+    );
+    expect(own.status).toBe(200);
+    await expect(own.json()).resolves.toMatchObject({
+      journey: { id: created.id, title: "Single read" },
+    });
+
+    const foreign = await app.request(
+      `${TEST_ORIGIN}/api/journeys/${journeyB}`,
+      { headers: authHeaders(identity.cookie) },
+    );
+    expect(foreign.status).toBe(404);
+  });
+
+  it("reorders journey media through the tenant-scoped endpoint", async () => {
+    const identity = await createAuthenticatedAtlas("Orderer");
+    const journey = await createJourneyForAtlas(identity.atlasId, identity.userId, {
+      ...baseJourney,
+      title: "Reorder story",
+    });
+    if (!journey) throw new Error("Journey fixture was not created");
+    const assets = await db
+      .insert(mediaAssets)
+      .values(["a.jpg", "b.jpg", "c.jpg"].map((fileName, index) => ({
+        journeyId: journey.id,
+        routePointId: null,
+        storageDriver: "test",
+        storageKey: `${identity.atlasId}/${journey.id}/${randomUUID()}`,
+        fileName,
+        mimeType: "image/jpeg",
+        bytes: 128,
+        sortOrder: index,
+        uploadedByUserId: identity.userId,
+      })))
+      .returning({ id: mediaAssets.id });
+
+    const reordered = [assets[2], assets[0], assets[1]].map((asset) => asset.id);
+    const response = await app.request(`${TEST_ORIGIN}/api/uploads/assets/reorder`, {
+      method: "POST",
+      headers: authHeaders(identity.cookie),
+      body: JSON.stringify({ journeyId: journey.id, assetIds: reordered }),
+    });
+    expect(response.status).toBe(200);
+    const payload = await response.json() as { journey: { media: { id: string; sortOrder: number }[] } };
+    expect(payload.journey.media.map((asset) => asset.id)).toEqual(reordered);
+    expect(payload.journey.media.map((asset) => asset.sortOrder)).toEqual([0, 1, 2]);
+
+    const foreignAsset = await app.request(
+      `${TEST_ORIGIN}/api/uploads/assets/reorder`,
+      {
+        method: "POST",
+        headers: authHeaders(identity.cookie),
+        body: JSON.stringify({
+          journeyId: journey.id,
+          assetIds: [assets[2].id, "00000000-0000-4000-8000-000000000099"],
+        }),
+      },
+    );
+    expect(foreignAsset.status).toBe(400);
+
+    const unknownJourney = await app.request(
+      `${TEST_ORIGIN}/api/uploads/assets/reorder`,
+      {
+        method: "POST",
+        headers: authHeaders(identity.cookie),
+        body: JSON.stringify({
+          journeyId: "00000000-0000-4000-8000-000000000099",
+          assetIds: reordered,
+        }),
+      },
+    );
+    expect(unknownJourney.status).toBe(404);
+  });
+
+  it("degrades truthfully when media storage is disabled", async () => {
+    const identity = await createAuthenticatedAtlas("NoStorage");
+    const start = await app.request(`${TEST_ORIGIN}/api/uploads/start`, {
+      method: "POST",
+      headers: authHeaders(identity.cookie),
+      body: JSON.stringify({
+        journeyId: journeyB,
+        fileName: "memory.jpg",
+        mimeType: "image/jpeg",
+        bytes: 128,
+      }),
+    });
+    expect(start.status).toBe(503);
+    await expect(start.json()).resolves.toMatchObject({
+      error: "STORAGE_UNAVAILABLE",
+    });
+
+    const read = await app.request(
+      `${TEST_ORIGIN}/api/uploads/assets/00000000-0000-4000-8000-000000000099/read-url`,
+      { headers: authHeaders(identity.cookie) },
+    );
+    expect(read.status).toBe(404);
+    const remove = await app.request(
+      `${TEST_ORIGIN}/api/uploads/assets/00000000-0000-4000-8000-000000000099`,
+      { method: "DELETE", headers: authHeaders(identity.cookie) },
+    );
+    expect(remove.status).toBe(404);
+  });
+
+  it("degrades truthfully when location search is disabled", async () => {
+    const identity = await createAuthenticatedAtlas("NoSearch");
+    const search = await app.request(
+      `${TEST_ORIGIN}/api/locations/search?q=Singapore`,
+      { headers: authHeaders(identity.cookie) },
+    );
+    expect(search.status).toBe(503);
+    await expect(search.json()).resolves.toMatchObject({
+      error: "LOCATION_SEARCH_UNAVAILABLE",
+    });
+
+    const reverse = await app.request(
+      `${TEST_ORIGIN}/api/locations/reverse?latitude=22.5&longitude=114.05`,
+      { headers: authHeaders(identity.cookie) },
+    );
+    expect(reverse.status).toBe(503);
+
+    const invalidReverse = await app.request(
+      `${TEST_ORIGIN}/api/locations/reverse?latitude=&longitude=114.05`,
+      { headers: authHeaders(identity.cookie) },
+    );
+    expect(invalidReverse.status).toBe(400);
+    await expect(invalidReverse.json()).resolves.toMatchObject({
+      error: "INVALID_LOCATION_COORDINATES",
+    });
+  });
+});
+
 describe("tenant-scoped journey repository", () => {
   it("never lists journeys from another atlas", async () => {
     const visible = await listJourneysForAtlas(atlasA);
