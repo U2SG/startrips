@@ -63,6 +63,12 @@ export function loadServerConfig(
   ).replace(/\/$/, "");
   const locationSearchUserAgent = environment.LOCATION_SEARCH_USER_AGENT?.trim()
     || `Startrips/1.0 (${appOrigin})`;
+  const anonymousRateLimitWindowSeconds = Number(
+    environment.ANON_RATE_LIMIT_WINDOW_SECONDS ?? 60,
+  );
+  const anonymousRateLimitMaxRequests = Number(
+    environment.ANON_RATE_LIMIT_MAX_REQUESTS ?? 60,
+  );
 
   if (production && (!smtpUrl || !mailFrom)) {
     throw new Error("SMTP_URL and MAIL_FROM are required in production");
@@ -140,6 +146,25 @@ export function loadServerConfig(
     throw new Error("LOCATION_SEARCH_BASE_URL must use HTTPS in production");
   }
 
+  if (
+    !Number.isInteger(anonymousRateLimitWindowSeconds)
+    || anonymousRateLimitWindowSeconds < 1
+    || anonymousRateLimitWindowSeconds > 3600
+  ) {
+    throw new Error(
+      "ANON_RATE_LIMIT_WINDOW_SECONDS must be an integer between 1 and 3600",
+    );
+  }
+  if (
+    !Number.isInteger(anonymousRateLimitMaxRequests)
+    || anonymousRateLimitMaxRequests < 1
+    || anonymousRateLimitMaxRequests > 100000
+  ) {
+    throw new Error(
+      "ANON_RATE_LIMIT_MAX_REQUESTS must be an integer between 1 and 100000",
+    );
+  }
+
   const authSecret = requiredInProduction(
     "BETTER_AUTH_SECRET",
     environment.BETTER_AUTH_SECRET,
@@ -186,6 +211,8 @@ export function loadServerConfig(
     locationSearchDriver,
     locationSearchBaseUrl,
     locationSearchUserAgent,
+    anonymousRateLimitWindowSeconds,
+    anonymousRateLimitMaxRequests,
   } as const;
 }
 

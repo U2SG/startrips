@@ -7,7 +7,9 @@ import { journeyRoutes } from "./routes/journeys";
 import { locationRoutes } from "./routes/locations";
 import { uploadRoutes } from "./routes/uploads";
 import { LocationSearchUnavailableError } from "./location/location-search";
+import { createAnonymousRateLimiter } from "./rate-limit";
 import { StorageUnavailableError } from "./storage/multipart-storage";
+import { serverConfig } from "./config";
 
 export const app = new Hono();
 
@@ -16,6 +18,14 @@ app.use(
   bodyLimit({
     maxSize: 512 * 1024,
     onError: (context) => context.json({ error: "REQUEST_TOO_LARGE" }, 413),
+  }),
+);
+
+app.use(
+  "/api/*",
+  createAnonymousRateLimiter({
+    windowSeconds: serverConfig.anonymousRateLimitWindowSeconds,
+    maxRequests: serverConfig.anonymousRateLimitMaxRequests,
   }),
 );
 
