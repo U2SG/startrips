@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createJourney,
   deleteJourney,
+  deleteMedia,
   listJourneys,
   restoreJourney,
   searchLocations,
@@ -68,6 +69,19 @@ describe("journeyApi", () => {
     await expect(deleteJourney("journey-1", fetcher)).resolves.toBeUndefined();
     expect(fetcher).toHaveBeenCalledWith(
       "/api/journeys/journey-1",
+      expect.objectContaining({
+        method: "DELETE",
+        credentials: "include",
+      }),
+    );
+  });
+
+  it("deletes a private media asset with DELETE", async () => {
+    const fetcher = vi.fn(async () => new Response(null, { status: 204 })) as unknown as typeof fetch;
+
+    await expect(deleteMedia("asset-1", fetcher)).resolves.toBeUndefined();
+    expect(fetcher).toHaveBeenCalledWith(
+      "/api/uploads/assets/asset-1",
       expect.objectContaining({
         method: "DELETE",
         credentials: "include",

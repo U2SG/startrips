@@ -9,6 +9,7 @@ import {
   mediaUploads,
   journeys,
 } from "../db/app-schema";
+import { deleteMediaAssetForAtlas } from "../services/delete-media";
 import {
   getMultipartStorage,
   hasConfiguredStorageBackends,
@@ -765,4 +766,14 @@ uploadRoutes.get("/assets/:id/read-url", async (context) => {
     url: signed.url,
     expiresAt: signed.expiresAt.toISOString(),
   });
+});
+
+uploadRoutes.delete("/assets/:id", async (context) => {
+  const { atlas } = await requireAtlasAccess(context.req.raw, "update");
+  const deleted = await deleteMediaAssetForAtlas(
+    context.req.param("id"),
+    atlas.id,
+  );
+  if (!deleted) return context.json({ error: "MEDIA_NOT_FOUND" }, 404);
+  return context.body(null, 204);
 });

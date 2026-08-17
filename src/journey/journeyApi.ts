@@ -116,6 +116,17 @@ export function getPrivateMediaRead(
   );
 }
 
+export async function deleteMedia(
+  assetId: string,
+  fetcher: Fetcher = fetch,
+): Promise<void> {
+  await requestJson<void>(
+    `/api/uploads/assets/${encodeURIComponent(assetId)}`,
+    { method: "DELETE" },
+    fetcher,
+  );
+}
+
 export async function searchLocations(
   query: string,
   fetcher: Fetcher = fetch,

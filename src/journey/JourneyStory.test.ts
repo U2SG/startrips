@@ -92,6 +92,22 @@ describe("JourneyStory", () => {
     expect(markup).toContain('data-route-point-id="point-1"');
     expect(markup).toContain("深圳");
     expect(markup).toContain("1 个媒体片段");
+    expect(markup).toContain('aria-label="删除这段媒体"');
+    expect(markup).not.toContain("删除这段媒体？");
+  });
+
+  it("hides the media removal control when the scoped media is empty", () => {
+    const markup = renderToStaticMarkup(createElement(JourneyStory, {
+      journeys: [journey],
+      journeyId: journey.id,
+      onClose: () => undefined,
+      onNavigate: () => undefined,
+      onEdit: () => undefined,
+      onMediaAdded: () => null,
+    }));
+
+    expect(markup).not.toContain('aria-label="删除这段媒体"');
+    expect(markup).not.toContain("删除这段媒体？");
   });
 
   it("hides permanent deletion when the current member lacks permission", () => {

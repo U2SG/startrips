@@ -15,7 +15,7 @@ import {
   IconUpload,
   IconX,
 } from "@tabler/icons-react";
-import { getPrivateMediaRead } from "./journeyApi";
+import { deleteMedia, getPrivateMediaRead } from "./journeyApi";
 import { uploadJourneyMedia } from "./JourneyComposer";
 import { validateJourneyFiles } from "./journeyModel";
 import type { Journey } from "./types";
@@ -35,6 +35,7 @@ type JourneyStoryProps = {
   onEdit: (journeyId: string) => void;
   onDelete?: (journeyId: string) => void | Promise<void>;
   onMediaAdded: (journeyId: string) => Journey | null | Promise<Journey | null>;
+  onMediaDelete?: (assetId: string) => void | Promise<void>;
 };
 
 type MediaUploadState =
@@ -80,6 +81,7 @@ export function JourneyStory({
   onEdit,
   onDelete,
   onMediaAdded,
+  onMediaDelete,
 }: JourneyStoryProps) {
   const journeyIndex = journeys.findIndex((candidate) => candidate.id === journeyId);
   const journey = journeys[journeyIndex];
@@ -93,15 +95,18 @@ export function JourneyStory({
   const [closeBlocked, setCloseBlocked] = useState(false);
   const [deleteState, setDeleteState] = useState<"idle" | "confirming" | "pending">("idle");
   const [deleteMessage, setDeleteMessage] = useState("");
+  const [mediaDeleteState, setMediaDeleteState] = useState<"idle" | "confirming" | "pending">("idle");
+  const [mediaDeleteMessage, setMediaDeleteMessage] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const deleteCancelRef = useRef<HTMLButtonElement>(null);
+  const mediaDeleteCancelRef = useRef<HTMLButtonElement>(null);
 
   function requestClose() {
     if (uploadState.status === "uploading") {
       setCloseBlocked(true);
       return;
     }
-    if (deleteState === "pending") return;
+    if (deleteState === "pending" || mediaDeleteState === "pending") return;
     onClose();
   }
 
@@ -115,11 +120,17 @@ export function JourneyStory({
     setCloseBlocked(false);
     setDeleteState("idle");
     setDeleteMessage("");
+    setMediaDeleteState("idle");
+    setMediaDeleteMessage("");
   }, [journeyId, routePointId]);
 
   useEffect(() => {
     if (deleteState === "confirming") deleteCancelRef.current?.focus();
   }, [deleteState]);
+
+  useEffect(() => {
+    if (mediaDeleteState === "confirming") mediaDeleteCancelRef.current?.focus();
+  }, [mediaDeleteState]);
 
   const scopedMedia = useMemo(
     () => journey ? mediaForRoutePoint(journey, selectedRoutePointId) : [],
@@ -282,7 +293,45 @@ export function JourneyStory({
     }
   }
 
-  const mutationPending = uploadState.status === "uploading" || deleteState === "pending";
+  async function confirmMediaDelete() {
+    if (!asset || mutationPending) return;
+    setMediaDeleteState("pending");
+    setMediaDeleteMessage("");
+    try {
+      await (onMediaDelete ?? deleteMedia)(asset.id);
+    } catch (error) {
+      setMediaDeleteState("confirming");
+      setMediaDeleteMessage(error instanceof Error ? error.message : "媒体删除失败，请稍后重试。");
+      return;
+    }
+    if (onMediaDelete) {
+      // The parent owns the state change in previews.
+      setMediaDeleteState("idle");
+      return;
+    }
+    try {
+      const refreshedJourney = await onMediaAdded(journey.id);
+      if (!refreshedJourney) {
+        setUploadState({
+          status: "complete",
+          tone: "error",
+          message: "媒体已删除，但当前列表刷新失败。重新打开这段旅程即可，不需要重复操作。",
+        });
+      }
+    } catch {
+      setUploadState({
+        status: "complete",
+        tone: "error",
+        message: "媒体已删除，但当前列表刷新失败。重新打开这段旅程即可，不需要重复操作。",
+      });
+    }
+    setMediaDeleteState("idle");
+    setMediaDeleteMessage("");
+  }
+
+  const mutationPending = uploadState.status === "uploading"
+    || deleteState === "pending"
+    || mediaDeleteState === "pending";
 
   function selectMediaScope(routePointId: string | null) {
     if (mutationPending) return;
@@ -318,6 +367,22 @@ export function JourneyStory({
                 <span>{assetIndex + 1} / {scopedMedia.length}</span>
                 <button type="button" disabled={assetIndex === scopedMedia.length - 1 || mutationPending} onClick={() => setAssetIndex((current) => current + 1)} aria-label="下一个媒体"><IconArrowRight size={17} stroke={1.35} aria-hidden="true" /></button>
               </nav>
+            ) : null}
+            {asset ? (
+              <div className="journey-story__media-remove">
+                {mediaDeleteState === "idle" ? (
+                  <button type="button" disabled={mutationPending} onClick={() => setMediaDeleteState("confirming")} aria-label="删除这段媒体">
+                    <IconTrash size={17} stroke={1.35} aria-hidden="true" />
+                  </button>
+                ) : (
+                  <div className="journey-story__media-remove__confirm" role="group" aria-label="确认删除媒体">
+                    <span>删除这段媒体？</span>
+                    <button ref={mediaDeleteCancelRef} type="button" disabled={mediaDeleteState === "pending"} onClick={() => { setMediaDeleteState("idle"); setMediaDeleteMessage(""); }}>取消</button>
+                    <button className="is-destructive" type="button" disabled={mediaDeleteState === "pending"} onClick={() => void confirmMediaDelete()}>{mediaDeleteState === "pending" ? "正在删除…" : "确认删除"}</button>
+                    {mediaDeleteMessage ? <p className="journey-story__media-remove__error" role="alert">{mediaDeleteMessage}</p> : null}
+                  </div>
+                )}
+              </div>
             ) : null}
           </section>
 

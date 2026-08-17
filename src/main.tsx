@@ -102,6 +102,14 @@ function JourneyStoryQaPreview() {
             setJourneys([nextJourney]);
             return nextJourney;
           }}
+          onMediaDelete={(assetId) => {
+            const currentJourney = journeys[0];
+            const nextJourney: Journey = {
+              ...currentJourney,
+              media: currentJourney.media.filter((asset) => asset.id !== assetId),
+            };
+            setJourneys([nextJourney]);
+          }}
         />
       ) : null}
     </main>

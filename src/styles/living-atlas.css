@@ -1021,6 +1021,90 @@
   text-align: center;
 }
 
+.journey-story__media-remove {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: 2;
+}
+
+.journey-story__media-remove > button {
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--atlas-line);
+  background: rgba(2, 8, 8, 0.82);
+  color: var(--atlas-muted);
+  cursor: pointer;
+}
+
+.journey-story__media-remove > button:hover:not(:disabled),
+.journey-story__media-remove > button:focus-visible {
+  color: #c28e78;
+  border-color: rgba(194, 142, 120, 0.55);
+}
+
+.journey-story__media-remove > button:disabled {
+  cursor: wait;
+  opacity: 0.68;
+}
+
+.journey-story__media-remove__confirm {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  background: rgba(2, 8, 8, 0.9);
+  border: 1px solid var(--atlas-line);
+}
+
+.journey-story__media-remove__confirm > span {
+  padding: 0 6px;
+  color: #d6e0dd;
+  font-size: 10px;
+  letter-spacing: 0.09em;
+}
+
+.journey-story__media-remove__confirm > button {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--atlas-line);
+  background: transparent;
+  color: var(--atlas-muted);
+  cursor: pointer;
+  font-size: 10px;
+  letter-spacing: 0.09em;
+}
+
+.journey-story__media-remove__confirm > button.is-destructive {
+  color: #c28e78;
+  border-color: rgba(194, 142, 120, 0.45);
+}
+
+.journey-story__media-remove__confirm > button:disabled {
+  cursor: wait;
+  opacity: 0.68;
+}
+
+.journey-story__media-remove__confirm > button:hover:not(:disabled),
+.journey-story__media-remove__confirm > button:focus-visible {
+  border-color: rgba(203, 241, 193, 0.5);
+}
+
+.journey-story__media-remove__confirm > button.is-destructive:hover:not(:disabled),
+.journey-story__media-remove__confirm > button.is-destructive:focus-visible {
+  border-color: rgba(194, 142, 120, 0.75);
+}
+
+.journey-story__media-remove__error {
+  margin: 0;
+  color: #c28e78;
+  font-size: 10px;
+  letter-spacing: 0.05em;
+}
+
 .journey-story__copy {
   min-width: 0;
   overflow-y: auto;
@@ -2807,6 +2891,21 @@
 
   .journey-story__media-nav {
     grid-template-columns: 44px auto 44px;
+  }
+
+  .journey-story__media-remove {
+    top: 12px;
+    right: 12px;
+  }
+
+  .journey-story__media-remove > button {
+    width: 44px;
+    height: 44px;
+  }
+
+  .journey-story__media-remove__confirm {
+    flex-wrap: wrap;
+    max-width: calc(100vw - 24px);
   }
 
   .journey-composer {
