@@ -77,12 +77,17 @@ export default function DetailedEarthMap({
       // busy forever with proxied tiles; keep it for the direct provider only.
       if (useGlobeProjection()) map.setProjection({ type: "globe" });
       applyMapLanguage(map, languageRef.current);
-      map.once("idle", () => {
+      const settle = () => {
         if (initialLoadSettled) return;
         initialLoadSettled = true;
         host.dataset.mapReady = "true";
         onReadyRef.current?.();
-      });
+      };
+      map.once("idle", settle);
+      // Safety net: under heavy load MapLibre can keep re-fetching tiles and
+      // never reach idle; enter the detail view anyway and let tiles finish
+      // progressively.
+      window.setTimeout(settle, 3000);
     });
 
     map.on("click", (event) => {
