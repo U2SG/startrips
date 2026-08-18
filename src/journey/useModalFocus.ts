@@ -34,6 +34,14 @@ export function useModalFocus<T extends HTMLElement>(
     const previousFocus = document.activeElement instanceof HTMLElement
       ? document.activeElement
       : null;
+    // Lock background scrolling while the dialog is open and compensate for
+    // the disappearing scrollbar so the page does not jump.
+    const previousOverflow = document.body.style.overflow;
+    const previousPaddingRight = document.body.style.paddingRight;
+    const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
+    document.body.style.overflow = "hidden";
+    if (scrollbarWidth > 0) document.body.style.paddingRight = `${scrollbarWidth}px`;
+
     const inerted: Array<{ element: HTMLElement; previous: boolean }> = [];
     const overlay = root.parentElement;
     const atlas = root.closest(".living-atlas");
@@ -93,6 +101,8 @@ export function useModalFocus<T extends HTMLElement>(
     return () => {
       document.removeEventListener("keydown", onKeyDown, true);
       for (const entry of inerted) entry.element.inert = entry.previous;
+      document.body.style.overflow = previousOverflow;
+      document.body.style.paddingRight = previousPaddingRight;
       if (previousFocus?.isConnected) previousFocus.focus();
     };
   }, [active]);
