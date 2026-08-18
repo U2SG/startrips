@@ -68,15 +68,15 @@ mapStyleRoutes.get("/", async (context) => {
     return context.json({ error: "INVALID_MAP_PATH" }, 400);
   }
 
-  const isStyleJson = path.startsWith("styles/");
-  const ttlMs = isStyleJson ? STYLE_CACHE_TTL_MS : TILE_CACHE_TTL_MS;
+  const isJson = path.startsWith("styles/") || path === "planet";
+  const ttlMs = isJson ? STYLE_CACHE_TTL_MS : TILE_CACHE_TTL_MS;
   const cached = await readCached(path, ttlMs);
   if (cached) {
-    const contentType = isStyleJson
+    const contentType = isJson
       ? "application/json; charset=utf-8"
       : path.endsWith(".pbf")
         ? "application/vnd.mapbox-vector-tile"
-        : path.endsWith(".png")
+        : path.endsWith(".png") || path === "planet"
           ? "image/png"
           : "application/octet-stream";
     return context.body(cached, 200, {
@@ -109,7 +109,7 @@ mapStyleRoutes.get("/", async (context) => {
   }
 
   const contentType = response.headers.get("content-type") ?? "application/octet-stream";
-  if (isStyleJson) {
+  if (isJson) {
     const text = await response.text();
     const rewritten = rewriteOpenFreemapUrls(text);
     await writeCached(path, Buffer.from(rewritten, "utf8"));
