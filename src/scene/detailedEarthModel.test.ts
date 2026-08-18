@@ -6,12 +6,27 @@ import {
   getDetailedEarthStyle,
   isDetailedEarthNameLabel,
   isRasterDetailedEarth,
+  useGlobeProjection,
 } from "./detailedEarthModel";
 
 describe("detailedEarthModel", () => {
   it("uses a provider-neutral vector style by default", () => {
     expect(getDetailedEarthStyle()).toBe(DEFAULT_DETAILED_EARTH_STYLE_URL);
     expect(isRasterDetailedEarth()).toBe(false);
+    expect(useGlobeProjection()).toBe(true);
+  });
+
+  it("keeps globe projection only for the direct default provider", () => {
+    const original = import.meta.env.VITE_ATLAS_MAP_STYLE_URL;
+    try {
+      import.meta.env.VITE_ATLAS_MAP_STYLE_URL = AMAP_RASTER_STYLE;
+      expect(useGlobeProjection()).toBe(false);
+      import.meta.env.VITE_ATLAS_MAP_STYLE_URL =
+        "https://startrips.example/api/mapstyle?path=styles%2Ffiord";
+      expect(useGlobeProjection()).toBe(false);
+    } finally {
+      import.meta.env.VITE_ATLAS_MAP_STYLE_URL = original;
+    }
   });
 
   it("switches to the built-in AMap raster style through the sentinel", () => {

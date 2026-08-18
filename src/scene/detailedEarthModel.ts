@@ -60,6 +60,13 @@ export function isRasterDetailedEarth(): boolean {
   return getConfiguredStyleUrl() === AMAP_RASTER_STYLE;
 }
 
+// Globe projection is only reliable with the default direct provider style;
+// proxied and raster styles keep the mercator projection, where MapLibre
+// reaches idle reliably.
+export function useGlobeProjection(): boolean {
+  return getConfiguredStyleUrl() === "";
+}
+
 export function getDetailedEarthStyle(): StyleSpecification | string {
   if (isRasterDetailedEarth()) return AMAP_RASTER_STYLE_SPEC;
   return getConfiguredStyleUrl() || DEFAULT_DETAILED_EARTH_STYLE_URL;

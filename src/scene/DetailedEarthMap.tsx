@@ -11,6 +11,7 @@ import {
   getDetailedEarthStyle,
   isDetailedEarthNameLabel,
   isRasterDetailedEarth,
+  useGlobeProjection,
 } from "./detailedEarthModel";
 
 type DetailedEarthMapProps = {
@@ -72,9 +73,9 @@ export default function DetailedEarthMap({
     map.addControl(new AttributionControl({ compact: true }), "bottom-left");
 
     map.on("load", () => {
-      // Globe projection only supports vector sources; raster styles keep the
-      // default mercator projection.
-      if (!isRasterDetailedEarth()) map.setProjection({ type: "globe" });
+      // Globe projection only supports vector sources and can keep the source
+      // busy forever with proxied tiles; keep it for the direct provider only.
+      if (useGlobeProjection()) map.setProjection({ type: "globe" });
       applyMapLanguage(map, languageRef.current);
       map.once("idle", () => {
         if (initialLoadSettled) return;
