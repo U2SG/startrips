@@ -826,6 +826,7 @@ export function ParticleEarthScene({
       segments: Float32Array;
       glowPath: SVGPathElement;
       corePath: SVGPathElement;
+      flowPath: SVGPathElement;
       points: Array<{
         element: SVGCircleElement;
         position: Vector3;
@@ -920,7 +921,14 @@ export function ParticleEarthScene({
           "path",
         );
         corePath.classList.add("particle-earth-route__core");
-        group.append(glowPath, corePath);
+        // ML-08 Spatial Particle Bridge: a light pulse travels along the
+        // active route from its origin toward its destination.
+        const flowPath = document.createElementNS(
+          "http://www.w3.org/2000/svg",
+          "path",
+        );
+        flowPath.classList.add("particle-earth-route__flow");
+        group.append(glowPath, corePath, flowPath);
         const vectorPoints: RouteVectorEntry["points"] = [];
         const routeLabelIndexes = route.id === latestActiveJourneyRouteId.current
           ? selectRouteLabelPointIndexes(route.points)
@@ -941,20 +949,32 @@ export function ParticleEarthScene({
             "http://www.w3.org/2000/svg",
             "circle",
           );
+          const roleClass = routePointIndex === 0
+            ? "particle-earth-route__point--origin"
+            : routePointIndex === route.points.length - 1
+              ? "particle-earth-route__point--destination"
+              : point.isStop
+                ? "particle-earth-route__point--stop"
+                : "particle-earth-route__point--transit";
           element.classList.add(
             "particle-earth-route__point",
-            point.isStop
-              ? "particle-earth-route__point--stop"
-              : "particle-earth-route__point--transit",
+            roleClass,
           );
-          element.setAttribute("r", point.isStop ? "4.4" : "2.8");
+          element.setAttribute(
+            "r",
+            routePointIndex === 0 || routePointIndex === route.points.length - 1
+              ? "5"
+              : point.isStop
+                ? "4.4"
+                : "2.8",
+          );
           group.appendChild(element);
           if (
-            point.isStop
+            (point.isStop || routePointIndex === route.points.length - 1)
             && route.id === latestActiveJourneyRouteId.current
           ) {
-            // ML-09 Geographic Cluster Bloom: a restrained one-shot pulse on
-            // the stops of the active journey.
+            // ML-09 Geographic Cluster Bloom: a restrained breathing ring on
+            // the stops (and final point) of the active journey.
             const ring = document.createElementNS(
               "http://www.w3.org/2000/svg",
               "circle",
@@ -1015,6 +1035,7 @@ export function ParticleEarthScene({
           segments: routeSegments,
           glowPath,
           corePath,
+          flowPath,
           points: vectorPoints,
         });
       });
@@ -1102,6 +1123,7 @@ export function ParticleEarthScene({
         const path = buildProjectedRoutePath(entry.segments, projectRoutePoint);
         entry.glowPath.setAttribute("d", path);
         entry.corePath.setAttribute("d", path);
+        entry.flowPath.setAttribute("d", path);
         const labelCandidates: Array<{
           label: RouteVectorLabel;
           x: number;

@@ -2741,16 +2741,53 @@
   from { opacity: 0.3; transform: scale(0.94); }
 }
 
-/* ML-09 Geographic Cluster Bloom: active journey stops pulse twice. */
+/* ML-09 Geographic Cluster Bloom: active journey stops breathe. */
 .particle-earth-route__point-ring {
   transform-box: fill-box;
   transform-origin: center;
-  animation: motionClusterPulse var(--motion-pulse, 1900ms) var(--motion-ease-out, ease) 2 both;
+  animation: motionClusterPulse 2.8s ease-in-out infinite;
 }
 
 @keyframes motionClusterPulse {
-  0% { transform: scale(1); opacity: 0.55; }
-  100% { transform: scale(3.8); opacity: 0; }
+  0%, 100% { transform: scale(1); opacity: 0.3; }
+  50% { transform: scale(2.6); opacity: 0; }
+}
+
+/* ML-08 Spatial Particle Bridge: a light pulse flows along the active
+   journey route from its origin toward its destination. */
+.particle-earth-route__flow {
+  fill: none;
+  stroke: #eafdf5;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-dasharray: 4 148;
+  opacity: 0;
+  animation: motionRouteFlow 3.4s linear infinite;
+}
+
+.particle-earth-route.is-active .particle-earth-route__flow {
+  opacity: 0.9;
+}
+
+@keyframes motionRouteFlow {
+  to { stroke-dashoffset: -152; }
+}
+
+/* Origin (hollow) and destination (solid) markers on active routes. */
+.particle-earth-route__point--origin {
+  fill: transparent;
+  stroke: currentColor;
+  stroke-width: 1.5;
+}
+
+.particle-earth-route.is-muted .particle-earth-route__point--origin {
+  fill: transparent;
+}
+
+.particle-earth-route__point--destination {
+  fill: #eafdf5;
+  stroke: currentColor;
+  stroke-width: 1;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -2758,6 +2795,15 @@
   .particle-earth-route__point-ring,
   .living-atlas__active.is-arriving {
     animation: none !important;
+  }
+
+  .particle-earth-route__point-ring {
+    opacity: 0.25;
+  }
+
+  .particle-earth-route__flow {
+    animation: none;
+    opacity: 0.5;
   }
 
   ::view-transition-old(journey-card),
