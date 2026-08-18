@@ -64,7 +64,11 @@ export const GLOBE_RENDER_ORDER = {
 export const GLOBE_DRAG_THRESHOLD_PX = 6;
 export const GLOBE_TILT_LIMIT_RADIANS = 0.62;
 export const GLOBE_ZOOM_MIN = 0.72;
-export const GLOBE_ZOOM_MAX = 3.4;
+// Camera sits at z=5.4 and the largest mode scale is 1.15, so the globe
+// surface (radius 1.39 * scale) must stay well in front of the camera:
+// 1.39 * 1.15 * zoom < 5.4 keeps the camera outside the sphere, otherwise
+// every city projection lands inside the near plane and labels vanish.
+export const GLOBE_ZOOM_MAX = 3.2;
 export const GLOBE_SURFACE_RADIUS = 1.39;
 
 const GLOBE_DRAG_RADIANS_PER_PIXEL = 0.005;
