@@ -10,6 +10,7 @@ import { createAnonymousRateLimiter } from "./rate-limit";
 import { atlasRoutes } from "./routes/atlases";
 import { journeyRoutes } from "./routes/journeys";
 import { locationRoutes } from "./routes/locations";
+import { mapStyleRoutes } from "./routes/mapstyle";
 import { uploadRoutes } from "./routes/uploads";
 import { StorageUnavailableError } from "./storage/multipart-storage";
 
@@ -72,6 +73,7 @@ app.on(["GET", "POST"], "/api/auth/*", (context) =>
 app.route("/api/atlases", atlasRoutes);
 app.route("/api/journeys", journeyRoutes);
 app.route("/api/locations", locationRoutes);
+app.route("/api/mapstyle", mapStyleRoutes);
 app.route("/api/uploads", uploadRoutes);
 
 app.notFound((context) =>
