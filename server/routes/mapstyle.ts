@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { Hono } from "hono";\nimport { serverConfig } from "../config";
+import { Hono } from "hono";
+import { serverConfig } from "../config";
 
 const OPENFREEMAP_ORIGIN = "https://tiles.openfreemap.org";
 const ALLOWED_PATH_PREFIXES = [
