@@ -80,7 +80,9 @@
 .account-dock input:focus-visible { outline: 1px solid #c8ff3d; outline-offset: 2px; }
 .account-dock form { position: absolute; top: calc(100% + 8px); right: 0; width: 260px; padding: 14px; border: 1px solid rgba(240, 234, 220, 0.18); background: #0b0f13; }
 .account-dock form label { display: grid; gap: 6px; }
-.account-dock form input { border: 1px solid rgba(240, 234, 220, 0.2); padding: 8px; color: white; background: transparent; }
+.account-dock form input,
+.account-dock form textarea { border: 1px solid rgba(240, 234, 220, 0.2); padding: 8px; color: white; background: transparent; }
+.account-dock form textarea { resize: vertical; font: inherit; }
 
 body:has(.living-atlas) .account-dock {
   z-index: 90;

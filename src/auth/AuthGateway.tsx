@@ -230,6 +230,9 @@ function WorkspaceGate({ children, activeOrganizationId, userName }: {
   const [dedication, setDedication] = useState("");
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteEmail, setInviteEmail] = useState("");
+  const [editAtlasOpen, setEditAtlasOpen] = useState(false);
+  const [editTitle, setEditTitle] = useState("");
+  const [editDedication, setEditDedication] = useState("");
 
   useEffect(() => {
     setSelectedActiveId(activeOrganizationId);
@@ -350,6 +353,26 @@ function WorkspaceGate({ children, activeOrganizationId, userName }: {
     setMessage("邀请邮件已发送。");
   }
 
+  async function saveAtlas(event: FormEvent) {
+    event.preventDefault();
+    setPending(true);
+    setMessage("");
+    const response = await fetch("/api/atlases/current", {
+      method: "PATCH",
+      credentials: "include",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ title: editTitle.trim(), dedication: editDedication }),
+    });
+    if (!response.ok) {
+      setMessage(await responseError(response));
+    } else {
+      setEditAtlasOpen(false);
+      setMessage("图谱信息已更新。");
+    }
+    setPending(false);
+    setRevision((value) => value + 1);
+  }
+
   if (gate.kind === "loading") {
     return <main className="auth-gate"><p className="auth-loading">正在打开私人图谱…</p></main>;
   }
@@ -375,11 +398,19 @@ function WorkspaceGate({ children, activeOrganizationId, userName }: {
         <span><strong>{gate.atlas.title}</strong> · {userName}</span>
         {message ? <small>{message}</small> : null}
         {isOwner ? <button type="button" onClick={() => setInviteOpen((value) => !value)}>邀请另一位</button> : null}
+        <button type="button" onClick={() => { setEditTitle(gate.atlas.title); setEditDedication(gate.atlas.dedication); setEditAtlasOpen((value) => !value); setMessage(""); }}>编辑图谱</button>
         <button type="button" onClick={() => void authClient.signOut().then(() => window.location.assign("/"))}>退出</button>
         {inviteOpen ? (
           <form onSubmit={invite}>
             <label><span>对方邮箱</span><input required type="email" value={inviteEmail} onChange={(event) => setInviteEmail(event.target.value)} /></label>
             <button type="submit" disabled={pending}>发送邀请</button>
+          </form>
+        ) : null}
+        {editAtlasOpen ? (
+          <form onSubmit={saveAtlas}>
+            <label><span>图谱名称</span><input required maxLength={80} value={editTitle} onChange={(event) => setEditTitle(event.target.value)} /></label>
+            <label><span>题词（可选）</span><textarea rows={2} maxLength={240} value={editDedication} onChange={(event) => setEditDedication(event.target.value)} /></label>
+            <button type="submit" disabled={pending}>{pending ? "保存中…" : "保存"}</button>
           </form>
         ) : null}
       </aside>
