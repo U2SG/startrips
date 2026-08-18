@@ -7,6 +7,7 @@ import {
 describe("mapstyle proxy validation", () => {
   it("allows only known OpenFreeMap resource prefixes", () => {
     expect(isAllowedOpenFreemapPath("styles/fiord")).toBe(true);
+    expect(isAllowedOpenFreemapPath("planet")).toBe(true);
     expect(isAllowedOpenFreemapPath("planet/2/0/1.pbf")).toBe(true);
     expect(isAllowedOpenFreemapPath("fonts/Noto%20Sans%20Regular/0-255.pbf"))
       .toBe(true);
