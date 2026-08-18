@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseCityFeatures, selectCityCandidates } from "./cityLabels";
+import { parseCityFeatures, parseCityList, selectCityCandidates } from "./cityLabels";
 
 describe("parseCityFeatures", () => {
   it("parses named cities with valid coordinates sorted by population", () => {
@@ -53,6 +53,34 @@ describe("parseCityFeatures", () => {
       })),
     });
     expect(cities.slice(0, 2).map((city) => city.name)).toEqual(["City 4", "City 3"]);
+  });
+});
+
+describe("parseCityList", () => {
+  it("parses the compact GeoNames build with unit directions", () => {
+    const cities = parseCityList({
+      cities: [
+        { n: "Zhengzhou", la: 34.75, lo: 113.63, p: 4672120 },
+        { n: "Small", la: 10, lo: 20, p: 15000 },
+      ],
+    });
+    expect(cities.map((city) => city.name)).toEqual(["Zhengzhou", "Small"]);
+    expect(cities[0]).toMatchObject({ latitude: 34.75, longitude: 113.63 });
+    const [x, y, z] = cities[1].direction;
+    expect(Math.hypot(x, y, z)).toBeCloseTo(1, 10);
+  });
+
+  it("skips unnamed, unlocated, or out-of-range entries", () => {
+    const cities = parseCityList({
+      cities: [
+        { n: "", la: 1, lo: 1, p: 100 },
+        { n: "No Coords", p: 100 },
+        { n: "Bad Range", la: 91, lo: 200, p: 100 },
+        { n: "No Pop", la: 5, lo: 5 },
+        { n: "Valid", la: 5, lo: 5, p: 50 },
+      ],
+    });
+    expect(cities.map((city) => city.name)).toEqual(["Valid"]);
   });
 });
 

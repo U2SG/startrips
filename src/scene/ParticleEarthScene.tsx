@@ -50,7 +50,7 @@ export const MAX_RENDERED_ROUTE_POINTS = 512;
 export const MAX_RENDERED_ROUTE_LINE_VERTICES = 8192;
 export const MAX_RENDERED_ROUTE_LABELS = 6;
 export const MAX_RENDERED_MOBILE_ROUTE_LABELS = 3;
-export const CITY_LABEL_BUDGET = 56;
+export const CITY_LABEL_BUDGET = 72;
 /** How many coarse-tier candidates may be projected per frame. */
 export const CITY_LABEL_COARSE_CANDIDATES = 44;
 export const MAX_RENDERED_COASTLINE_VERTICES = 20_000;
@@ -64,7 +64,7 @@ export const GLOBE_RENDER_ORDER = {
 export const GLOBE_DRAG_THRESHOLD_PX = 6;
 export const GLOBE_TILT_LIMIT_RADIANS = 0.62;
 export const GLOBE_ZOOM_MIN = 0.72;
-export const GLOBE_ZOOM_MAX = 2.2;
+export const GLOBE_ZOOM_MAX = 3.4;
 export const GLOBE_SURFACE_RADIUS = 1.39;
 
 const GLOBE_DRAG_RADIANS_PER_PIXEL = 0.005;
@@ -1093,8 +1093,9 @@ export function ParticleEarthScene({
       return true;
     };
 
-    // ML-09 city labels: coarse tier while the globe is distant, fine tier
-    // when zoomed in; both are city-level only and clickable for point picking.
+    // ML-09 city labels: coarse tier (Natural Earth 110m) while the globe is
+    // distant, fine tier (GeoNames cities15000, 34k+ cities) when zoomed in;
+    // both are city-level only and clickable for point picking.
     let cityTierData: { coarse: CityPoint[]; fine: CityPoint[] } | null = null;
     let lastCityTier: "coarse" | "fine" | null = null;
     const cityLabelPool: Array<{
@@ -1298,8 +1299,8 @@ export function ParticleEarthScene({
         // directly they face the camera, so zooming reveals nearby cities
         // instead of always the world's largest ones.
         const facingThreshold = Math.min(
-          0.8,
-          0.3 + (globe.scale.x - 1) * 0.35,
+          0.92,
+          0.3 + (globe.scale.x - 1) * 0.25,
         );
         const cities = selectCityCandidates(
           tier === "coarse" ? cityTierData.coarse : cityTierData.fine,

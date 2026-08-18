@@ -60,6 +60,46 @@ export function parseCityFeatures(
 }
 
 /**
+ * Parse the compact GeoNames build (public/earth/cities.json): an array of
+ * { n: asciiname, la: latitude, lo: longitude, p: population } objects,
+ * pre-sorted by population descending. Directions are computed once here so
+ * per-frame view filtering is pure dot products.
+ */
+export function parseCityList(payload: { cities?: unknown }): CityPoint[] {
+  if (!Array.isArray(payload.cities)) return [];
+  const cities: CityPoint[] = [];
+  for (const raw of payload.cities) {
+    const entry = raw as { n?: unknown; la?: unknown; lo?: unknown; p?: unknown };
+    const name = typeof entry.n === "string" ? entry.n.trim() : "";
+    const latitude = Number(entry.la);
+    const longitude = Number(entry.lo);
+    const population = Number(entry.p);
+    if (
+      !name
+      || !Number.isFinite(latitude)
+      || latitude < -90
+      || latitude > 90
+      || !Number.isFinite(longitude)
+      || longitude < -180
+      || longitude > 180
+      || !Number.isFinite(population)
+      || population <= 0
+    ) {
+      continue;
+    }
+    const vector = latLonToVector3(latitude, longitude, 1);
+    cities.push({
+      name,
+      latitude,
+      longitude,
+      population: Number.isFinite(population) ? population : 0,
+      direction: [vector.x, vector.y, vector.z],
+    });
+  }
+  return cities;
+}
+
+/**
  * Pick the cities worth labeling for the current view. `facingDirection` is
  * the globe-local unit vector from the globe center toward the camera; cities
  * are filtered by how directly they face the camera (the threshold tightens
@@ -106,7 +146,7 @@ export async function loadCityTiers(
   if (cityCache) return cityCache;
   const [coarseResponse, fineResponse] = await Promise.all([
     fetcher("/earth/ne_110m_populated_places.geojson", { cache: "force-cache" }),
-    fetcher("/earth/ne_50m_populated_places.geojson", { cache: "force-cache" }),
+    fetcher("/earth/cities.json", { cache: "force-cache" }),
   ]);
   if (!coarseResponse.ok || !fineResponse.ok) {
     throw new Error("City label data is unavailable");
@@ -117,7 +157,7 @@ export async function loadCityTiers(
   ]);
   cityCache = {
     coarse: parseCityFeatures(coarsePayload as { features?: unknown }),
-    fine: parseCityFeatures(finePayload as { features?: unknown }),
+    fine: parseCityList(finePayload as { cities?: unknown }),
   };
   return cityCache;
 }
