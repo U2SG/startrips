@@ -45,6 +45,9 @@ export function loadServerConfig(
   const s3UploadPartExpiresInSeconds = Number(
     environment.S3_UPLOAD_PART_EXPIRES_IN_SECONDS ?? 15 * 60,
   );
+  const mediaReadUrlExpiresInSeconds = Number(
+    environment.MEDIA_READ_URL_EXPIRES_IN_SECONDS ?? 15 * 60,
+  );
   const s3ConfigurationPresent = Boolean(
     s3BackendId
     || s3Endpoint
@@ -98,6 +101,15 @@ export function loadServerConfig(
   ) {
     throw new Error(
       "S3_UPLOAD_PART_EXPIRES_IN_SECONDS must be between 60 and 3600",
+    );
+  }
+  if (
+    !Number.isInteger(mediaReadUrlExpiresInSeconds)
+    || mediaReadUrlExpiresInSeconds < 60
+    || mediaReadUrlExpiresInSeconds > 60 * 60
+  ) {
+    throw new Error(
+      "MEDIA_READ_URL_EXPIRES_IN_SECONDS must be between 60 and 3600",
     );
   }
   if (storageDriver === "s3" || s3ConfigurationPresent) {
@@ -208,6 +220,7 @@ export function loadServerConfig(
     s3SessionToken,
     s3ForcePathStyle,
     s3UploadPartExpiresInSeconds,
+    mediaReadUrlExpiresInSeconds,
     locationSearchDriver,
     locationSearchBaseUrl,
     locationSearchUserAgent,

@@ -103,6 +103,28 @@ describe("anonymous rate limiting configuration", () => {
     expect(config.anonymousRateLimitMaxRequests).toBe(60);
   });
 
+  it("defaults the media read URL lifetime to 15 minutes", () => {
+    const config = loadServerConfig(productionEnvironment);
+    expect(config.mediaReadUrlExpiresInSeconds).toBe(900);
+  });
+
+  it("accepts an explicit media read URL lifetime", () => {
+    const config = loadServerConfig({
+      ...productionEnvironment,
+      MEDIA_READ_URL_EXPIRES_IN_SECONDS: "600",
+    });
+    expect(config.mediaReadUrlExpiresInSeconds).toBe(600);
+  });
+
+  it("rejects invalid media read URL lifetimes", () => {
+    expect(() => loadServerConfig({
+      ...productionEnvironment,
+      MEDIA_READ_URL_EXPIRES_IN_SECONDS: "30",
+    })).toThrow(
+      "MEDIA_READ_URL_EXPIRES_IN_SECONDS must be between 60 and 3600",
+    );
+  });
+
   it("accepts explicit window and maximum values", () => {
     const config = loadServerConfig({
       ...productionEnvironment,
