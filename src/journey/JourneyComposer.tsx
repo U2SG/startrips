@@ -578,7 +578,7 @@ export function JourneyComposer({
       <section
         ref={dialogRef}
         tabIndex={-1}
-        className="journey-composer"
+        className="journey-composer motion-staged"
         role="dialog"
         aria-modal="true"
         aria-labelledby="journey-composer-title"

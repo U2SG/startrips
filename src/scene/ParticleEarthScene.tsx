@@ -949,6 +949,20 @@ export function ParticleEarthScene({
           );
           element.setAttribute("r", point.isStop ? "4.4" : "2.8");
           group.appendChild(element);
+          if (
+            point.isStop
+            && route.id === latestActiveJourneyRouteId.current
+          ) {
+            // ML-09 Geographic Cluster Bloom: a restrained one-shot pulse on
+            // the stops of the active journey.
+            const ring = document.createElementNS(
+              "http://www.w3.org/2000/svg",
+              "circle",
+            );
+            ring.classList.add("particle-earth-route__point-ring");
+            ring.setAttribute("r", "4.4");
+            group.appendChild(ring);
+          }
           let label: RouteVectorLabel | undefined;
           if (routeLabelIndexSet.has(routePointIndex) && point.label?.trim()) {
             const labelElement = document.createElementNS(

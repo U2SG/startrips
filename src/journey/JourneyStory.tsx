@@ -428,7 +428,7 @@ export function JourneyStory({
 
   return (
     <div className="journey-story-backdrop" role="presentation" onClick={closeFromBackdrop}>
-      <article ref={dialogRef} tabIndex={-1} className="journey-story" role="dialog" aria-modal="true" aria-labelledby="journey-story-title">
+      <article ref={dialogRef} tabIndex={-1} className="journey-story motion-staged" role="dialog" aria-modal="true" aria-labelledby="journey-story-title">
         <header>
           <div>
             <p>PRIVATE JOURNEY · {journeyRange(journey)}</p>

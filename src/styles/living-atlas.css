@@ -11,6 +11,15 @@
   --atlas-cyan: #76e3d0;
   --atlas-acid: #c8ff3d;
   --atlas-warm: #f4ce73;
+  /* Motion tokens (mirror src/motion/tokens.ts) */
+  --motion-micro: 240ms;
+  --motion-panel: 420ms;
+  --motion-morph: 640ms;
+  --motion-pulse: 1800ms;
+  --motion-arrival: 2400ms;
+  --motion-stagger: 90ms;
+  --motion-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --motion-ease-soft: cubic-bezier(0.2, 0.75, 0.15, 1);
   position: relative;
   width: 100%;
   height: 100svh;
@@ -2683,9 +2692,78 @@
 }
 
 @keyframes atlasArrival {
-  0% { border-color: var(--atlas-line); transform: translateY(10px); opacity: 0.25; }
-  26% { border-color: var(--journey-color); transform: none; opacity: 1; }
+  0% {
+    border-color: var(--atlas-line);
+    transform: translate(16px, 20px) rotate(0.5deg) scale(0.97);
+    opacity: 0;
+  }
+  26% {
+    border-color: var(--journey-color);
+    transform: none;
+    opacity: 1;
+  }
   100% { border-color: var(--atlas-line); }
+}
+
+/* ML-11 Staged UI Assembly: panel children enter in hierarchy order. */
+.motion-staged > * {
+  animation: motionStageIn var(--motion-panel, 420ms) var(--motion-ease-out, cubic-bezier(0.16, 1, 0.3, 1)) both;
+}
+
+.motion-staged > *:nth-child(1) { animation-delay: calc(var(--motion-stagger, 90ms) * 0); }
+.motion-staged > *:nth-child(2) { animation-delay: calc(var(--motion-stagger, 90ms) * 1); }
+.motion-staged > *:nth-child(3) { animation-delay: calc(var(--motion-stagger, 90ms) * 2); }
+.motion-staged > *:nth-child(4) { animation-delay: calc(var(--motion-stagger, 90ms) * 3); }
+
+@keyframes motionStageIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* ML-04 Shared-Element Morph: journey rail card -> active journey card. */
+.living-atlas__active {
+  view-transition-name: journey-card;
+}
+
+::view-transition-old(journey-card) {
+  animation: motionCardOut 280ms var(--motion-ease-soft, ease) both;
+}
+
+::view-transition-new(journey-card) {
+  animation: motionCardIn 420ms var(--motion-ease-out, ease) both;
+}
+
+@keyframes motionCardOut {
+  to { opacity: 0; transform: scale(0.96); }
+}
+
+@keyframes motionCardIn {
+  from { opacity: 0.35; transform: scale(0.97); }
+}
+
+/* ML-09 Geographic Cluster Bloom: active journey stops pulse once. */
+.particle-earth-route__point-ring {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: motionClusterPulse var(--motion-pulse, 1800ms) var(--motion-ease-out, ease) both;
+}
+
+@keyframes motionClusterPulse {
+  0% { transform: scale(1); opacity: 0.5; }
+  100% { transform: scale(3.4); opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .motion-staged > *,
+  .particle-earth-route__point-ring,
+  .living-atlas__active.is-arriving {
+    animation: none !important;
+  }
+
+  ::view-transition-old(journey-card),
+  ::view-transition-new(journey-card) {
+    animation-duration: 0.01ms !important;
+  }
 }
 
 @media (max-width: 980px) {

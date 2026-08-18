@@ -9,6 +9,7 @@ import {
   IconX,
 } from "@tabler/icons-react";
 import { useAtlasCapabilities } from "../auth/AuthGateway";
+import { morphJourneyCard } from "../motion/primitives/sharedElement";
 import { LivingAtlasGlobe } from "../scene/LivingAtlasGlobe";
 import {
   JourneyComposer,
@@ -169,9 +170,12 @@ export function LivingAtlasApp() {
     }
   }
 
-  function selectJourney(journeyId: string) {
-    setActiveJourneyId(journeyId);
-    if (view === "timeline") setView("planet");
+  function selectJourney(journeyId: string, source?: HTMLElement | null) {
+    morphJourneyCard(source ?? null, activeJourneyId !== null, () => {
+      setActiveJourneyId(journeyId);
+      setArrivalJourneyId(journeyId);
+      if (view === "timeline") setView("planet");
+    });
   }
 
   function startGlobePick(accept: (point: GlobePointPick) => void) {
@@ -249,7 +253,7 @@ export function LivingAtlasApp() {
                   className={journey.id === activeJourneyId ? "is-active" : ""}
                   aria-current={journey.id === activeJourneyId ? "true" : undefined}
                   style={{ "--journey-color": journey.lightColor } as React.CSSProperties}
-                  onClick={() => selectJourney(journey.id)}
+                  onClick={(event) => selectJourney(journey.id, event.currentTarget)}
                 >
                   <span aria-hidden="true" />
                   <strong>{journey.title}</strong>
