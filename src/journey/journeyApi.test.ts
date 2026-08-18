@@ -4,7 +4,9 @@ import {
   deleteJourney,
   deleteMedia,
   listJourneys,
+  reorderJourneyMedia,
   restoreJourney,
+  reverseGeocode,
   searchLocations,
   updateJourney,
 } from "./journeyApi";
@@ -86,6 +88,49 @@ describe("journeyApi", () => {
         method: "DELETE",
         credentials: "include",
       }),
+    );
+  });
+
+  it("reorders the complete journey media list with POST", async () => {
+    const journey = { id: "journey-1", media: [] };
+    const fetcher = vi.fn(async () => Response.json({ journey })) as unknown as typeof fetch;
+
+    await expect(reorderJourneyMedia("journey-1", ["asset-2", "asset-1"], fetcher))
+      .resolves.toEqual(journey);
+    expect(fetcher).toHaveBeenCalledWith(
+      "/api/uploads/assets/reorder",
+      expect.objectContaining({
+        method: "POST",
+        credentials: "include",
+        body: JSON.stringify({
+          journeyId: "journey-1",
+          assetIds: ["asset-2", "asset-1"],
+        }),
+      }),
+    );
+  });
+
+  it("resolves a coordinate to a named place with attribution", async () => {
+    const response = {
+      result: {
+        id: "R:123",
+        label: "Shenzhen",
+        context: "Guangdong, China",
+        countryCode: "CN",
+        latitude: 22.5445741,
+        longitude: 114.0545429,
+      },
+      attribution: {
+        label: "© OpenStreetMap contributors",
+        url: "https://www.openstreetmap.org/copyright",
+      },
+    };
+    const fetcher = vi.fn(async () => Response.json(response)) as unknown as typeof fetch;
+
+    await expect(reverseGeocode(22.5445741, 114.0545429, fetcher)).resolves.toEqual(response);
+    expect(fetcher).toHaveBeenCalledWith(
+      "/api/locations/reverse?latitude=22.5445741&longitude=114.0545429",
+      expect.objectContaining({ credentials: "include" }),
     );
   });
 

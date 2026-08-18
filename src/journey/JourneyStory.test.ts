@@ -108,6 +108,54 @@ describe("JourneyStory", () => {
 
     expect(markup).not.toContain('aria-label="删除这段媒体"');
     expect(markup).not.toContain("删除这段媒体？");
+    expect(markup).not.toContain('aria-label="向前调整媒体顺序"');
+  });
+
+  it("offers media reordering controls when the journey holds multiple assets", () => {
+    const multiMediaJourney: Journey = {
+      ...journey,
+      media: [
+        {
+          id: "media-1",
+          journeyId: journey.id,
+          routePointId: null,
+          storageDriver: "test",
+          storageKey: "journey/first.jpg",
+          fileName: "first.jpg",
+          mimeType: "image/jpeg",
+          bytes: 128,
+          sortOrder: 0,
+          uploadedByUserId: "user-1",
+          createdAt: journey.createdAt,
+        },
+        {
+          id: "media-2",
+          journeyId: journey.id,
+          routePointId: null,
+          storageDriver: "test",
+          storageKey: "journey/second.jpg",
+          fileName: "second.jpg",
+          mimeType: "image/jpeg",
+          bytes: 128,
+          sortOrder: 1,
+          uploadedByUserId: "user-1",
+          createdAt: journey.createdAt,
+        },
+      ],
+    };
+
+    const markup = renderToStaticMarkup(createElement(JourneyStory, {
+      journeys: [multiMediaJourney],
+      journeyId: journey.id,
+      onClose: () => undefined,
+      onNavigate: () => undefined,
+      onEdit: () => undefined,
+      onMediaAdded: () => null,
+    }));
+
+    expect(markup).toContain('aria-label="向前调整媒体顺序"');
+    expect(markup).toContain('aria-label="向后调整媒体顺序"');
+    expect(markup).toContain('aria-label="删除这段媒体"');
   });
 
   it("hides permanent deletion when the current member lacks permission", () => {

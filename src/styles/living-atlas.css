@@ -996,7 +996,7 @@
   right: 16px;
   bottom: 16px;
   display: grid;
-  grid-template-columns: 40px auto 40px;
+  grid-template-columns: 40px auto 40px 40px 40px;
   align-items: center;
   gap: 8px;
   padding: 6px;
@@ -1019,6 +1019,20 @@
   color: var(--atlas-muted);
   font: 500 8px/1 ui-monospace, "SFMono-Regular", Consolas, monospace;
   text-align: center;
+}
+
+.journey-story__order-message {
+  position: absolute;
+  right: 16px;
+  bottom: 68px;
+  max-width: 60%;
+  margin: 0;
+  padding: 8px 10px;
+  background: rgba(2, 8, 8, 0.9);
+  border: 1px solid var(--atlas-line);
+  color: var(--atlas-muted);
+  font-size: 10px;
+  letter-spacing: 0.05em;
 }
 
 .journey-story__media-remove {
@@ -2890,7 +2904,7 @@
   }
 
   .journey-story__media-nav {
-    grid-template-columns: 44px auto 44px;
+    grid-template-columns: 44px auto 44px 44px 44px;
   }
 
   .journey-story__media-remove {

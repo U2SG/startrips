@@ -9,13 +9,15 @@ import {
 import {
   IconArrowLeft,
   IconArrowRight,
+  IconArrowDown,
+  IconArrowUp,
   IconEdit,
   IconPhoto,
   IconTrash,
   IconUpload,
   IconX,
 } from "@tabler/icons-react";
-import { deleteMedia, getPrivateMediaRead } from "./journeyApi";
+import { deleteMedia, getPrivateMediaRead, reorderJourneyMedia } from "./journeyApi";
 import { uploadJourneyMedia } from "./JourneyComposer";
 import { validateJourneyFiles } from "./journeyModel";
 import type { Journey } from "./types";
@@ -36,6 +38,10 @@ type JourneyStoryProps = {
   onDelete?: (journeyId: string) => void | Promise<void>;
   onMediaAdded: (journeyId: string) => Journey | null | Promise<Journey | null>;
   onMediaDelete?: (assetId: string) => void | Promise<void>;
+  onMediaReorder?: (
+    journeyId: string,
+    assetIds: readonly string[],
+  ) => Journey | Promise<Journey>;
 };
 
 type MediaUploadState =
@@ -82,6 +88,7 @@ export function JourneyStory({
   onDelete,
   onMediaAdded,
   onMediaDelete,
+  onMediaReorder,
 }: JourneyStoryProps) {
   const journeyIndex = journeys.findIndex((candidate) => candidate.id === journeyId);
   const journey = journeys[journeyIndex];
@@ -97,6 +104,8 @@ export function JourneyStory({
   const [deleteMessage, setDeleteMessage] = useState("");
   const [mediaDeleteState, setMediaDeleteState] = useState<"idle" | "confirming" | "pending">("idle");
   const [mediaDeleteMessage, setMediaDeleteMessage] = useState("");
+  const [orderPending, setOrderPending] = useState(false);
+  const [orderMessage, setOrderMessage] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const deleteCancelRef = useRef<HTMLButtonElement>(null);
   const mediaDeleteCancelRef = useRef<HTMLButtonElement>(null);
@@ -122,6 +131,8 @@ export function JourneyStory({
     setDeleteMessage("");
     setMediaDeleteState("idle");
     setMediaDeleteMessage("");
+    setOrderPending(false);
+    setOrderMessage("");
   }, [journeyId, routePointId]);
 
   useEffect(() => {
@@ -194,6 +205,14 @@ export function JourneyStory({
     : null;
   const asset = scopedMedia[assetIndex] ?? null;
   const read = asset ? mediaReads[asset.id] : null;
+  const fullMediaIndex = asset
+    ? journey.media.findIndex((candidate) => candidate.id === asset.id)
+    : -1;
+  const canMoveEarlier = asset && fullMediaIndex > 0
+    && journey.media[fullMediaIndex - 1].routePointId === asset.routePointId;
+  const canMoveLater = asset && fullMediaIndex >= 0
+    && fullMediaIndex < journey.media.length - 1
+    && journey.media[fullMediaIndex + 1].routePointId === asset.routePointId;
   const previousJourney = journeyIndex > 0 ? journeys[journeyIndex - 1] : null;
   const nextJourney = journeyIndex < journeys.length - 1 ? journeys[journeyIndex + 1] : null;
   const uploadPercent = uploadState.status === "uploading" && uploadState.totalBytes > 0
@@ -329,9 +348,44 @@ export function JourneyStory({
     setMediaDeleteMessage("");
   }
 
+  async function moveMedia(direction: -1 | 1) {
+    if (!asset || mutationPending) return;
+    const currentIndex = journey.media.findIndex((candidate) => candidate.id === asset.id);
+    const targetIndex = currentIndex + direction;
+    if (currentIndex < 0 || targetIndex < 0 || targetIndex >= journey.media.length) return;
+    const neighbor = journey.media[targetIndex];
+    if (neighbor.routePointId !== asset.routePointId) return;
+
+    const nextOrder = [...journey.media];
+    [nextOrder[currentIndex], nextOrder[targetIndex]] = [
+      nextOrder[targetIndex],
+      nextOrder[currentIndex],
+    ];
+    setOrderPending(true);
+    setOrderMessage("");
+    try {
+      if (onMediaReorder) {
+        // The parent owns the state change in previews.
+        await onMediaReorder(journey.id, nextOrder.map((candidate) => candidate.id));
+      } else {
+        await reorderJourneyMedia(journey.id, nextOrder.map((candidate) => candidate.id));
+        const refreshedJourney = await onMediaAdded(journey.id);
+        const scoped = mediaForRoutePoint(refreshedJourney ?? journey, selectedRoutePointId);
+        const movedIndex = scoped.findIndex((candidate) => candidate.id === asset.id);
+        if (movedIndex >= 0) setAssetIndex(movedIndex);
+      }
+    } catch (error) {
+      setOrderMessage(error instanceof Error ? error.message : "顺序调整失败，请稍后重试。");
+      return;
+    } finally {
+      setOrderPending(false);
+    }
+  }
+
   const mutationPending = uploadState.status === "uploading"
     || deleteState === "pending"
-    || mediaDeleteState === "pending";
+    || mediaDeleteState === "pending"
+    || orderPending;
 
   function selectMediaScope(routePointId: string | null) {
     if (mutationPending) return;
@@ -361,13 +415,16 @@ export function JourneyStory({
             {asset && read?.status === "error" ? <div className="journey-story__media-state is-error">{read.message}</div> : null}
             {asset && read?.status === "ready" && asset.mimeType.startsWith("video/") ? <video key={asset.id} src={read.url} controls playsInline preload="metadata" /> : null}
             {asset && read?.status === "ready" && !asset.mimeType.startsWith("video/") ? <img key={asset.id} src={read.url} alt={asset.fileName} /> : null}
-            {scopedMedia.length > 1 ? (
+            {scopedMedia.length > 1 || journey.media.length > 1 ? (
               <nav className="journey-story__media-nav" aria-label="媒体导航">
                 <button type="button" disabled={assetIndex === 0 || mutationPending} onClick={() => setAssetIndex((current) => current - 1)} aria-label="上一个媒体"><IconArrowLeft size={17} stroke={1.35} aria-hidden="true" /></button>
-                <span>{assetIndex + 1} / {scopedMedia.length}</span>
+                <span>{scopedMedia.length > 0 ? `${assetIndex + 1} / ${scopedMedia.length}` : "0 / 0"}</span>
                 <button type="button" disabled={assetIndex === scopedMedia.length - 1 || mutationPending} onClick={() => setAssetIndex((current) => current + 1)} aria-label="下一个媒体"><IconArrowRight size={17} stroke={1.35} aria-hidden="true" /></button>
+                <button type="button" disabled={!canMoveEarlier} onClick={() => void moveMedia(-1)} aria-label="向前调整媒体顺序"><IconArrowUp size={17} stroke={1.35} aria-hidden="true" /></button>
+                <button type="button" disabled={!canMoveLater} onClick={() => void moveMedia(1)} aria-label="向后调整媒体顺序"><IconArrowDown size={17} stroke={1.35} aria-hidden="true" /></button>
               </nav>
             ) : null}
+            {orderMessage ? <p className="journey-story__order-message" role="status">{orderMessage}</p> : null}
             {asset ? (
               <div className="journey-story__media-remove">
                 {mediaDeleteState === "idle" ? (

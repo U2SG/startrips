@@ -2,6 +2,7 @@ import type {
   Journey,
   JourneyInput,
   LocationSearchResponse,
+  LocationSearchResult,
   PrivateMediaRead,
 } from "./types";
 
@@ -127,12 +128,42 @@ export async function deleteMedia(
   );
 }
 
+export async function reorderJourneyMedia(
+  journeyId: string,
+  assetIds: readonly string[],
+  fetcher: Fetcher = fetch,
+): Promise<Journey> {
+  const payload = await requestJson<{ journey: Journey }>(
+    "/api/uploads/assets/reorder",
+    { method: "POST", body: JSON.stringify({ journeyId, assetIds }) },
+    fetcher,
+  );
+  return payload.journey;
+}
+
 export async function searchLocations(
   query: string,
   fetcher: Fetcher = fetch,
 ): Promise<LocationSearchResponse> {
   return requestJson<LocationSearchResponse>(
     `/api/locations/search?q=${encodeURIComponent(query.trim())}`,
+    {},
+    fetcher,
+  );
+}
+
+export type ReverseGeocodeResponse = {
+  result: LocationSearchResult | null;
+  attribution: { label: string; url: string } | null;
+};
+
+export async function reverseGeocode(
+  latitude: number,
+  longitude: number,
+  fetcher: Fetcher = fetch,
+): Promise<ReverseGeocodeResponse> {
+  return requestJson<ReverseGeocodeResponse>(
+    `/api/locations/reverse?latitude=${encodeURIComponent(String(latitude))}&longitude=${encodeURIComponent(String(longitude))}`,
     {},
     fetcher,
   );

@@ -110,6 +110,18 @@ function JourneyStoryQaPreview() {
             };
             setJourneys([nextJourney]);
           }}
+          onMediaReorder={(_journeyId, assetIds) => {
+            const currentJourney = journeys[0];
+            const media = assetIds
+              .map((id, index) => {
+                const asset = currentJourney.media.find((candidate) => candidate.id === id);
+                return asset ? { ...asset, sortOrder: index } : null;
+              })
+              .filter((asset): asset is NonNullable<typeof asset> => asset !== null);
+            const nextJourney: Journey = { ...currentJourney, media };
+            setJourneys([nextJourney]);
+            return nextJourney;
+          }}
         />
       ) : null}
     </main>
