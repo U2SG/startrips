@@ -1,5 +1,25 @@
 import { describe, expect, it, vi } from "vitest";
-import { uploadMediaInParts } from "./multipartUpload";
+import { contentHashOfFile, uploadMediaInParts } from "./multipartUpload";
+
+describe("contentHashOfFile", () => {
+  it("returns the sha256 hex digest of a small file", async () => {
+    const hash = await contentHashOfFile(new Blob(["startrips"]));
+    expect(hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(hash).not.toBeUndefined();
+  });
+
+  it("is deterministic for identical content", async () => {
+    const first = await contentHashOfFile(new Blob(["memory.jpg"]));
+    const second = await contentHashOfFile(new Blob(["memory.jpg"]));
+    expect(first).toBe(second);
+  });
+
+  it("skips hashing oversized files to avoid buffering them in memory", async () => {
+    const big = new Blob(["x".repeat(1024)]);
+    Object.defineProperty(big, "size", { value: 129 * 1024 * 1024 });
+    await expect(contentHashOfFile(big)).resolves.toBeUndefined();
+  });
+});
 
 describe("uploadMediaInParts", () => {
   it("uploads bounded chunks and completes them in order", async () => {

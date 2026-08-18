@@ -101,6 +101,7 @@ export const mediaAssets = pgTable(
     fileName: text("file_name").notNull(),
     mimeType: text("mime_type").notNull(),
     bytes: integer("bytes").notNull(),
+    contentHash: text("content_hash"),
     sortOrder: integer("sort_order").notNull().default(0),
     uploadedByUserId: text("uploaded_by_user_id").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true })
@@ -142,6 +143,7 @@ export const mediaUploads = pgTable(
     fileName: text("file_name").notNull(),
     mimeType: text("mime_type").notNull(),
     bytes: integer("bytes").notNull(),
+    contentHash: text("content_hash"),
     partSize: integer("part_size").notNull(),
     partCount: integer("part_count").notNull(),
     status: text("status").notNull().default("initiated"),

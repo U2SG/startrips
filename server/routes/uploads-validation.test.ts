@@ -69,6 +69,26 @@ describe("parseStartUpload", () => {
     expect(parsed?.bytes).toBe(16);
     expect(parsed?.partCount).toBe(1);
   });
+
+  it("accepts an optional sha256 content hash and normalizes its case", () => {
+    const hash = "a".repeat(64);
+    expect(parseStartUpload({ ...validStart, contentHash: hash })?.contentHash)
+      .toBe(hash);
+    expect(parseStartUpload(validStart)?.contentHash).toBeNull();
+    expect(parseStartUpload({
+      ...validStart,
+      contentHash: "A".repeat(64),
+    })?.contentHash).toBe(hash);
+  });
+
+  it("rejects malformed content hashes", () => {
+    expect(parseStartUpload({ ...validStart, contentHash: "abc" })).toBeNull();
+    expect(parseStartUpload({ ...validStart, contentHash: "a".repeat(63) }))
+      .toBeNull();
+    expect(parseStartUpload({ ...validStart, contentHash: "a".repeat(65) }))
+      .toBeNull();
+    expect(parseStartUpload({ ...validStart, contentHash: 42 })).toBeNull();
+  });
 });
 
 describe("parseParts", () => {

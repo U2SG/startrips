@@ -725,4 +725,46 @@ describe("tenant-scoped journey repository", () => {
       new Set([journey.routePoints[0].id]),
     );
   });
+
+  it("deduplicates identical media content within a journey", async () => {
+    const journey = await createJourneyForAtlas(atlasA, "user-a", {
+      ...baseJourney,
+      title: "Dedup story",
+    });
+    if (!journey) throw new Error("Journey fixture was not created");
+    const hash = "c".repeat(64);
+    const uploads = await db
+      .insert(mediaUploads)
+      .values(["first.jpg", "second.jpg"].map((fileName) => ({
+        atlasId: atlasA,
+        journeyId: journey.id,
+        storageDriver: "test",
+        storageKey: `${atlasA}/${journey.id}/${randomUUID()}`,
+        providerUploadId: randomUUID(),
+        fileName,
+        mimeType: "image/jpeg",
+        bytes: 128,
+        contentHash: hash,
+        partSize: 128,
+        partCount: 1,
+        status: "finalizing",
+        createdByUserId: "user-a",
+      })))
+      .returning();
+
+    const first = await finalizeUpload(uploads[0]);
+    const second = await finalizeUpload(uploads[1]);
+
+    expect(second.id).toBe(first.id);
+    const [assetCount] = await db
+      .select({ value: count() })
+      .from(mediaAssets)
+      .where(eq(mediaAssets.journeyId, journey.id));
+    expect(assetCount.value).toBe(1);
+    const [completedUpload] = await db
+      .select()
+      .from(mediaUploads)
+      .where(eq(mediaUploads.id, uploads[1].id));
+    expect(completedUpload.mediaAssetId).toBe(first.id);
+  });
 });

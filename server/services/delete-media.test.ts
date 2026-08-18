@@ -18,6 +18,7 @@ const ASSET: Asset = {
   fileName: "memory.jpg",
   mimeType: "image/jpeg",
   bytes: 16,
+  contentHash: null,
   sortOrder: 0,
   uploadedByUserId: "user-1",
   createdAt: new Date("2026-08-12T00:00:00.000Z"),

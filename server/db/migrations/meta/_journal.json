@@ -43,6 +43,13 @@
       "when": 1786701730537,
       "tag": "0005_journey_revision",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1787027608008,
+      "tag": "0006_fair_thena",
+      "breakpoints": true
     }
   ]
 }

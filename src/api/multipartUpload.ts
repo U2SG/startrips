@@ -7,6 +7,7 @@ export type UploadedMediaAsset = {
   fileName: string;
   mimeType: string;
   bytes: number;
+  contentHash?: string | null;
 };
 
 type Fetcher = typeof fetch;
@@ -74,6 +75,22 @@ async function waitBeforeRetry(attempt: number, signal?: AbortSignal) {
     };
     signal?.addEventListener("abort", cancel, { once: true });
   });
+}
+
+// Hashing larger files would buffer them fully in memory; deduplication is
+// scoped to photos and short videos where the memory cost is acceptable.
+const MAX_HASH_BYTES = 128 * 1024 * 1024;
+
+export async function contentHashOfFile(file: Blob): Promise<string | undefined> {
+  if (file.size > MAX_HASH_BYTES) return undefined;
+  try {
+    const buffer = await file.arrayBuffer();
+    const digest = await globalThis.crypto.subtle.digest("SHA-256", buffer);
+    return Array.from(new Uint8Array(digest), (byte) =>
+      byte.toString(16).padStart(2, "0")).join("");
+  } catch {
+    return undefined;
+  }
 }
 
 async function waitBeforeCompletionRetry(
@@ -161,6 +178,7 @@ export async function uploadMediaInParts({
       fileName,
       mimeType: file.type,
       bytes: file.size,
+      contentHash: await contentHashOfFile(file),
     }),
     signal,
   });

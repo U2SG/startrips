@@ -22,6 +22,7 @@ function upload(overrides: Partial<UploadRecord> = {}): UploadRecord {
     fileName: "memory.jpg",
     mimeType: "image/jpeg",
     bytes: 16,
+    contentHash: null,
     partSize: 8,
     partCount: 2,
     status: "initiated",

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { and, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { Hono } from "hono";
 import { requireAtlasAccess } from "../authorization/atlas-access";
+import { serverConfig } from "../config";
 import { db } from "../db/client";
 import {
   journeyRoutePoints,
@@ -47,6 +48,7 @@ type StartUploadInput = {
   fileName?: unknown;
   mimeType?: unknown;
   bytes?: unknown;
+  contentHash?: unknown;
 };
 
 export function parseStartUpload(body: StartUploadInput) {
@@ -60,6 +62,11 @@ export function parseStartUpload(body: StartUploadInput) {
   const mimeType = typeof body.mimeType === "string" ? body.mimeType : "";
   const bytes = Number(body.bytes);
   const partCount = Math.ceil(bytes / PART_SIZE);
+  const contentHash = body.contentHash === undefined || body.contentHash === null
+    ? null
+    : typeof body.contentHash === "string" && /^[0-9a-f]{64}$/i.test(body.contentHash)
+      ? body.contentHash.toLowerCase()
+      : "invalid";
 
   if (
     !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
@@ -73,12 +80,13 @@ export function parseStartUpload(body: StartUploadInput) {
     bytes < 1 ||
     bytes > MAX_UPLOAD_BYTES ||
     partCount < 1 ||
-    partCount > MAX_PARTS
+    partCount > MAX_PARTS ||
+    contentHash === "invalid"
   ) {
     return null;
   }
 
-  return { journeyId, routePointId, fileName, mimeType, bytes, partCount };
+  return { journeyId, routePointId, fileName, mimeType, bytes, partCount, contentHash };
 }
 
 export function parseParts(value: unknown, expectedCount: number): MultipartPart[] | null {
@@ -212,7 +220,7 @@ export async function finalizeUpload(
   upload: UploadRecord,
   lease?: CompletionLease,
 ) {
-  return db.transaction(async (transaction) => {
+  const result = await db.transaction(async (transaction) => {
     if (lease) {
       const lockedUpload = await transaction.execute<{ id: string }>(sql`
         select ${mediaUploads.id} as id
@@ -248,36 +256,61 @@ export async function finalizeUpload(
         .limit(1)
       : [];
 
-    const [lastAsset] = await transaction
-      .select({ sortOrder: mediaAssets.sortOrder })
-      .from(mediaAssets)
-      .where(eq(mediaAssets.journeyId, upload.journeyId))
-      .orderBy(desc(mediaAssets.sortOrder))
-      .limit(1);
-    const [created] = await transaction
-      .insert(mediaAssets)
-      .values({
-        journeyId: upload.journeyId,
-        routePointId: routePoint?.id ?? null,
-        storageDriver: upload.storageDriver,
-        storageKey: upload.storageKey,
-        fileName: upload.fileName,
-        mimeType: upload.mimeType,
-        bytes: upload.bytes,
-        sortOrder: (lastAsset?.sortOrder ?? -1) + 1,
-        uploadedByUserId: upload.createdByUserId,
-      })
-      .onConflictDoNothing({ target: mediaAssets.storageKey })
-      .returning();
-    const asset = created ?? (
-      await transaction
+    const [duplicate] = upload.contentHash
+      ? await transaction
+        .select({ id: mediaAssets.id })
+        .from(mediaAssets)
+        .where(and(
+          eq(mediaAssets.journeyId, upload.journeyId),
+          eq(mediaAssets.contentHash, upload.contentHash),
+        ))
+        .limit(1)
+      : [];
+
+    let asset: typeof mediaAssets.$inferSelect;
+    let deduplicated = false;
+    if (duplicate) {
+      const [existing] = await transaction
         .select()
         .from(mediaAssets)
-        .where(eq(mediaAssets.storageKey, upload.storageKey))
-        .limit(1)
-    )[0];
-    if (!asset || asset.journeyId !== upload.journeyId) {
-      throw new Error("Completed media asset could not be reconciled");
+        .where(eq(mediaAssets.id, duplicate.id))
+        .limit(1);
+      if (!existing) throw new Error("Duplicate media asset could not be loaded");
+      asset = existing;
+      deduplicated = true;
+    } else {
+      const [lastAsset] = await transaction
+        .select({ sortOrder: mediaAssets.sortOrder })
+        .from(mediaAssets)
+        .where(eq(mediaAssets.journeyId, upload.journeyId))
+        .orderBy(desc(mediaAssets.sortOrder))
+        .limit(1);
+      const [created] = await transaction
+        .insert(mediaAssets)
+        .values({
+          journeyId: upload.journeyId,
+          routePointId: routePoint?.id ?? null,
+          storageDriver: upload.storageDriver,
+          storageKey: upload.storageKey,
+          fileName: upload.fileName,
+          mimeType: upload.mimeType,
+          bytes: upload.bytes,
+          contentHash: upload.contentHash,
+          sortOrder: (lastAsset?.sortOrder ?? -1) + 1,
+          uploadedByUserId: upload.createdByUserId,
+        })
+        .onConflictDoNothing({ target: mediaAssets.storageKey })
+        .returning();
+      asset = created ?? (
+        await transaction
+          .select()
+          .from(mediaAssets)
+          .where(eq(mediaAssets.storageKey, upload.storageKey))
+          .limit(1)
+      )[0];
+      if (!asset || asset.journeyId !== upload.journeyId) {
+        throw new Error("Completed media asset could not be reconciled");
+      }
     }
     await transaction
       .update(mediaUploads)
@@ -288,8 +321,26 @@ export async function finalizeUpload(
         updatedAt: new Date(),
       })
       .where(eq(mediaUploads.id, upload.id));
-    return asset;
+    return { asset, deduplicated };
   });
+
+  // A deduplicated upload leaves its just-completed object behind; remove it
+  // best-effort after the transaction so a storage hiccup cannot roll back a
+  // completed asset. A leftover orphan only wastes object storage.
+  if (result.deduplicated) {
+    try {
+      await getMultipartStorage(upload.storageDriver).deleteObject({
+        key: upload.storageKey,
+      });
+    } catch (error) {
+      console.error(
+        "Deduplicated object cleanup failed",
+        upload.storageKey,
+        error instanceof Error ? error.message : "unknown error",
+      );
+    }
+  }
+  return result.asset;
 }
 
 async function recoverCompletedUpload(upload: UploadRecord) {
@@ -521,6 +572,7 @@ uploadRoutes.post("/start", async (context) => {
           fileName: input.fileName,
           mimeType: input.mimeType,
           bytes: input.bytes,
+          contentHash: input.contentHash,
           partSize: PART_SIZE,
           partCount: input.partCount,
           createdByUserId: session.user.id,
@@ -789,7 +841,7 @@ uploadRoutes.get("/assets/:id/read-url", async (context) => {
     row.asset.storageDriver,
   ).createPrivateReadUrl({
     key: row.asset.storageKey,
-    expiresInSeconds: 15 * 60,
+    expiresInSeconds: serverConfig.mediaReadUrlExpiresInSeconds,
   });
   return context.json({
     url: signed.url,
