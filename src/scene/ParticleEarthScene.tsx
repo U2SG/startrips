@@ -354,7 +354,6 @@ interface ParticleEarthSceneProps {
   onJourneyRoutePointActivate?: (journeyId: string, routePointId: string) => void;
   showArchiveSignals?: boolean;
   onReady?: () => void;
-  onDetailRequested?: () => void;
   onGlobePointPick?: (point: { latitude: number; longitude: number }) => void;
   dragToRotate?: boolean;
   reduceMotion?: boolean;
@@ -529,7 +528,6 @@ export function ParticleEarthScene({
   onJourneyRoutePointActivate,
   showArchiveSignals = true,
   onReady,
-  onDetailRequested,
   onGlobePointPick,
   dragToRotate = false,
   reduceMotion = false,
@@ -545,7 +543,6 @@ export function ParticleEarthScene({
   const latestOnJourneyRouteActivate = useRef(onJourneyRouteActivate);
   const latestOnJourneyRoutePointActivate = useRef(onJourneyRoutePointActivate);
   const latestOnReady = useRef(onReady);
-  const latestOnDetailRequested = useRef(onDetailRequested);
   const latestOnGlobePointPick = useRef(onGlobePointPick);
   const latestDragToRotate = useRef(dragToRotate);
   latestMode.current = mode;
@@ -558,7 +555,6 @@ export function ParticleEarthScene({
   latestOnJourneyRouteActivate.current = onJourneyRouteActivate;
   latestOnJourneyRoutePointActivate.current = onJourneyRoutePointActivate;
   latestOnReady.current = onReady;
-  latestOnDetailRequested.current = onDetailRequested;
   latestOnGlobePointPick.current = onGlobePointPick;
   latestDragToRotate.current = dragToRotate;
 
@@ -1577,13 +1573,11 @@ export function ParticleEarthScene({
     const onWheel = (event: WheelEvent) => {
       if (!latestDragToRotate.current) return;
       event.preventDefault();
-      const requestedZoom = interactiveZoom
-        * Math.exp(-event.deltaY * GLOBE_WHEEL_ZOOM_SPEED);
-      if (requestedZoom > GLOBE_ZOOM_MAX && latestOnDetailRequested.current) {
-        latestOnDetailRequested.current();
-        return;
-      }
-      interactiveZoom = clampGlobeZoom(requestedZoom);
+      // Stay in the particle globe at maximum zoom so cities stay pickable;
+      // entering the real map is an explicit button choice.
+      interactiveZoom = clampGlobeZoom(
+        interactiveZoom * Math.exp(-event.deltaY * GLOBE_WHEEL_ZOOM_SPEED),
+      );
     };
 
     renderer.domElement.addEventListener("pointerdown", onPointerDown);
@@ -1903,7 +1897,6 @@ export function ParticleEarthScene({
         onJourneyRouteActivate || onJourneyRoutePointActivate ? "true" : "false"
       }
       data-globe-point-pick={onGlobePointPick ? "true" : "false"}
-      data-detail-transition={onDetailRequested ? "true" : "false"}
       data-drag-rotation={dragToRotate ? "true" : "false"}
       aria-label="由世界陆地轮廓与艺术信号组成的粒子地球"
       role="img"

@@ -118,7 +118,6 @@ export function LivingAtlasGlobe({
             onReady={() => {
               if (transitionTarget === "particle") setTargetReady(true);
             }}
-            onDetailRequested={() => beginTransition("detail")}
             dragToRotate
             reduceMotion={reduceMotion}
           />
@@ -208,7 +207,7 @@ export function LivingAtlasGlobe({
           ? "VECTOR MAP PREPARING"
           : detailMode
             ? "CHINESE LABELS / VECTOR DETAIL"
-            : "SCROLL TO ENTER DETAIL"}
+            : "SCROLL TO ZOOM CITIES"}
       </div>
     </section>
   );
