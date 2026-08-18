@@ -65,9 +65,11 @@ export function LivingAtlasApp() {
       const loaded = sortJourneysChronologically(await listJourneys());
       if (revision !== loadRevision.current) return;
       setJourneys(loaded);
+      // Default to the most recent journey so routes and flow are visible
+      // immediately instead of only after the first selection.
       setActiveJourneyId((current) => {
         if (current && loaded.some((journey) => journey.id === current)) return current;
-        return null;
+        return loaded[0]?.id ?? null;
       });
       setLoadError("");
       setStatus("ready");
@@ -229,6 +231,10 @@ export function LivingAtlasApp() {
             setStoryJourneyId(journeyId);
           }}
           onGlobePointPick={globePickActive ? completeGlobePick : undefined}
+          onPickRequest={() => {
+            setEditingJourneyId(null);
+            setComposerOpen(true);
+          }}
           reduceMotion={reduceMotion}
         />
       </div>

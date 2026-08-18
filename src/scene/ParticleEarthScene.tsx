@@ -26,6 +26,7 @@ import {
 } from "three";
 import { archiveRecords } from "../data/archiveRecords";
 import type { GlobeMode } from "../experience/types";
+import { loadCityTiers, type CityPoint } from "./cityLabels";
 import type { JourneyRoute } from "../journey/types";
 import {
   buildArtworkPointPositions,
@@ -49,6 +50,7 @@ export const MAX_RENDERED_ROUTE_POINTS = 512;
 export const MAX_RENDERED_ROUTE_LINE_VERTICES = 8192;
 export const MAX_RENDERED_ROUTE_LABELS = 6;
 export const MAX_RENDERED_MOBILE_ROUTE_LABELS = 3;
+export const CITY_LABEL_BUDGET = 44;
 export const MAX_RENDERED_COASTLINE_VERTICES = 20_000;
 export const GLOBE_RENDER_ORDER = {
   coastline: 1,
@@ -590,6 +592,15 @@ export function ParticleEarthScene({
     routeVectorLayer.setAttribute("preserveAspectRatio", "none");
     routeVectorLayer.style.opacity = "0";
     host.appendChild(routeVectorLayer);
+    const cityVectorLayer = document.createElementNS(
+      "http://www.w3.org/2000/svg",
+      "svg",
+    );
+    cityVectorLayer.classList.add("particle-earth-city-layer");
+    cityVectorLayer.setAttribute("aria-hidden", "true");
+    cityVectorLayer.setAttribute("focusable", "false");
+    cityVectorLayer.setAttribute("preserveAspectRatio", "none");
+    host.appendChild(cityVectorLayer);
     const debugWindow = window as Window & {
       __particleEarthDebug?: () => {
         canvases: number;
@@ -1084,6 +1095,43 @@ export function ParticleEarthScene({
       return true;
     };
 
+    // ML-09 city labels: coarse tier while the globe is distant, fine tier
+    // when zoomed in; both are city-level only and clickable for point picking.
+    let cityTierData: { coarse: CityPoint[]; fine: CityPoint[] } | null = null;
+    let lastCityTier: "coarse" | "fine" | null = null;
+    const cityLabelPool: Array<{
+      element: SVGTextElement;
+      city: CityPoint | null;
+    }> = [];
+    const ensureCityLabel = (index: number) => {
+      if (index < cityLabelPool.length) return cityLabelPool[index];
+      if (cityLabelPool.length >= CITY_LABEL_BUDGET) return null;
+      const entry = {
+        element: document.createElementNS(
+          "http://www.w3.org/2000/svg",
+          "text",
+        ),
+        city: null as CityPoint | null,
+      };
+      entry.element.classList.add("particle-earth-city");
+      entry.element.addEventListener("pointerup", (event) => {
+        event.stopPropagation();
+        const pick = latestOnGlobePointPick.current;
+        if (entry.city && pick) {
+          pick({
+            latitude: entry.city.latitude,
+            longitude: entry.city.longitude,
+          });
+        }
+      });
+      cityVectorLayer.appendChild(entry.element);
+      cityLabelPool.push(entry);
+      return entry;
+    };
+    void loadCityTiers().then((tiers) => {
+      cityTierData = tiers;
+    }).catch(() => undefined);
+
     const updateRouteVectorLayer = () => {
       if (routeVectorOpacity <= 0.01 || routeVectorEntries.length === 0) return;
       const projectionState = [
@@ -1235,6 +1283,54 @@ export function ParticleEarthScene({
       host.dataset.journeyRouteVisibleLabelCount = String(visibleLabelCount);
       host.dataset.journeyRouteLabelSafeRight = routeLabelSafeArea.right.toFixed(1);
       host.dataset.journeyRouteLabelSafeBottom = routeLabelSafeArea.bottom.toFixed(1);
+
+      if (cityTierData) {
+        const tier: "coarse" | "fine" = globe.scale.x < 1.02
+          ? "coarse"
+          : "fine";
+        if (tier !== lastCityTier) {
+          lastCityTier = tier;
+          for (const entry of cityLabelPool) {
+            entry.element.style.display = "none";
+          }
+        }
+        const cities = tier === "coarse"
+          ? cityTierData.coarse.slice(0, CITY_LABEL_BUDGET)
+          : cityTierData.fine;
+        let visibleCityCount = 0;
+        for (let index = 0; index < cities.length; index += 1) {
+          if (visibleCityCount >= CITY_LABEL_BUDGET) break;
+          const city = cities[index];
+          const entry = ensureCityLabel(index);
+          if (!entry) break;
+          const vector = latLonToVector3(
+            city.latitude,
+            city.longitude,
+            1.46,
+          );
+          if (!projectRoutePoint(
+            vector.x,
+            vector.y,
+            vector.z,
+            routeProjectedPoint,
+          )) {
+            entry.element.style.display = "none";
+            entry.city = null;
+            continue;
+          }
+          entry.element.style.removeProperty("display");
+          entry.element.setAttribute("x", (routeProjectedPoint.x + 6).toFixed(1));
+          entry.element.setAttribute("y", (routeProjectedPoint.y - 5).toFixed(1));
+          entry.element.textContent = city.name;
+          entry.city = city;
+          visibleCityCount += 1;
+        }
+        for (let index = cities.length; index < cityLabelPool.length; index += 1) {
+          cityLabelPool[index].element.style.display = "none";
+          cityLabelPool[index].city = null;
+        }
+        host.dataset.journeyCityLabelCount = String(visibleCityCount);
+      }
     };
 
     const personalRaycaster = new Raycaster();
@@ -1543,6 +1639,10 @@ export function ParticleEarthScene({
         "viewBox",
         `0 0 ${targetSize.x} ${targetSize.y}`,
       );
+      cityVectorLayer.setAttribute(
+        "viewBox",
+        `0 0 ${targetSize.x} ${targetSize.y}`,
+      );
       updateRouteLabelSafeArea();
       camera.aspect = targetSize.x / targetSize.y;
       camera.updateProjectionMatrix();
@@ -1768,6 +1868,7 @@ export function ParticleEarthScene({
         renderer.dispose();
         renderer.forceContextLoss();
         routeVectorLayer.remove();
+        cityVectorLayer.remove();
         renderer.domElement.remove();
         Reflect.deleteProperty(debugWindow, "__particleEarthDebug");
       },

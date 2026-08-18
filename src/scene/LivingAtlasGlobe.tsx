@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useState } from "react";
-import { IconMap2, IconWorld } from "@tabler/icons-react";
+import { IconMap2, IconMapPin, IconWorld } from "@tabler/icons-react";
 import type { JourneyRoute } from "../journey/types";
 import type { DetailedEarthLanguage } from "./detailedEarthModel";
 import { ParticleEarthScene } from "./ParticleEarthScene";
@@ -19,6 +19,7 @@ type LivingAtlasGlobeProps = {
   onJourneyRouteActivate: (journeyId: string) => void;
   onJourneyRoutePointActivate: (journeyId: string, routePointId: string) => void;
   onGlobePointPick?: (point: { latitude: number; longitude: number }) => void;
+  onPickRequest?: () => void;
   reduceMotion?: boolean;
 };
 
@@ -30,6 +31,7 @@ export function LivingAtlasGlobe({
   onJourneyRouteActivate,
   onJourneyRoutePointActivate,
   onGlobePointPick,
+  onPickRequest,
   reduceMotion,
 }: LivingAtlasGlobeProps) {
   const [earthMode, setEarthMode] = useState<EarthMode>("particle");
@@ -186,6 +188,18 @@ export function LivingAtlasGlobe({
               双语
             </button>
           </div>
+        ) : null}
+
+        {detailMode && !transitionTarget && onPickRequest ? (
+          <button
+            type="button"
+            className="living-atlas-globe__pick"
+            onClick={onPickRequest}
+            aria-label="在地图上取点加入旅程"
+          >
+            <IconMapPin size={16} stroke={1.25} aria-hidden="true" />
+            在地图上取点
+          </button>
         ) : null}
       </div>
 
