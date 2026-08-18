@@ -1,8 +1,36 @@
-import type { ExpressionSpecification } from "maplibre-gl";
+import type { ExpressionSpecification, StyleSpecification } from "maplibre-gl";
 
 export type DetailedEarthLanguage = "zh" | "bilingual";
 
 export const DEFAULT_DETAILED_EARTH_STYLE_URL = "https://tiles.openfreemap.org/styles/fiord";
+
+// Set VITE_ATLAS_MAP_STYLE_URL to this sentinel to use the built-in AMap
+// raster style (mainland-reachable, no key) instead of a vector style.
+export const AMAP_RASTER_STYLE = "amap-raster";
+
+export const AMAP_RASTER_STYLE_SPEC: StyleSpecification = {
+  version: 8,
+  sources: {
+    amap: {
+      type: "raster",
+      tiles: [
+        "https://webrd01.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}",
+        "https://webrd02.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}",
+        "https://webrd03.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}",
+        "https://webrd04.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}",
+      ],
+      tileSize: 256,
+      maxzoom: 18,
+    },
+  },
+  layers: [
+    {
+      id: "amap",
+      type: "raster",
+      source: "amap",
+    },
+  ],
+};
 
 const CHINESE_NAME: ExpressionSpecification = [
   "coalesce",
@@ -24,9 +52,17 @@ const ENGLISH_NAME: ExpressionSpecification = [
   "",
 ];
 
-export function getDetailedEarthStyleUrl() {
-  return import.meta.env.VITE_ATLAS_MAP_STYLE_URL?.trim()
-    || DEFAULT_DETAILED_EARTH_STYLE_URL;
+export function getConfiguredStyleUrl(): string {
+  return import.meta.env.VITE_ATLAS_MAP_STYLE_URL?.trim() || "";
+}
+
+export function isRasterDetailedEarth(): boolean {
+  return getConfiguredStyleUrl() === AMAP_RASTER_STYLE;
+}
+
+export function getDetailedEarthStyle(): StyleSpecification | string {
+  if (isRasterDetailedEarth()) return AMAP_RASTER_STYLE_SPEC;
+  return getConfiguredStyleUrl() || DEFAULT_DETAILED_EARTH_STYLE_URL;
 }
 
 export function createDetailedEarthLabelExpression(

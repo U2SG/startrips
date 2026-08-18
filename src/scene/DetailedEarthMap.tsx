@@ -8,8 +8,9 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import {
   createDetailedEarthLabelExpression,
   type DetailedEarthLanguage,
-  getDetailedEarthStyleUrl,
+  getDetailedEarthStyle,
   isDetailedEarthNameLabel,
+  isRasterDetailedEarth,
 } from "./detailedEarthModel";
 
 type DetailedEarthMapProps = {
@@ -52,13 +53,13 @@ export default function DetailedEarthMap({
       : [104, 34];
     const map = new MapLibreMap({
       container: host,
-      style: getDetailedEarthStyleUrl(),
+      style: getDetailedEarthStyle(),
       center: initialCenter,
       zoom: focusPoint ? 6.6 : 3.2,
       minZoom: 1.5,
-      maxZoom: 20,
+      maxZoom: isRasterDetailedEarth() ? 18 : 20,
       maxPitch: 58,
-      pitch: 20,
+      pitch: isRasterDetailedEarth() ? 0 : 20,
       bearing: 0,
       renderWorldCopies: false,
       attributionControl: false,
@@ -71,7 +72,9 @@ export default function DetailedEarthMap({
     map.addControl(new AttributionControl({ compact: true }), "bottom-left");
 
     map.on("load", () => {
-      map.setProjection({ type: "globe" });
+      // Globe projection only supports vector sources; raster styles keep the
+      // default mercator projection.
+      if (!isRasterDetailedEarth()) map.setProjection({ type: "globe" });
       applyMapLanguage(map, languageRef.current);
       map.once("idle", () => {
         if (initialLoadSettled) return;
