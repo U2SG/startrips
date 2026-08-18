@@ -18,7 +18,8 @@ FROM app-base AS frontend-build
 ARG VITE_ATLAS_MAP_STYLE_URL
 ENV VITE_ATLAS_MAP_STYLE_URL=$VITE_ATLAS_MAP_STYLE_URL
 
-RUN pnpm build
+RUN pnpm build \
+    && cp node_modules/maplibre-gl/dist/maplibre-gl-worker.mjs dist/assets/maplibre-gl-worker.mjs
 
 FROM app-base AS api
 
