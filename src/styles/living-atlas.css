@@ -706,6 +706,8 @@
   padding: 24px 2px 14px;
   overscroll-behavior-inline: contain;
   scrollbar-color: #48625d transparent;
+  scroll-snap-type: x proximity;
+  scroll-padding-inline: 2px;
 }
 
 .journey-timeline__year {
@@ -713,6 +715,7 @@
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   gap: 14px;
+  scroll-snap-align: start;
 }
 
 .journey-timeline__year h3 {
@@ -1070,6 +1073,73 @@
   color: var(--atlas-muted);
   font-size: 10px;
   letter-spacing: 0.05em;
+}
+
+.journey-story__media > img.is-zoomable {
+  cursor: zoom-in;
+}
+
+.journey-story-fullscreen {
+  position: fixed;
+  z-index: 260;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.94);
+}
+
+.journey-story-fullscreen > img,
+.journey-story-fullscreen > video {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.journey-story-fullscreen__close {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid rgba(203, 241, 193, 0.28);
+  background: rgba(2, 8, 8, 0.8);
+  color: #d6e0dd;
+  cursor: pointer;
+}
+
+.journey-story-fullscreen__nav {
+  position: absolute;
+  left: 50%;
+  bottom: 22px;
+  transform: translateX(-50%);
+  display: grid;
+  grid-template-columns: 44px auto 44px;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px;
+  background: rgba(2, 8, 8, 0.82);
+  border: 1px solid var(--atlas-line);
+}
+
+.journey-story-fullscreen__nav button {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--atlas-line);
+  background: transparent;
+  color: var(--atlas-muted);
+  cursor: pointer;
+}
+
+.journey-story-fullscreen__nav span {
+  color: var(--atlas-muted);
+  font: 500 8px/1 ui-monospace, "SFMono-Regular", Consolas, monospace;
+  text-align: center;
 }
 
 .journey-story__media-remove {

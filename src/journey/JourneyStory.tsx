@@ -21,6 +21,7 @@ import {
 } from "@tabler/icons-react";
 import { deleteMedia, getPrivateMediaRead, reorderJourneyMedia } from "./journeyApi";
 import { uploadJourneyMedia } from "./JourneyComposer";
+import { startAmbientMusic, stopAmbientMusic } from "./ambientMusic";
 import { validateJourneyFiles } from "./journeyModel";
 import type { Journey } from "./types";
 import { useModalFocus } from "./useModalFocus";
@@ -109,11 +110,16 @@ export function JourneyStory({
   const [orderPending, setOrderPending] = useState(false);
   const [orderMessage, setOrderMessage] = useState("");
   const [playing, setPlaying] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const deleteCancelRef = useRef<HTMLButtonElement>(null);
   const mediaDeleteCancelRef = useRef<HTMLButtonElement>(null);
 
   function requestClose() {
+    if (fullscreen) {
+      setFullscreen(false);
+      return;
+    }
     if (uploadState.status === "uploading") {
       setCloseBlocked(true);
       return;
@@ -137,6 +143,7 @@ export function JourneyStory({
     setOrderPending(false);
     setOrderMessage("");
     setPlaying(false);
+    setFullscreen(false);
   }, [journeyId, routePointId]);
 
   useEffect(() => {
@@ -165,6 +172,12 @@ export function JourneyStory({
     }, 5200);
     return () => window.clearTimeout(timer);
   }, [assetIndex, playing, scopedMedia.length]);
+
+  useEffect(() => {
+    if (playing) startAmbientMusic();
+    else stopAmbientMusic();
+    return () => stopAmbientMusic();
+  }, [playing]);
 
   useEffect(() => {
     setAssetIndex((current) => Math.min(
@@ -437,9 +450,13 @@ export function JourneyStory({
                 key={asset.id}
                 className={playing && scopedMedia.length > 1
                   ? `is-kenburns kenburns-${assetIndex % 2}`
-                  : ""}
+                  : "is-zoomable"}
                 src={read.url}
                 alt={asset.fileName}
+                onClick={() => {
+                  setPlaying(false);
+                  setFullscreen(true);
+                }}
               />
             ) : null}
             {scopedMedia.length > 1 || journey.media.length > 1 ? (
@@ -597,6 +614,42 @@ export function JourneyStory({
           </div>
         </footer>
       </article>
+
+      {fullscreen && asset && read?.status === "ready" ? (
+        <div
+          className="journey-story-fullscreen"
+          role="dialog"
+          aria-modal="true"
+          aria-label="全屏查看媒体"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) setFullscreen(false);
+          }}
+        >
+          <button className="journey-story-fullscreen__close" type="button" onClick={() => setFullscreen(false)} aria-label="退出全屏"><IconX size={22} stroke={1.35} aria-hidden="true" /></button>
+          {asset.mimeType.startsWith("video/")
+            ? <video key={asset.id} src={read.url} controls autoPlay playsInline />
+            : <img key={asset.id} src={read.url} alt={asset.fileName} />}
+          {scopedMedia.length > 1 ? (
+            <nav className="journey-story-fullscreen__nav" aria-label="全屏媒体导航">
+              <button
+                type="button"
+                onClick={() => setAssetIndex((current) => (current - 1 + scopedMedia.length) % scopedMedia.length)}
+                aria-label="上一个媒体"
+              >
+                <IconArrowLeft size={22} stroke={1.35} aria-hidden="true" />
+              </button>
+              <span>{assetIndex + 1} / {scopedMedia.length}</span>
+              <button
+                type="button"
+                onClick={() => setAssetIndex((current) => (current + 1) % scopedMedia.length)}
+                aria-label="下一个媒体"
+              >
+                <IconArrowRight size={22} stroke={1.35} aria-hidden="true" />
+              </button>
+            </nav>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }

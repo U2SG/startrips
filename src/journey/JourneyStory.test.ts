@@ -158,6 +158,7 @@ describe("JourneyStory", () => {
     expect(markup).toContain('aria-label="删除这段媒体"');
     expect(markup).toContain('aria-label="自动播放照片"');
     expect(markup).toContain('aria-pressed="false"');
+    expect(markup).not.toContain('aria-label="全屏查看媒体"');
   });
 
   it("hides permanent deletion when the current member lacks permission", () => {
