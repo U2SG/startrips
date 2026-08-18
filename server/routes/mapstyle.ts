@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { Hono } from "hono";
+import { Hono } from "hono";\nimport { serverConfig } from "../config";
 
 const OPENFREEMAP_ORIGIN = "https://tiles.openfreemap.org";
 const ALLOWED_PATH_PREFIXES = [
@@ -16,13 +16,13 @@ const STYLE_CACHE_TTL_MS = 5 * 60 * 1_000;
 const TILE_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
 const CACHE_SWEEP_INTERVAL_MS = 60 * 60 * 1_000;
 
-export function rewriteOpenFreemapUrls(body: string): string {
+export function rewriteOpenFreemapUrls(body: string, origin: string): string {
   const pattern = new RegExp(
     `${OPENFREEMAP_ORIGIN.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/([^"?]+)`,
     "g",
   );
   return body.replace(pattern, (_match, path: string) =>
-    `/api/mapstyle?path=${encodeURIComponent(path)
+    `${origin}/api/mapstyle?path=${encodeURIComponent(path)
       .replace(/%7B/g, "{")
       .replace(/%7D/g, "}")}`);
 }
@@ -114,7 +114,7 @@ mapStyleRoutes.get("/", async (context) => {
   const contentType = response.headers.get("content-type") ?? "application/octet-stream";
   if (isJson) {
     const text = await response.text();
-    const rewritten = rewriteOpenFreemapUrls(text);
+    const rewritten = rewriteOpenFreemapUrls(text, serverConfig.appOrigin);
     await writeCached(path, Buffer.from(rewritten, "utf8"));
     return context.body(rewritten, 200, {
       "content-type": contentType,

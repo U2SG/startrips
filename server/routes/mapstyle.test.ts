@@ -27,23 +27,29 @@ describe("mapstyle proxy validation", () => {
 });
 
 describe("rewriteOpenFreemapUrls", () => {
-  it("rewrites provider URLs to the same-origin proxy", () => {
+  it("rewrites provider URLs to the same-origin proxy as absolute URLs", () => {
     const style = JSON.stringify({
       glyphs: "https://tiles.openfreemap.org/fonts/{fontstack}/{range}.pbf",
+      sprite: "https://tiles.openfreemap.org/sprites/ofm_f384/ofm",
       sources: {
         openmaptiles: { url: "https://tiles.openfreemap.org/planet" },
       },
     });
-    const rewritten = rewriteOpenFreemapUrls(style);
+    const rewritten = rewriteOpenFreemapUrls(style, "https://startrips.example");
     expect(rewritten).toContain(
-      "/api/mapstyle?path=fonts%2F{fontstack}%2F{range}.pbf",
+      "https://startrips.example/api/mapstyle?path=fonts%2F{fontstack}%2F{range}.pbf",
     );
-    expect(rewritten).toContain("/api/mapstyle?path=planet");
+    expect(rewritten).toContain(
+      "https://startrips.example/api/mapstyle?path=sprites%2Fofm_f384%2Fofm",
+    );
+    expect(rewritten).toContain(
+      "https://startrips.example/api/mapstyle?path=planet",
+    );
     expect(rewritten).not.toContain("tiles.openfreemap.org");
   });
 
   it("leaves unrelated JSON untouched", () => {
     const body = JSON.stringify({ hello: "world" });
-    expect(rewriteOpenFreemapUrls(body)).toBe(body);
+    expect(rewriteOpenFreemapUrls(body, "https://startrips.example")).toBe(body);
   });
 });
