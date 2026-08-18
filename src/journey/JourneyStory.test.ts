@@ -156,6 +156,8 @@ describe("JourneyStory", () => {
     expect(markup).toContain('aria-label="向前调整媒体顺序"');
     expect(markup).toContain('aria-label="向后调整媒体顺序"');
     expect(markup).toContain('aria-label="删除这段媒体"');
+    expect(markup).toContain('aria-label="自动播放照片"');
+    expect(markup).toContain('aria-pressed="false"');
   });
 
   it("hides permanent deletion when the current member lacks permission", () => {

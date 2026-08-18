@@ -13,6 +13,8 @@ import {
   IconArrowUp,
   IconEdit,
   IconPhoto,
+  IconPlayerPause,
+  IconPlayerPlay,
   IconTrash,
   IconUpload,
   IconX,
@@ -106,6 +108,7 @@ export function JourneyStory({
   const [mediaDeleteMessage, setMediaDeleteMessage] = useState("");
   const [orderPending, setOrderPending] = useState(false);
   const [orderMessage, setOrderMessage] = useState("");
+  const [playing, setPlaying] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const deleteCancelRef = useRef<HTMLButtonElement>(null);
   const mediaDeleteCancelRef = useRef<HTMLButtonElement>(null);
@@ -133,6 +136,7 @@ export function JourneyStory({
     setMediaDeleteMessage("");
     setOrderPending(false);
     setOrderMessage("");
+    setPlaying(false);
   }, [journeyId, routePointId]);
 
   useEffect(() => {
@@ -147,6 +151,20 @@ export function JourneyStory({
     () => journey ? mediaForRoutePoint(journey, selectedRoutePointId) : [],
     [journey, selectedRoutePointId],
   );
+
+  // Ken Burns playback: advance every slide when playing, restarting the
+  // timer whenever the user navigates manually or the media list changes.
+  useEffect(() => {
+    if (!playing) return;
+    if (scopedMedia.length < 2) {
+      setPlaying(false);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      setAssetIndex((current) => (current + 1) % scopedMedia.length);
+    }, 5200);
+    return () => window.clearTimeout(timer);
+  }, [assetIndex, playing, scopedMedia.length]);
 
   useEffect(() => {
     setAssetIndex((current) => Math.min(
@@ -414,9 +432,30 @@ export function JourneyStory({
             {asset && (!read || read.status === "loading") ? <div className="journey-story__media-state">正在打开私有媒体…</div> : null}
             {asset && read?.status === "error" ? <div className="journey-story__media-state is-error">{read.message}</div> : null}
             {asset && read?.status === "ready" && asset.mimeType.startsWith("video/") ? <video key={asset.id} src={read.url} controls playsInline preload="metadata" /> : null}
-            {asset && read?.status === "ready" && !asset.mimeType.startsWith("video/") ? <img key={asset.id} src={read.url} alt={asset.fileName} /> : null}
+            {asset && read?.status === "ready" && !asset.mimeType.startsWith("video/") ? (
+              <img
+                key={asset.id}
+                className={playing && scopedMedia.length > 1
+                  ? `is-kenburns kenburns-${assetIndex % 2}`
+                  : ""}
+                src={read.url}
+                alt={asset.fileName}
+              />
+            ) : null}
             {scopedMedia.length > 1 || journey.media.length > 1 ? (
               <nav className="journey-story__media-nav" aria-label="媒体导航">
+                <button
+                  type="button"
+                  className={playing ? "is-active" : ""}
+                  disabled={mutationPending || scopedMedia.length < 2}
+                  onClick={() => setPlaying((current) => !current)}
+                  aria-label={playing ? "暂停自动播放" : "自动播放照片"}
+                  aria-pressed={playing}
+                >
+                  {playing
+                    ? <IconPlayerPause size={17} stroke={1.35} aria-hidden="true" />
+                    : <IconPlayerPlay size={17} stroke={1.35} aria-hidden="true" />}
+                </button>
                 <button type="button" disabled={assetIndex === 0 || mutationPending} onClick={() => setAssetIndex((current) => current - 1)} aria-label="上一个媒体"><IconArrowLeft size={17} stroke={1.35} aria-hidden="true" /></button>
                 <span>{scopedMedia.length > 0 ? `${assetIndex + 1} / ${scopedMedia.length}` : "0 / 0"}</span>
                 <button type="button" disabled={assetIndex === scopedMedia.length - 1 || mutationPending} onClick={() => setAssetIndex((current) => current + 1)} aria-label="下一个媒体"><IconArrowRight size={17} stroke={1.35} aria-hidden="true" /></button>

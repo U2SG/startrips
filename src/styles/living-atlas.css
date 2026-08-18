@@ -996,11 +996,48 @@
   right: 16px;
   bottom: 16px;
   display: grid;
-  grid-template-columns: 40px auto 40px 40px 40px;
+  grid-template-columns: 40px 40px auto 40px 40px 40px;
   align-items: center;
   gap: 8px;
   padding: 6px;
   background: rgba(2, 8, 8, 0.82);
+}
+
+.journey-story__media-nav button.is-active {
+  color: var(--atlas-acid);
+  border-color: rgba(200, 255, 61, 0.5);
+}
+
+@keyframes journey-kenburns-a {
+  from {
+    transform: scale(1) translate(0, 0);
+  }
+  to {
+    transform: scale(1.09) translate(-2.2%, -2.2%);
+  }
+}
+
+@keyframes journey-kenburns-b {
+  from {
+    transform: scale(1) translate(0, 0);
+  }
+  to {
+    transform: scale(1.09) translate(2.2%, 1.6%);
+  }
+}
+
+.journey-story__media > img.is-kenburns.kenburns-0 {
+  animation: journey-kenburns-a 8.4s ease-in-out forwards;
+}
+
+.journey-story__media > img.is-kenburns.kenburns-1 {
+  animation: journey-kenburns-b 8.4s ease-in-out forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .journey-story__media > img.is-kenburns {
+    animation: none;
+  }
 }
 
 .journey-story__media-nav button {
@@ -2904,7 +2941,7 @@
   }
 
   .journey-story__media-nav {
-    grid-template-columns: 44px auto 44px 44px 44px;
+    grid-template-columns: 44px 44px auto 44px 44px 44px;
   }
 
   .journey-story__media-remove {
