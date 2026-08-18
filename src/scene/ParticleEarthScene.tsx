@@ -1133,6 +1133,10 @@ export function ParticleEarthScene({
     };
     void loadCityTiers().then((tiers) => {
       cityTierData = tiers;
+      // City data usually arrives after the intro/focus animation has already
+      // settled, when projection states no longer change and the city block
+      // would otherwise never run. Force one full refresh so labels appear.
+      routeProjectionRevision += 1;
     }).catch(() => undefined);
 
     const updateRouteVectorLayer = () => {
