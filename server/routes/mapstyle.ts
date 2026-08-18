@@ -117,7 +117,7 @@ mapStyleRoutes.get("/", async (context) => {
           : "application/octet-stream";
     return context.body(cached, 200, {
       "content-type": contentType,
-      "cache-control": `public, max-age=${Math.round(ttlMs / 1000)}`,
+      "cache-control": `public, max-age=${Math.round(ttlMs / 1000)}`,\n      "access-control-allow-origin": "*",
     });
   }
 
@@ -151,14 +151,14 @@ mapStyleRoutes.get("/", async (context) => {
     await writeCached(path, Buffer.from(rewritten, "utf8"));
     return context.body(rewritten, 200, {
       "content-type": contentType,
-      "cache-control": `public, max-age=${Math.round(STYLE_CACHE_TTL_MS / 1000)}`,
+      "cache-control": `public, max-age=${Math.round(STYLE_CACHE_TTL_MS / 1000)}`,\n      "access-control-allow-origin": "*",
     });
   }
   const body = Buffer.from(await response.arrayBuffer());
   await writeCached(path, body);
   return context.body(body, 200, {
     "content-type": contentType,
-    "cache-control": `public, max-age=${Math.round(TILE_CACHE_TTL_MS / 1000)}`,
+    "cache-control": `public, max-age=${Math.round(TILE_CACHE_TTL_MS / 1000)}`,\n      "access-control-allow-origin": "*",
   });
 });
 
