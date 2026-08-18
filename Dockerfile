@@ -19,7 +19,8 @@ ARG VITE_ATLAS_MAP_STYLE_URL
 ENV VITE_ATLAS_MAP_STYLE_URL=$VITE_ATLAS_MAP_STYLE_URL
 
 RUN pnpm build \
-    && cp node_modules/maplibre-gl/dist/maplibre-gl-worker.mjs dist/assets/maplibre-gl-worker.mjs
+    && cp node_modules/maplibre-gl/dist/maplibre-gl-worker.mjs dist/assets/maplibre-gl-worker.mjs \
+    && cp node_modules/maplibre-gl/dist/maplibre-gl-shared.mjs dist/assets/maplibre-gl-shared.mjs
 
 FROM app-base AS api
 
