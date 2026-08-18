@@ -40,12 +40,10 @@ describe("rewriteOpenFreemapUrls", () => {
       "https://startrips.example/api/mapstyle?path=fonts%2F{fontstack}%2F{range}.pbf",
     );
     expect(rewritten).toContain(
-      "https://startrips.example/api/mapstyle?path=sprites%2Fofm_f384%2Fofm",
-    );
-    expect(rewritten).toContain(
       "https://startrips.example/api/mapstyle?path=planet",
     );
-    expect(rewritten).not.toContain("tiles.openfreemap.org");
+    expect(rewritten).toContain("https://tiles.openfreemap.org/sprites/ofm_f384/ofm");
+    expect(rewritten).not.toContain("startrips.example/api/mapstyle?path=sprites");
   });
 
   it("leaves unrelated JSON untouched", () => {

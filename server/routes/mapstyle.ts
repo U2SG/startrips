@@ -17,15 +17,47 @@ const STYLE_CACHE_TTL_MS = 5 * 60 * 1_000;
 const TILE_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
 const CACHE_SWEEP_INTERVAL_MS = 60 * 60 * 1_000;
 
+const URL_PATTERN = new RegExp(
+  `${OPENFREEMAP_ORIGIN.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/([^"?]+)`,
+  "g",
+);
+
+function proxyUrlFor(path: string, origin: string): string {
+  return `${origin}/api/mapstyle?path=${encodeURIComponent(path)
+    .replace(/%7B/g, "{")
+    .replace(/%7D/g, "}")}`;
+}
+
 export function rewriteOpenFreemapUrls(body: string, origin: string): string {
-  const pattern = new RegExp(
-    `${OPENFREEMAP_ORIGIN.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/([^"?]+)`,
-    "g",
-  );
-  return body.replace(pattern, (_match, path: string) =>
-    `${origin}/api/mapstyle?path=${encodeURIComponent(path)
-      .replace(/%7B/g, "{")
-      .replace(/%7D/g, "}")}`);
+  const rewrite = (value: string) =>
+    value.replace(URL_PATTERN, (_match, path: string) => proxyUrlFor(path, origin));
+
+  try {
+    const style = JSON.parse(body) as {
+      glyphs?: unknown;
+      tiles?: unknown;
+      sources?: Record<string, { url?: unknown; tiles?: unknown }>;
+    };
+    if (typeof style.glyphs === "string") style.glyphs = rewrite(style.glyphs);
+    // The sprite URL is intentionally left direct: MapLibre appends
+    // .json/.png/@2x.png suffixes that a query-style proxy URL cannot serve,
+    // and the sprite files are small and browser-cacheable.
+    if (Array.isArray(style.tiles)) {
+      style.tiles = style.tiles.map((tile) =>
+        typeof tile === "string" ? rewrite(tile) : tile);
+    }
+    for (const source of Object.values(style.sources ?? {})) {
+      if (typeof source.url === "string") source.url = rewrite(source.url);
+      if (Array.isArray(source.tiles)) {
+        source.tiles = source.tiles.map((tile) =>
+          typeof tile === "string" ? rewrite(tile) : tile);
+      }
+    }
+    return JSON.stringify(style);
+  } catch {
+    return body.replace(URL_PATTERN, (_match, path: string) =>
+      proxyUrlFor(path, origin));
+  }
 }
 
 export function isAllowedOpenFreemapPath(path: string): boolean {
@@ -80,7 +112,7 @@ mapStyleRoutes.get("/", async (context) => {
       ? "application/json; charset=utf-8"
       : path.endsWith(".pbf")
         ? "application/vnd.mapbox-vector-tile"
-        : path.endsWith(".png") || path === "planet"
+        : path.endsWith(".png")
           ? "image/png"
           : "application/octet-stream";
     return context.body(cached, 200, {
