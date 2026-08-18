@@ -36,7 +36,7 @@ describe("rewriteOpenFreemapUrls", () => {
     });
     const rewritten = rewriteOpenFreemapUrls(style);
     expect(rewritten).toContain(
-      "/api/mapstyle?path=fonts%2F%7Bfontstack%7D%2F%7Brange%7D.pbf",
+      "/api/mapstyle?path=fonts%2F{fontstack}%2F{range}.pbf",
     );
     expect(rewritten).toContain("/api/mapstyle?path=planet");
     expect(rewritten).not.toContain("tiles.openfreemap.org");

@@ -22,7 +22,9 @@ export function rewriteOpenFreemapUrls(body: string): string {
     "g",
   );
   return body.replace(pattern, (_match, path: string) =>
-    `/api/mapstyle?path=${encodeURIComponent(path)}`);
+    `/api/mapstyle?path=${encodeURIComponent(path)
+      .replace(/%7B/g, "{")
+      .replace(/%7D/g, "}")}`);
 }
 
 export function isAllowedOpenFreemapPath(path: string): boolean {
