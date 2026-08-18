@@ -13,11 +13,11 @@
   --atlas-warm: #f4ce73;
   /* Motion tokens (mirror src/motion/tokens.ts) */
   --motion-micro: 240ms;
-  --motion-panel: 420ms;
-  --motion-morph: 640ms;
-  --motion-pulse: 1800ms;
+  --motion-panel: 560ms;
+  --motion-morph: 760ms;
+  --motion-pulse: 1900ms;
   --motion-arrival: 2400ms;
-  --motion-stagger: 90ms;
+  --motion-stagger: 140ms;
   --motion-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --motion-ease-soft: cubic-bezier(0.2, 0.75, 0.15, 1);
   position: relative;
@@ -2694,7 +2694,7 @@
 @keyframes atlasArrival {
   0% {
     border-color: var(--atlas-line);
-    transform: translate(16px, 20px) rotate(0.5deg) scale(0.97);
+    transform: translate(22px, 26px) rotate(0.8deg) scale(0.94);
     opacity: 0;
   }
   26% {
@@ -2707,16 +2707,16 @@
 
 /* ML-11 Staged UI Assembly: panel children enter in hierarchy order. */
 .motion-staged > * {
-  animation: motionStageIn var(--motion-panel, 420ms) var(--motion-ease-out, cubic-bezier(0.16, 1, 0.3, 1)) both;
+  animation: motionStageIn var(--motion-panel, 560ms) var(--motion-ease-out, cubic-bezier(0.16, 1, 0.3, 1)) both;
 }
 
-.motion-staged > *:nth-child(1) { animation-delay: calc(var(--motion-stagger, 90ms) * 0); }
-.motion-staged > *:nth-child(2) { animation-delay: calc(var(--motion-stagger, 90ms) * 1); }
-.motion-staged > *:nth-child(3) { animation-delay: calc(var(--motion-stagger, 90ms) * 2); }
-.motion-staged > *:nth-child(4) { animation-delay: calc(var(--motion-stagger, 90ms) * 3); }
+.motion-staged > *:nth-child(1) { animation-delay: calc(var(--motion-stagger, 140ms) * 0); }
+.motion-staged > *:nth-child(2) { animation-delay: calc(var(--motion-stagger, 140ms) * 1); }
+.motion-staged > *:nth-child(3) { animation-delay: calc(var(--motion-stagger, 140ms) * 2); }
+.motion-staged > *:nth-child(4) { animation-delay: calc(var(--motion-stagger, 140ms) * 3); }
 
 @keyframes motionStageIn {
-  from { opacity: 0; transform: translateY(10px); }
+  from { opacity: 0; transform: translateY(14px); }
   to { opacity: 1; transform: none; }
 }
 
@@ -2726,31 +2726,31 @@
 }
 
 ::view-transition-old(journey-card) {
-  animation: motionCardOut 280ms var(--motion-ease-soft, ease) both;
+  animation: motionCardOut 320ms var(--motion-ease-soft, ease) both;
 }
 
 ::view-transition-new(journey-card) {
-  animation: motionCardIn 420ms var(--motion-ease-out, ease) both;
+  animation: motionCardIn 560ms var(--motion-ease-out, ease) both;
 }
 
 @keyframes motionCardOut {
-  to { opacity: 0; transform: scale(0.96); }
+  to { opacity: 0; transform: scale(0.93); }
 }
 
 @keyframes motionCardIn {
-  from { opacity: 0.35; transform: scale(0.97); }
+  from { opacity: 0.3; transform: scale(0.94); }
 }
 
-/* ML-09 Geographic Cluster Bloom: active journey stops pulse once. */
+/* ML-09 Geographic Cluster Bloom: active journey stops pulse twice. */
 .particle-earth-route__point-ring {
   transform-box: fill-box;
   transform-origin: center;
-  animation: motionClusterPulse var(--motion-pulse, 1800ms) var(--motion-ease-out, ease) both;
+  animation: motionClusterPulse var(--motion-pulse, 1900ms) var(--motion-ease-out, ease) 2 both;
 }
 
 @keyframes motionClusterPulse {
-  0% { transform: scale(1); opacity: 0.5; }
-  100% { transform: scale(3.4); opacity: 0; }
+  0% { transform: scale(1); opacity: 0.55; }
+  100% { transform: scale(3.8); opacity: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {
