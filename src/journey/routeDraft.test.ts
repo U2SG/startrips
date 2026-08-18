@@ -4,6 +4,7 @@ import {
   moveRoutePoint,
   removeRoutePoint,
   routeDraftToInput,
+  suggestPointLabel,
   toggleRouteStop,
   updateRoutePoint,
   type RouteDraftPoint,
@@ -52,5 +53,16 @@ describe("route draft operations", () => {
     const points = [beijing, ulanBator];
     expect(moveRoutePoint(points, "beijing", -1)).toEqual(points);
     expect(moveRoutePoint(points, "ulan-bator", 1)).toEqual(points);
+  });
+
+  it("fills only an empty point label with a reverse-geocoded suggestion", () => {
+    const unnamed: RouteDraftPoint = { ...ulanBator, label: "" };
+    const named = suggestPointLabel([unnamed, beijing], "ulan-bator", "  Shenzhen ");
+    expect(named[0].label).toBe("Shenzhen");
+    expect(named[1].label).toBe("Beijing");
+
+    expect(suggestPointLabel([beijing], "beijing", "Tokyo")[0].label).toBe("Beijing");
+    expect(suggestPointLabel([unnamed], "missing", "Tokyo")[0].label).toBe("");
+    expect(suggestPointLabel([unnamed], "ulan-bator", "   ")[0].label).toBe("");
   });
 });

@@ -21,6 +21,20 @@ export function updateRoutePoint(
   );
 }
 
+export function suggestPointLabel(
+  points: readonly RouteDraftPoint[],
+  draftId: string,
+  label: string,
+): RouteDraftPoint[] {
+  const suggestion = label.trim();
+  if (!suggestion) return [...points];
+  return points.map((point) =>
+    point.draftId === draftId && !point.label.trim()
+      ? { ...point, label: suggestion }
+      : point
+  );
+}
+
 export function moveRoutePoint(
   points: readonly RouteDraftPoint[],
   draftId: string,

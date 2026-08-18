@@ -18,7 +18,12 @@ import {
   IconX,
 } from "@tabler/icons-react";
 import { uploadMediaInParts } from "../api/multipartUpload";
-import { createJourney, searchLocations, updateJourney } from "./journeyApi";
+import {
+  createJourney,
+  reverseGeocode,
+  searchLocations,
+  updateJourney,
+} from "./journeyApi";
 import {
   MAX_JOURNEY_FILES,
   validateJourneyFiles,
@@ -29,6 +34,7 @@ import {
   moveRoutePoint,
   removeRoutePoint,
   routeDraftToInput,
+  suggestPointLabel,
   toggleRouteStop,
   updateRoutePoint,
   type RouteDraftPoint,
@@ -293,6 +299,9 @@ export function JourneyComposer({
   const [searchAttribution, setSearchAttribution] = useState<
     LocationSearchResponse["attribution"]
   >(null);
+  const [reverseAttribution, setReverseAttribution] = useState<
+    LocationSearchResponse["attribution"]
+  >(null);
   const [searchPending, setSearchPending] = useState(false);
   const [title, setTitle] = useState(journey?.title ?? "");
   const [startedOn, setStartedOn] = useState(
@@ -414,17 +423,37 @@ export function JourneyComposer({
   function requestGlobePoint() {
     if (!onGlobePickRequest) return;
     setGlobePicking(true);
+    setReverseAttribution(null);
     setMessage("请在地球上点击一个位置。");
     onGlobePickRequest((point) => {
       setGlobePicking(false);
-      addPoint(toDraftPoint(
+      const draftPoint = toDraftPoint(
         point.latitude,
         point.longitude,
         "",
         routePoints.length === 0,
-      ));
-      setMessage("已从地球添加地点；首个地点会默认标记为停留，可继续补充精确名称。");
+      );
+      addPoint(draftPoint);
+      setMessage("已从地球添加地点；正在识别坐标对应的名称…");
+      void suggestPlaceName(draftPoint);
     });
+  }
+
+  async function suggestPlaceName(point: RouteDraftPoint) {
+    try {
+      const response = await reverseGeocode(point.latitude, point.longitude);
+      const label = response.result?.label;
+      if (label) {
+        setRoutePoints((current) => suggestPointLabel(current, point.draftId, label));
+        setMessage(`已根据坐标识别为「${label}」，可继续修改。`);
+      } else {
+        setMessage("已从地球添加地点，未识别到对应名称；可手动补充。");
+      }
+      if (response.attribution) setReverseAttribution(response.attribution);
+    } catch {
+      // Reverse lookup is optional; the picked point stays without a name.
+      setMessage("已从地球添加地点；坐标识别暂不可用，可手动补充名称。");
+    }
   }
 
   function cancelGlobePoint() {
@@ -661,6 +690,11 @@ export function JourneyComposer({
                   </>
                 ) : null}
                 {onGlobePickRequest ? <button className="journey-globe-pick-button" type="button" onClick={requestGlobePoint}><IconMapPin size={17} stroke={1.35} aria-hidden="true" /><span><strong>直接在地球上取点</strong><small>适合在路上、海上或没有准确名称的位置</small></span></button> : null}
+                {reverseAttribution ? (
+                  <a className="journey-location-attribution" href={reverseAttribution.url} target="_blank" rel="noreferrer">
+                    地点数据 {reverseAttribution.label}
+                  </a>
+                ) : null}
               </div>
 
               <ol className="journey-route-draft" aria-label="已添加的地点">
