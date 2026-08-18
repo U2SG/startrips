@@ -26,7 +26,7 @@ import {
 } from "three";
 import { archiveRecords } from "../data/archiveRecords";
 import type { GlobeMode } from "../experience/types";
-import { loadCityTiers, type CityPoint } from "./cityLabels";
+import { loadCityTiers, selectCityCandidates, type CityPoint } from "./cityLabels";
 import type { JourneyRoute } from "../journey/types";
 import {
   buildArtworkPointPositions,
@@ -50,7 +50,9 @@ export const MAX_RENDERED_ROUTE_POINTS = 512;
 export const MAX_RENDERED_ROUTE_LINE_VERTICES = 8192;
 export const MAX_RENDERED_ROUTE_LABELS = 6;
 export const MAX_RENDERED_MOBILE_ROUTE_LABELS = 3;
-export const CITY_LABEL_BUDGET = 44;
+export const CITY_LABEL_BUDGET = 56;
+/** How many coarse-tier candidates may be projected per frame. */
+export const CITY_LABEL_COARSE_CANDIDATES = 44;
 export const MAX_RENDERED_COASTLINE_VERTICES = 20_000;
 export const GLOBE_RENDER_ORDER = {
   coastline: 1,
@@ -1290,9 +1292,21 @@ export function ParticleEarthScene({
             entry.element.style.display = "none";
           }
         }
-        const cities = tier === "coarse"
-          ? cityTierData.coarse.slice(0, CITY_LABEL_BUDGET)
-          : cityTierData.fine;
+        // Zooming in tightens the facing window: at globe scale 1 every front
+        // hemisphere city may compete, at max zoom only cities near the view
+        // center survive the coarse filter. Candidates are ordered by how
+        // directly they face the camera, so zooming reveals nearby cities
+        // instead of always the world's largest ones.
+        const facingThreshold = Math.min(
+          0.8,
+          0.3 + (globe.scale.x - 1) * 0.35,
+        );
+        const cities = selectCityCandidates(
+          tier === "coarse" ? cityTierData.coarse : cityTierData.fine,
+          [routeCameraPosition.x, routeCameraPosition.y, routeCameraPosition.z],
+          facingThreshold,
+          tier === "coarse" ? CITY_LABEL_COARSE_CANDIDATES : CITY_LABEL_BUDGET,
+        );
         let visibleCityCount = 0;
         for (let index = 0; index < cities.length; index += 1) {
           if (visibleCityCount >= CITY_LABEL_BUDGET) break;
