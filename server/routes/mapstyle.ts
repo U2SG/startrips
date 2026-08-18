@@ -131,6 +131,11 @@ mapStyleRoutes.get("/", async (context) => {
   }
 
   const url = new URL(`${OPENFREEMAP_ORIGIN}/${path}`);
+  // The upstream fetch must not share the browser's abort signal: MapLibre
+  // cancels and retries tile requests aggressively, and a cancelled upstream
+  // would never populate the cache, turning retries into a dead loop.
+  const controller = new AbortController();
+  const timeout = globalThis.setTimeout(() => controller.abort(), 20_000);
   let response: Response;
   try {
     response = await fetch(url, {
@@ -138,13 +143,15 @@ mapStyleRoutes.get("/", async (context) => {
         Accept: "application/json, application/x-protobuf, image/*, */*",
         "User-Agent": "Startrips/1.0 (map proxy)",
       },
-      signal: context.req.raw.signal,
+      signal: controller.signal,
     });
   } catch {
     return context.json(
       { error: "MAP_STYLE_UNAVAILABLE", message: "Map style provider request failed" },
       502,
     );
+  } finally {
+    globalThis.clearTimeout(timeout);
   }
   if (!response.ok) {
     return context.json(
@@ -197,6 +204,8 @@ mapStyleRoutes.get("/sprite/*", async (context) => {
   }
 
   const url = new URL(`${OPENFREEMAP_ORIGIN}/${rest}`);
+  const controller = new AbortController();
+  const timeout = globalThis.setTimeout(() => controller.abort(), 20_000);
   let response: Response;
   try {
     response = await fetch(url, {
@@ -204,13 +213,15 @@ mapStyleRoutes.get("/sprite/*", async (context) => {
         Accept: "application/json, image/*",
         "User-Agent": "Startrips/1.0 (map proxy)",
       },
-      signal: context.req.raw.signal,
+      signal: controller.signal,
     });
   } catch {
     return context.json(
       { error: "MAP_STYLE_UNAVAILABLE", message: "Map style provider request failed" },
       502,
     );
+  } finally {
+    globalThis.clearTimeout(timeout);
   }
   if (!response.ok) {
     return context.json(
