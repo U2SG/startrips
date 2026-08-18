@@ -1888,16 +1888,18 @@ export function ParticleEarthScene({
   }, [controllerRef, mode]);
 
   useEffect(() => {
+    if (!ready) return;
     controllerRef.current?.setFocusPoint(focusPoint);
-  }, [controllerRef, focusPoint]);
+  }, [controllerRef, focusPoint, ready]);
 
   useEffect(() => {
     controllerRef.current?.setFocusColor(focusColor);
   }, [controllerRef, focusColor]);
 
   useEffect(() => {
+    if (!ready) return;
     controllerRef.current?.setJourneyRoutes(journeyRoutes, activeJourneyRouteId);
-  }, [activeJourneyRouteId, controllerRef, journeyRoutes]);
+  }, [activeJourneyRouteId, controllerRef, journeyRoutes, ready]);
 
   return (
     <div
