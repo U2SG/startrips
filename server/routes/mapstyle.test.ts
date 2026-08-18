@@ -42,7 +42,9 @@ describe("rewriteOpenFreemapUrls", () => {
     expect(rewritten).toContain(
       "https://startrips.example/api/mapstyle?path=planet",
     );
-    expect(rewritten).toContain("https://tiles.openfreemap.org/sprites/ofm_f384/ofm");
+    expect(rewritten).toContain(
+      "https://startrips.example/api/mapstyle/sprite/sprites/ofm_f384/ofm",
+    );
     expect(rewritten).not.toContain("startrips.example/api/mapstyle?path=sprites");
   });
 

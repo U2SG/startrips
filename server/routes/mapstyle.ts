@@ -28,6 +28,12 @@ function proxyUrlFor(path: string, origin: string): string {
     .replace(/%7D/g, "}")}`;
 }
 
+// MapLibre appends .json/.png/@2x.png to the sprite URL, so sprites need a
+// path-style endpoint instead of a query parameter.
+function spriteProxyUrlFor(path: string, origin: string): string {
+  return `${origin}/api/mapstyle/sprite/${path}`;
+}
+
 export function rewriteOpenFreemapUrls(body: string, origin: string): string {
   const rewrite = (value: string) =>
     value.replace(URL_PATTERN, (_match, path: string) => proxyUrlFor(path, origin));
@@ -35,13 +41,15 @@ export function rewriteOpenFreemapUrls(body: string, origin: string): string {
   try {
     const style = JSON.parse(body) as {
       glyphs?: unknown;
+      sprite?: unknown;
       tiles?: unknown;
       sources?: Record<string, { url?: unknown; tiles?: unknown }>;
     };
     if (typeof style.glyphs === "string") style.glyphs = rewrite(style.glyphs);
-    // The sprite URL is intentionally left direct: MapLibre appends
-    // .json/.png/@2x.png suffixes that a query-style proxy URL cannot serve,
-    // and the sprite files are small and browser-cacheable.
+    if (typeof style.sprite === "string" && style.sprite.startsWith(OPENFREEMAP_ORIGIN)) {
+      const path = style.sprite.slice(OPENFREEMAP_ORIGIN.length + 1);
+      style.sprite = spriteProxyUrlFor(path, origin);
+    }
     if (Array.isArray(style.tiles)) {
       style.tiles = style.tiles.map((tile) =>
         typeof tile === "string" ? rewrite(tile) : tile);
@@ -161,7 +169,61 @@ mapStyleRoutes.get("/", async (context) => {
   return context.body(body, 200, {
     "content-type": contentType,
     "cache-control": `public, max-age=${Math.round(TILE_CACHE_TTL_MS / 1000)}`,
+    "access-control-allow-origin": "*",
+  });
+});
+
+mapStyleRoutes.get("/sprite/*", async (context) => {
+  const rawPath = new URL(context.req.raw.url).pathname;
+  const rest = rawPath.replace(/^\/api\/mapstyle\/sprite\//, "");
+  if (
+    !rest.startsWith("sprites/")
+    || rest.includes("..")
+    || rest.length > 200
+  ) {
+    return context.json({ error: "INVALID_MAP_PATH" }, 400);
+  }
+
+  const ttlMs = TILE_CACHE_TTL_MS;
+  const cached = await readCached(`sprite/${rest}`, ttlMs);
+  if (cached) {
+    return context.body(cached, 200, {
+      "content-type": rest.endsWith(".json")
+        ? "application/json; charset=utf-8"
+        : "image/png",
+      "cache-control": `public, max-age=${Math.round(ttlMs / 1000)}`,
       "access-control-allow-origin": "*",
+    });
+  }
+
+  const url = new URL(`${OPENFREEMAP_ORIGIN}/${rest}`);
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      headers: {
+        Accept: "application/json, image/*",
+        "User-Agent": "Startrips/1.0 (map proxy)",
+      },
+      signal: context.req.raw.signal,
+    });
+  } catch {
+    return context.json(
+      { error: "MAP_STYLE_UNAVAILABLE", message: "Map style provider request failed" },
+      502,
+    );
+  }
+  if (!response.ok) {
+    return context.json(
+      { error: "MAP_STYLE_UNAVAILABLE", message: `Map style provider returned ${response.status}` },
+      502,
+    );
+  }
+  const spriteBody = Buffer.from(await response.arrayBuffer());
+  await writeCached(`sprite/${rest}`, spriteBody);
+  return context.body(spriteBody, 200, {
+    "content-type": response.headers.get("content-type") ?? "application/octet-stream",
+    "cache-control": `public, max-age=${Math.round(ttlMs / 1000)}`,
+    "access-control-allow-origin": "*",
   });
 });
 
