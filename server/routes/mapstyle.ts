@@ -29,7 +29,8 @@ export function isAllowedOpenFreemapPath(path: string): boolean {
   if (!path || path.length > 200 || path.includes("..") || path.includes("//")) {
     return false;
   }
-  return path === "planet"\n    || ALLOWED_PATH_PREFIXES.some((prefix) => path.startsWith(prefix));
+  return path === "planet"
+    || ALLOWED_PATH_PREFIXES.some((prefix) => path.startsWith(prefix));
 }
 
 function cacheKeyFor(path: string): string {
