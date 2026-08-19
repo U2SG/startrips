@@ -1,7 +1,7 @@
 import { chromium } from "playwright-core";
 
 const ORIGIN = "http://127.0.0.1:5173";
-const STYLES = ["default", "stream", "ribbon", "neon"];
+const STYLES = ["default", "stream", "ribbon", "neon", "strands", "laser"];
 const browser = await chromium.launch({ channel: "msedge", headless: true });
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
 const issues = [];
@@ -46,11 +46,26 @@ const states = await page.evaluate(() => ({
   muted: document.querySelectorAll(".particle-earth-route.is-muted").length,
   idle: document.querySelectorAll(".particle-earth-route.is-idle").length,
 }));
-snap("ACTIVE (rhine selected, stream style)", states);
+snap("ACTIVE (rhine selected, laser style)", states);
 await page.screenshot({ path: "D:\\startrips\\qa-style-active.png" });
 
-// Drag the globe while the stream style is live to exercise the per-frame
-// particle update path, then confirm the scene is still healthy.
+// Ambience toggle: layer appears, persists via dataset, and blobs animate.
+await page.click("[data-ambience-toggle]");
+await page.waitForTimeout(400);
+snap("AMBIENCE ON", await page.evaluate(() => ({
+  ambience: document.querySelector(".living-atlas-globe")?.dataset.ambience ?? null,
+  blobs: document.querySelectorAll(".living-atlas-ambience__blob").length,
+})));
+await page.screenshot({ path: "D:\\startrips\\qa-style-ambience.png" });
+await page.click("[data-ambience-toggle]");
+await page.waitForTimeout(300);
+snap("AMBIENCE OFF", await page.evaluate(() => ({
+  ambience: document.querySelector(".living-atlas-globe")?.dataset.ambience ?? null,
+  blobs: document.querySelectorAll(".living-atlas-ambience__blob").length,
+})));
+
+// Drag the globe while the laser style is live to exercise the per-frame
+// projection/animation paths, then confirm the scene is still healthy.
 const canvas = page.locator(".living-atlas-globe canvas").first();
 const box = await canvas.boundingBox();
 const cx = box.x + box.width / 2;
@@ -60,7 +75,7 @@ await page.mouse.down();
 await page.mouse.move(cx + 160, cy - 40, { steps: 8 });
 await page.mouse.up();
 await page.waitForTimeout(800);
-snap("AFTER DRAG (stream style)", {
+snap("AFTER DRAG (laser style)", {
   sceneAlive: await page.evaluate(() => Boolean(
     document.querySelector(".particle-earth-scene canvas"),
   )),

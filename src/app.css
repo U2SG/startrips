@@ -205,6 +205,93 @@ button {
   opacity: 0.24;
 }
 
+/* Strands style: two interlaced thread layers flowing along the route at
+   different speeds and dash rhythms, over a soft glow and gradient core. */
+.particle-earth-route__strand-a,
+.particle-earth-route__strand-b {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0;
+  vector-effect: non-scaling-stroke;
+}
+
+.particle-earth-route.is-style-strands .particle-earth-route__glow {
+  opacity: 0.22;
+  stroke-width: 6;
+}
+
+.particle-earth-route.is-style-strands .particle-earth-route__core {
+  opacity: 0.5;
+  stroke-width: 1.6;
+}
+
+.particle-earth-route.is-style-strands .particle-earth-route__strand-a {
+  opacity: 0.8;
+  stroke-width: 2.2;
+  stroke-dasharray: 16 44;
+  animation: motionStrandA 1.7s linear infinite;
+}
+
+.particle-earth-route.is-style-strands .particle-earth-route__strand-b {
+  opacity: 0.45;
+  stroke-width: 1.5;
+  stroke-dasharray: 10 58;
+  animation: motionStrandB 2.6s linear infinite;
+}
+
+.particle-earth-route.is-style-strands.is-muted .particle-earth-route__glow {
+  opacity: 0.06;
+}
+
+.particle-earth-route.is-style-strands.is-muted .particle-earth-route__core {
+  opacity: 0.22;
+}
+
+.particle-earth-route.is-style-strands.is-muted .particle-earth-route__strand-a {
+  opacity: 0.3;
+}
+
+.particle-earth-route.is-style-strands.is-muted .particle-earth-route__strand-b {
+  opacity: 0.18;
+}
+
+/* Laser style: a bright comet head races along the route over a wide bloom
+   and gradient core; the active journey's pulse gets faster too. */
+.particle-earth-route.is-style-laser .particle-earth-route__glow {
+  opacity: 0.5;
+  stroke-width: 9;
+}
+
+.particle-earth-route.is-style-laser .particle-earth-route__core {
+  opacity: 1;
+  stroke-width: 2.4;
+}
+
+.particle-earth-route.is-style-laser .particle-earth-route__energy {
+  opacity: 1;
+  stroke-width: 3.4;
+  stroke-dasharray: 26 214;
+  animation: motionLaser 1.15s linear infinite;
+}
+
+.particle-earth-route.is-style-laser .particle-earth-route__flow {
+  stroke-dasharray: 6 120;
+  animation-duration: 1.8s;
+}
+
+.particle-earth-route.is-style-laser.is-muted .particle-earth-route__glow {
+  opacity: 0.12;
+}
+
+.particle-earth-route.is-style-laser.is-muted .particle-earth-route__core {
+  opacity: 0.32;
+}
+
+.particle-earth-route.is-style-laser.is-muted .particle-earth-route__energy {
+  opacity: 0.28;
+}
+
 .particle-earth-route__leader {
   fill: none;
   stroke: currentColor;

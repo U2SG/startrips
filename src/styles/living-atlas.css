@@ -272,22 +272,25 @@
   display: flex;
   align-items: center;
   gap: 2px;
+  max-width: min(460px, calc(100vw - 320px));
   padding: 0 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
   border: 1px solid rgba(118, 198, 188, 0.24);
   background: rgba(2, 11, 12, 0.82);
   backdrop-filter: blur(12px);
 }
 
 .living-atlas-globe__route-style button {
-  min-width: 44px;
+  min-width: 38px;
   min-height: 34px;
-  padding: 0 8px;
+  padding: 0 7px;
   border: 1px solid transparent;
   background: transparent;
   color: var(--atlas-muted);
   cursor: pointer;
   font: 500 8px/1 ui-monospace, "SFMono-Regular", Consolas, monospace;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.1em;
 }
 
 .living-atlas-globe__route-style button:hover,
@@ -299,6 +302,90 @@
   border-color: rgba(200, 255, 61, 0.4);
   background: rgba(200, 255, 61, 0.08);
   color: var(--atlas-acid);
+}
+
+.living-atlas-globe__ambience {
+  min-height: 44px;
+  padding: 0 13px;
+  border: 1px solid rgba(118, 198, 188, 0.24);
+  background: rgba(2, 11, 12, 0.82);
+  backdrop-filter: blur(12px);
+  color: var(--atlas-muted);
+  cursor: pointer;
+  font: 500 8px/1 ui-monospace, "SFMono-Regular", Consolas, monospace;
+  letter-spacing: 0.12em;
+}
+
+.living-atlas-globe__ambience:hover,
+.living-atlas-globe__ambience:focus-visible {
+  color: var(--atlas-text);
+}
+
+.living-atlas-globe__ambience.is-active {
+  border-color: rgba(200, 255, 61, 0.4);
+  background: rgba(200, 255, 61, 0.08);
+  color: var(--atlas-acid);
+}
+
+/* ML-11 Ambience: a soft aurora field behind the transparent particle
+   globe. Blobs are GPU-composited transforms, never layout. */
+.living-atlas-ambience {
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.living-atlas-ambience__blob {
+  position: absolute;
+  width: 46vmax;
+  height: 46vmax;
+  border-radius: 50%;
+  filter: blur(90px);
+  opacity: 0.34;
+  will-change: transform;
+}
+
+.living-atlas-ambience__blob-a {
+  top: -18vmax;
+  left: -12vmax;
+  background:
+    radial-gradient(circle at 32% 38%, rgba(116, 231, 208, 0.5), transparent 62%),
+    radial-gradient(circle at 68% 60%, rgba(98, 86, 239, 0.34), transparent 60%);
+  animation: ambienceDriftA 26s ease-in-out infinite alternate;
+}
+
+.living-atlas-ambience__blob-b {
+  right: -16vmax;
+  bottom: -14vmax;
+  background:
+    radial-gradient(circle at 40% 34%, rgba(200, 255, 61, 0.26), transparent 58%),
+    radial-gradient(circle at 62% 66%, rgba(116, 231, 208, 0.32), transparent 60%);
+  animation: ambienceDriftB 32s ease-in-out infinite alternate;
+}
+
+.living-atlas-ambience__blob-c {
+  top: 32%;
+  left: 26%;
+  width: 30vmax;
+  height: 30vmax;
+  background:
+    radial-gradient(circle at 50% 50%, rgba(98, 86, 239, 0.22), transparent 60%),
+    radial-gradient(circle at 50% 50%, rgba(232, 168, 124, 0.14), transparent 66%);
+  animation: ambienceDriftC 22s ease-in-out infinite alternate;
+}
+
+@keyframes ambienceDriftA {
+  to { transform: translate3d(9vmax, 5vmax, 0) scale(1.12); }
+}
+
+@keyframes ambienceDriftB {
+  to { transform: translate3d(-7vmax, -6vmax, 0) scale(1.08); }
+}
+
+@keyframes ambienceDriftC {
+  to { transform: translate3d(5vmax, -4vmax, 0) scale(0.9); }
 }
 
 .living-atlas-globe__pick {
@@ -546,6 +633,43 @@
   width: 2px;
   height: 64px;
   background: var(--journey-color);
+}
+
+/* ML-12 Border Glow: a soft arc of journey-colored light rotates around the
+   active card's border. Without @property support the ring stays static,
+   which still reads as a subtle glow. */
+.living-atlas__active::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  padding: 1px;
+  background: conic-gradient(
+    from var(--atlas-border-angle, 0deg),
+    transparent 0deg,
+    transparent 210deg,
+    var(--journey-color) 300deg,
+    transparent 360deg
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  pointer-events: none;
+  animation: atlasBorderSpin 6s linear infinite;
+}
+
+@property --atlas-border-angle {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
+}
+
+@keyframes atlasBorderSpin {
+  to { --atlas-border-angle: 360deg; }
 }
 
 .living-atlas__active > p {
@@ -2865,6 +2989,20 @@
   to { stroke-dashoffset: -104; }
 }
 
+/* ML-11 Strands style: interlaced threads flow at different speeds. */
+@keyframes motionStrandA {
+  to { stroke-dashoffset: -60; }
+}
+
+@keyframes motionStrandB {
+  to { stroke-dashoffset: -68; }
+}
+
+/* ML-11 Laser style: a bright comet head races along the route. */
+@keyframes motionLaser {
+  to { stroke-dashoffset: -240; }
+}
+
 /* Origin (hollow) and destination (solid) markers on active routes. */
 .particle-earth-route__point--origin {
   fill: transparent;
@@ -2904,6 +3042,21 @@
 
   .particle-earth-route.is-style-neon .particle-earth-route__energy {
     opacity: 0.4;
+  }
+
+  .particle-earth-route__strand-a,
+  .particle-earth-route__strand-b,
+  .particle-earth-route.is-style-laser .particle-earth-route__energy,
+  .particle-earth-route.is-style-laser .particle-earth-route__flow {
+    animation: none;
+  }
+
+  .living-atlas-ambience__blob {
+    animation: none;
+  }
+
+  .living-atlas__active::after {
+    animation: none;
   }
 
   ::view-transition-old(journey-card),

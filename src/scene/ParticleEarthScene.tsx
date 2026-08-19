@@ -124,13 +124,15 @@ export function getJourneyRouteVisualState(
   return routeId === activeRouteId ? "is-active" : "is-muted";
 }
 
-export type JourneyRouteStyle = "default" | "stream" | "ribbon" | "neon";
+export type JourneyRouteStyle = "default" | "stream" | "ribbon" | "neon" | "strands" | "laser";
 
 export const JOURNEY_ROUTE_STYLES: readonly JourneyRouteStyle[] = [
   "default",
   "stream",
   "ribbon",
   "neon",
+  "strands",
+  "laser",
 ];
 
 export function selectRouteLabelPointIndexes(
@@ -869,6 +871,7 @@ export function ParticleEarthScene({
       corePath: SVGPathElement;
       flowPath: SVGPathElement;
       energyPath: SVGPathElement;
+      strandPaths: [SVGPathElement, SVGPathElement];
       fadeGradient: SVGLinearGradientElement;
       points: Array<{
         element: SVGCircleElement;
@@ -986,6 +989,20 @@ export function ParticleEarthScene({
           "path",
         );
         energyPath.classList.add("particle-earth-route__energy");
+        // Strands style: two interlaced thread layers that flow along the
+        // route at different speeds and dash rhythms.
+        const strandPaths: [SVGPathElement, SVGPathElement] = [
+          document.createElementNS("http://www.w3.org/2000/svg", "path"),
+          document.createElementNS("http://www.w3.org/2000/svg", "path"),
+        ];
+        strandPaths[0].classList.add("particle-earth-route__strand-a");
+        strandPaths[1].classList.add("particle-earth-route__strand-b");
+        strandPaths.forEach((strand) => {
+          strand.setAttribute(
+            "stroke",
+            `url(#route-fade-${sceneToken}-${routeIndex})`,
+          );
+        });
         // Ribbon/neon styles fade the stroke toward the destination; the
         // gradient is a per-route user-space gradient whose endpoints follow
         // the projected origin and destination each projection pass.
@@ -1011,7 +1028,7 @@ export function ParticleEarthScene({
           fadeGradient.appendChild(stop);
         }
         routeDefs.appendChild(fadeGradient);
-        group.append(glowPath, corePath, energyPath, flowPath);
+        group.append(glowPath, corePath, ...strandPaths, energyPath, flowPath);
         const vectorPoints: RouteVectorEntry["points"] = [];
         const routeLabelIndexes = route.id === latestActiveJourneyRouteId.current
           ? selectRouteLabelPointIndexes(route.points)
@@ -1123,6 +1140,7 @@ export function ParticleEarthScene({
           corePath,
           flowPath,
           energyPath,
+          strandPaths,
           fadeGradient,
           points: vectorPoints,
         });
@@ -1317,7 +1335,7 @@ export function ParticleEarthScene({
         JOURNEY_ROUTE_STYLES.forEach((style) => {
           group.classList.toggle(`is-style-${style}`, style === routeStyle);
         });
-        if (routeStyle === "ribbon" || routeStyle === "neon") {
+        if (routeStyle === "ribbon" || routeStyle === "neon" || routeStyle === "strands" || routeStyle === "laser") {
           entry.corePath.setAttribute("stroke", `url(#${entry.fadeGradient.id})`);
         } else {
           entry.corePath.removeAttribute("stroke");
@@ -1442,6 +1460,8 @@ export function ParticleEarthScene({
         entry.corePath.setAttribute("d", path);
         entry.flowPath.setAttribute("d", path);
         entry.energyPath.setAttribute("d", path);
+        entry.strandPaths[0].setAttribute("d", path);
+        entry.strandPaths[1].setAttribute("d", path);
         const labelCandidates: Array<{
           label: RouteVectorLabel;
           x: number;

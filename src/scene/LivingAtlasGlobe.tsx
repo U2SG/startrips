@@ -9,12 +9,15 @@ import {
 } from "./ParticleEarthScene";
 
 const ROUTE_STYLE_STORAGE_KEY = "startrips.routeStyle";
+const AMBIENCE_STORAGE_KEY = "startrips.ambience";
 
 const ROUTE_STYLE_LABELS: Record<JourneyRouteStyle, string> = {
   default: "现有",
   stream: "星光流",
   ribbon: "柔光带",
   neon: "霓虹",
+  strands: "丝线流",
+  laser: "激光束",
 };
 
 function preferredRouteStyle(): JourneyRouteStyle {
@@ -30,6 +33,14 @@ function preferredRouteStyle(): JourneyRouteStyle {
     // Storage can be unavailable (private mode, sandboxed iframe).
   }
   return "default";
+}
+
+function preferredAmbience(): boolean {
+  try {
+    return window.localStorage.getItem(AMBIENCE_STORAGE_KEY) === "on";
+  } catch {
+    return false;
+  }
 }
 
 const loadDetailedEarthMap = () => import("./DetailedEarthMap");
@@ -68,6 +79,7 @@ export function LivingAtlasGlobe({
   const [transitionError, setTransitionError] = useState<string | null>(null);
   const [detailLanguage, setDetailLanguage] = useState<DetailedEarthLanguage>("zh");
   const [routeStyle, setRouteStyle] = useState<JourneyRouteStyle>(preferredRouteStyle);
+  const [ambience, setAmbience] = useState(preferredAmbience);
 
   useEffect(() => {
     try {
@@ -76,6 +88,14 @@ export function LivingAtlasGlobe({
       // Storage can be unavailable; the choice just won't persist.
     }
   }, [routeStyle]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(AMBIENCE_STORAGE_KEY, ambience ? "on" : "off");
+    } catch {
+      // Storage can be unavailable; the choice just won't persist.
+    }
+  }, [ambience]);
 
   useEffect(() => {
     const preloadTimer = window.setTimeout(() => void loadDetailedEarthMap(), 350);
@@ -130,8 +150,16 @@ export function LivingAtlasGlobe({
       className={`living-atlas-globe${detailMode ? " is-detail" : " is-overview"}${transitionClasses}`}
       data-earth-mode={detailMode ? "detail" : "particle"}
       data-route-style={routeStyle}
+      data-ambience={ambience ? "on" : "off"}
       aria-label={detailMode ? "高精度地球地图" : "粒子艺术地球"}
     >
+      {ambience ? (
+        <div className="living-atlas-ambience" aria-hidden="true">
+          <span className="living-atlas-ambience__blob living-atlas-ambience__blob-a" />
+          <span className="living-atlas-ambience__blob living-atlas-ambience__blob-b" />
+          <span className="living-atlas-ambience__blob living-atlas-ambience__blob-c" />
+        </div>
+      ) : null}
       {showParticle ? (
         <div
           className="living-atlas-globe__layer living-atlas-globe__particle-layer"
@@ -222,6 +250,18 @@ export function LivingAtlasGlobe({
               </button>
             ))}
           </div>
+        ) : null}
+
+        {!detailMode && !transitionTarget ? (
+          <button
+            type="button"
+            className={`living-atlas-globe__ambience${ambience ? " is-active" : ""}`}
+            aria-pressed={ambience}
+            data-ambience-toggle
+            onClick={() => setAmbience((current) => !current)}
+          >
+            氛围
+          </button>
         ) : null}
 
         {detailMode && !transitionTarget ? (

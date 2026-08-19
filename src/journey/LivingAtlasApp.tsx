@@ -10,6 +10,7 @@ import {
 } from "@tabler/icons-react";
 import { useAtlasCapabilities } from "../auth/AuthGateway";
 import { morphJourneyCard } from "../motion/primitives/sharedElement";
+import { ScrambledText } from "../motion/primitives/ScrambledText";
 import { LivingAtlasGlobe } from "../scene/LivingAtlasGlobe";
 import {
   JourneyComposer,
@@ -299,7 +300,7 @@ export function LivingAtlasApp() {
         <aside className={`living-atlas__active${arrivalJourneyId === activeJourney.id ? " is-arriving" : ""}`} style={{ "--journey-color": activeJourney.lightColor } as React.CSSProperties}>
           <p>{activeJourney.startedOn}{activeJourney.endedOn ? ` — ${activeJourney.endedOn}` : ""}</p>
           <IconMapPin className="living-atlas__active-marker" size={18} stroke={1.25} aria-hidden="true" />
-          <h2>{activeJourney.title}</h2>
+          <h2><ScrambledText text={activeJourney.title} /></h2>
           <span>{activeJourney.routePoints.length} 个路线点 · {activeJourney.routePoints.filter((point) => point.isStop).length} 次停靠</span>
           <button type="button" onClick={() => { setStoryRoutePointId(null); setStoryJourneyId(activeJourney.id); }}>打开故事<IconBook2 size={17} stroke={1.3} aria-hidden="true" /></button>
         </aside>
