@@ -5,6 +5,9 @@ export type CityPoint = {
   latitude: number;
   longitude: number;
   population: number;
+  /** Administrative containment rank: 0 national capital, 1 first-level
+   *  capital (province), 2 second-level capital (prefecture), 3 others. */
+  rank: number;
   /** Precomputed unit direction on the globe-local sphere (radius 1). */
   direction: readonly [number, number, number];
 };
@@ -52,6 +55,8 @@ export function parseCityFeatures(
       latitude,
       longitude,
       population: Number.isFinite(population) ? population : 0,
+      // Natural Earth 110m populated places are capitals and major cities.
+      rank: 1,
       direction: [vector.x, vector.y, vector.z],
     });
   }
@@ -69,11 +74,18 @@ export function parseCityList(payload: { cities?: unknown }): CityPoint[] {
   if (!Array.isArray(payload.cities)) return [];
   const cities: CityPoint[] = [];
   for (const raw of payload.cities) {
-    const entry = raw as { n?: unknown; la?: unknown; lo?: unknown; p?: unknown };
+    const entry = raw as {
+      n?: unknown;
+      la?: unknown;
+      lo?: unknown;
+      p?: unknown;
+      r?: unknown;
+    };
     const name = typeof entry.n === "string" ? entry.n.trim() : "";
     const latitude = Number(entry.la);
     const longitude = Number(entry.lo);
     const population = Number(entry.p);
+    const rank = Number(entry.r);
     if (
       !name
       || !Number.isFinite(latitude)
@@ -92,7 +104,8 @@ export function parseCityList(payload: { cities?: unknown }): CityPoint[] {
       name,
       latitude,
       longitude,
-      population: Number.isFinite(population) ? population : 0,
+      population,
+      rank: Number.isFinite(rank) ? Math.max(0, Math.min(3, rank)) : 3,
       direction: [vector.x, vector.y, vector.z],
     });
   }
@@ -106,12 +119,17 @@ export function parseCityList(payload: { cities?: unknown }): CityPoint[] {
  * as the globe zooms in) and then sorted nearest-to-view-center first, with
  * population breaking ties. This is what makes zooming reveal nearby cities
  * instead of always the world's largest ones.
+ *
+ * `maxRank` enforces containment-aware zoom levels: pass 1 to show only
+ * national/provincial capitals, 2 to add prefecture cities, or 3 (or omit)
+ * for every city.
  */
 export function selectCityCandidates(
   cities: readonly CityPoint[],
   facingDirection: readonly [number, number, number],
   facingThreshold: number,
   limit: number,
+  maxRank = 3,
 ): CityPoint[] {
   if (limit <= 0) return [];
   const facingLength = Math.hypot(
@@ -125,6 +143,7 @@ export function selectCityCandidates(
   const directionZ = facingDirection[2] / facingLength;
   const candidates: Array<{ city: CityPoint; facing: number }> = [];
   for (const city of cities) {
+    if (city.rank > maxRank) continue;
     const facing = city.direction[0] * directionX
       + city.direction[1] * directionY
       + city.direction[2] * directionZ;
@@ -138,26 +157,17 @@ export function selectCityCandidates(
   return candidates.slice(0, limit).map((candidate) => candidate.city);
 }
 
-let cityCache: { coarse: CityPoint[]; fine: CityPoint[] } | null = null;
+let cityCache: { cities: CityPoint[] } | null = null;
 
 export async function loadCityTiers(
   fetcher: typeof fetch = fetch,
-): Promise<{ coarse: CityPoint[]; fine: CityPoint[] }> {
+): Promise<{ cities: CityPoint[] }> {
   if (cityCache) return cityCache;
-  const [coarseResponse, fineResponse] = await Promise.all([
-    fetcher("/earth/ne_110m_populated_places.geojson", { cache: "force-cache" }),
-    fetcher("/earth/cities.json", { cache: "force-cache" }),
-  ]);
-  if (!coarseResponse.ok || !fineResponse.ok) {
+  const response = await fetcher("/earth/cities.json", { cache: "force-cache" });
+  if (!response.ok) {
     throw new Error("City label data is unavailable");
   }
-  const [coarsePayload, finePayload] = await Promise.all([
-    coarseResponse.json(),
-    fineResponse.json(),
-  ]);
-  cityCache = {
-    coarse: parseCityFeatures(coarsePayload as { features?: unknown }),
-    fine: parseCityList(finePayload as { cities?: unknown }),
-  };
+  const payload = await response.json();
+  cityCache = { cities: parseCityList(payload as { cities?: unknown }) };
   return cityCache;
 }

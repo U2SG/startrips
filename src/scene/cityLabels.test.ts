@@ -57,30 +57,33 @@ describe("parseCityFeatures", () => {
 });
 
 describe("parseCityList", () => {
-  it("parses the compact GeoNames build with unit directions", () => {
+  it("parses the compact GeoNames build with unit directions and ranks", () => {
     const cities = parseCityList({
       cities: [
-        { n: "Zhengzhou", la: 34.75, lo: 113.63, p: 4672120 },
-        { n: "Small", la: 10, lo: 20, p: 15000 },
+        { n: "Zhengzhou", la: 34.75, lo: 113.63, p: 4672120, r: 1 },
+        { n: "Small", la: 10, lo: 20, p: 15000, r: 3 },
       ],
     });
     expect(cities.map((city) => city.name)).toEqual(["Zhengzhou", "Small"]);
-    expect(cities[0]).toMatchObject({ latitude: 34.75, longitude: 113.63 });
+    expect(cities[0]).toMatchObject({ latitude: 34.75, longitude: 113.63, rank: 1 });
+    expect(cities[1].rank).toBe(3);
     const [x, y, z] = cities[1].direction;
     expect(Math.hypot(x, y, z)).toBeCloseTo(1, 10);
   });
 
-  it("skips unnamed, unlocated, or out-of-range entries", () => {
+  it("clamps invalid ranks and skips unnamed, unlocated, or out-of-range entries", () => {
     const cities = parseCityList({
       cities: [
-        { n: "", la: 1, lo: 1, p: 100 },
-        { n: "No Coords", p: 100 },
-        { n: "Bad Range", la: 91, lo: 200, p: 100 },
-        { n: "No Pop", la: 5, lo: 5 },
-        { n: "Valid", la: 5, lo: 5, p: 50 },
+        { n: "", la: 1, lo: 1, p: 100, r: 1 },
+        { n: "No Coords", p: 100, r: 1 },
+        { n: "Bad Range", la: 91, lo: 200, p: 100, r: 1 },
+        { n: "No Pop", la: 5, lo: 5, r: 1 },
+        { n: "Bad Rank", la: 5, lo: 5, p: 50, r: 99 },
+        { n: "Valid", la: 5, lo: 5, p: 50, r: 2 },
       ],
     });
-    expect(cities.map((city) => city.name)).toEqual(["Valid"]);
+    expect(cities.map((city) => city.name)).toEqual(["Bad Rank", "Valid"]);
+    expect(cities[0].rank).toBe(3);
   });
 });
 
@@ -134,6 +137,32 @@ describe("selectCityCandidates", () => {
     });
     const result = selectCityCandidates(sameSpot, [1, 0, 0], 0.5, 10);
     expect(result.map((city) => city.name)).toEqual(["Big", "Small"]);
+  });
+
+  it("filters by containment rank", () => {
+    const ranked = parseCityList({
+      cities: [
+        { n: "Capital", la: 0, lo: 0, p: 100, r: 0 },
+        { n: "Province", la: 0, lo: 1, p: 90, r: 1 },
+        { n: "Prefecture", la: 0, lo: 2, p: 80, r: 2 },
+        { n: "Town", la: 0, lo: 3, p: 70, r: 3 },
+      ],
+    });
+    const capitals = selectCityCandidates(ranked, [1, 0, 0], 0.5, 10, 1);
+    expect(capitals.map((city) => city.name)).toEqual(["Capital", "Province"]);
+    const prefectures = selectCityCandidates(ranked, [1, 0, 0], 0.5, 10, 2);
+    expect(prefectures.map((city) => city.name)).toEqual([
+      "Capital",
+      "Province",
+      "Prefecture",
+    ]);
+    const all = selectCityCandidates(ranked, [1, 0, 0], 0.5, 10);
+    expect(all.map((city) => city.name)).toEqual([
+      "Capital",
+      "Province",
+      "Prefecture",
+      "Town",
+    ]);
   });
 
   it("normalizes the facing direction and handles a zero vector", () => {

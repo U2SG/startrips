@@ -51,8 +51,6 @@ export const MAX_RENDERED_ROUTE_LINE_VERTICES = 8192;
 export const MAX_RENDERED_ROUTE_LABELS = 6;
 export const MAX_RENDERED_MOBILE_ROUTE_LABELS = 3;
 export const CITY_LABEL_BUDGET = 72;
-/** How many coarse-tier candidates may be projected per frame. */
-export const CITY_LABEL_COARSE_CANDIDATES = 44;
 export const MAX_RENDERED_COASTLINE_VERTICES = 20_000;
 export const GLOBE_RENDER_ORDER = {
   coastline: 1,
@@ -241,6 +239,15 @@ function routeLabelBoxesOverlap(
 
 function routeLabelCharacterWidth(character: string) {
   return /^[\x20-\x7e]$/.test(character) ? 6.5 : 11.5;
+}
+
+/** Approximate rendered width of a city label (8px font, letter-spacing). */
+function estimateCityLabelWidth(label: string) {
+  let width = 0;
+  for (const character of label.trim()) {
+    width += /^[\x20-\x7e]$/.test(character) ? 5.2 : 9;
+  }
+  return Math.max(10, width);
 }
 
 function formatRouteLabel(label: string) {
@@ -1097,11 +1104,11 @@ export function ParticleEarthScene({
       return true;
     };
 
-    // ML-09 city labels: coarse tier (Natural Earth 110m) while the globe is
-    // distant, fine tier (GeoNames cities15000, 34k+ cities) when zoomed in;
-    // both are city-level only and clickable for point picking.
-    let cityTierData: { coarse: CityPoint[]; fine: CityPoint[] } | null = null;
-    let lastCityTier: "coarse" | "fine" | null = null;
+    // ML-09 city labels: GeoNames cities15000 with containment-aware zoom —
+    // capitals/province seats first, prefecture cities next, then counties
+    // and towns; all labels are clickable for point picking.
+    let cityTierData: { cities: CityPoint[] } | null = null;
+    let lastCityTier: "capitals" | "prefectures" | "all" | null = null;
     const cityLabelPool: Array<{
       element: SVGTextElement;
       city: CityPoint | null;
@@ -1292,30 +1299,38 @@ export function ParticleEarthScene({
       host.dataset.journeyRouteLabelSafeBottom = routeLabelSafeArea.bottom.toFixed(1);
 
       if (cityTierData) {
-        const tier: "coarse" | "fine" = globe.scale.x < 1.02
-          ? "coarse"
-          : "fine";
+        // Containment-aware zoom: national/provincial capitals while distant,
+        // add prefecture cities when zoomed in, then every county/town city.
+        const scale = globe.scale.x;
+        const tier: "capitals" | "prefectures" | "all" = scale < 1.3
+          ? "capitals"
+          : scale < 2.1
+            ? "prefectures"
+            : "all";
         if (tier !== lastCityTier) {
           lastCityTier = tier;
           for (const entry of cityLabelPool) {
             entry.element.style.display = "none";
           }
         }
-        // Zooming in tightens the facing window: at globe scale 1 every front
-        // hemisphere city may compete, at max zoom only cities near the view
-        // center survive the coarse filter. Candidates are ordered by how
-        // directly they face the camera, so zooming reveals nearby cities
-        // instead of always the world's largest ones.
+        // Zooming in tightens the facing window; candidates are ordered by
+        // how directly they face the camera, so zooming reveals nearby
+        // cities instead of always the world's largest ones.
         const facingThreshold = Math.min(
           0.92,
-          0.3 + (globe.scale.x - 1) * 0.25,
+          0.3 + (scale - 1) * 0.25,
         );
+        const maxRank = tier === "capitals" ? 1 : tier === "prefectures" ? 2 : 3;
         const cities = selectCityCandidates(
-          tier === "coarse" ? cityTierData.coarse : cityTierData.fine,
+          cityTierData.cities,
           [routeCameraPosition.x, routeCameraPosition.y, routeCameraPosition.z],
           facingThreshold,
-          tier === "coarse" ? CITY_LABEL_COARSE_CANDIDATES : CITY_LABEL_BUDGET,
+          CITY_LABEL_BUDGET,
+          maxRank,
         );
+        // Labels must never overlap each other or route labels: place in
+        // view-center order and skip any label whose box collides.
+        const cityBoxes: ProjectedRouteLabelBox[] = [];
         let visibleCityCount = 0;
         for (let index = 0; index < cities.length; index += 1) {
           if (visibleCityCount >= CITY_LABEL_BUDGET) break;
@@ -1337,9 +1352,26 @@ export function ParticleEarthScene({
             entry.city = null;
             continue;
           }
+          const textX = routeProjectedPoint.x + 6;
+          const textY = routeProjectedPoint.y - 5;
+          const box = {
+            left: textX,
+            top: textY - 9,
+            right: textX + estimateCityLabelWidth(city.name),
+            bottom: textY + 2,
+          };
+          if (
+            cityBoxes.some((candidate) => routeLabelBoxesOverlap(candidate, box, 4))
+            || labelBoxes.some((candidate) => routeLabelBoxesOverlap(candidate, box, 4))
+          ) {
+            entry.element.style.display = "none";
+            entry.city = null;
+            continue;
+          }
+          cityBoxes.push(box);
           entry.element.style.removeProperty("display");
-          entry.element.setAttribute("x", (routeProjectedPoint.x + 6).toFixed(1));
-          entry.element.setAttribute("y", (routeProjectedPoint.y - 5).toFixed(1));
+          entry.element.setAttribute("x", textX.toFixed(1));
+          entry.element.setAttribute("y", textY.toFixed(1));
           entry.element.textContent = city.name;
           entry.city = city;
           visibleCityCount += 1;
