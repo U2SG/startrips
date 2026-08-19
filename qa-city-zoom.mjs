@@ -19,15 +19,13 @@ const probe = () => {
   const dbg = window.__particleEarthDebug?.();
   const host = document.querySelector(".particle-earth-scene");
   return {
-    debug: dbg,
+    zoom: dbg?.zoom, scale: dbg?.scale,
     cityCount: host?.dataset.journeyCityLabelCount ?? null,
     visibleCities: [...document.querySelectorAll(".particle-earth-city")]
       .filter((el) => el.style.display !== "none").map((el) => el.textContent),
   };
 };
-const afterLoad = await page.evaluate(probe);
-console.log("AFTER LOAD:", JSON.stringify({ zoom: afterLoad.debug?.zoom, scale: afterLoad.debug?.scale, count: afterLoad.cityCount, cities: afterLoad.visibleCities.slice(0, 14) }));
-await page.screenshot({ path: "D:\\startrips\\qa-city-default.png" });
+const snap = (s) => console.log(JSON.stringify(s));
 const canvas = page.locator(".living-atlas-globe canvas").first();
 const box = await canvas.boundingBox();
 const cx = box.x + box.width / 2;
@@ -37,15 +35,24 @@ await page.mouse.down();
 await page.mouse.move(cx + 20, cy, { steps: 3 });
 await page.mouse.up();
 await page.waitForTimeout(400);
-for (let index = 0; index < 12; index += 1) {
+snap({ stage: "DEFAULT (capitals)", ...await page.evaluate(probe) });
+await page.screenshot({ path: "D:\\startrips\\qa-city-capitals.png" });
+for (let index = 0; index < 6; index += 1) {
+  await page.mouse.move(cx, cy);
+  await page.mouse.wheel(0, -200);
+  await page.waitForTimeout(250);
+}
+await page.waitForTimeout(2500);
+snap({ stage: "MID (prefectures)", ...await page.evaluate(probe) });
+await page.screenshot({ path: "D:\\startrips\\qa-city-prefectures.png" });
+for (let index = 0; index < 8; index += 1) {
   await page.mouse.move(cx, cy);
   await page.mouse.wheel(0, -500);
-  await page.waitForTimeout(300);
+  await page.waitForTimeout(250);
 }
 await page.waitForTimeout(3000);
-const maxZoom = await page.evaluate(probe);
-console.log("MAX ZOOM:", JSON.stringify({ zoom: maxZoom.debug?.zoom, scale: maxZoom.debug?.scale, count: maxZoom.cityCount, cities: maxZoom.visibleCities.slice(0, 24) }));
-await page.screenshot({ path: "D:\\startrips\\qa-city-maxzoom.png" });
+snap({ stage: "MAX (all)", ...await page.evaluate(probe) });
+await page.screenshot({ path: "D:\\startrips\\qa-city-all.png" });
 console.log("=== ISSUES ===");
 issues.slice(0, 8).forEach((line) => console.log(line));
 if (issues.length === 0) console.log("(none)");

@@ -129,6 +129,82 @@ button {
   stroke-opacity: 0.52;
 }
 
+/* ML-10 Switchable journey route styles: default (existing look), starlight
+   stream, soft ribbon, and neon flow. The group carries `is-style-*` so a
+   style switch never rebuilds geometry. */
+.particle-earth-route__energy {
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2.6;
+  opacity: 0;
+  vector-effect: non-scaling-stroke;
+}
+
+/* Starlight stream: the SVG line steps back to a faint track while the
+   WebGL particle stream carries the look. */
+.particle-earth-route.is-style-stream .particle-earth-route__glow {
+  opacity: 0;
+}
+
+.particle-earth-route.is-style-stream .particle-earth-route__core {
+  opacity: 0.16;
+  stroke-width: 1.1;
+}
+
+.particle-earth-route.is-style-stream.is-muted .particle-earth-route__core {
+  opacity: 0.09;
+}
+
+/* Soft ribbon: wide glow plus a gradient core that fades toward the
+   destination (gradient endpoints follow the projected travel direction). */
+.particle-earth-route.is-style-ribbon .particle-earth-route__glow {
+  opacity: 0.3;
+  stroke-width: 7;
+}
+
+.particle-earth-route.is-style-ribbon .particle-earth-route__core {
+  opacity: 0.95;
+  stroke-width: 2.4;
+}
+
+.particle-earth-route.is-style-ribbon.is-muted .particle-earth-route__glow {
+  opacity: 0.08;
+}
+
+.particle-earth-route.is-style-ribbon.is-muted .particle-earth-route__core {
+  opacity: 0.3;
+}
+
+/* Neon: wide bloom, gradient core, animated energy dashes, and the
+   traveling pulse on top. */
+.particle-earth-route.is-style-neon .particle-earth-route__glow {
+  opacity: 0.5;
+  stroke-width: 10;
+}
+
+.particle-earth-route.is-style-neon .particle-earth-route__core {
+  opacity: 1;
+  stroke-width: 2.8;
+}
+
+.particle-earth-route.is-style-neon .particle-earth-route__energy {
+  opacity: 0.85;
+}
+
+.particle-earth-route.is-style-neon.is-muted .particle-earth-route__glow {
+  opacity: 0.12;
+}
+
+.particle-earth-route.is-style-neon.is-muted .particle-earth-route__core {
+  opacity: 0.34;
+}
+
+.particle-earth-route.is-style-neon.is-muted .particle-earth-route__energy {
+  opacity: 0.24;
+}
+
 .particle-earth-route__leader {
   fill: none;
   stroke: currentColor;

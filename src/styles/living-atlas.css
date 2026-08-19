@@ -267,6 +267,40 @@
   color: var(--atlas-acid);
 }
 
+.living-atlas-globe__route-style {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 6px;
+  border: 1px solid rgba(118, 198, 188, 0.24);
+  background: rgba(2, 11, 12, 0.82);
+  backdrop-filter: blur(12px);
+}
+
+.living-atlas-globe__route-style button {
+  min-width: 44px;
+  min-height: 34px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--atlas-muted);
+  cursor: pointer;
+  font: 500 8px/1 ui-monospace, "SFMono-Regular", Consolas, monospace;
+  letter-spacing: 0.12em;
+}
+
+.living-atlas-globe__route-style button:hover,
+.living-atlas-globe__route-style button:focus-visible {
+  color: var(--atlas-text);
+}
+
+.living-atlas-globe__route-style button.is-active {
+  border-color: rgba(200, 255, 61, 0.4);
+  background: rgba(200, 255, 61, 0.08);
+  color: var(--atlas-acid);
+}
+
 .living-atlas-globe__pick {
   min-height: 44px;
   display: inline-flex;
@@ -2820,6 +2854,17 @@
   to { stroke-dashoffset: -152; }
 }
 
+/* ML-10 Neon style: a second, faster energy dash layer between the core
+   stroke and the traveling pulse. */
+.particle-earth-route__energy {
+  stroke-dasharray: 30 74;
+  animation: motionRouteEnergy 2.2s linear infinite;
+}
+
+@keyframes motionRouteEnergy {
+  to { stroke-dashoffset: -104; }
+}
+
 /* Origin (hollow) and destination (solid) markers on active routes. */
 .particle-earth-route__point--origin {
   fill: transparent;
@@ -2851,6 +2896,14 @@
   .particle-earth-route__flow {
     animation: none;
     opacity: 0.5;
+  }
+
+  .particle-earth-route__energy {
+    animation: none;
+  }
+
+  .particle-earth-route.is-style-neon .particle-earth-route__energy {
+    opacity: 0.4;
   }
 
   ::view-transition-old(journey-card),

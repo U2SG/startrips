@@ -2,7 +2,35 @@ import { lazy, Suspense, useEffect, useState } from "react";
 import { IconMap2, IconMapPin, IconWorld } from "@tabler/icons-react";
 import type { JourneyRoute } from "../journey/types";
 import type { DetailedEarthLanguage } from "./detailedEarthModel";
-import { ParticleEarthScene } from "./ParticleEarthScene";
+import {
+  JOURNEY_ROUTE_STYLES,
+  ParticleEarthScene,
+  type JourneyRouteStyle,
+} from "./ParticleEarthScene";
+
+const ROUTE_STYLE_STORAGE_KEY = "startrips.routeStyle";
+
+const ROUTE_STYLE_LABELS: Record<JourneyRouteStyle, string> = {
+  default: "现有",
+  stream: "星光流",
+  ribbon: "柔光带",
+  neon: "霓虹",
+};
+
+function preferredRouteStyle(): JourneyRouteStyle {
+  try {
+    const stored = window.localStorage.getItem(ROUTE_STYLE_STORAGE_KEY);
+    if (
+      stored
+      && (JOURNEY_ROUTE_STYLES as readonly string[]).includes(stored)
+    ) {
+      return stored as JourneyRouteStyle;
+    }
+  } catch {
+    // Storage can be unavailable (private mode, sandboxed iframe).
+  }
+  return "default";
+}
 
 const loadDetailedEarthMap = () => import("./DetailedEarthMap");
 const DetailedEarthMap = lazy(loadDetailedEarthMap);
@@ -39,6 +67,15 @@ export function LivingAtlasGlobe({
   const [targetReady, setTargetReady] = useState(false);
   const [transitionError, setTransitionError] = useState<string | null>(null);
   const [detailLanguage, setDetailLanguage] = useState<DetailedEarthLanguage>("zh");
+  const [routeStyle, setRouteStyle] = useState<JourneyRouteStyle>(preferredRouteStyle);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(ROUTE_STYLE_STORAGE_KEY, routeStyle);
+    } catch {
+      // Storage can be unavailable; the choice just won't persist.
+    }
+  }, [routeStyle]);
 
   useEffect(() => {
     const preloadTimer = window.setTimeout(() => void loadDetailedEarthMap(), 350);
@@ -92,6 +129,7 @@ export function LivingAtlasGlobe({
     <section
       className={`living-atlas-globe${detailMode ? " is-detail" : " is-overview"}${transitionClasses}`}
       data-earth-mode={detailMode ? "detail" : "particle"}
+      data-route-style={routeStyle}
       aria-label={detailMode ? "高精度地球地图" : "粒子艺术地球"}
     >
       {showParticle ? (
@@ -120,6 +158,7 @@ export function LivingAtlasGlobe({
             }}
             dragToRotate
             reduceMotion={reduceMotion}
+            routeStyle={routeStyle}
           />
         </div>
       ) : null}
@@ -167,6 +206,23 @@ export function LivingAtlasGlobe({
           <span>{transitionTarget ? transitionLabel : detailMode ? "返回粒子地球" : "深入真实地图"}</span>
           <small>{detailMode ? "ART GLOBE" : "ZOOM 20"}</small>
         </button>
+
+        {!detailMode && !transitionTarget ? (
+          <div className="living-atlas-globe__route-style" role="group" aria-label="旅程路线样式">
+            {JOURNEY_ROUTE_STYLES.map((style) => (
+              <button
+                key={style}
+                type="button"
+                className={routeStyle === style ? "is-active" : ""}
+                aria-pressed={routeStyle === style}
+                data-route-style-option={style}
+                onClick={() => setRouteStyle(style)}
+              >
+                {ROUTE_STYLE_LABELS[style]}
+              </button>
+            ))}
+          </div>
+        ) : null}
 
         {detailMode && !transitionTarget ? (
           <div className="living-atlas-globe__language" role="group" aria-label="地图语言">
