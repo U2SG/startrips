@@ -3,7 +3,6 @@ import { chromium } from "playwright-core";
 const EMAIL = "mapqa-1787023856@example.test";
 const PASSWORD = "map-qa-password-2026";
 const ORIGIN = "https://106.53.130.142";
-const STYLES = ["default", "stream", "ribbon", "neon", "strands", "laser"];
 const browser = await chromium.launch({ channel: "msedge", headless: true });
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
 const issues = [];
@@ -32,25 +31,25 @@ const snap = (label, extra = {}) => {
   console.log(JSON.stringify({ stage: label, ...extra }));
 };
 
-const switcherCount = await page.locator("[data-route-style-option]").count();
-snap("INIT", {
-  switcherButtons: switcherCount,
-  routeStyle: await page.evaluate(() => document.querySelector(".particle-earth-scene")?.dataset.routeStyle ?? null),
-  routes: await page.evaluate(() => Number(document.querySelector(".particle-earth-scene")?.dataset.journeyRouteCount ?? 0)),
-});
-await page.screenshot({ path: "D:\\startrips\\prod-style-default.png" });
+snap("INIT", await page.evaluate(() => {
+  const group = [...document.querySelectorAll(".particle-earth-route")]
+    .find((g) => g.querySelector(".particle-earth-route__core")?.getAttribute("d")?.length > 0);
+  return {
+    routeStyle: document.querySelector(".particle-earth-scene")?.dataset.routeStyle ?? null,
+    switcherRemoved: document.querySelectorAll("[data-route-style-option]").length === 0,
+    strandA: Boolean(group?.querySelector(".particle-earth-route__strand-a")),
+    coreGradient: group?.querySelector(".particle-earth-route__core")?.getAttribute("stroke")?.startsWith("url(#") ?? false,
+    shinyBrand: Boolean(document.querySelector(".living-atlas__brand h1 [data-shiny-text]")),
+    countUpText: document.querySelector(".living-atlas__journey-rail > p")?.textContent ?? null,
+    borderGlow: (() => {
+      const card = document.querySelector(".living-atlas__active");
+      return card ? getComputedStyle(card, "::after").animationName : null;
+    })(),
+  };
+}));
+await page.screenshot({ path: "D:\\startrips\\prod-style-strands.png" });
 
-for (const style of STYLES.slice(1)) {
-  await page.click(`[data-route-style-option="${style}"]`);
-  await page.waitForTimeout(style === "stream" ? 1400 : 900);
-  snap(style.toUpperCase(), {
-    routeStyle: await page.evaluate(() => document.querySelector(".particle-earth-scene")?.dataset.routeStyle ?? null),
-    streamParticles: await page.evaluate(() => Number(document.querySelector(".particle-earth-scene")?.dataset.journeyRouteStreamParticles ?? 0)),
-  });
-  await page.screenshot({ path: `D:\\startrips\\prod-style-${style}.png` });
-}
-
-// Select the first journey from the rail and verify focus/context states.
+// Select a journey and verify focus/context states.
 await page.click(".living-atlas__journey-rail ol li button", { timeout: 15000 });
 await page.waitForTimeout(1200);
 snap("ACTIVE SELECTED", await page.evaluate(() => ({

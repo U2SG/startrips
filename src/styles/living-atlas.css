@@ -267,43 +267,6 @@
   color: var(--atlas-acid);
 }
 
-.living-atlas-globe__route-style {
-  min-height: 44px;
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  max-width: min(460px, calc(100vw - 320px));
-  padding: 0 6px;
-  overflow-x: auto;
-  scrollbar-width: none;
-  border: 1px solid rgba(118, 198, 188, 0.24);
-  background: rgba(2, 11, 12, 0.82);
-  backdrop-filter: blur(12px);
-}
-
-.living-atlas-globe__route-style button {
-  min-width: 38px;
-  min-height: 34px;
-  padding: 0 7px;
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--atlas-muted);
-  cursor: pointer;
-  font: 500 8px/1 ui-monospace, "SFMono-Regular", Consolas, monospace;
-  letter-spacing: 0.1em;
-}
-
-.living-atlas-globe__route-style button:hover,
-.living-atlas-globe__route-style button:focus-visible {
-  color: var(--atlas-text);
-}
-
-.living-atlas-globe__route-style button.is-active {
-  border-color: rgba(200, 255, 61, 0.4);
-  background: rgba(200, 255, 61, 0.08);
-  color: var(--atlas-acid);
-}
-
 .living-atlas-globe__ambience {
   min-height: 44px;
   padding: 0 13px;
@@ -2978,18 +2941,7 @@
   to { stroke-dashoffset: -152; }
 }
 
-/* ML-10 Neon style: a second, faster energy dash layer between the core
-   stroke and the traveling pulse. */
-.particle-earth-route__energy {
-  stroke-dasharray: 30 74;
-  animation: motionRouteEnergy 2.2s linear infinite;
-}
-
-@keyframes motionRouteEnergy {
-  to { stroke-dashoffset: -104; }
-}
-
-/* ML-11 Strands style: interlaced threads flow at different speeds. */
+/* Strands: interlaced threads flow at different speeds. */
 @keyframes motionStrandA {
   to { stroke-dashoffset: -60; }
 }
@@ -2998,9 +2950,21 @@
   to { stroke-dashoffset: -68; }
 }
 
-/* ML-11 Laser style: a bright comet head races along the route. */
-@keyframes motionLaser {
-  to { stroke-dashoffset: -240; }
+/* ML-13 ShinyText: a highlight sweeps across the brand title; the sweep
+   spends most of the cycle parked off-text so the loop never flashes. */
+@keyframes shinyTextSweep {
+  0%, 60% { background-position: 140% 0; }
+  85%, 100% { background-position: -60% 0; }
+}
+
+/* ML-13 Magnet: magnetic CTA buttons spring back with the same motion
+   language used elsewhere in the atlas. */
+.living-atlas__header nav .living-atlas__create,
+.living-atlas__active > button {
+  transition:
+    transform 240ms cubic-bezier(0.2, 0.75, 0.15, 1),
+    border-color 180ms ease,
+    background 180ms ease;
 }
 
 /* Origin (hollow) and destination (solid) markers on active routes. */
@@ -3036,18 +3000,8 @@
     opacity: 0.5;
   }
 
-  .particle-earth-route__energy {
-    animation: none;
-  }
-
-  .particle-earth-route.is-style-neon .particle-earth-route__energy {
-    opacity: 0.4;
-  }
-
   .particle-earth-route__strand-a,
-  .particle-earth-route__strand-b,
-  .particle-earth-route.is-style-laser .particle-earth-route__energy,
-  .particle-earth-route.is-style-laser .particle-earth-route__flow {
+  .particle-earth-route__strand-b {
     animation: none;
   }
 

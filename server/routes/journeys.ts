@@ -157,6 +157,7 @@ journeyRoutes.post("/", async (context) => {
     );
   }
   const journey = await createJourneyForAtlas(atlas.id, session.user.id, input);
+  if (!journey) return context.json({ error: "ATLAS_NOT_FOUND" }, 404);
   return context.json({ journey }, 201);
 });
 

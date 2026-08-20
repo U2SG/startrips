@@ -12,6 +12,7 @@ import {
 } from "drizzle-orm";
 import { db } from "../db/client";
 import {
+  atlases,
   journeyRoutePoints,
   journeys,
   mediaAssets,
@@ -112,6 +113,15 @@ export async function createJourneyForAtlas(
   values: JourneyValues,
 ) {
   const journeyId = await db.transaction(async (transaction) => {
+    const lockedAtlas = await transaction.execute<{ id: string }>(sql`
+      select ${atlases.id} as id
+      from ${atlases}
+      where ${atlases.id} = ${atlasId}
+        and ${atlases.deletionStartedAt} is null
+      for update
+    `);
+    if (lockedAtlas.rows.length === 0) return undefined;
+
     const [journey] = await transaction
       .insert(journeys)
       .values({
@@ -133,7 +143,7 @@ export async function createJourneyForAtlas(
     );
     return journey.id;
   });
-  return getJourneyForAtlas(journeyId, atlasId);
+  return journeyId ? getJourneyForAtlas(journeyId, atlasId) : undefined;
 }
 
 export async function updateJourneyForAtlas(
@@ -142,6 +152,15 @@ export async function updateJourneyForAtlas(
   values: JourneyValues,
 ) {
   const updated = await db.transaction(async (transaction) => {
+    const lockedAtlas = await transaction.execute<{ id: string }>(sql`
+      select ${atlases.id} as id
+      from ${atlases}
+      where ${atlases.id} = ${atlasId}
+        and ${atlases.deletionStartedAt} is null
+      for update
+    `);
+    if (lockedAtlas.rows.length === 0) return false;
+
     const [journey] = await transaction
       .update(journeys)
       .set({

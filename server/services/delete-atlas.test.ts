@@ -16,6 +16,7 @@ const ATLAS: Atlas = {
   dedication: "",
   createdAt: new Date("2026-08-12T00:00:00.000Z"),
   updatedAt: new Date("2026-08-12T00:00:00.000Z"),
+  deletionStartedAt: null,
 };
 
 function storageWith(uploadExists: boolean) {
@@ -117,8 +118,19 @@ describe("deleteAtlasForOrganization", () => {
     expect(deps.deleteAtlasRow).not.toHaveBeenCalled();
   });
 
+  it("does not clean up when another deletion already owns the marker", async () => {
+    const { storage, deps } = dependencies({
+      markAtlasDeleting: vi.fn(async () => false),
+    });
+
+    await expect(deleteAtlasForOrganization("org-1", deps)).resolves.toBe(false);
+    expect(deps.listJourneys).not.toHaveBeenCalled();
+    expect(storage.deleteObject).not.toHaveBeenCalled();
+  });
+
   it("keeps every row when storage cleanup fails so deletion can be retried", async () => {
-    const { storage, deps } = dependencies();
+    const clearAtlasDeleting = vi.fn(async () => undefined);
+    const { storage, deps } = dependencies({ clearAtlasDeleting });
     storage.deleteObject = vi.fn(async () => {
       throw new Error("object storage is down");
     });
@@ -126,6 +138,7 @@ describe("deleteAtlasForOrganization", () => {
     await expect(deleteAtlasForOrganization("org-1", deps))
       .rejects.toThrow("object storage is down");
     expect(deps.deleteAtlasRow).not.toHaveBeenCalled();
+    expect(clearAtlasDeleting).toHaveBeenCalledWith(ATLAS.id);
   });
 
   it("cleans up every journey of the atlas before deleting it", async () => {

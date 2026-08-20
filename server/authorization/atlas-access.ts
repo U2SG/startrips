@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { auth } from "../auth";
 import { db } from "../db/client";
 import { atlases } from "../db/app-schema";
@@ -62,7 +62,10 @@ export async function requireAtlasAccess(
   const [atlas] = await db
     .select()
     .from(atlases)
-    .where(eq(atlases.organizationId, membership.organizationId))
+    .where(and(
+      eq(atlases.organizationId, membership.organizationId),
+      isNull(atlases.deletionStartedAt),
+    ))
     .limit(1);
 
   if (!atlas) {

@@ -28,7 +28,7 @@ import { useModalFocus } from "./useModalFocus";
 
 type MediaReadState =
   | { status: "loading" }
-  | { status: "ready"; url: string }
+  | { status: "ready"; url: string; expiresAt: number }
   | { status: "error"; message: string };
 
 type JourneyStoryProps = {
@@ -100,6 +100,7 @@ export function JourneyStory({
     routePointId,
   );
   const [mediaReads, setMediaReads] = useState<Record<string, MediaReadState>>({});
+  const [mediaReadRefresh, setMediaReadRefresh] = useState(0);
   const [uploadState, setUploadState] = useState<MediaUploadState>({ status: "idle" });
   const [retryFiles, setRetryFiles] = useState<File[]>([]);
   const [closeBlocked, setCloseBlocked] = useState(false);
@@ -158,6 +159,8 @@ export function JourneyStory({
     () => journey ? mediaForRoutePoint(journey, selectedRoutePointId) : [],
     [journey, selectedRoutePointId],
   );
+  const activeAsset = scopedMedia[assetIndex] ?? null;
+  const activeRead = activeAsset ? mediaReads[activeAsset.id] : null;
 
   // Ken Burns playback: advance every slide when playing, restarting the
   // timer whenever the user navigates manually or the media list changes.
@@ -188,23 +191,25 @@ export function JourneyStory({
 
   useEffect(() => {
     let cancelled = false;
-    if (!journey || journey.media.length === 0) {
+    if (!activeAsset) {
       setMediaReads({});
       return () => {
         cancelled = true;
       };
     }
 
-    setMediaReads(Object.fromEntries(
-      journey.media.map((asset) => [asset.id, { status: "loading" }]),
-    ));
-    for (const asset of journey.media) {
+    setMediaReads({ [activeAsset.id]: { status: "loading" } });
+    for (const asset of [activeAsset]) {
       void getPrivateMediaRead(asset.id).then(
         (read) => {
           if (cancelled) return;
           setMediaReads((current) => ({
             ...current,
-            [asset.id]: { status: "ready", url: read.url },
+            [asset.id]: {
+              status: "ready",
+              url: read.url,
+              expiresAt: Date.parse(read.expiresAt),
+            },
           }));
         },
         (error) => {
@@ -223,7 +228,19 @@ export function JourneyStory({
     return () => {
       cancelled = true;
     };
-  }, [journey]);
+  }, [activeAsset?.id, mediaReadRefresh]);
+
+  useEffect(() => {
+    if (!activeAsset || activeRead?.status !== "ready") return;
+    const expiresAt = Number.isFinite(activeRead.expiresAt)
+      ? activeRead.expiresAt
+      : Date.now() + 5 * 60 * 1000;
+    const timer = window.setTimeout(
+      () => setMediaReadRefresh((current) => current + 1),
+      Math.max(1_000, expiresAt - Date.now() - 30_000),
+    );
+    return () => window.clearTimeout(timer);
+  }, [activeAsset?.id, activeRead?.status === "ready" ? activeRead.expiresAt : 0]);
 
   const namedStops = useMemo(
     () => journey?.routePoints.filter((point) => point.isStop) ?? [],
@@ -234,7 +251,7 @@ export function JourneyStory({
   const selectedRoutePoint = selectedRoutePointId
     ? journey.routePoints.find((point) => point.id === selectedRoutePointId) ?? null
     : null;
-  const asset = scopedMedia[assetIndex] ?? null;
+  const asset = activeAsset;
   const read = asset ? mediaReads[asset.id] : null;
   const fullMediaIndex = asset
     ? journey.media.findIndex((candidate) => candidate.id === asset.id)

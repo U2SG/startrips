@@ -1,11 +1,6 @@
 import { getConnInfo } from "@hono/node-server/conninfo";
 import type { Context, Next } from "hono";
 
-const SESSION_COOKIE_NAMES = [
-  "startrips.session_token",
-  "startrips-session_token",
-];
-
 export type AnonymousRateLimitConfig = {
   windowSeconds: number;
   maxRequests: number;
@@ -15,15 +10,6 @@ type WindowState = {
   startedAt: number;
   count: number;
 };
-
-function hasSessionCookie(context: Context): boolean {
-  const header = context.req.header("cookie");
-  if (!header) return false;
-  return header.split(";").some((part) => {
-    const name = part.split("=", 1)[0]?.trim();
-    return name !== undefined && SESSION_COOKIE_NAMES.includes(name);
-  });
-}
 
 function clientKey(context: Context): string | undefined {
   const forwarded = context.req.header("x-forwarded-for");
@@ -56,7 +42,6 @@ export function createAnonymousRateLimiter(
     if (
       path === "/api/health"
       || path.startsWith("/api/auth")
-      || hasSessionCookie(context)
     ) {
       return next();
     }

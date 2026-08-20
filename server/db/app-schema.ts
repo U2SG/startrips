@@ -24,6 +24,7 @@ export const atlases = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
+    deletionStartedAt: timestamp("deletion_started_at", { withTimezone: true }),
   },
   (table) => [
     uniqueIndex("atlases_organization_unique").on(table.organizationId),

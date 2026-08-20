@@ -1,0 +1,1 @@
+ALTER TABLE "atlases" ADD COLUMN "deletion_started_at" timestamp with time zone;

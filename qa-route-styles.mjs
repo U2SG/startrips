@@ -1,7 +1,6 @@
 import { chromium } from "playwright-core";
 
 const ORIGIN = "http://127.0.0.1:5173";
-const STYLES = ["default", "stream", "ribbon", "neon", "strands", "laser"];
 const browser = await chromium.launch({ channel: "msedge", headless: true });
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
 const issues = [];
@@ -18,38 +17,36 @@ await page.waitForFunction(
   { timeout: 60000 },
 );
 await page.waitForTimeout(2500);
-console.log(`routes: ${await page.locator(".particle-earth-route").count()}`);
 
 const snap = (label, extra = {}) => {
   console.log(JSON.stringify({ stage: label, ...extra }));
 };
 
-for (const style of STYLES) {
-  await page.click(`[data-route-style-option="${style}"]`);
-  await page.waitForTimeout(style === "stream" ? 1400 : 900);
-  const dataset = await page.evaluate(() => ({
+snap("INIT", await page.evaluate(() => {
+  const group = [...document.querySelectorAll(".particle-earth-route")]
+    .find((g) => g.querySelector(".particle-earth-route__core")?.getAttribute("d")?.length > 0);
+  return {
     routeStyle: document.querySelector(".particle-earth-scene")?.dataset.routeStyle ?? null,
-    streamParticles: Number(
-      document.querySelector(".particle-earth-scene")?.dataset.journeyRouteStreamParticles ?? 0,
-    ),
-  }));
-  snap(style.toUpperCase(), dataset);
-  await page.screenshot({ path: `D:\\startrips\\qa-style-${style}.png` });
-}
+    switcherRemoved: document.querySelectorAll("[data-route-style-option]").length === 0,
+    strandA: Boolean(group?.querySelector(".particle-earth-route__strand-a")),
+    strandB: Boolean(group?.querySelector(".particle-earth-route__strand-b")),
+    strandDash: group ? getComputedStyle(group.querySelector(".particle-earth-route__strand-a")).strokeDasharray : null,
+    coreGradient: group?.querySelector(".particle-earth-route__core")?.getAttribute("stroke")?.startsWith("url(#") ?? false,
+  };
+}));
+await page.screenshot({ path: "D:\\startrips\\qa-style-strands.png" });
 
-// Activate one journey: the active route must be alone in is-active while
-// every other route stays visible but muted.
+// Activate one journey: active alone, others muted but visible.
 await page.click('[data-qa-route="qa-route-rhine"]');
 await page.waitForTimeout(1200);
-const states = await page.evaluate(() => ({
+snap("ACTIVE (rhine selected)", await page.evaluate(() => ({
   active: document.querySelectorAll(".particle-earth-route.is-active").length,
   muted: document.querySelectorAll(".particle-earth-route.is-muted").length,
   idle: document.querySelectorAll(".particle-earth-route.is-idle").length,
-}));
-snap("ACTIVE (rhine selected, laser style)", states);
+})));
 await page.screenshot({ path: "D:\\startrips\\qa-style-active.png" });
 
-// Ambience toggle: layer appears, persists via dataset, and blobs animate.
+// Ambience toggle.
 await page.click("[data-ambience-toggle]");
 await page.waitForTimeout(400);
 snap("AMBIENCE ON", await page.evaluate(() => ({
@@ -64,8 +61,7 @@ snap("AMBIENCE OFF", await page.evaluate(() => ({
   blobs: document.querySelectorAll(".living-atlas-ambience__blob").length,
 })));
 
-// Drag the globe while the laser style is live to exercise the per-frame
-// projection/animation paths, then confirm the scene is still healthy.
+// Drag the globe to exercise the projection path, then confirm health.
 const canvas = page.locator(".living-atlas-globe canvas").first();
 const box = await canvas.boundingBox();
 const cx = box.x + box.width / 2;
@@ -75,7 +71,7 @@ await page.mouse.down();
 await page.mouse.move(cx + 160, cy - 40, { steps: 8 });
 await page.mouse.up();
 await page.waitForTimeout(800);
-snap("AFTER DRAG (laser style)", {
+snap("AFTER DRAG", {
   sceneAlive: await page.evaluate(() => Boolean(
     document.querySelector(".particle-earth-scene canvas"),
   )),

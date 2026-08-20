@@ -3,16 +3,13 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import {
   buildArtworkPointPositions,
-  buildRoutePolylineLengths,
   buildSeededSpherePoints,
   buildSphericalRouteSegments,
   buildSphericalRingSegments,
-  computeRouteStreamParticleCount,
   formatLatitude,
   formatLongitude,
   latLonToVector3,
   rotationYForLongitude,
-  sampleRoutePolylinePosition,
   vector3ToLatLon,
 } from "./geo";
 
@@ -94,45 +91,6 @@ describe("spherical route geometry", () => {
       10,
     );
     expect(positions.length / 3).toBeLessThanOrEqual(10);
-  });
-});
-
-describe("route stream sampling", () => {
-  const segments = new Float32Array([
-    0, 0, 0, 2, 0, 0,
-    2, 0, 0, 2, 2, 0,
-  ]);
-
-  it("accumulates polyline lengths per segment pair", () => {
-    const lengths = buildRoutePolylineLengths(segments);
-    expect([...lengths]).toEqual([0, 2, 4]);
-  });
-
-  it("samples along the polyline at a fraction of total length", () => {
-    const target = new Vector3();
-    sampleRoutePolylinePosition(segments, buildRoutePolylineLengths(segments), 0.5, target);
-    expect(target.x).toBeCloseTo(2);
-    expect(target.y).toBeCloseTo(0);
-    expect(target.z).toBeCloseTo(0);
-    sampleRoutePolylinePosition(segments, buildRoutePolylineLengths(segments), 0.75, target);
-    expect(target.x).toBeCloseTo(2);
-    expect(target.y).toBeCloseTo(1);
-  });
-
-  it("clamps progress and handles empty geometry", () => {
-    const target = new Vector3();
-    sampleRoutePolylinePosition(segments, buildRoutePolylineLengths(segments), 2, target);
-    expect(target.y).toBeCloseTo(2);
-    sampleRoutePolylinePosition(new Float32Array(), new Float32Array([0]), 0.5, target);
-    expect(target.x).toBe(0);
-  });
-
-  it("sizes route streams by length without exhausting the shared budget", () => {
-    expect(computeRouteStreamParticleCount(2.2, 1000)).toBe(6);
-    expect(computeRouteStreamParticleCount(20, 1000)).toBeGreaterThan(6);
-    expect(computeRouteStreamParticleCount(1000, 1000)).toBeLessThanOrEqual(60);
-    expect(computeRouteStreamParticleCount(20, 3)).toBe(3);
-    expect(computeRouteStreamParticleCount(0, 1000)).toBe(0);
   });
 });
 

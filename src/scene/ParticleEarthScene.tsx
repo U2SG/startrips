@@ -30,14 +30,11 @@ import { loadCityTiers, selectCityCandidates, type CityPoint } from "./cityLabel
 import type { JourneyRoute } from "../journey/types";
 import {
   buildArtworkPointPositions,
-  buildRoutePolylineLengths,
   buildSeededSpherePoints,
   buildSphericalRouteSegments,
   buildSphericalRingSegments,
-  computeRouteStreamParticleCount,
   latLonToVector3,
   rotationYForLongitude,
-  sampleRoutePolylinePosition,
   vector3ToLatLon,
 } from "./geo";
 import { createAtmosphereMaterial, createParticleEarthMaterial } from "./particleEarthMaterial";
@@ -53,8 +50,6 @@ export const MAX_RENDERED_ROUTE_POINTS = 512;
 export const MAX_RENDERED_ROUTE_LINE_VERTICES = 8192;
 export const MAX_RENDERED_ROUTE_LABELS = 6;
 export const MAX_RENDERED_MOBILE_ROUTE_LABELS = 3;
-export const MAX_ROUTE_STREAM_PARTICLES = 1200;
-export const ROUTE_STREAM_RADIUS = 1.46;
 export const CITY_LABEL_BUDGET = 72;
 export const MAX_RENDERED_COASTLINE_VERTICES = 20_000;
 export const GLOBE_RENDER_ORDER = {
@@ -123,17 +118,6 @@ export function getJourneyRouteVisualState(
   if (!activeRouteId) return "is-idle";
   return routeId === activeRouteId ? "is-active" : "is-muted";
 }
-
-export type JourneyRouteStyle = "default" | "stream" | "ribbon" | "neon" | "strands" | "laser";
-
-export const JOURNEY_ROUTE_STYLES: readonly JourneyRouteStyle[] = [
-  "default",
-  "stream",
-  "ribbon",
-  "neon",
-  "strands",
-  "laser",
-];
 
 export function selectRouteLabelPointIndexes(
   points: readonly { isStop: boolean; label?: string }[],
@@ -386,7 +370,6 @@ interface ParticleEarthSceneProps {
   onGlobePointPick?: (point: { latitude: number; longitude: number }) => void;
   dragToRotate?: boolean;
   reduceMotion?: boolean;
-  routeStyle?: JourneyRouteStyle;
 }
 
 interface LandGeometry {
@@ -561,7 +544,6 @@ export function ParticleEarthScene({
   onGlobePointPick,
   dragToRotate = false,
   reduceMotion = false,
-  routeStyle = "default",
 }: ParticleEarthSceneProps) {
   const [ready, setReady] = useState(false);
   const latestMode = useRef(mode);
@@ -575,8 +557,6 @@ export function ParticleEarthScene({
   const latestOnJourneyRoutePointActivate = useRef(onJourneyRoutePointActivate);
   const latestOnReady = useRef(onReady);
   const latestOnGlobePointPick = useRef(onGlobePointPick);
-  const latestRouteStyle = useRef(routeStyle);
-  latestRouteStyle.current = routeStyle;
   const latestDragToRotate = useRef(dragToRotate);
   latestMode.current = mode;
   latestFocusPoint.current = focusPoint;
@@ -866,11 +846,9 @@ export function ParticleEarthScene({
       routeId: string;
       color: string;
       segments: Float32Array;
-      segmentsLengths: Float32Array;
       glowPath: SVGPathElement;
       corePath: SVGPathElement;
       flowPath: SVGPathElement;
-      energyPath: SVGPathElement;
       strandPaths: [SVGPathElement, SVGPathElement];
       fadeGradient: SVGLinearGradientElement;
       points: Array<{
@@ -881,7 +859,6 @@ export function ParticleEarthScene({
     };
     let routeVectorEntries: RouteVectorEntry[] = [];
     let routeVectorOpacity = 0;
-    let routeStyle: JourneyRouteStyle = latestRouteStyle.current;
     const sceneToken = Math.random().toString(36).slice(2, 8);
     const routeCameraPosition = new Vector3();
     const routeLocalPoint = new Vector3();
@@ -962,7 +939,7 @@ export function ParticleEarthScene({
         group.classList.add(
           "particle-earth-route",
           getJourneyRouteVisualState(route.id, latestActiveJourneyRouteId.current),
-          `is-style-${routeStyle}`,
+          "is-style-strands",
         );
         group.style.color = route.color;
         const glowPath = document.createElementNS(
@@ -982,15 +959,8 @@ export function ParticleEarthScene({
           "path",
         );
         flowPath.classList.add("particle-earth-route__flow");
-        // Neon style: a second, faster energy dash layer between the core
-        // and the traveling pulse.
-        const energyPath = document.createElementNS(
-          "http://www.w3.org/2000/svg",
-          "path",
-        );
-        energyPath.classList.add("particle-earth-route__energy");
-        // Strands style: two interlaced thread layers that flow along the
-        // route at different speeds and dash rhythms.
+        // Strands: two interlaced thread layers that flow along the route at
+        // different speeds and dash rhythms, over a gradient core.
         const strandPaths: [SVGPathElement, SVGPathElement] = [
           document.createElementNS("http://www.w3.org/2000/svg", "path"),
           document.createElementNS("http://www.w3.org/2000/svg", "path"),
@@ -1003,9 +973,9 @@ export function ParticleEarthScene({
             `url(#route-fade-${sceneToken}-${routeIndex})`,
           );
         });
-        // Ribbon/neon styles fade the stroke toward the destination; the
-        // gradient is a per-route user-space gradient whose endpoints follow
-        // the projected origin and destination each projection pass.
+        // The stroke fades toward the destination; the gradient is a
+        // per-route user-space gradient whose endpoints follow the projected
+        // origin and destination each projection pass.
         const fadeGradient = document.createElementNS(
           "http://www.w3.org/2000/svg",
           "linearGradient",
@@ -1028,7 +998,8 @@ export function ParticleEarthScene({
           fadeGradient.appendChild(stop);
         }
         routeDefs.appendChild(fadeGradient);
-        group.append(glowPath, corePath, ...strandPaths, energyPath, flowPath);
+        corePath.setAttribute("stroke", `url(#${fadeGradient.id})`);
+        group.append(glowPath, corePath, ...strandPaths, flowPath);
         const vectorPoints: RouteVectorEntry["points"] = [];
         const routeLabelIndexes = route.id === latestActiveJourneyRouteId.current
           ? selectRouteLabelPointIndexes(route.points)
@@ -1135,11 +1106,9 @@ export function ParticleEarthScene({
           routeId: route.id,
           color: route.color,
           segments: routeSegments,
-          segmentsLengths: buildRoutePolylineLengths(routeSegments),
           glowPath,
           corePath,
           flowPath,
-          energyPath,
           strandPaths,
           fadeGradient,
           points: vectorPoints,
@@ -1162,195 +1131,10 @@ export function ParticleEarthScene({
       host.dataset.journeyRouteVectorVertices = String(routeVertexCount);
       host.dataset.journeyRouteLabelCount = String(routeLabelCount);
       host.dataset.journeyRouteOverflow = String(routes.length - visibleRoutes.length);
-      host.dataset.routeStyle = routeStyle;
+      host.dataset.routeStyle = "strands";
       updateRouteLabelSafeArea();
-      disposeStreamLayer();
-      if (routeStyle === "stream") buildStreamLayer();
     };
 
-    // ML-10 Starlight Stream: journeys render as a flowing ribbon of fine
-    // particles that travel along each route. One additive Points object
-    // carries every particle; per-vertex colors encode route color, state
-    // (active/muted/idle) and a subtle twinkle, and back-side particles are
-    // painted black so additive blending hides them behind the globe.
-    let streamSignals: Points | null = null;
-    let streamGeometry: BufferGeometry | null = null;
-    let streamMaterial: PointsMaterial | null = null;
-    let streamPositions: Float32Array | null = null;
-    let streamColors: Float32Array | null = null;
-    let streamPositionAttribute: BufferAttribute | null = null;
-    let streamColorAttribute: BufferAttribute | null = null;
-    let streamParticles: Array<{
-      routeIndex: number;
-      offset: number;
-      speed: number;
-      phase: number;
-    }> = [];
-    const streamRouteColors: Color[] = [];
-    const streamSample = new Vector3();
-
-    const buildStreamLayer = () => {
-      disposeStreamLayer();
-      if (routeVectorEntries.length === 0) return;
-      const specs: typeof streamParticles = [];
-      const routeColors: Color[] = [];
-      let budget = MAX_ROUTE_STREAM_PARTICLES;
-      routeVectorEntries.forEach((entry, routeIndex) => {
-        const totalLength = entry.segmentsLengths[
-          entry.segmentsLengths.length - 1
-        ] ?? 0;
-        const count = computeRouteStreamParticleCount(totalLength, budget);
-        budget -= count;
-        for (let index = 0; index < count; index += 1) {
-          specs.push({
-            routeIndex,
-            offset: index / Math.max(1, count),
-            speed: 0.045 + ((routeIndex * 7 + index * 13) % 100) / 100 * 0.05,
-            phase: ((index * 37 + routeIndex * 61) % 1000) / 1000,
-          });
-        }
-        routeColors.push(
-          new Color(entry.color).convertSRGBToLinear(),
-        );
-      });
-      if (specs.length === 0) return;
-      const positions = new Float32Array(specs.length * 3);
-      const colors = new Float32Array(specs.length * 3);
-      const geometry = new BufferGeometry();
-      const positionAttribute = new BufferAttribute(positions, 3);
-      const colorAttribute = new BufferAttribute(colors, 3);
-      geometry.setAttribute("position", positionAttribute);
-      geometry.setAttribute("color", colorAttribute);
-      const material = new PointsMaterial({
-        size: 0.055,
-        sizeAttenuation: true,
-        transparent: true,
-        opacity: 0.95,
-        depthWrite: false,
-        blending: AdditiveBlending,
-        vertexColors: true,
-      });
-      const points = new Points(geometry, material);
-      points.renderOrder = GLOBE_RENDER_ORDER.routePoint;
-      points.frustumCulled = false;
-      globe.add(points);
-      streamSignals = points;
-      streamGeometry = geometry;
-      streamMaterial = material;
-      streamPositions = positions;
-      streamColors = colors;
-      streamPositionAttribute = positionAttribute;
-      streamColorAttribute = colorAttribute;
-      streamParticles = specs;
-      streamRouteColors.length = 0;
-      streamRouteColors.push(...routeColors);
-      host.dataset.journeyRouteStreamParticles = String(specs.length);
-      updateStreamLayer(0);
-    };
-
-    const disposeStreamLayer = () => {
-      if (streamSignals) globe.remove(streamSignals);
-      if (streamGeometry) streamGeometry.dispose();
-      if (streamMaterial) streamMaterial.dispose();
-      streamSignals = null;
-      streamGeometry = null;
-      streamMaterial = null;
-      streamPositions = null;
-      streamColors = null;
-      streamPositionAttribute = null;
-      streamColorAttribute = null;
-      streamParticles = [];
-      streamRouteColors.length = 0;
-      host.dataset.journeyRouteStreamParticles = "0";
-    };
-
-    const updateStreamLayer = (time: number) => {
-      if (
-        !streamPositions
-        || !streamColors
-        || !streamPositionAttribute
-        || !streamColorAttribute
-      ) {
-        return;
-      }
-      const advance = reduceMotion ? 0 : 1;
-      for (let index = 0; index < streamParticles.length; index += 1) {
-        const particle = streamParticles[index];
-        const entry = routeVectorEntries[particle.routeIndex];
-        if (!entry) continue;
-        const state = getJourneyRouteVisualState(
-          entry.routeId,
-          latestActiveJourneyRouteId.current,
-        );
-        const brightness = state === "is-active"
-          ? 1
-          : state === "is-muted"
-            ? 0.36
-            : 0.6;
-        const speedMultiplier = state === "is-active"
-          ? 2.1
-          : state === "is-muted"
-            ? 0.6
-            : 1;
-        const progress = (
-          particle.offset
-          + time * particle.speed * speedMultiplier * advance
-          + particle.phase
-        ) % 1;
-        sampleRoutePolylinePosition(
-          entry.segments,
-          entry.segmentsLengths,
-          progress,
-          streamSample,
-        );
-        streamSample.setLength(ROUTE_STREAM_RADIUS);
-        const offset = index * 3;
-        streamPositions[offset] = streamSample.x;
-        streamPositions[offset + 1] = streamSample.y;
-        streamPositions[offset + 2] = streamSample.z;
-        if (!isSphericalPointVisible(routeCameraPosition, streamSample)) {
-          streamColors[offset] = 0;
-          streamColors[offset + 1] = 0;
-          streamColors[offset + 2] = 0;
-          continue;
-        }
-        const twinkle = 0.78 + 0.22 * Math.sin(time * 2.6 + particle.phase * Math.PI * 2);
-        const color = streamRouteColors[particle.routeIndex];
-        const scale = brightness * twinkle;
-        streamColors[offset] = color.r * scale;
-        streamColors[offset + 1] = color.g * scale;
-        streamColors[offset + 2] = color.b * scale;
-      }
-      streamPositionAttribute.needsUpdate = true;
-      streamColorAttribute.needsUpdate = true;
-    };
-
-    const applyRouteStyle = (nextStyle: JourneyRouteStyle) => {
-      if (nextStyle === routeStyle) return;
-      routeStyle = nextStyle;
-      host.dataset.routeStyle = routeStyle;
-      routeVectorEntries.forEach((entry) => {
-        const group = entry.glowPath.parentElement;
-        if (!group) return;
-        JOURNEY_ROUTE_STYLES.forEach((style) => {
-          group.classList.toggle(`is-style-${style}`, style === routeStyle);
-        });
-        if (routeStyle === "ribbon" || routeStyle === "neon" || routeStyle === "strands" || routeStyle === "laser") {
-          entry.corePath.setAttribute("stroke", `url(#${entry.fadeGradient.id})`);
-        } else {
-          entry.corePath.removeAttribute("stroke");
-        }
-      });
-      if (routeStyle === "stream") {
-        if (!streamSignals) buildStreamLayer();
-        if (streamSignals) streamSignals.visible = true;
-      } else if (streamSignals) {
-        streamSignals.visible = false;
-      }
-      // Gradient endpoints only refresh during a projection pass; force one
-      // so ribbon/neon strokes get their fade direction on a static globe.
-      routeProjectionRevision += 1;
-    };
 
     const projectRoutePoint = (
       x: number,
@@ -1420,7 +1204,7 @@ export function ParticleEarthScene({
     }).catch(() => undefined);
 
     const updateRouteVectorLayer = () => {
-      if (routeVectorOpacity <= 0.01 || routeVectorEntries.length === 0) return;
+      if (routeVectorOpacity <= 0.01) return;
       const projectionState = [
         globe.position.x,
         globe.position.y,
@@ -1459,7 +1243,6 @@ export function ParticleEarthScene({
         entry.glowPath.setAttribute("d", path);
         entry.corePath.setAttribute("d", path);
         entry.flowPath.setAttribute("d", path);
-        entry.energyPath.setAttribute("d", path);
         entry.strandPaths[0].setAttribute("d", path);
         entry.strandPaths[1].setAttribute("d", path);
         const labelCandidates: Array<{
@@ -2111,10 +1894,6 @@ export function ParticleEarthScene({
 
       updateRouteVectorLayer();
 
-      if (routeStyle === "stream" && streamSignals?.visible) {
-        updateStreamLayer(now / 1000);
-      }
-
       if (latestCenterFocusPoint.current && latestFocusPoint.current) {
         const positionAttribute = personalGeometry.getAttribute("position") as BufferAttribute;
         personalScreenPosition.fromBufferAttribute(positionAttribute, 0);
@@ -2207,13 +1986,9 @@ export function ParticleEarthScene({
         latestActiveJourneyRouteId.current = activeRouteId;
         applyJourneyRoutes(routes);
       },
-      setRouteStyle(style: JourneyRouteStyle) {
-        applyRouteStyle(style);
-      },
       dispose() {
         disposed = true;
         cancelAnimationFrame(animationFrame);
-        disposeStreamLayer();
         document.removeEventListener("visibilitychange", onVisibilityChange);
         resizeObserver.disconnect();
         window.removeEventListener("resize", resize);
@@ -2256,10 +2031,6 @@ export function ParticleEarthScene({
     controllerRef.current?.setJourneyRoutes(journeyRoutes, activeJourneyRouteId);
   }, [activeJourneyRouteId, controllerRef, journeyRoutes, ready]);
 
-  useEffect(() => {
-    controllerRef.current?.setRouteStyle(routeStyle);
-  }, [controllerRef, routeStyle]);
-
   return (
     <div
       ref={hostRef}
@@ -2278,3 +2049,4 @@ export function ParticleEarthScene({
     />
   );
 }
+

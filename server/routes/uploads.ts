@@ -5,6 +5,7 @@ import { requireAtlasAccess } from "../authorization/atlas-access";
 import { serverConfig } from "../config";
 import { db } from "../db/client";
 import {
+  atlases,
   journeyRoutePoints,
   mediaAssets,
   mediaUploads,
@@ -221,6 +222,17 @@ export async function finalizeUpload(
   lease?: CompletionLease,
 ) {
   const result = await db.transaction(async (transaction) => {
+    const lockedAtlas = await transaction.execute<{ id: string }>(sql`
+      select ${atlases.id} as id
+      from ${atlases}
+      where ${atlases.id} = ${upload.atlasId}
+        and ${atlases.deletionStartedAt} is null
+      for update
+    `);
+    if (lockedAtlas.rows.length === 0) {
+      throw new Error("Upload atlas no longer exists");
+    }
+
     if (lease) {
       const lockedUpload = await transaction.execute<{ id: string }>(sql`
         select ${mediaUploads.id} as id
@@ -533,6 +545,15 @@ uploadRoutes.post("/start", async (context) => {
 
   try {
     const upload = await db.transaction(async (transaction) => {
+      const lockedAtlas = await transaction.execute<{ id: string }>(sql`
+        select ${atlases.id} as id
+        from ${atlases}
+        where ${atlases.id} = ${atlas.id}
+          and ${atlases.deletionStartedAt} is null
+        for update
+      `);
+      if (lockedAtlas.rows.length === 0) return undefined;
+
       const lockedJourney = await transaction.execute<{ id: string }>(sql`
         select ${journeys.id} as id
         from ${journeys}
@@ -732,6 +753,17 @@ uploadRoutes.post("/:id/complete", async (context) => {
   try {
     const storage = getMultipartStorage(upload.storageDriver);
     await db.transaction(async (transaction) => {
+      const lockedAtlas = await transaction.execute<{ id: string }>(sql`
+        select ${atlases.id} as id
+        from ${atlases}
+        where ${atlases.id} = ${atlas.id}
+          and ${atlases.deletionStartedAt} is null
+        for update
+      `);
+      if (lockedAtlas.rows.length === 0) {
+        throw new JourneyUnavailableForUploadError();
+      }
+
       const lockedJourney = await transaction.execute<{ id: string }>(sql`
         select ${journeys.id} as id
         from ${journeys}

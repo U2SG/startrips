@@ -58,16 +58,16 @@ describe("anonymous API rate limiting", () => {
     ).toBe(200);
   });
 
-  it("never limits requests carrying a session cookie", async () => {
+  it("does not trust an unverified session cookie to bypass the budget", async () => {
     const app = buildApp({ maxRequests: 1 });
     const headers = {
       cookie: "startrips.session_token=signed-token",
       "x-forwarded-for": "203.0.113.10",
     };
-    for (let index = 0; index < 5; index += 1) {
-      expect((await app.request("/api/atlases/current", { headers })).status)
-        .toBe(200);
-    }
+    expect((await app.request("/api/atlases/current", { headers })).status)
+      .toBe(200);
+    expect((await app.request("/api/atlases/current", { headers })).status)
+      .toBe(429);
   });
 
   it("exempts health and auth routes from the anonymous budget", async () => {

@@ -9,8 +9,11 @@ import {
   IconX,
 } from "@tabler/icons-react";
 import { useAtlasCapabilities } from "../auth/AuthGateway";
-import { morphJourneyCard } from "../motion/primitives/sharedElement";
+import { CountUp } from "../motion/primitives/CountUp";
+import { useMagnet } from "../motion/primitives/Magnet";
 import { ScrambledText } from "../motion/primitives/ScrambledText";
+import { ShinyText } from "../motion/primitives/ShinyText";
+import { morphJourneyCard } from "../motion/primitives/sharedElement";
 import { LivingAtlasGlobe } from "../scene/LivingAtlasGlobe";
 import {
   JourneyComposer,
@@ -58,6 +61,8 @@ export function LivingAtlasApp() {
   const loadRevision = useRef(0);
   const globePickAccept = useRef<((point: GlobePointPick) => void) | null>(null);
   const reduceMotion = useMemo(preferredReducedMotion, []);
+  const createMagnet = useMagnet<HTMLButtonElement>(14);
+  const storyMagnet = useMagnet<HTMLButtonElement>(14);
 
   const load = useCallback(async (quiet = false) => {
     const revision = ++loadRevision.current;
@@ -70,7 +75,7 @@ export function LivingAtlasApp() {
       // immediately instead of only after the first selection.
       setActiveJourneyId((current) => {
         if (current && loaded.some((journey) => journey.id === current)) return current;
-        return loaded[0]?.id ?? null;
+        return loaded.at(-1)?.id ?? null;
       });
       setLoadError("");
       setStatus("ready");
@@ -241,17 +246,17 @@ export function LivingAtlasApp() {
       </div>
 
       <header className="living-atlas__header">
-        <div className="living-atlas__brand"><IconWorld size={25} stroke={1.1} aria-hidden="true" /><div><p>STARTRIPS · LIVING ATLAS</p><h1>把走过的路留在地球上</h1></div></div>
+        <div className="living-atlas__brand"><IconWorld size={25} stroke={1.1} aria-hidden="true" /><div><p>STARTRIPS · LIVING ATLAS</p><h1><ShinyText>把走过的路留在地球上</ShinyText></h1></div></div>
         <nav aria-label="图谱视图">
           <button type="button" className={view === "planet" ? "is-active" : ""} onClick={() => setView("planet")}><IconWorld size={16} stroke={1.35} aria-hidden="true" />地球</button>
           <button type="button" className={view === "timeline" ? "is-active" : ""} onClick={() => setView("timeline")}><IconTimeline size={16} stroke={1.35} aria-hidden="true" />时间线</button>
-          <button type="button" className="living-atlas__create" onClick={openCreateComposer}><IconPlus size={17} stroke={1.4} aria-hidden="true" />记录旅程</button>
+          <button ref={createMagnet.ref} onMouseMove={createMagnet.onMouseMove} onMouseLeave={createMagnet.onMouseLeave} type="button" className="living-atlas__create" onClick={openCreateComposer}><IconPlus size={17} stroke={1.4} aria-hidden="true" />记录旅程</button>
         </nav>
       </header>
 
       {view === "planet" && journeys.length > 0 ? (
         <nav className="living-atlas__journey-rail" aria-label={`全部旅程，共 ${journeys.length} 段`}>
-          <p>{String(journeys.length).padStart(2, "0")} JOURNEYS</p>
+          <p><CountUp value={journeys.length} initialValue={journeys.length} format={(value) => String(value).padStart(2, "0")} /> JOURNEYS</p>
           <ol>
             {journeys.map((journey) => (
               <li key={journey.id}>
@@ -302,7 +307,7 @@ export function LivingAtlasApp() {
           <IconMapPin className="living-atlas__active-marker" size={18} stroke={1.25} aria-hidden="true" />
           <h2><ScrambledText text={activeJourney.title} /></h2>
           <span>{activeJourney.routePoints.length} 个路线点 · {activeJourney.routePoints.filter((point) => point.isStop).length} 次停靠</span>
-          <button type="button" onClick={() => { setStoryRoutePointId(null); setStoryJourneyId(activeJourney.id); }}>打开故事<IconBook2 size={17} stroke={1.3} aria-hidden="true" /></button>
+          <button ref={storyMagnet.ref} onMouseMove={storyMagnet.onMouseMove} onMouseLeave={storyMagnet.onMouseLeave} type="button" onClick={() => { setStoryRoutePointId(null); setStoryJourneyId(activeJourney.id); }}>打开故事<IconBook2 size={17} stroke={1.3} aria-hidden="true" /></button>
         </aside>
       ) : null}
 
