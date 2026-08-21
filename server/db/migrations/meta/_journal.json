@@ -57,6 +57,13 @@
       "when": 1787223938263,
       "tag": "0007_ambiguous_felicia_hardy",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1787305825658,
+      "tag": "0008_awesome_microchip",
+      "breakpoints": true
     }
   ]
 }

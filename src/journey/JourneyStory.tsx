@@ -5,7 +5,9 @@ import {
   useState,
   type ChangeEvent,
   type MouseEvent,
+  type WheelEvent,
 } from "react";
+import { createPortal } from "react-dom";
 import {
   IconArrowLeft,
   IconArrowRight,
@@ -115,6 +117,7 @@ export function JourneyStory({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const deleteCancelRef = useRef<HTMLButtonElement>(null);
   const mediaDeleteCancelRef = useRef<HTMLButtonElement>(null);
+  const copyRef = useRef<HTMLElement>(null);
 
   function requestClose() {
     if (fullscreen) {
@@ -269,6 +272,14 @@ export function JourneyStory({
 
   function closeFromBackdrop(event: MouseEvent<HTMLDivElement>) {
     if (event.target === event.currentTarget) requestClose();
+  }
+
+  function scrollCopyFromMedia(event: WheelEvent<HTMLElement>) {
+    if ((event.target as Element).closest(".journey-story__copy")) return;
+    const copy = copyRef.current;
+    if (!copy || copy.scrollHeight <= copy.clientHeight) return;
+    copy.scrollTop += event.deltaY;
+    event.preventDefault();
   }
 
   async function uploadFiles(files: readonly File[]) {
@@ -443,9 +454,9 @@ export function JourneyStory({
     setUploadState({ status: "idle" });
   }
 
-  return (
+  const content = (
     <div className="journey-story-backdrop" role="presentation" onClick={closeFromBackdrop}>
-      <article ref={dialogRef} tabIndex={-1} className="journey-story motion-staged" role="dialog" aria-modal="true" aria-labelledby="journey-story-title">
+      <article ref={dialogRef} tabIndex={-1} className="journey-story motion-staged" role="dialog" aria-modal="true" aria-labelledby="journey-story-title" onWheel={scrollCopyFromMedia}>
         <header>
           <div>
             <p>PRIVATE JOURNEY · {journeyRange(journey)}</p>
@@ -516,7 +527,7 @@ export function JourneyStory({
             ) : null}
           </section>
 
-          <section className="journey-story__copy">
+          <section ref={copyRef} className="journey-story__copy">
             <nav className="journey-story__route-points" aria-label="选择旅程途径点">
               <button
                 type="button"
@@ -669,4 +680,6 @@ export function JourneyStory({
       ) : null}
     </div>
   );
+
+  return typeof document === "undefined" ? content : createPortal(content, document.body);
 }

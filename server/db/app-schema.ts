@@ -43,6 +43,7 @@ export const journeys = pgTable(
     endedOn: date("ended_on", { mode: "string" }),
     note: text("note").notNull().default(""),
     lightColor: text("light_color").notNull().default("#f4ce73"),
+    lightEffect: text("light_effect"),
     revision: integer("revision").notNull().default(1),
     createdByUserId: text("created_by_user_id").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true })

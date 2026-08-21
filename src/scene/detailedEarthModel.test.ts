@@ -3,9 +3,13 @@ import {
   AMAP_RASTER_STYLE,
   createDetailedEarthLabelExpression,
   DEFAULT_DETAILED_EARTH_STYLE_URL,
+  DETAILED_EARTH_INITIAL_ZOOM,
+  DETAILED_EARTH_MIN_ZOOM,
+  DETAILED_EARTH_RETURN_ZOOM,
   getDetailedEarthStyle,
   isDetailedEarthNameLabel,
   isRasterDetailedEarth,
+  shouldReturnToParticleEarth,
   useGlobeProjection,
 } from "./detailedEarthModel";
 
@@ -58,5 +62,12 @@ describe("detailedEarthModel", () => {
   it("only replaces map labels backed by name fields", () => {
     expect(isDetailedEarthNameLabel(["get", "name:nonlatin"])).toBe(true);
     expect(isDetailedEarthNameLabel(["to-string", ["get", "ref"]])).toBe(false);
+  });
+
+  it("returns from the regional map before it expands into a world map", () => {
+    expect(DETAILED_EARTH_MIN_ZOOM).toBeLessThan(DETAILED_EARTH_RETURN_ZOOM);
+    expect(DETAILED_EARTH_INITIAL_ZOOM).toBeGreaterThan(DETAILED_EARTH_RETURN_ZOOM);
+    expect(shouldReturnToParticleEarth(DETAILED_EARTH_RETURN_ZOOM + 0.01)).toBe(false);
+    expect(shouldReturnToParticleEarth(DETAILED_EARTH_RETURN_ZOOM)).toBe(true);
   });
 });

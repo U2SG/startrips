@@ -35,14 +35,25 @@ export function createParticleEarthMaterial({
       uniform float uTime;
       uniform float uViewportHeight;
       varying float vStrength;
+      varying float vTwinkle;
 
       void main() {
         vec3 transformed = mix(position, targetPosition, uMorph);
-        float pulse = sin(float(gl_VertexID) * 0.071 + uTime * 0.55) * 0.008;
+        float vertexId = float(gl_VertexID);
+        float seed = fract(sin(vertexId * 12.9898) * 43758.5453);
+        float pulse = sin(vertexId * 0.071 + uTime * 0.55) * 0.008;
+        float shimmer = 0.5 + 0.5 * sin(
+          uTime * (0.72 + seed * 1.18) + seed * 6.2831853
+        );
+        float spark = smoothstep(0.86, 0.995, shimmer) * step(0.68, seed);
         transformed *= 1.0 + pulse;
         vec4 mvPosition = modelViewMatrix * vec4(transformed, 1.0);
         gl_Position = projectionMatrix * mvPosition;
-        gl_PointSize = max(1.0, uPointSize * (uViewportHeight / 720.0) * (1.7 / -mvPosition.z));
+        vTwinkle = 0.72 + shimmer * 0.3 + spark * 0.95;
+        gl_PointSize = max(
+          1.0,
+          uPointSize * (uViewportHeight / 720.0) * (1.7 / -mvPosition.z) * (0.9 + spark * 0.32)
+        );
         vStrength = mix(1.0, 0.72, uMorph);
       }
     `,
@@ -50,12 +61,13 @@ export function createParticleEarthMaterial({
       uniform vec3 uColor;
       uniform float uOpacity;
       varying float vStrength;
+      varying float vTwinkle;
 
       void main() {
         float distanceToCenter = distance(gl_PointCoord, vec2(0.5));
         float core = 1.0 - smoothstep(0.08, 0.48, distanceToCenter);
         float halo = 1.0 - smoothstep(0.18, 0.5, distanceToCenter);
-        float alpha = (core * 0.84 + halo * 0.32) * uOpacity * vStrength;
+        float alpha = (core * 0.84 + halo * 0.32) * uOpacity * vStrength * vTwinkle;
         if (alpha < 0.015) discard;
         gl_FragColor = vec4(uColor, alpha);
       }

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  IconBook2,
+  IconArrowRight,
   IconMapPin,
+  IconPhoto,
   IconPlus,
   IconRoute,
   IconTimeline,
@@ -22,12 +23,18 @@ import {
 } from "./JourneyComposer";
 import { JourneyStory } from "./JourneyStory";
 import { JourneyTimeline } from "./JourneyTimeline";
-import { deleteJourney, listJourneys, restoreJourney } from "./journeyApi";
+import {
+  deleteJourney,
+  getPrivateMediaRead,
+  listJourneys,
+  restoreJourney,
+} from "./journeyApi";
 import {
   mergeJourney,
   sortJourneysChronologically,
   toJourneyRoutes,
 } from "./journeyModel";
+import { getLightEffectGradient } from "./lightEffects";
 import type { Journey, JourneyRoute } from "./types";
 
 type AtlasView = "planet" | "timeline";
@@ -40,6 +47,90 @@ function journeyFocus(journey: Journey | null) {
   if (!journey || journey.routePoints.length === 0) return null;
   const point = journey.routePoints[Math.floor((journey.routePoints.length - 1) / 2)];
   return { lat: point.latitude, lon: point.longitude };
+}
+
+type JourneyCardMediaRead =
+  | { status: "idle" | "loading" | "error" }
+  | { status: "ready"; url: string };
+
+function JourneyCardMedia({
+  journey,
+  reduceMotion,
+}: {
+  journey: Journey;
+  reduceMotion: boolean;
+}) {
+  const asset = journey.media[0] ?? null;
+  const [read, setRead] = useState<JourneyCardMediaRead>({ status: "idle" });
+
+  useEffect(() => {
+    let cancelled = false;
+    let refreshTimer = 0;
+    if (!asset) {
+      setRead({ status: "idle" });
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const load = async () => {
+      setRead({ status: "loading" });
+      try {
+        const next = await getPrivateMediaRead(asset.id);
+        if (cancelled) return;
+        setRead({ status: "ready", url: next.url });
+        const expiresAt = Date.parse(next.expiresAt);
+        const refreshIn = Number.isFinite(expiresAt)
+          ? Math.max(30_000, expiresAt - Date.now() - 30_000)
+          : 5 * 60_000;
+        refreshTimer = window.setTimeout(
+          () => void load(),
+          refreshIn,
+        );
+      } catch {
+        if (!cancelled) setRead({ status: "error" });
+      }
+    };
+
+    void load();
+    return () => {
+      cancelled = true;
+      window.clearTimeout(refreshTimer);
+    };
+  }, [asset?.id]);
+
+  if (!asset) return null;
+  return (
+    <figure className={`living-atlas__active-media is-${read.status}`}>
+      {read.status === "ready" && asset.mimeType.startsWith("video/") ? (
+        <video
+          src={read.url}
+          aria-label={asset.fileName}
+          autoPlay={!reduceMotion}
+          loop={!reduceMotion}
+          muted
+          playsInline
+          preload={reduceMotion ? "metadata" : "auto"}
+          onError={() => setRead({ status: "error" })}
+        />
+      ) : null}
+      {read.status === "ready" && !asset.mimeType.startsWith("video/") ? (
+        <img
+          src={read.url}
+          alt={asset.fileName}
+          loading="eager"
+          onError={() => setRead({ status: "error" })}
+        />
+      ) : null}
+      {read.status !== "ready" ? (
+        <span className="living-atlas__active-media-state">
+          <IconPhoto size={18} stroke={1.2} aria-hidden="true" />
+          {read.status === "error" ? "媒体暂不可用" : "正在载入媒体"}
+        </span>
+      ) : null}
+      <figcaption>{String(journey.media.length).padStart(2, "0")} MEDIA</figcaption>
+    </figure>
+  );
 }
 
 export function LivingAtlasApp() {
@@ -110,6 +201,7 @@ export function LivingAtlasApp() {
 
   const activeJourney = journeys.find((journey) => journey.id === activeJourneyId) ?? null;
   const editingJourney = journeys.find((journey) => journey.id === editingJourneyId) ?? null;
+  const journeyRail = useMemo(() => [...journeys].reverse(), [journeys]);
   const routes = useMemo(() => {
     const savedRoutes = toJourneyRoutes(journeys);
     if (!draftRoute) return savedRoutes;
@@ -255,25 +347,33 @@ export function LivingAtlasApp() {
       </header>
 
       {view === "planet" && journeys.length > 0 ? (
-        <nav className="living-atlas__journey-rail" aria-label={`全部旅程，共 ${journeys.length} 段`}>
-          <p><CountUp value={journeys.length} initialValue={journeys.length} format={(value) => String(value).padStart(2, "0")} /> JOURNEYS</p>
+        <nav className="living-atlas__journey-rail motion-staged" aria-label={`全部旅程，共 ${journeys.length} 段`}>
+          <div className="living-atlas__journey-rail-heading">
+            <span>旅程</span>
+            <small><CountUp value={journeys.length} initialValue={journeys.length} format={(value) => String(value).padStart(2, "0")} /> JOURNEYS</small>
+          </div>
           <ol>
-            {journeys.map((journey) => (
+            {journeyRail.map((journey) => (
               <li key={journey.id}>
                 <button
                   type="button"
                   className={journey.id === activeJourneyId ? "is-active" : ""}
                   aria-current={journey.id === activeJourneyId ? "true" : undefined}
-                  style={{ "--journey-color": journey.lightColor } as React.CSSProperties}
+                  style={{
+                    "--journey-color": journey.lightColor,
+                    "--journey-gradient": getLightEffectGradient(journey.lightEffect, journey.lightColor),
+                  } as React.CSSProperties}
                   onClick={(event) => selectJourney(journey.id, event.currentTarget)}
                 >
                   <span aria-hidden="true" />
                   <strong>{journey.title}</strong>
                   <small>{journey.startedOn}</small>
+                  <IconArrowRight className="living-atlas__journey-arrow" size={16} stroke={1.35} aria-hidden="true" />
                 </button>
               </li>
             ))}
           </ol>
+          <p className="living-atlas__journey-scroll-hint">滚动查看更多旅程</p>
         </nav>
       ) : null}
 
@@ -302,12 +402,26 @@ export function LivingAtlasApp() {
       ) : null}
 
       {view === "planet" && activeJourney ? (
-        <aside className={`living-atlas__active${arrivalJourneyId === activeJourney.id ? " is-arriving" : ""}`} style={{ "--journey-color": activeJourney.lightColor } as React.CSSProperties}>
+        <aside
+          className={`living-atlas__active${activeJourney.media.length > 0 ? " has-media" : ""}${arrivalJourneyId === activeJourney.id ? " is-arriving" : ""}`}
+          style={{
+            "--journey-color": activeJourney.lightColor,
+            "--journey-gradient": getLightEffectGradient(activeJourney.lightEffect, activeJourney.lightColor),
+          } as React.CSSProperties}
+          aria-live="polite"
+        >
           <p>{activeJourney.startedOn}{activeJourney.endedOn ? ` — ${activeJourney.endedOn}` : ""}</p>
           <IconMapPin className="living-atlas__active-marker" size={18} stroke={1.25} aria-hidden="true" />
           <h2><ScrambledText text={activeJourney.title} /></h2>
           <span>{activeJourney.routePoints.length} 个路线点 · {activeJourney.routePoints.filter((point) => point.isStop).length} 次停靠</span>
-          <button ref={storyMagnet.ref} onMouseMove={storyMagnet.onMouseMove} onMouseLeave={storyMagnet.onMouseLeave} type="button" onClick={() => { setStoryRoutePointId(null); setStoryJourneyId(activeJourney.id); }}>打开故事<IconBook2 size={17} stroke={1.3} aria-hidden="true" /></button>
+          <JourneyCardMedia journey={activeJourney} reduceMotion={reduceMotion} />
+          <p className={`living-atlas__active-note${activeJourney.note ? "" : " is-empty"}`}>
+            {activeJourney.note || "路线已经留在地球上，故事等待被打开。"}
+          </p>
+          <button ref={storyMagnet.ref} onMouseMove={storyMagnet.onMouseMove} onMouseLeave={storyMagnet.onMouseLeave} type="button" onClick={() => { setStoryRoutePointId(null); setStoryJourneyId(activeJourney.id); }}>
+            <span>打开故事</span>
+            <span className="living-atlas__active-action-icon" aria-hidden="true"><IconArrowRight size={17} stroke={1.35} /></span>
+          </button>
         </aside>
       ) : null}
 

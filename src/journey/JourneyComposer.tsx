@@ -3,6 +3,7 @@ import {
   useMemo,
   useState,
   type ChangeEvent,
+  type CSSProperties,
   type FormEvent,
 } from "react";
 import {
@@ -25,7 +26,6 @@ import {
   updateJourney,
 } from "./journeyApi";
 import {
-  MAX_JOURNEY_FILES,
   validateJourneyFiles,
   validateJourneyInput,
 } from "./journeyModel";
@@ -46,9 +46,13 @@ import type {
   LocationSearchResponse,
   LocationSearchResult,
 } from "./types";
+import {
+  getLightEffectGradient,
+  LIGHT_COLORS,
+  LIGHT_EFFECTS,
+  type LightEffectId,
+} from "./lightEffects";
 import { useModalFocus } from "./useModalFocus";
-
-const LIGHT_COLORS = ["#f4ce73", "#e99578", "#77c8c2", "#8ca8df", "#c49bd8"];
 
 type UploadProgress = {
   fileName: string;
@@ -310,6 +314,7 @@ export function JourneyComposer({
   const [endedOn, setEndedOn] = useState(journey?.endedOn ?? "");
   const [note, setNote] = useState(journey?.note ?? "");
   const [lightColor, setLightColor] = useState(journey?.lightColor ?? LIGHT_COLORS[0]);
+  const [lightEffect, setLightEffect] = useState<LightEffectId | null>(journey?.lightEffect ?? null);
   const [mediaFiles, setMediaFiles] = useState<PendingJourneyMedia[]>([]);
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
@@ -317,6 +322,11 @@ export function JourneyComposer({
   const [savedResult, setSavedResult] = useState<JourneySaveResult | null>(null);
   const [retryAssignments, setRetryAssignments] = useState<JourneyMediaUploadAssignment[]>([]);
   const [globePicking, setGlobePicking] = useState(false);
+  const activeLightEffect = LIGHT_EFFECTS.find((effect) => effect.id === lightEffect) ?? null;
+  const safeLightColor = /^#[0-9a-fA-F]{6}$/.test(lightColor) ? lightColor : LIGHT_COLORS[0];
+  const activeLightGradient = activeLightEffect
+    ? getLightEffectGradient(activeLightEffect.id, safeLightColor)
+    : `linear-gradient(135deg, ${safeLightColor}, ${safeLightColor})`;
   const dialogRef = useModalFocus<HTMLElement>(() => {
     if (!saving) closeComposer();
   }, !globePicking);
@@ -327,14 +337,16 @@ export function JourneyComposer({
     endedOn: endedOn || null,
     note: note.trim(),
     lightColor,
+    lightEffect,
     revision: journey?.revision,
     routePoints: routeDraftToInput(routePoints),
-  }), [endedOn, journey?.revision, lightColor, note, routePoints, startedOn, title]);
+  }), [endedOn, journey?.revision, lightColor, lightEffect, note, routePoints, startedOn, title]);
 
   useEffect(() => {
     onRoutePreviewChange?.(routePoints.length === 0 ? null : {
       id: journey?.id ?? "draft-route-preview",
       color: lightColor,
+      lightEffect,
       points: routePoints.map((point) => ({
         lat: point.latitude,
         lon: point.longitude,
@@ -342,7 +354,7 @@ export function JourneyComposer({
         label: point.label,
       })),
     });
-  }, [journey?.id, lightColor, onRoutePreviewChange, routePoints]);
+  }, [journey?.id, lightColor, lightEffect, onRoutePreviewChange, routePoints]);
 
   useEffect(() => {
     if (!globePicking) return;
@@ -608,7 +620,7 @@ export function JourneyComposer({
                 <label className="journey-media-picker">
                   <IconUpload size={26} stroke={1.2} aria-hidden="true" />
                   <span>添加照片或视频</span>
-                  <strong>{journey?.media.length ? `${journey.media.length} 个已有媒体 · 继续添加` : `最多 ${MAX_JOURNEY_FILES} 个文件`}</strong>
+                  <strong>{journey?.media.length ? `${journey.media.length} 个已有媒体 · 可继续添加` : "支持照片与视频，可持续添加"}</strong>
                   <input type="file" accept="image/avif,image/jpeg,image/png,image/webp,video/mp4,video/quicktime,video/webm" multiple onChange={selectFiles} />
                 </label>
                 <ul>
@@ -632,28 +644,32 @@ export function JourneyComposer({
                         ))}
                       </select>
                       <button type="button" onClick={() => setMediaFiles((current) => current.filter((_, candidate) => candidate !== index))}>移除</button>
-                      <button
-                        type="button"
-                        aria-label={`向前调整 ${media.file.name} 的排序`}
-                        disabled={index === 0}
-                        onClick={() => setMediaFiles((current) => {
-                          if (index === 0) return current;
-                          const next = [...current];
-                          [next[index - 1], next[index]] = [next[index], next[index - 1]];
-                          return next;
-                        })}
-                      >上移</button>
-                      <button
-                        type="button"
-                        aria-label={`向后调整 ${media.file.name} 的排序`}
-                        disabled={index === mediaFiles.length - 1}
-                        onClick={() => setMediaFiles((current) => {
-                          if (index === current.length - 1) return current;
-                          const next = [...current];
-                          [next[index], next[index + 1]] = [next[index + 1], next[index]];
-                          return next;
-                        })}
-                      >下移</button>
+                      {isEditing ? (
+                        <>
+                          <button
+                            type="button"
+                            aria-label={`向前调整 ${media.file.name} 的排序`}
+                            disabled={index === 0}
+                            onClick={() => setMediaFiles((current) => {
+                              if (index === 0) return current;
+                              const next = [...current];
+                              [next[index - 1], next[index]] = [next[index], next[index - 1]];
+                              return next;
+                            })}
+                          >上移</button>
+                          <button
+                            type="button"
+                            aria-label={`向后调整 ${media.file.name} 的排序`}
+                            disabled={index === mediaFiles.length - 1}
+                            onClick={() => setMediaFiles((current) => {
+                              if (index === current.length - 1) return current;
+                              const next = [...current];
+                              [next[index], next[index + 1]] = [next[index + 1], next[index]];
+                              return next;
+                            })}
+                          >下移</button>
+                        </>
+                      ) : null}
                     </li>
                   ))}
                 </ul>
@@ -672,8 +688,62 @@ export function JourneyComposer({
                 </div>
                 <label><span>旅程故事 <small>可选</small></span><textarea rows={5} maxLength={2000} value={note} onChange={(event) => setNote(event.target.value)} placeholder="记下沿途发生了什么，也可以留白。" /></label>
                 <fieldset className="journey-light-colors">
-                  <legend>这段旅程的光</legend>
-                  {LIGHT_COLORS.map((color) => <button key={color} type="button" className={lightColor === color ? "is-selected" : ""} style={{ backgroundColor: color }} onClick={() => setLightColor(color)} aria-label={`选择颜色 ${color}`} aria-pressed={lightColor === color} />)}
+                  <legend>这段旅程的光 · 单色基调</legend>
+                  <div className="journey-light-color-list">
+                    {LIGHT_COLORS.map((color) => (
+                      <button
+                        key={color}
+                        type="button"
+                        className={lightColor === color ? "is-selected" : ""}
+                        style={{ backgroundColor: color }}
+                        onClick={() => {
+                          setLightColor(color);
+                          setLightEffect(null);
+                        }}
+                        aria-label={`选择单色 ${color}`}
+                        aria-pressed={lightColor === color}
+                      />
+                    ))}
+                  </div>
+                </fieldset>
+                <fieldset className="journey-light-effects">
+                  <legend>多色特效</legend>
+                  <div
+                    className="journey-light-effect-preview"
+                    style={{
+                      "--journey-light-gradient": activeLightGradient,
+                      "--journey-light-color": safeLightColor,
+                    } as CSSProperties}
+                  >
+                    <span className="journey-light-effect-preview__orb" aria-hidden="true" />
+                    <span className="journey-light-effect-preview__copy">
+                      <strong>{activeLightEffect?.label ?? "单色"}</strong>
+                    </span>
+                    <span className="journey-light-effect-preview__caption">旅程的光</span>
+                  </div>
+                  <div className="journey-light-effect-list" role="group" aria-label="选择多色特效">
+                    {LIGHT_EFFECTS.map((effect) => (
+                      <button
+                        key={effect.id}
+                        type="button"
+                        className={lightEffect === effect.id ? "is-selected" : ""}
+                        style={{
+                          "--journey-light-gradient": getLightEffectGradient(effect.id, safeLightColor),
+                          "--journey-light-color": safeLightColor,
+                        } as CSSProperties}
+                        onClick={() => {
+                          setLightEffect(effect.id);
+                        }}
+                        aria-label={`选择${effect.label}特效`}
+                        aria-pressed={lightEffect === effect.id}
+                      >
+                        <span className="journey-light-effect__orb" aria-hidden="true" />
+                        <span className="journey-light-effect__copy">
+                          <strong>{effect.label}</strong>
+                        </span>
+                      </button>
+                    ))}
+                  </div>
                 </fieldset>
               </div>
             </section>
@@ -736,8 +806,12 @@ export function JourneyComposer({
                     </div>
                     <label className="journey-checkbox"><input type="checkbox" checked={point.isStop} onChange={() => setRoutePoints((current) => toggleRouteStop(current, point.draftId))} />停靠</label>
                     <div className="journey-route-draft__actions">
-                      <button type="button" disabled={index === 0} onClick={() => setRoutePoints((current) => moveRoutePoint(current, point.draftId, -1))} aria-label="向前移动"><IconArrowUp size={15} stroke={1.4} aria-hidden="true" /></button>
-                      <button type="button" disabled={index === routePoints.length - 1} onClick={() => setRoutePoints((current) => moveRoutePoint(current, point.draftId, 1))} aria-label="向后移动"><IconArrowDown size={15} stroke={1.4} aria-hidden="true" /></button>
+                      {isEditing ? (
+                        <>
+                          <button type="button" disabled={index === 0} onClick={() => setRoutePoints((current) => moveRoutePoint(current, point.draftId, -1))} aria-label="向前移动"><IconArrowUp size={15} stroke={1.4} aria-hidden="true" /></button>
+                          <button type="button" disabled={index === routePoints.length - 1} onClick={() => setRoutePoints((current) => moveRoutePoint(current, point.draftId, 1))} aria-label="向后移动"><IconArrowDown size={15} stroke={1.4} aria-hidden="true" /></button>
+                        </>
+                      ) : null}
                       <button type="button" onClick={() => removeDraftPoint(point.draftId)} aria-label="删除地点"><IconTrash size={15} stroke={1.4} aria-hidden="true" /></button>
                     </div>
                   </li>

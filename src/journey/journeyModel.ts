@@ -4,8 +4,8 @@ import type {
   JourneyRoute,
   JourneyYearGroup,
 } from "./types";
+import { isLightEffectId } from "./lightEffects";
 
-export const MAX_JOURNEY_FILES = 12;
 export const MAX_JOURNEY_FILE_BYTES = 2_000_000_000;
 export const MAX_ROUTE_POINTS = 64;
 
@@ -71,6 +71,7 @@ export function toJourneyRoutes(journeys: readonly Journey[]): JourneyRoute[] {
   return journeys.map((journey) => ({
     id: journey.id,
     color: journey.lightColor,
+    lightEffect: journey.lightEffect ?? null,
     points: journey.routePoints.map((point) => ({
       id: point.id,
       lat: point.latitude,
@@ -97,6 +98,9 @@ export function validateJourneyInput(input: JourneyInput): ValidationResult {
   if (input.note.length > 2000) errors.push("旅程故事不能超过 2000 个字符");
   if (!/^#[0-9a-fA-F]{6}$/.test(input.lightColor)) {
     errors.push("旅程颜色无效");
+  }
+  if (input.lightEffect !== undefined && input.lightEffect !== null && !isLightEffectId(input.lightEffect)) {
+    errors.push("旅程光效无效");
   }
   if (input.routePoints.length < 1 || input.routePoints.length > MAX_ROUTE_POINTS) {
     errors.push(`路线必须包含 1 到 ${MAX_ROUTE_POINTS} 个点`);
@@ -137,10 +141,6 @@ export function validateJourneyFiles(
   files: readonly MediaFileLike[],
 ): ValidationResult {
   const errors: string[] = [];
-  if (files.length > MAX_JOURNEY_FILES) {
-    errors.push(`一次最多选择 ${MAX_JOURNEY_FILES} 个媒体文件`);
-  }
-
   files.forEach((file) => {
     if (!file.name.trim() || file.name.length > 180) {
       errors.push("文件名不能为空且不能超过 180 个字符");

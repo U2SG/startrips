@@ -86,4 +86,12 @@ describe("parseJourneyInput", () => {
     expect(parseJourneyInput({ ...validJourney, revision: 0 })).toBeNull();
     expect(parseJourneyInput({ ...validJourney, revision: 1.5 })).toBeNull();
   });
+
+  it("accepts known effects, preserves legacy null, and rejects unknown effects", () => {
+    expect(parseJourneyInput({ ...validJourney, lightEffect: "rainbow" })?.lightEffect)
+      .toBe("rainbow");
+    expect(parseJourneyInput({ ...validJourney, lightEffect: null })?.lightEffect)
+      .toBeNull();
+    expect(parseJourneyInput({ ...validJourney, lightEffect: "static-glitch" })).toBeNull();
+  });
 });

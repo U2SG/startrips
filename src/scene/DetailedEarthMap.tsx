@@ -7,10 +7,12 @@ import {
 import "maplibre-gl/dist/maplibre-gl.css";
 import {
   createDetailedEarthLabelExpression,
+  DETAILED_EARTH_INITIAL_ZOOM,
+  DETAILED_EARTH_MIN_ZOOM,
   type DetailedEarthLanguage,
   getDetailedEarthStyle,
   isDetailedEarthNameLabel,
-  isRasterDetailedEarth,
+  shouldReturnToParticleEarth,
   useGlobeProjection,
 } from "./detailedEarthModel";
 
@@ -18,6 +20,7 @@ type DetailedEarthMapProps = {
   focusPoint?: { lat: number; lon: number } | null;
   language: DetailedEarthLanguage;
   onGlobePointPick?: (point: { latitude: number; longitude: number }) => void;
+  onOverviewRequest?: () => void;
   onReady?: () => void;
 };
 
@@ -35,15 +38,18 @@ export default function DetailedEarthMap({
   focusPoint,
   language,
   onGlobePointPick,
+  onOverviewRequest,
   onReady,
 }: DetailedEarthMapProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const languageRef = useRef(language);
   const onPickRef = useRef(onGlobePointPick);
+  const onOverviewRequestRef = useRef(onOverviewRequest);
   const onReadyRef = useRef(onReady);
   languageRef.current = language;
   onPickRef.current = onGlobePointPick;
+  onOverviewRequestRef.current = onOverviewRequest;
   onReadyRef.current = onReady;
 
   useEffect(() => {
@@ -56,11 +62,11 @@ export default function DetailedEarthMap({
       container: host,
       style: getDetailedEarthStyle(),
       center: initialCenter,
-      zoom: focusPoint ? 6.6 : 3.2,
-      minZoom: 1.5,
-      maxZoom: isRasterDetailedEarth() ? 18 : 20,
-      maxPitch: 58,
-      pitch: isRasterDetailedEarth() ? 0 : 20,
+      zoom: DETAILED_EARTH_INITIAL_ZOOM,
+      minZoom: DETAILED_EARTH_MIN_ZOOM,
+      maxZoom: 16,
+      maxPitch: 0,
+      pitch: 0,
       bearing: 0,
       renderWorldCopies: false,
       attributionControl: false,
@@ -68,8 +74,11 @@ export default function DetailedEarthMap({
       fadeDuration: 650,
     });
     let initialLoadSettled = false;
+    let overviewRequested = false;
     mapRef.current = map;
-    map.addControl(new NavigationControl({ visualizePitch: true }), "bottom-right");
+    map.dragRotate.disable();
+    map.touchZoomRotate.disableRotation();
+    map.addControl(new NavigationControl({ showCompass: false }), "bottom-right");
     map.addControl(new AttributionControl({ compact: true }), "bottom-left");
 
     map.on("load", () => {
@@ -97,6 +106,15 @@ export default function DetailedEarthMap({
         longitude: event.lngLat.lng,
       });
     });
+    map.on("zoomend", () => {
+      if (
+        !initialLoadSettled
+        || overviewRequested
+        || !shouldReturnToParticleEarth(map.getZoom())
+      ) return;
+      overviewRequested = true;
+      onOverviewRequestRef.current?.();
+    });
     map.on("error", (event) => {
       host.dataset.mapError = event.error?.message ?? "map-error";
     });
@@ -118,7 +136,7 @@ export default function DetailedEarthMap({
     if (!map || !focusPoint) return;
     map.flyTo({
       center: [focusPoint.lon, focusPoint.lat],
-      zoom: Math.max(map.getZoom(), 6.6),
+      zoom: Math.max(map.getZoom(), DETAILED_EARTH_INITIAL_ZOOM),
       duration: 900,
       essential: true,
     });

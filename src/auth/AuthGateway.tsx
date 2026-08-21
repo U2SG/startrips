@@ -6,6 +6,7 @@ import {
   type FormEvent,
   type ReactNode,
 } from "react";
+import { IconChevronDown, IconUserCircle } from "@tabler/icons-react";
 import { authClient } from "./auth-client";
 
 type OrganizationSummary = {
@@ -233,6 +234,7 @@ function WorkspaceGate({ children, activeOrganizationId, userName }: {
   const [editAtlasOpen, setEditAtlasOpen] = useState(false);
   const [editTitle, setEditTitle] = useState("");
   const [editDedication, setEditDedication] = useState("");
+  const [dockOpen, setDockOpen] = useState(false);
 
   useEffect(() => {
     setSelectedActiveId(activeOrganizationId);
@@ -394,25 +396,40 @@ function WorkspaceGate({ children, activeOrganizationId, userName }: {
   const isOwner = gate.role.split(",").includes("owner");
   return (
     <>
-      <aside className="account-dock">
-        <span><strong>{gate.atlas.title}</strong> · {userName}</span>
-        {message ? <small>{message}</small> : null}
-        {isOwner ? <button type="button" onClick={() => setInviteOpen((value) => !value)}>邀请另一位</button> : null}
-        <button type="button" onClick={() => { setEditTitle(gate.atlas.title); setEditDedication(gate.atlas.dedication); setEditAtlasOpen((value) => !value); setMessage(""); }}>编辑图谱</button>
-        <button type="button" onClick={() => void authClient.signOut().then(() => window.location.assign("/"))}>退出</button>
-        {inviteOpen ? (
-          <form onSubmit={invite}>
-            <label><span>对方邮箱</span><input required type="email" value={inviteEmail} onChange={(event) => setInviteEmail(event.target.value)} /></label>
-            <button type="submit" disabled={pending}>发送邀请</button>
-          </form>
-        ) : null}
-        {editAtlasOpen ? (
-          <form onSubmit={saveAtlas}>
-            <label><span>图谱名称</span><input required maxLength={80} value={editTitle} onChange={(event) => setEditTitle(event.target.value)} /></label>
-            <label><span>题词（可选）</span><textarea rows={2} maxLength={240} value={editDedication} onChange={(event) => setEditDedication(event.target.value)} /></label>
-            <button type="submit" disabled={pending}>{pending ? "保存中…" : "保存"}</button>
-          </form>
-        ) : null}
+      <aside className={`account-dock${dockOpen ? " is-open" : ""}`}>
+        <button
+          className="account-dock__tab"
+          type="button"
+          aria-label={dockOpen ? "收起账户菜单" : "展开账户菜单"}
+          aria-expanded={dockOpen}
+          aria-controls="account-dock-panel"
+          onClick={() => setDockOpen((value) => !value)}
+        >
+          <IconUserCircle size={19} stroke={1.35} aria-hidden="true" />
+          <IconChevronDown className="account-dock__tab-chevron" size={14} stroke={1.35} aria-hidden="true" />
+        </button>
+        <div id="account-dock-panel" className="account-dock__panel">
+          <span className="account-dock__identity"><strong>{gate.atlas.title}</strong> · {userName}</span>
+          {message ? <small>{message}</small> : null}
+          <div className="account-dock__actions">
+            {isOwner ? <button type="button" onClick={() => { setEditAtlasOpen(false); setInviteOpen((value) => !value); }}>邀请另一位</button> : null}
+            <button type="button" onClick={() => { setInviteOpen(false); setEditTitle(gate.atlas.title); setEditDedication(gate.atlas.dedication); setEditAtlasOpen((value) => !value); setMessage(""); }}>编辑图谱</button>
+            <button type="button" onClick={() => void authClient.signOut().then(() => window.location.assign("/"))}>退出</button>
+          </div>
+          {inviteOpen ? (
+            <form onSubmit={invite}>
+              <label><span>对方邮箱</span><input required type="email" value={inviteEmail} onChange={(event) => setInviteEmail(event.target.value)} /></label>
+              <button type="submit" disabled={pending}>发送邀请</button>
+            </form>
+          ) : null}
+          {editAtlasOpen ? (
+            <form onSubmit={saveAtlas}>
+              <label><span>图谱名称</span><input required maxLength={80} value={editTitle} onChange={(event) => setEditTitle(event.target.value)} /></label>
+              <label><span>题词（可选）</span><textarea rows={2} maxLength={240} value={editDedication} onChange={(event) => setEditDedication(event.target.value)} /></label>
+              <button type="submit" disabled={pending}>{pending ? "保存中…" : "保存"}</button>
+            </form>
+          ) : null}
+        </div>
       </aside>
       <AtlasCapabilitiesContext.Provider value={{ canDeleteJourney: isOwner }}>
         {children}

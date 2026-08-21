@@ -13,6 +13,7 @@ import { deleteJourneyWithStorage } from "../services/delete-journey";
 
 const MAX_ROUTE_POINTS = 64;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const LIGHT_EFFECT_IDS = new Set(["rainbow", "aurora", "sunset", "nebula"]);
 export const JOURNEY_CACHE_CONTROL = "private, no-store, max-age=0";
 
 type JourneyInput = {
@@ -21,6 +22,7 @@ type JourneyInput = {
   endedOn?: unknown;
   note?: unknown;
   lightColor?: unknown;
+  lightEffect?: unknown;
   revision?: unknown;
   routePoints?: unknown;
 };
@@ -59,6 +61,11 @@ export function parseJourneyInput(body: JourneyInput): JourneyValues | null {
   const lightColor = typeof body.lightColor === "string"
     ? body.lightColor.trim()
     : "#f4ce73";
+  const lightEffect = body.lightEffect === undefined || body.lightEffect === null || body.lightEffect === ""
+    ? null
+    : typeof body.lightEffect === "string" && LIGHT_EFFECT_IDS.has(body.lightEffect)
+      ? body.lightEffect
+      : undefined;
   const revision = body.revision === undefined
     ? undefined
     : typeof body.revision === "number"
@@ -74,6 +81,7 @@ export function parseJourneyInput(body: JourneyInput): JourneyValues | null {
     || (endedOn !== null && endedOn < startedOn)
     || note.length > 2000
     || !/^#[0-9a-fA-F]{6}$/.test(lightColor)
+    || (body.lightEffect !== undefined && lightEffect === undefined)
     || revision === null
     || !Array.isArray(body.routePoints)
     || body.routePoints.length < 1
@@ -122,7 +130,7 @@ export function parseJourneyInput(body: JourneyInput): JourneyValues | null {
   const persistedIds = routePoints.flatMap((point) => point.id ? [point.id] : []);
   if (new Set(persistedIds).size !== persistedIds.length) return null;
 
-  return { title, startedOn, endedOn, note, lightColor, revision, routePoints };
+  return { title, startedOn, endedOn, note, lightColor, lightEffect, revision, routePoints };
 }
 
 export const journeyRoutes = new Hono();

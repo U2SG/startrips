@@ -1,3 +1,5 @@
+import type { LightEffectId } from "./lightEffects";
+
 export type JourneyMediaAsset = {
   id: string;
   journeyId: string;
@@ -39,6 +41,7 @@ export type Journey = {
   endedOn: string | null;
   note: string;
   lightColor: string;
+  lightEffect?: LightEffectId | null;
   revision: number;
   createdByUserId: string;
   createdAt: string;
@@ -49,7 +52,7 @@ export type Journey = {
 
 export type JourneyInput = Pick<
   Journey,
-  "title" | "startedOn" | "endedOn" | "note" | "lightColor"
+  "title" | "startedOn" | "endedOn" | "note" | "lightColor" | "lightEffect"
 > & {
   revision?: number;
   routePoints: RoutePointInput[];
@@ -68,6 +71,7 @@ export type JourneyYearGroup = {
 export type JourneyRoute = {
   id: string;
   color: string;
+  lightEffect?: LightEffectId | null;
   points: Array<{
     id?: string;
     lat: number;
