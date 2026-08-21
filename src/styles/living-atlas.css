@@ -3253,12 +3253,26 @@
   --journey-point-opacity-high: 0.92;
   transform-box: fill-box;
   transform-origin: center;
+  filter: drop-shadow(0 0 1px currentColor);
   animation: motionJourneyPointTwinkle var(--journey-twinkle-duration, 3.8s) ease-in-out infinite;
   animation-delay: var(--journey-twinkle-delay, 0s);
 }
 
+.particle-earth-route__point--transit,
+.particle-earth-route__point--stop {
+  --journey-point-opacity-low: 0.1;
+  --journey-point-opacity-high: 1;
+  animation-name: motionJourneyTransitTwinkle;
+}
+
 .particle-earth-route.is-active .particle-earth-route__point {
   --journey-point-opacity-low: 0.58;
+  --journey-point-opacity-high: 1;
+}
+
+.particle-earth-route.is-active .particle-earth-route__point--transit,
+.particle-earth-route.is-active .particle-earth-route__point--stop {
+  --journey-point-opacity-low: 0.18;
   --journey-point-opacity-high: 1;
 }
 
@@ -3267,10 +3281,46 @@
   --journey-point-opacity-high: 0.5;
 }
 
+.particle-earth-route.is-muted .particle-earth-route__point--transit,
+.particle-earth-route.is-muted .particle-earth-route__point--stop {
+  --journey-point-opacity-low: 0.08;
+  --journey-point-opacity-high: 0.9;
+}
+
 @keyframes motionJourneyPointTwinkle {
-  0%, 18%, 100% { opacity: var(--journey-point-opacity-low); transform: scale(0.9); }
-  42% { opacity: var(--journey-point-opacity-high); transform: scale(1.08); }
-  56% { opacity: calc(var(--journey-point-opacity-low) + 0.12); transform: scale(0.96); }
+  0%, 18%, 100% {
+    opacity: var(--journey-point-opacity-low);
+    transform: scale(0.9);
+    filter: drop-shadow(0 0 0 currentColor);
+  }
+  42% {
+    opacity: var(--journey-point-opacity-high);
+    transform: scale(1.08);
+    filter: drop-shadow(0 0 3px currentColor) drop-shadow(0 0 7px currentColor);
+  }
+  56% {
+    opacity: calc(var(--journey-point-opacity-low) + 0.12);
+    transform: scale(0.96);
+    filter: drop-shadow(0 0 1px currentColor);
+  }
+}
+
+@keyframes motionJourneyTransitTwinkle {
+  0%, 16%, 100% {
+    opacity: var(--journey-point-opacity-low);
+    transform: scale(0.62);
+    filter: drop-shadow(0 0 1px currentColor);
+  }
+  38% {
+    opacity: var(--journey-point-opacity-high);
+    transform: scale(1.65);
+    filter: drop-shadow(0 0 4px currentColor) drop-shadow(0 0 10px currentColor);
+  }
+  54% {
+    opacity: calc(var(--journey-point-opacity-low) + 0.16);
+    transform: scale(0.8);
+    filter: drop-shadow(0 0 2px currentColor);
+  }
 }
 
 .particle-earth-route__point-ring {
@@ -3317,7 +3367,7 @@
 .particle-earth-route__flow {
   fill: none;
   stroke: #eafdf5;
-  stroke-width: calc(1.7px * var(--journey-route-scale, 1));
+  stroke-width: calc(1.4px * var(--journey-route-scale, 1));
   stroke-linecap: round;
   stroke-dasharray: 4 148;
   opacity: 0;
@@ -3358,21 +3408,21 @@
     background 180ms ease;
 }
 
-/* Origin (hollow) and destination (solid) markers on active routes. */
+/* Solid origin and destination markers inherit each route's color. */
 .particle-earth-route__point--origin {
-  fill: transparent;
-  stroke: currentColor;
-  stroke-width: 1.5;
+  fill: currentColor;
+  stroke: rgba(245, 255, 251, 1);
+  stroke-width: 2;
 }
 
 .particle-earth-route.is-muted .particle-earth-route__point--origin {
-  fill: transparent;
+  fill: currentColor;
 }
 
 .particle-earth-route__point--destination {
-  fill: #eafdf5;
-  stroke: currentColor;
-  stroke-width: 1;
+  fill: currentColor;
+  stroke: rgba(245, 255, 251, 1);
+  stroke-width: 2;
 }
 
 @media (prefers-reduced-motion: reduce) {

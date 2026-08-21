@@ -79,6 +79,8 @@ const GLOBE_WHEEL_ZOOM_SPEED = 0.0012;
 const JOURNEY_ROUTE_LINE_REFERENCE_SCALE = 1.15;
 const JOURNEY_ROUTE_LINE_SCALE_MIN = 0.72;
 const JOURNEY_ROUTE_LINE_SCALE_MAX = 2.4;
+const JOURNEY_ROUTE_MARKER_SIZE_PX = 15;
+const JOURNEY_ROUTE_MARKER_SCALE = JOURNEY_ROUTE_MARKER_SIZE_PX / (3.4 * 2);
 
 export function clampGlobeTilt(rotation: number) {
   return Math.max(
@@ -271,6 +273,38 @@ function routeLabelBoxesOverlap(
 
 function routeLabelCharacterWidth(character: string) {
   return /^[\x20-\x7e]$/.test(character) ? 6.5 : 11.5;
+}
+
+function buildRoutePointStarPoints(
+  centerX: number,
+  centerY: number,
+  outerRadius = 2.8,
+  innerRadius = 1.18,
+) {
+  return Array.from({ length: 10 }, (_, index) => {
+    const angle = -Math.PI / 2 + index * (Math.PI / 5);
+    const radius = index % 2 === 0 ? outerRadius : innerRadius;
+    return `${(centerX + Math.cos(angle) * radius).toFixed(2)},${(centerY + Math.sin(angle) * radius).toFixed(2)}`;
+  }).join(" ");
+}
+
+function buildRoutePointFlagPath(
+  centerX: number,
+  centerY: number,
+  scale = 1,
+) {
+  const point = (x: number, y: number) =>
+    `${(centerX + x * scale).toFixed(2)} ${(centerY + y * scale).toFixed(2)}`;
+  return [
+    `M ${point(-0.55, 3.35)}`,
+    `L ${point(0.45, 3.35)}`,
+    `L ${point(0.45, -2.75)}`,
+    `C ${point(1.55, -3.35)} ${point(2.65, -3.05)} ${point(3.45, -2.2)}`,
+    `C ${point(2.65, -1.25)} ${point(1.55, -0.75)} ${point(0.45, -1.25)}`,
+    `L ${point(0.45, 3.35)}`,
+    `L ${point(-0.55, 3.35)}`,
+    "Z",
+  ].join(" ");
 }
 
 /** Approximate rendered width of a city label (8px font, letter-spacing). */
@@ -890,7 +924,7 @@ export function ParticleEarthScene({
       strandPaths: [SVGPathElement, SVGPathElement];
       fadeGradient: SVGLinearGradientElement;
       points: Array<{
-        element: SVGCircleElement;
+        element: SVGCircleElement | SVGPathElement | SVGPolygonElement;
         ring?: SVGCircleElement;
         position: Vector3;
         label?: RouteVectorLabel;
@@ -1067,10 +1101,6 @@ export function ParticleEarthScene({
           pointTargets.push({ journeyId: route.id, routePointId: point.id });
           pointIndex += 1;
 
-          const element = document.createElementNS(
-            "http://www.w3.org/2000/svg",
-            "circle",
-          );
           const roleClass = routePointIndex === 0
             ? "particle-earth-route__point--origin"
             : routePointIndex === route.points.length - 1
@@ -1078,22 +1108,44 @@ export function ParticleEarthScene({
               : point.isStop
                 ? "particle-earth-route__point--stop"
                 : "particle-earth-route__point--transit";
+          const isOriginPoint = roleClass === "particle-earth-route__point--origin";
+          const isDestinationPoint = roleClass === "particle-earth-route__point--destination";
+          const isWaypoint = !isOriginPoint && !isDestinationPoint;
+          const element = document.createElementNS(
+            "http://www.w3.org/2000/svg",
+            isDestinationPoint ? "polygon" : isWaypoint ? "path" : "circle",
+          ) as SVGCircleElement | SVGPathElement | SVGPolygonElement;
           element.classList.add(
             "particle-earth-route__point",
             roleClass,
           );
           const twinkleOffset = (routeIndex * 0.83 + routePointIndex * 0.47) % 4.6;
-          const twinkleDuration = 3.2 + ((routeIndex * 7 + routePointIndex * 3) % 6) * 0.31;
+          const twinkleDuration = isWaypoint
+            ? 1.8 + ((routeIndex * 7 + routePointIndex * 3) % 5) * 0.18
+            : 3.2 + ((routeIndex * 7 + routePointIndex * 3) % 6) * 0.31;
           element.style.setProperty("--journey-twinkle-delay", `${-twinkleOffset.toFixed(2)}s`);
           element.style.setProperty("--journey-twinkle-duration", `${twinkleDuration.toFixed(2)}s`);
-          element.setAttribute(
-            "r",
-            routePointIndex === 0 || routePointIndex === route.points.length - 1
-              ? "3.4"
-              : point.isStop
-                ? "3"
-                : "1.9",
-          );
+          if (isDestinationPoint) {
+            element.setAttribute(
+              "points",
+              buildRoutePointStarPoints(
+                0,
+                0,
+                3.6 * JOURNEY_ROUTE_MARKER_SCALE,
+                1.52 * JOURNEY_ROUTE_MARKER_SCALE,
+              ),
+            );
+          } else if (isWaypoint) {
+            element.setAttribute(
+              "d",
+              buildRoutePointFlagPath(0, 0, JOURNEY_ROUTE_MARKER_SCALE),
+            );
+          } else {
+            element.setAttribute(
+              "r",
+              String(3.4 * JOURNEY_ROUTE_MARKER_SCALE),
+            );
+          }
           group.appendChild(element);
           let ring: SVGCircleElement | undefined;
           if (
@@ -1107,7 +1159,10 @@ export function ParticleEarthScene({
               "circle",
             );
             ring.classList.add("particle-earth-route__point-ring");
-            ring.setAttribute("r", "3.2");
+            ring.setAttribute(
+              "r",
+              String(3.2 * JOURNEY_ROUTE_MARKER_SCALE),
+            );
             ring.style.setProperty("--journey-pulse-delay", `${-twinkleOffset.toFixed(2)}s`);
             group.appendChild(ring);
           }
@@ -1323,8 +1378,29 @@ export function ParticleEarthScene({
             return;
           }
           element.style.removeProperty("display");
-          element.setAttribute("cx", routeProjectedPoint.x.toFixed(1));
-          element.setAttribute("cy", routeProjectedPoint.y.toFixed(1));
+          if (element.tagName === "polygon") {
+            element.setAttribute(
+              "points",
+              buildRoutePointStarPoints(
+                routeProjectedPoint.x,
+                routeProjectedPoint.y,
+                3.6 * JOURNEY_ROUTE_MARKER_SCALE,
+                1.52 * JOURNEY_ROUTE_MARKER_SCALE,
+              ),
+            );
+          } else if (element.tagName === "path") {
+            element.setAttribute(
+              "d",
+              buildRoutePointFlagPath(
+                routeProjectedPoint.x,
+                routeProjectedPoint.y,
+                JOURNEY_ROUTE_MARKER_SCALE,
+              ),
+            );
+          } else {
+            element.setAttribute("cx", routeProjectedPoint.x.toFixed(1));
+            element.setAttribute("cy", routeProjectedPoint.y.toFixed(1));
+          }
           if (ring) {
             ring.style.removeProperty("display");
             ring.setAttribute("cx", routeProjectedPoint.x.toFixed(1));
