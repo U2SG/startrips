@@ -3317,7 +3317,7 @@
 .particle-earth-route__flow {
   fill: none;
   stroke: #eafdf5;
-  stroke-width: 0.95;
+  stroke-width: calc(1.7px * var(--journey-route-scale, 1));
   stroke-linecap: round;
   stroke-dasharray: 4 148;
   opacity: 0;
@@ -3325,7 +3325,7 @@
 }
 
 .particle-earth-route.is-active .particle-earth-route__flow {
-  opacity: 0.72;
+  opacity: 0.86;
 }
 
 @keyframes motionRouteFlow {

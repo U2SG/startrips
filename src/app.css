@@ -66,23 +66,26 @@ button {
   shape-rendering: geometricPrecision;
 }
 
+.particle-earth-route {
+  --journey-route-scale: 1;
+}
+
 .particle-earth-route__glow,
 .particle-earth-route__core {
   fill: none;
   stroke: currentColor;
   stroke-linecap: round;
   stroke-linejoin: round;
-  vector-effect: non-scaling-stroke;
 }
 
 .particle-earth-route__glow {
-  opacity: 0.045;
-  stroke-width: 3;
+  opacity: 0.08;
+  stroke-width: calc(5px * var(--journey-route-scale, 1));
 }
 
 .particle-earth-route__core {
-  opacity: 0.24;
-  stroke-width: 1.1;
+  opacity: 0.38;
+  stroke-width: calc(2px * var(--journey-route-scale, 1));
 }
 
 .particle-earth-route__point {
@@ -101,13 +104,13 @@ button {
 }
 
 .particle-earth-route.is-active .particle-earth-route__glow {
-  opacity: 0.14;
-  stroke-width: 3.6;
+  opacity: 0.22;
+  stroke-width: calc(7px * var(--journey-route-scale, 1));
 }
 
 .particle-earth-route.is-active .particle-earth-route__core {
   opacity: 1;
-  stroke-width: 1.25;
+  stroke-width: calc(2.8px * var(--journey-route-scale, 1));
 }
 
 .particle-earth-route.is-active .particle-earth-route__point {
@@ -138,31 +141,49 @@ button {
   stroke-linecap: round;
   stroke-linejoin: round;
   opacity: 0;
-  vector-effect: non-scaling-stroke;
 }
 
 .particle-earth-route.is-style-strands .particle-earth-route__glow {
-  opacity: 0.11;
-  stroke-width: 3.4;
+  opacity: 0.18;
+  stroke-width: calc(6.4px * var(--journey-route-scale, 1));
 }
 
 .particle-earth-route.is-style-strands .particle-earth-route__core {
-  opacity: 0.58;
-  stroke-width: 1.1;
+  opacity: 0.76;
+  stroke-width: calc(2.2px * var(--journey-route-scale, 1));
 }
 
 .particle-earth-route.is-style-strands .particle-earth-route__strand-a {
-  opacity: 0.72;
-  stroke-width: 1.15;
+  opacity: 0.94;
+  stroke-width: calc(2.7px * var(--journey-route-scale, 1));
   stroke-dasharray: 10 50;
   animation: motionStrandA 2.1s linear infinite;
 }
 
 .particle-earth-route.is-style-strands .particle-earth-route__strand-b {
-  opacity: 0.38;
-  stroke-width: 0.8;
+  opacity: 0.62;
+  stroke-width: calc(1.5px * var(--journey-route-scale, 1));
   stroke-dasharray: 6 62;
   animation: motionStrandB 3s linear infinite;
+}
+
+.particle-earth-route.is-style-strands.is-active .particle-earth-route__glow {
+  opacity: 0.3;
+  stroke-width: calc(8px * var(--journey-route-scale, 1));
+}
+
+.particle-earth-route.is-style-strands.is-active .particle-earth-route__core {
+  opacity: 0.98;
+  stroke-width: calc(2.8px * var(--journey-route-scale, 1));
+}
+
+.particle-earth-route.is-style-strands.is-active .particle-earth-route__strand-a {
+  stroke-width: calc(3.2px * var(--journey-route-scale, 1));
+}
+
+.particle-earth-route.is-style-strands.is-active .particle-earth-route__strand-b {
+  opacity: 0.76;
+  stroke-width: calc(1.8px * var(--journey-route-scale, 1));
 }
 
 .particle-earth-route.is-style-strands.is-muted .particle-earth-route__glow {
