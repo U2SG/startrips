@@ -769,7 +769,11 @@ export function JourneyComposer({
                       {searchResults.map((result) => (
                         <li key={result.id}>
                           <button type="button" onClick={() => chooseSearchResult(result)}>
-                            <strong>{result.label}</strong><span>{[result.context, result.countryCode].filter(Boolean).join(" · ")}</span>
+                            <strong>{result.label}</strong>
+                            {[result.labelLocal, result.labelEnglish]
+                              .filter((label, index, labels) => Boolean(label) && label !== result.label && labels.indexOf(label) === index)
+                              .map((label) => <small key={label}>{label}</small>)}
+                            <span>{[result.context, result.countryCode].filter(Boolean).join(" · ")}</span>
                           </button>
                         </li>
                       ))}

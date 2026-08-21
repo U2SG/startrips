@@ -44,6 +44,14 @@ function text(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function firstText(properties: Record<string, unknown>, keys: readonly string[]): string {
+  for (const key of keys) {
+    const value = text(properties[key]);
+    if (value) return value;
+  }
+  return "";
+}
+
 function contextFrom(properties: Record<string, unknown>, label: string): string {
   const street = [text(properties.street), text(properties.housenumber)]
     .filter(Boolean)
@@ -66,10 +74,14 @@ function toLocationResult(feature: PhotonFeature): LocationSearchResult | null {
 
   const longitude = Number(coordinates[0]);
   const latitude = Number(coordinates[1]);
-  const label = text(properties.name)
+  const chineseLabel = firstText(properties, ["name:zh-Hans", "name:zh"]);
+  const providerLabel = text(properties.name)
     || text(properties.street)
     || text(properties.city)
     || text(properties.country);
+  const label = chineseLabel || providerLabel;
+  const labelEnglish = firstText(properties, ["name:en", "name_en", "int_name"]);
+  const labelLocal = providerLabel !== label ? providerLabel : "";
   if (
     !label
     || !Number.isFinite(latitude)
@@ -93,6 +105,8 @@ function toLocationResult(feature: PhotonFeature): LocationSearchResult | null {
       ? `${osmType}:${osmId}`
       : `place:${latitude}:${longitude}`,
     label,
+    ...(labelEnglish && labelEnglish !== label ? { labelEnglish } : {}),
+    ...(labelLocal && labelLocal !== label ? { labelLocal } : {}),
     context: contextFrom(properties, label),
     countryCode: text(properties.countrycode).toUpperCase(),
     latitude,

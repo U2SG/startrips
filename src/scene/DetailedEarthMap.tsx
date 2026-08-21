@@ -8,8 +8,15 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import {
   createDetailedEarthLabelExpression,
   DETAILED_EARTH_INITIAL_ZOOM,
+  DETAILED_EARTH_DRAG_PAN_OPTIONS,
+  DETAILED_EARTH_MAX_PITCH,
+  DETAILED_EARTH_MAX_ZOOM,
   DETAILED_EARTH_MIN_ZOOM,
+  DETAILED_EARTH_PITCH_SPEED,
   type DetailedEarthLanguage,
+  DETAILED_EARTH_ROTATE_SPEED,
+  DETAILED_EARTH_TOUCH_ZOOM_RATE,
+  DETAILED_EARTH_TOUCH_ZOOM_THRESHOLD,
   getDetailedEarthStyle,
   isDetailedEarthNameLabel,
   shouldReturnToParticleEarth,
@@ -64,11 +71,13 @@ export default function DetailedEarthMap({
       center: initialCenter,
       zoom: DETAILED_EARTH_INITIAL_ZOOM,
       minZoom: DETAILED_EARTH_MIN_ZOOM,
-      maxZoom: 16,
-      maxPitch: 0,
+      maxZoom: DETAILED_EARTH_MAX_ZOOM,
+      maxPitch: DETAILED_EARTH_MAX_PITCH,
       pitch: 0,
       bearing: 0,
-      renderWorldCopies: false,
+      rotateSpeed: DETAILED_EARTH_ROTATE_SPEED,
+      pitchSpeed: DETAILED_EARTH_PITCH_SPEED,
+      renderWorldCopies: true,
       attributionControl: false,
       cooperativeGestures: false,
       fadeDuration: 650,
@@ -76,9 +85,12 @@ export default function DetailedEarthMap({
     let initialLoadSettled = false;
     let overviewRequested = false;
     mapRef.current = map;
-    map.dragRotate.disable();
-    map.touchZoomRotate.disableRotation();
-    map.addControl(new NavigationControl({ showCompass: false }), "bottom-right");
+    map.dragRotate.enable();
+    map.dragPan.enable(DETAILED_EARTH_DRAG_PAN_OPTIONS);
+    map.touchZoomRotate.enableRotation();
+    map.touchZoomRotate.setZoomRate(DETAILED_EARTH_TOUCH_ZOOM_RATE);
+    map.touchZoomRotate.setZoomThreshold(DETAILED_EARTH_TOUCH_ZOOM_THRESHOLD);
+    map.addControl(new NavigationControl({ showCompass: true }), "bottom-right");
     map.addControl(new AttributionControl({ compact: true }), "bottom-left");
 
     map.on("load", () => {

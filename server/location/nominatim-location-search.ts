@@ -44,6 +44,14 @@ function text(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function firstText(properties: Record<string, unknown>, keys: readonly string[]): string {
+  for (const key of keys) {
+    const value = text(properties[key]);
+    if (value) return value;
+  }
+  return "";
+}
+
 function toLocationResult(place: NominatimPlace): LocationSearchResult | null {
   const latitude = Number(place.lat);
   const longitude = Number(place.lon);
@@ -61,7 +69,11 @@ function toLocationResult(place: NominatimPlace): LocationSearchResult | null {
   }
 
   const parts = displayName.split(",").map((part) => part.trim()).filter(Boolean);
-  const label = text(place.namedetails?.name) || parts[0] || displayName;
+  const nameDetails = place.namedetails ?? {};
+  const localLabel = text(nameDetails.name) || parts[0] || displayName;
+  const chineseLabel = firstText(nameDetails, ["name:zh-Hans", "name:zh"]);
+  const label = chineseLabel || localLabel;
+  const labelEnglish = firstText(nameDetails, ["name:en", "int_name", "official_name:en"]);
   const context = parts.filter((part, index) => index > 0 && part !== label).join(", ");
   const sourceId = place.osm_type && place.osm_id !== undefined
     ? `${place.osm_type}:${place.osm_id}`
@@ -70,6 +82,8 @@ function toLocationResult(place: NominatimPlace): LocationSearchResult | null {
   return {
     id: sourceId,
     label,
+    ...(labelEnglish && labelEnglish !== label ? { labelEnglish } : {}),
+    ...(localLabel && localLabel !== label ? { labelLocal: localLabel } : {}),
     context,
     countryCode: text(place.address?.country_code).toUpperCase(),
     latitude,

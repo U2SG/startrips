@@ -78,6 +78,33 @@ describe("PhotonLocationSearch", () => {
     );
   });
 
+  it("prefers a Chinese alias and keeps an English alias when Photon provides both", async () => {
+    const search = new PhotonLocationSearch({
+      baseUrl: "https://photon.example.test",
+      userAgent: "Startrips/1.0",
+      fetcher: vi.fn(async () => Response.json({
+        features: [{
+          geometry: { coordinates: [116.3913, 39.9057] },
+          properties: {
+            osm_type: "R",
+            osm_id: 912940,
+            name: "Beijing",
+            "name:zh-Hans": "北京市",
+            "name:en": "Beijing",
+            country: "China",
+            countrycode: "CN",
+          },
+        }],
+      })) as unknown as typeof fetch,
+      requestIntervalMs: 0,
+    });
+
+    await expect(search.search("Beijing", { limit: 8 })).resolves.toMatchObject([{
+      label: "北京市",
+      labelEnglish: "Beijing",
+    }]);
+  });
+
   it("resolves a coordinate to the nearest named place", async () => {
     const fetchMock = vi.fn(async () => Response.json({
       features: [

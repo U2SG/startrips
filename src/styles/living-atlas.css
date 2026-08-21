@@ -2095,6 +2095,12 @@
   font-weight: 500;
 }
 
+.journey-location-results small {
+  color: var(--atlas-cyan);
+  font-size: 9px;
+  line-height: 1.35;
+}
+
 .journey-location-results span {
   color: var(--atlas-faint);
   font-size: 9px;
@@ -2935,6 +2941,10 @@
 .journey-location-results strong {
   color: #d5e2de;
   font-size: 14px;
+}
+
+.journey-location-results small {
+  font-size: 11px;
 }
 
 .journey-location-results span {

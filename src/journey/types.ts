@@ -84,6 +84,8 @@ export type JourneyRoute = {
 export type LocationSearchResult = {
   id: string;
   label: string;
+  labelEnglish?: string;
+  labelLocal?: string;
   context: string;
   countryCode: string;
   latitude: number;
