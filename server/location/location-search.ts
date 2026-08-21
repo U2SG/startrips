@@ -1,6 +1,10 @@
 export type LocationSearchResult = {
   id: string;
   label: string;
+  /** Optional provider-supplied English alias for bilingual result rendering. */
+  labelEnglish?: string;
+  /** Optional provider-supplied original/local alias for bilingual rendering. */
+  labelLocal?: string;
   context: string;
   countryCode: string;
   latitude: number;

@@ -8,6 +8,17 @@ export const DEFAULT_DETAILED_EARTH_STYLE_URL = "https://tiles.openfreemap.org/s
 export const DETAILED_EARTH_RETURN_ZOOM = 5.85;
 export const DETAILED_EARTH_MIN_ZOOM = 5.6;
 export const DETAILED_EARTH_INITIAL_ZOOM = 8;
+export const DETAILED_EARTH_MAX_ZOOM = 16;
+export const DETAILED_EARTH_MAX_PITCH = 50;
+export const DETAILED_EARTH_ROTATE_SPEED = 0.45;
+export const DETAILED_EARTH_PITCH_SPEED = -0.32;
+export const DETAILED_EARTH_TOUCH_ZOOM_RATE = 0.45;
+export const DETAILED_EARTH_TOUCH_ZOOM_THRESHOLD = 0.2;
+export const DETAILED_EARTH_DRAG_PAN_OPTIONS = {
+  linearity: 0.12,
+  deceleration: 4_200,
+  maxSpeed: 520,
+} as const;
 
 export function shouldReturnToParticleEarth(zoom: number) {
   return zoom <= DETAILED_EARTH_RETURN_ZOOM;
@@ -45,8 +56,8 @@ const CHINESE_NAME: ExpressionSpecification = [
   "coalesce",
   ["get", "name:zh-Hans"],
   ["get", "name:zh"],
-  ["get", "name"],
   ["get", "name:nonlatin"],
+  ["get", "name"],
   ["get", "name:en"],
   ["get", "name_en"],
   "",

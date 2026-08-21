@@ -66,6 +66,34 @@ describe("NominatimLocationSearch", () => {
     );
   });
 
+  it("prefers a Chinese name and preserves the English namedetail", async () => {
+    const search = new NominatimLocationSearch({
+      baseUrl: "https://nominatim.example.test",
+      userAgent: "Startrips/1.0",
+      fetcher: vi.fn(async () => Response.json([{
+        place_id: 123,
+        osm_type: "relation",
+        osm_id: 456,
+        display_name: "Beijing, China",
+        lat: "39.9057",
+        lon: "116.3913",
+        namedetails: {
+          name: "北京",
+          "name:zh-Hans": "北京市",
+          "name:en": "Beijing",
+        },
+        address: { country_code: "cn" },
+      }])) as unknown as typeof fetch,
+      requestIntervalMs: 0,
+    });
+
+    await expect(search.search("Beijing", { limit: 8 })).resolves.toMatchObject([{
+      label: "北京市",
+      labelEnglish: "Beijing",
+      labelLocal: "北京",
+    }]);
+  });
+
   it("times out a stalled provider request instead of blocking the queue forever", async () => {
     const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) =>
       new Promise<Response>((_resolve, reject) => {
