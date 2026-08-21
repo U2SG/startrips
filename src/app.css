@@ -154,21 +154,21 @@ button {
 
 .particle-earth-route.is-style-strands .particle-earth-route__core {
   opacity: 0.82;
-  stroke-width: calc(1.7px * var(--journey-route-scale, 1));
+  stroke-width: calc(1.45px * var(--journey-route-scale, 1));
 }
 
 .particle-earth-route.is-style-strands .particle-earth-route__strand-a {
   opacity: 0.9;
-  stroke-width: calc(2.05px * var(--journey-route-scale, 1));
-  stroke-dasharray: 10 50;
-  animation: motionStrandA 2.1s linear infinite;
+  stroke-width: calc(2px * var(--journey-route-scale, 1));
+  stroke-dasharray: 10 26;
+  animation: motionStrandA 2.6s linear infinite;
 }
 
 .particle-earth-route.is-style-strands .particle-earth-route__strand-b {
   opacity: 0.46;
   stroke-width: calc(1.05px * var(--journey-route-scale, 1));
-  stroke-dasharray: 6 62;
-  animation: motionStrandB 3s linear infinite;
+  stroke-dasharray: 5 32;
+  animation: motionStrandB 3.4s linear infinite;
 }
 
 .particle-earth-route.is-style-strands.is-active .particle-earth-route__glow {
@@ -178,16 +178,16 @@ button {
 
 .particle-earth-route.is-style-strands.is-active .particle-earth-route__core {
   opacity: 0.98;
-  stroke-width: calc(1.95px * var(--journey-route-scale, 1));
+  stroke-width: calc(1.65px * var(--journey-route-scale, 1));
 }
 
 .particle-earth-route.is-style-strands.is-active .particle-earth-route__strand-a {
-  stroke-width: calc(2.35px * var(--journey-route-scale, 1));
+  stroke-width: calc(2.25px * var(--journey-route-scale, 1));
 }
 
 .particle-earth-route.is-style-strands.is-active .particle-earth-route__strand-b {
   opacity: 0.58;
-  stroke-width: calc(1.25px * var(--journey-route-scale, 1));
+  stroke-width: calc(1.2px * var(--journey-route-scale, 1));
 }
 
 .particle-earth-route.is-style-strands.is-muted .particle-earth-route__glow {
