@@ -76,6 +76,9 @@ const GLOBE_DRAG_RADIANS_PER_PIXEL = 0.005;
 const GLOBE_MAX_ROTATION_SPEED = 4.2;
 const GLOBE_INERTIA_FRICTION = 5.2;
 const GLOBE_WHEEL_ZOOM_SPEED = 0.0012;
+const JOURNEY_ROUTE_LINE_REFERENCE_SCALE = 1.15;
+const JOURNEY_ROUTE_LINE_SCALE_MIN = 0.72;
+const JOURNEY_ROUTE_LINE_SCALE_MAX = 2.4;
 
 export function clampGlobeTilt(rotation: number) {
   return Math.max(
@@ -97,6 +100,16 @@ export function isPrimaryPointerActivation(
 
 export function clampGlobeZoom(zoom: number) {
   return Math.max(GLOBE_ZOOM_MIN, Math.min(GLOBE_ZOOM_MAX, zoom));
+}
+
+export function getJourneyRouteLineScale(globeScale: number) {
+  return Math.max(
+    JOURNEY_ROUTE_LINE_SCALE_MIN,
+    Math.min(
+      JOURNEY_ROUTE_LINE_SCALE_MAX,
+      globeScale / JOURNEY_ROUTE_LINE_REFERENCE_SCALE,
+    ),
+  );
 }
 
 export function getGlobeIdleRotationDelta(
@@ -869,6 +882,7 @@ export function ParticleEarthScene({
     type RouteVectorEntry = {
       routeId: string;
       color: string;
+      group: SVGGElement;
       segments: Float32Array;
       glowPath: SVGPathElement;
       corePath: SVGPathElement;
@@ -1033,7 +1047,9 @@ export function ParticleEarthScene({
           fadeGradient.appendChild(stop);
         }
         routeDefs.appendChild(fadeGradient);
-        corePath.setAttribute("stroke", `url(#${fadeGradient.id})`);
+        const gradientReference = `url(#${fadeGradient.id})`;
+        glowPath.setAttribute("stroke", gradientReference);
+        corePath.setAttribute("stroke", gradientReference);
         group.append(glowPath, corePath, ...strandPaths, flowPath);
         const vectorPoints: RouteVectorEntry["points"] = [];
         const routeLabelIndexes = route.id === latestActiveJourneyRouteId.current
@@ -1146,6 +1162,7 @@ export function ParticleEarthScene({
         routeVectorEntries.push({
           routeId: route.id,
           color: route.color,
+          group,
           segments: routeSegments,
           glowPath,
           corePath,
@@ -1278,8 +1295,10 @@ export function ParticleEarthScene({
         ? MAX_RENDERED_MOBILE_ROUTE_LABELS
         : MAX_RENDERED_ROUTE_LABELS;
       let visibleLabelCount = 0;
+      const routeLineScale = getJourneyRouteLineScale(globe.scale.x);
 
       routeVectorEntries.forEach((entry) => {
+        entry.group.style.setProperty("--journey-route-scale", routeLineScale.toFixed(3));
         const path = buildProjectedRoutePath(entry.segments, projectRoutePoint);
         entry.glowPath.setAttribute("d", path);
         entry.corePath.setAttribute("d", path);

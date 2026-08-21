@@ -25,6 +25,7 @@ import {
   buildProjectedRoutePath,
   clampGlobeTilt,
   clampGlobeZoom,
+  getJourneyRouteLineScale,
   getJourneyRouteVisualState,
   getGlobeIdleRotationDelta,
   isGlobeDrag,
@@ -117,6 +118,12 @@ describe("ParticleEarthScene contracts", () => {
     );
     expect(GLOBE_MODE_CONFIG.focusPoint.clusterOpacity).toBe(0);
     expect(GLOBE_MODE_CONFIG.archiveBurst.clusterOpacity).toBeGreaterThan(0);
+  });
+
+  it("scales route lines with globe zoom while keeping a readable floor and ceiling", () => {
+    expect(getJourneyRouteLineScale(0.72)).toBe(0.72);
+    expect(getJourneyRouteLineScale(1.15)).toBe(1);
+    expect(getJourneyRouteLineScale(1.15 * 3)).toBe(2.4);
   });
 
   it("keeps every journey neutral until one route is selected", () => {
