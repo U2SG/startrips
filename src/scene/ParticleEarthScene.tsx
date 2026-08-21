@@ -81,6 +81,7 @@ const JOURNEY_ROUTE_LINE_SCALE_MIN = 0.72;
 const JOURNEY_ROUTE_LINE_SCALE_MAX = 2.4;
 const JOURNEY_ROUTE_MARKER_SIZE_PX = 15;
 const JOURNEY_ROUTE_MARKER_SCALE = JOURNEY_ROUTE_MARKER_SIZE_PX / (3.4 * 2);
+const JOURNEY_POINT_TWINKLE_SLOWDOWN = 5;
 
 export function clampGlobeTilt(rotation: number) {
   return Math.max(
@@ -1120,9 +1121,11 @@ export function ParticleEarthScene({
             roleClass,
           );
           const twinkleOffset = (routeIndex * 0.83 + routePointIndex * 0.47) % 4.6;
-          const twinkleDuration = isWaypoint
-            ? 1.8 + ((routeIndex * 7 + routePointIndex * 3) % 5) * 0.18
-            : 3.2 + ((routeIndex * 7 + routePointIndex * 3) % 6) * 0.31;
+          const twinkleDuration = (
+            isWaypoint
+              ? 1.8 + ((routeIndex * 7 + routePointIndex * 3) % 5) * 0.18
+              : 3.2 + ((routeIndex * 7 + routePointIndex * 3) % 6) * 0.31
+          ) * JOURNEY_POINT_TWINKLE_SLOWDOWN;
           element.style.setProperty("--journey-twinkle-delay", `${-twinkleOffset.toFixed(2)}s`);
           element.style.setProperty("--journey-twinkle-duration", `${twinkleDuration.toFixed(2)}s`);
           if (isDestinationPoint) {

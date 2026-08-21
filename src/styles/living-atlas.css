@@ -3260,8 +3260,8 @@
 
 .particle-earth-route__point--transit,
 .particle-earth-route__point--stop {
-  --journey-point-opacity-low: 0.1;
-  --journey-point-opacity-high: 1;
+  --journey-point-opacity-low: 0.34;
+  --journey-point-opacity-high: 0.88;
   animation-name: motionJourneyTransitTwinkle;
 }
 
@@ -3272,8 +3272,8 @@
 
 .particle-earth-route.is-active .particle-earth-route__point--transit,
 .particle-earth-route.is-active .particle-earth-route__point--stop {
-  --journey-point-opacity-low: 0.18;
-  --journey-point-opacity-high: 1;
+  --journey-point-opacity-low: 0.42;
+  --journey-point-opacity-high: 0.96;
 }
 
 .particle-earth-route.is-muted .particle-earth-route__point {
@@ -3283,8 +3283,8 @@
 
 .particle-earth-route.is-muted .particle-earth-route__point--transit,
 .particle-earth-route.is-muted .particle-earth-route__point--stop {
-  --journey-point-opacity-low: 0.08;
-  --journey-point-opacity-high: 0.9;
+  --journey-point-opacity-low: 0.24;
+  --journey-point-opacity-high: 0.68;
 }
 
 @keyframes motionJourneyPointTwinkle {
@@ -3308,18 +3308,18 @@
 @keyframes motionJourneyTransitTwinkle {
   0%, 16%, 100% {
     opacity: var(--journey-point-opacity-low);
-    transform: scale(0.62);
+    transform: scale(0.86);
     filter: drop-shadow(0 0 1px currentColor);
   }
   38% {
     opacity: var(--journey-point-opacity-high);
-    transform: scale(1.65);
-    filter: drop-shadow(0 0 4px currentColor) drop-shadow(0 0 10px currentColor);
+    transform: scale(1.18);
+    filter: drop-shadow(0 0 2px currentColor) drop-shadow(0 0 5px currentColor);
   }
   54% {
-    opacity: calc(var(--journey-point-opacity-low) + 0.16);
-    transform: scale(0.8);
-    filter: drop-shadow(0 0 2px currentColor);
+    opacity: calc(var(--journey-point-opacity-low) + 0.08);
+    transform: scale(0.96);
+    filter: drop-shadow(0 0 1px currentColor);
   }
 }
 
