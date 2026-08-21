@@ -23,6 +23,7 @@ const globeQaRoutes: JourneyRoute[] = [
   {
     id: "qa-route-night-train",
     color: "#77c8c2",
+    lightEffect: "aurora",
     points: [
       { id: "qa-p-1", lat: 31.2304, lon: 121.4737, isStop: true, label: "Shanghai" },
       { id: "qa-p-2", lat: 34.7466, lon: 113.6254, isStop: true, label: "Zhengzhou" },
@@ -33,6 +34,7 @@ const globeQaRoutes: JourneyRoute[] = [
   {
     id: "qa-route-sea-breeze",
     color: "#e8a87c",
+    lightEffect: "rainbow",
     points: [
       { id: "qa-p-5", lat: 35.6762, lon: 139.6503, isStop: true, label: "Tokyo" },
       { id: "qa-p-6", lat: 34.6937, lon: 135.5023, isStop: true, label: "Osaka" },
@@ -42,6 +44,7 @@ const globeQaRoutes: JourneyRoute[] = [
   {
     id: "qa-route-rhine",
     color: "#9fd356",
+    lightEffect: "sunset",
     points: [
       { id: "qa-p-8", lat: 52.3676, lon: 4.9041, isStop: true, label: "Amsterdam" },
       { id: "qa-p-9", lat: 50.9375, lon: 6.9603, isStop: true, label: "Cologne" },
@@ -51,6 +54,7 @@ const globeQaRoutes: JourneyRoute[] = [
   {
     id: "qa-route-southern-summer",
     color: "#b39ddb",
+    lightEffect: "nebula",
     points: [
       { id: "qa-p-11", lat: -36.8509, lon: 174.7645, isStop: true, label: "Auckland" },
       { id: "qa-p-12", lat: -37.8136, lon: 144.9631, isStop: true, label: "Melbourne" },

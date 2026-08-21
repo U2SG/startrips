@@ -11,6 +11,8 @@ import type { GlobeMode } from "../experience/types";
 import {
   GLOBE_MODE_CONFIG,
   GLOBE_DRAG_THRESHOLD_PX,
+  GLOBE_IDLE_RESUME_DELAY_MS,
+  GLOBE_IDLE_ROTATION_RADIANS_PER_SECOND,
   GLOBE_RENDER_ORDER,
   GLOBE_TILT_LIMIT_RADIANS,
   GLOBE_ZOOM_MAX,
@@ -24,6 +26,7 @@ import {
   clampGlobeTilt,
   clampGlobeZoom,
   getJourneyRouteVisualState,
+  getGlobeIdleRotationDelta,
   isGlobeDrag,
   isPrimaryPointerActivation,
   isSphericalPointVisible,
@@ -76,6 +79,33 @@ describe("ParticleEarthScene contracts", () => {
       isPrimary: false,
       pointerType: "touch",
     })).toBe(false);
+  });
+
+  it("auto-rotates only after idle time and outside reduced motion", () => {
+    expect(getGlobeIdleRotationDelta(
+      1,
+      GLOBE_IDLE_RESUME_DELAY_MS - 1,
+      false,
+      false,
+    )).toBe(0);
+    expect(getGlobeIdleRotationDelta(
+      1,
+      GLOBE_IDLE_RESUME_DELAY_MS,
+      true,
+      false,
+    )).toBe(0);
+    expect(getGlobeIdleRotationDelta(
+      1,
+      GLOBE_IDLE_RESUME_DELAY_MS,
+      false,
+      true,
+    )).toBe(0);
+    expect(getGlobeIdleRotationDelta(
+      1,
+      GLOBE_IDLE_RESUME_DELAY_MS,
+      false,
+      false,
+    )).toBeCloseTo(GLOBE_IDLE_ROTATION_RADIANS_PER_SECOND);
   });
 
   it("keeps geographic context behind journey and personal signals", () => {

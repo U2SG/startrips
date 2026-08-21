@@ -76,13 +76,13 @@ button {
 }
 
 .particle-earth-route__glow {
-  opacity: 0.08;
-  stroke-width: 5;
+  opacity: 0.045;
+  stroke-width: 3;
 }
 
 .particle-earth-route__core {
-  opacity: 0.28;
-  stroke-width: 1.45;
+  opacity: 0.24;
+  stroke-width: 1.1;
 }
 
 .particle-earth-route__point {
@@ -101,13 +101,13 @@ button {
 }
 
 .particle-earth-route.is-active .particle-earth-route__glow {
-  opacity: 0.36;
-  stroke-width: 6;
+  opacity: 0.14;
+  stroke-width: 3.6;
 }
 
 .particle-earth-route.is-active .particle-earth-route__core {
   opacity: 1;
-  stroke-width: 1.8;
+  stroke-width: 1.25;
 }
 
 .particle-earth-route.is-active .particle-earth-route__point {
@@ -142,27 +142,27 @@ button {
 }
 
 .particle-earth-route.is-style-strands .particle-earth-route__glow {
-  opacity: 0.22;
-  stroke-width: 6;
+  opacity: 0.11;
+  stroke-width: 3.4;
 }
 
 .particle-earth-route.is-style-strands .particle-earth-route__core {
-  opacity: 0.5;
-  stroke-width: 1.6;
+  opacity: 0.58;
+  stroke-width: 1.1;
 }
 
 .particle-earth-route.is-style-strands .particle-earth-route__strand-a {
-  opacity: 0.8;
-  stroke-width: 2.2;
-  stroke-dasharray: 16 44;
-  animation: motionStrandA 1.7s linear infinite;
+  opacity: 0.72;
+  stroke-width: 1.15;
+  stroke-dasharray: 10 50;
+  animation: motionStrandA 2.1s linear infinite;
 }
 
 .particle-earth-route.is-style-strands .particle-earth-route__strand-b {
-  opacity: 0.45;
-  stroke-width: 1.5;
-  stroke-dasharray: 10 58;
-  animation: motionStrandB 2.6s linear infinite;
+  opacity: 0.38;
+  stroke-width: 0.8;
+  stroke-dasharray: 6 62;
+  animation: motionStrandB 3s linear infinite;
 }
 
 .particle-earth-route.is-style-strands.is-muted .particle-earth-route__glow {

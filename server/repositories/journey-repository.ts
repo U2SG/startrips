@@ -21,7 +21,7 @@ import {
 
 export type JourneyValues = Pick<
   typeof journeys.$inferInsert,
-  "title" | "startedOn" | "endedOn" | "note" | "lightColor"
+  "title" | "startedOn" | "endedOn" | "note" | "lightColor" | "lightEffect"
 > & {
   revision?: number;
   routePoints: Array<Pick<
@@ -52,6 +52,7 @@ async function loadJourneys(atlasId: string, journeyId?: string) {
       endedOn: journeys.endedOn,
       note: journeys.note,
       lightColor: journeys.lightColor,
+      lightEffect: journeys.lightEffect,
       revision: journeys.revision,
       createdByUserId: journeys.createdByUserId,
       createdAt: journeys.createdAt,
@@ -132,6 +133,7 @@ export async function createJourneyForAtlas(
         endedOn: values.endedOn,
         note: values.note,
         lightColor: values.lightColor,
+        lightEffect: values.lightEffect ?? null,
       })
       .returning({ id: journeys.id });
     await transaction.insert(journeyRoutePoints).values(
@@ -169,6 +171,7 @@ export async function updateJourneyForAtlas(
         endedOn: values.endedOn,
         note: values.note,
         lightColor: values.lightColor,
+        lightEffect: values.lightEffect ?? null,
         revision: sql`${journeys.revision} + 1`,
         updatedAt: new Date(),
       })

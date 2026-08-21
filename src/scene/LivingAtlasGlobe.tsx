@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useState } from "react";
-import { IconMap2, IconMapPin, IconWorld } from "@tabler/icons-react";
+import { IconMap2, IconMapPin, IconSparkles, IconWorld } from "@tabler/icons-react";
 import type { JourneyRoute } from "../journey/types";
 import type { DetailedEarthLanguage } from "./detailedEarthModel";
 import { ParticleEarthScene } from "./ParticleEarthScene";
@@ -146,6 +146,7 @@ export function LivingAtlasGlobe({
               if (transitionTarget === "particle") setTargetReady(true);
             }}
             dragToRotate
+            wheelToZoom
             reduceMotion={reduceMotion}
           />
         </div>
@@ -165,6 +166,7 @@ export function LivingAtlasGlobe({
               focusPoint={focusPoint}
               language={detailLanguage}
               onGlobePointPick={onGlobePointPick}
+              onOverviewRequest={() => beginTransition("particle")}
               onReady={() => {
                 if (transitionTarget === "detail") setTargetReady(true);
               }}
@@ -192,20 +194,8 @@ export function LivingAtlasGlobe({
         >
           {detailMode ? <IconWorld size={16} stroke={1.25} aria-hidden="true" /> : <IconMap2 size={16} stroke={1.25} aria-hidden="true" />}
           <span>{transitionTarget ? transitionLabel : detailMode ? "返回粒子地球" : "深入真实地图"}</span>
-          <small>{detailMode ? "ART GLOBE" : "ZOOM 20"}</small>
+          <small>{detailMode ? "ART GLOBE" : "REGION MAP"}</small>
         </button>
-
-        {!detailMode && !transitionTarget ? (
-          <button
-            type="button"
-            className={`living-atlas-globe__ambience${ambience ? " is-active" : ""}`}
-            aria-pressed={ambience}
-            data-ambience-toggle
-            onClick={() => setAmbience((current) => !current)}
-          >
-            氛围
-          </button>
-        ) : null}
 
         {detailMode && !transitionTarget ? (
           <div className="living-atlas-globe__language" role="group" aria-label="地图语言">
@@ -241,12 +231,26 @@ export function LivingAtlasGlobe({
         ) : null}
       </div>
 
+      {!detailMode && !transitionTarget ? (
+        <button
+          type="button"
+          className={`living-atlas-globe__ambience${ambience ? " is-active" : ""}`}
+          aria-label={ambience ? "关闭氛围效果" : "开启氛围效果"}
+          aria-pressed={ambience}
+          title={ambience ? "关闭氛围效果" : "开启氛围效果"}
+          data-ambience-toggle
+          onClick={() => setAmbience((current) => !current)}
+        >
+          <IconSparkles size={18} stroke={1.35} aria-hidden="true" />
+        </button>
+      ) : null}
+
       <div className="living-atlas-globe__mode-note" aria-hidden="true">
         {transitionTarget
           ? "VECTOR MAP PREPARING"
           : detailMode
-            ? "CHINESE LABELS / VECTOR DETAIL"
-            : "SCROLL TO ZOOM CITIES"}
+            ? "DRAG TO EXPLORE / ZOOM OUT TO RETURN"
+            : "SCROLL TO ZOOM / DRAG TO ROTATE"}
       </div>
     </section>
   );

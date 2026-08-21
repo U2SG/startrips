@@ -60,6 +60,7 @@ describe("journeyModel", () => {
 
   it("preserves place labels in the globe route projection", () => {
     const labeledJourney = journey("labeled", "2026-08-11");
+    labeledJourney.lightEffect = "aurora";
     labeledJourney.routePoints = [{
       id: "point-1",
       journeyId: labeledJourney.id,
@@ -78,6 +79,7 @@ describe("journeyModel", () => {
       isStop: true,
       label: "Shenzhen",
     });
+    expect(toJourneyRoutes([labeledJourney])[0].lightEffect).toBe("aurora");
   });
 
   it("accepts a single unnamed point and a multi-city route", () => {
@@ -103,13 +105,19 @@ describe("journeyModel", () => {
     expect(result.errors).toHaveLength(3);
   });
 
-  it("rejects excessive, empty, oversized, and unsupported media", () => {
-    const excessive = Array.from({ length: 13 }, (_, index) => ({
+  it("accepts known effects and rejects unknown effects", () => {
+    expect(validateJourneyInput(input({ lightEffect: "nebula" })).accepted).toBe(true);
+    expect(validateJourneyInput(input({ lightEffect: "static-glitch" as never })).accepted)
+      .toBe(false);
+  });
+
+  it("accepts any media count while rejecting invalid files", () => {
+    const manyFiles = Array.from({ length: 48 }, (_, index) => ({
       name: `${index}.jpg`,
       type: "image/jpeg",
       size: 10,
     }));
-    expect(validateJourneyFiles(excessive).accepted).toBe(false);
+    expect(validateJourneyFiles(manyFiles).accepted).toBe(true);
     const invalid = validateJourneyFiles([
       { name: "empty.jpg", type: "image/jpeg", size: 0 },
       { name: "notes.txt", type: "text/plain", size: 20 },

@@ -26,6 +26,7 @@ import {
 } from "three";
 import { archiveRecords } from "../data/archiveRecords";
 import type { GlobeMode } from "../experience/types";
+import { getLightEffectPalette } from "../journey/lightEffects";
 import { loadCityTiers, selectCityCandidates, type CityPoint } from "./cityLabels";
 import type { JourneyRoute } from "../journey/types";
 import {
@@ -68,6 +69,8 @@ export const GLOBE_ZOOM_MIN = 0.72;
 // anything above ~3.04 pushes labels inside the near plane and they vanish.
 export const GLOBE_ZOOM_MAX = 3.0;
 export const GLOBE_SURFACE_RADIUS = 1.39;
+export const GLOBE_IDLE_ROTATION_RADIANS_PER_SECOND = (Math.PI * 2) / 180;
+export const GLOBE_IDLE_RESUME_DELAY_MS = 1_800;
 
 const GLOBE_DRAG_RADIANS_PER_PIXEL = 0.005;
 const GLOBE_MAX_ROTATION_SPEED = 4.2;
@@ -94,6 +97,22 @@ export function isPrimaryPointerActivation(
 
 export function clampGlobeZoom(zoom: number) {
   return Math.max(GLOBE_ZOOM_MIN, Math.min(GLOBE_ZOOM_MAX, zoom));
+}
+
+export function getGlobeIdleRotationDelta(
+  deltaSeconds: number,
+  idleForMs: number,
+  hasMomentum: boolean,
+  motionDisabled: boolean,
+) {
+  if (
+    motionDisabled
+    || hasMomentum
+    || idleForMs < GLOBE_IDLE_RESUME_DELAY_MS
+  ) {
+    return 0;
+  }
+  return deltaSeconds * GLOBE_IDLE_ROTATION_RADIANS_PER_SECOND;
 }
 
 export function selectRenderableJourneyRoutes(
@@ -369,6 +388,7 @@ interface ParticleEarthSceneProps {
   onReady?: () => void;
   onGlobePointPick?: (point: { latitude: number; longitude: number }) => void;
   dragToRotate?: boolean;
+  wheelToZoom?: boolean;
   reduceMotion?: boolean;
 }
 
@@ -543,6 +563,7 @@ export function ParticleEarthScene({
   onReady,
   onGlobePointPick,
   dragToRotate = false,
+  wheelToZoom = true,
   reduceMotion = false,
 }: ParticleEarthSceneProps) {
   const [ready, setReady] = useState(false);
@@ -558,6 +579,7 @@ export function ParticleEarthScene({
   const latestOnReady = useRef(onReady);
   const latestOnGlobePointPick = useRef(onGlobePointPick);
   const latestDragToRotate = useRef(dragToRotate);
+  const latestWheelToZoom = useRef(wheelToZoom);
   latestMode.current = mode;
   latestFocusPoint.current = focusPoint;
   latestFocusColor.current = focusColor;
@@ -570,6 +592,7 @@ export function ParticleEarthScene({
   latestOnReady.current = onReady;
   latestOnGlobePointPick.current = onGlobePointPick;
   latestDragToRotate.current = dragToRotate;
+  latestWheelToZoom.current = wheelToZoom;
 
   const { hostRef, controllerRef } = useThreeScene((host) => {
     let disposed = false;
@@ -649,6 +672,7 @@ export function ParticleEarthScene({
     let interactiveZoom = 1;
     let rotationVelocityX = 0;
     let rotationVelocityY = 0;
+    let lastGlobeInteractionAt = performance.now();
     let centeredFocusKey = latestFocusPoint.current
       ? `${latestFocusPoint.current.lat}:${latestFocusPoint.current.lon}`
       : "";
@@ -813,7 +837,7 @@ export function ParticleEarthScene({
     const personalMaterial = createParticleEarthMaterial({
       color: 0xffdc72,
       opacity: 0,
-      size: 160,
+      size: 58,
     });
     personalMaterial.uniforms.uColor.value.set(
       latestFocusColor.current ?? 0xffdc72,
@@ -853,6 +877,7 @@ export function ParticleEarthScene({
       fadeGradient: SVGLinearGradientElement;
       points: Array<{
         element: SVGCircleElement;
+        ring?: SVGCircleElement;
         position: Vector3;
         label?: RouteVectorLabel;
       }>;
@@ -942,6 +967,7 @@ export function ParticleEarthScene({
           "is-style-strands",
         );
         group.style.color = route.color;
+        group.dataset.lightEffect = route.lightEffect ?? "none";
         const glowPath = document.createElementNS(
           "http://www.w3.org/2000/svg",
           "path",
@@ -982,18 +1008,27 @@ export function ParticleEarthScene({
         );
         fadeGradient.id = `route-fade-${sceneToken}-${routeIndex}`;
         fadeGradient.setAttribute("gradientUnits", "userSpaceOnUse");
-        const gradientStops = [
-          { offset: "0%", stopOpacity: "1" },
-          { offset: "68%", stopOpacity: "0.72" },
-          { offset: "100%", stopOpacity: "0" },
-        ];
-        for (const { offset, stopOpacity } of gradientStops) {
+        const palette = getLightEffectPalette(route.lightEffect, route.color);
+        const gradientStops = palette.length === 1
+          ? [
+            { offset: "0%", color: palette[0], stopOpacity: "1" },
+            { offset: "68%", color: palette[0], stopOpacity: "0.72" },
+            { offset: "100%", color: palette[0], stopOpacity: "0" },
+          ]
+          : palette.map((color, paletteIndex) => ({
+            offset: `${Math.round((paletteIndex / (palette.length - 1)) * 100)}%`,
+            color,
+            stopOpacity: paletteIndex === palette.length - 1
+              ? "0"
+              : String(1 - (paletteIndex / (palette.length - 1)) * 0.42),
+          }));
+        for (const { offset, color, stopOpacity } of gradientStops) {
           const stop = document.createElementNS(
             "http://www.w3.org/2000/svg",
             "stop",
           );
           stop.setAttribute("offset", offset);
-          stop.setAttribute("stop-color", route.color);
+          stop.setAttribute("stop-color", color);
           stop.setAttribute("stop-opacity", stopOpacity);
           fadeGradient.appendChild(stop);
         }
@@ -1031,27 +1066,33 @@ export function ParticleEarthScene({
             "particle-earth-route__point",
             roleClass,
           );
+          const twinkleOffset = (routeIndex * 0.83 + routePointIndex * 0.47) % 4.6;
+          const twinkleDuration = 3.2 + ((routeIndex * 7 + routePointIndex * 3) % 6) * 0.31;
+          element.style.setProperty("--journey-twinkle-delay", `${-twinkleOffset.toFixed(2)}s`);
+          element.style.setProperty("--journey-twinkle-duration", `${twinkleDuration.toFixed(2)}s`);
           element.setAttribute(
             "r",
             routePointIndex === 0 || routePointIndex === route.points.length - 1
-              ? "5"
+              ? "3.4"
               : point.isStop
-                ? "4.4"
-                : "2.8",
+                ? "3"
+                : "1.9",
           );
           group.appendChild(element);
+          let ring: SVGCircleElement | undefined;
           if (
             (point.isStop || routePointIndex === route.points.length - 1)
             && route.id === latestActiveJourneyRouteId.current
           ) {
             // ML-09 Geographic Cluster Bloom: a restrained breathing ring on
             // the stops (and final point) of the active journey.
-            const ring = document.createElementNS(
+            ring = document.createElementNS(
               "http://www.w3.org/2000/svg",
               "circle",
             );
             ring.classList.add("particle-earth-route__point-ring");
-            ring.setAttribute("r", "4.4");
+            ring.setAttribute("r", "3.2");
+            ring.style.setProperty("--journey-pulse-delay", `${-twinkleOffset.toFixed(2)}s`);
             group.appendChild(ring);
           }
           let label: RouteVectorLabel | undefined;
@@ -1088,7 +1129,7 @@ export function ParticleEarthScene({
             };
             routeLabelCount += 1;
           }
-          vectorPoints.push({ element, position, label });
+          vectorPoints.push({ element, ring, position, label });
         });
         group.append(...routeLabelElements);
 
@@ -1250,7 +1291,7 @@ export function ParticleEarthScene({
           x: number;
           y: number;
         }> = [];
-        entry.points.forEach(({ element, position, label }) => {
+        entry.points.forEach(({ element, ring, position, label }) => {
           if (!projectRoutePoint(
             position.x,
             position.y,
@@ -1258,12 +1299,18 @@ export function ParticleEarthScene({
             routeProjectedPoint,
           )) {
             element.style.display = "none";
+            if (ring) ring.style.display = "none";
             if (label) label.element.style.display = "none";
             return;
           }
           element.style.removeProperty("display");
           element.setAttribute("cx", routeProjectedPoint.x.toFixed(1));
           element.setAttribute("cy", routeProjectedPoint.y.toFixed(1));
+          if (ring) {
+            ring.style.removeProperty("display");
+            ring.setAttribute("cx", routeProjectedPoint.x.toFixed(1));
+            ring.setAttribute("cy", routeProjectedPoint.y.toFixed(1));
+          }
           if (label) {
             labelCandidates.push({
               label,
@@ -1594,6 +1641,7 @@ export function ParticleEarthScene({
         return;
       }
       activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      lastGlobeInteractionAt = performance.now();
       rotationVelocityX = 0;
       rotationVelocityY = 0;
       renderer.domElement.setPointerCapture?.(event.pointerId);
@@ -1648,6 +1696,7 @@ export function ParticleEarthScene({
       if (!dragStarted) return;
 
       event.preventDefault();
+      lastGlobeInteractionAt = performance.now();
       const rotationDeltaX = deltaY * GLOBE_DRAG_RADIANS_PER_PIXEL;
       const rotationDeltaY = deltaX * GLOBE_DRAG_RADIANS_PER_PIXEL;
       interactiveRotationX = clampGlobeTilt(interactiveRotationX + rotationDeltaX);
@@ -1688,6 +1737,7 @@ export function ParticleEarthScene({
         rotationVelocityX = 0;
         rotationVelocityY = 0;
       }
+      lastGlobeInteractionAt = performance.now();
       clearDragState();
       if (allowActivation && !wasGesture) activatePointerTarget(event);
     };
@@ -1715,8 +1765,9 @@ export function ParticleEarthScene({
     };
 
     const onWheel = (event: WheelEvent) => {
-      if (!latestDragToRotate.current) return;
+      if (!latestDragToRotate.current || !latestWheelToZoom.current) return;
       event.preventDefault();
+      lastGlobeInteractionAt = performance.now();
       // Stay in the particle globe at maximum zoom so cities stay pickable;
       // entering the real map is an explicit button choice.
       interactiveZoom = clampGlobeZoom(
@@ -1826,6 +1877,13 @@ export function ParticleEarthScene({
         rotationVelocityY *= inertia;
         if (Math.abs(rotationVelocityX) < 0.001) rotationVelocityX = 0;
         if (Math.abs(rotationVelocityY) < 0.001) rotationVelocityY = 0;
+        const hasMomentum = rotationVelocityX !== 0 || rotationVelocityY !== 0;
+        interactiveRotationY += getGlobeIdleRotationDelta(
+          delta,
+          now - lastGlobeInteractionAt,
+          hasMomentum,
+          !latestDragToRotate.current,
+        );
       }
       globe.rotation.x = interactiveRotationX;
       globe.rotation.y = baseRotationY + interactiveRotationY;
@@ -1866,7 +1924,7 @@ export function ParticleEarthScene({
       );
       personalMaterial.uniforms.uPointSize.value = interpolate(
         personalMaterial.uniforms.uPointSize.value,
-        currentMode === "particleSphere" ? 110 : 160,
+        currentMode === "particleSphere" ? 46 : 58,
       );
       const routeOpacity = currentMode === "surfaceEarth"
         ? 0
@@ -1884,13 +1942,16 @@ export function ParticleEarthScene({
         coastlineMaterial.opacity,
         target.coastlineOpacity,
       );
-      particleMaterial.uniforms.uTime.value = now / 1000;
-      if (archiveMaterial) archiveMaterial.uniforms.uTime.value = now / 1000;
-      clusterMaterial.uniforms.uTime.value = now / 1000;
-      cyanClusterMaterial.uniforms.uTime.value = now / 1000;
-      shellMaterial.uniforms.uTime.value = now / 1000;
-      haloMaterial.uniforms.uTime.value = now / 1000;
-      personalMaterial.uniforms.uTime.value = now / 1000;
+      // Keep the particle world alive while idle without involving React's
+      // render cycle. Reduced-motion resolves to a stable final frame.
+      const motionTime = reduceMotion ? 0 : now / 1000;
+      particleMaterial.uniforms.uTime.value = motionTime;
+      if (archiveMaterial) archiveMaterial.uniforms.uTime.value = motionTime;
+      clusterMaterial.uniforms.uTime.value = motionTime;
+      cyanClusterMaterial.uniforms.uTime.value = motionTime;
+      shellMaterial.uniforms.uTime.value = motionTime;
+      haloMaterial.uniforms.uTime.value = motionTime;
+      personalMaterial.uniforms.uTime.value = motionTime;
 
       updateRouteVectorLayer();
 
@@ -1971,6 +2032,7 @@ export function ParticleEarthScene({
           interactiveRotationY = 0;
           rotationVelocityX = 0;
           rotationVelocityY = 0;
+          lastGlobeInteractionAt = performance.now();
         }
         centeredFocusKey = nextFocusKey;
         applyFocusPoint(point);
@@ -2044,9 +2106,9 @@ export function ParticleEarthScene({
       }
       data-globe-point-pick={onGlobePointPick ? "true" : "false"}
       data-drag-rotation={dragToRotate ? "true" : "false"}
+      data-wheel-zoom={wheelToZoom ? "true" : "false"}
       aria-label="由世界陆地轮廓与艺术信号组成的粒子地球"
       role="img"
     />
   );
 }
-

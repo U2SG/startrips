@@ -64,21 +64,53 @@
   z-index: 100;
   top: 14px;
   right: 18px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  max-width: min(620px, calc(100vw - 36px));
-  padding: 8px 10px;
+  display: block;
   color: #d9d3c7;
-  background: rgba(5, 7, 9, 0.74);
-  border: 1px solid rgba(240, 234, 220, 0.14);
-  backdrop-filter: blur(16px);
   font: 11px/1.2 Inter, ui-sans-serif, system-ui, sans-serif;
 }
+.account-dock > .account-dock__tab {
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 0;
+  border: 1px solid rgba(118, 198, 188, 0.22);
+  color: #b9d0cb;
+  background: rgba(1, 7, 8, 0.84);
+  backdrop-filter: blur(14px);
+}
+.account-dock__tab-chevron { transition: transform 180ms ease; }
+.account-dock.is-open .account-dock__tab-chevron { transform: rotate(180deg); }
+.account-dock__panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  width: min(380px, calc(100vw - 36px));
+  box-sizing: border-box;
+  display: none;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(118, 198, 188, 0.2);
+  background: rgba(1, 7, 8, 0.96);
+  box-shadow: 0 18px 46px rgba(0, 0, 0, 0.42);
+  backdrop-filter: blur(18px);
+}
+.account-dock.is-open .account-dock__panel { display: grid; }
+.account-dock__identity {
+  display: block;
+  overflow: hidden;
+  color: #9bada8;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.account-dock__actions { display: flex; align-items: center; gap: 4px; }
+.account-dock__actions button { flex: 1 1 0; }
 .account-dock button { min-height: 32px; border: 0; padding: 4px 7px; color: #e8c87a; background: none; cursor: pointer; font: inherit; }
 .account-dock button:focus-visible,
 .account-dock input:focus-visible { outline: 1px solid #c8ff3d; outline-offset: 2px; }
-.account-dock form { position: absolute; top: calc(100% + 8px); right: 0; width: 260px; padding: 14px; border: 1px solid rgba(240, 234, 220, 0.18); background: #0b0f13; }
+.account-dock form { position: static; width: auto; padding: 14px; border: 1px solid rgba(240, 234, 220, 0.18); background: #0b0f13; }
 .account-dock form label { display: grid; gap: 6px; }
 .account-dock form input,
 .account-dock form textarea { border: 1px solid rgba(240, 234, 220, 0.2); padding: 8px; color: white; background: transparent; }
@@ -88,12 +120,6 @@ body:has(.living-atlas) .account-dock {
   z-index: 90;
   top: 12px;
   right: 16px;
-  max-width: 282px;
-  min-height: 42px;
-  border-color: rgba(118, 198, 188, 0.17);
-  background: rgba(1, 7, 8, 0.9);
-  color: #9bada8;
-  backdrop-filter: blur(14px);
 }
 
 body:has(.living-atlas) .account-dock button {
@@ -103,14 +129,25 @@ body:has(.living-atlas) .account-dock button {
 @media (max-width: 760px) {
   body:has(.living-atlas) .account-dock {
     top: 66px;
-    right: 10px;
-    min-height: 44px;
+    right: 64px;
   }
-  body:has(.living-atlas) .account-dock span {
-    display: none;
+  body:has(.living-atlas) .account-dock__panel {
+    width: min(300px, calc(100vw - 20px));
   }
-  body:has(.living-atlas) .account-dock button {
+  body:has(.living-atlas) .account-dock__actions {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 4px;
+  }
+  body:has(.living-atlas) .account-dock__actions button {
     min-height: 44px;
+    padding: 5px;
+  }
+  body:has(.living-atlas) .account-dock form {
+    position: static;
+    width: auto;
+    box-sizing: border-box;
+    margin-top: 0;
   }
   body:has(.living-atlas) .account-dock form input {
     min-height: 44px;
@@ -119,5 +156,4 @@ body:has(.living-atlas) .account-dock button {
 
 @media (max-width: 640px) {
   .auth-card { padding: 26px 22px; }
-  .account-dock span { display: none; }
 }

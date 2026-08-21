@@ -3,6 +3,15 @@ import type { ExpressionSpecification, StyleSpecification } from "maplibre-gl";
 export type DetailedEarthLanguage = "zh" | "bilingual";
 
 export const DEFAULT_DETAILED_EARTH_STYLE_URL = "https://tiles.openfreemap.org/styles/fiord";
+// Below this regional scale a flat map stops adding useful journey detail.
+// Returning to the particle globe also avoids presenting a second world view.
+export const DETAILED_EARTH_RETURN_ZOOM = 5.85;
+export const DETAILED_EARTH_MIN_ZOOM = 5.6;
+export const DETAILED_EARTH_INITIAL_ZOOM = 8;
+
+export function shouldReturnToParticleEarth(zoom: number) {
+  return zoom <= DETAILED_EARTH_RETURN_ZOOM;
+}
 
 // Set VITE_ATLAS_MAP_STYLE_URL to this sentinel to use the built-in AMap
 // raster style (mainland-reachable, no key) instead of a vector style.
