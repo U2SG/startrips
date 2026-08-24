@@ -65,4 +65,22 @@ describe("route draft operations", () => {
     expect(suggestPointLabel([unnamed], "missing", "Tokyo")[0].label).toBe("");
     expect(suggestPointLabel([unnamed], "ulan-bator", "   ")[0].label).toBe("");
   });
+
+  it("carries route-point notes through updates and the input payload (#10)", () => {
+    const withNote: RouteDraftPoint = {
+      ...beijing,
+      note: "风很大，只记得那一刻特别安静。",
+    };
+    const updated = updateRoutePoint([withNote], "beijing", {
+      note: "第二次来的时候，已经能认出山脊的轮廓。",
+    });
+    expect(updated[0].note).toBe("第二次来的时候，已经能认出山脊的轮廓。");
+
+    const cleared = updateRoutePoint([withNote], "beijing", { note: "" });
+    expect(cleared[0].note).toBe("");
+
+    // routeDraftToInput spreads the note through, so the whole-list replace
+    // never drops it.
+    expect(routeDraftToInput([withNote])[0].note).toBe("风很大，只记得那一刻特别安静。");
+  });
 });

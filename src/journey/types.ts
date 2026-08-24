@@ -23,12 +23,14 @@ export type RoutePoint = {
   label: string;
   isStop: boolean;
   occurredAt: string | null;
+  // #10: a short personal note for this route point (plain text, nullable).
+  note?: string | null;
   createdAt: string;
 };
 
 export type RoutePointInput = Pick<
   RoutePoint,
-  "latitude" | "longitude" | "label" | "isStop" | "occurredAt"
+  "latitude" | "longitude" | "label" | "isStop" | "occurredAt" | "note"
 > & {
   id?: string;
 };

@@ -137,6 +137,11 @@ export function validateJourneyInput(input: JourneyInput): ValidationResult {
     if (point.isStop && !point.label.trim()) {
       errors.push(`停靠点 ${index + 1} 需要地点标签`);
     }
+    // #10: route-point notes are plain text with a soft client cap (500) and
+    // a hard server cap (2000); keep the client check in sync with the UX.
+    if (point.note !== undefined && point.note !== null && point.note.length > 500) {
+      errors.push(`路线点 ${index + 1} 的笔记不能超过 500 个字符`);
+    }
     if (point.occurredAt !== null) {
       const timestamp = new Date(point.occurredAt);
       if (Number.isNaN(timestamp.valueOf())) {

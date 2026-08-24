@@ -119,6 +119,28 @@ describe("journeyModel", () => {
       .toBe(false);
   });
 
+  it("accepts route-point notes up to the soft cap and rejects over it (#10)", () => {
+    const point = {
+      latitude: 31.2304,
+      longitude: 121.4737,
+      label: "上海",
+      isStop: true,
+      occurredAt: "2026-08-11T01:00:00Z",
+    };
+    expect(validateJourneyInput(input({
+      routePoints: [{ ...point, note: "那一刻特别安静。" }],
+    })).accepted).toBe(true);
+    expect(validateJourneyInput(input({
+      routePoints: [{ ...point, note: null }],
+    })).accepted).toBe(true);
+    expect(validateJourneyInput(input({
+      routePoints: [{ ...point, note: "x".repeat(500) }],
+    })).accepted).toBe(true);
+    expect(validateJourneyInput(input({
+      routePoints: [{ ...point, note: "x".repeat(501) }],
+    })).accepted).toBe(false);
+  });
+
   it("separates visual media from soundtracks and keeps the newest track", () => {
     const asset = (
       id: string,

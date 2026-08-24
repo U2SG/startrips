@@ -26,7 +26,7 @@ export type JourneyValues = Pick<
   revision?: number;
   routePoints: Array<Pick<
     typeof journeyRoutePoints.$inferInsert,
-    "latitude" | "longitude" | "label" | "isStop" | "occurredAt"
+    "latitude" | "longitude" | "label" | "isStop" | "occurredAt" | "note"
   > & { id?: string }>;
 };
 
@@ -234,6 +234,7 @@ export async function updateJourneyForAtlas(
         label: point.label,
         isStop: point.isStop,
         occurredAt: point.occurredAt,
+        note: point.note ?? null,
       };
       if (point.id) {
         await transaction

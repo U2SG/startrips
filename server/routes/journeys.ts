@@ -13,6 +13,7 @@ import {
 import { deleteJourneyWithStorage } from "../services/delete-journey";
 
 const MAX_ROUTE_POINTS = 64;
+const MAX_ROUTE_POINT_NOTE_LENGTH = 2000;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const LIGHT_EFFECT_IDS = new Set(["rainbow", "aurora", "sunset", "nebula"]);
 export const JOURNEY_CACHE_CONTROL = "private, no-store, max-age=0";
@@ -110,6 +111,18 @@ export function parseJourneyInput(body: JourneyInput): JourneyValues | null {
       : typeof point.occurredAt === "string"
         ? new Date(point.occurredAt)
         : new Date(Number.NaN);
+    // #10: route-point note. Absent -> preserve (the whole route points list
+    // is replaced, so the composer echoes the note back); null/empty -> clear;
+    // text keeps line breaks but is length-capped and trimmed.
+    const note = point.note === undefined
+      ? undefined
+      : point.note === null || point.note === ""
+        ? null
+        : typeof point.note === "string"
+          ? point.note.trim().length > 0
+            ? point.note
+            : null
+          : "invalid";
     if (
       id === null
       || latitude === null
@@ -117,6 +130,8 @@ export function parseJourneyInput(body: JourneyInput): JourneyValues | null {
       || label.length > 120
       || (isStop && !label)
       || (occurredAt !== null && Number.isNaN(occurredAt.valueOf()))
+      || note === "invalid"
+      || (note !== undefined && note !== null && note.length > MAX_ROUTE_POINT_NOTE_LENGTH)
     ) {
       return null;
     }
@@ -125,7 +140,7 @@ export function parseJourneyInput(body: JourneyInput): JourneyValues | null {
       if (previousOccurredAt && canonical < previousOccurredAt) return null;
       previousOccurredAt = canonical;
     }
-    routePoints.push({ id, latitude, longitude, label, isStop, occurredAt });
+    routePoints.push({ id, latitude, longitude, label, isStop, occurredAt, note });
   }
 
   const persistedIds = routePoints.flatMap((point) => point.id ? [point.id] : []);

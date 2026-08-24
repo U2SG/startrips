@@ -81,6 +81,9 @@ export const journeyRoutePoints = pgTable(
     label: text("label").notNull().default(""),
     isStop: boolean("is_stop").notNull().default(false),
     occurredAt: timestamp("occurred_at", { withTimezone: true }),
+    // #10: a short personal note for this route point. Plain text, nullable;
+    // empty strings are stored as null. Kept simple for future journaling.
+    note: text("note"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

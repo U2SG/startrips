@@ -270,6 +270,9 @@ export function journeyToDraftPoints(journey: Journey): RouteDraftPoint[] {
     label: point.label,
     isStop: point.isStop,
     occurredAt: point.occurredAt,
+    // #10: echo the existing note back so a whole-list replace never clears
+    // it; absent notes stay absent.
+    note: point.note ?? null,
   }));
 }
 
@@ -812,7 +815,7 @@ export function JourneyComposer({
                 {routePoints.map((point, index) => (
                   <li key={point.draftId}>
                     <span className="journey-route-draft__index">{String(index + 1).padStart(2, "0")}</span>
-                    <div>
+                    <div className="journey-route-draft__main">
                       <input
                         aria-label={`地点 ${index + 1} 名称`}
                         maxLength={120}
@@ -821,6 +824,17 @@ export function JourneyComposer({
                         onChange={(event) => setRoutePoints((current) => updateRoutePoint(current, point.draftId, { label: event.target.value }))}
                       />
                       <small>{point.latitude.toFixed(6)}, {point.longitude.toFixed(6)}</small>
+                      {/* #10: a short personal note for this route point. */}
+                      <label className="journey-route-draft__note">
+                        <span>这一站想记住什么？<small>可选</small></span>
+                        <textarea
+                          rows={2}
+                          maxLength={500}
+                          value={point.note ?? ""}
+                          placeholder="写下一句当时的心情、发生的小事，或以后看到这里时想起的话…"
+                          onChange={(event) => setRoutePoints((current) => updateRoutePoint(current, point.draftId, { note: event.target.value }))}
+                        />
+                      </label>
                     </div>
                     <label className="journey-checkbox"><input type="checkbox" checked={point.isStop} onChange={() => setRoutePoints((current) => toggleRouteStop(current, point.draftId))} />停靠</label>
                     <div className="journey-route-draft__actions">

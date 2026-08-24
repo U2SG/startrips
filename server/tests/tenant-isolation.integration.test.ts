@@ -689,6 +689,61 @@ describe("tenant-scoped journey repository", () => {
     })).rejects.toBeInstanceOf(JourneyRouteChangedError);
   });
 
+  it("preserves route-point notes across edits and clears them explicitly (#10)", async () => {
+    const created = await createJourneyForAtlas(atlasA, "user-a", {
+      ...baseJourney,
+      title: "Noted route",
+      routePoints: baseJourney.routePoints.map((point, index) => ({
+        ...point,
+        note: index === 0 ? "第一次看到雪山的时候，风很大。" : null,
+      })),
+    });
+    if (!created) throw new Error("Journey fixture was not created");
+    const pointA = created.routePoints[0];
+    const pointB = created.routePoints[1];
+
+    // Notes round-trip through create/read.
+    expect(pointA.note).toBe("第一次看到雪山的时候，风很大。");
+    expect(pointB.note).toBeNull();
+
+    // A full replace that echoes the notes back preserves them; editing other
+    // fields never clears what the client carried.
+    const edited = await updateJourneyForAtlas(created.id, atlasA, {
+      ...baseJourney,
+      title: "Noted route (edited)",
+      revision: created.revision,
+      routePoints: created.routePoints.map(({ id, latitude, longitude, label, isStop, occurredAt, note }) => ({
+        id,
+        latitude,
+        longitude,
+        label,
+        isStop,
+        occurredAt,
+        note: note ?? null,
+      })),
+    });
+    expect(edited?.title).toBe("Noted route (edited)");
+    expect(edited?.routePoints[0].note).toBe("第一次看到雪山的时候，风很大。");
+
+    // Explicit null clears a note.
+    const cleared = await updateJourneyForAtlas(created.id, atlasA, {
+      ...baseJourney,
+      title: "Noted route (edited)",
+      revision: edited!.revision,
+      routePoints: edited!.routePoints.map(({ id, latitude, longitude, label, isStop, occurredAt }) => ({
+        id,
+        latitude,
+        longitude,
+        label,
+        isStop,
+        occurredAt,
+        note: null,
+      })),
+    });
+    expect(cleared?.routePoints[0].note).toBeNull();
+    expect(cleared?.routePoints[1].note).toBeNull();
+  });
+
   it("serializes media finalization into a stable story order", async () => {
     const journey = await createJourneyForAtlas(atlasA, "user-a", {
       ...baseJourney,

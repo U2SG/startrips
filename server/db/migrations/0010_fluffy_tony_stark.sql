@@ -1,0 +1,1 @@
+ALTER TABLE "journey_route_points" ADD COLUMN "note" text;

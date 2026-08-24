@@ -1397,6 +1397,12 @@ export function JourneyStory({
               <div><dt>STOPS</dt><dd>{namedStops.length}</dd></div>
             </dl>
             {namedStops.length > 0 ? <p className="journey-story__stops">{namedStops.map((stop) => stop.label).join(" · ")}</p> : null}
+            {/* #10: a selected route point shows its own note near the place
+                name — distinct from system metadata. Journey-scoped view never
+                fabricates a note. */}
+            {selectedRoutePoint && selectedRoutePoint.note ? (
+              <blockquote className="journey-story__point-note">{selectedRoutePoint.note}</blockquote>
+            ) : null}
             {journey.note ? <p className="journey-story__note">{journey.note}</p> : <p className="journey-story__note is-empty">没有文字，只有这条路线留下来。</p>}
             {onDelete && deleteState !== "idle" ? (
               <section className="journey-story__delete-confirmation" aria-label="确认删除旅程">

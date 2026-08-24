@@ -2015,6 +2015,20 @@
   color: var(--atlas-faint);
 }
 
+/* #10: a route point's personal note — softer, more personal than metadata,
+   larger line-height, serif, no placeholder when absent. */
+.journey-story__point-note {
+  margin: 22px 0 0;
+  padding: 0 0 0 18px;
+  border-left: 2px solid color-mix(in srgb, var(--journey-color, var(--atlas-warm)) 55%, transparent);
+  color: #cdd9d5;
+  font-family: var(--archive-serif);
+  font-size: 17px;
+  font-style: normal;
+  line-height: 2.05;
+  white-space: pre-wrap;
+}
+
 .journey-story__delete-confirmation {
   display: grid;
   gap: 16px;
@@ -2647,12 +2661,13 @@
   font: 500 8px/1 ui-monospace, "SFMono-Regular", Consolas, monospace;
 }
 
-.journey-route-draft li > div:nth-child(2) {
+.journey-route-draft li > .journey-route-draft__main {
   min-width: 0;
   display: grid;
+  gap: 8px;
 }
 
-.journey-route-draft li > div:nth-child(2) input {
+.journey-route-draft li > .journey-route-draft__main input {
   min-height: 34px;
 }
 
@@ -2660,6 +2675,40 @@
   margin-top: 3px;
   color: var(--atlas-faint);
   font: 500 8px/1.2 ui-monospace, "SFMono-Regular", Consolas, monospace;
+}
+
+/* #10: route-point note editor — quiet, non-pressuring. */
+.journey-route-draft__note {
+  display: grid;
+  gap: 5px;
+}
+
+.journey-route-draft__note > span {
+  color: var(--atlas-muted);
+  font-size: 9px;
+  letter-spacing: 0.07em;
+}
+
+.journey-route-draft__note > span small {
+  margin: 0 0 0 6px;
+  color: var(--atlas-faint);
+}
+
+.journey-route-draft__note textarea {
+  min-height: 52px;
+  resize: vertical;
+  padding: 8px 10px;
+  border: 1px solid var(--atlas-line);
+  background: rgba(2, 8, 8, 0.55);
+  color: #c7d4d0;
+  font-family: var(--archive-serif);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.journey-route-draft__note textarea:focus-visible {
+  outline: 1px solid var(--atlas-acid);
+  outline-offset: 2px;
 }
 
 .journey-route-draft__actions {
@@ -4506,7 +4555,7 @@
   }
 
   .journey-composer input:not([type="checkbox"]):not([type="file"]),
-  .journey-route-draft li > div:nth-child(2) input {
+  .journey-route-draft li > .journey-route-draft__main input {
     min-height: 44px;
   }
 
