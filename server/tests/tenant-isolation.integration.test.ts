@@ -20,6 +20,7 @@ import {
   listJourneysForAtlas,
   markJourneyForDeletionForAtlas,
   restoreJourneyForAtlas,
+  setJourneyCoverForAtlas,
   updateJourneyForAtlas,
 } from "../repositories/journey-repository";
 import { finalizeUpload } from "../routes/uploads";
@@ -935,5 +936,83 @@ describe("tenant-scoped journey repository", () => {
     expect(assetA.id).not.toBe(assetB.id);
     expect(assetA.routePointId).toBe(pointA);
     expect(assetB.routePointId).toBe(pointB);
+  });
+
+  it("sets and clears an explicit journey cover, rejecting foreign or audio assets (#14)", async () => {
+    const journey = await createJourneyForAtlas(atlasA, "user-a", {
+      ...baseJourney,
+      title: "Cover story",
+    });
+    if (!journey) throw new Error("Journey fixture was not created");
+    const pointA = journey.routePoints[0].id;
+    if (!pointA) throw new Error("Journey fixture lacks a route point");
+
+    const makeUpload = (fileName: string, mimeType: string, pointId: string | null) =>
+      db
+        .insert(mediaUploads)
+        .values({
+          atlasId: atlasA,
+          journeyId: journey.id,
+          routePointId: pointId,
+          storageDriver: "test",
+          storageKey: `${atlasA}/${journey.id}/${randomUUID()}`,
+          providerUploadId: randomUUID(),
+          fileName,
+          mimeType,
+          bytes: 128,
+          partSize: 128,
+          partCount: 1,
+          status: "finalizing",
+          createdByUserId: "user-a",
+        })
+        .returning();
+
+    const [photoUpload] = await makeUpload("photo.jpg", "image/jpeg", pointA);
+    const photo = await finalizeUpload(photoUpload);
+    const [audioUpload] = await makeUpload("track.mp3", "audio/mpeg", null);
+    const audio = await finalizeUpload(audioUpload);
+
+    // A visual asset of this journey becomes the cover.
+    const withCover = await setJourneyCoverForAtlas(journey.id, atlasA, photo.id);
+    expect(withCover?.coverMediaAssetId).toBe(photo.id);
+
+    // A soundtrack can never be the cover; the journey keeps its current cover.
+    const rejectedAudio = await setJourneyCoverForAtlas(journey.id, atlasA, audio.id);
+    expect(rejectedAudio?.id).toBe(journey.id);
+    expect(rejectedAudio?.coverMediaAssetId).toBe(photo.id);
+
+    // A foreign journey's asset is rejected.
+    const other = await createJourneyForAtlas(atlasA, "user-a", {
+      ...baseJourney,
+      title: "Other cover",
+    });
+    if (!other) throw new Error("Other journey fixture was not created");
+    const otherPhoto = await finalizeUpload(
+      (await db
+        .insert(mediaUploads)
+        .values({
+          atlasId: atlasA,
+          journeyId: other.id,
+          routePointId: other.routePoints[0]?.id ?? null,
+          storageDriver: "test",
+          storageKey: `${atlasA}/${other.id}/${randomUUID()}`,
+          providerUploadId: randomUUID(),
+          fileName: "other.jpg",
+          mimeType: "image/jpeg",
+          bytes: 128,
+          partSize: 128,
+          partCount: 1,
+          status: "finalizing",
+          createdByUserId: "user-a",
+        })
+        .returning())[0],
+    );
+    const rejectedForeign = await setJourneyCoverForAtlas(journey.id, atlasA, otherPhoto.id);
+    expect(rejectedForeign?.coverMediaAssetId).toBe(photo.id);
+
+    // Clearing works.
+    const cleared = await setJourneyCoverForAtlas(journey.id, atlasA, null);
+    expect(cleared?.coverMediaAssetId).toBeNull();
+    expect(cleared?.id).toBe(journey.id);
   });
 });

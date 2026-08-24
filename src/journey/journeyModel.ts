@@ -176,6 +176,22 @@ export function journeyVisualMedia(
   return journey.media.filter(isVisualMediaAsset);
 }
 
+// #14: the journey cover — the explicit coverMediaAssetId when it is a valid
+// visual asset of this journey, otherwise the first visual media by sortOrder,
+// otherwise null. Reordering never changes the explicit cover.
+export function journeyCover(
+  journey: Pick<Journey, "coverMediaAssetId" | "media">,
+): JourneyMediaAsset | null {
+  const visual = journeyVisualMedia(journey);
+  if (journey.coverMediaAssetId) {
+    const explicit = visual.find(
+      (asset) => asset.id === journey.coverMediaAssetId,
+    );
+    if (explicit) return explicit;
+  }
+  return visual[0] ?? null;
+}
+
 // Every completed upload receives the highest sortOrder in its journey, so the
 // newest track is already the active one before an older track is cleaned up.
 export function journeySoundtrack(

@@ -31,6 +31,7 @@ import {
   IconArrowRight,
   IconArrowDown,
   IconArrowUp,
+  IconBookmark,
   IconEdit,
   IconLayoutGrid,
   IconMaximize,
@@ -43,7 +44,7 @@ import {
   IconVideo,
   IconX,
 } from "@tabler/icons-react";
-import { deleteMedia, getPrivateMediaRead, reorderJourneyMedia } from "./journeyApi";
+import { deleteMedia, getPrivateMediaRead, reorderJourneyMedia, setJourneyCover } from "./journeyApi";
 import { uploadJourneyMedia } from "./JourneyComposer";
 import {
   createDecodeRegistry,
@@ -53,6 +54,7 @@ import {
 import { prefersReducedMotion } from "../motion/preferences";
 import {
   applyScopeReorder,
+  journeyCover,
   journeySoundtrack,
   journeyVisualMedia,
   stripMediaExtension,
@@ -227,18 +229,22 @@ function StoryMediaTile({
   asset,
   index,
   isCurrent,
+  isCover,
   read,
   disabled,
   onRequestRead,
   onSelect,
+  onSetCover,
 }: {
   asset: JourneyMediaAsset;
   index: number;
   isCurrent: boolean;
+  isCover: boolean;
   read: MediaReadState | undefined;
   disabled: boolean;
   onRequestRead: (assetId: string) => void;
   onSelect: (index: number) => void;
+  onSetCover?: (assetId: string) => void;
 }) {
   const tileRef = useRef<HTMLButtonElement>(null);
   const isVideo = asset.mimeType.startsWith("video/");
@@ -265,13 +271,13 @@ function StoryMediaTile({
   }, [asset.id, isVideo, onRequestRead]);
 
   return (
-    <li>
+    <li className={isCover ? "is-cover" : ""}>
       <button
         ref={tileRef}
         type="button"
         className={isCurrent ? "is-current" : ""}
         aria-current={isCurrent ? "true" : undefined}
-        aria-label={`第 ${index + 1} 个媒体 ${asset.fileName}`}
+        aria-label={`第 ${index + 1} 个媒体 ${asset.fileName}${isCover ? "，当前封面" : ""}`}
         data-media-tile-index={index}
         disabled={disabled}
         onClick={() => onSelect(index)}
@@ -287,8 +293,18 @@ function StoryMediaTile({
             {read?.status === "error" ? "不可用" : "载入中"}
           </span>
         )}
+        {isCover ? <span className="journey-story__media-tile-cover">封面</span> : null}
         <small>{String(index + 1).padStart(2, "0")}</small>
       </button>
+      {onSetCover && !isCover ? (
+        <button
+          type="button"
+          className="journey-story__media-tile-set-cover"
+          onClick={() => onSetCover(asset.id)}
+        >
+          设为封面
+        </button>
+      ) : null}
     </li>
   );
 }
@@ -301,18 +317,22 @@ function SortableMediaTile({
   asset,
   index,
   isCurrent,
+  isCover,
   read,
   disabled,
   onRequestRead,
   onSelect,
+  onSetCover,
 }: {
   asset: JourneyMediaAsset;
   index: number;
   isCurrent: boolean;
+  isCover: boolean;
   read: MediaReadState | undefined;
   disabled: boolean;
   onRequestRead: (assetId: string) => void;
   onSelect: (index: number) => void;
+  onSetCover?: (assetId: string) => void;
 }) {
   const {
     attributes,
@@ -341,10 +361,12 @@ function SortableMediaTile({
         asset={asset}
         index={index}
         isCurrent={isCurrent}
+        isCover={isCover}
         read={read}
         disabled={disabled || isDragging}
         onRequestRead={onRequestRead}
         onSelect={onSelect}
+        onSetCover={onSetCover}
       />
     </li>
   );
@@ -389,6 +411,8 @@ export function JourneyStory({
   const [mediaDeleteMessage, setMediaDeleteMessage] = useState("");
   const [orderPending, setOrderPending] = useState(false);
   const [orderMessage, setOrderMessage] = useState("");
+  // #14: setting a cover is a lightweight mutation that disables the grid.
+  const [coverPending, setCoverPending] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   // #7: fullscreen controls fade out after idle; any pointer/key activity
@@ -484,6 +508,10 @@ export function JourneyStory({
   const activeAsset = scopedMedia[assetIndex] ?? null;
   const activeRead = activeAsset ? mediaReads[activeAsset.id] : null;
   const soundtrackRead = soundtrack ? mediaReads[soundtrack.id] : null;
+  // #14: the journey cover — explicit coverMediaAssetId, else first visual
+  // media by sortOrder, else null. Cards/story use it as the representative
+  // image; it is independent of slideshow order.
+  const cover = journey ? journeyCover(journey) : null;
 
   function visualMediaCount(pointId: string | null) {
     return visualMedia.filter((asset) => asset.routePointId === pointId).length;
@@ -955,7 +983,8 @@ export function JourneyStory({
     || deleteState === "pending"
     || mediaDeleteState === "pending"
     || soundtrackRemovePending
-    || orderPending;
+    || orderPending
+    || coverPending;
 
   function selectMediaScope(routePointId: string | null) {
     if (mutationPending) return;
@@ -1041,6 +1070,23 @@ export function JourneyStory({
       // refresh the grid keeps the pre-drag order via the reloaded journey.
     } finally {
       setOrderPending(false);
+    }
+  }
+
+  // #14: set this journey's cover media. The parent owns journey state; after
+  // the API call we ask it to refresh, so the card updates immediately and a
+  // failure rolls back to server truth.
+  async function handleSetCover(assetId: string) {
+    if (!journey || coverPending || mutationPending) return;
+    setCoverPending(true);
+    setOrderMessage("");
+    try {
+      await setJourneyCover(journey.id, assetId);
+      await onMediaAdded(journey.id);
+    } catch (error) {
+      setOrderMessage(error instanceof Error ? error.message : "封面设置失败，请稍后重试。");
+    } finally {
+      setCoverPending(false);
     }
   }
 
@@ -1199,10 +1245,12 @@ export function JourneyStory({
                         asset={tile}
                         index={index}
                         isCurrent={index === assetIndex}
+                        isCover={cover?.id === tile.id}
                         read={mediaReads[tile.id]}
                         disabled={mutationPending}
                         onRequestRead={loadMediaRead}
                         onSelect={selectMediaIndex}
+                        onSetCover={handleSetCover}
                       />
                     ))}
                   </ul>
@@ -1283,19 +1331,34 @@ export function JourneyStory({
             ) : null}
             {orderMessage ? <p className="journey-story__order-message" role="status">{orderMessage}</p> : null}
             {!overview && asset ? (
-              <div className="journey-story__media-remove">
-                {mediaDeleteState === "idle" ? (
-                  <button type="button" disabled={mutationPending} onClick={() => setMediaDeleteState("confirming")} aria-label="删除这段媒体">
-                    <IconTrash size={17} stroke={1.35} aria-hidden="true" />
+              <div className="journey-story__media-actions">
+                {cover?.id !== asset.id ? (
+                  <button
+                    type="button"
+                    className="journey-story__media-set-cover"
+                    disabled={mutationPending || coverPending}
+                    onClick={() => void handleSetCover(asset.id)}
+                  >
+                    <IconBookmark size={16} stroke={1.35} aria-hidden="true" />
+                    设为封面
                   </button>
                 ) : (
-                  <div className="journey-story__media-remove__confirm" role="group" aria-label="确认删除媒体">
-                    <span>删除这段媒体？</span>
-                    <button ref={mediaDeleteCancelRef} type="button" disabled={mediaDeleteState === "pending"} onClick={() => { setMediaDeleteState("idle"); setMediaDeleteMessage(""); }}>取消</button>
-                    <button className="is-destructive" type="button" disabled={mediaDeleteState === "pending"} onClick={() => void confirmMediaDelete()}>{mediaDeleteState === "pending" ? "正在删除…" : "确认删除"}</button>
-                    {mediaDeleteMessage ? <p className="journey-story__media-remove__error" role="alert">{mediaDeleteMessage}</p> : null}
-                  </div>
+                  <span className="journey-story__media-cover-current">当前封面</span>
                 )}
+                <div className="journey-story__media-remove">
+                  {mediaDeleteState === "idle" ? (
+                    <button type="button" disabled={mutationPending} onClick={() => setMediaDeleteState("confirming")} aria-label="删除这段媒体">
+                      <IconTrash size={17} stroke={1.35} aria-hidden="true" />
+                    </button>
+                  ) : (
+                    <div className="journey-story__media-remove__confirm" role="group" aria-label="确认删除媒体">
+                      <span>删除这段媒体？</span>
+                      <button ref={mediaDeleteCancelRef} type="button" disabled={mediaDeleteState === "pending"} onClick={() => { setMediaDeleteState("idle"); setMediaDeleteMessage(""); }}>取消</button>
+                      <button className="is-destructive" type="button" disabled={mediaDeleteState === "pending"} onClick={() => void confirmMediaDelete()}>{mediaDeleteState === "pending" ? "正在删除…" : "确认删除"}</button>
+                      {mediaDeleteMessage ? <p className="journey-story__media-remove__error" role="alert">{mediaDeleteMessage}</p> : null}
+                    </div>
+                  )}
+                </div>
               </div>
             ) : null}
           </section>

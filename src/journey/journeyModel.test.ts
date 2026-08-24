@@ -4,6 +4,7 @@ import {
   groupJourneysByYear,
   isSoundtrackAsset,
   isVisualMediaAsset,
+  journeyCover,
   journeySoundtrack,
   journeyVisualMedia,
   sortJourneysChronologically,
@@ -298,5 +299,38 @@ describe("journeyModel", () => {
 
     const reordered = applyScopeReorder(withScope, null, ["j2", "j1"]);
     expect(reordered.map((entry) => entry.id)).toEqual(["j2", "a1", "j1"]);
+  });
+
+  it("falls back from an explicit cover to the first visual media (#14)", () => {
+    const base: JourneyMediaAsset = {
+      id: "",
+      journeyId: "journey-1",
+      routePointId: null,
+      storageDriver: "test",
+      storageKey: "journey-1",
+      fileName: "",
+      mimeType: "image/jpeg",
+      bytes: 128,
+      sortOrder: 0,
+      uploadedByUserId: "user-1",
+      createdAt: "2026-08-11T00:00:00.000Z",
+    };
+    const media = [
+      { ...base, id: "a1", fileName: "a1.jpg", sortOrder: 0 },
+      { ...base, id: "a2", fileName: "a2.jpg", sortOrder: 1 },
+      { ...base, id: "track", fileName: "t.mp3", mimeType: "audio/mpeg", sortOrder: 2 },
+    ] as JourneyMediaAsset[];
+
+    // No explicit cover -> first visual media (soundtrack skipped).
+    expect(journeyCover({ coverMediaAssetId: null, media })?.id).toBe("a1");
+    // Explicit cover wins even when it is not first by order.
+    expect(journeyCover({ coverMediaAssetId: "a2", media })?.id).toBe("a2");
+    // A cover pointing at the soundtrack or a missing asset falls back.
+    expect(journeyCover({ coverMediaAssetId: "track", media })?.id).toBe("a1");
+    expect(journeyCover({ coverMediaAssetId: "missing", media })?.id).toBe("a1");
+  });
+
+  it("returns null cover when a journey has no visual media (#14)", () => {
+    expect(journeyCover({ coverMediaAssetId: null, media: [] })).toBeNull();
   });
 });

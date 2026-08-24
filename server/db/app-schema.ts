@@ -9,6 +9,7 @@ import {
   timestamp,
   uniqueIndex,
   uuid,
+  type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 
 export const atlases = pgTable(
@@ -44,6 +45,14 @@ export const journeys = pgTable(
     note: text("note").notNull().default(""),
     lightColor: text("light_color").notNull().default("#f4ce73"),
     lightEffect: text("light_effect"),
+    // #14: explicit journey cover. Nullable; falls back to the first visual
+    // media by sortOrder when unset. Deletion of the referenced asset clears
+    // it (set null), and the app layer validates ownership + visual kind.
+    // AnyPgColumn breaks the type-inference cycle journeys <-> mediaAssets.
+    coverMediaAssetId: uuid("cover_media_asset_id").references(
+      (): AnyPgColumn => mediaAssets.id,
+      { onDelete: "set null" },
+    ),
     revision: integer("revision").notNull().default(1),
     createdByUserId: text("created_by_user_id").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true })

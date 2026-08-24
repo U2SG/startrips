@@ -6,6 +6,7 @@ import {
   JourneyRouteChangedError,
   listJourneysForAtlas,
   restoreJourneyForAtlas,
+  setJourneyCoverForAtlas,
   updateJourneyForAtlas,
   type JourneyValues,
 } from "../repositories/journey-repository";
@@ -204,6 +205,32 @@ journeyRoutes.delete("/:id", async (context) => {
 journeyRoutes.post("/:id/restore", async (context) => {
   const { atlas } = await requireAtlasAccess(context.req.raw, "delete");
   const journey = await restoreJourneyForAtlas(context.req.param("id"), atlas.id);
+  if (!journey) return context.json({ error: "JOURNEY_NOT_FOUND" }, 404);
+  return context.json({ journey });
+});
+
+// #14: set or clear the journey's explicit cover media. A dedicated lightweight
+// endpoint avoids overwriting any other journey field through the full update.
+journeyRoutes.patch("/:id/cover", async (context) => {
+  const { atlas } = await requireAtlasAccess(context.req.raw, "update");
+  const body = await context.req.json<{ coverMediaAssetId?: unknown }>();
+  const coverMediaAssetId = body.coverMediaAssetId === null
+    || body.coverMediaAssetId === undefined
+    ? null
+    : typeof body.coverMediaAssetId === "string" && UUID_PATTERN.test(body.coverMediaAssetId)
+      ? body.coverMediaAssetId
+      : "invalid";
+  if (coverMediaAssetId === "invalid") {
+    return context.json(
+      { error: "INVALID_COVER", message: "Invalid cover media asset" },
+      400,
+    );
+  }
+  const journey = await setJourneyCoverForAtlas(
+    context.req.param("id"),
+    atlas.id,
+    coverMediaAssetId,
+  );
   if (!journey) return context.json({ error: "JOURNEY_NOT_FOUND" }, 404);
   return context.json({ journey });
 });

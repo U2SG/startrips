@@ -30,6 +30,7 @@ import {
   restoreJourney,
 } from "./journeyApi";
 import {
+  journeyCover,
   journeyVisualMedia,
   mergeJourney,
   sortJourneysChronologically,
@@ -70,9 +71,10 @@ function JourneyCardMedia({
   journey: Journey;
   reduceMotion: boolean;
 }) {
-  // The journey soundtrack is audio, so it never becomes a card cover.
-  const visualMedia = journeyVisualMedia(journey);
-  const asset = visualMedia[0] ?? null;
+  // #14: the card cover is the explicit coverMediaAssetId when set, else the
+  // first visual media by sortOrder, else nothing. The soundtrack never
+  // becomes a cover.
+  const asset = journeyCover(journey);
   const [read, setRead] = useState<JourneyCardMediaRead>({ status: "idle" });
 
   useEffect(() => {
@@ -140,7 +142,7 @@ function JourneyCardMedia({
           {read.status === "error" ? "媒体暂不可用" : "正在载入媒体"}
         </span>
       ) : null}
-      <figcaption>{String(visualMedia.length).padStart(2, "0")} MEDIA</figcaption>
+      <figcaption>{String(journeyVisualMedia(journey).length).padStart(2, "0")} MEDIA</figcaption>
     </figure>
   );
 }

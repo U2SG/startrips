@@ -141,6 +141,20 @@ export async function reorderJourneyMedia(
   return payload.journey;
 }
 
+// #14: set or clear the journey's explicit cover media.
+export async function setJourneyCover(
+  journeyId: string,
+  coverMediaAssetId: string | null,
+  fetcher: Fetcher = fetch,
+): Promise<Journey> {
+  const payload = await requestJson<{ journey: Journey }>(
+    `/api/journeys/${encodeURIComponent(journeyId)}/cover`,
+    { method: "PATCH", body: JSON.stringify({ coverMediaAssetId }) },
+    fetcher,
+  );
+  return payload.journey;
+}
+
 export async function searchLocations(
   query: string,
   fetcher: Fetcher = fetch,

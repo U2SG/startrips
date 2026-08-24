@@ -1506,6 +1506,56 @@
   color: var(--atlas-acid);
 }
 
+/* #14: cover badge on the overview tile, and the hover-visible set-cover
+   action. The tile's <li> is the drag surface, so the action sits inside it
+   above the thumbnail. */
+.journey-story__media-grid > li {
+  position: relative;
+}
+
+.journey-story__media-tile-cover {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  padding: 3px 6px;
+  border: 1px solid rgba(200, 255, 61, 0.5);
+  background: rgba(2, 8, 8, 0.85);
+  color: var(--atlas-acid);
+  font: 500 7px/1 ui-monospace, "SFMono-Regular", Consolas, monospace;
+  letter-spacing: 0.12em;
+}
+
+.journey-story__media-grid > li:not(.is-cover) .journey-story__media-tile-set-cover {
+  position: absolute;
+  z-index: 1;
+  top: 4px;
+  right: 4px;
+  padding: 3px 6px;
+  border: 1px solid rgba(200, 255, 61, 0.35);
+  background: rgba(2, 8, 8, 0.85);
+  color: var(--atlas-acid);
+  cursor: pointer;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  opacity: 0;
+  transition: opacity var(--motion-instant, 120ms) ease;
+}
+
+.journey-story__media-grid > li:hover .journey-story__media-tile-set-cover,
+.journey-story__media-grid > li:focus-within .journey-story__media-tile-set-cover {
+  opacity: 1;
+}
+
+.journey-story__media-grid > li.is-dragging .journey-story__media-tile-set-cover {
+  display: none;
+}
+
+@media (hover: none) {
+  .journey-story__media-grid > li:not(.is-cover) .journey-story__media-tile-set-cover {
+    opacity: 1;
+  }
+}
+
 .journey-story__media-nav {
   position: absolute;
   right: 16px;
@@ -1718,6 +1768,53 @@
 .journey-story__media-remove > button:disabled {
   cursor: wait;
   opacity: 0.68;
+}
+
+/* #14: single-photo cover action and current-cover label. */
+.journey-story__media-actions {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.journey-story__media-set-cover {
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 12px;
+  border: 1px solid rgba(200, 255, 61, 0.32);
+  background: rgba(2, 8, 8, 0.82);
+  color: var(--atlas-acid);
+  cursor: pointer;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+}
+
+.journey-story__media-set-cover:hover:not(:disabled),
+.journey-story__media-set-cover:focus-visible {
+  border-color: rgba(200, 255, 61, 0.6);
+}
+
+.journey-story__media-set-cover:disabled {
+  cursor: wait;
+  opacity: 0.68;
+}
+
+.journey-story__media-cover-current {
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 12px;
+  border: 1px solid rgba(200, 255, 61, 0.22);
+  background: rgba(2, 8, 8, 0.82);
+  color: var(--atlas-muted);
+  font-size: 10px;
+  letter-spacing: 0.08em;
 }
 
 .journey-story__media-remove__confirm {
