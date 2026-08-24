@@ -40,6 +40,15 @@ import type { Journey, JourneyRoute } from "./types";
 
 type AtlasView = "planet" | "timeline";
 
+// #8: the root class/data contract for globe focus mode, kept pure so the
+// layout toggle is unit-testable without mounting the full app.
+export function globeFocusState(focused: boolean) {
+  return {
+    className: focused ? " is-globe-focus" : "",
+    dataAttribute: focused ? "on" : "off",
+  };
+}
+
 function preferredReducedMotion() {
   return globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
 }
@@ -152,11 +161,30 @@ export function LivingAtlasApp() {
   const [undoJourney, setUndoJourney] = useState<Journey | null>(null);
   const [globePickActive, setGlobePickActive] = useState(false);
   const [draftRoute, setDraftRoute] = useState<JourneyRoute | null>(null);
+  // #8: globe-only focus mode hides every sidebar/card and lets the globe take
+  // the full viewport. It is a temporary viewing mode: refresh restores the
+  // normal layout, and the Three scene is never remounted (camera/rotation/
+  // focus survive through the class switch).
+  const [globeFocusMode, setGlobeFocusMode] = useState(false);
+  const globeFocusExitRef = useRef<HTMLButtonElement | null>(null);
   const loadRevision = useRef(0);
   const globePickAccept = useRef<((point: GlobePointPick) => void) | null>(null);
   const reduceMotion = useMemo(preferredReducedMotion, []);
   const createMagnet = useMagnet<HTMLButtonElement>(14);
   const storyMagnet = useMagnet<HTMLButtonElement>(14);
+
+  // Esc exits focus mode. The exit control is only visible inside focus mode,
+  // so exiting returns focus to the trigger button in the header.
+  useEffect(() => {
+    if (!globeFocusMode) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setGlobeFocusMode(false);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [globeFocusMode]);
 
   const load = useCallback(async (quiet = false) => {
     const revision = ++loadRevision.current;
@@ -312,7 +340,8 @@ export function LivingAtlasApp() {
 
   return (
     <main
-      className={`living-atlas${arrivalJourneyId ? " has-arrival" : ""}${globePickActive ? " is-globe-picking" : ""}`}
+      className={`living-atlas${arrivalJourneyId ? " has-arrival" : ""}${globePickActive ? " is-globe-picking" : ""}${globeFocusState(globeFocusMode).className}`}
+      data-globe-focus={globeFocusState(globeFocusMode).dataAttribute}
       data-arrival-journey={arrivalJourneyId ?? undefined}
       data-journey-count={journeys.length}
     >
@@ -346,6 +375,18 @@ export function LivingAtlasApp() {
           <button type="button" className={view === "planet" ? "is-active" : ""} onClick={() => setView("planet")}><IconWorld size={16} stroke={1.35} aria-hidden="true" />地球</button>
           <button type="button" className={view === "timeline" ? "is-active" : ""} onClick={() => setView("timeline")}><IconTimeline size={16} stroke={1.35} aria-hidden="true" />时间线</button>
           <button ref={createMagnet.ref} onMouseMove={createMagnet.onMouseMove} onMouseLeave={createMagnet.onMouseLeave} type="button" className="living-atlas__create" onClick={openCreateComposer}><IconPlus size={17} stroke={1.4} aria-hidden="true" />记录旅程</button>
+          <button
+            type="button"
+            className="living-atlas__globe-focus"
+            aria-pressed={false}
+            onClick={() => {
+              setView("planet");
+              setGlobeFocusMode(true);
+            }}
+          >
+            <IconWorld size={16} stroke={1.35} aria-hidden="true" />
+            只看地球
+          </button>
         </nav>
       </header>
 
@@ -434,6 +475,19 @@ export function LivingAtlasApp() {
           <button type="button" onClick={() => { setNotice(""); setUndoJourney(null); }} aria-label="关闭提示"><IconX size={17} stroke={1.4} aria-hidden="true" /></button>
         </div>
       ) : null}
+
+      {/* #8: the only control left visible in globe focus mode; always in the
+          DOM so keyboard focus can return to it on exit. */}
+      <button
+        ref={globeFocusExitRef}
+        type="button"
+        className="living-atlas__globe-focus-exit"
+        aria-label="退出专注地球"
+        onClick={() => setGlobeFocusMode(false)}
+      >
+        <IconX size={16} stroke={1.4} aria-hidden="true" />
+        恢复界面
+      </button>
 
       {composerOpen ? (
         <JourneyComposer

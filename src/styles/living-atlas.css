@@ -429,7 +429,7 @@
   position: absolute;
   top: 14px;
   left: 50%;
-  width: 360px;
+  width: 460px;
   height: 54px;
   display: flex;
   align-items: center;
@@ -3708,6 +3708,85 @@
   }
 }
 
+/* ── #8 Globe Focus Mode ────────────────────────────────────────────────────
+   One click hides every sidebar/card and gives the globe the full viewport.
+   The globe is already inset:0, so hiding the floating layers is enough; the
+   Three scene is never remounted, preserving camera/rotation/focus. The exit
+   control stays visible and keyboard-reachable. */
+
+.living-atlas__globe-focus {
+  color: var(--atlas-muted);
+}
+
+/* Focus-mode layers recede with opacity + pointer-events and the header
+   slides away; the globe is raised above everything else. */
+.living-atlas.is-globe-focus .living-atlas__header {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-18px);
+  transition: opacity var(--motion-ui, 260ms) var(--motion-ease-out, ease), transform var(--motion-ui, 260ms) var(--motion-ease-out, ease);
+}
+
+.living-atlas.is-globe-focus .living-atlas__journey-rail,
+.living-atlas.is-globe-focus .living-atlas__active,
+.living-atlas.is-globe-focus .journey-timeline,
+.living-atlas.is-globe-focus .living-atlas__notice,
+.living-atlas.is-globe-focus .living-atlas__empty {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--motion-ui, 260ms) var(--motion-ease-out, ease);
+}
+
+.living-atlas.is-globe-focus .living-atlas__globe {
+  z-index: 60;
+}
+
+/* The exit control: small, semi-transparent, top-right, always focusable. */
+.living-atlas__globe-focus-exit {
+  position: absolute;
+  z-index: 80;
+  top: 16px;
+  right: 16px;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 16px;
+  border: 1px solid rgba(118, 198, 188, 0.22);
+  border-radius: 999px;
+  background: rgba(2, 10, 11, 0.55);
+  color: #a7b9b4;
+  cursor: pointer;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  opacity: 0;
+  pointer-events: none;
+  backdrop-filter: blur(12px);
+  transition: opacity var(--motion-ui, 260ms) var(--motion-ease-out, ease);
+}
+
+.living-atlas.is-globe-focus .living-atlas__globe-focus-exit {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.living-atlas__globe-focus-exit:focus-visible {
+  outline: 1px solid var(--atlas-acid);
+  outline-offset: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .living-atlas.is-globe-focus .living-atlas__header,
+  .living-atlas.is-globe-focus .living-atlas__journey-rail,
+  .living-atlas.is-globe-focus .living-atlas__active,
+  .living-atlas.is-globe-focus .journey-timeline,
+  .living-atlas.is-globe-focus .living-atlas__notice,
+  .living-atlas.is-globe-focus .living-atlas__empty,
+  .living-atlas.is-globe-focus .living-atlas__globe-focus-exit {
+    transition: none;
+  }
+}
+
 /* ── Motion Language primitives (#17) ─────────────────────────────────────
    Five primitives compose every effect in the product:
    fade-through / lift / shared-expand / draw / focus-flight.
@@ -3927,6 +4006,19 @@
     margin-left: 3px;
     padding: 0 10px;
     font-size: 9px;
+  }
+
+  /* #8: the globe-focus entry becomes an icon-only 44px tap target on mobile. */
+  .living-atlas__header nav .living-atlas__globe-focus {
+    width: 44px;
+    justify-content: center;
+    padding: 0;
+    font-size: 0;
+  }
+
+  .living-atlas__globe-focus-exit {
+    top: 12px;
+    right: 12px;
   }
 
   .living-atlas__active {
