@@ -64,6 +64,47 @@ describe("parseStartUpload", () => {
       .toBeNull();
   });
 
+  it("accepts a journey soundtrack in every supported audio type", () => {
+    for (const mimeType of [
+      "audio/mpeg",
+      "audio/mp3",
+      "audio/mp4",
+      "audio/x-m4a",
+      "audio/aac",
+      "audio/ogg",
+      "audio/wav",
+      "audio/x-wav",
+      "audio/wave",
+    ]) {
+      expect(parseStartUpload({
+        ...validStart,
+        fileName: "night.mp3",
+        mimeType,
+        bytes: 4_000_000,
+      })).toMatchObject({ mimeType, partCount: 1 });
+    }
+    expect(parseStartUpload({
+      ...validStart,
+      fileName: "notes.aiff",
+      mimeType: "audio/aiff",
+      bytes: 4_000_000,
+    })).toBeNull();
+  });
+
+  it("caps a soundtrack at 100 MB while visual media keeps its 2 GB limit", () => {
+    const soundtrack = {
+      ...validStart,
+      fileName: "night.mp3",
+      mimeType: "audio/mpeg",
+    };
+    expect(parseStartUpload({ ...soundtrack, bytes: 100 * 1024 * 1024 }))
+      .toMatchObject({ bytes: 100 * 1024 * 1024 });
+    expect(parseStartUpload({ ...soundtrack, bytes: 100 * 1024 * 1024 + 1 }))
+      .toBeNull();
+    expect(parseStartUpload({ ...validStart, bytes: 1_000_000_000 }))
+      .toMatchObject({ bytes: 1_000_000_000 });
+  });
+
   it("accepts numeric byte strings like the JSON boundary does", () => {
     const parsed = parseStartUpload({ ...validStart, bytes: "16" });
     expect(parsed?.bytes).toBe(16);

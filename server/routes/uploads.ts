@@ -25,6 +25,7 @@ import {
 
 const PART_SIZE = 8 * 1024 * 1024;
 const MAX_UPLOAD_BYTES = 2_000_000_000;
+const MAX_AUDIO_UPLOAD_BYTES = 100 * 1024 * 1024;
 const MAX_PARTS = 10_000;
 const MAX_REORDER_ASSETS = 256;
 const FINALIZATION_LEASE_MS = 20_000;
@@ -41,6 +42,19 @@ const ALLOWED_MIME_TYPES = new Set([
   "video/mp4",
   "video/quicktime",
   "video/webm",
+]);
+// Journey soundtracks. Kept in step with ACCEPTED_JOURNEY_SOUNDTRACK_TYPES in
+// src/journey/journeyModel.ts; this copy is the authoritative validator.
+const ALLOWED_AUDIO_MIME_TYPES = new Set([
+  "audio/aac",
+  "audio/mp3",
+  "audio/mp4",
+  "audio/mpeg",
+  "audio/ogg",
+  "audio/wav",
+  "audio/wave",
+  "audio/x-m4a",
+  "audio/x-wav",
 ]);
 
 type StartUploadInput = {
@@ -69,6 +83,9 @@ export function parseStartUpload(body: StartUploadInput) {
       ? body.contentHash.toLowerCase()
       : "invalid";
 
+  const isSoundtrack = ALLOWED_AUDIO_MIME_TYPES.has(mimeType);
+  const maxBytes = isSoundtrack ? MAX_AUDIO_UPLOAD_BYTES : MAX_UPLOAD_BYTES;
+
   if (
     !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
       journeyId,
@@ -76,10 +93,10 @@ export function parseStartUpload(body: StartUploadInput) {
     (routePointId !== null && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(routePointId)) ||
     !fileName ||
     fileName.length > 180 ||
-    !ALLOWED_MIME_TYPES.has(mimeType) ||
+    (!ALLOWED_MIME_TYPES.has(mimeType) && !isSoundtrack) ||
     !Number.isSafeInteger(bytes) ||
     bytes < 1 ||
-    bytes > MAX_UPLOAD_BYTES ||
+    bytes > maxBytes ||
     partCount < 1 ||
     partCount > MAX_PARTS ||
     contentHash === "invalid"

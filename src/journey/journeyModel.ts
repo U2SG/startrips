@@ -1,12 +1,14 @@
 import type {
   Journey,
   JourneyInput,
+  JourneyMediaAsset,
   JourneyRoute,
   JourneyYearGroup,
 } from "./types";
 import { isLightEffectId } from "./lightEffects";
 
 export const MAX_JOURNEY_FILE_BYTES = 2_000_000_000;
+export const MAX_JOURNEY_SOUNDTRACK_BYTES = 100 * 1024 * 1024;
 export const MAX_ROUTE_POINTS = 64;
 
 export const ACCEPTED_JOURNEY_MEDIA_TYPES = new Set([
@@ -17,6 +19,21 @@ export const ACCEPTED_JOURNEY_MEDIA_TYPES = new Set([
   "video/mp4",
   "video/quicktime",
   "video/webm",
+]);
+
+// Browsers disagree on the type they report for the same container, so every
+// common spelling of MP3, M4A/MP4 audio, AAC, OGG, and WAV is accepted here.
+// The server repeats this list as the authoritative validator.
+export const ACCEPTED_JOURNEY_SOUNDTRACK_TYPES = new Set([
+  "audio/aac",
+  "audio/mp3",
+  "audio/mp4",
+  "audio/mpeg",
+  "audio/ogg",
+  "audio/wav",
+  "audio/wave",
+  "audio/x-m4a",
+  "audio/x-wav",
 ]);
 
 export type MediaFileLike = Pick<File, "name" | "size" | "type">;
@@ -133,6 +150,72 @@ export function validateJourneyInput(input: JourneyInput): ValidationResult {
       }
     }
   });
+
+  return { accepted: errors.length === 0, errors };
+}
+
+// A soundtrack is recognized by its MIME prefix rather than by the accepted
+// upload list, so an asset stored before a format was allowed still behaves as
+// audio instead of rendering as a broken photo.
+export function isSoundtrackAsset(
+  asset: Pick<JourneyMediaAsset, "mimeType">,
+): boolean {
+  return typeof asset.mimeType === "string"
+    && asset.mimeType.startsWith("audio/");
+}
+
+export function isVisualMediaAsset(
+  asset: Pick<JourneyMediaAsset, "mimeType">,
+): boolean {
+  return !isSoundtrackAsset(asset);
+}
+
+export function journeyVisualMedia(
+  journey: Pick<Journey, "media">,
+): JourneyMediaAsset[] {
+  return journey.media.filter(isVisualMediaAsset);
+}
+
+// Every completed upload receives the highest sortOrder in its journey, so the
+// newest track is already the active one before an older track is cleaned up.
+export function journeySoundtrack(
+  journey: Pick<Journey, "media">,
+): JourneyMediaAsset | null {
+  return journey.media
+    .filter(isSoundtrackAsset)
+    .reduce<JourneyMediaAsset | null>(
+      (latest, asset) => !latest || asset.sortOrder > latest.sortOrder
+        ? asset
+        : latest,
+      null,
+    );
+}
+
+export function validateJourneySoundtrack(
+  files: readonly MediaFileLike[],
+): ValidationResult {
+  if (files.length !== 1) {
+    return {
+      accepted: false,
+      errors: ["每段旅程只保留一首配乐，请选择一个音频文件"],
+    };
+  }
+
+  const errors: string[] = [];
+  const [file] = files;
+  if (!file.name.trim() || file.name.length > 180) {
+    errors.push("文件名不能为空且不能超过 180 个字符");
+  }
+  if (!ACCEPTED_JOURNEY_SOUNDTRACK_TYPES.has(file.type)) {
+    errors.push(
+      `${file.name || "未命名文件"} 不是支持的音频格式，可用 MP3、M4A、AAC、OGG 或 WAV`,
+    );
+  }
+  if (!Number.isSafeInteger(file.size) || file.size < 1) {
+    errors.push(`${file.name || "未命名文件"} 是空文件`);
+  } else if (file.size > MAX_JOURNEY_SOUNDTRACK_BYTES) {
+    errors.push(`${file.name} 超过 100 MB 上限`);
+  }
 
   return { accepted: errors.length === 0, errors };
 }
