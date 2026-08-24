@@ -27,7 +27,12 @@ import {
 import { archiveRecords } from "../data/archiveRecords";
 import type { GlobeMode } from "../experience/types";
 import { getLightEffectPalette } from "../journey/lightEffects";
-import { loadCityTiers, selectCityCandidates, type CityPoint } from "./cityLabels";
+import {
+  loadCityTiers,
+  resolveCityDisplayName,
+  selectCityCandidates,
+  type CityPoint,
+} from "./cityLabels";
 import type { JourneyRoute } from "../journey/types";
 import {
   buildArtworkPointPositions,
@@ -1768,11 +1773,15 @@ export function ParticleEarthScene({
         );
         // Labels must never overlap each other or route labels: place in
         // view-center order and skip any label whose box collides.
+        // #16: the displayed label resolves through the data pipeline
+        // (Chinese cities show their localized name, others fall back).
+        const cityLabelLocale = "zh-CN";
         const cityBoxes: ProjectedRouteLabelBox[] = [];
         let visibleCityCount = 0;
         for (let index = 0; index < cities.length; index += 1) {
           if (visibleCityCount >= CITY_LABEL_BUDGET) break;
           const city = cities[index];
+          const displayName = resolveCityDisplayName(city, cityLabelLocale);
           const entry = ensureCityLabel(index);
           if (!entry) break;
           const vector = latLonToVector3(
@@ -1795,7 +1804,7 @@ export function ParticleEarthScene({
           const box = {
             left: textX,
             top: textY - 9,
-            right: textX + estimateCityLabelWidth(city.name),
+            right: textX + estimateCityLabelWidth(displayName),
             bottom: textY + 2,
           };
           if (
@@ -1810,7 +1819,7 @@ export function ParticleEarthScene({
           entry.element.style.removeProperty("display");
           entry.element.setAttribute("x", textX.toFixed(1));
           entry.element.setAttribute("y", textY.toFixed(1));
-          entry.element.textContent = city.name;
+          entry.element.textContent = displayName;
           entry.city = city;
           visibleCityCount += 1;
         }

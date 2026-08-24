@@ -17,3 +17,6 @@ coverage/
 
 # Test / build logs written during development
 *.log
+
+# GeoNames build cache (cities15000 + alternateNamesV2 source dumps)
+/.cache-geonames/

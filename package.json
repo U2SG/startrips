@@ -24,7 +24,8 @@
     "qa:preview": "node scripts/preview-qa.mjs",
     "qa:live-globe": "node scripts/qa-live-globe.mjs",
     "qa:composer": "node scripts/capture-journey-composer.mjs",
-    "qa:story": "node scripts/qa-journey-story.mjs"
+    "qa:story": "node scripts/qa-journey-story.mjs",
+    "build:city": "node scripts/build-city-data.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1108.0",

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { parseCityFeatures, parseCityList, selectCityCandidates } from "./cityLabels";
+import {
+  parseCityFeatures,
+  parseCityList,
+  resolveCityDisplayName,
+  selectCityCandidates,
+} from "./cityLabels";
 
 describe("parseCityFeatures", () => {
   it("parses named cities with valid coordinates sorted by population", () => {
@@ -71,6 +76,19 @@ describe("parseCityList", () => {
     expect(Math.hypot(x, y, z)).toBeCloseTo(1, 10);
   });
 
+  it("parses the localized `z` field into localizedName (#16)", () => {
+    const cities = parseCityList({
+      cities: [
+        { n: "Shenzhen", z: "深圳", la: 22.54, lo: 114.06, p: 17000000, r: 2 },
+        { n: "NoZh", la: 10, lo: 20, p: 1000, r: 3 },
+        { n: "EmptyZh", z: "   ", la: 5, lo: 5, p: 500, r: 3 },
+      ],
+    });
+    expect(cities[0].localizedName).toBe("深圳");
+    expect(cities[1].localizedName).toBeUndefined();
+    expect(cities[2].localizedName).toBeUndefined();
+  });
+
   it("clamps invalid ranks and skips unnamed, unlocated, or out-of-range entries", () => {
     const cities = parseCityList({
       cities: [
@@ -84,6 +102,29 @@ describe("parseCityList", () => {
     });
     expect(cities.map((city) => city.name)).toEqual(["Bad Rank", "Valid"]);
     expect(cities[0].rank).toBe(3);
+  });
+});
+
+describe("resolveCityDisplayName (#16)", () => {
+  const city = {
+    name: "Shenzhen",
+    localizedName: "深圳",
+  };
+
+  it("uses the localized name for Chinese locales", () => {
+    expect(resolveCityDisplayName(city, "zh-CN")).toBe("深圳");
+    expect(resolveCityDisplayName(city, "zh-Hans")).toBe("深圳");
+    expect(resolveCityDisplayName(city, "zh")).toBe("深圳");
+  });
+
+  it("falls back to the asciiname when no localized name exists", () => {
+    expect(resolveCityDisplayName({ name: "Paris", localizedName: undefined }, "zh-CN"))
+      .toBe("Paris");
+  });
+
+  it("prefers the asciiname for non-Chinese locales", () => {
+    expect(resolveCityDisplayName(city, "en")).toBe("Shenzhen");
+    expect(resolveCityDisplayName(city, "en-US")).toBe("Shenzhen");
   });
 });
 
