@@ -3,6 +3,7 @@ import {
   IconArrowRight,
   IconMapPin,
   IconPhoto,
+  IconPlayerPlay,
   IconPlus,
   IconRoute,
   IconTimeline,
@@ -21,6 +22,7 @@ import {
   type GlobePointPick,
   type JourneySaveResult,
 } from "./JourneyComposer";
+import { JourneyPlaybackOverlay } from "./JourneyPlaybackOverlay";
 import { JourneyStory } from "./JourneyStory";
 import { JourneyTimeline } from "./JourneyTimeline";
 import {
@@ -156,6 +158,13 @@ export function LivingAtlasApp() {
   const [activeJourneyId, setActiveJourneyId] = useState<string | null>(null);
   const [storyJourneyId, setStoryJourneyId] = useState<string | null>(null);
   const [storyRoutePointId, setStoryRoutePointId] = useState<string | null>(null);
+  // #19: cinematic journey playback. The globe stays mounted underneath; the
+  // director drives phases and the overlay translates them into focus calls.
+  const [playbackJourneyId, setPlaybackJourneyId] = useState<string | null>(null);
+  const [playbackFocusPoint, setPlaybackFocusPoint] = useState<{
+    lat: number;
+    lon: number;
+  } | null>(null);
   const [composerOpen, setComposerOpen] = useState(false);
   const [editingJourneyId, setEditingJourneyId] = useState<string | null>(null);
   const [arrivalJourneyId, setArrivalJourneyId] = useState<string | null>(null);
@@ -375,7 +384,7 @@ export function LivingAtlasApp() {
     >
       <div className="living-atlas__globe" aria-hidden={view !== "planet"}>
         <LivingAtlasGlobe
-          focusPoint={focusPoint}
+          focusPoint={playbackFocusPoint ?? focusPoint}
           focusColor={activeJourney?.lightColor}
           journeyRoutes={routes}
           activeJourneyRouteId={draftRoute?.id ?? activeJourneyId}
@@ -493,6 +502,17 @@ export function LivingAtlasApp() {
             <span>打开故事</span>
             <span className="living-atlas__active-action-icon" aria-hidden="true"><IconArrowRight size={17} stroke={1.35} /></span>
           </button>
+          <button type="button" className="living-atlas__active-play" onClick={() => {
+            setStoryJourneyId(null);
+            setStoryRoutePointId(null);
+            setPlaybackJourneyId(activeJourney.id);
+            setPlaybackFocusPoint(activeJourney.routePoints[0]
+              ? { lat: activeJourney.routePoints[0].latitude, lon: activeJourney.routePoints[0].longitude }
+              : null);
+          }}>
+            <IconPlayerPlay size={15} stroke={1.35} aria-hidden="true" />
+            <span>播放旅程</span>
+          </button>
         </aside>
       ) : null}
 
@@ -552,6 +572,24 @@ export function LivingAtlasApp() {
             const loaded = await load(true);
             return loaded?.find((journey) => journey.id === id) ?? null;
           }}
+        />
+      ) : null}
+
+      {playbackJourneyId ? (
+        <JourneyPlaybackOverlay
+          journey={journeys.find((journey) => journey.id === playbackJourneyId) ?? null}
+          onClose={() => {
+            setPlaybackJourneyId(null);
+            setPlaybackFocusPoint(null);
+          }}
+          onFocusRoutePoint={(pointIndex) => {
+            const journey = journeys.find((candidate) => candidate.id === playbackJourneyId);
+            const point = journey?.routePoints[pointIndex];
+            if (point) {
+              setPlaybackFocusPoint({ lat: point.latitude, lon: point.longitude });
+            }
+          }}
+          reduceMotion={reduceMotion}
         />
       ) : null}
     </main>

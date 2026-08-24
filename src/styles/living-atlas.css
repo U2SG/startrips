@@ -807,6 +807,36 @@
   color: var(--atlas-acid);
 }
 
+/* #19: the playback entry is a quieter secondary action beside 打开故事. */
+.living-atlas__active .living-atlas__active-play {
+  min-height: 56px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 0 18px;
+  border: 1px solid rgba(118, 198, 188, 0.42);
+  border-radius: 999px;
+  background: rgba(2, 10, 11, 0.72);
+  color: #d6e0dd;
+  box-shadow: none;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+}
+
+.living-atlas__active .living-atlas__active-play:hover,
+.living-atlas__active .living-atlas__active-play:focus-visible {
+  border-color: var(--atlas-cyan);
+  color: var(--atlas-cyan);
+}
+
+.living-atlas__active .living-atlas__active-play svg {
+  color: var(--atlas-cyan);
+}
+
 .living-atlas__active.is-arriving {
   animation: atlasArrival 2.4s ease both;
 }

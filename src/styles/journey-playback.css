@@ -1,0 +1,280 @@
+/* #19 Journey Playback — a cinematic chapter player overlaying the atlas.
+   The globe stays mounted underneath; the overlay only presents chapters. */
+
+.journey-playback {
+  position: fixed;
+  z-index: 300;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background:
+    radial-gradient(120% 90% at 50% 40%, rgba(8, 22, 20, 0.82) 0%, rgba(0, 0, 0, 0.92) 72%),
+    #000;
+  color: var(--atlas-text);
+}
+
+.journey-playback__stage {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 18px;
+  padding: 48px;
+  text-align: center;
+}
+
+/* Intro / outro: title over the globe, minimal. */
+.journey-playback__intro p,
+.journey-playback__outro p,
+.journey-playback__travel p,
+.journey-playback__stop p {
+  margin: 0;
+  color: var(--atlas-acid);
+  font: 500 8px/1 ui-monospace, "SFMono-Regular", Consolas, monospace;
+  letter-spacing: 0.22em;
+}
+
+.journey-playback__intro h2,
+.journey-playback__outro h2 {
+  margin: 0;
+  font-family: var(--archive-serif);
+  font-size: clamp(30px, 6vw, 56px);
+  font-weight: 400;
+  letter-spacing: 0.06em;
+}
+
+.journey-playback__intro span {
+  color: var(--atlas-muted);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+}
+
+/* Travel: the globe is the main visual; only a small heading enters. */
+.journey-playback__travel h3,
+.journey-playback__stop h3 {
+  margin: 0;
+  font-family: var(--archive-serif);
+  font-size: clamp(22px, 4vw, 38px);
+  font-weight: 400;
+}
+
+.journey-playback__route-hint {
+  width: min(240px, 40vw);
+  height: 1px;
+  overflow: hidden;
+  background: rgba(118, 198, 188, 0.14);
+}
+
+.journey-playback__route-hint span {
+  display: block;
+  width: 42px;
+  height: 1px;
+  background: var(--atlas-cyan);
+  animation: motionPlaybackRouteHint 1.4s var(--motion-ease-in-out-spatial, ease) infinite alternate;
+}
+
+@keyframes motionPlaybackRouteHint {
+  from { transform: translateX(-42px); }
+  to { transform: translateX(240px); }
+}
+
+/* Stop: place name + personal note, serif and roomy. */
+.journey-playback__stop blockquote {
+  max-width: 34em;
+  margin: 6px auto 0;
+  color: #cdd9d5;
+  font-family: var(--archive-serif);
+  font-size: 17px;
+  font-style: normal;
+  line-height: 2.05;
+  white-space: pre-wrap;
+}
+
+/* Media: the fullscreen stage. */
+.journey-playback__media {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+}
+
+.journey-playback__media img,
+.journey-playback__media video {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.journey-playback__media-state {
+  color: var(--atlas-muted);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+}
+
+/* Outro. */
+.journey-playback__outro p {
+  color: var(--atlas-muted);
+  font: 400 13px/1.8 var(--archive-serif);
+  letter-spacing: 0.06em;
+}
+
+/* Controls: bottom center, fade out on idle. */
+.journey-playback__close {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid rgba(203, 241, 193, 0.28);
+  background: rgba(2, 8, 8, 0.8);
+  color: #d6e0dd;
+  cursor: pointer;
+}
+
+.journey-playback__controls {
+  position: absolute;
+  left: 50%;
+  bottom: 22px;
+  transform: translateX(-50%);
+  display: grid;
+  grid-template-columns: 44px 44px 44px minmax(120px, 220px);
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: rgba(2, 8, 8, 0.82);
+  border: 1px solid var(--atlas-line);
+}
+
+.journey-playback__controls button {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--atlas-line);
+  background: transparent;
+  color: var(--atlas-muted);
+  cursor: pointer;
+}
+
+.journey-playback__controls button.is-active {
+  border-color: var(--atlas-acid);
+  color: var(--atlas-acid);
+}
+
+.journey-playback__progress {
+  height: 3px;
+  overflow: hidden;
+  background: rgba(118, 198, 188, 0.14);
+}
+
+.journey-playback__progress span {
+  display: block;
+  height: 100%;
+  background: var(--atlas-cyan);
+  transition: width var(--motion-ui, 260ms) var(--motion-ease-out, ease);
+}
+
+.journey-playback__close,
+.journey-playback__controls,
+.journey-playback__soundtrack {
+  transition: opacity var(--motion-ui, 260ms) var(--motion-ease-out, ease);
+}
+
+.journey-playback.is-controls-hidden .journey-playback__close,
+.journey-playback.is-controls-hidden .journey-playback__controls,
+.journey-playback.is-controls-hidden .journey-playback__soundtrack {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Soundtrack: bottom-right light strip with the friendly name. */
+.journey-playback__soundtrack {
+  position: absolute;
+  right: 18px;
+  bottom: 22px;
+  display: grid;
+  gap: 8px;
+  width: min(240px, 30vw);
+}
+
+.journey-playback__soundtrack small {
+  color: var(--atlas-muted);
+  font: 400 10px/1 var(--archive-serif);
+  letter-spacing: 0.08em;
+}
+
+.journey-playback__soundtrack-light {
+  position: relative;
+  height: 4px;
+  overflow: hidden;
+  background: rgba(118, 198, 188, 0.12);
+}
+
+.journey-playback__soundtrack-light span {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  background: linear-gradient(90deg,
+    transparent 0%,
+    color-mix(in srgb, var(--atlas-cyan) 60%, transparent) 50%,
+    transparent 100%);
+  filter: blur(3px);
+}
+
+.journey-playback__soundtrack.is-playing .journey-playback__soundtrack-light span {
+  opacity: 0.9;
+  animation: motionPlaybackLight 3.2s var(--motion-ease-in-out-spatial, ease) infinite alternate;
+}
+
+.journey-playback__soundtrack.is-playing .journey-playback__soundtrack-light span:nth-child(2) {
+  animation-duration: 4.1s;
+}
+
+.journey-playback__soundtrack.is-playing .journey-playback__soundtrack-light span:nth-child(3) {
+  animation-duration: 5.2s;
+}
+
+@keyframes motionPlaybackLight {
+  from { transform: translateX(-30%); }
+  to { transform: translateX(30%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .journey-playback__route-hint span,
+  .journey-playback__soundtrack.is-playing .journey-playback__soundtrack-light span {
+    animation: none;
+  }
+
+  .journey-playback__soundtrack.is-playing .journey-playback__soundtrack-light span {
+    opacity: 0.55;
+  }
+
+  .journey-playback__close,
+  .journey-playback__controls,
+  .journey-playback__soundtrack {
+    transition: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .journey-playback__stage {
+    padding: 24px;
+  }
+
+  .journey-playback__controls {
+    grid-template-columns: 44px 44px 44px minmax(90px, 140px);
+    bottom: 14px;
+  }
+
+  .journey-playback__soundtrack {
+    right: 12px;
+    bottom: 88px;
+    width: min(180px, 36vw);
+  }
+}
