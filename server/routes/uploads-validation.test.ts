@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  mediaKindOf,
   parseParts,
   parseReorderInput,
   parseStartUpload,
@@ -147,6 +148,27 @@ describe("parseStartUpload", () => {
     expect(parseStartUpload({ ...validStart, contentHash: "a".repeat(65) }))
       .toBeNull();
     expect(parseStartUpload({ ...validStart, contentHash: 42 })).toBeNull();
+  });
+});
+
+describe("mediaKindOf", () => {
+  it("separates audio from visual content so dedupe cannot cross kinds", () => {
+    // The same MP4 bytes can arrive as a video and as a soundtrack; the
+    // deduplication scope has to tell those apart.
+    expect(mediaKindOf("video/mp4")).toBe("video");
+    expect(mediaKindOf("audio/mp4")).toBe("audio");
+    expect(mediaKindOf("audio/mp4")).not.toBe(mediaKindOf("video/mp4"));
+    expect(mediaKindOf("image/jpeg")).toBe("image");
+    // Aliases of one kind stay in the same scope, which keeps replacing a
+    // soundtrack with the same file idempotent.
+    expect(mediaKindOf("audio/x-m4a")).toBe(mediaKindOf("audio/mpeg"));
+  });
+
+  it("falls back to a scope that matches nothing for malformed types", () => {
+    expect(mediaKindOf("")).toBe("unknown");
+    expect(mediaKindOf("audio")).toBe("audio");
+    expect(mediaKindOf("Audio/MP4")).toBe("unknown");
+    expect(mediaKindOf("%/mp4")).toBe("unknown");
   });
 });
 

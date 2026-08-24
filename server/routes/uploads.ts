@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, like, lt, or, sql } from "drizzle-orm";
 import { Hono } from "hono";
 import { requireAtlasAccess } from "../authorization/atlas-access";
 import { serverConfig } from "../config";
@@ -56,6 +56,14 @@ const ALLOWED_AUDIO_MIME_TYPES = new Set([
   "audio/x-m4a",
   "audio/x-wav",
 ]);
+
+// The deduplication scope of an upload: "image", "video", or "audio". Every
+// accepted MIME type carries one of those top-level types, and an unexpected
+// value falls back to a scope that matches nothing else.
+export function mediaKindOf(mimeType: string): string {
+  const kind = mimeType.split("/")[0];
+  return /^[a-z]+$/.test(kind) ? kind : "unknown";
+}
 
 type StartUploadInput = {
   journeyId?: unknown;
@@ -289,6 +297,10 @@ export async function finalizeUpload(
         .limit(1)
       : [];
 
+    // Deduplication is scoped to the media kind. The same bytes can be a
+    // journey video and a journey soundtrack, and collapsing those into one row
+    // would answer an audio upload with a visual asset that no soundtrack
+    // reader would ever find.
     const [duplicate] = upload.contentHash
       ? await transaction
         .select({ id: mediaAssets.id })
@@ -296,6 +308,7 @@ export async function finalizeUpload(
         .where(and(
           eq(mediaAssets.journeyId, upload.journeyId),
           eq(mediaAssets.contentHash, upload.contentHash),
+          like(mediaAssets.mimeType, `${mediaKindOf(upload.mimeType)}/%`),
         ))
         .limit(1)
       : [];

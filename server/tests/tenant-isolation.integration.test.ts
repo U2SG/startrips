@@ -767,4 +767,70 @@ describe("tenant-scoped journey repository", () => {
       .where(eq(mediaUploads.id, uploads[1].id));
     expect(completedUpload.mediaAssetId).toBe(first.id);
   });
+
+  it("never deduplicates a soundtrack onto identical visual content", async () => {
+    const journey = await createJourneyForAtlas(atlasA, "user-a", {
+      ...baseJourney,
+      title: "Same bytes, two kinds",
+    });
+    if (!journey) throw new Error("Journey fixture was not created");
+    // One MP4 can be stored as the journey's video and, later, as its
+    // soundtrack. Content hashing alone would collapse them into one row.
+    const hash = "d".repeat(64);
+    const [videoUpload, audioUpload] = await db
+      .insert(mediaUploads)
+      .values([
+        { fileName: "passage.mp4", mimeType: "video/mp4" },
+        { fileName: "passage.m4a", mimeType: "audio/mp4" },
+      ].map(({ fileName, mimeType }) => ({
+        atlasId: atlasA,
+        journeyId: journey.id,
+        storageDriver: "test",
+        storageKey: `${atlasA}/${journey.id}/${randomUUID()}`,
+        providerUploadId: randomUUID(),
+        fileName,
+        mimeType,
+        bytes: 128,
+        contentHash: hash,
+        partSize: 128,
+        partCount: 1,
+        status: "finalizing",
+        createdByUserId: "user-a",
+      })))
+      .returning();
+
+    const video = await finalizeUpload(videoUpload);
+    const audio = await finalizeUpload(audioUpload);
+
+    expect(audio.id).not.toBe(video.id);
+    expect(audio.mimeType).toBe("audio/mp4");
+    expect(video.mimeType).toBe("video/mp4");
+    const [assetCount] = await db
+      .select({ value: count() })
+      .from(mediaAssets)
+      .where(eq(mediaAssets.journeyId, journey.id));
+    expect(assetCount.value).toBe(2);
+
+    // A second soundtrack upload of the same audio bytes still deduplicates
+    // inside its own kind, which is what keeps replacement idempotent.
+    const [repeatUpload] = await db
+      .insert(mediaUploads)
+      .values({
+        atlasId: atlasA,
+        journeyId: journey.id,
+        storageDriver: "test",
+        storageKey: `${atlasA}/${journey.id}/${randomUUID()}`,
+        providerUploadId: randomUUID(),
+        fileName: "passage.m4a",
+        mimeType: "audio/mp4",
+        bytes: 128,
+        contentHash: hash,
+        partSize: 128,
+        partCount: 1,
+        status: "finalizing",
+        createdByUserId: "user-a",
+      })
+      .returning();
+    expect((await finalizeUpload(repeatUpload)).id).toBe(audio.id);
+  });
 });
