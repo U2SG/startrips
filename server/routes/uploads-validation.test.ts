@@ -91,6 +91,24 @@ describe("parseStartUpload", () => {
     })).toBeNull();
   });
 
+  it("refuses a soundtrack that claims a route point", () => {
+    const soundtrack = {
+      ...validStart,
+      fileName: "night.mp3",
+      mimeType: "audio/mpeg",
+      bytes: 4_000_000,
+    };
+    // A soundtrack belongs to the whole journey; a route-point-scoped audio row
+    // would be a state the atlas cannot express.
+    expect(parseStartUpload({ ...soundtrack, routePointId: ROUTE_POINT_ID }))
+      .toBeNull();
+    expect(parseStartUpload({ ...soundtrack, routePointId: null }))
+      .toMatchObject({ routePointId: null, mimeType: "audio/mpeg" });
+    // Photos and videos are still allowed to belong to a route point.
+    expect(parseStartUpload({ ...validStart, routePointId: ROUTE_POINT_ID }))
+      .toMatchObject({ routePointId: ROUTE_POINT_ID });
+  });
+
   it("caps a soundtrack at 100 MB while visual media keeps its 2 GB limit", () => {
     const soundtrack = {
       ...validStart,

@@ -87,6 +87,10 @@ export function parseStartUpload(body: StartUploadInput) {
   const maxBytes = isSoundtrack ? MAX_AUDIO_UPLOAD_BYTES : MAX_UPLOAD_BYTES;
 
   if (
+    // A soundtrack belongs to the whole journey. Accepting one against a route
+    // point would create a row the atlas has no way to express, since every
+    // audio asset is read as the journey's single track.
+    (isSoundtrack && routePointId !== null) ||
     !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
       journeyId,
     ) ||
