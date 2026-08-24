@@ -9,9 +9,13 @@ export const DETAILED_EARTH_RETURN_ZOOM = 5.85;
 export const DETAILED_EARTH_MIN_ZOOM = 5.6;
 export const DETAILED_EARTH_INITIAL_ZOOM = 8;
 export const DETAILED_EARTH_MAX_ZOOM = 16;
-export const DETAILED_EARTH_MAX_PITCH = 50;
+// MapLibre accepts pitches up to 85 degrees. Keep the camera out of the
+// singular edge while still allowing a focused polar region to come into view.
+export const DETAILED_EARTH_MAX_PITCH = 85;
 export const DETAILED_EARTH_ROTATE_SPEED = 0.45;
 export const DETAILED_EARTH_PITCH_SPEED = -0.32;
+export const DETAILED_EARTH_BEARING_PER_PIXEL = 0.35;
+export const DETAILED_EARTH_PITCH_PER_PIXEL = 0.25;
 export const DETAILED_EARTH_TOUCH_ZOOM_RATE = 0.45;
 export const DETAILED_EARTH_TOUCH_ZOOM_THRESHOLD = 0.2;
 export const DETAILED_EARTH_DRAG_PAN_OPTIONS = {
@@ -22,6 +26,26 @@ export const DETAILED_EARTH_DRAG_PAN_OPTIONS = {
 
 export function shouldReturnToParticleEarth(zoom: number) {
   return zoom <= DETAILED_EARTH_RETURN_ZOOM;
+}
+
+export function clampDetailedEarthPitch(pitch: number) {
+  return Math.max(0, Math.min(DETAILED_EARTH_MAX_PITCH, pitch));
+}
+
+export function getDetailedEarthDragRotation(
+  bearing: number,
+  pitch: number,
+  deltaX: number,
+  deltaY: number,
+) {
+  return {
+    // Bearing is intentionally not wrapped or clamped: repeated horizontal
+    // drags should keep rotating the earth in the same direction.
+    bearing: bearing - deltaX * DETAILED_EARTH_BEARING_PER_PIXEL,
+    pitch: clampDetailedEarthPitch(
+      pitch + deltaY * DETAILED_EARTH_PITCH_PER_PIXEL,
+    ),
+  };
 }
 
 // Set VITE_ATLAS_MAP_STYLE_URL to this sentinel to use the built-in AMap
@@ -80,11 +104,11 @@ export function isRasterDetailedEarth(): boolean {
   return getConfiguredStyleUrl() === AMAP_RASTER_STYLE;
 }
 
-// Globe projection is only reliable with the default direct provider style;
-// proxied and raster styles keep the mercator projection, where MapLibre
-// reaches idle reliably.
+// Every vector style can use the globe projection. The server proxy keeps the
+// production style same-origin; the map's ready callback has a timeout because
+// vector globe tiles may keep their source busy while the view is usable.
 export function useGlobeProjection(): boolean {
-  return getConfiguredStyleUrl() === "";
+  return !isRasterDetailedEarth();
 }
 
 export function getDetailedEarthStyle(): StyleSpecification | string {

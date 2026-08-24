@@ -7,8 +7,8 @@ import {
 import "maplibre-gl/dist/maplibre-gl.css";
 import {
   createDetailedEarthLabelExpression,
+  getDetailedEarthDragRotation,
   DETAILED_EARTH_INITIAL_ZOOM,
-  DETAILED_EARTH_DRAG_PAN_OPTIONS,
   DETAILED_EARTH_MAX_PITCH,
   DETAILED_EARTH_MAX_ZOOM,
   DETAILED_EARTH_MIN_ZOOM,
@@ -84,18 +84,130 @@ export default function DetailedEarthMap({
     });
     let initialLoadSettled = false;
     let overviewRequested = false;
+    let settleTimer: number | null = null;
+    let primaryDragActive = false;
+    let primaryDragX = 0;
+    let primaryDragY = 0;
+    let primaryDragDragged = false;
+    let suppressNextMapClick = false;
     mapRef.current = map;
     map.dragRotate.enable();
-    map.dragPan.enable(DETAILED_EARTH_DRAG_PAN_OPTIONS);
+    // A normal primary-button drag rotates the earth. MapLibre's built-in
+    // dragRotate intentionally reserves that gesture for right-button/Ctrl
+    // dragging, so leave it enabled for those gestures and own the primary
+    // pointer path here.
+    map.dragPan.disable();
     map.touchZoomRotate.enableRotation();
     map.touchZoomRotate.setZoomRate(DETAILED_EARTH_TOUCH_ZOOM_RATE);
     map.touchZoomRotate.setZoomThreshold(DETAILED_EARTH_TOUCH_ZOOM_THRESHOLD);
+    const canvas = map.getCanvas();
+    canvas.style.touchAction = "none";
+
+    const finishPrimaryDrag = () => {
+      const wasDragged = primaryDragDragged;
+      primaryDragActive = false;
+      primaryDragDragged = false;
+      delete host.dataset.dragging;
+      if (wasDragged) {
+        // MapLibre emits its click after the matching mouseup/touchend. Keep
+        // the next click suppressed long enough for that event to arrive.
+        window.setTimeout(() => {
+          suppressNextMapClick = false;
+        }, 0);
+      }
+    };
+
+    const beginPrimaryDrag = (x: number, y: number) => {
+      primaryDragActive = true;
+      primaryDragX = x;
+      primaryDragY = y;
+      primaryDragDragged = false;
+      map.stop();
+    };
+
+    const updatePrimaryDrag = (
+      x: number,
+      y: number,
+      event: { preventDefault: () => void },
+    ) => {
+      if (!primaryDragActive) return;
+      const deltaX = x - primaryDragX;
+      const deltaY = y - primaryDragY;
+      primaryDragX = x;
+      primaryDragY = y;
+      if (deltaX === 0 && deltaY === 0) return;
+      event.preventDefault();
+      primaryDragDragged = true;
+      suppressNextMapClick = true;
+      host.dataset.dragging = "true";
+      map.stop();
+      const rotation = getDetailedEarthDragRotation(
+        map.getBearing(),
+        map.getPitch(),
+        deltaX,
+        deltaY,
+      );
+      map.setBearing(rotation.bearing);
+      map.setPitch(rotation.pitch);
+    };
+
+    const onMouseDown = (event: MouseEvent) => {
+      // Ctrl+primary is MapLibre's own dragRotate gesture, which stays enabled
+      // below. Claiming it here too would apply both rotations to one drag.
+      if (event.button !== 0 || event.ctrlKey) return;
+      beginPrimaryDrag(event.clientX, event.clientY);
+    };
+
+    const onMouseMove = (event: MouseEvent) => {
+      updatePrimaryDrag(event.clientX, event.clientY, event);
+    };
+
+    const onMouseUp = () => {
+      if (primaryDragActive) finishPrimaryDrag();
+    };
+
+    const onTouchStart = (event: TouchEvent) => {
+      // Hand two-finger gestures back to MapLibre's native zoom/rotate/pitch
+      // handler instead of trying to turn them into a one-finger rotation.
+      if (event.touches.length !== 1) {
+        finishPrimaryDrag();
+        return;
+      }
+      const touch = event.touches[0];
+      beginPrimaryDrag(touch.clientX, touch.clientY);
+    };
+
+    const onTouchMove = (event: TouchEvent) => {
+      if (event.touches.length !== 1) {
+        finishPrimaryDrag();
+        return;
+      }
+      const touch = event.touches[0];
+      updatePrimaryDrag(touch.clientX, touch.clientY, event);
+    };
+
+    const onTouchEnd = (event: TouchEvent) => {
+      if (event.touches.length === 0 || event.touches.length > 1) {
+        finishPrimaryDrag();
+      }
+    };
+
+    const onTouchCancel = () => finishPrimaryDrag();
+
+    canvas.addEventListener("mousedown", onMouseDown);
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+    window.addEventListener("blur", onMouseUp);
+    canvas.addEventListener("touchstart", onTouchStart, { passive: false });
+    canvas.addEventListener("touchmove", onTouchMove, { passive: false });
+    canvas.addEventListener("touchend", onTouchEnd);
+    canvas.addEventListener("touchcancel", onTouchCancel);
     map.addControl(new NavigationControl({ showCompass: true }), "bottom-right");
     map.addControl(new AttributionControl({ compact: true }), "bottom-left");
 
     map.on("load", () => {
-      // Globe projection only supports vector sources and can keep the source
-      // busy forever with proxied tiles; keep it for the direct provider only.
+      // Raster fallback remains Mercator; vector styles use the globe so a
+      // polar focus is not trapped by the flat-map viewport.
       if (useGlobeProjection()) map.setProjection({ type: "globe" });
       applyMapLanguage(map, languageRef.current);
       const settle = () => {
@@ -108,10 +220,14 @@ export default function DetailedEarthMap({
       // Safety net: under heavy load MapLibre can keep re-fetching tiles and
       // never reach idle; enter the detail view anyway and let tiles finish
       // progressively.
-      window.setTimeout(settle, 3000);
+      settleTimer = window.setTimeout(settle, 3000);
     });
 
     map.on("click", (event) => {
+      if (suppressNextMapClick) {
+        suppressNextMapClick = false;
+        return;
+      }
       if (!onPickRef.current) return;
       onPickRef.current({
         latitude: event.lngLat.lat,
@@ -132,6 +248,16 @@ export default function DetailedEarthMap({
     });
 
     return () => {
+      if (settleTimer !== null) window.clearTimeout(settleTimer);
+      canvas.removeEventListener("mousedown", onMouseDown);
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+      window.removeEventListener("blur", onMouseUp);
+      canvas.removeEventListener("touchstart", onTouchStart);
+      canvas.removeEventListener("touchmove", onTouchMove);
+      canvas.removeEventListener("touchend", onTouchEnd);
+      canvas.removeEventListener("touchcancel", onTouchCancel);
+      finishPrimaryDrag();
       mapRef.current = null;
       map.remove();
     };

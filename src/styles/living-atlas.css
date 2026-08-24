@@ -131,6 +131,12 @@
 
 .detailed-earth-map .maplibregl-canvas {
   outline: 0;
+  touch-action: none;
+  cursor: grab;
+}
+
+.detailed-earth-map[data-dragging="true"] .maplibregl-canvas {
+  cursor: grabbing;
 }
 
 .detailed-earth-map .maplibregl-ctrl-group,

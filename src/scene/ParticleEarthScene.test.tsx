@@ -11,10 +11,12 @@ import type { GlobeMode } from "../experience/types";
 import {
   GLOBE_MODE_CONFIG,
   GLOBE_DRAG_THRESHOLD_PX,
+  GLOBE_IDLE_ALIGNMENT_SPEED,
   GLOBE_IDLE_RESUME_DELAY_MS,
   GLOBE_IDLE_ROTATION_RADIANS_PER_SECOND,
   GLOBE_RENDER_ORDER,
   GLOBE_TILT_LIMIT_RADIANS,
+  GLOBE_UPRIGHT_ROTATION_X,
   GLOBE_ZOOM_MAX,
   GLOBE_ZOOM_MIN,
   MAX_RENDERED_JOURNEYS,
@@ -30,7 +32,9 @@ import {
   clampGlobeZoom,
   getJourneyRouteLineScale,
   getJourneyRouteVisualState,
+  getGlobeIdleAlignmentRotation,
   getGlobeIdleRotationDelta,
+  isGlobeUpright,
   isGlobeDrag,
   isPrimaryPointerActivation,
   isSphericalPointVisible,
@@ -55,15 +59,12 @@ describe("ParticleEarthScene contracts", () => {
     });
   });
 
-  it("uses a deliberate drag threshold and keeps vertical rotation bounded", () => {
+  it("uses a deliberate drag threshold and allows full globe rotation", () => {
     expect(isGlobeDrag(GLOBE_DRAG_THRESHOLD_PX - 0.01)).toBe(false);
     expect(isGlobeDrag(GLOBE_DRAG_THRESHOLD_PX)).toBe(true);
-    expect(clampGlobeTilt(GLOBE_TILT_LIMIT_RADIANS + 1)).toBe(
-      GLOBE_TILT_LIMIT_RADIANS,
-    );
-    expect(clampGlobeTilt(-GLOBE_TILT_LIMIT_RADIANS - 1)).toBe(
-      -GLOBE_TILT_LIMIT_RADIANS,
-    );
+    expect(GLOBE_TILT_LIMIT_RADIANS).toBe(Number.POSITIVE_INFINITY);
+    expect(clampGlobeTilt(Math.PI * 3)).toBe(Math.PI * 3);
+    expect(clampGlobeTilt(-Math.PI * 3)).toBe(-Math.PI * 3);
     expect(clampGlobeTilt(0.18)).toBe(0.18);
     expect(clampGlobeZoom(GLOBE_ZOOM_MIN - 1)).toBe(GLOBE_ZOOM_MIN);
     expect(clampGlobeZoom(GLOBE_ZOOM_MAX + 1)).toBe(GLOBE_ZOOM_MAX);
@@ -110,6 +111,38 @@ describe("ParticleEarthScene contracts", () => {
       false,
       false,
     )).toBeCloseTo(GLOBE_IDLE_ROTATION_RADIANS_PER_SECOND);
+  });
+
+  it("smoothly returns upright before idle rotation starts", () => {
+    expect(GLOBE_UPRIGHT_ROTATION_X).toBe(0);
+    expect(GLOBE_IDLE_ALIGNMENT_SPEED).toBeGreaterThan(0);
+    expect(getGlobeIdleAlignmentRotation(
+      0.8,
+      1 / 60,
+      GLOBE_IDLE_RESUME_DELAY_MS - 1,
+      false,
+      false,
+    )).toBe(0.8);
+
+    const partiallyAligned = getGlobeIdleAlignmentRotation(
+      0.8,
+      1 / 60,
+      GLOBE_IDLE_RESUME_DELAY_MS,
+      false,
+      false,
+    );
+    expect(partiallyAligned).toBeGreaterThan(0);
+    expect(partiallyAligned).toBeLessThan(0.8);
+    expect(isGlobeUpright(partiallyAligned)).toBe(false);
+    expect(getGlobeIdleRotationDelta(
+      1,
+      GLOBE_IDLE_RESUME_DELAY_MS,
+      false,
+      false,
+      false,
+    )).toBe(0);
+    expect(isGlobeUpright(0)).toBe(true);
+    expect(isGlobeUpright(Math.PI * 2)).toBe(true);
   });
 
   it("anchors the journey connector to the card edge the layout uses", () => {

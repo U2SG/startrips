@@ -61,7 +61,9 @@ export const GLOBE_RENDER_ORDER = {
   personalPoint: 5,
 } as const;
 export const GLOBE_DRAG_THRESHOLD_PX = 6;
-export const GLOBE_TILT_LIMIT_RADIANS = 0.62;
+// The globe is a real sphere: vertical dragging must be able to pass the
+// former +/-35 degree clamp and turn it completely over.
+export const GLOBE_TILT_LIMIT_RADIANS = Number.POSITIVE_INFINITY;
 export const GLOBE_ZOOM_MIN = 0.72;
 // City labels project at radius 1.46 (above the 1.39 surface) and the
 // largest mode scale is 1.15, so at max zoom the label layer sits at
@@ -71,6 +73,8 @@ export const GLOBE_ZOOM_MAX = 3.0;
 export const GLOBE_SURFACE_RADIUS = 1.39;
 export const GLOBE_IDLE_ROTATION_RADIANS_PER_SECOND = (Math.PI * 2) / 180;
 export const GLOBE_IDLE_RESUME_DELAY_MS = 10_000;
+export const GLOBE_UPRIGHT_ROTATION_X = 0;
+export const GLOBE_IDLE_ALIGNMENT_SPEED = 3.2;
 
 const GLOBE_DRAG_RADIANS_PER_PIXEL = 0.005;
 const GLOBE_MAX_ROTATION_SPEED = 4.2;
@@ -84,10 +88,39 @@ const JOURNEY_ROUTE_MARKER_SCALE = JOURNEY_ROUTE_MARKER_SIZE_PX / (3.4 * 2);
 const JOURNEY_POINT_TWINKLE_SLOWDOWN = 5;
 
 export function clampGlobeTilt(rotation: number) {
-  return Math.max(
-    -GLOBE_TILT_LIMIT_RADIANS,
-    Math.min(GLOBE_TILT_LIMIT_RADIANS, rotation),
+  return rotation;
+}
+
+function getShortestRotationDelta(current: number, target: number) {
+  return Math.atan2(Math.sin(target - current), Math.cos(target - current));
+}
+
+export function isGlobeUpright(rotation: number, tolerance = 0.002) {
+  return Math.abs(getShortestRotationDelta(rotation, GLOBE_UPRIGHT_ROTATION_X))
+    <= tolerance;
+}
+
+export function getGlobeIdleAlignmentRotation(
+  rotation: number,
+  deltaSeconds: number,
+  idleForMs: number,
+  hasMomentum: boolean,
+  motionDisabled: boolean,
+) {
+  if (
+    motionDisabled
+    || hasMomentum
+    || idleForMs < GLOBE_IDLE_RESUME_DELAY_MS
+  ) {
+    return rotation;
+  }
+  const alignment = 1 - Math.exp(
+    -GLOBE_IDLE_ALIGNMENT_SPEED * Math.max(0, deltaSeconds),
   );
+  return rotation + getShortestRotationDelta(
+    rotation,
+    GLOBE_UPRIGHT_ROTATION_X,
+  ) * alignment;
 }
 
 export function isGlobeDrag(distance: number) {
@@ -120,11 +153,13 @@ export function getGlobeIdleRotationDelta(
   idleForMs: number,
   hasMomentum: boolean,
   motionDisabled: boolean,
+  alignmentComplete = true,
 ) {
   if (
     motionDisabled
     || hasMomentum
     || idleForMs < GLOBE_IDLE_RESUME_DELAY_MS
+    || !alignmentComplete
   ) {
     return 0;
   }
@@ -2151,11 +2186,21 @@ export function ParticleEarthScene({
         if (Math.abs(rotationVelocityX) < 0.001) rotationVelocityX = 0;
         if (Math.abs(rotationVelocityY) < 0.001) rotationVelocityY = 0;
         const hasMomentum = rotationVelocityX !== 0 || rotationVelocityY !== 0;
+        const idleForMs = now - lastGlobeInteractionAt;
+        const motionDisabled = !latestDragToRotate.current;
+        interactiveRotationX = getGlobeIdleAlignmentRotation(
+          interactiveRotationX,
+          delta,
+          idleForMs,
+          hasMomentum,
+          motionDisabled,
+        );
         interactiveRotationY += getGlobeIdleRotationDelta(
           delta,
-          now - lastGlobeInteractionAt,
+          idleForMs,
           hasMomentum,
-          !latestDragToRotate.current,
+          motionDisabled,
+          isGlobeUpright(interactiveRotationX),
         );
       }
       globe.rotation.x = interactiveRotationX;
