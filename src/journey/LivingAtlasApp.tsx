@@ -30,6 +30,7 @@ import {
   restoreJourney,
 } from "./journeyApi";
 import {
+  journeyVisualMedia,
   mergeJourney,
   sortJourneysChronologically,
   toJourneyRoutes,
@@ -60,7 +61,9 @@ function JourneyCardMedia({
   journey: Journey;
   reduceMotion: boolean;
 }) {
-  const asset = journey.media[0] ?? null;
+  // The journey soundtrack is audio, so it never becomes a card cover.
+  const visualMedia = journeyVisualMedia(journey);
+  const asset = visualMedia[0] ?? null;
   const [read, setRead] = useState<JourneyCardMediaRead>({ status: "idle" });
 
   useEffect(() => {
@@ -128,7 +131,7 @@ function JourneyCardMedia({
           {read.status === "error" ? "媒体暂不可用" : "正在载入媒体"}
         </span>
       ) : null}
-      <figcaption>{String(journey.media.length).padStart(2, "0")} MEDIA</figcaption>
+      <figcaption>{String(visualMedia.length).padStart(2, "0")} MEDIA</figcaption>
     </figure>
   );
 }
@@ -403,7 +406,7 @@ export function LivingAtlasApp() {
 
       {view === "planet" && activeJourney ? (
         <aside
-          className={`living-atlas__active${activeJourney.media.length > 0 ? " has-media" : ""}${arrivalJourneyId === activeJourney.id ? " is-arriving" : ""}`}
+          className={`living-atlas__active${journeyVisualMedia(activeJourney).length > 0 ? " has-media" : ""}${arrivalJourneyId === activeJourney.id ? " is-arriving" : ""}`}
           style={{
             "--journey-color": activeJourney.lightColor,
             "--journey-gradient": getLightEffectGradient(activeJourney.lightEffect, activeJourney.lightColor),

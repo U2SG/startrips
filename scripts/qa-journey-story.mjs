@@ -56,11 +56,17 @@ await page.route("**/api/uploads/qa-upload/complete", (route) => route.fulfill({
     },
   }),
 }));
+const QA_SOUNDTRACK_ASSET_ID = "00000000-0000-4000-8000-000000000900";
+const silentWav = "data:audio/wav;base64,UklGRiwAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQgAAACAgICAgICAgA==";
+const onePixelGif = "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=";
+
 await page.route("**/api/uploads/assets/*/read-url", (route) => route.fulfill({
   status: 200,
   contentType: "application/json",
   body: JSON.stringify({
-    url: "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=",
+    url: route.request().url().includes(QA_SOUNDTRACK_ASSET_ID)
+      ? silentWav
+      : onePixelGif,
     expiresAt: "2026-08-12T12:00:00.000Z",
   }),
 }));
@@ -92,20 +98,61 @@ try {
   await reopen.click();
   await dialog.waitFor({ state: "visible" });
 
+  // Direct access: reach the last of three seeded photos with one grid click
+  // instead of repeated "next" presses.
+  const counter = page.locator(".journey-story__media-nav span");
+  await counter.filter({ hasText: "1 / 3" }).waitFor({ state: "visible" });
+  await page.getByRole("button", { name: "全部照片" }).click();
+  const tiles = page.locator(".journey-story__media-grid > li");
+  await tiles.first().waitFor({ state: "visible" });
+  const overviewTileCount = await tiles.count();
+  await page.locator('[data-media-tile-index="2"]').click();
+  await counter.filter({ hasText: "3 / 3" }).waitFor({ state: "visible" });
+  const gridClosedAfterSelection = await page
+    .locator(".journey-story__media-grid").count() === 0;
+
   const fileInput = page.locator('.journey-story__media-add input[type="file"]');
   await fileInput.setInputFiles({
     name: "night-route.png",
     mimeType: "image/png",
     buffer: Buffer.from("89504e470d0a1a0a", "hex"),
   });
-  await page.getByRole("button", { name: "退出旅程故事" }).click();
+  // The explicit exit button is disabled while a multipart upload is in
+  // flight, so the escape path is what has to explain the wait.
+  await page.keyboard.press("Escape");
   const blockedMessage = page.getByText("正在完成分块上传，完成后即可安全退出。");
   await blockedMessage.waitFor({ state: "visible" });
   if (!await dialog.isVisible()) throw new Error("Dialog closed while upload was in flight");
 
-  await page.getByText("已将 1 个媒体添加到这段旅程。").waitFor({ state: "visible" });
-  await page.getByText("1 个媒体片段").waitFor({ state: "visible" });
+  await page.getByText("已将 1 个媒体添加到整段旅程。").waitFor({ state: "visible" });
+  await page.getByText("4 个媒体片段").waitFor({ state: "visible" });
   const progressRoleCount = await page.getByRole("progressbar").count();
+
+  // The soundtrack is journey-scoped audio: it must appear as an audio player,
+  // never as a photo tile or in the visual media count.
+  // The harness control sits behind the open dialog's backdrop, so it is
+  // dispatched directly instead of hit-tested.
+  await page.locator("[data-qa-story-next-audio]").dispatchEvent("click");
+  await page.locator('.journey-story__soundtrack input[type="file"]').setInputFiles({
+    name: "night-theme.mp3",
+    mimeType: "audio/mpeg",
+    buffer: Buffer.from("fffb90640000000000", "hex"),
+  });
+  await page.getByText("已把「night-theme.mp3」设为这段旅程的配乐。")
+    .waitFor({ state: "visible" });
+  const soundtrackAudioCount = await page.locator(".journey-story__soundtrack audio").count();
+  const soundtrackNameShown = await page
+    .locator(".journey-story__soundtrack strong")
+    .innerText() === "night-theme.mp3";
+  await page.getByText("4 个媒体片段").waitFor({ state: "visible" });
+  await page.getByRole("button", { name: "全部照片" }).click();
+  await tiles.first().waitFor({ state: "visible" });
+  const tilesAfterSoundtrack = await tiles.count();
+  const soundtrackTileCount = await page
+    .locator('.journey-story__media-grid [aria-label*="night-theme.mp3"]').count();
+  const removeSoundtrackVisible = await page
+    .getByRole("button", { name: "移除配乐" }).isVisible();
+
   await page.getByRole("button", { name: "退出旅程故事" }).click();
   await dialog.waitFor({ state: "detached" });
 
@@ -116,9 +163,17 @@ try {
     contentClickPreserved: true,
     escapeRestoredFocus,
     backdropRestoredFocus,
+    overviewTileCount,
+    nonAdjacentSelection: true,
+    gridClosedAfterSelection,
     uploadCloseBlocked: true,
     uploadCompletedAndRefreshed: true,
     progressRemovedAfterCompletion: progressRoleCount === 0,
+    soundtrackAudioCount,
+    soundtrackNameShown,
+    tilesAfterSoundtrack,
+    soundtrackTileCount,
+    removeSoundtrackVisible,
     consoleErrors,
     pageErrors,
   };
@@ -126,7 +181,14 @@ try {
   if (
     !escapeRestoredFocus
     || !backdropRestoredFocus
+    || overviewTileCount !== 3
+    || !gridClosedAfterSelection
     || progressRoleCount !== 0
+    || soundtrackAudioCount !== 1
+    || !soundtrackNameShown
+    || tilesAfterSoundtrack !== 4
+    || soundtrackTileCount !== 0
+    || !removeSoundtrackVisible
     || consoleErrors.length > 0
     || pageErrors.length > 0
   ) {

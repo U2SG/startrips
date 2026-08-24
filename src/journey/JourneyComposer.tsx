@@ -26,6 +26,7 @@ import {
   updateJourney,
 } from "./journeyApi";
 import {
+  journeyVisualMedia,
   validateJourneyFiles,
   validateJourneyInput,
 } from "./journeyModel";
@@ -323,6 +324,9 @@ export function JourneyComposer({
   const [retryAssignments, setRetryAssignments] = useState<JourneyMediaUploadAssignment[]>([]);
   const [globePicking, setGlobePicking] = useState(false);
   const activeLightEffect = LIGHT_EFFECTS.find((effect) => effect.id === lightEffect) ?? null;
+  // The composer edits photos and videos; a journey soundtrack is managed in
+  // the story dialog and is not counted here.
+  const existingVisualMediaCount = journey ? journeyVisualMedia(journey).length : 0;
   const safeLightColor = /^#[0-9a-fA-F]{6}$/.test(lightColor) ? lightColor : LIGHT_COLORS[0];
   const activeLightGradient = activeLightEffect
     ? getLightEffectGradient(activeLightEffect.id, safeLightColor)
@@ -620,7 +624,7 @@ export function JourneyComposer({
                 <label className="journey-media-picker">
                   <IconUpload size={26} stroke={1.2} aria-hidden="true" />
                   <span>添加照片或视频</span>
-                  <strong>{journey?.media.length ? `${journey.media.length} 个已有媒体 · 可继续添加` : "支持照片与视频，可持续添加"}</strong>
+                  <strong>{existingVisualMediaCount ? `${existingVisualMediaCount} 个已有媒体 · 可继续添加` : "支持照片与视频，可持续添加"}</strong>
                   <input type="file" accept="image/avif,image/jpeg,image/png,image/webp,video/mp4,video/quicktime,video/webm" multiple onChange={selectFiles} />
                 </label>
                 <ul>
@@ -858,8 +862,8 @@ export function JourneyComposer({
             <strong>{routePoints.length === 0 ? "还没有地点" : routePoints.length === 1 ? "1 个地点" : `${routePoints.length} 个地点 · 一段路径`}</strong>
             <span>{mediaFiles.length > 0
               ? `${mediaFiles.length} 个新媒体文件`
-              : journey?.media.length
-                ? `${journey.media.length} 个已有媒体`
+              : existingVisualMediaCount
+                ? `${existingVisualMediaCount} 个已有媒体`
                 : "媒体可以稍后补充"}</span>
           </div>
           {savedResult ? <button type="button" onClick={closeComposer}><IconCheck size={18} stroke={1.4} aria-hidden="true" />完成</button> : <button type="button" onClick={save} disabled={saving}><IconCheck size={18} stroke={1.4} aria-hidden="true" />{saving ? "正在保存…" : isEditing ? "保存修改" : "保存到星球"}</button>}

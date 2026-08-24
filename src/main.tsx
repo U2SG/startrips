@@ -160,12 +160,31 @@ const storyQaJourney: Journey = {
     occurredAt: null,
     createdAt: "2026-08-11T00:00:00.000Z",
   }],
-  media: [],
+  // Seeded so the deterministic QA can exercise the overview grid with
+  // non-adjacent selection instead of only sequential navigation.
+  media: [0, 1, 2].map((index) => ({
+    id: `00000000-0000-4000-8000-00000000010${index}`,
+    journeyId: "00000000-0000-4000-8000-000000000001",
+    routePointId: null,
+    storageDriver: "qa",
+    storageKey: `qa/story-seed-${index}`,
+    fileName: `seed-${index}.png`,
+    mimeType: "image/png",
+    bytes: 68,
+    sortOrder: index,
+    uploadedByUserId: "00000000-0000-4000-8000-000000000003",
+    createdAt: "2026-08-11T00:00:00.000Z",
+  })),
 };
+
+const QA_SOUNDTRACK_ASSET_ID = "00000000-0000-4000-8000-000000000900";
 
 function JourneyStoryQaPreview() {
   const [open, setOpen] = useState(true);
   const [journeys, setJourneys] = useState<Journey[]>([storyQaJourney]);
+  // The preview synthesizes the asset a real API would return, so it needs to
+  // be told which kind the next completed upload represents.
+  const [nextMediaIsSoundtrack, setNextMediaIsSoundtrack] = useState(false);
 
   return (
     <main className="living-atlas">
@@ -173,6 +192,7 @@ function JourneyStoryQaPreview() {
         <ParticleEarthScene mode="focusPoint" quality="high" reduceMotion />
       </div>
       <button type="button" data-qa-story-reopen onClick={() => setOpen(true)}>重新打开旅程</button>
+      <button type="button" data-qa-story-next-audio onClick={() => setNextMediaIsSoundtrack(true)}>下一个上传是配乐</button>
       {open ? (
         <JourneyStory
           journeys={journeys}
@@ -186,23 +206,27 @@ function JourneyStoryQaPreview() {
           }}
           onMediaAdded={() => {
             const currentJourney = journeys[0];
+            const index = currentJourney.media.length;
             const nextJourney: Journey = {
               ...currentJourney,
               media: [...currentJourney.media, {
-                id: "00000000-0000-4000-8000-000000000005",
+                id: nextMediaIsSoundtrack
+                  ? QA_SOUNDTRACK_ASSET_ID
+                  : `00000000-0000-4000-8000-00000000020${index}`,
                 journeyId: storyQaJourney.id,
                 routePointId: null,
                 storageDriver: "qa",
-                storageKey: "qa/story-media",
-                fileName: "night-route.png",
-                mimeType: "image/png",
+                storageKey: `qa/story-media-${index}`,
+                fileName: nextMediaIsSoundtrack ? "night-theme.mp3" : "night-route.png",
+                mimeType: nextMediaIsSoundtrack ? "audio/mpeg" : "image/png",
                 bytes: 68,
-                sortOrder: currentJourney.media.length,
+                sortOrder: index,
                 uploadedByUserId: storyQaJourney.createdByUserId,
                 createdAt: "2026-08-11T00:00:00.000Z",
               }],
             };
             setJourneys([nextJourney]);
+            setNextMediaIsSoundtrack(false);
             return nextJourney;
           }}
           onMediaDelete={(assetId) => {
