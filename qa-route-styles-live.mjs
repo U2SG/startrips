@@ -59,15 +59,17 @@ snap("ACTIVE SELECTED", await page.evaluate(() => ({
 })));
 await page.screenshot({ path: "D:\\startrips\\prod-style-active.png" });
 
-// Ambience toggle on the live site.
-await page.click("[data-ambience-toggle]");
-await page.waitForTimeout(500);
-snap("AMBIENCE ON", await page.evaluate(() => ({
+// Ambience is a permanent visual layer on the live site too: no control to
+// click, no off state to capture.
+const ambience = await page.evaluate(() => ({
   ambience: document.querySelector(".living-atlas-globe")?.dataset.ambience ?? null,
   blobs: document.querySelectorAll(".living-atlas-ambience__blob").length,
-})));
+  toggles: document.querySelectorAll("[data-ambience-toggle]").length,
+}));
+snap("AMBIENCE", ambience);
+if (ambience.blobs !== 3) issues.push(`[ambience] expected 3 blobs, saw ${ambience.blobs}`);
+if (ambience.toggles !== 0) issues.push("[ambience] toggle control is back in the DOM");
 await page.screenshot({ path: "D:\\startrips\\prod-style-ambience.png" });
-await page.click("[data-ambience-toggle]");
 
 console.log("=== ISSUES ===");
 issues.slice(0, 8).forEach((line) => console.log(line));

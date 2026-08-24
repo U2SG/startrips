@@ -46,20 +46,17 @@ snap("ACTIVE (rhine selected)", await page.evaluate(() => ({
 })));
 await page.screenshot({ path: "D:\\startrips\\qa-style-active.png" });
 
-// Ambience toggle.
-await page.click("[data-ambience-toggle]");
-await page.waitForTimeout(400);
-snap("AMBIENCE ON", await page.evaluate(() => ({
+// Ambience is a permanent visual layer with no control, so there is nothing to
+// click and no off state to capture.
+const ambience = await page.evaluate(() => ({
   ambience: document.querySelector(".living-atlas-globe")?.dataset.ambience ?? null,
   blobs: document.querySelectorAll(".living-atlas-ambience__blob").length,
-})));
+  toggles: document.querySelectorAll("[data-ambience-toggle]").length,
+}));
+snap("AMBIENCE", ambience);
+if (ambience.blobs !== 3) issues.push(`[ambience] expected 3 blobs, saw ${ambience.blobs}`);
+if (ambience.toggles !== 0) issues.push("[ambience] toggle control is back in the DOM");
 await page.screenshot({ path: "D:\\startrips\\qa-style-ambience.png" });
-await page.click("[data-ambience-toggle]");
-await page.waitForTimeout(300);
-snap("AMBIENCE OFF", await page.evaluate(() => ({
-  ambience: document.querySelector(".living-atlas-globe")?.dataset.ambience ?? null,
-  blobs: document.querySelectorAll(".living-atlas-ambience__blob").length,
-})));
 
 // Drag the globe to exercise the projection path, then confirm health.
 const canvas = page.locator(".living-atlas-globe canvas").first();
