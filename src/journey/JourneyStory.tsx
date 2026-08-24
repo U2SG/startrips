@@ -787,10 +787,16 @@ export function JourneyStory({
             <p>PRIVATE JOURNEY · {journeyRange(journey)}</p>
             <h2 id="journey-story-title">{journey.title}</h2>
           </div>
-          <button className="journey-story__close" type="button" disabled={mutationPending} onClick={requestClose} aria-label="退出旅程故事">
+          {/* An upload in flight keeps this button clickable so pressing it
+              explains the wait instead of silently doing nothing. */}
+          <button className="journey-story__close" type="button" disabled={mutationPending && !uploading} onClick={requestClose} aria-label="退出旅程故事">
             <span>{deleteState === "pending" ? "删除中" : uploading ? "上传中" : "退出"}</span><IconX size={19} stroke={1.35} aria-hidden="true" />
           </button>
         </header>
+
+        {closeBlocked && uploading ? (
+          <p className="journey-story__close-blocked" role="status">正在完成分块上传，完成后即可安全退出。</p>
+        ) : null}
 
         <div className="journey-story__layout">
           <section className="journey-story__media" aria-label="旅程媒体">
@@ -967,9 +973,6 @@ export function JourneyStory({
                   <span style={{ width: `${uploadPercent}%` }} />
                   <small>{uploadState.fileName}</small>
                 </div>
-              ) : null}
-              {closeBlocked && uploading ? (
-                <p className="journey-story__upload-message" role="status">正在完成分块上传，完成后即可安全退出。</p>
               ) : null}
               {uploadState.status === "complete" ? (
                 <p className={`journey-story__upload-message is-${uploadState.tone}`} role="status">{uploadState.message}</p>

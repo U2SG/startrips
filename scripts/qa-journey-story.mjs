@@ -117,12 +117,46 @@ try {
     mimeType: "image/png",
     buffer: Buffer.from("89504e470d0a1a0a", "hex"),
   });
-  // The explicit exit button is disabled while a multipart upload is in
-  // flight, so the escape path is what has to explain the wait.
-  await page.keyboard.press("Escape");
-  const blockedMessage = page.getByText("正在完成分块上传，完成后即可安全退出。");
+  // Pressing exit during an upload must explain the wait rather than be a
+  // dead control, so the button stays enabled and the dialog stays open.
+  const exitButton = page.getByRole("button", { name: "退出旅程故事" });
+  const exitEnabledDuringUpload = await exitButton.isEnabled();
+  await exitButton.click();
+  const blockedMessage = page.locator(".journey-story__close-blocked");
   await blockedMessage.waitFor({ state: "visible" });
+  const blockedByButton = (await blockedMessage.innerText())
+    === "正在完成分块上传，完成后即可安全退出。";
   if (!await dialog.isVisible()) throw new Error("Dialog closed while upload was in flight");
+
+  // The notice overlays the media row, so the footer must stay pinned to the
+  // dialog's bottom edge instead of being pushed out of the grid.
+  const blockedLayout = await page.evaluate(() => {
+    const story = document.querySelector(".journey-story");
+    const footer = document.querySelector(".journey-story > footer");
+    const layout = document.querySelector(".journey-story__layout");
+    const notice = document.querySelector(".journey-story__close-blocked");
+    if (!story || !footer || !layout || !notice) return null;
+    const storyBox = story.getBoundingClientRect();
+    const footerBox = footer.getBoundingClientRect();
+    const layoutBox = layout.getBoundingClientRect();
+    const noticeBox = notice.getBoundingClientRect();
+    return {
+      footerPinned: Math.abs(storyBox.bottom - footerBox.bottom) < 1,
+      // The notice shares the media row, so it must stay inside it. Its entrance
+      // animation offsets the top by a few pixels, hence the containment check
+      // rather than an exact match with the row edge.
+      noticeInsideMediaRow: noticeBox.top >= layoutBox.top - 1
+        && noticeBox.bottom <= footerBox.top + 1,
+      layoutRowHeight: Math.round(layoutBox.height),
+      documentOverflow: document.documentElement.scrollWidth
+        - document.documentElement.clientWidth,
+    };
+  });
+
+  // The escape path reports the same wait.
+  await page.keyboard.press("Escape");
+  await blockedMessage.waitFor({ state: "visible" });
+  if (!await dialog.isVisible()) throw new Error("Escape closed the dialog mid-upload");
 
   await page.getByText("已将 1 个媒体添加到整段旅程。").waitFor({ state: "visible" });
   await page.getByText("4 个媒体片段").waitFor({ state: "visible" });
@@ -166,6 +200,9 @@ try {
     overviewTileCount,
     nonAdjacentSelection: true,
     gridClosedAfterSelection,
+    exitEnabledDuringUpload,
+    blockedByButton,
+    blockedLayout,
     uploadCloseBlocked: true,
     uploadCompletedAndRefreshed: true,
     progressRemovedAfterCompletion: progressRoleCount === 0,
@@ -183,6 +220,12 @@ try {
     || !backdropRestoredFocus
     || overviewTileCount !== 3
     || !gridClosedAfterSelection
+    || !exitEnabledDuringUpload
+    || !blockedByButton
+    || !blockedLayout?.footerPinned
+    || !blockedLayout?.noticeInsideMediaRow
+    || blockedLayout?.layoutRowHeight !== 684
+    || blockedLayout?.documentOverflow !== 0
     || progressRoleCount !== 0
     || soundtrackAudioCount !== 1
     || !soundtrackNameShown
