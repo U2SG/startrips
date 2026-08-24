@@ -191,6 +191,27 @@ export function journeySoundtrack(
     );
 }
 
+// Audio file extensions never enter the presentation layer (#7): the UI shows
+// `飞云之下 韩红林俊杰`, never `飞云之下 韩红林俊杰.mp3`. The database file name
+// is untouched.
+const SOUNDTRACK_EXTENSIONS = new Set([
+  ".mp3",
+  ".m4a",
+  ".aac",
+  ".ogg",
+  ".wav",
+  ".wave",
+]);
+
+export function stripMediaExtension(fileName: string): string {
+  const dot = fileName.lastIndexOf(".");
+  if (dot <= 0) return fileName;
+  const extension = fileName.slice(dot).toLowerCase();
+  return SOUNDTRACK_EXTENSIONS.has(extension)
+    ? fileName.slice(0, dot)
+    : fileName;
+}
+
 export function validateJourneySoundtrack(
   files: readonly MediaFileLike[],
 ): ValidationResult {

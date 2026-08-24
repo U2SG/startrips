@@ -6,6 +6,7 @@ import {
   journeySoundtrack,
   journeyVisualMedia,
   sortJourneysChronologically,
+  stripMediaExtension,
   toJourneyRoutes,
   validateJourneyFiles,
   validateJourneyInput,
@@ -202,5 +203,21 @@ describe("journeyModel", () => {
       { name: "huge.mp4", type: "video/mp4", size: 2_000_000_001 },
     ]);
     expect(invalid.errors).toHaveLength(3);
+  });
+
+  it("strips soundtrack extensions from display names (#7)", () => {
+    expect(stripMediaExtension("飞云之下 韩红林俊杰.mp3")).toBe("飞云之下 韩红林俊杰");
+    expect(stripMediaExtension("night.mp3")).toBe("night");
+    expect(stripMediaExtension("rain.m4a")).toBe("rain");
+    expect(stripMediaExtension("wind.aac")).toBe("wind");
+    expect(stripMediaExtension("sea.ogg")).toBe("sea");
+    expect(stripMediaExtension("tide.wav")).toBe("tide");
+    expect(stripMediaExtension("tide.wave")).toBe("tide");
+    // Non-soundtrack extensions and extension-less names pass through.
+    expect(stripMediaExtension("clip.mp4")).toBe("clip.mp4");
+    expect(stripMediaExtension("photo.jpg")).toBe("photo.jpg");
+    expect(stripMediaExtension("README")).toBe("README");
+    // Hidden files keep their leading dot.
+    expect(stripMediaExtension(".mp3")).toBe(".mp3");
   });
 });

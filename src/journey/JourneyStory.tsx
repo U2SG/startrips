@@ -16,6 +16,7 @@ import {
   IconArrowUp,
   IconEdit,
   IconLayoutGrid,
+  IconMaximize,
   IconMusic,
   IconPhoto,
   IconPlayerPause,
@@ -36,6 +37,7 @@ import { prefersReducedMotion } from "../motion/preferences";
 import {
   journeySoundtrack,
   journeyVisualMedia,
+  stripMediaExtension,
   validateJourneyFiles,
   validateJourneySoundtrack,
 } from "./journeyModel";
@@ -314,6 +316,9 @@ export function JourneyStory({
   const [orderMessage, setOrderMessage] = useState("");
   const [playing, setPlaying] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
+  // #7: fullscreen controls fade out after idle; any pointer/key activity
+  // brings them back.
+  const [fullscreenControlsHidden, setFullscreenControlsHidden] = useState(false);
   const [overview, setOverview] = useState(false);
   const [soundtrackUpload, setSoundtrackUpload] = useState<MediaUploadState>({ status: "idle" });
   const [soundtrackRemovePending, setSoundtrackRemovePending] = useState(false);
@@ -447,6 +452,37 @@ export function JourneyStory({
   }, [playing, soundtrackRead?.status === "ready"]);
 
   useEffect(() => () => audioRef.current?.pause(), []);
+
+  // #7: fullscreen playback — Esc exits, arrows switch media, Space toggles
+  // play/pause. Controls fade out after 2.5s without pointer/key activity.
+  useEffect(() => {
+    if (!fullscreen) {
+      setFullscreenControlsHidden(false);
+      return;
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      setFullscreenControlsHidden(false);
+      if (event.key === "Escape") {
+        setFullscreen(false);
+      } else if (event.key === "ArrowLeft") {
+        navigateToMediaRef.current((assetIndex - 1 + scopedMedia.length) % scopedMedia.length);
+      } else if (event.key === "ArrowRight") {
+        navigateToMediaRef.current((assetIndex + 1) % scopedMedia.length);
+      } else if (event.key === " " || event.key === "Spacebar") {
+        event.preventDefault();
+        setPlaying((current) => !current);
+      }
+    };
+    const onPointerMove = () => setFullscreenControlsHidden(false);
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("pointermove", onPointerMove);
+    const idleTimer = window.setTimeout(() => setFullscreenControlsHidden(true), 2500);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("pointermove", onPointerMove);
+      window.clearTimeout(idleTimer);
+    };
+  }, [fullscreen, assetIndex, scopedMedia.length]);
 
   useEffect(() => {
     setAssetIndex((current) => Math.min(
@@ -1008,6 +1044,19 @@ export function JourneyStory({
                 {overview ? "返回单张" : "全部照片"}
               </button>
             ) : null}
+            {!overview && asset && read?.status === "ready" ? (
+              <button
+                type="button"
+                className="journey-story__fullscreen-entry"
+                onClick={() => {
+                  setPlaying(scopedMedia.length > 1);
+                  setFullscreen(true);
+                }}
+              >
+                <IconMaximize size={16} stroke={1.35} aria-hidden="true" />
+                全屏播放
+              </button>
+            ) : null}
             {overview ? (
               <ul className="journey-story__media-grid" aria-label={`全部媒体，共 ${scopedMedia.length} 个`}>
                 {scopedMedia.map((tile, index) => (
@@ -1214,22 +1263,31 @@ export function JourneyStory({
               ) : null}
             </div>
 
-            <div className="journey-story__soundtrack">
-              <div>
+            <div className={`journey-story__soundtrack${soundtrack && soundtrackRead?.status === "ready" ? " has-track" : ""}${playing ? " is-playing" : ""}`}>
+              <div className="journey-story__soundtrack-head">
                 <p>JOURNEY SOUNDTRACK</p>
-                <strong>{soundtrack ? soundtrack.fileName : "还没有配乐，幻灯片会安静播放"}</strong>
+                <strong>{soundtrack ? stripMediaExtension(soundtrack.fileName) : "还没有配乐，幻灯片会安静播放"}</strong>
               </div>
+              {/* #7: the audio element is a hidden playback engine only — no
+                  native control bar; play/pause follows the slideshow. */}
               {soundtrack && soundtrackRead?.status === "ready" ? (
                 <audio
                   ref={audioRef}
                   key={soundtrack.id}
                   src={soundtrackRead.url}
-                  controls
                   loop
                   preload="metadata"
-                  aria-label={`旅程配乐 ${soundtrack.fileName}`}
+                  tabIndex={-1}
+                  aria-hidden="true"
                 />
               ) : null}
+              {/* Light strip: a subtle flowing gradient while playing, static
+                  otherwise; reduced motion keeps it static (#7). */}
+              <div className="journey-story__soundtrack-light" aria-hidden="true">
+                <span />
+                <span />
+                <span />
+              </div>
               {soundtrack && (!soundtrackRead || soundtrackRead.status === "loading") ? (
                 <p className="journey-story__upload-message" role="status">正在打开配乐…</p>
               ) : null}
@@ -1305,18 +1363,27 @@ export function JourneyStory({
 
       {fullscreen && asset && read?.status === "ready" ? (
         <div
-          className="journey-story-fullscreen"
+          className={`journey-story-fullscreen${fullscreenControlsHidden ? " is-controls-hidden" : ""}${playing ? " is-playing" : ""}`}
           role="dialog"
           aria-modal="true"
-          aria-label="全屏查看媒体"
+          aria-label="全屏播放媒体"
           onClick={(event) => {
             if (event.target === event.currentTarget) setFullscreen(false);
           }}
         >
           <button className="journey-story-fullscreen__close" type="button" onClick={() => setFullscreen(false)} aria-label="退出全屏"><IconX size={22} stroke={1.35} aria-hidden="true" /></button>
-          {asset.mimeType.startsWith("video/")
-            ? <video key={asset.id} src={read.url} controls autoPlay playsInline />
-            : <img key={asset.id} src={read.url} alt={asset.fileName} />}
+          {/* #11 two-layer stage also serves fullscreen: the incoming frame
+              crossfades over the settled base frame without flashing. */}
+          {shownAsset && shownRead?.status === "ready" && shownAsset.mimeType.startsWith("video/")
+            ? <video key={`base-${shownAsset.id}`} src={shownRead.url} controls autoPlay playsInline />
+            : shownAsset && shownRead?.status === "ready"
+              ? <img key={`base-${shownAsset.id}`} src={shownRead.url} alt={shownAsset.fileName} />
+              : null}
+          {incoming && incomingRead?.status === "ready" && incoming.mimeType.startsWith("video/")
+            ? <video key={`incoming-${incoming.id}`} className="journey-story__media-incoming" src={incomingRead.url} autoPlay playsInline onAnimationEnd={() => { if (prefersReducedMotion()) settleIncoming(incoming.id); }} />
+            : incoming && incomingRead?.status === "ready"
+              ? <img key={`incoming-${incoming.id}`} className="journey-story__media-incoming" src={incomingRead.url} alt={incoming.fileName} onAnimationEnd={(event) => { if (event.animationName === "motionMediaIn") settleIncoming(incoming.id); }} />
+              : null}
           {scopedMedia.length > 1 ? (
             <nav className="journey-story-fullscreen__nav" aria-label="全屏媒体导航">
               <button
@@ -1325,6 +1392,17 @@ export function JourneyStory({
                 aria-label="上一个媒体"
               >
                 <IconArrowLeft size={22} stroke={1.35} aria-hidden="true" />
+              </button>
+              <button
+                type="button"
+                className={playing ? "is-active" : ""}
+                onClick={() => setPlaying((current) => !current)}
+                aria-label={playing ? "暂停自动播放" : "自动播放照片"}
+                aria-pressed={playing}
+              >
+                {playing
+                  ? <IconPlayerPause size={22} stroke={1.35} aria-hidden="true" />
+                  : <IconPlayerPlay size={22} stroke={1.35} aria-hidden="true" />}
               </button>
               <span>{assetIndex + 1} / {scopedMedia.length}</span>
               <button

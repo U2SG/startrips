@@ -392,11 +392,17 @@ describe("JourneyStory", () => {
     }));
 
     expect(markup).toContain("JOURNEY SOUNDTRACK");
-    expect(markup).toContain("night-route.mp3");
+    // #7: the presentation strips the file extension — the UI shows the
+    // friendly name, never `night-route.mp3`.
+    expect(markup).toContain("night-route");
+    expect(markup).not.toContain("night-route.mp3");
     expect(markup).toContain("替换配乐");
     expect(markup).toContain("移除配乐");
     // Two photos, not three assets.
     expect(markup).toContain("2 个媒体片段");
+    // The light strip replaces the native control bar. (The <audio> playback
+    // engine only mounts once the signed read resolves at runtime.)
+    expect(markup).toContain("journey-story__soundtrack-light");
   });
 
   it("keeps a soundtrack-only journey silent and free of a broken cover", () => {
@@ -414,7 +420,8 @@ describe("JourneyStory", () => {
     }));
 
     expect(markup).toContain("整段旅程还没有媒体");
-    expect(markup).toContain("night-route.mp3");
+    expect(markup).toContain("night-route");
+    expect(markup).not.toContain("night-route.mp3");
     expect(markup).not.toContain("全部照片");
     expect(markup).not.toContain('aria-label="删除这段媒体"');
     expect(markup).not.toContain('aria-label="向前调整媒体顺序"');
