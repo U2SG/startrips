@@ -384,7 +384,6 @@ export function LivingAtlasApp() {
         <JourneyTimeline
           journeys={journeys}
           activeJourneyId={activeJourneyId}
-          onSelect={selectJourney}
           onOpenStory={(id) => {
             setActiveJourneyId(id);
             setStoryRoutePointId(null);
