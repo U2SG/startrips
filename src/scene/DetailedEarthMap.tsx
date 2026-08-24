@@ -85,10 +85,10 @@ export default function DetailedEarthMap({
     let initialLoadSettled = false;
     let overviewRequested = false;
     let settleTimer: number | null = null;
-    let customPointerId: number | null = null;
-    let customPointerX = 0;
-    let customPointerY = 0;
-    let customPointerDragged = false;
+    let primaryDragActive = false;
+    let primaryDragX = 0;
+    let primaryDragY = 0;
+    let primaryDragDragged = false;
     let suppressNextMapClick = false;
     mapRef.current = map;
     map.dragRotate.enable();
@@ -103,44 +103,41 @@ export default function DetailedEarthMap({
     const canvas = map.getCanvas();
     canvas.style.touchAction = "none";
 
-    const releaseCustomPointer = () => {
-      if (
-        customPointerId !== null
-        && canvas.hasPointerCapture?.(customPointerId)
-      ) {
-        canvas.releasePointerCapture?.(customPointerId);
-      }
-      customPointerId = null;
-      customPointerDragged = false;
+    const finishPrimaryDrag = () => {
+      const wasDragged = primaryDragDragged;
+      primaryDragActive = false;
+      primaryDragDragged = false;
       delete host.dataset.dragging;
-    };
-
-    const onPointerDown = (event: PointerEvent) => {
-      if (event.pointerType === "mouse" && event.button !== 0) return;
-      // A second touch belongs to MapLibre's native pinch/rotation handler.
-      // Stop the one-finger rotation before handing the gesture over.
-      if (customPointerId !== null) {
-        releaseCustomPointer();
-        return;
+      if (wasDragged) {
+        // MapLibre emits its click after the matching mouseup/touchend. Keep
+        // the next click suppressed long enough for that event to arrive.
+        window.setTimeout(() => {
+          suppressNextMapClick = false;
+        }, 0);
       }
-      if (!event.isPrimary) return;
-      customPointerId = event.pointerId;
-      customPointerX = event.clientX;
-      customPointerY = event.clientY;
-      customPointerDragged = false;
-      map.stop();
-      canvas.setPointerCapture?.(event.pointerId);
     };
 
-    const onPointerMove = (event: PointerEvent) => {
-      if (event.pointerId !== customPointerId) return;
-      const deltaX = event.clientX - customPointerX;
-      const deltaY = event.clientY - customPointerY;
-      customPointerX = event.clientX;
-      customPointerY = event.clientY;
+    const beginPrimaryDrag = (x: number, y: number) => {
+      primaryDragActive = true;
+      primaryDragX = x;
+      primaryDragY = y;
+      primaryDragDragged = false;
+      map.stop();
+    };
+
+    const updatePrimaryDrag = (
+      x: number,
+      y: number,
+      event: { preventDefault: () => void },
+    ) => {
+      if (!primaryDragActive) return;
+      const deltaX = x - primaryDragX;
+      const deltaY = y - primaryDragY;
+      primaryDragX = x;
+      primaryDragY = y;
       if (deltaX === 0 && deltaY === 0) return;
       event.preventDefault();
-      customPointerDragged = true;
+      primaryDragDragged = true;
       suppressNextMapClick = true;
       host.dataset.dragging = "true";
       map.stop();
@@ -154,25 +151,55 @@ export default function DetailedEarthMap({
       map.setPitch(rotation.pitch);
     };
 
-    const onPointerUp = (event: PointerEvent) => {
-      if (event.pointerId !== customPointerId) return;
-      const wasDragged = customPointerDragged;
-      releaseCustomPointer();
-      if (suppressNextMapClick && wasDragged) {
-        window.setTimeout(() => {
-          suppressNextMapClick = false;
-        }, 0);
+    const onMouseDown = (event: MouseEvent) => {
+      if (event.button !== 0) return;
+      beginPrimaryDrag(event.clientX, event.clientY);
+    };
+
+    const onMouseMove = (event: MouseEvent) => {
+      updatePrimaryDrag(event.clientX, event.clientY, event);
+    };
+
+    const onMouseUp = () => {
+      if (primaryDragActive) finishPrimaryDrag();
+    };
+
+    const onTouchStart = (event: TouchEvent) => {
+      // Hand two-finger gestures back to MapLibre's native zoom/rotate/pitch
+      // handler instead of trying to turn them into a one-finger rotation.
+      if (event.touches.length !== 1) {
+        finishPrimaryDrag();
+        return;
+      }
+      const touch = event.touches[0];
+      beginPrimaryDrag(touch.clientX, touch.clientY);
+    };
+
+    const onTouchMove = (event: TouchEvent) => {
+      if (event.touches.length !== 1) {
+        finishPrimaryDrag();
+        return;
+      }
+      const touch = event.touches[0];
+      updatePrimaryDrag(touch.clientX, touch.clientY, event);
+    };
+
+    const onTouchEnd = (event: TouchEvent) => {
+      if (event.touches.length === 0 || event.touches.length > 1) {
+        finishPrimaryDrag();
       }
     };
 
-    const onPointerCancel = (event: PointerEvent) => {
-      if (event.pointerId === customPointerId) releaseCustomPointer();
-    };
+    const onTouchCancel = () => finishPrimaryDrag();
 
-    canvas.addEventListener("pointerdown", onPointerDown);
-    canvas.addEventListener("pointermove", onPointerMove, { passive: false });
-    canvas.addEventListener("pointerup", onPointerUp);
-    canvas.addEventListener("pointercancel", onPointerCancel);
+    canvas.addEventListener("mousedown", onMouseDown);
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+    window.addEventListener("blur", onMouseUp);
+    canvas.addEventListener("touchstart", onTouchStart, { passive: false });
+    canvas.addEventListener("touchmove", onTouchMove, { passive: false });
+    canvas.addEventListener("touchend", onTouchEnd);
+    canvas.addEventListener("touchcancel", onTouchCancel);
     map.addControl(new NavigationControl({ showCompass: true }), "bottom-right");
     map.addControl(new AttributionControl({ compact: true }), "bottom-left");
 
@@ -220,11 +247,15 @@ export default function DetailedEarthMap({
 
     return () => {
       if (settleTimer !== null) window.clearTimeout(settleTimer);
-      canvas.removeEventListener("pointerdown", onPointerDown);
-      canvas.removeEventListener("pointermove", onPointerMove);
-      canvas.removeEventListener("pointerup", onPointerUp);
-      canvas.removeEventListener("pointercancel", onPointerCancel);
-      releaseCustomPointer();
+      canvas.removeEventListener("mousedown", onMouseDown);
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+      window.removeEventListener("blur", onMouseUp);
+      canvas.removeEventListener("touchstart", onTouchStart);
+      canvas.removeEventListener("touchmove", onTouchMove);
+      canvas.removeEventListener("touchend", onTouchEnd);
+      canvas.removeEventListener("touchcancel", onTouchCancel);
+      finishPrimaryDrag();
       mapRef.current = null;
       map.remove();
     };
