@@ -1,0 +1,118 @@
+/* #21 Globe Rewind — a minimal time axis in globe focus mode. */
+
+.globe-time-scrubber {
+  position: absolute;
+  z-index: 75;
+  left: 50%;
+  bottom: 28px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 44px;
+  padding: 8px 16px;
+  border: 1px solid rgba(118, 198, 188, 0.18);
+  border-radius: 999px;
+  background: rgba(2, 10, 11, 0.6);
+  backdrop-filter: blur(12px);
+}
+
+.globe-time-scrubber__play {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid rgba(118, 198, 188, 0.3);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--atlas-cyan);
+  cursor: pointer;
+}
+
+.globe-time-scrubber__play.is-active,
+.globe-time-scrubber__play[aria-pressed="true"] {
+  border-color: var(--atlas-acid);
+  color: var(--atlas-acid);
+}
+
+.globe-time-scrubber__track-wrap {
+  min-width: min(320px, 46vw);
+  display: grid;
+  gap: 5px;
+}
+
+.globe-time-scrubber__track {
+  position: relative;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  touch-action: none;
+}
+
+/* The visual track is 1-2px; the 22px hit area keeps mobile taps easy. */
+.globe-time-scrubber__track::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  border-radius: 999px;
+  background: rgba(118, 198, 188, 0.16);
+}
+
+.globe-time-scrubber__fill {
+  position: absolute;
+  left: 0;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--atlas-cyan);
+  pointer-events: none;
+}
+
+.globe-time-scrubber__cursor {
+  position: absolute;
+  top: 50%;
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: rgba(2, 10, 11, 0.95);
+  border: 1px solid var(--atlas-cyan);
+  color: var(--atlas-cyan);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.globe-time-scrubber__ticks {
+  display: flex;
+  justify-content: space-between;
+  color: var(--atlas-faint);
+  font: 500 7px/1 ui-monospace, "SFMono-Regular", Consolas, monospace;
+  letter-spacing: 0.08em;
+  pointer-events: none;
+}
+
+.globe-time-scrubber__date {
+  min-width: 44px;
+  color: var(--atlas-muted);
+  font: 400 11px/1 var(--archive-serif);
+  letter-spacing: 0.06em;
+}
+
+@media (max-width: 760px) {
+  .globe-time-scrubber {
+    left: 12px;
+    right: 12px;
+    bottom: 14px;
+    transform: none;
+    justify-content: center;
+  }
+
+  .globe-time-scrubber__track-wrap {
+    min-width: 0;
+    flex: 1;
+  }
+}

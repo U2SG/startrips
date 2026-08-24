@@ -25,6 +25,8 @@ import {
 import { JourneyPlaybackOverlay } from "./JourneyPlaybackOverlay";
 import { JourneyStory } from "./JourneyStory";
 import { JourneyTimeline } from "./JourneyTimeline";
+import { GlobeTimeScrubber } from "./GlobeTimeScrubber";
+import { useGlobeTimeCursor } from "./useGlobeTimeCursor";
 import {
   deleteJourney,
   getPrivateMediaRead,
@@ -183,6 +185,10 @@ export function LivingAtlasApp() {
   const reduceMotion = useMemo(preferredReducedMotion, []);
   const createMagnet = useMagnet<HTMLButtonElement>(14);
   const storyMagnet = useMagnet<HTMLButtonElement>(14);
+
+  // #21: the rewind cursor over the whole journey timeline. Only active while
+  // the user is in globe focus mode; entering playback pauses rewind.
+  const timeCursor = useGlobeTimeCursor(journeys);
 
   // Esc exits focus mode. The exit control is only visible inside focus mode,
   // so exiting returns focus to the trigger button in the header.
@@ -388,6 +394,7 @@ export function LivingAtlasApp() {
           focusColor={activeJourney?.lightColor}
           journeyRoutes={routes}
           activeJourneyRouteId={draftRoute?.id ?? activeJourneyId}
+          temporalReveal={globeFocusMode ? timeCursor.reveal.journeyProgress : undefined}
           onJourneyRouteActivate={(id) => {
             if (id !== "draft-route-preview") selectJourney(id);
           }}
@@ -462,7 +469,7 @@ export function LivingAtlasApp() {
         <JourneyTimeline
           journeys={journeys}
           activeJourneyId={activeJourneyId}
-          onOpenStory={(id) => {
+          onOpenStory={(id: string) => {
             setActiveJourneyId(id);
             setStoryRoutePointId(null);
             setStoryJourneyId(id);
@@ -536,6 +543,9 @@ export function LivingAtlasApp() {
         <IconX size={16} stroke={1.4} aria-hidden="true" />
         恢复界面
       </button>
+
+      {/* #21: the rewind time axis, only in globe focus mode. */}
+      {globeFocusMode ? <GlobeTimeScrubber {...timeCursor} /> : null}
 
       {composerOpen ? (
         <JourneyComposer

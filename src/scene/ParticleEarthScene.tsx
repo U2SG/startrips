@@ -555,6 +555,9 @@ interface ParticleEarthSceneProps {
   activeJourneyRouteId?: string | null;
   onJourneyRouteActivate?: (id: string) => void;
   onJourneyRoutePointActivate?: (journeyId: string, routePointId: string) => void;
+  // #21: per-journey temporal reveal progress (0 = future, 1 = visited).
+  // When provided, route groups and points fade in with the time cursor.
+  temporalReveal?: ReadonlyMap<string, number>;
   showArchiveSignals?: boolean;
   onReady?: () => void;
   onGlobePointPick?: (point: { latitude: number; longitude: number }) => void;
@@ -730,6 +733,7 @@ export function ParticleEarthScene({
   activeJourneyRouteId,
   onJourneyRouteActivate,
   onJourneyRoutePointActivate,
+  temporalReveal,
   showArchiveSignals = true,
   onReady,
   onGlobePointPick,
@@ -747,6 +751,7 @@ export function ParticleEarthScene({
   const latestActiveJourneyRouteId = useRef(activeJourneyRouteId);
   const latestOnJourneyRouteActivate = useRef(onJourneyRouteActivate);
   const latestOnJourneyRoutePointActivate = useRef(onJourneyRoutePointActivate);
+  const latestTemporalReveal = useRef(temporalReveal);
   const latestOnReady = useRef(onReady);
   const latestOnGlobePointPick = useRef(onGlobePointPick);
   const latestDragToRotate = useRef(dragToRotate);
@@ -760,6 +765,7 @@ export function ParticleEarthScene({
   latestActiveJourneyRouteId.current = activeJourneyRouteId;
   latestOnJourneyRouteActivate.current = onJourneyRouteActivate;
   latestOnJourneyRoutePointActivate.current = onJourneyRoutePointActivate;
+  latestTemporalReveal.current = temporalReveal;
   latestOnReady.current = onReady;
   latestOnGlobePointPick.current = onGlobePointPick;
   latestDragToRotate.current = dragToRotate;
@@ -1152,6 +1158,14 @@ export function ParticleEarthScene({
         );
         group.style.color = route.color;
         group.dataset.lightEffect = route.lightEffect ?? "none";
+        // #21: the time cursor drives a route's presence. 0 = future
+        // (hidden), 0..1 = being revealed, 1 = visited. The CSS fades the
+        // whole trail and its points via --journey-temporal-progress.
+        const reveal = latestTemporalReveal.current?.get(route.id);
+        if (reveal !== undefined) {
+          group.style.setProperty("--journey-temporal-progress", reveal.toFixed(3));
+          group.dataset.temporalReveal = reveal.toFixed(3);
+        }
         const glowPath = document.createElementNS(
           "http://www.w3.org/2000/svg",
           "path",
@@ -2383,6 +2397,16 @@ export function ParticleEarthScene({
         latestActiveJourneyRouteId.current = activeRouteId;
         applyJourneyRoutes(routes);
       },
+      // #21: update per-route temporal reveal without rebuilding the layer,
+      // so the time cursor does not restart route animations every frame.
+      setTemporalReveal(reveal: ReadonlyMap<string, number>) {
+        for (const entry of routeVectorEntries) {
+          const progress = reveal.get(entry.routeId);
+          if (progress === undefined) continue;
+          entry.group.style.setProperty("--journey-temporal-progress", progress.toFixed(3));
+          entry.group.dataset.temporalReveal = progress.toFixed(3);
+        }
+      },
       dispose() {
         disposed = true;
         cancelAnimationFrame(animationFrame);
@@ -2427,6 +2451,11 @@ export function ParticleEarthScene({
     if (!ready) return;
     controllerRef.current?.setJourneyRoutes(journeyRoutes, activeJourneyRouteId);
   }, [activeJourneyRouteId, controllerRef, journeyRoutes, ready]);
+
+  useEffect(() => {
+    if (!ready || !temporalReveal) return;
+    controllerRef.current?.setTemporalReveal(temporalReveal);
+  }, [controllerRef, ready, temporalReveal]);
 
   return (
     <div

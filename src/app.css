@@ -145,6 +145,31 @@ button {
   stroke-opacity: 0.52;
 }
 
+/* #21: the time cursor drives a route's presence — 0 = future (hidden),
+   0..1 = being revealed, 1 = visited. The whole trail and its points fade
+   with the reveal; the active/visited state still shines through. */
+.particle-earth-route[data-temporal-reveal] {
+  opacity: calc(var(--journey-temporal-progress, 1) * 1);
+  transition: opacity var(--motion-ui, 260ms) var(--motion-ease-out, ease);
+}
+
+.particle-earth-route[data-temporal-reveal][data-temporal-reveal="0.000"] {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.particle-earth-route[data-temporal-reveal] .particle-earth-route__point {
+  opacity: calc(var(--journey-temporal-progress, 1) * 0.9);
+}
+
+.particle-earth-route[data-temporal-reveal] .particle-earth-route__flow {
+  opacity: calc(var(--journey-temporal-progress, 1) * 0.86);
+}
+
+.particle-earth-route[data-temporal-reveal][data-temporal-reveal="1.000"] {
+  opacity: 1;
+}
+
 /* Strands: two interlaced thread layers flow along the route at different
    speeds and dash rhythms, over a soft glow and a gradient core that fades
    toward the destination (endpoints follow the projected travel direction). */
