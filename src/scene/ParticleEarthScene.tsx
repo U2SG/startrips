@@ -1344,11 +1344,15 @@ export function ParticleEarthScene({
 
         const remainingVertices = MAX_RENDERED_ROUTE_LINE_VERTICES
           - routeVertexCount;
+        // #15: long legs lift off the surface as a natural spatial arc
+        // (great circle + altitude hump); short legs hug the globe. The
+        // hump scales nonlinearly with angular distance and is clamped.
         const routeSegments = buildSphericalRouteSegments(
           route.points,
           1.445,
           Math.PI / 96,
           remainingVertices,
+          { arcHeightRatio: 0.22, arcSaturationAngle: Math.PI / 3 },
         );
         routeVertexCount += routeSegments.length / 3;
         routeVectorLayer.appendChild(group);

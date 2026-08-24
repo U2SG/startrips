@@ -190,6 +190,29 @@ button {
   stroke-width: calc(1.65px * var(--journey-route-scale, 1));
 }
 
+/* #15: progressive draw — the active journey's trail grows from origin to
+   destination (Tier 3 journey pacing) instead of appearing whole. The core
+   and glow share one dash reveal; the travel pulse already flows along the
+   route on its own cycle. Reduced motion shows the final state instantly. */
+.particle-earth-route.is-style-strands.is-active .particle-earth-route__core,
+.particle-earth-route.is-style-strands.is-active .particle-earth-route__glow {
+  stroke-dasharray: 1200;
+  stroke-dashoffset: 1200;
+  animation: motionRouteDraw 980ms var(--motion-ease-in-out-spatial, cubic-bezier(0.65, 0, 0.35, 1)) forwards;
+}
+
+@keyframes motionRouteDraw {
+  to { stroke-dashoffset: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .particle-earth-route.is-style-strands.is-active .particle-earth-route__core,
+  .particle-earth-route.is-style-strands.is-active .particle-earth-route__glow {
+    animation: none;
+    stroke-dashoffset: 0;
+  }
+}
+
 .particle-earth-route.is-style-strands.is-active .particle-earth-route__strand-a {
   stroke-width: calc(2.25px * var(--journey-route-scale, 1));
 }

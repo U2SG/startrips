@@ -92,6 +92,91 @@ describe("spherical route geometry", () => {
     );
     expect(positions.length / 3).toBeLessThanOrEqual(10);
   });
+
+  it("lifts long legs off the surface with a clamped altitude hump (#15)", () => {
+    const flat = buildSphericalRouteSegments(
+      [{ lat: 0, lon: 0 }, { lat: 0, lon: 60 }],
+      1,
+      Math.PI / 180,
+      4096,
+    );
+    const arced = buildSphericalRouteSegments(
+      [{ lat: 0, lon: 0 }, { lat: 0, lon: 60 }],
+      1,
+      Math.PI / 180,
+      4096,
+      { arcHeightRatio: 0.5, arcSaturationAngle: Math.PI / 3 },
+    );
+    // The arc must stay above the flat great circle somewhere in the middle.
+    let maxLift = 0;
+    for (let index = 0; index < arced.length; index += 3) {
+      const distance = new Vector3(
+        arced[index],
+        arced[index + 1],
+        arced[index + 2],
+      ).length();
+      if (distance > maxLift) maxLift = distance;
+    }
+    expect(maxLift).toBeGreaterThan(1.1);
+    // Endpoints stay on the surface (both ends of every leg touch the globe).
+    const start = new Vector3(arced[0], arced[1], arced[2]);
+    const end = new Vector3(arced.at(-3)!, arced.at(-2)!, arced.at(-1)!);
+    expect(start.length()).toBeCloseTo(1, 2);
+    expect(end.length()).toBeCloseTo(1, 2);
+    // The flat build never leaves the surface.
+    let flatMax = 0;
+    for (let index = 0; index < flat.length; index += 3) {
+      flatMax = Math.max(flatMax, new Vector3(
+        flat[index],
+        flat[index + 1],
+        flat[index + 2],
+      ).length());
+    }
+    expect(flatMax).toBeCloseTo(1, 6);
+  });
+
+  it("keeps short legs hugging the surface (hump scales nonlinearly) (#15)", () => {
+    const positions = buildSphericalRouteSegments(
+      [{ lat: 0, lon: 0 }, { lat: 0, lon: 3 }],
+      1,
+      Math.PI / 360,
+      4096,
+      { arcHeightRatio: 0.5, arcSaturationAngle: Math.PI / 3 },
+    );
+    let maxDistance = 0;
+    for (let index = 0; index < positions.length; index += 3) {
+      maxDistance = Math.max(maxDistance, new Vector3(
+        positions[index],
+        positions[index + 1],
+        positions[index + 2],
+      ).length());
+    }
+    // 3° is ~0.052 rad; sqrt(0.052/1.047) ≈ 0.223 -> lift ≈ 1 + 0.5*0.223 ≈ 1.11 max
+    expect(maxDistance).toBeGreaterThan(1.02);
+    expect(maxDistance).toBeLessThan(1.16);
+  });
+
+  it("handles the 180° antipodal case with the orthonormal fallback (#15)", () => {
+    const positions = buildSphericalRouteSegments(
+      [{ lat: 0, lon: 0 }, { lat: 0, lon: 180 }],
+      1,
+      Math.PI / 180,
+      4096,
+      { arcHeightRatio: 0.4, arcSaturationAngle: Math.PI / 3 },
+    );
+    // The path is finite, every vertex is real, and the mid-arc lifts.
+    expect(positions.length).toBeGreaterThan(0);
+    let midMax = 0;
+    for (let index = 0; index < positions.length; index += 3) {
+      const distance = new Vector3(
+        positions[index],
+        positions[index + 1],
+        positions[index + 2],
+      ).length();
+      if (Number.isFinite(distance)) midMax = Math.max(midMax, distance);
+    }
+    expect(midMax).toBeGreaterThan(1.05);
+  });
 });
 
 describe("spherical coastline geometry", () => {
