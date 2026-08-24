@@ -1329,6 +1329,22 @@
   background: #010404;
 }
 
+/* #11 two-layer stage: the incoming frame crossfades over the settled base
+   frame (180–280ms) and is released only after the switch settles, so a
+   slideshow step never flashes an empty stage. */
+.journey-story__media > img.journey-story__media-incoming,
+.journey-story__media > video.journey-story__media-incoming {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  animation: motionMediaIn 240ms var(--motion-ease-out-soft, ease) forwards;
+}
+
+@keyframes motionMediaIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
 .journey-story__empty-media,
 .journey-story__media-state {
   height: 100%;
@@ -1493,6 +1509,13 @@
 @media (prefers-reduced-motion: reduce) {
   .journey-story__media > img.is-kenburns {
     animation: none;
+  }
+
+  /* #11: reduced motion swaps frames instantly — no crossfade, no flash. */
+  .journey-story__media > img.journey-story__media-incoming,
+  .journey-story__media > video.journey-story__media-incoming {
+    animation: none;
+    opacity: 1;
   }
 }
 
