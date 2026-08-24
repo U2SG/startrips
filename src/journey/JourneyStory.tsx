@@ -52,6 +52,7 @@ import {
   decodeImageUrl,
   prefetchWindowFor,
 } from "./mediaPrefetch";
+import { createSoundtrackSampler } from "../motion/audioSampler";
 import { prefersReducedMotion } from "../motion/preferences";
 import {
   applyScopeReorder,
@@ -426,6 +427,10 @@ export function JourneyStory({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const soundtrackInputRef = useRef<HTMLInputElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
+  // #20: one sampler per soundtrack element; the analyser is built on first
+  // play and drives the light strip with smoothed energy.
+  const audioSamplerRef = useRef(createSoundtrackSampler());
+  const soundtrackLightRef = useRef<HTMLDivElement>(null);
   const deleteCancelRef = useRef<HTMLButtonElement>(null);
   const mediaDeleteCancelRef = useRef<HTMLButtonElement>(null);
   const copyRef = useRef<HTMLElement>(null);
@@ -554,6 +559,33 @@ export function JourneyStory({
     // track. The slideshow continues silently instead of reporting a failure.
     void audio.play().catch(() => undefined);
   }, [playing, soundtrackRead?.status === "ready"]);
+
+  // #20: build the analyser on first play and drive the soundtrack light
+  // strip with smoothed energy. Reduced motion keeps the strip static; a
+  // failed analyser (CORS etc.) leaves the CSS-only animation in place.
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio || !playing || !soundtrackRead || soundtrackRead.status !== "ready") return;
+    if (prefersReducedMotion()) return;
+    const sampler = audioSamplerRef.current;
+    sampler.start(audio);
+    const strip = soundtrackLightRef.current;
+    if (!sampler.isActive()) return;
+    let frame = 0;
+    const drive = () => {
+      const energy = sampler.getEnergy();
+      if (strip) {
+        strip.style.setProperty("--audio-width", String(0.4 + energy.mid * 0.6));
+        strip.style.setProperty("--audio-brightness", String(0.4 + energy.overall * 0.6));
+      }
+      frame = window.requestAnimationFrame(drive);
+    };
+    frame = window.requestAnimationFrame(drive);
+    return () => window.cancelAnimationFrame(frame);
+  }, [playing, soundtrackRead?.status === "ready"]);
+
+  // Release the analyser and AudioContext when the story closes or navigates.
+  useEffect(() => () => audioSamplerRef.current.stop(), []);
 
   useEffect(() => () => audioRef.current?.pause(), []);
 
@@ -1526,7 +1558,7 @@ export function JourneyStory({
               ) : null}
               {/* Light strip: a subtle flowing gradient while playing, static
                   otherwise; reduced motion keeps it static (#7). */}
-              <div className="journey-story__soundtrack-light" aria-hidden="true">
+              <div ref={soundtrackLightRef} className="journey-story__soundtrack-light" aria-hidden="true">
                 <span />
                 <span />
                 <span />

@@ -2324,16 +2324,18 @@
 }
 
 .journey-story__soundtrack.has-track.is-playing .journey-story__soundtrack-light span {
-  opacity: 0.85;
-  animation: motionSoundtrackFlow 6.5s var(--motion-ease-in-out-spatial, ease) infinite alternate;
+  /* #20: the analyser drives width/brightness within a small range; without
+     energy values the defaults keep the #7 look. */
+  opacity: calc(0.85 * var(--audio-brightness, 1));
+  animation: motionSoundtrackFlow calc(6.5s / var(--audio-width, 1)) var(--motion-ease-in-out-spatial, ease) infinite alternate;
 }
 
 .journey-story__soundtrack.has-track.is-playing .journey-story__soundtrack-light span:nth-child(2) {
-  animation-duration: 7.6s;
+  animation-duration: calc(7.6s / var(--audio-width, 1));
 }
 
 .journey-story__soundtrack.has-track.is-playing .journey-story__soundtrack-light span:nth-child(3) {
-  animation-duration: 8.8s;
+  animation-duration: calc(8.8s / var(--audio-width, 1));
 }
 
 @keyframes motionSoundtrackFlow {

@@ -22,6 +22,8 @@ import {
 import { useJourneyPlaybackDirector } from "./useJourneyPlaybackDirector";
 import { playbackMediaForPoint, type PlaybackStep } from "./journeyPlayback";
 import { journeySoundtrack, stripMediaExtension } from "./journeyModel";
+import { createSoundtrackSampler } from "../motion/audioSampler";
+import { prefersReducedMotion } from "../motion/preferences";
 import type { Journey, JourneyMediaAsset } from "./types";
 
 type MediaRead =
@@ -54,6 +56,9 @@ export function JourneyPlaybackOverlay({
   const [mediaReads, setMediaReads] = useState<Record<string, MediaRead>>({});
   const decodeRegistryRef = useRef(createDecodeRegistry(decodeImageUrl));
   const audioRef = useRef<HTMLAudioElement>(null);
+  // #20: one sampler per soundtrack element; analyser built on first play.
+  const samplerRef = useRef(createSoundtrackSampler());
+  const lightStripRef = useRef<HTMLDivElement>(null);
   const [controlsHidden, setControlsHidden] = useState(false);
   const pendingReads = useRef(new Set<string>());
 
@@ -123,6 +128,39 @@ export function JourneyPlaybackOverlay({
     }
     void audio.play().catch(() => undefined);
   }, [paused, director.isPlaying, soundtrackRead?.status === "ready"]);
+
+  // #20: on first real play, build the analyser and drive the light strip /
+  // atmosphere from smoothed low/mid energy. Under reduced motion the strip
+  // stays static. If the analyser cannot be built (CORS etc.), playback
+  // continues and the CSS-only playing animation remains.
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio || !soundtrackRead || soundtrackRead.status !== "ready") return;
+    if (!director.isPlaying || paused) return;
+    const reduced = prefersReducedMotion();
+    if (reduced) return;
+    const sampler = samplerRef.current;
+    sampler.start(audio);
+    const strip = lightStripRef.current;
+    if (!sampler.isActive()) return;
+    let frame = 0;
+    const drive = () => {
+      const energy = sampler.getEnergy();
+      if (strip) {
+        // Clamp to a small visual range: glow width 0.4..1, brightness 0.4..1.
+        strip.style.setProperty("--audio-width", String(0.4 + energy.mid * 0.6));
+        strip.style.setProperty("--audio-brightness", String(0.4 + energy.overall * 0.6));
+      }
+      frame = window.requestAnimationFrame(drive);
+    };
+    frame = window.requestAnimationFrame(drive);
+    return () => window.cancelAnimationFrame(frame);
+  }, [director.isPlaying, paused, soundtrackRead?.status === "ready"]);
+
+  // Release the analyser and AudioContext when playback closes.
+  useEffect(() => {
+    return () => samplerRef.current.stop();
+  }, []);
 
   useEffect(() => () => audioRef.current?.pause(), []);
 
@@ -275,7 +313,7 @@ export function JourneyPlaybackOverlay({
       {/* ── Soundtrack light strip (hidden engine; follows playing) ─────── */}
       {soundtrack && soundtrackRead?.status === "ready" ? (
         <div className={`journey-playback__soundtrack${director.isPlaying ? " is-playing" : ""}`} aria-hidden="true">
-          <div className="journey-playback__soundtrack-light"><span /><span /><span /></div>
+          <div ref={lightStripRef} className="journey-playback__soundtrack-light"><span /><span /><span /></div>
           <small>{stripMediaExtension(soundtrack.fileName)}</small>
         </div>
       ) : null}

@@ -216,6 +216,9 @@
   background: rgba(118, 198, 188, 0.12);
 }
 
+/* #20: the analyser drives the strip width/brightness via custom properties
+   (clamped to a small visual range); the CSS flow animation keeps running on
+   top. Without energy values the defaults keep the #7 look. */
 .journey-playback__soundtrack-light span {
   position: absolute;
   inset: 0;
@@ -228,16 +231,16 @@
 }
 
 .journey-playback__soundtrack.is-playing .journey-playback__soundtrack-light span {
-  opacity: 0.9;
-  animation: motionPlaybackLight 3.2s var(--motion-ease-in-out-spatial, ease) infinite alternate;
+  opacity: calc(0.9 * var(--audio-brightness, 1));
+  animation: motionPlaybackLight calc(3.2s / var(--audio-width, 1)) var(--motion-ease-in-out-spatial, ease) infinite alternate;
 }
 
 .journey-playback__soundtrack.is-playing .journey-playback__soundtrack-light span:nth-child(2) {
-  animation-duration: 4.1s;
+  animation-duration: calc(4.1s / var(--audio-width, 1));
 }
 
 .journey-playback__soundtrack.is-playing .journey-playback__soundtrack-light span:nth-child(3) {
-  animation-duration: 5.2s;
+  animation-duration: calc(5.2s / var(--audio-width, 1));
 }
 
 @keyframes motionPlaybackLight {
