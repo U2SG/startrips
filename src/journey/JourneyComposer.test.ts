@@ -245,4 +245,24 @@ describe("persistJourneyDraft", () => {
     expect(markup).toContain("1 个已有媒体");
     expect(markup).toContain("保存修改");
   });
+
+  it("counts only photos and videos as existing composer media", () => {
+    const scored = {
+      ...journey,
+      media: [
+        { id: "media-1", mimeType: "image/jpeg" },
+        { id: "media-2", mimeType: "audio/mpeg" },
+      ],
+    } as Journey;
+
+    const markup = renderToStaticMarkup(createElement(JourneyComposer, {
+      open: true,
+      journey: scored,
+      onClose: () => undefined,
+      onSaved: () => undefined,
+    }));
+
+    expect(markup).toContain("1 个已有媒体");
+    expect(markup).not.toContain("2 个已有媒体");
+  });
 });

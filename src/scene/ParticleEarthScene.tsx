@@ -70,7 +70,7 @@ export const GLOBE_ZOOM_MIN = 0.72;
 export const GLOBE_ZOOM_MAX = 3.0;
 export const GLOBE_SURFACE_RADIUS = 1.39;
 export const GLOBE_IDLE_ROTATION_RADIANS_PER_SECOND = (Math.PI * 2) / 180;
-export const GLOBE_IDLE_RESUME_DELAY_MS = 1_800;
+export const GLOBE_IDLE_RESUME_DELAY_MS = 10_000;
 
 const GLOBE_DRAG_RADIANS_PER_PIXEL = 0.005;
 const GLOBE_MAX_ROTATION_SPEED = 4.2;
@@ -250,6 +250,89 @@ export function buildProjectedRoutePath(
   }
 
   return commands.join("");
+}
+
+export type JourneyConnectorRect = {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+};
+
+// The active journey card is docked to the right on wide layouts and becomes a
+// bottom sheet on compact ones, so the connector leaves from a different edge.
+export function journeyConnectorAnchor(
+  card: JourneyConnectorRect,
+  compact: boolean,
+) {
+  return compact
+    ? { x: (card.left + card.right) / 2, y: card.top }
+    : { x: card.left, y: (card.top + card.bottom) / 2 };
+}
+
+function connectorCoordinate(value: number) {
+  return Number(value.toFixed(1));
+}
+
+export function buildJourneyConnectorPath(
+  anchor: { x: number; y: number },
+  point: { x: number; y: number },
+  compact: boolean,
+) {
+  const anchorX = connectorCoordinate(anchor.x);
+  const anchorY = connectorCoordinate(anchor.y);
+  const pointX = connectorCoordinate(point.x);
+  const pointY = connectorCoordinate(point.y);
+  // Too little room for an elbow reads as a kink, so stay straight instead.
+  if (Math.abs(pointX - anchorX) < 14 || Math.abs(pointY - anchorY) < 14) {
+    return `M${anchorX} ${anchorY}L${pointX} ${pointY}`;
+  }
+  if (compact) {
+    const bendY = connectorCoordinate(anchor.y + (point.y - anchor.y) * 0.45);
+    return `M${anchorX} ${anchorY}V${bendY}H${pointX}V${pointY}`;
+  }
+  const bendX = connectorCoordinate(anchor.x + (point.x - anchor.x) * 0.45);
+  return `M${anchorX} ${anchorY}H${bendX}V${pointY}H${pointX}`;
+}
+
+// Returns an empty path whenever the line cannot truthfully connect the card to
+// the geographic point, so the scene never shows a decorative stub.
+export function buildJourneyConnector({
+  card,
+  point,
+  scene,
+  compact,
+  padding = 8,
+}: {
+  card: JourneyConnectorRect | null;
+  point: { x: number; y: number } | null;
+  scene: { width: number; height: number };
+  compact: boolean;
+  padding?: number;
+}) {
+  if (!card || !point) return "";
+  if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) return "";
+  if (
+    point.x < 0
+    || point.y < 0
+    || point.x > scene.width
+    || point.y > scene.height
+  ) {
+    return "";
+  }
+  if (
+    point.x >= card.left - padding
+    && point.x <= card.right + padding
+    && point.y >= card.top - padding
+    && point.y <= card.bottom + padding
+  ) {
+    return "";
+  }
+  return buildJourneyConnectorPath(
+    journeyConnectorAnchor(card, compact),
+    point,
+    compact,
+  );
 }
 
 type ProjectedRouteLabelBox = {
@@ -938,9 +1021,21 @@ export function ParticleEarthScene({
     const routeLocalPoint = new Vector3();
     const routeScreenPoint = new Vector3();
     const routeProjectedPoint = { x: 0, y: 0 };
-    const lastRouteProjectionState = new Float64Array(9).fill(Number.NaN);
+    // The last four slots carry the active card's bounds so a still globe still
+    // redraws the connector when the card moves or the layout changes.
+    const lastRouteProjectionState = new Float64Array(14).fill(Number.NaN);
     let routeProjectionRevision = 0;
     let renderedRouteProjectionRevision = -1;
+    const journeyConnectorPath = document.createElementNS(
+      "http://www.w3.org/2000/svg",
+      "path",
+    );
+    journeyConnectorPath.classList.add("particle-earth-journey-connector");
+    journeyConnectorPath.setAttribute("aria-hidden", "true");
+    journeyConnectorPath.setAttribute("fill", "none");
+    let journeyConnectorCard: HTMLElement | null = null;
+    let journeyConnectorCardRect: JourneyConnectorRect | null = null;
+    let journeyConnectorSampledAt = 0;
     let journeyPointTargets: Array<{ journeyId: string; routePointId?: string }> = [];
     const routeLabelSafeArea = {
       left: 16,
@@ -1248,6 +1343,9 @@ export function ParticleEarthScene({
       host.dataset.journeyRouteLabelCount = String(routeLabelCount);
       host.dataset.journeyRouteOverflow = String(routes.length - visibleRoutes.length);
       host.dataset.routeStyle = "strands";
+      // Rebuilding the layer clears its children, so the connector is put back
+      // last and therefore stays above the route strands.
+      routeVectorLayer.appendChild(journeyConnectorPath);
       updateRouteLabelSafeArea();
     };
 
@@ -1319,8 +1417,74 @@ export function ParticleEarthScene({
       routeProjectionRevision += 1;
     }).catch(() => undefined);
 
+    // Reading the card's box is a layout read, so it is sampled at 10 Hz while
+    // the globe is still and refreshed immediately whenever projection changes.
+    const sampleJourneyConnectorCard = (force: boolean) => {
+      const now = performance.now();
+      if (!force && now - journeyConnectorSampledAt < 100) return;
+      journeyConnectorSampledAt = now;
+      if (!journeyConnectorCard?.isConnected) {
+        journeyConnectorCard = document.querySelector<HTMLElement>(
+          ".living-atlas__active",
+        );
+      }
+      if (!journeyConnectorCard) {
+        journeyConnectorCardRect = null;
+        return;
+      }
+      const hostBounds = host.getBoundingClientRect();
+      const cardBounds = journeyConnectorCard.getBoundingClientRect();
+      journeyConnectorCardRect = {
+        left: cardBounds.left - hostBounds.left,
+        top: cardBounds.top - hostBounds.top,
+        right: cardBounds.right - hostBounds.left,
+        bottom: cardBounds.bottom - hostBounds.top,
+      };
+    };
+
+    const updateJourneyConnector = () => {
+      let path = "";
+      if (journeyConnectorCardRect && latestFocusPoint.current) {
+        const focusAttribute = personalGeometry.getAttribute(
+          "position",
+        ) as BufferAttribute;
+        const visible = projectRoutePoint(
+          focusAttribute.getX(0),
+          focusAttribute.getY(0),
+          focusAttribute.getZ(0),
+          routeProjectedPoint,
+        );
+        if (visible) {
+          path = buildJourneyConnector({
+            card: journeyConnectorCardRect,
+            point: routeProjectedPoint,
+            scene: { width: targetSize.x, height: targetSize.y },
+            compact: window.innerWidth <= 760,
+          });
+        }
+      }
+      journeyConnectorPath.setAttribute("d", path);
+      if (path) {
+        journeyConnectorPath.style.removeProperty("display");
+        journeyConnectorPath.setAttribute(
+          "stroke",
+          `#${personalMaterial.uniforms.uColor.value.getHexString()}`,
+        );
+        host.dataset.journeyConnector = "on";
+        host.dataset.journeyConnectorEndX = routeProjectedPoint.x.toFixed(1);
+        host.dataset.journeyConnectorEndY = routeProjectedPoint.y.toFixed(1);
+      } else {
+        journeyConnectorPath.style.display = "none";
+        host.dataset.journeyConnector = "off";
+        delete host.dataset.journeyConnectorEndX;
+        delete host.dataset.journeyConnectorEndY;
+      }
+    };
+
     const updateRouteVectorLayer = () => {
       if (routeVectorOpacity <= 0.01) return;
+      sampleJourneyConnectorCard(false);
+      const cardRect = journeyConnectorCardRect;
       const projectionState = [
         globe.position.x,
         globe.position.y,
@@ -1331,6 +1495,11 @@ export function ParticleEarthScene({
         targetSize.y,
         camera.aspect,
         window.innerWidth,
+        cardRect ? 1 : 0,
+        cardRect?.left ?? 0,
+        cardRect?.top ?? 0,
+        cardRect?.right ?? 0,
+        cardRect?.bottom ?? 0,
       ];
       const projectionChanged = projectionState.some((value, index) => (
         Math.abs(value - lastRouteProjectionState[index]) > 0.00001
@@ -1616,6 +1785,8 @@ export function ParticleEarthScene({
         }
         host.dataset.journeyCityLabelCount = String(visibleCityCount);
       }
+
+      updateJourneyConnector();
     };
 
     const personalRaycaster = new Raycaster();
@@ -1931,6 +2102,10 @@ export function ParticleEarthScene({
         `0 0 ${targetSize.x} ${targetSize.y}`,
       );
       updateRouteLabelSafeArea();
+      // A layout change moves the card as well as the scene, so the connector
+      // is re-measured and redrawn on the same frame.
+      sampleJourneyConnectorCard(true);
+      routeProjectionRevision += 1;
       camera.aspect = targetSize.x / targetSize.y;
       camera.updateProjectionMatrix();
       particleMaterial.uniforms.uViewportHeight.value = targetSize.y;
@@ -2134,10 +2309,14 @@ export function ParticleEarthScene({
         }
         centeredFocusKey = nextFocusKey;
         applyFocusPoint(point);
+        // Two journeys can share a rotation target, so the connector cannot
+        // rely on the globe transform alone to notice a new focus point.
+        routeProjectionRevision += 1;
       },
       setFocusColor(color: string | undefined) {
         personalMaterial.uniforms.uColor.value.set(color ?? 0xffdc72);
         host.dataset.focusColor = `#${personalMaterial.uniforms.uColor.value.getHexString()}`;
+        routeProjectionRevision += 1;
       },
       setJourneyRoutes(
         routes: readonly JourneyRoute[],

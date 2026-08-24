@@ -70,6 +70,15 @@ button {
   --journey-route-scale: 1;
 }
 
+/* The active journey card is tied to its real projected location. The path is
+   drawn only when that connection is truthful, so it needs no fallback. */
+.particle-earth-journey-connector {
+  fill: none;
+  stroke-width: 1px;
+  opacity: 0.55;
+  pointer-events: none;
+}
+
 .particle-earth-route__glow,
 .particle-earth-route__core {
   fill: none;

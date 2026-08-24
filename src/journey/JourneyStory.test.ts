@@ -1,12 +1,13 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   JourneyStory,
   journeyDeleteDescription,
   mediaForRoutePoint,
+  replaceJourneySoundtrack,
 } from "./JourneyStory";
-import type { Journey } from "./types";
+import type { Journey, JourneyMediaAsset } from "./types";
 
 const journey: Journey = {
   id: "journey-1",
@@ -23,6 +24,183 @@ const journey: Journey = {
   routePoints: [],
   media: [],
 };
+
+function asset(
+  id: string,
+  mimeType: string,
+  sortOrder: number,
+  fileName = `${id}.bin`,
+): JourneyMediaAsset {
+  return {
+    id,
+    journeyId: journey.id,
+    routePointId: null,
+    storageDriver: "test",
+    storageKey: `journey-1/${id}`,
+    fileName,
+    mimeType,
+    bytes: 128,
+    sortOrder,
+    uploadedByUserId: "user-1",
+    createdAt: journey.createdAt,
+  };
+}
+
+describe("replaceJourneySoundtrack", () => {
+  const file = { name: "night.mp3", size: 64, type: "audio/mpeg" } as File;
+
+  it("uploads and confirms the new track before removing the old one", async () => {
+    const calls: string[] = [];
+    const previous = asset("old-track", "audio/mpeg", 0, "old.mp3");
+    const upload = vi.fn(async () => {
+      calls.push("upload");
+      return { uploadedCount: 1, mediaErrors: [], assets: [] };
+    });
+    const refresh = vi.fn(async () => {
+      calls.push("refresh");
+      return journey;
+    });
+    const remove = vi.fn(async () => {
+      calls.push("remove");
+    });
+
+    const result = await replaceJourneySoundtrack({
+      journeyId: journey.id,
+      file,
+      previous,
+      upload: upload as never,
+      refresh,
+      remove,
+    });
+
+    expect(calls).toEqual(["upload", "refresh", "remove", "refresh"]);
+    expect(remove).toHaveBeenCalledWith("old-track");
+    expect(result).toMatchObject({
+      uploaded: true,
+      refreshFailed: false,
+      cleanupFailed: false,
+    });
+  });
+
+  it("keeps the track when replacing it with the exact same file", async () => {
+    // Soundtracks are always small enough to be content hashed, so the server
+    // deduplicates this upload to the asset that is already active.
+    const previous = asset("old-track", "audio/mpeg", 0, "night.mp3");
+    const remove = vi.fn();
+    const result = await replaceJourneySoundtrack({
+      journeyId: journey.id,
+      file,
+      previous,
+      upload: (async () => ({
+        uploadedCount: 1,
+        mediaErrors: [],
+        assets: [{
+          id: previous.id,
+          journeyId: journey.id,
+          routePointId: null,
+          storageDriver: "test",
+          storageKey: "journey-1/old-track",
+          fileName: "night.mp3",
+          mimeType: "audio/mpeg",
+          bytes: 64,
+        }],
+      })) as never,
+      refresh: async () => journey,
+      remove,
+    });
+
+    expect(remove).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      uploaded: true,
+      unchanged: true,
+      cleanupFailed: false,
+    });
+  });
+
+  it("still replaces when the upload resolves to a different asset", async () => {
+    const previous = asset("old-track", "audio/mpeg", 0, "old.mp3");
+    const remove = vi.fn();
+    const result = await replaceJourneySoundtrack({
+      journeyId: journey.id,
+      file,
+      previous,
+      upload: (async () => ({
+        uploadedCount: 1,
+        mediaErrors: [],
+        assets: [{
+          id: "new-track",
+          journeyId: journey.id,
+          routePointId: null,
+          storageDriver: "test",
+          storageKey: "journey-1/new-track",
+          fileName: "night.mp3",
+          mimeType: "audio/mpeg",
+          bytes: 64,
+        }],
+      })) as never,
+      refresh: async () => journey,
+      remove,
+    });
+
+    expect(remove).toHaveBeenCalledWith("old-track");
+    expect(result).toMatchObject({ uploaded: true, unchanged: false });
+  });
+
+  it("keeps the previous track when the new upload fails", async () => {
+    const remove = vi.fn();
+    const refresh = vi.fn();
+    const result = await replaceJourneySoundtrack({
+      journeyId: journey.id,
+      file,
+      previous: asset("old-track", "audio/mpeg", 0, "old.mp3"),
+      upload: (async () => ({
+        uploadedCount: 0,
+        mediaErrors: [{ fileIndex: 0, fileName: "night.mp3", message: "storage unavailable" }],
+        assets: [],
+      })) as never,
+      refresh,
+      remove,
+    });
+
+    expect(remove).not.toHaveBeenCalled();
+    expect(refresh).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      uploaded: false,
+      uploadError: "storage unavailable",
+    });
+  });
+
+  it("reports a failed cleanup without discarding the new track", async () => {
+    const result = await replaceJourneySoundtrack({
+      journeyId: journey.id,
+      file,
+      previous: asset("old-track", "audio/mpeg", 0, "old.mp3"),
+      upload: (async () => ({ uploadedCount: 1, mediaErrors: [], assets: [] })) as never,
+      refresh: async () => journey,
+      remove: async () => {
+        throw new Error("delete failed");
+      },
+    });
+
+    expect(result).toMatchObject({ uploaded: true, cleanupFailed: true });
+  });
+
+  it("skips removal for a journey that had no soundtrack", async () => {
+    const remove = vi.fn();
+    const result = await replaceJourneySoundtrack({
+      journeyId: journey.id,
+      file,
+      previous: null,
+      upload: (async () => ({ uploadedCount: 1, mediaErrors: [], assets: [] })) as never,
+      refresh: async () => null,
+      remove,
+    });
+
+    expect(remove).not.toHaveBeenCalled();
+    // A refresh that returns nothing is reported, not silently swallowed.
+    expect(result).toMatchObject({ uploaded: true, refreshFailed: true });
+  });
+});
 
 describe("JourneyStory", () => {
   it("exposes explicit exit and append-media actions in the story dialog", () => {
@@ -159,6 +337,103 @@ describe("JourneyStory", () => {
     expect(markup).toContain('aria-label="自动播放照片"');
     expect(markup).toContain('aria-pressed="false"');
     expect(markup).not.toContain('aria-label="全屏查看媒体"');
+  });
+
+  it("offers a direct-access overview only once a scope holds several photos", () => {
+    const single = renderToStaticMarkup(createElement(JourneyStory, {
+      journeys: [{ ...journey, media: [asset("media-1", "image/jpeg", 0)] }],
+      journeyId: journey.id,
+      onClose: () => undefined,
+      onNavigate: () => undefined,
+      onEdit: () => undefined,
+      onMediaAdded: () => null,
+    }));
+    expect(single).not.toContain("全部照片");
+
+    const many: Journey = {
+      ...journey,
+      media: [
+        asset("media-1", "image/jpeg", 0),
+        asset("media-2", "image/jpeg", 1),
+        asset("media-3", "video/mp4", 2),
+      ],
+    };
+    const markup = renderToStaticMarkup(createElement(JourneyStory, {
+      journeys: [many],
+      journeyId: journey.id,
+      onClose: () => undefined,
+      onNavigate: () => undefined,
+      onEdit: () => undefined,
+      onMediaAdded: () => null,
+    }));
+    expect(markup).toContain("全部照片");
+    expect(markup).toContain('aria-pressed="false"');
+    // The grid itself only appears once the overview is opened.
+    expect(markup).not.toContain("journey-story__media-grid");
+    expect(markup).toContain("3 个媒体片段");
+  });
+
+  it("keeps a soundtrack out of the photo counts and shows it as audio", () => {
+    const scored: Journey = {
+      ...journey,
+      media: [
+        asset("media-1", "image/jpeg", 0),
+        asset("media-2", "image/jpeg", 1),
+        asset("track", "audio/mpeg", 2, "night-route.mp3"),
+      ],
+    };
+    const markup = renderToStaticMarkup(createElement(JourneyStory, {
+      journeys: [scored],
+      journeyId: journey.id,
+      onClose: () => undefined,
+      onNavigate: () => undefined,
+      onEdit: () => undefined,
+      onMediaAdded: () => null,
+    }));
+
+    expect(markup).toContain("JOURNEY SOUNDTRACK");
+    expect(markup).toContain("night-route.mp3");
+    expect(markup).toContain("替换配乐");
+    expect(markup).toContain("移除配乐");
+    // Two photos, not three assets.
+    expect(markup).toContain("2 个媒体片段");
+  });
+
+  it("keeps a soundtrack-only journey silent and free of a broken cover", () => {
+    const soundtrackOnly: Journey = {
+      ...journey,
+      media: [asset("track", "audio/mpeg", 0, "night-route.mp3")],
+    };
+    const markup = renderToStaticMarkup(createElement(JourneyStory, {
+      journeys: [soundtrackOnly],
+      journeyId: journey.id,
+      onClose: () => undefined,
+      onNavigate: () => undefined,
+      onEdit: () => undefined,
+      onMediaAdded: () => null,
+    }));
+
+    expect(markup).toContain("整段旅程还没有媒体");
+    expect(markup).toContain("night-route.mp3");
+    expect(markup).not.toContain("全部照片");
+    expect(markup).not.toContain('aria-label="删除这段媒体"');
+    expect(markup).not.toContain('aria-label="向前调整媒体顺序"');
+  });
+
+  it("plays the slideshow silently when a journey has no soundtrack", () => {
+    const markup = renderToStaticMarkup(createElement(JourneyStory, {
+      journeys: [journey],
+      journeyId: journey.id,
+      onClose: () => undefined,
+      onNavigate: () => undefined,
+      onEdit: () => undefined,
+      onMediaAdded: () => null,
+    }));
+
+    expect(markup).toContain("还没有配乐，幻灯片会安静播放");
+    expect(markup).toContain("上传配乐");
+    expect(markup).not.toContain("<audio");
+    expect(markup).not.toContain("移除配乐");
   });
 
   it("hides permanent deletion when the current member lacks permission", () => {

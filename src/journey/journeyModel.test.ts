@@ -1,12 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
   groupJourneysByYear,
+  isSoundtrackAsset,
+  isVisualMediaAsset,
+  journeySoundtrack,
+  journeyVisualMedia,
   sortJourneysChronologically,
   toJourneyRoutes,
   validateJourneyFiles,
   validateJourneyInput,
+  validateJourneySoundtrack,
 } from "./journeyModel";
-import type { Journey, JourneyInput } from "./types";
+import type { Journey, JourneyInput, JourneyMediaAsset } from "./types";
 
 function input(overrides: Partial<JourneyInput> = {}): JourneyInput {
   return {
@@ -109,6 +114,79 @@ describe("journeyModel", () => {
     expect(validateJourneyInput(input({ lightEffect: "nebula" })).accepted).toBe(true);
     expect(validateJourneyInput(input({ lightEffect: "static-glitch" as never })).accepted)
       .toBe(false);
+  });
+
+  it("separates visual media from soundtracks and keeps the newest track", () => {
+    const asset = (
+      id: string,
+      mimeType: string,
+      sortOrder: number,
+    ): JourneyMediaAsset => ({
+      id,
+      journeyId: "journey-1",
+      routePointId: null,
+      storageDriver: "test",
+      storageKey: `journey-1/${id}`,
+      fileName: id,
+      mimeType,
+      bytes: 128,
+      sortOrder,
+      uploadedByUserId: "user-1",
+      createdAt: "2026-08-11T00:00:00.000Z",
+    });
+    const mixed = {
+      ...journey("mixed", "2026-08-11"),
+      media: [
+        asset("photo.jpg", "image/jpeg", 0),
+        asset("old-track.mp3", "audio/mpeg", 1),
+        asset("clip.mp4", "video/mp4", 2),
+        asset("new-track.m4a", "audio/mp4", 3),
+      ],
+    };
+
+    expect(isSoundtrackAsset(asset("t", "audio/ogg", 0))).toBe(true);
+    expect(isVisualMediaAsset(asset("p", "image/png", 0))).toBe(true);
+    expect(isVisualMediaAsset(asset("t", "audio/wav", 0))).toBe(false);
+    expect(journeyVisualMedia(mixed).map((item) => item.id))
+      .toEqual(["photo.jpg", "clip.mp4"]);
+    expect(journeySoundtrack(mixed)?.id).toBe("new-track.m4a");
+    expect(journeySoundtrack(journey("silent", "2026-08-11"))).toBeNull();
+  });
+
+  it("accepts one supported soundtrack and rejects the rest", () => {
+    expect(validateJourneySoundtrack([
+      { name: "night.mp3", type: "audio/mpeg", size: 4_000_000 },
+    ])).toEqual({ accepted: true, errors: [] });
+    for (const type of ["audio/mp4", "audio/x-m4a", "audio/aac", "audio/ogg", "audio/wav"]) {
+      expect(validateJourneySoundtrack([{ name: `track`, type, size: 10 }]).accepted)
+        .toBe(true);
+    }
+    expect(validateJourneySoundtrack([]).accepted).toBe(false);
+    expect(validateJourneySoundtrack([
+      { name: "a.mp3", type: "audio/mpeg", size: 10 },
+      { name: "b.mp3", type: "audio/mpeg", size: 10 },
+    ]).accepted).toBe(false);
+    expect(validateJourneySoundtrack([
+      { name: "clip.mp4", type: "video/mp4", size: 10 },
+    ]).accepted).toBe(false);
+    expect(validateJourneySoundtrack([
+      { name: "empty.mp3", type: "audio/mpeg", size: 0 },
+    ]).accepted).toBe(false);
+  });
+
+  it("holds the soundtrack size boundary at exactly 100 MB", () => {
+    expect(validateJourneySoundtrack([
+      { name: "edge.mp3", type: "audio/mpeg", size: 100 * 1024 * 1024 },
+    ]).accepted).toBe(true);
+    expect(validateJourneySoundtrack([
+      { name: "over.mp3", type: "audio/mpeg", size: 100 * 1024 * 1024 + 1 },
+    ]).accepted).toBe(false);
+  });
+
+  it("keeps audio out of route point media validation", () => {
+    expect(validateJourneyFiles([
+      { name: "night.mp3", type: "audio/mpeg", size: 10 },
+    ]).accepted).toBe(false);
   });
 
   it("accepts any media count while rejecting invalid files", () => {

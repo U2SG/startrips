@@ -1,18 +1,8 @@
 import { lazy, Suspense, useEffect, useState } from "react";
-import { IconMap2, IconMapPin, IconSparkles, IconWorld } from "@tabler/icons-react";
+import { IconMap2, IconMapPin, IconWorld } from "@tabler/icons-react";
 import type { JourneyRoute } from "../journey/types";
 import type { DetailedEarthLanguage } from "./detailedEarthModel";
 import { ParticleEarthScene } from "./ParticleEarthScene";
-
-const AMBIENCE_STORAGE_KEY = "startrips.ambience";
-
-function preferredAmbience(): boolean {
-  try {
-    return window.localStorage.getItem(AMBIENCE_STORAGE_KEY) === "on";
-  } catch {
-    return false;
-  }
-}
 
 const loadDetailedEarthMap = () => import("./DetailedEarthMap");
 const DetailedEarthMap = lazy(loadDetailedEarthMap);
@@ -49,15 +39,6 @@ export function LivingAtlasGlobe({
   const [targetReady, setTargetReady] = useState(false);
   const [transitionError, setTransitionError] = useState<string | null>(null);
   const [detailLanguage, setDetailLanguage] = useState<DetailedEarthLanguage>("zh");
-  const [ambience, setAmbience] = useState(preferredAmbience);
-
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(AMBIENCE_STORAGE_KEY, ambience ? "on" : "off");
-    } catch {
-      // Storage can be unavailable; the choice just won't persist.
-    }
-  }, [ambience]);
 
   useEffect(() => {
     const preloadTimer = window.setTimeout(() => void loadDetailedEarthMap(), 350);
@@ -111,16 +92,16 @@ export function LivingAtlasGlobe({
     <section
       className={`living-atlas-globe${detailMode ? " is-detail" : " is-overview"}${transitionClasses}`}
       data-earth-mode={detailMode ? "detail" : "particle"}
-      data-ambience={ambience ? "on" : "off"}
+      data-ambience="on"
       aria-label={detailMode ? "高精度地球地图" : "粒子艺术地球"}
     >
-      {ambience ? (
-        <div className="living-atlas-ambience" aria-hidden="true">
-          <span className="living-atlas-ambience__blob living-atlas-ambience__blob-a" />
-          <span className="living-atlas-ambience__blob living-atlas-ambience__blob-b" />
-          <span className="living-atlas-ambience__blob living-atlas-ambience__blob-c" />
-        </div>
-      ) : null}
+      {/* The aurora field is part of the atlas, not a user preference: it is
+          always rendered and only its animation answers to reduced motion. */}
+      <div className="living-atlas-ambience" aria-hidden="true">
+        <span className="living-atlas-ambience__blob living-atlas-ambience__blob-a" />
+        <span className="living-atlas-ambience__blob living-atlas-ambience__blob-b" />
+        <span className="living-atlas-ambience__blob living-atlas-ambience__blob-c" />
+      </div>
       {showParticle ? (
         <div
           className="living-atlas-globe__layer living-atlas-globe__particle-layer"
@@ -230,20 +211,6 @@ export function LivingAtlasGlobe({
           </button>
         ) : null}
       </div>
-
-      {!detailMode && !transitionTarget ? (
-        <button
-          type="button"
-          className={`living-atlas-globe__ambience${ambience ? " is-active" : ""}`}
-          aria-label={ambience ? "关闭氛围效果" : "开启氛围效果"}
-          aria-pressed={ambience}
-          title={ambience ? "关闭氛围效果" : "开启氛围效果"}
-          data-ambience-toggle
-          onClick={() => setAmbience((current) => !current)}
-        >
-          <IconSparkles size={18} stroke={1.35} aria-hidden="true" />
-        </button>
-      ) : null}
 
       <div className="living-atlas-globe__mode-note" aria-hidden="true">
         {transitionTarget

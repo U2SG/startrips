@@ -267,51 +267,6 @@
   color: var(--atlas-acid);
 }
 
-.living-atlas-globe__ambience {
-  position: absolute;
-  z-index: 8;
-  top: 82px;
-  right: 40px;
-  width: 44px;
-  height: 44px;
-  display: grid;
-  place-items: center;
-  padding: 0;
-  border: 1px solid rgba(118, 198, 188, 0.24);
-  border-radius: 50%;
-  background: rgba(2, 11, 12, 0.82);
-  backdrop-filter: blur(12px);
-  color: var(--atlas-muted);
-  cursor: pointer;
-  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.22);
-  transition:
-    color var(--motion-micro) ease,
-    border-color var(--motion-micro) ease,
-    background-color var(--motion-micro) ease,
-    transform var(--motion-micro) var(--motion-ease-out);
-}
-
-.living-atlas-globe__ambience:hover,
-.living-atlas-globe__ambience:focus-visible {
-  color: var(--atlas-text);
-  border-color: rgba(118, 227, 211, 0.52);
-  transform: translateY(-1px);
-}
-
-.living-atlas-globe__ambience.is-active {
-  border-color: rgba(200, 255, 61, 0.4);
-  background: rgba(200, 255, 61, 0.08);
-  color: var(--atlas-acid);
-}
-
-.living-atlas-globe__ambience.is-active > svg {
-  transform: rotate(12deg) scale(1.06);
-}
-
-.living-atlas-globe__ambience > svg {
-  transition: transform var(--motion-micro) var(--motion-ease-out);
-}
-
 /* ML-11 Ambience: a soft aurora field behind the transparent particle
    globe. Blobs are GPU-composited transforms, never layout. */
 .living-atlas-ambience {
@@ -661,16 +616,6 @@
   background: rgba(3, 12, 13, 0.88);
   box-shadow: 0 30px 90px rgba(0, 0, 0, 0.34), inset 0 0 52px rgba(118, 227, 211, 0.025);
   backdrop-filter: blur(22px);
-}
-
-.living-atlas__active::before {
-  content: "";
-  position: absolute;
-  top: 164px;
-  left: -78px;
-  width: 78px;
-  height: 1px;
-  background: var(--journey-color);
 }
 
 /* ML-12 Border Glow: a soft arc of journey-colored light rotates around the
@@ -1297,9 +1242,27 @@
 }
 
 .journey-story__layout {
+  /* Rows are pinned so the wait notice can share this row as an overlay
+     instead of adding a track to the dialog. */
+  grid-row: 2;
+  grid-column: 1;
   min-height: 0;
   display: grid;
   grid-template-columns: minmax(0, 1.6fr) minmax(310px, 0.72fr);
+}
+
+.journey-story__close-blocked {
+  grid-row: 2;
+  grid-column: 1;
+  z-index: 4;
+  align-self: start;
+  margin: 0;
+  padding: 11px 22px;
+  border-bottom: 1px solid var(--atlas-line);
+  background: rgba(1, 7, 8, 0.96);
+  color: var(--atlas-muted);
+  font-size: 10px;
+  letter-spacing: 0.06em;
 }
 
 .journey-story__media {
@@ -1333,6 +1296,108 @@
 
 .journey-story__media-state.is-error {
   color: #c28e78;
+}
+
+.journey-story__media-overview {
+  position: absolute;
+  z-index: 2;
+  top: 16px;
+  left: 16px;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 14px;
+  border: 1px solid var(--atlas-line);
+  background: rgba(2, 8, 8, 0.82);
+  color: #d6e0dd;
+  cursor: pointer;
+  font-size: 10px;
+  letter-spacing: 0.09em;
+}
+
+.journey-story__media-overview:hover,
+.journey-story__media-overview:focus-visible {
+  border-color: rgba(200, 255, 61, 0.5);
+}
+
+.journey-story__media-overview.is-active {
+  color: var(--atlas-acid);
+  border-color: rgba(200, 255, 61, 0.5);
+}
+
+.journey-story__media-grid {
+  height: 100%;
+  margin: 0;
+  padding: 72px 16px 16px;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+  gap: 8px;
+  align-content: start;
+  list-style: none;
+}
+
+.journey-story__media-grid > li {
+  margin: 0;
+}
+
+.journey-story__media-grid button {
+  position: relative;
+  width: 100%;
+  min-height: 92px;
+  aspect-ratio: 1;
+  display: block;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--atlas-line);
+  background: #010404;
+  cursor: pointer;
+}
+
+.journey-story__media-grid button:hover:not(:disabled),
+.journey-story__media-grid button:focus-visible {
+  border-color: rgba(200, 255, 61, 0.45);
+}
+
+.journey-story__media-grid button.is-current {
+  border-color: var(--atlas-acid);
+}
+
+.journey-story__media-grid button:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.journey-story__media-grid img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+
+.journey-story__media-tile-badge {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-content: center;
+  color: #657d77;
+  font-size: 9px;
+  letter-spacing: 0.1em;
+}
+
+.journey-story__media-grid button > small {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  padding: 2px 4px;
+  background: rgba(2, 8, 8, 0.82);
+  color: var(--atlas-muted);
+  font: 500 8px/1 ui-monospace, "SFMono-Regular", Consolas, monospace;
+}
+
+.journey-story__media-grid button.is-current > small {
+  color: var(--atlas-acid);
 }
 
 .journey-story__media-nav {
@@ -1894,7 +1959,94 @@
   color: #d9a38c;
 }
 
+.journey-story__soundtrack {
+  display: grid;
+  gap: 12px;
+  margin-top: 26px;
+  padding-top: 22px;
+  border-top: 1px solid var(--atlas-line);
+}
+
+.journey-story__soundtrack > div:first-child {
+  display: grid;
+  gap: 7px;
+}
+
+.journey-story__soundtrack > div:first-child p,
+.journey-story__soundtrack > div:first-child strong {
+  margin: 0;
+}
+
+.journey-story__soundtrack > div:first-child p {
+  color: var(--atlas-acid);
+  font: 500 8px/1 ui-monospace, "SFMono-Regular", Consolas, monospace;
+  letter-spacing: 0.15em;
+}
+
+.journey-story__soundtrack > div:first-child strong {
+  overflow-wrap: anywhere;
+  color: #d6e0dd;
+  font-family: var(--archive-serif);
+  font-size: 15px;
+  font-weight: 400;
+}
+
+.journey-story__soundtrack > audio {
+  width: 100%;
+  height: 38px;
+}
+
+.journey-story__soundtrack > input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.journey-story__soundtrack-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.journey-story__soundtrack-actions button {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  padding: 0 15px;
+  border: 1px solid rgba(203, 241, 193, 0.28);
+  background: rgba(203, 241, 193, 0.075);
+  color: #dbe8e4;
+  cursor: pointer;
+  font-size: 10px;
+  letter-spacing: 0.09em;
+}
+
+.journey-story__soundtrack-actions button:hover:not(:disabled),
+.journey-story__soundtrack-actions button:focus-visible {
+  border-color: rgba(203, 241, 193, 0.6);
+  background: rgba(203, 241, 193, 0.12);
+}
+
+.journey-story__soundtrack-actions button.is-destructive {
+  border-color: rgba(217, 163, 140, 0.28);
+  background: transparent;
+  color: #d9a38c;
+}
+
+.journey-story__soundtrack-actions button:disabled {
+  cursor: wait;
+  opacity: 0.68;
+}
+
 .journey-story > footer {
+  grid-row: 3;
+  grid-column: 1;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -3547,11 +3699,6 @@
     gap: 6px;
   }
 
-  .living-atlas-globe__ambience {
-    top: 66px;
-    right: 12px;
-  }
-
   .living-atlas-globe__mode {
     min-height: 44px;
   }
@@ -3676,10 +3823,6 @@
   }
 
   .living-atlas__journey-scroll-hint {
-    display: none;
-  }
-
-  .living-atlas__active::before {
     display: none;
   }
 

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, like, lt, or, sql } from "drizzle-orm";
 import { Hono } from "hono";
 import { requireAtlasAccess } from "../authorization/atlas-access";
 import { serverConfig } from "../config";
@@ -25,6 +25,7 @@ import {
 
 const PART_SIZE = 8 * 1024 * 1024;
 const MAX_UPLOAD_BYTES = 2_000_000_000;
+const MAX_AUDIO_UPLOAD_BYTES = 100 * 1024 * 1024;
 const MAX_PARTS = 10_000;
 const MAX_REORDER_ASSETS = 256;
 const FINALIZATION_LEASE_MS = 20_000;
@@ -42,6 +43,27 @@ const ALLOWED_MIME_TYPES = new Set([
   "video/quicktime",
   "video/webm",
 ]);
+// Journey soundtracks. Kept in step with ACCEPTED_JOURNEY_SOUNDTRACK_TYPES in
+// src/journey/journeyModel.ts; this copy is the authoritative validator.
+const ALLOWED_AUDIO_MIME_TYPES = new Set([
+  "audio/aac",
+  "audio/mp3",
+  "audio/mp4",
+  "audio/mpeg",
+  "audio/ogg",
+  "audio/wav",
+  "audio/wave",
+  "audio/x-m4a",
+  "audio/x-wav",
+]);
+
+// The deduplication scope of an upload: "image", "video", or "audio". Every
+// accepted MIME type carries one of those top-level types, and an unexpected
+// value falls back to a scope that matches nothing else.
+export function mediaKindOf(mimeType: string): string {
+  const kind = mimeType.split("/")[0];
+  return /^[a-z]+$/.test(kind) ? kind : "unknown";
+}
 
 type StartUploadInput = {
   journeyId?: unknown;
@@ -69,17 +91,24 @@ export function parseStartUpload(body: StartUploadInput) {
       ? body.contentHash.toLowerCase()
       : "invalid";
 
+  const isSoundtrack = ALLOWED_AUDIO_MIME_TYPES.has(mimeType);
+  const maxBytes = isSoundtrack ? MAX_AUDIO_UPLOAD_BYTES : MAX_UPLOAD_BYTES;
+
   if (
+    // A soundtrack belongs to the whole journey. Accepting one against a route
+    // point would create a row the atlas has no way to express, since every
+    // audio asset is read as the journey's single track.
+    (isSoundtrack && routePointId !== null) ||
     !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
       journeyId,
     ) ||
     (routePointId !== null && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(routePointId)) ||
     !fileName ||
     fileName.length > 180 ||
-    !ALLOWED_MIME_TYPES.has(mimeType) ||
+    (!ALLOWED_MIME_TYPES.has(mimeType) && !isSoundtrack) ||
     !Number.isSafeInteger(bytes) ||
     bytes < 1 ||
-    bytes > MAX_UPLOAD_BYTES ||
+    bytes > maxBytes ||
     partCount < 1 ||
     partCount > MAX_PARTS ||
     contentHash === "invalid"
@@ -268,6 +297,10 @@ export async function finalizeUpload(
         .limit(1)
       : [];
 
+    // Deduplication is scoped to the media kind. The same bytes can be a
+    // journey video and a journey soundtrack, and collapsing those into one row
+    // would answer an audio upload with a visual asset that no soundtrack
+    // reader would ever find.
     const [duplicate] = upload.contentHash
       ? await transaction
         .select({ id: mediaAssets.id })
@@ -275,6 +308,7 @@ export async function finalizeUpload(
         .where(and(
           eq(mediaAssets.journeyId, upload.journeyId),
           eq(mediaAssets.contentHash, upload.contentHash),
+          like(mediaAssets.mimeType, `${mediaKindOf(upload.mimeType)}/%`),
         ))
         .limit(1)
       : [];

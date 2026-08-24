@@ -22,8 +22,11 @@ import {
   MAX_RENDERED_ROUTE_LABELS,
   MAX_RENDERED_ROUTE_POINTS,
   QUALITY_PROFILE,
+  buildJourneyConnector,
+  buildJourneyConnectorPath,
   buildProjectedRoutePath,
   clampGlobeTilt,
+  journeyConnectorAnchor,
   clampGlobeZoom,
   getJourneyRouteLineScale,
   getJourneyRouteVisualState,
@@ -107,6 +110,68 @@ describe("ParticleEarthScene contracts", () => {
       false,
       false,
     )).toBeCloseTo(GLOBE_IDLE_ROTATION_RADIANS_PER_SECOND);
+  });
+
+  it("anchors the journey connector to the card edge the layout uses", () => {
+    const card = { left: 900, top: 200, right: 1200, bottom: 500 };
+    expect(journeyConnectorAnchor(card, false)).toEqual({ x: 900, y: 350 });
+    expect(journeyConnectorAnchor(card, true)).toEqual({ x: 1050, y: 200 });
+  });
+
+  it("draws an elbow that starts at the card and ends on the projected point", () => {
+    const desktop = buildJourneyConnectorPath(
+      { x: 900, y: 350 },
+      { x: 500, y: 260 },
+      false,
+    );
+    expect(desktop).toBe("M900 350H720V260H500");
+    const compact = buildJourneyConnectorPath(
+      { x: 200, y: 600 },
+      { x: 320, y: 300 },
+      true,
+    );
+    expect(compact).toBe("M200 600V465H320V300");
+    // A nearly aligned pair would kink, so it stays a straight line.
+    expect(buildJourneyConnectorPath({ x: 900, y: 350 }, { x: 500, y: 356 }, false))
+      .toBe("M900 350L500 356");
+  });
+
+  it("shows no connector unless it can truthfully reach the point", () => {
+    const scene = { width: 1440, height: 900 };
+    const card = { left: 900, top: 200, right: 1200, bottom: 500 };
+    expect(buildJourneyConnector({
+      card,
+      point: { x: 500, y: 260 },
+      scene,
+      compact: false,
+    })).toBe("M900 350H720V260H500");
+    // No card, no focus point, an off-scene projection, and a point that lands
+    // inside the card all resolve to nothing rather than a stub.
+    expect(buildJourneyConnector({ card: null, point: { x: 500, y: 260 }, scene, compact: false }))
+      .toBe("");
+    expect(buildJourneyConnector({ card, point: null, scene, compact: false }))
+      .toBe("");
+    expect(buildJourneyConnector({ card, point: { x: -4, y: 260 }, scene, compact: false }))
+      .toBe("");
+    expect(buildJourneyConnector({ card, point: { x: 500, y: 1200 }, scene, compact: false }))
+      .toBe("");
+    expect(buildJourneyConnector({ card, point: { x: 1000, y: 300 }, scene, compact: false }))
+      .toBe("");
+    expect(buildJourneyConnector({ card, point: { x: 896, y: 300 }, scene, compact: false }))
+      .toBe("");
+    expect(buildJourneyConnector({
+      card,
+      point: { x: Number.NaN, y: 260 },
+      scene,
+      compact: false,
+    })).toBe("");
+  });
+
+  it("waits a full ten seconds after the latest interaction", () => {
+    expect(GLOBE_IDLE_RESUME_DELAY_MS).toBe(10_000);
+    expect(getGlobeIdleRotationDelta(1, 9_999, false, false)).toBe(0);
+    expect(getGlobeIdleRotationDelta(1, 10_000, false, false))
+      .toBeCloseTo(GLOBE_IDLE_ROTATION_RADIANS_PER_SECOND);
   });
 
   it("keeps geographic context behind journey and personal signals", () => {
