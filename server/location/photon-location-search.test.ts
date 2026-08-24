@@ -139,6 +139,67 @@ describe("PhotonLocationSearch", () => {
     expect(englishUrl.searchParams.get("lang")).toBe("en");
   });
 
+  it("does not pay a second queued round trip when the Chinese query is already bilingual", async () => {
+    const fetchMock = vi.fn(async () => Response.json({
+      features: [{
+        geometry: { coordinates: [114.0545429, 22.5445741] },
+        properties: {
+          osm_type: "R",
+          osm_id: 123,
+          name: "深圳市",
+          "name:en": "Shenzhen",
+          country: "中国",
+          countrycode: "CN",
+        },
+      }],
+    }));
+    // No requestIntervalMs override, exactly like production: a needless
+    // English follow-up would sit a full second in the queue.
+    const search = new PhotonLocationSearch({
+      baseUrl: "https://photon.example.test",
+      userAgent: "Startrips/1.0",
+      fetcher: fetchMock as unknown as typeof fetch,
+    });
+
+    const startedAt = Date.now();
+    await expect(search.search("深圳", { limit: 8 })).resolves.toMatchObject([{
+      label: "深圳市",
+      labelEnglish: "Shenzhen",
+    }]);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(Date.now() - startedAt).toBeLessThan(500);
+  });
+
+  it("still falls back to English when a Chinese query finds nothing", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      return Response.json({
+        features: url.searchParams.get("lang") === "en" ? [{
+          geometry: { coordinates: [135.7681, 35.0116] },
+          properties: {
+            osm_type: "R",
+            osm_id: 2,
+            name: "Kyoto",
+            country: "Japan",
+            countrycode: "JP",
+          },
+        }] : [],
+      });
+    });
+    const search = new PhotonLocationSearch({
+      baseUrl: "https://photon.example.test",
+      userAgent: "Startrips/1.0",
+      fetcher: fetchMock as unknown as typeof fetch,
+      requestIntervalMs: 0,
+    });
+
+    await expect(search.search("京都", { limit: 8 })).resolves.toMatchObject([{
+      label: "Kyoto",
+      countryCode: "JP",
+    }]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("uses a common Chinese foreign-city alias when the local query is ambiguous", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = new URL(String(input));

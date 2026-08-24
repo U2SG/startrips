@@ -259,11 +259,17 @@ export class PhotonLocationSearch implements LocationSearch {
       `search:${normalizedQuery.toLocaleLowerCase()}::${options.limit}`,
       { limit: options.limit, signal: options.signal },
     ).then(async (primaryResults) => {
-      const shouldFetchEnglish = hasNonAscii(normalizedQuery)
-        || englishQuery !== normalizedQuery
+      // The English request is queued behind the primary one — a full
+      // requestIntervalMs (1s by default) of added latency — so only pay for
+      // it when the primary answer is genuinely insufficient: an alias needs
+      // correcting, a result carries no English label, or a non-ASCII query
+      // found nothing at all. A Chinese query the provider already answers
+      // bilingually must not trigger it.
+      const shouldFetchEnglish = englishQuery !== normalizedQuery
         || primaryResults.some((result) => (
           !result.labelEnglish && hasNonAscii(result.label)
-        ));
+        ))
+        || (hasNonAscii(normalizedQuery) && primaryResults.length === 0);
       if (!shouldFetchEnglish) return primaryResults;
 
       const englishUrl = new URL("api/", this.baseUrl);
