@@ -40,3 +40,37 @@ export function morphJourneyCard(
   });
   void transition.finished.catch(() => undefined);
 }
+
+/**
+ * #18 Shared-Element Transition.
+ *
+ * Runs a state update inside `startViewTransition` so the browser morphs one
+ * element into another. The caller sets `viewTransitionName` on the source
+ * element before calling (old snapshot), and the new snapshot must contain an
+ * element with the same name (e.g. the story hero or fullscreen stage).
+ *
+ * Rules:
+ * - one active shared element at a time;
+ * - reduced motion falls back to a plain update (short crossfade handled by
+ *   CSS);
+ * - the returned finish promise is swallowed so a cancelled transition never
+ *   rejects the caller.
+ *
+ * The transition never remounts the WebGL scene — it only wraps a React state
+ * update.
+ */
+export function runSharedElementTransition(
+  update: () => void,
+): void {
+  const doc = typeof document === "undefined"
+    ? undefined
+    : document as ViewTransitionDocument;
+  if (!doc?.startViewTransition || prefersReducedMotion()) {
+    update();
+    return;
+  }
+  const transition = doc.startViewTransition(() => {
+    flushSync(update);
+  });
+  void transition.finished.catch(() => undefined);
+}

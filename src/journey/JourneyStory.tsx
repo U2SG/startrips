@@ -45,6 +45,7 @@ import {
   IconX,
 } from "@tabler/icons-react";
 import { deleteMedia, getPrivateMediaRead, reorderJourneyMedia, setJourneyCover } from "./journeyApi";
+import { runSharedElementTransition } from "../motion/primitives/sharedElement";
 import { uploadJourneyMedia } from "./JourneyComposer";
 import {
   createDecodeRegistry,
@@ -1018,9 +1019,35 @@ export function JourneyStory({
     }
   }
 
+  // #18: shared-element transition source. When the user clicks an overview
+  // tile, the tile's <img> gets a stable view-transition-name before the state
+  // switch, and the single/fullscreen stage claims the same name, so the
+  // browser morphs the tile into the stage instead of a hard cut. The name is
+  // cleared after the transition settles.
+  const transitionNameRef = useRef<string | null>(null);
+
   function selectMediaIndex(index: number) {
-    navigateToMedia(index);
-    setOverview(false);
+    // The source tile is the one currently rendered at that index. Claim a
+    // stable name for the morph, then switch inside startViewTransition.
+    const sourceElement = document.querySelector<HTMLImageElement>(
+      `.journey-story__media-grid [data-media-tile-index="${index}"] img`,
+    );
+    const name = `story-media-${scopedMedia[index]?.id ?? "unknown"}`;
+    if (sourceElement && typeof document.startViewTransition === "function") {
+      sourceElement.style.viewTransitionName = name;
+      transitionNameRef.current = name;
+      runSharedElementTransition(() => {
+        navigateToMedia(index);
+        setOverview(false);
+      });
+      // Release the name once the browser finishes the morph (or cancels it).
+      window.setTimeout(() => {
+        transitionNameRef.current = null;
+      }, 700);
+    } else {
+      navigateToMedia(index);
+      setOverview(false);
+    }
   }
 
   // #12: overview drag-and-drop reordering. Sensors cover pointer (mouse +
@@ -1268,6 +1295,17 @@ export function JourneyStory({
                   : "is-zoomable"}
                 src={shownRead.url}
                 alt={shownAsset.fileName}
+                // #18: the hero claims the shared-element name when it is the
+                // journey cover coming from the card, or the tile that was
+                // clicked in the overview.
+                style={transitionNameRef.current === `story-media-${shownAsset.id}`
+                  ? { viewTransitionName: transitionNameRef.current }
+                  : (cover?.id === shownAsset.id
+                    ? { viewTransitionName: "journey-cover" }
+                    : undefined)}
+                onTransitionEnd={() => {
+                  if (transitionNameRef.current) transitionNameRef.current = null;
+                }}
                 onClick={() => {
                   setPlaying(false);
                   setFullscreen(true);

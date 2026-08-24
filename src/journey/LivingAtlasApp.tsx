@@ -14,7 +14,7 @@ import { CountUp } from "../motion/primitives/CountUp";
 import { useMagnet } from "../motion/primitives/Magnet";
 import { ScrambledText } from "../motion/primitives/ScrambledText";
 import { ShinyText } from "../motion/primitives/ShinyText";
-import { morphJourneyCard } from "../motion/primitives/sharedElement";
+import { morphJourneyCard, runSharedElementTransition } from "../motion/primitives/sharedElement";
 import { LivingAtlasGlobe } from "../scene/LivingAtlasGlobe";
 import {
   JourneyComposer,
@@ -311,6 +311,32 @@ export function LivingAtlasApp() {
     });
   }
 
+  // #18: opening the story from a card morphs the card cover into the story
+  // hero. The cover <img> claims a stable view-transition-name before the
+  // state switch; JourneyStory's hero claims the same name in the new
+  // snapshot, so the browser interpolates geometry instead of a hard modal
+  // cut. Falls back to a plain state update (short CSS crossfade).
+  function openJourneyStory(journeyId: string, routePointId: string | null) {
+    const sourceElement = document.querySelector<HTMLImageElement>(
+      ".living-atlas__active-media img",
+    );
+    if (sourceElement && typeof document.startViewTransition === "function") {
+      sourceElement.style.viewTransitionName = "journey-cover";
+      runSharedElementTransition(() => {
+        setActiveJourneyId(journeyId);
+        setStoryRoutePointId(routePointId);
+        setStoryJourneyId(journeyId);
+      });
+      window.setTimeout(() => {
+        sourceElement.style.viewTransitionName = "";
+      }, 700);
+    } else {
+      setActiveJourneyId(journeyId);
+      setStoryRoutePointId(routePointId);
+      setStoryJourneyId(journeyId);
+    }
+  }
+
   function startGlobePick(accept: (point: GlobePointPick) => void) {
     globePickAccept.current = accept;
     setGlobePickActive(true);
@@ -463,7 +489,7 @@ export function LivingAtlasApp() {
           <p className={`living-atlas__active-note${activeJourney.note ? "" : " is-empty"}`}>
             {activeJourney.note || "路线已经留在地球上，故事等待被打开。"}
           </p>
-          <button ref={storyMagnet.ref} onMouseMove={storyMagnet.onMouseMove} onMouseLeave={storyMagnet.onMouseLeave} type="button" onClick={() => { setStoryRoutePointId(null); setStoryJourneyId(activeJourney.id); }}>
+          <button ref={storyMagnet.ref} onMouseMove={storyMagnet.onMouseMove} onMouseLeave={storyMagnet.onMouseLeave} type="button" onClick={() => openJourneyStory(activeJourney.id, null)}>
             <span>打开故事</span>
             <span className="living-atlas__active-action-icon" aria-hidden="true"><IconArrowRight size={17} stroke={1.35} /></span>
           </button>
