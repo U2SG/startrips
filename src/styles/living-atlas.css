@@ -267,51 +267,6 @@
   color: var(--atlas-acid);
 }
 
-.living-atlas-globe__ambience {
-  position: absolute;
-  z-index: 8;
-  top: 82px;
-  right: 40px;
-  width: 44px;
-  height: 44px;
-  display: grid;
-  place-items: center;
-  padding: 0;
-  border: 1px solid rgba(118, 198, 188, 0.24);
-  border-radius: 50%;
-  background: rgba(2, 11, 12, 0.82);
-  backdrop-filter: blur(12px);
-  color: var(--atlas-muted);
-  cursor: pointer;
-  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.22);
-  transition:
-    color var(--motion-micro) ease,
-    border-color var(--motion-micro) ease,
-    background-color var(--motion-micro) ease,
-    transform var(--motion-micro) var(--motion-ease-out);
-}
-
-.living-atlas-globe__ambience:hover,
-.living-atlas-globe__ambience:focus-visible {
-  color: var(--atlas-text);
-  border-color: rgba(118, 227, 211, 0.52);
-  transform: translateY(-1px);
-}
-
-.living-atlas-globe__ambience.is-active {
-  border-color: rgba(200, 255, 61, 0.4);
-  background: rgba(200, 255, 61, 0.08);
-  color: var(--atlas-acid);
-}
-
-.living-atlas-globe__ambience.is-active > svg {
-  transform: rotate(12deg) scale(1.06);
-}
-
-.living-atlas-globe__ambience > svg {
-  transition: transform var(--motion-micro) var(--motion-ease-out);
-}
-
 /* ML-11 Ambience: a soft aurora field behind the transparent particle
    globe. Blobs are GPU-composited transforms, never layout. */
 .living-atlas-ambience {
@@ -661,16 +616,6 @@
   background: rgba(3, 12, 13, 0.88);
   box-shadow: 0 30px 90px rgba(0, 0, 0, 0.34), inset 0 0 52px rgba(118, 227, 211, 0.025);
   backdrop-filter: blur(22px);
-}
-
-.living-atlas__active::before {
-  content: "";
-  position: absolute;
-  top: 164px;
-  left: -78px;
-  width: 78px;
-  height: 1px;
-  background: var(--journey-color);
 }
 
 /* ML-12 Border Glow: a soft arc of journey-colored light rotates around the
@@ -3734,11 +3679,6 @@
     gap: 6px;
   }
 
-  .living-atlas-globe__ambience {
-    top: 66px;
-    right: 12px;
-  }
-
   .living-atlas-globe__mode {
     min-height: 44px;
   }
@@ -3863,10 +3803,6 @@
   }
 
   .living-atlas__journey-scroll-hint {
-    display: none;
-  }
-
-  .living-atlas__active::before {
     display: none;
   }
 

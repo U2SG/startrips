@@ -31,6 +31,67 @@ async function globeState() {
   return page.evaluate(() => window.__particleEarthDebug?.() ?? null);
 }
 
+// The active card must be tied to its real projected location: the connector
+// has to start on the card edge the layout uses and end on the focus point.
+async function connectorState() {
+  return page.evaluate(() => {
+    const host = document.querySelector("[data-scene-ready]");
+    const path = document.querySelector(".particle-earth-journey-connector");
+    const card = document.querySelector(".living-atlas__active");
+    if (!host || !path) return null;
+    const commands = (path.getAttribute("d") ?? "").match(/-?\d+(\.\d+)?/g);
+    const hostBounds = host.getBoundingClientRect();
+    const cardBounds = card?.getBoundingClientRect() ?? null;
+    return {
+      state: host.dataset.journeyConnector ?? null,
+      d: path.getAttribute("d") ?? "",
+      startX: commands ? Number(commands[0]) : null,
+      startY: commands ? Number(commands[1]) : null,
+      endX: host.dataset.journeyConnectorEndX
+        ? Number(host.dataset.journeyConnectorEndX)
+        : null,
+      endY: host.dataset.journeyConnectorEndY
+        ? Number(host.dataset.journeyConnectorEndY)
+        : null,
+      personalPointX: host.dataset.personalPointX
+        ? Number(host.dataset.personalPointX)
+        : null,
+      personalPointY: host.dataset.personalPointY
+        ? Number(host.dataset.personalPointY)
+        : null,
+      compact: window.innerWidth <= 760,
+      card: cardBounds
+        ? {
+            left: cardBounds.left - hostBounds.left,
+            top: cardBounds.top - hostBounds.top,
+            right: cardBounds.right - hostBounds.left,
+            bottom: cardBounds.bottom - hostBounds.top,
+          }
+        : null,
+    };
+  });
+}
+
+function connectorTouchesBothEnds(connector, tolerance = 2) {
+  if (!connector || connector.state !== "on" || !connector.card) return false;
+  if (connector.personalPointX === null || connector.personalPointY === null) {
+    return false;
+  }
+  const endMatchesFocus =
+    Math.abs(connector.endX - connector.personalPointX) <= tolerance
+    && Math.abs(connector.endY - connector.personalPointY) <= tolerance;
+  const anchorX = connector.compact
+    ? (connector.card.left + connector.card.right) / 2
+    : connector.card.left;
+  const anchorY = connector.compact
+    ? connector.card.top
+    : (connector.card.top + connector.card.bottom) / 2;
+  const startMatchesCard =
+    Math.abs(connector.startX - anchorX) <= tolerance
+    && Math.abs(connector.startY - anchorY) <= tolerance;
+  return endMatchesFocus && startMatchesCard;
+}
+
 try {
   await page.goto(baseUrl, { waitUntil: "networkidle" });
   const emailInput = page.locator('input[type="email"]').first();
@@ -105,6 +166,14 @@ try {
     pixelRatioY: element.height / element.clientHeight,
     dragging: element.parentElement?.getAttribute("data-dragging") ?? null,
   }));
+
+  const desktopConnector = await connectorState();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.waitForTimeout(400);
+  const mobileConnector = await connectorState();
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.waitForTimeout(400);
+
   const result = {
     before,
     afterDrag,
@@ -113,6 +182,10 @@ try {
     afterPinch,
     locationSearch,
     canvasMetrics,
+    desktopConnector,
+    mobileConnector,
+    desktopConnectorConnected: connectorTouchesBothEnds(desktopConnector),
+    mobileConnectorConnected: connectorTouchesBothEnds(mobileConnector),
     consoleErrors,
     pageErrors,
   };
@@ -135,6 +208,10 @@ try {
     || canvasMetrics.pixelRatioX < 1.95
     || canvasMetrics.pixelRatioY < 1.95
     || canvasMetrics.dragging !== null
+    // A hidden connector is only correct when the focus point cannot be
+    // reached; on this deterministic state both viewports must connect.
+    || !result.desktopConnectorConnected
+    || !result.mobileConnectorConnected
     || consoleErrors.length > 0
     || pageErrors.length > 0
   ) {
