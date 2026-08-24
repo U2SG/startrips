@@ -41,22 +41,35 @@ await page.route("**/qa-storage/story-part", async (route) => {
   await new Promise((resolve) => setTimeout(resolve, 3_000));
   await route.fulfill({ status: 200, headers: { etag: '"qa-etag"' } });
 });
+// The soundtrack asset id matches the one the preview stores, so re-uploading
+// the same track reproduces the server's content-hash deduplication.
+const QA_SOUNDTRACK_ASSET_ID = "00000000-0000-4000-8000-000000000900";
+let completeAsSoundtrack = false;
 await page.route("**/api/uploads/qa-upload/complete", (route) => route.fulfill({
   status: 200,
   contentType: "application/json",
   body: JSON.stringify({
-    asset: {
-      id: "00000000-0000-4000-8000-000000000005",
-      journeyId: "00000000-0000-4000-8000-000000000001",
-      storageDriver: "qa",
-      storageKey: "qa/story-media",
-      fileName: "night-route.png",
-      mimeType: "image/png",
-      bytes: 68,
-    },
+    asset: completeAsSoundtrack
+      ? {
+          id: QA_SOUNDTRACK_ASSET_ID,
+          journeyId: "00000000-0000-4000-8000-000000000001",
+          storageDriver: "qa",
+          storageKey: "qa/story-soundtrack",
+          fileName: "night-theme.mp3",
+          mimeType: "audio/mpeg",
+          bytes: 68,
+        }
+      : {
+          id: "00000000-0000-4000-8000-000000000005",
+          journeyId: "00000000-0000-4000-8000-000000000001",
+          storageDriver: "qa",
+          storageKey: "qa/story-media",
+          fileName: "night-route.png",
+          mimeType: "image/png",
+          bytes: 68,
+        },
   }),
 }));
-const QA_SOUNDTRACK_ASSET_ID = "00000000-0000-4000-8000-000000000900";
 const silentWav = "data:audio/wav;base64,UklGRiwAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQgAAACAgICAgICAgA==";
 const onePixelGif = "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=";
 
@@ -166,15 +179,22 @@ try {
   // never as a photo tile or in the visual media count.
   // The harness control sits behind the open dialog's backdrop, so it is
   // dispatched directly instead of hit-tested.
-  await page.locator("[data-qa-story-next-audio]").dispatchEvent("click");
-  await page.locator('.journey-story__soundtrack input[type="file"]').setInputFiles({
+  completeAsSoundtrack = true;
+  const soundtrackFile = {
     name: "night-theme.mp3",
     mimeType: "audio/mpeg",
     buffer: Buffer.from("fffb90640000000000", "hex"),
-  });
+  };
+  const soundtrackInput = page.locator('.journey-story__soundtrack input[type="file"]');
+  await page.locator("[data-qa-story-next-audio]").dispatchEvent("click");
+  await soundtrackInput.setInputFiles(soundtrackFile);
   await page.getByText("已把「night-theme.mp3」设为这段旅程的配乐。")
     .waitFor({ state: "visible" });
-  const soundtrackAudioCount = await page.locator(".journey-story__soundtrack audio").count();
+  // The player appears once its signed read resolves, which is after the
+  // success message, so wait for the element instead of racing it.
+  const soundtrackAudio = page.locator(".journey-story__soundtrack audio");
+  await soundtrackAudio.first().waitFor({ state: "attached" });
+  const soundtrackAudioCount = await soundtrackAudio.count();
   const soundtrackNameShown = await page
     .locator(".journey-story__soundtrack strong")
     .innerText() === "night-theme.mp3";
@@ -185,6 +205,20 @@ try {
   const soundtrackTileCount = await page
     .locator('.journey-story__media-grid [aria-label*="night-theme.mp3"]').count();
   const removeSoundtrackVisible = await page
+    .getByRole("button", { name: "移除配乐" }).isVisible();
+
+  // Re-picking the current track is deduplicated to the same asset. The track
+  // must survive: the old cleanup path would have deleted the only copy.
+  await page.getByRole("button", { name: "返回单张" }).click();
+  await page.locator("[data-qa-story-next-audio]").dispatchEvent("click");
+  await soundtrackInput.setInputFiles(soundtrackFile);
+  await page.getByText("「night-theme.mp3」已经是这段旅程的配乐，没有变化。")
+    .waitFor({ state: "visible" });
+  await soundtrackAudio.first().waitFor({ state: "attached" });
+  const soundtrackSurvivedReupload = await soundtrackAudio.count();
+  const soundtrackNameAfterReupload = await page
+    .locator(".journey-story__soundtrack strong").innerText();
+  const removeStillVisible = await page
     .getByRole("button", { name: "移除配乐" }).isVisible();
 
   await page.getByRole("button", { name: "退出旅程故事" }).click();
@@ -211,6 +245,9 @@ try {
     tilesAfterSoundtrack,
     soundtrackTileCount,
     removeSoundtrackVisible,
+    soundtrackSurvivedReupload,
+    soundtrackNameAfterReupload,
+    removeStillVisible,
     consoleErrors,
     pageErrors,
   };
@@ -232,6 +269,9 @@ try {
     || tilesAfterSoundtrack !== 4
     || soundtrackTileCount !== 0
     || !removeSoundtrackVisible
+    || soundtrackSurvivedReupload !== 1
+    || soundtrackNameAfterReupload !== "night-theme.mp3"
+    || !removeStillVisible
     || consoleErrors.length > 0
     || pageErrors.length > 0
   ) {

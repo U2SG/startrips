@@ -18,7 +18,10 @@ import {
   IconUpload,
   IconX,
 } from "@tabler/icons-react";
-import { uploadMediaInParts } from "../api/multipartUpload";
+import {
+  uploadMediaInParts,
+  type UploadedMediaAsset,
+} from "../api/multipartUpload";
 import {
   createJourney,
   reverseGeocode,
@@ -80,7 +83,12 @@ type JourneyMediaUploadAssignment = {
 type JourneyMediaUploadResult = Pick<
   JourneySaveResult,
   "uploadedCount" | "mediaErrors"
->;
+> & {
+  // The completed assets, in upload order. Callers need the resolved id
+  // because the server deduplicates identical content inside a journey and
+  // then answers with the existing asset rather than a new one.
+  assets: UploadedMediaAsset[];
+};
 
 type UploadJourneyMediaOptions = {
   journeyId: string;
@@ -114,13 +122,14 @@ async function uploadJourneyMediaAssignments({
 }: UploadJourneyMediaAssignmentsOptions): Promise<JourneyMediaUploadResult> {
   const totalBytes = assignments.reduce((sum, assignment) => sum + assignment.file.size, 0);
   const mediaErrors: JourneySaveResult["mediaErrors"] = [];
+  const assets: UploadedMediaAsset[] = [];
   let uploadedCount = 0;
   let completedBytes = 0;
 
   for (let fileIndex = 0; fileIndex < assignments.length; fileIndex += 1) {
     const { file, routePointId } = assignments[fileIndex];
     try {
-      await upload({
+      const asset = await upload({
         file,
         fileName: file.name,
         journeyId,
@@ -132,6 +141,7 @@ async function uploadJourneyMediaAssignments({
           totalBytes,
         }),
       });
+      if (asset) assets.push(asset);
       uploadedCount += 1;
     } catch (error) {
       mediaErrors.push({
@@ -149,7 +159,7 @@ async function uploadJourneyMediaAssignments({
     }
   }
 
-  return { uploadedCount, mediaErrors };
+  return { uploadedCount, mediaErrors, assets };
 }
 
 export async function uploadJourneyMedia({

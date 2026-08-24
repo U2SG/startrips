@@ -115,6 +115,9 @@ export type SoundtrackReplacement = {
   refreshed: Journey | null;
   refreshFailed: boolean;
   cleanupFailed: boolean;
+  // True when the upload resolved to the track that was already active, so
+  // nothing was replaced and nothing may be deleted.
+  unchanged: boolean;
 };
 
 // A journey keeps exactly one soundtrack. The replacement order matters: the
@@ -149,8 +152,16 @@ export async function replaceJourneySoundtrack({
       refreshed: null,
       refreshFailed: false,
       cleanupFailed: false,
+      unchanged: false,
     };
   }
+
+  // Every permitted soundtrack is small enough to be content hashed, so
+  // choosing the current track again is deduplicated by the server to the
+  // existing asset. Removing "the previous track" would then delete the only
+  // one there is.
+  const unchanged = previous !== null
+    && result.assets.some((asset) => asset.id === previous.id);
 
   let refreshed: Journey | null = null;
   let refreshFailed = false;
@@ -162,7 +173,7 @@ export async function replaceJourneySoundtrack({
   }
 
   let cleanupFailed = false;
-  if (previous) {
+  if (previous && !unchanged) {
     try {
       await remove(previous.id);
       try {
@@ -176,7 +187,14 @@ export async function replaceJourneySoundtrack({
     }
   }
 
-  return { uploaded: true, uploadError: null, refreshed, refreshFailed, cleanupFailed };
+  return {
+    uploaded: true,
+    uploadError: null,
+    refreshed,
+    refreshFailed,
+    cleanupFailed,
+    unchanged,
+  };
 }
 
 function StoryMediaTile({
@@ -745,6 +763,8 @@ export function JourneyStory({
       tone: result.refreshFailed ? "error" : "success",
       message: result.refreshFailed
         ? "配乐已上传，但当前列表刷新失败。重新打开这段旅程即可看到，不需要重复上传。"
+        : result.unchanged
+        ? `「${file.name}」已经是这段旅程的配乐，没有变化。`
         : `已把「${file.name}」设为这段旅程的配乐。`,
     });
   }

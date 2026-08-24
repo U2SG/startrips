@@ -207,6 +207,16 @@ function JourneyStoryQaPreview() {
           onMediaAdded={() => {
             const currentJourney = journeys[0];
             const index = currentJourney.media.length;
+            // The API deduplicates identical content inside a journey and
+            // answers with the asset that already exists, so re-uploading the
+            // same soundtrack must not add a second row here either.
+            if (
+              nextMediaIsSoundtrack
+              && currentJourney.media.some((asset) => asset.id === QA_SOUNDTRACK_ASSET_ID)
+            ) {
+              setNextMediaIsSoundtrack(false);
+              return currentJourney;
+            }
             const nextJourney: Journey = {
               ...currentJourney,
               media: [...currentJourney.media, {

@@ -54,7 +54,7 @@ describe("replaceJourneySoundtrack", () => {
     const previous = asset("old-track", "audio/mpeg", 0, "old.mp3");
     const upload = vi.fn(async () => {
       calls.push("upload");
-      return { uploadedCount: 1, mediaErrors: [] };
+      return { uploadedCount: 1, mediaErrors: [], assets: [] };
     });
     const refresh = vi.fn(async () => {
       calls.push("refresh");
@@ -82,6 +82,70 @@ describe("replaceJourneySoundtrack", () => {
     });
   });
 
+  it("keeps the track when replacing it with the exact same file", async () => {
+    // Soundtracks are always small enough to be content hashed, so the server
+    // deduplicates this upload to the asset that is already active.
+    const previous = asset("old-track", "audio/mpeg", 0, "night.mp3");
+    const remove = vi.fn();
+    const result = await replaceJourneySoundtrack({
+      journeyId: journey.id,
+      file,
+      previous,
+      upload: (async () => ({
+        uploadedCount: 1,
+        mediaErrors: [],
+        assets: [{
+          id: previous.id,
+          journeyId: journey.id,
+          routePointId: null,
+          storageDriver: "test",
+          storageKey: "journey-1/old-track",
+          fileName: "night.mp3",
+          mimeType: "audio/mpeg",
+          bytes: 64,
+        }],
+      })) as never,
+      refresh: async () => journey,
+      remove,
+    });
+
+    expect(remove).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      uploaded: true,
+      unchanged: true,
+      cleanupFailed: false,
+    });
+  });
+
+  it("still replaces when the upload resolves to a different asset", async () => {
+    const previous = asset("old-track", "audio/mpeg", 0, "old.mp3");
+    const remove = vi.fn();
+    const result = await replaceJourneySoundtrack({
+      journeyId: journey.id,
+      file,
+      previous,
+      upload: (async () => ({
+        uploadedCount: 1,
+        mediaErrors: [],
+        assets: [{
+          id: "new-track",
+          journeyId: journey.id,
+          routePointId: null,
+          storageDriver: "test",
+          storageKey: "journey-1/new-track",
+          fileName: "night.mp3",
+          mimeType: "audio/mpeg",
+          bytes: 64,
+        }],
+      })) as never,
+      refresh: async () => journey,
+      remove,
+    });
+
+    expect(remove).toHaveBeenCalledWith("old-track");
+    expect(result).toMatchObject({ uploaded: true, unchanged: false });
+  });
+
   it("keeps the previous track when the new upload fails", async () => {
     const remove = vi.fn();
     const refresh = vi.fn();
@@ -92,6 +156,7 @@ describe("replaceJourneySoundtrack", () => {
       upload: (async () => ({
         uploadedCount: 0,
         mediaErrors: [{ fileIndex: 0, fileName: "night.mp3", message: "storage unavailable" }],
+        assets: [],
       })) as never,
       refresh,
       remove,
@@ -110,7 +175,7 @@ describe("replaceJourneySoundtrack", () => {
       journeyId: journey.id,
       file,
       previous: asset("old-track", "audio/mpeg", 0, "old.mp3"),
-      upload: (async () => ({ uploadedCount: 1, mediaErrors: [] })) as never,
+      upload: (async () => ({ uploadedCount: 1, mediaErrors: [], assets: [] })) as never,
       refresh: async () => journey,
       remove: async () => {
         throw new Error("delete failed");
@@ -126,7 +191,7 @@ describe("replaceJourneySoundtrack", () => {
       journeyId: journey.id,
       file,
       previous: null,
-      upload: (async () => ({ uploadedCount: 1, mediaErrors: [] })) as never,
+      upload: (async () => ({ uploadedCount: 1, mediaErrors: [], assets: [] })) as never,
       refresh: async () => null,
       remove,
     });
