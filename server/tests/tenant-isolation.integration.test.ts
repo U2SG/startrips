@@ -833,4 +833,107 @@ describe("tenant-scoped journey repository", () => {
       .returning();
     expect((await finalizeUpload(repeatUpload)).id).toBe(audio.id);
   });
+
+  it("allows the same media bytes at different route points, dedupes within one point", async () => {
+    const journey = await createJourneyForAtlas(atlasA, "user-a", {
+      ...baseJourney,
+      title: "One file, two stops",
+    });
+    if (!journey) throw new Error("Journey fixture was not created");
+    const pointA = journey.routePoints[0].id;
+    const pointB = journey.routePoints[1].id;
+    if (!pointA || !pointB) throw new Error("Journey fixture lacks two route points");
+    const hash = "e".repeat(64);
+
+    const insertUpload = (routePointId: string | null, fileName: string) =>
+      db
+        .insert(mediaUploads)
+        .values({
+          atlasId: atlasA,
+          journeyId: journey.id,
+          routePointId,
+          storageDriver: "test",
+          storageKey: `${atlasA}/${journey.id}/${randomUUID()}`,
+          providerUploadId: randomUUID(),
+          fileName,
+          mimeType: "image/jpeg",
+          bytes: 128,
+          contentHash: hash,
+          partSize: 128,
+          partCount: 1,
+          status: "finalizing",
+          createdByUserId: "user-a",
+        })
+        .returning();
+
+    // Same hash at point A, then at point B: two distinct assets.
+    const [uploadA] = await insertUpload(pointA, "group.jpg");
+    const assetA = await finalizeUpload(uploadA);
+    const [uploadB] = await insertUpload(pointB, "group.jpg");
+    const assetB = await finalizeUpload(uploadB);
+
+    expect(assetA.id).not.toBe(assetB.id);
+    expect(assetA.routePointId).toBe(pointA);
+    expect(assetB.routePointId).toBe(pointB);
+
+    // Re-uploading the same bytes at point A still dedupes to asset A.
+    const [repeatA] = await insertUpload(pointA, "group-copy.jpg");
+    expect((await finalizeUpload(repeatA)).id).toBe(assetA.id);
+
+    // A journey-scoped upload (routePointId = null) of the same hash must not
+    // reuse either route-point asset.
+    const [journeyScoped] = await insertUpload(null, "group-journey.jpg");
+    const journeyScopedAsset = await finalizeUpload(journeyScoped);
+    expect(journeyScopedAsset.id).not.toBe(assetA.id);
+    expect(journeyScopedAsset.id).not.toBe(assetB.id);
+    expect(journeyScopedAsset.routePointId).toBeNull();
+
+    const [assetCount] = await db
+      .select({ value: count() })
+      .from(mediaAssets)
+      .where(eq(mediaAssets.journeyId, journey.id));
+    expect(assetCount.value).toBe(3);
+  });
+
+  it("applies route-point scoping to video dedupe as well", async () => {
+    const journey = await createJourneyForAtlas(atlasA, "user-a", {
+      ...baseJourney,
+      title: "One clip, two stops",
+    });
+    if (!journey) throw new Error("Journey fixture was not created");
+    const pointA = journey.routePoints[0].id;
+    const pointB = journey.routePoints[1].id;
+    if (!pointA || !pointB) throw new Error("Journey fixture lacks two route points");
+    const hash = "f".repeat(64);
+
+    const insertUpload = (routePointId: string | null) =>
+      db
+        .insert(mediaUploads)
+        .values({
+          atlasId: atlasA,
+          journeyId: journey.id,
+          routePointId,
+          storageDriver: "test",
+          storageKey: `${atlasA}/${journey.id}/${randomUUID()}`,
+          providerUploadId: randomUUID(),
+          fileName: "clip.mp4",
+          mimeType: "video/mp4",
+          bytes: 128,
+          contentHash: hash,
+          partSize: 128,
+          partCount: 1,
+          status: "finalizing",
+          createdByUserId: "user-a",
+        })
+        .returning();
+
+    const [uploadA] = await insertUpload(pointA);
+    const assetA = await finalizeUpload(uploadA);
+    const [uploadB] = await insertUpload(pointB);
+    const assetB = await finalizeUpload(uploadB);
+
+    expect(assetA.id).not.toBe(assetB.id);
+    expect(assetA.routePointId).toBe(pointA);
+    expect(assetB.routePointId).toBe(pointB);
+  });
 });

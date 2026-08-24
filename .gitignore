@@ -14,3 +14,6 @@ coverage/
 /docs/qa/
 /docs/reference/
 /artifacts/
+
+# Test / build logs written during development
+*.log

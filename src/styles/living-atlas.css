@@ -12,6 +12,11 @@
   --atlas-acid: #c8ff3d;
   --atlas-warm: #f4ce73;
   /* Motion tokens (mirror src/motion/tokens.ts) */
+  /* Tier durations — the only durations features reference (#17 Motion Language). */
+  --motion-instant: 120ms;   /* Tier 0: hover/press/focus */
+  --motion-ui: 260ms;        /* Tier 1: sidebar/reorder/controls */
+  --motion-content: 560ms;   /* Tier 2: card->story, tile->fullscreen */
+  --motion-journey: 980ms;   /* Tier 3: camera fly-to, route draw */
   --motion-micro: 240ms;
   --motion-panel: 560ms;
   --motion-morph: 760ms;
@@ -20,6 +25,8 @@
   --motion-stagger: 140ms;
   --motion-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --motion-ease-soft: cubic-bezier(0.2, 0.75, 0.15, 1);
+  --motion-ease-out-soft: cubic-bezier(0.22, 0.72, 0.24, 1);
+  --motion-ease-in-out-spatial: cubic-bezier(0.65, 0, 0.35, 1);
   position: relative;
   width: 100%;
   height: 100svh;
@@ -63,7 +70,7 @@
      off-center (about 3vw left) and let the camera aspect drift from the
      visible aspect, so smaller screens cropped the sphere differently. */
   transform: none;
-  transition: opacity 360ms ease;
+  transition: opacity var(--motion-ui, 260ms) ease;
 }
 
 .living-atlas__globe[aria-hidden="true"] {
@@ -88,7 +95,7 @@
 .living-atlas-globe__layer {
   opacity: 0;
   pointer-events: none;
-  transition: opacity 900ms cubic-bezier(0.22, 1, 0.36, 1);
+  transition: opacity var(--motion-journey, 980ms) var(--motion-ease-out, ease);
   will-change: opacity;
 }
 
@@ -2957,7 +2964,7 @@
   color: var(--atlas-text);
   text-align: left;
   cursor: pointer;
-  transition: border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease;
+  transition: border-color var(--motion-ui, 260ms) var(--motion-ease-out-soft, ease), box-shadow var(--motion-ui, 260ms) var(--motion-ease-out-soft, ease), transform var(--motion-instant, 120ms) var(--motion-ease-out-soft, ease);
 }
 
 .journey-light-effect-list button::before {
@@ -2966,7 +2973,7 @@
   content: "";
   background: var(--journey-light-gradient);
   opacity: 0.2;
-  transition: opacity 180ms ease;
+  transition: opacity var(--motion-instant, 120ms) ease;
 }
 
 .journey-light-effect-list button:hover {
@@ -3235,7 +3242,7 @@
 .journey-precise-location__chevron {
   flex: 0 0 auto;
   color: var(--atlas-acid);
-  transition: transform 180ms ease;
+  transition: transform var(--motion-ui, 260ms) var(--motion-ease-out-soft, ease);
 }
 
 .journey-precise-location[open] .journey-precise-location__chevron {
@@ -3394,25 +3401,26 @@
   to { opacity: 1; transform: none; }
 }
 
-/* ML-04 Shared-Element Morph: journey rail card -> active journey card. */
+/* ML-04 Shared-Element Morph: journey rail card -> active journey card.
+   Paced by the Tier 2 content token (#17). */
 .living-atlas__active {
   view-transition-name: journey-card;
 }
 
 ::view-transition-old(journey-card) {
-  animation: motionCardOut 320ms var(--motion-ease-soft, ease) both;
+  animation: motionSharedExpandOut var(--motion-content, 560ms) var(--motion-ease-soft, ease) both;
 }
 
 ::view-transition-new(journey-card) {
-  animation: motionCardIn 560ms var(--motion-ease-out, ease) both;
+  animation: motionSharedExpandIn var(--motion-content, 560ms) var(--motion-ease-out, ease) both;
 }
 
-@keyframes motionCardOut {
-  to { opacity: 0; transform: scale(0.93); }
+@keyframes motionSharedExpandOut {
+  to { opacity: 0.6; transform: scale(0.97); }
 }
 
-@keyframes motionCardIn {
-  from { opacity: 0.3; transform: scale(0.94); }
+@keyframes motionSharedExpandIn {
+  from { opacity: 0.4; transform: scale(0.98); }
 }
 
 /* ML-09 Geographic Cluster Bloom: active journey stops breathe. */
@@ -3601,6 +3609,20 @@
     animation: none !important;
   }
 
+  /* #17: Tier 2/3 become crossfades or instant states; continuous flow stops. */
+  .motion-fade-through,
+  .motion-draw,
+  .motion-focus-flight {
+    animation: none !important;
+    transition: none !important;
+  }
+
+  .motion-lift:hover,
+  .motion-lift:active {
+    transform: none;
+    filter: none;
+  }
+
   .particle-earth-route__point-ring {
     opacity: 0.25;
   }
@@ -3627,6 +3649,66 @@
   ::view-transition-new(journey-card) {
     animation-duration: 0.01ms !important;
   }
+}
+
+/* ── Motion Language primitives (#17) ─────────────────────────────────────
+   Five primitives compose every effect in the product:
+   fade-through / lift / shared-expand / draw / focus-flight.
+   Durations and easings come from the Tier tokens above; do not add
+   per-feature magic numbers. */
+
+/* 1. fade-through — small state replacement (Tier 1–2). */
+.motion-fade-through {
+  animation: motionFadeThrough var(--motion-content, 560ms) var(--motion-ease-out, ease) both;
+}
+
+@keyframes motionFadeThrough {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* 2. lift — card/interactive surface spatial feedback (Tier 0–1).
+   Quiet, depth not bounce: cover moves 2–4px, border light lifts. */
+.motion-lift {
+  transition:
+    transform var(--motion-instant, 120ms) var(--motion-ease-out-soft, ease),
+    filter var(--motion-instant, 120ms) var(--motion-ease-out-soft, ease),
+    box-shadow var(--motion-ui, 260ms) var(--motion-ease-out-soft, ease);
+}
+
+.motion-lift:hover {
+  transform: translateY(-3px);
+  filter: brightness(1.04);
+}
+
+.motion-lift:active {
+  transform: translateY(-1px);
+  filter: brightness(1.02);
+}
+
+/* 3. shared-expand — thumbnail/card expands into story/fullscreen (Tier 2).
+   The content itself is the transition object; background recedes instead of
+   competing. Implemented with the View Transitions API (see
+   src/motion/primitives/sharedElement.ts); the keyframes live beside ML-04
+   above, where the `journey-card` view name is declared. */
+
+/* 4. draw — route/light trail grows from 0 -> 1 (Tier 3). */
+.motion-draw {
+  transform-box: fill-box;
+  transform-origin: left center;
+  animation: motionDraw var(--motion-journey, 980ms) var(--motion-ease-in-out-spatial, ease) both;
+}
+
+@keyframes motionDraw {
+  from { transform: scaleX(0); opacity: 0; }
+  to { transform: scaleX(1); opacity: 1; }
+}
+
+/* 5. focus-flight — globe camera from global view to a place (Tier 3).
+   Driving JS in LivingAtlasGlobe; this class marks the moving layer so
+   reduced motion can freeze it. */
+.motion-focus-flight {
+  transition: transform var(--motion-journey, 980ms) var(--motion-ease-in-out-spatial, ease);
 }
 
 @media (max-width: 980px) {
