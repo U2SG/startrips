@@ -212,6 +212,43 @@ export function stripMediaExtension(fileName: string): string {
     : fileName;
 }
 
+// #12: reorder one scope of visual media and map it back onto the full visual
+// order without touching other scopes. `scopeId` is a route point id (or null
+// for journey-scoped media). Only the relative order inside the scope changes;
+// every other scope's items keep their positions, and the soundtrack never
+// enters the reorder at all (it is not visual media).
+export function applyScopeReorder(
+  visualMedia: readonly JourneyMediaAsset[],
+  scopeId: string | null,
+  reorderedScopeIds: readonly string[],
+): JourneyMediaAsset[] {
+  const scopeItems = visualMedia.filter(
+    (asset) => asset.routePointId === scopeId,
+  );
+  // A reorder must contain exactly the scope's assets, once each; anything
+  // else is a caller bug and must not corrupt the full order.
+  if (scopeItems.length !== reorderedScopeIds.length) return [...visualMedia];
+  const expected = new Set(scopeItems.map((asset) => asset.id));
+  if (new Set(reorderedScopeIds).size !== reorderedScopeIds.length) {
+    return [...visualMedia];
+  }
+  for (const id of reorderedScopeIds) {
+    if (!expected.has(id)) return [...visualMedia];
+  }
+
+  const byId = new Map(scopeItems.map((asset) => [asset.id, asset]));
+  const reordered = reorderedScopeIds.map((id) => byId.get(id)!);
+  const result = [...visualMedia];
+  let slot = 0;
+  for (let index = 0; index < result.length; index += 1) {
+    if (result[index].routePointId === scopeId) {
+      result[index] = reordered[slot];
+      slot += 1;
+    }
+  }
+  return result;
+}
+
 export function validateJourneySoundtrack(
   files: readonly MediaFileLike[],
 ): ValidationResult {

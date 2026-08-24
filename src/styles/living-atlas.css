@@ -1429,6 +1429,25 @@
   margin: 0;
 }
 
+/* #12: drag-and-drop ordering — the dragged tile lifts with a soft shadow;
+   sibling tiles animate out of the way via dnd-kit's layout transition. */
+.journey-story__media-grid > li.is-dragging {
+  z-index: 2;
+  border-radius: 3px;
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.5);
+  filter: brightness(1.06);
+}
+
+.journey-story__media-grid > li.is-dragging button {
+  cursor: grabbing;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .journey-story__media-grid > li {
+    transition: none !important;
+  }
+}
+
 .journey-story__media-grid button {
   position: relative;
   width: 100%;

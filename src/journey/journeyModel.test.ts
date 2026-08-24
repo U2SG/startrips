@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  applyScopeReorder,
   groupJourneysByYear,
   isSoundtrackAsset,
   isVisualMediaAsset,
@@ -219,5 +220,83 @@ describe("journeyModel", () => {
     expect(stripMediaExtension("README")).toBe("README");
     // Hidden files keep their leading dot.
     expect(stripMediaExtension(".mp3")).toBe(".mp3");
+  });
+
+  it("reorders one scope of visual media without touching other scopes (#12)", () => {
+    const base: JourneyMediaAsset = {
+      id: "",
+      journeyId: "journey-1",
+      routePointId: null,
+      storageDriver: "test",
+      storageKey: "journey-1",
+      fileName: "",
+      mimeType: "image/jpeg",
+      bytes: 128,
+      sortOrder: 0,
+      uploadedByUserId: "user-1",
+      createdAt: "2026-08-11T00:00:00.000Z",
+    };
+    const media = [
+      { ...base, id: "a1", fileName: "a1.jpg", sortOrder: 0, routePointId: "point-a" },
+      { ...base, id: "a2", fileName: "a2.jpg", sortOrder: 1, routePointId: "point-a" },
+      { ...base, id: "b1", fileName: "b1.jpg", sortOrder: 2, routePointId: "point-b" },
+      { ...base, id: "a3", fileName: "a3.jpg", sortOrder: 3, routePointId: "point-a" },
+      { ...base, id: "b2", fileName: "b2.jpg", sortOrder: 4, routePointId: "point-b" },
+    ] as JourneyMediaAsset[];
+
+    const reordered = applyScopeReorder(media, "point-a", ["a3", "a1", "a2"]);
+    // Only point-a's relative order changes; point-b items keep their slots.
+    expect(reordered.map((entry) => entry.id)).toEqual([
+      "a3", "a1", "b1", "a2", "b2",
+    ]);
+  });
+
+  it("rejects a scope reorder whose ids do not match the scope (#12)", () => {
+    const base: JourneyMediaAsset = {
+      id: "",
+      journeyId: "journey-1",
+      routePointId: null,
+      storageDriver: "test",
+      storageKey: "journey-1",
+      fileName: "",
+      mimeType: "image/jpeg",
+      bytes: 128,
+      sortOrder: 0,
+      uploadedByUserId: "user-1",
+      createdAt: "2026-08-11T00:00:00.000Z",
+    };
+    const withPoint = [
+      { ...base, id: "a1", fileName: "a1.jpg", sortOrder: 0, routePointId: "point-a" },
+      { ...base, id: "a2", fileName: "a2.jpg", sortOrder: 1, routePointId: "point-a" },
+    ] as JourneyMediaAsset[];
+
+    // Wrong count, duplicate, and foreign id all fall back to the original.
+    expect(applyScopeReorder(withPoint, "point-a", ["a1"])).toEqual(withPoint);
+    expect(applyScopeReorder(withPoint, "point-a", ["a1", "a1"])).toEqual(withPoint);
+    expect(applyScopeReorder(withPoint, "point-a", ["a1", "other"])).toEqual(withPoint);
+  });
+
+  it("keeps journey-scoped reorders separate from route-point scopes (#12)", () => {
+    const base: JourneyMediaAsset = {
+      id: "",
+      journeyId: "journey-1",
+      routePointId: null,
+      storageDriver: "test",
+      storageKey: "journey-1",
+      fileName: "",
+      mimeType: "image/jpeg",
+      bytes: 128,
+      sortOrder: 0,
+      uploadedByUserId: "user-1",
+      createdAt: "2026-08-11T00:00:00.000Z",
+    };
+    const withScope = [
+      { ...base, id: "j1", fileName: "j1.jpg", sortOrder: 0, routePointId: null },
+      { ...base, id: "a1", fileName: "a1.jpg", sortOrder: 1, routePointId: "point-a" },
+      { ...base, id: "j2", fileName: "j2.jpg", sortOrder: 2, routePointId: null },
+    ] as JourneyMediaAsset[];
+
+    const reordered = applyScopeReorder(withScope, null, ["j2", "j1"]);
+    expect(reordered.map((entry) => entry.id)).toEqual(["j2", "a1", "j1"]);
   });
 });

@@ -10,6 +10,23 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import {
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  arrayMove,
+  rectSortingStrategy,
+  sortableKeyboardCoordinates,
+  useSortable,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import {
   IconArrowLeft,
   IconArrowRight,
   IconArrowDown,
@@ -35,6 +52,7 @@ import {
 } from "./mediaPrefetch";
 import { prefersReducedMotion } from "../motion/preferences";
 import {
+  applyScopeReorder,
   journeySoundtrack,
   journeyVisualMedia,
   stripMediaExtension,
@@ -271,6 +289,63 @@ function StoryMediaTile({
         )}
         <small>{String(index + 1).padStart(2, "0")}</small>
       </button>
+    </li>
+  );
+}
+
+// #12: a sortable wrapper around StoryMediaTile. The <li> becomes the drag
+// handle surface; dragging lifts the tile and leaves the grid layout animating
+// around it (dnd-kit layout animation), with the sortable styles applied via
+// transform/transition so reduced-motion falls back to instant moves.
+function SortableMediaTile({
+  asset,
+  index,
+  isCurrent,
+  read,
+  disabled,
+  onRequestRead,
+  onSelect,
+}: {
+  asset: JourneyMediaAsset;
+  index: number;
+  isCurrent: boolean;
+  read: MediaReadState | undefined;
+  disabled: boolean;
+  onRequestRead: (assetId: string) => void;
+  onSelect: (index: number) => void;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: asset.id });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    zIndex: isDragging ? 2 : undefined,
+  };
+
+  return (
+    <li
+      ref={setNodeRef}
+      style={style}
+      className={isDragging ? "is-dragging" : ""}
+      {...attributes}
+      {...listeners}
+    >
+      <StoryMediaTile
+        asset={asset}
+        index={index}
+        isCurrent={isCurrent}
+        read={read}
+        disabled={disabled || isDragging}
+        onRequestRead={onRequestRead}
+        onSelect={onSelect}
+      />
     </li>
   );
 }
@@ -919,6 +994,56 @@ export function JourneyStory({
     setOverview(false);
   }
 
+  // #12: overview drag-and-drop reordering. Sensors cover pointer (mouse +
+  // touch) and keyboard; keyboard uses sortable arrow-key coordinates.
+  const dragSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+
+  async function handleMediaReorderEnd(event: DragEndEvent) {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    const oldIndex = scopedMedia.findIndex((candidate) => candidate.id === active.id);
+    const newIndex = scopedMedia.findIndex((candidate) => candidate.id === over.id);
+    if (oldIndex < 0 || newIndex < 0) return;
+
+    // Optimistic: update the grid immediately, then persist.
+    const nextScoped = arrayMove(scopedMedia, oldIndex, newIndex);
+    const nextVisual = applyScopeReorder(
+      visualMedia,
+      selectedRoutePointId,
+      nextScoped.map((candidate) => candidate.id),
+    );
+    const nextAssetIndex = nextScoped.findIndex(
+      (candidate) => candidate.id === active.id,
+    );
+    setOrderPending(true);
+    setOrderMessage("");
+    try {
+      if (onMediaReorder) {
+        await onMediaReorder(journey.id, nextVisual.map((candidate) => candidate.id));
+      } else {
+        await reorderJourneyMedia(journey.id, nextVisual.map((candidate) => candidate.id));
+        const refreshedJourney = await onMediaAdded(journey.id);
+        if (refreshedJourney) {
+          const refreshedScoped = scopedVisualMedia(refreshedJourney);
+          setAssetIndex((current) => Math.min(current, Math.max(0, refreshedScoped.length - 1)));
+          setShownAssetId(null);
+          setIncomingAssetId(null);
+          pendingTargetRef.current = null;
+        }
+      }
+      setAssetIndex(Math.max(0, nextAssetIndex));
+    } catch (error) {
+      setOrderMessage(error instanceof Error ? error.message : "顺序调整失败，请稍后重试。");
+      // Rollback: the parent refresh path restores server truth; without a
+      // refresh the grid keeps the pre-drag order via the reloaded journey.
+    } finally {
+      setOrderPending(false);
+    }
+  }
+
   function togglePlaying() {
     // Autoplay always runs on a single item, so entering it leaves the grid.
     setOverview(false);
@@ -1058,20 +1183,31 @@ export function JourneyStory({
               </button>
             ) : null}
             {overview ? (
-              <ul className="journey-story__media-grid" aria-label={`全部媒体，共 ${scopedMedia.length} 个`}>
-                {scopedMedia.map((tile, index) => (
-                  <StoryMediaTile
-                    key={tile.id}
-                    asset={tile}
-                    index={index}
-                    isCurrent={index === assetIndex}
-                    read={mediaReads[tile.id]}
-                    disabled={mutationPending}
-                    onRequestRead={loadMediaRead}
-                    onSelect={selectMediaIndex}
-                  />
-                ))}
-              </ul>
+              <DndContext
+                sensors={dragSensors}
+                collisionDetection={closestCenter}
+                onDragEnd={(event) => void handleMediaReorderEnd(event)}
+              >
+                <SortableContext
+                  items={scopedMedia.map((candidate) => candidate.id)}
+                  strategy={rectSortingStrategy}
+                >
+                  <ul className="journey-story__media-grid" aria-label={`全部媒体，共 ${scopedMedia.length} 个`}>
+                    {scopedMedia.map((tile, index) => (
+                      <SortableMediaTile
+                        key={tile.id}
+                        asset={tile}
+                        index={index}
+                        isCurrent={index === assetIndex}
+                        read={mediaReads[tile.id]}
+                        disabled={mutationPending}
+                        onRequestRead={loadMediaRead}
+                        onSelect={selectMediaIndex}
+                      />
+                    ))}
+                  </ul>
+                </SortableContext>
+              </DndContext>
             ) : null}
             {!overview && shownAsset && (!shownRead || shownRead.status === "loading") ? <div className="journey-story__media-state">正在打开私有媒体…</div> : null}
             {!overview && shownAsset && shownRead?.status === "error" ? <div className="journey-story__media-state is-error">{shownRead.message}</div> : null}
