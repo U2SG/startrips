@@ -152,7 +152,9 @@ export default function DetailedEarthMap({
     };
 
     const onMouseDown = (event: MouseEvent) => {
-      if (event.button !== 0) return;
+      // Ctrl+primary is MapLibre's own dragRotate gesture, which stays enabled
+      // below. Claiming it here too would apply both rotations to one drag.
+      if (event.button !== 0 || event.ctrlKey) return;
       beginPrimaryDrag(event.clientX, event.clientY);
     };
 
