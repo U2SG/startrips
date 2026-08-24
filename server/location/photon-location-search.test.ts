@@ -105,6 +105,73 @@ describe("PhotonLocationSearch", () => {
     }]);
   });
 
+  it("merges Photon local results with a second English-language query", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      const english = url.searchParams.get("lang") === "en";
+      return Response.json({
+        features: [{
+          geometry: { coordinates: [116.3913, 39.9057] },
+          properties: {
+            osm_type: "R",
+            osm_id: 912940,
+            name: english ? "Beijing" : "北京市",
+            country: english ? "China" : "中国",
+            countrycode: "CN",
+          },
+        }],
+      });
+    });
+    const search = new PhotonLocationSearch({
+      baseUrl: "https://photon.example.test",
+      userAgent: "Startrips/1.0",
+      fetcher: fetchMock as unknown as typeof fetch,
+      requestIntervalMs: 0,
+    });
+
+    await expect(search.search("Beijing", { limit: 8 })).resolves.toMatchObject([{
+      label: "北京市",
+      labelEnglish: "Beijing",
+    }]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const englishUrl = new URL(String(fetchMock.mock.calls[1][0]));
+    expect(englishUrl.searchParams.get("q")).toBe("Beijing");
+    expect(englishUrl.searchParams.get("lang")).toBe("en");
+  });
+
+  it("uses a common Chinese foreign-city alias when the local query is ambiguous", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      const english = url.searchParams.get("lang") === "en";
+      return Response.json({
+        features: english ? [{
+          geometry: { coordinates: [-0.1257, 51.5085] },
+          properties: {
+            osm_type: "N",
+            osm_id: 1,
+            name: "London",
+            country: "United Kingdom",
+            countrycode: "GB",
+          },
+        }] : [],
+      });
+    });
+    const search = new PhotonLocationSearch({
+      baseUrl: "https://photon.example.test",
+      userAgent: "Startrips/1.0",
+      fetcher: fetchMock as unknown as typeof fetch,
+      requestIntervalMs: 0,
+    });
+
+    await expect(search.search("伦敦", { limit: 8 })).resolves.toMatchObject([{
+      label: "London",
+      countryCode: "GB",
+    }]);
+    const englishUrl = new URL(String(fetchMock.mock.calls[1][0]));
+    expect(englishUrl.searchParams.get("q")).toBe("London");
+    expect(englishUrl.searchParams.get("lang")).toBe("en");
+  });
+
   it("resolves a coordinate to the nearest named place", async () => {
     const fetchMock = vi.fn(async () => Response.json({
       features: [

@@ -7,8 +7,8 @@ import {
 import "maplibre-gl/dist/maplibre-gl.css";
 import {
   createDetailedEarthLabelExpression,
+  getDetailedEarthDragRotation,
   DETAILED_EARTH_INITIAL_ZOOM,
-  DETAILED_EARTH_DRAG_PAN_OPTIONS,
   DETAILED_EARTH_MAX_PITCH,
   DETAILED_EARTH_MAX_ZOOM,
   DETAILED_EARTH_MIN_ZOOM,
@@ -84,18 +84,101 @@ export default function DetailedEarthMap({
     });
     let initialLoadSettled = false;
     let overviewRequested = false;
+    let settleTimer: number | null = null;
+    let customPointerId: number | null = null;
+    let customPointerX = 0;
+    let customPointerY = 0;
+    let customPointerDragged = false;
+    let suppressNextMapClick = false;
     mapRef.current = map;
     map.dragRotate.enable();
-    map.dragPan.enable(DETAILED_EARTH_DRAG_PAN_OPTIONS);
+    // A normal primary-button drag rotates the earth. MapLibre's built-in
+    // dragRotate intentionally reserves that gesture for right-button/Ctrl
+    // dragging, so leave it enabled for those gestures and own the primary
+    // pointer path here.
+    map.dragPan.disable();
     map.touchZoomRotate.enableRotation();
     map.touchZoomRotate.setZoomRate(DETAILED_EARTH_TOUCH_ZOOM_RATE);
     map.touchZoomRotate.setZoomThreshold(DETAILED_EARTH_TOUCH_ZOOM_THRESHOLD);
+    const canvas = map.getCanvas();
+    canvas.style.touchAction = "none";
+
+    const releaseCustomPointer = () => {
+      if (
+        customPointerId !== null
+        && canvas.hasPointerCapture?.(customPointerId)
+      ) {
+        canvas.releasePointerCapture?.(customPointerId);
+      }
+      customPointerId = null;
+      customPointerDragged = false;
+      delete host.dataset.dragging;
+    };
+
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.pointerType === "mouse" && event.button !== 0) return;
+      // A second touch belongs to MapLibre's native pinch/rotation handler.
+      // Stop the one-finger rotation before handing the gesture over.
+      if (customPointerId !== null) {
+        releaseCustomPointer();
+        return;
+      }
+      if (!event.isPrimary) return;
+      customPointerId = event.pointerId;
+      customPointerX = event.clientX;
+      customPointerY = event.clientY;
+      customPointerDragged = false;
+      map.stop();
+      canvas.setPointerCapture?.(event.pointerId);
+    };
+
+    const onPointerMove = (event: PointerEvent) => {
+      if (event.pointerId !== customPointerId) return;
+      const deltaX = event.clientX - customPointerX;
+      const deltaY = event.clientY - customPointerY;
+      customPointerX = event.clientX;
+      customPointerY = event.clientY;
+      if (deltaX === 0 && deltaY === 0) return;
+      event.preventDefault();
+      customPointerDragged = true;
+      suppressNextMapClick = true;
+      host.dataset.dragging = "true";
+      map.stop();
+      const rotation = getDetailedEarthDragRotation(
+        map.getBearing(),
+        map.getPitch(),
+        deltaX,
+        deltaY,
+      );
+      map.setBearing(rotation.bearing);
+      map.setPitch(rotation.pitch);
+    };
+
+    const onPointerUp = (event: PointerEvent) => {
+      if (event.pointerId !== customPointerId) return;
+      const wasDragged = customPointerDragged;
+      releaseCustomPointer();
+      if (suppressNextMapClick && wasDragged) {
+        window.setTimeout(() => {
+          suppressNextMapClick = false;
+        }, 0);
+      }
+    };
+
+    const onPointerCancel = (event: PointerEvent) => {
+      if (event.pointerId === customPointerId) releaseCustomPointer();
+    };
+
+    canvas.addEventListener("pointerdown", onPointerDown);
+    canvas.addEventListener("pointermove", onPointerMove, { passive: false });
+    canvas.addEventListener("pointerup", onPointerUp);
+    canvas.addEventListener("pointercancel", onPointerCancel);
     map.addControl(new NavigationControl({ showCompass: true }), "bottom-right");
     map.addControl(new AttributionControl({ compact: true }), "bottom-left");
 
     map.on("load", () => {
-      // Globe projection only supports vector sources and can keep the source
-      // busy forever with proxied tiles; keep it for the direct provider only.
+      // Raster fallback remains Mercator; vector styles use the globe so a
+      // polar focus is not trapped by the flat-map viewport.
       if (useGlobeProjection()) map.setProjection({ type: "globe" });
       applyMapLanguage(map, languageRef.current);
       const settle = () => {
@@ -108,10 +191,14 @@ export default function DetailedEarthMap({
       // Safety net: under heavy load MapLibre can keep re-fetching tiles and
       // never reach idle; enter the detail view anyway and let tiles finish
       // progressively.
-      window.setTimeout(settle, 3000);
+      settleTimer = window.setTimeout(settle, 3000);
     });
 
     map.on("click", (event) => {
+      if (suppressNextMapClick) {
+        suppressNextMapClick = false;
+        return;
+      }
       if (!onPickRef.current) return;
       onPickRef.current({
         latitude: event.lngLat.lat,
@@ -132,6 +219,12 @@ export default function DetailedEarthMap({
     });
 
     return () => {
+      if (settleTimer !== null) window.clearTimeout(settleTimer);
+      canvas.removeEventListener("pointerdown", onPointerDown);
+      canvas.removeEventListener("pointermove", onPointerMove);
+      canvas.removeEventListener("pointerup", onPointerUp);
+      canvas.removeEventListener("pointercancel", onPointerCancel);
+      releaseCustomPointer();
       mapRef.current = null;
       map.remove();
     };

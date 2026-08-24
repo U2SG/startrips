@@ -55,15 +55,12 @@ describe("ParticleEarthScene contracts", () => {
     });
   });
 
-  it("uses a deliberate drag threshold and keeps vertical rotation bounded", () => {
+  it("uses a deliberate drag threshold and allows full globe rotation", () => {
     expect(isGlobeDrag(GLOBE_DRAG_THRESHOLD_PX - 0.01)).toBe(false);
     expect(isGlobeDrag(GLOBE_DRAG_THRESHOLD_PX)).toBe(true);
-    expect(clampGlobeTilt(GLOBE_TILT_LIMIT_RADIANS + 1)).toBe(
-      GLOBE_TILT_LIMIT_RADIANS,
-    );
-    expect(clampGlobeTilt(-GLOBE_TILT_LIMIT_RADIANS - 1)).toBe(
-      -GLOBE_TILT_LIMIT_RADIANS,
-    );
+    expect(GLOBE_TILT_LIMIT_RADIANS).toBe(Number.POSITIVE_INFINITY);
+    expect(clampGlobeTilt(Math.PI * 3)).toBe(Math.PI * 3);
+    expect(clampGlobeTilt(-Math.PI * 3)).toBe(-Math.PI * 3);
     expect(clampGlobeTilt(0.18)).toBe(0.18);
     expect(clampGlobeZoom(GLOBE_ZOOM_MIN - 1)).toBe(GLOBE_ZOOM_MIN);
     expect(clampGlobeZoom(GLOBE_ZOOM_MAX + 1)).toBe(GLOBE_ZOOM_MAX);

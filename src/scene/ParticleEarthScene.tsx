@@ -61,7 +61,9 @@ export const GLOBE_RENDER_ORDER = {
   personalPoint: 5,
 } as const;
 export const GLOBE_DRAG_THRESHOLD_PX = 6;
-export const GLOBE_TILT_LIMIT_RADIANS = 0.62;
+// The globe is a real sphere: vertical dragging must be able to pass the
+// former +/-35 degree clamp and turn it completely over.
+export const GLOBE_TILT_LIMIT_RADIANS = Number.POSITIVE_INFINITY;
 export const GLOBE_ZOOM_MIN = 0.72;
 // City labels project at radius 1.46 (above the 1.39 surface) and the
 // largest mode scale is 1.15, so at max zoom the label layer sits at
@@ -84,10 +86,7 @@ const JOURNEY_ROUTE_MARKER_SCALE = JOURNEY_ROUTE_MARKER_SIZE_PX / (3.4 * 2);
 const JOURNEY_POINT_TWINKLE_SLOWDOWN = 5;
 
 export function clampGlobeTilt(rotation: number) {
-  return Math.max(
-    -GLOBE_TILT_LIMIT_RADIANS,
-    Math.min(GLOBE_TILT_LIMIT_RADIANS, rotation),
-  );
+  return rotation;
 }
 
 export function isGlobeDrag(distance: number) {

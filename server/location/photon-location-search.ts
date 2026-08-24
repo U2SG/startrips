@@ -40,6 +40,34 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
 const MAX_CACHE_ENTRIES = 256;
 const MAX_PENDING_REQUESTS = 24;
 
+// Photon does not translate every Chinese place-name query. These common
+// aliases keep the most frequent foreign-city searches useful while the
+// provider's own bilingual fields remain the source of truth for addresses.
+const ENGLISH_QUERY_ALIASES: Readonly<Record<string, string>> = {
+  "伦敦": "London",
+  "英国伦敦": "London",
+  "东京": "Tokyo",
+  "日本东京": "Tokyo",
+  "纽约": "New York City",
+  "纽约市": "New York City",
+  "巴黎": "Paris",
+  "新加坡": "Singapore",
+  "悉尼": "Sydney",
+  "墨尔本": "Melbourne",
+  "洛杉矶": "Los Angeles",
+  "旧金山": "San Francisco",
+  "芝加哥": "Chicago",
+  "罗马": "Rome",
+  "柏林": "Berlin",
+  "莫斯科": "Moscow",
+  "迪拜": "Dubai",
+  "曼谷": "Bangkok",
+  "首尔": "Seoul",
+  "香港": "Hong Kong",
+  "台北": "Taipei",
+  "大阪": "Osaka",
+};
+
 function text(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
@@ -50,6 +78,18 @@ function firstText(properties: Record<string, unknown>, keys: readonly string[])
     if (value) return value;
   }
   return "";
+}
+
+function hasNonAscii(value: string) {
+  return /[^\u0000-\u007f]/.test(value);
+}
+
+function normalizedQueryKey(value: string) {
+  return value.toLocaleLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function getEnglishQuery(query: string) {
+  return ENGLISH_QUERY_ALIASES[normalizedQueryKey(query)] ?? query;
 }
 
 function contextFrom(properties: Record<string, unknown>, label: string): string {
@@ -80,7 +120,12 @@ function toLocationResult(feature: PhotonFeature): LocationSearchResult | null {
     || text(properties.city)
     || text(properties.country);
   const label = chineseLabel || providerLabel;
-  const labelEnglish = firstText(properties, ["name:en", "name_en", "int_name"]);
+  const labelEnglish = firstText(properties, [
+    "name:en",
+    "name_en",
+    "name:latin",
+    "int_name",
+  ]);
   const labelLocal = providerLabel !== label ? providerLabel : "";
   if (
     !label
@@ -112,6 +157,65 @@ function toLocationResult(feature: PhotonFeature): LocationSearchResult | null {
     latitude,
     longitude,
   };
+}
+
+function englishAlias(result: LocationSearchResult) {
+  if (result.labelEnglish && !hasNonAscii(result.labelEnglish)) {
+    return result.labelEnglish;
+  }
+  return hasNonAscii(result.label) ? "" : result.label;
+}
+
+function samePlace(left: LocationSearchResult, right: LocationSearchResult) {
+  return left.id === right.id
+    || (
+      left.countryCode === right.countryCode
+      && Math.abs(left.latitude - right.latitude) < 0.001
+      && Math.abs(left.longitude - right.longitude) < 0.001
+    );
+}
+
+function mergeBilingualResults(
+  primary: LocationSearchResult[],
+  english: LocationSearchResult[],
+  limit: number,
+  preferEnglish: boolean,
+) {
+  const output = (preferEnglish ? english : primary).map((result) => ({ ...result }));
+  const secondary = preferEnglish ? primary : english;
+  const matchedSecondary = new Set<number>();
+
+  output.forEach((result) => {
+    const secondaryIndex = secondary.findIndex(
+      (candidate, index) => !matchedSecondary.has(index) && samePlace(result, candidate),
+    );
+    if (secondaryIndex < 0) return;
+    matchedSecondary.add(secondaryIndex);
+    const candidate = secondary[secondaryIndex];
+    const candidateEnglish = englishAlias(preferEnglish ? result : candidate);
+    const candidateLocal = preferEnglish
+      ? candidate.labelLocal || (hasNonAscii(candidate.label) ? candidate.label : "")
+      : candidate.labelLocal;
+    if (candidateEnglish && candidateEnglish !== result.label) {
+      result.labelEnglish = candidateEnglish;
+    }
+    if (candidateLocal && candidateLocal !== result.label) {
+      result.labelLocal = candidateLocal;
+    }
+    if (!result.context && candidate.context) result.context = candidate.context;
+  });
+
+  // For ordinary queries keep the provider's local ordering and append only
+  // genuinely new English hits. For a Chinese foreign-city alias, the
+  // provider's same-language hits can be unrelated places, so English hits
+  // are the authoritative list and those false positives are omitted.
+  if (!preferEnglish) {
+    secondary.forEach((candidate, index) => {
+      if (matchedSecondary.has(index)) return;
+      output.push(candidate);
+    });
+  }
+  return output.slice(0, limit);
 }
 
 export class PhotonLocationSearch implements LocationSearch {
@@ -146,14 +250,44 @@ export class PhotonLocationSearch implements LocationSearch {
     options: LocationSearchOptions,
   ): Promise<LocationSearchResult[]> {
     const normalizedQuery = query.trim().replace(/\s+/g, " ");
-    const url = new URL("api/", this.baseUrl);
-    url.searchParams.set("q", normalizedQuery);
-    url.searchParams.set("limit", String(options.limit));
+    const primaryUrl = new URL("api/", this.baseUrl);
+    primaryUrl.searchParams.set("q", normalizedQuery);
+    primaryUrl.searchParams.set("limit", String(options.limit));
+    const englishQuery = getEnglishQuery(normalizedQuery);
     return this.requestFeatures(
-      url,
+      primaryUrl,
       `search:${normalizedQuery.toLocaleLowerCase()}::${options.limit}`,
       { limit: options.limit, signal: options.signal },
-    );
+    ).then(async (primaryResults) => {
+      const shouldFetchEnglish = hasNonAscii(normalizedQuery)
+        || englishQuery !== normalizedQuery
+        || primaryResults.some((result) => (
+          !result.labelEnglish && hasNonAscii(result.label)
+        ));
+      if (!shouldFetchEnglish) return primaryResults;
+
+      const englishUrl = new URL("api/", this.baseUrl);
+      englishUrl.searchParams.set("q", englishQuery);
+      englishUrl.searchParams.set("limit", String(options.limit));
+      englishUrl.searchParams.set("lang", "en");
+      let englishResults: LocationSearchResult[];
+      try {
+        englishResults = await this.requestFeatures(
+          englishUrl,
+          `search:${englishQuery.toLocaleLowerCase()}::${options.limit}::lang=en`,
+          { limit: options.limit, signal: options.signal },
+        );
+      } catch {
+        throwIfLocationSearchAborted(options.signal);
+        return primaryResults;
+      }
+      return mergeBilingualResults(
+        primaryResults,
+        englishResults,
+        options.limit,
+        englishQuery !== normalizedQuery && hasNonAscii(normalizedQuery),
+      );
+    });
   }
 
   reverse(

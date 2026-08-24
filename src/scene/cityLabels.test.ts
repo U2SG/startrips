@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { parseCityFeatures, parseCityList, selectCityCandidates } from "./cityLabels";
+import {
+  getCityDisplayName,
+  parseCityFeatures,
+  parseCityList,
+  selectCityCandidates,
+} from "./cityLabels";
 
 describe("parseCityFeatures", () => {
   it("parses named cities with valid coordinates sorted by population", () => {
@@ -57,6 +62,18 @@ describe("parseCityFeatures", () => {
 });
 
 describe("parseCityList", () => {
+  it("localizes visible Chinese city names while preserving other cities", () => {
+    expect(getCityDisplayName("Beijing")).toBe("北京");
+    expect(getCityDisplayName("Xi’an")).toBe("西安");
+    expect(getCityDisplayName("London")).toBe("London");
+    expect(parseCityList({
+      cities: [
+        { n: "Shanghai", la: 31.22, lo: 121.45, p: 100, r: 1 },
+        { n: "London", la: 51.5, lo: -0.12, p: 100, r: 0 },
+      ],
+    }).map((city) => city.name)).toEqual(["上海", "London"]);
+  });
+
   it("parses the compact GeoNames build with unit directions and ranks", () => {
     const cities = parseCityList({
       cities: [
@@ -64,7 +81,7 @@ describe("parseCityList", () => {
         { n: "Small", la: 10, lo: 20, p: 15000, r: 3 },
       ],
     });
-    expect(cities.map((city) => city.name)).toEqual(["Zhengzhou", "Small"]);
+    expect(cities.map((city) => city.name)).toEqual(["郑州", "Small"]);
     expect(cities[0]).toMatchObject({ latitude: 34.75, longitude: 113.63, rank: 1 });
     expect(cities[1].rank).toBe(3);
     const [x, y, z] = cities[1].direction;

@@ -4,6 +4,8 @@ import {
   createDetailedEarthLabelExpression,
   DEFAULT_DETAILED_EARTH_STYLE_URL,
   DETAILED_EARTH_DRAG_PAN_OPTIONS,
+  DETAILED_EARTH_BEARING_PER_PIXEL,
+  DETAILED_EARTH_PITCH_PER_PIXEL,
   DETAILED_EARTH_INITIAL_ZOOM,
   DETAILED_EARTH_MAX_PITCH,
   DETAILED_EARTH_MAX_ZOOM,
@@ -12,6 +14,8 @@ import {
   DETAILED_EARTH_TOUCH_ZOOM_RATE,
   DETAILED_EARTH_TOUCH_ZOOM_THRESHOLD,
   getDetailedEarthStyle,
+  getDetailedEarthDragRotation,
+  clampDetailedEarthPitch,
   isDetailedEarthNameLabel,
   isRasterDetailedEarth,
   shouldReturnToParticleEarth,
@@ -25,14 +29,14 @@ describe("detailedEarthModel", () => {
     expect(useGlobeProjection()).toBe(true);
   });
 
-  it("keeps globe projection only for the direct default provider", () => {
+  it("keeps globe projection for vector providers but not raster tiles", () => {
     const original = import.meta.env.VITE_ATLAS_MAP_STYLE_URL;
     try {
       import.meta.env.VITE_ATLAS_MAP_STYLE_URL = AMAP_RASTER_STYLE;
       expect(useGlobeProjection()).toBe(false);
       import.meta.env.VITE_ATLAS_MAP_STYLE_URL =
         "https://startrips.example/api/mapstyle?path=styles%2Ffiord";
-      expect(useGlobeProjection()).toBe(false);
+      expect(useGlobeProjection()).toBe(true);
     } finally {
       import.meta.env.VITE_ATLAS_MAP_STYLE_URL = original;
     }
@@ -78,9 +82,18 @@ describe("detailedEarthModel", () => {
     expect(shouldReturnToParticleEarth(DETAILED_EARTH_RETURN_ZOOM)).toBe(true);
   });
 
-  it("keeps detailed-map interaction available but deliberately soft", () => {
+  it("keeps detailed-map interaction available and reaches polar views", () => {
     expect(DETAILED_EARTH_MAX_ZOOM).toBeGreaterThan(DETAILED_EARTH_INITIAL_ZOOM);
     expect(DETAILED_EARTH_MAX_PITCH).toBeGreaterThan(0);
+    expect(DETAILED_EARTH_MAX_PITCH).toBe(85);
+    expect(clampDetailedEarthPitch(-10)).toBe(0);
+    expect(clampDetailedEarthPitch(DETAILED_EARTH_MAX_PITCH + 10))
+      .toBe(DETAILED_EARTH_MAX_PITCH);
+    expect(getDetailedEarthDragRotation(0, 0, 10, 20)).toEqual({
+      bearing: -10 * DETAILED_EARTH_BEARING_PER_PIXEL,
+      pitch: 20 * DETAILED_EARTH_PITCH_PER_PIXEL,
+    });
+    expect(getDetailedEarthDragRotation(360, 80, -10, 100).bearing).toBe(360 + 10 * DETAILED_EARTH_BEARING_PER_PIXEL);
     expect(DETAILED_EARTH_TOUCH_ZOOM_RATE).toBeLessThan(1);
     expect(DETAILED_EARTH_TOUCH_ZOOM_THRESHOLD).toBeGreaterThan(0.1);
     expect(DETAILED_EARTH_DRAG_PAN_OPTIONS.linearity).toBeLessThan(0.3);
