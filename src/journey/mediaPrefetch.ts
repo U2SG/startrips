@@ -50,6 +50,8 @@ export type DecodedReadiness =
 export type DecodeRegistry = {
   ensure(assetId: string, url: string): DecodedReadiness;
   isDecoded(assetId: string): boolean;
+  /** Read the current terminal/pending state without starting a decode. */
+  readiness(assetId: string): DecodedReadiness | undefined;
   /** Register a listener called whenever any asset's decode settles (the
    *  pending → decoded/error transition). Used to wake React effects that
    *  gate navigation on decode readiness (review P1). */
@@ -105,6 +107,9 @@ export function createDecodeRegistry(
     ensure,
     isDecoded(assetId: string) {
       return state.get(assetId)?.status === "decoded";
+    },
+    readiness(assetId: string) {
+      return state.get(assetId);
     },
     onSettle(listener: () => void) {
       listeners.add(listener);

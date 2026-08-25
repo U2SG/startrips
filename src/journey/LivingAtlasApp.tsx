@@ -39,6 +39,7 @@ import {
 } from "./journeyApi";
 import {
   journeyCover,
+  journeySoundtrack,
   journeyVisualMedia,
   mergeJourney,
   sortJourneysChronologically,
@@ -56,6 +57,13 @@ export function globeFocusState(focused: boolean) {
     className: focused ? " is-globe-focus" : "",
     dataAttribute: focused ? "on" : "off",
   };
+}
+
+export function playbackEntryNeedsPreparation(
+  journey: Journey | null,
+  cachedRead: { url: string } | null,
+) {
+  return Boolean(journey && journeySoundtrack(journey) && !cachedRead);
 }
 
 function preferredReducedMotion() {
@@ -396,9 +404,10 @@ export function LivingAtlasApp() {
     const journey = journeys.find((candidate) => candidate.id === journeyId) ?? null;
     setStoryJourneyId(null);
     setStoryRoutePointId(null);
-    if (journey && !cachedSoundtrackRead(journey)) {
+    const cachedRead = journey ? cachedSoundtrackRead(journey) : null;
+    if (playbackEntryNeedsPreparation(journey, cachedRead)) {
       setPlaybackPreparingId(journeyId);
-      void prefetchSoundtrackRead(journey)
+      void prefetchSoundtrackRead(journey!)
         .catch(() => null)
         .finally(() => setPlaybackPreparingId((current) => (
           current === journeyId ? null : current

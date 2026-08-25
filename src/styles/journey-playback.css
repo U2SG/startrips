@@ -146,6 +146,10 @@
   letter-spacing: 0.12em;
 }
 
+.journey-playback__media-state.is-error {
+  color: #c28e78;
+}
+
 /* Outro. */
 .journey-playback__outro p {
   color: var(--atlas-muted);

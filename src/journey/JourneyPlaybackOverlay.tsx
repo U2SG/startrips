@@ -19,6 +19,7 @@ import { getPrivateMediaRead } from "./journeyApi";
 import {
   createDecodeRegistry,
   decodeImageUrl,
+  type DecodedReadiness,
 } from "./mediaPrefetch";
 import { useJourneyPlaybackDirector } from "./useJourneyPlaybackDirector";
 import { playbackMediaForPoint, type PlaybackStep } from "./journeyPlayback";
@@ -31,6 +32,20 @@ type MediaRead =
   | { status: "loading" }
   | { status: "ready"; url: string }
   | { status: "error"; message: string };
+
+export type PlaybackMediaGate = "waiting" | "ready" | "error";
+
+export function playbackMediaGate(
+  read: MediaRead | null | undefined,
+  decodeReadiness: DecodedReadiness | undefined,
+  isImage: boolean,
+): PlaybackMediaGate {
+  if (!read || read.status === "loading") return "waiting";
+  if (read.status === "error") return "error";
+  if (!isImage) return "ready";
+  if (decodeReadiness?.status === "error") return "error";
+  return decodeReadiness?.status === "decoded" ? "ready" : "waiting";
+}
 
 /**
  * #19 Journey Playback overlay.
@@ -172,26 +187,28 @@ export function JourneyPlaybackOverlay({
   }, [decodeSettleRevision, director.step, journey, mediaReads]);
 
   // Review P2: while a media chapter's image is not decoded yet, hold the
-  // director so it never advances into a blank frame. Once the decode
-  // settles (revision bump) the hold lifts and the timer restarts.
+  // director so it never advances into a blank frame. Terminal read/decode
+  // failures are settled too: they release the hold so playback can show an
+  // explicit fallback instead of deadlocking forever.
   useEffect(() => {
     if (!journey) return;
     const step = director.step;
     if (step?.kind === "stop") {
-      // Review P2: hold the STOP phase until this chapter's first image is
-      // decoded — so the stop -> media transition never lands on an
-      // undecoded frame. The stop UI (place + note) is the "previous frame"
-      // that stays on screen while the image prepares.
+      // Hold the STOP phase until this chapter's first image is decoded. If
+      // the signed read or browser decode fails, release the hold and let the
+      // media step render its recoverable error state.
       const firstImage = playbackMediaForPoint(journey, step.pointIndex)
         .find((asset) => asset.mimeType.startsWith("image/"));
       if (!firstImage) {
         setHold(false);
         return;
       }
-      const read = mediaReads[firstImage.id];
-      const decoded = read?.status === "ready"
-        && decodeRegistryRef.current.isDecoded(firstImage.id);
-      setHold(!decoded);
+      const gate = playbackMediaGate(
+        mediaReads[firstImage.id],
+        decodeRegistryRef.current.readiness(firstImage.id),
+        true,
+      );
+      setHold(gate === "waiting");
       return;
     }
     if (step?.kind !== "media") {
@@ -199,18 +216,16 @@ export function JourneyPlaybackOverlay({
       return;
     }
     const asset = playbackMediaForPoint(journey, step.pointIndex)[step.mediaIndex];
-    if (!asset) {
+    if (!asset || asset.mimeType.startsWith("video/")) {
       setHold(false);
       return;
     }
-    if (asset.mimeType.startsWith("video/")) {
-      setHold(false);
-      return;
-    }
-    const read = mediaReads[asset.id];
-    const decoded = read?.status === "ready"
-      && decodeRegistryRef.current.isDecoded(asset.id);
-    setHold(!decoded);
+    const gate = playbackMediaGate(
+      mediaReads[asset.id],
+      decodeRegistryRef.current.readiness(asset.id),
+      true,
+    );
+    setHold(gate === "waiting");
   }, [decodeSettleRevision, director.step, journey, mediaReads]);
 
   // The soundtrack follows playback: play on any non-paused phase after the
@@ -374,6 +389,15 @@ export function JourneyPlaybackOverlay({
     ? playbackMediaForPoint(journey, step.pointIndex)[step.mediaIndex]
     : null;
   const activeRead = activeMedia ? mediaReads[activeMedia.id] : null;
+  const activeMediaGate = activeMedia
+    ? playbackMediaGate(
+      activeRead,
+      activeMedia.mimeType.startsWith("image/")
+        ? decodeRegistryRef.current.readiness(activeMedia.id)
+        : undefined,
+      activeMedia.mimeType.startsWith("image/"),
+    )
+    : null;
   const activePoint = step?.kind === "stop" || step?.kind === "media"
     ? journey.routePoints[step.pointIndex]
     : step?.kind === "travel"
@@ -433,15 +457,16 @@ export function JourneyPlaybackOverlay({
 
         {step?.kind === "media" && activeMedia ? (
           <div className="journey-playback__media">
-            {activeMedia.mimeType.startsWith("video/")
+            {activeMediaGate === "error" ? (
+              <div className="journey-playback__media-state is-error">媒体暂不可用，继续播放下一段</div>
+            ) : activeMedia.mimeType.startsWith("video/")
               ? activeRead?.status === "ready"
                 ? <video key={activeMedia.id} src={activeRead.url} controls autoPlay playsInline />
                 : <div className="journey-playback__media-state">正在打开媒体…</div>
               // Review P2: images must wait for the decode gate too — showing
               // the <img> as soon as the signed URL is ready can still flash
               // a blank frame while the browser decodes (#11 requirement).
-              : activeRead?.status === "ready"
-                && decodeRegistryRef.current.isDecoded(activeMedia.id)
+              : activeMediaGate === "ready" && activeRead?.status === "ready"
                 ? <img key={activeMedia.id} src={activeRead.url} alt={activeMedia.fileName} />
                 : <div className="journey-playback__media-state">正在打开媒体…</div>}
           </div>

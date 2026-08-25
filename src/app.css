@@ -193,14 +193,6 @@ button {
   transition: opacity var(--motion-ui, 260ms) var(--motion-ease-out, ease);
 }
 
-.particle-earth-route[data-temporal-reveal] .particle-earth-route__glow,
-.particle-earth-route[data-temporal-reveal] .particle-earth-route__core,
-.particle-earth-route[data-temporal-reveal] .particle-earth-route__strand-a,
-.particle-earth-route[data-temporal-reveal] .particle-earth-route__strand-b,
-.particle-earth-route[data-temporal-reveal] .particle-earth-route__flow {
-  opacity: 0;
-}
-
 /* Strands: two interlaced thread layers flow along the route at different
    speeds and dash rhythms, over a soft glow and a gradient core that fades
    toward the destination (endpoints follow the projected travel direction). */
@@ -292,6 +284,18 @@ button {
 
 .particle-earth-route.is-style-strands.is-muted .particle-earth-route__strand-b {
   opacity: 0.18;
+}
+
+/* #21 review: this rewind override deliberately comes AFTER every strands,
+   active, and muted opacity rule. Matching the style class raises specificity
+   and source order breaks the remaining ties, so whole-route underlays stay
+   fully hidden while the per-leg paths alone express temporal progress. */
+.particle-earth-route.is-style-strands[data-temporal-reveal] .particle-earth-route__glow,
+.particle-earth-route.is-style-strands[data-temporal-reveal] .particle-earth-route__core,
+.particle-earth-route.is-style-strands[data-temporal-reveal] .particle-earth-route__strand-a,
+.particle-earth-route.is-style-strands[data-temporal-reveal] .particle-earth-route__strand-b,
+.particle-earth-route.is-style-strands[data-temporal-reveal] .particle-earth-route__flow {
+  opacity: 0;
 }
 
 .particle-earth-route__leader {

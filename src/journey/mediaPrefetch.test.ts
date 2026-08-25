@@ -66,6 +66,7 @@ describe("createDecodeRegistry (#11)", () => {
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(registry.isDecoded("bad")).toBe(false);
     expect(registry.ensure("bad", "url-bad").status).toBe("error");
+    expect(registry.readiness("bad")?.status).toBe("error");
 
     registry.release("bad");
     registry.ensure("bad", "url-bad");
