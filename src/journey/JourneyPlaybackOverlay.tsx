@@ -25,6 +25,10 @@ import { useJourneyPlaybackDirector } from "./useJourneyPlaybackDirector";
 import { playbackMediaForPoint, type PlaybackStep } from "./journeyPlayback";
 import { journeySoundtrack, stripMediaExtension } from "./journeyModel";
 import { createSoundtrackSampler } from "../motion/audioSampler";
+import {
+  resetAudioAtmosphereEnergy,
+  writeAudioAtmosphereEnergy,
+} from "../motion/audioAtmosphere";
 import { prefersReducedMotion } from "../motion/preferences";
 import type { Journey, JourneyMediaAsset } from "./types";
 
@@ -113,6 +117,7 @@ export function JourneyPlaybackOverlay({
     [journey],
   );
   const soundtrackRead = soundtrack ? mediaReads[soundtrack.id] : null;
+  const audioReactiveReducedMotion = reduceMotion ?? prefersReducedMotion();
 
   const loadMediaRead = useCallback((assetId: string) => {
     // Review P1: once an asset is ready, never re-request its signed read —
@@ -237,43 +242,59 @@ export function JourneyPlaybackOverlay({
     const audio = audioRef.current;
     if (!audio || !soundtrackRead || soundtrackRead.status !== "ready") return;
     if (paused || !director.isPlaying) {
+      samplerRef.current.setPlaying(false);
       audio.pause();
       return;
     }
+    // #20: this layout effect runs in the same committed gesture turn as the
+    // initial playback entry, giving AudioContext.resume() the best chance to
+    // retain user activation. Failure never blocks the real <audio> element.
+    if (!audioReactiveReducedMotion) samplerRef.current.start(audio);
+    samplerRef.current.setPlaying(true);
     void audio.play().catch(() => undefined);
-  }, [paused, director.isPlaying, soundtrackRead?.status === "ready"]);
+  }, [audioReactiveReducedMotion, paused, director.isPlaying, soundtrackRead?.status === "ready"]);
 
-  // #20: on first real play, build the analyser and drive the light strip /
-  // atmosphere from smoothed low/mid energy. Under reduced motion the strip
-  // stays static. If the analyser cannot be built (CORS etc.), playback
-  // continues and the CSS-only playing animation remains.
+  // #20: one analyser graph writes a shared mutable energy channel; the light
+  // strip and Three.js scene read that channel without React per-frame state.
   useEffect(() => {
     const audio = audioRef.current;
-    if (!audio || !soundtrackRead || soundtrackRead.status !== "ready") return;
-    if (!director.isPlaying || paused) return;
-    const reduced = prefersReducedMotion();
-    if (reduced) return;
+    if (!audio || !soundtrackRead || soundtrackRead.status !== "ready") {
+      samplerRef.current.stop();
+      resetAudioAtmosphereEnergy();
+      return;
+    }
+    if (audioReactiveReducedMotion) {
+      samplerRef.current.stop();
+      resetAudioAtmosphereEnergy();
+      return;
+    }
     const sampler = samplerRef.current;
-    sampler.start(audio);
+    if (director.isPlaying && !paused) sampler.start(audio);
+    sampler.setPlaying(director.isPlaying && !paused);
     const strip = lightStripRef.current;
-    if (!sampler.isActive()) return;
+    if (!sampler.isActive()) {
+      resetAudioAtmosphereEnergy();
+      return;
+    }
     let frame = 0;
     const drive = () => {
       const energy = sampler.getEnergy();
+      writeAudioAtmosphereEnergy(energy);
       if (strip) {
-        // Clamp to a small visual range: glow width 0.4..1, brightness 0.4..1.
-        strip.style.setProperty("--audio-width", String(0.4 + energy.mid * 0.6));
-        strip.style.setProperty("--audio-brightness", String(0.4 + energy.overall * 0.6));
+        // Keep the atmosphere restrained: at full energy visual gain <= 15%.
+        strip.style.setProperty("--audio-width", String(1 + energy.mid * 0.15));
+        strip.style.setProperty("--audio-brightness", String(1 + energy.overall * 0.12));
       }
       frame = window.requestAnimationFrame(drive);
     };
     frame = window.requestAnimationFrame(drive);
     return () => window.cancelAnimationFrame(frame);
-  }, [director.isPlaying, paused, soundtrackRead?.status === "ready"]);
+  }, [audioReactiveReducedMotion, director.isPlaying, paused, soundtrackRead?.status === "ready"]);
 
-  // Release the analyser and AudioContext when playback closes.
-  useEffect(() => {
-    return () => samplerRef.current.stop();
+  // Final teardown happens only when playback closes.
+  useEffect(() => () => {
+    samplerRef.current.stop();
+    resetAudioAtmosphereEnergy();
   }, []);
 
   useEffect(() => () => audioRef.current?.pause(), []);
@@ -311,13 +332,16 @@ export function JourneyPlaybackOverlay({
     if (paused) {
       const audio = audioRef.current;
       if (audio && soundtrackRead?.status === "ready") {
+        if (!audioReactiveReducedMotion) samplerRef.current.start(audio);
+        samplerRef.current.setPlaying(true);
         void audio.play().catch(() => undefined);
       }
       resume();
     } else {
+      samplerRef.current.setPlaying(false);
       pause();
     }
-  }, [paused, pause, resume, soundtrackRead?.status === "ready"]);
+  }, [audioReactiveReducedMotion, paused, pause, resume, soundtrackRead?.status === "ready"]);
 
   // Camera: travel and stop phases focus the relevant route point.
   useEffect(() => {
@@ -338,12 +362,12 @@ export function JourneyPlaybackOverlay({
       else if (event.key === "ArrowLeft") back();
       else if (event.key === " ") {
         event.preventDefault();
-        if (paused) resume(); else pause();
+        togglePlayback();
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [director.isPlaying, paused, pause, resume, next, back, requestClose]);
+  }, [director.isPlaying, paused, togglePlayback, next, back, requestClose]);
 
   // Review P2: keep Tab focus inside the playback overlay.
   useEffect(() => {

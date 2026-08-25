@@ -53,6 +53,10 @@ import {
   prefetchWindowFor,
 } from "./mediaPrefetch";
 import { createSoundtrackSampler } from "../motion/audioSampler";
+import {
+  resetAudioAtmosphereEnergy,
+  writeAudioAtmosphereEnergy,
+} from "../motion/audioAtmosphere";
 import { prefersReducedMotion } from "../motion/preferences";
 import {
   applyScopeReorder,
@@ -506,6 +510,8 @@ export function JourneyStory({
     setShownAssetId(null);
     setIncomingAssetId(null);
     pendingTargetRef.current = null;
+    audioSamplerRef.current.stop();
+    resetAudioAtmosphereEnergy();
     const audio = audioRef.current;
     if (audio) {
       audio.pause();
@@ -595,23 +601,37 @@ export function JourneyStory({
     void audio.play().catch(() => undefined);
   }, [playing, soundtrackRead?.status === "ready"]);
 
-  // #20: build the analyser on first play and drive the soundtrack light
-  // strip with smoothed energy. Reduced motion keeps the strip static; a
-  // failed analyser (CORS etc.) leaves the CSS-only animation in place.
+  // #20: analyser lifetime is tied to the soundtrack element, not to each
+  // play/pause toggle. The sampler keeps a single MediaElementSource for the
+  // element, decays energy on pause, and the global atmosphere channel lets
+  // the Three scene read the same smoothed values without React frame updates.
   useEffect(() => {
     const audio = audioRef.current;
-    if (!audio || !playing || !soundtrackRead || soundtrackRead.status !== "ready") return;
-    if (prefersReducedMotion()) return;
+    if (!audio || !soundtrackRead || soundtrackRead.status !== "ready") {
+      audioSamplerRef.current.stop();
+      resetAudioAtmosphereEnergy();
+      return;
+    }
+    if (prefersReducedMotion()) {
+      audioSamplerRef.current.stop();
+      resetAudioAtmosphereEnergy();
+      return;
+    }
     const sampler = audioSamplerRef.current;
-    sampler.start(audio);
+    if (playing) sampler.start(audio);
+    sampler.setPlaying(playing);
     const strip = soundtrackLightRef.current;
-    if (!sampler.isActive()) return;
+    if (!sampler.isActive()) {
+      resetAudioAtmosphereEnergy();
+      return;
+    }
     let frame = 0;
     const drive = () => {
       const energy = sampler.getEnergy();
+      writeAudioAtmosphereEnergy(energy);
       if (strip) {
-        strip.style.setProperty("--audio-width", String(0.4 + energy.mid * 0.6));
-        strip.style.setProperty("--audio-brightness", String(0.4 + energy.overall * 0.6));
+        strip.style.setProperty("--audio-width", String(1 + energy.mid * 0.15));
+        strip.style.setProperty("--audio-brightness", String(1 + energy.overall * 0.12));
       }
       frame = window.requestAnimationFrame(drive);
     };
@@ -619,8 +639,11 @@ export function JourneyStory({
     return () => window.cancelAnimationFrame(frame);
   }, [playing, soundtrackRead?.status === "ready"]);
 
-  // Release the analyser and AudioContext when the story closes or navigates.
-  useEffect(() => () => audioSamplerRef.current.stop(), []);
+  // Final teardown only when the Story leaves this soundtrack element.
+  useEffect(() => () => {
+    audioSamplerRef.current.stop();
+    resetAudioAtmosphereEnergy();
+  }, []);
 
   useEffect(() => () => audioRef.current?.pause(), []);
 
@@ -649,7 +672,7 @@ export function JourneyStory({
         navigateToMediaRef.current((assetIndex + 1) % scopedMedia.length);
       } else if (event.key === " " || event.key === "Spacebar") {
         event.preventDefault();
-        setPlaying((current) => !current);
+        togglePlaying();
       }
     };
     const onActivity = () => restartIdle();
@@ -1295,20 +1318,25 @@ export function JourneyStory({
     }
   }
 
+  function setPlayingFromGesture(willPlay: boolean) {
+    const audio = audioRef.current;
+    // #20: establish the analyser graph in the same user gesture that starts
+    // audio. If Web Audio/CORS is unavailable the sampler fails closed and the
+    // ordinary audio element still plays with the static/CSS fallback.
+    if (willPlay && audio && soundtrackRead?.status === "ready") {
+      if (!prefersReducedMotion()) audioSamplerRef.current.start(audio);
+      audioSamplerRef.current.setPlaying(true);
+      void audio.play().catch(() => undefined);
+    } else if (!willPlay) {
+      audioSamplerRef.current.setPlaying(false);
+    }
+    setPlaying(willPlay);
+  }
+
   function togglePlaying() {
     // Autoplay always runs on a single item, so entering it leaves the grid.
     setOverview(false);
-    const willPlay = !playingRef.current;
-    // Review P2: start playback synchronously from the user gesture so the
-    // browser's user-activation policy cannot reject play(). The effect below
-    // remains for synchronization/fallback (e.g. paused resume via state).
-    if (willPlay) {
-      const audio = audioRef.current;
-      if (audio && soundtrackRead?.status === "ready") {
-        void audio.play().catch(() => undefined);
-      }
-    }
-    setPlaying((current) => !current);
+    setPlayingFromGesture(!playingRef.current);
   }
 
   async function uploadSoundtrack(file: File) {
@@ -1378,6 +1406,8 @@ export function JourneyStory({
     setSoundtrackRemovePending(true);
     setSoundtrackNotice("");
     setPlaying(false);
+    audioSamplerRef.current.setPlaying(false);
+    resetAudioAtmosphereEnergy();
     try {
       await (onMediaDelete ?? deleteMedia)(soundtrack.id);
       if (!onMediaDelete) await onMediaAdded(journey.id);
@@ -1435,7 +1465,7 @@ export function JourneyStory({
                 type="button"
                 className="journey-story__fullscreen-entry"
                 onClick={() => {
-                  setPlaying(scopedMedia.length > 1);
+                  setPlayingFromGesture(scopedMedia.length > 1);
                   setFullscreen(true);
                 }}
               >
@@ -1496,7 +1526,7 @@ export function JourneyStory({
                 data-shared-media-id={shownAsset.id}
                 data-shared-journey-cover={cover?.id === shownAsset.id ? "true" : undefined}
                 onClick={() => {
-                  setPlaying(false);
+                  setPlayingFromGesture(false);
                   setFullscreen(true);
                 }}
               />
@@ -1515,7 +1545,7 @@ export function JourneyStory({
                   }
                 }}
                 onClick={() => {
-                  setPlaying(false);
+                  setPlayingFromGesture(false);
                   setFullscreen(true);
                 }}
               />
@@ -1830,7 +1860,7 @@ export function JourneyStory({
               <button
                 type="button"
                 className={playing ? "is-active" : ""}
-                onClick={() => setPlaying((current) => !current)}
+                onClick={togglePlaying}
                 aria-label={playing ? "暂停自动播放" : "自动播放照片"}
                 aria-pressed={playing}
               >

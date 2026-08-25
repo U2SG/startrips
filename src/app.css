@@ -132,6 +132,19 @@ button {
   stroke-width: 2;
 }
 
+/* #20: soundtrack energy is supplied by the Three render loop as a smoothed
+   0..0.15 gain. Only the active route/points respond; this is deliberately a
+   tiny brightness breath, not a spectrum visualization. */
+.particle-earth-route.is-active .particle-earth-route__glow,
+.particle-earth-route.is-active .particle-earth-route__core,
+.particle-earth-route.is-active .particle-earth-route__strand-a,
+.particle-earth-route.is-active .particle-earth-route__strand-b,
+.particle-earth-route.is-active .particle-earth-route__leg,
+.particle-earth-route.is-active .particle-earth-route__point,
+.particle-earth-route.is-active .particle-earth-route__point-ring {
+  filter: brightness(calc(1 + var(--audio-route-energy, 0)));
+}
+
 .particle-earth-route.is-muted .particle-earth-route__glow {
   opacity: 0.02;
 }
