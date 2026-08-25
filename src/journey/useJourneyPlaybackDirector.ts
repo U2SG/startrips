@@ -21,7 +21,10 @@ import type { Journey } from "./types";
  * element directly — the overlay translates phases into focus/route/media
  * commands.
  */
-export function useJourneyPlaybackDirector(journey: Journey | null) {
+export function useJourneyPlaybackDirector(
+  journey: Journey | null,
+  hold = false,
+) {
   const [state, setState] = useState<PlaybackState>(initialPlaybackState);
   const timerRef = useRef<number>(0);
   const journeyRef = useRef(journey);
@@ -51,12 +54,16 @@ export function useJourneyPlaybackDirector(journey: Journey | null) {
     window.clearTimeout(timerRef.current);
     if (!journey || state.paused) return;
     if (!step) return;
+    // Review P2: when `hold` is true the director waits — the overlay uses it
+    // to keep a media chapter on screen until the image is actually decoded,
+    // so a slow network never flashes an empty frame.
+    if (hold) return;
     const duration = stepDurationMs(journey, step);
     timerRef.current = window.setTimeout(() => {
       transition({ type: "advance" });
     }, duration);
     return () => window.clearTimeout(timerRef.current);
-  }, [journey, state.stepIndex, state.paused, step, transition]);
+  }, [hold, journey, state.stepIndex, state.paused, step, transition]);
 
   // Reset when the journey changes.
   useEffect(() => {

@@ -381,6 +381,23 @@ export function LivingAtlasApp() {
     }
   }
 
+  // Review P1: starting playback waits for the soundtrack signed read to be
+  // cached before opening the overlay. The await runs inside the click
+  // gesture's user activation window, so the overlay's first audio.play() is
+  // still considered user-initiated — no silent first soundtrack.
+  async function startPlayback(journeyId: string) {
+    const journey = journeys.find((candidate) => candidate.id === journeyId) ?? null;
+    setStoryJourneyId(null);
+    setStoryRoutePointId(null);
+    if (journey) {
+      await prefetchSoundtrackRead(journey).catch(() => null);
+    }
+    setPlaybackJourneyId(journeyId);
+    setPlaybackFocusPoint(journey?.routePoints[0]
+      ? { lat: journey.routePoints[0].latitude, lon: journey.routePoints[0].longitude }
+      : null);
+  }
+
   function startGlobePick(accept: (point: GlobePointPick) => void) {
     globePickAccept.current = accept;
     setGlobePickActive(true);
@@ -557,14 +574,13 @@ export function LivingAtlasApp() {
               <span>打开故事</span>
               <span className="living-atlas__active-action-icon" aria-hidden="true"><IconArrowRight size={17} stroke={1.35} /></span>
             </button>
-            <button type="button" className="living-atlas__active-play" onClick={() => {
-              setStoryJourneyId(null);
-              setStoryRoutePointId(null);
-              setPlaybackJourneyId(activeJourney.id);
-              setPlaybackFocusPoint(activeJourney.routePoints[0]
-                ? { lat: activeJourney.routePoints[0].latitude, lon: activeJourney.routePoints[0].longitude }
-                : null);
-            }}>
+            <button
+              type="button"
+              className="living-atlas__active-play"
+              onClick={() => {
+                void startPlayback(activeJourney.id);
+              }}
+            >
               <IconPlayerPlay size={15} stroke={1.35} aria-hidden="true" />
               <span>播放旅程</span>
             </button>

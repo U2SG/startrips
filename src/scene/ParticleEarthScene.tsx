@@ -37,6 +37,7 @@ import type { JourneyRoute } from "../journey/types";
 import {
   buildArtworkPointPositions,
   buildSeededSpherePoints,
+  buildSphericalRouteLegs,
   buildSphericalRouteSegments,
   buildSphericalRingSegments,
   latLonToVector3,
@@ -1053,6 +1054,14 @@ export function ParticleEarthScene({
       color: string;
       group: SVGGElement;
       segments: Float32Array;
+      // #21 review: one SVG path per leg (point i -> i+1), so a rewind can
+      // reveal the trail leg by leg; `toPointIndex` is the leg's destination
+      // route-point index used to drive its temporal reveal.
+      legs: Array<{
+        path: SVGPathElement;
+        toPointIndex: number;
+        segments: Float32Array;
+      }>;
       glowPath: SVGPathElement;
       corePath: SVGPathElement;
       flowPath: SVGPathElement;
@@ -1378,12 +1387,36 @@ export function ParticleEarthScene({
           { arcHeightRatio: 0.22, arcSaturationAngle: Math.PI / 3 },
         );
         routeVertexCount += routeSegments.length / 3;
+        // #21 review: build one path per leg so the rewind reveals the trail
+        // stop by stop. Each leg path reuses the core gradient stroke and is
+        // faded by its destination point's temporal progress.
+        const legArrays = buildSphericalRouteLegs(
+          route.points,
+          1.445,
+          Math.PI / 96,
+          Math.min(remainingVertices, 2048),
+          { arcHeightRatio: 0.22, arcSaturationAngle: Math.PI / 3 },
+        );
+        const legs = legArrays.map((leg, legIndex) => {
+          const path = document.createElementNS(
+            "http://www.w3.org/2000/svg",
+            "path",
+          );
+          path.classList.add("particle-earth-route__leg");
+          path.setAttribute("stroke", gradientReference);
+          path.setAttribute("fill", "none");
+          path.setAttribute("stroke-linecap", "round");
+          path.setAttribute("stroke-linejoin", "round");
+          group.appendChild(path);
+          return { path, toPointIndex: legIndex + 1, segments: leg };
+        });
         routeVectorLayer.appendChild(group);
         routeVectorEntries.push({
           routeId: route.id,
           color: route.color,
           group,
           segments: routeSegments,
+          legs,
           glowPath,
           corePath,
           flowPath,
@@ -1599,6 +1632,11 @@ export function ParticleEarthScene({
         entry.flowPath.setAttribute("d", path);
         entry.strandPaths[0].setAttribute("d", path);
         entry.strandPaths[1].setAttribute("d", path);
+        // #21 review: each leg projects independently so rewind reveal works
+        // per leg (the whole-route paths above stay for the static look).
+        for (const leg of entry.legs) {
+          leg.path.setAttribute("d", buildProjectedRoutePath(leg.segments, projectRoutePoint));
+        }
         const labelCandidates: Array<{
           label: RouteVectorLabel;
           x: number;
@@ -2438,6 +2476,20 @@ export function ParticleEarthScene({
                 pointProgress.toFixed(3),
               );
               point.element.dataset.temporalReveal = pointProgress.toFixed(3);
+            }
+          }
+          // #21 review: each leg's visibility follows its destination point's
+          // progress — the trail literally grows stop by stop.
+          for (const leg of entry.legs) {
+            const legProgress = reveal?.points.get(
+              `${entry.routeId}:${leg.toPointIndex}`,
+            );
+            if (legProgress === undefined) {
+              leg.path.style.removeProperty("opacity");
+              delete leg.path.dataset.temporalReveal;
+            } else {
+              leg.path.style.opacity = legProgress.toFixed(3);
+              leg.path.dataset.temporalReveal = legProgress.toFixed(3);
             }
           }
         }

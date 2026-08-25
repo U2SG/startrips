@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import {
   buildArtworkPointPositions,
   buildSeededSpherePoints,
+  buildSphericalRouteLegs,
   buildSphericalRouteSegments,
   buildSphericalRingSegments,
   formatLatitude,
@@ -176,6 +177,28 @@ describe("spherical route geometry", () => {
       if (Number.isFinite(distance)) midMax = Math.max(midMax, distance);
     }
     expect(midMax).toBeGreaterThan(1.05);
+  });
+
+  it("builds one Float32Array per leg for stop-by-stop reveal (#21 review)", () => {
+    const legs = buildSphericalRouteLegs(
+      [{ lat: 0, lon: 0 }, { lat: 0, lon: 30 }, { lat: 0, lon: 60 }],
+      1,
+      Math.PI / 180,
+      4096,
+      { arcHeightRatio: 0.3, arcSaturationAngle: Math.PI / 3 },
+    );
+    expect(legs).toHaveLength(2);
+    // Each leg starts on the surface at its origin point.
+    const firstStart = new Vector3(legs[0][0], legs[0][1], legs[0][2]);
+    expect(firstStart.length()).toBeCloseTo(1, 3);
+    // The last leg's end is the route destination on the surface.
+    const last = legs[1];
+    const lastEnd = new Vector3(last.at(-3)!, last.at(-2)!, last.at(-1)!);
+    expect(lastEnd.length()).toBeCloseTo(1, 3);
+  });
+
+  it("returns no legs for a single point (#21 review)", () => {
+    expect(buildSphericalRouteLegs([{ lat: 0, lon: 0 }], 1)).toEqual([]);
   });
 });
 

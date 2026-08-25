@@ -134,6 +134,33 @@ export function buildSphericalRouteSegments(
   return new Float32Array(values);
 }
 
+/**
+ * #21 review: build each route leg as its own Float32Array, so a rewind can
+ * reveal one leg at a time (the trail grows stop by stop) instead of fading
+ * the whole route as a single path. Each returned array covers points[i] ->
+ * points[i+1]; legs whose points fail validation are skipped.
+ */
+export function buildSphericalRouteLegs(
+  points: readonly GeographicPoint[],
+  radius: number,
+  maxSegmentAngle = Math.PI / 24,
+  maxVertices = 8192,
+  arc: RouteArcOptions = {},
+): Float32Array[] {
+  const legs: Float32Array[] = [];
+  for (let index = 1; index < points.length; index += 1) {
+    const leg = buildSphericalRouteSegments(
+      [points[index - 1], points[index]],
+      radius,
+      maxSegmentAngle,
+      maxVertices,
+      arc,
+    );
+    if (leg.length > 0) legs.push(leg);
+  }
+  return legs;
+}
+
 export function buildSphericalRingSegments(
   rings: readonly (readonly (readonly number[])[])[],
   radius: number,

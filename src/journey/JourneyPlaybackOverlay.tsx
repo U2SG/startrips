@@ -56,7 +56,11 @@ export function JourneyPlaybackOverlay({
   initialSoundtrackRead?: { url: string } | null;
   reduceMotion?: boolean;
 }) {
-  const director = useJourneyPlaybackDirector(journey);
+  // Review P2: hold the director while a media chapter's image is not yet
+  // decoded, so a slow network never flashes an empty frame — the chapter
+  // waits on the decode settle instead of advancing on a fixed timer.
+  const [hold, setHold] = useState(false);
+  const director = useJourneyPlaybackDirector(journey, hold);
   const { phase, paused, pause, resume, next, back, exit } = director;
   // Review P2: `exit()` only resets the local director; the overlay must also
   // tell the parent to drop playbackJourneyId, or playback can never close.
@@ -70,6 +74,8 @@ export function JourneyPlaybackOverlay({
     if (!soundtrack) return {};
     return { [soundtrack.id]: { status: "ready", url: initialSoundtrackRead.url } };
   });
+  const mediaReadsRef = useRef(mediaReads);
+  mediaReadsRef.current = mediaReads;
   const decodeRegistryRef = useRef(createDecodeRegistry(decodeImageUrl));
   // Review P2: decode settles without React state; this revision bumps on
   // every settle so the media gate re-renders once the image is decoded.
@@ -94,11 +100,15 @@ export function JourneyPlaybackOverlay({
   const soundtrackRead = soundtrack ? mediaReads[soundtrack.id] : null;
 
   const loadMediaRead = useCallback((assetId: string) => {
+    // Review P1: once an asset is ready, never re-request its signed read —
+    // a new URL would replace <audio src> and reset the soundtrack mid-play.
+    if (mediaReadsRef.current[assetId]?.status === "ready") return;
     if (pendingReads.current.has(assetId)) return;
     pendingReads.current.add(assetId);
-    setMediaReads((current) => current[assetId]?.status === "ready"
-      ? current
-      : { ...current, [assetId]: { status: "loading" } });
+    setMediaReads((current) => ({
+      ...current,
+      [assetId]: { status: "loading" },
+    }));
     void getPrivateMediaRead(assetId).then(
       (read) => setMediaReads((current) => ({
         ...current,
@@ -115,8 +125,15 @@ export function JourneyPlaybackOverlay({
   }, []);
 
   // Load the soundtrack and any media the current step needs.
+  // Review P1: the soundtrack read is loaded exactly ONCE per journey — it
+  // must never be re-requested on chapter changes (a new signed URL would
+  // replace <audio src> and reset the music mid-playback).
   useEffect(() => {
     if (soundtrack) loadMediaRead(soundtrack.id);
+  }, [loadMediaRead, soundtrack?.id]);
+
+  // Load the media the current step needs.
+  useEffect(() => {
     if (!journey) return;
     const step = director.step;
     if (step?.kind === "media") {
@@ -127,7 +144,7 @@ export function JourneyPlaybackOverlay({
         loadMediaRead(asset.id);
       }
     }
-  }, [journey, director.step, loadMediaRead, soundtrack]);
+  }, [journey, director.step, loadMediaRead]);
 
   // Review P2: decode the media of the current chapter AHEAD of display —
   // during the stop phase we already request reads, so the following media
@@ -152,6 +169,31 @@ export function JourneyPlaybackOverlay({
         decodeRegistryRef.current.ensure(asset.id, read.url);
       }
     }
+  }, [decodeSettleRevision, director.step, journey, mediaReads]);
+
+  // Review P2: while a media chapter's image is not decoded yet, hold the
+  // director so it never advances into a blank frame. Once the decode
+  // settles (revision bump) the hold lifts and the timer restarts.
+  useEffect(() => {
+    if (!journey) return;
+    const step = director.step;
+    if (step?.kind !== "media") {
+      setHold(false);
+      return;
+    }
+    const asset = playbackMediaForPoint(journey, step.pointIndex)[step.mediaIndex];
+    if (!asset) {
+      setHold(false);
+      return;
+    }
+    if (asset.mimeType.startsWith("video/")) {
+      setHold(false);
+      return;
+    }
+    const read = mediaReads[asset.id];
+    const decoded = read?.status === "ready"
+      && decodeRegistryRef.current.isDecoded(asset.id);
+    setHold(!decoded);
   }, [decodeSettleRevision, director.step, journey, mediaReads]);
 
   // The soundtrack follows playback: play on any non-paused phase after the
