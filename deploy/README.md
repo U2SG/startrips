@@ -16,6 +16,18 @@ Copy `deploy/env.example` to the ignored repository-root `.env.deploy`, replace 
 docker compose --env-file .env.deploy -f deploy/compose.yaml up -d --build
 ```
 
+## Repeatable main deployment
+
+From a trusted workstation with `git`, authenticated `gh`, Python `paramiko`, and the server PEM key, run one command:
+
+```powershell
+python scripts/deploy-main.py --key "D:\path\to\server-key.pem"
+```
+
+The script switches to and fast-forwards `main`, waits for that exact commit's GitHub Actions run to pass, uploads a `git archive`, backs up PostgreSQL, tags the running API/Web images for rollback, builds the new release, applies migrations, recreates API/Web, and verifies container state plus public HTTPS. It holds a server-side deployment lock, verifies any automatic application rollback, requires 5 GiB of free disk, and retains the five newest script-managed releases, backups, and rollback tags. The PEM contents and production `.env.deploy` are never copied into Git.
+
+The default server's SSH host keys are pinned in the script. A different `--server` must also pass one or more trusted `--host-key-sha256` fingerprints. The CI wait defaults to 25 minutes and the remote deployment deadline to one hour; both are configurable command-line options. Server-local HTTPS checks are the activation gate; a workstation public-path failure is reported as a warning because a local network problem must not roll back an otherwise healthy server.
+
 Inspect preview mail only through an SSH tunnel or a server-local API request. Do not publish port 8025.
 
 Location search is selected through `LOCATION_SEARCH_DRIVER`. The preview defaults
