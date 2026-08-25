@@ -45,7 +45,7 @@ import {
   IconX,
 } from "@tabler/icons-react";
 import { deleteMedia, getPrivateMediaRead, reorderJourneyMedia, setJourneyCover } from "./journeyApi";
-import { runSharedElementTransition } from "../motion/primitives/sharedElement";
+import { runSharedElementMorph } from "../motion/primitives/sharedElement";
 import { uploadJourneyMedia } from "./JourneyComposer";
 import {
   createDecodeRegistry,
@@ -53,6 +53,10 @@ import {
   prefetchWindowFor,
 } from "./mediaPrefetch";
 import { createSoundtrackSampler } from "../motion/audioSampler";
+import {
+  resetAudioAtmosphereEnergy,
+  writeAudioAtmosphereEnergy,
+} from "../motion/audioAtmosphere";
 import { prefersReducedMotion } from "../motion/preferences";
 import {
   applyScopeReorder,
@@ -93,7 +97,7 @@ type JourneyStoryProps = {
   journeys: readonly Journey[];
   journeyId: string;
   routePointId?: string | null;
-  onClose: () => void;
+  onClose: (sharedSource?: HTMLElement | null) => void;
   onNavigate: (journeyId: string) => void;
   onEdit: (journeyId: string) => void;
   onDelete?: (journeyId: string) => void | Promise<void>;
@@ -245,16 +249,16 @@ function StoryMediaTile({
   read: MediaReadState | undefined;
   disabled: boolean;
   onRequestRead: (assetId: string) => void;
-  onSelect: (index: number) => void;
+  onSelect: (index: number, source: HTMLButtonElement) => void;
   onSetCover?: (assetId: string) => void;
 }) {
   const tileRef = useRef<HTMLButtonElement>(null);
   const isVideo = asset.mimeType.startsWith("video/");
 
-  // Video tiles show a badge instead of a frame, so only image tiles need a
-  // signed read, and only once they are close to the viewport.
+  // Every visible tile prefetches its signed read. Images render a thumbnail;
+  // video tiles keep the lightweight badge but have the target URL ready so a
+  // tile -> stage shared transition does not collapse into a loading cut.
   useEffect(() => {
-    if (isVideo) return;
     const element = tileRef.current;
     if (!element || typeof IntersectionObserver === "undefined") {
       onRequestRead(asset.id);
@@ -282,7 +286,7 @@ function StoryMediaTile({
         aria-label={`第 ${index + 1} 个媒体 ${asset.fileName}${isCover ? "，当前封面" : ""}`}
         data-media-tile-index={index}
         disabled={disabled}
-        onClick={() => onSelect(index)}
+        onClick={(event) => onSelect(index, event.currentTarget)}
       >
         {isVideo ? (
           <span className="journey-story__media-tile-badge">
@@ -333,7 +337,7 @@ function SortableMediaTile({
   read: MediaReadState | undefined;
   disabled: boolean;
   onRequestRead: (assetId: string) => void;
-  onSelect: (index: number) => void;
+  onSelect: (index: number, source: HTMLButtonElement) => void;
   onSetCover?: (assetId: string) => void;
 }) {
   const {
@@ -473,7 +477,10 @@ export function JourneyStory({
     ) {
       return;
     }
-    onClose();
+    const sharedSource = dialogRef.current?.querySelector<HTMLElement>(
+      '[data-shared-journey-cover="true"]',
+    ) ?? null;
+    onClose(sharedSource);
   }
 
   const dialogRef = useModalFocus<HTMLElement>(requestClose);
@@ -503,6 +510,8 @@ export function JourneyStory({
     setShownAssetId(null);
     setIncomingAssetId(null);
     pendingTargetRef.current = null;
+    audioSamplerRef.current.stop();
+    resetAudioAtmosphereEnergy();
     const audio = audioRef.current;
     if (audio) {
       audio.pause();
@@ -592,23 +601,37 @@ export function JourneyStory({
     void audio.play().catch(() => undefined);
   }, [playing, soundtrackRead?.status === "ready"]);
 
-  // #20: build the analyser on first play and drive the soundtrack light
-  // strip with smoothed energy. Reduced motion keeps the strip static; a
-  // failed analyser (CORS etc.) leaves the CSS-only animation in place.
+  // #20: analyser lifetime is tied to the soundtrack element, not to each
+  // play/pause toggle. The sampler keeps a single MediaElementSource for the
+  // element, decays energy on pause, and the global atmosphere channel lets
+  // the Three scene read the same smoothed values without React frame updates.
   useEffect(() => {
     const audio = audioRef.current;
-    if (!audio || !playing || !soundtrackRead || soundtrackRead.status !== "ready") return;
-    if (prefersReducedMotion()) return;
+    if (!audio || !soundtrackRead || soundtrackRead.status !== "ready") {
+      audioSamplerRef.current.stop();
+      resetAudioAtmosphereEnergy();
+      return;
+    }
+    if (prefersReducedMotion()) {
+      audioSamplerRef.current.stop();
+      resetAudioAtmosphereEnergy();
+      return;
+    }
     const sampler = audioSamplerRef.current;
-    sampler.start(audio);
+    if (playing) sampler.start(audio);
+    sampler.setPlaying(playing);
     const strip = soundtrackLightRef.current;
-    if (!sampler.isActive()) return;
+    if (!sampler.isActive()) {
+      resetAudioAtmosphereEnergy();
+      return;
+    }
     let frame = 0;
     const drive = () => {
       const energy = sampler.getEnergy();
+      writeAudioAtmosphereEnergy(energy);
       if (strip) {
-        strip.style.setProperty("--audio-width", String(0.4 + energy.mid * 0.6));
-        strip.style.setProperty("--audio-brightness", String(0.4 + energy.overall * 0.6));
+        strip.style.setProperty("--audio-width", String(1 + energy.mid * 0.15));
+        strip.style.setProperty("--audio-brightness", String(1 + energy.overall * 0.12));
       }
       frame = window.requestAnimationFrame(drive);
     };
@@ -616,8 +639,11 @@ export function JourneyStory({
     return () => window.cancelAnimationFrame(frame);
   }, [playing, soundtrackRead?.status === "ready"]);
 
-  // Release the analyser and AudioContext when the story closes or navigates.
-  useEffect(() => () => audioSamplerRef.current.stop(), []);
+  // Final teardown only when the Story leaves this soundtrack element.
+  useEffect(() => () => {
+    audioSamplerRef.current.stop();
+    resetAudioAtmosphereEnergy();
+  }, []);
 
   useEffect(() => () => audioRef.current?.pause(), []);
 
@@ -646,7 +672,7 @@ export function JourneyStory({
         navigateToMediaRef.current((assetIndex + 1) % scopedMedia.length);
       } else if (event.key === " " || event.key === "Spacebar") {
         event.preventDefault();
-        setPlaying((current) => !current);
+        togglePlaying();
       }
     };
     const onActivity = () => restartIdle();
@@ -1149,35 +1175,69 @@ export function JourneyStory({
     }
   }
 
-  // #18: shared-element transition source. When the user clicks an overview
-  // tile, the tile's <img> gets a stable view-transition-name before the state
-  // switch, and the single/fullscreen stage claims the same name, so the
-  // browser morphs the tile into the stage instead of a hard cut. The name is
-  // cleared after the transition settles.
-  const transitionNameRef = useRef<string | null>(null);
-
-  function selectMediaIndex(index: number) {
-    // The source tile is the one currently rendered at that index. Claim a
-    // stable name for the morph, then switch inside startViewTransition.
-    const sourceElement = document.querySelector<HTMLImageElement>(
-      `.journey-story__media-grid [data-media-tile-index="${index}"] img`,
-    );
-    const name = `story-media-${scopedMedia[index]?.id ?? "unknown"}`;
-    if (sourceElement && typeof document.startViewTransition === "function") {
-      sourceElement.style.viewTransitionName = name;
-      transitionNameRef.current = name;
-      runSharedElementTransition(() => {
-        navigateToMedia(index);
+  // #18: overview tile -> single-media stage. The clicked tile itself is the
+  // source; when its signed read is already ready we promote that exact asset
+  // directly to the settled base layer so the morph never lands on a loading
+  // frame. Unsupported browsers use the WAAPI fixed-clone fallback.
+  function selectMediaIndex(index: number, tile: HTMLButtonElement) {
+    const target = scopedMedia[index];
+    if (!target) return;
+    const targetRead = mediaReads[target.id];
+    const sourceElement = tile.querySelector<HTMLElement>("img") ?? tile;
+    runSharedElementMorph({
+      source: sourceElement,
+      name: `story-media-${target.id}`,
+      update: () => {
+        if (targetRead?.status === "ready") {
+          pendingTargetRef.current = null;
+          setIncomingAssetId(null);
+          setAssetIndex(index);
+          setShownAssetId(target.id);
+          if (target.mimeType.startsWith("image/")) {
+            decodeRegistryRef.current.ensure(target.id, targetRead.url);
+          }
+        } else {
+          navigateToMedia(index);
+        }
         setOverview(false);
-      });
-      // Release the name once the browser finishes the morph (or cancels it).
-      window.setTimeout(() => {
-        transitionNameRef.current = null;
-      }, 700);
-    } else {
-      navigateToMedia(index);
-      setOverview(false);
+      },
+      resolveTarget: () => dialogRef.current?.querySelector<HTMLElement>(
+        ".journey-story__media > img, .journey-story__media > video",
+      ) ?? null,
+    });
+  }
+
+  function toggleMediaOverview() {
+    if (overview) {
+      const tile = dialogRef.current?.querySelector<HTMLButtonElement>(
+        `.journey-story__media-grid [data-media-tile-index="${assetIndex}"]`,
+      );
+      if (tile) {
+        selectMediaIndex(assetIndex, tile);
+      } else {
+        setOverview(false);
+      }
+      return;
     }
+
+    const current = scopedMedia[assetIndex];
+    const source = dialogRef.current?.querySelector<HTMLElement>(
+      ".journey-story__media > img, .journey-story__media > video",
+    ) ?? null;
+    runSharedElementMorph({
+      source,
+      name: `story-media-${current?.id ?? "current"}`,
+      update: () => {
+        setPlaying(false);
+        setOverview(true);
+      },
+      resolveTarget: () => {
+        const tile = dialogRef.current?.querySelector<HTMLButtonElement>(
+          `.journey-story__media-grid [data-media-tile-index="${assetIndex}"]`,
+        );
+        return tile?.querySelector<HTMLElement>("img") ?? tile ?? null;
+      },
+    });
   }
 
   // #12: overview drag-and-drop reordering. Pointer (mouse + touch) and
@@ -1258,20 +1318,25 @@ export function JourneyStory({
     }
   }
 
+  function setPlayingFromGesture(willPlay: boolean) {
+    const audio = audioRef.current;
+    // #20: establish the analyser graph in the same user gesture that starts
+    // audio. If Web Audio/CORS is unavailable the sampler fails closed and the
+    // ordinary audio element still plays with the static/CSS fallback.
+    if (willPlay && audio && soundtrackRead?.status === "ready") {
+      if (!prefersReducedMotion()) audioSamplerRef.current.start(audio);
+      audioSamplerRef.current.setPlaying(true);
+      void audio.play().catch(() => undefined);
+    } else if (!willPlay) {
+      audioSamplerRef.current.setPlaying(false);
+    }
+    setPlaying(willPlay);
+  }
+
   function togglePlaying() {
     // Autoplay always runs on a single item, so entering it leaves the grid.
     setOverview(false);
-    const willPlay = !playingRef.current;
-    // Review P2: start playback synchronously from the user gesture so the
-    // browser's user-activation policy cannot reject play(). The effect below
-    // remains for synchronization/fallback (e.g. paused resume via state).
-    if (willPlay) {
-      const audio = audioRef.current;
-      if (audio && soundtrackRead?.status === "ready") {
-        void audio.play().catch(() => undefined);
-      }
-    }
-    setPlaying((current) => !current);
+    setPlayingFromGesture(!playingRef.current);
   }
 
   async function uploadSoundtrack(file: File) {
@@ -1341,6 +1406,8 @@ export function JourneyStory({
     setSoundtrackRemovePending(true);
     setSoundtrackNotice("");
     setPlaying(false);
+    audioSamplerRef.current.setPlaying(false);
+    resetAudioAtmosphereEnergy();
     try {
       await (onMediaDelete ?? deleteMedia)(soundtrack.id);
       if (!onMediaDelete) await onMediaAdded(journey.id);
@@ -1387,7 +1454,7 @@ export function JourneyStory({
                 type="button"
                 className={`journey-story__media-overview${overview ? " is-active" : ""}`}
                 aria-pressed={overview}
-                onClick={() => setOverview((current) => !current)}
+                onClick={toggleMediaOverview}
               >
                 <IconLayoutGrid size={16} stroke={1.35} aria-hidden="true" />
                 {overview ? "返回单张" : "全部照片"}
@@ -1398,7 +1465,7 @@ export function JourneyStory({
                 type="button"
                 className="journey-story__fullscreen-entry"
                 onClick={() => {
-                  setPlaying(scopedMedia.length > 1);
+                  setPlayingFromGesture(scopedMedia.length > 1);
                   setFullscreen(true);
                 }}
               >
@@ -1437,7 +1504,17 @@ export function JourneyStory({
             ) : null}
             {!overview && shownAsset && (!shownRead || shownRead.status === "loading") ? <div className="journey-story__media-state">正在打开私有媒体…</div> : null}
             {!overview && shownAsset && shownRead?.status === "error" ? <div className="journey-story__media-state is-error">{shownRead.message}</div> : null}
-            {!overview && shownAsset && shownRead?.status === "ready" && shownAsset.mimeType.startsWith("video/") ? <video key={shownAsset.id} src={shownRead.url} controls playsInline preload="metadata" /> : null}
+            {!overview && shownAsset && shownRead?.status === "ready" && shownAsset.mimeType.startsWith("video/") ? (
+              <video
+                key={shownAsset.id}
+                src={shownRead.url}
+                controls
+                playsInline
+                preload="metadata"
+                data-shared-media-id={shownAsset.id}
+                data-shared-journey-cover={cover?.id === shownAsset.id ? "true" : undefined}
+              />
+            ) : null}
             {!overview && shownAsset && shownRead?.status === "ready" && !shownAsset.mimeType.startsWith("video/") ? (
               <img
                 key={`base-${shownAsset.id}`}
@@ -1446,19 +1523,10 @@ export function JourneyStory({
                   : "is-zoomable"}
                 src={shownRead.url}
                 alt={shownAsset.fileName}
-                // #18: the hero claims the shared-element name when it is the
-                // journey cover coming from the card, or the tile that was
-                // clicked in the overview.
-                style={transitionNameRef.current === `story-media-${shownAsset.id}`
-                  ? { viewTransitionName: transitionNameRef.current }
-                  : (cover?.id === shownAsset.id
-                    ? { viewTransitionName: "journey-cover" }
-                    : undefined)}
-                onTransitionEnd={() => {
-                  if (transitionNameRef.current) transitionNameRef.current = null;
-                }}
+                data-shared-media-id={shownAsset.id}
+                data-shared-journey-cover={cover?.id === shownAsset.id ? "true" : undefined}
                 onClick={() => {
-                  setPlaying(false);
+                  setPlayingFromGesture(false);
                   setFullscreen(true);
                 }}
               />
@@ -1477,7 +1545,7 @@ export function JourneyStory({
                   }
                 }}
                 onClick={() => {
-                  setPlaying(false);
+                  setPlayingFromGesture(false);
                   setFullscreen(true);
                 }}
               />
@@ -1792,7 +1860,7 @@ export function JourneyStory({
               <button
                 type="button"
                 className={playing ? "is-active" : ""}
-                onClick={() => setPlaying((current) => !current)}
+                onClick={togglePlaying}
                 aria-label={playing ? "暂停自动播放" : "自动播放照片"}
                 aria-pressed={playing}
               >

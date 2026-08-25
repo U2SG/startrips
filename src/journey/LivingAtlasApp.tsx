@@ -15,7 +15,7 @@ import { CountUp } from "../motion/primitives/CountUp";
 import { useMagnet } from "../motion/primitives/Magnet";
 import { ScrambledText } from "../motion/primitives/ScrambledText";
 import { ShinyText } from "../motion/primitives/ShinyText";
-import { morphJourneyCard, runSharedElementTransition } from "../motion/primitives/sharedElement";
+import { morphJourneyCard, runSharedElementMorph } from "../motion/primitives/sharedElement";
 import { LivingAtlasGlobe } from "../scene/LivingAtlasGlobe";
 import {
   JourneyComposer,
@@ -368,30 +368,42 @@ export function LivingAtlasApp() {
     });
   }
 
-  // #18: opening the story from a card morphs the card cover into the story
-  // hero. The cover <img> claims a stable view-transition-name before the
-  // state switch; JourneyStory's hero claims the same name in the new
-  // snapshot, so the browser interpolates geometry instead of a hard modal
-  // cut. Falls back to a plain state update (short CSS crossfade).
+  // #18: opening the story from the active card uses a true shared-element
+  // morph. View Transitions handles supported browsers; the primitive falls
+  // back to a fixed-clone WAAPI morph without remounting the globe.
   function openJourneyStory(journeyId: string, routePointId: string | null) {
-    const sourceElement = document.querySelector<HTMLImageElement>(
-      ".living-atlas__active-media img",
-    );
-    if (sourceElement && typeof document.startViewTransition === "function") {
-      sourceElement.style.viewTransitionName = "journey-cover";
-      runSharedElementTransition(() => {
+    const sourceElement = routePointId === null
+      ? document.querySelector<HTMLElement>(
+        ".living-atlas__active-media img, .living-atlas__active-media video",
+      )
+      : null;
+    runSharedElementMorph({
+      source: sourceElement,
+      name: `journey-cover-${journeyId}`,
+      update: () => {
         setActiveJourneyId(journeyId);
         setStoryRoutePointId(routePointId);
         setStoryJourneyId(journeyId);
-      });
-      window.setTimeout(() => {
-        sourceElement.style.viewTransitionName = "";
-      }, 700);
-    } else {
-      setActiveJourneyId(journeyId);
-      setStoryRoutePointId(routePointId);
-      setStoryJourneyId(journeyId);
-    }
+      },
+      resolveTarget: () => document.querySelector<HTMLElement>(
+        ".journey-story__media > img, .journey-story__media > video",
+      ),
+    });
+  }
+
+  function closeJourneyStory(source: HTMLElement | null) {
+    const journeyId = storyJourneyId;
+    runSharedElementMorph({
+      source,
+      name: `journey-cover-${journeyId ?? "story"}`,
+      update: () => {
+        setStoryJourneyId(null);
+        setStoryRoutePointId(null);
+      },
+      resolveTarget: () => document.querySelector<HTMLElement>(
+        ".living-atlas__active-media img, .living-atlas__active-media video",
+      ),
+    });
   }
 
   // Review P1: a network await does NOT preserve the click's transient user
@@ -660,7 +672,7 @@ export function LivingAtlasApp() {
           journeys={journeys}
           journeyId={storyJourneyId}
           routePointId={storyRoutePointId}
-          onClose={() => { setStoryJourneyId(null); setStoryRoutePointId(null); }}
+          onClose={(source) => closeJourneyStory(source ?? null)}
           onNavigate={(id) => {
             setActiveJourneyId(id);
             setStoryRoutePointId(null);

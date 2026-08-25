@@ -28,6 +28,10 @@ import { archiveRecords } from "../data/archiveRecords";
 import type { GlobeMode } from "../experience/types";
 import { getLightEffectPalette } from "../journey/lightEffects";
 import {
+  audioAtmosphereGains,
+  readAudioAtmosphereEnergy,
+} from "../motion/audioAtmosphere";
+import {
   loadCityTiers,
   resolveCityDisplayName,
   selectCityCandidates,
@@ -2235,6 +2239,12 @@ export function ParticleEarthScene({
       const delta = Math.min(0.05, Math.max(0, (now - lastTime) / 1000));
       lastTime = now;
       const target = GLOBE_MODE_CONFIG[currentMode];
+      const audioEnergy = reduceMotion
+        ? { low: 0, mid: 0, high: 0, overall: 0 }
+        : readAudioAtmosphereEnergy();
+      // #20: restrained energy mapping. Even at full energy the environment
+      // only gains 12–15%, so it feels alive rather than becoming a visualizer.
+      const audioGain = audioAtmosphereGains(audioEnergy);
       const targetBaseRotationY =
         currentMode === "focusPoint"
         && latestCenterFocusPoint.current
@@ -2304,11 +2314,11 @@ export function ParticleEarthScene({
       );
       shellMaterial.uniforms.uOpacity.value = interpolate(
         shellMaterial.uniforms.uOpacity.value,
-        target.shellOpacity,
+        Math.min(1, target.shellOpacity * audioGain.ambient),
       );
       haloMaterial.uniforms.uOpacity.value = interpolate(
         haloMaterial.uniforms.uOpacity.value,
-        target.haloOpacity,
+        Math.min(1, target.haloOpacity * audioGain.halo),
       );
       personalMaterial.uniforms.uOpacity.value = interpolate(
         personalMaterial.uniforms.uOpacity.value,
@@ -2325,9 +2335,15 @@ export function ParticleEarthScene({
           : 0.66;
       routeVectorOpacity = interpolate(routeVectorOpacity, routeOpacity);
       routeVectorLayer.style.opacity = String(routeVectorOpacity);
+      routeVectorLayer.style.setProperty("--audio-route-energy", audioGain.route.toFixed(3));
+      const baseAtmosphereOpacity = currentMode === "surfaceEarth"
+        ? 0.05
+        : currentMode === "particleSphere"
+          ? 0.5
+          : 0.36;
       atmosphereMaterial.uniforms.uOpacity.value = interpolate(
         atmosphereMaterial.uniforms.uOpacity.value,
-        currentMode === "surfaceEarth" ? 0.05 : currentMode === "particleSphere" ? 0.5 : 0.36,
+        Math.min(1, baseAtmosphereOpacity * audioGain.ambient),
       );
       wireMaterial.opacity = interpolate(wireMaterial.opacity, target.wireOpacity);
       coastlineMaterial.opacity = interpolate(

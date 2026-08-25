@@ -73,10 +73,14 @@ the current COS mount use `live`, matching the bucket prefix mounted at
 `/cos-data`; other providers may leave it empty or choose another prefix.
 
 The bucket CORS policy must allow `PUT` from `https://${APP_HOST}`, allow request
-headers used by signed uploads, and expose the `ETag` response header. Keep
-virtual-hosted addressing (`S3_FORCE_PATH_STYLE=false`) for COS and OSS; path
-style is intended only for compatible providers such as a locally configured
-MinIO deployment.
+headers used by signed uploads, and expose the `ETag` response header. It must
+also allow signed `GET`/`HEAD` reads from `https://${APP_HOST}` and return
+`Access-Control-Allow-Origin` for that origin so the optional #20 Web Audio
+analysis clone can read soundtrack energy. The real soundtrack player does not
+use CORS mode, so a missing/incorrect read CORS rule degrades only the reactive
+atmosphere and must not block audio playback. Keep virtual-hosted addressing
+(`S3_FORCE_PATH_STYLE=false`) for COS and OSS; path style is intended only for
+compatible providers such as a locally configured MinIO deployment.
 
 Before activation, add a bucket lifecycle rule that aborts incomplete multipart
 uploads after seven days. The client and API abort failed uploads immediately,
