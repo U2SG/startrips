@@ -26,7 +26,7 @@ export type JourneyValues = Pick<
   revision?: number;
   routePoints: Array<Pick<
     typeof journeyRoutePoints.$inferInsert,
-    "latitude" | "longitude" | "label" | "isStop" | "occurredAt"
+    "latitude" | "longitude" | "label" | "isStop" | "occurredAt" | "note"
   > & { id?: string }>;
 };
 
@@ -53,6 +53,7 @@ async function loadJourneys(atlasId: string, journeyId?: string) {
       note: journeys.note,
       lightColor: journeys.lightColor,
       lightEffect: journeys.lightEffect,
+      coverMediaAssetId: journeys.coverMediaAssetId,
       revision: journeys.revision,
       createdByUserId: journeys.createdByUserId,
       createdAt: journeys.createdAt,
@@ -233,6 +234,11 @@ export async function updateJourneyForAtlas(
         label: point.label,
         isStop: point.isStop,
         occurredAt: point.occurredAt,
+        // #10 + review fix: `undefined` means "preserve the stored note" —
+        // an older/partial client that omits note must never wipe it. Only
+        // explicit null/empty (parsed to null) clears. New points default to
+        // null (no note) because the column is nullable.
+        ...(point.note !== undefined ? { note: point.note ?? null } : {}),
       };
       if (point.id) {
         await transaction
@@ -246,12 +252,68 @@ export async function updateJourneyForAtlas(
         await transaction.insert(journeyRoutePoints).values({
           journeyId: journey.id,
           ...pointValues,
+          ...(point.note === undefined ? { note: null } : {}),
         });
       }
     }
     return true;
   });
   return updated ? getJourneyForAtlas(journeyId, atlasId) : undefined;
+}
+
+// #14: set (or clear) a journey's explicit cover media. The asset must belong
+// to this journey's atlas and must be visual (image/video) — a soundtrack can
+// never become a cover. Returns the journey (unchanged when the asset was
+// rejected), or undefined when the journey does not exist.
+export async function setJourneyCoverForAtlas(
+  journeyId: string,
+  atlasId: string,
+  coverMediaAssetId: string | null,
+) {
+  const journeyExists = await db.transaction(async (transaction) => {
+    const [journey] = await transaction
+      .select({ id: journeys.id })
+      .from(journeys)
+      .where(and(
+        eq(journeys.id, journeyId),
+        eq(journeys.atlasId, atlasId),
+        isNull(journeys.deletionStartedAt),
+      ))
+      .limit(1);
+    if (!journey) return false;
+
+    if (coverMediaAssetId !== null) {
+      const [asset] = await transaction
+        .select({
+          id: mediaAssets.id,
+          journeyId: mediaAssets.journeyId,
+          mimeType: mediaAssets.mimeType,
+        })
+        .from(mediaAssets)
+        .innerJoin(journeys, eq(journeys.id, mediaAssets.journeyId))
+        .where(and(
+          eq(mediaAssets.id, coverMediaAssetId),
+          eq(journeys.atlasId, atlasId),
+          isNull(journeys.deletionStartedAt),
+        ))
+        .limit(1);
+      // An invalid cover target leaves the journey untouched.
+      if (!asset || asset.journeyId !== journeyId || asset.mimeType.startsWith("audio/")) {
+        return true;
+      }
+    }
+
+    await transaction
+      .update(journeys)
+      .set({
+        coverMediaAssetId,
+        revision: sql`${journeys.revision} + 1`,
+        updatedAt: new Date(),
+      })
+      .where(eq(journeys.id, journeyId));
+    return true;
+  });
+  return journeyExists ? getJourneyForAtlas(journeyId, atlasId) : undefined;
 }
 
 export async function getJourneyDeletionCandidateForAtlas(

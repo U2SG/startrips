@@ -12,6 +12,11 @@
   --atlas-acid: #c8ff3d;
   --atlas-warm: #f4ce73;
   /* Motion tokens (mirror src/motion/tokens.ts) */
+  /* Tier durations — the only durations features reference (#17 Motion Language). */
+  --motion-instant: 120ms;   /* Tier 0: hover/press/focus */
+  --motion-ui: 260ms;        /* Tier 1: sidebar/reorder/controls */
+  --motion-content: 560ms;   /* Tier 2: card->story, tile->fullscreen */
+  --motion-journey: 980ms;   /* Tier 3: camera fly-to, route draw */
   --motion-micro: 240ms;
   --motion-panel: 560ms;
   --motion-morph: 760ms;
@@ -20,6 +25,8 @@
   --motion-stagger: 140ms;
   --motion-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --motion-ease-soft: cubic-bezier(0.2, 0.75, 0.15, 1);
+  --motion-ease-out-soft: cubic-bezier(0.22, 0.72, 0.24, 1);
+  --motion-ease-in-out-spatial: cubic-bezier(0.65, 0, 0.35, 1);
   position: relative;
   width: 100%;
   height: 100svh;
@@ -63,7 +70,7 @@
      off-center (about 3vw left) and let the camera aspect drift from the
      visible aspect, so smaller screens cropped the sphere differently. */
   transform: none;
-  transition: opacity 360ms ease;
+  transition: opacity var(--motion-ui, 260ms) ease;
 }
 
 .living-atlas__globe[aria-hidden="true"] {
@@ -88,7 +95,7 @@
 .living-atlas-globe__layer {
   opacity: 0;
   pointer-events: none;
-  transition: opacity 900ms cubic-bezier(0.22, 1, 0.36, 1);
+  transition: opacity var(--motion-journey, 980ms) var(--motion-ease-out, ease);
   will-change: opacity;
 }
 
@@ -422,7 +429,7 @@
   position: absolute;
   top: 14px;
   left: 50%;
-  width: 360px;
+  width: 460px;
   height: 54px;
   display: flex;
   align-items: center;
@@ -661,7 +668,7 @@
   to { --atlas-border-angle: 360deg; }
 }
 
-.living-atlas__active > p:first-child {
+.living-atlas__active-content > p:first-child {
   margin: 0;
   color: var(--atlas-faint);
   font: 500 8px/1.2 ui-monospace, "SFMono-Regular", Consolas, monospace;
@@ -682,7 +689,7 @@
   letter-spacing: -0.025em;
 }
 
-.living-atlas__active > span {
+.living-atlas__active-content > span {
   color: var(--atlas-muted);
   font-size: 10px;
   line-height: 1.6;
@@ -771,12 +778,36 @@
   color: var(--atlas-faint);
 }
 
-.living-atlas__active > button {
+/* #13 + review P2: the active card is one interaction surface. The content
+   stays inert; the transparent hit area covers the whole card and opens the
+   story; explicit actions sit above it. */
+.living-atlas__active-content {
+  display: contents;
+}
+
+.living-atlas__active-hit-area {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  cursor: pointer;
+}
+
+.living-atlas__active-actions {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  gap: 10px;
+  margin-top: auto;
+}
+
+.living-atlas__active-actions > button {
   min-height: 56px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-top: auto;
   padding: 0 8px 0 20px;
   border: 1px solid rgba(200, 255, 61, 0.7);
   border-radius: 999px;
@@ -798,6 +829,36 @@
   border-radius: 50%;
   background: #06100e;
   color: var(--atlas-acid);
+}
+
+/* #19: the playback entry is a quieter secondary action beside 打开故事. */
+.living-atlas__active .living-atlas__active-play {
+  min-height: 56px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 0 18px;
+  border: 1px solid rgba(118, 198, 188, 0.42);
+  border-radius: 999px;
+  background: rgba(2, 10, 11, 0.72);
+  color: #d6e0dd;
+  box-shadow: none;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+}
+
+.living-atlas__active .living-atlas__active-play:hover,
+.living-atlas__active .living-atlas__active-play:focus-visible {
+  border-color: var(--atlas-cyan);
+  color: var(--atlas-cyan);
+}
+
+.living-atlas__active .living-atlas__active-play svg {
+  color: var(--atlas-cyan);
 }
 
 .living-atlas__active.is-arriving {
@@ -1034,41 +1095,73 @@
   list-style: none;
 }
 
-.journey-timeline__year li {
+.journey-timeline__card {
   --journey-color: var(--atlas-warm);
+  position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   border: 1px solid var(--atlas-line);
   background: var(--atlas-panel-soft);
-  transition: border-color 180ms ease, transform 180ms ease;
+  /* #13: lift on the card itself, paced by Tier 0/1 tokens (motion language). */
+  transition: border-color var(--motion-ui, 260ms) var(--motion-ease-out-soft, ease), transform var(--motion-instant, 120ms) var(--motion-ease-out-soft, ease), box-shadow var(--motion-ui, 260ms) var(--motion-ease-out-soft, ease);
 }
 
-.journey-timeline__year li:hover,
-.journey-timeline__year li.is-active {
+.journey-timeline__card:hover,
+.journey-timeline__card.is-active {
   border-color: var(--journey-color);
   transform: translateY(-2px);
 }
 
-.journey-timeline__select {
+/* Focus ring follows the card's real border radius via a pseudo-element, so
+   keyboard focus never exposes the transparent hit area's browser outline
+   beyond the card (#13). */
+.journey-timeline__card::after {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  border-radius: inherit;
+  border: 1px solid transparent;
+  pointer-events: none;
+}
+
+.journey-timeline__card:has(.journey-timeline__hit-area:focus-visible)::after {
+  border-color: var(--atlas-acid);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--atlas-acid) 18%, transparent);
+}
+
+/* Transparent full-card hit area. It is the only pointer target for the whole
+   card surface; the content below stays inert so internal controls never
+   fight the card click (#13). */
+.journey-timeline__hit-area {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  cursor: pointer;
+}
+
+/* Inner actions sit above the hit area and keep their own pointer handling. */
+.journey-timeline__content {
+  position: relative;
+  z-index: 0;
   min-width: 0;
   min-height: 116px;
   display: grid;
   align-content: center;
   gap: 7px;
   padding: 16px;
-  border: 0;
-  background: transparent;
-  text-align: left;
-  cursor: pointer;
+  pointer-events: none;
 }
 
-.journey-timeline__select time {
+.journey-timeline__content time {
   color: var(--journey-color);
   font: 500 8px/1 ui-monospace, "SFMono-Regular", Consolas, monospace;
   letter-spacing: 0.14em;
 }
 
-.journey-timeline__select strong {
+.journey-timeline__content strong {
   overflow: hidden;
   color: var(--atlas-text);
   font-family: var(--archive-serif);
@@ -1079,7 +1172,7 @@
   white-space: nowrap;
 }
 
-.journey-timeline__select span {
+.journey-timeline__content span {
   overflow: hidden;
   color: var(--atlas-muted);
   font-size: 9px;
@@ -1089,6 +1182,8 @@
 }
 
 .journey-timeline__story {
+  position: relative;
+  z-index: 2;
   width: 48px;
   display: grid;
   place-content: center;
@@ -1288,6 +1383,22 @@
   background: #010404;
 }
 
+/* #11 two-layer stage: the incoming frame crossfades over the settled base
+   frame (180–280ms) and is released only after the switch settles, so a
+   slideshow step never flashes an empty stage. */
+.journey-story__media > img.journey-story__media-incoming,
+.journey-story__media > video.journey-story__media-incoming {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  animation: motionMediaIn 240ms var(--motion-ease-out-soft, ease) forwards;
+}
+
+@keyframes motionMediaIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
 .journey-story__empty-media,
 .journey-story__media-state {
   height: 100%;
@@ -1332,6 +1443,32 @@
   border-color: rgba(200, 255, 61, 0.5);
 }
 
+/* #7: explicit fullscreen-play entry, beside the overview toggle. */
+.journey-story__fullscreen-entry {
+  position: absolute;
+  z-index: 2;
+  /* Review P2: below the media actions (set cover / delete) so the two
+     top-right controls never overlap. */
+  top: 68px;
+  right: 16px;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 14px;
+  border: 1px solid rgba(200, 255, 61, 0.32);
+  background: rgba(2, 8, 8, 0.82);
+  color: var(--atlas-acid);
+  cursor: pointer;
+  font-size: 10px;
+  letter-spacing: 0.09em;
+}
+
+.journey-story__fullscreen-entry:hover,
+.journey-story__fullscreen-entry:focus-visible {
+  border-color: rgba(200, 255, 61, 0.6);
+}
+
 .journey-story__media-grid {
   height: 100%;
   margin: 0;
@@ -1346,6 +1483,25 @@
 
 .journey-story__media-grid > li {
   margin: 0;
+}
+
+/* #12: drag-and-drop ordering — the dragged tile lifts with a soft shadow;
+   sibling tiles animate out of the way via dnd-kit's layout transition. */
+.journey-story__media-grid > li.is-dragging {
+  z-index: 2;
+  border-radius: 3px;
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.5);
+  filter: brightness(1.06);
+}
+
+.journey-story__media-grid > li.is-dragging button {
+  cursor: grabbing;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .journey-story__media-grid > li {
+    transition: none !important;
+  }
 }
 
 .journey-story__media-grid button {
@@ -1406,6 +1562,56 @@
   color: var(--atlas-acid);
 }
 
+/* #14: cover badge on the overview tile, and the hover-visible set-cover
+   action. The tile's <li> is the drag surface, so the action sits inside it
+   above the thumbnail. */
+.journey-story__media-grid > li {
+  position: relative;
+}
+
+.journey-story__media-tile-cover {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  padding: 3px 6px;
+  border: 1px solid rgba(200, 255, 61, 0.5);
+  background: rgba(2, 8, 8, 0.85);
+  color: var(--atlas-acid);
+  font: 500 7px/1 ui-monospace, "SFMono-Regular", Consolas, monospace;
+  letter-spacing: 0.12em;
+}
+
+.journey-story__media-grid > li:not(.is-cover) .journey-story__media-tile-set-cover {
+  position: absolute;
+  z-index: 1;
+  top: 4px;
+  right: 4px;
+  padding: 3px 6px;
+  border: 1px solid rgba(200, 255, 61, 0.35);
+  background: rgba(2, 8, 8, 0.85);
+  color: var(--atlas-acid);
+  cursor: pointer;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  opacity: 0;
+  transition: opacity var(--motion-instant, 120ms) ease;
+}
+
+.journey-story__media-grid > li:hover .journey-story__media-tile-set-cover,
+.journey-story__media-grid > li:focus-within .journey-story__media-tile-set-cover {
+  opacity: 1;
+}
+
+.journey-story__media-grid > li.is-dragging .journey-story__media-tile-set-cover {
+  display: none;
+}
+
+@media (hover: none) {
+  .journey-story__media-grid > li:not(.is-cover) .journey-story__media-tile-set-cover {
+    opacity: 1;
+  }
+}
+
 .journey-story__media-nav {
   position: absolute;
   right: 16px;
@@ -1453,6 +1659,13 @@
   .journey-story__media > img.is-kenburns {
     animation: none;
   }
+
+  /* #11: reduced motion swaps frames instantly — no crossfade, no flash. */
+  .journey-story__media > img.journey-story__media-incoming,
+  .journey-story__media > video.journey-story__media-incoming {
+    animation: none;
+    opacity: 1;
+  }
 }
 
 .journey-story__media-nav button {
@@ -1497,7 +1710,11 @@
   inset: 0;
   display: grid;
   place-items: center;
-  background: rgba(0, 0, 0, 0.94);
+  /* #7: immersive — a deep gradient derived from the media, not a flat black
+     box; the media itself stays the focal point. */
+  background:
+    radial-gradient(120% 90% at 50% 40%, rgba(10, 28, 26, 0.72) 0%, rgba(0, 0, 0, 0.94) 70%),
+    #000;
 }
 
 .journey-story-fullscreen > img,
@@ -1505,6 +1722,19 @@
   max-width: 100%;
   max-height: 100%;
   object-fit: contain;
+}
+
+/* #7: the control layer (close + nav) fades out after 2.5s idle; any pointer
+   or key activity brings it back. */
+.journey-story-fullscreen__close,
+.journey-story-fullscreen__nav {
+  transition: opacity var(--motion-ui, 260ms) var(--motion-ease-out, ease);
+}
+
+.journey-story-fullscreen.is-controls-hidden .journey-story-fullscreen__close,
+.journey-story-fullscreen.is-controls-hidden .journey-story-fullscreen__nav {
+  opacity: 0;
+  pointer-events: none;
 }
 
 .journey-story-fullscreen__close {
@@ -1528,9 +1758,9 @@
   bottom: 22px;
   transform: translateX(-50%);
   display: grid;
-  grid-template-columns: 44px auto 44px;
+  grid-template-columns: 44px 44px auto 44px;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   padding: 8px 10px;
   background: rgba(2, 8, 8, 0.82);
   border: 1px solid var(--atlas-line);
@@ -1548,10 +1778,22 @@
   cursor: pointer;
 }
 
+.journey-story-fullscreen__nav button.is-active {
+  border-color: var(--atlas-acid);
+  color: var(--atlas-acid);
+}
+
 .journey-story-fullscreen__nav span {
   color: var(--atlas-muted);
   font: 500 8px/1 ui-monospace, "SFMono-Regular", Consolas, monospace;
   text-align: center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .journey-story-fullscreen__close,
+  .journey-story-fullscreen__nav {
+    transition: none;
+  }
 }
 
 .journey-story__media-remove {
@@ -1582,6 +1824,53 @@
 .journey-story__media-remove > button:disabled {
   cursor: wait;
   opacity: 0.68;
+}
+
+/* #14: single-photo cover action and current-cover label. */
+.journey-story__media-actions {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.journey-story__media-set-cover {
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 12px;
+  border: 1px solid rgba(200, 255, 61, 0.32);
+  background: rgba(2, 8, 8, 0.82);
+  color: var(--atlas-acid);
+  cursor: pointer;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+}
+
+.journey-story__media-set-cover:hover:not(:disabled),
+.journey-story__media-set-cover:focus-visible {
+  border-color: rgba(200, 255, 61, 0.6);
+}
+
+.journey-story__media-set-cover:disabled {
+  cursor: wait;
+  opacity: 0.68;
+}
+
+.journey-story__media-cover-current {
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 12px;
+  border: 1px solid rgba(200, 255, 61, 0.22);
+  background: rgba(2, 8, 8, 0.82);
+  color: var(--atlas-muted);
+  font-size: 10px;
+  letter-spacing: 0.08em;
 }
 
 .journey-story__media-remove__confirm {
@@ -1782,6 +2071,20 @@
   color: var(--atlas-faint);
 }
 
+/* #10: a route point's personal note — softer, more personal than metadata,
+   larger line-height, serif, no placeholder when absent. */
+.journey-story__point-note {
+  margin: 22px 0 0;
+  padding: 0 0 0 18px;
+  border-left: 2px solid color-mix(in srgb, var(--journey-color, var(--atlas-warm)) 55%, transparent);
+  color: #cdd9d5;
+  font-family: var(--archive-serif);
+  font-size: 17px;
+  font-style: normal;
+  line-height: 2.05;
+  white-space: pre-wrap;
+}
+
 .journey-story__delete-confirmation {
   display: grid;
   gap: 16px;
@@ -1973,23 +2276,23 @@
   border-top: 1px solid var(--atlas-line);
 }
 
-.journey-story__soundtrack > div:first-child {
+.journey-story__soundtrack-head {
   display: grid;
   gap: 7px;
 }
 
-.journey-story__soundtrack > div:first-child p,
-.journey-story__soundtrack > div:first-child strong {
+.journey-story__soundtrack-head p,
+.journey-story__soundtrack-head strong {
   margin: 0;
 }
 
-.journey-story__soundtrack > div:first-child p {
+.journey-story__soundtrack-head p {
   color: var(--atlas-acid);
   font: 500 8px/1 ui-monospace, "SFMono-Regular", Consolas, monospace;
   letter-spacing: 0.15em;
 }
 
-.journey-story__soundtrack > div:first-child strong {
+.journey-story__soundtrack-head strong {
   overflow-wrap: anywhere;
   color: #d6e0dd;
   font-family: var(--archive-serif);
@@ -1997,9 +2300,80 @@
   font-weight: 400;
 }
 
+/* #7: the audio element is a hidden playback engine — no native control bar,
+   no visible footprint. */
 .journey-story__soundtrack > audio {
-  width: 100%;
-  height: 38px;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* #7: light strip — three soft gradient layers that slowly flow while the
+   soundtrack plays and stay still otherwise. Glow is a state, not a border. */
+.journey-story__soundtrack-light {
+  position: relative;
+  height: 26px;
+  overflow: hidden;
+  border: 1px solid rgba(118, 198, 188, 0.14);
+  border-radius: 999px;
+  background: rgba(4, 18, 17, 0.65);
+}
+
+.journey-story__soundtrack-light span {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  background:
+    linear-gradient(90deg,
+      transparent 0%,
+      color-mix(in srgb, var(--atlas-cyan) 42%, transparent) 22%,
+      color-mix(in srgb, var(--atlas-acid) 30%, transparent) 50%,
+      color-mix(in srgb, var(--atlas-warm) 40%, transparent) 78%,
+      transparent 100%);
+  filter: blur(7px);
+  transform: translateX(-18%);
+  transition: opacity var(--motion-ui, 260ms) var(--motion-ease-out, ease);
+}
+
+.journey-story__soundtrack-light span:nth-child(2) {
+  filter: blur(12px);
+  transition-delay: 40ms;
+}
+
+.journey-story__soundtrack-light span:nth-child(3) {
+  filter: blur(18px);
+  transition-delay: 80ms;
+}
+
+.journey-story__soundtrack.has-track.is-playing .journey-story__soundtrack-light span {
+  /* #20: the analyser drives width/brightness within a small range; without
+     energy values the defaults keep the #7 look. */
+  opacity: calc(0.85 * var(--audio-brightness, 1));
+  animation: motionSoundtrackFlow calc(6.5s / var(--audio-width, 1)) var(--motion-ease-in-out-spatial, ease) infinite alternate;
+}
+
+.journey-story__soundtrack.has-track.is-playing .journey-story__soundtrack-light span:nth-child(2) {
+  animation-duration: calc(7.6s / var(--audio-width, 1));
+}
+
+.journey-story__soundtrack.has-track.is-playing .journey-story__soundtrack-light span:nth-child(3) {
+  animation-duration: calc(8.8s / var(--audio-width, 1));
+}
+
+@keyframes motionSoundtrackFlow {
+  from { transform: translateX(-18%); }
+  to { transform: translateX(18%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .journey-story__soundtrack.has-track.is-playing .journey-story__soundtrack-light span {
+    animation: none;
+    opacity: 0.55;
+  }
 }
 
 .journey-story__soundtrack > input {
@@ -2345,12 +2719,13 @@
   font: 500 8px/1 ui-monospace, "SFMono-Regular", Consolas, monospace;
 }
 
-.journey-route-draft li > div:nth-child(2) {
+.journey-route-draft li > .journey-route-draft__main {
   min-width: 0;
   display: grid;
+  gap: 8px;
 }
 
-.journey-route-draft li > div:nth-child(2) input {
+.journey-route-draft li > .journey-route-draft__main input {
   min-height: 34px;
 }
 
@@ -2358,6 +2733,40 @@
   margin-top: 3px;
   color: var(--atlas-faint);
   font: 500 8px/1.2 ui-monospace, "SFMono-Regular", Consolas, monospace;
+}
+
+/* #10: route-point note editor — quiet, non-pressuring. */
+.journey-route-draft__note {
+  display: grid;
+  gap: 5px;
+}
+
+.journey-route-draft__note > span {
+  color: var(--atlas-muted);
+  font-size: 9px;
+  letter-spacing: 0.07em;
+}
+
+.journey-route-draft__note > span small {
+  margin: 0 0 0 6px;
+  color: var(--atlas-faint);
+}
+
+.journey-route-draft__note textarea {
+  min-height: 52px;
+  resize: vertical;
+  padding: 8px 10px;
+  border: 1px solid var(--atlas-line);
+  background: rgba(2, 8, 8, 0.55);
+  color: #c7d4d0;
+  font-family: var(--archive-serif);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.journey-route-draft__note textarea:focus-visible {
+  outline: 1px solid var(--atlas-acid);
+  outline-offset: 2px;
 }
 
 .journey-route-draft__actions {
@@ -2957,7 +3366,7 @@
   color: var(--atlas-text);
   text-align: left;
   cursor: pointer;
-  transition: border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease;
+  transition: border-color var(--motion-ui, 260ms) var(--motion-ease-out-soft, ease), box-shadow var(--motion-ui, 260ms) var(--motion-ease-out-soft, ease), transform var(--motion-instant, 120ms) var(--motion-ease-out-soft, ease);
 }
 
 .journey-light-effect-list button::before {
@@ -2966,7 +3375,7 @@
   content: "";
   background: var(--journey-light-gradient);
   opacity: 0.2;
-  transition: opacity 180ms ease;
+  transition: opacity var(--motion-instant, 120ms) ease;
 }
 
 .journey-light-effect-list button:hover {
@@ -3235,7 +3644,7 @@
 .journey-precise-location__chevron {
   flex: 0 0 auto;
   color: var(--atlas-acid);
-  transition: transform 180ms ease;
+  transition: transform var(--motion-ui, 260ms) var(--motion-ease-out-soft, ease);
 }
 
 .journey-precise-location[open] .journey-precise-location__chevron {
@@ -3394,25 +3803,26 @@
   to { opacity: 1; transform: none; }
 }
 
-/* ML-04 Shared-Element Morph: journey rail card -> active journey card. */
+/* ML-04 Shared-Element Morph: journey rail card -> active journey card.
+   Paced by the Tier 2 content token (#17). */
 .living-atlas__active {
   view-transition-name: journey-card;
 }
 
 ::view-transition-old(journey-card) {
-  animation: motionCardOut 320ms var(--motion-ease-soft, ease) both;
+  animation: motionSharedExpandOut var(--motion-content, 560ms) var(--motion-ease-soft, ease) both;
 }
 
 ::view-transition-new(journey-card) {
-  animation: motionCardIn 560ms var(--motion-ease-out, ease) both;
+  animation: motionSharedExpandIn var(--motion-content, 560ms) var(--motion-ease-out, ease) both;
 }
 
-@keyframes motionCardOut {
-  to { opacity: 0; transform: scale(0.93); }
+@keyframes motionSharedExpandOut {
+  to { opacity: 0.6; transform: scale(0.97); }
 }
 
-@keyframes motionCardIn {
-  from { opacity: 0.3; transform: scale(0.94); }
+@keyframes motionSharedExpandIn {
+  from { opacity: 0.4; transform: scale(0.98); }
 }
 
 /* ML-09 Geographic Cluster Bloom: active journey stops breathe. */
@@ -3569,7 +3979,7 @@
 /* ML-13 Magnet: magnetic CTA buttons spring back with the same motion
    language used elsewhere in the atlas. */
 .living-atlas__header nav .living-atlas__create,
-.living-atlas__active > button {
+.living-atlas__active-actions > button {
   transition:
     transform 240ms cubic-bezier(0.2, 0.75, 0.15, 1),
     border-color 180ms ease,
@@ -3601,6 +4011,20 @@
     animation: none !important;
   }
 
+  /* #17: Tier 2/3 become crossfades or instant states; continuous flow stops. */
+  .motion-fade-through,
+  .motion-draw,
+  .motion-focus-flight {
+    animation: none !important;
+    transition: none !important;
+  }
+
+  .motion-lift:hover,
+  .motion-lift:active {
+    transform: none;
+    filter: none;
+  }
+
   .particle-earth-route__point-ring {
     opacity: 0.25;
   }
@@ -3627,6 +4051,145 @@
   ::view-transition-new(journey-card) {
     animation-duration: 0.01ms !important;
   }
+}
+
+/* ── #8 Globe Focus Mode ────────────────────────────────────────────────────
+   One click hides every sidebar/card and gives the globe the full viewport.
+   The globe is already inset:0, so hiding the floating layers is enough; the
+   Three scene is never remounted, preserving camera/rotation/focus. The exit
+   control stays visible and keyboard-reachable. */
+
+.living-atlas__globe-focus {
+  color: var(--atlas-muted);
+}
+
+/* Focus-mode layers recede with opacity + pointer-events and the header
+   slides away; the globe is raised above everything else. */
+.living-atlas.is-globe-focus .living-atlas__header {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-18px);
+  transition: opacity var(--motion-ui, 260ms) var(--motion-ease-out, ease), transform var(--motion-ui, 260ms) var(--motion-ease-out, ease);
+}
+
+.living-atlas.is-globe-focus .living-atlas__journey-rail,
+.living-atlas.is-globe-focus .living-atlas__active,
+.living-atlas.is-globe-focus .journey-timeline,
+.living-atlas.is-globe-focus .living-atlas__notice,
+.living-atlas.is-globe-focus .living-atlas__empty {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--motion-ui, 260ms) var(--motion-ease-out, ease);
+}
+
+.living-atlas.is-globe-focus .living-atlas__globe {
+  z-index: 60;
+}
+
+/* The exit control: small, semi-transparent, top-right, always focusable. */
+.living-atlas__globe-focus-exit {
+  position: absolute;
+  z-index: 80;
+  top: 16px;
+  right: 16px;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 16px;
+  border: 1px solid rgba(118, 198, 188, 0.22);
+  border-radius: 999px;
+  background: rgba(2, 10, 11, 0.55);
+  color: #a7b9b4;
+  cursor: pointer;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  opacity: 0;
+  pointer-events: none;
+  backdrop-filter: blur(12px);
+  transition: opacity var(--motion-ui, 260ms) var(--motion-ease-out, ease);
+}
+
+.living-atlas.is-globe-focus .living-atlas__globe-focus-exit {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.living-atlas__globe-focus-exit:focus-visible {
+  outline: 1px solid var(--atlas-acid);
+  outline-offset: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .living-atlas.is-globe-focus .living-atlas__header,
+  .living-atlas.is-globe-focus .living-atlas__journey-rail,
+  .living-atlas.is-globe-focus .living-atlas__active,
+  .living-atlas.is-globe-focus .journey-timeline,
+  .living-atlas.is-globe-focus .living-atlas__notice,
+  .living-atlas.is-globe-focus .living-atlas__empty,
+  .living-atlas.is-globe-focus .living-atlas__globe-focus-exit {
+    transition: none;
+  }
+}
+
+/* ── Motion Language primitives (#17) ─────────────────────────────────────
+   Five primitives compose every effect in the product:
+   fade-through / lift / shared-expand / draw / focus-flight.
+   Durations and easings come from the Tier tokens above; do not add
+   per-feature magic numbers. */
+
+/* 1. fade-through — small state replacement (Tier 1–2). */
+.motion-fade-through {
+  animation: motionFadeThrough var(--motion-content, 560ms) var(--motion-ease-out, ease) both;
+}
+
+@keyframes motionFadeThrough {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* 2. lift — card/interactive surface spatial feedback (Tier 0–1).
+   Quiet, depth not bounce: cover moves 2–4px, border light lifts. */
+.motion-lift {
+  transition:
+    transform var(--motion-instant, 120ms) var(--motion-ease-out-soft, ease),
+    filter var(--motion-instant, 120ms) var(--motion-ease-out-soft, ease),
+    box-shadow var(--motion-ui, 260ms) var(--motion-ease-out-soft, ease);
+}
+
+.motion-lift:hover {
+  transform: translateY(-3px);
+  filter: brightness(1.04);
+}
+
+.motion-lift:active {
+  transform: translateY(-1px);
+  filter: brightness(1.02);
+}
+
+/* 3. shared-expand — thumbnail/card expands into story/fullscreen (Tier 2).
+   The content itself is the transition object; background recedes instead of
+   competing. Implemented with the View Transitions API (see
+   src/motion/primitives/sharedElement.ts); the keyframes live beside ML-04
+   above, where the `journey-card` view name is declared. */
+
+/* 4. draw — route/light trail grows from 0 -> 1 (Tier 3). */
+.motion-draw {
+  transform-box: fill-box;
+  transform-origin: left center;
+  animation: motionDraw var(--motion-journey, 980ms) var(--motion-ease-in-out-spatial, ease) both;
+}
+
+@keyframes motionDraw {
+  from { transform: scaleX(0); opacity: 0; }
+  to { transform: scaleX(1); opacity: 1; }
+}
+
+/* 5. focus-flight — globe camera from global view to a place (Tier 3).
+   Driving JS in LivingAtlasGlobe; this class marks the moving layer so
+   reduced motion can freeze it. */
+.motion-focus-flight {
+  transition: transform var(--motion-journey, 980ms) var(--motion-ease-in-out-spatial, ease);
 }
 
 @media (max-width: 980px) {
@@ -3790,6 +4353,19 @@
     font-size: 9px;
   }
 
+  /* #8: the globe-focus entry becomes an icon-only 44px tap target on mobile. */
+  .living-atlas__header nav .living-atlas__globe-focus {
+    width: 44px;
+    justify-content: center;
+    padding: 0;
+    font-size: 0;
+  }
+
+  .living-atlas__globe-focus-exit {
+    top: 12px;
+    right: 12px;
+  }
+
   .living-atlas__active {
     top: auto;
     right: 10px;
@@ -3854,8 +4430,8 @@
     display: none;
   }
 
-  .living-atlas__active > button {
-    margin-top: 12px;
+  .living-atlas__active-actions > button {
+    margin-top: 0;
   }
 
   .living-atlas__empty {
@@ -4037,7 +4613,7 @@
   }
 
   .journey-composer input:not([type="checkbox"]):not([type="file"]),
-  .journey-route-draft li > div:nth-child(2) input {
+  .journey-route-draft li > .journey-route-draft__main input {
     min-height: 44px;
   }
 

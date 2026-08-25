@@ -137,6 +137,11 @@ export function validateJourneyInput(input: JourneyInput): ValidationResult {
     if (point.isStop && !point.label.trim()) {
       errors.push(`停靠点 ${index + 1} 需要地点标签`);
     }
+    // #10: route-point notes are plain text with a soft client cap (500) and
+    // a hard server cap (2000); keep the client check in sync with the UX.
+    if (point.note !== undefined && point.note !== null && point.note.length > 500) {
+      errors.push(`路线点 ${index + 1} 的笔记不能超过 500 个字符`);
+    }
     if (point.occurredAt !== null) {
       const timestamp = new Date(point.occurredAt);
       if (Number.isNaN(timestamp.valueOf())) {
@@ -176,6 +181,22 @@ export function journeyVisualMedia(
   return journey.media.filter(isVisualMediaAsset);
 }
 
+// #14: the journey cover — the explicit coverMediaAssetId when it is a valid
+// visual asset of this journey, otherwise the first visual media by sortOrder,
+// otherwise null. Reordering never changes the explicit cover.
+export function journeyCover(
+  journey: Pick<Journey, "coverMediaAssetId" | "media">,
+): JourneyMediaAsset | null {
+  const visual = journeyVisualMedia(journey);
+  if (journey.coverMediaAssetId) {
+    const explicit = visual.find(
+      (asset) => asset.id === journey.coverMediaAssetId,
+    );
+    if (explicit) return explicit;
+  }
+  return visual[0] ?? null;
+}
+
 // Every completed upload receives the highest sortOrder in its journey, so the
 // newest track is already the active one before an older track is cleaned up.
 export function journeySoundtrack(
@@ -189,6 +210,64 @@ export function journeySoundtrack(
         : latest,
       null,
     );
+}
+
+// Audio file extensions never enter the presentation layer (#7): the UI shows
+// `飞云之下 韩红林俊杰`, never `飞云之下 韩红林俊杰.mp3`. The database file name
+// is untouched.
+const SOUNDTRACK_EXTENSIONS = new Set([
+  ".mp3",
+  ".m4a",
+  ".aac",
+  ".ogg",
+  ".wav",
+  ".wave",
+]);
+
+export function stripMediaExtension(fileName: string): string {
+  const dot = fileName.lastIndexOf(".");
+  if (dot <= 0) return fileName;
+  const extension = fileName.slice(dot).toLowerCase();
+  return SOUNDTRACK_EXTENSIONS.has(extension)
+    ? fileName.slice(0, dot)
+    : fileName;
+}
+
+// #12: reorder one scope of visual media and map it back onto the full visual
+// order without touching other scopes. `scopeId` is a route point id (or null
+// for journey-scoped media). Only the relative order inside the scope changes;
+// every other scope's items keep their positions, and the soundtrack never
+// enters the reorder at all (it is not visual media).
+export function applyScopeReorder(
+  visualMedia: readonly JourneyMediaAsset[],
+  scopeId: string | null,
+  reorderedScopeIds: readonly string[],
+): JourneyMediaAsset[] {
+  const scopeItems = visualMedia.filter(
+    (asset) => asset.routePointId === scopeId,
+  );
+  // A reorder must contain exactly the scope's assets, once each; anything
+  // else is a caller bug and must not corrupt the full order.
+  if (scopeItems.length !== reorderedScopeIds.length) return [...visualMedia];
+  const expected = new Set(scopeItems.map((asset) => asset.id));
+  if (new Set(reorderedScopeIds).size !== reorderedScopeIds.length) {
+    return [...visualMedia];
+  }
+  for (const id of reorderedScopeIds) {
+    if (!expected.has(id)) return [...visualMedia];
+  }
+
+  const byId = new Map(scopeItems.map((asset) => [asset.id, asset]));
+  const reordered = reorderedScopeIds.map((id) => byId.get(id)!);
+  const result = [...visualMedia];
+  let slot = 0;
+  for (let index = 0; index < result.length; index += 1) {
+    if (result[index].routePointId === scopeId) {
+      result[index] = reordered[slot];
+      slot += 1;
+    }
+  }
+  return result;
 }
 
 export function validateJourneySoundtrack(

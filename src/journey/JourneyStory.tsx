@@ -10,12 +10,31 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import {
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  arrayMove,
+  rectSortingStrategy,
+  sortableKeyboardCoordinates,
+  useSortable,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import {
   IconArrowLeft,
   IconArrowRight,
   IconArrowDown,
   IconArrowUp,
+  IconBookmark,
   IconEdit,
   IconLayoutGrid,
+  IconMaximize,
   IconMusic,
   IconPhoto,
   IconPlayerPause,
@@ -25,11 +44,22 @@ import {
   IconVideo,
   IconX,
 } from "@tabler/icons-react";
-import { deleteMedia, getPrivateMediaRead, reorderJourneyMedia } from "./journeyApi";
+import { deleteMedia, getPrivateMediaRead, reorderJourneyMedia, setJourneyCover } from "./journeyApi";
+import { runSharedElementTransition } from "../motion/primitives/sharedElement";
 import { uploadJourneyMedia } from "./JourneyComposer";
 import {
+  createDecodeRegistry,
+  decodeImageUrl,
+  prefetchWindowFor,
+} from "./mediaPrefetch";
+import { createSoundtrackSampler } from "../motion/audioSampler";
+import { prefersReducedMotion } from "../motion/preferences";
+import {
+  applyScopeReorder,
+  journeyCover,
   journeySoundtrack,
   journeyVisualMedia,
+  stripMediaExtension,
   validateJourneyFiles,
   validateJourneySoundtrack,
 } from "./journeyModel";
@@ -201,18 +231,22 @@ function StoryMediaTile({
   asset,
   index,
   isCurrent,
+  isCover,
   read,
   disabled,
   onRequestRead,
   onSelect,
+  onSetCover,
 }: {
   asset: JourneyMediaAsset;
   index: number;
   isCurrent: boolean;
+  isCover: boolean;
   read: MediaReadState | undefined;
   disabled: boolean;
   onRequestRead: (assetId: string) => void;
   onSelect: (index: number) => void;
+  onSetCover?: (assetId: string) => void;
 }) {
   const tileRef = useRef<HTMLButtonElement>(null);
   const isVideo = asset.mimeType.startsWith("video/");
@@ -239,13 +273,13 @@ function StoryMediaTile({
   }, [asset.id, isVideo, onRequestRead]);
 
   return (
-    <li>
+    <>
       <button
         ref={tileRef}
         type="button"
         className={isCurrent ? "is-current" : ""}
         aria-current={isCurrent ? "true" : undefined}
-        aria-label={`第 ${index + 1} 个媒体 ${asset.fileName}`}
+        aria-label={`第 ${index + 1} 个媒体 ${asset.fileName}${isCover ? "，当前封面" : ""}`}
         data-media-tile-index={index}
         disabled={disabled}
         onClick={() => onSelect(index)}
@@ -261,8 +295,81 @@ function StoryMediaTile({
             {read?.status === "error" ? "不可用" : "载入中"}
           </span>
         )}
+        {isCover ? <span className="journey-story__media-tile-cover">封面</span> : null}
         <small>{String(index + 1).padStart(2, "0")}</small>
       </button>
+      {onSetCover && !isCover ? (
+        <button
+          type="button"
+          className="journey-story__media-tile-set-cover"
+          onClick={() => onSetCover(asset.id)}
+        >
+          设为封面
+        </button>
+      ) : null}
+    </>
+  );
+}
+
+// #12: a sortable wrapper around StoryMediaTile. The <li> becomes the drag
+// handle surface; dragging lifts the tile and leaves the grid layout animating
+// around it (dnd-kit layout animation), with the sortable styles applied via
+// transform/transition so reduced-motion falls back to instant moves.
+function SortableMediaTile({
+  asset,
+  index,
+  isCurrent,
+  isCover,
+  read,
+  disabled,
+  onRequestRead,
+  onSelect,
+  onSetCover,
+}: {
+  asset: JourneyMediaAsset;
+  index: number;
+  isCurrent: boolean;
+  isCover: boolean;
+  read: MediaReadState | undefined;
+  disabled: boolean;
+  onRequestRead: (assetId: string) => void;
+  onSelect: (index: number) => void;
+  onSetCover?: (assetId: string) => void;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: asset.id });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    zIndex: isDragging ? 2 : undefined,
+  };
+
+  return (
+    <li
+      ref={setNodeRef}
+      style={style}
+      className={`${isDragging ? "is-dragging" : ""}${isCover ? " is-cover" : ""}`}
+      {...attributes}
+      {...listeners}
+    >
+      <StoryMediaTile
+        asset={asset}
+        index={index}
+        isCurrent={isCurrent}
+        isCover={isCover}
+        read={read}
+        disabled={disabled || isDragging}
+        onRequestRead={onRequestRead}
+        onSelect={onSelect}
+        onSetCover={onSetCover}
+      />
     </li>
   );
 }
@@ -286,6 +393,24 @@ export function JourneyStory({
     routePointId,
   );
   const [mediaReads, setMediaReads] = useState<Record<string, MediaReadState>>({});
+  // Browser-side decode readiness, separate from signed-read readiness (#11):
+  // a URL being available never implies the image is decoded, so the slideshow
+  // holds the current frame until the next one is truly ready.
+  const decodeRegistryRef = useRef(createDecodeRegistry(decodeImageUrl));
+  // Review P1: decode settles asynchronously without React state; this
+  // revision counter bumps on every settle so the pending-navigation effect
+  // re-runs and can observe the newly decoded target.
+  const [decodeSettleRevision, setDecodeSettleRevision] = useState(0);
+  useEffect(() => decodeRegistryRef.current.onSettle(
+    () => setDecodeSettleRevision((current) => current + 1),
+  ), []);
+  // Two-layer media stage (#11): `shownAssetId` is the frame that has fully
+  // settled (base layer); `incomingAssetId` is the frame fading in on top.
+  // When they are equal the stage is single-layered. A target that is not yet
+  // decoded stays pending and the current frame keeps showing until it is.
+  const [shownAssetId, setShownAssetId] = useState<string | null>(null);
+  const [incomingAssetId, setIncomingAssetId] = useState<string | null>(null);
+  const pendingTargetRef = useRef<number | null>(null);
   const [uploadState, setUploadState] = useState<MediaUploadState>({ status: "idle" });
   const [retryFiles, setRetryFiles] = useState<File[]>([]);
   const [closeBlocked, setCloseBlocked] = useState(false);
@@ -295,8 +420,24 @@ export function JourneyStory({
   const [mediaDeleteMessage, setMediaDeleteMessage] = useState("");
   const [orderPending, setOrderPending] = useState(false);
   const [orderMessage, setOrderMessage] = useState("");
+  // Review P2: optimistic drag order for the current scope (asset ids). Set
+  // on drop before the API round-trip; cleared on success/rollback so the
+  // grid follows server truth.
+  const [localMediaOrder, setLocalMediaOrder] = useState<readonly string[] | null>(null);
+  // #14: setting a cover is a lightweight mutation that disables the grid.
+  const [coverPending, setCoverPending] = useState(false);
   const [playing, setPlaying] = useState(false);
+  // Review P2: mirrors `playing` so gesture handlers can read it synchronously.
+  const playingRef = useRef(false);
+  playingRef.current = playing;
   const [fullscreen, setFullscreen] = useState(false);
+  // #7: fullscreen controls fade out after idle; any pointer/key activity
+  // brings them back.
+  const [fullscreenControlsHidden, setFullscreenControlsHidden] = useState(false);
+  // Review P2: the fullscreen overlay is a focus trap of its own (it is
+  // rendered outside the story dialog, whose useModalFocus would otherwise
+  // steal Tab focus back into the article).
+  const fullscreenRef = useRef<HTMLDivElement>(null);
   const [overview, setOverview] = useState(false);
   const [soundtrackUpload, setSoundtrackUpload] = useState<MediaUploadState>({ status: "idle" });
   const [soundtrackRemovePending, setSoundtrackRemovePending] = useState(false);
@@ -304,6 +445,10 @@ export function JourneyStory({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const soundtrackInputRef = useRef<HTMLInputElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
+  // #20: one sampler per soundtrack element; the analyser is built on first
+  // play and drives the light strip with smoothed energy.
+  const audioSamplerRef = useRef(createSoundtrackSampler());
+  const soundtrackLightRef = useRef<HTMLDivElement>(null);
   const deleteCancelRef = useRef<HTMLButtonElement>(null);
   const mediaDeleteCancelRef = useRef<HTMLButtonElement>(null);
   const copyRef = useRef<HTMLElement>(null);
@@ -354,6 +499,10 @@ export function JourneyStory({
     // Signed reads belong to the journey that requested them.
     pendingReads.current.clear();
     setMediaReads({});
+    decodeRegistryRef.current.reset();
+    setShownAssetId(null);
+    setIncomingAssetId(null);
+    pendingTargetRef.current = null;
     const audio = audioRef.current;
     if (audio) {
       audio.pause();
@@ -379,10 +528,28 @@ export function JourneyStory({
     () => visualMedia.filter((asset) => asset.routePointId === selectedRoutePointId),
     [visualMedia, selectedRoutePointId],
   );
+  // Review P2: while a drag is pending, the overview renders the optimistic
+  // order; otherwise it follows scopedMedia (server truth).
+  const orderedScopedMedia = useMemo(() => {
+    if (!localMediaOrder) return scopedMedia;
+    const byId = new Map(scopedMedia.map((asset) => [asset.id, asset]));
+    const ordered = localMediaOrder.map((id) => byId.get(id)).filter(
+      (asset): asset is JourneyMediaAsset => asset !== undefined,
+    );
+    // Any asset not in the local order (e.g. a just-uploaded one) appends.
+    for (const asset of scopedMedia) {
+      if (!localMediaOrder.includes(asset.id)) ordered.push(asset);
+    }
+    return ordered;
+  }, [localMediaOrder, scopedMedia]);
   const soundtrack = journey ? journeySoundtrack(journey) : null;
   const activeAsset = scopedMedia[assetIndex] ?? null;
   const activeRead = activeAsset ? mediaReads[activeAsset.id] : null;
   const soundtrackRead = soundtrack ? mediaReads[soundtrack.id] : null;
+  // #14: the journey cover — explicit coverMediaAssetId, else first visual
+  // media by sortOrder, else null. Cards/story use it as the representative
+  // image; it is independent of slideshow order.
+  const cover = journey ? journeyCover(journey) : null;
 
   function visualMediaCount(pointId: string | null) {
     return visualMedia.filter((asset) => asset.routePointId === pointId).length;
@@ -395,6 +562,10 @@ export function JourneyStory({
 
   // Ken Burns playback: advance every slide when playing, restarting the
   // timer whenever the user navigates manually or the media list changes.
+  // #11: autoplay goes through the two-layer stage too, so a slow network
+  // keeps the current frame until the next one is decoded.
+  const navigateToMediaRef = useRef<(index: number) => void>(() => undefined);
+  navigateToMediaRef.current = navigateToMedia;
   useEffect(() => {
     if (!playing) return;
     if (scopedMedia.length < 2) {
@@ -402,7 +573,7 @@ export function JourneyStory({
       return;
     }
     const timer = window.setTimeout(() => {
-      setAssetIndex((current) => (current + 1) % scopedMedia.length);
+      navigateToMediaRef.current((assetIndex + 1) % scopedMedia.length);
     }, 5200);
     return () => window.clearTimeout(timer);
   }, [assetIndex, playing, scopedMedia.length]);
@@ -421,13 +592,130 @@ export function JourneyStory({
     void audio.play().catch(() => undefined);
   }, [playing, soundtrackRead?.status === "ready"]);
 
+  // #20: build the analyser on first play and drive the soundtrack light
+  // strip with smoothed energy. Reduced motion keeps the strip static; a
+  // failed analyser (CORS etc.) leaves the CSS-only animation in place.
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio || !playing || !soundtrackRead || soundtrackRead.status !== "ready") return;
+    if (prefersReducedMotion()) return;
+    const sampler = audioSamplerRef.current;
+    sampler.start(audio);
+    const strip = soundtrackLightRef.current;
+    if (!sampler.isActive()) return;
+    let frame = 0;
+    const drive = () => {
+      const energy = sampler.getEnergy();
+      if (strip) {
+        strip.style.setProperty("--audio-width", String(0.4 + energy.mid * 0.6));
+        strip.style.setProperty("--audio-brightness", String(0.4 + energy.overall * 0.6));
+      }
+      frame = window.requestAnimationFrame(drive);
+    };
+    frame = window.requestAnimationFrame(drive);
+    return () => window.cancelAnimationFrame(frame);
+  }, [playing, soundtrackRead?.status === "ready"]);
+
+  // Release the analyser and AudioContext when the story closes or navigates.
+  useEffect(() => () => audioSamplerRef.current.stop(), []);
+
   useEffect(() => () => audioRef.current?.pause(), []);
+
+  // #7 + review P2: fullscreen playback — Esc exits, arrows switch media,
+  // Space toggles play/pause. Controls fade out after 2.5s of idle; any
+  // pointer/key/touch activity shows them AND restarts the idle timer, so
+  // "hide after inactivity" actually re-arms after every interaction.
+  useEffect(() => {
+    if (!fullscreen) {
+      setFullscreenControlsHidden(false);
+      return;
+    }
+    let idleTimer = 0;
+    const restartIdle = () => {
+      setFullscreenControlsHidden(false);
+      window.clearTimeout(idleTimer);
+      idleTimer = window.setTimeout(() => setFullscreenControlsHidden(true), 2500);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      restartIdle();
+      if (event.key === "Escape") {
+        setFullscreen(false);
+      } else if (event.key === "ArrowLeft") {
+        navigateToMediaRef.current((assetIndex - 1 + scopedMedia.length) % scopedMedia.length);
+      } else if (event.key === "ArrowRight") {
+        navigateToMediaRef.current((assetIndex + 1) % scopedMedia.length);
+      } else if (event.key === " " || event.key === "Spacebar") {
+        event.preventDefault();
+        setPlaying((current) => !current);
+      }
+    };
+    const onActivity = () => restartIdle();
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("pointermove", onActivity);
+    window.addEventListener("pointerdown", onActivity);
+    window.addEventListener("touchstart", onActivity, { passive: true });
+    restartIdle();
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("pointermove", onActivity);
+      window.removeEventListener("pointerdown", onActivity);
+      window.removeEventListener("touchstart", onActivity);
+      window.clearTimeout(idleTimer);
+    };
+  }, [fullscreen, assetIndex, scopedMedia.length]);
+
+  // Review P2: the fullscreen overlay is its own focus trap. The story
+  // dialog's useModalFocus redirects Tab into the article; when fullscreen is
+  // open we own Tab cycling inside it and focus its close button on entry.
+  useEffect(() => {
+    if (!fullscreen) return;
+    const root = fullscreenRef.current;
+    if (!root) return;
+    const previousFocus = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+    const focusable = () => [...root.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    )].filter((element) => (
+      element.getClientRects().length > 0
+      && getComputedStyle(element).visibility !== "hidden"
+    ));
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Tab") return;
+      const candidates = focusable();
+      if (candidates.length === 0) return;
+      const first = candidates[0];
+      const last = candidates[candidates.length - 1];
+      const current = document.activeElement;
+      if (event.shiftKey && (current === first || !root.contains(current))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (current === last || !root.contains(current))) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    const firstButton = focusable()[0];
+    firstButton?.focus();
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown, true);
+      if (previousFocus?.isConnected) previousFocus.focus();
+    };
+  }, [fullscreen]);
 
   useEffect(() => {
     setAssetIndex((current) => Math.min(
       current,
       Math.max(0, scopedMedia.length - 1),
     ));
+    // A list shrink can leave the stage pointing at a removed asset; fall
+    // back to the (clamped) active frame so the stage never goes stale.
+    if (shownAssetId && !scopedMedia.some((candidate) => candidate.id === shownAssetId)) {
+      setShownAssetId(null);
+      setIncomingAssetId(null);
+      pendingTargetRef.current = null;
+    }
   }, [scopedMedia.length]);
 
   useEffect(() => {
@@ -461,6 +749,14 @@ export function JourneyStory({
     ).finally(() => pendingReads.current.delete(assetId));
   }, []);
 
+  // #11: settle the two-layer stage after the incoming frame's crossfade.
+  // Under reduced motion the animation is disabled and never fires
+  // animationend, so the caller settles immediately in that case.
+  const settleIncoming = useCallback((assetId: string) => {
+    setShownAssetId((current) => current === assetId ? current : assetId);
+    setIncomingAssetId((current) => current === assetId ? null : current);
+  }, []);
+
   useEffect(() => {
     if (activeAsset) loadMediaRead(activeAsset.id);
   }, [activeAsset?.id, loadMediaRead]);
@@ -468,6 +764,103 @@ export function JourneyStory({
   useEffect(() => {
     if (soundtrack) loadMediaRead(soundtrack.id);
   }, [soundtrack?.id, loadMediaRead]);
+
+  // #11: prepare adjacent slideshow media while the active one is on screen.
+  // The window is next 1 + previous 1 for manual browsing, next 2 for
+  // autoplay. Only images are decoded ahead; videos stay at preload metadata.
+  useEffect(() => {
+    if (!activeAsset || scopedMedia.length < 2) return;
+    const activeIndex = scopedMedia.findIndex((candidate) => candidate.id === activeAsset.id);
+    if (activeIndex < 0) return;
+    const windowFor = prefetchWindowFor(activeIndex, scopedMedia.length, playing);
+    const target = new Set(
+      [...windowFor.next, ...windowFor.previous]
+        .map((index) => scopedMedia[index])
+        .filter((asset): asset is JourneyMediaAsset => asset !== undefined),
+    );
+    for (const candidate of target) {
+      // Request the signed read (cached; no duplicate requests).
+      loadMediaRead(candidate.id);
+    }
+    // Release decoded refs outside the window so hundreds of images are not
+    // all kept in memory for one open dialog.
+    const keep = new Set<string>([activeAsset.id]);
+    for (const index of windowFor.next) keep.add(scopedMedia[index]?.id ?? "");
+    for (const index of windowFor.previous) keep.add(scopedMedia[index]?.id ?? "");
+    for (const [assetId, state] of Object.entries(mediaReadsRef.current)) {
+      if (state.status === "ready" && !keep.has(assetId)) {
+        decodeRegistryRef.current.release(assetId);
+      }
+    }
+  }, [activeAsset?.id, scopedMedia, playing, loadMediaRead]);
+
+  // #11: start the browser decode for any image whose signed read became
+  // ready inside the prefetch window (or is the current frame). Runs whenever
+  // reads settle, so an async read completion starts the decode automatically.
+  useEffect(() => {
+    const windowTargets = new Set<string>([activeAsset?.id ?? ""]);
+    if (activeAsset && scopedMedia.length >= 2) {
+      const activeIndex = scopedMedia.findIndex((candidate) => candidate.id === activeAsset.id);
+      if (activeIndex >= 0) {
+        const windowFor = prefetchWindowFor(activeIndex, scopedMedia.length, playing);
+        for (const index of [...windowFor.next, ...windowFor.previous]) {
+          const candidate = scopedMedia[index];
+          if (candidate) windowTargets.add(candidate.id);
+        }
+      }
+    }
+    for (const [assetId, state] of Object.entries(mediaReads)) {
+      if (
+        state.status === "ready"
+        && windowTargets.has(assetId)
+      ) {
+        const asset = scopedMedia.find((candidate) => candidate.id === assetId);
+        if (asset?.mimeType.startsWith("image/")) {
+          decodeRegistryRef.current.ensure(assetId, state.url);
+        }
+      }
+    }
+  }, [mediaReads, activeAsset?.id, scopedMedia, playing]);
+
+  // #11: when the incoming layer settles (transition end handled in the JSX),
+  // the base layer follows. This effect covers the entry case: no incoming and
+  // no settled frame yet, so the active frame becomes the base immediately.
+  useEffect(() => {
+    if (incomingAssetId !== null || shownAssetId !== null) return;
+    if (activeAsset) setShownAssetId(activeAsset.id);
+  }, [activeAsset?.id, incomingAssetId, shownAssetId]);
+
+  // #11: under reduced motion the crossfade animation is disabled, so no
+  // animationend fires; settle the stage as soon as the incoming frame mounts.
+  useEffect(() => {
+    if (incomingAssetId === null) return;
+    if (!prefersReducedMotion()) return;
+    const timer = window.setTimeout(() => settleIncoming(incomingAssetId), 16);
+    return () => window.clearTimeout(timer);
+  }, [incomingAssetId, settleIncoming]);
+
+  // #11: a navigation target that was not decoded yet stays pending; the
+  // current frame keeps showing until the target's read and decode settle,
+  // then the switch fires with the incoming layer crossfading in.
+  // Review P1: the effect re-runs on every decode settle revision, and when
+  // the target's signed read is already ready it starts the decode so a
+  // pending target can never stall.
+  useEffect(() => {
+    const pendingIndex = pendingTargetRef.current;
+    if (pendingIndex === null) return;
+    const target = scopedMedia[pendingIndex];
+    if (!target) return;
+    const targetRead = mediaReads[target.id];
+    if (targetRead?.status === "ready" && target.mimeType.startsWith("image/")) {
+      decodeRegistryRef.current.ensure(target.id, targetRead.url);
+    }
+    const ready = targetRead?.status === "ready"
+      && (target.mimeType.startsWith("video/") || decodeRegistryRef.current.isDecoded(target.id));
+    if (!ready) return;
+    pendingTargetRef.current = null;
+    setIncomingAssetId(target.id);
+    setAssetIndex(pendingIndex);
+  }, [decodeSettleRevision, mediaReads, scopedMedia, activeAsset?.id, playing]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -496,6 +889,20 @@ export function JourneyStory({
     : null;
   const asset = activeAsset;
   const read = asset ? mediaReads[asset.id] : null;
+  // #11 two-layer stage: `shownAsset` is the settled base frame, `incoming`
+  // (when present) is fading in on top. The base frame is released only after
+  // the incoming one settles, so a switch never flashes an empty stage.
+  const shownAsset = shownAssetId
+    ? scopedMedia.find((candidate) => candidate.id === shownAssetId) ?? null
+    : asset;
+  const shownRead = shownAsset ? mediaReads[shownAsset.id] : null;
+  const shownIndex = shownAsset
+    ? scopedMedia.findIndex((candidate) => candidate.id === shownAsset.id)
+    : -1;
+  const incoming = incomingAssetId && incomingAssetId !== shownAssetId
+    ? scopedMedia.find((candidate) => candidate.id === incomingAssetId) ?? null
+    : null;
+  const incomingRead = incoming ? mediaReads[incoming.id] : null;
   const fullMediaIndex = asset
     ? visualMedia.findIndex((candidate) => candidate.id === asset.id)
     : -1;
@@ -558,6 +965,9 @@ export function JourneyStory({
           : [];
         if (refreshedMedia[firstNewAssetIndex]) {
           setAssetIndex(firstNewAssetIndex);
+          setShownAssetId(refreshedMedia[firstNewAssetIndex].id);
+          setIncomingAssetId(null);
+          pendingTargetRef.current = null;
         } else {
           refreshFailed = true;
         }
@@ -677,7 +1087,12 @@ export function JourneyStory({
         const refreshedJourney = await onMediaAdded(journey.id);
         const scoped = scopedVisualMedia(refreshedJourney ?? journey);
         const movedIndex = scoped.findIndex((candidate) => candidate.id === asset.id);
-        if (movedIndex >= 0) setAssetIndex(movedIndex);
+        if (movedIndex >= 0) {
+          setAssetIndex(movedIndex);
+          setShownAssetId(asset.id);
+          setIncomingAssetId(null);
+          pendingTargetRef.current = null;
+        }
       }
     } catch (error) {
       setOrderMessage(error instanceof Error ? error.message : "顺序调整失败，请稍后重试。");
@@ -691,25 +1106,171 @@ export function JourneyStory({
     || deleteState === "pending"
     || mediaDeleteState === "pending"
     || soundtrackRemovePending
-    || orderPending;
+    || orderPending
+    || coverPending;
 
   function selectMediaScope(routePointId: string | null) {
     if (mutationPending) return;
     setSelectedRoutePointId(routePointId);
     setAssetIndex(0);
+    setShownAssetId(null);
+    setIncomingAssetId(null);
+    pendingTargetRef.current = null;
+    setLocalMediaOrder(null);
     setOverview(false);
     setRetryFiles([]);
     setUploadState({ status: "idle" });
   }
 
+  // #11: navigate to an index through the two-layer stage. The target must be
+  // decoded before it replaces the current frame; otherwise the target stays
+  // pending and the current frame remains until it settles.
+  function navigateToMedia(index: number) {
+    if (index < 0 || index >= scopedMedia.length) return;
+    if (index === assetIndex) return;
+    const target = scopedMedia[index];
+    if (!target) return;
+    const targetRead = mediaReads[target.id];
+    const ready = targetRead?.status === "ready"
+      && (target.mimeType.startsWith("video/") || decodeRegistryRef.current.isDecoded(target.id));
+    if (ready) {
+      setIncomingAssetId(target.id);
+      setAssetIndex(index);
+    } else {
+      // Review P1: even when the read is already ready, a pending target
+      // must start its decode; otherwise it can sit forever with a decoded
+      // image that never triggers a re-check.
+      pendingTargetRef.current = index;
+      if (targetRead?.status !== "ready") {
+        loadMediaRead(target.id);
+      } else if (target.mimeType.startsWith("image/")) {
+        decodeRegistryRef.current.ensure(target.id, targetRead.url);
+      }
+    }
+  }
+
+  // #18: shared-element transition source. When the user clicks an overview
+  // tile, the tile's <img> gets a stable view-transition-name before the state
+  // switch, and the single/fullscreen stage claims the same name, so the
+  // browser morphs the tile into the stage instead of a hard cut. The name is
+  // cleared after the transition settles.
+  const transitionNameRef = useRef<string | null>(null);
+
   function selectMediaIndex(index: number) {
-    setAssetIndex(index);
-    setOverview(false);
+    // The source tile is the one currently rendered at that index. Claim a
+    // stable name for the morph, then switch inside startViewTransition.
+    const sourceElement = document.querySelector<HTMLImageElement>(
+      `.journey-story__media-grid [data-media-tile-index="${index}"] img`,
+    );
+    const name = `story-media-${scopedMedia[index]?.id ?? "unknown"}`;
+    if (sourceElement && typeof document.startViewTransition === "function") {
+      sourceElement.style.viewTransitionName = name;
+      transitionNameRef.current = name;
+      runSharedElementTransition(() => {
+        navigateToMedia(index);
+        setOverview(false);
+      });
+      // Release the name once the browser finishes the morph (or cancels it).
+      window.setTimeout(() => {
+        transitionNameRef.current = null;
+      }, 700);
+    } else {
+      navigateToMedia(index);
+      setOverview(false);
+    }
+  }
+
+  // #12: overview drag-and-drop reordering. Pointer (mouse + touch) and
+  // keyboard; keyboard uses sortable arrow-key coordinates. Review P2: the
+  // pointer sensor uses a small distance for mouse but a long-press (delay)
+  // activation on touch so a scrollable grid does not fight the drag.
+  const dragSensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        delay: 200,
+        tolerance: 8,
+      },
+    }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+
+  async function handleMediaReorderEnd(event: DragEndEvent) {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    const oldIndex = scopedMedia.findIndex((candidate) => candidate.id === active.id);
+    const newIndex = scopedMedia.findIndex((candidate) => candidate.id === over.id);
+    if (oldIndex < 0 || newIndex < 0) return;
+
+    // Review P2: optimistic — apply the new scope order to the grid
+    // immediately, then persist; rollback clears the local order so the grid
+    // follows server truth on failure.
+    const nextScoped = arrayMove(scopedMedia, oldIndex, newIndex);
+    const nextVisual = applyScopeReorder(
+      visualMedia,
+      selectedRoutePointId,
+      nextScoped.map((candidate) => candidate.id),
+    );
+    const nextAssetIndex = nextScoped.findIndex(
+      (candidate) => candidate.id === active.id,
+    );
+    setLocalMediaOrder(nextScoped.map((candidate) => candidate.id));
+    setOrderPending(true);
+    setOrderMessage("");
+    try {
+      if (onMediaReorder) {
+        await onMediaReorder(journey.id, nextVisual.map((candidate) => candidate.id));
+      } else {
+        await reorderJourneyMedia(journey.id, nextVisual.map((candidate) => candidate.id));
+        const refreshedJourney = await onMediaAdded(journey.id);
+        if (refreshedJourney) {
+          const refreshedScoped = scopedVisualMedia(refreshedJourney);
+          setAssetIndex((current) => Math.min(current, Math.max(0, refreshedScoped.length - 1)));
+          setShownAssetId(null);
+          setIncomingAssetId(null);
+          pendingTargetRef.current = null;
+        }
+      }
+      setAssetIndex(Math.max(0, nextAssetIndex));
+    } catch (error) {
+      setOrderMessage(error instanceof Error ? error.message : "顺序调整失败，请稍后重试。");
+      // Rollback: drop the optimistic order; the grid returns to server truth.
+      setLocalMediaOrder(null);
+    } finally {
+      setOrderPending(false);
+      setLocalMediaOrder(null);
+    }
+  }
+
+  // #14: set this journey's cover media. The parent owns journey state; after
+  // the API call we ask it to refresh, so the card updates immediately and a
+  // failure rolls back to server truth.
+  async function handleSetCover(assetId: string) {
+    if (!journey || coverPending || mutationPending) return;
+    setCoverPending(true);
+    setOrderMessage("");
+    try {
+      await setJourneyCover(journey.id, assetId);
+      await onMediaAdded(journey.id);
+    } catch (error) {
+      setOrderMessage(error instanceof Error ? error.message : "封面设置失败，请稍后重试。");
+    } finally {
+      setCoverPending(false);
+    }
   }
 
   function togglePlaying() {
     // Autoplay always runs on a single item, so entering it leaves the grid.
     setOverview(false);
+    const willPlay = !playingRef.current;
+    // Review P2: start playback synchronously from the user gesture so the
+    // browser's user-activation policy cannot reject play(). The effect below
+    // remains for synchronization/fallback (e.g. paused resume via state).
+    if (willPlay) {
+      const audio = audioRef.current;
+      if (audio && soundtrackRead?.status === "ready") {
+        void audio.play().catch(() => undefined);
+      }
+    }
     setPlaying((current) => !current);
   }
 
@@ -832,36 +1393,107 @@ export function JourneyStory({
                 {overview ? "返回单张" : "全部照片"}
               </button>
             ) : null}
-            {overview ? (
-              <ul className="journey-story__media-grid" aria-label={`全部媒体，共 ${scopedMedia.length} 个`}>
-                {scopedMedia.map((tile, index) => (
-                  <StoryMediaTile
-                    key={tile.id}
-                    asset={tile}
-                    index={index}
-                    isCurrent={index === assetIndex}
-                    read={mediaReads[tile.id]}
-                    disabled={mutationPending}
-                    onRequestRead={loadMediaRead}
-                    onSelect={selectMediaIndex}
-                  />
-                ))}
-              </ul>
+            {!overview && asset && read?.status === "ready" ? (
+              <button
+                type="button"
+                className="journey-story__fullscreen-entry"
+                onClick={() => {
+                  setPlaying(scopedMedia.length > 1);
+                  setFullscreen(true);
+                }}
+              >
+                <IconMaximize size={16} stroke={1.35} aria-hidden="true" />
+                全屏播放
+              </button>
             ) : null}
-            {!overview && asset && (!read || read.status === "loading") ? <div className="journey-story__media-state">正在打开私有媒体…</div> : null}
-            {!overview && asset && read?.status === "error" ? <div className="journey-story__media-state is-error">{read.message}</div> : null}
-            {!overview && asset && read?.status === "ready" && asset.mimeType.startsWith("video/") ? <video key={asset.id} src={read.url} controls playsInline preload="metadata" /> : null}
-            {!overview && asset && read?.status === "ready" && !asset.mimeType.startsWith("video/") ? (
+            {overview ? (
+              <DndContext
+                sensors={dragSensors}
+                collisionDetection={closestCenter}
+                onDragEnd={(event) => void handleMediaReorderEnd(event)}
+              >
+                <SortableContext
+                  items={orderedScopedMedia.map((candidate) => candidate.id)}
+                  strategy={rectSortingStrategy}
+                >
+                  <ul className="journey-story__media-grid" aria-label={`全部媒体，共 ${orderedScopedMedia.length} 个`}>
+                    {orderedScopedMedia.map((tile, index) => (
+                      <SortableMediaTile
+                        key={tile.id}
+                        asset={tile}
+                        index={index}
+                        isCurrent={index === assetIndex}
+                        isCover={cover?.id === tile.id}
+                        read={mediaReads[tile.id]}
+                        disabled={mutationPending}
+                        onRequestRead={loadMediaRead}
+                        onSelect={selectMediaIndex}
+                        onSetCover={handleSetCover}
+                      />
+                    ))}
+                  </ul>
+                </SortableContext>
+              </DndContext>
+            ) : null}
+            {!overview && shownAsset && (!shownRead || shownRead.status === "loading") ? <div className="journey-story__media-state">正在打开私有媒体…</div> : null}
+            {!overview && shownAsset && shownRead?.status === "error" ? <div className="journey-story__media-state is-error">{shownRead.message}</div> : null}
+            {!overview && shownAsset && shownRead?.status === "ready" && shownAsset.mimeType.startsWith("video/") ? <video key={shownAsset.id} src={shownRead.url} controls playsInline preload="metadata" /> : null}
+            {!overview && shownAsset && shownRead?.status === "ready" && !shownAsset.mimeType.startsWith("video/") ? (
               <img
-                key={asset.id}
+                key={`base-${shownAsset.id}`}
                 className={playing && scopedMedia.length > 1
-                  ? `is-kenburns kenburns-${assetIndex % 2}`
+                  ? `is-kenburns kenburns-${shownIndex % 2}`
                   : "is-zoomable"}
-                src={read.url}
-                alt={asset.fileName}
+                src={shownRead.url}
+                alt={shownAsset.fileName}
+                // #18: the hero claims the shared-element name when it is the
+                // journey cover coming from the card, or the tile that was
+                // clicked in the overview.
+                style={transitionNameRef.current === `story-media-${shownAsset.id}`
+                  ? { viewTransitionName: transitionNameRef.current }
+                  : (cover?.id === shownAsset.id
+                    ? { viewTransitionName: "journey-cover" }
+                    : undefined)}
+                onTransitionEnd={() => {
+                  if (transitionNameRef.current) transitionNameRef.current = null;
+                }}
                 onClick={() => {
                   setPlaying(false);
                   setFullscreen(true);
+                }}
+              />
+            ) : null}
+            {!overview && incoming && incomingRead?.status === "ready" && !incoming.mimeType.startsWith("video/") ? (
+              <img
+                key={`incoming-${incoming.id}`}
+                className={`journey-story__media-incoming${playing && scopedMedia.length > 1 ? " is-kenburns" : ""}`}
+                src={incomingRead.url}
+                alt={incoming.fileName}
+                onAnimationEnd={(event) => {
+                  // Settle the stage only once the fade completes; the base
+                  // frame is released after this, never before.
+                  if (event.target === event.currentTarget && event.animationName === "motionMediaIn") {
+                    settleIncoming(incoming.id);
+                  }
+                }}
+                onClick={() => {
+                  setPlaying(false);
+                  setFullscreen(true);
+                }}
+              />
+            ) : null}
+            {!overview && incoming && incomingRead?.status === "ready" && incoming.mimeType.startsWith("video/") ? (
+              <video
+                key={`incoming-${incoming.id}`}
+                className="journey-story__media-incoming"
+                src={incomingRead.url}
+                controls
+                playsInline
+                preload="metadata"
+                onAnimationEnd={(event) => {
+                  if (event.target === event.currentTarget && event.animationName === "motionMediaIn") {
+                    settleIncoming(incoming.id);
+                  }
                 }}
               />
             ) : null}
@@ -879,28 +1511,43 @@ export function JourneyStory({
                     ? <IconPlayerPause size={17} stroke={1.35} aria-hidden="true" />
                     : <IconPlayerPlay size={17} stroke={1.35} aria-hidden="true" />}
                 </button>
-                <button type="button" disabled={assetIndex === 0 || mutationPending} onClick={() => setAssetIndex((current) => current - 1)} aria-label="上一个媒体"><IconArrowLeft size={17} stroke={1.35} aria-hidden="true" /></button>
+                <button type="button" disabled={assetIndex === 0 || mutationPending} onClick={() => navigateToMedia(assetIndex - 1)} aria-label="上一个媒体"><IconArrowLeft size={17} stroke={1.35} aria-hidden="true" /></button>
                 <span>{scopedMedia.length > 0 ? `${assetIndex + 1} / ${scopedMedia.length}` : "0 / 0"}</span>
-                <button type="button" disabled={assetIndex === scopedMedia.length - 1 || mutationPending} onClick={() => setAssetIndex((current) => current + 1)} aria-label="下一个媒体"><IconArrowRight size={17} stroke={1.35} aria-hidden="true" /></button>
+                <button type="button" disabled={assetIndex === scopedMedia.length - 1 || mutationPending} onClick={() => navigateToMedia(assetIndex + 1)} aria-label="下一个媒体"><IconArrowRight size={17} stroke={1.35} aria-hidden="true" /></button>
                 <button type="button" disabled={!canMoveEarlier} onClick={() => void moveMedia(-1)} aria-label="向前调整媒体顺序"><IconArrowUp size={17} stroke={1.35} aria-hidden="true" /></button>
                 <button type="button" disabled={!canMoveLater} onClick={() => void moveMedia(1)} aria-label="向后调整媒体顺序"><IconArrowDown size={17} stroke={1.35} aria-hidden="true" /></button>
               </nav>
             ) : null}
             {orderMessage ? <p className="journey-story__order-message" role="status">{orderMessage}</p> : null}
             {!overview && asset ? (
-              <div className="journey-story__media-remove">
-                {mediaDeleteState === "idle" ? (
-                  <button type="button" disabled={mutationPending} onClick={() => setMediaDeleteState("confirming")} aria-label="删除这段媒体">
-                    <IconTrash size={17} stroke={1.35} aria-hidden="true" />
+              <div className="journey-story__media-actions">
+                {cover?.id !== asset.id ? (
+                  <button
+                    type="button"
+                    className="journey-story__media-set-cover"
+                    disabled={mutationPending || coverPending}
+                    onClick={() => void handleSetCover(asset.id)}
+                  >
+                    <IconBookmark size={16} stroke={1.35} aria-hidden="true" />
+                    设为封面
                   </button>
                 ) : (
-                  <div className="journey-story__media-remove__confirm" role="group" aria-label="确认删除媒体">
-                    <span>删除这段媒体？</span>
-                    <button ref={mediaDeleteCancelRef} type="button" disabled={mediaDeleteState === "pending"} onClick={() => { setMediaDeleteState("idle"); setMediaDeleteMessage(""); }}>取消</button>
-                    <button className="is-destructive" type="button" disabled={mediaDeleteState === "pending"} onClick={() => void confirmMediaDelete()}>{mediaDeleteState === "pending" ? "正在删除…" : "确认删除"}</button>
-                    {mediaDeleteMessage ? <p className="journey-story__media-remove__error" role="alert">{mediaDeleteMessage}</p> : null}
-                  </div>
+                  <span className="journey-story__media-cover-current">当前封面</span>
                 )}
+                <div className="journey-story__media-remove">
+                  {mediaDeleteState === "idle" ? (
+                    <button type="button" disabled={mutationPending} onClick={() => setMediaDeleteState("confirming")} aria-label="删除这段媒体">
+                      <IconTrash size={17} stroke={1.35} aria-hidden="true" />
+                    </button>
+                  ) : (
+                    <div className="journey-story__media-remove__confirm" role="group" aria-label="确认删除媒体">
+                      <span>删除这段媒体？</span>
+                      <button ref={mediaDeleteCancelRef} type="button" disabled={mediaDeleteState === "pending"} onClick={() => { setMediaDeleteState("idle"); setMediaDeleteMessage(""); }}>取消</button>
+                      <button className="is-destructive" type="button" disabled={mediaDeleteState === "pending"} onClick={() => void confirmMediaDelete()}>{mediaDeleteState === "pending" ? "正在删除…" : "确认删除"}</button>
+                      {mediaDeleteMessage ? <p className="journey-story__media-remove__error" role="alert">{mediaDeleteMessage}</p> : null}
+                    </div>
+                  )}
+                </div>
               </div>
             ) : null}
           </section>
@@ -939,6 +1586,12 @@ export function JourneyStory({
               <div><dt>STOPS</dt><dd>{namedStops.length}</dd></div>
             </dl>
             {namedStops.length > 0 ? <p className="journey-story__stops">{namedStops.map((stop) => stop.label).join(" · ")}</p> : null}
+            {/* #10: a selected route point shows its own note near the place
+                name — distinct from system metadata. Journey-scoped view never
+                fabricates a note. */}
+            {selectedRoutePoint && selectedRoutePoint.note ? (
+              <blockquote className="journey-story__point-note">{selectedRoutePoint.note}</blockquote>
+            ) : null}
             {journey.note ? <p className="journey-story__note">{journey.note}</p> : <p className="journey-story__note is-empty">没有文字，只有这条路线留下来。</p>}
             {onDelete && deleteState !== "idle" ? (
               <section className="journey-story__delete-confirmation" aria-label="确认删除旅程">
@@ -1004,22 +1657,31 @@ export function JourneyStory({
               ) : null}
             </div>
 
-            <div className="journey-story__soundtrack">
-              <div>
+            <div className={`journey-story__soundtrack${soundtrack && soundtrackRead?.status === "ready" ? " has-track" : ""}${playing ? " is-playing" : ""}`}>
+              <div className="journey-story__soundtrack-head">
                 <p>JOURNEY SOUNDTRACK</p>
-                <strong>{soundtrack ? soundtrack.fileName : "还没有配乐，幻灯片会安静播放"}</strong>
+                <strong>{soundtrack ? stripMediaExtension(soundtrack.fileName) : "还没有配乐，幻灯片会安静播放"}</strong>
               </div>
+              {/* #7: the audio element is a hidden playback engine only — no
+                  native control bar; play/pause follows the slideshow. */}
               {soundtrack && soundtrackRead?.status === "ready" ? (
                 <audio
                   ref={audioRef}
                   key={soundtrack.id}
                   src={soundtrackRead.url}
-                  controls
                   loop
                   preload="metadata"
-                  aria-label={`旅程配乐 ${soundtrack.fileName}`}
+                  tabIndex={-1}
+                  aria-hidden="true"
                 />
               ) : null}
+              {/* Light strip: a subtle flowing gradient while playing, static
+                  otherwise; reduced motion keeps it static (#7). */}
+              <div ref={soundtrackLightRef} className="journey-story__soundtrack-light" aria-hidden="true">
+                <span />
+                <span />
+                <span />
+              </div>
               {soundtrack && (!soundtrackRead || soundtrackRead.status === "loading") ? (
                 <p className="journey-story__upload-message" role="status">正在打开配乐…</p>
               ) : null}
@@ -1095,31 +1757,53 @@ export function JourneyStory({
 
       {fullscreen && asset && read?.status === "ready" ? (
         <div
-          className="journey-story-fullscreen"
+          ref={fullscreenRef}
+          className={`journey-story-fullscreen${fullscreenControlsHidden ? " is-controls-hidden" : ""}${playing ? " is-playing" : ""}`}
           role="dialog"
           aria-modal="true"
-          aria-label="全屏查看媒体"
+          data-focus-trap-exempt="true"
+          aria-label="全屏播放媒体"
           onClick={(event) => {
             if (event.target === event.currentTarget) setFullscreen(false);
           }}
         >
           <button className="journey-story-fullscreen__close" type="button" onClick={() => setFullscreen(false)} aria-label="退出全屏"><IconX size={22} stroke={1.35} aria-hidden="true" /></button>
-          {asset.mimeType.startsWith("video/")
-            ? <video key={asset.id} src={read.url} controls autoPlay playsInline />
-            : <img key={asset.id} src={read.url} alt={asset.fileName} />}
+          {/* #11 two-layer stage also serves fullscreen: the incoming frame
+              crossfades over the settled base frame without flashing. */}
+          {shownAsset && shownRead?.status === "ready" && shownAsset.mimeType.startsWith("video/")
+            ? <video key={`base-${shownAsset.id}`} src={shownRead.url} controls autoPlay playsInline />
+            : shownAsset && shownRead?.status === "ready"
+              ? <img key={`base-${shownAsset.id}`} src={shownRead.url} alt={shownAsset.fileName} />
+              : null}
+          {incoming && incomingRead?.status === "ready" && incoming.mimeType.startsWith("video/")
+            ? <video key={`incoming-${incoming.id}`} className="journey-story__media-incoming" src={incomingRead.url} autoPlay playsInline onAnimationEnd={() => { if (prefersReducedMotion()) settleIncoming(incoming.id); }} />
+            : incoming && incomingRead?.status === "ready"
+              ? <img key={`incoming-${incoming.id}`} className="journey-story__media-incoming" src={incomingRead.url} alt={incoming.fileName} onAnimationEnd={(event) => { if (event.animationName === "motionMediaIn") settleIncoming(incoming.id); }} />
+              : null}
           {scopedMedia.length > 1 ? (
             <nav className="journey-story-fullscreen__nav" aria-label="全屏媒体导航">
               <button
                 type="button"
-                onClick={() => setAssetIndex((current) => (current - 1 + scopedMedia.length) % scopedMedia.length)}
+                onClick={() => navigateToMedia((assetIndex - 1 + scopedMedia.length) % scopedMedia.length)}
                 aria-label="上一个媒体"
               >
                 <IconArrowLeft size={22} stroke={1.35} aria-hidden="true" />
               </button>
+              <button
+                type="button"
+                className={playing ? "is-active" : ""}
+                onClick={() => setPlaying((current) => !current)}
+                aria-label={playing ? "暂停自动播放" : "自动播放照片"}
+                aria-pressed={playing}
+              >
+                {playing
+                  ? <IconPlayerPause size={22} stroke={1.35} aria-hidden="true" />
+                  : <IconPlayerPlay size={22} stroke={1.35} aria-hidden="true" />}
+              </button>
               <span>{assetIndex + 1} / {scopedMedia.length}</span>
               <button
                 type="button"
-                onClick={() => setAssetIndex((current) => (current + 1) % scopedMedia.length)}
+                onClick={() => navigateToMedia((assetIndex + 1) % scopedMedia.length)}
                 aria-label="下一个媒体"
               >
                 <IconArrowRight size={22} stroke={1.35} aria-hidden="true" />

@@ -2,6 +2,9 @@ import { latLonToVector3 } from "./geo";
 
 export type CityPoint = {
   name: string;
+  /** Localized display name from the data pipeline (e.g. Chinese for Chinese
+   *  cities), when the build produced one. Falls back to `name`. */
+  localizedName?: string | null;
   latitude: number;
   longitude: number;
   population: number;
@@ -66,9 +69,10 @@ export function parseCityFeatures(
 
 /**
  * Parse the compact GeoNames build (public/earth/cities.json): an array of
- * { n: asciiname, la: latitude, lo: longitude, p: population } objects,
- * pre-sorted by population descending. Directions are computed once here so
- * per-frame view filtering is pure dot products.
+ * { n: asciiname, z?: localized name, la: latitude, lo: longitude, p:
+ * population, r: rank } objects, pre-sorted by population descending.
+ * Directions are computed once here so per-frame view filtering is pure dot
+ * products.
  */
 export function parseCityList(payload: { cities?: unknown }): CityPoint[] {
   if (!Array.isArray(payload.cities)) return [];
@@ -76,6 +80,7 @@ export function parseCityList(payload: { cities?: unknown }): CityPoint[] {
   for (const raw of payload.cities) {
     const entry = raw as {
       n?: unknown;
+      z?: unknown;
       la?: unknown;
       lo?: unknown;
       p?: unknown;
@@ -100,8 +105,12 @@ export function parseCityList(payload: { cities?: unknown }): CityPoint[] {
       continue;
     }
     const vector = latLonToVector3(latitude, longitude, 1);
+    const localizedName = typeof entry.z === "string" && entry.z.trim()
+      ? entry.z.trim()
+      : undefined;
     cities.push({
       name,
+      ...(localizedName ? { localizedName } : {}),
       latitude,
       longitude,
       population,
@@ -110,6 +119,23 @@ export function parseCityList(payload: { cities?: unknown }): CityPoint[] {
     });
   }
   return cities;
+}
+
+/**
+ * #16: resolve a city's display label for the current UI locale. The data
+ * pipeline provides `localizedName` (Chinese for Chinese cities); English
+ * locales prefer the asciiname. This replaces any hand-maintained
+ * english -> chinese dictionary: the mapping lives in the build data keyed by
+ * stable GeoNames ids, not by string guessing.
+ */
+export function resolveCityDisplayName(
+  city: Pick<CityPoint, "name" | "localizedName">,
+  locale: string,
+): string {
+  if (locale.startsWith("zh")) {
+    return city.localizedName ?? city.name;
+  }
+  return city.name;
 }
 
 /**

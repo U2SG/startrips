@@ -27,11 +27,17 @@ import {
 import { archiveRecords } from "../data/archiveRecords";
 import type { GlobeMode } from "../experience/types";
 import { getLightEffectPalette } from "../journey/lightEffects";
-import { loadCityTiers, selectCityCandidates, type CityPoint } from "./cityLabels";
+import {
+  loadCityTiers,
+  resolveCityDisplayName,
+  selectCityCandidates,
+  type CityPoint,
+} from "./cityLabels";
 import type { JourneyRoute } from "../journey/types";
 import {
   buildArtworkPointPositions,
   buildSeededSpherePoints,
+  buildSphericalRouteLegs,
   buildSphericalRouteSegments,
   buildSphericalRingSegments,
   latLonToVector3,
@@ -550,6 +556,14 @@ interface ParticleEarthSceneProps {
   activeJourneyRouteId?: string | null;
   onJourneyRouteActivate?: (id: string) => void;
   onJourneyRoutePointActivate?: (journeyId: string, routePointId: string) => void;
+  // #21: per-journey temporal reveal progress (0 = future, 1 = visited).
+  // When provided, route groups and points fade in with the time cursor.
+  // Points are keyed by `${journeyId}:${pointIndex}` for one-stop-at-a-time
+  // reveal (review P2: a whole-route fade was not the #21 experience).
+  temporalReveal?: {
+    journeys: ReadonlyMap<string, number>;
+    points: ReadonlyMap<string, number>;
+  };
   showArchiveSignals?: boolean;
   onReady?: () => void;
   onGlobePointPick?: (point: { latitude: number; longitude: number }) => void;
@@ -725,6 +739,7 @@ export function ParticleEarthScene({
   activeJourneyRouteId,
   onJourneyRouteActivate,
   onJourneyRoutePointActivate,
+  temporalReveal,
   showArchiveSignals = true,
   onReady,
   onGlobePointPick,
@@ -742,6 +757,7 @@ export function ParticleEarthScene({
   const latestActiveJourneyRouteId = useRef(activeJourneyRouteId);
   const latestOnJourneyRouteActivate = useRef(onJourneyRouteActivate);
   const latestOnJourneyRoutePointActivate = useRef(onJourneyRoutePointActivate);
+  const latestTemporalReveal = useRef(temporalReveal);
   const latestOnReady = useRef(onReady);
   const latestOnGlobePointPick = useRef(onGlobePointPick);
   const latestDragToRotate = useRef(dragToRotate);
@@ -755,6 +771,7 @@ export function ParticleEarthScene({
   latestActiveJourneyRouteId.current = activeJourneyRouteId;
   latestOnJourneyRouteActivate.current = onJourneyRouteActivate;
   latestOnJourneyRoutePointActivate.current = onJourneyRoutePointActivate;
+  latestTemporalReveal.current = temporalReveal;
   latestOnReady.current = onReady;
   latestOnGlobePointPick.current = onGlobePointPick;
   latestDragToRotate.current = dragToRotate;
@@ -1037,6 +1054,14 @@ export function ParticleEarthScene({
       color: string;
       group: SVGGElement;
       segments: Float32Array;
+      // #21 review: one SVG path per leg (point i -> i+1), so a rewind can
+      // reveal the trail leg by leg; `toPointIndex` is the leg's destination
+      // route-point index used to drive its temporal reveal.
+      legs: Array<{
+        path: SVGPathElement;
+        toPointIndex: number;
+        segments: Float32Array;
+      }>;
       glowPath: SVGPathElement;
       corePath: SVGPathElement;
       flowPath: SVGPathElement;
@@ -1047,6 +1072,9 @@ export function ParticleEarthScene({
         ring?: SVGCircleElement;
         position: Vector3;
         label?: RouteVectorLabel;
+        // #21: the route point's index inside its journey, for per-point
+        // temporal reveal ("one stop lights up at a time").
+        routePointIndex: number;
       }>;
     };
     let routeVectorEntries: RouteVectorEntry[] = [];
@@ -1147,6 +1175,15 @@ export function ParticleEarthScene({
         );
         group.style.color = route.color;
         group.dataset.lightEffect = route.lightEffect ?? "none";
+        // #21: the time cursor drives a route's presence. 0 = future
+        // (hidden), 0..1 = being revealed, 1 = visited. The CSS fades the
+        // whole trail via --journey-temporal-progress; per-point progress is
+        // applied by setTemporalReveal on the element level.
+        const reveal = latestTemporalReveal.current?.journeys.get(route.id);
+        if (reveal !== undefined) {
+          group.style.setProperty("--journey-temporal-progress", reveal.toFixed(3));
+          group.dataset.temporalReveal = reveal.toFixed(3);
+        }
         const glowPath = document.createElementNS(
           "http://www.w3.org/2000/svg",
           "path",
@@ -1333,25 +1370,53 @@ export function ParticleEarthScene({
             };
             routeLabelCount += 1;
           }
-          vectorPoints.push({ element, ring, position, label });
+          vectorPoints.push({ element, ring, position, label, routePointIndex });
         });
         group.append(...routeLabelElements);
 
         const remainingVertices = MAX_RENDERED_ROUTE_LINE_VERTICES
           - routeVertexCount;
+        // #15: long legs lift off the surface as a natural spatial arc
+        // (great circle + altitude hump); short legs hug the globe. The
+        // hump scales nonlinearly with angular distance and is clamped.
         const routeSegments = buildSphericalRouteSegments(
           route.points,
           1.445,
           Math.PI / 96,
           remainingVertices,
+          { arcHeightRatio: 0.22, arcSaturationAngle: Math.PI / 3 },
         );
         routeVertexCount += routeSegments.length / 3;
+        // #21 review: build one path per leg so the rewind reveals the trail
+        // stop by stop. Each leg path reuses the core gradient stroke and is
+        // faded by its destination point's temporal progress.
+        const legArrays = buildSphericalRouteLegs(
+          route.points,
+          1.445,
+          Math.PI / 96,
+          Math.min(remainingVertices, 2048),
+          { arcHeightRatio: 0.22, arcSaturationAngle: Math.PI / 3 },
+        );
+        const legs = legArrays.map((leg, legIndex) => {
+          const path = document.createElementNS(
+            "http://www.w3.org/2000/svg",
+            "path",
+          );
+          path.classList.add("particle-earth-route__leg");
+          path.setAttribute("stroke", gradientReference);
+          path.setAttribute("fill", "none");
+          path.setAttribute("stroke-linecap", "round");
+          path.setAttribute("stroke-linejoin", "round");
+          group.appendChild(path);
+          return { path, toPointIndex: legIndex + 1, segments: leg };
+        });
         routeVectorLayer.appendChild(group);
         routeVectorEntries.push({
           routeId: route.id,
           color: route.color,
           group,
           segments: routeSegments,
+          legs,
           glowPath,
           corePath,
           flowPath,
@@ -1567,6 +1632,11 @@ export function ParticleEarthScene({
         entry.flowPath.setAttribute("d", path);
         entry.strandPaths[0].setAttribute("d", path);
         entry.strandPaths[1].setAttribute("d", path);
+        // #21 review: each leg projects independently so rewind reveal works
+        // per leg (the whole-route paths above stay for the static look).
+        for (const leg of entry.legs) {
+          leg.path.setAttribute("d", buildProjectedRoutePath(leg.segments, projectRoutePoint));
+        }
         const labelCandidates: Array<{
           label: RouteVectorLabel;
           x: number;
@@ -1768,11 +1838,15 @@ export function ParticleEarthScene({
         );
         // Labels must never overlap each other or route labels: place in
         // view-center order and skip any label whose box collides.
+        // #16: the displayed label resolves through the data pipeline
+        // (Chinese cities show their localized name, others fall back).
+        const cityLabelLocale = "zh-CN";
         const cityBoxes: ProjectedRouteLabelBox[] = [];
         let visibleCityCount = 0;
         for (let index = 0; index < cities.length; index += 1) {
           if (visibleCityCount >= CITY_LABEL_BUDGET) break;
           const city = cities[index];
+          const displayName = resolveCityDisplayName(city, cityLabelLocale);
           const entry = ensureCityLabel(index);
           if (!entry) break;
           const vector = latLonToVector3(
@@ -1795,7 +1869,7 @@ export function ParticleEarthScene({
           const box = {
             left: textX,
             top: textY - 9,
-            right: textX + estimateCityLabelWidth(city.name),
+            right: textX + estimateCityLabelWidth(displayName),
             bottom: textY + 2,
           };
           if (
@@ -1810,7 +1884,7 @@ export function ParticleEarthScene({
           entry.element.style.removeProperty("display");
           entry.element.setAttribute("x", textX.toFixed(1));
           entry.element.setAttribute("y", textY.toFixed(1));
-          entry.element.textContent = city.name;
+          entry.element.textContent = displayName;
           entry.city = city;
           visibleCityCount += 1;
         }
@@ -2370,6 +2444,56 @@ export function ParticleEarthScene({
         latestActiveJourneyRouteId.current = activeRouteId;
         applyJourneyRoutes(routes);
       },
+      // #21: update per-route AND per-point temporal reveal without rebuilding
+      // the layer, so the time cursor does not restart route animations.
+      // Review P2: points light up one stop at a time (route progress still
+      // fades the whole trail); a journey/point absent from the maps (or an
+      // undefined map after leaving focus mode) RESETS to full visibility so
+      // rewind state never leaks into the normal home view.
+      setTemporalReveal(reveal?: {
+        journeys: ReadonlyMap<string, number>;
+        points: ReadonlyMap<string, number>;
+      }) {
+        for (const entry of routeVectorEntries) {
+          const progress = reveal?.journeys.get(entry.routeId);
+          if (progress === undefined) {
+            entry.group.style.removeProperty("--journey-temporal-progress");
+            delete entry.group.dataset.temporalReveal;
+          } else {
+            entry.group.style.setProperty("--journey-temporal-progress", progress.toFixed(3));
+            entry.group.dataset.temporalReveal = progress.toFixed(3);
+          }
+          for (const point of entry.points) {
+            const pointProgress = reveal?.points.get(
+              `${entry.routeId}:${point.routePointIndex}`,
+            );
+            if (pointProgress === undefined) {
+              point.element.style.removeProperty("--journey-point-temporal-progress");
+              delete point.element.dataset.temporalReveal;
+            } else {
+              point.element.style.setProperty(
+                "--journey-point-temporal-progress",
+                pointProgress.toFixed(3),
+              );
+              point.element.dataset.temporalReveal = pointProgress.toFixed(3);
+            }
+          }
+          // #21 review: each leg's visibility follows its destination point's
+          // progress — the trail literally grows stop by stop.
+          for (const leg of entry.legs) {
+            const legProgress = reveal?.points.get(
+              `${entry.routeId}:${leg.toPointIndex}`,
+            );
+            if (legProgress === undefined) {
+              leg.path.style.removeProperty("opacity");
+              delete leg.path.dataset.temporalReveal;
+            } else {
+              leg.path.style.opacity = legProgress.toFixed(3);
+              leg.path.dataset.temporalReveal = legProgress.toFixed(3);
+            }
+          }
+        }
+      },
       dispose() {
         disposed = true;
         cancelAnimationFrame(animationFrame);
@@ -2414,6 +2538,13 @@ export function ParticleEarthScene({
     if (!ready) return;
     controllerRef.current?.setJourneyRoutes(journeyRoutes, activeJourneyRouteId);
   }, [activeJourneyRouteId, controllerRef, journeyRoutes, ready]);
+
+  useEffect(() => {
+    if (!ready) return;
+    // Review P2: also called with `undefined` so leaving focus mode resets
+    // every route's temporal reveal to full visibility.
+    controllerRef.current?.setTemporalReveal(temporalReveal);
+  }, [controllerRef, ready, temporalReveal]);
 
   return (
     <div

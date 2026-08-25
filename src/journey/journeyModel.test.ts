@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
+  applyScopeReorder,
   groupJourneysByYear,
   isSoundtrackAsset,
   isVisualMediaAsset,
+  journeyCover,
   journeySoundtrack,
   journeyVisualMedia,
   sortJourneysChronologically,
+  stripMediaExtension,
   toJourneyRoutes,
   validateJourneyFiles,
   validateJourneyInput,
@@ -116,6 +119,28 @@ describe("journeyModel", () => {
       .toBe(false);
   });
 
+  it("accepts route-point notes up to the soft cap and rejects over it (#10)", () => {
+    const point = {
+      latitude: 31.2304,
+      longitude: 121.4737,
+      label: "上海",
+      isStop: true,
+      occurredAt: "2026-08-11T01:00:00Z",
+    };
+    expect(validateJourneyInput(input({
+      routePoints: [{ ...point, note: "那一刻特别安静。" }],
+    })).accepted).toBe(true);
+    expect(validateJourneyInput(input({
+      routePoints: [{ ...point, note: null }],
+    })).accepted).toBe(true);
+    expect(validateJourneyInput(input({
+      routePoints: [{ ...point, note: "x".repeat(500) }],
+    })).accepted).toBe(true);
+    expect(validateJourneyInput(input({
+      routePoints: [{ ...point, note: "x".repeat(501) }],
+    })).accepted).toBe(false);
+  });
+
   it("separates visual media from soundtracks and keeps the newest track", () => {
     const asset = (
       id: string,
@@ -202,5 +227,132 @@ describe("journeyModel", () => {
       { name: "huge.mp4", type: "video/mp4", size: 2_000_000_001 },
     ]);
     expect(invalid.errors).toHaveLength(3);
+  });
+
+  it("strips soundtrack extensions from display names (#7)", () => {
+    expect(stripMediaExtension("飞云之下 韩红林俊杰.mp3")).toBe("飞云之下 韩红林俊杰");
+    expect(stripMediaExtension("night.mp3")).toBe("night");
+    expect(stripMediaExtension("rain.m4a")).toBe("rain");
+    expect(stripMediaExtension("wind.aac")).toBe("wind");
+    expect(stripMediaExtension("sea.ogg")).toBe("sea");
+    expect(stripMediaExtension("tide.wav")).toBe("tide");
+    expect(stripMediaExtension("tide.wave")).toBe("tide");
+    // Non-soundtrack extensions and extension-less names pass through.
+    expect(stripMediaExtension("clip.mp4")).toBe("clip.mp4");
+    expect(stripMediaExtension("photo.jpg")).toBe("photo.jpg");
+    expect(stripMediaExtension("README")).toBe("README");
+    // Hidden files keep their leading dot.
+    expect(stripMediaExtension(".mp3")).toBe(".mp3");
+  });
+
+  it("reorders one scope of visual media without touching other scopes (#12)", () => {
+    const base: JourneyMediaAsset = {
+      id: "",
+      journeyId: "journey-1",
+      routePointId: null,
+      storageDriver: "test",
+      storageKey: "journey-1",
+      fileName: "",
+      mimeType: "image/jpeg",
+      bytes: 128,
+      sortOrder: 0,
+      uploadedByUserId: "user-1",
+      createdAt: "2026-08-11T00:00:00.000Z",
+    };
+    const media = [
+      { ...base, id: "a1", fileName: "a1.jpg", sortOrder: 0, routePointId: "point-a" },
+      { ...base, id: "a2", fileName: "a2.jpg", sortOrder: 1, routePointId: "point-a" },
+      { ...base, id: "b1", fileName: "b1.jpg", sortOrder: 2, routePointId: "point-b" },
+      { ...base, id: "a3", fileName: "a3.jpg", sortOrder: 3, routePointId: "point-a" },
+      { ...base, id: "b2", fileName: "b2.jpg", sortOrder: 4, routePointId: "point-b" },
+    ] as JourneyMediaAsset[];
+
+    const reordered = applyScopeReorder(media, "point-a", ["a3", "a1", "a2"]);
+    // Only point-a's relative order changes; point-b items keep their slots.
+    expect(reordered.map((entry) => entry.id)).toEqual([
+      "a3", "a1", "b1", "a2", "b2",
+    ]);
+  });
+
+  it("rejects a scope reorder whose ids do not match the scope (#12)", () => {
+    const base: JourneyMediaAsset = {
+      id: "",
+      journeyId: "journey-1",
+      routePointId: null,
+      storageDriver: "test",
+      storageKey: "journey-1",
+      fileName: "",
+      mimeType: "image/jpeg",
+      bytes: 128,
+      sortOrder: 0,
+      uploadedByUserId: "user-1",
+      createdAt: "2026-08-11T00:00:00.000Z",
+    };
+    const withPoint = [
+      { ...base, id: "a1", fileName: "a1.jpg", sortOrder: 0, routePointId: "point-a" },
+      { ...base, id: "a2", fileName: "a2.jpg", sortOrder: 1, routePointId: "point-a" },
+    ] as JourneyMediaAsset[];
+
+    // Wrong count, duplicate, and foreign id all fall back to the original.
+    expect(applyScopeReorder(withPoint, "point-a", ["a1"])).toEqual(withPoint);
+    expect(applyScopeReorder(withPoint, "point-a", ["a1", "a1"])).toEqual(withPoint);
+    expect(applyScopeReorder(withPoint, "point-a", ["a1", "other"])).toEqual(withPoint);
+  });
+
+  it("keeps journey-scoped reorders separate from route-point scopes (#12)", () => {
+    const base: JourneyMediaAsset = {
+      id: "",
+      journeyId: "journey-1",
+      routePointId: null,
+      storageDriver: "test",
+      storageKey: "journey-1",
+      fileName: "",
+      mimeType: "image/jpeg",
+      bytes: 128,
+      sortOrder: 0,
+      uploadedByUserId: "user-1",
+      createdAt: "2026-08-11T00:00:00.000Z",
+    };
+    const withScope = [
+      { ...base, id: "j1", fileName: "j1.jpg", sortOrder: 0, routePointId: null },
+      { ...base, id: "a1", fileName: "a1.jpg", sortOrder: 1, routePointId: "point-a" },
+      { ...base, id: "j2", fileName: "j2.jpg", sortOrder: 2, routePointId: null },
+    ] as JourneyMediaAsset[];
+
+    const reordered = applyScopeReorder(withScope, null, ["j2", "j1"]);
+    expect(reordered.map((entry) => entry.id)).toEqual(["j2", "a1", "j1"]);
+  });
+
+  it("falls back from an explicit cover to the first visual media (#14)", () => {
+    const base: JourneyMediaAsset = {
+      id: "",
+      journeyId: "journey-1",
+      routePointId: null,
+      storageDriver: "test",
+      storageKey: "journey-1",
+      fileName: "",
+      mimeType: "image/jpeg",
+      bytes: 128,
+      sortOrder: 0,
+      uploadedByUserId: "user-1",
+      createdAt: "2026-08-11T00:00:00.000Z",
+    };
+    const media = [
+      { ...base, id: "a1", fileName: "a1.jpg", sortOrder: 0 },
+      { ...base, id: "a2", fileName: "a2.jpg", sortOrder: 1 },
+      { ...base, id: "track", fileName: "t.mp3", mimeType: "audio/mpeg", sortOrder: 2 },
+    ] as JourneyMediaAsset[];
+
+    // No explicit cover -> first visual media (soundtrack skipped).
+    expect(journeyCover({ coverMediaAssetId: null, media })?.id).toBe("a1");
+    // Explicit cover wins even when it is not first by order.
+    expect(journeyCover({ coverMediaAssetId: "a2", media })?.id).toBe("a2");
+    // A cover pointing at the soundtrack or a missing asset falls back.
+    expect(journeyCover({ coverMediaAssetId: "track", media })?.id).toBe("a1");
+    expect(journeyCover({ coverMediaAssetId: "missing", media })?.id).toBe("a1");
+  });
+
+  it("returns null cover when a journey has no visual media (#14)", () => {
+    expect(journeyCover({ coverMediaAssetId: null, media: [] })).toBeNull();
   });
 });

@@ -24,12 +24,16 @@
     "qa:preview": "node scripts/preview-qa.mjs",
     "qa:live-globe": "node scripts/qa-live-globe.mjs",
     "qa:composer": "node scripts/capture-journey-composer.mjs",
-    "qa:story": "node scripts/qa-journey-story.mjs"
+    "qa:story": "node scripts/qa-journey-story.mjs",
+    "build:city": "node scripts/build-city-data.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1108.0",
     "@aws-sdk/s3-request-presigner": "^3.1108.0",
     "@better-auth/drizzle-adapter": "1.6.23",
+    "@dnd-kit/core": "^6.3.1",
+    "@dnd-kit/sortable": "^10.0.0",
+    "@dnd-kit/utilities": "^3.2.2",
     "@hono/node-server": "^2.1.0",
     "@tabler/icons-react": "^3.46.0",
     "better-auth": "1.6.23",

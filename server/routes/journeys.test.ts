@@ -94,4 +94,47 @@ describe("parseJourneyInput", () => {
       .toBeNull();
     expect(parseJourneyInput({ ...validJourney, lightEffect: "static-glitch" })).toBeNull();
   });
+
+  it("parses route-point notes: absent preserved, null/empty cleared, length capped (#10)", () => {
+    // A note is carried through the whole-list replace.
+    const withNote = parseJourneyInput({
+      ...validJourney,
+      routePoints: [{
+        ...validJourney.routePoints[0],
+        note: "第一次看到雪山的时候其实没说话，风很大，只记得那一刻特别安静。",
+      }],
+    });
+    expect(withNote?.routePoints[0].note).toBe(
+      "第一次看到雪山的时候其实没说话，风很大，只记得那一刻特别安静。",
+    );
+
+    // Empty string becomes null (clears); absent stays absent (preserve).
+    const cleared = parseJourneyInput({
+      ...validJourney,
+      routePoints: [{ ...validJourney.routePoints[0], note: "" }],
+    });
+    expect(cleared?.routePoints[0].note).toBeNull();
+    expect(parseJourneyInput(validJourney)?.routePoints[0].note).toBeUndefined();
+
+    // Whitespace-only clears; non-string rejects; over-long rejects.
+    const whitespace = parseJourneyInput({
+      ...validJourney,
+      routePoints: [{ ...validJourney.routePoints[0], note: "   " }],
+    });
+    expect(whitespace?.routePoints[0].note).toBeNull();
+    expect(parseJourneyInput({
+      ...validJourney,
+      routePoints: [{ ...validJourney.routePoints[0], note: 42 }],
+    })).toBeNull();
+    expect(parseJourneyInput({
+      ...validJourney,
+      routePoints: [{ ...validJourney.routePoints[0], note: "x".repeat(2001) }],
+    })).toBeNull();
+    // Exactly at the cap is accepted; line breaks are preserved.
+    const lineBreak = parseJourneyInput({
+      ...validJourney,
+      routePoints: [{ ...validJourney.routePoints[0], note: "line one\nline two" }],
+    });
+    expect(lineBreak?.routePoints[0].note).toBe("line one\nline two");
+  });
 });

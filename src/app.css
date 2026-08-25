@@ -145,6 +145,54 @@ button {
   stroke-opacity: 0.52;
 }
 
+/* #21: the time cursor drives a route's presence — 0 = future (hidden),
+   0..1 = being revealed, 1 = visited. The whole trail and its points fade
+   with the reveal; the active/visited state still shines through. Points get
+   their own per-stop progress so the planet lights up stop by stop. */
+.particle-earth-route[data-temporal-reveal] {
+  opacity: calc(var(--journey-temporal-progress, 1) * 1);
+  transition: opacity var(--motion-ui, 260ms) var(--motion-ease-out, ease);
+}
+
+.particle-earth-route[data-temporal-reveal][data-temporal-reveal="0.000"] {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.particle-earth-route__point[data-temporal-reveal] {
+  opacity: calc(var(--journey-point-temporal-progress, 1) * 1);
+  transition: opacity var(--motion-ui, 260ms) var(--motion-ease-out, ease);
+}
+
+.particle-earth-route__point[data-temporal-reveal][data-temporal-reveal="0.000"] {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.particle-earth-route[data-temporal-reveal] .particle-earth-route__flow {
+  opacity: calc(var(--journey-temporal-progress, 1) * 0.86);
+}
+
+.particle-earth-route[data-temporal-reveal][data-temporal-reveal="1.000"] {
+  opacity: 1;
+}
+
+/* #21 review: per-leg reveal. Each leg path is hidden by default and revealed
+   by JS opacity as its destination point lights up, so the trail literally
+   grows stop by stop. During a rewind the whole-route underlay is FULLY
+   hidden (future legs must not be visible, even faintly) — the per-leg paths
+   alone express the time state. */
+.particle-earth-route__leg {
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: calc(1.65px * var(--journey-route-scale, 1));
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--motion-ui, 260ms) var(--motion-ease-out, ease);
+}
+
 /* Strands: two interlaced thread layers flow along the route at different
    speeds and dash rhythms, over a soft glow and a gradient core that fades
    toward the destination (endpoints follow the projected travel direction). */
@@ -190,6 +238,29 @@ button {
   stroke-width: calc(1.65px * var(--journey-route-scale, 1));
 }
 
+/* #15: progressive draw — the active journey's trail grows from origin to
+   destination (Tier 3 journey pacing) instead of appearing whole. The core
+   and glow share one dash reveal; the travel pulse already flows along the
+   route on its own cycle. Reduced motion shows the final state instantly. */
+.particle-earth-route.is-style-strands.is-active .particle-earth-route__core,
+.particle-earth-route.is-style-strands.is-active .particle-earth-route__glow {
+  stroke-dasharray: 1200;
+  stroke-dashoffset: 1200;
+  animation: motionRouteDraw 980ms var(--motion-ease-in-out-spatial, cubic-bezier(0.65, 0, 0.35, 1)) forwards;
+}
+
+@keyframes motionRouteDraw {
+  to { stroke-dashoffset: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .particle-earth-route.is-style-strands.is-active .particle-earth-route__core,
+  .particle-earth-route.is-style-strands.is-active .particle-earth-route__glow {
+    animation: none;
+    stroke-dashoffset: 0;
+  }
+}
+
 .particle-earth-route.is-style-strands.is-active .particle-earth-route__strand-a {
   stroke-width: calc(2.25px * var(--journey-route-scale, 1));
 }
@@ -213,6 +284,18 @@ button {
 
 .particle-earth-route.is-style-strands.is-muted .particle-earth-route__strand-b {
   opacity: 0.18;
+}
+
+/* #21 review: this rewind override deliberately comes AFTER every strands,
+   active, and muted opacity rule. Matching the style class raises specificity
+   and source order breaks the remaining ties, so whole-route underlays stay
+   fully hidden while the per-leg paths alone express temporal progress. */
+.particle-earth-route.is-style-strands[data-temporal-reveal] .particle-earth-route__glow,
+.particle-earth-route.is-style-strands[data-temporal-reveal] .particle-earth-route__core,
+.particle-earth-route.is-style-strands[data-temporal-reveal] .particle-earth-route__strand-a,
+.particle-earth-route.is-style-strands[data-temporal-reveal] .particle-earth-route__strand-b,
+.particle-earth-route.is-style-strands[data-temporal-reveal] .particle-earth-route__flow {
+  opacity: 0;
 }
 
 .particle-earth-route__leader {

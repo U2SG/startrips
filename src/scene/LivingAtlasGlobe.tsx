@@ -16,6 +16,10 @@ type LivingAtlasGlobeProps = {
   focusColor?: string;
   journeyRoutes: readonly JourneyRoute[];
   activeJourneyRouteId?: string | null;
+  temporalReveal?: {
+    journeys: ReadonlyMap<string, number>;
+    points: ReadonlyMap<string, number>;
+  };
   onJourneyRouteActivate: (journeyId: string) => void;
   onJourneyRoutePointActivate: (journeyId: string, routePointId: string) => void;
   onGlobePointPick?: (point: { latitude: number; longitude: number }) => void;
@@ -28,6 +32,7 @@ export function LivingAtlasGlobe({
   focusColor,
   journeyRoutes,
   activeJourneyRouteId,
+  temporalReveal,
   onJourneyRouteActivate,
   onJourneyRoutePointActivate,
   onGlobePointPick,
@@ -119,6 +124,7 @@ export function LivingAtlasGlobe({
             centerFocusPoint
             journeyRoutes={journeyRoutes}
             activeJourneyRouteId={activeJourneyRouteId}
+            temporalReveal={temporalReveal}
             onJourneyRouteActivate={onJourneyRouteActivate}
             onJourneyRoutePointActivate={onJourneyRoutePointActivate}
             onGlobePointPick={onGlobePointPick}

@@ -61,14 +61,43 @@ function slerpUnitVectors(start: Vector3, end: Vector3, progress: number) {
     .normalize();
 }
 
+/**
+ * #15 route arc options. A route is a great circle with an altitude hump:
+ * long legs lift off the surface with a natural spatial curve, short legs
+ * hug the globe like a glowing thread.
+ */
+export type RouteArcOptions = {
+  /**
+   * Max arc height as a fraction of the globe radius (0..~0.6). 0 disables
+   * the hump entirely and keeps the old flat spherical arc.
+   */
+  arcHeightRatio?: number;
+  /**
+   * Angular distance (radians) at which the hump saturates; shorter legs get
+   * a proportionally lower hump. The mapping is nonlinear (sqrt) so small
+   * hops stay flat while long transits curve gracefully.
+   */
+  arcSaturationAngle?: number;
+};
+
+function arcHeightFor(angle: number, radius: number, options: RouteArcOptions) {
+  const ratio = options.arcHeightRatio ?? 0;
+  if (ratio <= 0) return 0;
+  const saturation = options.arcSaturationAngle ?? Math.PI / 3;
+  const progress = Math.min(1, Math.sqrt(angle / saturation));
+  return radius * ratio * progress;
+}
+
 export function buildSphericalRouteSegments(
   points: readonly GeographicPoint[],
   radius: number,
   maxSegmentAngle = Math.PI / 24,
   maxVertices = 8192,
+  arc: RouteArcOptions = {},
 ) {
   if (points.length < 2 || maxVertices < 2) return new Float32Array();
   const values: number[] = [];
+  const arcExponent = 1.6;
 
   for (let index = 1; index < points.length; index += 1) {
     const start = latLonToVector3(
@@ -79,18 +108,57 @@ export function buildSphericalRouteSegments(
     const end = latLonToVector3(points[index].lat, points[index].lon, 1).normalize();
     const angle = Math.acos(Math.min(1, Math.max(-1, start.dot(end))));
     const stepCount = Math.max(1, Math.ceil(angle / maxSegmentAngle));
+    // #15: the hump peaks mid-leg and touches the surface at both ends, so a
+    // multi-stop route reads as a continuous trail, not disconnected arcs.
+    const arcHeight = arcHeightFor(angle, radius, arc);
 
     for (let step = 1; step <= stepCount; step += 1) {
       if (values.length / 3 + 2 > maxVertices) return new Float32Array(values);
-      const previous = slerpUnitVectors(start, end, (step - 1) / stepCount)
-        .multiplyScalar(radius);
-      const current = slerpUnitVectors(start, end, step / stepCount)
-        .multiplyScalar(radius);
+      const previousProgress = (step - 1) / stepCount;
+      const currentProgress = step / stepCount;
+      const previous = slerpUnitVectors(start, end, previousProgress);
+      const current = slerpUnitVectors(start, end, currentProgress);
+      if (arcHeight > 0) {
+        const previousLift = 1 + Math.pow(Math.sin(Math.PI * previousProgress), arcExponent) * (arcHeight / radius);
+        const currentLift = 1 + Math.pow(Math.sin(Math.PI * currentProgress), arcExponent) * (arcHeight / radius);
+        previous.multiplyScalar(radius * previousLift);
+        current.multiplyScalar(radius * currentLift);
+      } else {
+        previous.multiplyScalar(radius);
+        current.multiplyScalar(radius);
+      }
       values.push(...previous.toArray(), ...current.toArray());
     }
   }
 
   return new Float32Array(values);
+}
+
+/**
+ * #21 review: build each route leg as its own Float32Array, so a rewind can
+ * reveal one leg at a time (the trail grows stop by stop) instead of fading
+ * the whole route as a single path. Each returned array covers points[i] ->
+ * points[i+1]; legs whose points fail validation are skipped.
+ */
+export function buildSphericalRouteLegs(
+  points: readonly GeographicPoint[],
+  radius: number,
+  maxSegmentAngle = Math.PI / 24,
+  maxVertices = 8192,
+  arc: RouteArcOptions = {},
+): Float32Array[] {
+  const legs: Float32Array[] = [];
+  for (let index = 1; index < points.length; index += 1) {
+    const leg = buildSphericalRouteSegments(
+      [points[index - 1], points[index]],
+      radius,
+      maxSegmentAngle,
+      maxVertices,
+      arc,
+    );
+    if (leg.length > 0) legs.push(leg);
+  }
+  return legs;
 }
 
 export function buildSphericalRingSegments(

@@ -23,12 +23,14 @@ export type RoutePoint = {
   label: string;
   isStop: boolean;
   occurredAt: string | null;
+  // #10: a short personal note for this route point (plain text, nullable).
+  note?: string | null;
   createdAt: string;
 };
 
 export type RoutePointInput = Pick<
   RoutePoint,
-  "latitude" | "longitude" | "label" | "isStop" | "occurredAt"
+  "latitude" | "longitude" | "label" | "isStop" | "occurredAt" | "note"
 > & {
   id?: string;
 };
@@ -42,6 +44,9 @@ export type Journey = {
   note: string;
   lightColor: string;
   lightEffect?: LightEffectId | null;
+  // #14: explicit journey cover. Falls back to the first visual media by
+  // sortOrder when null.
+  coverMediaAssetId?: string | null;
   revision: number;
   createdByUserId: string;
   createdAt: string;

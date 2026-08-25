@@ -297,10 +297,14 @@ export async function finalizeUpload(
         .limit(1)
       : [];
 
-    // Deduplication is scoped to the media kind. The same bytes can be a
-    // journey video and a journey soundtrack, and collapsing those into one row
-    // would answer an audio upload with a visual asset that no soundtrack
-    // reader would ever find.
+    // Deduplication is scoped to the media kind AND the route point. The same
+    // bytes can be a journey video and a journey soundtrack, and collapsing
+    // those into one row would answer an audio upload with a visual asset that
+    // no soundtrack reader would ever find. Likewise, the same photo shared by
+    // two route points must produce two assets (one per point); a route-point
+    // asset and a journey-scoped asset (routePointId = null) must never
+    // collapse either. Within one journey + one route point + one media kind,
+    // an identical content hash is still a user mistake and dedupes.
     const [duplicate] = upload.contentHash
       ? await transaction
         .select({ id: mediaAssets.id })
@@ -309,6 +313,9 @@ export async function finalizeUpload(
           eq(mediaAssets.journeyId, upload.journeyId),
           eq(mediaAssets.contentHash, upload.contentHash),
           like(mediaAssets.mimeType, `${mediaKindOf(upload.mimeType)}/%`),
+          upload.routePointId
+            ? eq(mediaAssets.routePointId, upload.routePointId)
+            : isNull(mediaAssets.routePointId),
         ))
         .limit(1)
       : [];

@@ -20,6 +20,7 @@ import {
   listJourneysForAtlas,
   markJourneyForDeletionForAtlas,
   restoreJourneyForAtlas,
+  setJourneyCoverForAtlas,
   updateJourneyForAtlas,
 } from "../repositories/journey-repository";
 import { finalizeUpload } from "../routes/uploads";
@@ -688,6 +689,93 @@ describe("tenant-scoped journey repository", () => {
     })).rejects.toBeInstanceOf(JourneyRouteChangedError);
   });
 
+  it("preserves route-point notes across edits and clears them explicitly (#10)", async () => {
+    const created = await createJourneyForAtlas(atlasA, "user-a", {
+      ...baseJourney,
+      title: "Noted route",
+      routePoints: baseJourney.routePoints.map((point, index) => ({
+        ...point,
+        note: index === 0 ? "第一次看到雪山的时候，风很大。" : null,
+      })),
+    });
+    if (!created) throw new Error("Journey fixture was not created");
+    const pointA = created.routePoints[0];
+    const pointB = created.routePoints[1];
+
+    // Notes round-trip through create/read.
+    expect(pointA.note).toBe("第一次看到雪山的时候，风很大。");
+    expect(pointB.note).toBeNull();
+
+    // A full replace that echoes the notes back preserves them; editing other
+    // fields never clears what the client carried.
+    const edited = await updateJourneyForAtlas(created.id, atlasA, {
+      ...baseJourney,
+      title: "Noted route (edited)",
+      revision: created.revision,
+      routePoints: created.routePoints.map(({ id, latitude, longitude, label, isStop, occurredAt, note }) => ({
+        id,
+        latitude,
+        longitude,
+        label,
+        isStop,
+        occurredAt,
+        note: note ?? null,
+      })),
+    });
+    expect(edited?.title).toBe("Noted route (edited)");
+    expect(edited?.routePoints[0].note).toBe("第一次看到雪山的时候，风很大。");
+
+    // Explicit null clears a note.
+    const cleared = await updateJourneyForAtlas(created.id, atlasA, {
+      ...baseJourney,
+      title: "Noted route (edited)",
+      revision: edited!.revision,
+      routePoints: edited!.routePoints.map(({ id, latitude, longitude, label, isStop, occurredAt }) => ({
+        id,
+        latitude,
+        longitude,
+        label,
+        isStop,
+        occurredAt,
+        note: null,
+      })),
+    });
+    expect(cleared?.routePoints[0].note).toBeNull();
+    expect(cleared?.routePoints[1].note).toBeNull();
+  });
+
+  it("keeps existing route-point notes when an update omits the note field (review P1)", async () => {
+    const created = await createJourneyForAtlas(atlasA, "user-a", {
+      ...baseJourney,
+      title: "Omitted note",
+      routePoints: baseJourney.routePoints.map((point, index) => ({
+        ...point,
+        note: index === 0 ? "这句必须留下" : null,
+      })),
+    });
+    if (!created) throw new Error("Journey fixture was not created");
+
+    // An older/partial client updates the route but does not send `note` at
+    // all. The stored note must survive — only explicit null/empty clears.
+    const updated = await updateJourneyForAtlas(created.id, atlasA, {
+      ...baseJourney,
+      title: "Omitted note (edited)",
+      revision: created.revision,
+      routePoints: created.routePoints.map(({ id, latitude, longitude, label, isStop, occurredAt }) => ({
+        id,
+        latitude,
+        longitude,
+        label,
+        isStop,
+        occurredAt,
+        // note deliberately omitted
+      })),
+    });
+    expect(updated?.title).toBe("Omitted note (edited)");
+    expect(updated?.routePoints[0].note).toBe("这句必须留下");
+    expect(updated?.routePoints[1].note).toBeNull();
+  });
+
   it("serializes media finalization into a stable story order", async () => {
     const journey = await createJourneyForAtlas(atlasA, "user-a", {
       ...baseJourney,
@@ -832,5 +920,186 @@ describe("tenant-scoped journey repository", () => {
       })
       .returning();
     expect((await finalizeUpload(repeatUpload)).id).toBe(audio.id);
+  });
+
+  it("allows the same media bytes at different route points, dedupes within one point", async () => {
+    const journey = await createJourneyForAtlas(atlasA, "user-a", {
+      ...baseJourney,
+      title: "One file, two stops",
+    });
+    if (!journey) throw new Error("Journey fixture was not created");
+    const pointA = journey.routePoints[0].id;
+    const pointB = journey.routePoints[1].id;
+    if (!pointA || !pointB) throw new Error("Journey fixture lacks two route points");
+    const hash = "e".repeat(64);
+
+    const insertUpload = (routePointId: string | null, fileName: string) =>
+      db
+        .insert(mediaUploads)
+        .values({
+          atlasId: atlasA,
+          journeyId: journey.id,
+          routePointId,
+          storageDriver: "test",
+          storageKey: `${atlasA}/${journey.id}/${randomUUID()}`,
+          providerUploadId: randomUUID(),
+          fileName,
+          mimeType: "image/jpeg",
+          bytes: 128,
+          contentHash: hash,
+          partSize: 128,
+          partCount: 1,
+          status: "finalizing",
+          createdByUserId: "user-a",
+        })
+        .returning();
+
+    // Same hash at point A, then at point B: two distinct assets.
+    const [uploadA] = await insertUpload(pointA, "group.jpg");
+    const assetA = await finalizeUpload(uploadA);
+    const [uploadB] = await insertUpload(pointB, "group.jpg");
+    const assetB = await finalizeUpload(uploadB);
+
+    expect(assetA.id).not.toBe(assetB.id);
+    expect(assetA.routePointId).toBe(pointA);
+    expect(assetB.routePointId).toBe(pointB);
+
+    // Re-uploading the same bytes at point A still dedupes to asset A.
+    const [repeatA] = await insertUpload(pointA, "group-copy.jpg");
+    expect((await finalizeUpload(repeatA)).id).toBe(assetA.id);
+
+    // A journey-scoped upload (routePointId = null) of the same hash must not
+    // reuse either route-point asset.
+    const [journeyScoped] = await insertUpload(null, "group-journey.jpg");
+    const journeyScopedAsset = await finalizeUpload(journeyScoped);
+    expect(journeyScopedAsset.id).not.toBe(assetA.id);
+    expect(journeyScopedAsset.id).not.toBe(assetB.id);
+    expect(journeyScopedAsset.routePointId).toBeNull();
+
+    const [assetCount] = await db
+      .select({ value: count() })
+      .from(mediaAssets)
+      .where(eq(mediaAssets.journeyId, journey.id));
+    expect(assetCount.value).toBe(3);
+  });
+
+  it("applies route-point scoping to video dedupe as well", async () => {
+    const journey = await createJourneyForAtlas(atlasA, "user-a", {
+      ...baseJourney,
+      title: "One clip, two stops",
+    });
+    if (!journey) throw new Error("Journey fixture was not created");
+    const pointA = journey.routePoints[0].id;
+    const pointB = journey.routePoints[1].id;
+    if (!pointA || !pointB) throw new Error("Journey fixture lacks two route points");
+    const hash = "f".repeat(64);
+
+    const insertUpload = (routePointId: string | null) =>
+      db
+        .insert(mediaUploads)
+        .values({
+          atlasId: atlasA,
+          journeyId: journey.id,
+          routePointId,
+          storageDriver: "test",
+          storageKey: `${atlasA}/${journey.id}/${randomUUID()}`,
+          providerUploadId: randomUUID(),
+          fileName: "clip.mp4",
+          mimeType: "video/mp4",
+          bytes: 128,
+          contentHash: hash,
+          partSize: 128,
+          partCount: 1,
+          status: "finalizing",
+          createdByUserId: "user-a",
+        })
+        .returning();
+
+    const [uploadA] = await insertUpload(pointA);
+    const assetA = await finalizeUpload(uploadA);
+    const [uploadB] = await insertUpload(pointB);
+    const assetB = await finalizeUpload(uploadB);
+
+    expect(assetA.id).not.toBe(assetB.id);
+    expect(assetA.routePointId).toBe(pointA);
+    expect(assetB.routePointId).toBe(pointB);
+  });
+
+  it("sets and clears an explicit journey cover, rejecting foreign or audio assets (#14)", async () => {
+    const journey = await createJourneyForAtlas(atlasA, "user-a", {
+      ...baseJourney,
+      title: "Cover story",
+    });
+    if (!journey) throw new Error("Journey fixture was not created");
+    const pointA = journey.routePoints[0].id;
+    if (!pointA) throw new Error("Journey fixture lacks a route point");
+
+    const makeUpload = (fileName: string, mimeType: string, pointId: string | null) =>
+      db
+        .insert(mediaUploads)
+        .values({
+          atlasId: atlasA,
+          journeyId: journey.id,
+          routePointId: pointId,
+          storageDriver: "test",
+          storageKey: `${atlasA}/${journey.id}/${randomUUID()}`,
+          providerUploadId: randomUUID(),
+          fileName,
+          mimeType,
+          bytes: 128,
+          partSize: 128,
+          partCount: 1,
+          status: "finalizing",
+          createdByUserId: "user-a",
+        })
+        .returning();
+
+    const [photoUpload] = await makeUpload("photo.jpg", "image/jpeg", pointA);
+    const photo = await finalizeUpload(photoUpload);
+    const [audioUpload] = await makeUpload("track.mp3", "audio/mpeg", null);
+    const audio = await finalizeUpload(audioUpload);
+
+    // A visual asset of this journey becomes the cover.
+    const withCover = await setJourneyCoverForAtlas(journey.id, atlasA, photo.id);
+    expect(withCover?.coverMediaAssetId).toBe(photo.id);
+
+    // A soundtrack can never be the cover; the journey keeps its current cover.
+    const rejectedAudio = await setJourneyCoverForAtlas(journey.id, atlasA, audio.id);
+    expect(rejectedAudio?.id).toBe(journey.id);
+    expect(rejectedAudio?.coverMediaAssetId).toBe(photo.id);
+
+    // A foreign journey's asset is rejected.
+    const other = await createJourneyForAtlas(atlasA, "user-a", {
+      ...baseJourney,
+      title: "Other cover",
+    });
+    if (!other) throw new Error("Other journey fixture was not created");
+    const otherPhoto = await finalizeUpload(
+      (await db
+        .insert(mediaUploads)
+        .values({
+          atlasId: atlasA,
+          journeyId: other.id,
+          routePointId: other.routePoints[0]?.id ?? null,
+          storageDriver: "test",
+          storageKey: `${atlasA}/${other.id}/${randomUUID()}`,
+          providerUploadId: randomUUID(),
+          fileName: "other.jpg",
+          mimeType: "image/jpeg",
+          bytes: 128,
+          partSize: 128,
+          partCount: 1,
+          status: "finalizing",
+          createdByUserId: "user-a",
+        })
+        .returning())[0],
+    );
+    const rejectedForeign = await setJourneyCoverForAtlas(journey.id, atlasA, otherPhoto.id);
+    expect(rejectedForeign?.coverMediaAssetId).toBe(photo.id);
+
+    // Clearing works.
+    const cleared = await setJourneyCoverForAtlas(journey.id, atlasA, null);
+    expect(cleared?.coverMediaAssetId).toBeNull();
+    expect(cleared?.id).toBe(journey.id);
   });
 });

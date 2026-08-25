@@ -16,6 +16,8 @@ import "./styles/personal-artifact.css";
 import "./styles/personal-gallery.css";
 import "./styles/auth-gate.css";
 import "./styles/living-atlas.css";
+import "./styles/journey-playback.css";
+import "./styles/globe-time-scrubber.css";
 
 const qaState = new URLSearchParams(window.location.search).get("qaState");
 
