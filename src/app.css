@@ -179,8 +179,9 @@ button {
 
 /* #21 review: per-leg reveal. Each leg path is hidden by default and revealed
    by JS opacity as its destination point lights up, so the trail literally
-   grows stop by stop. During a rewind the whole-route strands stay as a
-   faint underlay. */
+   grows stop by stop. During a rewind the whole-route underlay is FULLY
+   hidden (future legs must not be visible, even faintly) — the per-leg paths
+   alone express the time state. */
 .particle-earth-route__leg {
   fill: none;
   stroke: currentColor;
@@ -195,8 +196,9 @@ button {
 .particle-earth-route[data-temporal-reveal] .particle-earth-route__glow,
 .particle-earth-route[data-temporal-reveal] .particle-earth-route__core,
 .particle-earth-route[data-temporal-reveal] .particle-earth-route__strand-a,
-.particle-earth-route[data-temporal-reveal] .particle-earth-route__strand-b {
-  opacity: 0.16;
+.particle-earth-route[data-temporal-reveal] .particle-earth-route__strand-b,
+.particle-earth-route[data-temporal-reveal] .particle-earth-route__flow {
+  opacity: 0;
 }
 
 /* Strands: two interlaced thread layers flow along the route at different

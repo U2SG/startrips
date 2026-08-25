@@ -167,6 +167,11 @@ export function LivingAtlasApp() {
   // #19: cinematic journey playback. The globe stays mounted underneath; the
   // director drives phases and the overlay translates them into focus calls.
   const [playbackJourneyId, setPlaybackJourneyId] = useState<string | null>(null);
+  // Review P1: when the soundtrack read is not cached yet, the first click
+  // only starts the prefetch and the button shows 正在准备配乐…; the user
+  // clicks again (now with a cached URL) to actually start, keeping play()
+  // inside a real user gesture.
+  const [playbackPreparingId, setPlaybackPreparingId] = useState<string | null>(null);
   const [playbackFocusPoint, setPlaybackFocusPoint] = useState<{
     lat: number;
     lon: number;
@@ -381,16 +386,24 @@ export function LivingAtlasApp() {
     }
   }
 
-  // Review P1: starting playback waits for the soundtrack signed read to be
-  // cached before opening the overlay. The await runs inside the click
-  // gesture's user activation window, so the overlay's first audio.play() is
-  // still considered user-initiated — no silent first soundtrack.
-  async function startPlayback(journeyId: string) {
+  // Review P1: a network await does NOT preserve the click's transient user
+  // activation. So: if the soundtrack read is already cached, start playback
+  // synchronously (the overlay's first play() stays inside the gesture);
+  // otherwise the first click only prefetches and the button switches to
+  // 正在准备配乐… — the user clicks again once it is ready, and THAT click
+  // starts playback with a cached URL. No silent first soundtrack.
+  function startPlayback(journeyId: string) {
     const journey = journeys.find((candidate) => candidate.id === journeyId) ?? null;
     setStoryJourneyId(null);
     setStoryRoutePointId(null);
-    if (journey) {
-      await prefetchSoundtrackRead(journey).catch(() => null);
+    if (journey && !cachedSoundtrackRead(journey)) {
+      setPlaybackPreparingId(journeyId);
+      void prefetchSoundtrackRead(journey)
+        .catch(() => null)
+        .finally(() => setPlaybackPreparingId((current) => (
+          current === journeyId ? null : current
+        )));
+      return;
     }
     setPlaybackJourneyId(journeyId);
     setPlaybackFocusPoint(journey?.routePoints[0]
@@ -577,12 +590,13 @@ export function LivingAtlasApp() {
             <button
               type="button"
               className="living-atlas__active-play"
+              disabled={playbackPreparingId === activeJourney.id}
               onClick={() => {
-                void startPlayback(activeJourney.id);
+                startPlayback(activeJourney.id);
               }}
             >
               <IconPlayerPlay size={15} stroke={1.35} aria-hidden="true" />
-              <span>播放旅程</span>
+              <span>{playbackPreparingId === activeJourney.id ? "正在准备配乐…" : "播放旅程"}</span>
             </button>
           </div>
         </aside>

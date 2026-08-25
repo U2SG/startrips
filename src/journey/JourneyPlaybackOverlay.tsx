@@ -177,6 +177,23 @@ export function JourneyPlaybackOverlay({
   useEffect(() => {
     if (!journey) return;
     const step = director.step;
+    if (step?.kind === "stop") {
+      // Review P2: hold the STOP phase until this chapter's first image is
+      // decoded — so the stop -> media transition never lands on an
+      // undecoded frame. The stop UI (place + note) is the "previous frame"
+      // that stays on screen while the image prepares.
+      const firstImage = playbackMediaForPoint(journey, step.pointIndex)
+        .find((asset) => asset.mimeType.startsWith("image/"));
+      if (!firstImage) {
+        setHold(false);
+        return;
+      }
+      const read = mediaReads[firstImage.id];
+      const decoded = read?.status === "ready"
+        && decodeRegistryRef.current.isDecoded(firstImage.id);
+      setHold(!decoded);
+      return;
+    }
     if (step?.kind !== "media") {
       setHold(false);
       return;
