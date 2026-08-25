@@ -6,6 +6,7 @@ import {
   journeyDeleteDescription,
   mediaForRoutePoint,
   replaceJourneySoundtrack,
+  storyInitialMediaSelection,
 } from "./JourneyStory";
 import type { Journey, JourneyMediaAsset } from "./types";
 
@@ -45,6 +46,52 @@ function asset(
     createdAt: journey.createdAt,
   };
 }
+
+describe("storyInitialMediaSelection (#18 follow-up)", () => {
+  it("opens a Journey card on its explicit cover instead of visualMedia[0]", () => {
+    const first = asset("first", "image/jpeg", 0, "first.jpg");
+    const cover = asset("cover", "image/jpeg", 1, "cover.jpg");
+    const withExplicitCover: Journey = {
+      ...journey,
+      coverMediaAssetId: cover.id,
+      media: [first, cover],
+    };
+
+    expect(storyInitialMediaSelection(withExplicitCover, null)).toEqual({
+      routePointId: null,
+      assetIndex: 1,
+      assetId: cover.id,
+    });
+  });
+
+  it("follows a route-point cover into its matching Story media scope", () => {
+    const journeyLevel = asset("journey-level", "image/jpeg", 0, "journey.jpg");
+    const pointFirst = {
+      ...asset("point-first", "image/jpeg", 1, "point-first.jpg"),
+      routePointId: "point-1",
+    };
+    const pointCover = {
+      ...asset("point-cover", "image/jpeg", 2, "point-cover.jpg"),
+      routePointId: "point-1",
+    };
+    const withPointCover: Journey = {
+      ...journey,
+      coverMediaAssetId: pointCover.id,
+      media: [journeyLevel, pointFirst, pointCover],
+    };
+
+    expect(storyInitialMediaSelection(withPointCover, null)).toEqual({
+      routePointId: "point-1",
+      assetIndex: 1,
+      assetId: pointCover.id,
+    });
+    expect(storyInitialMediaSelection(withPointCover, "point-1")).toEqual({
+      routePointId: "point-1",
+      assetIndex: 0,
+      assetId: pointFirst.id,
+    });
+  });
+});
 
 describe("replaceJourneySoundtrack", () => {
   const file = { name: "night.mp3", size: 64, type: "audio/mpeg" } as File;

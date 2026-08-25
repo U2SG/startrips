@@ -143,6 +143,39 @@ export function mediaForRoutePoint(
   return journey.media.filter((asset) => asset.routePointId === routePointId);
 }
 
+export function storyInitialMediaSelection(
+  journey: Journey | undefined,
+  requestedRoutePointId: string | null,
+) {
+  if (!journey) {
+    return { routePointId: requestedRoutePointId, assetIndex: 0, assetId: null };
+  }
+
+  const visualMedia = journeyVisualMedia(journey);
+  if (requestedRoutePointId !== null) {
+    const scoped = visualMedia.filter((asset) => asset.routePointId === requestedRoutePointId);
+    return {
+      routePointId: requestedRoutePointId,
+      assetIndex: 0,
+      assetId: scoped[0]?.id ?? null,
+    };
+  }
+
+  // #18 follow-up: the active Journey card displays journeyCover(), so the
+  // Story must open on that exact asset. This also follows a cover attached to
+  // a route point into the matching media scope instead of silently showing a
+  // different journey-level asset at index 0.
+  const cover = journeyCover(journey);
+  if (!cover) return { routePointId: null, assetIndex: 0, assetId: null };
+  const scoped = visualMedia.filter((asset) => asset.routePointId === cover.routePointId);
+  const coverIndex = scoped.findIndex((asset) => asset.id === cover.id);
+  return {
+    routePointId: cover.routePointId,
+    assetIndex: coverIndex >= 0 ? coverIndex : 0,
+    assetId: cover.id,
+  };
+}
+
 export type SoundtrackReplacement = {
   uploaded: boolean;
   uploadError: string | null;
@@ -392,9 +425,10 @@ export function JourneyStory({
 }: JourneyStoryProps) {
   const journeyIndex = journeys.findIndex((candidate) => candidate.id === journeyId);
   const journey = journeys[journeyIndex];
-  const [assetIndex, setAssetIndex] = useState(0);
+  const initialMediaSelection = storyInitialMediaSelection(journey, routePointId);
+  const [assetIndex, setAssetIndex] = useState(initialMediaSelection.assetIndex);
   const [selectedRoutePointId, setSelectedRoutePointId] = useState<string | null>(
-    routePointId,
+    initialMediaSelection.routePointId,
   );
   const [mediaReads, setMediaReads] = useState<Record<string, MediaReadState>>({});
   // Browser-side decode readiness, separate from signed-read readiness (#11):
@@ -486,8 +520,9 @@ export function JourneyStory({
   const dialogRef = useModalFocus<HTMLElement>(requestClose);
 
   useEffect(() => {
-    setAssetIndex(0);
-    setSelectedRoutePointId(routePointId);
+    const nextInitialMedia = storyInitialMediaSelection(journey, routePointId);
+    setAssetIndex(nextInitialMedia.assetIndex);
+    setSelectedRoutePointId(nextInitialMedia.routePointId);
     setUploadState({ status: "idle" });
     setRetryFiles([]);
     setCloseBlocked(false);
