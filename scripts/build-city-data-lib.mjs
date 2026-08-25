@@ -56,10 +56,14 @@ export function parseCityRow(fields) {
  */
 export function chineseAlternateScore(language, alternateName) {
   if (!alternateName) return null;
-  if (ZH_TAG.test(language)) {
-    return ZH_SIMPLIFIED_TAG.test(language) ? 0 : 1;
+  const normalizedLanguage = language.trim();
+  if (ZH_TAG.test(normalizedLanguage)) {
+    return ZH_SIMPLIFIED_TAG.test(normalizedLanguage) ? 0 : 1;
   }
-  return /[\u4e00-\u9fff]/.test(alternateName) ? 2 : null;
+  // Script-only fallback is intentionally limited to untagged rows. A
+  // language-tagged CJK name (for example `ja` Kanji) must not become the
+  // zh-CN display name merely because it shares Han characters.
+  return !normalizedLanguage && /[\u4e00-\u9fff]/.test(alternateName) ? 2 : null;
 }
 
 /**

@@ -51,6 +51,11 @@
   touch-action: none;
 }
 
+.globe-time-scrubber__track:focus-visible {
+  outline: 1px solid var(--atlas-acid);
+  outline-offset: 4px;
+}
+
 /* The visual track is 1-2px; the 22px hit area keeps mobile taps easy. */
 .globe-time-scrubber__track::before {
   content: "";

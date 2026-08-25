@@ -55,7 +55,9 @@ describe("chineseAlternateScore (#16)", () => {
     expect(chineseAlternateScore("zh-TW", "深圳")).toBe(1);
     expect(chineseAlternateScore("zh-Hant", "深圳")).toBe(1);
     expect(chineseAlternateScore("en", "Shenzhen")).toBeNull();
-    expect(chineseAlternateScore("en", "深圳")).toBe(2);
+    expect(chineseAlternateScore("", "深圳")).toBe(2);
+    expect(chineseAlternateScore("ja", "東京")).toBeNull();
+    expect(chineseAlternateScore("ko", "漢城")).toBeNull();
   });
 });
 
@@ -67,8 +69,9 @@ describe("collectChineseCandidates + applyChineseCandidates (#16)", () => {
       ["3", "1002", "zh-TW", "北京"],
       ["4", "1002", "en", "Beijing"],
       ["5", "1003", "en", "A cidade sem chinês"],
-      ["6", "1004", "en", "上海"], // untagged CJK fallback
+      ["6", "1004", "", "上海"], // untagged CJK fallback
       ["7", "1004", "en", "Shanghai"],
+      ["8", "1005", "ja", "東京"], // tagged Kanji must not become zh-CN
     ];
     const { preferred, fallback } = collectChineseCandidates(rows);
 
@@ -82,12 +85,14 @@ describe("collectChineseCandidates + applyChineseCandidates (#16)", () => {
       { n: "Beijing", p: 1 },
       { n: "NoZh", p: 1 },
       { n: "Shanghai", p: 1 },
+      { n: "Tokyo", p: 1 },
     ];
     const indexByGeonameId = new Map([
       ["1001", 0],
       ["1002", 1],
       ["1003", 2],
       ["1004", 3],
+      ["1005", 4],
     ]);
     const joined = applyChineseCandidates(cities, indexByGeonameId, preferred, fallback);
 
@@ -96,6 +101,7 @@ describe("collectChineseCandidates + applyChineseCandidates (#16)", () => {
     expect(cities[1].z).toBe("北京");
     expect(cities[2].z).toBeUndefined();
     expect(cities[3].z).toBe("上海");
+    expect(cities[4].z).toBeUndefined();
   });
 
   it("does not overwrite a tagged candidate with a CJK fallback", () => {

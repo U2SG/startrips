@@ -2,17 +2,22 @@ import { useRef } from "react";
 import { IconPlayerPause, IconPlayerPlay, IconHistory } from "@tabler/icons-react";
 import type { GlobeTimeCursor } from "./useGlobeTimeCursor";
 
+type TimeDomain = GlobeTimeCursor["timeDomain"];
+
+const KEY_STEP = 0.01;
+const PAGE_STEP = 0.1;
+const TICK_POSITIONS = [0, 1 / 3, 2 / 3, 1] as const;
+
 /**
  * #21 Globe Rewind — a minimal time axis shown in globe focus mode. One thin
- * track with year ticks and a cursor; hover/touch reveals the date. The user
- * can scrub (pointer) or press play to replay the whole planet from the
- * first journey to now. It is deliberately not a player dock: no chrome
- * beyond the track, a play/pause, and the year label.
+ * track with date ticks and a cursor; hover/touch reveals the date. The user
+ * can scrub (pointer/keyboard) or press play to replay the whole planet from
+ * the first dated journey to the latest dated moment.
  */
 export function GlobeTimeScrubber({
   cursor,
   playing,
-  stops,
+  timeDomain,
   play,
   pause,
   seek,
@@ -37,7 +42,15 @@ export function GlobeTimeScrubber({
     window.addEventListener("pointerup", onUp);
   };
 
-  const yearLabel = formatCursorYear(cursor, stops);
+  const onKeyDown = (event: React.KeyboardEvent) => {
+    const next = cursorForSliderKey(event.key, cursor);
+    if (next === null) return;
+    event.preventDefault();
+    seek(next);
+  };
+
+  const dateLabel = formatCursorDate(cursor, timeDomain);
+  const tickLabels = timelineTickLabels(timeDomain);
 
   return (
     <div className="globe-time-scrubber" role="group" aria-label="时间回溯">
@@ -57,12 +70,13 @@ export function GlobeTimeScrubber({
           ref={trackRef}
           className="globe-time-scrubber__track"
           onPointerDown={onPointerDown}
+          onKeyDown={onKeyDown}
           role="slider"
           aria-label="时间轴"
           aria-valuemin={0}
           aria-valuemax={100}
           aria-valuenow={Math.round(cursor * 100)}
-          aria-valuetext={yearLabel}
+          aria-valuetext={dateLabel}
           tabIndex={0}
         >
           <span className="globe-time-scrubber__fill" style={{ width: `${cursor * 100}%` }} />
@@ -71,22 +85,60 @@ export function GlobeTimeScrubber({
           </span>
         </div>
         <div className="globe-time-scrubber__ticks" aria-hidden="true">
-          <span>2019</span>
-          <span>2021</span>
-          <span>2024</span>
-          <span>现在</span>
+          {tickLabels.map((label, index) => <span key={`${index}-${label}`}>{label}</span>)}
         </div>
       </div>
-      <span className="globe-time-scrubber__date" aria-hidden="true">{yearLabel}</span>
+      <span className="globe-time-scrubber__date" aria-hidden="true">{dateLabel}</span>
     </div>
   );
 }
 
-function formatCursorYear(cursor: number, stops: readonly number[]): string {
-  if (stops.length === 0) return "现在";
-  if (cursor >= 1) return "现在";
-  const maxStop = stops.at(-1) ?? 1;
-  // Approximate year from the cursor fraction over the timeline.
-  const year = 2019 + Math.round((cursor / Math.max(0.0001, maxStop)) * 6);
-  return `${year}`;
+export function cursorForSliderKey(key: string, cursor: number): number | null {
+  switch (key) {
+    case "ArrowLeft":
+    case "ArrowDown":
+      return clampCursor(cursor - KEY_STEP);
+    case "ArrowRight":
+    case "ArrowUp":
+      return clampCursor(cursor + KEY_STEP);
+    case "PageDown":
+      return clampCursor(cursor - PAGE_STEP);
+    case "PageUp":
+      return clampCursor(cursor + PAGE_STEP);
+    case "Home":
+      return 0;
+    case "End":
+      return 1;
+    default:
+      return null;
+  }
+}
+
+export function formatCursorDate(cursor: number, timeDomain: TimeDomain): string {
+  if (!timeDomain) return "暂无日期";
+  return formatUtcDate(cursorToTimestamp(cursor, timeDomain));
+}
+
+export function timelineTickLabels(timeDomain: TimeDomain): string[] {
+  if (!timeDomain) return ["暂无", "—", "—", "日期"];
+  return TICK_POSITIONS.map((cursor) => (
+    formatUtcDate(cursorToTimestamp(cursor, timeDomain))
+  ));
+}
+
+function cursorToTimestamp(cursor: number, timeDomain: NonNullable<TimeDomain>) {
+  const { minTime, maxTime } = timeDomain;
+  return minTime + clampCursor(cursor) * Math.max(0, maxTime - minTime);
+}
+
+function formatUtcDate(timestamp: number) {
+  const date = new Date(timestamp);
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(date.getUTCDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function clampCursor(value: number) {
+  return Math.min(1, Math.max(0, value));
 }

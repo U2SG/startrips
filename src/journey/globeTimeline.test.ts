@@ -6,6 +6,11 @@ import {
   resolveRoutePointTimes,
   timelineCursorStops,
 } from "./globeTimeline";
+import {
+  cursorForSliderKey,
+  formatCursorDate,
+  timelineTickLabels,
+} from "./GlobeTimeScrubber";
 import type { Journey, RoutePoint } from "./types";
 
 function point(
@@ -189,5 +194,31 @@ describe("timelineCursorStops (#21)", () => {
     expect(stops.length).toBeLessThanOrEqual(32);
     expect(stops[0]).toBe(0);
     expect(stops.at(-1)).toBe(1);
+  });
+});
+
+describe("GlobeTimeScrubber date domain + keyboard (PR #24 P2)", () => {
+  const timeDomain = {
+    minTime: Date.parse("2031-04-10T00:00:00Z"),
+    maxTime: Date.parse("2033-10-20T00:00:00Z"),
+  };
+
+  it("formats the slider value from the real timeline domain instead of a fixed year range", () => {
+    expect(formatCursorDate(0, timeDomain)).toBe("2031-04-10");
+    expect(formatCursorDate(1, timeDomain)).toBe("2033-10-20");
+    const ticks = timelineTickLabels(timeDomain);
+    expect(ticks[0]).toBe("2031-04-10");
+    expect(ticks.at(-1)).toBe("2033-10-20");
+    expect(ticks).not.toContain("2019");
+  });
+
+  it("supports standard slider keyboard navigation and clamps at the ends", () => {
+    expect(cursorForSliderKey("ArrowRight", 0.5)).toBeCloseTo(0.51);
+    expect(cursorForSliderKey("ArrowLeft", 0)).toBe(0);
+    expect(cursorForSliderKey("ArrowUp", 1)).toBe(1);
+    expect(cursorForSliderKey("PageDown", 0.5)).toBeCloseTo(0.4);
+    expect(cursorForSliderKey("Home", 0.5)).toBe(0);
+    expect(cursorForSliderKey("End", 0.5)).toBe(1);
+    expect(cursorForSliderKey("Escape", 0.5)).toBeNull();
   });
 });

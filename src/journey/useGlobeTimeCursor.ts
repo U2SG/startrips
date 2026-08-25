@@ -97,6 +97,9 @@ export function useGlobeTimeCursor(journeys: readonly Journey[]) {
     cursor: effectiveCursor,
     playing,
     stops,
+    timeDomain: timeline.entries.length > 0
+      ? { minTime: timeline.minTime, maxTime: timeline.maxTime }
+      : null,
     play,
     pause,
     seek,
