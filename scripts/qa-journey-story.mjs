@@ -197,7 +197,7 @@ try {
   const soundtrackAudioCount = await soundtrackAudio.count();
   const soundtrackNameShown = await page
     .locator(".journey-story__soundtrack strong")
-    .innerText() === "night-theme.mp3";
+    .innerText() === "night-theme";
   await page.getByText("4 个媒体片段").waitFor({ state: "visible" });
   await page.getByRole("button", { name: "全部照片" }).click();
   await tiles.first().waitFor({ state: "visible" });
@@ -270,7 +270,7 @@ try {
     || soundtrackTileCount !== 0
     || !removeSoundtrackVisible
     || soundtrackSurvivedReupload !== 1
-    || soundtrackNameAfterReupload !== "night-theme.mp3"
+    || soundtrackNameAfterReupload !== "night-theme"
     || !removeStillVisible
     || consoleErrors.length > 0
     || pageErrors.length > 0

@@ -204,6 +204,14 @@
   color: var(--atlas-acid);
 }
 
+/* Video chapters also expose the browser's native transport at the bottom of
+   the media element. Keep Startrips' chapter transport above that reserved
+   zone so two independent sets of playback buttons never occupy the same
+   interaction band. */
+.journey-playback[data-playback-phase="media"]:has(.journey-playback__media > video) .journey-playback__controls {
+  bottom: 78px;
+}
+
 .journey-playback__progress {
   height: 3px;
   overflow: hidden;
@@ -316,5 +324,9 @@
     right: 12px;
     bottom: 88px;
     width: min(180px, 36vw);
+  }
+
+  .journey-playback[data-playback-phase="media"]:has(.journey-playback__media > video) .journey-playback__soundtrack {
+    bottom: 150px;
   }
 }
