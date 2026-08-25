@@ -53,8 +53,20 @@ export function JourneyPlaybackOverlay({
 }) {
   const director = useJourneyPlaybackDirector(journey);
   const { phase, paused, pause, resume, next, back, exit } = director;
+  // Review P2: `exit()` only resets the local director; the overlay must also
+  // tell the parent to drop playbackJourneyId, or playback can never close.
+  const requestClose = useCallback(() => {
+    exit();
+    onClose();
+  }, [exit, onClose]);
   const [mediaReads, setMediaReads] = useState<Record<string, MediaRead>>({});
   const decodeRegistryRef = useRef(createDecodeRegistry(decodeImageUrl));
+  // Review P2: decode settles without React state; this revision bumps on
+  // every settle so the media gate re-renders once the image is decoded.
+  const [decodeSettleRevision, setDecodeSettleRevision] = useState(0);
+  useEffect(() => decodeRegistryRef.current.onSettle(
+    () => setDecodeSettleRevision((current) => current + 1),
+  ), []);
   const audioRef = useRef<HTMLAudioElement>(null);
   // #20: one sampler per soundtrack element; analyser built on first play.
   const samplerRef = useRef(createSoundtrackSampler());
@@ -118,7 +130,7 @@ export function JourneyPlaybackOverlay({
     if (read?.status === "ready") {
       decodeRegistryRef.current.ensure(asset.id, read.url);
     }
-  }, [director.step, journey, mediaReads]);
+  }, [decodeSettleRevision, director.step, journey, mediaReads]);
 
   // The soundtrack follows playback: play on any non-paused phase after the
   // user started playback; pause when paused; never reset between chapters.
@@ -167,16 +179,28 @@ export function JourneyPlaybackOverlay({
 
   useEffect(() => () => audioRef.current?.pause(), []);
 
-  // Controls fade out after idle; any pointer/key activity brings them back.
+  // Controls fade out after idle; any pointer/key/touch activity shows them
+  // AND restarts the 2.5s timer (review P2: previously activity only revealed
+  // controls and the timer never re-armed after the first hide).
   useEffect(() => {
     if (!director.isPlaying) return;
-    const timer = window.setTimeout(() => setControlsHidden(true), 2500);
-    const onActivity = () => setControlsHidden(false);
+    let timer = 0;
+    const restartIdle = () => {
+      setControlsHidden(false);
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => setControlsHidden(true), 2500);
+    };
+    const onActivity = () => restartIdle();
     window.addEventListener("pointermove", onActivity);
+    window.addEventListener("pointerdown", onActivity);
+    window.addEventListener("touchstart", onActivity, { passive: true });
     window.addEventListener("keydown", onActivity);
+    restartIdle();
     return () => {
       window.clearTimeout(timer);
       window.removeEventListener("pointermove", onActivity);
+      window.removeEventListener("pointerdown", onActivity);
+      window.removeEventListener("touchstart", onActivity);
       window.removeEventListener("keydown", onActivity);
     };
   }, [director.isPlaying, director.stepIndex]);
@@ -210,7 +234,7 @@ export function JourneyPlaybackOverlay({
   useEffect(() => {
     if (!director.isPlaying && !paused) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") exit();
+      if (event.key === "Escape") requestClose();
       else if (event.key === "ArrowRight") next();
       else if (event.key === "ArrowLeft") back();
       else if (event.key === " ") {
@@ -220,7 +244,7 @@ export function JourneyPlaybackOverlay({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [director.isPlaying, paused, pause, resume, next, back, exit]);
+  }, [director.isPlaying, paused, pause, resume, next, back, requestClose]);
 
   // Review P2: keep Tab focus inside the playback overlay.
   useEffect(() => {
@@ -329,7 +353,11 @@ export function JourneyPlaybackOverlay({
               ? activeRead?.status === "ready"
                 ? <video key={activeMedia.id} src={activeRead.url} controls autoPlay playsInline />
                 : <div className="journey-playback__media-state">正在打开媒体…</div>
+              // Review P2: images must wait for the decode gate too — showing
+              // the <img> as soon as the signed URL is ready can still flash
+              // a blank frame while the browser decodes (#11 requirement).
               : activeRead?.status === "ready"
+                && decodeRegistryRef.current.isDecoded(activeMedia.id)
                 ? <img key={activeMedia.id} src={activeRead.url} alt={activeMedia.fileName} />
                 : <div className="journey-playback__media-state">正在打开媒体…</div>}
           </div>
@@ -344,7 +372,7 @@ export function JourneyPlaybackOverlay({
       </div>
 
       {/* ── Controls ────────────────────────────────────────────────────── */}
-      <button className="journey-playback__close" type="button" onClick={exit} aria-label="退出播放">
+      <button className="journey-playback__close" type="button" onClick={requestClose} aria-label="退出播放">
         <IconX size={22} stroke={1.35} aria-hidden="true" />
       </button>
       <nav className="journey-playback__controls" aria-label="播放控制">

@@ -26,6 +26,11 @@ export type JourneyTimelineEntry = {
  * Build the global journey timeline. The cursor domain is [0, 1]: 0 is
  * before every dated journey, 1 is "now" (the latest dated moment).
  *
+ * The normalization span covers EVERY time that participates in reveal —
+ * startedOn, endedOn, and route-point occurredAt — so no value ever
+ * normalizes beyond [0, 1] (review P2: a single journey with a 10-day range
+ * previously clamped its endedOn/occurredAt points outside the domain).
+ *
  * Point timestamps resolve to the finest available data:
  * - occurredAt when present;
  * - otherwise evenly interpolated across the journey's date range by index;
@@ -33,9 +38,9 @@ export type JourneyTimelineEntry = {
  */
 export function buildJourneyTimeline(journeys: readonly Journey[]): {
   entries: JourneyTimelineEntry[];
-  /** Earliest absolute ms across all dated journeys. */
+  /** Earliest absolute ms across all dated journeys and their points. */
   minTime: number;
-  /** Latest absolute ms across all dated journeys. */
+  /** Latest absolute ms across all dated journeys and their points. */
   maxTime: number;
   /** Journeys with no usable date (shown only at the final state). */
   undated: Journey[];
@@ -43,28 +48,44 @@ export function buildJourneyTimeline(journeys: readonly Journey[]): {
   const dated = journeys.filter((journey) => journey.startedOn);
   const undated = journeys.filter((journey) => !journey.startedOn);
 
-  const times = dated.map((journey) => Date.parse(journey.startedOn))
-    .filter((value) => Number.isFinite(value));
-  if (times.length === 0) {
+  // Collect every time that participates in reveal, then normalize over the
+  // union so started/ended/occurredAt all land inside [0, 1].
+  const resolvedByJourney = dated.map((journey) => ({
+    journey,
+    points: resolveRoutePointTimes(journey),
+  }));
+  const allTimes: number[] = [];
+  for (const { journey, points } of resolvedByJourney) {
+    const startedMs = Date.parse(journey.startedOn);
+    if (Number.isFinite(startedMs)) allTimes.push(startedMs);
+    if (journey.endedOn) {
+      const endedMs = Date.parse(journey.endedOn);
+      if (Number.isFinite(endedMs)) allTimes.push(endedMs);
+    }
+    for (const point of points) {
+      if (Number.isFinite(point.timeMs)) allTimes.push(point.timeMs);
+    }
+  }
+  if (allTimes.length === 0) {
     return { entries: [], minTime: 0, maxTime: 1, undated };
   }
-  const minTime = Math.min(...times);
-  const maxTime = Math.max(...times);
+  const minTime = Math.min(...allTimes);
+  const maxTime = Math.max(...allTimes);
   const span = Math.max(1, maxTime - minTime);
 
   const normalize = (timeMs: number) => (timeMs - minTime) / span;
 
-  const entries: JourneyTimelineEntry[] = dated.map((journey) => {
+  const entries: JourneyTimelineEntry[] = resolvedByJourney.map(({ journey, points }) => {
     const started = normalize(Date.parse(journey.startedOn));
     const ended = journey.endedOn
       ? normalize(Date.parse(journey.endedOn))
       : started;
-    const points = resolveRoutePointTimes(journey).map((point) => ({
+    const normalizedPoints = points.map((point) => ({
       pointIndex: point.index,
       at: normalize(point.timeMs),
       explicit: point.explicit,
     }));
-    return { journeyId: journey.id, started, ended, points };
+    return { journeyId: journey.id, started, ended, points: normalizedPoints };
   });
 
   entries.sort((left, right) => left.started - right.started);

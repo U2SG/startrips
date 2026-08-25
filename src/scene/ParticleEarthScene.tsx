@@ -2399,10 +2399,17 @@ export function ParticleEarthScene({
       },
       // #21: update per-route temporal reveal without rebuilding the layer,
       // so the time cursor does not restart route animations every frame.
-      setTemporalReveal(reveal: ReadonlyMap<string, number>) {
+      // Review P2: a route absent from the map (or an undefined map after
+      // leaving focus mode) must RESET to full visibility — otherwise the CSS
+      // variable from a previous rewind leaks into the normal home view.
+      setTemporalReveal(reveal?: ReadonlyMap<string, number>) {
         for (const entry of routeVectorEntries) {
-          const progress = reveal.get(entry.routeId);
-          if (progress === undefined) continue;
+          const progress = reveal?.get(entry.routeId);
+          if (progress === undefined) {
+            entry.group.style.removeProperty("--journey-temporal-progress");
+            delete entry.group.dataset.temporalReveal;
+            continue;
+          }
           entry.group.style.setProperty("--journey-temporal-progress", progress.toFixed(3));
           entry.group.dataset.temporalReveal = progress.toFixed(3);
         }
@@ -2453,7 +2460,9 @@ export function ParticleEarthScene({
   }, [activeJourneyRouteId, controllerRef, journeyRoutes, ready]);
 
   useEffect(() => {
-    if (!ready || !temporalReveal) return;
+    if (!ready) return;
+    // Review P2: also called with `undefined` so leaving focus mode resets
+    // every route's temporal reveal to full visibility.
     controllerRef.current?.setTemporalReveal(temporalReveal);
   }, [controllerRef, ready, temporalReveal]);
 

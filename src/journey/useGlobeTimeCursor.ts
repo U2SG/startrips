@@ -24,7 +24,9 @@ export type TemporalReveal = {
  */
 export function useGlobeTimeCursor(journeys: readonly Journey[]) {
   const timeline = useMemo(() => buildJourneyTimeline(journeys), [journeys]);
-  const [cursor, setCursor] = useState(0);
+  // Review P2: default to "now" (1) so entering Globe Focus Mode shows the
+  // full planet — only an explicit Play/scrub rewinds through time.
+  const [cursor, setCursor] = useState(1);
   const [playing, setPlaying] = useState(false);
   const [scrub, setScrub] = useState<number | null>(null);
   const playingRef = useRef(playing);

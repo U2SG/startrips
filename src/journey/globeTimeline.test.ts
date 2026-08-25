@@ -117,6 +117,30 @@ describe("buildJourneyTimeline (#21)", () => {
     expect(minTime).toBe(0);
     expect(maxTime).toBe(1);
   });
+
+  it("normalizes endedOn and occurredAt inside [0, 1] for a single range journey (review P2)", () => {
+    // One journey spanning 10 days: previously only startedOn defined the
+    // span, so endedOn/occurredAt normalized far beyond 1 and the route
+    // stayed partially hidden even at cursor = 1.
+    const trip: Journey = {
+      ...journey("solo", "2025-01-01", [
+        point("p0", "2025-01-01T00:00:00Z", 0),
+        point("p1", "2025-01-10T00:00:00Z", 1),
+      ]),
+      endedOn: "2025-01-10",
+    };
+    const { entries } = buildJourneyTimeline([trip]);
+    expect(entries).toHaveLength(1);
+    const entry = entries[0];
+    expect(entry.started).toBeCloseTo(0);
+    expect(entry.ended).toBeCloseTo(1);
+    for (const point of entry.points) {
+      expect(point.at).toBeGreaterThanOrEqual(0);
+      expect(point.at).toBeLessThanOrEqual(1);
+    }
+    // The journey is fully revealed at cursor = 1.
+    expect(getJourneyTemporalProgress(entry, 1)).toBe(1);
+  });
 });
 
 describe("temporal progress (#21)", () => {
