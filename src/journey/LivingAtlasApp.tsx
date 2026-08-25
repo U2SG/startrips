@@ -372,6 +372,10 @@ export function LivingAtlasApp() {
   // morph. View Transitions handles supported browsers; the primitive falls
   // back to a fixed-clone WAAPI morph without remounting the globe.
   function openJourneyStory(journeyId: string, routePointId: string | null) {
+    const targetJourney = journeys.find((candidate) => candidate.id === journeyId) ?? null;
+    const sharedCoverId = routePointId === null && targetJourney
+      ? journeyCover(targetJourney)?.id ?? null
+      : null;
     const sourceElement = routePointId === null
       ? document.querySelector<HTMLElement>(
         ".living-atlas__active-media img, .living-atlas__active-media video",
@@ -385,9 +389,13 @@ export function LivingAtlasApp() {
         setStoryRoutePointId(routePointId);
         setStoryJourneyId(journeyId);
       },
-      resolveTarget: () => document.querySelector<HTMLElement>(
-        ".journey-story__media > img, .journey-story__media > video",
-      ),
+      // #18 follow-up: never morph the card cover into whichever Story asset
+      // happens to render first. The Story initializes to journeyCover(), and
+      // this lookup additionally requires the exact same asset id.
+      resolveTarget: () => sharedCoverId
+        ? [...document.querySelectorAll<HTMLElement>("[data-shared-media-id]")]
+          .find((element) => element.dataset.sharedMediaId === sharedCoverId) ?? null
+        : null,
     });
   }
 
