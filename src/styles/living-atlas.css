@@ -668,7 +668,7 @@
   to { --atlas-border-angle: 360deg; }
 }
 
-.living-atlas__active > p:first-child {
+.living-atlas__active-content > p:first-child {
   margin: 0;
   color: var(--atlas-faint);
   font: 500 8px/1.2 ui-monospace, "SFMono-Regular", Consolas, monospace;
@@ -689,7 +689,7 @@
   letter-spacing: -0.025em;
 }
 
-.living-atlas__active > span {
+.living-atlas__active-content > span {
   color: var(--atlas-muted);
   font-size: 10px;
   line-height: 1.6;
@@ -778,12 +778,36 @@
   color: var(--atlas-faint);
 }
 
-.living-atlas__active > button {
+/* #13 + review P2: the active card is one interaction surface. The content
+   stays inert; the transparent hit area covers the whole card and opens the
+   story; explicit actions sit above it. */
+.living-atlas__active-content {
+  display: contents;
+}
+
+.living-atlas__active-hit-area {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  cursor: pointer;
+}
+
+.living-atlas__active-actions {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  gap: 10px;
+  margin-top: auto;
+}
+
+.living-atlas__active-actions > button {
   min-height: 56px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-top: auto;
   padding: 0 8px 0 20px;
   border: 1px solid rgba(200, 255, 61, 0.7);
   border-radius: 999px;
@@ -1423,7 +1447,9 @@
 .journey-story__fullscreen-entry {
   position: absolute;
   z-index: 2;
-  top: 16px;
+  /* Review P2: below the media actions (set cover / delete) so the two
+     top-right controls never overlap. */
+  top: 68px;
   right: 16px;
   min-height: 44px;
   display: inline-flex;
@@ -3953,7 +3979,7 @@
 /* ML-13 Magnet: magnetic CTA buttons spring back with the same motion
    language used elsewhere in the atlas. */
 .living-atlas__header nav .living-atlas__create,
-.living-atlas__active > button {
+.living-atlas__active-actions > button {
   transition:
     transform 240ms cubic-bezier(0.2, 0.75, 0.15, 1),
     border-color 180ms ease,
@@ -4404,8 +4430,8 @@
     display: none;
   }
 
-  .living-atlas__active > button {
-    margin-top: 12px;
+  .living-atlas__active-actions > button {
+    margin-top: 0;
   }
 
   .living-atlas__empty {

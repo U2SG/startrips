@@ -180,6 +180,11 @@ export function LivingAtlasApp() {
   // focus survive through the class switch).
   const [globeFocusMode, setGlobeFocusMode] = useState(false);
   const globeFocusExitRef = useRef<HTMLButtonElement | null>(null);
+  const globeFocusTriggerRef = useRef<HTMLButtonElement | null>(null);
+  // Review P2: remember the focused element inside focus mode so Esc/exit can
+  // restore focus to the trigger on the way out.
+  const globeFocusActiveRef = useRef(false);
+  globeFocusActiveRef.current = globeFocusMode;
   const loadRevision = useRef(0);
   const globePickAccept = useRef<((point: GlobePointPick) => void) | null>(null);
   const reduceMotion = useMemo(preferredReducedMotion, []);
@@ -190,18 +195,32 @@ export function LivingAtlasApp() {
   // the user is in globe focus mode; entering playback pauses rewind.
   const timeCursor = useGlobeTimeCursor(journeys);
 
+  // #8 + review P2: entering focus mode moves keyboard focus to the restore
+  // control so the invisible trigger never keeps it; exiting restores focus
+  // to the trigger. Hidden regions become `inert`, so tab order skips them.
+  useEffect(() => {
+    if (globeFocusMode) {
+      globeFocusExitRef.current?.focus();
+    }
+  }, [globeFocusMode]);
+
+  const exitGlobeFocus = useCallback(() => {
+    setGlobeFocusMode(false);
+    globeFocusTriggerRef.current?.focus();
+  }, []);
+
   // Esc exits focus mode. The exit control is only visible inside focus mode,
   // so exiting returns focus to the trigger button in the header.
   useEffect(() => {
     if (!globeFocusMode) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
-        setGlobeFocusMode(false);
+        exitGlobeFocus();
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [globeFocusMode]);
+  }, [globeFocusMode, exitGlobeFocus]);
 
   const load = useCallback(async (quiet = false) => {
     const revision = ++loadRevision.current;
@@ -413,16 +432,17 @@ export function LivingAtlasApp() {
         />
       </div>
 
-      <header className="living-atlas__header">
+      <header className="living-atlas__header" inert={globeFocusMode || undefined}>
         <div className="living-atlas__brand"><IconWorld size={25} stroke={1.1} aria-hidden="true" /><div><p>STARTRIPS · LIVING ATLAS</p><h1><ShinyText>把走过的路留在地球上</ShinyText></h1></div></div>
         <nav aria-label="图谱视图">
           <button type="button" className={view === "planet" ? "is-active" : ""} onClick={() => setView("planet")}><IconWorld size={16} stroke={1.35} aria-hidden="true" />地球</button>
           <button type="button" className={view === "timeline" ? "is-active" : ""} onClick={() => setView("timeline")}><IconTimeline size={16} stroke={1.35} aria-hidden="true" />时间线</button>
           <button ref={createMagnet.ref} onMouseMove={createMagnet.onMouseMove} onMouseLeave={createMagnet.onMouseLeave} type="button" className="living-atlas__create" onClick={openCreateComposer}><IconPlus size={17} stroke={1.4} aria-hidden="true" />记录旅程</button>
           <button
+            ref={globeFocusTriggerRef}
             type="button"
             className="living-atlas__globe-focus"
-            aria-pressed={false}
+            aria-pressed={globeFocusMode}
             onClick={() => {
               setView("planet");
               setGlobeFocusMode(true);
@@ -435,7 +455,7 @@ export function LivingAtlasApp() {
       </header>
 
       {view === "planet" && journeys.length > 0 ? (
-        <nav className="living-atlas__journey-rail motion-staged" aria-label={`全部旅程，共 ${journeys.length} 段`}>
+        <nav className="living-atlas__journey-rail motion-staged" aria-label={`全部旅程，共 ${journeys.length} 段`} inert={globeFocusMode || undefined}>
           <div className="living-atlas__journey-rail-heading">
             <span>旅程</span>
             <small><CountUp value={journeys.length} initialValue={journeys.length} format={(value) => String(value).padStart(2, "0")} /> JOURNEYS</small>
@@ -491,40 +511,54 @@ export function LivingAtlasApp() {
       {view === "planet" && activeJourney ? (
         <aside
           className={`living-atlas__active${journeyVisualMedia(activeJourney).length > 0 ? " has-media" : ""}${arrivalJourneyId === activeJourney.id ? " is-arriving" : ""}`}
+          inert={globeFocusMode || undefined}
           style={{
             "--journey-color": activeJourney.lightColor,
             "--journey-gradient": getLightEffectGradient(activeJourney.lightEffect, activeJourney.lightColor),
           } as React.CSSProperties}
           aria-live="polite"
         >
-          <p>{activeJourney.startedOn}{activeJourney.endedOn ? ` — ${activeJourney.endedOn}` : ""}</p>
-          <IconMapPin className="living-atlas__active-marker" size={18} stroke={1.25} aria-hidden="true" />
-          <h2><ScrambledText text={activeJourney.title} /></h2>
-          <span>{activeJourney.routePoints.length} 个路线点 · {activeJourney.routePoints.filter((point) => point.isStop).length} 次停靠</span>
-          <JourneyCardMedia journey={activeJourney} reduceMotion={reduceMotion} />
-          <p className={`living-atlas__active-note${activeJourney.note ? "" : " is-empty"}`}>
-            {activeJourney.note || "路线已经留在地球上，故事等待被打开。"}
-          </p>
-          <button ref={storyMagnet.ref} onMouseMove={storyMagnet.onMouseMove} onMouseLeave={storyMagnet.onMouseLeave} type="button" onClick={() => openJourneyStory(activeJourney.id, null)}>
-            <span>打开故事</span>
-            <span className="living-atlas__active-action-icon" aria-hidden="true"><IconArrowRight size={17} stroke={1.35} /></span>
-          </button>
-          <button type="button" className="living-atlas__active-play" onClick={() => {
-            setStoryJourneyId(null);
-            setStoryRoutePointId(null);
-            setPlaybackJourneyId(activeJourney.id);
-            setPlaybackFocusPoint(activeJourney.routePoints[0]
-              ? { lat: activeJourney.routePoints[0].latitude, lon: activeJourney.routePoints[0].longitude }
-              : null);
-          }}>
-            <IconPlayerPlay size={15} stroke={1.35} aria-hidden="true" />
-            <span>播放旅程</span>
-          </button>
+          {/* #13 + review P2: the whole active card is one interaction surface —
+              clicking cover/title/note/blank opens the story; explicit actions
+              sit above the transparent hit area. */}
+          <button
+            type="button"
+            className="living-atlas__active-hit-area"
+            aria-label={`打开旅程：${activeJourney.title}`}
+            onClick={() => openJourneyStory(activeJourney.id, null)}
+          />
+          <div className="living-atlas__active-content" aria-hidden="true">
+            <p>{activeJourney.startedOn}{activeJourney.endedOn ? ` — ${activeJourney.endedOn}` : ""}</p>
+            <IconMapPin className="living-atlas__active-marker" size={18} stroke={1.25} aria-hidden="true" />
+            <h2><ScrambledText text={activeJourney.title} /></h2>
+            <span>{activeJourney.routePoints.length} 个路线点 · {activeJourney.routePoints.filter((point) => point.isStop).length} 次停靠</span>
+            <JourneyCardMedia journey={activeJourney} reduceMotion={reduceMotion} />
+            <p className={`living-atlas__active-note${activeJourney.note ? "" : " is-empty"}`}>
+              {activeJourney.note || "路线已经留在地球上，故事等待被打开。"}
+            </p>
+          </div>
+          <div className="living-atlas__active-actions">
+            <button ref={storyMagnet.ref} onMouseMove={storyMagnet.onMouseMove} onMouseLeave={storyMagnet.onMouseLeave} type="button" onClick={() => openJourneyStory(activeJourney.id, null)}>
+              <span>打开故事</span>
+              <span className="living-atlas__active-action-icon" aria-hidden="true"><IconArrowRight size={17} stroke={1.35} /></span>
+            </button>
+            <button type="button" className="living-atlas__active-play" onClick={() => {
+              setStoryJourneyId(null);
+              setStoryRoutePointId(null);
+              setPlaybackJourneyId(activeJourney.id);
+              setPlaybackFocusPoint(activeJourney.routePoints[0]
+                ? { lat: activeJourney.routePoints[0].latitude, lon: activeJourney.routePoints[0].longitude }
+                : null);
+            }}>
+              <IconPlayerPlay size={15} stroke={1.35} aria-hidden="true" />
+              <span>播放旅程</span>
+            </button>
+          </div>
         </aside>
       ) : null}
 
       {notice ? (
-        <div className="living-atlas__notice" role="status">
+        <div className="living-atlas__notice" role="status" inert={globeFocusMode || undefined}>
           <span>{notice}</span>
           {undoJourney ? <button className="living-atlas__notice-undo" type="button" onClick={() => void undoRemovedJourney()}>撤销删除</button> : null}
           <button type="button" onClick={() => { setNotice(""); setUndoJourney(null); }} aria-label="关闭提示"><IconX size={17} stroke={1.4} aria-hidden="true" /></button>
@@ -538,7 +572,9 @@ export function LivingAtlasApp() {
         type="button"
         className="living-atlas__globe-focus-exit"
         aria-label="退出专注地球"
-        onClick={() => setGlobeFocusMode(false)}
+        aria-hidden={!globeFocusMode}
+        tabIndex={globeFocusMode ? 0 : -1}
+        onClick={exitGlobeFocus}
       >
         <IconX size={16} stroke={1.4} aria-hidden="true" />
         恢复界面

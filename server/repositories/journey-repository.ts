@@ -234,7 +234,11 @@ export async function updateJourneyForAtlas(
         label: point.label,
         isStop: point.isStop,
         occurredAt: point.occurredAt,
-        note: point.note ?? null,
+        // #10 + review fix: `undefined` means "preserve the stored note" —
+        // an older/partial client that omits note must never wipe it. Only
+        // explicit null/empty (parsed to null) clears. New points default to
+        // null (no note) because the column is nullable.
+        ...(point.note !== undefined ? { note: point.note ?? null } : {}),
       };
       if (point.id) {
         await transaction
@@ -248,6 +252,7 @@ export async function updateJourneyForAtlas(
         await transaction.insert(journeyRoutePoints).values({
           journeyId: journey.id,
           ...pointValues,
+          ...(point.note === undefined ? { note: null } : {}),
         });
       }
     }

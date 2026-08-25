@@ -81,6 +81,38 @@ describe("createDecodeRegistry (#11)", () => {
     expect(registry.isDecoded("a")).toBe(false);
     expect(registry.isDecoded("b")).toBe(false);
   });
+
+  it("notifies onSettle listeners when a pending decode settles (review P1)", async () => {
+    const registry = createDecodeRegistry(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    const settled = vi.fn();
+    const unsubscribe = registry.onSettle(settled);
+
+    registry.ensure("a", "url-a");
+    expect(settled).not.toHaveBeenCalled();
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(settled).toHaveBeenCalledTimes(1);
+    expect(registry.isDecoded("a")).toBe(true);
+
+    // Unsubscribe stops future notifications.
+    unsubscribe();
+    registry.ensure("b", "url-b");
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(settled).toHaveBeenCalledTimes(1);
+  });
+
+  it("notifies listeners on decode errors too (review P1)", async () => {
+    const registry = createDecodeRegistry(async () => {
+      throw new Error("boom");
+    });
+    const settled = vi.fn();
+    registry.onSettle(settled);
+    registry.ensure("bad", "url-bad");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(settled).toHaveBeenCalledTimes(1);
+    expect(registry.ensure("bad", "url-bad").status).toBe("error");
+  });
 });
 
 describe("decodeImageUrl (#11)", () => {

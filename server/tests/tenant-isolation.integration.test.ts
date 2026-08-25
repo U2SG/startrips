@@ -744,6 +744,38 @@ describe("tenant-scoped journey repository", () => {
     expect(cleared?.routePoints[1].note).toBeNull();
   });
 
+  it("keeps existing route-point notes when an update omits the note field (review P1)", async () => {
+    const created = await createJourneyForAtlas(atlasA, "user-a", {
+      ...baseJourney,
+      title: "Omitted note",
+      routePoints: baseJourney.routePoints.map((point, index) => ({
+        ...point,
+        note: index === 0 ? "这句必须留下" : null,
+      })),
+    });
+    if (!created) throw new Error("Journey fixture was not created");
+
+    // An older/partial client updates the route but does not send `note` at
+    // all. The stored note must survive — only explicit null/empty clears.
+    const updated = await updateJourneyForAtlas(created.id, atlasA, {
+      ...baseJourney,
+      title: "Omitted note (edited)",
+      revision: created.revision,
+      routePoints: created.routePoints.map(({ id, latitude, longitude, label, isStop, occurredAt }) => ({
+        id,
+        latitude,
+        longitude,
+        label,
+        isStop,
+        occurredAt,
+        // note deliberately omitted
+      })),
+    });
+    expect(updated?.title).toBe("Omitted note (edited)");
+    expect(updated?.routePoints[0].note).toBe("这句必须留下");
+    expect(updated?.routePoints[1].note).toBeNull();
+  });
+
   it("serializes media finalization into a stable story order", async () => {
     const journey = await createJourneyForAtlas(atlasA, "user-a", {
       ...baseJourney,

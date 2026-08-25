@@ -15,6 +15,15 @@ export function isModalFocusCandidate(candidate: HTMLElement) {
     && getComputedStyle(candidate).visibility !== "hidden";
 }
 
+/**
+ * Review P2: whether an element lives inside a nested focus trap (e.g. the
+ * fullscreen overlay rendered as a sibling of the story dialog). The dialog's
+ * own Tab redirect must not steal focus from a nested trap's controls.
+ */
+export function isInsideNestedTrap(element: Element | null) {
+  return Boolean(element?.closest("[data-focus-trap-exempt]"));
+}
+
 export function useModalFocus<T extends HTMLElement>(
   onClose: () => void,
   active = true,
@@ -70,6 +79,10 @@ export function useModalFocus<T extends HTMLElement>(
         return;
       }
       if (event.key !== "Tab") return;
+
+      // Review P2: a nested trap (fullscreen overlay) owns its own Tab
+      // cycling; this dialog's redirect must not steal focus from it.
+      if (isInsideNestedTrap(document.activeElement)) return;
 
       const candidates = focusable();
       if (candidates.length === 0) {

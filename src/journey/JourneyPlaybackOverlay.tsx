@@ -61,6 +61,9 @@ export function JourneyPlaybackOverlay({
   const lightStripRef = useRef<HTMLDivElement>(null);
   const [controlsHidden, setControlsHidden] = useState(false);
   const pendingReads = useRef(new Set<string>());
+  // Review P2: the playback overlay is its own focus trap (rendered outside
+  // any dialog that would otherwise manage Tab focus).
+  const overlayRef = useRef<HTMLDivElement>(null);
 
   const soundtrack = useMemo(
     () => journey ? journeySoundtrack(journey) : null,
@@ -178,6 +181,21 @@ export function JourneyPlaybackOverlay({
     };
   }, [director.isPlaying, director.stepIndex]);
 
+  // Review P2: toggle playback from the user gesture so audio.play() runs
+  // inside user activation; the soundtrack effect below stays as the
+  // synchronization/fallback path.
+  const togglePlayback = useCallback(() => {
+    if (paused) {
+      const audio = audioRef.current;
+      if (audio && soundtrackRead?.status === "ready") {
+        void audio.play().catch(() => undefined);
+      }
+      resume();
+    } else {
+      pause();
+    }
+  }, [paused, pause, resume, soundtrackRead?.status === "ready"]);
+
   // Camera: travel and stop phases focus the relevant route point.
   useEffect(() => {
     const step = director.step;
@@ -204,6 +222,43 @@ export function JourneyPlaybackOverlay({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [director.isPlaying, paused, pause, resume, next, back, exit]);
 
+  // Review P2: keep Tab focus inside the playback overlay.
+  useEffect(() => {
+    const root = overlayRef.current;
+    if (!root) return;
+    const previousFocus = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+    const focusable = () => [...root.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    )].filter((element) => (
+      element.getClientRects().length > 0
+      && getComputedStyle(element).visibility !== "hidden"
+    ));
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Tab") return;
+      const candidates = focusable();
+      if (candidates.length === 0) return;
+      const first = candidates[0];
+      const last = candidates[candidates.length - 1];
+      const current = document.activeElement;
+      if (event.shiftKey && (current === first || !root.contains(current))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (current === last || !root.contains(current))) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    const firstButton = focusable()[0];
+    firstButton?.focus();
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown, true);
+      if (previousFocus?.isConnected) previousFocus.focus();
+    };
+  }, []);
+
   if (!journey) return null;
 
   const step: PlaybackStep | undefined = director.step;
@@ -220,6 +275,7 @@ export function JourneyPlaybackOverlay({
 
   return (
     <div
+      ref={overlayRef}
       className={`journey-playback${paused ? " is-paused" : ""}${controlsHidden ? " is-controls-hidden" : ""}`}
       role="dialog"
       aria-modal="true"
@@ -296,7 +352,7 @@ export function JourneyPlaybackOverlay({
         <button
           type="button"
           className={paused ? "is-active" : ""}
-          onClick={paused ? resume : pause}
+          onClick={togglePlayback}
           aria-label={paused ? "继续播放" : "暂停播放"}
           aria-pressed={paused}
         >

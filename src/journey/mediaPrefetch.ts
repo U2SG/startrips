@@ -50,6 +50,10 @@ export type DecodedReadiness =
 export type DecodeRegistry = {
   ensure(assetId: string, url: string): DecodedReadiness;
   isDecoded(assetId: string): boolean;
+  /** Register a listener called whenever any asset's decode settles (the
+   *  pending → decoded/error transition). Used to wake React effects that
+   *  gate navigation on decode readiness (review P1). */
+  onSettle(listener: () => void): () => void;
   release(assetId: string): void;
   reset(): void;
 };
@@ -60,11 +64,19 @@ export type DecodeRegistry = {
  * outcome; later calls for the same asset return the recorded readiness.
  * `decode()` is required (modern browsers); a missing implementation falls
  * back to `onload`/`onerror` via the Image element.
+ *
+ * The registry is observable: when a pending decode settles, every `onSettle`
+ * listener fires, so UI code can re-check `isDecoded` without polling.
  */
 export function createDecodeRegistry(
   decodeImage: (url: string) => Promise<void>,
 ): DecodeRegistry {
   const state = new Map<string, DecodedReadiness>();
+  const listeners = new Set<() => void>();
+
+  function notifySettled() {
+    for (const listener of listeners) listener();
+  }
 
   function ensure(assetId: string, url: string): DecodedReadiness {
     const existing = state.get(assetId);
@@ -76,12 +88,14 @@ export function createDecodeRegistry(
     void decodeImage(url).then(
       () => {
         state.set(assetId, { status: "decoded" });
+        notifySettled();
       },
       (error: unknown) => {
         state.set(assetId, {
           status: "error",
           message: error instanceof Error ? error.message : "图片解码失败",
         });
+        notifySettled();
       },
     );
     return readiness;
@@ -91,6 +105,10 @@ export function createDecodeRegistry(
     ensure,
     isDecoded(assetId: string) {
       return state.get(assetId)?.status === "decoded";
+    },
+    onSettle(listener: () => void) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
     },
     release(assetId: string) {
       state.delete(assetId);
