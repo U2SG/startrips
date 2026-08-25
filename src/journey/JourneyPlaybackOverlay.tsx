@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -44,11 +45,15 @@ export function JourneyPlaybackOverlay({
   journey,
   onClose,
   onFocusRoutePoint,
+  initialSoundtrackRead,
   reduceMotion,
 }: {
   journey: Journey | null;
   onClose: () => void;
   onFocusRoutePoint: (pointIndex: number) => void;
+  // Review P1: a prefetched soundtrack signed read, so the first play() can
+  // run inside the click gesture (browser user-activation policy).
+  initialSoundtrackRead?: { url: string } | null;
   reduceMotion?: boolean;
 }) {
   const director = useJourneyPlaybackDirector(journey);
@@ -59,7 +64,12 @@ export function JourneyPlaybackOverlay({
     exit();
     onClose();
   }, [exit, onClose]);
-  const [mediaReads, setMediaReads] = useState<Record<string, MediaRead>>({});
+  const [mediaReads, setMediaReads] = useState<Record<string, MediaRead>>(() => {
+    if (!journey || !initialSoundtrackRead) return {};
+    const soundtrack = journeySoundtrack(journey);
+    if (!soundtrack) return {};
+    return { [soundtrack.id]: { status: "ready", url: initialSoundtrackRead.url } };
+  });
   const decodeRegistryRef = useRef(createDecodeRegistry(decodeImageUrl));
   // Review P2: decode settles without React state; this revision bumps on
   // every settle so the media gate re-renders once the image is decoded.
@@ -119,22 +129,37 @@ export function JourneyPlaybackOverlay({
     }
   }, [journey, director.step, loadMediaRead, soundtrack]);
 
-  // Decode the active media image ahead of display.
+  // Review P2: decode the media of the current chapter AHEAD of display —
+  // during the stop phase we already request reads, so the following media
+  // step mounts <img> without a loading gap. During a media step, decode the
+  // current image and prefetch the next one in the same chapter.
   useEffect(() => {
     if (!journey) return;
     const step = director.step;
-    if (step?.kind !== "media") return;
-    const asset = playbackMediaForPoint(journey, step.pointIndex)[step.mediaIndex];
-    if (!asset || !asset.mimeType.startsWith("image/")) return;
-    const read = mediaReads[asset.id];
-    if (read?.status === "ready") {
-      decodeRegistryRef.current.ensure(asset.id, read.url);
+    const chapterMedia = step?.kind === "stop" || step?.kind === "media"
+      ? playbackMediaForPoint(journey, step.pointIndex)
+      : [];
+    const nextChapterMedia = step?.kind === "stop" && journey.routePoints[step.pointIndex + 1]
+      ? playbackMediaForPoint(journey, step.pointIndex + 1)
+      : [];
+    const targets = step?.kind === "media"
+      ? [...chapterMedia.slice(step.mediaIndex, step.mediaIndex + 2)] // current + next
+      : [...chapterMedia.slice(0, 2), ...nextChapterMedia.slice(0, 1)]; // stop chapter + next stop
+    for (const asset of targets) {
+      if (!asset.mimeType.startsWith("image/")) continue;
+      const read = mediaReads[asset.id];
+      if (read?.status === "ready") {
+        decodeRegistryRef.current.ensure(asset.id, read.url);
+      }
     }
   }, [decodeSettleRevision, director.step, journey, mediaReads]);
 
   // The soundtrack follows playback: play on any non-paused phase after the
   // user started playback; pause when paused; never reset between chapters.
-  useEffect(() => {
+  // Review P1: layout effect so the very first play() runs inside the click
+  // gesture's transient user activation (a plain effect can be too late and
+  // Chrome/Safari reject the audio).
+  useLayoutEffect(() => {
     const audio = audioRef.current;
     if (!audio || !soundtrackRead || soundtrackRead.status !== "ready") return;
     if (paused || !director.isPlaying) {

@@ -16,7 +16,10 @@ type LivingAtlasGlobeProps = {
   focusColor?: string;
   journeyRoutes: readonly JourneyRoute[];
   activeJourneyRouteId?: string | null;
-  temporalReveal?: ReadonlyMap<string, number>;
+  temporalReveal?: {
+    journeys: ReadonlyMap<string, number>;
+    points: ReadonlyMap<string, number>;
+  };
   onJourneyRouteActivate: (journeyId: string) => void;
   onJourneyRoutePointActivate: (journeyId: string, routePointId: string) => void;
   onGlobePointPick?: (point: { latitude: number; longitude: number }) => void;

@@ -147,7 +147,8 @@ button {
 
 /* #21: the time cursor drives a route's presence — 0 = future (hidden),
    0..1 = being revealed, 1 = visited. The whole trail and its points fade
-   with the reveal; the active/visited state still shines through. */
+   with the reveal; the active/visited state still shines through. Points get
+   their own per-stop progress so the planet lights up stop by stop. */
 .particle-earth-route[data-temporal-reveal] {
   opacity: calc(var(--journey-temporal-progress, 1) * 1);
   transition: opacity var(--motion-ui, 260ms) var(--motion-ease-out, ease);
@@ -158,8 +159,14 @@ button {
   pointer-events: none;
 }
 
-.particle-earth-route[data-temporal-reveal] .particle-earth-route__point {
-  opacity: calc(var(--journey-temporal-progress, 1) * 0.9);
+.particle-earth-route__point[data-temporal-reveal] {
+  opacity: calc(var(--journey-point-temporal-progress, 1) * 1);
+  transition: opacity var(--motion-ui, 260ms) var(--motion-ease-out, ease);
+}
+
+.particle-earth-route__point[data-temporal-reveal][data-temporal-reveal="0.000"] {
+  opacity: 0;
+  pointer-events: none;
 }
 
 .particle-earth-route[data-temporal-reveal] .particle-earth-route__flow {

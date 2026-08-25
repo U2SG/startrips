@@ -557,7 +557,12 @@ interface ParticleEarthSceneProps {
   onJourneyRoutePointActivate?: (journeyId: string, routePointId: string) => void;
   // #21: per-journey temporal reveal progress (0 = future, 1 = visited).
   // When provided, route groups and points fade in with the time cursor.
-  temporalReveal?: ReadonlyMap<string, number>;
+  // Points are keyed by `${journeyId}:${pointIndex}` for one-stop-at-a-time
+  // reveal (review P2: a whole-route fade was not the #21 experience).
+  temporalReveal?: {
+    journeys: ReadonlyMap<string, number>;
+    points: ReadonlyMap<string, number>;
+  };
   showArchiveSignals?: boolean;
   onReady?: () => void;
   onGlobePointPick?: (point: { latitude: number; longitude: number }) => void;
@@ -1058,6 +1063,9 @@ export function ParticleEarthScene({
         ring?: SVGCircleElement;
         position: Vector3;
         label?: RouteVectorLabel;
+        // #21: the route point's index inside its journey, for per-point
+        // temporal reveal ("one stop lights up at a time").
+        routePointIndex: number;
       }>;
     };
     let routeVectorEntries: RouteVectorEntry[] = [];
@@ -1160,8 +1168,9 @@ export function ParticleEarthScene({
         group.dataset.lightEffect = route.lightEffect ?? "none";
         // #21: the time cursor drives a route's presence. 0 = future
         // (hidden), 0..1 = being revealed, 1 = visited. The CSS fades the
-        // whole trail and its points via --journey-temporal-progress.
-        const reveal = latestTemporalReveal.current?.get(route.id);
+        // whole trail via --journey-temporal-progress; per-point progress is
+        // applied by setTemporalReveal on the element level.
+        const reveal = latestTemporalReveal.current?.journeys.get(route.id);
         if (reveal !== undefined) {
           group.style.setProperty("--journey-temporal-progress", reveal.toFixed(3));
           group.dataset.temporalReveal = reveal.toFixed(3);
@@ -1352,7 +1361,7 @@ export function ParticleEarthScene({
             };
             routeLabelCount += 1;
           }
-          vectorPoints.push({ element, ring, position, label });
+          vectorPoints.push({ element, ring, position, label, routePointIndex });
         });
         group.append(...routeLabelElements);
 
@@ -2397,21 +2406,40 @@ export function ParticleEarthScene({
         latestActiveJourneyRouteId.current = activeRouteId;
         applyJourneyRoutes(routes);
       },
-      // #21: update per-route temporal reveal without rebuilding the layer,
-      // so the time cursor does not restart route animations every frame.
-      // Review P2: a route absent from the map (or an undefined map after
-      // leaving focus mode) must RESET to full visibility — otherwise the CSS
-      // variable from a previous rewind leaks into the normal home view.
-      setTemporalReveal(reveal?: ReadonlyMap<string, number>) {
+      // #21: update per-route AND per-point temporal reveal without rebuilding
+      // the layer, so the time cursor does not restart route animations.
+      // Review P2: points light up one stop at a time (route progress still
+      // fades the whole trail); a journey/point absent from the maps (or an
+      // undefined map after leaving focus mode) RESETS to full visibility so
+      // rewind state never leaks into the normal home view.
+      setTemporalReveal(reveal?: {
+        journeys: ReadonlyMap<string, number>;
+        points: ReadonlyMap<string, number>;
+      }) {
         for (const entry of routeVectorEntries) {
-          const progress = reveal?.get(entry.routeId);
+          const progress = reveal?.journeys.get(entry.routeId);
           if (progress === undefined) {
             entry.group.style.removeProperty("--journey-temporal-progress");
             delete entry.group.dataset.temporalReveal;
-            continue;
+          } else {
+            entry.group.style.setProperty("--journey-temporal-progress", progress.toFixed(3));
+            entry.group.dataset.temporalReveal = progress.toFixed(3);
           }
-          entry.group.style.setProperty("--journey-temporal-progress", progress.toFixed(3));
-          entry.group.dataset.temporalReveal = progress.toFixed(3);
+          for (const point of entry.points) {
+            const pointProgress = reveal?.points.get(
+              `${entry.routeId}:${point.routePointIndex}`,
+            );
+            if (pointProgress === undefined) {
+              point.element.style.removeProperty("--journey-point-temporal-progress");
+              delete point.element.dataset.temporalReveal;
+            } else {
+              point.element.style.setProperty(
+                "--journey-point-temporal-progress",
+                pointProgress.toFixed(3),
+              );
+              point.element.dataset.temporalReveal = pointProgress.toFixed(3);
+            }
+          }
         }
       },
       dispose() {

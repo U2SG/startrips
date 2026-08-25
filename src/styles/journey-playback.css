@@ -8,10 +8,43 @@
   display: grid;
   place-items: center;
   overflow: hidden;
+  /* Review P2: the backdrop follows the phase — the globe must be the main
+     visual during travel and stay visible during stops, only media/intro/
+     outro go dark. */
   background:
-    radial-gradient(120% 90% at 50% 40%, rgba(8, 22, 20, 0.82) 0%, rgba(0, 0, 0, 0.92) 72%),
-    #000;
+    radial-gradient(120% 90% at 50% 40%, rgba(8, 22, 20, 0.55) 0%, rgba(0, 0, 0, 0.72) 78%),
+    rgba(0, 0, 0, 0.18);
   color: var(--atlas-text);
+  transition: background var(--motion-content, 560ms) var(--motion-ease-out, ease);
+}
+
+/* Travel: the globe is the hero — nearly transparent, edge vignette only. */
+.journey-playback[data-playback-phase="travel"] {
+  background:
+    radial-gradient(120% 90% at 50% 40%, transparent 0%, rgba(0, 0, 0, 0.34) 82%),
+    rgba(0, 0, 0, 0.05);
+}
+
+/* Stop: globe clearly visible, text floats over space. */
+.journey-playback[data-playback-phase="stop"] {
+  background:
+    radial-gradient(120% 90% at 50% 40%, rgba(8, 22, 20, 0.28) 0%, rgba(0, 0, 0, 0.5) 80%),
+    rgba(0, 0, 0, 0.12);
+}
+
+/* Media: true immersive fullscreen. */
+.journey-playback[data-playback-phase="media"] {
+  background:
+    radial-gradient(120% 90% at 50% 40%, rgba(8, 22, 20, 0.82) 0%, rgba(0, 0, 0, 0.94) 72%),
+    #000;
+}
+
+/* Intro / outro: title over the planet, moderately dark. */
+.journey-playback[data-playback-phase="intro"],
+.journey-playback[data-playback-phase="outro"] {
+  background:
+    radial-gradient(120% 90% at 50% 40%, rgba(8, 22, 20, 0.6) 0%, rgba(0, 0, 0, 0.78) 76%),
+    rgba(0, 0, 0, 0.2);
 }
 
 .journey-playback__stage {

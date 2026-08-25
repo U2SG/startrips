@@ -24,6 +24,10 @@ import {
 } from "./JourneyComposer";
 import { JourneyPlaybackOverlay } from "./JourneyPlaybackOverlay";
 import { JourneyStory } from "./JourneyStory";
+import {
+  cachedSoundtrackRead,
+  prefetchSoundtrackRead,
+} from "./soundtrackReadCache";
 import { JourneyTimeline } from "./JourneyTimeline";
 import { GlobeTimeScrubber } from "./GlobeTimeScrubber";
 import { useGlobeTimeCursor } from "./useGlobeTimeCursor";
@@ -268,6 +272,12 @@ export function LivingAtlasApp() {
 
   const activeJourney = journeys.find((journey) => journey.id === activeJourneyId) ?? null;
   const editingJourney = journeys.find((journey) => journey.id === editingJourneyId) ?? null;
+  // Review P1: prefetch the soundtrack read while the active card is visible
+  // so 播放旅程 can start audio synchronously inside the click gesture.
+  useEffect(() => {
+    if (!activeJourney) return;
+    void prefetchSoundtrackRead(activeJourney).catch(() => undefined);
+  }, [activeJourney?.id]);
   const journeyRail = useMemo(() => [...journeys].reverse(), [journeys]);
   const routes = useMemo(() => {
     const savedRoutes = toJourneyRoutes(journeys);
@@ -413,7 +423,12 @@ export function LivingAtlasApp() {
           focusColor={activeJourney?.lightColor}
           journeyRoutes={routes}
           activeJourneyRouteId={draftRoute?.id ?? activeJourneyId}
-          temporalReveal={globeFocusMode ? timeCursor.reveal.journeyProgress : undefined}
+          temporalReveal={globeFocusMode
+            ? {
+              journeys: timeCursor.reveal.journeyProgress,
+              points: timeCursor.reveal.pointProgress,
+            }
+            : undefined}
           onJourneyRouteActivate={(id) => {
             if (id !== "draft-route-preview") selectJourney(id);
           }}
@@ -635,6 +650,10 @@ export function LivingAtlasApp() {
               setPlaybackFocusPoint({ lat: point.latitude, lon: point.longitude });
             }
           }}
+          initialSoundtrackRead={(() => {
+            const target = journeys.find((journey) => journey.id === playbackJourneyId);
+            return target ? cachedSoundtrackRead(target) : null;
+          })()}
           reduceMotion={reduceMotion}
         />
       ) : null}
