@@ -36,6 +36,7 @@ export function LivingAtlasGlobeControls({
         type="button"
         className="living-atlas-globe__mode"
         onClick={onModeToggle}
+        aria-label={transitionTarget ? transitionLabel : detailMode ? "返回粒子地球" : "深入真实地图"}
         aria-pressed={detailMode}
         disabled={Boolean(transitionTarget)}
       >

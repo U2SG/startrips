@@ -3905,6 +3905,7 @@
    interaction band without competing with map/account actions. */
 body:has(.journey-composer-backdrop.is-globe-picking) .living-atlas-globe__controls,
 body:has(.journey-composer-backdrop.is-globe-picking) .account-dock {
+  visibility: hidden;
   opacity: 0;
   pointer-events: none;
 }
@@ -4465,6 +4466,28 @@ body:has(.journey-composer-backdrop.is-globe-picking) .account-dock {
 
   .living-atlas-globe__pick-label-compact {
     display: inline;
+  }
+
+  @media (max-width: 340px) {
+    .living-atlas-globe.is-detail .living-atlas-globe__controls {
+      grid-template-columns: 44px 88px 44px;
+      justify-content: start;
+    }
+
+    .living-atlas-globe__mode,
+    .living-atlas-globe__pick {
+      width: 44px;
+      min-width: 44px;
+      padding: 0;
+      display: grid;
+      place-items: center;
+    }
+
+    .living-atlas-globe__mode > span,
+    .living-atlas-globe__pick-label-full,
+    .living-atlas-globe__pick-label-compact {
+      display: none;
+    }
   }
 
   .living-atlas-globe__mode-note {

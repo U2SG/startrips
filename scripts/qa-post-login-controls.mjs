@@ -273,6 +273,7 @@ async function verifyAccountDock() {
     await page.locator(".living-atlas__active").waitFor({ state: "visible" });
 
     for (const [label, width, height, mobile] of [
+      ["mobile-narrow", 320, 800, true],
       ["mobile-compact", 360, 800, true],
       ["mobile", 390, 844, true],
       ["tablet", 768, 1024, false],
@@ -335,6 +336,7 @@ async function verifyAccountDock() {
     await page.locator(".account-dock__tab").waitFor({ state: "visible" });
 
     for (const [label, width, height, mobile] of [
+      ["mobile-narrow", 320, 800, true],
       ["mobile-compact", 360, 800, true],
       ["mobile", 390, 844, true],
       ["tablet", 768, 1024, false],
@@ -374,6 +376,7 @@ async function verifyAccountDock() {
               height: Math.round(rect.height),
             };
           }),
+          modeTextVisible: getComputedStyle(document.querySelector(".living-atlas-globe__mode > span")).display !== "none",
           compactPickVisible: getComputedStyle(document.querySelector(".living-atlas-globe__pick-label-compact")).display !== "none",
           overflowX: Math.max(0, document.documentElement.scrollWidth - innerWidth),
           overflowY: Math.max(0, document.documentElement.scrollHeight - innerHeight),
@@ -387,7 +390,8 @@ async function verifyAccountDock() {
         || metrics.overflowY > 0
         || metrics.buttons.some((button) => button.height < minimumButtonHeight)
         || (mobile && metrics.controls.height > 52)
-        || (mobile && !metrics.compactPickVisible);
+        || (mobile && width > 340 && !metrics.compactPickVisible)
+        || (mobile && width <= 340 && (metrics.modeTextVisible || metrics.compactPickVisible));
       results.push({
         name: `globe-controls-${label}`,
         ...metrics,
@@ -413,19 +417,46 @@ async function verifyAccountDock() {
       const controlsStyle = getComputedStyle(controls);
       const accountStyle = getComputedStyle(account);
       return {
+        controlsVisibility: controlsStyle.visibility,
         controlsOpacity: controlsStyle.opacity,
         controlsPointerEvents: controlsStyle.pointerEvents,
+        accountVisibility: accountStyle.visibility,
         accountOpacity: accountStyle.opacity,
         accountPointerEvents: accountStyle.pointerEvents,
       };
     });
-    const invalidPickState = Number(focusedPickState.controlsOpacity) > 0.01
+    await page.evaluate(() => {
+      const before = document.createElement("button");
+      before.type = "button";
+      before.dataset.qaFocusBefore = "true";
+      before.textContent = "before";
+      const after = document.createElement("button");
+      after.type = "button";
+      after.dataset.qaFocusAfter = "true";
+      after.textContent = "after";
+      document.body.prepend(before);
+      document.body.append(after);
+      before.focus();
+    });
+    await page.keyboard.press("Tab");
+    const keyboardSkippedHiddenUtilities = await page.evaluate(() => (
+      document.activeElement?.getAttribute("data-qa-focus-after") === "true"
+    ));
+    await page.evaluate(() => {
+      document.querySelector('[data-qa-focus-before="true"]')?.remove();
+      document.querySelector('[data-qa-focus-after="true"]')?.remove();
+    });
+    const invalidPickState = focusedPickState.controlsVisibility !== "hidden"
+      || Number(focusedPickState.controlsOpacity) > 0.01
       || focusedPickState.controlsPointerEvents !== "none"
+      || focusedPickState.accountVisibility !== "hidden"
       || Number(focusedPickState.accountOpacity) > 0.01
-      || focusedPickState.accountPointerEvents !== "none";
+      || focusedPickState.accountPointerEvents !== "none"
+      || !keyboardSkippedHiddenUtilities;
     results.push({
       name: "globe-pick-focused-state",
       ...focusedPickState,
+      keyboardSkippedHiddenUtilities,
       failed: invalidPickState,
     });
     if (invalidPickState) failed = true;
