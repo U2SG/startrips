@@ -1,0 +1,64 @@
+name: merge-readiness
+
+on:
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - edited
+      - labeled
+      - unlabeled
+      - ready_for_review
+      - converted_to_draft
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  merge-readiness:
+    name: merge-readiness
+    runs-on: ubuntu-latest
+    steps:
+      - name: Defer stacked PRs until they target main
+        if: github.event.pull_request.base.ref != 'main'
+        run: |
+          echo "This PR targets ${{ github.event.pull_request.base.ref }}; merge readiness is enforced after retargeting to main."
+
+      - name: Verify explicit merge readiness
+        if: github.event.pull_request.base.ref == 'main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          IS_DRAFT: ${{ github.event.pull_request.draft }}
+          HAS_MERGE_READY: ${{ contains(github.event.pull_request.labels.*.name, 'merge-ready') }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$IS_DRAFT" == "true" ]]; then
+            echo "::error::Draft pull requests are not merge-ready."
+            exit 1
+          fi
+
+          if [[ "$HAS_MERGE_READY" != "true" ]]; then
+            echo "::error::Add the merge-ready label only after final review and CI verification."
+            exit 1
+          fi
+
+          owner="${GH_REPO%/*}"
+          repo="${GH_REPO#*/}"
+          unresolved=$(gh api graphql \
+            -f query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved}}}}}' \
+            -F owner="$owner" \
+            -F repo="$repo" \
+            -F number="$PR_NUMBER" \
+            --jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false)] | length')
+
+          if [[ "$unresolved" != "0" ]]; then
+            echo "::error::$unresolved unresolved review conversation(s) remain. Resolve them, then re-apply merge-ready."
+            exit 1
+          fi
+
+          echo "merge-ready is present and all review conversations are resolved."
