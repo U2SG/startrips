@@ -4,6 +4,8 @@ import {
   buildPlaybackSteps,
   initialPlaybackState,
   playbackReducer,
+  playbackCameraTargetForStep,
+  playbackCameraTargetKey,
   playbackMediaForPoint,
   routePointAngularDistance,
   stepDurationMs,
@@ -118,6 +120,37 @@ describe("buildPlaybackSteps (#19)", () => {
     const steps = buildPlaybackSteps(silent);
     expect(steps.filter((step) => step.kind === "stop")).toHaveLength(2);
     expect(steps.some((step) => step.kind === "media")).toBe(false);
+  });
+});
+
+
+
+describe("playback camera ownership", () => {
+  it("keeps intro and outro on the whole Journey route", () => {
+    expect(playbackCameraTargetForStep({ kind: "intro" })).toEqual({ kind: "route" });
+    expect(playbackCameraTargetForStep({ kind: "outro" })).toEqual({ kind: "route" });
+  });
+
+  it("gives travel, stop, and media to the relevant route point", () => {
+    expect(playbackCameraTargetForStep({ kind: "travel", to: 1 }))
+      .toEqual({ kind: "point", pointIndex: 1 });
+    expect(playbackCameraTargetForStep({ kind: "stop", pointIndex: 1, media: [] }))
+      .toEqual({ kind: "point", pointIndex: 1 });
+    expect(playbackCameraTargetForStep({ kind: "media", pointIndex: 1, mediaIndex: 0 }))
+      .toEqual({ kind: "point", pointIndex: 1 });
+  });
+
+  it("uses one stable camera key across stop-to-media chapters at the same point", () => {
+    const stopTarget = playbackCameraTargetForStep({ kind: "stop", pointIndex: 0, media: [] });
+    const mediaTarget = playbackCameraTargetForStep({ kind: "media", pointIndex: 0, mediaIndex: 0 });
+    expect(stopTarget).not.toBeNull();
+    expect(mediaTarget).not.toBeNull();
+    expect(playbackCameraTargetKey(stopTarget!)).toBe("point:0");
+    expect(playbackCameraTargetKey(mediaTarget!)).toBe("point:0");
+  });
+
+  it("returns no camera command when playback has no current step", () => {
+    expect(playbackCameraTargetForStep(undefined)).toBeNull();
   });
 });
 

@@ -23,6 +23,7 @@ import {
   type JourneySaveResult,
 } from "./JourneyComposer";
 import { JourneyPlaybackOverlay } from "./JourneyPlaybackOverlay";
+import type { PlaybackCameraTarget } from "./journeyPlayback";
 import { JourneyStory } from "./JourneyStory";
 import {
   cachedSoundtrackRead,
@@ -161,6 +162,15 @@ function JourneyCardMedia({
       <figcaption>{String(journeyVisualMedia(journey).length).padStart(2, "0")} MEDIA</figcaption>
     </figure>
   );
+}
+
+export function playbackFocusPointForCameraTarget(
+  journey: Journey | null,
+  target: PlaybackCameraTarget,
+): { lat: number; lon: number } | null {
+  if (target.kind === "route") return null;
+  const point = journey?.routePoints[target.pointIndex];
+  return point ? { lat: point.latitude, lon: point.longitude } : null;
 }
 
 export function LivingAtlasApp({ lightweightGlobe = false }: { lightweightGlobe?: boolean } = {}) {
@@ -436,9 +446,9 @@ export function LivingAtlasApp({ lightweightGlobe = false }: { lightweightGlobe?
       return;
     }
     setPlaybackJourneyId(journeyId);
-    setPlaybackFocusPoint(journey?.routePoints[0]
-      ? { lat: journey.routePoints[0].latitude, lon: journey.routePoints[0].longitude }
-      : null);
+    // Intro owns a whole-route framing. Point focus begins only when the
+    // playback director advances into a point-owned chapter.
+    setPlaybackFocusPoint(null);
   }
 
   function startGlobePick(accept: (point: GlobePointPick) => void) {
@@ -709,12 +719,14 @@ export function LivingAtlasApp({ lightweightGlobe = false }: { lightweightGlobe?
             setPlaybackJourneyId(null);
             setPlaybackFocusPoint(null);
           }}
-          onFocusRoutePoint={(pointIndex) => {
-            const journey = journeys.find((candidate) => candidate.id === playbackJourneyId);
-            const point = journey?.routePoints[pointIndex];
-            if (point) {
-              setPlaybackFocusPoint({ lat: point.latitude, lon: point.longitude });
-            }
+          onCameraTargetChange={(target) => {
+            const journey = journeys.find((candidate) => candidate.id === playbackJourneyId) ?? null;
+            const nextFocus = playbackFocusPointForCameraTarget(journey, target);
+            setPlaybackFocusPoint((current) => (
+              current?.lat === nextFocus?.lat && current?.lon === nextFocus?.lon
+                ? current
+                : nextFocus
+            ));
           }}
           initialSoundtrackRead={(() => {
             const target = journeys.find((journey) => journey.id === playbackJourneyId);

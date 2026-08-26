@@ -8,7 +8,11 @@ vi.mock("../auth/AuthGateway", () => ({
 }));
 
 import { readFileSync } from "node:fs";
-import { globeFocusState, playbackEntryNeedsPreparation } from "./LivingAtlasApp";
+import {
+  globeFocusState,
+  playbackEntryNeedsPreparation,
+  playbackFocusPointForCameraTarget,
+} from "./LivingAtlasApp";
 import { playbackMediaGate } from "./JourneyPlaybackOverlay";
 import type { Journey } from "./types";
 
@@ -47,6 +51,44 @@ const playbackJourney: Journey = {
   routePoints: [],
   media: [],
 };
+
+
+
+describe("playbackFocusPointForCameraTarget", () => {
+  const journeyWithPoints: Journey = {
+    ...playbackJourney,
+    routePoints: [{
+      id: "point-0",
+      journeyId: playbackJourney.id,
+      sortOrder: 0,
+      latitude: 22.5431,
+      longitude: 114.0579,
+      label: "Shenzhen",
+      isStop: true,
+      occurredAt: null,
+      note: null,
+      createdAt: "2026-08-25T00:00:00.000Z",
+    }],
+  };
+
+  it("releases point focus for intro/outro route framing", () => {
+    expect(playbackFocusPointForCameraTarget(journeyWithPoints, { kind: "route" })).toBeNull();
+  });
+
+  it("maps point camera ownership to the route point coordinates", () => {
+    expect(playbackFocusPointForCameraTarget(
+      journeyWithPoints,
+      { kind: "point", pointIndex: 0 },
+    )).toEqual({ lat: 22.5431, lon: 114.0579 });
+  });
+
+  it("fails closed for a missing route point", () => {
+    expect(playbackFocusPointForCameraTarget(
+      journeyWithPoints,
+      { kind: "point", pointIndex: 4 },
+    )).toBeNull();
+  });
+});
 
 describe("playbackEntryNeedsPreparation (PR #24 review)", () => {
   it("starts a silent journey immediately instead of waiting for soundtrack preparation", () => {
