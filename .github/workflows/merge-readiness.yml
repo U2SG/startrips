@@ -1,0 +1,134 @@
+name: merge-readiness
+
+on:
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - edited
+      - labeled
+      - unlabeled
+      - ready_for_review
+      - converted_to_draft
+  pull_request_review:
+    types: [submitted, edited, dismissed]
+  pull_request_review_comment:
+    types: [created, edited, deleted]
+
+permissions:
+  contents: read
+  checks: read
+  statuses: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  merge-readiness-controller:
+    name: merge-readiness-controller
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      STATUS_TARGET_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Defer stacked PRs until they target main
+        if: github.event.pull_request.base.ref != 'main'
+        run: |
+          echo "This PR targets ${{ github.event.pull_request.base.ref }}; merge readiness is enforced after retargeting to main."
+
+      - name: Invalidate stale sign-off
+        if: >-
+          github.event.pull_request.base.ref == 'main' &&
+          !(github.event_name == 'pull_request' &&
+            github.event.action == 'labeled' &&
+            github.event.label.name == 'merge-ready')
+        env:
+          HAS_MERGE_READY: ${{ contains(github.event.pull_request.labels.*.name, 'merge-ready') }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$HAS_MERGE_READY" == "true" ]]; then
+            gh api \
+              --method DELETE \
+              "repos/$GH_REPO/issues/$PR_NUMBER/labels/merge-ready" \
+              --silent
+            echo "Removed stale merge-ready sign-off."
+          fi
+
+          gh api \
+            --method POST \
+            "repos/$GH_REPO/statuses/$HEAD_SHA" \
+            -f state=pending \
+            -f context=merge-readiness \
+            -f description='Final review/CI sign-off required' \
+            -f target_url="$STATUS_TARGET_URL" \
+            --silent
+
+          echo "merge-readiness is pending until merge-ready is re-applied as the final action."
+
+      - name: Verify explicit merge readiness
+        if: >-
+          github.event.pull_request.base.ref == 'main' &&
+          github.event_name == 'pull_request' &&
+          github.event.action == 'labeled' &&
+          github.event.label.name == 'merge-ready'
+        env:
+          IS_DRAFT: ${{ github.event.pull_request.draft }}
+        run: |
+          set -euo pipefail
+
+          reject_gate() {
+            local description="$1"
+            gh api \
+              --method POST \
+              "repos/$GH_REPO/statuses/$HEAD_SHA" \
+              -f state=failure \
+              -f context=merge-readiness \
+              -f description="$description" \
+              -f target_url="$STATUS_TARGET_URL" \
+              --silent
+            gh api \
+              --method DELETE \
+              "repos/$GH_REPO/issues/$PR_NUMBER/labels/merge-ready" \
+              --silent
+            echo "merge-readiness rejected: $description"
+            exit 0
+          }
+
+          if [[ "$IS_DRAFT" == "true" ]]; then
+            reject_gate 'Draft pull request is not merge-ready'
+          fi
+
+          verify_conclusion=$(gh api \
+            "repos/$GH_REPO/commits/$HEAD_SHA/check-runs" \
+            --jq '[.check_runs[] | select(.name == "verify")] | sort_by(.started_at) | last | .conclusion // "missing"')
+          if [[ "$verify_conclusion" != "success" ]]; then
+            reject_gate "ci / verify is $verify_conclusion"
+          fi
+
+          owner="${GH_REPO%/*}"
+          repo="${GH_REPO#*/}"
+          thread_pages=$(gh api graphql --paginate --slurp \
+            -f query='query($owner:String!,$repo:String!,$number:Int!,$endCursor:String){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewThreads(first:100,after:$endCursor){nodes{isResolved}pageInfo{hasNextPage endCursor}}}}}' \
+            -F owner="$owner" \
+            -F repo="$repo" \
+            -F number="$PR_NUMBER")
+          unresolved=$(jq '[.[].data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false)] | length' <<<"$thread_pages")
+
+          if [[ "$unresolved" != "0" ]]; then
+            reject_gate "$unresolved unresolved review conversation(s) remain"
+          fi
+
+          gh api \
+            --method POST \
+            "repos/$GH_REPO/statuses/$HEAD_SHA" \
+            -f state=success \
+            -f context=merge-readiness \
+            -f description='Final review and CI sign-off complete' \
+            -f target_url="$STATUS_TARGET_URL" \
+            --silent
+
+          echo "merge-ready applies to $HEAD_SHA, ci / verify passed, and all review conversations are resolved."
