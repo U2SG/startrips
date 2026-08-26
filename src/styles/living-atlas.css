@@ -1505,6 +1505,66 @@
   list-style: none;
 }
 
+
+/* #34: shared secondary icon action. The accessible name remains on the
+   button; this tooltip is only a pointer/keyboard-focus description layer. */
+.icon-action-button {
+  position: relative;
+  overflow: visible;
+}
+
+.icon-action-button::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  z-index: 40;
+  left: 50%;
+  bottom: calc(100% + 8px);
+  width: max-content;
+  max-width: min(220px, calc(100vw - 24px));
+  padding: 6px 8px;
+  border: 1px solid rgba(118, 227, 211, 0.28);
+  background: rgba(2, 8, 8, 0.96);
+  color: #d6e0dd;
+  font: 500 9px/1.2 var(--archive-sans);
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transform: translate(-50%, 4px);
+  transition: opacity var(--motion-instant, 120ms) ease, transform var(--motion-instant, 120ms) ease;
+}
+
+.icon-action-button:hover::after,
+.icon-action-button:focus-visible::after {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+/* Story's current-media actions sit against the top edge of an overflow-hidden
+   media stage. Open their tooltip downward so the description remains visible. */
+.journey-story__media-actions .icon-action-button::after {
+  top: calc(100% + 8px);
+  bottom: auto;
+  transform: translate(-50%, -4px);
+}
+
+.journey-story__media-actions .icon-action-button:hover::after,
+.journey-story__media-actions .icon-action-button:focus-visible::after {
+  transform: translate(-50%, 0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .icon-action-button::after {
+    transition: none;
+  }
+}
+
+.icon-action-button.is-destructive-secondary:hover:not(:disabled),
+.icon-action-button.is-destructive-secondary:focus-visible {
+  color: #c28e78;
+  border-color: rgba(194, 142, 120, 0.55);
+}
+
 .journey-story__media-grid > li {
   margin: 0;
 }
@@ -1614,15 +1674,15 @@
 .journey-story__media-grid > li:not(.is-cover) .journey-story__media-tile-set-cover {
   position: static;
   z-index: auto;
-  width: 100%;
-  min-width: 0;
+  justify-self: end;
+  width: 32px;
+  min-width: 32px;
   min-height: 32px;
   height: 32px;
-  aspect-ratio: auto;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0 8px;
+  aspect-ratio: 1;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
   overflow: visible;
   border: 1px solid rgba(200, 255, 61, 0.22);
   background: rgba(2, 8, 8, 0.72);
@@ -1945,11 +2005,13 @@
 
 .journey-story__media-set-cover {
   flex: 0 0 auto;
+  width: 40px;
+  min-width: 40px;
+  height: 40px;
   min-height: 40px;
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  padding: 0 12px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
   border: 1px solid rgba(200, 255, 61, 0.32);
   background: rgba(2, 8, 8, 0.82);
   color: var(--atlas-acid);
@@ -3613,6 +3675,16 @@
   white-space: nowrap;
 }
 
+.journey-media-fields__actions .icon-action-button {
+  width: 40px;
+  min-width: 40px;
+  height: 40px;
+  min-height: 40px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+}
+
 .journey-composer__route-tools {
   padding: 0;
   border: 0;
@@ -4791,6 +4863,18 @@ body:has(.journey-composer-backdrop.is-globe-picking) .account-dock {
     gap: 6px;
   }
 
+  .journey-story__media-set-cover,
+  .journey-story__media-grid > li:not(.is-cover) .journey-story__media-tile-set-cover {
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+    min-height: 44px;
+  }
+
+  .journey-story__media-grid > li:not(.is-cover) {
+    grid-template-rows: auto 44px;
+  }
+
   .journey-story__fullscreen-entry {
     top: 66px;
     right: 12px;
@@ -4814,8 +4898,8 @@ body:has(.journey-composer-backdrop.is-globe-picking) .account-dock {
   }
 
   .journey-story__media-order button {
-    width: 40px;
-    height: 40px;
+    width: 44px;
+    height: 44px;
   }
 
   .journey-story__media:has(> video) .journey-story__media-nav {
@@ -4953,19 +5037,16 @@ body:has(.journey-composer-backdrop.is-globe-picking) .account-dock {
   }
 
   .journey-media-fields__actions {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    justify-content: stretch;
+    display: flex;
+    justify-content: flex-end;
     gap: 6px;
   }
 
-  .journey-media-fields__actions button {
-    width: 100%;
-    min-width: 0;
-  }
-
-  .journey-media-fields__actions button:only-child {
-    grid-column: 1 / -1;
+  .journey-media-fields__actions .icon-action-button {
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+    min-height: 44px;
   }
 
   .journey-story-fields__dates {

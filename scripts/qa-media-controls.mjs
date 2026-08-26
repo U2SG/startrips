@@ -56,11 +56,11 @@ async function scanButtons(page, rootSelector) {
   }, rootSelector);
 }
 
-async function createMobilePage(path, mediaUrl, { instrumentMedia = false } = {}) {
+async function createQaPage(path, mediaUrl, { instrumentMedia = false, mobile = true, viewport = mobile ? { width: 390, height: 844 } : { width: 1280, height: 800 } } = {}) {
   const page = await browser.newPage({
-    viewport: { width: 390, height: 844 },
-    isMobile: true,
-    hasTouch: true,
+    viewport,
+    isMobile: mobile,
+    hasTouch: mobile,
     deviceScaleFactor: 1,
     reducedMotion: "reduce",
   });
@@ -113,13 +113,59 @@ function record(name, scan, extra = {}) {
 }
 
 try {
-  const story = await createMobilePage("/?qaState=journey-story", onePixelGif);
+  const story = await createQaPage("/?qaState=journey-story", onePixelGif);
   try {
     await story.page.locator(".journey-story").waitFor({ state: "visible" });
     record("story-media", await scanButtons(story.page, ".journey-story"));
 
+    await story.page.getByRole("button", { name: "下一个媒体" }).click();
+    const mobileIconActions = await story.page.evaluate(() => (
+      [...document.querySelectorAll(
+        ".journey-story__media-order .icon-action-button, .journey-story__media-actions .icon-action-button",
+      )].map((button) => {
+        const rect = button.getBoundingClientRect();
+        return {
+          width: Math.round(rect.width),
+          height: Math.round(rect.height),
+          ariaLabel: button.getAttribute("aria-label"),
+          tooltip: button.getAttribute("data-tooltip"),
+          visibleText: button.textContent?.trim() ?? "",
+        };
+      })
+    ));
+    const mobileIconActionsFailed = mobileIconActions.length < 4
+      || mobileIconActions.some((button) => button.width < 43 || button.height < 43)
+      || mobileIconActions.some((button) => !button.ariaLabel || !button.tooltip || button.visibleText !== "");
+    checks.push({
+      name: "story-mobile-icon-actions",
+      actions: mobileIconActions,
+      failed: mobileIconActionsFailed,
+    });
+    if (mobileIconActionsFailed) failed = true;
+
     await story.page.getByRole("button", { name: "全部照片" }).click();
     record("story-overview", await scanButtons(story.page, ".journey-story"));
+    const mobileCoverActions = await story.page.evaluate(() => (
+      [...document.querySelectorAll(".journey-story__media-tile-set-cover")].map((button) => {
+        const rect = button.getBoundingClientRect();
+        return {
+          width: Math.round(rect.width),
+          height: Math.round(rect.height),
+          ariaLabel: button.getAttribute("aria-label"),
+          tooltip: button.getAttribute("data-tooltip"),
+          visibleText: button.textContent?.trim() ?? "",
+        };
+      })
+    ));
+    const mobileCoverActionsFailed = mobileCoverActions.length < 1
+      || mobileCoverActions.some((button) => button.width < 43 || button.height < 43)
+      || mobileCoverActions.some((button) => !button.ariaLabel || button.tooltip !== "设为封面" || button.visibleText !== "");
+    checks.push({
+      name: "story-mobile-cover-actions",
+      actions: mobileCoverActions,
+      failed: mobileCoverActionsFailed,
+    });
+    if (mobileCoverActionsFailed) failed = true;
 
     await story.page.getByRole("button", { name: "返回单张" }).click();
     await story.page.getByRole("button", { name: "删除这段媒体" }).click();
@@ -144,7 +190,95 @@ try {
     await story.page.close();
   }
 
-  const playback = await createMobilePage("/?qaState=journey-playback", tinyVideo, { instrumentMedia: true });
+  const storyDesktop = await createQaPage("/?qaState=journey-story", onePixelGif, { mobile: false });
+  try {
+    await storyDesktop.page.locator(".journey-story").waitFor({ state: "visible" });
+    await storyDesktop.page.getByRole("button", { name: "下一个媒体" }).click();
+    const coverAction = storyDesktop.page.getByRole("button", { name: "将当前媒体设为封面" });
+    await coverAction.hover();
+    await storyDesktop.page.waitForFunction(() => {
+      const button = document.querySelector(".journey-story__media-set-cover");
+      return button && Number(getComputedStyle(button, "::after").opacity) >= 0.9;
+    });
+    const hoverTooltip = await coverAction.evaluate((button) => {
+      const stage = button.closest(".journey-story__media");
+      const buttonRect = button.getBoundingClientRect();
+      const stageRect = stage?.getBoundingClientRect();
+      const tooltipStyle = getComputedStyle(button, "::after");
+      const tooltipHeight = Number.parseFloat(tooltipStyle.height);
+      const tooltipTop = buttonRect.bottom + 8;
+      const tooltipBottom = tooltipTop + tooltipHeight
+        + Number.parseFloat(tooltipStyle.paddingTop)
+        + Number.parseFloat(tooltipStyle.paddingBottom)
+        + Number.parseFloat(tooltipStyle.borderTopWidth)
+        + Number.parseFloat(tooltipStyle.borderBottomWidth);
+      return {
+        opacity: Number(tooltipStyle.opacity),
+        content: tooltipStyle.content,
+        placement: tooltipStyle.top !== "auto" ? "below" : "above",
+        stageTop: stageRect ? Math.round(stageRect.top) : null,
+        stageBottom: stageRect ? Math.round(stageRect.bottom) : null,
+        tooltipTop: Math.round(tooltipTop),
+        tooltipBottom: Math.round(tooltipBottom),
+        fullyInsideStage: Boolean(stageRect)
+          && tooltipTop >= stageRect.top
+          && tooltipBottom <= stageRect.bottom,
+      };
+    });
+    await coverAction.focus();
+    await storyDesktop.page.keyboard.press("Shift+Tab");
+    await storyDesktop.page.keyboard.press("Tab");
+    await storyDesktop.page.waitForFunction(() => {
+      const button = document.querySelector(".journey-story__media-set-cover");
+      return button === document.activeElement
+        && button.matches(":focus-visible")
+        && Number(getComputedStyle(button, "::after").opacity) >= 0.9;
+    });
+    const focusTooltip = await coverAction.evaluate((button) => {
+      const stage = button.closest(".journey-story__media");
+      const buttonRect = button.getBoundingClientRect();
+      const stageRect = stage?.getBoundingClientRect();
+      const tooltipStyle = getComputedStyle(button, "::after");
+      const tooltipHeight = Number.parseFloat(tooltipStyle.height);
+      const tooltipTop = buttonRect.bottom + 8;
+      const tooltipBottom = tooltipTop + tooltipHeight
+        + Number.parseFloat(tooltipStyle.paddingTop)
+        + Number.parseFloat(tooltipStyle.paddingBottom)
+        + Number.parseFloat(tooltipStyle.borderTopWidth)
+        + Number.parseFloat(tooltipStyle.borderBottomWidth);
+      return {
+        focused: document.activeElement === button,
+        focusVisible: button.matches(":focus-visible"),
+        opacity: Number(tooltipStyle.opacity),
+        content: tooltipStyle.content,
+        placement: tooltipStyle.top !== "auto" ? "below" : "above",
+        fullyInsideStage: Boolean(stageRect)
+          && tooltipTop >= stageRect.top
+          && tooltipBottom <= stageRect.bottom,
+      };
+    });
+    const desktopTooltipFailed = hoverTooltip.opacity < 0.9
+      || !hoverTooltip.content.includes("设为封面")
+      || hoverTooltip.placement !== "below"
+      || !hoverTooltip.fullyInsideStage
+      || !focusTooltip.focused
+      || !focusTooltip.focusVisible
+      || focusTooltip.opacity < 0.9
+      || !focusTooltip.content.includes("设为封面")
+      || focusTooltip.placement !== "below"
+      || !focusTooltip.fullyInsideStage;
+    checks.push({
+      name: "story-icon-action-tooltip-hover-focus",
+      hoverTooltip,
+      focusTooltip,
+      failed: desktopTooltipFailed,
+    });
+    if (desktopTooltipFailed) failed = true;
+  } finally {
+    await storyDesktop.page.close();
+  }
+
+  const playback = await createQaPage("/?qaState=journey-playback", tinyVideo, { instrumentMedia: true });
   try {
     await playback.page.locator(".journey-playback").waitFor({ state: "visible" });
     const next = playback.page.getByRole("button", { name: "下一个章节" });
