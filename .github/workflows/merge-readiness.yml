@@ -16,6 +16,12 @@ on:
   pull_request_review_comment:
     types: [created, edited, deleted]
 
+concurrency:
+  # One readiness state machine per PR. Never allow an older sign-off run and a
+  # newer invalidation run to write the same commit-status context concurrently.
+  group: merge-readiness-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
   checks: read
