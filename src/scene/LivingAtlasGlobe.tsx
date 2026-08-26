@@ -11,6 +11,77 @@ const EARTH_LOAD_TIMEOUT_MS = 12_000;
 
 type EarthMode = "particle" | "detail";
 
+type LivingAtlasGlobeControlsProps = {
+  detailMode: boolean;
+  transitionTarget: EarthMode | null;
+  detailLanguage: DetailedEarthLanguage;
+  transitionLabel: string;
+  onModeToggle: () => void;
+  onDetailLanguageChange: (language: DetailedEarthLanguage) => void;
+  onPickRequest?: () => void;
+};
+
+export function LivingAtlasGlobeControls({
+  detailMode,
+  transitionTarget,
+  detailLanguage,
+  transitionLabel,
+  onModeToggle,
+  onDetailLanguageChange,
+  onPickRequest,
+}: LivingAtlasGlobeControlsProps) {
+  return (
+    <div className="living-atlas-globe__controls">
+      <button
+        type="button"
+        className="living-atlas-globe__mode"
+        onClick={onModeToggle}
+        aria-label={transitionTarget ? transitionLabel : detailMode ? "返回粒子地球" : "深入真实地图"}
+        aria-pressed={detailMode}
+        disabled={Boolean(transitionTarget)}
+      >
+        {detailMode ? <IconWorld size={16} stroke={1.25} aria-hidden="true" /> : <IconMap2 size={16} stroke={1.25} aria-hidden="true" />}
+        <span>{transitionTarget ? transitionLabel : detailMode ? "返回粒子地球" : "深入真实地图"}</span>
+        <small>{detailMode ? "ART GLOBE" : "REGION MAP"}</small>
+      </button>
+
+      {detailMode && !transitionTarget ? (
+        <div className="living-atlas-globe__language" role="group" aria-label="地图语言">
+          <button
+            type="button"
+            className={detailLanguage === "zh" ? "is-active" : ""}
+            onClick={() => onDetailLanguageChange("zh")}
+            aria-pressed={detailLanguage === "zh"}
+          >
+            中文
+          </button>
+          <button
+            type="button"
+            className={detailLanguage === "bilingual" ? "is-active" : ""}
+            onClick={() => onDetailLanguageChange("bilingual")}
+            aria-pressed={detailLanguage === "bilingual"}
+          >
+            双语
+          </button>
+        </div>
+      ) : null}
+
+      {detailMode && !transitionTarget && onPickRequest ? (
+        <button
+          type="button"
+          className="living-atlas-globe__pick"
+          onClick={onPickRequest}
+          aria-label="在地图上取点加入旅程"
+        >
+          <IconMapPin size={16} stroke={1.25} aria-hidden="true" />
+          <span className="living-atlas-globe__pick-label-full">在地图上取点</span>
+          <span className="living-atlas-globe__pick-label-compact">取点</span>
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
 type LivingAtlasGlobeProps = {
   focusPoint?: { lat: number; lon: number } | null;
   focusColor?: string;
@@ -171,52 +242,15 @@ export function LivingAtlasGlobe({
         </div>
       ) : null}
 
-      <div className="living-atlas-globe__controls">
-        <button
-          type="button"
-          className="living-atlas-globe__mode"
-          onClick={() => beginTransition(detailMode ? "particle" : "detail")}
-          aria-pressed={detailMode}
-          disabled={Boolean(transitionTarget)}
-        >
-          {detailMode ? <IconWorld size={16} stroke={1.25} aria-hidden="true" /> : <IconMap2 size={16} stroke={1.25} aria-hidden="true" />}
-          <span>{transitionTarget ? transitionLabel : detailMode ? "返回粒子地球" : "深入真实地图"}</span>
-          <small>{detailMode ? "ART GLOBE" : "REGION MAP"}</small>
-        </button>
-
-        {detailMode && !transitionTarget ? (
-          <div className="living-atlas-globe__language" role="group" aria-label="地图语言">
-            <button
-              type="button"
-              className={detailLanguage === "zh" ? "is-active" : ""}
-              onClick={() => setDetailLanguage("zh")}
-              aria-pressed={detailLanguage === "zh"}
-            >
-              中文
-            </button>
-            <button
-              type="button"
-              className={detailLanguage === "bilingual" ? "is-active" : ""}
-              onClick={() => setDetailLanguage("bilingual")}
-              aria-pressed={detailLanguage === "bilingual"}
-            >
-              双语
-            </button>
-          </div>
-        ) : null}
-
-        {detailMode && !transitionTarget && onPickRequest ? (
-          <button
-            type="button"
-            className="living-atlas-globe__pick"
-            onClick={onPickRequest}
-            aria-label="在地图上取点加入旅程"
-          >
-            <IconMapPin size={16} stroke={1.25} aria-hidden="true" />
-            在地图上取点
-          </button>
-        ) : null}
-      </div>
+      <LivingAtlasGlobeControls
+        detailMode={detailMode}
+        transitionTarget={transitionTarget}
+        detailLanguage={detailLanguage}
+        transitionLabel={transitionLabel}
+        onModeToggle={() => beginTransition(detailMode ? "particle" : "detail")}
+        onDetailLanguageChange={setDetailLanguage}
+        onPickRequest={onPickRequest}
+      />
 
       <div className="living-atlas-globe__mode-note" aria-hidden="true">
         {transitionTarget

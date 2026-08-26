@@ -856,7 +856,7 @@ body:has(.living-atlas) .account-dock button {
 @media (max-width: 760px) {
   body:has(.living-atlas) .account-dock {
     top: 66px;
-    right: 64px;
+    right: 10px;
   }
   body:has(.living-atlas) .account-dock__panel {
     width: min(300px, calc(100vw - 20px));

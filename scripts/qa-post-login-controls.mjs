@@ -273,10 +273,13 @@ async function verifyAccountDock() {
     await page.locator(".living-atlas__active").waitFor({ state: "visible" });
 
     for (const [label, width, height, mobile] of [
+      ["mobile-narrow", 320, 800, true],
+      ["mobile-compact", 360, 800, true],
       ["mobile", 390, 844, true],
       ["tablet", 768, 1024, false],
     ]) {
       await page.setViewportSize({ width, height });
+      await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
       const tabNavOverlap = await page.evaluate(() => {
         const tab = document.querySelector(".account-dock__tab")?.getBoundingClientRect();
         const nav = document.querySelector(".living-atlas__header nav")?.getBoundingClientRect();
@@ -326,6 +329,138 @@ async function verifyAccountDock() {
       await page.locator(".account-dock__tab").click();
       await panel.waitFor({ state: "hidden" });
     }
+
+    await page.goto(`${origin}/?qaState=globe-controls-gateway&qaLite=1`, { waitUntil: "domcontentloaded" });
+    const globeControls = page.locator(".living-atlas-globe__controls");
+    await globeControls.waitFor({ state: "visible" });
+    await page.locator(".account-dock__tab").waitFor({ state: "visible" });
+
+    for (const [label, width, height, mobile] of [
+      ["mobile-narrow", 320, 800, true],
+      ["mobile-compact", 360, 800, true],
+      ["mobile", 390, 844, true],
+      ["tablet", 768, 1024, false],
+    ]) {
+      await page.setViewportSize({ width, height });
+      // Chromium can report one-frame-stale media-query geometry immediately
+      // after a viewport resize; wait for style + layout to settle.
+      await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      const metrics = await page.evaluate(() => {
+        const controls = document.querySelector(".living-atlas-globe__controls");
+        const account = document.querySelector(".account-dock__tab");
+        if (!controls || !account) return null;
+        const controlsRect = controls.getBoundingClientRect();
+        const accountRect = account.getBoundingClientRect();
+        const overlapX = Math.max(0, Math.min(controlsRect.right, accountRect.right) - Math.max(controlsRect.left, accountRect.left));
+        const overlapY = Math.max(0, Math.min(controlsRect.bottom, accountRect.bottom) - Math.max(controlsRect.top, accountRect.top));
+        return {
+          controls: {
+            x: Math.round(controlsRect.x),
+            y: Math.round(controlsRect.y),
+            width: Math.round(controlsRect.width),
+            height: Math.round(controlsRect.height),
+          },
+          account: {
+            x: Math.round(accountRect.x),
+            y: Math.round(accountRect.y),
+            width: Math.round(accountRect.width),
+            height: Math.round(accountRect.height),
+          },
+          overlapArea: Math.round(overlapX * overlapY),
+          viewportOverflowX: Math.max(0, Math.round(controlsRect.right - innerWidth)) + Math.max(0, Math.round(-controlsRect.left)),
+          buttons: [...controls.querySelectorAll("button")].map((button) => {
+            const rect = button.getBoundingClientRect();
+            return {
+              name: (button.getAttribute("aria-label") || button.textContent || "button").trim().replace(/\s+/g, " "),
+              width: Math.round(rect.width),
+              height: Math.round(rect.height),
+            };
+          }),
+          modeTextVisible: getComputedStyle(document.querySelector(".living-atlas-globe__mode > span")).display !== "none",
+          compactPickVisible: getComputedStyle(document.querySelector(".living-atlas-globe__pick-label-compact")).display !== "none",
+          overflowX: Math.max(0, document.documentElement.scrollWidth - innerWidth),
+          overflowY: Math.max(0, document.documentElement.scrollHeight - innerHeight),
+        };
+      });
+      const minimumButtonHeight = mobile ? 43 : 35;
+      const invalidControls = !metrics
+        || metrics.overlapArea > 0
+        || metrics.viewportOverflowX > 0
+        || metrics.overflowX > 0
+        || metrics.overflowY > 0
+        || metrics.buttons.some((button) => button.height < minimumButtonHeight)
+        || (mobile && metrics.controls.height > 52)
+        || (mobile && width > 340 && !metrics.compactPickVisible)
+        || (mobile && width <= 340 && (metrics.modeTextVisible || metrics.compactPickVisible));
+      results.push({
+        name: `globe-controls-${label}`,
+        ...metrics,
+        minimumButtonHeight,
+        failed: invalidControls,
+      });
+      if (invalidControls) failed = true;
+    }
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.evaluate(() => {
+      const pickState = document.createElement("div");
+      pickState.className = "journey-composer-backdrop is-globe-picking";
+      pickState.dataset.qaPickState = "true";
+      document.body.append(pickState);
+    });
+    // Pointer blocking applies immediately; opacity follows the app's global
+    // transition and needs a short settle before visual-state assertions.
+    await page.waitForTimeout(150);
+    const focusedPickState = await page.evaluate(() => {
+      const controls = document.querySelector(".living-atlas-globe__controls");
+      const account = document.querySelector(".account-dock");
+      const controlsStyle = getComputedStyle(controls);
+      const accountStyle = getComputedStyle(account);
+      return {
+        controlsVisibility: controlsStyle.visibility,
+        controlsOpacity: controlsStyle.opacity,
+        controlsPointerEvents: controlsStyle.pointerEvents,
+        accountVisibility: accountStyle.visibility,
+        accountOpacity: accountStyle.opacity,
+        accountPointerEvents: accountStyle.pointerEvents,
+      };
+    });
+    await page.evaluate(() => {
+      const before = document.createElement("button");
+      before.type = "button";
+      before.dataset.qaFocusBefore = "true";
+      before.textContent = "before";
+      const after = document.createElement("button");
+      after.type = "button";
+      after.dataset.qaFocusAfter = "true";
+      after.textContent = "after";
+      document.body.prepend(before);
+      document.body.append(after);
+      before.focus();
+    });
+    await page.keyboard.press("Tab");
+    const keyboardSkippedHiddenUtilities = await page.evaluate(() => (
+      document.activeElement?.getAttribute("data-qa-focus-after") === "true"
+    ));
+    await page.evaluate(() => {
+      document.querySelector('[data-qa-focus-before="true"]')?.remove();
+      document.querySelector('[data-qa-focus-after="true"]')?.remove();
+    });
+    const invalidPickState = focusedPickState.controlsVisibility !== "hidden"
+      || Number(focusedPickState.controlsOpacity) > 0.01
+      || focusedPickState.controlsPointerEvents !== "none"
+      || focusedPickState.accountVisibility !== "hidden"
+      || Number(focusedPickState.accountOpacity) > 0.01
+      || focusedPickState.accountPointerEvents !== "none"
+      || !keyboardSkippedHiddenUtilities;
+    results.push({
+      name: "globe-pick-focused-state",
+      ...focusedPickState,
+      keyboardSkippedHiddenUtilities,
+      failed: invalidPickState,
+    });
+    if (invalidPickState) failed = true;
+    await page.evaluate(() => document.querySelector('[data-qa-pick-state="true"]')?.remove());
   } finally {
     await page.close();
   }

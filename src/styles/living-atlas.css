@@ -370,6 +370,10 @@
   color: var(--atlas-acid);
 }
 
+.living-atlas-globe__pick-label-compact {
+  display: none;
+}
+
 .living-atlas-globe__mode-note {
   position: absolute;
   z-index: 7;
@@ -3896,6 +3900,16 @@
   opacity: 0;
 }
 
+/* Globe point-picking is a focused interaction state. The map remains active,
+   but utility controls are temporarily removed so the pick hint owns the
+   interaction band without competing with map/account actions. */
+body:has(.journey-composer-backdrop.is-globe-picking) .living-atlas-globe__controls,
+body:has(.journey-composer-backdrop.is-globe-picking) .account-dock {
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+
 @keyframes atlasViewIn {
   from { opacity: 0; transform: scale(1.006); }
   to { opacity: 1; transform: none; }
@@ -4396,22 +4410,84 @@
 
   .living-atlas-globe__controls {
     top: 66px;
+    right: auto;
     left: 10px;
-    max-width: calc(100% - 20px);
+    max-width: calc(100% - 80px);
     gap: 6px;
   }
 
+  .living-atlas-globe.is-detail .living-atlas-globe__controls {
+    right: 70px;
+    max-width: none;
+    display: grid;
+    grid-template-columns: minmax(112px, 1fr) auto auto;
+    align-items: stretch;
+  }
+
   .living-atlas-globe__mode {
+    min-width: 0;
     min-height: 44px;
+    grid-template-columns: 16px minmax(0, auto);
+    gap: 6px;
+    padding: 0 9px;
+    white-space: nowrap;
+  }
+
+  .living-atlas-globe__mode > span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .living-atlas-globe__mode > small {
+    display: none;
   }
 
   .living-atlas-globe__language {
     min-height: 44px;
+    grid-template-columns: repeat(2, 44px);
   }
 
   .living-atlas-globe__language button {
-    min-width: 48px;
-    padding: 0 8px;
+    min-width: 44px;
+    min-height: 44px;
+    padding: 0 6px;
+  }
+
+  .living-atlas-globe__pick {
+    min-width: 0;
+    padding: 0 9px;
+    gap: 6px;
+    white-space: nowrap;
+  }
+
+  .living-atlas-globe__pick-label-full {
+    display: none;
+  }
+
+  .living-atlas-globe__pick-label-compact {
+    display: inline;
+  }
+
+  @media (max-width: 340px) {
+    .living-atlas-globe.is-detail .living-atlas-globe__controls {
+      grid-template-columns: 44px 88px 44px;
+      justify-content: start;
+    }
+
+    .living-atlas-globe__mode,
+    .living-atlas-globe__pick {
+      width: 44px;
+      min-width: 44px;
+      padding: 0;
+      display: grid;
+      place-items: center;
+    }
+
+    .living-atlas-globe__mode > span,
+    .living-atlas-globe__pick-label-full,
+    .living-atlas-globe__pick-label-compact {
+      display: none;
+    }
   }
 
   .living-atlas-globe__mode-note {

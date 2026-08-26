@@ -577,7 +577,11 @@ export function AuthGateway({ children }: { children: ReactNode }) {
   const qaPhase = searchParams.get("qaPhase");
   const qaLite = import.meta.env.DEV && searchParams.get("qaLite") === "1";
   const qaLogin = import.meta.env.DEV && qaState === "login-v3";
-  const qaGateway = import.meta.env.DEV && (qaState === "login-gateway" || qaState === "atlas-gateway");
+  const qaGateway = import.meta.env.DEV && (
+    qaState === "login-gateway"
+    || qaState === "atlas-gateway"
+    || qaState === "globe-controls-gateway"
+  );
   const qaBypass = import.meta.env.DEV && Boolean(qaState) && !qaLogin && !qaGateway;
 
   useEffect(() => {
