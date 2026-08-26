@@ -1540,6 +1540,19 @@
   transform: translate(-50%, 0);
 }
 
+/* Story's current-media actions sit against the top edge of an overflow-hidden
+   media stage. Open their tooltip downward so the description remains visible. */
+.journey-story__media-actions .icon-action-button::after {
+  top: calc(100% + 8px);
+  bottom: auto;
+  transform: translate(-50%, -4px);
+}
+
+.journey-story__media-actions .icon-action-button:hover::after,
+.journey-story__media-actions .icon-action-button:focus-visible::after {
+  transform: translate(-50%, 0);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .icon-action-button::after {
     transition: none;

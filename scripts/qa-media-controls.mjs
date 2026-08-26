@@ -200,10 +200,31 @@ try {
       const button = document.querySelector(".journey-story__media-set-cover");
       return button && Number(getComputedStyle(button, "::after").opacity) >= 0.9;
     });
-    const hoverTooltip = await coverAction.evaluate((button) => ({
-      opacity: Number(getComputedStyle(button, "::after").opacity),
-      content: getComputedStyle(button, "::after").content,
-    }));
+    const hoverTooltip = await coverAction.evaluate((button) => {
+      const stage = button.closest(".journey-story__media");
+      const buttonRect = button.getBoundingClientRect();
+      const stageRect = stage?.getBoundingClientRect();
+      const tooltipStyle = getComputedStyle(button, "::after");
+      const tooltipHeight = Number.parseFloat(tooltipStyle.height);
+      const tooltipTop = buttonRect.bottom + 8;
+      const tooltipBottom = tooltipTop + tooltipHeight
+        + Number.parseFloat(tooltipStyle.paddingTop)
+        + Number.parseFloat(tooltipStyle.paddingBottom)
+        + Number.parseFloat(tooltipStyle.borderTopWidth)
+        + Number.parseFloat(tooltipStyle.borderBottomWidth);
+      return {
+        opacity: Number(tooltipStyle.opacity),
+        content: tooltipStyle.content,
+        placement: tooltipStyle.top !== "auto" ? "below" : "above",
+        stageTop: stageRect ? Math.round(stageRect.top) : null,
+        stageBottom: stageRect ? Math.round(stageRect.bottom) : null,
+        tooltipTop: Math.round(tooltipTop),
+        tooltipBottom: Math.round(tooltipBottom),
+        fullyInsideStage: Boolean(stageRect)
+          && tooltipTop >= stageRect.top
+          && tooltipBottom <= stageRect.bottom,
+      };
+    });
     await coverAction.focus();
     await storyDesktop.page.keyboard.press("Shift+Tab");
     await storyDesktop.page.keyboard.press("Tab");
@@ -213,18 +234,39 @@ try {
         && button.matches(":focus-visible")
         && Number(getComputedStyle(button, "::after").opacity) >= 0.9;
     });
-    const focusTooltip = await coverAction.evaluate((button) => ({
-      focused: document.activeElement === button,
-      focusVisible: button.matches(":focus-visible"),
-      opacity: Number(getComputedStyle(button, "::after").opacity),
-      content: getComputedStyle(button, "::after").content,
-    }));
+    const focusTooltip = await coverAction.evaluate((button) => {
+      const stage = button.closest(".journey-story__media");
+      const buttonRect = button.getBoundingClientRect();
+      const stageRect = stage?.getBoundingClientRect();
+      const tooltipStyle = getComputedStyle(button, "::after");
+      const tooltipHeight = Number.parseFloat(tooltipStyle.height);
+      const tooltipTop = buttonRect.bottom + 8;
+      const tooltipBottom = tooltipTop + tooltipHeight
+        + Number.parseFloat(tooltipStyle.paddingTop)
+        + Number.parseFloat(tooltipStyle.paddingBottom)
+        + Number.parseFloat(tooltipStyle.borderTopWidth)
+        + Number.parseFloat(tooltipStyle.borderBottomWidth);
+      return {
+        focused: document.activeElement === button,
+        focusVisible: button.matches(":focus-visible"),
+        opacity: Number(tooltipStyle.opacity),
+        content: tooltipStyle.content,
+        placement: tooltipStyle.top !== "auto" ? "below" : "above",
+        fullyInsideStage: Boolean(stageRect)
+          && tooltipTop >= stageRect.top
+          && tooltipBottom <= stageRect.bottom,
+      };
+    });
     const desktopTooltipFailed = hoverTooltip.opacity < 0.9
       || !hoverTooltip.content.includes("设为封面")
+      || hoverTooltip.placement !== "below"
+      || !hoverTooltip.fullyInsideStage
       || !focusTooltip.focused
       || !focusTooltip.focusVisible
       || focusTooltip.opacity < 0.9
-      || !focusTooltip.content.includes("设为封面");
+      || !focusTooltip.content.includes("设为封面")
+      || focusTooltip.placement !== "below"
+      || !focusTooltip.fullyInsideStage;
     checks.push({
       name: "story-icon-action-tooltip-hover-focus",
       hoverTooltip,
