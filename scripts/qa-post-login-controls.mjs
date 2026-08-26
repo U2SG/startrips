@@ -409,6 +409,19 @@ async function verifyComposerGlobeRoundTrip() {
     const countBefore = await routeItems().count();
     await trigger.click();
     await page.locator(".journey-globe-pick-hint").waitFor({ state: "visible" });
+    // React can commit the pick hint one frame before Chromium applies the
+    // sibling visibility/inert styles. CI is fast enough to observe that
+    // intermediate frame, so assert the actual interaction state instead of
+    // sampling immediately after the hint appears.
+    await page.waitForFunction(() => {
+      const composer = document.querySelector(".journey-composer");
+      const globeButton = document.querySelector("[data-qa-globe-pick-success]");
+      return composer
+        && getComputedStyle(composer).visibility === "hidden"
+        && globeButton instanceof HTMLElement
+        && !globeButton.closest("[inert]")
+        && !(globeButton instanceof HTMLButtonElement && globeButton.disabled);
+    });
     const picking = await page.evaluate(() => {
       const composer = document.querySelector(".journey-composer");
       const globeButton = document.querySelector("[data-qa-globe-pick-success]");
