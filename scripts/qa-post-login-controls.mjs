@@ -278,6 +278,7 @@ async function verifyAccountDock() {
       ["tablet", 768, 1024, false],
     ]) {
       await page.setViewportSize({ width, height });
+      await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
       const tabNavOverlap = await page.evaluate(() => {
         const tab = document.querySelector(".account-dock__tab")?.getBoundingClientRect();
         const nav = document.querySelector(".living-atlas__header nav")?.getBoundingClientRect();
@@ -339,6 +340,9 @@ async function verifyAccountDock() {
       ["tablet", 768, 1024, false],
     ]) {
       await page.setViewportSize({ width, height });
+      // Chromium can report one-frame-stale media-query geometry immediately
+      // after a viewport resize; wait for style + layout to settle.
+      await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
       const metrics = await page.evaluate(() => {
         const controls = document.querySelector(".living-atlas-globe__controls");
         const account = document.querySelector(".account-dock__tab");
@@ -400,6 +404,9 @@ async function verifyAccountDock() {
       pickState.dataset.qaPickState = "true";
       document.body.append(pickState);
     });
+    // Pointer blocking applies immediately; opacity follows the app's global
+    // transition and needs a short settle before visual-state assertions.
+    await page.waitForTimeout(150);
     const focusedPickState = await page.evaluate(() => {
       const controls = document.querySelector(".living-atlas-globe__controls");
       const account = document.querySelector(".account-dock");
