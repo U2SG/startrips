@@ -12,9 +12,9 @@ For a normal PR targeting `main`:
 4. Add the `merge-ready` label as the final sign-off.
 5. Confirm the `merge-readiness` check is green, then merge.
 
-Removing `merge-ready` immediately makes the readiness check non-green on the next label event. If a readiness run failed because review conversations were still unresolved, resolve them and remove/re-apply the label to re-run the check.
+The readiness workflow automatically removes a stale `merge-ready` sign-off when the PR head changes or new review/review-comment activity occurs. Those events deliberately leave `merge-readiness` red. Resolve the new work, wait for the final `ci / verify` run to pass, and add `merge-ready` again as the last action.
 
-Do not add `merge-ready` before the final CI/review pass. If the head changes after sign-off, treat the previous sign-off as stale: remove the label, review the new head, wait for CI again, and only then re-apply it.
+Do not add `merge-ready` before the final CI/review pass. The readiness check also verifies that `ci / verify` succeeded for the current head and scans every page of review conversations before it turns green.
 
 ## Stacked pull requests
 

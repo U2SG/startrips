@@ -11,10 +11,16 @@ on:
       - unlabeled
       - ready_for_review
       - converted_to_draft
+  pull_request_review:
+    types: [submitted, edited, dismissed]
+  pull_request_review_comment:
+    types: [created, edited, deleted]
 
 permissions:
   contents: read
+  checks: read
   pull-requests: read
+  issues: write
 
 jobs:
   merge-readiness:
@@ -26,14 +32,43 @@ jobs:
         run: |
           echo "This PR targets ${{ github.event.pull_request.base.ref }}; merge readiness is enforced after retargeting to main."
 
-      - name: Verify explicit merge readiness
-        if: github.event.pull_request.base.ref == 'main'
+      - name: Invalidate stale sign-off
+        if: >-
+          github.event.pull_request.base.ref == 'main' &&
+          !(github.event_name == 'pull_request' &&
+            github.event.action == 'labeled' &&
+            github.event.label.name == 'merge-ready')
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          IS_DRAFT: ${{ github.event.pull_request.draft }}
           HAS_MERGE_READY: ${{ contains(github.event.pull_request.labels.*.name, 'merge-ready') }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$HAS_MERGE_READY" == "true" ]]; then
+            gh api \
+              --method DELETE \
+              "repos/$GH_REPO/issues/$PR_NUMBER/labels/merge-ready" \
+              --silent || true
+            echo "Removed stale merge-ready sign-off."
+          fi
+
+          echo "::error::PR head/review state changed. Re-run review + CI, then add merge-ready again as the final action."
+          exit 1
+
+      - name: Verify explicit merge readiness
+        if: >-
+          github.event.pull_request.base.ref == 'main' &&
+          github.event_name == 'pull_request' &&
+          github.event.action == 'labeled' &&
+          github.event.label.name == 'merge-ready'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          IS_DRAFT: ${{ github.event.pull_request.draft }}
         run: |
           set -euo pipefail
 
@@ -42,23 +77,26 @@ jobs:
             exit 1
           fi
 
-          if [[ "$HAS_MERGE_READY" != "true" ]]; then
-            echo "::error::Add the merge-ready label only after final review and CI verification."
+          verify_conclusion=$(gh api \
+            "repos/$GH_REPO/commits/$HEAD_SHA/check-runs" \
+            --jq '[.check_runs[] | select(.name == "verify")] | sort_by(.started_at) | last | .conclusion // "missing"')
+          if [[ "$verify_conclusion" != "success" ]]; then
+            echo "::error::ci / verify is '$verify_conclusion'. Wait for the final head to pass CI, then remove/re-apply merge-ready."
             exit 1
           fi
 
           owner="${GH_REPO%/*}"
           repo="${GH_REPO#*/}"
-          unresolved=$(gh api graphql \
-            -f query='query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved}}}}}' \
+          thread_pages=$(gh api graphql --paginate --slurp \
+            -f query='query($owner:String!,$repo:String!,$number:Int!,$endCursor:String){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewThreads(first:100,after:$endCursor){nodes{isResolved}pageInfo{hasNextPage endCursor}}}}}' \
             -F owner="$owner" \
             -F repo="$repo" \
-            -F number="$PR_NUMBER" \
-            --jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false)] | length')
+            -F number="$PR_NUMBER")
+          unresolved=$(jq '[.[].data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false)] | length' <<<"$thread_pages")
 
           if [[ "$unresolved" != "0" ]]; then
-            echo "::error::$unresolved unresolved review conversation(s) remain. Resolve them, then re-apply merge-ready."
+            echo "::error::$unresolved unresolved review conversation(s) remain. Resolve them, then remove/re-apply merge-ready."
             exit 1
           fi
 
-          echo "merge-ready is present and all review conversations are resolved."
+          echo "merge-ready applies to $HEAD_SHA, ci / verify passed, and all review conversations are resolved."
