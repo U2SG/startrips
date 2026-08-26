@@ -8,7 +8,7 @@ import { JourneyStory } from "./journey/JourneyStory";
 import { JourneyPlaybackOverlay } from "./journey/JourneyPlaybackOverlay";
 import type { Journey, JourneyRoute } from "./journey/types";
 import { ParticleEarthScene } from "./scene/ParticleEarthScene";
-import { LivingAtlasGlobe, LivingAtlasGlobeControls } from "./scene/LivingAtlasGlobe";
+import { LivingAtlasGlobe, LivingAtlasGlobeControls, type LivingAtlasGlobeProps } from "./scene/LivingAtlasGlobe";
 import "./styles/tokens.css";
 import "./app.css";
 import "./styles/archive-shell.css";
@@ -132,8 +132,40 @@ function JourneyRoutesQaPreview() {
   );
 }
 
+const appQaPickPoints = [
+  { latitude: 37.76942, longitude: -122.48621 },
+  { latitude: 34.01129, longitude: -118.49231 },
+  { latitude: 47.60621, longitude: -122.33207 },
+];
+
+function LivingAtlasQaGlobe({ onGlobePointPick, journeyRoutes }: LivingAtlasGlobeProps) {
+  const [pickIndex, setPickIndex] = useState(0);
+  const draftRoute = journeyRoutes.find((route) => route.id === "draft-route-preview") ?? null;
+  return (
+    <div className="living-atlas__qa-globe">
+      {onGlobePointPick ? (
+        <button
+          type="button"
+          data-qa-app-globe-point-pick
+          onClick={() => {
+            const point = appQaPickPoints[pickIndex % appQaPickPoints.length];
+            setPickIndex((current) => current + 1);
+            onGlobePointPick(point);
+          }}
+          style={{ position: "fixed", zIndex: 230, left: 12, bottom: 12 }}
+        >QA 地球点击</button>
+      ) : null}
+      <output
+        data-qa-app-route-preview
+        data-route-points={JSON.stringify(draftRoute?.points ?? [])}
+        style={{ position: "fixed", width: 1, height: 1, overflow: "hidden", opacity: 0 }}
+      >{draftRoute?.points.length ?? 0}</output>
+    </div>
+  );
+}
+
 function LivingAtlasQaPreview() {
-  return <LivingAtlasApp lightweightGlobe />;
+  return <LivingAtlasApp GlobeComponent={LivingAtlasQaGlobe} />;
 }
 
 function LivingAtlasGlobeControlsQaPreview() {
