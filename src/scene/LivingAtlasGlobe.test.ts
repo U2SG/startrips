@@ -2,6 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { LivingAtlasGlobe } from "./LivingAtlasGlobe";
+import { getRouteFocusPhase } from "./ParticleEarthScene";
 
 function markup(storedAmbience: string | null) {
   // A stored preference must not be able to remove the ambience layer, so the
@@ -36,5 +37,17 @@ describe("LivingAtlasGlobe ambience", () => {
   it("ignores a stored preference that used to disable the ambience", () => {
     expect(markup("off")).toContain("living-atlas-ambience__blob-c");
     expect(markup("off")).toContain('data-ambience="on"');
+  });
+});
+
+describe("route focus choreography phase", () => {
+  it("derives flying and settled from route ownership", () => {
+    expect(getRouteFocusPhase(true, true, false)).toBe("flying");
+    expect(getRouteFocusPhase(true, false, false)).toBe("settled");
+  });
+
+  it("keeps zoom release distinct from the idle state", () => {
+    expect(getRouteFocusPhase(false, false, true)).toBe("releasing");
+    expect(getRouteFocusPhase(false, false, false)).toBe("idle");
   });
 });

@@ -259,7 +259,43 @@ button {
 .particle-earth-route.is-style-strands.is-active .particle-earth-route__glow {
   stroke-dasharray: 1200;
   stroke-dashoffset: 1200;
-  animation: motionRouteDraw 980ms var(--motion-ease-in-out-spatial, cubic-bezier(0.65, 0, 0.35, 1)) forwards;
+  animation: motionRouteDraw var(--motion-journey, 980ms) var(--motion-ease-in-out-spatial, cubic-bezier(0.65, 0, 0.35, 1)) forwards;
+}
+
+/* Selection choreography: the globe focus-flight is the Tier-3 lead. While
+   that camera move is in progress, hold the target route in a quiet locator
+   state; removing this override at `settled` starts the existing route draw. */
+.particle-earth-scene[data-route-focus-phase="flying"]
+  .particle-earth-route.is-style-strands.is-active .particle-earth-route__core,
+.particle-earth-scene[data-route-focus-phase="flying"]
+  .particle-earth-route.is-style-strands.is-active .particle-earth-route__glow {
+  animation: none;
+  stroke-dasharray: 1200;
+  stroke-dashoffset: 1200;
+}
+
+.particle-earth-scene[data-route-focus-phase="flying"]
+  .particle-earth-route.is-style-strands.is-active .particle-earth-route__strand-a {
+  opacity: 0.12;
+  animation-play-state: paused;
+}
+
+.particle-earth-scene[data-route-focus-phase="flying"]
+  .particle-earth-route.is-style-strands.is-active .particle-earth-route__strand-b {
+  opacity: 0.07;
+  animation-play-state: paused;
+}
+
+.particle-earth-scene[data-route-focus-phase="flying"]
+  .particle-earth-route.is-style-strands.is-active .particle-earth-route__flow {
+  opacity: 0;
+  animation-play-state: paused;
+}
+
+.particle-earth-scene[data-route-focus-phase="flying"]
+  .particle-earth-route.is-style-strands.is-active .particle-earth-route__point {
+  opacity: 0.34;
+  animation-play-state: paused;
 }
 
 @keyframes motionRouteDraw {
