@@ -1,4 +1,4 @@
-import { StrictMode, useState } from "react";
+import { StrictMode, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { AuthGateway } from "./auth/AuthGateway";
@@ -160,20 +160,74 @@ function LivingAtlasGlobeControlsQaPreview() {
   );
 }
 
+const composerQaPickPoints = [
+  { latitude: 37.76942, longitude: -122.48621 },
+  { latitude: 34.01129, longitude: -118.49231 },
+  { latitude: 47.60621, longitude: -122.33207 },
+];
+
 function JourneyComposerQaPreview() {
   const editMode = new URLSearchParams(window.location.search).get("qaMode") === "edit";
   const [open, setOpen] = useState(true);
+  const [pickReady, setPickReady] = useState(false);
+  const [routePreview, setRoutePreview] = useState<JourneyRoute | null>(null);
+  const pickIndexRef = useRef(0);
+  const pendingPickRef = useRef<((point: { latitude: number; longitude: number }) => void) | null>(null);
+  const lastPickRef = useRef<((point: { latitude: number; longitude: number }) => void) | null>(null);
+
+  function completeQaPick() {
+    const accept = pendingPickRef.current;
+    if (!accept) return;
+    pendingPickRef.current = null;
+    setPickReady(false);
+    const point = composerQaPickPoints[pickIndexRef.current % composerQaPickPoints.length];
+    pickIndexRef.current += 1;
+    accept(point);
+  }
+
   return (
     <main className="living-atlas">
       <div className="living-atlas__globe journey-story-qa__backdrop" aria-hidden="true" />
+      <button
+        type="button"
+        data-qa-globe-pick-success
+        disabled={!pickReady}
+        onClick={completeQaPick}
+        style={{ position: "fixed", zIndex: 245, left: 12, bottom: 12 }}
+      >QA 地球取点</button>
+      <button
+        type="button"
+        data-qa-globe-pick-replay
+        onClick={() => lastPickRef.current?.({ latitude: 51.5, longitude: -0.12 })}
+        style={{ position: "fixed", zIndex: 245, left: 120, bottom: 12 }}
+      >QA 重放旧取点</button>
+      <output
+        data-qa-route-preview
+        data-route-id={routePreview?.id ?? ""}
+        data-route-points={JSON.stringify(routePreview?.points ?? [])}
+        style={{ position: "fixed", width: 1, height: 1, overflow: "hidden", opacity: 0 }}
+      >{routePreview?.points.length ?? 0}</output>
       <button type="button" data-qa-composer-reopen onClick={() => setOpen(true)}>重新打开编辑器</button>
       {open ? (
         <JourneyComposer
           open
           journey={editMode ? storyQaJourney : undefined}
-          onClose={() => setOpen(false)}
+          onClose={() => {
+            pendingPickRef.current = null;
+            setPickReady(false);
+            setOpen(false);
+          }}
           onSaved={() => undefined}
-          onGlobePickRequest={() => undefined}
+          onGlobePickRequest={(accept) => {
+            pendingPickRef.current = accept;
+            lastPickRef.current = accept;
+            setPickReady(true);
+          }}
+          onGlobePickCancel={() => {
+            pendingPickRef.current = null;
+            setPickReady(false);
+          }}
+          onRoutePreviewChange={setRoutePreview}
         />
       ) : null}
     </main>
