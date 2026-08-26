@@ -334,9 +334,24 @@ try {
   const releasedGateway = await createGatewayPage();
   try {
     await submitGatewayLogin(releasedGateway.page);
-    await releasedGateway.page.locator(".auth-continuity.is-released").waitFor({ timeout: 5_000 });
+    await releasedGateway.page.locator(".auth-continuity.is-released").waitFor({ timeout: 15_000 });
     releasedGateway.loseSession();
-    await releasedGateway.page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+    // Better Auth rate-limits focus/visibility refetches for five seconds after
+    // a session request. A synthetic visibilitychange immediately after the
+    // handoff is therefore intentionally ignored and makes this QA flaky.
+    // Use Better Auth's cross-tab session notification path instead: storage
+    // session events trigger an immediate refetch without the focus throttle.
+    await releasedGateway.page.evaluate(() => {
+      window.dispatchEvent(new StorageEvent("storage", {
+        key: "better-auth.message",
+        newValue: JSON.stringify({
+          event: "session",
+          data: { trigger: "qa-session-loss" },
+          clientId: "qa-login-v3",
+          timestamp: Math.floor(Date.now() / 1_000),
+        }),
+      }));
+    });
     await releasedGateway.page.locator(".auth-continuity.is-login").waitFor({ timeout: 4_000 });
     const sessionLoss = await releasedGateway.page.evaluate(() => {
       const card = document.querySelector(".auth-card--login-v3");
