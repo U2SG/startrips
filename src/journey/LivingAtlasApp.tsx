@@ -163,7 +163,7 @@ function JourneyCardMedia({
   );
 }
 
-export function LivingAtlasApp() {
+export function LivingAtlasApp({ lightweightGlobe = false }: { lightweightGlobe?: boolean } = {}) {
   const { canDeleteJourney } = useAtlasCapabilities();
   const [journeys, setJourneys] = useState<Journey[]>([]);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
@@ -477,33 +477,37 @@ export function LivingAtlasApp() {
       data-journey-count={journeys.length}
     >
       <div className="living-atlas__globe" aria-hidden={view !== "planet"}>
-        <LivingAtlasGlobe
-          focusPoint={playbackFocusPoint ?? focusPoint}
-          focusColor={activeJourney?.lightColor}
-          journeyRoutes={routes}
-          activeJourneyRouteId={draftRoute?.id ?? activeJourneyId}
-          temporalReveal={globeFocusMode
-            ? {
-              journeys: timeCursor.reveal.journeyProgress,
-              points: timeCursor.reveal.pointProgress,
-            }
-            : undefined}
-          onJourneyRouteActivate={(id) => {
-            if (id !== "draft-route-preview") selectJourney(id);
-          }}
-          onJourneyRoutePointActivate={(journeyId, routePointId) => {
-            if (journeyId === "draft-route-preview") return;
-            setActiveJourneyId(journeyId);
-            setStoryRoutePointId(routePointId);
-            setStoryJourneyId(journeyId);
-          }}
-          onGlobePointPick={globePickActive ? completeGlobePick : undefined}
-          onPickRequest={() => {
-            setEditingJourneyId(null);
-            setComposerOpen(true);
-          }}
-          reduceMotion={reduceMotion}
-        />
+        {lightweightGlobe ? (
+          <div className="living-atlas__qa-globe" aria-hidden="true" />
+        ) : (
+          <LivingAtlasGlobe
+            focusPoint={playbackFocusPoint ?? focusPoint}
+            focusColor={activeJourney?.lightColor}
+            journeyRoutes={routes}
+            activeJourneyRouteId={draftRoute?.id ?? activeJourneyId}
+            temporalReveal={globeFocusMode
+              ? {
+                journeys: timeCursor.reveal.journeyProgress,
+                points: timeCursor.reveal.pointProgress,
+              }
+              : undefined}
+            onJourneyRouteActivate={(id) => {
+              if (id !== "draft-route-preview") selectJourney(id);
+            }}
+            onJourneyRoutePointActivate={(journeyId, routePointId) => {
+              if (journeyId === "draft-route-preview") return;
+              setActiveJourneyId(journeyId);
+              setStoryRoutePointId(routePointId);
+              setStoryJourneyId(journeyId);
+            }}
+            onGlobePointPick={globePickActive ? completeGlobePick : undefined}
+            onPickRequest={() => {
+              setEditingJourneyId(null);
+              setComposerOpen(true);
+            }}
+            reduceMotion={reduceMotion}
+          />
+        )}
       </div>
 
       <header className="living-atlas__header" inert={globeFocusMode || undefined}>
@@ -592,24 +596,25 @@ export function LivingAtlasApp() {
           } as React.CSSProperties}
           aria-live="polite"
         >
-          {/* #13 + review P2: the whole active card is one interaction surface —
-              clicking cover/title/note/blank opens the story; explicit actions
-              sit above the transparent hit area. */}
-          <button
-            type="button"
-            className="living-atlas__active-hit-area"
-            aria-label={`打开旅程：${activeJourney.title}`}
-            onClick={() => openJourneyStory(activeJourney.id, null)}
-          />
-          <div className="living-atlas__active-content" aria-hidden="true">
-            <p>{activeJourney.startedOn}{activeJourney.endedOn ? ` — ${activeJourney.endedOn}` : ""}</p>
-            <IconMapPin className="living-atlas__active-marker" size={18} stroke={1.25} aria-hidden="true" />
-            <h2><ScrambledText text={activeJourney.title} /></h2>
-            <span>{activeJourney.routePoints.length} 个路线点 · {activeJourney.routePoints.filter((point) => point.isStop).length} 次停靠</span>
-            <JourneyCardMedia journey={activeJourney} reduceMotion={reduceMotion} />
-            <p className={`living-atlas__active-note${activeJourney.note ? "" : " is-empty"}`}>
-              {activeJourney.note || "路线已经留在地球上，故事等待被打开。"}
-            </p>
+          {/* The narrative/media region is one story-opening surface, while
+              the explicit Story / Playback actions own a separate hit zone. */}
+          <div className="living-atlas__active-main">
+            <button
+              type="button"
+              className="living-atlas__active-hit-area"
+              aria-label={`打开旅程：${activeJourney.title}`}
+              onClick={() => openJourneyStory(activeJourney.id, null)}
+            />
+            <div className="living-atlas__active-content" aria-hidden="true">
+              <p>{activeJourney.startedOn}{activeJourney.endedOn ? ` — ${activeJourney.endedOn}` : ""}</p>
+              <IconMapPin className="living-atlas__active-marker" size={18} stroke={1.25} aria-hidden="true" />
+              <h2><ScrambledText text={activeJourney.title} /></h2>
+              <span>{activeJourney.routePoints.length} 个路线点 · {activeJourney.routePoints.filter((point) => point.isStop).length} 次停靠</span>
+              <JourneyCardMedia journey={activeJourney} reduceMotion={reduceMotion} />
+              <p className={`living-atlas__active-note${activeJourney.note ? "" : " is-empty"}`}>
+                {activeJourney.note || "路线已经留在地球上，故事等待被打开。"}
+              </p>
+            </div>
           </div>
           <div className="living-atlas__active-actions">
             <button ref={storyMagnet.ref} onMouseMove={storyMagnet.onMouseMove} onMouseLeave={storyMagnet.onMouseLeave} type="button" onClick={() => openJourneyStory(activeJourney.id, null)}>

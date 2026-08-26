@@ -68,5 +68,6 @@ jobs:
           curl --fail --silent http://127.0.0.1:4173/ > /dev/null || (cat /tmp/startrips-vite.log && exit 1)
           pnpm qa:login-v3
           pnpm qa:media-controls
+          pnpm qa:post-login-controls
       - name: Build
         run: pnpm build

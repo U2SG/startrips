@@ -660,33 +660,35 @@ export function JourneyComposer({
                           </option>
                         ))}
                       </select>
-                      <button type="button" onClick={() => setMediaFiles((current) => current.filter((_, candidate) => candidate !== index))}>移除</button>
-                      {isEditing ? (
-                        <>
-                          <button
-                            type="button"
-                            aria-label={`向前调整 ${media.file.name} 的排序`}
-                            disabled={index === 0}
-                            onClick={() => setMediaFiles((current) => {
-                              if (index === 0) return current;
-                              const next = [...current];
-                              [next[index - 1], next[index]] = [next[index], next[index - 1]];
-                              return next;
-                            })}
-                          >上移</button>
-                          <button
-                            type="button"
-                            aria-label={`向后调整 ${media.file.name} 的排序`}
-                            disabled={index === mediaFiles.length - 1}
-                            onClick={() => setMediaFiles((current) => {
-                              if (index === current.length - 1) return current;
-                              const next = [...current];
-                              [next[index], next[index + 1]] = [next[index + 1], next[index]];
-                              return next;
-                            })}
-                          >下移</button>
-                        </>
-                      ) : null}
+                      <div className="journey-media-fields__actions">
+                        <button type="button" onClick={() => setMediaFiles((current) => current.filter((_, candidate) => candidate !== index))}>移除</button>
+                        {isEditing ? (
+                          <>
+                            <button
+                              type="button"
+                              aria-label={`向前调整 ${media.file.name} 的排序`}
+                              disabled={index === 0}
+                              onClick={() => setMediaFiles((current) => {
+                                if (index === 0) return current;
+                                const next = [...current];
+                                [next[index - 1], next[index]] = [next[index], next[index - 1]];
+                                return next;
+                              })}
+                            >上移</button>
+                            <button
+                              type="button"
+                              aria-label={`向后调整 ${media.file.name} 的排序`}
+                              disabled={index === mediaFiles.length - 1}
+                              onClick={() => setMediaFiles((current) => {
+                                if (index === current.length - 1) return current;
+                                const next = [...current];
+                                [next[index], next[index + 1]] = [next[index + 1], next[index]];
+                                return next;
+                              })}
+                            >下移</button>
+                          </>
+                        ) : null}
+                      </div>
                     </li>
                   ))}
                 </ul>
