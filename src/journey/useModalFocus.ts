@@ -27,6 +27,7 @@ export function isInsideNestedTrap(element: Element | null) {
 export function useModalFocus<T extends HTMLElement>(
   onClose: () => void,
   active = true,
+  trapSuspended = false,
 ) {
   const rootRef = useRef<T>(null);
   const onCloseRef = useRef(onClose);
@@ -35,6 +36,9 @@ export function useModalFocus<T extends HTMLElement>(
     onCloseRef.current = onClose;
   }, [onClose]);
 
+  // Modal lifecycle ownership: body scroll lock and final focus restoration
+  // belong to the dialog for its entire open lifetime. Temporarily suspending
+  // the focus trap (e.g. globe point-picking) must not tear this lifecycle down.
   useEffect(() => {
     if (!active) return;
     const root = rootRef.current;
@@ -43,13 +47,26 @@ export function useModalFocus<T extends HTMLElement>(
     const previousFocus = document.activeElement instanceof HTMLElement
       ? document.activeElement
       : null;
-    // Lock background scrolling while the dialog is open and compensate for
-    // the disappearing scrollbar so the page does not jump.
     const previousOverflow = document.body.style.overflow;
     const previousPaddingRight = document.body.style.paddingRight;
     const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
     document.body.style.overflow = "hidden";
     if (scrollbarWidth > 0) document.body.style.paddingRight = `${scrollbarWidth}px`;
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.body.style.paddingRight = previousPaddingRight;
+      if (previousFocus?.isConnected) previousFocus.focus();
+    };
+  }, [active]);
+
+  // Focus-trap lifecycle: background inerting and keyboard ownership can be
+  // suspended independently while another interaction surface (the globe)
+  // needs to become reachable without closing the modal itself.
+  useEffect(() => {
+    if (!active || trapSuspended) return;
+    const root = rootRef.current;
+    if (!root) return;
 
     const inerted: Array<{ element: HTMLElement; previous: boolean }> = [];
     const overlay = root.parentElement;
@@ -80,8 +97,6 @@ export function useModalFocus<T extends HTMLElement>(
       }
       if (event.key !== "Tab") return;
 
-      // Review P2: a nested trap (fullscreen overlay) owns its own Tab
-      // cycling; this dialog's redirect must not steal focus from it.
       if (isInsideNestedTrap(document.activeElement)) return;
 
       const candidates = focusable();
@@ -114,11 +129,8 @@ export function useModalFocus<T extends HTMLElement>(
     return () => {
       document.removeEventListener("keydown", onKeyDown, true);
       for (const entry of inerted) entry.element.inert = entry.previous;
-      document.body.style.overflow = previousOverflow;
-      document.body.style.paddingRight = previousPaddingRight;
-      if (previousFocus?.isConnected) previousFocus.focus();
     };
-  }, [active]);
+  }, [active, trapSuspended]);
 
   return rootRef;
 }
