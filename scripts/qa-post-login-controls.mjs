@@ -272,9 +272,9 @@ async function verifyAccountDock() {
     await page.locator(".account-dock__tab").waitFor({ state: "visible" });
     await page.locator(".living-atlas__active").waitFor({ state: "visible" });
 
-    for (const [label, width, height] of [
-      ["mobile", 390, 844],
-      ["tablet", 768, 1024],
+    for (const [label, width, height, mobile] of [
+      ["mobile", 390, 844, true],
+      ["tablet", 768, 1024, false],
     ]) {
       await page.setViewportSize({ width, height });
       const tabNavOverlap = await page.evaluate(() => {
@@ -290,22 +290,42 @@ async function verifyAccountDock() {
         tabNavOverlap,
         failed: tabNavOverlap !== 0,
       });
-    }
 
-    await page.locator(".account-dock__tab").click();
-    const panelMetrics = await page.locator(".account-dock__panel").evaluate((panel) => ({
-      overflowX: panel.scrollWidth - panel.clientWidth,
-      overflowY: panel.scrollHeight - panel.clientHeight,
-      buttons: [...panel.querySelectorAll("button")].map((button) => {
-        const rect = button.getBoundingClientRect();
-        return { width: Math.round(rect.width), height: Math.round(rect.height) };
-      }),
-    }));
-    const invalidPanel = panelMetrics.overflowX > 0
-      || panelMetrics.overflowY > 0
-      || panelMetrics.buttons.some((button) => button.height < 31);
-    results.push({ name: "account-panel", ...panelMetrics, failed: invalidPanel });
-    if (invalidPanel) failed = true;
+      await page.locator(".account-dock__tab").click();
+      const panel = page.locator(".account-dock__panel");
+      await panel.waitFor({ state: "visible" });
+      const panelMetrics = await panel.evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        return {
+          width: Math.round(rect.width),
+          height: Math.round(rect.height),
+          viewportOverflowX: Math.max(0, Math.round(rect.right - innerWidth)) + Math.max(0, Math.round(-rect.left)),
+          viewportOverflowY: Math.max(0, Math.round(rect.bottom - innerHeight)) + Math.max(0, Math.round(-rect.top)),
+          overflowX: element.scrollWidth - element.clientWidth,
+          overflowY: element.scrollHeight - element.clientHeight,
+          buttons: [...element.querySelectorAll("button")].map((button) => {
+            const buttonRect = button.getBoundingClientRect();
+            return { width: Math.round(buttonRect.width), height: Math.round(buttonRect.height) };
+          }),
+        };
+      });
+      const minimumButtonHeight = mobile ? 43 : 31;
+      const invalidPanel = panelMetrics.viewportOverflowX > 0
+        || panelMetrics.viewportOverflowY > 0
+        || panelMetrics.overflowX > 0
+        || panelMetrics.overflowY > 0
+        || panelMetrics.buttons.some((button) => button.height < minimumButtonHeight);
+      results.push({
+        name: `account-${label}-panel`,
+        ...panelMetrics,
+        minimumButtonHeight,
+        failed: invalidPanel,
+      });
+      if (invalidPanel) failed = true;
+
+      await page.locator(".account-dock__tab").click();
+      await panel.waitFor({ state: "hidden" });
+    }
   } finally {
     await page.close();
   }
