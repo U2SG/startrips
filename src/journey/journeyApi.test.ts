@@ -134,6 +134,27 @@ describe("journeyApi", () => {
     );
   });
 
+  it("bounds reverse geocode so lookup degradation cannot block the composer", async () => {
+    const fetcher = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => (
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => {
+          reject(new DOMException("aborted", "AbortError"));
+        }, { once: true });
+      })
+    )) as unknown as typeof fetch;
+
+    await expect(reverseGeocode(22.5, 114, fetcher, 5)).rejects.toMatchObject({
+      name: "AbortError",
+    });
+    expect(fetcher).toHaveBeenCalledWith(
+      "/api/locations/reverse?latitude=22.5&longitude=114",
+      expect.objectContaining({
+        credentials: "include",
+        signal: expect.any(AbortSignal),
+      }),
+    );
+  });
+
   it("restores a recoverable journey with POST", async () => {
     const journey = { id: "journey-1", ...input, routePoints: [], media: [] };
     const fetcher = vi.fn(async () => Response.json({ journey })) as unknown as typeof fetch;

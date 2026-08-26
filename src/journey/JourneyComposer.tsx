@@ -351,6 +351,8 @@ export function JourneyComposer({
   // an accept callback alive in an event queue, so gate it by a monotonically
   // increasing revision instead of trusting the caller to forget it in time.
   const globePickRequestRevisionRef = useRef(0);
+  const reverseGeocodeRevisionRef = useRef(0);
+  const composerMountedRef = useRef(true);
   const routePointsRef = useRef(routePoints);
   routePointsRef.current = routePoints;
   const dialogRef = useModalFocus<HTMLElement>(() => {
@@ -367,6 +369,14 @@ export function JourneyComposer({
     revision: journey?.revision,
     routePoints: routeDraftToInput(routePoints),
   }), [endedOn, journey?.revision, lightColor, lightEffect, note, routePoints, startedOn, title]);
+
+  useEffect(() => {
+    composerMountedRef.current = true;
+    return () => {
+      composerMountedRef.current = false;
+      reverseGeocodeRevisionRef.current += 1;
+    };
+  }, []);
 
   useEffect(() => {
     onRoutePreviewChange?.(routePoints.length === 0 ? null : {
@@ -427,7 +437,13 @@ export function JourneyComposer({
   if (!open) return null;
 
   function addPoint(point: RouteDraftPoint) {
-    setRoutePoints((current) => appendRoutePoint(current, point));
+    setRoutePoints((current) => {
+      const next = appendRoutePoint(current, point);
+      // Keep async globe-pick work aligned even when a mocked/fast reverse
+      // lookup settles before React commits the next render.
+      routePointsRef.current = next;
+      return next;
+    });
     setMessage("");
   }
 
@@ -490,6 +506,7 @@ export function JourneyComposer({
   function requestGlobePoint() {
     if (!onGlobePickRequest) return;
     const requestRevision = ++globePickRequestRevisionRef.current;
+    reverseGeocodeRevisionRef.current += 1;
     setGlobePicking(true);
     setReverseAttribution(null);
     setMessage("请在地球上点击一个位置。");
@@ -508,24 +525,42 @@ export function JourneyComposer({
         routePointsRef.current.length === 0,
       );
       addPoint(draftPoint);
+      const geocodeRevision = ++reverseGeocodeRevisionRef.current;
       setMessage("已从地球添加地点；正在识别坐标对应的名称…");
-      void suggestPlaceName(draftPoint);
+      void suggestPlaceName(draftPoint, geocodeRevision);
     });
   }
 
-  async function suggestPlaceName(point: RouteDraftPoint) {
+  async function suggestPlaceName(point: RouteDraftPoint, revision: number) {
     try {
       const response = await reverseGeocode(point.latitude, point.longitude);
+      if (!composerMountedRef.current) return;
+      // The point may have been removed while the lookup was in flight. Never
+      // resurrect it or show a result for an interaction that no longer exists.
+      if (!routePointsRef.current.some((candidate) => candidate.draftId === point.draftId)) return;
+
       const label = response.result?.label;
       if (label) {
         setRoutePoints((current) => suggestPointLabel(current, point.draftId, label));
+      }
+
+      // A newer globe pick owns the shared message/attribution surface. An old
+      // lookup may still fill its own blank point label, but must never replace
+      // the current pick's user-visible status or provider attribution.
+      if (reverseGeocodeRevisionRef.current !== revision) return;
+      if (label) {
         setMessage(`已根据坐标识别为「${label}」，可继续修改。`);
       } else {
         setMessage("已从地球添加地点，未识别到对应名称；可手动补充。");
       }
-      if (response.attribution) setReverseAttribution(response.attribution);
+      setReverseAttribution(response.attribution ?? null);
     } catch {
-      // Reverse lookup is optional; the picked point stays without a name.
+      if (!composerMountedRef.current) return;
+      if (!routePointsRef.current.some((candidate) => candidate.draftId === point.draftId)) return;
+      if (reverseGeocodeRevisionRef.current !== revision) return;
+      // Reverse lookup is optional (including timeout); the picked point stays
+      // editable and route preview remains driven by the local draft.
+      setReverseAttribution(null);
       setMessage("已从地球添加地点；坐标识别暂不可用，可手动补充名称。");
     }
   }
@@ -540,6 +575,7 @@ export function JourneyComposer({
 
   function closeComposer() {
     globePickRequestRevisionRef.current += 1;
+    reverseGeocodeRevisionRef.current += 1;
     if (globePicking) onGlobePickCancel?.();
     onRoutePreviewChange?.(null);
     onClose();
@@ -565,7 +601,11 @@ export function JourneyComposer({
     const resetsMediaScope = mediaFiles.some(
       (media) => media.routePointDraftId === draftPointId,
     );
-    setRoutePoints((current) => removeRoutePoint(current, draftPointId));
+    setRoutePoints((current) => {
+      const next = removeRoutePoint(current, draftPointId);
+      routePointsRef.current = next;
+      return next;
+    });
     setMediaFiles((current) => clearRemovedMediaTarget(current, draftPointId));
     if (resetsMediaScope) setMessage("已删除该途径点；关联媒体已改为整段旅程。");
   }
