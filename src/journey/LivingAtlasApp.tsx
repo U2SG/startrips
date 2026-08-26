@@ -300,6 +300,7 @@ export function LivingAtlasApp({ lightweightGlobe = false }: { lightweightGlobe?
       : [...savedRoutes, draftRoute];
   }, [draftRoute, journeys]);
   const focusPoint = journeyFocus(activeJourney);
+  const activeJourneyRoute = routes.find((route) => route.id === activeJourneyId) ?? null;
 
   async function handleSaved(result: JourneySaveResult) {
     const edited = editingJourneyId === result.journey.id;
@@ -482,6 +483,7 @@ export function LivingAtlasApp({ lightweightGlobe = false }: { lightweightGlobe?
         ) : (
           <LivingAtlasGlobe
             focusPoint={playbackFocusPoint ?? focusPoint}
+            focusRoute={playbackFocusPoint ? null : activeJourneyRoute}
             focusColor={activeJourney?.lightColor}
             journeyRoutes={routes}
             activeJourneyRouteId={draftRoute?.id ?? activeJourneyId}
