@@ -471,6 +471,30 @@ async function verifyComposerGlobeRoundTrip() {
     await page.setViewportSize({ width, height });
     await page.goto(`${origin}/?qaState=living-atlas`, { waitUntil: "domcontentloaded" });
     await page.locator(".living-atlas__active").waitFor({ state: "visible" });
+    const focusExitHitTest = await page.evaluate(() => {
+      const exit = document.querySelector(".living-atlas__globe-focus-exit");
+      const create = document.querySelector(".living-atlas__create");
+      if (!(exit instanceof HTMLElement) || !(create instanceof HTMLElement)) return null;
+      const rect = create.getBoundingClientRect();
+      const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+      return {
+        exitAriaHidden: exit.getAttribute("aria-hidden"),
+        exitTabIndex: exit.tabIndex,
+        exitPointerEvents: getComputedStyle(exit).pointerEvents,
+        hitIsExit: hit === exit || exit.contains(hit),
+        hitInsideCreate: Boolean(hit && create.contains(hit)),
+      };
+    });
+    if (
+      !focusExitHitTest
+      || focusExitHitTest.exitAriaHidden !== "true"
+      || focusExitHitTest.exitTabIndex !== -1
+      || focusExitHitTest.exitPointerEvents !== "none"
+      || focusExitHitTest.hitIsExit
+      || !focusExitHitTest.hitInsideCreate
+    ) {
+      throw new Error(`hidden globe-focus exit intercepted atlas hit testing: ${JSON.stringify(focusExitHitTest)}`);
+    }
     await page.getByRole("button", { name: /记录旅程/ }).click();
     await page.locator(".journey-composer").waitFor({ state: "visible" });
     await page.locator("[data-qa-app-route-preview]").waitFor({ state: "attached" });

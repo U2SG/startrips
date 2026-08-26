@@ -390,6 +390,8 @@ const Experience = import.meta.env.DEV && qaState === "journey-composer"
     ? LivingAtlasGlobeControlsQaPreview
   : import.meta.env.DEV && (qaState === "living-atlas" || qaState === "atlas-gateway")
     ? LivingAtlasQaPreview
+  : import.meta.env.DEV && qaState === "final-acceptance"
+    ? LivingAtlasApp
   : import.meta.env.DEV && qaState
     ? App
     : LivingAtlasApp;

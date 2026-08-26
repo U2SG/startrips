@@ -189,7 +189,7 @@ export function PersistentEarthProvider({ children }: { children: ReactNode }) {
               ) : (
                 <ParticleEarthScene
                   mode={atlas ? "focusPoint" : loginPresentation.mode}
-                  quality="high"
+                  quality={stage === "atlas" ? "high" : "low"}
                   focusPoint={atlas?.focusPoint}
                   focusRoute={atlas?.focusRoute}
                   focusRevision={atlas?.focusRevision}

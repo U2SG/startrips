@@ -158,13 +158,17 @@ const gatewaySession = {
   },
 };
 
-async function createGatewayPage({ failAfterSignIn = false } = {}) {
+async function createGatewayPage({
+  failAfterSignIn = false,
+  initialAuthenticated = false,
+  initialPath = "/?qaState=login-gateway&qaLite=1",
+} = {}) {
   const gatewayPage = await browser.newPage({
     viewport: { width: 390, height: 844 },
     reducedMotion: "reduce",
   });
   const errors = [];
-  let authenticated = false;
+  let authenticated = initialAuthenticated;
   let signInRequests = 0;
   let postSignInSessionRequests = 0;
   gatewayPage.on("console", (message) => {
@@ -208,8 +212,10 @@ async function createGatewayPage({ failAfterSignIn = false } = {}) {
     contentType: "application/json",
     body: JSON.stringify({ atlas: { id: "qa-atlas", title: "QA Atlas", dedication: "" }, role: "owner" }),
   }));
-  await gatewayPage.goto(`${origin}/?qaState=login-gateway&qaLite=1`, { waitUntil: "domcontentloaded", timeout: 8_000 });
-  await gatewayPage.locator(".auth-card--login-v3").waitFor({ state: "visible", timeout: 4_000 });
+  await gatewayPage.goto(`${origin}${initialPath}`, { waitUntil: "domcontentloaded", timeout: 8_000 });
+  if (!initialAuthenticated) {
+    await gatewayPage.locator(".auth-card--login-v3").waitFor({ state: "visible", timeout: 4_000 });
+  }
   return {
     page: gatewayPage,
     errors,
@@ -222,6 +228,125 @@ async function submitGatewayLogin(gatewayPage) {
   await gatewayPage.locator('input[type="email"]').fill("qa@example.com");
   await gatewayPage.locator('input[type="password"]').fill("password1234");
   await gatewayPage.getByRole("button", { name: "登录", exact: true }).click();
+}
+
+async function verifyAuthenticatedDirectGate(label, path, targetSelector) {
+  const separator = path.includes("?") ? "&" : "?";
+  const gateway = await createGatewayPage({
+    initialAuthenticated: true,
+    initialPath: `${path}${separator}qaState=login-gateway&qaLite=1`,
+  });
+  try {
+    const target = gateway.page.locator(targetSelector);
+    await target.waitFor({ state: "visible", timeout: 4_000 });
+    await gateway.page.waitForFunction(() => (
+      document.querySelector("[data-persistent-earth-host]")?.getAttribute("data-stage") === "atlas"
+    ));
+    // Playwright hover includes hit-target/actionability checks, so this fails
+    // if the root pass-through layer still blocks the direct AuthGateway gate.
+    await target.hover();
+    const metrics = await target.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+      return {
+        pointerEvents: getComputedStyle(element).pointerEvents,
+        hitTargetOwned: hit === element || element.contains(hit),
+        hostStage: document.querySelector("[data-persistent-earth-host]")?.getAttribute("data-stage") ?? null,
+      };
+    });
+    return {
+      label,
+      ...metrics,
+      errors: gateway.errors,
+      failed: metrics.pointerEvents === "none"
+        || !metrics.hitTargetOwned
+        || metrics.hostStage !== "atlas"
+        || gateway.errors.length > 0,
+    };
+  } finally {
+    await gateway.page.close();
+  }
+}
+
+async function verifyPersistentGatewaySceneContinuity() {
+  const gateway = await createGatewayPage({ initialPath: "/?qaState=login-gateway&qaPhase=ready" });
+  try {
+    await gateway.page.waitForFunction(() => {
+      const debug = window.__particleEarthDebug?.();
+      return debug?.quality === "low" && debug.particleCount === 12_000;
+    }, null, { timeout: 15_000 });
+    const login = await gateway.page.evaluate(() => {
+      const host = document.querySelector("[data-persistent-earth-host]");
+      const canvas = document.querySelector('canvas[data-three-scene="particle-earth"]');
+      window.__qaPersistentEarthCanvas = canvas;
+      window.__qaPersistentEarthDebug = window.__particleEarthDebug;
+      window.__qaPersistentEarthStages = [host?.getAttribute("data-stage") ?? null];
+      const observer = new MutationObserver(() => {
+        const stage = host?.getAttribute("data-stage") ?? null;
+        if (window.__qaPersistentEarthStages.at(-1) !== stage) window.__qaPersistentEarthStages.push(stage);
+      });
+      if (host) observer.observe(host, { attributes: true, attributeFilter: ["data-stage"] });
+      window.__qaPersistentEarthObserver = observer;
+      return {
+        stage: host?.getAttribute("data-stage") ?? null,
+        debug: window.__particleEarthDebug?.() ?? null,
+        href: window.location.href,
+        authCard: Boolean(document.querySelector(".auth-card--login-v3")),
+        emailInputs: document.querySelectorAll('input[type="email"]').length,
+        passwordInputs: document.querySelectorAll('input[type="password"]').length,
+        bodyText: document.body.textContent?.trim().slice(0, 240) ?? "",
+      };
+    });
+    if (!login.authCard || login.passwordInputs !== 1) {
+      throw new Error(`persistent login surface disappeared before sign-in: ${JSON.stringify(login)}`);
+    }
+    const email = gateway.page.locator('input[type="email"]');
+    await email.fill("qa@example.com");
+    await gateway.page.keyboard.press("Tab");
+    const passwordFocused = await gateway.page.evaluate(() => (
+      document.activeElement instanceof HTMLInputElement && document.activeElement.type === "password"
+    ));
+    if (!passwordFocused) {
+      throw new Error("persistent login keyboard flow did not reach password");
+    }
+    await gateway.page.keyboard.type("password1234");
+    await gateway.page.keyboard.press("Enter");
+    await gateway.page.locator(".auth-continuity.is-released").waitFor({ timeout: 15_000 });
+    await gateway.page.waitForFunction(() => {
+      const debug = window.__particleEarthDebug?.();
+      return debug?.quality === "high" && debug.particleCount === 28_000;
+    }, null, { timeout: 15_000 });
+    const atlas = await gateway.page.evaluate(() => {
+      const canvas = document.querySelector('canvas[data-three-scene="particle-earth"]');
+      const result = {
+        sameCanvas: window.__qaPersistentEarthCanvas === canvas,
+        sameControllerDebug: window.__qaPersistentEarthDebug === window.__particleEarthDebug,
+        stages: window.__qaPersistentEarthStages ?? [],
+        debug: window.__particleEarthDebug?.() ?? null,
+      };
+      window.__qaPersistentEarthObserver?.disconnect();
+      return result;
+    });
+    const unexpectedErrors = gateway.errors.filter((message) => !message.includes("favicon"));
+    return {
+      label: "gateway-persistent-earth-quality-continuity",
+      login,
+      atlas,
+      errors: unexpectedErrors,
+      failed: login.stage !== "login"
+        || login.debug?.quality !== "low"
+        || login.debug?.particleCount !== 12_000
+        || !atlas.sameCanvas
+        || !atlas.sameControllerDebug
+        || !atlas.stages.includes("handoff")
+        || atlas.debug?.quality !== "high"
+        || atlas.debug?.particleCount !== 28_000
+        || atlas.debug?.canvases !== 1
+        || unexpectedErrors.length > 0,
+    };
+  } finally {
+    await gateway.page.close();
+  }
 }
 
 try {
@@ -294,6 +419,27 @@ try {
     handoffResult.failed = true;
   }
   results.push(handoffResult);
+
+  console.error("[qa-login-v3] authenticated direct gateway controls");
+  const resetPasswordPointers = await verifyAuthenticatedDirectGate(
+    "gateway-authenticated-reset-password-pointer-ownership",
+    "/reset-password?token=qa-reset-token",
+    'input[type="password"]',
+  );
+  if (resetPasswordPointers.failed) failed = true;
+  results.push(resetPasswordPointers);
+  const invitationPointers = await verifyAuthenticatedDirectGate(
+    "gateway-authenticated-invitation-pointer-ownership",
+    "/accept-invitation?id=qa-invitation",
+    ".auth-primary",
+  );
+  if (invitationPointers.failed) failed = true;
+  results.push(invitationPointers);
+
+  console.error("[qa-login-v3] persistent earth quality continuity");
+  const persistentEarthContinuity = await verifyPersistentGatewaySceneContinuity();
+  if (persistentEarthContinuity.failed) failed = true;
+  results.push(persistentEarthContinuity);
 
   console.error("[qa-login-v3] gateway refetch failure recovery");
   const failedGateway = await createGatewayPage({ failAfterSignIn: true });

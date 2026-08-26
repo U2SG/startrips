@@ -537,6 +537,14 @@
   pointer-events: auto;
 }
 
+/* AuthGateway can render recovery/invitation gates directly under the root
+   content layer even while the persistent Earth is in atlas stage. Those
+   full-screen controls explicitly own pointer input instead of inheriting the
+   atlas pass-through behavior. */
+.persistent-earth-content > .auth-gate {
+  pointer-events: auto;
+}
+
 .auth-continuity {
   position: relative;
   width: 100%;

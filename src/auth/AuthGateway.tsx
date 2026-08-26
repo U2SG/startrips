@@ -592,6 +592,7 @@ export function AuthGateway({ children }: { children: ReactNode }) {
     qaState === "login-gateway"
     || qaState === "atlas-gateway"
     || qaState === "globe-controls-gateway"
+    || qaState === "final-acceptance"
   );
   const qaBypass = import.meta.env.DEV && Boolean(qaState) && !qaLogin && !qaGateway;
 
@@ -683,7 +684,7 @@ export function AuthGateway({ children }: { children: ReactNode }) {
         <AuthForm
           key="login-continuity"
           handoff={handoffActive}
-          forceReady={handoffActive}
+          forceReady={handoffActive || (qaGateway && qaPhase === "ready")}
           lightweightScene={qaGateway && qaLite}
           onAuthenticated={() => {
             setHandoffActive(true);
