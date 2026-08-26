@@ -1143,7 +1143,8 @@ export function ParticleEarthScene({
 
     const updateRouteLabelSafeArea = () => {
       const hostBounds = host.getBoundingClientRect();
-      const atlas = host.closest(".living-atlas");
+      const atlas = host.closest(".living-atlas")
+        ?? document.querySelector(".living-atlas");
       const headerBounds = atlas
         ?.querySelector(".living-atlas__header")
         ?.getBoundingClientRect();

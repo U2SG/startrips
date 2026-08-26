@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { LivingAtlasGlobe } from "./LivingAtlasGlobe";
+import { LivingAtlasGlobe, PersistentEarthProvider } from "./LivingAtlasGlobe";
 import { getRouteFocusPhase } from "./ParticleEarthScene";
 
 function markup(storedAmbience: string | null) {
@@ -13,11 +13,15 @@ function markup(storedAmbience: string | null) {
     setItem: () => undefined,
   };
   try {
-    return renderToStaticMarkup(createElement(LivingAtlasGlobe, {
-      journeyRoutes: [],
-      onJourneyRouteActivate: () => undefined,
-      onJourneyRoutePointActivate: () => undefined,
-    }));
+    return renderToStaticMarkup(createElement(
+      PersistentEarthProvider,
+      null,
+      createElement(LivingAtlasGlobe, {
+        journeyRoutes: [],
+        onJourneyRouteActivate: () => undefined,
+        onJourneyRoutePointActivate: () => undefined,
+      }),
+    ));
   } finally {
     (globalThis as { localStorage?: unknown }).localStorage = previous;
   }
