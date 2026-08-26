@@ -53,7 +53,7 @@ Everything else is a combination of these five:
    `src/motion/primitives/sharedElement.ts`).
 4. **draw** — route/light trail grows 0 → 1 (`motion-draw`).
 5. **focus-flight** — globe camera flies from global view to a place
-   (`motion-focus-flight`; driving JS in `LivingAtlasGlobe`).
+   (`motion-focus-flight`; driving JS in `ParticleEarthScene`).
 
 ## Glow discipline
 

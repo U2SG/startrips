@@ -106,5 +106,45 @@ describe("rewind route CSS (PR #24 review)", () => {
       ".particle-earth-route.is-style-strands[data-temporal-reveal] .particle-earth-route__flow",
     );
     expect(css.slice(rewindOverride)).toContain("opacity: 0;");
+    const focusFlightLocator = css.indexOf(
+      '.particle-earth-scene[data-route-focus-phase="flying"]',
+    );
+    const focusFlightBlock = css.slice(focusFlightLocator, rewindOverride);
+    expect(focusFlightBlock).toContain(":not([data-temporal-reveal])");
+  });
+});
+
+describe("route focus-flight choreography", () => {
+  it("holds the active route draw while the camera is flying", () => {
+    const css = readFileSync(new URL("../app.css", import.meta.url), "utf8");
+    const drawRule = css.indexOf(
+      ".particle-earth-route.is-style-strands.is-active .particle-earth-route__core,",
+    );
+    const flyingRule = css.indexOf(
+      '.particle-earth-scene[data-route-focus-phase="flying"]',
+      drawRule,
+    );
+    expect(drawRule).toBeGreaterThanOrEqual(0);
+    expect(flyingRule).toBeGreaterThan(drawRule);
+    const flyingBlock = css.slice(flyingRule, css.indexOf("@keyframes motionRouteDraw", flyingRule));
+    expect(flyingBlock).toContain(
+      ".particle-earth-route.is-style-strands.is-active:not([data-temporal-reveal])",
+    );
+    expect(flyingBlock).toContain("animation: none;");
+    expect(flyingBlock).toContain("stroke-dashoffset: 1200;");
+    expect(flyingBlock).toContain("animation-play-state: paused;");
+    expect(flyingBlock).toContain("opacity: 0;");
+  });
+
+  it("lets reduced motion reveal the final route immediately", () => {
+    const css = readFileSync(new URL("../app.css", import.meta.url), "utf8");
+    const flyingRule = css.indexOf(
+      '.particle-earth-scene[data-route-focus-phase="flying"]',
+    );
+    const reducedMotion = css.indexOf("@media (prefers-reduced-motion: reduce)", flyingRule);
+    expect(reducedMotion).toBeGreaterThan(flyingRule);
+    const reducedBlock = css.slice(reducedMotion, css.indexOf("}", reducedMotion) + 1);
+    expect(reducedBlock).toContain("animation: none;");
+    expect(reducedBlock).toContain("stroke-dashoffset: 0;");
   });
 });
