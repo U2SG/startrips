@@ -347,6 +347,12 @@ export function JourneyComposer({
     : `linear-gradient(135deg, ${safeLightColor}, ${safeLightColor})`;
   const globePickTriggerRef = useRef<HTMLButtonElement>(null);
   const globePickCancelRef = useRef<HTMLButtonElement>(null);
+  // Each globe-pick handoff is single-use. A cancelled/closed pick can leave
+  // an accept callback alive in an event queue, so gate it by a monotonically
+  // increasing revision instead of trusting the caller to forget it in time.
+  const globePickRequestRevisionRef = useRef(0);
+  const routePointsRef = useRef(routePoints);
+  routePointsRef.current = routePoints;
   const dialogRef = useModalFocus<HTMLElement>(() => {
     if (!saving) closeComposer();
   }, true, globePicking);
@@ -408,6 +414,7 @@ export function JourneyComposer({
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       event.preventDefault();
+      globePickRequestRevisionRef.current += 1;
       setGlobePicking(false);
       setMessage("");
       onGlobePickCancel?.();
@@ -482,17 +489,23 @@ export function JourneyComposer({
 
   function requestGlobePoint() {
     if (!onGlobePickRequest) return;
+    const requestRevision = ++globePickRequestRevisionRef.current;
     setGlobePicking(true);
     setReverseAttribution(null);
     setMessage("请在地球上点击一个位置。");
     onGlobePickRequest((point) => {
+      // Consume exactly this handoff once. This also rejects callbacks from a
+      // cancelled/closed pick and a second delivery from the globe surface.
+      if (globePickRequestRevisionRef.current !== requestRevision) return;
+      globePickRequestRevisionRef.current += 1;
+
       setGlobePicking(false);
       restoreGlobePickTriggerFocus();
       const draftPoint = toDraftPoint(
         point.latitude,
         point.longitude,
         "",
-        routePoints.length === 0,
+        routePointsRef.current.length === 0,
       );
       addPoint(draftPoint);
       setMessage("已从地球添加地点；正在识别坐标对应的名称…");
@@ -518,6 +531,7 @@ export function JourneyComposer({
   }
 
   function cancelGlobePoint() {
+    globePickRequestRevisionRef.current += 1;
     setGlobePicking(false);
     setMessage("");
     onGlobePickCancel?.();
@@ -525,6 +539,7 @@ export function JourneyComposer({
   }
 
   function closeComposer() {
+    globePickRequestRevisionRef.current += 1;
     if (globePicking) onGlobePickCancel?.();
     onRoutePreviewChange?.(null);
     onClose();
