@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type ComponentType, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   IconArrowRight,
   IconMapPin,
@@ -16,7 +16,7 @@ import { useMagnet } from "../motion/primitives/Magnet";
 import { ScrambledText } from "../motion/primitives/ScrambledText";
 import { ShinyText } from "../motion/primitives/ShinyText";
 import { morphJourneyCard, runSharedElementMorph } from "../motion/primitives/sharedElement";
-import { LivingAtlasGlobe } from "../scene/LivingAtlasGlobe";
+import { LivingAtlasGlobe, type LivingAtlasGlobeProps } from "../scene/LivingAtlasGlobe";
 import {
   JourneyComposer,
   type GlobePointPick,
@@ -192,7 +192,13 @@ export function playbackFocusRouteForCameraTarget(
   return target.kind === "route" ? route : null;
 }
 
-export function LivingAtlasApp({ lightweightGlobe = false }: { lightweightGlobe?: boolean } = {}) {
+export function LivingAtlasApp({
+  lightweightGlobe = false,
+  GlobeComponent = LivingAtlasGlobe,
+}: {
+  lightweightGlobe?: boolean;
+  GlobeComponent?: ComponentType<LivingAtlasGlobeProps>;
+} = {}) {
   const { canDeleteJourney } = useAtlasCapabilities();
   const [journeys, setJourneys] = useState<Journey[]>([]);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
@@ -516,7 +522,7 @@ export function LivingAtlasApp({ lightweightGlobe = false }: { lightweightGlobe?
         {lightweightGlobe ? (
           <div className="living-atlas__qa-globe" aria-hidden="true" />
         ) : (
-          <LivingAtlasGlobe
+          <GlobeComponent
             focusPoint={playbackCameraTarget?.kind === "point" ? playbackFocusPoint : focusPoint}
             focusRoute={playbackCameraTarget ? playbackFocusRoute : activeJourneyRoute}
             focusRevision={playbackCameraCommand?.revision ?? 0}

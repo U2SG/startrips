@@ -82,7 +82,7 @@ export function LivingAtlasGlobeControls({
   );
 }
 
-type LivingAtlasGlobeProps = {
+export type LivingAtlasGlobeProps = {
   focusPoint?: { lat: number; lon: number } | null;
   focusRoute?: JourneyRoute | null;
   focusRevision?: number;

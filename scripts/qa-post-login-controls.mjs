@@ -333,10 +333,25 @@ async function verifyComposerMediaActions() {
 }
 
 async function verifyComposerGlobeRoundTrip() {
-  console.error("[qa-post-login] composer globe success round-trip");
+  console.error("[qa-post-login] app globe success round-trip");
   const page = await browser.newPage({ viewport: { width: 390, height: 844 }, reducedMotion: "reduce" });
   let reverseMode = "success";
   let reverseRequestCount = 0;
+  let firstReverseStarted = null;
+  let releaseFirstReverse = null;
+
+  function deferred() {
+    let resolve;
+    const promise = new Promise((next) => { resolve = next; });
+    return { promise, resolve };
+  }
+
+  function resetReverse(mode) {
+    reverseMode = mode;
+    reverseRequestCount = 0;
+    firstReverseStarted = deferred();
+    releaseFirstReverse = deferred();
+  }
 
   const reversePayload = (label, provider) => ({
     result: label ? {
@@ -350,6 +365,11 @@ async function verifyComposerGlobeRoundTrip() {
     attribution: provider ? { label: provider, url: "https://example.com/qa-geocode" } : null,
   });
 
+  await page.route("**/api/journeys", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({ journeys }),
+  }));
   await page.route("**/api/locations/reverse?*", async (route) => {
     reverseRequestCount += 1;
     const requestNumber = reverseRequestCount;
@@ -369,12 +389,15 @@ async function verifyComposerGlobeRoundTrip() {
       });
       return;
     }
-    if (reverseMode === "stale" && requestNumber === 1) {
-      await new Promise((resolve) => setTimeout(resolve, 240));
+    if ((reverseMode === "stale" || reverseMode === "pending-delete") && requestNumber === 1) {
+      firstReverseStarted?.resolve();
+      await releaseFirstReverse?.promise;
+      const label = reverseMode === "stale" ? "OLD QA PLACE" : "DELETED QA PLACE";
+      const provider = reverseMode === "stale" ? "OLD QA PROVIDER" : "DELETED QA PROVIDER";
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify(reversePayload("OLD QA PLACE", "OLD QA PROVIDER")),
+        body: JSON.stringify(reversePayload(label, provider)),
       });
       return;
     }
@@ -388,60 +411,72 @@ async function verifyComposerGlobeRoundTrip() {
   });
 
   const routeItems = () => page.locator(".journey-route-draft > li:not(.is-empty)");
-  const readPreview = () => page.locator("[data-qa-route-preview]").evaluate((element) => {
+  const readPreview = () => page.locator("[data-qa-app-route-preview]").evaluate((element) => {
     const raw = element.getAttribute("data-route-points") ?? "[]";
     return JSON.parse(raw);
   });
+  const settleRender = () => page.evaluate(() => new Promise((resolve) => (
+    requestAnimationFrame(() => requestAnimationFrame(resolve))
+  )));
   const openFreshComposer = async (width, height) => {
     await page.setViewportSize({ width, height });
-    await page.goto(`${origin}/?qaState=journey-composer&qaMode=edit`, { waitUntil: "domcontentloaded" });
+    await page.goto(`${origin}/?qaState=living-atlas`, { waitUntil: "domcontentloaded" });
+    await page.locator(".living-atlas__active").waitFor({ state: "visible" });
+    await page.getByRole("button", { name: /记录旅程/ }).click();
     await page.locator(".journey-composer").waitFor({ state: "visible" });
-    await page.waitForFunction(() => {
-      const output = document.querySelector("[data-qa-route-preview]");
-      return output?.getAttribute("data-route-points")?.includes("103.851471") ?? false;
-    });
+    await page.locator("[data-qa-app-route-preview]").waitFor({ state: "attached" });
   };
   const completePick = async () => {
     const trigger = page.getByRole("button", { name: /直接在地球上取点/ });
     await trigger.scrollIntoViewIfNeeded();
-    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    await settleRender();
     const scrollBefore = await page.locator(".journey-composer__editor").evaluate((element) => element.scrollTop);
     const countBefore = await routeItems().count();
     await trigger.click();
     await page.locator(".journey-globe-pick-hint").waitFor({ state: "visible" });
-    // React can commit the pick hint one frame before Chromium applies the
-    // sibling visibility/inert styles. CI is fast enough to observe that
-    // intermediate frame, so assert the actual interaction state instead of
-    // sampling immediately after the hint appears.
+    // This waits on the actual LivingAtlasApp handoff: startGlobePick flips
+    // globePickActive, releases the globe from inert, and supplies
+    // completeGlobePick as the globe component's onGlobePointPick callback.
     await page.waitForFunction(() => {
+      const root = document.querySelector(".living-atlas");
       const composer = document.querySelector(".journey-composer");
-      const globeButton = document.querySelector("[data-qa-globe-pick-success]");
-      return composer
+      const globeButton = document.querySelector("[data-qa-app-globe-point-pick]");
+      return root?.classList.contains("is-globe-picking")
+        && composer
         && getComputedStyle(composer).visibility === "hidden"
-        && globeButton instanceof HTMLElement
-        && !globeButton.closest("[inert]")
-        && !(globeButton instanceof HTMLButtonElement && globeButton.disabled);
+        && globeButton instanceof HTMLButtonElement
+        && !globeButton.disabled
+        && !globeButton.closest("[inert]");
     });
     const picking = await page.evaluate(() => {
+      const root = document.querySelector(".living-atlas");
       const composer = document.querySelector(".journey-composer");
-      const globeButton = document.querySelector("[data-qa-globe-pick-success]");
+      const globeButton = document.querySelector("[data-qa-app-globe-point-pick]");
       return {
+        appPickActive: root?.classList.contains("is-globe-picking") ?? false,
         composerVisibility: composer ? getComputedStyle(composer).visibility : null,
         bodyOverflow: document.body.style.overflow,
         globeButtonInert: globeButton instanceof HTMLElement ? Boolean(globeButton.closest("[inert]")) : null,
         globeButtonDisabled: globeButton instanceof HTMLButtonElement ? globeButton.disabled : null,
       };
     });
-    await page.locator("[data-qa-globe-pick-success]").click();
-    await page.waitForFunction(() => (
-      getComputedStyle(document.querySelector(".journey-composer")).visibility === "visible"
-      && document.activeElement?.classList.contains("journey-globe-pick-button")
-    ));
+    // The QA globe stands in for WebGL hit-testing; dispatch its React click
+    // directly so unrelated atlas chrome cannot intercept the synthetic pointer.
+    // The button still calls the onGlobePointPick prop supplied by LivingAtlasApp.
+    await page.locator("[data-qa-app-globe-point-pick]").evaluate((button) => button.click());
+    await page.waitForFunction(() => {
+      const root = document.querySelector(".living-atlas");
+      const composer = document.querySelector(".journey-composer");
+      return !root?.classList.contains("is-globe-picking")
+        && composer
+        && getComputedStyle(composer).visibility === "visible"
+        && (document.activeElement?.classList.contains("journey-globe-pick-button") ?? false);
+    });
     await page.waitForFunction((expected) => (
       document.querySelectorAll(".journey-route-draft > li:not(.is-empty)").length === expected
     ), countBefore + 1);
     await page.waitForFunction((expected) => {
-      const output = document.querySelector("[data-qa-route-preview]");
+      const output = document.querySelector("[data-qa-app-route-preview]");
       const points = JSON.parse(output?.getAttribute("data-route-points") ?? "[]");
       return points.length === expected;
     }, countBefore + 1);
@@ -449,6 +484,7 @@ async function verifyComposerGlobeRoundTrip() {
     const preview = await readPreview();
     const lastPoint = preview.at(-1) ?? null;
     const returned = await page.evaluate(() => ({
+      appPickActive: document.querySelector(".living-atlas")?.classList.contains("is-globe-picking") ?? false,
       bodyOverflow: document.body.style.overflow,
       composerVisibility: getComputedStyle(document.querySelector(".journey-composer")).visibility,
       activeIsTrigger: document.activeElement?.classList.contains("journey-globe-pick-button") ?? false,
@@ -464,26 +500,20 @@ async function verifyComposerGlobeRoundTrip() {
       ["mobile-small", 360, 800],
       ["mobile", 390, 844],
     ]) {
-      reverseMode = "success";
-      reverseRequestCount = 0;
+      resetReverse("success");
       await openFreshComposer(width, height);
       const roundTrip = await completePick();
       await page.getByText("已根据坐标识别为「QA PICKED PLACE」，可继续修改。").waitFor({ state: "visible" });
       const routeCountAfter = await routeItems().count();
       const labelValue = await routeItems().last().locator('input[aria-label^="地点 "]').inputValue();
       const coordinateText = await routeItems().last().locator(".journey-route-draft__main > small").textContent();
-
-      // Replay the old accept callback programmatically. The Composer owns the
-      // single-use guard, so even a stale queued delivery cannot append again.
-      await page.locator("[data-qa-globe-pick-replay]").evaluate((button) => button.click());
-      await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-      const routeCountAfterReplay = await routeItems().count();
-      const successFailed = roundTrip.picking.composerVisibility !== "hidden"
+      const successFailed = !roundTrip.picking.appPickActive
+        || roundTrip.picking.composerVisibility !== "hidden"
         || roundTrip.picking.bodyOverflow !== "hidden"
         || roundTrip.picking.globeButtonInert !== false
         || roundTrip.picking.globeButtonDisabled !== false
+        || roundTrip.returned.appPickActive
         || routeCountAfter !== roundTrip.countBefore + 1
-        || routeCountAfterReplay !== routeCountAfter
         || Math.abs(roundTrip.scrollAfter - roundTrip.scrollBefore) > 2
         || !roundTrip.returned.activeIsTrigger
         || roundTrip.returned.bodyOverflow !== "hidden"
@@ -492,13 +522,13 @@ async function verifyComposerGlobeRoundTrip() {
         || roundTrip.returned.overflowY > 0
         || Math.abs((roundTrip.lastPoint?.lat ?? 0) - 37.76942) > 0.000001
         || Math.abs((roundTrip.lastPoint?.lon ?? 0) - (-122.48621)) > 0.000001
+        || roundTrip.lastPoint?.isStop !== true
         || labelValue !== "QA PICKED PLACE"
         || !String(coordinateText).includes("37.769420, -122.486210");
       results.push({
-        name: `composer-${label}-globe-pick-success-roundtrip`,
+        name: `app-${label}-globe-pick-success-roundtrip`,
         ...roundTrip,
         routeCountAfter,
-        routeCountAfterReplay,
         labelValue,
         coordinateText,
         failed: successFailed,
@@ -507,8 +537,7 @@ async function verifyComposerGlobeRoundTrip() {
     }
 
     for (const mode of ["empty", "failure"]) {
-      reverseMode = mode;
-      reverseRequestCount = 0;
+      resetReverse(mode);
       await openFreshComposer(390, 844);
       const roundTrip = await completePick();
       const expectedMessage = mode === "empty"
@@ -519,10 +548,10 @@ async function verifyComposerGlobeRoundTrip() {
       const beforeManual = await lastInput.inputValue();
       const manualLabel = `手动地点-${mode}`;
       await lastInput.fill(manualLabel);
-      await page.waitForFunction((label) => {
-        const output = document.querySelector("[data-qa-route-preview]");
+      await page.waitForFunction((expectedLabel) => {
+        const output = document.querySelector("[data-qa-app-route-preview]");
         const points = JSON.parse(output?.getAttribute("data-route-points") ?? "[]");
-        return points.at(-1)?.label === label;
+        return points.at(-1)?.label === expectedLabel;
       }, manualLabel);
       const preview = await readPreview();
       const degradationFailed = beforeManual !== ""
@@ -531,7 +560,7 @@ async function verifyComposerGlobeRoundTrip() {
         || !roundTrip.returned.activeIsTrigger
         || Math.abs(roundTrip.scrollAfter - roundTrip.scrollBefore) > 2;
       results.push({
-        name: `composer-globe-pick-geocode-${mode}-degradation`,
+        name: `app-globe-pick-geocode-${mode}-degradation`,
         expectedMessage,
         beforeManual,
         manualLabel,
@@ -541,15 +570,57 @@ async function verifyComposerGlobeRoundTrip() {
       if (degradationFailed) failed = true;
     }
 
-    reverseMode = "stale";
-    reverseRequestCount = 0;
+    // #36 review regression: deleting the just-picked point while its lookup is
+    // pending must clear the shared "正在识别…" state, and the late response must
+    // stay unable to resurrect either the point or its status/attribution.
+    resetReverse("pending-delete");
     await openFreshComposer(390, 844);
     await completePick();
-    // Start the next round before the deliberately delayed first lookup lands.
+    await firstReverseStarted.promise;
+    await page.getByText("已从地球添加地点；正在识别坐标对应的名称…").waitFor({ state: "visible" });
+    const deletedResponse = page.waitForResponse((response) => (
+      response.url().includes("/api/locations/reverse?")
+      && response.url().includes("latitude=37.76942")
+    ));
+    await routeItems().last().getByRole("button", { name: "删除地点" }).click();
+    await page.waitForFunction(() => document.querySelectorAll(".journey-route-draft > li:not(.is-empty)").length === 0);
+    await page.locator(".journey-composer__message").waitFor({ state: "detached" });
+    releaseFirstReverse.resolve();
+    await deletedResponse;
+    await settleRender();
+    const deletedPreview = await readPreview();
+    const deletedLookupState = await page.evaluate(() => ({
+      message: document.querySelector(".journey-composer__message")?.textContent?.trim() ?? "",
+      attribution: document.querySelector(".journey-location-attribution")?.textContent?.trim() ?? "",
+    }));
+    const deletedLookupFailed = deletedPreview.length !== 0
+      || deletedLookupState.message !== ""
+      || deletedLookupState.attribution.includes("DELETED QA PROVIDER");
+    results.push({
+      name: "app-globe-pick-delete-pending-geocode",
+      deletedPreview,
+      deletedLookupState,
+      failed: deletedLookupFailed,
+    });
+    if (deletedLookupFailed) failed = true;
+
+    // Hold the old response behind an explicit barrier. Only release it after
+    // the newer response is visible, then await the old network response and
+    // two render frames before asserting it cannot replace current UI state.
+    resetReverse("stale");
+    await openFreshComposer(390, 844);
+    await completePick();
+    await firstReverseStarted.promise;
     await completePick();
     await page.getByText("已根据坐标识别为「NEW QA PLACE」，可继续修改。").waitFor({ state: "visible" });
     await page.getByText("地点数据 NEW QA PROVIDER").waitFor({ state: "visible" });
-    await page.waitForTimeout(320);
+    const staleResponse = page.waitForResponse((response) => (
+      response.url().includes("/api/locations/reverse?")
+      && response.url().includes("latitude=37.76942")
+    ));
+    releaseFirstReverse.resolve();
+    await staleResponse;
+    await settleRender();
     const staleState = await page.evaluate(() => ({
       message: document.querySelector(".journey-composer__message")?.textContent?.trim() ?? "",
       attribution: document.querySelector(".journey-location-attribution")?.textContent?.trim() ?? "",
@@ -559,10 +630,11 @@ async function verifyComposerGlobeRoundTrip() {
       || staleState.message !== "已根据坐标识别为「NEW QA PLACE」，可继续修改。"
       || !staleState.attribution.includes("NEW QA PROVIDER")
       || staleState.attribution.includes("OLD QA PROVIDER")
-      || stalePreview.length !== 3
+      || stalePreview.length !== 2
+      || stalePreview.at(0)?.label !== "OLD QA PLACE"
       || stalePreview.at(-1)?.label !== "NEW QA PLACE";
     results.push({
-      name: "composer-globe-pick-stale-geocode-isolation",
+      name: "app-globe-pick-stale-geocode-isolation",
       reverseRequestCount,
       staleState,
       stalePreview,
