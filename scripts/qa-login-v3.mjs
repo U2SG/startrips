@@ -1,10 +1,7 @@
-import { chromium } from "playwright-core";
+import { launchQaBrowser } from "./qa-browser.mjs";
 
-const edgePath = "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe";
 const origin = process.env.QA_ORIGIN ?? "http://127.0.0.1:4173";
-const browser = await chromium.launch({
-  executablePath: edgePath,
-  headless: true,
+const browser = await launchQaBrowser({
   args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"],
 });
 const page = await browser.newPage({
@@ -141,6 +138,92 @@ async function verifyViewport(name, viewport, mobile) {
   await scan(`${name}-forgot`, mobile);
 }
 
+const gatewaySession = {
+  session: {
+    id: "qa-session",
+    userId: "qa-user",
+    token: "qa-token",
+    expiresAt: "2026-08-27T00:00:00.000Z",
+    createdAt: "2026-08-26T00:00:00.000Z",
+    updatedAt: "2026-08-26T00:00:00.000Z",
+    activeOrganizationId: "qa-org",
+  },
+  user: {
+    id: "qa-user",
+    name: "QA Traveler",
+    email: "qa@example.com",
+    emailVerified: true,
+    createdAt: "2026-08-26T00:00:00.000Z",
+    updatedAt: "2026-08-26T00:00:00.000Z",
+  },
+};
+
+async function createGatewayPage({ failAfterSignIn = false } = {}) {
+  const gatewayPage = await browser.newPage({
+    viewport: { width: 390, height: 844 },
+    reducedMotion: "reduce",
+  });
+  const errors = [];
+  let authenticated = false;
+  let signInRequests = 0;
+  let postSignInSessionRequests = 0;
+  gatewayPage.on("console", (message) => {
+    if (message.type() === "error") errors.push(message.text());
+  });
+  gatewayPage.on("pageerror", (error) => errors.push(error.message));
+  await gatewayPage.route("**/api/auth/**", async (route) => {
+    const pathname = new URL(route.request().url()).pathname;
+    if (pathname.endsWith("/sign-in/email")) {
+      signInRequests += 1;
+      authenticated = true;
+      await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+      return;
+    }
+    if (pathname.endsWith("/get-session")) {
+      if (authenticated) postSignInSessionRequests += 1;
+      if (authenticated && failAfterSignIn) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        await route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ message: "qa session refresh failed" }) });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(authenticated ? gatewaySession : null),
+      });
+      return;
+    }
+    if (pathname.endsWith("/organization/list")) {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([{ id: "qa-org", name: "QA Atlas", slug: "qa-atlas" }]),
+      });
+      return;
+    }
+    await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+  });
+  await gatewayPage.route("**/api/atlases/current", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({ atlas: { id: "qa-atlas", title: "QA Atlas", dedication: "" }, role: "owner" }),
+  }));
+  await gatewayPage.goto(`${origin}/?qaState=login-gateway&qaLite=1`, { waitUntil: "domcontentloaded", timeout: 8_000 });
+  await gatewayPage.locator(".auth-card--login-v3").waitFor({ state: "visible", timeout: 4_000 });
+  return {
+    page: gatewayPage,
+    errors,
+    metrics() { return { signInRequests, postSignInSessionRequests }; },
+    loseSession() { authenticated = false; },
+  };
+}
+
+async function submitGatewayLogin(gatewayPage) {
+  await gatewayPage.locator('input[type="email"]').fill("qa@example.com");
+  await gatewayPage.locator('input[type="password"]').fill("password1234");
+  await gatewayPage.getByRole("button", { name: "登录", exact: true }).click();
+}
+
 try {
   await page.goto(`${origin}/?qaState=login-v3&qaPhase=ready&qaLite=1`, {
     waitUntil: "domcontentloaded",
@@ -211,6 +294,68 @@ try {
     handoffResult.failed = true;
   }
   results.push(handoffResult);
+
+  console.error("[qa-login-v3] gateway refetch failure recovery");
+  const failedGateway = await createGatewayPage({ failAfterSignIn: true });
+  try {
+    await submitGatewayLogin(failedGateway.page);
+    await failedGateway.page.waitForTimeout(350);
+    await failedGateway.page.locator(".auth-continuity.is-login").waitFor({ timeout: 4_000 });
+    const recovery = await failedGateway.page.evaluate(() => {
+      const card = document.querySelector(".auth-card--login-v3");
+      return {
+        handoff: card?.classList.contains("is-handoff") ?? true,
+        pointerEvents: card ? getComputedStyle(card).pointerEvents : null,
+      };
+    });
+    const recoveryMetrics = failedGateway.metrics();
+    const unexpectedRecoveryErrors = failedGateway.errors.filter((message) => (
+      !message.includes("500 (Internal Server Error)")
+    ));
+    const recoveryResult = {
+      label: "gateway-refetch-failure-recovery",
+      ...recovery,
+      ...recoveryMetrics,
+      expectedNetworkErrors: failedGateway.errors.length - unexpectedRecoveryErrors.length,
+      errors: unexpectedRecoveryErrors,
+      failed: recovery.handoff
+        || recovery.pointerEvents === "none"
+        || recoveryMetrics.signInRequests < 1
+        || recoveryMetrics.postSignInSessionRequests < 1
+        || unexpectedRecoveryErrors.length > 0,
+    };
+    if (recoveryResult.failed) failed = true;
+    results.push(recoveryResult);
+  } finally {
+    await failedGateway.page.close();
+  }
+
+  console.error("[qa-login-v3] gateway session loss recovery");
+  const releasedGateway = await createGatewayPage();
+  try {
+    await submitGatewayLogin(releasedGateway.page);
+    await releasedGateway.page.locator(".auth-continuity.is-released").waitFor({ timeout: 5_000 });
+    releasedGateway.loseSession();
+    await releasedGateway.page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+    await releasedGateway.page.locator(".auth-continuity.is-login").waitFor({ timeout: 4_000 });
+    const sessionLoss = await releasedGateway.page.evaluate(() => {
+      const card = document.querySelector(".auth-card--login-v3");
+      return {
+        handoff: card?.classList.contains("is-handoff") ?? true,
+        pointerEvents: card ? getComputedStyle(card).pointerEvents : null,
+      };
+    });
+    const sessionLossResult = {
+      label: "gateway-session-loss-recovery",
+      ...sessionLoss,
+      errors: releasedGateway.errors,
+      failed: sessionLoss.handoff || sessionLoss.pointerEvents === "none" || releasedGateway.errors.length > 0,
+    };
+    if (sessionLossResult.failed) failed = true;
+    results.push(sessionLossResult);
+  } finally {
+    await releasedGateway.page.close();
+  }
 
   if (consoleErrors.length || pageErrors.length) {
     failed = true;

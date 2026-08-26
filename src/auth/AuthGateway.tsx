@@ -568,6 +568,7 @@ export function AuthGateway({ children }: { children: ReactNode }) {
   const session = authClient.useSession();
   const [revision, setRevision] = useState(0);
   const [handoffActive, setHandoffActive] = useState(false);
+  const [handoffRefreshPending, setHandoffRefreshPending] = useState(false);
   const [workspaceReady, setWorkspaceReady] = useState(false);
   const [handoffDone, setHandoffDone] = useState(false);
   const reduceMotion = useReducedMotionPreference();
@@ -576,14 +577,41 @@ export function AuthGateway({ children }: { children: ReactNode }) {
   const qaPhase = searchParams.get("qaPhase");
   const qaLite = import.meta.env.DEV && searchParams.get("qaLite") === "1";
   const qaLogin = import.meta.env.DEV && qaState === "login-v3";
-  const qaBypass = import.meta.env.DEV && Boolean(qaState) && !qaLogin;
+  const qaGateway = import.meta.env.DEV && qaState === "login-gateway";
+  const qaBypass = import.meta.env.DEV && Boolean(qaState) && !qaLogin && !qaGateway;
+
+  useEffect(() => {
+    if (
+      !handoffActive
+      || handoffRefreshPending
+      || session.isPending
+      || session.isRefetching
+    ) return;
+    if (session.data && !session.error) return;
+
+    // Sign-in can succeed while the session cookie/refetch still fails. In
+    // that case restore an interactive Login V3 surface instead of leaving
+    // the dissolved handoff card on screen indefinitely.
+    setHandoffActive(false);
+    setWorkspaceReady(false);
+    setHandoffDone(false);
+  }, [
+    handoffActive,
+    handoffRefreshPending,
+    session.data,
+    session.error,
+    session.isPending,
+    session.isRefetching,
+  ]);
 
   useEffect(() => {
     if (!handoffActive || !workspaceReady || handoffDone) return;
-    const timeout = window.setTimeout(
-      () => setHandoffDone(true),
-      reduceMotion ? 160 : 1080,
-    );
+    const timeout = window.setTimeout(() => {
+      setHandoffDone(true);
+      // The visual handoff is one-shot. Clearing the active flag here also
+      // guarantees a later logout/session loss renders a normal login form.
+      setHandoffActive(false);
+    }, reduceMotion ? 160 : 1080);
     return () => window.clearTimeout(timeout);
   }, [handoffActive, workspaceReady, handoffDone, reduceMotion]);
 
@@ -618,11 +646,13 @@ export function AuthGateway({ children }: { children: ReactNode }) {
           key="login-continuity"
           handoff={handoffActive}
           forceReady={handoffActive}
+          lightweightScene={qaGateway && qaLite}
           onAuthenticated={() => {
             setHandoffActive(true);
+            setHandoffRefreshPending(true);
             setWorkspaceReady(false);
             setHandoffDone(false);
-            void session.refetch();
+            void session.refetch().finally(() => setHandoffRefreshPending(false));
           }}
         />
       </div>
@@ -652,6 +682,7 @@ export function AuthGateway({ children }: { children: ReactNode }) {
           onAuthenticated={() => undefined}
           handoff
           forceReady
+          lightweightScene={qaGateway && qaLite}
         />
       ) : null}
       <div key="atlas-workspace" className="auth-continuity__atlas">

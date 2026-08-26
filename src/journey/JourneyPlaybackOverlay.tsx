@@ -23,6 +23,7 @@ import {
 } from "./mediaPrefetch";
 import { useJourneyPlaybackDirector } from "./useJourneyPlaybackDirector";
 import { playbackMediaForPoint, type PlaybackStep } from "./journeyPlayback";
+import { syncPlaybackMediaElement } from "./mediaPlaybackSync";
 import { journeySoundtrack, stripMediaExtension } from "./journeyModel";
 import { createSoundtrackSampler } from "../motion/audioSampler";
 import {
@@ -103,6 +104,7 @@ export function JourneyPlaybackOverlay({
     () => setDecodeSettleRevision((current) => current + 1),
   ), []);
   const audioRef = useRef<HTMLAudioElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
   // #20: one sampler per soundtrack element; analyser built on first play.
   const samplerRef = useRef(createSoundtrackSampler());
   const lightStripRef = useRef<HTMLDivElement>(null);
@@ -254,6 +256,12 @@ export function JourneyPlaybackOverlay({
     void audio.play().catch(() => undefined);
   }, [audioReactiveReducedMotion, paused, director.isPlaying, soundtrackRead?.status === "ready"]);
 
+  // Video chapters use the same Startrips transport as the director and
+  // soundtrack. The native transport is intentionally not authoritative.
+  useLayoutEffect(() => {
+    syncPlaybackMediaElement(videoRef.current, director.isPlaying && !paused);
+  }, [director.isPlaying, director.stepIndex, paused]);
+
   // #20: one analyser graph writes a shared mutable energy channel; the light
   // strip and Three.js scene read that channel without React per-frame state.
   useEffect(() => {
@@ -336,9 +344,13 @@ export function JourneyPlaybackOverlay({
         samplerRef.current.setPlaying(true);
         void audio.play().catch(() => undefined);
       }
+      // Run video.play() inside the same user gesture as the Startrips resume
+      // action so browser user-activation rules do not create a second state.
+      syncPlaybackMediaElement(videoRef.current, true);
       resume();
     } else {
       samplerRef.current.setPlaying(false);
+      syncPlaybackMediaElement(videoRef.current, false);
       pause();
     }
   }, [audioReactiveReducedMotion, paused, pause, resume, soundtrackRead?.status === "ready"]);
@@ -485,7 +497,7 @@ export function JourneyPlaybackOverlay({
               <div className="journey-playback__media-state is-error">媒体暂不可用，继续播放下一段</div>
             ) : activeMedia.mimeType.startsWith("video/")
               ? activeRead?.status === "ready"
-                ? <video key={activeMedia.id} src={activeRead.url} controls autoPlay playsInline />
+                ? <video ref={videoRef} key={activeMedia.id} src={activeRead.url} autoPlay playsInline />
                 : <div className="journey-playback__media-state">正在打开媒体…</div>
               // Review P2: images must wait for the decode gate too — showing
               // the <img> as soon as the signed URL is ready can still flash

@@ -1,11 +1,10 @@
-import { chromium } from "playwright-core";
+import { launchQaBrowser } from "./qa-browser.mjs";
 
-const edgePath = "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe";
 const origin = process.env.QA_ORIGIN ?? "http://127.0.0.1:4173";
 const onePixelGif = "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=";
 const tinyVideo = "data:video/mp4;base64,AAAA";
 
-const browser = await chromium.launch({ executablePath: edgePath, headless: true });
+const browser = await launchQaBrowser();
 
 function overlapPairs(items) {
   const pairs = [];
@@ -57,7 +56,7 @@ async function scanButtons(page, rootSelector) {
   }, rootSelector);
 }
 
-async function createMobilePage(path, mediaUrl) {
+async function createMobilePage(path, mediaUrl, { instrumentMedia = false } = {}) {
   const page = await browser.newPage({
     viewport: { width: 390, height: 844 },
     isMobile: true,
@@ -71,6 +70,24 @@ async function createMobilePage(path, mediaUrl) {
     if (message.type() === "error") consoleErrors.push(message.text());
   });
   page.on("pageerror", (error) => pageErrors.push(error.message));
+  if (instrumentMedia) {
+    await page.addInitScript(() => {
+      const state = new WeakMap();
+      Object.defineProperty(HTMLMediaElement.prototype, "paused", {
+        configurable: true,
+        get() {
+          return state.get(this) !== "playing";
+        },
+      });
+      HTMLMediaElement.prototype.play = function play() {
+        state.set(this, "playing");
+        return Promise.resolve();
+      };
+      HTMLMediaElement.prototype.pause = function pause() {
+        state.set(this, "paused");
+      };
+    });
+  }
   await page.route("**/api/auth/get-session", (route) => route.fulfill({
     status: 200,
     contentType: "application/json",
@@ -127,7 +144,7 @@ try {
     await story.page.close();
   }
 
-  const playback = await createMobilePage("/?qaState=journey-playback", tinyVideo);
+  const playback = await createMobilePage("/?qaState=journey-playback", tinyVideo, { instrumentMedia: true });
   try {
     await playback.page.locator(".journey-playback").waitFor({ state: "visible" });
     const next = playback.page.getByRole("button", { name: "下一个章节" });
@@ -135,7 +152,17 @@ try {
     await next.click();
     await playback.page.waitForTimeout(80);
     const phase = await playback.page.locator(".journey-playback").getAttribute("data-playback-phase");
-    const videoVisible = await playback.page.locator(".journey-playback__media video").count() === 1;
+    const video = playback.page.locator(".journey-playback__media video");
+    const videoVisible = await video.count() === 1;
+    const nativeControls = videoVisible ? await video.evaluate((element) => element.controls) : null;
+    const initiallyPaused = videoVisible ? await video.evaluate((element) => element.paused) : null;
+    const pauseButton = playback.page.getByRole("button", { name: "暂停播放" });
+    await pauseButton.click();
+    await playback.page.waitForTimeout(20);
+    const pausedAfterStartripsPause = videoVisible ? await video.evaluate((element) => element.paused) : null;
+    await playback.page.getByRole("button", { name: "继续播放" }).click();
+    await playback.page.waitForTimeout(20);
+    const pausedAfterStartripsResume = videoVisible ? await video.evaluate((element) => element.paused) : null;
     const bottomGap = await playback.page.locator(".journey-playback__controls").evaluate((element) => {
       const bounds = element.getBoundingClientRect();
       return Math.round(innerHeight - bounds.bottom);
@@ -143,8 +170,18 @@ try {
     record("playback-video", await scanButtons(playback.page, ".journey-playback"), {
       phase,
       videoVisible,
+      nativeControls,
+      initiallyPaused,
+      pausedAfterStartripsPause,
+      pausedAfterStartripsResume,
       bottomGap,
-      failed: phase !== "media" || !videoVisible || bottomGap < 70,
+      failed: phase !== "media"
+        || !videoVisible
+        || nativeControls !== false
+        || initiallyPaused !== false
+        || pausedAfterStartripsPause !== true
+        || pausedAfterStartripsResume !== false
+        || bottomGap < 12,
     });
     if (playback.consoleErrors.length || playback.pageErrors.length) {
       checks.push({ name: "playback-runtime-errors", consoleErrors: playback.consoleErrors, pageErrors: playback.pageErrors });
