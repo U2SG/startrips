@@ -175,10 +175,17 @@ export async function reverseGeocode(
   latitude: number,
   longitude: number,
   fetcher: Fetcher = fetch,
+  timeoutMs = 8_000,
 ): Promise<ReverseGeocodeResponse> {
-  return requestJson<ReverseGeocodeResponse>(
-    `/api/locations/reverse?latitude=${encodeURIComponent(String(latitude))}&longitude=${encodeURIComponent(String(longitude))}`,
-    {},
-    fetcher,
-  );
+  const controller = new AbortController();
+  const timeout = globalThis.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await requestJson<ReverseGeocodeResponse>(
+      `/api/locations/reverse?latitude=${encodeURIComponent(String(latitude))}&longitude=${encodeURIComponent(String(longitude))}`,
+      { signal: controller.signal },
+      fetcher,
+    );
+  } finally {
+    globalThis.clearTimeout(timeout);
+  }
 }
