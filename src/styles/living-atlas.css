@@ -1540,6 +1540,12 @@
   transform: translate(-50%, 0);
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .icon-action-button::after {
+    transition: none;
+  }
+}
+
 .icon-action-button.is-destructive-secondary:hover:not(:disabled),
 .icon-action-button.is-destructive-secondary:focus-visible {
   color: #c28e78;

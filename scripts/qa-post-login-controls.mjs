@@ -214,6 +214,10 @@ async function verifyComposerMediaActions() {
     const tooltipAction = page.locator(".journey-media-fields__actions .icon-action-button:not(:disabled)").first();
     await tooltipAction.scrollIntoViewIfNeeded();
     await tooltipAction.hover();
+    await page.waitForFunction(() => {
+      const button = document.querySelector(".journey-media-fields__actions .icon-action-button:not(:disabled)");
+      return button && Number(getComputedStyle(button, "::after").opacity) >= 0.9;
+    });
     const hoverTooltip = await tooltipAction.evaluate((button) => ({
       opacity: Number(getComputedStyle(button, "::after").opacity),
       content: getComputedStyle(button, "::after").content,
@@ -221,6 +225,12 @@ async function verifyComposerMediaActions() {
     await tooltipAction.focus();
     await page.keyboard.press("Shift+Tab");
     await page.keyboard.press("Tab");
+    await page.waitForFunction(() => {
+      const button = document.querySelector(".journey-media-fields__actions .icon-action-button:not(:disabled)");
+      return button === document.activeElement
+        && button.matches(":focus-visible")
+        && Number(getComputedStyle(button, "::after").opacity) >= 0.9;
+    });
     const focusTooltip = await tooltipAction.evaluate((button) => ({
       focused: document.activeElement === button,
       focusVisible: button.matches(":focus-visible"),

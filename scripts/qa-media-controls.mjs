@@ -196,6 +196,10 @@ try {
     await storyDesktop.page.getByRole("button", { name: "下一个媒体" }).click();
     const coverAction = storyDesktop.page.getByRole("button", { name: "将当前媒体设为封面" });
     await coverAction.hover();
+    await storyDesktop.page.waitForFunction(() => {
+      const button = document.querySelector(".journey-story__media-set-cover");
+      return button && Number(getComputedStyle(button, "::after").opacity) >= 0.9;
+    });
     const hoverTooltip = await coverAction.evaluate((button) => ({
       opacity: Number(getComputedStyle(button, "::after").opacity),
       content: getComputedStyle(button, "::after").content,
@@ -203,6 +207,12 @@ try {
     await coverAction.focus();
     await storyDesktop.page.keyboard.press("Shift+Tab");
     await storyDesktop.page.keyboard.press("Tab");
+    await storyDesktop.page.waitForFunction(() => {
+      const button = document.querySelector(".journey-story__media-set-cover");
+      return button === document.activeElement
+        && button.matches(":focus-visible")
+        && Number(getComputedStyle(button, "::after").opacity) >= 0.9;
+    });
     const focusTooltip = await coverAction.evaluate((button) => ({
       focused: document.activeElement === button,
       focusVisible: button.matches(":focus-visible"),
