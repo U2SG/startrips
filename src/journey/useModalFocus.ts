@@ -31,6 +31,8 @@ export function useModalFocus<T extends HTMLElement>(
 ) {
   const rootRef = useRef<T>(null);
   const onCloseRef = useRef(onClose);
+  const trapActiveRef = useRef(false);
+  const pendingFocusRestoreRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     onCloseRef.current = onClose;
@@ -56,7 +58,19 @@ export function useModalFocus<T extends HTMLElement>(
     return () => {
       document.body.style.overflow = previousOverflow;
       document.body.style.paddingRight = previousPaddingRight;
-      if (previousFocus?.isConnected) previousFocus.focus();
+
+      // React runs effect cleanups in declaration order. If the trap is still
+      // active, its background siblings are still inert at this point, so a
+      // focus() here would be rejected by Chromium. Hand the target to the
+      // trap cleanup; if the trap was already suspended, restore immediately.
+      pendingFocusRestoreRef.current = previousFocus;
+      if (!trapActiveRef.current) {
+        const target = pendingFocusRestoreRef.current;
+        pendingFocusRestoreRef.current = null;
+        if (target?.isConnected && !target.closest("[inert]")) {
+          target.focus({ preventScroll: true });
+        }
+      }
     };
   }, [active]);
 
@@ -84,6 +98,7 @@ export function useModalFocus<T extends HTMLElement>(
       accountDock.inert = true;
     }
 
+    trapActiveRef.current = true;
     const focusable = () => [...root.querySelectorAll<HTMLElement>(FOCUSABLE)]
       .filter(isModalFocusCandidate);
     root.focus({ preventScroll: true });
@@ -129,6 +144,16 @@ export function useModalFocus<T extends HTMLElement>(
     return () => {
       document.removeEventListener("keydown", onKeyDown, true);
       for (const entry of inerted) entry.element.inert = entry.previous;
+      trapActiveRef.current = false;
+
+      // A modal close queues its opener above; restore only after every inert
+      // state owned by this trap has been released. Suspension has no queued
+      // target, so globe-pick handoff never steals focus back into the modal.
+      const target = pendingFocusRestoreRef.current;
+      pendingFocusRestoreRef.current = null;
+      if (target?.isConnected && !target.closest("[inert]")) {
+        target.focus({ preventScroll: true });
+      }
     };
   }, [active, trapSuspended]);
 

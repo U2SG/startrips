@@ -297,6 +297,36 @@ async function verifyComposerMediaActions() {
         failed: pickFailed,
       });
     }
+
+    // Review P2 regression: normal modal close must restore the opener only
+    // after the atlas siblings have been released from inert. The preview's
+    // reopen button is an atlas sibling, so the old cleanup order reproduced
+    // Chromium dropping focus to <body>.
+    await page.getByRole("button", { name: "关闭旅程编辑器" }).click();
+    await page.locator(".journey-composer").waitFor({ state: "detached" });
+    const reopen = page.locator("[data-qa-composer-reopen]");
+    await reopen.focus();
+    await reopen.click();
+    await page.locator(".journey-composer").waitFor({ state: "visible" });
+    await page.getByRole("button", { name: "关闭旅程编辑器" }).click();
+    await page.locator(".journey-composer").waitFor({ state: "detached" });
+    await page.waitForFunction(() => document.activeElement?.hasAttribute("data-qa-composer-reopen") ?? false);
+    const modalCloseFocus = await page.evaluate(() => {
+      const reopenButton = document.querySelector("[data-qa-composer-reopen]");
+      return {
+        activeIsReopen: document.activeElement === reopenButton,
+        reopenInert: reopenButton instanceof HTMLElement ? Boolean(reopenButton.closest("[inert]")) : null,
+        bodyOverflow: document.body.style.overflow,
+      };
+    });
+    results.push({
+      name: "composer-normal-close-focus-restoration",
+      ...modalCloseFocus,
+      failed: !modalCloseFocus.activeIsReopen
+        || modalCloseFocus.reopenInert !== false
+        || modalCloseFocus.bodyOverflow !== "",
+    });
+    if (results.at(-1).failed) failed = true;
   } finally {
     await page.close();
   }

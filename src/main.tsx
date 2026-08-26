@@ -162,16 +162,20 @@ function LivingAtlasGlobeControlsQaPreview() {
 
 function JourneyComposerQaPreview() {
   const editMode = new URLSearchParams(window.location.search).get("qaMode") === "edit";
+  const [open, setOpen] = useState(true);
   return (
     <main className="living-atlas">
       <div className="living-atlas__globe journey-story-qa__backdrop" aria-hidden="true" />
-      <JourneyComposer
-        open
-        journey={editMode ? storyQaJourney : undefined}
-        onClose={() => undefined}
-        onSaved={() => undefined}
-        onGlobePickRequest={() => undefined}
-      />
+      <button type="button" data-qa-composer-reopen onClick={() => setOpen(true)}>重新打开编辑器</button>
+      {open ? (
+        <JourneyComposer
+          open
+          journey={editMode ? storyQaJourney : undefined}
+          onClose={() => setOpen(false)}
+          onSaved={() => undefined}
+          onGlobePickRequest={() => undefined}
+        />
+      ) : null}
     </main>
   );
 }
