@@ -5,6 +5,7 @@ import { AuthGateway } from "./auth/AuthGateway";
 import { LivingAtlasApp } from "./journey/LivingAtlasApp";
 import { JourneyComposer } from "./journey/JourneyComposer";
 import { JourneyStory } from "./journey/JourneyStory";
+import { JourneyPlaybackOverlay } from "./journey/JourneyPlaybackOverlay";
 import type { Journey, JourneyRoute } from "./journey/types";
 import { ParticleEarthScene } from "./scene/ParticleEarthScene";
 import { LivingAtlasGlobe } from "./scene/LivingAtlasGlobe";
@@ -190,9 +191,7 @@ function JourneyStoryQaPreview() {
 
   return (
     <main className="living-atlas">
-      <div className="living-atlas__globe" aria-hidden="true">
-        <ParticleEarthScene mode="focusPoint" quality="high" reduceMotion />
-      </div>
+      <div className="living-atlas__globe journey-story-qa__backdrop" aria-hidden="true" />
       <button type="button" data-qa-story-reopen onClick={() => setOpen(true)}>重新打开旅程</button>
       <button type="button" data-qa-story-next-audio onClick={() => setNextMediaIsSoundtrack(true)}>下一个上传是配乐</button>
       {open ? (
@@ -267,10 +266,47 @@ function JourneyStoryQaPreview() {
   );
 }
 
+const playbackQaJourneyId = "00000000-0000-4000-8000-000000000011";
+const playbackQaJourney: Journey = {
+  ...storyQaJourney,
+  id: playbackQaJourneyId,
+  title: "QA · MEDIA PLAYBACK",
+  routePoints: storyQaJourney.routePoints.map((point) => ({
+    ...point,
+    journeyId: playbackQaJourneyId,
+  })),
+  media: [{
+    ...storyQaJourney.media[0],
+    id: "00000000-0000-4000-8000-000000000111",
+    journeyId: playbackQaJourneyId,
+    routePointId: storyQaJourney.routePoints[0].id,
+    storageKey: "qa/playback-video",
+    fileName: "playback-video.mp4",
+    mimeType: "video/mp4",
+    sortOrder: 0,
+  }],
+};
+
+function JourneyPlaybackQaPreview() {
+  return (
+    <main className="living-atlas">
+      <div className="living-atlas__globe journey-story-qa__backdrop" aria-hidden="true" />
+      <JourneyPlaybackOverlay
+        journey={playbackQaJourney}
+        onClose={() => undefined}
+        onFocusRoutePoint={() => undefined}
+        reduceMotion
+      />
+    </main>
+  );
+}
+
 const Experience = import.meta.env.DEV && qaState === "journey-composer"
   ? JourneyComposerQaPreview
   : import.meta.env.DEV && qaState === "journey-story"
     ? JourneyStoryQaPreview
+  : import.meta.env.DEV && qaState === "journey-playback"
+    ? JourneyPlaybackQaPreview
   : import.meta.env.DEV && qaState === "journey-routes"
     ? JourneyRoutesQaPreview
   : import.meta.env.DEV && qaState

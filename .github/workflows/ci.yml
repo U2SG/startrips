@@ -52,5 +52,21 @@ jobs:
         run: pnpm typecheck
       - name: Test
         run: pnpm test
+      - name: Install Chromium for browser QA
+        run: pnpm exec playwright-core install --with-deps chromium
+      - name: Login and media-control browser QA
+        run: |
+          pnpm exec vite --host 127.0.0.1 --port 4173 > /tmp/startrips-vite.log 2>&1 &
+          VITE_PID=$!
+          trap 'kill $VITE_PID' EXIT
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:4173/ > /dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          curl --fail --silent http://127.0.0.1:4173/ > /dev/null || (cat /tmp/startrips-vite.log && exit 1)
+          pnpm qa:login-v3
+          pnpm qa:media-controls
       - name: Build
         run: pnpm build

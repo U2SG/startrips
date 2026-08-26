@@ -1617,26 +1617,33 @@ export function JourneyStory({
                 <button type="button" disabled={assetIndex === 0 || mutationPending} onClick={() => navigateToMedia(assetIndex - 1)} aria-label="上一个媒体"><IconArrowLeft size={17} stroke={1.35} aria-hidden="true" /></button>
                 <span>{scopedMedia.length > 0 ? `${assetIndex + 1} / ${scopedMedia.length}` : "0 / 0"}</span>
                 <button type="button" disabled={assetIndex === scopedMedia.length - 1 || mutationPending} onClick={() => navigateToMedia(assetIndex + 1)} aria-label="下一个媒体"><IconArrowRight size={17} stroke={1.35} aria-hidden="true" /></button>
-                <button type="button" disabled={!canMoveEarlier} onClick={() => void moveMedia(-1)} aria-label="向前调整媒体顺序"><IconArrowUp size={17} stroke={1.35} aria-hidden="true" /></button>
-                <button type="button" disabled={!canMoveLater} onClick={() => void moveMedia(1)} aria-label="向后调整媒体顺序"><IconArrowDown size={17} stroke={1.35} aria-hidden="true" /></button>
               </nav>
+            ) : null}
+            {!overview && asset && visualMedia.length > 1 ? (
+              <div className="journey-story__media-order" role="group" aria-label="媒体排序">
+                <span>排序</span>
+                <button type="button" disabled={!canMoveEarlier || mutationPending} onClick={() => void moveMedia(-1)} aria-label="向前调整媒体顺序"><IconArrowUp size={16} stroke={1.35} aria-hidden="true" /></button>
+                <button type="button" disabled={!canMoveLater || mutationPending} onClick={() => void moveMedia(1)} aria-label="向后调整媒体顺序"><IconArrowDown size={16} stroke={1.35} aria-hidden="true" /></button>
+              </div>
             ) : null}
             {orderMessage ? <p className="journey-story__order-message" role="status">{orderMessage}</p> : null}
             {!overview && asset ? (
               <div className="journey-story__media-actions">
-                {cover?.id !== asset.id ? (
-                  <button
-                    type="button"
-                    className="journey-story__media-set-cover"
-                    disabled={mutationPending || coverPending}
-                    onClick={() => void handleSetCover(asset.id)}
-                  >
-                    <IconBookmark size={16} stroke={1.35} aria-hidden="true" />
-                    设为封面
-                  </button>
-                ) : (
-                  <span className="journey-story__media-cover-current">当前封面</span>
-                )}
+                {mediaDeleteState === "idle" ? (
+                  cover?.id !== asset.id ? (
+                    <button
+                      type="button"
+                      className="journey-story__media-set-cover"
+                      disabled={mutationPending || coverPending}
+                      onClick={() => void handleSetCover(asset.id)}
+                    >
+                      <IconBookmark size={16} stroke={1.35} aria-hidden="true" />
+                      设为封面
+                    </button>
+                  ) : (
+                    <span className="journey-story__media-cover-current">当前封面</span>
+                  )
+                ) : null}
                 <div className="journey-story__media-remove">
                   {mediaDeleteState === "idle" ? (
                     <button type="button" disabled={mutationPending} onClick={() => setMediaDeleteState("confirming")} aria-label="删除这段媒体">

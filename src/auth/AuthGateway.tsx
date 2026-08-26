@@ -7,6 +7,7 @@ import {
   type ReactNode,
 } from "react";
 import { IconChevronDown, IconUserCircle } from "@tabler/icons-react";
+import { ParticleEarthScene } from "../scene/ParticleEarthScene";
 import { authClient } from "./auth-client";
 
 type OrganizationSummary = {
@@ -45,25 +46,115 @@ async function responseError(response: Response): Promise<string> {
   return payload?.message || payload?.error || `Request failed (${response.status})`;
 }
 
-function AuthForm({ onAuthenticated }: { onAuthenticated: () => void }) {
+function useReducedMotionPreference() {
+  const [reduced, setReduced] = useState(() => (
+    typeof window !== "undefined"
+    && window.matchMedia("(prefers-reduced-motion: reduce)").matches
+  ));
+
+  useEffect(() => {
+    const media = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const update = () => setReduced(media.matches);
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+
+  return reduced;
+}
+
+function LoginV3Scene({ handoff = false, forceReady = false, lightweight = false }: {
+  handoff?: boolean;
+  forceReady?: boolean;
+  lightweight?: boolean;
+}) {
+  const reduceMotion = useReducedMotionPreference();
+  const [earthMode, setEarthMode] = useState<"archiveBurst" | "particleSphere">(
+    reduceMotion || forceReady || handoff ? "particleSphere" : "archiveBurst",
+  );
+
+  useEffect(() => {
+    if (reduceMotion || forceReady || handoff) {
+      setEarthMode("particleSphere");
+      return;
+    }
+    setEarthMode("archiveBurst");
+    const timer = window.setTimeout(() => setEarthMode("particleSphere"), 500);
+    return () => window.clearTimeout(timer);
+  }, [reduceMotion, forceReady, handoff]);
+
+  const classes = [
+    "auth-v3-scene",
+    handoff ? "is-handoff" : "",
+    forceReady ? "is-ready" : "",
+    reduceMotion ? "is-reduced-motion" : "",
+  ].filter(Boolean).join(" ");
+
+  return (
+    <div
+      className={classes}
+      data-login-v3-scene="true"
+      data-login-v3-handoff={handoff ? "true" : "false"}
+      aria-hidden="true"
+    >
+      <div className="auth-v3-scene__earth" data-login-v3-earth-mode={earthMode}>
+        {lightweight ? (
+          <div className="auth-v3-scene__qa-earth" />
+        ) : (
+          <ParticleEarthScene
+            mode={earthMode}
+            quality="low"
+            showArchiveSignals={false}
+            dragToRotate={false}
+            wheelToZoom={false}
+            reduceMotion={reduceMotion}
+          />
+        )}
+      </div>
+      <div className="auth-v3-scene__cyan-beam" />
+      <div className="auth-v3-scene__warm-glow" />
+      <div className="auth-v3-scene__space-haze" />
+      <div className="auth-v3-scene__vignette" />
+    </div>
+  );
+}
+
+function AuthForm({ onAuthenticated, handoff = false, forceReady = false, lightweightScene = false }: {
+  onAuthenticated: () => void;
+  handoff?: boolean;
+  forceReady?: boolean;
+  lightweightScene?: boolean;
+}) {
   const [mode, setMode] = useState<"sign-in" | "sign-up" | "forgot">("sign-in");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState("");
+  const [messageTone, setMessageTone] = useState<"error" | "success">("error");
+  const [introSkipped, setIntroSkipped] = useState(false);
+  const presentationReady = forceReady || handoff || introSkipped;
+
+  function changeMode(nextMode: "sign-in" | "sign-up" | "forgot") {
+    if (pending || nextMode === mode) return;
+    setMode(nextMode);
+    setMessage("");
+    setMessageTone("error");
+  }
 
   async function submit(event: FormEvent) {
     event.preventDefault();
     setPending(true);
     setMessage("");
+    setMessageTone("error");
     try {
       if (mode === "forgot") {
         const result = await authClient.requestPasswordReset({
-          email,
+          email: email.trim(),
           redirectTo: `${window.location.origin}/reset-password`,
         });
         if (result.error) throw new Error(result.error.message);
+        setMessageTone("success");
         setMessage("如果这个邮箱已注册，重置链接已经发送。");
         return;
       }
@@ -76,7 +167,8 @@ function AuthForm({ onAuthenticated }: { onAuthenticated: () => void }) {
           callbackURL: window.location.href,
         });
         if (result.error) throw new Error(result.error.message);
-        setMessage("验证邮件已发送。完成邮箱验证后即可进入。 ");
+        setMessageTone("success");
+        setMessage("验证邮件已发送。完成邮箱验证后即可进入。");
         return;
       }
 
@@ -88,6 +180,7 @@ function AuthForm({ onAuthenticated }: { onAuthenticated: () => void }) {
       if (result.error) throw new Error(result.error.message);
       onAuthenticated();
     } catch (error) {
+      setMessageTone("error");
       setMessage(error instanceof Error ? error.message : "认证失败，请重试");
     } finally {
       setPending(false);
@@ -95,8 +188,21 @@ function AuthForm({ onAuthenticated }: { onAuthenticated: () => void }) {
   }
 
   return (
-    <main className="auth-gate">
-      <section className="auth-card" aria-labelledby="auth-title">
+    <main
+      className="auth-gate"
+      onPointerDown={() => setIntroSkipped(true)}
+      onFocusCapture={() => setIntroSkipped(true)}
+    >
+      <LoginV3Scene handoff={handoff} forceReady={presentationReady} lightweight={lightweightScene} />
+      <div className="auth-v3-brand" aria-hidden="true">
+        <span>STARTRIPS</span>
+        <span>PRIVATE MEMORY ATLAS</span>
+      </div>
+      <section
+        className={`auth-card auth-card--login-v3 is-${mode}${handoff ? " is-handoff" : ""}${presentationReady ? " is-ready" : ""}`}
+        aria-labelledby="auth-title"
+        aria-busy={pending}
+      >
         <p className="auth-eyebrow">STARTRIPS · PRIVATE ATLAS</p>
         <h1 id="auth-title">
           {mode === "sign-in" ? "进入你们的星轨" : mode === "sign-up" ? "创建私人入口" : "重置密码"}
@@ -107,12 +213,12 @@ function AuthForm({ onAuthenticated }: { onAuthenticated: () => void }) {
           {mode === "sign-up" ? (
             <label>
               <span>你的名字</span>
-              <input required maxLength={80} value={name} onChange={(event) => setName(event.target.value)} />
+              <input required maxLength={80} autoComplete="name" value={name} onChange={(event) => setName(event.target.value)} />
             </label>
           ) : null}
           <label>
             <span>邮箱</span>
-            <input required type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} />
+            <input required type="email" autoComplete="email" autoCapitalize="none" spellCheck={false} inputMode="email" value={email} onChange={(event) => setEmail(event.target.value)} />
           </label>
           {mode !== "forgot" ? (
             <label>
@@ -125,12 +231,27 @@ function AuthForm({ onAuthenticated }: { onAuthenticated: () => void }) {
           </button>
         </form>
 
-        {message ? <p className="auth-message" role="status">{message}</p> : null}
-        <div className="auth-switches">
-          <button type="button" onClick={() => setMode(mode === "sign-up" ? "sign-in" : "sign-up")}>
+        {message ? (
+          <p
+            className={`auth-message is-${messageTone}`}
+            role={messageTone === "error" ? "alert" : "status"}
+          >
+            {message}
+          </p>
+        ) : null}
+        <div className="auth-switches" aria-label="切换登录方式">
+          <button
+            type="button"
+            disabled={pending}
+            onClick={() => changeMode(mode === "sign-up" ? "sign-in" : "sign-up")}
+          >
             {mode === "sign-up" ? "已有账号，去登录" : "没有账号，先注册"}
           </button>
-          <button type="button" onClick={() => setMode(mode === "forgot" ? "sign-in" : "forgot")}>
+          <button
+            type="button"
+            disabled={pending}
+            onClick={() => changeMode(mode === "forgot" ? "sign-in" : "forgot")}
+          >
             {mode === "forgot" ? "返回登录" : "忘记密码"}
           </button>
         </div>
@@ -217,10 +338,11 @@ function InvitationGate({ invitationId, onAccepted }: { invitationId: string; on
   );
 }
 
-function WorkspaceGate({ children, activeOrganizationId, userName }: {
+function WorkspaceGate({ children, activeOrganizationId, userName, onReady }: {
   children: ReactNode;
   activeOrganizationId?: string;
   userName: string;
+  onReady?: () => void;
 }) {
   const [gate, setGate] = useState<GateState>({ kind: "loading" });
   const [selectedActiveId, setSelectedActiveId] = useState(activeOrganizationId);
@@ -239,6 +361,10 @@ function WorkspaceGate({ children, activeOrganizationId, userName }: {
   useEffect(() => {
     setSelectedActiveId(activeOrganizationId);
   }, [activeOrganizationId]);
+
+  useEffect(() => {
+    if (gate.kind !== "loading") onReady?.();
+  }, [gate.kind, onReady]);
 
   useEffect(() => {
     let cancelled = false;
@@ -441,7 +567,64 @@ function WorkspaceGate({ children, activeOrganizationId, userName }: {
 export function AuthGateway({ children }: { children: ReactNode }) {
   const session = authClient.useSession();
   const [revision, setRevision] = useState(0);
-  const qaBypass = import.meta.env.DEV && new URLSearchParams(window.location.search).has("qaState");
+  const [handoffActive, setHandoffActive] = useState(false);
+  const [handoffRefreshPending, setHandoffRefreshPending] = useState(false);
+  const [workspaceReady, setWorkspaceReady] = useState(false);
+  const [handoffDone, setHandoffDone] = useState(false);
+  const reduceMotion = useReducedMotionPreference();
+  const searchParams = new URLSearchParams(window.location.search);
+  const qaState = searchParams.get("qaState");
+  const qaPhase = searchParams.get("qaPhase");
+  const qaLite = import.meta.env.DEV && searchParams.get("qaLite") === "1";
+  const qaLogin = import.meta.env.DEV && qaState === "login-v3";
+  const qaGateway = import.meta.env.DEV && qaState === "login-gateway";
+  const qaBypass = import.meta.env.DEV && Boolean(qaState) && !qaLogin && !qaGateway;
+
+  useEffect(() => {
+    if (
+      !handoffActive
+      || handoffRefreshPending
+      || session.isPending
+      || session.isRefetching
+    ) return;
+    if (session.data && !session.error) return;
+
+    // Sign-in can succeed while the session cookie/refetch still fails. In
+    // that case restore an interactive Login V3 surface instead of leaving
+    // the dissolved handoff card on screen indefinitely.
+    setHandoffActive(false);
+    setWorkspaceReady(false);
+    setHandoffDone(false);
+  }, [
+    handoffActive,
+    handoffRefreshPending,
+    session.data,
+    session.error,
+    session.isPending,
+    session.isRefetching,
+  ]);
+
+  useEffect(() => {
+    if (!handoffActive || !workspaceReady || handoffDone) return;
+    const timeout = window.setTimeout(() => {
+      setHandoffDone(true);
+      // The visual handoff is one-shot. Clearing the active flag here also
+      // guarantees a later logout/session loss renders a normal login form.
+      setHandoffActive(false);
+    }, reduceMotion ? 160 : 1080);
+    return () => window.clearTimeout(timeout);
+  }, [handoffActive, workspaceReady, handoffDone, reduceMotion]);
+
+  if (qaLogin) {
+    return (
+      <AuthForm
+        onAuthenticated={() => undefined}
+        handoff={qaPhase === "handoff"}
+        forceReady={qaPhase === "ready" || qaPhase === "handoff"}
+        lightweightScene={qaLite}
+      />
+    );
+  }
 
   if (qaBypass) {
     return (
@@ -450,22 +633,69 @@ export function AuthGateway({ children }: { children: ReactNode }) {
       </AtlasCapabilitiesContext.Provider>
     );
   }
-  if (window.location.pathname === "/reset-password") return <ResetPassword />;
-  if (session.isPending) return <main className="auth-gate"><p className="auth-loading">正在验证私人入口…</p></main>;
-  if (!session.data) return <AuthForm onAuthenticated={() => void session.refetch()} />;
 
-  const invitationId = new URLSearchParams(window.location.search).get("id");
-  if (window.location.pathname === "/accept-invitation" && invitationId) {
-    return <InvitationGate key={revision} invitationId={invitationId} onAccepted={() => { setRevision((value) => value + 1); void session.refetch(); }} />;
+  if (window.location.pathname === "/reset-password") return <ResetPassword />;
+  if (session.isPending) {
+    return <main className="auth-gate"><p className="auth-loading">正在验证私人入口…</p></main>;
   }
 
+  if (!session.data) {
+    return (
+      <div className={`auth-continuity${handoffActive ? " is-handoff" : " is-login"}`}>
+        <AuthForm
+          key="login-continuity"
+          handoff={handoffActive}
+          forceReady={handoffActive}
+          lightweightScene={qaGateway && qaLite}
+          onAuthenticated={() => {
+            setHandoffActive(true);
+            setHandoffRefreshPending(true);
+            setWorkspaceReady(false);
+            setHandoffDone(false);
+            void session.refetch().finally(() => setHandoffRefreshPending(false));
+          }}
+        />
+      </div>
+    );
+  }
+
+  const invitationId = searchParams.get("id");
+  if (window.location.pathname === "/accept-invitation" && invitationId) {
+    return (
+      <InvitationGate
+        key={revision}
+        invitationId={invitationId}
+        onAccepted={() => {
+          setRevision((value) => value + 1);
+          void session.refetch();
+        }}
+      />
+    );
+  }
+
+  const showHandoff = handoffActive && !handoffDone;
   return (
-    <WorkspaceGate
-      key={`${session.data.session.activeOrganizationId ?? "none"}-${revision}`}
-      activeOrganizationId={session.data.session.activeOrganizationId ?? undefined}
-      userName={session.data.user.name}
-    >
-      {children}
-    </WorkspaceGate>
+    <div className={`auth-continuity${showHandoff ? " is-handoff" : " is-released"}`}>
+      {showHandoff ? (
+        <AuthForm
+          key="login-continuity"
+          onAuthenticated={() => undefined}
+          handoff
+          forceReady
+          lightweightScene={qaGateway && qaLite}
+        />
+      ) : null}
+      <div key="atlas-workspace" className="auth-continuity__atlas">
+        <WorkspaceGate
+          key={`${session.data.session.activeOrganizationId ?? "none"}-${revision}`}
+          activeOrganizationId={session.data.session.activeOrganizationId ?? undefined}
+          userName={session.data.user.name}
+          onReady={() => setWorkspaceReady(true)}
+        >
+          {children}
+        </WorkspaceGate>
+      </div>
+    </div>
   );
+
 }

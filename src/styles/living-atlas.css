@@ -1446,7 +1446,7 @@
 /* #7: explicit fullscreen-play entry, beside the overview toggle. */
 .journey-story__fullscreen-entry {
   position: absolute;
-  z-index: 2;
+  z-index: 3;
   /* Review P2: below the media actions (set cover / delete) so the two
      top-right controls never overlap. */
   top: 68px;
@@ -1467,6 +1467,11 @@
 .journey-story__fullscreen-entry:hover,
 .journey-story__fullscreen-entry:focus-visible {
   border-color: rgba(200, 255, 61, 0.6);
+}
+
+.journey-story__media:has(> video) .journey-story__media-nav,
+.journey-story__media:has(> video) .journey-story__media-order {
+  bottom: 72px;
 }
 
 .journey-story__media-grid {
@@ -1581,25 +1586,42 @@
   letter-spacing: 0.12em;
 }
 
+.journey-story__media-grid > li:not(.is-cover) {
+  display: grid;
+  grid-template-rows: auto 32px;
+  gap: 4px;
+}
+
 .journey-story__media-grid > li:not(.is-cover) .journey-story__media-tile-set-cover {
-  position: absolute;
-  z-index: 1;
-  top: 4px;
-  right: 4px;
-  padding: 3px 6px;
-  border: 1px solid rgba(200, 255, 61, 0.35);
-  background: rgba(2, 8, 8, 0.85);
+  position: static;
+  z-index: auto;
+  width: 100%;
+  min-width: 0;
+  min-height: 32px;
+  height: 32px;
+  aspect-ratio: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 8px;
+  overflow: visible;
+  border: 1px solid rgba(200, 255, 61, 0.22);
+  background: rgba(2, 8, 8, 0.72);
   color: var(--atlas-acid);
   cursor: pointer;
   font-size: 9px;
-  letter-spacing: 0.08em;
-  opacity: 0;
-  transition: opacity var(--motion-instant, 120ms) ease;
+  line-height: 1;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+  opacity: 0.72;
+  transition: opacity var(--motion-instant, 120ms) ease, border-color var(--motion-instant, 120ms) ease, background var(--motion-instant, 120ms) ease;
 }
 
 .journey-story__media-grid > li:hover .journey-story__media-tile-set-cover,
 .journey-story__media-grid > li:focus-within .journey-story__media-tile-set-cover {
   opacity: 1;
+  border-color: rgba(200, 255, 61, 0.48);
+  background: rgba(10, 20, 12, 0.9);
 }
 
 .journey-story__media-grid > li.is-dragging .journey-story__media-tile-set-cover {
@@ -1614,19 +1636,62 @@
 
 .journey-story__media-nav {
   position: absolute;
+  z-index: 3;
   right: 16px;
   bottom: 16px;
   display: grid;
-  grid-template-columns: 40px 40px auto 40px 40px 40px;
+  grid-template-columns: 40px 40px auto 40px;
   align-items: center;
   gap: 8px;
   padding: 6px;
-  background: rgba(2, 8, 8, 0.82);
+  border: 1px solid rgba(118, 198, 188, 0.14);
+  background: rgba(2, 8, 8, 0.88);
+  backdrop-filter: blur(10px);
 }
 
 .journey-story__media-nav button.is-active {
   color: var(--atlas-acid);
   border-color: rgba(200, 255, 61, 0.5);
+}
+
+.journey-story__media-order {
+  position: absolute;
+  z-index: 3;
+  left: 16px;
+  bottom: 16px;
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px;
+  border: 1px solid rgba(118, 198, 188, 0.14);
+  background: rgba(2, 8, 8, 0.88);
+  backdrop-filter: blur(10px);
+}
+
+.journey-story__media-order > span {
+  padding: 0 7px;
+  color: var(--atlas-faint);
+  font: 500 8px/1 ui-monospace, "SFMono-Regular", Consolas, monospace;
+  letter-spacing: 0.1em;
+}
+
+.journey-story__media-order button {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--atlas-line);
+  background: transparent;
+  color: var(--atlas-muted);
+  cursor: pointer;
+}
+
+.journey-story__media-order button:hover:not(:disabled),
+.journey-story__media-order button:focus-visible {
+  border-color: rgba(118, 227, 211, 0.48);
+  color: var(--atlas-cyan);
 }
 
 @keyframes journey-kenburns-a {
@@ -1688,7 +1753,7 @@
 
 .journey-story__order-message {
   position: absolute;
-  right: 16px;
+  left: 16px;
   bottom: 68px;
   max-width: 60%;
   margin: 0;
@@ -1797,10 +1862,11 @@
 }
 
 .journey-story__media-remove {
-  position: absolute;
-  top: 16px;
-  right: 16px;
-  z-index: 2;
+  position: relative;
+  top: auto;
+  right: auto;
+  z-index: auto;
+  flex: 0 0 auto;
 }
 
 .journey-story__media-remove > button {
@@ -1831,13 +1897,35 @@
   position: absolute;
   top: 16px;
   right: 16px;
-  z-index: 2;
+  z-index: 4;
+  max-width: calc(100% - 32px);
   display: flex;
-  align-items: center;
+  align-items: flex-start;
+  justify-content: flex-end;
   gap: 8px;
 }
 
+/* Destructive confirmation is an atomic media state, not another toolbar.
+   While it is open, suspend every competing media action and give the
+   confirmation a stable central surface on desktop and touch layouts. */
+.journey-story__media:has(.journey-story__media-remove__confirm) .journey-story__media-overview,
+.journey-story__media:has(.journey-story__media-remove__confirm) .journey-story__fullscreen-entry,
+.journey-story__media:has(.journey-story__media-remove__confirm) .journey-story__media-nav,
+.journey-story__media:has(.journey-story__media-remove__confirm) .journey-story__media-order,
+.journey-story__media:has(.journey-story__media-remove__confirm) .journey-story__order-message {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.journey-story__media:has(.journey-story__media-remove__confirm) .journey-story__media-actions {
+  top: 50%;
+  right: 50%;
+  max-width: calc(100% - 24px);
+  transform: translate(50%, -50%);
+}
+
 .journey-story__media-set-cover {
+  flex: 0 0 auto;
   min-height: 40px;
   display: inline-flex;
   align-items: center;
@@ -1862,6 +1950,7 @@
 }
 
 .journey-story__media-cover-current {
+  flex: 0 0 auto;
   min-height: 40px;
   display: inline-flex;
   align-items: center;
@@ -1874,22 +1963,30 @@
 }
 
 .journey-story__media-remove__confirm {
-  display: flex;
+  width: min(330px, calc(100vw - 56px));
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   padding: 8px;
-  background: rgba(2, 8, 8, 0.9);
+  background: rgba(2, 8, 8, 0.94);
   border: 1px solid var(--atlas-line);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.32);
 }
 
 .journey-story__media-remove__confirm > span {
+  min-width: 0;
+  overflow: hidden;
   padding: 0 6px;
   color: #d6e0dd;
   font-size: 10px;
   letter-spacing: 0.09em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .journey-story__media-remove__confirm > button {
+  flex: 0 0 auto;
   min-height: 34px;
   padding: 0 12px;
   border: 1px solid var(--atlas-line);
@@ -1921,9 +2018,11 @@
 }
 
 .journey-story__media-remove__error {
+  grid-column: 1 / -1;
   margin: 0;
   color: #c28e78;
   font-size: 10px;
+  line-height: 1.5;
   letter-spacing: 0.05em;
 }
 
@@ -4555,13 +4654,72 @@
     min-height: 44px;
   }
 
+  .journey-story__soundtrack-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .journey-story__soundtrack-actions button {
+    width: 100%;
+    min-width: 0;
+    padding-inline: 10px;
+  }
+
+  .journey-story__soundtrack-actions button:only-child {
+    grid-column: 1 / -1;
+  }
+
+  .journey-story__media-overview {
+    top: 12px;
+    left: 12px;
+  }
+
+  .journey-story__media-actions {
+    top: 12px;
+    right: 12px;
+    max-width: calc(100% - 24px);
+    gap: 6px;
+  }
+
+  .journey-story__fullscreen-entry {
+    top: 66px;
+    right: 12px;
+  }
+
   .journey-story__media-nav {
-    grid-template-columns: 44px 44px auto 44px 44px 44px;
+    right: 12px;
+    bottom: 12px;
+    grid-template-columns: 44px 44px auto 44px;
+    gap: 4px;
+    padding: 5px;
+  }
+
+  .journey-story__media-order {
+    left: 12px;
+    bottom: 70px;
+  }
+
+  .journey-story__media-order > span {
+    display: none;
+  }
+
+  .journey-story__media-order button {
+    width: 40px;
+    height: 40px;
+  }
+
+  .journey-story__media:has(> video) .journey-story__media-nav {
+    bottom: 64px;
+  }
+
+  .journey-story__media:has(> video) .journey-story__media-order {
+    bottom: 122px;
   }
 
   .journey-story__media-remove {
-    top: 12px;
-    right: 12px;
+    position: relative;
+    top: auto;
+    right: auto;
   }
 
   .journey-story__media-remove > button {
@@ -4570,8 +4728,19 @@
   }
 
   .journey-story__media-remove__confirm {
-    flex-wrap: wrap;
+    width: min(330px, calc(100vw - 24px));
     max-width: calc(100vw - 24px);
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .journey-story__media-remove__confirm > span,
+  .journey-story__media-remove__error {
+    grid-column: 1 / -1;
+  }
+
+  .journey-story__media-remove__confirm > button {
+    min-height: 40px;
+    justify-content: center;
   }
 
   .journey-composer {

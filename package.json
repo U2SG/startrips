@@ -25,6 +25,8 @@
     "qa:live-globe": "node scripts/qa-live-globe.mjs",
     "qa:composer": "node scripts/capture-journey-composer.mjs",
     "qa:story": "node scripts/qa-journey-story.mjs",
+    "qa:media-controls": "node scripts/qa-media-controls.mjs",
+    "qa:login-v3": "node scripts/qa-login-v3.mjs",
     "build:city": "node scripts/build-city-data.mjs"
   },
   "dependencies": {
