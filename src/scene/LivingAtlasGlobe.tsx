@@ -84,6 +84,7 @@ export function LivingAtlasGlobeControls({
 
 type LivingAtlasGlobeProps = {
   focusPoint?: { lat: number; lon: number } | null;
+  focusRoute?: JourneyRoute | null;
   focusColor?: string;
   journeyRoutes: readonly JourneyRoute[];
   activeJourneyRouteId?: string | null;
@@ -100,6 +101,7 @@ type LivingAtlasGlobeProps = {
 
 export function LivingAtlasGlobe({
   focusPoint,
+  focusRoute,
   focusColor,
   journeyRoutes,
   activeJourneyRouteId,
@@ -191,6 +193,7 @@ export function LivingAtlasGlobe({
             mode="focusPoint"
             quality="high"
             focusPoint={focusPoint}
+            focusRoute={focusRoute}
             focusColor={focusColor}
             centerFocusPoint
             journeyRoutes={journeyRoutes}

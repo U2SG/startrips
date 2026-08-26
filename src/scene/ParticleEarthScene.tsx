@@ -44,7 +44,9 @@ import {
   buildSphericalRouteLegs,
   buildSphericalRouteSegments,
   buildSphericalRingSegments,
+  getSphericalRouteFocus,
   latLonToVector3,
+  rotationXForLatitude,
   rotationYForLongitude,
   vector3ToLatLon,
 } from "./geo";
@@ -553,6 +555,7 @@ interface ParticleEarthSceneProps {
   mode: GlobeMode;
   quality?: keyof typeof QUALITY_PROFILE;
   focusPoint?: { lat: number; lon: number } | null;
+  focusRoute?: JourneyRoute | null;
   focusColor?: string;
   centerFocusPoint?: boolean;
   onFocusPointActivate?: () => void;
@@ -736,6 +739,7 @@ export function ParticleEarthScene({
   mode,
   quality = "low",
   focusPoint,
+  focusRoute,
   focusColor,
   centerFocusPoint = false,
   onFocusPointActivate,
@@ -754,6 +758,7 @@ export function ParticleEarthScene({
   const [ready, setReady] = useState(false);
   const latestMode = useRef(mode);
   const latestFocusPoint = useRef(focusPoint);
+  const latestFocusRoute = useRef(focusRoute);
   const latestFocusColor = useRef(focusColor);
   const latestCenterFocusPoint = useRef(centerFocusPoint);
   const latestOnFocusPointActivate = useRef(onFocusPointActivate);
@@ -768,6 +773,7 @@ export function ParticleEarthScene({
   const latestWheelToZoom = useRef(wheelToZoom);
   latestMode.current = mode;
   latestFocusPoint.current = focusPoint;
+  latestFocusRoute.current = focusRoute;
   latestFocusColor.current = focusColor;
   latestCenterFocusPoint.current = centerFocusPoint;
   latestOnFocusPointActivate.current = onFocusPointActivate;
@@ -860,6 +866,8 @@ export function ParticleEarthScene({
     let rotationVelocityX = 0;
     let rotationVelocityY = 0;
     let lastGlobeInteractionAt = performance.now();
+    let routeFocusFrame = getSphericalRouteFocus(latestFocusRoute.current?.points ?? []);
+    let routeFocusSettling = Boolean(routeFocusFrame);
     let centeredFocusKey = latestFocusPoint.current
       ? `${latestFocusPoint.current.lat}:${latestFocusPoint.current.lon}`
       : "";
@@ -2023,6 +2031,7 @@ export function ParticleEarthScene({
         return;
       }
       activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      routeFocusSettling = false;
       lastGlobeInteractionAt = performance.now();
       rotationVelocityX = 0;
       rotationVelocityY = 0;
@@ -2149,6 +2158,7 @@ export function ParticleEarthScene({
     const onWheel = (event: WheelEvent) => {
       if (!latestDragToRotate.current || !latestWheelToZoom.current) return;
       event.preventDefault();
+      routeFocusSettling = false;
       lastGlobeInteractionAt = performance.now();
       // Stay in the particle globe at maximum zoom so cities stay pickable;
       // entering the real map is an explicit button choice.
@@ -2245,15 +2255,34 @@ export function ParticleEarthScene({
       // #20: restrained energy mapping. Even at full energy the environment
       // only gains 12–15%, so it feels alive rather than becoming a visualizer.
       const audioGain = audioAtmosphereGains(audioEnergy);
+      const spatialFocusPoint = routeFocusFrame?.center ?? latestFocusPoint.current;
       const targetBaseRotationY =
         currentMode === "focusPoint"
         && latestCenterFocusPoint.current
-        && latestFocusPoint.current
-          ? rotationYForLongitude(latestFocusPoint.current.lon)
+        && spatialFocusPoint
+          ? rotationYForLongitude(spatialFocusPoint.lon)
           : target.rotationY;
       const snap = reduceMotion ? 1 : 0;
       const interpolate = (value: number, next: number) =>
         snap ? next : damp(value, next, delta);
+
+      if (routeFocusSettling && routeFocusFrame && activePointers.size === 0) {
+        const targetRotationX = rotationXForLatitude(routeFocusFrame.center.lat);
+        interactiveRotationX = interpolate(interactiveRotationX, targetRotationX);
+        interactiveRotationY = interpolate(interactiveRotationY, 0);
+        interactiveZoom = interpolate(interactiveZoom, routeFocusFrame.zoom);
+        if (
+          Math.abs(getShortestRotationDelta(interactiveRotationX, targetRotationX)) < 0.002
+          && Math.abs(interactiveRotationY) < 0.002
+          && Math.abs(interactiveZoom - routeFocusFrame.zoom) < 0.003
+          && Math.abs(getShortestRotationDelta(baseRotationY, targetBaseRotationY)) < 0.003
+        ) {
+          interactiveRotationX = targetRotationX;
+          interactiveRotationY = 0;
+          interactiveZoom = routeFocusFrame.zoom;
+          routeFocusSettling = false;
+        }
+      }
 
       globe.position.x = interpolate(globe.position.x, target.x);
       globe.position.y = interpolate(globe.position.y, target.y);
@@ -2271,7 +2300,7 @@ export function ParticleEarthScene({
         if (Math.abs(rotationVelocityY) < 0.001) rotationVelocityY = 0;
         const hasMomentum = rotationVelocityX !== 0 || rotationVelocityY !== 0;
         const idleForMs = now - lastGlobeInteractionAt;
-        const motionDisabled = !latestDragToRotate.current;
+        const motionDisabled = !latestDragToRotate.current || Boolean(routeFocusFrame);
         interactiveRotationX = getGlobeIdleAlignmentRotation(
           interactiveRotationX,
           delta,
@@ -2448,6 +2477,24 @@ export function ParticleEarthScene({
         // rely on the globe transform alone to notice a new focus point.
         routeProjectionRevision += 1;
       },
+      setFocusRoute(route: JourneyRoute | null | undefined) {
+        routeFocusFrame = getSphericalRouteFocus(route?.points ?? []);
+        routeFocusSettling = Boolean(routeFocusFrame);
+        if (routeFocusFrame) {
+          interactiveRotationY = 0;
+          rotationVelocityX = 0;
+          rotationVelocityY = 0;
+          lastGlobeInteractionAt = performance.now();
+          host.dataset.routeFocusLat = String(routeFocusFrame.center.lat);
+          host.dataset.routeFocusLon = String(routeFocusFrame.center.lon);
+          host.dataset.routeFocusZoom = String(routeFocusFrame.zoom);
+        } else {
+          delete host.dataset.routeFocusLat;
+          delete host.dataset.routeFocusLon;
+          delete host.dataset.routeFocusZoom;
+        }
+        routeProjectionRevision += 1;
+      },
       setFocusColor(color: string | undefined) {
         personalMaterial.uniforms.uColor.value.set(color ?? 0xffdc72);
         host.dataset.focusColor = `#${personalMaterial.uniforms.uColor.value.getHexString()}`;
@@ -2545,6 +2592,11 @@ export function ParticleEarthScene({
     if (!ready) return;
     controllerRef.current?.setFocusPoint(focusPoint);
   }, [controllerRef, focusPoint, ready]);
+
+  useEffect(() => {
+    if (!ready) return;
+    controllerRef.current?.setFocusRoute(focusRoute);
+  }, [controllerRef, focusRoute, ready]);
 
   useEffect(() => {
     controllerRef.current?.setFocusColor(focusColor);

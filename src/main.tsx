@@ -75,16 +75,24 @@ const globeQaRoutes: JourneyRoute[] = [
 
 function JourneyRoutesQaPreview() {
   const [activeRouteId, setActiveRouteId] = useState<string | null>(null);
+  const activeRoute = globeQaRoutes.find((route) => route.id === activeRouteId) ?? null;
   return (
     <main className="living-atlas">
       <div className="living-atlas__globe">
-        <LivingAtlasGlobe
+        <ParticleEarthScene
+          mode="focusPoint"
+          quality="low"
           journeyRoutes={globeQaRoutes}
           activeJourneyRouteId={activeRouteId}
+          focusRoute={activeRoute}
           onJourneyRouteActivate={setActiveRouteId}
           onJourneyRoutePointActivate={() => undefined}
           focusPoint={{ lat: 30, lon: 110 }}
           focusColor="#77c8c2"
+          centerFocusPoint
+          dragToRotate
+          wheelToZoom
+          reduceMotion
         />
       </div>
       <div

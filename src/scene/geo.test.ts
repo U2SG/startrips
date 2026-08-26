@@ -9,8 +9,11 @@ import {
   buildSphericalRingSegments,
   formatLatitude,
   formatLongitude,
+  getSphericalRouteFocus,
   latLonToVector3,
+  rotationXForLatitude,
   rotationYForLongitude,
+  routeFocusZoomForAngularRadius,
   vector3ToLatLon,
 } from "./geo";
 
@@ -45,6 +48,42 @@ describe("coordinate labels", () => {
   it("computes the Y rotation that brings a longitude to the visible center", () => {
     expect(rotationYForLongitude(-90)).toBeCloseTo(0);
     expect(rotationYForLongitude(0)).toBeCloseTo(-Math.PI / 2);
+  });
+
+  it("computes a spherical route frame across the antimeridian", () => {
+    const frame = getSphericalRouteFocus([
+      { lat: 10, lon: 179 },
+      { lat: 12, lon: -179 },
+    ]);
+    expect(frame).not.toBeNull();
+    expect(Math.abs(frame!.center.lon)).toBeGreaterThan(175);
+    expect(frame!.center.lat).toBeCloseTo(11, 0);
+    expect(frame!.zoom).toBeGreaterThan(1.5);
+  });
+
+  it("pulls back as a journey covers more of the globe", () => {
+    const local = getSphericalRouteFocus([
+      { lat: 22.54, lon: 114.05 },
+      { lat: 22.30, lon: 114.20 },
+    ]);
+    const broad = getSphericalRouteFocus([
+      { lat: 22.54, lon: 114.05 },
+      { lat: 35.68, lon: 139.69 },
+      { lat: 37.77, lon: -122.42 },
+    ]);
+    expect(local).not.toBeNull();
+    expect(broad).not.toBeNull();
+    expect(local!.zoom).toBeGreaterThan(broad!.zoom);
+  });
+
+  it("maps route latitude to the globe X rotation needed for centering", () => {
+    expect(rotationXForLatitude(30)).toBeCloseTo(Math.PI / 6);
+    expect(rotationXForLatitude(-45)).toBeCloseTo(-Math.PI / 4);
+  });
+
+  it("keeps route-focus zoom within the intended framing range", () => {
+    expect(routeFocusZoomForAngularRadius(0)).toBeCloseTo(1.72);
+    expect(routeFocusZoomForAngularRadius(Math.PI / 2)).toBeCloseTo(0.82);
   });
 });
 

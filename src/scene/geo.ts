@@ -203,6 +203,67 @@ export function rotationYForLongitude(longitude: number) {
   return ((-longitude - 90) * Math.PI) / 180;
 }
 
+export type SphericalRouteFocus = {
+  center: GeographicPoint;
+  angularRadius: number;
+  zoom: number;
+};
+
+export function routeFocusZoomForAngularRadius(angularRadius: number) {
+  const degrees = Math.max(0, angularRadius) * 180 / Math.PI;
+  const stops = [
+    [0, 1.72],
+    [8, 1.58],
+    [20, 1.34],
+    [40, 1.06],
+    [70, 0.82],
+  ] as const;
+  if (degrees <= stops[0][0]) return stops[0][1];
+  for (let index = 1; index < stops.length; index += 1) {
+    const [nextDegrees, nextZoom] = stops[index];
+    const [previousDegrees, previousZoom] = stops[index - 1];
+    if (degrees <= nextDegrees) {
+      const progress = (degrees - previousDegrees) / (nextDegrees - previousDegrees);
+      return previousZoom + (nextZoom - previousZoom) * progress;
+    }
+  }
+  return stops[stops.length - 1][1];
+}
+
+/**
+ * Returns a spherical framing target for an ordered route. Using unit-vector
+ * averaging keeps routes that cross the antimeridian centered near ±180°
+ * instead of incorrectly jumping to Greenwich. The angular radius drives a
+ * bounded zoom target: local routes move closer, broad routes pull back.
+ */
+export function getSphericalRouteFocus(
+  points: readonly GeographicPoint[],
+): SphericalRouteFocus | null {
+  const vectors = points
+    .filter((point) => Number.isFinite(point.lat) && Number.isFinite(point.lon))
+    .map((point) => latLonToVector3(point.lat, point.lon, 1).normalize());
+  if (vectors.length === 0) return null;
+
+  const mean = vectors.reduce((sum, vector) => sum.add(vector), new Vector3());
+  const centerVector = mean.lengthSq() > 1e-8
+    ? mean.normalize()
+    : vectors[Math.floor((vectors.length - 1) / 2)].clone();
+  const center = vector3ToLatLon(centerVector);
+  const angularRadius = vectors.reduce((radius, vector) => (
+    Math.max(radius, Math.acos(Math.min(1, Math.max(-1, centerVector.dot(vector)))))
+  ), 0);
+
+  return {
+    center,
+    angularRadius,
+    zoom: routeFocusZoomForAngularRadius(angularRadius),
+  };
+}
+
+export function rotationXForLatitude(latitude: number) {
+  return latitude * Math.PI / 180;
+}
+
 function mulberry32(seed: number) {
   let value = seed >>> 0;
   return () => {
