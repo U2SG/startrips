@@ -352,6 +352,7 @@ export function JourneyComposer({
   // increasing revision instead of trusting the caller to forget it in time.
   const globePickRequestRevisionRef = useRef(0);
   const reverseGeocodeRevisionRef = useRef(0);
+  const activeReverseGeocodeDraftIdRef = useRef<string | null>(null);
   const composerMountedRef = useRef(true);
   const routePointsRef = useRef(routePoints);
   routePointsRef.current = routePoints;
@@ -526,6 +527,7 @@ export function JourneyComposer({
       );
       addPoint(draftPoint);
       const geocodeRevision = ++reverseGeocodeRevisionRef.current;
+      activeReverseGeocodeDraftIdRef.current = draftPoint.draftId;
       setMessage("已从地球添加地点；正在识别坐标对应的名称…");
       void suggestPlaceName(draftPoint, geocodeRevision);
     });
@@ -548,6 +550,7 @@ export function JourneyComposer({
       // lookup may still fill its own blank point label, but must never replace
       // the current pick's user-visible status or provider attribution.
       if (reverseGeocodeRevisionRef.current !== revision) return;
+      activeReverseGeocodeDraftIdRef.current = null;
       if (label) {
         setMessage(`已根据坐标识别为「${label}」，可继续修改。`);
       } else {
@@ -558,6 +561,7 @@ export function JourneyComposer({
       if (!composerMountedRef.current) return;
       if (!routePointsRef.current.some((candidate) => candidate.draftId === point.draftId)) return;
       if (reverseGeocodeRevisionRef.current !== revision) return;
+      activeReverseGeocodeDraftIdRef.current = null;
       // Reverse lookup is optional (including timeout); the picked point stays
       // editable and route preview remains driven by the local draft.
       setReverseAttribution(null);
@@ -576,6 +580,7 @@ export function JourneyComposer({
   function closeComposer() {
     globePickRequestRevisionRef.current += 1;
     reverseGeocodeRevisionRef.current += 1;
+    activeReverseGeocodeDraftIdRef.current = null;
     if (globePicking) onGlobePickCancel?.();
     onRoutePreviewChange?.(null);
     onClose();
@@ -601,13 +606,26 @@ export function JourneyComposer({
     const resetsMediaScope = mediaFiles.some(
       (media) => media.routePointDraftId === draftPointId,
     );
+    const removesActiveReverseLookup = activeReverseGeocodeDraftIdRef.current === draftPointId;
+    if (removesActiveReverseLookup) {
+      // The shared geocode status belongs to this point. Invalidate the pending
+      // lookup before removing the draft so a late response cannot restore its
+      // message/attribution, and never leave the Composer stuck on "正在识别…".
+      reverseGeocodeRevisionRef.current += 1;
+      activeReverseGeocodeDraftIdRef.current = null;
+      setReverseAttribution(null);
+    }
     setRoutePoints((current) => {
       const next = removeRoutePoint(current, draftPointId);
       routePointsRef.current = next;
       return next;
     });
     setMediaFiles((current) => clearRemovedMediaTarget(current, draftPointId));
-    if (resetsMediaScope) setMessage("已删除该途径点；关联媒体已改为整段旅程。");
+    if (resetsMediaScope) {
+      setMessage("已删除该途径点；关联媒体已改为整段旅程。");
+    } else if (removesActiveReverseLookup) {
+      setMessage("");
+    }
   }
 
   async function save() {
