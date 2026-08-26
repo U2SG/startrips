@@ -12,7 +12,7 @@ For a normal PR targeting `main`:
 4. Add the `merge-ready` label as the final sign-off.
 5. Confirm the `merge-readiness` status is green, then merge.
 
-The readiness workflow automatically removes a stale `merge-ready` sign-off when the PR head changes or new review/review-comment activity occurs. Those events set the `merge-readiness` commit status back to **pending** without manufacturing a permanently failed Actions run on the same head. Resolve the new work, wait for the final `ci / verify` run to pass, and add `merge-ready` again as the last action.
+The readiness workflow uses one latest-event-wins concurrency group per pull request: newer PR/review activity cancels any older controller run, and final sign-off revalidates the live `merge-ready` label before and after publishing success so a cancellation race cannot leave stale green readiness. It automatically removes a stale `merge-ready` sign-off when the PR head changes or new review/review-comment activity occurs. Those events set the `merge-readiness` commit status back to **pending** without manufacturing a permanently failed Actions run on the same head. Resolve the new work, wait for the final `ci / verify` run to pass, and add `merge-ready` again as the last action.
 
 Do not add `merge-ready` before the final CI/review pass. The controller verifies that `ci / verify` succeeded for the current head and scans every page of review conversations before it overwrites the `merge-readiness` status to **success**. If sign-off is attempted too early, the status is rejected and the label is removed.
 

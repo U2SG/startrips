@@ -16,6 +16,13 @@ on:
   pull_request_review_comment:
     types: [created, edited, deleted]
 
+concurrency:
+  # One readiness state machine per PR. Never allow an older sign-off run and a
+  # newer invalidation run to write the same commit-status context concurrently.
+  group: merge-readiness-${{ github.event.pull_request.number }}
+  # Newer PR/review activity is authoritative and cancels any older controller.
+  cancel-in-progress: true
+
 permissions:
   contents: read
   checks: read
@@ -122,6 +129,14 @@ jobs:
             reject_gate "$unresolved unresolved review conversation(s) remain"
           fi
 
+          live_merge_ready=$(gh api \
+            "repos/$GH_REPO/issues/$PR_NUMBER/labels" \
+            --jq 'any(.[]; .name == "merge-ready")')
+          if [[ "$live_merge_ready" != "true" ]]; then
+            echo "A newer invalidation already removed merge-ready; refusing stale success."
+            exit 0
+          fi
+
           gh api \
             --method POST \
             "repos/$GH_REPO/statuses/$HEAD_SHA" \
@@ -130,5 +145,24 @@ jobs:
             -f description='Final review and CI sign-off complete' \
             -f target_url="$STATUS_TARGET_URL" \
             --silent
+
+          # Close the tiny precheck/write window as well. If a newer invalidation
+          # removed the label while success was being posted, repair the shared
+          # context back to pending instead of leaving stale green readiness.
+          live_merge_ready_after=$(gh api \
+            "repos/$GH_REPO/issues/$PR_NUMBER/labels" \
+            --jq 'any(.[]; .name == "merge-ready")')
+          if [[ "$live_merge_ready_after" != "true" ]]; then
+            gh api \
+              --method POST \
+              "repos/$GH_REPO/statuses/$HEAD_SHA" \
+              -f state=pending \
+              -f context=merge-readiness \
+              -f description='Newer review/PR activity invalidated sign-off' \
+              -f target_url="$STATUS_TARGET_URL" \
+              --silent
+            echo "A newer invalidation raced final sign-off; readiness repaired to pending."
+            exit 0
+          fi
 
           echo "merge-ready applies to $HEAD_SHA, ci / verify passed, and all review conversations are resolved."
