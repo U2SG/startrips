@@ -266,34 +266,34 @@ button {
    that camera move is in progress, hold the target route in a quiet locator
    state; removing this override at `settled` starts the existing route draw. */
 .particle-earth-scene[data-route-focus-phase="flying"]
-  .particle-earth-route.is-style-strands.is-active .particle-earth-route__core,
+  .particle-earth-route.is-style-strands.is-active:not([data-temporal-reveal]) .particle-earth-route__core,
 .particle-earth-scene[data-route-focus-phase="flying"]
-  .particle-earth-route.is-style-strands.is-active .particle-earth-route__glow {
+  .particle-earth-route.is-style-strands.is-active:not([data-temporal-reveal]) .particle-earth-route__glow {
   animation: none;
   stroke-dasharray: 1200;
   stroke-dashoffset: 1200;
 }
 
 .particle-earth-scene[data-route-focus-phase="flying"]
-  .particle-earth-route.is-style-strands.is-active .particle-earth-route__strand-a {
+  .particle-earth-route.is-style-strands.is-active:not([data-temporal-reveal]) .particle-earth-route__strand-a {
   opacity: 0.12;
   animation-play-state: paused;
 }
 
 .particle-earth-scene[data-route-focus-phase="flying"]
-  .particle-earth-route.is-style-strands.is-active .particle-earth-route__strand-b {
+  .particle-earth-route.is-style-strands.is-active:not([data-temporal-reveal]) .particle-earth-route__strand-b {
   opacity: 0.07;
   animation-play-state: paused;
 }
 
 .particle-earth-scene[data-route-focus-phase="flying"]
-  .particle-earth-route.is-style-strands.is-active .particle-earth-route__flow {
+  .particle-earth-route.is-style-strands.is-active:not([data-temporal-reveal]) .particle-earth-route__flow {
   opacity: 0;
   animation-play-state: paused;
 }
 
 .particle-earth-scene[data-route-focus-phase="flying"]
-  .particle-earth-route.is-style-strands.is-active .particle-earth-route__point {
+  .particle-earth-route.is-style-strands.is-active:not([data-temporal-reveal]) .particle-earth-route__point {
   opacity: 0.34;
   animation-play-state: paused;
 }

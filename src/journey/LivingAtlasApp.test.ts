@@ -106,6 +106,11 @@ describe("rewind route CSS (PR #24 review)", () => {
       ".particle-earth-route.is-style-strands[data-temporal-reveal] .particle-earth-route__flow",
     );
     expect(css.slice(rewindOverride)).toContain("opacity: 0;");
+    const focusFlightLocator = css.indexOf(
+      '.particle-earth-scene[data-route-focus-phase="flying"]',
+    );
+    const focusFlightBlock = css.slice(focusFlightLocator, rewindOverride);
+    expect(focusFlightBlock).toContain(":not([data-temporal-reveal])");
   });
 });
 
@@ -122,6 +127,9 @@ describe("route focus-flight choreography", () => {
     expect(drawRule).toBeGreaterThanOrEqual(0);
     expect(flyingRule).toBeGreaterThan(drawRule);
     const flyingBlock = css.slice(flyingRule, css.indexOf("@keyframes motionRouteDraw", flyingRule));
+    expect(flyingBlock).toContain(
+      ".particle-earth-route.is-style-strands.is-active:not([data-temporal-reveal])",
+    );
     expect(flyingBlock).toContain("animation: none;");
     expect(flyingBlock).toContain("stroke-dashoffset: 1200;");
     expect(flyingBlock).toContain("animation-play-state: paused;");
