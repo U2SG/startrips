@@ -124,14 +124,18 @@ function JourneyRoutesQaPreview() {
   );
 }
 
+function LivingAtlasQaPreview() {
+  return <LivingAtlasApp lightweightGlobe />;
+}
+
 function JourneyComposerQaPreview() {
+  const editMode = new URLSearchParams(window.location.search).get("qaMode") === "edit";
   return (
     <main className="living-atlas">
-      <div className="living-atlas__globe" aria-hidden="true">
-        <ParticleEarthScene mode="focusPoint" quality="high" reduceMotion />
-      </div>
+      <div className="living-atlas__globe journey-story-qa__backdrop" aria-hidden="true" />
       <JourneyComposer
         open
+        journey={editMode ? storyQaJourney : undefined}
         onClose={() => undefined}
         onSaved={() => undefined}
         onGlobePickRequest={() => undefined}
@@ -309,6 +313,8 @@ const Experience = import.meta.env.DEV && qaState === "journey-composer"
     ? JourneyPlaybackQaPreview
   : import.meta.env.DEV && qaState === "journey-routes"
     ? JourneyRoutesQaPreview
+  : import.meta.env.DEV && (qaState === "living-atlas" || qaState === "atlas-gateway")
+    ? LivingAtlasQaPreview
   : import.meta.env.DEV && qaState
     ? App
     : LivingAtlasApp;

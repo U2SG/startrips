@@ -78,6 +78,14 @@
   pointer-events: none;
 }
 
+.living-atlas__qa-globe {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at 50% 48%, rgba(58, 135, 124, 0.2) 0 18%, rgba(25, 69, 64, 0.08) 30%, transparent 46%),
+    radial-gradient(circle at 50% 50%, transparent 0 25%, rgba(118, 227, 208, 0.08) 25.3% 25.7%, transparent 26%);
+}
+
 .living-atlas-globe,
 .living-atlas-globe__layer,
 .detailed-earth-map,
@@ -778,9 +786,16 @@
   color: var(--atlas-faint);
 }
 
-/* #13 + review P2: the active card is one interaction surface. The content
-   stays inert; the transparent hit area covers the whole card and opens the
-   story; explicit actions sit above it. */
+/* The narrative/media region opens the Story as one surface. Explicit Story
+   and Playback actions live outside this hit area, so buttons never overlap. */
+.living-atlas__active-main {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 .living-atlas__active-content {
   display: contents;
 }
@@ -1129,12 +1144,11 @@
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--atlas-acid) 18%, transparent);
 }
 
-/* Transparent full-card hit area. It is the only pointer target for the whole
-   card surface; the content below stays inert so internal controls never
-   fight the card click (#13). */
+/* The card content opens the Story, but the hit area stops before the
+   right-edge action so the two buttons never share geometry. */
 .journey-timeline__hit-area {
   position: absolute;
-  inset: 0;
+  inset: 0 48px 0 0;
   z-index: 1;
   border: 0;
   border-radius: inherit;
@@ -1142,7 +1156,8 @@
   cursor: pointer;
 }
 
-/* Inner actions sit above the hit area and keep their own pointer handling. */
+/* Visible card copy remains inert; the adjacent Story action owns its own
+   pointer region. */
 .journey-timeline__content {
   position: relative;
   z-index: 0;
@@ -3581,6 +3596,19 @@
   font-size: 11px;
 }
 
+.journey-media-fields__actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+}
+
+.journey-media-fields__actions button {
+  flex: 0 0 auto;
+  min-width: 44px;
+  white-space: nowrap;
+}
+
 .journey-composer__route-tools {
   padding: 0;
   border: 0;
@@ -4297,7 +4325,7 @@
   }
 
   .living-atlas__header nav {
-    right: 300px;
+    right: clamp(220px, 30vw, 300px);
     left: auto;
     width: auto;
     transform: none;
@@ -4346,6 +4374,12 @@
     border-left: 0;
   }
 
+}
+
+@media (max-width: 374px) {
+  .living-atlas__brand p {
+    display: none;
+  }
 }
 
 @media (max-width: 760px) {
@@ -4827,13 +4861,35 @@
   }
 
   .journey-media-fields > ul li {
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: 8px 12px;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+    padding: 12px;
+  }
+
+  .journey-media-fields li > span,
+  .journey-media-fields li select,
+  .journey-media-fields__actions {
+    grid-column: 1;
   }
 
   .journey-media-fields li select {
+    grid-row: auto;
+  }
+
+  .journey-media-fields__actions {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    justify-content: stretch;
+    gap: 6px;
+  }
+
+  .journey-media-fields__actions button {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .journey-media-fields__actions button:only-child {
     grid-column: 1 / -1;
-    grid-row: 2;
   }
 
   .journey-story-fields__dates {
