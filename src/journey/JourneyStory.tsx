@@ -31,7 +31,7 @@ import {
   IconArrowRight,
   IconArrowDown,
   IconArrowUp,
-  IconBookmark,
+  IconPhotoStar,
   IconEdit,
   IconLayoutGrid,
   IconMaximize,
@@ -44,6 +44,7 @@ import {
   IconVideo,
   IconX,
 } from "@tabler/icons-react";
+import { IconActionButton } from "../components/IconActionButton";
 import { deleteMedia, getPrivateMediaRead, reorderJourneyMedia, setJourneyCover } from "./journeyApi";
 import { runSharedElementMorph } from "../motion/primitives/sharedElement";
 import { uploadJourneyMedia } from "./JourneyComposer";
@@ -336,13 +337,15 @@ function StoryMediaTile({
         <small>{String(index + 1).padStart(2, "0")}</small>
       </button>
       {onSetCover && !isCover ? (
-        <button
+        <IconActionButton
           type="button"
           className="journey-story__media-tile-set-cover"
+          label={`将 ${asset.fileName} 设为封面`}
+          tooltip="设为封面"
           onClick={() => onSetCover(asset.id)}
         >
-          设为封面
-        </button>
+          <IconPhotoStar size={16} stroke={1.35} aria-hidden="true" />
+        </IconActionButton>
       ) : null}
     </>
   );
@@ -1622,8 +1625,8 @@ export function JourneyStory({
             {!overview && asset && visualMedia.length > 1 ? (
               <div className="journey-story__media-order" role="group" aria-label="媒体排序">
                 <span>排序</span>
-                <button type="button" disabled={!canMoveEarlier || mutationPending} onClick={() => void moveMedia(-1)} aria-label="向前调整媒体顺序"><IconArrowUp size={16} stroke={1.35} aria-hidden="true" /></button>
-                <button type="button" disabled={!canMoveLater || mutationPending} onClick={() => void moveMedia(1)} aria-label="向后调整媒体顺序"><IconArrowDown size={16} stroke={1.35} aria-hidden="true" /></button>
+                <IconActionButton type="button" disabled={!canMoveEarlier || mutationPending} onClick={() => void moveMedia(-1)} label="向前调整媒体顺序" tooltip="上移媒体"><IconArrowUp size={16} stroke={1.35} aria-hidden="true" /></IconActionButton>
+                <IconActionButton type="button" disabled={!canMoveLater || mutationPending} onClick={() => void moveMedia(1)} label="向后调整媒体顺序" tooltip="下移媒体"><IconArrowDown size={16} stroke={1.35} aria-hidden="true" /></IconActionButton>
               </div>
             ) : null}
             {orderMessage ? <p className="journey-story__order-message" role="status">{orderMessage}</p> : null}
@@ -1631,24 +1634,25 @@ export function JourneyStory({
               <div className="journey-story__media-actions">
                 {mediaDeleteState === "idle" ? (
                   cover?.id !== asset.id ? (
-                    <button
+                    <IconActionButton
                       type="button"
                       className="journey-story__media-set-cover"
+                      label="将当前媒体设为封面"
+                      tooltip="设为封面"
                       disabled={mutationPending || coverPending}
                       onClick={() => void handleSetCover(asset.id)}
                     >
-                      <IconBookmark size={16} stroke={1.35} aria-hidden="true" />
-                      设为封面
-                    </button>
+                      <IconPhotoStar size={17} stroke={1.35} aria-hidden="true" />
+                    </IconActionButton>
                   ) : (
                     <span className="journey-story__media-cover-current">当前封面</span>
                   )
                 ) : null}
                 <div className="journey-story__media-remove">
                   {mediaDeleteState === "idle" ? (
-                    <button type="button" disabled={mutationPending} onClick={() => setMediaDeleteState("confirming")} aria-label="删除这段媒体">
+                    <IconActionButton type="button" className="is-destructive-secondary" disabled={mutationPending} onClick={() => setMediaDeleteState("confirming")} label="删除这段媒体" tooltip="删除媒体">
                       <IconTrash size={17} stroke={1.35} aria-hidden="true" />
-                    </button>
+                    </IconActionButton>
                   ) : (
                     <div className="journey-story__media-remove__confirm" role="group" aria-label="确认删除媒体">
                       <span>删除这段媒体？</span>

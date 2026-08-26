@@ -178,6 +178,7 @@ async function verifyComposerMediaActions() {
     ]);
 
     for (const [label, width, height, mobile] of [
+      ["compact", 320, 800, true],
       ["mobile", 390, 844, true],
       ["tablet", 768, 1024, false],
       ["desktop", 1280, 800, false],
@@ -187,20 +188,58 @@ async function verifyComposerMediaActions() {
         [...document.querySelectorAll(".journey-media-fields__actions")].map((group) => (
           [...group.querySelectorAll("button")].map((button) => {
             const rect = button.getBoundingClientRect();
-            return { width: Math.round(rect.width), height: Math.round(rect.height) };
+            return {
+              width: Math.round(rect.width),
+              height: Math.round(rect.height),
+              ariaLabel: button.getAttribute("aria-label"),
+              tooltip: button.getAttribute("data-tooltip"),
+              visibleText: button.textContent?.trim() ?? "",
+            };
           })
         ))
       ));
       const invalidActions = actionMetrics.some((group) => {
         if (group.length !== 3) return true;
-        if (group.some((button) => button.width < 43 || button.height < (mobile ? 43 : 35))) return true;
-        return mobile && Math.max(...group.map((button) => button.width)) - Math.min(...group.map((button) => button.width)) > 1;
+        if (group.some((button) => button.width < (mobile ? 43 : 39) || button.height < (mobile ? 43 : 39))) return true;
+        if (group.some((button) => !button.ariaLabel || !button.tooltip || button.visibleText !== "")) return true;
+        return mobile && group.some((button) => button.width > 45 || button.height > 45);
       });
       record(`composer-${label}-media-actions`, await scanButtons(page, ".journey-composer", ".journey-composer__editor"), {
         actionMetrics,
         failed: invalidActions,
       });
     }
+
+    await page.setViewportSize({ width: 1280, height: 800 });
+    const tooltipAction = page.locator(".journey-media-fields__actions .icon-action-button:not(:disabled)").first();
+    await tooltipAction.scrollIntoViewIfNeeded();
+    await tooltipAction.hover();
+    const hoverTooltip = await tooltipAction.evaluate((button) => ({
+      opacity: Number(getComputedStyle(button, "::after").opacity),
+      content: getComputedStyle(button, "::after").content,
+    }));
+    await tooltipAction.focus();
+    await page.keyboard.press("Shift+Tab");
+    await page.keyboard.press("Tab");
+    const focusTooltip = await tooltipAction.evaluate((button) => ({
+      focused: document.activeElement === button,
+      focusVisible: button.matches(":focus-visible"),
+      opacity: Number(getComputedStyle(button, "::after").opacity),
+      content: getComputedStyle(button, "::after").content,
+    }));
+    const tooltipFailed = hoverTooltip.opacity < 0.9
+      || !hoverTooltip.content.includes("移除媒体")
+      || !focusTooltip.focused
+      || !focusTooltip.focusVisible
+      || focusTooltip.opacity < 0.9
+      || !focusTooltip.content.includes("移除媒体");
+    results.push({
+      name: "composer-icon-action-tooltip-hover-focus",
+      hoverTooltip,
+      focusTooltip,
+      failed: tooltipFailed,
+    });
+    if (tooltipFailed) failed = true;
 
     for (const [label, width, height] of [
       ["compact", 320, 800],

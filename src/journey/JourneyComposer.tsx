@@ -19,6 +19,7 @@ import {
   IconUpload,
   IconX,
 } from "@tabler/icons-react";
+import { IconActionButton } from "../components/IconActionButton";
 import {
   uploadMediaInParts,
   type UploadedMediaAsset,
@@ -767,12 +768,21 @@ export function JourneyComposer({
                         ))}
                       </select>
                       <div className="journey-media-fields__actions">
-                        <button type="button" onClick={() => setMediaFiles((current) => current.filter((_, candidate) => candidate !== index))}>移除</button>
+                        <IconActionButton
+                          type="button"
+                          label={`移除媒体 ${media.file.name}`}
+                          tooltip="移除媒体"
+                          className="is-destructive-secondary"
+                          onClick={() => setMediaFiles((current) => current.filter((_, candidate) => candidate !== index))}
+                        >
+                          <IconTrash size={16} stroke={1.4} aria-hidden="true" />
+                        </IconActionButton>
                         {isEditing ? (
                           <>
-                            <button
+                            <IconActionButton
                               type="button"
-                              aria-label={`向前调整 ${media.file.name} 的排序`}
+                              label={`向前调整 ${media.file.name} 的排序`}
+                              tooltip="上移媒体"
                               disabled={index === 0}
                               onClick={() => setMediaFiles((current) => {
                                 if (index === 0) return current;
@@ -780,10 +790,13 @@ export function JourneyComposer({
                                 [next[index - 1], next[index]] = [next[index], next[index - 1]];
                                 return next;
                               })}
-                            >上移</button>
-                            <button
+                            >
+                              <IconArrowUp size={16} stroke={1.4} aria-hidden="true" />
+                            </IconActionButton>
+                            <IconActionButton
                               type="button"
-                              aria-label={`向后调整 ${media.file.name} 的排序`}
+                              label={`向后调整 ${media.file.name} 的排序`}
+                              tooltip="下移媒体"
                               disabled={index === mediaFiles.length - 1}
                               onClick={() => setMediaFiles((current) => {
                                 if (index === current.length - 1) return current;
@@ -791,7 +804,9 @@ export function JourneyComposer({
                                 [next[index], next[index + 1]] = [next[index + 1], next[index]];
                                 return next;
                               })}
-                            >下移</button>
+                            >
+                              <IconArrowDown size={16} stroke={1.4} aria-hidden="true" />
+                            </IconActionButton>
                           </>
                         ) : null}
                       </div>
@@ -948,11 +963,11 @@ export function JourneyComposer({
                     <div className="journey-route-draft__actions">
                       {isEditing ? (
                         <>
-                          <button type="button" disabled={index === 0} onClick={() => setRoutePoints((current) => moveRoutePoint(current, point.draftId, -1))} aria-label="向前移动"><IconArrowUp size={15} stroke={1.4} aria-hidden="true" /></button>
-                          <button type="button" disabled={index === routePoints.length - 1} onClick={() => setRoutePoints((current) => moveRoutePoint(current, point.draftId, 1))} aria-label="向后移动"><IconArrowDown size={15} stroke={1.4} aria-hidden="true" /></button>
+                          <IconActionButton type="button" disabled={index === 0} onClick={() => setRoutePoints((current) => moveRoutePoint(current, point.draftId, -1))} label="向前移动地点" tooltip="上移地点"><IconArrowUp size={15} stroke={1.4} aria-hidden="true" /></IconActionButton>
+                          <IconActionButton type="button" disabled={index === routePoints.length - 1} onClick={() => setRoutePoints((current) => moveRoutePoint(current, point.draftId, 1))} label="向后移动地点" tooltip="下移地点"><IconArrowDown size={15} stroke={1.4} aria-hidden="true" /></IconActionButton>
                         </>
                       ) : null}
-                      <button type="button" onClick={() => removeDraftPoint(point.draftId)} aria-label="删除地点"><IconTrash size={15} stroke={1.4} aria-hidden="true" /></button>
+                      <IconActionButton type="button" className="is-destructive-secondary" onClick={() => removeDraftPoint(point.draftId)} label="删除地点" tooltip="删除地点"><IconTrash size={15} stroke={1.4} aria-hidden="true" /></IconActionButton>
                     </div>
                   </li>
                 ))}
