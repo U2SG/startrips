@@ -868,6 +868,7 @@ export function ParticleEarthScene({
     let lastGlobeInteractionAt = performance.now();
     let routeFocusFrame = getSphericalRouteFocus(latestFocusRoute.current?.points ?? []);
     let routeFocusSettling = Boolean(routeFocusFrame);
+    let routeFocusZoomResetting = false;
     let centeredFocusKey = latestFocusPoint.current
       ? `${latestFocusPoint.current.lat}:${latestFocusPoint.current.lon}`
       : "";
@@ -2032,6 +2033,7 @@ export function ParticleEarthScene({
       }
       activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
       routeFocusSettling = false;
+      routeFocusZoomResetting = false;
       lastGlobeInteractionAt = performance.now();
       rotationVelocityX = 0;
       rotationVelocityY = 0;
@@ -2159,6 +2161,7 @@ export function ParticleEarthScene({
       if (!latestDragToRotate.current || !latestWheelToZoom.current) return;
       event.preventDefault();
       routeFocusSettling = false;
+      routeFocusZoomResetting = false;
       lastGlobeInteractionAt = performance.now();
       // Stay in the particle globe at maximum zoom so cities stay pickable;
       // entering the real map is an explicit button choice.
@@ -2281,6 +2284,14 @@ export function ParticleEarthScene({
           interactiveRotationY = 0;
           interactiveZoom = routeFocusFrame.zoom;
           routeFocusSettling = false;
+        }
+      }
+
+      if (routeFocusZoomResetting && activePointers.size === 0) {
+        interactiveZoom = interpolate(interactiveZoom, 1);
+        if (Math.abs(interactiveZoom - 1) < 0.003) {
+          interactiveZoom = 1;
+          routeFocusZoomResetting = false;
         }
       }
 
@@ -2478,8 +2489,10 @@ export function ParticleEarthScene({
         routeProjectionRevision += 1;
       },
       setFocusRoute(route: JourneyRoute | null | undefined) {
+        const hadRouteFocus = Boolean(routeFocusFrame);
         routeFocusFrame = getSphericalRouteFocus(route?.points ?? []);
         routeFocusSettling = Boolean(routeFocusFrame);
+        routeFocusZoomResetting = hadRouteFocus && !routeFocusFrame;
         if (routeFocusFrame) {
           interactiveRotationY = 0;
           rotationVelocityX = 0;
@@ -2489,6 +2502,11 @@ export function ParticleEarthScene({
           host.dataset.routeFocusLon = String(routeFocusFrame.center.lon);
           host.dataset.routeFocusZoom = String(routeFocusFrame.zoom);
         } else {
+          if (routeFocusZoomResetting) {
+            rotationVelocityX = 0;
+            rotationVelocityY = 0;
+            lastGlobeInteractionAt = performance.now();
+          }
           delete host.dataset.routeFocusLat;
           delete host.dataset.routeFocusLon;
           delete host.dataset.routeFocusZoom;
