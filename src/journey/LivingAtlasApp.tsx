@@ -23,6 +23,7 @@ import {
   type JourneySaveResult,
 } from "./JourneyComposer";
 import { JourneyPlaybackOverlay } from "./JourneyPlaybackOverlay";
+import type { PlaybackCameraTarget } from "./journeyPlayback";
 import { JourneyStory } from "./JourneyStory";
 import {
   cachedSoundtrackRead,
@@ -163,6 +164,34 @@ function JourneyCardMedia({
   );
 }
 
+export function playbackFocusPointForCameraTarget(
+  journey: Journey | null,
+  target: PlaybackCameraTarget,
+): { lat: number; lon: number } | null {
+  if (target.kind === "route") return null;
+  const point = journey?.routePoints[target.pointIndex];
+  return point ? { lat: point.latitude, lon: point.longitude } : null;
+}
+
+export type PlaybackCameraCommand = {
+  target: PlaybackCameraTarget;
+  revision: number;
+};
+
+export function nextPlaybackCameraCommand(
+  current: PlaybackCameraCommand | null,
+  target: PlaybackCameraTarget,
+): PlaybackCameraCommand {
+  return { target, revision: (current?.revision ?? 0) + 1 };
+}
+
+export function playbackFocusRouteForCameraTarget(
+  route: JourneyRoute | null,
+  target: PlaybackCameraTarget,
+): JourneyRoute | null {
+  return target.kind === "route" ? route : null;
+}
+
 export function LivingAtlasApp({ lightweightGlobe = false }: { lightweightGlobe?: boolean } = {}) {
   const { canDeleteJourney } = useAtlasCapabilities();
   const [journeys, setJourneys] = useState<Journey[]>([]);
@@ -180,10 +209,7 @@ export function LivingAtlasApp({ lightweightGlobe = false }: { lightweightGlobe?
   // clicks again (now with a cached URL) to actually start, keeping play()
   // inside a real user gesture.
   const [playbackPreparingId, setPlaybackPreparingId] = useState<string | null>(null);
-  const [playbackFocusPoint, setPlaybackFocusPoint] = useState<{
-    lat: number;
-    lon: number;
-  } | null>(null);
+  const [playbackCameraCommand, setPlaybackCameraCommand] = useState<PlaybackCameraCommand | null>(null);
   const [composerOpen, setComposerOpen] = useState(false);
   const [editingJourneyId, setEditingJourneyId] = useState<string | null>(null);
   const [arrivalJourneyId, setArrivalJourneyId] = useState<string | null>(null);
@@ -284,6 +310,7 @@ export function LivingAtlasApp({ lightweightGlobe = false }: { lightweightGlobe?
   }, [arrivalJourneyId, reduceMotion]);
 
   const activeJourney = journeys.find((journey) => journey.id === activeJourneyId) ?? null;
+  const playbackJourney = journeys.find((journey) => journey.id === playbackJourneyId) ?? null;
   const editingJourney = journeys.find((journey) => journey.id === editingJourneyId) ?? null;
   // Review P1: prefetch the soundtrack read while the active card is visible
   // so 播放旅程 can start audio synchronously inside the click gesture.
@@ -301,6 +328,14 @@ export function LivingAtlasApp({ lightweightGlobe = false }: { lightweightGlobe?
   }, [draftRoute, journeys]);
   const focusPoint = journeyFocus(activeJourney);
   const activeJourneyRoute = routes.find((route) => route.id === activeJourneyId) ?? null;
+  const playbackCameraTarget = playbackCameraCommand?.target ?? null;
+  const playbackJourneyRoute = routes.find((route) => route.id === playbackJourneyId) ?? null;
+  const playbackFocusPoint = playbackCameraTarget
+    ? playbackFocusPointForCameraTarget(playbackJourney, playbackCameraTarget)
+    : null;
+  const playbackFocusRoute = playbackCameraTarget
+    ? playbackFocusRouteForCameraTarget(playbackJourneyRoute, playbackCameraTarget)
+    : null;
 
   async function handleSaved(result: JourneySaveResult) {
     const edited = editingJourneyId === result.journey.id;
@@ -436,9 +471,9 @@ export function LivingAtlasApp({ lightweightGlobe = false }: { lightweightGlobe?
       return;
     }
     setPlaybackJourneyId(journeyId);
-    setPlaybackFocusPoint(journey?.routePoints[0]
-      ? { lat: journey.routePoints[0].latitude, lon: journey.routePoints[0].longitude }
-      : null);
+    // The overlay issues the intro route command after mount. Clearing any
+    // previous command keeps camera ownership explicit across playback runs.
+    setPlaybackCameraCommand(null);
   }
 
   function startGlobePick(accept: (point: GlobePointPick) => void) {
@@ -482,8 +517,9 @@ export function LivingAtlasApp({ lightweightGlobe = false }: { lightweightGlobe?
           <div className="living-atlas__qa-globe" aria-hidden="true" />
         ) : (
           <LivingAtlasGlobe
-            focusPoint={playbackFocusPoint ?? focusPoint}
-            focusRoute={playbackFocusPoint ? null : activeJourneyRoute}
+            focusPoint={playbackCameraTarget?.kind === "point" ? playbackFocusPoint : focusPoint}
+            focusRoute={playbackCameraTarget ? playbackFocusRoute : activeJourneyRoute}
+            focusRevision={playbackCameraCommand?.revision ?? 0}
             focusColor={activeJourney?.lightColor}
             journeyRoutes={routes}
             activeJourneyRouteId={draftRoute?.id ?? activeJourneyId}
@@ -704,21 +740,16 @@ export function LivingAtlasApp({ lightweightGlobe = false }: { lightweightGlobe?
 
       {playbackJourneyId ? (
         <JourneyPlaybackOverlay
-          journey={journeys.find((journey) => journey.id === playbackJourneyId) ?? null}
+          journey={playbackJourney}
           onClose={() => {
             setPlaybackJourneyId(null);
-            setPlaybackFocusPoint(null);
+            setPlaybackCameraCommand(null);
           }}
-          onFocusRoutePoint={(pointIndex) => {
-            const journey = journeys.find((candidate) => candidate.id === playbackJourneyId);
-            const point = journey?.routePoints[pointIndex];
-            if (point) {
-              setPlaybackFocusPoint({ lat: point.latitude, lon: point.longitude });
-            }
+          onCameraTargetChange={(target) => {
+            setPlaybackCameraCommand((current) => nextPlaybackCameraCommand(current, target));
           }}
           initialSoundtrackRead={(() => {
-            const target = journeys.find((journey) => journey.id === playbackJourneyId);
-            return target ? cachedSoundtrackRead(target) : null;
+            return playbackJourney ? cachedSoundtrackRead(playbackJourney) : null;
           })()}
           reduceMotion={reduceMotion}
         />

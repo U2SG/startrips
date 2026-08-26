@@ -24,6 +24,55 @@ export const DETAILED_EARTH_DRAG_PAN_OPTIONS = {
   maxSpeed: 520,
 } as const;
 
+
+export type DetailedEarthRouteFrame = {
+  bounds: [[number, number], [number, number]];
+  center: [number, number];
+  pointCount: number;
+};
+
+function normalizeLongitude(longitude: number) {
+  return ((((longitude + 180) % 360) + 360) % 360) - 180;
+}
+
+/**
+ * Build one continuous longitude interval for route framing. Each longitude is
+ * unwrapped relative to the previous point, so a route such as 179E -> 179W
+ * stays a narrow two-degree frame instead of spanning almost the whole world.
+ */
+export function getDetailedEarthRouteFrame(
+  points: readonly { lat: number; lon: number }[],
+): DetailedEarthRouteFrame | null {
+  const valid = points.filter((point) => (
+    Number.isFinite(point.lat) && Number.isFinite(point.lon)
+  ));
+  if (valid.length === 0) return null;
+
+  let previousLongitude = normalizeLongitude(valid[0].lon);
+  let west = previousLongitude;
+  let east = previousLongitude;
+  let south = valid[0].lat;
+  let north = valid[0].lat;
+
+  for (let index = 1; index < valid.length; index += 1) {
+    const point = valid[index];
+    let longitude = normalizeLongitude(point.lon);
+    while (longitude - previousLongitude > 180) longitude -= 360;
+    while (longitude - previousLongitude < -180) longitude += 360;
+    previousLongitude = longitude;
+    west = Math.min(west, longitude);
+    east = Math.max(east, longitude);
+    south = Math.min(south, point.lat);
+    north = Math.max(north, point.lat);
+  }
+
+  return {
+    bounds: [[west, south], [east, north]],
+    center: [(west + east) / 2, (south + north) / 2],
+    pointCount: valid.length,
+  };
+}
+
 export function shouldReturnToParticleEarth(zoom: number) {
   return zoom <= DETAILED_EARTH_RETURN_ZOOM;
 }

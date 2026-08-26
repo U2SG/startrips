@@ -330,7 +330,7 @@ function JourneyPlaybackQaPreview() {
       <JourneyPlaybackOverlay
         journey={playbackQaJourney}
         onClose={() => undefined}
-        onFocusRoutePoint={() => undefined}
+        onCameraTargetChange={() => undefined}
         reduceMotion
       />
     </main>

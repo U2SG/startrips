@@ -22,7 +22,13 @@ import {
   type DecodedReadiness,
 } from "./mediaPrefetch";
 import { useJourneyPlaybackDirector } from "./useJourneyPlaybackDirector";
-import { playbackMediaForPoint, type PlaybackStep } from "./journeyPlayback";
+import {
+  playbackCameraTargetForStep,
+  playbackCameraTargetKey,
+  playbackMediaForPoint,
+  type PlaybackCameraTarget,
+  type PlaybackStep,
+} from "./journeyPlayback";
 import { syncPlaybackMediaElement } from "./mediaPlaybackSync";
 import { journeySoundtrack, stripMediaExtension } from "./journeyModel";
 import { createSoundtrackSampler } from "../motion/audioSampler";
@@ -59,18 +65,18 @@ export function playbackMediaGate(
  * note) -> memories (media slideshow) -> outro. The soundtrack plays for the
  * whole run, never resetting between chapters. The overlay translates each
  * phase into visible content; camera control is delegated to the parent via
- * onFocusRoutePoint so the globe is never remounted.
+ * camera target callback so the globe is never remounted.
  */
 export function JourneyPlaybackOverlay({
   journey,
   onClose,
-  onFocusRoutePoint,
+  onCameraTargetChange,
   initialSoundtrackRead,
   reduceMotion,
 }: {
   journey: Journey | null;
   onClose: () => void;
-  onFocusRoutePoint: (pointIndex: number) => void;
+  onCameraTargetChange: (target: PlaybackCameraTarget) => void;
   // Review P1: a prefetched soundtrack signed read, so the first play() can
   // run inside the click gesture (browser user-activation policy).
   initialSoundtrackRead?: { url: string } | null;
@@ -355,15 +361,18 @@ export function JourneyPlaybackOverlay({
     }
   }, [audioReactiveReducedMotion, paused, pause, resume, soundtrackRead?.status === "ready"]);
 
-  // Camera: travel and stop phases focus the relevant route point.
+  // Camera ownership follows playback semantics. Intro/outro frame the whole
+  // Journey; travel/stop/media point at one route point. The key guard avoids
+  // reissuing the same point command across stop -> media chapters.
+  const lastCameraTargetKeyRef = useRef<string | null>(null);
   useEffect(() => {
-    const step = director.step;
-    if (step?.kind === "travel") {
-      onFocusRoutePoint(step.to);
-    } else if (step?.kind === "stop") {
-      onFocusRoutePoint(step.pointIndex);
-    }
-  }, [director.step, onFocusRoutePoint]);
+    const target = playbackCameraTargetForStep(director.step);
+    if (!target || !journey) return;
+    const targetKey = `${journey.id}:${playbackCameraTargetKey(target)}`;
+    if (lastCameraTargetKeyRef.current === targetKey) return;
+    lastCameraTargetKeyRef.current = targetKey;
+    onCameraTargetChange(target);
+  }, [director.step, journey, onCameraTargetChange]);
 
   // Keyboard: arrows step, space pauses, Esc exits.
   useEffect(() => {

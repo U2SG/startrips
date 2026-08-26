@@ -8,7 +8,13 @@ vi.mock("../auth/AuthGateway", () => ({
 }));
 
 import { readFileSync } from "node:fs";
-import { globeFocusState, playbackEntryNeedsPreparation } from "./LivingAtlasApp";
+import {
+  globeFocusState,
+  nextPlaybackCameraCommand,
+  playbackEntryNeedsPreparation,
+  playbackFocusPointForCameraTarget,
+  playbackFocusRouteForCameraTarget,
+} from "./LivingAtlasApp";
 import { playbackMediaGate } from "./JourneyPlaybackOverlay";
 import type { Journey } from "./types";
 
@@ -47,6 +53,66 @@ const playbackJourney: Journey = {
   routePoints: [],
   media: [],
 };
+
+
+
+describe("playbackFocusPointForCameraTarget", () => {
+  const journeyWithPoints: Journey = {
+    ...playbackJourney,
+    routePoints: [{
+      id: "point-0",
+      journeyId: playbackJourney.id,
+      sortOrder: 0,
+      latitude: 22.5431,
+      longitude: 114.0579,
+      label: "Shenzhen",
+      isStop: true,
+      occurredAt: null,
+      note: null,
+      createdAt: "2026-08-25T00:00:00.000Z",
+    }],
+  };
+
+  it("releases point focus for intro/outro route framing", () => {
+    expect(playbackFocusPointForCameraTarget(journeyWithPoints, { kind: "route" })).toBeNull();
+  });
+
+  it("maps point camera ownership to the route point coordinates", () => {
+    expect(playbackFocusPointForCameraTarget(
+      journeyWithPoints,
+      { kind: "point", pointIndex: 0 },
+    )).toEqual({ lat: 22.5431, lon: 114.0579 });
+  });
+
+  it("fails closed for a missing route point", () => {
+    expect(playbackFocusPointForCameraTarget(
+      journeyWithPoints,
+      { kind: "point", pointIndex: 4 },
+    )).toBeNull();
+  });
+
+  it("keeps route ownership explicit instead of collapsing it to a null point", () => {
+    const route = {
+      id: journeyWithPoints.id,
+      color: journeyWithPoints.lightColor,
+      points: journeyWithPoints.routePoints.map((point) => ({
+        id: point.id,
+        lat: point.latitude,
+        lon: point.longitude,
+        isStop: point.isStop,
+      })),
+    };
+    expect(playbackFocusRouteForCameraTarget(route, { kind: "route" })).toBe(route);
+    expect(playbackFocusRouteForCameraTarget(route, { kind: "point", pointIndex: 0 })).toBeNull();
+  });
+
+  it("increments a camera command revision even for the same route target", () => {
+    const first = nextPlaybackCameraCommand(null, { kind: "route" });
+    const second = nextPlaybackCameraCommand(first, { kind: "route" });
+    expect(first).toEqual({ target: { kind: "route" }, revision: 1 });
+    expect(second).toEqual({ target: { kind: "route" }, revision: 2 });
+  });
+});
 
 describe("playbackEntryNeedsPreparation (PR #24 review)", () => {
   it("starts a silent journey immediately instead of waiting for soundtrack preparation", () => {

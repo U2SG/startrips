@@ -85,6 +85,7 @@ export function LivingAtlasGlobeControls({
 type LivingAtlasGlobeProps = {
   focusPoint?: { lat: number; lon: number } | null;
   focusRoute?: JourneyRoute | null;
+  focusRevision?: number;
   focusColor?: string;
   journeyRoutes: readonly JourneyRoute[];
   activeJourneyRouteId?: string | null;
@@ -102,6 +103,7 @@ type LivingAtlasGlobeProps = {
 export function LivingAtlasGlobe({
   focusPoint,
   focusRoute,
+  focusRevision,
   focusColor,
   journeyRoutes,
   activeJourneyRouteId,
@@ -194,6 +196,7 @@ export function LivingAtlasGlobe({
             quality="high"
             focusPoint={focusPoint}
             focusRoute={focusRoute}
+            focusRevision={focusRevision}
             focusColor={focusColor}
             centerFocusPoint
             journeyRoutes={journeyRoutes}
@@ -225,6 +228,8 @@ export function LivingAtlasGlobe({
           <Suspense fallback={null}>
             <DetailedEarthMap
               focusPoint={focusPoint}
+              focusRoute={focusRoute}
+              focusRevision={focusRevision}
               language={detailLanguage}
               onGlobePointPick={onGlobePointPick}
               onOverviewRequest={() => beginTransition("particle")}

@@ -97,6 +97,36 @@ export type PlaybackStep =
   | { kind: "media"; pointIndex: number; mediaIndex: number }
   | { kind: "outro" };
 
+export type PlaybackCameraTarget =
+  | { kind: "route" }
+  | { kind: "point"; pointIndex: number };
+
+/**
+ * Camera ownership follows the playback chapter, not the entry click:
+ * intro/outro frame the whole Journey, while travel/stop/media stay spatially
+ * anchored to the relevant route point. Media therefore inherits the stop's
+ * point target instead of causing a second camera command.
+ */
+export function playbackCameraTargetForStep(
+  step: PlaybackStep | undefined,
+): PlaybackCameraTarget | null {
+  if (!step) return null;
+  switch (step.kind) {
+    case "intro":
+    case "outro":
+      return { kind: "route" };
+    case "travel":
+      return { kind: "point", pointIndex: step.to };
+    case "stop":
+    case "media":
+      return { kind: "point", pointIndex: step.pointIndex };
+  }
+}
+
+export function playbackCameraTargetKey(target: PlaybackCameraTarget) {
+  return target.kind === "route" ? "route" : `point:${target.pointIndex}`;
+}
+
 /**
  * Expand a journey into the ordered playback steps: intro -> for each point
  * (travel + stop + its media) -> outro. Points with no media and no note
