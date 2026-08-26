@@ -1,6 +1,7 @@
 import {
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ChangeEvent,
   type CSSProperties,
@@ -344,9 +345,11 @@ export function JourneyComposer({
   const activeLightGradient = activeLightEffect
     ? getLightEffectGradient(activeLightEffect.id, safeLightColor)
     : `linear-gradient(135deg, ${safeLightColor}, ${safeLightColor})`;
+  const globePickTriggerRef = useRef<HTMLButtonElement>(null);
+  const globePickCancelRef = useRef<HTMLButtonElement>(null);
   const dialogRef = useModalFocus<HTMLElement>(() => {
     if (!saving) closeComposer();
-  }, !globePicking);
+  }, true, globePicking);
 
   const input = useMemo<JourneyInput>(() => ({
     title: title.trim(),
@@ -375,12 +378,40 @@ export function JourneyComposer({
 
   useEffect(() => {
     if (!globePicking) return;
+    globePickCancelRef.current?.focus({ preventScroll: true });
+  }, [globePicking]);
+
+  function restoreGlobePickTriggerFocus() {
+    // The state/class commit can land one frame before Chromium applies the
+    // restored visibility. Focusing while an ancestor is still hidden briefly
+    // succeeds, then drops back to <body>. Retry until the trigger is actually
+    // visible instead of relying on a fixed frame count.
+    const focusWhenVisible = (attempt = 0) => {
+      const trigger = globePickTriggerRef.current;
+      const visible = trigger?.isConnected
+        && !trigger.closest("[inert]")
+        && trigger.getClientRects().length > 0
+        && getComputedStyle(trigger).visibility !== "hidden";
+      if (visible) {
+        trigger.focus({ preventScroll: true });
+        return;
+      }
+      if (attempt < 4) {
+        window.requestAnimationFrame(() => focusWhenVisible(attempt + 1));
+      }
+    };
+    window.requestAnimationFrame(() => focusWhenVisible());
+  }
+
+  useEffect(() => {
+    if (!globePicking) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       event.preventDefault();
       setGlobePicking(false);
       setMessage("");
       onGlobePickCancel?.();
+      restoreGlobePickTriggerFocus();
     };
     document.addEventListener("keydown", onKeyDown, true);
     return () => document.removeEventListener("keydown", onKeyDown, true);
@@ -456,6 +487,7 @@ export function JourneyComposer({
     setMessage("请在地球上点击一个位置。");
     onGlobePickRequest((point) => {
       setGlobePicking(false);
+      restoreGlobePickTriggerFocus();
       const draftPoint = toDraftPoint(
         point.latitude,
         point.longitude,
@@ -489,6 +521,7 @@ export function JourneyComposer({
     setGlobePicking(false);
     setMessage("");
     onGlobePickCancel?.();
+    restoreGlobePickTriggerFocus();
   }
 
   function closeComposer() {
@@ -601,7 +634,7 @@ export function JourneyComposer({
         <aside className="journey-globe-pick-hint" role="status">
           <IconMapPin size={18} stroke={1.4} aria-hidden="true" />
           <div><strong>在地球上选择路线点</strong><span>点击球面；路线会按添加顺序连接。</span></div>
-          <button type="button" onClick={cancelGlobePoint}><IconX size={18} stroke={1.4} aria-hidden="true" /><span>取消</span></button>
+          <button ref={globePickCancelRef} type="button" onClick={cancelGlobePoint}><IconX size={18} stroke={1.4} aria-hidden="true" /><span>取消</span></button>
         </aside>
       ) : null}
       <section
@@ -804,7 +837,7 @@ export function JourneyComposer({
                     ) : null}
                   </>
                 ) : null}
-                {onGlobePickRequest ? <button className="journey-globe-pick-button" type="button" onClick={requestGlobePoint}><IconMapPin size={17} stroke={1.35} aria-hidden="true" /><span><strong>直接在地球上取点</strong><small>适合在路上、海上或没有准确名称的位置</small></span></button> : null}
+                {onGlobePickRequest ? <button ref={globePickTriggerRef} className="journey-globe-pick-button" type="button" onClick={requestGlobePoint}><IconMapPin size={17} stroke={1.35} aria-hidden="true" /><span><strong>直接在地球上取点</strong><small>适合在路上、海上或没有准确名称的位置</small></span></button> : null}
                 {reverseAttribution ? (
                   <a className="journey-location-attribution" href={reverseAttribution.url} target="_blank" rel="noreferrer">
                     地点数据 {reverseAttribution.label}

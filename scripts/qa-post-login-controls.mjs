@@ -201,6 +201,132 @@ async function verifyComposerMediaActions() {
         failed: invalidActions,
       });
     }
+
+    for (const [label, width, height] of [
+      ["compact", 320, 800],
+      ["mobile-small", 360, 800],
+      ["mobile", 390, 844],
+    ]) {
+      await page.setViewportSize({ width, height });
+      const trigger = page.getByRole("button", { name: /直接在地球上取点/ });
+      await trigger.click();
+      const cancel = page.locator(".journey-globe-pick-hint button");
+      await cancel.waitFor({ state: "visible" });
+      await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+
+      const pickMetrics = await page.evaluate(() => {
+        const composer = document.querySelector(".journey-composer");
+        const globe = document.querySelector(".living-atlas__globe");
+        const cancelButton = document.querySelector(".journey-globe-pick-hint button");
+        const hint = document.querySelector(".journey-globe-pick-hint");
+        const cancelRect = cancelButton?.getBoundingClientRect();
+        const hintRect = hint?.getBoundingClientRect();
+        return {
+          activeLabel: document.activeElement?.textContent?.trim() ?? null,
+          activeInsideComposer: Boolean(composer?.contains(document.activeElement)),
+          globeInert: globe instanceof HTMLElement ? globe.inert : null,
+          bodyOverflow: document.body.style.overflow,
+          composerVisibility: composer ? getComputedStyle(composer).visibility : null,
+          cancelButton: cancelRect ? {
+            width: Math.round(cancelRect.width),
+            height: Math.round(cancelRect.height),
+          } : null,
+          hint: hintRect ? {
+            x: Math.round(hintRect.x),
+            y: Math.round(hintRect.y),
+            right: Math.round(hintRect.right),
+            bottom: Math.round(hintRect.bottom),
+          } : null,
+          overflowX: Math.max(0, document.documentElement.scrollWidth - innerWidth),
+          overflowY: Math.max(0, document.documentElement.scrollHeight - innerHeight),
+        };
+      });
+
+      await page.keyboard.press("Tab");
+      const tabEscapedHiddenComposer = await page.evaluate(() => {
+        const composer = document.querySelector(".journey-composer");
+        return !composer?.contains(document.activeElement);
+      });
+      await page.keyboard.press("Escape");
+      await page.waitForFunction(() => !document.querySelector(".journey-composer-backdrop")?.classList.contains("is-globe-picking"));
+      await page.waitForFunction(
+        () => document.activeElement?.classList.contains("journey-globe-pick-button") ?? false,
+        null,
+        { timeout: 1000, polling: 25 },
+      );
+      const restored = await page.evaluate(() => {
+        const composer = document.querySelector(".journey-composer");
+        const globe = document.querySelector(".living-atlas__globe");
+        const active = document.activeElement;
+        return {
+          activeText: active?.textContent?.trim() ?? null,
+          activeIsTrigger: active?.classList.contains("journey-globe-pick-button") ?? false,
+          globeInert: globe instanceof HTMLElement ? globe.inert : null,
+          bodyOverflow: document.body.style.overflow,
+          composerVisibility: composer ? getComputedStyle(composer).visibility : null,
+        };
+      });
+
+      const pickFailed = pickMetrics.globeInert !== false
+        || pickMetrics.bodyOverflow !== "hidden"
+        || pickMetrics.composerVisibility !== "hidden"
+        || pickMetrics.activeInsideComposer
+        || !String(pickMetrics.activeLabel).includes("取消")
+        || !pickMetrics.cancelButton
+        || pickMetrics.cancelButton.width < 43
+        || pickMetrics.cancelButton.height < 43
+        || !pickMetrics.hint
+        || pickMetrics.hint.x < 0
+        || pickMetrics.hint.right > width
+        || pickMetrics.hint.bottom > height
+        || pickMetrics.overflowX > 0
+        || pickMetrics.overflowY > 0
+        || !tabEscapedHiddenComposer
+        || !restored.activeIsTrigger
+        || restored.globeInert !== true
+        || restored.bodyOverflow !== "hidden"
+        || restored.composerVisibility !== "visible";
+      record(`composer-${label}-globe-pick-focus`, {
+        items: [],
+        overflowX: pickMetrics.overflowX,
+        overflowY: pickMetrics.overflowY,
+      }, {
+        pickMetrics,
+        tabEscapedHiddenComposer,
+        restored,
+        failed: pickFailed,
+      });
+    }
+
+    // Review P2 regression: normal modal close must restore the opener only
+    // after the atlas siblings have been released from inert. The preview's
+    // reopen button is an atlas sibling, so the old cleanup order reproduced
+    // Chromium dropping focus to <body>.
+    await page.getByRole("button", { name: "关闭旅程编辑器" }).click();
+    await page.locator(".journey-composer").waitFor({ state: "detached" });
+    const reopen = page.locator("[data-qa-composer-reopen]");
+    await reopen.focus();
+    await reopen.click();
+    await page.locator(".journey-composer").waitFor({ state: "visible" });
+    await page.getByRole("button", { name: "关闭旅程编辑器" }).click();
+    await page.locator(".journey-composer").waitFor({ state: "detached" });
+    await page.waitForFunction(() => document.activeElement?.hasAttribute("data-qa-composer-reopen") ?? false);
+    const modalCloseFocus = await page.evaluate(() => {
+      const reopenButton = document.querySelector("[data-qa-composer-reopen]");
+      return {
+        activeIsReopen: document.activeElement === reopenButton,
+        reopenInert: reopenButton instanceof HTMLElement ? Boolean(reopenButton.closest("[inert]")) : null,
+        bodyOverflow: document.body.style.overflow,
+      };
+    });
+    results.push({
+      name: "composer-normal-close-focus-restoration",
+      ...modalCloseFocus,
+      failed: !modalCloseFocus.activeIsReopen
+        || modalCloseFocus.reopenInert !== false
+        || modalCloseFocus.bodyOverflow !== "",
+    });
+    if (results.at(-1).failed) failed = true;
   } finally {
     await page.close();
   }
