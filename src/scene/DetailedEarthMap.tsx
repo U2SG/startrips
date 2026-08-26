@@ -5,9 +5,11 @@ import {
   NavigationControl,
 } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
+import type { JourneyRoute } from "../journey/types";
 import {
   createDetailedEarthLabelExpression,
   getDetailedEarthDragRotation,
+  getDetailedEarthRouteFrame,
   DETAILED_EARTH_INITIAL_ZOOM,
   DETAILED_EARTH_MAX_PITCH,
   DETAILED_EARTH_MAX_ZOOM,
@@ -25,6 +27,8 @@ import {
 
 type DetailedEarthMapProps = {
   focusPoint?: { lat: number; lon: number } | null;
+  focusRoute?: JourneyRoute | null;
+  focusRevision?: number;
   language: DetailedEarthLanguage;
   onGlobePointPick?: (point: { latitude: number; longitude: number }) => void;
   onOverviewRequest?: () => void;
@@ -41,8 +45,37 @@ function applyMapLanguage(map: MapLibreMap, language: DetailedEarthLanguage) {
   }
 }
 
+function applyDetailedEarthFocus(
+  map: MapLibreMap,
+  focusPoint: { lat: number; lon: number } | null | undefined,
+  focusRoute: JourneyRoute | null | undefined,
+  duration: number,
+) {
+  const routeFrame = getDetailedEarthRouteFrame(focusRoute?.points ?? []);
+  if (routeFrame && routeFrame.pointCount > 1) {
+    map.fitBounds(routeFrame.bounds, {
+      padding: 56,
+      maxZoom: 10,
+      duration,
+      essential: true,
+    });
+    return;
+  }
+  const target = routeFrame?.center
+    ?? (focusPoint ? [focusPoint.lon, focusPoint.lat] as [number, number] : null);
+  if (!target) return;
+  map.flyTo({
+    center: target,
+    zoom: Math.max(map.getZoom(), DETAILED_EARTH_INITIAL_ZOOM),
+    duration,
+    essential: true,
+  });
+}
+
 export default function DetailedEarthMap({
   focusPoint,
+  focusRoute,
+  focusRevision = 0,
   language,
   onGlobePointPick,
   onOverviewRequest,
@@ -51,10 +84,14 @@ export default function DetailedEarthMap({
   const hostRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const languageRef = useRef(language);
+  const focusPointRef = useRef(focusPoint);
+  const focusRouteRef = useRef(focusRoute);
   const onPickRef = useRef(onGlobePointPick);
   const onOverviewRequestRef = useRef(onOverviewRequest);
   const onReadyRef = useRef(onReady);
   languageRef.current = language;
+  focusPointRef.current = focusPoint;
+  focusRouteRef.current = focusRoute;
   onPickRef.current = onGlobePointPick;
   onOverviewRequestRef.current = onOverviewRequest;
   onReadyRef.current = onReady;
@@ -62,9 +99,11 @@ export default function DetailedEarthMap({
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
-    const initialCenter: [number, number] = focusPoint
-      ? [focusPoint.lon, focusPoint.lat]
-      : [104, 34];
+    const initialRouteFrame = getDetailedEarthRouteFrame(focusRouteRef.current?.points ?? []);
+    const initialCenter: [number, number] = initialRouteFrame?.center
+      ?? (focusPointRef.current
+        ? [focusPointRef.current.lon, focusPointRef.current.lat]
+        : [104, 34]);
     const map = new MapLibreMap({
       container: host,
       style: getDetailedEarthStyle(),
@@ -210,6 +249,7 @@ export default function DetailedEarthMap({
       // polar focus is not trapped by the flat-map viewport.
       if (useGlobeProjection()) map.setProjection({ type: "globe" });
       applyMapLanguage(map, languageRef.current);
+      applyDetailedEarthFocus(map, focusPointRef.current, focusRouteRef.current, 0);
       const settle = () => {
         if (initialLoadSettled) return;
         initialLoadSettled = true;
@@ -271,14 +311,9 @@ export default function DetailedEarthMap({
 
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !focusPoint) return;
-    map.flyTo({
-      center: [focusPoint.lon, focusPoint.lat],
-      zoom: Math.max(map.getZoom(), DETAILED_EARTH_INITIAL_ZOOM),
-      duration: 900,
-      essential: true,
-    });
-  }, [focusPoint]);
+    if (!map) return;
+    applyDetailedEarthFocus(map, focusPoint, focusRoute, 900);
+  }, [focusPoint, focusRevision, focusRoute]);
 
   useEffect(() => {
     const canvas = mapRef.current?.getCanvas();

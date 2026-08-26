@@ -15,6 +15,7 @@ import {
   DETAILED_EARTH_TOUCH_ZOOM_THRESHOLD,
   getDetailedEarthStyle,
   getDetailedEarthDragRotation,
+  getDetailedEarthRouteFrame,
   clampDetailedEarthPitch,
   isDetailedEarthNameLabel,
   isRasterDetailedEarth,
@@ -98,5 +99,36 @@ describe("detailedEarthModel", () => {
     expect(DETAILED_EARTH_TOUCH_ZOOM_THRESHOLD).toBeGreaterThan(0.1);
     expect(DETAILED_EARTH_DRAG_PAN_OPTIONS.linearity).toBeLessThan(0.3);
     expect(DETAILED_EARTH_DRAG_PAN_OPTIONS.maxSpeed).toBeLessThan(1_400);
+  });
+});
+
+
+describe("detailed-earth route framing", () => {
+  it("frames all route points instead of reducing a Journey to one midpoint", () => {
+    const frame = getDetailedEarthRouteFrame([
+      { lat: 22.54, lon: 114.05 },
+      { lat: 31.23, lon: 121.47 },
+      { lat: 35.68, lon: 139.69 },
+    ]);
+    expect(frame).not.toBeNull();
+    expect(frame!.bounds[0][0]).toBeCloseTo(114.05);
+    expect(frame!.bounds[1][0]).toBeCloseTo(139.69);
+    expect(frame!.bounds[0][1]).toBeCloseTo(22.54);
+    expect(frame!.bounds[1][1]).toBeCloseTo(35.68);
+    expect(frame!.pointCount).toBe(3);
+  });
+
+  it("keeps antimeridian routes in a narrow unwrapped longitude interval", () => {
+    const frame = getDetailedEarthRouteFrame([
+      { lat: 10, lon: 179 },
+      { lat: 12, lon: -179 },
+    ]);
+    expect(frame).not.toBeNull();
+    expect(frame!.bounds[1][0] - frame!.bounds[0][0]).toBeCloseTo(2);
+    expect(Math.abs(frame!.center[0])).toBeGreaterThan(179);
+  });
+
+  it("ignores invalid points and returns null when no route geometry remains", () => {
+    expect(getDetailedEarthRouteFrame([{ lat: Number.NaN, lon: 20 }])).toBeNull();
   });
 });

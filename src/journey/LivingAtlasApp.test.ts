@@ -10,8 +10,10 @@ vi.mock("../auth/AuthGateway", () => ({
 import { readFileSync } from "node:fs";
 import {
   globeFocusState,
+  nextPlaybackCameraCommand,
   playbackEntryNeedsPreparation,
   playbackFocusPointForCameraTarget,
+  playbackFocusRouteForCameraTarget,
 } from "./LivingAtlasApp";
 import { playbackMediaGate } from "./JourneyPlaybackOverlay";
 import type { Journey } from "./types";
@@ -87,6 +89,28 @@ describe("playbackFocusPointForCameraTarget", () => {
       journeyWithPoints,
       { kind: "point", pointIndex: 4 },
     )).toBeNull();
+  });
+
+  it("keeps route ownership explicit instead of collapsing it to a null point", () => {
+    const route = {
+      id: journeyWithPoints.id,
+      color: journeyWithPoints.lightColor,
+      points: journeyWithPoints.routePoints.map((point) => ({
+        id: point.id,
+        lat: point.latitude,
+        lon: point.longitude,
+        isStop: point.isStop,
+      })),
+    };
+    expect(playbackFocusRouteForCameraTarget(route, { kind: "route" })).toBe(route);
+    expect(playbackFocusRouteForCameraTarget(route, { kind: "point", pointIndex: 0 })).toBeNull();
+  });
+
+  it("increments a camera command revision even for the same route target", () => {
+    const first = nextPlaybackCameraCommand(null, { kind: "route" });
+    const second = nextPlaybackCameraCommand(first, { kind: "route" });
+    expect(first).toEqual({ target: { kind: "route" }, revision: 1 });
+    expect(second).toEqual({ target: { kind: "route" }, revision: 2 });
   });
 });
 

@@ -567,6 +567,7 @@ interface ParticleEarthSceneProps {
   quality?: keyof typeof QUALITY_PROFILE;
   focusPoint?: { lat: number; lon: number } | null;
   focusRoute?: JourneyRoute | null;
+  focusRevision?: number;
   focusColor?: string;
   centerFocusPoint?: boolean;
   onFocusPointActivate?: () => void;
@@ -751,6 +752,7 @@ export function ParticleEarthScene({
   quality = "low",
   focusPoint,
   focusRoute,
+  focusRevision = 0,
   focusColor,
   centerFocusPoint = false,
   onFocusPointActivate,
@@ -2641,7 +2643,7 @@ export function ParticleEarthScene({
   useEffect(() => {
     if (!ready) return;
     controllerRef.current?.setFocusRoute(focusRoute);
-  }, [controllerRef, focusRoute, ready]);
+  }, [controllerRef, focusRevision, focusRoute, ready]);
 
   useEffect(() => {
     controllerRef.current?.setFocusColor(focusColor);
