@@ -465,6 +465,7 @@
   min-height: 100vh;
   min-height: 100svh;
   overflow: hidden;
+  pointer-events: none;
   background: #010506;
 }
 
@@ -528,6 +529,12 @@
 .persistent-earth-content {
   z-index: 2;
   pointer-events: none;
+}
+
+.persistent-earth-host[data-stage="idle"] + .persistent-earth-content,
+.persistent-earth-host[data-stage="login"] + .persistent-earth-content,
+.persistent-earth-host[data-stage="handoff"] + .persistent-earth-content {
+  pointer-events: auto;
 }
 
 .auth-continuity {
@@ -893,6 +900,7 @@
 .account-dock {
   position: fixed;
   z-index: 100;
+  pointer-events: auto;
   top: 14px;
   right: 18px;
   display: block;

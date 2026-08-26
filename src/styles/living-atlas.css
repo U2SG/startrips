@@ -39,14 +39,19 @@
   font-family: var(--archive-sans);
 }
 
-.living-atlas > :not(.living-atlas__globe),
+.living-atlas > :not(.living-atlas__globe):not(.living-atlas__globe-focus-exit),
 .living-atlas-globe__controls,
 .living-atlas__qa-globe [data-qa-app-globe-point-pick] {
   pointer-events: auto;
 }
 
-.living-atlas__globe {
+.living-atlas__globe,
+.living-atlas > .living-atlas__globe-focus-exit {
   pointer-events: none;
+}
+
+.living-atlas.is-globe-focus > .living-atlas__globe-focus-exit {
+  pointer-events: auto;
 }
 
 .living-atlas button,
