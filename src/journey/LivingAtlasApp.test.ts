@@ -214,3 +214,15 @@ describe("route focus-flight choreography", () => {
     expect(reducedBlock).toContain("stroke-dashoffset: 0;");
   });
 });
+
+describe("Mobile V2 particle-earth pointer ownership", () => {
+  it("lets empty-state visuals pass gestures through while keeping the CTA interactive", () => {
+    const css = readFileSync(new URL("../styles/living-atlas.css", import.meta.url), "utf8");
+    const emptyRule = css.indexOf(".living-atlas.is-mobile-v2 .living-atlas__empty {");
+    const buttonRule = css.indexOf(".living-atlas.is-mobile-v2 .living-atlas__empty button {", emptyRule);
+    expect(emptyRule).toBeGreaterThanOrEqual(0);
+    expect(buttonRule).toBeGreaterThan(emptyRule);
+    expect(css.slice(emptyRule, buttonRule)).toContain("pointer-events: none;");
+    expect(css.slice(buttonRule, css.indexOf("}", buttonRule) + 1)).toContain("pointer-events: auto;");
+  });
+});

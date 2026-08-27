@@ -112,6 +112,7 @@ export type LivingAtlasGlobeProps = {
   onJourneyRoutePointActivate: (journeyId: string, routePointId: string) => void;
   onGlobePointPick?: (point: { latitude: number; longitude: number }) => void;
   onPickRequest?: () => void;
+  showControls?: boolean;
   reduceMotion?: boolean;
   cinematicActive?: boolean;
 };
@@ -228,6 +229,7 @@ export function LivingAtlasGlobe({
   onJourneyRoutePointActivate,
   onGlobePointPick,
   onPickRequest,
+  showControls = true,
   reduceMotion,
   cinematicActive = false,
 }: LivingAtlasGlobeProps) {
@@ -366,24 +368,28 @@ export function LivingAtlasGlobe({
         </div>
       ) : null}
 
-      <LivingAtlasGlobeControls
-        detailMode={detailMode}
-        transitionTarget={transitionTarget}
-        detailLanguage={detailLanguage}
-        transitionLabel={transitionLabel}
-        onModeToggle={() => beginTransition(detailMode ? "particle" : "detail")}
-        onDetailLanguageChange={setDetailLanguage}
-        onPickRequest={onPickRequest}
-        inert={cinematicActive}
-      />
+      {showControls ? (
+        <>
+          <LivingAtlasGlobeControls
+            detailMode={detailMode}
+            transitionTarget={transitionTarget}
+            detailLanguage={detailLanguage}
+            transitionLabel={transitionLabel}
+            onModeToggle={() => beginTransition(detailMode ? "particle" : "detail")}
+            onDetailLanguageChange={setDetailLanguage}
+            onPickRequest={onPickRequest}
+            inert={cinematicActive}
+          />
 
-      <div className="living-atlas-globe__mode-note" aria-hidden="true">
-        {transitionTarget
-          ? "VECTOR MAP PREPARING"
-          : detailMode
-            ? "DRAG TO EXPLORE / ZOOM OUT TO RETURN"
-            : "SCROLL TO ZOOM / DRAG TO ROTATE"}
-      </div>
+          <div className="living-atlas-globe__mode-note" aria-hidden="true">
+            {transitionTarget
+              ? "VECTOR MAP PREPARING"
+              : detailMode
+                ? "DRAG TO EXPLORE / ZOOM OUT TO RETURN"
+                : "SCROLL TO ZOOM / DRAG TO ROTATE"}
+          </div>
+        </>
+      ) : null}
     </section>
   );
 }

@@ -1,4 +1,4 @@
-import { type ComponentType, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, type ComponentType, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   IconArrowRight,
   IconMapPin,
@@ -30,8 +30,9 @@ import {
   prefetchSoundtrackRead,
 } from "./soundtrackReadCache";
 import { JourneyTimeline } from "./JourneyTimeline";
-import { GlobeTimeScrubber } from "./GlobeTimeScrubber";
+import { GlobeTimeScrubber, formatCursorDate } from "./GlobeTimeScrubber";
 import { useGlobeTimeCursor } from "./useGlobeTimeCursor";
+import { useModalFocus } from "./useModalFocus";
 import {
   deleteJourney,
   getPrivateMediaRead,
@@ -50,6 +51,24 @@ import { getLightEffectGradient } from "./lightEffects";
 import type { Journey, JourneyRoute } from "./types";
 
 type AtlasView = "planet" | "timeline";
+
+const MobileDetailedEarthMap = lazy(() => import("../scene/DetailedEarthMap"));
+const MOBILE_ATLAS_QUERY = "(max-width: 760px)";
+
+function useMobileAtlasLayout() {
+  const [mobile, setMobile] = useState(() => (
+    globalThis.matchMedia?.(MOBILE_ATLAS_QUERY).matches ?? false
+  ));
+  useEffect(() => {
+    const media = globalThis.matchMedia?.(MOBILE_ATLAS_QUERY);
+    if (!media) return;
+    const update = () => setMobile(media.matches);
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+  return mobile;
+}
 
 // #8: the root class/data contract for globe focus mode, kept pure so the
 // layout toggle is unit-testable without mounting the full app.
@@ -230,6 +249,38 @@ export function LivingAtlasApp({
   // normal layout, and the Three scene is never remounted (camera/rotation/
   // focus survive through the class switch).
   const [globeFocusMode, setGlobeFocusMode] = useState(false);
+  const isMobileV2 = useMobileAtlasLayout();
+  const [mobileSheetJourneyId, setMobileSheetJourneyId] = useState<string | null>(null);
+  const [mobilePickerOpen, setMobilePickerOpen] = useState(false);
+  const [mobileMapJourneyId, setMobileMapJourneyId] = useState<string | null>(null);
+  const mobileJourneyChipRef = useRef<HTMLButtonElement>(null);
+  const closeMobileMap = useCallback(() => {
+    setMobileMapJourneyId(null);
+    if (typeof requestAnimationFrame !== "function") return;
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const chip = mobileJourneyChipRef.current;
+        if (chip?.isConnected && !chip.closest("[inert]")) {
+          chip.focus({ preventScroll: true });
+        }
+      });
+    });
+  }, []);
+  const mobileChipStartX = useRef<number | null>(null);
+  const mobileChipSwiped = useRef(false);
+  const mobileSheetStartY = useRef<number | null>(null);
+  const mobileSheetDialogRef = useModalFocus<HTMLElement>(
+    () => setMobileSheetJourneyId(null),
+    isMobileV2 && mobileSheetJourneyId !== null,
+  );
+  const mobilePickerDialogRef = useModalFocus<HTMLElement>(
+    () => setMobilePickerOpen(false),
+    isMobileV2 && mobilePickerOpen,
+  );
+  const mobileMapDialogRef = useModalFocus<HTMLElement>(
+    closeMobileMap,
+    isMobileV2 && mobileMapJourneyId !== null,
+  );
   const globeFocusExitRef = useRef<HTMLButtonElement | null>(null);
   const globeFocusTriggerRef = useRef<HTMLButtonElement | null>(null);
   // Review P2: remember the focused element inside focus mode so Esc/exit can
@@ -250,6 +301,14 @@ export function LivingAtlasApp({
     setCinematicIsolation(playbackActive);
     return () => setCinematicIsolation(false);
   }, [playbackActive, setCinematicIsolation]);
+
+  // Mobile V2 is immersive by default: desktop focus-mode and timeline views
+  // are never part of the mobile state machine.
+  useEffect(() => {
+    if (!isMobileV2) return;
+    setView("planet");
+    setGlobeFocusMode(false);
+  }, [isMobileV2]);
 
   // #8 + review P2: entering focus mode moves keyboard focus to the restore
   // control so the invisible trigger never keeps it; exiting restores focus
@@ -322,6 +381,12 @@ export function LivingAtlasApp({
     return () => globalThis.clearTimeout(timeout);
   }, [arrivalJourneyId, reduceMotion]);
 
+  useEffect(() => {
+    if (!isMobileV2 || !arrivalJourneyId) return;
+    if (!journeys.some((journey) => journey.id === arrivalJourneyId)) return;
+    timeCursor.selectJourney(arrivalJourneyId);
+  }, [arrivalJourneyId, isMobileV2, journeys, timeCursor.selectJourney]);
+
   const activeJourney = journeys.find((journey) => journey.id === activeJourneyId) ?? null;
   const playbackJourney = journeys.find((journey) => journey.id === playbackJourneyId) ?? null;
   const editingJourney = journeys.find((journey) => journey.id === editingJourneyId) ?? null;
@@ -339,8 +404,29 @@ export function LivingAtlasApp({
       ? savedRoutes.map((route) => route.id === draftRoute.id ? draftRoute : route)
       : [...savedRoutes, draftRoute];
   }, [draftRoute, journeys]);
+  const mobileJourney = journeys.find(
+    (journey) => journey.id === timeCursor.selection?.journeyId,
+  ) ?? journeys.at(-1) ?? null;
+  const mobilePoint = timeCursor.selection?.pointIndex === null
+    || timeCursor.selection?.pointIndex === undefined
+    ? null
+    : mobileJourney?.routePoints[timeCursor.selection.pointIndex] ?? null;
+  const mobileFocusPoint = mobilePoint
+    ? { lat: mobilePoint.latitude, lon: mobilePoint.longitude }
+    : journeyFocus(mobileJourney);
   const focusPoint = journeyFocus(activeJourney);
   const activeJourneyRoute = routes.find((route) => route.id === activeJourneyId) ?? null;
+  const mobileJourneyRoute = routes.find((route) => route.id === mobileJourney?.id) ?? null;
+  const mobileFocusRevision = mobileJourney
+    ? (Math.max(0, journeys.findIndex((journey) => journey.id === mobileJourney.id)) + 1) * 1000
+      + (timeCursor.selection?.pointIndex ?? 0)
+    : 0;
+  const mobileSheetJourney = journeys.find((journey) => journey.id === mobileSheetJourneyId) ?? null;
+  const mobileMapJourney = journeys.find((journey) => journey.id === mobileMapJourneyId) ?? null;
+  const mobileMapRoute = routes.find((route) => route.id === mobileMapJourneyId) ?? null;
+  const mobileMapFocusRevision = mobileMapJourney
+    ? (Math.max(0, journeys.findIndex((journey) => journey.id === mobileMapJourney.id)) + 1) * 1000
+    : 0;
   const playbackCameraTarget = playbackCameraCommand?.target ?? null;
   const playbackJourneyRoute = routes.find((route) => route.id === playbackJourneyId) ?? null;
   const playbackFocusPoint = playbackCameraTarget
@@ -349,6 +435,21 @@ export function LivingAtlasApp({
   const playbackFocusRoute = playbackCameraTarget
     ? playbackFocusRouteForCameraTarget(playbackJourneyRoute, playbackCameraTarget)
     : null;
+
+  function selectMobileJourney(journeyId: string) {
+    timeCursor.selectJourney(journeyId);
+    setView("planet");
+    setMobilePickerOpen(false);
+  }
+
+  function stepMobileJourney(direction: -1 | 1) {
+    if (!mobileJourney || journeys.length < 2) return;
+    const currentIndex = journeys.findIndex((journey) => journey.id === mobileJourney.id);
+    if (currentIndex < 0) return;
+    const nextIndex = Math.min(journeys.length - 1, Math.max(0, currentIndex + direction));
+    if (nextIndex === currentIndex) return;
+    selectMobileJourney(journeys[nextIndex].id);
+  }
 
   async function handleSaved(result: JourneySaveResult) {
     const edited = editingJourneyId === result.journey.id;
@@ -520,7 +621,8 @@ export function LivingAtlasApp({
 
   return (
     <main
-      className={`living-atlas${arrivalJourneyId ? " has-arrival" : ""}${globePickActive ? " is-globe-picking" : ""}${playbackActive ? " is-playback" : ""}${globeFocusState(globeFocusMode).className}`}
+      className={`living-atlas${isMobileV2 ? " is-mobile-v2" : ""}${arrivalJourneyId ? " has-arrival" : ""}${globePickActive ? " is-globe-picking" : ""}${playbackActive ? " is-playback" : ""}${globeFocusState(globeFocusMode).className}`}
+      data-mobile-v2={isMobileV2 ? "on" : "off"}
       data-globe-focus={globeFocusState(globeFocusMode).dataAttribute}
       data-arrival-journey={arrivalJourneyId ?? undefined}
       data-journey-count={journeys.length}
@@ -530,24 +632,37 @@ export function LivingAtlasApp({
           <div className="living-atlas__qa-globe" aria-hidden="true" />
         ) : (
           <GlobeComponent
-            focusPoint={playbackCameraTarget?.kind === "point" ? playbackFocusPoint : focusPoint}
-            focusRoute={playbackCameraTarget ? playbackFocusRoute : activeJourneyRoute}
-            focusRevision={playbackCameraCommand?.revision ?? 0}
-            focusColor={activeJourney?.lightColor}
+            focusPoint={playbackCameraTarget?.kind === "point"
+              ? playbackFocusPoint
+              : isMobileV2 ? mobileFocusPoint : focusPoint}
+            focusRoute={playbackCameraTarget
+              ? playbackFocusRoute
+              : isMobileV2 ? null : activeJourneyRoute}
+            focusRevision={playbackCameraCommand?.revision ?? (isMobileV2 ? mobileFocusRevision : 0)}
+            focusColor={(isMobileV2 ? mobileJourney : activeJourney)?.lightColor}
             journeyRoutes={routes}
-            activeJourneyRouteId={draftRoute?.id ?? activeJourneyId}
-            temporalReveal={globeFocusMode
+            activeJourneyRouteId={draftRoute?.id ?? (isMobileV2 ? mobileJourney?.id ?? null : activeJourneyId)}
+            temporalReveal={isMobileV2 || globeFocusMode
               ? {
                 journeys: timeCursor.reveal.journeyProgress,
                 points: timeCursor.reveal.pointProgress,
               }
               : undefined}
+            showControls={!isMobileV2}
             onJourneyRouteActivate={(id) => {
-              if (id !== "draft-route-preview") selectJourney(id);
+              if (id === "draft-route-preview") return;
+              if (isMobileV2) selectMobileJourney(id);
+              else selectJourney(id);
             }}
             onJourneyRoutePointActivate={(journeyId, routePointId) => {
               if (journeyId === "draft-route-preview") return;
-              setActiveJourneyId(journeyId);
+              if (isMobileV2) {
+                const journey = journeys.find((candidate) => candidate.id === journeyId);
+                const pointIndex = journey?.routePoints.findIndex((point) => point.id === routePointId) ?? -1;
+                if (pointIndex >= 0) timeCursor.selectPoint(journeyId, pointIndex);
+              } else {
+                setActiveJourneyId(journeyId);
+              }
               setStoryRoutePointId(routePointId);
               setStoryJourneyId(journeyId);
             }}
@@ -562,29 +677,41 @@ export function LivingAtlasApp({
         )}
       </div>
 
-      <header className="living-atlas__header" inert={globeFocusMode || globePickActive || playbackActive || undefined}>
-        <div className="living-atlas__brand"><IconWorld size={25} stroke={1.1} aria-hidden="true" /><div><p>STARTRIPS · LIVING ATLAS</p><h1><ShinyText>把走过的路留在地球上</ShinyText></h1></div></div>
-        <nav aria-label="图谱视图">
-          <button type="button" className={view === "planet" ? "is-active" : ""} onClick={() => setView("planet")}><IconWorld size={16} stroke={1.35} aria-hidden="true" />地球</button>
-          <button type="button" className={view === "timeline" ? "is-active" : ""} onClick={() => setView("timeline")}><IconTimeline size={16} stroke={1.35} aria-hidden="true" />时间线</button>
-          <button ref={createMagnet.ref} onMouseMove={createMagnet.onMouseMove} onMouseLeave={createMagnet.onMouseLeave} type="button" className="living-atlas__create" onClick={openCreateComposer}><IconPlus size={17} stroke={1.4} aria-hidden="true" />记录旅程</button>
-          <button
-            ref={globeFocusTriggerRef}
-            type="button"
-            className="living-atlas__globe-focus"
-            aria-pressed={globeFocusMode}
-            onClick={() => {
-              setView("planet");
-              setGlobeFocusMode(true);
-            }}
-          >
-            <IconWorld size={16} stroke={1.35} aria-hidden="true" />
-            只看地球
-          </button>
-        </nav>
-      </header>
+      {isMobileV2 ? (
+        <header className="mobile-v2__header">
+          <div className="mobile-v2__brand"><IconWorld size={18} stroke={1.2} aria-hidden="true" /><strong>Startrips</strong></div>
+          <nav aria-label="移动端旅程操作">
+            <button type="button" onClick={openCreateComposer} aria-label="记录新旅程"><IconPlus size={18} stroke={1.4} aria-hidden="true" /></button>
+            {journeys.length > 0 ? (
+              <button type="button" onClick={() => setMobilePickerOpen(true)} aria-label="打开全部旅程"><IconTimeline size={18} stroke={1.4} aria-hidden="true" /></button>
+            ) : null}
+          </nav>
+        </header>
+      ) : (
+        <header className="living-atlas__header" inert={globeFocusMode || globePickActive || playbackActive || undefined}>
+          <div className="living-atlas__brand"><IconWorld size={25} stroke={1.1} aria-hidden="true" /><div><p>STARTRIPS · LIVING ATLAS</p><h1><ShinyText>把走过的路留在地球上</ShinyText></h1></div></div>
+          <nav aria-label="图谱视图">
+            <button type="button" className={view === "planet" ? "is-active" : ""} onClick={() => setView("planet")}><IconWorld size={16} stroke={1.35} aria-hidden="true" />地球</button>
+            <button type="button" className={view === "timeline" ? "is-active" : ""} onClick={() => setView("timeline")}><IconTimeline size={16} stroke={1.35} aria-hidden="true" />时间线</button>
+            <button ref={createMagnet.ref} onMouseMove={createMagnet.onMouseMove} onMouseLeave={createMagnet.onMouseLeave} type="button" className="living-atlas__create" onClick={openCreateComposer}><IconPlus size={17} stroke={1.4} aria-hidden="true" />记录旅程</button>
+            <button
+              ref={globeFocusTriggerRef}
+              type="button"
+              className="living-atlas__globe-focus"
+              aria-pressed={globeFocusMode}
+              onClick={() => {
+                setView("planet");
+                setGlobeFocusMode(true);
+              }}
+            >
+              <IconWorld size={16} stroke={1.35} aria-hidden="true" />
+              只看地球
+            </button>
+          </nav>
+        </header>
+      )}
 
-      {view === "planet" && journeys.length > 0 ? (
+      {!isMobileV2 && view === "planet" && journeys.length > 0 ? (
         <nav className="living-atlas__journey-rail motion-staged" aria-label={`全部旅程，共 ${journeys.length} 段`} inert={globeFocusMode || globePickActive || playbackActive || undefined}>
           <div className="living-atlas__journey-rail-heading">
             <span>旅程</span>
@@ -615,7 +742,7 @@ export function LivingAtlasApp({
         </nav>
       ) : null}
 
-      {view === "timeline" ? (
+      {!isMobileV2 && view === "timeline" ? (
         <JourneyTimeline
           journeys={journeys}
           activeJourneyId={activeJourneyId}
@@ -638,7 +765,7 @@ export function LivingAtlasApp({
         </section>
       ) : null}
 
-      {view === "planet" && activeJourney ? (
+      {!isMobileV2 && view === "planet" && activeJourney ? (
         <aside
           className={`living-atlas__active${journeyVisualMedia(activeJourney).length > 0 ? " has-media" : ""}${arrivalJourneyId === activeJourney.id ? " is-arriving" : ""}`}
           inert={globeFocusMode || globePickActive || playbackActive || undefined}
@@ -686,6 +813,199 @@ export function LivingAtlasApp({
             </button>
           </div>
         </aside>
+      ) : null}
+
+      {isMobileV2 && view === "planet" && mobileJourney && !mobileMapJourney ? (
+        <section
+          className="mobile-v2__chrome"
+          aria-label="当前旅程与时间轴"
+          style={{
+            "--journey-color": mobileJourney.lightColor,
+            "--journey-gradient": getLightEffectGradient(mobileJourney.lightEffect, mobileJourney.lightColor),
+          } as React.CSSProperties}
+        >
+          {timeCursor.scrub !== null ? (
+            <div className="mobile-v2__scrub-bubble" aria-live="polite">
+              <strong>{formatCursorDate(timeCursor.cursor, timeCursor.timeDomain)}</strong>
+              <span>{mobilePoint?.label || mobileJourney.title}</span>
+            </div>
+          ) : null}
+          <button
+            ref={mobileJourneyChipRef}
+            type="button"
+            className="mobile-v2__journey-chip"
+            aria-label={`查看当前旅程详情：${mobileJourney.title}。左右滑动切换旅程`}
+            data-playback-journey={mobileJourney.id}
+            onPointerDown={(event) => {
+              mobileChipStartX.current = event.clientX;
+              mobileChipSwiped.current = false;
+            }}
+            onPointerUp={(event) => {
+              const start = mobileChipStartX.current;
+              mobileChipStartX.current = null;
+              if (start === null) return;
+              const delta = event.clientX - start;
+              if (Math.abs(delta) < 34) return;
+              mobileChipSwiped.current = true;
+              stepMobileJourney(delta < 0 ? 1 : -1);
+            }}
+            onPointerCancel={() => {
+              mobileChipStartX.current = null;
+              mobileChipSwiped.current = false;
+            }}
+            onClick={() => {
+              if (mobileChipSwiped.current) {
+                mobileChipSwiped.current = false;
+                return;
+              }
+              setMobileSheetJourneyId(mobileJourney.id);
+            }}
+          >
+            <span className="mobile-v2__journey-light" aria-hidden="true" />
+            <span className="mobile-v2__journey-copy">
+              <small>{mobileJourney.startedOn}{mobileJourney.endedOn ? ` — ${mobileJourney.endedOn}` : ""}</small>
+              <strong>{mobileJourney.title}</strong>
+              <span>{mobilePoint?.label || `${mobileJourney.routePoints.length} 个路线点`}</span>
+            </span>
+            <IconArrowRight size={17} stroke={1.35} aria-hidden="true" />
+          </button>
+          <div className="mobile-v2__timeline" data-scrubbing={timeCursor.scrub !== null ? "true" : "false"}>
+            <GlobeTimeScrubber {...timeCursor} />
+          </div>
+        </section>
+      ) : null}
+
+      {isMobileV2 && mobileSheetJourney ? (
+        <div className="mobile-v2__sheet-layer">
+          <button className="mobile-v2__sheet-backdrop" type="button" tabIndex={-1} aria-label="关闭旅程详情" onClick={() => setMobileSheetJourneyId(null)} />
+          <section
+            ref={mobileSheetDialogRef}
+            tabIndex={-1}
+            className="mobile-v2__sheet"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="mobile-v2-sheet-title"
+            style={{
+              "--journey-color": mobileSheetJourney.lightColor,
+              "--journey-gradient": getLightEffectGradient(mobileSheetJourney.lightEffect, mobileSheetJourney.lightColor),
+            } as React.CSSProperties}
+          >
+            <button
+              className="mobile-v2__sheet-handle"
+              type="button"
+              aria-label="向下滑动或点击关闭旅程详情"
+              onClick={() => setMobileSheetJourneyId(null)}
+              onPointerDown={(event) => {
+                mobileSheetStartY.current = event.clientY;
+              }}
+              onPointerUp={(event) => {
+                const start = mobileSheetStartY.current;
+                mobileSheetStartY.current = null;
+                if (start !== null && event.clientY - start > 64) setMobileSheetJourneyId(null);
+              }}
+              onPointerCancel={() => {
+                mobileSheetStartY.current = null;
+              }}
+            ><span aria-hidden="true" /></button>
+            <div className="mobile-v2__sheet-heading">
+              <p>{mobileSheetJourney.startedOn}{mobileSheetJourney.endedOn ? ` — ${mobileSheetJourney.endedOn}` : ""}</p>
+              <h2 id="mobile-v2-sheet-title">{mobileSheetJourney.title}</h2>
+              <span>{mobileSheetJourney.routePoints[0]?.label ?? "未命名起点"}{mobileSheetJourney.routePoints.length > 1 ? ` → ${mobileSheetJourney.routePoints.at(-1)?.label ?? "未命名终点"}` : ""}</span>
+            </div>
+            <JourneyCardMedia journey={mobileSheetJourney} reduceMotion={reduceMotion} />
+            <dl className="mobile-v2__stats">
+              <div><dt>路线点</dt><dd>{mobileSheetJourney.routePoints.length}</dd></div>
+              <div><dt>媒体</dt><dd>{journeyVisualMedia(mobileSheetJourney).length}</dd></div>
+              <div><dt>停靠</dt><dd>{mobileSheetJourney.routePoints.filter((point) => point.isStop).length}</dd></div>
+            </dl>
+            <p className={`mobile-v2__sheet-note${mobileSheetJourney.note ? "" : " is-empty"}`}>
+              {mobileSheetJourney.note || "路线已经留在地球上，故事等待被打开。"}
+            </p>
+            <div className="mobile-v2__sheet-actions">
+              <button
+                type="button"
+                className="is-primary"
+                onClick={() => {
+                  setMobileSheetJourneyId(null);
+                  openJourneyStory(mobileSheetJourney.id, null);
+                }}
+              >打开故事 <IconArrowRight size={17} stroke={1.35} aria-hidden="true" /></button>
+              <button
+                type="button"
+                onClick={() => {
+                  setMobileSheetJourneyId(null);
+                  setMobileMapJourneyId(mobileSheetJourney.id);
+                }}
+              ><IconWorld size={16} stroke={1.35} aria-hidden="true" />真实地图</button>
+              <button
+                type="button"
+                onClick={() => {
+                  setMobileSheetJourneyId(null);
+                  editJourney(mobileSheetJourney.id);
+                }}
+              ><IconRoute size={16} stroke={1.35} aria-hidden="true" />编辑旅程</button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {isMobileV2 && mobilePickerOpen ? (
+        <section ref={mobilePickerDialogRef} tabIndex={-1} className="mobile-v2__picker" role="dialog" aria-modal="true" aria-labelledby="mobile-v2-picker-title">
+          <header>
+            <div><p>YOUR JOURNEYS</p><h2 id="mobile-v2-picker-title">全部旅程</h2></div>
+            <button type="button" onClick={() => setMobilePickerOpen(false)} aria-label="关闭全部旅程"><IconX size={19} stroke={1.4} aria-hidden="true" /></button>
+          </header>
+          <ol>
+            {journeyRail.map((journey) => (
+              <li key={journey.id}>
+                <button
+                  type="button"
+                  className={journey.id === mobileJourney?.id ? "is-active" : ""}
+                  aria-current={journey.id === mobileJourney?.id ? "true" : undefined}
+                  style={{
+                    "--journey-color": journey.lightColor,
+                    "--journey-gradient": getLightEffectGradient(journey.lightEffect, journey.lightColor),
+                  } as React.CSSProperties}
+                  onClick={() => selectMobileJourney(journey.id)}
+                >
+                  <span className="mobile-v2__picker-thumb" aria-hidden="true"><IconRoute size={22} stroke={1.05} /></span>
+                  <span className="mobile-v2__picker-copy">
+                    <small>{journey.startedOn}{journey.endedOn ? ` — ${journey.endedOn}` : ""}</small>
+                    <strong>{journey.title}</strong>
+                    <span>{journey.routePoints[0]?.label ?? "未命名地点"}{journey.routePoints.length > 1 ? ` → ${journey.routePoints.at(-1)?.label ?? "终点"}` : ""}</span>
+                  </span>
+                  <IconArrowRight size={17} stroke={1.25} aria-hidden="true" />
+                </button>
+              </li>
+            ))}
+          </ol>
+          <button className="mobile-v2__picker-create" type="button" onClick={() => {
+            setMobilePickerOpen(false);
+            openCreateComposer();
+          }}><IconPlus size={17} stroke={1.4} aria-hidden="true" />记录新旅程</button>
+        </section>
+      ) : null}
+
+      {isMobileV2 && mobileMapJourney ? (
+        <section ref={mobileMapDialogRef} tabIndex={-1} className="mobile-v2__real-map" role="dialog" aria-modal="true" aria-labelledby="mobile-v2-real-map-title">
+          <Suspense fallback={<div className="mobile-v2__map-loading">正在打开真实地图…</div>}>
+            <MobileDetailedEarthMap
+              focusPoint={journeyFocus(mobileMapJourney)}
+              focusRoute={mobileMapRoute}
+              focusRevision={mobileMapFocusRevision}
+              language="zh"
+            />
+          </Suspense>
+          <header>
+            <button type="button" onClick={closeMobileMap} aria-label="返回地球"><IconX size={19} stroke={1.4} aria-hidden="true" /></button>
+            <div><p>REAL MAP</p><strong id="mobile-v2-real-map-title">{mobileMapJourney.title}</strong></div>
+          </header>
+          <div className="mobile-v2__map-card">
+            <span className="mobile-v2__journey-light" aria-hidden="true" />
+            <div><small>{mobileMapJourney.startedOn}</small><strong>{mobileMapJourney.routePoints[0]?.label ?? mobileMapJourney.title}</strong><span>{mobileMapJourney.routePoints.length} 个路线点</span></div>
+            <button type="button" onClick={closeMobileMap}>返回地球</button>
+          </div>
+        </section>
       ) : null}
 
       {notice ? (
@@ -739,7 +1059,8 @@ export function LivingAtlasApp({
           routePointId={storyRoutePointId}
           onClose={(source) => closeJourneyStory(source ?? null)}
           onNavigate={(id) => {
-            setActiveJourneyId(id);
+            if (isMobileV2) timeCursor.selectJourney(id);
+            else setActiveJourneyId(id);
             setStoryRoutePointId(null);
             setStoryJourneyId(id);
           }}
