@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { isModalFocusCandidate } from "./useModalFocus";
+import { isModalFocusCandidate, modalSurfaceFor } from "./useModalFocus";
 
 function candidate({ inert = false, rendered = true } = {}) {
   return {
@@ -21,5 +21,20 @@ describe("isModalFocusCandidate", () => {
     vi.stubGlobal("getComputedStyle", () => ({ visibility: "visible" }));
     expect(isModalFocusCandidate(candidate())).toBe(true);
     expect(isModalFocusCandidate(candidate({ rendered: false }))).toBe(false);
+  });
+});
+
+describe("modalSurfaceFor", () => {
+  it("keeps overlay wrappers as the modal surface for existing web dialogs", () => {
+    const atlas = {} as HTMLElement;
+    const overlay = { parentElement: atlas } as unknown as HTMLElement;
+    const root = { parentElement: overlay } as unknown as HTMLElement;
+    expect(modalSurfaceFor(root, atlas)).toBe(overlay);
+  });
+
+  it("keeps a direct atlas-child dialog reachable instead of inerting itself", () => {
+    const atlas = {} as HTMLElement;
+    const root = { parentElement: atlas } as unknown as HTMLElement;
+    expect(modalSurfaceFor(root, atlas)).toBe(root);
   });
 });

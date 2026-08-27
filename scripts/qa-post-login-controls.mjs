@@ -133,7 +133,7 @@ async function verifyAtlasShell() {
       body: JSON.stringify({ journeys }),
     }));
     await page.goto(`${origin}/?qaState=living-atlas`, { waitUntil: "domcontentloaded" });
-    await page.locator(".living-atlas__active").waitFor({ state: "visible" });
+    await page.locator(".living-atlas").waitFor({ state: "visible" });
 
     for (const [label, width, height] of [
       ["mobile-compact", 360, 800],
@@ -141,6 +141,39 @@ async function verifyAtlasShell() {
       ["tablet", 768, 1024],
     ]) {
       await page.setViewportSize({ width, height });
+      await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      const mobile = width <= 760;
+      if (mobile) {
+        await page.locator(".mobile-v2__journey-chip").waitFor({ state: "visible" });
+        const mobileShell = await page.evaluate(() => {
+          const root = document.querySelector(".living-atlas");
+          const chrome = document.querySelector(".mobile-v2__chrome");
+          const chromeRect = chrome?.getBoundingClientRect();
+          return {
+            mobileV2: root?.getAttribute("data-mobile-v2"),
+            desktopHeader: document.querySelectorAll(".living-atlas__header").length,
+            desktopCard: document.querySelectorAll(".living-atlas__active").length,
+            desktopRail: document.querySelectorAll(".living-atlas__journey-rail").length,
+            mobileChip: document.querySelectorAll(".mobile-v2__journey-chip").length,
+            mobileTimeline: document.querySelectorAll(".mobile-v2__timeline").length,
+            chromeHeight: chromeRect ? Math.round(chromeRect.height) : null,
+          };
+        });
+        record(`atlas-${label}-earth-first`, await scanButtons(page, ".living-atlas"), {
+          ...mobileShell,
+          failed: mobileShell.mobileV2 !== "on"
+            || mobileShell.desktopHeader !== 0
+            || mobileShell.desktopCard !== 0
+            || mobileShell.desktopRail !== 0
+            || mobileShell.mobileChip !== 1
+            || mobileShell.mobileTimeline !== 1
+            || mobileShell.chromeHeight === null
+            || mobileShell.chromeHeight > 125,
+        });
+        continue;
+      }
+
+      await page.locator(".living-atlas__active").waitFor({ state: "visible" });
       await clickText(page, "地球");
       const brandNavOverlap = await page.evaluate(() => {
         const brand = document.querySelector(".living-atlas__brand")?.getBoundingClientRect();
@@ -164,6 +197,110 @@ async function verifyAtlasShell() {
         failed: brandNavOverlap !== 0,
       });
     }
+  } finally {
+    await page.close();
+  }
+}
+
+async function verifyMobileV2InteractionContract() {
+  console.error("[qa-post-login] mobile v2 interaction contract");
+  const page = await browser.newPage({ viewport: { width: 390, height: 844 }, reducedMotion: "reduce" });
+  try {
+    await page.route("**/api/journeys", (route) => route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ journeys }),
+    }));
+    await page.goto(`${origin}/?qaState=living-atlas`, { waitUntil: "domcontentloaded" });
+    const chip = page.locator(".mobile-v2__journey-chip");
+    await chip.waitFor({ state: "visible" });
+
+    const pickerTrigger = page.getByRole("button", { name: "打开全部旅程" });
+    await pickerTrigger.click();
+    const picker = page.locator(".mobile-v2__picker");
+    await picker.waitFor({ state: "visible" });
+    const pickerRootFocused = await picker.evaluate((element) => document.activeElement === element);
+    const pickerBackgroundInert = await page.locator(".mobile-v2__header").evaluate((element) => element.inert);
+    await page.keyboard.press("Escape");
+    await picker.waitFor({ state: "detached" });
+    const pickerFocusRestored = await pickerTrigger.evaluate((element) => document.activeElement === element);
+
+    await pickerTrigger.click();
+    await picker.waitFor({ state: "visible" });
+    const journeyButtons = picker.locator("ol li button");
+    await journeyButtons.last().click();
+    await picker.waitFor({ state: "detached" });
+    const selectedJourneyId = await chip.getAttribute("data-playback-journey");
+
+    await page.getByRole("button", { name: "回放我的星球" }).click();
+    await chip.click();
+    const sheet = page.locator(".mobile-v2__sheet");
+    await sheet.waitFor({ state: "visible" });
+    const sheetRootFocused = await sheet.evaluate((element) => document.activeElement === element);
+    const sheetBackgroundInert = await page.locator(".mobile-v2__chrome").evaluate((element) => element.inert);
+    const pinnedTitleBefore = await sheet.locator("h2").textContent();
+    await page.waitForTimeout(1_050);
+    const playbackJourneyAfter = await chip.getAttribute("data-playback-journey");
+    const pinnedTitleAfter = await sheet.locator("h2").textContent();
+    await page.keyboard.press("Tab");
+    const sheetTabTrapped = await sheet.evaluate((element) => element.contains(document.activeElement));
+    await page.keyboard.press("Escape");
+    await sheet.waitFor({ state: "detached" });
+    const sheetFocusRestored = await chip.evaluate((element) => document.activeElement === element);
+
+    await chip.click();
+    await sheet.waitFor({ state: "visible" });
+    await sheet.getByRole("button", { name: /真实地图/ }).click();
+    const realMap = page.locator(".mobile-v2__real-map");
+    await realMap.waitFor({ state: "visible" });
+    const mapRootFocused = await realMap.evaluate((element) => document.activeElement === element);
+    const mapBackgroundInert = await page.locator(".mobile-v2__header").evaluate((element) => element.inert);
+    await page.keyboard.press("Escape");
+    await realMap.waitFor({ state: "detached" });
+    let mapFocusRestored = false;
+    try {
+      await page.waitForFunction(
+        () => document.activeElement?.classList.contains("mobile-v2__journey-chip"),
+        null,
+        { timeout: 1_500 },
+      );
+      mapFocusRestored = true;
+    } catch {
+      mapFocusRestored = false;
+    }
+
+    const interaction = {
+      name: "mobile-v2-playback-modal-contract",
+      pickerRootFocused,
+      pickerBackgroundInert,
+      pickerFocusRestored,
+      selectedJourneyId,
+      sheetRootFocused,
+      sheetBackgroundInert,
+      pinnedTitleBefore,
+      pinnedTitleAfter,
+      playbackJourneyAfter,
+      sheetTabTrapped,
+      sheetFocusRestored,
+      mapRootFocused,
+      mapBackgroundInert,
+      mapFocusRestored,
+      failed: !pickerRootFocused
+        || !pickerBackgroundInert
+        || !pickerFocusRestored
+        || !selectedJourneyId
+        || !sheetRootFocused
+        || !sheetBackgroundInert
+        || pinnedTitleBefore !== pinnedTitleAfter
+        || playbackJourneyAfter === selectedJourneyId
+        || !sheetTabTrapped
+        || !sheetFocusRestored
+        || !mapRootFocused
+        || !mapBackgroundInert
+        || !mapFocusRestored,
+    };
+    if (interaction.failed) failed = true;
+    results.push(interaction);
   } finally {
     await page.close();
   }
@@ -473,10 +610,11 @@ async function verifyComposerGlobeRoundTrip() {
   const openFreshComposer = async (width, height) => {
     await page.setViewportSize({ width, height });
     await page.goto(`${origin}/?qaState=living-atlas`, { waitUntil: "domcontentloaded" });
-    await page.locator(".living-atlas__active").waitFor({ state: "visible" });
+    await page.locator(width <= 760 ? ".mobile-v2__journey-chip" : ".living-atlas__active").waitFor({ state: "visible" });
     const focusExitHitTest = await page.evaluate(() => {
       const exit = document.querySelector(".living-atlas__globe-focus-exit");
-      const create = document.querySelector(".living-atlas__create");
+      const create = document.querySelector(".living-atlas__create")
+        ?? document.querySelector('.mobile-v2__header button[aria-label="记录新旅程"]');
       if (!(exit instanceof HTMLElement) || !(create instanceof HTMLElement)) return null;
       const rect = create.getBoundingClientRect();
       const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
@@ -498,7 +636,7 @@ async function verifyComposerGlobeRoundTrip() {
     ) {
       throw new Error(`hidden globe-focus exit intercepted atlas hit testing: ${JSON.stringify(focusExitHitTest)}`);
     }
-    await page.getByRole("button", { name: /记录旅程/ }).click();
+    await page.getByRole("button", { name: /记录(?:新)?旅程/ }).click();
     await page.locator(".journey-composer").waitFor({ state: "visible" });
     await page.locator("[data-qa-app-route-preview]").waitFor({ state: "attached" });
   };
@@ -786,7 +924,7 @@ async function verifyAccountDock() {
     await page.locator('input[type="password"]').fill("password1234");
     await page.getByRole("button", { name: "登录", exact: true }).click();
     await page.locator(".account-dock__tab").waitFor({ state: "visible" });
-    await page.locator(".living-atlas__active").waitFor({ state: "visible" });
+    await page.locator(".mobile-v2__journey-chip").waitFor({ state: "visible" });
 
     for (const [label, width, height, mobile] of [
       ["mobile-narrow", 320, 800, true],
@@ -798,7 +936,8 @@ async function verifyAccountDock() {
       await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
       const tabNavOverlap = await page.evaluate(() => {
         const tab = document.querySelector(".account-dock__tab")?.getBoundingClientRect();
-        const nav = document.querySelector(".living-atlas__header nav")?.getBoundingClientRect();
+        const nav = (document.querySelector(".mobile-v2__header nav")
+          ?? document.querySelector(".living-atlas__header nav"))?.getBoundingClientRect();
         if (!tab || !nav) return -1;
         return Math.round(
           Math.max(0, Math.min(tab.right, nav.right) - Math.max(tab.left, nav.left))
@@ -1865,6 +2004,7 @@ try {
     await verifyFinalAcceptanceMobileFlow();
   } else {
     await verifyAtlasShell();
+    await verifyMobileV2InteractionContract();
     await verifyComposerMediaActions();
     await verifyComposerGlobeRoundTrip();
     await verifyAccountDock();

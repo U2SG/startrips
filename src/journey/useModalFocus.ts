@@ -24,6 +24,10 @@ export function isInsideNestedTrap(element: Element | null) {
   return Boolean(element?.closest("[data-focus-trap-exempt]"));
 }
 
+export function modalSurfaceFor(root: HTMLElement, atlas: Element | null) {
+  return root.parentElement === atlas ? root : root.parentElement;
+}
+
 export function useModalFocus<T extends HTMLElement>(
   onClose: () => void,
   active = true,
@@ -37,6 +41,14 @@ export function useModalFocus<T extends HTMLElement>(
   useEffect(() => {
     onCloseRef.current = onClose;
   }, [onClose]);
+
+  const restorePendingFocus = () => {
+    const target = pendingFocusRestoreRef.current;
+    pendingFocusRestoreRef.current = null;
+    if (target?.isConnected && !target.closest("[inert]")) {
+      target.focus({ preventScroll: true });
+    }
+  };
 
   // Modal lifecycle ownership: body scroll lock and final focus restoration
   // belong to the dialog for its entire open lifetime. Temporarily suspending
@@ -64,13 +76,7 @@ export function useModalFocus<T extends HTMLElement>(
       // focus() here would be rejected by Chromium. Hand the target to the
       // trap cleanup; if the trap was already suspended, restore immediately.
       pendingFocusRestoreRef.current = previousFocus;
-      if (!trapActiveRef.current) {
-        const target = pendingFocusRestoreRef.current;
-        pendingFocusRestoreRef.current = null;
-        if (target?.isConnected && !target.closest("[inert]")) {
-          target.focus({ preventScroll: true });
-        }
-      }
+      if (!trapActiveRef.current) restorePendingFocus();
     };
   }, [active]);
 
@@ -83,11 +89,14 @@ export function useModalFocus<T extends HTMLElement>(
     if (!root) return;
 
     const inerted: Array<{ element: HTMLElement; previous: boolean }> = [];
-    const overlay = root.parentElement;
     const atlas = root.closest(".living-atlas");
-    if (atlas && overlay) {
+    // Some dialogs live inside an overlay wrapper (Composer/Story/Sheet),
+    // while full-screen Mobile V2 dialogs are direct atlas children. Inert the
+    // competing atlas siblings, but never inert the dialog itself.
+    const modalSurface = modalSurfaceFor(root, atlas);
+    if (atlas && modalSurface) {
       for (const child of atlas.children) {
-        if (!(child instanceof HTMLElement) || child === overlay) continue;
+        if (!(child instanceof HTMLElement) || child === modalSurface) continue;
         inerted.push({ element: child, previous: child.inert });
         child.inert = true;
       }
@@ -149,11 +158,7 @@ export function useModalFocus<T extends HTMLElement>(
       // A modal close queues its opener above; restore only after every inert
       // state owned by this trap has been released. Suspension has no queued
       // target, so globe-pick handoff never steals focus back into the modal.
-      const target = pendingFocusRestoreRef.current;
-      pendingFocusRestoreRef.current = null;
-      if (target?.isConnected && !target.closest("[inert]")) {
-        target.focus({ preventScroll: true });
-      }
+      restorePendingFocus();
     };
   }, [active, trapSuspended]);
 

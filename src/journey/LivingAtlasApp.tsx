@@ -32,6 +32,7 @@ import {
 import { JourneyTimeline } from "./JourneyTimeline";
 import { GlobeTimeScrubber, formatCursorDate } from "./GlobeTimeScrubber";
 import { useGlobeTimeCursor } from "./useGlobeTimeCursor";
+import { useModalFocus } from "./useModalFocus";
 import {
   deleteJourney,
   getPrivateMediaRead,
@@ -249,12 +250,37 @@ export function LivingAtlasApp({
   // focus survive through the class switch).
   const [globeFocusMode, setGlobeFocusMode] = useState(false);
   const isMobileV2 = useMobileAtlasLayout();
-  const [mobileSheetOpen, setMobileSheetOpen] = useState(false);
+  const [mobileSheetJourneyId, setMobileSheetJourneyId] = useState<string | null>(null);
   const [mobilePickerOpen, setMobilePickerOpen] = useState(false);
   const [mobileMapJourneyId, setMobileMapJourneyId] = useState<string | null>(null);
+  const mobileJourneyChipRef = useRef<HTMLButtonElement>(null);
+  const closeMobileMap = useCallback(() => {
+    setMobileMapJourneyId(null);
+    if (typeof requestAnimationFrame !== "function") return;
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const chip = mobileJourneyChipRef.current;
+        if (chip?.isConnected && !chip.closest("[inert]")) {
+          chip.focus({ preventScroll: true });
+        }
+      });
+    });
+  }, []);
   const mobileChipStartX = useRef<number | null>(null);
   const mobileChipSwiped = useRef(false);
   const mobileSheetStartY = useRef<number | null>(null);
+  const mobileSheetDialogRef = useModalFocus<HTMLElement>(
+    () => setMobileSheetJourneyId(null),
+    isMobileV2 && mobileSheetJourneyId !== null,
+  );
+  const mobilePickerDialogRef = useModalFocus<HTMLElement>(
+    () => setMobilePickerOpen(false),
+    isMobileV2 && mobilePickerOpen,
+  );
+  const mobileMapDialogRef = useModalFocus<HTMLElement>(
+    closeMobileMap,
+    isMobileV2 && mobileMapJourneyId !== null,
+  );
   const globeFocusExitRef = useRef<HTMLButtonElement | null>(null);
   const globeFocusTriggerRef = useRef<HTMLButtonElement | null>(null);
   // Review P2: remember the focused element inside focus mode so Esc/exit can
@@ -389,8 +415,12 @@ export function LivingAtlasApp({
     ? (Math.max(0, journeys.findIndex((journey) => journey.id === mobileJourney.id)) + 1) * 1000
       + (timeCursor.selection?.pointIndex ?? 0)
     : 0;
+  const mobileSheetJourney = journeys.find((journey) => journey.id === mobileSheetJourneyId) ?? null;
   const mobileMapJourney = journeys.find((journey) => journey.id === mobileMapJourneyId) ?? null;
   const mobileMapRoute = routes.find((route) => route.id === mobileMapJourneyId) ?? null;
+  const mobileMapFocusRevision = mobileMapJourney
+    ? (Math.max(0, journeys.findIndex((journey) => journey.id === mobileMapJourney.id)) + 1) * 1000
+    : 0;
   const playbackCameraTarget = playbackCameraCommand?.target ?? null;
   const playbackJourneyRoute = routes.find((route) => route.id === playbackJourneyId) ?? null;
   const playbackFocusPoint = playbackCameraTarget
@@ -795,6 +825,7 @@ export function LivingAtlasApp({
             </div>
           ) : null}
           <button
+            ref={mobileJourneyChipRef}
             type="button"
             className="mobile-v2__journey-chip"
             aria-label={`查看当前旅程详情：${mobileJourney.title}。左右滑动切换旅程`}
@@ -821,7 +852,7 @@ export function LivingAtlasApp({
                 mobileChipSwiped.current = false;
                 return;
               }
-              setMobileSheetOpen(true);
+              setMobileSheetJourneyId(mobileJourney.id);
             }}
           >
             <span className="mobile-v2__journey-light" aria-hidden="true" />
@@ -838,71 +869,73 @@ export function LivingAtlasApp({
         </section>
       ) : null}
 
-      {isMobileV2 && mobileSheetOpen && mobileJourney ? (
+      {isMobileV2 && mobileSheetJourney ? (
         <div className="mobile-v2__sheet-layer">
-          <button className="mobile-v2__sheet-backdrop" type="button" aria-label="关闭旅程详情" onClick={() => setMobileSheetOpen(false)} />
+          <button className="mobile-v2__sheet-backdrop" type="button" tabIndex={-1} aria-label="关闭旅程详情" onClick={() => setMobileSheetJourneyId(null)} />
           <section
+            ref={mobileSheetDialogRef}
+            tabIndex={-1}
             className="mobile-v2__sheet"
             role="dialog"
             aria-modal="true"
             aria-labelledby="mobile-v2-sheet-title"
             style={{
-              "--journey-color": mobileJourney.lightColor,
-              "--journey-gradient": getLightEffectGradient(mobileJourney.lightEffect, mobileJourney.lightColor),
+              "--journey-color": mobileSheetJourney.lightColor,
+              "--journey-gradient": getLightEffectGradient(mobileSheetJourney.lightEffect, mobileSheetJourney.lightColor),
             } as React.CSSProperties}
           >
             <button
               className="mobile-v2__sheet-handle"
               type="button"
               aria-label="向下滑动或点击关闭旅程详情"
-              onClick={() => setMobileSheetOpen(false)}
+              onClick={() => setMobileSheetJourneyId(null)}
               onPointerDown={(event) => {
                 mobileSheetStartY.current = event.clientY;
               }}
               onPointerUp={(event) => {
                 const start = mobileSheetStartY.current;
                 mobileSheetStartY.current = null;
-                if (start !== null && event.clientY - start > 64) setMobileSheetOpen(false);
+                if (start !== null && event.clientY - start > 64) setMobileSheetJourneyId(null);
               }}
               onPointerCancel={() => {
                 mobileSheetStartY.current = null;
               }}
             ><span aria-hidden="true" /></button>
             <div className="mobile-v2__sheet-heading">
-              <p>{mobileJourney.startedOn}{mobileJourney.endedOn ? ` — ${mobileJourney.endedOn}` : ""}</p>
-              <h2 id="mobile-v2-sheet-title">{mobileJourney.title}</h2>
-              <span>{mobileJourney.routePoints[0]?.label ?? "未命名起点"}{mobileJourney.routePoints.length > 1 ? ` → ${mobileJourney.routePoints.at(-1)?.label ?? "未命名终点"}` : ""}</span>
+              <p>{mobileSheetJourney.startedOn}{mobileSheetJourney.endedOn ? ` — ${mobileSheetJourney.endedOn}` : ""}</p>
+              <h2 id="mobile-v2-sheet-title">{mobileSheetJourney.title}</h2>
+              <span>{mobileSheetJourney.routePoints[0]?.label ?? "未命名起点"}{mobileSheetJourney.routePoints.length > 1 ? ` → ${mobileSheetJourney.routePoints.at(-1)?.label ?? "未命名终点"}` : ""}</span>
             </div>
-            <JourneyCardMedia journey={mobileJourney} reduceMotion={reduceMotion} />
+            <JourneyCardMedia journey={mobileSheetJourney} reduceMotion={reduceMotion} />
             <dl className="mobile-v2__stats">
-              <div><dt>路线点</dt><dd>{mobileJourney.routePoints.length}</dd></div>
-              <div><dt>媒体</dt><dd>{journeyVisualMedia(mobileJourney).length}</dd></div>
-              <div><dt>停靠</dt><dd>{mobileJourney.routePoints.filter((point) => point.isStop).length}</dd></div>
+              <div><dt>路线点</dt><dd>{mobileSheetJourney.routePoints.length}</dd></div>
+              <div><dt>媒体</dt><dd>{journeyVisualMedia(mobileSheetJourney).length}</dd></div>
+              <div><dt>停靠</dt><dd>{mobileSheetJourney.routePoints.filter((point) => point.isStop).length}</dd></div>
             </dl>
-            <p className={`mobile-v2__sheet-note${mobileJourney.note ? "" : " is-empty"}`}>
-              {mobileJourney.note || "路线已经留在地球上，故事等待被打开。"}
+            <p className={`mobile-v2__sheet-note${mobileSheetJourney.note ? "" : " is-empty"}`}>
+              {mobileSheetJourney.note || "路线已经留在地球上，故事等待被打开。"}
             </p>
             <div className="mobile-v2__sheet-actions">
               <button
                 type="button"
                 className="is-primary"
                 onClick={() => {
-                  setMobileSheetOpen(false);
-                  openJourneyStory(mobileJourney.id, null);
+                  setMobileSheetJourneyId(null);
+                  openJourneyStory(mobileSheetJourney.id, null);
                 }}
               >打开故事 <IconArrowRight size={17} stroke={1.35} aria-hidden="true" /></button>
               <button
                 type="button"
                 onClick={() => {
-                  setMobileSheetOpen(false);
-                  setMobileMapJourneyId(mobileJourney.id);
+                  setMobileSheetJourneyId(null);
+                  setMobileMapJourneyId(mobileSheetJourney.id);
                 }}
               ><IconWorld size={16} stroke={1.35} aria-hidden="true" />真实地图</button>
               <button
                 type="button"
                 onClick={() => {
-                  setMobileSheetOpen(false);
-                  editJourney(mobileJourney.id);
+                  setMobileSheetJourneyId(null);
+                  editJourney(mobileSheetJourney.id);
                 }}
               ><IconRoute size={16} stroke={1.35} aria-hidden="true" />编辑旅程</button>
             </div>
@@ -911,7 +944,7 @@ export function LivingAtlasApp({
       ) : null}
 
       {isMobileV2 && mobilePickerOpen ? (
-        <section className="mobile-v2__picker" role="dialog" aria-modal="true" aria-labelledby="mobile-v2-picker-title">
+        <section ref={mobilePickerDialogRef} tabIndex={-1} className="mobile-v2__picker" role="dialog" aria-modal="true" aria-labelledby="mobile-v2-picker-title">
           <header>
             <div><p>YOUR JOURNEYS</p><h2 id="mobile-v2-picker-title">全部旅程</h2></div>
             <button type="button" onClick={() => setMobilePickerOpen(false)} aria-label="关闭全部旅程"><IconX size={19} stroke={1.4} aria-hidden="true" /></button>
@@ -948,23 +981,23 @@ export function LivingAtlasApp({
       ) : null}
 
       {isMobileV2 && mobileMapJourney ? (
-        <section className="mobile-v2__real-map" role="dialog" aria-modal="true" aria-labelledby="mobile-v2-real-map-title">
+        <section ref={mobileMapDialogRef} tabIndex={-1} className="mobile-v2__real-map" role="dialog" aria-modal="true" aria-labelledby="mobile-v2-real-map-title">
           <Suspense fallback={<div className="mobile-v2__map-loading">正在打开真实地图…</div>}>
             <MobileDetailedEarthMap
               focusPoint={journeyFocus(mobileMapJourney)}
               focusRoute={mobileMapRoute}
-              focusRevision={mobileFocusRevision}
+              focusRevision={mobileMapFocusRevision}
               language="zh"
             />
           </Suspense>
           <header>
-            <button type="button" onClick={() => setMobileMapJourneyId(null)} aria-label="返回地球"><IconX size={19} stroke={1.4} aria-hidden="true" /></button>
+            <button type="button" onClick={closeMobileMap} aria-label="返回地球"><IconX size={19} stroke={1.4} aria-hidden="true" /></button>
             <div><p>REAL MAP</p><strong id="mobile-v2-real-map-title">{mobileMapJourney.title}</strong></div>
           </header>
           <div className="mobile-v2__map-card">
             <span className="mobile-v2__journey-light" aria-hidden="true" />
             <div><small>{mobileMapJourney.startedOn}</small><strong>{mobileMapJourney.routePoints[0]?.label ?? mobileMapJourney.title}</strong><span>{mobileMapJourney.routePoints.length} 个路线点</span></div>
-            <button type="button" onClick={() => setMobileMapJourneyId(null)}>返回地球</button>
+            <button type="button" onClick={closeMobileMap}>返回地球</button>
           </div>
         </section>
       ) : null}
