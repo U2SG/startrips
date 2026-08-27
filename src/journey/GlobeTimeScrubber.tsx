@@ -21,25 +21,31 @@ export function GlobeTimeScrubber({
   play,
   pause,
   seek,
+  setScrub,
 }: GlobeTimeCursor) {
   const trackRef = useRef<HTMLDivElement>(null);
 
   const onPointerDown = (event: React.PointerEvent) => {
     const track = trackRef.current;
     if (!track) return;
+    pause();
+    let latest = cursor;
     const move = (clientX: number) => {
       const rect = track.getBoundingClientRect();
-      const value = (clientX - rect.left) / Math.max(1, rect.width);
-      seek(Math.min(1, Math.max(0, value)));
+      latest = Math.min(1, Math.max(0, (clientX - rect.left) / Math.max(1, rect.width)));
+      setScrub(latest);
     };
     move(event.clientX);
     const onMove = (moveEvent: PointerEvent) => move(moveEvent.clientX);
-    const onUp = () => {
+    const finish = () => {
+      seek(latest);
       window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointerup", finish);
+      window.removeEventListener("pointercancel", finish);
     };
     window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointerup", finish);
+    window.addEventListener("pointercancel", finish);
   };
 
   const onKeyDown = (event: React.KeyboardEvent) => {

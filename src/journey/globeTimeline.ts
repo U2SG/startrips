@@ -188,3 +188,67 @@ export function timelineCursorStops(
   if (thinned.at(-1) !== sorted.at(-1)) thinned.push(sorted.at(-1)!);
   return thinned;
 }
+
+export type JourneyTimelineSelection = {
+  journeyId: string;
+  pointIndex: number | null;
+  cursor: number;
+};
+
+/**
+ * Resolve one authoritative playback selection from the global cursor.
+ *
+ * The latest journey that has begun owns the cursor; inside that journey the
+ * latest reached point owns the globe target. Before the first dated journey,
+ * the first journey/point is used so the player never falls back to a stale
+ * independently-selected card.
+ */
+export function resolveJourneyTimelineSelection(
+  entries: readonly JourneyTimelineEntry[],
+  cursor: number,
+  preferredJourneyId: string | null = null,
+): JourneyTimelineSelection | null {
+  if (entries.length === 0) return null;
+  const clamped = Math.min(1, Math.max(0, cursor));
+  const epsilon = 1e-9;
+  const preferredEntry = preferredJourneyId
+    ? entries.find((candidate) => candidate.journeyId === preferredJourneyId) ?? null
+    : null;
+  let entry = preferredEntry ?? entries[0];
+  if (!preferredEntry) {
+    for (const candidate of entries) {
+      if (candidate.started <= clamped + epsilon) entry = candidate;
+      else break;
+    }
+  }
+
+  let earliestPoint = entry.points[0] ?? null;
+  let reachedPoint: JourneyTimelineEntry["points"][number] | null = null;
+  for (const point of entry.points) {
+    if (!earliestPoint || point.at < earliestPoint.at) earliestPoint = point;
+    if (point.at > clamped + epsilon) continue;
+    if (
+      !reachedPoint
+      || point.at > reachedPoint.at + epsilon
+      || (Math.abs(point.at - reachedPoint.at) <= epsilon && point.pointIndex > reachedPoint.pointIndex)
+    ) {
+      reachedPoint = point;
+    }
+  }
+  const pointIndex = (reachedPoint ?? earliestPoint)?.pointIndex ?? null;
+  return { journeyId: entry.journeyId, pointIndex, cursor: clamped };
+}
+
+/** Cursor anchor used by chip/picker journey selection. */
+export function cursorForJourney(
+  entries: readonly JourneyTimelineEntry[],
+  journeyId: string,
+): number | null {
+  const entry = entries.find((candidate) => candidate.journeyId === journeyId);
+  if (!entry) return null;
+  const latestPoint = entry.points.reduce<number | null>(
+    (latest, point) => latest === null || point.at > latest ? point.at : latest,
+    null,
+  );
+  return Math.min(1, Math.max(0, latestPoint ?? entry.ended ?? entry.started));
+}

@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   buildJourneyTimeline,
+  cursorForJourney,
   getJourneyTemporalProgress,
   getTemporalProgress,
+  resolveJourneyTimelineSelection,
   resolveRoutePointTimes,
   timelineCursorStops,
 } from "./globeTimeline";
@@ -145,6 +147,100 @@ describe("buildJourneyTimeline (#21)", () => {
     }
     // The journey is fully revealed at cursor = 1.
     expect(getJourneyTemporalProgress(entry, 1)).toBe(1);
+  });
+});
+
+describe("authoritative mobile playback selection", () => {
+  const entries = [
+    {
+      journeyId: "older",
+      started: 0.1,
+      ended: 0.45,
+      points: [
+        { pointIndex: 0, at: 0.1, explicit: true },
+        { pointIndex: 1, at: 0.35, explicit: true },
+      ],
+    },
+    {
+      journeyId: "newer",
+      started: 0.6,
+      ended: 0.95,
+      points: [
+        { pointIndex: 0, at: 0.6, explicit: true },
+        { pointIndex: 1, at: 0.9, explicit: true },
+      ],
+    },
+  ];
+
+  it("derives journey and route point from one cursor instead of parallel selection state", () => {
+    expect(resolveJourneyTimelineSelection(entries, 0.2)).toMatchObject({
+      journeyId: "older",
+      pointIndex: 0,
+    });
+    expect(resolveJourneyTimelineSelection(entries, 0.4)).toMatchObject({
+      journeyId: "older",
+      pointIndex: 1,
+    });
+    expect(resolveJourneyTimelineSelection(entries, 0.7)).toMatchObject({
+      journeyId: "newer",
+      pointIndex: 0,
+    });
+    expect(resolveJourneyTimelineSelection(entries, 0.92)).toMatchObject({
+      journeyId: "newer",
+      pointIndex: 1,
+    });
+  });
+
+  it("keeps continuity in the gap between journeys and gives chip/picker a cursor anchor", () => {
+    expect(resolveJourneyTimelineSelection(entries, 0.52)?.journeyId).toBe("older");
+    expect(cursorForJourney(entries, "older")).toBe(0.35);
+    expect(cursorForJourney(entries, "newer")).toBe(0.9);
+    expect(cursorForJourney(entries, "missing")).toBeNull();
+  });
+
+  it("preserves an explicitly selected journey when journey time ranges overlap", () => {
+    const overlapping = [
+      {
+        journeyId: "older",
+        started: 0.1,
+        ended: 0.9,
+        points: [
+          { pointIndex: 0, at: 0.2, explicit: true },
+          { pointIndex: 1, at: 0.8, explicit: true },
+        ],
+      },
+      {
+        journeyId: "newer",
+        started: 0.5,
+        ended: 0.7,
+        points: [{ pointIndex: 0, at: 0.6, explicit: true }],
+      },
+    ];
+    const olderCursor = cursorForJourney(overlapping, "older");
+    expect(olderCursor).toBe(0.8);
+    expect(resolveJourneyTimelineSelection(overlapping, olderCursor!)?.journeyId).toBe("newer");
+    expect(resolveJourneyTimelineSelection(overlapping, olderCursor!, "older")).toMatchObject({
+      journeyId: "older",
+      pointIndex: 1,
+    });
+  });
+
+  it("finds the latest reached point without assuming route-array time order", () => {
+    const unsorted = [{
+      journeyId: "mixed-times",
+      started: 0.1,
+      ended: 0.95,
+      points: [
+        { pointIndex: 0, at: 0.8, explicit: true },
+        { pointIndex: 1, at: 0.5, explicit: false },
+        { pointIndex: 2, at: 0.9, explicit: true },
+      ],
+    }];
+    expect(resolveJourneyTimelineSelection(unsorted, 0.6)).toMatchObject({
+      journeyId: "mixed-times",
+      pointIndex: 1,
+    });
+    expect(cursorForJourney(unsorted, "mixed-times")).toBe(0.9);
   });
 });
 
