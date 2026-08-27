@@ -5755,6 +5755,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .account-dock {
     display: grid;
     justify-items: center;
     padding: 0 4px;
+    pointer-events: none;
     text-align: center;
   }
 
@@ -5793,6 +5794,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .account-dock {
   .living-atlas.is-mobile-v2 .living-atlas__empty button {
     min-height: 48px;
     border-radius: 14px;
+    pointer-events: auto;
   }
 
   .living-atlas.is-mobile-v2 .journey-story {

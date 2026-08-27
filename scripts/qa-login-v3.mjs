@@ -460,23 +460,51 @@ async function verifyDetailedEarthParticleContinuity() {
     if (!box) throw new Error("persistent particle-earth canvas has no browser bounds");
     const startX = box.x + box.width * 0.52;
     const startY = box.y + box.height * 0.54;
+    const pointerOwnership = await gateway.page.evaluate(({ x, y }) => {
+      const describe = (element) => {
+        if (!(element instanceof Element)) return null;
+        const style = getComputedStyle(element);
+        const rect = element.getBoundingClientRect();
+        return {
+          tag: element.tagName,
+          className: element.getAttribute("class"),
+          ariaLabel: element.getAttribute("aria-label"),
+          pointerEvents: style.pointerEvents,
+          zIndex: style.zIndex,
+          rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+        };
+      };
+      const canvas = document.querySelector('canvas[data-three-scene="particle-earth"]');
+      const stack = document.elementsFromPoint(x, y).slice(0, 8).map(describe);
+      const hit = document.elementFromPoint(x, y);
+      return {
+        hit: describe(hit),
+        stack,
+        canvasHitOwned: hit === canvas || Boolean(canvas && hit && canvas.contains(hit)),
+      };
+    }, { x: startX, y: startY });
     await gateway.page.mouse.move(startX, startY);
     await gateway.page.mouse.down();
     await gateway.page.mouse.move(startX + 52, startY + 28, { steps: 5 });
     await gateway.page.mouse.up();
     await gateway.page.mouse.wheel(0, -360);
-    await gateway.page.waitForFunction(({ rotationX, rotationY, zoom }) => {
-      const debug = window.__particleEarthDebug?.();
-      if (!debug) return false;
-      const rotationChanged = Math.abs(debug.rotationX - rotationX) > 0.01
-        || Math.abs(debug.rotationY - rotationY) > 0.01;
-      return rotationChanged && Math.abs(debug.zoom - zoom) > 0.01;
-    }, {
-      rotationX: before.debug?.rotationX ?? 0,
-      rotationY: before.debug?.rotationY ?? 0,
-      zoom: before.debug?.zoom ?? 1,
-    }, { timeout: 5_000 });
+    await gateway.page.waitForTimeout(250);
     const interacted = await gateway.page.evaluate(() => window.__particleEarthDebug?.() ?? null);
+    const rotationChanged = Boolean(interacted) && (
+      Math.abs(interacted.rotationX - (before.debug?.rotationX ?? 0)) > 0.01
+      || Math.abs(interacted.rotationY - (before.debug?.rotationY ?? 0)) > 0.01
+    );
+    const zoomChanged = Boolean(interacted)
+      && Math.abs(interacted.zoom - (before.debug?.zoom ?? 1)) > 0.01;
+    if (!pointerOwnership.canvasHitOwned || !rotationChanged || !zoomChanged) {
+      throw new Error(`persistent particle-earth interaction blocked: ${JSON.stringify({
+        pointerOwnership,
+        before: before.debug,
+        interacted,
+        rotationChanged,
+        zoomChanged,
+      })}`);
+    }
 
     const detailModeButton = gateway.page.getByRole("button", { name: "深入真实地图" });
     const detailModeHit = await detailModeButton.evaluate((button) => {
@@ -579,7 +607,10 @@ async function verifyDetailedEarthParticleContinuity() {
     return {
       label: "particle-detail-particle-controller-continuity",
       before,
+      pointerOwnership,
       interacted,
+      rotationChanged,
+      zoomChanged,
       detail,
       returned,
       errors: unexpectedErrors,
