@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   buildJourneyTimeline,
+  cursorForJourney,
   getJourneyTemporalProgress,
   getTemporalProgress,
+  resolveJourneyTimelineSelection,
   timelineCursorStops,
   type JourneyTimelineEntry,
 } from "./globeTimeline";
@@ -65,8 +67,34 @@ export function useGlobeTimeCursor(journeys: readonly Journey[]) {
   const pause = useCallback(() => setPlaying(false), []);
   const seek = useCallback((value: number) => {
     setCursor(Math.min(1, Math.max(0, value)));
+    setScrub(null);
     setPlaying(false);
   }, []);
+
+  // Scrubbing is a first-class preview position. Every derived surface uses
+  // the effective cursor, so the globe, chip and route reveal cannot drift.
+  const effectiveCursor = scrub ?? cursor;
+  const selection = useMemo(
+    () => resolveJourneyTimelineSelection(timeline.entries, effectiveCursor),
+    [effectiveCursor, timeline.entries],
+  );
+
+  const selectJourney = useCallback((journeyId: string) => {
+    const target = cursorForJourney(timeline.entries, journeyId);
+    if (target === null) return;
+    setCursor(target);
+    setScrub(null);
+    setPlaying(false);
+  }, [timeline.entries]);
+
+  const selectPoint = useCallback((journeyId: string, pointIndex: number) => {
+    const entry = timeline.entries.find((candidate) => candidate.journeyId === journeyId);
+    const point = entry?.points.find((candidate) => candidate.pointIndex === pointIndex);
+    if (!point) return;
+    setCursor(Math.min(1, Math.max(0, point.at)));
+    setScrub(null);
+    setPlaying(false);
+  }, [timeline.entries]);
 
   const reveal: TemporalReveal = useMemo(() => {
     const journeyProgress = new Map<string, number>();
@@ -74,24 +102,21 @@ export function useGlobeTimeCursor(journeys: readonly Journey[]) {
     for (const entry of timeline.entries) {
       journeyProgress.set(
         entry.journeyId,
-        getJourneyTemporalProgress(entry, cursor),
+        getJourneyTemporalProgress(entry, effectiveCursor),
       );
       for (const point of entry.points) {
         pointProgress.set(
           `${entry.journeyId}:${point.pointIndex}`,
-          getTemporalProgress(point.at, cursor),
+          getTemporalProgress(point.at, effectiveCursor),
         );
       }
     }
     return {
       journeyProgress,
       pointProgress,
-      showUndated: cursor >= 1,
+      showUndated: effectiveCursor >= 1,
     };
-  }, [timeline, cursor]);
-
-  // The scrub value lets the timeline UI drive the cursor continuously.
-  const effectiveCursor = scrub ?? cursor;
+  }, [timeline, effectiveCursor]);
 
   return {
     cursor: effectiveCursor,
@@ -103,6 +128,9 @@ export function useGlobeTimeCursor(journeys: readonly Journey[]) {
     play,
     pause,
     seek,
+    selectJourney,
+    selectPoint,
+    selection,
     scrub,
     setScrub,
     reveal,
