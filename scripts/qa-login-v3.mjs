@@ -506,6 +506,31 @@ async function verifyDetailedEarthParticleContinuity() {
       })}`);
     }
 
+    // Mobile V2 intentionally removes the desktop globe controls. Keep the real
+    // drag/wheel ownership assertion above at 390x844, then cross the responsive
+    // boundary on the same page before exercising particle -> detail -> particle.
+    // The persistent Earth contract requires the canvas/controller to survive that
+    // viewport transition as well, so this does not weaken the continuity check.
+    await gateway.page.setViewportSize({ width: 768, height: 1024 });
+    await gateway.page.waitForFunction(() => (
+      document.querySelector(".living-atlas")?.getAttribute("data-mobile-v2") === "off"
+    ), null, { timeout: 5_000 });
+    await gateway.page.evaluate(() => new Promise((resolve) => (
+      requestAnimationFrame(() => requestAnimationFrame(resolve))
+    )));
+    const desktopBoundary = await gateway.page.evaluate(() => {
+      const canvas = document.querySelector('canvas[data-three-scene="particle-earth"]');
+      return {
+        sameCanvas: window.__qaDetailEarthCanvas === canvas,
+        sameControllerDebug: window.__qaDetailEarthDebug === window.__particleEarthDebug,
+        mobileV2: document.querySelector(".living-atlas")?.getAttribute("data-mobile-v2") ?? null,
+        debug: window.__particleEarthDebug?.() ?? null,
+      };
+    });
+    if (!desktopBoundary.sameCanvas || !desktopBoundary.sameControllerDebug || desktopBoundary.mobileV2 !== "off") {
+      throw new Error(`persistent particle-earth responsive handoff failed: ${JSON.stringify(desktopBoundary)}`);
+    }
+
     const detailModeButton = gateway.page.getByRole("button", { name: "深入真实地图" });
     const detailModeHit = await detailModeButton.evaluate((button) => {
       const rect = button.getBoundingClientRect();
@@ -611,6 +636,7 @@ async function verifyDetailedEarthParticleContinuity() {
       interacted,
       rotationChanged,
       zoomChanged,
+      desktopBoundary,
       detail,
       returned,
       errors: unexpectedErrors,
@@ -623,6 +649,9 @@ async function verifyDetailedEarthParticleContinuity() {
         || !returned.sameControllerDebug
         || returned.debug?.canvases !== 1
         || !interactionApplied
+        || !desktopBoundary.sameCanvas
+        || !desktopBoundary.sameControllerDebug
+        || desktopBoundary.mobileV2 !== "off"
         || !rotationsRemainValid
         || !preserves(detail.debug?.zoom, interacted.zoom, 0.003)
         || !preserves(returned.debug?.zoom, interacted.zoom, 0.003)
