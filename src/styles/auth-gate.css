@@ -22,7 +22,7 @@
   align-items: center;
   justify-items: stretch;
   padding: clamp(28px, 4vw, 64px) clamp(28px, 6vw, 92px);
-  background: #010304;
+  background: transparent;
 }
 
 .auth-v3-brand {
@@ -53,7 +53,7 @@
   pointer-events: none;
   background:
     radial-gradient(circle at 33% 47%, rgba(17, 76, 72, 0.09), transparent 32%),
-    #010304;
+    transparent;
 }
 
 .auth-v3-scene__earth {
@@ -456,6 +456,95 @@
   animation: auth-v3-shell-release 1.08s linear forwards;
 }
 
+/* One renderer/scene/controller owns the Particle Earth from Login through Atlas.
+   UI shells are transparent presentation layers above this host. */
+.persistent-earth-shell {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 100vh;
+  min-height: 100svh;
+  overflow: hidden;
+  pointer-events: none;
+  background: #010506;
+}
+
+.persistent-earth-host,
+.persistent-earth-content {
+  position: absolute;
+  inset: 0;
+}
+
+.persistent-earth-host {
+  z-index: 1;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.persistent-earth-host[data-interactive="true"] {
+  pointer-events: auto;
+}
+
+.persistent-earth-host__viewport {
+  position: absolute;
+  top: 0;
+  left: -7vw;
+  width: 74vw;
+  height: 96vh;
+  min-width: 720px;
+  transform-origin: 42% 50%;
+  transition:
+    top 1.08s cubic-bezier(0.18, 0.75, 0.2, 1),
+    left 1.08s cubic-bezier(0.18, 0.75, 0.2, 1),
+    width 1.08s cubic-bezier(0.18, 0.75, 0.2, 1),
+    height 1.08s cubic-bezier(0.18, 0.75, 0.2, 1),
+    transform 1.08s cubic-bezier(0.18, 0.75, 0.2, 1);
+}
+
+.persistent-earth-host[data-stage="handoff"] .persistent-earth-host__viewport,
+.persistent-earth-host[data-stage="atlas"] .persistent-earth-host__viewport {
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  transform: none;
+}
+
+.persistent-earth-host__viewport > .particle-earth-scene {
+  inset: 0;
+}
+
+.persistent-earth-host__qa-earth {
+  position: absolute;
+  inset: 8% 6%;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 64% 34%, rgba(194, 255, 242, 0.28) 0 1px, transparent 2px),
+    radial-gradient(circle at 36% 58%, rgba(232, 200, 122, 0.24) 0 1px, transparent 2px),
+    radial-gradient(circle at 50% 50%, rgba(48, 123, 115, 0.13), transparent 64%);
+  box-shadow: inset 0 0 0 1px rgba(118, 227, 208, 0.08), 0 0 80px rgba(38, 128, 117, 0.08);
+}
+
+.persistent-earth-content {
+  z-index: 2;
+  pointer-events: none;
+}
+
+.persistent-earth-host[data-stage="idle"] + .persistent-earth-content,
+.persistent-earth-host[data-stage="login"] + .persistent-earth-content,
+.persistent-earth-host[data-stage="handoff"] + .persistent-earth-content {
+  pointer-events: auto;
+}
+
+/* AuthGateway can render recovery/invitation gates directly under the root
+   content layer even while the persistent Earth is in atlas stage. Those
+   full-screen controls explicitly own pointer input instead of inheriting the
+   atlas pass-through behavior. */
+.persistent-earth-content > .auth-gate {
+  pointer-events: auto;
+}
+
 .auth-continuity {
   position: relative;
   width: 100%;
@@ -463,13 +552,20 @@
   min-height: 100vh;
   min-height: 100svh;
   overflow: hidden;
-  background: #010304;
+  pointer-events: none;
+  background: transparent;
 }
 
 .auth-continuity__atlas {
   position: absolute;
   inset: 0;
   z-index: 0;
+  pointer-events: none;
+}
+
+.auth-continuity__atlas > .auth-gate {
+  pointer-events: auto;
+  background: transparent;
 }
 
 .auth-continuity.is-handoff .auth-continuity__atlas {
@@ -480,6 +576,12 @@
   position: absolute;
   z-index: 5;
   inset: 0;
+  pointer-events: auto;
+}
+
+.persistent-earth-content .auth-gate:has(.auth-v3-scene.is-handoff) {
+  animation: none;
+  background: transparent;
 }
 
 @keyframes auth-v3-earth-form {
@@ -621,6 +723,22 @@
 }
 
 @media (max-width: 760px) {
+  .persistent-earth-host__viewport {
+    top: -7vh;
+    left: -18vw;
+    width: 136vw;
+    height: 70vh;
+    min-width: 0;
+  }
+
+  .persistent-earth-host[data-stage="handoff"] .persistent-earth-host__viewport,
+  .persistent-earth-host[data-stage="atlas"] .persistent-earth-host__viewport {
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+  }
+
   .auth-gate:has(.auth-v3-scene) {
     display: flex;
     align-items: flex-end;
@@ -759,6 +877,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .persistent-earth-host__viewport,
   .auth-v3-scene__earth,
   .auth-v3-scene__cyan-beam,
   .auth-v3-scene__warm-glow,
@@ -789,6 +908,7 @@
 .account-dock {
   position: fixed;
   z-index: 100;
+  pointer-events: auto;
   top: 14px;
   right: 18px;
   display: block;
@@ -825,6 +945,11 @@
   backdrop-filter: blur(18px);
 }
 .account-dock.is-open .account-dock__panel { display: grid; }
+.account-dock.is-cinematic-hidden {
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
 .account-dock__identity {
   display: block;
   overflow: hidden;

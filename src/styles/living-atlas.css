@@ -33,9 +33,25 @@
   min-height: 620px;
   overflow: hidden;
   isolation: isolate;
-  background: var(--atlas-bg);
+  pointer-events: none;
+  background: transparent;
   color: var(--atlas-text);
   font-family: var(--archive-sans);
+}
+
+.living-atlas > :not(.living-atlas__globe):not(.living-atlas__globe-focus-exit),
+.living-atlas-globe__controls,
+.living-atlas__qa-globe [data-qa-app-globe-point-pick] {
+  pointer-events: auto;
+}
+
+.living-atlas__globe,
+.living-atlas > .living-atlas__globe-focus-exit {
+  pointer-events: none;
+}
+
+.living-atlas.is-globe-focus > .living-atlas__globe-focus-exit {
+  pointer-events: auto;
 }
 
 .living-atlas button,
@@ -3962,12 +3978,13 @@
   font-size: 9px;
 }
 
-.journey-composer-backdrop.is-globe-picking {
+.living-atlas > .journey-composer-backdrop.is-globe-picking {
   background: transparent;
   pointer-events: none;
 }
 
 .journey-composer-backdrop.is-globe-picking .journey-composer {
+  animation: none;
   visibility: hidden;
   opacity: 0;
 }
@@ -3975,6 +3992,13 @@
 /* Globe point-picking is a focused interaction state. The map remains active,
    but utility controls are temporarily removed so the pick hint owns the
    interaction band without competing with map/account actions. */
+.living-atlas.is-globe-picking .living-atlas__header,
+.living-atlas.is-globe-picking .living-atlas__journey-rail,
+.living-atlas.is-globe-picking .living-atlas__active,
+.living-atlas.is-globe-picking .living-atlas__notice,
+.living-atlas.is-globe-picking .living-atlas__empty,
+.living-atlas.is-globe-picking .living-atlas__globe-focus-exit,
+.living-atlas.is-globe-picking .globe-time-scrubber,
 body:has(.journey-composer-backdrop.is-globe-picking) .living-atlas-globe__controls,
 body:has(.journey-composer-backdrop.is-globe-picking) .account-dock {
   visibility: hidden;
@@ -4264,6 +4288,29 @@ body:has(.journey-composer-backdrop.is-globe-picking) .account-dock {
   ::view-transition-new(journey-card) {
     animation-duration: 0.01ms !important;
   }
+}
+
+/* Playback owns the atlas chrome while the persistent globe remains visible.
+   `inert` enforces keyboard ownership; these rules enforce visual isolation. */
+.living-atlas.is-playback .living-atlas__header,
+.living-atlas.is-playback .living-atlas__journey-rail,
+.living-atlas.is-playback .living-atlas__active,
+.living-atlas.is-playback .journey-timeline,
+.living-atlas.is-playback .living-atlas__notice,
+.living-atlas.is-playback .living-atlas__empty,
+.living-atlas.is-playback .living-atlas__globe-focus-exit,
+.living-atlas.is-playback .globe-time-scrubber {
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.living-atlas-globe.is-cinematic .living-atlas-globe__controls,
+.living-atlas-globe.is-cinematic .living-atlas-globe__mode-note,
+.living-atlas.is-playback .particle-earth-journey-connector {
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
 }
 
 /* ── #8 Globe Focus Mode ────────────────────────────────────────────────────

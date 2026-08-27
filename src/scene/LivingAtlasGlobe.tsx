@@ -1,4 +1,13 @@
-import { lazy, Suspense, useEffect, useState } from "react";
+import {
+  createContext,
+  lazy,
+  Suspense,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 import { IconMap2, IconMapPin, IconWorld } from "@tabler/icons-react";
 import type { JourneyRoute } from "../journey/types";
 import type { DetailedEarthLanguage } from "./detailedEarthModel";
@@ -19,6 +28,7 @@ type LivingAtlasGlobeControlsProps = {
   onModeToggle: () => void;
   onDetailLanguageChange: (language: DetailedEarthLanguage) => void;
   onPickRequest?: () => void;
+  inert?: boolean;
 };
 
 export function LivingAtlasGlobeControls({
@@ -29,9 +39,14 @@ export function LivingAtlasGlobeControls({
   onModeToggle,
   onDetailLanguageChange,
   onPickRequest,
+  inert = false,
 }: LivingAtlasGlobeControlsProps) {
   return (
-    <div className="living-atlas-globe__controls">
+    <div
+      className="living-atlas-globe__controls"
+      inert={inert || undefined}
+      aria-hidden={inert || undefined}
+    >
       <button
         type="button"
         className="living-atlas-globe__mode"
@@ -98,7 +113,108 @@ export type LivingAtlasGlobeProps = {
   onGlobePointPick?: (point: { latitude: number; longitude: number }) => void;
   onPickRequest?: () => void;
   reduceMotion?: boolean;
+  cinematicActive?: boolean;
 };
+
+type PersistentEarthStage = "idle" | "login" | "handoff" | "atlas";
+
+type LoginEarthPresentation = {
+  mode: "archiveBurst" | "particleSphere";
+  reduceMotion: boolean;
+};
+
+type AtlasEarthPresentation = Pick<
+  LivingAtlasGlobeProps,
+  | "focusPoint"
+  | "focusRoute"
+  | "focusRevision"
+  | "focusColor"
+  | "journeyRoutes"
+  | "activeJourneyRouteId"
+  | "temporalReveal"
+  | "onJourneyRouteActivate"
+  | "onJourneyRoutePointActivate"
+  | "onGlobePointPick"
+  | "reduceMotion"
+>;
+
+type PersistentEarthContextValue = {
+  setStage: (stage: PersistentEarthStage) => void;
+  setLoginPresentation: (presentation: LoginEarthPresentation) => void;
+  setAtlasPresentation: (presentation: AtlasEarthPresentation | null) => void;
+};
+
+const PersistentEarthContext = createContext<PersistentEarthContextValue | null>(null);
+
+export function usePersistentEarth() {
+  const value = useContext(PersistentEarthContext);
+  if (!value) throw new Error("PersistentEarthProvider is required");
+  return value;
+}
+
+export function PersistentEarthProvider({ children }: { children: ReactNode }) {
+  const [stage, setStage] = useState<PersistentEarthStage>("idle");
+  const [loginPresentation, setLoginPresentation] = useState<LoginEarthPresentation>({
+    mode: "particleSphere",
+    reduceMotion: false,
+  });
+  const [atlasPresentation, setAtlasPresentation] = useState<AtlasEarthPresentation | null>(null);
+  const lightweight = import.meta.env.DEV
+    && typeof window !== "undefined"
+    && new URLSearchParams(window.location.search).get("qaLite") === "1";
+  const value = useMemo<PersistentEarthContextValue>(() => ({
+    setStage,
+    setLoginPresentation,
+    setAtlasPresentation,
+  }), []);
+  const atlasOwnsScene = stage === "handoff" || stage === "atlas";
+  const atlas = atlasOwnsScene ? atlasPresentation : null;
+  const active = stage !== "idle";
+  const interactive = stage === "atlas" && Boolean(atlas);
+
+  return (
+    <PersistentEarthContext.Provider value={value}>
+      <div className="persistent-earth-shell" data-persistent-earth-stage={stage}>
+        <div
+          className="persistent-earth-host"
+          data-persistent-earth-host="true"
+          data-stage={stage}
+          data-interactive={interactive ? "true" : "false"}
+          aria-hidden="true"
+        >
+          <div className="persistent-earth-host__viewport">
+            {active ? (
+              lightweight ? (
+                <div className="persistent-earth-host__qa-earth" data-three-scene="particle-earth" />
+              ) : (
+                <ParticleEarthScene
+                  mode={atlas ? "focusPoint" : loginPresentation.mode}
+                  quality={stage === "atlas" ? "high" : "low"}
+                  focusPoint={atlas?.focusPoint}
+                  focusRoute={atlas?.focusRoute}
+                  focusRevision={atlas?.focusRevision}
+                  focusColor={atlas?.focusColor}
+                  centerFocusPoint={Boolean(atlas)}
+                  journeyRoutes={atlas?.journeyRoutes ?? []}
+                  activeJourneyRouteId={atlas?.activeJourneyRouteId}
+                  temporalReveal={atlas?.temporalReveal}
+                  onJourneyRouteActivate={atlas?.onJourneyRouteActivate}
+                  onJourneyRoutePointActivate={atlas?.onJourneyRoutePointActivate}
+                  onGlobePointPick={atlas?.onGlobePointPick}
+                  showArchiveSignals={false}
+                  dragToRotate={Boolean(atlas)}
+                  wheelToZoom={Boolean(atlas)}
+                  reduceMotion={atlas?.reduceMotion ?? loginPresentation.reduceMotion}
+                />
+              )
+            ) : null}
+          </div>
+        </div>
+        <div className="persistent-earth-content">{children}</div>
+      </div>
+    </PersistentEarthContext.Provider>
+  );
+}
 
 export function LivingAtlasGlobe({
   focusPoint,
@@ -113,12 +229,45 @@ export function LivingAtlasGlobe({
   onGlobePointPick,
   onPickRequest,
   reduceMotion,
+  cinematicActive = false,
 }: LivingAtlasGlobeProps) {
+  const persistentEarth = usePersistentEarth();
   const [earthMode, setEarthMode] = useState<EarthMode>("particle");
   const [transitionTarget, setTransitionTarget] = useState<EarthMode | null>(null);
   const [targetReady, setTargetReady] = useState(false);
   const [transitionError, setTransitionError] = useState<string | null>(null);
   const [detailLanguage, setDetailLanguage] = useState<DetailedEarthLanguage>("zh");
+
+  useEffect(() => {
+    persistentEarth.setAtlasPresentation({
+      focusPoint,
+      focusRoute,
+      focusRevision,
+      focusColor,
+      journeyRoutes,
+      activeJourneyRouteId,
+      temporalReveal,
+      onJourneyRouteActivate,
+      onJourneyRoutePointActivate,
+      onGlobePointPick,
+      reduceMotion,
+    });
+  }, [
+    activeJourneyRouteId,
+    focusColor,
+    focusPoint,
+    focusRevision,
+    focusRoute,
+    journeyRoutes,
+    onGlobePointPick,
+    onJourneyRouteActivate,
+    onJourneyRoutePointActivate,
+    persistentEarth,
+    reduceMotion,
+    temporalReveal,
+  ]);
+
+  useEffect(() => () => persistentEarth.setAtlasPresentation(null), [persistentEarth]);
 
   useEffect(() => {
     const preloadTimer = window.setTimeout(() => void loadDetailedEarthMap(), 350);
@@ -147,7 +296,9 @@ export function LivingAtlasGlobe({
   const beginTransition = (target: EarthMode) => {
     if (transitionTarget || target === earthMode) return;
     setTransitionError(null);
-    setTargetReady(false);
+    // The particle scene is persistent and already rendered behind the detail
+    // map, so returning never waits for a second Three scene to mount.
+    setTargetReady(target === "particle");
     setTransitionTarget(target);
   };
 
@@ -158,8 +309,7 @@ export function LivingAtlasGlobe({
     setTargetReady(false);
   };
 
-  const showParticle = earthMode === "particle" || transitionTarget === "particle";
-  const showDetail = earthMode === "detail" || transitionTarget === "detail";
+  const showDetail = earthMode === "detail" || transitionTarget === "detail" || transitionTarget === "particle";
   const detailMode = earthMode === "detail";
   const transitionLabel = transitionTarget === "detail"
     ? "正在准备真实地图…"
@@ -170,7 +320,7 @@ export function LivingAtlasGlobe({
 
   return (
     <section
-      className={`living-atlas-globe${detailMode ? " is-detail" : " is-overview"}${transitionClasses}`}
+      className={`living-atlas-globe${detailMode ? " is-detail" : " is-overview"}${transitionClasses}${cinematicActive ? " is-cinematic" : ""}`}
       data-earth-mode={detailMode ? "detail" : "particle"}
       data-ambience="on"
       aria-label={detailMode ? "高精度地球地图" : "粒子艺术地球"}
@@ -182,40 +332,6 @@ export function LivingAtlasGlobe({
         <span className="living-atlas-ambience__blob living-atlas-ambience__blob-b" />
         <span className="living-atlas-ambience__blob living-atlas-ambience__blob-c" />
       </div>
-      {showParticle ? (
-        <div
-          className="living-atlas-globe__layer living-atlas-globe__particle-layer"
-          onTransitionEnd={(event) => {
-            if (event.target === event.currentTarget && event.propertyName === "opacity") {
-              finishTransition("particle");
-            }
-          }}
-        >
-          <ParticleEarthScene
-            mode="focusPoint"
-            quality="high"
-            focusPoint={focusPoint}
-            focusRoute={focusRoute}
-            focusRevision={focusRevision}
-            focusColor={focusColor}
-            centerFocusPoint
-            journeyRoutes={journeyRoutes}
-            activeJourneyRouteId={activeJourneyRouteId}
-            temporalReveal={temporalReveal}
-            onJourneyRouteActivate={onJourneyRouteActivate}
-            onJourneyRoutePointActivate={onJourneyRoutePointActivate}
-            onGlobePointPick={onGlobePointPick}
-            showArchiveSignals={false}
-            onReady={() => {
-              if (transitionTarget === "particle") setTargetReady(true);
-            }}
-            dragToRotate
-            wheelToZoom
-            reduceMotion={reduceMotion}
-          />
-        </div>
-      ) : null}
-
       {showDetail ? (
         <div
           className="living-atlas-globe__layer living-atlas-globe__detail-layer"
@@ -258,6 +374,7 @@ export function LivingAtlasGlobe({
         onModeToggle={() => beginTransition(detailMode ? "particle" : "detail")}
         onDetailLanguageChange={setDetailLanguage}
         onPickRequest={onPickRequest}
+        inert={cinematicActive}
       />
 
       <div className="living-atlas-globe__mode-note" aria-hidden="true">

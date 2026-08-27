@@ -69,5 +69,6 @@ jobs:
           pnpm qa:login-v3
           pnpm qa:media-controls
           pnpm qa:post-login-controls
+          pnpm qa:final-acceptance
       - name: Build
         run: pnpm build

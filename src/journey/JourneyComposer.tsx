@@ -348,6 +348,7 @@ export function JourneyComposer({
     : `linear-gradient(135deg, ${safeLightColor}, ${safeLightColor})`;
   const globePickTriggerRef = useRef<HTMLButtonElement>(null);
   const globePickCancelRef = useRef<HTMLButtonElement>(null);
+  const globePickFocusRestorePendingRef = useRef(false);
   // Each globe-pick handoff is single-use. A cancelled/closed pick can leave
   // an accept callback alive in an event queue, so gate it by a monotonically
   // increasing revision instead of trusting the caller to forget it in time.
@@ -400,26 +401,37 @@ export function JourneyComposer({
   }, [globePicking]);
 
   function restoreGlobePickTriggerFocus() {
-    // The state/class commit can land one frame before Chromium applies the
-    // restored visibility. Focusing while an ancestor is still hidden briefly
-    // succeeds, then drops back to <body>. Retry until the trigger is actually
-    // visible instead of relying on a fixed frame count.
-    const focusWhenVisible = (attempt = 0) => {
+    // The modal focus trap resumes when globePicking becomes false and focuses
+    // the dialog root first. Queue trigger restoration for the post-resume
+    // effect below so the trap cannot steal focus back from the trigger.
+    globePickFocusRestorePendingRef.current = true;
+  }
+
+  useEffect(() => {
+    if (globePicking || !globePickFocusRestorePendingRef.current) return;
+    globePickFocusRestorePendingRef.current = false;
+    const deadline = performance.now() + 1_000;
+    const keepFocusOwned = () => {
       const trigger = globePickTriggerRef.current;
-      const visible = trigger?.isConnected
-        && !trigger.closest("[inert]")
+      if (!trigger?.isConnected || performance.now() >= deadline) return;
+      const visible = !trigger.closest("[inert]")
         && trigger.getClientRects().length > 0
         && getComputedStyle(trigger).visibility !== "hidden";
-      if (visible) {
-        trigger.focus({ preventScroll: true });
+      if (!visible) {
+        window.requestAnimationFrame(keepFocusOwned);
         return;
       }
-      if (attempt < 4) {
-        window.requestAnimationFrame(() => focusWhenVisible(attempt + 1));
+      const active = document.activeElement;
+      if (active === document.body || active === dialogRef.current || active === null) {
+        trigger.focus({ preventScroll: true });
+      } else if (active !== trigger) {
+        // A real user move owns focus from here; never steal it back.
+        return;
       }
+      window.requestAnimationFrame(keepFocusOwned);
     };
-    window.requestAnimationFrame(() => focusWhenVisible());
-  }
+    window.requestAnimationFrame(keepFocusOwned);
+  }, [globePicking]);
 
   useEffect(() => {
     if (!globePicking) return;
@@ -715,6 +727,7 @@ export function JourneyComposer({
         ref={dialogRef}
         tabIndex={-1}
         className="journey-composer motion-staged"
+        inert={globePicking || undefined}
         role="dialog"
         aria-modal="true"
         aria-labelledby="journey-composer-title"

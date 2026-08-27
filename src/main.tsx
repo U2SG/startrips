@@ -8,7 +8,12 @@ import { JourneyStory } from "./journey/JourneyStory";
 import { JourneyPlaybackOverlay } from "./journey/JourneyPlaybackOverlay";
 import type { Journey, JourneyRoute } from "./journey/types";
 import { ParticleEarthScene } from "./scene/ParticleEarthScene";
-import { LivingAtlasGlobe, LivingAtlasGlobeControls, type LivingAtlasGlobeProps } from "./scene/LivingAtlasGlobe";
+import {
+  LivingAtlasGlobe,
+  LivingAtlasGlobeControls,
+  PersistentEarthProvider,
+  type LivingAtlasGlobeProps,
+} from "./scene/LivingAtlasGlobe";
 import "./styles/tokens.css";
 import "./app.css";
 import "./styles/archive-shell.css";
@@ -385,14 +390,18 @@ const Experience = import.meta.env.DEV && qaState === "journey-composer"
     ? LivingAtlasGlobeControlsQaPreview
   : import.meta.env.DEV && (qaState === "living-atlas" || qaState === "atlas-gateway")
     ? LivingAtlasQaPreview
+  : import.meta.env.DEV && qaState === "final-acceptance"
+    ? LivingAtlasApp
   : import.meta.env.DEV && qaState
     ? App
     : LivingAtlasApp;
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <AuthGateway>
-      <Experience />
-    </AuthGateway>
+    <PersistentEarthProvider>
+      <AuthGateway>
+        <Experience />
+      </AuthGateway>
+    </PersistentEarthProvider>
   </StrictMode>,
 );

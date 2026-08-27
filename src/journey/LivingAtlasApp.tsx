@@ -10,7 +10,7 @@ import {
   IconWorld,
   IconX,
 } from "@tabler/icons-react";
-import { useAtlasCapabilities } from "../auth/AuthGateway";
+import { useAtlasCapabilities, useAtlasCinematicIsolation } from "../auth/AuthGateway";
 import { CountUp } from "../motion/primitives/CountUp";
 import { useMagnet } from "../motion/primitives/Magnet";
 import { ScrambledText } from "../motion/primitives/ScrambledText";
@@ -200,6 +200,7 @@ export function LivingAtlasApp({
   GlobeComponent?: ComponentType<LivingAtlasGlobeProps>;
 } = {}) {
   const { canDeleteJourney } = useAtlasCapabilities();
+  const setCinematicIsolation = useAtlasCinematicIsolation();
   const [journeys, setJourneys] = useState<Journey[]>([]);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [loadError, setLoadError] = useState("");
@@ -216,6 +217,7 @@ export function LivingAtlasApp({
   // inside a real user gesture.
   const [playbackPreparingId, setPlaybackPreparingId] = useState<string | null>(null);
   const [playbackCameraCommand, setPlaybackCameraCommand] = useState<PlaybackCameraCommand | null>(null);
+  const playbackActive = playbackJourneyId !== null;
   const [composerOpen, setComposerOpen] = useState(false);
   const [editingJourneyId, setEditingJourneyId] = useState<string | null>(null);
   const [arrivalJourneyId, setArrivalJourneyId] = useState<string | null>(null);
@@ -243,6 +245,11 @@ export function LivingAtlasApp({
   // #21: the rewind cursor over the whole journey timeline. Only active while
   // the user is in globe focus mode; entering playback pauses rewind.
   const timeCursor = useGlobeTimeCursor(journeys);
+
+  useEffect(() => {
+    setCinematicIsolation(playbackActive);
+    return () => setCinematicIsolation(false);
+  }, [playbackActive, setCinematicIsolation]);
 
   // #8 + review P2: entering focus mode moves keyboard focus to the restore
   // control so the invisible trigger never keeps it; exiting restores focus
@@ -513,7 +520,7 @@ export function LivingAtlasApp({
 
   return (
     <main
-      className={`living-atlas${arrivalJourneyId ? " has-arrival" : ""}${globePickActive ? " is-globe-picking" : ""}${globeFocusState(globeFocusMode).className}`}
+      className={`living-atlas${arrivalJourneyId ? " has-arrival" : ""}${globePickActive ? " is-globe-picking" : ""}${playbackActive ? " is-playback" : ""}${globeFocusState(globeFocusMode).className}`}
       data-globe-focus={globeFocusState(globeFocusMode).dataAttribute}
       data-arrival-journey={arrivalJourneyId ?? undefined}
       data-journey-count={journeys.length}
@@ -550,11 +557,12 @@ export function LivingAtlasApp({
               setComposerOpen(true);
             }}
             reduceMotion={reduceMotion}
+            cinematicActive={playbackActive}
           />
         )}
       </div>
 
-      <header className="living-atlas__header" inert={globeFocusMode || undefined}>
+      <header className="living-atlas__header" inert={globeFocusMode || globePickActive || playbackActive || undefined}>
         <div className="living-atlas__brand"><IconWorld size={25} stroke={1.1} aria-hidden="true" /><div><p>STARTRIPS · LIVING ATLAS</p><h1><ShinyText>把走过的路留在地球上</ShinyText></h1></div></div>
         <nav aria-label="图谱视图">
           <button type="button" className={view === "planet" ? "is-active" : ""} onClick={() => setView("planet")}><IconWorld size={16} stroke={1.35} aria-hidden="true" />地球</button>
@@ -577,7 +585,7 @@ export function LivingAtlasApp({
       </header>
 
       {view === "planet" && journeys.length > 0 ? (
-        <nav className="living-atlas__journey-rail motion-staged" aria-label={`全部旅程，共 ${journeys.length} 段`} inert={globeFocusMode || undefined}>
+        <nav className="living-atlas__journey-rail motion-staged" aria-label={`全部旅程，共 ${journeys.length} 段`} inert={globeFocusMode || globePickActive || playbackActive || undefined}>
           <div className="living-atlas__journey-rail-heading">
             <span>旅程</span>
             <small><CountUp value={journeys.length} initialValue={journeys.length} format={(value) => String(value).padStart(2, "0")} /> JOURNEYS</small>
@@ -633,7 +641,7 @@ export function LivingAtlasApp({
       {view === "planet" && activeJourney ? (
         <aside
           className={`living-atlas__active${journeyVisualMedia(activeJourney).length > 0 ? " has-media" : ""}${arrivalJourneyId === activeJourney.id ? " is-arriving" : ""}`}
-          inert={globeFocusMode || undefined}
+          inert={globeFocusMode || globePickActive || playbackActive || undefined}
           style={{
             "--journey-color": activeJourney.lightColor,
             "--journey-gradient": getLightEffectGradient(activeJourney.lightEffect, activeJourney.lightColor),
@@ -681,7 +689,7 @@ export function LivingAtlasApp({
       ) : null}
 
       {notice ? (
-        <div className="living-atlas__notice" role="status" inert={globeFocusMode || undefined}>
+        <div className="living-atlas__notice" role="status" inert={globeFocusMode || globePickActive || playbackActive || undefined}>
           <span>{notice}</span>
           {undoJourney ? <button className="living-atlas__notice-undo" type="button" onClick={() => void undoRemovedJourney()}>撤销删除</button> : null}
           <button type="button" onClick={() => { setNotice(""); setUndoJourney(null); }} aria-label="关闭提示"><IconX size={17} stroke={1.4} aria-hidden="true" /></button>

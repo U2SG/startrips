@@ -7,7 +7,7 @@ import {
   type ReactNode,
 } from "react";
 import { IconChevronDown, IconUserCircle } from "@tabler/icons-react";
-import { ParticleEarthScene } from "../scene/ParticleEarthScene";
+import { usePersistentEarth } from "../scene/LivingAtlasGlobe";
 import { authClient } from "./auth-client";
 
 type OrganizationSummary = {
@@ -36,6 +36,12 @@ const AtlasCapabilitiesContext = createContext({
 
 export function useAtlasCapabilities() {
   return useContext(AtlasCapabilitiesContext);
+}
+
+const AtlasCinematicContext = createContext<(active: boolean) => void>(() => undefined);
+
+export function useAtlasCinematicIsolation() {
+  return useContext(AtlasCinematicContext);
 }
 
 async function responseError(response: Response): Promise<string> {
@@ -68,6 +74,7 @@ function LoginV3Scene({ handoff = false, forceReady = false, lightweight = false
   forceReady?: boolean;
   lightweight?: boolean;
 }) {
+  const persistentEarth = usePersistentEarth();
   const reduceMotion = useReducedMotionPreference();
   const [earthMode, setEarthMode] = useState<"archiveBurst" | "particleSphere">(
     reduceMotion || forceReady || handoff ? "particleSphere" : "archiveBurst",
@@ -82,6 +89,10 @@ function LoginV3Scene({ handoff = false, forceReady = false, lightweight = false
     const timer = window.setTimeout(() => setEarthMode("particleSphere"), 500);
     return () => window.clearTimeout(timer);
   }, [reduceMotion, forceReady, handoff]);
+
+  useEffect(() => {
+    persistentEarth.setLoginPresentation({ mode: earthMode, reduceMotion });
+  }, [earthMode, persistentEarth, reduceMotion]);
 
   const classes = [
     "auth-v3-scene",
@@ -98,18 +109,7 @@ function LoginV3Scene({ handoff = false, forceReady = false, lightweight = false
       aria-hidden="true"
     >
       <div className="auth-v3-scene__earth" data-login-v3-earth-mode={earthMode}>
-        {lightweight ? (
-          <div className="auth-v3-scene__qa-earth" />
-        ) : (
-          <ParticleEarthScene
-            mode={earthMode}
-            quality="low"
-            showArchiveSignals={false}
-            dragToRotate={false}
-            wheelToZoom={false}
-            reduceMotion={reduceMotion}
-          />
-        )}
+        {lightweight ? <div className="auth-v3-scene__qa-earth" /> : null}
       </div>
       <div className="auth-v3-scene__cyan-beam" />
       <div className="auth-v3-scene__warm-glow" />
@@ -338,11 +338,12 @@ function InvitationGate({ invitationId, onAccepted }: { invitationId: string; on
   );
 }
 
-function WorkspaceGate({ children, activeOrganizationId, userName, onReady }: {
+function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cinematicActive = false }: {
   children: ReactNode;
   activeOrganizationId?: string;
   userName: string;
   onReady?: () => void;
+  cinematicActive?: boolean;
 }) {
   const [gate, setGate] = useState<GateState>({ kind: "loading" });
   const [selectedActiveId, setSelectedActiveId] = useState(activeOrganizationId);
@@ -361,6 +362,10 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady }: {
   useEffect(() => {
     setSelectedActiveId(activeOrganizationId);
   }, [activeOrganizationId]);
+
+  useEffect(() => {
+    if (cinematicActive) setDockOpen(false);
+  }, [cinematicActive]);
 
   useEffect(() => {
     if (gate.kind !== "loading") onReady?.();
@@ -522,7 +527,11 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady }: {
   const isOwner = gate.role.split(",").includes("owner");
   return (
     <>
-      <aside className={`account-dock${dockOpen ? " is-open" : ""}`}>
+      <aside
+        className={`account-dock${dockOpen ? " is-open" : ""}${cinematicActive ? " is-cinematic-hidden" : ""}`}
+        inert={cinematicActive || undefined}
+        aria-hidden={cinematicActive || undefined}
+      >
         <button
           className="account-dock__tab"
           type="button"
@@ -565,8 +574,10 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady }: {
 }
 
 export function AuthGateway({ children }: { children: ReactNode }) {
+  const persistentEarth = usePersistentEarth();
   const session = authClient.useSession();
   const [revision, setRevision] = useState(0);
+  const [cinematicActive, setCinematicActive] = useState(false);
   const [handoffActive, setHandoffActive] = useState(false);
   const [handoffRefreshPending, setHandoffRefreshPending] = useState(false);
   const [workspaceReady, setWorkspaceReady] = useState(false);
@@ -581,8 +592,32 @@ export function AuthGateway({ children }: { children: ReactNode }) {
     qaState === "login-gateway"
     || qaState === "atlas-gateway"
     || qaState === "globe-controls-gateway"
+    || qaState === "final-acceptance"
   );
   const qaBypass = import.meta.env.DEV && Boolean(qaState) && !qaLogin && !qaGateway;
+
+  useEffect(() => {
+    if (qaBypass) return;
+    if (qaLogin) {
+      persistentEarth.setStage(qaPhase === "handoff" ? "handoff" : "login");
+      return;
+    }
+    if (session.isPending) return;
+    if (!session.data) {
+      persistentEarth.setStage(handoffActive ? "handoff" : "login");
+      return;
+    }
+    persistentEarth.setStage(handoffActive && !handoffDone ? "handoff" : "atlas");
+  }, [
+    handoffActive,
+    handoffDone,
+    persistentEarth,
+    qaBypass,
+    qaLogin,
+    qaPhase,
+    session.data,
+    session.isPending,
+  ]);
 
   useEffect(() => {
     if (
@@ -649,7 +684,7 @@ export function AuthGateway({ children }: { children: ReactNode }) {
         <AuthForm
           key="login-continuity"
           handoff={handoffActive}
-          forceReady={handoffActive}
+          forceReady={handoffActive || (qaGateway && qaPhase === "ready")}
           lightweightScene={qaGateway && qaLite}
           onAuthenticated={() => {
             setHandoffActive(true);
@@ -679,8 +714,9 @@ export function AuthGateway({ children }: { children: ReactNode }) {
 
   const showHandoff = handoffActive && !handoffDone;
   return (
-    <div className={`auth-continuity${showHandoff ? " is-handoff" : " is-released"}`}>
-      {showHandoff ? (
+    <AtlasCinematicContext.Provider value={setCinematicActive}>
+      <div className={`auth-continuity${showHandoff ? " is-handoff" : " is-released"}${cinematicActive ? " is-cinematic" : ""}`}>
+        {showHandoff ? (
         <AuthForm
           key="login-continuity"
           onAuthenticated={() => undefined}
@@ -695,11 +731,13 @@ export function AuthGateway({ children }: { children: ReactNode }) {
           activeOrganizationId={session.data.session.activeOrganizationId ?? undefined}
           userName={session.data.user.name}
           onReady={() => setWorkspaceReady(true)}
+          cinematicActive={cinematicActive}
         >
           {children}
         </WorkspaceGate>
       </div>
     </div>
+    </AtlasCinematicContext.Provider>
   );
 
 }

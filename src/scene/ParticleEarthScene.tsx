@@ -770,6 +770,7 @@ export function ParticleEarthScene({
 }: ParticleEarthSceneProps) {
   const [ready, setReady] = useState(false);
   const latestMode = useRef(mode);
+  const latestQuality = useRef(quality);
   const latestFocusPoint = useRef(focusPoint);
   const latestFocusRoute = useRef(focusRoute);
   const latestFocusColor = useRef(focusColor);
@@ -785,6 +786,7 @@ export function ParticleEarthScene({
   const latestDragToRotate = useRef(dragToRotate);
   const latestWheelToZoom = useRef(wheelToZoom);
   latestMode.current = mode;
+  latestQuality.current = quality;
   latestFocusPoint.current = focusPoint;
   latestFocusRoute.current = focusRoute;
   latestFocusColor.current = focusColor;
@@ -805,6 +807,8 @@ export function ParticleEarthScene({
     let animationFrame = 0;
     let lastTime = performance.now();
     let currentMode = latestMode.current;
+    let currentQuality = latestQuality.current;
+    let qualityBuildRevision = 0;
     const targetSize = new Vector2();
     const scene = new Scene();
     const camera = new PerspectiveCamera(38, 1, 0.1, 100);
@@ -817,8 +821,9 @@ export function ParticleEarthScene({
     });
     renderer.outputColorSpace = SRGBColorSpace;
     renderer.setClearColor(new Color(0x020807), 0);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, QUALITY_PROFILE[quality].maxDpr));
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, QUALITY_PROFILE[currentQuality].maxDpr));
     renderer.domElement.dataset.threeScene = "particle-earth";
+    host.dataset.quality = currentQuality;
     host.appendChild(renderer.domElement);
     const routeVectorLayer = document.createElementNS(
       "http://www.w3.org/2000/svg",
@@ -849,6 +854,9 @@ export function ParticleEarthScene({
         rotationY: number;
         zoom: number;
         scale: number;
+        quality: keyof typeof QUALITY_PROFILE;
+        pixelRatio: number;
+        particleCount: number;
         coastlineVertices: number;
       };
     };
@@ -861,6 +869,9 @@ export function ParticleEarthScene({
       rotationY: globe.rotation.y,
       zoom: interactiveZoom,
       scale: globe.scale.x,
+      quality: currentQuality,
+      pixelRatio: renderer.getPixelRatio(),
+      particleCount: particleGeometry?.getAttribute("position")?.count ?? 0,
       coastlineVertices: coastlineGeometry.getAttribute("position")?.count ?? 0,
     });
 
@@ -917,7 +928,7 @@ export function ParticleEarthScene({
     wire.scale.setScalar(1.006);
     globe.add(wire);
 
-    const coastlineGeometry = new BufferGeometry();
+    let coastlineGeometry = new BufferGeometry();
     const coastlineMaterial = new LineBasicMaterial({
       blending: AdditiveBlending,
       color: 0x7af4ed,
@@ -1143,7 +1154,8 @@ export function ParticleEarthScene({
 
     const updateRouteLabelSafeArea = () => {
       const hostBounds = host.getBoundingClientRect();
-      const atlas = host.closest(".living-atlas");
+      const atlas = host.closest(".living-atlas")
+        ?? document.querySelector(".living-atlas");
       const headerBounds = atlas
         ?.querySelector(".living-atlas__header")
         ?.getBoundingClientRect();
@@ -2207,6 +2219,7 @@ export function ParticleEarthScene({
     });
     let particleGeometry: BufferGeometry | null = null;
     let particles: Points | null = null;
+    let landVisualReady = false;
 
     const texture = new TextureLoader().load(
       "/earth/nasa-earth-with-clouds-2048.jpg",
@@ -2239,7 +2252,7 @@ export function ParticleEarthScene({
       const bounds = host.getBoundingClientRect();
       targetSize.set(Math.max(1, bounds.width), Math.max(1, bounds.height));
       renderer.setPixelRatio(
-        Math.min(window.devicePixelRatio, QUALITY_PROFILE[quality].maxDpr),
+        Math.min(window.devicePixelRatio, QUALITY_PROFILE[currentQuality].maxDpr),
       );
       renderer.setSize(targetSize.x, targetSize.y, false);
       routeVectorLayer.setAttribute(
@@ -2265,6 +2278,57 @@ export function ParticleEarthScene({
       haloMaterial.uniforms.uViewportHeight.value = targetSize.y;
       personalMaterial.uniforms.uViewportHeight.value = targetSize.y;
     };
+
+    const rebuildLandVisualData = async (nextQuality: keyof typeof QUALITY_PROFILE) => {
+      const revision = ++qualityBuildRevision;
+      const { particlePositions, coastlinePositions } = await buildLandVisualData(
+        QUALITY_PROFILE[nextQuality].particleCount,
+      );
+      if (disposed || revision !== qualityBuildRevision || currentQuality !== nextQuality) return;
+
+      const nextParticleGeometry = new BufferGeometry();
+      nextParticleGeometry.setAttribute("position", new BufferAttribute(particlePositions, 3));
+      nextParticleGeometry.setAttribute(
+        "targetPosition",
+        new BufferAttribute(createBurstTargets(particlePositions), 3),
+      );
+      if (particles) {
+        const previousGeometry = particleGeometry;
+        particles.geometry = nextParticleGeometry;
+        particleGeometry = nextParticleGeometry;
+        previousGeometry?.dispose();
+      } else {
+        particleGeometry = nextParticleGeometry;
+        particles = new Points(particleGeometry, particleMaterial);
+        globe.add(particles);
+      }
+
+      const nextCoastlineGeometry = new BufferGeometry();
+      nextCoastlineGeometry.setAttribute("position", new BufferAttribute(coastlinePositions, 3));
+      if (coastlinePositions.length > 0) nextCoastlineGeometry.computeBoundingSphere();
+      const previousCoastlineGeometry = coastlineGeometry;
+      coastlineGeometry = nextCoastlineGeometry;
+      coastlines.geometry = coastlineGeometry;
+      previousCoastlineGeometry.dispose();
+
+      host.dataset.quality = nextQuality;
+      host.dataset.particleCount = String(particlePositions.length / 3);
+      host.dataset.coastlineVertices = String(coastlinePositions.length / 3);
+      if (!landVisualReady) {
+        landVisualReady = true;
+        setReady(true);
+        latestOnReady.current?.();
+      }
+    };
+
+    const applyQuality = (nextQuality: keyof typeof QUALITY_PROFILE) => {
+      if (currentQuality === nextQuality && landVisualReady) return;
+      currentQuality = nextQuality;
+      host.dataset.quality = nextQuality;
+      resize();
+      void rebuildLandVisualData(nextQuality);
+    };
+
     const resizeObserver = new ResizeObserver(resize);
     resizeObserver.observe(host);
     window.addEventListener("resize", resize);
@@ -2455,37 +2519,16 @@ export function ParticleEarthScene({
     };
     document.addEventListener("visibilitychange", onVisibilityChange);
 
-    void buildLandVisualData(QUALITY_PROFILE[quality].particleCount).then(({
-      particlePositions,
-      coastlinePositions,
-    }) => {
-      if (disposed) return;
-      particleGeometry = new BufferGeometry();
-      particleGeometry.setAttribute(
-        "position",
-        new BufferAttribute(particlePositions, 3),
-      );
-      particleGeometry.setAttribute(
-        "targetPosition",
-        new BufferAttribute(createBurstTargets(particlePositions), 3),
-      );
-      particles = new Points(particleGeometry, particleMaterial);
-      globe.add(particles);
-      coastlineGeometry.setAttribute(
-        "position",
-        new BufferAttribute(coastlinePositions, 3),
-      );
-      if (coastlinePositions.length > 0) coastlineGeometry.computeBoundingSphere();
-      host.dataset.coastlineVertices = String(coastlinePositions.length / 3);
-      setReady(true);
-      latestOnReady.current?.();
-    });
+    void rebuildLandVisualData(currentQuality);
 
     applyFocusPoint(latestFocusPoint.current);
     applyJourneyRoutes(latestJourneyRoutes.current);
     animationFrame = requestAnimationFrame(render);
 
     return {
+      setQuality(nextQuality: keyof typeof QUALITY_PROFILE) {
+        applyQuality(nextQuality);
+      },
       setMode(nextMode: GlobeMode) {
         currentMode = nextMode;
         if (!latestFocusPoint.current) {
@@ -2630,6 +2673,10 @@ export function ParticleEarthScene({
       },
     };
   });
+
+  useEffect(() => {
+    controllerRef.current?.setQuality(quality);
+  }, [controllerRef, quality]);
 
   useEffect(() => {
     controllerRef.current?.setMode(mode);
