@@ -96,6 +96,33 @@ function journeyFocus(journey: Journey | null) {
   return { lat: point.latitude, lon: point.longitude };
 }
 
+export function resolveMobilePlaybackPresentation(
+  journeys: readonly Journey[],
+  selection: { journeyId: string; pointIndex: number | null } | null,
+) {
+  const journey = journeys.find((candidate) => candidate.id === selection?.journeyId)
+    ?? journeys.at(-1)
+    ?? null;
+  const point = selection?.pointIndex === null || selection?.pointIndex === undefined
+    ? null
+    : journey?.routePoints[selection.pointIndex] ?? null;
+  const focusPoint = point
+    ? { lat: point.latitude, lon: point.longitude }
+    : journeyFocus(journey);
+  const journeyIndex = journey
+    ? Math.max(0, journeys.findIndex((candidate) => candidate.id === journey.id))
+    : -1;
+  return {
+    journey,
+    point,
+    focusPoint,
+    activeRouteId: journey?.id ?? null,
+    focusRevision: journeyIndex >= 0
+      ? (journeyIndex + 1) * 1000 + (selection?.pointIndex ?? 0)
+      : 0,
+  };
+}
+
 type JourneyCardMediaRead =
   | { status: "idle" | "loading" | "error" }
   | { status: "ready"; url: string };
@@ -404,23 +431,14 @@ export function LivingAtlasApp({
       ? savedRoutes.map((route) => route.id === draftRoute.id ? draftRoute : route)
       : [...savedRoutes, draftRoute];
   }, [draftRoute, journeys]);
-  const mobileJourney = journeys.find(
-    (journey) => journey.id === timeCursor.selection?.journeyId,
-  ) ?? journeys.at(-1) ?? null;
-  const mobilePoint = timeCursor.selection?.pointIndex === null
-    || timeCursor.selection?.pointIndex === undefined
-    ? null
-    : mobileJourney?.routePoints[timeCursor.selection.pointIndex] ?? null;
-  const mobileFocusPoint = mobilePoint
-    ? { lat: mobilePoint.latitude, lon: mobilePoint.longitude }
-    : journeyFocus(mobileJourney);
+  const mobilePlayback = resolveMobilePlaybackPresentation(journeys, timeCursor.selection);
+  const mobileJourney = mobilePlayback.journey;
+  const mobilePoint = mobilePlayback.point;
+  const mobileFocusPoint = mobilePlayback.focusPoint;
   const focusPoint = journeyFocus(activeJourney);
   const activeJourneyRoute = routes.find((route) => route.id === activeJourneyId) ?? null;
-  const mobileJourneyRoute = routes.find((route) => route.id === mobileJourney?.id) ?? null;
-  const mobileFocusRevision = mobileJourney
-    ? (Math.max(0, journeys.findIndex((journey) => journey.id === mobileJourney.id)) + 1) * 1000
-      + (timeCursor.selection?.pointIndex ?? 0)
-    : 0;
+  const mobileJourneyRoute = routes.find((route) => route.id === mobilePlayback.activeRouteId) ?? null;
+  const mobileFocusRevision = mobilePlayback.focusRevision;
   const mobileSheetJourney = journeys.find((journey) => journey.id === mobileSheetJourneyId) ?? null;
   const mobileMapJourney = journeys.find((journey) => journey.id === mobileMapJourneyId) ?? null;
   const mobileMapRoute = routes.find((route) => route.id === mobileMapJourneyId) ?? null;

@@ -14,6 +14,7 @@ import {
   playbackEntryNeedsPreparation,
   playbackFocusPointForCameraTarget,
   playbackFocusRouteForCameraTarget,
+  resolveMobilePlaybackPresentation,
 } from "./LivingAtlasApp";
 import { playbackMediaGate } from "./JourneyPlaybackOverlay";
 import type { Journey } from "./types";
@@ -111,6 +112,86 @@ describe("playbackFocusPointForCameraTarget", () => {
     const second = nextPlaybackCameraCommand(first, { kind: "route" });
     expect(first).toEqual({ target: { kind: "route" }, revision: 1 });
     expect(second).toEqual({ target: { kind: "route" }, revision: 2 });
+  });
+});
+
+describe("Mobile V2 playback presentation", () => {
+  const first: Journey = {
+    ...playbackJourney,
+    id: "journey-a",
+    title: "A",
+    routePoints: [
+      {
+        id: "a-0",
+        journeyId: "journey-a",
+        sortOrder: 0,
+        latitude: 22.5431,
+        longitude: 114.0579,
+        label: "Shenzhen",
+        isStop: true,
+        occurredAt: null,
+        createdAt: playbackJourney.createdAt,
+      },
+      {
+        id: "a-1",
+        journeyId: "journey-a",
+        sortOrder: 1,
+        latitude: 31.2304,
+        longitude: 121.4737,
+        label: "Shanghai",
+        isStop: true,
+        occurredAt: null,
+        createdAt: playbackJourney.createdAt,
+      },
+    ],
+  };
+  const second: Journey = {
+    ...playbackJourney,
+    id: "journey-b",
+    title: "B",
+    routePoints: [{
+      id: "b-0",
+      journeyId: "journey-b",
+      sortOrder: 0,
+      latitude: 35.6762,
+      longitude: 139.6503,
+      label: "Tokyo",
+      isStop: true,
+      occurredAt: null,
+      createdAt: playbackJourney.createdAt,
+    }],
+  };
+
+  it("derives chip journey, active route, route point and globe target from the same selection", () => {
+    const presentation = resolveMobilePlaybackPresentation(
+      [first, second],
+      { journeyId: "journey-a", pointIndex: 1 },
+    );
+    expect(presentation.journey?.id).toBe("journey-a");
+    expect(presentation.activeRouteId).toBe("journey-a");
+    expect(presentation.point?.id).toBe("a-1");
+    expect(presentation.focusPoint).toEqual({ lat: 31.2304, lon: 121.4737 });
+  });
+
+  it("moves the globe target when the authoritative journey changes", () => {
+    const presentation = resolveMobilePlaybackPresentation(
+      [first, second],
+      { journeyId: "journey-b", pointIndex: 0 },
+    );
+    expect(presentation.journey?.id).toBe("journey-b");
+    expect(presentation.activeRouteId).toBe("journey-b");
+    expect(presentation.focusPoint).toEqual({ lat: 35.6762, lon: 139.6503 });
+    expect(presentation.focusRevision).toBeGreaterThan(1000);
+  });
+
+  it("keeps the persistent mobile chrome within the design budget and safe area", () => {
+    const css = readFileSync(new URL("../styles/living-atlas.css", import.meta.url), "utf8");
+    const mobileChrome = css.slice(
+      css.indexOf(".mobile-v2__chrome"),
+      css.indexOf(".mobile-v2__journey-chip"),
+    );
+    expect(mobileChrome).toContain("height: 118px;");
+    expect(mobileChrome).toContain("env(safe-area-inset-bottom)");
   });
 });
 
