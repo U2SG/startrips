@@ -1088,6 +1088,7 @@ async function verifyFinalAcceptanceMobileFlow() {
     const page = await context.newPage();
     const consoleErrors = [];
     const pageErrors = [];
+    const failedRequests = [];
     const activateControl = async (locator, label) => {
       await locator.evaluate((element) => {
         element.scrollIntoView({ block: "center", inline: "center" });
@@ -1122,6 +1123,63 @@ async function verifyFinalAcceptanceMobileFlow() {
       }
       await locator.evaluate((element) => element.click());
     };
+    const setInputValue = async (locator, value, label) => {
+      await locator.evaluate((element) => {
+        element.scrollIntoView({ block: "center", inline: "center" });
+      });
+      await page.evaluate(() => new Promise((resolve) => (
+        requestAnimationFrame(() => requestAnimationFrame(resolve))
+      )));
+      const actionability = await locator.evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+        const input = element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement;
+        return {
+          input,
+          visible: rect.width > 0
+            && rect.height > 0
+            && style.display !== "none"
+            && style.visibility !== "hidden"
+            && Number(style.opacity) > 0.01,
+          enabled: input && !element.disabled,
+          editable: input && !element.readOnly,
+          pointerEvents: style.pointerEvents,
+          hitOwned: hit === element || element.contains(hit),
+          hitTag: hit?.tagName ?? null,
+          hitClass: hit instanceof Element ? hit.getAttribute("class") : null,
+        };
+      });
+      if (
+        !actionability.input
+        || !actionability.visible
+        || !actionability.enabled
+        || !actionability.editable
+        || actionability.pointerEvents === "none"
+        || !actionability.hitOwned
+      ) {
+        throw new Error(`${label} is not editable: ${JSON.stringify(actionability)}`);
+      }
+      const appliedValue = await locator.evaluate((element, nextValue) => {
+        const prototype = element instanceof HTMLTextAreaElement
+          ? HTMLTextAreaElement.prototype
+          : HTMLInputElement.prototype;
+        const valueSetter = Object.getOwnPropertyDescriptor(prototype, "value")?.set;
+        if (!valueSetter) throw new Error("native input value setter is unavailable");
+        element.focus({ preventScroll: true });
+        valueSetter.call(element, nextValue);
+        element.dispatchEvent(new Event("input", { bubbles: true }));
+        element.dispatchEvent(new Event("change", { bubbles: true }));
+        return element.value;
+      }, value);
+      if (appliedValue !== value) {
+        throw new Error(`${label} value did not apply`);
+      }
+    };
+    const readDocumentLayout = () => page.evaluate(() => ({
+      overflowX: Math.max(0, document.documentElement.scrollWidth - innerWidth),
+      overflowY: Math.max(0, document.documentElement.scrollHeight - innerHeight),
+    }));
     let authenticated = false;
     let signInRequests = 0;
     let sessionRequests = 0;
@@ -1130,11 +1188,19 @@ async function verifyFinalAcceptanceMobileFlow() {
     let uploadSequence = 0;
     const uploadMetadata = new Map();
     let journeyPostCount = 0;
+    let uploadStartCount = 0;
+    let uploadPartUrlCount = 0;
+    let uploadPartPutCount = 0;
     let uploadCompleteCount = 0;
+    let playbackLayout = null;
+    let composerLayout = null;
     page.on("console", (message) => {
       if (message.type() === "error") consoleErrors.push(message.text());
     });
     page.on("pageerror", (error) => pageErrors.push(error.message));
+    page.on("requestfailed", (request) => {
+      failedRequests.push(`${request.method()} ${request.url()} :: ${request.failure()?.errorText ?? "unknown"}`);
+    });
 
     const session = {
       session: {
@@ -1290,6 +1356,7 @@ async function verifyFinalAcceptanceMobileFlow() {
         });
       });
       await page.route("**/api/uploads/start", async (route) => {
+        uploadStartCount += 1;
         const metadata = route.request().postDataJSON();
         const uploadId = `fa-upload-${viewportLabel}-${++uploadSequence}`;
         uploadMetadata.set(uploadId, metadata);
@@ -1300,6 +1367,7 @@ async function verifyFinalAcceptanceMobileFlow() {
         });
       });
       await page.route("**/api/uploads/*/parts/*", async (route) => {
+        uploadPartUrlCount += 1;
         const parts = new URL(route.request().url()).pathname.split("/");
         const uploadId = parts.at(-3);
         const partNumber = parts.at(-1);
@@ -1312,11 +1380,14 @@ async function verifyFinalAcceptanceMobileFlow() {
           }),
         });
       });
-      await page.route("**/qa-upload/**", (route) => route.fulfill({
-        status: 200,
-        headers: { etag: '"fa-etag"' },
-        body: "",
-      }));
+      await page.route("**/qa-upload/**", (route) => {
+        if (route.request().method() === "PUT") uploadPartPutCount += 1;
+        return route.fulfill({
+          status: 200,
+          headers: { etag: '"fa-etag"' },
+          body: "",
+        });
+      });
       await page.route("**/api/uploads/*/complete", async (route) => {
         uploadCompleteCount += 1;
         const pathname = new URL(route.request().url()).pathname;
@@ -1347,14 +1418,29 @@ async function verifyFinalAcceptanceMobileFlow() {
           body: JSON.stringify({ asset }),
         });
       });
+      console.error(`[qa-post-login] final:${viewportLabel}:routes-ready`);
 
       await page.goto(`${origin}/?qaState=final-acceptance&qaPhase=ready`, {
-        waitUntil: "domcontentloaded",
+        waitUntil: "commit",
         timeout: 10_000,
       });
-      await page.locator(".auth-card--login-v3.is-ready").waitFor({ state: "visible", timeout: 8_000 });
-      await page.locator('input[type="email"]').fill("qa@example.com");
-      await page.locator('input[type="password"]').fill("password1234");
+      try {
+        await page.locator(".auth-card--login-v3.is-ready").waitFor({ state: "visible", timeout: 20_000 });
+      } catch (error) {
+        const loginReadyDebug = await page.evaluate(() => ({
+          href: location.href,
+          readyState: document.readyState,
+          rootChildren: document.querySelector("#root")?.childElementCount ?? null,
+          bodyText: document.body.innerText.slice(0, 500),
+          viteOverlay: document.querySelector("vite-error-overlay")?.shadowRoot?.textContent?.slice(0, 1_000) ?? null,
+          scripts: [...document.scripts].map((script) => script.src || "inline"),
+        }));
+        throw new Error(`Final acceptance login did not become ready: ${JSON.stringify({ loginReadyDebug, failedRequests })}`, { cause: error });
+      }
+      console.error(`[qa-post-login] final:${viewportLabel}:login-ready`);
+      await setInputValue(page.locator('input[type="email"]'), "qa@example.com", "login email input");
+      await setInputValue(page.locator('input[type="password"]'), "password1234", "login password input");
+      console.error(`[qa-post-login] final:${viewportLabel}:login-inputs-ready`);
       const loginButton = page.getByRole("button", { name: "登录", exact: true });
       const loginHit = await loginButton.evaluate((button) => {
         const rect = button.getBoundingClientRect();
@@ -1369,13 +1455,12 @@ async function verifyFinalAcceptanceMobileFlow() {
       if (!loginHit.visible || !loginHit.enabled || loginHit.pointerEvents === "none" || !loginHit.hitOwned) {
         throw new Error(`login control is not actionable: ${JSON.stringify(loginHit)}`);
       }
-      await loginButton.evaluate((button) => {
-        if (!(button instanceof HTMLButtonElement) || !button.form) {
-          throw new Error("login button is not attached to a form");
-        }
-        button.form.requestSubmit(button);
-      });
-      await page.locator(".auth-continuity.is-handoff").waitFor({ state: "visible", timeout: 8_000 });
+      const signInRequest = page.waitForRequest((request) => (
+        new URL(request.url()).pathname.endsWith("/sign-in/email")
+      ), { timeout: 8_000 });
+      await loginButton.evaluate((button) => button.click());
+      await signInRequest;
+      console.error(`[qa-post-login] final:${viewportLabel}:login-request`);
       const signalPage = await context.newPage();
       try {
         await signalPage.route("**/api/auth/get-session", (route) => route.fulfill({
@@ -1398,6 +1483,7 @@ async function verifyFinalAcceptanceMobileFlow() {
       } finally {
         await signalPage.close();
       }
+      console.error(`[qa-post-login] final:${viewportLabel}:session-refresh`);
       try {
         await page.locator(".auth-continuity.is-released").waitFor({ state: "visible", timeout: 15_000 });
       } catch (error) {
@@ -1415,12 +1501,12 @@ async function verifyFinalAcceptanceMobileFlow() {
         && window.__particleEarthDebug?.().canvases === 1
       ), null, { timeout: 20_000 });
       console.error(`[qa-post-login] final:${viewportLabel}:atlas-ready`);
-
       await activateControl(
         page.getByRole("button", { name: "时间线", exact: true }),
         "timeline view control",
       );
       await page.locator(".journey-timeline").waitFor({ state: "visible" });
+      console.error(`[qa-post-login] final:${viewportLabel}:timeline-ready`);
       await activateControl(
         page.getByRole("button", { name: `打开旅程：${targetTitle}` }),
         "timeline journey control",
@@ -1441,6 +1527,7 @@ async function verifyFinalAcceptanceMobileFlow() {
         "story close control",
       );
       await page.locator(".journey-story").waitFor({ state: "detached" });
+      console.error(`[qa-post-login] final:${viewportLabel}:story-closed`);
       const earthViewButton = page.getByRole("button", { name: "地球", exact: true });
       try {
         await earthViewButton.waitFor({ state: "visible", timeout: 4_000 });
@@ -1468,6 +1555,7 @@ async function verifyFinalAcceptanceMobileFlow() {
         throw new Error(`earth view control unavailable after story close: ${JSON.stringify(earthNavDebug)}`, { cause: error });
       }
       await activateControl(earthViewButton, "earth view control");
+      console.error(`[qa-post-login] final:${viewportLabel}:earth-ready`);
       const playButton = page.getByRole("button", { name: "播放旅程" });
       await playButton.waitFor({ state: "visible" });
       await activateControl(playButton, "playback start control");
@@ -1481,26 +1569,55 @@ async function verifyFinalAcceptanceMobileFlow() {
       }
       await page.locator(".journey-playback").waitFor({ state: "visible", timeout: 8_000 });
       await page.locator(".journey-playback__soundtrack").waitFor({ state: "attached", timeout: 5_000 });
+      await page.waitForFunction(() => [
+        ".account-dock",
+        ".living-atlas__header",
+        ".living-atlas__journey-rail",
+        ".living-atlas__active",
+        ".living-atlas-globe__controls",
+      ].every((selector) => {
+        const element = document.querySelector(selector);
+        if (!(element instanceof HTMLElement)) return false;
+        const style = getComputedStyle(element);
+        return style.visibility === "hidden"
+          && Number.parseFloat(style.opacity) === 0
+          && style.pointerEvents === "none";
+      }), null, { timeout: 5_000 });
       const cinematic = await page.evaluate(() => {
         const atlas = document.querySelector(".living-atlas");
         const auth = document.querySelector(".auth-continuity");
         const account = document.querySelector(".account-dock");
         const header = document.querySelector(".living-atlas__header");
-        const rail = document.querySelector(".living-atlas__rail");
+        const rail = document.querySelector(".living-atlas__journey-rail");
         const active = document.querySelector(".living-atlas__active");
         const controls = document.querySelector(".living-atlas-globe__controls");
         const playback = document.querySelector(".journey-playback");
-        const hidden = (element) => element ? getComputedStyle(element).visibility === "hidden" : true;
+        const playbackAudio = playback?.querySelector("audio");
+        const soundtrackStrip = document.querySelector(".journey-playback__soundtrack");
+        const hidden = (element) => {
+          if (!(element instanceof HTMLElement)) return false;
+          const style = getComputedStyle(element);
+          return style.visibility === "hidden"
+            && Number.parseFloat(style.opacity) === 0
+            && style.pointerEvents === "none";
+        };
         return {
           atlasPlayback: atlas?.classList.contains("is-playback") ?? false,
           authCinematic: auth?.classList.contains("is-cinematic") ?? false,
           accountInert: account instanceof HTMLElement ? account.inert : null,
           accountHidden: hidden(account),
           headerInert: header instanceof HTMLElement ? header.inert : null,
+          headerHidden: hidden(header),
           railInert: rail instanceof HTMLElement ? rail.inert : null,
+          railHidden: hidden(rail),
           activeInert: active instanceof HTMLElement ? active.inert : null,
+          activeHidden: hidden(active),
           controlsHidden: hidden(controls),
           playbackInteractive: playback ? getComputedStyle(playback).pointerEvents !== "none" : false,
+          soundtrackUsable: playbackAudio instanceof HTMLAudioElement
+            && Boolean(playbackAudio.currentSrc || playbackAudio.src)
+            && playbackAudio.loop,
+          soundtrackPlaying: soundtrackStrip?.classList.contains("is-playing") ?? false,
           particleCanvases: document.querySelectorAll('canvas[data-three-scene="particle-earth"]').length,
           soundtrack: document.querySelector(".journey-playback__soundtrack small")?.textContent?.trim() ?? "",
         };
@@ -1510,15 +1627,25 @@ async function verifyFinalAcceptanceMobileFlow() {
         || cinematic.accountInert !== true
         || !cinematic.accountHidden
         || cinematic.headerInert !== true
+        || !cinematic.headerHidden
         || cinematic.railInert !== true
+        || !cinematic.railHidden
         || cinematic.activeInert !== true
+        || !cinematic.activeHidden
         || !cinematic.controlsHidden
         || !cinematic.playbackInteractive
+        || !cinematic.soundtrackUsable
+        || !cinematic.soundtrackPlaying
         || cinematic.particleCanvases !== 1
         || cinematic.soundtrack !== "final-night-theme";
       if (cinematicFailed) {
         throw new Error(`Playback cinematic isolation failed: ${JSON.stringify(cinematic)}`);
       }
+      playbackLayout = await readDocumentLayout();
+      if (playbackLayout.overflowX > 0 || playbackLayout.overflowY > 0) {
+        throw new Error(`Playback document overflow: ${JSON.stringify(playbackLayout)}`);
+      }
+      console.error(`[qa-post-login] final:${viewportLabel}:cinematic-verified`);
       console.error(`[qa-post-login] final:${viewportLabel}:playback-ready`);
       await activateControl(
         page.getByRole("button", { name: "下一个章节" }),
@@ -1538,12 +1665,18 @@ async function verifyFinalAcceptanceMobileFlow() {
           && !header.inert
           && getComputedStyle(account).visibility !== "hidden";
       });
+      console.error(`[qa-post-login] final:${viewportLabel}:playback-exited`);
 
       await activateControl(
         page.getByRole("button", { name: /记录旅程/ }),
         "create journey control",
       );
       await page.locator(".journey-composer").waitFor({ state: "visible" });
+      composerLayout = await readDocumentLayout();
+      if (composerLayout.overflowX > 0 || composerLayout.overflowY > 0) {
+        throw new Error(`Composer document overflow: ${JSON.stringify(composerLayout)}`);
+      }
+      console.error(`[qa-post-login] final:${viewportLabel}:composer-ready`);
       await page.getByLabel("旅程标题").fill(`FINAL CREATED ${viewportLabel}`);
       await page.getByLabel("开始日期").fill("2026-08-27");
       const locationSearch = page.getByPlaceholder("建筑、景点、街道、街区或城市");
@@ -1552,6 +1685,7 @@ async function verifyFinalAcceptanceMobileFlow() {
         page.getByRole("button", { name: "搜索", exact: true }),
         "location search control",
       );
+      console.error(`[qa-post-login] final:${viewportLabel}:search-ready`);
       await activateControl(
         page.getByRole("button", { name: /FINAL QA SEARCH PLACE/ }),
         "location search result",
@@ -1559,6 +1693,7 @@ async function verifyFinalAcceptanceMobileFlow() {
       await page.waitForFunction(() => (
         document.querySelectorAll(".journey-route-draft > li:not(.is-empty)").length === 1
       ));
+      console.error(`[qa-post-login] final:${viewportLabel}:search-result-added`);
 
       const globePick = page.getByRole("button", { name: /直接在地球上取点/ });
       await activateControl(globePick, "globe pick control");
@@ -1566,6 +1701,32 @@ async function verifyFinalAcceptanceMobileFlow() {
         document.querySelector(".living-atlas")?.classList.contains("is-globe-picking")
         && document.querySelector(".particle-earth-scene")?.getAttribute("data-globe-point-pick") === "true"
       ));
+      try {
+        await page.waitForFunction(() => {
+          const backdrop = document.querySelector(".journey-composer-backdrop.is-globe-picking");
+          const composer = document.querySelector(".journey-composer");
+          return backdrop instanceof HTMLElement
+            && composer instanceof HTMLElement
+            && getComputedStyle(backdrop).pointerEvents === "none"
+            && getComputedStyle(composer).visibility === "hidden";
+        }, null, { timeout: 5_000 });
+      } catch (error) {
+        const pickState = await page.evaluate(() => {
+          const backdrop = document.querySelector(".journey-composer-backdrop.is-globe-picking");
+          const composer = document.querySelector(".journey-composer");
+          const state = (element) => element instanceof HTMLElement ? {
+            className: element.className,
+            visibility: getComputedStyle(element).visibility,
+            opacity: getComputedStyle(element).opacity,
+            pointerEvents: getComputedStyle(element).pointerEvents,
+            transitionProperty: getComputedStyle(element).transitionProperty,
+            transitionDuration: getComputedStyle(element).transitionDuration,
+          } : null;
+          return { backdrop: state(backdrop), composer: state(composer) };
+        });
+        throw new Error(`Globe pick isolation did not settle: ${JSON.stringify(pickState)}`, { cause: error });
+      }
+      console.error(`[qa-post-login] final:${viewportLabel}:globe-pick-ready`);
       const particleCanvas = page.locator('canvas[data-three-scene="particle-earth"]');
       const canvasPick = await particleCanvas.evaluate((canvas) => {
         const rect = canvas.getBoundingClientRect();
@@ -1586,11 +1747,20 @@ async function verifyFinalAcceptanceMobileFlow() {
             pointerType: "mouse",
           }));
         }
-        return { hitOwned, width: rect.width, height: rect.height };
+        return {
+          hitOwned,
+          width: rect.width,
+          height: rect.height,
+          hitTag: hit?.tagName ?? null,
+          hitClass: hit instanceof Element ? hit.getAttribute("class") : null,
+          hitId: hit instanceof Element ? hit.id : null,
+          hitParentClass: hit?.parentElement?.getAttribute("class") ?? null,
+        };
       });
       if (!canvasPick.hitOwned || canvasPick.width <= 0 || canvasPick.height <= 0) {
         throw new Error(`Final acceptance globe canvas is not pickable: ${JSON.stringify(canvasPick)}`);
       }
+      console.error(`[qa-post-login] final:${viewportLabel}:globe-pick-hit`);
       await page.waitForFunction(() => (
         !document.querySelector(".living-atlas")?.classList.contains("is-globe-picking")
         && document.querySelectorAll(".journey-route-draft > li:not(.is-empty)").length === 2
@@ -1599,20 +1769,33 @@ async function verifyFinalAcceptanceMobileFlow() {
         state: "visible",
         timeout: 5_000,
       });
+      console.error(`[qa-post-login] final:${viewportLabel}:reverse-geocode-ready`);
       await page.locator(".journey-media-picker input[type=file]").setInputFiles({
         name: `final-${viewportLabel}.png`,
         mimeType: "image/png",
         buffer: Buffer.from(`final-acceptance-${viewportLabel}`),
       });
+      console.error(`[qa-post-login] final:${viewportLabel}:upload-started`);
       await activateControl(
         page.getByRole("button", { name: "保存到星球" }),
         "save journey control",
       );
       await page.locator(".journey-composer").waitFor({ state: "detached", timeout: 15_000 });
+      if (
+        uploadStartCount !== 1
+        || uploadPartUrlCount !== 1
+        || uploadPartPutCount !== 1
+        || uploadCompleteCount !== 1
+      ) {
+        throw new Error(`Multipart upload chain failed: ${JSON.stringify({ uploadStartCount, uploadPartUrlCount, uploadPartPutCount, uploadCompleteCount })}`);
+      }
+      console.error(`[qa-post-login] final:${viewportLabel}:upload-complete`);
       await page.getByText("旅程已抵达你的私人图谱。").waitFor({ state: "visible", timeout: 5_000 });
+      console.error(`[qa-post-login] final:${viewportLabel}:journey-saved`);
       await page.waitForFunction((expectedTitle) => (
         document.querySelector(".living-atlas__active")?.textContent?.includes(expectedTitle) ?? false
       ), `FINAL CREATED ${viewportLabel}`, { timeout: 8_000 });
+      console.error(`[qa-post-login] final:${viewportLabel}:active-journey-verified`);
 
       const finalState = await page.evaluate(() => ({
         overflowX: Math.max(0, document.documentElement.scrollWidth - innerWidth),
@@ -1626,6 +1809,9 @@ async function verifyFinalAcceptanceMobileFlow() {
         && !message.includes("play()")
       ));
       const flowFailed = journeyPostCount !== 1
+        || uploadStartCount !== 1
+        || uploadPartUrlCount !== 1
+        || uploadPartPutCount !== 1
         || uploadCompleteCount !== 1
         || !createdJourney
         || createdJourney.routePoints.length !== 2
@@ -1639,7 +1825,12 @@ async function verifyFinalAcceptanceMobileFlow() {
       results.push({
         name: `final-acceptance-mobile-${viewportLabel}`,
         cinematic,
+        playbackLayout,
+        composerLayout,
         journeyPostCount,
+        uploadStartCount,
+        uploadPartUrlCount,
+        uploadPartPutCount,
         uploadCompleteCount,
         createdJourney: createdJourney ? {
           id: createdJourney.id,
@@ -1652,6 +1843,7 @@ async function verifyFinalAcceptanceMobileFlow() {
         failed: flowFailed,
       });
       if (flowFailed) failed = true;
+      else console.error(`[qa-post-login] final:${viewportLabel}:final-pass`);
     } catch (error) {
       failed = true;
       results.push({
@@ -1660,6 +1852,7 @@ async function verifyFinalAcceptanceMobileFlow() {
         error: error instanceof Error ? error.stack ?? error.message : String(error),
         consoleErrors,
         pageErrors,
+        failedRequests,
       });
     } finally {
       await context.close();

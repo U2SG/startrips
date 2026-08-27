@@ -3978,12 +3978,13 @@
   font-size: 9px;
 }
 
-.journey-composer-backdrop.is-globe-picking {
+.living-atlas > .journey-composer-backdrop.is-globe-picking {
   background: transparent;
   pointer-events: none;
 }
 
 .journey-composer-backdrop.is-globe-picking .journey-composer {
+  animation: none;
   visibility: hidden;
   opacity: 0;
 }
@@ -3991,6 +3992,13 @@
 /* Globe point-picking is a focused interaction state. The map remains active,
    but utility controls are temporarily removed so the pick hint owns the
    interaction band without competing with map/account actions. */
+.living-atlas.is-globe-picking .living-atlas__header,
+.living-atlas.is-globe-picking .living-atlas__journey-rail,
+.living-atlas.is-globe-picking .living-atlas__active,
+.living-atlas.is-globe-picking .living-atlas__notice,
+.living-atlas.is-globe-picking .living-atlas__empty,
+.living-atlas.is-globe-picking .living-atlas__globe-focus-exit,
+.living-atlas.is-globe-picking .globe-time-scrubber,
 body:has(.journey-composer-backdrop.is-globe-picking) .living-atlas-globe__controls,
 body:has(.journey-composer-backdrop.is-globe-picking) .account-dock {
   visibility: hidden;

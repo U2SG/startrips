@@ -562,7 +562,7 @@ export function LivingAtlasApp({
         )}
       </div>
 
-      <header className="living-atlas__header" inert={globeFocusMode || playbackActive || undefined}>
+      <header className="living-atlas__header" inert={globeFocusMode || globePickActive || playbackActive || undefined}>
         <div className="living-atlas__brand"><IconWorld size={25} stroke={1.1} aria-hidden="true" /><div><p>STARTRIPS · LIVING ATLAS</p><h1><ShinyText>把走过的路留在地球上</ShinyText></h1></div></div>
         <nav aria-label="图谱视图">
           <button type="button" className={view === "planet" ? "is-active" : ""} onClick={() => setView("planet")}><IconWorld size={16} stroke={1.35} aria-hidden="true" />地球</button>
@@ -585,7 +585,7 @@ export function LivingAtlasApp({
       </header>
 
       {view === "planet" && journeys.length > 0 ? (
-        <nav className="living-atlas__journey-rail motion-staged" aria-label={`全部旅程，共 ${journeys.length} 段`} inert={globeFocusMode || playbackActive || undefined}>
+        <nav className="living-atlas__journey-rail motion-staged" aria-label={`全部旅程，共 ${journeys.length} 段`} inert={globeFocusMode || globePickActive || playbackActive || undefined}>
           <div className="living-atlas__journey-rail-heading">
             <span>旅程</span>
             <small><CountUp value={journeys.length} initialValue={journeys.length} format={(value) => String(value).padStart(2, "0")} /> JOURNEYS</small>
@@ -641,7 +641,7 @@ export function LivingAtlasApp({
       {view === "planet" && activeJourney ? (
         <aside
           className={`living-atlas__active${journeyVisualMedia(activeJourney).length > 0 ? " has-media" : ""}${arrivalJourneyId === activeJourney.id ? " is-arriving" : ""}`}
-          inert={globeFocusMode || playbackActive || undefined}
+          inert={globeFocusMode || globePickActive || playbackActive || undefined}
           style={{
             "--journey-color": activeJourney.lightColor,
             "--journey-gradient": getLightEffectGradient(activeJourney.lightEffect, activeJourney.lightColor),
@@ -689,7 +689,7 @@ export function LivingAtlasApp({
       ) : null}
 
       {notice ? (
-        <div className="living-atlas__notice" role="status" inert={globeFocusMode || playbackActive || undefined}>
+        <div className="living-atlas__notice" role="status" inert={globeFocusMode || globePickActive || playbackActive || undefined}>
           <span>{notice}</span>
           {undoJourney ? <button className="living-atlas__notice-undo" type="button" onClick={() => void undoRemovedJourney()}>撤销删除</button> : null}
           <button type="button" onClick={() => { setNotice(""); setUndoJourney(null); }} aria-label="关闭提示"><IconX size={17} stroke={1.4} aria-hidden="true" /></button>
