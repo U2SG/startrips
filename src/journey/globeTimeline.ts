@@ -206,21 +206,36 @@ export type JourneyTimelineSelection = {
 export function resolveJourneyTimelineSelection(
   entries: readonly JourneyTimelineEntry[],
   cursor: number,
+  preferredJourneyId: string | null = null,
 ): JourneyTimelineSelection | null {
   if (entries.length === 0) return null;
   const clamped = Math.min(1, Math.max(0, cursor));
   const epsilon = 1e-9;
-  let entry = entries[0];
-  for (const candidate of entries) {
-    if (candidate.started <= clamped + epsilon) entry = candidate;
-    else break;
+  const preferredEntry = preferredJourneyId
+    ? entries.find((candidate) => candidate.journeyId === preferredJourneyId) ?? null
+    : null;
+  let entry = preferredEntry ?? entries[0];
+  if (!preferredEntry) {
+    for (const candidate of entries) {
+      if (candidate.started <= clamped + epsilon) entry = candidate;
+      else break;
+    }
   }
 
-  let pointIndex = entry.points[0]?.pointIndex ?? null;
+  let earliestPoint = entry.points[0] ?? null;
+  let reachedPoint: JourneyTimelineEntry["points"][number] | null = null;
   for (const point of entry.points) {
-    if (point.at <= clamped + epsilon) pointIndex = point.pointIndex;
-    else break;
+    if (!earliestPoint || point.at < earliestPoint.at) earliestPoint = point;
+    if (point.at > clamped + epsilon) continue;
+    if (
+      !reachedPoint
+      || point.at > reachedPoint.at + epsilon
+      || (Math.abs(point.at - reachedPoint.at) <= epsilon && point.pointIndex > reachedPoint.pointIndex)
+    ) {
+      reachedPoint = point;
+    }
   }
+  const pointIndex = (reachedPoint ?? earliestPoint)?.pointIndex ?? null;
   return { journeyId: entry.journeyId, pointIndex, cursor: clamped };
 }
 
@@ -231,6 +246,9 @@ export function cursorForJourney(
 ): number | null {
   const entry = entries.find((candidate) => candidate.journeyId === journeyId);
   if (!entry) return null;
-  const lastPoint = entry.points.at(-1)?.at;
-  return Math.min(1, Math.max(0, lastPoint ?? entry.ended ?? entry.started));
+  const latestPoint = entry.points.reduce<number | null>(
+    (latest, point) => latest === null || point.at > latest ? point.at : latest,
+    null,
+  );
+  return Math.min(1, Math.max(0, latestPoint ?? entry.ended ?? entry.started));
 }

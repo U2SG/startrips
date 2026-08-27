@@ -30,7 +30,11 @@ export function useGlobeTimeCursor(journeys: readonly Journey[]) {
   // full planet — only an explicit Play/scrub rewinds through time.
   const [cursor, setCursor] = useState(1);
   const [playing, setPlaying] = useState(false);
-  const [scrub, setScrub] = useState<number | null>(null);
+  const [scrub, setScrubState] = useState<number | null>(null);
+  // Explicit chip/picker/point selection is part of the canonical playback
+  // controller. It disambiguates overlapping journeys until time-driven input
+  // (play/seek/scrub) takes ownership again.
+  const [selectionOwnerJourneyId, setSelectionOwnerJourneyId] = useState<string | null>(null);
   const playingRef = useRef(playing);
   playingRef.current = playing;
 
@@ -61,29 +65,50 @@ export function useGlobeTimeCursor(journeys: readonly Journey[]) {
   }, [playing, cursor, stops]);
 
   const play = useCallback(() => {
+    setSelectionOwnerJourneyId(null);
+    setScrubState(null);
     setCursor((current) => (current >= 1 ? 0 : current));
     setPlaying(true);
   }, []);
   const pause = useCallback(() => setPlaying(false), []);
   const seek = useCallback((value: number) => {
+    setSelectionOwnerJourneyId(null);
     setCursor(Math.min(1, Math.max(0, value)));
-    setScrub(null);
+    setScrubState(null);
     setPlaying(false);
+  }, []);
+  const previewScrub = useCallback((value: number | null) => {
+    setSelectionOwnerJourneyId(null);
+    setScrubState(value === null ? null : Math.min(1, Math.max(0, value)));
   }, []);
 
   // Scrubbing is a first-class preview position. Every derived surface uses
   // the effective cursor, so the globe, chip and route reveal cannot drift.
   const effectiveCursor = scrub ?? cursor;
   const selection = useMemo(
-    () => resolveJourneyTimelineSelection(timeline.entries, effectiveCursor),
-    [effectiveCursor, timeline.entries],
+    () => resolveJourneyTimelineSelection(
+      timeline.entries,
+      effectiveCursor,
+      selectionOwnerJourneyId,
+    ),
+    [effectiveCursor, selectionOwnerJourneyId, timeline.entries],
   );
+
+  useEffect(() => {
+    if (
+      selectionOwnerJourneyId
+      && !timeline.entries.some((entry) => entry.journeyId === selectionOwnerJourneyId)
+    ) {
+      setSelectionOwnerJourneyId(null);
+    }
+  }, [selectionOwnerJourneyId, timeline.entries]);
 
   const selectJourney = useCallback((journeyId: string) => {
     const target = cursorForJourney(timeline.entries, journeyId);
     if (target === null) return;
+    setSelectionOwnerJourneyId(journeyId);
     setCursor(target);
-    setScrub(null);
+    setScrubState(null);
     setPlaying(false);
   }, [timeline.entries]);
 
@@ -91,8 +116,9 @@ export function useGlobeTimeCursor(journeys: readonly Journey[]) {
     const entry = timeline.entries.find((candidate) => candidate.journeyId === journeyId);
     const point = entry?.points.find((candidate) => candidate.pointIndex === pointIndex);
     if (!point) return;
+    setSelectionOwnerJourneyId(journeyId);
     setCursor(Math.min(1, Math.max(0, point.at)));
-    setScrub(null);
+    setScrubState(null);
     setPlaying(false);
   }, [timeline.entries]);
 
@@ -132,7 +158,7 @@ export function useGlobeTimeCursor(journeys: readonly Journey[]) {
     selectPoint,
     selection,
     scrub,
-    setScrub,
+    setScrub: previewScrub,
     reveal,
     entryOf: (journeyId: string): JourneyTimelineEntry | undefined =>
       timeline.entries.find((entry) => entry.journeyId === journeyId),
