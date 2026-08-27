@@ -381,6 +381,12 @@ export function LivingAtlasApp({
     return () => globalThis.clearTimeout(timeout);
   }, [arrivalJourneyId, reduceMotion]);
 
+  useEffect(() => {
+    if (!isMobileV2 || !arrivalJourneyId) return;
+    if (!journeys.some((journey) => journey.id === arrivalJourneyId)) return;
+    timeCursor.selectJourney(arrivalJourneyId);
+  }, [arrivalJourneyId, isMobileV2, journeys, timeCursor.selectJourney]);
+
   const activeJourney = journeys.find((journey) => journey.id === activeJourneyId) ?? null;
   const playbackJourney = journeys.find((journey) => journey.id === playbackJourneyId) ?? null;
   const editingJourney = journeys.find((journey) => journey.id === editingJourneyId) ?? null;

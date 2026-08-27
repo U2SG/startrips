@@ -1640,61 +1640,86 @@ async function verifyFinalAcceptanceMobileFlow() {
         && window.__particleEarthDebug?.().canvases === 1
       ), null, { timeout: 20_000 });
       console.error(`[qa-post-login] final:${viewportLabel}:atlas-ready`);
+      const mobileV2 = await page.locator(".living-atlas").getAttribute("data-mobile-v2");
+      if (mobileV2 !== "on") {
+        throw new Error(`Final acceptance expected Mobile V2 at ${viewportLabel}px, got ${mobileV2}`);
+      }
+      const persistentBeforeResponsive = await page.evaluate(() => {
+        const canvas = document.querySelector('canvas[data-three-scene="particle-earth"]');
+        window.__qaFinalAcceptanceCanvas = canvas;
+        window.__qaFinalAcceptanceDebug = window.__particleEarthDebug;
+        return { canvas: Boolean(canvas), debug: Boolean(window.__particleEarthDebug) };
+      });
+      if (!persistentBeforeResponsive.canvas || !persistentBeforeResponsive.debug) {
+        throw new Error(`Final acceptance persistent Earth missing before Mobile V2 flow: ${JSON.stringify(persistentBeforeResponsive)}`);
+      }
+
+      const pickerTrigger = page.locator('.mobile-v2__header button[aria-label="打开全部旅程"]');
+      await activateControl(pickerTrigger, "Mobile V2 journey picker control");
+      const picker = page.locator(".mobile-v2__picker");
+      await picker.waitFor({ state: "visible" });
       await activateControl(
-        page.getByRole("button", { name: "时间线", exact: true }),
-        "timeline view control",
+        picker.locator("li button").filter({ hasText: targetTitle }),
+        "Mobile V2 target journey control",
       );
-      await page.locator(".journey-timeline").waitFor({ state: "visible" });
-      console.error(`[qa-post-login] final:${viewportLabel}:timeline-ready`);
+      await picker.waitFor({ state: "detached" });
+      const mobileChip = page.locator(".mobile-v2__journey-chip");
+      await mobileChip.waitFor({ state: "visible" });
+      const chipText = await mobileChip.textContent();
+      if (!String(chipText).includes(targetTitle)) {
+        throw new Error(`Mobile V2 picker selected the wrong journey: ${chipText}`);
+      }
+      await activateControl(mobileChip, "Mobile V2 journey chip");
+      const mobileSheet = page.locator(".mobile-v2__sheet");
+      await mobileSheet.waitFor({ state: "visible" });
       await activateControl(
-        page.getByRole("button", { name: `打开旅程：${targetTitle}` }),
-        "timeline journey control",
+        mobileSheet.locator(".mobile-v2__sheet-actions .is-primary"),
+        "Mobile V2 open story control",
       );
       await page.locator(".journey-story").waitFor({ state: "visible" });
-      await page.waitForFunction(() => {
-        const scene = document.querySelector(".particle-earth-scene");
-        return scene?.getAttribute("data-route-focus-phase") !== "idle"
-          && Boolean(scene?.getAttribute("data-route-focus-lat"));
-      }, null, { timeout: 5_000 });
       const storyTitle = await page.locator(".journey-story h2").first().textContent();
       if (!String(storyTitle).includes(targetTitle)) {
         throw new Error(`Story continuity selected the wrong journey: ${storyTitle}`);
       }
       console.error(`[qa-post-login] final:${viewportLabel}:story-ready`);
-      await activateControl(
-        page.getByRole("button", { name: "退出旅程故事" }),
-        "story close control",
-      );
+      await activateControl(page.locator(".journey-story__close"), "story close control");
       await page.locator(".journey-story").waitFor({ state: "detached" });
       console.error(`[qa-post-login] final:${viewportLabel}:story-closed`);
-      const earthViewButton = page.getByRole("button", { name: "地球", exact: true });
-      try {
-        await earthViewButton.waitFor({ state: "visible", timeout: 4_000 });
-      } catch (error) {
-        const earthNavDebug = await page.evaluate(() => {
-          const header = document.querySelector(".living-atlas__header");
-          const buttons = [...document.querySelectorAll(".living-atlas__header nav button")];
-          return {
-            timelineVisible: Boolean(document.querySelector(".journey-timeline")),
-            headerInert: header instanceof HTMLElement ? header.inert : null,
-            headerVisibility: header ? getComputedStyle(header).visibility : null,
-            buttons: buttons.map((button) => {
-              const rect = button.getBoundingClientRect();
-              return {
-                text: button.textContent?.trim() ?? "",
-                ariaLabel: button.getAttribute("aria-label"),
-                display: getComputedStyle(button).display,
-                visibility: getComputedStyle(button).visibility,
-                opacity: getComputedStyle(button).opacity,
-                rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
-              };
-            }),
-          };
-        });
-        throw new Error(`earth view control unavailable after story close: ${JSON.stringify(earthNavDebug)}`, { cause: error });
+
+      // #43's cinematic playback surface remains a desktop contract. Cross the
+      // responsive boundary on the same authenticated page and require the
+      // persistent Earth canvas/controller to survive before exercising it.
+      await page.setViewportSize({ width: 768, height: 1024 });
+      await page.waitForFunction(() => (
+        document.querySelector(".living-atlas")?.getAttribute("data-mobile-v2") === "off"
+        && Boolean(document.querySelector(".living-atlas__header"))
+        && Boolean(document.querySelector(".living-atlas__journey-rail"))
+      ), null, { timeout: 5_000 });
+      const responsiveDesktop = await page.evaluate(() => {
+        const canvas = document.querySelector('canvas[data-three-scene="particle-earth"]');
+        return {
+          sameCanvas: window.__qaFinalAcceptanceCanvas === canvas,
+          sameControllerDebug: window.__qaFinalAcceptanceDebug === window.__particleEarthDebug,
+          mobileV2: document.querySelector(".living-atlas")?.getAttribute("data-mobile-v2") ?? null,
+          canvases: document.querySelectorAll('canvas[data-three-scene="particle-earth"]').length,
+        };
+      });
+      if (!responsiveDesktop.sameCanvas || !responsiveDesktop.sameControllerDebug || responsiveDesktop.canvases !== 1) {
+        throw new Error(`Final acceptance responsive desktop handoff failed: ${JSON.stringify(responsiveDesktop)}`);
       }
-      await activateControl(earthViewButton, "earth view control");
-      console.error(`[qa-post-login] final:${viewportLabel}:earth-ready`);
+      await activateControl(
+        page.locator(".living-atlas__journey-rail li button").filter({ hasText: targetTitle }),
+        "desktop target journey control",
+      );
+      await page.waitForFunction((expectedTitle) => (
+        document.querySelector(".living-atlas__active h2")?.textContent?.includes(expectedTitle) ?? false
+      ), targetTitle, { timeout: 5_000 });
+      await page.waitForFunction(() => {
+        const scene = document.querySelector(".particle-earth-scene");
+        return scene?.getAttribute("data-route-focus-phase") !== "idle"
+          && Boolean(scene?.getAttribute("data-route-focus-lat"));
+      }, null, { timeout: 5_000 });
+      console.error(`[qa-post-login] final:${viewportLabel}:desktop-journey-ready`);
       const playButton = page.getByRole("button", { name: "播放旅程" });
       await playButton.waitFor({ state: "visible" });
       await activateControl(playButton, "playback start control");
@@ -1786,14 +1811,12 @@ async function verifyFinalAcceptanceMobileFlow() {
       }
       console.error(`[qa-post-login] final:${viewportLabel}:cinematic-verified`);
       console.error(`[qa-post-login] final:${viewportLabel}:playback-ready`);
-      await activateControl(
-        page.getByRole("button", { name: "下一个章节" }),
-        "playback next chapter control",
-      );
-      await activateControl(
-        page.getByRole("button", { name: "退出播放" }),
-        "playback exit control",
-      );
+      const playbackStepBefore = await page.locator(".journey-playback").getAttribute("data-playback-step");
+      await page.keyboard.press("ArrowRight");
+      await page.waitForFunction((previousStep) => (
+        document.querySelector(".journey-playback")?.getAttribute("data-playback-step") !== previousStep
+      ), playbackStepBefore, { timeout: 2_000 });
+      await page.keyboard.press("Escape");
       await page.locator(".journey-playback").waitFor({ state: "detached" });
       await page.waitForFunction(() => {
         const account = document.querySelector(".account-dock");
@@ -1804,10 +1827,28 @@ async function verifyFinalAcceptanceMobileFlow() {
           && !header.inert
           && getComputedStyle(account).visibility !== "hidden";
       });
+      await page.setViewportSize({ width, height });
+      await page.waitForFunction(() => (
+        document.querySelector(".living-atlas")?.getAttribute("data-mobile-v2") === "on"
+        && Boolean(document.querySelector(".mobile-v2__header"))
+        && Boolean(document.querySelector(".mobile-v2__journey-chip"))
+      ), null, { timeout: 5_000 });
+      const responsiveMobile = await page.evaluate(() => {
+        const canvas = document.querySelector('canvas[data-three-scene="particle-earth"]');
+        return {
+          sameCanvas: window.__qaFinalAcceptanceCanvas === canvas,
+          sameControllerDebug: window.__qaFinalAcceptanceDebug === window.__particleEarthDebug,
+          mobileV2: document.querySelector(".living-atlas")?.getAttribute("data-mobile-v2") ?? null,
+          canvases: document.querySelectorAll('canvas[data-three-scene="particle-earth"]').length,
+        };
+      });
+      if (!responsiveMobile.sameCanvas || !responsiveMobile.sameControllerDebug || responsiveMobile.canvases !== 1) {
+        throw new Error(`Final acceptance responsive mobile restore failed: ${JSON.stringify(responsiveMobile)}`);
+      }
       console.error(`[qa-post-login] final:${viewportLabel}:playback-exited`);
 
       await activateControl(
-        page.getByRole("button", { name: /记录旅程/ }),
+        page.locator('.mobile-v2__header button[aria-label="记录新旅程"]'),
         "create journey control",
       );
       await page.locator(".journey-composer").waitFor({ state: "visible" });
@@ -1932,7 +1973,7 @@ async function verifyFinalAcceptanceMobileFlow() {
       await page.getByText("旅程已抵达你的私人图谱。").waitFor({ state: "visible", timeout: 5_000 });
       console.error(`[qa-post-login] final:${viewportLabel}:journey-saved`);
       await page.waitForFunction((expectedTitle) => (
-        document.querySelector(".living-atlas__active")?.textContent?.includes(expectedTitle) ?? false
+        document.querySelector(".mobile-v2__journey-chip")?.textContent?.includes(expectedTitle) ?? false
       ), `FINAL CREATED ${viewportLabel}`, { timeout: 8_000 });
       console.error(`[qa-post-login] final:${viewportLabel}:active-journey-verified`);
 
@@ -1941,7 +1982,7 @@ async function verifyFinalAcceptanceMobileFlow() {
         overflowY: Math.max(0, document.documentElement.scrollHeight - innerHeight),
         particleCanvases: document.querySelectorAll('canvas[data-three-scene="particle-earth"]').length,
         earthStage: document.querySelector("[data-persistent-earth-host]")?.getAttribute("data-stage") ?? null,
-        activeTitle: document.querySelector(".living-atlas__active h2")?.textContent?.trim() ?? "",
+        activeTitle: document.querySelector(".mobile-v2__journey-copy strong")?.textContent?.trim() ?? "",
       }));
       const unexpectedErrors = [...consoleErrors, ...pageErrors].filter((message) => (
         !message.includes("favicon")
