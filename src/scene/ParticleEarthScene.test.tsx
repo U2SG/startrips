@@ -127,9 +127,9 @@ describe("ParticleEarthScene contracts", () => {
     expect(isIdleRotationSuppressed(false, false, false)).toBe(true);
   });
 
-  it("smoothly returns upright before idle rotation starts", () => {
+  it("holds focus, then returns upright at a constant 15 degrees per second before idle rotation", () => {
     expect(GLOBE_UPRIGHT_ROTATION_X).toBe(0);
-    expect(GLOBE_IDLE_ALIGNMENT_SPEED).toBeGreaterThan(0);
+    expect(GLOBE_IDLE_ALIGNMENT_SPEED).toBeCloseTo((Math.PI * 15) / 180);
     expect(getGlobeIdleAlignmentRotation(
       0.8,
       1 / 60,
@@ -138,16 +138,22 @@ describe("ParticleEarthScene contracts", () => {
       false,
     )).toBe(0.8);
 
-    const partiallyAligned = getGlobeIdleAlignmentRotation(
+    const oneSecondAligned = getGlobeIdleAlignmentRotation(
       0.8,
-      1 / 60,
+      1,
       GLOBE_IDLE_RESUME_DELAY_MS,
       false,
       false,
     );
-    expect(partiallyAligned).toBeGreaterThan(0);
-    expect(partiallyAligned).toBeLessThan(0.8);
-    expect(isGlobeUpright(partiallyAligned)).toBe(false);
+    expect(oneSecondAligned).toBeCloseTo(0.8 - (Math.PI * 15) / 180);
+    expect(isGlobeUpright(oneSecondAligned)).toBe(false);
+    expect(getGlobeIdleAlignmentRotation(
+      0.1,
+      1,
+      GLOBE_IDLE_RESUME_DELAY_MS,
+      false,
+      false,
+    )).toBe(0);
     expect(getGlobeIdleRotationDelta(
       1,
       GLOBE_IDLE_RESUME_DELAY_MS,
@@ -288,10 +294,10 @@ describe("ParticleEarthScene contracts", () => {
     expect(partiallyRevealed[1].length()).toBeCloseTo(0.4);
   });
 
-  it("waits a full ten seconds after the latest interaction", () => {
-    expect(GLOBE_IDLE_RESUME_DELAY_MS).toBe(10_000);
-    expect(getGlobeIdleRotationDelta(1, 9_999, false, false)).toBe(0);
-    expect(getGlobeIdleRotationDelta(1, 10_000, false, false))
+  it("holds the focused arrival for twenty seconds of inactivity", () => {
+    expect(GLOBE_IDLE_RESUME_DELAY_MS).toBe(20_000);
+    expect(getGlobeIdleRotationDelta(1, 19_999, false, false)).toBe(0);
+    expect(getGlobeIdleRotationDelta(1, 20_000, false, false))
       .toBeCloseTo(GLOBE_IDLE_ROTATION_RADIANS_PER_SECOND);
   });
 

@@ -90,9 +90,9 @@ export const GLOBE_ZOOM_MIN = 0.72;
 export const GLOBE_ZOOM_MAX = 3.0;
 export const GLOBE_SURFACE_RADIUS = 1.39;
 export const GLOBE_IDLE_ROTATION_RADIANS_PER_SECOND = (Math.PI * 2) / 180;
-export const GLOBE_IDLE_RESUME_DELAY_MS = 10_000;
+export const GLOBE_IDLE_RESUME_DELAY_MS = 20_000;
 export const GLOBE_UPRIGHT_ROTATION_X = 0;
-export const GLOBE_IDLE_ALIGNMENT_SPEED = 3.2;
+export const GLOBE_IDLE_ALIGNMENT_SPEED = (Math.PI * 15) / 180;
 
 const GLOBE_DRAG_RADIANS_PER_PIXEL = 0.005;
 const GLOBE_MAX_ROTATION_SPEED = 4.2;
@@ -177,13 +177,10 @@ export function getGlobeIdleAlignmentRotation(
   ) {
     return rotation;
   }
-  const alignment = 1 - Math.exp(
-    -GLOBE_IDLE_ALIGNMENT_SPEED * Math.max(0, deltaSeconds),
-  );
-  return rotation + getShortestRotationDelta(
-    rotation,
-    GLOBE_UPRIGHT_ROTATION_X,
-  ) * alignment;
+  const remaining = getShortestRotationDelta(rotation, GLOBE_UPRIGHT_ROTATION_X);
+  const maxStep = GLOBE_IDLE_ALIGNMENT_SPEED * Math.max(0, deltaSeconds);
+  if (Math.abs(remaining) <= maxStep) return GLOBE_UPRIGHT_ROTATION_X;
+  return rotation + Math.sign(remaining) * maxStep;
 }
 
 export function isGlobeDrag(distance: number) {
@@ -2719,9 +2716,9 @@ export function ParticleEarthScene({
           );
           focusSettledThisFrame = true;
           pointFocusSettling = false;
-          // A programmatic journey/point focus is not a user-idle event. Resume
-          // the normal idle motion as soon as the one-shot arrival completes.
-          lastGlobeInteractionAt = now - GLOBE_IDLE_RESUME_DELAY_MS;
+          // Hold the arrival composition for a full inactivity window. Any
+          // later user interaction refreshes the same timer before release.
+          lastGlobeInteractionAt = now;
         }
       }
 
@@ -2749,7 +2746,7 @@ export function ParticleEarthScene({
           );
           focusSettledThisFrame = true;
           routeFocusSettling = false;
-          lastGlobeInteractionAt = now - GLOBE_IDLE_RESUME_DELAY_MS;
+          lastGlobeInteractionAt = now;
           syncRouteFocusPhase();
         }
       }
