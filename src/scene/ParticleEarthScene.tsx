@@ -1023,6 +1023,7 @@ export function ParticleEarthScene({
         mode: GlobeMode;
         rotationX: number;
         rotationY: number;
+        idleReleasePhase: number;
         positionX: number;
         positionY: number;
         zoom: number;
@@ -1040,6 +1041,7 @@ export function ParticleEarthScene({
       mode: currentMode,
       rotationX: globe.rotation.x,
       rotationY: globe.rotation.y,
+      idleReleasePhase,
       positionX: globe.position.x,
       positionY: globe.position.y,
       zoom: interactiveZoom,

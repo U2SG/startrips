@@ -2248,7 +2248,11 @@ async function verifyTransientJourneyFocus() {
         // The same release must eventually converge to the upright 2°/s idle orbit.
         await page.waitForFunction(() => {
           const debug = window.__particleEarthDebug?.();
-          return Boolean(debug && Math.abs(debug.rotationX) < 0.002);
+          return Boolean(
+            debug
+            && Math.abs(debug.rotationX) < 0.002
+            && debug.idleReleasePhase >= 0.99,
+          );
         }, null, { timeout: 20_000 });
         const upright = await page.evaluate(() => {
           const debug = window.__particleEarthDebug?.();
