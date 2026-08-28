@@ -34,6 +34,7 @@ import { JourneyTimeline } from "./JourneyTimeline";
 import { GlobeTimeScrubber, formatCursorDate } from "./GlobeTimeScrubber";
 import { useGlobeTimeCursor } from "./useGlobeTimeCursor";
 import { useModalFocus } from "./useModalFocus";
+import { useCompactMobileLayout } from "./mobileLayout";
 import {
   deleteJourney,
   getPrivateMediaRead,
@@ -54,22 +55,6 @@ import type { Journey, JourneyRoute } from "./types";
 type AtlasView = "planet" | "timeline";
 
 const MobileDetailedEarthMap = lazy(() => import("../scene/DetailedEarthMap"));
-const MOBILE_ATLAS_QUERY = "(max-width: 760px)";
-
-function useMobileAtlasLayout() {
-  const [mobile, setMobile] = useState(() => (
-    globalThis.matchMedia?.(MOBILE_ATLAS_QUERY).matches ?? false
-  ));
-  useEffect(() => {
-    const media = globalThis.matchMedia?.(MOBILE_ATLAS_QUERY);
-    if (!media) return;
-    const update = () => setMobile(media.matches);
-    update();
-    media.addEventListener("change", update);
-    return () => media.removeEventListener("change", update);
-  }, []);
-  return mobile;
-}
 
 // #8: the root class/data contract for globe focus mode, kept pure so the
 // layout toggle is unit-testable without mounting the full app.
@@ -276,7 +261,7 @@ export function LivingAtlasApp({
   // normal layout, and the Three scene is never remounted (camera/rotation/
   // focus survive through the class switch).
   const [globeFocusMode, setGlobeFocusMode] = useState(false);
-  const isMobileV2 = useMobileAtlasLayout();
+  const isMobileV2 = useCompactMobileLayout();
   const [mobileSheetJourneyId, setMobileSheetJourneyId] = useState<string | null>(null);
   const [mobilePickerOpen, setMobilePickerOpen] = useState(false);
   const [mobileMapJourneyId, setMobileMapJourneyId] = useState<string | null>(null);

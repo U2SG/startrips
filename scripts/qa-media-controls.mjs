@@ -259,6 +259,50 @@ try {
     await story.page.close();
   }
 
+  for (const [label, viewport] of [
+    ["844x390", { width: 844, height: 390 }],
+    ["932x430", { width: 932, height: 430 }],
+  ]) {
+    const landscapeStory = await createQaPage("/?qaState=journey-story", onePixelGif, {
+      mobile: true,
+      viewport,
+    });
+    try {
+      await landscapeStory.page.locator(".journey-story").waitFor({ state: "visible" });
+      const storyMobileLayout = await landscapeStory.page.locator(".journey-story__media").getAttribute("data-mobile-layout");
+      const storyDesktopOnlyControls = await landscapeStory.page.locator(
+        ".journey-story__media-overview, .journey-story__fullscreen-entry, .journey-story__media-controls, .journey-story__media-actions",
+      ).count();
+      checks.push({
+        name: `story-phone-landscape-${label}`,
+        storyMobileLayout,
+        storyDesktopOnlyControls,
+        failed: storyMobileLayout !== "true" || storyDesktopOnlyControls !== 0,
+      });
+      if (storyMobileLayout !== "true" || storyDesktopOnlyControls !== 0) failed = true;
+    } finally {
+      await landscapeStory.page.close();
+    }
+
+    const landscapeComposer = await createQaPage("/?qaState=journey-composer&qaMode=edit", onePixelGif, {
+      mobile: true,
+      viewport,
+    });
+    try {
+      const composer = landscapeComposer.page.locator(".journey-composer");
+      await composer.waitFor({ state: "visible" });
+      const composerMobileLayout = await composer.getAttribute("data-mobile-layout");
+      checks.push({
+        name: `composer-phone-landscape-${label}`,
+        composerMobileLayout,
+        failed: composerMobileLayout !== "true",
+      });
+      if (composerMobileLayout !== "true") failed = true;
+    } finally {
+      await landscapeComposer.page.close();
+    }
+  }
+
   const mediaContinuity = await createQaPage("/?qaState=journey-story", onePixelGif, {
     mobile: false,
     reducedMotion: "no-preference",

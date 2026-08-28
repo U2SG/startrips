@@ -72,6 +72,7 @@ import {
 } from "./journeyModel";
 import type { Journey, JourneyMediaAsset } from "./types";
 import { useModalFocus, useNestedModalFocus } from "./useModalFocus";
+import { useCompactMobileLayout } from "./mobileLayout";
 
 const SOUNDTRACK_INPUT_ACCEPT = [
   "audio/mpeg",
@@ -90,22 +91,6 @@ const SOUNDTRACK_INPUT_ACCEPT = [
 // session never shows an expired thumbnail.
 const MEDIA_READ_REFRESH_MARGIN_MS = 60_000;
 const MEDIA_READ_SWEEP_MS = 20_000;
-const MOBILE_STORY_QUERY = "(max-width: 760px)";
-
-function useMobileStoryLayout() {
-  const [mobile, setMobile] = useState(() => (
-    globalThis.matchMedia?.(MOBILE_STORY_QUERY).matches ?? false
-  ));
-  useEffect(() => {
-    const media = globalThis.matchMedia?.(MOBILE_STORY_QUERY);
-    if (!media) return;
-    const update = () => setMobile(media.matches);
-    update();
-    media.addEventListener("change", update);
-    return () => media.removeEventListener("change", update);
-  }, []);
-  return mobile;
-}
 
 type MediaReadState =
   | { status: "loading" }
@@ -489,7 +474,7 @@ export function JourneyStory({
   // Review P2: mirrors `playing` so gesture handlers can read it synchronously.
   const playingRef = useRef(false);
   playingRef.current = playing;
-  const mobileLayout = useMobileStoryLayout();
+  const mobileLayout = useCompactMobileLayout();
   const [fullscreen, setFullscreen] = useState(false);
   // #7: fullscreen controls fade out after idle; any pointer/key activity
   // brings them back. Mobile starts fully immersive and reveals controls only

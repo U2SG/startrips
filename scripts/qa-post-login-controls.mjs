@@ -2,6 +2,7 @@ import { launchQaBrowser } from "./qa-browser.mjs";
 
 const origin = process.env.QA_ORIGIN ?? "http://127.0.0.1:4173";
 const finalAcceptanceOnly = process.argv.includes("--final-acceptance");
+const atlasShellOnly = process.argv.includes("--atlas-shell-only");
 const browser = await launchQaBrowser(finalAcceptanceOnly
   ? { args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"] }
   : undefined);
@@ -125,7 +126,12 @@ async function clickText(page, text) {
 
 async function verifyAtlasShell() {
   console.error("[qa-post-login] atlas shell");
-  const page = await browser.newPage({ viewport: { width: 390, height: 844 }, reducedMotion: "reduce" });
+  const page = await browser.newPage({
+    viewport: { width: 390, height: 844 },
+    isMobile: true,
+    hasTouch: true,
+    reducedMotion: "reduce",
+  });
   try {
     await page.route("**/api/journeys", (route) => route.fulfill({
       status: 200,
@@ -135,14 +141,20 @@ async function verifyAtlasShell() {
     await page.goto(`${origin}/?qaState=living-atlas`, { waitUntil: "domcontentloaded" });
     await page.locator(".living-atlas").waitFor({ state: "visible" });
 
-    for (const [label, width, height] of [
-      ["mobile-compact", 360, 800],
-      ["mobile", 390, 844],
-      ["tablet", 768, 1024],
+    for (const [label, width, height, mobile] of [
+      ["portrait-320", 320, 700, true],
+      ["portrait-360", 360, 780, true],
+      ["portrait-390", 390, 844, true],
+      ["portrait-430", 430, 900, true],
+      ["landscape-667", 667, 375, true],
+      ["landscape-740", 740, 360, true],
+      ["landscape-780", 780, 360, true],
+      ["landscape-844", 844, 390, true],
+      ["landscape-932", 932, 430, true],
+      ["tablet", 768, 1024, false],
     ]) {
       await page.setViewportSize({ width, height });
       await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-      const mobile = width <= 760;
       if (mobile) {
         await page.locator(".mobile-v2__journey-chip").waitFor({ state: "visible" });
         const mobileShell = await page.evaluate(() => {
@@ -2289,6 +2301,8 @@ async function verifyTransientJourneyFocus() {
 try {
   if (finalAcceptanceOnly) {
     await verifyFinalAcceptanceMobileFlow();
+  } else if (atlasShellOnly) {
+    await verifyAtlasShell();
   } else {
     await verifyAtlasShell();
     await verifyMobileV2InteractionContract();
