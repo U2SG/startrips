@@ -6,6 +6,7 @@ import {
   BufferGeometry,
   Color,
   DirectionalLight,
+  Euler,
   Group,
   LineBasicMaterial,
   LineSegments,
@@ -1025,6 +1026,132 @@ export function ParticleEarthScene({
     const globe = new Group();
     globe.rotation.set(0.08, GLOBE_MODE_CONFIG[currentMode].rotationY, -0.03);
     scene.add(globe);
+    const focusProjectionEuler = new Euler();
+    const focusProjectionWorld = new Vector3();
+    const focusProjectionScreen = new Vector2();
+    const focusProjectionDeltaX = new Vector2();
+    const focusProjectionDeltaY = new Vector2();
+    const projectFocusPointForRotation = (
+      point: { lat: number; lon: number },
+      rotationX: number,
+      rotationY: number,
+      scale: number,
+      positionX: number,
+      positionY: number,
+      targetScreen: Vector2,
+    ) => {
+      focusProjectionWorld
+        .copy(latLonToVector3(point.lat, point.lon, 1.45))
+        .applyEuler(focusProjectionEuler.set(rotationX, rotationY, globe.rotation.z))
+        .multiplyScalar(scale);
+      focusProjectionWorld.x += positionX;
+      focusProjectionWorld.y += positionY;
+      focusProjectionWorld.z += globe.position.z;
+      focusProjectionWorld.project(camera);
+      return targetScreen.set(
+        ((focusProjectionWorld.x + 1) * targetSize.x) / 2,
+        ((1 - focusProjectionWorld.y) * targetSize.y) / 2,
+      );
+    };
+    const focusRotationTarget = { x: 0, y: 0, errorPx: Number.POSITIVE_INFINITY };
+    const solveFocusRotationForViewport = (
+      point: { lat: number; lon: number },
+      seedRotationX: number,
+      seedRotationY: number,
+      scale: number,
+      positionX: number,
+      positionY: number,
+    ) => {
+      let rotationX = seedRotationX;
+      let rotationY = seedRotationY;
+      const epsilon = 0.0025;
+      for (let iteration = 0; iteration < 8; iteration += 1) {
+        const projected = projectFocusPointForRotation(
+          point,
+          rotationX,
+          rotationY,
+          scale,
+          positionX,
+          positionY,
+          focusProjectionScreen,
+        );
+        const errorX = sampledFocusCenter.x - projected.x;
+        const errorY = sampledFocusCenter.y - projected.y;
+        const errorPx = Math.hypot(errorX, errorY);
+        if (errorPx <= 0.5) {
+          focusRotationTarget.x = rotationX;
+          focusRotationTarget.y = rotationY;
+          focusRotationTarget.errorPx = errorPx;
+          return focusRotationTarget;
+        }
+        const deltaX = projectFocusPointForRotation(
+          point,
+          rotationX + epsilon,
+          rotationY,
+          scale,
+          positionX,
+          positionY,
+          focusProjectionDeltaX,
+        );
+        const deltaY = projectFocusPointForRotation(
+          point,
+          rotationX,
+          rotationY + epsilon,
+          scale,
+          positionX,
+          positionY,
+          focusProjectionDeltaY,
+        );
+        const j00 = (deltaX.x - projected.x) / epsilon;
+        const j10 = (deltaX.y - projected.y) / epsilon;
+        const j01 = (deltaY.x - projected.x) / epsilon;
+        const j11 = (deltaY.y - projected.y) / epsilon;
+        const determinant = j00 * j11 - j01 * j10;
+        if (Math.abs(determinant) < 0.0001) break;
+        const stepX = (errorX * j11 - j01 * errorY) / determinant;
+        const stepY = (j00 * errorY - errorX * j10) / determinant;
+        rotationX += Math.max(-0.35, Math.min(0.35, stepX));
+        rotationY += Math.max(-0.35, Math.min(0.35, stepY));
+      }
+      const projected = projectFocusPointForRotation(
+        point,
+        rotationX,
+        rotationY,
+        scale,
+        positionX,
+        positionY,
+        focusProjectionScreen,
+      );
+      focusRotationTarget.x = rotationX;
+      focusRotationTarget.y = rotationY;
+      focusRotationTarget.errorPx = Math.hypot(
+        sampledFocusCenter.x - projected.x,
+        sampledFocusCenter.y - projected.y,
+      );
+      return focusRotationTarget;
+    };
+    const recordFocusArrival = (
+      point: { lat: number; lon: number },
+      rotationX: number,
+      rotationY: number,
+      scale: number,
+      positionX: number,
+      positionY: number,
+    ) => {
+      const projected = projectFocusPointForRotation(
+        point,
+        rotationX,
+        rotationY,
+        scale,
+        positionX,
+        positionY,
+        focusProjectionScreen,
+      );
+      host.dataset.focusArrivalX = projected.x.toFixed(2);
+      host.dataset.focusArrivalY = projected.y.toFixed(2);
+      host.dataset.focusArrivalCenterX = sampledFocusCenter.x.toFixed(2);
+      host.dataset.focusArrivalCenterY = sampledFocusCenter.y.toFixed(2);
+    };
     let baseRotationY = globe.rotation.y;
     let interactiveRotationX = globe.rotation.x;
     let interactiveRotationY = 0;
@@ -1035,6 +1162,7 @@ export function ParticleEarthScene({
     let routeFocusFrame = getSphericalRouteFocus(latestFocusRoute.current?.points ?? []);
     let routeFocusSettling = Boolean(routeFocusFrame);
     let pointFocusSettling = Boolean(latestFocusPoint.current) && !routeFocusFrame;
+    let focusBaseRotationY: number | null = null;
     let routeFocusZoomResetting = false;
     const syncRouteFocusPhase = () => {
       host.dataset.routeFocusPhase = getRouteFocusPhase(
@@ -2526,15 +2654,38 @@ export function ParticleEarthScene({
       // only gains 12–15%, so it feels alive rather than becoming a visualizer.
       const audioGain = audioAtmosphereGains(audioEnergy);
       const spatialFocusPoint = routeFocusFrame?.center ?? latestFocusPoint.current;
-      const targetBaseRotationY =
+      const focusFlightActive = Boolean(
         currentMode === "focusPoint"
         && latestCenterFocusPoint.current
         && spatialFocusPoint
-          ? rotationYForLongitude(spatialFocusPoint.lon)
-          : target.rotationY;
+        && isFocusFlightActive(pointFocusSettling, routeFocusSettling),
+      );
+      let targetRotationX = spatialFocusPoint
+        ? rotationXForLatitude(spatialFocusPoint.lat)
+        : interactiveRotationX;
+      let targetBaseRotationY = spatialFocusPoint
+        ? focusBaseRotationY ?? rotationYForLongitude(spatialFocusPoint.lon)
+        : target.rotationY;
+      if (focusFlightActive && spatialFocusPoint) {
+        sampleFocusViewport(false);
+        const finalFocusZoom = routeFocusFrame?.zoom ?? interactiveZoom;
+        const solvedFocusRotation = solveFocusRotationForViewport(
+          spatialFocusPoint,
+          targetRotationX,
+          rotationYForLongitude(spatialFocusPoint.lon),
+          target.scale * finalFocusZoom,
+          target.x,
+          target.y,
+        );
+        targetRotationX = solvedFocusRotation.x;
+        targetBaseRotationY = solvedFocusRotation.y;
+        focusBaseRotationY = solvedFocusRotation.y;
+        host.dataset.focusArrivalErrorPx = solvedFocusRotation.errorPx.toFixed(2);
+      }
       const snap = reduceMotion ? 1 : 0;
       const interpolate = (value: number, next: number) =>
         snap ? next : damp(value, next, delta);
+      let focusSettledThisFrame = false;
       for (const material of particleDimmingMaterials) {
         material.uniforms.uActiveDimStrength.value = interpolate(
           material.uniforms.uActiveDimStrength.value,
@@ -2548,16 +2699,25 @@ export function ParticleEarthScene({
         && spatialFocusPoint
         && activePointers.size === 0
       ) {
-        const targetRotationX = rotationXForLatitude(spatialFocusPoint.lat);
         interactiveRotationX = interpolate(interactiveRotationX, targetRotationX);
         interactiveRotationY = interpolate(interactiveRotationY, 0);
         if (
           Math.abs(getShortestRotationDelta(interactiveRotationX, targetRotationX)) < 0.002
           && Math.abs(interactiveRotationY) < 0.002
           && Math.abs(getShortestRotationDelta(baseRotationY, targetBaseRotationY)) < 0.003
+          && Math.abs(globe.scale.x - target.scale * interactiveZoom) < 0.003
         ) {
           interactiveRotationX = targetRotationX;
           interactiveRotationY = 0;
+          recordFocusArrival(
+            spatialFocusPoint,
+            targetRotationX,
+            targetBaseRotationY,
+            target.scale * interactiveZoom,
+            target.x,
+            target.y,
+          );
+          focusSettledThisFrame = true;
           pointFocusSettling = false;
           // A programmatic journey/point focus is not a user-idle event. Resume
           // the normal idle motion as soon as the one-shot arrival completes.
@@ -2566,7 +2726,6 @@ export function ParticleEarthScene({
       }
 
       if (routeFocusSettling && routeFocusFrame && activePointers.size === 0) {
-        const targetRotationX = rotationXForLatitude(routeFocusFrame.center.lat);
         interactiveRotationX = interpolate(interactiveRotationX, targetRotationX);
         interactiveRotationY = interpolate(interactiveRotationY, 0);
         interactiveZoom = interpolate(interactiveZoom, routeFocusFrame.zoom);
@@ -2575,10 +2734,20 @@ export function ParticleEarthScene({
           && Math.abs(interactiveRotationY) < 0.002
           && Math.abs(interactiveZoom - routeFocusFrame.zoom) < 0.003
           && Math.abs(getShortestRotationDelta(baseRotationY, targetBaseRotationY)) < 0.003
+          && Math.abs(globe.scale.x - target.scale * routeFocusFrame.zoom) < 0.003
         ) {
           interactiveRotationX = targetRotationX;
           interactiveRotationY = 0;
           interactiveZoom = routeFocusFrame.zoom;
+          recordFocusArrival(
+            routeFocusFrame.center,
+            targetRotationX,
+            targetBaseRotationY,
+            target.scale * routeFocusFrame.zoom,
+            target.x,
+            target.y,
+          );
+          focusSettledThisFrame = true;
           routeFocusSettling = false;
           lastGlobeInteractionAt = now - GLOBE_IDLE_RESUME_DELAY_MS;
           syncRouteFocusPhase();
@@ -2602,7 +2771,7 @@ export function ParticleEarthScene({
       // its screen position. The globe's x/y belongs to the layout/mode only.
       globe.position.x = interpolate(globe.position.x, target.x);
       globe.position.y = interpolate(globe.position.y, target.y);
-      if (activePointers.size === 0 && !reduceMotion) {
+      if (activePointers.size === 0 && !reduceMotion && !focusSettledThisFrame) {
         interactiveRotationX = clampGlobeTilt(
           interactiveRotationX + rotationVelocityX * delta,
         );
@@ -2710,6 +2879,23 @@ export function ParticleEarthScene({
 
       updateRouteVectorLayer();
 
+      if (latestCenterFocusPoint.current && spatialFocusPoint) {
+        const focusScreen = projectFocusPointForRotation(
+          spatialFocusPoint,
+          globe.rotation.x,
+          globe.rotation.y,
+          globe.scale.x,
+          globe.position.x,
+          globe.position.y,
+          focusProjectionScreen,
+        );
+        host.dataset.focusTargetX = focusScreen.x.toFixed(2);
+        host.dataset.focusTargetY = focusScreen.y.toFixed(2);
+      } else {
+        delete host.dataset.focusTargetX;
+        delete host.dataset.focusTargetY;
+      }
+
       if (latestCenterFocusPoint.current && latestFocusPoint.current) {
         const positionAttribute = personalGeometry.getAttribute("position") as BufferAttribute;
         personalScreenPosition.fromBufferAttribute(positionAttribute, 0);
@@ -2756,6 +2942,7 @@ export function ParticleEarthScene({
         }
       },
       setFocusPoint(point: { lat: number; lon: number } | null | undefined) {
+        focusBaseRotationY = null;
         if (
           latestDragToRotate.current
           && latestCenterFocusPoint.current
@@ -2774,6 +2961,7 @@ export function ParticleEarthScene({
       },
       setFocusRoute(route: JourneyRoute | null | undefined) {
         const hadRouteFocus = Boolean(routeFocusFrame);
+        focusBaseRotationY = null;
         routeFocusFrame = getSphericalRouteFocus(route?.points ?? []);
         routeFocusSettling = Boolean(routeFocusFrame);
         pointFocusSettling = !routeFocusFrame && Boolean(latestFocusPoint.current);

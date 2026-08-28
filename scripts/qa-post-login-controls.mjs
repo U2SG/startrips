@@ -2041,6 +2041,113 @@ async function verifyFinalAcceptanceMobileFlow() {
   }
 }
 
+async function verifyTransientJourneyFocus() {
+  console.error("[qa-post-login] transient journey focus");
+  const runCase = async (animated) => {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+    const pageErrors = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    try {
+      const suffix = animated ? "&qaMotion=animate" : "";
+      await page.goto(`${origin}/?qaState=journey-routes${suffix}`, { waitUntil: "domcontentloaded" });
+      const host = page.locator('[data-scene-ready="true"]');
+      await host.waitFor({ timeout: 20_000 });
+      await page.waitForFunction(() => {
+        const debug = window.__particleEarthDebug?.();
+        return debug
+          && Math.abs(debug.positionX - 0.7) < 0.001
+          && Math.abs(debug.positionY + 0.23) < 0.001;
+      }, null, { timeout: 8_000 });
+      const positionBefore = await page.evaluate(() => {
+        const debug = window.__particleEarthDebug?.();
+        return { x: debug?.positionX ?? 0, y: debug?.positionY ?? 0 };
+      });
+      await page.locator('[data-qa-route="qa-route-night-train"]').click();
+      await page.waitForFunction(() => (
+        document.querySelector(".particle-earth-scene")?.getAttribute("data-route-focus-phase") === "settled"
+      ), null, { timeout: 12_000 });
+      const arrived = await page.evaluate(() => {
+        const scene = document.querySelector(".particle-earth-scene");
+        const debug = window.__particleEarthDebug?.();
+        return {
+          arrivalX: Number(scene?.getAttribute("data-focus-arrival-x")),
+          arrivalY: Number(scene?.getAttribute("data-focus-arrival-y")),
+          centerX: Number(scene?.getAttribute("data-focus-arrival-center-x")),
+          centerY: Number(scene?.getAttribute("data-focus-arrival-center-y")),
+          targetX: Number(scene?.getAttribute("data-focus-target-x")),
+          targetY: Number(scene?.getAttribute("data-focus-target-y")),
+          positionX: debug?.positionX ?? 0,
+          positionY: debug?.positionY ?? 0,
+          rotationY: debug?.rotationY ?? 0,
+        };
+      });
+      const arrivalError = Math.hypot(
+        arrived.arrivalX - arrived.centerX,
+        arrived.arrivalY - arrived.centerY,
+      );
+      const positionArrivalDelta = Math.hypot(
+        arrived.positionX - positionBefore.x,
+        arrived.positionY - positionBefore.y,
+      );
+      if (arrivalError > 4 || positionArrivalDelta > 0.002 || pageErrors.length > 0) {
+        throw new Error(`Transient focus arrival failed: ${JSON.stringify({ arrivalError, positionArrivalDelta, pageErrors })}`);
+      }
+      let release = null;
+      if (animated) {
+        await page.waitForFunction((startRotationY) => {
+          const debug = window.__particleEarthDebug?.();
+          return Boolean(debug && Math.abs(debug.rotationY - startRotationY) > 0.025);
+        }, arrived.rotationY, { timeout: 8_000 });
+        release = await page.evaluate(() => {
+          const scene = document.querySelector(".particle-earth-scene");
+          const debug = window.__particleEarthDebug?.();
+          return {
+            targetX: Number(scene?.getAttribute("data-focus-target-x")),
+            targetY: Number(scene?.getAttribute("data-focus-target-y")),
+            positionX: debug?.positionX ?? 0,
+            positionY: debug?.positionY ?? 0,
+            rotationY: debug?.rotationY ?? 0,
+          };
+        });
+        const releaseDrift = Math.hypot(
+          release.targetX - arrived.arrivalX,
+          release.targetY - arrived.arrivalY,
+        );
+        const releasePositionDelta = Math.hypot(
+          release.positionX - arrived.positionX,
+          release.positionY - arrived.positionY,
+        );
+        if (
+          releaseDrift < 5
+          || releasePositionDelta > 0.002
+          || Math.abs(release.rotationY - arrived.rotationY) <= 0.025
+        ) {
+          throw new Error(`Transient focus release failed: ${JSON.stringify({ releaseDrift, releasePositionDelta, arrived, release })}`);
+        }
+      }
+      results.push({
+        name: animated ? "transient-journey-focus-animated" : "transient-journey-focus-reduced-motion",
+        arrivalError,
+        positionArrivalDelta,
+        release,
+        failed: false,
+      });
+    } catch (error) {
+      failed = true;
+      results.push({
+        name: animated ? "transient-journey-focus-animated" : "transient-journey-focus-reduced-motion",
+        failed: true,
+        error: error instanceof Error ? error.stack ?? error.message : String(error),
+        pageErrors,
+      });
+    } finally {
+      await page.close();
+    }
+  };
+  await runCase(false);
+  await runCase(true);
+}
+
 try {
   if (finalAcceptanceOnly) {
     await verifyFinalAcceptanceMobileFlow();
@@ -2049,6 +2156,7 @@ try {
     await verifyMobileV2InteractionContract();
     await verifyComposerMediaActions();
     await verifyComposerGlobeRoundTrip();
+    await verifyTransientJourneyFocus();
     await verifyAccountDock();
   }
 } finally {
