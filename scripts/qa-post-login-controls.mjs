@@ -242,11 +242,35 @@ async function verifyAtlasShell() {
 async function verifyMobileV2InteractionContract() {
   console.error("[qa-post-login] mobile v2 interaction contract");
   const page = await browser.newPage({ viewport: { width: 390, height: 844 }, reducedMotion: "reduce" });
+  const historyJourneys = journeys.map((journey, index) => ({
+    ...journey,
+    media: [{
+      id: `qa-history-media-${index}`,
+      journeyId: journey.id,
+      routePointId: null,
+      storageDriver: "qa",
+      storageKey: `qa/history-media-${index}.gif`,
+      fileName: `history-media-${index}.gif`,
+      mimeType: "image/gif",
+      bytes: 35,
+      sortOrder: 0,
+      uploadedByUserId: "qa-user",
+      createdAt: `${journey.startedOn}T00:10:00.000Z`,
+    }],
+  }));
   try {
     await page.route("**/api/journeys", (route) => route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify({ journeys }),
+      body: JSON.stringify({ journeys: historyJourneys }),
+    }));
+    await page.route("**/api/uploads/assets/*/read-url", (route) => route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        url: "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=",
+        expiresAt: "2026-08-30T00:00:00.000Z",
+      }),
     }));
     await page.goto(`${origin}/?qaState=living-atlas`, { waitUntil: "domcontentloaded" });
     const chip = page.locator(".mobile-v2__journey-chip");
@@ -262,6 +286,14 @@ async function verifyMobileV2InteractionContract() {
     const pickerBackgroundInert = await page.locator(".mobile-v2__header").evaluate((element) => element.inert);
     await page.keyboard.press("Escape");
     await picker.waitFor({ state: "detached" });
+    await page.waitForFunction(() => {
+      const stack = window.history.state?.__startripsMobileSurfaceStack;
+      return !Array.isArray(stack) || stack.length === 0;
+    });
+    const pickerCloseStackDepth = await page.evaluate(() => {
+      const stack = window.history.state?.__startripsMobileSurfaceStack;
+      return Array.isArray(stack) ? stack.length : 0;
+    });
     const pickerFocusRestored = await pickerTrigger.evaluate((element) => document.activeElement === element);
 
     await pickerTrigger.click();
@@ -269,6 +301,10 @@ async function verifyMobileV2InteractionContract() {
     const journeyButtons = picker.locator("ol li button");
     await journeyButtons.last().click();
     await picker.waitFor({ state: "detached" });
+    await page.waitForFunction(() => {
+      const stack = window.history.state?.__startripsMobileSurfaceStack;
+      return !Array.isArray(stack) || stack.length === 0;
+    });
     const selectedJourneyId = await chip.getAttribute("data-playback-journey");
 
     await page.getByRole("button", { name: "回放我的星球" }).click();
@@ -285,6 +321,10 @@ async function verifyMobileV2InteractionContract() {
     const sheetTabTrapped = await sheet.evaluate((element) => element.contains(document.activeElement));
     await page.keyboard.press("Escape");
     await sheet.waitFor({ state: "detached" });
+    await page.waitForFunction(() => {
+      const stack = window.history.state?.__startripsMobileSurfaceStack;
+      return !Array.isArray(stack) || stack.length === 0;
+    });
     const sheetFocusRestored = await chip.evaluate((element) => document.activeElement === element);
 
     await chip.click();
@@ -301,7 +341,7 @@ async function verifyMobileV2InteractionContract() {
     let mapFocusRestored = false;
     try {
       await page.waitForFunction(
-        () => document.activeElement?.classList.contains("mobile-v2__journey-chip"),
+        () => document.activeElement?.getAttribute("data-mobile-map-trigger") === "true",
         null,
         { timeout: 1_500 },
       );
@@ -310,12 +350,80 @@ async function verifyMobileV2InteractionContract() {
       mapFocusRestored = false;
     }
 
+    const historyStackDepth = () => page.evaluate(() => {
+      const stack = window.history.state?.__startripsMobileSurfaceStack;
+      return Array.isArray(stack) ? stack.length : 0;
+    });
+    const mapCloseStackDepth = await historyStackDepth();
+    await page.waitForFunction(() => {
+      const layer = document.querySelector(".mobile-v2__sheet-layer");
+      return layer && !layer.hasAttribute("inert") && layer.getAttribute("aria-hidden") !== "true";
+    });
+
+    const storyTrigger = sheet.getByRole("button", { name: /打开故事/ });
+    await storyTrigger.click();
+    const storySurface = page.locator(".journey-story");
+    await storySurface.waitFor({ state: "visible" });
+    const storyStackDepth = await historyStackDepth();
+    const sheetInertUnderStory = await page.locator(".mobile-v2__sheet-layer").evaluate((element) => element.inert);
+    const storyMedia = storySurface.locator(
+      ".journey-story__media > img:not(.journey-story__media-incoming), .journey-story__media > video:not(.journey-story__media-incoming)",
+    ).first();
+    await storyMedia.waitFor({ state: "visible" });
+    await storyMedia.click();
+    const fullscreenSurface = page.locator(".journey-story-fullscreen");
+    await fullscreenSurface.waitFor({ state: "visible" });
+    const fullscreenStackDepth = await historyStackDepth();
+
+    await page.evaluate(() => window.history.back());
+    await fullscreenSurface.waitFor({ state: "detached" });
+    const storyAfterFullscreenBack = await storySurface.isVisible();
+    const afterFullscreenBackDepth = await historyStackDepth();
+
+    await page.evaluate(() => window.history.back());
+    await storySurface.waitFor({ state: "detached" });
+    const sheetAfterStoryBack = await sheet.isVisible();
+    const sheetInertAfterStoryBack = await page.locator(".mobile-v2__sheet-layer").evaluate((element) => element.inert);
+    const afterStoryBackDepth = await historyStackDepth();
+
+    await page.evaluate(() => window.history.back());
+    await sheet.waitFor({ state: "detached" });
+    const atlasAfterSheetBack = await page.locator(".living-atlas").isVisible();
+    const afterSheetBackDepth = await historyStackDepth();
+
+    // Rebuild the three-layer mobile stack, then cross the responsive boundary.
+    // All Startrips-owned sentinels must collapse in one bounded history move
+    // without navigating/reloading the underlying Atlas document.
+    await chip.click();
+    await sheet.waitFor({ state: "visible" });
+    await sheet.getByRole("button", { name: /打开故事/ }).click();
+    await storySurface.waitFor({ state: "visible" });
+    await storyMedia.waitFor({ state: "visible" });
+    await storyMedia.click();
+    await fullscreenSurface.waitFor({ state: "visible" });
+    const breakpointStackDepthBefore = await historyStackDepth();
+    const breakpointUrlBefore = page.url();
+    await page.evaluate(() => {
+      window.__startripsQaHistoryDocumentMarker = "mobile-history-stack";
+    });
+    await page.setViewportSize({ width: 1200, height: 800 });
+    await page.waitForFunction(() => {
+      const stack = window.history.state?.__startripsMobileSurfaceStack;
+      return !Array.isArray(stack) || stack.length === 0;
+    });
+    const breakpointStackDepthAfter = await historyStackDepth();
+    const breakpointStayedInDocument = await page.evaluate(() => (
+      window.__startripsQaHistoryDocumentMarker === "mobile-history-stack"
+    ));
+    const breakpointUrlAfter = page.url();
+
     const interaction = {
       name: "mobile-v2-playback-modal-contract",
       pickerRootFocused,
       pickerCloseTouchTarget,
       pickerBackgroundInert,
       pickerFocusRestored,
+      pickerCloseStackDepth,
       selectedJourneyId,
       sheetRootFocused,
       sheetBackgroundInert,
@@ -328,10 +436,27 @@ async function verifyMobileV2InteractionContract() {
       mapCloseTouchTarget,
       mapBackgroundInert,
       mapFocusRestored,
+      mapCloseStackDepth,
+      storyStackDepth,
+      sheetInertUnderStory,
+      fullscreenStackDepth,
+      storyAfterFullscreenBack,
+      afterFullscreenBackDepth,
+      sheetAfterStoryBack,
+      sheetInertAfterStoryBack,
+      afterStoryBackDepth,
+      atlasAfterSheetBack,
+      afterSheetBackDepth,
+      breakpointStackDepthBefore,
+      breakpointStackDepthAfter,
+      breakpointStayedInDocument,
+      breakpointUrlBefore,
+      breakpointUrlAfter,
       failed: !pickerRootFocused
         || pickerCloseTouchTarget < 44
         || !pickerBackgroundInert
         || !pickerFocusRestored
+        || pickerCloseStackDepth !== 0
         || !selectedJourneyId
         || !sheetRootFocused
         || !sheetBackgroundInert
@@ -342,7 +467,22 @@ async function verifyMobileV2InteractionContract() {
         || !mapRootFocused
         || mapCloseTouchTarget < 44
         || !mapBackgroundInert
-        || !mapFocusRestored,
+        || !mapFocusRestored
+        || mapCloseStackDepth !== 1
+        || storyStackDepth !== 2
+        || !sheetInertUnderStory
+        || fullscreenStackDepth !== 3
+        || !storyAfterFullscreenBack
+        || afterFullscreenBackDepth !== 2
+        || !sheetAfterStoryBack
+        || sheetInertAfterStoryBack
+        || afterStoryBackDepth !== 1
+        || !atlasAfterSheetBack
+        || afterSheetBackDepth !== 0
+        || breakpointStackDepthBefore !== 3
+        || breakpointStackDepthAfter !== 0
+        || !breakpointStayedInDocument
+        || breakpointUrlAfter !== breakpointUrlBefore,
     };
     if (interaction.failed) failed = true;
     results.push(interaction);
