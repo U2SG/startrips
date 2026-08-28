@@ -505,6 +505,7 @@ export function LivingAtlasApp({
     timeCursor.selectJourney(journeyId);
     setStoryJourneyId(null);
     setStoryRoutePointId(null);
+    setMobileSheetJourneyId(null);
     setEditingJourneyId(journeyId);
     setView("planet");
     setComposerOpen(true);
@@ -517,6 +518,7 @@ export function LivingAtlasApp({
     setJourneys(remaining);
     setStoryJourneyId(null);
     setStoryRoutePointId(null);
+    setMobileSheetJourneyId(null);
     setUndoJourney(removed);
     setNotice("旅程已从图谱移除；7 天内可以撤销，媒体尚未清理。");
   }

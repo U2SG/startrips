@@ -1,9 +1,14 @@
 import { useEffect, useRef } from "react";
 
 const STACK_KEY = "__startripsMobileSurfaceStack";
+const SESSION_KEY = "__startripsMobileSurfaceSession";
+const documentSession = typeof crypto !== "undefined" && "randomUUID" in crypto
+  ? crypto.randomUUID()
+  : `mobile-surface-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
 type HistoryState = Record<string, unknown> & {
   [STACK_KEY]?: string[];
+  [SESSION_KEY]?: string;
 };
 
 function asHistoryState(value: unknown): HistoryState {
@@ -11,7 +16,9 @@ function asHistoryState(value: unknown): HistoryState {
 }
 
 function readStack(value: unknown) {
-  const stack = asHistoryState(value)[STACK_KEY];
+  const state = asHistoryState(value);
+  if (state[SESSION_KEY] !== documentSession) return [];
+  const stack = state[STACK_KEY];
   return Array.isArray(stack) ? stack.filter((entry): entry is string => typeof entry === "string") : [];
 }
 
@@ -45,6 +52,19 @@ function scheduleHistoryReconcile() {
 }
 
 if (typeof window !== "undefined") {
+  const currentState = asHistoryState(window.history.state);
+  const inheritedStack = currentState[STACK_KEY];
+  if (
+    currentState[SESSION_KEY] !== documentSession
+    && Array.isArray(inheritedStack)
+    && inheritedStack.length > 0
+  ) {
+    window.history.replaceState({
+      ...currentState,
+      [STACK_KEY]: [],
+      [SESSION_KEY]: documentSession,
+    }, "");
+  }
   window.addEventListener("popstate", () => {
     historyMovePending = false;
   });
@@ -78,6 +98,7 @@ export function useMobileSurfaceHistory(
     window.history.pushState({
       ...baseState,
       [STACK_KEY]: [...stack, token],
+      [SESSION_KEY]: documentSession,
     }, "");
     tokenRef.current = token;
     entryActiveRef.current = true;
