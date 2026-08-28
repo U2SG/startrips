@@ -50,7 +50,12 @@ import {
   rotationYForLongitude,
   vector3ToLatLon,
 } from "./geo";
-import { createAtmosphereMaterial, createParticleEarthMaterial } from "./particleEarthMaterial";
+import {
+  createAtmosphereMaterial,
+  createParticleEarthMaterial,
+  PARTICLE_ACTIVE_DIM_POINT_LIMIT,
+  PARTICLE_DIM_POINT_LIMIT,
+} from "./particleEarthMaterial";
 import { disposeSceneGraph, useThreeScene } from "./useThreeScene";
 
 export const QUALITY_PROFILE = {
@@ -98,6 +103,33 @@ const JOURNEY_ROUTE_LINE_SCALE_MAX = 2.4;
 const JOURNEY_ROUTE_MARKER_SIZE_PX = 15;
 const JOURNEY_ROUTE_MARKER_SCALE = JOURNEY_ROUTE_MARKER_SIZE_PX / (3.4 * 2);
 const JOURNEY_POINT_TWINKLE_SLOWDOWN = 5;
+
+export function collectJourneyDimDirections(
+  routes: readonly JourneyRoute[],
+  limit: number,
+) {
+  if (limit <= 0 || routes.length === 0) return [] as Vector3[];
+  const directions: Vector3[] = [];
+  const seen = new Set<string>();
+  const maxPointCount = routes.reduce(
+    (maximum, route) => Math.max(maximum, route.points.length),
+    0,
+  );
+  // Round-robin by point index so one long journey cannot consume the whole
+  // GPU uniform budget before the other lit journeys contribute a point.
+  for (let pointIndex = 0; pointIndex < maxPointCount && directions.length < limit; pointIndex += 1) {
+    for (const route of routes) {
+      const point = route.points[pointIndex];
+      if (!point) continue;
+      const key = `${point.lat.toFixed(4)}:${point.lon.toFixed(4)}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      directions.push(latLonToVector3(point.lat, point.lon, 1).normalize());
+      if (directions.length >= limit) break;
+    }
+  }
+  return directions;
+}
 
 export function clampGlobeTilt(rotation: number) {
   return rotation;
@@ -316,6 +348,27 @@ export type JourneyConnectorRect = {
   right: number;
   bottom: number;
 };
+
+export type FocusViewportChrome = {
+  left?: JourneyConnectorRect | null;
+  right?: JourneyConnectorRect | null;
+  top?: JourneyConnectorRect | null;
+  bottom?: JourneyConnectorRect | null;
+};
+
+export function focusViewportCenter(
+  scene: { width: number; height: number },
+  chrome: FocusViewportChrome = {},
+) {
+  const left = Math.min(scene.width, Math.max(0, chrome.left?.right ?? 0));
+  const right = Math.max(left, Math.min(scene.width, chrome.right?.left ?? scene.width));
+  const top = Math.min(scene.height, Math.max(0, chrome.top?.bottom ?? 0));
+  const bottom = Math.max(top, Math.min(scene.height, chrome.bottom?.top ?? scene.height));
+  return {
+    x: left + (right - left) / 2,
+    y: top + (bottom - top) / 2,
+  };
+}
 
 // The active journey card is docked to the right on wide layouts and becomes a
 // bottom sheet on compact ones, so the connector leaves from a different edge.
@@ -813,6 +866,55 @@ export function ParticleEarthScene({
     const scene = new Scene();
     const camera = new PerspectiveCamera(38, 1, 0.1, 100);
     camera.position.set(0, 0, 5.4);
+    const sampledFocusCenter = new Vector2();
+    let focusViewportSampledAt = 0;
+
+    const visibleElementRect = (element: HTMLElement | null): JourneyConnectorRect | null => {
+      if (!element?.isConnected) return null;
+      const style = window.getComputedStyle(element);
+      if (
+        style.display === "none"
+        || style.visibility === "hidden"
+        || Number.parseFloat(style.opacity || "1") <= 0.01
+      ) return null;
+      const hostBounds = host.getBoundingClientRect();
+      const bounds = element.getBoundingClientRect();
+      if (bounds.width <= 0 || bounds.height <= 0) return null;
+      return {
+        left: bounds.left - hostBounds.left,
+        top: bounds.top - hostBounds.top,
+        right: bounds.right - hostBounds.left,
+        bottom: bounds.bottom - hostBounds.top,
+      };
+    };
+
+    const sampleFocusViewport = (force: boolean) => {
+      const now = performance.now();
+      if (!force && now - focusViewportSampledAt < 100) return;
+      focusViewportSampledAt = now;
+      const atlas = host.closest<HTMLElement>(".living-atlas");
+      const useFullViewport = atlas?.dataset.globeFocus === "on"
+        || atlas?.classList.contains("is-playback");
+      const mobile = atlas?.dataset.mobileV2 === "on";
+      const chrome: FocusViewportChrome = useFullViewport
+        ? {}
+        : mobile
+          ? {
+            top: visibleElementRect(atlas?.querySelector<HTMLElement>(".mobile-v2__header") ?? null),
+            bottom: visibleElementRect(atlas?.querySelector<HTMLElement>(".mobile-v2__chrome") ?? null),
+          }
+          : {
+            left: visibleElementRect(atlas?.querySelector<HTMLElement>(".living-atlas__journey-rail") ?? null),
+            right: visibleElementRect(atlas?.querySelector<HTMLElement>(".living-atlas__active") ?? null),
+          };
+      const center = focusViewportCenter(
+        { width: targetSize.x, height: targetSize.y },
+        chrome,
+      );
+      sampledFocusCenter.set(center.x, center.y);
+      host.dataset.focusViewportCenterX = center.x.toFixed(1);
+      host.dataset.focusViewportCenterY = center.y.toFixed(1);
+    };
     const renderer = new WebGLRenderer({
       alpha: true,
       antialias: false,
@@ -883,6 +985,20 @@ export function ParticleEarthScene({
     const globe = new Group();
     globe.rotation.set(0.08, GLOBE_MODE_CONFIG[currentMode].rotationY, -0.03);
     scene.add(globe);
+    const focusRayPoint = new Vector3();
+    const focusRayDirection = new Vector3();
+    const focusWorldPosition = new Vector3();
+    const focusLocalOffset = new Vector3();
+    const focusWorldPositionForViewport = (depth: number) => {
+      focusRayPoint.set(
+        (sampledFocusCenter.x / targetSize.x) * 2 - 1,
+        1 - (sampledFocusCenter.y / targetSize.y) * 2,
+        0.5,
+      ).unproject(camera);
+      focusRayDirection.copy(focusRayPoint).sub(camera.position).normalize();
+      const distance = (depth - camera.position.z) / focusRayDirection.z;
+      return focusWorldPosition.copy(camera.position).addScaledVector(focusRayDirection, distance);
+    };
     let baseRotationY = globe.rotation.y;
     let interactiveRotationX = globe.rotation.x;
     let interactiveRotationY = 0;
@@ -892,6 +1008,7 @@ export function ParticleEarthScene({
     let lastGlobeInteractionAt = performance.now();
     let routeFocusFrame = getSphericalRouteFocus(latestFocusRoute.current?.points ?? []);
     let routeFocusSettling = Boolean(routeFocusFrame);
+    let pointFocusSettling = Boolean(latestFocusPoint.current) && !routeFocusFrame;
     let routeFocusZoomResetting = false;
     const syncRouteFocusPhase = () => {
       host.dataset.routeFocusPhase = getRouteFocusPhase(
@@ -901,9 +1018,6 @@ export function ParticleEarthScene({
       );
     };
     syncRouteFocusPhase();
-    let centeredFocusKey = latestFocusPoint.current
-      ? `${latestFocusPoint.current.lat}:${latestFocusPoint.current.lon}`
-      : "";
 
     const sphereGeometry = new SphereGeometry(1.39, 64, 40);
     const surfaceMaterial = new MeshPhongMaterial({
@@ -983,6 +1097,36 @@ export function ParticleEarthScene({
     archiveCluster.renderOrder = GLOBE_RENDER_ORDER.signal;
     globe.add(archiveCluster);
 
+    const particleDimmingMaterials: Array<ReturnType<typeof createParticleEarthMaterial>> = [];
+    let particleDimmingActiveRouteId: string | null | undefined;
+    let particleActiveDimStrengthTarget = 0;
+    const syncParticleDimming = (
+      routes: readonly JourneyRoute[],
+      activeRouteId: string | null | undefined,
+    ) => {
+      const allDirections = collectJourneyDimDirections(routes, PARTICLE_DIM_POINT_LIMIT);
+      const activeRoute = routes.find((route) => route.id === activeRouteId);
+      const activeDirections = collectJourneyDimDirections(
+        activeRoute ? [activeRoute] : [],
+        PARTICLE_ACTIVE_DIM_POINT_LIMIT,
+      );
+      const activeRouteChanged = particleDimmingActiveRouteId !== activeRouteId;
+      particleDimmingActiveRouteId = activeRouteId;
+      particleActiveDimStrengthTarget = activeDirections.length > 0 ? 1 : 0;
+      for (const material of particleDimmingMaterials) {
+        const dimUniforms = material.uniforms;
+        const dimPoints = dimUniforms.uDimPoints.value as Vector3[];
+        const activeDimPoints = dimUniforms.uActiveDimPoints.value as Vector3[];
+        allDirections.forEach((direction, index) => dimPoints[index].copy(direction));
+        activeDirections.forEach((direction, index) => activeDimPoints[index].copy(direction));
+        dimUniforms.uDimPointCount.value = allDirections.length;
+        dimUniforms.uActiveDimPointCount.value = activeDirections.length;
+        if (activeRouteChanged) dimUniforms.uActiveDimStrength.value = 0;
+      }
+      host.dataset.particleDimPointCount = String(allDirections.length);
+      host.dataset.particleActiveDimPointCount = String(activeDirections.length);
+    };
+
     const cyanClusterGeometry = new BufferGeometry();
     const cyanClusterPositions = buildRegionalClusterPositions(
       620,
@@ -1045,6 +1189,12 @@ export function ParticleEarthScene({
     });
     const particleHalo = new Points(haloGeometry, haloMaterial);
     globe.add(particleHalo);
+
+    // These are ambient cyan/green background layers. Route markers and the
+    // personal/journey signal use separate materials and intentionally stay
+    // bright, so the hierarchy changes without punching a dark hole in them.
+    particleDimmingMaterials.push(cyanClusterMaterial, shellMaterial, haloMaterial);
+    syncParticleDimming(latestJourneyRoutes.current, latestActiveJourneyRouteId.current);
 
     const personalGeometry = new BufferGeometry();
     const initialFallback =
@@ -1578,14 +1728,7 @@ export function ParticleEarthScene({
         journeyConnectorCardRect = null;
         return;
       }
-      const hostBounds = host.getBoundingClientRect();
-      const cardBounds = journeyConnectorCard.getBoundingClientRect();
-      journeyConnectorCardRect = {
-        left: cardBounds.left - hostBounds.left,
-        top: cardBounds.top - hostBounds.top,
-        right: cardBounds.right - hostBounds.left,
-        bottom: cardBounds.bottom - hostBounds.top,
-      };
+      journeyConnectorCardRect = visibleElementRect(journeyConnectorCard);
     };
 
     const updateJourneyConnector = () => {
@@ -2065,6 +2208,7 @@ export function ParticleEarthScene({
         return;
       }
       activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      pointFocusSettling = false;
       routeFocusSettling = false;
       routeFocusZoomResetting = false;
       syncRouteFocusPhase();
@@ -2194,6 +2338,7 @@ export function ParticleEarthScene({
     const onWheel = (event: WheelEvent) => {
       if (!latestDragToRotate.current || !latestWheelToZoom.current) return;
       event.preventDefault();
+      pointFocusSettling = false;
       routeFocusSettling = false;
       routeFocusZoomResetting = false;
       syncRouteFocusPhase();
@@ -2217,6 +2362,8 @@ export function ParticleEarthScene({
       opacity: 0,
       size: 8.8,
     });
+    particleDimmingMaterials.push(particleMaterial);
+    syncParticleDimming(latestJourneyRoutes.current, latestActiveJourneyRouteId.current);
     let particleGeometry: BufferGeometry | null = null;
     let particles: Points | null = null;
     let landVisualReady = false;
@@ -2270,6 +2417,7 @@ export function ParticleEarthScene({
       routeProjectionRevision += 1;
       camera.aspect = targetSize.x / targetSize.y;
       camera.updateProjectionMatrix();
+      sampleFocusViewport(true);
       particleMaterial.uniforms.uViewportHeight.value = targetSize.y;
       if (archiveMaterial) archiveMaterial.uniforms.uViewportHeight.value = targetSize.y;
       clusterMaterial.uniforms.uViewportHeight.value = targetSize.y;
@@ -2355,6 +2503,32 @@ export function ParticleEarthScene({
       const snap = reduceMotion ? 1 : 0;
       const interpolate = (value: number, next: number) =>
         snap ? next : damp(value, next, delta);
+      for (const material of particleDimmingMaterials) {
+        material.uniforms.uActiveDimStrength.value = interpolate(
+          material.uniforms.uActiveDimStrength.value,
+          particleActiveDimStrengthTarget,
+        );
+      }
+
+      if (
+        pointFocusSettling
+        && !routeFocusFrame
+        && spatialFocusPoint
+        && activePointers.size === 0
+      ) {
+        const targetRotationX = rotationXForLatitude(spatialFocusPoint.lat);
+        interactiveRotationX = interpolate(interactiveRotationX, targetRotationX);
+        interactiveRotationY = interpolate(interactiveRotationY, 0);
+        if (
+          Math.abs(getShortestRotationDelta(interactiveRotationX, targetRotationX)) < 0.002
+          && Math.abs(interactiveRotationY) < 0.002
+          && Math.abs(getShortestRotationDelta(baseRotationY, targetBaseRotationY)) < 0.003
+        ) {
+          interactiveRotationX = targetRotationX;
+          interactiveRotationY = 0;
+          pointFocusSettling = false;
+        }
+      }
 
       if (routeFocusSettling && routeFocusFrame && activePointers.size === 0) {
         const targetRotationX = rotationXForLatitude(routeFocusFrame.center.lat);
@@ -2384,10 +2558,30 @@ export function ParticleEarthScene({
         }
       }
 
-      globe.position.x = interpolate(globe.position.x, target.x);
-      globe.position.y = interpolate(globe.position.y, target.y);
       globe.scale.setScalar(interpolate(globe.scale.x, target.scale * interactiveZoom));
       baseRotationY = interpolate(baseRotationY, targetBaseRotationY);
+      globe.rotation.x = interactiveRotationX;
+      globe.rotation.y = baseRotationY + interactiveRotationY;
+      let targetPositionX = target.x;
+      let targetPositionY = target.y;
+      if (
+        currentMode === "focusPoint"
+        && latestCenterFocusPoint.current
+        && spatialFocusPoint
+      ) {
+        sampleFocusViewport(false);
+        focusLocalOffset
+          .copy(latLonToVector3(spatialFocusPoint.lat, spatialFocusPoint.lon, 1.45))
+          .applyEuler(globe.rotation)
+          .multiplyScalar(globe.scale.x);
+        const framedPoint = focusWorldPositionForViewport(
+          globe.position.z + focusLocalOffset.z,
+        );
+        targetPositionX = framedPoint.x - focusLocalOffset.x;
+        targetPositionY = framedPoint.y - focusLocalOffset.y;
+      }
+      globe.position.x = interpolate(globe.position.x, targetPositionX);
+      globe.position.y = interpolate(globe.position.y, targetPositionY);
       if (activePointers.size === 0 && !reduceMotion) {
         interactiveRotationX = clampGlobeTilt(
           interactiveRotationX + rotationVelocityX * delta,
@@ -2538,19 +2732,17 @@ export function ParticleEarthScene({
         }
       },
       setFocusPoint(point: { lat: number; lon: number } | null | undefined) {
-        const nextFocusKey = point ? `${point.lat}:${point.lon}` : "";
         if (
           latestDragToRotate.current
           && latestCenterFocusPoint.current
-          && nextFocusKey !== centeredFocusKey
+          && point
         ) {
-          interactiveRotationX = 0.08;
           interactiveRotationY = 0;
           rotationVelocityX = 0;
           rotationVelocityY = 0;
           lastGlobeInteractionAt = performance.now();
         }
-        centeredFocusKey = nextFocusKey;
+        pointFocusSettling = Boolean(point) && !routeFocusFrame;
         applyFocusPoint(point);
         // Two journeys can share a rotation target, so the connector cannot
         // rely on the globe transform alone to notice a new focus point.
@@ -2560,6 +2752,7 @@ export function ParticleEarthScene({
         const hadRouteFocus = Boolean(routeFocusFrame);
         routeFocusFrame = getSphericalRouteFocus(route?.points ?? []);
         routeFocusSettling = Boolean(routeFocusFrame);
+        pointFocusSettling = !routeFocusFrame && Boolean(latestFocusPoint.current);
         routeFocusZoomResetting = hadRouteFocus && !routeFocusFrame;
         if (routeFocusFrame) {
           syncRouteFocusPhase();
@@ -2595,6 +2788,7 @@ export function ParticleEarthScene({
         activeRouteId: string | null | undefined,
       ) {
         latestActiveJourneyRouteId.current = activeRouteId;
+        syncParticleDimming(routes, activeRouteId);
         applyJourneyRoutes(routes);
       },
       // #21: update per-route AND per-point temporal reveal without rebuilding
@@ -2685,7 +2879,7 @@ export function ParticleEarthScene({
   useEffect(() => {
     if (!ready) return;
     controllerRef.current?.setFocusPoint(focusPoint);
-  }, [controllerRef, focusPoint, ready]);
+  }, [controllerRef, focusPoint?.lat, focusPoint?.lon, focusRevision, ready]);
 
   useEffect(() => {
     if (!ready) return;

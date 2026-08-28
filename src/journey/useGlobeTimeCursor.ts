@@ -32,9 +32,17 @@ export function useGlobeTimeCursor(journeys: readonly Journey[]) {
   const [playing, setPlaying] = useState(false);
   const [scrub, setScrubState] = useState<number | null>(null);
   // Explicit chip/picker/point selection is part of the canonical playback
-  // controller. It disambiguates overlapping journeys until time-driven input
-  // (play/seek/scrub) takes ownership again.
-  const [selectionOwnerJourneyId, setSelectionOwnerJourneyId] = useState<string | null>(null);
+  // controller. Keep journey-level selection distinct from point-level
+  // selection so a journey click can frame the whole route while timeline
+  // playback/scrubbing can still resolve to the latest reached point.
+  const [selectionOwner, setSelectionOwner] = useState<{
+    journeyId: string;
+    pointIndex: number | null;
+  } | null>(null);
+  // Explicit re-selection must still retrigger camera framing even when the
+  // journey/point coordinates are unchanged (for example after manual globe
+  // rotation). Keep a monotonic revision separate from timeline position.
+  const [selectionRevision, setSelectionRevision] = useState(0);
   const playingRef = useRef(playing);
   playingRef.current = playing;
 
@@ -65,20 +73,20 @@ export function useGlobeTimeCursor(journeys: readonly Journey[]) {
   }, [playing, cursor, stops]);
 
   const play = useCallback(() => {
-    setSelectionOwnerJourneyId(null);
+    setSelectionOwner(null);
     setScrubState(null);
     setCursor((current) => (current >= 1 ? 0 : current));
     setPlaying(true);
   }, []);
   const pause = useCallback(() => setPlaying(false), []);
   const seek = useCallback((value: number) => {
-    setSelectionOwnerJourneyId(null);
+    setSelectionOwner(null);
     setCursor(Math.min(1, Math.max(0, value)));
     setScrubState(null);
     setPlaying(false);
   }, []);
   const previewScrub = useCallback((value: number | null) => {
-    setSelectionOwnerJourneyId(null);
+    setSelectionOwner(null);
     setScrubState(value === null ? null : Math.min(1, Math.max(0, value)));
   }, []);
 
@@ -86,27 +94,30 @@ export function useGlobeTimeCursor(journeys: readonly Journey[]) {
   // the effective cursor, so the globe, chip and route reveal cannot drift.
   const effectiveCursor = scrub ?? cursor;
   const selection = useMemo(
-    () => resolveJourneyTimelineSelection(
-      timeline.entries,
-      effectiveCursor,
-      selectionOwnerJourneyId,
-    ),
-    [effectiveCursor, selectionOwnerJourneyId, timeline.entries],
+    () => selectionOwner
+      ? {
+          journeyId: selectionOwner.journeyId,
+          pointIndex: selectionOwner.pointIndex,
+          cursor: effectiveCursor,
+        }
+      : resolveJourneyTimelineSelection(timeline.entries, effectiveCursor),
+    [effectiveCursor, selectionOwner, timeline.entries],
   );
 
   useEffect(() => {
     if (
-      selectionOwnerJourneyId
-      && !timeline.entries.some((entry) => entry.journeyId === selectionOwnerJourneyId)
+      selectionOwner
+      && !timeline.entries.some((entry) => entry.journeyId === selectionOwner.journeyId)
     ) {
-      setSelectionOwnerJourneyId(null);
+      setSelectionOwner(null);
     }
-  }, [selectionOwnerJourneyId, timeline.entries]);
+  }, [selectionOwner, timeline.entries]);
 
   const selectJourney = useCallback((journeyId: string) => {
     const target = cursorForJourney(timeline.entries, journeyId);
     if (target === null) return;
-    setSelectionOwnerJourneyId(journeyId);
+    setSelectionOwner({ journeyId, pointIndex: null });
+    setSelectionRevision((revision) => revision + 1);
     setCursor(target);
     setScrubState(null);
     setPlaying(false);
@@ -116,7 +127,8 @@ export function useGlobeTimeCursor(journeys: readonly Journey[]) {
     const entry = timeline.entries.find((candidate) => candidate.journeyId === journeyId);
     const point = entry?.points.find((candidate) => candidate.pointIndex === pointIndex);
     if (!point) return;
-    setSelectionOwnerJourneyId(journeyId);
+    setSelectionOwner({ journeyId, pointIndex });
+    setSelectionRevision((revision) => revision + 1);
     setCursor(Math.min(1, Math.max(0, point.at)));
     setScrubState(null);
     setPlaying(false);
@@ -157,6 +169,7 @@ export function useGlobeTimeCursor(journeys: readonly Journey[]) {
     selectJourney,
     selectPoint,
     selection,
+    selectionRevision,
     scrub,
     setScrub: previewScrub,
     reveal,

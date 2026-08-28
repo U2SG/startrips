@@ -27,6 +27,8 @@ import {
   buildJourneyConnector,
   buildJourneyConnectorPath,
   buildProjectedRoutePath,
+  collectJourneyDimDirections,
+  focusViewportCenter,
   clampGlobeTilt,
   journeyConnectorAnchor,
   clampGlobeZoom,
@@ -198,6 +200,52 @@ describe("ParticleEarthScene contracts", () => {
       scene,
       compact: false,
     })).toBe("");
+  });
+
+  it("computes the real visible center from measured chrome instead of a magic offset", () => {
+    expect(focusViewportCenter({ width: 1200, height: 800 })).toEqual({ x: 600, y: 400 });
+    expect(focusViewportCenter(
+      { width: 1200, height: 800 },
+      {
+        left: { left: 20, top: 140, right: 300, bottom: 700 },
+        right: { left: 930, top: 180, right: 1180, bottom: 680 },
+      },
+    )).toEqual({ x: 615, y: 400 });
+    expect(focusViewportCenter(
+      { width: 390, height: 844 },
+      {
+        top: { left: 0, top: 0, right: 390, bottom: 62 },
+        bottom: { left: 0, top: 650, right: 390, bottom: 844 },
+      },
+    )).toEqual({ x: 195, y: 356 });
+  });
+
+  it("samples lit-journey dim anchors fairly across routes and deduplicates places", () => {
+    const routes = [
+      {
+        id: "journey-a",
+        color: "#f4ce73",
+        points: [
+          { lat: 0, lon: 0, isStop: true },
+          { lat: 10, lon: 10, isStop: true },
+        ],
+      },
+      {
+        id: "journey-b",
+        color: "#76e3d0",
+        points: [
+          { lat: 20, lon: 20, isStop: true },
+          { lat: 0, lon: 0, isStop: true },
+        ],
+      },
+    ];
+    const directions = collectJourneyDimDirections(routes, 3);
+    expect(directions).toHaveLength(3);
+    expect(directions.every((direction) => Math.abs(direction.length() - 1) < 0.00001)).toBe(true);
+    // Round-robin means each journey contributes before route A's second stop.
+    expect(directions[0].equals(directions[1])).toBe(false);
+    expect(directions[2].equals(directions[0])).toBe(false);
+    expect(collectJourneyDimDirections(routes, 1)).toHaveLength(1);
   });
 
   it("waits a full ten seconds after the latest interaction", () => {

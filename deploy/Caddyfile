@@ -23,6 +23,13 @@
 		header Cache-Control "public, max-age=31536000, immutable"
 	}
 
+	@atlasStatic path /earth/* /fonts/*
+	handle @atlasStatic {
+		root * /srv
+		file_server
+		header Cache-Control "public, max-age=31536000, immutable"
+	}
+
 	handle {
 		root * /srv
 		try_files {path} /index.html

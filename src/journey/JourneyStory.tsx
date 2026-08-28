@@ -1502,13 +1502,14 @@ export function JourneyStory({
               <button
                 type="button"
                 className="journey-story__fullscreen-entry"
+                aria-label="全屏播放"
+                title="全屏播放"
                 onClick={() => {
                   setPlayingFromGesture(scopedMedia.length > 1);
                   setFullscreen(true);
                 }}
               >
                 <IconMaximize size={16} stroke={1.35} aria-hidden="true" />
-                全屏播放
               </button>
             ) : null}
             {overview ? (
@@ -1604,7 +1605,8 @@ export function JourneyStory({
               />
             ) : null}
             {!overview && (scopedMedia.length > 1 || visualMedia.length > 1) ? (
-              <nav className="journey-story__media-nav" aria-label="媒体导航">
+              <div className="journey-story__media-controls">
+                <nav className="journey-story__media-nav" aria-label="媒体导航">
                 <button
                   type="button"
                   className={playing ? "is-active" : ""}
@@ -1620,13 +1622,14 @@ export function JourneyStory({
                 <button type="button" disabled={assetIndex === 0 || mutationPending} onClick={() => navigateToMedia(assetIndex - 1)} aria-label="上一个媒体"><IconArrowLeft size={17} stroke={1.35} aria-hidden="true" /></button>
                 <span>{scopedMedia.length > 0 ? `${assetIndex + 1} / ${scopedMedia.length}` : "0 / 0"}</span>
                 <button type="button" disabled={assetIndex === scopedMedia.length - 1 || mutationPending} onClick={() => navigateToMedia(assetIndex + 1)} aria-label="下一个媒体"><IconArrowRight size={17} stroke={1.35} aria-hidden="true" /></button>
-              </nav>
-            ) : null}
-            {!overview && asset && visualMedia.length > 1 ? (
-              <div className="journey-story__media-order" role="group" aria-label="媒体排序">
-                <span>排序</span>
-                <IconActionButton type="button" disabled={!canMoveEarlier || mutationPending} onClick={() => void moveMedia(-1)} label="向前调整媒体顺序" tooltip="上移媒体"><IconArrowUp size={16} stroke={1.35} aria-hidden="true" /></IconActionButton>
-                <IconActionButton type="button" disabled={!canMoveLater || mutationPending} onClick={() => void moveMedia(1)} label="向后调整媒体顺序" tooltip="下移媒体"><IconArrowDown size={16} stroke={1.35} aria-hidden="true" /></IconActionButton>
+                </nav>
+                {asset && visualMedia.length > 1 ? (
+                  <div className="journey-story__media-order" role="group" aria-label="媒体排序">
+                    <span>排序</span>
+                    <IconActionButton type="button" disabled={!canMoveEarlier || mutationPending} onClick={() => void moveMedia(-1)} label="向前调整媒体顺序" tooltip="上移媒体"><IconArrowUp size={16} stroke={1.35} aria-hidden="true" /></IconActionButton>
+                    <IconActionButton type="button" disabled={!canMoveLater || mutationPending} onClick={() => void moveMedia(1)} label="向后调整媒体顺序" tooltip="下移媒体"><IconArrowDown size={16} stroke={1.35} aria-hidden="true" /></IconActionButton>
+                  </div>
+                ) : null}
               </div>
             ) : null}
             {orderMessage ? <p className="journey-story__order-message" role="status">{orderMessage}</p> : null}

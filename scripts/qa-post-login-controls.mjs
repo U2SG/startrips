@@ -1210,6 +1210,7 @@ async function verifyFinalAcceptanceMobileFlow() {
     ["320", 320, 800],
     ["360", 360, 800],
     ["390", 390, 844],
+    ["430", 430, 932],
   ].filter(([label]) => !requestedViewport || label === requestedViewport);
   if (requestedViewport && viewports.length === 0) {
     throw new Error(`Unknown QA_FINAL_VIEWPORT: ${requestedViewport}`);

@@ -224,11 +224,21 @@
 .living-atlas-globe__controls {
   position: absolute;
   z-index: 8;
-  top: 92px;
+  top: calc(clamp(152px, 17vh, 184px) - 54px);
   left: clamp(24px, 3vw, 48px);
+  width: min(300px, 23vw);
   display: flex;
   align-items: stretch;
   gap: 8px;
+}
+
+.living-atlas-globe.is-overview .living-atlas-globe__mode {
+  width: 100%;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+}
+
+.living-atlas-globe.is-detail .living-atlas-globe__controls {
+  width: auto;
 }
 
 .living-atlas-globe__mode {
@@ -1489,8 +1499,10 @@
   min-height: 44px;
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 0 14px;
+  width: 44px;
+  min-width: 44px;
+  justify-content: center;
+  padding: 0;
   border: 1px solid rgba(200, 255, 61, 0.32);
   background: rgba(2, 8, 8, 0.82);
   color: var(--atlas-acid);
@@ -1742,6 +1754,10 @@
   border: 1px solid rgba(118, 198, 188, 0.14);
   background: rgba(2, 8, 8, 0.88);
   backdrop-filter: blur(10px);
+}
+
+.journey-story__media-controls {
+  display: contents;
 }
 
 .journey-story__media-nav button.is-active {
@@ -4539,22 +4555,24 @@ body:has(.journey-composer-backdrop.is-globe-picking) .account-dock {
     right: 70px;
     max-width: none;
     display: grid;
-    grid-template-columns: minmax(112px, 1fr) auto auto;
+    grid-template-columns: 44px 88px minmax(44px, auto);
     align-items: stretch;
   }
 
-  .living-atlas-globe__mode {
-    min-width: 0;
+  .living-atlas-globe__mode,
+  .living-atlas-globe.is-overview .living-atlas-globe__mode {
+    width: 44px;
+    min-width: 44px;
     min-height: 44px;
-    grid-template-columns: 16px minmax(0, auto);
-    gap: 6px;
-    padding: 0 9px;
+    grid-template-columns: 16px;
+    place-items: center;
+    gap: 0;
+    padding: 0;
     white-space: nowrap;
   }
 
   .living-atlas-globe__mode > span {
-    overflow: hidden;
-    text-overflow: ellipsis;
+    display: none;
   }
 
   .living-atlas-globe__mode > small {
@@ -4690,8 +4708,15 @@ body:has(.journey-composer-backdrop.is-globe-picking) .account-dock {
   }
 
   .living-atlas__globe-focus-exit {
-    top: 12px;
-    right: 12px;
+    top: calc(env(safe-area-inset-top) + 12px);
+    right: auto;
+    left: calc(env(safe-area-inset-left) + 12px);
+    width: 44px;
+    min-width: 44px;
+    padding: 0;
+    justify-content: center;
+    gap: 0;
+    font-size: 0;
   }
 
   .living-atlas__active {
@@ -4927,17 +4952,40 @@ body:has(.journey-composer-backdrop.is-globe-picking) .account-dock {
     right: 12px;
   }
 
-  .journey-story__media-nav {
+  .journey-story__media-controls {
+    position: absolute;
+    z-index: 3;
     right: 12px;
     bottom: 12px;
-    grid-template-columns: 44px 44px auto 44px;
+    left: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     gap: 4px;
-    padding: 5px;
+    padding: 4px;
+    border: 1px solid rgba(118, 198, 188, 0.14);
+    background: rgba(2, 8, 8, 0.88);
+    backdrop-filter: blur(10px);
+  }
+
+  .journey-story__media-nav {
+    position: static;
+    grid-template-columns: 44px 44px minmax(36px, auto) 44px;
+    gap: 2px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    backdrop-filter: none;
   }
 
   .journey-story__media-order {
-    left: 12px;
-    bottom: 70px;
+    position: static;
+    gap: 2px;
+    padding: 0 0 0 4px;
+    border: 0;
+    border-left: 1px solid rgba(118, 198, 188, 0.14);
+    background: transparent;
+    backdrop-filter: none;
   }
 
   .journey-story__media-order > span {
@@ -4949,12 +4997,8 @@ body:has(.journey-composer-backdrop.is-globe-picking) .account-dock {
     height: 44px;
   }
 
-  .journey-story__media:has(> video) .journey-story__media-nav {
+  .journey-story__media:has(> video) .journey-story__media-controls {
     bottom: 64px;
-  }
-
-  .journey-story__media:has(> video) .journey-story__media-order {
-    bottom: 122px;
   }
 
   .journey-story__media-remove {
