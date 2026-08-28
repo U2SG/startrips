@@ -23,7 +23,7 @@ A feature picks a tier by what it is — never by tuning a number.
 Shared TS tokens: `src/motion/tokens.ts` → `motionTokens.tiers.*`,
 `motionTokens.easings.*`.
 
-CSS mirrors in `:root` of `living-atlas.css`:
+CSS mirrors in global `:root` of `src/styles/tokens.css`:
 
 ```css
 --motion-instant: 120ms;

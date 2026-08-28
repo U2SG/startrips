@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title desc">
+  <title id="title">Startrips Memory Orbit</title>
+  <desc id="desc">A refined memory orbit: an open planet, a journey curve, a waypoint, and a warm destination star.</desc>
+  <path d="M42.6 49.3A20.3 20.3 0 1 0 42.6 14.7" fill="none" stroke="#A4FFF4" stroke-width="3.1" stroke-linecap="round"/>
+  <path d="M41.8 46.2C35 45.8 31.7 40.5 32.2 34.6C32.7 28.4 37.4 25.7 39.6 21.3C41 18.5 43.7 17.4 47.4 17.9" fill="none" stroke="#49E5D3" stroke-width="2.7" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="33.9" cy="36.1" r="2.45" fill="#49E5D3"/>
+  <path d="M48.1 14.7L49.05 16.95L51.3 17.9L49.05 18.85L48.1 21.1L47.15 18.85L44.9 17.9L47.15 16.95Z" fill="#FFD77A"/>
+</svg>
