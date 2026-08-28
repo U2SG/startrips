@@ -1025,20 +1025,24 @@ export function LivingAtlasApp({
         </div>
       ) : null}
 
-      {/* #8: the only control left visible in globe focus mode; always in the
-          DOM so keyboard focus can return to it on exit. */}
-      <button
-        ref={globeFocusExitRef}
-        type="button"
-        className="living-atlas__globe-focus-exit"
-        aria-label="退出专注地球"
-        aria-hidden={!globeFocusMode}
-        tabIndex={globeFocusMode ? 0 : -1}
-        onClick={exitGlobeFocus}
-      >
-        <IconX size={16} stroke={1.4} aria-hidden="true" />
-        恢复界面
-      </button>
+      {/* Desktop keeps an explicit focus-mode exit for keyboard discovery.
+          Mobile V2 never renders this control: its globe is already the base
+          immersive surface, so a stale desktop focus state cannot flash a
+          prominent “restore page” button during a breakpoint transition. */}
+      {!isMobileV2 ? (
+        <button
+          ref={globeFocusExitRef}
+          type="button"
+          className="living-atlas__globe-focus-exit"
+          aria-label="退出专注地球"
+          aria-hidden={!globeFocusMode}
+          tabIndex={globeFocusMode ? 0 : -1}
+          onClick={exitGlobeFocus}
+        >
+          <IconX size={16} stroke={1.4} aria-hidden="true" />
+          返回界面
+        </button>
+      ) : null}
 
       {/* #21: the rewind time axis, only in globe focus mode. */}
       {globeFocusMode ? <GlobeTimeScrubber {...timeCursor} /> : null}

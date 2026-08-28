@@ -6,6 +6,7 @@ import {
   useState,
   type ChangeEvent,
   type MouseEvent,
+  type PointerEvent as ReactPointerEvent,
   type WheelEvent,
 } from "react";
 import { createPortal } from "react-dom";
@@ -31,6 +32,7 @@ import {
   IconArrowRight,
   IconArrowDown,
   IconArrowUp,
+  IconDots,
   IconPhotoStar,
   IconEdit,
   IconLayoutGrid,
@@ -88,6 +90,22 @@ const SOUNDTRACK_INPUT_ACCEPT = [
 // session never shows an expired thumbnail.
 const MEDIA_READ_REFRESH_MARGIN_MS = 60_000;
 const MEDIA_READ_SWEEP_MS = 20_000;
+const MOBILE_STORY_QUERY = "(max-width: 760px)";
+
+function useMobileStoryLayout() {
+  const [mobile, setMobile] = useState(() => (
+    globalThis.matchMedia?.(MOBILE_STORY_QUERY).matches ?? false
+  ));
+  useEffect(() => {
+    const media = globalThis.matchMedia?.(MOBILE_STORY_QUERY);
+    if (!media) return;
+    const update = () => setMobile(media.matches);
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+  return mobile;
+}
 
 type MediaReadState =
   | { status: "loading" }
@@ -471,10 +489,18 @@ export function JourneyStory({
   // Review P2: mirrors `playing` so gesture handlers can read it synchronously.
   const playingRef = useRef(false);
   playingRef.current = playing;
+  const mobileLayout = useMobileStoryLayout();
   const [fullscreen, setFullscreen] = useState(false);
   // #7: fullscreen controls fade out after idle; any pointer/key activity
-  // brings them back.
+  // brings them back. Mobile starts fully immersive and reveals controls only
+  // after an explicit interaction.
   const [fullscreenControlsHidden, setFullscreenControlsHidden] = useState(false);
+  const fullscreenHistoryActiveRef = useRef(false);
+  const fullscreenMobileIdleTimerRef = useRef(0);
+  const fullscreenGestureStartRef = useRef<{ x: number; y: number } | null>(null);
+  const storyMediaGestureStartRef = useRef<{ x: number; y: number } | null>(null);
+  const storyMediaGestureConsumedRef = useRef(false);
+  const [mobileMediaMenuOpen, setMobileMediaMenuOpen] = useState(false);
   // Review P2: the fullscreen overlay is a focus trap of its own (it is
   // rendered outside the story dialog, whose useModalFocus would otherwise
   // steal Tab focus back into the article).
@@ -498,9 +524,47 @@ export function JourneyStory({
   const uploading = uploadState.status === "uploading"
     || soundtrackUpload.status === "uploading";
 
+  function exitFullscreen(fromHistory = false) {
+    if (typeof window !== "undefined") {
+      window.clearTimeout(fullscreenMobileIdleTimerRef.current);
+      fullscreenMobileIdleTimerRef.current = 0;
+    }
+    if (
+      mobileLayout
+      && !fromHistory
+      && fullscreenHistoryActiveRef.current
+      && typeof window !== "undefined"
+      && window.history.state?.__startripsMediaFullscreen === true
+    ) {
+      // Keep the overlay mounted until popstate consumes the same-URL sentinel.
+      // Closing it immediately would tear down the listener before back() fires.
+      window.history.back();
+      return;
+    }
+    fullscreenHistoryActiveRef.current = false;
+    setFullscreen(false);
+    setFullscreenControlsHidden(false);
+  }
+
+  function enterFullscreen(autoPlay: boolean) {
+    setPlayingFromGesture(autoPlay);
+    setFullscreenControlsHidden(mobileLayout);
+    setMobileMediaMenuOpen(false);
+    setFullscreen(true);
+  }
+
   function requestClose() {
     if (fullscreen) {
-      setFullscreen(false);
+      exitFullscreen();
+      return;
+    }
+    if (mobileLayout && mobileMediaMenuOpen) {
+      setMobileMediaMenuOpen(false);
+      return;
+    }
+    if (mobileLayout && mediaDeleteState === "confirming") {
+      setMediaDeleteState("idle");
+      setMediaDeleteMessage("");
       return;
     }
     if (uploading) {
@@ -536,7 +600,8 @@ export function JourneyStory({
     setOrderPending(false);
     setOrderMessage("");
     setPlaying(false);
-    setFullscreen(false);
+    exitFullscreen();
+    setMobileMediaMenuOpen(false);
     setOverview(false);
     setSoundtrackUpload({ status: "idle" });
     setSoundtrackRemovePending(false);
@@ -685,6 +750,42 @@ export function JourneyStory({
 
   useEffect(() => () => audioRef.current?.pause(), []);
 
+  useEffect(() => {
+    if (mobileLayout) return;
+    setMobileMediaMenuOpen(false);
+  }, [mobileLayout]);
+
+  // Mobile fullscreen owns one same-URL history entry so the Android/browser
+  // back gesture exits immersive media before it can leave the Story.
+  useEffect(() => {
+    if (!fullscreen || !mobileLayout || typeof window === "undefined") return;
+    const previousState = window.history.state;
+    const baseState = previousState && typeof previousState === "object"
+      ? previousState
+      : {};
+    window.history.pushState({ ...baseState, __startripsMediaFullscreen: true }, "");
+    fullscreenHistoryActiveRef.current = true;
+    const onPopState = () => {
+      if (!fullscreenHistoryActiveRef.current) return;
+      fullscreenHistoryActiveRef.current = false;
+      exitFullscreen(true);
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => {
+      window.removeEventListener("popstate", onPopState);
+      // If fullscreen disappears because the Story unmounts or the responsive
+      // breakpoint changes, consume our own sentinel instead of leaving a
+      // ghost history entry behind for the user's next Back gesture.
+      if (
+        fullscreenHistoryActiveRef.current
+        && window.history.state?.__startripsMediaFullscreen === true
+      ) {
+        fullscreenHistoryActiveRef.current = false;
+        window.history.back();
+      }
+    };
+  }, [fullscreen, mobileLayout]);
+
   // #7 + review P2: fullscreen playback — Esc exits, arrows switch media,
   // Space toggles play/pause. Controls fade out after 2.5s of idle; any
   // pointer/key/touch activity shows them AND restarts the idle timer, so
@@ -703,7 +804,7 @@ export function JourneyStory({
     const onKeyDown = (event: KeyboardEvent) => {
       restartIdle();
       if (event.key === "Escape") {
-        setFullscreen(false);
+        exitFullscreen();
       } else if (event.key === "ArrowLeft") {
         navigateToMediaRef.current((assetIndex - 1 + scopedMedia.length) % scopedMedia.length);
       } else if (event.key === "ArrowRight") {
@@ -715,18 +816,24 @@ export function JourneyStory({
     };
     const onActivity = () => restartIdle();
     window.addEventListener("keydown", onKeyDown);
-    window.addEventListener("pointermove", onActivity);
-    window.addEventListener("pointerdown", onActivity);
-    window.addEventListener("touchstart", onActivity, { passive: true });
-    restartIdle();
+    if (!mobileLayout) {
+      window.addEventListener("pointermove", onActivity);
+      window.addEventListener("pointerdown", onActivity);
+      window.addEventListener("touchstart", onActivity, { passive: true });
+      restartIdle();
+    } else {
+      setFullscreenControlsHidden(true);
+    }
     return () => {
       window.removeEventListener("keydown", onKeyDown);
-      window.removeEventListener("pointermove", onActivity);
-      window.removeEventListener("pointerdown", onActivity);
-      window.removeEventListener("touchstart", onActivity);
+      if (!mobileLayout) {
+        window.removeEventListener("pointermove", onActivity);
+        window.removeEventListener("pointerdown", onActivity);
+        window.removeEventListener("touchstart", onActivity);
+      }
       window.clearTimeout(idleTimer);
     };
-  }, [fullscreen, assetIndex, scopedMedia.length]);
+  }, [fullscreen, assetIndex, scopedMedia.length, mobileLayout]);
 
   // Review P2: the fullscreen overlay is its own focus trap. The story
   // dialog's useModalFocus redirects Tab into the article; when fullscreen is
@@ -739,7 +846,7 @@ export function JourneyStory({
       ? document.activeElement
       : null;
     const focusable = () => [...root.querySelectorAll<HTMLElement>(
-      'button:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      'button:not([disabled]):not([tabindex="-1"]), [tabindex]:not([tabindex="-1"])',
     )].filter((element) => (
       element.getClientRects().length > 0
       && getComputedStyle(element).visibility !== "hidden"
@@ -747,26 +854,41 @@ export function JourneyStory({
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Tab") return;
       const candidates = focusable();
-      if (candidates.length === 0) return;
+      if (candidates.length === 0) {
+        event.preventDefault();
+        root.focus();
+        return;
+      }
       const first = candidates[0];
       const last = candidates[candidates.length - 1];
       const current = document.activeElement;
-      if (event.shiftKey && (current === first || !root.contains(current))) {
+      if (event.shiftKey && (current === root || current === first || !root.contains(current))) {
         event.preventDefault();
         last.focus();
-      } else if (!event.shiftKey && (current === last || !root.contains(current))) {
+      } else if (!event.shiftKey && (current === root || current === last || !root.contains(current))) {
         event.preventDefault();
         first.focus();
       }
     };
     const firstButton = focusable()[0];
-    firstButton?.focus();
+    if (firstButton) firstButton.focus();
+    else root.focus({ preventScroll: true });
     document.addEventListener("keydown", onKeyDown, true);
     return () => {
       document.removeEventListener("keydown", onKeyDown, true);
       if (previousFocus?.isConnected) previousFocus.focus();
     };
   }, [fullscreen]);
+
+  useEffect(() => {
+    if (!fullscreen || !mobileLayout || !fullscreenControlsHidden) return;
+    const root = fullscreenRef.current;
+    if (!root) return;
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && root.contains(active) && active !== root) {
+      root.focus({ preventScroll: true });
+    }
+  }, [fullscreen, fullscreenControlsHidden, mobileLayout]);
 
   useEffect(() => {
     setAssetIndex((current) => Math.min(
@@ -995,6 +1117,85 @@ export function JourneyStory({
     if (!copy || copy.scrollHeight <= copy.clientHeight) return;
     copy.scrollTop += event.deltaY;
     event.preventDefault();
+  }
+
+  function mediaGestureCanStart(target: EventTarget | null, clientY: number) {
+    if (!(target instanceof Element)) return false;
+    const video = target.closest("video");
+    if (video instanceof HTMLVideoElement) {
+      // Keep the native scrubber/control strip untouched while still allowing
+      // the upper video surface to participate in gesture-first navigation.
+      const rect = video.getBoundingClientRect();
+      const nativeControlGuard = Math.min(72, rect.height * 0.25);
+      if (clientY >= rect.bottom - nativeControlGuard) return false;
+    }
+    return !target.closest("button, input, select, textarea, [role='button']");
+  }
+
+  function handleStoryMediaPointerDown(event: ReactPointerEvent<HTMLElement>) {
+    storyMediaGestureConsumedRef.current = false;
+    storyMediaGestureStartRef.current = null;
+    if (!mobileLayout || overview || !event.isPrimary || !mediaGestureCanStart(event.target, event.clientY)) return;
+    storyMediaGestureStartRef.current = { x: event.clientX, y: event.clientY };
+  }
+
+  function handleStoryMediaPointerUp(event: ReactPointerEvent<HTMLElement>) {
+    const start = storyMediaGestureStartRef.current;
+    storyMediaGestureStartRef.current = null;
+    if (!mobileLayout || !start || !event.isPrimary || scopedMedia.length < 2) return;
+    const dx = event.clientX - start.x;
+    const dy = event.clientY - start.y;
+    if (Math.abs(dx) < 48 || Math.abs(dx) <= Math.abs(dy) * 1.15) return;
+    storyMediaGestureConsumedRef.current = true;
+    void navigateToMedia(dx < 0 ? assetIndex + 1 : assetIndex - 1);
+  }
+
+  function openImageFullscreenAfterTap() {
+    if (mobileLayout && storyMediaGestureConsumedRef.current) {
+      storyMediaGestureConsumedRef.current = false;
+      return;
+    }
+    enterFullscreen(false);
+  }
+
+  function revealMobileFullscreenControls() {
+    if (!mobileLayout || typeof window === "undefined") return;
+    window.clearTimeout(fullscreenMobileIdleTimerRef.current);
+    setFullscreenControlsHidden(false);
+    fullscreenMobileIdleTimerRef.current = window.setTimeout(
+      () => setFullscreenControlsHidden(true),
+      2500,
+    );
+  }
+
+  function handleFullscreenPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
+    fullscreenGestureStartRef.current = null;
+    if (!mobileLayout || !event.isPrimary || !mediaGestureCanStart(event.target, event.clientY)) return;
+    fullscreenGestureStartRef.current = { x: event.clientX, y: event.clientY };
+  }
+
+  function handleFullscreenPointerUp(event: ReactPointerEvent<HTMLDivElement>) {
+    if (!mobileLayout || !event.isPrimary) return;
+    const start = fullscreenGestureStartRef.current;
+    fullscreenGestureStartRef.current = null;
+    if (!start) {
+      revealMobileFullscreenControls();
+      return;
+    }
+    const dx = event.clientX - start.x;
+    const dy = event.clientY - start.y;
+    if (Math.abs(dx) >= 48 && Math.abs(dx) > Math.abs(dy) * 1.15 && scopedMedia.length > 1) {
+      const target = dx < 0
+        ? (assetIndex + 1) % scopedMedia.length
+        : (assetIndex - 1 + scopedMedia.length) % scopedMedia.length;
+      void navigateToMedia(target);
+      return;
+    }
+    if (dy >= 72 && Math.abs(dy) > Math.abs(dx) * 1.15) {
+      exitFullscreen();
+      return;
+    }
+    revealMobileFullscreenControls();
   }
 
   async function uploadFiles(files: readonly File[]) {
@@ -1485,9 +1686,15 @@ export function JourneyStory({
         ) : null}
 
         <div className="journey-story__layout">
-          <section className="journey-story__media" aria-label="旅程媒体">
+          <section
+            className="journey-story__media"
+            aria-label="旅程媒体"
+            data-mobile-layout={mobileLayout ? "true" : undefined}
+            onPointerDown={handleStoryMediaPointerDown}
+            onPointerUp={handleStoryMediaPointerUp}
+          >
             {!asset ? <div className="journey-story__empty-media"><IconPhoto size={36} stroke={1.05} style={{ color: journey.lightColor }} aria-hidden="true" />{selectedRoutePoint ? "这个途径点还没有媒体" : "整段旅程还没有媒体"}</div> : null}
-            {scopedMedia.length > 1 ? (
+            {scopedMedia.length > 1 && !mobileLayout ? (
               <button
                 type="button"
                 className={`journey-story__media-overview${overview ? " is-active" : ""}`}
@@ -1498,18 +1705,24 @@ export function JourneyStory({
                 {overview ? "返回单张" : "全部照片"}
               </button>
             ) : null}
-            {!overview && asset && read?.status === "ready" ? (
+            {!overview && asset && read?.status === "ready" && !mobileLayout ? (
               <button
                 type="button"
                 className="journey-story__fullscreen-entry"
                 aria-label="全屏播放"
                 title="全屏播放"
-                onClick={() => {
-                  setPlayingFromGesture(scopedMedia.length > 1);
-                  setFullscreen(true);
-                }}
+                onClick={() => enterFullscreen(scopedMedia.length > 1)}
               >
                 <IconMaximize size={16} stroke={1.35} aria-hidden="true" />
+              </button>
+            ) : null}
+            {overview && mobileLayout ? (
+              <button
+                type="button"
+                className="journey-story__mobile-sort-done"
+                onClick={() => setOverview(false)}
+              >
+                完成
               </button>
             ) : null}
             {overview ? (
@@ -1534,7 +1747,7 @@ export function JourneyStory({
                         disabled={mutationPending}
                         onRequestRead={loadMediaRead}
                         onSelect={selectMediaIndex}
-                        onSetCover={handleSetCover}
+                        onSetCover={mobileLayout ? undefined : handleSetCover}
                       />
                     ))}
                   </ul>
@@ -1564,10 +1777,7 @@ export function JourneyStory({
                 alt={shownAsset.fileName}
                 data-shared-media-id={shownAsset.id}
                 data-shared-journey-cover={cover?.id === shownAsset.id ? "true" : undefined}
-                onClick={() => {
-                  setPlayingFromGesture(false);
-                  setFullscreen(true);
-                }}
+                onClick={openImageFullscreenAfterTap}
               />
             ) : null}
             {!overview && incoming && incomingRead?.status === "ready" && !incoming.mimeType.startsWith("video/") ? (
@@ -1583,10 +1793,7 @@ export function JourneyStory({
                     settleIncoming(incoming.id);
                   }
                 }}
-                onClick={() => {
-                  setPlayingFromGesture(false);
-                  setFullscreen(true);
-                }}
+                onClick={openImageFullscreenAfterTap}
               />
             ) : null}
             {!overview && incoming && incomingRead?.status === "ready" && incoming.mimeType.startsWith("video/") ? (
@@ -1604,7 +1811,7 @@ export function JourneyStory({
                 }}
               />
             ) : null}
-            {!overview && (scopedMedia.length > 1 || visualMedia.length > 1) ? (
+            {!mobileLayout && !overview && (scopedMedia.length > 1 || visualMedia.length > 1) ? (
               <div className="journey-story__media-controls">
                 <nav className="journey-story__media-nav" aria-label="媒体导航">
                 <button
@@ -1633,7 +1840,106 @@ export function JourneyStory({
               </div>
             ) : null}
             {orderMessage ? <p className="journey-story__order-message" role="status">{orderMessage}</p> : null}
-            {!overview && asset ? (
+            {mobileLayout && !overview && asset ? (
+              <div className="journey-story__mobile-media-actions">
+                {mediaDeleteState === "idle" ? (
+                  <IconActionButton
+                    type="button"
+                    className="journey-story__mobile-media-menu-trigger"
+                    label="管理当前媒体"
+                    tooltip="管理媒体"
+                    aria-expanded={mobileMediaMenuOpen}
+                    disabled={mutationPending}
+                    onClick={() => setMobileMediaMenuOpen((open) => !open)}
+                  >
+                    <IconDots size={19} stroke={1.5} aria-hidden="true" />
+                  </IconActionButton>
+                ) : null}
+                {mobileMediaMenuOpen && mediaDeleteState === "idle" ? (
+                  <>
+                    <button
+                      type="button"
+                      className="journey-story__mobile-media-sheet-backdrop"
+                      aria-label="关闭媒体管理"
+                      onClick={() => setMobileMediaMenuOpen(false)}
+                    />
+                    <section className="journey-story__mobile-media-sheet" role="dialog" aria-modal="true" aria-label="媒体管理">
+                      <div>
+                        <small>当前媒体</small>
+                        <strong>{asset.fileName}</strong>
+                      </div>
+                      {cover?.id !== asset.id ? (
+                        <button
+                          type="button"
+                          disabled={mutationPending || coverPending}
+                          onClick={() => {
+                            setMobileMediaMenuOpen(false);
+                            void handleSetCover(asset.id);
+                          }}
+                        >
+                          <IconPhotoStar size={18} stroke={1.35} aria-hidden="true" />
+                          设为旅程封面
+                        </button>
+                      ) : <p className="journey-story__mobile-media-sheet-current">当前旅程封面</p>}
+                      {scopedMedia.length > 1 ? (
+                        <button
+                          type="button"
+                          disabled={mutationPending}
+                          onClick={() => {
+                            setPlaying(false);
+                            setMobileMediaMenuOpen(false);
+                            setOverview(true);
+                          }}
+                        >
+                          <IconLayoutGrid size={18} stroke={1.35} aria-hidden="true" />
+                          整理媒体
+                        </button>
+                      ) : null}
+                      <button type="button" disabled={mutationPending} onClick={() => enterFullscreen(scopedMedia.length > 1)}>
+                        <IconPlayerPlay size={18} stroke={1.35} aria-hidden="true" />
+                        {scopedMedia.length > 1 ? "沉浸播放" : "沉浸查看"}
+                      </button>
+                      <button
+                        type="button"
+                        className="is-destructive"
+                        disabled={mutationPending}
+                        onClick={() => {
+                          setMobileMediaMenuOpen(false);
+                          setMediaDeleteState("confirming");
+                        }}
+                      >
+                        <IconTrash size={18} stroke={1.35} aria-hidden="true" />
+                        删除媒体
+                      </button>
+                    </section>
+                  </>
+                ) : null}
+                {mediaDeleteState !== "idle" ? (
+                  <>
+                    <button
+                      type="button"
+                      className="journey-story__mobile-media-sheet-backdrop"
+                      aria-label="取消删除媒体"
+                      disabled={mediaDeleteState === "pending"}
+                      onClick={() => { setMediaDeleteState("idle"); setMediaDeleteMessage(""); }}
+                    />
+                    <section className="journey-story__mobile-media-sheet is-confirming" role="alertdialog" aria-modal="true" aria-label="确认删除媒体">
+                      <div>
+                        <small>删除媒体</small>
+                        <strong>确定删除这段媒体？</strong>
+                      </div>
+                      <p>这个操作需要再次确认，不会由滑动手势直接触发。</p>
+                      <div className="journey-story__mobile-media-confirm-actions">
+                        <button ref={mediaDeleteCancelRef} type="button" disabled={mediaDeleteState === "pending"} onClick={() => { setMediaDeleteState("idle"); setMediaDeleteMessage(""); }}>取消</button>
+                        <button className="is-destructive" type="button" disabled={mediaDeleteState === "pending"} onClick={() => void confirmMediaDelete()}>{mediaDeleteState === "pending" ? "正在删除…" : "确认删除"}</button>
+                      </div>
+                      {mediaDeleteMessage ? <p className="journey-story__media-remove__error" role="alert">{mediaDeleteMessage}</p> : null}
+                    </section>
+                  </>
+                ) : null}
+              </div>
+            ) : null}
+            {!mobileLayout && !overview && asset ? (
               <div className="journey-story__media-actions">
                 {mediaDeleteState === "idle" ? (
                   cover?.id !== asset.id ? (
@@ -1877,14 +2183,18 @@ export function JourneyStory({
           ref={fullscreenRef}
           className={`journey-story-fullscreen${fullscreenControlsHidden ? " is-controls-hidden" : ""}${playing ? " is-playing" : ""}`}
           role="dialog"
+          tabIndex={-1}
           aria-modal="true"
           data-focus-trap-exempt="true"
-          aria-label="全屏播放媒体"
+          data-mobile-layout={mobileLayout ? "true" : undefined}
+          aria-label="沉浸播放媒体"
+          onPointerDown={handleFullscreenPointerDown}
+          onPointerUp={handleFullscreenPointerUp}
           onClick={(event) => {
-            if (event.target === event.currentTarget) setFullscreen(false);
+            if (!mobileLayout && event.target === event.currentTarget) exitFullscreen();
           }}
         >
-          <button className="journey-story-fullscreen__close" type="button" onClick={() => setFullscreen(false)} aria-label="退出全屏"><IconX size={22} stroke={1.35} aria-hidden="true" /></button>
+          <button className="journey-story-fullscreen__close" type="button" onClick={() => exitFullscreen()} aria-label="退出沉浸媒体"><IconX size={22} stroke={1.35} aria-hidden="true" /></button>
           {/* #11 two-layer stage also serves fullscreen: the incoming frame
               crossfades over the settled base frame without flashing. */}
           {shownAsset && shownRead?.status === "ready" && shownAsset.mimeType.startsWith("video/")
