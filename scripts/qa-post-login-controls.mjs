@@ -2078,6 +2078,7 @@ async function verifyTransientJourneyFocus() {
           targetY: Number(scene?.getAttribute("data-focus-target-y")),
           positionX: debug?.positionX ?? 0,
           positionY: debug?.positionY ?? 0,
+          rotationX: debug?.rotationX ?? 0,
           rotationY: debug?.rotationY ?? 0,
         };
       });
@@ -2094,10 +2095,78 @@ async function verifyTransientJourneyFocus() {
       }
       let release = null;
       if (animated) {
+        // The arrival should stay still during the intentional inactivity hold.
+        await page.waitForTimeout(5_000);
+        const held = await page.evaluate(() => {
+          const debug = window.__particleEarthDebug?.();
+          return {
+            rotationX: debug?.rotationX ?? 0,
+            rotationY: debug?.rotationY ?? 0,
+            positionX: debug?.positionX ?? 0,
+            positionY: debug?.positionY ?? 0,
+          };
+        });
+        const holdRotationDelta = Math.hypot(
+          held.rotationX - arrived.rotationX,
+          held.rotationY - arrived.rotationY,
+        );
+        const holdPositionDelta = Math.hypot(
+          held.positionX - arrived.positionX,
+          held.positionY - arrived.positionY,
+        );
+        if (holdRotationDelta > 0.01 || holdPositionDelta > 0.002) {
+          throw new Error(`Transient focus hold failed: ${JSON.stringify({ held, arrived, holdPositionDelta, holdRotationDelta })}`);
+        }
+
+        // After 20s of inactivity, upright recovery begins at a constant 15°/s.
+        await page.waitForFunction((startRotationX) => {
+          const debug = window.__particleEarthDebug?.();
+          return Boolean(debug && Math.abs(debug.rotationX - startRotationX) > 0.03);
+        }, held.rotationX, { timeout: 20_000 });
+        const alignStart = await page.evaluate(() => {
+          const debug = window.__particleEarthDebug?.();
+          return {
+            at: performance.now(),
+            rotationX: debug?.rotationX ?? 0,
+            rotationY: debug?.rotationY ?? 0,
+            positionX: debug?.positionX ?? 0,
+            positionY: debug?.positionY ?? 0,
+          };
+        });
+        await page.waitForTimeout(1_000);
+        const alignAfterOneSecond = await page.evaluate(() => {
+          const debug = window.__particleEarthDebug?.();
+          return {
+            at: performance.now(),
+            rotationX: debug?.rotationX ?? 0,
+            rotationY: debug?.rotationY ?? 0,
+          };
+        });
+        const alignSeconds = Math.max(0.001, (alignAfterOneSecond.at - alignStart.at) / 1_000);
+        const alignRateDegrees = Math.abs(
+          (alignAfterOneSecond.rotationX - alignStart.rotationX) * 180 / Math.PI / alignSeconds,
+        );
+        if (alignRateDegrees < 12 || alignRateDegrees > 18) {
+          throw new Error(`Transient focus alignment speed failed: ${JSON.stringify({ alignRateDegrees, alignStart, alignAfterOneSecond })}`);
+        }
+
+        // Longitude auto-rotation must wait for upright alignment, then resume.
+        await page.waitForFunction(() => {
+          const debug = window.__particleEarthDebug?.();
+          return Boolean(debug && Math.abs(debug.rotationX) < 0.002);
+        }, null, { timeout: 8_000 });
+        const upright = await page.evaluate(() => {
+          const debug = window.__particleEarthDebug?.();
+          return {
+            rotationY: debug?.rotationY ?? 0,
+            positionX: debug?.positionX ?? 0,
+            positionY: debug?.positionY ?? 0,
+          };
+        });
         await page.waitForFunction((startRotationY) => {
           const debug = window.__particleEarthDebug?.();
-          return Boolean(debug && Math.abs(debug.rotationY - startRotationY) > 0.025);
-        }, arrived.rotationY, { timeout: 8_000 });
+          return Boolean(debug && Math.abs(debug.rotationY - startRotationY) > 0.02);
+        }, upright.rotationY, { timeout: 4_000 });
         release = await page.evaluate(() => {
           const scene = document.querySelector(".particle-earth-scene");
           const debug = window.__particleEarthDebug?.();
@@ -2120,9 +2189,9 @@ async function verifyTransientJourneyFocus() {
         if (
           releaseDrift < 5
           || releasePositionDelta > 0.002
-          || Math.abs(release.rotationY - arrived.rotationY) <= 0.025
+          || Math.abs(release.rotationY - upright.rotationY) <= 0.02
         ) {
-          throw new Error(`Transient focus release failed: ${JSON.stringify({ releaseDrift, releasePositionDelta, arrived, release })}`);
+          throw new Error(`Transient focus release failed: ${JSON.stringify({ releaseDrift, releasePositionDelta, arrived, upright, release })}`);
         }
       }
       results.push({
