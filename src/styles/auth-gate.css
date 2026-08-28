@@ -978,7 +978,7 @@ body:has(.living-atlas) .account-dock button {
   color: #c8ff3d;
 }
 
-@media (max-width: 760px) {
+@media (max-width: 760px), (max-width: 960px) and (max-height: 480px) and (any-pointer: coarse) {
   body:has(.living-atlas) .account-dock {
     top: 66px;
     right: 10px;

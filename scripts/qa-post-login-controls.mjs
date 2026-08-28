@@ -151,6 +151,7 @@ async function verifyAtlasShell() {
       ["landscape-780", 780, 360, true],
       ["landscape-844", 844, 390, true],
       ["landscape-932", 932, 430, true],
+      ["wide-short-touch", 1200, 450, false],
       ["tablet", 768, 1024, false],
     ]) {
       await page.setViewportSize({ width, height });
@@ -181,6 +182,21 @@ async function verifyAtlasShell() {
             || mobileShell.mobileTimeline !== 1
             || mobileShell.chromeHeight === null
             || mobileShell.chromeHeight > 125,
+        });
+        continue;
+      }
+
+      if (label === "wide-short-touch") {
+        const wideShortShell = await page.evaluate(() => ({
+          mobileV2: document.querySelector(".living-atlas")?.getAttribute("data-mobile-v2"),
+          desktopHeader: document.querySelectorAll(".living-atlas__header").length,
+          mobileChip: document.querySelectorAll(".mobile-v2__journey-chip").length,
+        }));
+        record(`atlas-${label}-desktop-mode`, await scanButtons(page, ".living-atlas"), {
+          ...wideShortShell,
+          failed: wideShortShell.mobileV2 === "on"
+            || wideShortShell.desktopHeader !== 1
+            || wideShortShell.mobileChip !== 0,
         });
         continue;
       }
