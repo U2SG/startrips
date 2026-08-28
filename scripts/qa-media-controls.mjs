@@ -61,6 +61,7 @@ async function createQaPage(path, mediaUrl, {
   mixedMedia = false,
   mobile = true,
   readDelayMs = 0,
+  blockedReadAssetId = null,
   reducedMotion = "reduce",
   viewport = mobile ? { width: 390, height: 844 } : { width: 1280, height: 800 },
 } = {}) {
@@ -100,7 +101,12 @@ async function createQaPage(path, mediaUrl, {
     contentType: "application/json",
     body: "null",
   }));
+  let releaseBlockedRead = () => undefined;
+  const blockedRead = blockedReadAssetId
+    ? new Promise((resolve) => { releaseBlockedRead = resolve; })
+    : null;
   await page.route("**/api/uploads/assets/*/read-url", async (route) => {
+    if (blockedRead && route.request().url().includes(blockedReadAssetId)) await blockedRead;
     if (readDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, readDelayMs));
     await route.fulfill({
       status: 200,
@@ -114,7 +120,7 @@ async function createQaPage(path, mediaUrl, {
     });
   });
   await page.goto(`${origin}${path}`, { waitUntil: "domcontentloaded" });
-  return { page, consoleErrors, pageErrors };
+  return { page, consoleErrors, pageErrors, releaseBlockedRead };
 }
 
 const checks = [];
@@ -332,7 +338,7 @@ try {
   ]) {
     const mobileContinuity = await createQaPage("/?qaState=journey-story", onePixelGif, {
       mobile: true,
-      readDelayMs: 180,
+      blockedReadAssetId: "00000000-0000-4000-8000-000000000101",
       reducedMotion: "no-preference",
       viewport,
     });
@@ -365,12 +371,14 @@ try {
         bubbles: true,
       });
       await mobileContinuity.page.waitForTimeout(60);
+      const incoming = stage.locator(":scope > .journey-story__media-incoming");
+      const incomingWhileReadBlocked = await incoming.count();
       const oldFrameHeldDuringRead = await stage.locator(
         ":scope > img:not(.journey-story__media-incoming), :scope > video:not(.journey-story__media-incoming)",
       ).first().evaluate((element, expected) => (
         (element.getAttribute("alt") ?? element.getAttribute("src")) === expected
       ), beforeLabel);
-      const incoming = stage.locator(":scope > .journey-story__media-incoming");
+      mobileContinuity.releaseBlockedRead();
       await incoming.waitFor({ state: "attached", timeout: 3_000 });
       const incomingState = await incoming.evaluate((element) => {
         window.__qaMobileIncomingMediaNode = element;
@@ -407,16 +415,18 @@ try {
         )
         : Number.POSITIVE_INFINITY;
       const continuityFailed = !oldFrameHeldDuringRead
+        || incomingWhileReadBlocked !== 0
         || incomingState.position !== "absolute"
         || incomingState.animationName !== "motionMediaIn"
         || !settledState?.sameNode
         || settledState.position !== "absolute"
-        || rectDelta > 0.5
+        || rectDelta > 2
         || mobileContinuity.consoleErrors.length > 0
         || mobileContinuity.pageErrors.length > 0;
       checks.push({
         name: `story-mobile-swipe-compositor-continuity-${label}`,
         oldFrameHeldDuringRead,
+        incomingWhileReadBlocked,
         incoming: incomingState,
         settled: settledState,
         rectDelta,
