@@ -56,13 +56,18 @@ async function scanButtons(page, rootSelector) {
   }, rootSelector);
 }
 
-async function createQaPage(path, mediaUrl, { instrumentMedia = false, mobile = true, viewport = mobile ? { width: 390, height: 844 } : { width: 1280, height: 800 } } = {}) {
+async function createQaPage(path, mediaUrl, {
+  instrumentMedia = false,
+  mobile = true,
+  reducedMotion = "reduce",
+  viewport = mobile ? { width: 390, height: 844 } : { width: 1280, height: 800 },
+} = {}) {
   const page = await browser.newPage({
     viewport,
     isMobile: mobile,
     hasTouch: mobile,
     deviceScaleFactor: 1,
-    reducedMotion: "reduce",
+    reducedMotion,
   });
   const consoleErrors = [];
   const pageErrors = [];
@@ -188,6 +193,58 @@ try {
     }
   } finally {
     await story.page.close();
+  }
+
+  const mediaContinuity = await createQaPage("/?qaState=journey-story", onePixelGif, {
+    mobile: false,
+    reducedMotion: "no-preference",
+  });
+  try {
+    await mediaContinuity.page.locator(".journey-story").waitFor({ state: "visible" });
+    await mediaContinuity.page.getByRole("button", { name: "下一个媒体" }).click();
+    const incoming = mediaContinuity.page.locator(
+      ".journey-story__media > .journey-story__media-incoming",
+    );
+    await incoming.waitFor({ state: "attached", timeout: 3_000 });
+    const incomingState = await incoming.evaluate((element) => {
+      window.__qaIncomingMediaNode = element;
+      const style = getComputedStyle(element);
+      return {
+        tagName: element.tagName,
+        animationName: style.animationName,
+        opacity: Number(style.opacity),
+      };
+    });
+    await mediaContinuity.page.waitForFunction(() => (
+      !document.querySelector(".journey-story__media > .journey-story__media-incoming")
+    ), null, { timeout: 3_000 });
+    const settledState = await mediaContinuity.page.evaluate(() => {
+      const settled = document.querySelector(
+        ".journey-story__media > img, .journey-story__media > video",
+      );
+      return {
+        sameNode: Boolean(settled && window.__qaIncomingMediaNode === settled),
+        opacity: settled ? Number(getComputedStyle(settled).opacity) : 0,
+        complete: settled instanceof HTMLImageElement ? settled.complete : true,
+      };
+    });
+    const continuityFailed = incomingState.animationName !== "motionMediaIn"
+      || !settledState.sameNode
+      || settledState.opacity < 0.99
+      || !settledState.complete
+      || mediaContinuity.consoleErrors.length > 0
+      || mediaContinuity.pageErrors.length > 0;
+    checks.push({
+      name: "story-media-switch-dom-continuity",
+      incoming: incomingState,
+      settled: settledState,
+      consoleErrors: mediaContinuity.consoleErrors,
+      pageErrors: mediaContinuity.pageErrors,
+      failed: continuityFailed,
+    });
+    if (continuityFailed) failed = true;
+  } finally {
+    await mediaContinuity.page.close();
   }
 
   const storyDesktop = await createQaPage("/?qaState=journey-story", onePixelGif, { mobile: false });
