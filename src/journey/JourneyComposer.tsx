@@ -12,6 +12,7 @@ import {
   IconArrowUp,
   IconCheck,
   IconChevronDown,
+  IconDots,
   IconMapPin,
   IconPlus,
   IconSearch,
@@ -58,7 +59,7 @@ import {
   LIGHT_EFFECTS,
   type LightEffectId,
 } from "./lightEffects";
-import { useModalFocus } from "./useModalFocus";
+import { useModalFocus, useNestedModalFocus } from "./useModalFocus";
 
 type UploadProgress = {
   fileName: string;
@@ -283,6 +284,23 @@ function formatBytes(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+const MOBILE_COMPOSER_QUERY = "(max-width: 760px)";
+
+function useMobileComposerLayout() {
+  const [mobile, setMobile] = useState(() => (
+    globalThis.matchMedia?.(MOBILE_COMPOSER_QUERY).matches ?? false
+  ));
+  useEffect(() => {
+    const media = globalThis.matchMedia?.(MOBILE_COMPOSER_QUERY);
+    if (!media) return;
+    const update = () => setMobile(media.matches);
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+  return mobile;
+}
+
 export function parseCoordinateInput(
   value: string,
   minimum: number,
@@ -332,6 +350,10 @@ export function JourneyComposer({
   const [lightColor, setLightColor] = useState(journey?.lightColor ?? LIGHT_COLORS[0]);
   const [lightEffect, setLightEffect] = useState<LightEffectId | null>(journey?.lightEffect ?? null);
   const [mediaFiles, setMediaFiles] = useState<PendingJourneyMedia[]>([]);
+  const mobileLayout = useMobileComposerLayout();
+  const [mobileMediaMenuIndex, setMobileMediaMenuIndex] = useState<number | null>(null);
+  const [mobileMediaAssignmentIndex, setMobileMediaAssignmentIndex] = useState<number | null>(null);
+  const [mobileMediaDeleteIndex, setMobileMediaDeleteIndex] = useState<number | null>(null);
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
   const [progress, setProgress] = useState<UploadProgress | null>(null);
@@ -359,8 +381,41 @@ export function JourneyComposer({
   const routePointsRef = useRef(routePoints);
   routePointsRef.current = routePoints;
   const dialogRef = useModalFocus<HTMLElement>(() => {
+    if (mobileMediaDeleteIndex !== null) {
+      setMobileMediaDeleteIndex(null);
+      return;
+    }
+    if (mobileMediaAssignmentIndex !== null) {
+      setMobileMediaAssignmentIndex(null);
+      return;
+    }
+    if (mobileMediaMenuIndex !== null) {
+      setMobileMediaMenuIndex(null);
+      return;
+    }
     if (!saving) closeComposer();
   }, true, globePicking);
+  const mobileMediaSheetRef = useNestedModalFocus<HTMLElement>(
+    mobileLayout && (
+      mobileMediaMenuIndex !== null
+      || mobileMediaAssignmentIndex !== null
+      || mobileMediaDeleteIndex !== null
+    ),
+    mobileMediaMenuIndex !== null
+      ? `manage:${mobileMediaMenuIndex}`
+      : mobileMediaAssignmentIndex !== null
+        ? `assignment:${mobileMediaAssignmentIndex}`
+        : mobileMediaDeleteIndex !== null
+          ? `delete:${mobileMediaDeleteIndex}`
+          : null,
+  );
+
+  useEffect(() => {
+    if (mobileLayout) return;
+    setMobileMediaMenuIndex(null);
+    setMobileMediaAssignmentIndex(null);
+    setMobileMediaDeleteIndex(null);
+  }, [mobileLayout]);
 
   const input = useMemo<JourneyInput>(() => ({
     title: title.trim(),
@@ -615,6 +670,41 @@ export function JourneyComposer({
     event.currentTarget.value = "";
   }
 
+  function mediaAssignmentLabel(media: PendingJourneyMedia) {
+    if (!media.routePointDraftId) return "整段旅程";
+    const pointIndex = routePoints.findIndex((point) => point.draftId === media.routePointDraftId);
+    const point = routePoints[pointIndex];
+    return point
+      ? `${String(pointIndex + 1).padStart(2, "0")} · ${point.label || `途径点 ${pointIndex + 1}`}`
+      : "整段旅程";
+  }
+
+  function assignPendingMedia(index: number, routePointDraftId: string | null) {
+    setMediaFiles((current) => current.map((candidate, candidateIndex) => (
+      candidateIndex === index ? { ...candidate, routePointDraftId } : candidate
+    )));
+    setMobileMediaAssignmentIndex(null);
+    setMobileMediaMenuIndex(null);
+  }
+
+  function movePendingMedia(index: number, direction: -1 | 1) {
+    setMediaFiles((current) => {
+      const target = index + direction;
+      if (target < 0 || target >= current.length) return current;
+      const next = [...current];
+      [next[index], next[target]] = [next[target], next[index]];
+      return next;
+    });
+    setMobileMediaMenuIndex(null);
+  }
+
+  function removePendingMedia(index: number) {
+    setMediaFiles((current) => current.filter((_, candidate) => candidate !== index));
+    setMobileMediaDeleteIndex(null);
+    setMobileMediaMenuIndex(null);
+    setMobileMediaAssignmentIndex(null);
+  }
+
   function removeDraftPoint(draftPointId: string) {
     const resetsMediaScope = mediaFiles.some(
       (media) => media.routePointDraftId === draftPointId,
@@ -713,6 +803,9 @@ export function JourneyComposer({
     : 0;
   const isEditing = Boolean(journey);
   const editorLocked = saving || savedResult !== null;
+  const mobileMenuMedia = mobileMediaMenuIndex === null ? null : mediaFiles[mobileMediaMenuIndex] ?? null;
+  const mobileAssignmentMedia = mobileMediaAssignmentIndex === null ? null : mediaFiles[mobileMediaAssignmentIndex] ?? null;
+  const mobileDeleteMedia = mobileMediaDeleteIndex === null ? null : mediaFiles[mobileMediaDeleteIndex] ?? null;
 
   return (
     <div className={`journey-composer-backdrop${globePicking ? " is-globe-picking" : ""}`} role="presentation">
@@ -760,73 +853,192 @@ export function JourneyComposer({
                   <strong>{existingVisualMediaCount ? `${existingVisualMediaCount} 个已有媒体 · 可继续添加` : "支持照片与视频，可持续添加"}</strong>
                   <input type="file" accept="image/avif,image/jpeg,image/png,image/webp,video/mp4,video/quicktime,video/webm" multiple onChange={selectFiles} />
                 </label>
-                <ul>
-                  {mediaFiles.map((media, index) => (
-                    <li key={`${media.file.name}-${media.file.lastModified}-${index}`}>
-                      <span>{media.file.name}<small>{formatBytes(media.file.size)}</small></span>
-                      <select
-                        aria-label={`${media.file.name} 的媒体归属`}
-                        value={media.routePointDraftId ?? ""}
-                        onChange={(event) => setMediaFiles((current) => current.map((candidate, candidateIndex) => (
-                          candidateIndex === index
-                            ? { ...candidate, routePointDraftId: event.target.value || null }
-                            : candidate
-                        )))}
-                      >
-                        <option value="">整段旅程</option>
-                        {routePoints.map((point, pointIndex) => (
-                          <option key={point.draftId} value={point.draftId}>
-                            {String(pointIndex + 1).padStart(2, "0")} · {point.label || `途径点 ${pointIndex + 1}`}
-                          </option>
-                        ))}
-                      </select>
-                      <div className="journey-media-fields__actions">
+                {!mobileLayout ? (
+                  <ul>
+                    {mediaFiles.map((media, index) => (
+                      <li key={`${media.file.name}-${media.file.lastModified}-${index}`}>
+                        <span>{media.file.name}<small>{formatBytes(media.file.size)}</small></span>
+                        <select
+                          aria-label={`${media.file.name} 的媒体归属`}
+                          value={media.routePointDraftId ?? ""}
+                          onChange={(event) => assignPendingMedia(index, event.target.value || null)}
+                        >
+                          <option value="">整段旅程</option>
+                          {routePoints.map((point, pointIndex) => (
+                            <option key={point.draftId} value={point.draftId}>
+                              {String(pointIndex + 1).padStart(2, "0")} · {point.label || `途径点 ${pointIndex + 1}`}
+                            </option>
+                          ))}
+                        </select>
+                        <div className="journey-media-fields__actions">
+                          <IconActionButton
+                            type="button"
+                            label={`移除媒体 ${media.file.name}`}
+                            tooltip="移除媒体"
+                            className="is-destructive-secondary"
+                            onClick={() => removePendingMedia(index)}
+                          >
+                            <IconTrash size={16} stroke={1.4} aria-hidden="true" />
+                          </IconActionButton>
+                          {isEditing ? (
+                            <>
+                              <IconActionButton
+                                type="button"
+                                label={`向前调整 ${media.file.name} 的排序`}
+                                tooltip="上移媒体"
+                                disabled={index === 0}
+                                onClick={() => movePendingMedia(index, -1)}
+                              >
+                                <IconArrowUp size={16} stroke={1.4} aria-hidden="true" />
+                              </IconActionButton>
+                              <IconActionButton
+                                type="button"
+                                label={`向后调整 ${media.file.name} 的排序`}
+                                tooltip="下移媒体"
+                                disabled={index === mediaFiles.length - 1}
+                                onClick={() => movePendingMedia(index, 1)}
+                              >
+                                <IconArrowDown size={16} stroke={1.4} aria-hidden="true" />
+                              </IconActionButton>
+                            </>
+                          ) : null}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <ul className="journey-media-fields__mobile-list">
+                    {mediaFiles.map((media, index) => (
+                      <li className="journey-media-mobile-card" key={`${media.file.name}-${media.file.lastModified}-${index}`}>
+                        <span className="journey-media-mobile-card__file">
+                          {media.file.name}
+                          <small>{formatBytes(media.file.size)}</small>
+                        </span>
+                        <button
+                          type="button"
+                          className="journey-media-mobile-card__assignment"
+                          aria-label={`${media.file.name} 的媒体归属：${mediaAssignmentLabel(media)}`}
+                          onClick={() => {
+                            setMobileMediaMenuIndex(null);
+                            setMobileMediaAssignmentIndex(index);
+                          }}
+                        >
+                          <IconMapPin size={14} stroke={1.35} aria-hidden="true" />
+                          <span>{mediaAssignmentLabel(media)}</span>
+                        </button>
                         <IconActionButton
                           type="button"
-                          label={`移除媒体 ${media.file.name}`}
-                          tooltip="移除媒体"
-                          className="is-destructive-secondary"
-                          onClick={() => setMediaFiles((current) => current.filter((_, candidate) => candidate !== index))}
+                          className="journey-media-mobile-card__menu"
+                          label={`管理媒体 ${media.file.name}`}
+                          tooltip="管理媒体"
+                          aria-expanded={mobileMediaMenuIndex === index}
+                          onClick={() => {
+                            setMobileMediaAssignmentIndex(null);
+                            setMobileMediaDeleteIndex(null);
+                            setMobileMediaMenuIndex((current) => current === index ? null : index);
+                          }}
                         >
-                          <IconTrash size={16} stroke={1.4} aria-hidden="true" />
+                          <IconDots size={19} stroke={1.45} aria-hidden="true" />
                         </IconActionButton>
-                        {isEditing ? (
-                          <>
-                            <IconActionButton
-                              type="button"
-                              label={`向前调整 ${media.file.name} 的排序`}
-                              tooltip="上移媒体"
-                              disabled={index === 0}
-                              onClick={() => setMediaFiles((current) => {
-                                if (index === 0) return current;
-                                const next = [...current];
-                                [next[index - 1], next[index]] = [next[index], next[index - 1]];
-                                return next;
-                              })}
-                            >
-                              <IconArrowUp size={16} stroke={1.4} aria-hidden="true" />
-                            </IconActionButton>
-                            <IconActionButton
-                              type="button"
-                              label={`向后调整 ${media.file.name} 的排序`}
-                              tooltip="下移媒体"
-                              disabled={index === mediaFiles.length - 1}
-                              onClick={() => setMediaFiles((current) => {
-                                if (index === current.length - 1) return current;
-                                const next = [...current];
-                                [next[index], next[index + 1]] = [next[index + 1], next[index]];
-                                return next;
-                              })}
-                            >
-                              <IconArrowDown size={16} stroke={1.4} aria-hidden="true" />
-                            </IconActionButton>
-                          </>
-                        ) : null}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {mobileLayout && mobileMenuMedia && mobileMediaMenuIndex !== null ? (
+                  <div className="journey-media-mobile-sheet-layer">
+                    <button type="button" className="journey-media-mobile-sheet__backdrop" aria-label="关闭媒体管理" onClick={() => setMobileMediaMenuIndex(null)} />
+                    <section ref={mobileMediaSheetRef} tabIndex={-1} data-focus-trap-exempt="true" className="journey-media-mobile-sheet" role="dialog" aria-modal="true" aria-label={`管理媒体 ${mobileMenuMedia.file.name}`}>
+                      <div className="journey-media-mobile-sheet__heading">
+                        <small>媒体管理</small>
+                        <strong>{mobileMenuMedia.file.name}</strong>
                       </div>
-                    </li>
-                  ))}
-                </ul>
-                {mediaFiles.length > 0 ? <p>每个文件都可以归到整段旅程，或一个具体途径点。</p> : null}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMobileMediaAssignmentIndex(mobileMediaMenuIndex);
+                          setMobileMediaMenuIndex(null);
+                        }}
+                      >
+                        <IconMapPin size={18} stroke={1.35} aria-hidden="true" />
+                        调整归属
+                      </button>
+                      {isEditing && mediaFiles.length > 1 ? (
+                        <div className="journey-media-mobile-sheet__order" role="group" aria-label="调整待上传媒体顺序">
+                          <button type="button" disabled={mobileMediaMenuIndex === 0} onClick={() => movePendingMedia(mobileMediaMenuIndex, -1)}>
+                            <IconArrowUp size={18} stroke={1.35} aria-hidden="true" />
+                            前移一位
+                          </button>
+                          <button type="button" disabled={mobileMediaMenuIndex === mediaFiles.length - 1} onClick={() => movePendingMedia(mobileMediaMenuIndex, 1)}>
+                            <IconArrowDown size={18} stroke={1.35} aria-hidden="true" />
+                            后移一位
+                          </button>
+                        </div>
+                      ) : null}
+                      <button
+                        type="button"
+                        className="is-destructive"
+                        onClick={() => {
+                          setMobileMediaDeleteIndex(mobileMediaMenuIndex);
+                          setMobileMediaMenuIndex(null);
+                        }}
+                      >
+                        <IconTrash size={18} stroke={1.35} aria-hidden="true" />
+                        移除媒体
+                      </button>
+                    </section>
+                  </div>
+                ) : null}
+                {mobileLayout && mobileAssignmentMedia && mobileMediaAssignmentIndex !== null ? (
+                  <div className="journey-media-mobile-sheet-layer">
+                    <button type="button" className="journey-media-mobile-sheet__backdrop" aria-label="关闭媒体归属选择" onClick={() => setMobileMediaAssignmentIndex(null)} />
+                    <section ref={mobileMediaSheetRef} tabIndex={-1} data-focus-trap-exempt="true" className="journey-media-mobile-sheet is-assignment" role="dialog" aria-modal="true" aria-label={`${mobileAssignmentMedia.file.name} 的媒体归属`}>
+                      <div className="journey-media-mobile-sheet__heading">
+                        <small>媒体归属</small>
+                        <strong>{mobileAssignmentMedia.file.name}</strong>
+                      </div>
+                      <button
+                        type="button"
+                        className={!mobileAssignmentMedia.routePointDraftId ? "is-current" : ""}
+                        aria-pressed={!mobileAssignmentMedia.routePointDraftId}
+                        onClick={() => assignPendingMedia(mobileMediaAssignmentIndex, null)}
+                      >
+                        <IconMapPin size={18} stroke={1.35} aria-hidden="true" />
+                        整段旅程
+                      </button>
+                      {routePoints.map((point, pointIndex) => (
+                        <button
+                          type="button"
+                          key={point.draftId}
+                          className={mobileAssignmentMedia.routePointDraftId === point.draftId ? "is-current" : ""}
+                          aria-pressed={mobileAssignmentMedia.routePointDraftId === point.draftId}
+                          onClick={() => assignPendingMedia(mobileMediaAssignmentIndex, point.draftId)}
+                        >
+                          <IconMapPin size={18} stroke={1.35} aria-hidden="true" />
+                          {String(pointIndex + 1).padStart(2, "0")} · {point.label || `途径点 ${pointIndex + 1}`}
+                        </button>
+                      ))}
+                    </section>
+                  </div>
+                ) : null}
+                {mobileLayout && mobileDeleteMedia && mobileMediaDeleteIndex !== null ? (
+                  <div className="journey-media-mobile-sheet-layer">
+                    <button type="button" className="journey-media-mobile-sheet__backdrop" aria-label="取消移除媒体" onClick={() => setMobileMediaDeleteIndex(null)} />
+                    <section ref={mobileMediaSheetRef} tabIndex={-1} data-focus-trap-exempt="true" className="journey-media-mobile-sheet is-confirming" role="alertdialog" aria-modal="true" aria-label={`确认移除媒体 ${mobileDeleteMedia.file.name}`}>
+                      <div className="journey-media-mobile-sheet__heading">
+                        <small>移除媒体</small>
+                        <strong>确定移除 {mobileDeleteMedia.file.name}？</strong>
+                      </div>
+                      <p>它只会从这次待上传列表中移除，不会由滑动手势直接触发。</p>
+                      <div className="journey-media-mobile-sheet__confirm-actions">
+                        <button type="button" onClick={() => setMobileMediaDeleteIndex(null)}>取消</button>
+                        <button type="button" className="is-destructive" onClick={() => removePendingMedia(mobileMediaDeleteIndex)}>确认移除</button>
+                      </div>
+                    </section>
+                  </div>
+                ) : null}
+                {mediaFiles.length > 0 ? (
+                  <p>{mobileLayout ? "点按归属标签可调整；其他操作收在媒体管理中。" : "每个文件都可以归到整段旅程，或一个具体途径点。"}</p>
+                ) : null}
               </div>
 
               <div className="journey-composer__section-heading journey-composer__story-heading">

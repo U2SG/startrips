@@ -1894,6 +1894,7 @@
 .journey-story-fullscreen.is-controls-hidden .journey-story-fullscreen__close,
 .journey-story-fullscreen.is-controls-hidden .journey-story-fullscreen__nav {
   opacity: 0;
+  visibility: hidden;
   pointer-events: none;
 }
 
@@ -4907,6 +4908,181 @@ body:has(.journey-composer-backdrop.is-globe-picking) .account-dock {
     grid-column: 1 / -1;
   }
 
+  /* Mobile Story is gesture-first: horizontal swipes replace persistent
+     previous/next controls, while management lives behind one quiet entry. */
+  .journey-story__media[data-mobile-layout="true"] {
+    touch-action: pan-y;
+  }
+
+  .journey-story__mobile-media-actions {
+    position: absolute;
+    z-index: 8;
+    inset: 0;
+    pointer-events: none;
+  }
+
+  .journey-story__mobile-media-menu-trigger {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    width: 42px;
+    min-width: 42px;
+    height: 42px;
+    min-height: 42px;
+    display: grid;
+    place-items: center;
+    padding: 0;
+    border: 1px solid rgba(118, 227, 211, 0.18);
+    border-radius: 999px;
+    background: rgba(2, 10, 11, 0.46);
+    color: rgba(224, 242, 235, 0.82);
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.16);
+    backdrop-filter: blur(12px);
+    pointer-events: auto;
+  }
+
+  .journey-story__mobile-media-menu-trigger::after {
+    display: none;
+  }
+
+  .journey-story__mobile-media-sheet-backdrop {
+    position: absolute;
+    z-index: 1;
+    inset: 0;
+    width: 100%;
+    min-height: 0;
+    padding: 0;
+    border: 0;
+    background: rgba(0, 0, 0, 0.22);
+    pointer-events: auto;
+  }
+
+  .journey-story__mobile-media-sheet {
+    position: absolute;
+    z-index: 2;
+    right: 12px;
+    bottom: 12px;
+    left: 12px;
+    display: grid;
+    gap: 7px;
+    padding: 12px;
+    border: 1px solid rgba(118, 227, 211, 0.16);
+    border-radius: 18px;
+    background: rgba(3, 14, 14, 0.94);
+    box-shadow: 0 22px 54px rgba(0, 0, 0, 0.48);
+    backdrop-filter: blur(18px);
+    pointer-events: auto;
+  }
+
+  .journey-story__mobile-media-sheet > div:first-child {
+    min-width: 0;
+    display: grid;
+    gap: 3px;
+    padding: 3px 4px 7px;
+  }
+
+  .journey-story__mobile-media-sheet small {
+    color: rgba(151, 186, 176, 0.62);
+    font: 500 8px/1 ui-monospace, "SFMono-Regular", Consolas, monospace;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+
+  .journey-story__mobile-media-sheet strong {
+    overflow: hidden;
+    color: rgba(236, 247, 242, 0.95);
+    font: 520 14px/1.25 var(--archive-serif);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .journey-story__mobile-media-sheet > button,
+  .journey-story__mobile-media-confirm-actions > button {
+    min-height: 48px;
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 10px;
+    padding: 0 14px;
+    border: 1px solid rgba(118, 227, 211, 0.13);
+    border-radius: 12px;
+    background: rgba(8, 28, 26, 0.64);
+    color: rgba(226, 242, 236, 0.9);
+    text-align: left;
+  }
+
+  .journey-story__mobile-media-sheet > button.is-destructive,
+  .journey-story__mobile-media-confirm-actions > button.is-destructive {
+    border-color: rgba(194, 142, 120, 0.28);
+    background: rgba(68, 30, 24, 0.3);
+    color: #d7a28c;
+  }
+
+  .journey-story__mobile-media-sheet-current,
+  .journey-story__mobile-media-sheet.is-confirming > p {
+    margin: 0;
+    padding: 8px 12px;
+    color: rgba(168, 196, 187, 0.7);
+    font-size: 10px;
+    line-height: 1.45;
+  }
+
+  .journey-story__mobile-media-confirm-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+
+  .journey-story__mobile-media-confirm-actions > button {
+    justify-content: center;
+  }
+
+  .journey-story__mobile-sort-done {
+    position: absolute;
+    z-index: 9;
+    top: 12px;
+    right: 12px;
+    min-height: 40px;
+    padding: 0 14px;
+    border: 1px solid rgba(118, 227, 211, 0.22);
+    border-radius: 999px;
+    background: rgba(2, 10, 11, 0.74);
+    color: rgba(230, 245, 239, 0.92);
+    backdrop-filter: blur(12px);
+  }
+
+  .journey-story__media[data-mobile-layout="true"] .journey-story__media-grid {
+    padding-top: 64px;
+    touch-action: pan-y;
+  }
+
+  .journey-story__media[data-mobile-layout="true"] .journey-story__media-grid > li:not(.is-cover) {
+    display: block;
+    grid-template-rows: none;
+  }
+
+  .journey-story-fullscreen[data-mobile-layout="true"] {
+    touch-action: none;
+  }
+
+  .journey-story-fullscreen[data-mobile-layout="true"] .journey-story-fullscreen__close {
+    top: calc(env(safe-area-inset-top) + 12px);
+    right: 12px;
+    width: 38px;
+    height: 38px;
+    border-radius: 999px;
+    border-color: rgba(203, 241, 193, 0.18);
+    background: rgba(2, 8, 8, 0.46);
+    backdrop-filter: blur(10px);
+  }
+
+  .journey-story-fullscreen[data-mobile-layout="true"] .journey-story-fullscreen__nav {
+    bottom: calc(env(safe-area-inset-bottom) + 14px);
+    border-radius: 16px;
+    background: rgba(2, 8, 8, 0.58);
+    backdrop-filter: blur(14px);
+  }
+
   .journey-story__media-overview {
     top: 12px;
     left: 12px;
@@ -5122,6 +5298,201 @@ body:has(.journey-composer-backdrop.is-globe-picking) .account-dock {
     min-width: 44px;
     height: 44px;
     min-height: 44px;
+  }
+
+  /* Composer gets a real mobile presentation instead of stacking the desktop
+     select + remove + reorder toolbar into a tall control-heavy card. */
+  .journey-media-fields > ul.journey-media-fields__mobile-list {
+    gap: 8px;
+  }
+
+  .journey-media-fields > ul.journey-media-fields__mobile-list > li.journey-media-mobile-card {
+    min-height: 78px;
+    grid-template-columns: minmax(0, 1fr) 42px;
+    grid-template-rows: auto auto;
+    align-items: center;
+    gap: 7px 10px;
+    padding: 10px 9px 10px 12px;
+    border-color: rgba(118, 227, 211, 0.12);
+    border-radius: 14px;
+    background: rgba(5, 20, 19, 0.58);
+  }
+
+  .journey-media-mobile-card__file {
+    grid-column: 1;
+    grid-row: 1;
+    display: grid;
+    gap: 4px;
+    color: rgba(225, 239, 234, 0.9);
+    font-size: 13px;
+  }
+
+  .journey-media-fields .journey-media-mobile-card__file small {
+    margin: 0;
+    color: rgba(133, 164, 154, 0.56);
+    font-size: 9px;
+  }
+
+  .journey-media-fields .journey-media-mobile-card__assignment {
+    grid-column: 1;
+    grid-row: 2;
+    justify-self: start;
+    width: auto;
+    max-width: 100%;
+    min-height: 32px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 9px;
+    overflow: hidden;
+    border: 1px solid rgba(118, 227, 211, 0.14);
+    border-radius: 999px;
+    background: rgba(6, 29, 27, 0.52);
+    color: rgba(167, 202, 191, 0.76);
+    text-align: left;
+  }
+
+  .journey-media-mobile-card__assignment > span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .journey-media-fields .journey-media-mobile-card__menu {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+    align-self: center;
+    width: 40px;
+    min-width: 40px;
+    height: 40px;
+    min-height: 40px;
+    display: grid;
+    place-items: center;
+    padding: 0;
+    border-radius: 50%;
+    background: transparent;
+    color: rgba(187, 211, 203, 0.7);
+  }
+
+  .journey-media-mobile-card__menu::after {
+    display: none;
+  }
+
+  .journey-media-mobile-sheet-layer {
+    position: fixed;
+    z-index: 285;
+    inset: 0;
+    display: grid;
+    align-items: end;
+    pointer-events: auto;
+  }
+
+  .journey-media-mobile-sheet__backdrop {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    min-height: 0;
+    padding: 0;
+    border: 0;
+    background: rgba(0, 4, 5, 0.54);
+    backdrop-filter: blur(2px);
+  }
+
+  .journey-media-mobile-sheet {
+    position: relative;
+    z-index: 1;
+    max-height: min(72svh, 620px);
+    overflow-y: auto;
+    display: grid;
+    gap: 7px;
+    padding: 10px 14px calc(env(safe-area-inset-bottom) + 14px);
+    border: 1px solid rgba(118, 227, 211, 0.16);
+    border-bottom: 0;
+    border-radius: 22px 22px 0 0;
+    background: linear-gradient(180deg, rgba(5, 22, 21, 0.99), rgba(1, 8, 9, 0.995));
+    box-shadow: 0 -24px 58px rgba(0, 0, 0, 0.44);
+  }
+
+  .journey-media-mobile-sheet__heading {
+    min-width: 0;
+    display: grid;
+    gap: 5px;
+    padding: 6px 4px 10px;
+  }
+
+  .journey-media-mobile-sheet__heading small {
+    margin: 0;
+    color: rgba(111, 226, 207, 0.58);
+    font: 600 8px/1 ui-monospace, "SFMono-Regular", Consolas, monospace;
+    letter-spacing: 0.13em;
+  }
+
+  .journey-media-mobile-sheet__heading strong {
+    overflow: hidden;
+    color: rgba(238, 247, 243, 0.96);
+    font: 500 16px/1.25 var(--archive-serif);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .journey-media-mobile-sheet > button,
+  .journey-media-mobile-sheet__order > button,
+  .journey-media-mobile-sheet__confirm-actions > button {
+    width: 100%;
+    min-height: 48px;
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 10px;
+    padding: 0 14px;
+    border: 1px solid rgba(118, 227, 211, 0.13);
+    border-radius: 12px;
+    background: rgba(7, 29, 27, 0.58);
+    color: rgba(222, 239, 233, 0.88);
+    text-align: left;
+  }
+
+  .journey-media-mobile-sheet > button.is-current {
+    border-color: rgba(200, 255, 61, 0.34);
+    background: rgba(200, 255, 61, 0.07);
+    color: rgba(230, 246, 220, 0.94);
+  }
+
+  .journey-media-mobile-sheet > button.is-destructive,
+  .journey-media-mobile-sheet__confirm-actions > button.is-destructive {
+    border-color: rgba(194, 142, 120, 0.28);
+    background: rgba(68, 30, 24, 0.28);
+    color: #d7a28c;
+  }
+
+  .journey-media-mobile-sheet__order,
+  .journey-media-mobile-sheet__confirm-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 7px;
+  }
+
+  .journey-media-mobile-sheet__order > button,
+  .journey-media-mobile-sheet__confirm-actions > button {
+    justify-content: center;
+    padding-inline: 8px;
+  }
+
+  .journey-media-mobile-sheet.is-confirming > p {
+    margin: 0;
+    padding: 5px 4px 10px;
+    color: rgba(161, 190, 181, 0.68);
+    font-size: 10px;
+    line-height: 1.55;
+  }
+
+  .journey-media-picker {
+    min-height: 132px;
+    padding: 18px;
+  }
+
+  .journey-media-picker > span {
+    font-size: 19px !important;
   }
 
   .journey-story-fields__dates {
