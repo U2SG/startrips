@@ -331,6 +331,10 @@ try {
       if (composerMobileLayout !== "true") failed = true;
     } finally {
       await landscapeComposer.page.close();
+    }
+  }
+
+  for (const [label, viewport] of [
     ["320", { width: 320, height: 700 }],
     ["360", { width: 360, height: 780 }],
     ["390", { width: 390, height: 844 }],
@@ -388,6 +392,7 @@ try {
           position: style.position,
           animationName: style.animationName,
           rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+          layout: { x: element.offsetLeft, y: element.offsetTop, width: element.offsetWidth, height: element.offsetHeight },
         };
       });
       await mobileContinuity.page.waitForFunction(() => (
@@ -404,14 +409,15 @@ try {
           sameNode: window.__qaMobileIncomingMediaNode === settled,
           position: style.position,
           rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+          layout: { x: settled.offsetLeft, y: settled.offsetTop, width: settled.offsetWidth, height: settled.offsetHeight },
         };
       });
-      const rectDelta = settledState
+      const layoutDelta = settledState
         ? Math.max(
-          Math.abs(settledState.rect.x - incomingState.rect.x),
-          Math.abs(settledState.rect.y - incomingState.rect.y),
-          Math.abs(settledState.rect.width - incomingState.rect.width),
-          Math.abs(settledState.rect.height - incomingState.rect.height),
+          Math.abs(settledState.layout.x - incomingState.layout.x),
+          Math.abs(settledState.layout.y - incomingState.layout.y),
+          Math.abs(settledState.layout.width - incomingState.layout.width),
+          Math.abs(settledState.layout.height - incomingState.layout.height),
         )
         : Number.POSITIVE_INFINITY;
       const continuityFailed = !oldFrameHeldDuringRead
@@ -420,7 +426,7 @@ try {
         || incomingState.animationName !== "motionMediaIn"
         || !settledState?.sameNode
         || settledState.position !== "absolute"
-        || rectDelta > 2
+        || layoutDelta > 0
         || mobileContinuity.consoleErrors.length > 0
         || mobileContinuity.pageErrors.length > 0;
       checks.push({
@@ -429,7 +435,7 @@ try {
         incomingWhileReadBlocked,
         incoming: incomingState,
         settled: settledState,
-        rectDelta,
+        layoutDelta,
         consoleErrors: mobileContinuity.consoleErrors,
         pageErrors: mobileContinuity.pageErrors,
         failed: continuityFailed,
