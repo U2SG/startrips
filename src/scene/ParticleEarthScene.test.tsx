@@ -248,6 +248,34 @@ describe("ParticleEarthScene contracts", () => {
     expect(collectJourneyDimDirections(routes, 1)).toHaveLength(1);
   });
 
+  it("does not let future Rewind points dim ambient particles before reveal", () => {
+    const routes = [{
+      id: "journey-rewind",
+      color: "#76e3d0",
+      points: [
+        { lat: 22, lon: 114, isStop: true },
+        { lat: 31, lon: 121, isStop: true },
+      ],
+    }];
+    const hiddenFuture = collectJourneyDimDirections(routes, 8, {
+      points: new Map([
+        ["journey-rewind:0", 1],
+        ["journey-rewind:1", 0],
+      ]),
+    });
+    expect(hiddenFuture).toHaveLength(1);
+    expect(hiddenFuture[0].length()).toBeCloseTo(1);
+
+    const partiallyRevealed = collectJourneyDimDirections(routes, 8, {
+      points: new Map([
+        ["journey-rewind:0", 1],
+        ["journey-rewind:1", 0.4],
+      ]),
+    });
+    expect(partiallyRevealed).toHaveLength(2);
+    expect(partiallyRevealed[1].length()).toBeCloseTo(0.4);
+  });
+
   it("waits a full ten seconds after the latest interaction", () => {
     expect(GLOBE_IDLE_RESUME_DELAY_MS).toBe(10_000);
     expect(getGlobeIdleRotationDelta(1, 9_999, false, false)).toBe(0);

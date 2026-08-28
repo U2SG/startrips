@@ -107,25 +107,43 @@ const JOURNEY_POINT_TWINKLE_SLOWDOWN = 5;
 export function collectJourneyDimDirections(
   routes: readonly JourneyRoute[],
   limit: number,
+  temporalReveal?: { points: ReadonlyMap<string, number> },
 ) {
   if (limit <= 0 || routes.length === 0) return [] as Vector3[];
   const directions: Vector3[] = [];
-  const seen = new Set<string>();
+  const directionIndexByLocation = new Map<string, number>();
   const maxPointCount = routes.reduce(
     (maximum, route) => Math.max(maximum, route.points.length),
     0,
   );
   // Round-robin by point index so one long journey cannot consume the whole
   // GPU uniform budget before the other lit journeys contribute a point.
-  for (let pointIndex = 0; pointIndex < maxPointCount && directions.length < limit; pointIndex += 1) {
+  for (let pointIndex = 0; pointIndex < maxPointCount; pointIndex += 1) {
     for (const route of routes) {
       const point = route.points[pointIndex];
       if (!point) continue;
+      const revealProgress = Math.min(
+        1,
+        Math.max(0, temporalReveal?.points.get(`${route.id}:${pointIndex}`) ?? 1),
+      );
+      if (revealProgress <= 0) continue;
       const key = `${point.lat.toFixed(4)}:${point.lon.toFixed(4)}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      directions.push(latLonToVector3(point.lat, point.lon, 1).normalize());
-      if (directions.length >= limit) break;
+      const existingIndex = directionIndexByLocation.get(key);
+      if (existingIndex !== undefined) {
+        if (directions[existingIndex].length() < revealProgress) {
+          directions[existingIndex]
+            .copy(latLonToVector3(point.lat, point.lon, 1).normalize())
+            .multiplyScalar(revealProgress);
+        }
+        continue;
+      }
+      if (directions.length >= limit) continue;
+      directionIndexByLocation.set(key, directions.length);
+      directions.push(
+        latLonToVector3(point.lat, point.lon, 1)
+          .normalize()
+          .multiplyScalar(revealProgress),
+      );
     }
   }
   return directions;
@@ -1103,12 +1121,18 @@ export function ParticleEarthScene({
     const syncParticleDimming = (
       routes: readonly JourneyRoute[],
       activeRouteId: string | null | undefined,
+      temporalReveal = latestTemporalReveal.current,
     ) => {
-      const allDirections = collectJourneyDimDirections(routes, PARTICLE_DIM_POINT_LIMIT);
+      const allDirections = collectJourneyDimDirections(
+        routes,
+        PARTICLE_DIM_POINT_LIMIT,
+        temporalReveal,
+      );
       const activeRoute = routes.find((route) => route.id === activeRouteId);
       const activeDirections = collectJourneyDimDirections(
         activeRoute ? [activeRoute] : [],
         PARTICLE_ACTIVE_DIM_POINT_LIMIT,
+        temporalReveal,
       );
       const activeRouteChanged = particleDimmingActiveRouteId !== activeRouteId;
       particleDimmingActiveRouteId = activeRouteId;
@@ -2801,6 +2825,11 @@ export function ParticleEarthScene({
         journeys: ReadonlyMap<string, number>;
         points: ReadonlyMap<string, number>;
       }) {
+        syncParticleDimming(
+          latestJourneyRoutes.current,
+          latestActiveJourneyRouteId.current,
+          reveal,
+        );
         for (const entry of routeVectorEntries) {
           const progress = reveal?.journeys.get(entry.routeId);
           if (progress === undefined) {

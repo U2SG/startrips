@@ -63,8 +63,15 @@ export function createParticleEarthMaterial({
       varying float vDimBrightness;
 
       float attenuationAt(vec3 direction, vec3 anchor) {
-        float alignment = dot(direction, normalize(anchor));
-        return smoothstep(uDimOuterCos, uDimInnerCos, alignment);
+        // Anchor magnitude carries temporal reveal progress (0..1), while its
+        // direction stays geographic. Hidden future points therefore cannot
+        // leak a dark patch during Rewind, and partially revealed points fade
+        // their suppression in with the same timeline progress.
+        float revealStrength = length(anchor);
+        if (revealStrength <= 0.0001) return 0.0;
+        float alignment = dot(direction, anchor / revealStrength);
+        return smoothstep(uDimOuterCos, uDimInnerCos, alignment)
+          * clamp(revealStrength, 0.0, 1.0);
       }
 
       void main() {
