@@ -36,6 +36,8 @@ import {
   getJourneyRouteVisualState,
   getGlobeIdleAlignmentRotation,
   getGlobeIdleRotationDelta,
+  isFocusFlightActive,
+  isIdleRotationSuppressed,
   isGlobeUpright,
   isGlobeDrag,
   isPrimaryPointerActivation,
@@ -113,6 +115,16 @@ describe("ParticleEarthScene contracts", () => {
       false,
       false,
     )).toBeCloseTo(GLOBE_IDLE_ROTATION_RADIANS_PER_SECOND);
+  });
+
+  it("treats journey focus as a one-shot flight and releases idle rotation after arrival", () => {
+    expect(isFocusFlightActive(true, false)).toBe(true);
+    expect(isFocusFlightActive(false, true)).toBe(true);
+    expect(isFocusFlightActive(false, false)).toBe(false);
+    expect(isIdleRotationSuppressed(true, true, false)).toBe(true);
+    expect(isIdleRotationSuppressed(true, false, true)).toBe(true);
+    expect(isIdleRotationSuppressed(true, false, false)).toBe(false);
+    expect(isIdleRotationSuppressed(false, false, false)).toBe(true);
   });
 
   it("smoothly returns upright before idle rotation starts", () => {

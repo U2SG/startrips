@@ -97,7 +97,7 @@ function JourneyRoutesQaPreview() {
           centerFocusPoint
           dragToRotate
           wheelToZoom
-          reduceMotion
+          reduceMotion={new URLSearchParams(window.location.search).get("qaMotion") !== "animate"}
         />
       </div>
       <div
