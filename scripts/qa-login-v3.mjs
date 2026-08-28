@@ -162,6 +162,7 @@ async function createGatewayPage({
   failAfterSignIn = false,
   initialAuthenticated = false,
   initialPath = "/?qaState=login-gateway&qaLite=1",
+  journeysDelayMs = 0,
   multiPage = false,
 } = {}) {
   const context = multiPage
@@ -221,11 +222,14 @@ async function createGatewayPage({
     contentType: "application/json",
     body: JSON.stringify({ atlas: { id: "qa-atlas", title: "QA Atlas", dedication: "" }, role: "owner" }),
   }));
-  await gatewayPage.route("**/api/journeys", (route) => route.fulfill({
-    status: 200,
-    contentType: "application/json",
-    body: JSON.stringify({ journeys: [] }),
-  }));
+  await gatewayPage.route("**/api/journeys", async (route) => {
+    if (journeysDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, journeysDelayMs));
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ journeys: [] }),
+    });
+  });
   await gatewayPage.goto(`${origin}${initialPath}`, { waitUntil: "domcontentloaded", timeout: 8_000 });
   if (!initialAuthenticated) {
     await gatewayPage.locator(".auth-card--login-v3").waitFor({ state: "visible", timeout: 4_000 });
@@ -312,6 +316,76 @@ async function verifyAuthenticatedDirectGate(label, path, targetSelector) {
         || !metrics.hitTargetOwned
         || metrics.hostStage !== "atlas"
         || gateway.errors.length > 0,
+    };
+  } finally {
+    await gateway.close();
+  }
+}
+
+async function verifyBrandLoaderContinuity() {
+  console.error("[qa-login-v3] brand loader continuity");
+  const gateway = await createGatewayPage({
+    initialAuthenticated: true,
+    initialPath: "/?qaState=final-acceptance&qaLite=1",
+    journeysDelayMs: 1_200,
+  });
+  try {
+    const loader = gateway.page.locator(".living-atlas.is-loading .startrips-brand-loader");
+    await loader.waitFor({ state: "visible", timeout: 5_000 });
+    await gateway.page.waitForFunction(() => (
+      document.querySelector("[data-persistent-earth-host]")?.getAttribute("data-stage") === "atlas"
+    ), null, { timeout: 5_000 });
+    const loading = await gateway.page.evaluate(() => {
+      const host = document.querySelector("[data-persistent-earth-host]");
+      const surface = document.querySelector(".living-atlas.is-loading");
+      const planet = document.querySelector(".startrips-brand-mark__planet");
+      const journey = document.querySelector(".startrips-brand-mark__journey");
+      const waypoint = document.querySelector(".startrips-brand-mark__waypoint");
+      const star = document.querySelector(".startrips-brand-mark__star");
+      window.__qaBrandLoaderHost = host;
+      return {
+        hostStage: host?.getAttribute("data-stage") ?? null,
+        hasPersistentEarth: Boolean(document.querySelector('[data-three-scene="particle-earth"]')),
+        backgroundColor: surface ? getComputedStyle(surface).backgroundColor : null,
+        backgroundImage: surface ? getComputedStyle(surface).backgroundImage : null,
+        planetAnimation: planet ? getComputedStyle(planet).animationName : null,
+        journeyAnimation: journey ? getComputedStyle(journey).animationName : null,
+        waypointAnimation: waypoint ? getComputedStyle(waypoint).animationName : null,
+        waypointOpacity: waypoint ? getComputedStyle(waypoint).opacity : null,
+        waypointTransform: waypoint ? getComputedStyle(waypoint).transform : null,
+        starAnimation: star ? getComputedStyle(star).animationName : null,
+        starOpacity: star ? getComputedStyle(star).opacity : null,
+        starTransform: star ? getComputedStyle(star).transform : null,
+      };
+    });
+    await gateway.page.locator(".living-atlas[data-journey-count]").waitFor({ state: "attached", timeout: 5_000 });
+    const settled = await gateway.page.evaluate(() => ({
+      sameHost: window.__qaBrandLoaderHost === document.querySelector("[data-persistent-earth-host]"),
+      hostStage: document.querySelector("[data-persistent-earth-host]")?.getAttribute("data-stage") ?? null,
+      hasPersistentEarth: Boolean(document.querySelector('[data-three-scene="particle-earth"]')),
+    }));
+    const unexpectedErrors = gateway.errors.filter((message) => !message.includes("favicon"));
+    return {
+      label: "brand-loader-persistent-earth-reduced-motion",
+      loading,
+      settled,
+      errors: unexpectedErrors,
+      failed: loading.hostStage !== "atlas"
+        || !loading.hasPersistentEarth
+        || loading.backgroundColor !== "rgba(0, 0, 0, 0)"
+        || loading.backgroundImage !== "none"
+        || loading.planetAnimation !== "none"
+        || loading.journeyAnimation !== "none"
+        || loading.waypointAnimation !== "none"
+        || loading.waypointOpacity !== "1"
+        || loading.waypointTransform !== "none"
+        || loading.starAnimation !== "none"
+        || loading.starOpacity !== "1"
+        || loading.starTransform !== "none"
+        || !settled.sameHost
+        || settled.hostStage !== "atlas"
+        || !settled.hasPersistentEarth
+        || unexpectedErrors.length > 0,
     };
   } finally {
     await gateway.close();
@@ -677,6 +751,8 @@ if (focusedCase) {
       focusedResult = await verifyPersistentGatewaySceneContinuity();
     } else if (focusedCase === "detail-map") {
       focusedResult = await verifyDetailedEarthParticleContinuity();
+    } else if (focusedCase === "brand-loader") {
+      focusedResult = await verifyBrandLoaderContinuity();
     } else {
       throw new Error(`Unknown QA_LOGIN_CASE: ${focusedCase}`);
     }
@@ -773,6 +849,10 @@ try {
   );
   if (invitationPointers.failed) failed = true;
   results.push(invitationPointers);
+
+  const brandLoaderContinuity = await verifyBrandLoaderContinuity();
+  if (brandLoaderContinuity.failed) failed = true;
+  results.push(brandLoaderContinuity);
 
   console.error("[qa-login-v3] persistent earth quality continuity");
   const persistentEarthContinuity = await verifyPersistentGatewaySceneContinuity();

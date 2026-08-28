@@ -607,7 +607,10 @@ export function AuthGateway({ children }: { children: ReactNode }) {
       persistentEarth.setStage(qaPhase === "handoff" ? "handoff" : "login");
       return;
     }
-    if (session.isPending) return;
+    if (session.isPending) {
+      persistentEarth.setStage("login");
+      return;
+    }
     if (!session.data) {
       persistentEarth.setStage(handoffActive ? "handoff" : "login");
       return;
@@ -680,7 +683,11 @@ export function AuthGateway({ children }: { children: ReactNode }) {
 
   if (window.location.pathname === "/reset-password") return <ResetPassword />;
   if (session.isPending) {
-    return <main className="auth-gate"><p className="auth-loading">正在验证私人入口…</p></main>;
+    return (
+      <main className="auth-gate auth-gate--brand-loading" aria-busy="true">
+        <StartripsBrandLoader message="正在验证私人入口…" />
+      </main>
+    );
   }
 
   if (!session.data) {

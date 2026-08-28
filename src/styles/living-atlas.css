@@ -11,22 +11,6 @@
   --atlas-cyan: #76e3d0;
   --atlas-acid: #c8ff3d;
   --atlas-warm: #f4ce73;
-  /* Motion tokens (mirror src/motion/tokens.ts) */
-  /* Tier durations — the only durations features reference (#17 Motion Language). */
-  --motion-instant: 120ms;   /* Tier 0: hover/press/focus */
-  --motion-ui: 260ms;        /* Tier 1: sidebar/reorder/controls */
-  --motion-content: 560ms;   /* Tier 2: card->story, tile->fullscreen */
-  --motion-journey: 980ms;   /* Tier 3: camera fly-to, route draw */
-  --motion-micro: 240ms;
-  --motion-panel: 560ms;
-  --motion-morph: 760ms;
-  --motion-pulse: 1900ms;
-  --motion-arrival: 2400ms;
-  --motion-stagger: 140ms;
-  --motion-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
-  --motion-ease-soft: cubic-bezier(0.2, 0.75, 0.15, 1);
-  --motion-ease-out-soft: cubic-bezier(0.22, 0.72, 0.24, 1);
-  --motion-ease-in-out-spatial: cubic-bezier(0.65, 0, 0.35, 1);
   position: relative;
   width: 100%;
   height: 100svh;
