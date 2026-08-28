@@ -2641,7 +2641,8 @@ export function ParticleEarthScene({
 
     const render = (now: number) => {
       if (disposed) return;
-      const delta = Math.min(0.05, Math.max(0, (now - lastTime) / 1000));
+      const elapsedDelta = Math.min(0.25, Math.max(0, (now - lastTime) / 1000));
+      const delta = Math.min(0.05, elapsedDelta);
       lastTime = now;
       const target = GLOBE_MODE_CONFIG[currentMode];
       const audioEnergy = reduceMotion
@@ -2787,13 +2788,13 @@ export function ParticleEarthScene({
         );
         interactiveRotationX = getGlobeIdleAlignmentRotation(
           interactiveRotationX,
-          delta,
+          elapsedDelta,
           idleForMs,
           hasMomentum,
           motionDisabled,
         );
         interactiveRotationY += getGlobeIdleRotationDelta(
-          delta,
+          elapsedDelta,
           idleForMs,
           hasMomentum,
           motionDisabled,
