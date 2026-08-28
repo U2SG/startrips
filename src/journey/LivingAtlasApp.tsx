@@ -343,7 +343,12 @@ export function LivingAtlasApp({
   // Mobile V2 is immersive by default: desktop focus-mode and timeline views
   // are never part of the mobile state machine.
   useEffect(() => {
-    if (!isMobileV2) return;
+    if (!isMobileV2) {
+      setMobileSheetJourneyId(null);
+      setMobilePickerOpen(false);
+      setMobileMapJourneyId(null);
+      return;
+    }
     setView("planet");
     setGlobeFocusMode(false);
   }, [isMobileV2]);
