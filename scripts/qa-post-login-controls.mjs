@@ -324,6 +324,23 @@ async function verifyComposerMediaActions() {
       ["desktop", 1280, 800, false],
     ]) {
       await page.setViewportSize({ width, height });
+      if (mobile) {
+        const mobileMetrics = await page.evaluate(() => ({
+          cards: document.querySelectorAll(".journey-media-mobile-card").length,
+          manageButtons: document.querySelectorAll(".journey-media-mobile-card__menu").length,
+          assignmentButtons: document.querySelectorAll(".journey-media-mobile-card__assignment").length,
+          desktopActionGroups: document.querySelectorAll(".journey-media-fields__actions").length,
+        }));
+        record(`composer-${label}-media-actions`, await scanButtons(page, ".journey-composer", ".journey-composer__editor"), {
+          mobileMetrics,
+          failed: mobileMetrics.cards !== 2
+            || mobileMetrics.manageButtons !== 2
+            || mobileMetrics.assignmentButtons !== 2
+            || mobileMetrics.desktopActionGroups !== 0,
+        });
+        continue;
+      }
+
       const actionMetrics = await page.evaluate(() => (
         [...document.querySelectorAll(".journey-media-fields__actions")].map((group) => (
           [...group.querySelectorAll("button")].map((button) => {
@@ -338,17 +355,57 @@ async function verifyComposerMediaActions() {
           })
         ))
       ));
-      const invalidActions = actionMetrics.some((group) => {
+      const invalidActions = actionMetrics.length !== 2 || actionMetrics.some((group) => {
         if (group.length !== 3) return true;
-        if (group.some((button) => button.width < (mobile ? 43 : 39) || button.height < (mobile ? 43 : 39))) return true;
-        if (group.some((button) => !button.ariaLabel || !button.tooltip || button.visibleText !== "")) return true;
-        return mobile && group.some((button) => button.width > 45 || button.height > 45);
+        if (group.some((button) => button.width < 39 || button.height < 39)) return true;
+        return group.some((button) => !button.ariaLabel || !button.tooltip || button.visibleText !== "");
       });
       record(`composer-${label}-media-actions`, await scanButtons(page, ".journey-composer", ".journey-composer__editor"), {
         actionMetrics,
         failed: invalidActions,
       });
     }
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    const firstManageTrigger = page.locator(".journey-media-mobile-card__menu").first();
+    const assertNestedSheetFocus = async (openSheet, selector, label) => {
+      await openSheet();
+      const sheet = page.locator(selector);
+      await sheet.waitFor({ state: "visible" });
+      const initialFocusInside = await sheet.evaluate((root) => root.contains(document.activeElement));
+      let tabStayedInside = initialFocusInside;
+      for (let index = 0; index < 6; index += 1) {
+        await page.keyboard.press("Tab");
+        tabStayedInside = tabStayedInside && await sheet.evaluate((root) => root.contains(document.activeElement));
+      }
+      await page.keyboard.press("Escape");
+      await sheet.waitFor({ state: "detached" });
+      const focusRestored = await firstManageTrigger.evaluate((button) => document.activeElement === button);
+      const result = { name: label, initialFocusInside, tabStayedInside, focusRestored, failed: !initialFocusInside || !tabStayedInside || !focusRestored };
+      results.push(result);
+      if (result.failed) failed = true;
+    };
+    await assertNestedSheetFocus(
+      () => firstManageTrigger.click(),
+      ".journey-media-mobile-sheet:not(.is-assignment):not(.is-confirming)",
+      "composer-mobile-management-focus",
+    );
+    await assertNestedSheetFocus(
+      async () => {
+        await firstManageTrigger.click();
+        await page.getByRole("button", { name: "调整归属" }).click();
+      },
+      ".journey-media-mobile-sheet.is-assignment",
+      "composer-mobile-assignment-focus",
+    );
+    await assertNestedSheetFocus(
+      async () => {
+        await firstManageTrigger.click();
+        await page.getByRole("button", { name: "移除媒体" }).click();
+      },
+      ".journey-media-mobile-sheet.is-confirming",
+      "composer-mobile-confirm-focus",
+    );
 
     await page.setViewportSize({ width: 1280, height: 800 });
     const tooltipAction = page.locator(".journey-media-fields__actions .icon-action-button:not(:disabled)").first();
@@ -611,30 +668,42 @@ async function verifyComposerGlobeRoundTrip() {
     await page.setViewportSize({ width, height });
     await page.goto(`${origin}/?qaState=living-atlas`, { waitUntil: "domcontentloaded" });
     await page.locator(width <= 760 ? ".mobile-v2__journey-chip" : ".living-atlas__active").waitFor({ state: "visible" });
-    const focusExitHitTest = await page.evaluate(() => {
+    const focusExitHitTest = await page.evaluate((mobile) => {
       const exit = document.querySelector(".living-atlas__globe-focus-exit");
       const create = document.querySelector(".living-atlas__create")
         ?? document.querySelector('.mobile-v2__header button[aria-label="记录新旅程"]');
-      if (!(exit instanceof HTMLElement) || !(create instanceof HTMLElement)) return null;
+      if (!(create instanceof HTMLElement)) return null;
       const rect = create.getBoundingClientRect();
       const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+      if (mobile) {
+        return {
+          mobile: true,
+          exitExists: exit instanceof HTMLElement,
+          hitInsideCreate: Boolean(hit && create.contains(hit)),
+        };
+      }
+      if (!(exit instanceof HTMLElement)) return null;
       return {
+        mobile: false,
+        exitExists: true,
         exitAriaHidden: exit.getAttribute("aria-hidden"),
         exitTabIndex: exit.tabIndex,
         exitPointerEvents: getComputedStyle(exit).pointerEvents,
         hitIsExit: hit === exit || exit.contains(hit),
         hitInsideCreate: Boolean(hit && create.contains(hit)),
       };
-    });
-    if (
-      !focusExitHitTest
-      || focusExitHitTest.exitAriaHidden !== "true"
-      || focusExitHitTest.exitTabIndex !== -1
-      || focusExitHitTest.exitPointerEvents !== "none"
-      || focusExitHitTest.hitIsExit
-      || !focusExitHitTest.hitInsideCreate
-    ) {
-      throw new Error(`hidden globe-focus exit intercepted atlas hit testing: ${JSON.stringify(focusExitHitTest)}`);
+    }, width <= 760);
+    const invalidFocusExit = !focusExitHitTest
+      || (focusExitHitTest.mobile
+        ? focusExitHitTest.exitExists || !focusExitHitTest.hitInsideCreate
+        : !focusExitHitTest.exitExists
+          || focusExitHitTest.exitAriaHidden !== "true"
+          || focusExitHitTest.exitTabIndex !== -1
+          || focusExitHitTest.exitPointerEvents !== "none"
+          || focusExitHitTest.hitIsExit
+          || !focusExitHitTest.hitInsideCreate);
+    if (invalidFocusExit) {
+      throw new Error(`globe-focus exit contract failed: ${JSON.stringify(focusExitHitTest)}`);
     }
     await page.getByRole("button", { name: /记录(?:新)?旅程/ }).click();
     await page.locator(".journey-composer").waitFor({ state: "visible" });

@@ -71,7 +71,7 @@ import {
   validateJourneySoundtrack,
 } from "./journeyModel";
 import type { Journey, JourneyMediaAsset } from "./types";
-import { useModalFocus } from "./useModalFocus";
+import { useModalFocus, useNestedModalFocus } from "./useModalFocus";
 
 const SOUNDTRACK_INPUT_ACCEPT = [
   "audio/mpeg",
@@ -553,6 +553,20 @@ export function JourneyStory({
     setFullscreen(true);
   }
 
+  function closeMobileMediaDelete() {
+    setMediaDeleteState("idle");
+    setMediaDeleteMessage("");
+    if (typeof window !== "undefined") {
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => {
+          document
+            .querySelector<HTMLButtonElement>(".journey-story__mobile-media-menu-trigger")
+            ?.focus({ preventScroll: true });
+        });
+      });
+    }
+  }
+
   function requestClose() {
     if (fullscreen) {
       exitFullscreen();
@@ -563,8 +577,7 @@ export function JourneyStory({
       return;
     }
     if (mobileLayout && mediaDeleteState === "confirming") {
-      setMediaDeleteState("idle");
-      setMediaDeleteMessage("");
+      closeMobileMediaDelete();
       return;
     }
     if (uploading) {
@@ -585,6 +598,10 @@ export function JourneyStory({
   }
 
   const dialogRef = useModalFocus<HTMLElement>(requestClose);
+  const mobileMediaSheetRef = useNestedModalFocus<HTMLElement>(
+    mobileLayout && (mobileMediaMenuOpen || mediaDeleteState !== "idle"),
+    mobileMediaMenuOpen ? "manage" : mediaDeleteState !== "idle" ? "delete" : null,
+  );
 
   useEffect(() => {
     const nextInitialMedia = storyInitialMediaSelection(journey, routePointId);
@@ -1842,19 +1859,20 @@ export function JourneyStory({
             {orderMessage ? <p className="journey-story__order-message" role="status">{orderMessage}</p> : null}
             {mobileLayout && !overview && asset ? (
               <div className="journey-story__mobile-media-actions">
-                {mediaDeleteState === "idle" ? (
-                  <IconActionButton
-                    type="button"
-                    className="journey-story__mobile-media-menu-trigger"
-                    label="管理当前媒体"
-                    tooltip="管理媒体"
-                    aria-expanded={mobileMediaMenuOpen}
-                    disabled={mutationPending}
-                    onClick={() => setMobileMediaMenuOpen((open) => !open)}
-                  >
-                    <IconDots size={19} stroke={1.5} aria-hidden="true" />
-                  </IconActionButton>
-                ) : null}
+                <IconActionButton
+                  type="button"
+                  className="journey-story__mobile-media-menu-trigger"
+                  label="管理当前媒体"
+                  tooltip="管理媒体"
+                  aria-expanded={mobileMediaMenuOpen}
+                  aria-hidden={mediaDeleteState !== "idle"}
+                  tabIndex={mediaDeleteState === "idle" ? 0 : -1}
+                  style={mediaDeleteState === "idle" ? undefined : { visibility: "hidden", pointerEvents: "none" }}
+                  disabled={mutationPending}
+                  onClick={() => setMobileMediaMenuOpen((open) => !open)}
+                >
+                  <IconDots size={19} stroke={1.5} aria-hidden="true" />
+                </IconActionButton>
                 {mobileMediaMenuOpen && mediaDeleteState === "idle" ? (
                   <>
                     <button
@@ -1863,7 +1881,7 @@ export function JourneyStory({
                       aria-label="关闭媒体管理"
                       onClick={() => setMobileMediaMenuOpen(false)}
                     />
-                    <section className="journey-story__mobile-media-sheet" role="dialog" aria-modal="true" aria-label="媒体管理">
+                    <section ref={mobileMediaSheetRef} tabIndex={-1} data-focus-trap-exempt="true" className="journey-story__mobile-media-sheet" role="dialog" aria-modal="true" aria-label="媒体管理">
                       <div>
                         <small>当前媒体</small>
                         <strong>{asset.fileName}</strong>
@@ -1921,16 +1939,16 @@ export function JourneyStory({
                       className="journey-story__mobile-media-sheet-backdrop"
                       aria-label="取消删除媒体"
                       disabled={mediaDeleteState === "pending"}
-                      onClick={() => { setMediaDeleteState("idle"); setMediaDeleteMessage(""); }}
+                      onClick={closeMobileMediaDelete}
                     />
-                    <section className="journey-story__mobile-media-sheet is-confirming" role="alertdialog" aria-modal="true" aria-label="确认删除媒体">
+                    <section ref={mobileMediaSheetRef} tabIndex={-1} data-focus-trap-exempt="true" className="journey-story__mobile-media-sheet is-confirming" role="alertdialog" aria-modal="true" aria-label="确认删除媒体">
                       <div>
                         <small>删除媒体</small>
                         <strong>确定删除这段媒体？</strong>
                       </div>
                       <p>这个操作需要再次确认，不会由滑动手势直接触发。</p>
                       <div className="journey-story__mobile-media-confirm-actions">
-                        <button ref={mediaDeleteCancelRef} type="button" disabled={mediaDeleteState === "pending"} onClick={() => { setMediaDeleteState("idle"); setMediaDeleteMessage(""); }}>取消</button>
+                        <button ref={mediaDeleteCancelRef} type="button" disabled={mediaDeleteState === "pending"} onClick={closeMobileMediaDelete}>取消</button>
                         <button className="is-destructive" type="button" disabled={mediaDeleteState === "pending"} onClick={() => void confirmMediaDelete()}>{mediaDeleteState === "pending" ? "正在删除…" : "确认删除"}</button>
                       </div>
                       {mediaDeleteMessage ? <p className="journey-story__media-remove__error" role="alert">{mediaDeleteMessage}</p> : null}

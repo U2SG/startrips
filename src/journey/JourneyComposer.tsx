@@ -59,7 +59,7 @@ import {
   LIGHT_EFFECTS,
   type LightEffectId,
 } from "./lightEffects";
-import { useModalFocus } from "./useModalFocus";
+import { useModalFocus, useNestedModalFocus } from "./useModalFocus";
 
 type UploadProgress = {
   fileName: string;
@@ -395,6 +395,20 @@ export function JourneyComposer({
     }
     if (!saving) closeComposer();
   }, true, globePicking);
+  const mobileMediaSheetRef = useNestedModalFocus<HTMLElement>(
+    mobileLayout && (
+      mobileMediaMenuIndex !== null
+      || mobileMediaAssignmentIndex !== null
+      || mobileMediaDeleteIndex !== null
+    ),
+    mobileMediaMenuIndex !== null
+      ? `manage:${mobileMediaMenuIndex}`
+      : mobileMediaAssignmentIndex !== null
+        ? `assignment:${mobileMediaAssignmentIndex}`
+        : mobileMediaDeleteIndex !== null
+          ? `delete:${mobileMediaDeleteIndex}`
+          : null,
+  );
 
   useEffect(() => {
     if (mobileLayout) return;
@@ -933,7 +947,7 @@ export function JourneyComposer({
                 {mobileLayout && mobileMenuMedia && mobileMediaMenuIndex !== null ? (
                   <div className="journey-media-mobile-sheet-layer">
                     <button type="button" className="journey-media-mobile-sheet__backdrop" aria-label="关闭媒体管理" onClick={() => setMobileMediaMenuIndex(null)} />
-                    <section className="journey-media-mobile-sheet" role="dialog" aria-modal="true" aria-label={`管理媒体 ${mobileMenuMedia.file.name}`}>
+                    <section ref={mobileMediaSheetRef} tabIndex={-1} data-focus-trap-exempt="true" className="journey-media-mobile-sheet" role="dialog" aria-modal="true" aria-label={`管理媒体 ${mobileMenuMedia.file.name}`}>
                       <div className="journey-media-mobile-sheet__heading">
                         <small>媒体管理</small>
                         <strong>{mobileMenuMedia.file.name}</strong>
@@ -977,7 +991,7 @@ export function JourneyComposer({
                 {mobileLayout && mobileAssignmentMedia && mobileMediaAssignmentIndex !== null ? (
                   <div className="journey-media-mobile-sheet-layer">
                     <button type="button" className="journey-media-mobile-sheet__backdrop" aria-label="关闭媒体归属选择" onClick={() => setMobileMediaAssignmentIndex(null)} />
-                    <section className="journey-media-mobile-sheet is-assignment" role="dialog" aria-modal="true" aria-label={`${mobileAssignmentMedia.file.name} 的媒体归属`}>
+                    <section ref={mobileMediaSheetRef} tabIndex={-1} data-focus-trap-exempt="true" className="journey-media-mobile-sheet is-assignment" role="dialog" aria-modal="true" aria-label={`${mobileAssignmentMedia.file.name} 的媒体归属`}>
                       <div className="journey-media-mobile-sheet__heading">
                         <small>媒体归属</small>
                         <strong>{mobileAssignmentMedia.file.name}</strong>
@@ -1009,7 +1023,7 @@ export function JourneyComposer({
                 {mobileLayout && mobileDeleteMedia && mobileMediaDeleteIndex !== null ? (
                   <div className="journey-media-mobile-sheet-layer">
                     <button type="button" className="journey-media-mobile-sheet__backdrop" aria-label="取消移除媒体" onClick={() => setMobileMediaDeleteIndex(null)} />
-                    <section className="journey-media-mobile-sheet is-confirming" role="alertdialog" aria-modal="true" aria-label={`确认移除媒体 ${mobileDeleteMedia.file.name}`}>
+                    <section ref={mobileMediaSheetRef} tabIndex={-1} data-focus-trap-exempt="true" className="journey-media-mobile-sheet is-confirming" role="alertdialog" aria-modal="true" aria-label={`确认移除媒体 ${mobileDeleteMedia.file.name}`}>
                       <div className="journey-media-mobile-sheet__heading">
                         <small>移除媒体</small>
                         <strong>确定移除 {mobileDeleteMedia.file.name}？</strong>

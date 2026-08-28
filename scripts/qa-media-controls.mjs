@@ -123,69 +123,133 @@ try {
     await story.page.locator(".journey-story").waitFor({ state: "visible" });
     record("story-media", await scanButtons(story.page, ".journey-story"));
 
-    await story.page.getByRole("button", { name: "下一个媒体" }).click();
-    const mobileIconActions = await story.page.evaluate(() => (
-      [...document.querySelectorAll(
-        ".journey-story__media-order .icon-action-button, .journey-story__media-actions .icon-action-button",
-      )].map((button) => {
-        const rect = button.getBoundingClientRect();
-        return {
-          width: Math.round(rect.width),
-          height: Math.round(rect.height),
-          ariaLabel: button.getAttribute("aria-label"),
-          tooltip: button.getAttribute("data-tooltip"),
-          visibleText: button.textContent?.trim() ?? "",
-        };
-      })
-    ));
-    const mobileIconActionsFailed = mobileIconActions.length < 4
-      || mobileIconActions.some((button) => button.width < 43 || button.height < 43)
-      || mobileIconActions.some((button) => !button.ariaLabel || !button.tooltip || button.visibleText !== "");
-    checks.push({
-      name: "story-mobile-icon-actions",
-      actions: mobileIconActions,
-      failed: mobileIconActionsFailed,
+    const mediaStage = story.page.locator(".journey-story__media");
+    const settledMedia = story.page.locator(
+      ".journey-story__media > img:not(.journey-story__media-incoming), .journey-story__media > video:not(.journey-story__media-incoming)",
+    ).first();
+    const firstMediaLabel = await settledMedia.getAttribute("alt");
+    const desktopOnlyControls = await story.page.locator(
+      ".journey-story__media-overview, .journey-story__fullscreen-entry, .journey-story__media-controls, .journey-story__media-actions",
+    ).count();
+    const stageBox = await mediaStage.boundingBox();
+    if (!stageBox) throw new Error("mobile story media stage has no bounds");
+    const swipeStartX = stageBox.x + stageBox.width * 0.72;
+    const swipeY = stageBox.y + stageBox.height * 0.5;
+    await mediaStage.dispatchEvent("pointerdown", {
+      pointerId: 1,
+      pointerType: "touch",
+      isPrimary: true,
+      clientX: swipeStartX,
+      clientY: swipeY,
+      bubbles: true,
     });
-    if (mobileIconActionsFailed) failed = true;
-
-    await story.page.getByRole("button", { name: "全部照片" }).click();
-    record("story-overview", await scanButtons(story.page, ".journey-story"));
-    const mobileCoverActions = await story.page.evaluate(() => (
-      [...document.querySelectorAll(".journey-story__media-tile-set-cover")].map((button) => {
-        const rect = button.getBoundingClientRect();
-        return {
-          width: Math.round(rect.width),
-          height: Math.round(rect.height),
-          ariaLabel: button.getAttribute("aria-label"),
-          tooltip: button.getAttribute("data-tooltip"),
-          visibleText: button.textContent?.trim() ?? "",
-        };
-      })
-    ));
-    const mobileCoverActionsFailed = mobileCoverActions.length < 1
-      || mobileCoverActions.some((button) => button.width < 43 || button.height < 43)
-      || mobileCoverActions.some((button) => !button.ariaLabel || button.tooltip !== "设为封面" || button.visibleText !== "");
-    checks.push({
-      name: "story-mobile-cover-actions",
-      actions: mobileCoverActions,
-      failed: mobileCoverActionsFailed,
+    await mediaStage.dispatchEvent("pointerup", {
+      pointerId: 1,
+      pointerType: "touch",
+      isPrimary: true,
+      clientX: swipeStartX - 110,
+      clientY: swipeY,
+      bubbles: true,
     });
-    if (mobileCoverActionsFailed) failed = true;
+    await story.page.waitForFunction((before) => {
+      const media = document.querySelector(
+        ".journey-story__media > img:not(.journey-story__media-incoming), .journey-story__media > video:not(.journey-story__media-incoming)",
+      );
+      return media && (media.getAttribute("alt") ?? media.getAttribute("src")) !== before;
+    }, firstMediaLabel, { timeout: 3_000 });
+    checks.push({
+      name: "story-mobile-swipe-navigation",
+      desktopOnlyControls,
+      failed: desktopOnlyControls !== 0,
+    });
+    if (desktopOnlyControls !== 0) failed = true;
 
-    await story.page.getByRole("button", { name: "返回单张" }).click();
-    await story.page.getByRole("button", { name: "删除这段媒体" }).click();
-    const deleteScan = await scanButtons(story.page, ".journey-story");
-    const otherMediaControlsVisible = await story.page.locator(
-      ".journey-story__media-overview, .journey-story__fullscreen-entry, .journey-story__media-nav, .journey-story__media-order",
-    ).evaluateAll((elements) => elements.some((element) => (
-      Number(getComputedStyle(element).opacity) > 0.05
-      && getComputedStyle(element).pointerEvents !== "none"
-    )));
-    record("story-delete-confirm", deleteScan, { failed: otherMediaControlsVisible });
+    const manageTrigger = story.page.getByRole("button", { name: "管理当前媒体" });
+    await manageTrigger.click();
+    const mobileSheet = story.page.locator(".journey-story__mobile-media-sheet");
+    await mobileSheet.waitFor({ state: "visible" });
+    const initialFocusInside = await mobileSheet.evaluate((root) => root.contains(document.activeElement));
+    let tabStayedInside = initialFocusInside;
+    for (let index = 0; index < 6; index += 1) {
+      await story.page.keyboard.press("Tab");
+      tabStayedInside = tabStayedInside && await mobileSheet.evaluate((root) => root.contains(document.activeElement));
+    }
+    await story.page.keyboard.press("Escape");
+    await mobileSheet.waitFor({ state: "detached" });
+    const sheetFocusRestored = await manageTrigger.evaluate((button) => document.activeElement === button);
+    checks.push({
+      name: "story-mobile-sheet-focus-ownership",
+      initialFocusInside,
+      tabStayedInside,
+      sheetFocusRestored,
+      failed: !initialFocusInside || !tabStayedInside || !sheetFocusRestored,
+    });
+    if (!initialFocusInside || !tabStayedInside || !sheetFocusRestored) failed = true;
 
-    await story.page.getByRole("button", { name: "取消" }).click();
-    await story.page.getByRole("button", { name: "全屏播放" }).click();
-    record("story-fullscreen", await scanButtons(story.page, ".journey-story-fullscreen"));
+    await manageTrigger.click();
+    await story.page.getByRole("button", { name: "删除媒体" }).click();
+    const deleteSheet = story.page.locator(".journey-story__mobile-media-sheet.is-confirming");
+    await deleteSheet.waitFor({ state: "visible" });
+    const deleteFocusInside = await deleteSheet.evaluate((root) => root.contains(document.activeElement));
+    let deleteTabStayedInside = deleteFocusInside;
+    for (let index = 0; index < 4; index += 1) {
+      await story.page.keyboard.press("Tab");
+      deleteTabStayedInside = deleteTabStayedInside && await deleteSheet.evaluate((root) => root.contains(document.activeElement));
+    }
+    await story.page.keyboard.press("Escape");
+    await deleteSheet.waitFor({ state: "detached" });
+    await story.page.waitForFunction(() => (
+      document.activeElement?.classList.contains("journey-story__mobile-media-menu-trigger") ?? false
+    ));
+    const deleteFocusRestored = await manageTrigger.evaluate((button) => document.activeElement === button);
+    checks.push({
+      name: "story-mobile-delete-focus-ownership",
+      deleteFocusInside,
+      deleteTabStayedInside,
+      deleteFocusRestored,
+      failed: !deleteFocusInside || !deleteTabStayedInside || !deleteFocusRestored,
+    });
+    if (!deleteFocusInside || !deleteTabStayedInside || !deleteFocusRestored) failed = true;
+
+    await settledMedia.click();
+    const fullscreen = story.page.locator(".journey-story-fullscreen");
+    await fullscreen.waitFor({ state: "visible" });
+    const fullscreenInitiallyImmersive = await fullscreen.evaluate((root) => root.classList.contains("is-controls-hidden"));
+    const fullscreenBox = await fullscreen.boundingBox();
+    if (!fullscreenBox) throw new Error("mobile fullscreen has no bounds");
+    const fullX = fullscreenBox.x + fullscreenBox.width * 0.5;
+    const fullY = fullscreenBox.y + fullscreenBox.height * 0.45;
+    await fullscreen.dispatchEvent("pointerdown", { pointerId: 2, pointerType: "touch", isPrimary: true, clientX: fullX, clientY: fullY, bubbles: true });
+    await fullscreen.dispatchEvent("pointerup", { pointerId: 2, pointerType: "touch", isPrimary: true, clientX: fullX, clientY: fullY, bubbles: true });
+    const fullscreenPositionBefore = await fullscreen.locator(".journey-story-fullscreen__nav span").textContent();
+    await fullscreen.dispatchEvent("pointerdown", { pointerId: 3, pointerType: "touch", isPrimary: true, clientX: fullX, clientY: fullY, bubbles: true });
+    await fullscreen.dispatchEvent("pointerup", { pointerId: 3, pointerType: "touch", isPrimary: true, clientX: fullX - 110, clientY: fullY, bubbles: true });
+    await story.page.waitForFunction((before) => {
+      const position = document.querySelector(".journey-story-fullscreen__nav span")?.textContent;
+      return Boolean(position && position !== before);
+    }, fullscreenPositionBefore, { timeout: 3_000 });
+    const fullscreenPosition = await fullscreen.locator(".journey-story-fullscreen__nav span").textContent();
+    record("story-fullscreen", await scanButtons(story.page, ".journey-story-fullscreen"), {
+      fullscreenInitiallyImmersive,
+      fullscreenPositionBefore,
+      fullscreenPosition,
+      failed: !fullscreenInitiallyImmersive || !fullscreenPositionBefore || !fullscreenPosition || fullscreenPosition === fullscreenPositionBefore,
+    });
+    await fullscreen.dispatchEvent("pointerdown", { pointerId: 4, pointerType: "touch", isPrimary: true, clientX: fullX, clientY: fullY, bubbles: true });
+    await fullscreen.dispatchEvent("pointerup", { pointerId: 4, pointerType: "touch", isPrimary: true, clientX: fullX, clientY: fullY + 130, bubbles: true });
+    await fullscreen.waitFor({ state: "detached" });
+
+    await settledMedia.click();
+    await story.page.locator(".journey-story-fullscreen").waitFor({ state: "visible" });
+    await story.page.evaluate(() => window.history.back());
+    await story.page.locator(".journey-story-fullscreen").waitFor({ state: "detached" });
+    const storyStillVisibleAfterBack = await story.page.locator(".journey-story").isVisible();
+    checks.push({
+      name: "story-mobile-fullscreen-exit-contract",
+      storyStillVisibleAfterBack,
+      failed: !storyStillVisibleAfterBack,
+    });
+    if (!storyStillVisibleAfterBack) failed = true;
 
     if (story.consoleErrors.length || story.pageErrors.length) {
       checks.push({ name: "story-runtime-errors", consoleErrors: story.consoleErrors, pageErrors: story.pageErrors });
@@ -250,7 +314,14 @@ try {
   const storyDesktop = await createQaPage("/?qaState=journey-story", onePixelGif, { mobile: false });
   try {
     await storyDesktop.page.locator(".journey-story").waitFor({ state: "visible" });
-    await storyDesktop.page.getByRole("button", { name: "下一个媒体" }).click();
+    const desktopPrevious = storyDesktop.page.getByRole("button", { name: "上一个媒体" });
+    const desktopNext = storyDesktop.page.getByRole("button", { name: "下一个媒体" });
+    const desktopButtonsVisible = await desktopPrevious.isVisible() && await desktopNext.isVisible();
+    await desktopNext.click();
+    await desktopPrevious.click();
+    await desktopNext.click();
+    checks.push({ name: "story-desktop-explicit-navigation", desktopButtonsVisible, failed: !desktopButtonsVisible });
+    if (!desktopButtonsVisible) failed = true;
     const coverAction = storyDesktop.page.getByRole("button", { name: "将当前媒体设为封面" });
     await coverAction.hover();
     await storyDesktop.page.waitForFunction(() => {
