@@ -2242,11 +2242,14 @@ async function verifyTransientJourneyFocus() {
           }
         }
 
+        // CI can render this anti-jump release at a low frame rate; each frame
+        // intentionally advances by at most 50ms, so preserve the same motion
+        // contract while allowing enough wall-clock time for convergence.
         // The same release must eventually converge to the upright 2°/s idle orbit.
         await page.waitForFunction(() => {
           const debug = window.__particleEarthDebug?.();
           return Boolean(debug && Math.abs(debug.rotationX) < 0.002);
-        }, null, { timeout: 8_000 });
+        }, null, { timeout: 20_000 });
         const upright = await page.evaluate(() => {
           const debug = window.__particleEarthDebug?.();
           return {
