@@ -425,16 +425,23 @@ async function verifyDetailedEarthParticleContinuity() {
     initialPath: "/?qaState=final-acceptance",
   });
   try {
-    await gateway.page.route("**/styles/fiord*", (route) => route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify({
-        version: 8,
-        name: "QA empty detailed-earth style",
-        sources: {},
-        layers: [],
+    // Keep this QA deterministic against the app's current same-origin style
+    // proxy. It previously intercepted the upstream /styles/fiord URL, so
+    // switching the production default to /api/mapstyle made CI accidentally
+    // hit the real proxy/upstream and fail on network availability.
+    await gateway.page.route(
+      /\/api\/mapstyle\?path=styles(?:%2F|\/)fiord(?:$|&)/i,
+      (route) => route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          version: 8,
+          name: "QA empty detailed-earth style",
+          sources: {},
+          layers: [],
+        }),
       }),
-    }));
+    );
     await gateway.page.locator(".auth-continuity.is-released").waitFor({ timeout: 15_000 });
     await gateway.page.waitForFunction(() => (
       document.querySelector("[data-persistent-earth-host]")?.getAttribute("data-stage") === "atlas"

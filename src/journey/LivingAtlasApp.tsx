@@ -251,7 +251,6 @@ export function LivingAtlasApp({
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [loadError, setLoadError] = useState("");
   const [view, setView] = useState<AtlasView>("planet");
-  const [activeJourneyId, setActiveJourneyId] = useState<string | null>(null);
   const [storyJourneyId, setStoryJourneyId] = useState<string | null>(null);
   const [storyRoutePointId, setStoryRoutePointId] = useState<string | null>(null);
   // #19: cinematic journey playback. The globe stays mounted underneath; the
@@ -323,6 +322,7 @@ export function LivingAtlasApp({
   // #21: the rewind cursor over the whole journey timeline. Only active while
   // the user is in globe focus mode; entering playback pauses rewind.
   const timeCursor = useGlobeTimeCursor(journeys);
+  const activeJourneyId = timeCursor.selection?.journeyId ?? journeys.at(-1)?.id ?? null;
 
   useEffect(() => {
     setCinematicIsolation(playbackActive);
@@ -371,12 +371,6 @@ export function LivingAtlasApp({
       const loaded = sortJourneysChronologically(await listJourneys());
       if (revision !== loadRevision.current) return;
       setJourneys(loaded);
-      // Default to the most recent journey so routes and flow are visible
-      // immediately instead of only after the first selection.
-      setActiveJourneyId((current) => {
-        if (current && loaded.some((journey) => journey.id === current)) return current;
-        return loaded.at(-1)?.id ?? null;
-      });
       setLoadError("");
       setStatus("ready");
       return loaded;
@@ -409,10 +403,10 @@ export function LivingAtlasApp({
   }, [arrivalJourneyId, reduceMotion]);
 
   useEffect(() => {
-    if (!isMobileV2 || !arrivalJourneyId) return;
+    if (!arrivalJourneyId) return;
     if (!journeys.some((journey) => journey.id === arrivalJourneyId)) return;
     timeCursor.selectJourney(arrivalJourneyId);
-  }, [arrivalJourneyId, isMobileV2, journeys, timeCursor.selectJourney]);
+  }, [arrivalJourneyId, journeys, timeCursor.selectJourney]);
 
   const activeJourney = journeys.find((journey) => journey.id === activeJourneyId) ?? null;
   const playbackJourney = journeys.find((journey) => journey.id === playbackJourneyId) ?? null;
@@ -431,14 +425,14 @@ export function LivingAtlasApp({
       ? savedRoutes.map((route) => route.id === draftRoute.id ? draftRoute : route)
       : [...savedRoutes, draftRoute];
   }, [draftRoute, journeys]);
-  const mobilePlayback = resolveMobilePlaybackPresentation(journeys, timeCursor.selection);
-  const mobileJourney = mobilePlayback.journey;
-  const mobilePoint = mobilePlayback.point;
-  const mobileFocusPoint = mobilePlayback.focusPoint;
-  const focusPoint = journeyFocus(activeJourney);
-  const activeJourneyRoute = routes.find((route) => route.id === activeJourneyId) ?? null;
-  const mobileJourneyRoute = routes.find((route) => route.id === mobilePlayback.activeRouteId) ?? null;
-  const mobileFocusRevision = mobilePlayback.focusRevision;
+  const focusPresentation = resolveMobilePlaybackPresentation(journeys, timeCursor.selection);
+  const mobileJourney = focusPresentation.journey;
+  const mobilePoint = focusPresentation.point;
+  const focusPoint = focusPresentation.focusPoint;
+  const focusRoute = focusPresentation.point
+    ? null
+    : routes.find((route) => route.id === focusPresentation.activeRouteId) ?? null;
+  const focusRevision = focusPresentation.focusRevision + timeCursor.selectionRevision * 100_000;
   const mobileSheetJourney = journeys.find((journey) => journey.id === mobileSheetJourneyId) ?? null;
   const mobileMapJourney = journeys.find((journey) => journey.id === mobileMapJourneyId) ?? null;
   const mobileMapRoute = routes.find((route) => route.id === mobileMapJourneyId) ?? null;
@@ -472,7 +466,6 @@ export function LivingAtlasApp({
   async function handleSaved(result: JourneySaveResult) {
     const edited = editingJourneyId === result.journey.id;
     setJourneys((current) => mergeJourney(current, result.journey));
-    setActiveJourneyId(result.journey.id);
     if (!edited) setArrivalJourneyId(result.journey.id);
     setDraftRoute(null);
     setUndoJourney(null);
@@ -493,7 +486,7 @@ export function LivingAtlasApp({
   }
 
   function editJourney(journeyId: string) {
-    setActiveJourneyId(journeyId);
+    timeCursor.selectJourney(journeyId);
     setStoryJourneyId(null);
     setStoryRoutePointId(null);
     setEditingJourneyId(journeyId);
@@ -508,9 +501,6 @@ export function LivingAtlasApp({
     setJourneys(remaining);
     setStoryJourneyId(null);
     setStoryRoutePointId(null);
-    setActiveJourneyId((current) => current === journeyId
-      ? null
-      : current);
     setUndoJourney(removed);
     setNotice("旅程已从图谱移除；7 天内可以撤销，媒体尚未清理。");
   }
@@ -520,7 +510,7 @@ export function LivingAtlasApp({
     try {
       const restored = await restoreJourney(undoJourney.id);
       setJourneys((current) => mergeJourney(current, restored));
-      setActiveJourneyId(restored.id);
+      setArrivalJourneyId(restored.id);
       setUndoJourney(null);
       setNotice("旅程已恢复到图谱。");
     } catch (error) {
@@ -530,7 +520,7 @@ export function LivingAtlasApp({
 
   function selectJourney(journeyId: string, source?: HTMLElement | null) {
     morphJourneyCard(source ?? null, activeJourneyId !== null, () => {
-      setActiveJourneyId(journeyId);
+      timeCursor.selectJourney(journeyId);
       setArrivalJourneyId(journeyId);
       if (view === "timeline") setView("planet");
     });
@@ -553,7 +543,7 @@ export function LivingAtlasApp({
       source: sourceElement,
       name: `journey-cover-${journeyId}`,
       update: () => {
-        setActiveJourneyId(journeyId);
+        timeCursor.selectJourney(journeyId);
         setStoryRoutePointId(routePointId);
         setStoryJourneyId(journeyId);
       },
@@ -652,14 +642,14 @@ export function LivingAtlasApp({
           <GlobeComponent
             focusPoint={playbackCameraTarget?.kind === "point"
               ? playbackFocusPoint
-              : isMobileV2 ? mobileFocusPoint : focusPoint}
+              : focusPoint}
             focusRoute={playbackCameraTarget
               ? playbackFocusRoute
-              : isMobileV2 ? null : activeJourneyRoute}
-            focusRevision={playbackCameraCommand?.revision ?? (isMobileV2 ? mobileFocusRevision : 0)}
-            focusColor={(isMobileV2 ? mobileJourney : activeJourney)?.lightColor}
+              : focusRoute}
+            focusRevision={playbackCameraCommand?.revision ?? focusRevision}
+            focusColor={focusPresentation.journey?.lightColor}
             journeyRoutes={routes}
-            activeJourneyRouteId={draftRoute?.id ?? (isMobileV2 ? mobileJourney?.id ?? null : activeJourneyId)}
+            activeJourneyRouteId={draftRoute?.id ?? activeJourneyId}
             temporalReveal={isMobileV2 || globeFocusMode
               ? {
                 journeys: timeCursor.reveal.journeyProgress,
@@ -674,13 +664,9 @@ export function LivingAtlasApp({
             }}
             onJourneyRoutePointActivate={(journeyId, routePointId) => {
               if (journeyId === "draft-route-preview") return;
-              if (isMobileV2) {
-                const journey = journeys.find((candidate) => candidate.id === journeyId);
-                const pointIndex = journey?.routePoints.findIndex((point) => point.id === routePointId) ?? -1;
-                if (pointIndex >= 0) timeCursor.selectPoint(journeyId, pointIndex);
-              } else {
-                setActiveJourneyId(journeyId);
-              }
+              const journey = journeys.find((candidate) => candidate.id === journeyId);
+              const pointIndex = journey?.routePoints.findIndex((point) => point.id === routePointId) ?? -1;
+              if (pointIndex >= 0) timeCursor.selectPoint(journeyId, pointIndex);
               setStoryRoutePointId(routePointId);
               setStoryJourneyId(journeyId);
             }}
@@ -765,7 +751,7 @@ export function LivingAtlasApp({
           journeys={journeys}
           activeJourneyId={activeJourneyId}
           onOpenStory={(id: string) => {
-            setActiveJourneyId(id);
+            timeCursor.selectJourney(id);
             setStoryRoutePointId(null);
             setStoryJourneyId(id);
           }}
@@ -1077,8 +1063,7 @@ export function LivingAtlasApp({
           routePointId={storyRoutePointId}
           onClose={(source) => closeJourneyStory(source ?? null)}
           onNavigate={(id) => {
-            if (isMobileV2) timeCursor.selectJourney(id);
-            else setActiveJourneyId(id);
+            timeCursor.selectJourney(id);
             setStoryRoutePointId(null);
             setStoryJourneyId(id);
           }}

@@ -23,6 +23,17 @@
 		header Cache-Control "public, max-age=31536000, immutable"
 	}
 
+	@atlasStatic path /earth/* /fonts/*
+	handle @atlasStatic {
+		root * /srv
+		file_server
+		# These files use stable names (for example /earth/cities.json and
+		# /fonts/Doto-ROND-wght.ttf), so they are cacheable but not immutable.
+		# Revalidate after a short freshness window so a deployment can update
+		# earth/font data without leaving clients pinned to an old copy for a year.
+		header Cache-Control "public, max-age=3600, must-revalidate"
+	}
+
 	handle {
 		root * /srv
 		try_files {path} /index.html

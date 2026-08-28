@@ -2,7 +2,7 @@ import type { ExpressionSpecification, StyleSpecification } from "maplibre-gl";
 
 export type DetailedEarthLanguage = "zh" | "bilingual";
 
-export const DEFAULT_DETAILED_EARTH_STYLE_URL = "https://tiles.openfreemap.org/styles/fiord";
+export const DEFAULT_DETAILED_EARTH_STYLE_URL = "/api/mapstyle?path=styles%2Ffiord";
 // Below this regional scale a flat map stops adding useful journey detail.
 // Returning to the particle globe also avoids presenting a second world view.
 export const DETAILED_EARTH_RETURN_ZOOM = 5.85;
