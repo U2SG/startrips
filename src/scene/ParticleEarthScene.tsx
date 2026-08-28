@@ -228,6 +228,24 @@ export function getGlobeIdleRotationDelta(
   return deltaSeconds * GLOBE_IDLE_ROTATION_RADIANS_PER_SECOND;
 }
 
+export function isFocusFlightActive(
+  pointFocusSettling: boolean,
+  routeFocusSettling: boolean,
+) {
+  return pointFocusSettling || routeFocusSettling;
+}
+
+export function isIdleRotationSuppressed(
+  dragToRotate: boolean,
+  pointFocusSettling: boolean,
+  routeFocusSettling: boolean,
+) {
+  // Programmatic focus is a one-shot flight, not a permanent camera lock.
+  // Pause idle rotation only while that flight is actively settling; once the
+  // destination arrives, normal self-rotation owns the globe again.
+  return !dragToRotate || isFocusFlightActive(pointFocusSettling, routeFocusSettling);
+}
+
 export function selectRenderableJourneyRoutes(
   routes: readonly JourneyRoute[],
 ): JourneyRoute[] {
@@ -1024,6 +1042,8 @@ export function ParticleEarthScene({
     let rotationVelocityX = 0;
     let rotationVelocityY = 0;
     let lastGlobeInteractionAt = performance.now();
+    const focusViewportPosition = new Vector2();
+    let hasFocusViewportPosition = false;
     let routeFocusFrame = getSphericalRouteFocus(latestFocusRoute.current?.points ?? []);
     let routeFocusSettling = Boolean(routeFocusFrame);
     let pointFocusSettling = Boolean(latestFocusPoint.current) && !routeFocusFrame;
@@ -2551,6 +2571,9 @@ export function ParticleEarthScene({
           interactiveRotationX = targetRotationX;
           interactiveRotationY = 0;
           pointFocusSettling = false;
+          // A programmatic journey/point focus is not a user-idle event. Resume
+          // the normal idle motion as soon as the one-shot arrival completes.
+          lastGlobeInteractionAt = now - GLOBE_IDLE_RESUME_DELAY_MS;
         }
       }
 
@@ -2569,6 +2592,7 @@ export function ParticleEarthScene({
           interactiveRotationY = 0;
           interactiveZoom = routeFocusFrame.zoom;
           routeFocusSettling = false;
+          lastGlobeInteractionAt = now - GLOBE_IDLE_RESUME_DELAY_MS;
           syncRouteFocusPhase();
         }
       }
@@ -2593,16 +2617,29 @@ export function ParticleEarthScene({
         && latestCenterFocusPoint.current
         && spatialFocusPoint
       ) {
-        sampleFocusViewport(false);
-        focusLocalOffset
-          .copy(latLonToVector3(spatialFocusPoint.lat, spatialFocusPoint.lon, 1.45))
-          .applyEuler(globe.rotation)
-          .multiplyScalar(globe.scale.x);
-        const framedPoint = focusWorldPositionForViewport(
-          globe.position.z + focusLocalOffset.z,
-        );
-        targetPositionX = framedPoint.x - focusLocalOffset.x;
-        targetPositionY = framedPoint.y - focusLocalOffset.y;
+        // The selected journey only owns the viewport while its focus flight is
+        // arriving. After arrival we freeze that translation and let globe
+        // rotation move the journey naturally away from center instead of
+        // re-projecting/re-centering it every frame.
+        if (isFocusFlightActive(pointFocusSettling, routeFocusSettling)) {
+          sampleFocusViewport(false);
+          focusLocalOffset
+            .copy(latLonToVector3(spatialFocusPoint.lat, spatialFocusPoint.lon, 1.45))
+            .applyEuler(globe.rotation)
+            .multiplyScalar(globe.scale.x);
+          const framedPoint = focusWorldPositionForViewport(
+            globe.position.z + focusLocalOffset.z,
+          );
+          focusViewportPosition.set(
+            framedPoint.x - focusLocalOffset.x,
+            framedPoint.y - focusLocalOffset.y,
+          );
+          hasFocusViewportPosition = true;
+        }
+        if (hasFocusViewportPosition) {
+          targetPositionX = focusViewportPosition.x;
+          targetPositionY = focusViewportPosition.y;
+        }
       }
       globe.position.x = interpolate(globe.position.x, targetPositionX);
       globe.position.y = interpolate(globe.position.y, targetPositionY);
@@ -2618,7 +2655,11 @@ export function ParticleEarthScene({
         if (Math.abs(rotationVelocityY) < 0.001) rotationVelocityY = 0;
         const hasMomentum = rotationVelocityX !== 0 || rotationVelocityY !== 0;
         const idleForMs = now - lastGlobeInteractionAt;
-        const motionDisabled = !latestDragToRotate.current || Boolean(routeFocusFrame);
+        const motionDisabled = isIdleRotationSuppressed(
+          latestDragToRotate.current,
+          pointFocusSettling,
+          routeFocusSettling,
+        );
         interactiveRotationX = getGlobeIdleAlignmentRotation(
           interactiveRotationX,
           delta,
@@ -2749,6 +2790,9 @@ export function ParticleEarthScene({
       },
       setMode(nextMode: GlobeMode) {
         currentMode = nextMode;
+        if (nextMode !== "focusPoint") {
+          hasFocusViewportPosition = false;
+        }
         if (!latestFocusPoint.current) {
           applyFocusPoint(
             nextMode === "archiveBurst" ? { lat: -10, lon: -180 } : null,
@@ -2756,6 +2800,11 @@ export function ParticleEarthScene({
         }
       },
       setFocusPoint(point: { lat: number; lon: number } | null | undefined) {
+        if (point) {
+          hasFocusViewportPosition = false;
+        } else if (!routeFocusFrame) {
+          hasFocusViewportPosition = false;
+        }
         if (
           latestDragToRotate.current
           && latestCenterFocusPoint.current
@@ -2774,6 +2823,7 @@ export function ParticleEarthScene({
       },
       setFocusRoute(route: JourneyRoute | null | undefined) {
         const hadRouteFocus = Boolean(routeFocusFrame);
+        hasFocusViewportPosition = false;
         routeFocusFrame = getSphericalRouteFocus(route?.points ?? []);
         routeFocusSettling = Boolean(routeFocusFrame);
         pointFocusSettling = !routeFocusFrame && Boolean(latestFocusPoint.current);
