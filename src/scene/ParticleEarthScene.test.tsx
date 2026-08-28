@@ -12,6 +12,7 @@ import {
   GLOBE_MODE_CONFIG,
   GLOBE_DRAG_THRESHOLD_PX,
   GLOBE_IDLE_ALIGNMENT_SPEED,
+  GLOBE_IDLE_RELEASE_BLEND_MS,
   GLOBE_IDLE_RESUME_DELAY_MS,
   GLOBE_IDLE_ROTATION_RADIANS_PER_SECOND,
   GLOBE_RENDER_ORDER,
@@ -26,6 +27,7 @@ import {
   QUALITY_PROFILE,
   buildJourneyConnector,
   buildJourneyConnectorPath,
+  advanceGlobeIdleReleasePhase,
   buildProjectedRoutePath,
   collectJourneyDimDirections,
   focusViewportCenter,
@@ -90,7 +92,7 @@ describe("ParticleEarthScene contracts", () => {
     })).toBe(false);
   });
 
-  it("auto-rotates only after idle time and outside reduced motion", () => {
+  it("auto-rotates only after idle time and ramps into the idle rate", () => {
     expect(getGlobeIdleRotationDelta(
       1,
       GLOBE_IDLE_RESUME_DELAY_MS - 1,
@@ -110,11 +112,21 @@ describe("ParticleEarthScene contracts", () => {
       true,
     )).toBe(0);
     expect(getGlobeIdleRotationDelta(
-      1,
+      0.05,
       GLOBE_IDLE_RESUME_DELAY_MS,
       false,
       false,
-    )).toBeCloseTo(GLOBE_IDLE_ROTATION_RADIANS_PER_SECOND);
+      true,
+      0,
+    )).toBe(0);
+    expect(getGlobeIdleRotationDelta(
+      0.05,
+      GLOBE_IDLE_RESUME_DELAY_MS + GLOBE_IDLE_RELEASE_BLEND_MS,
+      false,
+      false,
+      true,
+      1,
+    )).toBeCloseTo(0.05 * GLOBE_IDLE_ROTATION_RADIANS_PER_SECOND);
   });
 
   it("treats journey focus as a one-shot flight and releases idle rotation after arrival", () => {
@@ -127,40 +139,66 @@ describe("ParticleEarthScene contracts", () => {
     expect(isIdleRotationSuppressed(false, false, false)).toBe(true);
   });
 
-  it("holds focus, then returns upright at a constant 15 degrees per second before idle rotation", () => {
+  it("holds focus, then blends upright recovery and longitude idle rotation", () => {
     expect(GLOBE_UPRIGHT_ROTATION_X).toBe(0);
     expect(GLOBE_IDLE_ALIGNMENT_SPEED).toBeCloseTo((Math.PI * 15) / 180);
+    expect(GLOBE_IDLE_RELEASE_BLEND_MS).toBe(2_400);
     expect(getGlobeIdleAlignmentRotation(
       0.8,
       1 / 60,
       GLOBE_IDLE_RESUME_DELAY_MS - 1,
       false,
       false,
+      0,
     )).toBe(0.8);
 
-    const oneSecondAligned = getGlobeIdleAlignmentRotation(
-      0.8,
-      1,
+    const firstPhase = advanceGlobeIdleReleasePhase(
+      0,
+      0.05,
       GLOBE_IDLE_RESUME_DELAY_MS,
       false,
       false,
     );
-    expect(oneSecondAligned).toBeCloseTo(0.8 - (Math.PI * 15) / 180);
-    expect(isGlobeUpright(oneSecondAligned)).toBe(false);
-    expect(getGlobeIdleAlignmentRotation(
-      0.1,
-      1,
+    const resumedPhase = advanceGlobeIdleReleasePhase(
+      firstPhase,
+      5,
+      GLOBE_IDLE_RESUME_DELAY_MS + 5_000,
+      false,
+      false,
+    );
+    expect(firstPhase).toBeCloseTo(50 / GLOBE_IDLE_RELEASE_BLEND_MS);
+    expect(resumedPhase - firstPhase).toBeCloseTo(50 / GLOBE_IDLE_RELEASE_BLEND_MS);
+
+    const earlyAligned = getGlobeIdleAlignmentRotation(
+      0.8,
+      0.05,
       GLOBE_IDLE_RESUME_DELAY_MS,
       false,
       false,
-    )).toBe(0);
+      firstPhase,
+    );
+    expect(earlyAligned).toBeLessThan(0.8);
+    expect(earlyAligned).toBeGreaterThan(0.79);
     expect(getGlobeIdleRotationDelta(
-      1,
+      0.05,
       GLOBE_IDLE_RESUME_DELAY_MS,
       false,
       false,
       false,
-    )).toBe(0);
+      firstPhase,
+    )).toBeGreaterThan(0);
+
+    const fullPhaseAligned = getGlobeIdleAlignmentRotation(
+      0.8,
+      0.05,
+      GLOBE_IDLE_RESUME_DELAY_MS + GLOBE_IDLE_RELEASE_BLEND_MS,
+      false,
+      false,
+      1,
+    );
+    const fullPhaseStep = 0.8 - fullPhaseAligned;
+    expect(fullPhaseStep).toBeCloseTo(GLOBE_IDLE_ALIGNMENT_SPEED * 0.05);
+    expect(isGlobeUpright(fullPhaseAligned)).toBe(false);
     expect(isGlobeUpright(0)).toBe(true);
     expect(isGlobeUpright(Math.PI * 2)).toBe(true);
   });
@@ -294,11 +332,11 @@ describe("ParticleEarthScene contracts", () => {
     expect(partiallyRevealed[1].length()).toBeCloseTo(0.4);
   });
 
-  it("holds the focused arrival for twenty seconds of inactivity", () => {
+  it("holds the focused arrival for twenty seconds before release starts", () => {
     expect(GLOBE_IDLE_RESUME_DELAY_MS).toBe(20_000);
-    expect(getGlobeIdleRotationDelta(1, 19_999, false, false)).toBe(0);
-    expect(getGlobeIdleRotationDelta(1, 20_000, false, false))
-      .toBeCloseTo(GLOBE_IDLE_ROTATION_RADIANS_PER_SECOND);
+    expect(advanceGlobeIdleReleasePhase(0, 0.05, 19_999, false, false)).toBe(0);
+    expect(advanceGlobeIdleReleasePhase(0, 0.05, 20_000, false, false)).toBeGreaterThan(0);
+    expect(getGlobeIdleRotationDelta(0.05, 20_000, false, false, true, 0)).toBe(0);
   });
 
   it("keeps geographic context behind journey and personal signals", () => {

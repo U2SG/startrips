@@ -2187,39 +2187,62 @@ async function verifyTransientJourneyFocus() {
           throw new Error(`Transient focus hold failed: ${JSON.stringify({ held, arrived, holdPositionDelta, holdRotationDelta })}`);
         }
 
-        // After 20s of inactivity, upright recovery begins at a constant 15°/s.
-        await page.waitForFunction((startRotationX) => {
+        // After the 20s hold, X recovery and Y idle rotation must enter through
+        // one shared release phase. Sample the angular-velocity vector while the
+        // globe is still tilted so QA catches any axis-only ownership handoff.
+        await page.waitForFunction(({ startRotationX, startRotationY }) => {
           const debug = window.__particleEarthDebug?.();
-          return Boolean(debug && Math.abs(debug.rotationX - startRotationX) > 0.03);
-        }, held.rotationX, { timeout: 20_000 });
-        const alignStart = await page.evaluate(() => {
-          const debug = window.__particleEarthDebug?.();
+          return Boolean(
+            debug
+            && Math.abs(debug.rotationX - startRotationX) > 0.01
+            && Math.abs(debug.rotationY - startRotationY) > 0.001,
+          );
+        }, {
+          startRotationX: held.rotationX,
+          startRotationY: held.rotationY,
+        }, { timeout: 20_000 });
+        const releaseSamples = [];
+        for (let sampleIndex = 0; sampleIndex < 8; sampleIndex += 1) {
+          releaseSamples.push(await page.evaluate(() => {
+            const debug = window.__particleEarthDebug?.();
+            return {
+              at: performance.now(),
+              rotationX: debug?.rotationX ?? 0,
+              rotationY: debug?.rotationY ?? 0,
+            };
+          }));
+          await page.waitForTimeout(120);
+        }
+        const releaseVelocities = releaseSamples.slice(1).map((sample, index) => {
+          const previous = releaseSamples[index];
+          const seconds = Math.max(0.001, (sample.at - previous.at) / 1_000);
           return {
-            at: performance.now(),
-            rotationX: debug?.rotationX ?? 0,
-            rotationY: debug?.rotationY ?? 0,
-            positionX: debug?.positionX ?? 0,
-            positionY: debug?.positionY ?? 0,
+            x: (sample.rotationX - previous.rotationX) / seconds,
+            y: (sample.rotationY - previous.rotationY) / seconds,
           };
         });
-        await page.waitForTimeout(1_000);
-        const alignAfterOneSecond = await page.evaluate(() => {
-          const debug = window.__particleEarthDebug?.();
-          return {
-            at: performance.now(),
-            rotationX: debug?.rotationX ?? 0,
-            rotationY: debug?.rotationY ?? 0,
-          };
-        });
-        const alignSeconds = Math.max(0.001, (alignAfterOneSecond.at - alignStart.at) / 1_000);
-        const alignRateDegrees = Math.abs(
-          (alignAfterOneSecond.rotationX - alignStart.rotationX) * 180 / Math.PI / alignSeconds,
-        );
-        if (alignRateDegrees < 12 || alignRateDegrees > 18) {
-          throw new Error(`Transient focus alignment speed failed: ${JSON.stringify({ alignRateDegrees, alignStart, alignAfterOneSecond })}`);
+        for (const velocity of releaseVelocities) {
+          if (Math.abs(velocity.x) < 0.002 || Math.abs(velocity.y) < 0.001) {
+            throw new Error(`Transient focus release lost a motion axis: ${JSON.stringify({ releaseSamples, releaseVelocities })}`);
+          }
+        }
+        for (let velocityIndex = 1; velocityIndex < releaseVelocities.length; velocityIndex += 1) {
+          const previous = releaseVelocities[velocityIndex - 1];
+          const current = releaseVelocities[velocityIndex];
+          const previousAngle = Math.atan2(previous.y, previous.x);
+          const currentAngle = Math.atan2(current.y, current.x);
+          const angleDelta = Math.abs(Math.atan2(
+            Math.sin(currentAngle - previousAngle),
+            Math.cos(currentAngle - previousAngle),
+          ));
+          const previousSpeed = Math.hypot(previous.x, previous.y);
+          const currentSpeed = Math.hypot(current.x, current.y);
+          if (angleDelta > Math.PI / 5 || Math.abs(currentSpeed - previousSpeed) > 0.12) {
+            throw new Error(`Transient focus angular velocity was discontinuous: ${JSON.stringify({ releaseSamples, releaseVelocities, velocityIndex, angleDelta, previousSpeed, currentSpeed })}`);
+          }
         }
 
-        // Longitude auto-rotation must wait for upright alignment, then resume.
+        // The same release must eventually converge to the upright 2°/s idle orbit.
         await page.waitForFunction(() => {
           const debug = window.__particleEarthDebug?.();
           return Boolean(debug && Math.abs(debug.rotationX) < 0.002);
@@ -2227,15 +2250,27 @@ async function verifyTransientJourneyFocus() {
         const upright = await page.evaluate(() => {
           const debug = window.__particleEarthDebug?.();
           return {
+            at: performance.now(),
             rotationY: debug?.rotationY ?? 0,
             positionX: debug?.positionX ?? 0,
             positionY: debug?.positionY ?? 0,
           };
         });
-        await page.waitForFunction((startRotationY) => {
+        await page.waitForTimeout(1_000);
+        const idleSample = await page.evaluate(() => {
           const debug = window.__particleEarthDebug?.();
-          return Boolean(debug && Math.abs(debug.rotationY - startRotationY) > 0.02);
-        }, upright.rotationY, { timeout: 4_000 });
+          return {
+            at: performance.now(),
+            rotationY: debug?.rotationY ?? 0,
+          };
+        });
+        const idleSeconds = Math.max(0.001, (idleSample.at - upright.at) / 1_000);
+        const idleRateDegrees = Math.abs(
+          (idleSample.rotationY - upright.rotationY) * 180 / Math.PI / idleSeconds,
+        );
+        if (idleRateDegrees < 1.5 || idleRateDegrees > 2.5) {
+          throw new Error(`Transient focus idle convergence failed: ${JSON.stringify({ upright, idleSample, idleRateDegrees })}`);
+        }
         release = await page.evaluate(() => {
           const scene = document.querySelector(".particle-earth-scene");
           const debug = window.__particleEarthDebug?.();

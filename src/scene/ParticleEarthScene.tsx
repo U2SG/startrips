@@ -91,6 +91,7 @@ export const GLOBE_ZOOM_MAX = 3.0;
 export const GLOBE_SURFACE_RADIUS = 1.39;
 export const GLOBE_IDLE_ROTATION_RADIANS_PER_SECOND = (Math.PI * 2) / 180;
 export const GLOBE_IDLE_RESUME_DELAY_MS = 20_000;
+export const GLOBE_IDLE_RELEASE_BLEND_MS = 2_400;
 export const GLOBE_UPRIGHT_ROTATION_X = 0;
 export const GLOBE_IDLE_ALIGNMENT_SPEED = (Math.PI * 15) / 180;
 
@@ -163,8 +164,8 @@ export function isGlobeUpright(rotation: number, tolerance = 0.002) {
     <= tolerance;
 }
 
-export function getGlobeIdleAlignmentRotation(
-  rotation: number,
+export function advanceGlobeIdleReleasePhase(
+  currentPhase: number,
   deltaSeconds: number,
   idleForMs: number,
   hasMomentum: boolean,
@@ -175,10 +176,38 @@ export function getGlobeIdleAlignmentRotation(
     || hasMomentum
     || idleForMs < GLOBE_IDLE_RESUME_DELAY_MS
   ) {
+    return 0;
+  }
+  const boundedDelta = Math.min(0.05, Math.max(0, deltaSeconds));
+  return Math.min(1, currentPhase + (boundedDelta * 1_000) / GLOBE_IDLE_RELEASE_BLEND_MS);
+}
+
+export function getGlobeIdleReleaseEase(releasePhase: number) {
+  const t = Math.min(1, Math.max(0, releasePhase));
+  return t * t * (3 - 2 * t);
+}
+
+export function getGlobeIdleAlignmentRotation(
+  rotation: number,
+  deltaSeconds: number,
+  idleForMs: number,
+  hasMomentum: boolean,
+  motionDisabled: boolean,
+  releasePhase = 1,
+) {
+  if (
+    motionDisabled
+    || hasMomentum
+    || idleForMs < GLOBE_IDLE_RESUME_DELAY_MS
+  ) {
     return rotation;
   }
   const remaining = getShortestRotationDelta(rotation, GLOBE_UPRIGHT_ROTATION_X);
-  const maxStep = GLOBE_IDLE_ALIGNMENT_SPEED * Math.max(0, deltaSeconds);
+  if (Math.abs(remaining) <= 0.0005) return GLOBE_UPRIGHT_ROTATION_X;
+  const ease = getGlobeIdleReleaseEase(releasePhase);
+  const responseSpeed = Math.abs(remaining) * 1.6;
+  const angularSpeed = Math.min(GLOBE_IDLE_ALIGNMENT_SPEED, responseSpeed) * ease;
+  const maxStep = angularSpeed * Math.min(0.05, Math.max(0, deltaSeconds));
   if (Math.abs(remaining) <= maxStep) return GLOBE_UPRIGHT_ROTATION_X;
   return rotation + Math.sign(remaining) * maxStep;
 }
@@ -213,17 +242,19 @@ export function getGlobeIdleRotationDelta(
   idleForMs: number,
   hasMomentum: boolean,
   motionDisabled: boolean,
-  alignmentComplete = true,
+  _alignmentComplete = true,
+  releasePhase = 1,
 ) {
   if (
     motionDisabled
     || hasMomentum
     || idleForMs < GLOBE_IDLE_RESUME_DELAY_MS
-    || !alignmentComplete
   ) {
     return 0;
   }
-  return deltaSeconds * GLOBE_IDLE_ROTATION_RADIANS_PER_SECOND;
+  return Math.min(0.05, Math.max(0, deltaSeconds))
+    * GLOBE_IDLE_ROTATION_RADIANS_PER_SECOND
+    * getGlobeIdleReleaseEase(releasePhase);
 }
 
 export function isFocusFlightActive(
@@ -1163,6 +1194,7 @@ export function ParticleEarthScene({
     let interactiveZoom = 1;
     let rotationVelocityX = 0;
     let rotationVelocityY = 0;
+    let idleReleasePhase = 0;
     let lastGlobeInteractionAt = performance.now();
     let routeFocusFrame = getSphericalRouteFocus(latestFocusRoute.current?.points ?? []);
     let routeFocusSettling = Boolean(routeFocusFrame);
@@ -2794,19 +2826,28 @@ export function ParticleEarthScene({
           pointFocusSettling,
           routeFocusSettling,
         );
-        interactiveRotationX = getGlobeIdleAlignmentRotation(
-          interactiveRotationX,
-          elapsedDelta,
+        idleReleasePhase = advanceGlobeIdleReleasePhase(
+          idleReleasePhase,
+          delta,
           idleForMs,
           hasMomentum,
           motionDisabled,
         );
+        interactiveRotationX = getGlobeIdleAlignmentRotation(
+          interactiveRotationX,
+          delta,
+          idleForMs,
+          hasMomentum,
+          motionDisabled,
+          idleReleasePhase,
+        );
         interactiveRotationY += getGlobeIdleRotationDelta(
-          elapsedDelta,
+          delta,
           idleForMs,
           hasMomentum,
           motionDisabled,
           isGlobeUpright(interactiveRotationX),
+          idleReleasePhase,
         );
       }
       globe.rotation.x = interactiveRotationX;
