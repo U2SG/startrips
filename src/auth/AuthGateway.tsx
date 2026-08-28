@@ -7,6 +7,7 @@ import {
   type ReactNode,
 } from "react";
 import { IconChevronDown, IconUserCircle } from "@tabler/icons-react";
+import { StartripsBrandLoader } from "../brand/StartripsBrandMark";
 import { usePersistentEarth } from "../scene/LivingAtlasGlobe";
 import { authClient } from "./auth-client";
 
@@ -507,7 +508,11 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cine
   }
 
   if (gate.kind === "loading") {
-    return <main className="auth-gate"><p className="auth-loading">正在打开私人图谱…</p></main>;
+    return (
+      <main className="auth-gate auth-gate--brand-loading" aria-busy="true">
+        <StartripsBrandLoader message="正在打开私人图谱…" />
+      </main>
+    );
   }
   if (gate.kind === "error") {
     return <main className="auth-gate"><section className="auth-card"><h1>暂时无法进入</h1><p className="auth-message">{gate.message}</p><button className="auth-primary" type="button" onClick={() => setRevision((value) => value + 1)}>重试</button></section></main>;

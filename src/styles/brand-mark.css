@@ -1,0 +1,148 @@
+.startrips-brand-mark {
+  width: var(--startrips-mark-size, 64px);
+  height: var(--startrips-mark-size, 64px);
+  overflow: visible;
+  flex: 0 0 auto;
+}
+
+.startrips-brand-mark__planet,
+.startrips-brand-mark__journey {
+  fill: none;
+  vector-effect: non-scaling-stroke;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.startrips-brand-mark__planet {
+  stroke: #a4fff4;
+  stroke-width: 3.1;
+}
+
+.startrips-brand-mark__journey {
+  stroke: #49e5d3;
+  stroke-width: 2.7;
+}
+
+.startrips-brand-mark__waypoint {
+  fill: #49e5d3;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.startrips-brand-mark__star {
+  fill: #ffd77a;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.startrips-brand-mark.is-loading .startrips-brand-mark__planet {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: startrips-planet-draw 720ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.startrips-brand-mark.is-loading .startrips-brand-mark__journey {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation:
+    startrips-journey-draw 920ms 260ms cubic-bezier(0.2, 0.8, 0.2, 1) forwards,
+    startrips-journey-breathe 2.8s 1.4s ease-in-out infinite;
+}
+
+.startrips-brand-mark.is-loading .startrips-brand-mark__waypoint {
+  opacity: 0;
+  transform: scale(0.4);
+  animation: startrips-waypoint-light 420ms 880ms cubic-bezier(0.2, 1.6, 0.4, 1) forwards;
+}
+
+.startrips-brand-mark.is-loading .startrips-brand-mark__star {
+  opacity: 0;
+  transform: scale(0.35) rotate(-12deg);
+  animation:
+    startrips-star-light 520ms 1120ms cubic-bezier(0.2, 1.5, 0.35, 1) forwards,
+    startrips-star-breathe 3.2s 1.72s ease-in-out infinite;
+}
+
+.startrips-brand-loader {
+  display: grid;
+  justify-items: center;
+  gap: 16px;
+  text-align: center;
+  color: #dce9e5;
+}
+
+.startrips-brand-loader__copy {
+  display: grid;
+  gap: 7px;
+}
+
+.startrips-brand-loader__copy strong {
+  color: #c9f8ef;
+  font: 600 9px/1 ui-monospace, "SFMono-Regular", Consolas, monospace;
+  letter-spacing: 0.28em;
+}
+
+.startrips-brand-loader__copy span {
+  color: #7f9a94;
+  font: 500 9px/1.4 ui-monospace, "SFMono-Regular", Consolas, monospace;
+  letter-spacing: 0.16em;
+}
+
+@keyframes startrips-planet-draw {
+  to { stroke-dashoffset: 0; }
+}
+
+@keyframes startrips-journey-draw {
+  to { stroke-dashoffset: 0; }
+}
+
+@keyframes startrips-waypoint-light {
+  55% { opacity: 1; transform: scale(1.24); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+@keyframes startrips-star-light {
+  58% {
+    opacity: 1;
+    transform: scale(1.24) rotate(0deg);
+    filter: drop-shadow(0 0 7px rgb(255 215 122 / 0.72));
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) rotate(0deg);
+    filter: drop-shadow(0 0 3px rgb(255 215 122 / 0.3));
+  }
+}
+
+@keyframes startrips-journey-breathe {
+  0%, 100% { opacity: 0.82; filter: drop-shadow(0 0 2px rgb(73 229 211 / 0.18)); }
+  50% { opacity: 1; filter: drop-shadow(0 0 5px rgb(73 229 211 / 0.34)); }
+}
+
+@keyframes startrips-star-breathe {
+  0%, 100% { filter: drop-shadow(0 0 3px rgb(255 215 122 / 0.28)); }
+  50% { filter: drop-shadow(0 0 7px rgb(255 215 122 / 0.52)); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .startrips-brand-mark.is-loading .startrips-brand-mark__planet,
+  .startrips-brand-mark.is-loading .startrips-brand-mark__journey,
+  .startrips-brand-mark.is-loading .startrips-brand-mark__waypoint,
+  .startrips-brand-mark.is-loading .startrips-brand-mark__star {
+    animation: none;
+    opacity: 1;
+    transform: none;
+    stroke-dashoffset: 0;
+    filter: none;
+  }
+}
+.auth-gate--brand-loading,
+.living-atlas.is-loading {
+  background:
+    radial-gradient(circle at 50% 46%, rgb(73 229 211 / 0.065), transparent 24%),
+    #02090b;
+}
+
+.living-atlas.is-loading .startrips-brand-loader {
+  pointer-events: none;
+}

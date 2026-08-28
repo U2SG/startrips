@@ -11,6 +11,7 @@ import {
   IconX,
 } from "@tabler/icons-react";
 import { useAtlasCapabilities, useAtlasCinematicIsolation } from "../auth/AuthGateway";
+import { StartripsBrandLoader } from "../brand/StartripsBrandMark";
 import { CountUp } from "../motion/primitives/CountUp";
 import { useMagnet } from "../motion/primitives/Magnet";
 import { ScrambledText } from "../motion/primitives/ScrambledText";
@@ -616,7 +617,11 @@ export function LivingAtlasApp({
   }
 
   if (status === "loading") {
-    return <main className="living-atlas is-loading"><p>正在读取你的私人星轨…</p></main>;
+    return (
+      <main className="living-atlas is-loading" aria-busy="true">
+        <StartripsBrandLoader message="正在读取你的私人星轨…" />
+      </main>
+    );
   }
 
   if (status === "error") {

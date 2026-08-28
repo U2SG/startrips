@@ -21,6 +21,7 @@ import "./styles/artwork-browser.css";
 import "./styles/personal-artifact.css";
 import "./styles/personal-gallery.css";
 import "./styles/auth-gate.css";
+import "./styles/brand-mark.css";
 import "./styles/living-atlas.css";
 import "./styles/journey-playback.css";
 import "./styles/globe-time-scrubber.css";
