@@ -164,18 +164,21 @@ async function createGatewayPage({
   initialPath = "/?qaState=login-gateway&qaLite=1",
   journeysDelayMs = 0,
   multiPage = false,
+  reducedMotion = "reduce",
+  sessionDelayMs = 0,
+  waitForAuthCard = true,
 } = {}) {
   const context = multiPage
     ? await browser.newContext({
       viewport: { width: 390, height: 844 },
-      reducedMotion: "reduce",
+      reducedMotion,
     })
     : null;
   const gatewayPage = context
     ? await context.newPage()
     : await browser.newPage({
       viewport: { width: 390, height: 844 },
-      reducedMotion: "reduce",
+      reducedMotion,
     });
   const errors = [];
   let authenticated = initialAuthenticated;
@@ -194,6 +197,9 @@ async function createGatewayPage({
       return;
     }
     if (pathname.endsWith("/get-session")) {
+      if (!authenticated && sessionDelayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, sessionDelayMs));
+      }
       if (authenticated) postSignInSessionRequests += 1;
       if (authenticated && failAfterSignIn) {
         await new Promise((resolve) => setTimeout(resolve, 100));
@@ -231,7 +237,7 @@ async function createGatewayPage({
     });
   });
   await gatewayPage.goto(`${origin}${initialPath}`, { waitUntil: "domcontentloaded", timeout: 8_000 });
-  if (!initialAuthenticated) {
+  if (!initialAuthenticated && waitForAuthCard) {
     await gatewayPage.locator(".auth-card--login-v3").waitFor({ state: "visible", timeout: 4_000 });
   }
   return {
@@ -316,6 +322,61 @@ async function verifyAuthenticatedDirectGate(label, path, targetSelector) {
         || !metrics.hitTargetOwned
         || metrics.hostStage !== "atlas"
         || gateway.errors.length > 0,
+    };
+  } finally {
+    await gateway.close();
+  }
+}
+
+async function verifyLoginEarthIntroRotationContinuity() {
+  console.error("[qa-login-v3] login earth intro rotation continuity");
+  const gateway = await createGatewayPage({
+    initialPath: "/?qaState=login-gateway",
+    reducedMotion: "no-preference",
+    sessionDelayMs: 1_200,
+    waitForAuthCard: false,
+  });
+  try {
+    await gateway.page.locator('canvas[data-three-scene="particle-earth"]').waitFor({
+      state: "attached",
+      timeout: 6_000,
+    });
+    await gateway.page.waitForFunction(() => typeof window.__particleEarthDebug === "function", null, {
+      timeout: 6_000,
+    });
+    const samples = [];
+    for (let index = 0; index < 20; index += 1) {
+      samples.push(await gateway.page.evaluate(() => window.__particleEarthDebug?.() ?? null));
+      await gateway.page.waitForTimeout(120);
+    }
+    const modes = samples.map((sample) => sample?.mode ?? null);
+    const modeTransitions = modes.slice(1).reduce((count, mode, index) => (
+      mode !== modes[index] ? count + 1 : count
+    ), 0);
+    const rotationYs = samples
+      .map((sample) => sample?.rotationY)
+      .filter((value) => Number.isFinite(value));
+    const maxAbsRotationY = rotationYs.length
+      ? Math.max(...rotationYs.map((value) => Math.abs(value)))
+      : Number.POSITIVE_INFINITY;
+    const rotationSpan = rotationYs.length
+      ? Math.max(...rotationYs) - Math.min(...rotationYs)
+      : Number.POSITIVE_INFINITY;
+    const unexpectedErrors = gateway.errors.filter((message) => !message.includes("favicon"));
+    return {
+      label: "login-earth-intro-rotation-continuity",
+      samples: samples.map((sample) => ({ mode: sample?.mode ?? null, rotationY: sample?.rotationY ?? null })),
+      maxAbsRotationY,
+      rotationSpan,
+      modeTransitions,
+      errors: unexpectedErrors,
+      failed: rotationYs.length !== samples.length
+        || modes[0] !== "archiveBurst"
+        || modes.at(-1) !== "particleSphere"
+        || modeTransitions !== 1
+        || maxAbsRotationY > 0.03
+        || rotationSpan > 0.02
+        || unexpectedErrors.length > 0,
     };
   } finally {
     await gateway.close();
@@ -753,6 +814,8 @@ if (focusedCase) {
       focusedResult = await verifyDetailedEarthParticleContinuity();
     } else if (focusedCase === "brand-loader") {
       focusedResult = await verifyBrandLoaderContinuity();
+    } else if (focusedCase === "login-earth-intro") {
+      focusedResult = await verifyLoginEarthIntroRotationContinuity();
     } else {
       throw new Error(`Unknown QA_LOGIN_CASE: ${focusedCase}`);
     }
@@ -849,6 +912,10 @@ try {
   );
   if (invitationPointers.failed) failed = true;
   results.push(invitationPointers);
+
+  const loginEarthIntroContinuity = await verifyLoginEarthIntroRotationContinuity();
+  if (loginEarthIntroContinuity.failed) failed = true;
+  results.push(loginEarthIntroContinuity);
 
   const brandLoaderContinuity = await verifyBrandLoaderContinuity();
   if (brandLoaderContinuity.failed) failed = true;

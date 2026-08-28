@@ -1545,7 +1545,7 @@ export function JourneyStory({
             {!overview && shownAsset && shownRead?.status === "error" ? <div className="journey-story__media-state is-error">{shownRead.message}</div> : null}
             {!overview && shownAsset && shownRead?.status === "ready" && shownAsset.mimeType.startsWith("video/") ? (
               <video
-                key={shownAsset.id}
+                key={`media-${shownAsset.id}`}
                 src={shownRead.url}
                 controls
                 playsInline
@@ -1556,7 +1556,7 @@ export function JourneyStory({
             ) : null}
             {!overview && shownAsset && shownRead?.status === "ready" && !shownAsset.mimeType.startsWith("video/") ? (
               <img
-                key={`base-${shownAsset.id}`}
+                key={`media-${shownAsset.id}`}
                 className={playing && scopedMedia.length > 1
                   ? `is-kenburns kenburns-${shownIndex % 2}`
                   : "is-zoomable"}
@@ -1572,7 +1572,7 @@ export function JourneyStory({
             ) : null}
             {!overview && incoming && incomingRead?.status === "ready" && !incoming.mimeType.startsWith("video/") ? (
               <img
-                key={`incoming-${incoming.id}`}
+                key={`media-${incoming.id}`}
                 className={`journey-story__media-incoming${playing && scopedMedia.length > 1 ? " is-kenburns" : ""}`}
                 src={incomingRead.url}
                 alt={incoming.fileName}
@@ -1591,7 +1591,7 @@ export function JourneyStory({
             ) : null}
             {!overview && incoming && incomingRead?.status === "ready" && incoming.mimeType.startsWith("video/") ? (
               <video
-                key={`incoming-${incoming.id}`}
+                key={`media-${incoming.id}`}
                 className="journey-story__media-incoming"
                 src={incomingRead.url}
                 controls
@@ -1888,14 +1888,14 @@ export function JourneyStory({
           {/* #11 two-layer stage also serves fullscreen: the incoming frame
               crossfades over the settled base frame without flashing. */}
           {shownAsset && shownRead?.status === "ready" && shownAsset.mimeType.startsWith("video/")
-            ? <video key={`base-${shownAsset.id}`} src={shownRead.url} controls autoPlay playsInline />
+            ? <video key={`media-${shownAsset.id}`} src={shownRead.url} controls autoPlay playsInline />
             : shownAsset && shownRead?.status === "ready"
-              ? <img key={`base-${shownAsset.id}`} src={shownRead.url} alt={shownAsset.fileName} />
+              ? <img key={`media-${shownAsset.id}`} src={shownRead.url} alt={shownAsset.fileName} />
               : null}
           {incoming && incomingRead?.status === "ready" && incoming.mimeType.startsWith("video/")
-            ? <video key={`incoming-${incoming.id}`} className="journey-story__media-incoming" src={incomingRead.url} autoPlay playsInline onAnimationEnd={() => { if (prefersReducedMotion()) settleIncoming(incoming.id); }} />
+            ? <video key={`media-${incoming.id}`} className="journey-story__media-incoming" src={incomingRead.url} autoPlay playsInline onAnimationEnd={() => { if (prefersReducedMotion()) settleIncoming(incoming.id); }} />
             : incoming && incomingRead?.status === "ready"
-              ? <img key={`incoming-${incoming.id}`} className="journey-story__media-incoming" src={incomingRead.url} alt={incoming.fileName} onAnimationEnd={(event) => { if (event.animationName === "motionMediaIn") settleIncoming(incoming.id); }} />
+              ? <img key={`media-${incoming.id}`} className="journey-story__media-incoming" src={incomingRead.url} alt={incoming.fileName} onAnimationEnd={(event) => { if (event.animationName === "motionMediaIn") settleIncoming(incoming.id); }} />
               : null}
           {scopedMedia.length > 1 ? (
             <nav className="journey-story-fullscreen__nav" aria-label="全屏媒体导航">

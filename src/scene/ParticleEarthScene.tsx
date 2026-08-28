@@ -676,6 +676,7 @@ interface ParticleEarthSceneProps {
   dragToRotate?: boolean;
   wheelToZoom?: boolean;
   reduceMotion?: boolean;
+  rotationYOverride?: number;
 }
 
 interface LandGeometry {
@@ -854,6 +855,7 @@ export function ParticleEarthScene({
   dragToRotate = false,
   wheelToZoom = true,
   reduceMotion = false,
+  rotationYOverride,
 }: ParticleEarthSceneProps) {
   const [ready, setReady] = useState(false);
   const latestMode = useRef(mode);
@@ -872,6 +874,7 @@ export function ParticleEarthScene({
   const latestOnGlobePointPick = useRef(onGlobePointPick);
   const latestDragToRotate = useRef(dragToRotate);
   const latestWheelToZoom = useRef(wheelToZoom);
+  const latestRotationYOverride = useRef(rotationYOverride);
   latestMode.current = mode;
   latestQuality.current = quality;
   latestFocusPoint.current = focusPoint;
@@ -888,6 +891,7 @@ export function ParticleEarthScene({
   latestOnGlobePointPick.current = onGlobePointPick;
   latestDragToRotate.current = dragToRotate;
   latestWheelToZoom.current = wheelToZoom;
+  latestRotationYOverride.current = rotationYOverride;
 
   const { hostRef, controllerRef } = useThreeScene((host) => {
     let disposed = false;
@@ -1021,7 +1025,11 @@ export function ParticleEarthScene({
     scene.add(keyLight);
 
     const globe = new Group();
-    globe.rotation.set(0.08, GLOBE_MODE_CONFIG[currentMode].rotationY, -0.03);
+    globe.rotation.set(
+      0.08,
+      latestRotationYOverride.current ?? GLOBE_MODE_CONFIG[currentMode].rotationY,
+      -0.03,
+    );
     scene.add(globe);
     const focusProjectionEuler = new Euler();
     const focusProjectionWorld = new Vector3();
@@ -2663,7 +2671,7 @@ export function ParticleEarthScene({
         : interactiveRotationX;
       let targetBaseRotationY = spatialFocusPoint
         ? focusBaseRotationY ?? rotationYForLongitude(spatialFocusPoint.lon)
-        : target.rotationY;
+        : latestRotationYOverride.current ?? target.rotationY;
       if (focusFlightActive && spatialFocusPoint) {
         sampleFocusViewport(false);
         const finalFocusZoom = routeFocusFrame?.zoom ?? interactiveZoom;

@@ -11,7 +11,7 @@ import {
 import { IconMap2, IconMapPin, IconWorld } from "@tabler/icons-react";
 import type { JourneyRoute } from "../journey/types";
 import type { DetailedEarthLanguage } from "./detailedEarthModel";
-import { ParticleEarthScene } from "./ParticleEarthScene";
+import { GLOBE_MODE_CONFIG, ParticleEarthScene } from "./ParticleEarthScene";
 
 const loadDetailedEarthMap = () => import("./DetailedEarthMap");
 const DetailedEarthMap = lazy(loadDetailedEarthMap);
@@ -155,9 +155,16 @@ export function usePersistentEarth() {
 
 export function PersistentEarthProvider({ children }: { children: ReactNode }) {
   const [stage, setStage] = useState<PersistentEarthStage>("idle");
-  const [loginPresentation, setLoginPresentation] = useState<LoginEarthPresentation>({
-    mode: "particleSphere",
-    reduceMotion: false,
+  const [loginPresentation, setLoginPresentation] = useState<LoginEarthPresentation>(() => {
+    const reduceMotion = typeof window !== "undefined"
+      && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    return {
+      // The login Earth is already visible while the session request is pending.
+      // Seed the same one-way intro mode that LoginV3Scene will own after the
+      // request settles, so first paint never bounces particle → burst → particle.
+      mode: reduceMotion ? "particleSphere" : "archiveBurst",
+      reduceMotion,
+    };
   });
   const [atlasPresentation, setAtlasPresentation] = useState<AtlasEarthPresentation | null>(null);
   const lightweight = import.meta.env.DEV
@@ -206,6 +213,7 @@ export function PersistentEarthProvider({ children }: { children: ReactNode }) {
                   dragToRotate={Boolean(atlas)}
                   wheelToZoom={Boolean(atlas)}
                   reduceMotion={atlas?.reduceMotion ?? loginPresentation.reduceMotion}
+                  rotationYOverride={atlas ? undefined : GLOBE_MODE_CONFIG.particleSphere.rotationY}
                 />
               )
             ) : null}
