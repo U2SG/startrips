@@ -2037,7 +2037,7 @@
   inset: 0;
   display: grid;
   place-items: center;
-  touch-action: pan-y;
+  touch-action: none;
   /* #7: immersive — a deep gradient derived from the media, not a flat black
      box; the media itself stays the focal point. */
   background:

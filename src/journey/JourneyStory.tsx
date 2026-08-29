@@ -1307,7 +1307,6 @@ export function JourneyStory({
     const asset = commit ? drag.neighborAsset : null;
     const ready = asset !== null && drag.peek !== null && isMediaDragTargetReady(asset);
     if (asset && !ready) {
-      pendingTargetRef.current = drag.neighborIndex;
       const read = mediaReads[asset.id];
       if (read?.status !== "ready") {
         loadMediaRead(asset.id);
