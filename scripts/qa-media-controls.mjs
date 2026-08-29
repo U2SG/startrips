@@ -159,6 +159,17 @@ try {
       clientY: swipeY,
       bubbles: true,
     });
+    // The live-drag gesture computes distance/direction from pointermove,
+    // not just down/up coordinates, so a swipe simulation needs an
+    // intervening move — a real finger can't teleport between the two.
+    await mediaStage.dispatchEvent("pointermove", {
+      pointerId: 1,
+      pointerType: "touch",
+      isPrimary: true,
+      clientX: swipeStartX - 110,
+      clientY: swipeY,
+      bubbles: true,
+    });
     await mediaStage.dispatchEvent("pointerup", {
       pointerId: 1,
       pointerType: "touch",
@@ -249,6 +260,9 @@ try {
     const fullscreenCloseTouchTarget = fullscreenCloseBox ? Math.min(fullscreenCloseBox.width, fullscreenCloseBox.height) : 0;
     const fullscreenPositionBefore = await fullscreen.locator(".journey-story-fullscreen__nav span").textContent();
     await fullscreen.dispatchEvent("pointerdown", { pointerId: 3, pointerType: "touch", isPrimary: true, clientX: fullX, clientY: fullY, bubbles: true });
+    // See the inline-stage comment above: the live-drag gesture needs a
+    // pointermove to know the swipe distance/direction.
+    await fullscreen.dispatchEvent("pointermove", { pointerId: 3, pointerType: "touch", isPrimary: true, clientX: fullX - 110, clientY: fullY, bubbles: true });
     await fullscreen.dispatchEvent("pointerup", { pointerId: 3, pointerType: "touch", isPrimary: true, clientX: fullX - 110, clientY: fullY, bubbles: true });
     await story.page.waitForFunction((before) => {
       const position = document.querySelector(".journey-story-fullscreen__nav span")?.textContent;
@@ -363,6 +377,16 @@ try {
         pointerType: "touch",
         isPrimary: true,
         clientX: startX,
+        clientY: y,
+        bubbles: true,
+      });
+      // See the earlier comment: the live-drag gesture needs a pointermove
+      // to resolve a neighbor and commit at all.
+      await stage.dispatchEvent("pointermove", {
+        pointerId: 41,
+        pointerType: "touch",
+        isPrimary: true,
+        clientX: startX - 110,
         clientY: y,
         bubbles: true,
       });

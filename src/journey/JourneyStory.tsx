@@ -47,7 +47,7 @@ import {
   IconX,
 } from "@tabler/icons-react";
 import { IconActionButton } from "../components/IconActionButton";
-import { deleteMedia, getPrivateMediaRead, reorderJourneyMedia, setJourneyCover } from "./journeyApi";
+import { deleteMedia, getPrivateMediaRead, moveJourneyMedia, reorderJourneyMedia, setJourneyCover } from "./journeyApi";
 import { runSharedElementMorph } from "../motion/primitives/sharedElement";
 import { uploadJourneyMedia } from "./JourneyComposer";
 import {
@@ -92,6 +92,11 @@ const SOUNDTRACK_INPUT_ACCEPT = [
 // session never shows an expired thumbnail.
 const MEDIA_READ_REFRESH_MARGIN_MS = 60_000;
 const MEDIA_READ_SWEEP_MS = 20_000;
+// How far a mobile swipe drag must travel before it commits to the neighbor
+// instead of springing back — unchanged from the release-only gesture this
+// replaced.
+const MEDIA_DRAG_THRESHOLD_PX = 48;
+const MEDIA_DRAG_SETTLE_MS = 220;
 
 type MediaReadState =
   | { status: "loading" }
@@ -279,6 +284,8 @@ function StoryMediaTile({
   onRequestRead,
   onSelect,
   onSetCover,
+  selected,
+  onToggleSelect,
 }: {
   asset: JourneyMediaAsset;
   index: number;
@@ -289,6 +296,10 @@ function StoryMediaTile({
   onRequestRead: (assetId: string) => void;
   onSelect: (index: number, source: HTMLButtonElement) => void;
   onSetCover?: (assetId: string) => void;
+  // Move-selection mode (#20): when defined, a tap toggles selection instead
+  // of navigating to the tile, and the tile renders a checkbox affordance.
+  selected?: boolean;
+  onToggleSelect?: (assetId: string) => void;
 }) {
   const tileRef = useRef<HTMLButtonElement>(null);
   const isVideo = asset.mimeType.startsWith("video/");
@@ -321,10 +332,15 @@ function StoryMediaTile({
         type="button"
         className={isCurrent ? "is-current" : ""}
         aria-current={isCurrent ? "true" : undefined}
-        aria-label={`第 ${index + 1} 个媒体 ${asset.fileName}${isCover ? "，当前封面" : ""}`}
+        aria-pressed={selected}
+        aria-label={selected === undefined
+          ? `第 ${index + 1} 个媒体 ${asset.fileName}${isCover ? "，当前封面" : ""}`
+          : `${selected ? "取消选择" : "选择"} 第 ${index + 1} 个媒体 ${asset.fileName}`}
         data-media-tile-index={index}
         disabled={disabled}
-        onClick={(event) => onSelect(index, event.currentTarget)}
+        onClick={(event) => selected === undefined
+          ? onSelect(index, event.currentTarget)
+          : onToggleSelect?.(asset.id)}
       >
         {isVideo ? (
           <span className="journey-story__media-tile-badge">
@@ -338,6 +354,9 @@ function StoryMediaTile({
           </span>
         )}
         {isCover ? <span className="journey-story__media-tile-cover">封面</span> : null}
+        {selected !== undefined ? (
+          <span className={`journey-story__media-tile-check${selected ? " is-selected" : ""}`} aria-hidden="true" />
+        ) : null}
         <small>{String(index + 1).padStart(2, "0")}</small>
       </button>
       {onSetCover && !isCover ? (
@@ -471,6 +490,13 @@ export function JourneyStory({
   const [localMediaOrder, setLocalMediaOrder] = useState<readonly string[] | null>(null);
   // #14: setting a cover is a lightweight mutation that disables the grid.
   const [coverPending, setCoverPending] = useState(false);
+  // #20: batch move — fixes media that landed on the wrong route point
+  // without re-uploading. `moveSelection` is only meaningful while
+  // `moveSelectMode` is on; both reset together.
+  const [moveSelectMode, setMoveSelectMode] = useState(false);
+  const [moveSelection, setMoveSelection] = useState<ReadonlySet<string>>(new Set());
+  const [movePending, setMovePending] = useState(false);
+  const [moveMessage, setMoveMessage] = useState("");
   const [playing, setPlaying] = useState(false);
   // Review P2: mirrors `playing` so gesture handlers can read it synchronously.
   const playingRef = useRef(false);
@@ -482,9 +508,31 @@ export function JourneyStory({
   // after an explicit interaction.
   const [fullscreenControlsHidden, setFullscreenControlsHidden] = useState(false);
   const fullscreenMobileIdleTimerRef = useRef(0);
-  const fullscreenGestureStartRef = useRef<{ x: number; y: number } | null>(null);
-  const storyMediaGestureStartRef = useRef<{ x: number; y: number } | null>(null);
   const storyMediaGestureConsumedRef = useRef(false);
+  // Mobile swipe: a live, finger-following slide shared by the inline stage
+  // and the fullscreen stage, replacing a release-only "guess and crossfade"
+  // gesture that gave zero visual feedback while dragging. The dragged frame
+  // and (when the neighbor's signed read is already cached from the #11
+  // prefetch window) a peeking neighbor move directly with the pointer via
+  // imperative style writes, not React state, so tracking never waits on a
+  // re-render. It is a separate visual system from the settle-driven opacity
+  // crossfade below — it only ever ends by jumping straight to the
+  // already-settled state it just finished animating to, the same fast path
+  // selectMediaIndex uses when a target's read is already ready.
+  const mediaDragRef = useRef<{
+    container: HTMLElement;
+    base: HTMLElement;
+    peek: HTMLImageElement | null;
+    startX: number;
+    startY: number;
+    dx: number;
+    axis: "x" | "y" | null;
+    wrap: boolean;
+    neighborIndex: number;
+    neighborAsset: JourneyMediaAsset | null;
+    width: number;
+  } | null>(null);
+  const mediaDragSettlingRef = useRef(false);
   const [mobileMediaMenuOpen, setMobileMediaMenuOpen] = useState(false);
   // Review P2: the fullscreen overlay is a focus trap of its own (it is
   // rendered outside the story dialog, whose useModalFocus would otherwise
@@ -593,6 +641,9 @@ export function JourneyStory({
     exitFullscreen();
     setMobileMediaMenuOpen(false);
     setOverview(false);
+    setMoveSelectMode(false);
+    setMoveSelection(new Set());
+    setMoveMessage("");
     setSoundtrackUpload({ status: "idle" });
     setSoundtrackRemovePending(false);
     setSoundtrackNotice("");
@@ -619,6 +670,13 @@ export function JourneyStory({
   useEffect(() => {
     if (mediaDeleteState === "confirming") mediaDeleteCancelRef.current?.focus();
   }, [mediaDeleteState]);
+
+  useEffect(() => {
+    if (overview) return;
+    setMoveSelectMode(false);
+    setMoveSelection(new Set());
+    setMoveMessage("");
+  }, [overview]);
 
   // Only photos and videos are browsable media. The journey soundtrack is
   // audio, so it never enters the grid, the counts, or the ordering controls.
@@ -1091,22 +1149,209 @@ export function JourneyStory({
     return !target.closest("button, input, select, textarea, [role='button']");
   }
 
+  function resolveMediaDragNeighbor(dx: number, wrap: boolean) {
+    if (dx === 0 || scopedMedia.length < 2) return null;
+    const direction = dx < 0 ? 1 : -1;
+    let index = assetIndex + direction;
+    if (wrap) {
+      index = (index + scopedMedia.length) % scopedMedia.length;
+    } else if (index < 0 || index >= scopedMedia.length) {
+      return null;
+    }
+    const asset = scopedMedia[index];
+    return asset ? { index, asset } : null;
+  }
+
+  function attachMediaDragPeek(container: HTMLElement, neighbor: JourneyMediaAsset | null) {
+    if (!neighbor || !neighbor.mimeType.startsWith("image/")) return null;
+    const read = mediaReads[neighbor.id];
+    if (read?.status !== "ready") return null;
+    const peek = container.querySelector<HTMLImageElement>("[data-media-drag-peek]");
+    if (!peek) return null;
+    peek.src = read.url;
+    peek.style.display = "block";
+    peek.classList.toggle("journey-story__media-drag-page", container === fullscreenRef.current);
+    return peek;
+  }
+
+  function applyMediaDragTransform() {
+    const drag = mediaDragRef.current;
+    if (!drag) return;
+    const dx = drag.neighborAsset ? drag.dx : drag.dx * 0.3;
+    drag.base.style.transform = `translateX(${dx}px)`;
+    if (drag.peek) {
+      const edge = drag.dx < 0 ? drag.width : -drag.width;
+      drag.peek.style.transform = `translateX(${edge + dx}px)`;
+    }
+  }
+
+  function beginMediaDrag(container: HTMLElement | null, clientX: number, clientY: number, wrap: boolean) {
+    if (!container || mediaDragSettlingRef.current || incomingAssetId !== null || mutationPending || overview || scopedMedia.length < 2) return;
+    const base = container.querySelector<HTMLElement>(":scope > img, :scope > video");
+    if (!base) return;
+    base.classList.toggle("journey-story__media-drag-page", container === fullscreenRef.current);
+    mediaDragRef.current = {
+      container,
+      base,
+      peek: null,
+      startX: clientX,
+      startY: clientY,
+      dx: 0,
+      axis: null,
+      wrap,
+      neighborIndex: -1,
+      neighborAsset: null,
+      width: container.clientWidth,
+    };
+  }
+
+  // Locks onto an axis (8px of intent) the first time either axis moves
+  // enough to tell horizontal from vertical, then live-tracks the pointer
+  // on the horizontal axis only; a vertical lock leaves the gesture alone so
+  // the fullscreen stage's own swipe-down-to-exit keeps working unchanged.
+  function updateMediaDrag(clientX: number, clientY: number) {
+    const drag = mediaDragRef.current;
+    if (!drag) return;
+    if (drag.axis === null) {
+      const dx = clientX - drag.startX;
+      const dy = clientY - drag.startY;
+      if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+      if (Math.abs(dx) <= Math.abs(dy) * 1.15) {
+        drag.axis = "y";
+        return;
+      }
+      drag.axis = "x";
+    }
+    if (drag.axis !== "x") return;
+    drag.dx = clientX - drag.startX;
+    const neighbor = resolveMediaDragNeighbor(drag.dx, drag.wrap);
+    const neighborIndex = neighbor?.index ?? -1;
+    if (neighborIndex !== drag.neighborIndex) {
+      drag.neighborIndex = neighborIndex;
+      drag.neighborAsset = neighbor?.asset ?? null;
+      const previousPeek = drag.peek;
+      drag.peek = attachMediaDragPeek(drag.container, drag.neighborAsset);
+      if (previousPeek && previousPeek !== drag.peek) {
+        previousPeek.style.transition = "";
+        previousPeek.style.transform = "";
+        previousPeek.style.display = "none";
+        previousPeek.removeAttribute("src");
+        previousPeek.classList.remove("journey-story__media-drag-settle", "journey-story__media-drag-page");
+      }
+    }
+    applyMediaDragTransform();
+  }
+
+  function finishMediaDrag(drag: NonNullable<typeof mediaDragRef.current>) {
+    drag.base.style.transition = "";
+    drag.base.style.transform = "";
+    drag.base.classList.remove("journey-story__media-drag-settle", "journey-story__media-drag-page");
+    if (drag.peek) {
+      drag.peek.style.transition = "";
+      drag.peek.style.transform = "";
+      drag.peek.style.display = "none";
+      drag.peek.removeAttribute("src");
+      drag.peek.classList.remove("journey-story__media-drag-settle", "journey-story__media-drag-page");
+    }
+  }
+
+  // A neighbor with a cached read isn't necessarily safe to land on: images
+  // also need their browser-side decode to finish (#11) or the settled
+  // frame flashes an undecoded paint. Mirrors navigateToMedia's own check.
+  function isMediaDragTargetReady(asset: JourneyMediaAsset) {
+    const read = mediaReads[asset.id];
+    return read?.status === "ready"
+      && (asset.mimeType.startsWith("video/") || decodeRegistryRef.current.isDecoded(asset.id));
+  }
+
+  function landMediaDrag(asset: JourneyMediaAsset, index: number) {
+    pendingTargetRef.current = null;
+    setIncomingAssetId(null);
+    setAssetIndex(index);
+    setShownAssetId(asset.id);
+  }
+
+  // Commits to the neighbor the drag already dragged into view, or springs
+  // the current frame back to rest. Committing lands directly on the
+  // settled two-layer state (bypassing the crossfade above) because the
+  // slide the user just watched *was* the transition — unless the target
+  // wasn't actually ready yet (slow network outrunning a fast swipe), in
+  // which case it falls back to the same pending-navigation path a
+  // release-only swipe onto unready media already used, and only springs
+  // back visually since landing on it now would flash an undecoded frame.
+  function settleMediaDrag(commit: boolean) {
+    const drag = mediaDragRef.current;
+    mediaDragRef.current = null;
+    if (!drag) return;
+    mediaDragSettlingRef.current = !prefersReducedMotion();
+    const asset = commit ? drag.neighborAsset : null;
+    const ready = asset !== null && drag.peek !== null && isMediaDragTargetReady(asset);
+    if (asset && !ready) {
+      const read = mediaReads[asset.id];
+      if (read?.status !== "ready") {
+        loadMediaRead(asset.id);
+      } else if (asset.mimeType.startsWith("image/")) {
+        decodeRegistryRef.current.ensure(asset.id, read.url);
+      }
+    }
+    if (prefersReducedMotion()) {
+      if (ready && asset) landMediaDrag(asset, drag.neighborIndex);
+      else if (commit && asset) navigateToMedia(drag.neighborIndex);
+      finishMediaDrag(drag);
+      mediaDragSettlingRef.current = false;
+      return;
+    }
+    drag.base.classList.add("journey-story__media-drag-settle");
+    if (drag.peek) drag.peek.classList.add("journey-story__media-drag-settle");
+    if (ready && asset) {
+      const index = drag.neighborIndex;
+      const edge = drag.dx < 0 ? -drag.width : drag.width;
+      drag.base.style.transform = `translateX(${edge}px)`;
+      if (drag.peek) drag.peek.style.transform = "translateX(0)";
+      window.setTimeout(() => {
+        finishMediaDrag(drag);
+        mediaDragSettlingRef.current = false;
+        landMediaDrag(asset, index);
+      }, MEDIA_DRAG_SETTLE_MS);
+      return;
+    }
+    drag.base.style.transform = "translateX(0)";
+    if (drag.peek) {
+      const edge = drag.dx < 0 ? drag.width : -drag.width;
+      drag.peek.style.transform = `translateX(${edge}px)`;
+    }
+    window.setTimeout(() => {
+      finishMediaDrag(drag);
+      mediaDragSettlingRef.current = false;
+      if (commit && asset) navigateToMedia(drag.neighborIndex);
+    }, MEDIA_DRAG_SETTLE_MS);
+  }
+
   function handleStoryMediaPointerDown(event: ReactPointerEvent<HTMLElement>) {
     storyMediaGestureConsumedRef.current = false;
-    storyMediaGestureStartRef.current = null;
     if (!mobileLayout || overview || !event.isPrimary || !mediaGestureCanStart(event.target, event.clientY)) return;
-    storyMediaGestureStartRef.current = { x: event.clientX, y: event.clientY };
+    beginMediaDrag(event.currentTarget, event.clientX, event.clientY, false);
+  }
+
+  function handleStoryMediaPointerMove(event: ReactPointerEvent<HTMLElement>) {
+    if (!event.isPrimary) return;
+    updateMediaDrag(event.clientX, event.clientY);
   }
 
   function handleStoryMediaPointerUp(event: ReactPointerEvent<HTMLElement>) {
-    const start = storyMediaGestureStartRef.current;
-    storyMediaGestureStartRef.current = null;
-    if (!mobileLayout || !start || !event.isPrimary || scopedMedia.length < 2) return;
-    const dx = event.clientX - start.x;
-    const dy = event.clientY - start.y;
-    if (Math.abs(dx) < 48 || Math.abs(dx) <= Math.abs(dy) * 1.15) return;
-    storyMediaGestureConsumedRef.current = true;
-    void navigateToMedia(dx < 0 ? assetIndex + 1 : assetIndex - 1);
+    if (!event.isPrimary) return;
+    const drag = mediaDragRef.current;
+    // Only a committed swipe (>= the threshold, same as before this gesture
+    // grew live tracking) suppresses the tap-to-fullscreen click that
+    // otherwise follows this same release; a drag that axis-locked but
+    // didn't cross the threshold still reads as a tap, same as pre-drag.
+    const commit = Boolean(drag && drag.axis === "x" && Math.abs(drag.dx) >= MEDIA_DRAG_THRESHOLD_PX && drag.neighborAsset);
+    if (commit) storyMediaGestureConsumedRef.current = true;
+    settleMediaDrag(commit);
+  }
+
+  function handleStoryMediaPointerCancel() {
+    settleMediaDrag(false);
   }
 
   function openImageFullscreenAfterTap() {
@@ -1128,33 +1373,38 @@ export function JourneyStory({
   }
 
   function handleFullscreenPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
-    fullscreenGestureStartRef.current = null;
     if (!mobileLayout || !event.isPrimary || !mediaGestureCanStart(event.target, event.clientY)) return;
-    fullscreenGestureStartRef.current = { x: event.clientX, y: event.clientY };
+    beginMediaDrag(event.currentTarget, event.clientX, event.clientY, true);
+  }
+
+  function handleFullscreenPointerMove(event: ReactPointerEvent<HTMLDivElement>) {
+    if (!event.isPrimary) return;
+    updateMediaDrag(event.clientX, event.clientY);
   }
 
   function handleFullscreenPointerUp(event: ReactPointerEvent<HTMLDivElement>) {
     if (!mobileLayout || !event.isPrimary) return;
-    const start = fullscreenGestureStartRef.current;
-    fullscreenGestureStartRef.current = null;
-    if (!start) {
+    const drag = mediaDragRef.current;
+    if (!drag) {
       revealMobileFullscreenControls();
       return;
     }
-    const dx = event.clientX - start.x;
-    const dy = event.clientY - start.y;
-    if (Math.abs(dx) >= 48 && Math.abs(dx) > Math.abs(dy) * 1.15 && scopedMedia.length > 1) {
-      const target = dx < 0
-        ? (assetIndex + 1) % scopedMedia.length
-        : (assetIndex - 1 + scopedMedia.length) % scopedMedia.length;
-      void navigateToMedia(target);
+    const dx = event.clientX - drag.startX;
+    const dy = event.clientY - drag.startY;
+    if (drag.axis === "x" && Math.abs(dx) >= MEDIA_DRAG_THRESHOLD_PX && drag.neighborAsset) {
+      settleMediaDrag(true);
       return;
     }
+    settleMediaDrag(false);
     if (dy >= 72 && Math.abs(dy) > Math.abs(dx) * 1.15) {
       exitFullscreen();
       return;
     }
-    revealMobileFullscreenControls();
+    if (drag.axis === null) revealMobileFullscreenControls();
+  }
+
+  function handleFullscreenPointerCancel() {
+    settleMediaDrag(false);
   }
 
   async function uploadFiles(files: readonly File[]) {
@@ -1331,7 +1581,8 @@ export function JourneyStory({
     || mediaDeleteState === "pending"
     || soundtrackRemovePending
     || orderPending
-    || coverPending;
+    || coverPending
+    || movePending;
 
   function selectMediaScope(routePointId: string | null) {
     if (mutationPending) return;
@@ -1342,6 +1593,9 @@ export function JourneyStory({
     pendingTargetRef.current = null;
     setLocalMediaOrder(null);
     setOverview(false);
+    setMoveSelectMode(false);
+    setMoveSelection(new Set());
+    setMoveMessage("");
     setRetryFiles([]);
     setUploadState({ status: "idle" });
   }
@@ -1499,6 +1753,46 @@ export function JourneyStory({
     }
   }
 
+  // #20: batch move. Toggling selection mode always resets the selection —
+  // entering starts clean, and leaving (cancel or after a move) should not
+  // leave stale ids selected against a grid that may have just changed.
+  function toggleMoveSelectMode() {
+    if (mutationPending) return;
+    setMoveSelectMode((value) => !value);
+    setMoveSelection(new Set());
+    setMoveMessage("");
+  }
+
+  function toggleMoveSelection(assetId: string) {
+    setMoveSelection((current) => {
+      const next = new Set(current);
+      if (next.has(assetId)) next.delete(assetId); else next.add(assetId);
+      return next;
+    });
+  }
+
+  // #20: one request moves the whole selection, landing it at the end of the
+  // target route point's media (see server/routes/uploads.ts). Refreshing
+  // from the server afterward lets the scope-shrink effects above settle
+  // the stage if the moved media included the one currently shown.
+  async function moveSelectedMediaTo(targetRoutePointId: string | null) {
+    if (moveSelection.size === 0 || mutationPending) return;
+    const assetIds = [...moveSelection];
+    setMovePending(true);
+    setMoveMessage("");
+    try {
+      await moveJourneyMedia(journey.id, assetIds, targetRoutePointId);
+      await onMediaAdded(journey.id);
+      setMoveMessage(`已移动 ${assetIds.length} 个媒体`);
+      setMoveSelectMode(false);
+      setMoveSelection(new Set());
+    } catch (error) {
+      setMoveMessage(error instanceof Error ? error.message : "移动失败，请稍后重试。");
+    } finally {
+      setMovePending(false);
+    }
+  }
+
   // #14: set this journey's cover media. The parent owns journey state; after
   // the API call we ask it to refresh, so the card updates immediately and a
   // failure rolls back to server truth.
@@ -1650,10 +1944,12 @@ export function JourneyStory({
             aria-label="旅程媒体"
             data-mobile-layout={mobileLayout ? "true" : undefined}
             onPointerDown={handleStoryMediaPointerDown}
+            onPointerMove={handleStoryMediaPointerMove}
             onPointerUp={handleStoryMediaPointerUp}
+            onPointerCancel={handleStoryMediaPointerCancel}
           >
             {!asset ? <div className="journey-story__empty-media"><IconPhoto size={36} stroke={1.05} style={{ color: journey.lightColor }} aria-hidden="true" />{selectedRoutePoint ? "这个途径点还没有媒体" : "整段旅程还没有媒体"}</div> : null}
-            {scopedMedia.length > 1 && !mobileLayout ? (
+            {scopedMedia.length > 0 && !mobileLayout ? (
               <button
                 type="button"
                 className={`journey-story__media-overview${overview ? " is-active" : ""}`}
@@ -1679,12 +1975,42 @@ export function JourneyStory({
               <button
                 type="button"
                 className="journey-story__mobile-sort-done"
-                onClick={() => setOverview(false)}
+                onClick={() => { setOverview(false); setMoveSelectMode(false); setMoveSelection(new Set()); }}
               >
                 完成
               </button>
             ) : null}
-            {overview ? (
+            {overview && orderedScopedMedia.length > 0 ? (
+              <button
+                type="button"
+                className={`journey-story__media-select-toggle${moveSelectMode ? " is-active" : ""}`}
+                aria-pressed={moveSelectMode}
+                disabled={mutationPending}
+                onClick={toggleMoveSelectMode}
+              >
+                {moveSelectMode ? "取消选择" : "选择"}
+              </button>
+            ) : null}
+            {overview && moveSelectMode ? (
+              <ul className="journey-story__media-grid is-selecting" aria-label={`全部媒体，共 ${orderedScopedMedia.length} 个`}>
+                {orderedScopedMedia.map((tile, index) => (
+                  <li key={tile.id}>
+                    <StoryMediaTile
+                      asset={tile}
+                      index={index}
+                      isCurrent={index === assetIndex}
+                      isCover={cover?.id === tile.id}
+                      read={mediaReads[tile.id]}
+                      disabled={mutationPending}
+                      onRequestRead={loadMediaRead}
+                      onSelect={selectMediaIndex}
+                      selected={moveSelection.has(tile.id)}
+                      onToggleSelect={toggleMoveSelection}
+                    />
+                  </li>
+                ))}
+              </ul>
+            ) : overview ? (
               <DndContext
                 sensors={dragSensors}
                 collisionDetection={closestCenter}
@@ -1713,6 +2039,33 @@ export function JourneyStory({
                 </SortableContext>
               </DndContext>
             ) : null}
+            {overview && moveSelectMode ? (
+              <div className="journey-story__media-move-bar" role="group" aria-label="移动所选媒体">
+                <span>{moveSelection.size > 0 ? `已选 ${moveSelection.size} 个` : "点击照片进行选择"}</span>
+                <select
+                  aria-label="移动到途径点"
+                  disabled={moveSelection.size === 0 || movePending}
+                  defaultValue=""
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    if (!value) return;
+                    void moveSelectedMediaTo(value === "__journey__" ? null : value);
+                    event.target.value = "";
+                  }}
+                >
+                  <option value="" disabled>移动到…</option>
+                  {selectedRoutePointId !== null ? (
+                    <option value="__journey__">整段旅程（不属于途径点）</option>
+                  ) : null}
+                  {namedStops
+                    .filter((stop) => stop.id !== selectedRoutePointId)
+                    .map((stop) => (
+                      <option key={stop.id} value={stop.id}>{stop.label || "未命名途径点"}</option>
+                    ))}
+                </select>
+              </div>
+            ) : null}
+            {overview && moveMessage ? <p className="journey-story__order-message" role="status">{moveMessage}</p> : null}
             {!overview && shownAsset && (!shownRead || shownRead.status === "loading") ? <div className="journey-story__media-state">正在打开私有媒体…</div> : null}
             {!overview && shownAsset && shownRead?.status === "error" ? <div className="journey-story__media-state is-error">{shownRead.message}</div> : null}
             {!overview && shownAsset && shownRead?.status === "ready" && shownAsset.mimeType.startsWith("video/") ? (
@@ -1768,6 +2121,14 @@ export function JourneyStory({
                     settleIncoming(incoming.id);
                   }
                 }}
+              />
+            ) : null}
+            {mobileLayout && !overview ? (
+              <img
+                data-media-drag-peek
+                alt=""
+                aria-hidden="true"
+                style={{ display: "none" }}
               />
             ) : null}
             {!mobileLayout && !overview && (scopedMedia.length > 1 || visualMedia.length > 1) ? (
@@ -1841,7 +2202,7 @@ export function JourneyStory({
                           设为旅程封面
                         </button>
                       ) : <p className="journey-story__mobile-media-sheet-current">当前旅程封面</p>}
-                      {scopedMedia.length > 1 ? (
+                      {scopedMedia.length > 0 ? (
                         <button
                           type="button"
                           disabled={mutationPending}
@@ -2149,7 +2510,9 @@ export function JourneyStory({
           data-mobile-layout={mobileLayout ? "true" : undefined}
           aria-label="沉浸播放媒体"
           onPointerDown={handleFullscreenPointerDown}
+          onPointerMove={handleFullscreenPointerMove}
           onPointerUp={handleFullscreenPointerUp}
+          onPointerCancel={handleFullscreenPointerCancel}
           onClick={(event) => {
             if (!mobileLayout && event.target === event.currentTarget) exitFullscreen();
           }}
@@ -2167,6 +2530,7 @@ export function JourneyStory({
             : incoming && incomingRead?.status === "ready"
               ? <img key={`media-${incoming.id}`} className="journey-story__media-incoming" src={incomingRead.url} alt={incoming.fileName} onAnimationEnd={(event) => { if (event.target === event.currentTarget && event.animationName === "motionMediaIn") settleIncoming(incoming.id); }} />
               : null}
+          {mobileLayout ? <img data-media-drag-peek alt="" aria-hidden="true" style={{ display: "none" }} /> : null}
           {scopedMedia.length > 1 ? (
             <nav className="journey-story-fullscreen__nav" aria-label="全屏媒体导航">
               <button
