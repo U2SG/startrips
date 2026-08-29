@@ -73,6 +73,7 @@ import {
 import type { Journey, JourneyMediaAsset } from "./types";
 import { useModalFocus, useNestedModalFocus } from "./useModalFocus";
 import { useCompactMobileLayout } from "./mobileLayout";
+import { useMobileSurfaceHistory } from "./useMobileSurfaceHistory";
 
 const SOUNDTRACK_INPUT_ACCEPT = [
   "audio/mpeg",
@@ -480,7 +481,6 @@ export function JourneyStory({
   // brings them back. Mobile starts fully immersive and reveals controls only
   // after an explicit interaction.
   const [fullscreenControlsHidden, setFullscreenControlsHidden] = useState(false);
-  const fullscreenHistoryActiveRef = useRef(false);
   const fullscreenMobileIdleTimerRef = useRef(0);
   const fullscreenGestureStartRef = useRef<{ x: number; y: number } | null>(null);
   const storyMediaGestureStartRef = useRef<{ x: number; y: number } | null>(null);
@@ -509,24 +509,11 @@ export function JourneyStory({
   const uploading = uploadState.status === "uploading"
     || soundtrackUpload.status === "uploading";
 
-  function exitFullscreen(fromHistory = false) {
+  function exitFullscreen() {
     if (typeof window !== "undefined") {
       window.clearTimeout(fullscreenMobileIdleTimerRef.current);
       fullscreenMobileIdleTimerRef.current = 0;
     }
-    if (
-      mobileLayout
-      && !fromHistory
-      && fullscreenHistoryActiveRef.current
-      && typeof window !== "undefined"
-      && window.history.state?.__startripsMediaFullscreen === true
-    ) {
-      // Keep the overlay mounted until popstate consumes the same-URL sentinel.
-      // Closing it immediately would tear down the listener before back() fires.
-      window.history.back();
-      return;
-    }
-    fullscreenHistoryActiveRef.current = false;
     setFullscreen(false);
     setFullscreenControlsHidden(false);
   }
@@ -582,6 +569,7 @@ export function JourneyStory({
     onClose(sharedSource);
   }
 
+  useMobileSurfaceHistory(fullscreen && mobileLayout, "story-fullscreen", exitFullscreen);
   const dialogRef = useModalFocus<HTMLElement>(requestClose);
   const mobileMediaSheetRef = useNestedModalFocus<HTMLElement>(
     mobileLayout && (mobileMediaMenuOpen || mediaDeleteState !== "idle"),
@@ -756,37 +744,6 @@ export function JourneyStory({
     if (mobileLayout) return;
     setMobileMediaMenuOpen(false);
   }, [mobileLayout]);
-
-  // Mobile fullscreen owns one same-URL history entry so the Android/browser
-  // back gesture exits immersive media before it can leave the Story.
-  useEffect(() => {
-    if (!fullscreen || !mobileLayout || typeof window === "undefined") return;
-    const previousState = window.history.state;
-    const baseState = previousState && typeof previousState === "object"
-      ? previousState
-      : {};
-    window.history.pushState({ ...baseState, __startripsMediaFullscreen: true }, "");
-    fullscreenHistoryActiveRef.current = true;
-    const onPopState = () => {
-      if (!fullscreenHistoryActiveRef.current) return;
-      fullscreenHistoryActiveRef.current = false;
-      exitFullscreen(true);
-    };
-    window.addEventListener("popstate", onPopState);
-    return () => {
-      window.removeEventListener("popstate", onPopState);
-      // If fullscreen disappears because the Story unmounts or the responsive
-      // breakpoint changes, consume our own sentinel instead of leaving a
-      // ghost history entry behind for the user's next Back gesture.
-      if (
-        fullscreenHistoryActiveRef.current
-        && window.history.state?.__startripsMediaFullscreen === true
-      ) {
-        fullscreenHistoryActiveRef.current = false;
-        window.history.back();
-      }
-    };
-  }, [fullscreen, mobileLayout]);
 
   // #7 + review P2: fullscreen playback — Esc exits, arrows switch media,
   // Space toggles play/pause. Controls fade out after 2.5s of idle; any

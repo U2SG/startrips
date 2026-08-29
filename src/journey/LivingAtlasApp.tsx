@@ -35,6 +35,7 @@ import { GlobeTimeScrubber, formatCursorDate } from "./GlobeTimeScrubber";
 import { useGlobeTimeCursor } from "./useGlobeTimeCursor";
 import { useModalFocus } from "./useModalFocus";
 import { useCompactMobileLayout } from "./mobileLayout";
+import { useMobileSurfaceHistory } from "./useMobileSurfaceHistory";
 import {
   deleteJourney,
   getPrivateMediaRead,
@@ -265,25 +266,49 @@ export function LivingAtlasApp({
   const [mobileSheetJourneyId, setMobileSheetJourneyId] = useState<string | null>(null);
   const [mobilePickerOpen, setMobilePickerOpen] = useState(false);
   const [mobileMapJourneyId, setMobileMapJourneyId] = useState<string | null>(null);
-  const mobileJourneyChipRef = useRef<HTMLButtonElement>(null);
   const closeMobileMap = useCallback(() => {
     setMobileMapJourneyId(null);
     if (typeof requestAnimationFrame !== "function") return;
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
-        const chip = mobileJourneyChipRef.current;
-        if (chip?.isConnected && !chip.closest("[inert]")) {
-          chip.focus({ preventScroll: true });
+        const trigger = document.querySelector<HTMLButtonElement>(
+          '.mobile-v2__sheet button[data-mobile-map-trigger="true"]',
+        );
+        if (trigger?.isConnected && !trigger.closest("[inert]")) {
+          trigger.focus({ preventScroll: true });
         }
       });
     });
   }, []);
+  useMobileSurfaceHistory(
+    isMobileV2 && mobileSheetJourneyId !== null,
+    "journey-sheet",
+    () => setMobileSheetJourneyId(null),
+  );
+  useMobileSurfaceHistory(
+    isMobileV2 && mobilePickerOpen,
+    "journey-picker",
+    () => setMobilePickerOpen(false),
+  );
+  useMobileSurfaceHistory(
+    isMobileV2 && mobileMapJourneyId !== null,
+    "journey-map",
+    closeMobileMap,
+  );
+  useMobileSurfaceHistory(
+    isMobileV2 && storyJourneyId !== null,
+    "journey-story",
+    () => closeJourneyStory(null),
+  );
+  const mobileSheetActive = isMobileV2 && mobileSheetJourneyId !== null;
+  const mobileSheetChildActive = storyJourneyId !== null || mobileMapJourneyId !== null;
   const mobileChipStartX = useRef<number | null>(null);
   const mobileChipSwiped = useRef(false);
   const mobileSheetStartY = useRef<number | null>(null);
   const mobileSheetDialogRef = useModalFocus<HTMLElement>(
     () => setMobileSheetJourneyId(null),
-    isMobileV2 && mobileSheetJourneyId !== null,
+    mobileSheetActive,
+    mobileSheetChildActive,
   );
   const mobilePickerDialogRef = useModalFocus<HTMLElement>(
     () => setMobilePickerOpen(false),
@@ -318,7 +343,12 @@ export function LivingAtlasApp({
   // Mobile V2 is immersive by default: desktop focus-mode and timeline views
   // are never part of the mobile state machine.
   useEffect(() => {
-    if (!isMobileV2) return;
+    if (!isMobileV2) {
+      setMobileSheetJourneyId(null);
+      setMobilePickerOpen(false);
+      setMobileMapJourneyId(null);
+      return;
+    }
     setView("planet");
     setGlobeFocusMode(false);
   }, [isMobileV2]);
@@ -475,6 +505,7 @@ export function LivingAtlasApp({
     timeCursor.selectJourney(journeyId);
     setStoryJourneyId(null);
     setStoryRoutePointId(null);
+    setMobileSheetJourneyId(null);
     setEditingJourneyId(journeyId);
     setView("planet");
     setComposerOpen(true);
@@ -487,6 +518,7 @@ export function LivingAtlasApp({
     setJourneys(remaining);
     setStoryJourneyId(null);
     setStoryRoutePointId(null);
+    setMobileSheetJourneyId(null);
     setUndoJourney(removed);
     setNotice("旅程已从图谱移除；7 天内可以撤销，媒体尚未清理。");
   }
@@ -825,7 +857,6 @@ export function LivingAtlasApp({
             </div>
           ) : null}
           <button
-            ref={mobileJourneyChipRef}
             type="button"
             className="mobile-v2__journey-chip"
             aria-label={`查看当前旅程详情：${mobileJourney.title}。左右滑动切换旅程`}
@@ -869,7 +900,7 @@ export function LivingAtlasApp({
         </section>
       ) : null}
 
-      {isMobileV2 && mobileSheetJourney ? (
+      {mobileSheetActive && mobileSheetJourney ? (
         <div className="mobile-v2__sheet-layer">
           <button className="mobile-v2__sheet-backdrop" type="button" tabIndex={-1} aria-label="关闭旅程详情" onClick={() => setMobileSheetJourneyId(null)} />
           <section
@@ -920,14 +951,13 @@ export function LivingAtlasApp({
                 type="button"
                 className="is-primary"
                 onClick={() => {
-                  setMobileSheetJourneyId(null);
                   openJourneyStory(mobileSheetJourney.id, null);
                 }}
               >打开故事 <IconArrowRight size={17} stroke={1.35} aria-hidden="true" /></button>
               <button
                 type="button"
+                data-mobile-map-trigger="true"
                 onClick={() => {
-                  setMobileSheetJourneyId(null);
                   setMobileMapJourneyId(mobileSheetJourney.id);
                 }}
               ><IconWorld size={16} stroke={1.35} aria-hidden="true" />真实地图</button>

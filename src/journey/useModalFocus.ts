@@ -155,10 +155,11 @@ export function useModalFocus<T extends HTMLElement>(
     if (!root) return;
 
     const inerted: Array<{ element: HTMLElement; previous: boolean }> = [];
-    const atlas = root.closest(".living-atlas");
-    // Some dialogs live inside an overlay wrapper (Composer/Story/Sheet),
-    // while full-screen Mobile V2 dialogs are direct atlas children. Inert the
-    // competing atlas siblings, but never inert the dialog itself.
+    const atlas = root.closest(".living-atlas") ?? document.querySelector(".living-atlas");
+    // Some dialogs (Story/Composer) are portaled to document.body while their
+    // background Atlas stays in the application tree. Fall back to the live
+    // Atlas root so portaled modals still inert the underlying app surface.
+    // Non-portaled dialogs can keep using their local modal wrapper.
     const modalSurface = modalSurfaceFor(root, atlas);
     if (atlas && modalSurface) {
       for (const child of atlas.children) {
