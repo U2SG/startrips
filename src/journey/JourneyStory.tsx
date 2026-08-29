@@ -1375,6 +1375,7 @@ export function JourneyStory({
   }
 
   function handleStoryMediaLostPointerCapture(event: ReactPointerEvent<HTMLElement>) {
+    if (event.target !== event.currentTarget) return;
     if (mediaDragRef.current?.pointerId !== event.pointerId) return;
     settleMediaDrag(false);
   }
@@ -1435,6 +1436,7 @@ export function JourneyStory({
   }
 
   function handleFullscreenLostPointerCapture(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.target !== event.currentTarget) return;
     if (mediaDragRef.current?.pointerId !== event.pointerId) return;
     settleMediaDrag(false);
   }
