@@ -171,6 +171,14 @@ try {
     if (desktopOnlyControls !== 0) failed = true;
 
     const manageTrigger = story.page.getByRole("button", { name: "管理当前媒体" });
+    const manageTriggerBox = await manageTrigger.boundingBox();
+    const manageTouchTarget = manageTriggerBox ? Math.min(manageTriggerBox.width, manageTriggerBox.height) : 0;
+    checks.push({
+      name: "story-mobile-primary-touch-target",
+      manageTouchTarget,
+      failed: manageTouchTarget < 44,
+    });
+    if (manageTouchTarget < 44) failed = true;
     await manageTrigger.click();
     const mobileSheet = story.page.locator(".journey-story__mobile-media-sheet");
     await mobileSheet.waitFor({ state: "visible" });
@@ -227,6 +235,8 @@ try {
     const fullY = fullscreenBox.y + fullscreenBox.height * 0.45;
     await fullscreen.dispatchEvent("pointerdown", { pointerId: 2, pointerType: "touch", isPrimary: true, clientX: fullX, clientY: fullY, bubbles: true });
     await fullscreen.dispatchEvent("pointerup", { pointerId: 2, pointerType: "touch", isPrimary: true, clientX: fullX, clientY: fullY, bubbles: true });
+    const fullscreenCloseBox = await fullscreen.locator(".journey-story-fullscreen__close").boundingBox();
+    const fullscreenCloseTouchTarget = fullscreenCloseBox ? Math.min(fullscreenCloseBox.width, fullscreenCloseBox.height) : 0;
     const fullscreenPositionBefore = await fullscreen.locator(".journey-story-fullscreen__nav span").textContent();
     await fullscreen.dispatchEvent("pointerdown", { pointerId: 3, pointerType: "touch", isPrimary: true, clientX: fullX, clientY: fullY, bubbles: true });
     await fullscreen.dispatchEvent("pointerup", { pointerId: 3, pointerType: "touch", isPrimary: true, clientX: fullX - 110, clientY: fullY, bubbles: true });
@@ -237,9 +247,14 @@ try {
     const fullscreenPosition = await fullscreen.locator(".journey-story-fullscreen__nav span").textContent();
     record("story-fullscreen", await scanButtons(story.page, ".journey-story-fullscreen"), {
       fullscreenInitiallyImmersive,
+      fullscreenCloseTouchTarget,
       fullscreenPositionBefore,
       fullscreenPosition,
-      failed: !fullscreenInitiallyImmersive || !fullscreenPositionBefore || !fullscreenPosition || fullscreenPosition === fullscreenPositionBefore,
+      failed: !fullscreenInitiallyImmersive
+        || fullscreenCloseTouchTarget < 44
+        || !fullscreenPositionBefore
+        || !fullscreenPosition
+        || fullscreenPosition === fullscreenPositionBefore,
     });
     await fullscreen.dispatchEvent("pointerdown", { pointerId: 4, pointerType: "touch", isPrimary: true, clientX: fullX, clientY: fullY, bubbles: true });
     await fullscreen.dispatchEvent("pointerup", { pointerId: 4, pointerType: "touch", isPrimary: true, clientX: fullX, clientY: fullY + 130, bubbles: true });

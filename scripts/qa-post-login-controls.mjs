@@ -162,6 +162,12 @@ async function verifyAtlasShell() {
           const root = document.querySelector(".living-atlas");
           const chrome = document.querySelector(".mobile-v2__chrome");
           const chromeRect = chrome?.getBoundingClientRect();
+          const primaryTouchTargets = [...document.querySelectorAll(
+            ".mobile-v2__header button, .mobile-v2__timeline .globe-time-scrubber__play",
+          )].map((element) => {
+            const rect = element.getBoundingClientRect();
+            return Math.min(rect.width, rect.height);
+          });
           return {
             mobileV2: root?.getAttribute("data-mobile-v2"),
             desktopHeader: document.querySelectorAll(".living-atlas__header").length,
@@ -170,6 +176,7 @@ async function verifyAtlasShell() {
             mobileChip: document.querySelectorAll(".mobile-v2__journey-chip").length,
             mobileTimeline: document.querySelectorAll(".mobile-v2__timeline").length,
             chromeHeight: chromeRect ? Math.round(chromeRect.height) : null,
+            minPrimaryTouchTarget: primaryTouchTargets.length > 0 ? Math.min(...primaryTouchTargets) : null,
           };
         });
         record(`atlas-${label}-earth-first`, await scanButtons(page, ".living-atlas"), {
@@ -181,7 +188,9 @@ async function verifyAtlasShell() {
             || mobileShell.mobileChip !== 1
             || mobileShell.mobileTimeline !== 1
             || mobileShell.chromeHeight === null
-            || mobileShell.chromeHeight > 125,
+            || mobileShell.chromeHeight > 125
+            || mobileShell.minPrimaryTouchTarget === null
+            || mobileShell.minPrimaryTouchTarget < 44,
         });
         continue;
       }
@@ -248,6 +257,8 @@ async function verifyMobileV2InteractionContract() {
     const picker = page.locator(".mobile-v2__picker");
     await picker.waitFor({ state: "visible" });
     const pickerRootFocused = await picker.evaluate((element) => document.activeElement === element);
+    const pickerCloseBox = await picker.locator(":scope > header button").boundingBox();
+    const pickerCloseTouchTarget = pickerCloseBox ? Math.min(pickerCloseBox.width, pickerCloseBox.height) : 0;
     const pickerBackgroundInert = await page.locator(".mobile-v2__header").evaluate((element) => element.inert);
     await page.keyboard.press("Escape");
     await picker.waitFor({ state: "detached" });
@@ -282,6 +293,8 @@ async function verifyMobileV2InteractionContract() {
     const realMap = page.locator(".mobile-v2__real-map");
     await realMap.waitFor({ state: "visible" });
     const mapRootFocused = await realMap.evaluate((element) => document.activeElement === element);
+    const mapCloseBox = await realMap.locator(":scope > header > button").boundingBox();
+    const mapCloseTouchTarget = mapCloseBox ? Math.min(mapCloseBox.width, mapCloseBox.height) : 0;
     const mapBackgroundInert = await page.locator(".mobile-v2__header").evaluate((element) => element.inert);
     await page.keyboard.press("Escape");
     await realMap.waitFor({ state: "detached" });
@@ -300,6 +313,7 @@ async function verifyMobileV2InteractionContract() {
     const interaction = {
       name: "mobile-v2-playback-modal-contract",
       pickerRootFocused,
+      pickerCloseTouchTarget,
       pickerBackgroundInert,
       pickerFocusRestored,
       selectedJourneyId,
@@ -311,9 +325,11 @@ async function verifyMobileV2InteractionContract() {
       sheetTabTrapped,
       sheetFocusRestored,
       mapRootFocused,
+      mapCloseTouchTarget,
       mapBackgroundInert,
       mapFocusRestored,
       failed: !pickerRootFocused
+        || pickerCloseTouchTarget < 44
         || !pickerBackgroundInert
         || !pickerFocusRestored
         || !selectedJourneyId
@@ -324,6 +340,7 @@ async function verifyMobileV2InteractionContract() {
         || !sheetTabTrapped
         || !sheetFocusRestored
         || !mapRootFocused
+        || mapCloseTouchTarget < 44
         || !mapBackgroundInert
         || !mapFocusRestored,
     };
