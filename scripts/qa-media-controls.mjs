@@ -154,7 +154,7 @@ try {
     const swipeY = stageBox.y + stageBox.height * 0.5;
     await mediaStage.evaluate((stage) => {
       stage.addEventListener("gotpointercapture", (event) => { stage.dataset.qaCapturedPointer = String(event.pointerId); });
-      stage.addEventListener("lostpointercapture", (event) => { stage.dataset.qaReleasedPointer = String(event.pointerId); });
+      stage.addEventListener("lostpointercapture", (event) => { if (event.target === stage) stage.dataset.qaReleasedPointer = String(event.pointerId); });
     });
     await touch.send("Input.dispatchTouchEvent", {
       type: "touchStart",
@@ -289,7 +289,7 @@ try {
     const fullscreenPositionBefore = await fullscreen.locator(".journey-story-fullscreen__nav span").textContent();
     await fullscreen.evaluate((stage) => {
       stage.addEventListener("gotpointercapture", (event) => { stage.dataset.qaCapturedPointer = String(event.pointerId); });
-      stage.addEventListener("lostpointercapture", (event) => { stage.dataset.qaReleasedPointer = String(event.pointerId); });
+      stage.addEventListener("lostpointercapture", (event) => { if (event.target === stage) stage.dataset.qaReleasedPointer = String(event.pointerId); });
     });
     await touch.send("Input.dispatchTouchEvent", {
       type: "touchStart",
