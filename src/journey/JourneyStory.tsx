@@ -511,6 +511,7 @@ export function JourneyStory({
     neighborAsset: JourneyMediaAsset | null;
     width: number;
   } | null>(null);
+  const mediaDragSettlingRef = useRef(false);
   const [mobileMediaMenuOpen, setMobileMediaMenuOpen] = useState(false);
   // Review P2: the fullscreen overlay is a focus trap of its own (it is
   // rendered outside the story dialog, whose useModalFocus would otherwise
@@ -1154,7 +1155,7 @@ export function JourneyStory({
   }
 
   function beginMediaDrag(container: HTMLElement | null, clientX: number, clientY: number, wrap: boolean) {
-    if (!container || incomingAssetId !== null || mutationPending || overview || scopedMedia.length < 2) return;
+    if (!container || mediaDragSettlingRef.current || incomingAssetId !== null || mutationPending || overview || scopedMedia.length < 2) return;
     const base = container.querySelector<HTMLElement>(":scope > img, :scope > video");
     if (!base) return;
     base.classList.toggle("journey-story__media-drag-page", container === fullscreenRef.current);
@@ -1197,7 +1198,15 @@ export function JourneyStory({
     if (neighborIndex !== drag.neighborIndex) {
       drag.neighborIndex = neighborIndex;
       drag.neighborAsset = neighbor?.asset ?? null;
+      const previousPeek = drag.peek;
       drag.peek = attachMediaDragPeek(drag.container, drag.neighborAsset);
+      if (previousPeek && previousPeek !== drag.peek) {
+        previousPeek.style.transition = "";
+        previousPeek.style.transform = "";
+        previousPeek.style.display = "none";
+        previousPeek.removeAttribute("src");
+        previousPeek.classList.remove("journey-story__media-drag-settle", "journey-story__media-drag-page");
+      }
     }
     applyMediaDragTransform();
   }
@@ -1243,8 +1252,9 @@ export function JourneyStory({
     const drag = mediaDragRef.current;
     mediaDragRef.current = null;
     if (!drag) return;
+    mediaDragSettlingRef.current = !prefersReducedMotion();
     const asset = commit ? drag.neighborAsset : null;
-    const ready = asset !== null && isMediaDragTargetReady(asset);
+    const ready = asset !== null && drag.peek !== null && isMediaDragTargetReady(asset);
     if (asset && !ready) {
       pendingTargetRef.current = drag.neighborIndex;
       const read = mediaReads[asset.id];
@@ -1256,7 +1266,9 @@ export function JourneyStory({
     }
     if (prefersReducedMotion()) {
       if (ready && asset) landMediaDrag(asset, drag.neighborIndex);
+      else if (commit && asset) navigateToMedia(drag.neighborIndex);
       finishMediaDrag(drag);
+      mediaDragSettlingRef.current = false;
       return;
     }
     drag.base.classList.add("journey-story__media-drag-settle");
@@ -1268,6 +1280,7 @@ export function JourneyStory({
       if (drag.peek) drag.peek.style.transform = "translateX(0)";
       window.setTimeout(() => {
         finishMediaDrag(drag);
+        mediaDragSettlingRef.current = false;
         landMediaDrag(asset, index);
       }, MEDIA_DRAG_SETTLE_MS);
       return;
@@ -1277,7 +1290,11 @@ export function JourneyStory({
       const edge = drag.dx < 0 ? drag.width : -drag.width;
       drag.peek.style.transform = `translateX(${edge}px)`;
     }
-    window.setTimeout(() => finishMediaDrag(drag), MEDIA_DRAG_SETTLE_MS);
+    window.setTimeout(() => {
+      finishMediaDrag(drag);
+      mediaDragSettlingRef.current = false;
+      if (commit && asset) navigateToMedia(drag.neighborIndex);
+    }, MEDIA_DRAG_SETTLE_MS);
   }
 
   function handleStoryMediaPointerDown(event: ReactPointerEvent<HTMLElement>) {
