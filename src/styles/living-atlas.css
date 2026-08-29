@@ -1413,6 +1413,15 @@
   background: #010404;
 }
 
+/* Mobile swipe keeps compositor ownership stable across incoming -> settled.
+   The same media node stays absolutely positioned before and after settle. */
+.journey-story__media[data-mobile-layout="true"] > img,
+.journey-story__media[data-mobile-layout="true"] > video {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+}
+
 /* #11 two-layer stage: the incoming frame crossfades over the settled base
    frame (180–280ms) and is released only after the switch settles, so a
    slideshow step never flashes an empty stage. */

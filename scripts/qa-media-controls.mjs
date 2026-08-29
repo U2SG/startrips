@@ -60,6 +60,8 @@ async function createQaPage(path, mediaUrl, {
   instrumentMedia = false,
   mixedMedia = false,
   mobile = true,
+  readDelayMs = 0,
+  blockedReadAssetId = null,
   reducedMotion = "reduce",
   viewport = mobile ? { width: 390, height: 844 } : { width: 1280, height: 800 },
 } = {}) {
@@ -99,18 +101,26 @@ async function createQaPage(path, mediaUrl, {
     contentType: "application/json",
     body: "null",
   }));
-  await page.route("**/api/uploads/assets/*/read-url", (route) => route.fulfill({
-    status: 200,
-    contentType: "application/json",
-    body: JSON.stringify({
-      url: mixedMedia && route.request().url().includes("00000000-0000-4000-8000-000000000152")
-        ? tinyVideo
-        : mediaUrl,
-      expiresAt: "2026-08-26T00:00:00.000Z",
-    }),
-  }));
+  let releaseBlockedRead = () => undefined;
+  const blockedRead = blockedReadAssetId
+    ? new Promise((resolve) => { releaseBlockedRead = resolve; })
+    : null;
+  await page.route("**/api/uploads/assets/*/read-url", async (route) => {
+    if (blockedRead && route.request().url().includes(blockedReadAssetId)) await blockedRead;
+    if (readDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, readDelayMs));
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        url: mixedMedia && route.request().url().includes("00000000-0000-4000-8000-000000000152")
+          ? tinyVideo
+          : mediaUrl,
+        expiresAt: "2026-08-26T00:00:00.000Z",
+      }),
+    });
+  });
   await page.goto(`${origin}${path}`, { waitUntil: "domcontentloaded" });
-  return { page, consoleErrors, pageErrors };
+  return { page, consoleErrors, pageErrors, releaseBlockedRead };
 }
 
 const checks = [];
@@ -321,6 +331,118 @@ try {
       if (composerMobileLayout !== "true") failed = true;
     } finally {
       await landscapeComposer.page.close();
+    }
+  }
+
+  for (const [label, viewport] of [
+    ["320", { width: 320, height: 700 }],
+    ["360", { width: 360, height: 780 }],
+    ["390", { width: 390, height: 844 }],
+    ["430", { width: 430, height: 900 }],
+  ]) {
+    const mobileContinuity = await createQaPage("/?qaState=journey-story", onePixelGif, {
+      mobile: true,
+      blockedReadAssetId: "00000000-0000-4000-8000-000000000101",
+      reducedMotion: "no-preference",
+      viewport,
+    });
+    try {
+      const stage = mobileContinuity.page.locator(".journey-story__media");
+      await stage.waitFor({ state: "visible" });
+      const base = stage.locator(
+        ":scope > img:not(.journey-story__media-incoming), :scope > video:not(.journey-story__media-incoming)",
+      ).first();
+      await base.waitFor({ state: "visible", timeout: 3_000 });
+      const beforeLabel = (await base.getAttribute("alt")) ?? (await base.getAttribute("src"));
+      const box = await stage.boundingBox();
+      if (!box) throw new Error(`mobile continuity ${label}: stage has no bounds`);
+      const startX = box.x + box.width * 0.72;
+      const y = box.y + box.height * 0.5;
+      await stage.dispatchEvent("pointerdown", {
+        pointerId: 41,
+        pointerType: "touch",
+        isPrimary: true,
+        clientX: startX,
+        clientY: y,
+        bubbles: true,
+      });
+      await stage.dispatchEvent("pointerup", {
+        pointerId: 41,
+        pointerType: "touch",
+        isPrimary: true,
+        clientX: startX - 110,
+        clientY: y,
+        bubbles: true,
+      });
+      await mobileContinuity.page.waitForTimeout(60);
+      const incoming = stage.locator(":scope > .journey-story__media-incoming");
+      const incomingWhileReadBlocked = await incoming.count();
+      const oldFrameHeldDuringRead = await stage.locator(
+        ":scope > img:not(.journey-story__media-incoming), :scope > video:not(.journey-story__media-incoming)",
+      ).first().evaluate((element, expected) => (
+        (element.getAttribute("alt") ?? element.getAttribute("src")) === expected
+      ), beforeLabel);
+      mobileContinuity.releaseBlockedRead();
+      await incoming.waitFor({ state: "attached", timeout: 3_000 });
+      const incomingState = await incoming.evaluate((element) => {
+        window.__qaMobileIncomingMediaNode = element;
+        const style = getComputedStyle(element);
+        const rect = element.getBoundingClientRect();
+        return {
+          position: style.position,
+          animationName: style.animationName,
+          rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+          layout: { x: element.offsetLeft, y: element.offsetTop, width: element.offsetWidth, height: element.offsetHeight },
+        };
+      });
+      await mobileContinuity.page.waitForFunction(() => (
+        !document.querySelector(".journey-story__media > .journey-story__media-incoming")
+      ), null, { timeout: 3_000 });
+      const settledState = await mobileContinuity.page.evaluate(() => {
+        const settled = document.querySelector(
+          ".journey-story__media > img:not(.journey-story__media-incoming), .journey-story__media > video:not(.journey-story__media-incoming)",
+        );
+        if (!settled) return null;
+        const style = getComputedStyle(settled);
+        const rect = settled.getBoundingClientRect();
+        return {
+          sameNode: window.__qaMobileIncomingMediaNode === settled,
+          position: style.position,
+          rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+          layout: { x: settled.offsetLeft, y: settled.offsetTop, width: settled.offsetWidth, height: settled.offsetHeight },
+        };
+      });
+      const layoutDelta = settledState
+        ? Math.max(
+          Math.abs(settledState.layout.x - incomingState.layout.x),
+          Math.abs(settledState.layout.y - incomingState.layout.y),
+          Math.abs(settledState.layout.width - incomingState.layout.width),
+          Math.abs(settledState.layout.height - incomingState.layout.height),
+        )
+        : Number.POSITIVE_INFINITY;
+      const continuityFailed = !oldFrameHeldDuringRead
+        || incomingWhileReadBlocked !== 0
+        || incomingState.position !== "absolute"
+        || incomingState.animationName !== "motionMediaIn"
+        || !settledState?.sameNode
+        || settledState.position !== "absolute"
+        || layoutDelta > 0
+        || mobileContinuity.consoleErrors.length > 0
+        || mobileContinuity.pageErrors.length > 0;
+      checks.push({
+        name: `story-mobile-swipe-compositor-continuity-${label}`,
+        oldFrameHeldDuringRead,
+        incomingWhileReadBlocked,
+        incoming: incomingState,
+        settled: settledState,
+        layoutDelta,
+        consoleErrors: mobileContinuity.consoleErrors,
+        pageErrors: mobileContinuity.pageErrors,
+        failed: continuityFailed,
+      });
+      if (continuityFailed) failed = true;
+    } finally {
+      await mobileContinuity.page.close();
     }
   }
 
