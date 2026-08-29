@@ -51,6 +51,7 @@ import {
   toJourneyRoutes,
 } from "./journeyModel";
 import { getLightEffectGradient } from "./lightEffects";
+import "../styles/living-atlas-polish.css";
 import type { Journey, JourneyRoute } from "./types";
 
 type AtlasView = "planet" | "timeline";
@@ -223,6 +224,22 @@ export function playbackFocusRouteForCameraTarget(
   target: PlaybackCameraTarget,
 ): JourneyRoute | null {
   return target.kind === "route" ? route : null;
+}
+
+function useRailOverflow<T extends HTMLElement>(deps: readonly unknown[] = []) {
+  const ref = useRef<T | null>(null);
+  const [overflowing, setOverflowing] = useState(false);
+  useEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+    const check = () => setOverflowing(element.scrollHeight > element.clientHeight + 4);
+    check();
+    const observer = new ResizeObserver(check);
+    observer.observe(element);
+    return () => observer.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps);
+  return { ref, overflowing };
 }
 
 export function LivingAtlasApp({
@@ -423,6 +440,16 @@ export function LivingAtlasApp({
     if (!journeys.some((journey) => journey.id === arrivalJourneyId)) return;
     timeCursor.selectJourney(arrivalJourneyId);
   }, [arrivalJourneyId, journeys, timeCursor.selectJourney]);
+
+  const railList = useRailOverflow<HTMLOListElement>([journeys.length]);
+
+  // Plain notices (save confirmations etc.) settle and clear themselves; the
+  // delete-undo notice stays until the user decides.
+  useEffect(() => {
+    if (!notice || undoJourney) return;
+    const timer = globalThis.setTimeout(() => setNotice(""), 8000);
+    return () => globalThis.clearTimeout(timer);
+  }, [notice, undoJourney]);
 
   const activeJourney = journeys.find((journey) => journey.id === activeJourneyId) ?? null;
   const playbackJourney = journeys.find((journey) => journey.id === playbackJourneyId) ?? null;
@@ -717,8 +744,8 @@ export function LivingAtlasApp({
         <header className="living-atlas__header" inert={globeFocusMode || globePickActive || playbackActive || undefined}>
           <div className="living-atlas__brand"><IconWorld size={25} stroke={1.1} aria-hidden="true" /><div><p>STARTRIPS · LIVING ATLAS</p><h1><ShinyText>把走过的路留在地球上</ShinyText></h1></div></div>
           <nav aria-label="图谱视图">
-            <button type="button" className={view === "planet" ? "is-active" : ""} onClick={() => setView("planet")}><IconWorld size={16} stroke={1.35} aria-hidden="true" />地球</button>
-            <button type="button" className={view === "timeline" ? "is-active" : ""} onClick={() => setView("timeline")}><IconTimeline size={16} stroke={1.35} aria-hidden="true" />时间线</button>
+            <button type="button" className={view === "planet" ? "is-active" : ""} aria-current={view === "planet" ? "page" : undefined} onClick={() => setView("planet")}><IconWorld size={16} stroke={1.35} aria-hidden="true" />地球</button>
+            <button type="button" className={view === "timeline" ? "is-active" : ""} aria-current={view === "timeline" ? "page" : undefined} onClick={() => setView("timeline")}><IconTimeline size={16} stroke={1.35} aria-hidden="true" />时间线</button>
             <button ref={createMagnet.ref} onMouseMove={createMagnet.onMouseMove} onMouseLeave={createMagnet.onMouseLeave} type="button" className="living-atlas__create" onClick={openCreateComposer}><IconPlus size={17} stroke={1.4} aria-hidden="true" />记录旅程</button>
             <button
               ref={globeFocusTriggerRef}
@@ -743,7 +770,7 @@ export function LivingAtlasApp({
             <span>旅程</span>
             <small><CountUp value={journeys.length} initialValue={journeys.length} format={(value) => String(value).padStart(2, "0")} /> JOURNEYS</small>
           </div>
-          <ol>
+          <ol ref={railList.ref} data-overflow={railList.overflowing ? "true" : "false"}>
             {journeyRail.map((journey) => (
               <li key={journey.id}>
                 <button
@@ -764,7 +791,7 @@ export function LivingAtlasApp({
               </li>
             ))}
           </ol>
-          <p className="living-atlas__journey-scroll-hint">滚动查看更多旅程</p>
+          {railList.overflowing ? <p className="living-atlas__journey-scroll-hint">滚动查看更多旅程</p> : null}
         </nav>
       ) : null}
 
