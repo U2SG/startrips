@@ -226,20 +226,33 @@ export function playbackFocusRouteForCameraTarget(
   return target.kind === "route" ? route : null;
 }
 
+// The rail hint must re-measure whenever the rendered rows change, not only
+// when the count does — a same-count title edit can change the scroll height.
+export function railContentSignature(journeys: readonly Journey[]): string {
+  return journeys
+    .map((journey) => `${journey.id} ${journey.title} ${journey.startedOn}`)
+    .join("\n");
+}
+
+// Callback ref (not useRef) so the observer always attaches to the currently
+// mounted rail: switching to the timeline or Mobile V2 unmounts the <ol>, and
+// a detached element would otherwise keep the stale measurement forever.
 function useRailOverflow<T extends HTMLElement>(deps: readonly unknown[] = []) {
-  const ref = useRef<T | null>(null);
+  const [element, setElement] = useState<T | null>(null);
   const [overflowing, setOverflowing] = useState(false);
   useEffect(() => {
-    const element = ref.current;
-    if (!element) return;
+    if (!element) {
+      setOverflowing(false);
+      return;
+    }
     const check = () => setOverflowing(element.scrollHeight > element.clientHeight + 4);
     check();
     const observer = new ResizeObserver(check);
     observer.observe(element);
     return () => observer.disconnect();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, deps);
-  return { ref, overflowing };
+  }, [element, ...deps]);
+  return { ref: setElement, overflowing };
 }
 
 export function LivingAtlasApp({
@@ -441,7 +454,7 @@ export function LivingAtlasApp({
     timeCursor.selectJourney(arrivalJourneyId);
   }, [arrivalJourneyId, journeys, timeCursor.selectJourney]);
 
-  const railList = useRailOverflow<HTMLOListElement>([journeys.length]);
+  const railList = useRailOverflow<HTMLOListElement>([railContentSignature(journeys)]);
 
   // Plain notices (save confirmations etc.) settle and clear themselves; the
   // delete-undo notice stays until the user decides.
