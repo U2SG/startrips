@@ -13,7 +13,7 @@ import { useCompactMobileLayout } from "../journey/mobileLayout";
 import { useMobileSurfaceHistory } from "../journey/useMobileSurfaceHistory";
 import { useModalFocus } from "../journey/useModalFocus";
 import { usePersistentEarth } from "../scene/LivingAtlasGlobe";
-import { previousAccountSurface, type AccountSurface } from "./accountSurface";
+import { previousAccountSurface, shouldRenderStandaloneAccountDock, type AccountSurface } from "./accountSurface";
 import { authClient } from "./auth-client";
 
 type OrganizationSummary = {
@@ -596,7 +596,7 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cine
   return (
     <MobileAccountSlotContext.Provider value={setMobileAccountHost}>
       {mobileAccountTrigger}
-      {!isMobileV2 ? (
+      {shouldRenderStandaloneAccountDock(isMobileV2, mobileAccountHost !== null) ? (
         <aside
           className={`account-dock${dockOpen ? " is-open" : ""}${cinematicActive ? " is-cinematic-hidden" : ""}`}
           inert={cinematicActive || undefined}

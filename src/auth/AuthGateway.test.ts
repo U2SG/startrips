@@ -1,12 +1,25 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { previousAccountSurface } from "./accountSurface";
+import { previousAccountSurface, shouldRenderStandaloneAccountDock } from "./accountSurface";
 
 describe("mobile account surface", () => {
   it("unwinds a nested form before closing the account sheet", () => {
     expect(previousAccountSurface("invite")).toBe("menu");
     expect(previousAccountSurface("edit")).toBe("menu");
     expect(previousAccountSurface("menu")).toBeNull();
+  });
+
+
+  it("keeps the standalone account dock until the mobile Atlas slot mounts", () => {
+    expect(shouldRenderStandaloneAccountDock(false, false)).toBe(true);
+    expect(shouldRenderStandaloneAccountDock(false, true)).toBe(true);
+    expect(shouldRenderStandaloneAccountDock(true, false)).toBe(true);
+    expect(shouldRenderStandaloneAccountDock(true, true)).toBe(false);
+  });
+
+  it("restores pointer events on the mobile account sheet layer", () => {
+    const authCss = readFileSync("src/styles/auth-gate.css", "utf8");
+    expect(authCss).toMatch(/\.account-sheet-layer\s*\{[^}]*pointer-events:\s*auto;/s);
   });
 
   it("uses the Atlas header slot instead of independently positioning the mobile trigger", () => {

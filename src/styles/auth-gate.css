@@ -983,6 +983,7 @@ body:has(.living-atlas) .account-dock button {
   z-index: 200;
   inset: 0;
   display: grid;
+  pointer-events: auto;
   align-items: end;
 }
 
