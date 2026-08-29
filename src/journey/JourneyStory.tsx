@@ -32,7 +32,6 @@ import {
   IconArrowRight,
   IconArrowDown,
   IconArrowUp,
-  IconCheck,
   IconDots,
   IconPhotoStar,
   IconEdit,
@@ -48,7 +47,7 @@ import {
   IconX,
 } from "@tabler/icons-react";
 import { IconActionButton } from "../components/IconActionButton";
-import { deleteMedia, getPrivateMediaRead, moveJourneyMedia, reorderJourneyMedia, setJourneyCover } from "./journeyApi";
+import { deleteMedia, getPrivateMediaRead, reorderJourneyMedia, setJourneyCover } from "./journeyApi";
 import { runSharedElementMorph } from "../motion/primitives/sharedElement";
 import { uploadJourneyMedia } from "./JourneyComposer";
 import {
@@ -98,9 +97,6 @@ const MEDIA_READ_SWEEP_MS = 20_000;
 // replaced.
 const MEDIA_DRAG_THRESHOLD_PX = 48;
 const MEDIA_DRAG_SETTLE_MS = 220;
-// <option> values must be strings; this sentinel stands in for the "whole
-// journey" (routePointId: null) move target.
-const MEDIA_MOVE_TO_JOURNEY_VALUE = "__journey__";
 
 type MediaReadState =
   | { status: "loading" }
@@ -120,11 +116,6 @@ type JourneyStoryProps = {
   onMediaReorder?: (
     journeyId: string,
     assetIds: readonly string[],
-  ) => Journey | Promise<Journey>;
-  onMediaMove?: (
-    journeyId: string,
-    assetIds: readonly string[],
-    routePointId: string | null,
   ) => Journey | Promise<Journey>;
 };
 
@@ -293,9 +284,6 @@ function StoryMediaTile({
   onRequestRead,
   onSelect,
   onSetCover,
-  moveMode = false,
-  isMoveSelected = false,
-  onToggleMoveSelected,
 }: {
   asset: JourneyMediaAsset;
   index: number;
@@ -306,9 +294,6 @@ function StoryMediaTile({
   onRequestRead: (assetId: string) => void;
   onSelect: (index: number, source: HTMLButtonElement) => void;
   onSetCover?: (assetId: string) => void;
-  moveMode?: boolean;
-  isMoveSelected?: boolean;
-  onToggleMoveSelected?: (assetId: string) => void;
 }) {
   const tileRef = useRef<HTMLButtonElement>(null);
   const isVideo = asset.mimeType.startsWith("video/");
@@ -339,15 +324,12 @@ function StoryMediaTile({
       <button
         ref={tileRef}
         type="button"
-        className={`${isCurrent ? "is-current" : ""}${isMoveSelected ? " is-move-selected" : ""}`}
-        aria-current={!moveMode && isCurrent ? "true" : undefined}
-        aria-pressed={moveMode ? isMoveSelected : undefined}
-        aria-label={moveMode
-          ? `选择 ${asset.fileName}${isMoveSelected ? "，已选中" : ""}`
-          : `第 ${index + 1} 个媒体 ${asset.fileName}${isCover ? "，当前封面" : ""}`}
+        className={isCurrent ? "is-current" : ""}
+        aria-current={isCurrent ? "true" : undefined}
+        aria-label={`第 ${index + 1} 个媒体 ${asset.fileName}${isCover ? "，当前封面" : ""}`}
         data-media-tile-index={index}
         disabled={disabled}
-        onClick={(event) => moveMode ? onToggleMoveSelected?.(asset.id) : onSelect(index, event.currentTarget)}
+        onClick={(event) => onSelect(index, event.currentTarget)}
       >
         {isVideo ? (
           <span className="journey-story__media-tile-badge">
@@ -360,16 +342,10 @@ function StoryMediaTile({
             {read?.status === "error" ? "不可用" : "载入中"}
           </span>
         )}
-        {moveMode ? (
-          <span className="journey-story__media-tile-move-check" aria-hidden="true">
-            {isMoveSelected ? <IconCheck size={13} stroke={2.4} /> : null}
-          </span>
-        ) : isCover ? (
-          <span className="journey-story__media-tile-cover">封面</span>
-        ) : null}
+        {isCover ? <span className="journey-story__media-tile-cover">封面</span> : null}
         <small>{String(index + 1).padStart(2, "0")}</small>
       </button>
-      {onSetCover && !isCover && !moveMode ? (
+      {onSetCover && !isCover ? (
         <IconActionButton
           type="button"
           className="journey-story__media-tile-set-cover"
@@ -398,9 +374,6 @@ function SortableMediaTile({
   onRequestRead,
   onSelect,
   onSetCover,
-  moveMode = false,
-  isMoveSelected = false,
-  onToggleMoveSelected,
 }: {
   asset: JourneyMediaAsset;
   index: number;
@@ -411,9 +384,6 @@ function SortableMediaTile({
   onRequestRead: (assetId: string) => void;
   onSelect: (index: number, source: HTMLButtonElement) => void;
   onSetCover?: (assetId: string) => void;
-  moveMode?: boolean;
-  isMoveSelected?: boolean;
-  onToggleMoveSelected?: (assetId: string) => void;
 }) {
   const {
     attributes,
@@ -422,7 +392,7 @@ function SortableMediaTile({
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: asset.id, disabled: moveMode });
+  } = useSortable({ id: asset.id });
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -435,8 +405,8 @@ function SortableMediaTile({
       ref={setNodeRef}
       style={style}
       className={`${isDragging ? "is-dragging" : ""}${isCover ? " is-cover" : ""}`}
-      {...(moveMode ? null : attributes)}
-      {...(moveMode ? null : listeners)}
+      {...attributes}
+      {...listeners}
     >
       <StoryMediaTile
         asset={asset}
@@ -448,9 +418,6 @@ function SortableMediaTile({
         onRequestRead={onRequestRead}
         onSelect={onSelect}
         onSetCover={onSetCover}
-        moveMode={moveMode}
-        isMoveSelected={isMoveSelected}
-        onToggleMoveSelected={onToggleMoveSelected}
       />
     </li>
   );
@@ -467,7 +434,6 @@ export function JourneyStory({
   onMediaAdded,
   onMediaDelete,
   onMediaReorder,
-  onMediaMove,
 }: JourneyStoryProps) {
   const journeyIndex = journeys.findIndex((candidate) => candidate.id === journeyId);
   const journey = journeys[journeyIndex];
@@ -552,13 +518,6 @@ export function JourneyStory({
   // steal Tab focus back into the article).
   const fullscreenRef = useRef<HTMLDivElement>(null);
   const [overview, setOverview] = useState(false);
-  // Batch move: fixes media that landed on the wrong route point without
-  // re-uploading. Selection is scope-local (the currently viewed route
-  // point's tiles); moving hands the whole set to one request.
-  const [mediaMoveMode, setMediaMoveMode] = useState(false);
-  const [mediaMoveSelection, setMediaMoveSelection] = useState<ReadonlySet<string>>(new Set());
-  const [mediaMovePending, setMediaMovePending] = useState(false);
-  const [mediaMoveMessage, setMediaMoveMessage] = useState("");
   const [soundtrackUpload, setSoundtrackUpload] = useState<MediaUploadState>({ status: "idle" });
   const [soundtrackRemovePending, setSoundtrackRemovePending] = useState(false);
   const [soundtrackNotice, setSoundtrackNotice] = useState("");
@@ -661,9 +620,6 @@ export function JourneyStory({
     exitFullscreen();
     setMobileMediaMenuOpen(false);
     setOverview(false);
-    setMediaMoveMode(false);
-    setMediaMoveSelection(new Set());
-    setMediaMoveMessage("");
     setSoundtrackUpload({ status: "idle" });
     setSoundtrackRemovePending(false);
     setSoundtrackNotice("");
@@ -1093,13 +1049,6 @@ export function JourneyStory({
     }, MEDIA_READ_SWEEP_MS);
     return () => window.clearInterval(timer);
   }, [loadMediaRead]);
-
-  useEffect(() => {
-    if (overview) return;
-    setMediaMoveMode(false);
-    setMediaMoveSelection(new Set());
-    setMediaMoveMessage("");
-  }, [overview]);
 
   const namedStops = useMemo(
     () => journey?.routePoints.filter((point) => point.isStop) ?? [],
@@ -1601,8 +1550,7 @@ export function JourneyStory({
     || mediaDeleteState === "pending"
     || soundtrackRemovePending
     || orderPending
-    || coverPending
-    || mediaMovePending;
+    || coverPending;
 
   function selectMediaScope(routePointId: string | null) {
     if (mutationPending) return;
@@ -1613,9 +1561,6 @@ export function JourneyStory({
     pendingTargetRef.current = null;
     setLocalMediaOrder(null);
     setOverview(false);
-    setMediaMoveMode(false);
-    setMediaMoveSelection(new Set());
-    setMediaMoveMessage("");
     setRetryFiles([]);
     setUploadState({ status: "idle" });
   }
@@ -1770,47 +1715,6 @@ export function JourneyStory({
     } finally {
       setOrderPending(false);
       setLocalMediaOrder(null);
-    }
-  }
-
-  function toggleMediaMoveMode() {
-    setMediaMoveMode((mode) => !mode);
-    setMediaMoveSelection(new Set());
-    setMediaMoveMessage("");
-  }
-
-  function toggleMediaMoveSelected(assetId: string) {
-    setMediaMoveSelection((current) => {
-      const next = new Set(current);
-      if (next.has(assetId)) {
-        next.delete(assetId);
-      } else {
-        next.add(assetId);
-      }
-      return next;
-    });
-  }
-
-  // Batch-moves the current selection onto a different route point (or
-  // `null`, back to the whole journey) in one request, then refreshes.
-  async function confirmMediaMove(targetRoutePointId: string | null) {
-    if (mediaMoveSelection.size === 0 || mutationPending) return;
-    const assetIds = [...mediaMoveSelection];
-    setMediaMovePending(true);
-    setMediaMoveMessage("");
-    try {
-      if (onMediaMove) {
-        await onMediaMove(journey.id, assetIds, targetRoutePointId);
-      } else {
-        await moveJourneyMedia(journey.id, assetIds, targetRoutePointId);
-        await onMediaAdded(journey.id);
-      }
-      setMediaMoveMode(false);
-      setMediaMoveSelection(new Set());
-    } catch (error) {
-      setMediaMoveMessage(error instanceof Error ? error.message : "移动失败，请稍后重试。");
-    } finally {
-      setMediaMovePending(false);
     }
   }
 
@@ -2001,17 +1905,6 @@ export function JourneyStory({
                 完成
               </button>
             ) : null}
-            {overview && journey.routePoints.length > 0 ? (
-              <button
-                type="button"
-                className={`journey-story__media-move-toggle${mediaMoveMode ? " is-active" : ""}`}
-                aria-pressed={mediaMoveMode}
-                disabled={mutationPending}
-                onClick={toggleMediaMoveMode}
-              >
-                {mediaMoveMode ? "取消选择" : "选择照片移动"}
-              </button>
-            ) : null}
             {overview ? (
               <DndContext
                 sensors={dragSensors}
@@ -2035,51 +1928,11 @@ export function JourneyStory({
                         onRequestRead={loadMediaRead}
                         onSelect={selectMediaIndex}
                         onSetCover={mobileLayout ? undefined : handleSetCover}
-                        moveMode={mediaMoveMode}
-                        isMoveSelected={mediaMoveSelection.has(tile.id)}
-                        onToggleMoveSelected={toggleMediaMoveSelected}
                       />
                     ))}
                   </ul>
                 </SortableContext>
               </DndContext>
-            ) : null}
-            {overview && mediaMoveMode ? (
-              <form
-                className="journey-story__media-move-bar"
-                aria-label="移动照片到途径点"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  const value = new FormData(event.currentTarget).get("target");
-                  if (typeof value !== "string" || value === "") return;
-                  void confirmMediaMove(value === MEDIA_MOVE_TO_JOURNEY_VALUE ? null : value);
-                }}
-              >
-                <span>{mediaMoveSelection.size > 0 ? `已选择 ${mediaMoveSelection.size} 张` : "点按照片进行选择"}</span>
-                <select
-                  name="target"
-                  defaultValue=""
-                  disabled={mediaMoveSelection.size === 0 || mutationPending}
-                  required
-                >
-                  <option value="" disabled>移动到…</option>
-                  {selectedRoutePointId !== null ? (
-                    <option value={MEDIA_MOVE_TO_JOURNEY_VALUE}>整段旅程</option>
-                  ) : null}
-                  {journey.routePoints
-                    .map((point, index) => ({ point, label: point.label || `途径点 ${index + 1}` }))
-                    .filter(({ point }) => point.id !== selectedRoutePointId)
-                    .map(({ point, label }) => (
-                      <option key={point.id} value={point.id}>{label}</option>
-                    ))}
-                </select>
-                <button type="submit" disabled={mediaMoveSelection.size === 0 || mutationPending}>
-                  {mediaMovePending ? "移动中…" : "移动"}
-                </button>
-              </form>
-            ) : null}
-            {overview && mediaMoveMode && mediaMoveMessage ? (
-              <p className="journey-story__media-move-message" role="alert">{mediaMoveMessage}</p>
             ) : null}
             {!overview && shownAsset && (!shownRead || shownRead.status === "loading") ? <div className="journey-story__media-state">正在打开私有媒体…</div> : null}
             {!overview && shownAsset && shownRead?.status === "error" ? <div className="journey-story__media-state is-error">{shownRead.message}</div> : null}

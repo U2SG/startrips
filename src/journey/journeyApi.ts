@@ -141,23 +141,6 @@ export async function reorderJourneyMedia(
   return payload.journey;
 }
 
-// Batch-moves media onto a different route point (or `null`, back to the
-// whole journey) — for fixing photos that landed on the wrong stop, without
-// re-uploading. One request for the whole selection.
-export async function moveJourneyMedia(
-  journeyId: string,
-  assetIds: readonly string[],
-  routePointId: string | null,
-  fetcher: Fetcher = fetch,
-): Promise<Journey> {
-  const payload = await requestJson<{ journey: Journey }>(
-    "/api/uploads/assets/move",
-    { method: "POST", body: JSON.stringify({ journeyId, assetIds, routePointId }) },
-    fetcher,
-  );
-  return payload.journey;
-}
-
 // #14: set or clear the journey's explicit cover media.
 export async function setJourneyCover(
   journeyId: string,

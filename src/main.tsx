@@ -352,16 +352,6 @@ function JourneyStoryQaPreview() {
             setJourneys([nextJourney]);
             return nextJourney;
           }}
-          onMediaMove={(_journeyId, assetIds, routePointId) => {
-            const currentJourney = journeys[0];
-            const moving = new Set(assetIds);
-            const media = currentJourney.media.map((asset) => (
-              moving.has(asset.id) ? { ...asset, routePointId } : asset
-            ));
-            const nextJourney: Journey = { ...currentJourney, media };
-            setJourneys([nextJourney]);
-            return nextJourney;
-          }}
         />
       ) : null}
     </main>
