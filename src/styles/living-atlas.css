@@ -1583,6 +1583,10 @@
   list-style: none;
 }
 
+.journey-story__media-grid.is-selecting {
+  padding-bottom: 104px;
+}
+
 
 /* #34: shared secondary icon action. The accessible name remains on the
    button; this tooltip is only a pointer/keyboard-focus description layer. */
@@ -5159,6 +5163,10 @@ body:has(.journey-composer-backdrop.is-globe-picking) .account-dock {
   .journey-story__media[data-mobile-layout="true"] .journey-story__media-grid {
     padding-top: 64px;
     touch-action: pan-y;
+  }
+
+  .journey-story__media[data-mobile-layout="true"] .journey-story__media-grid.is-selecting {
+    padding-bottom: calc(104px + env(safe-area-inset-bottom));
   }
 
   .journey-story__media[data-mobile-layout="true"] .journey-story__media-grid > li:not(.is-cover) {

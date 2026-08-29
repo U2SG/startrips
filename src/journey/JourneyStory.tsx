@@ -614,6 +614,9 @@ export function JourneyStory({
     exitFullscreen();
     setMobileMediaMenuOpen(false);
     setOverview(false);
+    setMoveSelectMode(false);
+    setMoveSelection(new Set());
+    setMoveMessage("");
     setSoundtrackUpload({ status: "idle" });
     setSoundtrackRemovePending(false);
     setSoundtrackNotice("");
@@ -640,6 +643,13 @@ export function JourneyStory({
   useEffect(() => {
     if (mediaDeleteState === "confirming") mediaDeleteCancelRef.current?.focus();
   }, [mediaDeleteState]);
+
+  useEffect(() => {
+    if (overview) return;
+    setMoveSelectMode(false);
+    setMoveSelection(new Set());
+    setMoveMessage("");
+  }, [overview]);
 
   // Only photos and videos are browsable media. The journey soundtrack is
   // audio, so it never enters the grid, the counts, or the ordering controls.
@@ -1364,6 +1374,9 @@ export function JourneyStory({
     pendingTargetRef.current = null;
     setLocalMediaOrder(null);
     setOverview(false);
+    setMoveSelectMode(false);
+    setMoveSelection(new Set());
+    setMoveMessage("");
     setRetryFiles([]);
     setUploadState({ status: "idle" });
   }
@@ -1715,7 +1728,7 @@ export function JourneyStory({
             onPointerUp={handleStoryMediaPointerUp}
           >
             {!asset ? <div className="journey-story__empty-media"><IconPhoto size={36} stroke={1.05} style={{ color: journey.lightColor }} aria-hidden="true" />{selectedRoutePoint ? "这个途径点还没有媒体" : "整段旅程还没有媒体"}</div> : null}
-            {scopedMedia.length > 1 && !mobileLayout ? (
+            {scopedMedia.length > 0 && !mobileLayout ? (
               <button
                 type="button"
                 className={`journey-story__media-overview${overview ? " is-active" : ""}`}
@@ -1809,7 +1822,7 @@ export function JourneyStory({
               <div className="journey-story__media-move-bar" role="group" aria-label="移动所选媒体">
                 <span>{moveSelection.size > 0 ? `已选 ${moveSelection.size} 个` : "点击照片进行选择"}</span>
                 <select
-                  aria-label="移动到"
+                  aria-label="移动到途径点"
                   disabled={moveSelection.size === 0 || movePending}
                   defaultValue=""
                   onChange={(event) => {
@@ -1960,7 +1973,7 @@ export function JourneyStory({
                           设为旅程封面
                         </button>
                       ) : <p className="journey-story__mobile-media-sheet-current">当前旅程封面</p>}
-                      {scopedMedia.length > 1 ? (
+                      {scopedMedia.length > 0 ? (
                         <button
                           type="button"
                           disabled={mutationPending}

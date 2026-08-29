@@ -1084,13 +1084,14 @@ uploadRoutes.post("/assets/move", async (context) => {
       .where(eq(mediaAssets.journeyId, input.journeyId))
       .orderBy(mediaAssets.sortOrder);
     const moving = new Set(input.assetIds);
+    const existingOrder = all.map((asset) => asset.id);
+    const movedInExistingOrder = existingOrder.filter((id) => moving.has(id));
     // Moved assets rejoin at the end of the journey's order, same place a
-    // freshly uploaded asset lands — which is also the end of their new
-    // route point's own filtered view, since nothing else there outranks
-    // them yet.
+    // freshly uploaded asset lands — but preserve their relative slideshow
+    // order instead of inheriting the client's click / Set insertion order.
     const nextOrder = [
-      ...all.map((asset) => asset.id).filter((id) => !moving.has(id)),
-      ...input.assetIds,
+      ...existingOrder.filter((id) => !moving.has(id)),
+      ...movedInExistingOrder,
     ];
     await transaction
       .update(mediaAssets)

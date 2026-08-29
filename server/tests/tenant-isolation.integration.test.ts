@@ -464,7 +464,9 @@ describe("media and atlas HTTP endpoints", () => {
       })
       .returning({ id: mediaAssets.id });
 
-    const moved = [assets[0].id, assets[2].id];
+    // Deliberately submit them in reverse click order; the endpoint must keep
+    // their existing slideshow order (a.jpg before c.jpg).
+    const moved = [assets[2].id, assets[0].id];
     const response = await app.request(`${TEST_ORIGIN}/api/uploads/assets/move`, {
       method: "POST",
       headers: authHeaders(identity.cookie),
@@ -478,6 +480,11 @@ describe("media and atlas HTTP endpoints", () => {
     expect(byId.get(assets[0].id)?.routePointId).toBe(stopId);
     expect(byId.get(assets[2].id)?.routePointId).toBe(stopId);
     expect(byId.get(assets[1].id)?.routePointId).toBeNull();
+    expect(
+      payload.journey.media
+        .filter((asset) => asset.id === assets[0].id || asset.id === assets[2].id)
+        .map((asset) => asset.id),
+    ).toEqual([assets[0].id, assets[2].id]);
 
     // Moving back to the whole journey (null) is the same endpoint.
     const movedBack = await app.request(`${TEST_ORIGIN}/api/uploads/assets/move`, {

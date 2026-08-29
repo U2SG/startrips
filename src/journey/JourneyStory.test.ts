@@ -421,7 +421,7 @@ describe("JourneyStory", () => {
     expect(markup).not.toContain("全部照片");
   });
 
-  it("offers a direct-access overview only once a scope holds several photos", () => {
+  it("offers a direct-access overview for singleton and multi-media scopes", () => {
     const single = renderToStaticMarkup(createElement(JourneyStory, {
       journeys: [{ ...journey, media: [asset("media-1", "image/jpeg", 0)] }],
       journeyId: journey.id,
@@ -430,7 +430,8 @@ describe("JourneyStory", () => {
       onEdit: () => undefined,
       onMediaAdded: () => null,
     }));
-    expect(single).not.toContain("全部照片");
+    expect(single).toContain("全部照片");
+    expect(single).toContain('aria-pressed="false"');
 
     const many: Journey = {
       ...journey,
