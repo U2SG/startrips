@@ -56,6 +56,12 @@ import type { Journey, JourneyRoute } from "./types";
 
 type AtlasView = "planet" | "timeline";
 
+type AtlasNotice = { id: number; message: string };
+
+export function nextAtlasNotice(current: AtlasNotice | null, message: string): AtlasNotice {
+  return { id: (current?.id ?? 0) + 1, message };
+}
+
 const MobileDetailedEarthMap = lazy(() => import("../scene/DetailedEarthMap"));
 
 // #8: the root class/data contract for globe focus mode, kept pure so the
@@ -283,8 +289,12 @@ export function LivingAtlasApp({
   const [composerOpen, setComposerOpen] = useState(false);
   const [editingJourneyId, setEditingJourneyId] = useState<string | null>(null);
   const [arrivalJourneyId, setArrivalJourneyId] = useState<string | null>(null);
-  const [notice, setNotice] = useState("");
+  const [notice, setNotice] = useState<AtlasNotice | null>(null);
   const [undoJourney, setUndoJourney] = useState<Journey | null>(null);
+  const showNotice = useCallback((message: string) => {
+    setNotice((current) => nextAtlasNotice(current, message));
+  }, []);
+  const clearNotice = useCallback(() => setNotice(null), []);
   const [globePickActive, setGlobePickActive] = useState(false);
   const [draftRoute, setDraftRoute] = useState<JourneyRoute | null>(null);
   // #8: globe-only focus mode hides every sidebar/card and lets the globe take
@@ -423,14 +433,14 @@ export function LivingAtlasApp({
     } catch (error) {
       if (revision !== loadRevision.current) return;
       if (quiet) {
-        setNotice("旅程已保存，但最新媒体列表暂时无法刷新。稍后重新进入即可重试。");
+        showNotice("旅程已保存，但最新媒体列表暂时无法刷新。稍后重新进入即可重试。");
       } else {
         setLoadError(error instanceof Error ? error.message : "无法读取旅程");
         setStatus("error");
       }
       return null;
     }
-  }, []);
+  }, [showNotice]);
 
   useEffect(() => {
     void load();
@@ -460,9 +470,9 @@ export function LivingAtlasApp({
   // delete-undo notice stays until the user decides.
   useEffect(() => {
     if (!notice || undoJourney) return;
-    const timer = globalThis.setTimeout(() => setNotice(""), 8000);
+    const timer = globalThis.setTimeout(clearNotice, 8000);
     return () => globalThis.clearTimeout(timer);
-  }, [notice, undoJourney]);
+  }, [notice, undoJourney, clearNotice]);
 
   const activeJourney = journeys.find((journey) => journey.id === activeJourneyId) ?? null;
   const playbackJourney = journeys.find((journey) => journey.id === playbackJourneyId) ?? null;
@@ -525,7 +535,7 @@ export function LivingAtlasApp({
     if (!edited) setArrivalJourneyId(result.journey.id);
     setDraftRoute(null);
     setUndoJourney(null);
-    setNotice(edited
+    showNotice(edited
       ? result.mediaErrors.length > 0
         ? "旅程修改已保存；未上传成功的媒体仍可重试。"
         : "旅程修改已保存。"
@@ -560,7 +570,7 @@ export function LivingAtlasApp({
     setStoryRoutePointId(null);
     setMobileSheetJourneyId(null);
     setUndoJourney(removed);
-    setNotice("旅程已从图谱移除；7 天内可以撤销，媒体尚未清理。");
+    showNotice("旅程已从图谱移除；7 天内可以撤销，媒体尚未清理。");
   }
 
   async function undoRemovedJourney() {
@@ -570,9 +580,9 @@ export function LivingAtlasApp({
       setJourneys((current) => mergeJourney(current, restored));
       setArrivalJourneyId(restored.id);
       setUndoJourney(null);
-      setNotice("旅程已恢复到图谱。");
+      showNotice("旅程已恢复到图谱。");
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "无法恢复这段旅程");
+      showNotice(error instanceof Error ? error.message : "无法恢复这段旅程");
     }
   }
 
@@ -1074,9 +1084,9 @@ export function LivingAtlasApp({
 
       {notice ? (
         <div className="living-atlas__notice" role="status" inert={globeFocusMode || globePickActive || playbackActive || undefined}>
-          <span>{notice}</span>
+          <span>{notice.message}</span>
           {undoJourney ? <button className="living-atlas__notice-undo" type="button" onClick={() => void undoRemovedJourney()}>撤销删除</button> : null}
-          <button type="button" onClick={() => { setNotice(""); setUndoJourney(null); }} aria-label="关闭提示"><IconX size={17} stroke={1.4} aria-hidden="true" /></button>
+          <button type="button" onClick={() => { clearNotice(); setUndoJourney(null); }} aria-label="关闭提示"><IconX size={17} stroke={1.4} aria-hidden="true" /></button>
         </div>
       ) : null}
 

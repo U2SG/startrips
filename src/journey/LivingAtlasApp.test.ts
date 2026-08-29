@@ -14,6 +14,7 @@ import {
   playbackEntryNeedsPreparation,
   playbackFocusPointForCameraTarget,
   playbackFocusRouteForCameraTarget,
+  nextAtlasNotice,
   railContentSignature,
   resolveMobilePlaybackPresentation,
 } from "./LivingAtlasApp";
@@ -332,5 +333,15 @@ describe("railContentSignature (rail overflow hint freshness)", () => {
   it("still tracks count changes", () => {
     const two = railContentSignature([playbackJourney, { ...playbackJourney, id: "journey-2" }]);
     expect(two).not.toBe(railContentSignature([playbackJourney]));
+  });
+});
+
+describe("atlas notice auto-dismiss identity", () => {
+  it("assigns a fresh identity when the same message is published again", () => {
+    const first = nextAtlasNotice(null, "旅程修改已保存。");
+    const second = nextAtlasNotice(first, "旅程修改已保存。");
+
+    expect(second.message).toBe(first.message);
+    expect(second.id).toBe(first.id + 1);
   });
 });
