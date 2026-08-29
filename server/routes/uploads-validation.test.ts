@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   mediaKindOf,
+  parseMoveMediaInput,
   parseParts,
   parseReorderInput,
   parseStartUpload,
@@ -247,5 +248,54 @@ describe("parseReorderInput", () => {
       (_, index) => `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
     );
     expect(parseReorderInput({ journeyId: JOURNEY_ID, assetIds })).toBeNull();
+  });
+});
+
+describe("parseMoveMediaInput", () => {
+  const assetIds = [
+    "00000000-0000-4000-8000-000000000011",
+    "00000000-0000-4000-8000-000000000012",
+  ];
+
+  it("accepts a batch move onto a route point", () => {
+    expect(parseMoveMediaInput({
+      journeyId: JOURNEY_ID,
+      assetIds,
+      routePointId: ROUTE_POINT_ID,
+    })).toEqual({ journeyId: JOURNEY_ID, assetIds, routePointId: ROUTE_POINT_ID });
+  });
+
+  it("accepts a batch move back to the whole journey (null route point)", () => {
+    expect(parseMoveMediaInput({ journeyId: JOURNEY_ID, assetIds }))
+      .toEqual({ journeyId: JOURNEY_ID, assetIds, routePointId: null });
+    expect(parseMoveMediaInput({ journeyId: JOURNEY_ID, assetIds, routePointId: null }))
+      .toEqual({ journeyId: JOURNEY_ID, assetIds, routePointId: null });
+  });
+
+  it("rejects malformed journeys, route points, ids, and duplicate or empty lists", () => {
+    expect(parseMoveMediaInput({ journeyId: "bad", assetIds, routePointId: ROUTE_POINT_ID }))
+      .toBeNull();
+    expect(parseMoveMediaInput({ journeyId: JOURNEY_ID, assetIds: [], routePointId: ROUTE_POINT_ID }))
+      .toBeNull();
+    expect(parseMoveMediaInput({ journeyId: JOURNEY_ID, assetIds: ["not-a-uuid"], routePointId: ROUTE_POINT_ID }))
+      .toBeNull();
+    expect(parseMoveMediaInput({
+      journeyId: JOURNEY_ID,
+      assetIds: [assetIds[0], assetIds[0]],
+      routePointId: ROUTE_POINT_ID,
+    })).toBeNull();
+    expect(parseMoveMediaInput({ journeyId: JOURNEY_ID, assetIds, routePointId: "bad" }))
+      .toBeNull();
+    expect(parseMoveMediaInput({ journeyId: JOURNEY_ID, assetIds, routePointId: 42 }))
+      .toBeNull();
+  });
+
+  it("rejects oversized selections", () => {
+    const oversized = Array.from(
+      { length: 257 },
+      (_, index) => `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
+    );
+    expect(parseMoveMediaInput({ journeyId: JOURNEY_ID, assetIds: oversized, routePointId: ROUTE_POINT_ID }))
+      .toBeNull();
   });
 });

@@ -177,6 +177,42 @@ export function parseReorderInput(body: ReorderMediaInput) {
   return { journeyId, assetIds };
 }
 
+type MoveMediaInput = {
+  journeyId?: unknown;
+  assetIds?: unknown;
+  routePointId?: unknown;
+};
+
+// A batch move onto a route point (or `null`, back to the whole journey). One
+// request moves the whole selection, so it lands under the same journey row
+// lock and dense sortOrder renumbering as a reorder, rather than N separate
+// writes racing each other.
+export function parseMoveMediaInput(body: MoveMediaInput) {
+  const journeyId = typeof body.journeyId === "string" ? body.journeyId : "";
+  const routePointId = body.routePointId === undefined || body.routePointId === null
+    ? null
+    : typeof body.routePointId === "string"
+      ? body.routePointId
+      : "invalid";
+  if (
+    !UUID_PATTERN.test(journeyId)
+    || !Array.isArray(body.assetIds)
+    || body.assetIds.length < 1
+    || body.assetIds.length > MAX_REORDER_ASSETS
+    || routePointId === "invalid"
+    || (routePointId !== null && !UUID_PATTERN.test(routePointId))
+  ) {
+    return null;
+  }
+  const assetIds: string[] = [];
+  for (const raw of body.assetIds) {
+    if (typeof raw !== "string" || !UUID_PATTERN.test(raw)) return null;
+    assetIds.push(raw);
+  }
+  if (new Set(assetIds).size !== assetIds.length) return null;
+  return { journeyId, assetIds, routePointId };
+}
+
 async function findUpload(uploadId: string, atlasId: string) {
   const [row] = await db
     .select({ upload: mediaUploads })
@@ -983,6 +1019,108 @@ uploadRoutes.post("/assets/reorder", async (context) => {
       {
         error: "INVALID_MEDIA_ORDER",
         message: "Media assets do not belong to this journey",
+      },
+      400,
+    );
+  }
+  return context.json({
+    journey: await getJourneyForAtlas(input.journeyId, atlas.id),
+  });
+});
+
+uploadRoutes.post("/assets/move", async (context) => {
+  const { atlas } = await requireAtlasAccess(context.req.raw, "update");
+  const input = parseMoveMediaInput(await context.req.json<MoveMediaInput>());
+  if (!input) {
+    return context.json(
+      { error: "INVALID_MEDIA_MOVE", message: "Invalid media move" },
+      400,
+    );
+  }
+
+  const result = await db.transaction(async (transaction) => {
+    const lockedJourney = await transaction.execute<{ id: string }>(sql`
+      select ${journeys.id} as id
+      from ${journeys}
+      where ${journeys.id} = ${input.journeyId}
+        and ${journeys.atlasId} = ${atlas.id}
+        and ${journeys.deletionStartedAt} is null
+      for update
+    `);
+    if (lockedJourney.rows.length === 0) return "journey-not-found" as const;
+
+    if (input.routePointId) {
+      const [routePoint] = await transaction
+        .select({ id: journeyRoutePoints.id })
+        .from(journeyRoutePoints)
+        .where(and(
+          eq(journeyRoutePoints.id, input.routePointId),
+          eq(journeyRoutePoints.journeyId, input.journeyId),
+        ))
+        .limit(1);
+      if (!routePoint) return "route-point-not-found" as const;
+    }
+
+    const owned = await transaction
+      .select({ id: mediaAssets.id, mimeType: mediaAssets.mimeType })
+      .from(mediaAssets)
+      .where(and(
+        eq(mediaAssets.journeyId, input.journeyId),
+        inArray(mediaAssets.id, input.assetIds),
+      ));
+    if (owned.length !== input.assetIds.length) return "invalid-selection" as const;
+    // A soundtrack belongs to the whole journey (see parseStartUpload); moving
+    // one onto a route point would create a row the atlas has no way to read.
+    if (
+      input.routePointId
+      && owned.some((asset) => !ALLOWED_MIME_TYPES.has(asset.mimeType))
+    ) {
+      return "invalid-selection" as const;
+    }
+
+    const all = await transaction
+      .select({ id: mediaAssets.id })
+      .from(mediaAssets)
+      .where(eq(mediaAssets.journeyId, input.journeyId))
+      .orderBy(mediaAssets.sortOrder);
+    const moving = new Set(input.assetIds);
+    const existingOrder = all.map((asset) => asset.id);
+    const movedInExistingOrder = existingOrder.filter((id) => moving.has(id));
+    // Moved assets rejoin at the end of the journey's order, same place a
+    // freshly uploaded asset lands — but preserve their relative slideshow
+    // order instead of inheriting the client's click / Set insertion order.
+    const nextOrder = [
+      ...existingOrder.filter((id) => !moving.has(id)),
+      ...movedInExistingOrder,
+    ];
+    await transaction
+      .update(mediaAssets)
+      .set({ sortOrder: sql`${mediaAssets.sortOrder} + 1000` })
+      .where(eq(mediaAssets.journeyId, input.journeyId));
+    for (let index = 0; index < nextOrder.length; index += 1) {
+      await transaction
+        .update(mediaAssets)
+        .set({ sortOrder: index })
+        .where(eq(mediaAssets.id, nextOrder[index]));
+    }
+    await transaction
+      .update(mediaAssets)
+      .set({ routePointId: input.routePointId })
+      .where(inArray(mediaAssets.id, input.assetIds));
+    return "ok" as const;
+  });
+
+  if (result === "journey-not-found") {
+    return context.json({ error: "JOURNEY_NOT_FOUND" }, 404);
+  }
+  if (result === "route-point-not-found") {
+    return context.json({ error: "ROUTE_POINT_NOT_FOUND" }, 404);
+  }
+  if (result === "invalid-selection") {
+    return context.json(
+      {
+        error: "INVALID_MEDIA_MOVE",
+        message: "Media assets do not belong to this journey, or a soundtrack cannot move onto a route point",
       },
       400,
     );
