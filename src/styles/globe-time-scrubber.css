@@ -28,6 +28,21 @@
   background: transparent;
   color: var(--atlas-cyan);
   cursor: pointer;
+  transition:
+    border-color var(--motion-ui, 260ms) ease,
+    color var(--motion-ui, 260ms) ease,
+    background-color var(--motion-ui, 260ms) ease,
+    transform var(--motion-micro, 240ms) ease;
+}
+
+.globe-time-scrubber__play:hover {
+  border-color: rgba(118, 227, 211, 0.62);
+  background: rgba(118, 227, 211, 0.08);
+  transform: scale(1.06);
+}
+
+.globe-time-scrubber__play:active {
+  transform: scale(0.96);
 }
 
 .globe-time-scrubber__play.is-active,
@@ -73,6 +88,7 @@
   height: 2px;
   border-radius: 999px;
   background: var(--atlas-cyan);
+  box-shadow: 0 0 8px rgba(118, 227, 211, 0.35);
   pointer-events: none;
 }
 
@@ -89,6 +105,14 @@
   color: var(--atlas-cyan);
   transform: translate(-50%, -50%);
   pointer-events: none;
+  transition: transform var(--motion-micro, 240ms) var(--motion-ease-out, ease),
+    border-color var(--motion-ui, 260ms) ease;
+}
+
+.globe-time-scrubber__track:hover .globe-time-scrubber__cursor,
+.globe-time-scrubber__track:focus-visible .globe-time-scrubber__cursor {
+  border-color: #aef2e4;
+  transform: translate(-50%, -50%) scale(1.14);
 }
 
 .globe-time-scrubber__ticks {

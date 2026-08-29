@@ -1,0 +1,147 @@
+/* ==========================================================================
+   Living Atlas — experience polish layer (2026-08 refresh).
+
+   Imported by LivingAtlasApp after the base stylesheet. Every selector is
+   prefixed with `.living-atlas` so these refinements win on specificity and
+   never depend on bundle order. All effects are additive (hover / focus /
+   entry / press) and inherit the prefers-reduced-motion kill-switch at the
+   end of living-atlas.css.
+   ========================================================================== */
+
+/* --- Header nav: calm pill hover, keep the create button's notch shape --- */
+.living-atlas .living-atlas__header nav button {
+  border-radius: 999px;
+  transition: color var(--motion-ui) ease, background-color var(--motion-ui) ease;
+}
+
+.living-atlas .living-atlas__header nav button:hover {
+  background: rgba(118, 227, 211, 0.06);
+}
+
+.living-atlas .living-atlas__header nav .living-atlas__create {
+  border-radius: 0 999px 999px 0;
+  transition:
+    color var(--motion-ui) ease,
+    background-color var(--motion-ui) ease,
+    border-color var(--motion-ui) ease;
+}
+
+/* --- Journey rail: slide affordance, active spine, themed scrollbar --- */
+.living-atlas .living-atlas__journey-rail button {
+  transition:
+    border-color var(--motion-ui) ease,
+    background-color var(--motion-ui) ease,
+    box-shadow var(--motion-ui) ease,
+    transform var(--motion-ui) var(--motion-ease-out);
+}
+
+.living-atlas .living-atlas__journey-rail button:hover,
+.living-atlas .living-atlas__journey-rail button.is-active {
+  transform: translateX(3px);
+}
+
+.living-atlas .living-atlas__journey-rail button.is-active::before {
+  content: "";
+  position: absolute;
+  top: 12px;
+  bottom: 12px;
+  left: -1px;
+  width: 2px;
+  border-radius: 999px;
+  background: var(--journey-gradient, var(--journey-color));
+  box-shadow: 0 0 12px color-mix(in srgb, var(--journey-color) 55%, transparent);
+}
+
+.living-atlas .living-atlas__journey-rail ol::-webkit-scrollbar {
+  width: 4px;
+}
+
+.living-atlas .living-atlas__journey-rail ol::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(122, 244, 237, 0.22);
+}
+
+/* --- Active journey card: lift + journey-colored bloom + media parallax --- */
+.living-atlas .living-atlas__active {
+  transition:
+    border-color var(--motion-ui) ease,
+    box-shadow var(--motion-ui) ease,
+    transform var(--motion-ui) var(--motion-ease-out);
+}
+
+.living-atlas .living-atlas__active:hover {
+  border-color: color-mix(in srgb, var(--journey-color) 64%, var(--atlas-line));
+  box-shadow:
+    0 36px 104px rgba(0, 0, 0, 0.44),
+    inset 0 0 60px color-mix(in srgb, var(--journey-color) 5%, transparent);
+}
+
+.living-atlas .living-atlas__active-media img,
+.living-atlas .living-atlas__active-media video {
+  transition: transform var(--motion-content) var(--motion-ease-out);
+}
+
+.living-atlas .living-atlas__active:hover .living-atlas__active-media img,
+.living-atlas .living-atlas__active:hover .living-atlas__active-media video {
+  transform: scale(1.035);
+}
+
+.living-atlas .living-atlas__active-hit-area:focus-visible {
+  outline: 1px solid var(--atlas-acid);
+  outline-offset: -5px;
+}
+
+/* --- Card actions: press physics --- */
+.living-atlas .living-atlas__active-actions button {
+  transition:
+    transform var(--motion-micro) var(--motion-ease-out),
+    border-color var(--motion-ui) ease,
+    background-color var(--motion-ui) ease,
+    color var(--motion-ui) ease;
+}
+
+.living-atlas .living-atlas__active-actions button:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.living-atlas .living-atlas__active-actions button:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+/* --- Notice toast: settle in instead of popping --- */
+.living-atlas .living-atlas__notice {
+  animation: atlasNoticeIn var(--motion-content) var(--motion-ease-out) both;
+}
+
+@keyframes atlasNoticeIn {
+  from { opacity: 0; }
+}
+
+/* --- Globe control cluster: unify interaction feedback --- */
+.living-atlas .living-atlas-globe__mode,
+.living-atlas .living-atlas-globe__language button,
+.living-atlas .living-atlas-globe__pick {
+  transition:
+    border-color var(--motion-ui) ease,
+    background-color var(--motion-ui) ease,
+    color var(--motion-ui) ease;
+}
+
+/* --- Mobile V2: press feedback for the primary touch surfaces --- */
+.living-atlas .mobile-v2__journey-chip {
+  transition: transform var(--motion-micro) var(--motion-ease-out);
+}
+
+.living-atlas .mobile-v2__journey-chip:active {
+  transform: scale(0.985);
+}
+
+.living-atlas .mobile-v2__sheet-actions button {
+  transition:
+    transform var(--motion-micro) var(--motion-ease-out),
+    border-color var(--motion-ui) ease;
+}
+
+.living-atlas .mobile-v2__sheet-actions button:active {
+  transform: scale(0.98);
+}
