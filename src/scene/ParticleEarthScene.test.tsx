@@ -187,6 +187,17 @@ describe("ParticleEarthScene contracts", () => {
       false,
       firstPhase,
     )).toBeGreaterThan(0);
+    const lowFrameSteadyDelta = getGlobeIdleRotationDelta(
+      0.15,
+      GLOBE_IDLE_RESUME_DELAY_MS + GLOBE_IDLE_RELEASE_BLEND_MS,
+      false,
+      false,
+      true,
+      1,
+    );
+    expect(lowFrameSteadyDelta).toBeCloseTo(
+      0.15 * GLOBE_IDLE_ROTATION_RADIANS_PER_SECOND,
+    );
 
     const fullPhaseAligned = getGlobeIdleAlignmentRotation(
       0.8,

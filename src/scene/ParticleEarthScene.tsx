@@ -252,9 +252,13 @@ export function getGlobeIdleRotationDelta(
   ) {
     return 0;
   }
-  return Math.min(0.05, Math.max(0, deltaSeconds))
+  const boundedDelta = Math.min(0.05, Math.max(0, deltaSeconds));
+  const elapsedDelta = Math.min(0.25, Math.max(0, deltaSeconds));
+  const ease = getGlobeIdleReleaseEase(releasePhase);
+  const blendedDelta = boundedDelta + (elapsedDelta - boundedDelta) * ease;
+  return blendedDelta
     * GLOBE_IDLE_ROTATION_RADIANS_PER_SECOND
-    * getGlobeIdleReleaseEase(releasePhase);
+    * ease;
 }
 
 export function isFocusFlightActive(
