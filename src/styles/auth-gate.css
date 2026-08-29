@@ -1009,3 +1009,31 @@ body:has(.living-atlas) .account-dock button {
 @media (max-width: 640px) {
   .auth-card { padding: 26px 22px; }
 }
+
+/* ==========================================================================
+   Experience polish (2026-08)
+   ========================================================================== */
+
+/* Keep the dark theme intact when the browser autofills credentials. */
+.auth-card input:-webkit-autofill,
+.auth-card input:-webkit-autofill:hover,
+.auth-card input:-webkit-autofill:focus {
+  -webkit-text-fill-color: #f2eee5;
+  caret-color: #e8c87a;
+  transition: background-color 1000000s ease-out;
+}
+
+/* Let inline notices settle in instead of popping. */
+.auth-message {
+  animation: authMessageIn 360ms var(--motion-ease-out, ease) both;
+}
+
+@keyframes authMessageIn {
+  from { opacity: 0; transform: translateY(4px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .auth-message {
+    animation: none;
+  }
+}
