@@ -1402,6 +1402,32 @@
   min-height: 0;
   overflow: hidden;
   background: #030808;
+  /* Let the mobile drag-to-navigate gesture own horizontal panning; keep
+     vertical scroll/pull-to-refresh untouched. */
+  touch-action: pan-y;
+}
+
+/* Mobile swipe drag (live finger-follow, see JourneyStory.tsx): while a
+   horizontal drag is settling (commit or spring-back), transform animates
+   instead of jumping. Not applied during the drag itself, which writes
+   `transform` on every pointermove with no transition for 1:1 tracking. */
+.journey-story__media-drag-settle {
+  transition: transform var(--motion-ui, 260ms) var(--motion-ease-out-soft, ease);
+}
+
+/* The fullscreen base layer is normally sized to its own intrinsic content
+   and centered by `place-items: center` (see .journey-story-fullscreen
+   below), which only works edge-to-edge for a single frame. A drag needs
+   the dragged frame and its peeking neighbor to share one full-bleed page
+   box so they can slide past each other regardless of each photo's own
+   aspect ratio; object-fit: contain still renders the same pixels inside
+   that larger box, so removing this class at rest is visually a no-op. */
+.journey-story-fullscreen > img.journey-story__media-drag-page,
+.journey-story-fullscreen > video.journey-story__media-drag-page {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
 }
 
 .journey-story__media > img,
@@ -1432,6 +1458,16 @@
   position: absolute;
   inset: 0;
   z-index: 1;
+  /* In the inline stage width/height are already 100% (see the base rule
+     above), so this is a no-op there. In the fullscreen stage the base
+     layer has no explicit width/height (it's sized to its own intrinsic
+     content and centered by `place-items: center`), so an `inset: 0`
+     replaced element with auto width/height instead resolves to its
+     intrinsic size pinned to the top-left corner — a different box than
+     the settled base layer, which is exactly the "jumps in from a
+     corner, then snaps to the middle" flash. `margin: auto` centers it
+     to match once width/height are auto. */
+  margin: auto;
   animation: motionMediaIn 240ms var(--motion-ease-out-soft, ease) forwards;
 }
 
@@ -1961,6 +1997,7 @@
   inset: 0;
   display: grid;
   place-items: center;
+  touch-action: none;
   /* #7: immersive — a deep gradient derived from the media, not a flat black
      box; the media itself stays the focal point. */
   background:
@@ -4656,12 +4693,14 @@ body:has(.journey-composer-backdrop.is-globe-picking) .account-dock {
   }
 
   .living-atlas-globe__language {
-    min-height: 44px;
+    height: 46px;
+    min-height: 46px;
     grid-template-columns: repeat(2, 44px);
   }
 
   .living-atlas-globe__language button {
     min-width: 44px;
+    height: 44px;
     min-height: 44px;
     padding: 0 6px;
   }
@@ -5711,6 +5750,10 @@ body:has(.journey-composer-backdrop.is-globe-picking) .account-dock {
   display: flex;
   gap: 6px;
   pointer-events: auto;
+  /* Reserve room for .account-dock, which docks to the same header row
+     as its own rightmost circle (see auth-gate.css); keeps the two
+     independent trees from overlapping regardless of icon count. */
+  margin-right: calc(var(--mobile-control-hit-size, 44px) + 6px);
 }
 
 .mobile-v2__header button {

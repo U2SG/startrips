@@ -92,6 +92,11 @@ const SOUNDTRACK_INPUT_ACCEPT = [
 // session never shows an expired thumbnail.
 const MEDIA_READ_REFRESH_MARGIN_MS = 60_000;
 const MEDIA_READ_SWEEP_MS = 20_000;
+// How far a mobile swipe drag must travel before it commits to the neighbor
+// instead of springing back — unchanged from the release-only gesture this
+// replaced.
+const MEDIA_DRAG_THRESHOLD_PX = 48;
+const MEDIA_DRAG_SETTLE_MS = 220;
 
 type MediaReadState =
   | { status: "loading" }
@@ -503,9 +508,31 @@ export function JourneyStory({
   // after an explicit interaction.
   const [fullscreenControlsHidden, setFullscreenControlsHidden] = useState(false);
   const fullscreenMobileIdleTimerRef = useRef(0);
-  const fullscreenGestureStartRef = useRef<{ x: number; y: number } | null>(null);
-  const storyMediaGestureStartRef = useRef<{ x: number; y: number } | null>(null);
   const storyMediaGestureConsumedRef = useRef(false);
+  // Mobile swipe: a live, finger-following slide shared by the inline stage
+  // and the fullscreen stage, replacing a release-only "guess and crossfade"
+  // gesture that gave zero visual feedback while dragging. The dragged frame
+  // and (when the neighbor's signed read is already cached from the #11
+  // prefetch window) a peeking neighbor move directly with the pointer via
+  // imperative style writes, not React state, so tracking never waits on a
+  // re-render. It is a separate visual system from the settle-driven opacity
+  // crossfade below — it only ever ends by jumping straight to the
+  // already-settled state it just finished animating to, the same fast path
+  // selectMediaIndex uses when a target's read is already ready.
+  const mediaDragRef = useRef<{
+    container: HTMLElement;
+    base: HTMLElement;
+    peek: HTMLImageElement | null;
+    startX: number;
+    startY: number;
+    dx: number;
+    axis: "x" | "y" | null;
+    wrap: boolean;
+    neighborIndex: number;
+    neighborAsset: JourneyMediaAsset | null;
+    width: number;
+  } | null>(null);
+  const mediaDragSettlingRef = useRef(false);
   const [mobileMediaMenuOpen, setMobileMediaMenuOpen] = useState(false);
   // Review P2: the fullscreen overlay is a focus trap of its own (it is
   // rendered outside the story dialog, whose useModalFocus would otherwise
@@ -1122,22 +1149,209 @@ export function JourneyStory({
     return !target.closest("button, input, select, textarea, [role='button']");
   }
 
+  function resolveMediaDragNeighbor(dx: number, wrap: boolean) {
+    if (dx === 0 || scopedMedia.length < 2) return null;
+    const direction = dx < 0 ? 1 : -1;
+    let index = assetIndex + direction;
+    if (wrap) {
+      index = (index + scopedMedia.length) % scopedMedia.length;
+    } else if (index < 0 || index >= scopedMedia.length) {
+      return null;
+    }
+    const asset = scopedMedia[index];
+    return asset ? { index, asset } : null;
+  }
+
+  function attachMediaDragPeek(container: HTMLElement, neighbor: JourneyMediaAsset | null) {
+    if (!neighbor || !neighbor.mimeType.startsWith("image/")) return null;
+    const read = mediaReads[neighbor.id];
+    if (read?.status !== "ready") return null;
+    const peek = container.querySelector<HTMLImageElement>("[data-media-drag-peek]");
+    if (!peek) return null;
+    peek.src = read.url;
+    peek.style.display = "block";
+    peek.classList.toggle("journey-story__media-drag-page", container === fullscreenRef.current);
+    return peek;
+  }
+
+  function applyMediaDragTransform() {
+    const drag = mediaDragRef.current;
+    if (!drag) return;
+    const dx = drag.neighborAsset ? drag.dx : drag.dx * 0.3;
+    drag.base.style.transform = `translateX(${dx}px)`;
+    if (drag.peek) {
+      const edge = drag.dx < 0 ? drag.width : -drag.width;
+      drag.peek.style.transform = `translateX(${edge + dx}px)`;
+    }
+  }
+
+  function beginMediaDrag(container: HTMLElement | null, clientX: number, clientY: number, wrap: boolean) {
+    if (!container || mediaDragSettlingRef.current || incomingAssetId !== null || mutationPending || overview || scopedMedia.length < 2) return;
+    const base = container.querySelector<HTMLElement>(":scope > img, :scope > video");
+    if (!base) return;
+    base.classList.toggle("journey-story__media-drag-page", container === fullscreenRef.current);
+    mediaDragRef.current = {
+      container,
+      base,
+      peek: null,
+      startX: clientX,
+      startY: clientY,
+      dx: 0,
+      axis: null,
+      wrap,
+      neighborIndex: -1,
+      neighborAsset: null,
+      width: container.clientWidth,
+    };
+  }
+
+  // Locks onto an axis (8px of intent) the first time either axis moves
+  // enough to tell horizontal from vertical, then live-tracks the pointer
+  // on the horizontal axis only; a vertical lock leaves the gesture alone so
+  // the fullscreen stage's own swipe-down-to-exit keeps working unchanged.
+  function updateMediaDrag(clientX: number, clientY: number) {
+    const drag = mediaDragRef.current;
+    if (!drag) return;
+    if (drag.axis === null) {
+      const dx = clientX - drag.startX;
+      const dy = clientY - drag.startY;
+      if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+      if (Math.abs(dx) <= Math.abs(dy) * 1.15) {
+        drag.axis = "y";
+        return;
+      }
+      drag.axis = "x";
+    }
+    if (drag.axis !== "x") return;
+    drag.dx = clientX - drag.startX;
+    const neighbor = resolveMediaDragNeighbor(drag.dx, drag.wrap);
+    const neighborIndex = neighbor?.index ?? -1;
+    if (neighborIndex !== drag.neighborIndex) {
+      drag.neighborIndex = neighborIndex;
+      drag.neighborAsset = neighbor?.asset ?? null;
+      const previousPeek = drag.peek;
+      drag.peek = attachMediaDragPeek(drag.container, drag.neighborAsset);
+      if (previousPeek && previousPeek !== drag.peek) {
+        previousPeek.style.transition = "";
+        previousPeek.style.transform = "";
+        previousPeek.style.display = "none";
+        previousPeek.removeAttribute("src");
+        previousPeek.classList.remove("journey-story__media-drag-settle", "journey-story__media-drag-page");
+      }
+    }
+    applyMediaDragTransform();
+  }
+
+  function finishMediaDrag(drag: NonNullable<typeof mediaDragRef.current>) {
+    drag.base.style.transition = "";
+    drag.base.style.transform = "";
+    drag.base.classList.remove("journey-story__media-drag-settle", "journey-story__media-drag-page");
+    if (drag.peek) {
+      drag.peek.style.transition = "";
+      drag.peek.style.transform = "";
+      drag.peek.style.display = "none";
+      drag.peek.removeAttribute("src");
+      drag.peek.classList.remove("journey-story__media-drag-settle", "journey-story__media-drag-page");
+    }
+  }
+
+  // A neighbor with a cached read isn't necessarily safe to land on: images
+  // also need their browser-side decode to finish (#11) or the settled
+  // frame flashes an undecoded paint. Mirrors navigateToMedia's own check.
+  function isMediaDragTargetReady(asset: JourneyMediaAsset) {
+    const read = mediaReads[asset.id];
+    return read?.status === "ready"
+      && (asset.mimeType.startsWith("video/") || decodeRegistryRef.current.isDecoded(asset.id));
+  }
+
+  function landMediaDrag(asset: JourneyMediaAsset, index: number) {
+    pendingTargetRef.current = null;
+    setIncomingAssetId(null);
+    setAssetIndex(index);
+    setShownAssetId(asset.id);
+  }
+
+  // Commits to the neighbor the drag already dragged into view, or springs
+  // the current frame back to rest. Committing lands directly on the
+  // settled two-layer state (bypassing the crossfade above) because the
+  // slide the user just watched *was* the transition — unless the target
+  // wasn't actually ready yet (slow network outrunning a fast swipe), in
+  // which case it falls back to the same pending-navigation path a
+  // release-only swipe onto unready media already used, and only springs
+  // back visually since landing on it now would flash an undecoded frame.
+  function settleMediaDrag(commit: boolean) {
+    const drag = mediaDragRef.current;
+    mediaDragRef.current = null;
+    if (!drag) return;
+    mediaDragSettlingRef.current = !prefersReducedMotion();
+    const asset = commit ? drag.neighborAsset : null;
+    const ready = asset !== null && drag.peek !== null && isMediaDragTargetReady(asset);
+    if (asset && !ready) {
+      const read = mediaReads[asset.id];
+      if (read?.status !== "ready") {
+        loadMediaRead(asset.id);
+      } else if (asset.mimeType.startsWith("image/")) {
+        decodeRegistryRef.current.ensure(asset.id, read.url);
+      }
+    }
+    if (prefersReducedMotion()) {
+      if (ready && asset) landMediaDrag(asset, drag.neighborIndex);
+      else if (commit && asset) navigateToMedia(drag.neighborIndex);
+      finishMediaDrag(drag);
+      mediaDragSettlingRef.current = false;
+      return;
+    }
+    drag.base.classList.add("journey-story__media-drag-settle");
+    if (drag.peek) drag.peek.classList.add("journey-story__media-drag-settle");
+    if (ready && asset) {
+      const index = drag.neighborIndex;
+      const edge = drag.dx < 0 ? -drag.width : drag.width;
+      drag.base.style.transform = `translateX(${edge}px)`;
+      if (drag.peek) drag.peek.style.transform = "translateX(0)";
+      window.setTimeout(() => {
+        finishMediaDrag(drag);
+        mediaDragSettlingRef.current = false;
+        landMediaDrag(asset, index);
+      }, MEDIA_DRAG_SETTLE_MS);
+      return;
+    }
+    drag.base.style.transform = "translateX(0)";
+    if (drag.peek) {
+      const edge = drag.dx < 0 ? drag.width : -drag.width;
+      drag.peek.style.transform = `translateX(${edge}px)`;
+    }
+    window.setTimeout(() => {
+      finishMediaDrag(drag);
+      mediaDragSettlingRef.current = false;
+      if (commit && asset) navigateToMedia(drag.neighborIndex);
+    }, MEDIA_DRAG_SETTLE_MS);
+  }
+
   function handleStoryMediaPointerDown(event: ReactPointerEvent<HTMLElement>) {
     storyMediaGestureConsumedRef.current = false;
-    storyMediaGestureStartRef.current = null;
     if (!mobileLayout || overview || !event.isPrimary || !mediaGestureCanStart(event.target, event.clientY)) return;
-    storyMediaGestureStartRef.current = { x: event.clientX, y: event.clientY };
+    beginMediaDrag(event.currentTarget, event.clientX, event.clientY, false);
+  }
+
+  function handleStoryMediaPointerMove(event: ReactPointerEvent<HTMLElement>) {
+    if (!event.isPrimary) return;
+    updateMediaDrag(event.clientX, event.clientY);
   }
 
   function handleStoryMediaPointerUp(event: ReactPointerEvent<HTMLElement>) {
-    const start = storyMediaGestureStartRef.current;
-    storyMediaGestureStartRef.current = null;
-    if (!mobileLayout || !start || !event.isPrimary || scopedMedia.length < 2) return;
-    const dx = event.clientX - start.x;
-    const dy = event.clientY - start.y;
-    if (Math.abs(dx) < 48 || Math.abs(dx) <= Math.abs(dy) * 1.15) return;
-    storyMediaGestureConsumedRef.current = true;
-    void navigateToMedia(dx < 0 ? assetIndex + 1 : assetIndex - 1);
+    if (!event.isPrimary) return;
+    const drag = mediaDragRef.current;
+    // Only a committed swipe (>= the threshold, same as before this gesture
+    // grew live tracking) suppresses the tap-to-fullscreen click that
+    // otherwise follows this same release; a drag that axis-locked but
+    // didn't cross the threshold still reads as a tap, same as pre-drag.
+    const commit = Boolean(drag && drag.axis === "x" && Math.abs(drag.dx) >= MEDIA_DRAG_THRESHOLD_PX && drag.neighborAsset);
+    if (commit) storyMediaGestureConsumedRef.current = true;
+    settleMediaDrag(commit);
+  }
+
+  function handleStoryMediaPointerCancel() {
+    settleMediaDrag(false);
   }
 
   function openImageFullscreenAfterTap() {
@@ -1159,33 +1373,38 @@ export function JourneyStory({
   }
 
   function handleFullscreenPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
-    fullscreenGestureStartRef.current = null;
     if (!mobileLayout || !event.isPrimary || !mediaGestureCanStart(event.target, event.clientY)) return;
-    fullscreenGestureStartRef.current = { x: event.clientX, y: event.clientY };
+    beginMediaDrag(event.currentTarget, event.clientX, event.clientY, true);
+  }
+
+  function handleFullscreenPointerMove(event: ReactPointerEvent<HTMLDivElement>) {
+    if (!event.isPrimary) return;
+    updateMediaDrag(event.clientX, event.clientY);
   }
 
   function handleFullscreenPointerUp(event: ReactPointerEvent<HTMLDivElement>) {
     if (!mobileLayout || !event.isPrimary) return;
-    const start = fullscreenGestureStartRef.current;
-    fullscreenGestureStartRef.current = null;
-    if (!start) {
+    const drag = mediaDragRef.current;
+    if (!drag) {
       revealMobileFullscreenControls();
       return;
     }
-    const dx = event.clientX - start.x;
-    const dy = event.clientY - start.y;
-    if (Math.abs(dx) >= 48 && Math.abs(dx) > Math.abs(dy) * 1.15 && scopedMedia.length > 1) {
-      const target = dx < 0
-        ? (assetIndex + 1) % scopedMedia.length
-        : (assetIndex - 1 + scopedMedia.length) % scopedMedia.length;
-      void navigateToMedia(target);
+    const dx = event.clientX - drag.startX;
+    const dy = event.clientY - drag.startY;
+    if (drag.axis === "x" && Math.abs(dx) >= MEDIA_DRAG_THRESHOLD_PX && drag.neighborAsset) {
+      settleMediaDrag(true);
       return;
     }
+    settleMediaDrag(false);
     if (dy >= 72 && Math.abs(dy) > Math.abs(dx) * 1.15) {
       exitFullscreen();
       return;
     }
-    revealMobileFullscreenControls();
+    if (drag.axis === null) revealMobileFullscreenControls();
+  }
+
+  function handleFullscreenPointerCancel() {
+    settleMediaDrag(false);
   }
 
   async function uploadFiles(files: readonly File[]) {
@@ -1725,7 +1944,9 @@ export function JourneyStory({
             aria-label="旅程媒体"
             data-mobile-layout={mobileLayout ? "true" : undefined}
             onPointerDown={handleStoryMediaPointerDown}
+            onPointerMove={handleStoryMediaPointerMove}
             onPointerUp={handleStoryMediaPointerUp}
+            onPointerCancel={handleStoryMediaPointerCancel}
           >
             {!asset ? <div className="journey-story__empty-media"><IconPhoto size={36} stroke={1.05} style={{ color: journey.lightColor }} aria-hidden="true" />{selectedRoutePoint ? "这个途径点还没有媒体" : "整段旅程还没有媒体"}</div> : null}
             {scopedMedia.length > 0 && !mobileLayout ? (
@@ -1900,6 +2121,14 @@ export function JourneyStory({
                     settleIncoming(incoming.id);
                   }
                 }}
+              />
+            ) : null}
+            {mobileLayout && !overview ? (
+              <img
+                data-media-drag-peek
+                alt=""
+                aria-hidden="true"
+                style={{ display: "none" }}
               />
             ) : null}
             {!mobileLayout && !overview && (scopedMedia.length > 1 || visualMedia.length > 1) ? (
@@ -2281,7 +2510,9 @@ export function JourneyStory({
           data-mobile-layout={mobileLayout ? "true" : undefined}
           aria-label="沉浸播放媒体"
           onPointerDown={handleFullscreenPointerDown}
+          onPointerMove={handleFullscreenPointerMove}
           onPointerUp={handleFullscreenPointerUp}
+          onPointerCancel={handleFullscreenPointerCancel}
           onClick={(event) => {
             if (!mobileLayout && event.target === event.currentTarget) exitFullscreen();
           }}
@@ -2299,6 +2530,7 @@ export function JourneyStory({
             : incoming && incomingRead?.status === "ready"
               ? <img key={`media-${incoming.id}`} className="journey-story__media-incoming" src={incomingRead.url} alt={incoming.fileName} onAnimationEnd={(event) => { if (event.target === event.currentTarget && event.animationName === "motionMediaIn") settleIncoming(incoming.id); }} />
               : null}
+          {mobileLayout ? <img data-media-drag-peek alt="" aria-hidden="true" style={{ display: "none" }} /> : null}
           {scopedMedia.length > 1 ? (
             <nav className="journey-story-fullscreen__nav" aria-label="全屏媒体导航">
               <button
