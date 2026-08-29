@@ -140,6 +140,7 @@ try {
     record("story-media", await scanButtons(story.page, ".journey-story"));
 
     const mediaStage = story.page.locator(".journey-story__media");
+    const touch = await story.page.context().newCDPSession(story.page);
     const settledMedia = story.page.locator(
       ".journey-story__media > img:not(.journey-story__media-incoming), .journey-story__media > video:not(.journey-story__media-incoming)",
     ).first();
@@ -151,19 +152,44 @@ try {
     if (!stageBox) throw new Error("mobile story media stage has no bounds");
     const swipeStartX = stageBox.x + stageBox.width * 0.72;
     const swipeY = stageBox.y + stageBox.height * 0.5;
+    await mediaStage.evaluate((stage) => {
+      stage.addEventListener("gotpointercapture", (event) => { stage.dataset.qaCapturedPointer = String(event.pointerId); });
+      stage.addEventListener("lostpointercapture", (event) => { stage.dataset.qaReleasedPointer = String(event.pointerId); });
+    });
+    await touch.send("Input.dispatchTouchEvent", {
+      type: "touchStart",
+      touchPoints: [{ x: swipeStartX, y: swipeY }],
+    });
+    // The live-drag gesture computes distance/direction from pointermove,
+    // not just down/up coordinates, so a swipe simulation needs an
+    // intervening move — a real finger can't teleport between the two.
+    await touch.send("Input.dispatchTouchEvent", {
+      type: "touchMove",
+      touchPoints: [{ x: swipeStartX - 30, y: swipeY }],
+    });
+    const inlineCapturedDuringDrag = await mediaStage.evaluate((stage) => {
+      const pointerId = Number(stage.dataset.qaCapturedPointer);
+      return Number.isFinite(pointerId) && stage.hasPointerCapture(pointerId);
+    });
+    // Once horizontal intent owns the pointer, move outside the inline
+    // media stage and release there. Capture must keep routing the terminal
+    // event back to the stage so the gesture cannot strand its transform.
+    await touch.send("Input.dispatchTouchEvent", {
+      type: "touchMove",
+      touchPoints: [{ x: swipeStartX - 30, y: 10 }],
+    });
+    await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    const inlineReleasedAfterDrag = await mediaStage.evaluate((stage) => Boolean(stage.dataset.qaReleasedPointer));
     await mediaStage.dispatchEvent("pointerdown", {
-      pointerId: 1,
+      pointerId: 11,
       pointerType: "touch",
       isPrimary: true,
       clientX: swipeStartX,
       clientY: swipeY,
       bubbles: true,
     });
-    // The live-drag gesture computes distance/direction from pointermove,
-    // not just down/up coordinates, so a swipe simulation needs an
-    // intervening move — a real finger can't teleport between the two.
     await mediaStage.dispatchEvent("pointermove", {
-      pointerId: 1,
+      pointerId: 11,
       pointerType: "touch",
       isPrimary: true,
       clientX: swipeStartX - 110,
@@ -171,7 +197,7 @@ try {
       bubbles: true,
     });
     await mediaStage.dispatchEvent("pointerup", {
-      pointerId: 1,
+      pointerId: 11,
       pointerType: "touch",
       isPrimary: true,
       clientX: swipeStartX - 110,
@@ -187,9 +213,11 @@ try {
     checks.push({
       name: "story-mobile-swipe-navigation",
       desktopOnlyControls,
-      failed: desktopOnlyControls !== 0,
+      inlineCapturedDuringDrag,
+      inlineReleasedAfterDrag,
+      failed: desktopOnlyControls !== 0 || !inlineCapturedDuringDrag || !inlineReleasedAfterDrag,
     });
-    if (desktopOnlyControls !== 0) failed = true;
+    if (desktopOnlyControls !== 0 || !inlineCapturedDuringDrag || !inlineReleasedAfterDrag) failed = true;
 
     const manageTrigger = story.page.getByRole("button", { name: "管理当前媒体" });
     const manageTriggerBox = await manageTrigger.boundingBox();
@@ -259,9 +287,27 @@ try {
     const fullscreenCloseBox = await fullscreen.locator(".journey-story-fullscreen__close").boundingBox();
     const fullscreenCloseTouchTarget = fullscreenCloseBox ? Math.min(fullscreenCloseBox.width, fullscreenCloseBox.height) : 0;
     const fullscreenPositionBefore = await fullscreen.locator(".journey-story-fullscreen__nav span").textContent();
-    await fullscreen.dispatchEvent("pointerdown", { pointerId: 3, pointerType: "touch", isPrimary: true, clientX: fullX, clientY: fullY, bubbles: true });
+    await fullscreen.evaluate((stage) => {
+      stage.addEventListener("gotpointercapture", (event) => { stage.dataset.qaCapturedPointer = String(event.pointerId); });
+      stage.addEventListener("lostpointercapture", (event) => { stage.dataset.qaReleasedPointer = String(event.pointerId); });
+    });
+    await touch.send("Input.dispatchTouchEvent", {
+      type: "touchStart",
+      touchPoints: [{ x: fullX, y: fullY }],
+    });
     // See the inline-stage comment above: the live-drag gesture needs a
     // pointermove to know the swipe distance/direction.
+    await touch.send("Input.dispatchTouchEvent", {
+      type: "touchMove",
+      touchPoints: [{ x: fullX - 30, y: fullY }],
+    });
+    const fullscreenCapturedDuringDrag = await fullscreen.evaluate((stage) => {
+      const pointerId = Number(stage.dataset.qaCapturedPointer);
+      return Number.isFinite(pointerId) && stage.hasPointerCapture(pointerId);
+    });
+    await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    const fullscreenReleasedAfterDrag = await fullscreen.evaluate((stage) => Boolean(stage.dataset.qaReleasedPointer));
+    await fullscreen.dispatchEvent("pointerdown", { pointerId: 3, pointerType: "touch", isPrimary: true, clientX: fullX, clientY: fullY, bubbles: true });
     await fullscreen.dispatchEvent("pointermove", { pointerId: 3, pointerType: "touch", isPrimary: true, clientX: fullX - 110, clientY: fullY, bubbles: true });
     await fullscreen.dispatchEvent("pointerup", { pointerId: 3, pointerType: "touch", isPrimary: true, clientX: fullX - 110, clientY: fullY, bubbles: true });
     await story.page.waitForFunction((before) => {
@@ -274,11 +320,15 @@ try {
       fullscreenCloseTouchTarget,
       fullscreenPositionBefore,
       fullscreenPosition,
+      fullscreenCapturedDuringDrag,
+      fullscreenReleasedAfterDrag,
       failed: !fullscreenInitiallyImmersive
         || fullscreenCloseTouchTarget < 44
         || !fullscreenPositionBefore
         || !fullscreenPosition
-        || fullscreenPosition === fullscreenPositionBefore,
+        || fullscreenPosition === fullscreenPositionBefore
+        || !fullscreenCapturedDuringDrag
+        || !fullscreenReleasedAfterDrag,
     });
     await fullscreen.dispatchEvent("pointerdown", { pointerId: 4, pointerType: "touch", isPrimary: true, clientX: fullX, clientY: fullY, bubbles: true });
     await fullscreen.dispatchEvent("pointerup", { pointerId: 4, pointerType: "touch", isPrimary: true, clientX: fullX, clientY: fullY + 130, bubbles: true });
