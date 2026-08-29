@@ -60,6 +60,7 @@ import {
   type LightEffectId,
 } from "./lightEffects";
 import { useModalFocus, useNestedModalFocus } from "./useModalFocus";
+import { useCompactMobileLayout } from "./mobileLayout";
 
 type UploadProgress = {
   fileName: string;
@@ -284,23 +285,6 @@ function formatBytes(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-const MOBILE_COMPOSER_QUERY = "(max-width: 760px)";
-
-function useMobileComposerLayout() {
-  const [mobile, setMobile] = useState(() => (
-    globalThis.matchMedia?.(MOBILE_COMPOSER_QUERY).matches ?? false
-  ));
-  useEffect(() => {
-    const media = globalThis.matchMedia?.(MOBILE_COMPOSER_QUERY);
-    if (!media) return;
-    const update = () => setMobile(media.matches);
-    update();
-    media.addEventListener("change", update);
-    return () => media.removeEventListener("change", update);
-  }, []);
-  return mobile;
-}
-
 export function parseCoordinateInput(
   value: string,
   minimum: number,
@@ -350,7 +334,7 @@ export function JourneyComposer({
   const [lightColor, setLightColor] = useState(journey?.lightColor ?? LIGHT_COLORS[0]);
   const [lightEffect, setLightEffect] = useState<LightEffectId | null>(journey?.lightEffect ?? null);
   const [mediaFiles, setMediaFiles] = useState<PendingJourneyMedia[]>([]);
-  const mobileLayout = useMobileComposerLayout();
+  const mobileLayout = useCompactMobileLayout();
   const [mobileMediaMenuIndex, setMobileMediaMenuIndex] = useState<number | null>(null);
   const [mobileMediaAssignmentIndex, setMobileMediaAssignmentIndex] = useState<number | null>(null);
   const [mobileMediaDeleteIndex, setMobileMediaDeleteIndex] = useState<number | null>(null);
@@ -820,6 +804,7 @@ export function JourneyComposer({
         ref={dialogRef}
         tabIndex={-1}
         className="journey-composer motion-staged"
+        data-mobile-layout={mobileLayout ? "true" : undefined}
         inert={globePicking || undefined}
         role="dialog"
         aria-modal="true"
