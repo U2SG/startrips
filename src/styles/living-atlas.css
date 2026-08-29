@@ -1484,6 +1484,60 @@
   border-color: rgba(200, 255, 61, 0.5);
 }
 
+/* #20: batch-move entry point, opposite corner from the overview toggle so
+   the two never collide regardless of either button's text width. Mobile
+   repositions this next to .journey-story__mobile-sort-done below. */
+.journey-story__media-select-toggle {
+  position: absolute;
+  z-index: 2;
+  top: 16px;
+  right: 16px;
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px solid var(--atlas-line);
+  background: rgba(2, 8, 8, 0.82);
+  color: #d6e0dd;
+  cursor: pointer;
+  font-size: 10px;
+  letter-spacing: 0.09em;
+}
+
+.journey-story__media-select-toggle.is-active {
+  color: var(--atlas-acid);
+  border-color: rgba(200, 255, 61, 0.5);
+}
+
+.journey-story__media-move-bar {
+  position: absolute;
+  z-index: 3;
+  left: 16px;
+  right: 16px;
+  bottom: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--atlas-line);
+  background: rgba(2, 8, 8, 0.92);
+  backdrop-filter: blur(12px);
+  color: var(--atlas-muted);
+  font-size: 11px;
+}
+
+.journey-story__media-move-bar select {
+  min-height: 36px;
+  padding: 0 8px;
+  border: 1px solid var(--atlas-line);
+  background: #0b0f13;
+  color: var(--atlas-text);
+  font: inherit;
+}
+
+.journey-story__media-move-bar select:disabled {
+  opacity: 0.6;
+}
+
 /* #7: explicit fullscreen-play entry, beside the overview toggle. */
 .journey-story__fullscreen-entry {
   position: absolute;
@@ -1687,6 +1741,25 @@
   color: var(--atlas-acid);
   font: 500 7px/1 ui-monospace, "SFMono-Regular", Consolas, monospace;
   letter-spacing: 0.12em;
+}
+
+/* #20: batch move — the tile's selection checkbox, opposite corner from the
+   cover badge so the two never collide. */
+.journey-story__media-tile-check {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 18px;
+  height: 18px;
+  border: 1px solid rgba(200, 255, 61, 0.5);
+  border-radius: 50%;
+  background: rgba(2, 8, 8, 0.7);
+}
+
+.journey-story__media-tile-check.is-selected {
+  border-color: var(--atlas-acid);
+  background: var(--atlas-acid);
+  box-shadow: 0 0 0 3px rgba(200, 255, 61, 0.25);
 }
 
 .journey-story__media-grid > li:not(.is-cover) {
@@ -5063,6 +5136,24 @@ body:has(.journey-composer-backdrop.is-globe-picking) .account-dock {
     background: rgba(2, 10, 11, 0.74);
     color: rgba(230, 245, 239, 0.92);
     backdrop-filter: blur(12px);
+  }
+
+  /* Opposite corner from .journey-story__mobile-sort-done above. */
+  .journey-story__media-select-toggle {
+    top: 12px;
+    right: auto;
+    left: 12px;
+    z-index: 9;
+    min-height: 40px;
+    border-radius: 999px;
+    background: rgba(2, 10, 11, 0.74);
+    backdrop-filter: blur(12px);
+  }
+
+  .journey-story__media-move-bar {
+    left: 12px;
+    right: 12px;
+    bottom: 12px;
   }
 
   .journey-story__media[data-mobile-layout="true"] .journey-story__media-grid {

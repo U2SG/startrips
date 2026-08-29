@@ -428,6 +428,114 @@ describe("media and atlas HTTP endpoints", () => {
     await db.delete(mediaAssets).where(eq(mediaAssets.journeyId, journey.id));
   });
 
+  it("moves a batch of media onto a route point through the tenant-scoped endpoint", async () => {
+    const journey = await createJourneyForAtlas(identity.atlasId, identity.userId, {
+      ...baseJourney,
+      title: "Move story",
+    });
+    if (!journey) throw new Error("Journey fixture was not created");
+    const [stopId, wayPointId] = journey.routePoints.map((point) => point.id);
+    const assets = await db
+      .insert(mediaAssets)
+      .values(["a.jpg", "b.jpg", "c.jpg"].map((fileName, index) => ({
+        journeyId: journey.id,
+        routePointId: null,
+        storageDriver: "test",
+        storageKey: `${identity.atlasId}/${journey.id}/${randomUUID()}`,
+        fileName,
+        mimeType: "image/jpeg",
+        bytes: 128,
+        sortOrder: index,
+        uploadedByUserId: identity.userId,
+      })))
+      .returning({ id: mediaAssets.id });
+    const [soundtrack] = await db
+      .insert(mediaAssets)
+      .values({
+        journeyId: journey.id,
+        routePointId: null,
+        storageDriver: "test",
+        storageKey: `${identity.atlasId}/${journey.id}/${randomUUID()}`,
+        fileName: "theme.mp3",
+        mimeType: "audio/mpeg",
+        bytes: 128,
+        sortOrder: 3,
+        uploadedByUserId: identity.userId,
+      })
+      .returning({ id: mediaAssets.id });
+
+    const moved = [assets[0].id, assets[2].id];
+    const response = await app.request(`${TEST_ORIGIN}/api/uploads/assets/move`, {
+      method: "POST",
+      headers: authHeaders(identity.cookie),
+      body: JSON.stringify({ journeyId: journey.id, assetIds: moved, routePointId: stopId }),
+    });
+    expect(response.status).toBe(200);
+    const payload = await response.json() as {
+      journey: { media: { id: string; routePointId: string | null }[] };
+    };
+    const byId = new Map(payload.journey.media.map((asset) => [asset.id, asset]));
+    expect(byId.get(assets[0].id)?.routePointId).toBe(stopId);
+    expect(byId.get(assets[2].id)?.routePointId).toBe(stopId);
+    expect(byId.get(assets[1].id)?.routePointId).toBeNull();
+
+    // Moving back to the whole journey (null) is the same endpoint.
+    const movedBack = await app.request(`${TEST_ORIGIN}/api/uploads/assets/move`, {
+      method: "POST",
+      headers: authHeaders(identity.cookie),
+      body: JSON.stringify({ journeyId: journey.id, assetIds: [assets[0].id], routePointId: null }),
+    });
+    expect(movedBack.status).toBe(200);
+    const movedBackPayload = await movedBack.json() as {
+      journey: { media: { id: string; routePointId: string | null }[] };
+    };
+    expect(
+      movedBackPayload.journey.media.find((asset) => asset.id === assets[0].id)?.routePointId,
+    ).toBeNull();
+
+    const foreignAsset = await app.request(`${TEST_ORIGIN}/api/uploads/assets/move`, {
+      method: "POST",
+      headers: authHeaders(identity.cookie),
+      body: JSON.stringify({
+        journeyId: journey.id,
+        assetIds: [assets[1].id, "00000000-0000-4000-8000-000000000099"],
+        routePointId: wayPointId,
+      }),
+    });
+    expect(foreignAsset.status).toBe(400);
+
+    const soundtrackOntoRoutePoint = await app.request(`${TEST_ORIGIN}/api/uploads/assets/move`, {
+      method: "POST",
+      headers: authHeaders(identity.cookie),
+      body: JSON.stringify({ journeyId: journey.id, assetIds: [soundtrack.id], routePointId: stopId }),
+    });
+    expect(soundtrackOntoRoutePoint.status).toBe(400);
+
+    const unknownRoutePoint = await app.request(`${TEST_ORIGIN}/api/uploads/assets/move`, {
+      method: "POST",
+      headers: authHeaders(identity.cookie),
+      body: JSON.stringify({
+        journeyId: journey.id,
+        assetIds: [assets[1].id],
+        routePointId: "00000000-0000-4000-8000-000000000099",
+      }),
+    });
+    expect(unknownRoutePoint.status).toBe(404);
+
+    const unknownJourney = await app.request(`${TEST_ORIGIN}/api/uploads/assets/move`, {
+      method: "POST",
+      headers: authHeaders(identity.cookie),
+      body: JSON.stringify({
+        journeyId: "00000000-0000-4000-8000-000000000099",
+        assetIds: [assets[1].id],
+        routePointId: stopId,
+      }),
+    });
+    expect(unknownJourney.status).toBe(404);
+
+    await db.delete(mediaAssets).where(eq(mediaAssets.journeyId, journey.id));
+  });
+
   it("degrades truthfully when media storage is disabled", async () => {
     const start = await app.request(`${TEST_ORIGIN}/api/uploads/start`, {
       method: "POST",

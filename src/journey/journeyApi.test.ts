@@ -4,6 +4,7 @@ import {
   deleteJourney,
   deleteMedia,
   listJourneys,
+  moveJourneyMedia,
   reorderJourneyMedia,
   restoreJourney,
   reverseGeocode,
@@ -105,6 +106,44 @@ describe("journeyApi", () => {
         body: JSON.stringify({
           journeyId: "journey-1",
           assetIds: ["asset-2", "asset-1"],
+        }),
+      }),
+    );
+  });
+
+  it("moves a batch of media onto a route point with POST", async () => {
+    const journey = { id: "journey-1", media: [] };
+    const fetcher = vi.fn(async () => Response.json({ journey })) as unknown as typeof fetch;
+
+    await expect(moveJourneyMedia("journey-1", ["asset-1", "asset-2"], "point-1", fetcher))
+      .resolves.toEqual(journey);
+    expect(fetcher).toHaveBeenCalledWith(
+      "/api/uploads/assets/move",
+      expect.objectContaining({
+        method: "POST",
+        credentials: "include",
+        body: JSON.stringify({
+          journeyId: "journey-1",
+          assetIds: ["asset-1", "asset-2"],
+          routePointId: "point-1",
+        }),
+      }),
+    );
+  });
+
+  it("moves a batch of media back to the whole journey with a null route point", async () => {
+    const journey = { id: "journey-1", media: [] };
+    const fetcher = vi.fn(async () => Response.json({ journey })) as unknown as typeof fetch;
+
+    await expect(moveJourneyMedia("journey-1", ["asset-1"], null, fetcher))
+      .resolves.toEqual(journey);
+    expect(fetcher).toHaveBeenCalledWith(
+      "/api/uploads/assets/move",
+      expect.objectContaining({
+        body: JSON.stringify({
+          journeyId: "journey-1",
+          assetIds: ["asset-1"],
+          routePointId: null,
         }),
       }),
     );

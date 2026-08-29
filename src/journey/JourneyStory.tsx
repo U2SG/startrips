@@ -47,7 +47,7 @@ import {
   IconX,
 } from "@tabler/icons-react";
 import { IconActionButton } from "../components/IconActionButton";
-import { deleteMedia, getPrivateMediaRead, reorderJourneyMedia, setJourneyCover } from "./journeyApi";
+import { deleteMedia, getPrivateMediaRead, moveJourneyMedia, reorderJourneyMedia, setJourneyCover } from "./journeyApi";
 import { runSharedElementMorph } from "../motion/primitives/sharedElement";
 import { uploadJourneyMedia } from "./JourneyComposer";
 import {
@@ -279,6 +279,8 @@ function StoryMediaTile({
   onRequestRead,
   onSelect,
   onSetCover,
+  selected,
+  onToggleSelect,
 }: {
   asset: JourneyMediaAsset;
   index: number;
@@ -289,6 +291,10 @@ function StoryMediaTile({
   onRequestRead: (assetId: string) => void;
   onSelect: (index: number, source: HTMLButtonElement) => void;
   onSetCover?: (assetId: string) => void;
+  // Move-selection mode (#20): when defined, a tap toggles selection instead
+  // of navigating to the tile, and the tile renders a checkbox affordance.
+  selected?: boolean;
+  onToggleSelect?: (assetId: string) => void;
 }) {
   const tileRef = useRef<HTMLButtonElement>(null);
   const isVideo = asset.mimeType.startsWith("video/");
@@ -321,10 +327,15 @@ function StoryMediaTile({
         type="button"
         className={isCurrent ? "is-current" : ""}
         aria-current={isCurrent ? "true" : undefined}
-        aria-label={`第 ${index + 1} 个媒体 ${asset.fileName}${isCover ? "，当前封面" : ""}`}
+        aria-pressed={selected}
+        aria-label={selected === undefined
+          ? `第 ${index + 1} 个媒体 ${asset.fileName}${isCover ? "，当前封面" : ""}`
+          : `${selected ? "取消选择" : "选择"} 第 ${index + 1} 个媒体 ${asset.fileName}`}
         data-media-tile-index={index}
         disabled={disabled}
-        onClick={(event) => onSelect(index, event.currentTarget)}
+        onClick={(event) => selected === undefined
+          ? onSelect(index, event.currentTarget)
+          : onToggleSelect?.(asset.id)}
       >
         {isVideo ? (
           <span className="journey-story__media-tile-badge">
@@ -338,6 +349,9 @@ function StoryMediaTile({
           </span>
         )}
         {isCover ? <span className="journey-story__media-tile-cover">封面</span> : null}
+        {selected !== undefined ? (
+          <span className={`journey-story__media-tile-check${selected ? " is-selected" : ""}`} aria-hidden="true" />
+        ) : null}
         <small>{String(index + 1).padStart(2, "0")}</small>
       </button>
       {onSetCover && !isCover ? (
@@ -471,6 +485,13 @@ export function JourneyStory({
   const [localMediaOrder, setLocalMediaOrder] = useState<readonly string[] | null>(null);
   // #14: setting a cover is a lightweight mutation that disables the grid.
   const [coverPending, setCoverPending] = useState(false);
+  // #20: batch move — fixes media that landed on the wrong route point
+  // without re-uploading. `moveSelection` is only meaningful while
+  // `moveSelectMode` is on; both reset together.
+  const [moveSelectMode, setMoveSelectMode] = useState(false);
+  const [moveSelection, setMoveSelection] = useState<ReadonlySet<string>>(new Set());
+  const [movePending, setMovePending] = useState(false);
+  const [moveMessage, setMoveMessage] = useState("");
   const [playing, setPlaying] = useState(false);
   // Review P2: mirrors `playing` so gesture handlers can read it synchronously.
   const playingRef = useRef(false);
@@ -1331,7 +1352,8 @@ export function JourneyStory({
     || mediaDeleteState === "pending"
     || soundtrackRemovePending
     || orderPending
-    || coverPending;
+    || coverPending
+    || movePending;
 
   function selectMediaScope(routePointId: string | null) {
     if (mutationPending) return;
@@ -1496,6 +1518,46 @@ export function JourneyStory({
     } finally {
       setOrderPending(false);
       setLocalMediaOrder(null);
+    }
+  }
+
+  // #20: batch move. Toggling selection mode always resets the selection —
+  // entering starts clean, and leaving (cancel or after a move) should not
+  // leave stale ids selected against a grid that may have just changed.
+  function toggleMoveSelectMode() {
+    if (mutationPending) return;
+    setMoveSelectMode((value) => !value);
+    setMoveSelection(new Set());
+    setMoveMessage("");
+  }
+
+  function toggleMoveSelection(assetId: string) {
+    setMoveSelection((current) => {
+      const next = new Set(current);
+      if (next.has(assetId)) next.delete(assetId); else next.add(assetId);
+      return next;
+    });
+  }
+
+  // #20: one request moves the whole selection, landing it at the end of the
+  // target route point's media (see server/routes/uploads.ts). Refreshing
+  // from the server afterward lets the scope-shrink effects above settle
+  // the stage if the moved media included the one currently shown.
+  async function moveSelectedMediaTo(targetRoutePointId: string | null) {
+    if (moveSelection.size === 0 || mutationPending) return;
+    const assetIds = [...moveSelection];
+    setMovePending(true);
+    setMoveMessage("");
+    try {
+      await moveJourneyMedia(journey.id, assetIds, targetRoutePointId);
+      await onMediaAdded(journey.id);
+      setMoveMessage(`已移动 ${assetIds.length} 个媒体`);
+      setMoveSelectMode(false);
+      setMoveSelection(new Set());
+    } catch (error) {
+      setMoveMessage(error instanceof Error ? error.message : "移动失败，请稍后重试。");
+    } finally {
+      setMovePending(false);
     }
   }
 
@@ -1679,12 +1741,42 @@ export function JourneyStory({
               <button
                 type="button"
                 className="journey-story__mobile-sort-done"
-                onClick={() => setOverview(false)}
+                onClick={() => { setOverview(false); setMoveSelectMode(false); setMoveSelection(new Set()); }}
               >
                 完成
               </button>
             ) : null}
-            {overview ? (
+            {overview && orderedScopedMedia.length > 0 ? (
+              <button
+                type="button"
+                className={`journey-story__media-select-toggle${moveSelectMode ? " is-active" : ""}`}
+                aria-pressed={moveSelectMode}
+                disabled={mutationPending}
+                onClick={toggleMoveSelectMode}
+              >
+                {moveSelectMode ? "取消选择" : "选择"}
+              </button>
+            ) : null}
+            {overview && moveSelectMode ? (
+              <ul className="journey-story__media-grid is-selecting" aria-label={`全部媒体，共 ${orderedScopedMedia.length} 个`}>
+                {orderedScopedMedia.map((tile, index) => (
+                  <li key={tile.id}>
+                    <StoryMediaTile
+                      asset={tile}
+                      index={index}
+                      isCurrent={index === assetIndex}
+                      isCover={cover?.id === tile.id}
+                      read={mediaReads[tile.id]}
+                      disabled={mutationPending}
+                      onRequestRead={loadMediaRead}
+                      onSelect={selectMediaIndex}
+                      selected={moveSelection.has(tile.id)}
+                      onToggleSelect={toggleMoveSelection}
+                    />
+                  </li>
+                ))}
+              </ul>
+            ) : overview ? (
               <DndContext
                 sensors={dragSensors}
                 collisionDetection={closestCenter}
@@ -1713,6 +1805,33 @@ export function JourneyStory({
                 </SortableContext>
               </DndContext>
             ) : null}
+            {overview && moveSelectMode ? (
+              <div className="journey-story__media-move-bar" role="group" aria-label="移动所选媒体">
+                <span>{moveSelection.size > 0 ? `已选 ${moveSelection.size} 个` : "点击照片进行选择"}</span>
+                <select
+                  aria-label="移动到"
+                  disabled={moveSelection.size === 0 || movePending}
+                  defaultValue=""
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    if (!value) return;
+                    void moveSelectedMediaTo(value === "__journey__" ? null : value);
+                    event.target.value = "";
+                  }}
+                >
+                  <option value="" disabled>移动到…</option>
+                  {selectedRoutePointId !== null ? (
+                    <option value="__journey__">整段旅程（不属于途径点）</option>
+                  ) : null}
+                  {namedStops
+                    .filter((stop) => stop.id !== selectedRoutePointId)
+                    .map((stop) => (
+                      <option key={stop.id} value={stop.id}>{stop.label || "未命名途径点"}</option>
+                    ))}
+                </select>
+              </div>
+            ) : null}
+            {overview && moveMessage ? <p className="journey-story__order-message" role="status">{moveMessage}</p> : null}
             {!overview && shownAsset && (!shownRead || shownRead.status === "loading") ? <div className="journey-story__media-state">正在打开私有媒体…</div> : null}
             {!overview && shownAsset && shownRead?.status === "error" ? <div className="journey-story__media-state is-error">{shownRead.message}</div> : null}
             {!overview && shownAsset && shownRead?.status === "ready" && shownAsset.mimeType.startsWith("video/") ? (
