@@ -2848,7 +2848,7 @@ export function ParticleEarthScene({
           idleReleasePhase,
         );
         interactiveRotationY += getGlobeIdleRotationDelta(
-          delta,
+          elapsedDelta,
           idleForMs,
           hasMomentum,
           motionDisabled,
