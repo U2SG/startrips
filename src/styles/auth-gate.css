@@ -979,9 +979,25 @@ body:has(.living-atlas) .account-dock button {
 }
 
 @media (max-width: 760px), (max-width: 960px) and (max-height: 480px) and (any-pointer: coarse) {
+  /* Sit inline with the mobile-v2 header's icon row (top +
+     timeline buttons) as its rightmost circle, instead of floating
+     over the globe below the header. .mobile-v2__header reserves the
+     matching width on its own nav so this never overlaps regardless
+     of how many header icons render. */
   body:has(.living-atlas) .account-dock {
-    top: 66px;
-    right: 10px;
+    top: calc(env(safe-area-inset-top) + 10px);
+    right: 14px;
+  }
+  body:has(.living-atlas) .account-dock > .account-dock__tab {
+    width: var(--mobile-control-hit-size, 44px);
+    height: var(--mobile-control-hit-size, 44px);
+    border-radius: 50%;
+    border-color: rgba(118, 198, 188, 0.17);
+    background: rgba(2, 10, 11, 0.48);
+    backdrop-filter: blur(14px);
+  }
+  body:has(.living-atlas) .account-dock__tab-chevron {
+    display: none;
   }
   body:has(.living-atlas) .account-dock__panel {
     width: min(300px, calc(100vw - 20px));
