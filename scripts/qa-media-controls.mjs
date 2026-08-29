@@ -58,6 +58,7 @@ async function scanButtons(page, rootSelector) {
 
 async function createQaPage(path, mediaUrl, {
   instrumentMedia = false,
+  mixedMedia = false,
   mobile = true,
   reducedMotion = "reduce",
   viewport = mobile ? { width: 390, height: 844 } : { width: 1280, height: 800 },
@@ -101,7 +102,12 @@ async function createQaPage(path, mediaUrl, {
   await page.route("**/api/uploads/assets/*/read-url", (route) => route.fulfill({
     status: 200,
     contentType: "application/json",
-    body: JSON.stringify({ url: mediaUrl, expiresAt: "2026-08-26T00:00:00.000Z" }),
+    body: JSON.stringify({
+      url: mixedMedia && route.request().url().includes("00000000-0000-4000-8000-000000000152")
+        ? tinyVideo
+        : mediaUrl,
+      expiresAt: "2026-08-26T00:00:00.000Z",
+    }),
   }));
   await page.goto(`${origin}${path}`, { waitUntil: "domcontentloaded" });
   return { page, consoleErrors, pageErrors };
@@ -309,6 +315,62 @@ try {
     if (continuityFailed) failed = true;
   } finally {
     await mediaContinuity.page.close();
+  }
+
+  const mixedMedia = await createQaPage("/?qaState=journey-story&qaMode=mixed-media", onePixelGif, {
+    instrumentMedia: true,
+    mixedMedia: true,
+    mobile: false,
+    reducedMotion: "no-preference",
+  });
+  try {
+    await mixedMedia.page.locator(".journey-story").waitFor({ state: "visible" });
+    const stageNext = mixedMedia.page.locator(".journey-story__media-nav button").last();
+    await stageNext.click();
+    const stageIncomingVideo = mixedMedia.page.locator(".journey-story__media > video.journey-story__media-incoming");
+    await stageIncomingVideo.waitFor({ state: "attached", timeout: 3_000 });
+    await stageIncomingVideo.waitFor({ state: "detached", timeout: 3_000 });
+    const settledStageVideo = mixedMedia.page.locator(".journey-story__media > video:not(.journey-story__media-incoming)");
+    const stageVideoSettled = await settledStageVideo.count() === 1;
+
+    await mixedMedia.page.locator(".journey-story__fullscreen-entry").click();
+    const mixedFullscreen = mixedMedia.page.locator(".journey-story-fullscreen");
+    await mixedFullscreen.waitFor({ state: "visible" });
+    const fullscreenVideoControls = await mixedFullscreen.locator(":scope > video:not(.journey-story__media-incoming)").evaluate((video) => video.controls);
+
+    const fullscreenNext = mixedFullscreen.locator(".journey-story-fullscreen__nav button").last();
+    const fullscreenPrevious = mixedFullscreen.locator(".journey-story-fullscreen__nav button").first();
+    await fullscreenNext.click();
+    await mixedFullscreen.locator(":scope > .journey-story__media-incoming").waitFor({ state: "attached", timeout: 3_000 });
+    await mixedFullscreen.locator(":scope > .journey-story__media-incoming").waitFor({ state: "detached", timeout: 3_000 });
+    await fullscreenPrevious.click();
+    const fullscreenIncomingVideo = mixedFullscreen.locator(":scope > video.journey-story__media-incoming");
+    await fullscreenIncomingVideo.waitFor({ state: "attached", timeout: 3_000 });
+    await fullscreenIncomingVideo.waitFor({ state: "detached", timeout: 3_000 });
+    const settledFullscreenVideo = mixedFullscreen.locator(":scope > video:not(.journey-story__media-incoming)");
+    const fullscreenVideoSettled = await settledFullscreenVideo.count() === 1;
+    const fullscreenControlsAfterReturn = fullscreenVideoSettled
+      ? await settledFullscreenVideo.evaluate((video) => video.controls)
+      : false;
+    const mixedMediaFailed = !stageVideoSettled
+      || !fullscreenVideoControls
+      || !fullscreenVideoSettled
+      || !fullscreenControlsAfterReturn
+      || mixedMedia.consoleErrors.length > 0
+      || mixedMedia.pageErrors.length > 0;
+    checks.push({
+      name: "story-fullscreen-mixed-media-settle",
+      stageVideoSettled,
+      fullscreenVideoControls,
+      fullscreenVideoSettled,
+      fullscreenControlsAfterReturn,
+      consoleErrors: mixedMedia.consoleErrors,
+      pageErrors: mixedMedia.pageErrors,
+      failed: mixedMediaFailed,
+    });
+    if (mixedMediaFailed) failed = true;
+  } finally {
+    await mixedMedia.page.close();
   }
 
   const storyDesktop = await createQaPage("/?qaState=journey-story", onePixelGif, { mobile: false });

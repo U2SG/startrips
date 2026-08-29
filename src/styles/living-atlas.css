@@ -1416,7 +1416,9 @@
    frame (180–280ms) and is released only after the switch settles, so a
    slideshow step never flashes an empty stage. */
 .journey-story__media > img.journey-story__media-incoming,
-.journey-story__media > video.journey-story__media-incoming {
+.journey-story__media > video.journey-story__media-incoming,
+.journey-story-fullscreen > img.journey-story__media-incoming,
+.journey-story-fullscreen > video.journey-story__media-incoming {
   position: absolute;
   inset: 0;
   z-index: 1;
@@ -1822,7 +1824,9 @@
 
   /* #11: reduced motion swaps frames instantly — no crossfade, no flash. */
   .journey-story__media > img.journey-story__media-incoming,
-  .journey-story__media > video.journey-story__media-incoming {
+  .journey-story__media > video.journey-story__media-incoming,
+  .journey-story-fullscreen > img.journey-story__media-incoming,
+  .journey-story-fullscreen > video.journey-story__media-incoming {
     animation: none;
     opacity: 1;
   }

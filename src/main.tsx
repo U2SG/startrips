@@ -258,11 +258,25 @@ const storyQaJourney: Journey = {
   })),
 };
 
+const STORY_QA_MIXED_VIDEO_ASSET_ID = "00000000-0000-4000-8000-000000000152";
+const storyQaMixedJourney: Journey = {
+  ...storyQaJourney,
+  media: storyQaJourney.media.map((asset, index) => index === 1 ? {
+    ...asset,
+    id: STORY_QA_MIXED_VIDEO_ASSET_ID,
+    storageKey: "qa/story-mixed-video",
+    fileName: "mixed-video.mp4",
+    mimeType: "video/mp4",
+  } : asset),
+};
+
 const QA_SOUNDTRACK_ASSET_ID = "00000000-0000-4000-8000-000000000900";
 
 function JourneyStoryQaPreview() {
+  const mixedMediaMode = new URLSearchParams(window.location.search).get("qaMode") === "mixed-media";
+  const initialJourney = mixedMediaMode ? storyQaMixedJourney : storyQaJourney;
   const [open, setOpen] = useState(true);
-  const [journeys, setJourneys] = useState<Journey[]>([storyQaJourney]);
+  const [journeys, setJourneys] = useState<Journey[]>([initialJourney]);
   // The preview synthesizes the asset a real API would return, so it needs to
   // be told which kind the next completed upload represents.
   const [nextMediaIsSoundtrack, setNextMediaIsSoundtrack] = useState(false);
@@ -275,7 +289,7 @@ function JourneyStoryQaPreview() {
       {open ? (
         <JourneyStory
           journeys={journeys}
-          journeyId={storyQaJourney.id}
+          journeyId={initialJourney.id}
           onClose={() => setOpen(false)}
           onNavigate={() => undefined}
           onEdit={() => undefined}

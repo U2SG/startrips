@@ -2221,9 +2221,9 @@ export function JourneyStory({
               ? <img key={`media-${shownAsset.id}`} src={shownRead.url} alt={shownAsset.fileName} />
               : null}
           {incoming && incomingRead?.status === "ready" && incoming.mimeType.startsWith("video/")
-            ? <video key={`media-${incoming.id}`} className="journey-story__media-incoming" src={incomingRead.url} autoPlay playsInline onAnimationEnd={() => { if (prefersReducedMotion()) settleIncoming(incoming.id); }} />
+            ? <video key={`media-${incoming.id}`} className="journey-story__media-incoming" src={incomingRead.url} autoPlay playsInline onAnimationEnd={(event) => { if (event.target === event.currentTarget && event.animationName === "motionMediaIn") settleIncoming(incoming.id); }} />
             : incoming && incomingRead?.status === "ready"
-              ? <img key={`media-${incoming.id}`} className="journey-story__media-incoming" src={incomingRead.url} alt={incoming.fileName} onAnimationEnd={(event) => { if (event.animationName === "motionMediaIn") settleIncoming(incoming.id); }} />
+              ? <img key={`media-${incoming.id}`} className="journey-story__media-incoming" src={incomingRead.url} alt={incoming.fileName} onAnimationEnd={(event) => { if (event.target === event.currentTarget && event.animationName === "motionMediaIn") settleIncoming(incoming.id); }} />
               : null}
           {scopedMedia.length > 1 ? (
             <nav className="journey-story-fullscreen__nav" aria-label="全屏媒体导航">
