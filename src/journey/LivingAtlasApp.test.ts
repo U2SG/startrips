@@ -14,6 +14,7 @@ import {
   playbackEntryNeedsPreparation,
   playbackFocusPointForCameraTarget,
   playbackFocusRouteForCameraTarget,
+  railContentSignature,
   resolveMobilePlaybackPresentation,
 } from "./LivingAtlasApp";
 import { playbackMediaGate } from "./JourneyPlaybackOverlay";
@@ -305,5 +306,31 @@ describe("Mobile V2 particle-earth pointer ownership", () => {
     expect(buttonRule).toBeGreaterThan(emptyRule);
     expect(css.slice(emptyRule, buttonRule)).toContain("pointer-events: none;");
     expect(css.slice(buttonRule, css.indexOf("}", buttonRule) + 1)).toContain("pointer-events: auto;");
+  });
+});
+
+describe("railContentSignature (rail overflow hint freshness)", () => {
+  it("changes when a same-count edit alters what the rail renders", () => {
+    const before = railContentSignature([playbackJourney]);
+    const renamed = railContentSignature([
+      { ...playbackJourney, title: "一条被改得很长很长、足以在旅程栏换行的旅程标题" },
+    ]);
+    expect(renamed).not.toBe(before);
+  });
+
+  it("changes when a same-count edit moves the start date", () => {
+    const before = railContentSignature([playbackJourney]);
+    const redated = railContentSignature([{ ...playbackJourney, startedOn: "2024-01-05" }]);
+    expect(redated).not.toBe(before);
+  });
+
+  it("stays stable when the rail content is unchanged", () => {
+    expect(railContentSignature([playbackJourney]))
+      .toBe(railContentSignature([{ ...playbackJourney }]));
+  });
+
+  it("still tracks count changes", () => {
+    const two = railContentSignature([playbackJourney, { ...playbackJourney, id: "journey-2" }]);
+    expect(two).not.toBe(railContentSignature([playbackJourney]));
   });
 });
