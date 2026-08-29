@@ -4693,12 +4693,14 @@ body:has(.journey-composer-backdrop.is-globe-picking) .account-dock {
   }
 
   .living-atlas-globe__language {
-    min-height: 44px;
+    height: 46px;
+    min-height: 46px;
     grid-template-columns: repeat(2, 44px);
   }
 
   .living-atlas-globe__language button {
     min-width: 44px;
+    height: 44px;
     min-height: 44px;
     padding: 0 6px;
   }
