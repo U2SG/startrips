@@ -1,6 +1,10 @@
 import { launchQaBrowser } from "./qa-browser.mjs";
 
 const origin = process.env.QA_ORIGIN ?? "http://127.0.0.1:4173";
+// Direct authenticated routes are loaded after a fresh Vite navigation in CI.
+// Keep a bounded readiness budget above the old 4s window so cold transforms do
+// not create false reds while a genuinely missing control still fails quickly.
+const DIRECT_GATE_READY_TIMEOUT_MS = 8_000;
 const browser = await launchQaBrowser({
   args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"],
 });
@@ -298,7 +302,29 @@ async function verifyAuthenticatedDirectGate(label, path, targetSelector) {
   });
   try {
     const target = gateway.page.locator(targetSelector);
-    await target.waitFor({ state: "visible", timeout: 4_000 });
+    try {
+      // `goto(..., waitUntil: "domcontentloaded")` returns before Vite/React
+      // necessarily finishes hydrating the route on a cold or CPU-throttled
+      // CI runner. Four seconds has proven too tight for this direct-gate
+      // assertion even when the route is healthy; match the navigation budget
+      // so a real missing control still fails deterministically instead of
+      // turning runner scheduling jitter into a red main build.
+      await target.waitFor({ state: "visible", timeout: DIRECT_GATE_READY_TIMEOUT_MS });
+    } catch (error) {
+      const diagnostics = await gateway.page.evaluate(() => ({
+        href: window.location.href,
+        pathname: window.location.pathname,
+        readyState: document.readyState,
+        bodyText: document.body?.innerText?.slice(0, 800) ?? "",
+        authGateCount: document.querySelectorAll(".auth-gate").length,
+        passwordInputCount: document.querySelectorAll('input[type="password"]').length,
+        persistentEarthStage: document.querySelector("[data-persistent-earth-host]")?.getAttribute("data-stage") ?? null,
+      }));
+      throw new Error(
+        `Direct gateway target ${targetSelector} did not become visible: ${JSON.stringify(diagnostics)}`,
+        { cause: error },
+      );
+    }
     await gateway.page.waitForFunction(() => (
       document.querySelector("[data-persistent-earth-host]")?.getAttribute("data-stage") === "atlas"
     ));
