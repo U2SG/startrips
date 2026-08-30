@@ -271,6 +271,29 @@ describe("spherical coastline geometry", () => {
     expect(positions.length / 3).toBe(4);
   });
 
+  it("distributes a constrained coastline budget across the full ring set", () => {
+    const positions = buildSphericalRingSegments(
+      [
+        [[-170, 0], [-160, 0]],
+        [[-60, 0], [-50, 0]],
+        [[50, 0], [60, 0]],
+        [[160, 0], [170, 0]],
+      ],
+      1,
+      4,
+    );
+
+    expect(positions.length / 3).toBe(4);
+    const points = [];
+    for (let index = 0; index < positions.length; index += 3) {
+      points.push(new Vector3(positions[index], positions[index + 1], positions[index + 2]));
+    }
+    const earlierSample = latLonToVector3(0, -60, 1);
+    const finalSample = latLonToVector3(0, 160, 1);
+    expect(points.some((point) => point.distanceTo(earlierSample) < 1e-5)).toBe(true);
+    expect(points.some((point) => point.distanceTo(finalSample) < 1e-5)).toBe(true);
+  });
+
   it("uses the short chord across the antimeridian", () => {
     const positions = buildSphericalRingSegments(
       [[[179, 0], [-179, 0]]],

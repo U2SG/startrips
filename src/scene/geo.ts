@@ -166,12 +166,18 @@ export function buildSphericalRingSegments(
   radius: number,
   maxVertices = 20_000,
 ) {
-  if (maxVertices < 2) return new Float32Array();
-  const values: number[] = [];
+  const maxSegments = Math.floor(maxVertices / 2);
+  if (maxSegments < 1) return new Float32Array();
+
+  const segments: Array<{
+    previousLat: number;
+    previousLon: number;
+    latitude: number;
+    longitude: number;
+  }> = [];
 
   for (const ring of rings) {
     for (let index = 1; index < ring.length; index += 1) {
-      if (values.length / 3 + 2 > maxVertices) return new Float32Array(values);
       const [previousLon, previousLat] = ring[index - 1];
       const [longitude, latitude] = ring[index];
       if (
@@ -182,13 +188,29 @@ export function buildSphericalRingSegments(
       ) {
         continue;
       }
-      const previous = latLonToVector3(previousLat, previousLon, radius);
-      const current = latLonToVector3(latitude, longitude, radius);
-      values.push(...previous.toArray(), ...current.toArray());
+      segments.push({ previousLat, previousLon, latitude, longitude });
     }
   }
 
-  return new Float32Array(values);
+  const selected = segments.length <= maxSegments
+    ? segments
+    : Array.from({ length: maxSegments }, (_, index) => {
+      const sampledIndex = Math.min(
+        segments.length - 1,
+        Math.floor(((index + 0.5) * segments.length) / maxSegments),
+      );
+      return segments[sampledIndex];
+    });
+  const values = new Float32Array(selected.length * 6);
+
+  selected.forEach((segment, index) => {
+    const previous = latLonToVector3(segment.previousLat, segment.previousLon, radius);
+    const current = latLonToVector3(segment.latitude, segment.longitude, radius);
+    previous.toArray(values, index * 6);
+    current.toArray(values, index * 6 + 3);
+  });
+
+  return values;
 }
 
 export function formatLatitude(value: number, precision = 4) {
