@@ -208,6 +208,50 @@ try {
     } catch {
       inlineJitterOpenedFullscreen = false;
     }
+
+    // Issue #65: a short but fast flick should commit even below the 48px
+    // distance threshold, while the 30px jitter above remains a tap. Use real
+    // CDP touch timing so velocity comes from browser event timestamps.
+    await touch.send("Input.dispatchTouchEvent", {
+      type: "touchStart",
+      touchPoints: [{ x: swipeStartX, y: swipeY }],
+    });
+    await story.page.waitForTimeout(20);
+    await touch.send("Input.dispatchTouchEvent", {
+      type: "touchMove",
+      touchPoints: [{ x: swipeStartX - 40, y: swipeY }],
+    });
+    await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await story.page.waitForFunction((before) => {
+      const media = document.querySelector(
+        ".journey-story__media > img:not(.journey-story__media-incoming), .journey-story__media > video:not(.journey-story__media-incoming)",
+      );
+      return media && (media.getAttribute("alt") ?? media.getAttribute("src")) !== before;
+    }, firstMediaLabel, { timeout: 3_000 });
+    const flickedMedia = story.page.locator(
+      ".journey-story__media > img:not(.journey-story__media-incoming), .journey-story__media > video:not(.journey-story__media-incoming)",
+    ).first();
+    const flickedMediaLabel = (await flickedMedia.getAttribute("alt")) ?? (await flickedMedia.getAttribute("src"));
+    const inlineVelocityFlickNavigated = Boolean(flickedMediaLabel && flickedMediaLabel !== firstMediaLabel);
+
+    await touch.send("Input.dispatchTouchEvent", {
+      type: "touchStart",
+      touchPoints: [{ x: swipeStartX, y: swipeY }],
+    });
+    await story.page.waitForTimeout(20);
+    await touch.send("Input.dispatchTouchEvent", {
+      type: "touchMove",
+      touchPoints: [{ x: swipeStartX + 40, y: swipeY }],
+    });
+    await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await story.page.waitForFunction((expected) => {
+      const media = document.querySelector(
+        ".journey-story__media > img:not(.journey-story__media-incoming), .journey-story__media > video:not(.journey-story__media-incoming)",
+      );
+      return media && (media.getAttribute("alt") ?? media.getAttribute("src")) === expected;
+    }, firstMediaLabel, { timeout: 3_000 });
+    const inlineVelocityReverseReturned = true;
+
     await mediaStage.dispatchEvent("pointerdown", {
       pointerId: 11,
       pointerType: "touch",
@@ -245,11 +289,15 @@ try {
       inlineReleasedAfterDrag,
       inlineEdgeOverscrollOpenedFullscreen,
       inlineJitterOpenedFullscreen,
+      inlineVelocityFlickNavigated,
+      inlineVelocityReverseReturned,
       failed: desktopOnlyControls !== 0
         || !inlineCapturedDuringDrag
         || !inlineReleasedAfterDrag
         || inlineEdgeOverscrollOpenedFullscreen
-        || !inlineJitterOpenedFullscreen,
+        || !inlineJitterOpenedFullscreen
+        || !inlineVelocityFlickNavigated
+        || !inlineVelocityReverseReturned,
     });
     if (
       desktopOnlyControls !== 0
@@ -257,6 +305,8 @@ try {
       || !inlineReleasedAfterDrag
       || inlineEdgeOverscrollOpenedFullscreen
       || !inlineJitterOpenedFullscreen
+      || !inlineVelocityFlickNavigated
+      || !inlineVelocityReverseReturned
     ) failed = true;
 
     const manageTrigger = story.page.getByRole("button", { name: "管理当前媒体" });

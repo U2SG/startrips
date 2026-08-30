@@ -74,6 +74,7 @@ import type { Journey, JourneyMediaAsset } from "./types";
 import { useModalFocus, useNestedModalFocus } from "./useModalFocus";
 import { useCompactMobileLayout } from "./mobileLayout";
 import { useMobileSurfaceHistory } from "./useMobileSurfaceHistory";
+import { MEDIA_SWIPE_VELOCITY_MAX_AGE_MS, isMediaSwipeIntent, nextMediaSwipeVelocity, shouldCommitMediaSwipe } from "./mediaSwipeDecision";
 
 const SOUNDTRACK_INPUT_ACCEPT = [
   "audio/mpeg",
@@ -92,10 +93,8 @@ const SOUNDTRACK_INPUT_ACCEPT = [
 // session never shows an expired thumbnail.
 const MEDIA_READ_REFRESH_MARGIN_MS = 60_000;
 const MEDIA_READ_SWEEP_MS = 20_000;
-// How far a mobile swipe drag must travel before it commits to the neighbor
-// instead of springing back — unchanged from the release-only gesture this
-// replaced.
-const MEDIA_DRAG_THRESHOLD_PX = 48;
+// Mobile drag settles after distance/velocity intent is resolved by
+// mediaSwipeDecision; keep the visual snap duration independent of that input.
 const MEDIA_DRAG_SETTLE_MS = 220;
 
 type MediaReadState =
@@ -527,6 +526,9 @@ export function JourneyStory({
     startY: number;
     pointerId: number;
     dx: number;
+    velocityX: number;
+    lastX: number;
+    lastTime: number;
     axis: "x" | "y" | null;
     tapOpensFullscreen: boolean;
     preserveNativeVideoCapture: boolean;
@@ -1188,7 +1190,7 @@ export function JourneyStory({
     }
   }
 
-  function beginMediaDrag(container: HTMLElement | null, pointerId: number, clientX: number, clientY: number, wrap: boolean, tapOpensFullscreen = false, preserveNativeVideoCapture = false) {
+  function beginMediaDrag(container: HTMLElement | null, pointerId: number, clientX: number, clientY: number, eventTime: number, wrap: boolean, tapOpensFullscreen = false, preserveNativeVideoCapture = false) {
     if (!container || mediaDragSettlingRef.current || incomingAssetId !== null || mutationPending || overview || scopedMedia.length < 2) return;
     const base = container.querySelector<HTMLElement>(":scope > img, :scope > video");
     if (!base) return;
@@ -1201,6 +1203,9 @@ export function JourneyStory({
       startY: clientY,
       pointerId,
       dx: 0,
+      velocityX: 0,
+      lastX: clientX,
+      lastTime: eventTime,
       axis: null,
       tapOpensFullscreen,
       preserveNativeVideoCapture,
@@ -1215,7 +1220,7 @@ export function JourneyStory({
   // enough to tell horizontal from vertical, then live-tracks the pointer
   // on the horizontal axis only; a vertical lock leaves the gesture alone so
   // the fullscreen stage's own swipe-down-to-exit keeps working unchanged.
-  function updateMediaDrag(pointerId: number, clientX: number, clientY: number) {
+  function updateMediaDrag(pointerId: number, clientX: number, clientY: number, eventTime: number) {
     const drag = mediaDragRef.current;
     if (!drag || drag.pointerId !== pointerId) return;
     if (drag.axis === null) {
@@ -1241,6 +1246,12 @@ export function JourneyStory({
     }
     if (drag.axis !== "x") return;
     drag.dx = clientX - drag.startX;
+    const elapsed = eventTime - drag.lastTime;
+    if (elapsed > 0) {
+      drag.velocityX = nextMediaSwipeVelocity(drag.velocityX, clientX - drag.lastX, elapsed);
+      drag.lastX = clientX;
+      drag.lastTime = eventTime;
+    }
     const neighbor = resolveMediaDragNeighbor(drag.dx, drag.wrap);
     const neighborIndex = neighbor?.index ?? -1;
     if (neighborIndex !== drag.neighborIndex) {
@@ -1359,6 +1370,7 @@ export function JourneyStory({
       event.pointerId,
       event.clientX,
       event.clientY,
+      event.timeStamp,
       false,
       event.target instanceof HTMLImageElement,
       event.target instanceof Element && event.target.closest("video") instanceof HTMLVideoElement,
@@ -1367,25 +1379,26 @@ export function JourneyStory({
 
   function handleStoryMediaPointerMove(event: ReactPointerEvent<HTMLElement>) {
     if (!event.isPrimary) return;
-    updateMediaDrag(event.pointerId, event.clientX, event.clientY);
+    updateMediaDrag(event.pointerId, event.clientX, event.clientY, event.timeStamp);
   }
 
   function handleStoryMediaPointerUp(event: ReactPointerEvent<HTMLElement>) {
     if (!event.isPrimary) return;
     const drag = mediaDragRef.current;
     if (drag && drag.pointerId !== event.pointerId) return;
-    // Only a committed swipe (>= the threshold, same as before this gesture
-    // grew live tracking) suppresses the tap-to-fullscreen click that
-    // otherwise follows this same release; a drag that axis-locked but
-    // didn't cross the threshold still reads as a tap, same as pre-drag.
-    const commit = Boolean(drag && drag.axis === "x" && Math.abs(drag.dx) >= MEDIA_DRAG_THRESHOLD_PX && drag.neighborAsset);
+    const releaseVelocityX = drag && event.timeStamp - drag.lastTime <= MEDIA_SWIPE_VELOCITY_MAX_AGE_MS ? drag.velocityX : 0;
+    // Distance or a recent same-direction flick can own the gesture. Slow
+    // sub-threshold movement remains an image tap; an edge flick with no
+    // neighbor is still consumed as swipe intent so it only springs back.
+    const swipeIntent = Boolean(drag && drag.axis === "x" && isMediaSwipeIntent(drag.dx, releaseVelocityX));
+    const commit = Boolean(drag && drag.axis === "x" && shouldCommitMediaSwipe(drag.dx, releaseVelocityX, Boolean(drag.neighborAsset)));
     const reopenFullscreenAfterSettle = Boolean(
       drag
       && drag.axis === "x"
-      && Math.abs(drag.dx) < MEDIA_DRAG_THRESHOLD_PX
+      && !swipeIntent
       && drag.tapOpensFullscreen,
     );
-    if (commit || reopenFullscreenAfterSettle) storyMediaGestureConsumedRef.current = true;
+    if (swipeIntent || reopenFullscreenAfterSettle) storyMediaGestureConsumedRef.current = true;
     settleMediaDrag(commit);
     if (reopenFullscreenAfterSettle) {
       window.setTimeout(() => enterFullscreen(false), prefersReducedMotion() ? 0 : MEDIA_DRAG_SETTLE_MS);
@@ -1428,6 +1441,7 @@ export function JourneyStory({
       event.pointerId,
       event.clientX,
       event.clientY,
+      event.timeStamp,
       true,
       false,
       event.target instanceof Element && event.target.closest("video") instanceof HTMLVideoElement,
@@ -1436,7 +1450,7 @@ export function JourneyStory({
 
   function handleFullscreenPointerMove(event: ReactPointerEvent<HTMLDivElement>) {
     if (!event.isPrimary) return;
-    updateMediaDrag(event.pointerId, event.clientX, event.clientY);
+    updateMediaDrag(event.pointerId, event.clientX, event.clientY, event.timeStamp);
   }
 
   function handleFullscreenPointerUp(event: ReactPointerEvent<HTMLDivElement>) {
@@ -1449,7 +1463,8 @@ export function JourneyStory({
     }
     const dx = event.clientX - drag.startX;
     const dy = event.clientY - drag.startY;
-    if (drag.axis === "x" && Math.abs(dx) >= MEDIA_DRAG_THRESHOLD_PX && drag.neighborAsset) {
+    const releaseVelocityX = event.timeStamp - drag.lastTime <= MEDIA_SWIPE_VELOCITY_MAX_AGE_MS ? drag.velocityX : 0;
+    if (drag.axis === "x" && shouldCommitMediaSwipe(dx, releaseVelocityX, Boolean(drag.neighborAsset))) {
       settleMediaDrag(true);
       return;
     }
