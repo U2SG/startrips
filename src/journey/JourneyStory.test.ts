@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   JourneyStory,
   journeyDeleteDescription,
+  mobileStoryHistoryLayers,
   mediaForRoutePoint,
   replaceJourneySoundtrack,
   storyAssetIndexForId,
@@ -510,6 +511,63 @@ describe("JourneyStory", () => {
     expect(markup).not.toContain('aria-label="全屏查看媒体"');
   });
 
+  it("orders migrated mobile mutation history under Manage while keeping Viewer fullscreen independent", () => {
+    const migratedJourneyDelete = mobileStoryHistoryLayers({
+      mobileLayout: true,
+      mobileManageMode: false,
+      fullscreen: false,
+      mediaMenuOpen: false,
+      mediaDeleteOpen: false,
+      journeyDeleteOpen: true,
+    });
+    expect(migratedJourneyDelete).toEqual({
+      manage: false,
+      mediaSurface: false,
+      journeyDelete: false,
+    });
+
+    const settledJourneyDelete = mobileStoryHistoryLayers({
+      mobileLayout: true,
+      mobileManageMode: true,
+      fullscreen: false,
+      mediaMenuOpen: false,
+      mediaDeleteOpen: false,
+      journeyDeleteOpen: true,
+    });
+    expect(settledJourneyDelete).toEqual({
+      manage: true,
+      mediaSurface: false,
+      journeyDelete: true,
+    });
+
+    const migratedMediaDelete = mobileStoryHistoryLayers({
+      mobileLayout: true,
+      mobileManageMode: false,
+      fullscreen: false,
+      mediaMenuOpen: false,
+      mediaDeleteOpen: true,
+      journeyDeleteOpen: false,
+    });
+    expect(migratedMediaDelete.mediaSurface).toBe(false);
+    expect(mobileStoryHistoryLayers({
+      mobileLayout: true,
+      mobileManageMode: true,
+      fullscreen: false,
+      mediaMenuOpen: false,
+      mediaDeleteOpen: true,
+      journeyDeleteOpen: false,
+    }).mediaSurface).toBe(true);
+
+    expect(mobileStoryHistoryLayers({
+      mobileLayout: true,
+      mobileManageMode: false,
+      fullscreen: true,
+      mediaMenuOpen: false,
+      mediaDeleteOpen: false,
+      journeyDeleteOpen: false,
+    }).mediaSurface).toBe(true);
+  });
+
   it("keeps the mobile media stage gesture-first instead of rendering the desktop toolbar", () => {
     vi.stubGlobal("matchMedia", vi.fn(() => ({
       matches: true,
@@ -534,11 +592,37 @@ describe("JourneyStory", () => {
     }));
 
     expect(markup).toContain('data-mobile-layout="true"');
-    expect(markup).toContain('aria-label="管理当前媒体"');
+    expect(markup).toContain('data-mobile-mode="viewer"');
+    expect(markup).toContain('aria-label="管理旅程"');
+    expect(markup).not.toContain('aria-label="管理当前媒体"');
+    expect(markup).not.toContain("添加照片或视频");
+    expect(markup).not.toContain("编辑旅程");
+    expect(markup).not.toContain("删除旅程");
     expect(markup).not.toContain('aria-label="向前调整媒体顺序"');
     expect(markup).not.toContain('aria-label="向后调整媒体顺序"');
     expect(markup).not.toContain('aria-label="自动播放照片"');
     expect(markup).not.toContain("全部照片");
+  });
+
+  it("keeps mobile management reachable when the selected media scope is empty", () => {
+    vi.stubGlobal("matchMedia", vi.fn(() => ({
+      matches: true,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })));
+    const markup = renderToStaticMarkup(createElement(JourneyStory, {
+      journeys: [{ ...journey, media: [] }],
+      journeyId: journey.id,
+      onClose: () => undefined,
+      onNavigate: () => undefined,
+      onEdit: () => undefined,
+      onMediaAdded: () => null,
+    }));
+
+    expect(markup).toContain('data-mobile-mode="viewer"');
+    expect(markup).toContain('aria-label="管理旅程"');
+    expect(markup).not.toContain("添加照片或视频");
+    vi.unstubAllGlobals();
   });
 
   it("offers a direct-access overview for singleton and multi-media scopes", () => {

@@ -142,6 +142,34 @@ function formatUploadError(message: string) {
   return message;
 }
 
+export function mobileStoryHistoryLayers({
+  mobileLayout,
+  mobileManageMode,
+  fullscreen,
+  mediaMenuOpen,
+  mediaDeleteOpen,
+  journeyDeleteOpen,
+}: {
+  mobileLayout: boolean;
+  mobileManageMode: boolean;
+  fullscreen: boolean;
+  mediaMenuOpen: boolean;
+  mediaDeleteOpen: boolean;
+  journeyDeleteOpen: boolean;
+}) {
+  const manage = mobileLayout && mobileManageMode;
+  return {
+    manage,
+    // Fullscreen is valid in Viewer. Mutation-only media surfaces must wait
+    // until Manage owns its parent history layer (important when a desktop
+    // confirmation migrates into compact layout).
+    mediaSurface: mobileLayout && (
+      fullscreen || (mobileManageMode && (mediaMenuOpen || mediaDeleteOpen))
+    ),
+    journeyDelete: manage && journeyDeleteOpen,
+  };
+}
+
 export function journeyDeleteDescription(journey: Journey) {
   return `先从图谱隐藏；7 天内可撤销，之后才会清理路线和 ${journey.media.length} 个私有媒体。`;
 }
@@ -603,6 +631,11 @@ export function JourneyStory({
     width: number;
   } | null>(null);
   const mediaDragSettlingRef = useRef(false);
+  const [mobileManageMode, setMobileManageMode] = useState(false);
+  const mobileManageDoneRef = useRef<HTMLButtonElement>(null);
+  const mobileManageViewerTriggerRef = useRef<HTMLButtonElement>(null);
+  const mobileManageFocusFrameRef = useRef<number | null>(null);
+  const restoreMobileManageViewerFocusRef = useRef(false);
   const [mobileMediaMenuOpen, setMobileMediaMenuOpen] = useState(false);
   // Review P2: the fullscreen overlay is a focus trap of its own (it is
   // rendered outside the story dialog, whose useModalFocus would otherwise
@@ -620,12 +653,20 @@ export function JourneyStory({
   const audioSamplerRef = useRef(createSoundtrackSampler());
   const soundtrackLightRef = useRef<HTMLDivElement>(null);
   const deleteCancelRef = useRef<HTMLButtonElement>(null);
+  const journeyDeleteTriggerRef = useRef<HTMLButtonElement>(null);
   const mediaDeleteCancelRef = useRef<HTMLButtonElement>(null);
   const copyRef = useRef<HTMLElement>(null);
   const pendingReads = useRef(new Set<string>());
   const mediaReadsRef = useRef(mediaReads);
   const uploading = uploadState.status === "uploading"
     || soundtrackUpload.status === "uploading";
+  const mutationPending = uploading
+    || deleteState === "pending"
+    || mediaDeleteState === "pending"
+    || soundtrackRemovePending
+    || orderPending
+    || coverPending
+    || movePending;
 
   function exitFullscreen() {
     if (typeof window !== "undefined") {
@@ -644,6 +685,7 @@ export function JourneyStory({
   }
 
   function closeMobileMediaDelete() {
+    if (mediaDeleteState === "pending") return false;
     setMediaDeleteState("idle");
     setMediaDeleteMessage("");
     if (typeof window !== "undefined") {
@@ -655,6 +697,42 @@ export function JourneyStory({
         });
       });
     }
+    return true;
+  }
+
+  function closeJourneyDelete() {
+    if (deleteState === "pending") return false;
+    setDeleteState("idle");
+    setDeleteMessage("");
+    if (mobileLayout && typeof window !== "undefined") {
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => {
+          journeyDeleteTriggerRef.current?.focus({ preventScroll: true });
+        });
+      });
+    }
+    return true;
+  }
+
+  function enterMobileManageMode() {
+    setPlaying(false);
+    setMobileManageMode(true);
+  }
+
+  function exitMobileManageMode() {
+    if (mutationPending) return false;
+    setDeleteState("idle");
+    setDeleteMessage("");
+    setMobileMediaMenuOpen(false);
+    setMediaDeleteState("idle");
+    setMediaDeleteMessage("");
+    setOverview(false);
+    setMoveSelectMode(false);
+    setMoveSelection(new Set());
+    setMoveMessage("");
+    restoreMobileManageViewerFocusRef.current = true;
+    setMobileManageMode(false);
+    return true;
   }
 
   function requestClose() {
@@ -668,6 +746,14 @@ export function JourneyStory({
     }
     if (mobileLayout && mediaDeleteState === "confirming") {
       closeMobileMediaDelete();
+      return;
+    }
+    if (mobileLayout && deleteState === "confirming") {
+      closeJourneyDelete();
+      return;
+    }
+    if (mobileLayout && mobileManageMode) {
+      if (!exitMobileManageMode() && uploading) setCloseBlocked(true);
       return;
     }
     if (uploading) {
@@ -687,7 +773,32 @@ export function JourneyStory({
     onClose(sharedSource);
   }
 
-  useMobileSurfaceHistory(fullscreen && mobileLayout, "story-fullscreen", exitFullscreen);
+  const mobileHistoryLayers = mobileStoryHistoryLayers({
+    mobileLayout,
+    mobileManageMode,
+    fullscreen,
+    mediaMenuOpen: mobileMediaMenuOpen,
+    mediaDeleteOpen: mediaDeleteState !== "idle",
+    journeyDeleteOpen: deleteState !== "idle",
+  });
+  useMobileSurfaceHistory(mobileHistoryLayers.manage, "story-manage", exitMobileManageMode);
+  // Media menu, media-delete confirmation, and fullscreen are mutually
+  // replacing transient surfaces on mobile. Keep them on one browser-history
+  // layer so menu -> delete/fullscreen reuses the current entry instead of
+  // burying a stale menu token underneath the replacement. Mutation-only
+  // children are gated by Manage so desktop confirmations migrating into a
+  // compact viewport push parent -> child tokens in the correct order.
+  useMobileSurfaceHistory(mobileHistoryLayers.mediaSurface, "story-media-surface", () => {
+    if (fullscreen) {
+      exitFullscreen();
+      return;
+    }
+    if (mediaDeleteState !== "idle") {
+      return closeMobileMediaDelete();
+    }
+    if (mobileMediaMenuOpen) setMobileMediaMenuOpen(false);
+  });
+  useMobileSurfaceHistory(mobileHistoryLayers.journeyDelete, "story-journey-delete", closeJourneyDelete);
   const dialogRef = useModalFocus<HTMLElement>(requestClose);
   const mobileMediaSheetRef = useNestedModalFocus<HTMLElement>(
     mobileLayout && (mobileMediaMenuOpen || mediaDeleteState !== "idle"),
@@ -709,6 +820,7 @@ export function JourneyStory({
     setOrderMessage("");
     setPlaying(false);
     exitFullscreen();
+    setMobileManageMode(false);
     setMobileMediaMenuOpen(false);
     setOverview(false);
     setMoveSelectMode(false);
@@ -736,6 +848,30 @@ export function JourneyStory({
   useEffect(() => {
     if (deleteState === "confirming") deleteCancelRef.current?.focus();
   }, [deleteState]);
+
+  useEffect(() => {
+    if (!mobileLayout || typeof window === "undefined") return;
+    const focusTarget = mobileManageMode
+      ? mobileManageDoneRef
+      : restoreMobileManageViewerFocusRef.current
+        ? mobileManageViewerTriggerRef
+        : null;
+    if (!focusTarget) return;
+    if (!mobileManageMode) restoreMobileManageViewerFocusRef.current = false;
+    const firstFrame = window.requestAnimationFrame(() => {
+      const secondFrame = window.requestAnimationFrame(() => {
+        focusTarget.current?.focus(mobileManageMode ? undefined : { preventScroll: true });
+      });
+      mobileManageFocusFrameRef.current = secondFrame;
+    });
+    mobileManageFocusFrameRef.current = firstFrame;
+    return () => {
+      if (mobileManageFocusFrameRef.current !== null) {
+        window.cancelAnimationFrame(mobileManageFocusFrameRef.current);
+        mobileManageFocusFrameRef.current = null;
+      }
+    };
+  }, [mobileLayout, mobileManageMode]);
 
   useEffect(() => {
     if (mediaDeleteState === "confirming") mediaDeleteCancelRef.current?.focus();
@@ -881,8 +1017,22 @@ export function JourneyStory({
   useEffect(() => () => audioRef.current?.pause(), []);
 
   useEffect(() => {
-    if (mobileLayout) return;
-    setMobileMediaMenuOpen(false);
+    if (!mobileLayout) {
+      setMobileMediaMenuOpen(false);
+      return;
+    }
+    // A responsive desktop -> compact transition must preserve editing intent.
+    // Never label the compact Story as Viewer while an edit-only surface is
+    // still mounted; carry that state into explicit Manage mode instead.
+    if (
+      overview
+      || deleteState !== "idle"
+      || mediaDeleteState !== "idle"
+      || moveSelectMode
+      || mutationPending
+    ) {
+      setMobileManageMode(true);
+    }
   }, [mobileLayout]);
 
   // #7 + review P2: fullscreen playback — Esc exits, arrows switch media,
@@ -1748,14 +1898,6 @@ export function JourneyStory({
     }
   }
 
-  const mutationPending = uploading
-    || deleteState === "pending"
-    || mediaDeleteState === "pending"
-    || soundtrackRemovePending
-    || orderPending
-    || coverPending
-    || movePending;
-
   function selectMediaScope(routePointId: string | null) {
     if (mutationPending) return;
     setPlayingFromGesture(false);
@@ -2108,7 +2250,16 @@ export function JourneyStory({
 
   const content = (
     <div className="journey-story-backdrop" role="presentation" onClick={closeFromBackdrop}>
-      <article ref={dialogRef} tabIndex={-1} className="journey-story motion-staged" role="dialog" aria-modal="true" aria-labelledby="journey-story-title" onWheel={scrollCopyFromMedia}>
+      <article
+        ref={dialogRef}
+        tabIndex={-1}
+        className={`journey-story motion-staged${mobileLayout && mobileManageMode ? " is-mobile-manage" : ""}`}
+        data-mobile-mode={mobileLayout ? (mobileManageMode ? "manage" : "viewer") : undefined}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="journey-story-title"
+        onWheel={scrollCopyFromMedia}
+      >
         <header>
           <div>
             <p>PRIVATE JOURNEY · {journeyRange(journey)}</p>
@@ -2348,23 +2499,45 @@ export function JourneyStory({
               </div>
             ) : null}
             {orderMessage ? <p className="journey-story__order-message" role="status">{orderMessage}</p> : null}
+            {mobileLayout && !overview && !asset && !mobileManageMode ? (
+              <div className="journey-story__mobile-media-actions">
+                <IconActionButton
+                  type="button"
+                  className="journey-story__mobile-media-menu-trigger"
+                  buttonRef={mobileManageViewerTriggerRef}
+                  label="管理旅程"
+                  tooltip="管理旅程"
+                  disabled={mutationPending}
+                  onClick={enterMobileManageMode}
+                >
+                  <IconDots size={19} stroke={1.5} aria-hidden="true" />
+                </IconActionButton>
+              </div>
+            ) : null}
             {mobileLayout && !overview && asset ? (
               <div className="journey-story__mobile-media-actions">
                 <IconActionButton
                   type="button"
                   className="journey-story__mobile-media-menu-trigger"
-                  label="管理当前媒体"
-                  tooltip="管理媒体"
-                  aria-expanded={mobileMediaMenuOpen}
+                  buttonRef={mobileManageViewerTriggerRef}
+                  label={mobileManageMode ? "管理当前媒体" : "管理旅程"}
+                  tooltip={mobileManageMode ? "管理媒体" : "管理旅程"}
+                  aria-expanded={mobileManageMode ? mobileMediaMenuOpen : undefined}
                   aria-hidden={mediaDeleteState !== "idle"}
                   tabIndex={mediaDeleteState === "idle" ? 0 : -1}
                   style={mediaDeleteState === "idle" ? undefined : { visibility: "hidden", pointerEvents: "none" }}
                   disabled={mutationPending}
-                  onClick={() => setMobileMediaMenuOpen((open) => !open)}
+                  onClick={() => {
+                    if (!mobileManageMode) {
+                      enterMobileManageMode();
+                      return;
+                    }
+                    setMobileMediaMenuOpen((open) => !open);
+                  }}
                 >
                   <IconDots size={19} stroke={1.5} aria-hidden="true" />
                 </IconActionButton>
-                {mobileMediaMenuOpen && mediaDeleteState === "idle" ? (
+                {mobileManageMode && mobileMediaMenuOpen && mediaDeleteState === "idle" ? (
                   <>
                     <button
                       type="button"
@@ -2529,6 +2702,12 @@ export function JourneyStory({
               <blockquote className="journey-story__point-note">{activeChapterRoutePoint.note}</blockquote>
             ) : null}
             {journey.note ? <p className="journey-story__note">{journey.note}</p> : <p className="journey-story__note is-empty">没有文字，只有这条路线留下来。</p>}
+            {mobileLayout && mobileManageMode ? (
+              <div className="journey-story__mobile-manage-bar" role="status">
+                <div><small>MANAGE JOURNEY</small><strong>管理旅程</strong></div>
+                <button ref={mobileManageDoneRef} type="button" disabled={mutationPending} onClick={exitMobileManageMode}>完成</button>
+              </div>
+            ) : null}
             {onDelete && deleteState !== "idle" ? (
               <section className="journey-story__delete-confirmation" aria-label="确认删除旅程">
                 <div>
@@ -2537,13 +2716,13 @@ export function JourneyStory({
                   <span>{journeyDeleteDescription(journey)}</span>
                 </div>
                 <div>
-                  <button ref={deleteCancelRef} type="button" disabled={deleteState === "pending"} onClick={() => { setDeleteState("idle"); setDeleteMessage(""); }}>取消</button>
+                  <button ref={deleteCancelRef} type="button" disabled={deleteState === "pending"} onClick={closeJourneyDelete}>取消</button>
                   <button type="button" disabled={mutationPending} onClick={() => void confirmDelete()}>{deleteState === "pending" ? "正在删除…" : "确认删除"}</button>
                 </div>
                 {deleteMessage ? <p className="journey-story__delete-error" role="alert">{deleteMessage}</p> : null}
               </section>
             ) : null}
-            <div className="journey-story__media-add">
+            {(!mobileLayout || mobileManageMode) ? <div className="journey-story__media-add">
               <div>
                 <p>PRIVATE MEDIA</p>
                 <strong>{selectedRoutePoint
@@ -2589,7 +2768,7 @@ export function JourneyStory({
                   重试失败的 {retryFiles.length} 个文件
                 </button>
               ) : null}
-            </div>
+            </div> : null}
 
             <div className={`journey-story__soundtrack${soundtrack && soundtrackRead?.status === "ready" ? " has-track" : ""}${playing ? " is-playing" : ""}`}>
               <div className="journey-story__soundtrack-head">
@@ -2622,6 +2801,7 @@ export function JourneyStory({
               {soundtrack && soundtrackRead?.status === "error" ? (
                 <p className="journey-story__upload-message is-error" role="alert">{soundtrackRead.message}</p>
               ) : null}
+              {(!mobileLayout || mobileManageMode) ? <>
               <input
                 ref={soundtrackInputRef}
                 type="file"
@@ -2654,6 +2834,7 @@ export function JourneyStory({
                   </button>
                 ) : null}
               </div>
+              </> : null}
               {soundtrackUpload.status === "uploading" ? (
                 <div
                   className="journey-story__upload-progress"
@@ -2678,10 +2859,12 @@ export function JourneyStory({
         </div>
 
         <footer>
-          <div className="journey-story__manage">
-            <button type="button" disabled={mutationPending || deleteState !== "idle"} onClick={() => onEdit(journey.id)}><IconEdit size={16} stroke={1.35} aria-hidden="true" />编辑旅程</button>
-            {onDelete ? <button className="is-destructive" type="button" disabled={mutationPending || deleteState !== "idle"} onClick={() => { setDeleteState("confirming"); setDeleteMessage(""); }}><IconTrash size={16} stroke={1.35} aria-hidden="true" />删除旅程</button> : null}
-          </div>
+          {(!mobileLayout || mobileManageMode) ? (
+            <div className="journey-story__manage">
+              <button type="button" disabled={mutationPending || deleteState !== "idle"} onClick={() => onEdit(journey.id)}><IconEdit size={16} stroke={1.35} aria-hidden="true" />编辑旅程</button>
+              {onDelete ? <button ref={journeyDeleteTriggerRef} className="is-destructive" type="button" disabled={mutationPending || deleteState !== "idle"} onClick={() => { setDeleteState("confirming"); setDeleteMessage(""); }}><IconTrash size={16} stroke={1.35} aria-hidden="true" />删除旅程</button> : null}
+            </div>
+          ) : null}
           <div className="journey-story__navigation">
             <button type="button" disabled={!previousJourney || mutationPending || deleteState !== "idle"} onClick={() => previousJourney && onNavigate(previousJourney.id)}><IconArrowLeft size={17} stroke={1.35} aria-hidden="true" />上一段</button>
             <button type="button" disabled={!nextJourney || mutationPending || deleteState !== "idle"} onClick={() => nextJourney && onNavigate(nextJourney.id)}>下一段<IconArrowRight size={17} stroke={1.35} aria-hidden="true" /></button>

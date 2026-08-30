@@ -18,6 +18,14 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ## 2026-08-30
 
+### PR #90 — Separate mobile experience and Journey management modes
+
+- **Source head:** `b47dbe0e72efe4cf280ad6db66c65d40094eacce`
+- **Scope:** Separates compact-mobile Story viewing from mutation-heavy Journey management, with explicit Manage mode ownership for upload, media organization, soundtrack changes, edit/delete actions, and same-document browser history.
+- **User-visible change:** Mobile Story opens as a cleaner viewer; editing and destructive controls live behind a single “管理旅程” entry, while Browser Back unwinds nested management surfaces before leaving Story and focus is handed between Viewer, Manage, media/delete confirmation, and fullscreen controls.
+- **Review fixes:** Kept Manage reachable for empty media scopes; prevented destructive confirmation leakage into Viewer; preserved focus entering/exiting Manage and dismissing Journey deletion; removed stale media-menu history entries; preserved parent/child history ordering across breakpoint migration; blocked Back while mutations are pending; retained delete history through pending requests; preserved upload-close feedback; carried desktop-started mutations into compact Manage; and ensured the focused Done control is actually revealed in the viewport.
+- **Follow-up:** None known at merge time.
+
 ### PR #83 — Stabilize particle globe city labels across zoom
 
 - **Source head:** `9b526fd6061fb1c7318ac1bd154cd92ed3ffee8f`

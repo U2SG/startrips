@@ -1018,7 +1018,7 @@ export function LivingAtlasApp({
                   setMobileSheetJourneyId(null);
                   editJourney(mobileSheetJourney.id);
                 }}
-              ><IconRoute size={16} stroke={1.35} aria-hidden="true" />编辑旅程</button>
+              ><IconRoute size={16} stroke={1.35} aria-hidden="true" />管理旅程</button>
             </div>
           </section>
         </div>

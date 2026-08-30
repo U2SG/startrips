@@ -78,7 +78,7 @@ if (typeof window !== "undefined") {
 export function useMobileSurfaceHistory(
   active: boolean,
   surface: string,
-  onHistoryClose: () => void,
+  onHistoryClose: () => boolean | void,
 ) {
   const onHistoryCloseRef = useRef(onHistoryClose);
   const tokenRef = useRef<string | null>(null);
@@ -106,10 +106,23 @@ export function useMobileSurfaceHistory(
     const onPopState = (event: PopStateEvent) => {
       if (!entryActiveRef.current) return;
       if (readStack(event.state).includes(token)) return;
+      const closed = onHistoryCloseRef.current();
+      if (closed === false) {
+        // The surface is temporarily non-dismissible (for example while a
+        // mutation is pending). Restore the same owned history layer so a Back
+        // press cannot consume navigation state while leaving the UI mounted.
+        const baseState = asHistoryState(window.history.state);
+        const stack = readStack(baseState);
+        window.history.pushState({
+          ...baseState,
+          [STACK_KEY]: [...stack, token],
+          [SESSION_KEY]: documentSession,
+        }, "");
+        return;
+      }
       entryActiveRef.current = false;
       tokenRef.current = null;
       activeTokens.delete(token);
-      onHistoryCloseRef.current();
     };
 
     window.addEventListener("popstate", onPopState);

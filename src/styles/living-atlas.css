@@ -5085,6 +5085,55 @@ body:has(.journey-composer-backdrop.is-globe-picking) .account-dock {
     display: none;
   }
 
+  .journey-story[data-mobile-mode="viewer"] .journey-story__soundtrack {
+    opacity: 0.84;
+  }
+
+  .journey-story.is-mobile-manage .journey-story__mobile-media-menu-trigger {
+    border-color: rgba(118, 227, 211, 0.34);
+    background: rgba(8, 28, 26, 0.76);
+    color: rgba(238, 250, 246, 0.96);
+  }
+
+  .journey-story__mobile-manage-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin: 0 0 18px;
+    padding: 10px 12px;
+    border: 1px solid rgba(118, 227, 211, 0.16);
+    border-radius: 14px;
+    background: rgba(7, 25, 23, 0.5);
+  }
+
+  .journey-story__mobile-manage-bar > div {
+    min-width: 0;
+    display: grid;
+    gap: 3px;
+  }
+
+  .journey-story__mobile-manage-bar small {
+    color: rgba(151, 186, 176, 0.62);
+    font: 500 8px/1 ui-monospace, "SFMono-Regular", Consolas, monospace;
+    letter-spacing: 0.12em;
+  }
+
+  .journey-story__mobile-manage-bar strong {
+    color: rgba(236, 247, 242, 0.95);
+    font: 520 14px/1.2 var(--archive-serif);
+  }
+
+  .journey-story__mobile-manage-bar button {
+    min-width: 64px;
+    min-height: 44px;
+    padding: 0 14px;
+    border: 1px solid rgba(118, 227, 211, 0.18);
+    border-radius: 999px;
+    background: rgba(10, 36, 33, 0.68);
+    color: rgba(228, 244, 238, 0.92);
+  }
+
   .journey-story__mobile-media-sheet-backdrop {
     position: absolute;
     z-index: 1;

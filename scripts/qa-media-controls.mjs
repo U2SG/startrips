@@ -309,16 +309,96 @@ try {
       || !inlineVelocityReverseReturned
     ) failed = true;
 
-    const manageTrigger = story.page.getByRole("button", { name: "管理当前媒体" });
+    const storyRoot = story.page.locator(".journey-story");
+    const manageTrigger = story.page.getByRole("button", { name: "管理旅程" });
+    const manageTriggerButton = story.page.locator(".journey-story__mobile-media-menu-trigger");
+    const viewerMode = await storyRoot.getAttribute("data-mobile-mode");
+    const viewerMutationButtons = await story.page.getByRole("button", {
+      name: /添加照片或视频|编辑旅程|删除旅程/,
+    }).count();
     const manageTriggerBox = await manageTrigger.boundingBox();
     const manageTouchTarget = manageTriggerBox ? Math.min(manageTriggerBox.width, manageTriggerBox.height) : 0;
     checks.push({
-      name: "story-mobile-primary-touch-target",
+      name: "story-mobile-viewer-manage-separation",
+      viewerMode,
+      viewerMutationButtons,
       manageTouchTarget,
-      failed: manageTouchTarget < 44,
+      failed: viewerMode !== "viewer" || viewerMutationButtons !== 0 || manageTouchTarget < 44,
     });
-    if (manageTouchTarget < 44) failed = true;
+    if (viewerMode !== "viewer" || viewerMutationButtons !== 0 || manageTouchTarget < 44) failed = true;
+
     await manageTrigger.click();
+    await story.page.waitForFunction(() => document.querySelector(".journey-story")?.getAttribute("data-mobile-mode") === "manage");
+    const manageMutationButtons = await story.page.getByRole("button", { name: /编辑旅程|删除旅程/ }).count();
+    const manageDone = story.page.getByRole("button", { name: "完成" });
+    await story.page.waitForFunction(() => document.activeElement?.textContent?.includes("完成"));
+    const manageFocusTransferred = await manageDone.evaluate((button) => document.activeElement === button);
+    const manageDoneVisible = await manageDone.evaluate((button) => {
+      const rect = button.getBoundingClientRect();
+      return rect.top >= 0
+        && rect.left >= 0
+        && rect.bottom <= window.innerHeight
+        && rect.right <= window.innerWidth;
+    });
+    checks.push({
+      name: "story-mobile-manage-mode-reveals-mutations",
+      manageMutationButtons,
+      hasDone: await manageDone.count() === 1,
+      manageFocusTransferred,
+      manageDoneVisible,
+      failed: manageMutationButtons < 2 || await manageDone.count() !== 1 || !manageFocusTransferred || !manageDoneVisible,
+    });
+    if (manageMutationButtons < 2 || await manageDone.count() !== 1 || !manageFocusTransferred || !manageDoneVisible) failed = true;
+
+    const journeyDeleteButton = story.page.locator(".journey-story__manage .is-destructive");
+    await journeyDeleteButton.click();
+    const journeyDeleteConfirmation = story.page.locator(".journey-story__delete-confirmation");
+    await journeyDeleteConfirmation.waitFor({ state: "visible" });
+    await story.page.evaluate(() => window.history.back());
+    await journeyDeleteConfirmation.waitFor({ state: "detached" });
+    await story.page.waitForFunction(() => document.activeElement?.textContent?.includes("删除旅程"));
+    const journeyDeleteBackFocusRestored = await journeyDeleteButton.evaluate((button) => document.activeElement === button);
+    checks.push({
+      name: "story-mobile-journey-delete-back-focus",
+      journeyDeleteBackFocusRestored,
+      failed: !journeyDeleteBackFocusRestored,
+    });
+    if (!journeyDeleteBackFocusRestored) failed = true;
+
+    await journeyDeleteButton.click();
+    await journeyDeleteConfirmation.waitFor({ state: "visible" });
+    await manageDone.click();
+    await story.page.waitForFunction(() => document.querySelector(".journey-story")?.getAttribute("data-mobile-mode") === "viewer");
+    await story.page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "管理旅程");
+    const manageDoneFocusRestored = await story.page.getByRole("button", { name: "管理旅程" }).evaluate((button) => document.activeElement === button);
+    const deleteConfirmationLeakedToViewer = await journeyDeleteConfirmation.count() !== 0;
+    checks.push({
+      name: "story-mobile-delete-confirmation-owned-by-manage",
+      deleteConfirmationLeakedToViewer,
+      manageDoneFocusRestored,
+      failed: deleteConfirmationLeakedToViewer || !manageDoneFocusRestored,
+    });
+    if (deleteConfirmationLeakedToViewer || !manageDoneFocusRestored) failed = true;
+
+    await story.page.getByRole("button", { name: "管理旅程" }).click();
+    await story.page.waitForFunction(() => document.querySelector(".journey-story")?.getAttribute("data-mobile-mode") === "manage");
+    await story.page.evaluate(() => window.history.back());
+    await story.page.waitForFunction(() => document.querySelector(".journey-story")?.getAttribute("data-mobile-mode") === "viewer");
+    await story.page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "管理旅程");
+    const manageExitedOnBack = await storyRoot.getAttribute("data-mobile-mode") === "viewer";
+    const manageBackFocusRestored = await story.page.getByRole("button", { name: "管理旅程" }).evaluate((button) => document.activeElement === button);
+    checks.push({
+      name: "story-mobile-manage-back-contract",
+      manageExitedOnBack,
+      manageBackFocusRestored,
+      failed: !manageExitedOnBack || !manageBackFocusRestored,
+    });
+    if (!manageExitedOnBack || !manageBackFocusRestored) failed = true;
+
+    await story.page.getByRole("button", { name: "管理旅程" }).click();
+    await story.page.waitForFunction(() => document.querySelector(".journey-story")?.getAttribute("data-mobile-mode") === "manage");
+    const mediaManageTrigger = story.page.getByRole("button", { name: "管理当前媒体" });
+    await mediaManageTrigger.click();
     const mobileSheet = story.page.locator(".journey-story__mobile-media-sheet");
     await mobileSheet.waitFor({ state: "visible" });
     const initialFocusInside = await mobileSheet.evaluate((root) => root.contains(document.activeElement));
@@ -329,7 +409,7 @@ try {
     }
     await story.page.keyboard.press("Escape");
     await mobileSheet.waitFor({ state: "detached" });
-    const sheetFocusRestored = await manageTrigger.evaluate((button) => document.activeElement === button);
+    const sheetFocusRestored = await manageTriggerButton.evaluate((button) => document.activeElement === button);
     checks.push({
       name: "story-mobile-sheet-focus-ownership",
       initialFocusInside,
@@ -339,7 +419,7 @@ try {
     });
     if (!initialFocusInside || !tabStayedInside || !sheetFocusRestored) failed = true;
 
-    await manageTrigger.click();
+    await mediaManageTrigger.click();
     await story.page.getByRole("button", { name: "删除媒体" }).click();
     const deleteSheet = story.page.locator(".journey-story__mobile-media-sheet.is-confirming");
     await deleteSheet.waitFor({ state: "visible" });
@@ -349,20 +429,43 @@ try {
       await story.page.keyboard.press("Tab");
       deleteTabStayedInside = deleteTabStayedInside && await deleteSheet.evaluate((root) => root.contains(document.activeElement));
     }
-    await story.page.keyboard.press("Escape");
+    // Menu -> delete is a replacement, not a nested history layer. One Back
+    // closes delete directly to Manage; a second Back must leave Manage without
+    // exposing or traversing a stale media-menu history entry.
+    await story.page.evaluate(() => window.history.back());
     await deleteSheet.waitFor({ state: "detached" });
     await story.page.waitForFunction(() => (
       document.activeElement?.classList.contains("journey-story__mobile-media-menu-trigger") ?? false
     ));
-    const deleteFocusRestored = await manageTrigger.evaluate((button) => document.activeElement === button);
+    const deleteFocusRestored = await manageTriggerButton.evaluate((button) => document.activeElement === button);
+    const replacementMenuStayedClosed = await mobileSheet.count() === 0;
+    const replacementStayedInManage = await storyRoot.getAttribute("data-mobile-mode") === "manage";
+    await story.page.evaluate(() => window.history.back());
+    await story.page.waitForFunction(() => document.querySelector(".journey-story")?.getAttribute("data-mobile-mode") === "viewer");
+    const replacementSecondBackExitedManage = await storyRoot.getAttribute("data-mobile-mode") === "viewer";
     checks.push({
       name: "story-mobile-delete-focus-ownership",
       deleteFocusInside,
       deleteTabStayedInside,
       deleteFocusRestored,
-      failed: !deleteFocusInside || !deleteTabStayedInside || !deleteFocusRestored,
+      replacementMenuStayedClosed,
+      replacementStayedInManage,
+      replacementSecondBackExitedManage,
+      failed: !deleteFocusInside
+        || !deleteTabStayedInside
+        || !deleteFocusRestored
+        || !replacementMenuStayedClosed
+        || !replacementStayedInManage
+        || !replacementSecondBackExitedManage,
     });
-    if (!deleteFocusInside || !deleteTabStayedInside || !deleteFocusRestored) failed = true;
+    if (!deleteFocusInside
+      || !deleteTabStayedInside
+      || !deleteFocusRestored
+      || !replacementMenuStayedClosed
+      || !replacementStayedInManage
+      || !replacementSecondBackExitedManage) failed = true;
+    await story.page.getByRole("button", { name: "管理旅程" }).click();
+    await story.page.waitForFunction(() => document.querySelector(".journey-story")?.getAttribute("data-mobile-mode") === "manage");
 
     await settledMedia.click();
     const fullscreen = story.page.locator(".journey-story-fullscreen");
