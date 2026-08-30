@@ -70,6 +70,7 @@ import {
   validateJourneyFiles,
   validateJourneySoundtrack,
 } from "./journeyModel";
+import { playbackIntroMedia, storyMediaForScope } from "./journeyPlayback";
 import type { Journey, JourneyMediaAsset } from "./types";
 import { useModalFocus, useNestedModalFocus } from "./useModalFocus";
 import { useCompactMobileLayout } from "./mobileLayout";
@@ -152,6 +153,39 @@ export function mediaForRoutePoint(
   return journey.media.filter((asset) => asset.routePointId === routePointId);
 }
 
+export function storyMediaNeighborIndex(
+  currentIndex: number,
+  mediaLength: number,
+  direction: -1 | 1,
+  wrap: boolean,
+): number | null {
+  if (mediaLength < 2) return null;
+  const next = currentIndex + direction;
+  if (next >= 0 && next < mediaLength) return next;
+  if (!wrap) return null;
+  return direction > 0 ? 0 : mediaLength - 1;
+}
+
+export function storyAssetIndexForId(
+  media: readonly JourneyMediaAsset[],
+  assetId: string | null,
+  fallbackIndex: number,
+) {
+  if (assetId) {
+    const index = media.findIndex((asset) => asset.id === assetId);
+    if (index >= 0) return index;
+  }
+  return Math.min(Math.max(0, fallbackIndex), Math.max(0, media.length - 1));
+}
+
+export function storyAutoplayNextIndex(
+  currentIndex: number,
+  mediaLength: number,
+): number | null {
+  if (mediaLength < 2) return null;
+  return currentIndex < mediaLength - 1 ? currentIndex + 1 : null;
+}
+
 export function storyInitialMediaSelection(
   journey: Journey | undefined,
   requestedRoutePointId: string | null,
@@ -160,9 +194,8 @@ export function storyInitialMediaSelection(
     return { routePointId: requestedRoutePointId, assetIndex: 0, assetId: null };
   }
 
-  const visualMedia = journeyVisualMedia(journey);
+  const scoped = storyMediaForScope(journey, requestedRoutePointId);
   if (requestedRoutePointId !== null) {
-    const scoped = visualMedia.filter((asset) => asset.routePointId === requestedRoutePointId);
     return {
       routePointId: requestedRoutePointId,
       assetIndex: 0,
@@ -170,18 +203,14 @@ export function storyInitialMediaSelection(
     };
   }
 
-  // #18 follow-up: the active Journey card displays journeyCover(), so the
-  // Story must open on that exact asset. This also follows a cover attached to
-  // a route point into the matching media scope instead of silently showing a
-  // different journey-level asset at index 0.
+  // Whole-Journey mode stays aggregate even when the card cover belongs to a
+  // route point. Start on that cover inside the canonical narrative sequence.
   const cover = journeyCover(journey);
-  if (!cover) return { routePointId: null, assetIndex: 0, assetId: null };
-  const scoped = visualMedia.filter((asset) => asset.routePointId === cover.routePointId);
-  const coverIndex = scoped.findIndex((asset) => asset.id === cover.id);
+  const coverIndex = cover ? scoped.findIndex((asset) => asset.id === cover.id) : -1;
   return {
-    routePointId: cover.routePointId,
+    routePointId: null,
     assetIndex: coverIndex >= 0 ? coverIndex : 0,
-    assetId: cover.id,
+    assetId: coverIndex >= 0 ? cover!.id : scoped[0]?.id ?? null,
   };
 }
 
@@ -690,8 +719,8 @@ export function JourneyStory({
     [journey],
   );
   const scopedMedia = useMemo(
-    () => visualMedia.filter((asset) => asset.routePointId === selectedRoutePointId),
-    [visualMedia, selectedRoutePointId],
+    () => journey ? storyMediaForScope(journey, selectedRoutePointId) : [],
+    [journey, selectedRoutePointId],
   );
   // Review P2: while a drag is pending, the overview renders the optimistic
   // order; otherwise it follows scopedMedia (server truth).
@@ -721,8 +750,7 @@ export function JourneyStory({
   }
 
   function scopedVisualMedia(target: Journey) {
-    return journeyVisualMedia(target)
-      .filter((asset) => asset.routePointId === selectedRoutePointId);
+    return storyMediaForScope(target, selectedRoutePointId);
   }
 
   // Ken Burns playback: advance every slide when playing, restarting the
@@ -733,12 +761,13 @@ export function JourneyStory({
   navigateToMediaRef.current = navigateToMedia;
   useEffect(() => {
     if (!playing) return;
-    if (scopedMedia.length < 2) {
+    const nextIndex = storyAutoplayNextIndex(assetIndex, scopedMedia.length);
+    if (nextIndex === null) {
       setPlaying(false);
       return;
     }
     const timer = window.setTimeout(() => {
-      navigateToMediaRef.current((assetIndex + 1) % scopedMedia.length);
+      navigateToMediaRef.current(nextIndex);
     }, 5200);
     return () => window.clearTimeout(timer);
   }, [assetIndex, playing, scopedMedia.length]);
@@ -828,9 +857,11 @@ export function JourneyStory({
       if (event.key === "Escape") {
         exitFullscreen();
       } else if (event.key === "ArrowLeft") {
-        navigateToMediaRef.current((assetIndex - 1 + scopedMedia.length) % scopedMedia.length);
+        const index = storyMediaNeighborIndex(assetIndex, scopedMedia.length, -1, selectedRoutePointId !== null);
+        if (index !== null) navigateToMediaRef.current(index);
       } else if (event.key === "ArrowRight") {
-        navigateToMediaRef.current((assetIndex + 1) % scopedMedia.length);
+        const index = storyMediaNeighborIndex(assetIndex, scopedMedia.length, 1, selectedRoutePointId !== null);
+        if (index !== null) navigateToMediaRef.current(index);
       } else if (event.key === " " || event.key === "Spacebar") {
         event.preventDefault();
         togglePlaying();
@@ -855,7 +886,7 @@ export function JourneyStory({
       }
       window.clearTimeout(idleTimer);
     };
-  }, [fullscreen, assetIndex, scopedMedia.length, mobileLayout]);
+  }, [fullscreen, assetIndex, scopedMedia.length, mobileLayout, selectedRoutePointId]);
 
   // Review P2: the fullscreen overlay is its own focus trap. The story
   // dialog's useModalFocus redirects Tab into the article; when fullscreen is
@@ -913,18 +944,18 @@ export function JourneyStory({
   }, [fullscreen, fullscreenControlsHidden, mobileLayout]);
 
   useEffect(() => {
-    setAssetIndex((current) => Math.min(
-      current,
-      Math.max(0, scopedMedia.length - 1),
-    ));
-    // A list shrink can leave the stage pointing at a removed asset; fall
-    // back to the (clamped) active frame so the stage never goes stale.
+    // Canonical whole-Journey ordering can change without changing list length
+    // (for example after #67/#75 reassigns an asset to another chapter). Keep
+    // the settled media identity stable and rebase its index onto the new
+    // sequence instead of silently switching to whichever asset inherited the
+    // previous numeric index.
+    setAssetIndex((current) => storyAssetIndexForId(scopedMedia, shownAssetId, current));
     if (shownAssetId && !scopedMedia.some((candidate) => candidate.id === shownAssetId)) {
       setShownAssetId(null);
       setIncomingAssetId(null);
       pendingTargetRef.current = null;
     }
-  }, [scopedMedia.length]);
+  }, [scopedMedia, shownAssetId]);
 
   useEffect(() => {
     mediaReadsRef.current = mediaReads;
@@ -1096,6 +1127,12 @@ export function JourneyStory({
     ? journey.routePoints.find((point) => point.id === selectedRoutePointId) ?? null
     : null;
   const asset = activeAsset;
+  const activeChapterRoutePointId = selectedRoutePointId === null
+    ? asset?.routePointId ?? null
+    : selectedRoutePointId;
+  const activeChapterRoutePoint = activeChapterRoutePointId
+    ? journey.routePoints.find((point) => point.id === activeChapterRoutePointId) ?? null
+    : null;
   const read = asset ? mediaReads[asset.id] : null;
   // #11 two-layer stage: `shownAsset` is the settled base frame, `incoming`
   // (when present) is fading in on top. The base frame is released only after
@@ -1155,14 +1192,10 @@ export function JourneyStory({
   }
 
   function resolveMediaDragNeighbor(dx: number, wrap: boolean) {
-    if (dx === 0 || scopedMedia.length < 2) return null;
-    const direction = dx < 0 ? 1 : -1;
-    let index = assetIndex + direction;
-    if (wrap) {
-      index = (index + scopedMedia.length) % scopedMedia.length;
-    } else if (index < 0 || index >= scopedMedia.length) {
-      return null;
-    }
+    if (dx === 0) return null;
+    const direction: -1 | 1 = dx < 0 ? 1 : -1;
+    const index = storyMediaNeighborIndex(assetIndex, scopedMedia.length, direction, wrap && selectedRoutePointId !== null);
+    if (index === null) return null;
     const asset = scopedMedia[index];
     return asset ? { index, asset } : null;
   }
@@ -1502,7 +1535,9 @@ export function JourneyStory({
       uploadedBytes: 0,
       totalBytes: files.reduce((sum, file) => sum + file.size, 0),
     });
-    const firstNewAssetIndex = scopedMedia.length;
+    const firstNewAssetIndex = selectedRoutePointId === null
+      ? playbackIntroMedia(journey).length
+      : scopedMedia.length;
     const result = await uploadJourneyMedia({
       journeyId: journey.id,
       routePointId: selectedRoutePointId ?? undefined,
@@ -1666,6 +1701,7 @@ export function JourneyStory({
 
   function selectMediaScope(routePointId: string | null) {
     if (mutationPending) return;
+    setPlayingFromGesture(false);
     setSelectedRoutePointId(routePointId);
     setAssetIndex(0);
     setShownAssetId(null);
@@ -1789,18 +1825,32 @@ export function JourneyStory({
   async function handleMediaReorderEnd(event: DragEndEvent) {
     const { active, over } = event;
     if (!over || active.id === over.id) return;
-    const oldIndex = scopedMedia.findIndex((candidate) => candidate.id === active.id);
-    const newIndex = scopedMedia.findIndex((candidate) => candidate.id === over.id);
+    const activeAsset = scopedMedia.find((candidate) => candidate.id === active.id);
+    const overAsset = scopedMedia.find((candidate) => candidate.id === over.id);
+    if (!activeAsset || !overAsset) return;
+    if (activeAsset.routePointId !== overAsset.routePointId) {
+      setOrderMessage("整段旅程按章节排列；请选择同一章节内的媒体调整顺序。");
+      return;
+    }
+
+    const reorderScopeId = activeAsset.routePointId;
+    const chapterMedia = scopedMedia.filter((candidate) => candidate.routePointId === reorderScopeId);
+    const oldIndex = chapterMedia.findIndex((candidate) => candidate.id === active.id);
+    const newIndex = chapterMedia.findIndex((candidate) => candidate.id === over.id);
     if (oldIndex < 0 || newIndex < 0) return;
 
-    // Review P2: optimistic — apply the new scope order to the grid
-    // immediately, then persist; rollback clears the local order so the grid
-    // follows server truth on failure.
-    const nextScoped = arrayMove(scopedMedia, oldIndex, newIndex);
+    // In aggregate Journey mode the grid spans multiple chapters. Reorder only
+    // the active chapter, then splice it back into the canonical Story sequence
+    // so a drag can never move media across route-point ownership.
+    const nextChapter = arrayMove(chapterMedia, oldIndex, newIndex);
+    let chapterIndex = 0;
+    const nextScoped = scopedMedia.map((candidate) => (
+      candidate.routePointId === reorderScopeId ? nextChapter[chapterIndex++] : candidate
+    ));
     const nextVisual = applyScopeReorder(
       visualMedia,
-      selectedRoutePointId,
-      nextScoped.map((candidate) => candidate.id),
+      reorderScopeId,
+      nextChapter.map((candidate) => candidate.id),
     );
     const nextAssetIndex = nextScoped.findIndex(
       (candidate) => candidate.id === active.id,
@@ -2388,15 +2438,19 @@ export function JourneyStory({
               >
                 <span>00</span>
                 <strong>整段旅程</strong>
-                <small>{visualMediaCount(null)}</small>
+                <small>{visualMedia.length}</small>
               </button>
               {journey.routePoints.map((point, index) => (
                 <button
                   key={point.id}
                   type="button"
                   disabled={mutationPending}
-                  className={selectedRoutePointId === point.id ? "is-active" : ""}
+                  className={[
+                    selectedRoutePointId === point.id ? "is-active" : "",
+                    selectedRoutePointId === null && activeChapterRoutePointId === point.id ? "is-chapter-active" : "",
+                  ].filter(Boolean).join(" ")}
                   aria-pressed={selectedRoutePointId === point.id}
+                  aria-current={selectedRoutePointId === null && activeChapterRoutePointId === point.id ? "step" : undefined}
                   data-route-point-id={point.id}
                   onClick={() => selectMediaScope(point.id)}
                 >
@@ -2414,8 +2468,8 @@ export function JourneyStory({
             {/* #10: a selected route point shows its own note near the place
                 name — distinct from system metadata. Journey-scoped view never
                 fabricates a note. */}
-            {selectedRoutePoint && selectedRoutePoint.note ? (
-              <blockquote className="journey-story__point-note">{selectedRoutePoint.note}</blockquote>
+            {activeChapterRoutePoint && activeChapterRoutePoint.note ? (
+              <blockquote className="journey-story__point-note">{activeChapterRoutePoint.note}</blockquote>
             ) : null}
             {journey.note ? <p className="journey-story__note">{journey.note}</p> : <p className="journey-story__note is-empty">没有文字，只有这条路线留下来。</p>}
             {onDelete && deleteState !== "idle" ? (
@@ -2435,11 +2489,9 @@ export function JourneyStory({
             <div className="journey-story__media-add">
               <div>
                 <p>PRIVATE MEDIA</p>
-                <strong>{scopedMedia.length > 0
-                  ? `${scopedMedia.length} 个媒体片段 · ${selectedRoutePoint?.label || (selectedRoutePoint ? `途径点 ${selectedRoutePoint.sortOrder + 1}` : "整段旅程")}`
-                  : selectedRoutePoint
-                  ? `为「${selectedRoutePoint.label || `途径点 ${selectedRoutePoint.sortOrder + 1}`}」留下影像`
-                  : "为整段旅程留下影像"}</strong>
+                <strong>{selectedRoutePoint
+                  ? `${scopedMedia.length} 个媒体片段 · ${selectedRoutePoint.label || `途径点 ${selectedRoutePoint.sortOrder + 1}`}`
+                  : `${playbackIntroMedia(journey).length} 个媒体片段 · 旅程级媒体 / 开场章节`}</strong>
               </div>
               <input
                 ref={fileInputRef}
@@ -2617,7 +2669,8 @@ export function JourneyStory({
             <nav className="journey-story-fullscreen__nav" aria-label="全屏媒体导航">
               <button
                 type="button"
-                onClick={() => navigateToMedia((assetIndex - 1 + scopedMedia.length) % scopedMedia.length)}
+                disabled={selectedRoutePointId === null && assetIndex === 0}
+                onClick={() => { const index = storyMediaNeighborIndex(assetIndex, scopedMedia.length, -1, selectedRoutePointId !== null); if (index !== null) navigateToMedia(index); }}
                 aria-label="上一个媒体"
               >
                 <IconArrowLeft size={22} stroke={1.35} aria-hidden="true" />
@@ -2636,7 +2689,8 @@ export function JourneyStory({
               <span>{assetIndex + 1} / {scopedMedia.length}</span>
               <button
                 type="button"
-                onClick={() => navigateToMedia((assetIndex + 1) % scopedMedia.length)}
+                disabled={selectedRoutePointId === null && assetIndex === scopedMedia.length - 1}
+                onClick={() => { const index = storyMediaNeighborIndex(assetIndex, scopedMedia.length, 1, selectedRoutePointId !== null); if (index !== null) navigateToMedia(index); }}
                 aria-label="下一个媒体"
               >
                 <IconArrowRight size={22} stroke={1.35} aria-hidden="true" />

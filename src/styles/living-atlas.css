@@ -2320,6 +2320,16 @@
   box-shadow: 0 0 12px rgba(200, 255, 61, 0.48);
 }
 
+.journey-story__route-points button.is-chapter-active {
+  border-color: rgba(203, 241, 193, 0.3);
+  background: rgba(203, 241, 193, 0.055);
+  color: #edf6f2;
+}
+
+.journey-story__route-points button.is-chapter-active::after {
+  background: rgba(203, 241, 193, 0.72);
+}
+
 .journey-story__route-points span,
 .journey-story__route-points small {
   font: 500 8px/1 ui-monospace, "SFMono-Regular", Consolas, monospace;
