@@ -32,6 +32,8 @@ import {
   IconArrowRight,
   IconArrowDown,
   IconArrowUp,
+  IconChevronDown,
+  IconChevronUp,
   IconDots,
   IconPhotoStar,
   IconEdit,
@@ -566,6 +568,9 @@ export function JourneyStory({
   const playingRef = useRef(false);
   playingRef.current = playing;
   const mobileLayout = useCompactMobileLayout();
+  const [mobileStoryExpanded, setMobileStoryExpanded] = useState(false);
+  const storySheetGestureRef = useRef<{ startY: number; pointerId: number } | null>(null);
+  const storySheetGestureConsumedRef = useRef(false);
   const [fullscreen, setFullscreen] = useState(false);
   // #7: fullscreen controls fade out after idle; any pointer/key activity
   // brings them back. Mobile starts fully immersive and reveals controls only
@@ -627,6 +632,42 @@ export function JourneyStory({
   const uploading = uploadState.status === "uploading"
     || soundtrackUpload.status === "uploading";
 
+  function collapseMobileStory() {
+    setMobileStoryExpanded(false);
+  }
+
+  function toggleMobileStoryPresentation() {
+    if (storySheetGestureConsumedRef.current) {
+      storySheetGestureConsumedRef.current = false;
+      return;
+    }
+    setMobileStoryExpanded((current) => !current);
+  }
+
+  function handleStorySheetPointerDown(event: ReactPointerEvent<HTMLButtonElement>) {
+    if (!mobileLayout || event.pointerType === "mouse") return;
+    storySheetGestureConsumedRef.current = false;
+    storySheetGestureRef.current = { startY: event.clientY, pointerId: event.pointerId };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function handleStorySheetPointerUp(event: ReactPointerEvent<HTMLButtonElement>) {
+    const gesture = storySheetGestureRef.current;
+    storySheetGestureRef.current = null;
+    if (!gesture || gesture.pointerId !== event.pointerId) return;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    const dy = event.clientY - gesture.startY;
+    if (Math.abs(dy) >= 32) storySheetGestureConsumedRef.current = true;
+    if (dy <= -32) setMobileStoryExpanded(true);
+    else if (dy >= 32) setMobileStoryExpanded(false);
+  }
+
+  function handleStorySheetPointerCancel(event: ReactPointerEvent<HTMLButtonElement>) {
+    if (storySheetGestureRef.current?.pointerId !== event.pointerId) return;
+    storySheetGestureRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+  }
+
   function exitFullscreen() {
     if (typeof window !== "undefined") {
       window.clearTimeout(fullscreenMobileIdleTimerRef.current);
@@ -687,6 +728,7 @@ export function JourneyStory({
     onClose(sharedSource);
   }
 
+  useMobileSurfaceHistory(mobileStoryExpanded && mobileLayout, "story-expanded", collapseMobileStory);
   useMobileSurfaceHistory(fullscreen && mobileLayout, "story-fullscreen", exitFullscreen);
   const dialogRef = useModalFocus<HTMLElement>(requestClose);
   const mobileMediaSheetRef = useNestedModalFocus<HTMLElement>(
@@ -708,6 +750,7 @@ export function JourneyStory({
     setOrderPending(false);
     setOrderMessage("");
     setPlaying(false);
+    setMobileStoryExpanded(false);
     exitFullscreen();
     setMobileMediaMenuOpen(false);
     setOverview(false);
@@ -2107,8 +2150,38 @@ export function JourneyStory({
   }
 
   const content = (
-    <div className="journey-story-backdrop" role="presentation" onClick={closeFromBackdrop}>
-      <article ref={dialogRef} tabIndex={-1} className="journey-story motion-staged" role="dialog" aria-modal="true" aria-labelledby="journey-story-title" onWheel={scrollCopyFromMedia}>
+    <div
+      className={`journey-story-backdrop${mobileLayout ? " is-mobile-context" : ""}${mobileLayout && mobileStoryExpanded ? " is-story-expanded" : ""}`}
+      role="presentation"
+      onClick={closeFromBackdrop}
+    >
+      <article
+        ref={dialogRef}
+        tabIndex={-1}
+        className="journey-story motion-staged"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="journey-story-title"
+        data-mobile-presentation={mobileLayout ? (mobileStoryExpanded ? "expanded" : "in-context") : undefined}
+        onWheel={scrollCopyFromMedia}
+      >
+        {mobileLayout ? (
+          <button
+            type="button"
+            className="journey-story__sheet-handle"
+            aria-label={mobileStoryExpanded ? "收起旅程故事" : "展开旅程故事"}
+            aria-expanded={mobileStoryExpanded}
+            onClick={toggleMobileStoryPresentation}
+            onPointerDown={handleStorySheetPointerDown}
+            onPointerUp={handleStorySheetPointerUp}
+            onPointerCancel={handleStorySheetPointerCancel}
+          >
+            <span aria-hidden="true" />
+            {mobileStoryExpanded
+              ? <IconChevronDown size={17} stroke={1.5} aria-hidden="true" />
+              : <IconChevronUp size={17} stroke={1.5} aria-hidden="true" />}
+          </button>
+        ) : null}
         <header>
           <div>
             <p>PRIVATE JOURNEY · {journeyRange(journey)}</p>
