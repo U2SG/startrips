@@ -848,7 +848,8 @@ export function JourneyStory({
     if (mobileMediaMenuOpen) setMobileMediaMenuOpen(false);
   });
   useMobileSurfaceHistory(mobileHistoryLayers.journeyDelete, "story-journey-delete", closeJourneyDelete);
-  const dialogRef = useModalFocus<HTMLElement>(requestClose);
+  const storyModal = !mobileLayout || mobileStoryExpanded;
+  const dialogRef = useModalFocus<HTMLElement>(requestClose, storyModal);
   const mobileMediaSheetRef = useNestedModalFocus<HTMLElement>(
     mobileLayout && (mobileMediaMenuOpen || mediaDeleteState !== "idle"),
     mobileMediaMenuOpen ? "manage" : mediaDeleteState !== "idle" ? "delete" : null,
@@ -2312,7 +2313,7 @@ export function JourneyStory({
         data-mobile-mode={mobileLayout ? (mobileManageMode ? "manage" : "viewer") : undefined}
         data-mobile-presentation={mobileLayout ? (mobileStoryExpanded ? "expanded" : "in-context") : undefined}
         role="dialog"
-        aria-modal="true"
+        aria-modal={storyModal ? "true" : undefined}
         aria-labelledby="journey-story-title"
         onWheel={scrollCopyFromMedia}
       >
