@@ -388,7 +388,8 @@ describe("JourneyStory", () => {
 
     expect(markup).toContain('role="dialog"');
     expect(markup).toContain('aria-label="退出旅程故事"');
-    expect(markup).toContain(">退出<");
+    expect(markup).toContain('class="journey-story__close"');
+    expect(markup).not.toContain(">退出<");
     expect(markup).toContain("添加照片或视频");
     expect(markup).toContain('type="file"');
     expect(markup).toContain("编辑旅程");

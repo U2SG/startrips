@@ -2267,8 +2267,17 @@ export function JourneyStory({
           </div>
           {/* An upload in flight keeps this button clickable so pressing it
               explains the wait instead of silently doing nothing. */}
-          <button className="journey-story__close" type="button" disabled={mutationPending && !uploading} onClick={requestClose} aria-label="退出旅程故事">
-            <span>{deleteState === "pending" ? "删除中" : uploading ? "上传中" : "退出"}</span><IconX size={19} stroke={1.35} aria-hidden="true" />
+          <button
+            className={`journey-story__close${deleteState === "pending" || uploading ? " is-status" : ""}`}
+            type="button"
+            disabled={mutationPending && !uploading}
+            onClick={requestClose}
+            aria-label="退出旅程故事"
+          >
+            {deleteState === "pending" || uploading ? (
+              <span>{deleteState === "pending" ? "删除中" : "上传中"}</span>
+            ) : null}
+            <IconX size={19} stroke={1.35} aria-hidden="true" />
           </button>
         </header>
 

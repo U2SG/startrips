@@ -310,6 +310,20 @@ try {
     ) failed = true;
 
     const storyRoot = story.page.locator(".journey-story");
+    const storyClose = story.page.getByRole("button", { name: "退出旅程故事" });
+    const closeBox = await storyClose.boundingBox();
+    const closeVisibleText = (await storyClose.innerText()).trim();
+    const closeUsesControlGrid = closeBox !== null
+      && Math.min(closeBox.width, closeBox.height) >= 44
+      && Math.abs(closeBox.width - closeBox.height) <= 1;
+    checks.push({
+      name: "story-mobile-close-control-grammar",
+      closeVisibleText,
+      closeUsesControlGrid,
+      failed: closeVisibleText !== "" || !closeUsesControlGrid,
+    });
+    if (closeVisibleText !== "" || !closeUsesControlGrid) failed = true;
+
     const manageTrigger = story.page.getByRole("button", { name: "管理旅程" });
     const manageTriggerButton = story.page.locator(".journey-story__mobile-media-menu-trigger");
     const viewerMode = await storyRoot.getAttribute("data-mobile-mode");
