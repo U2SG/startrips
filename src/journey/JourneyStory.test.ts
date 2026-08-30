@@ -534,7 +534,12 @@ describe("JourneyStory", () => {
     }));
 
     expect(markup).toContain('data-mobile-layout="true"');
-    expect(markup).toContain('aria-label="管理当前媒体"');
+    expect(markup).toContain('data-mobile-mode="viewer"');
+    expect(markup).toContain('aria-label="管理旅程"');
+    expect(markup).not.toContain('aria-label="管理当前媒体"');
+    expect(markup).not.toContain("添加照片或视频");
+    expect(markup).not.toContain("编辑旅程");
+    expect(markup).not.toContain("删除旅程");
     expect(markup).not.toContain('aria-label="向前调整媒体顺序"');
     expect(markup).not.toContain('aria-label="向后调整媒体顺序"');
     expect(markup).not.toContain('aria-label="自动播放照片"');

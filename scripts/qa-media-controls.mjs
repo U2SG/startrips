@@ -309,16 +309,50 @@ try {
       || !inlineVelocityReverseReturned
     ) failed = true;
 
-    const manageTrigger = story.page.getByRole("button", { name: "管理当前媒体" });
+    const storyRoot = story.page.locator(".journey-story");
+    const manageTrigger = story.page.getByRole("button", { name: "管理旅程" });
+    const manageTriggerButton = story.page.locator(".journey-story__mobile-media-menu-trigger");
+    const viewerMode = await storyRoot.getAttribute("data-mobile-mode");
+    const viewerMutationButtons = await story.page.getByRole("button", {
+      name: /添加照片或视频|编辑旅程|删除旅程/,
+    }).count();
     const manageTriggerBox = await manageTrigger.boundingBox();
     const manageTouchTarget = manageTriggerBox ? Math.min(manageTriggerBox.width, manageTriggerBox.height) : 0;
     checks.push({
-      name: "story-mobile-primary-touch-target",
+      name: "story-mobile-viewer-manage-separation",
+      viewerMode,
+      viewerMutationButtons,
       manageTouchTarget,
-      failed: manageTouchTarget < 44,
+      failed: viewerMode !== "viewer" || viewerMutationButtons !== 0 || manageTouchTarget < 44,
     });
-    if (manageTouchTarget < 44) failed = true;
+    if (viewerMode !== "viewer" || viewerMutationButtons !== 0 || manageTouchTarget < 44) failed = true;
+
     await manageTrigger.click();
+    await story.page.waitForFunction(() => document.querySelector(".journey-story")?.getAttribute("data-mobile-mode") === "manage");
+    const manageMutationButtons = await story.page.getByRole("button", { name: /编辑旅程|删除旅程/ }).count();
+    const manageDone = story.page.getByRole("button", { name: "完成" });
+    checks.push({
+      name: "story-mobile-manage-mode-reveals-mutations",
+      manageMutationButtons,
+      hasDone: await manageDone.count() === 1,
+      failed: manageMutationButtons < 2 || await manageDone.count() !== 1,
+    });
+    if (manageMutationButtons < 2 || await manageDone.count() !== 1) failed = true;
+
+    await story.page.evaluate(() => window.history.back());
+    await story.page.waitForFunction(() => document.querySelector(".journey-story")?.getAttribute("data-mobile-mode") === "viewer");
+    const manageExitedOnBack = await storyRoot.getAttribute("data-mobile-mode") === "viewer";
+    checks.push({
+      name: "story-mobile-manage-back-contract",
+      manageExitedOnBack,
+      failed: !manageExitedOnBack,
+    });
+    if (!manageExitedOnBack) failed = true;
+
+    await story.page.getByRole("button", { name: "管理旅程" }).click();
+    await story.page.waitForFunction(() => document.querySelector(".journey-story")?.getAttribute("data-mobile-mode") === "manage");
+    const mediaManageTrigger = story.page.getByRole("button", { name: "管理当前媒体" });
+    await mediaManageTrigger.click();
     const mobileSheet = story.page.locator(".journey-story__mobile-media-sheet");
     await mobileSheet.waitFor({ state: "visible" });
     const initialFocusInside = await mobileSheet.evaluate((root) => root.contains(document.activeElement));
@@ -329,7 +363,7 @@ try {
     }
     await story.page.keyboard.press("Escape");
     await mobileSheet.waitFor({ state: "detached" });
-    const sheetFocusRestored = await manageTrigger.evaluate((button) => document.activeElement === button);
+    const sheetFocusRestored = await manageTriggerButton.evaluate((button) => document.activeElement === button);
     checks.push({
       name: "story-mobile-sheet-focus-ownership",
       initialFocusInside,
@@ -339,7 +373,7 @@ try {
     });
     if (!initialFocusInside || !tabStayedInside || !sheetFocusRestored) failed = true;
 
-    await manageTrigger.click();
+    await mediaManageTrigger.click();
     await story.page.getByRole("button", { name: "删除媒体" }).click();
     const deleteSheet = story.page.locator(".journey-story__mobile-media-sheet.is-confirming");
     await deleteSheet.waitFor({ state: "visible" });
@@ -354,7 +388,7 @@ try {
     await story.page.waitForFunction(() => (
       document.activeElement?.classList.contains("journey-story__mobile-media-menu-trigger") ?? false
     ));
-    const deleteFocusRestored = await manageTrigger.evaluate((button) => document.activeElement === button);
+    const deleteFocusRestored = await manageTriggerButton.evaluate((button) => document.activeElement === button);
     checks.push({
       name: "story-mobile-delete-focus-ownership",
       deleteFocusInside,
