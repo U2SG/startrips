@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  cityLabelFacingThreshold,
+  cityStableKey,
   parseCityFeatures,
   parseCityList,
   resolveCityDisplayName,
@@ -210,5 +212,69 @@ describe("selectCityCandidates", () => {
     expect(selectCityCandidates(cities, [0, 0, 0], 0.5, 10)).toEqual([]);
     const doubled = selectCityCandidates(cities, [2, 0, 0], 0.5, 10);
     expect(doubled.map((city) => city.name)).toEqual(["Far", "Near"]);
+  });
+});
+
+
+describe("stable zoom-aware city candidate policy (#79)", () => {
+  const pearlRiverDelta = parseCityList({
+    cities: [
+      { n: "Hong Kong", z: "香港", la: 22.27832, lo: 114.17469, p: 7396076, r: 0 },
+      { n: "Shenzhen", z: "深圳", la: 22.54554, lo: 114.0683, p: 17494398, r: 2 },
+      { n: "Guangzhou", z: "广州", la: 23.11667, lo: 113.25, p: 16096724, r: 1 },
+      { n: "Dongguan", z: "东莞市", la: 23.01797, lo: 113.74866, p: 9644871, r: 2 },
+      { n: "Foshan", z: "佛山市", la: 23.02677, lo: 113.13148, p: 9042509, r: 2 },
+      { n: "Zhuhai", z: "珠海市", la: 22.27694, lo: 113.56778, p: 2207090, r: 2 },
+      { n: "Huizhou", z: "惠州市", la: 23.11147, lo: 114.41523, p: 2900113, r: 2 },
+      { n: "Macau", z: "澳门", la: 22.20056, lo: 113.54611, p: 649335, r: 0 },
+    ],
+  });
+
+  it("does not narrow candidate coverage as globe scale increases", () => {
+    expect(cityLabelFacingThreshold(1)).toBe(cityLabelFacingThreshold(2));
+    expect(cityLabelFacingThreshold(2)).toBe(cityLabelFacingThreshold(3));
+  });
+
+  it("keeps major Pearl River Delta anchors ahead of lower-priority neighbors", () => {
+    const shenzhen = pearlRiverDelta.find((city) => city.name === "Shenzhen")!;
+    const result = selectCityCandidates(
+      pearlRiverDelta,
+      shenzhen.direction,
+      cityLabelFacingThreshold(2.5),
+      8,
+      3,
+    );
+    const names = result.map((city) => city.name);
+    expect(names).toContain("Hong Kong");
+    expect(names).toContain("Shenzhen");
+    expect(names).toContain("Guangzhou");
+    expect(names.indexOf("Hong Kong")).toBeLessThan(names.indexOf("Dongguan"));
+  });
+
+  it("uses persistence as hysteresis for otherwise equivalent nearby labels", () => {
+    const twins = parseCityList({ cities: [
+      { n: "Visible", la: 22.5, lo: 114, p: 1000000, r: 2 },
+      { n: "Challenger", la: 22.5, lo: 114, p: 1000000, r: 2 },
+    ] });
+    const persistent = new Set([cityStableKey(twins[0])]);
+    const result = selectCityCandidates(
+      twins,
+      twins[0].direction,
+      0.3,
+      1,
+      3,
+      persistent,
+    );
+    expect(result[0].name).toBe("Visible");
+  });
+
+  it("expanding rank tiers is monotonic for a fixed view", () => {
+    const shenzhen = pearlRiverDelta.find((city) => city.name === "Shenzhen")!;
+    const capitals = selectCityCandidates(pearlRiverDelta, shenzhen.direction, 0.3, 72, 1);
+    const prefectures = selectCityCandidates(pearlRiverDelta, shenzhen.direction, 0.3, 72, 2);
+    const capitalKeys = new Set(capitals.map(cityStableKey));
+    const prefectureKeys = new Set(prefectures.map(cityStableKey));
+    for (const key of capitalKeys) expect(prefectureKeys.has(key)).toBe(true);
+    expect(prefectures.length).toBeGreaterThanOrEqual(capitals.length);
   });
 });

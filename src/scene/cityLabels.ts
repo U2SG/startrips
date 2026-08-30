@@ -150,12 +150,43 @@ export function resolveCityDisplayName(
  * national/provincial capitals, 2 to add prefecture cities, or 3 (or omit)
  * for every city.
  */
+export function cityStableKey(city: Pick<CityPoint, "name" | "latitude" | "longitude">): string {
+  return `${city.name}\u0000${city.latitude.toFixed(4)}\u0000${city.longitude.toFixed(4)}`;
+}
+
+/**
+ * Candidate coverage must not shrink as the user zooms in. Screen-space
+ * magnification already creates more room between nearby labels; tightening
+ * the angular window at the same time made local context disappear exactly
+ * when the user asked for more detail. Keep one stable regional window and
+ * let zoom tiers add lower-rank places monotonically.
+ */
+export function cityLabelFacingThreshold(_scale: number): number {
+  return 0.3;
+}
+
+export function cityCandidateScore(
+  city: CityPoint,
+  facing: number,
+  facingThreshold: number,
+  persistent = false,
+): number {
+  const normalizedFacing = Math.max(0, Math.min(1,
+    (facing - facingThreshold) / Math.max(0.0001, 1 - facingThreshold),
+  ));
+  const rankBonus = [220, 160, 90, 0][Math.max(0, Math.min(3, city.rank))] ?? 0;
+  const populationBonus = Math.min(180, Math.log10(Math.max(1, city.population)) * 24);
+  const persistenceBonus = persistent ? 70 : 0;
+  return normalizedFacing * 320 + rankBonus + populationBonus + persistenceBonus;
+}
+
 export function selectCityCandidates(
   cities: readonly CityPoint[],
   facingDirection: readonly [number, number, number],
   facingThreshold: number,
   limit: number,
   maxRank = 3,
+  persistentCityKeys: ReadonlySet<string> = new Set(),
 ): CityPoint[] {
   if (limit <= 0) return [];
   const facingLength = Math.hypot(
@@ -167,18 +198,29 @@ export function selectCityCandidates(
   const directionX = facingDirection[0] / facingLength;
   const directionY = facingDirection[1] / facingLength;
   const directionZ = facingDirection[2] / facingLength;
-  const candidates: Array<{ city: CityPoint; facing: number }> = [];
+  const candidates: Array<{ city: CityPoint; facing: number; score: number }> = [];
   for (const city of cities) {
     if (city.rank > maxRank) continue;
     const facing = city.direction[0] * directionX
       + city.direction[1] * directionY
       + city.direction[2] * directionZ;
     if (facing < facingThreshold) continue;
-    candidates.push({ city, facing });
+    candidates.push({
+      city,
+      facing,
+      score: cityCandidateScore(
+        city,
+        facing,
+        facingThreshold,
+        persistentCityKeys.has(cityStableKey(city)),
+      ),
+    });
   }
   candidates.sort(
-    (left, right) => right.facing - left.facing
-      || right.city.population - left.city.population,
+    (left, right) => right.score - left.score
+      || right.facing - left.facing
+      || right.city.population - left.city.population
+      || left.city.name.localeCompare(right.city.name),
   );
   return candidates.slice(0, limit).map((candidate) => candidate.city);
 }

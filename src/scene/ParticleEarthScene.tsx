@@ -33,6 +33,8 @@ import {
   readAudioAtmosphereEnergy,
 } from "../motion/audioAtmosphere";
 import {
+  cityLabelFacingThreshold,
+  cityStableKey,
   loadCityTiers,
   resolveCityDisplayName,
   selectCityCandidates,
@@ -2207,19 +2209,27 @@ export function ParticleEarthScene({
           : scale < 2.1
             ? "prefectures"
             : "all";
+        // Snapshot persistence before a tier reset hides the current pool, so
+        // crossing capitals -> prefectures -> all does not throw away label
+        // hysteresis exactly at the zoom boundary.
+        const persistentCityKeys = new Set(
+          cityLabelPool
+            .filter((entry) => entry.city && entry.element.style.display !== "none")
+            .map((entry) => cityStableKey(entry.city!)),
+        );
         if (tier !== lastCityTier) {
           lastCityTier = tier;
           for (const entry of cityLabelPool) {
             entry.element.style.display = "none";
           }
         }
-        // Zooming in tightens the facing window; candidates are ordered by
-        // how directly they face the camera, so zooming reveals nearby
-        // cities instead of always the world's largest ones.
-        const facingThreshold = Math.min(
-          0.92,
-          0.3 + (scale - 1) * 0.25,
-        );
+        // Keep the angular coverage stable as zoom increases. Magnification
+        // creates more screen-space room, while the tier only adds lower-rank
+        // places; the candidate set therefore grows monotonically instead of
+        // losing nearby context at close zoom. Previously visible labels get a
+        // modest persistence bonus so tiny wheel/rotation deltas do not churn
+        // dense metro labels, while route labels still win every collision.
+        const facingThreshold = cityLabelFacingThreshold(scale);
         const maxRank = tier === "capitals" ? 1 : tier === "prefectures" ? 2 : 3;
         const cities = selectCityCandidates(
           cityTierData.cities,
@@ -2227,6 +2237,7 @@ export function ParticleEarthScene({
           facingThreshold,
           CITY_LABEL_BUDGET,
           maxRank,
+          persistentCityKeys,
         );
         // Labels must never overlap each other or route labels: place in
         // view-center order and skip any label whose box collides.
