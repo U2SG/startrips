@@ -2388,6 +2388,23 @@ export function JourneyStory({
               </div>
             ) : null}
             {orderMessage ? <p className="journey-story__order-message" role="status">{orderMessage}</p> : null}
+            {mobileLayout && !overview && !asset && !mobileManageMode ? (
+              <div className="journey-story__mobile-media-actions">
+                <IconActionButton
+                  type="button"
+                  className="journey-story__mobile-media-menu-trigger"
+                  label="管理旅程"
+                  tooltip="管理旅程"
+                  disabled={mutationPending}
+                  onClick={() => {
+                    setPlaying(false);
+                    setMobileManageMode(true);
+                  }}
+                >
+                  <IconDots size={19} stroke={1.5} aria-hidden="true" />
+                </IconActionButton>
+              </div>
+            ) : null}
             {mobileLayout && !overview && asset ? (
               <div className="journey-story__mobile-media-actions">
                 <IconActionButton

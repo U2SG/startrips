@@ -546,6 +546,27 @@ describe("JourneyStory", () => {
     expect(markup).not.toContain("全部照片");
   });
 
+  it("keeps mobile management reachable when the selected media scope is empty", () => {
+    vi.stubGlobal("matchMedia", vi.fn(() => ({
+      matches: true,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })));
+    const markup = renderToStaticMarkup(createElement(JourneyStory, {
+      journeys: [{ ...journey, media: [] }],
+      journeyId: journey.id,
+      onClose: () => undefined,
+      onNavigate: () => undefined,
+      onEdit: () => undefined,
+      onMediaAdded: () => null,
+    }));
+
+    expect(markup).toContain('data-mobile-mode="viewer"');
+    expect(markup).toContain('aria-label="管理旅程"');
+    expect(markup).not.toContain("添加照片或视频");
+    vi.unstubAllGlobals();
+  });
+
   it("offers a direct-access overview for singleton and multi-media scopes", () => {
     const single = renderToStaticMarkup(createElement(JourneyStory, {
       journeys: [{ ...journey, media: [asset("media-1", "image/jpeg", 0)] }],
