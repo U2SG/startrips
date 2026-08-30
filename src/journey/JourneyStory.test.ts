@@ -8,9 +8,11 @@ import {
   replaceJourneySoundtrack,
   storyAssetIndexForId,
   storyAutoplayNextIndex,
+  storyChapterMedia,
   shouldHoldWholeJourneyTerminalFrame,
   storyInitialMediaSelection,
   storyMediaNeighborIndex,
+  storySelectionContainsRoutePointMedia,
   storyUploadedAssetIndex,
 } from "./JourneyStory";
 import type { Journey, JourneyMediaAsset } from "./types";
@@ -179,6 +181,25 @@ describe("storyUploadedAssetIndex (#76 review)", () => {
   it("returns null when refresh cannot find any successful uploaded asset", () => {
     const intro = asset("intro", "image/jpeg", 0, "intro.jpg");
     expect(storyUploadedAssetIndex([intro], ["missing"])).toBeNull();
+  });
+});
+
+describe("aggregate organizer ownership (#76 review)", () => {
+  it("derives arrow-sort neighbors from the active ownership chapter", () => {
+    const pointA1 = { ...asset("a1", "image/jpeg", 0), routePointId: "point-a" };
+    const pointB = { ...asset("b", "image/jpeg", 1), routePointId: "point-b" };
+    const pointA2 = { ...asset("a2", "image/jpeg", 2), routePointId: "point-a" };
+    expect(storyChapterMedia([pointA1, pointA2, pointB], pointA1).map((item) => item.id))
+      .toEqual(["a1", "a2"]);
+  });
+
+  it("offers the journey-level destination when aggregate selection includes chapter media", () => {
+    const intro = asset("intro", "image/jpeg", 0);
+    const point = { ...asset("point", "image/jpeg", 1), routePointId: "point-a" };
+    expect(storySelectionContainsRoutePointMedia([intro, point], new Set([point.id])))
+      .toBe(true);
+    expect(storySelectionContainsRoutePointMedia([intro, point], new Set([intro.id])))
+      .toBe(false);
   });
 });
 

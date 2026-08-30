@@ -207,6 +207,21 @@ export function storyUploadedAssetIndex(
   return null;
 }
 
+export function storyChapterMedia(
+  media: readonly JourneyMediaAsset[],
+  asset: JourneyMediaAsset | null,
+): JourneyMediaAsset[] {
+  if (!asset) return [];
+  return media.filter((candidate) => candidate.routePointId === asset.routePointId);
+}
+
+export function storySelectionContainsRoutePointMedia(
+  media: readonly JourneyMediaAsset[],
+  selectedIds: ReadonlySet<string>,
+): boolean {
+  return media.some((asset) => selectedIds.has(asset.id) && asset.routePointId !== null);
+}
+
 export function storyInitialMediaSelection(
   journey: Journey | undefined,
   requestedRoutePointId: string | null,
@@ -1181,14 +1196,17 @@ export function JourneyStory({
     ? scopedMedia.find((candidate) => candidate.id === incomingAssetId) ?? null
     : null;
   const incomingRead = incoming ? mediaReads[incoming.id] : null;
-  const fullMediaIndex = asset
-    ? visualMedia.findIndex((candidate) => candidate.id === asset.id)
+  const activeChapterMedia = storyChapterMedia(scopedMedia, asset);
+  const activeChapterIndex = asset
+    ? activeChapterMedia.findIndex((candidate) => candidate.id === asset.id)
     : -1;
-  const canMoveEarlier = asset && fullMediaIndex > 0
-    && visualMedia[fullMediaIndex - 1].routePointId === asset.routePointId;
-  const canMoveLater = asset && fullMediaIndex >= 0
-    && fullMediaIndex < visualMedia.length - 1
-    && visualMedia[fullMediaIndex + 1].routePointId === asset.routePointId;
+  const canMoveEarlier = activeChapterIndex > 0;
+  const canMoveLater = activeChapterIndex >= 0
+    && activeChapterIndex < activeChapterMedia.length - 1;
+  const selectionContainsRoutePointMedia = storySelectionContainsRoutePointMedia(
+    orderedScopedMedia,
+    moveSelection,
+  );
   const previousJourney = journeyIndex > 0 ? journeys[journeyIndex - 1] : null;
   const nextJourney = journeyIndex < journeys.length - 1 ? journeys[journeyIndex + 1] : null;
   const uploadPercent = uploadState.status === "uploading" && uploadState.totalBytes > 0
@@ -1686,19 +1704,24 @@ export function JourneyStory({
 
   async function moveMedia(direction: -1 | 1) {
     if (!asset || mutationPending) return;
-    // Ordering is expressed over visual media only; the soundtrack keeps its
-    // own position and is never part of the reorder payload.
-    const currentIndex = visualMedia.findIndex((candidate) => candidate.id === asset.id);
+    // The Story's aggregate view groups media by ownership chapter. Arrow
+    // sorting therefore moves inside the active chapter sequence, then maps
+    // that chapter order back onto the full visual-media payload.
+    const chapterMedia = storyChapterMedia(scopedMedia, asset);
+    const currentIndex = chapterMedia.findIndex((candidate) => candidate.id === asset.id);
     const targetIndex = currentIndex + direction;
-    if (currentIndex < 0 || targetIndex < 0 || targetIndex >= visualMedia.length) return;
-    const neighbor = visualMedia[targetIndex];
-    if (neighbor.routePointId !== asset.routePointId) return;
+    if (currentIndex < 0 || targetIndex < 0 || targetIndex >= chapterMedia.length) return;
 
-    const nextOrder = [...visualMedia];
-    [nextOrder[currentIndex], nextOrder[targetIndex]] = [
-      nextOrder[targetIndex],
-      nextOrder[currentIndex],
+    const nextChapter = [...chapterMedia];
+    [nextChapter[currentIndex], nextChapter[targetIndex]] = [
+      nextChapter[targetIndex],
+      nextChapter[currentIndex],
     ];
+    const nextOrder = applyScopeReorder(
+      visualMedia,
+      asset.routePointId,
+      nextChapter.map((candidate) => candidate.id),
+    );
     setOrderPending(true);
     setOrderMessage("");
     try {
@@ -2219,7 +2242,7 @@ export function JourneyStory({
                   }}
                 >
                   <option value="" disabled>移动到…</option>
-                  {selectedRoutePointId !== null ? (
+                  {selectedRoutePointId !== null || selectionContainsRoutePointMedia ? (
                     <option value="__journey__">整段旅程（不属于途径点）</option>
                   ) : null}
                   {namedStops
