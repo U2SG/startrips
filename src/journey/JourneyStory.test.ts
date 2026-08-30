@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   JourneyStory,
   journeyDeleteDescription,
+  mobileStoryExpandedForLayout,
   mobileStoryHistoryLayers,
   mediaForRoutePoint,
   replaceJourneySoundtrack,
@@ -509,6 +510,16 @@ describe("JourneyStory", () => {
     expect(markup).toContain('aria-label="自动播放照片"');
     expect(markup).toContain('aria-pressed="false"');
     expect(markup).not.toContain('aria-label="全屏查看媒体"');
+  });
+
+  it("clears expanded Story state across a compact breakpoint round trip", () => {
+    const expandedOnMobile = mobileStoryExpandedForLayout(true, true);
+    const afterDesktop = mobileStoryExpandedForLayout(false, expandedOnMobile);
+    const backOnMobile = mobileStoryExpandedForLayout(true, afterDesktop);
+
+    expect(expandedOnMobile).toBe(true);
+    expect(afterDesktop).toBe(false);
+    expect(backOnMobile).toBe(false);
   });
 
   it("orders migrated mobile mutation history under Manage while keeping Viewer fullscreen independent", () => {

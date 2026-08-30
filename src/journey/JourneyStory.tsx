@@ -144,6 +144,10 @@ function formatUploadError(message: string) {
   return message;
 }
 
+export function mobileStoryExpandedForLayout(mobileLayout: boolean, expanded: boolean) {
+  return mobileLayout ? expanded : false;
+}
+
 export function mobileStoryHistoryLayers({
   mobileLayout,
   mobileManageMode,
@@ -1064,6 +1068,7 @@ export function JourneyStory({
 
   useEffect(() => {
     if (!mobileLayout) {
+      setMobileStoryExpanded((expanded) => mobileStoryExpandedForLayout(false, expanded));
       setMobileMediaMenuOpen(false);
       return;
     }
