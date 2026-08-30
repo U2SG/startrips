@@ -174,7 +174,12 @@ export function cityCandidateScore(
   const normalizedFacing = Math.max(0, Math.min(1,
     (facing - facingThreshold) / Math.max(0.0001, 1 - facingThreshold),
   ));
-  const rankBonus = [220, 160, 90, 0][Math.max(0, Math.min(3, city.rank))] ?? 0;
+  // View proximity must dominate administrative rank. Large rank bonuses made
+  // distant capitals consume the fixed candidate budget before centered local
+  // cities could even reach screen-space collision placement. Rank remains a
+  // useful preference among similarly positioned cities, but never outweighs
+  // a materially better-facing lower-rank place.
+  const rankBonus = [60, 40, 20, 0][Math.max(0, Math.min(3, city.rank))] ?? 0;
   const populationBonus = Math.min(180, Math.log10(Math.max(1, city.population)) * 24);
   const persistenceBonus = persistent ? 70 : 0;
   return normalizedFacing * 320 + rankBonus + populationBonus + persistenceBonus;

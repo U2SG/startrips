@@ -251,6 +251,22 @@ describe("stable zoom-aware city candidate policy (#79)", () => {
     expect(names.indexOf("Hong Kong")).toBeLessThan(names.indexOf("Dongguan"));
   });
 
+  it("keeps a centered prefecture city inside a crowded fixed candidate budget", () => {
+    const crowded = parseCityList({ cities: [
+      { n: "Centered Local", la: 0, lo: 0, p: 12000000, r: 2 },
+      ...Array.from({ length: 90 }, (_, index) => ({
+        n: `Administrative ${index}`,
+        la: 0,
+        lo: 28 + (index % 28),
+        p: 20000000 - index,
+        r: index % 2,
+      })),
+    ] });
+    const centered = crowded.find((city) => city.name === "Centered Local")!;
+    const result = selectCityCandidates(crowded, centered.direction, 0.3, 72, 2);
+    expect(result.map((city) => city.name)).toContain("Centered Local");
+  });
+
   it("uses persistence as hysteresis for otherwise equivalent nearby labels", () => {
     const twins = parseCityList({ cities: [
       { n: "Visible", la: 22.5, lo: 114, p: 1000000, r: 2 },
