@@ -142,6 +142,34 @@ function formatUploadError(message: string) {
   return message;
 }
 
+export function mobileStoryHistoryLayers({
+  mobileLayout,
+  mobileManageMode,
+  fullscreen,
+  mediaMenuOpen,
+  mediaDeleteOpen,
+  journeyDeleteOpen,
+}: {
+  mobileLayout: boolean;
+  mobileManageMode: boolean;
+  fullscreen: boolean;
+  mediaMenuOpen: boolean;
+  mediaDeleteOpen: boolean;
+  journeyDeleteOpen: boolean;
+}) {
+  const manage = mobileLayout && mobileManageMode;
+  return {
+    manage,
+    // Fullscreen is valid in Viewer. Mutation-only media surfaces must wait
+    // until Manage owns its parent history layer (important when a desktop
+    // confirmation migrates into compact layout).
+    mediaSurface: mobileLayout && (
+      fullscreen || (mobileManageMode && (mediaMenuOpen || mediaDeleteOpen))
+    ),
+    journeyDelete: manage && journeyDeleteOpen,
+  };
+}
+
 export function journeyDeleteDescription(journey: Journey) {
   return `先从图谱隐藏；7 天内可撤销，之后才会清理路线和 ${journey.media.length} 个私有媒体。`;
 }
@@ -745,17 +773,22 @@ export function JourneyStory({
     onClose(sharedSource);
   }
 
-  useMobileSurfaceHistory(mobileManageMode && mobileLayout, "story-manage", exitMobileManageMode);
+  const mobileHistoryLayers = mobileStoryHistoryLayers({
+    mobileLayout,
+    mobileManageMode,
+    fullscreen,
+    mediaMenuOpen: mobileMediaMenuOpen,
+    mediaDeleteOpen: mediaDeleteState !== "idle",
+    journeyDeleteOpen: deleteState !== "idle",
+  });
+  useMobileSurfaceHistory(mobileHistoryLayers.manage, "story-manage", exitMobileManageMode);
   // Media menu, media-delete confirmation, and fullscreen are mutually
   // replacing transient surfaces on mobile. Keep them on one browser-history
   // layer so menu -> delete/fullscreen reuses the current entry instead of
-  // burying a stale menu token underneath the replacement.
-  const mobileTransientMediaSurfaceOpen = mobileLayout && (
-    mobileMediaMenuOpen
-    || mediaDeleteState !== "idle"
-    || fullscreen
-  );
-  useMobileSurfaceHistory(mobileTransientMediaSurfaceOpen, "story-media-surface", () => {
+  // burying a stale menu token underneath the replacement. Mutation-only
+  // children are gated by Manage so desktop confirmations migrating into a
+  // compact viewport push parent -> child tokens in the correct order.
+  useMobileSurfaceHistory(mobileHistoryLayers.mediaSurface, "story-media-surface", () => {
     if (fullscreen) {
       exitFullscreen();
       return;
@@ -765,7 +798,7 @@ export function JourneyStory({
     }
     if (mobileMediaMenuOpen) setMobileMediaMenuOpen(false);
   });
-  useMobileSurfaceHistory(deleteState !== "idle" && mobileLayout, "story-journey-delete", closeJourneyDelete);
+  useMobileSurfaceHistory(mobileHistoryLayers.journeyDelete, "story-journey-delete", closeJourneyDelete);
   const dialogRef = useModalFocus<HTMLElement>(requestClose);
   const mobileMediaSheetRef = useNestedModalFocus<HTMLElement>(
     mobileLayout && (mobileMediaMenuOpen || mediaDeleteState !== "idle"),

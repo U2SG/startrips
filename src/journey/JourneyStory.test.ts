@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   JourneyStory,
   journeyDeleteDescription,
+  mobileStoryHistoryLayers,
   mediaForRoutePoint,
   replaceJourneySoundtrack,
   storyAssetIndexForId,
@@ -508,6 +509,63 @@ describe("JourneyStory", () => {
     expect(markup).toContain('aria-label="自动播放照片"');
     expect(markup).toContain('aria-pressed="false"');
     expect(markup).not.toContain('aria-label="全屏查看媒体"');
+  });
+
+  it("orders migrated mobile mutation history under Manage while keeping Viewer fullscreen independent", () => {
+    const migratedJourneyDelete = mobileStoryHistoryLayers({
+      mobileLayout: true,
+      mobileManageMode: false,
+      fullscreen: false,
+      mediaMenuOpen: false,
+      mediaDeleteOpen: false,
+      journeyDeleteOpen: true,
+    });
+    expect(migratedJourneyDelete).toEqual({
+      manage: false,
+      mediaSurface: false,
+      journeyDelete: false,
+    });
+
+    const settledJourneyDelete = mobileStoryHistoryLayers({
+      mobileLayout: true,
+      mobileManageMode: true,
+      fullscreen: false,
+      mediaMenuOpen: false,
+      mediaDeleteOpen: false,
+      journeyDeleteOpen: true,
+    });
+    expect(settledJourneyDelete).toEqual({
+      manage: true,
+      mediaSurface: false,
+      journeyDelete: true,
+    });
+
+    const migratedMediaDelete = mobileStoryHistoryLayers({
+      mobileLayout: true,
+      mobileManageMode: false,
+      fullscreen: false,
+      mediaMenuOpen: false,
+      mediaDeleteOpen: true,
+      journeyDeleteOpen: false,
+    });
+    expect(migratedMediaDelete.mediaSurface).toBe(false);
+    expect(mobileStoryHistoryLayers({
+      mobileLayout: true,
+      mobileManageMode: true,
+      fullscreen: false,
+      mediaMenuOpen: false,
+      mediaDeleteOpen: true,
+      journeyDeleteOpen: false,
+    }).mediaSurface).toBe(true);
+
+    expect(mobileStoryHistoryLayers({
+      mobileLayout: true,
+      mobileManageMode: false,
+      fullscreen: true,
+      mediaMenuOpen: false,
+      mediaDeleteOpen: false,
+      journeyDeleteOpen: false,
+    }).mediaSurface).toBe(true);
   });
 
   it("keeps the mobile media stage gesture-first instead of rendering the desktop toolbar", () => {
