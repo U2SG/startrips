@@ -10,6 +10,7 @@ import {
   Group,
   LineBasicMaterial,
   LineSegments,
+  Matrix4,
   Mesh,
   MeshBasicMaterial,
   MeshPhongMaterial,
@@ -33,6 +34,7 @@ import {
   readAudioAtmosphereEnergy,
 } from "../motion/audioAtmosphere";
 import {
+  cityLabelFacingThreshold,
   loadCityTiers,
   resolveCityDisplayName,
   selectCityCandidates,
@@ -311,6 +313,58 @@ export function getRouteFocusPhase(
 ): RouteFocusPhase {
   if (hasRouteFocus) return routeFocusSettling ? "flying" : "settled";
   return routeFocusZoomResetting ? "releasing" : "idle";
+}
+
+export function isProjectedPointInsideViewport(
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+): boolean {
+  return Number.isFinite(x)
+    && Number.isFinite(y)
+    && width > 0
+    && height > 0
+    && x >= 0
+    && x <= width
+    && y >= 0
+    && y <= height;
+}
+
+export function isLocalPointInsideClipViewport(
+  matrixElements: readonly number[],
+  x: number,
+  y: number,
+  z: number,
+): boolean {
+  if (matrixElements.length < 16) return false;
+  const clipX = matrixElements[0] * x
+    + matrixElements[4] * y
+    + matrixElements[8] * z
+    + matrixElements[12];
+  const clipY = matrixElements[1] * x
+    + matrixElements[5] * y
+    + matrixElements[9] * z
+    + matrixElements[13];
+  const clipZ = matrixElements[2] * x
+    + matrixElements[6] * y
+    + matrixElements[10] * z
+    + matrixElements[14];
+  const clipW = matrixElements[3] * x
+    + matrixElements[7] * y
+    + matrixElements[11] * z
+    + matrixElements[15];
+  return Number.isFinite(clipX)
+    && Number.isFinite(clipY)
+    && Number.isFinite(clipZ)
+    && Number.isFinite(clipW)
+    && clipW > 0
+    && clipX >= -clipW
+    && clipX <= clipW
+    && clipY >= -clipW
+    && clipY <= clipW
+    && clipZ >= -clipW
+    && clipZ <= clipW;
 }
 
 export function selectRouteLabelPointIndexes(
@@ -1482,6 +1536,15 @@ export function ParticleEarthScene({
     const routeLocalPoint = new Vector3();
     const routeScreenPoint = new Vector3();
     const routeProjectedPoint = { x: 0, y: 0 };
+    const cityClipMatrix = new Matrix4();
+    const isCityCandidateInsideViewport = (city: CityPoint) => {
+      const x = city.direction[0] * 1.46;
+      const y = city.direction[1] * 1.46;
+      const z = city.direction[2] * 1.46;
+      routeLocalPoint.set(x, y, z);
+      if (!isSphericalPointVisible(routeCameraPosition, routeLocalPoint)) return false;
+      return isLocalPointInsideClipViewport(cityClipMatrix.elements, x, y, z);
+    };
     // The last four slots carry the active card's bounds so a still globe still
     // redraws the connector when the card moves or the layout changes.
     const lastRouteProjectionState = new Float64Array(14).fill(Number.NaN);
@@ -2207,26 +2270,56 @@ export function ParticleEarthScene({
           : scale < 2.1
             ? "prefectures"
             : "all";
+        // Snapshot persistence before a tier reset hides the current pool, so
+        // crossing capitals -> prefectures -> all does not throw away label
+        // hysteresis exactly at the zoom boundary.
+        const persistentCities = new Set(
+          cityLabelPool
+            .filter((entry) => {
+              const city = entry.city;
+              if (!city || entry.element.style.display === "none") return false;
+              const vector = latLonToVector3(city.latitude, city.longitude, 1.46);
+              if (!projectRoutePoint(vector.x, vector.y, vector.z, routeProjectedPoint)) {
+                return false;
+              }
+              return isProjectedPointInsideViewport(
+                routeProjectedPoint.x,
+                routeProjectedPoint.y,
+                targetSize.x,
+                targetSize.y,
+              );
+            })
+            .map((entry) => entry.city!),
+        );
         if (tier !== lastCityTier) {
           lastCityTier = tier;
           for (const entry of cityLabelPool) {
             entry.element.style.display = "none";
           }
         }
-        // Zooming in tightens the facing window; candidates are ordered by
-        // how directly they face the camera, so zooming reveals nearby
-        // cities instead of always the world's largest ones.
-        const facingThreshold = Math.min(
-          0.92,
-          0.3 + (scale - 1) * 0.25,
-        );
+        // Keep the angular coverage stable as zoom increases. Magnification
+        // creates more screen-space room, while the tier only adds lower-rank
+        // places; the candidate set therefore grows monotonically instead of
+        // losing nearby context at close zoom. Previously visible labels get a
+        // modest persistence bonus so tiny wheel/rotation deltas do not churn
+        // dense metro labels, while route labels still win every collision.
+        const facingThreshold = cityLabelFacingThreshold(scale);
         const maxRank = tier === "capitals" ? 1 : tier === "prefectures" ? 2 : 3;
+        // Precompute local -> clip once for this projection state. The regional
+        // all-tier scan can contain ~15k cities; a scalar clip/frustum check
+        // keeps that scan cheap, while full camera projection remains bounded
+        // to the <=72 retained labels below (plus the <=72 persistence snapshot).
+        cityClipMatrix
+          .multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)
+          .multiply(globe.matrixWorld);
         const cities = selectCityCandidates(
           cityTierData.cities,
           [routeCameraPosition.x, routeCameraPosition.y, routeCameraPosition.z],
           facingThreshold,
           CITY_LABEL_BUDGET,
           maxRank,
+          persistentCities,
+          isCityCandidateInsideViewport,
         );
         // Labels must never overlap each other or route labels: place in
         // view-center order and skip any label whose box collides.
@@ -2251,6 +2344,11 @@ export function ParticleEarthScene({
             vector.y,
             vector.z,
             routeProjectedPoint,
+          ) || !isProjectedPointInsideViewport(
+            routeProjectedPoint.x,
+            routeProjectedPoint.y,
+            targetSize.x,
+            targetSize.y,
           )) {
             entry.element.style.display = "none";
             entry.city = null;

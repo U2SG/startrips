@@ -1,8 +1,10 @@
 import {
   BufferGeometry,
   Group,
+  Matrix4,
   Mesh,
   MeshBasicMaterial,
+  PerspectiveCamera,
   Texture,
   Vector3,
 } from "three";
@@ -44,6 +46,8 @@ import {
   isGlobeDrag,
   isPrimaryPointerActivation,
   isSphericalPointVisible,
+  isProjectedPointInsideViewport,
+  isLocalPointInsideClipViewport,
   selectRenderableJourneyRoutes,
   selectRouteLabelPointIndexes,
 } from "./ParticleEarthScene";
@@ -359,6 +363,59 @@ describe("ParticleEarthScene contracts", () => {
     );
     expect(GLOBE_MODE_CONFIG.focusPoint.clusterOpacity).toBe(0);
     expect(GLOBE_MODE_CONFIG.archiveBurst.clusterOpacity).toBeGreaterThan(0);
+  });
+
+  it("only persists city anchors that remain inside the projected viewport", () => {
+    expect(isProjectedPointInsideViewport(0, 0, 390, 844)).toBe(true);
+    expect(isProjectedPointInsideViewport(390, 844, 390, 844)).toBe(true);
+    expect(isProjectedPointInsideViewport(-0.1, 200, 390, 844)).toBe(false);
+    expect(isProjectedPointInsideViewport(390.1, 200, 390, 844)).toBe(false);
+    expect(isProjectedPointInsideViewport(100, 844.1, 390, 844)).toBe(false);
+    expect(isProjectedPointInsideViewport(Number.NaN, 100, 390, 844)).toBe(false);
+  });
+
+  it("matches full camera projection with a precomputed local clip viewport", () => {
+    const camera = new PerspectiveCamera(38, 16 / 9, 0.1, 100);
+    camera.position.set(0, 0, 5.4);
+    camera.updateProjectionMatrix();
+    camera.updateMatrixWorld(true);
+
+    const globe = new Group();
+    globe.position.set(0.18, -0.12, 0);
+    globe.rotation.set(0.2, -0.7, 0);
+    globe.scale.setScalar(2.4);
+    globe.updateWorldMatrix(true, false);
+
+    const clip = new Matrix4()
+      .multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)
+      .multiply(globe.matrixWorld);
+    const samples = [
+      new Vector3(0, 0, 1.46),
+      new Vector3(1.46, 0, 0),
+      new Vector3(-1.46, 0, 0),
+      new Vector3(0, 1.46, 0),
+      new Vector3(0, -1.46, 0),
+      new Vector3(0, 0, -1.46),
+    ];
+
+    for (const point of samples) {
+      const projected = point.clone().applyMatrix4(globe.matrixWorld).project(camera);
+      const expected = Number.isFinite(projected.x)
+        && Number.isFinite(projected.y)
+        && Number.isFinite(projected.z)
+        && projected.x >= -1
+        && projected.x <= 1
+        && projected.y >= -1
+        && projected.y <= 1
+        && projected.z >= -1
+        && projected.z <= 1;
+      expect(isLocalPointInsideClipViewport(
+        clip.elements,
+        point.x,
+        point.y,
+        point.z,
+      )).toBe(expected);
+    }
   });
 
   it("scales route lines with globe zoom while keeping a readable floor and ceiling", () => {

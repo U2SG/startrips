@@ -150,12 +150,122 @@ export function resolveCityDisplayName(
  * national/provincial capitals, 2 to add prefecture cities, or 3 (or omit)
  * for every city.
  */
+/**
+ * Candidate coverage must not shrink as the user zooms in. Screen-space
+ * magnification already creates more room between nearby labels; tightening
+ * the angular window at the same time made local context disappear exactly
+ * when the user asked for more detail. Keep one stable regional window and
+ * let zoom tiers add lower-rank places monotonically.
+ */
+export function cityLabelFacingThreshold(_scale: number): number {
+  return 0.3;
+}
+
+type ScoredCityCandidate = {
+  city: CityPoint;
+  facing: number;
+  score: number;
+};
+
+const ALL_CITY_CANDIDATES_RENDERABLE = () => true;
+
+export function cityCandidateScore(
+  city: CityPoint,
+  facing: number,
+  facingThreshold: number,
+): number {
+  const normalizedFacing = Math.max(0, Math.min(1,
+    (facing - facingThreshold) / Math.max(0.0001, 1 - facingThreshold),
+  ));
+  // View proximity must dominate administrative rank. Large rank bonuses made
+  // distant capitals consume the fixed candidate budget before centered local
+  // cities could even reach screen-space collision placement. Rank remains a
+  // useful preference among similarly positioned cities, but never outweighs
+  // a materially better-facing lower-rank place.
+  const rankBonus = [60, 40, 20, 0][Math.max(0, Math.min(3, city.rank))] ?? 0;
+  const populationBonus = Math.min(180, Math.log10(Math.max(1, city.population)) * 24);
+  return normalizedFacing * 320 + rankBonus + populationBonus;
+}
+
+function compareCityCandidatePriority(
+  left: ScoredCityCandidate,
+  right: ScoredCityCandidate,
+): number {
+  return right.score - left.score
+    || right.facing - left.facing
+    || right.city.population - left.city.population
+    || left.city.name.localeCompare(right.city.name);
+}
+
+/**
+ * Keep a fixed-size min-priority pool whose root is the worst retained city.
+ * Each qualifying source city costs O(log k) comparisons and the pool never
+ * grows past the label budget, avoiding a full regional sort every frame.
+ */
+function isWorseCityCandidate(left: ScoredCityCandidate, right: ScoredCityCandidate): boolean {
+  return compareCityCandidatePriority(left, right) > 0;
+}
+
+function rawCityCandidateOutranks(
+  city: CityPoint,
+  facing: number,
+  score: number,
+  retained: ScoredCityCandidate,
+): boolean {
+  return score > retained.score
+    || (score === retained.score && facing > retained.facing)
+    || (score === retained.score
+      && facing === retained.facing
+      && city.population > retained.city.population)
+    || (score === retained.score
+      && facing === retained.facing
+      && city.population === retained.city.population
+      && city.name.localeCompare(retained.city.name) < 0);
+}
+
+function retainTopCityCandidate(
+  heap: ScoredCityCandidate[],
+  city: CityPoint,
+  facing: number,
+  score: number,
+  limit: number,
+) {
+  if (heap.length < limit) {
+    const candidate = { city, facing, score };
+    heap.push(candidate);
+    let index = heap.length - 1;
+    while (index > 0) {
+      const parent = (index - 1) >> 1;
+      if (!isWorseCityCandidate(heap[index], heap[parent])) break;
+      [heap[index], heap[parent]] = [heap[parent], heap[index]];
+      index = parent;
+    }
+    return;
+  }
+
+  if (!rawCityCandidateOutranks(city, facing, score, heap[0])) return;
+  heap[0] = { city, facing, score };
+  let index = 0;
+  while (true) {
+    const left = index * 2 + 1;
+    if (left >= heap.length) break;
+    const right = left + 1;
+    let worseChild = left;
+    if (right < heap.length && isWorseCityCandidate(heap[right], heap[left])) worseChild = right;
+    if (!isWorseCityCandidate(heap[worseChild], heap[index])) break;
+    [heap[index], heap[worseChild]] = [heap[worseChild], heap[index]];
+    index = worseChild;
+  }
+}
+
 export function selectCityCandidates(
   cities: readonly CityPoint[],
   facingDirection: readonly [number, number, number],
   facingThreshold: number,
   limit: number,
   maxRank = 3,
+  persistentCities: ReadonlySet<CityPoint> = new Set(),
+  isRenderable: (city: CityPoint) => boolean = ALL_CITY_CANDIDATES_RENDERABLE,
 ): CityPoint[] {
   if (limit <= 0) return [];
   const facingLength = Math.hypot(
@@ -167,20 +277,44 @@ export function selectCityCandidates(
   const directionX = facingDirection[0] / facingLength;
   const directionY = facingDirection[1] / facingLength;
   const directionZ = facingDirection[2] / facingLength;
-  const candidates: Array<{ city: CityPoint; facing: number }> = [];
+  const persistent: ScoredCityCandidate[] = [];
+  const top: ScoredCityCandidate[] = [];
+
   for (const city of cities) {
     if (city.rank > maxRank) continue;
     const facing = city.direction[0] * directionX
       + city.direction[1] * directionY
       + city.direction[2] * directionZ;
     if (facing < facingThreshold) continue;
-    candidates.push({ city, facing });
+    // The fixed budget is a rendered-label budget, not merely a hemispheric
+    // budget. Reject candidates outside the current viewport before they can
+    // occupy one of the bounded heap slots.
+    if (!isRenderable(city)) continue;
+    const score = cityCandidateScore(city, facing, facingThreshold);
+    if (persistentCities.has(city)) {
+      persistent.push({ city, facing, score });
+      continue;
+    }
+    // Do not allocate a candidate object for every eligible source city. The
+    // all-tier regional window can contain ~15k cities on a single frame; only
+    // materialize an object when the bounded heap actually retains it.
+    retainTopCityCandidate(top, city, facing, score, limit);
   }
-  candidates.sort(
-    (left, right) => right.facing - left.facing
-      || right.city.population - left.city.population,
-  );
-  return candidates.slice(0, limit).map((candidate) => candidate.city);
+
+  // Explicitly reserve eligible labels that were already visible. This makes
+  // tier expansion monotonic for the actual displayed set instead of hoping a
+  // soft score bonus can beat dozens of newly eligible competitors.
+  persistent.sort(compareCityCandidatePriority);
+  if (persistent.length >= limit) {
+    return persistent.slice(0, limit).map((candidate) => candidate.city);
+  }
+  top.sort(compareCityCandidatePriority);
+  const result = persistent.map((candidate) => candidate.city);
+  for (const candidate of top) {
+    if (result.length >= limit) break;
+    result.push(candidate.city);
+  }
+  return result;
 }
 
 let cityCache: { cities: CityPoint[] } | null = null;
