@@ -8,6 +8,7 @@ import {
   replaceJourneySoundtrack,
   storyAssetIndexForId,
   storyAutoplayNextIndex,
+  shouldHoldWholeJourneyTerminalFrame,
   storyInitialMediaSelection,
   storyMediaNeighborIndex,
   storyUploadedAssetIndex,
@@ -139,6 +140,19 @@ describe("storyAutoplayNextIndex (#76)", () => {
     expect(storyAutoplayNextIndex(0, 3, false)).toBe(1);
     expect(storyAutoplayNextIndex(2, 3, false)).toBe(0);
     expect(storyAutoplayNextIndex(0, 1, false)).toBeNull();
+  });
+});
+
+describe("shouldHoldWholeJourneyTerminalFrame (#76 review)", () => {
+  it("keeps the final whole-Journey frame playing for its terminal interval", () => {
+    expect(shouldHoldWholeJourneyTerminalFrame(2, 3, true)).toBe(true);
+    expect(shouldHoldWholeJourneyTerminalFrame(0, 1, true)).toBe(true);
+  });
+
+  it("does not turn route-point or non-terminal frames into delayed stops", () => {
+    expect(shouldHoldWholeJourneyTerminalFrame(1, 3, true)).toBe(false);
+    expect(shouldHoldWholeJourneyTerminalFrame(2, 3, false)).toBe(false);
+    expect(shouldHoldWholeJourneyTerminalFrame(0, 0, true)).toBe(false);
   });
 });
 

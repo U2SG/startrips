@@ -188,6 +188,14 @@ export function storyAutoplayNextIndex(
   return wholeJourney ? null : 0;
 }
 
+export function shouldHoldWholeJourneyTerminalFrame(
+  currentIndex: number,
+  mediaLength: number,
+  wholeJourney: boolean,
+): boolean {
+  return wholeJourney && mediaLength > 0 && currentIndex >= mediaLength - 1;
+}
+
 export function storyUploadedAssetIndex(
   media: readonly JourneyMediaAsset[],
   uploadedAssetIds: readonly string[],
@@ -780,6 +788,14 @@ export function JourneyStory({
       selectedRoutePointId === null,
     );
     if (nextIndex === null) {
+      if (shouldHoldWholeJourneyTerminalFrame(
+        assetIndex,
+        scopedMedia.length,
+        selectedRoutePointId === null,
+      )) {
+        const timer = window.setTimeout(() => setPlaying(false), 5200);
+        return () => window.clearTimeout(timer);
+      }
       setPlaying(false);
       return;
     }
