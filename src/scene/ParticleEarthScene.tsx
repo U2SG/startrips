@@ -10,6 +10,7 @@ import {
   Group,
   LineBasicMaterial,
   LineSegments,
+  Matrix4,
   Mesh,
   MeshBasicMaterial,
   MeshPhongMaterial,
@@ -328,6 +329,42 @@ export function isProjectedPointInsideViewport(
     && x <= width
     && y >= 0
     && y <= height;
+}
+
+export function isLocalPointInsideClipViewport(
+  matrixElements: readonly number[],
+  x: number,
+  y: number,
+  z: number,
+): boolean {
+  if (matrixElements.length < 16) return false;
+  const clipX = matrixElements[0] * x
+    + matrixElements[4] * y
+    + matrixElements[8] * z
+    + matrixElements[12];
+  const clipY = matrixElements[1] * x
+    + matrixElements[5] * y
+    + matrixElements[9] * z
+    + matrixElements[13];
+  const clipZ = matrixElements[2] * x
+    + matrixElements[6] * y
+    + matrixElements[10] * z
+    + matrixElements[14];
+  const clipW = matrixElements[3] * x
+    + matrixElements[7] * y
+    + matrixElements[11] * z
+    + matrixElements[15];
+  return Number.isFinite(clipX)
+    && Number.isFinite(clipY)
+    && Number.isFinite(clipZ)
+    && Number.isFinite(clipW)
+    && clipW > 0
+    && clipX >= -clipW
+    && clipX <= clipW
+    && clipY >= -clipW
+    && clipY <= clipW
+    && clipZ >= -clipW
+    && clipZ <= clipW;
 }
 
 export function selectRouteLabelPointIndexes(
@@ -1499,6 +1536,15 @@ export function ParticleEarthScene({
     const routeLocalPoint = new Vector3();
     const routeScreenPoint = new Vector3();
     const routeProjectedPoint = { x: 0, y: 0 };
+    const cityClipMatrix = new Matrix4();
+    const isCityCandidateInsideViewport = (city: CityPoint) => {
+      const x = city.direction[0] * 1.46;
+      const y = city.direction[1] * 1.46;
+      const z = city.direction[2] * 1.46;
+      routeLocalPoint.set(x, y, z);
+      if (!isSphericalPointVisible(routeCameraPosition, routeLocalPoint)) return false;
+      return isLocalPointInsideClipViewport(cityClipMatrix.elements, x, y, z);
+    };
     // The last four slots carry the active card's bounds so a still globe still
     // redraws the connector when the card moves or the layout changes.
     const lastRouteProjectionState = new Float64Array(14).fill(Number.NaN);
@@ -2259,6 +2305,13 @@ export function ParticleEarthScene({
         // dense metro labels, while route labels still win every collision.
         const facingThreshold = cityLabelFacingThreshold(scale);
         const maxRank = tier === "capitals" ? 1 : tier === "prefectures" ? 2 : 3;
+        // Precompute local -> clip once for this projection state. The regional
+        // all-tier scan can contain ~15k cities; a scalar clip/frustum check
+        // keeps that scan cheap, while full camera projection remains bounded
+        // to the <=72 retained labels below (plus the <=72 persistence snapshot).
+        cityClipMatrix
+          .multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)
+          .multiply(globe.matrixWorld);
         const cities = selectCityCandidates(
           cityTierData.cities,
           [routeCameraPosition.x, routeCameraPosition.y, routeCameraPosition.z],
@@ -2266,20 +2319,7 @@ export function ParticleEarthScene({
           CITY_LABEL_BUDGET,
           maxRank,
           persistentCities,
-          (city) => {
-            if (!projectRoutePoint(
-              city.direction[0] * 1.46,
-              city.direction[1] * 1.46,
-              city.direction[2] * 1.46,
-              routeProjectedPoint,
-            )) return false;
-            return isProjectedPointInsideViewport(
-              routeProjectedPoint.x,
-              routeProjectedPoint.y,
-              targetSize.x,
-              targetSize.y,
-            );
-          },
+          isCityCandidateInsideViewport,
         );
         // Labels must never overlap each other or route labels: place in
         // view-center order and skip any label whose box collides.
