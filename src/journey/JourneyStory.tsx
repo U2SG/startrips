@@ -717,7 +717,7 @@ export function JourneyStory({
       return;
     }
     if (mobileLayout && mobileManageMode) {
-      exitMobileManageMode();
+      if (!exitMobileManageMode() && uploading) setCloseBlocked(true);
       return;
     }
     if (uploading) {
@@ -983,7 +983,13 @@ export function JourneyStory({
     // A responsive desktop -> compact transition must preserve editing intent.
     // Never label the compact Story as Viewer while an edit-only surface is
     // still mounted; carry that state into explicit Manage mode instead.
-    if (overview || deleteState !== "idle" || mediaDeleteState !== "idle" || moveSelectMode) {
+    if (
+      overview
+      || deleteState !== "idle"
+      || mediaDeleteState !== "idle"
+      || moveSelectMode
+      || mutationPending
+    ) {
       setMobileManageMode(true);
     }
   }, [mobileLayout]);
