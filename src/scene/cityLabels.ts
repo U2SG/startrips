@@ -167,6 +167,8 @@ type ScoredCityCandidate = {
   score: number;
 };
 
+const ALL_CITY_CANDIDATES_RENDERABLE = () => true;
+
 export function cityCandidateScore(
   city: CityPoint,
   facing: number,
@@ -263,6 +265,7 @@ export function selectCityCandidates(
   limit: number,
   maxRank = 3,
   persistentCities: ReadonlySet<CityPoint> = new Set(),
+  isRenderable: (city: CityPoint) => boolean = ALL_CITY_CANDIDATES_RENDERABLE,
 ): CityPoint[] {
   if (limit <= 0) return [];
   const facingLength = Math.hypot(
@@ -283,6 +286,10 @@ export function selectCityCandidates(
       + city.direction[1] * directionY
       + city.direction[2] * directionZ;
     if (facing < facingThreshold) continue;
+    // The fixed budget is a rendered-label budget, not merely a hemispheric
+    // budget. Reject candidates outside the current viewport before they can
+    // occupy one of the bounded heap slots.
+    if (!isRenderable(city)) continue;
     const score = cityCandidateScore(city, facing, facingThreshold);
     if (persistentCities.has(city)) {
       persistent.push({ city, facing, score });

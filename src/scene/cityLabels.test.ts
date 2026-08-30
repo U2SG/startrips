@@ -289,6 +289,36 @@ describe("stable zoom-aware city candidate policy (#79)", () => {
     for (const city of before) expect(after).toContain(city);
   });
 
+  it("applies viewport eligibility before consuming the fixed candidate budget", () => {
+    const crowded = parseCityList({ cities: [
+      ...Array.from({ length: 90 }, (_, index) => ({
+        n: `Offscreen ${index}`,
+        la: 0,
+        lo: index * 0.05,
+        p: 3000000 - index,
+        r: 0,
+      })),
+      ...Array.from({ length: 72 }, (_, index) => ({
+        n: `Onscreen ${index}`,
+        la: 0,
+        lo: 5 + index * 0.05,
+        p: 1000000 - index,
+        r: 2,
+      })),
+    ] });
+    const result = selectCityCandidates(
+      crowded,
+      [1, 0, 0],
+      0.3,
+      72,
+      2,
+      new Set(),
+      (city) => city.name.startsWith("Onscreen"),
+    );
+    expect(result).toHaveLength(72);
+    expect(result.every((city) => city.name.startsWith("Onscreen"))).toBe(true);
+  });
+
   it("keeps the retained candidate set bounded for a large regional source", () => {
     const many = parseCityList({ cities: Array.from({ length: 5000 }, (_, index) => ({
       n: `City ${index}`,

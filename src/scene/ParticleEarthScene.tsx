@@ -2266,6 +2266,20 @@ export function ParticleEarthScene({
           CITY_LABEL_BUDGET,
           maxRank,
           persistentCities,
+          (city) => {
+            if (!projectRoutePoint(
+              city.direction[0] * 1.46,
+              city.direction[1] * 1.46,
+              city.direction[2] * 1.46,
+              routeProjectedPoint,
+            )) return false;
+            return isProjectedPointInsideViewport(
+              routeProjectedPoint.x,
+              routeProjectedPoint.y,
+              targetSize.x,
+              targetSize.y,
+            );
+          },
         );
         // Labels must never overlap each other or route labels: place in
         // view-center order and skip any label whose box collides.
@@ -2290,6 +2304,11 @@ export function ParticleEarthScene({
             vector.y,
             vector.z,
             routeProjectedPoint,
+          ) || !isProjectedPointInsideViewport(
+            routeProjectedPoint.x,
+            routeProjectedPoint.y,
+            targetSize.x,
+            targetSize.y,
           )) {
             entry.element.style.display = "none";
             entry.city = null;
