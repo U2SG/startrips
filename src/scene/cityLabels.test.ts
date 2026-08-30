@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   cityLabelFacingThreshold,
-  cityStableKey,
   parseCityFeatures,
   parseCityList,
   resolveCityDisplayName,
@@ -267,12 +266,48 @@ describe("stable zoom-aware city candidate policy (#79)", () => {
     expect(result.map((city) => city.name)).toContain("Centered Local");
   });
 
+  it("explicitly reserves eligible persistent candidates across crowded tier expansion", () => {
+    const base = parseCityList({ cities: [
+      ...Array.from({ length: 72 }, (_, index) => ({
+        n: `Existing ${index}`,
+        la: 0,
+        lo: index * 0.15,
+        p: 1000000 - index,
+        r: 1,
+      })),
+      ...Array.from({ length: 90 }, (_, index) => ({
+        n: `New ${index}`,
+        la: 0,
+        lo: index * 0.1,
+        p: 2000000 - index,
+        r: 2,
+      })),
+    ] });
+    const before = selectCityCandidates(base, [1, 0, 0], 0.3, 72, 1);
+    const after = selectCityCandidates(base, [1, 0, 0], 0.3, 72, 2, new Set(before));
+    expect(after).toHaveLength(72);
+    for (const city of before) expect(after).toContain(city);
+  });
+
+  it("keeps the retained candidate set bounded for a large regional source", () => {
+    const many = parseCityList({ cities: Array.from({ length: 5000 }, (_, index) => ({
+      n: `City ${index}`,
+      la: (index % 80) * 0.1,
+      lo: (index % 120) * 0.1,
+      p: 1000000 + index,
+      r: index % 4,
+    })) });
+    const result = selectCityCandidates(many, [1, 0, 0], 0.3, 72, 3);
+    expect(result).toHaveLength(72);
+    expect(new Set(result).size).toBe(72);
+  });
+
   it("uses persistence as hysteresis for otherwise equivalent nearby labels", () => {
     const twins = parseCityList({ cities: [
       { n: "Visible", la: 22.5, lo: 114, p: 1000000, r: 2 },
       { n: "Challenger", la: 22.5, lo: 114, p: 1000000, r: 2 },
     ] });
-    const persistent = new Set([cityStableKey(twins[0])]);
+    const persistent = new Set([twins[0]]);
     const result = selectCityCandidates(
       twins,
       twins[0].direction,
@@ -287,10 +322,16 @@ describe("stable zoom-aware city candidate policy (#79)", () => {
   it("expanding rank tiers is monotonic for a fixed view", () => {
     const shenzhen = pearlRiverDelta.find((city) => city.name === "Shenzhen")!;
     const capitals = selectCityCandidates(pearlRiverDelta, shenzhen.direction, 0.3, 72, 1);
-    const prefectures = selectCityCandidates(pearlRiverDelta, shenzhen.direction, 0.3, 72, 2);
-    const capitalKeys = new Set(capitals.map(cityStableKey));
-    const prefectureKeys = new Set(prefectures.map(cityStableKey));
-    for (const key of capitalKeys) expect(prefectureKeys.has(key)).toBe(true);
+    const prefectures = selectCityCandidates(
+      pearlRiverDelta,
+      shenzhen.direction,
+      0.3,
+      72,
+      2,
+      new Set(capitals),
+    );
+    const prefectureSet = new Set(prefectures);
+    for (const city of capitals) expect(prefectureSet.has(city)).toBe(true);
     expect(prefectures.length).toBeGreaterThanOrEqual(capitals.length);
   });
 });

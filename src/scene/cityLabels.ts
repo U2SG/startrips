@@ -150,10 +150,6 @@ export function resolveCityDisplayName(
  * national/provincial capitals, 2 to add prefecture cities, or 3 (or omit)
  * for every city.
  */
-export function cityStableKey(city: Pick<CityPoint, "name" | "latitude" | "longitude">): string {
-  return `${city.name}\u0000${city.latitude.toFixed(4)}\u0000${city.longitude.toFixed(4)}`;
-}
-
 /**
  * Candidate coverage must not shrink as the user zooms in. Screen-space
  * magnification already creates more room between nearby labels; tightening
@@ -165,11 +161,16 @@ export function cityLabelFacingThreshold(_scale: number): number {
   return 0.3;
 }
 
+type ScoredCityCandidate = {
+  city: CityPoint;
+  facing: number;
+  score: number;
+};
+
 export function cityCandidateScore(
   city: CityPoint,
   facing: number,
   facingThreshold: number,
-  persistent = false,
 ): number {
   const normalizedFacing = Math.max(0, Math.min(1,
     (facing - facingThreshold) / Math.max(0.0001, 1 - facingThreshold),
@@ -181,8 +182,57 @@ export function cityCandidateScore(
   // a materially better-facing lower-rank place.
   const rankBonus = [60, 40, 20, 0][Math.max(0, Math.min(3, city.rank))] ?? 0;
   const populationBonus = Math.min(180, Math.log10(Math.max(1, city.population)) * 24);
-  const persistenceBonus = persistent ? 70 : 0;
-  return normalizedFacing * 320 + rankBonus + populationBonus + persistenceBonus;
+  return normalizedFacing * 320 + rankBonus + populationBonus;
+}
+
+function compareCityCandidatePriority(
+  left: ScoredCityCandidate,
+  right: ScoredCityCandidate,
+): number {
+  return right.score - left.score
+    || right.facing - left.facing
+    || right.city.population - left.city.population
+    || left.city.name.localeCompare(right.city.name);
+}
+
+/**
+ * Keep a fixed-size min-priority pool whose root is the worst retained city.
+ * Each qualifying source city costs O(log k) comparisons and the pool never
+ * grows past the label budget, avoiding a full regional sort every frame.
+ */
+function retainTopCityCandidate(
+  heap: ScoredCityCandidate[],
+  candidate: ScoredCityCandidate,
+  limit: number,
+) {
+  const isWorse = (left: ScoredCityCandidate, right: ScoredCityCandidate) =>
+    compareCityCandidatePriority(left, right) > 0;
+
+  if (heap.length < limit) {
+    heap.push(candidate);
+    let index = heap.length - 1;
+    while (index > 0) {
+      const parent = (index - 1) >> 1;
+      if (!isWorse(heap[index], heap[parent])) break;
+      [heap[index], heap[parent]] = [heap[parent], heap[index]];
+      index = parent;
+    }
+    return;
+  }
+
+  if (!isWorse(heap[0], candidate)) return;
+  heap[0] = candidate;
+  let index = 0;
+  while (true) {
+    const left = index * 2 + 1;
+    if (left >= heap.length) break;
+    const right = left + 1;
+    let worseChild = left;
+    if (right < heap.length && isWorse(heap[right], heap[left])) worseChild = right;
+    if (!isWorse(heap[worseChild], heap[index])) break;
+    [heap[index], heap[worseChild]] = [heap[worseChild], heap[index]];
+    index = worseChild;
+  }
 }
 
 export function selectCityCandidates(
@@ -191,7 +241,7 @@ export function selectCityCandidates(
   facingThreshold: number,
   limit: number,
   maxRank = 3,
-  persistentCityKeys: ReadonlySet<string> = new Set(),
+  persistentCities: ReadonlySet<CityPoint> = new Set(),
 ): CityPoint[] {
   if (limit <= 0) return [];
   const facingLength = Math.hypot(
@@ -203,31 +253,41 @@ export function selectCityCandidates(
   const directionX = facingDirection[0] / facingLength;
   const directionY = facingDirection[1] / facingLength;
   const directionZ = facingDirection[2] / facingLength;
-  const candidates: Array<{ city: CityPoint; facing: number; score: number }> = [];
+  const persistent: ScoredCityCandidate[] = [];
+  const top: ScoredCityCandidate[] = [];
+
   for (const city of cities) {
     if (city.rank > maxRank) continue;
     const facing = city.direction[0] * directionX
       + city.direction[1] * directionY
       + city.direction[2] * directionZ;
     if (facing < facingThreshold) continue;
-    candidates.push({
+    const candidate = {
       city,
       facing,
-      score: cityCandidateScore(
-        city,
-        facing,
-        facingThreshold,
-        persistentCityKeys.has(cityStableKey(city)),
-      ),
-    });
+      score: cityCandidateScore(city, facing, facingThreshold),
+    };
+    if (persistentCities.has(city)) {
+      persistent.push(candidate);
+      continue;
+    }
+    retainTopCityCandidate(top, candidate, limit);
   }
-  candidates.sort(
-    (left, right) => right.score - left.score
-      || right.facing - left.facing
-      || right.city.population - left.city.population
-      || left.city.name.localeCompare(right.city.name),
-  );
-  return candidates.slice(0, limit).map((candidate) => candidate.city);
+
+  // Explicitly reserve eligible labels that were already visible. This makes
+  // tier expansion monotonic for the actual displayed set instead of hoping a
+  // soft score bonus can beat dozens of newly eligible competitors.
+  persistent.sort(compareCityCandidatePriority);
+  if (persistent.length >= limit) {
+    return persistent.slice(0, limit).map((candidate) => candidate.city);
+  }
+  top.sort(compareCityCandidatePriority);
+  const result = persistent.map((candidate) => candidate.city);
+  for (const candidate of top) {
+    if (result.length >= limit) break;
+    result.push(candidate.city);
+  }
+  return result;
 }
 
 let cityCache: { cities: CityPoint[] } | null = null;

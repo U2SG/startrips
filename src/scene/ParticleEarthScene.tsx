@@ -34,7 +34,6 @@ import {
 } from "../motion/audioAtmosphere";
 import {
   cityLabelFacingThreshold,
-  cityStableKey,
   loadCityTiers,
   resolveCityDisplayName,
   selectCityCandidates,
@@ -2212,10 +2211,10 @@ export function ParticleEarthScene({
         // Snapshot persistence before a tier reset hides the current pool, so
         // crossing capitals -> prefectures -> all does not throw away label
         // hysteresis exactly at the zoom boundary.
-        const persistentCityKeys = new Set(
+        const persistentCities = new Set(
           cityLabelPool
             .filter((entry) => entry.city && entry.element.style.display !== "none")
-            .map((entry) => cityStableKey(entry.city!)),
+            .map((entry) => entry.city!),
         );
         if (tier !== lastCityTier) {
           lastCityTier = tier;
@@ -2237,7 +2236,7 @@ export function ParticleEarthScene({
           facingThreshold,
           CITY_LABEL_BUDGET,
           maxRank,
-          persistentCityKeys,
+          persistentCities,
         );
         // Labels must never overlap each other or route labels: place in
         // view-center order and skip any label whose box collides.
