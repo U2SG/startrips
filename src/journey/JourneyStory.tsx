@@ -1374,7 +1374,12 @@ export function JourneyStory({
     // otherwise follows this same release; a drag that axis-locked but
     // didn't cross the threshold still reads as a tap, same as pre-drag.
     const commit = Boolean(drag && drag.axis === "x" && Math.abs(drag.dx) >= MEDIA_DRAG_THRESHOLD_PX && drag.neighborAsset);
-    const reopenFullscreenAfterSettle = Boolean(drag && drag.axis === "x" && !commit && drag.tapOpensFullscreen);
+    const reopenFullscreenAfterSettle = Boolean(
+      drag
+      && drag.axis === "x"
+      && Math.abs(drag.dx) < MEDIA_DRAG_THRESHOLD_PX
+      && drag.tapOpensFullscreen,
+    );
     if (commit || reopenFullscreenAfterSettle) storyMediaGestureConsumedRef.current = true;
     settleMediaDrag(commit);
     if (reopenFullscreenAfterSettle) {

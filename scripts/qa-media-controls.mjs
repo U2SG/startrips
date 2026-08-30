@@ -156,6 +156,20 @@ try {
       stage.addEventListener("gotpointercapture", (event) => { stage.dataset.qaCapturedPointer = String(event.pointerId); });
       stage.addEventListener("lostpointercapture", (event) => { if (event.target === stage && String(event.pointerId) === stage.dataset.qaCapturedPointer) stage.dataset.qaReleasedPointer = String(event.pointerId); });
     });
+    // At the first asset, a large outward drag has no neighbor. It must spring
+    // back as overscroll, not be reinterpreted as the image tap that opens
+    // fullscreen merely because `commit` is false.
+    await touch.send("Input.dispatchTouchEvent", {
+      type: "touchStart",
+      touchPoints: [{ x: swipeStartX, y: swipeY }],
+    });
+    await touch.send("Input.dispatchTouchEvent", {
+      type: "touchMove",
+      touchPoints: [{ x: swipeStartX + 80, y: swipeY }],
+    });
+    await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await story.page.waitForTimeout(300);
+    const inlineEdgeOverscrollOpenedFullscreen = await story.page.locator(".journey-story-fullscreen").isVisible();
     await touch.send("Input.dispatchTouchEvent", {
       type: "touchStart",
       touchPoints: [{ x: swipeStartX, y: swipeY }],
@@ -189,7 +203,7 @@ try {
     try {
       await jitterFullscreen.waitFor({ state: "visible", timeout: 1_500 });
       inlineJitterOpenedFullscreen = true;
-      await story.page.getByRole("button", { name: "退出沉浸媒体" }).click();
+      await story.page.keyboard.press("Escape");
       await jitterFullscreen.waitFor({ state: "hidden", timeout: 1_500 });
     } catch {
       inlineJitterOpenedFullscreen = false;
@@ -229,10 +243,21 @@ try {
       desktopOnlyControls,
       inlineCapturedDuringDrag,
       inlineReleasedAfterDrag,
+      inlineEdgeOverscrollOpenedFullscreen,
       inlineJitterOpenedFullscreen,
-      failed: desktopOnlyControls !== 0 || !inlineCapturedDuringDrag || !inlineReleasedAfterDrag || !inlineJitterOpenedFullscreen,
+      failed: desktopOnlyControls !== 0
+        || !inlineCapturedDuringDrag
+        || !inlineReleasedAfterDrag
+        || inlineEdgeOverscrollOpenedFullscreen
+        || !inlineJitterOpenedFullscreen,
     });
-    if (desktopOnlyControls !== 0 || !inlineCapturedDuringDrag || !inlineReleasedAfterDrag || !inlineJitterOpenedFullscreen) failed = true;
+    if (
+      desktopOnlyControls !== 0
+      || !inlineCapturedDuringDrag
+      || !inlineReleasedAfterDrag
+      || inlineEdgeOverscrollOpenedFullscreen
+      || !inlineJitterOpenedFullscreen
+    ) failed = true;
 
     const manageTrigger = story.page.getByRole("button", { name: "管理当前媒体" });
     const manageTriggerBox = await manageTrigger.boundingBox();
