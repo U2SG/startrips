@@ -6,9 +6,14 @@ import {
   type FormEvent,
   type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
 import { IconChevronDown, IconUserCircle } from "@tabler/icons-react";
 import { StartripsBrandLoader } from "../brand/StartripsBrandMark";
+import { useCompactMobileLayout } from "../journey/mobileLayout";
+import { useMobileSurfaceHistory } from "../journey/useMobileSurfaceHistory";
+import { useModalFocus } from "../journey/useModalFocus";
 import { usePersistentEarth } from "../scene/LivingAtlasGlobe";
+import { previousAccountSurface, shouldActivateAccountSheetFocus, shouldRenderStandaloneAccountDock, type AccountSurface } from "./accountSurface";
 import { authClient } from "./auth-client";
 
 type OrganizationSummary = {
@@ -43,6 +48,13 @@ const AtlasCinematicContext = createContext<(active: boolean) => void>(() => und
 
 export function useAtlasCinematicIsolation() {
   return useContext(AtlasCinematicContext);
+}
+
+const MobileAccountSlotContext = createContext<(host: HTMLElement | null) => void>(() => undefined);
+
+export function MobileAccountActionSlot() {
+  const setHost = useContext(MobileAccountSlotContext);
+  return <span className="mobile-v2__account-slot" ref={setHost} />;
 }
 
 async function responseError(response: Response): Promise<string> {
@@ -359,14 +371,42 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cine
   const [editTitle, setEditTitle] = useState("");
   const [editDedication, setEditDedication] = useState("");
   const [dockOpen, setDockOpen] = useState(false);
+  const [accountSurface, setAccountSurface] = useState<AccountSurface>(null);
+  const [mobileAccountHost, setMobileAccountHost] = useState<HTMLElement | null>(null);
+  const isMobileV2 = useCompactMobileLayout();
+  const accountSheetOpen = isMobileV2 && accountSurface !== null;
+  const accountFormOpen = accountSurface === "invite" || accountSurface === "edit";
+  const accountSheetFocusActive = shouldActivateAccountSheetFocus(accountSheetOpen, gate.kind === "ready");
+  const accountSheetRef = useModalFocus<HTMLElement>(
+    () => setAccountSurface((surface) => previousAccountSurface(surface)),
+    accountSheetFocusActive,
+  );
+
+  useMobileSurfaceHistory(
+    accountSheetOpen,
+    "account-sheet",
+    () => setAccountSurface(null),
+  );
+  useMobileSurfaceHistory(
+    isMobileV2 && accountFormOpen,
+    "account-form",
+    () => setAccountSurface("menu"),
+  );
 
   useEffect(() => {
     setSelectedActiveId(activeOrganizationId);
   }, [activeOrganizationId]);
 
   useEffect(() => {
-    if (cinematicActive) setDockOpen(false);
+    if (!cinematicActive) return;
+    setDockOpen(false);
+    setAccountSurface(null);
   }, [cinematicActive]);
+
+  useEffect(() => {
+    if (isMobileV2) setDockOpen(false);
+    else setAccountSurface(null);
+  }, [isMobileV2]);
 
   useEffect(() => {
     if (gate.kind !== "loading") onReady?.();
@@ -484,6 +524,7 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cine
     }
     setInviteEmail("");
     setInviteOpen(false);
+    if (isMobileV2) setAccountSurface("menu");
     setMessage("邀请邮件已发送。");
   }
 
@@ -501,6 +542,7 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cine
       setMessage(await responseError(response));
     } else {
       setEditAtlasOpen(false);
+      if (isMobileV2) setAccountSurface("menu");
       setMessage("图谱信息已更新。");
     }
     setPending(false);
@@ -530,51 +572,118 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cine
   }
 
   const isOwner = gate.role.split(",").includes("owner");
-  return (
-    <>
-      <aside
-        className={`account-dock${dockOpen ? " is-open" : ""}${cinematicActive ? " is-cinematic-hidden" : ""}`}
-        inert={cinematicActive || undefined}
-        aria-hidden={cinematicActive || undefined}
+  const openMobileEdit = () => {
+    setEditTitle(gate.atlas.title);
+    setEditDedication(gate.atlas.dedication);
+    setMessage("");
+    setAccountSurface("edit");
+  };
+  const mobileAccountTrigger = isMobileV2 && mobileAccountHost && !cinematicActive
+    ? createPortal(
+      <button
+        className="mobile-v2__account-trigger"
+        type="button"
+        aria-label="打开账户菜单"
+        aria-expanded={accountSheetOpen}
+        aria-controls="account-mobile-sheet"
+        onClick={() => setAccountSurface((surface) => surface === null ? "menu" : null)}
       >
-        <button
-          className="account-dock__tab"
-          type="button"
-          aria-label={dockOpen ? "收起账户菜单" : "展开账户菜单"}
-          aria-expanded={dockOpen}
-          aria-controls="account-dock-panel"
-          onClick={() => setDockOpen((value) => !value)}
+        <IconUserCircle size={19} stroke={1.35} aria-hidden="true" />
+      </button>,
+      mobileAccountHost,
+    )
+    : null;
+
+  return (
+    <MobileAccountSlotContext.Provider value={setMobileAccountHost}>
+      {mobileAccountTrigger}
+      {shouldRenderStandaloneAccountDock(isMobileV2, mobileAccountHost !== null) ? (
+        <aside
+          className={`account-dock${dockOpen ? " is-open" : ""}${cinematicActive ? " is-cinematic-hidden" : ""}`}
+          inert={cinematicActive || undefined}
+          aria-hidden={cinematicActive || undefined}
         >
-          <IconUserCircle size={19} stroke={1.35} aria-hidden="true" />
-          <IconChevronDown className="account-dock__tab-chevron" size={14} stroke={1.35} aria-hidden="true" />
-        </button>
-        <div id="account-dock-panel" className="account-dock__panel">
-          <span className="account-dock__identity"><strong>{gate.atlas.title}</strong> · {userName}</span>
-          {message ? <small>{message}</small> : null}
-          <div className="account-dock__actions">
-            {isOwner ? <button type="button" onClick={() => { setEditAtlasOpen(false); setInviteOpen((value) => !value); }}>邀请另一位</button> : null}
-            <button type="button" onClick={() => { setInviteOpen(false); setEditTitle(gate.atlas.title); setEditDedication(gate.atlas.dedication); setEditAtlasOpen((value) => !value); setMessage(""); }}>编辑图谱</button>
-            <button type="button" onClick={() => void authClient.signOut().then(() => window.location.assign("/"))}>退出</button>
+          <button
+            className="account-dock__tab"
+            type="button"
+            aria-label={dockOpen ? "收起账户菜单" : "展开账户菜单"}
+            aria-expanded={dockOpen}
+            aria-controls="account-dock-panel"
+            onClick={() => setDockOpen((value) => !value)}
+          >
+            <IconUserCircle size={19} stroke={1.35} aria-hidden="true" />
+            <IconChevronDown className="account-dock__tab-chevron" size={14} stroke={1.35} aria-hidden="true" />
+          </button>
+          <div id="account-dock-panel" className="account-dock__panel">
+            <span className="account-dock__identity"><strong>{gate.atlas.title}</strong> · {userName}</span>
+            {message ? <small>{message}</small> : null}
+            <div className="account-dock__actions">
+              {isOwner ? <button type="button" onClick={() => { setEditAtlasOpen(false); setInviteOpen((value) => !value); }}>邀请另一位</button> : null}
+              <button type="button" onClick={() => { setInviteOpen(false); setEditTitle(gate.atlas.title); setEditDedication(gate.atlas.dedication); setEditAtlasOpen((value) => !value); setMessage(""); }}>编辑图谱</button>
+              <button type="button" onClick={() => void authClient.signOut().then(() => window.location.assign("/"))}>退出</button>
+            </div>
+            {inviteOpen ? (
+              <form onSubmit={invite}>
+                <label><span>对方邮箱</span><input required type="email" value={inviteEmail} onChange={(event) => setInviteEmail(event.target.value)} /></label>
+                <button type="submit" disabled={pending}>发送邀请</button>
+              </form>
+            ) : null}
+            {editAtlasOpen ? (
+              <form onSubmit={saveAtlas}>
+                <label><span>图谱名称</span><input required maxLength={80} value={editTitle} onChange={(event) => setEditTitle(event.target.value)} /></label>
+                <label><span>题词（可选）</span><textarea rows={2} maxLength={240} value={editDedication} onChange={(event) => setEditDedication(event.target.value)} /></label>
+                <button type="submit" disabled={pending}>{pending ? "保存中…" : "保存"}</button>
+              </form>
+            ) : null}
           </div>
-          {inviteOpen ? (
-            <form onSubmit={invite}>
-              <label><span>对方邮箱</span><input required type="email" value={inviteEmail} onChange={(event) => setInviteEmail(event.target.value)} /></label>
-              <button type="submit" disabled={pending}>发送邀请</button>
-            </form>
-          ) : null}
-          {editAtlasOpen ? (
-            <form onSubmit={saveAtlas}>
-              <label><span>图谱名称</span><input required maxLength={80} value={editTitle} onChange={(event) => setEditTitle(event.target.value)} /></label>
-              <label><span>题词（可选）</span><textarea rows={2} maxLength={240} value={editDedication} onChange={(event) => setEditDedication(event.target.value)} /></label>
-              <button type="submit" disabled={pending}>{pending ? "保存中…" : "保存"}</button>
-            </form>
-          ) : null}
+        </aside>
+      ) : null}
+      {accountSheetOpen ? (
+        <div className="account-sheet-layer">
+          <button className="account-sheet__backdrop" type="button" tabIndex={-1} aria-label="关闭账户菜单" onClick={() => setAccountSurface(null)} />
+          <section ref={accountSheetRef} id="account-mobile-sheet" className="account-sheet" tabIndex={-1} role="dialog" aria-modal="true" aria-labelledby="account-sheet-title">
+            <button className="account-sheet__handle" type="button" aria-label="关闭账户菜单" onClick={() => setAccountSurface(null)}><span aria-hidden="true" /></button>
+            {accountSurface === "menu" ? (
+              <>
+                <header className="account-sheet__identity">
+                  <IconUserCircle size={24} stroke={1.2} aria-hidden="true" />
+                  <div><p>PRIVATE ATLAS</p><h2 id="account-sheet-title">{gate.atlas.title}</h2><span>{userName}</span></div>
+                </header>
+                {message ? <p className="account-sheet__message" role="status">{message}</p> : null}
+                <div className="account-sheet__actions">
+                  {isOwner ? <button type="button" onClick={() => { setMessage(""); setAccountSurface("invite"); }}><span>邀请另一位</span><small>发送私人图谱邀请</small></button> : null}
+                  <button type="button" onClick={openMobileEdit}><span>编辑图谱</span><small>修改名称与题词</small></button>
+                  <button type="button" onClick={() => void authClient.signOut().then(() => window.location.assign("/"))}><span>退出</span><small>退出当前账户</small></button>
+                </div>
+              </>
+            ) : (
+              <>
+                <header className="account-sheet__drill-header">
+                  <button type="button" onClick={() => setAccountSurface("menu")} aria-label="返回账户菜单">‹</button>
+                  <div><p>{accountSurface === "invite" ? "INVITATION" : "ATLAS DETAILS"}</p><h2 id="account-sheet-title">{accountSurface === "invite" ? "邀请另一位" : "编辑图谱"}</h2></div>
+                </header>
+                {message ? <p className="account-sheet__message" role="alert">{message}</p> : null}
+                {accountSurface === "invite" ? (
+                  <form className="account-sheet__form" onSubmit={invite}>
+                    <label><span>对方邮箱</span><input required type="email" inputMode="email" autoComplete="email" value={inviteEmail} onChange={(event) => setInviteEmail(event.target.value)} /></label>
+                    <button type="submit" disabled={pending}>{pending ? "发送中…" : "发送邀请"}</button>
+                  </form>
+                ) : (
+                  <form className="account-sheet__form" onSubmit={saveAtlas}>
+                    <label><span>图谱名称</span><input required maxLength={80} value={editTitle} onChange={(event) => setEditTitle(event.target.value)} /></label>
+                    <label><span>题词（可选）</span><textarea rows={3} maxLength={240} value={editDedication} onChange={(event) => setEditDedication(event.target.value)} /></label>
+                    <button type="submit" disabled={pending}>{pending ? "保存中…" : "保存"}</button>
+                  </form>
+                )}
+              </>
+            )}
+          </section>
         </div>
-      </aside>
+      ) : null}
       <AtlasCapabilitiesContext.Provider value={{ canDeleteJourney: isOwner }}>
         {children}
       </AtlasCapabilitiesContext.Provider>
-    </>
+    </MobileAccountSlotContext.Provider>
   );
 }
 

@@ -5750,11 +5750,9 @@ body:has(.journey-composer-backdrop.is-globe-picking) .account-dock {
   display: flex;
   gap: 6px;
   pointer-events: auto;
-  /* Reserve room for .account-dock, which docks to the same header row
-     as its own rightmost circle (see auth-gate.css); keeps the two
-     independent trees from overlapping regardless of icon count. */
-  margin-right: calc(var(--mobile-control-hit-size, 44px) + 6px);
 }
+
+.mobile-v2__account-slot { display: contents; }
 
 .mobile-v2__header button {
   width: var(--mobile-control-hit-size, 44px);

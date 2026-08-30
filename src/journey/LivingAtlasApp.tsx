@@ -10,7 +10,7 @@ import {
   IconWorld,
   IconX,
 } from "@tabler/icons-react";
-import { useAtlasCapabilities, useAtlasCinematicIsolation } from "../auth/AuthGateway";
+import { MobileAccountActionSlot, useAtlasCapabilities, useAtlasCinematicIsolation } from "../auth/AuthGateway";
 import { StartripsBrandLoader } from "../brand/StartripsBrandMark";
 import { CountUp } from "../motion/primitives/CountUp";
 import { useMagnet } from "../motion/primitives/Magnet";
@@ -757,6 +757,7 @@ export function LivingAtlasApp({
         <header className="mobile-v2__header">
           <div className="mobile-v2__brand"><IconWorld size={18} stroke={1.2} aria-hidden="true" /><strong>Startrips</strong></div>
           <nav aria-label="移动端旅程操作">
+            <MobileAccountActionSlot />
             <button type="button" onClick={openCreateComposer} aria-label="记录新旅程"><IconPlus size={18} stroke={1.4} aria-hidden="true" /></button>
             {journeys.length > 0 ? (
               <button type="button" onClick={() => setMobilePickerOpen(true)} aria-label="打开全部旅程"><IconTimeline size={18} stroke={1.4} aria-hidden="true" /></button>
