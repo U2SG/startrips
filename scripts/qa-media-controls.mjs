@@ -180,6 +180,20 @@ try {
     });
     await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
     const inlineReleasedAfterDrag = await mediaStage.evaluate((stage) => Boolean(stage.dataset.qaReleasedPointer));
+    // The 30px horizontal move above intentionally crosses the 8px intent
+    // lock but stays below the 48px navigation threshold. Because pointer
+    // capture retargets the eventual click to the stage, the component must
+    // explicitly preserve the image tap and still enter fullscreen.
+    let inlineJitterOpenedFullscreen = false;
+    const jitterFullscreen = story.page.locator(".journey-story-fullscreen");
+    try {
+      await jitterFullscreen.waitFor({ state: "visible", timeout: 1_500 });
+      inlineJitterOpenedFullscreen = true;
+      await story.page.getByRole("button", { name: "退出沉浸媒体" }).click();
+      await jitterFullscreen.waitFor({ state: "hidden", timeout: 1_500 });
+    } catch {
+      inlineJitterOpenedFullscreen = false;
+    }
     await mediaStage.dispatchEvent("pointerdown", {
       pointerId: 11,
       pointerType: "touch",
@@ -215,9 +229,10 @@ try {
       desktopOnlyControls,
       inlineCapturedDuringDrag,
       inlineReleasedAfterDrag,
-      failed: desktopOnlyControls !== 0 || !inlineCapturedDuringDrag || !inlineReleasedAfterDrag,
+      inlineJitterOpenedFullscreen,
+      failed: desktopOnlyControls !== 0 || !inlineCapturedDuringDrag || !inlineReleasedAfterDrag || !inlineJitterOpenedFullscreen,
     });
-    if (desktopOnlyControls !== 0 || !inlineCapturedDuringDrag || !inlineReleasedAfterDrag) failed = true;
+    if (desktopOnlyControls !== 0 || !inlineCapturedDuringDrag || !inlineReleasedAfterDrag || !inlineJitterOpenedFullscreen) failed = true;
 
     const manageTrigger = story.page.getByRole("button", { name: "管理当前媒体" });
     const manageTriggerBox = await manageTrigger.boundingBox();

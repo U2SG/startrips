@@ -528,6 +528,7 @@ export function JourneyStory({
     pointerId: number;
     dx: number;
     axis: "x" | "y" | null;
+    tapOpensFullscreen: boolean;
     wrap: boolean;
     neighborIndex: number;
     neighborAsset: JourneyMediaAsset | null;
@@ -1186,7 +1187,7 @@ export function JourneyStory({
     }
   }
 
-  function beginMediaDrag(container: HTMLElement | null, pointerId: number, clientX: number, clientY: number, wrap: boolean) {
+  function beginMediaDrag(container: HTMLElement | null, pointerId: number, clientX: number, clientY: number, wrap: boolean, tapOpensFullscreen = false) {
     if (!container || mediaDragSettlingRef.current || incomingAssetId !== null || mutationPending || overview || scopedMedia.length < 2) return;
     const base = container.querySelector<HTMLElement>(":scope > img, :scope > video");
     if (!base) return;
@@ -1200,6 +1201,7 @@ export function JourneyStory({
       pointerId,
       dx: 0,
       axis: null,
+      tapOpensFullscreen,
       wrap,
       neighborIndex: -1,
       neighborAsset: null,
@@ -1348,7 +1350,14 @@ export function JourneyStory({
   function handleStoryMediaPointerDown(event: ReactPointerEvent<HTMLElement>) {
     storyMediaGestureConsumedRef.current = false;
     if (!mobileLayout || overview || !event.isPrimary || !mediaGestureCanStart(event.target, event.clientY)) return;
-    beginMediaDrag(event.currentTarget, event.pointerId, event.clientX, event.clientY, false);
+    beginMediaDrag(
+      event.currentTarget,
+      event.pointerId,
+      event.clientX,
+      event.clientY,
+      false,
+      event.target instanceof HTMLImageElement,
+    );
   }
 
   function handleStoryMediaPointerMove(event: ReactPointerEvent<HTMLElement>) {
@@ -1365,8 +1374,12 @@ export function JourneyStory({
     // otherwise follows this same release; a drag that axis-locked but
     // didn't cross the threshold still reads as a tap, same as pre-drag.
     const commit = Boolean(drag && drag.axis === "x" && Math.abs(drag.dx) >= MEDIA_DRAG_THRESHOLD_PX && drag.neighborAsset);
-    if (commit) storyMediaGestureConsumedRef.current = true;
+    const reopenFullscreenAfterSettle = Boolean(drag && drag.axis === "x" && !commit && drag.tapOpensFullscreen);
+    if (commit || reopenFullscreenAfterSettle) storyMediaGestureConsumedRef.current = true;
     settleMediaDrag(commit);
+    if (reopenFullscreenAfterSettle) {
+      window.setTimeout(() => enterFullscreen(false), prefersReducedMotion() ? 0 : MEDIA_DRAG_SETTLE_MS);
+    }
   }
 
   function handleStoryMediaPointerCancel(event: ReactPointerEvent<HTMLElement>) {
