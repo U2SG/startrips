@@ -18,6 +18,14 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ## 2026-08-30
 
+### PR #95 — Make mobile Story collapsible and spatial
+
+- **Source head:** `6431c51efede9abca22dc97162ef3b84a6b74321`
+- **Scope:** Reworks compact-mobile Journey Story into a two-state spatial sheet with an in-context collapsed presentation and an expanded modal presentation, shared mobile-surface history ownership, and gesture handling for expand/collapse without stealing media navigation or Story scrolling.
+- **User-visible change:** Mobile Story now opens as a lower in-context sheet that keeps the globe available, can be expanded with the handle or vertical swipe, and collapses predictably with Browser Back while fullscreen returns to the prior Story snap state.
+- **Review fixes:** Raised the sheet handle to the 44px mobile touch-target contract; clears stale expanded state when leaving compact layout; made collapsed Story explicitly non-modal while expanded Story restores modal focus/inert semantics; and added Chromium QA across 320/360/390/430 portrait plus phone landscape for handle geometry, modal/inert transitions, Browser Back, vertical sheet gestures, media horizontal ownership, Story scrolling, and fullscreen snap restoration.
+- **Follow-up:** None known at merge time.
+
 ### PR #90 — Separate mobile experience and Journey management modes
 
 - **Source head:** `b47dbe0e72efe4cf280ad6db66c65d40094eacce`

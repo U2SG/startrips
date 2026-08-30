@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   JourneyStory,
   journeyDeleteDescription,
+  mobileStoryExpandedForLayout,
   mobileStoryHistoryLayers,
   mediaForRoutePoint,
   replaceJourneySoundtrack,
@@ -511,6 +512,16 @@ describe("JourneyStory", () => {
     expect(markup).not.toContain('aria-label="全屏查看媒体"');
   });
 
+  it("clears expanded Story state across a compact breakpoint round trip", () => {
+    const expandedOnMobile = mobileStoryExpandedForLayout(true, true);
+    const afterDesktop = mobileStoryExpandedForLayout(false, expandedOnMobile);
+    const backOnMobile = mobileStoryExpandedForLayout(true, afterDesktop);
+
+    expect(expandedOnMobile).toBe(true);
+    expect(afterDesktop).toBe(false);
+    expect(backOnMobile).toBe(false);
+  });
+
   it("orders migrated mobile mutation history under Manage while keeping Viewer fullscreen independent", () => {
     const migratedJourneyDelete = mobileStoryHistoryLayers({
       mobileLayout: true,
@@ -593,6 +604,9 @@ describe("JourneyStory", () => {
 
     expect(markup).toContain('data-mobile-layout="true"');
     expect(markup).toContain('data-mobile-mode="viewer"');
+    expect(markup).toContain('data-mobile-presentation="in-context"');
+    expect(markup).toContain('aria-label="展开旅程故事"');
+    expect(markup).toContain('aria-expanded="false"');
     expect(markup).toContain('aria-label="管理旅程"');
     expect(markup).not.toContain('aria-label="管理当前媒体"');
     expect(markup).not.toContain("添加照片或视频");

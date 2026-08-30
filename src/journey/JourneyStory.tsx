@@ -32,6 +32,8 @@ import {
   IconArrowRight,
   IconArrowDown,
   IconArrowUp,
+  IconChevronDown,
+  IconChevronUp,
   IconDots,
   IconPhotoStar,
   IconEdit,
@@ -140,6 +142,10 @@ function formatUploadError(message: string) {
     return "媒体存储尚未配置，旅程内容不会受影响。配置对象存储后可以直接重试。";
   }
   return message;
+}
+
+export function mobileStoryExpandedForLayout(mobileLayout: boolean, expanded: boolean) {
+  return mobileLayout ? expanded : false;
 }
 
 export function mobileStoryHistoryLayers({
@@ -594,6 +600,9 @@ export function JourneyStory({
   const playingRef = useRef(false);
   playingRef.current = playing;
   const mobileLayout = useCompactMobileLayout();
+  const [mobileStoryExpanded, setMobileStoryExpanded] = useState(false);
+  const storySheetGestureRef = useRef<{ startY: number; pointerId: number } | null>(null);
+  const storySheetGestureConsumedRef = useRef(false);
   const [fullscreen, setFullscreen] = useState(false);
   // #7: fullscreen controls fade out after idle; any pointer/key activity
   // brings them back. Mobile starts fully immersive and reveals controls only
@@ -667,6 +676,42 @@ export function JourneyStory({
     || orderPending
     || coverPending
     || movePending;
+
+  function collapseMobileStory() {
+    setMobileStoryExpanded(false);
+  }
+
+  function toggleMobileStoryPresentation() {
+    if (storySheetGestureConsumedRef.current) {
+      storySheetGestureConsumedRef.current = false;
+      return;
+    }
+    setMobileStoryExpanded((current) => !current);
+  }
+
+  function handleStorySheetPointerDown(event: ReactPointerEvent<HTMLButtonElement>) {
+    if (!mobileLayout || event.pointerType === "mouse") return;
+    storySheetGestureConsumedRef.current = false;
+    storySheetGestureRef.current = { startY: event.clientY, pointerId: event.pointerId };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function handleStorySheetPointerUp(event: ReactPointerEvent<HTMLButtonElement>) {
+    const gesture = storySheetGestureRef.current;
+    storySheetGestureRef.current = null;
+    if (!gesture || gesture.pointerId !== event.pointerId) return;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    const dy = event.clientY - gesture.startY;
+    if (Math.abs(dy) >= 32) storySheetGestureConsumedRef.current = true;
+    if (dy <= -32) setMobileStoryExpanded(true);
+    else if (dy >= 32) setMobileStoryExpanded(false);
+  }
+
+  function handleStorySheetPointerCancel(event: ReactPointerEvent<HTMLButtonElement>) {
+    if (storySheetGestureRef.current?.pointerId !== event.pointerId) return;
+    storySheetGestureRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+  }
 
   function exitFullscreen() {
     if (typeof window !== "undefined") {
@@ -773,6 +818,10 @@ export function JourneyStory({
     onClose(sharedSource);
   }
 
+  // Expanded Story is the parent mobile presentation layer. Manage and its
+  // transient mutation/fullscreen surfaces register afterward so Browser Back
+  // unwinds the active intent before collapsing the Story sheet.
+  useMobileSurfaceHistory(mobileStoryExpanded && mobileLayout, "story-expanded", collapseMobileStory);
   const mobileHistoryLayers = mobileStoryHistoryLayers({
     mobileLayout,
     mobileManageMode,
@@ -799,7 +848,8 @@ export function JourneyStory({
     if (mobileMediaMenuOpen) setMobileMediaMenuOpen(false);
   });
   useMobileSurfaceHistory(mobileHistoryLayers.journeyDelete, "story-journey-delete", closeJourneyDelete);
-  const dialogRef = useModalFocus<HTMLElement>(requestClose);
+  const storyModal = !mobileLayout || mobileStoryExpanded;
+  const dialogRef = useModalFocus<HTMLElement>(requestClose, storyModal);
   const mobileMediaSheetRef = useNestedModalFocus<HTMLElement>(
     mobileLayout && (mobileMediaMenuOpen || mediaDeleteState !== "idle"),
     mobileMediaMenuOpen ? "manage" : mediaDeleteState !== "idle" ? "delete" : null,
@@ -819,6 +869,7 @@ export function JourneyStory({
     setOrderPending(false);
     setOrderMessage("");
     setPlaying(false);
+    setMobileStoryExpanded(false);
     exitFullscreen();
     setMobileManageMode(false);
     setMobileMediaMenuOpen(false);
@@ -1018,6 +1069,7 @@ export function JourneyStory({
 
   useEffect(() => {
     if (!mobileLayout) {
+      setMobileStoryExpanded((expanded) => mobileStoryExpandedForLayout(false, expanded));
       setMobileMediaMenuOpen(false);
       return;
     }
@@ -2249,17 +2301,39 @@ export function JourneyStory({
   }
 
   const content = (
-    <div className="journey-story-backdrop" role="presentation" onClick={closeFromBackdrop}>
+    <div
+      className={`journey-story-backdrop${mobileLayout ? " is-mobile-context" : ""}${mobileLayout && mobileStoryExpanded ? " is-story-expanded" : ""}`}
+      role="presentation"
+      onClick={closeFromBackdrop}
+    >
       <article
         ref={dialogRef}
         tabIndex={-1}
         className={`journey-story motion-staged${mobileLayout && mobileManageMode ? " is-mobile-manage" : ""}`}
         data-mobile-mode={mobileLayout ? (mobileManageMode ? "manage" : "viewer") : undefined}
+        data-mobile-presentation={mobileLayout ? (mobileStoryExpanded ? "expanded" : "in-context") : undefined}
         role="dialog"
-        aria-modal="true"
+        aria-modal={storyModal ? "true" : undefined}
         aria-labelledby="journey-story-title"
         onWheel={scrollCopyFromMedia}
       >
+        {mobileLayout ? (
+          <button
+            type="button"
+            className="journey-story__sheet-handle"
+            aria-label={mobileStoryExpanded ? "收起旅程故事" : "展开旅程故事"}
+            aria-expanded={mobileStoryExpanded}
+            onClick={toggleMobileStoryPresentation}
+            onPointerDown={handleStorySheetPointerDown}
+            onPointerUp={handleStorySheetPointerUp}
+            onPointerCancel={handleStorySheetPointerCancel}
+          >
+            <span aria-hidden="true" />
+            {mobileStoryExpanded
+              ? <IconChevronDown size={17} stroke={1.5} aria-hidden="true" />
+              : <IconChevronUp size={17} stroke={1.5} aria-hidden="true" />}
+          </button>
+        ) : null}
         <header>
           <div>
             <p>PRIVATE JOURNEY · {journeyRange(journey)}</p>
