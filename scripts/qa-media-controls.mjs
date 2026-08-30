@@ -331,14 +331,33 @@ try {
     await story.page.waitForFunction(() => document.querySelector(".journey-story")?.getAttribute("data-mobile-mode") === "manage");
     const manageMutationButtons = await story.page.getByRole("button", { name: /编辑旅程|删除旅程/ }).count();
     const manageDone = story.page.getByRole("button", { name: "完成" });
+    await story.page.waitForFunction(() => document.activeElement?.textContent?.includes("完成"));
+    const manageFocusTransferred = await manageDone.evaluate((button) => document.activeElement === button);
     checks.push({
       name: "story-mobile-manage-mode-reveals-mutations",
       manageMutationButtons,
       hasDone: await manageDone.count() === 1,
-      failed: manageMutationButtons < 2 || await manageDone.count() !== 1,
+      manageFocusTransferred,
+      failed: manageMutationButtons < 2 || await manageDone.count() !== 1 || !manageFocusTransferred,
     });
-    if (manageMutationButtons < 2 || await manageDone.count() !== 1) failed = true;
+    if (manageMutationButtons < 2 || await manageDone.count() !== 1 || !manageFocusTransferred) failed = true;
 
+    const journeyDeleteButton = story.page.locator(".journey-story__manage .is-destructive");
+    await journeyDeleteButton.click();
+    const journeyDeleteConfirmation = story.page.locator(".journey-story__delete-confirmation");
+    await journeyDeleteConfirmation.waitFor({ state: "visible" });
+    await manageDone.click();
+    await story.page.waitForFunction(() => document.querySelector(".journey-story")?.getAttribute("data-mobile-mode") === "viewer");
+    const deleteConfirmationLeakedToViewer = await journeyDeleteConfirmation.count() !== 0;
+    checks.push({
+      name: "story-mobile-delete-confirmation-owned-by-manage",
+      deleteConfirmationLeakedToViewer,
+      failed: deleteConfirmationLeakedToViewer,
+    });
+    if (deleteConfirmationLeakedToViewer) failed = true;
+
+    await story.page.getByRole("button", { name: "管理旅程" }).click();
+    await story.page.waitForFunction(() => document.querySelector(".journey-story")?.getAttribute("data-mobile-mode") === "manage");
     await story.page.evaluate(() => window.history.back());
     await story.page.waitForFunction(() => document.querySelector(".journey-story")?.getAttribute("data-mobile-mode") === "viewer");
     const manageExitedOnBack = await storyRoot.getAttribute("data-mobile-mode") === "viewer";

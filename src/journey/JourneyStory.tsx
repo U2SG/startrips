@@ -604,6 +604,8 @@ export function JourneyStory({
   } | null>(null);
   const mediaDragSettlingRef = useRef(false);
   const [mobileManageMode, setMobileManageMode] = useState(false);
+  const mobileManageDoneRef = useRef<HTMLButtonElement>(null);
+  const mobileManageFocusFrameRef = useRef<number | null>(null);
   const [mobileMediaMenuOpen, setMobileMediaMenuOpen] = useState(false);
   // Review P2: the fullscreen overlay is a focus trap of its own (it is
   // rendered outside the story dialog, whose useModalFocus would otherwise
@@ -664,7 +666,15 @@ export function JourneyStory({
     setDeleteMessage("");
   }
 
+  function enterMobileManageMode() {
+    setPlaying(false);
+    setMobileManageMode(true);
+  }
+
   function exitMobileManageMode() {
+    if (deleteState === "pending") return;
+    setDeleteState("idle");
+    setDeleteMessage("");
     setMobileMediaMenuOpen(false);
     setMediaDeleteState("idle");
     setMediaDeleteMessage("");
@@ -767,6 +777,23 @@ export function JourneyStory({
   useEffect(() => {
     if (deleteState === "confirming") deleteCancelRef.current?.focus();
   }, [deleteState]);
+
+  useEffect(() => {
+    if (!mobileLayout || !mobileManageMode || typeof window === "undefined") return;
+    const firstFrame = window.requestAnimationFrame(() => {
+      const secondFrame = window.requestAnimationFrame(() => {
+        mobileManageDoneRef.current?.focus({ preventScroll: true });
+      });
+      mobileManageFocusFrameRef.current = secondFrame;
+    });
+    mobileManageFocusFrameRef.current = firstFrame;
+    return () => {
+      if (mobileManageFocusFrameRef.current !== null) {
+        window.cancelAnimationFrame(mobileManageFocusFrameRef.current);
+        mobileManageFocusFrameRef.current = null;
+      }
+    };
+  }, [mobileLayout, mobileManageMode]);
 
   useEffect(() => {
     if (mediaDeleteState === "confirming") mediaDeleteCancelRef.current?.focus();
@@ -2396,10 +2423,7 @@ export function JourneyStory({
                   label="管理旅程"
                   tooltip="管理旅程"
                   disabled={mutationPending}
-                  onClick={() => {
-                    setPlaying(false);
-                    setMobileManageMode(true);
-                  }}
+                  onClick={enterMobileManageMode}
                 >
                   <IconDots size={19} stroke={1.5} aria-hidden="true" />
                 </IconActionButton>
@@ -2419,8 +2443,7 @@ export function JourneyStory({
                   disabled={mutationPending}
                   onClick={() => {
                     if (!mobileManageMode) {
-                      setPlaying(false);
-                      setMobileManageMode(true);
+                      enterMobileManageMode();
                       return;
                     }
                     setMobileMediaMenuOpen((open) => !open);
@@ -2596,7 +2619,7 @@ export function JourneyStory({
             {mobileLayout && mobileManageMode ? (
               <div className="journey-story__mobile-manage-bar" role="status">
                 <div><small>MANAGE JOURNEY</small><strong>管理旅程</strong></div>
-                <button type="button" disabled={mutationPending} onClick={exitMobileManageMode}>完成</button>
+                <button ref={mobileManageDoneRef} type="button" disabled={mutationPending} onClick={exitMobileManageMode}>完成</button>
               </div>
             ) : null}
             {onDelete && deleteState !== "idle" ? (
