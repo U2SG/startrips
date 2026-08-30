@@ -333,14 +333,22 @@ try {
     const manageDone = story.page.getByRole("button", { name: "完成" });
     await story.page.waitForFunction(() => document.activeElement?.textContent?.includes("完成"));
     const manageFocusTransferred = await manageDone.evaluate((button) => document.activeElement === button);
+    const manageDoneVisible = await manageDone.evaluate((button) => {
+      const rect = button.getBoundingClientRect();
+      return rect.top >= 0
+        && rect.left >= 0
+        && rect.bottom <= window.innerHeight
+        && rect.right <= window.innerWidth;
+    });
     checks.push({
       name: "story-mobile-manage-mode-reveals-mutations",
       manageMutationButtons,
       hasDone: await manageDone.count() === 1,
       manageFocusTransferred,
-      failed: manageMutationButtons < 2 || await manageDone.count() !== 1 || !manageFocusTransferred,
+      manageDoneVisible,
+      failed: manageMutationButtons < 2 || await manageDone.count() !== 1 || !manageFocusTransferred || !manageDoneVisible,
     });
-    if (manageMutationButtons < 2 || await manageDone.count() !== 1 || !manageFocusTransferred) failed = true;
+    if (manageMutationButtons < 2 || await manageDone.count() !== 1 || !manageFocusTransferred || !manageDoneVisible) failed = true;
 
     const journeyDeleteButton = story.page.locator(".journey-story__manage .is-destructive");
     await journeyDeleteButton.click();

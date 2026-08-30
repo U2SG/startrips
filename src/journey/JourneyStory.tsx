@@ -860,7 +860,7 @@ export function JourneyStory({
     if (!mobileManageMode) restoreMobileManageViewerFocusRef.current = false;
     const firstFrame = window.requestAnimationFrame(() => {
       const secondFrame = window.requestAnimationFrame(() => {
-        focusTarget.current?.focus({ preventScroll: true });
+        focusTarget.current?.focus(mobileManageMode ? undefined : { preventScroll: true });
       });
       mobileManageFocusFrameRef.current = secondFrame;
     });
