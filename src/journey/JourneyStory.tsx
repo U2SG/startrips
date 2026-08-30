@@ -529,6 +529,7 @@ export function JourneyStory({
     dx: number;
     axis: "x" | "y" | null;
     tapOpensFullscreen: boolean;
+    preserveNativeVideoCapture: boolean;
     wrap: boolean;
     neighborIndex: number;
     neighborAsset: JourneyMediaAsset | null;
@@ -1187,7 +1188,7 @@ export function JourneyStory({
     }
   }
 
-  function beginMediaDrag(container: HTMLElement | null, pointerId: number, clientX: number, clientY: number, wrap: boolean, tapOpensFullscreen = false) {
+  function beginMediaDrag(container: HTMLElement | null, pointerId: number, clientX: number, clientY: number, wrap: boolean, tapOpensFullscreen = false, preserveNativeVideoCapture = false) {
     if (!container || mediaDragSettlingRef.current || incomingAssetId !== null || mutationPending || overview || scopedMedia.length < 2) return;
     const base = container.querySelector<HTMLElement>(":scope > img, :scope > video");
     if (!base) return;
@@ -1202,6 +1203,7 @@ export function JourneyStory({
       dx: 0,
       axis: null,
       tapOpensFullscreen,
+      preserveNativeVideoCapture,
       wrap,
       neighborIndex: -1,
       neighborAsset: null,
@@ -1225,14 +1227,16 @@ export function JourneyStory({
         return;
       }
       drag.axis = "x";
-      try {
-        if (!drag.container.hasPointerCapture(pointerId)) {
-          drag.container.setPointerCapture(pointerId);
+      if (!drag.preserveNativeVideoCapture) {
+        try {
+          if (!drag.container.hasPointerCapture(pointerId)) {
+            drag.container.setPointerCapture(pointerId);
+          }
+        } catch {
+          // Synthetic QA events and a pointer cancelled by the browser between
+          // dispatch and this handler can no longer be captured. The existing
+          // local-event path still settles safely if its terminal event arrives.
         }
-      } catch {
-        // Synthetic QA events and a pointer cancelled by the browser between
-        // dispatch and this handler can no longer be captured. The existing
-        // local-event path still settles safely if its terminal event arrives.
       }
     }
     if (drag.axis !== "x") return;
@@ -1357,6 +1361,7 @@ export function JourneyStory({
       event.clientY,
       false,
       event.target instanceof HTMLImageElement,
+      event.target instanceof Element && event.target.closest("video") instanceof HTMLVideoElement,
     );
   }
 
@@ -1418,7 +1423,15 @@ export function JourneyStory({
 
   function handleFullscreenPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
     if (!mobileLayout || !event.isPrimary || !mediaGestureCanStart(event.target, event.clientY)) return;
-    beginMediaDrag(event.currentTarget, event.pointerId, event.clientX, event.clientY, true);
+    beginMediaDrag(
+      event.currentTarget,
+      event.pointerId,
+      event.clientX,
+      event.clientY,
+      true,
+      false,
+      event.target instanceof Element && event.target.closest("video") instanceof HTMLVideoElement,
+    );
   }
 
   function handleFullscreenPointerMove(event: ReactPointerEvent<HTMLDivElement>) {
