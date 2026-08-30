@@ -348,25 +348,31 @@ try {
     await journeyDeleteConfirmation.waitFor({ state: "visible" });
     await manageDone.click();
     await story.page.waitForFunction(() => document.querySelector(".journey-story")?.getAttribute("data-mobile-mode") === "viewer");
+    await story.page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "管理旅程");
+    const manageDoneFocusRestored = await story.page.getByRole("button", { name: "管理旅程" }).evaluate((button) => document.activeElement === button);
     const deleteConfirmationLeakedToViewer = await journeyDeleteConfirmation.count() !== 0;
     checks.push({
       name: "story-mobile-delete-confirmation-owned-by-manage",
       deleteConfirmationLeakedToViewer,
-      failed: deleteConfirmationLeakedToViewer,
+      manageDoneFocusRestored,
+      failed: deleteConfirmationLeakedToViewer || !manageDoneFocusRestored,
     });
-    if (deleteConfirmationLeakedToViewer) failed = true;
+    if (deleteConfirmationLeakedToViewer || !manageDoneFocusRestored) failed = true;
 
     await story.page.getByRole("button", { name: "管理旅程" }).click();
     await story.page.waitForFunction(() => document.querySelector(".journey-story")?.getAttribute("data-mobile-mode") === "manage");
     await story.page.evaluate(() => window.history.back());
     await story.page.waitForFunction(() => document.querySelector(".journey-story")?.getAttribute("data-mobile-mode") === "viewer");
+    await story.page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "管理旅程");
     const manageExitedOnBack = await storyRoot.getAttribute("data-mobile-mode") === "viewer";
+    const manageBackFocusRestored = await story.page.getByRole("button", { name: "管理旅程" }).evaluate((button) => document.activeElement === button);
     checks.push({
       name: "story-mobile-manage-back-contract",
       manageExitedOnBack,
-      failed: !manageExitedOnBack,
+      manageBackFocusRestored,
+      failed: !manageExitedOnBack || !manageBackFocusRestored,
     });
-    if (!manageExitedOnBack) failed = true;
+    if (!manageExitedOnBack || !manageBackFocusRestored) failed = true;
 
     await story.page.getByRole("button", { name: "管理旅程" }).click();
     await story.page.waitForFunction(() => document.querySelector(".journey-story")?.getAttribute("data-mobile-mode") === "manage");

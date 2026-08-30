@@ -605,7 +605,9 @@ export function JourneyStory({
   const mediaDragSettlingRef = useRef(false);
   const [mobileManageMode, setMobileManageMode] = useState(false);
   const mobileManageDoneRef = useRef<HTMLButtonElement>(null);
+  const mobileManageViewerTriggerRef = useRef<HTMLButtonElement>(null);
   const mobileManageFocusFrameRef = useRef<number | null>(null);
+  const restoreMobileManageViewerFocusRef = useRef(false);
   const [mobileMediaMenuOpen, setMobileMediaMenuOpen] = useState(false);
   // Review P2: the fullscreen overlay is a focus trap of its own (it is
   // rendered outside the story dialog, whose useModalFocus would otherwise
@@ -682,6 +684,7 @@ export function JourneyStory({
     setMoveSelectMode(false);
     setMoveSelection(new Set());
     setMoveMessage("");
+    restoreMobileManageViewerFocusRef.current = true;
     setMobileManageMode(false);
   }
 
@@ -779,10 +782,17 @@ export function JourneyStory({
   }, [deleteState]);
 
   useEffect(() => {
-    if (!mobileLayout || !mobileManageMode || typeof window === "undefined") return;
+    if (!mobileLayout || typeof window === "undefined") return;
+    const focusTarget = mobileManageMode
+      ? mobileManageDoneRef
+      : restoreMobileManageViewerFocusRef.current
+        ? mobileManageViewerTriggerRef
+        : null;
+    if (!focusTarget) return;
+    if (!mobileManageMode) restoreMobileManageViewerFocusRef.current = false;
     const firstFrame = window.requestAnimationFrame(() => {
       const secondFrame = window.requestAnimationFrame(() => {
-        mobileManageDoneRef.current?.focus({ preventScroll: true });
+        focusTarget.current?.focus({ preventScroll: true });
       });
       mobileManageFocusFrameRef.current = secondFrame;
     });
@@ -2420,6 +2430,7 @@ export function JourneyStory({
                 <IconActionButton
                   type="button"
                   className="journey-story__mobile-media-menu-trigger"
+                  buttonRef={mobileManageViewerTriggerRef}
                   label="管理旅程"
                   tooltip="管理旅程"
                   disabled={mutationPending}
@@ -2434,6 +2445,7 @@ export function JourneyStory({
                 <IconActionButton
                   type="button"
                   className="journey-story__mobile-media-menu-trigger"
+                  buttonRef={mobileManageViewerTriggerRef}
                   label={mobileManageMode ? "管理当前媒体" : "管理旅程"}
                   tooltip={mobileManageMode ? "管理媒体" : "管理旅程"}
                   aria-expanded={mobileManageMode ? mobileMediaMenuOpen : undefined}
