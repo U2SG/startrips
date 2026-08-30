@@ -593,6 +593,9 @@ describe("JourneyStory", () => {
 
     expect(markup).toContain('data-mobile-layout="true"');
     expect(markup).toContain('data-mobile-mode="viewer"');
+    expect(markup).toContain('data-mobile-presentation="in-context"');
+    expect(markup).toContain('aria-label="展开旅程故事"');
+    expect(markup).toContain('aria-expanded="false"');
     expect(markup).toContain('aria-label="管理旅程"');
     expect(markup).not.toContain('aria-label="管理当前媒体"');
     expect(markup).not.toContain("添加照片或视频");

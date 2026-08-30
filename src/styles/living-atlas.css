@@ -4977,16 +4977,69 @@ body:has(.journey-composer-backdrop.is-globe-picking) .account-dock {
     box-shadow: none;
   }
 
+  .journey-story-backdrop.is-mobile-context {
+    display: flex;
+    align-items: flex-end;
+    justify-content: stretch;
+    background: linear-gradient(180deg, rgba(0, 3, 4, 0.04) 0%, rgba(0, 3, 4, 0.18) 34%, rgba(0, 3, 4, 0.56) 100%);
+    overflow: hidden;
+    pointer-events: none;
+  }
+
+  .journey-story-backdrop.is-mobile-context .journey-story {
+    pointer-events: auto;
+  }
+
   .journey-story {
+    position: relative;
     display: block;
-    max-height: none;
+    height: min(72svh, 680px);
+    max-height: min(72svh, 680px);
     overflow-y: auto;
+    border: 1px solid rgba(118, 198, 188, 0.2);
+    border-bottom: 0;
+    border-radius: 24px 24px 0 0;
+    background: rgba(2, 8, 9, 0.97);
+    box-shadow: 0 -24px 72px rgba(0, 0, 0, 0.42);
+    transition: height var(--motion-content, 560ms) var(--motion-ease-out, ease), max-height var(--motion-content, 560ms) var(--motion-ease-out, ease);
+  }
+
+  .journey-story-backdrop.is-story-expanded .journey-story {
+    height: 100svh;
+    max-height: 100svh;
+    border-radius: 0;
+  }
+
+  .journey-story__sheet-handle {
+    position: sticky;
+    z-index: 6;
+    top: 0;
+    width: 100%;
+    height: 30px;
+    min-height: 30px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 0;
+    border: 0;
+    border-bottom: 1px solid rgba(118, 198, 188, 0.1);
+    background: rgba(2, 8, 9, 0.96);
+    color: rgba(190, 214, 207, 0.7);
+    touch-action: none;
+  }
+
+  .journey-story__sheet-handle > span {
+    width: 38px;
+    height: 4px;
+    border-radius: 999px;
+    background: rgba(203, 241, 193, 0.28);
   }
 
   .journey-story > header {
     position: sticky;
     z-index: 4;
-    top: 0;
+    top: 30px;
     height: 62px;
     padding: 0 12px;
   }
@@ -4996,6 +5049,11 @@ body:has(.journey-composer-backdrop.is-globe-picking) .account-dock {
   }
 
   .journey-story__media {
+    height: 38svh;
+    min-height: 240px;
+  }
+
+  .journey-story[data-mobile-presentation="expanded"] .journey-story__media {
     height: 47svh;
     min-height: 300px;
   }
