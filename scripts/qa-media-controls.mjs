@@ -346,6 +346,19 @@ try {
     await journeyDeleteButton.click();
     const journeyDeleteConfirmation = story.page.locator(".journey-story__delete-confirmation");
     await journeyDeleteConfirmation.waitFor({ state: "visible" });
+    await story.page.evaluate(() => window.history.back());
+    await journeyDeleteConfirmation.waitFor({ state: "detached" });
+    await story.page.waitForFunction(() => document.activeElement?.textContent?.includes("删除旅程"));
+    const journeyDeleteBackFocusRestored = await journeyDeleteButton.evaluate((button) => document.activeElement === button);
+    checks.push({
+      name: "story-mobile-journey-delete-back-focus",
+      journeyDeleteBackFocusRestored,
+      failed: !journeyDeleteBackFocusRestored,
+    });
+    if (!journeyDeleteBackFocusRestored) failed = true;
+
+    await journeyDeleteButton.click();
+    await journeyDeleteConfirmation.waitFor({ state: "visible" });
     await manageDone.click();
     await story.page.waitForFunction(() => document.querySelector(".journey-story")?.getAttribute("data-mobile-mode") === "viewer");
     await story.page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "管理旅程");

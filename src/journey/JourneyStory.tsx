@@ -625,6 +625,7 @@ export function JourneyStory({
   const audioSamplerRef = useRef(createSoundtrackSampler());
   const soundtrackLightRef = useRef<HTMLDivElement>(null);
   const deleteCancelRef = useRef<HTMLButtonElement>(null);
+  const journeyDeleteTriggerRef = useRef<HTMLButtonElement>(null);
   const mediaDeleteCancelRef = useRef<HTMLButtonElement>(null);
   const copyRef = useRef<HTMLElement>(null);
   const pendingReads = useRef(new Set<string>());
@@ -675,6 +676,13 @@ export function JourneyStory({
     if (deleteState === "pending") return false;
     setDeleteState("idle");
     setDeleteMessage("");
+    if (mobileLayout && typeof window !== "undefined") {
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => {
+          journeyDeleteTriggerRef.current?.focus({ preventScroll: true });
+        });
+      });
+    }
     return true;
   }
 
@@ -2821,7 +2829,7 @@ export function JourneyStory({
           {(!mobileLayout || mobileManageMode) ? (
             <div className="journey-story__manage">
               <button type="button" disabled={mutationPending || deleteState !== "idle"} onClick={() => onEdit(journey.id)}><IconEdit size={16} stroke={1.35} aria-hidden="true" />编辑旅程</button>
-              {onDelete ? <button className="is-destructive" type="button" disabled={mutationPending || deleteState !== "idle"} onClick={() => { setDeleteState("confirming"); setDeleteMessage(""); }}><IconTrash size={16} stroke={1.35} aria-hidden="true" />删除旅程</button> : null}
+              {onDelete ? <button ref={journeyDeleteTriggerRef} className="is-destructive" type="button" disabled={mutationPending || deleteState !== "idle"} onClick={() => { setDeleteState("confirming"); setDeleteMessage(""); }}><IconTrash size={16} stroke={1.35} aria-hidden="true" />删除旅程</button> : null}
             </div>
           ) : null}
           <div className="journey-story__navigation">
