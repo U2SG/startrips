@@ -7,3 +7,6 @@ export function previousAccountSurface(surface: AccountSurface): AccountSurface 
 export function shouldRenderStandaloneAccountDock(isMobileV2: boolean, hasMobileAccountHost: boolean): boolean {
   return !isMobileV2 || !hasMobileAccountHost;
 }
+export function shouldActivateAccountSheetFocus(accountSheetOpen: boolean, atlasReady: boolean): boolean {
+  return accountSheetOpen && atlasReady;
+}

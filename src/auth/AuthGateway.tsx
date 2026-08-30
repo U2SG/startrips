@@ -13,7 +13,7 @@ import { useCompactMobileLayout } from "../journey/mobileLayout";
 import { useMobileSurfaceHistory } from "../journey/useMobileSurfaceHistory";
 import { useModalFocus } from "../journey/useModalFocus";
 import { usePersistentEarth } from "../scene/LivingAtlasGlobe";
-import { previousAccountSurface, shouldRenderStandaloneAccountDock, type AccountSurface } from "./accountSurface";
+import { previousAccountSurface, shouldActivateAccountSheetFocus, shouldRenderStandaloneAccountDock, type AccountSurface } from "./accountSurface";
 import { authClient } from "./auth-client";
 
 type OrganizationSummary = {
@@ -376,9 +376,10 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cine
   const isMobileV2 = useCompactMobileLayout();
   const accountSheetOpen = isMobileV2 && accountSurface !== null;
   const accountFormOpen = accountSurface === "invite" || accountSurface === "edit";
+  const accountSheetFocusActive = shouldActivateAccountSheetFocus(accountSheetOpen, gate.kind === "ready");
   const accountSheetRef = useModalFocus<HTMLElement>(
     () => setAccountSurface((surface) => previousAccountSurface(surface)),
-    accountSheetOpen,
+    accountSheetFocusActive,
   );
 
   useMobileSurfaceHistory(

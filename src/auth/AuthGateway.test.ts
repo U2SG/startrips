@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { previousAccountSurface, shouldRenderStandaloneAccountDock } from "./accountSurface";
+import { previousAccountSurface, shouldActivateAccountSheetFocus, shouldRenderStandaloneAccountDock } from "./accountSurface";
 
 describe("mobile account surface", () => {
   it("unwinds a nested form before closing the account sheet", () => {
@@ -9,6 +9,12 @@ describe("mobile account surface", () => {
     expect(previousAccountSurface("menu")).toBeNull();
   });
 
+
+  it("restarts mobile sheet focus ownership across an Atlas reload", () => {
+    expect(shouldActivateAccountSheetFocus(true, true)).toBe(true);
+    expect(shouldActivateAccountSheetFocus(true, false)).toBe(false);
+    expect(shouldActivateAccountSheetFocus(false, true)).toBe(false);
+  });
 
   it("keeps the standalone account dock until the mobile Atlas slot mounts", () => {
     expect(shouldRenderStandaloneAccountDock(false, false)).toBe(true);
