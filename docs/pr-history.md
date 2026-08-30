@@ -18,6 +18,14 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ## 2026-08-30
 
+### PR #83 — Stabilize particle globe city labels across zoom
+
+- **Source head:** `9b526fd6061fb1c7318ac1bd154cd92ed3ffee8f`
+- **Scope:** Reworks Particle Earth city-label candidate selection so zoom tiers reveal useful nearby cities with bounded per-frame work and stable label persistence.
+- **User-visible change:** Zooming into the globe reveals denser nearby city context without dropping already visible labels unnecessarily, letting off-screen labels consume the label budget, or favoring distant administrative capitals over nearby cities.
+- **Review fixes:** Reduced administrative-rank dominance, made persistence explicit across crowded tier transitions, removed off-screen labels from persistence and candidate budgets, bounded selection with a fixed-capacity heap, eliminated per-city candidate/closure allocation, applied viewport filtering before the 72-label budget, and replaced thousands of per-frame Three.js projections with a precomputed scalar local-to-clip frustum test.
+- **Follow-up:** None known at merge time.
+
 ### PR #78 — Make whole-Journey Story playback continuous
 
 - **Source head:** `2674f99d0e0d10d7e80909c16d68aafa05c13e16`
