@@ -7,6 +7,8 @@ import {
   playbackCameraTargetForStep,
   playbackCameraTargetKey,
   playbackMediaForPoint,
+  playbackStoryMedia,
+  storyMediaForScope,
   routePointAngularDistance,
   stepDurationMs,
   travelDurationMs,
@@ -85,6 +87,57 @@ describe("routePointAngularDistance / travelDurationMs (#19)", () => {
     expect(short).toBeGreaterThan(PLAYBACK_PACING.travelBaseMs);
     expect(long).toBeLessThanOrEqual(PLAYBACK_PACING.travelMaxMs);
     expect(short).toBeLessThan(long);
+  });
+});
+
+describe("Story whole-Journey media sequence (#76)", () => {
+  it("shares intro and route-point ordering with Journey Playback", () => {
+    const aggregate: Journey = {
+      ...journey,
+      routePoints: [
+        point("point-0", 0, 0),
+        point("point-1", 0, 30),
+        point("point-2", 0, 60),
+      ],
+      media: [
+        media("intro-b", null, "image/jpeg", 1),
+        media("point-1-video", "point-1", "video/mp4", 0),
+        media("intro-a", null, "image/jpeg", 0),
+        media("point-0-image", "point-0", "image/jpeg", 0),
+        media("track", null, "audio/mpeg", 2),
+      ],
+    };
+
+    expect(playbackStoryMedia(aggregate).map((asset) => asset.id)).toEqual([
+      "intro-a",
+      "intro-b",
+      "point-0-image",
+      "point-1-video",
+    ]);
+    expect(storyMediaForScope(aggregate, null).map((asset) => asset.id))
+      .toEqual(playbackStoryMedia(aggregate).map((asset) => asset.id));
+    expect(storyMediaForScope(aggregate, "point-1").map((asset) => asset.id))
+      .toEqual(["point-1-video"]);
+  });
+
+  it("starts at the first populated route point when there is no intro and skips empty points", () => {
+    const noIntro: Journey = {
+      ...journey,
+      routePoints: [
+        point("point-0", 0, 0),
+        point("point-1", 0, 30),
+        point("point-2", 0, 60),
+      ],
+      media: [
+        media("point-1-image", "point-1", "image/jpeg", 0),
+        media("point-2-video", "point-2", "video/mp4", 0),
+      ],
+    };
+
+    expect(playbackStoryMedia(noIntro).map((asset) => asset.id)).toEqual([
+      "point-1-image",
+      "point-2-video",
+    ]);
   });
 });
 

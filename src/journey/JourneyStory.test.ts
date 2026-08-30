@@ -6,7 +6,14 @@ import {
   journeyDeleteDescription,
   mediaForRoutePoint,
   replaceJourneySoundtrack,
+  storyAssetIndexForId,
+  storyAutoplayNextIndex,
+  storyChapterMedia,
+  shouldHoldWholeJourneyTerminalFrame,
   storyInitialMediaSelection,
+  storyMediaNeighborIndex,
+  storySelectionContainsRoutePointMedia,
+  storyUploadedAssetIndex,
 } from "./JourneyStory";
 import type { Journey, JourneyMediaAsset } from "./types";
 
@@ -68,7 +75,7 @@ describe("storyInitialMediaSelection (#18 follow-up)", () => {
     });
   });
 
-  it("follows a route-point cover into its matching Story media scope", () => {
+  it("keeps whole-Journey mode when the explicit cover belongs to a route point", () => {
     const journeyLevel = asset("journey-level", "image/jpeg", 0, "journey.jpg");
     const pointFirst = {
       ...asset("point-first", "image/jpeg", 1, "point-first.jpg"),
@@ -81,12 +88,24 @@ describe("storyInitialMediaSelection (#18 follow-up)", () => {
     const withPointCover: Journey = {
       ...journey,
       coverMediaAssetId: pointCover.id,
+      routePoints: [{
+        id: "point-1",
+        journeyId: journey.id,
+        sortOrder: 0,
+        latitude: 22.5431,
+        longitude: 114.0579,
+        label: "深圳",
+        isStop: true,
+        occurredAt: null,
+        note: null,
+        createdAt: "2026-08-11T00:00:00.000Z",
+      }],
       media: [journeyLevel, pointFirst, pointCover],
     };
 
     expect(storyInitialMediaSelection(withPointCover, null)).toEqual({
-      routePointId: "point-1",
-      assetIndex: 1,
+      routePointId: null,
+      assetIndex: 2,
       assetId: pointCover.id,
     });
     expect(storyInitialMediaSelection(withPointCover, "point-1")).toEqual({
@@ -94,6 +113,107 @@ describe("storyInitialMediaSelection (#18 follow-up)", () => {
       assetIndex: 0,
       assetId: pointFirst.id,
     });
+  });
+});
+
+
+
+describe("storyMediaNeighborIndex (#76)", () => {
+  it("does not wrap the whole-Journey narrative at either end", () => {
+    expect(storyMediaNeighborIndex(0, 4, -1, false)).toBeNull();
+    expect(storyMediaNeighborIndex(3, 4, 1, false)).toBeNull();
+    expect(storyMediaNeighborIndex(1, 4, 1, false)).toBe(2);
+  });
+
+  it("preserves the existing wrap behavior for a route-point browse scope", () => {
+    expect(storyMediaNeighborIndex(0, 4, -1, true)).toBe(3);
+    expect(storyMediaNeighborIndex(3, 4, 1, true)).toBe(0);
+  });
+});
+
+describe("storyAutoplayNextIndex (#76)", () => {
+  it("stops at the end of the whole-Journey narrative", () => {
+    expect(storyAutoplayNextIndex(0, 3, true)).toBe(1);
+    expect(storyAutoplayNextIndex(2, 3, true)).toBeNull();
+    expect(storyAutoplayNextIndex(0, 1, true)).toBeNull();
+  });
+
+  it("preserves route-point autoplay looping", () => {
+    expect(storyAutoplayNextIndex(0, 3, false)).toBe(1);
+    expect(storyAutoplayNextIndex(2, 3, false)).toBe(0);
+    expect(storyAutoplayNextIndex(0, 1, false)).toBeNull();
+  });
+});
+
+describe("shouldHoldWholeJourneyTerminalFrame (#76 review)", () => {
+  it("keeps the final whole-Journey frame playing for its terminal interval", () => {
+    expect(shouldHoldWholeJourneyTerminalFrame(2, 3, true)).toBe(true);
+    expect(shouldHoldWholeJourneyTerminalFrame(0, 1, true)).toBe(true);
+  });
+
+  it("does not turn route-point or non-terminal frames into delayed stops", () => {
+    expect(shouldHoldWholeJourneyTerminalFrame(1, 3, true)).toBe(false);
+    expect(shouldHoldWholeJourneyTerminalFrame(2, 3, false)).toBe(false);
+    expect(shouldHoldWholeJourneyTerminalFrame(0, 0, true)).toBe(false);
+  });
+});
+
+describe("storyUploadedAssetIndex (#76 review)", () => {
+  it("selects a deduplicated intro asset instead of the first route-point boundary", () => {
+    const intro = asset("intro", "image/jpeg", 0, "intro.jpg");
+    const pointMedia = {
+      ...asset("point", "image/jpeg", 1, "point.jpg"),
+      routePointId: "point-1",
+    };
+    expect(storyUploadedAssetIndex([intro, pointMedia], [intro.id])).toBe(0);
+  });
+
+  it("selects the first successful newly uploaded asset by id", () => {
+    const intro = asset("intro", "image/jpeg", 0, "intro.jpg");
+    const added = asset("added", "image/jpeg", 1, "added.jpg");
+    const pointMedia = {
+      ...asset("point", "image/jpeg", 2, "point.jpg"),
+      routePointId: "point-1",
+    };
+    expect(storyUploadedAssetIndex([intro, added, pointMedia], [added.id])).toBe(1);
+  });
+
+  it("returns null when refresh cannot find any successful uploaded asset", () => {
+    const intro = asset("intro", "image/jpeg", 0, "intro.jpg");
+    expect(storyUploadedAssetIndex([intro], ["missing"])).toBeNull();
+  });
+});
+
+describe("aggregate organizer ownership (#76 review)", () => {
+  it("derives arrow-sort neighbors from the active ownership chapter", () => {
+    const pointA1 = { ...asset("a1", "image/jpeg", 0), routePointId: "point-a" };
+    const pointB = { ...asset("b", "image/jpeg", 1), routePointId: "point-b" };
+    const pointA2 = { ...asset("a2", "image/jpeg", 2), routePointId: "point-a" };
+    expect(storyChapterMedia([pointA1, pointA2, pointB], pointA1).map((item) => item.id))
+      .toEqual(["a1", "a2"]);
+  });
+
+  it("offers the journey-level destination when aggregate selection includes chapter media", () => {
+    const intro = asset("intro", "image/jpeg", 0);
+    const point = { ...asset("point", "image/jpeg", 1), routePointId: "point-a" };
+    expect(storySelectionContainsRoutePointMedia([intro, point], new Set([point.id])))
+      .toBe(true);
+    expect(storySelectionContainsRoutePointMedia([intro, point], new Set([intro.id])))
+      .toBe(false);
+  });
+});
+
+describe("storyAssetIndexForId (#76)", () => {
+  it("keeps the settled asset selected when a reassignment changes sequence order", () => {
+    const intro = asset("intro", "image/jpeg", 0, "intro.jpg");
+    const moved = asset("moved", "image/jpeg", 1, "moved.jpg");
+    const other = asset("other", "image/jpeg", 2, "other.jpg");
+    expect(storyAssetIndexForId([intro, other, moved], moved.id, 1)).toBe(2);
+  });
+
+  it("clamps the numeric fallback when the settled asset disappeared", () => {
+    const only = asset("only", "image/jpeg", 0, "only.jpg");
+    expect(storyAssetIndexForId([only], "gone", 4)).toBe(0);
   });
 });
 

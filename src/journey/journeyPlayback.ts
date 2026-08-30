@@ -90,6 +90,26 @@ export function playbackIntroMedia(journey: Journey): JourneyMediaAsset[] {
     .sort((left, right) => left.sortOrder - right.sortOrder);
 }
 
+/** Canonical Story media order for the whole Journey: intro media first, then
+ * each route point's visual media in the same order used by Journey Playback. */
+export function playbackStoryMedia(journey: Journey): JourneyMediaAsset[] {
+  return [
+    ...playbackIntroMedia(journey),
+    ...journey.routePoints.flatMap((_, pointIndex) => playbackMediaForPoint(journey, pointIndex)),
+  ];
+}
+
+/** Story browse scope: null means the aggregate Journey narrative, while a
+ * route-point id keeps the existing chapter-only browsing mode. */
+export function storyMediaForScope(
+  journey: Journey,
+  routePointId: string | null,
+): JourneyMediaAsset[] {
+  if (routePointId === null) return playbackStoryMedia(journey);
+  const pointIndex = journey.routePoints.findIndex((point) => point.id === routePointId);
+  return pointIndex >= 0 ? playbackMediaForPoint(journey, pointIndex) : [];
+}
+
 export type PlaybackStep =
   | { kind: "intro" }
   | { kind: "travel"; to: number }
