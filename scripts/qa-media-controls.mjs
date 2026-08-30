@@ -140,6 +140,7 @@ try {
     record("story-media", await scanButtons(story.page, ".journey-story"));
 
     const mediaStage = story.page.locator(".journey-story__media");
+    const touch = await story.page.context().newCDPSession(story.page);
     const settledMedia = story.page.locator(
       ".journey-story__media > img:not(.journey-story__media-incoming), .journey-story__media > video:not(.journey-story__media-incoming)",
     ).first();
@@ -151,19 +152,72 @@ try {
     if (!stageBox) throw new Error("mobile story media stage has no bounds");
     const swipeStartX = stageBox.x + stageBox.width * 0.72;
     const swipeY = stageBox.y + stageBox.height * 0.5;
+    await mediaStage.evaluate((stage) => {
+      stage.addEventListener("gotpointercapture", (event) => { stage.dataset.qaCapturedPointer = String(event.pointerId); });
+      stage.addEventListener("lostpointercapture", (event) => { if (event.target === stage && String(event.pointerId) === stage.dataset.qaCapturedPointer) stage.dataset.qaReleasedPointer = String(event.pointerId); });
+    });
+    // At the first asset, a large outward drag has no neighbor. It must spring
+    // back as overscroll, not be reinterpreted as the image tap that opens
+    // fullscreen merely because `commit` is false.
+    await touch.send("Input.dispatchTouchEvent", {
+      type: "touchStart",
+      touchPoints: [{ x: swipeStartX, y: swipeY }],
+    });
+    await touch.send("Input.dispatchTouchEvent", {
+      type: "touchMove",
+      touchPoints: [{ x: swipeStartX + 80, y: swipeY }],
+    });
+    await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await story.page.waitForTimeout(300);
+    const inlineEdgeOverscrollOpenedFullscreen = await story.page.locator(".journey-story-fullscreen").isVisible();
+    await touch.send("Input.dispatchTouchEvent", {
+      type: "touchStart",
+      touchPoints: [{ x: swipeStartX, y: swipeY }],
+    });
+    // The live-drag gesture computes distance/direction from pointermove,
+    // not just down/up coordinates, so a swipe simulation needs an
+    // intervening move — a real finger can't teleport between the two.
+    await touch.send("Input.dispatchTouchEvent", {
+      type: "touchMove",
+      touchPoints: [{ x: swipeStartX - 30, y: swipeY }],
+    });
+    const inlineCapturedDuringDrag = await mediaStage.evaluate((stage) => {
+      const pointerId = Number(stage.dataset.qaCapturedPointer);
+      return Number.isFinite(pointerId) && stage.hasPointerCapture(pointerId);
+    });
+    // Once horizontal intent owns the pointer, move outside the inline
+    // media stage and release there. Capture must keep routing the terminal
+    // event back to the stage so the gesture cannot strand its transform.
+    await touch.send("Input.dispatchTouchEvent", {
+      type: "touchMove",
+      touchPoints: [{ x: swipeStartX - 30, y: 10 }],
+    });
+    await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    const inlineReleasedAfterDrag = await mediaStage.evaluate((stage) => Boolean(stage.dataset.qaReleasedPointer));
+    // The 30px horizontal move above intentionally crosses the 8px intent
+    // lock but stays below the 48px navigation threshold. Because pointer
+    // capture retargets the eventual click to the stage, the component must
+    // explicitly preserve the image tap and still enter fullscreen.
+    let inlineJitterOpenedFullscreen = false;
+    const jitterFullscreen = story.page.locator(".journey-story-fullscreen");
+    try {
+      await jitterFullscreen.waitFor({ state: "visible", timeout: 1_500 });
+      inlineJitterOpenedFullscreen = true;
+      await story.page.keyboard.press("Escape");
+      await jitterFullscreen.waitFor({ state: "hidden", timeout: 1_500 });
+    } catch {
+      inlineJitterOpenedFullscreen = false;
+    }
     await mediaStage.dispatchEvent("pointerdown", {
-      pointerId: 1,
+      pointerId: 11,
       pointerType: "touch",
       isPrimary: true,
       clientX: swipeStartX,
       clientY: swipeY,
       bubbles: true,
     });
-    // The live-drag gesture computes distance/direction from pointermove,
-    // not just down/up coordinates, so a swipe simulation needs an
-    // intervening move — a real finger can't teleport between the two.
     await mediaStage.dispatchEvent("pointermove", {
-      pointerId: 1,
+      pointerId: 11,
       pointerType: "touch",
       isPrimary: true,
       clientX: swipeStartX - 110,
@@ -171,7 +225,7 @@ try {
       bubbles: true,
     });
     await mediaStage.dispatchEvent("pointerup", {
-      pointerId: 1,
+      pointerId: 11,
       pointerType: "touch",
       isPrimary: true,
       clientX: swipeStartX - 110,
@@ -187,9 +241,23 @@ try {
     checks.push({
       name: "story-mobile-swipe-navigation",
       desktopOnlyControls,
-      failed: desktopOnlyControls !== 0,
+      inlineCapturedDuringDrag,
+      inlineReleasedAfterDrag,
+      inlineEdgeOverscrollOpenedFullscreen,
+      inlineJitterOpenedFullscreen,
+      failed: desktopOnlyControls !== 0
+        || !inlineCapturedDuringDrag
+        || !inlineReleasedAfterDrag
+        || inlineEdgeOverscrollOpenedFullscreen
+        || !inlineJitterOpenedFullscreen,
     });
-    if (desktopOnlyControls !== 0) failed = true;
+    if (
+      desktopOnlyControls !== 0
+      || !inlineCapturedDuringDrag
+      || !inlineReleasedAfterDrag
+      || inlineEdgeOverscrollOpenedFullscreen
+      || !inlineJitterOpenedFullscreen
+    ) failed = true;
 
     const manageTrigger = story.page.getByRole("button", { name: "管理当前媒体" });
     const manageTriggerBox = await manageTrigger.boundingBox();
@@ -259,9 +327,27 @@ try {
     const fullscreenCloseBox = await fullscreen.locator(".journey-story-fullscreen__close").boundingBox();
     const fullscreenCloseTouchTarget = fullscreenCloseBox ? Math.min(fullscreenCloseBox.width, fullscreenCloseBox.height) : 0;
     const fullscreenPositionBefore = await fullscreen.locator(".journey-story-fullscreen__nav span").textContent();
-    await fullscreen.dispatchEvent("pointerdown", { pointerId: 3, pointerType: "touch", isPrimary: true, clientX: fullX, clientY: fullY, bubbles: true });
+    await fullscreen.evaluate((stage) => {
+      stage.addEventListener("gotpointercapture", (event) => { stage.dataset.qaCapturedPointer = String(event.pointerId); });
+      stage.addEventListener("lostpointercapture", (event) => { if (event.target === stage && String(event.pointerId) === stage.dataset.qaCapturedPointer) stage.dataset.qaReleasedPointer = String(event.pointerId); });
+    });
+    await touch.send("Input.dispatchTouchEvent", {
+      type: "touchStart",
+      touchPoints: [{ x: fullX, y: fullY }],
+    });
     // See the inline-stage comment above: the live-drag gesture needs a
     // pointermove to know the swipe distance/direction.
+    await touch.send("Input.dispatchTouchEvent", {
+      type: "touchMove",
+      touchPoints: [{ x: fullX - 30, y: fullY }],
+    });
+    const fullscreenCapturedDuringDrag = await fullscreen.evaluate((stage) => {
+      const pointerId = Number(stage.dataset.qaCapturedPointer);
+      return Number.isFinite(pointerId) && stage.hasPointerCapture(pointerId);
+    });
+    await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    const fullscreenReleasedAfterDrag = await fullscreen.evaluate((stage) => Boolean(stage.dataset.qaReleasedPointer));
+    await fullscreen.dispatchEvent("pointerdown", { pointerId: 3, pointerType: "touch", isPrimary: true, clientX: fullX, clientY: fullY, bubbles: true });
     await fullscreen.dispatchEvent("pointermove", { pointerId: 3, pointerType: "touch", isPrimary: true, clientX: fullX - 110, clientY: fullY, bubbles: true });
     await fullscreen.dispatchEvent("pointerup", { pointerId: 3, pointerType: "touch", isPrimary: true, clientX: fullX - 110, clientY: fullY, bubbles: true });
     await story.page.waitForFunction((before) => {
@@ -274,11 +360,15 @@ try {
       fullscreenCloseTouchTarget,
       fullscreenPositionBefore,
       fullscreenPosition,
+      fullscreenCapturedDuringDrag,
+      fullscreenReleasedAfterDrag,
       failed: !fullscreenInitiallyImmersive
         || fullscreenCloseTouchTarget < 44
         || !fullscreenPositionBefore
         || !fullscreenPosition
-        || fullscreenPosition === fullscreenPositionBefore,
+        || fullscreenPosition === fullscreenPositionBefore
+        || !fullscreenCapturedDuringDrag
+        || !fullscreenReleasedAfterDrag,
     });
     await fullscreen.dispatchEvent("pointerdown", { pointerId: 4, pointerType: "touch", isPrimary: true, clientX: fullX, clientY: fullY, bubbles: true });
     await fullscreen.dispatchEvent("pointerup", { pointerId: 4, pointerType: "touch", isPrimary: true, clientX: fullX, clientY: fullY + 130, bubbles: true });
@@ -302,6 +392,141 @@ try {
     }
   } finally {
     await story.page.close();
+  }
+
+  const mixedMediaMobile = await createQaPage("/?qaState=journey-story&qaMode=mixed-media", onePixelGif, {
+    instrumentMedia: true,
+    mixedMedia: true,
+    mobile: true,
+    reducedMotion: "reduce",
+  });
+  try {
+    await mixedMediaMobile.page.locator(".journey-story").waitFor({ state: "visible" });
+    const inlineStage = mixedMediaMobile.page.locator(".journey-story__media");
+    const initialImage = inlineStage.locator(":scope > img:not(.journey-story__media-incoming)").first();
+    await initialImage.waitFor({ state: "visible" });
+    await initialImage.click();
+
+    const fullscreenStage = mixedMediaMobile.page.locator(".journey-story-fullscreen");
+    await fullscreenStage.waitFor({ state: "visible" });
+    const fullscreenBox = await fullscreenStage.boundingBox();
+    if (!fullscreenBox) throw new Error("mobile mixed-media fullscreen has no bounds");
+    const fullStartX = fullscreenBox.x + fullscreenBox.width * 0.72;
+    const fullSwipeY = fullscreenBox.y + fullscreenBox.height * 0.42;
+    // Land on the video deterministically before exercising real touch. This
+    // setup gesture targets the stage directly; the assertions below use CDP
+    // touch so the browser gives the <video> its normal implicit capture.
+    await fullscreenStage.dispatchEvent("pointerdown", { pointerId: 51, pointerType: "touch", isPrimary: true, clientX: fullStartX, clientY: fullSwipeY, bubbles: true });
+    await fullscreenStage.dispatchEvent("pointermove", { pointerId: 51, pointerType: "touch", isPrimary: true, clientX: fullStartX - 110, clientY: fullSwipeY, bubbles: true });
+    await fullscreenStage.dispatchEvent("pointerup", { pointerId: 51, pointerType: "touch", isPrimary: true, clientX: fullStartX - 110, clientY: fullSwipeY, bubbles: true });
+
+    const fullscreenVideo = fullscreenStage.locator(":scope > video:not(.journey-story__media-incoming)");
+    await fullscreenVideo.waitFor({ state: "visible", timeout: 3_000 });
+    const touch = await mixedMediaMobile.page.context().newCDPSession(mixedMediaMobile.page);
+    await fullscreenStage.evaluate((stage) => {
+      stage.dataset.qaVideoStageCapture = "";
+      stage.addEventListener("gotpointercapture", (event) => {
+        if (event.target === stage) stage.dataset.qaVideoStageCapture = String(event.pointerId);
+      });
+    });
+    await fullscreenVideo.evaluate((video) => {
+      video.dataset.qaPointerUps = "0";
+      video.addEventListener("pointerup", (event) => {
+        if (event.target === video) {
+          video.dataset.qaPointerUps = String(Number(video.dataset.qaPointerUps ?? "0") + 1);
+        }
+      });
+    });
+    const fullscreenVideoBox = await fullscreenVideo.boundingBox();
+    if (!fullscreenVideoBox) throw new Error("mobile fullscreen video has no bounds");
+    const fullscreenVideoX = fullscreenVideoBox.x + fullscreenVideoBox.width * 0.5;
+    const fullscreenVideoY = fullscreenVideoBox.y + fullscreenVideoBox.height * 0.35;
+    await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: fullscreenVideoX, y: fullscreenVideoY }] });
+    await touch.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: fullscreenVideoX + 30, y: fullscreenVideoY }] });
+    const fullscreenVideoStageCapturedOnJitter = await fullscreenStage.evaluate((stage) => Boolean(stage.dataset.qaVideoStageCapture));
+    await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    const fullscreenVideoPointerUps = Number(await fullscreenVideo.getAttribute("data-qa-pointer-ups") ?? "0");
+
+    const fullscreenPositionBeforeVideoSwipe = await fullscreenStage.locator(".journey-story-fullscreen__nav span").textContent();
+    await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: fullscreenVideoX, y: fullscreenVideoY }] });
+    await touch.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: fullscreenVideoX - 110, y: fullscreenVideoY }] });
+    await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await mixedMediaMobile.page.waitForFunction((before) => {
+      const position = document.querySelector(".journey-story-fullscreen__nav span")?.textContent;
+      return Boolean(position && position !== before);
+    }, fullscreenPositionBeforeVideoSwipe, { timeout: 3_000 });
+    const fullscreenVideoSwipeNavigated = true;
+
+    // Return to the video, then exit fullscreen so the inline stage can run
+    // the same native-capture contract.
+    await fullscreenStage.dispatchEvent("pointerdown", { pointerId: 52, pointerType: "touch", isPrimary: true, clientX: fullStartX, clientY: fullSwipeY, bubbles: true });
+    await fullscreenStage.dispatchEvent("pointermove", { pointerId: 52, pointerType: "touch", isPrimary: true, clientX: fullStartX + 110, clientY: fullSwipeY, bubbles: true });
+    await fullscreenStage.dispatchEvent("pointerup", { pointerId: 52, pointerType: "touch", isPrimary: true, clientX: fullStartX + 110, clientY: fullSwipeY, bubbles: true });
+    await fullscreenVideo.waitFor({ state: "visible", timeout: 3_000 });
+    await mixedMediaMobile.page.keyboard.press("Escape");
+    await fullscreenStage.waitFor({ state: "detached" });
+
+    const inlineVideo = inlineStage.locator(":scope > video:not(.journey-story__media-incoming)");
+    await inlineVideo.waitFor({ state: "visible", timeout: 3_000 });
+    await inlineStage.evaluate((stage) => {
+      stage.dataset.qaVideoStageCapture = "";
+      stage.addEventListener("gotpointercapture", (event) => {
+        if (event.target === stage) stage.dataset.qaVideoStageCapture = String(event.pointerId);
+      });
+    });
+    await inlineVideo.evaluate((video) => {
+      video.dataset.qaPointerUps = "0";
+      video.addEventListener("pointerup", (event) => {
+        if (event.target === video) {
+          video.dataset.qaPointerUps = String(Number(video.dataset.qaPointerUps ?? "0") + 1);
+        }
+      });
+    });
+    const inlineVideoBox = await inlineVideo.boundingBox();
+    if (!inlineVideoBox) throw new Error("mobile inline video has no bounds");
+    const inlineVideoX = inlineVideoBox.x + inlineVideoBox.width * 0.5;
+    const inlineVideoY = inlineVideoBox.y + inlineVideoBox.height * 0.35;
+    await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: inlineVideoX, y: inlineVideoY }] });
+    await touch.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: inlineVideoX + 30, y: inlineVideoY }] });
+    const inlineVideoStageCapturedOnJitter = await inlineStage.evaluate((stage) => Boolean(stage.dataset.qaVideoStageCapture));
+    await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    const inlineVideoPointerUps = Number(await inlineVideo.getAttribute("data-qa-pointer-ups") ?? "0");
+
+    const inlineVideoSrcBeforeSwipe = await inlineVideo.getAttribute("src");
+    await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: inlineVideoX, y: inlineVideoY }] });
+    await touch.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: inlineVideoX - 110, y: inlineVideoY }] });
+    await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await mixedMediaMobile.page.waitForFunction((before) => {
+      const media = document.querySelector(
+        ".journey-story__media > img:not(.journey-story__media-incoming), .journey-story__media > video:not(.journey-story__media-incoming)",
+      );
+      return Boolean(media && media.getAttribute("src") !== before);
+    }, inlineVideoSrcBeforeSwipe, { timeout: 3_000 });
+    const inlineVideoSwipeNavigated = true;
+
+    const videoNativeTapFailed = fullscreenVideoStageCapturedOnJitter
+      || inlineVideoStageCapturedOnJitter
+      || fullscreenVideoPointerUps < 1
+      || inlineVideoPointerUps < 1
+      || !fullscreenVideoSwipeNavigated
+      || !inlineVideoSwipeNavigated
+      || mixedMediaMobile.consoleErrors.length > 0
+      || mixedMediaMobile.pageErrors.length > 0;
+    checks.push({
+      name: "story-mobile-video-native-capture-preserved",
+      fullscreenVideoStageCapturedOnJitter,
+      fullscreenVideoPointerUps,
+      fullscreenVideoSwipeNavigated,
+      inlineVideoStageCapturedOnJitter,
+      inlineVideoPointerUps,
+      inlineVideoSwipeNavigated,
+      consoleErrors: mixedMediaMobile.consoleErrors,
+      pageErrors: mixedMediaMobile.pageErrors,
+      failed: videoNativeTapFailed,
+    });
+    if (videoNativeTapFailed) failed = true;
+  } finally {
+    await mixedMediaMobile.page.close();
   }
 
   for (const [label, viewport] of [

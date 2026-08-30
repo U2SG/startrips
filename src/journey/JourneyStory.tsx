@@ -525,8 +525,11 @@ export function JourneyStory({
     peek: HTMLImageElement | null;
     startX: number;
     startY: number;
+    pointerId: number;
     dx: number;
     axis: "x" | "y" | null;
+    tapOpensFullscreen: boolean;
+    preserveNativeVideoCapture: boolean;
     wrap: boolean;
     neighborIndex: number;
     neighborAsset: JourneyMediaAsset | null;
@@ -1185,7 +1188,7 @@ export function JourneyStory({
     }
   }
 
-  function beginMediaDrag(container: HTMLElement | null, clientX: number, clientY: number, wrap: boolean) {
+  function beginMediaDrag(container: HTMLElement | null, pointerId: number, clientX: number, clientY: number, wrap: boolean, tapOpensFullscreen = false, preserveNativeVideoCapture = false) {
     if (!container || mediaDragSettlingRef.current || incomingAssetId !== null || mutationPending || overview || scopedMedia.length < 2) return;
     const base = container.querySelector<HTMLElement>(":scope > img, :scope > video");
     if (!base) return;
@@ -1196,8 +1199,11 @@ export function JourneyStory({
       peek: null,
       startX: clientX,
       startY: clientY,
+      pointerId,
       dx: 0,
       axis: null,
+      tapOpensFullscreen,
+      preserveNativeVideoCapture,
       wrap,
       neighborIndex: -1,
       neighborAsset: null,
@@ -1209,9 +1215,9 @@ export function JourneyStory({
   // enough to tell horizontal from vertical, then live-tracks the pointer
   // on the horizontal axis only; a vertical lock leaves the gesture alone so
   // the fullscreen stage's own swipe-down-to-exit keeps working unchanged.
-  function updateMediaDrag(clientX: number, clientY: number) {
+  function updateMediaDrag(pointerId: number, clientX: number, clientY: number) {
     const drag = mediaDragRef.current;
-    if (!drag) return;
+    if (!drag || drag.pointerId !== pointerId) return;
     if (drag.axis === null) {
       const dx = clientX - drag.startX;
       const dy = clientY - drag.startY;
@@ -1221,6 +1227,17 @@ export function JourneyStory({
         return;
       }
       drag.axis = "x";
+      if (!drag.preserveNativeVideoCapture) {
+        try {
+          if (!drag.container.hasPointerCapture(pointerId)) {
+            drag.container.setPointerCapture(pointerId);
+          }
+        } catch {
+          // Synthetic QA events and a pointer cancelled by the browser between
+          // dispatch and this handler can no longer be captured. The existing
+          // local-event path still settles safely if its terminal event arrives.
+        }
+      }
     }
     if (drag.axis !== "x") return;
     drag.dx = clientX - drag.startX;
@@ -1283,6 +1300,13 @@ export function JourneyStory({
     const drag = mediaDragRef.current;
     mediaDragRef.current = null;
     if (!drag) return;
+    try {
+      if (drag.container.hasPointerCapture(drag.pointerId)) {
+        drag.container.releasePointerCapture(drag.pointerId);
+      }
+    } catch {
+      // The browser may already have dropped capture before pointercancel.
+    }
     mediaDragSettlingRef.current = !prefersReducedMotion();
     const asset = commit ? drag.neighborAsset : null;
     const ready = asset !== null && drag.peek !== null && isMediaDragTargetReady(asset);
@@ -1330,27 +1354,52 @@ export function JourneyStory({
   function handleStoryMediaPointerDown(event: ReactPointerEvent<HTMLElement>) {
     storyMediaGestureConsumedRef.current = false;
     if (!mobileLayout || overview || !event.isPrimary || !mediaGestureCanStart(event.target, event.clientY)) return;
-    beginMediaDrag(event.currentTarget, event.clientX, event.clientY, false);
+    beginMediaDrag(
+      event.currentTarget,
+      event.pointerId,
+      event.clientX,
+      event.clientY,
+      false,
+      event.target instanceof HTMLImageElement,
+      event.target instanceof Element && event.target.closest("video") instanceof HTMLVideoElement,
+    );
   }
 
   function handleStoryMediaPointerMove(event: ReactPointerEvent<HTMLElement>) {
     if (!event.isPrimary) return;
-    updateMediaDrag(event.clientX, event.clientY);
+    updateMediaDrag(event.pointerId, event.clientX, event.clientY);
   }
 
   function handleStoryMediaPointerUp(event: ReactPointerEvent<HTMLElement>) {
     if (!event.isPrimary) return;
     const drag = mediaDragRef.current;
+    if (drag && drag.pointerId !== event.pointerId) return;
     // Only a committed swipe (>= the threshold, same as before this gesture
     // grew live tracking) suppresses the tap-to-fullscreen click that
     // otherwise follows this same release; a drag that axis-locked but
     // didn't cross the threshold still reads as a tap, same as pre-drag.
     const commit = Boolean(drag && drag.axis === "x" && Math.abs(drag.dx) >= MEDIA_DRAG_THRESHOLD_PX && drag.neighborAsset);
-    if (commit) storyMediaGestureConsumedRef.current = true;
+    const reopenFullscreenAfterSettle = Boolean(
+      drag
+      && drag.axis === "x"
+      && Math.abs(drag.dx) < MEDIA_DRAG_THRESHOLD_PX
+      && drag.tapOpensFullscreen,
+    );
+    if (commit || reopenFullscreenAfterSettle) storyMediaGestureConsumedRef.current = true;
     settleMediaDrag(commit);
+    if (reopenFullscreenAfterSettle) {
+      window.setTimeout(() => enterFullscreen(false), prefersReducedMotion() ? 0 : MEDIA_DRAG_SETTLE_MS);
+    }
   }
 
-  function handleStoryMediaPointerCancel() {
+  function handleStoryMediaPointerCancel(event: ReactPointerEvent<HTMLElement>) {
+    if (mediaDragRef.current?.pointerId !== event.pointerId) return;
+    settleMediaDrag(false);
+  }
+
+  function handleStoryMediaLostPointerCapture(event: ReactPointerEvent<HTMLElement>) {
+    if (event.target !== event.currentTarget) return;
+    if (mediaDragRef.current?.pointerId !== event.pointerId) return;
     settleMediaDrag(false);
   }
 
@@ -1374,17 +1423,26 @@ export function JourneyStory({
 
   function handleFullscreenPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
     if (!mobileLayout || !event.isPrimary || !mediaGestureCanStart(event.target, event.clientY)) return;
-    beginMediaDrag(event.currentTarget, event.clientX, event.clientY, true);
+    beginMediaDrag(
+      event.currentTarget,
+      event.pointerId,
+      event.clientX,
+      event.clientY,
+      true,
+      false,
+      event.target instanceof Element && event.target.closest("video") instanceof HTMLVideoElement,
+    );
   }
 
   function handleFullscreenPointerMove(event: ReactPointerEvent<HTMLDivElement>) {
     if (!event.isPrimary) return;
-    updateMediaDrag(event.clientX, event.clientY);
+    updateMediaDrag(event.pointerId, event.clientX, event.clientY);
   }
 
   function handleFullscreenPointerUp(event: ReactPointerEvent<HTMLDivElement>) {
     if (!mobileLayout || !event.isPrimary) return;
     const drag = mediaDragRef.current;
+    if (drag && drag.pointerId !== event.pointerId) return;
     if (!drag) {
       revealMobileFullscreenControls();
       return;
@@ -1403,7 +1461,14 @@ export function JourneyStory({
     if (drag.axis === null) revealMobileFullscreenControls();
   }
 
-  function handleFullscreenPointerCancel() {
+  function handleFullscreenPointerCancel(event: ReactPointerEvent<HTMLDivElement>) {
+    if (mediaDragRef.current?.pointerId !== event.pointerId) return;
+    settleMediaDrag(false);
+  }
+
+  function handleFullscreenLostPointerCapture(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.target !== event.currentTarget) return;
+    if (mediaDragRef.current?.pointerId !== event.pointerId) return;
     settleMediaDrag(false);
   }
 
@@ -1947,6 +2012,7 @@ export function JourneyStory({
             onPointerMove={handleStoryMediaPointerMove}
             onPointerUp={handleStoryMediaPointerUp}
             onPointerCancel={handleStoryMediaPointerCancel}
+            onLostPointerCapture={handleStoryMediaLostPointerCapture}
           >
             {!asset ? <div className="journey-story__empty-media"><IconPhoto size={36} stroke={1.05} style={{ color: journey.lightColor }} aria-hidden="true" />{selectedRoutePoint ? "这个途径点还没有媒体" : "整段旅程还没有媒体"}</div> : null}
             {scopedMedia.length > 0 && !mobileLayout ? (
@@ -2513,6 +2579,7 @@ export function JourneyStory({
           onPointerMove={handleFullscreenPointerMove}
           onPointerUp={handleFullscreenPointerUp}
           onPointerCancel={handleFullscreenPointerCancel}
+          onLostPointerCapture={handleFullscreenLostPointerCapture}
           onClick={(event) => {
             if (!mobileLayout && event.target === event.currentTarget) exitFullscreen();
           }}
