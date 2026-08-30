@@ -631,6 +631,13 @@ export function JourneyStory({
   const mediaReadsRef = useRef(mediaReads);
   const uploading = uploadState.status === "uploading"
     || soundtrackUpload.status === "uploading";
+  const mutationPending = uploading
+    || deleteState === "pending"
+    || mediaDeleteState === "pending"
+    || soundtrackRemovePending
+    || orderPending
+    || coverPending
+    || movePending;
 
   function exitFullscreen() {
     if (typeof window !== "undefined") {
@@ -649,6 +656,7 @@ export function JourneyStory({
   }
 
   function closeMobileMediaDelete() {
+    if (mediaDeleteState === "pending") return false;
     setMediaDeleteState("idle");
     setMediaDeleteMessage("");
     if (typeof window !== "undefined") {
@@ -660,12 +668,14 @@ export function JourneyStory({
         });
       });
     }
+    return true;
   }
 
   function closeJourneyDelete() {
-    if (deleteState === "pending") return;
+    if (deleteState === "pending") return false;
     setDeleteState("idle");
     setDeleteMessage("");
+    return true;
   }
 
   function enterMobileManageMode() {
@@ -674,7 +684,7 @@ export function JourneyStory({
   }
 
   function exitMobileManageMode() {
-    if (deleteState === "pending") return;
+    if (mutationPending) return false;
     setDeleteState("idle");
     setDeleteMessage("");
     setMobileMediaMenuOpen(false);
@@ -686,6 +696,7 @@ export function JourneyStory({
     setMoveMessage("");
     restoreMobileManageViewerFocusRef.current = true;
     setMobileManageMode(false);
+    return true;
   }
 
   function requestClose() {
@@ -733,7 +744,7 @@ export function JourneyStory({
   // burying a stale menu token underneath the replacement.
   const mobileTransientMediaSurfaceOpen = mobileLayout && (
     mobileMediaMenuOpen
-    || mediaDeleteState === "confirming"
+    || mediaDeleteState !== "idle"
     || fullscreen
   );
   useMobileSurfaceHistory(mobileTransientMediaSurfaceOpen, "story-media-surface", () => {
@@ -741,13 +752,12 @@ export function JourneyStory({
       exitFullscreen();
       return;
     }
-    if (mediaDeleteState === "confirming") {
-      closeMobileMediaDelete();
-      return;
+    if (mediaDeleteState !== "idle") {
+      return closeMobileMediaDelete();
     }
     if (mobileMediaMenuOpen) setMobileMediaMenuOpen(false);
   });
-  useMobileSurfaceHistory(deleteState === "confirming" && mobileLayout, "story-journey-delete", closeJourneyDelete);
+  useMobileSurfaceHistory(deleteState !== "idle" && mobileLayout, "story-journey-delete", closeJourneyDelete);
   const dialogRef = useModalFocus<HTMLElement>(requestClose);
   const mobileMediaSheetRef = useNestedModalFocus<HTMLElement>(
     mobileLayout && (mobileMediaMenuOpen || mediaDeleteState !== "idle"),
@@ -966,8 +976,16 @@ export function JourneyStory({
   useEffect(() => () => audioRef.current?.pause(), []);
 
   useEffect(() => {
-    if (mobileLayout) return;
-    setMobileMediaMenuOpen(false);
+    if (!mobileLayout) {
+      setMobileMediaMenuOpen(false);
+      return;
+    }
+    // A responsive desktop -> compact transition must preserve editing intent.
+    // Never label the compact Story as Viewer while an edit-only surface is
+    // still mounted; carry that state into explicit Manage mode instead.
+    if (overview || deleteState !== "idle" || mediaDeleteState !== "idle" || moveSelectMode) {
+      setMobileManageMode(true);
+    }
   }, [mobileLayout]);
 
   // #7 + review P2: fullscreen playback — Esc exits, arrows switch media,
@@ -1832,14 +1850,6 @@ export function JourneyStory({
       setOrderPending(false);
     }
   }
-
-  const mutationPending = uploading
-    || deleteState === "pending"
-    || mediaDeleteState === "pending"
-    || soundtrackRemovePending
-    || orderPending
-    || coverPending
-    || movePending;
 
   function selectMediaScope(routePointId: string | null) {
     if (mutationPending) return;
