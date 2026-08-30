@@ -1,3 +1,11 @@
+/* Shared mobile-control geometry must live above both the Atlas tree and
+   body-portaled Story/fullscreen surfaces so one override changes them together. */
+:root {
+  --mobile-control-hit-size: 44px;
+  --mobile-control-cluster-gap: 6px;
+  --mobile-control-radius: 999px;
+}
+
 .living-atlas {
   --atlas-bg: #010506;
   --atlas-panel: rgba(3, 12, 13, 0.91);
@@ -11,7 +19,6 @@
   --atlas-cyan: #76e3d0;
   --atlas-acid: #c8ff3d;
   --atlas-warm: #f4ce73;
-  --mobile-control-hit-size: 44px;
   position: relative;
   width: 100%;
   height: 100svh;
@@ -1352,17 +1359,26 @@
 }
 
 .journey-story > header > .journey-story__close {
-  width: auto;
-  flex-basis: auto;
+  flex: 0 0 var(--mobile-control-hit-size, 44px);
+  width: var(--mobile-control-hit-size, 44px);
+  height: var(--mobile-control-hit-size, 44px);
   display: inline-flex;
-  grid-template-columns: none;
   align-items: center;
-  gap: 9px;
-  padding: 0 13px 0 15px;
+  justify-content: center;
+  gap: var(--mobile-control-cluster-gap, 6px);
+  padding: 0;
+  border-radius: var(--mobile-control-radius, 999px);
   color: #c4d1ce;
   font-size: 10px;
   letter-spacing: 0.12em;
   transition: border-color 160ms ease, color 160ms ease, background 160ms ease;
+}
+
+.journey-story > header > .journey-story__close.is-status {
+  width: auto;
+  flex-basis: auto;
+  min-width: var(--mobile-control-hit-size, 44px);
+  padding-inline: 13px;
 }
 
 .journey-story > header > .journey-story__close:hover,
@@ -5131,7 +5147,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .account-dock {
     place-items: center;
     padding: 0;
     border: 1px solid rgba(118, 227, 211, 0.18);
-    border-radius: 999px;
+    border-radius: var(--mobile-control-radius, 999px);
     background: rgba(2, 10, 11, 0.46);
     color: rgba(224, 242, 235, 0.82);
     box-shadow: 0 8px 28px rgba(0, 0, 0, 0.16);
@@ -5289,7 +5305,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .account-dock {
     z-index: 9;
     top: 12px;
     right: 12px;
-    min-height: 40px;
+    min-height: var(--mobile-control-hit-size, 44px);
     padding: 0 14px;
     border: 1px solid rgba(118, 227, 211, 0.22);
     border-radius: 999px;
@@ -5304,7 +5320,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .account-dock {
     right: auto;
     left: 12px;
     z-index: 9;
-    min-height: 40px;
+    min-height: var(--mobile-control-hit-size, 44px);
     border-radius: 999px;
     background: rgba(2, 10, 11, 0.74);
     backdrop-filter: blur(12px);
@@ -5339,7 +5355,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .account-dock {
     right: 12px;
     width: var(--mobile-control-hit-size, 44px);
     height: var(--mobile-control-hit-size, 44px);
-    border-radius: 999px;
+    border-radius: var(--mobile-control-radius, 999px);
     border-color: rgba(203, 241, 193, 0.18);
     background: rgba(2, 8, 8, 0.46);
     backdrop-filter: blur(10px);
@@ -5361,7 +5377,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .account-dock {
     top: 12px;
     right: 12px;
     max-width: calc(100% - 24px);
-    gap: 6px;
+    gap: var(--mobile-control-cluster-gap, 6px);
   }
 
   .journey-story__media-set-cover,
@@ -5453,7 +5469,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .account-dock {
   }
 
   .journey-story__media-remove__confirm > button {
-    min-height: 40px;
+    min-height: var(--mobile-control-hit-size, 44px);
     justify-content: center;
   }
 
@@ -5631,14 +5647,14 @@ body:has(.journey-composer-backdrop.is-globe-picking) .account-dock {
     grid-column: 2;
     grid-row: 1 / span 2;
     align-self: center;
-    width: 40px;
-    min-width: 40px;
-    height: 40px;
-    min-height: 40px;
+    width: var(--mobile-control-hit-size, 44px);
+    min-width: var(--mobile-control-hit-size, 44px);
+    height: var(--mobile-control-hit-size, 44px);
+    min-height: var(--mobile-control-hit-size, 44px);
     display: grid;
     place-items: center;
     padding: 0;
-    border-radius: 50%;
+    border-radius: var(--mobile-control-radius, 999px);
     background: transparent;
     color: rgba(187, 211, 203, 0.7);
   }
@@ -5865,7 +5881,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .account-dock {
 
 .mobile-v2__header nav {
   display: flex;
-  gap: 6px;
+  gap: var(--mobile-control-cluster-gap, 6px);
   pointer-events: auto;
 }
 
@@ -6234,7 +6250,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .account-dock {
   place-items: center;
   padding: 0;
   border: 1px solid rgba(118, 198, 188, 0.16);
-  border-radius: 50%;
+  border-radius: var(--mobile-control-radius, 999px);
   background: rgba(5, 23, 22, 0.66);
   color: rgba(225, 239, 233, 0.84);
 }

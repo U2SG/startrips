@@ -18,6 +18,14 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ## 2026-08-30
 
+### PR #96 — Unify mobile control grammar
+
+- **Source head:** `253233778b910aa6c92710dd5db1d9fd6bc5febe`
+- **Scope:** Establishes a shared mobile control grammar for Atlas, Journey Story, fullscreen and picker surfaces, including common 44px hit geometry, cluster spacing, radius tokens, icon-only Story close behavior, and documented shape/motion rules.
+- **User-visible change:** Mobile controls now use a more consistent compact visual language: idle Story close is a single icon-only X, related icon actions share sizing/spacing, and transient upload/delete status remains text-forward when needed.
+- **Review fixes:** Moved shared control custom properties from `.living-atlas` to `:root` so body-portaled Journey Story/fullscreen controls inherit the same tokens instead of silently falling back and drifting from Atlas geometry; rebased onto the merged mobile Story sheet work and re-reviewed the resulting cross-surface diff.
+- **Follow-up:** `qa:media-controls` still has a pre-existing velocity-flick timeout before this PR's new close-geometry assertion; the PR's focused/unit/full suite, typecheck, production build and static checks were otherwise reported green, while GitHub-hosted workflow failures on the reviewed head were zero-step runner failures rather than executed test failures.
+
 ### PR #95 — Make mobile Story collapsible and spatial
 
 - **Source head:** `6431c51efede9abca22dc97162ef3b84a6b74321`
