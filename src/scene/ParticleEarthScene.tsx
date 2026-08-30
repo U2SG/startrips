@@ -73,6 +73,8 @@ export const MAX_RENDERED_ROUTE_LABELS = 6;
 export const MAX_RENDERED_MOBILE_ROUTE_LABELS = 3;
 export const CITY_LABEL_BUDGET = 72;
 export const MAX_RENDERED_COASTLINE_VERTICES = 20_000;
+export const COASTLINE_LOD_VERTEX_BUDGET = { far: 20_000, mid: 32_000, near: 52_000 } as const;
+export type CoastlineLod = keyof typeof COASTLINE_LOD_VERTEX_BUDGET;
 export const GLOBE_RENDER_ORDER = {
   coastline: 1,
   signal: 2,
@@ -227,6 +229,22 @@ export function isPrimaryPointerActivation(
 
 export function clampGlobeZoom(zoom: number) {
   return Math.max(GLOBE_ZOOM_MIN, Math.min(GLOBE_ZOOM_MAX, zoom));
+}
+
+function smoothstep(edge0: number, edge1: number, value: number) {
+  const t = Math.min(1, Math.max(0, (value - edge0) / (edge1 - edge0)));
+  return t * t * (3 - 2 * t);
+}
+
+export function coastlineLodWeights(zoom: number): Record<CoastlineLod, number> {
+  const mid = smoothstep(1.12, 1.5, clampGlobeZoom(zoom));
+  const near = smoothstep(1.95, 2.45, clampGlobeZoom(zoom));
+  return { far: 1 - mid, mid: mid * (1 - near), near };
+}
+
+export function activeCoastlineLod(zoom: number): CoastlineLod {
+  const weights = coastlineLodWeights(zoom);
+  return (Object.keys(weights) as CoastlineLod[]).reduce((best, lod) => weights[lod] > weights[best] ? lod : best, 'far');
 }
 
 export function getJourneyRouteLineScale(globeScale: number) {
@@ -828,18 +846,25 @@ async function buildLandVisualData(count: number) {
     return {
       particlePositions: buildSeededSpherePoints(count, 1908),
       coastlinePositions: new Float32Array(),
+      detailedCoastlinePositions: { mid: new Float32Array(), near: new Float32Array() },
     };
   }
 
-  const response = await fetch("/earth/ne_110m_land.geojson");
+  const [response, detailedResponse] = await Promise.all([
+    fetch("/earth/ne_110m_land.geojson"),
+    fetch("/earth/ne_50m_land.geojson"),
+  ]);
   if (!response.ok) {
     return {
       particlePositions: buildSeededSpherePoints(count, 1908),
       coastlinePositions: new Float32Array(),
+      detailedCoastlinePositions: { mid: new Float32Array(), near: new Float32Array() },
     };
   }
   const collection = (await response.json()) as LandFeatureCollection;
+  const detailedCollection = detailedResponse.ok ? (await detailedResponse.json()) as LandFeatureCollection : collection;
   const rings: number[][][] = [];
+  const detailedRings: number[][][] = [];
   context.clearRect(0, 0, width, height);
   context.fillStyle = "#fff";
 
@@ -853,6 +878,13 @@ async function buildLandVisualData(count: number) {
       drawPolygonMask(context, polygon, width);
       rings.push(...polygon);
     });
+  });
+  detailedCollection.features.forEach(({ geometry }) => {
+    if (!geometry) return;
+    const polygons = geometry.type === "Polygon"
+      ? [geometry.coordinates as number[][][]]
+      : (geometry.coordinates as number[][][][]);
+    polygons.forEach((polygon) => detailedRings.push(...polygon));
   });
 
   const mask = context.getImageData(0, 0, width, height).data;
@@ -882,11 +914,11 @@ async function buildLandVisualData(count: number) {
 
   return {
     particlePositions: points,
-    coastlinePositions: buildSphericalRingSegments(
-      rings,
-      1.405,
-      MAX_RENDERED_COASTLINE_VERTICES,
-    ),
+    coastlinePositions: buildSphericalRingSegments(rings, 1.405, MAX_RENDERED_COASTLINE_VERTICES),
+    detailedCoastlinePositions: {
+      mid: buildSphericalRingSegments(detailedRings, 1.405, COASTLINE_LOD_VERTEX_BUDGET.mid),
+      near: buildSphericalRingSegments(detailedRings, 1.405, COASTLINE_LOD_VERTEX_BUDGET.near),
+    },
   };
 }
 
@@ -1305,6 +1337,15 @@ export function ParticleEarthScene({
     const coastlines = new LineSegments(coastlineGeometry, coastlineMaterial);
     coastlines.renderOrder = GLOBE_RENDER_ORDER.coastline;
     globe.add(coastlines);
+    let midCoastlineGeometry = new BufferGeometry();
+    let nearCoastlineGeometry = new BufferGeometry();
+    const midCoastlineMaterial = coastlineMaterial.clone();
+    const nearCoastlineMaterial = coastlineMaterial.clone();
+    const midCoastlines = new LineSegments(midCoastlineGeometry, midCoastlineMaterial);
+    const nearCoastlines = new LineSegments(nearCoastlineGeometry, nearCoastlineMaterial);
+    midCoastlines.renderOrder = GLOBE_RENDER_ORDER.coastline;
+    nearCoastlines.renderOrder = GLOBE_RENDER_ORDER.coastline;
+    globe.add(midCoastlines, nearCoastlines);
 
     const atmosphereMaterial = createAtmosphereMaterial();
     const atmosphere = new Mesh(sphereGeometry, atmosphereMaterial);
@@ -2730,7 +2771,7 @@ export function ParticleEarthScene({
 
     const rebuildLandVisualData = async (nextQuality: keyof typeof QUALITY_PROFILE) => {
       const revision = ++qualityBuildRevision;
-      const { particlePositions, coastlinePositions } = await buildLandVisualData(
+      const { particlePositions, coastlinePositions, detailedCoastlinePositions } = await buildLandVisualData(
         QUALITY_PROFILE[nextQuality].particleCount,
       );
       if (disposed || revision !== qualityBuildRevision || currentQuality !== nextQuality) return;
@@ -2759,6 +2800,16 @@ export function ParticleEarthScene({
       coastlineGeometry = nextCoastlineGeometry;
       coastlines.geometry = coastlineGeometry;
       previousCoastlineGeometry.dispose();
+      for (const [lod, positions] of Object.entries(detailedCoastlinePositions) as ["mid" | "near", Float32Array][]) {
+        const nextGeometry = new BufferGeometry();
+        nextGeometry.setAttribute("position", new BufferAttribute(positions, 3));
+        if (positions.length > 0) nextGeometry.computeBoundingSphere();
+        if (lod === "mid") {
+          const previous = midCoastlineGeometry; midCoastlineGeometry = nextGeometry; midCoastlines.geometry = nextGeometry; previous.dispose();
+        } else {
+          const previous = nearCoastlineGeometry; nearCoastlineGeometry = nextGeometry; nearCoastlines.geometry = nextGeometry; previous.dispose();
+        }
+      }
 
       host.dataset.quality = nextQuality;
       host.dataset.particleCount = String(particlePositions.length / 3);
@@ -3013,10 +3064,16 @@ export function ParticleEarthScene({
         Math.min(1, baseAtmosphereOpacity * audioGain.ambient),
       );
       wireMaterial.opacity = interpolate(wireMaterial.opacity, target.wireOpacity);
-      coastlineMaterial.opacity = interpolate(
-        coastlineMaterial.opacity,
-        target.coastlineOpacity,
-      );
+      const coastlineWeights = coastlineLodWeights(interactiveZoom);
+      const coastlineLod = activeCoastlineLod(interactiveZoom);
+      coastlineMaterial.opacity = interpolate(coastlineMaterial.opacity, target.coastlineOpacity * coastlineWeights.far);
+      midCoastlineMaterial.opacity = interpolate(midCoastlineMaterial.opacity, target.coastlineOpacity * coastlineWeights.mid);
+      nearCoastlineMaterial.opacity = interpolate(nearCoastlineMaterial.opacity, target.coastlineOpacity * coastlineWeights.near);
+      coastlines.visible = coastlineWeights.far > 0.001 || coastlineMaterial.opacity > 0.001;
+      midCoastlines.visible = coastlineWeights.mid > 0.001 || midCoastlineMaterial.opacity > 0.001;
+      nearCoastlines.visible = coastlineWeights.near > 0.001 || nearCoastlineMaterial.opacity > 0.001;
+      host.dataset.coastlineLod = coastlineLod;
+      host.dataset.coastlineVertices = String((coastlineLod === "far" ? coastlineGeometry : coastlineLod === "mid" ? midCoastlineGeometry : nearCoastlineGeometry).getAttribute("position")?.count ?? 0);
       // Keep the particle world alive while idle without involving React's
       // render cycle. Reduced-motion resolves to a stable final frame.
       const motionTime = reduceMotion ? 0 : now / 1000;
