@@ -51,9 +51,16 @@ import {
   toJourneyRoutes,
 } from "./journeyModel";
 import { getLightEffectGradient } from "./lightEffects";
+import "../styles/living-atlas-polish.css";
 import type { Journey, JourneyRoute } from "./types";
 
 type AtlasView = "planet" | "timeline";
+
+type AtlasNotice = { id: number; message: string };
+
+export function nextAtlasNotice(current: AtlasNotice | null, message: string): AtlasNotice {
+  return { id: (current?.id ?? 0) + 1, message };
+}
 
 const MobileDetailedEarthMap = lazy(() => import("../scene/DetailedEarthMap"));
 
@@ -225,6 +232,35 @@ export function playbackFocusRouteForCameraTarget(
   return target.kind === "route" ? route : null;
 }
 
+// The rail hint must re-measure whenever the rendered rows change, not only
+// when the count does — a same-count title edit can change the scroll height.
+export function railContentSignature(journeys: readonly Journey[]): string {
+  return journeys
+    .map((journey) => `${journey.id} ${journey.title} ${journey.startedOn}`)
+    .join("\n");
+}
+
+// Callback ref (not useRef) so the observer always attaches to the currently
+// mounted rail: switching to the timeline or Mobile V2 unmounts the <ol>, and
+// a detached element would otherwise keep the stale measurement forever.
+function useRailOverflow<T extends HTMLElement>(deps: readonly unknown[] = []) {
+  const [element, setElement] = useState<T | null>(null);
+  const [overflowing, setOverflowing] = useState(false);
+  useEffect(() => {
+    if (!element) {
+      setOverflowing(false);
+      return;
+    }
+    const check = () => setOverflowing(element.scrollHeight > element.clientHeight + 4);
+    check();
+    const observer = new ResizeObserver(check);
+    observer.observe(element);
+    return () => observer.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [element, ...deps]);
+  return { ref: setElement, overflowing };
+}
+
 export function LivingAtlasApp({
   lightweightGlobe = false,
   GlobeComponent = LivingAtlasGlobe,
@@ -253,8 +289,12 @@ export function LivingAtlasApp({
   const [composerOpen, setComposerOpen] = useState(false);
   const [editingJourneyId, setEditingJourneyId] = useState<string | null>(null);
   const [arrivalJourneyId, setArrivalJourneyId] = useState<string | null>(null);
-  const [notice, setNotice] = useState("");
+  const [notice, setNotice] = useState<AtlasNotice | null>(null);
   const [undoJourney, setUndoJourney] = useState<Journey | null>(null);
+  const showNotice = useCallback((message: string) => {
+    setNotice((current) => nextAtlasNotice(current, message));
+  }, []);
+  const clearNotice = useCallback(() => setNotice(null), []);
   const [globePickActive, setGlobePickActive] = useState(false);
   const [draftRoute, setDraftRoute] = useState<JourneyRoute | null>(null);
   // #8: globe-only focus mode hides every sidebar/card and lets the globe take
@@ -393,14 +433,14 @@ export function LivingAtlasApp({
     } catch (error) {
       if (revision !== loadRevision.current) return;
       if (quiet) {
-        setNotice("旅程已保存，但最新媒体列表暂时无法刷新。稍后重新进入即可重试。");
+        showNotice("旅程已保存，但最新媒体列表暂时无法刷新。稍后重新进入即可重试。");
       } else {
         setLoadError(error instanceof Error ? error.message : "无法读取旅程");
         setStatus("error");
       }
       return null;
     }
-  }, []);
+  }, [showNotice]);
 
   useEffect(() => {
     void load();
@@ -423,6 +463,16 @@ export function LivingAtlasApp({
     if (!journeys.some((journey) => journey.id === arrivalJourneyId)) return;
     timeCursor.selectJourney(arrivalJourneyId);
   }, [arrivalJourneyId, journeys, timeCursor.selectJourney]);
+
+  const railList = useRailOverflow<HTMLOListElement>([railContentSignature(journeys)]);
+
+  // Plain notices (save confirmations etc.) settle and clear themselves; the
+  // delete-undo notice stays until the user decides.
+  useEffect(() => {
+    if (!notice || undoJourney) return;
+    const timer = globalThis.setTimeout(clearNotice, 8000);
+    return () => globalThis.clearTimeout(timer);
+  }, [notice, undoJourney, clearNotice]);
 
   const activeJourney = journeys.find((journey) => journey.id === activeJourneyId) ?? null;
   const playbackJourney = journeys.find((journey) => journey.id === playbackJourneyId) ?? null;
@@ -485,7 +535,7 @@ export function LivingAtlasApp({
     if (!edited) setArrivalJourneyId(result.journey.id);
     setDraftRoute(null);
     setUndoJourney(null);
-    setNotice(edited
+    showNotice(edited
       ? result.mediaErrors.length > 0
         ? "旅程修改已保存；未上传成功的媒体仍可重试。"
         : "旅程修改已保存。"
@@ -520,7 +570,7 @@ export function LivingAtlasApp({
     setStoryRoutePointId(null);
     setMobileSheetJourneyId(null);
     setUndoJourney(removed);
-    setNotice("旅程已从图谱移除；7 天内可以撤销，媒体尚未清理。");
+    showNotice("旅程已从图谱移除；7 天内可以撤销，媒体尚未清理。");
   }
 
   async function undoRemovedJourney() {
@@ -530,9 +580,9 @@ export function LivingAtlasApp({
       setJourneys((current) => mergeJourney(current, restored));
       setArrivalJourneyId(restored.id);
       setUndoJourney(null);
-      setNotice("旅程已恢复到图谱。");
+      showNotice("旅程已恢复到图谱。");
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "无法恢复这段旅程");
+      showNotice(error instanceof Error ? error.message : "无法恢复这段旅程");
     }
   }
 
@@ -717,8 +767,8 @@ export function LivingAtlasApp({
         <header className="living-atlas__header" inert={globeFocusMode || globePickActive || playbackActive || undefined}>
           <div className="living-atlas__brand"><IconWorld size={25} stroke={1.1} aria-hidden="true" /><div><p>STARTRIPS · LIVING ATLAS</p><h1><ShinyText>把走过的路留在地球上</ShinyText></h1></div></div>
           <nav aria-label="图谱视图">
-            <button type="button" className={view === "planet" ? "is-active" : ""} onClick={() => setView("planet")}><IconWorld size={16} stroke={1.35} aria-hidden="true" />地球</button>
-            <button type="button" className={view === "timeline" ? "is-active" : ""} onClick={() => setView("timeline")}><IconTimeline size={16} stroke={1.35} aria-hidden="true" />时间线</button>
+            <button type="button" className={view === "planet" ? "is-active" : ""} aria-current={view === "planet" ? "page" : undefined} onClick={() => setView("planet")}><IconWorld size={16} stroke={1.35} aria-hidden="true" />地球</button>
+            <button type="button" className={view === "timeline" ? "is-active" : ""} aria-current={view === "timeline" ? "page" : undefined} onClick={() => setView("timeline")}><IconTimeline size={16} stroke={1.35} aria-hidden="true" />时间线</button>
             <button ref={createMagnet.ref} onMouseMove={createMagnet.onMouseMove} onMouseLeave={createMagnet.onMouseLeave} type="button" className="living-atlas__create" onClick={openCreateComposer}><IconPlus size={17} stroke={1.4} aria-hidden="true" />记录旅程</button>
             <button
               ref={globeFocusTriggerRef}
@@ -743,7 +793,7 @@ export function LivingAtlasApp({
             <span>旅程</span>
             <small><CountUp value={journeys.length} initialValue={journeys.length} format={(value) => String(value).padStart(2, "0")} /> JOURNEYS</small>
           </div>
-          <ol>
+          <ol ref={railList.ref} data-overflow={railList.overflowing ? "true" : "false"}>
             {journeyRail.map((journey) => (
               <li key={journey.id}>
                 <button
@@ -764,7 +814,7 @@ export function LivingAtlasApp({
               </li>
             ))}
           </ol>
-          <p className="living-atlas__journey-scroll-hint">滚动查看更多旅程</p>
+          {railList.overflowing ? <p className="living-atlas__journey-scroll-hint">滚动查看更多旅程</p> : null}
         </nav>
       ) : null}
 
@@ -1034,9 +1084,9 @@ export function LivingAtlasApp({
 
       {notice ? (
         <div className="living-atlas__notice" role="status" inert={globeFocusMode || globePickActive || playbackActive || undefined}>
-          <span>{notice}</span>
+          <span>{notice.message}</span>
           {undoJourney ? <button className="living-atlas__notice-undo" type="button" onClick={() => void undoRemovedJourney()}>撤销删除</button> : null}
-          <button type="button" onClick={() => { setNotice(""); setUndoJourney(null); }} aria-label="关闭提示"><IconX size={17} stroke={1.4} aria-hidden="true" /></button>
+          <button type="button" onClick={() => { clearNotice(); setUndoJourney(null); }} aria-label="关闭提示"><IconX size={17} stroke={1.4} aria-hidden="true" /></button>
         </div>
       ) : null}
 
