@@ -408,20 +408,43 @@ try {
       await story.page.keyboard.press("Tab");
       deleteTabStayedInside = deleteTabStayedInside && await deleteSheet.evaluate((root) => root.contains(document.activeElement));
     }
-    await story.page.keyboard.press("Escape");
+    // Menu -> delete is a replacement, not a nested history layer. One Back
+    // closes delete directly to Manage; a second Back must leave Manage without
+    // exposing or traversing a stale media-menu history entry.
+    await story.page.evaluate(() => window.history.back());
     await deleteSheet.waitFor({ state: "detached" });
     await story.page.waitForFunction(() => (
       document.activeElement?.classList.contains("journey-story__mobile-media-menu-trigger") ?? false
     ));
     const deleteFocusRestored = await manageTriggerButton.evaluate((button) => document.activeElement === button);
+    const replacementMenuStayedClosed = await mobileSheet.count() === 0;
+    const replacementStayedInManage = await storyRoot.getAttribute("data-mobile-mode") === "manage";
+    await story.page.evaluate(() => window.history.back());
+    await story.page.waitForFunction(() => document.querySelector(".journey-story")?.getAttribute("data-mobile-mode") === "viewer");
+    const replacementSecondBackExitedManage = await storyRoot.getAttribute("data-mobile-mode") === "viewer";
     checks.push({
       name: "story-mobile-delete-focus-ownership",
       deleteFocusInside,
       deleteTabStayedInside,
       deleteFocusRestored,
-      failed: !deleteFocusInside || !deleteTabStayedInside || !deleteFocusRestored,
+      replacementMenuStayedClosed,
+      replacementStayedInManage,
+      replacementSecondBackExitedManage,
+      failed: !deleteFocusInside
+        || !deleteTabStayedInside
+        || !deleteFocusRestored
+        || !replacementMenuStayedClosed
+        || !replacementStayedInManage
+        || !replacementSecondBackExitedManage,
     });
-    if (!deleteFocusInside || !deleteTabStayedInside || !deleteFocusRestored) failed = true;
+    if (!deleteFocusInside
+      || !deleteTabStayedInside
+      || !deleteFocusRestored
+      || !replacementMenuStayedClosed
+      || !replacementStayedInManage
+      || !replacementSecondBackExitedManage) failed = true;
+    await story.page.getByRole("button", { name: "管理旅程" }).click();
+    await story.page.waitForFunction(() => document.querySelector(".journey-story")?.getAttribute("data-mobile-mode") === "manage");
 
     await settledMedia.click();
     const fullscreen = story.page.locator(".journey-story-fullscreen");

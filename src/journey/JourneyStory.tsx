@@ -727,10 +727,27 @@ export function JourneyStory({
   }
 
   useMobileSurfaceHistory(mobileManageMode && mobileLayout, "story-manage", exitMobileManageMode);
-  useMobileSurfaceHistory(mobileMediaMenuOpen && mobileLayout, "story-media-manage", () => setMobileMediaMenuOpen(false));
-  useMobileSurfaceHistory(mediaDeleteState === "confirming" && mobileLayout, "story-media-delete", closeMobileMediaDelete);
+  // Media menu, media-delete confirmation, and fullscreen are mutually
+  // replacing transient surfaces on mobile. Keep them on one browser-history
+  // layer so menu -> delete/fullscreen reuses the current entry instead of
+  // burying a stale menu token underneath the replacement.
+  const mobileTransientMediaSurfaceOpen = mobileLayout && (
+    mobileMediaMenuOpen
+    || mediaDeleteState === "confirming"
+    || fullscreen
+  );
+  useMobileSurfaceHistory(mobileTransientMediaSurfaceOpen, "story-media-surface", () => {
+    if (fullscreen) {
+      exitFullscreen();
+      return;
+    }
+    if (mediaDeleteState === "confirming") {
+      closeMobileMediaDelete();
+      return;
+    }
+    if (mobileMediaMenuOpen) setMobileMediaMenuOpen(false);
+  });
   useMobileSurfaceHistory(deleteState === "confirming" && mobileLayout, "story-journey-delete", closeJourneyDelete);
-  useMobileSurfaceHistory(fullscreen && mobileLayout, "story-fullscreen", exitFullscreen);
   const dialogRef = useModalFocus<HTMLElement>(requestClose);
   const mobileMediaSheetRef = useNestedModalFocus<HTMLElement>(
     mobileLayout && (mobileMediaMenuOpen || mediaDeleteState !== "idle"),
