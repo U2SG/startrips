@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isMediaSwipeIntent, shouldCommitMediaSwipe } from "./mediaSwipeDecision";
+import { isMediaSwipeIntent, nextMediaSwipeVelocity, shouldCommitMediaSwipe } from "./mediaSwipeDecision";
 
 describe("mobile media swipe decision", () => {
   it("commits a deliberate distance drag", () => {
@@ -16,6 +16,12 @@ describe("mobile media swipe decision", () => {
     expect(isMediaSwipeIntent(30, 1.2)).toBe(false);
     expect(isMediaSwipeIntent(40, 0.2)).toBe(false);
     expect(isMediaSwipeIntent(40, -0.8)).toBe(false);
+  });
+
+  it("expires stale flick velocity before blending a delayed sample", () => {
+    const velocity = nextMediaSwipeVelocity(2, 1, 100);
+    expect(velocity).toBeCloseTo(0.01);
+    expect(shouldCommitMediaSwipe(41, velocity, true)).toBe(false);
   });
 
   it("keeps edge flicks as swipe intent without committing a missing neighbor", () => {

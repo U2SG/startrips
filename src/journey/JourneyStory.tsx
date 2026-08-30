@@ -74,7 +74,7 @@ import type { Journey, JourneyMediaAsset } from "./types";
 import { useModalFocus, useNestedModalFocus } from "./useModalFocus";
 import { useCompactMobileLayout } from "./mobileLayout";
 import { useMobileSurfaceHistory } from "./useMobileSurfaceHistory";
-import { isMediaSwipeIntent, shouldCommitMediaSwipe } from "./mediaSwipeDecision";
+import { MEDIA_SWIPE_VELOCITY_MAX_AGE_MS, isMediaSwipeIntent, nextMediaSwipeVelocity, shouldCommitMediaSwipe } from "./mediaSwipeDecision";
 
 const SOUNDTRACK_INPUT_ACCEPT = [
   "audio/mpeg",
@@ -1248,10 +1248,7 @@ export function JourneyStory({
     drag.dx = clientX - drag.startX;
     const elapsed = eventTime - drag.lastTime;
     if (elapsed > 0) {
-      const sampleVelocity = (clientX - drag.lastX) / elapsed;
-      drag.velocityX = drag.velocityX === 0
-        ? sampleVelocity
-        : drag.velocityX * 0.35 + sampleVelocity * 0.65;
+      drag.velocityX = nextMediaSwipeVelocity(drag.velocityX, clientX - drag.lastX, elapsed);
       drag.lastX = clientX;
       drag.lastTime = eventTime;
     }
@@ -1389,7 +1386,7 @@ export function JourneyStory({
     if (!event.isPrimary) return;
     const drag = mediaDragRef.current;
     if (drag && drag.pointerId !== event.pointerId) return;
-    const releaseVelocityX = drag && event.timeStamp - drag.lastTime <= 80 ? drag.velocityX : 0;
+    const releaseVelocityX = drag && event.timeStamp - drag.lastTime <= MEDIA_SWIPE_VELOCITY_MAX_AGE_MS ? drag.velocityX : 0;
     // Distance or a recent same-direction flick can own the gesture. Slow
     // sub-threshold movement remains an image tap; an edge flick with no
     // neighbor is still consumed as swipe intent so it only springs back.
@@ -1466,7 +1463,7 @@ export function JourneyStory({
     }
     const dx = event.clientX - drag.startX;
     const dy = event.clientY - drag.startY;
-    const releaseVelocityX = event.timeStamp - drag.lastTime <= 80 ? drag.velocityX : 0;
+    const releaseVelocityX = event.timeStamp - drag.lastTime <= MEDIA_SWIPE_VELOCITY_MAX_AGE_MS ? drag.velocityX : 0;
     if (drag.axis === "x" && shouldCommitMediaSwipe(dx, releaseVelocityX, Boolean(drag.neighborAsset))) {
       settleMediaDrag(true);
       return;
