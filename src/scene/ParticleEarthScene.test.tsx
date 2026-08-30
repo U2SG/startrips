@@ -44,6 +44,7 @@ import {
   isGlobeDrag,
   isPrimaryPointerActivation,
   isSphericalPointVisible,
+  isProjectedPointInsideViewport,
   selectRenderableJourneyRoutes,
   selectRouteLabelPointIndexes,
 } from "./ParticleEarthScene";
@@ -359,6 +360,15 @@ describe("ParticleEarthScene contracts", () => {
     );
     expect(GLOBE_MODE_CONFIG.focusPoint.clusterOpacity).toBe(0);
     expect(GLOBE_MODE_CONFIG.archiveBurst.clusterOpacity).toBeGreaterThan(0);
+  });
+
+  it("only persists city anchors that remain inside the projected viewport", () => {
+    expect(isProjectedPointInsideViewport(0, 0, 390, 844)).toBe(true);
+    expect(isProjectedPointInsideViewport(390, 844, 390, 844)).toBe(true);
+    expect(isProjectedPointInsideViewport(-0.1, 200, 390, 844)).toBe(false);
+    expect(isProjectedPointInsideViewport(390.1, 200, 390, 844)).toBe(false);
+    expect(isProjectedPointInsideViewport(100, 844.1, 390, 844)).toBe(false);
+    expect(isProjectedPointInsideViewport(Number.NaN, 100, 390, 844)).toBe(false);
   });
 
   it("scales route lines with globe zoom while keeping a readable floor and ceiling", () => {

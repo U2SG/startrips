@@ -314,6 +314,22 @@ export function getRouteFocusPhase(
   return routeFocusZoomResetting ? "releasing" : "idle";
 }
 
+export function isProjectedPointInsideViewport(
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+): boolean {
+  return Number.isFinite(x)
+    && Number.isFinite(y)
+    && width > 0
+    && height > 0
+    && x >= 0
+    && x <= width
+    && y >= 0
+    && y <= height;
+}
+
 export function selectRouteLabelPointIndexes(
   points: readonly { isStop: boolean; label?: string }[],
   maxLabels = MAX_RENDERED_ROUTE_LABELS,
@@ -2213,7 +2229,20 @@ export function ParticleEarthScene({
         // hysteresis exactly at the zoom boundary.
         const persistentCities = new Set(
           cityLabelPool
-            .filter((entry) => entry.city && entry.element.style.display !== "none")
+            .filter((entry) => {
+              const city = entry.city;
+              if (!city || entry.element.style.display === "none") return false;
+              const vector = latLonToVector3(city.latitude, city.longitude, 1.46);
+              if (!projectRoutePoint(vector.x, vector.y, vector.z, routeProjectedPoint)) {
+                return false;
+              }
+              return isProjectedPointInsideViewport(
+                routeProjectedPoint.x,
+                routeProjectedPoint.y,
+                targetSize.x,
+                targetSize.y,
+              );
+            })
             .map((entry) => entry.city!),
         );
         if (tier !== lastCityTier) {
