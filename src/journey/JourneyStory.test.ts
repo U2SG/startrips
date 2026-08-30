@@ -10,6 +10,7 @@ import {
   storyAutoplayNextIndex,
   storyInitialMediaSelection,
   storyMediaNeighborIndex,
+  storyUploadedAssetIndex,
 } from "./JourneyStory";
 import type { Journey, JourneyMediaAsset } from "./types";
 
@@ -128,10 +129,42 @@ describe("storyMediaNeighborIndex (#76)", () => {
 });
 
 describe("storyAutoplayNextIndex (#76)", () => {
-  it("stops at the end instead of implicitly looping", () => {
-    expect(storyAutoplayNextIndex(0, 3)).toBe(1);
-    expect(storyAutoplayNextIndex(2, 3)).toBeNull();
-    expect(storyAutoplayNextIndex(0, 1)).toBeNull();
+  it("stops at the end of the whole-Journey narrative", () => {
+    expect(storyAutoplayNextIndex(0, 3, true)).toBe(1);
+    expect(storyAutoplayNextIndex(2, 3, true)).toBeNull();
+    expect(storyAutoplayNextIndex(0, 1, true)).toBeNull();
+  });
+
+  it("preserves route-point autoplay looping", () => {
+    expect(storyAutoplayNextIndex(0, 3, false)).toBe(1);
+    expect(storyAutoplayNextIndex(2, 3, false)).toBe(0);
+    expect(storyAutoplayNextIndex(0, 1, false)).toBeNull();
+  });
+});
+
+describe("storyUploadedAssetIndex (#76 review)", () => {
+  it("selects a deduplicated intro asset instead of the first route-point boundary", () => {
+    const intro = asset("intro", "image/jpeg", 0, "intro.jpg");
+    const pointMedia = {
+      ...asset("point", "image/jpeg", 1, "point.jpg"),
+      routePointId: "point-1",
+    };
+    expect(storyUploadedAssetIndex([intro, pointMedia], [intro.id])).toBe(0);
+  });
+
+  it("selects the first successful newly uploaded asset by id", () => {
+    const intro = asset("intro", "image/jpeg", 0, "intro.jpg");
+    const added = asset("added", "image/jpeg", 1, "added.jpg");
+    const pointMedia = {
+      ...asset("point", "image/jpeg", 2, "point.jpg"),
+      routePointId: "point-1",
+    };
+    expect(storyUploadedAssetIndex([intro, added, pointMedia], [added.id])).toBe(1);
+  });
+
+  it("returns null when refresh cannot find any successful uploaded asset", () => {
+    const intro = asset("intro", "image/jpeg", 0, "intro.jpg");
+    expect(storyUploadedAssetIndex([intro], ["missing"])).toBeNull();
   });
 });
 

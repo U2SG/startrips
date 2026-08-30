@@ -181,9 +181,22 @@ export function storyAssetIndexForId(
 export function storyAutoplayNextIndex(
   currentIndex: number,
   mediaLength: number,
+  wholeJourney: boolean,
 ): number | null {
   if (mediaLength < 2) return null;
-  return currentIndex < mediaLength - 1 ? currentIndex + 1 : null;
+  if (currentIndex < mediaLength - 1) return currentIndex + 1;
+  return wholeJourney ? null : 0;
+}
+
+export function storyUploadedAssetIndex(
+  media: readonly JourneyMediaAsset[],
+  uploadedAssetIds: readonly string[],
+): number | null {
+  for (const assetId of uploadedAssetIds) {
+    const index = media.findIndex((asset) => asset.id === assetId);
+    if (index >= 0) return index;
+  }
+  return null;
 }
 
 export function storyInitialMediaSelection(
@@ -761,7 +774,11 @@ export function JourneyStory({
   navigateToMediaRef.current = navigateToMedia;
   useEffect(() => {
     if (!playing) return;
-    const nextIndex = storyAutoplayNextIndex(assetIndex, scopedMedia.length);
+    const nextIndex = storyAutoplayNextIndex(
+      assetIndex,
+      scopedMedia.length,
+      selectedRoutePointId === null,
+    );
     if (nextIndex === null) {
       setPlaying(false);
       return;
@@ -770,7 +787,7 @@ export function JourneyStory({
       navigateToMediaRef.current(nextIndex);
     }, 5200);
     return () => window.clearTimeout(timer);
-  }, [assetIndex, playing, scopedMedia.length]);
+  }, [assetIndex, playing, scopedMedia.length, selectedRoutePointId]);
 
   // The soundtrack follows the slideshow: it keeps its position across pauses
   // and only rewinds when the story closes or moves to another journey.
@@ -1535,9 +1552,6 @@ export function JourneyStory({
       uploadedBytes: 0,
       totalBytes: files.reduce((sum, file) => sum + file.size, 0),
     });
-    const firstNewAssetIndex = selectedRoutePointId === null
-      ? playbackIntroMedia(journey).length
-      : scopedMedia.length;
     const result = await uploadJourneyMedia({
       journeyId: journey.id,
       routePointId: selectedRoutePointId ?? undefined,
@@ -1552,9 +1566,13 @@ export function JourneyStory({
         const refreshedMedia = refreshedJourney
           ? scopedVisualMedia(refreshedJourney)
           : [];
-        if (refreshedMedia[firstNewAssetIndex]) {
-          setAssetIndex(firstNewAssetIndex);
-          setShownAssetId(refreshedMedia[firstNewAssetIndex].id);
+        const uploadedAssetIndex = storyUploadedAssetIndex(
+          refreshedMedia,
+          result.assets.map((asset) => asset.id),
+        );
+        if (uploadedAssetIndex !== null) {
+          setAssetIndex(uploadedAssetIndex);
+          setShownAssetId(refreshedMedia[uploadedAssetIndex].id);
           setIncomingAssetId(null);
           pendingTargetRef.current = null;
         } else {
