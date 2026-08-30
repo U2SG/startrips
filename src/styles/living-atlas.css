@@ -1,3 +1,11 @@
+/* Shared mobile-control geometry must live above both the Atlas tree and
+   body-portaled Story/fullscreen surfaces so one override changes them together. */
+:root {
+  --mobile-control-hit-size: 44px;
+  --mobile-control-cluster-gap: 6px;
+  --mobile-control-radius: 999px;
+}
+
 .living-atlas {
   --atlas-bg: #010506;
   --atlas-panel: rgba(3, 12, 13, 0.91);
@@ -11,11 +19,6 @@
   --atlas-cyan: #76e3d0;
   --atlas-acid: #c8ff3d;
   --atlas-warm: #f4ce73;
-  /* Mobile control grammar: fixed hit geometry, quiet circular icon surface,
-     and one shared cluster gap. Visible glyphs may optically vary inside it. */
-  --mobile-control-hit-size: 44px;
-  --mobile-control-cluster-gap: 6px;
-  --mobile-control-radius: 999px;
   position: relative;
   width: 100%;
   height: 100svh;
