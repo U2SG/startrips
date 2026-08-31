@@ -862,6 +862,35 @@ export function JourneyStory({
   useMobileSurfaceHistory(mobileHistoryLayers.journeyDelete, "story-journey-delete", closeJourneyDelete);
   const storyModal = !mobileLayout || mobileStoryExpanded;
   const dialogRef = useModalFocus<HTMLElement>(requestClose, storyModal);
+
+  // A collapsed mobile Story is intentionally not a modal, so useModalFocus
+  // does not own Escape there. Manage still needs the same keyboard exit
+  // contract as Browser Back once transient child sheets are gone.
+  useEffect(() => {
+    if (!mobileLayout || !mobileManageMode || storyModal) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      if (
+        mobileMediaMenuOpen
+        || mediaDeleteState !== "idle"
+        || deleteState !== "idle"
+        || fullscreen
+      ) return;
+      event.preventDefault();
+      exitMobileManageMode();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [
+    deleteState,
+    fullscreen,
+    mediaDeleteState,
+    mobileLayout,
+    mobileManageMode,
+    mobileMediaMenuOpen,
+    storyModal,
+  ]);
+
   const mobileMediaSheetRef = useNestedModalFocus<HTMLElement>(
     mobileLayout && (mobileMediaMenuOpen || mediaDeleteState !== "idle"),
     mobileMediaMenuOpen ? "manage" : mediaDeleteState !== "idle" ? "delete" : null,
