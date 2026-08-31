@@ -18,6 +18,14 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ## 2026-08-31
 
+### PR #101 ? Correct PR 99 review ledger
+
+- **Source head:** `f8bb5b43c9805dc7233d3b44d8bc3ccabad3a5b9`
+- **Scope:** Repairs the durable PR ledger after PR #99 merged from a later reviewed source head than the SHA recorded in its in-branch history entry.
+- **User-visible change:** None; this is a documentation/governance correction so future audits point to the exact #99 head that was reviewed against latest main before merge.
+- **Review fixes:** Verified the corrected #99 source head `d5c22e5` included latest main / PR #100 without modifying #99's media-management logic; recorded the executed branch-local Chromium acceptance and latest-main validation evidence; confirmed the correction commit changes only `docs/pr-history.md`.
+- **Follow-up:** No product follow-up from this docs-only repair. The pre-existing Issue #65 media velocity-flick QA timeout remains tracked separately.
+
 ### PR #100 ? Define deterministic Journey keepsake render manifest
 
 - **Source head:** `23c7eb2f6dbfff5d9573b05902897feb316646ac`
