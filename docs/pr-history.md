@@ -20,11 +20,11 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ### PR #100 ? Define deterministic Journey keepsake render manifest
 
-- **Source head:** `42d783883462894d66d2a6e9594bb88e40644f12`
+- **Source head:** `23c7eb2f6dbfff5d9573b05902897feb316646ac`
 - **Scope:** Defines the phase-1 deterministic keepsake render manifest and hybrid authorized-server-render contract, reusing live Journey Playback ordering while encoding private media references as stable IDs and supporting portrait-first 15/30/60-second pacing presets.
 - **User-visible change:** Establishes the export contract for future private Journey reels so route arrivals, travel, opening media, point media, and outro scenes can render in the same semantic order as live playback without embedding signed URLs or exposing storage coordinates.
-- **Review fixes:** Replaced index-only geography with stable route-point IDs on arrival/media scenes and stable from/to route-point IDs on travel scenes; made `journeyId + journeyRevision` an explicit hard render precondition; added missing-ID validation and a regression proving a reordered, revised Journey is rejected instead of silently resolving old indexes to new geography.
-- **Follow-up:** The next #87 slice remains the dedicated render harness and deterministic 3-stop output experiment with encode-time, peak-memory, file-size, and visual-quality measurements. GitHub-hosted verify/readiness checks on the reviewed code head were zero-step runner failures; targeted keepsake/playback tests (18/18), the non-DB suite (46 files / 409 tests), typecheck, production build, and `git diff --check` were green.
+- **Review fixes:** Replaced index-only geography with role-specific required stable route-point IDs on arrival/travel scenes; made `journeyId + journeyRevision` an explicit hard render precondition; added a stable-ID narrative snapshot of route order and canonical visual-media placement/order so queued manifests also reject media move, reorder, upload, or deletion paths that do not bump Journey revision; added missing-ID/placement validation and regressions for route reorder plus same-revision media mutations.
+- **Follow-up:** The next #87 slice remains the dedicated render harness and deterministic 3-stop output experiment with encode-time, peak-memory, file-size, and visual-quality measurements. GitHub-hosted verify/readiness checks on the reviewed code head were zero-step runner failures; targeted keepsake/playback tests (19/19), the non-DB suite (46 files / 410 tests), typecheck, production build, and `git diff --check` were green.
 
 ## 2026-08-30
 
