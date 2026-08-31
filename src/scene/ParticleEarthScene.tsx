@@ -60,6 +60,7 @@ import {
   PARTICLE_DIM_POINT_LIMIT,
 } from "./particleEarthMaterial";
 import { disposeSceneGraph, useThreeScene } from "./useThreeScene";
+import { resolveGlobeSemanticZoom, resolveGlobeSemanticZoomForFrame, type GlobeSemanticZoomState } from "./semanticZoom";
 
 export const QUALITY_PROFILE = {
   low: { particleCount: 12_000, maxDpr: 1 },
@@ -231,20 +232,12 @@ export function clampGlobeZoom(zoom: number) {
   return Math.max(GLOBE_ZOOM_MIN, Math.min(GLOBE_ZOOM_MAX, zoom));
 }
 
-function smoothstep(edge0: number, edge1: number, value: number) {
-  const t = Math.min(1, Math.max(0, (value - edge0) / (edge1 - edge0)));
-  return t * t * (3 - 2 * t);
-}
-
 export function coastlineLodWeights(zoom: number): Record<CoastlineLod, number> {
-  const mid = smoothstep(1.12, 1.5, clampGlobeZoom(zoom));
-  const near = smoothstep(1.95, 2.45, clampGlobeZoom(zoom));
-  return { far: 1 - mid, mid: mid * (1 - near), near };
+  return resolveGlobeSemanticZoom({ zoom }).coastlineWeights;
 }
 
 export function activeCoastlineLod(zoom: number): CoastlineLod {
-  const weights = coastlineLodWeights(zoom);
-  return (Object.keys(weights) as CoastlineLod[]).reduce((best, lod) => weights[lod] > weights[best] ? lod : best, 'far');
+  return resolveGlobeSemanticZoom({ zoom }).coastlineLod;
 }
 
 export function getJourneyRouteLineScale(globeScale: number) {
@@ -1992,6 +1985,7 @@ export function ParticleEarthScene({
     // and towns; all labels are clickable for point picking.
     let cityTierData: { cities: CityPoint[] } | null = null;
     let lastCityTier: "capitals" | "prefectures" | "all" | null = null;
+    let semanticZoomState: GlobeSemanticZoomState = resolveGlobeSemanticZoom({ zoom: interactiveZoom, qualityProfile: currentQuality });
     const cityLabelPool: Array<{
       element: SVGTextElement;
       city: CityPoint | null;
@@ -2315,11 +2309,7 @@ export function ParticleEarthScene({
         // Containment-aware zoom: national/provincial capitals while distant,
         // add prefecture cities when zoomed in, then every county/town city.
         const scale = globe.scale.x;
-        const tier: "capitals" | "prefectures" | "all" = scale < 1.3
-          ? "capitals"
-          : scale < 2.1
-            ? "prefectures"
-            : "all";
+        const tier = semanticZoomState.cityTier;
         // Snapshot persistence before a tier reset hides the current pool, so
         // crossing capitals -> prefectures -> all does not throw away label
         // hysteresis exactly at the zoom boundary.
@@ -3081,8 +3071,16 @@ export function ParticleEarthScene({
         Math.min(1, baseAtmosphereOpacity * audioGain.ambient),
       );
       wireMaterial.opacity = interpolate(wireMaterial.opacity, target.wireOpacity);
-      const coastlineWeights = coastlineLodWeights(interactiveZoom);
-      const coastlineLod = activeCoastlineLod(interactiveZoom);
+      semanticZoomState = resolveGlobeSemanticZoomForFrame({
+        zoom: interactiveZoom,
+        current: semanticZoomState,
+        qualityProfile: currentQuality,
+        focusFlightActive: routeFocusSettling,
+      });
+      host.dataset.semanticZoom = semanticZoomState.state;
+      host.dataset.cityLod = semanticZoomState.cityTier;
+      const coastlineWeights = semanticZoomState.coastlineWeights;
+      const coastlineLod = semanticZoomState.coastlineLod;
       coastlineMaterial.opacity = interpolate(coastlineMaterial.opacity, target.coastlineOpacity * coastlineWeights.far);
       midCoastlineMaterial.opacity = interpolate(midCoastlineMaterial.opacity, target.coastlineOpacity * coastlineWeights.mid);
       nearCoastlineMaterial.opacity = interpolate(nearCoastlineMaterial.opacity, target.coastlineOpacity * coastlineWeights.near);

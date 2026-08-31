@@ -18,6 +18,14 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ## 2026-08-30
 
+### PR #98 — Unify globe layers under semantic zoom
+
+- **Source head:** `80f93650cf9d8d0e6e335ca5b0746a6ec023a167`
+- **Scope:** Introduces a shared four-band semantic-zoom resolver with hysteresis and routes the particle globe's city-label tier and coastline detail through one semantic context, including mobile/low-quality coastline caps and debug state for QA.
+- **User-visible change:** Zooming from planet to local view now reveals city and coastline context as one more coherent hierarchy, while programmatic Journey focus flights keep a stable information state during travel and reveal destination detail only on arrival instead of popping through intermediate LOD bands.
+- **Review fixes:** Fixed focus-flight semantic churn by freezing the complete semantic snapshot during `routeFocusSettling`—state, city tier, coastline weights and active coastline LOD—and resolving the destination semantic state only after arrival; added a planet-to-local regression crossing multiple semantic bands.
+- **Follow-up:** Spatial particle LOD (#81) and relief/terrain exploration (#82) remain separate consumers to integrate with the shared semantic contract. GitHub-hosted verify/readiness checks on the reviewed code head were zero-step runner failures; targeted semantic/scene tests, the non-DB suite, typecheck and production build were reported green, while the local tenant integration suite could not start because Postgres was unavailable at `127.0.0.1:5432`.
+
 ### PR #97 — Add adaptive coastline LOD
 
 - **Source head:** `c02e732d5045a4bf8c9a4668ae0af77bfeb7da8d`
