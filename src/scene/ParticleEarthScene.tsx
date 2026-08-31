@@ -308,6 +308,17 @@ export function isReliablePinchAnchor(
       <= projectedGlobeRadiusPx * 0.98;
 }
 
+export function canTrackGlobePointer(activePointerCount: number) {
+  return activePointerCount < 2;
+}
+
+export function shouldSuppressUntrackedPointerActivation(
+  rejectedByGestureCapacity: boolean,
+  activePointerCount: number,
+) {
+  return rejectedByGestureCapacity || activePointerCount > 0;
+}
+
 export function rebaseGlobeDragSample(
   pointerId: number,
   pointer: ScreenPoint,
@@ -2122,6 +2133,8 @@ export function ParticleEarthScene({
     let cityTierData: { cities: CityPoint[] } | null = null;
     let lastCityTier: "capitals" | "prefectures" | "all" | null = null;
     let semanticZoomState: GlobeSemanticZoomState = resolveGlobeSemanticZoom({ zoom: interactiveZoom, qualityProfile: currentQuality });
+    const activePointers = new Map<number, { x: number; y: number }>();
+    const rejectedPointerIds = new Set<number>();
     const cityLabelPool: Array<{
       element: SVGTextElement;
       city: CityPoint | null;
@@ -2139,6 +2152,13 @@ export function ParticleEarthScene({
       entry.element.classList.add("particle-earth-city");
       entry.element.addEventListener("pointerup", (event) => {
         event.stopPropagation();
+        const rejectedByGestureCapacity = rejectedPointerIds.delete(event.pointerId);
+        if (shouldSuppressUntrackedPointerActivation(
+          rejectedByGestureCapacity,
+          activePointers.size,
+        )) {
+          return;
+        }
         const pick = latestOnGlobePointPick.current;
         if (entry.city && pick) {
           pick({
@@ -2724,7 +2744,6 @@ export function ParticleEarthScene({
       routeProjectionRevision += 1;
       return anchored;
     };
-    const activePointers = new Map<number, { x: number; y: number }>();
     let dragPointerId: number | null = null;
     let dragLastX = 0;
     let dragLastY = 0;
@@ -2785,6 +2804,12 @@ export function ParticleEarthScene({
       ) {
         return;
       }
+      if (!canTrackGlobePointer(activePointers.size)) {
+        rejectedPointerIds.add(event.pointerId);
+        renderer.domElement.setPointerCapture?.(event.pointerId);
+        return;
+      }
+      rejectedPointerIds.delete(event.pointerId);
       activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
       claimManualInteraction();
       renderer.domElement.setPointerCapture?.(event.pointerId);
@@ -2927,12 +2952,28 @@ export function ParticleEarthScene({
     const onPointerUp = (event: PointerEvent) => {
       if (activePointers.has(event.pointerId)) {
         finishPointer(event, isPrimaryPointerActivation(event));
-      } else if (isPrimaryPointerActivation(event)) {
+        return;
+      }
+      const rejectedByGestureCapacity = rejectedPointerIds.delete(event.pointerId);
+      if (
+        isPrimaryPointerActivation(event)
+        && !shouldSuppressUntrackedPointerActivation(
+          rejectedByGestureCapacity,
+          activePointers.size,
+        )
+      ) {
         activatePointerTarget(event);
       }
     };
-    const onPointerCancel = (event: PointerEvent) => finishPointer(event, false);
+    const onPointerCancel = (event: PointerEvent) => {
+      if (rejectedPointerIds.delete(event.pointerId)) return;
+      finishPointer(event, false);
+    };
+    const onRejectedPointerLifecycleEnd = (event: PointerEvent) => {
+      rejectedPointerIds.delete(event.pointerId);
+    };
     const onLostPointerCapture = (event: PointerEvent) => {
+      rejectedPointerIds.delete(event.pointerId);
       if (!activePointers.has(event.pointerId)) return;
       activePointers.delete(event.pointerId);
       rotationVelocityX = 0;
@@ -2986,6 +3027,8 @@ export function ParticleEarthScene({
     renderer.domElement.addEventListener("pointerup", onPointerUp);
     renderer.domElement.addEventListener("pointercancel", onPointerCancel);
     renderer.domElement.addEventListener("lostpointercapture", onLostPointerCapture);
+    window.addEventListener("pointerup", onRejectedPointerLifecycleEnd);
+    window.addEventListener("pointercancel", onRejectedPointerLifecycleEnd);
     renderer.domElement.addEventListener("wheel", onWheel, { passive: false });
 
     let particleMaterial = createParticleEarthMaterial({
@@ -3608,6 +3651,8 @@ export function ParticleEarthScene({
         renderer.domElement.removeEventListener("pointerup", onPointerUp);
         renderer.domElement.removeEventListener("pointercancel", onPointerCancel);
         renderer.domElement.removeEventListener("lostpointercapture", onLostPointerCapture);
+        window.removeEventListener("pointerup", onRejectedPointerLifecycleEnd);
+        window.removeEventListener("pointercancel", onRejectedPointerLifecycleEnd);
         renderer.domElement.removeEventListener("wheel", onWheel);
         texture.dispose();
         if (particles) globe.remove(particles);
