@@ -271,6 +271,60 @@ describe("spherical coastline geometry", () => {
     expect(positions.length / 3).toBe(4);
   });
 
+  it("keeps a one-segment closed-ring budget non-degenerate", () => {
+    const positions = buildSphericalRingSegments(
+      [[[0, 0], [30, 0], [30, 30], [0, 30], [0, 0]]],
+      1,
+      2,
+    );
+
+    expect(positions.length / 3).toBe(2);
+    const start = new Vector3(positions[0], positions[1], positions[2]);
+    const end = new Vector3(positions[3], positions[4], positions[5]);
+    expect(start.distanceTo(end)).toBeGreaterThan(0.01);
+  });
+
+  it("simplifies an over-budget coastline as connected runs instead of isolated dashes", () => {
+    const positions = buildSphericalRingSegments(
+      [[
+        [-160, 0], [-120, 5], [-80, 10], [-40, 15],
+        [0, 20], [40, 15], [80, 10], [120, 5], [160, 0],
+      ]],
+      1,
+      4,
+    );
+
+    expect(positions.length / 3).toBe(4);
+    expect([...positions.slice(3, 6)]).toEqual([...positions.slice(6, 9)]);
+    const first = new Vector3(positions[0], positions[1], positions[2]);
+    const last = new Vector3(positions.at(-3)!, positions.at(-2)!, positions.at(-1)!);
+    expect(vector3ToLatLon(first).lon).toBeCloseTo(-160);
+    expect(vector3ToLatLon(last).lon).toBeCloseTo(160);
+  });
+
+  it("distributes a constrained coastline budget across the full ring set", () => {
+    const positions = buildSphericalRingSegments(
+      [
+        [[-170, 0], [-160, 0]],
+        [[-60, 0], [-50, 0]],
+        [[50, 0], [60, 0]],
+        [[160, 0], [170, 0]],
+      ],
+      1,
+      4,
+    );
+
+    expect(positions.length / 3).toBe(4);
+    const points = [];
+    for (let index = 0; index < positions.length; index += 3) {
+      points.push(new Vector3(positions[index], positions[index + 1], positions[index + 2]));
+    }
+    const earlierSample = latLonToVector3(0, -60, 1);
+    const finalSample = latLonToVector3(0, 160, 1);
+    expect(points.some((point) => point.distanceTo(earlierSample) < 1e-5)).toBe(true);
+    expect(points.some((point) => point.distanceTo(finalSample) < 1e-5)).toBe(true);
+  });
+
   it("uses the short chord across the antimeridian", () => {
     const positions = buildSphericalRingSegments(
       [[[179, 0], [-179, 0]]],

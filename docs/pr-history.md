@@ -18,6 +18,14 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ## 2026-08-30
 
+### PR #97 — Add adaptive coastline LOD
+
+- **Source head:** `c02e732d5045a4bf8c9a4668ae0af77bfeb7da8d`
+- **Scope:** Adds multi-resolution coastline geometry for the particle globe, keeping the Natural Earth 110m outline as the far/global layer and asynchronously upgrading mid/near zoom to 50m detail under bounded GPU vertex budgets with smooth LOD crossfades.
+- **User-visible change:** Coastlines remain globally present while zooming in and gain noticeably more geographic detail at closer zoom levels without hard popping or blocking the base globe when detailed data is slow or unavailable.
+- **Review fixes:** Replaced prefix truncation with globally distributed path budgets; preserved connected coastline runs instead of sampled dashes; decoupled the optional 50m fetch from base-scene readiness with stale-result guards; and fixed quota-one closed rings so they retain a real nonzero source edge instead of collapsing to an invisible first-to-last segment.
+- **Follow-up:** GitHub-hosted `verify` / merge-readiness jobs on the reviewed code head were still affected by the repository's zero-step runner failure; local targeted tests (47/47), full suite (45 files / 423 tests), tenant integration, typecheck, production build, and `git diff --check` were green.
+
 ### PR #96 — Unify mobile control grammar
 
 - **Source head:** `253233778b910aa6c92710dd5db1d9fd6bc5febe`
