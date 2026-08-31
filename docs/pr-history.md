@@ -18,6 +18,14 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ## 2026-09-01
 
+### PR #108 - Bound particle-globe gestures to two pointers
+
+- **Source head:** `b105c76ffa1f2ae51799d61d557d7f1465765097`
+- **Scope:** Rebases the post-#105 two-pointer gesture bound onto current main and closes the remaining sibling-SVG lifecycle gap when an overflow contact begins directly on a city label instead of the canvas.
+- **User-visible change:** An accidental third touch, mouse, or stylus contact can no longer activate a city label after the two tracked gesture contacts end, even when that extra contact started directly on the overlaid city-label SVG. Normal city taps, one-finger drag and two-finger anchored pinch remain unchanged.
+- **Review fixes:** Capacity-rejected canvas pointers remain suppressed for their full lifecycle; city-label pointer-up independently applies the same suppression contract; and the city SVG layer now records pointer-downs that begin while two tracked pointers already own the globe, so direct label-origin overflow contacts cannot escape suppression when the first two contacts release earlier.
+- **Follow-up:** None known. ParticleEarth targeted tests are 33/33, the non-DB suite is 47 files / 438 tests, typecheck, production build and `git diff --check` are green. The existing #105 mobile/desktop globe-interaction browser QA is green with 1x/2x/3x 30px drag equivalence, anchored pinch, zero pinch-to-drag rebase jump, manual focus ownership, and zero console/page errors.
+
 ### PR #111 - Suggest media placement from local capture metadata
 
 - **Source head:** `00ccb22b1f95fa51f458984bdec3b73edebf8a4d`

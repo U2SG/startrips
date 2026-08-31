@@ -34,6 +34,7 @@ import {
   buildProjectedRoutePath,
   collectJourneyDimDirections,
   focusViewportCenter,
+  canTrackGlobePointer,
   clampGlobeTilt,
   journeyConnectorAnchor,
   clampGlobeZoom,
@@ -49,6 +50,8 @@ import {
   isGlobeUpright,
   isGlobeDrag,
   isPrimaryPointerActivation,
+  shouldRememberUntrackedPointerStart,
+  shouldSuppressUntrackedPointerActivation,
   isSphericalPointVisible,
   isProjectedPointInsideViewport,
   isLocalPointInsideClipViewport,
@@ -206,6 +209,28 @@ describe("ParticleEarthScene contracts", () => {
       particleCount: 28_000,
       maxDpr: Number.POSITIVE_INFINITY,
     });
+  });
+
+  it("bounds the gesture controller to the two pointers its pinch math supports (#107)", () => {
+    expect(canTrackGlobePointer(0)).toBe(true);
+    expect(canTrackGlobePointer(1)).toBe(true);
+    expect(canTrackGlobePointer(2)).toBe(false);
+    expect(canTrackGlobePointer(3)).toBe(false);
+  });
+
+
+  it("remembers overflow contacts that begin outside the canvas while two pointers own the globe (#107)", () => {
+    expect(shouldRememberUntrackedPointerStart(0)).toBe(false);
+    expect(shouldRememberUntrackedPointerStart(1)).toBe(false);
+    expect(shouldRememberUntrackedPointerStart(2)).toBe(true);
+    expect(shouldRememberUntrackedPointerStart(3)).toBe(true);
+  });
+
+  it("suppresses activation for capacity-rejected or gesture-overlapping untracked pointers (#107)", () => {
+    expect(shouldSuppressUntrackedPointerActivation(true, 0)).toBe(true);
+    expect(shouldSuppressUntrackedPointerActivation(true, 2)).toBe(true);
+    expect(shouldSuppressUntrackedPointerActivation(false, 1)).toBe(true);
+    expect(shouldSuppressUntrackedPointerActivation(false, 0)).toBe(false);
   });
 
   it("uses a deliberate drag threshold and allows full globe rotation", () => {
