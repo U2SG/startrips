@@ -18,6 +18,14 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ## 2026-09-01
 
+### PR #108 - Bound particle-globe gestures to two pointers
+
+- **Source head:** `a7d023ed6336fa6996faf5f2421775dd975855b7`
+- **Scope:** Rebases the post-#105 two-pointer gesture bound onto current main and closes the remaining sibling-SVG activation path for capacity-rejected extra contacts.
+- **User-visible change:** An accidental third touch, mouse, or stylus contact can no longer activate a city label while a two-pointer globe gesture is in progress, even if that extra pointer moves from the canvas onto the overlaid city-label SVG before release. Normal one-finger drag, two-finger anchored pinch, and ordinary city-label activation remain unchanged.
+- **Review fixes:** Capacity-rejected pointers now receive pointer capture when possible, and the city-label pointer-up handler independently applies the same rejected/active-gesture suppression contract before invoking globe-point picking. This makes the suppression robust both with and without capture support.
+- **Follow-up:** None known. ParticleEarth targeted tests are 32/32, the non-DB suite is 47 files / 437 tests, typecheck, production build and `git diff --check` are green. The existing #105 mobile/desktop globe-interaction browser QA is green with zero console/page errors; a dedicated three-contact probe verified the third pointer receives canvas capture and its pointer-up remains targeted at the canvas after moving over a visible city label.
+
 ### PR #111 - Suggest media placement from local capture metadata
 
 - **Source head:** `00ccb22b1f95fa51f458984bdec3b73edebf8a4d`
