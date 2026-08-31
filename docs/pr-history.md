@@ -16,6 +16,16 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ---
 
+## 2026-09-01
+
+### PR #108 - Bound particle-globe gestures to two pointers
+
+- **Source head:** `542ae5d70a068f5622fa0d4cd35161e87800f35f`
+- **Scope:** Fixes a post-#105 gesture-state regression by bounding the particle-globe controller to the two simultaneous pointers its pinch distance/centroid and handoff state machine actually support; third-and-later contacts are ignored instead of entering `activePointers`.
+- **User-visible change:** Accidental three-finger contact can no longer corrupt an in-progress two-finger globe pinch or leave the following one-finger drag in a partially reset state. Normal one-finger drag and two-finger anchored pinch behavior are unchanged.
+- **Review fixes:** Post-merge audit identified that three tracked pointers plus a pointer-up left two contacts active while `finishPointer()` cleared drag/pinch state. The fix makes pointer admission explicit and adds a boundary regression. A browser three-pointer probe measured zero rotation from the ignored third finger and normal non-zero continuation after the tracked pinch rebased to one finger.
+- **Follow-up:** None known. ParticleEarth targeted tests are 31/31, the non-DB suite is 46 files / 424 tests, typecheck, production build, `git diff --check`, and the existing #105 mobile/desktop globe-interaction browser QA are green with zero console/page errors.
+
 ## 2026-08-31
 
 ### PR #105 — Stabilize high-zoom globe drag and pinch
