@@ -108,6 +108,44 @@ describe("Journey keepsake render manifest (#87)", () => {
     expect(() => assertKeepsakeManifestRevision(manifest, journey)).not.toThrow();
   });
 
+  it("rejects media move, reorder, upload, and deletion even when Journey revision is unchanged", () => {
+    const manifest = buildKeepsakeRenderManifest(journey, 30);
+
+    const moved: Journey = {
+      ...journey,
+      media: journey.media.map((asset) => (
+        asset.id === "p1-video" ? { ...asset, routePointId: "p0" } : asset
+      )),
+    };
+    expect(() => assertKeepsakeManifestRevision(manifest, moved))
+      .toThrow("keepsake_manifest_narrative_mismatch");
+
+    const reordered: Journey = {
+      ...journey,
+      media: journey.media.map((asset) => {
+        if (asset.id === "p0-photo") return { ...asset, sortOrder: 1 };
+        if (asset.id === "p0-photo-2") return { ...asset, sortOrder: 0 };
+        return asset;
+      }),
+    };
+    expect(() => assertKeepsakeManifestRevision(manifest, reordered))
+      .toThrow("keepsake_manifest_narrative_mismatch");
+
+    const uploaded: Journey = {
+      ...journey,
+      media: [...journey.media, media("p2-new", "p2", "image/jpeg", 2)],
+    };
+    expect(() => assertKeepsakeManifestRevision(manifest, uploaded))
+      .toThrow("keepsake_manifest_narrative_mismatch");
+
+    const deleted: Journey = {
+      ...journey,
+      media: journey.media.filter((asset) => asset.id !== "p2-photo"),
+    };
+    expect(() => assertKeepsakeManifestRevision(manifest, deleted))
+      .toThrow("keepsake_manifest_narrative_mismatch");
+  });
+
   it("uses map scenes as punctuation, not between adjacent media at one stop", () => {
     const manifest = buildKeepsakeRenderManifest(journey, 30);
     const firstPhoto = manifest.scenes.findIndex(

@@ -3,6 +3,7 @@ import {
   playbackCameraTargetForStep,
   playbackIntroMedia,
   playbackMediaForPoint,
+  playbackStoryMedia,
   stepDurationMs,
   type PlaybackStep,
 } from "./journeyPlayback";
@@ -28,11 +29,22 @@ export const KEEPSAKE_MIN_DURATION_MS = {
 export type KeepsakeScene =
   | {
       kind: "map";
-      role: "intro" | "travel" | "arrival" | "outro";
-      pointIndex?: number;
-      routePointId?: string;
-      fromRoutePointId?: string;
-      toRoutePointId?: string;
+      role: "intro" | "outro";
+      durationMs: number;
+    }
+  | {
+      kind: "map";
+      role: "travel";
+      pointIndex: number;
+      fromRoutePointId: string;
+      toRoutePointId: string;
+      durationMs: number;
+    }
+  | {
+      kind: "map";
+      role: "arrival";
+      pointIndex: number;
+      routePointId: string;
       durationMs: number;
     }
   | {
@@ -44,10 +56,19 @@ export type KeepsakeScene =
       durationMs: number;
     };
 
+export interface KeepsakeNarrativeSnapshot {
+  routePointIds: string[];
+  visualMedia: Array<{
+    mediaAssetId: string;
+    routePointId: string | null;
+  }>;
+}
+
 export interface KeepsakeRenderManifest {
   version: 1;
   journeyId: string;
   journeyRevision: number;
+  narrativeSnapshot: KeepsakeNarrativeSnapshot;
   title: string;
   presetSeconds: KeepsakeDurationPreset;
   aspect: KeepsakeAspect;
@@ -62,16 +83,43 @@ export interface KeepsakeRenderManifest {
   scenes: KeepsakeScene[];
 }
 
-type SceneDraft = (
-  | Omit<Extract<KeepsakeScene, { kind: "map" }>, "durationMs">
-  | Omit<Extract<KeepsakeScene, { kind: "media" }>, "durationMs">
-) & {
-  desiredDurationMs: number;
-  minimumDurationMs: number;
-};
+type SceneDraftFor<T extends KeepsakeScene> = T extends KeepsakeScene
+  ? Omit<T, "durationMs"> & {
+      desiredDurationMs: number;
+      minimumDurationMs: number;
+    }
+  : never;
+
+type SceneDraft = SceneDraftFor<KeepsakeScene>;
 
 function mediaType(mimeType: string): "image" | "video" {
   return mimeType.startsWith("video/") ? "video" : "image";
+}
+
+export function buildKeepsakeNarrativeSnapshot(
+  journey: Pick<Journey, "routePoints" | "media">,
+): KeepsakeNarrativeSnapshot {
+  const playbackJourney = journey as Journey;
+  return {
+    routePointIds: journey.routePoints.map((point) => point.id),
+    visualMedia: playbackStoryMedia(playbackJourney).map((asset) => ({
+      mediaAssetId: asset.id,
+      routePointId: asset.routePointId,
+    })),
+  };
+}
+
+function narrativeSnapshotsEqual(
+  left: KeepsakeNarrativeSnapshot,
+  right: KeepsakeNarrativeSnapshot,
+): boolean {
+  if (left.routePointIds.length !== right.routePointIds.length) return false;
+  if (left.visualMedia.length !== right.visualMedia.length) return false;
+  if (left.routePointIds.some((id, index) => id !== right.routePointIds[index])) return false;
+  return left.visualMedia.every((media, index) => (
+    media.mediaAssetId === right.visualMedia[index]?.mediaAssetId
+    && media.routePointId === right.visualMedia[index]?.routePointId
+  ));
 }
 
 function sceneForStep(journey: Journey, step: PlaybackStep): SceneDraft[] {
@@ -199,6 +247,7 @@ export function buildKeepsakeRenderManifest(
     version: 1,
     journeyId: journey.id,
     journeyRevision: journey.revision,
+    narrativeSnapshot: buildKeepsakeNarrativeSnapshot(journey),
     title: journey.title,
     presetSeconds,
     aspect,
@@ -225,26 +274,37 @@ export function assertKeepsakeManifestRevision(
   if (journey.revision !== manifest.journeyRevision) {
     throw new Error("keepsake_manifest_revision_mismatch");
   }
+  const currentNarrative = buildKeepsakeNarrativeSnapshot(journey);
+  if (!narrativeSnapshotsEqual(manifest.narrativeSnapshot, currentNarrative)) {
+    throw new Error("keepsake_manifest_narrative_mismatch");
+  }
 
   const routePointIds = new Set(journey.routePoints.map((point) => point.id));
-  const mediaIds = new Set(journey.media.map((asset) => asset.id));
+  const mediaById = new Map(journey.media.map((asset) => [asset.id, asset]));
   for (const scene of manifest.scenes) {
     if (scene.kind === "media") {
-      if (!mediaIds.has(scene.mediaAssetId)) {
+      const asset = mediaById.get(scene.mediaAssetId);
+      if (!asset) {
         throw new Error("keepsake_manifest_media_missing");
       }
       if (scene.routePointId !== null && !routePointIds.has(scene.routePointId)) {
         throw new Error("keepsake_manifest_route_point_missing");
       }
+      if (asset.routePointId !== scene.routePointId) {
+        throw new Error("keepsake_manifest_media_point_mismatch");
+      }
       continue;
     }
-    if (scene.routePointId && !routePointIds.has(scene.routePointId)) {
-      throw new Error("keepsake_manifest_route_point_missing");
+    if (scene.role === "arrival") {
+      if (!routePointIds.has(scene.routePointId)) {
+        throw new Error("keepsake_manifest_route_point_missing");
+      }
+      continue;
     }
-    if (scene.fromRoutePointId && !routePointIds.has(scene.fromRoutePointId)) {
-      throw new Error("keepsake_manifest_route_point_missing");
-    }
-    if (scene.toRoutePointId && !routePointIds.has(scene.toRoutePointId)) {
+    if (scene.role === "travel" && (
+      !routePointIds.has(scene.fromRoutePointId)
+      || !routePointIds.has(scene.toRoutePointId)
+    )) {
       throw new Error("keepsake_manifest_route_point_missing");
     }
   }

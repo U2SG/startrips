@@ -24,9 +24,9 @@ Phase 1 does not provide a clip editor, templates, stickers, or per-clip trimmin
 
 ## Privacy and media lifecycle
 
-The manifest contains stable Journey/media/route-point **IDs only**, never storage keys or signed URLs. `pointIndex` may be retained as a generation-time ordering hint, but workers must resolve geography by `routePointId`; travel scenes carry stable `fromRoutePointId` and `toRoutePointId`.
+The manifest contains stable Journey/media/route-point **IDs only**, never storage keys or signed URLs. `pointIndex` may be retained as a generation-time ordering hint, but workers must resolve geography by stable IDs. Arrival scenes require `routePointId`; travel scenes require stable `fromRoutePointId` and `toRoutePointId`.
 
-A queued manifest is valid only for the exact `journeyId + journeyRevision` it was generated from. Before resolving any media or camera scene, the worker must load the Journey and reject a revision mismatch with `keepsake_manifest_revision_mismatch`; it must never reinterpret old indexes against a newer route order. Missing referenced point/media IDs are likewise hard failures, not fallback-to-index behavior.
+A queued manifest is valid only for the exact narrative it was generated from. Before resolving any media or camera scene, the worker must load the Journey and first reject a `journeyId`/`journeyRevision` mismatch. It must then compare the manifest's stable-ID `narrativeSnapshot` against the current canonical playback order. The snapshot records route-point ID order plus ordered visual-media ID/route-point pairs, so media move, reorder, upload, and deletion invalidate a queued manifest even on mutation paths that do not increment `journeys.revision`. A mismatch fails with `keepsake_manifest_narrative_mismatch`; missing referenced point/media IDs are likewise hard failures, never fallback-to-index behavior.
 
 The render worker must:
 
