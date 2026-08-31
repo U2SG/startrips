@@ -213,11 +213,11 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ### PR #106 — Add spatial particle LOD for high zoom
 
-- **Source head:** `3d1d47efd8b4e5201c1ca462fb6b741ce7c9289f`
+- **Source head:** `d80416f5eaec8bab01e3eec4d37dd0e2afc9ba51`
 - **Scope:** Adds bounded regional particle refinement on top of the stable global particle base, reusing #98 semantic zoom and preserving #105 projected-surface interaction. Global land remains on the lightweight 110m/720x360 source while high-zoom refinement uses 50m/1440x720 geography, quantized/cached regional cells, per-particle reveal thresholds, cooperative stale-build cancellation, visibility gating, and debug observability.
 - **User-visible change:** Zooming into Hong Kong/Shenzhen and other supported local views now progressively reveals denser geographic particle detail instead of magnifying the same sparse global distribution, without multiplying the whole-Earth particle budget or changing close-range drag/pinch behavior.
-- **Review fixes:** None yet. Pre-review self-audit caught and corrected the original WIP's use of the coarse 110m mask for refinement; local refinement now explicitly uses the finer 50m source. The implementation was rebased over merged #105 and both spatial-LOD and globe-interaction browser QA were rerun on the same branch.
-- **Follow-up:** Terrain relief remains separately tracked by #82/#104. Post-#105 targeted tests (65/65), non-DB suite (47 files / 429 tests), typecheck, production build, `git diff --check`, branch-local `qa:globe-interaction`, and 390px Hong Kong/Shenzhen `qa:particle-spatial-lod` are green. Browser QA measured refinement 0 → 3,321 → 9,000 at 1x → 2x → 3x while base stayed 28,000 and refinement cap stayed 9,000.
+- **Review fixes:** Two Codex P2s are fixed: route-focus flights now freeze refinement LOD, cancel pending regional builds, and resolve destination LOD after arrival; returning to the active region now invalidates a pending build for a different region. Pre-review self-audit also corrected refinement to use the finer 50m source.
+- **Follow-up:** Terrain relief remains separately tracked by #82/#104. Targeted particle/ParticleEarth/semantic tests (42/42), non-DB suite (47 files / 431 tests), typecheck, production build, and `git diff --check` are green. Browser QA measured refinement 0 -> 3,321 -> 9,000 at 1x/2x/3x with base 28,000; #105 mobile/desktop globe QA passed 30px-equivalent drags, ~0.0126px pinch-anchor error, zero pinch-to-drag rebase jump, and zero console/page errors.
 
 ### PR #105 — Stabilize high-zoom globe drag and pinch
 
