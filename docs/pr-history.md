@@ -16,6 +16,16 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ---
 
+## 2026-09-01
+
+### PR #111 - Suggest media placement from local capture metadata
+
+- **Source head:** `00ccb22b1f95fa51f458984bdec3b73edebf8a4d`
+- **Scope:** Adds privacy-preserving local EXIF/capture-time placement suggestions for Journey and route-point upload destinations, plus the Story review flow that lets the user accept or override the proposed scope before upload.
+- **User-visible change:** Photos with reliable location/time metadata can be suggested into the most plausible Journey point without uploading raw EXIF. After accepting a different route-point destination, the uploaded media is immediately selected from that new scope instead of falsely reporting a refresh failure.
+- **Review fixes:** Decoupled strong-signal conflict detection from the combined recommendation score: strong GPS chooses the nearest eligible route point using spatial evidence only, while strong absolute time chooses the closest timestamp independently, so contradictory nearby GPS/time signals correctly suppress a suggestion. The post-upload refresh now filters with the accepted `targetRoutePointId` explicitly rather than the stale pre-click React state closure. Added regressions for same-city conflicting strong signals and stale-scope refresh selection.
+- **Follow-up:** Broader cross-Journey placement UX and metadata coverage remain product follow-up; raw metadata stays browser-local. Targeted placement/Story tests are 46/46, the non-DB suite is 47 files / 435 tests, typecheck, production build, and `git diff --check` are green.
+
 ## 2026-08-31
 
 ### PR #105 — Stabilize high-zoom globe drag and pinch

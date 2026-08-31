@@ -74,6 +74,11 @@ import {
 } from "./journeyModel";
 import { playbackIntroMedia, storyMediaForScope } from "./journeyPlayback";
 import type { Journey, JourneyMediaAsset } from "./types";
+import {
+  groupMediaPlacementSuggestions,
+  readMediaPlacementSignal,
+  type MediaPlacementBatchResult,
+} from "./mediaPlacement";
 import { useModalFocus, useNestedModalFocus } from "./useModalFocus";
 import { useCompactMobileLayout } from "./mobileLayout";
 import { useMobileSurfaceHistory } from "./useMobileSurfaceHistory";
@@ -119,6 +124,11 @@ type JourneyStoryProps = {
     journeyId: string,
     assetIds: readonly string[],
   ) => Journey | Promise<Journey>;
+};
+
+type PendingPlacementReview = {
+  files: File[];
+  batch: MediaPlacementBatchResult;
 };
 
 type MediaUploadState =
@@ -254,6 +264,13 @@ export function storySelectionContainsRoutePointMedia(
   selectedIds: ReadonlySet<string>,
 ): boolean {
   return media.some((asset) => selectedIds.has(asset.id) && asset.routePointId !== null);
+}
+
+export function mediaForUploadRefreshScope(
+  target: Journey,
+  targetRoutePointId: string | null,
+) {
+  return storyMediaForScope(target, targetRoutePointId);
 }
 
 export function storyInitialMediaSelection(
@@ -575,6 +592,9 @@ export function JourneyStory({
   const pendingTargetRef = useRef<number | null>(null);
   const [uploadState, setUploadState] = useState<MediaUploadState>({ status: "idle" });
   const [retryFiles, setRetryFiles] = useState<File[]>([]);
+  const [retryRoutePointId, setRetryRoutePointId] = useState<string | null>(null);
+  const [placementReview, setPlacementReview] = useState<PendingPlacementReview | null>(null);
+  const [placementAnalyzing, setPlacementAnalyzing] = useState(false);
   const [closeBlocked, setCloseBlocked] = useState(false);
   const [deleteState, setDeleteState] = useState<"idle" | "confirming" | "pending">("idle");
   const [deleteMessage, setDeleteMessage] = useState("");
@@ -904,6 +924,9 @@ export function JourneyStory({
     setSelectedRoutePointId(nextInitialMedia.routePointId);
     setUploadState({ status: "idle" });
     setRetryFiles([]);
+    setRetryRoutePointId(null);
+    setPlacementReview(null);
+    setPlacementAnalyzing(false);
     setCloseBlocked(false);
     setDeleteState("idle");
     setDeleteMessage("");
@@ -1830,8 +1853,13 @@ export function JourneyStory({
     settleMediaDrag(false);
   }
 
-  async function uploadFiles(files: readonly File[]) {
+  async function uploadFiles(
+    files: readonly File[],
+    targetRoutePointId: string | null = selectedRoutePointId,
+  ) {
     setRetryFiles([]);
+    setRetryRoutePointId(null);
+    setPlacementReview(null);
     setCloseBlocked(false);
     const validation = validateJourneyFiles(files);
     if (!validation.accepted) {
@@ -1847,7 +1875,7 @@ export function JourneyStory({
     });
     const result = await uploadJourneyMedia({
       journeyId: journey.id,
-      routePointId: selectedRoutePointId ?? undefined,
+      routePointId: targetRoutePointId ?? undefined,
       files,
       onProgress: (progress) => setUploadState({ status: "uploading", ...progress }),
     });
@@ -1857,7 +1885,7 @@ export function JourneyStory({
       try {
         const refreshedJourney = await onMediaAdded(journey.id);
         const refreshedMedia = refreshedJourney
-          ? scopedVisualMedia(refreshedJourney)
+          ? mediaForUploadRefreshScope(refreshedJourney, targetRoutePointId)
           : [];
         const uploadedAssetIndex = storyUploadedAssetIndex(
           refreshedMedia,
@@ -1878,6 +1906,7 @@ export function JourneyStory({
 
     const failedFiles = result.mediaErrors.map((error) => files[error.fileIndex]);
     setRetryFiles(failedFiles);
+    setRetryRoutePointId(targetRoutePointId);
     setCloseBlocked(false);
     if (result.mediaErrors.length > 0) {
       const failure = formatUploadError(result.mediaErrors[0].message);
@@ -1898,17 +1927,57 @@ export function JourneyStory({
       setUploadState({
         status: "complete",
         tone: "success",
-        message: selectedRoutePoint
-          ? `已将 ${result.uploadedCount} 个媒体添加到「${selectedRoutePoint.label || `途径点 ${selectedRoutePoint.sortOrder + 1}`}」。`
-          : `已将 ${result.uploadedCount} 个媒体添加到整段旅程。`,
+        message: targetRoutePointId
+          ? `\u5df2\u5c06 ${result.uploadedCount} \u4e2a\u5a92\u4f53\u6dfb\u52a0\u5230\u300c${journey.routePoints.find((point) => point.id === targetRoutePointId)?.label || "\u6240\u9009\u65c5\u7a0b\u70b9"}\u300d\u3002`
+          : `\u5df2\u5c06 ${result.uploadedCount} \u4e2a\u5a92\u4f53\u6dfb\u52a0\u5230\u6574\u6bb5\u65c5\u7a0b\u3002`,
       });
+    }
+  }
+
+  async function reviewSelectedFiles(files: File[]) {
+    const validation = validateJourneyFiles(files);
+    if (!validation.accepted) {
+      await uploadFiles(files);
+      return;
+    }
+    setPlacementAnalyzing(true);
+    try {
+      const signals = await Promise.all(files.map(readMediaPlacementSignal));
+      const batch = groupMediaPlacementSuggestions(signals, journeys, journey.id);
+      if (batch.groups.length === 0) {
+        await uploadFiles(files);
+        return;
+      }
+      const completeSingleGroup = batch.groups.length === 1
+        && batch.unsuggestedFileIndexes.length === 0
+        && batch.groups[0].fileIndexes.length === files.length;
+      const suggestion = completeSingleGroup ? batch.groups[0] : null;
+      if (
+        suggestion
+        && suggestion.journeyId === journey.id
+        && suggestion.routePointId === selectedRoutePointId
+      ) {
+        await uploadFiles(files);
+        return;
+      }
+      setPlacementReview({ files, batch });
+    } finally {
+      setPlacementAnalyzing(false);
     }
   }
 
   function selectFiles(event: ChangeEvent<HTMLInputElement>) {
     const selected = [...(event.currentTarget.files ?? [])];
     event.currentTarget.value = "";
-    if (selected.length > 0) void uploadFiles(selected);
+    if (selected.length > 0) void reviewSelectedFiles(selected);
+  }
+
+  function confirmPlacementUpload(targetRoutePointId: string | null) {
+    if (!placementReview || mutationPending) return;
+    const files = placementReview.files;
+    setSelectedRoutePointId(targetRoutePointId);
+    setPlacementReview(null);
+    void uploadFiles(files, targetRoutePointId);
   }
 
   async function confirmDelete() {
@@ -2887,17 +2956,82 @@ export function JourneyStory({
                 multiple
                 tabIndex={-1}
                 aria-hidden="true"
-                disabled={mutationPending || deleteState !== "idle"}
+                disabled={mutationPending || placementAnalyzing || placementReview !== null || deleteState !== "idle"}
                 onChange={selectFiles}
               />
               <button
                 type="button"
-                disabled={mutationPending || deleteState !== "idle"}
+                disabled={mutationPending || placementAnalyzing || placementReview !== null || deleteState !== "idle"}
                 onClick={() => fileInputRef.current?.click()}
               >
                 <IconUpload size={17} stroke={1.35} aria-hidden="true" />
-                {uploadState.status === "uploading" ? `正在上传 ${uploadPercent}%` : "添加照片或视频"}
+                {uploadState.status === "uploading"
+                  ? `正在上传 ${uploadPercent}%`
+                  : placementAnalyzing
+                    ? "正在读取拍摄信息…"
+                    : "添加照片或视频"}
               </button>
+              {placementReview ? (() => {
+                const { groups, unsuggestedFileIndexes } = placementReview.batch;
+                const completeSingleGroup = groups.length === 1
+                  && unsuggestedFileIndexes.length === 0
+                  && groups[0].fileIndexes.length === placementReview.files.length;
+                const singleSuggestion = completeSingleGroup ? groups[0] : null;
+                const suggestedJourney = singleSuggestion
+                  ? journeys.find((candidate) => candidate.id === singleSuggestion.journeyId) ?? null
+                  : null;
+                const suggestedPoint = singleSuggestion?.routePointId
+                  ? suggestedJourney?.routePoints.find((point) => point.id === singleSuggestion.routePointId) ?? null
+                  : null;
+                const canApplySuggestion = Boolean(singleSuggestion && suggestedJourney?.id === journey.id);
+                return (
+                  <section className="journey-story__placement-review" aria-label={"\u5a92\u4f53\u4f4d\u7f6e\u5efa\u8bae"}>
+                    <div className="journey-story__placement-review-head">
+                      <p>PLACEMENT SUGGESTION</p>
+                      <strong>{singleSuggestion && suggestedJourney
+                        ? `\u770b\u8d77\u6765\u66f4\u50cf\u662f\uff1a${suggestedJourney.title} / ${suggestedPoint?.label || "\u6574\u6bb5\u65c5\u7a0b"}`
+                        : `\u68c0\u6d4b\u5230 ${groups.length} \u7ec4\u53ef\u80fd\u7684\u4f4d\u7f6e`}</strong>
+                      <span>{singleSuggestion
+                        ? canApplySuggestion
+                          ? "\u6839\u636e\u7167\u7247\u672c\u5730\u7684\u62cd\u6444\u4f4d\u7f6e/\u65f6\u95f4\u63a8\u6d4b\u3002\u786e\u8ba4\u540e\u624d\u4f1a\u4f7f\u7528\uff0c\u4e0d\u4f1a\u4fdd\u5b58\u539f\u59cb EXIF\u3002"
+                          : "\u5efa\u8bae\u5c5e\u4e8e\u53e6\u4e00\u6bb5\u65c5\u7a0b\u3002\u5f53\u524d\u4e0d\u4f1a\u81ea\u52a8\u8de8\u65c5\u7a0b\u79fb\u52a8\uff1b\u4f60\u4ecd\u53ef\u4ee5\u9009\u62e9\u672c\u65c5\u7a0b\u7684\u4f4d\u7f6e\u3002"
+                        : `${unsuggestedFileIndexes.length > 0 ? `${unsuggestedFileIndexes.length} \u4e2a\u6587\u4ef6\u4fe1\u606f\u4e0d\u8db3\uff1b` : ""}\u4e0d\u540c\u6587\u4ef6\u53ef\u80fd\u5c5e\u4e8e\u4e0d\u540c\u4f4d\u7f6e\uff0c\u4e0d\u4f1a\u5f3a\u884c\u5408\u5e76\u3002`}</span>
+                    </div>
+                    {!singleSuggestion ? (
+                      <ul className="journey-story__placement-groups">
+                        {groups.map((group) => {
+                          const destinationJourney = journeys.find((candidate) => candidate.id === group.journeyId);
+                          const destinationPoint = group.routePointId
+                            ? destinationJourney?.routePoints.find((point) => point.id === group.routePointId)
+                            : null;
+                          return (
+                            <li key={`${group.journeyId}:${group.routePointId ?? "journey"}`}>
+                              <b>{group.fileIndexes.length} {"\u4e2a"}</b>
+                              <span>{destinationJourney?.title ?? "\u5176\u4ed6\u65c5\u7a0b"} / {destinationPoint?.label || "\u6574\u6bb5\u65c5\u7a0b"}</span>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    ) : null}
+                    <div className="journey-story__placement-actions">
+                      {canApplySuggestion && singleSuggestion ? (
+                        <button type="button" onClick={() => confirmPlacementUpload(singleSuggestion.routePointId)}>
+                          {"\u4f7f\u7528\u5efa\u8bae"}
+                        </button>
+                      ) : null}
+                      <button type="button" onClick={() => confirmPlacementUpload(null)}>{"\u653e\u5230\u6574\u6bb5\u65c5\u7a0b"}</button>
+                      {journey.routePoints.map((point) => (
+                        <button key={point.id} type="button" onClick={() => confirmPlacementUpload(point.id)}>
+                          {point.label || `\u9014\u5f84\u70b9 ${point.sortOrder + 1}`}
+                        </button>
+                      ))}
+                      <button className="is-secondary" type="button" onClick={() => setPlacementReview(null)}>
+                        {"\u53d6\u6d88"}
+                      </button>
+                    </div>
+                  </section>
+                );
+              })() : null}
               {uploadState.status === "uploading" ? (
                 <div
                   className="journey-story__upload-progress"
@@ -2915,7 +3049,7 @@ export function JourneyStory({
                 <p className={`journey-story__upload-message is-${uploadState.tone}`} role="status">{uploadState.message}</p>
               ) : null}
               {retryFiles.length > 0 && uploadState.status !== "uploading" ? (
-                <button className="journey-story__retry" type="button" disabled={mutationPending || deleteState !== "idle"} onClick={() => void uploadFiles(retryFiles)}>
+                <button className="journey-story__retry" type="button" disabled={mutationPending || deleteState !== "idle"} onClick={() => void uploadFiles(retryFiles, retryRoutePointId)}>
                   重试失败的 {retryFiles.length} 个文件
                 </button>
               ) : null}
