@@ -25,6 +25,25 @@ function smoothstep(edge0: number, edge1: number, value: number) {
   return t * t * (3 - 2 * t);
 }
 
+export function resolveGlobeSemanticZoomForFrame({
+  zoom,
+  current,
+  qualityProfile = "high",
+  focusFlightActive = false,
+}: {
+  zoom: number;
+  current: GlobeSemanticZoomState;
+  qualityProfile?: GlobeQualityProfile;
+  focusFlightActive?: boolean;
+}): GlobeSemanticZoomState {
+  if (focusFlightActive) return current;
+  return resolveGlobeSemanticZoom({
+    zoom,
+    previous: current.state,
+    qualityProfile,
+  });
+}
+
 export function resolveGlobeSemanticZoom({
   zoom,
   previous,

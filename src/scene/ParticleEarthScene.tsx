@@ -60,7 +60,7 @@ import {
   PARTICLE_DIM_POINT_LIMIT,
 } from "./particleEarthMaterial";
 import { disposeSceneGraph, useThreeScene } from "./useThreeScene";
-import { resolveGlobeSemanticZoom, type GlobeSemanticZoomState } from "./semanticZoom";
+import { resolveGlobeSemanticZoom, resolveGlobeSemanticZoomForFrame, type GlobeSemanticZoomState } from "./semanticZoom";
 
 export const QUALITY_PROFILE = {
   low: { particleCount: 12_000, maxDpr: 1 },
@@ -3071,10 +3071,11 @@ export function ParticleEarthScene({
         Math.min(1, baseAtmosphereOpacity * audioGain.ambient),
       );
       wireMaterial.opacity = interpolate(wireMaterial.opacity, target.wireOpacity);
-      semanticZoomState = resolveGlobeSemanticZoom({
+      semanticZoomState = resolveGlobeSemanticZoomForFrame({
         zoom: interactiveZoom,
-        previous: semanticZoomState.state,
+        current: semanticZoomState,
         qualityProfile: currentQuality,
+        focusFlightActive: routeFocusSettling,
       });
       host.dataset.semanticZoom = semanticZoomState.state;
       host.dataset.cityLod = semanticZoomState.cityTier;
