@@ -17,7 +17,7 @@ export interface GlobeSemanticZoomState {
 }
 
 const ORDER: GlobeSemanticZoom[] = ["planet", "macro", "regional", "local"];
-const BOUNDARIES = [1.22, 1.72, 2.32] as const;
+const BOUNDARIES = [1.3, 2.1, 2.55] as const;
 const HYSTERESIS = 0.08;
 
 function smoothstep(edge0: number, edge1: number, value: number) {
