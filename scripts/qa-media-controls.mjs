@@ -434,6 +434,76 @@ try {
     if (!initialFocusInside || !tabStayedInside || !sheetFocusRestored) failed = true;
 
     await mediaManageTrigger.click();
+    const reclassifyMedia = story.page.getByRole("button", { name: "移动媒体 / 重新归类" });
+    const organizeMedia = story.page.getByRole("button", { name: "整理媒体" });
+    const reclassifyBox = await reclassifyMedia.boundingBox();
+    const organizeBox = await organizeMedia.boundingBox();
+    const bothSheetActionsAvailable = await reclassifyMedia.count() === 1 && await organizeMedia.count() === 1;
+    await reclassifyMedia.click();
+    await mobileSheet.waitFor({ state: "detached" });
+    const moveSelectToggle = story.page.locator(".journey-story__media-select-toggle");
+    await moveSelectToggle.waitFor({ state: "visible" });
+    await story.page.waitForFunction(() => (
+      document.querySelector(".journey-story__media-grid")?.classList.contains("is-selecting") ?? false
+    ));
+    const directMoveModeActive = await moveSelectToggle.getAttribute("aria-pressed") === "true";
+    const directMoveFocusTransferred = await moveSelectToggle.evaluate((button) => document.activeElement === button);
+    const directMoveTouchTarget = reclassifyBox ? Math.min(reclassifyBox.width, reclassifyBox.height) : 0;
+    const organizeTouchTarget = organizeBox ? Math.min(organizeBox.width, organizeBox.height) : 0;
+    checks.push({
+      name: "story-mobile-media-reclassification-direct-entry",
+      directMoveModeActive,
+      directMoveFocusTransferred,
+      bothSheetActionsAvailable,
+      directMoveTouchTarget,
+      organizeTouchTarget,
+      failed: !directMoveModeActive
+        || !directMoveFocusTransferred
+        || !bothSheetActionsAvailable
+        || directMoveTouchTarget < 44
+        || organizeTouchTarget < 44,
+    });
+    if (!directMoveModeActive
+      || !directMoveFocusTransferred
+      || !bothSheetActionsAvailable
+      || directMoveTouchTarget < 44
+      || organizeTouchTarget < 44) failed = true;
+
+    await story.page.keyboard.press("Escape");
+    await story.page.waitForFunction(() => document.querySelector(".journey-story")?.getAttribute("data-mobile-mode") === "viewer");
+    await story.page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "管理旅程");
+    const directMoveEscapeRestoredViewer = await storyRoot.getAttribute("data-mobile-mode") === "viewer";
+    const directMoveEscapeFocusRestored = await manageTrigger.evaluate((button) => document.activeElement === button);
+
+    await manageTrigger.click();
+    await story.page.waitForFunction(() => document.querySelector(".journey-story")?.getAttribute("data-mobile-mode") === "manage");
+    await mediaManageTrigger.click();
+    await reclassifyMedia.click();
+    await moveSelectToggle.waitFor({ state: "visible" });
+    await story.page.evaluate(() => window.history.back());
+    await story.page.waitForFunction(() => document.querySelector(".journey-story")?.getAttribute("data-mobile-mode") === "viewer");
+    await story.page.waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "管理旅程");
+    const directMoveBackRestoredViewer = await storyRoot.getAttribute("data-mobile-mode") === "viewer";
+    const directMoveBackFocusRestored = await manageTrigger.evaluate((button) => document.activeElement === button);
+    checks.push({
+      name: "story-mobile-media-reclassification-exit-contract",
+      directMoveEscapeRestoredViewer,
+      directMoveEscapeFocusRestored,
+      directMoveBackRestoredViewer,
+      directMoveBackFocusRestored,
+      failed: !directMoveEscapeRestoredViewer
+        || !directMoveEscapeFocusRestored
+        || !directMoveBackRestoredViewer
+        || !directMoveBackFocusRestored,
+    });
+    if (!directMoveEscapeRestoredViewer
+      || !directMoveEscapeFocusRestored
+      || !directMoveBackRestoredViewer
+      || !directMoveBackFocusRestored) failed = true;
+
+    await manageTrigger.click();
+    await story.page.waitForFunction(() => document.querySelector(".journey-story")?.getAttribute("data-mobile-mode") === "manage");
+    await mediaManageTrigger.click();
     await story.page.getByRole("button", { name: "删除媒体" }).click();
     const deleteSheet = story.page.locator(".journey-story__mobile-media-sheet.is-confirming");
     await deleteSheet.waitFor({ state: "visible" });

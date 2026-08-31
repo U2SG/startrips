@@ -646,6 +646,8 @@ export function JourneyStory({
   const mobileManageFocusFrameRef = useRef<number | null>(null);
   const restoreMobileManageViewerFocusRef = useRef(false);
   const [mobileMediaMenuOpen, setMobileMediaMenuOpen] = useState(false);
+  const mobileMoveSelectToggleRef = useRef<HTMLButtonElement>(null);
+  const restoreMobileMoveSelectFocusRef = useRef(false);
   // Review P2: the fullscreen overlay is a focus trap of its own (it is
   // rendered outside the story dialog, whose useModalFocus would otherwise
   // steal Tab focus back into the article).
@@ -764,6 +766,16 @@ export function JourneyStory({
     setMobileManageMode(true);
   }
 
+  function enterMobileMoveSelectMode() {
+    setPlaying(false);
+    setMobileMediaMenuOpen(false);
+    setMoveSelection(new Set());
+    setMoveMessage("");
+    restoreMobileMoveSelectFocusRef.current = true;
+    setMoveSelectMode(true);
+    setOverview(true);
+  }
+
   function exitMobileManageMode() {
     if (mutationPending) return false;
     setDeleteState("idle");
@@ -850,6 +862,37 @@ export function JourneyStory({
   useMobileSurfaceHistory(mobileHistoryLayers.journeyDelete, "story-journey-delete", closeJourneyDelete);
   const storyModal = !mobileLayout || mobileStoryExpanded;
   const dialogRef = useModalFocus<HTMLElement>(requestClose, storyModal);
+
+  // A collapsed mobile Story is intentionally not a modal, so useModalFocus
+  // does not own Escape there. Manage still needs the same keyboard exit
+  // contract as Browser Back once transient child sheets are gone.
+  useEffect(() => {
+    if (!mobileLayout || !mobileManageMode || storyModal) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      if (
+        mutationPending
+        || mobileMediaMenuOpen
+        || mediaDeleteState !== "idle"
+        || deleteState !== "idle"
+        || fullscreen
+      ) return;
+      event.preventDefault();
+      exitMobileManageMode();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [
+    deleteState,
+    fullscreen,
+    mediaDeleteState,
+    mobileLayout,
+    mobileManageMode,
+    mobileMediaMenuOpen,
+    mutationPending,
+    storyModal,
+  ]);
+
   const mobileMediaSheetRef = useNestedModalFocus<HTMLElement>(
     mobileLayout && (mobileMediaMenuOpen || mediaDeleteState !== "idle"),
     mobileMediaMenuOpen ? "manage" : mediaDeleteState !== "idle" ? "delete" : null,
@@ -923,6 +966,20 @@ export function JourneyStory({
       }
     };
   }, [mobileLayout, mobileManageMode]);
+
+  useEffect(() => {
+    if (
+      !mobileLayout
+      || !overview
+      || !moveSelectMode
+      || !restoreMobileMoveSelectFocusRef.current
+    ) return;
+    const frame = window.requestAnimationFrame(() => {
+      restoreMobileMoveSelectFocusRef.current = false;
+      mobileMoveSelectToggleRef.current?.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [mobileLayout, moveSelectMode, overview]);
 
   useEffect(() => {
     if (mediaDeleteState === "confirming") mediaDeleteCancelRef.current?.focus();
@@ -2406,6 +2463,7 @@ export function JourneyStory({
               <button
                 type="button"
                 className={`journey-story__media-select-toggle${moveSelectMode ? " is-active" : ""}`}
+                ref={mobileLayout ? mobileMoveSelectToggleRef : undefined}
                 aria-pressed={moveSelectMode}
                 disabled={mutationPending}
                 onClick={toggleMoveSelectMode}
@@ -2647,18 +2705,28 @@ export function JourneyStory({
                         </button>
                       ) : <p className="journey-story__mobile-media-sheet-current">当前旅程封面</p>}
                       {scopedMedia.length > 0 ? (
-                        <button
-                          type="button"
-                          disabled={mutationPending}
-                          onClick={() => {
-                            setPlaying(false);
-                            setMobileMediaMenuOpen(false);
-                            setOverview(true);
-                          }}
-                        >
-                          <IconLayoutGrid size={18} stroke={1.35} aria-hidden="true" />
-                          整理媒体
-                        </button>
+                        <>
+                          <button
+                            type="button"
+                            disabled={mutationPending}
+                            onClick={() => {
+                              setPlaying(false);
+                              setMobileMediaMenuOpen(false);
+                              setOverview(true);
+                            }}
+                          >
+                            <IconLayoutGrid size={18} stroke={1.35} aria-hidden="true" />
+                            整理媒体
+                          </button>
+                          <button
+                            type="button"
+                            disabled={mutationPending}
+                            onClick={enterMobileMoveSelectMode}
+                          >
+                            <IconArrowRight size={18} stroke={1.35} aria-hidden="true" />
+                            移动媒体 / 重新归类
+                          </button>
+                        </>
                       ) : null}
                       <button type="button" disabled={mutationPending} onClick={() => enterFullscreen(scopedMedia.length > 1)}>
                         <IconPlayerPlay size={18} stroke={1.35} aria-hidden="true" />

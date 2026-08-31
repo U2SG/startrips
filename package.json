@@ -26,6 +26,7 @@
     "qa:composer": "node scripts/capture-journey-composer.mjs",
     "qa:story": "node scripts/qa-journey-story.mjs",
     "qa:media-controls": "node scripts/qa-media-controls.mjs",
+    "qa:media-reclassification": "node scripts/qa-media-reclassification.mjs",
     "qa:post-login-controls": "node scripts/qa-post-login-controls.mjs",
     "qa:final-acceptance": "node scripts/qa-post-login-controls.mjs --final-acceptance",
     "qa:login-v3": "node scripts/qa-login-v3.mjs",
