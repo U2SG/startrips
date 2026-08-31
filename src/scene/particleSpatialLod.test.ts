@@ -47,7 +47,7 @@ describe("particle spatial LOD", () => {
   });
 
 
-  it("freezes particle LOD during route-focus flights and resolves after arrival", () => {
+  it("freezes particle LOD during any focus flight and resolves after arrival", () => {
     const current = resolveParticleRefinementLod(3, "high");
     const flying = resolveParticleRefinementLodForFrame({
       zoom: 1.1,

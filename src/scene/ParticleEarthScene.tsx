@@ -3579,13 +3579,17 @@ export function ParticleEarthScene({
     };
 
     const updateParticleRefinement = (now: number) => {
+      const refinementFocusFlightActive = isFocusFlightActive(
+        pointFocusSettling,
+        routeFocusSettling,
+      );
       currentParticleLod = resolveParticleRefinementLodForFrame({
         zoom: interactiveZoom,
         quality: currentQuality,
         current: currentParticleLod,
-        focusFlightActive: routeFocusSettling,
+        focusFlightActive: refinementFocusFlightActive,
       });
-      if (routeFocusSettling) {
+      if (refinementFocusFlightActive) {
         if (requestedRefinementCacheKey !== null) {
           refinementBuildGuard.invalidate();
           requestedRefinementCacheKey = null;
