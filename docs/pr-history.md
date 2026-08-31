@@ -18,6 +18,14 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ## 2026-08-31
 
+### PR #105 — Stabilize high-zoom globe drag and pinch
+
+- **Source head:** `7596ebf21e7946e631ea2f187c83fb8e28ffe3a9`
+- **Scope:** Replaces fixed mobile globe drag sensitivity with projected-surface screen-space mapping, calibrates inertia from the same interaction radius, anchors pinch zoom to the visible geographic surface, rebases pinch-to-drag handoff, and prevents stale focus revisions from retaking manual camera ownership. Adds detailed interaction debug state and a dedicated real-browser QA runner.
+- **User-visible change:** Close-range globe manipulation now stays precise instead of becoming hypersensitive: the same finger movement produces comparable visual displacement from whole-Earth to max zoom, off-center pinch keeps the inspected geography under the fingers, and small high-zoom flicks no longer throw the target away.
+- **Review fixes:** None yet; pre-review integration preserved the merged semantic-zoom/coastline behavior from #98/#97 while layering the new interaction model on latest main. Browser QA measured ~30px equivalent displacement for a 30px drag at 1x/2x/3x, 0.013px pinch-anchor error, zero pinch-to-drag rebase jump, and no console/page errors.
+- **Follow-up:** #81 remains the complementary high-zoom geographic-fidelity lane. Targeted scene/semantic tests (34/34), non-DB suite (46 files / 418 tests), typecheck, production build, `git diff --check`, and branch-local mobile/desktop browser interaction QA are green.
+
 ### PR #102 ? Add cross-Journey media move foundation
 
 - **Source head:** `b73e47be1254992b295ce46110eab4c6608cf92e`
