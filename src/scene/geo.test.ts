@@ -271,6 +271,24 @@ describe("spherical coastline geometry", () => {
     expect(positions.length / 3).toBe(4);
   });
 
+  it("simplifies an over-budget coastline as connected runs instead of isolated dashes", () => {
+    const positions = buildSphericalRingSegments(
+      [[
+        [-160, 0], [-120, 5], [-80, 10], [-40, 15],
+        [0, 20], [40, 15], [80, 10], [120, 5], [160, 0],
+      ]],
+      1,
+      4,
+    );
+
+    expect(positions.length / 3).toBe(4);
+    expect([...positions.slice(3, 6)]).toEqual([...positions.slice(6, 9)]);
+    const first = new Vector3(positions[0], positions[1], positions[2]);
+    const last = new Vector3(positions.at(-3)!, positions.at(-2)!, positions.at(-1)!);
+    expect(vector3ToLatLon(first).lon).toBeCloseTo(-160);
+    expect(vector3ToLatLon(last).lon).toBeCloseTo(160);
+  });
+
   it("distributes a constrained coastline budget across the full ring set", () => {
     const positions = buildSphericalRingSegments(
       [

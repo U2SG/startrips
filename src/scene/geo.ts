@@ -169,48 +169,106 @@ export function buildSphericalRingSegments(
   const maxSegments = Math.floor(maxVertices / 2);
   if (maxSegments < 1) return new Float32Array();
 
-  const segments: Array<{
-    previousLat: number;
-    previousLon: number;
-    latitude: number;
-    longitude: number;
-  }> = [];
+  type CoastlinePath = {
+    points: Array<[longitude: number, latitude: number]>;
+    segmentCount: number;
+  };
+  const paths: CoastlinePath[] = [];
+
+  const flushRun = (run: Array<[number, number]>) => {
+    if (run.length >= 2) {
+      paths.push({ points: run, segmentCount: run.length - 1 });
+    }
+  };
 
   for (const ring of rings) {
-    for (let index = 1; index < ring.length; index += 1) {
-      const [previousLon, previousLat] = ring[index - 1];
-      const [longitude, latitude] = ring[index];
-      if (
-        !Number.isFinite(previousLat)
-        || !Number.isFinite(previousLon)
-        || !Number.isFinite(latitude)
-        || !Number.isFinite(longitude)
-      ) {
+    let run: Array<[number, number]> = [];
+    for (const coordinate of ring) {
+      const [longitude, latitude] = coordinate;
+      if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+        flushRun(run);
+        run = [];
         continue;
       }
-      segments.push({ previousLat, previousLon, latitude, longitude });
+      run.push([longitude, latitude]);
+    }
+    flushRun(run);
+  }
+
+  if (paths.length === 0) return new Float32Array();
+
+  const totalSegments = paths.reduce((sum, path) => sum + path.segmentCount, 0);
+  let selectedPaths = paths;
+  if (paths.length > maxSegments) {
+    selectedPaths = Array.from({ length: maxSegments }, (_, index) => {
+      const sampledIndex = Math.min(
+        paths.length - 1,
+        Math.floor(((index + 0.5) * paths.length) / maxSegments),
+      );
+      return paths[sampledIndex];
+    });
+  }
+
+  const quotas = new Array(selectedPaths.length).fill(1);
+  if (totalSegments <= maxSegments && selectedPaths.length === paths.length) {
+    selectedPaths.forEach((path, index) => {
+      quotas[index] = path.segmentCount;
+    });
+  } else if (selectedPaths.length < maxSegments) {
+    let remaining = maxSegments - selectedPaths.length;
+    const capacities = selectedPaths.map((path) => Math.max(0, path.segmentCount - 1));
+    const totalCapacity = capacities.reduce((sum, capacity) => sum + capacity, 0);
+    if (totalCapacity > 0 && remaining > 0) {
+      const remainders: Array<{ index: number; fraction: number }> = [];
+      capacities.forEach((capacity, index) => {
+        const exact = (remaining * capacity) / totalCapacity;
+        const extra = Math.min(capacity, Math.floor(exact));
+        quotas[index] += extra;
+        remainders.push({ index, fraction: exact - extra });
+      });
+      remaining = maxSegments - quotas.reduce((sum, quota) => sum + quota, 0);
+      remainders.sort((a, b) => b.fraction - a.fraction);
+      for (const { index } of remainders) {
+        if (remaining <= 0) break;
+        if (quotas[index] >= selectedPaths[index].segmentCount) continue;
+        quotas[index] += 1;
+        remaining -= 1;
+      }
     }
   }
 
-  const selected = segments.length <= maxSegments
-    ? segments
-    : Array.from({ length: maxSegments }, (_, index) => {
-      const sampledIndex = Math.min(
-        segments.length - 1,
-        Math.floor(((index + 0.5) * segments.length) / maxSegments),
-      );
-      return segments[sampledIndex];
-    });
-  const values = new Float32Array(selected.length * 6);
+  const values: number[] = [];
+  selectedPaths.forEach((path, pathIndex) => {
+    const quota = Math.min(path.segmentCount, quotas[pathIndex]);
+    if (quota >= path.segmentCount) {
+      for (let index = 1; index < path.points.length; index += 1) {
+        const [previousLon, previousLat] = path.points[index - 1];
+        const [longitude, latitude] = path.points[index];
+        values.push(
+          ...latLonToVector3(previousLat, previousLon, radius).toArray(),
+          ...latLonToVector3(latitude, longitude, radius).toArray(),
+        );
+      }
+      return;
+    }
 
-  selected.forEach((segment, index) => {
-    const previous = latLonToVector3(segment.previousLat, segment.previousLon, radius);
-    const current = latLonToVector3(segment.latitude, segment.longitude, radius);
-    previous.toArray(values, index * 6);
-    current.toArray(values, index * 6 + 3);
+    let previousIndex = 0;
+    for (let segmentIndex = 1; segmentIndex <= quota; segmentIndex += 1) {
+      const pointIndex = Math.min(
+        path.points.length - 1,
+        Math.round((segmentIndex * path.segmentCount) / quota),
+      );
+      const [previousLon, previousLat] = path.points[previousIndex];
+      const [longitude, latitude] = path.points[pointIndex];
+      values.push(
+        ...latLonToVector3(previousLat, previousLon, radius).toArray(),
+        ...latLonToVector3(latitude, longitude, radius).toArray(),
+      );
+      previousIndex = pointIndex;
+    }
   });
 
-  return values;
+  return new Float32Array(values);
 }
 
 export function formatLatitude(value: number, precision = 4) {
