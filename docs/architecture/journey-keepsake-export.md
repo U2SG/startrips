@@ -24,7 +24,11 @@ Phase 1 does not provide a clip editor, templates, stickers, or per-clip trimmin
 
 ## Privacy and media lifecycle
 
-The manifest contains media **IDs only**, never storage keys or signed URLs. The render worker must:
+The manifest contains stable Journey/media/route-point **IDs only**, never storage keys or signed URLs. `pointIndex` may be retained as a generation-time ordering hint, but workers must resolve geography by `routePointId`; travel scenes carry stable `fromRoutePointId` and `toRoutePointId`.
+
+A queued manifest is valid only for the exact `journeyId + journeyRevision` it was generated from. Before resolving any media or camera scene, the worker must load the Journey and reject a revision mismatch with `keepsake_manifest_revision_mismatch`; it must never reinterpret old indexes against a newer route order. Missing referenced point/media IDs are likewise hard failures, not fallback-to-index behavior.
+
+The render worker must:
 
 1. authenticate the render job owner;
 2. re-authorize access to the Journey/Atlas at render time;

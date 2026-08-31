@@ -30,11 +30,15 @@ export type KeepsakeScene =
       kind: "map";
       role: "intro" | "travel" | "arrival" | "outro";
       pointIndex?: number;
+      routePointId?: string;
+      fromRoutePointId?: string;
+      toRoutePointId?: string;
       durationMs: number;
     }
   | {
       kind: "media";
       pointIndex: number | null;
+      routePointId: string | null;
       mediaAssetId: string;
       mediaType: "image" | "video";
       durationMs: number;
@@ -81,29 +85,43 @@ function sceneForStep(journey: Journey, step: PlaybackStep): SceneDraft[] {
         desiredDurationMs: desired,
         minimumDurationMs: KEEPSAKE_MIN_DURATION_MS.intro,
       }];
-    case "travel":
+    case "travel": {
+      const toPointIndex = camera?.kind === "point" ? camera.pointIndex : step.to;
+      const fromPoint = journey.routePoints[Math.max(0, toPointIndex - 1)];
+      const toPoint = journey.routePoints[toPointIndex];
+      if (!fromPoint || !toPoint) return [];
       return [{
         kind: "map",
         role: "travel",
-        pointIndex: camera?.kind === "point" ? camera.pointIndex : step.to,
+        pointIndex: toPointIndex,
+        fromRoutePointId: fromPoint.id,
+        toRoutePointId: toPoint.id,
         desiredDurationMs: desired,
         minimumDurationMs: KEEPSAKE_MIN_DURATION_MS.travel,
       }];
-    case "stop":
+    }
+    case "stop": {
+      const point = journey.routePoints[step.pointIndex];
+      if (!point) return [];
       return [{
         kind: "map",
         role: "arrival",
         pointIndex: step.pointIndex,
+        routePointId: point.id,
         desiredDurationMs: desired,
         minimumDurationMs: KEEPSAKE_MIN_DURATION_MS.stop,
       }];
+    }
     case "media": {
       const asset = playbackMediaForPoint(journey, step.pointIndex)[step.mediaIndex];
       if (!asset) return [];
       const type = mediaType(asset.mimeType);
+      const point = journey.routePoints[step.pointIndex];
+      if (!point) return [];
       return [{
         kind: "media",
         pointIndex: step.pointIndex,
+        routePointId: point.id,
         mediaAssetId: asset.id,
         mediaType: type,
         desiredDurationMs: desired,
@@ -162,6 +180,7 @@ export function buildKeepsakeRenderManifest(
     return {
       kind: "media",
       pointIndex: null,
+      routePointId: null,
       mediaAssetId: asset.id,
       mediaType: type,
       desiredDurationMs: type === "video" ? 6000 : 4500,
@@ -193,4 +212,40 @@ export function buildKeepsakeRenderManifest(
     actualDurationMs: scenes.reduce((sum, scene) => sum + scene.durationMs, 0),
     scenes,
   };
+}
+
+
+export function assertKeepsakeManifestRevision(
+  manifest: KeepsakeRenderManifest,
+  journey: Pick<Journey, "id" | "revision" | "routePoints" | "media">,
+): void {
+  if (journey.id !== manifest.journeyId) {
+    throw new Error("keepsake_manifest_journey_mismatch");
+  }
+  if (journey.revision !== manifest.journeyRevision) {
+    throw new Error("keepsake_manifest_revision_mismatch");
+  }
+
+  const routePointIds = new Set(journey.routePoints.map((point) => point.id));
+  const mediaIds = new Set(journey.media.map((asset) => asset.id));
+  for (const scene of manifest.scenes) {
+    if (scene.kind === "media") {
+      if (!mediaIds.has(scene.mediaAssetId)) {
+        throw new Error("keepsake_manifest_media_missing");
+      }
+      if (scene.routePointId !== null && !routePointIds.has(scene.routePointId)) {
+        throw new Error("keepsake_manifest_route_point_missing");
+      }
+      continue;
+    }
+    if (scene.routePointId && !routePointIds.has(scene.routePointId)) {
+      throw new Error("keepsake_manifest_route_point_missing");
+    }
+    if (scene.fromRoutePointId && !routePointIds.has(scene.fromRoutePointId)) {
+      throw new Error("keepsake_manifest_route_point_missing");
+    }
+    if (scene.toRoutePointId && !routePointIds.has(scene.toRoutePointId)) {
+      throw new Error("keepsake_manifest_route_point_missing");
+    }
+  }
 }

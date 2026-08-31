@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildPlaybackSteps } from "./journeyPlayback";
-import { buildKeepsakeRenderManifest } from "./journeyKeepsake";
+import { assertKeepsakeManifestRevision, buildKeepsakeRenderManifest } from "./journeyKeepsake";
 import type { Journey, JourneyMediaAsset, RoutePoint } from "./types";
 
 function point(id: string, sortOrder: number, longitude: number): RoutePoint {
@@ -74,12 +74,38 @@ describe("Journey keepsake render manifest (#87)", () => {
       .map((scene) => scene.pointIndex);
     expect(reelPointOrder).toEqual(livePointOrder);
     expect(manifest.scenes.filter((scene) => scene.kind === "media")).toEqual([
-      expect.objectContaining({ mediaAssetId: "opening", pointIndex: null }),
-      expect.objectContaining({ mediaAssetId: "p0-photo", pointIndex: 0 }),
-      expect.objectContaining({ mediaAssetId: "p0-photo-2", pointIndex: 0 }),
-      expect.objectContaining({ mediaAssetId: "p1-video", pointIndex: 1 }),
-      expect.objectContaining({ mediaAssetId: "p2-photo", pointIndex: 2 }),
+      expect.objectContaining({ mediaAssetId: "opening", pointIndex: null, routePointId: null }),
+      expect.objectContaining({ mediaAssetId: "p0-photo", pointIndex: 0, routePointId: "p0" }),
+      expect.objectContaining({ mediaAssetId: "p0-photo-2", pointIndex: 0, routePointId: "p0" }),
+      expect.objectContaining({ mediaAssetId: "p1-video", pointIndex: 1, routePointId: "p1" }),
+      expect.objectContaining({ mediaAssetId: "p2-photo", pointIndex: 2, routePointId: "p2" }),
     ]);
+  });
+
+  it("pins map geography to stable route-point IDs and rejects stale revisions", () => {
+    const manifest = buildKeepsakeRenderManifest(journey, 30);
+    const arrivals = manifest.scenes.filter(
+      (scene) => scene.kind === "map" && scene.role === "arrival",
+    );
+    expect(arrivals.map((scene) => scene.kind === "map" ? scene.routePointId : null))
+      .toEqual(["p0", "p1", "p2"]);
+    const travel = manifest.scenes.find(
+      (scene) => scene.kind === "map" && scene.role === "travel",
+    );
+    expect(travel).toMatchObject({
+      fromRoutePointId: "p0",
+      toRoutePointId: "p1",
+      pointIndex: 1,
+    });
+
+    const reordered: Journey = {
+      ...journey,
+      revision: journey.revision + 1,
+      routePoints: [journey.routePoints[2], journey.routePoints[0], journey.routePoints[1]],
+    };
+    expect(() => assertKeepsakeManifestRevision(manifest, reordered))
+      .toThrow("keepsake_manifest_revision_mismatch");
+    expect(() => assertKeepsakeManifestRevision(manifest, journey)).not.toThrow();
   });
 
   it("uses map scenes as punctuation, not between adjacent media at one stop", () => {
