@@ -213,6 +213,28 @@ export async function undoMediaMove(
   );
 }
 
+export type JourneyMediaMoveUndo = {
+  journeyId: string;
+  expectedRoutePointId: string | null;
+  assignments: Array<{
+    assetId: string;
+    routePointId: string | null;
+  }>;
+  assetOrder: string[];
+};
+
+export async function undoJourneyMediaMove(
+  undo: JourneyMediaMoveUndo,
+  fetcher: Fetcher = fetch,
+): Promise<Journey> {
+  const payload = await requestJson<{ journey: Journey }>(
+    "/api/uploads/assets/move/undo",
+    { method: "POST", body: JSON.stringify(undo) },
+    fetcher,
+  );
+  return payload.journey;
+}
+
 // #14: set or clear the journey's explicit cover media.
 export async function setJourneyCover(
   journeyId: string,

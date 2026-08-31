@@ -439,7 +439,7 @@ describe("media and atlas HTTP endpoints", () => {
       .insert(mediaAssets)
       .values(["a.jpg", "b.jpg", "c.jpg"].map((fileName, index) => ({
         journeyId: journey.id,
-        routePointId: null,
+        routePointId: index === 2 ? wayPointId : null,
         storageDriver: "test",
         storageKey: `${identity.atlasId}/${journey.id}/${randomUUID()}`,
         fileName,
@@ -485,6 +485,57 @@ describe("media and atlas HTTP endpoints", () => {
         .filter((asset) => asset.id === assets[0].id || asset.id === assets[2].id)
         .map((asset) => asset.id),
     ).toEqual([assets[0].id, assets[2].id]);
+
+    // Undo restores both mixed previous ownership and the exact pre-move
+    // canonical order in one locked transaction.
+    const undoPayload = {
+      journeyId: journey.id,
+      expectedRoutePointId: stopId,
+      assignments: [
+        { assetId: assets[0].id, routePointId: null },
+        { assetId: assets[2].id, routePointId: wayPointId },
+      ],
+      assetOrder: [assets[0].id, assets[1].id, assets[2].id, soundtrack.id],
+    };
+    const undone = await app.request(`${TEST_ORIGIN}/api/uploads/assets/move/undo`, {
+      method: "POST",
+      headers: authHeaders(identity.cookie),
+      body: JSON.stringify(undoPayload),
+    });
+    expect(undone.status).toBe(200);
+    const undonePayload = await undone.json() as {
+      journey: { media: { id: string; routePointId: string | null }[] };
+    };
+    expect(undonePayload.journey.media.map((asset) => asset.id))
+      .toEqual(undoPayload.assetOrder);
+    expect(undonePayload.journey.media.find((asset) => asset.id === assets[0].id)?.routePointId)
+      .toBeNull();
+    expect(undonePayload.journey.media.find((asset) => asset.id === assets[2].id)?.routePointId)
+      .toBe(wayPointId);
+
+    // A later move + reorder makes the old undo token stale. It must not
+    // overwrite newer media intent merely because the asset ids still exist.
+    const movedAgain = await app.request(`${TEST_ORIGIN}/api/uploads/assets/move`, {
+      method: "POST",
+      headers: authHeaders(identity.cookie),
+      body: JSON.stringify({ journeyId: journey.id, assetIds: moved, routePointId: stopId }),
+    });
+    expect(movedAgain.status).toBe(200);
+    const reorderedAfterMove = await app.request(`${TEST_ORIGIN}/api/uploads/assets/reorder`, {
+      method: "POST",
+      headers: authHeaders(identity.cookie),
+      body: JSON.stringify({
+        journeyId: journey.id,
+        assetIds: [soundtrack.id, assets[1].id, assets[0].id, assets[2].id],
+      }),
+    });
+    expect(reorderedAfterMove.status).toBe(200);
+    const staleUndo = await app.request(`${TEST_ORIGIN}/api/uploads/assets/move/undo`, {
+      method: "POST",
+      headers: authHeaders(identity.cookie),
+      body: JSON.stringify(undoPayload),
+    });
+    expect(staleUndo.status).toBe(409);
 
     // Moving back to the whole journey (null) is the same endpoint.
     const movedBack = await app.request(`${TEST_ORIGIN}/api/uploads/assets/move`, {

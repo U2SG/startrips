@@ -10,6 +10,7 @@ import {
   mobileStoryHistoryLayers,
   mediaForRoutePoint,
   mediaForUploadRefreshScope,
+  mediaMoveUndoForSelection,
   replaceJourneySoundtrack,
   storyAssetIndexForId,
   storyAutoplayNextIndex,
@@ -284,6 +285,29 @@ describe("aggregate organizer ownership (#76 review)", () => {
       .toBe(true);
     expect(storySelectionContainsRoutePointMedia([intro, point], new Set([intro.id])))
       .toBe(false);
+  });
+
+  it("captures mixed previous ownership and full order for server-backed move undo", () => {
+    const intro = asset("intro", "image/jpeg", 0);
+    const pointA = { ...asset("point-a-media", "image/jpeg", 1), routePointId: "point-a" };
+    const pointB = { ...asset("point-b-media", "video/mp4", 2), routePointId: "point-b" };
+    const track = asset("track", "audio/mpeg", 3);
+    const source: Journey = { ...journey, media: [intro, pointA, pointB, track] };
+
+    expect(mediaMoveUndoForSelection(
+      source,
+      [pointB.id, intro.id],
+      "point-a",
+    )).toEqual({
+      journeyId: source.id,
+      expectedRoutePointId: "point-a",
+      assignments: [
+        { assetId: intro.id, routePointId: null },
+        { assetId: pointB.id, routePointId: "point-b" },
+      ],
+      assetOrder: [intro.id, pointA.id, pointB.id, track.id],
+    });
+    expect(mediaMoveUndoForSelection(source, ["missing"], "point-a")).toBeNull();
   });
 });
 

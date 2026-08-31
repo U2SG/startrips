@@ -49,7 +49,16 @@ import {
   IconX,
 } from "@tabler/icons-react";
 import { IconActionButton } from "../components/IconActionButton";
-import { deleteMedia, getPrivateMediaRead, moveJourneyMedia, reorderJourneyMedia, setJourneyCover } from "./journeyApi";
+import {
+  JourneyApiError,
+  deleteMedia,
+  getPrivateMediaRead,
+  moveJourneyMedia,
+  reorderJourneyMedia,
+  setJourneyCover,
+  undoJourneyMediaMove,
+  type JourneyMediaMoveUndo,
+} from "./journeyApi";
 import { runSharedElementMorph } from "../motion/primitives/sharedElement";
 import { uploadJourneyMedia } from "./JourneyComposer";
 import {
@@ -301,6 +310,27 @@ export function mediaForUploadRefreshScope(
   targetRoutePointId: string | null,
 ) {
   return storyMediaForScope(target, targetRoutePointId);
+}
+
+export function mediaMoveUndoForSelection(
+  journey: Journey,
+  assetIds: readonly string[],
+  expectedRoutePointId: string | null,
+): JourneyMediaMoveUndo | null {
+  const selected = new Set(assetIds);
+  const assignments = journey.media
+    .filter((asset) => selected.has(asset.id))
+    .map((asset) => ({ assetId: asset.id, routePointId: asset.routePointId }));
+  if (assignments.length !== selected.size) return null;
+  const assetOrder = [...journey.media]
+    .sort((left, right) => left.sortOrder - right.sortOrder)
+    .map((asset) => asset.id);
+  return {
+    journeyId: journey.id,
+    expectedRoutePointId,
+    assignments,
+    assetOrder,
+  };
 }
 
 export function storyInitialMediaSelection(
@@ -645,6 +675,7 @@ export function JourneyStory({
   const [moveSelection, setMoveSelection] = useState<ReadonlySet<string>>(new Set());
   const [movePending, setMovePending] = useState(false);
   const [moveMessage, setMoveMessage] = useState("");
+  const [moveUndo, setMoveUndo] = useState<JourneyMediaMoveUndo | null>(null);
   const [playing, setPlaying] = useState(false);
   // Review P2: mirrors `playing` so gesture handlers can read it synchronously.
   const playingRef = useRef(false);
@@ -817,6 +848,7 @@ export function JourneyStory({
     setMobileMediaMenuOpen(false);
     setMoveSelection(new Set());
     setMoveMessage("");
+    setMoveUndo(null);
     restoreMobileMoveSelectFocusRef.current = true;
     setMoveSelectMode(true);
     setOverview(true);
@@ -833,6 +865,7 @@ export function JourneyStory({
     setMoveSelectMode(false);
     setMoveSelection(new Set());
     setMoveMessage("");
+    setMoveUndo(null);
     restoreMobileManageViewerFocusRef.current = true;
     setMobileManageMode(false);
     return true;
@@ -984,6 +1017,7 @@ export function JourneyStory({
     setMoveSelectMode(false);
     setMoveSelection(new Set());
     setMoveMessage("");
+    setMoveUndo(null);
     setSoundtrackUpload({ status: "idle" });
     setSoundtrackRemovePending(false);
     setSoundtrackNotice("");
@@ -1071,6 +1105,7 @@ export function JourneyStory({
     setMoveSelectMode(false);
     setMoveSelection(new Set());
     setMoveMessage("");
+    setMoveUndo(null);
   }, [overview]);
 
   // Only photos and videos are browsable media. The journey soundtrack is
@@ -1952,6 +1987,8 @@ export function JourneyStory({
     files: readonly File[],
     targetRoutePointId: string | null = selectedRoutePointId,
   ) {
+    setMoveUndo(null);
+    setMoveMessage("");
     setRetryFiles([]);
     setRetryRoutePointId(null);
     setPlacementReview(null);
@@ -2092,6 +2129,8 @@ export function JourneyStory({
 
   async function confirmMediaDelete() {
     if (!asset || mutationPending) return;
+    setMoveUndo(null);
+    setMoveMessage("");
     setMediaDeleteState("pending");
     setMediaDeleteMessage("");
     try {
@@ -2128,6 +2167,8 @@ export function JourneyStory({
 
   async function moveMedia(direction: -1 | 1) {
     if (!asset || mutationPending) return;
+    setMoveUndo(null);
+    setMoveMessage("");
     // The Story's aggregate view groups media by ownership chapter. Arrow
     // sorting therefore moves inside the active chapter sequence, then maps
     // that chapter order back onto the full visual-media payload.
@@ -2299,6 +2340,8 @@ export function JourneyStory({
   async function handleMediaReorderEnd(event: DragEndEvent) {
     const { active, over } = event;
     if (!over || active.id === over.id) return;
+    setMoveUndo(null);
+    setMoveMessage("");
     const activeAsset = scopedMedia.find((candidate) => candidate.id === active.id);
     const overAsset = scopedMedia.find((candidate) => candidate.id === over.id);
     if (!activeAsset || !overAsset) return;
@@ -2365,6 +2408,7 @@ export function JourneyStory({
     setMoveSelectMode((value) => !value);
     setMoveSelection(new Set());
     setMoveMessage("");
+    setMoveUndo(null);
   }
 
   function toggleMoveSelection(assetId: string) {
@@ -2382,16 +2426,64 @@ export function JourneyStory({
   async function moveSelectedMediaTo(targetRoutePointId: string | null) {
     if (moveSelection.size === 0 || mutationPending) return;
     const assetIds = [...moveSelection];
+    const undo = mediaMoveUndoForSelection(journey, assetIds, targetRoutePointId);
+    if (!undo) {
+      setMoveMessage("所选媒体已经变化，请重新选择。");
+      return;
+    }
+    const destination = targetRoutePointId === null
+      ? "整段旅程"
+      : journey.routePoints.find((point) => point.id === targetRoutePointId)?.label
+        || "所选途径点";
     setMovePending(true);
     setMoveMessage("");
+    setMoveUndo(null);
     try {
       await moveJourneyMedia(journey.id, assetIds, targetRoutePointId);
-      await onMediaAdded(journey.id);
-      setMoveMessage(`已移动 ${assetIds.length} 个媒体`);
-      setMoveSelectMode(false);
-      setMoveSelection(new Set());
     } catch (error) {
       setMoveMessage(error instanceof Error ? error.message : "移动失败，请稍后重试。");
+      setMovePending(false);
+      return;
+    }
+
+    setMoveUndo(undo);
+    setMoveMessage(`已移动 ${assetIds.length} 个媒体到 ${destination}`);
+    setMoveSelectMode(false);
+    setMoveSelection(new Set());
+    try {
+      await onMediaAdded(journey.id);
+    } catch {
+      setMoveMessage(`已移动 ${assetIds.length} 个媒体到 ${destination}；列表刷新失败，仍可撤销`);
+    } finally {
+      setMovePending(false);
+    }
+  }
+
+  async function undoLastMediaMove() {
+    if (!moveUndo || mutationPending) return;
+    const undo = moveUndo;
+    setMovePending(true);
+    try {
+      await undoJourneyMediaMove(undo);
+    } catch (error) {
+      setMoveMessage(
+        error instanceof JourneyApiError && error.code === "MEDIA_MOVE_UNDO_STALE"
+          ? "媒体在移动后又发生了变化，无法安全撤销。"
+          : error instanceof Error
+            ? error.message
+            : "撤销失败，请稍后重试。",
+      );
+      setMoveUndo(null);
+      setMovePending(false);
+      return;
+    }
+
+    setMoveUndo(null);
+    setMoveMessage("已撤销媒体移动");
+    try {
+      await onMediaAdded(journey.id);
+    } catch {
+      setMoveMessage("媒体移动已撤销，但当前列表刷新失败。重新打开旅程即可看到服务器状态。");
     } finally {
       setMovePending(false);
     }
@@ -2711,7 +2803,21 @@ export function JourneyStory({
                 </select>
               </div>
             ) : null}
-            {overview && moveMessage ? <p className="journey-story__order-message" role="status">{moveMessage}</p> : null}
+            {overview && moveMessage ? (
+              <p className="journey-story__order-message" role="status">
+                <span>{moveMessage}</span>
+                {moveUndo ? (
+                  <button
+                    className="journey-story__move-undo"
+                    type="button"
+                    disabled={movePending}
+                    onClick={() => void undoLastMediaMove()}
+                  >
+                    撤销
+                  </button>
+                ) : null}
+              </p>
+            ) : null}
             {!overview && shownAsset && (!shownRead || shownRead.status === "loading") ? <div className="journey-story__media-state">正在打开私有媒体…</div> : null}
             {!overview && shownAsset && shownRead?.status === "error" ? <div className="journey-story__media-state is-error">{shownRead.message}</div> : null}
             {!overview && shownAsset && shownRead?.status === "ready" && shownAsset.mimeType.startsWith("video/") ? (

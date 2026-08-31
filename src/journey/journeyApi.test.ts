@@ -7,6 +7,7 @@ import {
   moveJourneyMedia,
   moveMediaBetweenJourneys,
   undoMediaMove,
+  undoJourneyMediaMove,
   reorderJourneyMedia,
   restoreJourney,
   reverseGeocode,
@@ -207,6 +208,30 @@ describe("journeyApi", () => {
     expect(fetcher).toHaveBeenCalledWith(
       "/api/uploads/assets/move/undo",
       expect.objectContaining({ body: JSON.stringify(undo) }),
+    );
+  });
+
+  it("undoes a media move with previous assignments and canonical order", async () => {
+    const journey = { id: "journey-1", media: [] };
+    const fetcher = vi.fn(async () => Response.json({ journey })) as unknown as typeof fetch;
+    const undo = {
+      journeyId: "journey-1",
+      expectedRoutePointId: "point-2",
+      assignments: [
+        { assetId: "asset-1", routePointId: null },
+        { assetId: "asset-2", routePointId: "point-1" },
+      ],
+      assetOrder: ["asset-1", "asset-3", "asset-2"],
+    };
+
+    await expect(undoJourneyMediaMove(undo, fetcher)).resolves.toEqual(journey);
+    expect(fetcher).toHaveBeenCalledWith(
+      "/api/uploads/assets/move/undo",
+      expect.objectContaining({
+        method: "POST",
+        credentials: "include",
+        body: JSON.stringify(undo),
+      }),
     );
   });
 
