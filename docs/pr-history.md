@@ -16,6 +16,24 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ---
 
+## 2026-08-31
+
+### PR #100 ? Define deterministic Journey keepsake render manifest
+
+- **Source head:** `23c7eb2f6dbfff5d9573b05902897feb316646ac`
+- **Scope:** Defines the phase-1 deterministic keepsake render manifest and hybrid authorized-server-render contract, reusing live Journey Playback ordering while encoding private media references as stable IDs and supporting portrait-first 15/30/60-second pacing presets.
+- **User-visible change:** Establishes the export contract for future private Journey reels so route arrivals, travel, opening media, point media, and outro scenes can render in the same semantic order as live playback without embedding signed URLs or exposing storage coordinates.
+- **Review fixes:** Replaced index-only geography with role-specific required stable route-point IDs on arrival/travel scenes; made `journeyId + journeyRevision` an explicit hard render precondition; added a stable-ID narrative snapshot of route order and canonical visual-media placement/order so queued manifests also reject media move, reorder, upload, or deletion paths that do not bump Journey revision; added missing-ID/placement validation and regressions for route reorder plus same-revision media mutations.
+- **Follow-up:** The next #87 slice remains the dedicated render harness and deterministic 3-stop output experiment with encode-time, peak-memory, file-size, and visual-quality measurements. GitHub-hosted verify/readiness checks on the reviewed code head were zero-step runner failures; targeted keepsake/playback tests (19/19), the non-DB suite (46 files / 410 tests), typecheck, production build, and `git diff --check` were green.
+
+### PR #99 — Make mobile media reassignment discoverable
+
+- **Source head:** `9a24b52d3fe1a2697908d6fe82890b537962abff`
+- **Scope:** Adds a first-level mobile media-management action for reassignment/reclassification, enters the existing multi-select move flow directly, and adds a dedicated Chromium QA runner for discoverability, 44px touch targets, Back/Escape ownership, focus restoration, and pending-mutation behavior.
+- **User-visible change:** On mobile, users can move or reclassify media directly from the first management sheet instead of first entering an unrelated organize/select path; normal Escape and Browser Back restore Viewer/focus predictably, while an in-flight move cannot be dismissed by Escape.
+- **Review fixes:** Split the #74 acceptance coverage into an independently runnable browser QA so the pre-existing #65 velocity-flick timeout cannot hide the new checks; synchronized the collapsed-mobile Escape handler with current `mutationPending` state and added a held-request regression proving pending Escape stays in Manage with the move UI intact.
+- **Follow-up:** The broader `qa:media-controls` runner still has the pre-existing Issue #65 velocity-flick timeout on current main; the dedicated `qa:media-reclassification`, JourneyStory tests, typecheck, production build, and diff-check passed on the reviewed source head. GitHub-hosted verify/readiness checks were zero-step runner failures.
+
 ## 2026-08-30
 
 ### PR #98 — Unify globe layers under semantic zoom
