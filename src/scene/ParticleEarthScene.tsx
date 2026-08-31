@@ -67,7 +67,9 @@ import {
   ParticleRefinementBuildGuard,
   buildRegionalLandSample,
   resolveParticleRefinementLod,
+  resolveParticleRefinementLodForFrame,
   resolveParticleRefinementRegion,
+  shouldCancelPendingRefinementRequest,
   type ParticleRefinementRegion,
   type RegionalLandSample,
 } from "./particleSpatialLod";
@@ -3310,15 +3312,19 @@ export function ParticleEarthScene({
       const qualityAtRequest = currentQuality;
       const particleCap = currentParticleLod.particleCap;
       const cacheKey = `${qualityAtRequest}:${region.key}`;
-      if (
-        requestedRefinementCacheKey === cacheKey
-        || activeRefinementLayer?.cacheKey === cacheKey
-      ) {
-        if (activeRefinementLayer?.cacheKey === cacheKey) {
-          refinementBuildState = "ready";
+      if (activeRefinementLayer?.cacheKey === cacheKey) {
+        if (shouldCancelPendingRefinementRequest({
+          activeCacheKey: activeRefinementLayer.cacheKey,
+          requestedCacheKey: requestedRefinementCacheKey,
+          targetCacheKey: cacheKey,
+        })) {
+          refinementBuildGuard.invalidate();
+          requestedRefinementCacheKey = null;
         }
+        refinementBuildState = "ready";
         return;
       }
+      if (requestedRefinementCacheKey === cacheKey) return;
       requestedRefinementCacheKey = cacheKey;
       const ticket = refinementBuildGuard.request(cacheKey);
       const cached = readCachedRefinement(cacheKey);
@@ -3573,11 +3579,21 @@ export function ParticleEarthScene({
     };
 
     const updateParticleRefinement = (now: number) => {
-      currentParticleLod = resolveParticleRefinementLod(
-        interactiveZoom,
-        currentQuality,
-        currentParticleLod.level,
-      );
+      currentParticleLod = resolveParticleRefinementLodForFrame({
+        zoom: interactiveZoom,
+        quality: currentQuality,
+        current: currentParticleLod,
+        focusFlightActive: routeFocusSettling,
+      });
+      if (routeFocusSettling) {
+        if (requestedRefinementCacheKey !== null) {
+          refinementBuildGuard.invalidate();
+          requestedRefinementCacheKey = null;
+          refinementBuildState = activeRefinementLayer ? "ready" : "idle";
+        }
+        updateParticleLodDebug();
+        return;
+      }
       if (currentParticleLod.activeCount === 0) {
         if (requestedRefinementCacheKey !== null) {
           refinementBuildGuard.invalidate();

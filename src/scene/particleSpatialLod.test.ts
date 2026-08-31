@@ -6,7 +6,9 @@ import {
   ParticleRefinementBuildGuard,
   buildRegionalLandSample,
   resolveParticleRefinementLod,
+  resolveParticleRefinementLodForFrame,
   resolveParticleRefinementRegion,
+  shouldCancelPendingRefinementRequest,
 } from "./particleSpatialLod";
 
 describe("particle spatial LOD", () => {
@@ -44,6 +46,45 @@ describe("particle spatial LOD", () => {
     expect(lowCounts[2]).toBeLessThan(highCounts[2]);
   });
 
+
+  it("freezes particle LOD during route-focus flights and resolves after arrival", () => {
+    const current = resolveParticleRefinementLod(3, "high");
+    const flying = resolveParticleRefinementLodForFrame({
+      zoom: 1.1,
+      quality: "high",
+      current,
+      focusFlightActive: true,
+    });
+    expect(flying).toBe(current);
+    expect(flying.activeCount).toBe(current.activeCount);
+
+    const arrived = resolveParticleRefinementLodForFrame({
+      zoom: 1.1,
+      quality: "high",
+      current,
+      focusFlightActive: false,
+    });
+    expect(arrived).not.toBe(current);
+    expect(arrived.activeCount).toBe(0);
+  });
+
+  it("cancels a different pending region when the view returns to the active region", () => {
+    expect(shouldCancelPendingRefinementRequest({
+      activeCacheKey: "high:A",
+      requestedCacheKey: "high:B",
+      targetCacheKey: "high:A",
+    })).toBe(true);
+    expect(shouldCancelPendingRefinementRequest({
+      activeCacheKey: "high:A",
+      requestedCacheKey: "high:A",
+      targetCacheKey: "high:A",
+    })).toBe(false);
+    expect(shouldCancelPendingRefinementRequest({
+      activeCacheKey: "high:A",
+      requestedCacheKey: null,
+      targetCacheKey: "high:A",
+    })).toBe(false);
+  });
   it("quantizes nearby views to a reusable bounded region", () => {
     const first = resolveParticleRefinementRegion({ lat: 1.1, lon: 103.8 });
     const nearby = resolveParticleRefinementRegion({ lat: 3.9, lon: 106.1 });

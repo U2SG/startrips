@@ -74,6 +74,35 @@ export function resolveParticleRefinementLod(
   };
 }
 
+export function resolveParticleRefinementLodForFrame({
+  zoom,
+  quality,
+  current,
+  focusFlightActive,
+}: {
+  zoom: number;
+  quality: ParticleLodQuality;
+  current: ParticleRefinementLod;
+  focusFlightActive: boolean;
+}): ParticleRefinementLod {
+  if (focusFlightActive) return current;
+  return resolveParticleRefinementLod(zoom, quality, current.level);
+}
+
+export function shouldCancelPendingRefinementRequest({
+  activeCacheKey,
+  requestedCacheKey,
+  targetCacheKey,
+}: {
+  activeCacheKey: string | null;
+  requestedCacheKey: string | null;
+  targetCacheKey: string;
+}) {
+  return activeCacheKey === targetCacheKey
+    && requestedCacheKey !== null
+    && requestedCacheKey !== targetCacheKey;
+}
+
 export interface ParticleRefinementRegion {
   key: string;
   center: { lat: number; lon: number };
