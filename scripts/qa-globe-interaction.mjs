@@ -1,11 +1,11 @@
 import { launchQaBrowser } from "./qa-browser.mjs";
+import { normalizeQaBaseUrl, startOwnedQaViteServer } from "./qa-globe-interaction-server.mjs";
 
-const baseUrl = process.env.QA_BASE_URL ?? "http://127.0.0.1:4173";
-const qaUrl = new URL("/?qaState=journey-routes", baseUrl).toString();
-const browser = await launchQaBrowser({
-  headless: true,
-  args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"],
-});
+const explicitBaseUrl = normalizeQaBaseUrl(process.env.QA_BASE_URL);
+const ownedServer = explicitBaseUrl ? null : await startOwnedQaViteServer();
+const baseUrl = explicitBaseUrl ?? ownedServer.baseUrl;
+const qaUrl = new URL("/?qaState=journey-routes", `${baseUrl}/`).toString();
+let browser = null;
 
 function rotationDistance(before, after) {
   return Math.hypot(
@@ -28,8 +28,8 @@ async function createQaPage(options) {
     contentType: "application/json",
     body: "null",
   }));
-  await page.goto(qaUrl, { waitUntil: "domcontentloaded" });
-  await page.locator('[data-scene-ready="true"]').waitFor({ timeout: 20_000 });
+  await page.goto(qaUrl, { waitUntil: "domcontentloaded", timeout: 120_000 });
+  await page.locator('[data-scene-ready="true"]').waitFor({ timeout: 60_000 });
   await page.waitForFunction(() => Boolean(window.__particleEarthDebug?.()));
   // The route-only QA preview deliberately makes its backdrop noninteractive.
   // Production mounts the same canvas in an interactive persistent host, so
@@ -385,9 +385,14 @@ async function runDesktopQa() {
 }
 
 try {
+  browser = await launchQaBrowser({
+    headless: true,
+    args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"],
+  });
   const mobile = await runMobileQa();
   const desktop = await runDesktopQa();
   console.log(JSON.stringify({ baseUrl, mobile, desktop }, null, 2));
 } finally {
-  await browser.close();
+  await browser?.close();
+  await ownedServer?.close();
 }
