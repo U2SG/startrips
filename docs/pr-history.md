@@ -20,11 +20,11 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ### PR #108 - Bound particle-globe gestures to two pointers
 
-- **Source head:** `542ae5d70a068f5622fa0d4cd35161e87800f35f`
-- **Scope:** Fixes a post-#105 gesture-state regression by bounding the particle-globe controller to the two simultaneous pointers its pinch distance/centroid and handoff state machine actually support; third-and-later contacts are ignored instead of entering `activePointers`.
-- **User-visible change:** Accidental three-finger contact can no longer corrupt an in-progress two-finger globe pinch or leave the following one-finger drag in a partially reset state. Normal one-finger drag and two-finger anchored pinch behavior are unchanged.
-- **Review fixes:** Post-merge audit identified that three tracked pointers plus a pointer-up left two contacts active while `finishPointer()` cleared drag/pinch state. The fix makes pointer admission explicit and adds a boundary regression. A browser three-pointer probe measured zero rotation from the ignored third finger and normal non-zero continuation after the tracked pinch rebased to one finger.
-- **Follow-up:** None known. ParticleEarth targeted tests are 31/31, the non-DB suite is 46 files / 424 tests, typecheck, production build, `git diff --check`, and the existing #105 mobile/desktop globe-interaction browser QA are green with zero console/page errors.
+- **Source head:** `541f56709c976eee8d6670a1d08055e7766880d8`
+- **Scope:** Fixes a post-#105 gesture-state regression by bounding the particle-globe controller to the two simultaneous pointers its pinch distance/centroid and handoff state machine actually support, while tracking rejected extra pointer IDs through their lifecycle so their release cannot activate route targets.
+- **User-visible change:** Accidental extra contacts can no longer corrupt an in-progress globe gesture or activate a route target when released, including after the tracked pinch has ended. Normal one-finger drag and two-finger anchored pinch behavior are unchanged.
+- **Review fixes:** Rejected extra pointer IDs remain suppressed until their own lifecycle ends; overlapping untracked pointers are also suppressed while a gesture is active; and off-canvas pointer lifecycle cleanup occurs at window scope. A dedicated route-target browser probe verified both release orderings with zero activation and zero errors.
+- **Follow-up:** None known. ParticleEarth targeted tests are 32/32, the non-DB suite is 46 files / 425 tests, typecheck, production build, `git diff --check`, the existing #105 mobile/desktop globe-interaction browser QA, and the dedicated route-target browser probe are green.
 
 ## 2026-08-31
 
