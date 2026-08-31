@@ -2572,6 +2572,93 @@
   opacity: 0.68;
 }
 
+.journey-story__placement-review {
+  display: grid;
+  gap: 12px;
+  padding: 13px;
+  border: 1px solid rgba(203, 241, 193, 0.22);
+  background: rgba(7, 20, 19, 0.72);
+}
+
+.journey-story__placement-review-head {
+  display: grid;
+  gap: 5px;
+}
+
+.journey-story__placement-review-head p,
+.journey-story__placement-review-head strong,
+.journey-story__placement-review-head span {
+  margin: 0;
+}
+
+.journey-story__placement-review-head p {
+  color: var(--atlas-acid);
+  font: 500 8px/1 ui-monospace, "SFMono-Regular", Consolas, monospace;
+  letter-spacing: 0.14em;
+}
+
+.journey-story__placement-review-head strong {
+  color: #dbe8e4;
+  font-size: 12px;
+  font-weight: 560;
+  line-height: 1.45;
+}
+
+.journey-story__placement-review-head span,
+.journey-story__placement-groups {
+  color: var(--atlas-faint);
+  font-size: 9px;
+  line-height: 1.55;
+}
+
+.journey-story__placement-groups {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.journey-story__placement-groups li {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.journey-story__placement-groups b {
+  flex: 0 0 auto;
+  color: #b8d8ce;
+  font-weight: 600;
+}
+
+.journey-story__placement-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.journey-story__placement-actions button {
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid rgba(203, 241, 193, 0.28);
+  background: rgba(203, 241, 193, 0.08);
+  color: #dbe8e4;
+  cursor: pointer;
+  font-size: 9px;
+}
+
+.journey-story__placement-actions button:hover,
+.journey-story__placement-actions button:focus-visible {
+  border-color: rgba(203, 241, 193, 0.58);
+  background: rgba(203, 241, 193, 0.13);
+}
+
+.journey-story__placement-actions button.is-secondary {
+  border-color: rgba(255, 255, 255, 0.12);
+  background: transparent;
+  color: var(--atlas-faint);
+}
+
 .journey-story__upload-progress {
   position: relative;
   height: 2px;
