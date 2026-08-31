@@ -252,6 +252,21 @@ export function buildSphericalRingSegments(
       return;
     }
 
+    const [firstLon, firstLat] = path.points[0];
+    const [lastLon, lastLat] = path.points[path.points.length - 1];
+    if (quota === 1 && firstLon === lastLon && firstLat === lastLat) {
+      for (let index = 1; index < path.points.length; index += 1) {
+        const [previousLon, previousLat] = path.points[index - 1];
+        const [longitude, latitude] = path.points[index];
+        const previous = latLonToVector3(previousLat, previousLon, radius);
+        const current = latLonToVector3(latitude, longitude, radius);
+        if (previous.distanceToSquared(current) <= 1e-20) continue;
+        values.push(...previous.toArray(), ...current.toArray());
+        return;
+      }
+      return;
+    }
+
     let previousIndex = 0;
     for (let segmentIndex = 1; segmentIndex <= quota; segmentIndex += 1) {
       const pointIndex = Math.min(

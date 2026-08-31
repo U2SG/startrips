@@ -271,6 +271,19 @@ describe("spherical coastline geometry", () => {
     expect(positions.length / 3).toBe(4);
   });
 
+  it("keeps a one-segment closed-ring budget non-degenerate", () => {
+    const positions = buildSphericalRingSegments(
+      [[[0, 0], [30, 0], [30, 30], [0, 30], [0, 0]]],
+      1,
+      2,
+    );
+
+    expect(positions.length / 3).toBe(2);
+    const start = new Vector3(positions[0], positions[1], positions[2]);
+    const end = new Vector3(positions[3], positions[4], positions[5]);
+    expect(start.distanceTo(end)).toBeGreaterThan(0.01);
+  });
+
   it("simplifies an over-budget coastline as connected runs instead of isolated dashes", () => {
     const positions = buildSphericalRingSegments(
       [[
