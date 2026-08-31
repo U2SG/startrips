@@ -34,6 +34,7 @@ import {
   buildProjectedRoutePath,
   collectJourneyDimDirections,
   focusViewportCenter,
+  canTrackGlobePointer,
   clampGlobeTilt,
   journeyConnectorAnchor,
   clampGlobeZoom,
@@ -206,6 +207,13 @@ describe("ParticleEarthScene contracts", () => {
       particleCount: 28_000,
       maxDpr: Number.POSITIVE_INFINITY,
     });
+  });
+
+  it("bounds the gesture controller to the two pointers its pinch math supports (#107)", () => {
+    expect(canTrackGlobePointer(0)).toBe(true);
+    expect(canTrackGlobePointer(1)).toBe(true);
+    expect(canTrackGlobePointer(2)).toBe(false);
+    expect(canTrackGlobePointer(3)).toBe(false);
   });
 
   it("uses a deliberate drag threshold and allows full globe rotation", () => {

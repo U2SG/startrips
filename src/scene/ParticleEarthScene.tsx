@@ -308,6 +308,10 @@ export function isReliablePinchAnchor(
       <= projectedGlobeRadiusPx * 0.98;
 }
 
+export function canTrackGlobePointer(activePointerCount: number) {
+  return activePointerCount < 2;
+}
+
 export function rebaseGlobeDragSample(
   pointerId: number,
   pointer: ScreenPoint,
@@ -2782,6 +2786,7 @@ export function ParticleEarthScene({
       if (
         !latestDragToRotate.current
         || (event.pointerType === "mouse" && event.button !== 0)
+        || !canTrackGlobePointer(activePointers.size)
       ) {
         return;
       }
