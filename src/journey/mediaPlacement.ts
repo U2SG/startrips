@@ -187,13 +187,24 @@ function journeyCandidate(
   };
 }
 
-function bestStrongSignalTarget(
-  candidates: readonly Candidate[],
-  predicate: (candidate: Candidate) => boolean,
-) {
+function bestStrongGpsTarget(candidates: readonly Candidate[]) {
   return candidates
-    .filter((candidate) => candidate.routePointId && predicate(candidate))
-    .sort((left, right) => right.score - left.score)[0] ?? null;
+    .filter((candidate) => candidate.routePointId && candidate.strongGps)
+    .sort((left, right) => (
+      (left.distanceKm ?? Number.POSITIVE_INFINITY) - (right.distanceKm ?? Number.POSITIVE_INFINITY)
+      || left.journeyId.localeCompare(right.journeyId)
+      || (left.routePointId ?? "").localeCompare(right.routePointId ?? "")
+    ))[0] ?? null;
+}
+
+function bestStrongTimeTarget(candidates: readonly Candidate[]) {
+  return candidates
+    .filter((candidate) => candidate.routePointId && candidate.strongTime)
+    .sort((left, right) => (
+      (left.timeDeltaHours ?? Number.POSITIVE_INFINITY) - (right.timeDeltaHours ?? Number.POSITIVE_INFINITY)
+      || left.journeyId.localeCompare(right.journeyId)
+      || (left.routePointId ?? "").localeCompare(right.routePointId ?? "")
+    ))[0] ?? null;
 }
 
 /**
@@ -216,8 +227,8 @@ export function suggestMediaPlacement(
 
   // Strong GPS and strong absolute-time evidence that point at different places
   // is a conflict, not permission to average two contradictory facts.
-  const spatialTarget = bestStrongSignalTarget(routeCandidates, (candidate) => candidate.strongGps);
-  const temporalTarget = bestStrongSignalTarget(routeCandidates, (candidate) => candidate.strongTime);
+  const spatialTarget = bestStrongGpsTarget(routeCandidates);
+  const temporalTarget = bestStrongTimeTarget(routeCandidates);
   if (
     spatialTarget
     && temporalTarget

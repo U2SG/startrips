@@ -266,6 +266,13 @@ export function storySelectionContainsRoutePointMedia(
   return media.some((asset) => selectedIds.has(asset.id) && asset.routePointId !== null);
 }
 
+export function mediaForUploadRefreshScope(
+  target: Journey,
+  targetRoutePointId: string | null,
+) {
+  return storyMediaForScope(target, targetRoutePointId);
+}
+
 export function storyInitialMediaSelection(
   journey: Journey | undefined,
   requestedRoutePointId: string | null,
@@ -1878,7 +1885,7 @@ export function JourneyStory({
       try {
         const refreshedJourney = await onMediaAdded(journey.id);
         const refreshedMedia = refreshedJourney
-          ? scopedVisualMedia(refreshedJourney)
+          ? mediaForUploadRefreshScope(refreshedJourney, targetRoutePointId)
           : [];
         const uploadedAssetIndex = storyUploadedAssetIndex(
           refreshedMedia,

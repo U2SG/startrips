@@ -206,6 +206,24 @@ describe("suggestMediaPlacement (#86)", () => {
     expect(result).toBeNull();
   });
 
+
+  it("uses GPS distance independently when strong GPS and time favor different nearby points", () => {
+    const nearbyConflict = journey("nearby-conflict", "2026-08-30", "2026-08-30", [
+      routePoint("gps-point", 22.2783, 114.1747, "2026-08-30T00:00:00Z"),
+      routePoint("time-point", 22.33, 114.22, "2026-08-30T06:00:00Z", 1),
+    ]);
+    const result = suggestMediaPlacement(
+      {
+        latitude: 22.2783,
+        longitude: 114.1747,
+        capturedAt: "2026-08-30T06:00:00Z",
+      },
+      [nearbyConflict],
+      nearbyConflict.id,
+    );
+    expect(result).toBeNull();
+  });
+
   it("keeps the capture's local calendar date at timezone boundaries", () => {
     const boundary = journey("boundary", "2026-09-01", "2026-09-01", [
       routePoint("midnight", 0, 0, "2026-08-31T10:30:00Z"),

@@ -7,6 +7,7 @@ import {
   mobileStoryExpandedForLayout,
   mobileStoryHistoryLayers,
   mediaForRoutePoint,
+  mediaForUploadRefreshScope,
   replaceJourneySoundtrack,
   storyAssetIndexForId,
   storyAutoplayNextIndex,
@@ -59,6 +60,25 @@ function asset(
     createdAt: journey.createdAt,
   };
 }
+
+
+describe("mediaForUploadRefreshScope (#111 review)", () => {
+  it("filters refreshed media by the accepted upload destination instead of stale UI scope", () => {
+    const refreshed: Journey = {
+      ...journey,
+      routePoints: [
+        { id: "old-point", journeyId: journey.id, sortOrder: 0, label: "Old", latitude: 1, longitude: 1, occurredAt: null, note: null, isStop: true, createdAt: journey.createdAt },
+        { id: "new-point", journeyId: journey.id, sortOrder: 1, label: "New", latitude: 2, longitude: 2, occurredAt: null, note: null, isStop: true, createdAt: journey.createdAt },
+      ],
+      media: [
+        { ...asset("old-media", "image/jpeg", 0), routePointId: "old-point" },
+        { ...asset("uploaded-media", "image/jpeg", 1), routePointId: "new-point" },
+      ],
+    };
+    expect(mediaForUploadRefreshScope(refreshed, "new-point").map((item) => item.id))
+      .toEqual(["uploaded-media"]);
+  });
+});
 
 describe("storyInitialMediaSelection (#18 follow-up)", () => {
   it("opens a Journey card on its explicit cover instead of visualMedia[0]", () => {
