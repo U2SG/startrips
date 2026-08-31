@@ -1388,13 +1388,14 @@ uploadRoutes.post("/assets/move/undo", async (context) => {
       .where(eq(mediaAssets.journeyId, input.targetJourneyId))
       .orderBy(mediaAssets.sortOrder);
     const currentSourceIds = sourceAll.map((asset) => asset.id);
-    const originalSourceSet = new Set(input.sourceOrder);
-    const currentSourceSet = new Set(currentSourceIds);
-    const restoredSourceOrder = input.sourceOrder.filter(
-      (assetId) => currentSourceSet.has(assetId) || moving.has(assetId),
-    );
-    const sourceNewcomers = currentSourceIds.filter((assetId) => !originalSourceSet.has(assetId));
-    const sourceNextOrder = [...restoredSourceOrder, ...sourceNewcomers];
+    const expectedPostMoveSourceOrder = input.sourceOrder.filter((assetId) => !moving.has(assetId));
+    if (
+      currentSourceIds.length !== expectedPostMoveSourceOrder.length
+      || currentSourceIds.some((assetId, index) => assetId !== expectedPostMoveSourceOrder[index])
+    ) {
+      return "undo-conflict" as const;
+    }
+    const sourceNextOrder = input.sourceOrder;
     const targetNextOrder = targetAll.map((asset) => asset.id).filter((assetId) => !moving.has(assetId));
     const placementByAsset = new Map(
       input.placements.map((placement) => [placement.assetId, placement.routePointId]),

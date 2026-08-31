@@ -648,6 +648,40 @@ describe("media and atlas HTTP endpoints", () => {
       { assetId: sourceAssets[1].id, routePointId: null },
     ]);
 
+    // A newer source reorder invalidates this older undo. The endpoint must
+    // preserve the user's newer order instead of replaying pre-move sourceOrder.
+    const reorderedSourceIds = [sourceAssets[3].id, sourceAssets[2].id];
+    const reorderAfterMove = await app.request(`${TEST_ORIGIN}/api/uploads/assets/reorder`, {
+      method: "POST",
+      headers: authHeaders(identity.cookie),
+      body: JSON.stringify({ journeyId: source.id, assetIds: reorderedSourceIds }),
+    });
+    expect(reorderAfterMove.status).toBe(200);
+    const staleAfterReorder = await app.request(`${TEST_ORIGIN}/api/uploads/assets/move/undo`, {
+      method: "POST",
+      headers: authHeaders(identity.cookie),
+      body: JSON.stringify(movedPayload.undo),
+    });
+    expect(staleAfterReorder.status).toBe(409);
+    const sourceOrderAfterRejectedUndo = await db
+      .select({ id: mediaAssets.id })
+      .from(mediaAssets)
+      .where(eq(mediaAssets.journeyId, source.id))
+      .orderBy(mediaAssets.sortOrder);
+    expect(sourceOrderAfterRejectedUndo.map((asset) => asset.id)).toEqual(reorderedSourceIds);
+
+    // Restore the deterministic post-move source order so the original undo
+    // remains valid for the success-path assertions below.
+    const restorePostMoveOrder = await app.request(`${TEST_ORIGIN}/api/uploads/assets/reorder`, {
+      method: "POST",
+      headers: authHeaders(identity.cookie),
+      body: JSON.stringify({
+        journeyId: source.id,
+        assetIds: [sourceAssets[2].id, sourceAssets[3].id],
+      }),
+    });
+    expect(restorePostMoveOrder.status).toBe(200);
+
     // Invalid selection must roll back the entire batch and leave c.jpg in source.
     const invalidBatch = await app.request(`${TEST_ORIGIN}/api/uploads/assets/move`, {
       method: "POST",
