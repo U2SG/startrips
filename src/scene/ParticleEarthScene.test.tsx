@@ -18,6 +18,7 @@ import {
   GLOBE_IDLE_RESUME_DELAY_MS,
   GLOBE_IDLE_ROTATION_RADIANS_PER_SECOND,
   GLOBE_RENDER_ORDER,
+  GLOBE_SURFACE_RADIUS,
   GLOBE_TILT_LIMIT_RADIANS,
   GLOBE_UPRIGHT_ROTATION_X,
   GLOBE_ZOOM_MAX,
@@ -40,6 +41,9 @@ import {
   getJourneyRouteVisualState,
   getGlobeIdleAlignmentRotation,
   getGlobeIdleRotationDelta,
+  getGlobeInertiaSpeedLimit,
+  getProjectedGlobeRadiusPx,
+  getProjectedSurfaceInteractionRadiusPx,
   isFocusFlightActive,
   isIdleRotationSuppressed,
   isGlobeUpright,
@@ -48,12 +52,147 @@ import {
   isSphericalPointVisible,
   isProjectedPointInsideViewport,
   isLocalPointInsideClipViewport,
+  isReliablePinchAnchor,
+  projectedRadiusRotationDelta,
+  rebaseGlobeDragSample,
   selectRenderableJourneyRoutes,
   selectRouteLabelPointIndexes,
+  shouldFocusRevisionOwnState,
+  shouldRetainGlobeInertia,
+  solveScreenAnchorRotation,
 } from "./ParticleEarthScene";
 import { disposeSceneGraph } from "./useThreeScene";
 
 describe("ParticleEarthScene contracts", () => {
+  it("maps the same drag to comparable screen motion across globe zoom levels", () => {
+    const viewportHeight = 844;
+    const fov = (38 * Math.PI) / 180;
+    const cameraDistance = 5.4;
+    const wholeEarthRadius = getProjectedSurfaceInteractionRadiusPx(
+      viewportHeight,
+      fov,
+      cameraDistance,
+      GLOBE_SURFACE_RADIUS * 1.15,
+    );
+    const closeRadius = getProjectedSurfaceInteractionRadiusPx(
+      viewportHeight,
+      fov,
+      cameraDistance,
+      GLOBE_SURFACE_RADIUS * 1.15 * GLOBE_ZOOM_MAX,
+    );
+    const wholeEarthDelta = projectedRadiusRotationDelta(
+      { x: 195, y: 422 },
+      { x: 225, y: 422 },
+      wholeEarthRadius,
+    );
+    const closeDelta = projectedRadiusRotationDelta(
+      { x: 195, y: 422 },
+      { x: 225, y: 422 },
+      closeRadius,
+    );
+
+    expect(closeRadius).toBeGreaterThan(wholeEarthRadius * 3);
+    expect(Math.abs(closeDelta.rotationY)).toBeLessThan(
+      Math.abs(wholeEarthDelta.rotationY) / 3,
+    );
+    expect(wholeEarthRadius * wholeEarthDelta.angularDelta).toBeCloseTo(30, 1);
+    expect(closeRadius * closeDelta.angularDelta).toBeCloseTo(30, 1);
+  });
+
+  it("keeps projected-radius drag continuous across the silhouette", () => {
+    const center = { x: 200, y: 300 };
+    const radius = 180;
+    const inside = projectedRadiusRotationDelta(
+      { x: center.x + radius * 0.96, y: center.y },
+      { x: center.x + radius * 0.99, y: center.y },
+      radius,
+    );
+    const crossing = projectedRadiusRotationDelta(
+      { x: center.x + radius * 0.99, y: center.y },
+      { x: center.x + radius * 1.02, y: center.y },
+      radius,
+    );
+    const outside = projectedRadiusRotationDelta(
+      { x: center.x + radius * 1.02, y: center.y },
+      { x: center.x + radius * 1.05, y: center.y },
+      radius,
+    );
+
+    expect(inside.rotationY).toBeGreaterThan(0);
+    expect(crossing.rotationY).toBeGreaterThan(0);
+    expect(outside.rotationY).toBeGreaterThan(0);
+    expect(crossing.angularDelta).toBeCloseTo(inside.angularDelta);
+    expect(outside.angularDelta).toBeCloseTo(inside.angularDelta);
+  });
+
+  it("solves a geographic pinch anchor to the moving gesture centroid", () => {
+    const solved = solveScreenAnchorRotation(
+      0,
+      0,
+      { x: 270, y: 170 },
+      (rotationX, rotationY) => ({
+        x: 210 + rotationY * 240,
+        y: 220 - rotationX * 180,
+      }),
+    );
+
+    expect(solved.converged).toBe(true);
+    expect(solved.errorPx).toBeLessThanOrEqual(0.5);
+    expect(solved.x).toBeCloseTo(50 / 180, 4);
+    expect(solved.y).toBeCloseTo(60 / 240, 4);
+  });
+
+  it("falls back when a pinch centroid cannot reliably remain on the silhouette", () => {
+    expect(isReliablePinchAnchor(
+      { x: 250, y: 200 },
+      { x: 200, y: 200 },
+      100,
+    )).toBe(true);
+    expect(isReliablePinchAnchor(
+      { x: 301, y: 200 },
+      { x: 200, y: 200 },
+      100,
+    )).toBe(false);
+    expect(getProjectedGlobeRadiusPx(844, (38 * Math.PI) / 180, 5.4, 1.6))
+      .toBeGreaterThan(300);
+  });
+
+  it("rebases pinch to one-finger drag without carrying a stale sample", () => {
+    expect(rebaseGlobeDragSample(
+      7,
+      { x: 144, y: 288 },
+      1234,
+      true,
+    )).toEqual({
+      pointerId: 7,
+      lastX: 144,
+      lastY: 288,
+      lastTime: 1234,
+      travel: GLOBE_DRAG_THRESHOLD_PX,
+      started: true,
+    });
+  });
+
+  it("keeps stale focus revisions from reclaiming manually owned state", () => {
+    expect(shouldFocusRevisionOwnState(null, 1000)).toBe(true);
+    expect(shouldFocusRevisionOwnState(1000, 1000)).toBe(false);
+    expect(shouldFocusRevisionOwnState(1000, 999)).toBe(false);
+    expect(shouldFocusRevisionOwnState(1000, 1001)).toBe(true);
+  });
+
+  it("caps inertia in screen space so close zoom cannot fling farther", () => {
+    const wholeEarthLimit = getGlobeInertiaSpeedLimit(400);
+    const closeLimit = getGlobeInertiaSpeedLimit(1_200);
+    expect(closeLimit).toBeCloseTo(wholeEarthLimit / 3);
+    expect(wholeEarthLimit * 400).toBeCloseTo(closeLimit * 1_200);
+  });
+
+  it("does not retain inertia after a held or near-zero release", () => {
+    expect(shouldRetainGlobeInertia(1_000, 1_040, 0.01)).toBe(true);
+    expect(shouldRetainGlobeInertia(1_000, 1_100, 0.01)).toBe(false);
+    expect(shouldRetainGlobeInertia(1_000, 1_040, 0.0001)).toBe(false);
+  });
+
   it("supports every globe mode without adding a second quality profile", () => {
     const modes: GlobeMode[] = [
       "particleSphere",
