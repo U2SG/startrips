@@ -50,6 +50,7 @@ import {
   isGlobeUpright,
   isGlobeDrag,
   isPrimaryPointerActivation,
+  shouldRememberUntrackedPointerStart,
   shouldSuppressUntrackedPointerActivation,
   isSphericalPointVisible,
   isProjectedPointInsideViewport,
@@ -217,6 +218,13 @@ describe("ParticleEarthScene contracts", () => {
     expect(canTrackGlobePointer(3)).toBe(false);
   });
 
+
+  it("remembers overflow contacts that begin outside the canvas while two pointers own the globe (#107)", () => {
+    expect(shouldRememberUntrackedPointerStart(0)).toBe(false);
+    expect(shouldRememberUntrackedPointerStart(1)).toBe(false);
+    expect(shouldRememberUntrackedPointerStart(2)).toBe(true);
+    expect(shouldRememberUntrackedPointerStart(3)).toBe(true);
+  });
 
   it("suppresses activation for capacity-rejected or gesture-overlapping untracked pointers (#107)", () => {
     expect(shouldSuppressUntrackedPointerActivation(true, 0)).toBe(true);

@@ -319,6 +319,10 @@ export function shouldSuppressUntrackedPointerActivation(
   return rejectedByGestureCapacity || activePointerCount > 0;
 }
 
+export function shouldRememberUntrackedPointerStart(activePointerCount: number) {
+  return !canTrackGlobePointer(activePointerCount);
+}
+
 export function rebaseGlobeDragSample(
   pointerId: number,
   pointer: ScreenPoint,
@@ -2797,6 +2801,23 @@ export function ParticleEarthScene({
       dragAngularDisplacement = { x: 0, y: 0, total: 0 };
     };
 
+    const onCityLayerPointerDown = (event: PointerEvent) => {
+      if (
+        !latestDragToRotate.current
+        || (event.pointerType === "mouse" && event.button !== 0)
+      ) {
+        return;
+      }
+      // City labels live in a sibling SVG, so contacts that begin there never
+      // pass through the canvas pointerdown handler. Remember only overflow
+      // contacts while a two-pointer gesture already owns the globe; this lets
+      // the city pointerup suppress activation for the contact's full lifecycle
+      // without changing ordinary city taps or the existing pinch controller.
+      if (shouldRememberUntrackedPointerStart(activePointers.size)) {
+        rejectedPointerIds.add(event.pointerId);
+      }
+    };
+
     const onPointerDown = (event: PointerEvent) => {
       if (
         !latestDragToRotate.current
@@ -3022,6 +3043,7 @@ export function ParticleEarthScene({
       pinchAnchorErrorPx = null;
     };
 
+    cityVectorLayer.addEventListener("pointerdown", onCityLayerPointerDown);
     renderer.domElement.addEventListener("pointerdown", onPointerDown);
     renderer.domElement.addEventListener("pointermove", onPointerMove);
     renderer.domElement.addEventListener("pointerup", onPointerUp);
@@ -3646,6 +3668,7 @@ export function ParticleEarthScene({
         document.removeEventListener("visibilitychange", onVisibilityChange);
         resizeObserver.disconnect();
         window.removeEventListener("resize", resize);
+        cityVectorLayer.removeEventListener("pointerdown", onCityLayerPointerDown);
         renderer.domElement.removeEventListener("pointerdown", onPointerDown);
         renderer.domElement.removeEventListener("pointermove", onPointerMove);
         renderer.domElement.removeEventListener("pointerup", onPointerUp);
