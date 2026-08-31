@@ -20,10 +20,10 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ### PR #102 ? Add cross-Journey media move foundation
 
-- **Source head:** `cf8b87b224bbaabb7489c426c3e1bd7d831e54c2`
+- **Source head:** `b73e47be1254992b295ce46110eab4c6608cf92e`
 - **Scope:** Extends the existing media reassignment mutation with same-Atlas cross-Journey ownership transfer, deterministic source/destination locking, canonical source/destination refresh payloads, server-generated undo descriptors, and a real undo mutation that restores Journey ownership, route-point placement, source ordering, and moved source-cover state while rejecting stale/conflicting replay.
 - **User-visible change:** This backend/API foundation enables photos and videos to move between Journeys without re-uploading bytes and gives the upcoming UI a safe server-backed Undo path; no new cross-Journey destination picker is exposed by this PR itself.
-- **Review fixes:** Rebased the branch onto latest `main@44e200c`; fixed the P1 stale-Undo race by deriving the expected post-move source order from the server-generated pre-move `sourceOrder + assetIds` and rejecting Undo with 409 whenever the current source order/count changed, so a newer source reorder/upload/delete is never overwritten. Added an integration regression for move ? source reorder ? Undo that verifies the newer order is preserved.
+- **Review fixes:** Rebased the branch onto latest `main@44e200c`; fixed both stale-Undo P1 races. Undo now verifies the expected post-move source order and a server-generated destination snapshot (`targetRoutePointId + targetOrder`) before mutating either Journey. Newer source reorder/upload/delete or destination reclassify/reorder/upload/delete therefore return 409 instead of being overwritten. Integration regressions cover source reorder and destination route-point reclassification while preserving the newer state.
 - **Follow-up:** #75 remains open for the hierarchical Journey/route-point destination picker and user-facing Undo notice/history wiring. Targeted parser/API tests (41/41), the non-DB suite (46 files / 415 tests), typecheck, production build, and `git diff --check` are green. The tenant integration suite includes the new stale-reorder regression but cannot execute locally because PostgreSQL is not listening on `127.0.0.1:5432`.
 
 ### PR #101 ? Correct PR 99 review ledger
