@@ -28,6 +28,7 @@ const MAX_UPLOAD_BYTES = 2_000_000_000;
 const MAX_AUDIO_UPLOAD_BYTES = 100 * 1024 * 1024;
 const MAX_PARTS = 10_000;
 const MAX_REORDER_ASSETS = 256;
+const MAX_MOVE_UNDO_ORDER = 10_000;
 const FINALIZATION_LEASE_MS = 20_000;
 const FINALIZATION_HEARTBEAT_MS = 5_000;
 const STALE_UPLOAD_AFTER_MS = 24 * 60 * 60 * 1_000;
@@ -179,16 +180,22 @@ export function parseReorderInput(body: ReorderMediaInput) {
 
 type MoveMediaInput = {
   journeyId?: unknown;
+  targetJourneyId?: unknown;
   assetIds?: unknown;
   routePointId?: unknown;
 };
 
-// A batch move onto a route point (or `null`, back to the whole journey). One
-// request moves the whole selection, so it lands under the same journey row
-// lock and dense sortOrder renumbering as a reorder, rather than N separate
-// writes racing each other.
+// A batch move onto a route point (or `null`, back to the whole journey).
+// `journeyId` remains the source Journey for backwards compatibility; an
+// optional `targetJourneyId` upgrades the same mutation to a cross-Journey
+// move inside the active Atlas.
 export function parseMoveMediaInput(body: MoveMediaInput) {
   const journeyId = typeof body.journeyId === "string" ? body.journeyId : "";
+  const targetJourneyId = body.targetJourneyId === undefined || body.targetJourneyId === null
+    ? null
+    : typeof body.targetJourneyId === "string"
+      ? body.targetJourneyId
+      : "invalid";
   const routePointId = body.routePointId === undefined || body.routePointId === null
     ? null
     : typeof body.routePointId === "string"
@@ -196,6 +203,8 @@ export function parseMoveMediaInput(body: MoveMediaInput) {
       : "invalid";
   if (
     !UUID_PATTERN.test(journeyId)
+    || targetJourneyId === "invalid"
+    || (targetJourneyId !== null && !UUID_PATTERN.test(targetJourneyId))
     || !Array.isArray(body.assetIds)
     || body.assetIds.length < 1
     || body.assetIds.length > MAX_REORDER_ASSETS
@@ -210,7 +219,94 @@ export function parseMoveMediaInput(body: MoveMediaInput) {
     assetIds.push(raw);
   }
   if (new Set(assetIds).size !== assetIds.length) return null;
-  return { journeyId, assetIds, routePointId };
+  return {
+    journeyId,
+    ...(targetJourneyId === null ? {} : { targetJourneyId }),
+    assetIds,
+    routePointId,
+  };
+}
+
+export type MediaMoveUndo = {
+  sourceJourneyId: string;
+  targetJourneyId: string;
+  assetIds: string[];
+  targetRoutePointId: string | null;
+  sourceOrder: string[];
+  targetOrder: string[];
+  sourceCoverMediaAssetId: string | null;
+  placements: Array<{ assetId: string; routePointId: string | null }>;
+};
+
+type UndoMediaMoveInput = Partial<MediaMoveUndo>;
+
+export function parseUndoMediaMoveInput(body: UndoMediaMoveInput): MediaMoveUndo | null {
+  const sourceJourneyId = typeof body.sourceJourneyId === "string" ? body.sourceJourneyId : "";
+  const targetJourneyId = typeof body.targetJourneyId === "string" ? body.targetJourneyId : "";
+  if (
+    !UUID_PATTERN.test(sourceJourneyId)
+    || !UUID_PATTERN.test(targetJourneyId)
+    || sourceJourneyId === targetJourneyId
+    || !(body.targetRoutePointId === null || typeof body.targetRoutePointId === "string")
+    || (typeof body.targetRoutePointId === "string" && !UUID_PATTERN.test(body.targetRoutePointId))
+    || !Array.isArray(body.assetIds)
+    || body.assetIds.length < 1
+    || body.assetIds.length > MAX_REORDER_ASSETS
+    || !Array.isArray(body.sourceOrder)
+    || body.sourceOrder.length < body.assetIds.length
+    || body.sourceOrder.length > MAX_MOVE_UNDO_ORDER
+    || !Array.isArray(body.targetOrder)
+    || body.targetOrder.length < body.assetIds.length
+    || body.targetOrder.length > MAX_MOVE_UNDO_ORDER
+    || !Array.isArray(body.placements)
+    || body.placements.length !== body.assetIds.length
+    || !(body.sourceCoverMediaAssetId === null || typeof body.sourceCoverMediaAssetId === "string")
+    || (typeof body.sourceCoverMediaAssetId === "string" && !UUID_PATTERN.test(body.sourceCoverMediaAssetId))
+  ) return null;
+
+  const assetIds = [...body.assetIds];
+  const sourceOrder = [...body.sourceOrder];
+  const targetOrder = [...body.targetOrder];
+  if (
+    assetIds.some((id) => typeof id !== "string" || !UUID_PATTERN.test(id))
+    || sourceOrder.some((id) => typeof id !== "string" || !UUID_PATTERN.test(id))
+    || targetOrder.some((id) => typeof id !== "string" || !UUID_PATTERN.test(id))
+    || new Set(assetIds).size !== assetIds.length
+    || new Set(sourceOrder).size !== sourceOrder.length
+    || new Set(targetOrder).size !== targetOrder.length
+    || assetIds.some((id) => !sourceOrder.includes(id) || !targetOrder.includes(id))
+  ) return null;
+
+  const placementByAsset = new Map<string, string | null>();
+  for (const placement of body.placements) {
+    if (!placement || typeof placement !== "object") return null;
+    const assetId = typeof placement.assetId === "string" ? placement.assetId : "";
+    const routePointId = placement.routePointId === null
+      ? null
+      : typeof placement.routePointId === "string"
+        ? placement.routePointId
+        : "invalid";
+    if (
+      !UUID_PATTERN.test(assetId)
+      || !assetIds.includes(assetId)
+      || routePointId === "invalid"
+      || (routePointId !== null && !UUID_PATTERN.test(routePointId))
+      || placementByAsset.has(assetId)
+    ) return null;
+    placementByAsset.set(assetId, routePointId);
+  }
+  if (placementByAsset.size !== assetIds.length) return null;
+
+  return {
+    sourceJourneyId,
+    targetJourneyId,
+    assetIds,
+    targetRoutePointId: body.targetRoutePointId ?? null,
+    sourceOrder,
+    targetOrder,
+    sourceCoverMediaAssetId: body.sourceCoverMediaAssetId ?? null,
+    placements: assetIds.map((assetId) => ({ assetId, routePointId: placementByAsset.get(assetId) ?? null })),
+  };
 }
 
 async function findUpload(uploadId: string, atlasId: string) {
@@ -1038,94 +1134,355 @@ uploadRoutes.post("/assets/move", async (context) => {
     );
   }
 
+  const sourceJourneyId = input.journeyId;
+  const targetJourneyId = input.targetJourneyId ?? input.journeyId;
+  const crossJourney = sourceJourneyId !== targetJourneyId;
+
   const result = await db.transaction(async (transaction) => {
-    const lockedJourney = await transaction.execute<{ id: string }>(sql`
-      select ${journeys.id} as id
-      from ${journeys}
-      where ${journeys.id} = ${input.journeyId}
-        and ${journeys.atlasId} = ${atlas.id}
-        and ${journeys.deletionStartedAt} is null
-      for update
-    `);
-    if (lockedJourney.rows.length === 0) return "journey-not-found" as const;
+    const lockedJourneys = new Map<string, { id: string; coverMediaAssetId: string | null }>();
+    for (const journeyId of [...new Set([sourceJourneyId, targetJourneyId])].sort()) {
+      const locked = await transaction.execute<{ id: string; coverMediaAssetId: string | null }>(sql`
+        select
+          ${journeys.id} as id,
+          ${journeys.coverMediaAssetId} as "coverMediaAssetId"
+        from ${journeys}
+        where ${journeys.id} = ${journeyId}
+          and ${journeys.atlasId} = ${atlas.id}
+          and ${journeys.deletionStartedAt} is null
+        for update
+      `);
+      const row = locked.rows[0];
+      if (!row) {
+        return journeyId === sourceJourneyId
+          ? "journey-not-found" as const
+          : "destination-journey-not-found" as const;
+      }
+      lockedJourneys.set(row.id, row);
+    }
 
     if (input.routePointId) {
-      const [routePoint] = await transaction
-        .select({ id: journeyRoutePoints.id })
-        .from(journeyRoutePoints)
-        .where(and(
-          eq(journeyRoutePoints.id, input.routePointId),
-          eq(journeyRoutePoints.journeyId, input.journeyId),
-        ))
-        .limit(1);
-      if (!routePoint) return "route-point-not-found" as const;
+      const lockedRoutePoint = await transaction.execute<{ id: string }>(sql`
+        select ${journeyRoutePoints.id} as id
+        from ${journeyRoutePoints}
+        where ${journeyRoutePoints.id} = ${input.routePointId}
+          and ${journeyRoutePoints.journeyId} = ${targetJourneyId}
+        for update
+      `);
+      if (lockedRoutePoint.rows.length === 0) return "route-point-not-found" as const;
     }
 
     const owned = await transaction
-      .select({ id: mediaAssets.id, mimeType: mediaAssets.mimeType })
+      .select({
+        id: mediaAssets.id,
+        mimeType: mediaAssets.mimeType,
+        routePointId: mediaAssets.routePointId,
+        sortOrder: mediaAssets.sortOrder,
+      })
       .from(mediaAssets)
       .where(and(
-        eq(mediaAssets.journeyId, input.journeyId),
+        eq(mediaAssets.journeyId, sourceJourneyId),
         inArray(mediaAssets.id, input.assetIds),
       ));
     if (owned.length !== input.assetIds.length) return "invalid-selection" as const;
-    // A soundtrack belongs to the whole journey (see parseStartUpload); moving
-    // one onto a route point would create a row the atlas has no way to read.
     if (
-      input.routePointId
+      (crossJourney || input.routePointId)
       && owned.some((asset) => !ALLOWED_MIME_TYPES.has(asset.mimeType))
     ) {
       return "invalid-selection" as const;
     }
 
-    const all = await transaction
+    const sourceAll = await transaction
       .select({ id: mediaAssets.id })
       .from(mediaAssets)
-      .where(eq(mediaAssets.journeyId, input.journeyId))
+      .where(eq(mediaAssets.journeyId, sourceJourneyId))
       .orderBy(mediaAssets.sortOrder);
     const moving = new Set(input.assetIds);
-    const existingOrder = all.map((asset) => asset.id);
-    const movedInExistingOrder = existingOrder.filter((id) => moving.has(id));
-    // Moved assets rejoin at the end of the journey's order, same place a
-    // freshly uploaded asset lands — but preserve their relative slideshow
-    // order instead of inheriting the client's click / Set insertion order.
-    const nextOrder = [
-      ...existingOrder.filter((id) => !moving.has(id)),
-      ...movedInExistingOrder,
+    const sourceOrder = sourceAll.map((asset) => asset.id);
+    const movedInSourceOrder = sourceOrder.filter((id) => moving.has(id));
+
+    if (!crossJourney) {
+      const nextOrder = [
+        ...sourceOrder.filter((id) => !moving.has(id)),
+        ...movedInSourceOrder,
+      ];
+      await transaction
+        .update(mediaAssets)
+        .set({ sortOrder: sql`${mediaAssets.sortOrder} + 1000` })
+        .where(eq(mediaAssets.journeyId, sourceJourneyId));
+      for (let index = 0; index < nextOrder.length; index += 1) {
+        await transaction
+          .update(mediaAssets)
+          .set({ sortOrder: index })
+          .where(eq(mediaAssets.id, nextOrder[index]));
+      }
+      await transaction
+        .update(mediaAssets)
+        .set({ routePointId: input.routePointId })
+        .where(inArray(mediaAssets.id, input.assetIds));
+      return "ok" as const;
+    }
+
+    const targetAll = await transaction
+      .select({ id: mediaAssets.id })
+      .from(mediaAssets)
+      .where(eq(mediaAssets.journeyId, targetJourneyId))
+      .orderBy(mediaAssets.sortOrder);
+    const sourceNextOrder = sourceOrder.filter((id) => !moving.has(id));
+    const targetNextOrder = [
+      ...targetAll.map((asset) => asset.id),
+      ...movedInSourceOrder,
     ];
+    if (
+      sourceOrder.length > MAX_MOVE_UNDO_ORDER
+      || targetNextOrder.length > MAX_MOVE_UNDO_ORDER
+    ) return "undo-state-too-large" as const;
+    const ownedById = new Map(owned.map((asset) => [asset.id, asset]));
+    const sourceCoverMediaAssetId = lockedJourneys.get(sourceJourneyId)?.coverMediaAssetId ?? null;
+    const undo: MediaMoveUndo = {
+      sourceJourneyId,
+      targetJourneyId,
+      assetIds: movedInSourceOrder,
+      targetRoutePointId: input.routePointId,
+      sourceOrder,
+      targetOrder: targetNextOrder,
+      sourceCoverMediaAssetId,
+      placements: movedInSourceOrder.map((assetId) => ({
+        assetId,
+        routePointId: ownedById.get(assetId)?.routePointId ?? null,
+      })),
+    };
+
     await transaction
       .update(mediaAssets)
       .set({ sortOrder: sql`${mediaAssets.sortOrder} + 1000` })
-      .where(eq(mediaAssets.journeyId, input.journeyId));
-    for (let index = 0; index < nextOrder.length; index += 1) {
+      .where(or(
+        eq(mediaAssets.journeyId, sourceJourneyId),
+        eq(mediaAssets.journeyId, targetJourneyId),
+      ));
+
+    for (let index = 0; index < sourceNextOrder.length; index += 1) {
       await transaction
         .update(mediaAssets)
         .set({ sortOrder: index })
-        .where(eq(mediaAssets.id, nextOrder[index]));
+        .where(eq(mediaAssets.id, sourceNextOrder[index]));
     }
+    for (let index = 0; index < targetNextOrder.length; index += 1) {
+      const assetId = targetNextOrder[index];
+      await transaction
+        .update(mediaAssets)
+        .set(moving.has(assetId)
+          ? {
+              journeyId: targetJourneyId,
+              routePointId: input.routePointId,
+              sortOrder: index,
+            }
+          : { sortOrder: index })
+        .where(eq(mediaAssets.id, assetId));
+    }
+
+    if (sourceCoverMediaAssetId && moving.has(sourceCoverMediaAssetId)) {
+      await transaction
+        .update(journeys)
+        .set({ coverMediaAssetId: null })
+        .where(eq(journeys.id, sourceJourneyId));
+    }
+    return { kind: "ok" as const, undo };
+  });
+
+  if (result === "journey-not-found") {
+    return context.json({ error: "JOURNEY_NOT_FOUND" }, 404);
+  }
+  if (result === "destination-journey-not-found") {
+    return context.json({ error: "DESTINATION_JOURNEY_NOT_FOUND" }, 404);
+  }
+  if (result === "route-point-not-found") {
+    return context.json({ error: "ROUTE_POINT_NOT_FOUND" }, 404);
+  }
+  if (result === "undo-state-too-large") {
+    return context.json(
+      { error: "MEDIA_MOVE_TOO_LARGE", message: "Journey has too many media assets to create an undo-safe move" },
+      409,
+    );
+  }
+  if (result === "invalid-selection") {
+    return context.json(
+      {
+        error: "INVALID_MEDIA_MOVE",
+        message: "Media assets do not belong to the source journey, or the selected media cannot move to that destination",
+      },
+      400,
+    );
+  }
+
+  const sourceJourney = await getJourneyForAtlas(sourceJourneyId, atlas.id);
+  if (!crossJourney) {
+    return context.json({ journey: sourceJourney });
+  }
+  const destinationJourney = await getJourneyForAtlas(targetJourneyId, atlas.id);
+  const undo = typeof result === "object" ? result.undo : null;
+  return context.json({
+    journey: sourceJourney,
+    sourceJourney,
+    destinationJourney,
+    undo,
+  });
+});
+
+
+uploadRoutes.post("/assets/move/undo", async (context) => {
+  const { atlas } = await requireAtlasAccess(context.req.raw, "update");
+  const input = parseUndoMediaMoveInput(await context.req.json<UndoMediaMoveInput>());
+  if (!input) {
+    return context.json(
+      { error: "INVALID_MEDIA_MOVE_UNDO", message: "Invalid media move undo" },
+      400,
+    );
+  }
+
+  const result = await db.transaction(async (transaction) => {
+    const lockedJourneys = new Map<string, { id: string; coverMediaAssetId: string | null }>();
+    for (const journeyId of [input.sourceJourneyId, input.targetJourneyId].sort()) {
+      const locked = await transaction.execute<{ id: string; coverMediaAssetId: string | null }>(sql`
+        select
+          ${journeys.id} as id,
+          ${journeys.coverMediaAssetId} as "coverMediaAssetId"
+        from ${journeys}
+        where ${journeys.id} = ${journeyId}
+          and ${journeys.atlasId} = ${atlas.id}
+          and ${journeys.deletionStartedAt} is null
+        for update
+      `);
+      const row = locked.rows[0];
+      if (!row) {
+        return journeyId === input.sourceJourneyId
+          ? "journey-not-found" as const
+          : "destination-journey-not-found" as const;
+      }
+      lockedJourneys.set(row.id, row);
+    }
+
+    const originalRoutePointIds = [...new Set(
+      input.placements
+        .map((placement) => placement.routePointId)
+        .filter((routePointId): routePointId is string => routePointId !== null),
+    )].sort();
+    for (const routePointId of originalRoutePointIds) {
+      const lockedRoutePoint = await transaction.execute<{ id: string }>(sql`
+        select ${journeyRoutePoints.id} as id
+        from ${journeyRoutePoints}
+        where ${journeyRoutePoints.id} = ${routePointId}
+          and ${journeyRoutePoints.journeyId} = ${input.sourceJourneyId}
+        for update
+      `);
+      if (lockedRoutePoint.rows.length === 0) return "route-point-not-found" as const;
+    }
+
+    const movingRows = await transaction
+      .select({ id: mediaAssets.id, routePointId: mediaAssets.routePointId })
+      .from(mediaAssets)
+      .where(and(
+        eq(mediaAssets.journeyId, input.targetJourneyId),
+        inArray(mediaAssets.id, input.assetIds),
+      ));
+    if (movingRows.length !== input.assetIds.length) return "undo-conflict" as const;
+    if (movingRows.some((asset) => asset.routePointId !== input.targetRoutePointId)) {
+      return "undo-conflict" as const;
+    }
+
+    const moving = new Set(input.assetIds);
+    const sourceCoverBeforeUndo = lockedJourneys.get(input.sourceJourneyId)?.coverMediaAssetId ?? null;
+    const targetCoverBeforeUndo = lockedJourneys.get(input.targetJourneyId)?.coverMediaAssetId ?? null;
+    const shouldRestoreSourceCover = input.sourceCoverMediaAssetId !== null
+      && moving.has(input.sourceCoverMediaAssetId);
+    if (shouldRestoreSourceCover && sourceCoverBeforeUndo !== null) return "undo-conflict" as const;
+    if (targetCoverBeforeUndo !== null && moving.has(targetCoverBeforeUndo)) return "undo-conflict" as const;
+
+    const sourceAll = await transaction
+      .select({ id: mediaAssets.id })
+      .from(mediaAssets)
+      .where(eq(mediaAssets.journeyId, input.sourceJourneyId))
+      .orderBy(mediaAssets.sortOrder);
+    const targetAll = await transaction
+      .select({ id: mediaAssets.id })
+      .from(mediaAssets)
+      .where(eq(mediaAssets.journeyId, input.targetJourneyId))
+      .orderBy(mediaAssets.sortOrder);
+    const currentSourceIds = sourceAll.map((asset) => asset.id);
+    const expectedPostMoveSourceOrder = input.sourceOrder.filter((assetId) => !moving.has(assetId));
+    if (
+      currentSourceIds.length !== expectedPostMoveSourceOrder.length
+      || currentSourceIds.some((assetId, index) => assetId !== expectedPostMoveSourceOrder[index])
+    ) {
+      return "undo-conflict" as const;
+    }
+    const currentTargetIds = targetAll.map((asset) => asset.id);
+    if (
+      currentTargetIds.length !== input.targetOrder.length
+      || currentTargetIds.some((assetId, index) => assetId !== input.targetOrder[index])
+    ) {
+      return "undo-conflict" as const;
+    }
+    const sourceNextOrder = input.sourceOrder;
+    const targetNextOrder = currentTargetIds.filter((assetId) => !moving.has(assetId));
+    const placementByAsset = new Map(
+      input.placements.map((placement) => [placement.assetId, placement.routePointId]),
+    );
+
     await transaction
       .update(mediaAssets)
-      .set({ routePointId: input.routePointId })
-      .where(inArray(mediaAssets.id, input.assetIds));
+      .set({ sortOrder: sql`${mediaAssets.sortOrder} + 1000` })
+      .where(or(
+        eq(mediaAssets.journeyId, input.sourceJourneyId),
+        eq(mediaAssets.journeyId, input.targetJourneyId),
+      ));
+
+    for (let index = 0; index < targetNextOrder.length; index += 1) {
+      await transaction
+        .update(mediaAssets)
+        .set({ sortOrder: index })
+        .where(eq(mediaAssets.id, targetNextOrder[index]));
+    }
+    for (let index = 0; index < sourceNextOrder.length; index += 1) {
+      const assetId = sourceNextOrder[index];
+      await transaction
+        .update(mediaAssets)
+        .set(moving.has(assetId)
+          ? {
+              journeyId: input.sourceJourneyId,
+              routePointId: placementByAsset.get(assetId) ?? null,
+              sortOrder: index,
+            }
+          : { sortOrder: index })
+        .where(eq(mediaAssets.id, assetId));
+    }
+
+    if (shouldRestoreSourceCover) {
+      await transaction
+        .update(journeys)
+        .set({ coverMediaAssetId: input.sourceCoverMediaAssetId })
+        .where(eq(journeys.id, input.sourceJourneyId));
+    }
     return "ok" as const;
   });
 
   if (result === "journey-not-found") {
     return context.json({ error: "JOURNEY_NOT_FOUND" }, 404);
   }
+  if (result === "destination-journey-not-found") {
+    return context.json({ error: "DESTINATION_JOURNEY_NOT_FOUND" }, 404);
+  }
   if (result === "route-point-not-found") {
     return context.json({ error: "ROUTE_POINT_NOT_FOUND" }, 404);
   }
-  if (result === "invalid-selection") {
+  if (result === "undo-conflict") {
     return context.json(
-      {
-        error: "INVALID_MEDIA_MOVE",
-        message: "Media assets do not belong to this journey, or a soundtrack cannot move onto a route point",
-      },
-      400,
+      { error: "MEDIA_MOVE_UNDO_CONFLICT", message: "Media ownership or cover state changed after the move" },
+      409,
     );
   }
+
   return context.json({
-    journey: await getJourneyForAtlas(input.journeyId, atlas.id),
+    sourceJourney: await getJourneyForAtlas(input.sourceJourneyId, atlas.id),
+    destinationJourney: await getJourneyForAtlas(input.targetJourneyId, atlas.id),
   });
 });

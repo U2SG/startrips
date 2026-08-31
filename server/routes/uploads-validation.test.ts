@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   mediaKindOf,
   parseMoveMediaInput,
+  parseUndoMediaMoveInput,
   parseParts,
   parseReorderInput,
   parseStartUpload,
@@ -290,6 +291,19 @@ describe("parseMoveMediaInput", () => {
       .toBeNull();
   });
 
+  it("accepts an optional cross-journey destination while preserving the legacy shape", () => {
+    const targetJourneyId = "00000000-0000-4000-8000-000000000003";
+    const assetIds = ["00000000-0000-4000-8000-000000000011"];
+    expect(parseMoveMediaInput({
+      journeyId: JOURNEY_ID,
+      targetJourneyId,
+      assetIds,
+      routePointId: ROUTE_POINT_ID,
+    })).toEqual({ journeyId: JOURNEY_ID, targetJourneyId, assetIds, routePointId: ROUTE_POINT_ID });
+    expect(parseMoveMediaInput({ journeyId: JOURNEY_ID, targetJourneyId: "bad", assetIds, routePointId: null }))
+      .toBeNull();
+  });
+
   it("rejects oversized selections", () => {
     const oversized = Array.from(
       { length: 257 },
@@ -297,5 +311,40 @@ describe("parseMoveMediaInput", () => {
     );
     expect(parseMoveMediaInput({ journeyId: JOURNEY_ID, assetIds: oversized, routePointId: ROUTE_POINT_ID }))
       .toBeNull();
+  });
+});
+
+describe("parseUndoMediaMoveInput", () => {
+  const input = {
+    sourceJourneyId: JOURNEY_ID,
+    targetJourneyId: "00000000-0000-4000-8000-000000000003",
+    assetIds: ["00000000-0000-4000-8000-000000000011"],
+    targetRoutePointId: null,
+    sourceOrder: [
+      "00000000-0000-4000-8000-000000000011",
+      "00000000-0000-4000-8000-000000000012",
+    ],
+    targetOrder: ["00000000-0000-4000-8000-000000000011"],
+    sourceCoverMediaAssetId: "00000000-0000-4000-8000-000000000011",
+    placements: [{
+      assetId: "00000000-0000-4000-8000-000000000011",
+      routePointId: ROUTE_POINT_ID,
+    }],
+  };
+
+  it("accepts a complete server-generated undo descriptor", () => {
+    expect(parseUndoMediaMoveInput(input)).toEqual(input);
+  });
+
+  it("rejects malformed, duplicate, mismatched, and same-journey descriptors", () => {
+    expect(parseUndoMediaMoveInput({ ...input, targetJourneyId: JOURNEY_ID })).toBeNull();
+    expect(parseUndoMediaMoveInput({ ...input, assetIds: [input.assetIds[0], input.assetIds[0]] })).toBeNull();
+    expect(parseUndoMediaMoveInput({ ...input, placements: [] })).toBeNull();
+    expect(parseUndoMediaMoveInput({ ...input, targetOrder: [] })).toBeNull();
+    expect(parseUndoMediaMoveInput({ ...input, sourceOrder: ["00000000-0000-4000-8000-000000000012"] })).toBeNull();
+    expect(parseUndoMediaMoveInput({
+      ...input,
+      placements: [{ assetId: input.assetIds[0], routePointId: "bad" }],
+    })).toBeNull();
   });
 });

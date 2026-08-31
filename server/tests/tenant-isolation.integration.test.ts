@@ -543,6 +543,284 @@ describe("media and atlas HTTP endpoints", () => {
     await db.delete(mediaAssets).where(eq(mediaAssets.journeyId, journey.id));
   });
 
+  it("moves visual media across journeys atomically and supports server undo", async () => {
+    const source = await createJourneyForAtlas(identity.atlasId, identity.userId, {
+      ...baseJourney,
+      title: "Cross move source",
+    });
+    const destination = await createJourneyForAtlas(identity.atlasId, identity.userId, {
+      ...baseJourney,
+      title: "Cross move destination",
+    });
+    if (!source || !destination) throw new Error("Cross-move fixtures were not created");
+    const sourceStopId = source.routePoints[0].id;
+    const destinationStopId = destination.routePoints[0].id;
+
+    const sourceAssets = await db
+      .insert(mediaAssets)
+      .values([
+        { fileName: "a.jpg", routePointId: sourceStopId, mimeType: "image/jpeg" },
+        { fileName: "b.jpg", routePointId: null, mimeType: "image/jpeg" },
+        { fileName: "c.jpg", routePointId: null, mimeType: "image/jpeg" },
+        { fileName: "theme.mp3", routePointId: null, mimeType: "audio/mpeg" },
+      ].map((asset, index) => ({
+        journeyId: source.id,
+        routePointId: asset.routePointId,
+        storageDriver: "test",
+        storageKey: `${identity.atlasId}/${source.id}/${randomUUID()}`,
+        fileName: asset.fileName,
+        mimeType: asset.mimeType,
+        bytes: 128,
+        sortOrder: index,
+        uploadedByUserId: identity.userId,
+      })))
+      .returning({ id: mediaAssets.id, storageKey: mediaAssets.storageKey });
+    const [targetExisting] = await db
+      .insert(mediaAssets)
+      .values({
+        journeyId: destination.id,
+        routePointId: null,
+        storageDriver: "test",
+        storageKey: `${identity.atlasId}/${destination.id}/${randomUUID()}`,
+        fileName: "existing.jpg",
+        mimeType: "image/jpeg",
+        bytes: 128,
+        sortOrder: 0,
+        uploadedByUserId: identity.userId,
+      })
+      .returning({ id: mediaAssets.id });
+    await setJourneyCoverForAtlas(source.id, identity.atlasId, sourceAssets[0].id);
+    await setJourneyCoverForAtlas(destination.id, identity.atlasId, targetExisting.id);
+
+    const originalStorageKeys = new Map(sourceAssets.map((asset) => [asset.id, asset.storageKey]));
+    const movedIds = [sourceAssets[1].id, sourceAssets[0].id]; // reverse click order on purpose
+    const moveResponse = await app.request(`${TEST_ORIGIN}/api/uploads/assets/move`, {
+      method: "POST",
+      headers: authHeaders(identity.cookie),
+      body: JSON.stringify({
+        journeyId: source.id,
+        targetJourneyId: destination.id,
+        assetIds: movedIds,
+        routePointId: destinationStopId,
+      }),
+    });
+    expect(moveResponse.status).toBe(200);
+    const movedPayload = await moveResponse.json() as {
+      sourceJourney: { coverMediaAssetId: string | null; media: Array<{ id: string }> };
+      destinationJourney: {
+        coverMediaAssetId: string | null;
+        media: Array<{ id: string; journeyId: string; routePointId: string | null; storageKey: string }>;
+      };
+      undo: {
+        sourceJourneyId: string;
+        targetJourneyId: string;
+        assetIds: string[];
+        targetRoutePointId: string | null;
+        sourceOrder: string[];
+        targetOrder: string[];
+        sourceCoverMediaAssetId: string | null;
+        placements: Array<{ assetId: string; routePointId: string | null }>;
+      };
+    };
+    expect(movedPayload.sourceJourney.coverMediaAssetId).toBeNull();
+    expect(movedPayload.destinationJourney.coverMediaAssetId).toBe(targetExisting.id);
+    expect(movedPayload.sourceJourney.media.map((asset) => asset.id)).toEqual([
+      sourceAssets[2].id,
+      sourceAssets[3].id,
+    ]);
+    expect(movedPayload.destinationJourney.media.map((asset) => asset.id)).toEqual([
+      targetExisting.id,
+      sourceAssets[0].id,
+      sourceAssets[1].id,
+    ]);
+    for (const asset of movedPayload.destinationJourney.media.filter((asset) => movedIds.includes(asset.id))) {
+      expect(asset.journeyId).toBe(destination.id);
+      expect(asset.routePointId).toBe(destinationStopId);
+      expect(asset.storageKey).toBe(originalStorageKeys.get(asset.id));
+    }
+    expect(movedPayload.undo).toMatchObject({
+      sourceJourneyId: source.id,
+      targetJourneyId: destination.id,
+      assetIds: [sourceAssets[0].id, sourceAssets[1].id],
+      targetRoutePointId: destinationStopId,
+      sourceOrder: sourceAssets.map((asset) => asset.id),
+      targetOrder: [targetExisting.id, sourceAssets[0].id, sourceAssets[1].id],
+      sourceCoverMediaAssetId: sourceAssets[0].id,
+    });
+    expect(movedPayload.undo.placements).toEqual([
+      { assetId: sourceAssets[0].id, routePointId: sourceStopId },
+      { assetId: sourceAssets[1].id, routePointId: null },
+    ]);
+
+    // A newer source reorder invalidates this older undo. The endpoint must
+    // preserve the user's newer order instead of replaying pre-move sourceOrder.
+    const reorderedSourceIds = [sourceAssets[3].id, sourceAssets[2].id];
+    const reorderAfterMove = await app.request(`${TEST_ORIGIN}/api/uploads/assets/reorder`, {
+      method: "POST",
+      headers: authHeaders(identity.cookie),
+      body: JSON.stringify({ journeyId: source.id, assetIds: reorderedSourceIds }),
+    });
+    expect(reorderAfterMove.status).toBe(200);
+    const staleAfterReorder = await app.request(`${TEST_ORIGIN}/api/uploads/assets/move/undo`, {
+      method: "POST",
+      headers: authHeaders(identity.cookie),
+      body: JSON.stringify(movedPayload.undo),
+    });
+    expect(staleAfterReorder.status).toBe(409);
+    const sourceOrderAfterRejectedUndo = await db
+      .select({ id: mediaAssets.id })
+      .from(mediaAssets)
+      .where(eq(mediaAssets.journeyId, source.id))
+      .orderBy(mediaAssets.sortOrder);
+    expect(sourceOrderAfterRejectedUndo.map((asset) => asset.id)).toEqual(reorderedSourceIds);
+
+    // Restore the deterministic post-move source order so the original undo
+    // remains valid for the success-path assertions below.
+    const restorePostMoveOrder = await app.request(`${TEST_ORIGIN}/api/uploads/assets/reorder`, {
+      method: "POST",
+      headers: authHeaders(identity.cookie),
+      body: JSON.stringify({
+        journeyId: source.id,
+        assetIds: [sourceAssets[2].id, sourceAssets[3].id],
+      }),
+    });
+    expect(restorePostMoveOrder.status).toBe(200);
+
+    // A newer destination-side reclassification also invalidates the older
+    // cross-Journey undo instead of silently discarding that new placement.
+    const destinationOtherStopId = destination.routePoints[1].id;
+    const reclassifiedDestination = await app.request(`${TEST_ORIGIN}/api/uploads/assets/move`, {
+      method: "POST",
+      headers: authHeaders(identity.cookie),
+      body: JSON.stringify({
+        journeyId: destination.id,
+        assetIds: [sourceAssets[0].id],
+        routePointId: destinationOtherStopId,
+      }),
+    });
+    expect(reclassifiedDestination.status).toBe(200);
+    const staleAfterDestinationReclassify = await app.request(`${TEST_ORIGIN}/api/uploads/assets/move/undo`, {
+      method: "POST",
+      headers: authHeaders(identity.cookie),
+      body: JSON.stringify(movedPayload.undo),
+    });
+    expect(staleAfterDestinationReclassify.status).toBe(409);
+    const [reclassifiedAsset] = await db
+      .select({ journeyId: mediaAssets.journeyId, routePointId: mediaAssets.routePointId })
+      .from(mediaAssets)
+      .where(eq(mediaAssets.id, sourceAssets[0].id));
+    expect(reclassifiedAsset).toMatchObject({
+      journeyId: destination.id,
+      routePointId: destinationOtherStopId,
+    });
+
+    // Restore the original post-move placement so the success-path Undo below
+    // still exercises a valid descriptor.
+    const restoreDestinationPlacement = await app.request(`${TEST_ORIGIN}/api/uploads/assets/move`, {
+      method: "POST",
+      headers: authHeaders(identity.cookie),
+      body: JSON.stringify({
+        journeyId: destination.id,
+        assetIds: [sourceAssets[0].id],
+        routePointId: destinationStopId,
+      }),
+    });
+    expect(restoreDestinationPlacement.status).toBe(200);
+
+    // Invalid selection must roll back the entire batch and leave c.jpg in source.
+    const invalidBatch = await app.request(`${TEST_ORIGIN}/api/uploads/assets/move`, {
+      method: "POST",
+      headers: authHeaders(identity.cookie),
+      body: JSON.stringify({
+        journeyId: source.id,
+        targetJourneyId: destination.id,
+        assetIds: [sourceAssets[2].id, "00000000-0000-4000-8000-000000000099"],
+        routePointId: destinationStopId,
+      }),
+    });
+    expect(invalidBatch.status).toBe(400);
+
+    const invalidTargetPoint = await app.request(`${TEST_ORIGIN}/api/uploads/assets/move`, {
+      method: "POST",
+      headers: authHeaders(identity.cookie),
+      body: JSON.stringify({
+        journeyId: source.id,
+        targetJourneyId: destination.id,
+        assetIds: [sourceAssets[2].id],
+        routePointId: sourceStopId,
+      }),
+    });
+    expect(invalidTargetPoint.status).toBe(404);
+
+    const foreignAtlas = await app.request(`${TEST_ORIGIN}/api/uploads/assets/move`, {
+      method: "POST",
+      headers: authHeaders(identity.cookie),
+      body: JSON.stringify({
+        journeyId: source.id,
+        targetJourneyId: journeyB,
+        assetIds: [sourceAssets[2].id],
+        routePointId: null,
+      }),
+    });
+    expect(foreignAtlas.status).toBe(404);
+
+    const soundtrack = await app.request(`${TEST_ORIGIN}/api/uploads/assets/move`, {
+      method: "POST",
+      headers: authHeaders(identity.cookie),
+      body: JSON.stringify({
+        journeyId: source.id,
+        targetJourneyId: destination.id,
+        assetIds: [sourceAssets[3].id],
+        routePointId: null,
+      }),
+    });
+    expect(soundtrack.status).toBe(400);
+
+    const afterRejectedMoves = await db
+      .select({ id: mediaAssets.id, journeyId: mediaAssets.journeyId })
+      .from(mediaAssets)
+      .where(inArray(mediaAssets.id, [sourceAssets[2].id, sourceAssets[3].id]));
+    expect(afterRejectedMoves.every((asset) => asset.journeyId === source.id)).toBe(true);
+
+    const undoResponse = await app.request(`${TEST_ORIGIN}/api/uploads/assets/move/undo`, {
+      method: "POST",
+      headers: authHeaders(identity.cookie),
+      body: JSON.stringify(movedPayload.undo),
+    });
+    expect(undoResponse.status).toBe(200);
+    const undone = await undoResponse.json() as {
+      sourceJourney: {
+        coverMediaAssetId: string | null;
+        media: Array<{ id: string; journeyId: string; routePointId: string | null; storageKey: string }>;
+      };
+      destinationJourney: { coverMediaAssetId: string | null; media: Array<{ id: string }> };
+    };
+    expect(undone.sourceJourney.coverMediaAssetId).toBe(sourceAssets[0].id);
+    expect(undone.sourceJourney.media.map((asset) => asset.id)).toEqual(sourceAssets.map((asset) => asset.id));
+    expect(undone.sourceJourney.media.find((asset) => asset.id === sourceAssets[0].id)?.routePointId).toBe(sourceStopId);
+    expect(undone.sourceJourney.media.find((asset) => asset.id === sourceAssets[1].id)?.routePointId).toBeNull();
+    for (const asset of undone.sourceJourney.media.filter((asset) => movedIds.includes(asset.id))) {
+      expect(asset.journeyId).toBe(source.id);
+      expect(asset.storageKey).toBe(originalStorageKeys.get(asset.id));
+    }
+    expect(undone.destinationJourney.coverMediaAssetId).toBe(targetExisting.id);
+    expect(undone.destinationJourney.media.map((asset) => asset.id)).toEqual([targetExisting.id]);
+
+    // The undo descriptor is single-use with respect to ownership; replaying it
+    // must conflict instead of partially reordering either Journey.
+    const replayUndo = await app.request(`${TEST_ORIGIN}/api/uploads/assets/move/undo`, {
+      method: "POST",
+      headers: authHeaders(identity.cookie),
+      body: JSON.stringify(movedPayload.undo),
+    });
+    expect(replayUndo.status).toBe(409);
+
+    await db.delete(mediaAssets).where(inArray(mediaAssets.id, [
+      ...sourceAssets.map((asset) => asset.id),
+      targetExisting.id,
+    ]));
+  });
+
   it("degrades truthfully when media storage is disabled", async () => {
     const start = await app.request(`${TEST_ORIGIN}/api/uploads/start`, {
       method: "POST",
