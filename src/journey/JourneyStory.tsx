@@ -646,6 +646,8 @@ export function JourneyStory({
   const mobileManageFocusFrameRef = useRef<number | null>(null);
   const restoreMobileManageViewerFocusRef = useRef(false);
   const [mobileMediaMenuOpen, setMobileMediaMenuOpen] = useState(false);
+  const mobileMoveSelectToggleRef = useRef<HTMLButtonElement>(null);
+  const restoreMobileMoveSelectFocusRef = useRef(false);
   // Review P2: the fullscreen overlay is a focus trap of its own (it is
   // rendered outside the story dialog, whose useModalFocus would otherwise
   // steal Tab focus back into the article).
@@ -762,6 +764,16 @@ export function JourneyStory({
   function enterMobileManageMode() {
     setPlaying(false);
     setMobileManageMode(true);
+  }
+
+  function enterMobileMoveSelectMode() {
+    setPlaying(false);
+    setMobileMediaMenuOpen(false);
+    setMoveSelection(new Set());
+    setMoveMessage("");
+    restoreMobileMoveSelectFocusRef.current = true;
+    setMoveSelectMode(true);
+    setOverview(true);
   }
 
   function exitMobileManageMode() {
@@ -923,6 +935,20 @@ export function JourneyStory({
       }
     };
   }, [mobileLayout, mobileManageMode]);
+
+  useEffect(() => {
+    if (
+      !mobileLayout
+      || !overview
+      || !moveSelectMode
+      || !restoreMobileMoveSelectFocusRef.current
+    ) return;
+    const frame = window.requestAnimationFrame(() => {
+      restoreMobileMoveSelectFocusRef.current = false;
+      mobileMoveSelectToggleRef.current?.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [mobileLayout, moveSelectMode, overview]);
 
   useEffect(() => {
     if (mediaDeleteState === "confirming") mediaDeleteCancelRef.current?.focus();
@@ -2406,6 +2432,7 @@ export function JourneyStory({
               <button
                 type="button"
                 className={`journey-story__media-select-toggle${moveSelectMode ? " is-active" : ""}`}
+                ref={mobileLayout ? mobileMoveSelectToggleRef : undefined}
                 aria-pressed={moveSelectMode}
                 disabled={mutationPending}
                 onClick={toggleMoveSelectMode}
@@ -2647,18 +2674,28 @@ export function JourneyStory({
                         </button>
                       ) : <p className="journey-story__mobile-media-sheet-current">当前旅程封面</p>}
                       {scopedMedia.length > 0 ? (
-                        <button
-                          type="button"
-                          disabled={mutationPending}
-                          onClick={() => {
-                            setPlaying(false);
-                            setMobileMediaMenuOpen(false);
-                            setOverview(true);
-                          }}
-                        >
-                          <IconLayoutGrid size={18} stroke={1.35} aria-hidden="true" />
-                          整理媒体
-                        </button>
+                        <>
+                          <button
+                            type="button"
+                            disabled={mutationPending}
+                            onClick={() => {
+                              setPlaying(false);
+                              setMobileMediaMenuOpen(false);
+                              setOverview(true);
+                            }}
+                          >
+                            <IconLayoutGrid size={18} stroke={1.35} aria-hidden="true" />
+                            整理媒体
+                          </button>
+                          <button
+                            type="button"
+                            disabled={mutationPending}
+                            onClick={enterMobileMoveSelectMode}
+                          >
+                            <IconArrowRight size={18} stroke={1.35} aria-hidden="true" />
+                            移动媒体 / 重新归类
+                          </button>
+                        </>
                       ) : null}
                       <button type="button" disabled={mutationPending} onClick={() => enterFullscreen(scopedMedia.length > 1)}>
                         <IconPlayerPlay size={18} stroke={1.35} aria-hidden="true" />
