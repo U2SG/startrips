@@ -28,7 +28,11 @@ const MAX_UPLOAD_BYTES = 2_000_000_000;
 const MAX_AUDIO_UPLOAD_BYTES = 100 * 1024 * 1024;
 const MAX_PARTS = 10_000;
 const MAX_REORDER_ASSETS = 256;
-const MAX_MOVE_UNDO_ORDER = 10_000;
+export const MAX_MOVE_UNDO_ORDER = 10_000;
+
+export function moveUndoOrdersFitLimit(...orders: readonly string[][]) {
+  return orders.every((order) => order.length <= MAX_MOVE_UNDO_ORDER);
+}
 const FINALIZATION_LEASE_MS = 20_000;
 const FINALIZATION_HEARTBEAT_MS = 5_000;
 const STALE_UPLOAD_AFTER_MS = 24 * 60 * 60 * 1_000;
@@ -1269,6 +1273,9 @@ uploadRoutes.post("/assets/move", async (context) => {
     const movedInSourceOrder = sourceOrder.filter((id) => moving.has(id));
 
     if (!crossJourney) {
+      if (!moveUndoOrdersFitLimit(sourceOrder)) {
+        return "undo-state-too-large" as const;
+      }
       const nextOrder = [
         ...sourceOrder.filter((id) => !moving.has(id)),
         ...movedInSourceOrder,
@@ -1300,10 +1307,9 @@ uploadRoutes.post("/assets/move", async (context) => {
       ...targetAll.map((asset) => asset.id),
       ...movedInSourceOrder,
     ];
-    if (
-      sourceOrder.length > MAX_MOVE_UNDO_ORDER
-      || targetNextOrder.length > MAX_MOVE_UNDO_ORDER
-    ) return "undo-state-too-large" as const;
+    if (!moveUndoOrdersFitLimit(sourceOrder, targetNextOrder)) {
+      return "undo-state-too-large" as const;
+    }
     const ownedById = new Map(owned.map((asset) => [asset.id, asset]));
     const sourceCoverMediaAssetId = lockedJourneys.get(sourceJourneyId)?.coverMediaAssetId ?? null;
     const undo: MediaMoveUndo = {

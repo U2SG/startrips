@@ -676,6 +676,11 @@ export function JourneyStory({
   const [movePending, setMovePending] = useState(false);
   const [moveMessage, setMoveMessage] = useState("");
   const [moveUndo, setMoveUndo] = useState<JourneyMediaMoveUndo | null>(null);
+
+  function invalidateMoveUndo() {
+    setMoveUndo(null);
+    setMoveMessage("");
+  }
   const [playing, setPlaying] = useState(false);
   // Review P2: mirrors `playing` so gesture handlers can read it synchronously.
   const playingRef = useRef(false);
@@ -1987,8 +1992,7 @@ export function JourneyStory({
     files: readonly File[],
     targetRoutePointId: string | null = selectedRoutePointId,
   ) {
-    setMoveUndo(null);
-    setMoveMessage("");
+    invalidateMoveUndo();
     setRetryFiles([]);
     setRetryRoutePointId(null);
     setPlacementReview(null);
@@ -2129,8 +2133,7 @@ export function JourneyStory({
 
   async function confirmMediaDelete() {
     if (!asset || mutationPending) return;
-    setMoveUndo(null);
-    setMoveMessage("");
+    invalidateMoveUndo();
     setMediaDeleteState("pending");
     setMediaDeleteMessage("");
     try {
@@ -2167,8 +2170,7 @@ export function JourneyStory({
 
   async function moveMedia(direction: -1 | 1) {
     if (!asset || mutationPending) return;
-    setMoveUndo(null);
-    setMoveMessage("");
+    invalidateMoveUndo();
     // The Story's aggregate view groups media by ownership chapter. Arrow
     // sorting therefore moves inside the active chapter sequence, then maps
     // that chapter order back onto the full visual-media payload.
@@ -2340,8 +2342,7 @@ export function JourneyStory({
   async function handleMediaReorderEnd(event: DragEndEvent) {
     const { active, over } = event;
     if (!over || active.id === over.id) return;
-    setMoveUndo(null);
-    setMoveMessage("");
+    invalidateMoveUndo();
     const activeAsset = scopedMedia.find((candidate) => candidate.id === active.id);
     const overAsset = scopedMedia.find((candidate) => candidate.id === over.id);
     if (!activeAsset || !overAsset) return;
@@ -2540,6 +2541,7 @@ export function JourneyStory({
       return;
     }
 
+    invalidateMoveUndo();
     const replaced = soundtrack;
     setSoundtrackUpload({
       status: "uploading",
@@ -2591,6 +2593,7 @@ export function JourneyStory({
 
   async function removeSoundtrack() {
     if (!soundtrack || mutationPending) return;
+    invalidateMoveUndo();
     setSoundtrackRemovePending(true);
     setSoundtrackNotice("");
     setPlaying(false);

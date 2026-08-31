@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  MAX_MOVE_UNDO_ORDER,
   mediaKindOf,
   mediaOrderAfterMove,
+  moveUndoOrdersFitLimit,
   parseMoveMediaInput,
   parseUndoMediaMoveInput,
   parseUndoMoveMediaInput,
@@ -20,6 +22,22 @@ const validStart = {
   mimeType: "image/jpeg",
   bytes: 8 * 1024 * 1024,
 };
+
+
+describe("moveUndoOrdersFitLimit", () => {
+  it("accepts the exact undo-safe boundary and rejects an oversized same-Journey order", () => {
+    const boundary = Array.from({ length: MAX_MOVE_UNDO_ORDER }, (_, index) => String(index));
+    expect(moveUndoOrdersFitLimit(boundary)).toBe(true);
+    expect(moveUndoOrdersFitLimit([...boundary, "overflow"])).toBe(false);
+  });
+
+  it("requires every cross-Journey order to fit the same undo-safe contract", () => {
+    const safe = Array.from({ length: 8 }, (_, index) => String(index));
+    const oversized = Array.from({ length: MAX_MOVE_UNDO_ORDER + 1 }, (_, index) => String(index));
+    expect(moveUndoOrdersFitLimit(safe, safe)).toBe(true);
+    expect(moveUndoOrdersFitLimit(safe, oversized)).toBe(false);
+  });
+});
 
 describe("parseStartUpload", () => {
   it("accepts a journey-scoped upload and computes its part count", () => {
