@@ -162,7 +162,9 @@ export type MediaMoveUndo = {
   sourceJourneyId: string;
   targetJourneyId: string;
   assetIds: string[];
+  targetRoutePointId: string | null;
   sourceOrder: string[];
+  targetOrder: string[];
   sourceCoverMediaAssetId: string | null;
   placements: Array<{ assetId: string; routePointId: string | null }>;
 };

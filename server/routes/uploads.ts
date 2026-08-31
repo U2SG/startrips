@@ -231,7 +231,9 @@ export type MediaMoveUndo = {
   sourceJourneyId: string;
   targetJourneyId: string;
   assetIds: string[];
+  targetRoutePointId: string | null;
   sourceOrder: string[];
+  targetOrder: string[];
   sourceCoverMediaAssetId: string | null;
   placements: Array<{ assetId: string; routePointId: string | null }>;
 };
@@ -245,12 +247,17 @@ export function parseUndoMediaMoveInput(body: UndoMediaMoveInput): MediaMoveUndo
     !UUID_PATTERN.test(sourceJourneyId)
     || !UUID_PATTERN.test(targetJourneyId)
     || sourceJourneyId === targetJourneyId
+    || !(body.targetRoutePointId === null || typeof body.targetRoutePointId === "string")
+    || (typeof body.targetRoutePointId === "string" && !UUID_PATTERN.test(body.targetRoutePointId))
     || !Array.isArray(body.assetIds)
     || body.assetIds.length < 1
     || body.assetIds.length > MAX_REORDER_ASSETS
     || !Array.isArray(body.sourceOrder)
     || body.sourceOrder.length < body.assetIds.length
     || body.sourceOrder.length > MAX_MOVE_UNDO_ORDER
+    || !Array.isArray(body.targetOrder)
+    || body.targetOrder.length < body.assetIds.length
+    || body.targetOrder.length > MAX_MOVE_UNDO_ORDER
     || !Array.isArray(body.placements)
     || body.placements.length !== body.assetIds.length
     || !(body.sourceCoverMediaAssetId === null || typeof body.sourceCoverMediaAssetId === "string")
@@ -259,12 +266,15 @@ export function parseUndoMediaMoveInput(body: UndoMediaMoveInput): MediaMoveUndo
 
   const assetIds = [...body.assetIds];
   const sourceOrder = [...body.sourceOrder];
+  const targetOrder = [...body.targetOrder];
   if (
     assetIds.some((id) => typeof id !== "string" || !UUID_PATTERN.test(id))
     || sourceOrder.some((id) => typeof id !== "string" || !UUID_PATTERN.test(id))
+    || targetOrder.some((id) => typeof id !== "string" || !UUID_PATTERN.test(id))
     || new Set(assetIds).size !== assetIds.length
     || new Set(sourceOrder).size !== sourceOrder.length
-    || assetIds.some((id) => !sourceOrder.includes(id))
+    || new Set(targetOrder).size !== targetOrder.length
+    || assetIds.some((id) => !sourceOrder.includes(id) || !targetOrder.includes(id))
   ) return null;
 
   const placementByAsset = new Map<string, string | null>();
@@ -291,7 +301,9 @@ export function parseUndoMediaMoveInput(body: UndoMediaMoveInput): MediaMoveUndo
     sourceJourneyId,
     targetJourneyId,
     assetIds,
+    targetRoutePointId: body.targetRoutePointId ?? null,
     sourceOrder,
+    targetOrder,
     sourceCoverMediaAssetId: body.sourceCoverMediaAssetId ?? null,
     placements: assetIds.map((assetId) => ({ assetId, routePointId: placementByAsset.get(assetId) ?? null })),
   };
@@ -1215,19 +1227,24 @@ uploadRoutes.post("/assets/move", async (context) => {
       .from(mediaAssets)
       .where(eq(mediaAssets.journeyId, targetJourneyId))
       .orderBy(mediaAssets.sortOrder);
-    if (sourceOrder.length > MAX_MOVE_UNDO_ORDER) return "undo-state-too-large" as const;
     const sourceNextOrder = sourceOrder.filter((id) => !moving.has(id));
     const targetNextOrder = [
       ...targetAll.map((asset) => asset.id),
       ...movedInSourceOrder,
     ];
+    if (
+      sourceOrder.length > MAX_MOVE_UNDO_ORDER
+      || targetNextOrder.length > MAX_MOVE_UNDO_ORDER
+    ) return "undo-state-too-large" as const;
     const ownedById = new Map(owned.map((asset) => [asset.id, asset]));
     const sourceCoverMediaAssetId = lockedJourneys.get(sourceJourneyId)?.coverMediaAssetId ?? null;
     const undo: MediaMoveUndo = {
       sourceJourneyId,
       targetJourneyId,
       assetIds: movedInSourceOrder,
+      targetRoutePointId: input.routePointId,
       sourceOrder,
+      targetOrder: targetNextOrder,
       sourceCoverMediaAssetId,
       placements: movedInSourceOrder.map((assetId) => ({
         assetId,
@@ -1361,13 +1378,16 @@ uploadRoutes.post("/assets/move/undo", async (context) => {
     }
 
     const movingRows = await transaction
-      .select({ id: mediaAssets.id })
+      .select({ id: mediaAssets.id, routePointId: mediaAssets.routePointId })
       .from(mediaAssets)
       .where(and(
         eq(mediaAssets.journeyId, input.targetJourneyId),
         inArray(mediaAssets.id, input.assetIds),
       ));
     if (movingRows.length !== input.assetIds.length) return "undo-conflict" as const;
+    if (movingRows.some((asset) => asset.routePointId !== input.targetRoutePointId)) {
+      return "undo-conflict" as const;
+    }
 
     const moving = new Set(input.assetIds);
     const sourceCoverBeforeUndo = lockedJourneys.get(input.sourceJourneyId)?.coverMediaAssetId ?? null;
@@ -1395,8 +1415,15 @@ uploadRoutes.post("/assets/move/undo", async (context) => {
     ) {
       return "undo-conflict" as const;
     }
+    const currentTargetIds = targetAll.map((asset) => asset.id);
+    if (
+      currentTargetIds.length !== input.targetOrder.length
+      || currentTargetIds.some((assetId, index) => assetId !== input.targetOrder[index])
+    ) {
+      return "undo-conflict" as const;
+    }
     const sourceNextOrder = input.sourceOrder;
-    const targetNextOrder = targetAll.map((asset) => asset.id).filter((assetId) => !moving.has(assetId));
+    const targetNextOrder = currentTargetIds.filter((assetId) => !moving.has(assetId));
     const placementByAsset = new Map(
       input.placements.map((placement) => [placement.assetId, placement.routePointId]),
     );

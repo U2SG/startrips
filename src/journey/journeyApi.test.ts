@@ -158,7 +158,9 @@ describe("journeyApi", () => {
       sourceJourneyId: "journey-a",
       targetJourneyId: "journey-b",
       assetIds: ["asset-1"],
+      targetRoutePointId: "point-b",
       sourceOrder: ["asset-1", "asset-2"],
+      targetOrder: ["asset-existing", "asset-1"],
       sourceCoverMediaAssetId: "asset-1",
       placements: [{ assetId: "asset-1", routePointId: null }],
     };
@@ -189,7 +191,9 @@ describe("journeyApi", () => {
       sourceJourneyId: "journey-a",
       targetJourneyId: "journey-b",
       assetIds: ["asset-1"],
+      targetRoutePointId: "point-b",
       sourceOrder: ["asset-1", "asset-2"],
+      targetOrder: ["asset-existing", "asset-1"],
       sourceCoverMediaAssetId: "asset-1",
       placements: [{ assetId: "asset-1", routePointId: null }],
     };

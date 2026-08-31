@@ -319,10 +319,12 @@ describe("parseUndoMediaMoveInput", () => {
     sourceJourneyId: JOURNEY_ID,
     targetJourneyId: "00000000-0000-4000-8000-000000000003",
     assetIds: ["00000000-0000-4000-8000-000000000011"],
+    targetRoutePointId: null,
     sourceOrder: [
       "00000000-0000-4000-8000-000000000011",
       "00000000-0000-4000-8000-000000000012",
     ],
+    targetOrder: ["00000000-0000-4000-8000-000000000011"],
     sourceCoverMediaAssetId: "00000000-0000-4000-8000-000000000011",
     placements: [{
       assetId: "00000000-0000-4000-8000-000000000011",
@@ -338,6 +340,7 @@ describe("parseUndoMediaMoveInput", () => {
     expect(parseUndoMediaMoveInput({ ...input, targetJourneyId: JOURNEY_ID })).toBeNull();
     expect(parseUndoMediaMoveInput({ ...input, assetIds: [input.assetIds[0], input.assetIds[0]] })).toBeNull();
     expect(parseUndoMediaMoveInput({ ...input, placements: [] })).toBeNull();
+    expect(parseUndoMediaMoveInput({ ...input, targetOrder: [] })).toBeNull();
     expect(parseUndoMediaMoveInput({ ...input, sourceOrder: ["00000000-0000-4000-8000-000000000012"] })).toBeNull();
     expect(parseUndoMediaMoveInput({
       ...input,

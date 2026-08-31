@@ -615,7 +615,9 @@ describe("media and atlas HTTP endpoints", () => {
         sourceJourneyId: string;
         targetJourneyId: string;
         assetIds: string[];
+        targetRoutePointId: string | null;
         sourceOrder: string[];
+        targetOrder: string[];
         sourceCoverMediaAssetId: string | null;
         placements: Array<{ assetId: string; routePointId: string | null }>;
       };
@@ -640,7 +642,9 @@ describe("media and atlas HTTP endpoints", () => {
       sourceJourneyId: source.id,
       targetJourneyId: destination.id,
       assetIds: [sourceAssets[0].id, sourceAssets[1].id],
+      targetRoutePointId: destinationStopId,
       sourceOrder: sourceAssets.map((asset) => asset.id),
+      targetOrder: [targetExisting.id, sourceAssets[0].id, sourceAssets[1].id],
       sourceCoverMediaAssetId: sourceAssets[0].id,
     });
     expect(movedPayload.undo.placements).toEqual([
@@ -681,6 +685,47 @@ describe("media and atlas HTTP endpoints", () => {
       }),
     });
     expect(restorePostMoveOrder.status).toBe(200);
+
+    // A newer destination-side reclassification also invalidates the older
+    // cross-Journey undo instead of silently discarding that new placement.
+    const destinationOtherStopId = destination.routePoints[1].id;
+    const reclassifiedDestination = await app.request(`${TEST_ORIGIN}/api/uploads/assets/move`, {
+      method: "POST",
+      headers: authHeaders(identity.cookie),
+      body: JSON.stringify({
+        journeyId: destination.id,
+        assetIds: [sourceAssets[0].id],
+        routePointId: destinationOtherStopId,
+      }),
+    });
+    expect(reclassifiedDestination.status).toBe(200);
+    const staleAfterDestinationReclassify = await app.request(`${TEST_ORIGIN}/api/uploads/assets/move/undo`, {
+      method: "POST",
+      headers: authHeaders(identity.cookie),
+      body: JSON.stringify(movedPayload.undo),
+    });
+    expect(staleAfterDestinationReclassify.status).toBe(409);
+    const [reclassifiedAsset] = await db
+      .select({ journeyId: mediaAssets.journeyId, routePointId: mediaAssets.routePointId })
+      .from(mediaAssets)
+      .where(eq(mediaAssets.id, sourceAssets[0].id));
+    expect(reclassifiedAsset).toMatchObject({
+      journeyId: destination.id,
+      routePointId: destinationOtherStopId,
+    });
+
+    // Restore the original post-move placement so the success-path Undo below
+    // still exercises a valid descriptor.
+    const restoreDestinationPlacement = await app.request(`${TEST_ORIGIN}/api/uploads/assets/move`, {
+      method: "POST",
+      headers: authHeaders(identity.cookie),
+      body: JSON.stringify({
+        journeyId: destination.id,
+        assetIds: [sourceAssets[0].id],
+        routePointId: destinationStopId,
+      }),
+    });
+    expect(restoreDestinationPlacement.status).toBe(200);
 
     // Invalid selection must roll back the entire batch and leave c.jpg in source.
     const invalidBatch = await app.request(`${TEST_ORIGIN}/api/uploads/assets/move`, {
