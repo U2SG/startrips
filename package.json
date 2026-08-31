@@ -23,6 +23,7 @@
     "qa:memory": "node scripts/check-earth-memory.mjs",
     "qa:preview": "node scripts/preview-qa.mjs",
     "qa:live-globe": "node scripts/qa-live-globe.mjs",
+    "qa:globe-interaction": "node scripts/qa-globe-interaction.mjs",
     "qa:composer": "node scripts/capture-journey-composer.mjs",
     "qa:story": "node scripts/qa-journey-story.mjs",
     "qa:media-controls": "node scripts/qa-media-controls.mjs",
