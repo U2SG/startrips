@@ -850,10 +850,7 @@ async function buildLandVisualData(count: number) {
     };
   }
 
-  const [response, detailedResponse] = await Promise.all([
-    fetch("/earth/ne_110m_land.geojson"),
-    fetch("/earth/ne_50m_land.geojson"),
-  ]);
+  const response = await fetch("/earth/ne_110m_land.geojson");
   if (!response.ok) {
     return {
       particlePositions: buildSeededSpherePoints(count, 1908),
@@ -862,9 +859,7 @@ async function buildLandVisualData(count: number) {
     };
   }
   const collection = (await response.json()) as LandFeatureCollection;
-  const detailedCollection = detailedResponse.ok ? (await detailedResponse.json()) as LandFeatureCollection : collection;
   const rings: number[][][] = [];
-  const detailedRings: number[][][] = [];
   context.clearRect(0, 0, width, height);
   context.fillStyle = "#fff";
 
@@ -879,14 +874,6 @@ async function buildLandVisualData(count: number) {
       rings.push(...polygon);
     });
   });
-  detailedCollection.features.forEach(({ geometry }) => {
-    if (!geometry) return;
-    const polygons = geometry.type === "Polygon"
-      ? [geometry.coordinates as number[][][]]
-      : (geometry.coordinates as number[][][][]);
-    polygons.forEach((polygon) => detailedRings.push(...polygon));
-  });
-
   const mask = context.getImageData(0, 0, width, height).data;
   const points = new Float32Array(count * 3);
   let accepted = 0;
@@ -916,10 +903,32 @@ async function buildLandVisualData(count: number) {
     particlePositions: points,
     coastlinePositions: buildSphericalRingSegments(rings, 1.405, MAX_RENDERED_COASTLINE_VERTICES),
     detailedCoastlinePositions: {
-      mid: buildSphericalRingSegments(detailedRings, 1.405, COASTLINE_LOD_VERTEX_BUDGET.mid),
-      near: buildSphericalRingSegments(detailedRings, 1.405, COASTLINE_LOD_VERTEX_BUDGET.near),
+      mid: buildSphericalRingSegments(rings, 1.405, COASTLINE_LOD_VERTEX_BUDGET.mid),
+      near: buildSphericalRingSegments(rings, 1.405, COASTLINE_LOD_VERTEX_BUDGET.near),
     },
   };
+}
+
+async function loadDetailedCoastlinePositions() {
+  try {
+    const response = await fetch("/earth/ne_50m_land.geojson");
+    if (!response.ok) return null;
+    const collection = (await response.json()) as LandFeatureCollection;
+    const rings: number[][][] = [];
+    collection.features.forEach(({ geometry }) => {
+      if (!geometry) return;
+      const polygons = geometry.type === "Polygon"
+        ? [geometry.coordinates as number[][][]]
+        : (geometry.coordinates as number[][][][]);
+      polygons.forEach((polygon) => rings.push(...polygon));
+    });
+    return {
+      mid: buildSphericalRingSegments(rings, 1.405, COASTLINE_LOD_VERTEX_BUDGET.mid),
+      near: buildSphericalRingSegments(rings, 1.405, COASTLINE_LOD_VERTEX_BUDGET.near),
+    };
+  } catch {
+    return null;
+  }
 }
 
 function createBurstTargets(source: Float32Array) {
@@ -2800,16 +2809,19 @@ export function ParticleEarthScene({
       coastlineGeometry = nextCoastlineGeometry;
       coastlines.geometry = coastlineGeometry;
       previousCoastlineGeometry.dispose();
-      for (const [lod, positions] of Object.entries(detailedCoastlinePositions) as ["mid" | "near", Float32Array][]) {
-        const nextGeometry = new BufferGeometry();
-        nextGeometry.setAttribute("position", new BufferAttribute(positions, 3));
-        if (positions.length > 0) nextGeometry.computeBoundingSphere();
-        if (lod === "mid") {
-          const previous = midCoastlineGeometry; midCoastlineGeometry = nextGeometry; midCoastlines.geometry = nextGeometry; previous.dispose();
-        } else {
-          const previous = nearCoastlineGeometry; nearCoastlineGeometry = nextGeometry; nearCoastlines.geometry = nextGeometry; previous.dispose();
+      const applyDetailedCoastlinePositions = (positionsByLod: { mid: Float32Array; near: Float32Array }) => {
+        for (const [lod, positions] of Object.entries(positionsByLod) as ["mid" | "near", Float32Array][]) {
+          const nextGeometry = new BufferGeometry();
+          nextGeometry.setAttribute("position", new BufferAttribute(positions, 3));
+          if (positions.length > 0) nextGeometry.computeBoundingSphere();
+          if (lod === "mid") {
+            const previous = midCoastlineGeometry; midCoastlineGeometry = nextGeometry; midCoastlines.geometry = nextGeometry; previous.dispose();
+          } else {
+            const previous = nearCoastlineGeometry; nearCoastlineGeometry = nextGeometry; nearCoastlines.geometry = nextGeometry; previous.dispose();
+          }
         }
-      }
+      };
+      applyDetailedCoastlinePositions(detailedCoastlinePositions);
 
       host.dataset.quality = nextQuality;
       host.dataset.particleCount = String(particlePositions.length / 3);
@@ -2819,6 +2831,11 @@ export function ParticleEarthScene({
         setReady(true);
         latestOnReady.current?.();
       }
+
+      void loadDetailedCoastlinePositions().then((positionsByLod) => {
+        if (!positionsByLod || disposed || revision !== qualityBuildRevision || currentQuality !== nextQuality) return;
+        applyDetailedCoastlinePositions(positionsByLod);
+      });
     };
 
     const applyQuality = (nextQuality: keyof typeof QUALITY_PROFILE) => {
