@@ -30,6 +30,25 @@ export async function allocateLoopbackPort() {
   });
 }
 
+export async function waitForChildExitOrTimeout(child, timeoutMs = 5_000) {
+  if (child.exitCode !== null) return "exit";
+  return await new Promise((resolve) => {
+    let settled = false;
+    let timer = null;
+    const finish = (reason) => {
+      if (settled) return;
+      settled = true;
+      child.off("exit", onExit);
+      if (timer) clearTimeout(timer);
+      resolve(reason);
+    };
+    const onExit = () => finish("exit");
+    child.once("exit", onExit);
+    timer = setTimeout(() => finish("timeout"), timeoutMs);
+    timer.unref?.();
+  });
+}
+
 async function waitForHttpReady(url, child, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   let lastError = null;
@@ -81,10 +100,7 @@ export async function startOwnedQaViteServer({ cwd = process.cwd(), timeoutMs = 
     async close() {
       if (child.exitCode !== null) return;
       child.kill();
-      await Promise.race([
-        new Promise((resolve) => child.once("exit", resolve)),
-        new Promise((resolve) => setTimeout(resolve, 5_000)),
-      ]);
+      await waitForChildExitOrTimeout(child);
       if (child.exitCode === null) child.kill("SIGKILL");
     },
   };
