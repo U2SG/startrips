@@ -28,11 +28,11 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ### PR #99 — Make mobile media reassignment discoverable
 
-- **Source head:** `9a24b52d3fe1a2697908d6fe82890b537962abff`
+- **Source head:** `d5c22e55d9f11b5aa3ca3be3510a5bd30095f33e`
 - **Scope:** Adds a first-level mobile media-management action for reassignment/reclassification, enters the existing multi-select move flow directly, and adds a dedicated Chromium QA runner for discoverability, 44px touch targets, Back/Escape ownership, focus restoration, and pending-mutation behavior.
 - **User-visible change:** On mobile, users can move or reclassify media directly from the first management sheet instead of first entering an unrelated organize/select path; normal Escape and Browser Back restore Viewer/focus predictably, while an in-flight move cannot be dismissed by Escape.
 - **Review fixes:** Split the #74 acceptance coverage into an independently runnable browser QA so the pre-existing #65 velocity-flick timeout cannot hide the new checks; synchronized the collapsed-mobile Escape handler with current `mutationPending` state and added a held-request regression proving pending Escape stays in Manage with the move UI intact.
-- **Follow-up:** The broader `qa:media-controls` runner still has the pre-existing Issue #65 velocity-flick timeout on current main; the dedicated `qa:media-reclassification`, JourneyStory tests, typecheck, production build, and diff-check passed on the reviewed source head. GitHub-hosted verify/readiness checks were zero-step runner failures.
+- **Follow-up:** The broader `qa:media-controls` runner still has the pre-existing Issue #65 velocity-flick timeout on current main. After merging latest `main` / PR #100 into the reviewed source head, the dedicated `qa:media-reclassification` Chromium acceptance passed on an isolated branch-local Vite origin, JourneyStory was 34/34, the non-DB suite was 46 files / 410 tests, typecheck, production build, and diff-check were green. GitHub-hosted verify/readiness checks remained zero-step runner failures.
 
 ## 2026-08-30
 
