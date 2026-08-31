@@ -104,6 +104,14 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ## 2026-08-31
 
+### PR #103 - Add server-backed undo for media reassignment
+
+- **Source head:** `8db878c763bea455465de303edb1836683aee1ff`
+- **Scope:** Rebased the same-Journey media-reassignment Undo work onto current main after PR #102 introduced cross-Journey move/Undo. The shared `/api/uploads/assets/move/undo` endpoint now accepts either the cross-Journey server-generated snapshot descriptor or the same-Journey exact-order/placement descriptor, preserving both contracts without route duplication.
+- **User-visible change:** After batch-moving media between route-point scopes inside one Journey, Story shows a lightweight Undo action. Undo restores each selected asset's previous route-point ownership and the exact pre-move canonical media order; newer media changes make the old Undo stale instead of overwriting newer intent.
+- **Review fixes:** Resolved the post-#102 P1 contract conflict by keeping one coherent Undo endpoint with payload-shape dispatch; preserved #102 source/destination order, cover and route-point stale guards; retained #103 same-Journey order/placement stale guards and soundtrack restrictions; unified the same-Journey full-order limit with the existing 10,000-item undo-safe budget instead of the old 2,048 cap; kept later upload/reorder/delete/move actions invalidating stale client Undo state.
+- **Follow-up:** Cross-Journey destination-picker UX remains tracked in #75. Targeted parser/API/Story tests are 81/81, the non-DB suite is 46 files / 429 tests, typecheck, production build and `git diff --check` are green. Tenant integration coverage includes same-Journey exact restore/stale rejection and the existing cross-Journey stale-source/destination guards, but local DB execution still requires PostgreSQL on `127.0.0.1:5432`.
+
 ### PR #105 — Stabilize high-zoom globe drag and pinch
 
 - **Source head:** `7596ebf21e7946e631ea2f187c83fb8e28ffe3a9`
