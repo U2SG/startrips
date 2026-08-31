@@ -5,6 +5,8 @@ import {
   deleteMedia,
   listJourneys,
   moveJourneyMedia,
+  moveMediaBetweenJourneys,
+  undoMediaMove,
   reorderJourneyMedia,
   restoreJourney,
   reverseGeocode,
@@ -146,6 +148,61 @@ describe("journeyApi", () => {
           routePointId: null,
         }),
       }),
+    );
+  });
+
+  it("moves media between journeys and returns canonical source/destination plus undo", async () => {
+    const sourceJourney = { id: "journey-a", media: [] };
+    const destinationJourney = { id: "journey-b", media: [] };
+    const undo = {
+      sourceJourneyId: "journey-a",
+      targetJourneyId: "journey-b",
+      assetIds: ["asset-1"],
+      sourceOrder: ["asset-1", "asset-2"],
+      sourceCoverMediaAssetId: "asset-1",
+      placements: [{ assetId: "asset-1", routePointId: null }],
+    };
+    const fetcher = vi.fn(async () => Response.json({ sourceJourney, destinationJourney, undo })) as unknown as typeof fetch;
+
+    await expect(moveMediaBetweenJourneys(
+      "journey-a",
+      "journey-b",
+      ["asset-1"],
+      "point-b",
+      fetcher,
+    )).resolves.toEqual({ sourceJourney, destinationJourney, undo });
+    expect(fetcher).toHaveBeenCalledWith(
+      "/api/uploads/assets/move",
+      expect.objectContaining({
+        body: JSON.stringify({
+          journeyId: "journey-a",
+          targetJourneyId: "journey-b",
+          assetIds: ["asset-1"],
+          routePointId: "point-b",
+        }),
+      }),
+    );
+  });
+
+  it("posts the server-generated descriptor to undo a cross-journey move", async () => {
+    const undo = {
+      sourceJourneyId: "journey-a",
+      targetJourneyId: "journey-b",
+      assetIds: ["asset-1"],
+      sourceOrder: ["asset-1", "asset-2"],
+      sourceCoverMediaAssetId: "asset-1",
+      placements: [{ assetId: "asset-1", routePointId: null }],
+    };
+    const payload = {
+      sourceJourney: { id: "journey-a", media: [] },
+      destinationJourney: { id: "journey-b", media: [] },
+    };
+    const fetcher = vi.fn(async () => Response.json(payload)) as unknown as typeof fetch;
+
+    await expect(undoMediaMove(undo, fetcher)).resolves.toEqual(payload);
+    expect(fetcher).toHaveBeenCalledWith(
+      "/api/uploads/assets/move/undo",
+      expect.objectContaining({ body: JSON.stringify(undo) }),
     );
   });
 

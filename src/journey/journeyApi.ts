@@ -158,6 +158,59 @@ export async function moveJourneyMedia(
   return payload.journey;
 }
 
+export type MediaMoveUndo = {
+  sourceJourneyId: string;
+  targetJourneyId: string;
+  assetIds: string[];
+  sourceOrder: string[];
+  sourceCoverMediaAssetId: string | null;
+  placements: Array<{ assetId: string; routePointId: string | null }>;
+};
+
+export type CrossJourneyMediaMoveResult = {
+  sourceJourney: Journey;
+  destinationJourney: Journey;
+  undo: MediaMoveUndo;
+};
+
+export async function moveMediaBetweenJourneys(
+  sourceJourneyId: string,
+  targetJourneyId: string,
+  assetIds: readonly string[],
+  routePointId: string | null,
+  fetcher: Fetcher = fetch,
+): Promise<CrossJourneyMediaMoveResult> {
+  const payload = await requestJson<{
+    sourceJourney: Journey;
+    destinationJourney: Journey;
+    undo: MediaMoveUndo;
+  }>(
+    "/api/uploads/assets/move",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        journeyId: sourceJourneyId,
+        targetJourneyId,
+        assetIds,
+        routePointId,
+      }),
+    },
+    fetcher,
+  );
+  return payload;
+}
+
+export async function undoMediaMove(
+  undo: MediaMoveUndo,
+  fetcher: Fetcher = fetch,
+): Promise<Pick<CrossJourneyMediaMoveResult, "sourceJourney" | "destinationJourney">> {
+  return requestJson(
+    "/api/uploads/assets/move/undo",
+    { method: "POST", body: JSON.stringify(undo) },
+    fetcher,
+  );
+}
+
 // #14: set or clear the journey's explicit cover media.
 export async function setJourneyCover(
   journeyId: string,
