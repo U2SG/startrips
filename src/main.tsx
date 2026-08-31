@@ -82,18 +82,28 @@ const globeQaRoutes: JourneyRoute[] = [
 function JourneyRoutesQaPreview() {
   const [activeRouteId, setActiveRouteId] = useState<string | null>(null);
   const activeRoute = globeQaRoutes.find((route) => route.id === activeRouteId) ?? null;
+  const qaParams = new URLSearchParams(window.location.search);
+  const requestedLatRaw = qaParams.get("qaFocusLat");
+  const requestedLonRaw = qaParams.get("qaFocusLon");
+  const requestedLat = requestedLatRaw === null ? Number.NaN : Number(requestedLatRaw);
+  const requestedLon = requestedLonRaw === null ? Number.NaN : Number(requestedLonRaw);
+  const qaFocusPoint = {
+    lat: Number.isFinite(requestedLat) ? requestedLat : 30,
+    lon: Number.isFinite(requestedLon) ? requestedLon : 110,
+  };
+  const qaQuality = qaParams.get("qaQuality") === "high" ? "high" : "low";
   return (
     <main className="living-atlas">
       <div className="living-atlas__globe">
         <ParticleEarthScene
           mode="focusPoint"
-          quality="low"
+          quality={qaQuality}
           journeyRoutes={globeQaRoutes}
           activeJourneyRouteId={activeRouteId}
           focusRoute={activeRoute}
           onJourneyRouteActivate={setActiveRouteId}
           onJourneyRoutePointActivate={() => undefined}
-          focusPoint={{ lat: 30, lon: 110 }}
+          focusPoint={qaFocusPoint}
           focusColor="#77c8c2"
           centerFocusPoint
           dragToRotate
