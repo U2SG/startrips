@@ -871,7 +871,8 @@ export function JourneyStory({
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return;
       if (
-        mobileMediaMenuOpen
+        mutationPending
+        || mobileMediaMenuOpen
         || mediaDeleteState !== "idle"
         || deleteState !== "idle"
         || fullscreen
@@ -888,6 +889,7 @@ export function JourneyStory({
     mobileLayout,
     mobileManageMode,
     mobileMediaMenuOpen,
+    mutationPending,
     storyModal,
   ]);
 

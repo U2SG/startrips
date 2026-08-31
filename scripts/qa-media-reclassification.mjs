@@ -39,6 +39,18 @@ try {
       expiresAt: "2026-08-26T00:00:00.000Z",
     }),
   }));
+  let releaseMoveRequest = () => undefined;
+  let signalMoveStarted = () => undefined;
+  const moveStarted = new Promise((resolve) => { signalMoveStarted = resolve; });
+  await page.route("**/api/uploads/assets/move", async (route) => {
+    signalMoveStarted();
+    await new Promise((resolve) => { releaseMoveRequest = resolve; });
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ journey: null }),
+    });
+  });
 
   try {
     await page.goto(`${origin}/?qaState=journey-story`, { waitUntil: "domcontentloaded" });
@@ -148,6 +160,46 @@ try {
         || !directMoveEscapeFocusRestored
         || !directMoveBackRestoredViewer
         || !directMoveBackFocusRestored,
+    });
+
+    // Review regression: Escape must not dismiss Manage while the reassignment
+    // mutation is still in flight. Hold the request at the network boundary so
+    // this assertion exercises the real pending state rather than a synthetic
+    // state toggle.
+    await enterManage();
+    mobileSheet = await openMediaSheet();
+    await page.getByRole("button", { name: "移动媒体 / 重新归类" }).click();
+    await mobileSheet.waitFor({ state: "detached" });
+    await moveSelectToggle.waitFor({ state: "visible" });
+    const firstSelectableTile = page.locator(
+      '.journey-story__media-grid.is-selecting button[data-media-tile-index]',
+    ).first();
+    await firstSelectableTile.click();
+    const destination = page.locator('.journey-story__media-move-bar select');
+    const destinationValue = await destination.evaluate((select) => (
+      [...select.options].find((option) => !option.disabled && option.value)?.value ?? ""
+    ));
+    if (!destinationValue) throw new Error("QA fixture has no media-move destination");
+    await destination.selectOption(destinationValue);
+    await moveStarted;
+    await page.waitForFunction(() => (
+      document.querySelector('.journey-story__media-move-bar select')?.disabled ?? false
+    ));
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(100);
+    const pendingEscapeStayedInManage = await storyRoot.getAttribute("data-mobile-mode") === "manage";
+    const pendingEscapeKeptMoveUi = await page.locator(
+      ".journey-story__media-grid.is-selecting",
+    ).count() === 1;
+    releaseMoveRequest();
+    await page.waitForFunction(() => {
+      const select = document.querySelector('.journey-story__media-move-bar select');
+      return !select || !select.disabled;
+    });
+    record("story-mobile-media-reclassification-pending-escape", {
+      pendingEscapeStayedInManage,
+      pendingEscapeKeptMoveUi,
+      failed: !pendingEscapeStayedInManage || !pendingEscapeKeptMoveUi,
     });
 
     record("story-mobile-media-reclassification-runtime-errors", {
