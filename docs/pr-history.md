@@ -18,6 +18,14 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ## 2026-09-01
 
+### PR #128 - Add Playback V2 tempo timeline foundation
+
+- **Source head:** `d0bac51b121b815b7d89442b4d97674ce20d3945`
+- **Scope:** Introduces the Playback V2 elapsed-time planning layer for #126: deterministic contiguous segments, phase-specific fast/standard/immersive tempo profiles, scrub lookup primitives, meaningful navigation indexes, and explicit plan-only representation of Journey-scoped visual media without changing the stable legacy playback step grammar.
+- **User-visible change:** Primarily architectural foundation. The plan now preserves every canonical Full Journey visual, including `routePointId=null` opening media, so future scrubbing/tempo UI cannot silently omit Journey-level images or videos.
+- **Review fixes:** Rebased onto current main, preserving newer seek and meaningful-navigation behavior. Fixed the P1 review by inserting Journey-scoped visual segments into the elapsed-time plan with image/video-specific durations, stable asset identities, and source-step mapping; added regressions proving those assets are ordered and individually reachable by elapsed-time lookup.
+- **Follow-up:** #126 remains open for runtime tempo replanning and remaining Playback V2 integration. Validation on current main: planner + legacy playback/navigation tests 29/29 green, client typecheck green, production build green, and `git diff --check` green.
+
 ### PR #130 - Navigate Journey Playback by meaningful beats
 
 - **Source head:** `886afce3139243e1989206770fd7ae903d2ace78`
