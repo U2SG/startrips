@@ -321,7 +321,7 @@ export function shouldSuppressUntrackedPointerActivation(
 }
 
 export function shouldRememberUntrackedPointerStart(activePointerCount: number) {
-  return !canTrackGlobePointer(activePointerCount);
+  return activePointerCount > 0;
 }
 
 export function rebaseGlobeDragSample(
@@ -2814,10 +2814,10 @@ export function ParticleEarthScene({
         return;
       }
       // City labels live in a sibling SVG, so contacts that begin there never
-      // pass through the canvas pointerdown handler. Remember only overflow
-      // contacts while a two-pointer gesture already owns the globe; this lets
-      // the city pointerup suppress activation for the contact's full lifecycle
-      // without changing ordinary city taps or the existing pinch controller.
+      // pass through the canvas pointerdown handler. Once another globe contact is
+      // already tracked, remember this sibling-layer contact for its full
+      // lifecycle so it can never turn into a delayed city tap after the tracked
+      // pointer lifts. Zero-pointer city taps remain ordinary activations.
       if (shouldRememberUntrackedPointerStart(activePointers.size)) {
         rejectedPointerIds.add(event.pointerId);
       }
