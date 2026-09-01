@@ -1177,8 +1177,8 @@ async function verifyAccountDock() {
     await page.locator('input[type="email"]').fill("qa@example.com");
     await page.locator('input[type="password"]').fill("password1234");
     await page.getByRole("button", { name: "登录", exact: true }).click();
-    await page.locator(".account-dock__tab").waitFor({ state: "visible" });
     await page.locator(".mobile-v2__journey-chip").waitFor({ state: "visible" });
+    await page.locator(".mobile-v2__account-trigger").waitFor({ state: "visible" });
 
     for (const [label, width, height, mobile] of [
       ["mobile-narrow", 320, 800, true],
@@ -1188,8 +1188,11 @@ async function verifyAccountDock() {
     ]) {
       await page.setViewportSize({ width, height });
       await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-      const tabNavOverlap = await page.evaluate(() => {
-        const tab = document.querySelector(".account-dock__tab")?.getBoundingClientRect();
+      const accountTriggerSelector = mobile ? ".mobile-v2__account-trigger" : ".account-dock__tab";
+      const accountPanelSelector = mobile ? ".account-sheet" : ".account-dock__panel";
+      await page.locator(accountTriggerSelector).waitFor({ state: "visible" });
+      const tabNavOverlap = await page.evaluate((selector) => {
+        const tab = document.querySelector(selector)?.getBoundingClientRect();
         const nav = (document.querySelector(".mobile-v2__header nav")
           ?? document.querySelector(".living-atlas__header nav"))?.getBoundingClientRect();
         if (!tab || !nav) return -1;
@@ -1197,14 +1200,14 @@ async function verifyAccountDock() {
           Math.max(0, Math.min(tab.right, nav.right) - Math.max(tab.left, nav.left))
           * Math.max(0, Math.min(tab.bottom, nav.bottom) - Math.max(tab.top, nav.top)),
         );
-      });
+      }, accountTriggerSelector);
       record(`account-${label}-closed`, await scanButtons(page, ".living-atlas"), {
         tabNavOverlap,
         failed: tabNavOverlap !== 0,
       });
 
-      await page.locator(".account-dock__tab").click();
-      const panel = page.locator(".account-dock__panel");
+      await page.locator(accountTriggerSelector).click();
+      const panel = page.locator(accountPanelSelector);
       await panel.waitFor({ state: "visible" });
       const panelMetrics = await panel.evaluate((element) => {
         const rect = element.getBoundingClientRect();
@@ -1215,7 +1218,11 @@ async function verifyAccountDock() {
           viewportOverflowY: Math.max(0, Math.round(rect.bottom - innerHeight)) + Math.max(0, Math.round(-rect.top)),
           overflowX: element.scrollWidth - element.clientWidth,
           overflowY: element.scrollHeight - element.clientHeight,
-          buttons: [...element.querySelectorAll("button")].map((button) => {
+          buttons: [...element.querySelectorAll(
+            element.classList.contains("account-sheet")
+              ? ".account-sheet__actions button, .account-sheet__form button, .account-sheet__drill-header > button"
+              : "button",
+          )].map((button) => {
             const buttonRect = button.getBoundingClientRect();
             return { width: Math.round(buttonRect.width), height: Math.round(buttonRect.height) };
           }),
@@ -1235,14 +1242,18 @@ async function verifyAccountDock() {
       });
       if (invalidPanel) failed = true;
 
-      await page.locator(".account-dock__tab").click();
+      if (mobile) {
+        await page.locator(".account-sheet__handle").click();
+      } else {
+        await page.locator(accountTriggerSelector).click();
+      }
       await panel.waitFor({ state: "hidden" });
     }
 
     await page.goto(`${origin}/?qaState=globe-controls-gateway&qaLite=1`, { waitUntil: "domcontentloaded" });
     const globeControls = page.locator(".living-atlas-globe__controls");
     await globeControls.waitFor({ state: "visible" });
-    await page.locator(".account-dock__tab").waitFor({ state: "visible" });
+    await page.locator(".mobile-v2__account-trigger").waitFor({ state: "visible" });
 
     for (const [label, width, height, mobile] of [
       ["mobile-narrow", 320, 800, true],
@@ -1254,9 +1265,11 @@ async function verifyAccountDock() {
       // Chromium can report one-frame-stale media-query geometry immediately
       // after a viewport resize; wait for style + layout to settle.
       await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-      const metrics = await page.evaluate(() => {
+      const metrics = await page.evaluate((isMobile) => {
         const controls = document.querySelector(".living-atlas-globe__controls");
-        const account = document.querySelector(".account-dock__tab");
+        const account = document.querySelector(
+          isMobile ? ".mobile-v2__account-trigger" : ".account-dock__tab",
+        );
         if (!controls || !account) return null;
         const controlsRect = controls.getBoundingClientRect();
         const accountRect = account.getBoundingClientRect();
@@ -1290,7 +1303,7 @@ async function verifyAccountDock() {
           overflowX: Math.max(0, document.documentElement.scrollWidth - innerWidth),
           overflowY: Math.max(0, document.documentElement.scrollHeight - innerHeight),
         };
-      });
+      }, mobile);
       const minimumButtonHeight = mobile ? 43 : 35;
       const invalidControls = !metrics
         || metrics.overlapArea > 0
@@ -1322,7 +1335,7 @@ async function verifyAccountDock() {
     await page.waitForTimeout(150);
     const focusedPickState = await page.evaluate(() => {
       const controls = document.querySelector(".living-atlas-globe__controls");
-      const account = document.querySelector(".account-dock");
+      const account = document.querySelector(".mobile-v2__account-trigger");
       const controlsStyle = getComputedStyle(controls);
       const accountStyle = getComputedStyle(account);
       return {
