@@ -213,11 +213,11 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ### PR #106 — Add spatial particle LOD for high zoom
 
-- **Source head:** `8a65af39a553a5072563ce11b58bc6813f676c92`
-- **Scope:** Rebased onto `main@d22673b` after #118 restored the shared CI/mobile baseline. Adds bounded regional particle refinement on top of the stable global particle base, reusing #98 semantic zoom and preserving #105 projected-surface interaction. Global land remains on the lightweight 110m/720x360 source while high-zoom refinement uses 50m/1440x720 geography, quantized/cached regional cells, per-particle reveal thresholds, cooperative stale-build cancellation, visibility gating, and debug observability.
+- **Source head:** `6cde48fd1d5951999307c70eb21b923aba4f2a99`
+- **Scope:** Rebases spatial particle LOD onto current `main@0043fda`, preserving the newly merged opt-in terrain-relief hierarchy and all intervening globe/mobile/playback/EXIF fixes while retaining bounded 50m regional particle refinement, semantic-zoom integration, cooperative cancellation, caching, and debug observability.
 - **User-visible change:** Zooming into Hong Kong/Shenzhen and other supported local views now progressively reveals denser geographic particle detail instead of magnifying the same sparse global distribution, without multiplying the whole-Earth particle budget or changing close-range drag/pinch behavior.
-- **Review fixes:** Two Codex P2s are fixed: route-focus flights now freeze refinement LOD, cancel pending regional builds, and resolve destination LOD after arrival; returning to the active region now invalidates a pending build for a different region. Pre-review self-audit also corrected refinement to use the finer 50m source.
-- **Follow-up:** Terrain relief remains separately tracked by #82/#104. Targeted particle/ParticleEarth/semantic tests (42/42), non-DB suite (47 files / 431 tests), typecheck, production build, and `git diff --check` are green. Browser QA measured refinement 0 -> 3,321 -> 9,000 at 1x/2x/3x with base 28,000; #105 mobile/desktop globe QA passed 30px-equivalent drags, ~0.0126px pinch-anchor error, zero pinch-to-drag rebase jump, and zero console/page errors.
+- **Review fixes:** Preserves all earlier focus-flight, stale-build, retry/backoff, and failed-request release fixes. Current review also fixes both open P2s: reduced-motion now snaps refinement opacity/LOD transitions instead of damping, and the refinement-only 50m land-mask loader no longer retains expanded GeoJSON rings after rasterization.
+- **Follow-up:** Terrain relief is now present on main via #104 and remains opt-in; #81 continues to own geographic-fidelity acceptance. Current-main validation: targeted ParticleEarth/spatial/semantic/relief 49/49; non-DB src/scripts suite 38 files / 380 tests; production build and `git diff --check` green. Full typecheck is blocked only by the six pre-existing `S3Client.send` errors in `server/storage/s3-compatible-storage.ts` on current main.
 
 ### PR #105 — Stabilize high-zoom globe drag and pinch
 
