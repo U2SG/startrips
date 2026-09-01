@@ -13,12 +13,14 @@ interface ParticleMaterialOptions {
   color: number;
   opacity: number;
   size: number;
+  spatialLod?: boolean;
 }
 
 export function createParticleEarthMaterial({
   color,
   opacity,
   size,
+  spatialLod = false,
 }: ParticleMaterialOptions) {
   return new ShaderMaterial({
     transparent: true,
@@ -40,6 +42,7 @@ export function createParticleEarthMaterial({
         value: Array.from({ length: PARTICLE_ACTIVE_DIM_POINT_LIMIT }, () => new Vector3(0, 0, 1)),
       },
       uActiveDimStrength: { value: 0 },
+      uLodProgress: { value: spatialLod ? 0 : 1 },
       // Angular falloff is evaluated with dot products so attenuation stays
       // stable across zoom, DPR and screen size. 0.978 ~= 12°, 0.994 ~= 6°.
       uDimOuterCos: { value: 0.978 },
@@ -47,6 +50,7 @@ export function createParticleEarthMaterial({
     },
     vertexShader: `
       attribute vec3 targetPosition;
+      ${spatialLod ? "attribute float lodThreshold;" : ""}
       uniform float uMorph;
       uniform float uPointSize;
       uniform float uTime;
@@ -58,9 +62,11 @@ export function createParticleEarthMaterial({
       uniform float uActiveDimStrength;
       uniform float uDimOuterCos;
       uniform float uDimInnerCos;
+      uniform float uLodProgress;
       varying float vStrength;
       varying float vTwinkle;
       varying float vDimBrightness;
+      varying float vLodAlpha;
 
       float attenuationAt(vec3 direction, vec3 anchor) {
         // Anchor magnitude carries temporal reveal progress (0..1), while its
@@ -110,6 +116,9 @@ export function createParticleEarthMaterial({
         float twinkleSignal = shimmer * 0.3 + spark * 0.95;
         vTwinkle = 0.78 + twinkleSignal * mix(1.0, 0.24, dimAmount);
         vDimBrightness = mix(1.0, 0.46, dimAmount);
+        ${spatialLod
+          ? "vLodAlpha = smoothstep(lodThreshold - 0.035, lodThreshold + 0.015, uLodProgress);"
+          : "vLodAlpha = 1.0;"}
         gl_PointSize = max(
           1.0,
           uPointSize * (uViewportHeight / 720.0) * (1.7 / -mvPosition.z)
@@ -124,6 +133,7 @@ export function createParticleEarthMaterial({
       varying float vStrength;
       varying float vTwinkle;
       varying float vDimBrightness;
+      varying float vLodAlpha;
 
       void main() {
         float distanceToCenter = distance(gl_PointCoord, vec2(0.5));
@@ -133,7 +143,8 @@ export function createParticleEarthMaterial({
           * uOpacity
           * vStrength
           * vTwinkle
-          * vDimBrightness;
+          * vDimBrightness
+          * vLodAlpha;
         if (alpha < 0.015) discard;
         gl_FragColor = vec4(uColor, alpha);
       }

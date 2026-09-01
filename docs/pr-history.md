@@ -211,6 +211,14 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 - **Follow-up:** Cross-Journey destination-picker UX remains tracked separately. Final validation on rebased source: JourneyStory 43/43; server uploads validation 33/33; full `src` suite 32 files / 328 tests green on the final source; typecheck, production build, and `git diff --check` green. Tenant integration is locally blocked before tests by PostgreSQL not listening on `127.0.0.1:5432`; GitHub CI remains authoritative for DB integration.
 
 
+### PR #106 — Add spatial particle LOD for high zoom
+
+- **Source head:** `6cde48fd1d5951999307c70eb21b923aba4f2a99`
+- **Scope:** Rebases spatial particle LOD onto current `main@0043fda`, preserving the newly merged opt-in terrain-relief hierarchy and all intervening globe/mobile/playback/EXIF fixes while retaining bounded 50m regional particle refinement, semantic-zoom integration, cooperative cancellation, caching, and debug observability.
+- **User-visible change:** Zooming into Hong Kong/Shenzhen and other supported local views now progressively reveals denser geographic particle detail instead of magnifying the same sparse global distribution, without multiplying the whole-Earth particle budget or changing close-range drag/pinch behavior.
+- **Review fixes:** Preserves all earlier focus-flight, stale-build, retry/backoff, and failed-request release fixes. Current review also fixes both open P2s: reduced-motion now snaps refinement opacity/LOD transitions instead of damping, and the refinement-only 50m land-mask loader no longer retains expanded GeoJSON rings after rasterization.
+- **Follow-up:** Terrain relief is now present on main via #104 and remains opt-in; #81 continues to own geographic-fidelity acceptance. Current-main validation: targeted ParticleEarth/spatial/semantic/relief 49/49; non-DB src/scripts suite 38 files / 380 tests; production build and `git diff --check` green. Full typecheck is blocked only by the six pre-existing `S3Client.send` errors in `server/storage/s3-compatible-storage.ts` on current main.
+
 ### PR #105 — Stabilize high-zoom globe drag and pinch
 
 - **Source head:** `7596ebf21e7946e631ea2f187c83fb8e28ffe3a9`

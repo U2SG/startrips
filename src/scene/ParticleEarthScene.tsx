@@ -60,8 +60,26 @@ import {
   PARTICLE_ACTIVE_DIM_POINT_LIMIT,
   PARTICLE_DIM_POINT_LIMIT,
 } from "./particleEarthMaterial";
+import {
+  PARTICLE_BASE_LAND_SOURCE,
+  PARTICLE_REFINEMENT_CACHE_LIMIT,
+  PARTICLE_REFINEMENT_LAND_SOURCE,
+  ParticleRefinementBuildGuard,
+  buildRegionalLandSample,
+  resolveParticleRefinementLod,
+  resolveParticleRefinementLodForFrame,
+  resolveParticleRefinementRegion,
+  shouldCancelPendingRefinementRequest,
+  type ParticleRefinementRegion,
+  type RegionalLandSample,
+} from "./particleSpatialLod";
 import { disposeSceneGraph, useThreeScene } from "./useThreeScene";
-import { resolveGlobeSemanticZoom, resolveGlobeSemanticZoomForFrame, type GlobeSemanticZoomState } from "./semanticZoom";
+import {
+  resolveGlobeSemanticZoom,
+  resolveGlobeSemanticZoomForFrame,
+  type GlobeSemanticZoom,
+  type GlobeSemanticZoomState,
+} from "./semanticZoom";
 import { terrainReliefBumpScale, terrainReliefOpacity } from "./terrainRelief";
 
 export const QUALITY_PROFILE = {
@@ -944,6 +962,70 @@ interface LandFeatureCollection {
   features: Array<{ geometry: LandGeometry | null }>;
 }
 
+interface ParticleLandMask {
+  mask: Uint8ClampedArray;
+  rings: number[][][];
+  width: number;
+  height: number;
+  vectorScale: string;
+}
+
+interface ParticleRefinementLayer {
+  cacheKey: string;
+  region: ParticleRefinementRegion;
+  particleCap: number;
+  sampleCount: number;
+  geometry: BufferGeometry;
+  material: ReturnType<typeof createParticleEarthMaterial>;
+  points: Points;
+}
+
+export function createRetryableParticleResourceLoader<T>(
+  load: () => Promise<T | null>,
+  {
+    retryDelayMs = 5_000,
+    now = Date.now,
+  }: {
+    retryDelayMs?: number;
+    now?: () => number;
+  } = {},
+): () => Promise<T | null> {
+  let current: Promise<T | null> | null = null;
+  let retryAt: number | null = null;
+  return () => {
+    if (current && retryAt !== null && now() >= retryAt) {
+      current = null;
+      retryAt = null;
+    }
+    if (current) return current;
+    const request: Promise<T | null> = Promise.resolve()
+      .then(load)
+      .catch(() => null)
+      .then((value) => {
+        if (value === null && current === request) {
+          retryAt = now() + retryDelayMs;
+        }
+        return value;
+      });
+    current = request;
+    return request;
+  };
+}
+
+export function releaseFailedParticleRefinementRequest({
+  requestedCacheKey,
+  failedCacheKey,
+  requestIsCurrent,
+}: {
+  requestedCacheKey: string | null;
+  failedCacheKey: string;
+  requestIsCurrent: boolean;
+}) {
+  return requestIsCurrent && requestedCacheKey === failedCacheKey
+    ? null
+    : requestedCacheKey;
+}
+
 function unwrapRing(ring: number[][], width: number) {
   const points: Array<[number, number]> = [];
   let previousX: number | null = null;
@@ -984,29 +1066,21 @@ function drawPolygonMask(
   }
 }
 
-async function buildLandVisualData(count: number) {
-  const width = 720;
-  const height = 360;
+async function buildParticleLandMask(source: {
+  path: string;
+  vectorScale: string;
+  maskWidth: number;
+  maskHeight: number;
+}, retainRings = true) {
+  const { maskWidth: width, maskHeight: height, path, vectorScale } = source;
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
   const context = canvas.getContext("2d", { willReadFrequently: true });
-  if (!context) {
-    return {
-      particlePositions: buildSeededSpherePoints(count, 1908),
-      coastlinePositions: new Float32Array(),
-      detailedCoastlinePositions: { mid: new Float32Array(), near: new Float32Array() },
-    };
-  }
+  if (!context) return null;
 
-  const response = await fetch("/earth/ne_110m_land.geojson");
-  if (!response.ok) {
-    return {
-      particlePositions: buildSeededSpherePoints(count, 1908),
-      coastlinePositions: new Float32Array(),
-      detailedCoastlinePositions: { mid: new Float32Array(), near: new Float32Array() },
-    };
-  }
+  const response = await fetch(path);
+  if (!response.ok) return null;
   const collection = (await response.json()) as LandFeatureCollection;
   const rings: number[][][] = [];
   context.clearRect(0, 0, width, height);
@@ -1020,10 +1094,47 @@ async function buildLandVisualData(count: number) {
         : (geometry.coordinates as number[][][][]);
     polygons.forEach((polygon) => {
       drawPolygonMask(context, polygon, width);
-      rings.push(...polygon);
+      if (retainRings) rings.push(...polygon);
     });
   });
-  const mask = context.getImageData(0, 0, width, height).data;
+  return {
+    mask: context.getImageData(0, 0, width, height).data,
+    rings,
+    width,
+    height,
+    vectorScale,
+  };
+}
+
+const loadParticleLandMask = createRetryableParticleResourceLoader(
+  () => buildParticleLandMask(PARTICLE_BASE_LAND_SOURCE),
+);
+
+const loadParticleRefinementLandMask = createRetryableParticleResourceLoader(
+  () => buildParticleLandMask(PARTICLE_REFINEMENT_LAND_SOURCE, false),
+);
+
+function isParticleLand(source: ParticleLandMask, lat: number, lon: number) {
+  const longitudeUnit = (((lon + 180) % 360) + 360) % 360 / 360;
+  const x = Math.min(source.width - 1, Math.floor(longitudeUnit * source.width));
+  const y = Math.min(
+    source.height - 1,
+    Math.max(0, Math.floor(((90 - lat) / 180) * source.height)),
+  );
+  return source.mask[(y * source.width + x) * 4 + 3] >= 128;
+}
+
+async function buildLandVisualData(count: number) {
+  const source = await loadParticleLandMask();
+  if (!source) {
+    return {
+      particlePositions: buildSeededSpherePoints(count, 1908),
+      coastlinePositions: new Float32Array(),
+      detailedCoastlinePositions: { mid: new Float32Array(), near: new Float32Array() },
+      landSourceAvailable: false,
+    };
+  }
+
   const points = new Float32Array(count * 3);
   let accepted = 0;
 
@@ -1033,10 +1144,7 @@ async function buildLandVisualData(count: number) {
     const lon = longitudeUnit * 360 - 180;
     const sphereY = latitudeUnit * 2 - 1;
     const lat = (Math.asin(sphereY) * 180) / Math.PI;
-    const x = Math.min(width - 1, Math.floor(longitudeUnit * width));
-    const y = Math.min(height - 1, Math.floor(((90 - lat) / 180) * height));
-
-    if (mask[(y * width + x) * 4 + 3] < 128) continue;
+    if (!isParticleLand(source, lat, lon)) continue;
     latLonToVector3(lat, lon, 1.39).toArray(points, accepted * 3);
     accepted += 1;
   }
@@ -1050,11 +1158,16 @@ async function buildLandVisualData(count: number) {
 
   return {
     particlePositions: points,
-    coastlinePositions: buildSphericalRingSegments(rings, 1.405, MAX_RENDERED_COASTLINE_VERTICES),
+    coastlinePositions: buildSphericalRingSegments(
+      source.rings,
+      1.405,
+      MAX_RENDERED_COASTLINE_VERTICES,
+    ),
     detailedCoastlinePositions: {
-      mid: buildSphericalRingSegments(rings, 1.405, COASTLINE_LOD_VERTEX_BUDGET.mid),
-      near: buildSphericalRingSegments(rings, 1.405, COASTLINE_LOD_VERTEX_BUDGET.near),
+      mid: buildSphericalRingSegments(source.rings, 1.405, COASTLINE_LOD_VERTEX_BUDGET.mid),
+      near: buildSphericalRingSegments(source.rings, 1.405, COASTLINE_LOD_VERTEX_BUDGET.near),
     },
+    landSourceAvailable: true,
   };
 }
 
@@ -1293,6 +1406,14 @@ export function ParticleEarthScene({
         quality: keyof typeof QUALITY_PROFILE;
         pixelRatio: number;
         particleCount: number;
+        particleBaseCount: number;
+        particleRefinementCount: number;
+        particleRefinementCap: number;
+        particleRefinementRegion: ParticleRefinementRegion | null;
+        particleRefinementBuild: string;
+        particleLandSource: string;
+        semanticLod: GlobeSemanticZoom;
+        semanticLodProgress: number;
         coastlineVertices: number;
       };
     };
@@ -1320,6 +1441,16 @@ export function ParticleEarthScene({
       quality: currentQuality,
       pixelRatio: renderer.getPixelRatio(),
       particleCount: particleGeometry?.getAttribute("position")?.count ?? 0,
+      particleBaseCount: particleGeometry?.getAttribute("position")?.count ?? 0,
+      particleRefinementCount: activeRefinementLayer
+        ? Math.min(activeRefinementLayer.sampleCount, currentParticleLod.activeCount)
+        : 0,
+      particleRefinementCap: currentParticleLod.particleCap,
+      particleRefinementRegion: activeRefinementLayer?.region ?? null,
+      particleRefinementBuild: refinementBuildState,
+      particleLandSource: landSourceDebug,
+      semanticLod: currentParticleLod.level,
+      semanticLodProgress: currentParticleLod.refinementProgress,
       coastlineVertices: coastlineGeometry.getAttribute("position")?.count ?? 0,
     });
 
@@ -1413,6 +1544,10 @@ export function ParticleEarthScene({
     let interactiveRotationX = globe.rotation.x;
     let interactiveRotationY = 0;
     let interactiveZoom = 1;
+    let currentParticleLod = resolveParticleRefinementLod(
+      interactiveZoom,
+      currentQuality,
+    );
     let rotationVelocityX = 0;
     let rotationVelocityY = 0;
     let lastGestureAngularDelta = { x: 0, y: 0, total: 0 };
@@ -3088,6 +3223,195 @@ export function ParticleEarthScene({
     let particleGeometry: BufferGeometry | null = null;
     let particles: Points | null = null;
     let landVisualReady = false;
+    const refinementBuildGuard = new ParticleRefinementBuildGuard();
+    refinementBuildGuard.setVisible(!document.hidden);
+    const refinementCache = new Map<
+      string,
+      {
+        region: ParticleRefinementRegion;
+        particleCap: number;
+        sample: RegionalLandSample;
+      }
+    >();
+    const refinementViewPosition = new Vector3();
+    let activeRefinementLayer: ParticleRefinementLayer | null = null;
+    let departingRefinementLayer: ParticleRefinementLayer | null = null;
+    let requestedRefinementCacheKey: string | null = null;
+    let lastRefinementViewSampleAt = Number.NEGATIVE_INFINITY;
+    let refinementBuildState = document.hidden ? "paused" : "idle";
+    let landSourceDebug = "loading:ne_110m_land.geojson@110m";
+
+    const removeParticleDimmingMaterial = (
+      material: ReturnType<typeof createParticleEarthMaterial>,
+    ) => {
+      const index = particleDimmingMaterials.indexOf(material);
+      if (index >= 0) particleDimmingMaterials.splice(index, 1);
+    };
+
+    const disposeRefinementLayer = (layer: ParticleRefinementLayer | null) => {
+      if (!layer) return;
+      globe.remove(layer.points);
+      removeParticleDimmingMaterial(layer.material);
+      layer.geometry.dispose();
+      layer.material.dispose();
+    };
+
+    const cacheRefinementSample = (
+      cacheKey: string,
+      region: ParticleRefinementRegion,
+      particleCap: number,
+      sample: RegionalLandSample,
+    ) => {
+      refinementCache.delete(cacheKey);
+      refinementCache.set(cacheKey, { region, particleCap, sample });
+      while (refinementCache.size > PARTICLE_REFINEMENT_CACHE_LIMIT) {
+        const oldestKey = refinementCache.keys().next().value;
+        if (typeof oldestKey !== "string") break;
+        refinementCache.delete(oldestKey);
+      }
+    };
+
+    const readCachedRefinement = (cacheKey: string) => {
+      const cached = refinementCache.get(cacheKey);
+      if (!cached) return null;
+      refinementCache.delete(cacheKey);
+      refinementCache.set(cacheKey, cached);
+      return cached;
+    };
+
+    const applyRefinementSample = (
+      cacheKey: string,
+      region: ParticleRefinementRegion,
+      particleCap: number,
+      sample: RegionalLandSample,
+    ) => {
+      if (activeRefinementLayer?.cacheKey === cacheKey) return;
+      const geometry = new BufferGeometry();
+      geometry.setAttribute("position", new BufferAttribute(sample.positions, 3));
+      geometry.setAttribute(
+        "targetPosition",
+        new BufferAttribute(createBurstTargets(sample.positions), 3),
+      );
+      geometry.setAttribute(
+        "lodThreshold",
+        new BufferAttribute(sample.lodThresholds, 1),
+      );
+      if (sample.positions.length > 0) geometry.computeBoundingSphere();
+      const material = createParticleEarthMaterial({
+        color: 0x74eee6,
+        opacity: 0,
+        size: 7.2,
+        spatialLod: true,
+      });
+      material.uniforms.uViewportHeight.value = targetSize.y;
+      const points = new Points(geometry, material);
+      globe.add(points);
+      particleDimmingMaterials.push(material);
+      syncParticleDimming(
+        latestJourneyRoutes.current,
+        latestActiveJourneyRouteId.current,
+      );
+
+      const previousActive = activeRefinementLayer;
+      const previousDeparting = departingRefinementLayer;
+      if (previousActive && previousDeparting) {
+        const activeOpacity = previousActive.material.uniforms.uOpacity.value as number;
+        const departingOpacity = previousDeparting.material.uniforms.uOpacity.value as number;
+        if (activeOpacity >= departingOpacity) {
+          disposeRefinementLayer(previousDeparting);
+          departingRefinementLayer = previousActive;
+        } else {
+          disposeRefinementLayer(previousActive);
+          departingRefinementLayer = previousDeparting;
+        }
+      } else {
+        departingRefinementLayer = previousActive ?? previousDeparting;
+      }
+      activeRefinementLayer = {
+        cacheKey,
+        region,
+        particleCap,
+        sampleCount: sample.positions.length / 3,
+        geometry,
+        material,
+        points,
+      };
+      refinementBuildState = "ready";
+    };
+
+    const yieldRefinementBuild = () => new Promise<void>((resolve) => {
+      window.setTimeout(resolve, 0);
+    });
+
+    const requestRefinementRegion = (region: ParticleRefinementRegion) => {
+      const qualityAtRequest = currentQuality;
+      const particleCap = currentParticleLod.particleCap;
+      const cacheKey = `${qualityAtRequest}:${region.key}`;
+      if (activeRefinementLayer?.cacheKey === cacheKey) {
+        if (shouldCancelPendingRefinementRequest({
+          activeCacheKey: activeRefinementLayer.cacheKey,
+          requestedCacheKey: requestedRefinementCacheKey,
+          targetCacheKey: cacheKey,
+        })) {
+          refinementBuildGuard.invalidate();
+          requestedRefinementCacheKey = null;
+        }
+        refinementBuildState = "ready";
+        return;
+      }
+      if (requestedRefinementCacheKey === cacheKey) return;
+      requestedRefinementCacheKey = cacheKey;
+      const ticket = refinementBuildGuard.request(cacheKey);
+      const cached = readCachedRefinement(cacheKey);
+      if (cached) {
+        refinementBuildState = "cached";
+        if (refinementBuildGuard.isCurrent(ticket)) {
+          applyRefinementSample(
+            cacheKey,
+            cached.region,
+            cached.particleCap,
+            cached.sample,
+          );
+        }
+        return;
+      }
+
+      refinementBuildState = "building";
+      void (async () => {
+        const source = await loadParticleRefinementLandMask();
+        const requestIsCurrent = refinementBuildGuard.isCurrent(ticket);
+        if (
+          !source
+          || currentQuality !== qualityAtRequest
+          || !requestIsCurrent
+        ) {
+          if (!source) {
+            requestedRefinementCacheKey = releaseFailedParticleRefinementRequest({
+              requestedCacheKey: requestedRefinementCacheKey,
+              failedCacheKey: cacheKey,
+              requestIsCurrent,
+            });
+          }
+          if (requestIsCurrent) {
+            refinementBuildState = source ? "cancelled" : "source-unavailable";
+          }
+          return;
+        }
+        const sample = await buildRegionalLandSample({
+          region,
+          count: particleCap,
+          isLand: (lat, lon) => isParticleLand(source, lat, lon),
+          shouldContinue: () => (
+            currentQuality === qualityAtRequest
+            && refinementBuildGuard.isCurrent(ticket)
+          ),
+          yieldControl: yieldRefinementBuild,
+        });
+        if (!sample || !refinementBuildGuard.isCurrent(ticket)) return;
+        cacheRefinementSample(cacheKey, region, particleCap, sample);
+        applyRefinementSample(cacheKey, region, particleCap, sample);
+      })();
+    };
 
     let reliefTextureReady = false;
     host.dataset.reliefTexture = reliefExperimentEnabled ? "loading" : "disabled";
@@ -3165,13 +3489,22 @@ export function ParticleEarthScene({
       shellMaterial.uniforms.uViewportHeight.value = targetSize.y;
       haloMaterial.uniforms.uViewportHeight.value = targetSize.y;
       personalMaterial.uniforms.uViewportHeight.value = targetSize.y;
+      if (activeRefinementLayer) {
+        activeRefinementLayer.material.uniforms.uViewportHeight.value = targetSize.y;
+      }
+      if (departingRefinementLayer) {
+        departingRefinementLayer.material.uniforms.uViewportHeight.value = targetSize.y;
+      }
     };
 
     const rebuildLandVisualData = async (nextQuality: keyof typeof QUALITY_PROFILE) => {
       const revision = ++qualityBuildRevision;
-      const { particlePositions, coastlinePositions, detailedCoastlinePositions } = await buildLandVisualData(
-        QUALITY_PROFILE[nextQuality].particleCount,
-      );
+      const {
+        particlePositions,
+        coastlinePositions,
+        detailedCoastlinePositions,
+        landSourceAvailable,
+      } = await buildLandVisualData(QUALITY_PROFILE[nextQuality].particleCount);
       if (disposed || revision !== qualityBuildRevision || currentQuality !== nextQuality) return;
 
       const nextParticleGeometry = new BufferGeometry();
@@ -3215,7 +3548,12 @@ export function ParticleEarthScene({
 
       host.dataset.quality = nextQuality;
       host.dataset.particleCount = String(particlePositions.length / 3);
+      host.dataset.particleBaseCount = String(particlePositions.length / 3);
       host.dataset.coastlineVertices = String(coastlinePositions.length / 3);
+      landSourceDebug = landSourceAvailable
+        ? "base=ne_110m_land.geojson@110m;mask=720x360;refinement=ne_50m_land.geojson@50m;mask=1440x720"
+        : "fallback-seeded-sphere;refinement=unavailable";
+      host.dataset.particleLandSource = landSourceDebug;
       if (!landVisualReady) {
         landVisualReady = true;
         setReady(true);
@@ -3232,6 +3570,9 @@ export function ParticleEarthScene({
       if (currentQuality === nextQuality && landVisualReady) return;
       currentQuality = nextQuality;
       host.dataset.quality = nextQuality;
+      refinementBuildGuard.invalidate();
+      requestedRefinementCacheKey = null;
+      refinementBuildState = document.hidden ? "paused" : "idle";
       resize();
       void rebuildLandVisualData(nextQuality);
     };
@@ -3240,6 +3581,90 @@ export function ParticleEarthScene({
     resizeObserver.observe(host);
     window.addEventListener("resize", resize);
     resize();
+
+    const updateParticleLodDebug = () => {
+      const refinementCount = activeRefinementLayer
+        ? Math.min(activeRefinementLayer.sampleCount, currentParticleLod.activeCount)
+        : 0;
+      const setDebugValue = (key: keyof DOMStringMap, value: string) => {
+        if (host.dataset[key] !== value) host.dataset[key] = value;
+      };
+      setDebugValue("particleLod", currentParticleLod.level);
+      setDebugValue(
+        "particleLodProgress",
+        currentParticleLod.refinementProgress.toFixed(3),
+      );
+      setDebugValue("particleRefinementCount", String(refinementCount));
+      setDebugValue("particleRefinementCap", String(currentParticleLod.particleCap));
+      setDebugValue("particleRefinementBuild", refinementBuildState);
+      if (activeRefinementLayer) {
+        setDebugValue("particleRefinementRegion", activeRefinementLayer.region.key);
+        setDebugValue(
+          "particleRefinementRegionLat",
+          String(activeRefinementLayer.region.center.lat),
+        );
+        setDebugValue(
+          "particleRefinementRegionLon",
+          String(activeRefinementLayer.region.center.lon),
+        );
+        setDebugValue(
+          "particleRefinementRegionRadius",
+          String(activeRefinementLayer.region.radiusDegrees),
+        );
+      } else {
+        if (host.dataset.particleRefinementRegion !== undefined) {
+          delete host.dataset.particleRefinementRegion;
+          delete host.dataset.particleRefinementRegionLat;
+          delete host.dataset.particleRefinementRegionLon;
+          delete host.dataset.particleRefinementRegionRadius;
+        }
+      }
+    };
+
+    const updateParticleRefinement = (now: number) => {
+      const refinementFocusFlightActive = isFocusFlightActive(
+        pointFocusSettling,
+        routeFocusSettling,
+      );
+      currentParticleLod = resolveParticleRefinementLodForFrame({
+        zoom: interactiveZoom,
+        quality: currentQuality,
+        current: currentParticleLod,
+        focusFlightActive: refinementFocusFlightActive,
+      });
+      if (refinementFocusFlightActive) {
+        if (requestedRefinementCacheKey !== null) {
+          refinementBuildGuard.invalidate();
+          requestedRefinementCacheKey = null;
+          refinementBuildState = activeRefinementLayer ? "ready" : "idle";
+        }
+        updateParticleLodDebug();
+        return;
+      }
+      if (currentParticleLod.activeCount === 0) {
+        if (requestedRefinementCacheKey !== null) {
+          refinementBuildGuard.invalidate();
+          requestedRefinementCacheKey = null;
+          refinementBuildState = "idle";
+        }
+        updateParticleLodDebug();
+        return;
+      }
+      if (
+        document.hidden
+        || now - lastRefinementViewSampleAt < 160
+      ) {
+        updateParticleLodDebug();
+        return;
+      }
+      lastRefinementViewSampleAt = now;
+      camera.updateMatrixWorld();
+      globe.updateWorldMatrix(true, false);
+      globe.worldToLocal(refinementViewPosition.copy(camera.position));
+      const viewCenter = vector3ToLatLon(refinementViewPosition);
+      requestRefinementRegion(resolveParticleRefinementRegion(viewCenter));
+      updateParticleLodDebug();
+    };
 
     const render = (now: number) => {
       if (disposed) return;
@@ -3428,6 +3853,7 @@ export function ParticleEarthScene({
       }
       globe.rotation.x = interactiveRotationX;
       globe.rotation.y = baseRotationY + interactiveRotationY;
+      updateParticleRefinement(now);
       particleMaterial.uniforms.uMorph.value = interpolate(
         particleMaterial.uniforms.uMorph.value,
         target.burst,
@@ -3436,6 +3862,39 @@ export function ParticleEarthScene({
         particleMaterial.uniforms.uOpacity.value,
         target.particleOpacity,
       );
+      const blendRefinement = (value: number, next: number) => (
+        snap ? next : damp(value, next, delta, 7.5)
+      );
+      if (activeRefinementLayer) {
+        const refinementOpacity = currentParticleLod.activeCount > 0
+          ? target.particleOpacity * 0.5
+          : 0;
+        activeRefinementLayer.material.uniforms.uMorph.value = interpolate(
+          activeRefinementLayer.material.uniforms.uMorph.value,
+          target.burst,
+        );
+        activeRefinementLayer.material.uniforms.uOpacity.value = blendRefinement(
+          activeRefinementLayer.material.uniforms.uOpacity.value,
+          refinementOpacity,
+        );
+        activeRefinementLayer.material.uniforms.uLodProgress.value = blendRefinement(
+          activeRefinementLayer.material.uniforms.uLodProgress.value,
+          Math.min(
+            1,
+            currentParticleLod.activeCount / activeRefinementLayer.particleCap,
+          ),
+        );
+      }
+      if (departingRefinementLayer) {
+        departingRefinementLayer.material.uniforms.uOpacity.value = blendRefinement(
+          departingRefinementLayer.material.uniforms.uOpacity.value,
+          0,
+        );
+        if (departingRefinementLayer.material.uniforms.uOpacity.value < 0.005) {
+          disposeRefinementLayer(departingRefinementLayer);
+          departingRefinementLayer = null;
+        }
+      }
       surfaceMaterial.opacity = interpolate(surfaceMaterial.opacity, target.surfaceOpacity);
       const reliefModeWeight = !reliefExperimentEnabled
         ? 0
@@ -3522,6 +3981,12 @@ export function ParticleEarthScene({
       // render cycle. Reduced-motion resolves to a stable final frame.
       const motionTime = reduceMotion ? 0 : now / 1000;
       particleMaterial.uniforms.uTime.value = motionTime;
+      if (activeRefinementLayer) {
+        activeRefinementLayer.material.uniforms.uTime.value = motionTime;
+      }
+      if (departingRefinementLayer) {
+        departingRefinementLayer.material.uniforms.uTime.value = motionTime;
+      }
       if (archiveMaterial) archiveMaterial.uniforms.uTime.value = motionTime;
       clusterMaterial.uniforms.uTime.value = motionTime;
       cyanClusterMaterial.uniforms.uTime.value = motionTime;
@@ -3567,8 +4032,15 @@ export function ParticleEarthScene({
 
     const onVisibilityChange = () => {
       if (document.hidden) {
+        refinementBuildGuard.setVisible(false);
+        requestedRefinementCacheKey = null;
+        refinementBuildState = "paused";
         cancelAnimationFrame(animationFrame);
       } else {
+        refinementBuildGuard.setVisible(true);
+        requestedRefinementCacheKey = null;
+        refinementBuildState = "idle";
+        lastRefinementViewSampleAt = Number.NEGATIVE_INFINITY;
         lastTime = performance.now();
         animationFrame = requestAnimationFrame(render);
       }
@@ -3738,6 +4210,7 @@ export function ParticleEarthScene({
       },
       dispose() {
         disposed = true;
+        refinementBuildGuard.dispose();
         cancelAnimationFrame(animationFrame);
         document.removeEventListener("visibilitychange", onVisibilityChange);
         resizeObserver.disconnect();
@@ -3754,6 +4227,11 @@ export function ParticleEarthScene({
         reliefTexture?.dispose();
         reliefMaterial.dispose();
         texture.dispose();
+        disposeRefinementLayer(departingRefinementLayer);
+        departingRefinementLayer = null;
+        disposeRefinementLayer(activeRefinementLayer);
+        activeRefinementLayer = null;
+        refinementCache.clear();
         if (particles) globe.remove(particles);
         if (particleGeometry) particleGeometry.dispose();
         particleMaterial.dispose();
