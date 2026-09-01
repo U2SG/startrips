@@ -140,6 +140,21 @@ function itemDuration(digest: MediaDigestV1, tempo: AutoEditTempo) {
   return IMAGE_DWELL_MS[tempo];
 }
 
+function isQuickRecapEligible(
+  digest: MediaDigestV1,
+  journeyId: string,
+  journeyRevision: string,
+  canonicalRouteOrder: ReadonlyMap<string, number>,
+) {
+  return (
+    digest.journeyId === journeyId &&
+    digest.sourceRevision === journeyRevision &&
+    !digest.userSignals.excludedFromRecap &&
+    (digest.mediaType !== "video" || (digest.intrinsic.durationMs !== undefined && digest.intrinsic.durationMs > 0)) &&
+    (digest.routePointId === null || canonicalRouteOrder.has(digest.routePointId))
+  );
+}
+
 function selectionReason(digest: MediaDigestV1, clusterSize: number): AutoEditSelectionReason {
   if (digest.userSignals.pinnedForRecap) return "user-pinned";
   if (digest.userSignals.isJourneyCover) return "journey-cover";
@@ -152,11 +167,7 @@ export function buildDeterministicQuickRecapPlan(input: DeterministicQuickRecapI
   const tempo = input.tempo ?? "standard";
   const canonicalRouteOrder = new Map(input.routePointIds.map((id, index) => [id, index]));
   const eligible = input.digests.filter((digest) =>
-    digest.journeyId === input.journeyId &&
-    digest.sourceRevision === input.journeyRevision &&
-    !digest.userSignals.excludedFromRecap &&
-    (digest.mediaType !== "video" || (digest.intrinsic.durationMs !== undefined && digest.intrinsic.durationMs > 0)) &&
-    (digest.routePointId === null || canonicalRouteOrder.has(digest.routePointId)),
+    isQuickRecapEligible(digest, input.journeyId, input.journeyRevision, canonicalRouteOrder),
   );
 
   const duplicateSizes = new Map<string, number>();
@@ -294,15 +305,12 @@ export function validateAutoEditPlanV1(plan: AutoEditPlanV1, input: {
 
   if (plan.mode === "quick-recap") {
     for (const digest of input.digests) {
-      if (digest.journeyId !== input.journeyId || digest.sourceRevision !== input.journeyRevision) continue;
-      if (digest.userSignals.pinnedForRecap && !digest.userSignals.excludedFromRecap && !seen.has(digest.assetId)) errors.push(`pinned asset omitted ${digest.assetId}`);
+      if (!isQuickRecapEligible(digest, input.journeyId, input.journeyRevision, routeOrder)) continue;
+      if (digest.userSignals.pinnedForRecap && !seen.has(digest.assetId)) errors.push(`pinned asset omitted ${digest.assetId}`);
     }
     for (const routePointId of input.routePointIds) {
       const hasEligible = input.digests.some((digest) =>
-        digest.journeyId === input.journeyId &&
-        digest.sourceRevision === input.journeyRevision &&
-        digest.routePointId === routePointId &&
-        !digest.userSignals.excludedFromRecap,
+        digest.routePointId === routePointId && isQuickRecapEligible(digest, input.journeyId, input.journeyRevision, routeOrder),
       );
       const represented = plan.chapters.some((chapter) => chapter.routePointId === routePointId && chapter.items.length > 0);
       if (hasEligible && !represented) errors.push(`route point omitted ${routePointId}`);

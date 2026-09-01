@@ -90,6 +90,17 @@ describe("deterministic auto-edit foundation (#127)", () => {
     expect(validateAutoEditPlanV1(plan, { ...baseInput, digests })).toMatchObject({ valid: true, errors: [] });
   });
 
+  it("does not require route coverage for noneligible videos", () => {
+    const digests = [
+      digest("unknown-video", "tokyo", 0, { mediaType: "video", mimeType: "video/mp4", intrinsic: {} }),
+      digest("zero-video", "kyoto", 1, { mediaType: "video", mimeType: "video/mp4", intrinsic: { durationMs: 0 } }),
+      digest("osaka", "osaka", 2),
+    ];
+    const plan = buildDeterministicQuickRecapPlan({ ...baseInput, digests });
+    expect(plan.chapters.map((chapter) => chapter.routePointId)).toEqual(["osaka"]);
+    expect(validateAutoEditPlanV1(plan, { ...baseInput, digests })).toMatchObject({ valid: true, errors: [] });
+  });
+
   it("never selects recap-excluded media", () => {
     const digests = [
       digest("excluded", "tokyo", 0, { userSignals: { isJourneyCover: false, pinnedForRecap: false, excludedFromRecap: true } }),
