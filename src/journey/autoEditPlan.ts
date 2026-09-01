@@ -120,7 +120,8 @@ function stableCandidateSort(a: MediaDigestV1, b: MediaDigestV1) {
 function selectDuplicateRepresentatives(digests: MediaDigestV1[]) {
   const grouped = new Map<string, MediaDigestV1[]>();
   for (const digest of digests) {
-    const key = digest.similarity?.duplicateClusterId ?? `asset:${digest.assetId}`;
+    const clusterKey = digest.similarity?.duplicateClusterId ?? `asset:${digest.assetId}`;
+    const key = `${digest.routePointId ?? "journey"}:${clusterKey}`;
     const group = grouped.get(key) ?? [];
     group.push(digest);
     grouped.set(key, group);
@@ -132,8 +133,9 @@ function selectDuplicateRepresentatives(digests: MediaDigestV1[]) {
 
 function itemDuration(digest: MediaDigestV1, tempo: AutoEditTempo) {
   if (digest.mediaType === "video") {
-    const sourceDuration = digest.intrinsic.durationMs ?? VIDEO_DWELL_MS[tempo];
-    return Math.max(1_000, Math.min(sourceDuration, VIDEO_DWELL_MS[tempo]));
+    const sourceDuration = digest.intrinsic.durationMs;
+    if (sourceDuration === undefined || sourceDuration <= 0) return 0;
+    return Math.min(sourceDuration, VIDEO_DWELL_MS[tempo]);
   }
   return IMAGE_DWELL_MS[tempo];
 }
@@ -153,6 +155,7 @@ export function buildDeterministicQuickRecapPlan(input: DeterministicQuickRecapI
     digest.journeyId === input.journeyId &&
     digest.sourceRevision === input.journeyRevision &&
     !digest.userSignals.excludedFromRecap &&
+    (digest.mediaType !== "video" || (digest.intrinsic.durationMs !== undefined && digest.intrinsic.durationMs > 0)) &&
     (digest.routePointId === null || canonicalRouteOrder.has(digest.routePointId)),
   );
 

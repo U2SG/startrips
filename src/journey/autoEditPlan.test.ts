@@ -63,6 +63,33 @@ describe("deterministic auto-edit foundation (#127)", () => {
     expect(plan.omittedAssetIds).toContain("weak");
   });
 
+
+  it("preserves route coverage when duplicate clusters span route points", () => {
+    const digests = [
+      digest("tokyo-burst", "tokyo", 0, { similarity: { duplicateClusterId: "shared-burst" } }),
+      digest("kyoto-burst", "kyoto", 1, { similarity: { duplicateClusterId: "shared-burst" } }),
+      digest("osaka", "osaka", 2),
+    ];
+    const plan = buildDeterministicQuickRecapPlan({ ...baseInput, digests });
+    expect(plan.chapters.map((chapter) => chapter.routePointId)).toEqual(["tokyo", "kyoto", "osaka"]);
+    expect(validateAutoEditPlanV1(plan, { ...baseInput, digests })).toMatchObject({ valid: true, errors: [] });
+  });
+
+  it("omits videos without known positive duration and bounds short-video trims to the source", () => {
+    const digests = [
+      digest("unknown-video", "tokyo", 0, { mediaType: "video", mimeType: "video/mp4", intrinsic: {} }),
+      digest("tokyo", "tokyo", 1),
+      digest("short-video", "kyoto", 2, { mediaType: "video", mimeType: "video/mp4", intrinsic: { durationMs: 420 } }),
+      digest("osaka", "osaka", 3),
+    ];
+    const plan = buildDeterministicQuickRecapPlan({ ...baseInput, digests });
+    const items = plan.chapters.flatMap((chapter) => chapter.items);
+    expect(items.find((item) => item.assetId === "unknown-video")).toBeUndefined();
+    expect(plan.omittedAssetIds).not.toContain("unknown-video");
+    expect(items.find((item) => item.assetId === "short-video")?.trim).toEqual({ inMs: 0, outMs: 420 });
+    expect(validateAutoEditPlanV1(plan, { ...baseInput, digests })).toMatchObject({ valid: true, errors: [] });
+  });
+
   it("never selects recap-excluded media", () => {
     const digests = [
       digest("excluded", "tokyo", 0, { userSignals: { isJourneyCover: false, pinnedForRecap: false, excludedFromRecap: true } }),
