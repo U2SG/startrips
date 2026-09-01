@@ -30,6 +30,7 @@ import {
   type PlaybackStep,
 } from "./journeyPlayback";
 import { syncPlaybackMediaElement } from "./mediaPlaybackSync";
+import { playbackControlsMayAutoHide } from "./playbackControls";
 import { journeySoundtrack, stripMediaExtension } from "./journeyModel";
 import { createSoundtrackSampler } from "../motion/audioSampler";
 import {
@@ -115,6 +116,7 @@ export function JourneyPlaybackOverlay({
   const samplerRef = useRef(createSoundtrackSampler());
   const lightStripRef = useRef<HTMLDivElement>(null);
   const [controlsHidden, setControlsHidden] = useState(false);
+  const playbackInputModalityRef = useRef<"pointer" | "keyboard">("pointer");
   const pendingReads = useRef(new Set<string>());
   // Review P2: the playback overlay is its own focus trap (rendered outside
   // any dialog that would otherwise manage Tab focus).
@@ -313,31 +315,53 @@ export function JourneyPlaybackOverlay({
 
   useEffect(() => () => audioRef.current?.pause(), []);
 
-  // Controls fade out after idle; any pointer/key/touch activity shows them
-  // AND restarts the 2.5s timer (review P2: previously activity only revealed
-  // controls and the timer never re-armed after the first hide).
+  // Playback chrome fades during uninterrupted pointer/touch viewing, but it
+  // must never disappear while paused or while a keyboard user owns focus in
+  // the dialog. Programmatic initial focus does not pin the chrome forever:
+  // only an actual keyboard interaction switches the idle policy to keyboard.
   useEffect(() => {
-    if (!director.isPlaying) return;
+    if (paused || !director.isPlaying) {
+      setControlsHidden(false);
+      return;
+    }
     let timer = 0;
+    const focusWithinOverlay = () => Boolean(
+      overlayRef.current?.contains(document.activeElement),
+    );
+    const mayAutoHide = () => playbackControlsMayAutoHide({
+      paused,
+      keyboardNavigation: playbackInputModalityRef.current === "keyboard",
+      focusWithinOverlay: focusWithinOverlay(),
+    });
     const restartIdle = () => {
       setControlsHidden(false);
       window.clearTimeout(timer);
-      timer = window.setTimeout(() => setControlsHidden(true), 2500);
+      if (!mayAutoHide()) return;
+      timer = window.setTimeout(() => {
+        if (mayAutoHide()) setControlsHidden(true);
+      }, 2500);
     };
-    const onActivity = () => restartIdle();
-    window.addEventListener("pointermove", onActivity);
-    window.addEventListener("pointerdown", onActivity);
-    window.addEventListener("touchstart", onActivity, { passive: true });
-    window.addEventListener("keydown", onActivity);
+    const onPointerActivity = () => {
+      playbackInputModalityRef.current = "pointer";
+      restartIdle();
+    };
+    const onKeyboardActivity = () => {
+      playbackInputModalityRef.current = "keyboard";
+      restartIdle();
+    };
+    window.addEventListener("pointermove", onPointerActivity);
+    window.addEventListener("pointerdown", onPointerActivity);
+    window.addEventListener("touchstart", onPointerActivity, { passive: true });
+    window.addEventListener("keydown", onKeyboardActivity);
     restartIdle();
     return () => {
       window.clearTimeout(timer);
-      window.removeEventListener("pointermove", onActivity);
-      window.removeEventListener("pointerdown", onActivity);
-      window.removeEventListener("touchstart", onActivity);
-      window.removeEventListener("keydown", onActivity);
+      window.removeEventListener("pointermove", onPointerActivity);
+      window.removeEventListener("pointerdown", onPointerActivity);
+      window.removeEventListener("touchstart", onPointerActivity);
+      window.removeEventListener("keydown", onKeyboardActivity);
     };
-  }, [director.isPlaying, director.stepIndex]);
+  }, [director.isPlaying, director.stepIndex, paused]);
 
   // Review P2: toggle playback from the user gesture so audio.play() runs
   // inside user activation; the soundtrack effect below stays as the
