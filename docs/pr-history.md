@@ -36,6 +36,14 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ## 2026-09-01
 
+### PR #119 - Pair EXIF digitized timestamps with their offset
+
+- **Source head:** `18e449b020f28453390b29306383869d3c2ef775`
+- **Scope:** Corrects the local JPEG EXIF placement parser so each capture timestamp uses its matching EXIF timezone-offset tag: DateTimeOriginal/OffsetTimeOriginal first, then DateTimeDigitized/OffsetTimeDigitized as the fallback pair, rebased on the latest EXIF validation, APP1-boundary, and GPS-range fixes already in main.
+- **User-visible change:** Photos that carry only a digitized capture timestamp plus an explicit timezone no longer lose that offset and risk being matched to the wrong Journey date or route point around timezone/day boundaries.
+- **Review fixes:** Preserved main's calendar/range validation so malformed Original timestamps do not suppress a valid Digitized fallback; the existing invalid-Original regression remains green, and the Digitized-only `+08:00` case now verifies the matching `OffsetTimeDigitized` tag is used.
+- **Follow-up:** Targeted media-placement tests are 22/22, typecheck, production build, and `git diff --check` are green on the rebased source head.
+
 ### PR #128 - Add Playback V2 tempo timeline foundation
 
 - **Source head:** `d0bac51b121b815b7d89442b4d97674ce20d3945`
