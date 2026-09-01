@@ -18,6 +18,14 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ## 2026-09-01
 
+### PR #138 - Avoid near-expiry soundtrack signed reads
+
+- **Source head:** `d9a728308c13794d88a1f1b336c0d5de23cd3a4c`
+- **Scope:** Rebases the soundtrack signed-read freshness hardening onto current main and preserves the 30-second freshness margin while carrying the exact read snapshot accepted by the initiating playback click into the overlay.
+- **User-visible change:** Journey Playback no longer treats a near-expiry soundtrack URL as ready, and a read that was accepted during the user's click cannot be invalidated by a second render-time freshness check before the overlay starts audio.
+- **Review fixes:** The current P2 is addressed by storing the `cachedSoundtrackRead()` result accepted in `startPlayback()` and passing that snapshot directly as `initialSoundtrackRead`; preparation paths clear the snapshot and closing playback releases it. This keeps the first `audio.play()` on the same user-activation path instead of forcing a later async refetch.
+- **Follow-up:** #137 remains the tracking issue. Rebased onto `main@8fc24be`; soundtrack cache targeted tests are 5/5, production build and `git diff --check` are green. Repository typecheck remains blocked only by the same six pre-existing `S3Client.send` errors in `server/storage/s3-compatible-storage.ts`.
+
 ### PR #141 - Cancel stale carousel settle after Story scope changes
 
 - **Source head:** `c6442f0c35298fabba6c96076e07762f3eda5ca2`
