@@ -18,6 +18,14 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ## 2026-09-02
 
+### PR #110 - Make globe interaction QA self-contained
+
+- **Source head:** `cb79f8dfa2c6fb247176fc5eefd0bf35d2eca00b`
+- **Scope:** Rebases the self-contained globe-interaction browser QA onto current main. The runner owns an ephemeral loopback Vite server by default, preserves explicit external `QA_BASE_URL` behavior, and now treats both ordinary exits and signal termination as terminal child-process states.
+- **User-visible change:** None directly; the QA can no longer validate a stale server on a fixed port, leak its shutdown fallback, or wait the full readiness/shutdown timeout after its owned Vite child has already died from a signal.
+- **Review fixes:** Preserves the prior shutdown-timer cleanup review fix after rebase, then fixes the remaining P2 by centralizing child liveness in `hasChildExited()` (`exitCode` or `signalCode`) for readiness, startup cleanup, normal close, and SIGKILL fallback. Added a signal-terminated-child regression.
+- **Follow-up:** None known for the QA ownership slice. Validation on current main: lifecycle tests 6/6 green, broader src/scripts suite 39 files / 390 tests green, client typecheck and production build green, `git diff --check` green, and the real self-owned `pnpm qa:globe-interaction` passed on an ephemeral port with all mobile/desktop gesture assertions and zero console/page errors.
+
 ### PR #112 - Apply grouped media placement suggestions
 
 - **Source head:** `ce50b22ebedafd3c3469c3855c8c8362b429d99c`
