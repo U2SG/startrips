@@ -18,6 +18,14 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ## 2026-09-02
 
+### PR #143 - Add deterministic auto-edit plan foundation
+
+- **Source head:** `906da316b5578825e48dd9078cc558c52a6431b0`
+- **Scope:** Begins #127 Phase A with versioned `MediaDigestV1` and `AutoEditPlanV1` contracts, a deterministic Quick Recap baseline selector, and a hard validator. This slice stays entirely in the planning layer: no LLM/VLM calls, no Journey mutation, no playback/runtime wiring, and no keepsake rendering changes.
+- **User-visible change:** None yet; this establishes the safe deterministic foundation future Quick Recap UI can consume. The baseline preserves canonical route chronology, keeps pinned/cover media, excludes recap-excluded media, reduces duplicate clusters using stable technical-quality tie-breaking, represents every eligible route point, and uses bounded video highlight trims.
+- **Review fixes:** Self-review removed an implicit fixed outro duration that was not represented by the plan schema and tightened route-coverage validation so stale/foreign digests cannot create false omissions. Validation recomputes duration independently and rejects identity/revision drift, unknown/out-of-order route points, duplicate/missing/chapter-mismatched assets, excluded selections, invalid trims, omitted pins, and omitted eligible route points.
+- **Follow-up:** #127 remains open for broader Phase A analysis signals, stronger duration budgeting, full-mode plan generation, pin/exclude persistence/UI, cache invalidation/race handling, and later local semantic/optional AI phases. Validation on current main: targeted auto-edit tests 7/7 green, non-DB suite 55 files / 520 tests green, typecheck green, production build green, and `git diff --check` green.
+
 ### PR #110 - Make globe interaction QA self-contained
 
 - **Source head:** `cb79f8dfa2c6fb247176fc5eefd0bf35d2eca00b`
