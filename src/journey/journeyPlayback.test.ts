@@ -5,6 +5,7 @@ import {
   initialPlaybackState,
   playbackReducer,
   playbackCameraTargetForStep,
+  playbackTravelChoreography,
   playbackCameraTargetKey,
   playbackMediaForPoint,
   playbackStoryMedia,
@@ -256,5 +257,34 @@ describe("stepDurationMs (#19)", () => {
     );
     expect(stepDurationMs(journey, steps[5])).toBe(PLAYBACK_PACING.videoMs);
     expect(stepDurationMs(journey, steps.at(-1)!)).toBe(PLAYBACK_PACING.outroMs);
+  });
+});
+
+
+describe("playbackTravelChoreography (#126)", () => {
+  const withPoints = (coords: Array<[number, number]>): Journey => ({
+    ...journey,
+    routePoints: coords.map(([latitude, longitude], index) => point(`p-${index}`, latitude, longitude)),
+  });
+
+  it("uses a restrained nearby flight for same-city legs", () => {
+    const target = withPoints([[22.28, 114.17], [22.31, 114.21]]);
+    expect(playbackTravelChoreography(target, 1)).toBe("nearby");
+    expect(playbackCameraTargetForStep({ kind: "travel", to: 1 }, target)).toEqual({
+      kind: "point", pointIndex: 1, choreography: "nearby",
+    });
+  });
+
+  it("uses regional choreography for medium-distance legs", () => {
+    const target = withPoints([[22.28, 114.17], [31.23, 121.47]]);
+    expect(playbackTravelChoreography(target, 1)).toBe("regional");
+  });
+
+  it("uses pullback choreography for intercontinental legs", () => {
+    const target = withPoints([[22.28, 114.17], [51.51, -0.13]]);
+    expect(playbackTravelChoreography(target, 1)).toBe("long-haul");
+    expect(playbackCameraTargetForStep({ kind: "travel", to: 1 }, target)).toMatchObject({
+      choreography: "long-haul",
+    });
   });
 });

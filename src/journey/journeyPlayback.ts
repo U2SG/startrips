@@ -117,9 +117,11 @@ export type PlaybackStep =
   | { kind: "media"; pointIndex: number; mediaIndex: number }
   | { kind: "outro" };
 
+export type PlaybackTravelChoreography = "nearby" | "regional" | "long-haul";
+
 export type PlaybackCameraTarget =
   | { kind: "route" }
-  | { kind: "point"; pointIndex: number };
+  | { kind: "point"; pointIndex: number; choreography?: PlaybackTravelChoreography };
 
 /**
  * Camera ownership follows the playback chapter, not the entry click:
@@ -127,8 +129,22 @@ export type PlaybackCameraTarget =
  * anchored to the relevant route point. Media therefore inherits the stop's
  * point target instead of causing a second camera command.
  */
+export function playbackTravelChoreography(
+  journey: Journey,
+  toPointIndex: number,
+): PlaybackTravelChoreography {
+  const to = journey.routePoints[toPointIndex];
+  const from = journey.routePoints[toPointIndex - 1];
+  if (!from || !to) return "regional";
+  const degrees = routePointAngularDistance(from, to) * 180 / Math.PI;
+  if (degrees < 6) return "nearby";
+  if (degrees >= 55) return "long-haul";
+  return "regional";
+}
+
 export function playbackCameraTargetForStep(
   step: PlaybackStep | undefined,
+  journey?: Journey | null,
 ): PlaybackCameraTarget | null {
   if (!step) return null;
   switch (step.kind) {
@@ -136,7 +152,11 @@ export function playbackCameraTargetForStep(
     case "outro":
       return { kind: "route" };
     case "travel":
-      return { kind: "point", pointIndex: step.to };
+      return {
+        kind: "point",
+        pointIndex: step.to,
+        choreography: journey ? playbackTravelChoreography(journey, step.to) : undefined,
+      };
     case "stop":
     case "media":
       return { kind: "point", pointIndex: step.pointIndex };
