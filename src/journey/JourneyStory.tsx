@@ -9,7 +9,7 @@ import {
   type PointerEvent as ReactPointerEvent,
   type WheelEvent,
 } from "react";
-import { createPortal } from "react-dom";
+import { createPortal, flushSync } from "react-dom";
 import {
   DndContext,
   KeyboardSensor,
@@ -104,6 +104,15 @@ const MEDIA_READ_SWEEP_MS = 20_000;
 // Mobile drag settles after distance/velocity intent is resolved by
 // mediaSwipeDecision; keep the visual snap duration independent of that input.
 const MEDIA_DRAG_SETTLE_MS = 220;
+
+export function finalizeMediaDragCommit(
+  commit: () => void,
+  cleanup: () => void,
+  syncCommit: (callback: () => void) => void = flushSync,
+) {
+  syncCommit(commit);
+  cleanup();
+}
 
 type MediaReadState =
   | { status: "loading" }
@@ -1718,9 +1727,15 @@ export function JourneyStory({
       }
     }
     if (prefersReducedMotion()) {
-      if (ready && asset) landMediaDrag(asset, drag.neighborIndex);
-      else if (commit && asset) navigateToMedia(drag.neighborIndex);
-      finishMediaDrag(drag);
+      if (ready && asset) {
+        finalizeMediaDragCommit(
+          () => landMediaDrag(asset, drag.neighborIndex),
+          () => finishMediaDrag(drag),
+        );
+      } else {
+        if (commit && asset) navigateToMedia(drag.neighborIndex);
+        finishMediaDrag(drag);
+      }
       mediaDragSettlingRef.current = false;
       return;
     }
@@ -1732,9 +1747,14 @@ export function JourneyStory({
       drag.base.style.transform = `translateX(${edge}px)`;
       if (drag.peek) drag.peek.style.transform = "translateX(0)";
       window.setTimeout(() => {
-        finishMediaDrag(drag);
+        // Commit the semantic target before removing the already-visible peek.
+        // Otherwise the imperative cleanup can briefly snap the old base back
+        // to center while React has not committed the new media node yet.
+        finalizeMediaDragCommit(
+          () => landMediaDrag(asset, index),
+          () => finishMediaDrag(drag),
+        );
         mediaDragSettlingRef.current = false;
-        landMediaDrag(asset, index);
       }, MEDIA_DRAG_SETTLE_MS);
       return;
     }

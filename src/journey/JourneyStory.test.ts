@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   JourneyStory,
+  finalizeMediaDragCommit,
   journeyDeleteDescription,
   mobileStoryExpandedForLayout,
   mobileStoryHistoryLayers,
@@ -38,6 +39,23 @@ const journey: Journey = {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+describe("finalizeMediaDragCommit (#65)", () => {
+  it("commits the new semantic owner before removing the visible drag layers", () => {
+    const events: string[] = [];
+    finalizeMediaDragCommit(
+      () => events.push("commit"),
+      () => events.push("cleanup"),
+      (callback) => {
+        events.push("flush-start");
+        callback();
+        events.push("flush-end");
+      },
+    );
+
+    expect(events).toEqual(["flush-start", "commit", "flush-end", "cleanup"]);
+  });
 });
 
 function asset(

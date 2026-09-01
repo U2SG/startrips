@@ -18,6 +18,14 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ## 2026-09-01
 
+### PR #135 - Fix mobile carousel settle continuity
+
+- **Source head:** `0530c0206595774733cdd8bd05dc5d501d6dcba7`
+- **Scope:** Fixes the remaining mobile direct-manipulation carousel settle boundary where the imperative drag cleanup could restore the old base frame before React committed the newly landed semantic media owner. The change is limited to committed, already-ready swipe landings and leaves pointermove tracking, slow-target spring-back, desktop crossfade, playback ordering, and media decode policy unchanged.
+- **User-visible change:** After a successful mobile swipe finishes sliding the next image into place, the old image can no longer briefly reappear during the semantic slot handoff; the centered target remains the visible owner continuously through settle.
+- **Review fixes:** The final implementation synchronously commits the new media identity with `flushSync` before hiding the centered drag peek/resetting the old base transform, and shares that ordering with reduced-motion landings. A regression locks the commit-before-cleanup contract.
+- **Follow-up:** #65 stays open for broader real-device acceptance across delayed decode, mixed image/video, route-point boundary crossing, rapid reversal, inline Story and true fullscreen. Targeted JourneyStory/media swipe tests are 41/41, the full `src` suite is 32 files / 320 tests, TypeScript and production build are green, and `git diff --check` is green.
+
 ### PR #133 - Upgrade CI actions to Node 24 runtimes
 
 - **Source head:** `5cc3b9be1af0712624c3cfd43f6ac79b9db8b82a`
