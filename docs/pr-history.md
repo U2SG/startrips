@@ -18,6 +18,14 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ## 2026-09-02
 
+### PR #112 - Apply grouped media placement suggestions
+
+- **Source head:** `ce50b22ebedafd3c3469c3855c8c8362b429d99c`
+- **Scope:** Rebases grouped EXIF/capture-time placement uploads onto current main and preserves the existing grouped destination plan while restoring the same post-upload refresh/selection guarantees as the single-destination upload path.
+- **User-visible change:** Accepting a single grouped suggestion into another route point now opens the newly uploaded media instead of leaving an older item selected; if upload succeeds but the Journey refresh is null, throws, or cannot yet find the uploaded asset, Story reports that the upload succeeded and tells the user to reopen rather than upload again.
+- **Review fixes:** Fixes both open P2 findings by resolving the newly uploaded asset from the refreshed accepted scope using returned asset IDs, and by treating null/throw/stale refresh results as explicit refresh failure. Partial-upload messaging also preserves the non-retry warning for already-uploaded media. Added regressions for selecting a new asset beside existing destination media and for null/stale refresh results.
+- **Follow-up:** #86 remains the broader media-placement feature tracker. Validation on current main: grouped placement/JourneyStory targeted tests 69/69 green, full `src` suite 37 files / 379 tests green, client typecheck green, production build green, and `git diff --check` green. Full server typecheck in the shared local install remains blocked only by the existing six `S3Client.send` errors in `server/storage/s3-compatible-storage.ts`; GitHub CI is authoritative for the clean dependency environment.
+
 ### PR #121 - Bound EXIF TIFF reads to APP1 segment
 
 - **Source head:** `56ff9cc37711f0facd8ea7d046ef5e11adac4f6a`
