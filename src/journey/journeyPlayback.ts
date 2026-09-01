@@ -292,9 +292,11 @@ export function playbackReducer(
       return { stepIndex: next, phase: phaseForStep(steps[next]), paused: false };
     }
     case "previous": {
-      if (state.paused) return state;
       const previous = previousMeaningfulPlaybackStepIndex(steps, state.stepIndex);
-      return { stepIndex: previous, phase: phaseForStep(steps[previous]), paused: false };
+      const phase = phaseForStep(steps[previous]);
+      return state.paused
+        ? { stepIndex: previous, phase: { type: "paused", previous: phase }, paused: true }
+        : { stepIndex: previous, phase, paused: false };
     }
     case "back": {
       const previous = Math.max(0, state.stepIndex - 1);

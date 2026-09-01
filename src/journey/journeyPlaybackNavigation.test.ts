@@ -83,6 +83,22 @@ describe("meaningful Journey Playback navigation (#126)", () => {
     expect(state.phase).toEqual({ type: "media", pointIndex: 0, mediaIndex: 0 });
   });
 
+
+  it("keeps Back usable while paused and preserves pause ownership", () => {
+    let state = initialPlaybackState();
+    state = playbackReducer(journey, state, { type: "next" });
+    state = playbackReducer(journey, state, { type: "next" });
+    state = playbackReducer(journey, state, { type: "next" });
+    state = playbackReducer(journey, state, { type: "pause" });
+    state = playbackReducer(journey, state, { type: "previous" });
+    expect(state.stepIndex).toBe(2);
+    expect(state.paused).toBe(true);
+    expect(state.phase).toEqual({
+      type: "paused",
+      previous: { type: "media", pointIndex: 0, mediaIndex: 0 },
+    });
+  });
+
   it("clamps manual navigation at intro and outro", () => {
     let state = initialPlaybackState();
     state = playbackReducer(journey, state, { type: "previous" });
