@@ -341,7 +341,8 @@ export function LivingAtlasApp({
     () => closeJourneyStory(null),
   );
   const mobileSheetActive = isMobileV2 && mobileSheetJourneyId !== null;
-  const mobileSheetChildActive = storyJourneyId !== null || mobileMapJourneyId !== null;
+  const mobileSheetStoryActive = storyJourneyId !== null;
+  const mobileSheetChildActive = mobileSheetStoryActive || mobileMapJourneyId !== null;
   const mobileChipStartX = useRef<number | null>(null);
   const mobileChipSwiped = useRef(false);
   const mobileSheetStartY = useRef<number | null>(null);
@@ -954,8 +955,8 @@ export function LivingAtlasApp({
       {mobileSheetActive && mobileSheetJourney ? (
         <div
           className="mobile-v2__sheet-layer"
-          inert={mobileSheetChildActive || undefined}
-          aria-hidden={mobileSheetChildActive || undefined}
+          inert={mobileSheetStoryActive || undefined}
+          aria-hidden={mobileSheetStoryActive || undefined}
         >
           <button className="mobile-v2__sheet-backdrop" type="button" tabIndex={-1} aria-label="关闭旅程详情" onClick={() => setMobileSheetJourneyId(null)} />
           <section
