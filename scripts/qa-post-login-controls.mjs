@@ -1178,7 +1178,10 @@ async function verifyAccountDock() {
     await page.locator('input[type="password"]').fill("password1234");
     await page.getByRole("button", { name: "登录", exact: true }).click();
     await page.locator(".mobile-v2__journey-chip").waitFor({ state: "visible" });
-    await page.locator(".mobile-v2__account-trigger").waitFor({ state: "visible" });
+    // This focused globe-control preview does not render the Mobile V2 account
+    // slot, so AuthGateway intentionally falls back to the standalone dock at
+    // every viewport size. Keep this scenario on that fallback contract.
+    await page.locator(".account-dock__tab").waitFor({ state: "visible" });
 
     for (const [label, width, height, mobile] of [
       ["mobile-narrow", 320, 800, true],
@@ -1265,11 +1268,9 @@ async function verifyAccountDock() {
       // Chromium can report one-frame-stale media-query geometry immediately
       // after a viewport resize; wait for style + layout to settle.
       await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-      const metrics = await page.evaluate((isMobile) => {
+      const metrics = await page.evaluate(() => {
         const controls = document.querySelector(".living-atlas-globe__controls");
-        const account = document.querySelector(
-          isMobile ? ".mobile-v2__account-trigger" : ".account-dock__tab",
-        );
+        const account = document.querySelector(".account-dock__tab");
         if (!controls || !account) return null;
         const controlsRect = controls.getBoundingClientRect();
         const accountRect = account.getBoundingClientRect();
@@ -1303,7 +1304,7 @@ async function verifyAccountDock() {
           overflowX: Math.max(0, document.documentElement.scrollWidth - innerWidth),
           overflowY: Math.max(0, document.documentElement.scrollHeight - innerHeight),
         };
-      }, mobile);
+      });
       const minimumButtonHeight = mobile ? 43 : 35;
       const invalidControls = !metrics
         || metrics.overlapArea > 0
@@ -1335,7 +1336,7 @@ async function verifyAccountDock() {
     await page.waitForTimeout(150);
     const focusedPickState = await page.evaluate(() => {
       const controls = document.querySelector(".living-atlas-globe__controls");
-      const account = document.querySelector(".mobile-v2__account-trigger");
+      const account = document.querySelector(".account-dock");
       const controlsStyle = getComputedStyle(controls);
       const accountStyle = getComputedStyle(account);
       return {
