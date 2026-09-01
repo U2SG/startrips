@@ -36,6 +36,14 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ## 2026-09-01
 
+### PR #104 - Prototype opt-in particle-globe terrain relief
+
+- **Source head:** `f5a5d9b3ffeb923f6ff0b5379afb171901ca7783`
+- **Scope:** Rebases the opt-in terrain-relief experiment onto current main while preserving all intervening globe interaction, CI/mobile, playback, EXIF, and city-label fixes. Terrain remains disabled by default behind `?terrainRelief=1`.
+- **User-visible change:** When explicitly enabled, shaded relief adds restrained geographic depth that increases with zoom without replacing the particle globe or loading the relief texture for default users. The relief layer now renders explicitly behind the primary particle field so near-zoom shading cannot wash out or darken the particle surface.
+- **Review fixes:** Removed the stale duplicate globe-QA selector change from this PR because #109/#110 owns that harness follow-up; replaced the previous `coastline - 0.5` relief order with an explicit render hierarchy `relief < particle < coastline < signals < routes < personal points`, and assigned the primary particle layer an explicit render order instead of relying on Three.js defaults.
+- **Follow-up:** #82 remains an experiment until same-location global/regional/near visual captures and representative-device frame-time/texture-memory measurements are recorded. Current-main validation: terrain/ParticleEarth/semantic/LivingAtlasGlobe targeted tests 44/44; non-DB src/scripts suite 37 files / 371 tests; production build and `git diff --check` green. Full typecheck is blocked only by the six pre-existing `S3Client.send` errors in `server/storage/s3-compatible-storage.ts` on current main.
+
 ### PR #116 - Suppress secondary city-label contact activation
 
 - **Source head:** `1369a63625aa465b96578c4d892136bf295eaf39`

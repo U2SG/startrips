@@ -62,6 +62,7 @@ import {
 } from "./particleEarthMaterial";
 import { disposeSceneGraph, useThreeScene } from "./useThreeScene";
 import { resolveGlobeSemanticZoom, resolveGlobeSemanticZoomForFrame, type GlobeSemanticZoomState } from "./semanticZoom";
+import { terrainReliefBumpScale, terrainReliefOpacity } from "./terrainRelief";
 
 export const QUALITY_PROFILE = {
   low: { particleCount: 12_000, maxDpr: 1 },
@@ -78,6 +79,8 @@ export const MAX_RENDERED_COASTLINE_VERTICES = 20_000;
 export const COASTLINE_LOD_VERTEX_BUDGET = { far: 20_000, mid: 32_000, near: 52_000 } as const;
 export type CoastlineLod = keyof typeof COASTLINE_LOD_VERTEX_BUDGET;
 export const GLOBE_RENDER_ORDER = {
+  relief: -1,
+  particle: 0,
   coastline: 1,
   signal: 2,
   routeLine: 3,
@@ -1470,6 +1473,23 @@ export function ParticleEarthScene({
     });
     const surface = new Mesh(sphereGeometry, surfaceMaterial);
     globe.add(surface);
+
+    const reliefExperimentEnabled = new URLSearchParams(window.location.search)
+      .get("terrainRelief") === "1";
+    host.dataset.reliefExperiment = reliefExperimentEnabled ? "on" : "off";
+    const reliefMaterial = new MeshPhongMaterial({
+      color: 0x07100f,
+      emissive: 0x010302,
+      shininess: 0,
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+    });
+    const reliefSupport = new Mesh(sphereGeometry, reliefMaterial);
+    reliefSupport.scale.setScalar(1.0015);
+    reliefSupport.renderOrder = GLOBE_RENDER_ORDER.relief;
+    reliefSupport.visible = false;
+    globe.add(reliefSupport);
 
     const wireMaterial = new MeshBasicMaterial({
       color: 0x54ddd4,
@@ -3069,6 +3089,25 @@ export function ParticleEarthScene({
     let particles: Points | null = null;
     let landVisualReady = false;
 
+    let reliefTextureReady = false;
+    host.dataset.reliefTexture = reliefExperimentEnabled ? "loading" : "disabled";
+    const reliefTexture = reliefExperimentEnabled
+      ? new TextureLoader().load(
+          "/earth/natural-earth-shaded-relief-2048.jpg",
+          (loadedTexture) => {
+            reliefMaterial.bumpMap = loadedTexture;
+            reliefMaterial.needsUpdate = true;
+            reliefTextureReady = true;
+            host.dataset.reliefTexture = "ready";
+          },
+          undefined,
+          () => {
+            reliefTextureReady = false;
+            host.dataset.reliefTexture = "unavailable";
+          },
+        )
+      : null;
+
     const texture = new TextureLoader().load(
       "/earth/nasa-earth-with-clouds-2048.jpg",
       (loadedTexture) => {
@@ -3149,6 +3188,7 @@ export function ParticleEarthScene({
       } else {
         particleGeometry = nextParticleGeometry;
         particles = new Points(particleGeometry, particleMaterial);
+        particles.renderOrder = GLOBE_RENDER_ORDER.particle;
         globe.add(particles);
       }
 
@@ -3397,6 +3437,21 @@ export function ParticleEarthScene({
         target.particleOpacity,
       );
       surfaceMaterial.opacity = interpolate(surfaceMaterial.opacity, target.surfaceOpacity);
+      const reliefModeWeight = !reliefExperimentEnabled
+        ? 0
+        : currentMode === "surfaceEarth"
+          ? 0
+          : currentMode === "archiveBurst"
+            ? 0.35
+            : 1;
+      const reliefOpacity = terrainReliefOpacity(interactiveZoom, currentQuality) * reliefModeWeight;
+      reliefMaterial.opacity = interpolate(reliefMaterial.opacity, reliefOpacity);
+      reliefMaterial.bumpScale = terrainReliefBumpScale(interactiveZoom, currentQuality);
+      reliefSupport.visible = reliefExperimentEnabled
+        && reliefTextureReady
+        && reliefMaterial.opacity > 0.001;
+      host.dataset.reliefOpacity = reliefMaterial.opacity.toFixed(4);
+      host.dataset.reliefBumpScale = reliefMaterial.bumpScale.toFixed(4);
       if (archiveMaterial) {
         archiveMaterial.uniforms.uOpacity.value = interpolate(
           archiveMaterial.uniforms.uOpacity.value,
@@ -3696,6 +3751,8 @@ export function ParticleEarthScene({
         window.removeEventListener("pointerup", onRejectedPointerLifecycleEnd);
         window.removeEventListener("pointercancel", onRejectedPointerLifecycleEnd);
         renderer.domElement.removeEventListener("wheel", onWheel);
+        reliefTexture?.dispose();
+        reliefMaterial.dispose();
         texture.dispose();
         if (particles) globe.remove(particles);
         if (particleGeometry) particleGeometry.dispose();

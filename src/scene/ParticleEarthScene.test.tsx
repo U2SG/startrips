@@ -519,6 +519,8 @@ describe("ParticleEarthScene contracts", () => {
   });
 
   it("keeps geographic context behind journey and personal signals", () => {
+    expect(GLOBE_RENDER_ORDER.relief).toBeLessThan(GLOBE_RENDER_ORDER.particle);
+    expect(GLOBE_RENDER_ORDER.particle).toBeLessThan(GLOBE_RENDER_ORDER.coastline);
     expect(GLOBE_RENDER_ORDER.coastline).toBeLessThan(GLOBE_RENDER_ORDER.signal);
     expect(GLOBE_RENDER_ORDER.signal).toBeLessThan(GLOBE_RENDER_ORDER.routeLine);
     expect(GLOBE_RENDER_ORDER.routeLine).toBeLessThan(GLOBE_RENDER_ORDER.routePoint);
