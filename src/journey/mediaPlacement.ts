@@ -43,9 +43,25 @@ function safeDateMs(value: string | null | undefined) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function isValidCalendarDate(year: number, month: number, day: number) {
+  if (year <= 0 || month < 1 || month > 12 || day < 1 || day > 31) return false;
+  const normalized = new Date(0);
+  normalized.setUTCFullYear(year, month - 1, day);
+  normalized.setUTCHours(0, 0, 0, 0);
+  return normalized.getUTCFullYear() === year
+    && normalized.getUTCMonth() === month - 1
+    && normalized.getUTCDate() === day;
+}
+
 function dateKey(value: string | undefined) {
-  const match = value?.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  return match ? `${match[1]}-${match[2]}-${match[3]}` : null;
+  const match = value?.match(/^(\d{4})-(\d{2})-(\d{2})(?=$|T)/);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  return isValidCalendarDate(year, month, day)
+    ? `${match[1]}-${match[2]}-${match[3]}`
+    : null;
 }
 
 function signalDateKey(signal: MediaPlacementSignal) {
@@ -53,9 +69,10 @@ function signalDateKey(signal: MediaPlacementSignal) {
 }
 
 function dateOrdinal(value: string) {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
-  if (!match) return null;
-  return Math.floor(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])) / 86_400_000);
+  const key = dateKey(value);
+  if (!key || key !== value) return null;
+  const [year, month, day] = key.split("-").map(Number);
+  return Math.floor(Date.UTC(year, month - 1, day) / 86_400_000);
 }
 
 function journeyContainsDate(journey: Journey, captureDate: string | null) {
@@ -421,8 +438,23 @@ function normalizeExifDateTime(value: string | null, offset: string | null) {
   if (!value) return {};
   const match = /^(\d{4}):(\d{2}):(\d{2})[ T](\d{2}):(\d{2}):(\d{2})$/.exec(value);
   if (!match) return {};
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6]);
+  if (
+    !isValidCalendarDate(year, month, day)
+    || hour > 23
+    || minute > 59
+    || second > 59
+  ) {
+    return {};
+  }
   const local = `${match[1]}-${match[2]}-${match[3]}T${match[4]}:${match[5]}:${match[6]}`;
-  if (offset && /^[+-]\d{2}:\d{2}$/.test(offset)) {
+  const offsetMatch = offset?.match(/^([+-])(\d{2}):(\d{2})$/);
+  if (offsetMatch && Number(offsetMatch[2]) <= 23 && Number(offsetMatch[3]) <= 59) {
     return { capturedAt: `${local}${offset}` };
   }
   return { capturedLocal: local };
@@ -492,10 +524,16 @@ export function parseJpegExifPlacementSignal(buffer: ArrayBuffer): MediaPlacemen
 
       const exifIfd = readLongEntry(reader, findIfdEntry(reader, ifd0, 0x8769));
       if (exifIfd !== null) {
-        const dateTimeOriginal = readAsciiEntry(reader, findIfdEntry(reader, exifIfd, 0x9003))
-          ?? readAsciiEntry(reader, findIfdEntry(reader, exifIfd, 0x9004));
+        const dateTimeOriginal = readAsciiEntry(reader, findIfdEntry(reader, exifIfd, 0x9003));
+        const dateTimeDigitized = readAsciiEntry(reader, findIfdEntry(reader, exifIfd, 0x9004));
         const offsetTimeOriginal = readAsciiEntry(reader, findIfdEntry(reader, exifIfd, 0x9011));
-        Object.assign(signal, normalizeExifDateTime(dateTimeOriginal, offsetTimeOriginal));
+        const normalizedOriginal = normalizeExifDateTime(dateTimeOriginal, offsetTimeOriginal);
+        Object.assign(
+          signal,
+          Object.keys(normalizedOriginal).length > 0
+            ? normalizedOriginal
+            : normalizeExifDateTime(dateTimeDigitized, null),
+        );
       }
       return Object.keys(signal).length > 0 ? signal : null;
     }
