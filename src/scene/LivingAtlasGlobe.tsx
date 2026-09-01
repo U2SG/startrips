@@ -363,6 +363,7 @@ export function LivingAtlasGlobe({
               focusPoint={focusPoint}
               focusRoute={focusRoute}
               focusRevision={focusRevision}
+              focusFlightProfile={focusFlightProfile}
               language={detailLanguage}
               onGlobePointPick={onGlobePointPick}
               onOverviewRequest={() => beginTransition("particle")}

@@ -7,6 +7,17 @@ export const DEFAULT_DETAILED_EARTH_STYLE_URL = "/api/mapstyle?path=styles%2Ffio
 // Returning to the particle globe also avoids presenting a second world view.
 export const DETAILED_EARTH_RETURN_ZOOM = 5.85;
 export const DETAILED_EARTH_MIN_ZOOM = 5.6;
+
+export type DetailedEarthFocusFlightProfile = "nearby" | "regional" | "long-haul";
+
+export function getDetailedEarthFocusDuration(
+  profile: DetailedEarthFocusFlightProfile | undefined,
+) {
+  if (profile === "nearby") return 520;
+  if (profile === "long-haul") return 1_350;
+  return 900;
+}
+
 export const DETAILED_EARTH_INITIAL_ZOOM = 8;
 export const DETAILED_EARTH_MAX_ZOOM = 16;
 // MapLibre accepts pitches up to 85 degrees. Keep the camera out of the
