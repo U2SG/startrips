@@ -18,6 +18,15 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ## 2026-09-01
 
+### PR #139 - fix-deploy-utf8-console
+
+- **Source head:** `afd5b9def0f69422725e95cee0f6dc149e46898c`
+- **Scope:** Configures `scripts/deploy-main.py` stdout/stderr as UTF-8 with replacement fallback when the active Python streams support `reconfigure`, leaving deployment transport, server selection, host-key verification, and command execution unchanged.
+- **User-visible change:** Windows deployments can stream Unicode/Chinese deploy output without failing on a legacy console code page; unencodable characters degrade to replacement output instead of aborting the deployment process.
+- **Review fixes:** Rebased the single-purpose change onto current main and re-reviewed the resulting one-file diff; there are no unresolved review threads and no additional review-fix commits to preserve.
+- **Validation:** `python -m py_compile scripts/deploy-main.py` and `git diff --check origin/main...HEAD` pass on the rebased source head. GitHub CI on the final ledger head remains authoritative before merge.
+- **Follow-up:** None known.
+
 ### PR #142 - Parallelize browser QA in CI
 
 - **Source head:** `cac74af85f7d15d4186c653b81e83dcd31369d62`
