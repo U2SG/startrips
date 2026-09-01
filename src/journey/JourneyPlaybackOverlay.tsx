@@ -366,7 +366,7 @@ export function JourneyPlaybackOverlay({
   // reissuing the same point command across stop -> media chapters.
   const lastCameraTargetKeyRef = useRef<string | null>(null);
   useEffect(() => {
-    const target = playbackCameraTargetForStep(director.step);
+    const target = playbackCameraTargetForStep(director.step, journey);
     if (!target || !journey) return;
     const targetKey = `${journey.id}:${playbackCameraTargetKey(target)}`;
     if (lastCameraTargetKeyRef.current === targetKey) return;

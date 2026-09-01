@@ -10,12 +10,14 @@ import {
   createDetailedEarthLabelExpression,
   DETAILED_EARTH_DRAG_PAN_OPTIONS,
   getDetailedEarthRouteFrame,
+  getDetailedEarthFocusDuration,
   DETAILED_EARTH_INITIAL_ZOOM,
   DETAILED_EARTH_MAX_PITCH,
   DETAILED_EARTH_MAX_ZOOM,
   DETAILED_EARTH_MIN_ZOOM,
   DETAILED_EARTH_PITCH_SPEED,
   type DetailedEarthLanguage,
+  type DetailedEarthFocusFlightProfile,
   DETAILED_EARTH_ROTATE_SPEED,
   DETAILED_EARTH_TOUCH_ZOOM_RATE,
   DETAILED_EARTH_TOUCH_ZOOM_THRESHOLD,
@@ -29,6 +31,7 @@ type DetailedEarthMapProps = {
   focusPoint?: { lat: number; lon: number } | null;
   focusRoute?: JourneyRoute | null;
   focusRevision?: number;
+  focusFlightProfile?: DetailedEarthFocusFlightProfile;
   language: DetailedEarthLanguage;
   onGlobePointPick?: (point: { latitude: number; longitude: number }) => void;
   onOverviewRequest?: () => void;
@@ -76,6 +79,7 @@ export default function DetailedEarthMap({
   focusPoint,
   focusRoute,
   focusRevision = 0,
+  focusFlightProfile,
   language,
   onGlobePointPick,
   onOverviewRequest,
@@ -194,8 +198,13 @@ export default function DetailedEarthMap({
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
-    applyDetailedEarthFocus(map, focusPoint, focusRoute, 900);
-  }, [focusPoint, focusRevision, focusRoute]);
+    applyDetailedEarthFocus(
+      map,
+      focusPoint,
+      focusRoute,
+      getDetailedEarthFocusDuration(focusFlightProfile),
+    );
+  }, [focusFlightProfile, focusPoint, focusRevision, focusRoute]);
 
   useEffect(() => {
     const canvas = mapRef.current?.getCanvas();

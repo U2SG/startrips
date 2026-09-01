@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import { IconMap2, IconMapPin, IconWorld } from "@tabler/icons-react";
+import type { PlaybackTravelChoreography } from "../journey/journeyPlayback";
 import type { JourneyRoute } from "../journey/types";
 import type { DetailedEarthLanguage } from "./detailedEarthModel";
 import { GLOBE_MODE_CONFIG, ParticleEarthScene } from "./ParticleEarthScene";
@@ -101,6 +102,7 @@ export type LivingAtlasGlobeProps = {
   focusPoint?: { lat: number; lon: number } | null;
   focusRoute?: JourneyRoute | null;
   focusRevision?: number;
+  focusFlightProfile?: PlaybackTravelChoreography;
   focusColor?: string;
   journeyRoutes: readonly JourneyRoute[];
   activeJourneyRouteId?: string | null;
@@ -129,6 +131,7 @@ type AtlasEarthPresentation = Pick<
   | "focusPoint"
   | "focusRoute"
   | "focusRevision"
+  | "focusFlightProfile"
   | "focusColor"
   | "journeyRoutes"
   | "activeJourneyRouteId"
@@ -201,6 +204,7 @@ export function PersistentEarthProvider({ children }: { children: ReactNode }) {
                   focusPoint={atlas?.focusPoint}
                   focusRoute={atlas?.focusRoute}
                   focusRevision={atlas?.focusRevision}
+                  focusFlightProfile={atlas?.focusFlightProfile}
                   focusColor={atlas?.focusColor}
                   centerFocusPoint={Boolean(atlas)}
                   journeyRoutes={atlas?.journeyRoutes ?? []}
@@ -229,6 +233,7 @@ export function LivingAtlasGlobe({
   focusPoint,
   focusRoute,
   focusRevision,
+  focusFlightProfile,
   focusColor,
   journeyRoutes,
   activeJourneyRouteId,
@@ -253,6 +258,7 @@ export function LivingAtlasGlobe({
       focusPoint,
       focusRoute,
       focusRevision,
+      focusFlightProfile,
       focusColor,
       journeyRoutes,
       activeJourneyRouteId,
@@ -267,6 +273,7 @@ export function LivingAtlasGlobe({
     focusColor,
     focusPoint,
     focusRevision,
+    focusFlightProfile,
     focusRoute,
     journeyRoutes,
     onGlobePointPick,
@@ -356,6 +363,7 @@ export function LivingAtlasGlobe({
               focusPoint={focusPoint}
               focusRoute={focusRoute}
               focusRevision={focusRevision}
+              focusFlightProfile={focusFlightProfile}
               language={detailLanguage}
               onGlobePointPick={onGlobePointPick}
               onOverviewRequest={() => beginTransition("particle")}

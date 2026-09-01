@@ -18,6 +18,14 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ## 2026-09-01
 
+### PR #136 - Add distance-aware playback camera choreography
+
+- **Source head:** {source}
+- **Scope:** Adds deterministic distance-aware Journey Playback camera grammar. Travel legs are classified by spherical angular distance into nearby, regional, and long-haul profiles and that profile is carried through the persistent globe focus path without changing playback ordering, seek semantics, tempo planning, or media transport.
+- **User-visible change:** Nearby legs settle more quickly and directly; regional/long-haul legs use a restrained pullback before approaching the next route point, so intercontinental travel no longer uses exactly the same camera sentence as same-city movement. Stop/media chapters at the same point retain the existing stable camera key and do not retrigger travel motion.
+- **Review fixes:** Preserves the deterministic particle-globe distance choreography and fixes the latest P2 by forwarding the same flight profile into the visible `DetailedEarthMap`; detail mode now maps nearby/regional/long-haul legs to distinct focus durations instead of flattening every leg to 900 ms. Added regression coverage for duration ordering and the default.
+- **Follow-up:** #126 still owns remaining Playback V2 work. Rebased onto current main; Journey Playback + detailed-earth targeted tests are 27/27, production build and `git diff --check` are green. Repository typecheck remains blocked only by the same six pre-existing `S3Client.send` errors in `server/storage/s3-compatible-storage.ts`.
+
 ### PR #138 - Avoid near-expiry soundtrack signed reads
 
 - **Source head:** `d9a728308c13794d88a1f1b336c0d5de23cd3a4c`

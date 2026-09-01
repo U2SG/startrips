@@ -16,6 +16,7 @@ import {
   getDetailedEarthStyle,
   getDetailedEarthDragRotation,
   getDetailedEarthRouteFrame,
+  getDetailedEarthFocusDuration,
   clampDetailedEarthPitch,
   isDetailedEarthNameLabel,
   isRasterDetailedEarth,
@@ -130,5 +131,18 @@ describe("detailed-earth route framing", () => {
 
   it("ignores invalid points and returns null when no route geometry remains", () => {
     expect(getDetailedEarthRouteFrame([{ lat: Number.NaN, lon: 20 }])).toBeNull();
+  });
+});
+
+
+describe("getDetailedEarthFocusDuration", () => {
+  it("keeps distance-aware playback pacing distinct in detail mode", () => {
+    expect(getDetailedEarthFocusDuration("nearby")).toBeLessThan(
+      getDetailedEarthFocusDuration("regional"),
+    );
+    expect(getDetailedEarthFocusDuration("long-haul")).toBeGreaterThan(
+      getDetailedEarthFocusDuration("regional"),
+    );
+    expect(getDetailedEarthFocusDuration(undefined)).toBe(900);
   });
 });

@@ -40,6 +40,7 @@ import {
   selectCityCandidates,
   type CityPoint,
 } from "./cityLabels";
+import type { PlaybackTravelChoreography } from "../journey/journeyPlayback";
 import type { JourneyRoute } from "../journey/types";
 import {
   buildArtworkPointPositions,
@@ -906,6 +907,7 @@ interface ParticleEarthSceneProps {
   focusPoint?: { lat: number; lon: number } | null;
   focusRoute?: JourneyRoute | null;
   focusRevision?: number;
+  focusFlightProfile?: PlaybackTravelChoreography;
   focusColor?: string;
   centerFocusPoint?: boolean;
   onFocusPointActivate?: () => void;
@@ -1115,6 +1117,7 @@ export function ParticleEarthScene({
   focusPoint,
   focusRoute,
   focusRevision = 0,
+  focusFlightProfile,
   focusColor,
   centerFocusPoint = false,
   onFocusPointActivate,
@@ -1137,6 +1140,7 @@ export function ParticleEarthScene({
   const latestFocusPoint = useRef(focusPoint);
   const latestFocusRoute = useRef(focusRoute);
   const latestFocusRevision = useRef(focusRevision);
+  const latestFocusFlightProfile = useRef(focusFlightProfile);
   const latestFocusColor = useRef(focusColor);
   const latestCenterFocusPoint = useRef(centerFocusPoint);
   const latestOnFocusPointActivate = useRef(onFocusPointActivate);
@@ -1155,6 +1159,7 @@ export function ParticleEarthScene({
   latestFocusPoint.current = focusPoint;
   latestFocusRoute.current = focusRoute;
   latestFocusRevision.current = focusRevision;
+  latestFocusFlightProfile.current = focusFlightProfile;
   latestFocusColor.current = focusColor;
   latestCenterFocusPoint.current = centerFocusPoint;
   latestOnFocusPointActivate.current = onFocusPointActivate;
@@ -3243,8 +3248,13 @@ export function ParticleEarthScene({
         host.dataset.focusArrivalErrorPx = solvedFocusRotation.errorPx.toFixed(2);
       }
       const snap = reduceMotion ? 1 : 0;
+      const flightSpeed = latestFocusFlightProfile.current === "nearby"
+        ? 7.2
+        : latestFocusFlightProfile.current === "long-haul"
+          ? 4.4
+          : 5.5;
       const interpolate = (value: number, next: number) =>
-        snap ? next : damp(value, next, delta);
+        snap ? next : damp(value, next, delta, focusFlightActive ? flightSpeed : 5.5);
       let focusSettledThisFrame = false;
       for (const material of particleDimmingMaterials) {
         material.uniforms.uActiveDimStrength.value = interpolate(
@@ -3261,10 +3271,14 @@ export function ParticleEarthScene({
       ) {
         interactiveRotationX = interpolate(interactiveRotationX, targetRotationX);
         interactiveRotationY = interpolate(interactiveRotationY, 0);
+        if (latestFocusFlightProfile.current) {
+          interactiveZoom = interpolate(interactiveZoom, 1);
+        }
         if (
           Math.abs(getShortestRotationDelta(interactiveRotationX, targetRotationX)) < 0.002
           && Math.abs(interactiveRotationY) < 0.002
           && Math.abs(getShortestRotationDelta(baseRotationY, targetBaseRotationY)) < 0.003
+          && (!latestFocusFlightProfile.current || Math.abs(interactiveZoom - 1) < 0.003)
           && Math.abs(globe.scale.x - target.scale * interactiveZoom) < 0.003
         ) {
           interactiveRotationX = targetRotationX;
@@ -3544,6 +3558,11 @@ export function ParticleEarthScene({
           && point
         ) {
           interactiveRotationY = 0;
+          if (latestFocusFlightProfile.current === "long-haul") {
+            interactiveZoom = Math.min(interactiveZoom, 0.78);
+          } else if (latestFocusFlightProfile.current === "regional") {
+            interactiveZoom = Math.min(interactiveZoom, 0.9);
+          }
           rotationVelocityX = 0;
           rotationVelocityY = 0;
           lastGlobeInteractionAt = performance.now();
