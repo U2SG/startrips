@@ -25,6 +25,17 @@ except ImportError as error:  # pragma: no cover - environment preflight
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def configure_utf8_stdio() -> None:
+    """Keep streamed UTF-8 deploy output printable on Windows consoles."""
+    for stream_name in ("stdout", "stderr"):
+        stream = getattr(sys, stream_name)
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            reconfigure(encoding="utf-8", errors="replace")
+
+
 SERVER_PATTERN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$")
 USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 DEFAULT_HOST_KEY_SHA256 = {
@@ -451,6 +462,7 @@ true
 
 
 if __name__ == "__main__":
+    configure_utf8_stdio()
     try:
         raise SystemExit(main())
     except (
