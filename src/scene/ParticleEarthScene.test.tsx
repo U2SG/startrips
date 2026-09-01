@@ -59,6 +59,7 @@ import {
   isReliablePinchAnchor,
   projectedRadiusRotationDelta,
   rebaseGlobeDragSample,
+  releaseFailedParticleRefinementRequest,
   selectRenderableJourneyRoutes,
   selectRouteLabelPointIndexes,
   shouldFocusRevisionOwnState,
@@ -68,7 +69,7 @@ import {
 import { disposeSceneGraph } from "./useThreeScene";
 
 describe("ParticleEarthScene contracts", () => {
-  it("retries failed particle resources while keeping successful loads single-flight", async () => {
+  it("retries the same refinement region after source failures", async () => {
     let attempt = 0;
     const load = vi.fn(async () => {
       attempt += 1;
@@ -77,19 +78,46 @@ describe("ParticleEarthScene contracts", () => {
       return { source: "land-mask" };
     });
     const loadResource = createRetryableParticleResourceLoader(load);
+    let requestedCacheKey: string | null = null;
+    const requestRegion = async (cacheKey: string) => {
+      if (requestedCacheKey === cacheKey) return "deduped";
+      requestedCacheKey = cacheKey;
+      const source = await loadResource();
+      if (!source) {
+        requestedCacheKey = releaseFailedParticleRefinementRequest({
+          requestedCacheKey,
+          failedCacheKey: cacheKey,
+          requestIsCurrent: true,
+        });
+        return "unavailable";
+      }
+      return "ready";
+    };
 
-    const unavailable = loadResource();
-    expect(loadResource()).toBe(unavailable);
-    await expect(unavailable).resolves.toBeNull();
+    const cacheKey = "high:12:108";
+    const unavailableRequest = requestRegion(cacheKey);
+    const unavailableSource = loadResource();
+    expect(loadResource()).toBe(unavailableSource);
+    await expect(unavailableSource).resolves.toBeNull();
+    await expect(unavailableRequest).resolves.toBe("unavailable");
     expect(load).toHaveBeenCalledTimes(1);
+    expect(requestedCacheKey).toBeNull();
 
-    await expect(loadResource()).resolves.toBeNull();
+    await expect(requestRegion(cacheKey)).resolves.toBe("unavailable");
     expect(load).toHaveBeenCalledTimes(2);
+    expect(requestedCacheKey).toBeNull();
 
+    await expect(requestRegion(cacheKey)).resolves.toBe("ready");
     const recovered = loadResource();
     await expect(recovered).resolves.toEqual({ source: "land-mask" });
     expect(loadResource()).toBe(recovered);
     expect(load).toHaveBeenCalledTimes(3);
+
+    expect(releaseFailedParticleRefinementRequest({
+      requestedCacheKey: "high:24:120",
+      failedCacheKey: "high:12:108",
+      requestIsCurrent: false,
+    })).toBe("high:24:120");
   });
 
   it("maps the same drag to comparable screen motion across globe zoom levels", () => {

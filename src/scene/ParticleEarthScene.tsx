@@ -998,6 +998,20 @@ export function createRetryableParticleResourceLoader<T>(
   };
 }
 
+export function releaseFailedParticleRefinementRequest({
+  requestedCacheKey,
+  failedCacheKey,
+  requestIsCurrent,
+}: {
+  requestedCacheKey: string | null;
+  failedCacheKey: string;
+  requestIsCurrent: boolean;
+}) {
+  return requestIsCurrent && requestedCacheKey === failedCacheKey
+    ? null
+    : requestedCacheKey;
+}
+
 function unwrapRing(ring: number[][], width: number) {
   const points: Array<[number, number]> = [];
   let previousX: number | null = null;
@@ -3351,12 +3365,20 @@ export function ParticleEarthScene({
       refinementBuildState = "building";
       void (async () => {
         const source = await loadParticleRefinementLandMask();
+        const requestIsCurrent = refinementBuildGuard.isCurrent(ticket);
         if (
           !source
           || currentQuality !== qualityAtRequest
-          || !refinementBuildGuard.isCurrent(ticket)
+          || !requestIsCurrent
         ) {
-          if (refinementBuildGuard.isCurrent(ticket)) {
+          if (!source) {
+            requestedRefinementCacheKey = releaseFailedParticleRefinementRequest({
+              requestedCacheKey: requestedRefinementCacheKey,
+              failedCacheKey: cacheKey,
+              requestIsCurrent,
+            });
+          }
+          if (requestIsCurrent) {
             refinementBuildState = source ? "cancelled" : "source-unavailable";
           }
           return;
