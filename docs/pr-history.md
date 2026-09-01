@@ -20,11 +20,11 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ### PR #132 - Keep playback controls visible for keyboard focus
 
-- **Source head:** `32b5386f3551e7deb74468586d441247e1bbe554`
+- **Source head:** `b020b62d44aa3d7929b1da2eb8bd04e48f3a2d1b`
 - **Scope:** Refines Journey Playback chrome idle ownership without changing playback order, timer budgets, media synchronization, or the separate Playback V2 timeline/navigation work. The overlay tracks pointer/touch versus keyboard input modality across automatic step changes and gates the existing idle fade accordingly.
 - **User-visible change:** Playback controls still fade after 2.5 seconds of uninterrupted pointer/touch viewing, but they stay visible while playback is paused and no longer disappear underneath a keyboard user's active focus.
-- **Review fixes:** Self-review caught that a local keyboard-modality flag would reset on every automatic playback step; the final implementation persists modality in a ref so focused keyboard controls remain visible across chapter changes while programmatic initial focus does not disable normal mobile/pointer auto-hide.
-- **Follow-up:** #126 still owns tempo re-planning, scrub timeline, cinematic spatial grammar, and the remaining Playback V2 work. Targeted playback/control tests are 20/20, the client/source suite is 33 files / 323 tests, client typecheck and production build are green, and `git diff --check` is green. Full typecheck remains blocked only by the existing six `S3Client.send` errors in `server/storage/s3-compatible-storage.ts`.
+- **Review fixes:** Self-review kept input modality persistent across playback steps; the final review fix also keeps pointer/touch/keyboard modality listeners attached while playback is paused, so clicking Play after a keyboard pause correctly restores pointer ownership and normal idle auto-hide instead of leaving focused chrome pinned indefinitely.
+- **Follow-up:** #126 still owns tempo re-planning, scrub timeline, cinematic spatial grammar, and the remaining Playback V2 work. Revalidated on latest main: targeted playback/control tests 25/25 green, production build and `git diff --check` green; the broader test run passed 397 tests with only the existing 9 AWS SDK load failures, and server typecheck remains blocked only by the existing six `S3Client.send` errors in `server/storage/s3-compatible-storage.ts`.
 
 ### PR #125 - Reject malformed EXIF GPS DMS components
 
