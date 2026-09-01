@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   JourneyStory,
   finalizeMediaDragCommit,
+  scheduleCancelableMediaDragSettle,
   journeyDeleteDescription,
   mobileStoryExpandedForLayout,
   mobileStoryHistoryLayers,
@@ -55,6 +56,49 @@ describe("finalizeMediaDragCommit (#65)", () => {
     );
 
     expect(events).toEqual(["flush-start", "commit", "flush-end", "cleanup"]);
+  });
+});
+
+describe("scheduleCancelableMediaDragSettle (#140)", () => {
+  it("cancels stale settle work before it can commit into a new Story scope", () => {
+    const events: string[] = [];
+    const scheduled: { current: (() => void) | null } = { current: null };
+    const cancel = scheduleCancelableMediaDragSettle(
+      () => events.push("commit"),
+      () => events.push("cleanup"),
+      220,
+      (callback) => {
+        scheduled.current = callback;
+        return 7;
+      },
+      (timerId) => events.push(`clear:${timerId}`),
+    );
+
+    cancel();
+    scheduled.current?.();
+    cancel();
+
+    expect(events).toEqual(["clear:7", "cleanup"]);
+  });
+
+  it("runs the settle once and makes later cancellation a no-op", () => {
+    const events: string[] = [];
+    const scheduled: { current: (() => void) | null } = { current: null };
+    const cancel = scheduleCancelableMediaDragSettle(
+      () => events.push("commit"),
+      () => events.push("cleanup"),
+      220,
+      (callback) => {
+        scheduled.current = callback;
+        return 11;
+      },
+      (timerId) => events.push(`clear:${timerId}`),
+    );
+
+    scheduled.current?.();
+    cancel();
+
+    expect(events).toEqual(["commit"]);
   });
 });
 
