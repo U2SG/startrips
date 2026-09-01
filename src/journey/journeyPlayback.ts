@@ -218,6 +218,8 @@ export function stepDurationMs(
 
 export type PlaybackControl =
   | { type: "advance" }
+  | { type: "next" }
+  | { type: "previous" }
   | { type: "back" }
   | { type: "pause" }
   | { type: "resume" }
@@ -232,6 +234,30 @@ export type PlaybackState = {
 
 export function initialPlaybackState(): PlaybackState {
   return { stepIndex: 0, phase: { type: "intro" }, paused: false };
+}
+
+export function isMeaningfulPlaybackStep(step: PlaybackStep | undefined): boolean {
+  return Boolean(step && step.kind !== "travel");
+}
+
+export function nextMeaningfulPlaybackStepIndex(
+  steps: readonly PlaybackStep[],
+  currentIndex: number,
+): number {
+  for (let index = Math.max(0, currentIndex + 1); index < steps.length; index += 1) {
+    if (isMeaningfulPlaybackStep(steps[index])) return index;
+  }
+  return Math.min(Math.max(0, currentIndex), Math.max(0, steps.length - 1));
+}
+
+export function previousMeaningfulPlaybackStepIndex(
+  steps: readonly PlaybackStep[],
+  currentIndex: number,
+): number {
+  for (let index = Math.min(currentIndex - 1, steps.length - 1); index >= 0; index -= 1) {
+    if (isMeaningfulPlaybackStep(steps[index])) return index;
+  }
+  return Math.min(Math.max(0, currentIndex), Math.max(0, steps.length - 1));
 }
 
 /**
@@ -259,6 +285,16 @@ export function playbackReducer(
       const next = Math.min(lastIndex, state.stepIndex + 1);
       if (state.paused) return state;
       return { stepIndex: next, phase: phaseForStep(steps[next]), paused: false };
+    }
+    case "next": {
+      if (state.paused) return state;
+      const next = nextMeaningfulPlaybackStepIndex(steps, state.stepIndex);
+      return { stepIndex: next, phase: phaseForStep(steps[next]), paused: false };
+    }
+    case "previous": {
+      if (state.paused) return state;
+      const previous = previousMeaningfulPlaybackStepIndex(steps, state.stepIndex);
+      return { stepIndex: previous, phase: phaseForStep(steps[previous]), paused: false };
     }
     case "back": {
       const previous = Math.max(0, state.stepIndex - 1);
