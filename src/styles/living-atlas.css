@@ -4242,7 +4242,8 @@
 .living-atlas.is-globe-picking .living-atlas__globe-focus-exit,
 .living-atlas.is-globe-picking .globe-time-scrubber,
 body:has(.journey-composer-backdrop.is-globe-picking) .living-atlas-globe__controls,
-body:has(.journey-composer-backdrop.is-globe-picking) .account-dock {
+body:has(.journey-composer-backdrop.is-globe-picking) .account-dock,
+body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigger {
   visibility: hidden;
   opacity: 0;
   pointer-events: none;
@@ -5089,7 +5090,8 @@ body:has(.journey-composer-backdrop.is-globe-picking) .account-dock {
     pointer-events: none;
   }
 
-  .journey-story-backdrop.is-mobile-context .journey-story {
+  .journey-story-backdrop.is-mobile-context .journey-story,
+  .journey-story-backdrop.is-mobile-context .journey-story-fullscreen {
     pointer-events: auto;
   }
 

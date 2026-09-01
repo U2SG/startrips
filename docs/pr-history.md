@@ -18,6 +18,16 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ## 2026-09-01
 
+### PR #118 — Restore CI integration and mobile pointer baselines
+
+- **Source head:** `d7a049cbc45687401654810998aeeb81d8c5feef`
+- **Scope:** Restores the CI baseline uncovered after GitHub Actions quota recovery. The PostgreSQL integration scenario restores both destination route-point placement and exact destination ordering before retrying a stale cross-Journey Undo descriptor. Mobile Story restores Escape ownership for nested management surfaces and real pointer ownership for fullscreen media. Post-login QA follows the rendered account host contract: Mobile V2 trigger/sheet in the Atlas shell and standalone dock fallback in focused globe-control previews. Mobile modal layering now gives Story declarative ownership of the parent Journey sheet inert state while the real-map modal keeps its existing `useModalFocus` ownership.
+- **User-visible change:** Mobile fullscreen media now receives real touch/pointer input instead of passing hit-testing through to inline Story media. Escape closes the active nested media-management surface before unwinding Manage mode. Globe point-picking hides the Mobile V2 account trigger. Opening Story from the mobile Journey sheet now removes the underlying sheet from the interaction/accessibility tree and restores it after Back without leaving stale inert state.
+- **Review fixes:** Kept the production stale-Undo guard unchanged and corrected the integration test to restore the full state it claims to restore. Fixed mobile fullscreen pointer-event ownership, commit-driven Journey-delete focus restoration, Mobile V2 account-host QA selection, account collision measurement against real sibling controls instead of its containing nav, and the Story-vs-map inert ownership race that could leave the Journey sheet permanently inert after closing the real map.
+- **Validation:** GitHub CI run `33490802390` on code head `d7a049c` passed migrations, Typecheck, full Test/PostgreSQL integration, Chromium login/media/post-login QA, Build, and job cleanup.
+- **Follow-up:** After this ledger-only head is re-reviewed and CI remains green, #65 can be audited for closure and the other open PRs can update to the repaired main baseline before rerunning their own CI.
+
+
 ### PR #108 - Bound particle-globe gestures to two pointers
 
 - **Source head:** `b105c76ffa1f2ae51799d61d557d7f1465765097`

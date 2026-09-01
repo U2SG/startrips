@@ -727,6 +727,20 @@ describe("media and atlas HTTP endpoints", () => {
     });
     expect(restoreDestinationPlacement.status).toBe(200);
 
+    // Reclassification is intentionally a same-Journey move, so it appends the
+    // selected asset and therefore changes the destination order. Restore the
+    // exact post-move order recorded by the Undo descriptor before asserting
+    // that the original descriptor is valid again.
+    const restoreDestinationOrder = await app.request(`${TEST_ORIGIN}/api/uploads/assets/reorder`, {
+      method: "POST",
+      headers: authHeaders(identity.cookie),
+      body: JSON.stringify({
+        journeyId: destination.id,
+        assetIds: movedPayload.undo.targetOrder,
+      }),
+    });
+    expect(restoreDestinationOrder.status).toBe(200);
+
     // Invalid selection must roll back the entire batch and leave c.jpg in source.
     const invalidBatch = await app.request(`${TEST_ORIGIN}/api/uploads/assets/move`, {
       method: "POST",
