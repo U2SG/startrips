@@ -980,8 +980,23 @@ interface ParticleRefinementLayer {
   points: Points;
 }
 
-let particleLandMaskPromise: Promise<ParticleLandMask | null> | null = null;
-let particleRefinementLandMaskPromise: Promise<ParticleLandMask | null> | null = null;
+export function createRetryableParticleResourceLoader<T>(
+  load: () => Promise<T | null>,
+): () => Promise<T | null> {
+  let current: Promise<T | null> | null = null;
+  return () => {
+    if (current) return current;
+    const request: Promise<T | null> = Promise.resolve()
+      .then(load)
+      .catch(() => null)
+      .then((value) => {
+        if (value === null && current === request) current = null;
+        return value;
+      });
+    current = request;
+    return request;
+  };
+}
 
 function unwrapRing(ring: number[][], width: number) {
   const points: Array<[number, number]> = [];
@@ -1063,21 +1078,13 @@ async function buildParticleLandMask(source: {
   };
 }
 
-async function loadParticleLandMask() {
-  if (!particleLandMaskPromise) {
-    particleLandMaskPromise = buildParticleLandMask(PARTICLE_BASE_LAND_SOURCE).catch(() => null);
-  }
-  return particleLandMaskPromise;
-}
+const loadParticleLandMask = createRetryableParticleResourceLoader(
+  () => buildParticleLandMask(PARTICLE_BASE_LAND_SOURCE),
+);
 
-async function loadParticleRefinementLandMask() {
-  if (!particleRefinementLandMaskPromise) {
-    particleRefinementLandMaskPromise = buildParticleLandMask(
-      PARTICLE_REFINEMENT_LAND_SOURCE,
-    ).catch(() => null);
-  }
-  return particleRefinementLandMaskPromise;
-}
+const loadParticleRefinementLandMask = createRetryableParticleResourceLoader(
+  () => buildParticleLandMask(PARTICLE_REFINEMENT_LAND_SOURCE),
+);
 
 function isParticleLand(source: ParticleLandMask, lat: number, lon: number) {
   const longitudeUnit = (((lon + 180) % 360) + 360) % 360 / 360;

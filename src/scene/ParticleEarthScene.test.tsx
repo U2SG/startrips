@@ -38,6 +38,7 @@ import {
   clampGlobeTilt,
   journeyConnectorAnchor,
   clampGlobeZoom,
+  createRetryableParticleResourceLoader,
   getJourneyRouteLineScale,
   getJourneyRouteVisualState,
   getGlobeIdleAlignmentRotation,
@@ -67,6 +68,30 @@ import {
 import { disposeSceneGraph } from "./useThreeScene";
 
 describe("ParticleEarthScene contracts", () => {
+  it("retries failed particle resources while keeping successful loads single-flight", async () => {
+    let attempt = 0;
+    const load = vi.fn(async () => {
+      attempt += 1;
+      if (attempt === 1) return null;
+      if (attempt === 2) throw new Error("transient fetch failure");
+      return { source: "land-mask" };
+    });
+    const loadResource = createRetryableParticleResourceLoader(load);
+
+    const unavailable = loadResource();
+    expect(loadResource()).toBe(unavailable);
+    await expect(unavailable).resolves.toBeNull();
+    expect(load).toHaveBeenCalledTimes(1);
+
+    await expect(loadResource()).resolves.toBeNull();
+    expect(load).toHaveBeenCalledTimes(2);
+
+    const recovered = loadResource();
+    await expect(recovered).resolves.toEqual({ source: "land-mask" });
+    expect(loadResource()).toBe(recovered);
+    expect(load).toHaveBeenCalledTimes(3);
+  });
+
   it("maps the same drag to comparable screen motion across globe zoom levels", () => {
     const viewportHeight = 844;
     const fov = (38 * Math.PI) / 180;
