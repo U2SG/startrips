@@ -20,11 +20,11 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ### PR #131 - Stabilize gateway refetch recovery QA
 
-- **Source head:** `90afdf3d9a4be3263e2dff8bbf617174c60dc5b7`
-- **Scope:** Makes the `gateway-refetch-failure-recovery` browser QA wait for the recovered Login V3 card itself to become visible after the auth continuity host returns to login, instead of relying on a fixed 350 ms delay before reading handoff and pointer ownership.
-- **User-visible change:** None; this only makes the CI recovery gate deterministic. The production authentication and playback flows are unchanged.
-- **Review fixes:** The main push after PR #129 exposed a mount-order race where `.auth-continuity.is-login` could be observable before `.auth-card--login-v3` mounted, producing a false `handoff=true` / `pointerEvents=null` failure. The gate now waits for the real card while preserving the requirement that a post-sign-in session request occurred and that the recovered card is interactive.
-- **Follow-up:** Main CI run `33495049599` / job `99815180594` was the motivating failure; PR #129's pre-merge run had passed the same scenario and #129 did not modify auth/gateway code. Focused `pnpm qa:login-v3` and `git diff --check` are green on the source head. GitHub PR verify remains authoritative before merge.
+- **Source head:** `78b890d4de1da60f7213526e65a4f1c0af9a5ed6`
+- **Scope:** Makes the `gateway-refetch-failure-recovery` browser QA wait on the two facts the scenario actually owns: at least one post-sign-in `/get-session` failure response has completed, and the recovered Login V3 card is visible/interactable. This replaces fixed-delay and cross-layer timing assumptions with deterministic network + UI readiness gates.
+- **User-visible change:** None; this only makes the CI recovery gate deterministic. Production authentication and playback flows are unchanged.
+- **Review fixes:** The main push after PR #129 first exposed a mount-order race where `.auth-continuity.is-login` could be observable before `.auth-card--login-v3` mounted. PR CI then exposed the inverse ordering: the card could already be visible while the intended failed post-sign-in session refetch had not completed. The QA now records completed failed session responses and waits for that metric before asserting the recovered interactive login card, while retaining the requirement that a post-sign-in session request occurred.
+- **Follow-up:** Main CI run `33495049599` / job `99815180594` was the motivating failure; PR #131 run `33499818600` exposed the second ordering race (`postSignInSessionRequests=0`). GitHub PR verify remains authoritative before merge.
 
 ### PR #129 - Preserve playback progress across pause and resume
 
