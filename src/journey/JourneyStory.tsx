@@ -114,6 +114,27 @@ export function finalizeMediaDragCommit(
   cleanup();
 }
 
+export function scheduleCancelableMediaDragSettle(
+  run: () => void,
+  cleanup: () => void,
+  delayMs = MEDIA_DRAG_SETTLE_MS,
+  schedule: (callback: () => void, delay: number) => number = (callback, delay) => window.setTimeout(callback, delay),
+  cancel: (timerId: number) => void = (timerId) => window.clearTimeout(timerId),
+) {
+  let active = true;
+  const timerId = schedule(() => {
+    if (!active) return;
+    active = false;
+    run();
+  }, delayMs);
+  return () => {
+    if (!active) return;
+    active = false;
+    cancel(timerId);
+    cleanup();
+  };
+}
+
 type MediaReadState =
   | { status: "loading" }
   | { status: "ready"; url: string; expiresAt: number }
@@ -669,6 +690,7 @@ export function JourneyStory({
     width: number;
   } | null>(null);
   const mediaDragSettlingRef = useRef(false);
+  const mediaDragSettleCancelRef = useRef<(() => void) | null>(null);
   const [mobileManageMode, setMobileManageMode] = useState(false);
   const mobileManageDoneRef = useRef<HTMLButtonElement>(null);
   const mobileManageViewerTriggerRef = useRef<HTMLButtonElement>(null);
@@ -936,6 +958,8 @@ export function JourneyStory({
   );
 
   useEffect(() => {
+    cancelPendingMediaDragSettle();
+
     const nextInitialMedia = storyInitialMediaSelection(journey, routePointId);
     setAssetIndex(nextInitialMedia.assetIndex);
     setSelectedRoutePointId(nextInitialMedia.routePointId);
@@ -977,6 +1001,9 @@ export function JourneyStory({
       audio.pause();
       audio.currentTime = 0;
     }
+    return () => {
+      cancelPendingMediaDragSettle();
+    };
   }, [journeyId, routePointId]);
 
   useEffect(() => {
@@ -1667,6 +1694,16 @@ export function JourneyStory({
     applyMediaDragTransform();
   }
 
+  function cancelPendingMediaDragSettle() {
+    const cancelPendingSettle = mediaDragSettleCancelRef.current;
+    mediaDragSettleCancelRef.current = null;
+    cancelPendingSettle?.();
+    const activeDrag = mediaDragRef.current;
+    mediaDragRef.current = null;
+    if (activeDrag) finishMediaDrag(activeDrag);
+    mediaDragSettlingRef.current = false;
+  }
+
   function finishMediaDrag(drag: NonNullable<typeof mediaDragRef.current>) {
     drag.base.style.transition = "";
     drag.base.style.transform = "";
@@ -1746,16 +1783,24 @@ export function JourneyStory({
       const edge = drag.dx < 0 ? -drag.width : drag.width;
       drag.base.style.transform = `translateX(${edge}px)`;
       if (drag.peek) drag.peek.style.transform = "translateX(0)";
-      window.setTimeout(() => {
-        // Commit the semantic target before removing the already-visible peek.
-        // Otherwise the imperative cleanup can briefly snap the old base back
-        // to center while React has not committed the new media node yet.
-        finalizeMediaDragCommit(
-          () => landMediaDrag(asset, index),
-          () => finishMediaDrag(drag),
-        );
-        mediaDragSettlingRef.current = false;
-      }, MEDIA_DRAG_SETTLE_MS);
+      mediaDragSettleCancelRef.current?.();
+      mediaDragSettleCancelRef.current = scheduleCancelableMediaDragSettle(
+        () => {
+          mediaDragSettleCancelRef.current = null;
+          // Commit the semantic target before removing the already-visible peek.
+          // Otherwise the imperative cleanup can briefly snap the old base back
+          // to center while React has not committed the new media node yet.
+          finalizeMediaDragCommit(
+            () => landMediaDrag(asset, index),
+            () => finishMediaDrag(drag),
+          );
+          mediaDragSettlingRef.current = false;
+        },
+        () => {
+          finishMediaDrag(drag);
+          mediaDragSettlingRef.current = false;
+        },
+      );
       return;
     }
     drag.base.style.transform = "translateX(0)";
@@ -1763,11 +1808,19 @@ export function JourneyStory({
       const edge = drag.dx < 0 ? drag.width : -drag.width;
       drag.peek.style.transform = `translateX(${edge}px)`;
     }
-    window.setTimeout(() => {
-      finishMediaDrag(drag);
-      mediaDragSettlingRef.current = false;
-      if (commit && asset) navigateToMedia(drag.neighborIndex);
-    }, MEDIA_DRAG_SETTLE_MS);
+    mediaDragSettleCancelRef.current?.();
+    mediaDragSettleCancelRef.current = scheduleCancelableMediaDragSettle(
+      () => {
+        mediaDragSettleCancelRef.current = null;
+        finishMediaDrag(drag);
+        mediaDragSettlingRef.current = false;
+        if (commit && asset) navigateToMedia(drag.neighborIndex);
+      },
+      () => {
+        finishMediaDrag(drag);
+        mediaDragSettlingRef.current = false;
+      },
+    );
   }
 
   function handleStoryMediaPointerDown(event: ReactPointerEvent<HTMLElement>) {
@@ -2017,6 +2070,7 @@ export function JourneyStory({
   function confirmPlacementUpload(targetRoutePointId: string | null) {
     if (!placementReview || mutationPending) return;
     const files = placementReview.files;
+    cancelPendingMediaDragSettle();
     setSelectedRoutePointId(targetRoutePointId);
     setPlacementReview(null);
     void uploadFiles(files, targetRoutePointId);
@@ -2120,6 +2174,7 @@ export function JourneyStory({
 
   function selectMediaScope(routePointId: string | null) {
     if (mutationPending) return;
+    cancelPendingMediaDragSettle();
     setPlayingFromGesture(false);
     setSelectedRoutePointId(routePointId);
     setAssetIndex(0);

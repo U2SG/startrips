@@ -18,6 +18,15 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ## 2026-09-01
 
+### PR #141 - Cancel stale carousel settle after Story scope changes
+
+- **Source head:** `c6442f0c35298fabba6c96076e07762f3eda5ca2`
+- **Scope:** Rebases the cancellable mobile Story/fullscreen carousel settle lifecycle onto `main@5a078ac` after the parallel-CI baseline. Pending settle timers and active drag visuals are cancelled for external Journey/route-point changes, Story unmount, and internal media-scope changes before the new scope can accept stale settle work.
+- **User-visible change:** Switching Journey or route-point during the 220 ms mobile swipe settle can no longer let a delayed callback from the previous scope select an old asset/index or restore stale drag visuals. This now also covers route-point scope changes initiated inside Story and placement-confirmation flows.
+- **Review fixes:** The existing single-run cancellable settle scheduler is preserved. The current P2 review is addressed by synchronously calling the shared pending-drag cancellation helper before `selectMediaScope()` and `confirmPlacementUpload()` update `selectedRoutePointId`, while the Journey/prop reset and unmount paths reuse the same helper.
+- **Validation:** Rebased onto `main@7869146`; `JourneyStory.test.ts` 38/38, full `src` 32 files / 322 tests, TypeScript, production build, and `git diff --check` are green. GitHub final-head CI remains authoritative before merge.
+- **Follow-up:** None known for this stale-settle cancellation slice.
+
 ### PR #139 - fix-deploy-utf8-console
 
 - **Source head:** `afd5b9def0f69422725e95cee0f6dc149e46898c`
