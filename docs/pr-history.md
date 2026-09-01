@@ -18,6 +18,14 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ## 2026-09-01
 
+### PR #133 - Upgrade CI actions to Node 24 runtimes
+
+- **Source head:** `5cc3b9be1af0712624c3cfd43f6ac79b9db8b82a`
+- **Scope:** Upgrades the JavaScript action runtimes used by CI from `actions/checkout@v4`, `pnpm/action-setup@v4`, and `actions/setup-node@v4` to `checkout@v7`, `pnpm/action-setup@v6`, and `setup-node@v7`. The project test/runtime target remains pinned to Node.js 22.
+- **User-visible change:** None; this is CI maintenance only.
+- **Review fixes:** Separates GitHub Action runtime compatibility from the application's Node.js runtime so the Node 20 deprecation warning can be removed without changing the app's Node.js 22 test/build baseline.
+- **Follow-up:** Merge only after PR #133 GitHub `verify` is green and review has no blocker; then validate the merge-to-main push run before rebasing the remaining open PRs onto the new baseline.
+
 ### PR #131 - Stabilize gateway refetch recovery QA
 
 - **Source head:** `78b890d4de1da60f7213526e65a4f1c0af9a5ed6`
