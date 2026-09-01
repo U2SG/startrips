@@ -11,6 +11,7 @@ import {
   mediaForRoutePoint,
   mediaForUploadRefreshScope,
   mediaMoveUndoForSelection,
+  retainMediaMoveUndoAfterError,
   replaceJourneySoundtrack,
   storyAssetIndexForId,
   storyAutoplayNextIndex,
@@ -21,6 +22,7 @@ import {
   storySelectionContainsRoutePointMedia,
   storyUploadedAssetIndex,
 } from "./JourneyStory";
+import { JourneyApiError } from "./journeyApi";
 import type { Journey, JourneyMediaAsset } from "./types";
 
 const journey: Journey = {
@@ -140,6 +142,23 @@ describe("mediaForUploadRefreshScope (#111 review)", () => {
     };
     expect(mediaForUploadRefreshScope(refreshed, "new-point").map((item) => item.id))
       .toEqual(["uploaded-media"]);
+  });
+});
+
+describe("retainMediaMoveUndoAfterError", () => {
+  it("keeps the descriptor for network and retryable HTTP failures", () => {
+    expect(retainMediaMoveUndoAfterError(new TypeError("network failed"))).toBe(true);
+    expect(retainMediaMoveUndoAfterError(new JourneyApiError(503, "REQUEST_FAILED", "retry"))).toBe(true);
+    expect(retainMediaMoveUndoAfterError(new JourneyApiError(429, "RATE_LIMITED", "retry"))).toBe(true);
+  });
+
+  it("drops the descriptor for confirmed stale or other non-retryable failures", () => {
+    expect(retainMediaMoveUndoAfterError(
+      new JourneyApiError(409, "MEDIA_MOVE_UNDO_STALE", "stale"),
+    )).toBe(false);
+    expect(retainMediaMoveUndoAfterError(
+      new JourneyApiError(400, "INVALID_MEDIA_MOVE_UNDO", "invalid"),
+    )).toBe(false);
   });
 });
 

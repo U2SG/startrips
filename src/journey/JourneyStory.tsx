@@ -333,6 +333,14 @@ export function mediaMoveUndoForSelection(
   };
 }
 
+export function retainMediaMoveUndoAfterError(error: unknown): boolean {
+  if (!(error instanceof JourneyApiError)) return true;
+  return error.status >= 500
+    || error.status === 408
+    || error.status === 425
+    || error.status === 429;
+}
+
 export function storyInitialMediaSelection(
   journey: Journey | undefined,
   requestedRoutePointId: string | null,
@@ -2467,14 +2475,15 @@ export function JourneyStory({
     try {
       await undoJourneyMediaMove(undo);
     } catch (error) {
+      const stale = error instanceof JourneyApiError && error.code === "MEDIA_MOVE_UNDO_STALE";
       setMoveMessage(
-        error instanceof JourneyApiError && error.code === "MEDIA_MOVE_UNDO_STALE"
+        stale
           ? "媒体在移动后又发生了变化，无法安全撤销。"
           : error instanceof Error
             ? error.message
             : "撤销失败，请稍后重试。",
       );
-      setMoveUndo(null);
+      if (!retainMediaMoveUndoAfterError(error)) setMoveUndo(null);
       setMovePending(false);
       return;
     }
@@ -2482,7 +2491,10 @@ export function JourneyStory({
     setMoveUndo(null);
     setMoveMessage("已撤销媒体移动");
     try {
-      await onMediaAdded(journey.id);
+      const refreshedJourney = await onMediaAdded(journey.id);
+      if (!refreshedJourney) {
+        setMoveMessage("媒体移动已撤销，但当前列表刷新失败。重新打开旅程即可看到服务器状态。");
+      }
     } catch {
       setMoveMessage("媒体移动已撤销，但当前列表刷新失败。重新打开旅程即可看到服务器状态。");
     } finally {

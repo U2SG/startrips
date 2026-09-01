@@ -1426,15 +1426,21 @@ uploadRoutes.post("/assets/move/undo", async (context) => {
       `);
       if (lockedJourney.rows.length === 0) return "journey-not-found" as const;
 
-      const all = await transaction
-        .select({
-          id: mediaAssets.id,
-          routePointId: mediaAssets.routePointId,
-          mimeType: mediaAssets.mimeType,
-        })
-        .from(mediaAssets)
-        .where(eq(mediaAssets.journeyId, sameJourneyInput.journeyId))
-        .orderBy(mediaAssets.sortOrder);
+      const lockedMedia = await transaction.execute<{
+        id: string;
+        routePointId: string | null;
+        mimeType: string;
+      }>(sql`
+        select
+          ${mediaAssets.id} as id,
+          ${mediaAssets.routePointId} as "routePointId",
+          ${mediaAssets.mimeType} as "mimeType"
+        from ${mediaAssets}
+        where ${mediaAssets.journeyId} = ${sameJourneyInput.journeyId}
+        order by ${mediaAssets.sortOrder}
+        for update
+      `);
+      const all = lockedMedia.rows;
       const currentIds = new Set(all.map((asset) => asset.id));
       if (
         all.length !== sameJourneyInput.assetOrder.length
