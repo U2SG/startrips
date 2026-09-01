@@ -36,6 +36,14 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ## 2026-09-01
 
+### PR #116 - Suppress secondary city-label contact activation
+
+- **Source head:** `1369a63625aa465b96578c4d892136bf295eaf39`
+- **Scope:** Closes the remaining sibling-SVG activation gap after PR #108 by remembering a city-label contact whenever another globe pointer is already tracked, while preserving latest-main gesture, EXIF, and playback changes.
+- **User-visible change:** A second finger that starts directly on a city label can no longer turn into an accidental city selection merely because the first canvas finger lifts earlier. Ordinary one-finger city taps remain unchanged.
+- **Review fixes:** Preserves the prior post-merge correction that starts the sibling-layer guard at one tracked pointer; regression coverage keeps 0 tracked as an ordinary tap and 1/2/3 tracked as remembered contacts after the latest-main rebase.
+- **Follow-up:** ParticleEarth targeted tests are 33/33; the broader local run reached 414 passing tests before 9 server suites hit the shared local `@aws-sdk/core/client` installation gap. Typecheck, production build, and `git diff --check` are green; clean-environment GitHub browser/verify gates remain authoritative before merge.
+
 ### PR #119 - Pair EXIF digitized timestamps with their offset
 
 - **Source head:** `18e449b020f28453390b29306383869d3c2ef775`
