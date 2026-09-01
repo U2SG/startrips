@@ -18,6 +18,14 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ## 2026-09-01
 
+### PR #131 - Stabilize gateway refetch recovery QA
+
+- **Source head:** `78b890d4de1da60f7213526e65a4f1c0af9a5ed6`
+- **Scope:** Makes the `gateway-refetch-failure-recovery` browser QA wait on the two facts the scenario actually owns: at least one post-sign-in `/get-session` failure response has completed, and the recovered Login V3 card is visible/interactable. This replaces fixed-delay and cross-layer timing assumptions with deterministic network + UI readiness gates.
+- **User-visible change:** None; this only makes the CI recovery gate deterministic. Production authentication and playback flows are unchanged.
+- **Review fixes:** The main push after PR #129 first exposed a mount-order race where `.auth-continuity.is-login` could be observable before `.auth-card--login-v3` mounted. PR CI then exposed the inverse ordering: the card could already be visible while the intended failed post-sign-in session refetch had not completed. The QA now records completed failed session responses and waits for that metric before asserting the recovered interactive login card, while retaining the requirement that a post-sign-in session request occurred.
+- **Follow-up:** Main CI run `33495049599` / job `99815180594` was the motivating failure; PR #131 run `33499818600` exposed the second ordering race (`postSignInSessionRequests=0`). GitHub PR verify remains authoritative before merge.
+
 ### PR #129 - Preserve playback progress across pause and resume
 
 - **Source head:** `296b27c8ade25daa07d208ad36be3beeece1afa9`

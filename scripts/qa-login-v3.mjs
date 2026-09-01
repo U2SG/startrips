@@ -188,6 +188,7 @@ async function createGatewayPage({
   let authenticated = initialAuthenticated;
   let signInRequests = 0;
   let postSignInSessionRequests = 0;
+  let failedPostSignInSessionResponses = 0;
   gatewayPage.on("console", (message) => {
     if (message.type() === "error") errors.push(message.text());
   });
@@ -208,6 +209,7 @@ async function createGatewayPage({
       if (authenticated && failAfterSignIn) {
         await new Promise((resolve) => setTimeout(resolve, 100));
         await route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ message: "qa session refresh failed" }) });
+        failedPostSignInSessionResponses += 1;
         return;
       }
       await route.fulfill({
@@ -247,7 +249,7 @@ async function createGatewayPage({
   return {
     page: gatewayPage,
     errors,
-    metrics() { return { signInRequests, postSignInSessionRequests }; },
+    metrics() { return { signInRequests, postSignInSessionRequests, failedPostSignInSessionResponses }; },
     gainSession() { authenticated = true; },
     loseSession() { authenticated = false; },
     async close() {
@@ -261,6 +263,16 @@ async function submitGatewayLogin(gatewayPage) {
   await gatewayPage.locator('input[type="email"]').fill("qa@example.com");
   await gatewayPage.locator('input[type="password"]').fill("password1234");
   await gatewayPage.getByRole("button", { name: "登录", exact: true }).click();
+}
+
+async function waitForGatewayMetric(gateway, predicate, timeoutMs = 4_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const metrics = gateway.metrics();
+    if (predicate(metrics)) return metrics;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  return gateway.metrics();
 }
 
 async function broadcastSessionRefresh(targetPage, trigger) {
@@ -961,8 +973,12 @@ try {
   const failedGateway = await createGatewayPage({ failAfterSignIn: true });
   try {
     await submitGatewayLogin(failedGateway.page);
-    await failedGateway.page.waitForTimeout(350);
+    const completedRefetchMetrics = await waitForGatewayMetric(
+      failedGateway,
+      (metrics) => metrics.failedPostSignInSessionResponses >= 1,
+    );
     await failedGateway.page.locator(".auth-continuity.is-login").waitFor({ timeout: 4_000 });
+    await failedGateway.page.locator(".auth-card--login-v3").waitFor({ state: "visible", timeout: 4_000 });
     const recovery = await failedGateway.page.evaluate(() => {
       const card = document.querySelector(".auth-card--login-v3");
       return {
@@ -983,6 +999,7 @@ try {
       failed: recovery.handoff
         || recovery.pointerEvents === "none"
         || recoveryMetrics.signInRequests < 1
+        || completedRefetchMetrics.failedPostSignInSessionResponses < 1
         || recoveryMetrics.postSignInSessionRequests < 1
         || unexpectedRecoveryErrors.length > 0,
     };
