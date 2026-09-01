@@ -18,6 +18,14 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ## 2026-09-01
 
+### PR #125 - Reject malformed EXIF GPS DMS components
+
+- **Source head:** `f691f46d5a2b56d80cde081aa0a05c3d8e24705d`
+- **Scope:** Hardens the local JPEG EXIF placement parser so corrupt degree/minute/second coordinates cannot be normalized into plausible but incorrect decimal GPS values.
+- **User-visible change:** Photos with malformed EXIF GPS minutes/seconds or coordinates beyond the pole/antimeridian no longer produce a false high-confidence Journey/route-point suggestion; valid capture-time evidence from the same photo is still preserved.
+- **Review fixes:** Validates minutes and seconds as `[0, 60)`, caps latitude/longitude degrees at 90/180 before conversion, and only accepts exact pole/antimeridian degrees when both lower-order components are zero. Rebase review verified the feature patch remains patch-equivalent to the previously reviewed implementation, so no prior fix was lost.
+- **Follow-up:** None known in this parser slice. Rebased onto `main@0a21787`; targeted media-placement tests are 16/16, client TypeScript, production build, and `git diff --check` are green.
+
 ### PR #134 - Add seekable Journey Playback timeline
 
 - **Source head:** `50dc8384ff5ec9e19347d69d6319cb32f1e84292`
