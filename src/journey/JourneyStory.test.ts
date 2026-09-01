@@ -10,6 +10,10 @@ import {
   mobileStoryHistoryLayers,
   mediaForRoutePoint,
   mediaForUploadRefreshScope,
+  mediaMoveUndoForSelection,
+  mediaMoveUndoNeedsServerReconcile,
+  reorderInvalidatesMediaMoveUndo,
+  retainMediaMoveUndoAfterError,
   replaceJourneySoundtrack,
   storyAssetIndexForId,
   storyAutoplayNextIndex,
@@ -20,6 +24,7 @@ import {
   storySelectionContainsRoutePointMedia,
   storyUploadedAssetIndex,
 } from "./JourneyStory";
+import { JourneyApiError } from "./journeyApi";
 import type { Journey, JourneyMediaAsset } from "./types";
 
 const journey: Journey = {
@@ -139,6 +144,43 @@ describe("mediaForUploadRefreshScope (#111 review)", () => {
     };
     expect(mediaForUploadRefreshScope(refreshed, "new-point").map((item) => item.id))
       .toEqual(["uploaded-media"]);
+  });
+});
+
+describe("media move Undo review regressions", () => {
+  it("reconciles server state when a retained Undo retry reports stale", () => {
+    expect(mediaMoveUndoNeedsServerReconcile(
+      new JourneyApiError(409, "MEDIA_MOVE_UNDO_STALE", "stale"),
+    )).toBe(true);
+    expect(mediaMoveUndoNeedsServerReconcile(
+      new JourneyApiError(400, "INVALID_MEDIA_MOVE_UNDO", "invalid"),
+    )).toBe(false);
+  });
+
+  it("does not invalidate Undo for rejected cross-chapter drag reorder", () => {
+    const pointA = { ...asset("point-a-media", "image/jpeg", 0), routePointId: "point-a" };
+    const pointB = { ...asset("point-b-media", "image/jpeg", 1), routePointId: "point-b" };
+    const pointASecond = { ...asset("point-a-second", "image/jpeg", 2), routePointId: "point-a" };
+
+    expect(reorderInvalidatesMediaMoveUndo([pointA, pointB], pointA.id, pointB.id)).toBe(false);
+    expect(reorderInvalidatesMediaMoveUndo([pointA, pointASecond], pointA.id, pointASecond.id)).toBe(true);
+  });
+});
+
+describe("retainMediaMoveUndoAfterError", () => {
+  it("keeps the descriptor for network and retryable HTTP failures", () => {
+    expect(retainMediaMoveUndoAfterError(new TypeError("network failed"))).toBe(true);
+    expect(retainMediaMoveUndoAfterError(new JourneyApiError(503, "REQUEST_FAILED", "retry"))).toBe(true);
+    expect(retainMediaMoveUndoAfterError(new JourneyApiError(429, "RATE_LIMITED", "retry"))).toBe(true);
+  });
+
+  it("drops the descriptor for confirmed stale or other non-retryable failures", () => {
+    expect(retainMediaMoveUndoAfterError(
+      new JourneyApiError(409, "MEDIA_MOVE_UNDO_STALE", "stale"),
+    )).toBe(false);
+    expect(retainMediaMoveUndoAfterError(
+      new JourneyApiError(400, "INVALID_MEDIA_MOVE_UNDO", "invalid"),
+    )).toBe(false);
   });
 });
 
@@ -284,6 +326,29 @@ describe("aggregate organizer ownership (#76 review)", () => {
       .toBe(true);
     expect(storySelectionContainsRoutePointMedia([intro, point], new Set([intro.id])))
       .toBe(false);
+  });
+
+  it("captures mixed previous ownership and full order for server-backed move undo", () => {
+    const intro = asset("intro", "image/jpeg", 0);
+    const pointA = { ...asset("point-a-media", "image/jpeg", 1), routePointId: "point-a" };
+    const pointB = { ...asset("point-b-media", "video/mp4", 2), routePointId: "point-b" };
+    const track = asset("track", "audio/mpeg", 3);
+    const source: Journey = { ...journey, media: [intro, pointA, pointB, track] };
+
+    expect(mediaMoveUndoForSelection(
+      source,
+      [pointB.id, intro.id],
+      "point-a",
+    )).toEqual({
+      journeyId: source.id,
+      expectedRoutePointId: "point-a",
+      assignments: [
+        { assetId: intro.id, routePointId: null },
+        { assetId: pointB.id, routePointId: "point-b" },
+      ],
+      assetOrder: [intro.id, pointA.id, pointB.id, track.id],
+    });
+    expect(mediaMoveUndoForSelection(source, ["missing"], "point-a")).toBeNull();
   });
 });
 

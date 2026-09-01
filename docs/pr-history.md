@@ -102,7 +102,16 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 - **Review fixes:** Decoupled strong-signal conflict detection from the combined recommendation score: strong GPS chooses the nearest eligible route point using spatial evidence only, while strong absolute time chooses the closest timestamp independently, so contradictory nearby GPS/time signals correctly suppress a suggestion. The post-upload refresh now filters with the accepted `targetRoutePointId` explicitly rather than the stale pre-click React state closure. Added regressions for same-city conflicting strong signals and stale-scope refresh selection.
 - **Follow-up:** Broader cross-Journey placement UX and metadata coverage remain product follow-up; raw metadata stays browser-local. Targeted placement/Story tests are 46/46, the non-DB suite is 47 files / 435 tests, typecheck, production build, and `git diff --check` are green.
 
-## 2026-08-31
+## 2026-09-01
+
+### PR #103 - Add server-backed undo for media reassignment
+
+- **Source head:** `52982c42ea54c17b07b59072dcfc79b2dac4f2e8`
+- **Scope:** Rebases same-Journey media reassignment Undo onto `main@9d74a69`, preserving the merged carousel-settle, CI/deploy, grouped-placement, playback, and cross-Journey Undo behavior while keeping PR #103's server-backed same-Journey restore contract.
+- **User-visible change:** Same-Journey media moves remain safely undoable with exact ownership/order restoration. Rejected cross-chapter drag attempts no longer erase a still-valid Undo, and an ambiguous retry that returns `MEDIA_MOVE_UNDO_STALE` now reconciles the Journey from the server before retiring the action so the UI cannot remain on a stale moved state.
+- **Review fixes:** Preserved the 10,000-item pre-mutation undo-safe guard, soundtrack/media invalidation, complete same-Journey media-row `FOR UPDATE` locking, retryable descriptor retention, and nullable refresh handling across rebase. Final P2 fixes defer Undo invalidation until drag reorder validation has passed and force a server refresh on stale 409 after a retained retry. Regression helpers cover cross-chapter rejection and stale-retry reconciliation.
+- **Follow-up:** Cross-Journey destination-picker UX remains tracked separately. Final validation on rebased source: JourneyStory 43/43; server uploads validation 33/33; full `src` suite 32 files / 328 tests green on the final source; typecheck, production build, and `git diff --check` green. Tenant integration is locally blocked before tests by PostgreSQL not listening on `127.0.0.1:5432`; GitHub CI remains authoritative for DB integration.
+
 
 ### PR #105 — Stabilize high-zoom globe drag and pinch
 

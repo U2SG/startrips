@@ -28,7 +28,11 @@ const MAX_UPLOAD_BYTES = 2_000_000_000;
 const MAX_AUDIO_UPLOAD_BYTES = 100 * 1024 * 1024;
 const MAX_PARTS = 10_000;
 const MAX_REORDER_ASSETS = 256;
-const MAX_MOVE_UNDO_ORDER = 10_000;
+export const MAX_MOVE_UNDO_ORDER = 10_000;
+
+export function moveUndoOrdersFitLimit(...orders: readonly string[][]) {
+  return orders.every((order) => order.length <= MAX_MOVE_UNDO_ORDER);
+}
 const FINALIZATION_LEASE_MS = 20_000;
 const FINALIZATION_HEARTBEAT_MS = 5_000;
 const STALE_UPLOAD_AFTER_MS = 24 * 60 * 60 * 1_000;
@@ -158,6 +162,17 @@ type ReorderMediaInput = {
   journeyId?: unknown;
   assetIds?: unknown;
 };
+
+export function mediaOrderAfterMove(
+  existingOrder: readonly string[],
+  assetIds: readonly string[],
+) {
+  const moving = new Set(assetIds);
+  return [
+    ...existingOrder.filter((id) => !moving.has(id)),
+    ...existingOrder.filter((id) => moving.has(id)),
+  ];
+}
 
 export function parseReorderInput(body: ReorderMediaInput) {
   const journeyId = typeof body.journeyId === "string" ? body.journeyId : "";
@@ -307,6 +322,63 @@ export function parseUndoMediaMoveInput(body: UndoMediaMoveInput): MediaMoveUndo
     sourceCoverMediaAssetId: body.sourceCoverMediaAssetId ?? null,
     placements: assetIds.map((assetId) => ({ assetId, routePointId: placementByAsset.get(assetId) ?? null })),
   };
+}
+
+type UndoMoveMediaInput = {
+  journeyId?: unknown;
+  expectedRoutePointId?: unknown;
+  assignments?: unknown;
+  assetOrder?: unknown;
+};
+
+type UndoMoveAssignment = {
+  assetId: string;
+  routePointId: string | null;
+};
+
+export function parseUndoMoveMediaInput(body: UndoMoveMediaInput) {
+  const journeyId = typeof body.journeyId === "string" ? body.journeyId : "";
+  const expectedRoutePointId = body.expectedRoutePointId === undefined || body.expectedRoutePointId === null
+    ? null
+    : typeof body.expectedRoutePointId === "string"
+      ? body.expectedRoutePointId
+      : "invalid";
+  if (
+    !UUID_PATTERN.test(journeyId)
+    || expectedRoutePointId === "invalid"
+    || (expectedRoutePointId !== null && !UUID_PATTERN.test(expectedRoutePointId))
+    || !Array.isArray(body.assignments)
+    || body.assignments.length < 1
+    || body.assignments.length > MAX_REORDER_ASSETS
+    || !Array.isArray(body.assetOrder)
+    || body.assetOrder.length < 1
+    || body.assetOrder.length > MAX_MOVE_UNDO_ORDER
+  ) return null;
+
+  const assignments: UndoMoveAssignment[] = [];
+  for (const raw of body.assignments) {
+    if (!raw || typeof raw !== "object") return null;
+    const candidate = raw as { assetId?: unknown; routePointId?: unknown };
+    if (typeof candidate.assetId !== "string" || !UUID_PATTERN.test(candidate.assetId)) return null;
+    const routePointId = candidate.routePointId === undefined || candidate.routePointId === null
+      ? null
+      : typeof candidate.routePointId === "string"
+        ? candidate.routePointId
+        : "invalid";
+    if (routePointId === "invalid" || (routePointId !== null && !UUID_PATTERN.test(routePointId))) return null;
+    assignments.push({ assetId: candidate.assetId, routePointId });
+  }
+  if (new Set(assignments.map((assignment) => assignment.assetId)).size !== assignments.length) return null;
+
+  const assetOrder: string[] = [];
+  for (const raw of body.assetOrder) {
+    if (typeof raw !== "string" || !UUID_PATTERN.test(raw)) return null;
+    assetOrder.push(raw);
+  }
+  if (new Set(assetOrder).size !== assetOrder.length) return null;
+  if (assignments.some((assignment) => !assetOrder.includes(assignment.assetId))) return null;
+
+  return { journeyId, expectedRoutePointId, assignments, assetOrder };
 }
 
 async function findUpload(uploadId: string, atlasId: string) {
@@ -1201,6 +1273,9 @@ uploadRoutes.post("/assets/move", async (context) => {
     const movedInSourceOrder = sourceOrder.filter((id) => moving.has(id));
 
     if (!crossJourney) {
+      if (!moveUndoOrdersFitLimit(sourceOrder)) {
+        return "undo-state-too-large" as const;
+      }
       const nextOrder = [
         ...sourceOrder.filter((id) => !moving.has(id)),
         ...movedInSourceOrder,
@@ -1232,10 +1307,9 @@ uploadRoutes.post("/assets/move", async (context) => {
       ...targetAll.map((asset) => asset.id),
       ...movedInSourceOrder,
     ];
-    if (
-      sourceOrder.length > MAX_MOVE_UNDO_ORDER
-      || targetNextOrder.length > MAX_MOVE_UNDO_ORDER
-    ) return "undo-state-too-large" as const;
+    if (!moveUndoOrdersFitLimit(sourceOrder, targetNextOrder)) {
+      return "undo-state-too-large" as const;
+    }
     const ownedById = new Map(owned.map((asset) => [asset.id, asset]));
     const sourceCoverMediaAssetId = lockedJourneys.get(sourceJourneyId)?.coverMediaAssetId ?? null;
     const undo: MediaMoveUndo = {
@@ -1331,12 +1405,117 @@ uploadRoutes.post("/assets/move", async (context) => {
 
 uploadRoutes.post("/assets/move/undo", async (context) => {
   const { atlas } = await requireAtlasAccess(context.req.raw, "update");
-  const input = parseUndoMediaMoveInput(await context.req.json<UndoMediaMoveInput>());
+  const body = await context.req.json<UndoMediaMoveInput & UndoMoveMediaInput>();
+  const input = parseUndoMediaMoveInput(body);
   if (!input) {
-    return context.json(
-      { error: "INVALID_MEDIA_MOVE_UNDO", message: "Invalid media move undo" },
-      400,
-    );
+    const sameJourneyInput = parseUndoMoveMediaInput(body);
+    if (!sameJourneyInput) {
+      return context.json(
+        { error: "INVALID_MEDIA_MOVE_UNDO", message: "Invalid media move undo" },
+        400,
+      );
+    }
+    const result = await db.transaction(async (transaction) => {
+      const lockedJourney = await transaction.execute<{ id: string }>(sql`
+        select ${journeys.id} as id
+        from ${journeys}
+        where ${journeys.id} = ${sameJourneyInput.journeyId}
+          and ${journeys.atlasId} = ${atlas.id}
+          and ${journeys.deletionStartedAt} is null
+        for update
+      `);
+      if (lockedJourney.rows.length === 0) return "journey-not-found" as const;
+
+      const lockedMedia = await transaction.execute<{
+        id: string;
+        routePointId: string | null;
+        mimeType: string;
+      }>(sql`
+        select
+          ${mediaAssets.id} as id,
+          ${mediaAssets.routePointId} as "routePointId",
+          ${mediaAssets.mimeType} as "mimeType"
+        from ${mediaAssets}
+        where ${mediaAssets.journeyId} = ${sameJourneyInput.journeyId}
+        order by ${mediaAssets.sortOrder}
+        for update
+      `);
+      const all = lockedMedia.rows;
+      const currentIds = new Set(all.map((asset) => asset.id));
+      if (
+        all.length !== sameJourneyInput.assetOrder.length
+        || sameJourneyInput.assetOrder.some((assetId) => !currentIds.has(assetId))
+      ) return "stale" as const;
+      const expectedCurrentOrder = mediaOrderAfterMove(
+        sameJourneyInput.assetOrder,
+        sameJourneyInput.assignments.map((assignment) => assignment.assetId),
+      );
+      if (all.some((asset, index) => asset.id !== expectedCurrentOrder[index])) {
+        return "stale" as const;
+      }
+
+      const currentById = new Map(all.map((asset) => [asset.id, asset]));
+      for (const assignment of sameJourneyInput.assignments) {
+        const current = currentById.get(assignment.assetId);
+        if (!current || current.routePointId !== sameJourneyInput.expectedRoutePointId) return "stale" as const;
+        if (assignment.routePointId !== null && !ALLOWED_MIME_TYPES.has(current.mimeType)) {
+          return "invalid-selection" as const;
+        }
+      }
+
+      const restoreRoutePointIds = [...new Set(
+        sameJourneyInput.assignments
+          .map((assignment) => assignment.routePointId)
+          .filter((routePointId): routePointId is string => routePointId !== null),
+      )];
+      if (restoreRoutePointIds.length > 0) {
+        const routePoints = await transaction
+          .select({ id: journeyRoutePoints.id })
+          .from(journeyRoutePoints)
+          .where(and(
+            eq(journeyRoutePoints.journeyId, sameJourneyInput.journeyId),
+            inArray(journeyRoutePoints.id, restoreRoutePointIds),
+          ));
+        if (routePoints.length !== restoreRoutePointIds.length) return "stale" as const;
+      }
+
+      await transaction
+        .update(mediaAssets)
+        .set({ sortOrder: sql`${mediaAssets.sortOrder} + 1000` })
+        .where(eq(mediaAssets.journeyId, sameJourneyInput.journeyId));
+      for (let index = 0; index < sameJourneyInput.assetOrder.length; index += 1) {
+        await transaction
+          .update(mediaAssets)
+          .set({ sortOrder: index })
+          .where(eq(mediaAssets.id, sameJourneyInput.assetOrder[index]));
+      }
+      for (const assignment of sameJourneyInput.assignments) {
+        await transaction
+          .update(mediaAssets)
+          .set({ routePointId: assignment.routePointId })
+          .where(eq(mediaAssets.id, assignment.assetId));
+      }
+      return "ok" as const;
+    });
+
+    if (result === "journey-not-found") {
+      return context.json({ error: "JOURNEY_NOT_FOUND" }, 404);
+    }
+    if (result === "invalid-selection") {
+      return context.json({
+        error: "INVALID_MEDIA_MOVE_UNDO",
+        message: "A soundtrack cannot be restored onto a route point",
+      }, 400);
+    }
+    if (result === "stale") {
+      return context.json({
+        error: "MEDIA_MOVE_UNDO_STALE",
+        message: "Media changed after this move and can no longer be safely undone",
+      }, 409);
+    }
+    return context.json({
+      journey: await getJourneyForAtlas(sameJourneyInput.journeyId, atlas.id),
+    });
   }
 
   const result = await db.transaction(async (transaction) => {

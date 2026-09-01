@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  MAX_MOVE_UNDO_ORDER,
   mediaKindOf,
+  mediaOrderAfterMove,
+  moveUndoOrdersFitLimit,
   parseMoveMediaInput,
   parseUndoMediaMoveInput,
+  parseUndoMoveMediaInput,
   parseParts,
   parseReorderInput,
   parseStartUpload,
@@ -18,6 +22,22 @@ const validStart = {
   mimeType: "image/jpeg",
   bytes: 8 * 1024 * 1024,
 };
+
+
+describe("moveUndoOrdersFitLimit", () => {
+  it("accepts the exact undo-safe boundary and rejects an oversized same-Journey order", () => {
+    const boundary = Array.from({ length: MAX_MOVE_UNDO_ORDER }, (_, index) => String(index));
+    expect(moveUndoOrdersFitLimit(boundary)).toBe(true);
+    expect(moveUndoOrdersFitLimit([...boundary, "overflow"])).toBe(false);
+  });
+
+  it("requires every cross-Journey order to fit the same undo-safe contract", () => {
+    const safe = Array.from({ length: 8 }, (_, index) => String(index));
+    const oversized = Array.from({ length: MAX_MOVE_UNDO_ORDER + 1 }, (_, index) => String(index));
+    expect(moveUndoOrdersFitLimit(safe, safe)).toBe(true);
+    expect(moveUndoOrdersFitLimit(safe, oversized)).toBe(false);
+  });
+});
 
 describe("parseStartUpload", () => {
   it("accepts a journey-scoped upload and computes its part count", () => {
@@ -245,7 +265,7 @@ describe("parseReorderInput", () => {
 
   it("rejects oversized order lists", () => {
     const assetIds = Array.from(
-      { length: 257 },
+      { length: 2_049 },
       (_, index) => `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
     );
     expect(parseReorderInput({ journeyId: JOURNEY_ID, assetIds })).toBeNull();
@@ -345,6 +365,82 @@ describe("parseUndoMediaMoveInput", () => {
     expect(parseUndoMediaMoveInput({
       ...input,
       placements: [{ assetId: input.assetIds[0], routePointId: "bad" }],
+    })).toBeNull();
+  });
+});
+
+describe("mediaOrderAfterMove", () => {
+  it("preserves selected relative order while appending the selection", () => {
+    expect(mediaOrderAfterMove(["a", "b", "c", "d"], ["c", "a"]))
+      .toEqual(["b", "d", "a", "c"]);
+  });
+});
+
+describe("parseUndoMoveMediaInput", () => {
+  const assetA = "00000000-0000-4000-8000-000000000011";
+  const assetB = "00000000-0000-4000-8000-000000000012";
+
+  it("accepts mixed previous assignments plus the pre-move canonical order", () => {
+    expect(parseUndoMoveMediaInput({
+      journeyId: JOURNEY_ID,
+      expectedRoutePointId: ROUTE_POINT_ID,
+      assignments: [
+        { assetId: assetA, routePointId: null },
+        { assetId: assetB, routePointId: "00000000-0000-4000-8000-000000000003" },
+      ],
+      assetOrder: [assetA, assetB],
+    })).toEqual({
+      journeyId: JOURNEY_ID,
+      expectedRoutePointId: ROUTE_POINT_ID,
+      assignments: [
+        { assetId: assetA, routePointId: null },
+        { assetId: assetB, routePointId: "00000000-0000-4000-8000-000000000003" },
+      ],
+      assetOrder: [assetA, assetB],
+    });
+  });
+
+  it("allows a full Journey order larger than the old 2,048-item undo cap", () => {
+    const assetOrder = Array.from(
+      { length: 257 },
+      (_, index) => `00000000-0000-4000-8000-${String(index + 1000).padStart(12, "0")}`,
+    );
+    const selected = assetOrder.slice(0, 2);
+    expect(parseUndoMoveMediaInput({
+      journeyId: JOURNEY_ID,
+      expectedRoutePointId: ROUTE_POINT_ID,
+      assignments: selected.map((assetId) => ({ assetId, routePointId: null })),
+      assetOrder,
+    })).toMatchObject({ assetOrder });
+  });
+
+  it("rejects malformed or stale-shaped undo payloads before the transaction", () => {
+    expect(parseUndoMoveMediaInput({
+      journeyId: JOURNEY_ID,
+      expectedRoutePointId: ROUTE_POINT_ID,
+      assignments: [],
+      assetOrder: [assetA],
+    })).toBeNull();
+    expect(parseUndoMoveMediaInput({
+      journeyId: JOURNEY_ID,
+      expectedRoutePointId: "bad",
+      assignments: [{ assetId: assetA, routePointId: null }],
+      assetOrder: [assetA],
+    })).toBeNull();
+    expect(parseUndoMoveMediaInput({
+      journeyId: JOURNEY_ID,
+      expectedRoutePointId: ROUTE_POINT_ID,
+      assignments: [
+        { assetId: assetA, routePointId: null },
+        { assetId: assetA, routePointId: null },
+      ],
+      assetOrder: [assetA],
+    })).toBeNull();
+    expect(parseUndoMoveMediaInput({
+      journeyId: JOURNEY_ID,
+      expectedRoutePointId: ROUTE_POINT_ID,
+      assignments: [{ assetId: assetA, routePointId: null }],
+      assetOrder: [assetB],
     })).toBeNull();
   });
 });

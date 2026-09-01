@@ -1993,14 +1993,34 @@
   position: absolute;
   left: 16px;
   bottom: 68px;
-  max-width: 60%;
+  max-width: 70%;
   margin: 0;
-  padding: 8px 10px;
+  padding: 6px 8px 6px 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   background: rgba(2, 8, 8, 0.9);
   border: 1px solid var(--atlas-line);
   color: var(--atlas-muted);
   font-size: 10px;
   letter-spacing: 0.05em;
+}
+
+.journey-story__move-undo {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 8px;
+  border: 0;
+  background: transparent;
+  color: var(--atlas-text);
+  font: inherit;
+  letter-spacing: inherit;
+  cursor: pointer;
+}
+
+.journey-story__move-undo:disabled {
+  opacity: 0.55;
+  cursor: default;
 }
 
 .journey-story__media > img.is-zoomable {
