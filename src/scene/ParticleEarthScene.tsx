@@ -79,6 +79,8 @@ export const MAX_RENDERED_COASTLINE_VERTICES = 20_000;
 export const COASTLINE_LOD_VERTEX_BUDGET = { far: 20_000, mid: 32_000, near: 52_000 } as const;
 export type CoastlineLod = keyof typeof COASTLINE_LOD_VERTEX_BUDGET;
 export const GLOBE_RENDER_ORDER = {
+  relief: -1,
+  particle: 0,
   coastline: 1,
   signal: 2,
   routeLine: 3,
@@ -1485,7 +1487,7 @@ export function ParticleEarthScene({
     });
     const reliefSupport = new Mesh(sphereGeometry, reliefMaterial);
     reliefSupport.scale.setScalar(1.0015);
-    reliefSupport.renderOrder = GLOBE_RENDER_ORDER.coastline - 0.5;
+    reliefSupport.renderOrder = GLOBE_RENDER_ORDER.relief;
     reliefSupport.visible = false;
     globe.add(reliefSupport);
 
@@ -3186,6 +3188,7 @@ export function ParticleEarthScene({
       } else {
         particleGeometry = nextParticleGeometry;
         particles = new Points(particleGeometry, particleMaterial);
+        particles.renderOrder = GLOBE_RENDER_ORDER.particle;
         globe.add(particles);
       }
 
