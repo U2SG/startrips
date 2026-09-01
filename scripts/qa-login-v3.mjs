@@ -961,8 +961,8 @@ try {
   const failedGateway = await createGatewayPage({ failAfterSignIn: true });
   try {
     await submitGatewayLogin(failedGateway.page);
-    await failedGateway.page.waitForTimeout(350);
     await failedGateway.page.locator(".auth-continuity.is-login").waitFor({ timeout: 4_000 });
+    await failedGateway.page.locator(".auth-card--login-v3").waitFor({ state: "visible", timeout: 4_000 });
     const recovery = await failedGateway.page.evaluate(() => {
       const card = document.querySelector(".auth-card--login-v3");
       return {
