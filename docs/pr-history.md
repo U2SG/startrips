@@ -18,6 +18,14 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ## 2026-09-02
 
+### PR #121 - Bound EXIF TIFF reads to APP1 segment
+
+- **Source head:** `56ff9cc37711f0facd8ea7d046ef5e11adac4f6a`
+- **Scope:** Constrains all TIFF/IFD reads to the declared EXIF APP1 payload after rebasing onto current main, while preserving the newer date validation/fallback and GPS DMS correctness already merged in #123/#125.
+- **User-visible change:** Malformed JPEG metadata can no longer borrow bytes beyond its declared EXIF segment and accidentally produce placement signals from unrelated trailing data.
+- **Review fixes:** Semantically merged the newer EXIF test fixtures instead of replacing them; all scalar, entry, ASCII, rational, and indirect TIFF reads now share the APP1-local `tiffEnd` bound, with a regression proving a truncated APP1 cannot follow offsets into bytes that remain later in the JPEG.
+- **Follow-up:** None known for the APP1-boundary change; PR #119 remains the separate Digitized-offset pairing lane. Validation on current main: targeted media-placement tests 21/21 green, full `src` suite 35 files / 362 tests green, typecheck green, production build green, and `git diff --check` green.
+
 ### PR #123 - Validate EXIF capture dates before placement scoring
 
 - **Source head:** `253657ffad1b7fa501ac7a243fefa9091213f3d3`

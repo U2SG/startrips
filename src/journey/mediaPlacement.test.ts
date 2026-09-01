@@ -236,6 +236,13 @@ describe("JPEG EXIF placement parsing (#86)", () => {
     });
   });
 
+  it("does not follow TIFF offsets beyond the declared Exif APP1 segment", () => {
+    const jpeg = new Uint8Array(jpegWithExif());
+    const view = new DataView(jpeg.buffer);
+    view.setUint16(4, 30, false);
+
+    expect(parseJpegExifPlacementSignal(jpeg.buffer)).toBeNull();
+  });
   it("returns no signal for non-JPEG or metadata-free bytes", () => {
     expect(parseJpegExifPlacementSignal(new Uint8Array([1, 2, 3]).buffer)).toBeNull();
     expect(parseJpegExifPlacementSignal(new Uint8Array([0xff, 0xd8, 0xff, 0xd9]).buffer)).toBeNull();

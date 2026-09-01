@@ -334,15 +334,20 @@ type TiffReader = {
   view: DataView;
   littleEndian: boolean;
   tiffStart: number;
+  tiffEnd: number;
 };
 
+function inTiffBounds(reader: TiffReader, offset: number, bytes: number) {
+  return offset >= reader.tiffStart && bytes >= 0 && offset + bytes <= reader.tiffEnd;
+}
+
 function readUint16(reader: TiffReader, offset: number) {
-  if (!inBounds(reader.view, offset, 2)) return null;
+  if (!inTiffBounds(reader, offset, 2)) return null;
   return reader.view.getUint16(offset, reader.littleEndian);
 }
 
 function readUint32(reader: TiffReader, offset: number) {
-  if (!inBounds(reader.view, offset, 4)) return null;
+  if (!inTiffBounds(reader, offset, 4)) return null;
   return reader.view.getUint32(offset, reader.littleEndian);
 }
 
@@ -352,7 +357,7 @@ function findIfdEntry(reader: TiffReader, relativeIfdOffset: number, tag: number
   if (count === null || count > 4096) return null;
   for (let index = 0; index < count; index += 1) {
     const entryOffset = ifdOffset + 2 + index * 12;
-    if (!inBounds(reader.view, entryOffset, 12)) return null;
+    if (!inTiffBounds(reader, entryOffset, 12)) return null;
     const entryTag = reader.view.getUint16(entryOffset, reader.littleEndian);
     if (entryTag === tag) return entryOffset;
   }
@@ -368,7 +373,7 @@ function entryTypeSize(type: number) {
 }
 
 function entryDataOffset(reader: TiffReader, entryOffset: number) {
-  if (!inBounds(reader.view, entryOffset, 12)) return null;
+  if (!inTiffBounds(reader, entryOffset, 12)) return null;
   const type = reader.view.getUint16(entryOffset + 2, reader.littleEndian);
   const count = reader.view.getUint32(entryOffset + 4, reader.littleEndian);
   const size = entryTypeSize(type) * count;
@@ -376,13 +381,13 @@ function entryDataOffset(reader: TiffReader, entryOffset: number) {
   if (size <= 4) return { type, count, offset: entryOffset + 8 };
   const relative = reader.view.getUint32(entryOffset + 8, reader.littleEndian);
   const offset = reader.tiffStart + relative;
-  return inBounds(reader.view, offset, size) ? { type, count, offset } : null;
+  return inTiffBounds(reader, offset, size) ? { type, count, offset } : null;
 }
 
 function readAsciiEntry(reader: TiffReader, entryOffset: number | null) {
   if (entryOffset === null) return null;
   const data = entryDataOffset(reader, entryOffset);
-  if (!data || data.type !== 2 || !inBounds(reader.view, data.offset, data.count)) return null;
+  if (!data || data.type !== 2 || !inTiffBounds(reader, data.offset, data.count)) return null;
   const bytes = new Uint8Array(reader.view.buffer, reader.view.byteOffset + data.offset, data.count);
   const value = new TextDecoder("ascii").decode(bytes).replace(/\0.*$/, "").trim();
   return value || null;
@@ -400,7 +405,7 @@ function readLongEntry(reader: TiffReader, entryOffset: number | null) {
 function readRationalArray(reader: TiffReader, entryOffset: number | null) {
   if (entryOffset === null) return null;
   const data = entryDataOffset(reader, entryOffset);
-  if (!data || data.type !== 5 || data.count < 3 || !inBounds(reader.view, data.offset, 24)) return null;
+  if (!data || data.type !== 5 || data.count < 3 || !inTiffBounds(reader, data.offset, 24)) return null;
   const values: number[] = [];
   for (let index = 0; index < 3; index += 1) {
     const offset = data.offset + index * 8;
@@ -494,6 +499,7 @@ export function parseJpegExifPlacementSignal(buffer: ArrayBuffer): MediaPlacemen
         view,
         littleEndian: byteOrder === 0x4949,
         tiffStart,
+        tiffEnd: cursor + segmentLength,
       };
       if (readUint16(reader, tiffStart + 2) !== 42) return null;
       const ifd0 = readUint32(reader, tiffStart + 4);
