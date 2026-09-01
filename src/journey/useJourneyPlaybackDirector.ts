@@ -12,6 +12,11 @@ import {
 } from "./journeyPlayback";
 import type { Journey } from "./types";
 
+export function consumePlaybackTimerBudget(remainingMs: number, startedAtMs: number, nowMs: number) {
+  const elapsedMs = Math.max(0, nowMs - startedAtMs);
+  return Math.max(0, remainingMs - elapsedMs);
+}
+
 /**
  * #19 Journey Playback director.
  *
@@ -27,6 +32,9 @@ export function useJourneyPlaybackDirector(
 ) {
   const [state, setState] = useState<PlaybackState>(initialPlaybackState);
   const timerRef = useRef<number>(0);
+  const timerStepKeyRef = useRef<string | null>(null);
+  const timerRemainingMsRef = useRef<number | null>(null);
+  const timerStartedAtMsRef = useRef<number | null>(null);
   const journeyRef = useRef(journey);
   journeyRef.current = journey;
 
@@ -48,25 +56,58 @@ export function useJourneyPlaybackDirector(
   const back = useCallback(() => transition({ type: "back" }), [transition]);
   const exit = useCallback(() => transition({ type: "exit" }), [transition]);
 
-  // One timer per step: when it fires, advance. Rebuilt whenever the step
-  // index changes, the director pauses, or the journey changes.
+  // Keep one elapsed-time budget per expanded step. Pausing (or decode hold)
+  // freezes that budget instead of discarding it, so resume continues from the
+  // same point in the current beat rather than granting a fresh full timeout.
   useEffect(() => {
     window.clearTimeout(timerRef.current);
-    if (!journey || state.paused) return;
-    if (!step) return;
-    // Review P2: when `hold` is true the director waits — the overlay uses it
-    // to keep a media chapter on screen until the image is actually decoded,
-    // so a slow network never flashes an empty frame.
-    if (hold) return;
-    const duration = stepDurationMs(journey, step);
+    if (!journey || !step) {
+      timerStepKeyRef.current = null;
+      timerRemainingMsRef.current = null;
+      timerStartedAtMsRef.current = null;
+      return;
+    }
+
+    const fullDurationMs = stepDurationMs(journey, step);
+    const stepKey = `${journey.id}:${state.stepIndex}:${step.kind}:${fullDurationMs}`;
+    if (timerStepKeyRef.current !== stepKey) {
+      timerStepKeyRef.current = stepKey;
+      timerRemainingMsRef.current = fullDurationMs;
+      timerStartedAtMsRef.current = null;
+    }
+
+    if (state.paused || hold) return;
+
+    const remainingMs = timerRemainingMsRef.current ?? fullDurationMs;
+    const startedAtMs = performance.now();
+    timerStartedAtMsRef.current = startedAtMs;
     timerRef.current = window.setTimeout(() => {
+      timerRemainingMsRef.current = 0;
+      timerStartedAtMsRef.current = null;
       transition({ type: "advance" });
-    }, duration);
-    return () => window.clearTimeout(timerRef.current);
+    }, remainingMs);
+
+    return () => {
+      window.clearTimeout(timerRef.current);
+      if (
+        timerStepKeyRef.current === stepKey
+        && timerStartedAtMsRef.current === startedAtMs
+      ) {
+        timerRemainingMsRef.current = consumePlaybackTimerBudget(
+          remainingMs,
+          startedAtMs,
+          performance.now(),
+        );
+        timerStartedAtMsRef.current = null;
+      }
+    };
   }, [hold, journey, state.stepIndex, state.paused, step, transition]);
 
   // Reset when the journey changes.
   useEffect(() => {
+    timerStepKeyRef.current = null;
+    timerRemainingMsRef.current = null;
+    timerStartedAtMsRef.current = null;
     setState(initialPlaybackState());
   }, [journey?.id]);
 
