@@ -18,6 +18,14 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ## 2026-09-01
 
+### PR #132 - Keep playback controls visible for keyboard focus
+
+- **Source head:** `b020b62d44aa3d7929b1da2eb8bd04e48f3a2d1b`
+- **Scope:** Refines Journey Playback chrome idle ownership without changing playback order, timer budgets, media synchronization, or the separate Playback V2 timeline/navigation work. The overlay tracks pointer/touch versus keyboard input modality across automatic step changes and gates the existing idle fade accordingly.
+- **User-visible change:** Playback controls still fade after 2.5 seconds of uninterrupted pointer/touch viewing, but they stay visible while playback is paused and no longer disappear underneath a keyboard user's active focus.
+- **Review fixes:** Self-review kept input modality persistent across playback steps; the final review fix also keeps pointer/touch/keyboard modality listeners attached while playback is paused, so clicking Play after a keyboard pause correctly restores pointer ownership and normal idle auto-hide instead of leaving focused chrome pinned indefinitely.
+- **Follow-up:** #126 still owns tempo re-planning, scrub timeline, cinematic spatial grammar, and the remaining Playback V2 work. Revalidated on latest main: targeted playback/control tests 25/25 green, production build and `git diff --check` green; the broader test run passed 397 tests with only the existing 9 AWS SDK load failures, and server typecheck remains blocked only by the existing six `S3Client.send` errors in `server/storage/s3-compatible-storage.ts`.
+
 ### PR #125 - Reject malformed EXIF GPS DMS components
 
 - **Source head:** `f691f46d5a2b56d80cde081aa0a05c3d8e24705d`
