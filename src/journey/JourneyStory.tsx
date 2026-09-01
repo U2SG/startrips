@@ -685,6 +685,7 @@ export function JourneyStory({
   const soundtrackLightRef = useRef<HTMLDivElement>(null);
   const deleteCancelRef = useRef<HTMLButtonElement>(null);
   const journeyDeleteTriggerRef = useRef<HTMLButtonElement>(null);
+  const restoreJourneyDeleteFocusRef = useRef(false);
   const mediaDeleteCancelRef = useRef<HTMLButtonElement>(null);
   const copyRef = useRef<HTMLElement>(null);
   const pendingReads = useRef(new Set<string>());
@@ -769,15 +770,9 @@ export function JourneyStory({
 
   function closeJourneyDelete() {
     if (deleteState === "pending") return false;
+    restoreJourneyDeleteFocusRef.current = mobileLayout;
     setDeleteState("idle");
     setDeleteMessage("");
-    if (mobileLayout && typeof window !== "undefined") {
-      window.requestAnimationFrame(() => {
-        window.requestAnimationFrame(() => {
-          journeyDeleteTriggerRef.current?.focus({ preventScroll: true });
-        });
-      });
-    }
     return true;
   }
 
@@ -978,6 +973,20 @@ export function JourneyStory({
   useEffect(() => {
     if (deleteState === "confirming") deleteCancelRef.current?.focus();
   }, [deleteState]);
+
+  useEffect(() => {
+    if (
+      !mobileLayout
+      || deleteState !== "idle"
+      || !restoreJourneyDeleteFocusRef.current
+      || typeof window === "undefined"
+    ) return;
+    restoreJourneyDeleteFocusRef.current = false;
+    const frame = window.requestAnimationFrame(() => {
+      journeyDeleteTriggerRef.current?.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [deleteState, mobileLayout]);
 
   useEffect(() => {
     if (!mobileLayout || typeof window === "undefined") return;
