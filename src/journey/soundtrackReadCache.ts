@@ -16,13 +16,18 @@ const cache = new Map<string, CachedRead>();
 const pending = new Map<string, Promise<void>>();
 
 const CACHE_TTL_MS = 8 * 60 * 1000;
+const SIGNED_READ_FRESHNESS_MARGIN_MS = 30_000;
+
+function isFreshSignedRead(read: CachedRead, now = Date.now()) {
+  return read.expiresAt - now > SIGNED_READ_FRESHNESS_MARGIN_MS;
+}
 
 /** Prefetch (and cache) the soundtrack signed read for one journey. */
 export async function prefetchSoundtrackRead(journey: Journey): Promise<string | null> {
   const soundtrack = journeySoundtrack(journey);
   if (!soundtrack) return null;
   const existing = cache.get(soundtrack.id);
-  if (existing && existing.expiresAt > Date.now()) return existing.url;
+  if (existing && isFreshSignedRead(existing)) return existing.url;
 
   const inFlight = pending.get(soundtrack.id);
   if (inFlight) {
@@ -31,10 +36,13 @@ export async function prefetchSoundtrackRead(journey: Journey): Promise<string |
   }
   const task = (async () => {
     const read = await getPrivateMediaRead(soundtrack.id);
-    cache.set(soundtrack.id, {
+    const parsedExpiresAt = Date.parse(read.expiresAt);
+    const cachedRead = {
       url: read.url,
-      expiresAt: Date.parse(read.expiresAt) || Date.now() + CACHE_TTL_MS,
-    });
+      expiresAt: Number.isFinite(parsedExpiresAt) ? parsedExpiresAt : Date.now() + CACHE_TTL_MS,
+    };
+    if (isFreshSignedRead(cachedRead)) cache.set(soundtrack.id, cachedRead);
+    else cache.delete(soundtrack.id);
   })();
   pending.set(soundtrack.id, task);
   try {
@@ -54,6 +62,6 @@ export function cachedSoundtrackRead(journey: Journey): { url: string } | null {
   const soundtrack = journeySoundtrack(journey);
   if (!soundtrack) return null;
   const existing = cache.get(soundtrack.id);
-  if (!existing || existing.expiresAt <= Date.now()) return null;
+  if (!existing || !isFreshSignedRead(existing)) return null;
   return { url: existing.url };
 }
