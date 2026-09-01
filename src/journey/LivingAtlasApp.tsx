@@ -279,6 +279,7 @@ export function LivingAtlasApp({
   // #19: cinematic journey playback. The globe stays mounted underneath; the
   // director drives phases and the overlay translates them into focus calls.
   const [playbackJourneyId, setPlaybackJourneyId] = useState<string | null>(null);
+  const [playbackSoundtrackRead, setPlaybackSoundtrackRead] = useState<{ url: string } | null>(null);
   // Review P1: when the soundtrack read is not cached yet, the first click
   // only starts the prefetch and the button shows 正在准备配乐…; the user
   // clicks again (now with a cached URL) to actually start, keeping play()
@@ -653,6 +654,7 @@ export function LivingAtlasApp({
     setStoryRoutePointId(null);
     const cachedRead = journey ? cachedSoundtrackRead(journey) : null;
     if (playbackEntryNeedsPreparation(journey, cachedRead)) {
+      setPlaybackSoundtrackRead(null);
       setPlaybackPreparingId(journeyId);
       void prefetchSoundtrackRead(journey!)
         .catch(() => null)
@@ -661,6 +663,7 @@ export function LivingAtlasApp({
         )));
       return;
     }
+    setPlaybackSoundtrackRead(cachedRead);
     setPlaybackJourneyId(journeyId);
     // The overlay issues the intro route command after mount. Clearing any
     // previous command keeps camera ownership explicit across playback runs.
@@ -1161,14 +1164,13 @@ export function LivingAtlasApp({
           journey={playbackJourney}
           onClose={() => {
             setPlaybackJourneyId(null);
+            setPlaybackSoundtrackRead(null);
             setPlaybackCameraCommand(null);
           }}
           onCameraTargetChange={(target) => {
             setPlaybackCameraCommand((current) => nextPlaybackCameraCommand(current, target));
           }}
-          initialSoundtrackRead={(() => {
-            return playbackJourney ? cachedSoundtrackRead(playbackJourney) : null;
-          })()}
+          initialSoundtrackRead={playbackSoundtrackRead}
           reduceMotion={reduceMotion}
         />
       ) : null}
