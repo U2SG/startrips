@@ -16,6 +16,16 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ---
 
+## 2026-09-02
+
+### PR #123 - Validate EXIF capture dates before placement scoring
+
+- **Source head:** `253657ffad1b7fa501ac7a243fefa9091213f3d3`
+- **Scope:** Validates EXIF calendar/clock values before they influence media-placement scoring and preserves valid fallback metadata after rebasing onto the latest main, including the already-merged GPS DMS validation from #125.
+- **User-visible change:** Malformed capture dates no longer roll into another calendar date or suppress a usable fallback timestamp; year `0000` placeholders are ignored and a valid Digitized timestamp can still be used.
+- **Review fixes:** Semantically merged main's newer GPS tests with this PR's date-validation coverage; fixed the outstanding P2 by rejecting year zero and normalizing DateTimeOriginal before deciding whether to fall back to DateTimeDigitized, with a dedicated `0000:01:01` fallback regression.
+- **Follow-up:** PR #119 still owns correct pairing of Digitized timestamps with their own EXIF offset tag. Validation on current main: targeted media-placement tests 20/20 green, full `src` suite 35 files / 361 tests green, typecheck green, production build green, and `git diff --check` green.
+
 ## 2026-09-01
 
 ### PR #128 - Add Playback V2 tempo timeline foundation
