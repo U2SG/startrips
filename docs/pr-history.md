@@ -18,6 +18,14 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ## 2026-09-01
 
+### PR #130 - Navigate Journey Playback by meaningful beats
+
+- **Source head:** `886afce3139243e1989206770fd7ae903d2ace78`
+- **Scope:** Separates automatic cinematic advancement from manual transport navigation so user controls skip internal `travel` bookkeeping while timer-driven playback still preserves the full travel/stop/media stream; rebased onto latest main while retaining the merged seek API.
+- **User-visible change:** Next/Back land directly on meaningful visible beats instead of requiring an extra press through internal travel phases. Back remains usable while paused and keeps playback paused on the selected prior beat.
+- **Review fixes:** Semantically resolved the rebase conflict by preserving main's `seek` transport while keeping this PR's `next`/`previous` controls. Fixed the P2 paused-Back regression and added a paused-navigation regression.
+- **Follow-up:** Issue #126 still tracks the remaining Playback V2 work. Validation on current main: targeted playback/navigation/director tests 26/26 green, client typecheck green, production build green, and `git diff --check` green.
+
 ### PR #132 - Keep playback controls visible for keyboard focus
 
 - **Source head:** `b020b62d44aa3d7929b1da2eb8bd04e48f3a2d1b`

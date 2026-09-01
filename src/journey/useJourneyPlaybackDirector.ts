@@ -52,8 +52,8 @@ export function useJourneyPlaybackDirector(
 
   const pause = useCallback(() => transition({ type: "pause" }), [transition]);
   const resume = useCallback(() => transition({ type: "resume" }), [transition]);
-  const next = useCallback(() => transition({ type: "advance" }), [transition]);
-  const back = useCallback(() => transition({ type: "back" }), [transition]);
+  const next = useCallback(() => transition({ type: "next" }), [transition]);
+  const back = useCallback(() => transition({ type: "previous" }), [transition]);
   const seek = useCallback((stepIndex: number) => transition({ type: "seek", stepIndex }), [transition]);
   const exit = useCallback(() => transition({ type: "exit" }), [transition]);
 
