@@ -23,7 +23,7 @@ function point(id: string, sortOrder: number, longitude: number, note: string | 
   };
 }
 
-function media(id: string, routePointId: string, mimeType = "image/jpeg", sortOrder = 0): JourneyMediaAsset {
+function media(id: string, routePointId: string | null, mimeType = "image/jpeg", sortOrder = 0): JourneyMediaAsset {
   return {
     id,
     journeyId: "journey-1",
@@ -72,6 +72,23 @@ describe("Playback V2 timeline planner (#126)", () => {
     const plan = buildPlaybackPlan(journey, "standard");
     expect(plan.segments.filter((segment) => segment.kind === "media").map((segment) => segment.assetId))
       .toEqual(["p0-m0", "p0-m1", "p0-m2", "p1-m0", "p1-m1", "p1-m2"]);
+  });
+
+  it("keeps journey-scoped visual media reachable in the elapsed-time plan", () => {
+    const journey = fixture(1);
+    journey.media.unshift(
+      media("intro-image", null, "image/jpeg", 0),
+      media("intro-video", null, "video/mp4", 1),
+    );
+    const plan = buildPlaybackPlan(journey, "standard");
+    const mediaSegments = plan.segments.filter((segment) => segment.kind === "media");
+    expect(mediaSegments.map((segment) => segment.assetId)).toEqual([
+      "intro-image", "intro-video", "p0-m0", "p1-m0",
+    ]);
+    expect(mediaSegments[0]).toMatchObject({ routePointId: null, durationMs: PLAYBACK_TEMPO_PROFILES.standard.imageMs });
+    expect(mediaSegments[1]).toMatchObject({ routePointId: null, durationMs: PLAYBACK_TEMPO_PROFILES.standard.videoMs });
+    expect(playbackSegmentAtElapsed(plan, mediaSegments[0].startMs)?.assetId).toBe("intro-image");
+    expect(playbackSegmentAtElapsed(plan, mediaSegments[1].startMs)?.assetId).toBe("intro-video");
   });
 
   it("maps tempo independently by phase instead of applying one global multiplier", () => {

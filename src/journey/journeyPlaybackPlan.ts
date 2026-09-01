@@ -1,5 +1,6 @@
 ﻿import {
   buildPlaybackSteps,
+  playbackIntroMedia,
   playbackMediaForPoint,
   routePointAngularDistance,
   type PlaybackStep,
@@ -64,6 +65,7 @@ export type PlannedPlaybackSegment = {
   id: string;
   kind: "intro" | "travel" | "arrival" | "media" | "outro";
   stepIndex: number;
+  sourceStepIndex: number;
   routePointId: string | null;
   assetId?: string;
   startMs: number;
@@ -111,7 +113,16 @@ function durationForStep(
   }
 }
 
-function segmentIdentity(journey: Journey, step: PlaybackStep, stepIndex: number) {
+type PlaybackSegmentIdentity = Pick<
+  PlannedPlaybackSegment,
+  "id" | "kind" | "routePointId" | "assetId"
+>;
+
+function segmentIdentity(
+  journey: Journey,
+  step: PlaybackStep,
+  stepIndex: number,
+): PlaybackSegmentIdentity {
   switch (step.kind) {
     case "intro":
       return { id: "intro", kind: "intro" as const, routePointId: null };
@@ -157,16 +168,42 @@ export function buildPlaybackPlan(
 ): PlaybackPlan {
   const profile = PLAYBACK_TEMPO_PROFILES[tempo];
   const steps = buildPlaybackSteps(journey);
+  const drafts: Array<{
+    identity: PlaybackSegmentIdentity;
+    durationMs: number;
+    sourceStepIndex: number;
+  }> = [];
+  steps.forEach((step, sourceStepIndex) => {
+    drafts.push({
+      identity: segmentIdentity(journey, step, sourceStepIndex),
+      durationMs: durationForStep(journey, step, profile),
+      sourceStepIndex,
+    });
+    if (step.kind !== "intro") return;
+    for (const asset of playbackIntroMedia(journey)) {
+      drafts.push({
+        identity: {
+          id: `media:${asset.id}`,
+          kind: "media" as const,
+          routePointId: null,
+          assetId: asset.id,
+        },
+        durationMs: asset.mimeType.startsWith("video/") ? profile.videoMs : profile.imageMs,
+        sourceStepIndex,
+      });
+    }
+  });
+
   let cursorMs = 0;
-  const segments = steps.map((step, stepIndex) => {
-    const durationMs = durationForStep(journey, step, profile);
+  const segments = drafts.map((draft, stepIndex) => {
     const segment: PlannedPlaybackSegment = {
-      ...segmentIdentity(journey, step, stepIndex),
+      ...draft.identity,
       stepIndex,
+      sourceStepIndex: draft.sourceStepIndex,
       startMs: cursorMs,
-      durationMs,
+      durationMs: draft.durationMs,
     };
-    cursorMs += durationMs;
+    cursorMs += draft.durationMs;
     return segment;
   });
   return {
