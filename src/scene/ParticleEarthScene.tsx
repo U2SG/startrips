@@ -982,15 +982,29 @@ interface ParticleRefinementLayer {
 
 export function createRetryableParticleResourceLoader<T>(
   load: () => Promise<T | null>,
+  {
+    retryDelayMs = 5_000,
+    now = Date.now,
+  }: {
+    retryDelayMs?: number;
+    now?: () => number;
+  } = {},
 ): () => Promise<T | null> {
   let current: Promise<T | null> | null = null;
+  let retryAt: number | null = null;
   return () => {
+    if (current && retryAt !== null && now() >= retryAt) {
+      current = null;
+      retryAt = null;
+    }
     if (current) return current;
     const request: Promise<T | null> = Promise.resolve()
       .then(load)
       .catch(() => null)
       .then((value) => {
-        if (value === null && current === request) current = null;
+        if (value === null && current === request) {
+          retryAt = now() + retryDelayMs;
+        }
         return value;
       });
     current = request;

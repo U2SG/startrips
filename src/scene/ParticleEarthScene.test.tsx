@@ -71,13 +71,17 @@ import { disposeSceneGraph } from "./useThreeScene";
 describe("ParticleEarthScene contracts", () => {
   it("retries the same refinement region after source failures", async () => {
     let attempt = 0;
+    let now = 0;
     const load = vi.fn(async () => {
       attempt += 1;
       if (attempt === 1) return null;
       if (attempt === 2) throw new Error("transient fetch failure");
       return { source: "land-mask" };
     });
-    const loadResource = createRetryableParticleResourceLoader(load);
+    const loadResource = createRetryableParticleResourceLoader(load, {
+      retryDelayMs: 1_000,
+      now: () => now,
+    });
     let requestedCacheKey: string | null = null;
     const requestRegion = async (cacheKey: string) => {
       if (requestedCacheKey === cacheKey) return "deduped";
@@ -103,10 +107,21 @@ describe("ParticleEarthScene contracts", () => {
     expect(load).toHaveBeenCalledTimes(1);
     expect(requestedCacheKey).toBeNull();
 
+    for (now = 160; now < 1_000; now += 160) {
+      await expect(requestRegion(cacheKey)).resolves.toBe("unavailable");
+    }
+    expect(load).toHaveBeenCalledTimes(1);
+
+    now = 1_000;
     await expect(requestRegion(cacheKey)).resolves.toBe("unavailable");
     expect(load).toHaveBeenCalledTimes(2);
     expect(requestedCacheKey).toBeNull();
 
+    now = 1_999;
+    await expect(requestRegion(cacheKey)).resolves.toBe("unavailable");
+    expect(load).toHaveBeenCalledTimes(2);
+
+    now = 2_000;
     await expect(requestRegion(cacheKey)).resolves.toBe("ready");
     const recovered = loadResource();
     await expect(recovered).resolves.toEqual({ source: "land-mask" });
