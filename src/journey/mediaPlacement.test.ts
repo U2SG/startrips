@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  completeMediaPlacementUploadPlan,
   groupMediaPlacementSuggestions,
   parseJpegExifPlacementSignal,
   suggestMediaPlacement,
@@ -403,5 +404,38 @@ describe("groupMediaPlacementSuggestions (#86)", () => {
       ],
       unsuggestedFileIndexes: [3],
     });
+  });
+});
+
+
+describe("completeMediaPlacementUploadPlan", () => {
+  const suggestion = (journeyId: string, routePointId: string | null) => ({
+    journeyId,
+    routePointId,
+    score: 0.9,
+    confidence: "high" as const,
+    evidence: ["gps" as const],
+  });
+
+  it("returns ordered destination groups only when every file is covered exactly once", () => {
+    const batch = {
+      groups: [
+        { journeyId: "journey-b", routePointId: "point-b", fileIndexes: [3, 1], suggestion: suggestion("journey-b", "point-b") },
+        { journeyId: "journey-a", routePointId: null, fileIndexes: [2, 0], suggestion: suggestion("journey-a", null) },
+      ],
+      unsuggestedFileIndexes: [],
+    };
+    expect(completeMediaPlacementUploadPlan(batch, 4)).toEqual([
+      { journeyId: "journey-a", routePointId: null, fileIndexes: [0, 2] },
+      { journeyId: "journey-b", routePointId: "point-b", fileIndexes: [1, 3] },
+    ]);
+  });
+
+  it("refuses incomplete, duplicate, unsuggested, and out-of-range batches", () => {
+    const group = { journeyId: "journey-a", routePointId: null, fileIndexes: [0], suggestion: suggestion("journey-a", null) };
+    expect(completeMediaPlacementUploadPlan({ groups: [group], unsuggestedFileIndexes: [] }, 2)).toBeNull();
+    expect(completeMediaPlacementUploadPlan({ groups: [group], unsuggestedFileIndexes: [1] }, 2)).toBeNull();
+    expect(completeMediaPlacementUploadPlan({ groups: [{ ...group, fileIndexes: [0, 0] }], unsuggestedFileIndexes: [] }, 1)).toBeNull();
+    expect(completeMediaPlacementUploadPlan({ groups: [{ ...group, fileIndexes: [1] }], unsuggestedFileIndexes: [] }, 1)).toBeNull();
   });
 });

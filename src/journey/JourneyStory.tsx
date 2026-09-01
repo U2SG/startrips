@@ -84,6 +84,7 @@ import {
 import { playbackIntroMedia, storyMediaForScope } from "./journeyPlayback";
 import type { Journey, JourneyMediaAsset } from "./types";
 import {
+  completeMediaPlacementUploadPlan,
   groupMediaPlacementSuggestions,
   readMediaPlacementSignal,
   type MediaPlacementBatchResult,
@@ -168,6 +169,12 @@ type JourneyStoryProps = {
 type PendingPlacementReview = {
   files: File[];
   batch: MediaPlacementBatchResult;
+};
+
+type PendingPlacementUploadGroup = {
+  journeyId: string;
+  routePointId: string | null;
+  files: File[];
 };
 
 type MediaUploadState =
@@ -310,6 +317,18 @@ export function mediaForUploadRefreshScope(
   targetRoutePointId: string | null,
 ) {
   return storyMediaForScope(target, targetRoutePointId);
+}
+
+export function groupedPlacementRefreshSelection(
+  target: Journey | null,
+  targetRoutePointId: string | null,
+  uploadedAssetIds: readonly string[],
+) {
+  if (!target) return null;
+  const media = mediaForUploadRefreshScope(target, targetRoutePointId);
+  const assetIndex = storyUploadedAssetIndex(media, uploadedAssetIds);
+  if (assetIndex === null) return null;
+  return { media, assetIndex, assetId: media[assetIndex].id };
 }
 
 export function mediaMoveUndoForSelection(
@@ -678,6 +697,7 @@ export function JourneyStory({
   const [retryFiles, setRetryFiles] = useState<File[]>([]);
   const [retryRoutePointId, setRetryRoutePointId] = useState<string | null>(null);
   const [placementReview, setPlacementReview] = useState<PendingPlacementReview | null>(null);
+  const [placementRetryGroups, setPlacementRetryGroups] = useState<PendingPlacementUploadGroup[]>([]);
   const [placementAnalyzing, setPlacementAnalyzing] = useState(false);
   const [closeBlocked, setCloseBlocked] = useState(false);
   const [deleteState, setDeleteState] = useState<"idle" | "confirming" | "pending">("idle");
@@ -1029,6 +1049,7 @@ export function JourneyStory({
     setRetryFiles([]);
     setRetryRoutePointId(null);
     setPlacementReview(null);
+    setPlacementRetryGroups([]);
     setPlacementAnalyzing(false);
     setCloseBlocked(false);
     setDeleteState("idle");
@@ -2020,6 +2041,7 @@ export function JourneyStory({
     setRetryFiles([]);
     setRetryRoutePointId(null);
     setPlacementReview(null);
+    setPlacementRetryGroups([]);
     setCloseBlocked(false);
     const validation = validateJourneyFiles(files);
     if (!validation.accepted) {
@@ -2095,6 +2117,7 @@ export function JourneyStory({
   }
 
   async function reviewSelectedFiles(files: File[]) {
+    setPlacementRetryGroups([]);
     const validation = validateJourneyFiles(files);
     if (!validation.accepted) {
       await uploadFiles(files);
@@ -2132,6 +2155,122 @@ export function JourneyStory({
     if (selected.length > 0) void reviewSelectedFiles(selected);
   }
 
+
+  async function uploadPlacementGroups(groups: readonly PendingPlacementUploadGroup[]) {
+    if (groups.length === 0 || mutationPending) return;
+    setPlacementReview(null);
+    setPlacementRetryGroups([]);
+    setRetryFiles([]);
+    setRetryRoutePointId(null);
+    setCloseBlocked(false);
+    const totalBytes = groups.reduce(
+      (sum, group) => sum + group.files.reduce((groupSum, file) => groupSum + file.size, 0),
+      0,
+    );
+    setUploadState({
+      status: "uploading",
+      fileName: "\u6309\u5efa\u8bae\u5206\u522b\u653e\u7f6e",
+      uploadedBytes: 0,
+      totalBytes,
+    });
+
+    let completedBytes = 0;
+    let uploadedCount = 0;
+    let refreshFailed = false;
+    const failedGroups: PendingPlacementUploadGroup[] = [];
+    let firstFailure: string | null = null;
+    for (const group of groups) {
+      const groupBytes = group.files.reduce((sum, file) => sum + file.size, 0);
+      const result = await uploadJourneyMedia({
+        journeyId: group.journeyId,
+        routePointId: group.routePointId ?? undefined,
+        files: group.files,
+        onProgress: (progress) => setUploadState({
+          status: "uploading",
+          fileName: progress.fileName,
+          uploadedBytes: completedBytes + progress.uploadedBytes,
+          totalBytes,
+        }),
+      });
+      uploadedCount += result.uploadedCount;
+      if (result.uploadedCount > 0) {
+        try {
+          const refreshedJourney = await onMediaAdded(group.journeyId);
+          if (!refreshedJourney) {
+            refreshFailed = true;
+          } else if (groups.length === 1 && group.journeyId === journey.id) {
+            const selection = groupedPlacementRefreshSelection(
+              refreshedJourney,
+              group.routePointId,
+              result.assets.map((asset) => asset.id),
+            );
+            if (!selection) {
+              refreshFailed = true;
+            } else {
+              setAssetIndex(selection.assetIndex);
+              setShownAssetId(selection.assetId);
+              setIncomingAssetId(null);
+              pendingTargetRef.current = null;
+            }
+          }
+        } catch {
+          // Upload is already canonical server state. A later refresh/reopen will
+          // surface it; do not repeat the upload because a refresh failed.
+          refreshFailed = true;
+        }
+      }
+      if (result.mediaErrors.length > 0) {
+        const failedFiles = result.mediaErrors.map((error) => group.files[error.fileIndex]).filter(Boolean);
+        if (failedFiles.length > 0) {
+          failedGroups.push({ ...group, files: failedFiles });
+        }
+        firstFailure ??= formatUploadError(result.mediaErrors[0].message);
+      }
+      completedBytes += groupBytes;
+    }
+
+    setPlacementRetryGroups(failedGroups);
+    setCloseBlocked(false);
+    if (failedGroups.length > 0) {
+      const failedCount = failedGroups.reduce((sum, group) => sum + group.files.length, 0);
+      setUploadState({
+        status: "complete",
+        tone: "error",
+        message: uploadedCount > 0
+          ? `\u5df2\u6309\u5efa\u8bae\u653e\u7f6e ${uploadedCount} \u4e2a\u5a92\u4f53\uff1b${failedCount} \u4e2a\u5931\u8d25\u3002${firstFailure ?? "\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002"}${refreshFailed ? " \u5df2\u4e0a\u4f20\u7684\u5a92\u4f53\u6682\u672a\u5237\u65b0\uff0c\u91cd\u65b0\u6253\u5f00\u65c5\u7a0b\u5373\u53ef\u770b\u5230\uff0c\u4e0d\u9700\u8981\u91cd\u590d\u4e0a\u4f20\u3002" : ""}`
+          : firstFailure ?? "\u6309\u5efa\u8bae\u653e\u7f6e\u5931\u8d25\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002",
+      });
+      return;
+    }
+    if (refreshFailed) {
+      setUploadState({
+        status: "complete",
+        tone: "error",
+        message: "\u5a92\u4f53\u5df2\u4e0a\u4f20\uff0c\u4f46\u5f53\u524d\u5217\u8868\u5237\u65b0\u5931\u8d25\u3002\u91cd\u65b0\u6253\u5f00\u8fd9\u6bb5\u65c5\u7a0b\u5373\u53ef\u770b\u5230\uff0c\u4e0d\u9700\u8981\u91cd\u590d\u4e0a\u4f20\u3002",
+      });
+      return;
+    }
+    setUploadState({
+      status: "complete",
+      tone: "success",
+      message: `\u5df2\u6309\u5efa\u8bae\u5206\u522b\u653e\u7f6e ${uploadedCount} \u4e2a\u5a92\u4f53\u3002`,
+    });
+  }
+
+  function confirmSuggestedPlacementGroups() {
+    if (!placementReview || mutationPending) return;
+    const plan = completeMediaPlacementUploadPlan(placementReview.batch, placementReview.files.length);
+    if (!plan) return;
+    const groups = plan.map((group) => ({
+      journeyId: group.journeyId,
+      routePointId: group.routePointId,
+      files: group.fileIndexes.map((index) => placementReview.files[index]),
+    }));
+    if (groups.length === 1 && groups[0].journeyId === journey.id) {
+      setSelectedRoutePointId(groups[0].routePointId);
+    }
+    void uploadPlacementGroups(groups);
+  }
   function confirmPlacementUpload(targetRoutePointId: string | null) {
     if (!placementReview || mutationPending) return;
     const files = placementReview.files;
@@ -3222,6 +3361,10 @@ export function JourneyStory({
               </button>
               {placementReview ? (() => {
                 const { groups, unsuggestedFileIndexes } = placementReview.batch;
+                const groupedUploadPlan = completeMediaPlacementUploadPlan(
+                  placementReview.batch,
+                  placementReview.files.length,
+                );
                 const completeSingleGroup = groups.length === 1
                   && unsuggestedFileIndexes.length === 0
                   && groups[0].fileIndexes.length === placementReview.files.length;
@@ -3232,7 +3375,7 @@ export function JourneyStory({
                 const suggestedPoint = singleSuggestion?.routePointId
                   ? suggestedJourney?.routePoints.find((point) => point.id === singleSuggestion.routePointId) ?? null
                   : null;
-                const canApplySuggestion = Boolean(singleSuggestion && suggestedJourney?.id === journey.id);
+                const canApplySuggestion = Boolean(singleSuggestion && groupedUploadPlan);
                 return (
                   <section className="journey-story__placement-review" aria-label={"\u5a92\u4f53\u4f4d\u7f6e\u5efa\u8bae"}>
                     <div className="journey-story__placement-review-head">
@@ -3264,8 +3407,13 @@ export function JourneyStory({
                     ) : null}
                     <div className="journey-story__placement-actions">
                       {canApplySuggestion && singleSuggestion ? (
-                        <button type="button" onClick={() => confirmPlacementUpload(singleSuggestion.routePointId)}>
+                        <button type="button" onClick={confirmSuggestedPlacementGroups}>
                           {"\u4f7f\u7528\u5efa\u8bae"}
+                        </button>
+                      ) : null}
+                      {!singleSuggestion && groupedUploadPlan ? (
+                        <button type="button" onClick={confirmSuggestedPlacementGroups}>
+                          {"\u6309\u5efa\u8bae\u5206\u522b\u653e\u7f6e"}
                         </button>
                       ) : null}
                       <button type="button" onClick={() => confirmPlacementUpload(null)}>{"\u653e\u5230\u6574\u6bb5\u65c5\u7a0b"}</button>
@@ -3296,6 +3444,11 @@ export function JourneyStory({
               ) : null}
               {uploadState.status === "complete" ? (
                 <p className={`journey-story__upload-message is-${uploadState.tone}`} role="status">{uploadState.message}</p>
+              ) : null}
+              {placementRetryGroups.length > 0 && uploadState.status !== "uploading" ? (
+                <button className="journey-story__retry" type="button" disabled={mutationPending || deleteState !== "idle"} onClick={() => void uploadPlacementGroups(placementRetryGroups)}>
+                  {"\u91cd\u8bd5\u6309\u5efa\u8bae\u653e\u7f6e\u5931\u8d25\u7684"} {placementRetryGroups.reduce((sum, group) => sum + group.files.length, 0)} {"\u4e2a\u6587\u4ef6"}
+                </button>
               ) : null}
               {retryFiles.length > 0 && uploadState.status !== "uploading" ? (
                 <button className="journey-story__retry" type="button" disabled={mutationPending || deleteState !== "idle"} onClick={() => void uploadFiles(retryFiles, retryRoutePointId)}>
