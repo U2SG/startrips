@@ -228,6 +228,40 @@ describe("playbackReducer (#19)", () => {
     expect(clamped.phase).toEqual({ type: "outro" });
   });
 
+  it("seeks atomically to a requested playback step and clamps boundaries", () => {
+    const steps = buildPlaybackSteps(journey);
+    let state = playbackReducer(journey, initialPlaybackState(), { type: "seek", stepIndex: 5 });
+    expect(state).toEqual({
+      stepIndex: 5,
+      phase: { type: "media", pointIndex: 1, mediaIndex: 0 },
+      paused: false,
+    });
+
+    state = playbackReducer(journey, state, { type: "seek", stepIndex: 999 });
+    expect(state.stepIndex).toBe(steps.length - 1);
+    expect(state.phase).toEqual({ type: "outro" });
+
+    state = playbackReducer(journey, state, { type: "seek", stepIndex: -20 });
+    expect(state.stepIndex).toBe(0);
+    expect(state.phase).toEqual({ type: "intro" });
+  });
+
+  it("preserves pause ownership when seeking so resume starts from the target", () => {
+    let state = playbackReducer(journey, initialPlaybackState(), { type: "pause" });
+    state = playbackReducer(journey, state, { type: "seek", stepIndex: 4 });
+    expect(state).toEqual({
+      stepIndex: 4,
+      phase: { type: "paused", previous: { type: "stop", pointIndex: 1 } },
+      paused: true,
+    });
+    state = playbackReducer(journey, state, { type: "resume" });
+    expect(state).toEqual({
+      stepIndex: 4,
+      phase: { type: "stop", pointIndex: 1 },
+      paused: false,
+    });
+  });
+
   it("pause freezes advancement and resume restores the previous phase", () => {
     let state = initialPlaybackState();
     state = playbackReducer(journey, state, { type: "advance" });

@@ -54,6 +54,7 @@ export function useJourneyPlaybackDirector(
   const resume = useCallback(() => transition({ type: "resume" }), [transition]);
   const next = useCallback(() => transition({ type: "advance" }), [transition]);
   const back = useCallback(() => transition({ type: "back" }), [transition]);
+  const seek = useCallback((stepIndex: number) => transition({ type: "seek", stepIndex }), [transition]);
   const exit = useCallback(() => transition({ type: "exit" }), [transition]);
 
   // Keep one elapsed-time budget per expanded step. Pausing (or decode hold)
@@ -126,6 +127,7 @@ export function useJourneyPlaybackDirector(
     resume,
     next,
     back,
+    seek,
     exit,
     introMs: PLAYBACK_PACING.introMs,
     outroMs: PLAYBACK_PACING.outroMs,
