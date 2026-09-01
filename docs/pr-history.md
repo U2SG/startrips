@@ -18,6 +18,14 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ## 2026-09-01
 
+### PR #142 - Parallelize browser QA in CI
+
+- **Source head:** `cac74af85f7d15d4186c653b81e83dcd31369d62`
+- **Scope:** Splits the previously serial browser acceptance block into three parallel browser-QA lanes while keeping schema generation, PostgreSQL migrations, typecheck, full tests, and build in a core lane. A final job named exactly `verify` remains the merge-readiness gate and succeeds only when both core and the aggregate browser matrix succeed.
+- **User-visible change:** None; this is CI wall-clock optimization only. No acceptance coverage is removed.
+- **Review fixes:** `qa:login-v3` and `qa:media-controls` share one balanced lane, while `qa:post-login-controls` and the distinct `qa:final-acceptance` mode each keep dedicated lanes. Matrix fail-fast is disabled so failures remain diagnosable, and the final `verify` job uses `if: always()` plus explicit dependency-result checks to prevent failed, cancelled, or skipped validation from producing a false green gate. Superseded runs are cancelled through workflow concurrency.
+- **Follow-up:** Compare PR and merge-to-main wall-clock time against the pre-optimization ~6m56s baseline (browser QA ~4m55s serial). GitHub CI is authoritative for timing and correctness.
+
 ### PR #135 - Fix mobile carousel settle continuity
 
 - **Source head:** `0530c0206595774733cdd8bd05dc5d501d6dcba7`
