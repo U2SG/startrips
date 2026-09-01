@@ -402,7 +402,7 @@ export function JourneyPlaybackOverlay({
       ? document.activeElement
       : null;
     const focusable = () => [...root.querySelectorAll<HTMLElement>(
-      'button:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      'button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
     )].filter((element) => (
       element.getClientRects().length > 0
       && getComputedStyle(element).visibility !== "hidden"
