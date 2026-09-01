@@ -183,6 +183,16 @@ function jpegWithExifDateFallback(original: string, digitized: string) {
   return bytes.buffer;
 }
 
+function jpegWithDigitizedExif() {
+  const buffer = jpegWithExif();
+  const view = new DataView(buffer);
+  const tiff = 12;
+  const exifIfd = tiff + 38;
+  view.setUint16(exifIfd + 2, 0x9004, true);
+  view.setUint16(exifIfd + 14, 0x9012, true);
+  return buffer;
+}
+
 describe("JPEG EXIF placement parsing (#86)", () => {
   it("extracts only normalized GPS and DateTimeOriginal with timezone", () => {
     expect(parseJpegExifPlacementSignal(jpegWithExif())).toEqual({
@@ -243,6 +253,14 @@ describe("JPEG EXIF placement parsing (#86)", () => {
 
     expect(parseJpegExifPlacementSignal(jpeg.buffer)).toBeNull();
   });
+  it("pairs DateTimeDigitized with OffsetTimeDigitized", () => {
+    expect(parseJpegExifPlacementSignal(jpegWithDigitizedExif())).toEqual({
+      latitude: expect.closeTo(22.278319, 5),
+      longitude: expect.closeTo(114.17469, 5),
+      capturedAt: "2026-08-30T14:15:00+08:00",
+    });
+  });
+
   it("returns no signal for non-JPEG or metadata-free bytes", () => {
     expect(parseJpegExifPlacementSignal(new Uint8Array([1, 2, 3]).buffer)).toBeNull();
     expect(parseJpegExifPlacementSignal(new Uint8Array([0xff, 0xd8, 0xff, 0xd9]).buffer)).toBeNull();
