@@ -320,10 +320,6 @@ export function JourneyPlaybackOverlay({
   // the dialog. Programmatic initial focus does not pin the chrome forever:
   // only an actual keyboard interaction switches the idle policy to keyboard.
   useEffect(() => {
-    if (paused || !director.isPlaying) {
-      setControlsHidden(false);
-      return;
-    }
     let timer = 0;
     const focusWithinOverlay = () => Boolean(
       overlayRef.current?.contains(document.activeElement),
@@ -353,7 +349,8 @@ export function JourneyPlaybackOverlay({
     window.addEventListener("pointerdown", onPointerActivity);
     window.addEventListener("touchstart", onPointerActivity, { passive: true });
     window.addEventListener("keydown", onKeyboardActivity);
-    restartIdle();
+    if (paused || !director.isPlaying) setControlsHidden(false);
+    else restartIdle();
     return () => {
       window.clearTimeout(timer);
       window.removeEventListener("pointermove", onPointerActivity);
