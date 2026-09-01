@@ -952,7 +952,11 @@ export function LivingAtlasApp({
       ) : null}
 
       {mobileSheetActive && mobileSheetJourney ? (
-        <div className="mobile-v2__sheet-layer">
+        <div
+          className="mobile-v2__sheet-layer"
+          inert={mobileSheetChildActive || undefined}
+          aria-hidden={mobileSheetChildActive || undefined}
+        >
           <button className="mobile-v2__sheet-backdrop" type="button" tabIndex={-1} aria-label="关闭旅程详情" onClick={() => setMobileSheetJourneyId(null)} />
           <section
             ref={mobileSheetDialogRef}
