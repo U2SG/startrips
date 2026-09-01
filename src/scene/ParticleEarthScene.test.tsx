@@ -219,9 +219,9 @@ describe("ParticleEarthScene contracts", () => {
   });
 
 
-  it("remembers overflow contacts that begin outside the canvas while two pointers own the globe (#107)", () => {
+  it("remembers sibling city contacts once another globe pointer is already tracked (#115)", () => {
     expect(shouldRememberUntrackedPointerStart(0)).toBe(false);
-    expect(shouldRememberUntrackedPointerStart(1)).toBe(false);
+    expect(shouldRememberUntrackedPointerStart(1)).toBe(true);
     expect(shouldRememberUntrackedPointerStart(2)).toBe(true);
     expect(shouldRememberUntrackedPointerStart(3)).toBe(true);
   });
