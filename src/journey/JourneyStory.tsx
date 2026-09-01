@@ -341,6 +341,22 @@ export function retainMediaMoveUndoAfterError(error: unknown): boolean {
     || error.status === 429;
 }
 
+export function mediaMoveUndoNeedsServerReconcile(error: unknown): boolean {
+  return error instanceof JourneyApiError && error.code === "MEDIA_MOVE_UNDO_STALE";
+}
+
+export function reorderInvalidatesMediaMoveUndo(
+  media: readonly JourneyMediaAsset[],
+  activeAssetId: string,
+  overAssetId: string,
+): boolean {
+  if (activeAssetId === overAssetId) return false;
+  const activeAsset = media.find((candidate) => candidate.id === activeAssetId);
+  const overAsset = media.find((candidate) => candidate.id === overAssetId);
+  if (!activeAsset || !overAsset) return false;
+  return activeAsset.routePointId === overAsset.routePointId;
+}
+
 export function storyInitialMediaSelection(
   journey: Journey | undefined,
   requestedRoutePointId: string | null,
@@ -2350,7 +2366,6 @@ export function JourneyStory({
   async function handleMediaReorderEnd(event: DragEndEvent) {
     const { active, over } = event;
     if (!over || active.id === over.id) return;
-    invalidateMoveUndo();
     const activeAsset = scopedMedia.find((candidate) => candidate.id === active.id);
     const overAsset = scopedMedia.find((candidate) => candidate.id === over.id);
     if (!activeAsset || !overAsset) return;
@@ -2363,7 +2378,11 @@ export function JourneyStory({
     const chapterMedia = scopedMedia.filter((candidate) => candidate.routePointId === reorderScopeId);
     const oldIndex = chapterMedia.findIndex((candidate) => candidate.id === active.id);
     const newIndex = chapterMedia.findIndex((candidate) => candidate.id === over.id);
-    if (oldIndex < 0 || newIndex < 0) return;
+    if (oldIndex < 0 || newIndex < 0 || oldIndex === newIndex) return;
+    // Preserve a valid server-backed Undo when drag validation rejects the gesture.
+    // Only a reorder that is actually going to mutate state invalidates it.
+    if (!reorderInvalidatesMediaMoveUndo(scopedMedia, activeAsset.id, overAsset.id)) return;
+    invalidateMoveUndo();
 
     // In aggregate Journey mode the grid spans multiple chapters. Reorder only
     // the active chapter, then splice it back into the canonical Story sequence
@@ -2475,14 +2494,26 @@ export function JourneyStory({
     try {
       await undoJourneyMediaMove(undo);
     } catch (error) {
-      const stale = error instanceof JourneyApiError && error.code === "MEDIA_MOVE_UNDO_STALE";
-      setMoveMessage(
-        stale
-          ? "媒体在移动后又发生了变化，无法安全撤销。"
-          : error instanceof Error
-            ? error.message
-            : "撤销失败，请稍后重试。",
-      );
+      const stale = mediaMoveUndoNeedsServerReconcile(error);
+      if (stale) {
+        // A retained retry can receive 409 after the first request actually committed
+        // but its response was lost. Always reconcile from the server before retiring
+        // the descriptor so the UI cannot remain on the pre-Undo state.
+        setMoveUndo(null);
+        try {
+          const refreshedJourney = await onMediaAdded(journey.id);
+          setMoveMessage(
+            refreshedJourney
+              ? "媒体状态已从服务器更新；该撤销操作已结束。"
+              : "撤销状态已变化，但当前列表刷新失败。重新打开旅程即可看到服务器状态。",
+          );
+        } catch {
+          setMoveMessage("撤销状态已变化，但当前列表刷新失败。重新打开旅程即可看到服务器状态。");
+        }
+        setMovePending(false);
+        return;
+      }
+      setMoveMessage(error instanceof Error ? error.message : "撤销失败，请稍后重试。");
       if (!retainMediaMoveUndoAfterError(error)) setMoveUndo(null);
       setMovePending(false);
       return;

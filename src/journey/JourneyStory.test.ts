@@ -11,6 +11,8 @@ import {
   mediaForRoutePoint,
   mediaForUploadRefreshScope,
   mediaMoveUndoForSelection,
+  mediaMoveUndoNeedsServerReconcile,
+  reorderInvalidatesMediaMoveUndo,
   retainMediaMoveUndoAfterError,
   replaceJourneySoundtrack,
   storyAssetIndexForId,
@@ -142,6 +144,26 @@ describe("mediaForUploadRefreshScope (#111 review)", () => {
     };
     expect(mediaForUploadRefreshScope(refreshed, "new-point").map((item) => item.id))
       .toEqual(["uploaded-media"]);
+  });
+});
+
+describe("media move Undo review regressions", () => {
+  it("reconciles server state when a retained Undo retry reports stale", () => {
+    expect(mediaMoveUndoNeedsServerReconcile(
+      new JourneyApiError(409, "MEDIA_MOVE_UNDO_STALE", "stale"),
+    )).toBe(true);
+    expect(mediaMoveUndoNeedsServerReconcile(
+      new JourneyApiError(400, "INVALID_MEDIA_MOVE_UNDO", "invalid"),
+    )).toBe(false);
+  });
+
+  it("does not invalidate Undo for rejected cross-chapter drag reorder", () => {
+    const pointA = { ...asset("point-a-media", "image/jpeg", 0), routePointId: "point-a" };
+    const pointB = { ...asset("point-b-media", "image/jpeg", 1), routePointId: "point-b" };
+    const pointASecond = { ...asset("point-a-second", "image/jpeg", 2), routePointId: "point-a" };
+
+    expect(reorderInvalidatesMediaMoveUndo([pointA, pointB], pointA.id, pointB.id)).toBe(false);
+    expect(reorderInvalidatesMediaMoveUndo([pointA, pointASecond], pointA.id, pointASecond.id)).toBe(true);
   });
 });
 
