@@ -958,13 +958,7 @@ export function JourneyStory({
   );
 
   useEffect(() => {
-    const cancelPendingSettle = mediaDragSettleCancelRef.current;
-    mediaDragSettleCancelRef.current = null;
-    cancelPendingSettle?.();
-    const activeDrag = mediaDragRef.current;
-    mediaDragRef.current = null;
-    if (activeDrag) finishMediaDrag(activeDrag);
-    mediaDragSettlingRef.current = false;
+    cancelPendingMediaDragSettle();
 
     const nextInitialMedia = storyInitialMediaSelection(journey, routePointId);
     setAssetIndex(nextInitialMedia.assetIndex);
@@ -1008,13 +1002,7 @@ export function JourneyStory({
       audio.currentTime = 0;
     }
     return () => {
-      const cancelPendingSettle = mediaDragSettleCancelRef.current;
-      mediaDragSettleCancelRef.current = null;
-      cancelPendingSettle?.();
-      const activeDrag = mediaDragRef.current;
-      mediaDragRef.current = null;
-      if (activeDrag) finishMediaDrag(activeDrag);
-      mediaDragSettlingRef.current = false;
+      cancelPendingMediaDragSettle();
     };
   }, [journeyId, routePointId]);
 
@@ -1706,6 +1694,16 @@ export function JourneyStory({
     applyMediaDragTransform();
   }
 
+  function cancelPendingMediaDragSettle() {
+    const cancelPendingSettle = mediaDragSettleCancelRef.current;
+    mediaDragSettleCancelRef.current = null;
+    cancelPendingSettle?.();
+    const activeDrag = mediaDragRef.current;
+    mediaDragRef.current = null;
+    if (activeDrag) finishMediaDrag(activeDrag);
+    mediaDragSettlingRef.current = false;
+  }
+
   function finishMediaDrag(drag: NonNullable<typeof mediaDragRef.current>) {
     drag.base.style.transition = "";
     drag.base.style.transform = "";
@@ -2072,6 +2070,7 @@ export function JourneyStory({
   function confirmPlacementUpload(targetRoutePointId: string | null) {
     if (!placementReview || mutationPending) return;
     const files = placementReview.files;
+    cancelPendingMediaDragSettle();
     setSelectedRoutePointId(targetRoutePointId);
     setPlacementReview(null);
     void uploadFiles(files, targetRoutePointId);
@@ -2175,6 +2174,7 @@ export function JourneyStory({
 
   function selectMediaScope(routePointId: string | null) {
     if (mutationPending) return;
+    cancelPendingMediaDragSettle();
     setPlayingFromGesture(false);
     setSelectedRoutePointId(routePointId);
     setAssetIndex(0);
