@@ -18,13 +18,13 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ## 2026-09-01
 
-### PR #118 — Restore cross-move Undo integration baseline
+### PR #118 — Restore CI integration and mobile pointer baselines
 
-- **Source head:** `c2373e3d16d8dfa42182043c5481557b97a316b3`
-- **Scope:** Corrects the PostgreSQL integration scenario for cross-Journey media Undo after CI quota recovery exposed a main-level baseline failure. The test now restores both destination route-point placement and the exact server-recorded destination order before asserting that the original Undo descriptor becomes valid again.
-- **User-visible change:** None; production stale-Undo protection is intentionally unchanged. The fix only makes the integration test restore the full state it claims to restore.
-- **Review fixes:** Initial self-review identified the later Atlas-delete 503 as a cascade from the early Undo assertion abort leaving `storageDriver="test"` fixtures behind, not a delete-service regression.
-- **Follow-up:** Once merged, open PRs that shared the red main baseline should update to the new main and rerun CI.
+- **Source head:** `e65405cad87aa4a4efc23902db5e9daca0d39b8e`
+- **Scope:** Restores the CI baseline uncovered after GitHub Actions quota recovery. The PostgreSQL integration scenario now restores both destination route-point placement and exact destination ordering before retrying a stale cross-Journey Undo descriptor. Mobile Story also restores Escape ownership for nested management surfaces and real pointer ownership for fullscreen media inside the mobile-context backdrop.
+- **User-visible change:** Mobile fullscreen media now receives real touch/pointer input instead of allowing hit-testing to pass through to the inline Story media beneath it, so fullscreen image swipes and native video pointer lifecycles behave consistently. Escape again closes the active nested media-management surface before unwinding Manage mode.
+- **Review fixes:** Kept the production stale-Undo guard unchanged; the integration test now restores the full state it claims to restore. CI browser-QA investigation then found that `.journey-story-backdrop.is-mobile-context` disabled pointer events for siblings and only re-enabled `.journey-story`, omitting `.journey-story-fullscreen`; fullscreen now explicitly owns pointer events. The collapsed Manage Escape handler now delegates to the active nested sheet/confirmation before exiting Manage.
+- **Follow-up:** If GitHub CI and final review are green, #65 can be audited for closure and the other open PRs can update to the repaired main baseline before rerunning their own CI.
 
 ### PR #108 - Bound particle-globe gestures to two pointers
 
