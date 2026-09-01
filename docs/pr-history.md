@@ -18,6 +18,14 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ## 2026-09-01
 
+### PR #134 - Add seekable Journey Playback timeline
+
+- **Source head:** `50dc8384ff5ec9e19347d69d6319cb32f1e84292`
+- **Scope:** Adds an atomic seek primitive to the existing Journey Playback director and upgrades the read-only progress line into a 44px interactive slider with route-point chapter ticks. Seeking reuses the current camera/media effects instead of introducing a second synchronization path, and paused playback remains paused at the selected target until resumed.
+- **User-visible change:** The playback progress control can now be tapped, dragged, or adjusted with the keyboard to jump directly through the current expanded playback sequence while the globe focus and media stage follow the selected step.
+- **Review fixes:** Preserves atomic seek and keyboard ownership, and fixes the latest P2 by including enabled input controls in the dialog focus-trap selector so the native range slider is reachable by Tab instead of being skipped.
+- **Follow-up:** #126 still owns remaining Playback V2 work. Rebased onto current main; playback/director targeted tests are 21/21, client TypeScript, production build, and `git diff --check` are green.
+
 ### PR #136 - Add distance-aware playback camera choreography
 
 - **Source head:** {source}
