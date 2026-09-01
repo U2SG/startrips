@@ -1191,16 +1191,26 @@ async function verifyAccountDock() {
       const accountTriggerSelector = mobile ? ".mobile-v2__account-trigger" : ".account-dock__tab";
       const accountPanelSelector = mobile ? ".account-sheet" : ".account-dock__panel";
       await page.locator(accountTriggerSelector).waitFor({ state: "visible" });
-      const tabNavOverlap = await page.evaluate((selector) => {
-        const tab = document.querySelector(selector)?.getBoundingClientRect();
-        const nav = (document.querySelector(".mobile-v2__header nav")
-          ?? document.querySelector(".living-atlas__header nav"))?.getBoundingClientRect();
-        if (!tab || !nav) return -1;
-        return Math.round(
-          Math.max(0, Math.min(tab.right, nav.right) - Math.max(tab.left, nav.left))
-          * Math.max(0, Math.min(tab.bottom, nav.bottom) - Math.max(tab.top, nav.top)),
+      const tabNavOverlap = await page.evaluate(({ selector, isMobile }) => {
+        const account = document.querySelector(selector);
+        const accountRect = account?.getBoundingClientRect();
+        if (!account || !accountRect) return -1;
+        const overlapArea = (rect) => Math.round(
+          Math.max(0, Math.min(accountRect.right, rect.right) - Math.max(accountRect.left, rect.left))
+          * Math.max(0, Math.min(accountRect.bottom, rect.bottom) - Math.max(accountRect.top, rect.top)),
         );
-      }, accountTriggerSelector);
+        if (isMobile) {
+          const obstacles = [
+            document.querySelector(".mobile-v2__brand"),
+            ...document.querySelectorAll(".mobile-v2__header nav button"),
+          ].filter((element) => element && element !== account);
+          return obstacles.reduce((maxOverlap, element) => (
+            Math.max(maxOverlap, overlapArea(element.getBoundingClientRect()))
+          ), 0);
+        }
+        const nav = document.querySelector(".living-atlas__header nav")?.getBoundingClientRect();
+        return nav ? overlapArea(nav) : -1;
+      }, { selector: accountTriggerSelector, isMobile: mobile });
       record(`account-${label}-closed`, await scanButtons(page, ".living-atlas"), {
         tabNavOverlap,
         failed: tabNavOverlap !== 0,
