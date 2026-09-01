@@ -102,6 +102,16 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 - **Review fixes:** Decoupled strong-signal conflict detection from the combined recommendation score: strong GPS chooses the nearest eligible route point using spatial evidence only, while strong absolute time chooses the closest timestamp independently, so contradictory nearby GPS/time signals correctly suppress a suggestion. The post-upload refresh now filters with the accepted `targetRoutePointId` explicitly rather than the stale pre-click React state closure. Added regressions for same-city conflicting strong signals and stale-scope refresh selection.
 - **Follow-up:** Broader cross-Journey placement UX and metadata coverage remain product follow-up; raw metadata stays browser-local. Targeted placement/Story tests are 46/46, the non-DB suite is 47 files / 435 tests, typecheck, production build, and `git diff --check` are green.
 
+## 2026-09-01
+
+### PR #103 - Add server-backed undo for media reassignment
+
+- **Source head:** `0986675a671f19dedbf4d5b3dbae33afe8743a6d`
+- **Scope:** Integrates same-Journey media reassignment Undo with current main, preserving #111 grouped-placement upload/refresh scope and the existing #102 cross-Journey Undo contract.
+- **User-visible change:** Same-Journey media moves remain undoable with exact ownership/order restoration. Retryable network/server failures keep the Undo action available, while confirmed stale/non-retryable responses retire it. A successful server Undo now reports refresh failure when the parent returns `null` instead of pretending the visible list refreshed.
+- **Review fixes:** Added a pre-mutation 10,000-item undo-safe size guard; invalidated Undo for soundtrack mutations; locked all same-Journey media rows with `FOR UPDATE` while validating/restoring Undo so concurrent deletion cannot yield a false success; retained descriptors across network/408/425/429/5xx failures; handled nullable refresh results explicitly. The #111 `targetRoutePointId` upload path and placement-refresh scope were preserved during conflict resolution.
+- **Follow-up:** Cross-Journey destination-picker UX remains tracked separately. Targeted uploads/Journey API/Story/delete-media tests are 89/89; the non-DB suite is 47 files / 448 tests; typecheck, production build, and `git diff --check` are green. DB concurrency integration still requires local PostgreSQL.
+
 ## 2026-08-31
 
 ### PR #103 - Add server-backed undo for media reassignment
