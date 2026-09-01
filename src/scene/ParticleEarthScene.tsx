@@ -1071,7 +1071,7 @@ async function buildParticleLandMask(source: {
   vectorScale: string;
   maskWidth: number;
   maskHeight: number;
-}) {
+}, retainRings = true) {
   const { maskWidth: width, maskHeight: height, path, vectorScale } = source;
   const canvas = document.createElement("canvas");
   canvas.width = width;
@@ -1094,7 +1094,7 @@ async function buildParticleLandMask(source: {
         : (geometry.coordinates as number[][][][]);
     polygons.forEach((polygon) => {
       drawPolygonMask(context, polygon, width);
-      rings.push(...polygon);
+      if (retainRings) rings.push(...polygon);
     });
   });
   return {
@@ -1111,7 +1111,7 @@ const loadParticleLandMask = createRetryableParticleResourceLoader(
 );
 
 const loadParticleRefinementLandMask = createRetryableParticleResourceLoader(
-  () => buildParticleLandMask(PARTICLE_REFINEMENT_LAND_SOURCE),
+  () => buildParticleLandMask(PARTICLE_REFINEMENT_LAND_SOURCE, false),
 );
 
 function isParticleLand(source: ParticleLandMask, lat: number, lon: number) {
@@ -3863,7 +3863,7 @@ export function ParticleEarthScene({
         target.particleOpacity,
       );
       const blendRefinement = (value: number, next: number) => (
-        damp(value, next, delta, 7.5)
+        snap ? next : damp(value, next, delta, 7.5)
       );
       if (activeRefinementLayer) {
         const refinementOpacity = currentParticleLod.activeCount > 0
