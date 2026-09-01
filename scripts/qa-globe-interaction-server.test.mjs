@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import {
   allocateLoopbackPort,
+  hasChildExited,
   normalizeQaBaseUrl,
   waitForChildExitOrTimeout,
 } from "./qa-globe-interaction-server.mjs";
@@ -53,4 +54,12 @@ describe("qa globe interaction server ownership (#109)", () => {
       vi.useRealTimers();
     }
   });
+  it("treats signal-terminated children as exited", async () => {
+    const child = new EventEmitter();
+    child.exitCode = null;
+    child.signalCode = "SIGKILL";
+    expect(hasChildExited(child)).toBe(true);
+    await expect(waitForChildExitOrTimeout(child, 5_000)).resolves.toBe("exit");
+  });
+
 });

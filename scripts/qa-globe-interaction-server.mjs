@@ -30,8 +30,12 @@ export async function allocateLoopbackPort() {
   });
 }
 
+export function hasChildExited(child) {
+  return child.exitCode !== null || child.signalCode != null;
+}
+
 export async function waitForChildExitOrTimeout(child, timeoutMs = 5_000) {
-  if (child.exitCode !== null) return "exit";
+  if (hasChildExited(child)) return "exit";
   return await new Promise((resolve) => {
     let settled = false;
     let timer = null;
@@ -53,8 +57,9 @@ async function waitForHttpReady(url, child, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   let lastError = null;
   while (Date.now() < deadline) {
-    if (child.exitCode !== null) {
-      throw new Error(`QA Vite server exited before becoming ready (code ${child.exitCode})`);
+    if (hasChildExited(child)) {
+      const reason = child.signalCode ? `signal ${child.signalCode}` : `code ${child.exitCode}`;
+      throw new Error(`QA Vite server exited before becoming ready (${reason})`);
     }
     try {
       const response = await fetch(url, { signal: AbortSignal.timeout(2_000) });
@@ -92,16 +97,16 @@ export async function startOwnedQaViteServer({ cwd = process.cwd(), timeoutMs = 
   try {
     await waitForHttpReady(baseUrl, child, timeoutMs);
   } catch (error) {
-    if (child.exitCode === null) child.kill();
+    if (!hasChildExited(child)) child.kill();
     throw new Error(`${error instanceof Error ? error.message : String(error)}\n${output}`);
   }
   return {
     baseUrl,
     async close() {
-      if (child.exitCode !== null) return;
+      if (hasChildExited(child)) return;
       child.kill();
       await waitForChildExitOrTimeout(child);
-      if (child.exitCode === null) child.kill("SIGKILL");
+      if (!hasChildExited(child)) child.kill("SIGKILL");
     },
   };
 }
