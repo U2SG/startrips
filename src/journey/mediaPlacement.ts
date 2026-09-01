@@ -533,12 +533,13 @@ export function parseJpegExifPlacementSignal(buffer: ArrayBuffer): MediaPlacemen
         const dateTimeOriginal = readAsciiEntry(reader, findIfdEntry(reader, exifIfd, 0x9003));
         const dateTimeDigitized = readAsciiEntry(reader, findIfdEntry(reader, exifIfd, 0x9004));
         const offsetTimeOriginal = readAsciiEntry(reader, findIfdEntry(reader, exifIfd, 0x9011));
+        const offsetTimeDigitized = readAsciiEntry(reader, findIfdEntry(reader, exifIfd, 0x9012));
         const normalizedOriginal = normalizeExifDateTime(dateTimeOriginal, offsetTimeOriginal);
         Object.assign(
           signal,
           Object.keys(normalizedOriginal).length > 0
             ? normalizedOriginal
-            : normalizeExifDateTime(dateTimeDigitized, null),
+            : normalizeExifDateTime(dateTimeDigitized, offsetTimeDigitized),
         );
       }
       return Object.keys(signal).length > 0 ? signal : null;
