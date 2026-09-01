@@ -5,6 +5,7 @@ import {
   JourneyStory,
   finalizeMediaDragCommit,
   scheduleCancelableMediaDragSettle,
+  groupedPlacementRefreshSelection,
   journeyDeleteDescription,
   mobileStoryExpandedForLayout,
   mobileStoryHistoryLayers,
@@ -128,6 +129,29 @@ function asset(
   };
 }
 
+
+describe("groupedPlacementRefreshSelection (#112 review)", () => {
+  it("selects the newly uploaded asset inside the accepted route-point scope", () => {
+    const refreshed: Journey = {
+      ...journey,
+      routePoints: [{
+        id: "point-1", journeyId: journey.id, sortOrder: 0, label: "Point 1",
+        latitude: 1, longitude: 1, occurredAt: null, note: null, isStop: true, createdAt: journey.createdAt,
+      }],
+      media: [
+        { ...asset("existing", "image/jpeg", 0), routePointId: "point-1" },
+        { ...asset("uploaded", "image/jpeg", 1), routePointId: "point-1" },
+      ],
+    };
+    expect(groupedPlacementRefreshSelection(refreshed, "point-1", ["uploaded"]))
+      .toMatchObject({ assetIndex: 1, assetId: "uploaded" });
+  });
+
+  it("treats a null refresh or a stale refresh missing the uploaded asset as failure", () => {
+    expect(groupedPlacementRefreshSelection(null, "point-1", ["uploaded"])).toBeNull();
+    expect(groupedPlacementRefreshSelection(journey, null, ["missing"])).toBeNull();
+  });
+});
 
 describe("mediaForUploadRefreshScope (#111 review)", () => {
   it("filters refreshed media by the accepted upload destination instead of stale UI scope", () => {

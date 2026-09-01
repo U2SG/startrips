@@ -319,6 +319,18 @@ export function mediaForUploadRefreshScope(
   return storyMediaForScope(target, targetRoutePointId);
 }
 
+export function groupedPlacementRefreshSelection(
+  target: Journey | null,
+  targetRoutePointId: string | null,
+  uploadedAssetIds: readonly string[],
+) {
+  if (!target) return null;
+  const media = mediaForUploadRefreshScope(target, targetRoutePointId);
+  const assetIndex = storyUploadedAssetIndex(media, uploadedAssetIds);
+  if (assetIndex === null) return null;
+  return { media, assetIndex, assetId: media[assetIndex].id };
+}
+
 export function mediaMoveUndoForSelection(
   journey: Journey,
   assetIds: readonly string[],
@@ -2164,6 +2176,7 @@ export function JourneyStory({
 
     let completedBytes = 0;
     let uploadedCount = 0;
+    let refreshFailed = false;
     const failedGroups: PendingPlacementUploadGroup[] = [];
     let firstFailure: string | null = null;
     for (const group of groups) {
@@ -2182,10 +2195,28 @@ export function JourneyStory({
       uploadedCount += result.uploadedCount;
       if (result.uploadedCount > 0) {
         try {
-          await onMediaAdded(group.journeyId);
+          const refreshedJourney = await onMediaAdded(group.journeyId);
+          if (!refreshedJourney) {
+            refreshFailed = true;
+          } else if (groups.length === 1 && group.journeyId === journey.id) {
+            const selection = groupedPlacementRefreshSelection(
+              refreshedJourney,
+              group.routePointId,
+              result.assets.map((asset) => asset.id),
+            );
+            if (!selection) {
+              refreshFailed = true;
+            } else {
+              setAssetIndex(selection.assetIndex);
+              setShownAssetId(selection.assetId);
+              setIncomingAssetId(null);
+              pendingTargetRef.current = null;
+            }
+          }
         } catch {
           // Upload is already canonical server state. A later refresh/reopen will
           // surface it; do not repeat the upload because a refresh failed.
+          refreshFailed = true;
         }
       }
       if (result.mediaErrors.length > 0) {
@@ -2206,8 +2237,16 @@ export function JourneyStory({
         status: "complete",
         tone: "error",
         message: uploadedCount > 0
-          ? `\u5df2\u6309\u5efa\u8bae\u653e\u7f6e ${uploadedCount} \u4e2a\u5a92\u4f53\uff1b${failedCount} \u4e2a\u5931\u8d25\u3002${firstFailure ?? "\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002"}`
+          ? `\u5df2\u6309\u5efa\u8bae\u653e\u7f6e ${uploadedCount} \u4e2a\u5a92\u4f53\uff1b${failedCount} \u4e2a\u5931\u8d25\u3002${firstFailure ?? "\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002"}${refreshFailed ? " \u5df2\u4e0a\u4f20\u7684\u5a92\u4f53\u6682\u672a\u5237\u65b0\uff0c\u91cd\u65b0\u6253\u5f00\u65c5\u7a0b\u5373\u53ef\u770b\u5230\uff0c\u4e0d\u9700\u8981\u91cd\u590d\u4e0a\u4f20\u3002" : ""}`
           : firstFailure ?? "\u6309\u5efa\u8bae\u653e\u7f6e\u5931\u8d25\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002",
+      });
+      return;
+    }
+    if (refreshFailed) {
+      setUploadState({
+        status: "complete",
+        tone: "error",
+        message: "\u5a92\u4f53\u5df2\u4e0a\u4f20\uff0c\u4f46\u5f53\u524d\u5217\u8868\u5237\u65b0\u5931\u8d25\u3002\u91cd\u65b0\u6253\u5f00\u8fd9\u6bb5\u65c5\u7a0b\u5373\u53ef\u770b\u5230\uff0c\u4e0d\u9700\u8981\u91cd\u590d\u4e0a\u4f20\u3002",
       });
       return;
     }
