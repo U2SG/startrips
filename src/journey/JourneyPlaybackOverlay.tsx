@@ -87,7 +87,7 @@ export function JourneyPlaybackOverlay({
   // waits on the decode settle instead of advancing on a fixed timer.
   const [hold, setHold] = useState(false);
   const director = useJourneyPlaybackDirector(journey, hold);
-  const { phase, paused, pause, resume, next, back, exit } = director;
+  const { phase, paused, pause, resume, next, back, seek, exit } = director;
   // Review P2: `exit()` only resets the local director; the overlay must also
   // tell the parent to drop playbackJourneyId, or playback can never close.
   const requestClose = useCallback(() => {
@@ -378,8 +378,12 @@ export function JourneyPlaybackOverlay({
   useEffect(() => {
     if (!director.isPlaying && !paused) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") requestClose();
-      else if (event.key === "ArrowRight") next();
+      if (event.key === "Escape") {
+        requestClose();
+        return;
+      }
+      if (event.target instanceof HTMLInputElement) return;
+      if (event.key === "ArrowRight") next();
       else if (event.key === "ArrowLeft") back();
       else if (event.key === " ") {
         event.preventDefault();
@@ -398,7 +402,7 @@ export function JourneyPlaybackOverlay({
       ? document.activeElement
       : null;
     const focusable = () => [...root.querySelectorAll<HTMLElement>(
-      'button:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      'button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
     )].filter((element) => (
       element.getClientRects().length > 0
       && getComputedStyle(element).visibility !== "hidden"
@@ -449,6 +453,9 @@ export function JourneyPlaybackOverlay({
       ? journey.routePoints[step.to]
       : null;
   const progress = stepsProgress(director.stepIndex, director.steps.length);
+  const chapterStepIndexes = director.steps.flatMap((candidate, index) => (
+    candidate.kind === "stop" ? [index] : []
+  ));
 
   return (
     <div
@@ -543,8 +550,26 @@ export function JourneyPlaybackOverlay({
             : <IconPlayerPause size={20} stroke={1.35} aria-hidden="true" />}
         </button>
         <button type="button" onClick={next} aria-label="下一个章节"><IconChevronRight size={20} stroke={1.35} aria-hidden="true" /></button>
-        <div className="journey-playback__progress" role="progressbar" aria-valuenow={Math.round(progress * 100)} aria-valuemin={0} aria-valuemax={100} aria-label="播放进度">
-          <span style={{ width: `${progress * 100}%` }} />
+        <div className="journey-playback__progress">
+          <span className="journey-playback__progress-fill" style={{ width: `${progress * 100}%` }} />
+          <div className="journey-playback__progress-chapters" aria-hidden="true">
+            {chapterStepIndexes.map((stepIndex) => (
+              <i
+                key={stepIndex}
+                style={{ left: `${stepsProgress(stepIndex, director.steps.length) * 100}%` }}
+              />
+            ))}
+          </div>
+          <input
+            type="range"
+            min={0}
+            max={Math.max(0, director.steps.length - 1)}
+            step={1}
+            value={director.stepIndex}
+            aria-label="播放进度"
+            aria-valuetext={`${director.stepIndex + 1} / ${Math.max(1, director.steps.length)}`}
+            onChange={(event) => seek(Number(event.currentTarget.value))}
+          />
         </div>
       </nav>
 

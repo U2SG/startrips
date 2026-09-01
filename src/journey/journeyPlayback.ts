@@ -221,6 +221,7 @@ export type PlaybackControl =
   | { type: "back" }
   | { type: "pause" }
   | { type: "resume" }
+  | { type: "seek"; stepIndex: number }
   | { type: "exit" };
 
 export type PlaybackState = {
@@ -263,6 +264,13 @@ export function playbackReducer(
       const previous = Math.max(0, state.stepIndex - 1);
       if (state.paused) return state;
       return { stepIndex: previous, phase: phaseForStep(steps[previous]), paused: false };
+    }
+    case "seek": {
+      const stepIndex = Math.min(lastIndex, Math.max(0, Math.trunc(control.stepIndex)));
+      const phase = phaseForStep(steps[stepIndex]);
+      return state.paused
+        ? { stepIndex, phase: { type: "paused", previous: phase }, paused: true }
+        : { stepIndex, phase, paused: false };
     }
     case "exit":
       return state;
