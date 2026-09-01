@@ -18,6 +18,14 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ## 2026-09-01
 
+### PR #129 - Preserve playback progress across pause and resume
+
+- **Source head:** `296b27c8ade25daa07d208ad36be3beeece1afa9`
+- **Scope:** Makes the existing Journey Playback director preserve the active step's elapsed-time budget across pause/resume and media decode holds, without depending on the separate Playback V2 tempo/timeline planner.
+- **User-visible change:** Pausing partway through a playback beat and resuming no longer restarts that beat's full wait; playback continues with only the remaining time. Slow-media readiness holds likewise freeze rather than reset the current timer budget.
+- **Review fixes:** Timer state is keyed to Journey/expanded-step identity, active elapsed time is consumed with a monotonic clock, completed/manual step transitions cannot leak old budget into the next step, and Journey changes explicitly reset all timer refs.
+- **Follow-up:** #126 still owns tempo re-planning, meaningful next/back, scrub UI, and cinematic grammar. After rebasing onto `main@d22673b`, targeted legacy playback + timer tests are 16/16, the full test suite and production build are green, and `git diff --check` is green. Local typecheck remains blocked only by the existing six `S3Client.send` errors in `server/storage/s3-compatible-storage.ts`.
+
 ### PR #118 — Restore CI integration and mobile pointer baselines
 
 - **Source head:** `d7a049cbc45687401654810998aeeb81d8c5feef`
