@@ -5089,7 +5089,8 @@ body:has(.journey-composer-backdrop.is-globe-picking) .account-dock {
     pointer-events: none;
   }
 
-  .journey-story-backdrop.is-mobile-context .journey-story {
+  .journey-story-backdrop.is-mobile-context .journey-story,
+  .journey-story-backdrop.is-mobile-context .journey-story-fullscreen {
     pointer-events: auto;
   }
 

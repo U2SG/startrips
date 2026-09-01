@@ -890,13 +890,26 @@ export function JourneyStory({
     if (!mobileLayout || !mobileManageMode || storyModal) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return;
-      if (
-        mutationPending
-        || mobileMediaMenuOpen
-        || mediaDeleteState !== "idle"
-        || deleteState !== "idle"
-        || fullscreen
-      ) return;
+      if (mutationPending) return;
+      if (mobileMediaMenuOpen) {
+        event.preventDefault();
+        setMobileMediaMenuOpen(false);
+        return;
+      }
+      if (mediaDeleteState !== "idle") {
+        if (mediaDeleteState === "confirming" && closeMobileMediaDelete()) {
+          event.preventDefault();
+        }
+        return;
+      }
+      if (deleteState !== "idle") {
+        if (deleteState === "confirming" && closeJourneyDelete()) {
+          event.preventDefault();
+        }
+        return;
+      }
+      // Fullscreen owns Escape on its window-level handler.
+      if (fullscreen) return;
       event.preventDefault();
       exitMobileManageMode();
     };
