@@ -106,21 +106,14 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ### PR #103 - Add server-backed undo for media reassignment
 
-- **Source head:** `0986675a671f19dedbf4d5b3dbae33afe8743a6d`
-- **Scope:** Integrates same-Journey media reassignment Undo with current main, preserving #111 grouped-placement upload/refresh scope and the existing #102 cross-Journey Undo contract.
-- **User-visible change:** Same-Journey media moves remain undoable with exact ownership/order restoration. Retryable network/server failures keep the Undo action available, while confirmed stale/non-retryable responses retire it. A successful server Undo now reports refresh failure when the parent returns `null` instead of pretending the visible list refreshed.
-- **Review fixes:** Added a pre-mutation 10,000-item undo-safe size guard; invalidated Undo for soundtrack mutations; locked all same-Journey media rows with `FOR UPDATE` while validating/restoring Undo so concurrent deletion cannot yield a false success; retained descriptors across network/408/425/429/5xx failures; handled nullable refresh results explicitly. The #111 `targetRoutePointId` upload path and placement-refresh scope were preserved during conflict resolution.
-- **Follow-up:** Cross-Journey destination-picker UX remains tracked separately. Targeted uploads/Journey API/Story/delete-media tests are 89/89; the non-DB suite is 47 files / 448 tests; typecheck, production build, and `git diff --check` are green. DB concurrency integration still requires local PostgreSQL.
+- **Source head:** `618aadbabf7bd565ff15bf09bd6169bfef7efbc1`
+- **Scope:** Rebases same-Journey media reassignment Undo onto `main@43bd76e`, preserving #111 grouped-placement upload/refresh behavior, #129 playback pause/resume behavior, and the existing #102 cross-Journey Undo contract.
+- **User-visible change:** Same-Journey media moves remain undoable with exact ownership/order restoration. Retryable network/server failures keep the Undo action available, while confirmed stale/non-retryable responses retire it. A successful server Undo reports refresh failure when the parent returns `null` instead of pretending the visible list refreshed.
+- **Review fixes:** Preserved the 10,000-item pre-mutation undo-safe guard and soundtrack invalidation; restored complete same-Journey media-row `FOR UPDATE` locking after rebase so concurrent deletion cannot yield a false success; preserved retryable descriptor retention for network/408/425/429/5xx failures; preserved nullable refresh handling. Rebase conflict resolution explicitly retained #111 `targetRoutePointId` upload scope and #129 playback changes.
+- **Follow-up:** Cross-Journey destination-picker UX remains tracked separately. Rebase validation: targeted uploads/Journey API/Story/delete-media/playback-director tests 92/92; non-DB suite 48 files / 451 tests; typecheck, production build, and `git diff --check` green. DB concurrency integration still requires local PostgreSQL.
+
 
 ## 2026-08-31
-
-### PR #103 - Add server-backed undo for media reassignment
-
-- **Source head:** `d613cfed7f1461928cd0ac3bf3e8a371aca6c61c`
-- **Scope:** Rebased the same-Journey media-reassignment Undo work onto current main after PR #102 introduced cross-Journey move/Undo. The shared `/api/uploads/assets/move/undo` endpoint accepts either the cross-Journey server-generated snapshot descriptor or the same-Journey exact-order/placement descriptor, preserving both contracts without route duplication.
-- **User-visible change:** After batch-moving media between route-point scopes inside one Journey, Story shows a lightweight Undo action. Undo restores each selected asset's previous route-point ownership and exact pre-move canonical media order; newer media changes make the old Undo stale instead of overwriting newer intent.
-- **Review fixes:** Resolved the post-#102 P1 contract conflict; preserved both cross- and same-Journey stale guards; unified the same-Journey full-order limit with the 10,000-item undo-safe budget; added a pre-mutation same-Journey size guard so an oversized Journey cannot move successfully and then expose a permanently failing Undo; centralized client Undo invalidation and now clear it when soundtrack upload/remove begins as well as on later visual-media mutation.
-- **Follow-up:** Cross-Journey destination-picker UX remains tracked in #75. Latest targeted parser/API/Story tests are 83/83, the non-DB suite is 46 files / 431 tests, typecheck, production build and `git diff --check` are green. Tenant integration coverage requires local PostgreSQL on `127.0.0.1:5432`.
 
 ### PR #105 — Stabilize high-zoom globe drag and pinch
 
