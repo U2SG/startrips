@@ -31,6 +31,43 @@ export type MediaPlacementBatchResult = {
   unsuggestedFileIndexes: number[];
 };
 
+export type MediaPlacementUploadGroup = {
+  journeyId: string;
+  routePointId: string | null;
+  fileIndexes: number[];
+};
+
+/**
+ * Returns an upload-safe grouped plan only when every selected file has exactly
+ * one confident destination. The plan preserves original selection order within
+ * each destination and orders groups by their first selected file.
+ */
+export function completeMediaPlacementUploadPlan(
+  batch: MediaPlacementBatchResult,
+  fileCount: number,
+): MediaPlacementUploadGroup[] | null {
+  if (fileCount <= 0 || batch.unsuggestedFileIndexes.length > 0 || batch.groups.length === 0) {
+    return null;
+  }
+  const seen = new Set<number>();
+  const groups: MediaPlacementUploadGroup[] = [];
+  for (const group of batch.groups) {
+    const indexes = [...group.fileIndexes].sort((left, right) => left - right);
+    if (indexes.length === 0) return null;
+    for (const index of indexes) {
+      if (!Number.isInteger(index) || index < 0 || index >= fileCount || seen.has(index)) return null;
+      seen.add(index);
+    }
+    groups.push({
+      journeyId: group.journeyId,
+      routePointId: group.routePointId,
+      fileIndexes: indexes,
+    });
+  }
+  if (seen.size !== fileCount) return null;
+  return groups.sort((left, right) => left.fileIndexes[0] - right.fileIndexes[0]);
+}
+
 const GPS_STRONG_DISTANCE_KM = 25;
 const TIME_STRONG_DELTA_HOURS = 24;
 const MIN_ROUTE_SCORE = 0.58;
