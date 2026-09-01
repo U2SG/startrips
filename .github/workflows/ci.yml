@@ -5,13 +5,18 @@ on:
     branches: [main]
   pull_request:
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
 jobs:
-  verify:
+  core:
+    name: core
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
     services:
       postgres:
         image: postgres:17-alpine
@@ -52,13 +57,43 @@ jobs:
         run: pnpm typecheck
       - name: Test
         run: pnpm test
-      - name: Install Chromium for browser QA
+      - name: Build
+        run: pnpm build
+
+  browser-qa:
+    name: browser-qa / ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: login-media
+            command: pnpm qa:login-v3 && pnpm qa:media-controls
+          - name: post-login
+            command: pnpm qa:post-login-controls
+          - name: final-acceptance
+            command: pnpm qa:final-acceptance
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.17.1
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Install Chromium
         run: pnpm exec playwright-core install --with-deps chromium
-      - name: Login and media-control browser QA
+      - name: Run browser QA
+        env:
+          QA_COMMAND: ${{ matrix.command }}
         run: |
+          set -euo pipefail
           pnpm exec vite --host 127.0.0.1 --port 4173 > /tmp/startrips-vite.log 2>&1 &
           VITE_PID=$!
-          trap 'kill $VITE_PID' EXIT
+          trap 'kill $VITE_PID 2>/dev/null || true' EXIT
           for attempt in {1..30}; do
             if curl --fail --silent http://127.0.0.1:4173/ > /dev/null; then
               break
@@ -66,9 +101,24 @@ jobs:
             sleep 1
           done
           curl --fail --silent http://127.0.0.1:4173/ > /dev/null || (cat /tmp/startrips-vite.log && exit 1)
-          pnpm qa:login-v3
-          pnpm qa:media-controls
-          pnpm qa:post-login-controls
-          pnpm qa:final-acceptance
-      - name: Build
-        run: pnpm build
+          bash -lc "$QA_COMMAND"
+
+  verify:
+    name: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    if: ${{ always() }}
+    needs:
+      - core
+      - browser-qa
+    steps:
+      - name: Require every validation lane to pass
+        env:
+          CORE_RESULT: ${{ needs.core.result }}
+          BROWSER_QA_RESULT: ${{ needs.browser-qa.result }}
+        run: |
+          set -euo pipefail
+          echo "core=$CORE_RESULT"
+          echo "browser-qa=$BROWSER_QA_RESULT"
+          [[ "$CORE_RESULT" == "success" ]]
+          [[ "$BROWSER_QA_RESULT" == "success" ]]
