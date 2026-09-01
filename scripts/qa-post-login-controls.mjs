@@ -1178,10 +1178,7 @@ async function verifyAccountDock() {
     await page.locator('input[type="password"]').fill("password1234");
     await page.getByRole("button", { name: "登录", exact: true }).click();
     await page.locator(".mobile-v2__journey-chip").waitFor({ state: "visible" });
-    // This focused globe-control preview does not render the Mobile V2 account
-    // slot, so AuthGateway intentionally falls back to the standalone dock at
-    // every viewport size. Keep this scenario on that fallback contract.
-    await page.locator(".account-dock__tab").waitFor({ state: "visible" });
+    await page.locator(".mobile-v2__account-trigger").waitFor({ state: "visible" });
 
     for (const [label, width, height, mobile] of [
       ["mobile-narrow", 320, 800, true],
@@ -1256,7 +1253,10 @@ async function verifyAccountDock() {
     await page.goto(`${origin}/?qaState=globe-controls-gateway&qaLite=1`, { waitUntil: "domcontentloaded" });
     const globeControls = page.locator(".living-atlas-globe__controls");
     await globeControls.waitFor({ state: "visible" });
-    await page.locator(".mobile-v2__account-trigger").waitFor({ state: "visible" });
+    // This focused globe-control preview does not render the Mobile V2 account
+    // slot, so AuthGateway intentionally falls back to the standalone dock at
+    // every viewport size. Keep this scenario on that fallback contract.
+    await page.locator(".account-dock__tab").waitFor({ state: "visible" });
 
     for (const [label, width, height, mobile] of [
       ["mobile-narrow", 320, 800, true],
