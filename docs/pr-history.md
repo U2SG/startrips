@@ -18,6 +18,14 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ## 2026-09-01
 
+### PR #118 — Restore cross-move Undo integration baseline
+
+- **Source head:** `c2373e3d16d8dfa42182043c5481557b97a316b3`
+- **Scope:** Corrects the PostgreSQL integration scenario for cross-Journey media Undo after CI quota recovery exposed a main-level baseline failure. The test now restores both destination route-point placement and the exact server-recorded destination order before asserting that the original Undo descriptor becomes valid again.
+- **User-visible change:** None; production stale-Undo protection is intentionally unchanged. The fix only makes the integration test restore the full state it claims to restore.
+- **Review fixes:** Initial self-review identified the later Atlas-delete 503 as a cascade from the early Undo assertion abort leaving `storageDriver="test"` fixtures behind, not a delete-service regression.
+- **Follow-up:** Once merged, open PRs that shared the red main baseline should update to the new main and rerun CI.
+
 ### PR #108 - Bound particle-globe gestures to two pointers
 
 - **Source head:** `b105c76ffa1f2ae51799d61d557d7f1465765097`
