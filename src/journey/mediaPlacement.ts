@@ -395,6 +395,23 @@ function readRationalArray(reader: TiffReader, entryOffset: number | null) {
   return values;
 }
 
+function isValidGpsDms(parts: readonly number[], maxDegrees: number) {
+  if (parts.length < 3) return false;
+  const [degrees, minutes, seconds] = parts;
+  if (
+    !Number.isFinite(degrees)
+    || !Number.isFinite(minutes)
+    || !Number.isFinite(seconds)
+    || degrees < 0
+    || minutes < 0
+    || seconds < 0
+    || minutes >= 60
+    || seconds >= 60
+    || degrees > maxDegrees
+  ) return false;
+  return degrees < maxDegrees || (minutes === 0 && seconds === 0);
+}
+
 function degreesFromGps(parts: readonly number[], reference: string) {
   const value = parts[0] + parts[1] / 60 + parts[2] / 3600;
   return reference === "S" || reference === "W" ? -value : value;
@@ -461,6 +478,8 @@ export function parseJpegExifPlacementSignal(buffer: ArrayBuffer): MediaPlacemen
           latRef && /^[NS]$/.test(latRef)
           && lonRef && /^[EW]$/.test(lonRef)
           && latParts && lonParts
+          && isValidGpsDms(latParts, 90)
+          && isValidGpsDms(lonParts, 180)
         ) {
           const latitude = degreesFromGps(latParts, latRef);
           const longitude = degreesFromGps(lonParts, lonRef);

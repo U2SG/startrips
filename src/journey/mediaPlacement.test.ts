@@ -78,7 +78,7 @@ function writeAscii(bytes: Uint8Array, offset: number, value: string) {
   bytes[offset + value.length] = 0;
 }
 
-function writeRationals(view: DataView, offset: number, values: Array<[number, number]>) {
+function writeRationals(view: DataView, offset: number, values: ReadonlyArray<readonly [number, number]>) {
   values.forEach(([numerator, denominator], index) => {
     view.setUint32(offset + index * 8, numerator, true);
     view.setUint32(offset + index * 8 + 4, denominator, true);
@@ -135,6 +135,17 @@ function jpegWithExif() {
   return bytes.buffer;
 }
 
+function jpegWithGpsParts(
+  latitude: Array<[number, number]>,
+  longitude: Array<[number, number]>,
+) {
+  const buffer = jpegWithExif();
+  const view = new DataView(buffer);
+  const tiff = 12;
+  writeRationals(view, tiff + 149, latitude);
+  writeRationals(view, tiff + 173, longitude);
+  return buffer;
+}
 describe("JPEG EXIF placement parsing (#86)", () => {
   it("extracts only normalized GPS and DateTimeOriginal with timezone", () => {
     expect(parseJpegExifPlacementSignal(jpegWithExif())).toEqual({
@@ -144,6 +155,28 @@ describe("JPEG EXIF placement parsing (#86)", () => {
     });
   });
 
+  it.each([
+    ["latitude minutes", [[22, 1], [60, 1], [0, 1]], [[114, 1], [10, 1], [0, 1]]],
+    ["longitude seconds", [[22, 1], [16, 1], [0, 1]], [[114, 1], [10, 1], [60, 1]]],
+    ["latitude past the pole", [[90, 1], [1, 1], [0, 1]], [[114, 1], [10, 1], [0, 1]]],
+    ["longitude past the antimeridian", [[22, 1], [16, 1], [0, 1]], [[180, 1], [0, 1], [1, 1]]],
+  ] as const)("rejects malformed GPS DMS components: %s", (_label, latitude, longitude) => {
+    expect(parseJpegExifPlacementSignal(jpegWithGpsParts(
+      latitude.map((part) => [...part]) as Array<[number, number]>,
+      longitude.map((part) => [...part]) as Array<[number, number]>,
+    ))).toEqual({ capturedAt: "2026-08-30T14:15:00+08:00" });
+  });
+
+  it("accepts exact pole and antimeridian DMS coordinates", () => {
+    expect(parseJpegExifPlacementSignal(jpegWithGpsParts(
+      [[90, 1], [0, 1], [0, 1]],
+      [[180, 1], [0, 1], [0, 1]],
+    ))).toEqual({
+      latitude: 90,
+      longitude: 180,
+      capturedAt: "2026-08-30T14:15:00+08:00",
+    });
+  });
   it("returns no signal for non-JPEG or metadata-free bytes", () => {
     expect(parseJpegExifPlacementSignal(new Uint8Array([1, 2, 3]).buffer)).toBeNull();
     expect(parseJpegExifPlacementSignal(new Uint8Array([0xff, 0xd8, 0xff, 0xd9]).buffer)).toBeNull();
