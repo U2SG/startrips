@@ -18,6 +18,14 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ## 2026-09-02
 
+### PR #165 - Reject duplicate auto-edit chapter ownership
+
+- **Source head:** `1a12523c19b5cf0ceaebf57b10570be9c4cd7cdf`
+- **Scope:** Tightens Quick Recap runtime validation so a plan can contain at most one journey-intro chapter and at most one chapter for each route point, matching the deterministic builder topology.
+- **User-visible change:** Malformed AI/JSON plans can no longer replay the same place's camera/arrival choreography by splitting distinct media across duplicate chapters while keeping total duration internally consistent.
+- **Review fixes:** Post-merge audit reproduced the gap with distinct assets split across duplicate route chapters and duplicate intro chapters; both cases now fail closed without changing canonical builder output.
+- **Follow-up:** Continue validating chapter-level grammar as new planner primitives are introduced; this PR intentionally does not constrain non-Quick-Recap modes that may need different chapter topology. Validation on source: autoEditPlan 32/32 green, full `src` 38 files / 417 tests green, client TypeScript green, production build green, and `git diff --check` green.
+
 ### PR #159 - Validate auto-edit media source order
 
 - **Source head:** `b44995dd015b9daeb12f47fd178346cc0a1a5a25`
