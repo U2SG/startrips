@@ -16,6 +16,16 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ---
 
+## 2026-09-03
+
+### PR #176 - Enforce canonical Full Playback chapter topology
+
+- **Source head:** `ef53df0c943f7ec611ccaca3a6504cd1fb089126`
+- **Scope:** Tightens Full Playback V1 validation so each Journey-intro/route scope can appear at most once and every Full chapter must contain media. This closes the gap where an otherwise preservation-complete plan could inject camera-only or split-scope chapters that repeat/inflate choreography.
+- **User-visible change:** Full Playback can no longer contain invisible camera-only detours or replay the same place through multiple chapters while still claiming a valid plan. Detailed Full camera primitive/duration grammar remains intentionally separate.
+- **Review fixes:** Self-review kept the rule scoped to Full mode and tested forged `plannedDurationMs` values that still reconcile, proving topology rather than arithmetic is what rejects the plan. A canonical populated one-chapter-per-scope Full plan remains valid.
+- **Follow-up:** Full camera/arrival semantics may be constrained separately once that grammar is finalized. Local validation was intentionally limited to `git diff --check`; this isolated worktree has no dependencies installed, so no dependency installation, full suite, production build, or other high-memory local validation was run. Targeted/full tests, TypeScript, build and browser QA are delegated to GitHub CI.
+
 ## 2026-09-02
 
 ### PR #172 - Enforce deterministic Quick Recap asset selection
