@@ -18,6 +18,13 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ## 2026-09-03
 
+### PR #182 - Reject empty Quick Recap chapters
+
+- **Source head:** `0d844ce3f1b94a49e502bcd38d384013c91bd663`
+- **Scope:** Tightens the Quick Recap V1 trust boundary so every accepted Quick Recap chapter must contain at least one media item, closing the remaining topology gap where a model-authored plan could inject a camera-only Journey/route chapter without changing deterministic selected-asset identity.
+- **User-visible change:** Malformed Quick Recap plans can no longer add dead-air travel/arrival choreography or display place/note UI for a route that has no recap media, even when camera/arrival vocabulary is valid and `plannedDurationMs` is forged to reconcile exactly.
+- **Review fixes:** The guard is intentionally scoped to Quick Recap and mirrors the existing Full Playback empty-chapter rejection without constraining Keepsake. Regression coverage uses canonical route travel/arrival values and recomputes total duration, proving the plan fails for empty topology rather than timing arithmetic.
+- **Follow-up:** None known at source review time. Local verification was intentionally limited to `git diff --check`; this isolated worktree has no `node_modules`, so dependencies were not installed and no full suite, production build, or other high-memory local validation was run. Full tests, TypeScript, build and browser QA are delegated to GitHub CI.
 ### PR #180 - Enforce Journey intro chronology in auto-edit plans
 
 - **Source head:** `ca7dbed270dbf7e550ac92ade9674634dc520e37`
