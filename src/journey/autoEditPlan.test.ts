@@ -39,6 +39,49 @@ describe("deterministic auto-edit foundation (#127)", () => {
     expect(validateAutoEditPlanV1(plan, { ...baseInput, digests }).valid).toBe(true);
   });
 
+  it("assigns photo-first chapter roles with distinct tempo-aware dwell", () => {
+    const digests = [
+      digest("tokyo-opener", "tokyo", 0),
+      digest("tokyo-detail", "tokyo", 1),
+      digest("tokyo-pin", "tokyo", 2, {
+        userSignals: { isJourneyCover: false, pinnedForRecap: true, excludedFromRecap: false },
+      }),
+      digest("kyoto", "kyoto", 3),
+      digest("osaka", "osaka", 4),
+    ];
+    const plan = buildDeterministicQuickRecapPlan({ ...baseInput, targetDurationMs: 30_000, digests });
+    const tokyo = plan.chapters.find((chapter) => chapter.routePointId === "tokyo");
+    expect(tokyo?.items.map((item) => [item.assetId, item.photoRole, item.dwellMs])).toEqual([
+      ["tokyo-opener", "hero", 3_100],
+      ["tokyo-detail", "supporting", 1_800],
+      ["tokyo-pin", "representative", 2_500],
+    ]);
+    expect(validateAutoEditPlanV1(plan, { ...baseInput, digests })).toMatchObject({ valid: true });
+  });
+
+  it("uses role-aware dwell when deciding whether optional photos fit the recap budget", () => {
+    const digests = [
+      digest("tokyo-opener", "tokyo", 0),
+      digest("tokyo-detail", "tokyo", 1),
+    ];
+    const plan = buildDeterministicQuickRecapPlan({
+      ...baseInput,
+      routePointIds: ["tokyo"],
+      targetDurationMs: 6_500,
+      digests,
+    });
+    expect(plan.chapters[0]?.items.map((item) => item.assetId)).toEqual(["tokyo-opener"]);
+    expect(plan.plannedDurationMs).toBe(4_900);
+  });
+
+  it("keeps hero image dwell inside the intended tempo bands", () => {
+    const digests = [digest("tokyo", "tokyo", 0)];
+    const fast = buildDeterministicQuickRecapPlan({ ...baseInput, routePointIds: ["tokyo"], targetDurationMs: 10_000, tempo: "fast", digests });
+    const immersive = buildDeterministicQuickRecapPlan({ ...baseInput, routePointIds: ["tokyo"], targetDurationMs: 10_000, tempo: "immersive", digests });
+    expect(fast.chapters[0]?.items[0]).toMatchObject({ photoRole: "hero", dwellMs: 2_000 });
+    expect(immersive.chapters[0]?.items[0]).toMatchObject({ photoRole: "hero", dwellMs: 4_900 });
+  });
+
   it("keeps pinned media even when the duration budget is already tight", () => {
     const digests = [
       digest("tokyo", "tokyo", 0),

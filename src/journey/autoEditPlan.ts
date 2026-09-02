@@ -1,5 +1,6 @@
 export type AutoEditMode = "full" | "quick-recap" | "keepsake";
 export type AutoEditTempo = "fast" | "standard" | "immersive";
+export type AutoEditPhotoRole = "hero" | "representative" | "supporting" | "burst";
 export type AutoEditSelectionReason =
   | "all-media"
   | "journey-cover"
@@ -48,6 +49,7 @@ export type AutoEditPlanItemV1 = {
   sourceIndex: number;
   trim?: { inMs: number; outMs: number };
   dwellMs?: number;
+  photoRole?: AutoEditPhotoRole;
   framing: "contain" | "cover" | "gentle-pan";
   transition: "direct" | "shared-spatial" | "soft-dissolve";
   selectionReason: AutoEditSelectionReason;
@@ -90,10 +92,10 @@ export type DeterministicQuickRecapInput = {
   generatedAt: string;
 };
 
-const IMAGE_DWELL_MS: Record<AutoEditTempo, number> = {
-  fast: 1_600,
-  standard: 2_200,
-  immersive: 3_000,
+const IMAGE_DWELL_MS: Record<AutoEditTempo, Record<AutoEditPhotoRole, number>> = {
+  fast: { hero: 2_000, representative: 1_600, supporting: 1_200, burst: 700 },
+  standard: { hero: 3_100, representative: 2_500, supporting: 1_800, burst: 900 },
+  immersive: { hero: 4_900, representative: 4_100, supporting: 3_000, burst: 1_300 },
 };
 const VIDEO_DWELL_MS: Record<AutoEditTempo, number> = {
   fast: 2_600,
@@ -131,13 +133,50 @@ function selectDuplicateRepresentatives(digests: MediaDigestV1[]) {
     .filter((digest): digest is MediaDigestV1 => Boolean(digest));
 }
 
-function itemDuration(digest: MediaDigestV1, tempo: AutoEditTempo) {
+function itemDuration(
+  digest: MediaDigestV1,
+  tempo: AutoEditTempo,
+  photoRole: AutoEditPhotoRole = "representative",
+) {
   if (digest.mediaType === "video") {
     const sourceDuration = digest.intrinsic.durationMs;
     if (sourceDuration === undefined || sourceDuration <= 0) return 0;
     return Math.min(sourceDuration, VIDEO_DWELL_MS[tempo]);
   }
-  return IMAGE_DWELL_MS[tempo];
+  return IMAGE_DWELL_MS[tempo][photoRole];
+}
+
+function photoRoleForChapterItem(
+  digest: MediaDigestV1,
+  imageIndex: number,
+): AutoEditPhotoRole {
+  if (imageIndex === 0) return "hero";
+  if (digest.userSignals.isJourneyCover || digest.userSignals.pinnedForRecap) return "representative";
+  return "supporting";
+}
+
+function selectedMediaDuration(
+  selected: Iterable<MediaDigestV1>,
+  tempo: AutoEditTempo,
+) {
+  const groups = new Map<string, MediaDigestV1[]>();
+  for (const digest of selected) {
+    const key = digest.routePointId ?? "__journey__";
+    const group = groups.get(key) ?? [];
+    group.push(digest);
+    groups.set(key, group);
+  }
+  let total = 0;
+  for (const group of groups.values()) {
+    let imageIndex = 0;
+    for (const digest of [...group].sort((a, b) => a.sourceIndex - b.sourceIndex)) {
+      const photoRole = digest.mediaType === "image"
+        ? photoRoleForChapterItem(digest, imageIndex++)
+        : undefined;
+      total += itemDuration(digest, tempo, photoRole);
+    }
+  }
+  return total;
 }
 
 function isQuickRecapEligible(
@@ -193,7 +232,7 @@ export function buildDeterministicQuickRecapPlan(input: DeterministicQuickRecapI
   if (introCandidates[0]) selected.set(introCandidates[0].assetId, introCandidates[0]);
 
   const baseOverhead = input.routePointIds.length * (CAMERA_MS + ARRIVAL_MS);
-  let selectedDuration = [...selected.values()].reduce((sum, digest) => sum + itemDuration(digest, tempo), 0);
+  let selectedDuration = selectedMediaDuration(selected.values(), tempo);
   const optional = representatives
     .filter((digest) => !selected.has(digest.assetId))
     .sort((a, b) => {
@@ -203,24 +242,33 @@ export function buildDeterministicQuickRecapPlan(input: DeterministicQuickRecapI
       return stableCandidateSort(a, b);
     });
   for (const digest of optional) {
-    const duration = itemDuration(digest, tempo);
-    if (baseOverhead + selectedDuration + duration > input.targetDurationMs) continue;
     selected.set(digest.assetId, digest);
-    selectedDuration += duration;
+    const nextDuration = selectedMediaDuration(selected.values(), tempo);
+    if (baseOverhead + nextDuration > input.targetDurationMs) {
+      selected.delete(digest.assetId);
+      continue;
+    }
+    selectedDuration = nextDuration;
   }
 
   const chapterOrder: Array<string | null> = [null, ...input.routePointIds];
   const chapters = chapterOrder.flatMap((routePointId) => {
+    let imageIndex = 0;
     const chapterItems = [...selected.values()]
       .filter((digest) => digest.routePointId === routePointId)
       .sort((a, b) => a.sourceIndex - b.sourceIndex)
       .map<AutoEditPlanItemV1>((digest) => {
-        const duration = itemDuration(digest, tempo);
+        const photoRole = digest.mediaType === "image"
+          ? photoRoleForChapterItem(digest, imageIndex++)
+          : undefined;
+        const duration = itemDuration(digest, tempo, photoRole);
         const clusterKey = digest.similarity?.duplicateClusterId;
         return {
           assetId: digest.assetId,
           sourceIndex: digest.sourceIndex,
-          ...(digest.mediaType === "video" ? { trim: { inMs: 0, outMs: duration } } : { dwellMs: duration }),
+          ...(digest.mediaType === "video"
+            ? { trim: { inMs: 0, outMs: duration } }
+            : { dwellMs: duration, photoRole }),
           framing: "contain",
           transition: "direct",
           selectionReason: selectionReason(digest, clusterKey ? (duplicateSizes.get(clusterKey) ?? 1) : 1),
