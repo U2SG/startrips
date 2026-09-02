@@ -455,6 +455,13 @@ export function validateAutoEditPlanV1(planInput: unknown, input: {
         routeOrder,
       ))
     : [];
+  const fullCanonicalDigests = plan.mode === "full"
+    ? input.digests.filter((digest) =>
+        digest.journeyId === input.journeyId
+        && digest.sourceRevision === input.journeyRevision
+        && (digest.routePointId === null || routeOrder.has(digest.routePointId)),
+      )
+    : [];
   const quickRecapDuplicateSizes = new Map<string, number>();
   for (const digest of quickRecapEligibleDigests) {
     const clusterKey = digest.similarity?.duplicateClusterId;
@@ -527,6 +534,9 @@ export function validateAutoEditPlanV1(planInput: unknown, input: {
       if (!(AUTO_EDIT_FRAMINGS as readonly unknown[]).includes(item.framing)) errors.push(`framing invalid ${item.assetId}`);
       if (!(AUTO_EDIT_TRANSITIONS as readonly unknown[]).includes(item.transition)) errors.push(`transition invalid ${item.assetId}`);
       if (!(AUTO_EDIT_SELECTION_REASONS as readonly unknown[]).includes(item.selectionReason)) errors.push(`selection reason invalid ${item.assetId}`);
+      if (plan.mode === "full" && item.selectionReason !== "all-media") {
+        errors.push(`full selection reason mismatch ${item.assetId}`);
+      }
       const quickRecapTempo = plan.mode === "quick-recap"
         && (AUTO_EDIT_TEMPOS as readonly unknown[]).includes(plan.tempo)
         ? plan.tempo as AutoEditTempo
@@ -579,9 +589,21 @@ export function validateAutoEditPlanV1(planInput: unknown, input: {
             if (item.trim.inMs !== 0 || item.trim.outMs !== expectedOutMs) {
               errors.push(`quick recap trim mismatch ${item.assetId}`);
             }
+          } else if (
+            plan.mode === "full"
+            && (item.trim.inMs !== 0 || item.trim.outMs !== sourceDuration)
+          ) {
+            errors.push(`full video trim mismatch ${item.assetId}`);
           }
         }
       }
+    }
+  }
+
+  if (plan.mode === "full") {
+    if (plan.omittedAssetIds.length > 0) errors.push("full omission ledger must be empty");
+    for (const digest of fullCanonicalDigests) {
+      if (!seen.has(digest.assetId)) errors.push(`full asset omitted ${digest.assetId}`);
     }
   }
 
