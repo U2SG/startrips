@@ -207,6 +207,61 @@ describe("deterministic auto-edit foundation (#127)", () => {
     ]));
   });
 
+  it("rejects vocabulary-valid Quick Recap framing and transition that diverge from V1 semantics", () => {
+    const digests = [digest("photo", "tokyo", 0)];
+    const plan = buildDeterministicQuickRecapPlan({ ...baseInput, routePointIds: ["tokyo"], digests });
+    const item = plan.chapters[0]?.items[0];
+    if (item) {
+      item.framing = "cover";
+      item.transition = "soft-dissolve";
+    }
+    const result = validateAutoEditPlanV1(plan, { ...baseInput, routePointIds: ["tokyo"], digests });
+    expect(result.errors).toEqual(expect.arrayContaining([
+      "quick recap framing mismatch photo",
+      "quick recap transition mismatch photo",
+    ]));
+  });
+
+  it("rejects forged Quick Recap selection reasons while preserving builder precedence", () => {
+    const scenarios = [
+      {
+        digest: digest("pinned", "tokyo", 0, { userSignals: { isJourneyCover: true, pinnedForRecap: true, excludedFromRecap: false } }),
+        expected: "user-pinned",
+      },
+      {
+        digest: digest("cover", "tokyo", 0, { userSignals: { isJourneyCover: true, pinnedForRecap: false, excludedFromRecap: false } }),
+        expected: "journey-cover",
+      },
+      {
+        digest: digest("video", "tokyo", 0, { mediaType: "video", mimeType: "video/mp4", intrinsic: { durationMs: 2_000 } }),
+        expected: "video-highlight",
+      },
+    ] as const;
+    for (const scenario of scenarios) {
+      const digests = [scenario.digest];
+      const plan = buildDeterministicQuickRecapPlan({ ...baseInput, routePointIds: ["tokyo"], digests });
+      const item = plan.chapters[0]?.items[0];
+      expect(item?.selectionReason).toBe(scenario.expected);
+      if (item) item.selectionReason = "visual-diversity";
+      expect(validateAutoEditPlanV1(plan, { ...baseInput, routePointIds: ["tokyo"], digests }).errors)
+        .toContain(`selection reason mismatch ${scenario.digest.assetId}`);
+    }
+  });
+
+  it("derives duplicate-cluster selection reasoning from eligible source digests", () => {
+    const digests = [
+      digest("weak", "tokyo", 0, { similarity: { duplicateClusterId: "burst" }, technical: { sharpness: 0.1 } }),
+      digest("strong", "tokyo", 1, { similarity: { duplicateClusterId: "burst" }, technical: { sharpness: 0.9 } }),
+    ];
+    const plan = buildDeterministicQuickRecapPlan({ ...baseInput, routePointIds: ["tokyo"], digests });
+    const selected = plan.chapters[0]?.items[0];
+    expect(selected?.assetId).toBe("strong");
+    expect(selected?.selectionReason).toBe("duplicate-cluster-representative");
+    if (selected) selected.selectionReason = "route-point-representative";
+    expect(validateAutoEditPlanV1(plan, { ...baseInput, routePointIds: ["tokyo"], digests }).errors)
+      .toContain("selection reason mismatch strong");
+  });
+
   it("rejects unknown quick-recap photo roles from untyped plan input", () => {
     const digests = [digest("photo", "tokyo", 0)];
     const plan = buildDeterministicQuickRecapPlan({ ...baseInput, routePointIds: ["tokyo"], digests });
