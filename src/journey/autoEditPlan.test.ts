@@ -448,6 +448,30 @@ describe("deterministic auto-edit foundation (#127)", () => {
     expect(validateAutoEditPlanV1(plan, { ...baseInput, routePointIds: ["tokyo"], digests })).toMatchObject({ valid: true, errors: [] });
   });
 
+  it("rejects empty Quick Recap route chapters even when canonical choreography and forged duration reconcile", () => {
+    const digests = [digest("photo", "tokyo", 0)];
+    const plan = buildDeterministicQuickRecapPlan({
+      ...baseInput,
+      routePointIds: ["tokyo", "kyoto"],
+      targetDurationMs: 20_000,
+      digests,
+    });
+    plan.chapters.push({
+      chapterId: "route:kyoto:camera-only",
+      routePointId: "kyoto",
+      camera: { primitive: "travel", durationMs: 1_000 },
+      arrival: { durationMs: 800, showPlaceLabel: true, showNote: true },
+      items: [],
+    });
+    plan.plannedDurationMs = plan.chapters.reduce((sum, chapter) =>
+      sum + chapter.camera.durationMs + (chapter.arrival?.durationMs ?? 0) + chapter.items.reduce((itemSum, item) =>
+        itemSum + (item.dwellMs ?? (item.trim ? item.trim.outMs - item.trim.inMs : 0)), 0), 0);
+
+    const result = validateAutoEditPlanV1(plan, { ...baseInput, routePointIds: ["tokyo", "kyoto"], digests });
+    expect(result.valid).toBe(false);
+    expect(result.errors).toContain("empty quick recap chapter route:kyoto:camera-only");
+    expect(result.errors).not.toContain("planned duration mismatch");
+  });
   it("rejects duplicate Quick Recap route chapters even when distinct assets and duration still reconcile", () => {
     const digests = [
       digest("first", "tokyo", 0),
