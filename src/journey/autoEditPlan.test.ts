@@ -311,6 +311,62 @@ describe("deterministic auto-edit foundation (#127)", () => {
       .toMatchObject({ valid: true, errors: [] });
   });
 
+  it("rejects duplicate Quick Recap route chapters even when distinct assets and duration still reconcile", () => {
+    const digests = [
+      digest("first", "tokyo", 0),
+      digest("second", "tokyo", 1),
+    ];
+    const plan = buildDeterministicQuickRecapPlan({
+      ...baseInput,
+      routePointIds: ["tokyo"],
+      targetDurationMs: 20_000,
+      digests,
+    });
+    const original = plan.chapters[0]!;
+    const [first, second] = original.items;
+    expect(first).toBeDefined();
+    expect(second).toBeDefined();
+    plan.chapters = [
+      { ...structuredClone(original), items: [structuredClone(first!)] },
+      { ...structuredClone(original), chapterId: "route:tokyo:split", items: [structuredClone(second!)] },
+    ];
+    plan.plannedDurationMs = plan.chapters.reduce((sum, chapter) =>
+      sum + chapter.camera.durationMs + (chapter.arrival?.durationMs ?? 0) + chapter.items.reduce((itemSum, item) =>
+        itemSum + (item.dwellMs ?? (item.trim ? item.trim.outMs - item.trim.inMs : 0)), 0), 0);
+
+    const result = validateAutoEditPlanV1(plan, { ...baseInput, routePointIds: ["tokyo"], digests });
+    expect(result.valid).toBe(false);
+    expect(result.errors).toContain("duplicate chapter scope tokyo");
+  });
+
+  it("rejects duplicate Quick Recap journey-intro chapters", () => {
+    const digests = [
+      digest("intro-a", null, 0),
+      digest("intro-b", null, 1),
+    ];
+    const plan = buildDeterministicQuickRecapPlan({
+      ...baseInput,
+      routePointIds: [],
+      targetDurationMs: 20_000,
+      digests,
+    });
+    const original = plan.chapters[0]!;
+    const [first, second] = original.items;
+    expect(first).toBeDefined();
+    expect(second).toBeDefined();
+    plan.chapters = [
+      { ...structuredClone(original), items: [structuredClone(first!)] },
+      { ...structuredClone(original), chapterId: "journey-intro:split", items: [structuredClone(second!)] },
+    ];
+    plan.plannedDurationMs = plan.chapters.reduce((sum, chapter) =>
+      sum + chapter.camera.durationMs + (chapter.arrival?.durationMs ?? 0) + chapter.items.reduce((itemSum, item) =>
+        itemSum + (item.dwellMs ?? (item.trim ? item.trim.outMs - item.trim.inMs : 0)), 0), 0);
+
+    const result = validateAutoEditPlanV1(plan, { ...baseInput, routePointIds: [], digests });
+    expect(result.valid).toBe(false);
+    expect(result.errors).toContain("duplicate chapter scope journey-intro");
+  });
+
   it("rejects forged selected-media source indexes and reversed chapter chronology", () => {
     const digests = [
       digest("first", "tokyo", 0),
