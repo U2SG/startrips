@@ -1,15 +1,25 @@
-export type AutoEditMode = "full" | "quick-recap" | "keepsake";
-export type AutoEditTempo = "fast" | "standard" | "immersive";
+export const AUTO_EDIT_MODES = ["full", "quick-recap", "keepsake"] as const;
+export type AutoEditMode = typeof AUTO_EDIT_MODES[number];
+export const AUTO_EDIT_TEMPOS = ["fast", "standard", "immersive"] as const;
+export type AutoEditTempo = typeof AUTO_EDIT_TEMPOS[number];
 export const AUTO_EDIT_PHOTO_ROLES = ["hero", "representative", "supporting", "burst"] as const;
 export type AutoEditPhotoRole = typeof AUTO_EDIT_PHOTO_ROLES[number];
-export type AutoEditSelectionReason =
-  | "all-media"
-  | "journey-cover"
-  | "user-pinned"
-  | "route-point-representative"
-  | "visual-diversity"
-  | "duplicate-cluster-representative"
-  | "video-highlight";
+export const AUTO_EDIT_SELECTION_REASONS = [
+  "all-media",
+  "journey-cover",
+  "user-pinned",
+  "route-point-representative",
+  "visual-diversity",
+  "duplicate-cluster-representative",
+  "video-highlight",
+] as const;
+export type AutoEditSelectionReason = typeof AUTO_EDIT_SELECTION_REASONS[number];
+export const AUTO_EDIT_FRAMINGS = ["contain", "cover", "gentle-pan"] as const;
+export type AutoEditFraming = typeof AUTO_EDIT_FRAMINGS[number];
+export const AUTO_EDIT_TRANSITIONS = ["direct", "shared-spatial", "soft-dissolve"] as const;
+export type AutoEditTransition = typeof AUTO_EDIT_TRANSITIONS[number];
+export const AUTO_EDIT_CAMERA_PRIMITIVES = ["hold", "short-arc", "travel", "pullback-travel"] as const;
+export type AutoEditCameraPrimitive = typeof AUTO_EDIT_CAMERA_PRIMITIVES[number];
 
 export type MediaDigestV1 = {
   schemaVersion: 1;
@@ -51,8 +61,8 @@ export type AutoEditPlanItemV1 = {
   trim?: { inMs: number; outMs: number };
   dwellMs?: number;
   photoRole?: AutoEditPhotoRole;
-  framing: "contain" | "cover" | "gentle-pan";
-  transition: "direct" | "shared-spatial" | "soft-dissolve";
+  framing: AutoEditFraming;
+  transition: AutoEditTransition;
   selectionReason: AutoEditSelectionReason;
 };
 
@@ -70,7 +80,7 @@ export type AutoEditPlanV1 = {
     chapterId: string;
     routePointId: string | null;
     camera: {
-      primitive: "hold" | "short-arc" | "travel" | "pullback-travel";
+      primitive: AutoEditCameraPrimitive;
       durationMs: number;
     };
     arrival?: {
@@ -326,6 +336,8 @@ export function validateAutoEditPlanV1(plan: AutoEditPlanV1, input: {
 }) {
   const errors: string[] = [];
   if (plan.schemaVersion !== 1) errors.push("unsupported schema version");
+  if (!(AUTO_EDIT_MODES as readonly unknown[]).includes(plan.mode)) errors.push("plan mode invalid");
+  if (!(AUTO_EDIT_TEMPOS as readonly unknown[]).includes(plan.tempo)) errors.push("plan tempo invalid");
   if (plan.journeyId !== input.journeyId) errors.push("journey id mismatch");
   if (plan.journeyRevision !== input.journeyRevision) errors.push("journey revision mismatch");
   const digestById = new Map(input.digests.map((digest) => [digest.assetId, digest]));
@@ -339,6 +351,9 @@ export function validateAutoEditPlanV1(plan: AutoEditPlanV1, input: {
     }
     if (chapter.arrival && !isFiniteNonNegativeDuration(chapter.arrival.durationMs)) {
       errors.push(`invalid arrival duration ${chapter.chapterId}`);
+    }
+    if (!(AUTO_EDIT_CAMERA_PRIMITIVES as readonly unknown[]).includes(chapter.camera.primitive)) {
+      errors.push(`camera primitive invalid ${chapter.chapterId}`);
     }
     if (chapter.routePointId !== null) {
       const routeIndex = routeOrder.get(chapter.routePointId);
@@ -357,6 +372,9 @@ export function validateAutoEditPlanV1(plan: AutoEditPlanV1, input: {
       if (digest.journeyId !== input.journeyId || digest.sourceRevision !== input.journeyRevision) errors.push(`stale asset ${item.assetId}`);
       if (digest.routePointId !== chapter.routePointId) errors.push(`asset chapter mismatch ${item.assetId}`);
       if (digest.userSignals.excludedFromRecap && plan.mode !== "full") errors.push(`excluded asset selected ${item.assetId}`);
+      if (!(AUTO_EDIT_FRAMINGS as readonly unknown[]).includes(item.framing)) errors.push(`framing invalid ${item.assetId}`);
+      if (!(AUTO_EDIT_TRANSITIONS as readonly unknown[]).includes(item.transition)) errors.push(`transition invalid ${item.assetId}`);
+      if (!(AUTO_EDIT_SELECTION_REASONS as readonly unknown[]).includes(item.selectionReason)) errors.push(`selection reason invalid ${item.assetId}`);
       if (plan.mode === "quick-recap") {
         if (digest.mediaType === "image") {
           if (!item.photoRole) errors.push(`photo role missing ${item.assetId}`);

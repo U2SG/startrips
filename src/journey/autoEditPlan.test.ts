@@ -178,6 +178,35 @@ describe("deterministic auto-edit foundation (#127)", () => {
     expect(result.errors).not.toEqual(expect.arrayContaining(["route point omitted kyoto", "route point omitted osaka"]));
   });
 
+  it("rejects unknown plan tempo and mode from runtime input", () => {
+    const digests = [digest("photo", "tokyo", 0)];
+    const plan = buildDeterministicQuickRecapPlan({ ...baseInput, routePointIds: ["tokyo"], digests });
+    (plan as unknown as { mode: unknown }).mode = "experimental";
+    (plan as unknown as { tempo: unknown }).tempo = "warp";
+    const result = validateAutoEditPlanV1(plan, { ...baseInput, routePointIds: ["tokyo"], digests });
+    expect(result.errors).toEqual(expect.arrayContaining(["plan mode invalid", "plan tempo invalid"]));
+  });
+
+  it("rejects unknown camera and item behavior vocabulary from runtime input", () => {
+    const digests = [digest("photo", "tokyo", 0)];
+    const plan = buildDeterministicQuickRecapPlan({ ...baseInput, routePointIds: ["tokyo"], digests });
+    const chapter = plan.chapters[0];
+    const item = chapter?.items[0];
+    if (chapter) (chapter.camera as unknown as { primitive: unknown }).primitive = "teleport";
+    if (item) {
+      (item as unknown as { framing: unknown }).framing = "stretch";
+      (item as unknown as { transition: unknown }).transition = "flash";
+      (item as unknown as { selectionReason: unknown }).selectionReason = "model-choice";
+    }
+    const result = validateAutoEditPlanV1(plan, { ...baseInput, routePointIds: ["tokyo"], digests });
+    expect(result.errors).toEqual(expect.arrayContaining([
+      "camera primitive invalid route:tokyo",
+      "framing invalid photo",
+      "transition invalid photo",
+      "selection reason invalid photo",
+    ]));
+  });
+
   it("rejects unknown quick-recap photo roles from untyped plan input", () => {
     const digests = [digest("photo", "tokyo", 0)];
     const plan = buildDeterministicQuickRecapPlan({ ...baseInput, routePointIds: ["tokyo"], digests });
