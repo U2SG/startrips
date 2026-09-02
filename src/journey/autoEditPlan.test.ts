@@ -246,6 +246,71 @@ describe("deterministic auto-edit foundation (#127)", () => {
     ]));
   });
 
+  it("fails closed on malformed omission-ledger entries", () => {
+    const digests = [digest("photo", "tokyo", 0)];
+    const validPlan = buildDeterministicQuickRecapPlan({ ...baseInput, routePointIds: ["tokyo"], digests });
+    for (const omittedAssetIds of [[null], [42], new Array(1)]) {
+      const result = validateAutoEditPlanV1(
+        { ...validPlan, omittedAssetIds },
+        { ...baseInput, routePointIds: ["tokyo"], digests },
+      );
+      expect(result.errors).toContain("omitted asset id invalid 0");
+    }
+  });
+
+  it("requires Quick Recap omission ledger to exactly match eligible unselected media", () => {
+    const digests = [
+      digest("selected", "tokyo", 0),
+      digest("omitted-a", "tokyo", 1, { similarity: { duplicateClusterId: "burst" }, technical: { sharpness: 0.1 } }),
+      digest("omitted-b", "tokyo", 2, { similarity: { duplicateClusterId: "burst" }, technical: { sharpness: 0.9 } }),
+      digest("excluded", "tokyo", 3, { userSignals: { isJourneyCover: false, pinnedForRecap: false, excludedFromRecap: true } }),
+    ];
+    const plan = buildDeterministicQuickRecapPlan({
+      ...baseInput,
+      routePointIds: ["tokyo"],
+      targetDurationMs: 4_900,
+      digests,
+    });
+    expect(plan.omittedAssetIds.length).toBeGreaterThan(0);
+    const actualOmitted = [...plan.omittedAssetIds];
+    const selectedId = plan.chapters[0]!.items[0]!.assetId;
+
+    const cases = [
+      { omittedAssetIds: [], error: "omission ledger mismatch" },
+      { omittedAssetIds: [...actualOmitted, ...actualOmitted], error: `duplicate omitted asset ${actualOmitted[0]}` },
+      { omittedAssetIds: [selectedId, ...actualOmitted], error: `selected asset listed omitted ${selectedId}` },
+      { omittedAssetIds: ["excluded", ...actualOmitted], error: "noneligible omitted asset excluded" },
+      { omittedAssetIds: [...actualOmitted].reverse(), error: "omission ledger mismatch" },
+    ];
+    for (const testCase of cases) {
+      const result = validateAutoEditPlanV1(
+        { ...plan, omittedAssetIds: testCase.omittedAssetIds },
+        { ...baseInput, routePointIds: ["tokyo"], digests },
+      );
+      expect(result.valid).toBe(false);
+      expect(result.errors).toContain(testCase.error);
+    }
+    expect(validateAutoEditPlanV1(plan, { ...baseInput, routePointIds: ["tokyo"], digests }))
+      .toMatchObject({ valid: true, errors: [] });
+  });
+
+  it("accepts builder omission order when eligible media share a source index", () => {
+    const digests = [
+      digest("z-selected", "tokyo", 0, { technical: { sharpness: 1 } }),
+      digest("z-omitted", "tokyo", 1, { similarity: { duplicateClusterId: "same" }, technical: { sharpness: 0.1 } }),
+      digest("a-omitted", "tokyo", 1, { similarity: { duplicateClusterId: "same" }, technical: { sharpness: 0.9 } }),
+      digest("m-optional", "tokyo", 1),
+    ];
+    const plan = buildDeterministicQuickRecapPlan({
+      ...baseInput,
+      routePointIds: ["tokyo"],
+      targetDurationMs: 4_900,
+      digests,
+    });
+    expect(validateAutoEditPlanV1(plan, { ...baseInput, routePointIds: ["tokyo"], digests }))
+      .toMatchObject({ valid: true, errors: [] });
+  });
+
   it("fails closed on structurally malformed runtime plan input instead of throwing", () => {
     const digests = [digest("photo", "tokyo", 0)];
     const validPlan = buildDeterministicQuickRecapPlan({ ...baseInput, routePointIds: ["tokyo"], digests });
