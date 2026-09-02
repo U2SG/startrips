@@ -24,19 +24,25 @@ function isAudio(asset: JourneyMediaAsset) {
 
 function runtimePhotoCandidates(journey: Journey): JourneyMediaAsset[] {
   const firstRoutePointId = journey.routePoints[0]?.id ?? null;
+  const coverId = journey.coverMediaAssetId;
   return journey.media
     .filter(isImage)
     .flatMap((asset) => {
-      if (asset.id === journey.coverMediaAssetId && firstRoutePointId) {
+      if (asset.id === coverId && firstRoutePointId) {
         // Playback projection only: the explicit Journey cover always opens
         // the recap as the first chapter hero, even when canonical ownership
-        // belongs to a later route point. The persisted asset is not mutated.
-        return [{ ...asset, routePointId: firstRoutePointId }];
+        // belongs to a later route point. Synthetic ordering is scoped to the
+        // projection; persisted ownership/sort order remain untouched.
+        return [{ ...asset, routePointId: firstRoutePointId, sortOrder: Number.MIN_SAFE_INTEGER }];
       }
       if (asset.routePointId !== null) return [asset];
       return [];
     })
-    .sort((left, right) => left.sortOrder - right.sortOrder || left.id.localeCompare(right.id));
+    .sort((left, right) => {
+      if (left.id === coverId && right.id !== coverId) return -1;
+      if (right.id === coverId && left.id !== coverId) return 1;
+      return left.sortOrder - right.sortOrder || left.id.localeCompare(right.id);
+    });
 }
 
 export function quickRecapDigestsForJourney(journey: Journey): MediaDigestV1[] {
@@ -70,17 +76,23 @@ export function prepareQuickRecapPlayback(
   const digests = quickRecapDigestsForJourney(journey);
   if (digests.length === 0) return null;
 
+  const candidateRoutePointIds = journey.routePoints
+    .filter((point) => digests.some((digest) => digest.routePointId === point.id))
+    .map((point) => point.id);
+  if (candidateRoutePointIds.length === 0) return null;
+
   const requestedTargetMs = options.targetDurationMs ?? QUICK_RECAP_TARGET_MS;
   const chapterBudgetMs = Math.max(1, requestedTargetMs - PLAYBACK_PACING.introMs - PLAYBACK_PACING.outroMs);
   const plan = buildDeterministicQuickRecapPlan({
     journeyId: journey.id,
     journeyRevision: String(journey.revision),
-    routePointIds: journey.routePoints.map((point) => point.id),
+    routePointIds: candidateRoutePointIds,
     digests,
     targetDurationMs: chapterBudgetMs,
     tempo: options.tempo ?? "standard",
     generatedAt: options.generatedAt,
   });
+  if (plan.plannedDurationMs > chapterBudgetMs) return null;
   const selectedIds = new Set(plan.chapters.flatMap((chapter) => chapter.items.map((item) => item.assetId)));
   if (selectedIds.size === 0) return null;
   const plannedRoutePointIds = new Set(plan.chapters.map((chapter) => chapter.routePointId));

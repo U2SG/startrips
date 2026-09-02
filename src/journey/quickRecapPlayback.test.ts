@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildPlaybackSteps } from "./journeyPlayback";
+import { buildPlaybackSteps, playbackMediaForPoint } from "./journeyPlayback";
 import {
   prepareQuickRecapPlayback,
   quickRecapDigestsForJourney,
@@ -58,6 +58,51 @@ describe("Quick Recap playback handoff (#127)", () => {
 
     const prepared = prepareQuickRecapPlayback(journey, { generatedAt: "2026-09-02T00:00:00.000Z" })!;
     expect(prepared.journey.media.find((asset) => asset.id === "cover")?.routePointId).toBe("p0");
+  });
+
+  it("puts the explicit cover first in both the plan and projected playback order", () => {
+    const journey = fixture();
+    journey.media = journey.media.map((asset) => {
+      if (asset.id === "cover") return { ...asset, routePointId: "p1", sortOrder: 99 };
+      if (asset.id === "p0-a") return { ...asset, sortOrder: 0 };
+      return asset;
+    });
+
+    const digests = quickRecapDigestsForJourney(journey);
+    expect(digests[0]?.assetId).toBe("cover");
+    expect(digests[0]?.sourceIndex).toBe(0);
+
+    const prepared = prepareQuickRecapPlayback(journey, { generatedAt: "2026-09-02T00:00:00.000Z" })!;
+    const openingChapter = prepared.plan.chapters.find((chapter) => chapter.routePointId === "p0")!;
+    expect(openingChapter.items[0]?.assetId).toBe("cover");
+    expect(playbackMediaForPoint(prepared.journey, 0)[0]?.id).toBe("cover");
+    expect(prepared.journey.media.find((asset) => asset.id === "cover")?.sortOrder).toBe(Number.MIN_SAFE_INTEGER);
+    expect(journey.media.find((asset) => asset.id === "cover")?.sortOrder).toBe(99);
+  });
+
+  it("budgets only route points that can produce recap chapters", () => {
+    const journey = fixture();
+    journey.coverMediaAssetId = null;
+    journey.routePoints = Array.from({ length: 64 }, (_, index) => point(`p${index}`, index));
+    journey.media = [
+      ...Array.from({ length: 12 }, (_, index) => media(`p0-${index}`, "p0", "image/jpeg", index)),
+      media("track", null, "audio/mpeg", 99),
+    ];
+
+    const prepared = prepareQuickRecapPlayback(journey, { generatedAt: "2026-09-02T00:00:00.000Z" })!;
+    expect(prepared).not.toBeNull();
+    expect(prepared.plan.chapters.map((chapter) => chapter.routePointId)).toEqual(["p0"]);
+    expect(prepared.plan.chapters[0]?.items).toHaveLength(12);
+    expect(prepared.plan.plannedDurationMs).toBeLessThanOrEqual(42_000);
+  });
+
+  it("fails closed when mandatory represented chapters cannot fit the recap target", () => {
+    const journey = fixture();
+    journey.coverMediaAssetId = null;
+    journey.routePoints = Array.from({ length: 9 }, (_, index) => point(`p${index}`, index));
+    journey.media = journey.routePoints.map((routePoint, index) => media(`photo-${index}`, routePoint.id, "image/jpeg", index));
+
+    expect(prepareQuickRecapPlayback(journey, { generatedAt: "2026-09-02T00:00:00.000Z" })).toBeNull();
   });
 
   it("omits route points that have no recap chapter so empty Full Playback timing cannot leak in", () => {
