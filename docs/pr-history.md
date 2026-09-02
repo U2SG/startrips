@@ -52,6 +52,14 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ## 2026-09-02
 
+### PR #174 - Enforce Full Playback plan preservation
+
+- **Source head:** `cce636929b781f5f7fbfc3b999042dac02a19700`
+- **Scope:** Adds Full-mode preservation gates to `validateAutoEditPlanV1()`: every current canonical visual digest must be selected exactly once, the omission ledger must be empty, selected items must use the faithful `all-media` reason, and videos with known duration must span the complete source range instead of inheriting recap-style trims. Foreign, stale, and deleted-route digests are excluded from the canonical required set.
+- **User-visible change:** A Full Playback plan can no longer silently drop Journey media or cut a long video down to a recap excerpt while still presenting itself as the faithful full experience.
+- **Review fixes:** Self-review kept the required Full asset set scoped to current Journey/revision and canonical route membership, so stale analysis records do not create impossible preservation requirements. Added regression coverage for missing canonical media, forged omission bookkeeping, recap selection reasons, full-length video acceptance, and duration-consistent silent truncation.
+- **Follow-up:** Full-mode chapter/camera grammar can evolve separately; this PR only locks preservation semantics required by #127. Local verification was intentionally limited to `git diff --check` because this isolated worktree has no test dependencies installed; no dependency install, full suite, production build, or other high-memory local validation was run. Targeted/full TypeScript/build/browser coverage is delegated to GitHub CI.
+
 ### PR #172 - Enforce deterministic Quick Recap asset selection
 
 - **Source head:** `797c1e5c2241995aab674ab3cb8873484f5fed7c`
