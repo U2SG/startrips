@@ -18,6 +18,14 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ## 2026-09-02
 
+### PR #150 - Reject unknown auto-edit behavioral vocabulary
+
+- **Source head:** `8b6c0fd4b3523782f665bde7622a41e112f2f1a9`
+- **Scope:** Adds runtime validation for auto-edit behavioral vocabulary so unknown `mode`, `tempo`, camera primitive, framing, transition, selection reason, and Quick Recap photo-role values cannot bypass the TypeScript boundary when plans come from JSON or AI-generated input. The rebase semantically preserves #148's finite/non-negative timing validation alongside this vocabulary validation.
+- **User-visible change:** Malformed or unsupported auto-edit plans are rejected before execution instead of silently entering the playback/keepsake pipeline with unknown behavior tokens.
+- **Review fixes:** No unresolved GitHub review findings at the rebased source. Rebase conflict with #148 was resolved by retaining both timing-shape checks and vocabulary checks rather than choosing either side.
+- **Follow-up:** Keep future schema vocabulary additions centralized in the validator allowlists so planner producers and runtime consumers evolve together. Validation on the rebased source: `autoEditPlan.test.ts` 21/21 green, client TypeScript green, production build green, and `git diff --check` green.
+
 ### PR #148 - Reject malformed auto-edit timing plans
 
 - **Source head:** `34436c61d3d6126f4f55c58e111098b649ecf65e`
