@@ -18,6 +18,14 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ## 2026-09-02
 
+### PR #170 - Enforce Quick Recap item behavior semantics
+
+- **Source head:** `fd097cb1f5751e12f15d7f114c86467123f8de0f`
+- **Scope:** Tightens Quick Recap V1 validation so vocabulary-valid item behavior still has to match the deterministic builder contract: `contain` framing, `direct` transition, and selection-reason precedence derived from pinned/cover/video/eligible duplicate-cluster/source semantics.
+- **User-visible change:** External JSON / AI-authored Quick Recap plans can no longer pass validation while misrepresenting why an asset was selected or substituting a different supported framing/transition behavior. Full and Keepsake behavior grammar remains unconstrained.
+- **Review fixes:** Self-review verified duplicate-cluster reasoning is computed from eligible source digests, matching the builder's duplicate-size semantics rather than trusting plan-selected items. Added coverage for pinned-over-cover precedence, cover, video, duplicate representatives, and vocabulary-valid framing/transition forgery.
+- **Follow-up:** None known at source review time. Local verification was intentionally limited to `git diff --check` because this isolated worktree has no dependencies installed; targeted/full tests, TypeScript, build and browser QA are delegated to GitHub CI to avoid high local resource use.
+
 ### PR #165 - Reject duplicate auto-edit chapter ownership
 
 - **Source head:** `1a12523c19b5cf0ceaebf57b10570be9c4cd7cdf`
