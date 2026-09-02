@@ -504,6 +504,41 @@ describe("deterministic auto-edit foundation (#127)", () => {
     expect(result.errors).toContain("duplicate chapter scope journey-intro");
   });
 
+  it("rejects Full Playback journey intro after route chapters even when duration reconciles", () => {
+    const digests = [digest("intro", null, 0), digest("tokyo", "tokyo", 1)];
+    const item = (assetId: string, sourceIndex: number) => ({
+      assetId, sourceIndex, dwellMs: 1_000, framing: "contain" as const, transition: "direct" as const, selectionReason: "all-media" as const,
+    });
+    const plan: AutoEditPlanV1 = {
+      schemaVersion: 1, planId: "full:late-intro", journeyId: "journey-1", journeyRevision: "7", generatedAt: baseInput.generatedAt,
+      mode: "full", plannedDurationMs: 3_000, tempo: "standard", omittedAssetIds: [],
+      chapters: [
+        { chapterId: "route:tokyo", routePointId: "tokyo", camera: { primitive: "travel", durationMs: 1_000 }, items: [item("tokyo", 1)] },
+        { chapterId: "journey-intro", routePointId: null, camera: { primitive: "hold", durationMs: 0 }, items: [item("intro", 0)] },
+      ],
+    };
+    const result = validateAutoEditPlanV1(plan, { ...baseInput, routePointIds: ["tokyo"], digests });
+    expect(result.valid).toBe(false);
+    expect(result.errors).toContain("journey intro chronology mismatch");
+    expect(result.errors).not.toContain("planned duration mismatch");
+  });
+
+  it("rejects Quick Recap journey intro after route chapters even when duration reconciles", () => {
+    const digests = [digest("intro", null, 0), digest("tokyo", "tokyo", 1)];
+    const plan = buildDeterministicQuickRecapPlan({
+      ...baseInput, routePointIds: ["tokyo"], targetDurationMs: 20_000, digests,
+    });
+    expect(plan.chapters.map((chapter) => chapter.routePointId)).toEqual([null, "tokyo"]);
+    plan.chapters.reverse();
+    plan.plannedDurationMs = plan.chapters.reduce((sum, chapter) =>
+      sum + chapter.camera.durationMs + (chapter.arrival?.durationMs ?? 0) + chapter.items.reduce((itemSum, item) =>
+        itemSum + (item.dwellMs ?? (item.trim ? item.trim.outMs - item.trim.inMs : 0)), 0), 0);
+    const result = validateAutoEditPlanV1(plan, { ...baseInput, routePointIds: ["tokyo"], digests });
+    expect(result.valid).toBe(false);
+    expect(result.errors).toContain("journey intro chronology mismatch");
+    expect(result.errors).not.toContain("planned duration mismatch");
+  });
+
   it("rejects forged selected-media source indexes and reversed chapter chronology", () => {
     const digests = [
       digest("first", "tokyo", 0),
