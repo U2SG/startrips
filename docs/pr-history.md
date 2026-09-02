@@ -18,6 +18,14 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ## 2026-09-02
 
+### PR #152 - Fail closed on malformed auto-edit plan shapes
+
+- **Source head:** `07f700c9fd25125e66420ab68908493537107b3c`
+- **Scope:** Hardens `validateAutoEditPlanV1()` as an untyped trust boundary so malformed JSON-shaped plan roots, chapter collections, camera/items/arrival records, trim shapes, and duration leaves return structured validation errors instead of throwing during traversal or duration arithmetic. The branch preserves the vocabulary and timing validation already merged through PRs #150 and #148.
+- **User-visible change:** Malformed external or AI-generated auto-edit plans are rejected safely before playback or keepsake consumers can execute them; valid deterministic plans behave unchanged.
+- **Review fixes:** The latest Codex P2 fixes replace hole-skipping `forEach` traversal with explicit numeric-slot inspection for sparse chapter/item arrays, and reject hostile non-number camera, arrival, dwell, and trim duration leaves during structural validation before any arithmetic can coerce or throw on them. Regression cases verify both paths return invalid results without throwing.
+- **Follow-up:** Keep future runtime plan fields covered by the structural trust-boundary pass before semantic traversal or arithmetic. Validation on the reviewed source: targeted `autoEditPlan.test.ts` green, client TypeScript green, production build green, and `git diff --check` green.
+
 ### PR #150 - Reject unknown auto-edit behavioral vocabulary
 
 - **Source head:** `8b6c0fd4b3523782f665bde7622a41e112f2f1a9`
