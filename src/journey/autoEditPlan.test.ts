@@ -311,6 +311,64 @@ describe("deterministic auto-edit foundation (#127)", () => {
       .toMatchObject({ valid: true, errors: [] });
   });
 
+  it("rejects forged selected-media source indexes and reversed chapter chronology", () => {
+    const digests = [
+      digest("first", "tokyo", 0),
+      digest("second", "tokyo", 1),
+    ];
+    const plan = buildDeterministicQuickRecapPlan({
+      ...baseInput,
+      routePointIds: ["tokyo"],
+      targetDurationMs: 20_000,
+      digests,
+    });
+    expect(plan.chapters[0]?.items.map((item) => item.assetId)).toEqual(["first", "second"]);
+
+    const forged = structuredClone(plan);
+    forged.chapters[0]!.items[0]!.sourceIndex = 99;
+    expect(validateAutoEditPlanV1(forged, { ...baseInput, routePointIds: ["tokyo"], digests }).errors)
+      .toContain("source index mismatch first");
+
+    const reversed = structuredClone(plan);
+    reversed.chapters[0]!.items.reverse();
+    expect(validateAutoEditPlanV1(reversed, { ...baseInput, routePointIds: ["tokyo"], digests }).errors)
+      .toContain("item source order mismatch route:tokyo");
+  });
+
+  it("fails closed on malformed selected-media source index leaves", () => {
+    const digests = [digest("photo", "tokyo", 0)];
+    const validPlan = buildDeterministicQuickRecapPlan({ ...baseInput, routePointIds: ["tokyo"], digests });
+    const cases = [
+      { sourceIndex: "0", error: "item source index invalid 0:0" },
+      { sourceIndex: Number.NaN, error: "invalid source index photo" },
+      { sourceIndex: Number.POSITIVE_INFINITY, error: "invalid source index photo" },
+      { sourceIndex: -1, error: "invalid source index photo" },
+      { sourceIndex: 0.5, error: "invalid source index photo" },
+    ];
+    for (const testCase of cases) {
+      const plan: any = structuredClone(validPlan);
+      plan.chapters[0].items[0].sourceIndex = testCase.sourceIndex;
+      const result = validateAutoEditPlanV1(plan, { ...baseInput, routePointIds: ["tokyo"], digests });
+      expect(result.valid).toBe(false);
+      expect(result.errors).toContain(testCase.error);
+    }
+  });
+
+  it("allows stable equal source indexes without inventing a tie-breaker", () => {
+    const digests = [
+      digest("z-first", "tokyo", 1),
+      digest("a-second", "tokyo", 1),
+    ];
+    const plan = buildDeterministicQuickRecapPlan({
+      ...baseInput,
+      routePointIds: ["tokyo"],
+      targetDurationMs: 20_000,
+      digests,
+    });
+    expect(validateAutoEditPlanV1(plan, { ...baseInput, routePointIds: ["tokyo"], digests }))
+      .toMatchObject({ valid: true, errors: [] });
+  });
+
   it("fails closed on structurally malformed runtime plan input instead of throwing", () => {
     const digests = [digest("photo", "tokyo", 0)];
     const validPlan = buildDeterministicQuickRecapPlan({ ...baseInput, routePointIds: ["tokyo"], digests });

@@ -375,6 +375,9 @@ function structurallyValidateAutoEditPlanV1(value: unknown) {
             errors.push(`chapter item invalid ${chapterIndex}:${itemIndex}`);
             continue;
           }
+          if (typeof item.sourceIndex !== "number") {
+            errors.push(`item source index invalid ${chapterIndex}:${itemIndex}`);
+          }
           if (Object.prototype.hasOwnProperty.call(item, "dwellMs") && typeof item.dwellMs !== "number") {
             errors.push(`item dwell invalid ${chapterIndex}:${itemIndex}`);
           }
@@ -428,6 +431,7 @@ export function validateAutoEditPlanV1(planInput: unknown, input: {
   let previousRouteIndex = -1;
 
   for (const chapter of plan.chapters) {
+    let previousItemSourceIndex = -1;
     if (!isFiniteNonNegativeDuration(chapter.camera.durationMs)) {
       errors.push(`invalid camera duration ${chapter.chapterId}`);
     }
@@ -451,6 +455,15 @@ export function validateAutoEditPlanV1(planInput: unknown, input: {
       }
       if (seen.has(item.assetId)) errors.push(`duplicate asset ${item.assetId}`);
       seen.add(item.assetId);
+      if (!Number.isFinite(item.sourceIndex) || !Number.isInteger(item.sourceIndex) || item.sourceIndex < 0) {
+        errors.push(`invalid source index ${item.assetId}`);
+      } else if (item.sourceIndex !== digest.sourceIndex) {
+        errors.push(`source index mismatch ${item.assetId}`);
+      }
+      if (digest.sourceIndex < previousItemSourceIndex) {
+        errors.push(`item source order mismatch ${chapter.chapterId}`);
+      }
+      previousItemSourceIndex = Math.max(previousItemSourceIndex, digest.sourceIndex);
       if (digest.journeyId !== input.journeyId || digest.sourceRevision !== input.journeyRevision) errors.push(`stale asset ${item.assetId}`);
       if (digest.routePointId !== chapter.routePointId) errors.push(`asset chapter mismatch ${item.assetId}`);
       if (digest.userSignals.excludedFromRecap && plan.mode !== "full") errors.push(`excluded asset selected ${item.assetId}`);
