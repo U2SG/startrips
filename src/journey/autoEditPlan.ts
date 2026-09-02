@@ -348,7 +348,7 @@ export function validateAutoEditPlanV1(plan: AutoEditPlanV1, input: {
           if (!item.photoRole) errors.push(`photo role missing ${item.assetId}`);
           else if (!(AUTO_EDIT_PHOTO_ROLES as readonly string[]).includes(item.photoRole)) errors.push(`photo role invalid ${item.assetId}`);
         }
-        if (digest.mediaType === "video" && item.photoRole) errors.push(`video photo role invalid ${item.assetId}`);
+        if (digest.mediaType === "video" && Object.prototype.hasOwnProperty.call(item, "photoRole")) errors.push(`video photo role invalid ${item.assetId}`);
       }
       if (item.trim) {
         const sourceDuration = digest.intrinsic.durationMs;

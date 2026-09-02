@@ -167,10 +167,23 @@ describe("deterministic auto-edit foundation (#127)", () => {
   it("rejects unknown quick-recap photo roles from untyped plan input", () => {
     const digests = [digest("photo", "tokyo", 0)];
     const plan = buildDeterministicQuickRecapPlan({ ...baseInput, routePointIds: ["tokyo"], digests });
-    const photo = plan.chapters[0]?.items[0] as (typeof plan.chapters)[number]["items"][number] & { photoRole?: string };
-    if (photo) photo.photoRole = "primary";
+    const photo = plan.chapters[0]?.items[0];
+    if (photo) (photo as unknown as { photoRole?: unknown }).photoRole = "primary";
     const result = validateAutoEditPlanV1(plan, { ...baseInput, routePointIds: ["tokyo"], digests });
     expect(result.errors).toContain("photo role invalid photo");
+  });
+
+  it("rejects any present photoRole field on quick-recap videos", () => {
+    const digests = [
+      digest("video", "tokyo", 0, { mediaType: "video", mimeType: "video/mp4", intrinsic: { durationMs: 2_000 } }),
+    ];
+    for (const illegalRole of [null, "", 0]) {
+      const plan = buildDeterministicQuickRecapPlan({ ...baseInput, routePointIds: ["tokyo"], digests });
+      const video = plan.chapters[0]?.items[0];
+      if (video) (video as unknown as { photoRole?: unknown }).photoRole = illegalRole;
+      const result = validateAutoEditPlanV1(plan, { ...baseInput, routePointIds: ["tokyo"], digests });
+      expect(result.errors).toContain("video photo role invalid video");
+    }
   });
 
   it("requires explicit photo roles on quick-recap images and forbids them on videos", () => {
