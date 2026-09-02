@@ -190,7 +190,7 @@ function isQuickRecapEligible(
     digest.journeyId === journeyId &&
     digest.sourceRevision === journeyRevision &&
     !digest.userSignals.excludedFromRecap &&
-    (digest.mediaType !== "video" || (digest.intrinsic.durationMs !== undefined && digest.intrinsic.durationMs > 0)) &&
+    (digest.mediaType !== "video" || (digest.intrinsic.durationMs !== undefined && Number.isFinite(digest.intrinsic.durationMs) && digest.intrinsic.durationMs > 0)) &&
     (digest.routePointId === null || canonicalRouteOrder.has(digest.routePointId))
   );
 }

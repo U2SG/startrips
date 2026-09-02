@@ -133,6 +133,20 @@ describe("deterministic auto-edit foundation (#127)", () => {
     expect(validateAutoEditPlanV1(plan, { ...baseInput, digests })).toMatchObject({ valid: true, errors: [] });
   });
 
+  it("treats non-finite video durations as noneligible before plan construction", () => {
+    const digests = [
+      digest("infinite-video", "tokyo", 0, { mediaType: "video", mimeType: "video/mp4", intrinsic: { durationMs: Number.POSITIVE_INFINITY } }),
+      digest("nan-video", "kyoto", 1, { mediaType: "video", mimeType: "video/mp4", intrinsic: { durationMs: Number.NaN } }),
+      digest("osaka", "osaka", 2),
+    ];
+    const plan = buildDeterministicQuickRecapPlan({ ...baseInput, digests });
+    expect(plan.chapters.map((chapter) => chapter.routePointId)).toEqual(["osaka"]);
+    expect(plan.chapters.flatMap((chapter) => chapter.items.map((item) => item.assetId))).not.toEqual(
+      expect.arrayContaining(["infinite-video", "nan-video"]),
+    );
+    expect(validateAutoEditPlanV1(plan, { ...baseInput, digests })).toMatchObject({ valid: true, errors: [] });
+  });
+
   it("does not require route coverage for noneligible videos", () => {
     const digests = [
       digest("unknown-video", "tokyo", 0, { mediaType: "video", mimeType: "video/mp4", intrinsic: {} }),
