@@ -16,6 +16,8 @@ import {
   playbackFocusRouteForCameraTarget,
   nextAtlasNotice,
   railContentSignature,
+  releaseStalePlaybackSession,
+  resolvePlaybackOwnership,
   resolveMobilePlaybackPresentation,
 } from "./LivingAtlasApp";
 import { playbackMediaGate } from "./JourneyPlaybackOverlay";
@@ -56,6 +58,62 @@ const playbackJourney: Journey = {
   routePoints: [],
   media: [],
 };
+
+describe("resolvePlaybackOwnership", () => {
+  it("requires the playback id to resolve before granting cinematic ownership", () => {
+    expect(resolvePlaybackOwnership([playbackJourney], playbackJourney.id, true)).toEqual({
+      journey: playbackJourney,
+      active: true,
+      releaseStaleState: false,
+    });
+    expect(resolvePlaybackOwnership([], playbackJourney.id, true)).toEqual({
+      journey: null,
+      active: false,
+      releaseStaleState: true,
+    });
+  });
+
+  it("waits for the initial Journey load to settle before releasing stale state", () => {
+    const ownership = resolvePlaybackOwnership([], playbackJourney.id, false);
+    expect(ownership).toEqual({
+      journey: null,
+      active: false,
+      releaseStaleState: false,
+    });
+    const session = {
+      journeyId: playbackJourney.id,
+      soundtrackRead: { url: "signed-track" },
+      cameraCommand: { target: { kind: "route" as const }, revision: 7 },
+    };
+    expect(releaseStalePlaybackSession(session, ownership.releaseStaleState)).toBe(session);
+  });
+
+  it("keeps an ordinary settled state inactive without scheduling cleanup", () => {
+    expect(resolvePlaybackOwnership([playbackJourney], null, true)).toEqual({
+      journey: null,
+      active: false,
+      releaseStaleState: false,
+    });
+  });
+
+  it("atomically releases playback state after the active Journey disappears", () => {
+    const session = {
+      journeyId: playbackJourney.id,
+      soundtrackRead: { url: "signed-track" },
+      cameraCommand: { target: { kind: "route" as const }, revision: 7 },
+    };
+    const before = resolvePlaybackOwnership([playbackJourney], session.journeyId, true);
+    expect(before.active).toBe(true);
+
+    const after = resolvePlaybackOwnership([], session.journeyId, true);
+    expect(after.active).toBe(false);
+    expect(releaseStalePlaybackSession(session, after.releaseStaleState)).toEqual({
+      journeyId: null,
+      soundtrackRead: null,
+      cameraCommand: null,
+    });
+  });
+});
 
 
 

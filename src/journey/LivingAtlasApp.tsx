@@ -80,6 +80,34 @@ export function playbackEntryNeedsPreparation(
   return Boolean(journey && journeySoundtrack(journey) && !cachedRead);
 }
 
+export function resolvePlaybackOwnership(
+  journeys: readonly Journey[],
+  playbackJourneyId: string | null,
+  journeysReady: boolean,
+) {
+  const journey = journeys.find((candidate) => candidate.id === playbackJourneyId) ?? null;
+  return {
+    journey,
+    active: journey !== null,
+    releaseStaleState: journeysReady && playbackJourneyId !== null && journey === null,
+  };
+}
+
+export type PlaybackSessionState = {
+  journeyId: string | null;
+  soundtrackRead: { url: string } | null;
+  cameraCommand: PlaybackCameraCommand | null;
+};
+
+export function releaseStalePlaybackSession(
+  session: PlaybackSessionState,
+  release: boolean,
+): PlaybackSessionState {
+  return release
+    ? { journeyId: null, soundtrackRead: null, cameraCommand: null }
+    : session;
+}
+
 function preferredReducedMotion() {
   return globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
 }
@@ -281,15 +309,19 @@ export function LivingAtlasApp({
   const [storyRoutePointId, setStoryRoutePointId] = useState<string | null>(null);
   // #19: cinematic journey playback. The globe stays mounted underneath; the
   // director drives phases and the overlay translates them into focus calls.
-  const [playbackJourneyId, setPlaybackJourneyId] = useState<string | null>(null);
-  const [playbackSoundtrackRead, setPlaybackSoundtrackRead] = useState<{ url: string } | null>(null);
+  const [playbackSession, setPlaybackSession] = useState<PlaybackSessionState>({
+    journeyId: null,
+    soundtrackRead: null,
+    cameraCommand: null,
+  });
   // Review P1: when the soundtrack read is not cached yet, the first click
   // only starts the prefetch and the button shows 正在准备配乐…; the user
   // clicks again (now with a cached URL) to actually start, keeping play()
   // inside a real user gesture.
   const [playbackPreparingId, setPlaybackPreparingId] = useState<string | null>(null);
-  const [playbackCameraCommand, setPlaybackCameraCommand] = useState<PlaybackCameraCommand | null>(null);
-  const playbackActive = playbackJourneyId !== null;
+  const playbackOwnership = resolvePlaybackOwnership(journeys, playbackSession.journeyId, status === "ready");
+  const playbackJourney = playbackOwnership.journey;
+  const playbackActive = playbackOwnership.active;
   const [composerOpen, setComposerOpen] = useState(false);
   const [editingJourneyId, setEditingJourneyId] = useState<string | null>(null);
   const [arrivalJourneyId, setArrivalJourneyId] = useState<string | null>(null);
@@ -384,6 +416,13 @@ export function LivingAtlasApp({
     setCinematicIsolation(playbackActive);
     return () => setCinematicIsolation(false);
   }, [playbackActive, setCinematicIsolation]);
+
+  useEffect(() => {
+    setPlaybackSession((current) => releaseStalePlaybackSession(
+      current,
+      playbackOwnership.releaseStaleState,
+    ));
+  }, [playbackOwnership.releaseStaleState]);
 
   // Mobile V2 is immersive by default: desktop focus-mode and timeline views
   // are never part of the mobile state machine.
@@ -480,7 +519,6 @@ export function LivingAtlasApp({
   }, [notice, undoJourney, clearNotice]);
 
   const activeJourney = journeys.find((journey) => journey.id === activeJourneyId) ?? null;
-  const playbackJourney = journeys.find((journey) => journey.id === playbackJourneyId) ?? null;
   const editingJourney = journeys.find((journey) => journey.id === editingJourneyId) ?? null;
   // Review P1: prefetch the soundtrack read while the active card is visible
   // so 播放旅程 can start audio synchronously inside the click gesture.
@@ -510,8 +548,8 @@ export function LivingAtlasApp({
   const mobileMapFocusRevision = mobileMapJourney
     ? (Math.max(0, journeys.findIndex((journey) => journey.id === mobileMapJourney.id)) + 1) * 1000
     : 0;
-  const playbackCameraTarget = playbackCameraCommand?.target ?? null;
-  const playbackJourneyRoute = routes.find((route) => route.id === playbackJourneyId) ?? null;
+  const playbackCameraTarget = playbackSession.cameraCommand?.target ?? null;
+  const playbackJourneyRoute = routes.find((route) => route.id === playbackSession.journeyId) ?? null;
   const playbackFocusPoint = playbackCameraTarget
     ? playbackFocusPointForCameraTarget(playbackJourney, playbackCameraTarget)
     : null;
@@ -657,7 +695,7 @@ export function LivingAtlasApp({
     setStoryRoutePointId(null);
     const cachedRead = journey ? cachedSoundtrackRead(journey) : null;
     if (playbackEntryNeedsPreparation(journey, cachedRead)) {
-      setPlaybackSoundtrackRead(null);
+      setPlaybackSession((current) => ({ ...current, soundtrackRead: null }));
       setPlaybackPreparingId(journeyId);
       void prefetchSoundtrackRead(journey!)
         .catch(() => null)
@@ -666,11 +704,13 @@ export function LivingAtlasApp({
         )));
       return;
     }
-    setPlaybackSoundtrackRead(cachedRead);
-    setPlaybackJourneyId(journeyId);
-    // The overlay issues the intro route command after mount. Clearing any
-    // previous command keeps camera ownership explicit across playback runs.
-    setPlaybackCameraCommand(null);
+    setPlaybackSession({
+      journeyId,
+      soundtrackRead: cachedRead,
+      // The overlay issues the intro route command after mount. Clearing any
+      // previous command keeps camera ownership explicit across playback runs.
+      cameraCommand: null,
+    });
   }
 
   function startGlobePick(accept: (point: GlobePointPick) => void) {
@@ -725,7 +765,7 @@ export function LivingAtlasApp({
             focusRoute={playbackCameraTarget
               ? playbackFocusRoute
               : focusRoute}
-            focusRevision={playbackCameraCommand?.revision ?? focusRevision}
+            focusRevision={playbackSession.cameraCommand?.revision ?? focusRevision}
             focusFlightProfile={playbackCameraTarget?.kind === "point" ? playbackCameraTarget.choreography : undefined}
             focusColor={focusPresentation.journey?.lightColor}
             journeyRoutes={routes}
@@ -1163,18 +1203,19 @@ export function LivingAtlasApp({
         />
       ) : null}
 
-      {playbackJourneyId ? (
+      {playbackSession.journeyId ? (
         <JourneyPlaybackOverlay
           journey={playbackJourney}
           onClose={() => {
-            setPlaybackJourneyId(null);
-            setPlaybackSoundtrackRead(null);
-            setPlaybackCameraCommand(null);
+            setPlaybackSession({ journeyId: null, soundtrackRead: null, cameraCommand: null });
           }}
           onCameraTargetChange={(target) => {
-            setPlaybackCameraCommand((current) => nextPlaybackCameraCommand(current, target, focusRevision));
+            setPlaybackSession((current) => ({
+              ...current,
+              cameraCommand: nextPlaybackCameraCommand(current.cameraCommand, target, focusRevision),
+            }));
           }}
-          initialSoundtrackRead={playbackSoundtrackRead}
+          initialSoundtrackRead={playbackSession.soundtrackRead}
           reduceMotion={reduceMotion}
         />
       ) : null}
