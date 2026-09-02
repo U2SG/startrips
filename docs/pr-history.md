@@ -18,6 +18,14 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ## 2026-09-03
 
+### PR #180 - Enforce Journey intro chronology in auto-edit plans
+
+- **Source head:** `ca7dbed270dbf7e550ac92ade9674634dc520e37`
+- **Scope:** Tightens the shared Auto Edit V1 chronology gate for Full Playback and Quick Recap so an optional Journey-intro chapter may appear only before route chapters. Once a route chapter has been observed, any later `routePointId: null` chapter fails validation.
+- **User-visible change:** External JSON / AI-authored plans can no longer move canonical Journey-intro media into the middle or end of playback while keeping route order and total duration internally consistent. Keepsake chronology is intentionally unchanged by this patch.
+- **Review fixes:** Self-review kept the new guard orthogonal to existing route-order checks and added forged Full/Quick Recap cases that recompute `plannedDurationMs`, proving rejection is based on chronology rather than arithmetic mismatch. Canonical intro-first plans remain covered by existing tests.
+- **Follow-up:** None known at source review time. Local verification was intentionally limited to `git diff --check`; the isolated worktree has no local `node_modules`, so no dependency installation, full suite, production build, or other high-memory local validation was run. Targeted/full tests, TypeScript, build and browser QA are delegated to GitHub CI.
+
 ### PR #176 - Enforce canonical Full Playback chapter topology
 
 - **Source head:** `ef53df0c943f7ec611ccaca3a6504cd1fb089126`
