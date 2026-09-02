@@ -18,6 +18,14 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ## 2026-09-02
 
+### PR #146 - Add photo-first recap beat roles
+
+- **Source head:** `140413848d436af5761c34f7abd18e7f9fb91d0f`
+- **Scope:** Extends #127's deterministic Quick Recap planner with explicit photo beat roles (`hero`, `representative`, `supporting`, reserved `burst`), role-specific tempo dwell budgets, and role-aware optional-media admission so the target-duration budget reflects the actual still-image rhythm.
+- **User-visible change:** Future Quick Recap playback can distinguish chapter-opening photos from supporting detail photos instead of assigning every still image one identical hold; this slice changes the validated plan contract, not the live playback UI.
+- **Review fixes:** Self-review caught that role-specific dwell could otherwise make optional selections exceed the recap budget, so optional admission recomputes role-aware chapter duration. Codex P2 review also caught that external/loaded plans could omit `photoRole`; Quick Recap validation now requires a role on image items and rejects photo roles on videos.
+- **Follow-up:** Live Playback V2 should consume `photoRole` rather than inventing a second photo-rhythm heuristic. `burst` is intentionally reserved for a later explicit Quick Recap burst policy. Validation on the reviewed source: `autoEditPlan.test.ts` 14/14 green, client TypeScript green, production build green, and `git diff --check` green.
+
 ### PR #145 - Make mobile Journey focus one continuous globe turn
 
 - **Source head:** `01b89a5d98edaf5d928508c5acced1fa594e0085`
