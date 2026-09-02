@@ -429,6 +429,19 @@ export function validateAutoEditPlanV1(planInput: unknown, input: {
   const seen = new Set<string>();
   const seenQuickRecapChapterScopes = new Set<string>();
   const routeOrder = new Map(input.routePointIds.map((id, index) => [id, index]));
+  const quickRecapEligibleDigests = plan.mode === "quick-recap"
+    ? input.digests.filter((digest) => isQuickRecapEligible(
+        digest,
+        input.journeyId,
+        input.journeyRevision,
+        routeOrder,
+      ))
+    : [];
+  const quickRecapDuplicateSizes = new Map<string, number>();
+  for (const digest of quickRecapEligibleDigests) {
+    const clusterKey = digest.similarity?.duplicateClusterId;
+    if (clusterKey) quickRecapDuplicateSizes.set(clusterKey, (quickRecapDuplicateSizes.get(clusterKey) ?? 0) + 1);
+  }
   let previousRouteIndex = -1;
 
   for (const chapter of plan.chapters) {
@@ -479,6 +492,16 @@ export function validateAutoEditPlanV1(planInput: unknown, input: {
       if (!(AUTO_EDIT_TRANSITIONS as readonly unknown[]).includes(item.transition)) errors.push(`transition invalid ${item.assetId}`);
       if (!(AUTO_EDIT_SELECTION_REASONS as readonly unknown[]).includes(item.selectionReason)) errors.push(`selection reason invalid ${item.assetId}`);
       if (plan.mode === "quick-recap") {
+        if (item.framing !== "contain") errors.push(`quick recap framing mismatch ${item.assetId}`);
+        if (item.transition !== "direct") errors.push(`quick recap transition mismatch ${item.assetId}`);
+        const clusterKey = digest.similarity?.duplicateClusterId;
+        const expectedSelectionReason = selectionReason(
+          digest,
+          clusterKey ? (quickRecapDuplicateSizes.get(clusterKey) ?? 1) : 1,
+        );
+        if (item.selectionReason !== expectedSelectionReason) {
+          errors.push(`selection reason mismatch ${item.assetId}`);
+        }
         if (digest.mediaType === "image") {
           if (!item.photoRole) errors.push(`photo role missing ${item.assetId}`);
           else if (!(AUTO_EDIT_PHOTO_ROLES as readonly string[]).includes(item.photoRole)) errors.push(`photo role invalid ${item.assetId}`);
@@ -511,13 +534,7 @@ export function validateAutoEditPlanV1(planInput: unknown, input: {
   }
 
   if (plan.mode === "quick-recap") {
-    const eligibleDigests = input.digests
-      .filter((digest) => isQuickRecapEligible(
-        digest,
-        input.journeyId,
-        input.journeyRevision,
-        routeOrder,
-      ));
+    const eligibleDigests = quickRecapEligibleDigests;
     const eligibleById = new Map(eligibleDigests.map((digest) => [digest.assetId, digest]));
     const omissionSet = new Set<string>();
     for (const assetId of plan.omittedAssetIds) {
