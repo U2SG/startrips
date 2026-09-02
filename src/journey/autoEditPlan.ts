@@ -533,6 +533,34 @@ export function validateAutoEditPlanV1(planInput: unknown, input: {
     }
   }
 
+  if (
+    plan.mode === "quick-recap"
+    && (AUTO_EDIT_TEMPOS as readonly unknown[]).includes(plan.tempo)
+    && isFinitePositiveDuration(plan.targetDurationMs)
+  ) {
+    const expectedPlan = buildDeterministicQuickRecapPlan({
+      journeyId: input.journeyId,
+      journeyRevision: input.journeyRevision,
+      routePointIds: input.routePointIds,
+      digests: input.digests,
+      targetDurationMs: plan.targetDurationMs,
+      tempo: plan.tempo,
+      generatedAt: typeof plan.generatedAt === "string" ? plan.generatedAt : "",
+    });
+    const actualSelectedAssetIds = plan.chapters.flatMap((chapter) => chapter.items.map((item) => item.assetId));
+    const expectedSelectedAssetIds = expectedPlan.chapters.flatMap((chapter) => chapter.items.map((item) => item.assetId));
+    if (
+      actualSelectedAssetIds.length !== expectedSelectedAssetIds.length
+      || actualSelectedAssetIds.some((assetId, index) => assetId !== expectedSelectedAssetIds[index])
+    ) {
+      errors.push("quick recap selection mismatch");
+    }
+  }
+
+  if (plan.mode === "quick-recap" && !isFinitePositiveDuration(plan.targetDurationMs)) {
+    errors.push("quick recap target duration invalid");
+  }
+
   if (plan.mode === "quick-recap") {
     const eligibleDigests = quickRecapEligibleDigests;
     const eligibleById = new Map(eligibleDigests.map((digest) => [digest.assetId, digest]));

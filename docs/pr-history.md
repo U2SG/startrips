@@ -18,6 +18,14 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ## 2026-09-02
 
+### PR #172 - Enforce deterministic Quick Recap asset selection
+
+- **Source head:** `797c1e5c2241995aab674ab3cb8873484f5fed7c`
+- **Scope:** Tightens Quick Recap V1 validation by rebuilding the deterministic baseline selection from trusted digests, canonical route order, candidate target duration, and tempo, then requiring the candidate plan to preserve the exact selected asset identity/order. Quick Recap now also requires a positive target duration so deterministic selection can be reconstructed.
+- **User-visible change:** External JSON / AI-authored Quick Recap plans can no longer substitute a weaker duplicate-cluster member or a different eligible optional photo while keeping omission bookkeeping and durations internally consistent. Full and Keepsake selection policy remains unconstrained.
+- **Review fixes:** Self-review added an explicit target-duration requirement instead of silently skipping deterministic comparison when the field is missing/invalid. Regression coverage demonstrates both weaker duplicate replacement and duration-budget optional substitution fail even when the omission ledger is forged consistently.
+- **Follow-up:** None known at source review time. Local verification intentionally used only the single `autoEditPlan.test.ts` suite (39/39 green with one worker) plus `git diff --check`; no full suite, production build, dependency install, or other high-memory local validation was run. Full TypeScript/build/browser coverage is delegated to GitHub CI.
+
 ### PR #170 - Enforce Quick Recap item behavior semantics
 
 - **Source head:** `fd097cb1f5751e12f15d7f114c86467123f8de0f`

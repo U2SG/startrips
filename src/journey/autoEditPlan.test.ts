@@ -588,4 +588,76 @@ describe("deterministic auto-edit foundation (#127)", () => {
     expect(result.valid).toBe(false);
     expect(result.errors).toEqual(expect.arrayContaining(["invalid trim video", "pinned asset omitted pin", "route point omitted kyoto"]));
   });
+
+  it("rejects substituting a weaker duplicate-cluster member while omission bookkeeping stays internally consistent", () => {
+    const digests = [
+      digest("weak", "tokyo", 0, { similarity: { duplicateClusterId: "burst" }, technical: { sharpness: 0.1 } }),
+      digest("strong", "tokyo", 1, { similarity: { duplicateClusterId: "burst" }, technical: { sharpness: 0.9 } }),
+    ];
+    const plan = buildDeterministicQuickRecapPlan({
+      ...baseInput,
+      routePointIds: ["tokyo"],
+      targetDurationMs: 10_000,
+      digests,
+    });
+    expect(plan.chapters[0]?.items[0]?.assetId).toBe("strong");
+    const item = plan.chapters[0]?.items[0];
+    if (item) {
+      item.assetId = "weak";
+      item.sourceIndex = 0;
+    }
+    plan.omittedAssetIds = ["strong"];
+    const result = validateAutoEditPlanV1(plan, { ...baseInput, routePointIds: ["tokyo"], digests });
+    expect(result.errors).toContain("quick recap selection mismatch");
+    expect(result.errors).not.toContain("omission ledger mismatch");
+  });
+
+  it("rejects swapping an optional eligible photo for one the deterministic duration budget did not choose", () => {
+    const digests = [
+      digest("hero", "tokyo", 0),
+      digest("chosen-detail", "tokyo", 1),
+      digest("later-detail", "tokyo", 2),
+    ];
+    const plan = buildDeterministicQuickRecapPlan({
+      ...baseInput,
+      routePointIds: ["tokyo"],
+      targetDurationMs: 7_000,
+      digests,
+    });
+    expect(plan.chapters[0]?.items.map((item) => item.assetId)).toEqual(["hero", "chosen-detail"]);
+    const detail = plan.chapters[0]?.items[1];
+    if (detail) {
+      detail.assetId = "later-detail";
+      detail.sourceIndex = 2;
+    }
+    plan.omittedAssetIds = ["chosen-detail"];
+    const result = validateAutoEditPlanV1(plan, { ...baseInput, routePointIds: ["tokyo"], digests });
+    expect(result.errors).toContain("quick recap selection mismatch");
+    expect(result.errors).not.toContain("omission ledger mismatch");
+  });
+
+  it("keeps builder-generated deterministic selection valid across every Quick Recap tempo", () => {
+    const digests = [digest("photo", "tokyo", 0)];
+    for (const tempo of ["fast", "standard", "immersive"] as const) {
+      const plan = buildDeterministicQuickRecapPlan({
+        ...baseInput,
+        routePointIds: ["tokyo"],
+        targetDurationMs: 12_000,
+        tempo,
+        digests,
+      });
+      expect(validateAutoEditPlanV1(plan, { ...baseInput, routePointIds: ["tokyo"], digests }))
+        .toMatchObject({ valid: true, errors: [] });
+    }
+  });
+
+
+  it("requires Quick Recap target duration before deterministic selection can be trusted", () => {
+    const digests = [digest("photo", "tokyo", 0)];
+    const plan = buildDeterministicQuickRecapPlan({ ...baseInput, routePointIds: ["tokyo"], digests });
+    delete plan.targetDurationMs;
+    expect(validateAutoEditPlanV1(plan, { ...baseInput, routePointIds: ["tokyo"], digests }).errors)
+      .toContain("quick recap target duration invalid");
+  });
+
 });
