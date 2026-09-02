@@ -164,6 +164,15 @@ describe("deterministic auto-edit foundation (#127)", () => {
     expect(result.errors).not.toEqual(expect.arrayContaining(["route point omitted kyoto", "route point omitted osaka"]));
   });
 
+  it("rejects unknown quick-recap photo roles from untyped plan input", () => {
+    const digests = [digest("photo", "tokyo", 0)];
+    const plan = buildDeterministicQuickRecapPlan({ ...baseInput, routePointIds: ["tokyo"], digests });
+    const photo = plan.chapters[0]?.items[0] as (typeof plan.chapters)[number]["items"][number] & { photoRole?: string };
+    if (photo) photo.photoRole = "primary";
+    const result = validateAutoEditPlanV1(plan, { ...baseInput, routePointIds: ["tokyo"], digests });
+    expect(result.errors).toContain("photo role invalid photo");
+  });
+
   it("requires explicit photo roles on quick-recap images and forbids them on videos", () => {
     const digests = [
       digest("photo", "tokyo", 0),
