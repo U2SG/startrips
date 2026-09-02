@@ -342,6 +342,10 @@ export function validateAutoEditPlanV1(plan: AutoEditPlanV1, input: {
       if (digest.journeyId !== input.journeyId || digest.sourceRevision !== input.journeyRevision) errors.push(`stale asset ${item.assetId}`);
       if (digest.routePointId !== chapter.routePointId) errors.push(`asset chapter mismatch ${item.assetId}`);
       if (digest.userSignals.excludedFromRecap && plan.mode !== "full") errors.push(`excluded asset selected ${item.assetId}`);
+      if (plan.mode === "quick-recap") {
+        if (digest.mediaType === "image" && !item.photoRole) errors.push(`photo role missing ${item.assetId}`);
+        if (digest.mediaType === "video" && item.photoRole) errors.push(`video photo role invalid ${item.assetId}`);
+      }
       if (item.trim) {
         const sourceDuration = digest.intrinsic.durationMs;
         if (item.trim.inMs < 0 || item.trim.outMs <= item.trim.inMs || sourceDuration === undefined || item.trim.outMs > sourceDuration) {

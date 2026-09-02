@@ -164,6 +164,23 @@ describe("deterministic auto-edit foundation (#127)", () => {
     expect(result.errors).not.toEqual(expect.arrayContaining(["route point omitted kyoto", "route point omitted osaka"]));
   });
 
+  it("requires explicit photo roles on quick-recap images and forbids them on videos", () => {
+    const digests = [
+      digest("photo", "tokyo", 0),
+      digest("video", "tokyo", 1, { mediaType: "video", mimeType: "video/mp4", intrinsic: { durationMs: 2_000 } }),
+    ];
+    const plan = buildDeterministicQuickRecapPlan({ ...baseInput, routePointIds: ["tokyo"], digests });
+    const photo = plan.chapters[0]?.items.find((item) => item.assetId === "photo");
+    const video = plan.chapters[0]?.items.find((item) => item.assetId === "video");
+    if (photo) delete photo.photoRole;
+    if (video) video.photoRole = "supporting";
+    const result = validateAutoEditPlanV1(plan, { ...baseInput, routePointIds: ["tokyo"], digests });
+    expect(result.errors).toEqual(expect.arrayContaining([
+      "photo role missing photo",
+      "video photo role invalid video",
+    ]));
+  });
+
   it("rejects stale revisions, chapter mismatches, invalid trims, and omitted pins", () => {
     const digests = [
       digest("video", "tokyo", 0, { mediaType: "video", mimeType: "video/mp4", intrinsic: { durationMs: 5_000 } }),
