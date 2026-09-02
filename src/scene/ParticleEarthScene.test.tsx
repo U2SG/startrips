@@ -44,6 +44,7 @@ import {
   getGlobeIdleAlignmentRotation,
   getGlobeIdleRotationDelta,
   getGlobeInertiaSpeedLimit,
+  getShortestRotationDelta,
   getProjectedGlobeRadiusPx,
   getProjectedSurfaceInteractionRadiusPx,
   isFocusFlightActive,
@@ -58,17 +59,70 @@ import {
   isLocalPointInsideClipViewport,
   isReliablePinchAnchor,
   projectedRadiusRotationDelta,
+  nearestEquivalentRotation,
   rebaseGlobeDragSample,
   releaseFailedParticleRefinementRequest,
   selectRenderableJourneyRoutes,
   selectRouteLabelPointIndexes,
   shouldFocusRevisionOwnState,
+  shouldApplyFocusIntentRevision,
   shouldRetainGlobeInertia,
   solveScreenAnchorRotation,
+  resolveGlobeFocusIntent,
 } from "./ParticleEarthScene";
 import { disposeSceneGraph } from "./useThreeScene";
 
 describe("ParticleEarthScene contracts", () => {
+  it("resolves one route intent instead of competing route and point intents", () => {
+    const route = {
+      id: "journey-a",
+      color: "#fff",
+      points: [
+        { lat: 22.3, lon: 114.2, isStop: true },
+        { lat: 35.7, lon: 139.7, isStop: true },
+      ],
+    };
+    const intent = resolveGlobeFocusIntent({ lat: 31.2, lon: 121.5 }, route, 7);
+    expect(intent).toMatchObject({ revision: 7, kind: "route", route });
+    expect(intent?.zoom).not.toBe(1);
+  });
+
+  it("resolves route-point focus to exactly one point intent", () => {
+    expect(resolveGlobeFocusIntent({ lat: 31.2, lon: 121.5 }, null, 8)).toEqual({
+      revision: 8,
+      kind: "point",
+      point: { lat: 31.2, lon: 121.5 },
+      zoom: 1,
+      route: null,
+    });
+  });
+
+  it("lets only a newer focus revision supersede the active owner", () => {
+    expect(shouldApplyFocusIntentRevision(10, 10)).toBe(false);
+    expect(shouldApplyFocusIntentRevision(10, 9)).toBe(false);
+    expect(shouldApplyFocusIntentRevision(10, 11)).toBe(true);
+    expect([1, 2, 3].reduce(
+      (active, revision) => shouldApplyFocusIntentRevision(active, revision) ? revision : active,
+      Number.NEGATIVE_INFINITY,
+    )).toBe(3);
+  });
+
+  it("plans the nearest equivalent angle without changing direction at wrapping", () => {
+    const current = Math.PI - 0.1;
+    const equivalentTarget = -Math.PI + 0.1;
+    const planned = nearestEquivalentRotation(current, equivalentTarget);
+    expect(planned).toBeCloseTo(Math.PI + 0.1);
+    expect(getShortestRotationDelta(current, planned)).toBeCloseTo(0.2);
+
+    const samples = [current];
+    for (let index = 0; index < 12; index += 1) {
+      samples.push(samples.at(-1)! + (planned - samples.at(-1)!) * 0.35);
+    }
+    const deltas = samples.map((value) => getShortestRotationDelta(value, planned));
+    expect(deltas.every((delta) => delta >= 0)).toBe(true);
+    expect(deltas.at(-1)!).toBeLessThan(deltas[0]);
+  });
+
   it("retries the same refinement region after source failures", async () => {
     let attempt = 0;
     let now = 0;

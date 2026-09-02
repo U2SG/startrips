@@ -186,6 +186,23 @@ describe("Mobile V2 playback presentation", () => {
     expect(presentation.focusRevision).toBeGreaterThan(1000);
   });
 
+  it("publishes one route intent for a whole Journey selection", () => {
+    const presentation = resolveMobilePlaybackPresentation(
+      [first, second],
+      { journeyId: "journey-a", pointIndex: null },
+    );
+    expect(presentation.focusPoint).toBeNull();
+    expect(presentation.activeRouteId).toBe("journey-a");
+  });
+
+  it("publishes one point intent for a route-point selection", () => {
+    const presentation = resolveMobilePlaybackPresentation(
+      [first, second],
+      { journeyId: "journey-a", pointIndex: 1 },
+    );
+    expect(presentation.focusPoint).toEqual({ lat: 31.2304, lon: 121.4737 });
+  });
+
   it("keeps the persistent mobile chrome within the design budget and safe area", () => {
     const css = readFileSync(new URL("../styles/living-atlas.css", import.meta.url), "utf8");
     const mobileChrome = css.slice(

@@ -100,9 +100,11 @@ export function resolveMobilePlaybackPresentation(
   const point = selection?.pointIndex === null || selection?.pointIndex === undefined
     ? null
     : journey?.routePoints[selection.pointIndex] ?? null;
+  // A whole-Journey selection is owned by route fitting. Do not also publish
+  // its middle point as a competing globe command for the same revision.
   const focusPoint = point
     ? { lat: point.latitude, lon: point.longitude }
-    : journeyFocus(journey);
+    : null;
   const journeyIndex = journey
     ? Math.max(0, journeys.findIndex((candidate) => candidate.id === journey.id))
     : -1;
