@@ -133,6 +133,20 @@ describe("deterministic auto-edit foundation (#127)", () => {
     expect(validateAutoEditPlanV1(plan, { ...baseInput, digests })).toMatchObject({ valid: true, errors: [] });
   });
 
+  it("treats non-finite video durations as noneligible before plan construction", () => {
+    const digests = [
+      digest("infinite-video", "tokyo", 0, { mediaType: "video", mimeType: "video/mp4", intrinsic: { durationMs: Number.POSITIVE_INFINITY } }),
+      digest("nan-video", "kyoto", 1, { mediaType: "video", mimeType: "video/mp4", intrinsic: { durationMs: Number.NaN } }),
+      digest("osaka", "osaka", 2),
+    ];
+    const plan = buildDeterministicQuickRecapPlan({ ...baseInput, digests });
+    expect(plan.chapters.map((chapter) => chapter.routePointId)).toEqual(["osaka"]);
+    expect(plan.chapters.flatMap((chapter) => chapter.items.map((item) => item.assetId))).not.toEqual(
+      expect.arrayContaining(["infinite-video", "nan-video"]),
+    );
+    expect(validateAutoEditPlanV1(plan, { ...baseInput, digests })).toMatchObject({ valid: true, errors: [] });
+  });
+
   it("does not require route coverage for noneligible videos", () => {
     const digests = [
       digest("unknown-video", "tokyo", 0, { mediaType: "video", mimeType: "video/mp4", intrinsic: {} }),
@@ -200,6 +214,48 @@ describe("deterministic auto-edit foundation (#127)", () => {
     expect(result.errors).toEqual(expect.arrayContaining([
       "photo role missing photo",
       "video photo role invalid video",
+    ]));
+  });
+
+  it("rejects malformed media timing shapes even when planned duration is forged to match", () => {
+    const digests = [
+      digest("photo", "tokyo", 0),
+      digest("video", "tokyo", 1, { mediaType: "video", mimeType: "video/mp4", intrinsic: { durationMs: 5_000 } }),
+    ];
+    const cases = [
+      { mutate: (photo: any) => { photo.dwellMs = -10; }, error: "invalid dwell photo" },
+      { mutate: (photo: any) => { photo.dwellMs = Number.NaN; }, error: "invalid dwell photo" },
+      { mutate: (photo: any) => { photo.trim = { inMs: 0, outMs: 100 }; }, error: "image trim invalid photo" },
+      { mutate: (_photo: any, video: any) => { video.dwellMs = 500; }, error: "video dwell invalid video" },
+      { mutate: (_photo: any, video: any) => { delete video.trim; }, error: "video trim missing video" },
+    ];
+    for (const testCase of cases) {
+      const plan = buildDeterministicQuickRecapPlan({ ...baseInput, routePointIds: ["tokyo"], digests });
+      const items = plan.chapters[0]!.items;
+      const photo = items.find((item) => item.assetId === "photo")!;
+      const video = items.find((item) => item.assetId === "video")!;
+      testCase.mutate(photo, video);
+      plan.plannedDurationMs = plan.chapters.reduce((sum, chapter) =>
+        sum + chapter.camera.durationMs + (chapter.arrival?.durationMs ?? 0) + chapter.items.reduce((itemSum, item) =>
+          itemSum + (item.dwellMs ?? (item.trim ? item.trim.outMs - item.trim.inMs : 0)), 0), 0);
+      const result = validateAutoEditPlanV1(plan, { ...baseInput, routePointIds: ["tokyo"], digests });
+      expect(result.errors).toContain(testCase.error);
+    }
+  });
+
+  it("rejects non-finite or negative chapter timing", () => {
+    const digests = [digest("photo", "tokyo", 0)];
+    const plan = buildDeterministicQuickRecapPlan({ ...baseInput, routePointIds: ["tokyo"], digests });
+    plan.chapters[0]!.camera.durationMs = -1;
+    plan.chapters[0]!.arrival!.durationMs = Number.NaN;
+    plan.plannedDurationMs = Number.NaN;
+    plan.targetDurationMs = 0;
+    const result = validateAutoEditPlanV1(plan, { ...baseInput, routePointIds: ["tokyo"], digests });
+    expect(result.errors).toEqual(expect.arrayContaining([
+      "invalid camera duration route:tokyo",
+      "invalid arrival duration route:tokyo",
+      "planned duration invalid",
+      "target duration invalid",
     ]));
   });
 
