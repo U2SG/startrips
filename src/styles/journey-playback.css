@@ -179,7 +179,7 @@
   bottom: 22px;
   transform: translateX(-50%);
   display: grid;
-  grid-template-columns: 44px 44px 44px minmax(120px, 220px);
+  grid-template-columns: 44px 44px 44px minmax(76px, auto) minmax(120px, 220px);
   align-items: center;
   gap: 10px;
   padding: 8px 12px;
@@ -202,6 +202,29 @@
 .journey-playback__controls button.is-active {
   border-color: var(--atlas-acid);
   color: var(--atlas-acid);
+}
+
+.journey-playback__tempo {
+  height: 44px;
+  min-width: 76px;
+  display: flex;
+  align-items: center;
+}
+
+.journey-playback__tempo select {
+  width: 100%;
+  height: 44px;
+  padding: 0 24px 0 10px;
+  border: 1px solid var(--atlas-line);
+  background: rgba(2, 8, 8, 0.72);
+  color: var(--atlas-muted);
+  font: 500 11px/1 var(--archive-serif);
+  cursor: pointer;
+}
+
+.journey-playback__tempo select:focus-visible {
+  outline: 2px solid var(--atlas-acid);
+  outline-offset: 2px;
 }
 
 .journey-playback__progress {
@@ -343,6 +366,14 @@
 
   .journey-playback__close,
   .journey-playback__controls,
+  .journey-playback__tempo {
+    min-width: 64px;
+  }
+
+  .journey-playback__tempo select {
+    padding-inline: 7px 18px;
+  }
+
   .journey-playback__soundtrack {
     transition: none;
   }
@@ -354,7 +385,8 @@
   }
 
   .journey-playback__controls {
-    grid-template-columns: 44px 44px 44px minmax(90px, 140px);
+    grid-template-columns: 44px 44px 44px 64px minmax(60px, 100px);
+    gap: 6px;
     bottom: 14px;
   }
 

@@ -1,4 +1,4 @@
-﻿import {
+import {
   buildPlaybackSteps,
   playbackIntroMedia,
   playbackMediaForPoint,
@@ -79,7 +79,7 @@ export type PlaybackPlan = {
   meaningfulStepIndexes: number[];
 };
 
-function durationForStep(
+export function playbackStepDurationForTempo(
   journey: Journey,
   step: PlaybackStep,
   profile: PlaybackTempoProfile,
@@ -176,7 +176,7 @@ export function buildPlaybackPlan(
   steps.forEach((step, sourceStepIndex) => {
     drafts.push({
       identity: segmentIdentity(journey, step, sourceStepIndex),
-      durationMs: durationForStep(journey, step, profile),
+      durationMs: playbackStepDurationForTempo(journey, step, profile),
       sourceStepIndex,
     });
     if (step.kind !== "intro") return;
