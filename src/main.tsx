@@ -81,6 +81,7 @@ const globeQaRoutes: JourneyRoute[] = [
 
 function JourneyRoutesQaPreview() {
   const [activeRouteId, setActiveRouteId] = useState<string | null>(null);
+  const [focusRevision, setFocusRevision] = useState(0);
   const activeRoute = globeQaRoutes.find((route) => route.id === activeRouteId) ?? null;
   const qaParams = new URLSearchParams(window.location.search);
   const requestedLatRaw = qaParams.get("qaFocusLat");
@@ -101,7 +102,11 @@ function JourneyRoutesQaPreview() {
           journeyRoutes={globeQaRoutes}
           activeJourneyRouteId={activeRouteId}
           focusRoute={activeRoute}
-          onJourneyRouteActivate={setActiveRouteId}
+          focusRevision={focusRevision}
+          onJourneyRouteActivate={(routeId) => {
+            setActiveRouteId(routeId);
+            setFocusRevision((revision) => revision + 1);
+          }}
           onJourneyRoutePointActivate={() => undefined}
           focusPoint={qaFocusPoint}
           focusColor="#77c8c2"
@@ -138,7 +143,10 @@ function JourneyRoutesQaPreview() {
               cursor: "pointer",
               font: "500 9px/1 ui-monospace, monospace",
             }}
-            onClick={() => setActiveRouteId(route.id)}
+            onClick={() => {
+              setActiveRouteId(route.id);
+              setFocusRevision((revision) => revision + 1);
+            }}
           >
             {route.id.replace("qa-route-", "")}
           </button>
