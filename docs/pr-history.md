@@ -18,6 +18,14 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ## 2026-09-02
 
+### PR #148 - Reject malformed auto-edit timing plans
+
+- **Source head:** `a510a0be8df38efb68bb7c20ec501ae27d076be6`
+- **Scope:** Hardens `validateAutoEditPlanV1()` as the trust boundary for deterministic/AI-generated plans by enforcing finite phase durations and media-type timing shape: still images require positive finite dwell with no trim; videos require a bounded trim with no dwell; camera/arrival/planned/target durations are range-checked.
+- **User-visible change:** Malformed recap/keepsake timing plans are rejected before they can reach Playback V2 or export consumers; normal deterministic plans remain unchanged.
+- **Review fixes:** Post-merge audit found that a forged `plannedDurationMs` could make negative/NaN or wrong-media timing shapes pass validation. Regression tests explicitly forge the aggregate duration and verify the validator still rejects each malformed item.
+- **Follow-up:** None known. Validation on the reviewed source: targeted `autoEditPlan.test.ts` 18/18 green, full `src` 38 files / 403 tests green, client TypeScript green, production build green, and `git diff --check` green.
+
 ### PR #146 - Add photo-first recap beat roles
 
 - **Source head:** `140413848d436af5761c34f7abd18e7f9fb91d0f`
