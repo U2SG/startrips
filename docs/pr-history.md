@@ -18,6 +18,14 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ## 2026-09-02
 
+### PR #159 - Validate auto-edit media source order
+
+- **Source head:** `b44995dd015b9daeb12f47fd178346cc0a1a5a25`
+- **Scope:** Hardens `validateAutoEditPlanV1()` so every selected media item must carry a finite non-negative integer `sourceIndex` matching its authoritative `MediaDigestV1`, and each chapter must preserve nondecreasing authoritative source order. Structural validation also rejects non-number source-index leaves before semantic traversal.
+- **User-visible change:** Invalid external/AI Quick Recap plans can no longer silently reorder memories or lie about their canonical source positions; valid equal-index stable ordering remains accepted.
+- **Review fixes:** Self-review explicitly preserved equal-source-index input stability instead of adding an asset-id tie-breaker, avoiding a new validator/builder ordering mismatch.
+- **Follow-up:** If `MediaDigestV1` itself becomes an untyped external boundary later, validate digest source indexes at ingestion as a separate contract. Validation on the reviewed source: `autoEditPlan.test.ts` 30/30 green, full `src` 38 files / 415 tests green, client TypeScript green, production build green, and `git diff --check` green.
+
 ### PR #156 - Validate Quick Recap omission ledger
 
 - **Source head:** `30a302019de491383678e55a6870ffd98e620738`
