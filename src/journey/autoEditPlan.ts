@@ -427,10 +427,18 @@ export function validateAutoEditPlanV1(planInput: unknown, input: {
   if (plan.journeyRevision !== input.journeyRevision) errors.push("journey revision mismatch");
   const digestById = new Map(input.digests.map((digest) => [digest.assetId, digest]));
   const seen = new Set<string>();
+  const seenQuickRecapChapterScopes = new Set<string>();
   const routeOrder = new Map(input.routePointIds.map((id, index) => [id, index]));
   let previousRouteIndex = -1;
 
   for (const chapter of plan.chapters) {
+    if (plan.mode === "quick-recap") {
+      const scopeKey = chapter.routePointId === null ? "__journey_intro__" : `route:${chapter.routePointId}`;
+      if (seenQuickRecapChapterScopes.has(scopeKey)) {
+        errors.push(`duplicate chapter scope ${chapter.routePointId ?? "journey-intro"}`);
+      }
+      seenQuickRecapChapterScopes.add(scopeKey);
+    }
     let previousItemSourceIndex = -1;
     if (!isFiniteNonNegativeDuration(chapter.camera.durationMs)) {
       errors.push(`invalid camera duration ${chapter.chapterId}`);
