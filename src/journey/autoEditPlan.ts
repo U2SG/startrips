@@ -328,12 +328,66 @@ function isFinitePositiveDuration(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
 
-export function validateAutoEditPlanV1(plan: AutoEditPlanV1, input: {
+type UnknownRecord = Record<string, unknown>;
+
+function asRecord(value: unknown): UnknownRecord | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as UnknownRecord
+    : null;
+}
+
+function structurallyValidateAutoEditPlanV1(value: unknown) {
+  const errors: string[] = [];
+  const root = asRecord(value);
+  if (!root) return { plan: null, errors: ["plan must be an object"] };
+  if (!Array.isArray(root.chapters)) errors.push("chapters must be an array");
+  if (!Array.isArray(root.omittedAssetIds)) errors.push("omittedAssetIds must be an array");
+
+  if (Array.isArray(root.chapters)) {
+    root.chapters.forEach((chapterValue, chapterIndex) => {
+      const chapter = asRecord(chapterValue);
+      if (!chapter) {
+        errors.push(`chapter ${chapterIndex} must be an object`);
+        return;
+      }
+      if (!asRecord(chapter.camera)) errors.push(`chapter camera invalid ${chapterIndex}`);
+      if (!Array.isArray(chapter.items)) {
+        errors.push(`chapter items invalid ${chapterIndex}`);
+      } else {
+        chapter.items.forEach((itemValue, itemIndex) => {
+          const item = asRecord(itemValue);
+          if (!item) {
+            errors.push(`chapter item invalid ${chapterIndex}:${itemIndex}`);
+            return;
+          }
+          if (Object.prototype.hasOwnProperty.call(item, "trim") && item.trim !== undefined && !asRecord(item.trim)) {
+            errors.push(`item trim invalid ${chapterIndex}:${itemIndex}`);
+          }
+        });
+      }
+      if (Object.prototype.hasOwnProperty.call(chapter, "arrival") && chapter.arrival !== undefined && !asRecord(chapter.arrival)) {
+        errors.push(`chapter arrival invalid ${chapterIndex}`);
+      }
+    });
+  }
+
+  return {
+    plan: errors.length === 0 ? root as unknown as AutoEditPlanV1 : null,
+    errors,
+  };
+}
+
+export function validateAutoEditPlanV1(planInput: unknown, input: {
   journeyId: string;
   journeyRevision: string;
   routePointIds: string[];
   digests: MediaDigestV1[];
 }) {
+  const structural = structurallyValidateAutoEditPlanV1(planInput);
+  if (!structural.plan) {
+    return { valid: false, errors: structural.errors, recomputedDurationMs: 0 };
+  }
+  const plan = structural.plan;
   const errors: string[] = [];
   if (plan.schemaVersion !== 1) errors.push("unsupported schema version");
   if (!(AUTO_EDIT_MODES as readonly unknown[]).includes(plan.mode)) errors.push("plan mode invalid");

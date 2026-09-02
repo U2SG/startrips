@@ -246,6 +246,29 @@ describe("deterministic auto-edit foundation (#127)", () => {
     ]));
   });
 
+  it("fails closed on structurally malformed runtime plan input instead of throwing", () => {
+    const digests = [digest("photo", "tokyo", 0)];
+    const validPlan = buildDeterministicQuickRecapPlan({ ...baseInput, routePointIds: ["tokyo"], digests });
+    const malformed: Array<{ plan: unknown; error: string }> = [
+      { plan: null, error: "plan must be an object" },
+      { plan: { ...validPlan, chapters: null }, error: "chapters must be an array" },
+      { plan: { ...validPlan, omittedAssetIds: null }, error: "omittedAssetIds must be an array" },
+      { plan: { ...validPlan, chapters: [null] }, error: "chapter 0 must be an object" },
+      { plan: { ...validPlan, chapters: [{ ...validPlan.chapters[0], camera: null }] }, error: "chapter camera invalid 0" },
+      { plan: { ...validPlan, chapters: [{ ...validPlan.chapters[0], items: null }] }, error: "chapter items invalid 0" },
+      { plan: { ...validPlan, chapters: [{ ...validPlan.chapters[0], items: [null] }] }, error: "chapter item invalid 0:0" },
+      { plan: { ...validPlan, chapters: [{ ...validPlan.chapters[0], arrival: [] }] }, error: "chapter arrival invalid 0" },
+      {
+        plan: { ...validPlan, chapters: [{ ...validPlan.chapters[0], items: [{ ...validPlan.chapters[0]!.items[0], trim: [] }] }] },
+        error: "item trim invalid 0:0",
+      },
+    ];
+    for (const testCase of malformed) {
+      expect(() => validateAutoEditPlanV1(testCase.plan, { ...baseInput, routePointIds: ["tokyo"], digests })).not.toThrow();
+      expect(validateAutoEditPlanV1(testCase.plan, { ...baseInput, routePointIds: ["tokyo"], digests }).errors).toContain(testCase.error);
+    }
+  });
+
   it("rejects malformed media timing shapes even when planned duration is forged to match", () => {
     const digests = [
       digest("photo", "tokyo", 0),
