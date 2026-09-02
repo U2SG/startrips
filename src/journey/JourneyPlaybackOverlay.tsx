@@ -26,6 +26,7 @@ import {
   playbackCameraTargetForStep,
   playbackCameraTargetKey,
   playbackMediaForPoint,
+  playbackMediaWaitPolicy,
   type PlaybackCameraTarget,
   type PlaybackStep,
 } from "./journeyPlayback";
@@ -231,16 +232,20 @@ export function JourneyPlaybackOverlay({
       return;
     }
     const asset = playbackMediaForPoint(journey, step.pointIndex)[step.mediaIndex];
-    if (!asset || asset.mimeType.startsWith("video/")) {
+    if (!asset) {
       setHold(false);
       return;
     }
+    const isImage = asset.mimeType.startsWith("image/");
     const gate = playbackMediaGate(
       mediaReads[asset.id],
-      decodeRegistryRef.current.readiness(asset.id),
-      true,
+      isImage ? decodeRegistryRef.current.readiness(asset.id) : undefined,
+      isImage,
     );
-    setHold(gate === "waiting");
+    // Successful Full Journey video chapters are owned by the media element's
+    // real `ended` event, not the legacy six-second timer. Loading videos stay
+    // held too; terminal read/media errors release the fallback timer.
+    setHold(playbackMediaWaitPolicy(asset, gate) !== "none");
   }, [decodeSettleRevision, director.step, journey, mediaReads]);
 
   // The soundtrack follows playback: play on any non-paused phase after the
@@ -534,7 +539,18 @@ export function JourneyPlaybackOverlay({
               <div className="journey-playback__media-state is-error">媒体暂不可用，继续播放下一段</div>
             ) : activeMedia.mimeType.startsWith("video/")
               ? activeRead?.status === "ready"
-                ? <video ref={videoRef} key={activeMedia.id} src={activeRead.url} autoPlay playsInline />
+                ? <video
+                    ref={videoRef}
+                    key={activeMedia.id}
+                    src={activeRead.url}
+                    autoPlay
+                    playsInline
+                    onEnded={() => {
+                      setHold(false);
+                      director.complete();
+                    }}
+                    onError={() => setHold(false)}
+                  />
                 : <div className="journey-playback__media-state">正在打开媒体…</div>
               // Review P2: images must wait for the decode gate too — showing
               // the <img> as soon as the signed URL is ready can still flash

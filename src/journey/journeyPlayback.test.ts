@@ -12,6 +12,8 @@ import {
   storyMediaForScope,
   routePointAngularDistance,
   stepDurationMs,
+  playbackMediaWaitPolicy,
+  phaseForStep,
   travelDurationMs,
 } from "./journeyPlayback";
 import type { Journey, JourneyMediaAsset, RoutePoint } from "./types";
@@ -276,6 +278,33 @@ describe("playbackReducer (#19)", () => {
     const resumed = playbackReducer(journey, state, { type: "resume" });
     expect(resumed.paused).toBe(false);
     expect(resumed.phase).toEqual({ type: "stop", pointIndex: 0 });
+  });
+});
+
+describe("video completion ownership (#126)", () => {
+  it("lets a healthy Full Journey video own advancement until its real ended event", () => {
+    const video = media("video", "point-0", "video/mp4");
+    expect(playbackMediaWaitPolicy(video, "waiting")).toBe("video-ended");
+    expect(playbackMediaWaitPolicy(video, "ready")).toBe("video-ended");
+    expect(playbackMediaWaitPolicy(video, "error")).toBe("none");
+  });
+
+  it("keeps image decode waiting separate from video completion", () => {
+    const image = media("image", "point-0", "image/jpeg");
+    expect(playbackMediaWaitPolicy(image, "waiting")).toBe("decode");
+    expect(playbackMediaWaitPolicy(image, "ready")).toBe("none");
+    expect(playbackMediaWaitPolicy(image, "error")).toBe("none");
+  });
+
+  it("keeps automatic video completion on raw sequence advancement", () => {
+    const steps = buildPlaybackSteps(journey);
+    const mediaIndex = steps.findIndex((step) => step.kind === "media");
+    const state = { stepIndex: mediaIndex, phase: phaseForStep(steps[mediaIndex]), paused: false };
+    const automatic = playbackReducer(journey, state, { type: "advance" });
+    const manual = playbackReducer(journey, state, { type: "next" });
+    expect(automatic.stepIndex).toBe(mediaIndex + 1);
+    expect(steps[automatic.stepIndex]?.kind).toBe("travel");
+    expect(steps[manual.stepIndex]?.kind).not.toBe("travel");
   });
 });
 
