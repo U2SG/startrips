@@ -444,6 +444,7 @@ export function validateAutoEditPlanV1(planInput: unknown, input: {
     if (clusterKey) quickRecapDuplicateSizes.set(clusterKey, (quickRecapDuplicateSizes.get(clusterKey) ?? 0) + 1);
   }
   let previousRouteIndex = -1;
+  let hasSeenRouteChapter = false;
 
   for (const chapter of plan.chapters) {
     if (plan.mode === "quick-recap") {
@@ -472,10 +473,13 @@ export function validateAutoEditPlanV1(planInput: unknown, input: {
       errors.push(`camera primitive invalid ${chapter.chapterId}`);
     }
     if (chapter.routePointId !== null) {
+      hasSeenRouteChapter = true;
       const routeIndex = routeOrder.get(chapter.routePointId);
       if (routeIndex === undefined) errors.push(`unknown route point ${chapter.routePointId}`);
       else if (routeIndex < previousRouteIndex) errors.push("route chronology mismatch");
       else previousRouteIndex = routeIndex;
+    } else if ((plan.mode === "full" || plan.mode === "quick-recap") && hasSeenRouteChapter) {
+      errors.push("journey intro chronology mismatch");
     }
     for (const item of chapter.items) {
       const digest = digestById.get(item.assetId);
