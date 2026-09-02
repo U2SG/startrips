@@ -7,6 +7,7 @@ export type PlaybackMediaElement = {
 export function syncPlaybackMediaElement(
   element: PlaybackMediaElement | null,
   playing: boolean,
+  onPlayFailure?: () => void,
 ) {
   if (!element) return;
   if (!playing) {
@@ -17,10 +18,9 @@ export function syncPlaybackMediaElement(
   try {
     const result = element.play();
     if (result && typeof result.catch === "function") {
-      void result.catch(() => undefined);
+      void result.catch(() => onPlayFailure?.());
     }
   } catch {
-    // Browser autoplay/user-activation failures are non-fatal; the shared
-    // transport remains the only visible source of playback state.
+    onPlayFailure?.();
   }
 }

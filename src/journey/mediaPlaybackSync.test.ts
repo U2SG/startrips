@@ -17,4 +17,25 @@ describe("syncPlaybackMediaElement", () => {
     expect(play).toHaveBeenCalledOnce();
     expect(pause).not.toHaveBeenCalled();
   });
+
+  it("reports an async play rejection so the overlay can release video ownership", async () => {
+    const onPlayFailure = vi.fn();
+    syncPlaybackMediaElement(
+      { pause: vi.fn(), play: vi.fn(() => Promise.reject(new Error("autoplay blocked"))) },
+      true,
+      onPlayFailure,
+    );
+    await Promise.resolve();
+    expect(onPlayFailure).toHaveBeenCalledOnce();
+  });
+
+  it("reports a synchronous play failure", () => {
+    const onPlayFailure = vi.fn();
+    syncPlaybackMediaElement(
+      { pause: vi.fn(), play: vi.fn(() => { throw new Error("unsupported"); }) },
+      true,
+      onPlayFailure,
+    );
+    expect(onPlayFailure).toHaveBeenCalledOnce();
+  });
 });

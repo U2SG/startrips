@@ -88,6 +88,7 @@ export function JourneyPlaybackOverlay({
   // decoded, so a slow network never flashes an empty frame — the chapter
   // waits on the decode settle instead of advancing on a fixed timer.
   const [hold, setHold] = useState(false);
+  const [videoFallbackAssetId, setVideoFallbackAssetId] = useState<string | null>(null);
   const director = useJourneyPlaybackDirector(journey, hold);
   const { phase, paused, pause, resume, next, back, seek, exit } = director;
   // Review P2: `exit()` only resets the local director; the overlay must also
@@ -243,10 +244,15 @@ export function JourneyPlaybackOverlay({
       isImage,
     );
     // Successful Full Journey video chapters are owned by the media element's
-    // real `ended` event, not the legacy six-second timer. Loading videos stay
-    // held too; terminal read/media errors release the fallback timer.
+    // real `ended` event. Once this asset has recorded a media/play() failure,
+    // keep the failure state stable across renders so the legacy fallback timer
+    // can run instead of immediately re-acquiring the hold.
+    if (asset.mimeType.startsWith("video/") && videoFallbackAssetId === asset.id) {
+      setHold(false);
+      return;
+    }
     setHold(playbackMediaWaitPolicy(asset, gate) !== "none");
-  }, [decodeSettleRevision, director.step, journey, mediaReads]);
+  }, [decodeSettleRevision, director.step, journey, mediaReads, videoFallbackAssetId]);
 
   // The soundtrack follows playback: play on any non-paused phase after the
   // user started playback; pause when paused; never reset between chapters.
@@ -272,8 +278,18 @@ export function JourneyPlaybackOverlay({
   // Video chapters use the same Startrips transport as the director and
   // soundtrack. The native transport is intentionally not authoritative.
   useLayoutEffect(() => {
-    syncPlaybackMediaElement(videoRef.current, director.isPlaying && !paused);
-  }, [director.isPlaying, director.stepIndex, paused]);
+    const step = director.step;
+    const asset = journey && step?.kind === "media"
+      ? playbackMediaForPoint(journey, step.pointIndex)[step.mediaIndex]
+      : null;
+    syncPlaybackMediaElement(
+      videoRef.current,
+      director.isPlaying && !paused,
+      asset?.mimeType.startsWith("video/")
+        ? () => setVideoFallbackAssetId(asset.id)
+        : undefined,
+    );
+  }, [director.isPlaying, director.step, journey, paused]);
 
   // #20: one analyser graph writes a shared mutable energy channel; the light
   // strip and Three.js scene read that channel without React per-frame state.
