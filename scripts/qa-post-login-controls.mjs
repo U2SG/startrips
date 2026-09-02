@@ -1999,18 +1999,31 @@ async function verifyFinalAcceptanceMobileFlow() {
           && Boolean(scene?.getAttribute("data-route-focus-lat"));
       }, null, { timeout: 5_000 });
       console.error(`[qa-post-login] final:${viewportLabel}:desktop-journey-ready`);
-      const playButton = page.getByRole("button", { name: "播放旅程" });
+      const playButton = page.locator(".living-atlas__active-play");
       await playButton.waitFor({ state: "visible" });
-      await activateControl(playButton, "playback start control");
+      await activateControl(playButton, "playback mode chooser control");
+      const playbackModeMenu = page.locator(".living-atlas__playback-mode-menu");
+      await playbackModeMenu.waitFor({ state: "visible", timeout: 5_000 });
+      const quickRecapOption = playbackModeMenu.locator('[data-playback-mode-option="quick-recap"]');
+      const fullPlaybackOption = playbackModeMenu.locator('[data-playback-mode-option="full"]');
+      await quickRecapOption.waitFor({ state: "visible" });
+      await fullPlaybackOption.waitFor({ state: "visible" });
+      const chooser = await playbackModeMenu.evaluate((menu) => ({
+        quickRecap: menu.querySelector('[data-playback-mode-option="quick-recap"]')?.textContent?.trim() ?? "",
+        full: menu.querySelector('[data-playback-mode-option="full"]')?.textContent?.trim() ?? "",
+      }));
+      if (!chooser.quickRecap.includes("快速回顾") || !chooser.full.includes("完整播放")) {
+        throw new Error(`Playback mode chooser missing expected options: ${JSON.stringify(chooser)}`);
+      }
+      await activateControl(fullPlaybackOption, "full playback mode option");
       if (await page.locator(".journey-playback").count() === 0) {
         await page.waitForFunction(() => {
-          const button = [...document.querySelectorAll("button")]
-            .find((candidate) => candidate.textContent?.includes("播放旅程"));
+          const button = document.querySelector(".living-atlas__active-play");
           return button instanceof HTMLButtonElement && !button.disabled;
         }, null, { timeout: 8_000 });
         await activateControl(playButton, "playback start control after soundtrack prefetch");
       }
-      await page.locator(".journey-playback").waitFor({ state: "visible", timeout: 8_000 });
+      await page.locator('.journey-playback[data-playback-mode="full"]').waitFor({ state: "visible", timeout: 8_000 });
       await page.locator(".journey-playback__soundtrack").waitFor({ state: "attached", timeout: 5_000 });
       await page.waitForFunction(() => [
         ".account-dock",

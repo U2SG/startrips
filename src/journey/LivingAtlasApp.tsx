@@ -1013,10 +1013,18 @@ export function LivingAtlasApp({
                   }
                 }}
               >
-                <button type="button" onClick={() => startPlayback(activeJourney.id, "quick-recap")}>
+                <button
+                  type="button"
+                  data-playback-mode-option="quick-recap"
+                  onClick={() => startPlayback(activeJourney.id, "quick-recap")}
+                >
                   <strong>快速回顾</strong><span>约 45 秒 · 照片优先</span>
                 </button>
-                <button type="button" onClick={() => startPlayback(activeJourney.id, "full")}>
+                <button
+                  type="button"
+                  data-playback-mode-option="full"
+                  onClick={() => startPlayback(activeJourney.id, "full")}
+                >
                   <strong>完整播放</strong><span>保留全部媒体与章节</span>
                 </button>
               </div>
