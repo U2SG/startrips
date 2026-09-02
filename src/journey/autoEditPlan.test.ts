@@ -203,6 +203,48 @@ describe("deterministic auto-edit foundation (#127)", () => {
     ]));
   });
 
+  it("rejects malformed media timing shapes even when planned duration is forged to match", () => {
+    const digests = [
+      digest("photo", "tokyo", 0),
+      digest("video", "tokyo", 1, { mediaType: "video", mimeType: "video/mp4", intrinsic: { durationMs: 5_000 } }),
+    ];
+    const cases = [
+      { mutate: (photo: any) => { photo.dwellMs = -10; }, error: "invalid dwell photo" },
+      { mutate: (photo: any) => { photo.dwellMs = Number.NaN; }, error: "invalid dwell photo" },
+      { mutate: (photo: any) => { photo.trim = { inMs: 0, outMs: 100 }; }, error: "image trim invalid photo" },
+      { mutate: (_photo: any, video: any) => { video.dwellMs = 500; }, error: "video dwell invalid video" },
+      { mutate: (_photo: any, video: any) => { delete video.trim; }, error: "video trim missing video" },
+    ];
+    for (const testCase of cases) {
+      const plan = buildDeterministicQuickRecapPlan({ ...baseInput, routePointIds: ["tokyo"], digests });
+      const items = plan.chapters[0]!.items;
+      const photo = items.find((item) => item.assetId === "photo")!;
+      const video = items.find((item) => item.assetId === "video")!;
+      testCase.mutate(photo, video);
+      plan.plannedDurationMs = plan.chapters.reduce((sum, chapter) =>
+        sum + chapter.camera.durationMs + (chapter.arrival?.durationMs ?? 0) + chapter.items.reduce((itemSum, item) =>
+          itemSum + (item.dwellMs ?? (item.trim ? item.trim.outMs - item.trim.inMs : 0)), 0), 0);
+      const result = validateAutoEditPlanV1(plan, { ...baseInput, routePointIds: ["tokyo"], digests });
+      expect(result.errors).toContain(testCase.error);
+    }
+  });
+
+  it("rejects non-finite or negative chapter timing", () => {
+    const digests = [digest("photo", "tokyo", 0)];
+    const plan = buildDeterministicQuickRecapPlan({ ...baseInput, routePointIds: ["tokyo"], digests });
+    plan.chapters[0]!.camera.durationMs = -1;
+    plan.chapters[0]!.arrival!.durationMs = Number.NaN;
+    plan.plannedDurationMs = Number.NaN;
+    plan.targetDurationMs = 0;
+    const result = validateAutoEditPlanV1(plan, { ...baseInput, routePointIds: ["tokyo"], digests });
+    expect(result.errors).toEqual(expect.arrayContaining([
+      "invalid camera duration route:tokyo",
+      "invalid arrival duration route:tokyo",
+      "planned duration invalid",
+      "target duration invalid",
+    ]));
+  });
+
   it("rejects stale revisions, chapter mismatches, invalid trims, and omitted pins", () => {
     const digests = [
       digest("video", "tokyo", 0, { mediaType: "video", mimeType: "video/mp4", intrinsic: { durationMs: 5_000 } }),

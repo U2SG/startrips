@@ -310,6 +310,14 @@ export function buildDeterministicQuickRecapPlan(input: DeterministicQuickRecapI
   };
 }
 
+function isFiniteNonNegativeDuration(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+function isFinitePositiveDuration(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
 export function validateAutoEditPlanV1(plan: AutoEditPlanV1, input: {
   journeyId: string;
   journeyRevision: string;
@@ -326,6 +334,12 @@ export function validateAutoEditPlanV1(plan: AutoEditPlanV1, input: {
   let previousRouteIndex = -1;
 
   for (const chapter of plan.chapters) {
+    if (!isFiniteNonNegativeDuration(chapter.camera.durationMs)) {
+      errors.push(`invalid camera duration ${chapter.chapterId}`);
+    }
+    if (chapter.arrival && !isFiniteNonNegativeDuration(chapter.arrival.durationMs)) {
+      errors.push(`invalid arrival duration ${chapter.chapterId}`);
+    }
     if (chapter.routePointId !== null) {
       const routeIndex = routeOrder.get(chapter.routePointId);
       if (routeIndex === undefined) errors.push(`unknown route point ${chapter.routePointId}`);
@@ -350,10 +364,26 @@ export function validateAutoEditPlanV1(plan: AutoEditPlanV1, input: {
         }
         if (digest.mediaType === "video" && Object.prototype.hasOwnProperty.call(item, "photoRole")) errors.push(`video photo role invalid ${item.assetId}`);
       }
-      if (item.trim) {
-        const sourceDuration = digest.intrinsic.durationMs;
-        if (item.trim.inMs < 0 || item.trim.outMs <= item.trim.inMs || sourceDuration === undefined || item.trim.outMs > sourceDuration) {
-          errors.push(`invalid trim ${item.assetId}`);
+      if (digest.mediaType === "image") {
+        if (!isFinitePositiveDuration(item.dwellMs)) errors.push(`invalid dwell ${item.assetId}`);
+        if (Object.prototype.hasOwnProperty.call(item, "trim")) errors.push(`image trim invalid ${item.assetId}`);
+      } else {
+        if (Object.prototype.hasOwnProperty.call(item, "dwellMs")) errors.push(`video dwell invalid ${item.assetId}`);
+        if (!item.trim) {
+          errors.push(`video trim missing ${item.assetId}`);
+        } else {
+          const sourceDuration = digest.intrinsic.durationMs;
+          if (
+            !isFiniteNonNegativeDuration(item.trim.inMs)
+            || !isFinitePositiveDuration(item.trim.outMs)
+            || item.trim.outMs <= item.trim.inMs
+            || sourceDuration === undefined
+            || !Number.isFinite(sourceDuration)
+            || sourceDuration <= 0
+            || item.trim.outMs > sourceDuration
+          ) {
+            errors.push(`invalid trim ${item.assetId}`);
+          }
         }
       }
     }
@@ -372,6 +402,9 @@ export function validateAutoEditPlanV1(plan: AutoEditPlanV1, input: {
       if (hasEligible && !represented) errors.push(`route point omitted ${routePointId}`);
     }
   }
+
+  if (!isFiniteNonNegativeDuration(plan.plannedDurationMs)) errors.push("planned duration invalid");
+  if (plan.targetDurationMs !== undefined && !isFinitePositiveDuration(plan.targetDurationMs)) errors.push("target duration invalid");
 
   const recomputedDuration = plan.chapters.reduce((sum, chapter) =>
     sum + chapter.camera.durationMs + (chapter.arrival?.durationMs ?? 0) + chapter.items.reduce((itemSum, item) =>
