@@ -27,12 +27,13 @@ function runtimePhotoCandidates(journey: Journey): JourneyMediaAsset[] {
   return journey.media
     .filter(isImage)
     .flatMap((asset) => {
-      if (asset.routePointId !== null) return [asset];
       if (asset.id === journey.coverMediaAssetId && firstRoutePointId) {
-        // Playback projection only: a Journey-scoped cover becomes the first
-        // chapter's hero without mutating canonical media ownership.
+        // Playback projection only: the explicit Journey cover always opens
+        // the recap as the first chapter hero, even when canonical ownership
+        // belongs to a later route point. The persisted asset is not mutated.
         return [{ ...asset, routePointId: firstRoutePointId }];
       }
+      if (asset.routePointId !== null) return [asset];
       return [];
     })
     .sort((left, right) => left.sortOrder - right.sortOrder || left.id.localeCompare(right.id));
@@ -82,6 +83,9 @@ export function prepareQuickRecapPlayback(
   });
   const selectedIds = new Set(plan.chapters.flatMap((chapter) => chapter.items.map((item) => item.assetId)));
   if (selectedIds.size === 0) return null;
+  const plannedRoutePointIds = new Set(plan.chapters.map((chapter) => chapter.routePointId));
+  const projectedRoutePoints = journey.routePoints.filter((point) => plannedRoutePointIds.has(point.id));
+  if (projectedRoutePoints.length === 0) return null;
 
   const projectedCandidates = new Map(runtimePhotoCandidates(journey).map((asset) => [asset.id, asset]));
   const projectedMedia = journey.media.flatMap((asset) => {
@@ -92,7 +96,7 @@ export function prepareQuickRecapPlayback(
 
   return {
     plan,
-    journey: { ...journey, media: projectedMedia },
+    journey: { ...journey, routePoints: projectedRoutePoints, media: projectedMedia },
   };
 }
 

@@ -46,6 +46,32 @@ describe("Quick Recap playback handoff (#127)", () => {
     expect(journey.media.find((asset) => asset.id === "cover")?.routePointId).toBeNull();
   });
 
+
+  it("promotes an explicit cover from a later route point into the opening recap chapter", () => {
+    const journey = fixture();
+    journey.media = journey.media.map((asset) => (
+      asset.id === "cover" ? { ...asset, routePointId: "p1" } : asset
+    ));
+    const digests = quickRecapDigestsForJourney(journey);
+    expect(digests.find((digest) => digest.assetId === "cover")?.routePointId).toBe("p0");
+    expect(journey.media.find((asset) => asset.id === "cover")?.routePointId).toBe("p1");
+
+    const prepared = prepareQuickRecapPlayback(journey, { generatedAt: "2026-09-02T00:00:00.000Z" })!;
+    expect(prepared.journey.media.find((asset) => asset.id === "cover")?.routePointId).toBe("p0");
+  });
+
+  it("omits route points that have no recap chapter so empty Full Playback timing cannot leak in", () => {
+    const journey = fixture();
+    journey.coverMediaAssetId = null;
+    journey.routePoints = Array.from({ length: 64 }, (_, index) => point(`p${index}`, index));
+    journey.media = [media("only-photo", "p0", "image/jpeg", 0), media("track", null, "audio/mpeg", 1)];
+
+    const prepared = prepareQuickRecapPlayback(journey, { generatedAt: "2026-09-02T00:00:00.000Z" })!;
+    expect(prepared.plan.chapters.map((chapter) => chapter.routePointId)).toEqual(["p0"]);
+    expect(prepared.journey.routePoints.map((routePoint) => routePoint.id)).toEqual(["p0"]);
+    expect(buildPlaybackSteps(prepared.journey).some((step) => step.kind === "travel")).toBe(false);
+  });
+
   it("builds a photo-first playback Journey while preserving soundtrack and route geography", () => {
     const journey = fixture();
     const prepared = prepareQuickRecapPlayback(journey, { generatedAt: "2026-09-02T00:00:00.000Z" });
