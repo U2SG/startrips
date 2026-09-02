@@ -366,16 +366,16 @@
 
   .journey-playback__close,
   .journey-playback__controls,
+  .journey-playback__soundtrack {
+    transition: none;
+  }
+
   .journey-playback__tempo {
     min-width: 64px;
   }
 
   .journey-playback__tempo select {
     padding-inline: 7px 18px;
-  }
-
-  .journey-playback__soundtrack {
-    transition: none;
   }
 }
 

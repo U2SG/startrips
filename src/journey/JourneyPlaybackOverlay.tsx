@@ -466,7 +466,12 @@ export function JourneyPlaybackOverlay({
         requestClose();
         return;
       }
-      if (event.target instanceof HTMLInputElement) return;
+      if (
+        event.target instanceof HTMLInputElement
+        || event.target instanceof HTMLSelectElement
+        || event.target instanceof HTMLTextAreaElement
+        || event.target instanceof HTMLButtonElement
+      ) return;
       if (event.key === "ArrowRight") next();
       else if (event.key === "ArrowLeft") back();
       else if (event.key === " ") {
