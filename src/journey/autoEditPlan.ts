@@ -453,6 +453,7 @@ export function validateAutoEditPlanV1(planInput: unknown, input: {
         errors.push(`duplicate chapter scope ${chapter.routePointId ?? "journey-intro"}`);
       }
       seenQuickRecapChapterScopes.add(scopeKey);
+      if (chapter.items.length === 0) errors.push(`empty quick recap chapter ${chapter.chapterId}`);
     }
     if (plan.mode === "full") {
       const scopeKey = chapter.routePointId === null ? "__journey_intro__" : `route:${chapter.routePointId}`;
