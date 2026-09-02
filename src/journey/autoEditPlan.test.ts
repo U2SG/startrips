@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildDeterministicQuickRecapPlan, type MediaDigestV1, validateAutoEditPlanV1 } from "./autoEditPlan";
+import { buildDeterministicQuickRecapPlan, type AutoEditPlanV1, type MediaDigestV1, validateAutoEditPlanV1 } from "./autoEditPlan";
 
 function digest(id: string, routePointId: string | null, sourceIndex: number, overrides: Partial<MediaDigestV1> = {}): MediaDigestV1 {
   return {
@@ -364,6 +364,88 @@ describe("deterministic auto-edit foundation (#127)", () => {
     });
     expect(validateAutoEditPlanV1(plan, { ...baseInput, routePointIds: ["tokyo"], digests }))
       .toMatchObject({ valid: true, errors: [] });
+  });
+
+  it("rejects camera-only Full Playback chapters even when forged duration reconciles", () => {
+    const digests = [digest("photo", "tokyo", 0)];
+    const plan: AutoEditPlanV1 = {
+      schemaVersion: 1,
+      planId: "full:empty-chapter",
+      journeyId: "journey-1",
+      journeyRevision: "7",
+      generatedAt: baseInput.generatedAt,
+      mode: "full",
+      plannedDurationMs: 4_000,
+      tempo: "standard",
+      chapters: [
+        {
+          chapterId: "route:tokyo",
+          routePointId: "tokyo",
+          camera: { primitive: "travel", durationMs: 1_000 },
+          items: [{ assetId: "photo", sourceIndex: 0, dwellMs: 2_000, framing: "contain", transition: "direct", selectionReason: "all-media" }],
+        },
+        {
+          chapterId: "route:kyoto:camera-only",
+          routePointId: "kyoto",
+          camera: { primitive: "travel", durationMs: 1_000 },
+          items: [],
+        },
+      ],
+      omittedAssetIds: [],
+    };
+    const result = validateAutoEditPlanV1(plan, { ...baseInput, routePointIds: ["tokyo", "kyoto"], digests });
+    expect(result.valid).toBe(false);
+    expect(result.errors).toContain("empty full chapter route:kyoto:camera-only");
+    expect(result.errors).not.toContain("planned duration mismatch");
+  });
+
+  it("rejects duplicate Full Playback route and journey-intro scopes", () => {
+    const digests = [
+      digest("intro-a", null, 0),
+      digest("intro-b", null, 1),
+      digest("tokyo-a", "tokyo", 2),
+      digest("tokyo-b", "tokyo", 3),
+    ];
+    const item = (assetId: string, sourceIndex: number) => ({
+      assetId, sourceIndex, dwellMs: 1_000, framing: "contain" as const, transition: "direct" as const, selectionReason: "all-media" as const,
+    });
+    const plan: AutoEditPlanV1 = {
+      schemaVersion: 1,
+      planId: "full:split-scopes",
+      journeyId: "journey-1",
+      journeyRevision: "7",
+      generatedAt: baseInput.generatedAt,
+      mode: "full",
+      plannedDurationMs: 6_000,
+      tempo: "standard",
+      chapters: [
+        { chapterId: "journey-intro:a", routePointId: null, camera: { primitive: "hold", durationMs: 0 }, items: [item("intro-a", 0)] },
+        { chapterId: "journey-intro:b", routePointId: null, camera: { primitive: "hold", durationMs: 0 }, items: [item("intro-b", 1)] },
+        { chapterId: "route:tokyo:a", routePointId: "tokyo", camera: { primitive: "travel", durationMs: 1_000 }, items: [item("tokyo-a", 2)] },
+        { chapterId: "route:tokyo:b", routePointId: "tokyo", camera: { primitive: "travel", durationMs: 1_000 }, items: [item("tokyo-b", 3)] },
+      ],
+      omittedAssetIds: [],
+    };
+    const result = validateAutoEditPlanV1(plan, { ...baseInput, routePointIds: ["tokyo"], digests });
+    expect(result.valid).toBe(false);
+    expect(result.errors).toEqual(expect.arrayContaining([
+      "duplicate full chapter scope journey-intro",
+      "duplicate full chapter scope tokyo",
+    ]));
+    expect(result.errors).not.toContain("planned duration mismatch");
+  });
+
+  it("keeps one populated Full Playback chapter per scope valid", () => {
+    const digests = [digest("intro", null, 0), digest("tokyo", "tokyo", 1)];
+    const plan: AutoEditPlanV1 = {
+      schemaVersion: 1, planId: "full:canonical", journeyId: "journey-1", journeyRevision: "7", generatedAt: baseInput.generatedAt,
+      mode: "full", plannedDurationMs: 3_000, tempo: "standard", omittedAssetIds: [],
+      chapters: [
+        { chapterId: "journey-intro", routePointId: null, camera: { primitive: "hold", durationMs: 0 }, items: [{ assetId: "intro", sourceIndex: 0, dwellMs: 1_000, framing: "contain", transition: "direct", selectionReason: "all-media" }] },
+        { chapterId: "route:tokyo", routePointId: "tokyo", camera: { primitive: "travel", durationMs: 1_000 }, items: [{ assetId: "tokyo", sourceIndex: 1, dwellMs: 1_000, framing: "contain", transition: "direct", selectionReason: "all-media" }] },
+      ],
+    };
+    expect(validateAutoEditPlanV1(plan, { ...baseInput, routePointIds: ["tokyo"], digests })).toMatchObject({ valid: true, errors: [] });
   });
 
   it("rejects duplicate Quick Recap route chapters even when distinct assets and duration still reconcile", () => {

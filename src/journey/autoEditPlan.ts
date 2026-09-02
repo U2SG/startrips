@@ -428,6 +428,7 @@ export function validateAutoEditPlanV1(planInput: unknown, input: {
   const digestById = new Map(input.digests.map((digest) => [digest.assetId, digest]));
   const seen = new Set<string>();
   const seenQuickRecapChapterScopes = new Set<string>();
+  const seenFullChapterScopes = new Set<string>();
   const routeOrder = new Map(input.routePointIds.map((id, index) => [id, index]));
   const quickRecapEligibleDigests = plan.mode === "quick-recap"
     ? input.digests.filter((digest) => isQuickRecapEligible(
@@ -451,6 +452,14 @@ export function validateAutoEditPlanV1(planInput: unknown, input: {
         errors.push(`duplicate chapter scope ${chapter.routePointId ?? "journey-intro"}`);
       }
       seenQuickRecapChapterScopes.add(scopeKey);
+    }
+    if (plan.mode === "full") {
+      const scopeKey = chapter.routePointId === null ? "__journey_intro__" : `route:${chapter.routePointId}`;
+      if (seenFullChapterScopes.has(scopeKey)) {
+        errors.push(`duplicate full chapter scope ${chapter.routePointId ?? "journey-intro"}`);
+      }
+      seenFullChapterScopes.add(scopeKey);
+      if (chapter.items.length === 0) errors.push(`empty full chapter ${chapter.chapterId}`);
     }
     let previousItemSourceIndex = -1;
     if (!isFiniteNonNegativeDuration(chapter.camera.durationMs)) {
