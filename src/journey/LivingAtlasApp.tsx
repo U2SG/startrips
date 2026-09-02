@@ -100,9 +100,11 @@ export function resolveMobilePlaybackPresentation(
   const point = selection?.pointIndex === null || selection?.pointIndex === undefined
     ? null
     : journey?.routePoints[selection.pointIndex] ?? null;
+  // A whole-Journey selection is owned by route fitting. Do not also publish
+  // its middle point as a competing globe command for the same revision.
   const focusPoint = point
     ? { lat: point.latitude, lon: point.longitude }
-    : journeyFocus(journey);
+    : null;
   const journeyIndex = journey
     ? Math.max(0, journeys.findIndex((candidate) => candidate.id === journey.id))
     : -1;
@@ -221,8 +223,9 @@ export type PlaybackCameraCommand = {
 export function nextPlaybackCameraCommand(
   current: PlaybackCameraCommand | null,
   target: PlaybackCameraTarget,
+  baselineRevision = 0,
 ): PlaybackCameraCommand {
-  return { target, revision: (current?.revision ?? 0) + 1 };
+  return { target, revision: Math.max(current?.revision ?? 0, baselineRevision) + 1 };
 }
 
 export function playbackFocusRouteForCameraTarget(
@@ -1169,7 +1172,7 @@ export function LivingAtlasApp({
             setPlaybackCameraCommand(null);
           }}
           onCameraTargetChange={(target) => {
-            setPlaybackCameraCommand((current) => nextPlaybackCameraCommand(current, target));
+            setPlaybackCameraCommand((current) => nextPlaybackCameraCommand(current, target, focusRevision));
           }}
           initialSoundtrackRead={playbackSoundtrackRead}
           reduceMotion={reduceMotion}

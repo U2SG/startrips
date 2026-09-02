@@ -112,8 +112,10 @@ describe("playbackFocusPointForCameraTarget", () => {
   it("increments a camera command revision even for the same route target", () => {
     const first = nextPlaybackCameraCommand(null, { kind: "route" });
     const second = nextPlaybackCameraCommand(first, { kind: "route" });
+    const afterNormalFocus = nextPlaybackCameraCommand(null, { kind: "route" }, 100_123);
     expect(first).toEqual({ target: { kind: "route" }, revision: 1 });
     expect(second).toEqual({ target: { kind: "route" }, revision: 2 });
+    expect(afterNormalFocus).toEqual({ target: { kind: "route" }, revision: 100_124 });
   });
 });
 
@@ -184,6 +186,23 @@ describe("Mobile V2 playback presentation", () => {
     expect(presentation.activeRouteId).toBe("journey-b");
     expect(presentation.focusPoint).toEqual({ lat: 35.6762, lon: 139.6503 });
     expect(presentation.focusRevision).toBeGreaterThan(1000);
+  });
+
+  it("publishes one route intent for a whole Journey selection", () => {
+    const presentation = resolveMobilePlaybackPresentation(
+      [first, second],
+      { journeyId: "journey-a", pointIndex: null },
+    );
+    expect(presentation.focusPoint).toBeNull();
+    expect(presentation.activeRouteId).toBe("journey-a");
+  });
+
+  it("publishes one point intent for a route-point selection", () => {
+    const presentation = resolveMobilePlaybackPresentation(
+      [first, second],
+      { journeyId: "journey-a", pointIndex: 1 },
+    );
+    expect(presentation.focusPoint).toEqual({ lat: 31.2304, lon: 121.4737 });
   });
 
   it("keeps the persistent mobile chrome within the design budget and safe area", () => {

@@ -182,8 +182,40 @@ export function clampGlobeTilt(rotation: number) {
   return rotation;
 }
 
-function getShortestRotationDelta(current: number, target: number) {
+export function getShortestRotationDelta(current: number, target: number) {
   return Math.atan2(Math.sin(target - current), Math.cos(target - current));
+}
+
+export function nearestEquivalentRotation(current: number, target: number) {
+  return current + getShortestRotationDelta(current, target);
+}
+
+export type GlobeFocusIntent = {
+  revision: number;
+  kind: "point" | "route";
+  point: { lat: number; lon: number };
+  zoom: number;
+  route: JourneyRoute | null;
+};
+
+export function resolveGlobeFocusIntent(
+  focusPoint: { lat: number; lon: number } | null | undefined,
+  focusRoute: JourneyRoute | null | undefined,
+  revision: number,
+): GlobeFocusIntent | null {
+  const routeFrame = getSphericalRouteFocus(focusRoute?.points ?? []);
+  if (focusRoute && routeFrame) {
+    return {
+      revision,
+      kind: "route",
+      point: routeFrame.center,
+      zoom: routeFrame.zoom,
+      route: focusRoute,
+    };
+  }
+  return focusPoint
+    ? { revision, kind: "point", point: focusPoint, zoom: 1, route: null }
+    : null;
 }
 
 export function isGlobeUpright(rotation: number, tolerance = 0.002) {
@@ -366,6 +398,13 @@ export function shouldFocusRevisionOwnState(
   incomingFocusRevision: number,
 ) {
   return manualFocusRevision === null || incomingFocusRevision > manualFocusRevision;
+}
+
+export function shouldApplyFocusIntentRevision(
+  activeRevision: number,
+  incomingRevision: number,
+) {
+  return incomingRevision > activeRevision;
 }
 
 export function solveScreenAnchorRotation(
@@ -1558,9 +1597,17 @@ export function ParticleEarthScene({
     let idleReleasePhase = 0;
     let lastGlobeInteractionAt = performance.now();
     let routeFocusFrame = getSphericalRouteFocus(latestFocusRoute.current?.points ?? []);
-    let routeFocusSettling = Boolean(routeFocusFrame);
-    let pointFocusSettling = Boolean(latestFocusPoint.current) && !routeFocusFrame;
-    let focusBaseRotationY: number | null = null;
+    let routeFocusSettling = false;
+    let pointFocusSettling = false;
+    let activeFocusRevision = Number.NEGATIVE_INFINITY;
+    let focusTarget: {
+      point: { lat: number; lon: number };
+      rotationX: number;
+      rotationY: number;
+      zoom: number;
+      screenX: number;
+      screenY: number;
+    } | null = null;
     let routeFocusZoomResetting = false;
     const interactionWorldCenter = new Vector3();
     const interactionGeometry = {
@@ -2848,6 +2895,7 @@ export function ParticleEarthScene({
       manualFocusRevision = latestFocusRevision.current;
       pointFocusSettling = false;
       routeFocusSettling = false;
+      focusTarget = null;
       routeFocusZoomResetting = false;
       syncRouteFocusPhase();
       lastGlobeInteractionAt = performance.now();
@@ -3678,7 +3726,7 @@ export function ParticleEarthScene({
       // #20: restrained energy mapping. Even at full energy the environment
       // only gains 12–15%, so it feels alive rather than becoming a visualizer.
       const audioGain = audioAtmosphereGains(audioEnergy);
-      const spatialFocusPoint = routeFocusFrame?.center ?? latestFocusPoint.current;
+      const spatialFocusPoint = focusTarget?.point ?? routeFocusFrame?.center ?? latestFocusPoint.current;
       const focusSolverOwnsState = manualFocusRevision === null;
       const focusFlightActive = Boolean(
         focusSolverOwnsState
@@ -3688,29 +3736,29 @@ export function ParticleEarthScene({
         && spatialFocusPoint
         && isFocusFlightActive(pointFocusSettling, routeFocusSettling),
       );
-      let targetRotationX = focusSolverOwnsState && spatialFocusPoint
-        ? rotationXForLatitude(spatialFocusPoint.lat)
+      let targetRotationX = focusSolverOwnsState && focusTarget
+        ? focusTarget.rotationX
+        : focusSolverOwnsState && spatialFocusPoint
+          ? rotationXForLatitude(spatialFocusPoint.lat)
         : interactiveRotationX;
-      let targetBaseRotationY = focusSolverOwnsState && spatialFocusPoint
-        ? focusBaseRotationY ?? rotationYForLongitude(spatialFocusPoint.lon)
+      let targetBaseRotationY = focusSolverOwnsState && focusTarget
+        ? focusTarget.rotationY
+        : focusSolverOwnsState && spatialFocusPoint
+          ? rotationYForLongitude(spatialFocusPoint.lon)
         : manualFocusRevision !== null
           ? baseRotationY
           : latestRotationYOverride.current ?? target.rotationY;
-      if (focusFlightActive && spatialFocusPoint) {
-        sampleFocusViewport(false);
-        const finalFocusZoom = routeFocusFrame?.zoom ?? interactiveZoom;
-        const solvedFocusRotation = solveFocusRotationForViewport(
-          spatialFocusPoint,
-          targetRotationX,
-          rotationYForLongitude(spatialFocusPoint.lon),
-          target.scale * finalFocusZoom,
-          target.x,
-          target.y,
-        );
-        targetRotationX = solvedFocusRotation.x;
-        targetBaseRotationY = solvedFocusRotation.y;
-        focusBaseRotationY = solvedFocusRotation.y;
-        host.dataset.focusArrivalErrorPx = solvedFocusRotation.errorPx.toFixed(2);
+      if (import.meta.env.DEV && focusFlightActive && focusTarget) {
+        host.dataset.focusFlightCurrentRotationX = interactiveRotationX.toFixed(6);
+        host.dataset.focusFlightCurrentRotationY = baseRotationY.toFixed(6);
+        host.dataset.focusSignedDeltaX = getShortestRotationDelta(
+          interactiveRotationX,
+          focusTarget.rotationX,
+        ).toFixed(6);
+        host.dataset.focusSignedDeltaY = getShortestRotationDelta(
+          baseRotationY,
+          focusTarget.rotationY,
+        ).toFixed(6);
       }
       const snap = reduceMotion ? 1 : 0;
       const flightSpeed = latestFocusFlightProfile.current === "nearby"
@@ -3758,6 +3806,11 @@ export function ParticleEarthScene({
           );
           focusSettledThisFrame = true;
           pointFocusSettling = false;
+          if (import.meta.env.DEV) {
+            host.dataset.focusSettleCount = String(
+              Number(host.dataset.focusSettleCount ?? 0) + 1,
+            );
+          }
           // Hold the arrival composition for a full inactivity window. Any
           // later user interaction refreshes the same timer before release.
           lastGlobeInteractionAt = now;
@@ -3788,6 +3841,11 @@ export function ParticleEarthScene({
           );
           focusSettledThisFrame = true;
           routeFocusSettling = false;
+          if (import.meta.env.DEV) {
+            host.dataset.focusSettleCount = String(
+              Number(host.dataset.focusSettleCount ?? 0) + 1,
+            );
+          }
           lastGlobeInteractionAt = now;
           syncRouteFocusPhase();
         }
@@ -4065,24 +4123,27 @@ export function ParticleEarthScene({
           );
         }
       },
-      setFocusPoint(
-        point: { lat: number; lon: number } | null | undefined,
-        revision: number,
-      ) {
+      setFocusIntent(intent: GlobeFocusIntent | null) {
+        const revision = intent?.revision ?? latestFocusRevision.current;
+        if (!shouldApplyFocusIntentRevision(activeFocusRevision, revision)) return;
         const focusOwnsState = shouldFocusRevisionOwnState(
           manualFocusRevision,
           revision,
         );
+        if (!focusOwnsState) return;
+        activeFocusRevision = revision;
+        const hadRouteFocus = Boolean(routeFocusFrame);
+        routeFocusFrame = getSphericalRouteFocus(intent?.route?.points ?? []);
+        const point = intent?.point ?? null;
         if (focusOwnsState) {
           manualFocusRevision = null;
-          focusBaseRotationY = null;
         }
         if (
           focusOwnsState
           &&
           latestDragToRotate.current
           && latestCenterFocusPoint.current
-          && point
+          && intent
         ) {
           interactiveRotationY = 0;
           if (latestFocusFlightProfile.current === "long-haul") {
@@ -4094,34 +4155,60 @@ export function ParticleEarthScene({
           rotationVelocityY = 0;
           lastGlobeInteractionAt = performance.now();
         }
-        pointFocusSettling = focusOwnsState && Boolean(point) && !routeFocusFrame;
+        pointFocusSettling = Boolean(intent?.kind === "point");
+        routeFocusSettling = Boolean(intent?.kind === "route" && routeFocusFrame);
+        routeFocusZoomResetting = hadRouteFocus && !routeFocusFrame;
         applyFocusPoint(point);
-        // Two journeys can share a rotation target, so the connector cannot
-        // rely on the globe transform alone to notice a new focus point.
-        routeProjectionRevision += 1;
-      },
-      setFocusRoute(route: JourneyRoute | null | undefined, revision: number) {
-        const focusOwnsState = shouldFocusRevisionOwnState(
-          manualFocusRevision,
-          revision,
-        );
-        const hadRouteFocus = Boolean(routeFocusFrame);
-        if (focusOwnsState) {
-          manualFocusRevision = null;
-          focusBaseRotationY = null;
-        }
-        routeFocusFrame = getSphericalRouteFocus(route?.points ?? []);
-        routeFocusSettling = focusOwnsState && Boolean(routeFocusFrame);
-        pointFocusSettling = focusOwnsState
-          && !routeFocusFrame
-          && Boolean(latestFocusPoint.current);
-        routeFocusZoomResetting = focusOwnsState && hadRouteFocus && !routeFocusFrame;
-        if (routeFocusFrame && focusOwnsState) {
-          syncRouteFocusPhase();
+        if (intent) {
+          sampleFocusViewport(true);
+          const target = GLOBE_MODE_CONFIG[currentMode];
+          const solved = solveFocusRotationForViewport(
+            intent.point,
+            rotationXForLatitude(intent.point.lat),
+            rotationYForLongitude(intent.point.lon),
+            target.scale * intent.zoom,
+            target.x,
+            target.y,
+          );
+          host.dataset.focusArrivalErrorPx = solved.errorPx.toFixed(2);
+          focusTarget = {
+            point: intent.point,
+            rotationX: nearestEquivalentRotation(interactiveRotationX, solved.x),
+            rotationY: nearestEquivalentRotation(baseRotationY, solved.y),
+            zoom: intent.zoom,
+            screenX: sampledFocusCenter.x,
+            screenY: sampledFocusCenter.y,
+          };
           interactiveRotationY = 0;
           rotationVelocityX = 0;
           rotationVelocityY = 0;
           lastGlobeInteractionAt = performance.now();
+          if (import.meta.env.DEV) {
+            host.dataset.focusRevision = String(revision);
+            host.dataset.focusIntentKind = intent.kind;
+            host.dataset.focusIntentSource = latestFocusFlightProfile.current
+              ? "playback"
+              : intent.kind === "route" ? "journey" : "route-point";
+            host.dataset.focusTargetLat = String(intent.point.lat);
+            host.dataset.focusTargetLon = String(intent.point.lon);
+            host.dataset.focusTargetRotationX = String(focusTarget.rotationX);
+            host.dataset.focusTargetRotationY = String(focusTarget.rotationY);
+            host.dataset.focusTargetZoom = String(intent.zoom);
+            host.dataset.focusTargetScreenX = String(focusTarget.screenX);
+            host.dataset.focusTargetScreenY = String(focusTarget.screenY);
+            host.dataset.focusFlightStartRotationX = String(interactiveRotationX);
+            host.dataset.focusFlightStartRotationY = String(baseRotationY);
+            host.dataset.focusReplanCount = "0";
+            host.dataset.focusSettleCount = "0";
+          }
+        } else {
+          focusTarget = null;
+        }
+        syncRouteFocusPhase();
+        // Two journeys can share a rotation target, so the connector cannot
+        // rely on the globe transform alone to notice a new focus point.
+        routeProjectionRevision += 1;
+        if (routeFocusFrame) {
           host.dataset.routeFocusLat = String(routeFocusFrame.center.lat);
           host.dataset.routeFocusLon = String(routeFocusFrame.center.lon);
           host.dataset.routeFocusZoom = String(routeFocusFrame.zoom);
@@ -4138,7 +4225,6 @@ export function ParticleEarthScene({
           delete host.dataset.routeFocusLon;
           delete host.dataset.routeFocusZoom;
         }
-        routeProjectionRevision += 1;
       },
       setFocusColor(color: string | undefined) {
         personalMaterial.uniforms.uColor.value.set(color ?? 0xffdc72);
@@ -4256,13 +4342,10 @@ export function ParticleEarthScene({
 
   useEffect(() => {
     if (!ready) return;
-    controllerRef.current?.setFocusPoint(focusPoint, focusRevision);
-  }, [controllerRef, focusPoint?.lat, focusPoint?.lon, focusRevision, ready]);
-
-  useEffect(() => {
-    if (!ready) return;
-    controllerRef.current?.setFocusRoute(focusRoute, focusRevision);
-  }, [controllerRef, focusRevision, focusRoute, ready]);
+    controllerRef.current?.setFocusIntent(
+      resolveGlobeFocusIntent(focusPoint, focusRoute, focusRevision),
+    );
+  }, [controllerRef, focusPoint?.lat, focusPoint?.lon, focusRevision, focusRoute, ready]);
 
   useEffect(() => {
     controllerRef.current?.setFocusColor(focusColor);

@@ -18,6 +18,14 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ## 2026-09-02
 
+### PR #145 - Make mobile Journey focus one continuous globe turn
+
+- **Source head:** `01b89a5d98edaf5d928508c5acced1fa594e0085`
+- **Scope:** Makes mobile Journey selection hand one continuous focus intent to the particle globe, preserving the selected Journey/route target through the camera turn instead of issuing competing intermediate focus commands. Playback camera commands now continue the same monotonic focus-revision sequence.
+- **User-visible change:** Selecting a Journey on mobile produces one continuous globe turn toward that Journey; starting Journey Playback can still take camera ownership for route/point choreography instead of being silently rejected by an older higher revision.
+- **Review fixes:** Fixes the P1 review finding that Playback used an independent revision counter starting at 1 while normal Journey focus revisions are much larger. `nextPlaybackCameraCommand` now advances above the current focus baseline, with regression coverage for a 100k-range normal focus revision.
+- **Follow-up:** None known at merge time. Validation on the reviewed source: LivingAtlasApp + ParticleEarthScene targeted suites 63/63 green, client typecheck green, production build and `git diff --check` green; focused real-browser transient Journey focus QA passes in both reduced-motion and animated modes after making the QA route activation advance the same focus revision contract.
+
 ### PR #143 - Add deterministic auto-edit plan foundation
 
 - **Source head:** `5391f7cd0f97e7641d4980da2b77e1487031196b`

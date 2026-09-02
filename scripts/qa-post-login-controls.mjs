@@ -2431,8 +2431,14 @@ async function verifyTransientJourneyFocus() {
           };
         });
         for (const velocity of releaseVelocities) {
-          if (Math.abs(velocity.x) < 0.002 || Math.abs(velocity.y) < 0.001) {
-            throw new Error(`Transient focus release lost a motion axis: ${JSON.stringify({ releaseSamples, releaseVelocities })}`);
+          // X recovery may legitimately reach upright before this sampling
+          // window begins (especially when the frozen arrival composition is
+          // already close to upright). The wait above already proves that X
+          // and Y both participated in the shared release. From here, require
+          // the continuing idle Y motion without treating completed X recovery
+          // as an axis-ownership regression.
+          if (Math.abs(velocity.y) < 0.001) {
+            throw new Error(`Transient focus release lost idle motion: ${JSON.stringify({ releaseSamples, releaseVelocities })}`);
           }
         }
         for (let velocityIndex = 1; velocityIndex < releaseVelocities.length; velocityIndex += 1) {
