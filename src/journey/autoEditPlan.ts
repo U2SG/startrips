@@ -344,31 +344,51 @@ function structurallyValidateAutoEditPlanV1(value: unknown) {
   if (!Array.isArray(root.omittedAssetIds)) errors.push("omittedAssetIds must be an array");
 
   if (Array.isArray(root.chapters)) {
-    root.chapters.forEach((chapterValue, chapterIndex) => {
+    for (let chapterIndex = 0; chapterIndex < root.chapters.length; chapterIndex += 1) {
+      const chapterValue = root.chapters[chapterIndex];
       const chapter = asRecord(chapterValue);
       if (!chapter) {
         errors.push(`chapter ${chapterIndex} must be an object`);
-        return;
+        continue;
       }
-      if (!asRecord(chapter.camera)) errors.push(`chapter camera invalid ${chapterIndex}`);
+      const camera = asRecord(chapter.camera);
+      if (!camera) {
+        errors.push(`chapter camera invalid ${chapterIndex}`);
+      } else if (typeof camera.durationMs !== "number") {
+        errors.push(`chapter camera duration invalid ${chapterIndex}`);
+      }
       if (!Array.isArray(chapter.items)) {
         errors.push(`chapter items invalid ${chapterIndex}`);
       } else {
-        chapter.items.forEach((itemValue, itemIndex) => {
+        for (let itemIndex = 0; itemIndex < chapter.items.length; itemIndex += 1) {
+          const itemValue = chapter.items[itemIndex];
           const item = asRecord(itemValue);
           if (!item) {
             errors.push(`chapter item invalid ${chapterIndex}:${itemIndex}`);
-            return;
+            continue;
           }
-          if (Object.prototype.hasOwnProperty.call(item, "trim") && item.trim !== undefined && !asRecord(item.trim)) {
-            errors.push(`item trim invalid ${chapterIndex}:${itemIndex}`);
+          if (Object.prototype.hasOwnProperty.call(item, "dwellMs") && typeof item.dwellMs !== "number") {
+            errors.push(`item dwell invalid ${chapterIndex}:${itemIndex}`);
           }
-        });
+          if (Object.prototype.hasOwnProperty.call(item, "trim") && item.trim !== undefined) {
+            const trim = asRecord(item.trim);
+            if (!trim) {
+              errors.push(`item trim invalid ${chapterIndex}:${itemIndex}`);
+            } else if (typeof trim.inMs !== "number" || typeof trim.outMs !== "number") {
+              errors.push(`item trim duration invalid ${chapterIndex}:${itemIndex}`);
+            }
+          }
+        }
       }
-      if (Object.prototype.hasOwnProperty.call(chapter, "arrival") && chapter.arrival !== undefined && !asRecord(chapter.arrival)) {
-        errors.push(`chapter arrival invalid ${chapterIndex}`);
+      if (Object.prototype.hasOwnProperty.call(chapter, "arrival") && chapter.arrival !== undefined) {
+        const arrival = asRecord(chapter.arrival);
+        if (!arrival) {
+          errors.push(`chapter arrival invalid ${chapterIndex}`);
+        } else if (typeof arrival.durationMs !== "number") {
+          errors.push(`chapter arrival duration invalid ${chapterIndex}`);
+        }
       }
-    });
+    }
   }
 
   return {
