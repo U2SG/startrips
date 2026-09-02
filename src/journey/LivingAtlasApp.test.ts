@@ -112,8 +112,10 @@ describe("playbackFocusPointForCameraTarget", () => {
   it("increments a camera command revision even for the same route target", () => {
     const first = nextPlaybackCameraCommand(null, { kind: "route" });
     const second = nextPlaybackCameraCommand(first, { kind: "route" });
+    const afterNormalFocus = nextPlaybackCameraCommand(null, { kind: "route" }, 100_123);
     expect(first).toEqual({ target: { kind: "route" }, revision: 1 });
     expect(second).toEqual({ target: { kind: "route" }, revision: 2 });
+    expect(afterNormalFocus).toEqual({ target: { kind: "route" }, revision: 100_124 });
   });
 });
 

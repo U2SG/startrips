@@ -223,8 +223,9 @@ export type PlaybackCameraCommand = {
 export function nextPlaybackCameraCommand(
   current: PlaybackCameraCommand | null,
   target: PlaybackCameraTarget,
+  baselineRevision = 0,
 ): PlaybackCameraCommand {
-  return { target, revision: (current?.revision ?? 0) + 1 };
+  return { target, revision: Math.max(current?.revision ?? 0, baselineRevision) + 1 };
 }
 
 export function playbackFocusRouteForCameraTarget(
@@ -1171,7 +1172,7 @@ export function LivingAtlasApp({
             setPlaybackCameraCommand(null);
           }}
           onCameraTargetChange={(target) => {
-            setPlaybackCameraCommand((current) => nextPlaybackCameraCommand(current, target));
+            setPlaybackCameraCommand((current) => nextPlaybackCameraCommand(current, target, focusRevision));
           }}
           initialSoundtrackRead={playbackSoundtrackRead}
           reduceMotion={reduceMotion}
