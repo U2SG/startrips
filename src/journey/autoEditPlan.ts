@@ -485,6 +485,7 @@ export function validateAutoEditPlanV1(planInput: unknown, input: {
       }
     }
     let previousItemSourceIndex = -1;
+    let quickRecapImageIndex = 0;
     if (!isFiniteNonNegativeDuration(chapter.camera.durationMs)) {
       errors.push(`invalid camera duration ${chapter.chapterId}`);
     }
@@ -526,6 +527,11 @@ export function validateAutoEditPlanV1(planInput: unknown, input: {
       if (!(AUTO_EDIT_FRAMINGS as readonly unknown[]).includes(item.framing)) errors.push(`framing invalid ${item.assetId}`);
       if (!(AUTO_EDIT_TRANSITIONS as readonly unknown[]).includes(item.transition)) errors.push(`transition invalid ${item.assetId}`);
       if (!(AUTO_EDIT_SELECTION_REASONS as readonly unknown[]).includes(item.selectionReason)) errors.push(`selection reason invalid ${item.assetId}`);
+      const quickRecapTempo = plan.mode === "quick-recap"
+        && (AUTO_EDIT_TEMPOS as readonly unknown[]).includes(plan.tempo)
+        ? plan.tempo as AutoEditTempo
+        : null;
+      let expectedQuickRecapPhotoRole: AutoEditPhotoRole | null = null;
       if (plan.mode === "quick-recap") {
         if (item.framing !== "contain") errors.push(`quick recap framing mismatch ${item.assetId}`);
         if (item.transition !== "direct") errors.push(`quick recap transition mismatch ${item.assetId}`);
@@ -538,14 +544,20 @@ export function validateAutoEditPlanV1(planInput: unknown, input: {
           errors.push(`selection reason mismatch ${item.assetId}`);
         }
         if (digest.mediaType === "image") {
+          expectedQuickRecapPhotoRole = photoRoleForChapterItem(digest, quickRecapImageIndex++);
           if (!item.photoRole) errors.push(`photo role missing ${item.assetId}`);
           else if (!(AUTO_EDIT_PHOTO_ROLES as readonly string[]).includes(item.photoRole)) errors.push(`photo role invalid ${item.assetId}`);
+          else if (item.photoRole !== expectedQuickRecapPhotoRole) errors.push(`photo role semantic mismatch ${item.assetId}`);
         }
         if (digest.mediaType === "video" && Object.prototype.hasOwnProperty.call(item, "photoRole")) errors.push(`video photo role invalid ${item.assetId}`);
       }
       if (digest.mediaType === "image") {
         if (!isFinitePositiveDuration(item.dwellMs)) errors.push(`invalid dwell ${item.assetId}`);
         if (Object.prototype.hasOwnProperty.call(item, "trim")) errors.push(`image trim invalid ${item.assetId}`);
+        if (quickRecapTempo && expectedQuickRecapPhotoRole) {
+          const expectedDwellMs = IMAGE_DWELL_MS[quickRecapTempo][expectedQuickRecapPhotoRole];
+          if (item.dwellMs !== expectedDwellMs) errors.push(`quick recap dwell mismatch ${item.assetId}`);
+        }
       } else {
         if (Object.prototype.hasOwnProperty.call(item, "dwellMs")) errors.push(`video dwell invalid ${item.assetId}`);
         if (!item.trim) {
@@ -562,6 +574,11 @@ export function validateAutoEditPlanV1(planInput: unknown, input: {
             || item.trim.outMs > sourceDuration
           ) {
             errors.push(`invalid trim ${item.assetId}`);
+          } else if (quickRecapTempo) {
+            const expectedOutMs = Math.min(sourceDuration, VIDEO_DWELL_MS[quickRecapTempo]);
+            if (item.trim.inMs !== 0 || item.trim.outMs !== expectedOutMs) {
+              errors.push(`quick recap trim mismatch ${item.assetId}`);
+            }
           }
         }
       }
