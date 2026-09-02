@@ -18,6 +18,14 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ## 2026-09-02
 
+### PR #156 - Validate Quick Recap omission ledger
+
+- **Source head:** `30a302019de491383678e55a6870ffd98e620738`
+- **Scope:** Hardens the V1 auto-edit runtime validator so Quick Recap `omittedAssetIds` must exactly match eligible media not selected by the plan. Structural validation now fails closed on malformed/sparse omission entries, and semantic validation rejects duplicate, selected, noneligible, missing, extra, or re-ordered omissions.
+- **User-visible change:** Quick Recap/AI-generated plans can no longer validate while falsely reporting which memories were omitted, keeping selection bookkeeping trustworthy for downstream playback/export/audit surfaces.
+- **Review fixes:** Self-review caught that adding an asset-id tie-breaker would diverge from the existing builder when `sourceIndex` values tie; validation was corrected to reuse the builder's stable source-order semantics, with regression coverage.
+- **Follow-up:** If Full Playback begins consuming `omittedAssetIds`, define and validate its own explicit omission contract rather than inheriting Quick Recap semantics. Validation on the reviewed source: targeted `autoEditPlan.test.ts` 27/27 green, full `src` 38 files / 412 tests green, client TypeScript green, production build green, and `git diff --check` green.
+
 ### PR #152 - Fail closed on malformed auto-edit plan shapes
 
 - **Source head:** `07f700c9fd25125e66420ab68908493537107b3c`
