@@ -341,7 +341,15 @@ function structurallyValidateAutoEditPlanV1(value: unknown) {
   const root = asRecord(value);
   if (!root) return { plan: null, errors: ["plan must be an object"] };
   if (!Array.isArray(root.chapters)) errors.push("chapters must be an array");
-  if (!Array.isArray(root.omittedAssetIds)) errors.push("omittedAssetIds must be an array");
+  if (!Array.isArray(root.omittedAssetIds)) {
+    errors.push("omittedAssetIds must be an array");
+  } else {
+    for (let omittedIndex = 0; omittedIndex < root.omittedAssetIds.length; omittedIndex += 1) {
+      if (typeof root.omittedAssetIds[omittedIndex] !== "string") {
+        errors.push(`omitted asset id invalid ${omittedIndex}`);
+      }
+    }
+  }
 
   if (Array.isArray(root.chapters)) {
     for (let chapterIndex = 0; chapterIndex < root.chapters.length; chapterIndex += 1) {
@@ -482,8 +490,33 @@ export function validateAutoEditPlanV1(planInput: unknown, input: {
   }
 
   if (plan.mode === "quick-recap") {
-    for (const digest of input.digests) {
-      if (!isQuickRecapEligible(digest, input.journeyId, input.journeyRevision, routeOrder)) continue;
+    const eligibleDigests = input.digests
+      .filter((digest) => isQuickRecapEligible(
+        digest,
+        input.journeyId,
+        input.journeyRevision,
+        routeOrder,
+      ));
+    const eligibleById = new Map(eligibleDigests.map((digest) => [digest.assetId, digest]));
+    const omissionSet = new Set<string>();
+    for (const assetId of plan.omittedAssetIds) {
+      if (omissionSet.has(assetId)) errors.push(`duplicate omitted asset ${assetId}`);
+      omissionSet.add(assetId);
+      if (seen.has(assetId)) errors.push(`selected asset listed omitted ${assetId}`);
+      if (!eligibleById.has(assetId)) errors.push(`noneligible omitted asset ${assetId}`);
+    }
+    const expectedOmittedAssetIds = eligibleDigests
+      .filter((digest) => !seen.has(digest.assetId))
+      .sort((a, b) => a.sourceIndex - b.sourceIndex)
+      .map((digest) => digest.assetId);
+    if (
+      plan.omittedAssetIds.length !== expectedOmittedAssetIds.length
+      || plan.omittedAssetIds.some((assetId, index) => assetId !== expectedOmittedAssetIds[index])
+    ) {
+      errors.push("omission ledger mismatch");
+    }
+
+    for (const digest of eligibleDigests) {
       if (digest.userSignals.pinnedForRecap && !seen.has(digest.assetId)) errors.push(`pinned asset omitted ${digest.assetId}`);
     }
     for (const routePointId of input.routePointIds) {
