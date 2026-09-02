@@ -14,6 +14,12 @@ export type PreparedQuickRecapPlayback = {
   plan: AutoEditPlanV1;
 };
 
+export type QuickRecapFallbackReason = "no-photos" | "over-budget";
+
+export type QuickRecapPreparationResult =
+  | { playback: PreparedQuickRecapPlayback; fallbackReason: null }
+  | { playback: null; fallbackReason: QuickRecapFallbackReason };
+
 function isImage(asset: JourneyMediaAsset) {
   return asset.mimeType.startsWith("image/");
 }
@@ -64,22 +70,22 @@ export function quickRecapDigestsForJourney(journey: Journey): MediaDigestV1[] {
   }));
 }
 
-export function prepareQuickRecapPlayback(
+export function prepareQuickRecapPlaybackResult(
   journey: Journey,
   options: {
     generatedAt: string;
     targetDurationMs?: number;
     tempo?: AutoEditTempo;
   },
-): PreparedQuickRecapPlayback | null {
-  if (journey.routePoints.length === 0) return null;
+): QuickRecapPreparationResult {
+  if (journey.routePoints.length === 0) return { playback: null, fallbackReason: "no-photos" };
   const digests = quickRecapDigestsForJourney(journey);
-  if (digests.length === 0) return null;
+  if (digests.length === 0) return { playback: null, fallbackReason: "no-photos" };
 
   const candidateRoutePointIds = journey.routePoints
     .filter((point) => digests.some((digest) => digest.routePointId === point.id))
     .map((point) => point.id);
-  if (candidateRoutePointIds.length === 0) return null;
+  if (candidateRoutePointIds.length === 0) return { playback: null, fallbackReason: "no-photos" };
 
   const requestedTargetMs = options.targetDurationMs ?? QUICK_RECAP_TARGET_MS;
   const chapterBudgetMs = Math.max(1, requestedTargetMs - PLAYBACK_PACING.introMs - PLAYBACK_PACING.outroMs);
@@ -92,12 +98,12 @@ export function prepareQuickRecapPlayback(
     tempo: options.tempo ?? "standard",
     generatedAt: options.generatedAt,
   });
-  if (plan.plannedDurationMs > chapterBudgetMs) return null;
+  if (plan.plannedDurationMs > chapterBudgetMs) return { playback: null, fallbackReason: "over-budget" };
   const selectedIds = new Set(plan.chapters.flatMap((chapter) => chapter.items.map((item) => item.assetId)));
-  if (selectedIds.size === 0) return null;
+  if (selectedIds.size === 0) return { playback: null, fallbackReason: "no-photos" };
   const plannedRoutePointIds = new Set(plan.chapters.map((chapter) => chapter.routePointId));
   const projectedRoutePoints = journey.routePoints.filter((point) => plannedRoutePointIds.has(point.id));
-  if (projectedRoutePoints.length === 0) return null;
+  if (projectedRoutePoints.length === 0) return { playback: null, fallbackReason: "no-photos" };
 
   const projectedCandidates = new Map(runtimePhotoCandidates(journey).map((asset) => [asset.id, asset]));
   const projectedMedia = journey.media.flatMap((asset) => {
@@ -107,9 +113,23 @@ export function prepareQuickRecapPlayback(
   });
 
   return {
-    plan,
-    journey: { ...journey, routePoints: projectedRoutePoints, media: projectedMedia },
+    fallbackReason: null,
+    playback: {
+      plan,
+      journey: { ...journey, routePoints: projectedRoutePoints, media: projectedMedia },
+    },
   };
+}
+
+export function prepareQuickRecapPlayback(
+  journey: Journey,
+  options: {
+    generatedAt: string;
+    targetDurationMs?: number;
+    tempo?: AutoEditTempo;
+  },
+): PreparedQuickRecapPlayback | null {
+  return prepareQuickRecapPlaybackResult(journey, options).playback;
 }
 
 export function quickRecapStepDurationMs(

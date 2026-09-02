@@ -25,7 +25,7 @@ import {
 } from "./JourneyComposer";
 import { JourneyPlaybackOverlay } from "./JourneyPlaybackOverlay";
 import {
-  prepareQuickRecapPlayback,
+  prepareQuickRecapPlaybackResult,
   quickRecapStepDurationMs,
   type PreparedQuickRecapPlayback,
 } from "./quickRecapPlayback";
@@ -329,7 +329,12 @@ export function LivingAtlasApp({
   });
   const [playbackQuickRecap, setPlaybackQuickRecap] = useState<PreparedQuickRecapPlayback | null>(null);
   const [playbackModeMenuJourneyId, setPlaybackModeMenuJourneyId] = useState<string | null>(null);
-  const [playbackPendingMode, setPlaybackPendingMode] = useState<{ journeyId: string; mode: "full" | "quick-recap" } | null>(null);
+  const [playbackPendingMode, setPlaybackPendingMode] = useState<{
+    journeyId: string;
+    mode: "full" | "quick-recap";
+    fallbackMessage: string | null;
+  } | null>(null);
+  const [playbackFallbackMessage, setPlaybackFallbackMessage] = useState<string | null>(null);
   const [playbackReleaseFocusRevision, setPlaybackReleaseFocusRevision] = useState(0);
   // Review P1: when the soundtrack read is not cached yet, the first click
   // only starts the prefetch and the button shows 正在准备配乐…; the user
@@ -717,7 +722,11 @@ export function LivingAtlasApp({
   // otherwise the first click only prefetches and the button switches to
   // 正在准备配乐… — the user clicks again once it is ready, and THAT click
   // starts playback with a cached URL. No silent first soundtrack.
-  function startPlayback(journeyId: string, requestedMode: "full" | "quick-recap" = "full") {
+  function startPlayback(
+    journeyId: string,
+    requestedMode: "full" | "quick-recap" = "full",
+    carriedFallbackMessage: string | null = null,
+  ) {
     const journey = journeys.find((candidate) => candidate.id === journeyId) ?? null;
     if (!journey) return;
     setStoryJourneyId(null);
@@ -725,21 +734,28 @@ export function LivingAtlasApp({
 
     let mode = requestedMode;
     let quickRecap: PreparedQuickRecapPlayback | null = null;
+    let fallbackMessage = carriedFallbackMessage;
     if (mode === "quick-recap") {
-      quickRecap = prepareQuickRecapPlayback(journey, {
+      const preparation = prepareQuickRecapPlaybackResult(journey, {
         generatedAt: new Date().toISOString(),
       });
+      quickRecap = preparation.playback;
       if (!quickRecap) {
         mode = "full";
-        showNotice("这段旅程还没有可用于快速回顾的照片，已切换为完整播放。");
+        fallbackMessage = preparation.fallbackReason === "over-budget"
+          ? "这段旅程的必选回忆超过快速回顾时长，已切换为完整播放。"
+          : "这段旅程还没有可用于快速回顾的照片，已切换为完整播放。";
       }
+    } else if (!carriedFallbackMessage) {
+      fallbackMessage = null;
     }
 
     const cachedRead = cachedSoundtrackRead(journey);
     if (playbackEntryNeedsPreparation(journey, cachedRead)) {
       setPlaybackSession((current) => ({ ...current, soundtrackRead: null }));
       setPlaybackQuickRecap(null);
-      setPlaybackPendingMode({ journeyId, mode });
+      setPlaybackFallbackMessage(fallbackMessage);
+      setPlaybackPendingMode({ journeyId, mode, fallbackMessage });
       setPlaybackModeMenuJourneyId(null);
       setPlaybackPreparingId(journeyId);
       void prefetchSoundtrackRead(journey)
@@ -750,6 +766,7 @@ export function LivingAtlasApp({
       return;
     }
     setPlaybackQuickRecap(mode === "quick-recap" ? quickRecap : null);
+    setPlaybackFallbackMessage(fallbackMessage);
     setPlaybackPendingMode(null);
     setPlaybackModeMenuJourneyId(null);
     setPlaybackSession({
@@ -985,7 +1002,11 @@ export function LivingAtlasApp({
               aria-controls={`playback-mode-options-${activeJourney.id}`}
               onClick={() => {
                 if (playbackPendingMode?.journeyId === activeJourney.id) {
-                  startPlayback(activeJourney.id, playbackPendingMode.mode);
+                  startPlayback(
+                    activeJourney.id,
+                    playbackPendingMode.mode,
+                    playbackPendingMode.fallbackMessage,
+                  );
                   return;
                 }
                 setPlaybackModeMenuJourneyId((current) => current === activeJourney.id ? null : activeJourney.id);
@@ -1303,6 +1324,7 @@ export function LivingAtlasApp({
             setPlaybackSession({ journeyId: null, soundtrackRead: null, cameraCommand: null });
             setPlaybackQuickRecap(null);
             setPlaybackPendingMode(null);
+            setPlaybackFallbackMessage(null);
           }}
           onCameraTargetChange={(target) => {
             setPlaybackSession((current) => ({
@@ -1313,6 +1335,7 @@ export function LivingAtlasApp({
           initialSoundtrackRead={playbackSession.soundtrackRead}
           stepDurationResolver={playbackStepDurationResolver}
           playbackMode={playbackQuickRecap ? "quick-recap" : "full"}
+          statusMessage={playbackFallbackMessage}
           reduceMotion={reduceMotion}
         />
       ) : null}

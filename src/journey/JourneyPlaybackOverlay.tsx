@@ -80,6 +80,7 @@ export function JourneyPlaybackOverlay({
   reduceMotion,
   stepDurationResolver,
   playbackMode = "full",
+  statusMessage,
 }: {
   journey: Journey | null;
   onClose: () => void;
@@ -90,6 +91,7 @@ export function JourneyPlaybackOverlay({
   reduceMotion?: boolean;
   stepDurationResolver?: PlaybackStepDurationResolver;
   playbackMode?: "full" | "quick-recap";
+  statusMessage?: string | null;
 }) {
   // Review P2: hold the director while a media chapter's image is not yet
   // decoded, so a slow network never flashes an empty frame — the chapter
@@ -572,6 +574,10 @@ export function JourneyPlaybackOverlay({
       />
 
       {/* ── Chapter content ─────────────────────────────────────────────── */}
+      {statusMessage ? (
+        <div className="journey-playback__status" role="status">{statusMessage}</div>
+      ) : null}
+
       <div className="journey-playback__stage">
         {step?.kind === "intro" ? (
           <div className="journey-playback__intro">

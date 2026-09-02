@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { buildPlaybackSteps, playbackMediaForPoint } from "./journeyPlayback";
 import {
   prepareQuickRecapPlayback,
+  prepareQuickRecapPlaybackResult,
   quickRecapDigestsForJourney,
   quickRecapStepDurationMs,
 } from "./quickRecapPlayback";
@@ -96,12 +97,14 @@ describe("Quick Recap playback handoff (#127)", () => {
     expect(prepared.plan.plannedDurationMs).toBeLessThanOrEqual(42_000);
   });
 
-  it("fails closed when mandatory represented chapters cannot fit the recap target", () => {
+  it("fails closed with an over-budget reason when mandatory represented chapters cannot fit the recap target", () => {
     const journey = fixture();
     journey.coverMediaAssetId = null;
     journey.routePoints = Array.from({ length: 9 }, (_, index) => point(`p${index}`, index));
     journey.media = journey.routePoints.map((routePoint, index) => media(`photo-${index}`, routePoint.id, "image/jpeg", index));
 
+    const result = prepareQuickRecapPlaybackResult(journey, { generatedAt: "2026-09-02T00:00:00.000Z" });
+    expect(result).toEqual({ playback: null, fallbackReason: "over-budget" });
     expect(prepareQuickRecapPlayback(journey, { generatedAt: "2026-09-02T00:00:00.000Z" })).toBeNull();
   });
 
@@ -142,10 +145,13 @@ describe("Quick Recap playback handoff (#127)", () => {
     expect(quickRecapStepDurationMs(prepared.journey, firstMedia, prepared.plan)).toBe(3_100);
   });
 
-  it("fails closed when a Journey has no route-scoped or cover photo for recap", () => {
+  it("fails closed with a no-photos reason when a Journey has no recap photo", () => {
     const journey = fixture();
     journey.coverMediaAssetId = null;
     journey.media = [media("video", "p0", "video/mp4", 0), media("track", null, "audio/mpeg", 1)];
-    expect(prepareQuickRecapPlayback(journey, { generatedAt: "2026-09-02T00:00:00.000Z" })).toBeNull();
+    expect(prepareQuickRecapPlaybackResult(journey, { generatedAt: "2026-09-02T00:00:00.000Z" })).toEqual({
+      playback: null,
+      fallbackReason: "no-photos",
+    });
   });
 });
