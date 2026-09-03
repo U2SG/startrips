@@ -574,6 +574,7 @@ export function LivingAtlasApp({
     setPlaybackSession((current) => releaseStalePlaybackSession(current, true));
     setPlaybackQuickRecap(null);
     setPlaybackPendingMode(null);
+    setPlaybackFallbackMessage(null);
   }, [focusRevision, playbackOwnership.releaseStaleState, playbackSession.cameraCommand?.revision]);
   const mobileSheetJourney = journeys.find((journey) => journey.id === mobileSheetJourneyId) ?? null;
   const mobileMapJourney = journeys.find((journey) => journey.id === mobileMapJourneyId) ?? null;
