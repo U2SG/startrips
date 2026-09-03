@@ -603,6 +603,14 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 - **Review fixes:** Keeps `play()` failures sticky across download `progress`/`timeupdate`, clears them only on actual `playing`, and resynchronizes transport when a signed video read becomes ready so a newly mounted element is explicitly played or paused.
 - **Follow-up:** Persisted intrinsic video duration remains separate follow-up work.
 
+### PR #184 - Fail closed on malformed auto-edit identity fields
+
+- **Source head:** `40313a2b350711f708352f6b74754162f6f87344`
+- **Scope:** Hardens AutoEditPlan V1 structural validation for top-level, chapter, camera, item, photo-role, and arrival primitive shapes before semantic validation.
+- **User-visible change:** No intentional product behavior change; malformed external/AI edit plans fail closed before typed execution.
+- **Review fixes:** Keeps enum membership and mode-specific semantics in the semantic validator and aligns malformed photo-role coverage with the stricter structural gate.
+- **Follow-up:** None known; `git diff --check` is green after rebasing onto the latest main and GitHub CI is authoritative for final validation.
+
 ---
 
 ## Entry template
