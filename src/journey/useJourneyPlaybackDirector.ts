@@ -40,9 +40,12 @@ export function replanPlaybackTimerBudget(
  * element directly — the overlay translates phases into focus/route/media
  * commands.
  */
+export type PlaybackStepDurationResolver = (journey: Journey, step: PlaybackStep) => number | undefined;
+
 export function useJourneyPlaybackDirector(
   journey: Journey | null,
   hold = false,
+  resolveStepDuration?: PlaybackStepDurationResolver,
 ) {
   const [state, setState] = useState<PlaybackState>(initialPlaybackState);
   const [tempo, setTempo] = useState<PlaybackTempo>("standard");
@@ -87,9 +90,14 @@ export function useJourneyPlaybackDirector(
       return;
     }
 
+    const overrideDurationMs = resolveStepDuration?.(journey, step);
     const profile = PLAYBACK_TEMPO_PROFILES[tempo];
-    const fullDurationMs = playbackStepDurationForTempo(journey, step, profile);
-    const stepKey = `${journey.id}:${state.stepIndex}:${step.kind}`;
+    const fullDurationMs = overrideDurationMs !== undefined
+      && Number.isFinite(overrideDurationMs)
+      && overrideDurationMs >= 0
+      ? overrideDurationMs
+      : playbackStepDurationForTempo(journey, step, profile);
+    const stepKey = `${journey.id}:${state.stepIndex}:${step.kind}:${fullDurationMs}`;
     if (timerStepKeyRef.current !== stepKey) {
       timerStepKeyRef.current = stepKey;
       timerRemainingMsRef.current = fullDurationMs;
@@ -129,7 +137,7 @@ export function useJourneyPlaybackDirector(
         timerStartedAtMsRef.current = null;
       }
     };
-  }, [hold, journey, state.stepIndex, state.paused, step, tempo, transition]);
+  }, [hold, journey, resolveStepDuration, state.stepIndex, state.paused, step, tempo, transition]);
 
   // Reset when the journey changes.
   useEffect(() => {

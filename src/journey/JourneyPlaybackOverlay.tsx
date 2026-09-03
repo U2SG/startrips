@@ -21,7 +21,7 @@ import {
   decodeImageUrl,
   type DecodedReadiness,
 } from "./mediaPrefetch";
-import { useJourneyPlaybackDirector } from "./useJourneyPlaybackDirector";
+import { useJourneyPlaybackDirector, type PlaybackStepDurationResolver } from "./useJourneyPlaybackDirector";
 import {
   playbackCameraTargetForStep,
   playbackCameraTargetKey,
@@ -78,6 +78,9 @@ export function JourneyPlaybackOverlay({
   onCameraTargetChange,
   initialSoundtrackRead,
   reduceMotion,
+  stepDurationResolver,
+  playbackMode = "full",
+  statusMessage,
 }: {
   journey: Journey | null;
   onClose: () => void;
@@ -86,13 +89,16 @@ export function JourneyPlaybackOverlay({
   // run inside the click gesture (browser user-activation policy).
   initialSoundtrackRead?: { url: string } | null;
   reduceMotion?: boolean;
+  stepDurationResolver?: PlaybackStepDurationResolver;
+  playbackMode?: "full" | "quick-recap";
+  statusMessage?: string | null;
 }) {
   // Review P2: hold the director while a media chapter's image is not yet
   // decoded, so a slow network never flashes an empty frame — the chapter
   // waits on the decode settle instead of advancing on a fixed timer.
   const [hold, setHold] = useState(false);
   const [videoFallbackAssetId, setVideoFallbackAssetId] = useState<string | null>(null);
-  const director = useJourneyPlaybackDirector(journey, hold);
+  const director = useJourneyPlaybackDirector(journey, hold, stepDurationResolver);
   const { phase, paused, pause, resume, next, back, seek, exit, tempo, setTempo } = director;
   // Review P2: `exit()` only resets the local director; the overlay must also
   // tell the parent to drop playbackJourneyId, or playback can never close.
@@ -554,6 +560,7 @@ export function JourneyPlaybackOverlay({
       aria-modal="true"
       aria-label="播放旅程"
       data-playback-phase={step?.kind ?? "idle"}
+      data-playback-mode={playbackMode}
       data-playback-step={director.stepIndex}
       data-playback-steps={director.steps.length}
     >
@@ -567,10 +574,14 @@ export function JourneyPlaybackOverlay({
       />
 
       {/* ── Chapter content ─────────────────────────────────────────────── */}
+      {statusMessage ? (
+        <div className="journey-playback__status" role="status">{statusMessage}</div>
+      ) : null}
+
       <div className="journey-playback__stage">
         {step?.kind === "intro" ? (
           <div className="journey-playback__intro">
-            <p>JOURNEY PLAYBACK</p>
+            <p>{playbackMode === "quick-recap" ? "QUICK RECAP" : "JOURNEY PLAYBACK"}</p>
             <h2>{journey.title}</h2>
             <span>{journey.startedOn}{journey.endedOn ? ` — ${journey.endedOn}` : ""}</span>
           </div>

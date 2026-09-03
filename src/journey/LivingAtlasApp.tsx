@@ -24,7 +24,12 @@ import {
   type JourneySaveResult,
 } from "./JourneyComposer";
 import { JourneyPlaybackOverlay } from "./JourneyPlaybackOverlay";
-import type { PlaybackCameraTarget } from "./journeyPlayback";
+import {
+  prepareQuickRecapPlaybackResult,
+  quickRecapStepDurationMs,
+  type PreparedQuickRecapPlayback,
+} from "./quickRecapPlayback";
+import type { PlaybackCameraTarget, PlaybackStep } from "./journeyPlayback";
 import { JourneyStory } from "./JourneyStory";
 import {
   cachedSoundtrackRead,
@@ -322,6 +327,14 @@ export function LivingAtlasApp({
     soundtrackRead: null,
     cameraCommand: null,
   });
+  const [playbackQuickRecap, setPlaybackQuickRecap] = useState<PreparedQuickRecapPlayback | null>(null);
+  const [playbackModeMenuJourneyId, setPlaybackModeMenuJourneyId] = useState<string | null>(null);
+  const [playbackPendingMode, setPlaybackPendingMode] = useState<{
+    journeyId: string;
+    mode: "full" | "quick-recap";
+    fallbackMessage: string | null;
+  } | null>(null);
+  const [playbackFallbackMessage, setPlaybackFallbackMessage] = useState<string | null>(null);
   const [playbackReleaseFocusRevision, setPlaybackReleaseFocusRevision] = useState(0);
   // Review P1: when the soundtrack read is not cached yet, the first click
   // only starts the prefetch and the button shows 正在准备配乐…; the user
@@ -329,7 +342,10 @@ export function LivingAtlasApp({
   // inside a real user gesture.
   const [playbackPreparingId, setPlaybackPreparingId] = useState<string | null>(null);
   const playbackOwnership = resolvePlaybackOwnership(journeys, playbackSession.journeyId, status === "ready");
-  const playbackJourney = playbackOwnership.journey;
+  const playbackSourceJourney = playbackOwnership.journey;
+  const playbackJourney = playbackQuickRecap?.journey.id === playbackSession.journeyId
+    ? playbackQuickRecap.journey
+    : playbackSourceJourney;
   const playbackActive = playbackOwnership.active;
   const [composerOpen, setComposerOpen] = useState(false);
   const [editingJourneyId, setEditingJourneyId] = useState<string | null>(null);
@@ -528,6 +544,10 @@ export function LivingAtlasApp({
     if (!activeJourney) return;
     void prefetchSoundtrackRead(activeJourney).catch(() => undefined);
   }, [activeJourney?.id]);
+  useEffect(() => {
+    setPlaybackModeMenuJourneyId(null);
+  }, [activeJourney?.id]);
+
   const journeyRail = useMemo(() => [...journeys].reverse(), [journeys]);
   const routes = useMemo(() => {
     const savedRoutes = toJourneyRoutes(journeys);
@@ -552,6 +572,9 @@ export function LivingAtlasApp({
       focusRevision,
     ));
     setPlaybackSession((current) => releaseStalePlaybackSession(current, true));
+    setPlaybackQuickRecap(null);
+    setPlaybackPendingMode(null);
+    setPlaybackFallbackMessage(null);
   }, [focusRevision, playbackOwnership.releaseStaleState, playbackSession.cameraCommand?.revision]);
   const mobileSheetJourney = journeys.find((journey) => journey.id === mobileSheetJourneyId) ?? null;
   const mobileMapJourney = journeys.find((journey) => journey.id === mobileMapJourneyId) ?? null;
@@ -700,21 +723,53 @@ export function LivingAtlasApp({
   // otherwise the first click only prefetches and the button switches to
   // 正在准备配乐… — the user clicks again once it is ready, and THAT click
   // starts playback with a cached URL. No silent first soundtrack.
-  function startPlayback(journeyId: string) {
+  function startPlayback(
+    journeyId: string,
+    requestedMode: "full" | "quick-recap" = "full",
+    carriedFallbackMessage: string | null = null,
+  ) {
     const journey = journeys.find((candidate) => candidate.id === journeyId) ?? null;
+    if (!journey) return;
     setStoryJourneyId(null);
     setStoryRoutePointId(null);
-    const cachedRead = journey ? cachedSoundtrackRead(journey) : null;
+
+    let mode = requestedMode;
+    let quickRecap: PreparedQuickRecapPlayback | null = null;
+    let fallbackMessage = carriedFallbackMessage;
+    if (mode === "quick-recap") {
+      const preparation = prepareQuickRecapPlaybackResult(journey, {
+        generatedAt: new Date().toISOString(),
+      });
+      quickRecap = preparation.playback;
+      if (!quickRecap) {
+        mode = "full";
+        fallbackMessage = preparation.fallbackReason === "over-budget"
+          ? "这段旅程的必选回忆超过快速回顾时长，已切换为完整播放。"
+          : "这段旅程还没有可用于快速回顾的照片，已切换为完整播放。";
+      }
+    } else if (!carriedFallbackMessage) {
+      fallbackMessage = null;
+    }
+
+    const cachedRead = cachedSoundtrackRead(journey);
     if (playbackEntryNeedsPreparation(journey, cachedRead)) {
       setPlaybackSession((current) => ({ ...current, soundtrackRead: null }));
+      setPlaybackQuickRecap(null);
+      setPlaybackFallbackMessage(fallbackMessage);
+      setPlaybackPendingMode({ journeyId, mode, fallbackMessage });
+      setPlaybackModeMenuJourneyId(null);
       setPlaybackPreparingId(journeyId);
-      void prefetchSoundtrackRead(journey!)
+      void prefetchSoundtrackRead(journey)
         .catch(() => null)
         .finally(() => setPlaybackPreparingId((current) => (
           current === journeyId ? null : current
         )));
       return;
     }
+    setPlaybackQuickRecap(mode === "quick-recap" ? quickRecap : null);
+    setPlaybackFallbackMessage(fallbackMessage);
+    setPlaybackPendingMode(null);
+    setPlaybackModeMenuJourneyId(null);
     setPlaybackSession({
       journeyId,
       soundtrackRead: cachedRead,
@@ -723,6 +778,10 @@ export function LivingAtlasApp({
       cameraCommand: null,
     });
   }
+
+  const playbackStepDurationResolver = useCallback((targetJourney: Journey, step: PlaybackStep) => (
+    playbackQuickRecap ? quickRecapStepDurationMs(targetJourney, step, playbackQuickRecap.plan) : undefined
+  ), [playbackQuickRecap]);
 
   function startGlobePick(accept: (point: GlobePointPick) => void) {
     globePickAccept.current = accept;
@@ -903,7 +962,7 @@ export function LivingAtlasApp({
 
       {!isMobileV2 && view === "planet" && activeJourney ? (
         <aside
-          className={`living-atlas__active${journeyVisualMedia(activeJourney).length > 0 ? " has-media" : ""}${arrivalJourneyId === activeJourney.id ? " is-arriving" : ""}`}
+          className={`living-atlas__active${journeyVisualMedia(activeJourney).length > 0 ? " has-media" : ""}${arrivalJourneyId === activeJourney.id ? " is-arriving" : ""}${playbackModeMenuJourneyId === activeJourney.id ? " has-playback-menu" : ""}`}
           inert={globeFocusMode || globePickActive || playbackActive || undefined}
           style={{
             "--journey-color": activeJourney.lightColor,
@@ -940,13 +999,58 @@ export function LivingAtlasApp({
               type="button"
               className="living-atlas__active-play"
               disabled={playbackPreparingId === activeJourney.id}
+              aria-expanded={playbackModeMenuJourneyId === activeJourney.id}
+              aria-controls={`playback-mode-options-${activeJourney.id}`}
               onClick={() => {
-                startPlayback(activeJourney.id);
+                if (playbackPendingMode?.journeyId === activeJourney.id) {
+                  startPlayback(
+                    activeJourney.id,
+                    playbackPendingMode.mode,
+                    playbackPendingMode.fallbackMessage,
+                  );
+                  return;
+                }
+                setPlaybackModeMenuJourneyId((current) => current === activeJourney.id ? null : activeJourney.id);
               }}
             >
               <IconPlayerPlay size={15} stroke={1.35} aria-hidden="true" />
-              <span>{playbackPreparingId === activeJourney.id ? "正在准备配乐…" : "播放旅程"}</span>
+              <span>{playbackPreparingId === activeJourney.id
+                ? "正在准备配乐…"
+                : playbackPendingMode?.journeyId === activeJourney.id
+                  ? (playbackPendingMode.mode === "quick-recap" ? "继续快速回顾" : "继续完整播放")
+                  : "播放旅程"}</span>
             </button>
+            {playbackModeMenuJourneyId === activeJourney.id ? (
+              <div
+                id={`playback-mode-options-${activeJourney.id}`}
+                className="living-atlas__playback-mode-menu"
+                role="group"
+                aria-label="选择播放方式"
+                onKeyDown={(event) => {
+                  if (event.key === "Escape") {
+                    event.preventDefault();
+                    setPlaybackModeMenuJourneyId(null);
+                    event.currentTarget.previousElementSibling instanceof HTMLButtonElement
+                      && event.currentTarget.previousElementSibling.focus();
+                  }
+                }}
+              >
+                <button
+                  type="button"
+                  data-playback-mode-option="quick-recap"
+                  onClick={() => startPlayback(activeJourney.id, "quick-recap")}
+                >
+                  <strong>快速回顾</strong><span>约 45 秒 · 照片优先</span>
+                </button>
+                <button
+                  type="button"
+                  data-playback-mode-option="full"
+                  onClick={() => startPlayback(activeJourney.id, "full")}
+                >
+                  <strong>完整播放</strong><span>保留全部媒体与章节</span>
+                </button>
+              </div>
+            ) : null}
           </div>
         </aside>
       ) : null}
@@ -1219,6 +1323,9 @@ export function LivingAtlasApp({
           journey={playbackJourney}
           onClose={() => {
             setPlaybackSession({ journeyId: null, soundtrackRead: null, cameraCommand: null });
+            setPlaybackQuickRecap(null);
+            setPlaybackPendingMode(null);
+            setPlaybackFallbackMessage(null);
           }}
           onCameraTargetChange={(target) => {
             setPlaybackSession((current) => ({
@@ -1227,6 +1334,9 @@ export function LivingAtlasApp({
             }));
           }}
           initialSoundtrackRead={playbackSession.soundtrackRead}
+          stepDurationResolver={playbackStepDurationResolver}
+          playbackMode={playbackQuickRecap ? "quick-recap" : "full"}
+          statusMessage={playbackFallbackMessage}
           reduceMotion={reduceMotion}
         />
       ) : null}

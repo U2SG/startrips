@@ -279,6 +279,16 @@ describe("Mobile V2 playback presentation", () => {
     expect(mobileChrome).toContain("height: 118px;");
     expect(mobileChrome).toContain("env(safe-area-inset-bottom)");
   });
+
+  it("keeps the desktop playback chooser within short viewports", () => {
+    const css = readFileSync(new URL("../styles/living-atlas.css", import.meta.url), "utf8");
+    const constrainedCard = css.slice(
+      css.indexOf(".living-atlas__active.has-playback-menu"),
+      css.indexOf(".living-atlas__playback-mode-menu"),
+    );
+    expect(constrainedCard).toContain("max-height: calc(100svh");
+    expect(constrainedCard).toContain("overflow-y: auto;");
+  });
 });
 
 describe("playbackEntryNeedsPreparation (PR #24 review)", () => {

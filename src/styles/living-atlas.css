@@ -898,6 +898,52 @@
   color: var(--atlas-cyan);
 }
 
+.living-atlas__active.has-playback-menu {
+  max-height: calc(100svh - clamp(172px, 22vh, 232px) - 16px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.living-atlas__playback-mode-menu {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 8px;
+  border: 1px solid rgba(118, 198, 188, 0.24);
+  border-radius: 18px;
+  background: rgba(2, 10, 11, 0.92);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(18px);
+}
+
+.living-atlas__playback-mode-menu button {
+  min-height: 52px;
+  display: grid;
+  gap: 3px;
+  padding: 10px 14px;
+  border: 1px solid rgba(118, 198, 188, 0.18);
+  border-radius: 14px;
+  background: rgba(7, 21, 23, 0.78);
+  color: rgba(240, 252, 249, 0.92);
+  text-align: left;
+}
+
+.living-atlas__playback-mode-menu button:hover,
+.living-atlas__playback-mode-menu button:focus-visible {
+  border-color: rgba(118, 198, 188, 0.7);
+  background: rgba(10, 31, 33, 0.96);
+}
+
+.living-atlas__playback-mode-menu strong {
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.living-atlas__playback-mode-menu span {
+  font-size: 11px;
+  color: rgba(199, 222, 218, 0.68);
+}
+
 .living-atlas__active.is-arriving {
   animation: atlasArrival 2.4s ease both;
 }
