@@ -52,6 +52,14 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 
 ## 2026-09-02
 
+### PR #174 - Enforce Full Playback plan preservation
+
+- **Source head:** `2678dcdd5a93264c70deff35fd94514bbda3f939`
+- **Scope:** Adds Full-mode preservation gates to `validateAutoEditPlanV1()`: every current canonical visual digest must be selected exactly once, the omission ledger must be empty, selected items must use the faithful `all-media` reason, and videos with known duration must span the complete source range instead of inheriting recap-style trims. Foreign, stale, and deleted-route digests are excluded from the canonical required set.
+- **User-visible change:** A Full Playback plan can no longer silently drop Journey media or cut a long video down to a recap excerpt while still presenting itself as the faithful full experience.
+- **Review fixes:** The required Full asset set remains scoped to current Journey/revision and canonical route membership. The latest P2 defines supported semantics for canonical videos without a trusted positive intrinsic duration: they remain mandatory in Full mode, may omit `trim`, and contribute 0 to planned arithmetic while live Playback owns completion through the real video `ended` event. Videos with known duration still require an exact full-source trim. Regression coverage includes undefined, zero, NaN, and infinite durations plus omission rejection.
+- **Follow-up:** Persist trusted intrinsic video duration so Full plan timeline arithmetic can include real video runtime instead of 0 for unknown-duration videos; live playback behavior is already faithful via media `ended`. After rebasing onto main with PR #163 and the stricter Quick Recap timing validator, `git diff --check` is green; GitHub CI is authoritative for targeted/full/typecheck/browser validation on the final head.
+
 ### PR #172 - Enforce deterministic Quick Recap asset selection
 
 - **Source head:** `797c1e5c2241995aab674ab3cb8873484f5fed7c`

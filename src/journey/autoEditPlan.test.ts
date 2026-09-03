@@ -921,4 +921,130 @@ describe("deterministic auto-edit foundation (#127)", () => {
       .toContain("quick recap target duration invalid");
   });
 
+  it("requires Full Playback to preserve every canonical visual asset exactly once", () => {
+    const digests = [
+      digest("intro", null, 0),
+      digest("photo", "tokyo", 1),
+      digest("video", "tokyo", 2, { mediaType: "video", mimeType: "video/mp4", intrinsic: { durationMs: 40_000 } }),
+      digest("foreign", "tokyo", 3, { journeyId: "journey-2" }),
+      digest("stale", "tokyo", 4, { sourceRevision: "6" }),
+      digest("orphan", "deleted-route", 5),
+    ];
+    const plan: AutoEditPlanV1 = {
+      schemaVersion: 1,
+      planId: "full:test",
+      journeyId: "journey-1",
+      journeyRevision: "7",
+      generatedAt: baseInput.generatedAt,
+      mode: "full",
+      plannedDurationMs: 46_000,
+      tempo: "standard",
+      chapters: [
+        {
+          chapterId: "journey-intro",
+          routePointId: null,
+          camera: { primitive: "hold", durationMs: 0 },
+          items: [{ assetId: "intro", sourceIndex: 0, dwellMs: 3_000, framing: "contain", transition: "direct", selectionReason: "all-media" }],
+        },
+        {
+          chapterId: "route:tokyo",
+          routePointId: "tokyo",
+          camera: { primitive: "travel", durationMs: 1_000 },
+          arrival: { durationMs: 800, showPlaceLabel: true, showNote: true },
+          items: [
+            { assetId: "photo", sourceIndex: 1, dwellMs: 1_200, framing: "contain", transition: "direct", selectionReason: "all-media" },
+            { assetId: "video", sourceIndex: 2, trim: { inMs: 0, outMs: 40_000 }, framing: "contain", transition: "direct", selectionReason: "all-media" },
+          ],
+        },
+      ],
+      omittedAssetIds: [],
+    };
+    expect(validateAutoEditPlanV1(plan, { ...baseInput, routePointIds: ["tokyo"], digests }))
+      .toMatchObject({ valid: true, errors: [] });
+
+    plan.chapters[1]!.items = plan.chapters[1]!.items.filter((item) => item.assetId !== "photo");
+    plan.plannedDurationMs -= 1_200;
+    const missing = validateAutoEditPlanV1(plan, { ...baseInput, routePointIds: ["tokyo"], digests });
+    expect(missing.errors).toContain("full asset omitted photo");
+  });
+
+  it("preserves Full Playback videos with unknown intrinsic duration without inventing trims", () => {
+    const unknownDurations = [undefined, 0, Number.NaN, Number.POSITIVE_INFINITY];
+    for (const durationMs of unknownDurations) {
+      const digests = [
+        digest("video", "tokyo", 0, {
+          mediaType: "video",
+          mimeType: "video/mp4",
+          intrinsic: durationMs === undefined ? {} : { durationMs },
+        }),
+      ];
+      const plan: AutoEditPlanV1 = {
+        schemaVersion: 1,
+        planId: "full:unknown-video",
+        journeyId: "journey-1",
+        journeyRevision: "7",
+        generatedAt: baseInput.generatedAt,
+        mode: "full",
+        plannedDurationMs: 1_800,
+        tempo: "standard",
+        omittedAssetIds: [],
+        chapters: [{
+          chapterId: "route:tokyo",
+          routePointId: "tokyo",
+          camera: { primitive: "travel", durationMs: 1_000 },
+          arrival: { durationMs: 800, showPlaceLabel: true, showNote: true },
+          items: [{
+            assetId: "video",
+            sourceIndex: 0,
+            framing: "contain",
+            transition: "direct",
+            selectionReason: "all-media",
+          }],
+        }],
+      };
+      expect(validateAutoEditPlanV1(plan, { ...baseInput, routePointIds: ["tokyo"], digests }))
+        .toMatchObject({ valid: true, errors: [], recomputedDurationMs: 1_800 });
+
+      plan.chapters[0]!.items = [];
+      const missing = validateAutoEditPlanV1(plan, { ...baseInput, routePointIds: ["tokyo"], digests });
+      expect(missing.errors).toContain("full asset omitted video");
+    }
+  });
+
+  it("rejects Full omission bookkeeping, recap selection reasons, and silent video truncation", () => {
+    const digests = [
+      digest("photo", "tokyo", 0),
+      digest("video", "tokyo", 1, { mediaType: "video", mimeType: "video/mp4", intrinsic: { durationMs: 40_000 } }),
+    ];
+    const plan: AutoEditPlanV1 = {
+      schemaVersion: 1,
+      planId: "full:forged",
+      journeyId: "journey-1",
+      journeyRevision: "7",
+      generatedAt: baseInput.generatedAt,
+      mode: "full",
+      plannedDurationMs: 7_300,
+      tempo: "standard",
+      chapters: [{
+        chapterId: "route:tokyo",
+        routePointId: "tokyo",
+        camera: { primitive: "travel", durationMs: 1_000 },
+        arrival: { durationMs: 800, showPlaceLabel: true, showNote: true },
+        items: [
+          { assetId: "photo", sourceIndex: 0, dwellMs: 2_000, framing: "contain", transition: "direct", selectionReason: "route-point-representative" },
+          { assetId: "video", sourceIndex: 1, trim: { inMs: 0, outMs: 3_500 }, framing: "contain", transition: "direct", selectionReason: "all-media" },
+        ],
+      }],
+      omittedAssetIds: ["photo"],
+    };
+    const result = validateAutoEditPlanV1(plan, { ...baseInput, routePointIds: ["tokyo"], digests });
+    expect(result.valid).toBe(false);
+    expect(result.errors).toEqual(expect.arrayContaining([
+      "full omission ledger must be empty",
+      "full selection reason mismatch photo",
+      "full video trim mismatch video",
+    ]));
+    expect(result.errors).not.toContain("planned duration mismatch");
+  });
+
 });
