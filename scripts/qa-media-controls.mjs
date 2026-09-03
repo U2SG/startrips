@@ -886,6 +886,82 @@ try {
     }
   }
 
+  // Issue #199 review: a video step must be ended by the video, not by the
+  // fixed slide timer. `instrumentMedia` makes play() resolve, so a synthetic
+  // `ended` is the only thing that can finish the step here; a timer-only
+  // implementation would need STORY_AUTOPLAY_STEP_MS (5.2s) to advance.
+  const videoAutoplay = await createQaPage("/?qaState=journey-story&qaMode=mixed-media", onePixelGif, {
+    instrumentMedia: true,
+    mixedMedia: true,
+    mobile: true,
+  });
+  try {
+    await videoAutoplay.page.locator(".journey-story").waitFor({ state: "visible" });
+    const videoStage = videoAutoplay.page.locator(".journey-story__media");
+    const firstImage = videoStage.locator(":scope > img:not(.journey-story__media-incoming)").first();
+    await firstImage.waitFor({ state: "visible" });
+    const videoStageBox = await videoStage.boundingBox();
+    if (!videoStageBox) throw new Error("mixed-media story stage has no bounds");
+    const videoSwipeX = videoStageBox.x + videoStageBox.width * 0.72;
+    const videoSwipeY = videoStageBox.y + videoStageBox.height * 0.5;
+    // One committed swipe lands on the video asset at index 1.
+    await videoStage.dispatchEvent("pointerdown", { pointerId: 71, pointerType: "touch", isPrimary: true, clientX: videoSwipeX, clientY: videoSwipeY, bubbles: true });
+    await videoStage.dispatchEvent("pointermove", { pointerId: 71, pointerType: "touch", isPrimary: true, clientX: videoSwipeX - 110, clientY: videoSwipeY, bubbles: true });
+    await videoStage.dispatchEvent("pointerup", { pointerId: 71, pointerType: "touch", isPrimary: true, clientX: videoSwipeX - 110, clientY: videoSwipeY, bubbles: true });
+    const settledVideo = videoStage.locator(":scope > video:not(.journey-story__media-incoming)");
+    await settledVideo.waitFor({ state: "visible", timeout: 5_000 });
+
+    const videoPlayControl = videoAutoplay.page.locator(".journey-story__mobile-media-play");
+    await videoPlayControl.waitFor({ state: "visible" });
+    await videoPlayControl.click();
+    await videoAutoplay.page.waitForFunction(
+      () => document.querySelector(".journey-story__mobile-media-play")?.getAttribute("aria-pressed") === "true",
+      undefined,
+      { timeout: 3_000 },
+    );
+    // The sequence, not the markup, starts this element: the inline stage
+    // never sets `autoPlay`, so an unplayed video would stay paused.
+    const videoDrivenBySequence = await videoAutoplay.page.waitForFunction(
+      () => {
+        const element = document.querySelector(".journey-story__media > video:not(.journey-story__media-incoming)");
+        return element ? !element.paused : false;
+      },
+      undefined,
+      { timeout: 3_000 },
+    ).then(() => true).catch(() => false);
+
+    const endedAt = Date.now();
+    await settledVideo.evaluate((element) => element.dispatchEvent(new Event("ended")));
+    let videoEndAdvancedMs = null;
+    try {
+      await videoAutoplay.page.waitForFunction(() => {
+        const element = document.querySelector(
+          ".journey-story__media > img:not(.journey-story__media-incoming), .journey-story__media > video:not(.journey-story__media-incoming)",
+        );
+        return element?.tagName === "IMG" && element.getAttribute("alt") === "seed-2.png";
+      }, undefined, { timeout: 4_000 });
+      videoEndAdvancedMs = Date.now() - endedAt;
+    } catch {
+      videoEndAdvancedMs = null;
+    }
+    const videoAutoplayFailed = !videoDrivenBySequence
+      || videoEndAdvancedMs === null
+      || videoEndAdvancedMs >= 5_000
+      || videoAutoplay.consoleErrors.length > 0
+      || videoAutoplay.pageErrors.length > 0;
+    checks.push({
+      name: "story-mobile-viewer-playback-video-completion",
+      videoDrivenBySequence,
+      videoEndAdvancedMs,
+      consoleErrors: videoAutoplay.consoleErrors,
+      pageErrors: videoAutoplay.pageErrors,
+      failed: videoAutoplayFailed,
+    });
+    if (videoAutoplayFailed) failed = true;
+  } finally {
+    await videoAutoplay.page.close();
+  }
+
   for (const [label, viewport] of [
     ["320", { width: 320, height: 700 }],
     ["360", { width: 360, height: 780 }],

@@ -81,7 +81,8 @@ import {
   validateJourneyFiles,
   validateJourneySoundtrack,
 } from "./journeyModel";
-import { playbackIntroMedia, storyMediaForScope } from "./journeyPlayback";
+import { playbackIntroMedia, playbackMediaWaitPolicy, storyMediaForScope } from "./journeyPlayback";
+import type { PlaybackMediaAvailability } from "./journeyPlayback";
 import type { Journey, JourneyMediaAsset } from "./types";
 import {
   completeMediaPlacementUploadPlan,
@@ -295,6 +296,50 @@ export function storyAutoplayNextIndex(
   if (mediaLength < 2) return null;
   if (currentIndex < mediaLength - 1) return currentIndex + 1;
   return wholeJourney ? null : 0;
+}
+
+export const STORY_AUTOPLAY_STEP_MS = 5200;
+
+export type StoryAutoplayAdvance =
+  | { kind: "stop" }
+  | { kind: "hold-terminal" }
+  | { kind: "advance"; nextIndex: number };
+
+// What ends the current autoplay step: leave playback, hold the last frame of
+// a whole-journey run, or move to a specific next index.
+export function storyAutoplayAdvance(
+  currentIndex: number,
+  mediaLength: number,
+  wholeJourney: boolean,
+): StoryAutoplayAdvance {
+  const nextIndex = storyAutoplayNextIndex(currentIndex, mediaLength, wholeJourney);
+  if (nextIndex !== null) return { kind: "advance", nextIndex };
+  return shouldHoldWholeJourneyTerminalFrame(currentIndex, mediaLength, wholeJourney)
+    ? { kind: "hold-terminal" }
+    : { kind: "stop" };
+}
+
+// Signed-read status in the shared playback vocabulary, so the Story stage and
+// Journey playback classify a step's media the same way.
+export function storyMediaAvailability(
+  status: "loading" | "ready" | "error" | undefined,
+): PlaybackMediaAvailability {
+  if (status === "ready") return "ready";
+  if (status === "error") return "error";
+  return "waiting";
+}
+
+// #199 review: a video step owns its own completion, so the sequence waits for
+// `ended` instead of the fixed slide timer. Anything that cannot deliver
+// `ended` — an image, a failed read, or a video element that is not mounted
+// for this exact asset yet — keeps the timer so the sequence never stalls.
+export function storyAutoplayWaitsForVideoEnd(
+  asset: JourneyMediaAsset | null,
+  availability: PlaybackMediaAvailability,
+  videoAttached: boolean,
+): boolean {
+  return videoAttached
+    && playbackMediaWaitPolicy(asset, availability) === "video-ended";
 }
 
 export function shouldHoldWholeJourneyTerminalFrame(
@@ -809,6 +854,10 @@ export function JourneyStory({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const soundtrackInputRef = useRef<HTMLInputElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
+  // #199 review: the settled video of the current step, per stage. Autoplay
+  // drives whichever stage is on screen so a video step can end itself.
+  const storyVideoRef = useRef<HTMLVideoElement>(null);
+  const fullscreenVideoRef = useRef<HTMLVideoElement>(null);
   // #20: one sampler per soundtrack element; the analyser is built on first
   // play and drives the light strip with smoothed energy.
   const audioSamplerRef = useRef(createSoundtrackSampler());
@@ -1226,28 +1275,58 @@ export function JourneyStory({
   navigateToMediaRef.current = navigateToMedia;
   useEffect(() => {
     if (!playing) return;
-    const nextIndex = storyAutoplayNextIndex(
+    const advance = storyAutoplayAdvance(
       assetIndex,
       scopedMedia.length,
       selectedRoutePointId === null,
     );
-    if (nextIndex === null) {
-      if (shouldHoldWholeJourneyTerminalFrame(
-        assetIndex,
-        scopedMedia.length,
-        selectedRoutePointId === null,
-      )) {
-        const timer = window.setTimeout(() => setPlaying(false), 5200);
-        return () => window.clearTimeout(timer);
-      }
+    if (advance.kind === "stop") {
       setPlaying(false);
       return;
     }
-    const timer = window.setTimeout(() => {
-      navigateToMediaRef.current(nextIndex);
-    }, 5200);
-    return () => window.clearTimeout(timer);
-  }, [assetIndex, playing, scopedMedia.length, selectedRoutePointId]);
+    const finishStep = advance.kind === "hold-terminal"
+      ? () => setPlaying(false)
+      : () => navigateToMediaRef.current(advance.nextIndex);
+    // #199 review: a video step must last as long as the video, not 5.2s.
+    // Only the settled element of this exact asset can report `ended`.
+    const video = fullscreen ? fullscreenVideoRef.current : storyVideoRef.current;
+    const waitsForVideoEnd = storyAutoplayWaitsForVideoEnd(
+      activeAsset,
+      storyMediaAvailability(activeRead?.status),
+      video !== null && (shownAssetId ?? activeAsset?.id ?? null) === activeAsset?.id,
+    );
+    if (!video || !waitsForVideoEnd) {
+      const timer = window.setTimeout(finishStep, STORY_AUTOPLAY_STEP_MS);
+      return () => window.clearTimeout(timer);
+    }
+    // A browser that refuses to play, or an element that errors, must not
+    // strand the sequence: it degrades to the ordinary slide timer.
+    let fallbackTimer = 0;
+    const armFallback = () => {
+      if (fallbackTimer) return;
+      fallbackTimer = window.setTimeout(finishStep, STORY_AUTOPLAY_STEP_MS);
+    };
+    video.addEventListener("ended", finishStep);
+    video.addEventListener("error", armFallback);
+    Promise.resolve(video.play()).catch(armFallback);
+    return () => {
+      video.removeEventListener("ended", finishStep);
+      video.removeEventListener("error", armFallback);
+      window.clearTimeout(fallbackTimer);
+      // Leaving this step (pause, manual navigation, stage change) also stops
+      // the video the sequence itself started.
+      video.pause();
+    };
+  }, [
+    activeAsset?.id,
+    activeRead?.status,
+    assetIndex,
+    fullscreen,
+    playing,
+    scopedMedia.length,
+    selectedRoutePointId,
+    shownAssetId,
+  ]);
 
   // The soundtrack follows the slideshow: it keeps its position across pauses
   // and only rewinds when the story closes or moves to another journey.
@@ -3027,6 +3106,7 @@ export function JourneyStory({
             {!overview && shownAsset && shownRead?.status === "ready" && shownAsset.mimeType.startsWith("video/") ? (
               <video
                 key={`media-${shownAsset.id}`}
+                ref={storyVideoRef}
                 src={shownRead.url}
                 controls
                 playsInline
@@ -3620,7 +3700,7 @@ export function JourneyStory({
           {/* #11 two-layer stage also serves fullscreen: the incoming frame
               crossfades over the settled base frame without flashing. */}
           {shownAsset && shownRead?.status === "ready" && shownAsset.mimeType.startsWith("video/")
-            ? <video key={`media-${shownAsset.id}`} src={shownRead.url} controls autoPlay playsInline />
+            ? <video key={`media-${shownAsset.id}`} ref={fullscreenVideoRef} src={shownRead.url} controls autoPlay playsInline />
             : shownAsset && shownRead?.status === "ready"
               ? <img key={`media-${shownAsset.id}`} src={shownRead.url} alt={shownAsset.fileName} />
               : null}

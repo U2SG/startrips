@@ -18,7 +18,10 @@ import {
   replaceJourneySoundtrack,
   showMobileStoryPlayControl,
   storyAssetIndexForId,
+  storyAutoplayAdvance,
   storyAutoplayNextIndex,
+  storyAutoplayWaitsForVideoEnd,
+  storyMediaAvailability,
   storyChapterMedia,
   shouldHoldWholeJourneyTerminalFrame,
   storyInitialMediaSelection,
@@ -306,6 +309,52 @@ describe("shouldHoldWholeJourneyTerminalFrame (#76 review)", () => {
     expect(shouldHoldWholeJourneyTerminalFrame(1, 3, true)).toBe(false);
     expect(shouldHoldWholeJourneyTerminalFrame(2, 3, false)).toBe(false);
     expect(shouldHoldWholeJourneyTerminalFrame(0, 0, true)).toBe(false);
+  });
+});
+
+describe("storyAutoplayAdvance (#199 review)", () => {
+  it("names what ends each step: next asset, terminal hold, or stop", () => {
+    expect(storyAutoplayAdvance(0, 3, true)).toEqual({ kind: "advance", nextIndex: 1 });
+    expect(storyAutoplayAdvance(2, 3, true)).toEqual({ kind: "hold-terminal" });
+    expect(storyAutoplayAdvance(2, 3, false)).toEqual({ kind: "advance", nextIndex: 0 });
+    expect(storyAutoplayAdvance(0, 1, false)).toEqual({ kind: "stop" });
+    expect(storyAutoplayAdvance(0, 0, true)).toEqual({ kind: "stop" });
+  });
+
+  it("keeps the single whole-Journey asset on its terminal hold", () => {
+    expect(storyAutoplayAdvance(0, 1, true)).toEqual({ kind: "hold-terminal" });
+  });
+});
+
+describe("storyMediaAvailability (#199 review)", () => {
+  it("maps signed-read status onto the shared playback vocabulary", () => {
+    expect(storyMediaAvailability("ready")).toBe("ready");
+    expect(storyMediaAvailability("error")).toBe("error");
+    expect(storyMediaAvailability("loading")).toBe("waiting");
+    expect(storyMediaAvailability(undefined)).toBe("waiting");
+  });
+});
+
+describe("storyAutoplayWaitsForVideoEnd (#199 review)", () => {
+  const video = asset("video-1", "video/mp4", 0, "clip.mp4");
+  const image = asset("image-1", "image/jpeg", 1, "frame.jpg");
+
+  it("lets a mounted, readable video own its own completion", () => {
+    expect(storyAutoplayWaitsForVideoEnd(video, "ready", true)).toBe(true);
+  });
+
+  it("keeps the slide timer for anything that cannot report `ended`", () => {
+    // An image step is always timed.
+    expect(storyAutoplayWaitsForVideoEnd(image, "ready", true)).toBe(false);
+    // No settled element for this asset yet, so nothing can fire `ended`.
+    expect(storyAutoplayWaitsForVideoEnd(video, "ready", false)).toBe(false);
+    // A failed read never produces a playable element.
+    expect(storyAutoplayWaitsForVideoEnd(video, "error", true)).toBe(false);
+    expect(storyAutoplayWaitsForVideoEnd(null, "ready", true)).toBe(false);
+  });
+
+  it("still waits on a video whose read is in flight once its element is attached", () => {
+    expect(storyAutoplayWaitsForVideoEnd(video, "waiting", true)).toBe(true);
   });
 });
 
