@@ -32,6 +32,12 @@ jobs:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: node scripts/pr-history.mjs validate-pr --pr "$PR_NUMBER" --base "$PR_BASE_SHA" --head "$PR_HEAD_SHA"
+      - name: Validate main ledger immutability
+        if: github.event_name == 'push'
+        env:
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+          PUSH_AFTER_SHA: ${{ github.event.after }}
+        run: node scripts/pr-history.mjs validate-push --before "$PUSH_BEFORE_SHA" --after "$PUSH_AFTER_SHA"
       - name: Render aggregate ledger index
         run: |
           node scripts/pr-history.mjs render --output "$RUNNER_TEMP/pr-history-index.md"

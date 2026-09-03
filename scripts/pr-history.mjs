@@ -145,6 +145,40 @@ export function validatePrLedger({ prNumber, headSha, baseSha, root = ROOT, ledg
   return entry;
 }
 
+
+export function validatePushLedger({ beforeSha, afterSha, root = ROOT }) {
+  if (!/^[0-9a-f]{40}$/i.test(beforeSha)) fail(`invalid push before SHA '${beforeSha}'`);
+  if (!/^[0-9a-f]{40}$/i.test(afterSha)) fail(`invalid push after SHA '${afterSha}'`);
+
+  for (const sha of [beforeSha, afterSha]) {
+    try {
+      git(["cat-file", "-e", `${sha}^{commit}`], root);
+    } catch {
+      fail(`push commit ${sha} is not available in git history`);
+    }
+  }
+
+  const existingLedgers = new Set(
+    git(["ls-tree", "-r", "--name-only", beforeSha, "--", "docs/pr-history"], root)
+      .split(/\r?\n/)
+      .filter((name) => /^docs\/pr-history\/\d+\.md$/.test(name)),
+  );
+  const changed = git(["diff", "--no-renames", "--name-only", `${beforeSha}..${afterSha}`], root)
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((value) => value.replace(/\\/g, "/"));
+
+  if (changed.includes("docs/pr-history.md")) {
+    fail("legacy docs/pr-history.md is frozen on main pushes");
+  }
+  const mutatedHistory = changed.filter((name) => existingLedgers.has(name));
+  if (mutatedHistory.length > 0) {
+    fail(`main push modifies existing PR ledger history: ${mutatedHistory.join(", ")}`);
+  }
+
+  return { addedLedgerPaths: changed.filter((name) => /^docs\/pr-history\/\d+\.md$/.test(name) && !existingLedgers.has(name)) };
+}
+
 export function renderAggregate(entries = validateAllLedgers()) {
   const lines = [
     "# Startrips Pull Request History - Generated Index",
@@ -180,6 +214,13 @@ export function main(argv = process.argv.slice(2)) {
     console.log(`validated PR #${entry.number} ledger at source ${entry.sourceHead}`);
     return;
   }
+  if (command === "validate-push") {
+    const beforeSha = optionValue(argv, "--before");
+    const afterSha = optionValue(argv, "--after");
+    const result = validatePushLedger({ beforeSha, afterSha });
+    console.log(`validated main ledger push; new ledger files: ${result.addedLedgerPaths.join(", ") || "none"}`);
+    return;
+  }
   if (command === "render") {
     const outputIndex = argv.indexOf("--output");
     const rendered = renderAggregate();
@@ -193,7 +234,7 @@ export function main(argv = process.argv.slice(2)) {
     }
     return;
   }
-  fail("usage: node scripts/pr-history.mjs <validate-all|validate-pr|render> [...options]; validate-pr requires --pr, --base and --head");
+  fail("usage: node scripts/pr-history.mjs <validate-all|validate-pr|validate-push|render> [...options]");
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {

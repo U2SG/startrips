@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { execFileSync } from "node:child_process";
-import { parseLedgerText, readLedgerEntries, renderAggregate, validatePrLedger } from "./pr-history.mjs";
+import { parseLedgerText, readLedgerEntries, renderAggregate, validatePrLedger, validatePushLedger } from "./pr-history.mjs";
 
 const SHA = "0123456789abcdef0123456789abcdef01234567";
 function ledger(number, title = "Test ledger") {
@@ -161,4 +161,58 @@ test("rejects renaming another PR ledger into the current PR ledger", () => {
     root: dir,
     ledgerDir,
   }), /code drift after Source head|modifies another PR ledger/);
+});
+
+
+function createPushFixture() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "startrips-ledger-push-"));
+  const ledgerDir = path.join(dir, "docs", "pr-history");
+  fs.mkdirSync(ledgerDir, { recursive: true });
+  git(dir, "init", "-q");
+  git(dir, "config", "user.email", "ledger-test@example.com");
+  git(dir, "config", "user.name", "Ledger Test");
+  git(dir, "config", "core.autocrlf", "false");
+  fs.writeFileSync(path.join(dir, "docs", "pr-history.md"), "# Legacy archive\n");
+  fs.writeFileSync(path.join(ledgerDir, "191.md"), ledger(191));
+  git(dir, "add", ".");
+  git(dir, "commit", "-qm", "before");
+  return { dir, ledgerDir, beforeSha: git(dir, "rev-parse", "HEAD") };
+}
+
+test("allows a main push to add a new PR ledger", () => {
+  const fixture = createPushFixture();
+  fs.writeFileSync(path.join(fixture.ledgerDir, "192.md"), ledger(192));
+  git(fixture.dir, "add", ".");
+  git(fixture.dir, "commit", "-qm", "add ledger");
+  const afterSha = git(fixture.dir, "rev-parse", "HEAD");
+  assert.deepEqual(validatePushLedger({ beforeSha: fixture.beforeSha, afterSha, root: fixture.dir }), {
+    addedLedgerPaths: ["docs/pr-history/192.md"],
+  });
+});
+
+test("rejects a main push that edits an existing PR ledger", () => {
+  const fixture = createPushFixture();
+  fs.appendFileSync(path.join(fixture.ledgerDir, "191.md"), "tampered\n");
+  git(fixture.dir, "add", ".");
+  git(fixture.dir, "commit", "-qm", "tamper ledger");
+  const afterSha = git(fixture.dir, "rev-parse", "HEAD");
+  assert.throws(() => validatePushLedger({ beforeSha: fixture.beforeSha, afterSha, root: fixture.dir }), /modifies existing PR ledger history/);
+});
+
+test("rejects a main push that deletes an existing PR ledger", () => {
+  const fixture = createPushFixture();
+  fs.unlinkSync(path.join(fixture.ledgerDir, "191.md"));
+  git(fixture.dir, "add", "-A");
+  git(fixture.dir, "commit", "-qm", "delete ledger");
+  const afterSha = git(fixture.dir, "rev-parse", "HEAD");
+  assert.throws(() => validatePushLedger({ beforeSha: fixture.beforeSha, afterSha, root: fixture.dir }), /modifies existing PR ledger history/);
+});
+
+test("rejects a main push that rewrites the frozen legacy archive", () => {
+  const fixture = createPushFixture();
+  fs.appendFileSync(path.join(fixture.dir, "docs", "pr-history.md"), "tampered\n");
+  git(fixture.dir, "add", ".");
+  git(fixture.dir, "commit", "-qm", "tamper legacy");
+  const afterSha = git(fixture.dir, "rev-parse", "HEAD");
+  assert.throws(() => validatePushLedger({ beforeSha: fixture.beforeSha, afterSha, root: fixture.dir }), /legacy docs\/pr-history\.md is frozen on main pushes/);
 });
