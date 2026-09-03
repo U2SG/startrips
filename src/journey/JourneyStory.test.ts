@@ -2,6 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  storyAutoplayVideoCandidate,
   shouldRefreshStoryMediaRead,
   createStoryAutoplayFallbackController,
   JourneyStory,
@@ -311,6 +312,25 @@ describe("shouldHoldWholeJourneyTerminalFrame (#76 review)", () => {
     expect(shouldHoldWholeJourneyTerminalFrame(1, 3, true)).toBe(false);
     expect(shouldHoldWholeJourneyTerminalFrame(2, 3, false)).toBe(false);
     expect(shouldHoldWholeJourneyTerminalFrame(0, 0, true)).toBe(false);
+  });
+});
+
+describe("storyAutoplayVideoCandidate (#204 final review)", () => {
+  const imageA = asset("image-a", "image/jpeg", 0, "a.jpg");
+  const imageB = asset("image-b", "image/jpeg", 1, "b.jpg");
+  const video = asset("video-1", "video/mp4", 2, "clip.mp4");
+
+  it("prepares the first future video while autoplay is still on an image", () => {
+    expect(storyAutoplayVideoCandidate([imageA, imageB, video], 0, true)?.id).toBe("video-1");
+  });
+
+  it("keeps the current video as the stable authorized element", () => {
+    expect(storyAutoplayVideoCandidate([imageA, video], 1, true)?.id).toBe("video-1");
+  });
+
+  it("only wraps for a route-point autoplay loop", () => {
+    expect(storyAutoplayVideoCandidate([video, imageA, imageB], 2, true)).toBeNull();
+    expect(storyAutoplayVideoCandidate([video, imageA, imageB], 2, false)?.id).toBe("video-1");
   });
 });
 

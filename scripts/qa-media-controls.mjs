@@ -88,10 +88,14 @@ async function createQaPage(path, mediaUrl, {
         },
       });
       window.__qaMediaPlayEvents = [];
+      const mediaElementIds = new WeakMap();
+      let nextMediaElementId = 1;
       HTMLMediaElement.prototype.play = function play() {
         state.set(this, "playing");
+        if (!mediaElementIds.has(this)) mediaElementIds.set(this, nextMediaElementId++);
         window.__qaMediaPlayEvents.push({
           tagName: this.tagName,
+          elementId: mediaElementIds.get(this),
           userActivation: navigator.userActivation?.isActive ?? null,
         });
         return Promise.resolve();
@@ -769,6 +773,65 @@ try {
     if (videoNativeTapFailed) failed = true;
   } finally {
     await mixedMediaMobile.page.close();
+  }
+
+  // #204 final review P1: starting autoplay on an image must authorize the
+  // persistent future-video element in that same user gesture. When the timer
+  // later reaches the video, the synchronization play() must target the exact
+  // same DOM element rather than a newly keyed, untrusted <video>.
+  const futureVideoAuthorization = await createQaPage("/?qaState=journey-story&qaMode=mixed-media", onePixelGif, {
+    instrumentMedia: true,
+    mixedMedia: true,
+    mobile: true,
+  });
+  try {
+    await futureVideoAuthorization.page.locator(".journey-story").waitFor({ state: "visible" });
+    const stage = futureVideoAuthorization.page.locator(".journey-story__media");
+    await stage.locator(":scope > img:not(.journey-story__media-incoming)").first().waitFor({ state: "visible" });
+    const primedVideo = stage.locator(":scope > video:not(.journey-story__media-incoming)");
+    await primedVideo.waitFor({ state: "attached", timeout: 5_000 });
+    await futureVideoAuthorization.page.waitForFunction(() => {
+      const video = document.querySelector(".journey-story__media > video:not(.journey-story__media-incoming)");
+      return Boolean(video?.getAttribute("src"));
+    }, undefined, { timeout: 5_000 });
+
+    const playControl = futureVideoAuthorization.page.locator(".journey-story__mobile-media-play");
+    await futureVideoAuthorization.page.evaluate(() => { window.__qaMediaPlayEvents.length = 0; });
+    await playControl.click();
+    const primingEvents = await futureVideoAuthorization.page.evaluate(() => [...window.__qaMediaPlayEvents]);
+    const primingVideoEvent = primingEvents.find((event) => (
+      event.tagName === "VIDEO" && event.userActivation === true
+    ));
+
+    await primedVideo.waitFor({ state: "visible", timeout: 7_000 });
+    await futureVideoAuthorization.page.waitForFunction(() => (
+      window.__qaMediaPlayEvents.filter((event) => event.tagName === "VIDEO").length >= 2
+    ), undefined, { timeout: 3_000 });
+    const laterEvents = await futureVideoAuthorization.page.evaluate(() => [...window.__qaMediaPlayEvents]);
+    const reusedAuthorizedVideo = Boolean(
+      primingVideoEvent
+      && laterEvents.some((event) => (
+        event.tagName === "VIDEO"
+        && event.elementId === primingVideoEvent.elementId
+        && event !== primingVideoEvent
+      )),
+    );
+    const futureVideoAuthorizationFailed = !primingVideoEvent
+      || !reusedAuthorizedVideo
+      || futureVideoAuthorization.consoleErrors.length > 0
+      || futureVideoAuthorization.pageErrors.length > 0;
+    checks.push({
+      name: "story-autoplay-future-video-authorization",
+      primingVideoEvent,
+      laterEvents,
+      reusedAuthorizedVideo,
+      consoleErrors: futureVideoAuthorization.consoleErrors,
+      pageErrors: futureVideoAuthorization.pageErrors,
+      failed: futureVideoAuthorizationFailed,
+    });
+    if (futureVideoAuthorizationFailed) failed = true;
+  } finally {
+    await futureVideoAuthorization.page.close();
   }
 
   for (const [label, viewport] of [

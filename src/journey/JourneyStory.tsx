@@ -310,6 +310,21 @@ export function storyAutoplayNextIndex(
   return wholeJourney ? null : 0;
 }
 
+export function storyAutoplayVideoCandidate(
+  media: readonly JourneyMediaAsset[],
+  currentIndex: number,
+  wholeJourney: boolean,
+) {
+  if (media.length === 0 || currentIndex < 0 || currentIndex >= media.length) return null;
+  for (let offset = 0; offset < media.length; offset += 1) {
+    const rawIndex = currentIndex + offset;
+    if (wholeJourney && rawIndex >= media.length) break;
+    const candidate = media[rawIndex % media.length];
+    if (candidate?.mimeType.startsWith("video/")) return candidate;
+  }
+  return null;
+}
+
 export const STORY_AUTOPLAY_STEP_MS = 5200;
 export const STORY_VIDEO_STALL_WATCHDOG_MS = 4_000;
 
@@ -1288,6 +1303,11 @@ export function JourneyStory({
   }, [localMediaOrder, scopedMedia]);
   const soundtrack = journey ? journeySoundtrack(journey) : null;
   const activeAsset = scopedMedia[assetIndex] ?? null;
+  const autoplayVideoCandidate = storyAutoplayVideoCandidate(
+    scopedMedia,
+    assetIndex,
+    selectedRoutePointId === null,
+  );
   const activeRead = activeAsset ? mediaReads[activeAsset.id] : null;
   const soundtrackRead = soundtrack ? mediaReads[soundtrack.id] : null;
   // #14: the journey cover — explicit coverMediaAssetId, else first visual
@@ -1637,6 +1657,15 @@ export function JourneyStory({
     if (soundtrack) loadMediaRead(soundtrack.id);
   }, [soundtrack?.id, loadMediaRead]);
 
+  // #204 final review: keep the first future video read warm even when it is
+  // farther than the ordinary neighbor window. Story can then mount one stable
+  // video element before autoplay starts and authorize that same element inside
+  // the initiating user gesture instead of creating a fresh untrusted element
+  // several image steps later. This is one signed-read request, not a decode-all.
+  useEffect(() => {
+    if (autoplayVideoCandidate) loadMediaRead(autoplayVideoCandidate.id);
+  }, [autoplayVideoCandidate?.id, loadMediaRead]);
+
   // #11: prepare adjacent slideshow media while the active one is on screen.
   // The window is next 1 + previous 1 for manual browsing, next 2 for
   // autoplay. Only images are decoded ahead; videos stay at preload metadata.
@@ -1778,6 +1807,17 @@ export function JourneyStory({
     ? scopedMedia.find((candidate) => candidate.id === shownAssetId) ?? null
     : asset;
   const shownRead = shownAsset ? mediaReads[shownAsset.id] : null;
+  const storyStageVideoAsset = shownAsset?.mimeType.startsWith("video/")
+    ? shownAsset
+    : autoplayVideoCandidate;
+  const storyStageVideoRead = storyStageVideoAsset ? mediaReads[storyStageVideoAsset.id] : null;
+  const storyStageVideoVisible = Boolean(
+    shownAsset
+    && storyStageVideoAsset
+    && shownAsset.id === storyStageVideoAsset.id
+    && shownRead?.status === "ready"
+    && shownAsset.mimeType.startsWith("video/"),
+  );
   const shownIndex = shownAsset
     ? scopedMedia.findIndex((candidate) => candidate.id === shownAsset.id)
     : -1;
@@ -2856,16 +2896,23 @@ export function JourneyStory({
   function setPlayingFromGesture(willPlay: boolean) {
     const audio = audioRef.current;
     const gestureVideo = fullscreen ? fullscreenVideoRef.current : storyVideoRef.current;
-    if (
-      willPlay
-      && activeAsset?.mimeType.startsWith("video/")
-      && gestureVideo
-      && (shownAssetId ?? activeAsset.id) === activeAsset.id
-    ) {
-      // Keep the first video.play() inside the initiating click/tap/keyboard
-      // activation. The effect remains authoritative for subsequent steps and
-      // for rejection/error/stall recovery.
-      void gestureVideo.play().catch(() => undefined);
+    if (willPlay && gestureVideo && autoplayVideoCandidate) {
+      const currentVideoIsSettled = activeAsset?.mimeType.startsWith("video/")
+        && (shownAssetId ?? activeAsset.id) === activeAsset.id;
+      if (currentVideoIsSettled) {
+        // Keep the first video.play() inside the initiating click/tap/keyboard
+        // activation. The effect remains authoritative for synchronization.
+        void gestureVideo.play().catch(() => undefined);
+      } else {
+        // The stable stage video is mounted for the first future video before
+        // autoplay starts; its signed read is prefetched independently. Touch
+        // the same element inside this gesture, then pause before media can
+        // advance audibly behind the current image. Safari-style per-element
+        // authorization is retained because later video steps reuse this node.
+        void gestureVideo.play().catch(() => undefined);
+        gestureVideo.pause();
+        try { gestureVideo.currentTime = 0; } catch { /* metadata may not be ready yet */ }
+      }
     }
     // #20: establish the analyser graph in the same user gesture that starts
     // audio. If Web Audio/CORS is unavailable the sampler fails closed and the
@@ -3181,16 +3228,19 @@ export function JourneyStory({
             ) : null}
             {!overview && shownAsset && (!shownRead || shownRead.status === "loading") ? <div className="journey-story__media-state">正在打开私有媒体…</div> : null}
             {!overview && shownAsset && shownRead?.status === "error" ? <div className="journey-story__media-state is-error">{shownRead.message}</div> : null}
-            {!overview && shownAsset && shownRead?.status === "ready" && shownAsset.mimeType.startsWith("video/") ? (
+            {!overview && storyStageVideoAsset ? (
               <video
-                key={`media-${shownAsset.id}`}
                 ref={storyVideoRef}
-                src={shownRead.url}
-                controls
+                src={storyStageVideoRead?.status === "ready" ? storyStageVideoRead.url : undefined}
+                controls={storyStageVideoVisible}
                 playsInline
                 preload="metadata"
-                data-shared-media-id={shownAsset.id}
-                data-shared-journey-cover={cover?.id === shownAsset.id ? "true" : undefined}
+                hidden={!storyStageVideoVisible}
+                aria-hidden={storyStageVideoVisible ? undefined : true}
+                data-shared-media-id={storyStageVideoVisible ? storyStageVideoAsset.id : undefined}
+                data-shared-journey-cover={
+                  storyStageVideoVisible && cover?.id === storyStageVideoAsset.id ? "true" : undefined
+                }
               />
             ) : null}
             {!overview && shownAsset && shownRead?.status === "ready" && !shownAsset.mimeType.startsWith("video/") ? (
@@ -3777,11 +3827,20 @@ export function JourneyStory({
           <button className="journey-story-fullscreen__close" type="button" onClick={() => exitFullscreen()} aria-label="退出沉浸媒体"><IconX size={22} stroke={1.35} aria-hidden="true" /></button>
           {/* #11 two-layer stage also serves fullscreen: the incoming frame
               crossfades over the settled base frame without flashing. */}
-          {shownAsset && shownRead?.status === "ready" && shownAsset.mimeType.startsWith("video/")
-            ? <video key={`media-${shownAsset.id}`} ref={fullscreenVideoRef} src={shownRead.url} controls autoPlay playsInline />
-            : shownAsset && shownRead?.status === "ready"
-              ? <img key={`media-${shownAsset.id}`} src={shownRead.url} alt={shownAsset.fileName} />
-              : null}
+          {storyStageVideoAsset ? (
+            <video
+              ref={fullscreenVideoRef}
+              src={storyStageVideoRead?.status === "ready" ? storyStageVideoRead.url : undefined}
+              controls={storyStageVideoVisible}
+              autoPlay={storyStageVideoVisible && playing}
+              playsInline
+              hidden={!storyStageVideoVisible}
+              aria-hidden={storyStageVideoVisible ? undefined : true}
+            />
+          ) : null}
+          {shownAsset && shownRead?.status === "ready" && !shownAsset.mimeType.startsWith("video/")
+            ? <img key={`media-${shownAsset.id}`} src={shownRead.url} alt={shownAsset.fileName} />
+            : null}
           {incoming && incomingRead?.status === "ready" && incoming.mimeType.startsWith("video/")
             ? <video key={`media-${incoming.id}`} className="journey-story__media-incoming" src={incomingRead.url} autoPlay playsInline onAnimationEnd={(event) => { if (event.target === event.currentTarget && event.animationName === "motionMediaIn") settleIncoming(incoming.id); }} />
             : incoming && incomingRead?.status === "ready"
