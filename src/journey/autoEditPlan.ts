@@ -425,6 +425,11 @@ export function validateAutoEditPlanV1(planInput: unknown, input: {
   if (!(AUTO_EDIT_TEMPOS as readonly unknown[]).includes(plan.tempo)) errors.push("plan tempo invalid");
   if (plan.journeyId !== input.journeyId) errors.push("journey id mismatch");
   if (plan.journeyRevision !== input.journeyRevision) errors.push("journey revision mismatch");
+  const digestIdentitySet = new Set<string>();
+  for (const digest of input.digests) {
+    if (digestIdentitySet.has(digest.assetId)) errors.push(`duplicate digest asset ${digest.assetId}`);
+    digestIdentitySet.add(digest.assetId);
+  }
   const digestById = new Map(input.digests.map((digest) => [digest.assetId, digest]));
   const seen = new Set<string>();
   const seenQuickRecapChapterScopes = new Set<string>();

@@ -39,6 +39,25 @@ describe("deterministic auto-edit foundation (#127)", () => {
     expect(validateAutoEditPlanV1(plan, { ...baseInput, digests }).valid).toBe(true);
   });
 
+  it("rejects duplicate digest identities before one digest can shadow another", () => {
+    const canonicalDigests = [digest("tokyo-photo", "tokyo", 0)];
+    const plan = buildDeterministicQuickRecapPlan({
+      ...baseInput,
+      routePointIds: ["tokyo"],
+      digests: canonicalDigests,
+    });
+    const ambiguousDigests = [
+      canonicalDigests[0]!,
+      digest("tokyo-photo", "kyoto", 99, { sourceRevision: "stale" }),
+    ];
+
+    expect(validateAutoEditPlanV1(plan, {
+      ...baseInput,
+      routePointIds: ["tokyo", "kyoto"],
+      digests: ambiguousDigests,
+    }).errors).toContain("duplicate digest asset tokyo-photo");
+  });
+
   it("assigns photo-first chapter roles with distinct tempo-aware dwell", () => {
     const digests = [
       digest("tokyo-opener", "tokyo", 0),
