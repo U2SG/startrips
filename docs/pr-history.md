@@ -595,6 +595,14 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 - **Follow-up:** Keepsake-specific timing semantics and future semantic video-highlight selection remain separate follow-up work under #127/#87; this PR does not define them.
 - **Validation:** Rebased onto `main@0600361`; `git diff --check` is green. The earlier exact-head CI failure was a real executed browser-QA failure, so the rebased head must pass fresh GitHub CI before merge; no unrelated source workaround was added.
 
+### PR #163 - Let Full Journey videos own playback completion
+
+- **Source head:** `36128fcfcb27763bd02030df1e8cced11639675b`
+- **Scope:** Lets healthy Full Journey videos own playback completion via media-ended semantics, with bounded stall/failure fallback and transport synchronization.
+- **User-visible change:** Full Playback no longer silently advances long healthy videos on the legacy fixed timer; failed/stalled playback degrades without trapping the Journey.
+- **Review fixes:** Keeps `play()` failures sticky across download `progress`/`timeupdate`, clears them only on actual `playing`, and resynchronizes transport when a signed video read becomes ready so a newly mounted element is explicitly played or paused.
+- **Follow-up:** Persisted intrinsic video duration remains separate follow-up work.
+
 ---
 
 ## Entry template
