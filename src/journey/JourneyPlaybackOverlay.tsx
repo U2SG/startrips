@@ -572,6 +572,14 @@ export function JourneyPlaybackOverlay({
                       setVideoFallbackAssetId(activeMedia.id);
                       setHold(false);
                     }}
+                    onStalled={() => {
+                      // A media response can stop making progress after play() has
+                      // already resolved without ever emitting error/ended. Treat
+                      // the browser's terminal stalled signal like a media failure
+                      // so Full Playback falls back instead of holding forever.
+                      setVideoFallbackAssetId(activeMedia.id);
+                      setHold(false);
+                    }}
                   />
                 : <div className="journey-playback__media-state">正在打开媒体…</div>
               // Review P2: images must wait for the decode gate too — showing
