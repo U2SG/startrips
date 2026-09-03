@@ -43,6 +43,7 @@ export function useGlobeTimeCursor(journeys: readonly Journey[]) {
   // journey/point coordinates are unchanged (for example after manual globe
   // rotation). Keep a monotonic revision separate from timeline position.
   const [selectionRevision, setSelectionRevision] = useState(0);
+  const [timelineRevision, setTimelineRevision] = useState(0);
   const playingRef = useRef(playing);
   playingRef.current = playing;
 
@@ -64,9 +65,11 @@ export function useGlobeTimeCursor(journeys: readonly Journey[]) {
       const nextStop = stops[stopIndex + 1];
       if (nextStop === undefined) {
         setPlaying(false);
+        setTimelineRevision((revision) => revision + 1);
         setCursor(1);
         return;
       }
+      setTimelineRevision((revision) => revision + 1);
       setCursor(nextStop);
     }, 900);
     return () => window.clearTimeout(timer);
@@ -75,18 +78,21 @@ export function useGlobeTimeCursor(journeys: readonly Journey[]) {
   const play = useCallback(() => {
     setSelectionOwner(null);
     setScrubState(null);
+    setTimelineRevision((revision) => revision + 1);
     setCursor((current) => (current >= 1 ? 0 : current));
     setPlaying(true);
   }, []);
   const pause = useCallback(() => setPlaying(false), []);
   const seek = useCallback((value: number) => {
     setSelectionOwner(null);
+    setTimelineRevision((revision) => revision + 1);
     setCursor(Math.min(1, Math.max(0, value)));
     setScrubState(null);
     setPlaying(false);
   }, []);
   const previewScrub = useCallback((value: number | null) => {
     setSelectionOwner(null);
+    setTimelineRevision((revision) => revision + 1);
     setScrubState(value === null ? null : Math.min(1, Math.max(0, value)));
   }, []);
 
@@ -170,6 +176,7 @@ export function useGlobeTimeCursor(journeys: readonly Journey[]) {
     selectPoint,
     selection,
     selectionRevision,
+    timelineRevision,
     scrub,
     setScrub: previewScrub,
     reveal,

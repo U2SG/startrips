@@ -543,7 +543,7 @@ export function LivingAtlasApp({
   const focusRoute = focusPresentation.point
     ? null
     : routes.find((route) => route.id === focusPresentation.activeRouteId) ?? null;
-  const focusRevision = focusPresentation.focusRevision + timeCursor.selectionRevision * 100_000;
+  const focusRevision = focusPresentation.focusRevision + (timeCursor.selectionRevision + timeCursor.timelineRevision) * 100_000;
   useEffect(() => {
     if (!playbackOwnership.releaseStaleState) return;
     setPlaybackReleaseFocusRevision((current) => nextPlaybackReleaseFocusRevision(
