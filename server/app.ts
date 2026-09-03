@@ -7,6 +7,7 @@ import { serverConfig } from "./config";
 import { db } from "./db/client";
 import { LocationSearchUnavailableError } from "./location/location-search";
 import { createAnonymousRateLimiter } from "./rate-limit";
+import { requestLog } from "./request-log";
 import { atlasRoutes } from "./routes/atlases";
 import { journeyRoutes } from "./routes/journeys";
 import { locationRoutes } from "./routes/locations";
@@ -16,27 +17,7 @@ import { StorageUnavailableError } from "./storage/multipart-storage";
 
 export const app = new Hono();
 
-app.use("*", async (context, next) => {
-  const started = performance.now();
-  let failed = false;
-  try {
-    await next();
-  } catch (error) {
-    failed = true;
-    console.error(
-      `${context.req.method} ${context.req.path} failed`,
-      error instanceof Error ? error.message : "unknown error",
-    );
-    throw error;
-  } finally {
-    if (!failed) {
-      console.info(
-        `${context.req.method} ${context.req.path} ${context.res.status} `
-        + `${Math.round(performance.now() - started)}ms`,
-      );
-    }
-  }
-});
+app.use("*", requestLog);
 
 app.use(
   "/api/*",

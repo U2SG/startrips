@@ -85,3 +85,22 @@ compatible providers such as a locally configured MinIO deployment.
 Before activation, add a bucket lifecycle rule that aborts incomplete multipart
 uploads after seven days. The client and API abort failed uploads immediately,
 while the lifecycle rule covers browser crashes and interrupted sessions.
+
+## Access log redaction
+
+Caddy's access log records `request>uri`, which is the path plus the query
+string, and some of those URIs carry a live credential: a password reset link
+puts its token in a path segment (`/api/auth/reset-password/<token>`), while
+email verification and the SPA reset callback pass it as `?token=`. Both would
+otherwise be written to the container log and persisted by the `json-file`
+driver, so the `log` directive filters `request>uri` before encoding: the
+segment after `reset-password/`, `/share/` and `/api/shared/` and the values of
+the `token` and `callbackURL` query keys are replaced with `REDACTED`.
+
+The filter is a single `regexp` entry by design. Caddy keys log field filters
+by field name, so adding a second filter on `request>uri` silently replaces the
+first one rather than chaining onto it. Extend the existing pattern instead of
+adding another `request>uri` line, and re-check it with
+`caddy validate --config deploy/Caddyfile --adapter caddyfile` (with `APP_HOST`
+set) after any change. The API logs the matched route pattern rather than the
+request path, so the same tokens never reach the API container log either.
