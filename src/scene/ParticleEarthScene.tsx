@@ -3507,6 +3507,10 @@ export function ParticleEarthScene({
 
     const updateCoastlineRefinement = (now: number) => {
       if (semanticZoomState.coastlineWeights.near <= 0.001) return;
+      if (isFocusFlightActive(pointFocusSettling, routeFocusSettling)) {
+        coastlineRefinementState = "deferred-flight";
+        return;
+      }
       if (document.hidden || now - lastCoastlineRefinementSampleAt < 200) return;
       lastCoastlineRefinementSampleAt = now;
       camera.updateMatrixWorld();
@@ -4099,7 +4103,7 @@ export function ParticleEarthScene({
         ? "110m-global"
         : coastlineLod === "mid"
           ? "50m-global"
-          : activeCoastlineRegionKey ? "50m-regional-foundation" : "50m-global-fallback";
+          : activeCoastlineRegionKey ? "50m-regional-foundation" : "110m-global-fallback";
       host.dataset.coastlineActiveChunks = activeCoastlineRegionKey ?? "";
       host.dataset.coastlineCacheChunks = String(coastlineRefinementCache.size);
       host.dataset.coastlineRefinement = coastlineRefinementState;
