@@ -299,6 +299,7 @@ export function storyAutoplayNextIndex(
 }
 
 export const STORY_AUTOPLAY_STEP_MS = 5200;
+export const STORY_VIDEO_STALL_WATCHDOG_MS = 4_000;
 
 export type StoryAutoplayAdvance =
   | { kind: "stop" }
@@ -348,15 +349,19 @@ export function createStoryAutoplayFallbackController(
 ) {
   let disposed = false;
   let timer = 0;
+  const cancel = () => {
+    if (timer) clear(timer);
+    timer = 0;
+  };
   return {
     arm() {
       if (disposed || timer) return;
       timer = schedule();
     },
+    cancel,
     dispose() {
       disposed = true;
-      if (timer) clear(timer);
-      timer = 0;
+      cancel();
     },
   };
 }
@@ -1324,16 +1329,31 @@ export function JourneyStory({
       () => window.setTimeout(finishStep, STORY_AUTOPLAY_STEP_MS),
       (timer) => window.clearTimeout(timer),
     );
+    const stallWatchdog = createStoryAutoplayFallbackController(
+      () => window.setTimeout(finishStep, STORY_VIDEO_STALL_WATCHDOG_MS),
+      (timer) => window.clearTimeout(timer),
+    );
     const armFallback = () => fallback.arm();
+    const armStallWatchdog = () => stallWatchdog.arm();
+    const recoverFromStall = () => stallWatchdog.cancel();
     video.addEventListener("ended", finishStep);
     video.addEventListener("error", armFallback);
+    video.addEventListener("stalled", armStallWatchdog);
+    video.addEventListener("playing", recoverFromStall);
+    video.addEventListener("progress", recoverFromStall);
+    video.addEventListener("timeupdate", recoverFromStall);
     Promise.resolve(video.play()).catch(armFallback);
     return () => {
       video.removeEventListener("ended", finishStep);
       video.removeEventListener("error", armFallback);
-      // Dispose before touching the element: a pending play() rejection may
-      // settle after cleanup and must not arm a stale step timer.
+      video.removeEventListener("stalled", armStallWatchdog);
+      video.removeEventListener("playing", recoverFromStall);
+      video.removeEventListener("progress", recoverFromStall);
+      video.removeEventListener("timeupdate", recoverFromStall);
+      // Dispose before touching the element: pending play() rejection/stall
+      // callbacks after cleanup must not revive an obsolete Story step.
       fallback.dispose();
+      stallWatchdog.dispose();
       // Leaving this step (pause, manual navigation, stage change) also stops
       // the video the sequence itself started.
       video.pause();
@@ -2810,6 +2830,18 @@ export function JourneyStory({
 
   function setPlayingFromGesture(willPlay: boolean) {
     const audio = audioRef.current;
+    const gestureVideo = fullscreen ? fullscreenVideoRef.current : storyVideoRef.current;
+    if (
+      willPlay
+      && activeAsset?.mimeType.startsWith("video/")
+      && gestureVideo
+      && (shownAssetId ?? activeAsset.id) === activeAsset.id
+    ) {
+      // Keep the first video.play() inside the initiating click/tap/keyboard
+      // activation. The effect remains authoritative for subsequent steps and
+      // for rejection/error/stall recovery.
+      void gestureVideo.play().catch(() => undefined);
+    }
     // #20: establish the analyser graph in the same user gesture that starts
     // audio. If Web Audio/CORS is unavailable the sampler fails closed and the
     // ordinary audio element still plays with the static/CSS fallback.

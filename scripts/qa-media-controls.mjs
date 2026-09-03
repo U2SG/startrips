@@ -87,8 +87,13 @@ async function createQaPage(path, mediaUrl, {
           return state.get(this) !== "playing";
         },
       });
+      window.__qaMediaPlayEvents = [];
       HTMLMediaElement.prototype.play = function play() {
         state.set(this, "playing");
+        window.__qaMediaPlayEvents.push({
+          tagName: this.tagName,
+          userActivation: navigator.userActivation?.isActive ?? null,
+        });
         return Promise.resolve();
       };
       HTMLMediaElement.prototype.pause = function pause() {
@@ -913,12 +918,17 @@ try {
 
     const videoPlayControl = videoAutoplay.page.locator(".journey-story__mobile-media-play");
     await videoPlayControl.waitFor({ state: "visible" });
+    await videoAutoplay.page.evaluate(() => { window.__qaMediaPlayEvents.length = 0; });
     await videoPlayControl.click();
     await videoAutoplay.page.waitForFunction(
       () => document.querySelector(".journey-story__mobile-media-play")?.getAttribute("aria-pressed") === "true",
       undefined,
       { timeout: 3_000 },
     );
+    const videoPlayEvents = await videoAutoplay.page.evaluate(() => window.__qaMediaPlayEvents);
+    const gestureStartedVideo = videoPlayEvents.some((event) => (
+      event.tagName === "VIDEO" && event.userActivation === true
+    ));
     // The sequence, not the markup, starts this element: the inline stage
     // never sets `autoPlay`, so an unplayed video would stay paused.
     const videoDrivenBySequence = await videoAutoplay.page.waitForFunction(
@@ -944,13 +954,16 @@ try {
     } catch {
       videoEndAdvancedMs = null;
     }
-    const videoAutoplayFailed = !videoDrivenBySequence
+    const videoAutoplayFailed = !gestureStartedVideo
+      || !videoDrivenBySequence
       || videoEndAdvancedMs === null
       || videoEndAdvancedMs >= 5_000
       || videoAutoplay.consoleErrors.length > 0
       || videoAutoplay.pageErrors.length > 0;
     checks.push({
       name: "story-mobile-viewer-playback-video-completion",
+      gestureStartedVideo,
+      videoPlayEvents,
       videoDrivenBySequence,
       videoEndAdvancedMs,
       consoleErrors: videoAutoplay.consoleErrors,

@@ -352,6 +352,23 @@ describe("createStoryAutoplayFallbackController (#204 review)", () => {
     expect(cleared).toEqual([]);
   });
 
+  it("cancels a transient watchdog and allows a later stall to re-arm it", () => {
+    const scheduled: number[] = [];
+    const cleared: number[] = [];
+    let nextTimer = 42;
+    const controller = createStoryAutoplayFallbackController(
+      () => { scheduled.push(nextTimer); return nextTimer++; },
+      (timer) => cleared.push(timer),
+    );
+
+    controller.arm();
+    controller.cancel();
+    controller.arm();
+
+    expect(scheduled).toEqual([42, 43]);
+    expect(cleared).toEqual([42]);
+  });
+
   it("clears an already-armed fallback and cannot re-arm after disposal", () => {
     const scheduled: string[] = [];
     const cleared: number[] = [];
