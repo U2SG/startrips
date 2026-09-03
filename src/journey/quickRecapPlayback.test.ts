@@ -40,6 +40,27 @@ function fixture(): Journey {
 }
 
 describe("Quick Recap playback handoff (#127)", () => {
+  it("projects Journey-scoped photos into the first playable recap chapter without mutating ownership", () => {
+    const journey = fixture();
+    journey.coverMediaAssetId = null;
+    journey.media = [
+      media("intro-a", null, "image/jpeg", 0),
+      media("intro-b", null, "image/jpeg", 1),
+      media("track", null, "audio/mpeg", 2),
+    ];
+
+    const digests = quickRecapDigestsForJourney(journey);
+    expect(digests.map((digest) => [digest.assetId, digest.routePointId])).toEqual([
+      ["intro-a", "p0"],
+      ["intro-b", "p0"],
+    ]);
+
+    const prepared = prepareQuickRecapPlaybackResult(journey, { generatedAt: "2026-09-03T00:00:00.000Z" });
+    expect(prepared.fallbackReason).toBeNull();
+    expect(prepared.playback?.journey.media.find((asset) => asset.id === "intro-a")?.routePointId).toBe("p0");
+    expect(journey.media.find((asset) => asset.id === "intro-a")?.routePointId).toBeNull();
+  });
+
   it("projects Journey-scoped cover into the first recap chapter without mutating canonical ownership", () => {
     const journey = fixture();
     const digests = quickRecapDigestsForJourney(journey);

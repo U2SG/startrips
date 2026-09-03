@@ -42,6 +42,12 @@ function runtimePhotoCandidates(journey: Journey): JourneyMediaAsset[] {
         return [{ ...asset, routePointId: firstRoutePointId, sortOrder: Number.MIN_SAFE_INTEGER }];
       }
       if (asset.routePointId !== null) return [asset];
+      if (firstRoutePointId) {
+        // Journey-scoped photos are a valid presentation scope, but the live
+        // Playback step model only renders media inside route-point chapters.
+        // Project them into the first playable chapter for Quick Recap only.
+        return [{ ...asset, routePointId: firstRoutePointId }];
+      }
       return [];
     })
     .sort((left, right) => {
