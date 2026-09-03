@@ -775,6 +775,20 @@ describe("deterministic auto-edit foundation (#127)", () => {
     }
   });
 
+  it("rejects non-string chapter ids before duplicate identity checks", () => {
+    const digests = [digest("tokyo", "tokyo", 0)];
+    const basePlan = buildDeterministicQuickRecapPlan({ ...baseInput, routePointIds: ["tokyo"], digests });
+    const malformedIds: unknown[] = [{ forged: "route:tokyo" }, Symbol("route:tokyo")];
+
+    for (const chapterId of malformedIds) {
+      const plan = structuredClone(basePlan) as any;
+      plan.chapters[0].chapterId = chapterId;
+      expect(() => validateAutoEditPlanV1(plan, { ...baseInput, routePointIds: ["tokyo"], digests })).not.toThrow();
+      expect(validateAutoEditPlanV1(plan, { ...baseInput, routePointIds: ["tokyo"], digests }).errors)
+        .toContain("chapter id invalid 0");
+    }
+  });
+
   it("rejects duplicate chapter ids even when chapter scopes are otherwise valid", () => {
     const digests = [digest("tokyo", "tokyo", 0), digest("kyoto", "kyoto", 1)];
     const plan = buildDeterministicQuickRecapPlan({ ...baseInput, routePointIds: ["tokyo", "kyoto"], digests });
