@@ -25,4 +25,4 @@ The Source head is the final reviewed **code** commit. The PR may then add only 
 
 ## Aggregate index
 
-CI runs `node scripts/pr-history.mjs render` and publishes the generated aggregate Markdown as a build artifact. The generated aggregate is deliberately not committed back to the repository, so it cannot become another shared write lock or create main-branch bot-commit churn.
+CI runs `node scripts/pr-history.mjs render` and appends the generated aggregate Markdown to the GitHub Actions Job Summary for each CI run. The generated aggregate is deliberately not committed back to the repository, so it cannot become another shared write lock or create main-branch bot-commit churn.
