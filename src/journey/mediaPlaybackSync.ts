@@ -8,6 +8,7 @@ export function syncPlaybackMediaElement(
   element: PlaybackMediaElement | null,
   playing: boolean,
   onPlayFailure?: () => void,
+  onPlaySuccess?: () => void,
 ) {
   if (!element) return;
   if (!playing) {
@@ -17,8 +18,10 @@ export function syncPlaybackMediaElement(
 
   try {
     const result = element.play();
-    if (result && typeof result.catch === "function") {
-      void result.catch(() => onPlayFailure?.());
+    if (result && typeof result.then === "function") {
+      void result.then(() => onPlaySuccess?.(), () => onPlayFailure?.());
+    } else {
+      onPlaySuccess?.();
     }
   } catch {
     onPlayFailure?.();

@@ -288,6 +288,9 @@ export function JourneyPlaybackOverlay({
       asset?.mimeType.startsWith("video/")
         ? () => setVideoFallbackAssetId(asset.id)
         : undefined,
+      asset?.mimeType.startsWith("video/")
+        ? () => setVideoFallbackAssetId((current) => current === asset.id ? null : current)
+        : undefined,
     );
   }, [director.isPlaying, director.step, journey, paused]);
 

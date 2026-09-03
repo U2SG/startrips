@@ -29,6 +29,19 @@ describe("syncPlaybackMediaElement", () => {
     expect(onPlayFailure).toHaveBeenCalledOnce();
   });
 
+
+  it("reports async play success so a recovered video can reclaim completion ownership", async () => {
+    const onPlaySuccess = vi.fn();
+    syncPlaybackMediaElement(
+      { pause: vi.fn(), play: vi.fn(() => Promise.resolve()) },
+      true,
+      vi.fn(),
+      onPlaySuccess,
+    );
+    await Promise.resolve();
+    expect(onPlaySuccess).toHaveBeenCalledOnce();
+  });
+
   it("reports a synchronous play failure", () => {
     const onPlayFailure = vi.fn();
     syncPlaybackMediaElement(
