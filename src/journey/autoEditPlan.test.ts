@@ -78,6 +78,74 @@ describe("deterministic auto-edit foundation (#127)", () => {
     expect(validateAutoEditPlanV1(plan, { ...baseInput, digests })).toMatchObject({ valid: true });
   });
 
+  it("rejects forged Quick Recap photo roles and dwell even when planned duration is reconciled", () => {
+    const digests = [
+      digest("hero", "tokyo", 0),
+      digest("support", "tokyo", 1),
+    ];
+    const plan = buildDeterministicQuickRecapPlan({
+      ...baseInput,
+      routePointIds: ["tokyo"],
+      targetDurationMs: 20_000,
+      digests,
+    });
+    const forgedRole = structuredClone(plan);
+    forgedRole.chapters[0]!.items[1]!.photoRole = "hero";
+    forgedRole.chapters[0]!.items[1]!.dwellMs = forgedRole.chapters[0]!.items[0]!.dwellMs;
+    forgedRole.plannedDurationMs = forgedRole.chapters.reduce((sum, chapter) =>
+      sum + chapter.camera.durationMs + (chapter.arrival?.durationMs ?? 0) + chapter.items.reduce((itemSum, item) =>
+        itemSum + (item.dwellMs ?? (item.trim ? item.trim.outMs - item.trim.inMs : 0)), 0), 0);
+    const roleResult = validateAutoEditPlanV1(forgedRole, { ...baseInput, routePointIds: ["tokyo"], digests });
+    expect(roleResult.valid).toBe(false);
+    expect(roleResult.errors).toContain("photo role semantic mismatch support");
+
+    const forgedDwell = structuredClone(plan);
+    forgedDwell.chapters[0]!.items[0]!.dwellMs = 9_999;
+    forgedDwell.plannedDurationMs = forgedDwell.chapters.reduce((sum, chapter) =>
+      sum + chapter.camera.durationMs + (chapter.arrival?.durationMs ?? 0) + chapter.items.reduce((itemSum, item) =>
+        itemSum + (item.dwellMs ?? (item.trim ? item.trim.outMs - item.trim.inMs : 0)), 0), 0);
+    const dwellResult = validateAutoEditPlanV1(forgedDwell, { ...baseInput, routePointIds: ["tokyo"], digests });
+    expect(dwellResult.valid).toBe(false);
+    expect(dwellResult.errors).toContain("quick recap dwell mismatch hero");
+  });
+
+  it("rejects forged Quick Recap video trims even when they stay in source bounds", () => {
+    const digests = [digest("clip", "tokyo", 0, {
+      mediaType: "video",
+      mimeType: "video/mp4",
+      intrinsic: { durationMs: 10_000 },
+    })];
+    const plan = buildDeterministicQuickRecapPlan({
+      ...baseInput,
+      routePointIds: ["tokyo"],
+      targetDurationMs: 20_000,
+      digests,
+    });
+    expect(plan.chapters[0]!.items[0]!.trim).toEqual({ inMs: 0, outMs: 3_500 });
+    const forged = structuredClone(plan);
+    forged.chapters[0]!.items[0]!.trim = { inMs: 1_000, outMs: 6_000 };
+    forged.plannedDurationMs = forged.chapters.reduce((sum, chapter) =>
+      sum + chapter.camera.durationMs + (chapter.arrival?.durationMs ?? 0) + chapter.items.reduce((itemSum, item) =>
+        itemSum + (item.dwellMs ?? (item.trim ? item.trim.outMs - item.trim.inMs : 0)), 0), 0);
+    const result = validateAutoEditPlanV1(forged, { ...baseInput, routePointIds: ["tokyo"], digests });
+    expect(result.valid).toBe(false);
+    expect(result.errors).toContain("quick recap trim mismatch clip");
+  });
+
+  it("keeps builder media timing valid across every Quick Recap tempo", () => {
+    const digests = [
+      digest("photo", "tokyo", 0),
+      digest("clip", "tokyo", 1, { mediaType: "video", mimeType: "video/mp4", intrinsic: { durationMs: 10_000 } }),
+    ];
+    for (const tempo of ["fast", "standard", "immersive"] as const) {
+      const plan = buildDeterministicQuickRecapPlan({
+        ...baseInput, routePointIds: ["tokyo"], targetDurationMs: 20_000, tempo, digests,
+      });
+      expect(validateAutoEditPlanV1(plan, { ...baseInput, routePointIds: ["tokyo"], digests }))
+        .toMatchObject({ valid: true, errors: [] });
+    }
+  });
+
   it("uses role-aware dwell when deciding whether optional photos fit the recap budget", () => {
     const digests = [
       digest("tokyo-opener", "tokyo", 0),
