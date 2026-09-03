@@ -48,6 +48,8 @@ type MediaRead =
 
 export type PlaybackMediaGate = "waiting" | "ready" | "error";
 
+const VIDEO_STALL_WATCHDOG_MS = 4_000;
+
 export function playbackMediaGate(
   read: MediaRead | null | undefined,
   decodeReadiness: DecodedReadiness | undefined,
@@ -114,6 +116,27 @@ export function JourneyPlaybackOverlay({
   ), []);
   const audioRef = useRef<HTMLAudioElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const videoStallTimerRef = useRef<number | null>(null);
+  const clearVideoStallWatchdog = useCallback(() => {
+    if (videoStallTimerRef.current === null) return;
+    window.clearTimeout(videoStallTimerRef.current);
+    videoStallTimerRef.current = null;
+  }, []);
+  const scheduleVideoStallWatchdog = useCallback((assetId: string) => {
+    clearVideoStallWatchdog();
+    videoStallTimerRef.current = window.setTimeout(() => {
+      videoStallTimerRef.current = null;
+      setVideoFallbackAssetId(assetId);
+      setHold(false);
+    }, VIDEO_STALL_WATCHDOG_MS);
+  }, [clearVideoStallWatchdog]);
+  useEffect(() => () => clearVideoStallWatchdog(), [clearVideoStallWatchdog]);
+  useEffect(() => {
+    clearVideoStallWatchdog();
+  }, [clearVideoStallWatchdog, director.step]);
+  useEffect(() => {
+    if (paused) clearVideoStallWatchdog();
+  }, [clearVideoStallWatchdog, paused]);
   // #20: one sampler per soundtrack element; analyser built on first play.
   const samplerRef = useRef(createSoundtrackSampler());
   const lightStripRef = useRef<HTMLDivElement>(null);
@@ -565,20 +588,23 @@ export function JourneyPlaybackOverlay({
                     autoPlay
                     playsInline
                     onEnded={() => {
+                      clearVideoStallWatchdog();
                       setHold(false);
                       director.complete();
                     }}
                     onError={() => {
+                      clearVideoStallWatchdog();
                       setVideoFallbackAssetId(activeMedia.id);
                       setHold(false);
                     }}
+                    onPlaying={clearVideoStallWatchdog}
+                    onProgress={clearVideoStallWatchdog}
+                    onTimeUpdate={clearVideoStallWatchdog}
                     onStalled={() => {
-                      // A media response can stop making progress after play() has
-                      // already resolved without ever emitting error/ended. Treat
-                      // the browser's terminal stalled signal like a media failure
-                      // so Full Playback falls back instead of holding forever.
-                      setVideoFallbackAssetId(activeMedia.id);
-                      setHold(false);
+                      // `stalled` can be transient. Keep Full Playback ownership
+                      // while the browser may recover, and only fall back if no
+                      // playing/progress signal clears this bounded watchdog.
+                      scheduleVideoStallWatchdog(activeMedia.id);
                     }}
                   />
                 : <div className="journey-playback__media-state">正在打开媒体…</div>
