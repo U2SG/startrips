@@ -340,6 +340,16 @@ function structurallyValidateAutoEditPlanV1(value: unknown) {
   const errors: string[] = [];
   const root = asRecord(value);
   if (!root) return { plan: null, errors: ["plan must be an object"] };
+  for (const [field, fieldValue] of [
+    ["planId", root.planId],
+    ["journeyId", root.journeyId],
+    ["journeyRevision", root.journeyRevision],
+    ["generatedAt", root.generatedAt],
+    ["mode", root.mode],
+    ["tempo", root.tempo],
+  ] as const) {
+    if (typeof fieldValue !== "string") errors.push(`${field} must be a string`);
+  }
   if (!Array.isArray(root.chapters)) errors.push("chapters must be an array");
   if (!Array.isArray(root.omittedAssetIds)) {
     errors.push("omittedAssetIds must be an array");
@@ -359,9 +369,13 @@ function structurallyValidateAutoEditPlanV1(value: unknown) {
         errors.push(`chapter ${chapterIndex} must be an object`);
         continue;
       }
+      if (typeof chapter.chapterId !== "string") errors.push(`chapter id invalid ${chapterIndex}`);
+      if (chapter.routePointId !== null && typeof chapter.routePointId !== "string") errors.push(`chapter route point invalid ${chapterIndex}`);
       const camera = asRecord(chapter.camera);
       if (!camera) {
         errors.push(`chapter camera invalid ${chapterIndex}`);
+      } else if (typeof camera.primitive !== "string") {
+        errors.push(`camera primitive shape invalid ${chapterIndex}`);
       } else if (typeof camera.durationMs !== "number") {
         errors.push(`chapter camera duration invalid ${chapterIndex}`);
       }
@@ -374,6 +388,17 @@ function structurallyValidateAutoEditPlanV1(value: unknown) {
           if (!item) {
             errors.push(`chapter item invalid ${chapterIndex}:${itemIndex}`);
             continue;
+          }
+          for (const [field, fieldValue] of [
+            ["assetId", item.assetId],
+            ["framing", item.framing],
+            ["transition", item.transition],
+            ["selectionReason", item.selectionReason],
+          ] as const) {
+            if (typeof fieldValue !== "string") errors.push(`item ${field} invalid ${chapterIndex}:${itemIndex}`);
+          }
+          if (Object.prototype.hasOwnProperty.call(item, "photoRole") && item.photoRole !== undefined && typeof item.photoRole !== "string") {
+            errors.push(`item photoRole invalid ${chapterIndex}:${itemIndex}`);
           }
           if (typeof item.sourceIndex !== "number") {
             errors.push(`item source index invalid ${chapterIndex}:${itemIndex}`);
@@ -397,6 +422,8 @@ function structurallyValidateAutoEditPlanV1(value: unknown) {
           errors.push(`chapter arrival invalid ${chapterIndex}`);
         } else if (typeof arrival.durationMs !== "number") {
           errors.push(`chapter arrival duration invalid ${chapterIndex}`);
+        } else if (typeof arrival.showPlaceLabel !== "boolean" || typeof arrival.showNote !== "boolean") {
+          errors.push(`chapter arrival flags invalid ${chapterIndex}`);
         }
       }
     }
