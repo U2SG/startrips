@@ -1,4 +1,4 @@
-﻿# Startrips Pull Request History
+# Startrips Pull Request History
 
 This file is the durable product/engineering ledger for pull requests merged into `main`.
 
