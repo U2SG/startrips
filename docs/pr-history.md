@@ -655,6 +655,14 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 - **Review fixes:** Includes the reviewed focus-flight deferral, interaction deferral, and final coastline refinement blocker fixes; all four source commits replayed cleanly onto the latest main.
 - **Follow-up:** This remains a foundation toward the full #154 high-detail local coastline acceptance criteria; GitHub CI is authoritative for final validation.
 
+### PR #157 — Wire Quick Recap into Journey Playback
+
+- **Source head:** `1784b458fdc8e8652f2a25ff6d3ad111290896c3`
+- **Scope:** Wires deterministic Quick Recap planning into live Journey Playback, including playback-mode selection, recap projection, plan-derived timing, route/media filtering, explicit-cover opening behavior, accurate fallback reasons, and short-viewport chooser containment.
+- **User-visible change:** Playback can be started as a bounded Quick Recap or Full Playback; Quick Recap keeps only represented recap chapters, preserves the explicit cover as the opening hero, reports why it falls back, and keeps the mode chooser reachable on short desktop viewports.
+- **Review fixes:** Resolved empty-route timing leakage, route-cover promotion/order, over-budget fallback, phantom route budgeting, hidden fallback notices, journey-scoped photo handling, ledger corruption, short-viewport chooser overflow, and playback session ownership across recap handoff. Rebased onto current main while preserving runtime tempo/video-completion changes.
+- **Follow-up:** Final GitHub CI is authoritative; local targeted Vitest was unavailable because the shared executable is not installed in this worktree environment.
+
 ---
 
 ## Entry template
