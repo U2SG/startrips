@@ -628,6 +628,15 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 - **Review fixes:** Preserved the existing structural `chapterId` type gate before deduplication and retained the main-branch route-point shape validation while replaying onto the latest main.
 - **Follow-up:** None known; GitHub CI remains authoritative after the final docs-only head update.
 
+
+### PR #178 - Enforce Full Playback camera and arrival semantics
+
+- **Source head:** `1bf7a0fdfc6bb1ac818de4228a2b3ce71a3969b3`
+- **Scope:** Enforces canonical Full Playback V1 choreography: intro chapters hold with zero camera duration and no arrival, while route chapters travel for the canonical camera duration and require canonical arrival label/note semantics.
+- **User-visible change:** Full Playback plans can no longer silently remove or alter the spatial arrival rhythm while remaining arithmetically valid.
+- **Review fixes:** Updated canonical Full fixtures to include required arrival timing/flags and replayed both reviewed source commits cleanly onto the latest main with no code conflict.
+- **Follow-up:** None known; GitHub CI remains authoritative after the final docs-only head update.
+
 ---
 
 ## Entry template
