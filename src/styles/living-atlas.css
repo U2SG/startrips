@@ -5290,7 +5290,8 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
     pointer-events: none;
   }
 
-  .journey-story__mobile-media-menu-trigger {
+  .journey-story__mobile-media-menu-trigger,
+  .journey-story__mobile-media-play {
     position: absolute;
     top: 12px;
     right: 12px;
@@ -5310,8 +5311,22 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
     pointer-events: auto;
   }
 
-  .journey-story__mobile-media-menu-trigger::after {
+  .journey-story__mobile-media-menu-trigger::after,
+  .journey-story__mobile-media-play::after {
     display: none;
+  }
+
+  /* #199: playback shares the Viewer cluster with the management entry, one
+     hit target to its left, so the pair stays put across image/video and
+     aspect-ratio changes and never lands on the swipe surface. */
+  .journey-story__mobile-media-play {
+    right: calc(12px + var(--mobile-control-hit-size, 44px) + 8px);
+  }
+
+  .journey-story__mobile-media-play.is-active {
+    border-color: rgba(118, 227, 211, 0.34);
+    background: rgba(8, 28, 26, 0.76);
+    color: rgba(238, 250, 246, 0.96);
   }
 
   .journey-story[data-mobile-mode="viewer"] .journey-story__soundtrack {

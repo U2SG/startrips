@@ -232,6 +232,25 @@ export function mobileStoryHistoryLayers({
   };
 }
 
+// #199: Story media sequence playback is a viewing action, so mobile Viewer
+// keeps one quiet play/pause control in its action cluster instead of hiding
+// it behind Manage mode. Manage owns mutation surfaces, the overview grid has
+// no single stage to play, and a scope with one asset has no sequence at all —
+// the same gate the fullscreen navigation already uses.
+export function showMobileStoryPlayControl({
+  mobileLayout,
+  overview,
+  mobileManageMode,
+  scopedMediaCount,
+}: {
+  mobileLayout: boolean;
+  overview: boolean;
+  mobileManageMode: boolean;
+  scopedMediaCount: number;
+}) {
+  return mobileLayout && !overview && !mobileManageMode && scopedMediaCount > 1;
+}
+
 export function journeyDeleteDescription(journey: Journey) {
   return `先从图谱隐藏；7 天内可撤销，之后才会清理路线和 ${journey.media.length} 个私有媒体。`;
 }
@@ -3076,7 +3095,7 @@ export function JourneyStory({
                   className={playing ? "is-active" : ""}
                   disabled={mutationPending || scopedMedia.length < 2}
                   onClick={togglePlaying}
-                  aria-label={playing ? "暂停自动播放" : "自动播放照片"}
+                  aria-label={playing ? "暂停自动播放" : "自动播放媒体"}
                   aria-pressed={playing}
                 >
                   {playing
@@ -3114,6 +3133,25 @@ export function JourneyStory({
             ) : null}
             {mobileLayout && !overview && asset ? (
               <div className="journey-story__mobile-media-actions">
+                {showMobileStoryPlayControl({
+                  mobileLayout,
+                  overview,
+                  mobileManageMode,
+                  scopedMediaCount: scopedMedia.length,
+                }) ? (
+                  <IconActionButton
+                    type="button"
+                    className={`journey-story__mobile-media-play${playing ? " is-active" : ""}`}
+                    label={playing ? "暂停自动播放" : "自动播放媒体"}
+                    aria-pressed={playing}
+                    disabled={mutationPending}
+                    onClick={togglePlaying}
+                  >
+                    {playing
+                      ? <IconPlayerPause size={19} stroke={1.5} aria-hidden="true" />
+                      : <IconPlayerPlay size={19} stroke={1.5} aria-hidden="true" />}
+                  </IconActionButton>
+                ) : null}
                 <IconActionButton
                   type="button"
                   className="journey-story__mobile-media-menu-trigger"
@@ -3606,7 +3644,7 @@ export function JourneyStory({
                 type="button"
                 className={playing ? "is-active" : ""}
                 onClick={togglePlaying}
-                aria-label={playing ? "暂停自动播放" : "自动播放照片"}
+                aria-label={playing ? "暂停自动播放" : "自动播放媒体"}
                 aria-pressed={playing}
               >
                 {playing

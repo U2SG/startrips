@@ -16,6 +16,7 @@ import {
   reorderInvalidatesMediaMoveUndo,
   retainMediaMoveUndoAfterError,
   replaceJourneySoundtrack,
+  showMobileStoryPlayControl,
   storyAssetIndexForId,
   storyAutoplayNextIndex,
   storyChapterMedia,
@@ -305,6 +306,35 @@ describe("shouldHoldWholeJourneyTerminalFrame (#76 review)", () => {
     expect(shouldHoldWholeJourneyTerminalFrame(1, 3, true)).toBe(false);
     expect(shouldHoldWholeJourneyTerminalFrame(2, 3, false)).toBe(false);
     expect(shouldHoldWholeJourneyTerminalFrame(0, 0, true)).toBe(false);
+  });
+});
+
+describe("showMobileStoryPlayControl (#199)", () => {
+  const viewer = {
+    mobileLayout: true,
+    overview: false,
+    mobileManageMode: false,
+    scopedMediaCount: 3,
+  };
+
+  it("exposes playback in mobile Viewer for a multi-asset scope", () => {
+    expect(showMobileStoryPlayControl(viewer)).toBe(true);
+    expect(showMobileStoryPlayControl({ ...viewer, scopedMediaCount: 2 })).toBe(true);
+  });
+
+  it("stays out of desktop, the overview grid, Manage mode and single-asset scopes", () => {
+    expect(showMobileStoryPlayControl({ ...viewer, mobileLayout: false })).toBe(false);
+    expect(showMobileStoryPlayControl({ ...viewer, overview: true })).toBe(false);
+    expect(showMobileStoryPlayControl({ ...viewer, mobileManageMode: true })).toBe(false);
+    expect(showMobileStoryPlayControl({ ...viewer, scopedMediaCount: 1 })).toBe(false);
+    expect(showMobileStoryPlayControl({ ...viewer, scopedMediaCount: 0 })).toBe(false);
+  });
+
+  it("matches the gate the fullscreen navigation already uses", () => {
+    for (const scopedMediaCount of [0, 1, 2, 5]) {
+      expect(showMobileStoryPlayControl({ ...viewer, scopedMediaCount }))
+        .toBe(scopedMediaCount > 1);
+    }
   });
 });
 
@@ -679,7 +709,7 @@ describe("JourneyStory", () => {
     expect(markup).toContain('aria-label="向前调整媒体顺序"');
     expect(markup).toContain('aria-label="向后调整媒体顺序"');
     expect(markup).toContain('aria-label="删除这段媒体"');
-    expect(markup).toContain('aria-label="自动播放照片"');
+    expect(markup).toContain('aria-label="自动播放媒体"');
     expect(markup).toContain('aria-pressed="false"');
     expect(markup).not.toContain('aria-label="全屏查看媒体"');
   });
@@ -786,8 +816,61 @@ describe("JourneyStory", () => {
     expect(markup).not.toContain("删除旅程");
     expect(markup).not.toContain('aria-label="向前调整媒体顺序"');
     expect(markup).not.toContain('aria-label="向后调整媒体顺序"');
-    expect(markup).not.toContain('aria-label="自动播放照片"');
+    expect(markup).not.toContain("journey-story__media-nav");
+    expect(markup).not.toContain('aria-label="上一个媒体"');
+    expect(markup).not.toContain('aria-label="下一个媒体"');
     expect(markup).not.toContain("全部照片");
+    // #199: playback is the one Viewer control that survives the toolbar cut.
+    expect(markup).toContain("journey-story__mobile-media-play");
+    expect(markup).toContain('aria-label="自动播放媒体"');
+    expect(markup).not.toContain("journey-story__mobile-media-sheet");
+  });
+
+  it("keeps mobile Story playback in the Viewer cluster only for multi-media scopes (#199)", () => {
+    vi.stubGlobal("matchMedia", vi.fn(() => ({
+      matches: true,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })));
+
+    const single = renderToStaticMarkup(createElement(JourneyStory, {
+      journeys: [{ ...journey, media: [asset("media-1", "image/jpeg", 0)] }],
+      journeyId: journey.id,
+      onClose: () => undefined,
+      onNavigate: () => undefined,
+      onEdit: () => undefined,
+      onMediaAdded: () => null,
+    }));
+    // One asset is not a sequence, so the control would promise nothing.
+    expect(single).not.toContain("journey-story__mobile-media-play");
+    expect(single).toContain('aria-label="管理旅程"');
+
+    const sequence = renderToStaticMarkup(createElement(JourneyStory, {
+      journeys: [{
+        ...journey,
+        media: [
+          asset("media-1", "image/jpeg", 0),
+          asset("media-2", "video/mp4", 1),
+        ],
+      }],
+      journeyId: journey.id,
+      onClose: () => undefined,
+      onNavigate: () => undefined,
+      onEdit: () => undefined,
+      onMediaAdded: () => null,
+    }));
+    // Mixed image/video still reads as one playable sequence, and the control
+    // sits in the Viewer action cluster rather than the management sheet.
+    expect(sequence).toContain('class="icon-action-button journey-story__mobile-media-play"');
+    expect(sequence).toContain('aria-label="自动播放媒体"');
+    expect(sequence).toContain('aria-pressed="false"');
+    expect(sequence).not.toContain("journey-story__mobile-media-sheet");
+    expect(
+      sequence.indexOf("journey-story__mobile-media-play"),
+    ).toBeGreaterThan(sequence.indexOf('class="journey-story__mobile-media-actions"'));
+    expect(
+      sequence.indexOf("journey-story__mobile-media-play"),
+    ).toBeLessThan(sequence.indexOf("journey-story__mobile-media-menu-trigger"));
   });
 
   it("keeps mobile management reachable when the selected media scope is empty", () => {

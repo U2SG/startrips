@@ -810,6 +810,82 @@ try {
     }
   }
 
+  // Issue #199: mobile Viewer must offer Story media sequence playback without
+  // entering Manage mode. The control belongs to the viewer action cluster, is
+  // never inside the management sheet, keeps a 44px target from the narrowest
+  // portrait phone to phone landscape, and toggles `aria-pressed` on tap.
+  for (const [label, viewport] of [
+    ["320x700", { width: 320, height: 700 }],
+    ["390x844", { width: 390, height: 844 }],
+    ["844x390", { width: 844, height: 390 }],
+    ["932x430", { width: 932, height: 430 }],
+  ]) {
+    const viewerPlayback = await createQaPage("/?qaState=journey-story", onePixelGif, {
+      mobile: true,
+      viewport,
+    });
+    try {
+      await viewerPlayback.page.locator(".journey-story").waitFor({ state: "visible" });
+      const playControl = viewerPlayback.page.locator(".journey-story__mobile-media-play");
+      await playControl.waitFor({ state: "visible", timeout: 5_000 });
+      const playBox = await playControl.boundingBox();
+      const placement = await playControl.evaluate((element) => ({
+        idleLabel: element.getAttribute("aria-label"),
+        idlePressed: element.getAttribute("aria-pressed"),
+        inViewerCluster: Boolean(element.closest(".journey-story__mobile-media-actions")),
+        insideManageSheet: Boolean(element.closest(".journey-story__mobile-media-sheet")),
+        manageSheetsMounted: document.querySelectorAll(".journey-story__mobile-media-sheet").length,
+        mobileMode: element.closest(".journey-story")?.dataset.mobileMode ?? null,
+      }));
+      // The cluster shares one absolute anchor with the management entry, so
+      // an overlap here would mean the pair collided at this width.
+      const clusterScan = await scanButtons(viewerPlayback.page, ".journey-story__mobile-media-actions");
+      const clusterOverlap = overlapPairs(clusterScan.items);
+      await playControl.click();
+      await viewerPlayback.page.waitForFunction(
+        () => document.querySelector(".journey-story__mobile-media-play")?.getAttribute("aria-pressed") === "true",
+        undefined,
+        { timeout: 3_000 },
+      );
+      const playingLabel = await playControl.getAttribute("aria-label");
+      await playControl.click();
+      await viewerPlayback.page.waitForFunction(
+        () => document.querySelector(".journey-story__mobile-media-play")?.getAttribute("aria-pressed") === "false",
+        undefined,
+        { timeout: 3_000 },
+      );
+      const restoredPressed = await playControl.getAttribute("aria-pressed");
+      const playbackFailed = !playBox
+        || playBox.width < 44
+        || playBox.height < 44
+        || placement.idlePressed !== "false"
+        || placement.idleLabel !== "自动播放媒体"
+        || playingLabel !== "暂停自动播放"
+        || restoredPressed !== "false"
+        || !placement.inViewerCluster
+        || placement.insideManageSheet
+        || placement.manageSheetsMounted !== 0
+        || placement.mobileMode !== "viewer"
+        || clusterOverlap.length > 0
+        || viewerPlayback.consoleErrors.length > 0
+        || viewerPlayback.pageErrors.length > 0;
+      checks.push({
+        name: `story-mobile-viewer-playback-${label}`,
+        playBox: playBox ? { width: Math.round(playBox.width), height: Math.round(playBox.height) } : null,
+        ...placement,
+        playingLabel,
+        restoredPressed,
+        clusterOverlap,
+        consoleErrors: viewerPlayback.consoleErrors,
+        pageErrors: viewerPlayback.pageErrors,
+        failed: playbackFailed,
+      });
+      if (playbackFailed) failed = true;
+    } finally {
+      await viewerPlayback.page.close();
+    }
+  }
+
   for (const [label, viewport] of [
     ["320", { width: 320, height: 700 }],
     ["360", { width: 360, height: 780 }],
