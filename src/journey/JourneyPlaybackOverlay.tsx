@@ -615,12 +615,12 @@ export function JourneyPlaybackOverlay({
                       setHold(false);
                     }}
                     onPlaying={() => recoverVideoPlayback(activeMedia.id)}
-                    onProgress={() => recoverVideoPlayback(activeMedia.id)}
-                    onTimeUpdate={() => recoverVideoPlayback(activeMedia.id)}
+                    onProgress={() => clearVideoStallWatchdog()}
+                    onTimeUpdate={() => clearVideoStallWatchdog()}
                     onStalled={() => {
                       // `stalled` can be transient. Keep Full Playback ownership
                       // while the browser may recover, and only fall back if no
-                      // playing/progress signal clears this bounded watchdog.
+                      // progress/timeupdate may clear only this bounded watchdog; `playing` is the proof that playback resumed and may clear a persisted play failure.
                       if (paused) videoStalledAssetIdRef.current = activeMedia.id;
                       else scheduleVideoStallWatchdog(activeMedia.id);
                     }}
