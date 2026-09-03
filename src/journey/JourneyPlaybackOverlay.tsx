@@ -133,7 +133,7 @@ export function JourneyPlaybackOverlay({
   useEffect(() => () => clearVideoStallWatchdog(), [clearVideoStallWatchdog]);
   useEffect(() => {
     clearVideoStallWatchdog();
-  }, [clearVideoStallWatchdog, director.step]);
+  }, [clearVideoStallWatchdog, director.stepIndex]);
   useEffect(() => {
     if (paused) clearVideoStallWatchdog();
   }, [clearVideoStallWatchdog, paused]);
