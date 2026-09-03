@@ -520,6 +520,24 @@ export function validateAutoEditPlanV1(planInput: unknown, input: {
           errors.push(`empty full chapter ${chapter.chapterId}`);
         }
       }
+      if (chapter.routePointId === null) {
+        if (chapter.camera.primitive !== "hold" || chapter.camera.durationMs !== 0) {
+          errors.push(`full intro camera mismatch ${chapter.chapterId}`);
+        }
+        if (chapter.arrival !== undefined) errors.push(`full intro arrival invalid ${chapter.chapterId}`);
+      } else {
+        if (chapter.camera.primitive !== "travel" || chapter.camera.durationMs !== CAMERA_MS) {
+          errors.push(`full route camera mismatch ${chapter.chapterId}`);
+        }
+        if (
+          !chapter.arrival
+          || chapter.arrival.durationMs !== ARRIVAL_MS
+          || chapter.arrival.showPlaceLabel !== true
+          || chapter.arrival.showNote !== true
+        ) {
+          errors.push(`full route arrival mismatch ${chapter.chapterId}`);
+        }
+      }
     }
     let previousItemSourceIndex = -1;
     let quickRecapImageIndex = 0;
