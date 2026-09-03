@@ -22,7 +22,7 @@ jobs:
         with:
           fetch-depth: 0
       - name: Test ledger tooling
-        run: node --test scripts/pr-history.test.mjs
+        run: node --test scripts/pr-history.node-test.mjs
       - name: Validate sharded ledgers
         run: node scripts/pr-history.mjs validate-all
       - name: Validate current PR ledger
