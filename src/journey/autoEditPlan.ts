@@ -124,6 +124,14 @@ function stableCandidateSort(a: MediaDigestV1, b: MediaDigestV1) {
   const hardA = Number(a.userSignals.pinnedForRecap) * 4 + Number(a.userSignals.isJourneyCover) * 2;
   const hardB = Number(b.userSignals.pinnedForRecap) * 4 + Number(b.userSignals.isJourneyCover) * 2;
   if (hardA !== hardB) return hardB - hardA;
+  // #195 photo-first: photographs define the default editorial language, so an
+  // image outranks a video on an otherwise equal tie. Without this term a video
+  // that merely happened to be uploaded before the photos at the same route
+  // point became that point's mandatory representative and pushed every photo
+  // into the optional fill, where a tight budget could cut them. Ranked below
+  // the pinned/cover signals above, so a cover or pinned video still wins by
+  // user intent, and a video-only route point still gets its video.
+  if (a.mediaType !== b.mediaType) return a.mediaType === "image" ? -1 : 1;
   const scoreDelta = technicalScore(b) - technicalScore(a);
   if (scoreDelta !== 0) return scoreDelta;
   if (a.sourceIndex !== b.sourceIndex) return a.sourceIndex - b.sourceIndex;
