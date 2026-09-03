@@ -430,6 +430,18 @@ export function validateAutoEditPlanV1(planInput: unknown, input: {
   const seenQuickRecapChapterScopes = new Set<string>();
   const seenFullChapterScopes = new Set<string>();
   const routeOrder = new Map(input.routePointIds.map((id, index) => [id, index]));
+  const fullRouteScopesWithCanonicalMedia = new Set(
+    plan.mode === "full"
+      ? input.digests
+          .filter((digest) =>
+            digest.journeyId === input.journeyId
+            && digest.sourceRevision === input.journeyRevision
+            && digest.routePointId !== null
+            && routeOrder.has(digest.routePointId),
+          )
+          .map((digest) => digest.routePointId as string)
+      : [],
+  );
   const quickRecapEligibleDigests = plan.mode === "quick-recap"
     ? input.digests.filter((digest) => isQuickRecapEligible(
         digest,
@@ -461,7 +473,11 @@ export function validateAutoEditPlanV1(planInput: unknown, input: {
         errors.push(`duplicate full chapter scope ${chapter.routePointId ?? "journey-intro"}`);
       }
       seenFullChapterScopes.add(scopeKey);
-      if (chapter.items.length === 0) errors.push(`empty full chapter ${chapter.chapterId}`);
+      if (chapter.items.length === 0) {
+        if (chapter.routePointId === null || fullRouteScopesWithCanonicalMedia.has(chapter.routePointId)) {
+          errors.push(`empty full chapter ${chapter.chapterId}`);
+        }
+      }
     }
     let previousItemSourceIndex = -1;
     if (!isFiniteNonNegativeDuration(chapter.camera.durationMs)) {
@@ -573,6 +589,12 @@ export function validateAutoEditPlanV1(planInput: unknown, input: {
 
   if (plan.mode === "quick-recap" && !isFinitePositiveDuration(plan.targetDurationMs)) {
     errors.push("quick recap target duration invalid");
+  }
+
+  if (plan.mode === "full") {
+    for (const routePointId of input.routePointIds) {
+      if (!seenFullChapterScopes.has(`route:${routePointId}`)) errors.push(`full route point omitted ${routePointId}`);
+    }
   }
 
   if (plan.mode === "quick-recap") {
