@@ -28,7 +28,9 @@ export function parseLedgerText(text, fileName = "<memory>") {
   const fields = new Map();
   for (const line of lines) {
     const match = line.match(/^- \*\*(Source head|Scope|User-visible change|Review fixes|Follow-up|Validation):\*\*\s+(.+)$/);
-    if (match) fields.set(match[1], match[2].trim());
+    if (!match) continue;
+    if (fields.has(match[1])) fail(`${fileName}: duplicate required field '${match[1]}'`);
+    fields.set(match[1], match[2].trim());
   }
   for (const field of REQUIRED_FIELDS) {
     if (!fields.get(field)) fail(`${fileName}: missing required field '${field}'`);

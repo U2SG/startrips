@@ -17,6 +17,22 @@ test("parses a complete sharded ledger", () => {
   assert.equal(entry.sourceHead, SHA);
 });
 
+test("rejects duplicate Source head fields", () => {
+  const text = ledger(192).replace(
+    `- **Scope:** Scope.`,
+    `- **Source head:** \`${"f".repeat(40)}\`\n- **Scope:** Scope.`,
+  );
+  assert.throws(() => parseLedgerText(text, "192.md"), /duplicate required field 'Source head'/);
+});
+
+test("rejects duplicate non-source required fields", () => {
+  const text = ledger(192).replace(
+    `- **Follow-up:** None.`,
+    `- **Follow-up:** First.\n- **Follow-up:** Second.`,
+  );
+  assert.throws(() => parseLedgerText(text, "192.md"), /duplicate required field 'Follow-up'/);
+});
+
 test("rejects missing required fields", () => {
   assert.throws(() => parseLedgerText(`# PR #192 - Missing fields\n\n- **Source head:** \`${SHA}\`\n`, "192.md"), /missing required field/);
 });
