@@ -330,7 +330,7 @@ export function JourneyPlaybackOverlay({
           }
         : undefined,
     );
-  }, [clearVideoStallWatchdog, director.isPlaying, director.stepIndex, journey, paused]);
+  }, [clearVideoStallWatchdog, director.isPlaying, director.stepIndex, journey, mediaReads, paused]);
 
   // #20: one analyser graph writes a shared mutable energy channel; the light
   // strip and Three.js scene read that channel without React per-frame state.
