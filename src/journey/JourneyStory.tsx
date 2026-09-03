@@ -151,6 +151,18 @@ type MediaReadState =
   | { status: "ready"; url: string; expiresAt: number }
   | { status: "error"; message: string };
 
+export function shouldRefreshStoryMediaRead(
+  assetId: string,
+  state: { status: string; expiresAt?: number },
+  now: number,
+  protectedPlaybackAssetId: string | null,
+) {
+  return assetId !== protectedPlaybackAssetId
+    && state.status === "ready"
+    && Number.isFinite(state.expiresAt)
+    && (state.expiresAt as number) - now < MEDIA_READ_REFRESH_MARGIN_MS;
+}
+
 type JourneyStoryProps = {
   journeys: readonly Journey[];
   journeyId: string;
@@ -1725,18 +1737,22 @@ export function JourneyStory({
   useEffect(() => {
     const timer = window.setInterval(() => {
       const now = Date.now();
+      // #204 final review: while Story autoplay owns the settled video, do not
+      // replace its signed URL underneath the element. Replacing `src` resets
+      // the media resource and can pause/stall an otherwise healthy long clip.
+      // Once autoplay releases ownership (pause/end/navigation), the next sweep
+      // refreshes it normally before it is reused.
+      const protectedPlaybackAssetId = playing && activeAsset?.mimeType.startsWith("video/")
+        ? activeAsset.id
+        : null;
       for (const [assetId, state] of Object.entries(mediaReadsRef.current)) {
-        if (
-          state.status === "ready"
-          && Number.isFinite(state.expiresAt)
-          && state.expiresAt - now < MEDIA_READ_REFRESH_MARGIN_MS
-        ) {
+        if (shouldRefreshStoryMediaRead(assetId, state, now, protectedPlaybackAssetId)) {
           loadMediaRead(assetId);
         }
       }
     }, MEDIA_READ_SWEEP_MS);
     return () => window.clearInterval(timer);
-  }, [loadMediaRead]);
+  }, [activeAsset?.id, activeAsset?.mimeType, loadMediaRead, playing]);
 
   const namedStops = useMemo(
     () => journey?.routePoints.filter((point) => point.isStop) ?? [],
