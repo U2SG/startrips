@@ -256,6 +256,14 @@ export function nextPlaybackCameraCommand(
   return { target, revision: Math.max(current?.revision ?? 0, baselineRevision) + 1 };
 }
 
+export function nextPlaybackReleaseFocusRevision(
+  currentReleaseRevision: number,
+  playbackRevision: number,
+  normalFocusRevision: number,
+) {
+  return Math.max(currentReleaseRevision, playbackRevision, normalFocusRevision) + 1;
+}
+
 export function playbackFocusRouteForCameraTarget(
   route: JourneyRoute | null,
   target: PlaybackCameraTarget,
@@ -314,6 +322,7 @@ export function LivingAtlasApp({
     soundtrackRead: null,
     cameraCommand: null,
   });
+  const [playbackReleaseFocusRevision, setPlaybackReleaseFocusRevision] = useState(0);
   // Review P1: when the soundtrack read is not cached yet, the first click
   // only starts the prefetch and the button shows 正在准备配乐…; the user
   // clicks again (now with a cached URL) to actually start, keeping play()
@@ -416,13 +425,6 @@ export function LivingAtlasApp({
     setCinematicIsolation(playbackActive);
     return () => setCinematicIsolation(false);
   }, [playbackActive, setCinematicIsolation]);
-
-  useEffect(() => {
-    setPlaybackSession((current) => releaseStalePlaybackSession(
-      current,
-      playbackOwnership.releaseStaleState,
-    ));
-  }, [playbackOwnership.releaseStaleState]);
 
   // Mobile V2 is immersive by default: desktop focus-mode and timeline views
   // are never part of the mobile state machine.
@@ -542,6 +544,15 @@ export function LivingAtlasApp({
     ? null
     : routes.find((route) => route.id === focusPresentation.activeRouteId) ?? null;
   const focusRevision = focusPresentation.focusRevision + timeCursor.selectionRevision * 100_000;
+  useEffect(() => {
+    if (!playbackOwnership.releaseStaleState) return;
+    setPlaybackReleaseFocusRevision((current) => nextPlaybackReleaseFocusRevision(
+      current,
+      playbackSession.cameraCommand?.revision ?? 0,
+      focusRevision,
+    ));
+    setPlaybackSession((current) => releaseStalePlaybackSession(current, true));
+  }, [focusRevision, playbackOwnership.releaseStaleState, playbackSession.cameraCommand?.revision]);
   const mobileSheetJourney = journeys.find((journey) => journey.id === mobileSheetJourneyId) ?? null;
   const mobileMapJourney = journeys.find((journey) => journey.id === mobileMapJourneyId) ?? null;
   const mobileMapRoute = routes.find((route) => route.id === mobileMapJourneyId) ?? null;
@@ -765,7 +776,7 @@ export function LivingAtlasApp({
             focusRoute={playbackCameraTarget
               ? playbackFocusRoute
               : focusRoute}
-            focusRevision={playbackSession.cameraCommand?.revision ?? focusRevision}
+            focusRevision={playbackSession.cameraCommand?.revision ?? Math.max(focusRevision, playbackReleaseFocusRevision)}
             focusFlightProfile={playbackCameraTarget?.kind === "point" ? playbackCameraTarget.choreography : undefined}
             focusColor={focusPresentation.journey?.lightColor}
             journeyRoutes={routes}
@@ -1212,7 +1223,7 @@ export function LivingAtlasApp({
           onCameraTargetChange={(target) => {
             setPlaybackSession((current) => ({
               ...current,
-              cameraCommand: nextPlaybackCameraCommand(current.cameraCommand, target, focusRevision),
+              cameraCommand: nextPlaybackCameraCommand(current.cameraCommand, target, Math.max(focusRevision, playbackReleaseFocusRevision)),
             }));
           }}
           initialSoundtrackRead={playbackSession.soundtrackRead}

@@ -11,6 +11,7 @@ import { readFileSync } from "node:fs";
 import {
   globeFocusState,
   nextPlaybackCameraCommand,
+  nextPlaybackReleaseFocusRevision,
   playbackEntryNeedsPreparation,
   playbackFocusPointForCameraTarget,
   playbackFocusRouteForCameraTarget,
@@ -174,6 +175,12 @@ describe("playbackFocusPointForCameraTarget", () => {
     expect(first).toEqual({ target: { kind: "route" }, revision: 1 });
     expect(second).toEqual({ target: { kind: "route" }, revision: 2 });
     expect(afterNormalFocus).toEqual({ target: { kind: "route" }, revision: 100_124 });
+  });
+
+  it("hands normal focus a revision above stale playback ownership", () => {
+    const released = nextPlaybackReleaseFocusRevision(0, 120_004, 3_002);
+    expect(released).toBe(120_005);
+    expect(nextPlaybackCameraCommand(null, { kind: "route" }, released).revision).toBe(120_006);
   });
 });
 
