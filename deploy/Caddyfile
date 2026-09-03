@@ -50,5 +50,22 @@
 		-Server
 	}
 
-	log
+	# The access log records the request URI (path plus query) and the request
+	# headers, and both are credential-bearing: a password reset link carries its
+	# token as a path segment (/api/auth/reset-password/<token>) while email
+	# verification and the SPA reset callback carry it as ?token=. Under the
+	# Referrer-Policy above, a same-origin request made from /reset-password?token=
+	# sends that full URL as Referer, so the token reaches the log through the
+	# header too. Caddy already redacts Cookie and Authorization by default; the
+	# same pattern is applied to both remaining fields. One regexp per field is
+	# deliberate - Caddy keys log filters by field name, so a second filter on the
+	# same field silently replaces the first instead of adding to it.
+	log {
+		format filter {
+			fields {
+				request>uri regexp "((?:reset-password|/share|/api/shared)/|[?&](?:token|callbackURL)=)[^/?&#]*" "${1}REDACTED"
+				request>headers>Referer regexp "((?:reset-password|/share|/api/shared)/|[?&](?:token|callbackURL)=)[^/?&#]*" "${1}REDACTED"
+			}
+		}
+	}
 }
