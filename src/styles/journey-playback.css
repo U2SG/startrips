@@ -379,6 +379,12 @@
   }
 }
 
+@media (max-width: 1024px) {
+  .journey-playback__soundtrack {
+    bottom: 88px;
+  }
+}
+
 @media (max-width: 760px) {
   .journey-playback__stage {
     padding: 24px;
