@@ -3296,6 +3296,7 @@ export function ParticleEarthScene({
     const coastlineRefinementCache = new CoastlineRefinementCache();
     const coastlineViewPosition = new Vector3();
     let detailedCoastlineRings: number[][][] = [];
+    let detailedMidCoastlineReady = false;
     let activeCoastlineRegionKey: string | null = null;
     let coastlineRefinementState = document.hidden ? "paused" : "fallback";
     let lastCoastlineRefinementSampleAt = Number.NEGATIVE_INFINITY;
@@ -3511,6 +3512,10 @@ export function ParticleEarthScene({
         coastlineRefinementState = "deferred-flight";
         return;
       }
+      if (activePointers.size > 0 || rotationVelocityX !== 0 || rotationVelocityY !== 0) {
+        coastlineRefinementState = "deferred-interaction";
+        return;
+      }
       if (document.hidden || now - lastCoastlineRefinementSampleAt < 200) return;
       lastCoastlineRefinementSampleAt = now;
       camera.updateMatrixWorld();
@@ -3651,6 +3656,7 @@ export function ParticleEarthScene({
         }
       };
       applyDetailedCoastlinePositions(detailedCoastlinePositions);
+      detailedMidCoastlineReady = false;
 
       host.dataset.quality = nextQuality;
       host.dataset.particleCount = String(particlePositions.length / 3);
@@ -3672,6 +3678,7 @@ export function ParticleEarthScene({
         applyDetailedCoastlinePositions({ mid: detailed.mid, near: nearCoastlineGeometry.getAttribute("position")
           ? new Float32Array((nearCoastlineGeometry.getAttribute("position") as BufferAttribute).array as ArrayLike<number>)
           : new Float32Array() });
+        detailedMidCoastlineReady = true;
         activeCoastlineRegionKey = null;
         coastlineRefinementState = "idle";
       });
@@ -4102,7 +4109,7 @@ export function ParticleEarthScene({
       host.dataset.coastlineSource = coastlineLod === "far"
         ? "110m-global"
         : coastlineLod === "mid"
-          ? "50m-global"
+          ? (detailedMidCoastlineReady ? "50m-global" : "110m-global-fallback")
           : activeCoastlineRegionKey ? "50m-regional-foundation" : "110m-global-fallback";
       host.dataset.coastlineActiveChunks = activeCoastlineRegionKey ?? "";
       host.dataset.coastlineCacheChunks = String(coastlineRefinementCache.size);
