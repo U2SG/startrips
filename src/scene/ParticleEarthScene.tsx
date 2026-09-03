@@ -2350,6 +2350,7 @@ export function ParticleEarthScene({
     let lastCityTier: "capitals" | "prefectures" | "all" | null = null;
     let semanticZoomState: GlobeSemanticZoomState = resolveGlobeSemanticZoom({ zoom: interactiveZoom, qualityProfile: currentQuality });
     const activePointers = new Map<number, { x: number; y: number }>();
+    let wheelInteractionUntil = 0;
     const rejectedPointerIds = new Set<number>();
     const cityLabelPool: Array<{
       element: SVGTextElement;
@@ -3246,6 +3247,7 @@ export function ParticleEarthScene({
         })()
         : toScenePoint(cursor);
       claimManualInteraction();
+      wheelInteractionUntil = performance.now() + 180;
       // Stay in the particle globe at maximum zoom so cities stay pickable;
       // entering the real map is an explicit button choice.
       applyAnchoredZoom(
@@ -3276,6 +3278,7 @@ export function ParticleEarthScene({
     let particleGeometry: BufferGeometry | null = null;
     let particles: Points | null = null;
     let landVisualReady = false;
+    let baseCoastlineSourceAvailable = false;
     const refinementBuildGuard = new ParticleRefinementBuildGuard();
     refinementBuildGuard.setVisible(!document.hidden);
     const refinementCache = new Map<
@@ -3473,7 +3476,7 @@ export function ParticleEarthScene({
       })();
     };
 
-    const applyNearCoastlinePositions = (positions: Float32Array, regionKey: string) => {
+    const applyNearCoastlinePositions = (positions: Float32Array, regionKey: string, terminalState: "ready" | "cached" = "ready") => {
       const nextGeometry = new BufferGeometry();
       nextGeometry.setAttribute("position", new BufferAttribute(positions, 3));
       if (positions.length > 0) nextGeometry.computeBoundingSphere();
@@ -3482,7 +3485,7 @@ export function ParticleEarthScene({
       nearCoastlines.geometry = nextGeometry;
       previous.dispose();
       activeCoastlineRegionKey = regionKey;
-      coastlineRefinementState = "ready";
+      coastlineRefinementState = terminalState;
     };
 
     const requestCoastlineRefinement = (viewCenter: { lat: number; lon: number }) => {
@@ -3492,8 +3495,7 @@ export function ParticleEarthScene({
       if (activeCoastlineRegionKey === cacheKey) return;
       const cached = coastlineRefinementCache.get(cacheKey);
       if (cached) {
-        coastlineRefinementState = "cached";
-        applyNearCoastlinePositions(cached, cacheKey);
+        applyNearCoastlinePositions(cached, cacheKey, "cached");
         return;
       }
       coastlineRefinementState = "building";
@@ -3512,7 +3514,7 @@ export function ParticleEarthScene({
         coastlineRefinementState = "deferred-flight";
         return;
       }
-      if (activePointers.size > 0 || rotationVelocityX !== 0 || rotationVelocityY !== 0) {
+      if (activePointers.size > 0 || rotationVelocityX !== 0 || rotationVelocityY !== 0 || now < wheelInteractionUntil) {
         coastlineRefinementState = "deferred-interaction";
         return;
       }
@@ -3662,6 +3664,7 @@ export function ParticleEarthScene({
       host.dataset.particleCount = String(particlePositions.length / 3);
       host.dataset.particleBaseCount = String(particlePositions.length / 3);
       host.dataset.coastlineVertices = String(coastlinePositions.length / 3);
+      baseCoastlineSourceAvailable = landSourceAvailable;
       landSourceDebug = landSourceAvailable
         ? "base=ne_110m_land.geojson@110m;mask=720x360;refinement=ne_50m_land.geojson@50m;mask=1440x720"
         : "fallback-seeded-sphere;refinement=unavailable";
@@ -4107,10 +4110,10 @@ export function ParticleEarthScene({
       host.dataset.coastlineLod = coastlineLod;
       host.dataset.coastlineVertices = String((coastlineLod === "far" ? coastlineGeometry : coastlineLod === "mid" ? midCoastlineGeometry : nearCoastlineGeometry).getAttribute("position")?.count ?? 0);
       host.dataset.coastlineSource = coastlineLod === "far"
-        ? "110m-global"
+        ? (baseCoastlineSourceAvailable ? "110m-global" : "unavailable")
         : coastlineLod === "mid"
-          ? (detailedMidCoastlineReady ? "50m-global" : "110m-global-fallback")
-          : activeCoastlineRegionKey ? "50m-regional-foundation" : "110m-global-fallback";
+          ? (detailedMidCoastlineReady ? "50m-global" : baseCoastlineSourceAvailable ? "110m-global-fallback" : "unavailable")
+          : activeCoastlineRegionKey ? "50m-regional-foundation" : baseCoastlineSourceAvailable ? "110m-global-fallback" : "unavailable";
       host.dataset.coastlineActiveChunks = activeCoastlineRegionKey ?? "";
       host.dataset.coastlineCacheChunks = String(coastlineRefinementCache.size);
       host.dataset.coastlineRefinement = coastlineRefinementState;
