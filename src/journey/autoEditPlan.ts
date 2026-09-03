@@ -103,18 +103,21 @@ export type DeterministicQuickRecapInput = {
   generatedAt: string;
 };
 
-const IMAGE_DWELL_MS: Record<AutoEditTempo, Record<AutoEditPhotoRole, number>> = {
+// Exported only so that narrativeTiming.test.ts can assert the resolver's
+// quick-recap profile still reproduces these numbers. PR 2 of the shared
+// narrative timing plan deletes all four in favour of the resolver.
+export const IMAGE_DWELL_MS: Record<AutoEditTempo, Record<AutoEditPhotoRole, number>> = {
   fast: { hero: 2_000, representative: 1_600, supporting: 1_200, burst: 700 },
   standard: { hero: 3_100, representative: 2_500, supporting: 1_800, burst: 900 },
   immersive: { hero: 4_900, representative: 4_100, supporting: 3_000, burst: 1_300 },
 };
-const VIDEO_DWELL_MS: Record<AutoEditTempo, number> = {
+export const VIDEO_DWELL_MS: Record<AutoEditTempo, number> = {
   fast: 2_600,
   standard: 3_500,
   immersive: 4_500,
 };
-const CAMERA_MS = 1_000;
-const ARRIVAL_MS = 800;
+export const CAMERA_MS = 1_000;
+export const ARRIVAL_MS = 800;
 
 function technicalScore(digest: MediaDigestV1) {
   return (digest.technical?.sharpness ?? 0) + (digest.technical?.exposureQuality ?? 0);

@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  PLAYBACK_PACING,
   buildPlaybackSteps,
   initialPlaybackState,
   playbackReducer,
@@ -169,8 +168,6 @@ export function useJourneyPlaybackDirector(
     back,
     seek,
     exit,
-    introMs: PLAYBACK_PACING.introMs,
-    outroMs: PLAYBACK_PACING.outroMs,
   };
 }
 
