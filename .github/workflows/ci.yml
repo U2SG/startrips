@@ -13,6 +13,36 @@ permissions:
   contents: read
 
 jobs:
+  ledger:
+    name: ledger
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Test ledger tooling
+        run: node --test scripts/pr-history.node-test.mjs
+      - name: Validate sharded ledgers
+        run: node scripts/pr-history.mjs validate-all
+      - name: Validate current PR ledger
+        if: github.event_name == 'pull_request'
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/pr-history.mjs validate-pr --pr "$PR_NUMBER" --base "$PR_BASE_SHA" --head "$PR_HEAD_SHA"
+      - name: Validate main ledger immutability
+        if: github.event_name == 'push'
+        env:
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+          PUSH_AFTER_SHA: ${{ github.event.after }}
+        run: node scripts/pr-history.mjs validate-push --before "$PUSH_BEFORE_SHA" --after "$PUSH_AFTER_SHA"
+      - name: Render aggregate ledger index
+        run: |
+          node scripts/pr-history.mjs render --output "$RUNNER_TEMP/pr-history-index.md"
+          cat "$RUNNER_TEMP/pr-history-index.md" >> "$GITHUB_STEP_SUMMARY"
+
   core:
     name: core
     runs-on: ubuntu-latest
@@ -109,16 +139,20 @@ jobs:
     timeout-minutes: 2
     if: ${{ always() }}
     needs:
+      - ledger
       - core
       - browser-qa
     steps:
       - name: Require every validation lane to pass
         env:
+          LEDGER_RESULT: ${{ needs.ledger.result }}
           CORE_RESULT: ${{ needs.core.result }}
           BROWSER_QA_RESULT: ${{ needs.browser-qa.result }}
         run: |
           set -euo pipefail
+          echo "ledger=$LEDGER_RESULT"
           echo "core=$CORE_RESULT"
           echo "browser-qa=$BROWSER_QA_RESULT"
+          [[ "$LEDGER_RESULT" == "success" ]]
           [[ "$CORE_RESULT" == "success" ]]
           [[ "$BROWSER_QA_RESULT" == "success" ]]
