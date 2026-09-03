@@ -5,7 +5,9 @@ import {
   nextMeaningfulStepIndex,
   playbackElapsedForFraction,
   playbackSegmentAtElapsed,
+  playbackStepDurationForTempo,
 } from "./journeyPlaybackPlan";
+import { buildPlaybackSteps } from "./journeyPlayback";
 import type { Journey, JourneyMediaAsset, RoutePoint } from "./types";
 
 function point(id: string, sortOrder: number, longitude: number, note: string | null = null): RoutePoint {
@@ -89,6 +91,21 @@ describe("Playback V2 timeline planner (#126)", () => {
     expect(mediaSegments[1]).toMatchObject({ routePointId: null, durationMs: PLAYBACK_TEMPO_PROFILES.standard.videoMs });
     expect(playbackSegmentAtElapsed(plan, mediaSegments[0].startMs)?.assetId).toBe("intro-image");
     expect(playbackSegmentAtElapsed(plan, mediaSegments[1].startMs)?.assetId).toBe("intro-video");
+  });
+
+  it("exposes the same phase-specific duration policy to the live director", () => {
+    const journey = fixture(1);
+    const mediaStep = buildPlaybackSteps(journey).find((step) => step.kind === "media")!;
+    expect(playbackStepDurationForTempo(
+      journey,
+      mediaStep,
+      PLAYBACK_TEMPO_PROFILES.fast,
+    )).toBe(PLAYBACK_TEMPO_PROFILES.fast.imageMs);
+    expect(playbackStepDurationForTempo(
+      journey,
+      mediaStep,
+      PLAYBACK_TEMPO_PROFILES.immersive,
+    )).toBe(PLAYBACK_TEMPO_PROFILES.immersive.imageMs);
   });
 
   it("maps tempo independently by phase instead of applying one global multiplier", () => {

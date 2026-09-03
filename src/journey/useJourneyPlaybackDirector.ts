@@ -4,17 +4,31 @@ import {
   buildPlaybackSteps,
   initialPlaybackState,
   playbackReducer,
-  stepDurationMs,
   type JourneyPlaybackPhase,
   type PlaybackControl,
   type PlaybackState,
   type PlaybackStep,
 } from "./journeyPlayback";
+import {
+  PLAYBACK_TEMPO_PROFILES,
+  playbackStepDurationForTempo,
+  type PlaybackTempo,
+} from "./journeyPlaybackPlan";
 import type { Journey } from "./types";
 
 export function consumePlaybackTimerBudget(remainingMs: number, startedAtMs: number, nowMs: number) {
   const elapsedMs = Math.max(0, nowMs - startedAtMs);
   return Math.max(0, remainingMs - elapsedMs);
+}
+
+export function replanPlaybackTimerBudget(
+  remainingMs: number,
+  previousDurationMs: number,
+  nextDurationMs: number,
+) {
+  if (previousDurationMs <= 0) return Math.max(0, nextDurationMs);
+  const remainingFraction = Math.min(1, Math.max(0, remainingMs / previousDurationMs));
+  return Math.max(0, nextDurationMs * remainingFraction);
 }
 
 /**
@@ -31,9 +45,11 @@ export function useJourneyPlaybackDirector(
   hold = false,
 ) {
   const [state, setState] = useState<PlaybackState>(initialPlaybackState);
+  const [tempo, setTempo] = useState<PlaybackTempo>("standard");
   const timerRef = useRef<number>(0);
   const timerStepKeyRef = useRef<string | null>(null);
   const timerRemainingMsRef = useRef<number | null>(null);
+  const timerFullDurationMsRef = useRef<number | null>(null);
   const timerStartedAtMsRef = useRef<number | null>(null);
   const journeyRef = useRef(journey);
   journeyRef.current = journey;
@@ -66,16 +82,26 @@ export function useJourneyPlaybackDirector(
     if (!journey || !step) {
       timerStepKeyRef.current = null;
       timerRemainingMsRef.current = null;
+      timerFullDurationMsRef.current = null;
       timerStartedAtMsRef.current = null;
       return;
     }
 
-    const fullDurationMs = stepDurationMs(journey, step);
-    const stepKey = `${journey.id}:${state.stepIndex}:${step.kind}:${fullDurationMs}`;
+    const profile = PLAYBACK_TEMPO_PROFILES[tempo];
+    const fullDurationMs = playbackStepDurationForTempo(journey, step, profile);
+    const stepKey = `${journey.id}:${state.stepIndex}:${step.kind}`;
     if (timerStepKeyRef.current !== stepKey) {
       timerStepKeyRef.current = stepKey;
       timerRemainingMsRef.current = fullDurationMs;
+      timerFullDurationMsRef.current = fullDurationMs;
       timerStartedAtMsRef.current = null;
+    } else if (timerFullDurationMsRef.current !== fullDurationMs) {
+      timerRemainingMsRef.current = replanPlaybackTimerBudget(
+        timerRemainingMsRef.current ?? timerFullDurationMsRef.current ?? fullDurationMs,
+        timerFullDurationMsRef.current ?? fullDurationMs,
+        fullDurationMs,
+      );
+      timerFullDurationMsRef.current = fullDurationMs;
     }
 
     if (state.paused || hold) return;
@@ -103,14 +129,16 @@ export function useJourneyPlaybackDirector(
         timerStartedAtMsRef.current = null;
       }
     };
-  }, [hold, journey, state.stepIndex, state.paused, step, transition]);
+  }, [hold, journey, state.stepIndex, state.paused, step, tempo, transition]);
 
   // Reset when the journey changes.
   useEffect(() => {
     timerStepKeyRef.current = null;
     timerRemainingMsRef.current = null;
+    timerFullDurationMsRef.current = null;
     timerStartedAtMsRef.current = null;
     setState(initialPlaybackState());
+    setTempo("standard");
   }, [journey?.id]);
 
   useEffect(() => () => window.clearTimeout(timerRef.current), []);
@@ -123,6 +151,8 @@ export function useJourneyPlaybackDirector(
     step,
     phase,
     paused: state.paused,
+    tempo,
+    setTempo,
     isPlaying: !state.paused && step !== undefined,
     pause,
     resume,

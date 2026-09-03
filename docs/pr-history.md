@@ -637,6 +637,15 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 - **Review fixes:** Updated canonical Full fixtures to include required arrival timing/flags and replayed both reviewed source commits cleanly onto the latest main with no code conflict.
 - **Follow-up:** None known; GitHub CI remains authoritative after the final docs-only head update.
 
+
+### PR #162 - Add runtime Journey Playback tempo control
+
+- **Source head:** `9c1d64d4648aee451b9783ef4a38b52b4f95d071`
+- **Scope:** Adds runtime playback tempo switching, preserved-progress replanning in the director, accessible tempo controls, reduced-motion handling, and layout adjustments for mobile transport/soundtrack coexistence.
+- **User-visible change:** Users can change Journey Playback pace without restarting the Journey or soundtrack, while mobile controls remain within the transport grid and do not overlap soundtrack UI.
+- **Review fixes:** Includes the reviewed keyboard/reduced-motion fix, mobile grid containment, and soundtrack clearance fixes; all four source commits replayed cleanly onto the latest main.
+- **Follow-up:** None known; GitHub CI remains authoritative after the final docs-only head update.
+
 ---
 
 ## Entry template
