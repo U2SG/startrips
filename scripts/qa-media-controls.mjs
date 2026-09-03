@@ -940,6 +940,23 @@ try {
       { timeout: 3_000 },
     ).then(() => true).catch(() => false);
 
+    // Native controls own the element too: pausing the settled video must
+    // immediately stop Story autoplay rather than leaving `playing=true`.
+    await settledVideo.evaluate((element) => element.dispatchEvent(new Event("pause")));
+    const nativePauseStoppedSequence = await videoAutoplay.page.waitForFunction(
+      () => document.querySelector(".journey-story__mobile-media-play")?.getAttribute("aria-pressed") === "false",
+      undefined,
+      { timeout: 3_000 },
+    ).then(() => true).catch(() => false);
+
+    // Restart from a fresh user gesture so the existing ended contract remains
+    // covered after the native-pause ownership assertion.
+    await videoPlayControl.click();
+    await videoAutoplay.page.waitForFunction(
+      () => document.querySelector(".journey-story__mobile-media-play")?.getAttribute("aria-pressed") === "true",
+      undefined,
+      { timeout: 3_000 },
+    );
     const endedAt = Date.now();
     await settledVideo.evaluate((element) => element.dispatchEvent(new Event("ended")));
     let videoEndAdvancedMs = null;
@@ -956,6 +973,7 @@ try {
     }
     const videoAutoplayFailed = !gestureStartedVideo
       || !videoDrivenBySequence
+      || !nativePauseStoppedSequence
       || videoEndAdvancedMs === null
       || videoEndAdvancedMs >= 5_000
       || videoAutoplay.consoleErrors.length > 0
@@ -965,6 +983,7 @@ try {
       gestureStartedVideo,
       videoPlayEvents,
       videoDrivenBySequence,
+      nativePauseStoppedSequence,
       videoEndAdvancedMs,
       consoleErrors: videoAutoplay.consoleErrors,
       pageErrors: videoAutoplay.pageErrors,

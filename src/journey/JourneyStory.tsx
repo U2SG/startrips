@@ -1336,8 +1336,16 @@ export function JourneyStory({
     const armFallback = () => fallback.arm();
     const armStallWatchdog = () => stallWatchdog.arm();
     const recoverFromStall = () => stallWatchdog.cancel();
+    // Native controls are another playback owner. If the viewer pauses the
+    // settled clip directly, stop Story autoplay too so soundtrack/state do
+    // not claim the sequence is still progressing. Ignore the terminal pause
+    // associated with an ended clip; `ended` owns that transition.
+    const stopForNativePause = () => {
+      if (!video.ended) setPlaying(false);
+    };
     video.addEventListener("ended", finishStep);
     video.addEventListener("error", armFallback);
+    video.addEventListener("pause", stopForNativePause);
     video.addEventListener("stalled", armStallWatchdog);
     video.addEventListener("playing", recoverFromStall);
     video.addEventListener("progress", recoverFromStall);
@@ -1346,6 +1354,7 @@ export function JourneyStory({
     return () => {
       video.removeEventListener("ended", finishStep);
       video.removeEventListener("error", armFallback);
+      video.removeEventListener("pause", stopForNativePause);
       video.removeEventListener("stalled", armStallWatchdog);
       video.removeEventListener("playing", recoverFromStall);
       video.removeEventListener("progress", recoverFromStall);
