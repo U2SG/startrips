@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -1329,7 +1330,7 @@ export function JourneyStory({
   // keeps the current frame until the next one is decoded.
   const navigateToMediaRef = useRef<(index: number) => void>(() => undefined);
   navigateToMediaRef.current = navigateToMedia;
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!playing) return;
     const advance = storyAutoplayAdvance(
       assetIndex,
@@ -1811,13 +1812,20 @@ export function JourneyStory({
     ? shownAsset
     : autoplayVideoCandidate;
   const storyStageVideoRead = storyStageVideoAsset ? mediaReads[storyStageVideoAsset.id] : null;
-  const storyStageVideoVisible = Boolean(
+  const storyStageVideoSettled = Boolean(
     shownAsset
     && storyStageVideoAsset
     && shownAsset.id === storyStageVideoAsset.id
     && shownRead?.status === "ready"
     && shownAsset.mimeType.startsWith("video/"),
   );
+  const storyStageVideoIncoming = Boolean(
+    incomingAssetId
+    && storyStageVideoAsset
+    && incomingAssetId === storyStageVideoAsset.id
+    && storyStageVideoRead?.status === "ready",
+  );
+  const storyStageVideoVisible = storyStageVideoSettled || storyStageVideoIncoming;
   const shownIndex = shownAsset
     ? scopedMedia.findIndex((candidate) => candidate.id === shownAsset.id)
     : -1;
@@ -3231,8 +3239,9 @@ export function JourneyStory({
             {!overview && storyStageVideoAsset ? (
               <video
                 ref={storyVideoRef}
+                className={storyStageVideoIncoming ? "journey-story__media-incoming" : undefined}
                 src={storyStageVideoRead?.status === "ready" ? storyStageVideoRead.url : undefined}
-                controls={storyStageVideoVisible}
+                controls={storyStageVideoSettled}
                 playsInline
                 preload="metadata"
                 hidden={!storyStageVideoVisible}
@@ -3241,6 +3250,15 @@ export function JourneyStory({
                 data-shared-journey-cover={
                   storyStageVideoVisible && cover?.id === storyStageVideoAsset.id ? "true" : undefined
                 }
+                onAnimationEnd={(event) => {
+                  if (
+                    storyStageVideoIncoming
+                    && event.target === event.currentTarget
+                    && event.animationName === "motionMediaIn"
+                  ) {
+                    settleIncoming(storyStageVideoAsset.id);
+                  }
+                }}
               />
             ) : null}
             {!overview && shownAsset && shownRead?.status === "ready" && !shownAsset.mimeType.startsWith("video/") ? (
@@ -3270,21 +3288,6 @@ export function JourneyStory({
                   }
                 }}
                 onClick={openImageFullscreenAfterTap}
-              />
-            ) : null}
-            {!overview && incoming && incomingRead?.status === "ready" && incoming.mimeType.startsWith("video/") ? (
-              <video
-                key={`media-${incoming.id}`}
-                className="journey-story__media-incoming"
-                src={incomingRead.url}
-                controls
-                playsInline
-                preload="metadata"
-                onAnimationEnd={(event) => {
-                  if (event.target === event.currentTarget && event.animationName === "motionMediaIn") {
-                    settleIncoming(incoming.id);
-                  }
-                }}
               />
             ) : null}
             {mobileLayout && !overview ? (
@@ -3830,22 +3833,29 @@ export function JourneyStory({
           {storyStageVideoAsset ? (
             <video
               ref={fullscreenVideoRef}
+              className={storyStageVideoIncoming ? "journey-story__media-incoming" : undefined}
               src={storyStageVideoRead?.status === "ready" ? storyStageVideoRead.url : undefined}
-              controls={storyStageVideoVisible}
-              autoPlay={storyStageVideoVisible && playing}
+              controls={storyStageVideoSettled}
               playsInline
               hidden={!storyStageVideoVisible}
               aria-hidden={storyStageVideoVisible ? undefined : true}
+              onAnimationEnd={(event) => {
+                if (
+                  storyStageVideoIncoming
+                  && event.target === event.currentTarget
+                  && event.animationName === "motionMediaIn"
+                ) {
+                  settleIncoming(storyStageVideoAsset.id);
+                }
+              }}
             />
           ) : null}
           {shownAsset && shownRead?.status === "ready" && !shownAsset.mimeType.startsWith("video/")
             ? <img key={`media-${shownAsset.id}`} src={shownRead.url} alt={shownAsset.fileName} />
             : null}
-          {incoming && incomingRead?.status === "ready" && incoming.mimeType.startsWith("video/")
-            ? <video key={`media-${incoming.id}`} className="journey-story__media-incoming" src={incomingRead.url} autoPlay playsInline onAnimationEnd={(event) => { if (event.target === event.currentTarget && event.animationName === "motionMediaIn") settleIncoming(incoming.id); }} />
-            : incoming && incomingRead?.status === "ready"
-              ? <img key={`media-${incoming.id}`} className="journey-story__media-incoming" src={incomingRead.url} alt={incoming.fileName} onAnimationEnd={(event) => { if (event.target === event.currentTarget && event.animationName === "motionMediaIn") settleIncoming(incoming.id); }} />
-              : null}
+          {incoming && incomingRead?.status === "ready" && !incoming.mimeType.startsWith("video/")
+            ? <img key={`media-${incoming.id}`} className="journey-story__media-incoming" src={incomingRead.url} alt={incoming.fileName} onAnimationEnd={(event) => { if (event.target === event.currentTarget && event.animationName === "motionMediaIn") settleIncoming(incoming.id); }} />
+            : null}
           {mobileLayout ? <img data-media-drag-peek alt="" aria-hidden="true" style={{ display: "none" }} /> : null}
           {scopedMedia.length > 1 ? (
             <nav className="journey-story-fullscreen__nav" aria-label="全屏媒体导航">
