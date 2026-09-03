@@ -339,10 +339,13 @@ describe("storyAutoplayVideoCandidate (#204 final review)", () => {
 describe("storyAutoplayCanStart (#204 CFAA)", () => {
   const video = asset("video-ready", "video/mp4", 0, "clip.mp4");
 
-  it("waits for the candidate URL before consuming the initiating gesture", () => {
+  it("waits only while the candidate URL is unresolved", () => {
     expect(storyAutoplayCanStart(video, "waiting")).toBe(false);
-    expect(storyAutoplayCanStart(video, "error")).toBe(false);
     expect(storyAutoplayCanStart(video, "ready")).toBe(true);
+  });
+
+  it("does not deadlock autoplay after a failed candidate prefetch", () => {
+    expect(storyAutoplayCanStart(video, "error")).toBe(true);
   });
 
   it("does not block an image-only sequence", () => {

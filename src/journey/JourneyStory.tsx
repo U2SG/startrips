@@ -330,7 +330,10 @@ export function storyAutoplayCanStart(
   videoCandidate: JourneyMediaAsset | null,
   candidateAvailability: PlaybackMediaAvailability,
 ) {
-  return !videoCandidate || candidateAvailability === "ready";
+  // Only an unresolved candidate source must hold the initiating gesture. A
+  // failed read is already terminal for this attempt and the existing playback
+  // policy intentionally degrades that step through its timer/fallback path.
+  return !videoCandidate || candidateAvailability !== "waiting";
 }
 
 export function storyStageVideoOwner(
