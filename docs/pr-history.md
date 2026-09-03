@@ -560,6 +560,14 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 - **Review fixes:** Keeps empty chapters forbidden for routes that do own canonical media and leaves Quick Recap's stricter non-empty topology unchanged.
 - **Follow-up:** Re-review after the open Full camera/preservation PRs rebase because they touch adjacent validation semantics.
 
+### PR #190 — Reject duplicate MediaDigest asset identities
+
+- **Source head:** `be6b59b9ac58f136b22dcd4904a5b94ccfa9dbf1`
+- **Scope:** Rejects duplicate `MediaDigestV1.assetId` identities before constructing the validator lookup map, so canonical ownership, source index, revision, and preservation checks cannot depend on last-write-wins digest ordering.
+- **User-visible change:** No intentional UI change; malformed/ambiguous auto-edit analysis input now fails closed instead of potentially validating against the wrong digest facts.
+- **Review fixes:** Kept the guard mode-agnostic and limited to identity uniqueness; no new MediaDigest product semantics were introduced.
+- **Follow-up:** Full test/typecheck/build/browser verification remains delegated to GitHub CI.
+
 ---
 
 ## Entry template
