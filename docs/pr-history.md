@@ -577,6 +577,15 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 - **Follow-up:** None known at source review time.
 - **Validation:** Rebased onto `main@f665df5`; `git diff --check` green. The isolated finalization worktree has no Vitest executable, so GitHub CI is authoritative for targeted tests, TypeScript, build, and browser QA on the final docs-only head.
 
+### PR #168 - Enforce Quick Recap media timing semantics
+
+- **Source head:** `eed2cdd64edb30bc1b432f6d5b524201640b9240`
+- **Scope:** Tightens Quick Recap V1 validation so photo roles follow deterministic chapter order/pin-cover semantics, image dwell matches tempo + role policy, and video trims start at zero and end at the tempo-capped source duration.
+- **User-visible change:** Malformed AI/JSON recap plans can no longer stretch still images or choose arbitrary in-range video slices and hide the change by forging a matching planned duration.
+- **Review fixes:** Replayed the validated code onto the latest main while dropping the stale conflicting ledger commit; scope remains deliberately limited to `quick-recap`, preserving Full/Keepsake evolution. Builder-generated fast/standard/immersive plans remain the reference grammar.
+- **Follow-up:** Keepsake-specific timing semantics and future semantic video-highlight selection remain separate follow-up work under #127/#87; this PR does not define them.
+- **Validation:** Rebased onto `main@0600361`; `git diff --check` is green. The earlier exact-head CI failure was a real executed browser-QA failure, so the rebased head must pass fresh GitHub CI before merge; no unrelated source workaround was added.
+
 ---
 
 ## Entry template
