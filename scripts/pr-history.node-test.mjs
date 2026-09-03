@@ -100,3 +100,14 @@ test("rejects PRs that modify another PR's numeric ledger", () => {
     ledgerDir: path.join(fixture.dir, "docs", "pr-history"),
   }), /modifies another PR ledger/);
 });
+
+
+test("rejects symlinked numeric ledger entries", { skip: process.platform === "win32" }, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "startrips-ledger-symlink-"));
+  const ledgerDir = path.join(dir, "docs", "pr-history");
+  fs.mkdirSync(ledgerDir, { recursive: true });
+  const target = path.join(dir, "ledger-target.md");
+  fs.writeFileSync(target, ledger(192));
+  fs.symlinkSync(target, path.join(ledgerDir, "192.md"));
+  assert.throws(() => readLedgerEntries(ledgerDir), /regular non-symlink file/);
+});

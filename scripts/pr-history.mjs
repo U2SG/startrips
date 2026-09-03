@@ -55,6 +55,10 @@ export function readLedgerEntries(ledgerDir = DEFAULT_LEDGER_DIR) {
     const fileMatch = name.match(/^(\d+)\.md$/);
     if (!fileMatch) fail(`${name}: ledger filename must be '<PR_NUMBER>.md'`);
     const fullPath = path.join(ledgerDir, name);
+    const stat = fs.lstatSync(fullPath);
+    if (stat.isSymbolicLink() || !stat.isFile()) {
+      fail(`${name}: ledger entry must be a regular non-symlink file`);
+    }
     const entry = parseLedgerText(fs.readFileSync(fullPath, "utf8"), name);
     const fileNumber = Number(fileMatch[1]);
     if (entry.number !== fileNumber) fail(`${name}: heading PR #${entry.number} does not match filename ${fileNumber}.md`);
@@ -86,6 +90,10 @@ export function validatePrLedger({ prNumber, headSha, baseSha, root = ROOT, ledg
   const fileName = `${prNumber}.md`;
   const ledgerPath = path.join(ledgerDir, fileName);
   if (!fs.existsSync(ledgerPath)) fail(`missing PR ledger docs/pr-history/${fileName}`);
+  const ledgerStat = fs.lstatSync(ledgerPath);
+  if (ledgerStat.isSymbolicLink() || !ledgerStat.isFile()) {
+    fail(`${fileName}: ledger entry must be a regular non-symlink file`);
+  }
   const entry = parseLedgerText(fs.readFileSync(ledgerPath, "utf8"), fileName);
   if (entry.number !== prNumber) fail(`${fileName}: heading targets PR #${entry.number}, expected PR #${prNumber}`);
 
