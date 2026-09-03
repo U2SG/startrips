@@ -568,7 +568,10 @@ export function JourneyPlaybackOverlay({
                       setHold(false);
                       director.complete();
                     }}
-                    onError={() => setHold(false)}
+                    onError={() => {
+                      setVideoFallbackAssetId(activeMedia.id);
+                      setHold(false);
+                    }}
                   />
                 : <div className="journey-playback__media-state">正在打开媒体…</div>
               // Review P2: images must wait for the decode gate too — showing
