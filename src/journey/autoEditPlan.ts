@@ -459,6 +459,7 @@ export function validateAutoEditPlanV1(planInput: unknown, input: {
   }
   const digestById = new Map(input.digests.map((digest) => [digest.assetId, digest]));
   const seen = new Set<string>();
+  const seenChapterIds = new Set<string>();
   const seenQuickRecapChapterScopes = new Set<string>();
   const seenFullChapterScopes = new Set<string>();
   const routeOrder = new Map(input.routePointIds.map((id, index) => [id, index]));
@@ -498,6 +499,8 @@ export function validateAutoEditPlanV1(planInput: unknown, input: {
   let hasSeenRouteChapter = false;
 
   for (const chapter of plan.chapters) {
+    if (seenChapterIds.has(chapter.chapterId)) errors.push(`duplicate chapter id ${chapter.chapterId}`);
+    seenChapterIds.add(chapter.chapterId);
     if (plan.mode === "quick-recap") {
       const scopeKey = chapter.routePointId === null ? "__journey_intro__" : `route:${chapter.routePointId}`;
       if (seenQuickRecapChapterScopes.has(scopeKey)) {
