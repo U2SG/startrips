@@ -552,6 +552,14 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 - **Review fixes:** Fullscreen incoming video now settles only on its own `motionMediaIn` animation end, with the image handler similarly scoped to its own event.
 - **Follow-up:** Compositor continuity was further hardened in PR #62.
 
+### PR #188 — Preserve media-less Full Playback route points
+
+- **Source head:** `7b166052d5c6085af824ef3994ca4b32927187af`
+- **Scope:** Restores Full Playback route coverage by requiring every canonical route point to have one chapter while permitting an empty camera/arrival-only route chapter only when that route owns no current-revision visual media.
+- **User-visible change:** Full Playback can still visit and present a place/note even when that stop has no photo or video, instead of forcing the route point to disappear from the validated plan.
+- **Review fixes:** Keeps empty chapters forbidden for routes that do own canonical media and leaves Quick Recap's stricter non-empty topology unchanged.
+- **Follow-up:** Re-review after the open Full camera/preservation PRs rebase because they touch adjacent validation semantics.
+
 ---
 
 ## Entry template

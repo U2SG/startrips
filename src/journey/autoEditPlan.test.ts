@@ -366,11 +366,11 @@ describe("deterministic auto-edit foundation (#127)", () => {
       .toMatchObject({ valid: true, errors: [] });
   });
 
-  it("rejects camera-only Full Playback chapters even when forged duration reconciles", () => {
+  it("preserves media-less Full Playback route points with camera-only chapters", () => {
     const digests = [digest("photo", "tokyo", 0)];
     const plan: AutoEditPlanV1 = {
       schemaVersion: 1,
-      planId: "full:empty-chapter",
+      planId: "full:media-less-route",
       journeyId: "journey-1",
       journeyRevision: "7",
       generatedAt: baseInput.generatedAt,
@@ -393,9 +393,42 @@ describe("deterministic auto-edit foundation (#127)", () => {
       ],
       omittedAssetIds: [],
     };
+    expect(validateAutoEditPlanV1(plan, { ...baseInput, routePointIds: ["tokyo", "kyoto"], digests }))
+      .toMatchObject({ valid: true, errors: [] });
+  });
+
+  it("rejects Full Playback plans that omit a media-less canonical route point", () => {
+    const digests = [digest("photo", "tokyo", 0)];
+    const plan: AutoEditPlanV1 = {
+      schemaVersion: 1, planId: "full:missing-media-less-route", journeyId: "journey-1", journeyRevision: "7", generatedAt: baseInput.generatedAt,
+      mode: "full", plannedDurationMs: 3_000, tempo: "standard", omittedAssetIds: [],
+      chapters: [{
+        chapterId: "route:tokyo", routePointId: "tokyo", camera: { primitive: "travel", durationMs: 1_000 },
+        items: [{ assetId: "photo", sourceIndex: 0, dwellMs: 2_000, framing: "contain", transition: "direct", selectionReason: "all-media" }],
+      }],
+    };
     const result = validateAutoEditPlanV1(plan, { ...baseInput, routePointIds: ["tokyo", "kyoto"], digests });
     expect(result.valid).toBe(false);
-    expect(result.errors).toContain("empty full chapter route:kyoto:camera-only");
+    expect(result.errors).toContain("full route point omitted kyoto");
+    expect(result.errors).not.toContain("planned duration mismatch");
+  });
+
+  it("still rejects empty Full Playback chapters when that route owns canonical media", () => {
+    const digests = [digest("photo", "tokyo", 0), digest("kyoto-photo", "kyoto", 1)];
+    const plan: AutoEditPlanV1 = {
+      schemaVersion: 1, planId: "full:empty-populated-route", journeyId: "journey-1", journeyRevision: "7", generatedAt: baseInput.generatedAt,
+      mode: "full", plannedDurationMs: 4_000, tempo: "standard", omittedAssetIds: [],
+      chapters: [
+        {
+          chapterId: "route:tokyo", routePointId: "tokyo", camera: { primitive: "travel", durationMs: 1_000 },
+          items: [{ assetId: "photo", sourceIndex: 0, dwellMs: 2_000, framing: "contain", transition: "direct", selectionReason: "all-media" }],
+        },
+        { chapterId: "route:kyoto", routePointId: "kyoto", camera: { primitive: "travel", durationMs: 1_000 }, items: [] },
+      ],
+    };
+    const result = validateAutoEditPlanV1(plan, { ...baseInput, routePointIds: ["tokyo", "kyoto"], digests });
+    expect(result.valid).toBe(false);
+    expect(result.errors).toContain("empty full chapter route:kyoto");
     expect(result.errors).not.toContain("planned duration mismatch");
   });
 
