@@ -568,6 +568,15 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 - **Review fixes:** Kept the guard mode-agnostic and limited to identity uniqueness; no new MediaDigest product semantics were introduced.
 - **Follow-up:** Full test/typecheck/build/browser verification remains delegated to GitHub CI.
 
+### PR #160 - Release stale playback ownership when Journey disappears
+
+- **Source head:** `97f06577c9ecdfbb13c4feea76f7f510d68eb98d`
+- **Scope:** Releases stale Journey Playback ownership only after Journey loading settles, clears stale soundtrack/camera state, and hands normal globe focus a revision above the last playback camera revision so Three.js accepts the ownership transfer.
+- **User-visible change:** If the currently playing Journey disappears after refresh/concurrent deletion, the cinematic overlay/isolation closes and the globe returns to the normal current focus instead of remaining stuck on the deleted Journey.
+- **Review fixes:** Final P2 review identified that nulling the React camera command alone could leave `ParticleEarthScene` rejecting the lower normal focus revision. The fix publishes a monotonic release revision and uses it as the baseline for the next playback camera command; focused unit coverage verifies the handoff revision outranks stale playback ownership.
+- **Follow-up:** None known at source review time.
+- **Validation:** Rebased onto `main@f665df5`; `git diff --check` green. The isolated finalization worktree has no Vitest executable, so GitHub CI is authoritative for targeted tests, TypeScript, build, and browser QA on the final docs-only head.
+
 ---
 
 ## Entry template
