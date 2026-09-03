@@ -205,6 +205,27 @@ describe("deterministic auto-edit foundation (#127)", () => {
     expect(validateAutoEditPlanV1(plan, { ...baseInput, digests })).toMatchObject({ valid: true, errors: [] });
   });
 
+  it("keeps the photograph as every route representative when videos were uploaded first", () => {
+    const routePointIds = Array.from({ length: 7 }, (_, index) => `point-${index}`);
+    const digests = routePointIds.flatMap((routePointId, index) => [
+      digest(`${routePointId}-video`, routePointId, index * 2, {
+        mediaType: "video", mimeType: "video/mp4", intrinsic: { durationMs: 6_000 },
+      }),
+      digest(`${routePointId}-photo`, routePointId, index * 2 + 1),
+    ]);
+    // The real Quick Recap chapter budget: 45s target less intro and outro.
+    const input = { ...baseInput, routePointIds, targetDurationMs: 42_000, digests };
+    const plan = buildDeterministicQuickRecapPlan(input);
+
+    expect(plan.chapters.map((chapter) => chapter.routePointId)).toEqual(routePointIds);
+    for (const routePointId of routePointIds) {
+      const chapter = plan.chapters.find((candidate) => candidate.routePointId === routePointId)!;
+      expect(chapter.items.map((item) => item.assetId)).toContain(`${routePointId}-photo`);
+    }
+    expect(plan.plannedDurationMs).toBeLessThanOrEqual(42_000);
+    expect(validateAutoEditPlanV1(plan, input)).toMatchObject({ valid: true, errors: [] });
+  });
+
   it("omits videos without known positive duration and bounds short-video trims to the source", () => {
     const digests = [
       digest("unknown-video", "tokyo", 0, { mediaType: "video", mimeType: "video/mp4", intrinsic: {} }),

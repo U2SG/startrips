@@ -35,20 +35,40 @@ function visualMediaType(asset: JourneyMediaAsset): "image" | "video" {
   return asset.mimeType.startsWith("video/") ? "video" : "image";
 }
 
+// The explicit Journey cover opens the recap as the first chapter hero, but
+// only when moving it cannot empty the route point that owns it. When the cover
+// is that point's only visual media, relocating it would leave the chapter
+// without a single candidate and the route point would disappear from the recap
+// — the same topology loss as #195 itself. Such a cover stays where it belongs
+// and simply does not open the recap; it still carries the cover user signal,
+// so it remains its own chapter's mandatory representative.
+function openingCoverAsset(
+  journey: Journey,
+  visualMedia: readonly JourneyMediaAsset[],
+): JourneyMediaAsset | null {
+  const firstRoutePointId = journey.routePoints[0]?.id ?? null;
+  if (!firstRoutePointId || !journey.coverMediaAssetId) return null;
+  const cover = visualMedia.find((asset) => asset.id === journey.coverMediaAssetId);
+  if (!cover) return null;
+  if (cover.routePointId === null || cover.routePointId === firstRoutePointId) return cover;
+  const ownerKeepsVisualMedia = visualMedia.some((asset) => (
+    asset.id !== cover.id && asset.routePointId === cover.routePointId
+  ));
+  return ownerKeepsVisualMedia ? cover : null;
+}
+
 // #195: Startrips is photo-first, not photo-only. Every playable visual asset
 // is a recap candidate so a route point whose only media is a video keeps its
 // chapter; only the soundtrack is excluded, matching Full Playback's chapter
 // stream (`playbackMediaForPoint`).
 function runtimeVisualCandidates(journey: Journey): JourneyMediaAsset[] {
   const firstRoutePointId = journey.routePoints[0]?.id ?? null;
-  const coverId = journey.coverMediaAssetId;
-  return journey.media
-    .filter(isVisualMediaAsset)
+  const visualMedia = journey.media.filter(isVisualMediaAsset);
+  const openingCoverId = openingCoverAsset(journey, visualMedia)?.id ?? null;
+  return visualMedia
     .flatMap((asset) => {
-      if (asset.id === coverId && firstRoutePointId) {
-        // Playback projection only: the explicit Journey cover always opens
-        // the recap as the first chapter hero, even when canonical ownership
-        // belongs to a later route point. Synthetic ordering is scoped to the
+      if (asset.id === openingCoverId && firstRoutePointId) {
+        // Playback projection only: synthetic ordering is scoped to the
         // projection; persisted ownership/sort order remain untouched.
         return [{ ...asset, routePointId: firstRoutePointId, sortOrder: Number.MIN_SAFE_INTEGER }];
       }
@@ -61,9 +81,12 @@ function runtimeVisualCandidates(journey: Journey): JourneyMediaAsset[] {
       }
       return [];
     })
+    // Cover-first ordering applies only to a relocated cover. A cover left with
+    // its own route point must keep its natural source order, so it cannot be
+    // hoisted ahead of the chapters that precede it.
     .sort((left, right) => {
-      if (left.id === coverId && right.id !== coverId) return -1;
-      if (right.id === coverId && left.id !== coverId) return 1;
+      if (left.id === openingCoverId && right.id !== openingCoverId) return -1;
+      if (right.id === openingCoverId && left.id !== openingCoverId) return 1;
       return left.sortOrder - right.sortOrder || left.id.localeCompare(right.id);
     });
 }

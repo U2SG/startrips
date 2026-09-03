@@ -267,6 +267,57 @@ describe("Quick Recap visual-media topology (#195)", () => {
     expect(prepared.plan.chapters.map((chapter) => chapter.routePointId)).toEqual(["p0", "p1", "p2"]);
   });
 
+  it("keeps a later route point whose only visual media is the video cover", () => {
+    const journey = fixture();
+    journey.coverMediaAssetId = "p1-video";
+    journey.media = [
+      media("p0-a", "p0", "image/jpeg", 0),
+      media("p1-video", "p1", "video/mp4", 1),
+    ];
+
+    const digests = quickRecapDigestsForJourney(journey);
+    expect(digests.find((digest) => digest.assetId === "p1-video")?.routePointId).toBe("p1");
+    expect(digests.find((digest) => digest.assetId === "p1-video")?.userSignals.isJourneyCover).toBe(true);
+
+    const prepared = prepareQuickRecapPlayback(journey, { generatedAt: "2026-09-02T00:00:00.000Z" })!;
+    expect(prepared.plan.chapters.map((chapter) => chapter.routePointId)).toEqual(["p0", "p1"]);
+    expect(prepared.plan.chapters[1]?.items.map((item) => item.assetId)).toEqual(["p1-video"]);
+    expect(prepared.journey.media.find((asset) => asset.id === "p1-video")?.routePointId).toBe("p1");
+  });
+
+  it("keeps a later route point whose only visual media is the photo cover", () => {
+    const journey = fixture();
+    journey.coverMediaAssetId = "p1-a";
+    journey.media = [
+      media("p0-a", "p0", "image/jpeg", 0),
+      media("p1-a", "p1", "image/jpeg", 1),
+    ];
+
+    const prepared = prepareQuickRecapPlayback(journey, { generatedAt: "2026-09-02T00:00:00.000Z" })!;
+    expect(prepared.plan.chapters.map((chapter) => chapter.routePointId)).toEqual(["p0", "p1"]);
+    expect(prepared.plan.chapters[1]?.items.map((item) => item.assetId)).toEqual(["p1-a"]);
+    expect(prepared.journey.media.find((asset) => asset.id === "p1-a")?.routePointId).toBe("p1");
+  });
+
+  it("still opens the recap with a cover its owning route point can spare", () => {
+    const journey = fixture();
+    journey.coverMediaAssetId = "p1-a";
+    journey.media = [
+      media("p0-a", "p0", "image/jpeg", 0),
+      media("p1-a", "p1", "image/jpeg", 1),
+      media("p1-b", "p1", "image/jpeg", 2),
+    ];
+
+    const digests = quickRecapDigestsForJourney(journey);
+    expect(digests[0]?.assetId).toBe("p1-a");
+    expect(digests.find((digest) => digest.assetId === "p1-a")?.routePointId).toBe("p0");
+
+    const prepared = prepareQuickRecapPlayback(journey, { generatedAt: "2026-09-02T00:00:00.000Z" })!;
+    expect(prepared.plan.chapters.map((chapter) => chapter.routePointId)).toEqual(["p0", "p1"]);
+    expect(prepared.plan.chapters[0]?.items[0]?.assetId).toBe("p1-a");
+    expect(prepared.plan.chapters[1]?.items.map((item) => item.assetId)).toEqual(["p1-b"]);
+  });
+
   it("does not let a video displace photos when a route point has plenty", () => {
     const journey = fixture();
     journey.coverMediaAssetId = null;
