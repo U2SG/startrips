@@ -376,7 +376,11 @@ async function verifyMobileV2InteractionContract() {
     const fullscreenStackDepth = await historyStackDepth();
 
     await page.evaluate(() => window.history.back());
-    await fullscreenSurface.waitFor({ state: "detached" });
+    // #204 CFAA: fullscreen keeps a persistent hidden video stage so the exact
+    // node can retain user-activation authorization across entry. Back must
+    // dismiss the surface semantically, not require its implementation DOM to
+    // be detached.
+    await fullscreenSurface.waitFor({ state: "hidden" });
     const storyAfterFullscreenBack = await storySurface.isVisible();
     const afterFullscreenBackDepth = await historyStackDepth();
 
