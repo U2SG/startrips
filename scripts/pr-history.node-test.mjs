@@ -111,3 +111,38 @@ test("rejects symlinked numeric ledger entries", { skip: process.platform === "w
   fs.symlinkSync(target, path.join(ledgerDir, "192.md"));
   assert.throws(() => readLedgerEntries(ledgerDir), /regular non-symlink file/);
 });
+
+
+test("rejects renaming another PR ledger into the current PR ledger", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "startrips-ledger-rename-"));
+  const ledgerDir = path.join(dir, "docs", "pr-history");
+  fs.mkdirSync(ledgerDir, { recursive: true });
+  git(dir, "init", "-q");
+  git(dir, "config", "user.email", "ledger-test@example.com");
+  git(dir, "config", "user.name", "Ledger Test");
+  git(dir, "config", "core.autocrlf", "false");
+  fs.writeFileSync(path.join(dir, "docs", "pr-history.md"), "# Legacy archive\n");
+  fs.writeFileSync(path.join(ledgerDir, "191.md"), ledger(191));
+  git(dir, "add", ".");
+  git(dir, "commit", "-qm", "base");
+  const baseSha = git(dir, "rev-parse", "HEAD");
+
+  fs.writeFileSync(path.join(dir, "app.txt"), "code\n");
+  git(dir, "add", ".");
+  git(dir, "commit", "-qm", "code");
+  const sourceHead = git(dir, "rev-parse", "HEAD");
+
+  fs.renameSync(path.join(ledgerDir, "191.md"), path.join(ledgerDir, "192.md"));
+  fs.writeFileSync(path.join(ledgerDir, "192.md"), ledger(192).replace(SHA, sourceHead));
+  git(dir, "add", "-A");
+  git(dir, "commit", "-qm", "rename ledger");
+  const headSha = git(dir, "rev-parse", "HEAD");
+
+  assert.throws(() => validatePrLedger({
+    prNumber: 192,
+    baseSha,
+    headSha,
+    root: dir,
+    ledgerDir,
+  }), /code drift after Source head|modifies another PR ledger/);
+});

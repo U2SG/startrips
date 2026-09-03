@@ -108,7 +108,7 @@ export function validatePrLedger({ prNumber, headSha, baseSha, root = ROOT, ledg
     fail(`${fileName}: Source head ${entry.sourceHead} is not an ancestor of PR head ${headSha}`);
   }
 
-  const changed = git(["diff", "--name-only", `${entry.sourceHead}..${headSha}`], root)
+  const changed = git(["diff", "--no-renames", "--name-only", `${entry.sourceHead}..${headSha}`], root)
     .split(/\r?\n/)
     .filter(Boolean)
     .map((value) => value.replace(/\\/g, "/"));
@@ -125,7 +125,7 @@ export function validatePrLedger({ prNumber, headSha, baseSha, root = ROOT, ledg
   } catch {
     fail(`${fileName}: cannot resolve merge-base between ${baseSha} and ${headSha}`);
   }
-  const prChanged = git(["diff", "--name-only", `${prBase}..${headSha}`], root)
+  const prChanged = git(["diff", "--no-renames", "--name-only", `${prBase}..${headSha}`], root)
     .split(/\r?\n/)
     .filter(Boolean)
     .map((value) => value.replace(/\\/g, "/"));
