@@ -362,12 +362,16 @@ describe("deterministic auto-edit foundation (#127)", () => {
     const digests = [
       digest("video", "tokyo", 0, { mediaType: "video", mimeType: "video/mp4", intrinsic: { durationMs: 2_000 } }),
     ];
-    for (const illegalRole of [null, "", 0]) {
+    for (const { illegalRole, expectedError } of [
+      { illegalRole: null, expectedError: "item photoRole invalid 0:0" },
+      { illegalRole: "", expectedError: "video photo role invalid video" },
+      { illegalRole: 0, expectedError: "item photoRole invalid 0:0" },
+    ]) {
       const plan = buildDeterministicQuickRecapPlan({ ...baseInput, routePointIds: ["tokyo"], digests });
       const video = plan.chapters[0]?.items[0];
       if (video) (video as unknown as { photoRole?: unknown }).photoRole = illegalRole;
       const result = validateAutoEditPlanV1(plan, { ...baseInput, routePointIds: ["tokyo"], digests });
-      expect(result.errors).toContain("video photo role invalid video");
+      expect(result.errors).toContain(expectedError);
     }
   });
 
@@ -748,6 +752,13 @@ describe("deterministic auto-edit foundation (#127)", () => {
       { plan: null, error: "plan must be an object" },
       { plan: { ...validPlan, chapters: null }, error: "chapters must be an array" },
       { plan: { ...validPlan, omittedAssetIds: null }, error: "omittedAssetIds must be an array" },
+      { plan: { ...validPlan, planId: 7 }, error: "planId must be a string" },
+      { plan: { ...validPlan, generatedAt: false }, error: "generatedAt must be a string" },
+      { plan: { ...validPlan, chapters: [{ ...validPlan.chapters[0], chapterId: 7 }] }, error: "chapter id invalid 0" },
+      { plan: { ...validPlan, chapters: [{ ...validPlan.chapters[0], routePointId: 7 }] }, error: "chapter route point invalid 0" },
+      { plan: { ...validPlan, chapters: [{ ...validPlan.chapters[0], camera: { ...validPlan.chapters[0]!.camera, primitive: 7 } }] }, error: "camera primitive shape invalid 0" },
+      { plan: { ...validPlan, chapters: [{ ...validPlan.chapters[0], arrival: { ...validPlan.chapters[0]!.arrival!, showNote: "yes" } }] }, error: "chapter arrival flags invalid 0" },
+      { plan: { ...validPlan, chapters: [{ ...validPlan.chapters[0], items: [{ ...validPlan.chapters[0]!.items[0], assetId: 7 }] }] }, error: "item assetId invalid 0:0" },
       { plan: { ...validPlan, chapters: [null] }, error: "chapter 0 must be an object" },
       { plan: { ...validPlan, chapters: [{ ...validPlan.chapters[0], camera: null }] }, error: "chapter camera invalid 0" },
       { plan: { ...validPlan, chapters: [{ ...validPlan.chapters[0], items: null }] }, error: "chapter items invalid 0" },
