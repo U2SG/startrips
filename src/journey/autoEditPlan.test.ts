@@ -362,12 +362,16 @@ describe("deterministic auto-edit foundation (#127)", () => {
     const digests = [
       digest("video", "tokyo", 0, { mediaType: "video", mimeType: "video/mp4", intrinsic: { durationMs: 2_000 } }),
     ];
-    for (const illegalRole of [null, "", 0]) {
+    for (const { illegalRole, expectedError } of [
+      { illegalRole: null, expectedError: "item photoRole invalid 0:0" },
+      { illegalRole: "", expectedError: "video photo role invalid video" },
+      { illegalRole: 0, expectedError: "item photoRole invalid 0:0" },
+    ]) {
       const plan = buildDeterministicQuickRecapPlan({ ...baseInput, routePointIds: ["tokyo"], digests });
       const video = plan.chapters[0]?.items[0];
       if (video) (video as unknown as { photoRole?: unknown }).photoRole = illegalRole;
       const result = validateAutoEditPlanV1(plan, { ...baseInput, routePointIds: ["tokyo"], digests });
-      expect(result.errors).toContain("video photo role invalid video");
+      expect(result.errors).toContain(expectedError);
     }
   });
 
