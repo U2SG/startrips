@@ -646,6 +646,15 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 - **Review fixes:** Includes the reviewed keyboard/reduced-motion fix, mobile grid containment, and soundtrack clearance fixes; all four source commits replayed cleanly onto the latest main.
 - **Follow-up:** None known; GitHub CI remains authoritative after the final docs-only head update.
 
+
+### PR #161 - Add spatial coastline refinement foundation
+
+- **Source head:** `918306b9f9ceb8be2d6bc624b301ef0bc93af092`
+- **Scope:** Adds bounded spatial coastline refinement primitives and integrates them into the particle Earth scene, including focus/interaction deferral and reviewed lifecycle safeguards.
+- **User-visible change:** Close-zoom coastline refinement can allocate detail by active region while avoiding stale refinement during focus flights or active interaction.
+- **Review fixes:** Includes the reviewed focus-flight deferral, interaction deferral, and final coastline refinement blocker fixes; all four source commits replayed cleanly onto the latest main.
+- **Follow-up:** This remains a foundation toward the full #154 high-detail local coastline acceptance criteria; GitHub CI is authoritative for final validation.
+
 ---
 
 ## Entry template

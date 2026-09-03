@@ -61,6 +61,11 @@ import {
   PARTICLE_DIM_POINT_LIMIT,
 } from "./particleEarthMaterial";
 import {
+  CoastlineRefinementCache,
+  buildRegionalCoastlinePositions,
+  resolveCoastlineRefinementRegion,
+} from "./coastlineSpatialLod";
+import {
   PARTICLE_BASE_LAND_SOURCE,
   PARTICLE_REFINEMENT_CACHE_LIMIT,
   PARTICLE_REFINEMENT_LAND_SOURCE,
@@ -1210,7 +1215,7 @@ async function buildLandVisualData(count: number) {
   };
 }
 
-async function loadDetailedCoastlinePositions() {
+async function loadDetailedCoastlineData() {
   try {
     const response = await fetch("/earth/ne_50m_land.geojson");
     if (!response.ok) return null;
@@ -1224,8 +1229,8 @@ async function loadDetailedCoastlinePositions() {
       polygons.forEach((polygon) => rings.push(...polygon));
     });
     return {
+      rings,
       mid: buildSphericalRingSegments(rings, 1.405, COASTLINE_LOD_VERTEX_BUDGET.mid),
-      near: buildSphericalRingSegments(rings, 1.405, COASTLINE_LOD_VERTEX_BUDGET.near),
     };
   } catch {
     return null;
@@ -2345,6 +2350,7 @@ export function ParticleEarthScene({
     let lastCityTier: "capitals" | "prefectures" | "all" | null = null;
     let semanticZoomState: GlobeSemanticZoomState = resolveGlobeSemanticZoom({ zoom: interactiveZoom, qualityProfile: currentQuality });
     const activePointers = new Map<number, { x: number; y: number }>();
+    let wheelInteractionUntil = 0;
     const rejectedPointerIds = new Set<number>();
     const cityLabelPool: Array<{
       element: SVGTextElement;
@@ -3241,6 +3247,7 @@ export function ParticleEarthScene({
         })()
         : toScenePoint(cursor);
       claimManualInteraction();
+      wheelInteractionUntil = performance.now() + 180;
       // Stay in the particle globe at maximum zoom so cities stay pickable;
       // entering the real map is an explicit button choice.
       applyAnchoredZoom(
@@ -3271,6 +3278,7 @@ export function ParticleEarthScene({
     let particleGeometry: BufferGeometry | null = null;
     let particles: Points | null = null;
     let landVisualReady = false;
+    let baseCoastlineSourceAvailable = false;
     const refinementBuildGuard = new ParticleRefinementBuildGuard();
     refinementBuildGuard.setVisible(!document.hidden);
     const refinementCache = new Map<
@@ -3288,6 +3296,13 @@ export function ParticleEarthScene({
     let lastRefinementViewSampleAt = Number.NEGATIVE_INFINITY;
     let refinementBuildState = document.hidden ? "paused" : "idle";
     let landSourceDebug = "loading:ne_110m_land.geojson@110m";
+    const coastlineRefinementCache = new CoastlineRefinementCache();
+    const coastlineViewPosition = new Vector3();
+    let detailedCoastlineRings: number[][][] = [];
+    let detailedMidCoastlineReady = false;
+    let activeCoastlineRegionKey: string | null = null;
+    let coastlineRefinementState = document.hidden ? "paused" : "fallback";
+    let lastCoastlineRefinementSampleAt = Number.NEGATIVE_INFINITY;
 
     const removeParticleDimmingMaterial = (
       material: ReturnType<typeof createParticleEarthMaterial>,
@@ -3461,6 +3476,56 @@ export function ParticleEarthScene({
       })();
     };
 
+    const applyNearCoastlinePositions = (positions: Float32Array, regionKey: string, terminalState: "ready" | "cached" = "ready") => {
+      const nextGeometry = new BufferGeometry();
+      nextGeometry.setAttribute("position", new BufferAttribute(positions, 3));
+      if (positions.length > 0) nextGeometry.computeBoundingSphere();
+      const previous = nearCoastlineGeometry;
+      nearCoastlineGeometry = nextGeometry;
+      nearCoastlines.geometry = nextGeometry;
+      previous.dispose();
+      activeCoastlineRegionKey = regionKey;
+      coastlineRefinementState = terminalState;
+    };
+
+    const requestCoastlineRefinement = (viewCenter: { lat: number; lon: number }) => {
+      if (detailedCoastlineRings.length === 0 || document.hidden) return;
+      const region = resolveCoastlineRefinementRegion(viewCenter);
+      const cacheKey = `${currentQuality}:${region.key}`;
+      if (activeCoastlineRegionKey === cacheKey) return;
+      const cached = coastlineRefinementCache.get(cacheKey);
+      if (cached) {
+        applyNearCoastlinePositions(cached, cacheKey, "cached");
+        return;
+      }
+      coastlineRefinementState = "building";
+      const positions = buildRegionalCoastlinePositions({
+        rings: detailedCoastlineRings,
+        region,
+        quality: currentQuality,
+      });
+      coastlineRefinementCache.set(cacheKey, positions);
+      applyNearCoastlinePositions(positions, cacheKey);
+    };
+
+    const updateCoastlineRefinement = (now: number) => {
+      if (semanticZoomState.coastlineWeights.near <= 0.001) return;
+      if (isFocusFlightActive(pointFocusSettling, routeFocusSettling)) {
+        coastlineRefinementState = "deferred-flight";
+        return;
+      }
+      if (activePointers.size > 0 || rotationVelocityX !== 0 || rotationVelocityY !== 0 || now < wheelInteractionUntil) {
+        coastlineRefinementState = "deferred-interaction";
+        return;
+      }
+      if (document.hidden || now - lastCoastlineRefinementSampleAt < 200) return;
+      lastCoastlineRefinementSampleAt = now;
+      camera.updateMatrixWorld();
+      globe.updateWorldMatrix(true, false);
+      globe.worldToLocal(coastlineViewPosition.copy(camera.position));
+      requestCoastlineRefinement(vector3ToLatLon(coastlineViewPosition));
+    };
+
     let reliefTextureReady = false;
     host.dataset.reliefTexture = reliefExperimentEnabled ? "loading" : "disabled";
     const reliefTexture = reliefExperimentEnabled
@@ -3593,11 +3658,13 @@ export function ParticleEarthScene({
         }
       };
       applyDetailedCoastlinePositions(detailedCoastlinePositions);
+      detailedMidCoastlineReady = false;
 
       host.dataset.quality = nextQuality;
       host.dataset.particleCount = String(particlePositions.length / 3);
       host.dataset.particleBaseCount = String(particlePositions.length / 3);
       host.dataset.coastlineVertices = String(coastlinePositions.length / 3);
+      baseCoastlineSourceAvailable = landSourceAvailable;
       landSourceDebug = landSourceAvailable
         ? "base=ne_110m_land.geojson@110m;mask=720x360;refinement=ne_50m_land.geojson@50m;mask=1440x720"
         : "fallback-seeded-sphere;refinement=unavailable";
@@ -3608,9 +3675,15 @@ export function ParticleEarthScene({
         latestOnReady.current?.();
       }
 
-      void loadDetailedCoastlinePositions().then((positionsByLod) => {
-        if (!positionsByLod || disposed || revision !== qualityBuildRevision || currentQuality !== nextQuality) return;
-        applyDetailedCoastlinePositions(positionsByLod);
+      void loadDetailedCoastlineData().then((detailed) => {
+        if (!detailed || disposed || revision !== qualityBuildRevision || currentQuality !== nextQuality) return;
+        detailedCoastlineRings = detailed.rings;
+        applyDetailedCoastlinePositions({ mid: detailed.mid, near: nearCoastlineGeometry.getAttribute("position")
+          ? new Float32Array((nearCoastlineGeometry.getAttribute("position") as BufferAttribute).array as ArrayLike<number>)
+          : new Float32Array() });
+        detailedMidCoastlineReady = true;
+        activeCoastlineRegionKey = null;
+        coastlineRefinementState = "idle";
       });
     };
 
@@ -4025,6 +4098,7 @@ export function ParticleEarthScene({
       });
       host.dataset.semanticZoom = semanticZoomState.state;
       host.dataset.cityLod = semanticZoomState.cityTier;
+      updateCoastlineRefinement(now);
       const coastlineWeights = semanticZoomState.coastlineWeights;
       const coastlineLod = semanticZoomState.coastlineLod;
       coastlineMaterial.opacity = interpolate(coastlineMaterial.opacity, target.coastlineOpacity * coastlineWeights.far);
@@ -4035,6 +4109,14 @@ export function ParticleEarthScene({
       nearCoastlines.visible = coastlineWeights.near > 0.001 || nearCoastlineMaterial.opacity > 0.001;
       host.dataset.coastlineLod = coastlineLod;
       host.dataset.coastlineVertices = String((coastlineLod === "far" ? coastlineGeometry : coastlineLod === "mid" ? midCoastlineGeometry : nearCoastlineGeometry).getAttribute("position")?.count ?? 0);
+      host.dataset.coastlineSource = coastlineLod === "far"
+        ? (baseCoastlineSourceAvailable ? "110m-global" : "unavailable")
+        : coastlineLod === "mid"
+          ? (detailedMidCoastlineReady ? "50m-global" : baseCoastlineSourceAvailable ? "110m-global-fallback" : "unavailable")
+          : activeCoastlineRegionKey ? "50m-regional-foundation" : baseCoastlineSourceAvailable ? "110m-global-fallback" : "unavailable";
+      host.dataset.coastlineActiveChunks = activeCoastlineRegionKey ?? "";
+      host.dataset.coastlineCacheChunks = String(coastlineRefinementCache.size);
+      host.dataset.coastlineRefinement = coastlineRefinementState;
       // Keep the particle world alive while idle without involving React's
       // render cycle. Reduced-motion resolves to a stable final frame.
       const motionTime = reduceMotion ? 0 : now / 1000;
@@ -4318,6 +4400,7 @@ export function ParticleEarthScene({
         disposeRefinementLayer(activeRefinementLayer);
         activeRefinementLayer = null;
         refinementCache.clear();
+        coastlineRefinementCache.clear();
         if (particles) globe.remove(particles);
         if (particleGeometry) particleGeometry.dispose();
         particleMaterial.dispose();
