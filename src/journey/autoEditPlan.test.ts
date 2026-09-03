@@ -466,19 +466,21 @@ describe("deterministic auto-edit foundation (#127)", () => {
       journeyRevision: "7",
       generatedAt: baseInput.generatedAt,
       mode: "full",
-      plannedDurationMs: 4_000,
+      plannedDurationMs: 5_600,
       tempo: "standard",
       chapters: [
         {
           chapterId: "route:tokyo",
           routePointId: "tokyo",
           camera: { primitive: "travel", durationMs: 1_000 },
+          arrival: { durationMs: 800, showPlaceLabel: true, showNote: true },
           items: [{ assetId: "photo", sourceIndex: 0, dwellMs: 2_000, framing: "contain", transition: "direct", selectionReason: "all-media" }],
         },
         {
           chapterId: "route:kyoto:camera-only",
           routePointId: "kyoto",
           camera: { primitive: "travel", durationMs: 1_000 },
+          arrival: { durationMs: 800, showPlaceLabel: true, showNote: true },
           items: [],
         },
       ],
