@@ -3,6 +3,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   storyAutoplayVideoCandidate,
+  storyAutoplayCanStart,
+  storyStageVideoOwner,
   shouldRefreshStoryMediaRead,
   createStoryAutoplayFallbackController,
   JourneyStory,
@@ -331,6 +333,38 @@ describe("storyAutoplayVideoCandidate (#204 final review)", () => {
   it("only wraps for a route-point autoplay loop", () => {
     expect(storyAutoplayVideoCandidate([video, imageA, imageB], 2, true)).toBeNull();
     expect(storyAutoplayVideoCandidate([video, imageA, imageB], 2, false)?.id).toBe("video-1");
+  });
+});
+
+describe("storyAutoplayCanStart (#204 CFAA)", () => {
+  const video = asset("video-ready", "video/mp4", 0, "clip.mp4");
+
+  it("waits for the candidate URL before consuming the initiating gesture", () => {
+    expect(storyAutoplayCanStart(video, "waiting")).toBe(false);
+    expect(storyAutoplayCanStart(video, "error")).toBe(false);
+    expect(storyAutoplayCanStart(video, "ready")).toBe(true);
+  });
+
+  it("does not block an image-only sequence", () => {
+    expect(storyAutoplayCanStart(null, "waiting")).toBe(true);
+  });
+});
+
+describe("storyStageVideoOwner (#204 CFAA)", () => {
+  const videoA = asset("video-a", "video/mp4", 0, "a.mp4");
+  const videoB = asset("video-b", "video/mp4", 1, "b.mp4");
+  const image = asset("image", "image/jpeg", 2, "image.jpg");
+
+  it("prefers an incoming video over the previously settled video", () => {
+    expect(storyStageVideoOwner(videoA, videoB, videoA)?.id).toBe("video-b");
+  });
+
+  it("keeps the settled video when the incoming asset is an image", () => {
+    expect(storyStageVideoOwner(videoA, image, videoB)?.id).toBe("video-a");
+  });
+
+  it("uses the future autoplay candidate while an image is settled", () => {
+    expect(storyStageVideoOwner(image, null, videoB)?.id).toBe("video-b");
   });
 });
 
@@ -979,8 +1013,11 @@ describe("JourneyStory", () => {
     expect(markup).not.toContain('aria-label="向前调整媒体顺序"');
     expect(markup).not.toContain('aria-label="向后调整媒体顺序"');
     expect(markup).not.toContain("journey-story__media-nav");
-    expect(markup).not.toContain('aria-label="上一个媒体"');
-    expect(markup).not.toContain('aria-label="下一个媒体"');
+    // #204 CFAA: fullscreen keeps a persistent, hidden stage so its video node
+    // can be authorized during the entry gesture; its nav may exist in SSR but
+    // must remain inside the hidden overlay until fullscreen is entered.
+    expect(markup).toContain('<div hidden="" style="display:none" class="journey-story-fullscreen');
+    expect(markup).toContain('class="journey-story-fullscreen__nav"');
     expect(markup).not.toContain("全部照片");
     // #199: playback is the one Viewer control that survives the toolbar cut.
     expect(markup).toContain("journey-story__mobile-media-play");

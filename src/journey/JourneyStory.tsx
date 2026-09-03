@@ -326,6 +326,23 @@ export function storyAutoplayVideoCandidate(
   return null;
 }
 
+export function storyAutoplayCanStart(
+  videoCandidate: JourneyMediaAsset | null,
+  candidateAvailability: PlaybackMediaAvailability,
+) {
+  return !videoCandidate || candidateAvailability === "ready";
+}
+
+export function storyStageVideoOwner(
+  shown: JourneyMediaAsset | null,
+  incoming: JourneyMediaAsset | null,
+  autoplayCandidate: JourneyMediaAsset | null,
+) {
+  if (incoming?.mimeType.startsWith("video/")) return incoming;
+  if (shown?.mimeType.startsWith("video/")) return shown;
+  return autoplayCandidate;
+}
+
 export const STORY_AUTOPLAY_STEP_MS = 5200;
 export const STORY_VIDEO_STALL_WATCHDOG_MS = 4_000;
 
@@ -977,7 +994,9 @@ export function JourneyStory({
   }
 
   function enterFullscreen(autoPlay: boolean) {
-    setPlayingFromGesture(autoPlay);
+    // The fullscreen persistent video is mounted even while the overlay is
+    // hidden, so authorize that exact node before state reveals the overlay.
+    setPlayingFromGesture(autoPlay, "fullscreen");
     setFullscreenControlsHidden(mobileLayout);
     setMobileMediaMenuOpen(false);
     setFullscreen(true);
@@ -1309,6 +1328,9 @@ export function JourneyStory({
     assetIndex,
     selectedRoutePointId === null,
   );
+  const autoplayVideoCandidateRead = autoplayVideoCandidate
+    ? mediaReads[autoplayVideoCandidate.id]
+    : null;
   const activeRead = activeAsset ? mediaReads[activeAsset.id] : null;
   const soundtrackRead = soundtrack ? mediaReads[soundtrack.id] : null;
   // #14: the journey cover — explicit coverMediaAssetId, else first visual
@@ -1808,9 +1830,18 @@ export function JourneyStory({
     ? scopedMedia.find((candidate) => candidate.id === shownAssetId) ?? null
     : asset;
   const shownRead = shownAsset ? mediaReads[shownAsset.id] : null;
-  const storyStageVideoAsset = shownAsset?.mimeType.startsWith("video/")
-    ? shownAsset
-    : autoplayVideoCandidate;
+  const incoming = incomingAssetId && incomingAssetId !== shownAssetId
+    ? scopedMedia.find((candidate) => candidate.id === incomingAssetId) ?? null
+    : null;
+  const incomingRead = incoming ? mediaReads[incoming.id] : null;
+  // #204 CFAA family fix: one persistent video node owns priming, incoming, and
+  // settled video states. Prefer the incoming video over the old settled video
+  // so video→video navigation can actually mount and settle the destination.
+  const storyStageVideoAsset = storyStageVideoOwner(
+    shownAsset,
+    incoming,
+    autoplayVideoCandidate,
+  );
   const storyStageVideoRead = storyStageVideoAsset ? mediaReads[storyStageVideoAsset.id] : null;
   const storyStageVideoSettled = Boolean(
     shownAsset
@@ -1820,19 +1851,15 @@ export function JourneyStory({
     && shownAsset.mimeType.startsWith("video/"),
   );
   const storyStageVideoIncoming = Boolean(
-    incomingAssetId
+    incoming
     && storyStageVideoAsset
-    && incomingAssetId === storyStageVideoAsset.id
+    && incoming.id === storyStageVideoAsset.id
     && storyStageVideoRead?.status === "ready",
   );
   const storyStageVideoVisible = storyStageVideoSettled || storyStageVideoIncoming;
   const shownIndex = shownAsset
     ? scopedMedia.findIndex((candidate) => candidate.id === shownAsset.id)
     : -1;
-  const incoming = incomingAssetId && incomingAssetId !== shownAssetId
-    ? scopedMedia.find((candidate) => candidate.id === incomingAssetId) ?? null
-    : null;
-  const incomingRead = incoming ? mediaReads[incoming.id] : null;
   const activeChapterMedia = storyChapterMedia(scopedMedia, asset);
   const activeChapterIndex = asset
     ? activeChapterMedia.findIndex((candidate) => candidate.id === asset.id)
@@ -1913,7 +1940,9 @@ export function JourneyStory({
 
   function beginMediaDrag(container: HTMLElement | null, pointerId: number, clientX: number, clientY: number, eventTime: number, wrap: boolean, tapOpensFullscreen = false, preserveNativeVideoCapture = false) {
     if (!container || mediaDragSettlingRef.current || incomingAssetId !== null || mutationPending || overview || scopedMedia.length < 2) return;
-    const base = container.querySelector<HTMLElement>(":scope > img, :scope > video");
+    // #204 CFAA: hidden authorization/priming media is implementation detail,
+    // not the semantic settled frame the user's finger is manipulating.
+    const base = container.querySelector<HTMLElement>(":scope > [data-shared-media-id]");
     if (!base) return;
     base.classList.toggle("journey-story__media-drag-page", container === fullscreenRef.current);
     mediaDragRef.current = {
@@ -2901,9 +2930,21 @@ export function JourneyStory({
     }
   }
 
-  function setPlayingFromGesture(willPlay: boolean) {
+  function setPlayingFromGesture(willPlay: boolean, targetStage: "current" | "fullscreen" = "current") {
+    // A future video can only be authorized when its actual candidate source is
+    // already attached. Starting earlier would consume the gesture on src-less
+    // media, leaving the later passive play() outside the activation window.
+    if (
+      willPlay
+      && !storyAutoplayCanStart(
+        autoplayVideoCandidate,
+        storyMediaAvailability(autoplayVideoCandidateRead?.status),
+      )
+    ) return;
     const audio = audioRef.current;
-    const gestureVideo = fullscreen ? fullscreenVideoRef.current : storyVideoRef.current;
+    const gestureVideo = targetStage === "fullscreen"
+      ? fullscreenVideoRef.current
+      : fullscreen ? fullscreenVideoRef.current : storyVideoRef.current;
     if (willPlay && gestureVideo && autoplayVideoCandidate) {
       const currentVideoIsSettled = activeAsset?.mimeType.startsWith("video/")
         && (shownAssetId ?? activeAsset.id) === activeAsset.id;
@@ -3119,6 +3160,13 @@ export function JourneyStory({
                 className="journey-story__fullscreen-entry"
                 aria-label="全屏播放"
                 title="全屏播放"
+                disabled={
+                  scopedMedia.length > 1
+                  && !storyAutoplayCanStart(
+                    autoplayVideoCandidate,
+                    storyMediaAvailability(autoplayVideoCandidateRead?.status),
+                  )
+                }
                 onClick={() => enterFullscreen(scopedMedia.length > 1)}
               >
                 <IconMaximize size={16} stroke={1.35} aria-hidden="true" />
@@ -3304,7 +3352,11 @@ export function JourneyStory({
                 <button
                   type="button"
                   className={playing ? "is-active" : ""}
-                  disabled={mutationPending || scopedMedia.length < 2}
+                  disabled={
+                    mutationPending
+                    || scopedMedia.length < 2
+                    || (!playing && Boolean(autoplayVideoCandidate) && autoplayVideoCandidateRead?.status !== "ready")
+                  }
                   onClick={togglePlaying}
                   aria-label={playing ? "暂停自动播放" : "自动播放媒体"}
                   aria-pressed={playing}
@@ -3355,7 +3407,10 @@ export function JourneyStory({
                     className={`journey-story__mobile-media-play${playing ? " is-active" : ""}`}
                     label={playing ? "暂停自动播放" : "自动播放媒体"}
                     aria-pressed={playing}
-                    disabled={mutationPending}
+                    disabled={
+                      mutationPending
+                      || (!playing && Boolean(autoplayVideoCandidate) && autoplayVideoCandidateRead?.status !== "ready")
+                    }
                     onClick={togglePlaying}
                   >
                     {playing
@@ -3434,7 +3489,18 @@ export function JourneyStory({
                           </button>
                         </>
                       ) : null}
-                      <button type="button" disabled={mutationPending} onClick={() => enterFullscreen(scopedMedia.length > 1)}>
+                      <button
+                        type="button"
+                        disabled={
+                          mutationPending
+                          || (scopedMedia.length > 1
+                            && !storyAutoplayCanStart(
+                              autoplayVideoCandidate,
+                              storyMediaAvailability(autoplayVideoCandidateRead?.status),
+                            ))
+                        }
+                        onClick={() => enterFullscreen(scopedMedia.length > 1)}
+                      >
                         <IconPlayerPlay size={18} stroke={1.35} aria-hidden="true" />
                         {scopedMedia.length > 1 ? "沉浸播放" : "沉浸查看"}
                       </button>
@@ -3808,9 +3874,11 @@ export function JourneyStory({
         </footer>
       </article>
 
-      {fullscreen && asset && read?.status === "ready" ? (
+      {asset ? (
         <div
           ref={fullscreenRef}
+          hidden={!fullscreen}
+          style={!fullscreen ? { display: "none" } : undefined}
           className={`journey-story-fullscreen${fullscreenControlsHidden ? " is-controls-hidden" : ""}${playing ? " is-playing" : ""}`}
           role="dialog"
           tabIndex={-1}
@@ -3839,6 +3907,7 @@ export function JourneyStory({
               playsInline
               hidden={!storyStageVideoVisible}
               aria-hidden={storyStageVideoVisible ? undefined : true}
+              data-shared-media-id={storyStageVideoVisible ? storyStageVideoAsset.id : undefined}
               onAnimationEnd={(event) => {
                 if (
                   storyStageVideoIncoming
@@ -3851,7 +3920,7 @@ export function JourneyStory({
             />
           ) : null}
           {shownAsset && shownRead?.status === "ready" && !shownAsset.mimeType.startsWith("video/")
-            ? <img key={`media-${shownAsset.id}`} src={shownRead.url} alt={shownAsset.fileName} />
+            ? <img key={`media-${shownAsset.id}`} src={shownRead.url} alt={shownAsset.fileName} data-shared-media-id={shownAsset.id} />
             : null}
           {incoming && incomingRead?.status === "ready" && !incoming.mimeType.startsWith("video/")
             ? <img key={`media-${incoming.id}`} className="journey-story__media-incoming" src={incomingRead.url} alt={incoming.fileName} onAnimationEnd={(event) => { if (event.target === event.currentTarget && event.animationName === "motionMediaIn") settleIncoming(incoming.id); }} />
@@ -3870,6 +3939,7 @@ export function JourneyStory({
               <button
                 type="button"
                 className={playing ? "is-active" : ""}
+                disabled={!playing && Boolean(autoplayVideoCandidate) && autoplayVideoCandidateRead?.status !== "ready"}
                 onClick={togglePlaying}
                 aria-label={playing ? "暂停自动播放" : "自动播放媒体"}
                 aria-pressed={playing}
