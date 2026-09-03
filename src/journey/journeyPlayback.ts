@@ -58,6 +58,19 @@ export function stopDurationMs(point: RoutePoint): number {
   return Math.min(PLAYBACK_PACING.stopMaxMs, duration);
 }
 
+export type PlaybackMediaAvailability = "waiting" | "ready" | "error";
+export type PlaybackMediaWaitPolicy = "none" | "decode" | "video-ended";
+
+export function playbackMediaWaitPolicy(
+  asset: JourneyMediaAsset | null | undefined,
+  availability: PlaybackMediaAvailability,
+): PlaybackMediaWaitPolicy {
+  if (!asset || availability === "error") return "none";
+  if (asset.mimeType.startsWith("video/")) return "video-ended";
+  if (asset.mimeType.startsWith("image/") && availability === "waiting") return "decode";
+  return "none";
+}
+
 export function mediaDurationMs(asset: JourneyMediaAsset): number {
   return asset.mimeType.startsWith("video/")
     ? PLAYBACK_PACING.videoMs

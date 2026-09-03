@@ -7,20 +7,27 @@ export type PlaybackMediaElement = {
 export function syncPlaybackMediaElement(
   element: PlaybackMediaElement | null,
   playing: boolean,
+  onPlayFailure?: () => void,
 ) {
-  if (!element) return;
+  let cancelled = false;
+  const cancel = () => {
+    cancelled = true;
+  };
+  if (!element) return cancel;
   if (!playing) {
     element.pause();
-    return;
+    return cancel;
   }
 
   try {
     const result = element.play();
-    if (result && typeof result.catch === "function") {
-      void result.catch(() => undefined);
+    if (result && typeof result.then === "function") {
+      void result.catch(() => {
+        if (!cancelled) onPlayFailure?.();
+      });
     }
   } catch {
-    // Browser autoplay/user-activation failures are non-fatal; the shared
-    // transport remains the only visible source of playback state.
+    if (!cancelled) onPlayFailure?.();
   }
+  return cancel;
 }

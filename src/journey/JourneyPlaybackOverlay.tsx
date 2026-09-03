@@ -26,6 +26,7 @@ import {
   playbackCameraTargetForStep,
   playbackCameraTargetKey,
   playbackMediaForPoint,
+  playbackMediaWaitPolicy,
   type PlaybackCameraTarget,
   type PlaybackStep,
 } from "./journeyPlayback";
@@ -46,6 +47,8 @@ type MediaRead =
   | { status: "error"; message: string };
 
 export type PlaybackMediaGate = "waiting" | "ready" | "error";
+
+const VIDEO_STALL_WATCHDOG_MS = 4_000;
 
 export function playbackMediaGate(
   read: MediaRead | null | undefined,
@@ -87,6 +90,7 @@ export function JourneyPlaybackOverlay({
   // decoded, so a slow network never flashes an empty frame — the chapter
   // waits on the decode settle instead of advancing on a fixed timer.
   const [hold, setHold] = useState(false);
+  const [videoFallbackAssetId, setVideoFallbackAssetId] = useState<string | null>(null);
   const director = useJourneyPlaybackDirector(journey, hold);
   const { phase, paused, pause, resume, next, back, seek, exit } = director;
   // Review P2: `exit()` only resets the local director; the overlay must also
@@ -112,6 +116,41 @@ export function JourneyPlaybackOverlay({
   ), []);
   const audioRef = useRef<HTMLAudioElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const videoStallTimerRef = useRef<number | null>(null);
+  const videoStalledAssetIdRef = useRef<string | null>(null);
+  const clearVideoStallWatchdog = useCallback(() => {
+    if (videoStallTimerRef.current === null) return;
+    window.clearTimeout(videoStallTimerRef.current);
+    videoStallTimerRef.current = null;
+  }, []);
+  const scheduleVideoStallWatchdog = useCallback((assetId: string) => {
+    clearVideoStallWatchdog();
+    videoStalledAssetIdRef.current = assetId;
+    videoStallTimerRef.current = window.setTimeout(() => {
+      videoStallTimerRef.current = null;
+      if (videoStalledAssetIdRef.current === assetId) videoStalledAssetIdRef.current = null;
+      setVideoFallbackAssetId(assetId);
+      setHold(false);
+    }, VIDEO_STALL_WATCHDOG_MS);
+  }, [clearVideoStallWatchdog]);
+  const recoverVideoPlayback = useCallback((assetId: string) => {
+    clearVideoStallWatchdog();
+    if (videoStalledAssetIdRef.current === assetId) videoStalledAssetIdRef.current = null;
+    setVideoFallbackAssetId((current) => current === assetId ? null : current);
+  }, [clearVideoStallWatchdog]);
+  useEffect(() => () => clearVideoStallWatchdog(), [clearVideoStallWatchdog]);
+  useEffect(() => {
+    clearVideoStallWatchdog();
+    videoStalledAssetIdRef.current = null;
+  }, [clearVideoStallWatchdog, director.stepIndex]);
+  useEffect(() => {
+    if (paused) {
+      clearVideoStallWatchdog();
+      return;
+    }
+    const stalledAssetId = videoStalledAssetIdRef.current;
+    if (stalledAssetId) scheduleVideoStallWatchdog(stalledAssetId);
+  }, [clearVideoStallWatchdog, paused, scheduleVideoStallWatchdog]);
   // #20: one sampler per soundtrack element; analyser built on first play.
   const samplerRef = useRef(createSoundtrackSampler());
   const lightStripRef = useRef<HTMLDivElement>(null);
@@ -231,17 +270,26 @@ export function JourneyPlaybackOverlay({
       return;
     }
     const asset = playbackMediaForPoint(journey, step.pointIndex)[step.mediaIndex];
-    if (!asset || asset.mimeType.startsWith("video/")) {
+    if (!asset) {
       setHold(false);
       return;
     }
+    const isImage = asset.mimeType.startsWith("image/");
     const gate = playbackMediaGate(
       mediaReads[asset.id],
-      decodeRegistryRef.current.readiness(asset.id),
-      true,
+      isImage ? decodeRegistryRef.current.readiness(asset.id) : undefined,
+      isImage,
     );
-    setHold(gate === "waiting");
-  }, [decodeSettleRevision, director.step, journey, mediaReads]);
+    // Successful Full Journey video chapters are owned by the media element's
+    // real `ended` event. Once this asset has recorded a media/play() failure,
+    // keep the failure state stable across renders so the legacy fallback timer
+    // can run instead of immediately re-acquiring the hold.
+    if (asset.mimeType.startsWith("video/") && videoFallbackAssetId === asset.id) {
+      setHold(false);
+      return;
+    }
+    setHold(playbackMediaWaitPolicy(asset, gate) !== "none");
+  }, [decodeSettleRevision, director.step, journey, mediaReads, videoFallbackAssetId]);
 
   // The soundtrack follows playback: play on any non-paused phase after the
   // user started playback; pause when paused; never reset between chapters.
@@ -267,8 +315,22 @@ export function JourneyPlaybackOverlay({
   // Video chapters use the same Startrips transport as the director and
   // soundtrack. The native transport is intentionally not authoritative.
   useLayoutEffect(() => {
-    syncPlaybackMediaElement(videoRef.current, director.isPlaying && !paused);
-  }, [director.isPlaying, director.stepIndex, paused]);
+    const step = director.step;
+    const asset = journey && step?.kind === "media"
+      ? playbackMediaForPoint(journey, step.pointIndex)[step.mediaIndex]
+      : null;
+    return syncPlaybackMediaElement(
+      videoRef.current,
+      director.isPlaying && !paused,
+      asset?.mimeType.startsWith("video/")
+        ? () => {
+            clearVideoStallWatchdog();
+            videoStalledAssetIdRef.current = null;
+            setVideoFallbackAssetId(asset.id);
+          }
+        : undefined,
+    );
+  }, [clearVideoStallWatchdog, director.isPlaying, director.stepIndex, journey, mediaReads, paused]);
 
   // #20: one analyser graph writes a shared mutable energy channel; the light
   // strip and Three.js scene read that channel without React per-frame state.
@@ -534,7 +596,35 @@ export function JourneyPlaybackOverlay({
               <div className="journey-playback__media-state is-error">媒体暂不可用，继续播放下一段</div>
             ) : activeMedia.mimeType.startsWith("video/")
               ? activeRead?.status === "ready"
-                ? <video ref={videoRef} key={activeMedia.id} src={activeRead.url} autoPlay playsInline />
+                ? <video
+                    ref={videoRef}
+                    key={activeMedia.id}
+                    src={activeRead.url}
+                    autoPlay
+                    playsInline
+                    onEnded={() => {
+                      clearVideoStallWatchdog();
+                      videoStalledAssetIdRef.current = null;
+                      setHold(false);
+                      director.complete();
+                    }}
+                    onError={() => {
+                      clearVideoStallWatchdog();
+                      videoStalledAssetIdRef.current = null;
+                      setVideoFallbackAssetId(activeMedia.id);
+                      setHold(false);
+                    }}
+                    onPlaying={() => recoverVideoPlayback(activeMedia.id)}
+                    onProgress={() => clearVideoStallWatchdog()}
+                    onTimeUpdate={() => clearVideoStallWatchdog()}
+                    onStalled={() => {
+                      // `stalled` can be transient. Keep Full Playback ownership
+                      // while the browser may recover, and only fall back if no
+                      // progress/timeupdate may clear only this bounded watchdog; `playing` is the proof that playback resumed and may clear a persisted play failure.
+                      if (paused) videoStalledAssetIdRef.current = activeMedia.id;
+                      else scheduleVideoStallWatchdog(activeMedia.id);
+                    }}
+                  />
                 : <div className="journey-playback__media-state">正在打开媒体…</div>
               // Review P2: images must wait for the decode gate too — showing
               // the <img> as soon as the signed URL is ready can still flash
