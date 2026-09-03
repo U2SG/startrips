@@ -898,6 +898,12 @@
   color: var(--atlas-cyan);
 }
 
+.living-atlas__active.has-playback-menu {
+  max-height: calc(100svh - clamp(172px, 22vh, 232px) - 16px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
 .living-atlas__playback-mode-menu {
   display: grid;
   gap: 8px;

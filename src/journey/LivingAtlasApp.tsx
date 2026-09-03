@@ -961,7 +961,7 @@ export function LivingAtlasApp({
 
       {!isMobileV2 && view === "planet" && activeJourney ? (
         <aside
-          className={`living-atlas__active${journeyVisualMedia(activeJourney).length > 0 ? " has-media" : ""}${arrivalJourneyId === activeJourney.id ? " is-arriving" : ""}`}
+          className={`living-atlas__active${journeyVisualMedia(activeJourney).length > 0 ? " has-media" : ""}${arrivalJourneyId === activeJourney.id ? " is-arriving" : ""}${playbackModeMenuJourneyId === activeJourney.id ? " has-playback-menu" : ""}`}
           inert={globeFocusMode || globePickActive || playbackActive || undefined}
           style={{
             "--journey-color": activeJourney.lightColor,
