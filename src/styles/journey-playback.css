@@ -390,6 +390,10 @@
     bottom: 14px;
   }
 
+  .journey-playback__tempo {
+    min-width: 64px;
+  }
+
   .journey-playback__soundtrack {
     right: 12px;
     bottom: 88px;
