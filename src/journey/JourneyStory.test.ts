@@ -27,6 +27,7 @@ import {
   storyAutoplayNextIndex,
   storyAutoplayWaitsForVideoEnd,
   storyMediaAvailability,
+  storyNavigationTargetDisposition,
   storyChapterMedia,
   shouldHoldWholeJourneyTerminalFrame,
   storyInitialMediaSelection,
@@ -423,6 +424,23 @@ describe("shouldRefreshStoryMediaRead (#204 final review)", () => {
       now,
       null,
     )).toBe(false);
+  });
+});
+
+describe("storyNavigationTargetDisposition (#204 final review)", () => {
+  const video = asset("video-nav", "video/mp4", 0, "clip.mp4");
+  const image = asset("image-nav", "image/jpeg", 1, "frame.jpg");
+
+  it("promotes terminal read failures so autoplay can advance past unavailable media", () => {
+    expect(storyNavigationTargetDisposition(video, "error", false)).toBe("failed");
+    expect(storyNavigationTargetDisposition(image, "error", false)).toBe("failed");
+  });
+
+  it("waits only for unresolved reads or undecoded images", () => {
+    expect(storyNavigationTargetDisposition(video, "waiting", false)).toBe("waiting");
+    expect(storyNavigationTargetDisposition(video, "ready", false)).toBe("ready");
+    expect(storyNavigationTargetDisposition(image, "ready", false)).toBe("waiting");
+    expect(storyNavigationTargetDisposition(image, "ready", true)).toBe("ready");
   });
 });
 

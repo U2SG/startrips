@@ -618,12 +618,12 @@ try {
     });
     await fullscreen.dispatchEvent("pointerdown", { pointerId: 4, pointerType: "touch", isPrimary: true, clientX: fullX, clientY: fullY, bubbles: true });
     await fullscreen.dispatchEvent("pointerup", { pointerId: 4, pointerType: "touch", isPrimary: true, clientX: fullX, clientY: fullY + 130, bubbles: true });
-    await fullscreen.waitFor({ state: "detached" });
+    await fullscreen.waitFor({ state: "hidden" });
 
     await settledMedia.click();
     await story.page.locator(".journey-story-fullscreen").waitFor({ state: "visible" });
     await story.page.evaluate(() => window.history.back());
-    await story.page.locator(".journey-story-fullscreen").waitFor({ state: "detached" });
+    await story.page.locator(".journey-story-fullscreen").waitFor({ state: "hidden" });
     const storyStillVisibleAfterBack = await story.page.locator(".journey-story").isVisible();
     checks.push({
       name: "story-mobile-fullscreen-exit-contract",

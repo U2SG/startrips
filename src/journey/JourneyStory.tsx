@@ -326,6 +326,16 @@ export function storyAutoplayVideoCandidate(
   return null;
 }
 
+export function storyNavigationTargetDisposition(
+  target: JourneyMediaAsset,
+  availability: PlaybackMediaAvailability,
+  imageDecoded: boolean,
+): "ready" | "failed" | "waiting" {
+  if (availability === "error") return "failed";
+  if (availability !== "ready") return "waiting";
+  return target.mimeType.startsWith("video/") || imageDecoded ? "ready" : "waiting";
+}
+
 export function storyAutoplayCanStart(
   videoCandidate: JourneyMediaAsset | null,
   candidateAvailability: PlaybackMediaAvailability,
@@ -1781,9 +1791,22 @@ export function JourneyStory({
     if (targetRead?.status === "ready" && target.mimeType.startsWith("image/")) {
       decodeRegistryRef.current.ensure(target.id, targetRead.url);
     }
-    const ready = targetRead?.status === "ready"
-      && (target.mimeType.startsWith("video/") || decodeRegistryRef.current.isDecoded(target.id));
-    if (!ready) return;
+    const disposition = storyNavigationTargetDisposition(
+      target,
+      storyMediaAvailability(targetRead?.status),
+      decodeRegistryRef.current.isDecoded(target.id),
+    );
+    if (disposition === "failed") {
+      // A terminal read failure is still a completed navigation step. Promote
+      // it so Story autoplay can own the unavailable-media interval and move
+      // on, instead of leaving the prior frame pending forever.
+      pendingTargetRef.current = null;
+      setIncomingAssetId(null);
+      setShownAssetId(target.id);
+      setAssetIndex(pendingIndex);
+      return;
+    }
+    if (disposition !== "ready") return;
     pendingTargetRef.current = null;
     setIncomingAssetId(target.id);
     setAssetIndex(pendingIndex);
@@ -2649,9 +2672,17 @@ export function JourneyStory({
     const target = scopedMedia[index];
     if (!target) return;
     const targetRead = mediaReads[target.id];
-    const ready = targetRead?.status === "ready"
-      && (target.mimeType.startsWith("video/") || decodeRegistryRef.current.isDecoded(target.id));
-    if (ready) {
+    const disposition = storyNavigationTargetDisposition(
+      target,
+      storyMediaAvailability(targetRead?.status),
+      decodeRegistryRef.current.isDecoded(target.id),
+    );
+    if (disposition === "failed") {
+      pendingTargetRef.current = null;
+      setIncomingAssetId(null);
+      setShownAssetId(target.id);
+      setAssetIndex(index);
+    } else if (disposition === "ready") {
       setIncomingAssetId(target.id);
       setAssetIndex(index);
     } else {
@@ -3358,7 +3389,10 @@ export function JourneyStory({
                   disabled={
                     mutationPending
                     || scopedMedia.length < 2
-                    || (!playing && Boolean(autoplayVideoCandidate) && autoplayVideoCandidateRead?.status !== "ready")
+                    || (!playing && !storyAutoplayCanStart(
+                      autoplayVideoCandidate,
+                      storyMediaAvailability(autoplayVideoCandidateRead?.status),
+                    ))
                   }
                   onClick={togglePlaying}
                   aria-label={playing ? "暂停自动播放" : "自动播放媒体"}
@@ -3412,7 +3446,10 @@ export function JourneyStory({
                     aria-pressed={playing}
                     disabled={
                       mutationPending
-                      || (!playing && Boolean(autoplayVideoCandidate) && autoplayVideoCandidateRead?.status !== "ready")
+                      || (!playing && !storyAutoplayCanStart(
+                      autoplayVideoCandidate,
+                      storyMediaAvailability(autoplayVideoCandidateRead?.status),
+                    ))
                     }
                     onClick={togglePlaying}
                   >
@@ -3942,7 +3979,10 @@ export function JourneyStory({
               <button
                 type="button"
                 className={playing ? "is-active" : ""}
-                disabled={!playing && Boolean(autoplayVideoCandidate) && autoplayVideoCandidateRead?.status !== "ready"}
+                disabled={!playing && !storyAutoplayCanStart(
+                  autoplayVideoCandidate,
+                  storyMediaAvailability(autoplayVideoCandidateRead?.status),
+                )}
                 onClick={togglePlaying}
                 aria-label={playing ? "暂停自动播放" : "自动播放媒体"}
                 aria-pressed={playing}
