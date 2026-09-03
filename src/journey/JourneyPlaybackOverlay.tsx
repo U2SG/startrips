@@ -117,6 +117,7 @@ export function JourneyPlaybackOverlay({
   const audioRef = useRef<HTMLAudioElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const videoStallTimerRef = useRef<number | null>(null);
+  const videoStalledAssetIdRef = useRef<string | null>(null);
   const clearVideoStallWatchdog = useCallback(() => {
     if (videoStallTimerRef.current === null) return;
     window.clearTimeout(videoStallTimerRef.current);
@@ -124,19 +125,32 @@ export function JourneyPlaybackOverlay({
   }, []);
   const scheduleVideoStallWatchdog = useCallback((assetId: string) => {
     clearVideoStallWatchdog();
+    videoStalledAssetIdRef.current = assetId;
     videoStallTimerRef.current = window.setTimeout(() => {
       videoStallTimerRef.current = null;
+      if (videoStalledAssetIdRef.current === assetId) videoStalledAssetIdRef.current = null;
       setVideoFallbackAssetId(assetId);
       setHold(false);
     }, VIDEO_STALL_WATCHDOG_MS);
   }, [clearVideoStallWatchdog]);
+  const recoverVideoPlayback = useCallback((assetId: string) => {
+    clearVideoStallWatchdog();
+    if (videoStalledAssetIdRef.current === assetId) videoStalledAssetIdRef.current = null;
+    setVideoFallbackAssetId((current) => current === assetId ? null : current);
+  }, [clearVideoStallWatchdog]);
   useEffect(() => () => clearVideoStallWatchdog(), [clearVideoStallWatchdog]);
   useEffect(() => {
     clearVideoStallWatchdog();
+    videoStalledAssetIdRef.current = null;
   }, [clearVideoStallWatchdog, director.stepIndex]);
   useEffect(() => {
-    if (paused) clearVideoStallWatchdog();
-  }, [clearVideoStallWatchdog, paused]);
+    if (paused) {
+      clearVideoStallWatchdog();
+      return;
+    }
+    const stalledAssetId = videoStalledAssetIdRef.current;
+    if (stalledAssetId) scheduleVideoStallWatchdog(stalledAssetId);
+  }, [clearVideoStallWatchdog, paused, scheduleVideoStallWatchdog]);
   // #20: one sampler per soundtrack element; analyser built on first play.
   const samplerRef = useRef(createSoundtrackSampler());
   const lightStripRef = useRef<HTMLDivElement>(null);
@@ -305,17 +319,18 @@ export function JourneyPlaybackOverlay({
     const asset = journey && step?.kind === "media"
       ? playbackMediaForPoint(journey, step.pointIndex)[step.mediaIndex]
       : null;
-    syncPlaybackMediaElement(
+    return syncPlaybackMediaElement(
       videoRef.current,
       director.isPlaying && !paused,
       asset?.mimeType.startsWith("video/")
-        ? () => setVideoFallbackAssetId(asset.id)
-        : undefined,
-      asset?.mimeType.startsWith("video/")
-        ? () => setVideoFallbackAssetId((current) => current === asset.id ? null : current)
+        ? () => {
+            clearVideoStallWatchdog();
+            videoStalledAssetIdRef.current = null;
+            setVideoFallbackAssetId(asset.id);
+          }
         : undefined,
     );
-  }, [director.isPlaying, director.step, journey, paused]);
+  }, [clearVideoStallWatchdog, director.isPlaying, director.stepIndex, journey, paused]);
 
   // #20: one analyser graph writes a shared mutable energy channel; the light
   // strip and Three.js scene read that channel without React per-frame state.
@@ -589,22 +604,25 @@ export function JourneyPlaybackOverlay({
                     playsInline
                     onEnded={() => {
                       clearVideoStallWatchdog();
+                      videoStalledAssetIdRef.current = null;
                       setHold(false);
                       director.complete();
                     }}
                     onError={() => {
                       clearVideoStallWatchdog();
+                      videoStalledAssetIdRef.current = null;
                       setVideoFallbackAssetId(activeMedia.id);
                       setHold(false);
                     }}
-                    onPlaying={clearVideoStallWatchdog}
-                    onProgress={clearVideoStallWatchdog}
-                    onTimeUpdate={clearVideoStallWatchdog}
+                    onPlaying={() => recoverVideoPlayback(activeMedia.id)}
+                    onProgress={() => recoverVideoPlayback(activeMedia.id)}
+                    onTimeUpdate={() => recoverVideoPlayback(activeMedia.id)}
                     onStalled={() => {
                       // `stalled` can be transient. Keep Full Playback ownership
                       // while the browser may recover, and only fall back if no
                       // playing/progress signal clears this bounded watchdog.
-                      scheduleVideoStallWatchdog(activeMedia.id);
+                      if (paused) videoStalledAssetIdRef.current = activeMedia.id;
+                      else scheduleVideoStallWatchdog(activeMedia.id);
                     }}
                   />
                 : <div className="journey-playback__media-state">正在打开媒体…</div>

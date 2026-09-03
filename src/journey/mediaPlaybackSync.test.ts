@@ -30,16 +30,21 @@ describe("syncPlaybackMediaElement", () => {
   });
 
 
-  it("reports async play success so a recovered video can reclaim completion ownership", async () => {
-    const onPlaySuccess = vi.fn();
-    syncPlaybackMediaElement(
-      { pause: vi.fn(), play: vi.fn(() => Promise.resolve()) },
+  it("ignores a pending play rejection after playback state intentionally changes", async () => {
+    const onPlayFailure = vi.fn();
+    let rejectPlay!: (error: Error) => void;
+    const pendingPlay = new Promise<void>((_resolve, reject) => {
+      rejectPlay = reject;
+    });
+    const cancel = syncPlaybackMediaElement(
+      { pause: vi.fn(), play: vi.fn(() => pendingPlay) },
       true,
-      vi.fn(),
-      onPlaySuccess,
+      onPlayFailure,
     );
+    cancel();
+    rejectPlay(new DOMException("The play() request was interrupted by a call to pause().", "AbortError"));
     await Promise.resolve();
-    expect(onPlaySuccess).toHaveBeenCalledOnce();
+    expect(onPlayFailure).not.toHaveBeenCalled();
   });
 
   it("reports a synchronous play failure", () => {

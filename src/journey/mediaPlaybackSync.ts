@@ -8,22 +8,26 @@ export function syncPlaybackMediaElement(
   element: PlaybackMediaElement | null,
   playing: boolean,
   onPlayFailure?: () => void,
-  onPlaySuccess?: () => void,
 ) {
-  if (!element) return;
+  let cancelled = false;
+  const cancel = () => {
+    cancelled = true;
+  };
+  if (!element) return cancel;
   if (!playing) {
     element.pause();
-    return;
+    return cancel;
   }
 
   try {
     const result = element.play();
     if (result && typeof result.then === "function") {
-      void result.then(() => onPlaySuccess?.(), () => onPlayFailure?.());
-    } else {
-      onPlaySuccess?.();
+      void result.catch(() => {
+        if (!cancelled) onPlayFailure?.();
+      });
     }
   } catch {
-    onPlayFailure?.();
+    if (!cancelled) onPlayFailure?.();
   }
+  return cancel;
 }
