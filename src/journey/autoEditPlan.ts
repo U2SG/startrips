@@ -570,31 +570,33 @@ export function validateAutoEditPlanV1(planInput: unknown, input: {
         }
       } else {
         if (Object.prototype.hasOwnProperty.call(item, "dwellMs")) errors.push(`video dwell invalid ${item.assetId}`);
+        const sourceDuration = digest.intrinsic.durationMs;
+        const hasKnownSourceDuration = isFinitePositiveDuration(sourceDuration);
         if (!item.trim) {
-          errors.push(`video trim missing ${item.assetId}`);
-        } else {
-          const sourceDuration = digest.intrinsic.durationMs;
-          if (
-            !isFiniteNonNegativeDuration(item.trim.inMs)
-            || !isFinitePositiveDuration(item.trim.outMs)
-            || item.trim.outMs <= item.trim.inMs
-            || sourceDuration === undefined
-            || !Number.isFinite(sourceDuration)
-            || sourceDuration <= 0
-            || item.trim.outMs > sourceDuration
-          ) {
-            errors.push(`invalid trim ${item.assetId}`);
-          } else if (quickRecapTempo) {
-            const expectedOutMs = Math.min(sourceDuration, VIDEO_DWELL_MS[quickRecapTempo]);
-            if (item.trim.inMs !== 0 || item.trim.outMs !== expectedOutMs) {
-              errors.push(`quick recap trim mismatch ${item.assetId}`);
-            }
-          } else if (
-            plan.mode === "full"
-            && (item.trim.inMs !== 0 || item.trim.outMs !== sourceDuration)
-          ) {
-            errors.push(`full video trim mismatch ${item.assetId}`);
+          // Full Playback can preserve a canonical video before intrinsic media
+          // duration has been persisted. Its live chapter completes on the real
+          // media `ended` event, while plan arithmetic contributes 0.
+          if (plan.mode !== "full" || hasKnownSourceDuration) {
+            errors.push(`video trim missing ${item.assetId}`);
           }
+        } else if (
+          !hasKnownSourceDuration
+          || !isFiniteNonNegativeDuration(item.trim.inMs)
+          || !isFinitePositiveDuration(item.trim.outMs)
+          || item.trim.outMs <= item.trim.inMs
+          || item.trim.outMs > sourceDuration
+        ) {
+          errors.push(`invalid trim ${item.assetId}`);
+        } else if (quickRecapTempo) {
+          const expectedOutMs = Math.min(sourceDuration, VIDEO_DWELL_MS[quickRecapTempo]);
+          if (item.trim.inMs !== 0 || item.trim.outMs !== expectedOutMs) {
+            errors.push(`quick recap trim mismatch ${item.assetId}`);
+          }
+        } else if (
+          plan.mode === "full"
+          && (item.trim.inMs !== 0 || item.trim.outMs !== sourceDuration)
+        ) {
+          errors.push(`full video trim mismatch ${item.assetId}`);
         }
       }
     }

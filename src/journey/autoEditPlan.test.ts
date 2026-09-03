@@ -968,6 +968,49 @@ describe("deterministic auto-edit foundation (#127)", () => {
     expect(missing.errors).toContain("full asset omitted photo");
   });
 
+  it("preserves Full Playback videos with unknown intrinsic duration without inventing trims", () => {
+    const unknownDurations = [undefined, 0, Number.NaN, Number.POSITIVE_INFINITY];
+    for (const durationMs of unknownDurations) {
+      const digests = [
+        digest("video", "tokyo", 0, {
+          mediaType: "video",
+          mimeType: "video/mp4",
+          intrinsic: durationMs === undefined ? {} : { durationMs },
+        }),
+      ];
+      const plan: AutoEditPlanV1 = {
+        schemaVersion: 1,
+        planId: "full:unknown-video",
+        journeyId: "journey-1",
+        journeyRevision: "7",
+        generatedAt: baseInput.generatedAt,
+        mode: "full",
+        plannedDurationMs: 1_800,
+        tempo: "standard",
+        omittedAssetIds: [],
+        chapters: [{
+          chapterId: "route:tokyo",
+          routePointId: "tokyo",
+          camera: { primitive: "travel", durationMs: 1_000 },
+          arrival: { durationMs: 800, showPlaceLabel: true, showNote: true },
+          items: [{
+            assetId: "video",
+            sourceIndex: 0,
+            framing: "contain",
+            transition: "direct",
+            selectionReason: "all-media",
+          }],
+        }],
+      };
+      expect(validateAutoEditPlanV1(plan, { ...baseInput, routePointIds: ["tokyo"], digests }))
+        .toMatchObject({ valid: true, errors: [], recomputedDurationMs: 1_800 });
+
+      plan.chapters[0]!.items = [];
+      const missing = validateAutoEditPlanV1(plan, { ...baseInput, routePointIds: ["tokyo"], digests });
+      expect(missing.errors).toContain("full asset omitted video");
+    }
+  });
+
   it("rejects Full omission bookkeeping, recap selection reasons, and silent video truncation", () => {
     const digests = [
       digest("photo", "tokyo", 0),
