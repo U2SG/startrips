@@ -619,6 +619,15 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 - **Review fixes:** Keeps enum membership and mode-specific semantics in the semantic validator and aligns malformed photo-role coverage with the stricter structural gate.
 - **Follow-up:** None known; `git diff --check` is green after rebasing onto the latest main and GitHub CI is authoritative for final validation.
 
+
+### PR #186 - Reject duplicate auto-edit chapter identities
+
+- **Source head:** `994373728c0f03766f21cfca3e8537ee000f419b`
+- **Scope:** Requires `AutoEditPlanV1` chapter identities to be unique after structural type validation, preventing ambiguous chapter identity while preserving existing scope, chronology, camera, media, and timing semantics.
+- **User-visible change:** No intentional UI change; malformed edit plans that reuse a chapter identity now fail closed instead of reaching playback/render with ambiguous chapter keys.
+- **Review fixes:** Preserved the existing structural `chapterId` type gate before deduplication and retained the main-branch route-point shape validation while replaying onto the latest main.
+- **Follow-up:** None known; GitHub CI remains authoritative after the final docs-only head update.
+
 ---
 
 ## Entry template
