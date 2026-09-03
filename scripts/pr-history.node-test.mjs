@@ -3,7 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { parseLedgerText, readLedgerEntries, renderAggregate } from "./pr-history.mjs";
+import { execFileSync } from "node:child_process";
+import { parseLedgerText, readLedgerEntries, renderAggregate, validatePrLedger } from "./pr-history.mjs";
 
 const SHA = "0123456789abcdef0123456789abcdef01234567";
 function ledger(number, title = "Test ledger") {
@@ -33,4 +34,69 @@ test("renders newest PR first without modifying the source files", () => {
   const rendered = renderAggregate(readLedgerEntries(dir));
   assert.ok(rendered.indexOf("PR #192") < rendered.indexOf("PR #191"));
   assert.match(rendered, /Historical entries before ledger sharding/);
+});
+
+function git(cwd, ...args) {
+  return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+}
+
+function createGitFixture({ mutateLegacy = false, foreignLedger = false } = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "startrips-ledger-git-"));
+  fs.mkdirSync(path.join(dir, "docs", "pr-history"), { recursive: true });
+  git(dir, "init", "-q");
+  git(dir, "config", "user.email", "ledger-test@example.com");
+  git(dir, "config", "user.name", "Ledger Test");
+  git(dir, "config", "core.autocrlf", "false");
+  fs.writeFileSync(path.join(dir, "docs", "pr-history.md"), "# Legacy archive\n");
+  fs.writeFileSync(path.join(dir, "app.txt"), "base\n");
+  git(dir, "add", ".");
+  git(dir, "commit", "-qm", "base");
+  const baseSha = git(dir, "rev-parse", "HEAD");
+
+  fs.writeFileSync(path.join(dir, "app.txt"), "code\n");
+  if (mutateLegacy) fs.appendFileSync(path.join(dir, "docs", "pr-history.md"), "changed\n");
+  if (foreignLedger) fs.writeFileSync(path.join(dir, "docs", "pr-history", "191.md"), ledger(191));
+  git(dir, "add", ".");
+  git(dir, "commit", "-qm", "code");
+  const sourceHead = git(dir, "rev-parse", "HEAD");
+
+  fs.writeFileSync(path.join(dir, "docs", "pr-history", "192.md"), ledger(192).replace(SHA, sourceHead));
+  git(dir, "add", ".");
+  git(dir, "commit", "-qm", "ledger");
+  const headSha = git(dir, "rev-parse", "HEAD");
+  return { dir, baseSha, sourceHead, headSha };
+}
+
+test("validates a PR whose only post-source change is its own ledger", () => {
+  const fixture = createGitFixture();
+  const entry = validatePrLedger({
+    prNumber: 192,
+    baseSha: fixture.baseSha,
+    headSha: fixture.headSha,
+    root: fixture.dir,
+    ledgerDir: path.join(fixture.dir, "docs", "pr-history"),
+  });
+  assert.equal(entry.sourceHead, fixture.sourceHead);
+});
+
+test("rejects PRs that still modify the frozen legacy archive", () => {
+  const fixture = createGitFixture({ mutateLegacy: true });
+  assert.throws(() => validatePrLedger({
+    prNumber: 192,
+    baseSha: fixture.baseSha,
+    headSha: fixture.headSha,
+    root: fixture.dir,
+    ledgerDir: path.join(fixture.dir, "docs", "pr-history"),
+  }), /legacy docs\/pr-history\.md is frozen/);
+});
+
+test("rejects PRs that modify another PR's numeric ledger", () => {
+  const fixture = createGitFixture({ foreignLedger: true });
+  assert.throws(() => validatePrLedger({
+    prNumber: 192,
+    baseSha: fixture.baseSha,
+    headSha: fixture.headSha,
+    root: fixture.dir,
+    ledgerDir: path.join(fixture.dir, "docs", "pr-history"),
+  }), /modifies another PR ledger/);
 });

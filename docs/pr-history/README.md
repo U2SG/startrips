@@ -21,7 +21,7 @@ docs/pr-history/<PR_NUMBER>.md
 - **Validation:** What was verified and which checks remain authoritative.
 ```
 
-The Source head is the final reviewed **code** commit. The PR may then add only its own ledger file. CI validates that `Source head..PR head` contains no files except `docs/pr-history/<PR_NUMBER>.md`.
+The Source head is the final reviewed **code** commit. The PR may then add only its own ledger file. CI validates that `Source head..PR head` contains no files except `docs/pr-history/<PR_NUMBER>.md`. Across the whole PR diff, the legacy `docs/pr-history.md` archive is frozen and numeric ledger files belonging to other PRs are forbidden.
 
 ## Aggregate index
 

@@ -78,9 +78,10 @@ function git(args, cwd = ROOT) {
   return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
 
-export function validatePrLedger({ prNumber, headSha, root = ROOT, ledgerDir = path.join(root, "docs", "pr-history") }) {
+export function validatePrLedger({ prNumber, headSha, baseSha, root = ROOT, ledgerDir = path.join(root, "docs", "pr-history") }) {
   if (!Number.isInteger(prNumber) || prNumber <= 0) fail(`invalid PR number '${prNumber}'`);
   if (!/^[0-9a-f]{40}$/i.test(headSha)) fail(`invalid PR head SHA '${headSha}'`);
+  if (!/^[0-9a-f]{40}$/i.test(baseSha)) fail(`invalid PR base SHA '${baseSha}'`);
 
   const fileName = `${prNumber}.md`;
   const ledgerPath = path.join(ledgerDir, fileName);
@@ -108,6 +109,27 @@ export function validatePrLedger({ prNumber, headSha, root = ROOT, ledgerDir = p
   if (!changed.includes(expected)) fail(`${fileName}: final PR head does not add/update its ledger after Source head`);
   if (unexpected.length > 0) {
     fail(`${fileName}: code drift after Source head; only ${expected} may change, found: ${unexpected.join(", ")}`);
+  }
+
+  let prBase;
+  try {
+    prBase = git(["merge-base", baseSha, headSha], root);
+  } catch {
+    fail(`${fileName}: cannot resolve merge-base between ${baseSha} and ${headSha}`);
+  }
+  const prChanged = git(["diff", "--name-only", `${prBase}..${headSha}`], root)
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((value) => value.replace(/\\/g, "/"));
+  if (prChanged.includes("docs/pr-history.md")) {
+    fail("legacy docs/pr-history.md is frozen; new PRs must not modify it");
+  }
+  const foreignLedgers = prChanged.filter((name) => {
+    const match = name.match(/^docs\/pr-history\/(\d+)\.md$/);
+    return match && Number(match[1]) !== prNumber;
+  });
+  if (foreignLedgers.length > 0) {
+    fail(`${fileName}: PR modifies another PR ledger: ${foreignLedgers.join(", ")}`);
   }
 
   return entry;
@@ -143,7 +165,8 @@ export function main(argv = process.argv.slice(2)) {
   if (command === "validate-pr") {
     const prNumber = Number(optionValue(argv, "--pr"));
     const headSha = optionValue(argv, "--head");
-    const entry = validatePrLedger({ prNumber, headSha });
+    const baseSha = optionValue(argv, "--base");
+    const entry = validatePrLedger({ prNumber, headSha, baseSha });
     console.log(`validated PR #${entry.number} ledger at source ${entry.sourceHead}`);
     return;
   }
@@ -160,7 +183,7 @@ export function main(argv = process.argv.slice(2)) {
     }
     return;
   }
-  fail("usage: node scripts/pr-history.mjs <validate-all|validate-pr|render> [...options]");
+  fail("usage: node scripts/pr-history.mjs <validate-all|validate-pr|render> [...options]; validate-pr requires --pr, --base and --head");
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
