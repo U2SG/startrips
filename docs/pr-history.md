@@ -1,4 +1,4 @@
-# Startrips Pull Request History
+﻿# Startrips Pull Request History
 
 This file is the durable product/engineering ledger for pull requests merged into `main`.
 
@@ -17,6 +17,15 @@ The source head SHA is recorded instead of the squash merge SHA so the ledger ca
 ---
 
 ## 2026-09-03
+
+### PR #191 - Stabilize initial login QA layout scan
+
+- **Source head:** `276035f1aeb64beee60e5b74904cdd6522580c36`
+- **Scope:** Stabilizes the login browser QA harness so layout measurements wait for the application's global CSS reset (`body margin: 0`, `html overflow: hidden`) before scanning, and records a per-scan `failed` flag for direct diagnostics.
+- **User-visible change:** None. This prevents false-red CI caused by measuring the browser's transient default 8px body margin before Vite-loaded styles apply.
+- **Review fixes:** Root-cause analysis of main run `33713614844` showed core, post-login, and final-acceptance green; only `desktop-sign-in` reported `overflowX=8` / `overflowY=8`, while every subsequent auth viewport reported 0. The fix preserves strict overflow thresholds instead of weakening assertions.
+- **Follow-up:** None known. Current main run `33717735658` is already green, confirming the #190 failure was a transient QA timing race rather than a product regression.
+- **Validation:** `node --check scripts/qa-login-v3.mjs` and `git diff --check` green. GitHub CI is authoritative for final browser validation.
 
 ### PR #182 - Reject empty Quick Recap chapters
 

@@ -64,6 +64,16 @@ async function ensureSignIn() {
 }
 
 async function scan(label, mobile) {
+  await page.waitForFunction(() => {
+    const bodyStyle = getComputedStyle(document.body);
+    const htmlStyle = getComputedStyle(document.documentElement);
+    return bodyStyle.marginTop === "0px"
+      && bodyStyle.marginRight === "0px"
+      && bodyStyle.marginBottom === "0px"
+      && bodyStyle.marginLeft === "0px"
+      && htmlStyle.overflowX === "hidden"
+      && htmlStyle.overflowY === "hidden";
+  }, null, { timeout: 4_000 });
   const snapshot = await page.evaluate(() => {
     const card = document.querySelector(".auth-card--login-v3");
     if (!card) return null;
@@ -120,14 +130,13 @@ async function scan(label, mobile) {
     overflowX: snapshot.overflowX,
     overflowY: snapshot.overflowY,
     smallTouchTargets,
+    failed: overlaps.length > 0
+      || snapshot.cardOverflow > 1
+      || snapshot.overflowX > 0
+      || snapshot.overflowY > 0
+      || smallTouchTargets.length > 0,
   };
-  if (
-    overlaps.length
-    || snapshot.cardOverflow > 1
-    || snapshot.overflowX > 0
-    || snapshot.overflowY > 0
-    || smallTouchTargets.length
-  ) failed = true;
+  if (result.failed) failed = true;
   results.push(result);
 }
 
