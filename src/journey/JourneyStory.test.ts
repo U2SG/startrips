@@ -2,6 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  createStoryAutoplayFallbackController,
   JourneyStory,
   finalizeMediaDragCommit,
   scheduleCancelableMediaDragSettle,
@@ -332,6 +333,39 @@ describe("storyMediaAvailability (#199 review)", () => {
     expect(storyMediaAvailability("error")).toBe("error");
     expect(storyMediaAvailability("loading")).toBe("waiting");
     expect(storyMediaAvailability(undefined)).toBe("waiting");
+  });
+});
+
+describe("createStoryAutoplayFallbackController (#204 review)", () => {
+  it("ignores a delayed play rejection after the owning effect is disposed", () => {
+    const scheduled: string[] = [];
+    const cleared: number[] = [];
+    const controller = createStoryAutoplayFallbackController(
+      () => { scheduled.push("armed"); return 41; },
+      (timer) => cleared.push(timer),
+    );
+
+    controller.dispose();
+    controller.arm();
+
+    expect(scheduled).toEqual([]);
+    expect(cleared).toEqual([]);
+  });
+
+  it("clears an already-armed fallback and cannot re-arm after disposal", () => {
+    const scheduled: string[] = [];
+    const cleared: number[] = [];
+    const controller = createStoryAutoplayFallbackController(
+      () => { scheduled.push("armed"); return 42; },
+      (timer) => cleared.push(timer),
+    );
+
+    controller.arm();
+    controller.dispose();
+    controller.arm();
+
+    expect(scheduled).toEqual(["armed"]);
+    expect(cleared).toEqual([42]);
   });
 });
 

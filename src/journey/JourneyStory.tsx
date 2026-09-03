@@ -342,6 +342,25 @@ export function storyAutoplayWaitsForVideoEnd(
     && playbackMediaWaitPolicy(asset, availability) === "video-ended";
 }
 
+export function createStoryAutoplayFallbackController(
+  schedule: () => number,
+  clear: (timer: number) => void,
+) {
+  let disposed = false;
+  let timer = 0;
+  return {
+    arm() {
+      if (disposed || timer) return;
+      timer = schedule();
+    },
+    dispose() {
+      disposed = true;
+      if (timer) clear(timer);
+      timer = 0;
+    },
+  };
+}
+
 export function shouldHoldWholeJourneyTerminalFrame(
   currentIndex: number,
   mediaLength: number,
@@ -1301,18 +1320,20 @@ export function JourneyStory({
     }
     // A browser that refuses to play, or an element that errors, must not
     // strand the sequence: it degrades to the ordinary slide timer.
-    let fallbackTimer = 0;
-    const armFallback = () => {
-      if (fallbackTimer) return;
-      fallbackTimer = window.setTimeout(finishStep, STORY_AUTOPLAY_STEP_MS);
-    };
+    const fallback = createStoryAutoplayFallbackController(
+      () => window.setTimeout(finishStep, STORY_AUTOPLAY_STEP_MS),
+      (timer) => window.clearTimeout(timer),
+    );
+    const armFallback = () => fallback.arm();
     video.addEventListener("ended", finishStep);
     video.addEventListener("error", armFallback);
     Promise.resolve(video.play()).catch(armFallback);
     return () => {
       video.removeEventListener("ended", finishStep);
       video.removeEventListener("error", armFallback);
-      window.clearTimeout(fallbackTimer);
+      // Dispose before touching the element: a pending play() rejection may
+      // settle after cleanup and must not arm a stale step timer.
+      fallback.dispose();
       // Leaving this step (pause, manual navigation, stage change) also stops
       // the video the sequence itself started.
       video.pause();
