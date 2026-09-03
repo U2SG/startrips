@@ -5,34 +5,45 @@ import {
   type MediaDigestV1,
 } from "./autoEditPlan";
 import { PLAYBACK_PACING, playbackMediaForPoint, type PlaybackStep } from "./journeyPlayback";
+import { isSoundtrackAsset, isVisualMediaAsset } from "./journeyModel";
 import type { Journey, JourneyMediaAsset } from "./types";
 
 export const QUICK_RECAP_TARGET_MS = 45_000;
+
+// #195 Phase 1: no video duration is persisted with a media asset and the
+// browser cannot read one synchronously here, so a video digest declares this
+// explicit analysis-pending duration instead of an empty `intrinsic`. The
+// plan's video eligibility rule rejects an absent, non-finite, or non-positive
+// duration, which would delete the route point's only chapter — the regression
+// this replaces. Reusing Full Playback's deterministic video duration keeps one
+// number for "how long an unmeasured video is worth"; because it exceeds every
+// per-tempo video dwell, the planner's own clamp still decides the real length.
+export const QUICK_RECAP_PENDING_VIDEO_DURATION_MS = PLAYBACK_PACING.videoMs;
 
 export type PreparedQuickRecapPlayback = {
   journey: Journey;
   plan: AutoEditPlanV1;
 };
 
-export type QuickRecapFallbackReason = "no-photos" | "over-budget";
+export type QuickRecapFallbackReason = "no-visual-media" | "over-budget";
 
 export type QuickRecapPreparationResult =
   | { playback: PreparedQuickRecapPlayback; fallbackReason: null }
   | { playback: null; fallbackReason: QuickRecapFallbackReason };
 
-function isImage(asset: JourneyMediaAsset) {
-  return asset.mimeType.startsWith("image/");
+function visualMediaType(asset: JourneyMediaAsset): "image" | "video" {
+  return asset.mimeType.startsWith("video/") ? "video" : "image";
 }
 
-function isAudio(asset: JourneyMediaAsset) {
-  return asset.mimeType.startsWith("audio/");
-}
-
-function runtimePhotoCandidates(journey: Journey): JourneyMediaAsset[] {
+// #195: Startrips is photo-first, not photo-only. Every playable visual asset
+// is a recap candidate so a route point whose only media is a video keeps its
+// chapter; only the soundtrack is excluded, matching Full Playback's chapter
+// stream (`playbackMediaForPoint`).
+function runtimeVisualCandidates(journey: Journey): JourneyMediaAsset[] {
   const firstRoutePointId = journey.routePoints[0]?.id ?? null;
   const coverId = journey.coverMediaAssetId;
   return journey.media
-    .filter(isImage)
+    .filter(isVisualMediaAsset)
     .flatMap((asset) => {
       if (asset.id === coverId && firstRoutePointId) {
         // Playback projection only: the explicit Journey cover always opens
@@ -43,7 +54,7 @@ function runtimePhotoCandidates(journey: Journey): JourneyMediaAsset[] {
       }
       if (asset.routePointId !== null) return [asset];
       if (firstRoutePointId) {
-        // Journey-scoped photos are a valid presentation scope, but the live
+        // Journey-scoped visual media is a valid presentation scope, but the live
         // Playback step model only renders media inside route-point chapters.
         // Project them into the first playable chapter for Quick Recap only.
         return [{ ...asset, routePointId: firstRoutePointId }];
@@ -58,22 +69,27 @@ function runtimePhotoCandidates(journey: Journey): JourneyMediaAsset[] {
 }
 
 export function quickRecapDigestsForJourney(journey: Journey): MediaDigestV1[] {
-  return runtimePhotoCandidates(journey).map((asset, sourceIndex) => ({
-    schemaVersion: 1,
-    assetId: asset.id,
-    journeyId: journey.id,
-    routePointId: asset.routePointId,
-    sourceRevision: String(journey.revision),
-    mediaType: "image",
-    mimeType: asset.mimeType,
-    sourceIndex,
-    intrinsic: {},
-    userSignals: {
-      isJourneyCover: asset.id === journey.coverMediaAssetId,
-      pinnedForRecap: false,
-      excludedFromRecap: false,
-    },
-  }));
+  return runtimeVisualCandidates(journey).map<MediaDigestV1>((asset, sourceIndex) => {
+    const mediaType = visualMediaType(asset);
+    return {
+      schemaVersion: 1,
+      assetId: asset.id,
+      journeyId: journey.id,
+      routePointId: asset.routePointId,
+      sourceRevision: String(journey.revision),
+      mediaType,
+      mimeType: asset.mimeType,
+      sourceIndex,
+      intrinsic: mediaType === "video"
+        ? { durationMs: QUICK_RECAP_PENDING_VIDEO_DURATION_MS }
+        : {},
+      userSignals: {
+        isJourneyCover: asset.id === journey.coverMediaAssetId,
+        pinnedForRecap: false,
+        excludedFromRecap: false,
+      },
+    };
+  });
 }
 
 export function prepareQuickRecapPlaybackResult(
@@ -84,14 +100,14 @@ export function prepareQuickRecapPlaybackResult(
     tempo?: AutoEditTempo;
   },
 ): QuickRecapPreparationResult {
-  if (journey.routePoints.length === 0) return { playback: null, fallbackReason: "no-photos" };
+  if (journey.routePoints.length === 0) return { playback: null, fallbackReason: "no-visual-media" };
   const digests = quickRecapDigestsForJourney(journey);
-  if (digests.length === 0) return { playback: null, fallbackReason: "no-photos" };
+  if (digests.length === 0) return { playback: null, fallbackReason: "no-visual-media" };
 
   const candidateRoutePointIds = journey.routePoints
     .filter((point) => digests.some((digest) => digest.routePointId === point.id))
     .map((point) => point.id);
-  if (candidateRoutePointIds.length === 0) return { playback: null, fallbackReason: "no-photos" };
+  if (candidateRoutePointIds.length === 0) return { playback: null, fallbackReason: "no-visual-media" };
 
   const requestedTargetMs = options.targetDurationMs ?? QUICK_RECAP_TARGET_MS;
   const chapterBudgetMs = Math.max(1, requestedTargetMs - PLAYBACK_PACING.introMs - PLAYBACK_PACING.outroMs);
@@ -106,14 +122,14 @@ export function prepareQuickRecapPlaybackResult(
   });
   if (plan.plannedDurationMs > chapterBudgetMs) return { playback: null, fallbackReason: "over-budget" };
   const selectedIds = new Set(plan.chapters.flatMap((chapter) => chapter.items.map((item) => item.assetId)));
-  if (selectedIds.size === 0) return { playback: null, fallbackReason: "no-photos" };
+  if (selectedIds.size === 0) return { playback: null, fallbackReason: "no-visual-media" };
   const plannedRoutePointIds = new Set(plan.chapters.map((chapter) => chapter.routePointId));
   const projectedRoutePoints = journey.routePoints.filter((point) => plannedRoutePointIds.has(point.id));
-  if (projectedRoutePoints.length === 0) return { playback: null, fallbackReason: "no-photos" };
+  if (projectedRoutePoints.length === 0) return { playback: null, fallbackReason: "no-visual-media" };
 
-  const projectedCandidates = new Map(runtimePhotoCandidates(journey).map((asset) => [asset.id, asset]));
+  const projectedCandidates = new Map(runtimeVisualCandidates(journey).map((asset) => [asset.id, asset]));
   const projectedMedia = journey.media.flatMap((asset) => {
-    if (isAudio(asset)) return [asset];
+    if (isSoundtrackAsset(asset)) return [asset];
     if (!selectedIds.has(asset.id)) return [];
     return [projectedCandidates.get(asset.id) ?? asset];
   });

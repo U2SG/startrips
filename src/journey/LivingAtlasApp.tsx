@@ -745,7 +745,7 @@ export function LivingAtlasApp({
         mode = "full";
         fallbackMessage = preparation.fallbackReason === "over-budget"
           ? "这段旅程的必选回忆超过快速回顾时长，已切换为完整播放。"
-          : "这段旅程还没有可用于快速回顾的照片，已切换为完整播放。";
+          : "这段旅程还没有可用于快速回顾的照片或视频，已切换为完整播放。";
       }
     } else if (!carriedFallbackMessage) {
       fallbackMessage = null;
