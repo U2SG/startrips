@@ -4,9 +4,15 @@ import {
   type AutoEditTempo,
   type MediaDigestV1,
 } from "./autoEditPlan";
-import { PLAYBACK_PACING, playbackMediaForPoint, type PlaybackStep } from "./journeyPlayback";
+import {
+  PLAYBACK_PACING,
+  playbackMediaForPoint,
+  routePointAngularDistance,
+  type PlaybackStep,
+} from "./journeyPlayback";
 import { isSoundtrackAsset, isVisualMediaAsset } from "./journeyModel";
-import type { Journey, JourneyMediaAsset } from "./types";
+import { resolveNarrativeTiming } from "./narrativeTiming";
+import type { Journey, JourneyMediaAsset, RoutePoint } from "./types";
 
 export const QUICK_RECAP_TARGET_MS = 45_000;
 
@@ -133,14 +139,26 @@ export function prepareQuickRecapPlaybackResult(
   if (candidateRoutePointIds.length === 0) return { playback: null, fallbackReason: "no-visual-media" };
 
   const requestedTargetMs = options.targetDurationMs ?? QUICK_RECAP_TARGET_MS;
-  const chapterBudgetMs = Math.max(1, requestedTargetMs - PLAYBACK_PACING.introMs - PLAYBACK_PACING.outroMs);
+  const tempo = options.tempo ?? "standard";
+  // The recap's chapter budget is what is left of the target once the intro and
+  // outro beats are paid for. Those two are the only beats the director still
+  // times itself (`quickRecapStepDurationMs` returns undefined for them), so the
+  // budget must subtract the numbers that actually play — the resolver's
+  // per-tempo intro/outro — instead of legacy `PLAYBACK_PACING`'s flat
+  // 1200 + 1800, which no mode has spent since the tempo profiles landed.
+  const chapterBudgetMs = Math.max(
+    1,
+    requestedTargetMs
+      - resolveNarrativeTiming({ mode: "quick-recap", tempo, segmentKind: "intro" })
+      - resolveNarrativeTiming({ mode: "quick-recap", tempo, segmentKind: "outro" }),
+  );
   const plan = buildDeterministicQuickRecapPlan({
     journeyId: journey.id,
     journeyRevision: String(journey.revision),
     routePointIds: candidateRoutePointIds,
     digests,
     targetDurationMs: chapterBudgetMs,
-    tempo: options.tempo ?? "standard",
+    tempo,
     generatedAt: options.generatedAt,
   });
   if (plan.plannedDurationMs > chapterBudgetMs) return { playback: null, fallbackReason: "over-budget" };
@@ -177,10 +195,39 @@ export function prepareQuickRecapPlayback(
   return prepareQuickRecapPlaybackResult(journey, options).playback;
 }
 
+function noteLengthFor(point: RoutePoint) {
+  return point.note?.trim().length ?? 0;
+}
+
+/**
+ * How long one Quick Recap beat lasts at the runtime tempo.
+ *
+ * The Edit Plan stays the source of *what* plays and in what order: a step
+ * whose route point has no chapter, or whose asset the plan did not select,
+ * still resolves to `undefined` and falls through to Full Playback's timing.
+ * What the plan no longer decides is *how long*. Travel and arrival used to be
+ * read straight out of the frozen plan, where they were one flat camera and one
+ * flat arrival value per route point, planned once at `standard` for the whole
+ * session; they now go through `resolveNarrativeTiming` with the real route
+ * geometry and note length, so the recap answers the tempo control and a nearby
+ * leg stops being paced like an intercontinental one (decisions D1 and D2).
+ *
+ * Media dwell stays pinned by the plan, because the plan's greedy selection
+ * budget was measured against exactly those milliseconds; overriding it here
+ * would spend a length the budget never booked. Dwell is already tempo-aware
+ * and a tempo change rebuilds the plan, so it follows tempo through the plan
+ * rather than around it. The resolver only supplies a dwell the plan left
+ * unpinned.
+ *
+ * `intro` / `outro` return `undefined` on purpose: the director spends the live
+ * tempo profile for those two beats, and `prepareQuickRecapPlaybackResult`
+ * budgets against the same numbers.
+ */
 export function quickRecapStepDurationMs(
   journey: Journey,
   step: PlaybackStep,
   plan: AutoEditPlanV1,
+  tempo: AutoEditTempo = "standard",
 ): number | undefined {
   if (step.kind === "intro" || step.kind === "outro") return undefined;
   const pointIndex = step.kind === "travel" ? step.to : step.pointIndex;
@@ -189,15 +236,96 @@ export function quickRecapStepDurationMs(
   const chapter = plan.chapters.find((candidate) => candidate.routePointId === point.id);
   if (!chapter) return undefined;
 
-  if (step.kind === "travel") return chapter.camera.durationMs;
+  const cameraMs = (index: number) => {
+    const from = journey.routePoints[index - 1];
+    const to = journey.routePoints[index];
+    return resolveNarrativeTiming({
+      mode: "quick-recap",
+      tempo,
+      segmentKind: "travel",
+      // The first route point has no leg to fly, so it resolves to the floor.
+      routeDistanceRadians: from && to ? routePointAngularDistance(from, to) : undefined,
+    });
+  };
+
+  if (step.kind === "travel") return cameraMs(step.to);
   if (step.kind === "stop") {
-    const firstPointCameraMs = step.pointIndex === 0 ? chapter.camera.durationMs : 0;
-    return firstPointCameraMs + (chapter.arrival?.durationMs ?? 0);
+    // Point 0 has no travel step in front of it, so its chapter camera is paid
+    // for inside the stop — the same fold the frozen-plan reader performed.
+    const firstPointCameraMs = step.pointIndex === 0 ? cameraMs(0) : 0;
+    if (!chapter.arrival) return firstPointCameraMs;
+    return firstPointCameraMs + resolveNarrativeTiming({
+      mode: "quick-recap",
+      tempo,
+      segmentKind: "arrival",
+      noteLength: noteLengthFor(point),
+    });
   }
 
   const asset = playbackMediaForPoint(journey, step.pointIndex)[step.mediaIndex];
   if (!asset) return undefined;
   const item = chapter.items.find((candidate) => candidate.assetId === asset.id);
   if (!item) return undefined;
-  return item.dwellMs ?? (item.trim ? item.trim.outMs - item.trim.inMs : undefined);
+  if (item.dwellMs !== undefined) return item.dwellMs;
+  if (item.trim) return item.trim.outMs - item.trim.inMs;
+  return resolveNarrativeTiming({
+    mode: "quick-recap",
+    tempo,
+    segmentKind: "media",
+    mediaKind: visualMediaType(asset),
+    mediaRole: item.photoRole,
+  });
+}
+
+/**
+ * A step's narrative identity, stable across a plan rebuild.
+ *
+ * A step index alone is meaningless once the plan changes: a rebuild at another
+ * tempo can select more or fewer assets, so index 7 may be a different beat.
+ * Identity is the route point id (travel / stop) or the asset id (media), which
+ * survive the rebuild whenever the beat itself does.
+ */
+export function playbackStepIdentity(journey: Journey, step: PlaybackStep): string {
+  switch (step.kind) {
+    case "intro":
+      return "intro";
+    case "outro":
+      return "outro";
+    case "travel":
+      return `travel:${journey.routePoints[step.to]?.id ?? step.to}`;
+    case "stop":
+      return `stop:${journey.routePoints[step.pointIndex]?.id ?? step.pointIndex}`;
+    case "media": {
+      const asset = playbackMediaForPoint(journey, step.pointIndex)[step.mediaIndex];
+      return `media:${asset?.id ?? `${step.pointIndex}:${step.mediaIndex}`}`;
+    }
+  }
+}
+
+/**
+ * Where playback lands after a Quick Recap plan rebuild.
+ *
+ * The rule: keep the same step when it survives the rebuild; otherwise land on
+ * the nearest surviving step, searching backwards before forwards so a dropped
+ * beat rewinds slightly instead of skipping content the viewer has not seen. If
+ * nothing survives, clamp the old index into the new range.
+ */
+export function remapPlaybackStepIndex(
+  previousIdentities: readonly string[],
+  nextIdentities: readonly string[],
+  stepIndex: number,
+): number {
+  if (nextIdentities.length === 0) return 0;
+  const clampedNext = Math.min(Math.max(0, stepIndex), nextIdentities.length - 1);
+  if (previousIdentities.length === 0) return clampedNext;
+  const from = Math.min(Math.max(0, stepIndex), previousIdentities.length - 1);
+  for (let offset = 0; offset < previousIdentities.length; offset += 1) {
+    const candidates = offset === 0 ? [from] : [from - offset, from + offset];
+    for (const candidate of candidates) {
+      if (candidate < 0 || candidate >= previousIdentities.length) continue;
+      const found = nextIdentities.indexOf(previousIdentities[candidate]);
+      if (found >= 0) return found;
+    }
+  }
+  return clampedNext;
 }

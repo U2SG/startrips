@@ -30,6 +30,8 @@ import {
   type PreparedQuickRecapPlayback,
 } from "./quickRecapPlayback";
 import type { PlaybackCameraTarget, PlaybackStep } from "./journeyPlayback";
+import type { PlaybackTempo } from "./journeyPlaybackPlan";
+import { PLAYBACK_INITIAL_TEMPO } from "./useJourneyPlaybackDirector";
 import { JourneyStory } from "./JourneyStory";
 import {
   cachedSoundtrackRead,
@@ -737,8 +739,11 @@ export function LivingAtlasApp({
     let quickRecap: PreparedQuickRecapPlayback | null = null;
     let fallbackMessage = carriedFallbackMessage;
     if (mode === "quick-recap") {
+      // The director starts every run at PLAYBACK_INITIAL_TEMPO, so the opening
+      // plan must be budgeted at the same tempo; a later change re-plans below.
       const preparation = prepareQuickRecapPlaybackResult(journey, {
         generatedAt: new Date().toISOString(),
+        tempo: PLAYBACK_INITIAL_TEMPO,
       });
       quickRecap = preparation.playback;
       if (!quickRecap) {
@@ -779,9 +784,40 @@ export function LivingAtlasApp({
     });
   }
 
-  const playbackStepDurationResolver = useCallback((targetJourney: Journey, step: PlaybackStep) => (
-    playbackQuickRecap ? quickRecapStepDurationMs(targetJourney, step, playbackQuickRecap.plan) : undefined
+  const playbackStepDurationResolver = useCallback((
+    targetJourney: Journey,
+    step: PlaybackStep,
+    tempo: PlaybackTempo,
+  ) => (
+    playbackQuickRecap
+      ? quickRecapStepDurationMs(targetJourney, step, playbackQuickRecap.plan, tempo)
+      : undefined
   ), [playbackQuickRecap]);
+
+  // Decision D1: in Quick Recap the target duration wins over tempo, so a tempo
+  // change is a plan rebuild rather than a rescale — the recap keeps its ~45 s
+  // promise at every tempo. The director still owns tempo state; it only
+  // reports the change here, where the Edit Plan lives.
+  //
+  // A rebuild that no longer fits the budget keeps the plan that is playing:
+  // dropping the viewer into Full Playback mid-recap would be a harsher answer
+  // to a pacing control than leaving that one tempo without effect. The overlay
+  // remaps the current step across the rebuild (`remapPlaybackStepIndex`).
+  //
+  // The rebuild reads the *source* journey, never the projected one already in
+  // state: the projection carries only the previous plan's selection, so
+  // re-planning from it could never bring an omitted asset back.
+  const handlePlaybackTempoChange = useCallback((tempo: PlaybackTempo) => {
+    if (!playbackSourceJourney) return;
+    setPlaybackQuickRecap((current) => {
+      if (!current) return current;
+      const rebuilt = prepareQuickRecapPlaybackResult(playbackSourceJourney, {
+        generatedAt: new Date().toISOString(),
+        tempo,
+      });
+      return rebuilt.playback ?? current;
+    });
+  }, [playbackSourceJourney]);
 
   function startGlobePick(accept: (point: GlobePointPick) => void) {
     globePickAccept.current = accept;
@@ -1335,6 +1371,7 @@ export function LivingAtlasApp({
           }}
           initialSoundtrackRead={playbackSession.soundtrackRead}
           stepDurationResolver={playbackStepDurationResolver}
+          onTempoChange={handlePlaybackTempoChange}
           playbackMode={playbackQuickRecap ? "quick-recap" : "full"}
           statusMessage={playbackFallbackMessage}
           reduceMotion={reduceMotion}

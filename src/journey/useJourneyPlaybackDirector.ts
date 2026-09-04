@@ -39,7 +39,23 @@ export function replanPlaybackTimerBudget(
  * element directly — the overlay translates phases into focus/route/media
  * commands.
  */
-export type PlaybackStepDurationResolver = (journey: Journey, step: PlaybackStep) => number | undefined;
+/**
+ * An override for one step's length.
+ *
+ * The director owns tempo state, so it passes its own tempo at the call site
+ * rather than making the caller lift that state: a resolver built in the app
+ * shell (Quick Recap) cannot take tempo as a dependency, but it can receive it
+ * as an argument.
+ */
+export type PlaybackStepDurationResolver = (
+  journey: Journey,
+  step: PlaybackStep,
+  tempo: PlaybackTempo,
+) => number | undefined;
+
+/** The tempo every playback run starts at; callers that pre-build a plan for
+ * the first beat must plan at the same tempo. */
+export const PLAYBACK_INITIAL_TEMPO: PlaybackTempo = "standard";
 
 export function useJourneyPlaybackDirector(
   journey: Journey | null,
@@ -47,7 +63,7 @@ export function useJourneyPlaybackDirector(
   resolveStepDuration?: PlaybackStepDurationResolver,
 ) {
   const [state, setState] = useState<PlaybackState>(initialPlaybackState);
-  const [tempo, setTempo] = useState<PlaybackTempo>("standard");
+  const [tempo, setTempo] = useState<PlaybackTempo>(PLAYBACK_INITIAL_TEMPO);
   const timerRef = useRef<number>(0);
   const timerStepKeyRef = useRef<string | null>(null);
   const timerRemainingMsRef = useRef<number | null>(null);
@@ -83,7 +99,7 @@ export function useJourneyPlaybackDirector(
   const durationForStep = useCallback((target: PlaybackStep) => {
     const current = journeyRef.current;
     if (!current) return 0;
-    const overrideDurationMs = resolveStepDuration?.(current, target);
+    const overrideDurationMs = resolveStepDuration?.(current, target, tempo);
     return overrideDurationMs !== undefined
       && Number.isFinite(overrideDurationMs)
       && overrideDurationMs >= 0
@@ -105,7 +121,13 @@ export function useJourneyPlaybackDirector(
     }
 
     const fullDurationMs = durationForStep(step);
-    const stepKey = `${journey.id}:${state.stepIndex}:${step.kind}:${fullDurationMs}`;
+    // The key identifies *which* beat is playing, deliberately not how long it
+    // is: a tempo change re-resolves the same beat to a new length, and that
+    // must scale the remaining budget through `replanPlaybackTimerBudget`
+    // instead of resetting it. With the duration inside the key every change
+    // took the reset branch, so the replan branch was unreachable and a tempo
+    // change restarted the current beat.
+    const stepKey = `${journey.id}:${state.stepIndex}:${step.kind}`;
     if (timerStepKeyRef.current !== stepKey) {
       timerStepKeyRef.current = stepKey;
       timerRemainingMsRef.current = fullDurationMs;
@@ -154,7 +176,7 @@ export function useJourneyPlaybackDirector(
     timerFullDurationMsRef.current = null;
     timerStartedAtMsRef.current = null;
     setState(initialPlaybackState());
-    setTempo("standard");
+    setTempo(PLAYBACK_INITIAL_TEMPO);
   }, [journey?.id]);
 
   useEffect(() => () => window.clearTimeout(timerRef.current), []);
