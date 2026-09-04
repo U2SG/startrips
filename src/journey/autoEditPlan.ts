@@ -1,3 +1,5 @@
+import { resolveNarrativeTiming } from "./narrativeTiming";
+
 export const AUTO_EDIT_MODES = ["full", "quick-recap", "keepsake"] as const;
 export type AutoEditMode = typeof AUTO_EDIT_MODES[number];
 export const AUTO_EDIT_TEMPOS = ["fast", "standard", "immersive"] as const;
@@ -103,9 +105,11 @@ export type DeterministicQuickRecapInput = {
   generatedAt: string;
 };
 
-// Exported only so that narrativeTiming.test.ts can assert the resolver's
-// quick-recap profile still reproduces these numbers. PR 2 of the shared
-// narrative timing plan deletes all four in favour of the resolver.
+// No longer consulted by this module: every duration below is now resolved by
+// `resolveNarrativeTiming({ mode: "quick-recap", ... })`, which owns the
+// quick-recap profile. They survive as the equivalence anchor that
+// `narrativeTiming.test.ts` asserts the resolver against, so deleting them
+// belongs to a change that may edit that test file.
 export const IMAGE_DWELL_MS: Record<AutoEditTempo, Record<AutoEditPhotoRole, number>> = {
   fast: { hero: 2_000, representative: 1_600, supporting: 1_200, burst: 700 },
   standard: { hero: 3_100, representative: 2_500, supporting: 1_800, burst: 900 },
@@ -155,6 +159,14 @@ function selectDuplicateRepresentatives(digests: MediaDigestV1[]) {
     .filter((digest): digest is MediaDigestV1 => Boolean(digest));
 }
 
+function quickRecapTiming(
+  segmentKind: "travel" | "arrival" | "media",
+  tempo: AutoEditTempo,
+  extra: { mediaKind?: "image" | "video"; mediaRole?: AutoEditPhotoRole; intrinsicDurationMs?: number } = {},
+) {
+  return resolveNarrativeTiming({ mode: "quick-recap", tempo, segmentKind, ...extra });
+}
+
 function itemDuration(
   digest: MediaDigestV1,
   tempo: AutoEditTempo,
@@ -162,10 +174,13 @@ function itemDuration(
 ) {
   if (digest.mediaType === "video") {
     const sourceDuration = digest.intrinsic.durationMs;
-    if (sourceDuration === undefined || sourceDuration <= 0) return 0;
-    return Math.min(sourceDuration, VIDEO_DWELL_MS[tempo]);
+    // A video whose intrinsic duration is not yet known contributes nothing to
+    // the plan. The resolver would fall back to the profile's video budget, so
+    // the guard stays here rather than moving into the timing module.
+    if (sourceDuration === undefined || !Number.isFinite(sourceDuration) || sourceDuration <= 0) return 0;
+    return quickRecapTiming("media", tempo, { mediaKind: "video", intrinsicDurationMs: sourceDuration });
   }
-  return IMAGE_DWELL_MS[tempo][photoRole];
+  return quickRecapTiming("media", tempo, { mediaKind: "image", mediaRole: photoRole });
 }
 
 function photoRoleForChapterItem(
@@ -253,7 +268,13 @@ export function buildDeterministicQuickRecapPlan(input: DeterministicQuickRecapI
   const introCandidates = representatives.filter((digest) => digest.routePointId === null).sort(stableCandidateSort);
   if (introCandidates[0]) selected.set(introCandidates[0].assetId, introCandidates[0]);
 
-  const baseOverhead = input.routePointIds.length * (CAMERA_MS + ARRIVAL_MS);
+  // Route geometry and notes are not part of the deterministic plan input, so
+  // the resolver is called without a distance or note term and returns the
+  // quick-recap floor for both beats. Distance- and note-aware quick recap
+  // timing arrives with the director wiring, not here.
+  const routeCameraMs = quickRecapTiming("travel", tempo);
+  const routeArrivalMs = quickRecapTiming("arrival", tempo);
+  const baseOverhead = input.routePointIds.length * (routeCameraMs + routeArrivalMs);
   let selectedDuration = selectedMediaDuration(selected.values(), tempo);
   const optional = representatives
     .filter((digest) => !selected.has(digest.assetId))
@@ -300,8 +321,8 @@ export function buildDeterministicQuickRecapPlan(input: DeterministicQuickRecapI
     return [{
       chapterId: routePointId === null ? "journey-intro" : `route:${routePointId}`,
       routePointId,
-      camera: { primitive: routePointId === null ? "hold" as const : "travel" as const, durationMs: routePointId === null ? 0 : CAMERA_MS },
-      ...(routePointId === null ? {} : { arrival: { durationMs: ARRIVAL_MS, showPlaceLabel: true, showNote: true } }),
+      camera: { primitive: routePointId === null ? "hold" as const : "travel" as const, durationMs: routePointId === null ? 0 : routeCameraMs },
+      ...(routePointId === null ? {} : { arrival: { durationMs: routeArrivalMs, showPlaceLabel: true, showNote: true } }),
       items: chapterItems,
     }];
   });
@@ -329,6 +350,15 @@ export function buildDeterministicQuickRecapPlan(input: DeterministicQuickRecapI
     chapters,
     omittedAssetIds,
   };
+}
+
+/**
+ * The route travel grammar: every camera primitive except `hold`. It is the
+ * complement of `hold`, not a curated list, so a new choreography primitive is
+ * accepted on a route chapter without another validator change.
+ */
+function isRouteTravelPrimitive(primitive: AutoEditCameraPrimitive) {
+  return primitive !== "hold";
 }
 
 function isFiniteNonNegativeDuration(value: unknown): value is number {
@@ -519,6 +549,35 @@ export function validateAutoEditPlanV1(planInput: unknown, input: {
       }
       seenQuickRecapChapterScopes.add(scopeKey);
       if (chapter.items.length === 0) errors.push(`empty quick recap chapter ${chapter.chapterId}`);
+      // Semantic choreography, not milliseconds (#166). The journey intro does
+      // not travel anywhere and has nothing to arrive at; a route chapter must
+      // hand off spatially and must announce the place it reached.
+      if (chapter.routePointId === null) {
+        if (chapter.camera.primitive !== "hold" || chapter.camera.durationMs !== 0) {
+          errors.push(`quick recap intro camera mismatch ${chapter.chapterId}`);
+        }
+        if (chapter.arrival !== undefined) errors.push(`quick recap intro arrival invalid ${chapter.chapterId}`);
+      } else {
+        // The route travel grammar is the complement of `hold`, deliberately
+        // permissive: `travel`, `pullback-travel` and `short-arc` are all
+        // legitimate ways to reach the next route point, and `short-arc` is the
+        // natural rendering of a nearby leg. What this forbids is a route
+        // chapter that refuses to move at all.
+        if (!isRouteTravelPrimitive(chapter.camera.primitive)) {
+          errors.push(`quick recap route camera mismatch ${chapter.chapterId}`);
+        }
+        // Presence is the live check; the two `typeof` guards restate a
+        // guarantee the structural pass already enforces, so a non-boolean flag
+        // is reported as `chapter arrival flags invalid` and never reaches here.
+        // They stay so this branch reads as the complete arrival contract.
+        if (
+          !chapter.arrival
+          || typeof chapter.arrival.showPlaceLabel !== "boolean"
+          || typeof chapter.arrival.showNote !== "boolean"
+        ) {
+          errors.push(`quick recap route arrival mismatch ${chapter.chapterId}`);
+        }
+      }
     }
     if (plan.mode === "full") {
       const scopeKey = chapter.routePointId === null ? "__journey_intro__" : `route:${chapter.routePointId}`;
@@ -537,12 +596,11 @@ export function validateAutoEditPlanV1(planInput: unknown, input: {
         }
         if (chapter.arrival !== undefined) errors.push(`full intro arrival invalid ${chapter.chapterId}`);
       } else {
-        if (chapter.camera.primitive !== "travel" || chapter.camera.durationMs !== CAMERA_MS) {
+        if (chapter.camera.primitive !== "travel") {
           errors.push(`full route camera mismatch ${chapter.chapterId}`);
         }
         if (
           !chapter.arrival
-          || chapter.arrival.durationMs !== ARRIVAL_MS
           || chapter.arrival.showPlaceLabel !== true
           || chapter.arrival.showNote !== true
         ) {
@@ -596,10 +654,6 @@ export function validateAutoEditPlanV1(planInput: unknown, input: {
       if (plan.mode === "full" && item.selectionReason !== "all-media") {
         errors.push(`full selection reason mismatch ${item.assetId}`);
       }
-      const quickRecapTempo = plan.mode === "quick-recap"
-        && (AUTO_EDIT_TEMPOS as readonly unknown[]).includes(plan.tempo)
-        ? plan.tempo as AutoEditTempo
-        : null;
       let expectedQuickRecapPhotoRole: AutoEditPhotoRole | null = null;
       if (plan.mode === "quick-recap") {
         if (item.framing !== "contain") errors.push(`quick recap framing mismatch ${item.assetId}`);
@@ -623,10 +677,9 @@ export function validateAutoEditPlanV1(planInput: unknown, input: {
       if (digest.mediaType === "image") {
         if (!isFinitePositiveDuration(item.dwellMs)) errors.push(`invalid dwell ${item.assetId}`);
         if (Object.prototype.hasOwnProperty.call(item, "trim")) errors.push(`image trim invalid ${item.assetId}`);
-        if (quickRecapTempo && expectedQuickRecapPhotoRole) {
-          const expectedDwellMs = IMAGE_DWELL_MS[quickRecapTempo][expectedQuickRecapPhotoRole];
-          if (item.dwellMs !== expectedDwellMs) errors.push(`quick recap dwell mismatch ${item.assetId}`);
-        }
+        // No dwell equality: the shared narrative timing resolver owns how long
+        // a beat lasts, and the planned-duration recompute below keeps a plan
+        // internally consistent with whatever it declares.
       } else {
         if (Object.prototype.hasOwnProperty.call(item, "dwellMs")) errors.push(`video dwell invalid ${item.assetId}`);
         const sourceDuration = digest.intrinsic.durationMs;
@@ -646,11 +699,6 @@ export function validateAutoEditPlanV1(planInput: unknown, input: {
           || item.trim.outMs > sourceDuration
         ) {
           errors.push(`invalid trim ${item.assetId}`);
-        } else if (quickRecapTempo) {
-          const expectedOutMs = Math.min(sourceDuration, VIDEO_DWELL_MS[quickRecapTempo]);
-          if (item.trim.inMs !== 0 || item.trim.outMs !== expectedOutMs) {
-            errors.push(`quick recap trim mismatch ${item.assetId}`);
-          }
         } else if (
           plan.mode === "full"
           && (item.trim.inMs !== 0 || item.trim.outMs !== sourceDuration)

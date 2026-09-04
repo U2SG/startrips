@@ -1,5 +1,40 @@
 import { describe, expect, it } from "vitest";
-import { buildDeterministicQuickRecapPlan, type AutoEditPlanV1, type MediaDigestV1, validateAutoEditPlanV1 } from "./autoEditPlan";
+import { buildDeterministicQuickRecapPlan, type AutoEditPhotoRole, type AutoEditPlanV1, type AutoEditTempo, type MediaDigestV1, validateAutoEditPlanV1 } from "./autoEditPlan";
+import { resolveNarrativeTiming } from "./narrativeTiming";
+
+/**
+ * Quick Recap durations are read from the shared narrative timing resolver
+ * rather than restated as literals, so a resolver change moves the fixtures
+ * with it instead of failing them. Full Playback fixtures below still carry
+ * plain millisecond numbers: the validator no longer constrains those values at
+ * all, it only requires that they add up to the plan's `plannedDurationMs`.
+ */
+const quickRecapDwellMs = (tempo: AutoEditTempo, mediaRole: AutoEditPhotoRole) =>
+  resolveNarrativeTiming({ mode: "quick-recap", tempo, segmentKind: "media", mediaKind: "image", mediaRole });
+const quickRecapTravelMs = (tempo: AutoEditTempo) =>
+  resolveNarrativeTiming({ mode: "quick-recap", tempo, segmentKind: "travel" });
+const quickRecapArrivalMs = (tempo: AutoEditTempo) =>
+  resolveNarrativeTiming({ mode: "quick-recap", tempo, segmentKind: "arrival" });
+
+/**
+ * Full Playback fixtures below are hand-written — this module builds only
+ * Quick Recap plans, so their camera and arrival milliseconds have no resolver
+ * to be derived from. They are deliberately *not* 1000 / 800: since #166 the
+ * validator constrains neither value, requiring only that the plan's beats sum
+ * to `plannedDurationMs`, and a fixture still carrying the old `CAMERA_MS` /
+ * `ARRIVAL_MS` numbers would read as though the removed equalities were still
+ * in force. Each fixture states `plannedDurationMs` as arithmetic over these
+ * constants so the totals stay honest.
+ */
+const FULL_CAMERA_MS = 1_234;
+const FULL_ARRIVAL_MS = 777;
+
+/** The validator's own duration recompute, mirrored so forged fixtures can reconcile. */
+function sumPlannedDurationMs(plan: AutoEditPlanV1) {
+  return plan.chapters.reduce((sum, chapter) =>
+    sum + chapter.camera.durationMs + (chapter.arrival?.durationMs ?? 0) + chapter.items.reduce((itemSum, item) =>
+      itemSum + (item.dwellMs ?? (item.trim ? item.trim.outMs - item.trim.inMs : 0)), 0), 0);
+}
 
 function digest(id: string, routePointId: string | null, sourceIndex: number, overrides: Partial<MediaDigestV1> = {}): MediaDigestV1 {
   return {
@@ -71,10 +106,11 @@ describe("deterministic auto-edit foundation (#127)", () => {
     const plan = buildDeterministicQuickRecapPlan({ ...baseInput, targetDurationMs: 30_000, digests });
     const tokyo = plan.chapters.find((chapter) => chapter.routePointId === "tokyo");
     expect(tokyo?.items.map((item) => [item.assetId, item.photoRole, item.dwellMs])).toEqual([
-      ["tokyo-opener", "hero", 3_100],
-      ["tokyo-detail", "supporting", 1_800],
-      ["tokyo-pin", "representative", 2_500],
+      ["tokyo-opener", "hero", quickRecapDwellMs("standard", "hero")],
+      ["tokyo-detail", "supporting", quickRecapDwellMs("standard", "supporting")],
+      ["tokyo-pin", "representative", quickRecapDwellMs("standard", "representative")],
     ]);
+    expect(new Set(tokyo?.items.map((item) => item.dwellMs)).size).toBe(3);
     expect(validateAutoEditPlanV1(plan, { ...baseInput, digests })).toMatchObject({ valid: true });
   });
 
@@ -92,28 +128,51 @@ describe("deterministic auto-edit foundation (#127)", () => {
     const forgedRole = structuredClone(plan);
     forgedRole.chapters[0]!.items[1]!.photoRole = "hero";
     forgedRole.chapters[0]!.items[1]!.dwellMs = forgedRole.chapters[0]!.items[0]!.dwellMs;
-    forgedRole.plannedDurationMs = forgedRole.chapters.reduce((sum, chapter) =>
-      sum + chapter.camera.durationMs + (chapter.arrival?.durationMs ?? 0) + chapter.items.reduce((itemSum, item) =>
-        itemSum + (item.dwellMs ?? (item.trim ? item.trim.outMs - item.trim.inMs : 0)), 0), 0);
+    forgedRole.plannedDurationMs = sumPlannedDurationMs(forgedRole);
     const roleResult = validateAutoEditPlanV1(forgedRole, { ...baseInput, routePointIds: ["tokyo"], digests });
     expect(roleResult.valid).toBe(false);
     expect(roleResult.errors).toContain("photo role semantic mismatch support");
 
+    // A dwell may now be any finite non-negative number the resolver could
+    // produce, but it may not disagree with the plan's own declared duration.
     const forgedDwell = structuredClone(plan);
     forgedDwell.chapters[0]!.items[0]!.dwellMs = 9_999;
-    forgedDwell.plannedDurationMs = forgedDwell.chapters.reduce((sum, chapter) =>
-      sum + chapter.camera.durationMs + (chapter.arrival?.durationMs ?? 0) + chapter.items.reduce((itemSum, item) =>
-        itemSum + (item.dwellMs ?? (item.trim ? item.trim.outMs - item.trim.inMs : 0)), 0), 0);
     const dwellResult = validateAutoEditPlanV1(forgedDwell, { ...baseInput, routePointIds: ["tokyo"], digests });
     expect(dwellResult.valid).toBe(false);
-    expect(dwellResult.errors).toContain("quick recap dwell mismatch hero");
+    expect(dwellResult.errors).toContain("planned duration mismatch");
   });
 
-  it("rejects forged Quick Recap video trims even when they stay in source bounds", () => {
+  it("rejects a tampered planned duration for every beat that contributes to it", () => {
+    const digests = [
+      digest("hero", "tokyo", 0),
+      digest("clip", "tokyo", 1, { mediaType: "video", mimeType: "video/mp4", intrinsic: { durationMs: 10_000 } }),
+    ];
+    const plan = buildDeterministicQuickRecapPlan({
+      ...baseInput, routePointIds: ["tokyo"], targetDurationMs: 20_000, digests,
+    });
+    expect(validateAutoEditPlanV1(plan, { ...baseInput, routePointIds: ["tokyo"], digests }).valid).toBe(true);
+
+    const tamperings: Array<[string, (forged: AutoEditPlanV1) => void]> = [
+      ["camera", (forged) => { forged.chapters[0]!.camera.durationMs += 500; }],
+      ["arrival", (forged) => { forged.chapters[0]!.arrival!.durationMs += 500; }],
+      ["dwell", (forged) => { forged.chapters[0]!.items[0]!.dwellMs = 9_999; }],
+      ["trim", (forged) => { forged.chapters[0]!.items[1]!.trim = { inMs: 0, outMs: 1_234 }; }],
+      ["declared total", (forged) => { forged.plannedDurationMs += 1; }],
+    ];
+    for (const [label, tamper] of tamperings) {
+      const forged = structuredClone(plan);
+      tamper(forged);
+      const result = validateAutoEditPlanV1(forged, { ...baseInput, routePointIds: ["tokyo"], digests });
+      expect(result.valid, label).toBe(false);
+      expect(result.errors, label).toContain("planned duration mismatch");
+    }
+  });
+
+  it("still rejects a Quick Recap video trim that leaves its source bounds", () => {
     const digests = [digest("clip", "tokyo", 0, {
       mediaType: "video",
       mimeType: "video/mp4",
-      intrinsic: { durationMs: 10_000 },
+      intrinsic: { durationMs: 3_000 },
     })];
     const plan = buildDeterministicQuickRecapPlan({
       ...baseInput,
@@ -121,15 +180,126 @@ describe("deterministic auto-edit foundation (#127)", () => {
       targetDurationMs: 20_000,
       digests,
     });
-    expect(plan.chapters[0]!.items[0]!.trim).toEqual({ inMs: 0, outMs: 3_500 });
+    // The resolver clamps the clip to its own source duration, not to a fixed budget.
+    expect(plan.chapters[0]!.items[0]!.trim).toEqual({ inMs: 0, outMs: 3_000 });
     const forged = structuredClone(plan);
     forged.chapters[0]!.items[0]!.trim = { inMs: 1_000, outMs: 6_000 };
-    forged.plannedDurationMs = forged.chapters.reduce((sum, chapter) =>
-      sum + chapter.camera.durationMs + (chapter.arrival?.durationMs ?? 0) + chapter.items.reduce((itemSum, item) =>
-        itemSum + (item.dwellMs ?? (item.trim ? item.trim.outMs - item.trim.inMs : 0)), 0), 0);
+    forged.plannedDurationMs = sumPlannedDurationMs(forged);
     const result = validateAutoEditPlanV1(forged, { ...baseInput, routePointIds: ["tokyo"], digests });
     expect(result.valid).toBe(false);
-    expect(result.errors).toContain("quick recap trim mismatch clip");
+    expect(result.errors).toContain("invalid trim clip");
+  });
+
+  it("accepts any route travel primitive and any resolver-shaped Quick Recap timing", () => {
+    const digests = [digest("tokyo-photo", "tokyo", 0)];
+    const plan = buildDeterministicQuickRecapPlan({
+      ...baseInput, routePointIds: ["tokyo"], targetDurationMs: 20_000, digests,
+    });
+    // The route travel grammar is the complement of `hold`, so a nearby leg
+    // rendered as a short arc is as legitimate as a long-haul travel.
+    for (const primitive of ["travel", "pullback-travel", "short-arc"] as const) {
+      const variant = structuredClone(plan);
+      variant.chapters[0]!.camera = { primitive, durationMs: 1_337 };
+      variant.chapters[0]!.arrival = { durationMs: 911, showPlaceLabel: false, showNote: false };
+      variant.plannedDurationMs = sumPlannedDurationMs(variant);
+      expect(validateAutoEditPlanV1(variant, { ...baseInput, routePointIds: ["tokyo"], digests }), primitive)
+        .toMatchObject({ valid: true, errors: [] });
+    }
+  });
+
+  it("rejects Quick Recap chapters that break the intro and route choreography (#166)", () => {
+    const digests = [digest("intro", null, 0), digest("tokyo-photo", "tokyo", 1)];
+    const base = buildDeterministicQuickRecapPlan({
+      ...baseInput, routePointIds: ["tokyo"], targetDurationMs: 30_000, digests,
+    });
+    expect(base.chapters.map((chapter) => chapter.routePointId)).toEqual([null, "tokyo"]);
+    const reconcile = (plan: AutoEditPlanV1) => {
+      plan.plannedDurationMs = sumPlannedDurationMs(plan);
+    };
+
+    const cases: Array<{ mutate: (plan: AutoEditPlanV1) => void; error: string }> = [
+      {
+        mutate: (plan) => { plan.chapters[0]!.arrival = { durationMs: quickRecapArrivalMs("standard"), showPlaceLabel: true, showNote: true }; },
+        error: "quick recap intro arrival invalid journey-intro",
+      },
+      {
+        mutate: (plan) => { plan.chapters[0]!.camera = { primitive: "travel", durationMs: 0 }; },
+        error: "quick recap intro camera mismatch journey-intro",
+      },
+      {
+        mutate: (plan) => { plan.chapters[0]!.camera = { primitive: "hold", durationMs: 250 }; },
+        error: "quick recap intro camera mismatch journey-intro",
+      },
+      {
+        mutate: (plan) => { plan.chapters[1]!.camera = { primitive: "hold", durationMs: plan.chapters[1]!.camera.durationMs }; },
+        error: "quick recap route camera mismatch route:tokyo",
+      },
+      {
+        mutate: (plan) => { delete plan.chapters[1]!.arrival; },
+        error: "quick recap route arrival mismatch route:tokyo",
+      },
+      {
+        // A non-boolean flag never reaches the quick-recap grammar branch: the
+        // structural pass rejects the shape first and returns early. Asserted
+        // here against the error that is actually raised, so the test documents
+        // where the guarantee lives rather than a branch it cannot reach.
+        mutate: (plan) => {
+          plan.chapters[1]!.arrival = { durationMs: quickRecapArrivalMs("standard"), showPlaceLabel: "yes" as unknown as boolean, showNote: true };
+        },
+        error: "chapter arrival flags invalid 1",
+      },
+    ];
+
+    for (const { mutate, error } of cases) {
+      const forged = structuredClone(base);
+      mutate(forged);
+      reconcile(forged);
+      const result = validateAutoEditPlanV1(forged, { ...baseInput, routePointIds: ["tokyo"], digests });
+      expect(result.valid, error).toBe(false);
+      expect(result.errors, error).toContain(error);
+    }
+  });
+
+  it("gives fast, standard and immersive distinct Quick Recap timing for one fixture", () => {
+    const digests = [
+      digest("hero", "tokyo", 0),
+      digest("support", "tokyo", 1),
+      digest("clip", "kyoto", 2, { mediaType: "video", mimeType: "video/mp4", intrinsic: { durationMs: 60_000 } }),
+    ];
+    const plans = (["fast", "standard", "immersive"] as const).map((tempo) =>
+      buildDeterministicQuickRecapPlan({
+        ...baseInput, routePointIds: ["tokyo", "kyoto"], targetDurationMs: 60_000, tempo, digests,
+      }));
+    for (const plan of plans) {
+      expect(validateAutoEditPlanV1(plan, { ...baseInput, routePointIds: ["tokyo", "kyoto"], digests }))
+        .toMatchObject({ valid: true, errors: [] });
+    }
+    const dwells = plans.map((plan) => plan.chapters[0]!.items[0]!.dwellMs);
+    const trims = plans.map((plan) => plan.chapters[1]!.items[0]!.trim!.outMs);
+    const totals = plans.map((plan) => plan.plannedDurationMs);
+    expect(new Set(dwells).size).toBe(3);
+    expect(new Set(trims).size).toBe(3);
+    expect(new Set(totals).size).toBe(3);
+    // Slower tempi hold every beat longer.
+    expect(dwells[0]!).toBeLessThan(dwells[1]!);
+    expect(dwells[1]!).toBeLessThan(dwells[2]!);
+    expect(totals[0]!).toBeLessThan(totals[1]!);
+    expect(totals[1]!).toBeLessThan(totals[2]!);
+
+    // Camera and arrival are flat across tempo in the plan because the
+    // deterministic input carries no route geometry and no notes. The resolver
+    // itself is already tempo-, distance- and note-sensitive; threading those
+    // terms into Quick Recap belongs to the director wiring.
+    expect(new Set(plans.map((plan) => plan.chapters[1]!.camera.durationMs)).size).toBe(1);
+    for (const tempo of ["fast", "standard", "immersive"] as const) {
+      expect(resolveNarrativeTiming({ mode: "quick-recap", tempo, segmentKind: "travel", routeDistanceRadians: 2 }))
+        .toBeGreaterThan(resolveNarrativeTiming({ mode: "quick-recap", tempo, segmentKind: "travel" }));
+      expect(resolveNarrativeTiming({ mode: "quick-recap", tempo, segmentKind: "arrival", noteLength: 40 }))
+        .toBeGreaterThan(resolveNarrativeTiming({ mode: "quick-recap", tempo, segmentKind: "arrival" }));
+    }
+    const longHaul = (["fast", "standard", "immersive"] as const).map((tempo) =>
+      resolveNarrativeTiming({ mode: "quick-recap", tempo, segmentKind: "travel", routeDistanceRadians: 1 }));
+    expect(new Set(longHaul).size).toBe(3);
   });
 
   it("keeps builder media timing valid across every Quick Recap tempo", () => {
@@ -487,21 +657,21 @@ describe("deterministic auto-edit foundation (#127)", () => {
       journeyRevision: "7",
       generatedAt: baseInput.generatedAt,
       mode: "full",
-      plannedDurationMs: 5_600,
+      plannedDurationMs: 2_000 + 2 * FULL_CAMERA_MS + 2 * FULL_ARRIVAL_MS,
       tempo: "standard",
       chapters: [
         {
           chapterId: "route:tokyo",
           routePointId: "tokyo",
-          camera: { primitive: "travel", durationMs: 1_000 },
-          arrival: { durationMs: 800, showPlaceLabel: true, showNote: true },
+          camera: { primitive: "travel", durationMs: FULL_CAMERA_MS },
+          arrival: { durationMs: FULL_ARRIVAL_MS, showPlaceLabel: true, showNote: true },
           items: [{ assetId: "photo", sourceIndex: 0, dwellMs: 2_000, framing: "contain", transition: "direct", selectionReason: "all-media" }],
         },
         {
           chapterId: "route:kyoto:camera-only",
           routePointId: "kyoto",
-          camera: { primitive: "travel", durationMs: 1_000 },
-          arrival: { durationMs: 800, showPlaceLabel: true, showNote: true },
+          camera: { primitive: "travel", durationMs: FULL_CAMERA_MS },
+          arrival: { durationMs: FULL_ARRIVAL_MS, showPlaceLabel: true, showNote: true },
           items: [],
         },
       ],
@@ -515,9 +685,9 @@ describe("deterministic auto-edit foundation (#127)", () => {
     const digests = [digest("photo", "tokyo", 0)];
     const plan: AutoEditPlanV1 = {
       schemaVersion: 1, planId: "full:missing-media-less-route", journeyId: "journey-1", journeyRevision: "7", generatedAt: baseInput.generatedAt,
-      mode: "full", plannedDurationMs: 3_000, tempo: "standard", omittedAssetIds: [],
+      mode: "full", plannedDurationMs: 2_000 + FULL_CAMERA_MS, tempo: "standard", omittedAssetIds: [],
       chapters: [{
-        chapterId: "route:tokyo", routePointId: "tokyo", camera: { primitive: "travel", durationMs: 1_000 },
+        chapterId: "route:tokyo", routePointId: "tokyo", camera: { primitive: "travel", durationMs: FULL_CAMERA_MS },
         items: [{ assetId: "photo", sourceIndex: 0, dwellMs: 2_000, framing: "contain", transition: "direct", selectionReason: "all-media" }],
       }],
     };
@@ -531,13 +701,13 @@ describe("deterministic auto-edit foundation (#127)", () => {
     const digests = [digest("photo", "tokyo", 0), digest("kyoto-photo", "kyoto", 1)];
     const plan: AutoEditPlanV1 = {
       schemaVersion: 1, planId: "full:empty-populated-route", journeyId: "journey-1", journeyRevision: "7", generatedAt: baseInput.generatedAt,
-      mode: "full", plannedDurationMs: 4_000, tempo: "standard", omittedAssetIds: [],
+      mode: "full", plannedDurationMs: 2_000 + 2 * FULL_CAMERA_MS, tempo: "standard", omittedAssetIds: [],
       chapters: [
         {
-          chapterId: "route:tokyo", routePointId: "tokyo", camera: { primitive: "travel", durationMs: 1_000 },
+          chapterId: "route:tokyo", routePointId: "tokyo", camera: { primitive: "travel", durationMs: FULL_CAMERA_MS },
           items: [{ assetId: "photo", sourceIndex: 0, dwellMs: 2_000, framing: "contain", transition: "direct", selectionReason: "all-media" }],
         },
-        { chapterId: "route:kyoto", routePointId: "kyoto", camera: { primitive: "travel", durationMs: 1_000 }, items: [] },
+        { chapterId: "route:kyoto", routePointId: "kyoto", camera: { primitive: "travel", durationMs: FULL_CAMERA_MS }, items: [] },
       ],
     };
     const result = validateAutoEditPlanV1(plan, { ...baseInput, routePointIds: ["tokyo", "kyoto"], digests });
@@ -563,13 +733,13 @@ describe("deterministic auto-edit foundation (#127)", () => {
       journeyRevision: "7",
       generatedAt: baseInput.generatedAt,
       mode: "full",
-      plannedDurationMs: 6_000,
+      plannedDurationMs: 4_000 + 2 * FULL_CAMERA_MS,
       tempo: "standard",
       chapters: [
         { chapterId: "journey-intro:a", routePointId: null, camera: { primitive: "hold", durationMs: 0 }, items: [item("intro-a", 0)] },
         { chapterId: "journey-intro:b", routePointId: null, camera: { primitive: "hold", durationMs: 0 }, items: [item("intro-b", 1)] },
-        { chapterId: "route:tokyo:a", routePointId: "tokyo", camera: { primitive: "travel", durationMs: 1_000 }, items: [item("tokyo-a", 2)] },
-        { chapterId: "route:tokyo:b", routePointId: "tokyo", camera: { primitive: "travel", durationMs: 1_000 }, items: [item("tokyo-b", 3)] },
+        { chapterId: "route:tokyo:a", routePointId: "tokyo", camera: { primitive: "travel", durationMs: FULL_CAMERA_MS }, items: [item("tokyo-a", 2)] },
+        { chapterId: "route:tokyo:b", routePointId: "tokyo", camera: { primitive: "travel", durationMs: FULL_CAMERA_MS }, items: [item("tokyo-b", 3)] },
       ],
       omittedAssetIds: [],
     };
@@ -586,10 +756,10 @@ describe("deterministic auto-edit foundation (#127)", () => {
     const digests = [digest("intro", null, 0), digest("tokyo", "tokyo", 1)];
     const base: AutoEditPlanV1 = {
       schemaVersion: 1, planId: "full:camera", journeyId: "journey-1", journeyRevision: "7", generatedAt: baseInput.generatedAt,
-      mode: "full", plannedDurationMs: 3_800, tempo: "standard", omittedAssetIds: [],
+      mode: "full", plannedDurationMs: 2_000 + FULL_CAMERA_MS + FULL_ARRIVAL_MS, tempo: "standard", omittedAssetIds: [],
       chapters: [
         { chapterId: "journey-intro", routePointId: null, camera: { primitive: "hold", durationMs: 0 }, items: [{ assetId: "intro", sourceIndex: 0, dwellMs: 1_000, framing: "contain", transition: "direct", selectionReason: "all-media" }] },
-        { chapterId: "route:tokyo", routePointId: "tokyo", camera: { primitive: "travel", durationMs: 1_000 }, arrival: { durationMs: 800, showPlaceLabel: true, showNote: true }, items: [{ assetId: "tokyo", sourceIndex: 1, dwellMs: 1_000, framing: "contain", transition: "direct", selectionReason: "all-media" }] },
+        { chapterId: "route:tokyo", routePointId: "tokyo", camera: { primitive: "travel", durationMs: FULL_CAMERA_MS }, arrival: { durationMs: FULL_ARRIVAL_MS, showPlaceLabel: true, showNote: true }, items: [{ assetId: "tokyo", sourceIndex: 1, dwellMs: 1_000, framing: "contain", transition: "direct", selectionReason: "all-media" }] },
       ],
     };
     expect(validateAutoEditPlanV1(base, { ...baseInput, routePointIds: ["tokyo"], digests })).toMatchObject({ valid: true });
@@ -597,16 +767,14 @@ describe("deterministic auto-edit foundation (#127)", () => {
     const cases = [
       { mutate: (plan: AutoEditPlanV1) => { plan.chapters[1]!.camera = { primitive: "hold", durationMs: 0 }; }, error: "full route camera mismatch route:tokyo" },
       { mutate: (plan: AutoEditPlanV1) => { delete plan.chapters[1]!.arrival; }, error: "full route arrival mismatch route:tokyo" },
-      { mutate: (plan: AutoEditPlanV1) => { plan.chapters[1]!.arrival = { durationMs: 800, showPlaceLabel: false, showNote: true }; }, error: "full route arrival mismatch route:tokyo" },
-      { mutate: (plan: AutoEditPlanV1) => { plan.chapters[0]!.camera = { primitive: "travel", durationMs: 1_000 }; }, error: "full intro camera mismatch journey-intro" },
-      { mutate: (plan: AutoEditPlanV1) => { plan.chapters[0]!.arrival = { durationMs: 800, showPlaceLabel: true, showNote: true }; }, error: "full intro arrival invalid journey-intro" },
+      { mutate: (plan: AutoEditPlanV1) => { plan.chapters[1]!.arrival = { durationMs: FULL_ARRIVAL_MS, showPlaceLabel: false, showNote: true }; }, error: "full route arrival mismatch route:tokyo" },
+      { mutate: (plan: AutoEditPlanV1) => { plan.chapters[0]!.camera = { primitive: "travel", durationMs: FULL_CAMERA_MS }; }, error: "full intro camera mismatch journey-intro" },
+      { mutate: (plan: AutoEditPlanV1) => { plan.chapters[0]!.arrival = { durationMs: FULL_ARRIVAL_MS, showPlaceLabel: true, showNote: true }; }, error: "full intro arrival invalid journey-intro" },
     ];
     for (const testCase of cases) {
       const plan = structuredClone(base);
       testCase.mutate(plan);
-      plan.plannedDurationMs = plan.chapters.reduce((sum, chapter) =>
-        sum + chapter.camera.durationMs + (chapter.arrival?.durationMs ?? 0) + chapter.items.reduce((itemSum, item) =>
-          itemSum + (item.dwellMs ?? (item.trim ? item.trim.outMs - item.trim.inMs : 0)), 0), 0);
+      plan.plannedDurationMs = sumPlannedDurationMs(plan);
       const result = validateAutoEditPlanV1(plan, { ...baseInput, routePointIds: ["tokyo"], digests });
       expect(result.valid).toBe(false);
       expect(result.errors).toContain(testCase.error);
@@ -618,10 +786,10 @@ describe("deterministic auto-edit foundation (#127)", () => {
     const digests = [digest("intro", null, 0), digest("tokyo", "tokyo", 1)];
     const plan: AutoEditPlanV1 = {
       schemaVersion: 1, planId: "full:canonical", journeyId: "journey-1", journeyRevision: "7", generatedAt: baseInput.generatedAt,
-      mode: "full", plannedDurationMs: 3_800, tempo: "standard", omittedAssetIds: [],
+      mode: "full", plannedDurationMs: 2_000 + FULL_CAMERA_MS + FULL_ARRIVAL_MS, tempo: "standard", omittedAssetIds: [],
       chapters: [
         { chapterId: "journey-intro", routePointId: null, camera: { primitive: "hold", durationMs: 0 }, items: [{ assetId: "intro", sourceIndex: 0, dwellMs: 1_000, framing: "contain", transition: "direct", selectionReason: "all-media" }] },
-        { chapterId: "route:tokyo", routePointId: "tokyo", camera: { primitive: "travel", durationMs: 1_000 }, arrival: { durationMs: 800, showPlaceLabel: true, showNote: true }, items: [{ assetId: "tokyo", sourceIndex: 1, dwellMs: 1_000, framing: "contain", transition: "direct", selectionReason: "all-media" }] },
+        { chapterId: "route:tokyo", routePointId: "tokyo", camera: { primitive: "travel", durationMs: FULL_CAMERA_MS }, arrival: { durationMs: FULL_ARRIVAL_MS, showPlaceLabel: true, showNote: true }, items: [{ assetId: "tokyo", sourceIndex: 1, dwellMs: 1_000, framing: "contain", transition: "direct", selectionReason: "all-media" }] },
       ],
     };
     expect(validateAutoEditPlanV1(plan, { ...baseInput, routePointIds: ["tokyo"], digests })).toMatchObject({ valid: true, errors: [] });
@@ -638,13 +806,11 @@ describe("deterministic auto-edit foundation (#127)", () => {
     plan.chapters.push({
       chapterId: "route:kyoto:camera-only",
       routePointId: "kyoto",
-      camera: { primitive: "travel", durationMs: 1_000 },
-      arrival: { durationMs: 800, showPlaceLabel: true, showNote: true },
+      camera: { primitive: "travel", durationMs: quickRecapTravelMs("standard") },
+      arrival: { durationMs: quickRecapArrivalMs("standard"), showPlaceLabel: true, showNote: true },
       items: [],
     });
-    plan.plannedDurationMs = plan.chapters.reduce((sum, chapter) =>
-      sum + chapter.camera.durationMs + (chapter.arrival?.durationMs ?? 0) + chapter.items.reduce((itemSum, item) =>
-        itemSum + (item.dwellMs ?? (item.trim ? item.trim.outMs - item.trim.inMs : 0)), 0), 0);
+    plan.plannedDurationMs = sumPlannedDurationMs(plan);
 
     const result = validateAutoEditPlanV1(plan, { ...baseInput, routePointIds: ["tokyo", "kyoto"], digests });
     expect(result.valid).toBe(false);
@@ -670,9 +836,7 @@ describe("deterministic auto-edit foundation (#127)", () => {
       { ...structuredClone(original), items: [structuredClone(first!)] },
       { ...structuredClone(original), chapterId: "route:tokyo:split", items: [structuredClone(second!)] },
     ];
-    plan.plannedDurationMs = plan.chapters.reduce((sum, chapter) =>
-      sum + chapter.camera.durationMs + (chapter.arrival?.durationMs ?? 0) + chapter.items.reduce((itemSum, item) =>
-        itemSum + (item.dwellMs ?? (item.trim ? item.trim.outMs - item.trim.inMs : 0)), 0), 0);
+    plan.plannedDurationMs = sumPlannedDurationMs(plan);
 
     const result = validateAutoEditPlanV1(plan, { ...baseInput, routePointIds: ["tokyo"], digests });
     expect(result.valid).toBe(false);
@@ -698,9 +862,7 @@ describe("deterministic auto-edit foundation (#127)", () => {
       { ...structuredClone(original), items: [structuredClone(first!)] },
       { ...structuredClone(original), chapterId: "journey-intro:split", items: [structuredClone(second!)] },
     ];
-    plan.plannedDurationMs = plan.chapters.reduce((sum, chapter) =>
-      sum + chapter.camera.durationMs + (chapter.arrival?.durationMs ?? 0) + chapter.items.reduce((itemSum, item) =>
-        itemSum + (item.dwellMs ?? (item.trim ? item.trim.outMs - item.trim.inMs : 0)), 0), 0);
+    plan.plannedDurationMs = sumPlannedDurationMs(plan);
 
     const result = validateAutoEditPlanV1(plan, { ...baseInput, routePointIds: [], digests });
     expect(result.valid).toBe(false);
@@ -714,9 +876,9 @@ describe("deterministic auto-edit foundation (#127)", () => {
     });
     const plan: AutoEditPlanV1 = {
       schemaVersion: 1, planId: "full:late-intro", journeyId: "journey-1", journeyRevision: "7", generatedAt: baseInput.generatedAt,
-      mode: "full", plannedDurationMs: 3_000, tempo: "standard", omittedAssetIds: [],
+      mode: "full", plannedDurationMs: 2_000 + FULL_CAMERA_MS, tempo: "standard", omittedAssetIds: [],
       chapters: [
-        { chapterId: "route:tokyo", routePointId: "tokyo", camera: { primitive: "travel", durationMs: 1_000 }, items: [item("tokyo", 1)] },
+        { chapterId: "route:tokyo", routePointId: "tokyo", camera: { primitive: "travel", durationMs: FULL_CAMERA_MS }, items: [item("tokyo", 1)] },
         { chapterId: "journey-intro", routePointId: null, camera: { primitive: "hold", durationMs: 0 }, items: [item("intro", 0)] },
       ],
     };
@@ -733,9 +895,7 @@ describe("deterministic auto-edit foundation (#127)", () => {
     });
     expect(plan.chapters.map((chapter) => chapter.routePointId)).toEqual([null, "tokyo"]);
     plan.chapters.reverse();
-    plan.plannedDurationMs = plan.chapters.reduce((sum, chapter) =>
-      sum + chapter.camera.durationMs + (chapter.arrival?.durationMs ?? 0) + chapter.items.reduce((itemSum, item) =>
-        itemSum + (item.dwellMs ?? (item.trim ? item.trim.outMs - item.trim.inMs : 0)), 0), 0);
+    plan.plannedDurationMs = sumPlannedDurationMs(plan);
     const result = validateAutoEditPlanV1(plan, { ...baseInput, routePointIds: ["tokyo"], digests });
     expect(result.valid).toBe(false);
     expect(result.errors).toContain("journey intro chronology mismatch");
@@ -902,9 +1062,7 @@ describe("deterministic auto-edit foundation (#127)", () => {
       const photo = items.find((item) => item.assetId === "photo")!;
       const video = items.find((item) => item.assetId === "video")!;
       testCase.mutate(photo, video);
-      plan.plannedDurationMs = plan.chapters.reduce((sum, chapter) =>
-        sum + chapter.camera.durationMs + (chapter.arrival?.durationMs ?? 0) + chapter.items.reduce((itemSum, item) =>
-          itemSum + (item.dwellMs ?? (item.trim ? item.trim.outMs - item.trim.inMs : 0)), 0), 0);
+      plan.plannedDurationMs = sumPlannedDurationMs(plan);
       const result = validateAutoEditPlanV1(plan, { ...baseInput, routePointIds: ["tokyo"], digests });
       expect(result.errors).toContain(testCase.error);
     }
@@ -1026,7 +1184,7 @@ describe("deterministic auto-edit foundation (#127)", () => {
       journeyRevision: "7",
       generatedAt: baseInput.generatedAt,
       mode: "full",
-      plannedDurationMs: 46_000,
+      plannedDurationMs: 44_200 + FULL_CAMERA_MS + FULL_ARRIVAL_MS,
       tempo: "standard",
       chapters: [
         {
@@ -1038,8 +1196,8 @@ describe("deterministic auto-edit foundation (#127)", () => {
         {
           chapterId: "route:tokyo",
           routePointId: "tokyo",
-          camera: { primitive: "travel", durationMs: 1_000 },
-          arrival: { durationMs: 800, showPlaceLabel: true, showNote: true },
+          camera: { primitive: "travel", durationMs: FULL_CAMERA_MS },
+          arrival: { durationMs: FULL_ARRIVAL_MS, showPlaceLabel: true, showNote: true },
           items: [
             { assetId: "photo", sourceIndex: 1, dwellMs: 1_200, framing: "contain", transition: "direct", selectionReason: "all-media" },
             { assetId: "video", sourceIndex: 2, trim: { inMs: 0, outMs: 40_000 }, framing: "contain", transition: "direct", selectionReason: "all-media" },
@@ -1074,14 +1232,14 @@ describe("deterministic auto-edit foundation (#127)", () => {
         journeyRevision: "7",
         generatedAt: baseInput.generatedAt,
         mode: "full",
-        plannedDurationMs: 1_800,
+        plannedDurationMs: FULL_CAMERA_MS + FULL_ARRIVAL_MS,
         tempo: "standard",
         omittedAssetIds: [],
         chapters: [{
           chapterId: "route:tokyo",
           routePointId: "tokyo",
-          camera: { primitive: "travel", durationMs: 1_000 },
-          arrival: { durationMs: 800, showPlaceLabel: true, showNote: true },
+          camera: { primitive: "travel", durationMs: FULL_CAMERA_MS },
+          arrival: { durationMs: FULL_ARRIVAL_MS, showPlaceLabel: true, showNote: true },
           items: [{
             assetId: "video",
             sourceIndex: 0,
@@ -1092,7 +1250,7 @@ describe("deterministic auto-edit foundation (#127)", () => {
         }],
       };
       expect(validateAutoEditPlanV1(plan, { ...baseInput, routePointIds: ["tokyo"], digests }))
-        .toMatchObject({ valid: true, errors: [], recomputedDurationMs: 1_800 });
+        .toMatchObject({ valid: true, errors: [], recomputedDurationMs: FULL_CAMERA_MS + FULL_ARRIVAL_MS });
 
       plan.chapters[0]!.items = [];
       const missing = validateAutoEditPlanV1(plan, { ...baseInput, routePointIds: ["tokyo"], digests });
@@ -1112,13 +1270,13 @@ describe("deterministic auto-edit foundation (#127)", () => {
       journeyRevision: "7",
       generatedAt: baseInput.generatedAt,
       mode: "full",
-      plannedDurationMs: 7_300,
+      plannedDurationMs: 5_500 + FULL_CAMERA_MS + FULL_ARRIVAL_MS,
       tempo: "standard",
       chapters: [{
         chapterId: "route:tokyo",
         routePointId: "tokyo",
-        camera: { primitive: "travel", durationMs: 1_000 },
-        arrival: { durationMs: 800, showPlaceLabel: true, showNote: true },
+        camera: { primitive: "travel", durationMs: FULL_CAMERA_MS },
+        arrival: { durationMs: FULL_ARRIVAL_MS, showPlaceLabel: true, showNote: true },
         items: [
           { assetId: "photo", sourceIndex: 0, dwellMs: 2_000, framing: "contain", transition: "direct", selectionReason: "route-point-representative" },
           { assetId: "video", sourceIndex: 1, trim: { inMs: 0, outMs: 3_500 }, framing: "contain", transition: "direct", selectionReason: "all-media" },
