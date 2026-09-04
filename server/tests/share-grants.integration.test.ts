@@ -11,7 +11,9 @@ import {
 import { serverConfig } from "../config";
 import {
   atlases,
+  journeyRoutePoints,
   journeys,
+  mediaAssets,
   shareGrantJourneys,
   shareGrants,
 } from "../db/app-schema";
@@ -652,5 +654,321 @@ describe("share grant lifecycle", () => {
     });
     expect(guest.status).toBe(200);
     await expect(guest.json()).resolves.toMatchObject({ journeyCount: 0 });
+  });
+});
+
+/**
+ * #200 phase B. Every assertion here is about `GET /api/shared/journeys`:
+ * what one grant may reach, what it may not, and what a guest sees once the
+ * grant stops authorizing anything.
+ */
+describe("guest journey read", () => {
+  type GuestPayload = {
+    share: { expiresAt: string; journeyCount: number };
+    journeys: Array<{
+      id: string;
+      title: string;
+      previousJourneyId: string | null;
+      nextJourneyId: string | null;
+      routePoints: Array<{ id: string; label: string }>;
+      media: Array<{ id: string; fileName: string }>;
+    }>;
+  };
+
+  const PRIVATE_TITLE = "Private aurora ridge never shared";
+  const SHARED_STORAGE_KEY = `share-phase-b/${randomUUID()}/shared.jpg`;
+  let privateJourneyId = "";
+  let sharedMediaId = "";
+
+  async function createShare(journeyIds: string[]): Promise<string> {
+    const response = await app.request(`${TEST_ORIGIN}/api/shares`, {
+      method: "POST",
+      headers: authHeaders(identity.cookie),
+      body: JSON.stringify({ journeyIds, expiresAt: inDays(7) }),
+    });
+    expect(response.status).toBe(201);
+    const { token } = await response.json() as { token: string };
+    return token;
+  }
+
+  function guestRead(token: string) {
+    return app.request(`${TEST_ORIGIN}/api/shared/journeys`, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+  }
+
+  beforeAll(async () => {
+    // An unshared journey in the SAME atlas: the interesting leak is a
+    // neighbour of the shared journeys, not a stranger's atlas.
+    const privateJourney = await createJourneyForAtlas(
+      identity.atlasId,
+      identity.userId,
+      { ...baseJourney, startedOn: "2026-08-15", title: PRIVATE_TITLE },
+    );
+    if (!privateJourney) throw new Error("Private journey fixture was not created");
+    privateJourneyId = privateJourney.id;
+
+    // Media has no reachable write path without a storage driver, so the row
+    // is written straight in. Its storage key is the field that must never
+    // reach a guest.
+    const [routePoint] = await db
+      .select({ id: journeyRoutePoints.id })
+      .from(journeyRoutePoints)
+      .where(eq(journeyRoutePoints.journeyId, journeyA))
+      .limit(1);
+    const [asset] = await db
+      .insert(mediaAssets)
+      .values({
+        journeyId: journeyA,
+        routePointId: routePoint.id,
+        storageDriver: "s3",
+        storageKey: SHARED_STORAGE_KEY,
+        fileName: "shared.jpg",
+        mimeType: "image/jpeg",
+        bytes: 2048,
+        contentHash: "phase-b-content-hash",
+        uploadedByUserId: identity.userId,
+      })
+      .returning({ id: mediaAssets.id });
+    sharedMediaId = asset.id;
+  });
+
+  it("answers a single-journey grant with exactly that journey", async () => {
+    const token = await createShare([journeyA]);
+    const response = await guestRead(token);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(response.headers.get("x-robots-tag")).toBe("noindex, nofollow");
+
+    const payload = await response.json() as GuestPayload;
+    expect(payload.share.journeyCount).toBe(1);
+    expect(payload.journeys.map((journey) => journey.id)).toEqual([journeyA]);
+    expect(payload.journeys[0].title).toBe("Shared north");
+    expect(payload.journeys[0].routePoints.map((point) => point.label))
+      .toEqual(["Singapore"]);
+    expect(payload.journeys[0].media.map((asset) => asset.id))
+      .toEqual([sharedMediaId]);
+  });
+
+  it("answers a multi-journey grant with exactly the granted set in its recorded order", async () => {
+    const token = await createShare([journeyB, journeyA]);
+    const payload = await (await guestRead(token)).json() as GuestPayload;
+    expect(payload.share.journeyCount).toBe(2);
+    // Canonical chronology recorded at creation, not the client's argument
+    // order and not re-derived at read time.
+    expect(payload.journeys.map((journey) => journey.id))
+      .toEqual([journeyA, journeyB]);
+  });
+
+  it("closes previous/next navigation at both edges of the granted set", async () => {
+    const token = await createShare([journeyA, journeyB]);
+    const payload = await (await guestRead(token)).json() as GuestPayload;
+    expect(payload.journeys[0]).toMatchObject({
+      previousJourneyId: null,
+      nextJourneyId: journeyB,
+    });
+    expect(payload.journeys[1]).toMatchObject({
+      previousJourneyId: journeyA,
+      nextJourneyId: null,
+    });
+    const reachable = payload.journeys.flatMap((journey) =>
+      [journey.previousJourneyId, journey.nextJourneyId].filter(
+        (id): id is string => id !== null,
+      ));
+    const granted = new Set(payload.journeys.map((journey) => journey.id));
+    expect(reachable.every((id) => granted.has(id))).toBe(true);
+  });
+
+  it("leaks no unshared journey, owner field or storage key through the payload", async () => {
+    const token = await createShare([journeyA]);
+    const body = await (await guestRead(token)).text();
+
+    // Nothing about the same atlas's other journeys, or another atlas's.
+    expect(body).not.toContain(privateJourneyId);
+    expect(body).not.toContain(PRIVATE_TITLE);
+    expect(body).not.toContain(journeyB);
+    expect(body).not.toContain("Shared south");
+    expect(body).not.toContain(foreignJourneyId);
+    expect(body).not.toContain("Never shared");
+    // Nor the private plumbing of the journey it does share.
+    expect(body).not.toContain(SHARED_STORAGE_KEY);
+    expect(body).not.toContain("phase-b-content-hash");
+    expect(body).not.toContain(identity.atlasId);
+    expect(body).not.toContain(identity.userId);
+    expect(body).not.toContain("storageKey");
+    expect(body).not.toContain("sortOrder");
+    expect(body).not.toContain("createdByUserId");
+    expect(body).not.toContain("uploadedByUserId");
+    expect(body).not.toContain("atlasId");
+    expect(body).not.toContain("deletion");
+    // No aggregate or ordering hint that a wider set exists.
+    const payload = JSON.parse(body) as GuestPayload;
+    expect(Object.keys(payload).sort()).toEqual(["journeys", "share"]);
+    expect(Object.keys(payload.share).sort()).toEqual([
+      "expiresAt",
+      "journeyCount",
+    ]);
+  });
+
+  it("drops a granted journey once it starts deleting", async () => {
+    const doomed = await createJourneyForAtlas(identity.atlasId, identity.userId, {
+      ...baseJourney,
+      startedOn: "2026-08-25",
+      title: "Deleting shared journey",
+    });
+    if (!doomed) throw new Error("Journey fixture was not created");
+    const token = await createShare([journeyA, doomed.id]);
+
+    const before = await (await guestRead(token)).json() as GuestPayload;
+    expect(before.journeys.map((journey) => journey.id))
+      .toEqual([journeyA, doomed.id]);
+
+    await markJourneyForDeletionForAtlas(doomed.id, identity.atlasId);
+
+    const response = await guestRead(token);
+    expect(response.status).toBe(200);
+    const body = await response.text();
+    expect(body).not.toContain(doomed.id);
+    expect(body).not.toContain("Deleting shared journey");
+    const after = JSON.parse(body) as GuestPayload;
+    expect(after.share.journeyCount).toBe(1);
+    // The survivor's navigation closes over what is left, not over what the
+    // grant originally selected.
+    expect(after.journeys[0]).toMatchObject({
+      id: journeyA,
+      previousJourneyId: null,
+      nextJourneyId: null,
+    });
+  });
+
+  it("answers an emptied grant scope with an empty set rather than the unavailable state", async () => {
+    const solo = await createJourneyForAtlas(identity.atlasId, identity.userId, {
+      ...baseJourney,
+      startedOn: "2026-08-27",
+      title: "Sole shared journey",
+    });
+    if (!solo) throw new Error("Journey fixture was not created");
+    const token = await createShare([solo.id]);
+    await markJourneyForDeletionForAtlas(solo.id, identity.atlasId);
+
+    const response = await guestRead(token);
+    expect(response.status).toBe(200);
+    const payload = await response.json() as GuestPayload;
+    expect(payload.journeys).toEqual([]);
+    expect(payload.share.journeyCount).toBe(0);
+    expect(payload.share.expiresAt).toBeTruthy();
+  });
+
+  it("answers one indistinguishable unavailable state for expired, revoked, deleting-atlas and unknown tokens", async () => {
+    const expired = await insertGrant(
+      identity.atlasId,
+      journeyA,
+      new Date(Date.now() - 1_000),
+    );
+
+    const revokedToken = await createShare([journeyA]);
+    const revokedHash = hashShareToken(revokedToken);
+    const [toRevoke] = await db
+      .select({ id: shareGrants.id })
+      .from(shareGrants)
+      .where(eq(shareGrants.tokenHash, revokedHash));
+    const revokeResponse = await app.request(
+      `${TEST_ORIGIN}/api/shares/${toRevoke.id}/revoke`,
+      { method: "POST", headers: authHeaders(identity.cookie) },
+    );
+    expect(revokeResponse.status).toBe(200);
+
+    // An atlas of its own, so marking it deleting cannot disturb the shared
+    // authenticated fixture.
+    const [doomedAtlas] = await db
+      .insert(atlases)
+      .values({
+        organizationId: `test-org-share-guest-${randomUUID()}`,
+        title: "Doomed guest atlas",
+      })
+      .returning({ id: atlases.id });
+    atlasIds.push(doomedAtlas.id);
+    const doomedJourney = await createJourneyForAtlas(doomedAtlas.id, "user-doomed", {
+      ...baseJourney,
+      title: "Doomed guest journey",
+    });
+    if (!doomedJourney) throw new Error("Doomed journey fixture was not created");
+    const doomedGrant = await insertGrant(
+      doomedAtlas.id,
+      doomedJourney.id,
+      new Date(Date.now() + 60_000),
+    );
+    await db
+      .update(atlases)
+      .set({ deletionStartedAt: new Date() })
+      .where(eq(atlases.id, doomedAtlas.id));
+
+    const responses = [
+      await guestRead(expired.token),
+      await guestRead(revokedToken),
+      await guestRead(doomedGrant.token),
+      await guestRead(generateShareToken()),
+      await guestRead("not-a-token"),
+      await app.request(`${TEST_ORIGIN}/api/shared/journeys`),
+      await app.request(`${TEST_ORIGIN}/api/shared/journeys`, {
+        headers: { authorization: "Basic abc" },
+      }),
+    ];
+    const bodies = new Set<string>();
+    for (const response of responses) {
+      expect(response.status).toBe(404);
+      expect(response.headers.get("cache-control")).toBe("private, no-store");
+      expect(response.headers.get("x-robots-tag")).toBe("noindex, nofollow");
+      bodies.add(await response.text());
+    }
+    // One body for every cause: a probe cannot tell an expired grant from a
+    // token that never existed.
+    expect(bodies.size).toBe(1);
+    expect([...bodies][0]).toBe(JSON.stringify({
+      error: "SHARE_UNAVAILABLE",
+      message: "Share link unavailable",
+    }));
+  });
+
+  it("exposes no mutation method on the guest journey read", async () => {
+    const token = await createShare([journeyA]);
+    for (const method of ["POST", "PATCH", "PUT", "DELETE"]) {
+      const response = await app.request(`${TEST_ORIGIN}/api/shared/journeys`, {
+        method,
+        headers: {
+          authorization: `Bearer ${token}`,
+          "content-type": "application/json",
+        },
+        body: method === "DELETE" ? undefined : "{}",
+      });
+      expect(response.status).toBe(404);
+    }
+
+    // The bearer capability is not a session, so the owner journey routes it
+    // would need in order to mutate anything stay closed to it.
+    for (const path of ["/api/journeys", `/api/journeys/${journeyA}`]) {
+      const response = await app.request(`${TEST_ORIGIN}${path}`, {
+        headers: { authorization: `Bearer ${token}`, origin: TEST_ORIGIN },
+      });
+      expect(response.status).toBe(401);
+    }
+  });
+
+  it("cannot be widened to another atlas by a request parameter", async () => {
+    const token = await createShare([journeyA]);
+    // The scope comes from the grant the bearer token resolves to. There is no
+    // path, query or body parameter through which a guest could name a journey
+    // or an atlas, so an added one changes nothing.
+    const probe = await app.request(
+      `${TEST_ORIGIN}/api/shared/journeys?journeyId=${foreignJourneyId}&atlasId=${foreignAtlasId}`,
+      { headers: { authorization: `Bearer ${token}` } },
+    );
+    expect(probe.status).toBe(200);
+    const body = await probe.text();
+    expect(body).not.toContain(foreignJourneyId);
+    expect(body).not.toContain("Never shared");
+    const probed = JSON.parse(body) as GuestPayload;
+    expect(probed.journeys.map((journey) => journey.id)).toEqual([journeyA]);
   });
 });

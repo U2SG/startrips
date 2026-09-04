@@ -12,6 +12,7 @@ import {
 import { journeys, shareGrantJourneys, shareGrants } from "../db/app-schema";
 import { db } from "../db/client";
 import { lockActiveAtlas } from "../repositories/journey-repository";
+import { loadSharedJourneyView } from "../repositories/shared-journey-repository";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -315,25 +316,70 @@ shareRoutes.post("/:id/revoke", async (context) => {
 export const sharedRoutes = new Hono();
 
 /**
- * The guest read of the grant itself. Phase A exposes nothing about the
- * journeys — no ids, no titles, no counts of what was *not* shared — only the
- * two facts a viewer shell needs before Phase B supplies the data.
+ * Every guest response, including the generic unavailable 404 that
+ * `requireActiveShareGrant` throws, carries the headers private shared content
+ * needs. Set before the handler runs so Hono applies them to the response the
+ * global `onError` builds on this same context, not only to the happy path.
+ *
+ * `Referrer-Policy` here is defence in depth rather than the fix: the token
+ * lives in the fragment of the `/share#<token>` document, so the surface that
+ * can leak it through `Referer` is that HTML document and the requests it
+ * makes to third parties. Sending the policy on the API response costs nothing
+ * and closes nothing on its own; the document-level policy and the `noindex`
+ * meta tag belong to the guest viewer in phase D.
  */
-sharedRoutes.get("/grant", async (context) => {
-  const grant = await requireActiveShareGrant(context.req.raw);
+sharedRoutes.use("*", async (context, next) => {
+  context.header("Cache-Control", SHARE_CACHE_CONTROL);
+  context.header("Referrer-Policy", "no-referrer");
+  context.header("X-Robots-Tag", "noindex, nofollow");
+  return next();
+});
+
+/** An access record for the owner's audit column, not per-request telemetry. */
+async function recordShareAccess(shareGrantId: string): Promise<void> {
   await db
     .update(shareGrants)
     .set({ lastAccessedAt: new Date() })
-    .where(eq(shareGrants.id, grant.id));
+    .where(eq(shareGrants.id, shareGrantId));
+}
+
+/**
+ * The guest read of the grant itself. Phase A exposes nothing about the
+ * journeys — no ids, no titles, no counts of what was *not* shared — only the
+ * two facts a viewer shell needs. Its `journeyCount` is grant membership, so
+ * it still counts a granted journey that has started deleting; the phase B
+ * read below reports the live readable set instead and is what the viewer
+ * should trust.
+ */
+sharedRoutes.get("/grant", async (context) => {
+  const grant = await requireActiveShareGrant(context.req.raw);
+  await recordShareAccess(grant.id);
   const [selected] = await db
     .select({ value: count() })
     .from(shareGrantJourneys)
     .where(eq(shareGrantJourneys.shareGrantId, grant.id));
 
-  context.header("Cache-Control", SHARE_CACHE_CONTROL);
-  context.header("X-Robots-Tag", "noindex, nofollow");
   return context.json({
     expiresAt: grant.expiresAt,
     journeyCount: selected.value,
   });
+});
+
+/**
+ * #200 phase B: the whole guest payload — the granted journeys, their routes
+ * and their media, and nothing else.
+ *
+ * There is no journey id, atlas id or token in the path or the query string:
+ * the capability arrives only as `Authorization: Bearer`, and the scope comes
+ * from the grant it resolves to. A guest therefore has nothing to enumerate.
+ *
+ * An active grant whose journeys have all been deleted answers 200 with an
+ * empty set rather than the unavailable 404, because those are two different
+ * product states: the link still works and its content is gone, which is what
+ * `这些旅程目前不可查看` says, while the 404 is `这条分享链接已失效`.
+ */
+sharedRoutes.get("/journeys", async (context) => {
+  const grant = await requireActiveShareGrant(context.req.raw);
+  await recordShareAccess(grant.id);
+  return context.json(await loadSharedJourneyView(grant));
 });
