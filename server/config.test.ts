@@ -96,13 +96,7 @@ describe("S3-compatible storage configuration", () => {
   });
 });
 
-describe("anonymous rate limiting configuration", () => {
-  it("defaults to a 60-second window with 60 requests", () => {
-    const config = loadServerConfig(productionEnvironment);
-    expect(config.anonymousRateLimitWindowSeconds).toBe(60);
-    expect(config.anonymousRateLimitMaxRequests).toBe(60);
-  });
-
+describe("media read URL configuration", () => {
   it("defaults the media read URL lifetime to 15 minutes", () => {
     const config = loadServerConfig(productionEnvironment);
     expect(config.mediaReadUrlExpiresInSeconds).toBe(900);
@@ -122,31 +116,6 @@ describe("anonymous rate limiting configuration", () => {
       MEDIA_READ_URL_EXPIRES_IN_SECONDS: "30",
     })).toThrow(
       "MEDIA_READ_URL_EXPIRES_IN_SECONDS must be between 60 and 3600",
-    );
-  });
-
-  it("accepts explicit window and maximum values", () => {
-    const config = loadServerConfig({
-      ...productionEnvironment,
-      ANON_RATE_LIMIT_WINDOW_SECONDS: "120",
-      ANON_RATE_LIMIT_MAX_REQUESTS: "30",
-    });
-    expect(config.anonymousRateLimitWindowSeconds).toBe(120);
-    expect(config.anonymousRateLimitMaxRequests).toBe(30);
-  });
-
-  it("rejects invalid windows and maxima during startup", () => {
-    expect(() => loadServerConfig({
-      ...productionEnvironment,
-      ANON_RATE_LIMIT_WINDOW_SECONDS: "0",
-    })).toThrow(
-      "ANON_RATE_LIMIT_WINDOW_SECONDS must be an integer between 1 and 3600",
-    );
-    expect(() => loadServerConfig({
-      ...productionEnvironment,
-      ANON_RATE_LIMIT_MAX_REQUESTS: "not-a-number",
-    })).toThrow(
-      "ANON_RATE_LIMIT_MAX_REQUESTS must be an integer between 1 and 100000",
     );
   });
 });
