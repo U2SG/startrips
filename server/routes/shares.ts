@@ -7,12 +7,22 @@ import {
   hashShareToken,
   MAX_SHARE_LIFETIME_MS,
   requireActiveShareGrant,
+  shareUnavailable,
   type ShareGrantStatus,
 } from "../authorization/share-access";
+import { serverConfig } from "../config";
 import { journeys, shareGrantJourneys, shareGrants } from "../db/app-schema";
 import { db } from "../db/client";
 import { lockActiveAtlas } from "../repositories/journey-repository";
 import { loadSharedJourneyView } from "../repositories/shared-journey-repository";
+import {
+  capShareMediaTtlSeconds,
+  resolveSharedMediaRead,
+  type ShareMediaTtlLimits,
+  type SharedMediaRead,
+} from "../repositories/shared-media-repository";
+import type { MultipartStorage } from "../storage/multipart-storage";
+import { getMultipartStorage } from "../storage/storage-registry";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -382,4 +392,100 @@ sharedRoutes.get("/journeys", async (context) => {
   const grant = await requireActiveShareGrant(context.req.raw);
   await recordShareAccess(grant.id);
   return context.json(await loadSharedJourneyView(grant));
+});
+
+/**
+ * Turn a resolved asset into a signed URL that cannot outlive its grant.
+ *
+ * The lifetime is derived here rather than by the resolver because it has to
+ * be measured from the clock the signature is about to be stamped with. A
+ * duration computed before the authorization transaction ran would be a
+ * promise about a moment already in the past: a request that waited on a
+ * saturated connection pool would take the remaining lifetime it saw at entry
+ * and start counting it from a later instant, so the URL would still be valid
+ * for that long *after* the grant expired. `now` defaults here, one statement
+ * before the presign, and nowhere earlier.
+ *
+ * The post-condition is checked rather than argued. `expiresInSeconds` is a
+ * duration and the adapter stamps its own signing time, so the interface alone
+ * cannot express "not past this instant"; comparing what came back against the
+ * deadline is what makes the guarantee hold for any adapter, including one
+ * that rounds its own expiry up. It refuses rather than returning a URL it
+ * cannot stand behind.
+ *
+ * `resolveStorage` is injectable for tests only; the route always uses the
+ * real registry.
+ */
+export async function signSharedMediaRead(
+  resolved: SharedMediaRead,
+  limits: ShareMediaTtlLimits,
+  now: Date = new Date(),
+  resolveStorage: (driver: string) => MultipartStorage = getMultipartStorage,
+): Promise<{ url: string; expiresAt: string }> {
+  const expiresInSeconds = capShareMediaTtlSeconds(
+    limits,
+    resolved.grantExpiresAt,
+    now,
+  );
+  // The grant is still active but has under a second left. There is no honest
+  // URL to issue: any signature would outlive the grant it came from.
+  if (expiresInSeconds < 1) throw shareUnavailable();
+
+  const signed = await resolveStorage(resolved.storageDriver)
+    .createPrivateReadUrl({ key: resolved.storageKey, expiresInSeconds });
+  if (signed.expiresAt.valueOf() > resolved.grantExpiresAt.valueOf()) {
+    throw shareUnavailable();
+  }
+  return { url: signed.url, expiresAt: signed.expiresAt.toISOString() };
+}
+
+/**
+ * #200 phase C: one short-lived signed storage URL for one asset of one
+ * active grant.
+ *
+ * Media stays private in object storage, so the guest `<img>` and `<video>`
+ * carry a presigned storage URL and never the share token. The path carries no
+ * token either — the capability is the bearer header — so nothing here is
+ * loggable at the edge, and the response body holds the signed URL, which no
+ * log line touches.
+ *
+ * There are deliberately TWO unavailable shapes, and the distinction is about
+ * what a guest is allowed to learn, not about disclosure:
+ *
+ * - grant-side causes — unknown token, revoked, expired, atlas deleting, and
+ *   a grant with under a second left — all raise the same byte-identical
+ *   `SHARE_UNAVAILABLE` 404 as every other guest route, so a token probe still
+ *   cannot tell them apart. That is the link being dead.
+ * - asset-side causes — malformed id, unknown id, an asset in an unshared
+ *   journey of the same atlas, an asset in another atlas, an asset whose
+ *   journey started deleting — all answer the same `MEDIA_UNAVAILABLE` 404, so
+ *   they cannot be told apart either and existence is never disclosed. That is
+ *   one picture being gone while the link still works, which is a different
+ *   product state: a viewer must not tear down a whole session because the
+ *   owner moved one photo.
+ *
+ * `lastAccessedAt` is not written here. #200 lists it as optional and the
+ * journeys read already records the visit; a media read happens once per
+ * asset, so recording it would turn a prefetching gallery into a burst of
+ * writes on one row for no owner-visible gain.
+ */
+sharedRoutes.get("/assets/:assetId/read-url", async (context) => {
+  const grant = await requireActiveShareGrant(context.req.raw);
+  const assetId = context.req.param("assetId");
+  // Not defensive: without this an unparseable id reaches a `uuid` comparison,
+  // Postgres raises 22P02, and the generic 500 from `onError` would tell a
+  // guest that its id was malformed rather than simply unavailable.
+  const resolved = UUID_PATTERN.test(assetId)
+    ? await resolveSharedMediaRead(grant, assetId)
+    : null;
+  if (!resolved) {
+    return context.json(
+      { error: "MEDIA_UNAVAILABLE", message: "Media unavailable" },
+      404,
+    );
+  }
+  return context.json(await signSharedMediaRead(resolved, {
+    shareTtlSeconds: serverConfig.shareMediaReadUrlExpiresInSeconds,
+    ownerTtlSeconds: serverConfig.mediaReadUrlExpiresInSeconds,
+  }));
 });

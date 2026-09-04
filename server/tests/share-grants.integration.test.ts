@@ -28,6 +28,12 @@ import {
   markJourneyForDeletionForAtlas,
 } from "../repositories/journey-repository";
 import { loadSharedJourneyView } from "../repositories/shared-journey-repository";
+import {
+  capShareMediaTtlSeconds,
+  resolveSharedMediaRead,
+} from "../repositories/shared-media-repository";
+import { signSharedMediaRead } from "../routes/shares";
+import { disabledStorage } from "../storage/disabled-storage";
 
 const TEST_ORIGIN = "http://127.0.0.1:5173";
 const TOKEN_SHAPE = /^[A-Za-z0-9_-]{43}$/;
@@ -140,6 +146,18 @@ async function insertGrant(atlasId: string, journeyId: string, expiresAt: Date) 
     .insert(shareGrantJourneys)
     .values({ shareGrantId: grant.id, journeyId, sortOrder: 0 });
   return { id: grant.id, token: rawToken };
+}
+
+/** A grant created the way the product creates one, returning its raw token. */
+async function createShare(journeyIds: string[]): Promise<string> {
+  const response = await app.request(`${TEST_ORIGIN}/api/shares`, {
+    method: "POST",
+    headers: authHeaders(identity.cookie),
+    body: JSON.stringify({ journeyIds, expiresAt: inDays(7) }),
+  });
+  expect(response.status).toBe(201);
+  const { token } = await response.json() as { token: string };
+  return token;
 }
 
 let identity: Awaited<ReturnType<typeof createAuthenticatedAtlas>>;
@@ -682,17 +700,6 @@ describe("guest journey read", () => {
   let privateJourneyId = "";
   let sharedMediaId = "";
 
-  async function createShare(journeyIds: string[]): Promise<string> {
-    const response = await app.request(`${TEST_ORIGIN}/api/shares`, {
-      method: "POST",
-      headers: authHeaders(identity.cookie),
-      body: JSON.stringify({ journeyIds, expiresAt: inDays(7) }),
-    });
-    expect(response.status).toBe(201);
-    const { token } = await response.json() as { token: string };
-    return token;
-  }
-
   function guestRead(token: string) {
     return app.request(`${TEST_ORIGIN}/api/shared/journeys`, {
       headers: { authorization: `Bearer ${token}` },
@@ -1012,5 +1019,490 @@ describe("guest journey read", () => {
     await expect(response.json()).resolves.toMatchObject({
       error: "SHARE_UNAVAILABLE",
     });
+  });
+});
+
+/**
+ * #200 phase C. Every assertion here is about
+ * `GET /api/shared/assets/:assetId/read-url`: which assets one grant may have
+ * signed for it, how long the signature may live, and what a guest is told
+ * when the answer is no.
+ *
+ * Object storage is not configured in this environment, so no test here
+ * asserts a signed URL. The route-level cases prove the authorization decision
+ * and the two unavailable shapes; the resolver is called directly for the
+ * storage key and the capped lifetime, the way the phase B tests call
+ * `loadSharedJourneyView`.
+ */
+describe("guest media read", () => {
+  const GRANTED_STORAGE_KEY = `share-phase-c/${randomUUID()}/granted.jpg`;
+  const UNSHARED_STORAGE_KEY = `share-phase-c/${randomUUID()}/unshared.jpg`;
+  const UNSHARED_TITLE = "Unshared journey holding phase C media";
+  const MEDIA_UNAVAILABLE_BODY = JSON.stringify({
+    error: "MEDIA_UNAVAILABLE",
+    message: "Media unavailable",
+  });
+  const SHARE_UNAVAILABLE_BODY = JSON.stringify({
+    error: "SHARE_UNAVAILABLE",
+    message: "Share link unavailable",
+  });
+  const LIMITS = {
+    shareTtlSeconds: serverConfig.shareMediaReadUrlExpiresInSeconds,
+    ownerTtlSeconds: serverConfig.mediaReadUrlExpiresInSeconds,
+  };
+
+  /**
+   * Object storage is unconfigured here, so the signing step is driven through
+   * an injected adapter for the cases that are about the lifetime rather than
+   * about the bucket. It records the duration it was asked for and honours it
+   * exactly, which is the contract a real presign keeps.
+   */
+  const signedLifetimes: number[] = [];
+  const fakeStorage = () => ({
+    ...disabledStorage,
+    driver: "s3",
+    async createPrivateReadUrl(
+      input: { key: string; expiresInSeconds: number },
+    ) {
+      signedLifetimes.push(input.expiresInSeconds);
+      return {
+        url: "https://storage.test/" + encodeURIComponent(input.key),
+        expiresAt: new Date(Date.now() + input.expiresInSeconds * 1000),
+      };
+    },
+  });
+
+  let unsharedJourneyId = "";
+  let unsharedAssetId = "";
+  let foreignAssetId = "";
+
+  /**
+   * Media has no reachable write path without a storage driver, so asset rows
+   * are written straight in, exactly as the phase B fixtures are. The mime
+   * type is one the move endpoint accepts, so the move case below can run
+   * through the real product mutation rather than an UPDATE.
+   */
+  async function insertAsset(journeyId: string, storageKey: string) {
+    const [asset] = await db
+      .insert(mediaAssets)
+      .values({
+        journeyId,
+        storageDriver: "s3",
+        storageKey,
+        fileName: "granted.jpg",
+        mimeType: "image/jpeg",
+        bytes: 4096,
+        uploadedByUserId: identity.userId,
+      })
+      .returning({ id: mediaAssets.id });
+    return asset.id;
+  }
+
+  /** A storage key nobody else in this file can collide with. */
+  function uniqueKey(label: string) {
+    return "share-phase-c/" + randomUUID() + "/" + label + ".jpg";
+  }
+
+  function guestReadUrl(token: string, assetId: string) {
+    return app.request(
+      `${TEST_ORIGIN}/api/shared/assets/${assetId}/read-url`,
+      { headers: { authorization: `Bearer ${token}` } },
+    );
+  }
+
+  /**
+   * The object `requireActiveShareGrant` hands a route once it has authorized
+   * the bearer token, so the resolver can be driven with the same input the
+   * route gives it.
+   */
+  async function authorizedGrant(token: string) {
+    const [row] = await db
+      .select({
+        id: shareGrants.id,
+        atlasId: shareGrants.atlasId,
+        expiresAt: shareGrants.expiresAt,
+      })
+      .from(shareGrants)
+      .where(eq(shareGrants.tokenHash, hashShareToken(token)));
+    return { id: row.id, atlasId: row.atlasId, expiresAt: row.expiresAt };
+  }
+
+  beforeAll(async () => {
+    // An unshared journey in the SAME atlas. The interesting failure is a
+    // grant reaching a neighbour of what it shares, not a stranger's atlas.
+    const unshared = await createJourneyForAtlas(
+      identity.atlasId,
+      identity.userId,
+      { ...baseJourney, startedOn: "2026-09-01", title: UNSHARED_TITLE },
+    );
+    if (!unshared) throw new Error("Unshared journey fixture was not created");
+    unsharedJourneyId = unshared.id;
+    unsharedAssetId = await insertAsset(unsharedJourneyId, UNSHARED_STORAGE_KEY);
+    foreignAssetId = await insertAsset(
+      foreignJourneyId,
+      `share-phase-c/${randomUUID()}/foreign.jpg`,
+    );
+  });
+
+  it("authorizes an asset in a granted journey and reaches object storage", async () => {
+    const assetId = await insertAsset(journeyA, GRANTED_STORAGE_KEY);
+    const token = await createShare([journeyA]);
+    const response = await guestReadUrl(token, assetId);
+
+    // 503, not 404: authorization passed and the route went on to presign,
+    // which is as far as it can get with STORAGE_DRIVER unconfigured here.
+    // Truthful degradation, not a fake URL.
+    expect(response.status).toBe(503);
+    const body = await response.text();
+    expect(JSON.parse(body).error).toBe("STORAGE_UNAVAILABLE");
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(response.headers.get("x-robots-tag")).toBe("noindex, nofollow");
+    // Whatever the outcome, no guest response repeats the capability or the
+    // private storage key back.
+    expect(body).not.toContain(token);
+    expect(body).not.toContain(GRANTED_STORAGE_KEY);
+
+    // What the route would have signed: the asset's real key, its grant's
+    // deadline, and - through the injected adapter - an actual URL.
+    const grant = await authorizedGrant(token);
+    const resolved = await resolveSharedMediaRead(grant, assetId);
+    expect(resolved).toMatchObject({
+      storageDriver: "s3",
+      storageKey: GRANTED_STORAGE_KEY,
+      grantExpiresAt: grant.expiresAt,
+    });
+
+    signedLifetimes.length = 0;
+    const issued = await signSharedMediaRead(
+      resolved!,
+      LIMITS,
+      new Date(),
+      fakeStorage,
+    );
+    expect(issued.url).toContain(encodeURIComponent(GRANTED_STORAGE_KEY));
+    expect(signedLifetimes).toEqual([
+      serverConfig.shareMediaReadUrlExpiresInSeconds,
+    ]);
+    expect(Date.parse(issued.expiresAt))
+      .toBeLessThanOrEqual(grant.expiresAt.valueOf());
+  });
+
+  it("applies the TTL cap so no signed URL can outlive the grant", async () => {
+    const assetId = await insertAsset(
+      journeyA,
+      `share-phase-c/${randomUUID()}/ttl.jpg`,
+    );
+    // A grant with less time left than the share ceiling. Only a row insert
+    // can produce it: the create API rejects an expiry this close.
+    const shortGrant = await insertGrant(
+      identity.atlasId,
+      journeyA,
+      new Date(Date.now() + 20_000),
+    );
+    const short = await authorizedGrant(shortGrant.token);
+    const resolvedShort = await resolveSharedMediaRead(short, assetId);
+    expect(resolvedShort?.grantExpiresAt).toEqual(short.expiresAt);
+    // The lifetime is derived at signing time from that deadline, which is the
+    // whole point: the clock passed below is the one the signature is stamped
+    // with.
+    signedLifetimes.length = 0;
+    const issued = await signSharedMediaRead(
+      resolvedShort!,
+      LIMITS,
+      new Date(),
+      fakeStorage,
+    );
+    expect(signedLifetimes[0]).toBeLessThanOrEqual(20);
+    expect(signedLifetimes[0]).toBeGreaterThan(0);
+    // The promise, stated as the arithmetic it is.
+    expect(Date.parse(issued.expiresAt))
+      .toBeLessThanOrEqual(short.expiresAt.valueOf());
+
+    // A long grant is capped by the share ceiling instead, never by the
+    // owner's ~15 minutes.
+    const longGrant = await authorizedGrant(await createShare([journeyA]));
+    const resolvedLong = await resolveSharedMediaRead(longGrant, assetId);
+    signedLifetimes.length = 0;
+    await signSharedMediaRead(resolvedLong!, LIMITS, new Date(), fakeStorage);
+    expect(signedLifetimes[0])
+      .toBe(serverConfig.shareMediaReadUrlExpiresInSeconds);
+    expect(signedLifetimes[0])
+      .toBeLessThan(serverConfig.mediaReadUrlExpiresInSeconds);
+  });
+
+  it("derives the TTL from the signing clock, not from when the request started", async () => {
+    const assetId = await insertAsset(journeyA, uniqueKey("slow"));
+    const stalled = await insertGrant(
+      identity.atlasId,
+      journeyA,
+      new Date(Date.now() + 30_000),
+    );
+    const grant = await authorizedGrant(stalled.token);
+    const resolved = await resolveSharedMediaRead(grant, assetId);
+
+    // The request is authorized with 30 s left, then stalls - a saturated
+    // connection pool, a slow query - and signs only 25 s later. A lifetime
+    // computed at entry would still be 30 s, and the URL would outlive the
+    // grant by 25 s. Signing-time arithmetic issues 5 s instead.
+    signedLifetimes.length = 0;
+    const late = new Date(grant.expiresAt.valueOf() - 5_000);
+    const issued = await signSharedMediaRead(
+      resolved!,
+      LIMITS,
+      late,
+      fakeStorage,
+    );
+    expect(signedLifetimes[0]).toBe(5);
+    expect(late.valueOf() + signedLifetimes[0] * 1000)
+      .toBeLessThanOrEqual(grant.expiresAt.valueOf());
+    expect(issued.url).toBeTruthy();
+  });
+
+  it("refuses a signature that would reach past the grant deadline", async () => {
+    const assetId = await insertAsset(journeyA, uniqueKey("overrun"));
+    const grant = await authorizedGrant(await createShare([journeyA]));
+    const resolved = await resolveSharedMediaRead(grant, assetId);
+    // An adapter that honours the duration but stamps it from a later clock,
+    // or rounds its own expiry up, must not have its URL reach a guest. The
+    // guarantee is enforced against what came back, not argued from the
+    // interface.
+    const overrunning = () => ({
+      ...disabledStorage,
+      async createPrivateReadUrl() {
+        return {
+          url: "https://storage.test/overrun",
+          expiresAt: new Date(grant.expiresAt.valueOf() + 1_000),
+        };
+      },
+    });
+    await expect(
+      signSharedMediaRead(resolved!, LIMITS, new Date(), overrunning),
+    ).rejects.toThrow(ShareAccessError);
+  });
+
+  it("signs nothing for the final sub-second of a grant", async () => {
+    const assetId = await insertAsset(
+      journeyA,
+      `share-phase-c/${randomUUID()}/edge.jpg`,
+    );
+    const grant = await authorizedGrant(await createShare([journeyA]));
+    const resolved = await resolveSharedMediaRead(grant, assetId);
+    // 400 ms before the grant expires it is still active, so the refusal has
+    // to come from the TTL cap rather than from the expiry check. The clock is
+    // explicit so the case does not depend on wall-clock timing.
+    const almostOver = new Date(grant.expiresAt.valueOf() - 400);
+    expect(capShareMediaTtlSeconds(LIMITS, grant.expiresAt, almostOver)).toBe(0);
+    await expect(
+      signSharedMediaRead(resolved!, LIMITS, almostOver, fakeStorage),
+    ).rejects.toThrow(ShareAccessError);
+  });
+
+  it("stops signing an asset moved out of the shared journey", async () => {
+    const assetId = await insertAsset(
+      journeyA,
+      `share-phase-c/${randomUUID()}/moved.jpg`,
+    );
+    const token = await createShare([journeyA]);
+    const grant = await authorizedGrant(token);
+    expect(await resolveSharedMediaRead(grant, assetId)).not.toBeNull();
+
+    // The real owner mutation, not an UPDATE: this is the transition #200
+    // describes, an owner moving a photo into a journey the link never shared.
+    const move = await app.request(`${TEST_ORIGIN}/api/uploads/assets/move`, {
+      method: "POST",
+      headers: authHeaders(identity.cookie),
+      body: JSON.stringify({
+        journeyId: journeyA,
+        targetJourneyId: unsharedJourneyId,
+        assetIds: [assetId],
+      }),
+    });
+    expect(move.status).toBe(200);
+
+    // No cache to invalidate: the next call re-derives membership from the
+    // asset's current journey and finds nothing.
+    expect(await resolveSharedMediaRead(grant, assetId)).toBeNull();
+    const response = await guestReadUrl(token, assetId);
+    expect(response.status).toBe(404);
+    expect(await response.text()).toBe(MEDIA_UNAVAILABLE_BODY);
+  });
+
+  it("stops signing an asset whose journey starts deleting", async () => {
+    const doomed = await createJourneyForAtlas(identity.atlasId, identity.userId, {
+      ...baseJourney,
+      startedOn: "2026-09-02",
+      title: "Deleting journey holding phase C media",
+    });
+    if (!doomed) throw new Error("Journey fixture was not created");
+    const assetId = await insertAsset(
+      doomed.id,
+      `share-phase-c/${randomUUID()}/doomed.jpg`,
+    );
+    const token = await createShare([doomed.id]);
+    expect((await guestReadUrl(token, assetId)).status).toBe(503);
+
+    await markJourneyForDeletionForAtlas(doomed.id, identity.atlasId);
+
+    // Soft deletion keeps the row and its grant membership, so this is the
+    // journey's deletion mark alone doing the work.
+    const response = await guestReadUrl(token, assetId);
+    expect(response.status).toBe(404);
+    expect(await response.text()).toBe(MEDIA_UNAVAILABLE_BODY);
+  });
+
+  it("stops signing every asset of an atlas that starts deleting", async () => {
+    const [doomedAtlas] = await db
+      .insert(atlases)
+      .values({
+        organizationId: `test-org-share-media-${randomUUID()}`,
+        title: "Doomed media atlas",
+      })
+      .returning({ id: atlases.id });
+    atlasIds.push(doomedAtlas.id);
+    const journey = await createJourneyForAtlas(doomedAtlas.id, "user-doomed", {
+      ...baseJourney,
+      title: "Doomed media journey",
+    });
+    if (!journey) throw new Error("Doomed journey fixture was not created");
+    const [asset] = await db
+      .insert(mediaAssets)
+      .values({
+        journeyId: journey.id,
+        storageDriver: "s3",
+        storageKey: `share-phase-c/${randomUUID()}/doomed-atlas.jpg`,
+        fileName: "granted.jpg",
+        mimeType: "image/jpeg",
+        bytes: 4096,
+        uploadedByUserId: "user-doomed",
+      })
+      .returning({ id: mediaAssets.id });
+    const grant = await insertGrant(
+      doomedAtlas.id,
+      journey.id,
+      new Date(Date.now() + 60_000),
+    );
+    expect((await guestReadUrl(grant.token, asset.id)).status).toBe(503);
+
+    await db
+      .update(atlases)
+      .set({ deletionStartedAt: new Date() })
+      .where(eq(atlases.id, doomedAtlas.id));
+
+    // The whole link is gone, not one asset, so this is the grant-side shape.
+    const response = await guestReadUrl(grant.token, asset.id);
+    expect(response.status).toBe(404);
+    expect(await response.text()).toBe(SHARE_UNAVAILABLE_BODY);
+  });
+
+  it("stops issuing read-urls the moment the grant is revoked", async () => {
+    const assetId = await insertAsset(
+      journeyA,
+      `share-phase-c/${randomUUID()}/revoked.jpg`,
+    );
+    const token = await createShare([journeyA]);
+    expect((await guestReadUrl(token, assetId)).status).toBe(503);
+
+    const grant = await authorizedGrant(token);
+    const revoke = await app.request(
+      `${TEST_ORIGIN}/api/shares/${grant.id}/revoke`,
+      { method: "POST", headers: authHeaders(identity.cookie) },
+    );
+    expect(revoke.status).toBe(200);
+
+    const response = await guestReadUrl(token, assetId);
+    expect(response.status).toBe(404);
+    expect(await response.text()).toBe(SHARE_UNAVAILABLE_BODY);
+    // And a stale authorization already in hand does not buy one either: the
+    // resolver re-evaluates the grant inside its own snapshot.
+    await expect(resolveSharedMediaRead(grant, assetId))
+      .rejects.toThrow(ShareAccessError);
+  });
+
+  it("answers one indistinguishable state for every asset outside the grant", async () => {
+    const token = await createShare([journeyA]);
+    const responses = [
+      // An asset that exists, in an unshared journey of the same atlas.
+      await guestReadUrl(token, unsharedAssetId),
+      // An asset that exists, in another atlas entirely.
+      await guestReadUrl(token, foreignAssetId),
+      // An asset id that has never existed.
+      await guestReadUrl(token, randomUUID()),
+      // An id that is not a UUID at all, which must not become a 500.
+      await guestReadUrl(token, "not-an-asset-id"),
+    ];
+    const bodies = new Set<string>();
+    for (const response of responses) {
+      expect(response.status).toBe(404);
+      expect(response.headers.get("cache-control")).toBe("private, no-store");
+      expect(response.headers.get("x-robots-tag")).toBe("noindex, nofollow");
+      bodies.add(await response.text());
+    }
+    // One body for all four: nothing here discloses whether an asset exists,
+    // and a malformed id is not distinguishable from a well-formed unknown one.
+    expect(bodies.size).toBe(1);
+    expect([...bodies][0]).toBe(MEDIA_UNAVAILABLE_BODY);
+  });
+
+  it("leaks no unshared journey, storage key or owner field through the media path", async () => {
+    const token = await createShare([journeyA]);
+    const bodies = [
+      await (await guestReadUrl(token, unsharedAssetId)).text(),
+      await (await guestReadUrl(token, foreignAssetId)).text(),
+      await (await guestReadUrl(token, await insertAsset(
+        journeyA,
+        `share-phase-c/${randomUUID()}/leak.jpg`,
+      ))).text(),
+    ];
+    for (const body of bodies) {
+      expect(body).not.toContain(UNSHARED_STORAGE_KEY);
+      expect(body).not.toContain(unsharedJourneyId);
+      expect(body).not.toContain(UNSHARED_TITLE);
+      expect(body).not.toContain(foreignAtlasId);
+      expect(body).not.toContain(foreignJourneyId);
+      expect(body).not.toContain(identity.atlasId);
+      expect(body).not.toContain(identity.userId);
+      expect(body).not.toContain(token);
+      expect(body).not.toContain("storageKey");
+      expect(body).not.toContain("storageDriver");
+    }
+  });
+
+  it("exposes no mutation method on the guest media read", async () => {
+    const assetId = await insertAsset(
+      journeyA,
+      `share-phase-c/${randomUUID()}/readonly.jpg`,
+    );
+    const token = await createShare([journeyA]);
+    for (const method of ["POST", "PATCH", "PUT", "DELETE"]) {
+      const response = await app.request(
+        `${TEST_ORIGIN}/api/shared/assets/${assetId}/read-url`,
+        {
+          method,
+          headers: {
+            authorization: `Bearer ${token}`,
+            "content-type": "application/json",
+          },
+          body: method === "DELETE" ? undefined : "{}",
+        },
+      );
+      expect(response.status).toBe(404);
+    }
+
+    // The bearer capability is not a session, so the owner read-url route the
+    // guest would otherwise reuse stays closed to it, as does deletion.
+    const ownerRead = await app.request(
+      `${TEST_ORIGIN}/api/uploads/assets/${assetId}/read-url`,
+      { headers: { authorization: `Bearer ${token}`, origin: TEST_ORIGIN } },
+    );
+    expect(ownerRead.status).toBe(401);
+    const ownerDelete = await app.request(
+      `${TEST_ORIGIN}/api/uploads/assets/${assetId}`,
+      {
+        method: "DELETE",
+        headers: { authorization: `Bearer ${token}`, origin: TEST_ORIGIN },
+      },
+    );
+    expect(ownerDelete.status).toBe(401);
   });
 });

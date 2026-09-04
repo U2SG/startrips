@@ -48,6 +48,14 @@ export function loadServerConfig(
   const mediaReadUrlExpiresInSeconds = Number(
     environment.MEDIA_READ_URL_EXPIRES_IN_SECONDS ?? 15 * 60,
   );
+  // #200 phase C: a share guest gets its own, much shorter media read lifetime
+  // than the owner's ~15 minutes, because an already-issued presigned URL is
+  // the one thing a revoke cannot reach. 90 seconds sits inside the 60-120
+  // second band #200 recommends. This is only the ceiling; the issued value is
+  // additionally capped by the grant's remaining lifetime at presign time.
+  const shareMediaReadUrlExpiresInSeconds = Number(
+    environment.SHARE_MEDIA_READ_URL_EXPIRES_IN_SECONDS ?? 90,
+  );
   const s3ConfigurationPresent = Boolean(
     s3BackendId
     || s3Endpoint
@@ -104,6 +112,20 @@ export function loadServerConfig(
   ) {
     throw new Error(
       "MEDIA_READ_URL_EXPIRES_IN_SECONDS must be between 60 and 3600",
+    );
+  }
+  // A lower floor than the owner value on purpose: 15 seconds is short but
+  // still long enough to start a media fetch, and the point of this knob is to
+  // allow a shorter guest lifetime than an owner is ever given. The ceiling is
+  // ten minutes so a deployment cannot quietly turn a share link into a
+  // long-lived object-storage credential.
+  if (
+    !Number.isInteger(shareMediaReadUrlExpiresInSeconds)
+    || shareMediaReadUrlExpiresInSeconds < 15
+    || shareMediaReadUrlExpiresInSeconds > 10 * 60
+  ) {
+    throw new Error(
+      "SHARE_MEDIA_READ_URL_EXPIRES_IN_SECONDS must be between 15 and 600",
     );
   }
   if (storageDriver === "s3" || s3ConfigurationPresent) {
@@ -196,6 +218,7 @@ export function loadServerConfig(
     s3ForcePathStyle,
     s3UploadPartExpiresInSeconds,
     mediaReadUrlExpiresInSeconds,
+    shareMediaReadUrlExpiresInSeconds,
     locationSearchDriver,
     locationSearchBaseUrl,
     locationSearchUserAgent,
