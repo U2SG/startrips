@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { playbackControlsMayAutoHide } from "./playbackControls";
+import { playbackControlsMayAutoHide, playbackTempoControlVisible } from "./playbackControls";
+
+describe("playbackTempoControlVisible (S1 plan D4)", () => {
+  it("shows the tempo control in Full Playback, where tempo drives every beat", () => {
+    expect(playbackTempoControlVisible("full")).toBe(true);
+  });
+
+  it("hides the tempo control in Quick Recap, where it would only move intro and outro", () => {
+    expect(playbackTempoControlVisible("quick-recap")).toBe(false);
+  });
+});
 
 describe("playbackControlsMayAutoHide (#126)", () => {
   it("keeps controls visible while playback is paused", () => {
