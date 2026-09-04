@@ -10,7 +10,8 @@ type JourneyTimelineProps = {
   journeys: readonly Journey[];
   activeJourneyId: string | null;
   onOpenStory: (journeyId: string) => void;
-  onCreate: () => void;
+  /** Absent when the view has no create capability (#200 shared mode). */
+  onCreate?: () => void;
 };
 
 function routeSummary(journey: Journey) {
@@ -84,9 +85,11 @@ export function JourneyTimeline({
             </ol>
           </section>
         ))}
-        <button type="button" className="journey-timeline__future" onClick={onCreate}>
-          <IconPlus size={24} stroke={1.2} aria-hidden="true" /><strong>下一段旅程</strong><small>路线还没有发生</small>
-        </button>
+        {onCreate ? (
+          <button type="button" className="journey-timeline__future" onClick={onCreate}>
+            <IconPlus size={24} stroke={1.2} aria-hidden="true" /><strong>下一段旅程</strong><small>路线还没有发生</small>
+          </button>
+        ) : null}
       </div>
     </section>
   );

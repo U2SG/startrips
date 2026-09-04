@@ -1,10 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const getPrivateMediaRead = vi.hoisted(() => vi.fn());
-
-vi.mock("./journeyApi", () => ({
-  getPrivateMediaRead,
-}));
+// The cache no longer imports an owner API client; the reader is injected, so
+// the test hands in the same double the module used to be mocked with.
+const getPrivateMediaRead = vi.fn();
 
 import { cachedSoundtrackRead, prefetchSoundtrackRead } from "./soundtrackReadCache";
 import type { Journey } from "./types";
@@ -63,11 +61,11 @@ describe("soundtrackReadCache", () => {
       expiresAt: "2026-09-01T12:02:00.000Z",
     });
 
-    await expect(prefetchSoundtrackRead(journey)).resolves.toBe("https://media.example/healthy");
+    await expect(prefetchSoundtrackRead(journey, getPrivateMediaRead)).resolves.toBe("https://media.example/healthy");
     vi.setSystemTime(new Date("2026-09-01T12:00:45.000Z"));
 
     expect(cachedSoundtrackRead(journey)).toEqual({ url: "https://media.example/healthy" });
-    await expect(prefetchSoundtrackRead(journey)).resolves.toBe("https://media.example/healthy");
+    await expect(prefetchSoundtrackRead(journey, getPrivateMediaRead)).resolves.toBe("https://media.example/healthy");
     expect(getPrivateMediaRead).toHaveBeenCalledTimes(1);
   });
 
@@ -85,11 +83,11 @@ describe("soundtrackReadCache", () => {
         expiresAt: "2026-09-01T12:05:00.000Z",
       });
 
-    await prefetchSoundtrackRead(journey);
+    await prefetchSoundtrackRead(journey, getPrivateMediaRead);
     vi.setSystemTime(new Date("2026-09-01T12:01:40.000Z"));
 
     expect(cachedSoundtrackRead(journey)).toBeNull();
-    await expect(prefetchSoundtrackRead(journey)).resolves.toBe("https://media.example/new");
+    await expect(prefetchSoundtrackRead(journey, getPrivateMediaRead)).resolves.toBe("https://media.example/new");
     expect(cachedSoundtrackRead(journey)).toEqual({ url: "https://media.example/new" });
     expect(getPrivateMediaRead).toHaveBeenCalledTimes(2);
   });
@@ -103,7 +101,7 @@ describe("soundtrackReadCache", () => {
       expiresAt: "2026-09-01T12:00:20.000Z",
     });
 
-    await expect(prefetchSoundtrackRead(journey)).resolves.toBeNull();
+    await expect(prefetchSoundtrackRead(journey, getPrivateMediaRead)).resolves.toBeNull();
     expect(cachedSoundtrackRead(journey)).toBeNull();
   });
 });

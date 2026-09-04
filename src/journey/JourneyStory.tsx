@@ -52,16 +52,11 @@ import {
 import { IconActionButton } from "../components/IconActionButton";
 import {
   JourneyApiError,
-  deleteMedia,
-  getPrivateMediaRead,
-  moveJourneyMedia,
-  reorderJourneyMedia,
-  setJourneyCover,
-  undoJourneyMediaMove,
   type JourneyMediaMoveUndo,
 } from "./journeyApi";
+import { useAtlasView, type AtlasMutations, type UploadJourneyMedia } from "./atlasView";
+import { mediaReadIsFresh } from "./mediaReadRefresh";
 import { runSharedElementMorph } from "../motion/primitives/sharedElement";
-import { uploadJourneyMedia } from "./JourneyComposer";
 import {
   createDecodeRegistry,
   decodeImageUrl,
@@ -149,19 +144,32 @@ export function scheduleCancelableMediaDragSettle(
 
 type MediaReadState =
   | { status: "loading" }
-  | { status: "ready"; url: string; expiresAt: number }
+  | { status: "ready"; url: string; issuedAt: number; expiresAt: number }
   | { status: "error"; message: string };
 
+/**
+ * A cached signed read is replaced once it is past half its own lifetime, and
+ * in any case `MEDIA_READ_REFRESH_MARGIN_MS` before it expires.
+ *
+ * The margin alone was enough while every read came from the owner route and
+ * lived 900 s. A share-scoped read is capped at 90 s by default and further
+ * capped by the remaining grant, so a read shorter than the margin would be
+ * stale on arrival and this would refresh it on every tick.
+ */
 export function shouldRefreshStoryMediaRead(
   assetId: string,
-  state: { status: string; expiresAt?: number },
+  state: { status: string; issuedAt?: number; expiresAt?: number },
   now: number,
   protectedPlaybackAssetId: string | null,
 ) {
-  return assetId !== protectedPlaybackAssetId
-    && state.status === "ready"
-    && Number.isFinite(state.expiresAt)
-    && (state.expiresAt as number) - now < MEDIA_READ_REFRESH_MARGIN_MS;
+  if (assetId === protectedPlaybackAssetId) return false;
+  if (state.status !== "ready") return false;
+  if (!Number.isFinite(state.expiresAt)) return false;
+  const expiresAt = state.expiresAt as number;
+  const issuedAt = Number.isFinite(state.issuedAt)
+    ? (state.issuedAt as number)
+    : expiresAt - MEDIA_READ_REFRESH_MARGIN_MS * 2;
+  return !mediaReadIsFresh(issuedAt, expiresAt, now, MEDIA_READ_REFRESH_MARGIN_MS);
 }
 
 type JourneyStoryProps = {
@@ -170,7 +178,8 @@ type JourneyStoryProps = {
   routePointId?: string | null;
   onClose: (sharedSource?: HTMLElement | null) => void;
   onNavigate: (journeyId: string) => void;
-  onEdit: (journeyId: string) => void;
+  /** Absent when the view has no edit capability (#200 shared mode). */
+  onEdit?: (journeyId: string) => void;
   onDelete?: (journeyId: string) => void | Promise<void>;
   onMediaAdded: (journeyId: string) => Journey | null | Promise<Journey | null>;
   onMediaDelete?: (assetId: string) => void | Promise<void>;
@@ -568,7 +577,7 @@ export async function replaceJourneySoundtrack({
   journeyId,
   file,
   previous,
-  upload = uploadJourneyMedia,
+  upload,
   refresh,
   remove,
   onProgress,
@@ -576,7 +585,7 @@ export async function replaceJourneySoundtrack({
   journeyId: string;
   file: File;
   previous: JourneyMediaAsset | null;
-  upload?: typeof uploadJourneyMedia;
+  upload: UploadJourneyMedia;
   refresh: (journeyId: string) => Journey | null | Promise<Journey | null>;
   remove: (assetId: string) => void | Promise<void>;
   onProgress?: (progress: {
@@ -813,6 +822,14 @@ export function JourneyStory({
   onMediaDelete,
   onMediaReorder,
 }: JourneyStoryProps) {
+  // #200 phase D. `mutations` is null in shared mode, so `manageMedia` below
+  // is null too and every media write in this component has nothing to call.
+  // Before this contract an absent `onMediaDelete` fell through to the owner
+  // API, which meant hiding the control left deletion reachable.
+  const { capabilities, readMedia, mutations } = useAtlasView();
+  const manageMedia: AtlasMutations | null = capabilities.canManageMedia ? mutations : null;
+  const removeMedia = onMediaDelete ?? manageMedia?.deleteMedia ?? null;
+  const canEditJourney = capabilities.canEditJourney && Boolean(onEdit);
   const journeyIndex = journeys.findIndex((candidate) => candidate.id === journeyId);
   const journey = journeys[journeyIndex];
   const initialMediaSelection = storyInitialMediaSelection(journey, routePointId);
@@ -1658,12 +1675,14 @@ export function JourneyStory({
     setMediaReads((current) => current[assetId]?.status === "ready"
       ? current
       : { ...current, [assetId]: { status: "loading" } });
-    void getPrivateMediaRead(assetId).then(
+    const issuedAt = Date.now();
+    void readMedia(assetId).then(
       (read) => setMediaReads((current) => ({
         ...current,
         [assetId]: {
           status: "ready",
           url: read.url,
+          issuedAt,
           expiresAt: Date.parse(read.expiresAt),
         },
       })),
@@ -2304,6 +2323,7 @@ export function JourneyStory({
     files: readonly File[],
     targetRoutePointId: string | null = selectedRoutePointId,
   ) {
+    if (!manageMedia) return;
     invalidateMoveUndo();
     setRetryFiles([]);
     setRetryRoutePointId(null);
@@ -2322,7 +2342,7 @@ export function JourneyStory({
       uploadedBytes: 0,
       totalBytes: files.reduce((sum, file) => sum + file.size, 0),
     });
-    const result = await uploadJourneyMedia({
+    const result = await manageMedia.uploadJourneyMedia({
       journeyId: journey.id,
       routePointId: targetRoutePointId ?? undefined,
       files,
@@ -2424,7 +2444,7 @@ export function JourneyStory({
 
 
   async function uploadPlacementGroups(groups: readonly PendingPlacementUploadGroup[]) {
-    if (groups.length === 0 || mutationPending) return;
+    if (groups.length === 0 || mutationPending || !manageMedia) return;
     setPlacementReview(null);
     setPlacementRetryGroups([]);
     setRetryFiles([]);
@@ -2448,7 +2468,7 @@ export function JourneyStory({
     let firstFailure: string | null = null;
     for (const group of groups) {
       const groupBytes = group.files.reduce((sum, file) => sum + file.size, 0);
-      const result = await uploadJourneyMedia({
+      const result = await manageMedia.uploadJourneyMedia({
         journeyId: group.journeyId,
         routePointId: group.routePointId ?? undefined,
         files: group.files,
@@ -2562,12 +2582,12 @@ export function JourneyStory({
   }
 
   async function confirmMediaDelete() {
-    if (!asset || mutationPending) return;
+    if (!asset || mutationPending || !removeMedia) return;
     invalidateMoveUndo();
     setMediaDeleteState("pending");
     setMediaDeleteMessage("");
     try {
-      await (onMediaDelete ?? deleteMedia)(asset.id);
+      await removeMedia(asset.id);
     } catch (error) {
       setMediaDeleteState("confirming");
       setMediaDeleteMessage(error instanceof Error ? error.message : "媒体删除失败，请稍后重试。");
@@ -2599,7 +2619,7 @@ export function JourneyStory({
   }
 
   async function moveMedia(direction: -1 | 1) {
-    if (!asset || mutationPending) return;
+    if (!asset || mutationPending || !manageMedia) return;
     invalidateMoveUndo();
     // The Story's aggregate view groups media by ownership chapter. Arrow
     // sorting therefore moves inside the active chapter sequence, then maps
@@ -2626,7 +2646,7 @@ export function JourneyStory({
         // The parent owns the state change in previews.
         await onMediaReorder(journey.id, nextOrder.map((candidate) => candidate.id));
       } else {
-        await reorderJourneyMedia(journey.id, nextOrder.map((candidate) => candidate.id));
+        await manageMedia.reorderJourneyMedia(journey.id, nextOrder.map((candidate) => candidate.id));
         const refreshedJourney = await onMediaAdded(journey.id);
         const scoped = scopedVisualMedia(refreshedJourney ?? journey);
         const movedIndex = scoped.findIndex((candidate) => candidate.id === asset.id);
@@ -2782,7 +2802,7 @@ export function JourneyStory({
 
   async function handleMediaReorderEnd(event: DragEndEvent) {
     const { active, over } = event;
-    if (!over || active.id === over.id) return;
+    if (!over || active.id === over.id || !manageMedia) return;
     const activeAsset = scopedMedia.find((candidate) => candidate.id === active.id);
     const overAsset = scopedMedia.find((candidate) => candidate.id === over.id);
     if (!activeAsset || !overAsset) return;
@@ -2824,7 +2844,7 @@ export function JourneyStory({
       if (onMediaReorder) {
         await onMediaReorder(journey.id, nextVisual.map((candidate) => candidate.id));
       } else {
-        await reorderJourneyMedia(journey.id, nextVisual.map((candidate) => candidate.id));
+        await manageMedia.reorderJourneyMedia(journey.id, nextVisual.map((candidate) => candidate.id));
         const refreshedJourney = await onMediaAdded(journey.id);
         if (refreshedJourney) {
           const refreshedScoped = scopedVisualMedia(refreshedJourney);
@@ -2869,7 +2889,7 @@ export function JourneyStory({
   // from the server afterward lets the scope-shrink effects above settle
   // the stage if the moved media included the one currently shown.
   async function moveSelectedMediaTo(targetRoutePointId: string | null) {
-    if (moveSelection.size === 0 || mutationPending) return;
+    if (moveSelection.size === 0 || mutationPending || !manageMedia) return;
     const assetIds = [...moveSelection];
     const undo = mediaMoveUndoForSelection(journey, assetIds, targetRoutePointId);
     if (!undo) {
@@ -2884,7 +2904,7 @@ export function JourneyStory({
     setMoveMessage("");
     setMoveUndo(null);
     try {
-      await moveJourneyMedia(journey.id, assetIds, targetRoutePointId);
+      await manageMedia.moveJourneyMedia(journey.id, assetIds, targetRoutePointId);
     } catch (error) {
       setMoveMessage(error instanceof Error ? error.message : "移动失败，请稍后重试。");
       setMovePending(false);
@@ -2905,11 +2925,11 @@ export function JourneyStory({
   }
 
   async function undoLastMediaMove() {
-    if (!moveUndo || mutationPending) return;
+    if (!moveUndo || mutationPending || !manageMedia) return;
     const undo = moveUndo;
     setMovePending(true);
     try {
-      await undoJourneyMediaMove(undo);
+      await manageMedia.undoJourneyMediaMove(undo);
     } catch (error) {
       const stale = mediaMoveUndoNeedsServerReconcile(error);
       if (stale) {
@@ -2954,11 +2974,11 @@ export function JourneyStory({
   // the API call we ask it to refresh, so the card updates immediately and a
   // failure rolls back to server truth.
   async function handleSetCover(assetId: string) {
-    if (!journey || coverPending || mutationPending) return;
+    if (!journey || coverPending || mutationPending || !manageMedia) return;
     setCoverPending(true);
     setOrderMessage("");
     try {
-      await setJourneyCover(journey.id, assetId);
+      await manageMedia.setJourneyCover(journey.id, assetId);
       await onMediaAdded(journey.id);
     } catch (error) {
       setOrderMessage(error instanceof Error ? error.message : "封面设置失败，请稍后重试。");
@@ -3020,6 +3040,7 @@ export function JourneyStory({
   }
 
   async function uploadSoundtrack(file: File) {
+    if (!manageMedia || !removeMedia) return;
     setSoundtrackNotice("");
     setCloseBlocked(false);
     const validation = validateJourneySoundtrack([file]);
@@ -3044,8 +3065,9 @@ export function JourneyStory({
       journeyId: journey.id,
       file,
       previous: replaced,
+      upload: manageMedia.uploadJourneyMedia,
       refresh: onMediaAdded,
-      remove: onMediaDelete ?? deleteMedia,
+      remove: removeMedia,
       onProgress: (progress) => setSoundtrackUpload({ status: "uploading", ...progress }),
     });
     setCloseBlocked(false);
@@ -3083,7 +3105,7 @@ export function JourneyStory({
   }
 
   async function removeSoundtrack() {
-    if (!soundtrack || mutationPending) return;
+    if (!soundtrack || mutationPending || !removeMedia) return;
     invalidateMoveUndo();
     setSoundtrackRemovePending(true);
     setSoundtrackNotice("");
@@ -3091,7 +3113,7 @@ export function JourneyStory({
     audioSamplerRef.current.setPlaying(false);
     resetAudioAtmosphereEnergy();
     try {
-      await (onMediaDelete ?? deleteMedia)(soundtrack.id);
+      await removeMedia(soundtrack.id);
       if (!onMediaDelete) await onMediaAdded(journey.id);
       setSoundtrackUpload({
         status: "complete",
@@ -3218,7 +3240,7 @@ export function JourneyStory({
                 完成
               </button>
             ) : null}
-            {overview && orderedScopedMedia.length > 0 ? (
+            {manageMedia && overview && orderedScopedMedia.length > 0 ? (
               <button
                 type="button"
                 className={`journey-story__media-select-toggle${moveSelectMode ? " is-active" : ""}`}
@@ -3245,6 +3267,27 @@ export function JourneyStory({
                       onSelect={selectMediaIndex}
                       selected={moveSelection.has(tile.id)}
                       onToggleSelect={toggleMoveSelection}
+                    />
+                  </li>
+                ))}
+              </ul>
+            ) : overview && !manageMedia ? (
+              /* Read-only overview: a plain grid, not a drag surface. Wrapping
+                 these tiles in a DndContext whose drop handler refuses would
+                 still make every tile draggable, which is the sort of live
+                 handler under a hidden control #200 rules out. */
+              <ul className="journey-story__media-grid" aria-label={`全部媒体，共 ${orderedScopedMedia.length} 个`}>
+                {orderedScopedMedia.map((tile, index) => (
+                  <li key={tile.id}>
+                    <StoryMediaTile
+                      asset={tile}
+                      index={index}
+                      isCurrent={index === assetIndex}
+                      isCover={cover?.id === tile.id}
+                      read={mediaReads[tile.id]}
+                      disabled={mutationPending}
+                      onRequestRead={loadMediaRead}
+                      onSelect={selectMediaIndex}
                     />
                   </li>
                 ))}
@@ -3421,7 +3464,7 @@ export function JourneyStory({
             {orderMessage ? <p className="journey-story__order-message" role="status">{orderMessage}</p> : null}
             {mobileLayout && !overview && !asset && !mobileManageMode ? (
               <div className="journey-story__mobile-media-actions">
-                <IconActionButton
+                {manageMedia ? <IconActionButton
                   type="button"
                   className="journey-story__mobile-media-menu-trigger"
                   buttonRef={mobileManageViewerTriggerRef}
@@ -3431,7 +3474,7 @@ export function JourneyStory({
                   onClick={enterMobileManageMode}
                 >
                   <IconDots size={19} stroke={1.5} aria-hidden="true" />
-                </IconActionButton>
+                </IconActionButton> : null}
               </div>
             ) : null}
             {mobileLayout && !overview && asset ? (
@@ -3587,7 +3630,7 @@ export function JourneyStory({
                 ) : null}
               </div>
             ) : null}
-            {!mobileLayout && !overview && asset ? (
+            {manageMedia && !mobileLayout && !overview && asset ? (
               <div className="journey-story__media-actions">
                 {mediaDeleteState === "idle" ? (
                   cover?.id !== asset.id ? (
@@ -3688,7 +3731,7 @@ export function JourneyStory({
                 {deleteMessage ? <p className="journey-story__delete-error" role="alert">{deleteMessage}</p> : null}
               </section>
             ) : null}
-            {(!mobileLayout || mobileManageMode) ? <div className="journey-story__media-add">
+            {manageMedia && (!mobileLayout || mobileManageMode) ? <div className="journey-story__media-add">
               <div>
                 <p>PRIVATE MEDIA</p>
                 <strong>{selectedRoutePoint
@@ -3846,7 +3889,7 @@ export function JourneyStory({
               {soundtrack && soundtrackRead?.status === "error" ? (
                 <p className="journey-story__upload-message is-error" role="alert">{soundtrackRead.message}</p>
               ) : null}
-              {(!mobileLayout || mobileManageMode) ? <>
+              {manageMedia && (!mobileLayout || mobileManageMode) ? <>
               <input
                 ref={soundtrackInputRef}
                 type="file"
@@ -3904,9 +3947,9 @@ export function JourneyStory({
         </div>
 
         <footer>
-          {(!mobileLayout || mobileManageMode) ? (
+          {(canEditJourney || onDelete) && (!mobileLayout || mobileManageMode) ? (
             <div className="journey-story__manage">
-              <button type="button" disabled={mutationPending || deleteState !== "idle"} onClick={() => onEdit(journey.id)}><IconEdit size={16} stroke={1.35} aria-hidden="true" />编辑旅程</button>
+              {canEditJourney ? <button type="button" disabled={mutationPending || deleteState !== "idle"} onClick={() => onEdit?.(journey.id)}><IconEdit size={16} stroke={1.35} aria-hidden="true" />编辑旅程</button> : null}
               {onDelete ? <button ref={journeyDeleteTriggerRef} className="is-destructive" type="button" disabled={mutationPending || deleteState !== "idle"} onClick={() => { setDeleteState("confirming"); setDeleteMessage(""); }}><IconTrash size={16} stroke={1.35} aria-hidden="true" />删除旅程</button> : null}
             </div>
           ) : null}

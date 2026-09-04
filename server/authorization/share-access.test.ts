@@ -6,6 +6,9 @@ import {
   parseBearerToken,
   SHARE_TOKEN_LENGTH,
 } from "./share-access";
+// `sharedAtlas.ts` has no runtime imports, so the browser module's idea of a
+// token shape can be checked here against the generator that issues it.
+import { SHARE_TOKEN_PATTERN, readShareTokenFromHash } from "../../src/journey/sharedAtlas";
 
 const NOW = new Date("2026-09-03T12:00:00.000Z");
 
@@ -28,6 +31,18 @@ describe("share token generation", () => {
     expect(token).toHaveLength(SHARE_TOKEN_LENGTH);
     expect(token).toMatch(/^[A-Za-z0-9_-]+$/);
     expect(token).not.toContain("=");
+  });
+
+  it("is accepted by the browser's own token shape", () => {
+    // #200 phase D reads the token from the URL fragment and refuses anything
+    // that does not match `SHARE_TOKEN_PATTERN` before making a request. That
+    // pattern is a second copy of this length, so the two are checked against
+    // each other rather than trusted to stay in step.
+    const token = generateShareToken();
+    expect(SHARE_TOKEN_PATTERN.source).toContain(String(SHARE_TOKEN_LENGTH));
+    expect(SHARE_TOKEN_PATTERN.test(token)).toBe(true);
+    expect(readShareTokenFromHash(`#${token}`)).toBe(token);
+    expect(readShareTokenFromHash(`#${token}extra`)).toBeNull();
   });
 
   it("never repeats a token", () => {

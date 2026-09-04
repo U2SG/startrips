@@ -1,0 +1,66 @@
+/* #200 phase D: the guest gate — the loading, expired, unreachable and
+   emptied states of a shared link. The shared Atlas itself is the same
+   `living-atlas` tree the owner sees, so nothing here styles journey content.
+
+   The compact-mobile behaviour of this panel is height- and width-driven in
+   one clamp rather than a mode switch, so it needs no layout contract: there
+   is no alternate arrangement to choose between. */
+.shared-atlas-gate {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  min-height: 100svh;
+  padding: clamp(20px, 6vw, 64px);
+  background: var(--archive-bg);
+  color: var(--archive-ink);
+  font-family: var(--archive-sans);
+}
+
+.shared-atlas-gate__panel {
+  width: min(430px, 100%);
+  padding-left: 18px;
+  border-left: 1px solid var(--archive-cyan);
+}
+
+.shared-atlas-gate__panel > p:first-child {
+  margin: 0 0 18px;
+  color: var(--archive-green);
+  font: 500 8px/1 ui-monospace, "SFMono-Regular", Consolas, monospace;
+  letter-spacing: 0.18em;
+}
+
+.shared-atlas-gate__panel > svg {
+  color: var(--archive-cyan);
+}
+
+.shared-atlas-gate__panel h1 {
+  margin: 14px 0 12px;
+  font-family: var(--archive-serif);
+  font-size: clamp(30px, 4.4vw, 52px);
+  font-weight: 400;
+  line-height: 1.04;
+  letter-spacing: -0.045em;
+}
+
+.shared-atlas-gate__panel > p:not(:first-child) {
+  max-width: 370px;
+  margin: 0;
+  color: var(--archive-muted);
+  font-size: 12px;
+  line-height: 1.85;
+}
+
+.shared-atlas-gate__panel button {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  margin-top: 24px;
+  padding: 0 16px;
+  border: 1px solid rgba(200, 255, 61, 0.48);
+  background: rgba(48, 69, 28, 0.42);
+  color: var(--archive-ink);
+  cursor: pointer;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+}
