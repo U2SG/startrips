@@ -46,7 +46,7 @@ With `LOCATION_SEARCH_DRIVER=disabled`, the authenticated endpoint returns `503 
 - Serve the Vite application and reverse-proxy `/api` through the same HTTPS origin so session cookies stay first-party.
 - Supply PostgreSQL, SMTP, Better Auth secret, and the selected adapter credentials through environment variables.
 - Apply the checked-in Drizzle migrations through the deployment pipeline, not from a browser process.
-- Better Auth's database-backed limiter protects authentication endpoints. The API additionally rate limits requests without a session cookie per client IP (`ANON_RATE_LIMIT_WINDOW_SECONDS`, `ANON_RATE_LIMIT_MAX_REQUESTS`); authenticated requests are never limited by the API. Edge-level enforcement can still be added for non-API traffic.
+- Better Auth's database-backed limiter protects abuse-sensitive authentication endpoints. Normal Atlas, Journey, media, playback, location, upload, and sharing traffic is not subject to a blanket per-IP API request budget; any future abuse protection should be scoped to the specific costly/public capability that requires it. Edge-level controls may still be added where justified by the deployment threat model.
 - Keep stored objects private. Only the tenant-authorized read-url endpoint may mint short-lived media access.
 
 The checked-in defaults keep storage and location search disabled so a missing deployment choice is visible instead of silently coupling the product to a provider.
