@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   NARRATIVE_TIMING_PROFILES,
+  UNMEASURED_VIDEO_DURATION_MS,
   resolveNarrativeTiming,
   type NarrativeMode,
   type NarrativeSegmentKind,
@@ -8,16 +9,48 @@ import {
   type NarrativeTimingContext,
 } from "./narrativeTiming";
 import {
-  ARRIVAL_MS,
   AUTO_EDIT_PHOTO_ROLES,
   AUTO_EDIT_TEMPOS,
-  CAMERA_MS,
-  IMAGE_DWELL_MS,
-  VIDEO_DWELL_MS,
   type AutoEditPhotoRole,
+  type AutoEditTempo,
 } from "./autoEditPlan";
 import { PLAYBACK_TEMPO_PROFILES } from "./journeyPlaybackPlan";
-import { PLAYBACK_PACING } from "./journeyPlayback";
+
+/**
+ * The quick-recap and keepsake numbers, spelled out as literals.
+ *
+ * They used to be asserted against the constants they were seeded from
+ * (`autoEditPlan.ts`'s dwell tables and camera / arrival floors, and the legacy
+ * pacing table in `journeyPlayback.ts`). Those are deleted now that the
+ * resolver is the only timing truth, so the equivalence anchors become plain
+ * expected values: an unintended retune still fails here, it just no longer has
+ * a second table to be compared against.
+ */
+const QUICK_RECAP_IMAGE_DWELL_EXPECTED: Record<AutoEditTempo, Record<AutoEditPhotoRole, number>> = {
+  fast: { hero: 2_000, representative: 1_600, supporting: 1_200, burst: 700 },
+  standard: { hero: 3_100, representative: 2_500, supporting: 1_800, burst: 900 },
+  immersive: { hero: 4_900, representative: 4_100, supporting: 3_000, burst: 1_300 },
+};
+const QUICK_RECAP_VIDEO_EXPECTED: Record<AutoEditTempo, number> = {
+  fast: 2_600,
+  standard: 3_500,
+  immersive: 4_500,
+};
+/** The zero-distance / zero-note floors quick recap kept from its flat constants. */
+const QUICK_RECAP_CAMERA_FLOOR_MS = 1_000;
+const QUICK_RECAP_ARRIVAL_FLOOR_MS = 800;
+const KEEPSAKE_EXPECTED = {
+  introMs: 1_200,
+  travelBaseMs: 900,
+  travelPerRadiansMs: 600,
+  travelMaxMs: 1_600,
+  arrivalBaseMs: 1_500,
+  arrivalPerNoteCharMs: 24,
+  arrivalMaxMs: 3_000,
+  imageMs: 4_500,
+  videoMs: 6_000,
+  outroMs: 1_800,
+} as const;
 
 const MODES: NarrativeMode[] = ["full", "quick-recap", "keepsake"];
 const TEMPI: NarrativeTempo[] = ["fast", "standard", "immersive"];
@@ -247,7 +280,7 @@ describe("NARRATIVE_TIMING_PROFILES seed equivalence", () => {
     }
   });
 
-  it("reproduces IMAGE_DWELL_MS, VIDEO_DWELL_MS, CAMERA_MS and ARRIVAL_MS for quick recap", () => {
+  it("keeps the quick recap dwell, camera and arrival numbers", () => {
     for (const tempo of AUTO_EDIT_TEMPOS) {
       for (const mediaRole of AUTO_EDIT_PHOTO_ROLES) {
         expect(
@@ -259,7 +292,7 @@ describe("NARRATIVE_TIMING_PROFILES seed equivalence", () => {
             mediaRole,
           }),
           `${tempo}/${mediaRole}`,
-        ).toBe(IMAGE_DWELL_MS[tempo][mediaRole]);
+        ).toBe(QUICK_RECAP_IMAGE_DWELL_EXPECTED[tempo][mediaRole]);
       }
 
       expect(
@@ -271,9 +304,9 @@ describe("NARRATIVE_TIMING_PROFILES seed equivalence", () => {
           intrinsicDurationMs: 60_000,
         }),
         `${tempo} video budget`,
-      ).toBe(VIDEO_DWELL_MS[tempo]);
+      ).toBe(QUICK_RECAP_VIDEO_EXPECTED[tempo]);
 
-      // Decision D2 keeps today's flat constants as the zero-distance /
+      // Decision D2 keeps the former flat constants as the zero-distance /
       // zero-note floor, so nothing changes for a same-place leg.
       expect(
         resolveNarrativeTiming({
@@ -283,7 +316,7 @@ describe("NARRATIVE_TIMING_PROFILES seed equivalence", () => {
           routeDistanceRadians: 0,
         }),
         `${tempo} zero-distance camera`,
-      ).toBe(CAMERA_MS);
+      ).toBe(QUICK_RECAP_CAMERA_FLOOR_MS);
       expect(
         resolveNarrativeTiming({
           mode: "quick-recap",
@@ -292,7 +325,7 @@ describe("NARRATIVE_TIMING_PROFILES seed equivalence", () => {
           noteLength: 0,
         }),
         `${tempo} zero-note arrival`,
-      ).toBe(ARRIVAL_MS);
+      ).toBe(QUICK_RECAP_ARRIVAL_FLOOR_MS);
     }
   });
 
@@ -310,28 +343,42 @@ describe("NARRATIVE_TIMING_PROFILES seed equivalence", () => {
         segmentKind: "travel",
         routeDistanceRadians: 2,
       });
-      // A ~6 km leg still resolves to today's flat camera duration, give or
-      // take the rounding of a sub-millisecond distance term.
-      expect(nearby, `${tempo} nearby stays at the floor`).toBeGreaterThanOrEqual(CAMERA_MS);
-      expect(nearby, `${tempo} nearby stays at the floor`).toBeLessThanOrEqual(CAMERA_MS + 1);
+      // A ~6 km leg still resolves to the flat camera duration, give or take
+      // the rounding of a sub-millisecond distance term.
+      expect(nearby, `${tempo} nearby stays at the floor`)
+        .toBeGreaterThanOrEqual(QUICK_RECAP_CAMERA_FLOOR_MS);
+      expect(nearby, `${tempo} nearby stays at the floor`)
+        .toBeLessThanOrEqual(QUICK_RECAP_CAMERA_FLOOR_MS + 1);
       // An intercontinental leg no longer collapses to the same number.
-      expect(longHaul, `${tempo} long haul exceeds the floor`).toBeGreaterThan(CAMERA_MS + 1);
+      expect(longHaul, `${tempo} long haul exceeds the floor`)
+        .toBeGreaterThan(QUICK_RECAP_CAMERA_FLOOR_MS + 1);
     }
   });
 
-  it("reproduces PLAYBACK_PACING for keepsake at every tempo", () => {
+  it("keeps the keepsake numbers, identically at every tempo (decision D3)", () => {
     for (const tempo of TEMPI) {
       const seeded = NARRATIVE_TIMING_PROFILES.keepsake[tempo];
-      expect(seeded.introMs).toBe(PLAYBACK_PACING.introMs);
-      expect(seeded.travelBaseMs).toBe(PLAYBACK_PACING.travelBaseMs);
-      expect(seeded.travelPerRadiansMs).toBe(PLAYBACK_PACING.travelPerRadiansMs);
-      expect(seeded.travelMaxMs).toBe(PLAYBACK_PACING.travelMaxMs);
-      expect(seeded.arrivalBaseMs).toBe(PLAYBACK_PACING.stopMinMs);
-      expect(seeded.arrivalPerNoteCharMs).toBe(PLAYBACK_PACING.stopPerNoteCharMs);
-      expect(seeded.arrivalMaxMs).toBe(PLAYBACK_PACING.stopMaxMs);
-      expect(seeded.imageRoleMs.representative).toBe(PLAYBACK_PACING.imageMs);
-      expect(seeded.videoMs).toBe(PLAYBACK_PACING.videoMs);
-      expect(seeded.outroMs).toBe(PLAYBACK_PACING.outroMs);
+      expect(seeded.introMs, tempo).toBe(KEEPSAKE_EXPECTED.introMs);
+      expect(seeded.travelBaseMs, tempo).toBe(KEEPSAKE_EXPECTED.travelBaseMs);
+      expect(seeded.travelPerRadiansMs, tempo).toBe(KEEPSAKE_EXPECTED.travelPerRadiansMs);
+      expect(seeded.travelMaxMs, tempo).toBe(KEEPSAKE_EXPECTED.travelMaxMs);
+      expect(seeded.arrivalBaseMs, tempo).toBe(KEEPSAKE_EXPECTED.arrivalBaseMs);
+      expect(seeded.arrivalPerNoteCharMs, tempo).toBe(KEEPSAKE_EXPECTED.arrivalPerNoteCharMs);
+      expect(seeded.arrivalMaxMs, tempo).toBe(KEEPSAKE_EXPECTED.arrivalMaxMs);
+      for (const role of AUTO_EDIT_PHOTO_ROLES) {
+        expect(seeded.imageRoleMs[role], `${tempo}/${role}`).toBe(KEEPSAKE_EXPECTED.imageMs);
+      }
+      expect(seeded.videoMs, tempo).toBe(KEEPSAKE_EXPECTED.videoMs);
+      expect(seeded.outroMs, tempo).toBe(KEEPSAKE_EXPECTED.outroMs);
+    }
+  });
+
+  it("keeps the unmeasured video duration above every quick recap video budget", () => {
+    for (const tempo of TEMPI) {
+      expect(
+        UNMEASURED_VIDEO_DURATION_MS,
+        `${tempo} video budget`,
+      ).toBeGreaterThan(NARRATIVE_TIMING_PROFILES["quick-recap"][tempo].videoMs);
     }
   });
 });

@@ -101,8 +101,8 @@ function mediaType(mimeType: string): "image" | "video" {
  * Keepsake asks the shared resolver how long each beat wants to be. The export
  * keeps its fixed 15/30/60 s presets and offers no tempo control (decision D3),
  * so the mode and tempo are pinned here; the `keepsake` profile is seeded from
- * the legacy `PLAYBACK_PACING` numbers this call replaced, which keeps the
- * switch a no-visual-change refactor. `fitKeepsakeSceneDurations()` still owns
+ * the legacy pacing numbers this call replaced, which kept the switch a
+ * no-visual-change refactor. `fitKeepsakeSceneDurations()` still owns
  * the preset fit — the resolver answers "how long is this beat", never "how
  * many beats fit".
  */

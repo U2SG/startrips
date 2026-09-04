@@ -5,21 +5,21 @@ import type { AutoEditPhotoRole } from "./autoEditPlan";
  *
  * Before this module the codebase held four independent timing truths: the live
  * Playback tempo profiles (`journeyPlaybackPlan.ts`), the Quick Recap dwell and
- * camera constants (`autoEditPlan.ts`), the Keepsake desired durations, and the
- * legacy `PLAYBACK_PACING` table (`journeyPlayback.ts`) that Keepsake and the
- * Quick Recap budget still read. The Edit Plan decides what / order / role /
- * camera intent; this resolver decides how long; the Director and the Keepsake
- * renderer only execute.
+ * camera constants (`autoEditPlan.ts`), the Keepsake desired durations, and a
+ * legacy pacing table in `journeyPlayback.ts` that Keepsake and the Quick Recap
+ * budget still read. All four are gone; the Edit Plan decides what / order /
+ * role / camera intent, this resolver decides how long, and the Director and
+ * the Keepsake renderer only execute.
  *
  * Pure: no React, no I/O, no clock. Target-duration budgeting deliberately
  * stays outside — Quick Recap keeps its greedy selection loop and Keepsake
  * keeps `fitKeepsakeSceneDurations()`. This module answers "how long is this
  * beat", never "how many beats fit".
  *
- * The tables below are seeded from the numbers that play today so that the
- * callers can be switched over one at a time without changing behaviour;
- * `narrativeTiming.test.ts` asserts that equivalence against the original
- * constants rather than against copied literals.
+ * The tables below are seeded from the numbers that played before the switch,
+ * so moving each caller over was a no-visual-change refactor;
+ * `narrativeTiming.test.ts` pins those numbers as literals now that this module
+ * is the only place they live.
  */
 
 export type NarrativeMode = "full" | "quick-recap" | "keepsake";
@@ -63,8 +63,8 @@ const DEFAULT_PHOTO_ROLE: AutoEditPhotoRole = "representative";
  * `journeyPlaybackPlan.ts:25-62`, unchanged. `imageRoleMs.representative` is
  * that profile's `imageMs`, so Full Playback — which never assigns a photo role
  * and therefore takes the default role — keeps exactly today's dwell; the other
- * three roles come from Quick Recap's `IMAGE_DWELL_MS` so that a future
- * role-aware Full Playback has a table to read instead of inventing one.
+ * three roles come from Quick Recap's per-role dwell table so that a future
+ * role-aware Full Playback has numbers to read instead of inventing them.
  */
 const FULL_PROFILES: Record<NarrativeTempo, NarrativeTimingProfile> = {
   fast: {
@@ -75,7 +75,8 @@ const FULL_PROFILES: Record<NarrativeTempo, NarrativeTimingProfile> = {
     arrivalBaseMs: 650,
     arrivalPerNoteCharMs: 10,
     arrivalMaxMs: 1000,
-    // representative: PLAYBACK_TEMPO_PROFILES.fast.imageMs; others: IMAGE_DWELL_MS.fast.
+    // representative: PLAYBACK_TEMPO_PROFILES.fast.imageMs; the other three roles are
+    // Quick Recap's fast dwell numbers.
     imageRoleMs: { hero: 2_000, representative: 1_700, supporting: 1_200, burst: 700 },
     videoMs: 4_200,
     outroMs: 1_000,
@@ -88,7 +89,8 @@ const FULL_PROFILES: Record<NarrativeTempo, NarrativeTimingProfile> = {
     arrivalBaseMs: 950,
     arrivalPerNoteCharMs: 14,
     arrivalMaxMs: 1_500,
-    // representative: PLAYBACK_TEMPO_PROFILES.standard.imageMs; others: IMAGE_DWELL_MS.standard.
+    // representative: PLAYBACK_TEMPO_PROFILES.standard.imageMs; the other three roles are
+    // Quick Recap's standard dwell numbers.
     imageRoleMs: { hero: 3_100, representative: 2_800, supporting: 1_800, burst: 900 },
     videoMs: 6_000,
     outroMs: 1_500,
@@ -101,7 +103,8 @@ const FULL_PROFILES: Record<NarrativeTempo, NarrativeTimingProfile> = {
     arrivalBaseMs: 1_500,
     arrivalPerNoteCharMs: 18,
     arrivalMaxMs: 2_600,
-    // representative: PLAYBACK_TEMPO_PROFILES.immersive.imageMs; others: IMAGE_DWELL_MS.immersive.
+    // representative: PLAYBACK_TEMPO_PROFILES.immersive.imageMs; the other three roles are
+    // Quick Recap's immersive dwell numbers.
     imageRoleMs: { hero: 4_900, representative: 4_500, supporting: 3_000, burst: 1_300 },
     videoMs: 8_000,
     outroMs: 2_000,
@@ -111,10 +114,10 @@ const FULL_PROFILES: Record<NarrativeTempo, NarrativeTimingProfile> = {
 /**
  * Quick Recap.
  *
- * - `imageRoleMs` / `videoMs`: `IMAGE_DWELL_MS` / `VIDEO_DWELL_MS`
- *   (`autoEditPlan.ts:106-115`), unchanged — dwell was already tempo-aware.
- * - `travelBaseMs` = `CAMERA_MS` (1000, `autoEditPlan.ts:116`) and
- *   `arrivalBaseMs` = `ARRIVAL_MS` (800, `:117`), which were flat constants. Per
+ * - `imageRoleMs` / `videoMs`: the per-role and per-tempo dwell tables that
+ *   lived in `autoEditPlan.ts`, unchanged — dwell was already tempo-aware.
+ * - `travelBaseMs` (1000) and `arrivalBaseMs` (800) are the flat camera and
+ *   arrival constants `autoEditPlan.ts` carried before this resolver. Per
  *   decision D2 they become base values plus distance and note terms, so a
  *   nearby leg and a long-haul leg stop collapsing to one camera duration. The
  *   slopes and the base→max span are Full Playback's, i.e. the same distance and
@@ -167,22 +170,21 @@ const QUICK_RECAP_PROFILES: Record<NarrativeTempo, NarrativeTimingProfile> = {
 };
 
 /**
- * Keepsake: every tempo carries the legacy `PLAYBACK_PACING` numbers
- * (`journeyPlayback.ts:20-31`) that `stepDurationMs()` feeds to `sceneForStep()`
- * today, so switching Keepsake onto the resolver is a provable no-visual-change
- * refactor and `journeyKeepsake.test.ts` fixtures stay byte-identical. Per
+ * Keepsake: every tempo carries the numbers from the legacy pacing table that
+ * `journeyPlayback.ts` fed to `sceneForStep()` before this resolver, so
+ * switching Keepsake over was a provable no-visual-change refactor and
+ * `journeyKeepsake.test.ts` fixtures stayed byte-identical. Per
  * decision D3 the export keeps its fixed 15/30/60 s presets and no tempo
  * control, so the three rows are deliberately identical — Keepsake reads the
  * `standard` row and tempo for Keepsake is a later product question. All four
- * photo roles share `PLAYBACK_PACING.imageMs` because Keepsake assigns no role
- * in phase 1.
+ * photo roles share one image dwell because Keepsake assigns no role in
+ * phase 1.
  */
 const KEEPSAKE_PROFILE: NarrativeTimingProfile = {
   introMs: 1_200,
   travelBaseMs: 900,
   travelPerRadiansMs: 600,
   travelMaxMs: 1_600,
-  // PLAYBACK_PACING's arrival terms are named stopMinMs / stopPerNoteCharMs / stopMaxMs.
   arrivalBaseMs: 1_500,
   arrivalPerNoteCharMs: 24,
   arrivalMaxMs: 3_000,
@@ -206,6 +208,17 @@ export const NARRATIVE_TIMING_PROFILES: Record<
   "quick-recap": QUICK_RECAP_PROFILES,
   keepsake: KEEPSAKE_PROFILES,
 };
+
+/**
+ * How long a video is worth while its intrinsic duration is unknown — a video
+ * digest with no measured length declares this instead of an empty duration
+ * (`quickRecapPlayback.ts`). It is a flat number rather than a profile lookup
+ * because it is a property of *not knowing*, not of a mode or a tempo: the
+ * invariant it must keep is that it exceeds every quick-recap `videoMs`, so the
+ * caller's own clamp still decides the length that plays.
+ * `narrativeTiming.test.ts` asserts that invariant.
+ */
+export const UNMEASURED_VIDEO_DURATION_MS = 6_000;
 
 function nonNegativeTerm(value: number | undefined) {
   if (value === undefined || !Number.isFinite(value) || value <= 0) return 0;

@@ -5,13 +5,12 @@ import {
   type MediaDigestV1,
 } from "./autoEditPlan";
 import {
-  PLAYBACK_PACING,
   playbackMediaForPoint,
   routePointAngularDistance,
   type PlaybackStep,
 } from "./journeyPlayback";
 import { isSoundtrackAsset, isVisualMediaAsset } from "./journeyModel";
-import { resolveNarrativeTiming } from "./narrativeTiming";
+import { UNMEASURED_VIDEO_DURATION_MS, resolveNarrativeTiming } from "./narrativeTiming";
 import type { Journey, JourneyMediaAsset, RoutePoint } from "./types";
 
 export const QUICK_RECAP_TARGET_MS = 45_000;
@@ -21,10 +20,10 @@ export const QUICK_RECAP_TARGET_MS = 45_000;
 // explicit analysis-pending duration instead of an empty `intrinsic`. The
 // plan's video eligibility rule rejects an absent, non-finite, or non-positive
 // duration, which would delete the route point's only chapter — the regression
-// this replaces. Reusing Full Playback's deterministic video duration keeps one
-// number for "how long an unmeasured video is worth"; because it exceeds every
-// per-tempo video dwell, the planner's own clamp still decides the real length.
-export const QUICK_RECAP_PENDING_VIDEO_DURATION_MS = PLAYBACK_PACING.videoMs;
+// this replaces. The resolver owns the one number for "how long an unmeasured
+// video is worth"; because it exceeds every per-tempo video dwell, the
+// planner's own clamp still decides the real length.
+export const QUICK_RECAP_PENDING_VIDEO_DURATION_MS = UNMEASURED_VIDEO_DURATION_MS;
 
 export type PreparedQuickRecapPlayback = {
   journey: Journey;
@@ -144,8 +143,9 @@ export function prepareQuickRecapPlaybackResult(
   // outro beats are paid for. Those two are the only beats the director still
   // times itself (`quickRecapStepDurationMs` returns undefined for them), so the
   // budget must subtract the numbers that actually play — the resolver's
-  // per-tempo intro/outro — instead of legacy `PLAYBACK_PACING`'s flat
-  // 1200 + 1800, which no mode has spent since the tempo profiles landed.
+  // per-tempo intro/outro — instead of the flat 1200 + 1800 the deleted legacy
+  // pacing table carried, which no mode has spent since the tempo profiles
+  // landed.
   const chapterBudgetMs = Math.max(
     1,
     requestedTargetMs

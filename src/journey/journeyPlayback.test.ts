@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  PLAYBACK_PACING,
   buildPlaybackSteps,
   initialPlaybackState,
   playbackReducer,
@@ -11,10 +10,8 @@ import {
   playbackStoryMedia,
   storyMediaForScope,
   routePointAngularDistance,
-  stepDurationMs,
   playbackMediaWaitPolicy,
   phaseForStep,
-  travelDurationMs,
 } from "./journeyPlayback";
 import type { Journey, JourneyMediaAsset, RoutePoint } from "./types";
 
@@ -79,16 +76,15 @@ const journey: Journey = {
   ],
 };
 
-describe("routePointAngularDistance / travelDurationMs (#19)", () => {
-  it("maps angular distance to a clamped travel duration", () => {
+describe("routePointAngularDistance (#19)", () => {
+  it("measures the great-circle distance between two route points", () => {
     expect(routePointAngularDistance(point("a", 0, 0), point("b", 0, 60))).toBeCloseTo(
       Math.PI / 3,
       6,
     );
-    const short = travelDurationMs(point("a", 0, 0), point("b", 0, 1));
-    const long = travelDurationMs(point("a", 0, 0), point("b", 0, 90));
-    expect(short).toBeGreaterThan(PLAYBACK_PACING.travelBaseMs);
-    expect(long).toBeLessThanOrEqual(PLAYBACK_PACING.travelMaxMs);
+    const short = routePointAngularDistance(point("a", 0, 0), point("b", 0, 1));
+    const long = routePointAngularDistance(point("a", 0, 0), point("b", 0, 90));
+    expect(short).toBeGreaterThan(0);
     expect(short).toBeLessThan(long);
   });
 });
@@ -307,22 +303,6 @@ describe("video completion ownership (#126)", () => {
     expect(steps[manual.stepIndex]?.kind).not.toBe("travel");
   });
 });
-
-describe("stepDurationMs (#19)", () => {
-  it("returns the deterministic pacing for each step kind", () => {
-    const steps = buildPlaybackSteps(journey);
-    expect(stepDurationMs(journey, steps[0])).toBe(PLAYBACK_PACING.introMs);
-    expect(stepDurationMs(journey, steps[1])).toBeGreaterThanOrEqual(
-      PLAYBACK_PACING.stopMinMs,
-    );
-    expect(stepDurationMs(journey, steps[3])).toBeLessThanOrEqual(
-      PLAYBACK_PACING.travelMaxMs,
-    );
-    expect(stepDurationMs(journey, steps[5])).toBe(PLAYBACK_PACING.videoMs);
-    expect(stepDurationMs(journey, steps.at(-1)!)).toBe(PLAYBACK_PACING.outroMs);
-  });
-});
-
 
 describe("playbackTravelChoreography (#126)", () => {
   const withPoints = (coords: Array<[number, number]>): Journey => ({

@@ -1,10 +1,11 @@
 // #19 Journey Playback — a deterministic playback director.
 //
 // The director is a pure state machine: it never touches the Three scene, the
-// DOM, or the audio element. It computes *what phase* playback is in and *for
-// how long*, and the UI layer turns those into semantic commands (focus
-// camera, show route progress, mount media). Keeping the machine pure makes
-// the chapter order, timing mapping, and pause/resume behavior unit-testable.
+// DOM, or the audio element. It computes *what phase* playback is in, and the
+// UI layer turns those into semantic commands (focus camera, show route
+// progress, mount media). How long a phase lasts is not decided here —
+// `narrativeTiming.ts` is the single resolver every mode asks. Keeping the
+// machine pure makes the chapter order and pause/resume behavior unit-testable.
 
 import type { Journey, JourneyMediaAsset, RoutePoint } from "./types";
 
@@ -15,20 +16,6 @@ export type JourneyPlaybackPhase =
   | { type: "media"; pointIndex: number; mediaIndex: number }
   | { type: "outro" }
   | { type: "paused"; previous: JourneyPlaybackPhase };
-
-// Deterministic pacing (first version; no AI per-content timing).
-export const PLAYBACK_PACING = {
-  introMs: 1200,
-  travelBaseMs: 900,
-  travelPerRadiansMs: 600,
-  travelMaxMs: 1600,
-  stopMinMs: 1500,
-  stopPerNoteCharMs: 24,
-  stopMaxMs: 3000,
-  imageMs: 4500,
-  videoMs: 6000,
-  outroMs: 1800,
-} as const;
 
 export function routePointAngularDistance(
   from: RoutePoint,
@@ -44,20 +31,6 @@ export function routePointAngularDistance(
   return 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-export function travelDurationMs(from: RoutePoint, to: RoutePoint): number {
-  const distance = routePointAngularDistance(from, to);
-  const duration = PLAYBACK_PACING.travelBaseMs
-    + distance * PLAYBACK_PACING.travelPerRadiansMs;
-  return Math.min(PLAYBACK_PACING.travelMaxMs, duration);
-}
-
-export function stopDurationMs(point: RoutePoint): number {
-  const noteLength = point.note?.trim().length ?? 0;
-  const duration = PLAYBACK_PACING.stopMinMs
-    + noteLength * PLAYBACK_PACING.stopPerNoteCharMs;
-  return Math.min(PLAYBACK_PACING.stopMaxMs, duration);
-}
-
 export type PlaybackMediaAvailability = "waiting" | "ready" | "error";
 export type PlaybackMediaWaitPolicy = "none" | "decode" | "video-ended";
 
@@ -69,12 +42,6 @@ export function playbackMediaWaitPolicy(
   if (asset.mimeType.startsWith("video/")) return "video-ended";
   if (asset.mimeType.startsWith("image/") && availability === "waiting") return "decode";
   return "none";
-}
-
-export function mediaDurationMs(asset: JourneyMediaAsset): number {
-  return asset.mimeType.startsWith("video/")
-    ? PLAYBACK_PACING.videoMs
-    : PLAYBACK_PACING.imageMs;
 }
 
 /**
@@ -222,35 +189,6 @@ export function playbackStepIdentity(journey: Journey, step: PlaybackStep): stri
       const asset = playbackMediaForPoint(journey, step.pointIndex)[step.mediaIndex];
       return `media:${asset?.id ?? `${step.pointIndex}:${step.mediaIndex}`}`;
     }
-  }
-}
-
-/** Duration of one expanded step. */
-export function stepDurationMs(
-  journey: Journey,
-  step: PlaybackStep,
-): number {
-  switch (step.kind) {
-    case "intro":
-      return PLAYBACK_PACING.introMs;
-    case "travel": {
-      const to = journey.routePoints[step.to];
-      const from = journey.routePoints[Math.max(0, step.to - 1)];
-      return travelDurationMs(from, to);
-    }
-    case "stop": {
-      const point = journey.routePoints[step.pointIndex];
-      return stopDurationMs(point);
-    }
-    case "media": {
-      const point = journey.routePoints[step.pointIndex];
-      const media = playbackMediaForPoint(journey, step.pointIndex);
-      const asset = media[step.mediaIndex];
-      if (!asset) return PLAYBACK_PACING.imageMs;
-      return mediaDurationMs(asset);
-    }
-    case "outro":
-      return PLAYBACK_PACING.outroMs;
   }
 }
 
