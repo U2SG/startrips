@@ -1,10 +1,16 @@
 import { and, asc, eq, inArray, isNull } from "drizzle-orm";
-import type { ActiveShareGrant } from "../authorization/share-access";
 import {
+  evaluateShareGrant,
+  shareUnavailable,
+  type ActiveShareGrant,
+} from "../authorization/share-access";
+import {
+  atlases,
   journeyRoutePoints,
   journeys,
   mediaAssets,
   shareGrantJourneys,
+  shareGrants,
 } from "../db/app-schema";
 import { db } from "../db/client";
 
@@ -146,14 +152,59 @@ export function buildSharedJourneyView(
  * cannot make one grant read as two different sequences on two surfaces, and a
  * shared link's ordering stays as auditable as its scope.
  *
+ * Everything is read in one `repeatable read` transaction, and the grant is
+ * re-evaluated as that transaction's first statement, which is what fixes the
+ * snapshot. So the authorization decision, the journey selection and the route
+ * and media rows all describe one instant: an owner who revokes, starts
+ * deleting the atlas or starts deleting a selected journey either commits
+ * before that instant, in which case this read refuses or excludes it, or
+ * after it, in which case the whole payload predates the withdrawal. A plain
+ * `read committed` transaction would not do this — each statement would take
+ * its own snapshot — and neither would a wrapper that authorized outside it.
+ *
+ * What no read can do is un-send an answer that was already in flight when the
+ * revoke committed. #200 states that honestly: a grant stops issuing new
+ * access, and bounding the residual lifetime of what was already issued is the
+ * job of the short presign TTL in phase C, not of this snapshot.
+ *
  * `atlasId` is compared as well as the grant join, so a grant can only ever
  * reach journeys of the atlas that issued it even if the join table were
  * wrong.
  */
 export async function loadSharedJourneyView(
   grant: ActiveShareGrant,
+  now: Date = new Date(),
 ): Promise<SharedJourneyView> {
-  const journeyRows = await db
+  return db.transaction(
+    (transaction) => readSharedJourneyView(transaction, grant, now),
+    { isolationLevel: "repeatable read", accessMode: "read only" },
+  );
+}
+
+type Transaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+async function readSharedJourneyView(
+  transaction: Transaction,
+  grant: ActiveShareGrant,
+  now: Date,
+): Promise<SharedJourneyView> {
+  // First statement, so this is where the snapshot is taken, and the state it
+  // reads is the state everything below sees.
+  const [current] = await transaction
+    .select({
+      expiresAt: shareGrants.expiresAt,
+      revokedAt: shareGrants.revokedAt,
+      atlasDeletionStartedAt: atlases.deletionStartedAt,
+    })
+    .from(shareGrants)
+    .innerJoin(atlases, eq(atlases.id, shareGrants.atlasId))
+    .where(eq(shareGrants.id, grant.id))
+    .limit(1);
+  if (!current || evaluateShareGrant(current, now) !== "active") {
+    throw shareUnavailable();
+  }
+
+  const journeyRows = await transaction
     .select({
       id: journeys.id,
       title: journeys.title,
@@ -175,47 +226,47 @@ export async function loadSharedJourneyView(
     .orderBy(asc(shareGrantJourneys.sortOrder));
 
   if (journeyRows.length === 0) {
-    return buildSharedJourneyView(grant, {
+    return buildSharedJourneyView(current, {
       journeys: [],
       routePoints: [],
       media: [],
     });
   }
 
+  // Sequential, not `Promise.all`: a transaction holds one connection, so two
+  // statements would be queued behind each other anyway.
   const journeyIds = journeyRows.map((journey) => journey.id);
-  const [routePointRows, mediaRows] = await Promise.all([
-    db
-      .select({
-        journeyId: journeyRoutePoints.journeyId,
-        id: journeyRoutePoints.id,
-        latitude: journeyRoutePoints.latitude,
-        longitude: journeyRoutePoints.longitude,
-        label: journeyRoutePoints.label,
-        isStop: journeyRoutePoints.isStop,
-        occurredAt: journeyRoutePoints.occurredAt,
-        note: journeyRoutePoints.note,
-      })
-      .from(journeyRoutePoints)
-      .where(inArray(journeyRoutePoints.journeyId, journeyIds))
-      .orderBy(
-        asc(journeyRoutePoints.journeyId),
-        asc(journeyRoutePoints.sortOrder),
-      ),
-    db
-      .select({
-        journeyId: mediaAssets.journeyId,
-        id: mediaAssets.id,
-        routePointId: mediaAssets.routePointId,
-        fileName: mediaAssets.fileName,
-        mimeType: mediaAssets.mimeType,
-        bytes: mediaAssets.bytes,
-      })
-      .from(mediaAssets)
-      .where(inArray(mediaAssets.journeyId, journeyIds))
-      .orderBy(asc(mediaAssets.journeyId), asc(mediaAssets.sortOrder)),
-  ]);
+  const routePointRows = await transaction
+    .select({
+      journeyId: journeyRoutePoints.journeyId,
+      id: journeyRoutePoints.id,
+      latitude: journeyRoutePoints.latitude,
+      longitude: journeyRoutePoints.longitude,
+      label: journeyRoutePoints.label,
+      isStop: journeyRoutePoints.isStop,
+      occurredAt: journeyRoutePoints.occurredAt,
+      note: journeyRoutePoints.note,
+    })
+    .from(journeyRoutePoints)
+    .where(inArray(journeyRoutePoints.journeyId, journeyIds))
+    .orderBy(
+      asc(journeyRoutePoints.journeyId),
+      asc(journeyRoutePoints.sortOrder),
+    );
+  const mediaRows = await transaction
+    .select({
+      journeyId: mediaAssets.journeyId,
+      id: mediaAssets.id,
+      routePointId: mediaAssets.routePointId,
+      fileName: mediaAssets.fileName,
+      mimeType: mediaAssets.mimeType,
+      bytes: mediaAssets.bytes,
+    })
+    .from(mediaAssets)
+    .where(inArray(mediaAssets.journeyId, journeyIds))
+    .orderBy(asc(mediaAssets.journeyId), asc(mediaAssets.sortOrder));
 
-  return buildSharedJourneyView(grant, {
+  return buildSharedJourneyView(current, {
     journeys: journeyRows,
     routePoints: routePointRows,
     media: mediaRows,

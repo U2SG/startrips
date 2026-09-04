@@ -7,6 +7,7 @@ import {
   generateShareToken,
   hashShareToken,
   MAX_SHARE_LIFETIME_MS,
+  ShareAccessError,
 } from "../authorization/share-access";
 import { serverConfig } from "../config";
 import {
@@ -26,6 +27,7 @@ import {
   createJourneyForAtlas,
   markJourneyForDeletionForAtlas,
 } from "../repositories/journey-repository";
+import { loadSharedJourneyView } from "../repositories/shared-journey-repository";
 
 const TEST_ORIGIN = "http://127.0.0.1:5173";
 const TOKEN_SHAPE = /^[A-Za-z0-9_-]{43}$/;
@@ -970,5 +972,45 @@ describe("guest journey read", () => {
     expect(body).not.toContain("Never shared");
     const probed = JSON.parse(body) as GuestPayload;
     expect(probed.journeys.map((journey) => journey.id)).toEqual([journeyA]);
+  });
+  it("refuses a grant withdrawn between authorization and the payload read", async () => {
+    const token = await createShare([journeyA]);
+    const [row] = await db
+      .select({
+        id: shareGrants.id,
+        atlasId: shareGrants.atlasId,
+        expiresAt: shareGrants.expiresAt,
+      })
+      .from(shareGrants)
+      .where(eq(shareGrants.tokenHash, hashShareToken(token)));
+    // Exactly the object `requireActiveShareGrant` hands the read once it has
+    // authorized the bearer token, so calling the read with it directly is the
+    // race: authorization already succeeded, and the withdrawal commits before
+    // the payload is assembled.
+    const authorized = {
+      id: row.id,
+      atlasId: row.atlasId,
+      expiresAt: row.expiresAt,
+    };
+    await expect(loadSharedJourneyView(authorized)).resolves.toMatchObject({
+      share: { journeyCount: 1 },
+    });
+
+    const revoke = await app.request(
+      `${TEST_ORIGIN}/api/shares/${row.id}/revoke`,
+      { method: "POST", headers: authHeaders(identity.cookie) },
+    );
+    expect(revoke.status).toBe(200);
+
+    // The grant is re-evaluated inside the read's own snapshot, so the stale
+    // authorization no longer buys a payload.
+    await expect(loadSharedJourneyView(authorized)).rejects.toThrow(
+      ShareAccessError,
+    );
+    const response = await guestRead(token);
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "SHARE_UNAVAILABLE",
+    });
   });
 });
