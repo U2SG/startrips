@@ -31,7 +31,7 @@ import {
   type PlaybackStep,
 } from "./journeyPlayback";
 import { syncPlaybackMediaElement } from "./mediaPlaybackSync";
-import { playbackControlsMayAutoHide } from "./playbackControls";
+import { playbackControlsMayAutoHide, playbackTempoControlVisible } from "./playbackControls";
 import type { PlaybackTempo } from "./journeyPlaybackPlan";
 import { journeySoundtrack, stripMediaExtension } from "./journeyModel";
 import { createSoundtrackSampler } from "../motion/audioSampler";
@@ -678,17 +678,19 @@ export function JourneyPlaybackOverlay({
             : <IconPlayerPause size={20} stroke={1.35} aria-hidden="true" />}
         </button>
         <button type="button" onClick={next} aria-label="下一个章节"><IconChevronRight size={20} stroke={1.35} aria-hidden="true" /></button>
-        <label className="journey-playback__tempo">
-          <select
-            value={tempo}
-            aria-label="播放节奏"
-            onChange={(event) => setTempo(event.currentTarget.value as PlaybackTempo)}
-          >
-            <option value="fast">快速</option>
-            <option value="standard">标准</option>
-            <option value="immersive">沉浸</option>
-          </select>
-        </label>
+        {playbackTempoControlVisible(playbackMode) ? (
+          <label className="journey-playback__tempo">
+            <select
+              value={tempo}
+              aria-label="播放节奏"
+              onChange={(event) => setTempo(event.currentTarget.value as PlaybackTempo)}
+            >
+              <option value="fast">快速</option>
+              <option value="standard">标准</option>
+              <option value="immersive">沉浸</option>
+            </select>
+          </label>
+        ) : null}
         <div className="journey-playback__progress">
           <span className="journey-playback__progress-fill" style={{ width: `${progress * 100}%` }} />
           <div className="journey-playback__progress-chapters" aria-hidden="true">
