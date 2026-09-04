@@ -104,7 +104,7 @@ already exercises its subsystem rather than building one large end-to-end suite.
 | 7. Credentials never travel in a URL path or query string | **partial, redaction only** — `server/request-log.test.ts` asserts the logger writes the matched route pattern instead of the raw path, so a credential that reaches the log layer in a path is not written out, including on the throw and unmatched-path branches. It deliberately sends a token in a path itself, so it cannot fail if application code starts putting credentials in paths or query strings. See the gaps below |
 | 8. Share scope closure | **partial, server read path only** — `server/authorization/share-access.test.ts` covers token generation, SHA-256 hashing, `Authorization: Bearer` parsing and grant-state evaluation; `server/repositories/shared-journey-repository.test.ts` asserts that the guest payload's previous/next references stay inside the granted set and that rows belonging to an unshared journey are dropped; the `guest journey read` block in `server/tests/share-grants.integration.test.ts` reads `GET /api/shared/journeys` for a single-journey and a multi-journey grant and asserts that no unshared journey id, title, storage key or owner field appears anywhere in the response text. Timeline, globe and playback reach are still unguarded because no guest viewer exists yet. See the gaps below |
 | 9. Read-only stays read-only | **partial, guest prefix and journey routes only** — the grant primitives establish that a grant evaluates as read-only; the `guest journey read` block additionally sends POST, PATCH, PUT and DELETE at the guest read route and replays the bearer token against the owner journey routes, which answer 401. The upload, atlas and share-management surfaces are not walked with a share identity. See the gaps below |
-| 10. Expiry propagates | **partial, request time only** — the grant primitives evaluate expiry, the expiry instant itself, revocation ahead of a later expiry and an atlas that starts deleting as a pure function; the `guest journey read` block drives all four causes plus an unknown and a malformed token at `GET /api/shared/journeys` and asserts one byte-identical unavailable body for every cause, and asserts that a grant withdrawn after it was authorized but before the payload was assembled is refused by the read's own snapshot. Propagation to an already-open page and the presigned-read lifetime cap are unguarded. See the gaps below |
+| 10. Expiry propagates | **partial, server issuance only** — the grant primitives evaluate expiry, the expiry instant itself, revocation ahead of a later expiry and an atlas that starts deleting as a pure function; the `guest journey read` block drives all four causes plus an unknown and a malformed token at `GET /api/shared/journeys` and asserts one byte-identical unavailable body for every cause, and asserts that a grant withdrawn after it was authorized but before the payload was assembled is refused by the read's own snapshot. `server/repositories/shared-media-repository.test.ts` sweeps every remaining lifetime from 1 to 600 seconds and asserts the issued presign TTL never reaches past `expiresAt`, and the `guest media read` block asserts the cap, the owner ceiling, the sub-second refusal, and that a moved, deleting or revoked asset stops being signed. Propagation to an already-open page is unguarded, and so is the client-side half: nothing asserts that a consumer's refresh margin is derived from the TTL it was handed. See the gaps below |
 | 11. Closer means more confidence | `src/scene/semanticZoom.test.ts` for tier monotonicity and `src/scene/cityLabels.test.ts` for label completeness and stability |
 
 Known gaps. Each is worth targeted QA and none of them has it yet. A row above that reads
@@ -130,8 +130,19 @@ cannot rely on is worse than an admitted gap.
   but the surfaces downstream of it are not. Nothing exercises scope closure through the timeline,
   the globe or playback under a grant, because the guest viewer does not exist yet; no test reaches
   the upload or atlas-management endpoints with a share identity; nothing covers revocation reaching
-  an already-open page, and nothing caps a presigned read at the grant's remaining lifetime. The
-  payload can stay closed while any of these regresses.
+  an already-open page. The presigned read is capped now, at issuance; what stays uncovered is the
+  consumer of that cap, below. The payload can stay closed while any of these regresses.
+- **Signed-read lifetime consumers** (invariants 3 and 10). A media read URL's lifetime stopped
+  being an effectively fixed ~15 minutes: a share guest gets 90 seconds, shrinking toward zero as
+  the grant nears expiry. Three client refresh strategies still encode the old magnitude as a
+  literal — `src/journey/LivingAtlasApp.tsx` schedules its refresh at
+  `Math.max(30_000, expiresAt - Date.now() - 30_000)`, so a 30-second floor can outlast a shorter
+  TTL; `src/journey/JourneyStory.tsx` treats a read as stale below a fixed
+  `MEDIA_READ_REFRESH_MARGIN_MS` of 60 s, which is two thirds of the guest ceiling;
+  `src/journey/soundtrackReadCache.ts` holds a read for 8 minutes behind a 30-second freshness
+  margin. None of the three is reachable by a guest today — the guest viewer does not exist — so
+  this is a constraint on that viewer rather than a live defect, and nothing asserts it. A refresh
+  margin must be derived from the `expiresAt` the server returned, never from a constant.
 
 ## Risk-driven matrix
 
@@ -255,6 +266,7 @@ not anecdotes: each one names a dimension that became variable.
 | #199 | Reduced chrome in the phone Story view mode removes only redundancy | low-chrome viewer mode | The media-playback affordance existed nowhere else, so removing it removed the capability rather than a duplicate of it | 6 |
 | #201 | A bearer credential in a request URL is an implementation detail | edge and API request logging | The credential was written into request logs, turning a transport choice into a durable credential leak | 7 |
 | #200 | One member session is the only identity that reaches a journey surface | expiring read-only share grants | Every read path, navigation surface and presigned read now serves a narrower identity with its own lifetime | 8, 9, 10 |
+| #200 phase C | A signed media read lives an effectively fixed ~15 minutes, long enough that any refresh margin measured in tens of seconds is safe | a guest presign capped by the grant's remaining lifetime | A media URL's lifetime became a variable that shrinks toward zero, so a constant refresh margin can exceed the whole lifetime it is meant to pre-empt | 3, 10 |
 
 ## Standing north-star
 

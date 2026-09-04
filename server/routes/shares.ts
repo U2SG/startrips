@@ -9,10 +9,13 @@ import {
   requireActiveShareGrant,
   type ShareGrantStatus,
 } from "../authorization/share-access";
+import { serverConfig } from "../config";
 import { journeys, shareGrantJourneys, shareGrants } from "../db/app-schema";
 import { db } from "../db/client";
 import { lockActiveAtlas } from "../repositories/journey-repository";
 import { loadSharedJourneyView } from "../repositories/shared-journey-repository";
+import { resolveSharedMediaRead } from "../repositories/shared-media-repository";
+import { getMultipartStorage } from "../storage/storage-registry";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -382,4 +385,65 @@ sharedRoutes.get("/journeys", async (context) => {
   const grant = await requireActiveShareGrant(context.req.raw);
   await recordShareAccess(grant.id);
   return context.json(await loadSharedJourneyView(grant));
+});
+
+/**
+ * #200 phase C: one short-lived signed storage URL for one asset of one
+ * active grant.
+ *
+ * Media stays private in object storage, so the guest `<img>` and `<video>`
+ * carry a presigned storage URL and never the share token. The path carries no
+ * token either — the capability is the bearer header — so nothing here is
+ * loggable at the edge, and the response body holds the signed URL, which no
+ * log line touches.
+ *
+ * There are deliberately TWO unavailable shapes, and the distinction is about
+ * what a guest is allowed to learn, not about disclosure:
+ *
+ * - grant-side causes — unknown token, revoked, expired, atlas deleting, and
+ *   a grant with under a second left — all raise the same byte-identical
+ *   `SHARE_UNAVAILABLE` 404 as every other guest route, so a token probe still
+ *   cannot tell them apart. That is the link being dead.
+ * - asset-side causes — malformed id, unknown id, an asset in an unshared
+ *   journey of the same atlas, an asset in another atlas, an asset whose
+ *   journey started deleting — all answer the same `MEDIA_UNAVAILABLE` 404, so
+ *   they cannot be told apart either and existence is never disclosed. That is
+ *   one picture being gone while the link still works, which is a different
+ *   product state: a viewer must not tear down a whole session because the
+ *   owner moved one photo.
+ *
+ * `lastAccessedAt` is not written here. #200 lists it as optional and the
+ * journeys read already records the visit; a media read happens once per
+ * asset, so recording it would turn a prefetching gallery into a burst of
+ * writes on one row for no owner-visible gain.
+ */
+sharedRoutes.get("/assets/:assetId/read-url", async (context) => {
+  const grant = await requireActiveShareGrant(context.req.raw);
+  const assetId = context.req.param("assetId");
+  // Not defensive: without this an unparseable id reaches a `uuid` comparison,
+  // Postgres raises 22P02, and the generic 500 from `onError` would tell a
+  // guest that its id was malformed rather than simply unavailable.
+  const resolved = UUID_PATTERN.test(assetId)
+    ? await resolveSharedMediaRead(grant, assetId, {
+      shareTtlSeconds: serverConfig.shareMediaReadUrlExpiresInSeconds,
+      ownerTtlSeconds: serverConfig.mediaReadUrlExpiresInSeconds,
+    })
+    : null;
+  if (!resolved) {
+    return context.json(
+      { error: "MEDIA_UNAVAILABLE", message: "Media unavailable" },
+      404,
+    );
+  }
+
+  const signed = await getMultipartStorage(
+    resolved.storageDriver,
+  ).createPrivateReadUrl({
+    key: resolved.storageKey,
+    expiresInSeconds: resolved.expiresInSeconds,
+  });
+  return context.json({
+    url: signed.url,
+    expiresAt: signed.expiresAt.toISOString(),
+  });
 });

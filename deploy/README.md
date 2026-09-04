@@ -86,6 +86,22 @@ Before activation, add a bucket lifecycle rule that aborts incomplete multipart
 uploads after seven days. The client and API abort failed uploads immediately,
 while the lifecycle rule covers browser crashes and interrupted sessions.
 
+### Signed read lifetimes
+
+`MEDIA_READ_URL_EXPIRES_IN_SECONDS` (60-3600, default 900) is the lifetime of a
+signed read issued to a member of the Atlas.
+`SHARE_MEDIA_READ_URL_EXPIRES_IN_SECONDS` (15-600, default 90) is the ceiling
+for a share-link guest, and the value actually issued is
+`min(that ceiling, the owner ceiling, the grant's remaining lifetime)`.
+
+The guest value is short because it is the only bound that exists on an
+already-issued URL. A presigned storage URL cannot be withdrawn: revoking a
+share stops the API issuing new ones immediately, but a URL already in a
+guest's hands keeps working until it expires. That residual window is exactly
+this setting, so raising it lengthens how long a revoked share can still fetch
+bytes. Lowering it costs a guest an extra API round trip per asset while a page
+is open. Do not raise it to match the owner value.
+
 ## Access log redaction
 
 Caddy's access log records `request>uri`, which is the path plus the query

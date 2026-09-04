@@ -118,4 +118,44 @@ describe("media read URL configuration", () => {
       "MEDIA_READ_URL_EXPIRES_IN_SECONDS must be between 60 and 3600",
     );
   });
+
+  // #200 phase C: the guest ceiling is a separate knob with a lower floor, so
+  // a deployment can shorten a share link's media lifetime without shortening
+  // the owner's.
+  it("defaults the share media read URL lifetime to 90 seconds", () => {
+    const config = loadServerConfig(productionEnvironment);
+    expect(config.shareMediaReadUrlExpiresInSeconds).toBe(90);
+  });
+
+  it("accepts an explicit share media read URL lifetime", () => {
+    const config = loadServerConfig({
+      ...productionEnvironment,
+      SHARE_MEDIA_READ_URL_EXPIRES_IN_SECONDS: "45",
+    });
+    expect(config.shareMediaReadUrlExpiresInSeconds).toBe(45);
+  });
+
+  it("rejects share media read URL lifetimes outside 15 to 600 seconds", () => {
+    for (const value of ["5", "900", "60.5"]) {
+      expect(() => loadServerConfig({
+        ...productionEnvironment,
+        SHARE_MEDIA_READ_URL_EXPIRES_IN_SECONDS: value,
+      })).toThrow(
+        "SHARE_MEDIA_READ_URL_EXPIRES_IN_SECONDS must be between 15 and 600",
+      );
+    }
+  });
+
+  // Deliberately allowed: a deployment that shortens the owner lifetime below
+  // the guest ceiling is not a startup error. The presign takes the minimum of
+  // both, so the guest still never outlives the owner.
+  it("accepts a share ceiling above a shortened owner lifetime", () => {
+    const config = loadServerConfig({
+      ...productionEnvironment,
+      MEDIA_READ_URL_EXPIRES_IN_SECONDS: "60",
+      SHARE_MEDIA_READ_URL_EXPIRES_IN_SECONDS: "90",
+    });
+    expect(config.mediaReadUrlExpiresInSeconds).toBe(60);
+    expect(config.shareMediaReadUrlExpiresInSeconds).toBe(90);
+  });
 });
