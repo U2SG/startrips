@@ -45,15 +45,24 @@ import type { JourneyRoute } from "../journey/types";
 import {
   buildArtworkPointPositions,
   buildSeededSpherePoints,
-  buildSphericalRouteLegs,
-  buildSphericalRouteSegments,
+  buildRouteArcLegSamples,
+  buildRouteArcSamples,
   buildSphericalRingSegments,
   getSphericalRouteFocus,
   latLonToVector3,
+  ROUTE_ANCHOR_RADIUS,
+  routeArcVertexCount,
+  routePointAnchor,
+  type RouteArcSamples,
   rotationXForLatitude,
   rotationYForLongitude,
   vector3ToLatLon,
 } from "./geo";
+import {
+  resolveRouteArcLift,
+  ROUTE_ARC_HEIGHT_RATIO,
+  ROUTE_ARC_SATURATION_ANGLE,
+} from "./routeArcLift";
 import {
   createAtmosphereMaterial,
   createParticleEarthMaterial,
@@ -641,56 +650,132 @@ export function isSphericalPointVisible(
   ) >= occluderRadius * occluderRadius;
 }
 
+export type ProjectedRoutePath = {
+  d: string;
+  /** Projected first Route Point anchor, when the path reaches it unclipped. */
+  start: ProjectedRoutePoint | null;
+  /** Projected last Route Point anchor, when the path reaches it unclipped. */
+  end: ProjectedRoutePoint | null;
+};
+
+const HORIZON_CLIP_ITERATIONS = 8;
+
+/**
+ * #193: route geometry is stored as unit directions plus a per-vertex lift, so
+ * the world position of a vertex is resolved here with the frame's current
+ * lift strength. Endpoints carry lift 0 and therefore project onto the exact
+ * Route Point anchor the marker uses.
+ *
+ * A segment with one endpoint behind the horizon is clipped at the crossing
+ * instead of being dropped whole, so a visible Route Point is never left with
+ * its route torn off tens of pixels away; the line tapers into the anchor and
+ * both disappear together.
+ */
 export function buildProjectedRoutePath(
-  segments: Float32Array,
+  samples: RouteArcSamples,
   projectPoint: (
     x: number,
     y: number,
     z: number,
     target: ProjectedRoutePoint,
   ) => boolean,
-) {
+  world: { radius: number; liftScale: number },
+): ProjectedRoutePath {
+  const { directions, lifts } = samples;
   const start = { x: 0, y: 0 };
   const end = { x: 0, y: 0 };
+  const probe = { x: 0, y: 0 };
+  const crossing = { x: 0, y: 0 };
   const commands: string[] = [];
   let previousEndX = Number.NaN;
   let previousEndY = Number.NaN;
+  let pathStart: ProjectedRoutePoint | null = null;
+  let pathEnd: ProjectedRoutePoint | null = null;
 
-  for (let index = 0; index + 5 < segments.length; index += 6) {
-    const startVisible = projectPoint(
-      segments[index],
-      segments[index + 1],
-      segments[index + 2],
-      start,
-    );
-    const endVisible = projectPoint(
-      segments[index + 3],
-      segments[index + 4],
-      segments[index + 5],
-      end,
-    );
-    if (!startVisible || !endVisible) {
-      previousEndX = Number.NaN;
-      previousEndY = Number.NaN;
-      continue;
-    }
-    const startX = start.x.toFixed(1);
-    const startY = start.y.toFixed(1);
-    const endX = end.x.toFixed(1);
-    const endY = end.y.toFixed(1);
+  const moveTo = (point: ProjectedRoutePoint) => {
     if (
       !Number.isFinite(previousEndX)
-      || Math.abs(previousEndX - start.x) > 0.11
-      || Math.abs(previousEndY - start.y) > 0.11
+      || Math.abs(previousEndX - point.x) > 0.11
+      || Math.abs(previousEndY - point.y) > 0.11
     ) {
-      commands.push(`M${startX} ${startY}`);
+      commands.push(`M${point.x.toFixed(1)} ${point.y.toFixed(1)}`);
     }
-    commands.push(`L${endX} ${endY}`);
-    previousEndX = end.x;
-    previousEndY = end.y;
+  };
+  const lineTo = (point: ProjectedRoutePoint) => {
+    commands.push(`L${point.x.toFixed(1)} ${point.y.toFixed(1)}`);
+  };
+
+  const vertexCount = lifts.length;
+  for (let vertex = 0; vertex + 1 < vertexCount; vertex += 2) {
+    const startRadius = world.radius * (1 + lifts[vertex] * world.liftScale);
+    const endRadius = world.radius * (1 + lifts[vertex + 1] * world.liftScale);
+    const startOffset = vertex * 3;
+    const endOffset = startOffset + 3;
+    const startWorldX = directions[startOffset] * startRadius;
+    const startWorldY = directions[startOffset + 1] * startRadius;
+    const startWorldZ = directions[startOffset + 2] * startRadius;
+    const endWorldX = directions[endOffset] * endRadius;
+    const endWorldY = directions[endOffset + 1] * endRadius;
+    const endWorldZ = directions[endOffset + 2] * endRadius;
+
+    const startVisible = projectPoint(startWorldX, startWorldY, startWorldZ, start);
+    const endVisible = projectPoint(endWorldX, endWorldY, endWorldZ, end);
+
+    if (startVisible && vertex === 0) pathStart = { x: start.x, y: start.y };
+    if (endVisible && vertex + 2 >= vertexCount) pathEnd = { x: end.x, y: end.y };
+
+    if (startVisible && endVisible) {
+      moveTo(start);
+      lineTo(end);
+      previousEndX = end.x;
+      previousEndY = end.y;
+      continue;
+    }
+
+    // One end is behind the horizon (or past a clip plane): walk the chord to
+    // the crossing so the visible side still reaches its Route Point anchor.
+    let crossingFound = false;
+    if (startVisible !== endVisible) {
+      let low = 0;
+      let high = 1;
+      for (let step = 0; step < HORIZON_CLIP_ITERATIONS; step += 1) {
+        const middle = (low + high) / 2;
+        const progress = startVisible ? middle : 1 - middle;
+        const visible = projectPoint(
+          startWorldX + (endWorldX - startWorldX) * progress,
+          startWorldY + (endWorldY - startWorldY) * progress,
+          startWorldZ + (endWorldZ - startWorldZ) * progress,
+          probe,
+        );
+        if (visible) {
+          crossingFound = true;
+          crossing.x = probe.x;
+          crossing.y = probe.y;
+          low = middle;
+        } else {
+          high = middle;
+        }
+      }
+    }
+
+    if (crossingFound && startVisible) {
+      moveTo(start);
+      lineTo(crossing);
+    } else if (crossingFound) {
+      previousEndX = Number.NaN;
+      previousEndY = Number.NaN;
+      moveTo(crossing);
+      lineTo(end);
+      previousEndX = end.x;
+      previousEndY = end.y;
+      continue;
+    }
+
+    previousEndX = Number.NaN;
+    previousEndY = Number.NaN;
   }
 
-  return commands.join("");
+  return { d: commands.join(""), start: pathStart, end: pathEnd };
 }
 
 export type JourneyConnectorRect = {
@@ -1911,14 +1996,14 @@ export function ParticleEarthScene({
       routeId: string;
       color: string;
       group: SVGGElement;
-      segments: Float32Array;
+      samples: RouteArcSamples;
       // #21 review: one SVG path per leg (point i -> i+1), so a rewind can
       // reveal the trail leg by leg; `toPointIndex` is the leg's destination
       // route-point index used to drive its temporal reveal.
       legs: Array<{
         path: SVGPathElement;
         toPointIndex: number;
-        segments: Float32Array;
+        samples: RouteArcSamples;
       }>;
       glowPath: SVGPathElement;
       corePath: SVGPathElement;
@@ -1951,9 +2036,10 @@ export function ParticleEarthScene({
       if (!isSphericalPointVisible(routeCameraPosition, routeLocalPoint)) return false;
       return isLocalPointInsideClipViewport(cityClipMatrix.elements, x, y, z);
     };
-    // The last four slots carry the active card's bounds so a still globe still
-    // redraws the connector when the card moves or the layout changes.
-    const lastRouteProjectionState = new Float64Array(14).fill(Number.NaN);
+    // Slots 10..13 carry the active card's bounds so a still globe still
+    // redraws the connector when the card moves or the layout changes; the
+    // last slot carries the frame's route arc lift (#193).
+    const lastRouteProjectionState = new Float64Array(15).fill(Number.NaN);
     let routeProjectionRevision = 0;
     let renderedRouteProjectionRevision = -1;
     const journeyConnectorPath = document.createElementNS(
@@ -2042,6 +2128,7 @@ export function ParticleEarthScene({
           "is-style-strands",
         );
         group.style.color = route.color;
+        group.dataset.journeyRoute = route.id;
         group.dataset.lightEffect = route.lightEffect ?? "none";
         // #21: the time cursor drives a route's presence. 0 = future
         // (hidden), 0..1 = being revealed, 1 = visited. The CSS fades the
@@ -2129,7 +2216,10 @@ export function ParticleEarthScene({
         const routeLabelElements: SVGGElement[] = [];
 
         route.points.forEach((point, routePointIndex) => {
-          const position = latLonToVector3(point.lat, point.lon, 1.46);
+          // #193: the canonical Route Point anchor. The marker, the point
+          // sprite, the label and both ends of the route line all read it,
+          // so nothing can drift away from the line at high zoom.
+          const position = routePointAnchor(point.lat, point.lon);
           position.toArray(
             pointPositions,
             pointIndex * 3,
@@ -2247,25 +2337,29 @@ export function ParticleEarthScene({
         // #15: long legs lift off the surface as a natural spatial arc
         // (great circle + altitude hump); short legs hug the globe. The
         // hump scales nonlinearly with angular distance and is clamped.
-        const routeSegments = buildSphericalRouteSegments(
+        const routeSamples = buildRouteArcSamples(
           route.points,
-          1.445,
           Math.PI / 96,
           remainingVertices,
-          { arcHeightRatio: 0.22, arcSaturationAngle: Math.PI / 3 },
+          {
+            arcHeightRatio: ROUTE_ARC_HEIGHT_RATIO,
+            arcSaturationAngle: ROUTE_ARC_SATURATION_ANGLE,
+          },
         );
-        routeVertexCount += routeSegments.length / 3;
+        routeVertexCount += routeArcVertexCount(routeSamples);
         // #21 review: build one path per leg so the rewind reveals the trail
         // stop by stop. Each leg path reuses the core gradient stroke and is
         // faded by its destination point's temporal progress.
-        const legArrays = buildSphericalRouteLegs(
+        const legSamples = buildRouteArcLegSamples(
           route.points,
-          1.445,
           Math.PI / 96,
           Math.min(remainingVertices, 2048),
-          { arcHeightRatio: 0.22, arcSaturationAngle: Math.PI / 3 },
+          {
+            arcHeightRatio: ROUTE_ARC_HEIGHT_RATIO,
+            arcSaturationAngle: ROUTE_ARC_SATURATION_ANGLE,
+          },
         );
-        const legs = legArrays.map((leg, legIndex) => {
+        const legs = legSamples.map((leg, legIndex) => {
           const path = document.createElementNS(
             "http://www.w3.org/2000/svg",
             "path",
@@ -2276,14 +2370,14 @@ export function ParticleEarthScene({
           path.setAttribute("stroke-linecap", "round");
           path.setAttribute("stroke-linejoin", "round");
           group.appendChild(path);
-          return { path, toPointIndex: legIndex + 1, segments: leg };
+          return { path, toPointIndex: legIndex + 1, samples: leg };
         });
         routeVectorLayer.appendChild(group);
         routeVectorEntries.push({
           routeId: route.id,
           color: route.color,
           group,
-          segments: routeSegments,
+          samples: routeSamples,
           legs,
           glowPath,
           corePath,
@@ -2473,6 +2567,24 @@ export function ParticleEarthScene({
         cardRect?.right ?? 0,
         cardRect?.bottom ?? 0,
       ];
+      const focalLengthPx = targetSize.y / (2 * Math.tan((camera.fov * Math.PI) / 360));
+      const pixelsPerWorldUnit = focalLengthPx
+        / Math.max(0.0001, Math.abs(camera.position.z - globe.position.z));
+      // #193: decorative altitude is resolved per frame from the geometry's
+      // stored per-vertex lift, so semantic zoom can flatten the arc without
+      // rebuilding a single route.
+      const arcLift = resolveRouteArcLift({
+        // Derived from the rendered scale rather than the zoom target, so the
+        // attenuation curve and the two ceilings always describe the same
+        // frame while a wheel step is still interpolating.
+        zoom: globe.scale.x / GLOBE_MODE_CONFIG[currentMode].scale,
+        globeScale: globe.scale.x,
+        anchorRadius: ROUTE_ANCHOR_RADIUS,
+        pixelsPerWorldUnit,
+        viewportMinPx: Math.min(targetSize.x, targetSize.y),
+        semanticZoom: semanticZoomState.state,
+      });
+      projectionState.push(arcLift.liftScale);
       const projectionChanged = projectionState.some((value, index) => (
         Math.abs(value - lastRouteProjectionState[index]) > 0.00001
       ));
@@ -2496,25 +2608,50 @@ export function ParticleEarthScene({
       let visibleLabelCount = 0;
       const routeLineScale = getJourneyRouteLineScale(globe.scale.x);
 
+      const arcWorld = {
+        radius: ROUTE_ANCHOR_RADIUS,
+        liftScale: arcLift.liftScale,
+      };
+      let routeEndpointMaxErrorPx = 0;
+
       routeVectorEntries.forEach((entry) => {
         entry.group.style.setProperty("--journey-route-scale", routeLineScale.toFixed(3));
-        const path = buildProjectedRoutePath(entry.segments, projectRoutePoint);
-        entry.glowPath.setAttribute("d", path);
-        entry.corePath.setAttribute("d", path);
-        entry.flowPath.setAttribute("d", path);
-        entry.strandPaths[0].setAttribute("d", path);
-        entry.strandPaths[1].setAttribute("d", path);
+        const path = buildProjectedRoutePath(
+          entry.samples,
+          projectRoutePoint,
+          arcWorld,
+        );
+        entry.glowPath.setAttribute("d", path.d);
+        entry.corePath.setAttribute("d", path.d);
+        entry.flowPath.setAttribute("d", path.d);
+        entry.strandPaths[0].setAttribute("d", path.d);
+        entry.strandPaths[1].setAttribute("d", path.d);
         // #21 review: each leg projects independently so rewind reveal works
         // per leg (the whole-route paths above stay for the static look).
+        // #193: a leg's projected ends are kept so the rendered line can be
+        // measured against the rendered marker below.
+        const projectedLegEnds: Array<
+          [pointIndex: number, point: ProjectedRoutePoint]
+        > = [];
         for (const leg of entry.legs) {
-          leg.path.setAttribute("d", buildProjectedRoutePath(leg.segments, projectRoutePoint));
+          const legPath = buildProjectedRoutePath(
+            leg.samples,
+            projectRoutePoint,
+            arcWorld,
+          );
+          leg.path.setAttribute("d", legPath.d);
+          if (legPath.start) {
+            projectedLegEnds.push([leg.toPointIndex - 1, legPath.start]);
+          }
+          if (legPath.end) projectedLegEnds.push([leg.toPointIndex, legPath.end]);
         }
+        const projectedMarkers = new Map<number, ProjectedRoutePoint>();
         const labelCandidates: Array<{
           label: RouteVectorLabel;
           x: number;
           y: number;
         }> = [];
-        entry.points.forEach(({ element, ring, position, label }) => {
+        entry.points.forEach(({ element, ring, position, label, routePointIndex }) => {
           if (!projectRoutePoint(
             position.x,
             position.y,
@@ -2555,6 +2692,15 @@ export function ParticleEarthScene({
             ring.setAttribute("cx", routeProjectedPoint.x.toFixed(1));
             ring.setAttribute("cy", routeProjectedPoint.y.toFixed(1));
           }
+          projectedMarkers.set(routePointIndex, {
+            x: routeProjectedPoint.x,
+            y: routeProjectedPoint.y,
+          });
+          // #193: the anchor this marker graphic was drawn around, so QA can
+          // measure the rendered route line against the rendered Route Point.
+          element.dataset.anchorX = routeProjectedPoint.x.toFixed(2);
+          element.dataset.anchorY = routeProjectedPoint.y.toFixed(2);
+          element.dataset.routePointIndex = String(routePointIndex);
           if (label) {
             labelCandidates.push({
               label,
@@ -2563,6 +2709,19 @@ export function ParticleEarthScene({
             });
           }
         });
+
+        // #193 read-back guard: compare the rendered line end against the
+        // rendered marker for every Route Point where both are on screen. It
+        // reads 0 while both derive from the one anchor and goes non-zero the
+        // moment some layer picks a radius of its own again.
+        for (const [pointIndex, projectedEnd] of projectedLegEnds) {
+          const marker = projectedMarkers.get(pointIndex);
+          if (!marker) continue;
+          routeEndpointMaxErrorPx = Math.max(
+            routeEndpointMaxErrorPx,
+            Math.hypot(projectedEnd.x - marker.x, projectedEnd.y - marker.y),
+          );
+        }
 
         labelCandidates
           .sort((left, right) => (
@@ -2674,6 +2833,14 @@ export function ParticleEarthScene({
           }
         }
       });
+      // #193 QA instrumentation: the arc profile, the decorative altitude the
+      // frame actually drew, the screen ceiling it was measured against, and
+      // the endpoint read-back guard.
+      host.dataset.routeArcProfile = arcLift.profile;
+      host.dataset.routeArcLift = arcLift.liftScale.toFixed(4);
+      host.dataset.routeArcLiftPx = arcLift.screenLiftPx.toFixed(2);
+      host.dataset.routeArcLiftCapPx = arcLift.screenLiftCapPx.toFixed(2);
+      host.dataset.routeEndpointMaxErrorPx = routeEndpointMaxErrorPx.toFixed(3);
       host.dataset.journeyRouteVisibleLabelCount = String(visibleLabelCount);
       host.dataset.journeyRouteLabelSafeRight = routeLabelSafeArea.right.toFixed(1);
       host.dataset.journeyRouteLabelSafeBottom = routeLabelSafeArea.bottom.toFixed(1);

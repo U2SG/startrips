@@ -80,23 +80,75 @@ export type RouteArcOptions = {
   arcSaturationAngle?: number;
 };
 
-function arcHeightFor(angle: number, radius: number, options: RouteArcOptions) {
+/**
+ * #193: the one canonical radius a Route Point occupies. Route line endpoints,
+ * the marker shell and the point sprites all sit on it, so a Route Point and
+ * the route line meeting it project to the same screen pixel at every zoom.
+ */
+export const ROUTE_ANCHOR_RADIUS = 1.46;
+
+/**
+ * #193: the canonical anchor of a Route Point. Anything that has to agree with
+ * route geometry on screen - markers, labels, visibility, picking - must derive
+ * its position from this helper instead of choosing a radius of its own.
+ */
+export function routePointAnchor(
+  lat: number,
+  lon: number,
+  radius = ROUTE_ANCHOR_RADIUS,
+) {
+  return latLonToVector3(lat, lon, radius);
+}
+
+/**
+ * #193: route geometry is stored as unit directions plus a decorative lift per
+ * vertex instead of baked world positions. The lift is a fraction of the anchor
+ * radius, so a frame can pick its own lift strength - see resolveRouteArcLift -
+ * without rebuilding the route, and both ends of every leg carry lift 0 and
+ * therefore land exactly on the Route Point anchor.
+ */
+export type RouteArcSamples = {
+  /** Unit direction per vertex; two vertices (6 floats) per drawn segment. */
+  directions: Float32Array;
+  /** Decorative lift per vertex as a fraction of the anchor radius. */
+  lifts: Float32Array;
+};
+
+const EMPTY_ROUTE_ARC_SAMPLES: RouteArcSamples = {
+  directions: new Float32Array(),
+  lifts: new Float32Array(),
+};
+
+function arcHeightRatioFor(angle: number, options: RouteArcOptions) {
   const ratio = options.arcHeightRatio ?? 0;
   if (ratio <= 0) return 0;
   const saturation = options.arcSaturationAngle ?? Math.PI / 3;
-  const progress = Math.min(1, Math.sqrt(angle / saturation));
-  return radius * ratio * progress;
+  return ratio * Math.min(1, Math.sqrt(angle / saturation));
 }
 
-export function buildSphericalRouteSegments(
+/**
+ * The hump peaks mid-leg and is exactly zero at both ends, so a leg endpoint
+ * always resolves to the Route Point anchor itself rather than to a value a
+ * sine rounds to 1e-26.
+ */
+function liftAt(progress: number, heightRatio: number, exponent: number) {
+  if (progress <= 0 || progress >= 1 || heightRatio <= 0) return 0;
+  return Math.pow(Math.sin(Math.PI * progress), exponent) * heightRatio;
+}
+
+export function routeArcVertexCount(samples: RouteArcSamples) {
+  return samples.lifts.length;
+}
+
+export function buildRouteArcSamples(
   points: readonly GeographicPoint[],
-  radius: number,
   maxSegmentAngle = Math.PI / 24,
   maxVertices = 8192,
   arc: RouteArcOptions = {},
-) {
-  if (points.length < 2 || maxVertices < 2) return new Float32Array();
-  const values: number[] = [];
+): RouteArcSamples {
+  if (points.length < 2 || maxVertices < 2) return EMPTY_ROUTE_ARC_SAMPLES;
+  const directions: number[] = [];
+  const lifts: number[] = [];
   const arcExponent = 1.6;
 
   for (let index = 1; index < points.length; index += 1) {
@@ -110,53 +162,54 @@ export function buildSphericalRouteSegments(
     const stepCount = Math.max(1, Math.ceil(angle / maxSegmentAngle));
     // #15: the hump peaks mid-leg and touches the surface at both ends, so a
     // multi-stop route reads as a continuous trail, not disconnected arcs.
-    const arcHeight = arcHeightFor(angle, radius, arc);
+    const heightRatio = arcHeightRatioFor(angle, arc);
 
     for (let step = 1; step <= stepCount; step += 1) {
-      if (values.length / 3 + 2 > maxVertices) return new Float32Array(values);
+      if (lifts.length + 2 > maxVertices) {
+        return {
+          directions: new Float32Array(directions),
+          lifts: new Float32Array(lifts),
+        };
+      }
       const previousProgress = (step - 1) / stepCount;
       const currentProgress = step / stepCount;
       const previous = slerpUnitVectors(start, end, previousProgress);
       const current = slerpUnitVectors(start, end, currentProgress);
-      if (arcHeight > 0) {
-        const previousLift = 1 + Math.pow(Math.sin(Math.PI * previousProgress), arcExponent) * (arcHeight / radius);
-        const currentLift = 1 + Math.pow(Math.sin(Math.PI * currentProgress), arcExponent) * (arcHeight / radius);
-        previous.multiplyScalar(radius * previousLift);
-        current.multiplyScalar(radius * currentLift);
-      } else {
-        previous.multiplyScalar(radius);
-        current.multiplyScalar(radius);
-      }
-      values.push(...previous.toArray(), ...current.toArray());
+      directions.push(...previous.toArray(), ...current.toArray());
+      lifts.push(
+        liftAt(previousProgress, heightRatio, arcExponent),
+        liftAt(currentProgress, heightRatio, arcExponent),
+      );
     }
   }
 
-  return new Float32Array(values);
+  return {
+    directions: new Float32Array(directions),
+    lifts: new Float32Array(lifts),
+  };
 }
 
 /**
- * #21 review: build each route leg as its own Float32Array, so a rewind can
+ * #21 review: build each route leg as its own sample set, so a rewind can
  * reveal one leg at a time (the trail grows stop by stop) instead of fading
- * the whole route as a single path. Each returned array covers points[i] ->
- * points[i+1]; legs whose points fail validation are skipped.
+ * the whole path. Each returned entry covers points[i] -> points[i+1]; legs
+ * whose points fail validation are skipped.
  */
-export function buildSphericalRouteLegs(
+export function buildRouteArcLegSamples(
   points: readonly GeographicPoint[],
-  radius: number,
   maxSegmentAngle = Math.PI / 24,
   maxVertices = 8192,
   arc: RouteArcOptions = {},
-): Float32Array[] {
-  const legs: Float32Array[] = [];
+): RouteArcSamples[] {
+  const legs: RouteArcSamples[] = [];
   for (let index = 1; index < points.length; index += 1) {
-    const leg = buildSphericalRouteSegments(
+    const leg = buildRouteArcSamples(
       [points[index - 1], points[index]],
-      radius,
       maxSegmentAngle,
       maxVertices,
       arc,
     );
-    if (leg.length > 0) legs.push(leg);
+    if (leg.directions.length > 0) legs.push(leg);
   }
   return legs;
 }

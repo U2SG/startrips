@@ -4,8 +4,8 @@ import { readFileSync } from "node:fs";
 import {
   buildArtworkPointPositions,
   buildSeededSpherePoints,
-  buildSphericalRouteLegs,
-  buildSphericalRouteSegments,
+  buildRouteArcLegSamples,
+  buildRouteArcSamples,
   buildSphericalRingSegments,
   formatLatitude,
   formatLongitude,
@@ -13,9 +13,37 @@ import {
   latLonToVector3,
   rotationXForLatitude,
   rotationYForLongitude,
+  ROUTE_ANCHOR_RADIUS,
+  routeArcVertexCount,
   routeFocusZoomForAngularRadius,
+  routePointAnchor,
+  type RouteArcSamples,
   vector3ToLatLon,
 } from "./geo";
+
+/** World position of one stored vertex at a given radius and lift strength. */
+function sampleAt(
+  samples: RouteArcSamples,
+  vertex: number,
+  radius = 1,
+  liftScale = 1,
+) {
+  const offset = vertex * 3;
+  const scale = radius * (1 + samples.lifts[vertex] * liftScale);
+  return new Vector3(
+    samples.directions[offset] * scale,
+    samples.directions[offset + 1] * scale,
+    samples.directions[offset + 2] * scale,
+  );
+}
+
+function maxRadius(samples: RouteArcSamples, radius = 1, liftScale = 1) {
+  let largest = 0;
+  for (let vertex = 0; vertex < routeArcVertexCount(samples); vertex += 1) {
+    largest = Math.max(largest, sampleAt(samples, vertex, radius, liftScale).length());
+  }
+  return largest;
+}
 
 describe("latLonToVector3", () => {
   it("maps the equator and poles to a unit sphere", () => {
@@ -107,137 +135,130 @@ describe("seeded geographic point generation", () => {
   });
 });
 
-describe("spherical route geometry", () => {
+describe("route arc geometry", () => {
   it("returns no line for a single point", () => {
-    expect(buildSphericalRouteSegments([{ lat: 0, lon: 0 }], 1)).toHaveLength(0);
+    expect(routeArcVertexCount(buildRouteArcSamples([{ lat: 0, lon: 0 }]))).toBe(0);
   });
 
   it("uses the short spherical arc across the antimeridian", () => {
-    const positions = buildSphericalRouteSegments(
+    const samples = buildRouteArcSamples(
       [{ lat: 0, lon: 179 }, { lat: 0, lon: -179 }],
-      1,
       Math.PI / 180,
     );
-    const mid = new Vector3(positions[6], positions[7], positions[8]);
+    const mid = sampleAt(samples, 2);
     expect(mid.length()).toBeCloseTo(1);
     expect(mid.x).toBeLessThan(-0.99);
   });
 
   it("respects the line-vertex budget", () => {
-    const positions = buildSphericalRouteSegments(
+    const samples = buildRouteArcSamples(
       [{ lat: 0, lon: 0 }, { lat: 0, lon: 180 }],
-      1,
       Math.PI / 180,
       10,
     );
-    expect(positions.length / 3).toBeLessThanOrEqual(10);
+    expect(routeArcVertexCount(samples)).toBeLessThanOrEqual(10);
+    expect(samples.directions.length).toBe(routeArcVertexCount(samples) * 3);
   });
 
   it("lifts long legs off the surface with a clamped altitude hump (#15)", () => {
-    const flat = buildSphericalRouteSegments(
+    const flat = buildRouteArcSamples(
       [{ lat: 0, lon: 0 }, { lat: 0, lon: 60 }],
-      1,
       Math.PI / 180,
       4096,
     );
-    const arced = buildSphericalRouteSegments(
+    const arced = buildRouteArcSamples(
       [{ lat: 0, lon: 0 }, { lat: 0, lon: 60 }],
-      1,
       Math.PI / 180,
       4096,
       { arcHeightRatio: 0.5, arcSaturationAngle: Math.PI / 3 },
     );
     // The arc must stay above the flat great circle somewhere in the middle.
-    let maxLift = 0;
-    for (let index = 0; index < arced.length; index += 3) {
-      const distance = new Vector3(
-        arced[index],
-        arced[index + 1],
-        arced[index + 2],
-      ).length();
-      if (distance > maxLift) maxLift = distance;
-    }
-    expect(maxLift).toBeGreaterThan(1.1);
-    // Endpoints stay on the surface (both ends of every leg touch the globe).
-    const start = new Vector3(arced[0], arced[1], arced[2]);
-    const end = new Vector3(arced.at(-3)!, arced.at(-2)!, arced.at(-1)!);
-    expect(start.length()).toBeCloseTo(1, 2);
-    expect(end.length()).toBeCloseTo(1, 2);
+    expect(maxRadius(arced)).toBeGreaterThan(1.1);
+    // Endpoints stay on the anchor shell (both ends of every leg meet a point).
+    expect(arced.lifts[0]).toBe(0);
+    expect(arced.lifts.at(-1)).toBe(0);
+    expect(sampleAt(arced, 0).length()).toBeCloseTo(1, 6);
+    expect(sampleAt(arced, routeArcVertexCount(arced) - 1).length()).toBeCloseTo(1, 6);
     // The flat build never leaves the surface.
-    let flatMax = 0;
-    for (let index = 0; index < flat.length; index += 3) {
-      flatMax = Math.max(flatMax, new Vector3(
-        flat[index],
-        flat[index + 1],
-        flat[index + 2],
-      ).length());
-    }
-    expect(flatMax).toBeCloseTo(1, 6);
+    expect(maxRadius(flat)).toBeCloseTo(1, 6);
   });
 
   it("keeps short legs hugging the surface (hump scales nonlinearly) (#15)", () => {
-    const positions = buildSphericalRouteSegments(
+    const samples = buildRouteArcSamples(
       [{ lat: 0, lon: 0 }, { lat: 0, lon: 3 }],
-      1,
       Math.PI / 360,
       4096,
       { arcHeightRatio: 0.5, arcSaturationAngle: Math.PI / 3 },
     );
-    let maxDistance = 0;
-    for (let index = 0; index < positions.length; index += 3) {
-      maxDistance = Math.max(maxDistance, new Vector3(
-        positions[index],
-        positions[index + 1],
-        positions[index + 2],
-      ).length());
-    }
-    // 3° is ~0.052 rad; sqrt(0.052/1.047) ≈ 0.223 -> lift ≈ 1 + 0.5*0.223 ≈ 1.11 max
-    expect(maxDistance).toBeGreaterThan(1.02);
-    expect(maxDistance).toBeLessThan(1.16);
+    // 3 degrees is ~0.052 rad; sqrt(0.052/1.047) ~ 0.223 -> lift ~ 1.11 max
+    expect(maxRadius(samples)).toBeGreaterThan(1.02);
+    expect(maxRadius(samples)).toBeLessThan(1.16);
   });
 
-  it("handles the 180° antipodal case with the orthonormal fallback (#15)", () => {
-    const positions = buildSphericalRouteSegments(
+  it("handles the 180 degree antipodal case with the orthonormal fallback (#15)", () => {
+    const samples = buildRouteArcSamples(
       [{ lat: 0, lon: 0 }, { lat: 0, lon: 180 }],
-      1,
       Math.PI / 180,
       4096,
       { arcHeightRatio: 0.4, arcSaturationAngle: Math.PI / 3 },
     );
-    // The path is finite, every vertex is real, and the mid-arc lifts.
-    expect(positions.length).toBeGreaterThan(0);
-    let midMax = 0;
-    for (let index = 0; index < positions.length; index += 3) {
-      const distance = new Vector3(
-        positions[index],
-        positions[index + 1],
-        positions[index + 2],
-      ).length();
-      if (Number.isFinite(distance)) midMax = Math.max(midMax, distance);
-    }
-    expect(midMax).toBeGreaterThan(1.05);
+    expect(routeArcVertexCount(samples)).toBeGreaterThan(0);
+    expect([...samples.directions].every(Number.isFinite)).toBe(true);
+    expect(maxRadius(samples)).toBeGreaterThan(1.05);
   });
 
-  it("builds one Float32Array per leg for stop-by-stop reveal (#21 review)", () => {
-    const legs = buildSphericalRouteLegs(
+  it("scales the stored hump with the frame's lift strength (#193)", () => {
+    const samples = buildRouteArcSamples(
+      [{ lat: 0, lon: 0 }, { lat: 0, lon: 60 }],
+      Math.PI / 180,
+      4096,
+      { arcHeightRatio: 0.22, arcSaturationAngle: Math.PI / 3 },
+    );
+    const cinematic = maxRadius(samples, ROUTE_ANCHOR_RADIUS, 1);
+    const restrained = maxRadius(samples, ROUTE_ANCHOR_RADIUS, 0.25);
+    const geographic = maxRadius(samples, ROUTE_ANCHOR_RADIUS, 0);
+    expect(cinematic).toBeGreaterThan(restrained);
+    expect(restrained).toBeGreaterThan(geographic);
+    // Zero lift collapses the route onto the Route Point anchor shell.
+    expect(geographic).toBeCloseTo(ROUTE_ANCHOR_RADIUS, 6);
+    // Every lift strength leaves both endpoints exactly on the anchor shell.
+    for (const liftScale of [0, 0.25, 1]) {
+      expect(sampleAt(samples, 0, ROUTE_ANCHOR_RADIUS, liftScale).length())
+        .toBeCloseTo(ROUTE_ANCHOR_RADIUS, 6);
+    }
+  });
+
+  it("puts a Route Point anchor on the canonical shell (#193)", () => {
+    const anchor = routePointAnchor(37.8651, -119.5383);
+    expect(anchor.length()).toBeCloseTo(ROUTE_ANCHOR_RADIUS, 6);
+    const samples = buildRouteArcSamples(
+      [{ lat: 37.8651, lon: -119.5383 }, { lat: 34.0522, lon: -118.2437 }],
+      Math.PI / 96,
+      4096,
+      { arcHeightRatio: 0.22, arcSaturationAngle: Math.PI / 3 },
+    );
+    // The route's first vertex IS the Route Point, at every lift strength.
+    for (const liftScale of [0, 0.5, 1]) {
+      const endpoint = sampleAt(samples, 0, ROUTE_ANCHOR_RADIUS, liftScale);
+      expect(endpoint.distanceTo(anchor)).toBeLessThan(1e-6);
+    }
+  });
+
+  it("builds one sample set per leg for stop-by-stop reveal (#21 review)", () => {
+    const legs = buildRouteArcLegSamples(
       [{ lat: 0, lon: 0 }, { lat: 0, lon: 30 }, { lat: 0, lon: 60 }],
-      1,
       Math.PI / 180,
       4096,
       { arcHeightRatio: 0.3, arcSaturationAngle: Math.PI / 3 },
     );
     expect(legs).toHaveLength(2);
-    // Each leg starts on the surface at its origin point.
-    const firstStart = new Vector3(legs[0][0], legs[0][1], legs[0][2]);
-    expect(firstStart.length()).toBeCloseTo(1, 3);
-    // The last leg's end is the route destination on the surface.
+    expect(sampleAt(legs[0], 0).length()).toBeCloseTo(1, 6);
     const last = legs[1];
-    const lastEnd = new Vector3(last.at(-3)!, last.at(-2)!, last.at(-1)!);
-    expect(lastEnd.length()).toBeCloseTo(1, 3);
+    expect(sampleAt(last, routeArcVertexCount(last) - 1).length()).toBeCloseTo(1, 6);
   });
 
   it("returns no legs for a single point (#21 review)", () => {
-    expect(buildSphericalRouteLegs([{ lat: 0, lon: 0 }], 1)).toEqual([]);
+    expect(buildRouteArcLegSamples([{ lat: 0, lon: 0 }])).toEqual([]);
   });
 });
 
