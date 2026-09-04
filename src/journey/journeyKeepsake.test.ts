@@ -171,6 +171,32 @@ describe("Journey keepsake render manifest (#87)", () => {
     expect(serialized).not.toContain("audio/mpeg");
   });
 
+  it("carries the resolver's note and distance sensitivity into the fitted scenes", () => {
+    const manifest = buildKeepsakeRenderManifest(journey, 30);
+    const arrivals = manifest.scenes.filter(
+      (scene) => scene.kind === "map" && scene.role === "arrival",
+    );
+    // p1 is the only route point with a note, so its arrival must outlast the
+    // note-free ones: the resolver's note term survives the preset fit.
+    expect(arrivals[1].durationMs).toBeGreaterThan(arrivals[0].durationMs);
+    expect(arrivals[1].durationMs).toBeGreaterThan(arrivals[2].durationMs);
+
+    const travels = manifest.scenes.filter(
+      (scene) => scene.kind === "map" && scene.role === "travel",
+    );
+    // p1 -> p2 spans more longitude than p0 -> p1, so the longer leg holds the
+    // camera longer instead of both legs collapsing to one travel duration.
+    expect(travels[1].durationMs).toBeGreaterThan(travels[0].durationMs);
+
+    const video = manifest.scenes.find(
+      (scene) => scene.kind === "media" && scene.mediaType === "video",
+    );
+    const photo = manifest.scenes.find(
+      (scene) => scene.kind === "media" && scene.mediaAssetId === "p2-photo",
+    );
+    expect(video!.durationMs).toBeGreaterThan(photo!.durationMs);
+  });
+
   it("defines deterministic 15/30/60 pacing without randomly deleting content", () => {
     const manifests = [15, 30, 60].map((preset) => (
       buildKeepsakeRenderManifest(journey, preset as 15 | 30 | 60)
