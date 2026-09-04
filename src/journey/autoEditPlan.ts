@@ -571,6 +571,14 @@ export function validateAutoEditPlanV1(planInput: unknown, input: {
         if (!isRouteTravelPrimitive(chapter.camera.primitive)) {
           errors.push(`quick recap route camera mismatch ${chapter.chapterId}`);
         }
+        // A route chapter that travels for zero milliseconds does not travel.
+        // The dropped millisecond equalities (#166) left the resolver free to
+        // choose any duration, but not free to choose none: `0` reads as a
+        // legal non-negative duration to the generic check below, so the
+        // grammar has to state the floor itself.
+        if (!isFinitePositiveDuration(chapter.camera.durationMs)) {
+          errors.push(`route camera duration must be positive ${chapter.chapterId}`);
+        }
         // Presence is the live check; the two `typeof` guards restate a
         // guarantee the structural pass already enforces, so a non-boolean flag
         // is reported as `chapter arrival flags invalid` and never reaches here.
@@ -581,6 +589,11 @@ export function validateAutoEditPlanV1(planInput: unknown, input: {
           || typeof chapter.arrival.showNote !== "boolean"
         ) {
           errors.push(`quick recap route arrival mismatch ${chapter.chapterId}`);
+        }
+        // Guarded on presence so a chapter with no arrival reports the missing
+        // arrival once rather than twice.
+        if (chapter.arrival && !isFinitePositiveDuration(chapter.arrival.durationMs)) {
+          errors.push(`route arrival duration must be positive ${chapter.chapterId}`);
         }
       }
     }
@@ -604,12 +617,18 @@ export function validateAutoEditPlanV1(planInput: unknown, input: {
         if (chapter.camera.primitive !== "travel") {
           errors.push(`full route camera mismatch ${chapter.chapterId}`);
         }
+        if (!isFinitePositiveDuration(chapter.camera.durationMs)) {
+          errors.push(`route camera duration must be positive ${chapter.chapterId}`);
+        }
         if (
           !chapter.arrival
           || chapter.arrival.showPlaceLabel !== true
           || chapter.arrival.showNote !== true
         ) {
           errors.push(`full route arrival mismatch ${chapter.chapterId}`);
+        }
+        if (chapter.arrival && !isFinitePositiveDuration(chapter.arrival.durationMs)) {
+          errors.push(`route arrival duration must be positive ${chapter.chapterId}`);
         }
       }
     }

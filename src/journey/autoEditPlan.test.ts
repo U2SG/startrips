@@ -311,6 +311,36 @@ describe("deterministic auto-edit foundation (#127)", () => {
     }
   });
 
+  it("rejects Quick Recap route chapters that never travel or never arrive (#166)", () => {
+    const digests = [digest("intro", null, 0), digest("tokyo-photo", "tokyo", 1)];
+    const scope = { ...baseInput, routePointIds: ["tokyo"], digests };
+    const base = buildDeterministicQuickRecapPlan({
+      ...baseInput, routePointIds: ["tokyo"], targetDurationMs: 30_000, digests,
+    });
+    // The planner's own choreography stays valid: the floor rejects only zero.
+    expect(validateAutoEditPlanV1(base, scope)).toMatchObject({ valid: true, errors: [] });
+
+    // Each forgery reconciles `plannedDurationMs`, so the error array is
+    // exactly the new one - a zero duration is a legal non-negative number to
+    // every other check in the validator.
+    const stalled = structuredClone(base);
+    stalled.chapters[1]!.camera.durationMs = 0;
+    stalled.plannedDurationMs = sumPlannedDurationMs(stalled);
+    expect(validateAutoEditPlanV1(stalled, scope).errors)
+      .toEqual(["route camera duration must be positive route:tokyo"]);
+
+    const unannounced = structuredClone(base);
+    unannounced.chapters[1]!.arrival!.durationMs = 0;
+    unannounced.plannedDurationMs = sumPlannedDurationMs(unannounced);
+    expect(validateAutoEditPlanV1(unannounced, scope).errors)
+      .toEqual(["route arrival duration must be positive route:tokyo"]);
+
+    // The journey intro is the deliberate exception: it holds at zero and has
+    // nothing to arrive at.
+    expect(base.chapters[0]!.camera.durationMs).toBe(0);
+    expect(base.chapters[0]!.arrival).toBeUndefined();
+  });
+
   it("gives fast, standard and immersive distinct Quick Recap timing for one fixture", () => {
     const digests = [
       digest("hero", "tokyo", 0),
@@ -831,6 +861,32 @@ describe("deterministic auto-edit foundation (#127)", () => {
       expect(result.errors).toContain(testCase.error);
       expect(result.errors).not.toContain("planned duration mismatch");
     }
+  });
+
+  it("rejects Full Playback route chapters that never travel or never arrive (#166)", () => {
+    const digests = [digest("intro", null, 0), digest("tokyo", "tokyo", 1)];
+    const scope = { ...baseInput, routePointIds: ["tokyo"], digests };
+    const base: AutoEditPlanV1 = {
+      schemaVersion: 1, planId: "full:route-duration", journeyId: "journey-1", journeyRevision: "7", generatedAt: baseInput.generatedAt,
+      mode: "full", plannedDurationMs: 2_000 + FULL_CAMERA_MS + FULL_ARRIVAL_MS, tempo: "standard", omittedAssetIds: [],
+      chapters: [
+        { chapterId: "journey-intro", routePointId: null, camera: { primitive: "hold", durationMs: 0 }, items: [{ assetId: "intro", sourceIndex: 0, dwellMs: 1_000, framing: "contain", transition: "direct", selectionReason: "all-media" }] },
+        { chapterId: "route:tokyo", routePointId: "tokyo", camera: { primitive: "travel", durationMs: FULL_CAMERA_MS }, arrival: { durationMs: FULL_ARRIVAL_MS, showPlaceLabel: true, showNote: true }, items: [{ assetId: "tokyo", sourceIndex: 1, dwellMs: 1_000, framing: "contain", transition: "direct", selectionReason: "all-media" }] },
+      ],
+    };
+    expect(validateAutoEditPlanV1(base, scope)).toMatchObject({ valid: true, errors: [] });
+
+    const stalled = structuredClone(base);
+    stalled.chapters[1]!.camera.durationMs = 0;
+    stalled.plannedDurationMs = sumPlannedDurationMs(stalled);
+    expect(validateAutoEditPlanV1(stalled, scope).errors)
+      .toEqual(["route camera duration must be positive route:tokyo"]);
+
+    const unannounced = structuredClone(base);
+    unannounced.chapters[1]!.arrival!.durationMs = 0;
+    unannounced.plannedDurationMs = sumPlannedDurationMs(unannounced);
+    expect(validateAutoEditPlanV1(unannounced, scope).errors)
+      .toEqual(["route arrival duration must be positive route:tokyo"]);
   });
 
   it("keeps one populated Full Playback chapter per scope valid", () => {
