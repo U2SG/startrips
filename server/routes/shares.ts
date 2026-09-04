@@ -43,6 +43,8 @@ export type ShareValues = {
  * The parsed body is `unknown` because a well-formed JSON document is not
  * necessarily an object: `null`, a number and a bare string all parse without
  * a `SyntaxError`, so only this guard keeps a property read off a non-object.
+ * A body that is not valid JSON at all never reaches here; `readShareInput`
+ * catches that `SyntaxError` and answers with the same `null`.
  */
 export function parseShareInput(
   parsed: unknown,
@@ -72,6 +74,31 @@ export function parseShareInput(
   return { journeyIds: journeyIds as string[], expiresAt };
 }
 
+/**
+ * Reads and validates the create body in one step. A syntactically malformed
+ * document makes the read throw a `SyntaxError`, which the global `onError`
+ * would otherwise turn into a generic `INVALID_JSON` 400 from outside the
+ * route. Catching it here means every unusable body — malformed, non-object,
+ * or well-shaped but invalid — leaves by the route's own `INVALID_SHARE`
+ * envelope, telling a client nothing about which of the three it sent.
+ *
+ * The read is a thunk rather than a `Request` so the route keeps using Hono's
+ * cached `context.req.json()` behind the body-limit middleware, while the test
+ * can hand in a plain `Request`.
+ */
+export async function readShareInput(
+  read: () => Promise<unknown>,
+  now?: Date,
+): Promise<ShareValues | null> {
+  let parsed: unknown;
+  try {
+    parsed = await read();
+  } catch {
+    return null;
+  }
+  return parseShareInput(parsed, now);
+}
+
 /** Byte-order text comparison, matching how Postgres ordered these columns. */
 function compareText(first: string, second: string): number {
   if (first < second) return -1;
@@ -99,7 +126,7 @@ export const shareRoutes = new Hono();
  */
 shareRoutes.post("/", async (context) => {
   const { atlas, session } = await requireAtlasAccess(context.req.raw, "create");
-  const input = parseShareInput(await context.req.json());
+  const input = await readShareInput(() => context.req.json());
   if (!input) {
     return context.json(
       { error: "INVALID_SHARE", message: "Invalid share selection or expiry" },
