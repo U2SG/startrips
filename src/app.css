@@ -368,11 +368,15 @@ button {
   letter-spacing: 0.08em;
 }
 
-@media (max-width: 760px) {
-  .particle-earth-route__label text {
-    font-size: 10px;
-    letter-spacing: 0.05em;
-  }
+/* #194: route-label typography belongs to the globe overlay, so it follows
+   the compact flag the scene was handed instead of a width breakpoint.
+   The scope sits in :where() so these rules keep exactly the specificity
+   they had inside the media query, and Atlas placement rules that used to
+   win over them still do. */
+
+:where(.particle-earth-scene[data-mobile-v2="on"]) .particle-earth-route__label text {
+  font-size: 10px;
+  letter-spacing: 0.05em;
 }
 
 .particle-earth-scene[data-drag-rotation="true"] canvas {

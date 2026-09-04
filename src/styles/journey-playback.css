@@ -403,25 +403,29 @@
   }
 }
 
-@media (max-width: 760px) {
-  .journey-playback__stage {
-    padding: 24px;
-  }
+/* #194: Playback compacts for the product interaction mode. The overlay
+   publishes data-mobile-v2 from useCompactMobileLayout(), so this file states
+   no breakpoint of its own and cannot drift from COMPACT_MOBILE_MEDIA_QUERY.
+   The scope sits in :where() so these rules keep exactly the specificity
+   they had inside the media query, and Atlas placement rules that used to
+   win over them still do. */
 
-  .journey-playback__controls {
-    grid-template-columns: 44px 44px 44px 64px minmax(60px, 100px);
-    gap: 6px;
-    bottom: 14px;
-  }
+:where(.journey-playback[data-mobile-v2="on"]) .journey-playback__stage {
+  padding: 24px;
+}
 
-  .journey-playback__tempo {
-    min-width: 64px;
-  }
+:where(.journey-playback[data-mobile-v2="on"]) .journey-playback__controls {
+  grid-template-columns: 44px 44px 44px 64px minmax(60px, 100px);
+  gap: 6px;
+  bottom: 14px;
+}
 
-  .journey-playback__soundtrack {
-    right: 12px;
-    bottom: 88px;
-    width: min(180px, 36vw);
-  }
+:where(.journey-playback[data-mobile-v2="on"]) .journey-playback__tempo {
+  min-width: 64px;
+}
 
+:where(.journey-playback[data-mobile-v2="on"]) .journey-playback__soundtrack {
+  right: 12px;
+  bottom: 88px;
+  width: min(180px, 36vw);
 }

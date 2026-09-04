@@ -722,6 +722,18 @@
   }
 }
 
+/* #194 audit: width-only here is deliberate, not post-#58 drift.
+   This block never decides the product interaction mode - AuthGateway.tsx does
+   that from useCompactMobileLayout(), and every surface that decision gates
+   (.account-dock, .account-sheet*) is styled outside any media query. What this
+   block chooses is a layout SHAPE for a narrow viewport: a bottom-sheet login
+   card and an oversized earth, sized in vh/svh (70vh earth, min(66svh, 560px)
+   card, clamp(34px, 10.8vw, 44px) heading). The extra sizes the shared contract
+   admits are coarse-pointer landscape at <=480px tall, where those exact rules
+   are worst - a 66svh sheet is ~284px on a 932x430 phone. Widening this to
+   COMPACT_MOBILE_MEDIA_QUERY would degrade landscape, not align it, so the
+   width-only query stays and src/journey/compactMobileContract.test.ts requires
+   this justification to remain next to it. */
 @media (max-width: 760px) {
   .persistent-earth-host__viewport {
     top: -7vh;

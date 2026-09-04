@@ -41,7 +41,7 @@ import { JourneyTimeline } from "./JourneyTimeline";
 import { GlobeTimeScrubber, formatCursorDate } from "./GlobeTimeScrubber";
 import { useGlobeTimeCursor } from "./useGlobeTimeCursor";
 import { useModalFocus } from "./useModalFocus";
-import { useCompactMobileLayout } from "./mobileLayout";
+import { compactMobileLayoutMarker, useCompactMobileLayout } from "./mobileLayout";
 import { useMobileSurfaceHistory } from "./useMobileSurfaceHistory";
 import {
   deleteJourney,
@@ -855,7 +855,7 @@ export function LivingAtlasApp({
   return (
     <main
       className={`living-atlas${isMobileV2 ? " is-mobile-v2" : ""}${arrivalJourneyId ? " has-arrival" : ""}${globePickActive ? " is-globe-picking" : ""}${playbackActive ? " is-playback" : ""}${globeFocusState(globeFocusMode).className}`}
-      data-mobile-v2={isMobileV2 ? "on" : "off"}
+      data-mobile-v2={compactMobileLayoutMarker(isMobileV2)}
       data-globe-focus={globeFocusState(globeFocusMode).dataAttribute}
       data-arrival-journey={arrivalJourneyId ?? undefined}
       data-journey-count={journeys.length}

@@ -41,6 +41,7 @@ import {
   type CityPoint,
 } from "./cityLabels";
 import type { PlaybackTravelChoreography } from "../journey/journeyPlayback";
+import { compactMobileLayoutMarker } from "../journey/mobileLayout";
 import type { JourneyRoute } from "../journey/types";
 import {
   buildArtworkPointPositions,
@@ -605,6 +606,60 @@ export function isLocalPointInsideClipViewport(
     && clipZ <= clipW;
 }
 
+export type RouteLabelSafeArea = {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+};
+
+export type RouteLabelSafeAreaInput = {
+  /** Host size in CSS pixels. */
+  host: { width: number; height: number };
+  /** Atlas header bottom edge, host-relative, or null when there is no header. */
+  headerBottom: number | null;
+  /** Active journey card bounds, host-relative, or null when no card is on screen. */
+  card: { left: number; top: number; right: number; bottom: number } | null;
+  /**
+   * #194: the product interaction mode is decided once, by the React owner, and
+   * handed down. The scene never re-derives it from `window.innerWidth`, so a
+   * coarse-pointer landscape phone wider than 760px still lays out as compact.
+   */
+  compactMobileLayout: boolean;
+};
+
+export function resolveRouteLabelSafeArea({
+  host,
+  headerBottom,
+  card,
+  compactMobileLayout,
+}: RouteLabelSafeAreaInput): RouteLabelSafeArea {
+  const safeArea: RouteLabelSafeArea = {
+    left: 16,
+    top: headerBottom !== null
+      ? Math.max(16, headerBottom + 10)
+      : compactMobileLayout ? 62 : 74,
+    right: host.width - 16,
+    bottom: host.height - 18,
+  };
+  if (!card) return safeArea;
+  const overlapsHorizontally = card.left < host.width && card.right > 0;
+  const overlapsVertically = card.top < host.height && card.bottom > 0;
+  if (!overlapsHorizontally || !overlapsVertically) return safeArea;
+  if (compactMobileLayout && card.top > 0) {
+    safeArea.bottom = Math.min(safeArea.bottom, card.top - 16);
+  } else if (!compactMobileLayout && card.left > 0) {
+    safeArea.right = Math.min(safeArea.right, card.left - 18);
+  }
+  return safeArea;
+}
+
+export function resolveRouteLabelLimit(compactMobileLayout: boolean) {
+  return compactMobileLayout
+    ? MAX_RENDERED_MOBILE_ROUTE_LABELS
+    : MAX_RENDERED_ROUTE_LABELS;
+}
+
 export function selectRouteLabelPointIndexes(
   points: readonly { isStop: boolean; label?: string }[],
   maxLabels = MAX_RENDERED_ROUTE_LABELS,
@@ -1081,6 +1136,11 @@ interface ParticleEarthSceneProps {
   wheelToZoom?: boolean;
   reduceMotion?: boolean;
   rotationYOverride?: number;
+  /**
+   * #194: the one product-level compact/mobile decision, made by the React
+   * owner from `useCompactMobileLayout()`. The scene must not infer it.
+   */
+  compactMobileLayout?: boolean;
 }
 
 interface LandGeometry {
@@ -1378,6 +1438,7 @@ export function ParticleEarthScene({
   dragToRotate = false,
   wheelToZoom = true,
   reduceMotion = false,
+  compactMobileLayout = false,
   rotationYOverride,
 }: ParticleEarthSceneProps) {
   const [ready, setReady] = useState(false);
@@ -1400,6 +1461,7 @@ export function ParticleEarthScene({
   const latestDragToRotate = useRef(dragToRotate);
   const latestWheelToZoom = useRef(wheelToZoom);
   const latestRotationYOverride = useRef(rotationYOverride);
+  const latestCompactMobileLayout = useRef(compactMobileLayout);
   latestMode.current = mode;
   latestQuality.current = quality;
   latestFocusPoint.current = focusPoint;
@@ -1419,6 +1481,7 @@ export function ParticleEarthScene({
   latestDragToRotate.current = dragToRotate;
   latestWheelToZoom.current = wheelToZoom;
   latestRotationYOverride.current = rotationYOverride;
+  latestCompactMobileLayout.current = compactMobileLayout;
 
   const { hostRef, controllerRef } = useThreeScene((host) => {
     let disposed = false;
@@ -1426,6 +1489,7 @@ export function ParticleEarthScene({
     let lastTime = performance.now();
     let currentMode = latestMode.current;
     let currentQuality = latestQuality.current;
+    let currentCompactMobileLayout = latestCompactMobileLayout.current;
     let qualityBuildRevision = 0;
     const targetSize = new Vector2();
     const scene = new Scene();
@@ -2071,30 +2135,24 @@ export function ParticleEarthScene({
       const cardBounds = atlas
         ?.querySelector(".living-atlas__active")
         ?.getBoundingClientRect();
-      const compact = window.innerWidth <= 760;
-      routeLabelSafeArea.left = 16;
-      routeLabelSafeArea.top = headerBounds
-        ? Math.max(16, headerBounds.bottom - hostBounds.top + 10)
-        : compact ? 62 : 74;
-      routeLabelSafeArea.right = hostBounds.width - 16;
-      routeLabelSafeArea.bottom = hostBounds.height - 18;
-      if (!cardBounds) return;
-      const overlapsHorizontally = cardBounds.left < hostBounds.right
-        && cardBounds.right > hostBounds.left;
-      const overlapsVertically = cardBounds.top < hostBounds.bottom
-        && cardBounds.bottom > hostBounds.top;
-      if (!overlapsHorizontally || !overlapsVertically) return;
-      if (compact && cardBounds.top > hostBounds.top) {
-        routeLabelSafeArea.bottom = Math.min(
-          routeLabelSafeArea.bottom,
-          cardBounds.top - hostBounds.top - 16,
-        );
-      } else if (!compact && cardBounds.left > hostBounds.left) {
-        routeLabelSafeArea.right = Math.min(
-          routeLabelSafeArea.right,
-          cardBounds.left - hostBounds.left - 18,
-        );
-      }
+      // This function only measures the DOM; the layout rules themselves live
+      // in the pure `resolveRouteLabelSafeArea` so they can be tested without
+      // a viewport, and so #194's compact flag has exactly one source.
+      Object.assign(routeLabelSafeArea, resolveRouteLabelSafeArea({
+        host: { width: hostBounds.width, height: hostBounds.height },
+        headerBottom: headerBounds
+          ? headerBounds.bottom - hostBounds.top
+          : null,
+        card: cardBounds
+          ? {
+            left: cardBounds.left - hostBounds.left,
+            top: cardBounds.top - hostBounds.top,
+            right: cardBounds.right - hostBounds.left,
+            bottom: cardBounds.bottom - hostBounds.top,
+          }
+          : null,
+        compactMobileLayout: currentCompactMobileLayout,
+      }));
     };
 
     const applyJourneyRoutes = (routes: readonly JourneyRoute[]) => {
@@ -2526,7 +2584,7 @@ export function ParticleEarthScene({
             card: journeyConnectorCardRect,
             point: routeProjectedPoint,
             scene: { width: targetSize.x, height: targetSize.y },
-            compact: window.innerWidth <= 760,
+            compact: currentCompactMobileLayout,
           });
         }
       }
@@ -2605,10 +2663,7 @@ export function ParticleEarthScene({
       globe.worldToLocal(routeCameraPosition.copy(camera.position));
 
       const labelBoxes: ProjectedRouteLabelBox[] = [];
-      const compactRouteLabels = window.innerWidth <= 760;
-      const labelLimit = compactRouteLabels
-        ? MAX_RENDERED_MOBILE_ROUTE_LABELS
-        : MAX_RENDERED_ROUTE_LABELS;
+      const labelLimit = resolveRouteLabelLimit(currentCompactMobileLayout);
       let visibleLabelCount = 0;
       const routeLineScale = getJourneyRouteLineScale(globe.scale.x);
 
@@ -4479,6 +4534,15 @@ export function ParticleEarthScene({
           delete host.dataset.routeFocusZoom;
         }
       },
+      setCompactMobileLayout(compact: boolean) {
+        if (currentCompactMobileLayout === compact) return;
+        currentCompactMobileLayout = compact;
+        updateRouteLabelSafeArea();
+        // An orientation flip can cross the shared query without changing the
+        // canvas size, so the projection cache has to be invalidated by hand or
+        // the labels keep the previous mode's layout until the next real move.
+        routeProjectionRevision += 1;
+      },
       setFocusColor(color: string | undefined) {
         personalMaterial.uniforms.uColor.value.set(color ?? 0xffdc72);
         host.dataset.focusColor = `#${personalMaterial.uniforms.uColor.value.getHexString()}`;
@@ -4606,6 +4670,10 @@ export function ParticleEarthScene({
   }, [controllerRef, focusColor]);
 
   useEffect(() => {
+    controllerRef.current?.setCompactMobileLayout(compactMobileLayout);
+  }, [compactMobileLayout, controllerRef]);
+
+  useEffect(() => {
     if (!ready) return;
     controllerRef.current?.setJourneyRoutes(journeyRoutes, activeJourneyRouteId);
   }, [activeJourneyRouteId, controllerRef, journeyRoutes, ready]);
@@ -4621,6 +4689,9 @@ export function ParticleEarthScene({
     <div
       ref={hostRef}
       className="particle-earth-scene"
+      // #194: the overlays this scene draws are styled from the injected
+      // product mode, so app.css keys off this instead of a breakpoint.
+      data-mobile-v2={compactMobileLayoutMarker(compactMobileLayout)}
       data-scene-ready={ready ? "true" : "false"}
       data-personal-point-interactive={
         centerFocusPoint && onFocusPointActivate ? "true" : "false"

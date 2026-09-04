@@ -1,5 +1,6 @@
 import { useRef } from "react";
 import { IconPlayerPause, IconPlayerPlay, IconHistory } from "@tabler/icons-react";
+import { compactMobileLayoutMarker, useCompactMobileLayout } from "./mobileLayout";
 import type { GlobeTimeCursor } from "./useGlobeTimeCursor";
 
 type TimeDomain = GlobeTimeCursor["timeDomain"];
@@ -23,6 +24,8 @@ export function GlobeTimeScrubber({
   seek,
   setScrub,
 }: GlobeTimeCursor) {
+  // #194: an Atlas control compacts for the product mode, not for a width.
+  const compactMobileLayout = useCompactMobileLayout();
   const trackRef = useRef<HTMLDivElement>(null);
 
   const onPointerDown = (event: React.PointerEvent) => {
@@ -59,7 +62,12 @@ export function GlobeTimeScrubber({
   const tickLabels = timelineTickLabels(timeDomain);
 
   return (
-    <div className="globe-time-scrubber" role="group" aria-label="时间回溯">
+    <div
+      className="globe-time-scrubber"
+      data-mobile-v2={compactMobileLayoutMarker(compactMobileLayout)}
+      role="group"
+      aria-label="时间回溯"
+    >
       <button
         type="button"
         className="globe-time-scrubber__play"
