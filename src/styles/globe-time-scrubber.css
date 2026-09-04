@@ -131,7 +131,9 @@
   letter-spacing: 0.06em;
 }
 
-@media (max-width: 760px) {
+/* #194 regression-family: the scrubber is an Atlas control that compacts for
+   the same product mode, so it follows COMPACT_MOBILE_MEDIA_QUERY too. */
+@media (max-width: 760px), (max-width: 960px) and (max-height: 480px) and (any-pointer: coarse) {
   .globe-time-scrubber {
     left: 12px;
     right: 12px;

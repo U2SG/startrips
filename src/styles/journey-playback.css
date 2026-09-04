@@ -403,7 +403,11 @@
   }
 }
 
-@media (max-width: 760px) {
+/* #194: Playback landed after #58 and must use the one product-level
+   compact-mobile contract, not a width-only breakpoint. Keep this prelude
+   byte-identical to COMPACT_MOBILE_MEDIA_QUERY in src/journey/mobileLayout.ts;
+   src/journey/compactMobileContract.test.ts fails the build if it drifts. */
+@media (max-width: 760px), (max-width: 960px) and (max-height: 480px) and (any-pointer: coarse) {
   .journey-playback__stage {
     padding: 24px;
   }

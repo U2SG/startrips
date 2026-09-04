@@ -10,6 +10,7 @@ import {
 } from "react";
 import { IconMap2, IconMapPin, IconWorld } from "@tabler/icons-react";
 import type { PlaybackTravelChoreography } from "../journey/journeyPlayback";
+import { useCompactMobileLayout } from "../journey/mobileLayout";
 import type { JourneyRoute } from "../journey/types";
 import type { DetailedEarthLanguage } from "./detailedEarthModel";
 import { GLOBE_MODE_CONFIG, ParticleEarthScene } from "./ParticleEarthScene";
@@ -158,6 +159,10 @@ export function usePersistentEarth() {
 
 export function PersistentEarthProvider({ children }: { children: ReactNode }) {
   const [stage, setStage] = useState<PersistentEarthStage>("idle");
+  // #194: the scene owner reads the one shared compact-mobile contract and
+  // hands the answer down, so the globe overlays can never disagree with the
+  // Atlas shell about whether the viewport is in compact mobile mode.
+  const compactMobileLayout = useCompactMobileLayout();
   const [loginPresentation, setLoginPresentation] = useState<LoginEarthPresentation>(() => {
     const reduceMotion = typeof window !== "undefined"
       && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -218,6 +223,7 @@ export function PersistentEarthProvider({ children }: { children: ReactNode }) {
                   wheelToZoom={Boolean(atlas)}
                   reduceMotion={atlas?.reduceMotion ?? loginPresentation.reduceMotion}
                   rotationYOverride={atlas ? undefined : GLOBE_MODE_CONFIG.particleSphere.rotationY}
+                  compactMobileLayout={compactMobileLayout}
                 />
               )
             ) : null}

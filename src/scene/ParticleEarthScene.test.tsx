@@ -27,6 +27,8 @@ import {
   MAX_RENDERED_MOBILE_ROUTE_LABELS,
   MAX_RENDERED_ROUTE_LABELS,
   MAX_RENDERED_ROUTE_POINTS,
+  resolveRouteLabelLimit,
+  resolveRouteLabelSafeArea,
   QUALITY_PROFILE,
   buildJourneyConnector,
   buildJourneyConnectorPath,
@@ -870,5 +872,106 @@ describe("ParticleEarthScene contracts", () => {
     ).toBeLessThanOrEqual(MAX_RENDERED_ROUTE_POINTS);
     expect(visible.at(-1)?.id).toBe(String(routes.length - 1));
     expect(QUALITY_PROFILE.low.maxDpr).toBe(1);
+  });
+});
+
+describe("#194 compact mobile layout is injected, never inferred", () => {
+  // The globe overlays used to read `window.innerWidth <= 760` themselves, so a
+  // 932x430 coarse-pointer phone was Mobile V2 in the shell and desktop in the
+  // scene. These cases pin the two layout helpers to the injected boolean and
+  // set a desktop-width global to prove the global is not consulted.
+  const desktopViewport = <T,>(run: () => T) => {
+    const original = globalThis.innerWidth;
+    Object.defineProperty(globalThis, "innerWidth", {
+      configurable: true,
+      value: 1440,
+      writable: true,
+    });
+    try {
+      return run();
+    } finally {
+      Object.defineProperty(globalThis, "innerWidth", {
+        configurable: true,
+        value: original,
+        writable: true,
+      });
+    }
+  };
+
+  const host = { width: 932, height: 430 };
+
+  it("caps route labels from the injected flag while the viewport reads desktop", () => {
+    expect(desktopViewport(() => resolveRouteLabelLimit(true)))
+      .toBe(MAX_RENDERED_MOBILE_ROUTE_LABELS);
+    expect(desktopViewport(() => resolveRouteLabelLimit(false)))
+      .toBe(MAX_RENDERED_ROUTE_LABELS);
+  });
+
+  it("takes the compact header inset from the injected flag, not the viewport", () => {
+    const compact = desktopViewport(() => resolveRouteLabelSafeArea({
+      host,
+      headerBottom: null,
+      card: null,
+      compactMobileLayout: true,
+    }));
+    const roomy = desktopViewport(() => resolveRouteLabelSafeArea({
+      host,
+      headerBottom: null,
+      card: null,
+      compactMobileLayout: false,
+    }));
+    expect(compact.top).toBe(62);
+    expect(roomy.top).toBe(74);
+    expect(compact.right).toBe(host.width - 16);
+    expect(compact.bottom).toBe(host.height - 18);
+  });
+
+  it("measures the header when one is present, in host-relative pixels", () => {
+    const safeArea = resolveRouteLabelSafeArea({
+      host,
+      headerBottom: 90,
+      card: null,
+      compactMobileLayout: true,
+    });
+    expect(safeArea.top).toBe(100);
+    expect(resolveRouteLabelSafeArea({
+      host,
+      headerBottom: -40,
+      card: null,
+      compactMobileLayout: false,
+    }).top).toBe(16);
+  });
+
+  it("yields the bottom edge to the active card when compact", () => {
+    const safeArea = desktopViewport(() => resolveRouteLabelSafeArea({
+      host,
+      headerBottom: null,
+      card: { left: 0, top: 260, right: host.width, bottom: host.height },
+      compactMobileLayout: true,
+    }));
+    expect(safeArea.bottom).toBe(244);
+    expect(safeArea.right).toBe(host.width - 16);
+  });
+
+  it("yields the right edge to the active card when not compact", () => {
+    const safeArea = resolveRouteLabelSafeArea({
+      host,
+      headerBottom: null,
+      card: { left: 600, top: 0, right: host.width, bottom: host.height },
+      compactMobileLayout: false,
+    });
+    expect(safeArea.right).toBe(582);
+    expect(safeArea.bottom).toBe(host.height - 18);
+  });
+
+  it("keeps the full host box when the card does not overlap it", () => {
+    const safeArea = resolveRouteLabelSafeArea({
+      host,
+      headerBottom: null,
+      card: { left: host.width + 20, top: 40, right: host.width + 300, bottom: 200 },
+      compactMobileLayout: true,
+    });
+    expect(safeArea.bottom).toBe(host.height - 18);
+    expect(safeArea.right).toBe(host.width - 16);
   });
 });
