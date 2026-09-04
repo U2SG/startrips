@@ -30,7 +30,7 @@ export class ShareAccessError extends Error {
   }
 }
 
-function shareUnavailable(): ShareAccessError {
+export function shareUnavailable(): ShareAccessError {
   return new ShareAccessError(
     404,
     "SHARE_UNAVAILABLE",

@@ -102,9 +102,9 @@ already exercises its subsystem rather than building one large end-to-end suite.
 | 5. Newer intent wins | **none targeted** — see the gaps below |
 | 6. Low chrome removes redundancy, not capability | `scripts/qa-media-controls.mjs` asserts the phone Story viewer keeps a discoverable media-playback affordance and that viewer and manage responsibilities stay separated |
 | 7. Credentials never travel in a URL path or query string | **partial, redaction only** — `server/request-log.test.ts` asserts the logger writes the matched route pattern instead of the raw path, so a credential that reaches the log layer in a path is not written out, including on the throw and unmatched-path branches. It deliberately sends a token in a path itself, so it cannot fail if application code starts putting credentials in paths or query strings. See the gaps below |
-| 8. Share scope closure | **partial, grant primitives only** — `server/authorization/share-access.test.ts` covers token generation, SHA-256 hashing, `Authorization: Bearer` parsing and grant-state evaluation. It never traverses navigation, timeline, globe or playback reach under a grant, so closure over the granted set is unguarded. See the gaps below |
-| 9. Read-only stays read-only | **partial, grant primitives only** — the same file establishes that a grant evaluates as read-only, and nothing more. No test walks a downstream mutation surface with a share identity, so mutation-authority denial is unguarded. See the gaps below |
-| 10. Expiry propagates | **partial, evaluation only** — the same file evaluates expiry, the expiry instant itself, revocation ahead of a later expiry and an atlas that starts deleting, all as a pure function at one instant. Propagation to an already-open page and the presigned-read lifetime cap are unguarded. See the gaps below |
+| 8. Share scope closure | **partial, server read path only** — `server/authorization/share-access.test.ts` covers token generation, SHA-256 hashing, `Authorization: Bearer` parsing and grant-state evaluation; `server/repositories/shared-journey-repository.test.ts` asserts that the guest payload's previous/next references stay inside the granted set and that rows belonging to an unshared journey are dropped; the `guest journey read` block in `server/tests/share-grants.integration.test.ts` reads `GET /api/shared/journeys` for a single-journey and a multi-journey grant and asserts that no unshared journey id, title, storage key or owner field appears anywhere in the response text. Timeline, globe and playback reach are still unguarded because no guest viewer exists yet. See the gaps below |
+| 9. Read-only stays read-only | **partial, guest prefix and journey routes only** — the grant primitives establish that a grant evaluates as read-only; the `guest journey read` block additionally sends POST, PATCH, PUT and DELETE at the guest read route and replays the bearer token against the owner journey routes, which answer 401. The upload, atlas and share-management surfaces are not walked with a share identity. See the gaps below |
+| 10. Expiry propagates | **partial, request time only** — the grant primitives evaluate expiry, the expiry instant itself, revocation ahead of a later expiry and an atlas that starts deleting as a pure function; the `guest journey read` block drives all four causes plus an unknown and a malformed token at `GET /api/shared/journeys` and asserts one byte-identical unavailable body for every cause, and asserts that a grant withdrawn after it was authorized but before the payload was assembled is refused by the read's own snapshot. Propagation to an already-open page and the presigned-read lifetime cap are unguarded. See the gaps below |
 | 11. Closer means more confidence | `src/scene/semanticZoom.test.ts` for tier monotonicity and `src/scene/cityLabels.test.ts` for label completeness and stability |
 
 Known gaps. Each is worth targeted QA and none of them has it yet. A row above that reads
@@ -126,11 +126,12 @@ cannot rely on is worse than an admitted gap.
 - **Credential transport** (invariant 7). Nothing asserts where a credential is allowed to travel.
   The guarded half is the log line; the unguarded half is the rule that a share or bearer token
   appears only in an `Authorization` header or a URL fragment, never in a path or a query string.
-- **Downstream share surfaces** (invariants 8, 9 and 10). Nothing exercises journey-scope closure
-  across navigation, timeline, globe and playback under a grant; no test reaches a mutation endpoint
-  with a share identity to prove it is refused; nothing covers revocation reaching an already-open
-  page, and nothing caps a presigned read at the grant's remaining lifetime. The grant primitives
-  can stay green while any of these regresses.
+- **Downstream share surfaces** (invariants 8, 9 and 10). The server guest read is covered now,
+  but the surfaces downstream of it are not. Nothing exercises scope closure through the timeline,
+  the globe or playback under a grant, because the guest viewer does not exist yet; no test reaches
+  the upload or atlas-management endpoints with a share identity; nothing covers revocation reaching
+  an already-open page, and nothing caps a presigned read at the grant's remaining lifetime. The
+  payload can stay closed while any of these regresses.
 
 ## Risk-driven matrix
 
