@@ -43,10 +43,11 @@ See `docs/cross-feature-assumption-audit.md` for the dimensions, the invariant l
 risk-driven matrix.
 
 <!--
-If this pull request fixes a P0 or P1 regression, the audit is not complete without a family
-search. Add a `Regression-family search:` line naming every sibling subsystem that shares the
-failed assumption, and for each confirmed sibling defect either the fix in this pull request or
-the issue it created or reopened.
+If this pull request fixes a P0 or P1 regression — or a P2 defect that reveals a shared
+architectural assumption — the audit is not complete without a family search. Add a
+`Regression-family search:` line naming every sibling subsystem that shares the failed assumption,
+and for each confirmed sibling defect either the fix in this pull request or the issue it created,
+reopened or grew in scope.
 -->
 
 Local validation:

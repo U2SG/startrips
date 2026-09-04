@@ -95,26 +95,42 @@ already exercises its subsystem rather than building one large end-to-end suite.
 
 | Invariant | Automated QA that encodes it |
 | --- | --- |
-| 1. One product mode per viewport | `scripts/qa-media-controls.mjs` drives a real phone viewport and asserts the shared `data-mobile-mode` contract on `.journey-story` across its viewer, manage, back and fullscreen-exit checks |
+| 1. One product mode per viewport | **partial** — `scripts/qa-media-controls.mjs` drives a real phone viewport and asserts the shared `data-mobile-mode` contract on `.journey-story` across its viewer, manage, back and fullscreen-exit checks. That is Story layout state only: nothing asserts the repository-wide half of the invariant, that no other subsystem re-derives posture from a raw width threshold. See the gaps below |
 | 2. One geographic anchor across layers | **none targeted** — see the gaps below |
 | 3. One tempo, one consumption rate | `src/journey/narrativeTiming.test.ts` for the shared resolver, `src/journey/quickRecapPlayback.test.ts` for recap chapter booking, `src/journey/playbackPrefetchPlan.test.ts` for tempo-aware prefetch distance, plus the `story-mobile-viewer-playback-video-completion` and `playback-runtime-errors` checks in `scripts/qa-media-controls.mjs` |
 | 4. A meaningful route point survives every projection | `src/journey/autoEditPlan.test.ts` validates the plan grammar without narrowing media type, and `src/journey/quickRecapPlayback.test.ts` covers the recap production handoff |
 | 5. Newer intent wins | **none targeted** — see the gaps below |
 | 6. Low chrome removes redundancy, not capability | `scripts/qa-media-controls.mjs` asserts the phone Story viewer keeps a discoverable media-playback affordance and that viewer and manage responsibilities stay separated |
-| 7. Credentials never travel in a URL path or query string | `server/request-log.test.ts` |
-| 8. Share scope closure | `server/authorization/share-access.test.ts` |
-| 9. Read-only stays read-only | `server/authorization/share-access.test.ts` |
-| 10. Expiry propagates | `server/authorization/share-access.test.ts` |
+| 7. Credentials never travel in a URL path or query string | **partial, redaction only** — `server/request-log.test.ts` asserts the logger writes the matched route pattern instead of the raw path, so a credential that reaches the log layer in a path is not written out, including on the throw and unmatched-path branches. It deliberately sends a token in a path itself, so it cannot fail if application code starts putting credentials in paths or query strings. See the gaps below |
+| 8. Share scope closure | **partial, grant primitives only** — `server/authorization/share-access.test.ts` covers token generation, SHA-256 hashing, `Authorization: Bearer` parsing and grant-state evaluation. It never traverses navigation, timeline, globe or playback reach under a grant, so closure over the granted set is unguarded. See the gaps below |
+| 9. Read-only stays read-only | **partial, grant primitives only** — the same file establishes that a grant evaluates as read-only, and nothing more. No test walks a downstream mutation surface with a share identity, so mutation-authority denial is unguarded. See the gaps below |
+| 10. Expiry propagates | **partial, evaluation only** — the same file evaluates expiry, the expiry instant itself, revocation ahead of a later expiry and an atlas that starts deleting, all as a pure function at one instant. Propagation to an already-open page and the presigned-read lifetime cap are unguarded. See the gaps below |
 | 11. Closer means more confidence | `src/scene/semanticZoom.test.ts` for tier monotonicity and `src/scene/cityLabels.test.ts` for label completeness and stability |
 
-Known gaps, both of which are worth targeted QA and neither of which has it yet:
+Known gaps. Each is worth targeted QA and none of them has it yet. A row above that reads
+**partial** is listed here for the part it does not cover, because a coverage claim a reviewer
+cannot rely on is worse than an admitted gap.
 
+- **Child viewport classifiers** (invariant 1). Nothing asserts that a subsystem resolves posture
+  through the shared `COMPACT_MOBILE_MEDIA_QUERY` contract in `src/journey/mobileLayout.ts` rather
+  than its own width test. `src/scene/ParticleEarthScene.tsx` still reads `window.innerWidth <= 760`
+  for the route-label safe area, the journey connector and the route-label budget, so a coarse-pointer
+  landscape phone at 844x390 resolves compact in Story and desktop in the globe. That divergence is
+  tracked in #194; the missing assertion is what let it survive the #58 fix.
 - **High-zoom anchor error** (invariant 2). Nothing measures the screen-space distance between a
   route endpoint, its marker and its place label at maximum zoom. #193 and #196 were both found
   by eye.
 - **Focus revision ownership** (invariant 5). Nothing asserts that a late async result is rejected
   after a newer focus intent has already won; the ownership rule is currently enforced only by
   reading the code.
+- **Credential transport** (invariant 7). Nothing asserts where a credential is allowed to travel.
+  The guarded half is the log line; the unguarded half is the rule that a share or bearer token
+  appears only in an `Authorization` header or a URL fragment, never in a path or a query string.
+- **Downstream share surfaces** (invariants 8, 9 and 10). Nothing exercises journey-scope closure
+  across navigation, timeline, globe and playback under a grant; no test reaches a mutation endpoint
+  with a share identity to prove it is refused; nothing covers revocation reaching an already-open
+  page, and nothing caps a presigned read at the grant's remaining lifetime. The grant primitives
+  can stay green while any of these regresses.
 
 ## Risk-driven matrix
 
