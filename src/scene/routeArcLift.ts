@@ -35,6 +35,35 @@ const ARC_SCREEN_LIFT_BUDGET = 0.12;
  */
 const ARC_WORLD_RADIUS_BUDGET = 5.02;
 
+/** Never divide by a depth the near plane (0.1) would have clipped anyway. */
+const MIN_ARC_DEPTH = 0.2;
+
+/**
+ * Pixels per world unit for the route arc, measured at the closest depth a
+ * route vertex can occupy rather than at the globe centre. The front of the
+ * anchor shell is within half a world unit of the camera at max zoom, so a
+ * centre-depth approximation understates the magnification of a camera-facing
+ * arc several-fold and would let it exceed the screen ceiling it was measured
+ * against.
+ */
+export function routeArcPixelsPerWorldUnit({
+  focalLengthPx,
+  cameraDistance,
+  anchorRadius,
+  globeScale,
+}: {
+  focalLengthPx: number;
+  cameraDistance: number;
+  anchorRadius: number;
+  globeScale: number;
+}) {
+  const nearestDepth = Math.max(
+    MIN_ARC_DEPTH,
+    cameraDistance - anchorRadius * globeScale,
+  );
+  return focalLengthPx / nearestDepth;
+}
+
 export type RouteArcLift = {
   /** 0..1 multiplier applied to the per-vertex lift stored in the geometry. */
   liftScale: number;

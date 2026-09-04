@@ -60,6 +60,7 @@ import {
 } from "./geo";
 import {
   resolveRouteArcLift,
+  routeArcPixelsPerWorldUnit,
   ROUTE_ARC_HEIGHT_RATIO,
   ROUTE_ARC_SATURATION_ANGLE,
 } from "./routeArcLift";
@@ -2567,9 +2568,12 @@ export function ParticleEarthScene({
         cardRect?.right ?? 0,
         cardRect?.bottom ?? 0,
       ];
-      const focalLengthPx = targetSize.y / (2 * Math.tan((camera.fov * Math.PI) / 360));
-      const pixelsPerWorldUnit = focalLengthPx
-        / Math.max(0.0001, Math.abs(camera.position.z - globe.position.z));
+      const pixelsPerWorldUnit = routeArcPixelsPerWorldUnit({
+        focalLengthPx: targetSize.y / (2 * Math.tan((camera.fov * Math.PI) / 360)),
+        cameraDistance: Math.abs(camera.position.z - globe.position.z),
+        anchorRadius: ROUTE_ANCHOR_RADIUS,
+        globeScale: globe.scale.x,
+      });
       // #193: decorative altitude is resolved per frame from the geometry's
       // stored per-vertex lift, so semantic zoom can flatten the arc without
       // rebuilding a single route.

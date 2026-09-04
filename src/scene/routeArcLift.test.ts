@@ -3,27 +3,35 @@ import { ROUTE_ANCHOR_RADIUS } from "./geo";
 import {
   resolveRouteArcLift,
   resolveRouteArcProfile,
+  routeArcPixelsPerWorldUnit,
   ROUTE_ARC_HEIGHT_RATIO,
 } from "./routeArcLift";
 import type { GlobeSemanticZoom } from "./semanticZoom";
 
 const MODE_SCALE = 1.15;
-// 1280x800 desktop, 38 degree vertical fov, camera at z 5.4.
-const DESKTOP = {
-  pixelsPerWorldUnit: 800 / (2 * Math.tan((38 * Math.PI) / 360)) / 5.4,
-  viewportMinPx: 800,
-};
+const CAMERA_DISTANCE = 5.4;
+const focalLengthPx = (viewportHeightPx: number) =>
+  viewportHeightPx / (2 * Math.tan((38 * Math.PI) / 360));
+// 1280x800 desktop and a 390x844 phone, 38 degree vertical fov, camera at 5.4.
+const DESKTOP = { viewportHeightPx: 800, viewportMinPx: 800 };
+const PHONE = { viewportHeightPx: 844, viewportMinPx: 390 };
 
 function liftAtZoom(
   zoom: number,
   view = DESKTOP,
   semanticZoom: GlobeSemanticZoom = "planet",
 ) {
+  const globeScale = MODE_SCALE * zoom;
   return resolveRouteArcLift({
     zoom,
-    globeScale: MODE_SCALE * zoom,
+    globeScale,
     anchorRadius: ROUTE_ANCHOR_RADIUS,
-    pixelsPerWorldUnit: view.pixelsPerWorldUnit,
+    pixelsPerWorldUnit: routeArcPixelsPerWorldUnit({
+      focalLengthPx: focalLengthPx(view.viewportHeightPx),
+      cameraDistance: CAMERA_DISTANCE,
+      anchorRadius: ROUTE_ANCHOR_RADIUS,
+      globeScale,
+    }),
     viewportMinPx: view.viewportMinPx,
     semanticZoom,
   });
@@ -32,11 +40,37 @@ function liftAtZoom(
 describe("route arc lift (#193)", () => {
   it("keeps the cinematic geodesic arc at global view", () => {
     expect(liftAtZoom(0.72).liftScale).toBe(1);
-    expect(liftAtZoom(1).liftScale).toBe(1);
-    expect(liftAtZoom(1).worldLiftAtScale).toBeCloseTo(
-      ROUTE_ANCHOR_RADIUS * ROUTE_ARC_HEIGHT_RATIO * MODE_SCALE,
+    expect(liftAtZoom(0.72).worldLiftAtScale).toBeCloseTo(
+      ROUTE_ANCHOR_RADIUS * ROUTE_ARC_HEIGHT_RATIO * MODE_SCALE * 0.72,
       6,
     );
+    // At 1x the screen ceiling already trims the hump, but the route still
+    // reads as an elevated geodesic arc rather than a flat thread.
+    expect(liftAtZoom(1).liftScale).toBeGreaterThan(0.7);
+  });
+
+  it("measures magnification at the arc's own depth, not the globe centre", () => {
+    const centreDepth = routeArcPixelsPerWorldUnit({
+      focalLengthPx: focalLengthPx(800),
+      cameraDistance: CAMERA_DISTANCE,
+      anchorRadius: 0,
+      globeScale: 1,
+    });
+    const arcDepth = routeArcPixelsPerWorldUnit({
+      focalLengthPx: focalLengthPx(800),
+      cameraDistance: CAMERA_DISTANCE,
+      anchorRadius: ROUTE_ANCHOR_RADIUS,
+      globeScale: MODE_SCALE * 2,
+    });
+    // A camera-facing vertex at 2x sits far closer than the globe centre.
+    expect(arcDepth).toBeGreaterThan(centreDepth * 2);
+    // The near plane can never produce a division blow-up.
+    expect(Number.isFinite(routeArcPixelsPerWorldUnit({
+      focalLengthPx: focalLengthPx(800),
+      cameraDistance: CAMERA_DISTANCE,
+      anchorRadius: ROUTE_ANCHOR_RADIUS,
+      globeScale: 100,
+    }))).toBe(true);
   });
 
   it("attenuates toward geographic as zoom approaches max", () => {
@@ -78,14 +112,16 @@ describe("route arc lift (#193)", () => {
     });
     expect(dense.liftScale).toBeLessThan(0.1);
     expect(dense.screenLiftPx).toBeLessThanOrEqual(dense.screenLiftCapPx + 1e-6);
+    // Zooming in never buys more projected altitude than the global view had.
+    expect(liftAtZoom(2).screenLiftPx)
+      .toBeLessThanOrEqual(liftAtZoom(1).screenLiftPx + 1e-6);
   });
 
   it("gives a phone a proportionally smaller ceiling", () => {
-    const phone = { pixelsPerWorldUnit: DESKTOP.pixelsPerWorldUnit, viewportMinPx: 390 };
-    expect(liftAtZoom(1.6, phone).screenLiftCapPx)
+    expect(liftAtZoom(1.6, PHONE).screenLiftCapPx)
       .toBeLessThan(liftAtZoom(1.6).screenLiftCapPx);
-    expect(liftAtZoom(1.6, phone).screenLiftPx)
-      .toBeLessThanOrEqual(liftAtZoom(1.6).screenLiftPx);
+    expect(liftAtZoom(1.6, PHONE).liftScale)
+      .toBeLessThan(liftAtZoom(1.6).liftScale);
   });
 
   it("keeps every lifted vertex inside the near-plane budget", () => {
