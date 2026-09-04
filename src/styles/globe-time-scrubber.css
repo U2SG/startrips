@@ -132,9 +132,12 @@
 }
 
 /* #194: the scrubber is an Atlas control and compacts for the same product
-   mode, published as data-mobile-v2 by GlobeTimeScrubber.tsx. */
+   mode, published as data-mobile-v2 by GlobeTimeScrubber.tsx.
+   The scope sits in :where() so these rules keep exactly the specificity
+   they had inside the media query - .mobile-v2__timeline .globe-time-scrubber
+   in living-atlas.css must still place it. */
 
-.globe-time-scrubber[data-mobile-v2="on"] {
+.globe-time-scrubber:where([data-mobile-v2="on"]) {
   left: 12px;
   right: 12px;
   bottom: 14px;
@@ -142,7 +145,7 @@
   justify-content: center;
 }
 
-.globe-time-scrubber[data-mobile-v2="on"] .globe-time-scrubber__track-wrap {
+:where(.globe-time-scrubber[data-mobile-v2="on"]) .globe-time-scrubber__track-wrap {
   min-width: 0;
   flex: 1;
 }

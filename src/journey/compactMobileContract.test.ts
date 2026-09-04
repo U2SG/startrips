@@ -27,19 +27,19 @@ const GLOBE_SCENE_SOURCES = [
 const ATTRIBUTE_DRIVEN_STYLESHEETS = {
   "src/styles/journey-playback.css": {
     publisher: "src/journey/JourneyPlaybackOverlay.tsx",
-    scope: '.journey-playback[data-mobile-v2="on"]',
+    scope: ':where(.journey-playback[data-mobile-v2="on"])',
     surface: ".journey-playback",
   },
   "src/styles/globe-time-scrubber.css": {
     publisher: "src/journey/GlobeTimeScrubber.tsx",
-    scope: '.globe-time-scrubber[data-mobile-v2="on"]',
+    scope: '.globe-time-scrubber:where([data-mobile-v2="on"])',
     surface: ".globe-time-scrubber",
   },
   // `src/app.css` also holds the legacy `?qaState=` experience, which keeps its
   // own 720px block; only the globe overlay selectors are constrained here.
   "src/app.css": {
     publisher: "src/scene/ParticleEarthScene.tsx",
-    scope: '.particle-earth-scene[data-mobile-v2="on"]',
+    scope: ':where(.particle-earth-scene[data-mobile-v2="on"])',
     surface: ".particle-earth",
   },
 } as const;

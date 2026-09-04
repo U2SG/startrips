@@ -11,6 +11,7 @@
 import { launchQaBrowser } from "./qa-browser.mjs";
 
 const origin = process.env.QA_ORIGIN ?? "http://127.0.0.1:4173";
+const ONE_PIXEL_GIF = "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=";
 
 // The exact literal from src/journey/mobileLayout.ts. A drift between the two
 // is caught by the core lane (src/journey/compactMobileContract.test.ts); this
@@ -115,6 +116,14 @@ async function openPreview(qaState, { width, height, mobile }) {
     status: 200,
     contentType: "application/json",
     body: "null",
+  }));
+  // The Playback preview opens a media chapter, and there is no API behind the
+  // Vite dev server in this lane. Serve the same one-pixel asset the media
+  // lanes use so a 500 does not masquerade as a contract failure.
+  await page.route("**/api/uploads/assets/*/read-url", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({ url: ONE_PIXEL_GIF, expiresAt: "2027-01-01T00:00:00.000Z" }),
   }));
   await page.goto(`${origin}/?qaState=${qaState}`, { waitUntil: "domcontentloaded" });
   return { page, consoleErrors, pageErrors };
