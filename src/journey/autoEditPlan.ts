@@ -507,6 +507,16 @@ export function validateAutoEditPlanV1(planInput: unknown, input: {
   journeyRevision: string;
   routePointIds: string[];
   digests: MediaDigestV1[];
+  /**
+   * The same geometry the plan was built with. Validation replays the planner
+   * to check its selection, so a rebuild that priced chapters at the floor
+   * while the plan priced them by distance and note length would reject the
+   * planner's own valid output near the target duration. Optional because a
+   * plan built without geometry is validated without it; the two inputs have
+   * to match, not merely be present. This lives on the validator input rather
+   * than on `AutoEditPlanV1`, which stays at schema version 1.
+   */
+  routePointGeometry?: Readonly<Record<string, QuickRecapRouteGeometryV1>>;
 }) {
   const structural = structurallyValidateAutoEditPlanV1(planInput);
   if (!structural.plan) {
@@ -786,6 +796,7 @@ export function validateAutoEditPlanV1(planInput: unknown, input: {
       targetDurationMs: plan.targetDurationMs,
       tempo: plan.tempo,
       generatedAt: typeof plan.generatedAt === "string" ? plan.generatedAt : "",
+      routePointGeometry: input.routePointGeometry,
     });
     const actualSelectedAssetIds = plan.chapters.flatMap((chapter) => chapter.items.map((item) => item.assetId));
     const expectedSelectedAssetIds = expectedPlan.chapters.flatMap((chapter) => chapter.items.map((item) => item.assetId));

@@ -13,6 +13,7 @@ import {
   prepareQuickRecapPlaybackResult,
   type PreparedQuickRecapPlayback,
   quickRecapDigestsForJourney,
+  quickRecapRouteGeometry,
   quickRecapStepDurationMs,
   remapPlaybackStepIndex,
   QUICK_RECAP_PENDING_VIDEO_DURATION_MS,
@@ -641,6 +642,12 @@ describe("Quick Recap planner and runtime timing parity (S1, follow-up to #208 a
       journeyRevision: String(journey.revision),
       routePointIds: prepared.journey.routePoints.map((routePoint) => routePoint.id),
       digests,
+      // The plan was priced with this geometry, so validation has to replay the
+      // planner with it too.
+      routePointGeometry: quickRecapRouteGeometry(
+        journey,
+        prepared.journey.routePoints.map((routePoint) => routePoint.id),
+      ),
     })).toMatchObject({ valid: true, errors: [] });
 
     for (const chapter of prepared.plan.chapters) {

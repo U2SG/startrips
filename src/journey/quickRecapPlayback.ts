@@ -134,7 +134,7 @@ function noteLengthFor(point: RoutePoint) {
  * recap never flies. `candidateRoutePointIds` is `journey.routePoints` filtered,
  * so it already carries the recap's playing order.
  */
-function quickRecapRouteGeometry(
+export function quickRecapRouteGeometry(
   journey: Journey,
   candidateRoutePointIds: readonly string[],
 ): Record<string, QuickRecapRouteGeometryV1> {

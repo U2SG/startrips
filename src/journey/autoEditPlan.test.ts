@@ -1401,4 +1401,59 @@ describe("deterministic auto-edit foundation (#127)", () => {
     expect(result.errors).not.toContain("planned duration mismatch");
   });
 
+  /**
+   * Validation replays the planner to check its selection, so it has to replay
+   * it with the geometry the plan was priced with. The fixture below sits
+   * exactly on the boundary: the target pays for both images at the quick-recap
+   * floor, and the note on `tokyo` raises the arrival beat by enough to price
+   * the optional supporting image out. Every number is derived from the
+   * resolver so a retuned quick-recap profile moves the boundary with it.
+   */
+  describe("quick recap selection replay uses the plan's own geometry (#213)", () => {
+    // 40 chars is past the standard arrival cap, so the note buys the full
+    // `arrivalMaxMs - arrivalBaseMs` bump rather than a length-sensitive one.
+    const NOTED_TOKYO = { noteLength: 40 } as const;
+    const routePointGeometry = { tokyo: NOTED_TOKYO };
+    const digests = [digest("tokyo-hero", "tokyo", 0), digest("tokyo-extra", "tokyo", 1)];
+    const floorArrivalMs = quickRecapArrivalMs("standard");
+    const notedArrivalMs = resolveNarrativeTiming({
+      mode: "quick-recap",
+      tempo: "standard",
+      segmentKind: "arrival",
+      noteLength: NOTED_TOKYO.noteLength,
+    });
+    // Exactly what the floor-priced chapter costs with both images, which is
+    // therefore too little for the noted chapter to keep the second one.
+    const targetDurationMs = quickRecapTravelMs("standard")
+      + floorArrivalMs
+      + quickRecapDwellMs("standard", "hero")
+      + quickRecapDwellMs("standard", "supporting");
+    const input = { ...baseInput, routePointIds: ["tokyo"], targetDurationMs, digests };
+
+    it("prices the optional image out only once the note is priced in", () => {
+      expect(notedArrivalMs).toBeGreaterThan(floorArrivalMs);
+      const noted = buildDeterministicQuickRecapPlan({ ...input, routePointGeometry });
+      expect(noted.chapters[0].items.map((item) => item.assetId)).toEqual(["tokyo-hero"]);
+      expect(noted.omittedAssetIds).toEqual(["tokyo-extra"]);
+      expect(buildDeterministicQuickRecapPlan(input).chapters[0].items.map((item) => item.assetId))
+        .toEqual(["tokyo-hero", "tokyo-extra"]);
+    });
+
+    it("validates a geometry-priced plan against the same geometry", () => {
+      const plan = buildDeterministicQuickRecapPlan({ ...input, routePointGeometry });
+      expect(validateAutoEditPlanV1(plan, { ...input, routePointGeometry }))
+        .toMatchObject({ valid: true, errors: [] });
+    });
+
+    it("reports a selection mismatch when the geometry is withheld", () => {
+      const plan = buildDeterministicQuickRecapPlan({ ...input, routePointGeometry });
+      expect(validateAutoEditPlanV1(plan, input).errors).toContain("quick recap selection mismatch");
+    });
+
+    it("still validates a plan that was built without geometry", () => {
+      const plan = buildDeterministicQuickRecapPlan(input);
+      expect(validateAutoEditPlanV1(plan, input)).toMatchObject({ valid: true, errors: [] });
+    });
+  });
+
 });
