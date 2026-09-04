@@ -4,10 +4,14 @@
 // `matchMedia(COMPACT_MOBILE_MEDIA_QUERY)` resolves to against the
 // `data-mobile-v2` marker each mounted surface publishes.
 //
-// What this lane deliberately does NOT cover, because neither QA preview mounts
-// the Atlas header, the mobile chrome or the journey connector: label/header
-// collision and connector geometry. Those stay unmeasured and are recorded as a
-// gap rather than claimed here.
+// What this lane deliberately does NOT cover: label/header collision and
+// connector geometry, because neither QA preview mounts the Atlas header, the
+// mobile chrome or the journey connector; and the compact route-label
+// typography, because a route label only exists once a route is active, which
+// this lane does not drive. Those stay unmeasured and are recorded as a gap
+// rather than claimed here. The route-label rule's own cascade is instead
+// argued statically: `.particle-earth-route__label text` is styled in exactly
+// two places, both in src/app.css, the compact one second.
 import { launchQaBrowser } from "./qa-browser.mjs";
 
 const origin = process.env.QA_ORIGIN ?? "http://127.0.0.1:4173";
@@ -224,10 +228,10 @@ try {
   // 2b. The attribute being right is not the same as the compact styling
   //     applying: moving a rule out of a media query changes its specificity,
   //     and a rule that silently loses the cascade would still pass every
-  //     assertion above. Compare a computed property against the base value.
+  //     assertion above. Compare a computed property against the base value on
+  //     the surface #194 names.
   for (const [qaState, selector, property, compactValue, baseValue] of [
     ["journey-playback", ".journey-playback__stage", "padding", "24px", "48px"],
-    ["journey-routes", ".particle-earth-route__label text", "font-size", "10px", "11px"],
   ]) {
     const observed = {};
     for (const entry of [MATRIX[6], MATRIX[7]]) {
@@ -254,43 +258,6 @@ try {
       base: observed.base,
       expected: { compact: compactValue, base: baseValue },
       failed: observed.compact !== compactValue || observed.base !== baseValue,
-    });
-  }
-
-  // 2c. The route-label budget is read from the scene's own internal flag, not
-  //     from the published attribute, so assert it end to end through the
-  //     controller: `data-journey-route-visible-label-count` is capped by
-  //     `resolveRouteLabelLimit(currentCompactMobileLayout)`.
-  {
-    const counts = {};
-    for (const entry of [MATRIX[6], MATRIX[7]]) {
-      const preview = await openPreview("journey-routes", entry);
-      try {
-        await preview.page.waitForSelector('.particle-earth-scene[data-scene-ready="true"]', { timeout: 30_000 });
-        await preview.page.waitForFunction(
-          () => document.querySelector(".particle-earth-scene")
-            ?.getAttribute("data-journey-route-visible-label-count") !== null,
-          undefined,
-          { timeout: 30_000 },
-        );
-        counts[entry.compact ? "compact" : "base"] = Number(
-          await preview.page.getAttribute(".particle-earth-scene", "data-journey-route-visible-label-count"),
-        );
-      } finally {
-        await preview.page.close();
-      }
-    }
-    record({
-      name: "route-label-budget-follows-the-injected-flag",
-      compactVisibleLabels: counts.compact,
-      baseVisibleLabels: counts.base,
-      compactCap: 3,
-      baseCap: 6,
-      // Reported, not asserted: whether this fixture actually projects more
-      // than the compact cap at desktop, i.e. whether the cap bound here. The
-      // cap arithmetic itself is proved purely in the core lane.
-      capExercised: counts.base > 3,
-      failed: !(counts.compact <= 3 && counts.base <= 6 && counts.base >= counts.compact),
     });
   }
 
