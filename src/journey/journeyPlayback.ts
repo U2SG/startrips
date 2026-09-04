@@ -200,6 +200,31 @@ export function buildPlaybackSteps(journey: Journey): PlaybackStep[] {
   return steps;
 }
 
+/**
+ * A step's narrative identity, stable across a plan rebuild.
+ *
+ * A step index alone is meaningless once the plan changes: a rebuild at another
+ * tempo can select more or fewer assets, so index 7 may be a different beat.
+ * Identity is the route point id (travel / stop) or the asset id (media), which
+ * survive the rebuild whenever the beat itself does.
+ */
+export function playbackStepIdentity(journey: Journey, step: PlaybackStep): string {
+  switch (step.kind) {
+    case "intro":
+      return "intro";
+    case "outro":
+      return "outro";
+    case "travel":
+      return `travel:${journey.routePoints[step.to]?.id ?? step.to}`;
+    case "stop":
+      return `stop:${journey.routePoints[step.pointIndex]?.id ?? step.pointIndex}`;
+    case "media": {
+      const asset = playbackMediaForPoint(journey, step.pointIndex)[step.mediaIndex];
+      return `media:${asset?.id ?? `${step.pointIndex}:${step.mediaIndex}`}`;
+    }
+  }
+}
+
 /** Duration of one expanded step. */
 export function stepDurationMs(
   journey: Journey,

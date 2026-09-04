@@ -28,12 +28,13 @@ import {
   playbackCameraTargetKey,
   playbackMediaForPoint,
   playbackMediaWaitPolicy,
+  playbackStepIdentity,
   type PlaybackCameraTarget,
   type PlaybackStep,
 } from "./journeyPlayback";
 import { planPrefetchWindow, readyMsAheadForTempo } from "./playbackPrefetchPlan";
 import { syncPlaybackMediaElement } from "./mediaPlaybackSync";
-import { playbackStepIdentity, remapPlaybackStepIndex } from "./quickRecapPlayback";
+import { remapPlaybackStepIndex } from "./quickRecapPlayback";
 import { playbackControlsMayAutoHide } from "./playbackControls";
 import type { PlaybackTempo } from "./journeyPlaybackPlan";
 import { journeySoundtrack, stripMediaExtension } from "./journeyModel";
@@ -143,7 +144,10 @@ export function JourneyPlaybackOverlay({
       && previousIdentities.every((identity, index) => identity === nextIdentities[index])
     ) return;
     const target = remapPlaybackStepIndex(previousIdentities, nextIdentities, stepIndexRef.current);
-    if (target !== stepIndexRef.current) seek(target);
+    // `carryProgress`: this seek re-addresses the beat that is already playing,
+    // so it resumes where it was instead of restarting the image. A beat the
+    // rebuild deleted lands on its neighbour, which the director starts fresh.
+    if (target !== stepIndexRef.current) seek(target, { carryProgress: true });
   }, [journey, seek]);
   // Review P2: `exit()` only resets the local director; the overlay must also
   // tell the parent to drop playbackJourneyId, or playback can never close.

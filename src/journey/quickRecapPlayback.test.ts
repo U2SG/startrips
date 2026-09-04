@@ -2,11 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   buildPlaybackSteps,
   playbackMediaForPoint,
+  playbackStepIdentity,
   routePointAngularDistance,
 } from "./journeyPlayback";
 import { resolveNarrativeTiming, type NarrativeTempo } from "./narrativeTiming";
 import {
-  playbackStepIdentity,
   prepareQuickRecapPlayback,
   prepareQuickRecapPlaybackResult,
   quickRecapDigestsForJourney,
