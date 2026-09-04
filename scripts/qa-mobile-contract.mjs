@@ -216,6 +216,72 @@ try {
     }
   }
 
+  // 2b. The attribute being right is not the same as the compact styling
+  //     applying: moving a rule out of a media query changes its specificity,
+  //     and a rule that silently loses the cascade would still pass every
+  //     assertion above. Compare a computed property against the base value.
+  for (const [qaState, selector, property, compactValue, baseValue] of [
+    ["journey-playback", ".journey-playback__stage", "padding", "24px", "48px"],
+    ["journey-routes", ".particle-earth-route__label text", "font-size", "10px", "11px"],
+  ]) {
+    const observed = {};
+    for (const entry of [MATRIX[6], MATRIX[7]]) {
+      const preview = await openPreview(qaState, entry);
+      try {
+        await preview.page.waitForSelector(selector, { timeout: 15_000 });
+        observed[entry.compact ? "compact" : "base"] = await preview.page.evaluate(
+          ({ target, prop }) => {
+            const element = document.querySelector(target);
+            return element ? getComputedStyle(element).getPropertyValue(prop).trim() : null;
+          },
+          { target: selector, prop: property },
+        );
+      } finally {
+        await preview.page.close();
+      }
+    }
+    record({
+      name: `computed-style/${selector}/${property}`,
+      compact: observed.compact,
+      base: observed.base,
+      expected: { compact: compactValue, base: baseValue },
+      failed: observed.compact !== compactValue || observed.base !== baseValue,
+    });
+  }
+
+  // 2c. The route-label budget is read from the scene's own internal flag, not
+  //     from the published attribute, so assert it end to end through the
+  //     controller: `data-journey-route-visible-label-count` is capped by
+  //     `resolveRouteLabelLimit(currentCompactMobileLayout)`.
+  {
+    const counts = {};
+    for (const entry of [MATRIX[6], MATRIX[7]]) {
+      const preview = await openPreview("journey-routes", entry);
+      try {
+        await preview.page.waitForSelector('.particle-earth-scene[data-scene-ready="true"]', { timeout: 30_000 });
+        await preview.page.waitForFunction(
+          () => document.querySelector(".particle-earth-scene")
+            ?.getAttribute("data-journey-route-visible-label-count") !== null,
+          undefined,
+          { timeout: 30_000 },
+        );
+        counts[entry.compact ? "compact" : "base"] = Number(
+          await preview.page.getAttribute(".particle-earth-scene", "data-journey-route-visible-label-count"),
+        );
+      } finally {
+        await preview.page.close();
+      }
+    }
+    record({
+      name: "route-label-budget-follows-the-injected-flag",
+      compactVisibleLabels: counts.compact,
+      baseVisibleLabels: counts.base,
+      compactCap: 3,
+      baseCap: 6,
+      failed: !(counts.compact <= 3 && counts.base <= 6 && counts.base >= counts.compact),
+    });
+  }
+
   // 3. An orientation flip must not leave a stale marker behind. The page is
   //    never reloaded: the media-query listener is what has to react.
   {
