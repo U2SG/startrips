@@ -100,14 +100,14 @@ export function planPrefetchWindow(input: {
   for (let index = stepIndex + 1; index < stepCount; index += 1) {
     if (assetIds.length >= maxAssets) break;
     const stepAssetIds = assetIdsForStep(index);
-    const stepDurationMs = Math.max(0, durationForStep(index));
-    const fitsBudget = coveredDurationMs + stepDurationMs <= budgetMs;
+    const stepMs = Math.max(0, durationForStep(index));
+    const fitsBudget = coveredDurationMs + stepMs <= budgetMs;
     // The next step that shows an asset is always reached, even when the beats
     // in between are longer than the whole budget: the director holds on that
     // asset, so leaving it unread would stall playback rather than pace it.
     const reachesNextAsset = !reachedAssetAhead && stepAssetIds.length > 0;
     if (!fitsBudget && !reachesNextAsset) break;
-    coveredDurationMs += stepDurationMs;
+    coveredDurationMs += stepMs;
     lastStepIndex = index;
     if (stepAssetIds.length > 0) {
       reachedAssetAhead = true;

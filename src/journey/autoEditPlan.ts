@@ -105,24 +105,6 @@ export type DeterministicQuickRecapInput = {
   generatedAt: string;
 };
 
-// No longer consulted by this module: every duration below is now resolved by
-// `resolveNarrativeTiming({ mode: "quick-recap", ... })`, which owns the
-// quick-recap profile. They survive as the equivalence anchor that
-// `narrativeTiming.test.ts` asserts the resolver against, so deleting them
-// belongs to a change that may edit that test file.
-export const IMAGE_DWELL_MS: Record<AutoEditTempo, Record<AutoEditPhotoRole, number>> = {
-  fast: { hero: 2_000, representative: 1_600, supporting: 1_200, burst: 700 },
-  standard: { hero: 3_100, representative: 2_500, supporting: 1_800, burst: 900 },
-  immersive: { hero: 4_900, representative: 4_100, supporting: 3_000, burst: 1_300 },
-};
-export const VIDEO_DWELL_MS: Record<AutoEditTempo, number> = {
-  fast: 2_600,
-  standard: 3_500,
-  immersive: 4_500,
-};
-export const CAMERA_MS = 1_000;
-export const ARRIVAL_MS = 800;
-
 function technicalScore(digest: MediaDigestV1) {
   return (digest.technical?.sharpness ?? 0) + (digest.technical?.exposureQuality ?? 0);
 }
