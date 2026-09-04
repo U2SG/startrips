@@ -1510,6 +1510,21 @@
   z-index: 0;
 }
 
+/* #204: the stage <video> is mounted before its own step so a user gesture can
+   authorize the exact node that will play later. Until it owns the stage it
+   must neither take layout nor paint — the `display: block` above outranks the
+   UA `[hidden]` rule, so without this the primed node would occupy the whole
+   stage and clip the current frame. It stays rendered (out of flow and fully
+   transparent) rather than `display: none`, because per-element playback
+   authorization only survives on an element the browser still renders. */
+.journey-story__media > video[hidden],
+.journey-story-fullscreen > video[hidden] {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
 /* #11 two-layer stage: the incoming frame crossfades over the settled base
    frame (180–280ms) and is released only after the switch settles, so a
    slideshow step never flashes an empty stage. */
@@ -5290,7 +5305,8 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
     pointer-events: none;
   }
 
-  .journey-story__mobile-media-menu-trigger {
+  .journey-story__mobile-media-menu-trigger,
+  .journey-story__mobile-media-play {
     position: absolute;
     top: 12px;
     right: 12px;
@@ -5310,8 +5326,22 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
     pointer-events: auto;
   }
 
-  .journey-story__mobile-media-menu-trigger::after {
+  .journey-story__mobile-media-menu-trigger::after,
+  .journey-story__mobile-media-play::after {
     display: none;
+  }
+
+  /* #199: playback shares the Viewer cluster with the management entry, one
+     hit target to its left, so the pair stays put across image/video and
+     aspect-ratio changes and never lands on the swipe surface. */
+  .journey-story__mobile-media-play {
+    right: calc(12px + var(--mobile-control-hit-size, 44px) + 8px);
+  }
+
+  .journey-story__mobile-media-play.is-active {
+    border-color: rgba(118, 227, 211, 0.34);
+    background: rgba(8, 28, 26, 0.76);
+    color: rgba(238, 250, 246, 0.96);
   }
 
   .journey-story[data-mobile-mode="viewer"] .journey-story__soundtrack {

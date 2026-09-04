@@ -87,8 +87,17 @@ async function createQaPage(path, mediaUrl, {
           return state.get(this) !== "playing";
         },
       });
+      window.__qaMediaPlayEvents = [];
+      const mediaElementIds = new WeakMap();
+      let nextMediaElementId = 1;
       HTMLMediaElement.prototype.play = function play() {
         state.set(this, "playing");
+        if (!mediaElementIds.has(this)) mediaElementIds.set(this, nextMediaElementId++);
+        window.__qaMediaPlayEvents.push({
+          tagName: this.tagName,
+          elementId: mediaElementIds.get(this),
+          userActivation: navigator.userActivation?.isActive ?? null,
+        });
         return Promise.resolve();
       };
       HTMLMediaElement.prototype.pause = function pause() {
@@ -609,12 +618,12 @@ try {
     });
     await fullscreen.dispatchEvent("pointerdown", { pointerId: 4, pointerType: "touch", isPrimary: true, clientX: fullX, clientY: fullY, bubbles: true });
     await fullscreen.dispatchEvent("pointerup", { pointerId: 4, pointerType: "touch", isPrimary: true, clientX: fullX, clientY: fullY + 130, bubbles: true });
-    await fullscreen.waitFor({ state: "detached" });
+    await fullscreen.waitFor({ state: "hidden" });
 
     await settledMedia.click();
     await story.page.locator(".journey-story-fullscreen").waitFor({ state: "visible" });
     await story.page.evaluate(() => window.history.back());
-    await story.page.locator(".journey-story-fullscreen").waitFor({ state: "detached" });
+    await story.page.locator(".journey-story-fullscreen").waitFor({ state: "hidden" });
     const storyStillVisibleAfterBack = await story.page.locator(".journey-story").isVisible();
     checks.push({
       name: "story-mobile-fullscreen-exit-contract",
@@ -701,7 +710,9 @@ try {
     await fullscreenStage.dispatchEvent("pointerup", { pointerId: 52, pointerType: "touch", isPrimary: true, clientX: fullStartX + 110, clientY: fullSwipeY, bubbles: true });
     await fullscreenVideo.waitFor({ state: "visible", timeout: 3_000 });
     await mixedMediaMobile.page.keyboard.press("Escape");
-    await fullscreenStage.waitFor({ state: "detached" });
+    // The fullscreen stage stays mounted but hidden so its exact <video> node
+    // keeps playback authorization; dismissal is semantic, not DOM detachment.
+    await fullscreenStage.waitFor({ state: "hidden" });
 
     const inlineVideo = inlineStage.locator(":scope > video:not(.journey-story__media-incoming)");
     await inlineVideo.waitFor({ state: "visible", timeout: 3_000 });
@@ -766,6 +777,74 @@ try {
     await mixedMediaMobile.page.close();
   }
 
+  // #204 final review P1: starting autoplay on an image must authorize the
+  // persistent future-video element in that same user gesture. When the timer
+  // later reaches the video, the synchronization play() must target the exact
+  // same DOM element rather than a newly keyed, untrusted <video>.
+  const futureVideoAuthorization = await createQaPage("/?qaState=journey-story&qaMode=mixed-media", onePixelGif, {
+    instrumentMedia: true,
+    mixedMedia: true,
+    mobile: true,
+  });
+  try {
+    await futureVideoAuthorization.page.locator(".journey-story").waitFor({ state: "visible" });
+    const stage = futureVideoAuthorization.page.locator(".journey-story__media");
+    await stage.locator(":scope > img:not(.journey-story__media-incoming)").first().waitFor({ state: "visible" });
+    const primedVideo = stage.locator(":scope > video:not(.journey-story__media-incoming)");
+    await primedVideo.waitFor({ state: "attached", timeout: 5_000 });
+    await futureVideoAuthorization.page.waitForFunction(() => {
+      const video = document.querySelector(".journey-story__media > video:not(.journey-story__media-incoming)");
+      return Boolean(video?.getAttribute("src"));
+    }, undefined, { timeout: 5_000 });
+
+    const playControl = futureVideoAuthorization.page.locator(".journey-story__mobile-media-play");
+    await futureVideoAuthorization.page.evaluate(() => { window.__qaMediaPlayEvents.length = 0; });
+    await playControl.click();
+    const primingEvents = await futureVideoAuthorization.page.evaluate(() => [...window.__qaMediaPlayEvents]);
+    const primingVideoEvent = primingEvents.find((event) => (
+      event.tagName === "VIDEO" && event.userActivation === true
+    ));
+    // Events cross the bridge as fresh objects on every evaluate(), so identity
+    // comparison against the priming event can never exclude it. Everything
+    // recorded after the gesture is identified by this index instead, and the
+    // wait below observes the same window as the assertion.
+    const primingEventCount = primingEvents.length;
+
+    // The play() recorded after the gesture is the only observable step
+    // boundary here: the stage video is mounted from the start, so element
+    // visibility says nothing about which step the sequence is on. The budget
+    // must therefore cover a full image step (STORY_AUTOPLAY_STEP_MS = 5.2s)
+    // plus the settle that follows it.
+    await futureVideoAuthorization.page.waitForFunction((recorded) => (
+      window.__qaMediaPlayEvents.slice(recorded).some((event) => event.tagName === "VIDEO")
+    ), primingEventCount, { timeout: 10_000 });
+    const laterEvents = await futureVideoAuthorization.page.evaluate(() => [...window.__qaMediaPlayEvents]);
+    const playsAfterGesture = laterEvents.slice(primingEventCount);
+    const reusedAuthorizedVideo = Boolean(
+      primingVideoEvent
+      && playsAfterGesture.some((event) => (
+        event.tagName === "VIDEO"
+        && event.elementId === primingVideoEvent.elementId
+      )),
+    );
+    const futureVideoAuthorizationFailed = !primingVideoEvent
+      || !reusedAuthorizedVideo
+      || futureVideoAuthorization.consoleErrors.length > 0
+      || futureVideoAuthorization.pageErrors.length > 0;
+    checks.push({
+      name: "story-autoplay-future-video-authorization",
+      primingVideoEvent,
+      playsAfterGesture,
+      reusedAuthorizedVideo,
+      consoleErrors: futureVideoAuthorization.consoleErrors,
+      pageErrors: futureVideoAuthorization.pageErrors,
+      failed: futureVideoAuthorizationFailed,
+    });
+    if (futureVideoAuthorizationFailed) failed = true;
+  } finally {
+    await futureVideoAuthorization.page.close();
+  }
+
   for (const [label, viewport] of [
     ["844x390", { width: 844, height: 390 }],
     ["932x430", { width: 932, height: 430 }],
@@ -808,6 +887,185 @@ try {
     } finally {
       await landscapeComposer.page.close();
     }
+  }
+
+  // Issue #199: mobile Viewer must offer Story media sequence playback without
+  // entering Manage mode. The control belongs to the viewer action cluster, is
+  // never inside the management sheet, keeps a 44px target from the narrowest
+  // portrait phone to phone landscape, and toggles `aria-pressed` on tap.
+  for (const [label, viewport] of [
+    ["320x700", { width: 320, height: 700 }],
+    ["390x844", { width: 390, height: 844 }],
+    ["844x390", { width: 844, height: 390 }],
+    ["932x430", { width: 932, height: 430 }],
+  ]) {
+    const viewerPlayback = await createQaPage("/?qaState=journey-story", onePixelGif, {
+      mobile: true,
+      viewport,
+    });
+    try {
+      await viewerPlayback.page.locator(".journey-story").waitFor({ state: "visible" });
+      const playControl = viewerPlayback.page.locator(".journey-story__mobile-media-play");
+      await playControl.waitFor({ state: "visible", timeout: 5_000 });
+      const playBox = await playControl.boundingBox();
+      const placement = await playControl.evaluate((element) => ({
+        idleLabel: element.getAttribute("aria-label"),
+        idlePressed: element.getAttribute("aria-pressed"),
+        inViewerCluster: Boolean(element.closest(".journey-story__mobile-media-actions")),
+        insideManageSheet: Boolean(element.closest(".journey-story__mobile-media-sheet")),
+        manageSheetsMounted: document.querySelectorAll(".journey-story__mobile-media-sheet").length,
+        mobileMode: element.closest(".journey-story")?.dataset.mobileMode ?? null,
+      }));
+      // The cluster shares one absolute anchor with the management entry, so
+      // an overlap here would mean the pair collided at this width.
+      const clusterScan = await scanButtons(viewerPlayback.page, ".journey-story__mobile-media-actions");
+      const clusterOverlap = overlapPairs(clusterScan.items);
+      await playControl.click();
+      await viewerPlayback.page.waitForFunction(
+        () => document.querySelector(".journey-story__mobile-media-play")?.getAttribute("aria-pressed") === "true",
+        undefined,
+        { timeout: 3_000 },
+      );
+      const playingLabel = await playControl.getAttribute("aria-label");
+      await playControl.click();
+      await viewerPlayback.page.waitForFunction(
+        () => document.querySelector(".journey-story__mobile-media-play")?.getAttribute("aria-pressed") === "false",
+        undefined,
+        { timeout: 3_000 },
+      );
+      const restoredPressed = await playControl.getAttribute("aria-pressed");
+      const playbackFailed = !playBox
+        || playBox.width < 44
+        || playBox.height < 44
+        || placement.idlePressed !== "false"
+        || placement.idleLabel !== "自动播放媒体"
+        || playingLabel !== "暂停自动播放"
+        || restoredPressed !== "false"
+        || !placement.inViewerCluster
+        || placement.insideManageSheet
+        || placement.manageSheetsMounted !== 0
+        || placement.mobileMode !== "viewer"
+        || clusterOverlap.length > 0
+        || viewerPlayback.consoleErrors.length > 0
+        || viewerPlayback.pageErrors.length > 0;
+      checks.push({
+        name: `story-mobile-viewer-playback-${label}`,
+        playBox: playBox ? { width: Math.round(playBox.width), height: Math.round(playBox.height) } : null,
+        ...placement,
+        playingLabel,
+        restoredPressed,
+        clusterOverlap,
+        consoleErrors: viewerPlayback.consoleErrors,
+        pageErrors: viewerPlayback.pageErrors,
+        failed: playbackFailed,
+      });
+      if (playbackFailed) failed = true;
+    } finally {
+      await viewerPlayback.page.close();
+    }
+  }
+
+  // Issue #199 review: a video step must be ended by the video, not by the
+  // fixed slide timer. `instrumentMedia` makes play() resolve, so a synthetic
+  // `ended` is the only thing that can finish the step here; a timer-only
+  // implementation would need STORY_AUTOPLAY_STEP_MS (5.2s) to advance.
+  const videoAutoplay = await createQaPage("/?qaState=journey-story&qaMode=mixed-media", onePixelGif, {
+    instrumentMedia: true,
+    mixedMedia: true,
+    mobile: true,
+  });
+  try {
+    await videoAutoplay.page.locator(".journey-story").waitFor({ state: "visible" });
+    const videoStage = videoAutoplay.page.locator(".journey-story__media");
+    const firstImage = videoStage.locator(":scope > img:not(.journey-story__media-incoming)").first();
+    await firstImage.waitFor({ state: "visible" });
+    const videoStageBox = await videoStage.boundingBox();
+    if (!videoStageBox) throw new Error("mixed-media story stage has no bounds");
+    const videoSwipeX = videoStageBox.x + videoStageBox.width * 0.72;
+    const videoSwipeY = videoStageBox.y + videoStageBox.height * 0.5;
+    // One committed swipe lands on the video asset at index 1.
+    await videoStage.dispatchEvent("pointerdown", { pointerId: 71, pointerType: "touch", isPrimary: true, clientX: videoSwipeX, clientY: videoSwipeY, bubbles: true });
+    await videoStage.dispatchEvent("pointermove", { pointerId: 71, pointerType: "touch", isPrimary: true, clientX: videoSwipeX - 110, clientY: videoSwipeY, bubbles: true });
+    await videoStage.dispatchEvent("pointerup", { pointerId: 71, pointerType: "touch", isPrimary: true, clientX: videoSwipeX - 110, clientY: videoSwipeY, bubbles: true });
+    const settledVideo = videoStage.locator(":scope > video:not(.journey-story__media-incoming)");
+    await settledVideo.waitFor({ state: "visible", timeout: 5_000 });
+
+    const videoPlayControl = videoAutoplay.page.locator(".journey-story__mobile-media-play");
+    await videoPlayControl.waitFor({ state: "visible" });
+    await videoAutoplay.page.evaluate(() => { window.__qaMediaPlayEvents.length = 0; });
+    await videoPlayControl.click();
+    await videoAutoplay.page.waitForFunction(
+      () => document.querySelector(".journey-story__mobile-media-play")?.getAttribute("aria-pressed") === "true",
+      undefined,
+      { timeout: 3_000 },
+    );
+    const videoPlayEvents = await videoAutoplay.page.evaluate(() => window.__qaMediaPlayEvents);
+    const gestureStartedVideo = videoPlayEvents.some((event) => (
+      event.tagName === "VIDEO" && event.userActivation === true
+    ));
+    // The sequence, not the markup, starts this element: the inline stage
+    // never sets `autoPlay`, so an unplayed video would stay paused.
+    const videoDrivenBySequence = await videoAutoplay.page.waitForFunction(
+      () => {
+        const element = document.querySelector(".journey-story__media > video:not(.journey-story__media-incoming)");
+        return element ? !element.paused : false;
+      },
+      undefined,
+      { timeout: 3_000 },
+    ).then(() => true).catch(() => false);
+
+    // Native controls own the element too: pausing the settled video must
+    // immediately stop Story autoplay rather than leaving `playing=true`.
+    await settledVideo.evaluate((element) => element.dispatchEvent(new Event("pause")));
+    const nativePauseStoppedSequence = await videoAutoplay.page.waitForFunction(
+      () => document.querySelector(".journey-story__mobile-media-play")?.getAttribute("aria-pressed") === "false",
+      undefined,
+      { timeout: 3_000 },
+    ).then(() => true).catch(() => false);
+
+    // Restart from a fresh user gesture so the existing ended contract remains
+    // covered after the native-pause ownership assertion.
+    await videoPlayControl.click();
+    await videoAutoplay.page.waitForFunction(
+      () => document.querySelector(".journey-story__mobile-media-play")?.getAttribute("aria-pressed") === "true",
+      undefined,
+      { timeout: 3_000 },
+    );
+    const endedAt = Date.now();
+    await settledVideo.evaluate((element) => element.dispatchEvent(new Event("ended")));
+    let videoEndAdvancedMs = null;
+    try {
+      await videoAutoplay.page.waitForFunction(() => {
+        const element = document.querySelector(
+          ".journey-story__media > img:not(.journey-story__media-incoming), .journey-story__media > video:not(.journey-story__media-incoming)",
+        );
+        return element?.tagName === "IMG" && element.getAttribute("alt") === "seed-2.png";
+      }, undefined, { timeout: 4_000 });
+      videoEndAdvancedMs = Date.now() - endedAt;
+    } catch {
+      videoEndAdvancedMs = null;
+    }
+    const videoAutoplayFailed = !gestureStartedVideo
+      || !videoDrivenBySequence
+      || !nativePauseStoppedSequence
+      || videoEndAdvancedMs === null
+      || videoEndAdvancedMs >= 5_000
+      || videoAutoplay.consoleErrors.length > 0
+      || videoAutoplay.pageErrors.length > 0;
+    checks.push({
+      name: "story-mobile-viewer-playback-video-completion",
+      gestureStartedVideo,
+      videoPlayEvents,
+      videoDrivenBySequence,
+      nativePauseStoppedSequence,
+      videoEndAdvancedMs,
+      consoleErrors: videoAutoplay.consoleErrors,
+      pageErrors: videoAutoplay.pageErrors,
+      failed: videoAutoplayFailed,
+    });
+    if (videoAutoplayFailed) failed = true;
+  } finally {
+    await videoAutoplay.page.close();
   }
 
   for (const [label, viewport] of [

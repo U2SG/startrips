@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -81,7 +82,8 @@ import {
   validateJourneyFiles,
   validateJourneySoundtrack,
 } from "./journeyModel";
-import { playbackIntroMedia, storyMediaForScope } from "./journeyPlayback";
+import { playbackIntroMedia, playbackMediaWaitPolicy, storyMediaForScope } from "./journeyPlayback";
+import type { PlaybackMediaAvailability } from "./journeyPlayback";
 import type { Journey, JourneyMediaAsset } from "./types";
 import {
   completeMediaPlacementUploadPlan,
@@ -149,6 +151,18 @@ type MediaReadState =
   | { status: "loading" }
   | { status: "ready"; url: string; expiresAt: number }
   | { status: "error"; message: string };
+
+export function shouldRefreshStoryMediaRead(
+  assetId: string,
+  state: { status: string; expiresAt?: number },
+  now: number,
+  protectedPlaybackAssetId: string | null,
+) {
+  return assetId !== protectedPlaybackAssetId
+    && state.status === "ready"
+    && Number.isFinite(state.expiresAt)
+    && (state.expiresAt as number) - now < MEDIA_READ_REFRESH_MARGIN_MS;
+}
 
 type JourneyStoryProps = {
   journeys: readonly Journey[];
@@ -232,6 +246,25 @@ export function mobileStoryHistoryLayers({
   };
 }
 
+// #199: Story media sequence playback is a viewing action, so mobile Viewer
+// keeps one quiet play/pause control in its action cluster instead of hiding
+// it behind Manage mode. Manage owns mutation surfaces, the overview grid has
+// no single stage to play, and a scope with one asset has no sequence at all —
+// the same gate the fullscreen navigation already uses.
+export function showMobileStoryPlayControl({
+  mobileLayout,
+  overview,
+  mobileManageMode,
+  scopedMediaCount,
+}: {
+  mobileLayout: boolean;
+  overview: boolean;
+  mobileManageMode: boolean;
+  scopedMediaCount: number;
+}) {
+  return mobileLayout && !overview && !mobileManageMode && scopedMediaCount > 1;
+}
+
 export function journeyDeleteDescription(journey: Journey) {
   return `先从图谱隐藏；7 天内可撤销，之后才会清理路线和 ${journey.media.length} 个私有媒体。`;
 }
@@ -276,6 +309,119 @@ export function storyAutoplayNextIndex(
   if (mediaLength < 2) return null;
   if (currentIndex < mediaLength - 1) return currentIndex + 1;
   return wholeJourney ? null : 0;
+}
+
+export function storyAutoplayVideoCandidate(
+  media: readonly JourneyMediaAsset[],
+  currentIndex: number,
+  wholeJourney: boolean,
+) {
+  if (media.length === 0 || currentIndex < 0 || currentIndex >= media.length) return null;
+  for (let offset = 0; offset < media.length; offset += 1) {
+    const rawIndex = currentIndex + offset;
+    if (wholeJourney && rawIndex >= media.length) break;
+    const candidate = media[rawIndex % media.length];
+    if (candidate?.mimeType.startsWith("video/")) return candidate;
+  }
+  return null;
+}
+
+export function storyNavigationTargetDisposition(
+  target: JourneyMediaAsset,
+  availability: PlaybackMediaAvailability,
+  imageDecoded: boolean,
+): "ready" | "failed" | "waiting" {
+  if (availability === "error") return "failed";
+  if (availability !== "ready") return "waiting";
+  return target.mimeType.startsWith("video/") || imageDecoded ? "ready" : "waiting";
+}
+
+export function storyAutoplayCanStart(
+  videoCandidate: JourneyMediaAsset | null,
+  candidateAvailability: PlaybackMediaAvailability,
+) {
+  // Only an unresolved candidate source must hold the initiating gesture. A
+  // failed read is already terminal for this attempt and the existing playback
+  // policy intentionally degrades that step through its timer/fallback path.
+  return !videoCandidate || candidateAvailability !== "waiting";
+}
+
+export function storyStageVideoOwner(
+  shown: JourneyMediaAsset | null,
+  incoming: JourneyMediaAsset | null,
+  autoplayCandidate: JourneyMediaAsset | null,
+) {
+  if (incoming?.mimeType.startsWith("video/")) return incoming;
+  if (shown?.mimeType.startsWith("video/")) return shown;
+  return autoplayCandidate;
+}
+
+export const STORY_AUTOPLAY_STEP_MS = 5200;
+export const STORY_VIDEO_STALL_WATCHDOG_MS = 4_000;
+
+export type StoryAutoplayAdvance =
+  | { kind: "stop" }
+  | { kind: "hold-terminal" }
+  | { kind: "advance"; nextIndex: number };
+
+// What ends the current autoplay step: leave playback, hold the last frame of
+// a whole-journey run, or move to a specific next index.
+export function storyAutoplayAdvance(
+  currentIndex: number,
+  mediaLength: number,
+  wholeJourney: boolean,
+): StoryAutoplayAdvance {
+  const nextIndex = storyAutoplayNextIndex(currentIndex, mediaLength, wholeJourney);
+  if (nextIndex !== null) return { kind: "advance", nextIndex };
+  return shouldHoldWholeJourneyTerminalFrame(currentIndex, mediaLength, wholeJourney)
+    ? { kind: "hold-terminal" }
+    : { kind: "stop" };
+}
+
+// Signed-read status in the shared playback vocabulary, so the Story stage and
+// Journey playback classify a step's media the same way.
+export function storyMediaAvailability(
+  status: "loading" | "ready" | "error" | undefined,
+): PlaybackMediaAvailability {
+  if (status === "ready") return "ready";
+  if (status === "error") return "error";
+  return "waiting";
+}
+
+// #199 review: a video step owns its own completion, so the sequence waits for
+// `ended` instead of the fixed slide timer. Anything that cannot deliver
+// `ended` — an image, a failed read, or a video element that is not mounted
+// for this exact asset yet — keeps the timer so the sequence never stalls.
+export function storyAutoplayWaitsForVideoEnd(
+  asset: JourneyMediaAsset | null,
+  availability: PlaybackMediaAvailability,
+  videoAttached: boolean,
+): boolean {
+  return videoAttached
+    && playbackMediaWaitPolicy(asset, availability) === "video-ended";
+}
+
+export function createStoryAutoplayFallbackController(
+  schedule: () => number,
+  clear: (timer: number) => void,
+) {
+  let disposed = false;
+  let timer = 0;
+  const cancel = () => {
+    if (timer) clear(timer);
+    timer = 0;
+  };
+  return {
+    arm() {
+      if (disposed || timer) return;
+      timer = schedule();
+    },
+    cancel,
+    dispose() {
+      disposed = true;
+      cancel();
+    },
+  };
 }
 
 export function shouldHoldWholeJourneyTerminalFrame(
@@ -790,6 +936,10 @@ export function JourneyStory({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const soundtrackInputRef = useRef<HTMLInputElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
+  // #199 review: the settled video of the current step, per stage. Autoplay
+  // drives whichever stage is on screen so a video step can end itself.
+  const storyVideoRef = useRef<HTMLVideoElement>(null);
+  const fullscreenVideoRef = useRef<HTMLVideoElement>(null);
   // #20: one sampler per soundtrack element; the analyser is built on first
   // play and drives the light strip with smoothed energy.
   const audioSamplerRef = useRef(createSoundtrackSampler());
@@ -857,7 +1007,9 @@ export function JourneyStory({
   }
 
   function enterFullscreen(autoPlay: boolean) {
-    setPlayingFromGesture(autoPlay);
+    // The fullscreen persistent video is mounted even while the overlay is
+    // hidden, so authorize that exact node before state reveals the overlay.
+    setPlayingFromGesture(autoPlay, "fullscreen");
     setFullscreenControlsHidden(mobileLayout);
     setMobileMediaMenuOpen(false);
     setFullscreen(true);
@@ -1184,6 +1336,14 @@ export function JourneyStory({
   }, [localMediaOrder, scopedMedia]);
   const soundtrack = journey ? journeySoundtrack(journey) : null;
   const activeAsset = scopedMedia[assetIndex] ?? null;
+  const autoplayVideoCandidate = storyAutoplayVideoCandidate(
+    scopedMedia,
+    assetIndex,
+    selectedRoutePointId === null,
+  );
+  const autoplayVideoCandidateRead = autoplayVideoCandidate
+    ? mediaReads[autoplayVideoCandidate.id]
+    : null;
   const activeRead = activeAsset ? mediaReads[activeAsset.id] : null;
   const soundtrackRead = soundtrack ? mediaReads[soundtrack.id] : null;
   // #14: the journey cover — explicit coverMediaAssetId, else first visual
@@ -1205,30 +1365,86 @@ export function JourneyStory({
   // keeps the current frame until the next one is decoded.
   const navigateToMediaRef = useRef<(index: number) => void>(() => undefined);
   navigateToMediaRef.current = navigateToMedia;
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!playing) return;
-    const nextIndex = storyAutoplayNextIndex(
+    const advance = storyAutoplayAdvance(
       assetIndex,
       scopedMedia.length,
       selectedRoutePointId === null,
     );
-    if (nextIndex === null) {
-      if (shouldHoldWholeJourneyTerminalFrame(
-        assetIndex,
-        scopedMedia.length,
-        selectedRoutePointId === null,
-      )) {
-        const timer = window.setTimeout(() => setPlaying(false), 5200);
-        return () => window.clearTimeout(timer);
-      }
+    if (advance.kind === "stop") {
       setPlaying(false);
       return;
     }
-    const timer = window.setTimeout(() => {
-      navigateToMediaRef.current(nextIndex);
-    }, 5200);
-    return () => window.clearTimeout(timer);
-  }, [assetIndex, playing, scopedMedia.length, selectedRoutePointId]);
+    const finishStep = advance.kind === "hold-terminal"
+      ? () => setPlaying(false)
+      : () => navigateToMediaRef.current(advance.nextIndex);
+    // #199 review: a video step must last as long as the video, not 5.2s.
+    // Only the settled element of this exact asset can report `ended`.
+    const video = fullscreen ? fullscreenVideoRef.current : storyVideoRef.current;
+    const waitsForVideoEnd = storyAutoplayWaitsForVideoEnd(
+      activeAsset,
+      storyMediaAvailability(activeRead?.status),
+      video !== null && (shownAssetId ?? activeAsset?.id ?? null) === activeAsset?.id,
+    );
+    if (!video || !waitsForVideoEnd) {
+      const timer = window.setTimeout(finishStep, STORY_AUTOPLAY_STEP_MS);
+      return () => window.clearTimeout(timer);
+    }
+    // A browser that refuses to play, or an element that errors, must not
+    // strand the sequence: it degrades to the ordinary slide timer.
+    const fallback = createStoryAutoplayFallbackController(
+      () => window.setTimeout(finishStep, STORY_AUTOPLAY_STEP_MS),
+      (timer) => window.clearTimeout(timer),
+    );
+    const stallWatchdog = createStoryAutoplayFallbackController(
+      () => window.setTimeout(finishStep, STORY_VIDEO_STALL_WATCHDOG_MS),
+      (timer) => window.clearTimeout(timer),
+    );
+    const armFallback = () => fallback.arm();
+    const armStallWatchdog = () => stallWatchdog.arm();
+    const recoverFromStall = () => stallWatchdog.cancel();
+    // Native controls are another playback owner. If the viewer pauses the
+    // settled clip directly, stop Story autoplay too so soundtrack/state do
+    // not claim the sequence is still progressing. Ignore the terminal pause
+    // associated with an ended clip; `ended` owns that transition.
+    const stopForNativePause = () => {
+      if (!video.ended) setPlaying(false);
+    };
+    video.addEventListener("ended", finishStep);
+    video.addEventListener("error", armFallback);
+    video.addEventListener("pause", stopForNativePause);
+    video.addEventListener("stalled", armStallWatchdog);
+    video.addEventListener("playing", recoverFromStall);
+    video.addEventListener("progress", recoverFromStall);
+    video.addEventListener("timeupdate", recoverFromStall);
+    Promise.resolve(video.play()).catch(armFallback);
+    return () => {
+      video.removeEventListener("ended", finishStep);
+      video.removeEventListener("error", armFallback);
+      video.removeEventListener("pause", stopForNativePause);
+      video.removeEventListener("stalled", armStallWatchdog);
+      video.removeEventListener("playing", recoverFromStall);
+      video.removeEventListener("progress", recoverFromStall);
+      video.removeEventListener("timeupdate", recoverFromStall);
+      // Dispose before touching the element: pending play() rejection/stall
+      // callbacks after cleanup must not revive an obsolete Story step.
+      fallback.dispose();
+      stallWatchdog.dispose();
+      // Leaving this step (pause, manual navigation, stage change) also stops
+      // the video the sequence itself started.
+      video.pause();
+    };
+  }, [
+    activeAsset?.id,
+    activeRead?.status,
+    assetIndex,
+    fullscreen,
+    playing,
+    scopedMedia.length,
+    selectedRoutePointId,
+    shownAssetId,
+  ]);
 
   // The soundtrack follows the slideshow: it keeps its position across pauses
   // and only rewinds when the story closes or moves to another journey.
@@ -1477,6 +1693,15 @@ export function JourneyStory({
     if (soundtrack) loadMediaRead(soundtrack.id);
   }, [soundtrack?.id, loadMediaRead]);
 
+  // #204 final review: keep the first future video read warm even when it is
+  // farther than the ordinary neighbor window. Story can then mount one stable
+  // video element before autoplay starts and authorize that same element inside
+  // the initiating user gesture instead of creating a fresh untrusted element
+  // several image steps later. This is one signed-read request, not a decode-all.
+  useEffect(() => {
+    if (autoplayVideoCandidate) loadMediaRead(autoplayVideoCandidate.id);
+  }, [autoplayVideoCandidate?.id, loadMediaRead]);
+
   // #11: prepare adjacent slideshow media while the active one is on screen.
   // The window is next 1 + previous 1 for manual browsing, next 2 for
   // autoplay. Only images are decoded ahead; videos stay at preload metadata.
@@ -1566,9 +1791,22 @@ export function JourneyStory({
     if (targetRead?.status === "ready" && target.mimeType.startsWith("image/")) {
       decodeRegistryRef.current.ensure(target.id, targetRead.url);
     }
-    const ready = targetRead?.status === "ready"
-      && (target.mimeType.startsWith("video/") || decodeRegistryRef.current.isDecoded(target.id));
-    if (!ready) return;
+    const disposition = storyNavigationTargetDisposition(
+      target,
+      storyMediaAvailability(targetRead?.status),
+      decodeRegistryRef.current.isDecoded(target.id),
+    );
+    if (disposition === "failed") {
+      // A terminal read failure is still a completed navigation step. Promote
+      // it so Story autoplay can own the unavailable-media interval and move
+      // on, instead of leaving the prior frame pending forever.
+      pendingTargetRef.current = null;
+      setIncomingAssetId(null);
+      setShownAssetId(target.id);
+      setAssetIndex(pendingIndex);
+      return;
+    }
+    if (disposition !== "ready") return;
     pendingTargetRef.current = null;
     setIncomingAssetId(target.id);
     setAssetIndex(pendingIndex);
@@ -1577,18 +1815,22 @@ export function JourneyStory({
   useEffect(() => {
     const timer = window.setInterval(() => {
       const now = Date.now();
+      // #204 final review: while Story autoplay owns the settled video, do not
+      // replace its signed URL underneath the element. Replacing `src` resets
+      // the media resource and can pause/stall an otherwise healthy long clip.
+      // Once autoplay releases ownership (pause/end/navigation), the next sweep
+      // refreshes it normally before it is reused.
+      const protectedPlaybackAssetId = playing && activeAsset?.mimeType.startsWith("video/")
+        ? activeAsset.id
+        : null;
       for (const [assetId, state] of Object.entries(mediaReadsRef.current)) {
-        if (
-          state.status === "ready"
-          && Number.isFinite(state.expiresAt)
-          && state.expiresAt - now < MEDIA_READ_REFRESH_MARGIN_MS
-        ) {
+        if (shouldRefreshStoryMediaRead(assetId, state, now, protectedPlaybackAssetId)) {
           loadMediaRead(assetId);
         }
       }
     }, MEDIA_READ_SWEEP_MS);
     return () => window.clearInterval(timer);
-  }, [loadMediaRead]);
+  }, [activeAsset?.id, activeAsset?.mimeType, loadMediaRead, playing]);
 
   const namedStops = useMemo(
     () => journey?.routePoints.filter((point) => point.isStop) ?? [],
@@ -1614,13 +1856,36 @@ export function JourneyStory({
     ? scopedMedia.find((candidate) => candidate.id === shownAssetId) ?? null
     : asset;
   const shownRead = shownAsset ? mediaReads[shownAsset.id] : null;
-  const shownIndex = shownAsset
-    ? scopedMedia.findIndex((candidate) => candidate.id === shownAsset.id)
-    : -1;
   const incoming = incomingAssetId && incomingAssetId !== shownAssetId
     ? scopedMedia.find((candidate) => candidate.id === incomingAssetId) ?? null
     : null;
   const incomingRead = incoming ? mediaReads[incoming.id] : null;
+  // #204 CFAA family fix: one persistent video node owns priming, incoming, and
+  // settled video states. Prefer the incoming video over the old settled video
+  // so video→video navigation can actually mount and settle the destination.
+  const storyStageVideoAsset = storyStageVideoOwner(
+    shownAsset,
+    incoming,
+    autoplayVideoCandidate,
+  );
+  const storyStageVideoRead = storyStageVideoAsset ? mediaReads[storyStageVideoAsset.id] : null;
+  const storyStageVideoSettled = Boolean(
+    shownAsset
+    && storyStageVideoAsset
+    && shownAsset.id === storyStageVideoAsset.id
+    && shownRead?.status === "ready"
+    && shownAsset.mimeType.startsWith("video/"),
+  );
+  const storyStageVideoIncoming = Boolean(
+    incoming
+    && storyStageVideoAsset
+    && incoming.id === storyStageVideoAsset.id
+    && storyStageVideoRead?.status === "ready",
+  );
+  const storyStageVideoVisible = storyStageVideoSettled || storyStageVideoIncoming;
+  const shownIndex = shownAsset
+    ? scopedMedia.findIndex((candidate) => candidate.id === shownAsset.id)
+    : -1;
   const activeChapterMedia = storyChapterMedia(scopedMedia, asset);
   const activeChapterIndex = asset
     ? activeChapterMedia.findIndex((candidate) => candidate.id === asset.id)
@@ -1701,7 +1966,9 @@ export function JourneyStory({
 
   function beginMediaDrag(container: HTMLElement | null, pointerId: number, clientX: number, clientY: number, eventTime: number, wrap: boolean, tapOpensFullscreen = false, preserveNativeVideoCapture = false) {
     if (!container || mediaDragSettlingRef.current || incomingAssetId !== null || mutationPending || overview || scopedMedia.length < 2) return;
-    const base = container.querySelector<HTMLElement>(":scope > img, :scope > video");
+    // #204 CFAA: hidden authorization/priming media is implementation detail,
+    // not the semantic settled frame the user's finger is manipulating.
+    const base = container.querySelector<HTMLElement>(":scope > [data-shared-media-id]");
     if (!base) return;
     base.classList.toggle("journey-story__media-drag-page", container === fullscreenRef.current);
     mediaDragRef.current = {
@@ -2405,9 +2672,17 @@ export function JourneyStory({
     const target = scopedMedia[index];
     if (!target) return;
     const targetRead = mediaReads[target.id];
-    const ready = targetRead?.status === "ready"
-      && (target.mimeType.startsWith("video/") || decodeRegistryRef.current.isDecoded(target.id));
-    if (ready) {
+    const disposition = storyNavigationTargetDisposition(
+      target,
+      storyMediaAvailability(targetRead?.status),
+      decodeRegistryRef.current.isDecoded(target.id),
+    );
+    if (disposition === "failed") {
+      pendingTargetRef.current = null;
+      setIncomingAssetId(null);
+      setShownAssetId(target.id);
+      setAssetIndex(index);
+    } else if (disposition === "ready") {
       setIncomingAssetId(target.id);
       setAssetIndex(index);
     } else {
@@ -2450,7 +2725,7 @@ export function JourneyStory({
         setOverview(false);
       },
       resolveTarget: () => dialogRef.current?.querySelector<HTMLElement>(
-        ".journey-story__media > img, .journey-story__media > video",
+        ".journey-story__media > [data-shared-media-id]",
       ) ?? null,
     });
   }
@@ -2469,8 +2744,11 @@ export function JourneyStory({
     }
 
     const current = scopedMedia[assetIndex];
+    // #204 CFAA: hidden priming/authorization media carries no shared-media id,
+    // so the morph anchors on the visible settled frame instead of a zero-sized
+    // node that would silently drop the shared-element transition.
     const source = dialogRef.current?.querySelector<HTMLElement>(
-      ".journey-story__media > img, .journey-story__media > video",
+      ".journey-story__media > [data-shared-media-id]",
     ) ?? null;
     runSharedElementMorph({
       source,
@@ -2689,8 +2967,39 @@ export function JourneyStory({
     }
   }
 
-  function setPlayingFromGesture(willPlay: boolean) {
+  function setPlayingFromGesture(willPlay: boolean, targetStage: "current" | "fullscreen" = "current") {
+    // A future video can only be authorized when its actual candidate source is
+    // already attached. Starting earlier would consume the gesture on src-less
+    // media, leaving the later passive play() outside the activation window.
+    if (
+      willPlay
+      && !storyAutoplayCanStart(
+        autoplayVideoCandidate,
+        storyMediaAvailability(autoplayVideoCandidateRead?.status),
+      )
+    ) return;
     const audio = audioRef.current;
+    const gestureVideo = targetStage === "fullscreen"
+      ? fullscreenVideoRef.current
+      : fullscreen ? fullscreenVideoRef.current : storyVideoRef.current;
+    if (willPlay && gestureVideo && autoplayVideoCandidate) {
+      const currentVideoIsSettled = activeAsset?.mimeType.startsWith("video/")
+        && (shownAssetId ?? activeAsset.id) === activeAsset.id;
+      if (currentVideoIsSettled) {
+        // Keep the first video.play() inside the initiating click/tap/keyboard
+        // activation. The effect remains authoritative for synchronization.
+        void gestureVideo.play().catch(() => undefined);
+      } else {
+        // The stable stage video is mounted for the first future video before
+        // autoplay starts; its signed read is prefetched independently. Touch
+        // the same element inside this gesture, then pause before media can
+        // advance audibly behind the current image. Safari-style per-element
+        // authorization is retained because later video steps reuse this node.
+        void gestureVideo.play().catch(() => undefined);
+        gestureVideo.pause();
+        try { gestureVideo.currentTime = 0; } catch { /* metadata may not be ready yet */ }
+      }
+    }
     // #20: establish the analyser graph in the same user gesture that starts
     // audio. If Web Audio/CORS is unavailable the sampler fails closed and the
     // ordinary audio element still plays with the static/CSS fallback.
@@ -2888,6 +3197,13 @@ export function JourneyStory({
                 className="journey-story__fullscreen-entry"
                 aria-label="全屏播放"
                 title="全屏播放"
+                disabled={
+                  scopedMedia.length > 1
+                  && !storyAutoplayCanStart(
+                    autoplayVideoCandidate,
+                    storyMediaAvailability(autoplayVideoCandidateRead?.status),
+                  )
+                }
                 onClick={() => enterFullscreen(scopedMedia.length > 1)}
               >
                 <IconMaximize size={16} stroke={1.35} aria-hidden="true" />
@@ -3005,15 +3321,29 @@ export function JourneyStory({
             ) : null}
             {!overview && shownAsset && (!shownRead || shownRead.status === "loading") ? <div className="journey-story__media-state">正在打开私有媒体…</div> : null}
             {!overview && shownAsset && shownRead?.status === "error" ? <div className="journey-story__media-state is-error">{shownRead.message}</div> : null}
-            {!overview && shownAsset && shownRead?.status === "ready" && shownAsset.mimeType.startsWith("video/") ? (
+            {!overview && storyStageVideoAsset ? (
               <video
-                key={`media-${shownAsset.id}`}
-                src={shownRead.url}
-                controls
+                ref={storyVideoRef}
+                className={storyStageVideoIncoming ? "journey-story__media-incoming" : undefined}
+                src={storyStageVideoRead?.status === "ready" ? storyStageVideoRead.url : undefined}
+                controls={storyStageVideoSettled}
                 playsInline
                 preload="metadata"
-                data-shared-media-id={shownAsset.id}
-                data-shared-journey-cover={cover?.id === shownAsset.id ? "true" : undefined}
+                hidden={!storyStageVideoVisible}
+                aria-hidden={storyStageVideoVisible ? undefined : true}
+                data-shared-media-id={storyStageVideoVisible ? storyStageVideoAsset.id : undefined}
+                data-shared-journey-cover={
+                  storyStageVideoVisible && cover?.id === storyStageVideoAsset.id ? "true" : undefined
+                }
+                onAnimationEnd={(event) => {
+                  if (
+                    storyStageVideoIncoming
+                    && event.target === event.currentTarget
+                    && event.animationName === "motionMediaIn"
+                  ) {
+                    settleIncoming(storyStageVideoAsset.id);
+                  }
+                }}
               />
             ) : null}
             {!overview && shownAsset && shownRead?.status === "ready" && !shownAsset.mimeType.startsWith("video/") ? (
@@ -3045,21 +3375,6 @@ export function JourneyStory({
                 onClick={openImageFullscreenAfterTap}
               />
             ) : null}
-            {!overview && incoming && incomingRead?.status === "ready" && incoming.mimeType.startsWith("video/") ? (
-              <video
-                key={`media-${incoming.id}`}
-                className="journey-story__media-incoming"
-                src={incomingRead.url}
-                controls
-                playsInline
-                preload="metadata"
-                onAnimationEnd={(event) => {
-                  if (event.target === event.currentTarget && event.animationName === "motionMediaIn") {
-                    settleIncoming(incoming.id);
-                  }
-                }}
-              />
-            ) : null}
             {mobileLayout && !overview ? (
               <img
                 data-media-drag-peek
@@ -3074,9 +3389,16 @@ export function JourneyStory({
                 <button
                   type="button"
                   className={playing ? "is-active" : ""}
-                  disabled={mutationPending || scopedMedia.length < 2}
+                  disabled={
+                    mutationPending
+                    || scopedMedia.length < 2
+                    || (!playing && !storyAutoplayCanStart(
+                      autoplayVideoCandidate,
+                      storyMediaAvailability(autoplayVideoCandidateRead?.status),
+                    ))
+                  }
                   onClick={togglePlaying}
-                  aria-label={playing ? "暂停自动播放" : "自动播放照片"}
+                  aria-label={playing ? "暂停自动播放" : "自动播放媒体"}
                   aria-pressed={playing}
                 >
                   {playing
@@ -3114,6 +3436,31 @@ export function JourneyStory({
             ) : null}
             {mobileLayout && !overview && asset ? (
               <div className="journey-story__mobile-media-actions">
+                {showMobileStoryPlayControl({
+                  mobileLayout,
+                  overview,
+                  mobileManageMode,
+                  scopedMediaCount: scopedMedia.length,
+                }) ? (
+                  <IconActionButton
+                    type="button"
+                    className={`journey-story__mobile-media-play${playing ? " is-active" : ""}`}
+                    label={playing ? "暂停自动播放" : "自动播放媒体"}
+                    aria-pressed={playing}
+                    disabled={
+                      mutationPending
+                      || (!playing && !storyAutoplayCanStart(
+                      autoplayVideoCandidate,
+                      storyMediaAvailability(autoplayVideoCandidateRead?.status),
+                    ))
+                    }
+                    onClick={togglePlaying}
+                  >
+                    {playing
+                      ? <IconPlayerPause size={19} stroke={1.5} aria-hidden="true" />
+                      : <IconPlayerPlay size={19} stroke={1.5} aria-hidden="true" />}
+                  </IconActionButton>
+                ) : null}
                 <IconActionButton
                   type="button"
                   className="journey-story__mobile-media-menu-trigger"
@@ -3185,7 +3532,18 @@ export function JourneyStory({
                           </button>
                         </>
                       ) : null}
-                      <button type="button" disabled={mutationPending} onClick={() => enterFullscreen(scopedMedia.length > 1)}>
+                      <button
+                        type="button"
+                        disabled={
+                          mutationPending
+                          || (scopedMedia.length > 1
+                            && !storyAutoplayCanStart(
+                              autoplayVideoCandidate,
+                              storyMediaAvailability(autoplayVideoCandidateRead?.status),
+                            ))
+                        }
+                        onClick={() => enterFullscreen(scopedMedia.length > 1)}
+                      >
                         <IconPlayerPlay size={18} stroke={1.35} aria-hidden="true" />
                         {scopedMedia.length > 1 ? "沉浸播放" : "沉浸查看"}
                       </button>
@@ -3559,9 +3917,11 @@ export function JourneyStory({
         </footer>
       </article>
 
-      {fullscreen && asset && read?.status === "ready" ? (
+      {asset ? (
         <div
           ref={fullscreenRef}
+          hidden={!fullscreen}
+          style={!fullscreen ? { display: "none" } : undefined}
           className={`journey-story-fullscreen${fullscreenControlsHidden ? " is-controls-hidden" : ""}${playing ? " is-playing" : ""}`}
           role="dialog"
           tabIndex={-1}
@@ -3581,16 +3941,33 @@ export function JourneyStory({
           <button className="journey-story-fullscreen__close" type="button" onClick={() => exitFullscreen()} aria-label="退出沉浸媒体"><IconX size={22} stroke={1.35} aria-hidden="true" /></button>
           {/* #11 two-layer stage also serves fullscreen: the incoming frame
               crossfades over the settled base frame without flashing. */}
-          {shownAsset && shownRead?.status === "ready" && shownAsset.mimeType.startsWith("video/")
-            ? <video key={`media-${shownAsset.id}`} src={shownRead.url} controls autoPlay playsInline />
-            : shownAsset && shownRead?.status === "ready"
-              ? <img key={`media-${shownAsset.id}`} src={shownRead.url} alt={shownAsset.fileName} />
-              : null}
-          {incoming && incomingRead?.status === "ready" && incoming.mimeType.startsWith("video/")
-            ? <video key={`media-${incoming.id}`} className="journey-story__media-incoming" src={incomingRead.url} autoPlay playsInline onAnimationEnd={(event) => { if (event.target === event.currentTarget && event.animationName === "motionMediaIn") settleIncoming(incoming.id); }} />
-            : incoming && incomingRead?.status === "ready"
-              ? <img key={`media-${incoming.id}`} className="journey-story__media-incoming" src={incomingRead.url} alt={incoming.fileName} onAnimationEnd={(event) => { if (event.target === event.currentTarget && event.animationName === "motionMediaIn") settleIncoming(incoming.id); }} />
-              : null}
+          {storyStageVideoAsset ? (
+            <video
+              ref={fullscreenVideoRef}
+              className={storyStageVideoIncoming ? "journey-story__media-incoming" : undefined}
+              src={storyStageVideoRead?.status === "ready" ? storyStageVideoRead.url : undefined}
+              controls={storyStageVideoSettled}
+              playsInline
+              hidden={!storyStageVideoVisible}
+              aria-hidden={storyStageVideoVisible ? undefined : true}
+              data-shared-media-id={storyStageVideoVisible ? storyStageVideoAsset.id : undefined}
+              onAnimationEnd={(event) => {
+                if (
+                  storyStageVideoIncoming
+                  && event.target === event.currentTarget
+                  && event.animationName === "motionMediaIn"
+                ) {
+                  settleIncoming(storyStageVideoAsset.id);
+                }
+              }}
+            />
+          ) : null}
+          {shownAsset && shownRead?.status === "ready" && !shownAsset.mimeType.startsWith("video/")
+            ? <img key={`media-${shownAsset.id}`} src={shownRead.url} alt={shownAsset.fileName} data-shared-media-id={shownAsset.id} />
+            : null}
+          {incoming && incomingRead?.status === "ready" && !incoming.mimeType.startsWith("video/")
+            ? <img key={`media-${incoming.id}`} className="journey-story__media-incoming" src={incomingRead.url} alt={incoming.fileName} onAnimationEnd={(event) => { if (event.target === event.currentTarget && event.animationName === "motionMediaIn") settleIncoming(incoming.id); }} />
+            : null}
           {mobileLayout ? <img data-media-drag-peek alt="" aria-hidden="true" style={{ display: "none" }} /> : null}
           {scopedMedia.length > 1 ? (
             <nav className="journey-story-fullscreen__nav" aria-label="全屏媒体导航">
@@ -3605,8 +3982,12 @@ export function JourneyStory({
               <button
                 type="button"
                 className={playing ? "is-active" : ""}
+                disabled={!playing && !storyAutoplayCanStart(
+                  autoplayVideoCandidate,
+                  storyMediaAvailability(autoplayVideoCandidateRead?.status),
+                )}
                 onClick={togglePlaying}
-                aria-label={playing ? "暂停自动播放" : "自动播放照片"}
+                aria-label={playing ? "暂停自动播放" : "自动播放媒体"}
                 aria-pressed={playing}
               >
                 {playing

@@ -2,6 +2,11 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  storyAutoplayVideoCandidate,
+  storyAutoplayCanStart,
+  storyStageVideoOwner,
+  shouldRefreshStoryMediaRead,
+  createStoryAutoplayFallbackController,
   JourneyStory,
   finalizeMediaDragCommit,
   scheduleCancelableMediaDragSettle,
@@ -16,8 +21,13 @@ import {
   reorderInvalidatesMediaMoveUndo,
   retainMediaMoveUndoAfterError,
   replaceJourneySoundtrack,
+  showMobileStoryPlayControl,
   storyAssetIndexForId,
+  storyAutoplayAdvance,
   storyAutoplayNextIndex,
+  storyAutoplayWaitsForVideoEnd,
+  storyMediaAvailability,
+  storyNavigationTargetDisposition,
   storyChapterMedia,
   shouldHoldWholeJourneyTerminalFrame,
   storyInitialMediaSelection,
@@ -305,6 +315,243 @@ describe("shouldHoldWholeJourneyTerminalFrame (#76 review)", () => {
     expect(shouldHoldWholeJourneyTerminalFrame(1, 3, true)).toBe(false);
     expect(shouldHoldWholeJourneyTerminalFrame(2, 3, false)).toBe(false);
     expect(shouldHoldWholeJourneyTerminalFrame(0, 0, true)).toBe(false);
+  });
+});
+
+describe("storyAutoplayVideoCandidate (#204 final review)", () => {
+  const imageA = asset("image-a", "image/jpeg", 0, "a.jpg");
+  const imageB = asset("image-b", "image/jpeg", 1, "b.jpg");
+  const video = asset("video-1", "video/mp4", 2, "clip.mp4");
+
+  it("prepares the first future video while autoplay is still on an image", () => {
+    expect(storyAutoplayVideoCandidate([imageA, imageB, video], 0, true)?.id).toBe("video-1");
+  });
+
+  it("keeps the current video as the stable authorized element", () => {
+    expect(storyAutoplayVideoCandidate([imageA, video], 1, true)?.id).toBe("video-1");
+  });
+
+  it("only wraps for a route-point autoplay loop", () => {
+    expect(storyAutoplayVideoCandidate([video, imageA, imageB], 2, true)).toBeNull();
+    expect(storyAutoplayVideoCandidate([video, imageA, imageB], 2, false)?.id).toBe("video-1");
+  });
+});
+
+describe("storyAutoplayCanStart (#204 CFAA)", () => {
+  const video = asset("video-ready", "video/mp4", 0, "clip.mp4");
+
+  it("waits only while the candidate URL is unresolved", () => {
+    expect(storyAutoplayCanStart(video, "waiting")).toBe(false);
+    expect(storyAutoplayCanStart(video, "ready")).toBe(true);
+  });
+
+  it("does not deadlock autoplay after a failed candidate prefetch", () => {
+    expect(storyAutoplayCanStart(video, "error")).toBe(true);
+  });
+
+  it("does not block an image-only sequence", () => {
+    expect(storyAutoplayCanStart(null, "waiting")).toBe(true);
+  });
+});
+
+describe("storyStageVideoOwner (#204 CFAA)", () => {
+  const videoA = asset("video-a", "video/mp4", 0, "a.mp4");
+  const videoB = asset("video-b", "video/mp4", 1, "b.mp4");
+  const image = asset("image", "image/jpeg", 2, "image.jpg");
+
+  it("prefers an incoming video over the previously settled video", () => {
+    expect(storyStageVideoOwner(videoA, videoB, videoA)?.id).toBe("video-b");
+  });
+
+  it("keeps the settled video when the incoming asset is an image", () => {
+    expect(storyStageVideoOwner(videoA, image, videoB)?.id).toBe("video-a");
+  });
+
+  it("uses the future autoplay candidate while an image is settled", () => {
+    expect(storyStageVideoOwner(image, null, videoB)?.id).toBe("video-b");
+  });
+});
+
+describe("storyAutoplayAdvance (#199 review)", () => {
+  it("names what ends each step: next asset, terminal hold, or stop", () => {
+    expect(storyAutoplayAdvance(0, 3, true)).toEqual({ kind: "advance", nextIndex: 1 });
+    expect(storyAutoplayAdvance(2, 3, true)).toEqual({ kind: "hold-terminal" });
+    expect(storyAutoplayAdvance(2, 3, false)).toEqual({ kind: "advance", nextIndex: 0 });
+    expect(storyAutoplayAdvance(0, 1, false)).toEqual({ kind: "stop" });
+    expect(storyAutoplayAdvance(0, 0, true)).toEqual({ kind: "stop" });
+  });
+
+  it("keeps the single whole-Journey asset on its terminal hold", () => {
+    expect(storyAutoplayAdvance(0, 1, true)).toEqual({ kind: "hold-terminal" });
+  });
+});
+
+describe("shouldRefreshStoryMediaRead (#204 final review)", () => {
+  const now = 1_000_000;
+
+  it("defers signed URL replacement for the video currently owned by Story autoplay", () => {
+    expect(shouldRefreshStoryMediaRead(
+      "video-1",
+      { status: "ready", expiresAt: now + 30_000 },
+      now,
+      "video-1",
+    )).toBe(false);
+  });
+
+  it("continues refreshing other expiring reads while autoplay owns a video", () => {
+    expect(shouldRefreshStoryMediaRead(
+      "image-2",
+      { status: "ready", expiresAt: now + 30_000 },
+      now,
+      "video-1",
+    )).toBe(true);
+  });
+
+  it("refreshes the video again after autoplay releases ownership", () => {
+    expect(shouldRefreshStoryMediaRead(
+      "video-1",
+      { status: "ready", expiresAt: now + 30_000 },
+      now,
+      null,
+    )).toBe(true);
+  });
+
+  it("does not refresh non-ready or non-expiring reads", () => {
+    expect(shouldRefreshStoryMediaRead("video-1", { status: "loading" }, now, null)).toBe(false);
+    expect(shouldRefreshStoryMediaRead(
+      "video-1",
+      { status: "ready", expiresAt: now + 120_000 },
+      now,
+      null,
+    )).toBe(false);
+  });
+});
+
+describe("storyNavigationTargetDisposition (#204 final review)", () => {
+  const video = asset("video-nav", "video/mp4", 0, "clip.mp4");
+  const image = asset("image-nav", "image/jpeg", 1, "frame.jpg");
+
+  it("promotes terminal read failures so autoplay can advance past unavailable media", () => {
+    expect(storyNavigationTargetDisposition(video, "error", false)).toBe("failed");
+    expect(storyNavigationTargetDisposition(image, "error", false)).toBe("failed");
+  });
+
+  it("waits only for unresolved reads or undecoded images", () => {
+    expect(storyNavigationTargetDisposition(video, "waiting", false)).toBe("waiting");
+    expect(storyNavigationTargetDisposition(video, "ready", false)).toBe("ready");
+    expect(storyNavigationTargetDisposition(image, "ready", false)).toBe("waiting");
+    expect(storyNavigationTargetDisposition(image, "ready", true)).toBe("ready");
+  });
+});
+
+describe("storyMediaAvailability (#199 review)", () => {
+  it("maps signed-read status onto the shared playback vocabulary", () => {
+    expect(storyMediaAvailability("ready")).toBe("ready");
+    expect(storyMediaAvailability("error")).toBe("error");
+    expect(storyMediaAvailability("loading")).toBe("waiting");
+    expect(storyMediaAvailability(undefined)).toBe("waiting");
+  });
+});
+
+describe("createStoryAutoplayFallbackController (#204 review)", () => {
+  it("ignores a delayed play rejection after the owning effect is disposed", () => {
+    const scheduled: string[] = [];
+    const cleared: number[] = [];
+    const controller = createStoryAutoplayFallbackController(
+      () => { scheduled.push("armed"); return 41; },
+      (timer) => cleared.push(timer),
+    );
+
+    controller.dispose();
+    controller.arm();
+
+    expect(scheduled).toEqual([]);
+    expect(cleared).toEqual([]);
+  });
+
+  it("cancels a transient watchdog and allows a later stall to re-arm it", () => {
+    const scheduled: number[] = [];
+    const cleared: number[] = [];
+    let nextTimer = 42;
+    const controller = createStoryAutoplayFallbackController(
+      () => { scheduled.push(nextTimer); return nextTimer++; },
+      (timer) => cleared.push(timer),
+    );
+
+    controller.arm();
+    controller.cancel();
+    controller.arm();
+
+    expect(scheduled).toEqual([42, 43]);
+    expect(cleared).toEqual([42]);
+  });
+
+  it("clears an already-armed fallback and cannot re-arm after disposal", () => {
+    const scheduled: string[] = [];
+    const cleared: number[] = [];
+    const controller = createStoryAutoplayFallbackController(
+      () => { scheduled.push("armed"); return 42; },
+      (timer) => cleared.push(timer),
+    );
+
+    controller.arm();
+    controller.dispose();
+    controller.arm();
+
+    expect(scheduled).toEqual(["armed"]);
+    expect(cleared).toEqual([42]);
+  });
+});
+
+describe("storyAutoplayWaitsForVideoEnd (#199 review)", () => {
+  const video = asset("video-1", "video/mp4", 0, "clip.mp4");
+  const image = asset("image-1", "image/jpeg", 1, "frame.jpg");
+
+  it("lets a mounted, readable video own its own completion", () => {
+    expect(storyAutoplayWaitsForVideoEnd(video, "ready", true)).toBe(true);
+  });
+
+  it("keeps the slide timer for anything that cannot report `ended`", () => {
+    // An image step is always timed.
+    expect(storyAutoplayWaitsForVideoEnd(image, "ready", true)).toBe(false);
+    // No settled element for this asset yet, so nothing can fire `ended`.
+    expect(storyAutoplayWaitsForVideoEnd(video, "ready", false)).toBe(false);
+    // A failed read never produces a playable element.
+    expect(storyAutoplayWaitsForVideoEnd(video, "error", true)).toBe(false);
+    expect(storyAutoplayWaitsForVideoEnd(null, "ready", true)).toBe(false);
+  });
+
+  it("still waits on a video whose read is in flight once its element is attached", () => {
+    expect(storyAutoplayWaitsForVideoEnd(video, "waiting", true)).toBe(true);
+  });
+});
+
+describe("showMobileStoryPlayControl (#199)", () => {
+  const viewer = {
+    mobileLayout: true,
+    overview: false,
+    mobileManageMode: false,
+    scopedMediaCount: 3,
+  };
+
+  it("exposes playback in mobile Viewer for a multi-asset scope", () => {
+    expect(showMobileStoryPlayControl(viewer)).toBe(true);
+    expect(showMobileStoryPlayControl({ ...viewer, scopedMediaCount: 2 })).toBe(true);
+  });
+
+  it("stays out of desktop, the overview grid, Manage mode and single-asset scopes", () => {
+    expect(showMobileStoryPlayControl({ ...viewer, mobileLayout: false })).toBe(false);
+    expect(showMobileStoryPlayControl({ ...viewer, overview: true })).toBe(false);
+    expect(showMobileStoryPlayControl({ ...viewer, mobileManageMode: true })).toBe(false);
+    expect(showMobileStoryPlayControl({ ...viewer, scopedMediaCount: 1 })).toBe(false);
+    expect(showMobileStoryPlayControl({ ...viewer, scopedMediaCount: 0 })).toBe(false);
+  });
+
+  it("matches the gate the fullscreen navigation already uses", () => {
+    for (const scopedMediaCount of [0, 1, 2, 5]) {
+      expect(showMobileStoryPlayControl({ ...viewer, scopedMediaCount }))
+        .toBe(scopedMediaCount > 1);
+    }
   });
 });
 
@@ -679,7 +926,7 @@ describe("JourneyStory", () => {
     expect(markup).toContain('aria-label="向前调整媒体顺序"');
     expect(markup).toContain('aria-label="向后调整媒体顺序"');
     expect(markup).toContain('aria-label="删除这段媒体"');
-    expect(markup).toContain('aria-label="自动播放照片"');
+    expect(markup).toContain('aria-label="自动播放媒体"');
     expect(markup).toContain('aria-pressed="false"');
     expect(markup).not.toContain('aria-label="全屏查看媒体"');
   });
@@ -786,8 +1033,64 @@ describe("JourneyStory", () => {
     expect(markup).not.toContain("删除旅程");
     expect(markup).not.toContain('aria-label="向前调整媒体顺序"');
     expect(markup).not.toContain('aria-label="向后调整媒体顺序"');
-    expect(markup).not.toContain('aria-label="自动播放照片"');
+    expect(markup).not.toContain("journey-story__media-nav");
+    // #204 CFAA: fullscreen keeps a persistent, hidden stage so its video node
+    // can be authorized during the entry gesture; its nav may exist in SSR but
+    // must remain inside the hidden overlay until fullscreen is entered.
+    expect(markup).toContain('<div hidden="" style="display:none" class="journey-story-fullscreen');
+    expect(markup).toContain('class="journey-story-fullscreen__nav"');
     expect(markup).not.toContain("全部照片");
+    // #199: playback is the one Viewer control that survives the toolbar cut.
+    expect(markup).toContain("journey-story__mobile-media-play");
+    expect(markup).toContain('aria-label="自动播放媒体"');
+    expect(markup).not.toContain("journey-story__mobile-media-sheet");
+  });
+
+  it("keeps mobile Story playback in the Viewer cluster only for multi-media scopes (#199)", () => {
+    vi.stubGlobal("matchMedia", vi.fn(() => ({
+      matches: true,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })));
+
+    const single = renderToStaticMarkup(createElement(JourneyStory, {
+      journeys: [{ ...journey, media: [asset("media-1", "image/jpeg", 0)] }],
+      journeyId: journey.id,
+      onClose: () => undefined,
+      onNavigate: () => undefined,
+      onEdit: () => undefined,
+      onMediaAdded: () => null,
+    }));
+    // One asset is not a sequence, so the control would promise nothing.
+    expect(single).not.toContain("journey-story__mobile-media-play");
+    expect(single).toContain('aria-label="管理旅程"');
+
+    const sequence = renderToStaticMarkup(createElement(JourneyStory, {
+      journeys: [{
+        ...journey,
+        media: [
+          asset("media-1", "image/jpeg", 0),
+          asset("media-2", "video/mp4", 1),
+        ],
+      }],
+      journeyId: journey.id,
+      onClose: () => undefined,
+      onNavigate: () => undefined,
+      onEdit: () => undefined,
+      onMediaAdded: () => null,
+    }));
+    // Mixed image/video still reads as one playable sequence, and the control
+    // sits in the Viewer action cluster rather than the management sheet.
+    expect(sequence).toContain('class="icon-action-button journey-story__mobile-media-play"');
+    expect(sequence).toContain('aria-label="自动播放媒体"');
+    expect(sequence).toContain('aria-pressed="false"');
+    expect(sequence).not.toContain("journey-story__mobile-media-sheet");
+    expect(
+      sequence.indexOf("journey-story__mobile-media-play"),
+    ).toBeGreaterThan(sequence.indexOf('class="journey-story__mobile-media-actions"'));
+    expect(
+      sequence.indexOf("journey-story__mobile-media-play"),
+    ).toBeLessThan(sequence.indexOf("journey-story__mobile-media-menu-trigger"));
   });
 
   it("keeps mobile management reachable when the selected media scope is empty", () => {
