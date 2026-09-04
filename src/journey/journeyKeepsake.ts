@@ -4,9 +4,10 @@ import {
   playbackIntroMedia,
   playbackMediaForPoint,
   playbackStoryMedia,
-  stepDurationMs,
+  routePointAngularDistance,
   type PlaybackStep,
 } from "./journeyPlayback";
+import { resolveNarrativeTiming, type NarrativeTimingContext } from "./narrativeTiming";
 import type { Journey } from "./types";
 
 export type KeepsakeDurationPreset = 15 | 30 | 60;
@@ -96,6 +97,21 @@ function mediaType(mimeType: string): "image" | "video" {
   return mimeType.startsWith("video/") ? "video" : "image";
 }
 
+/**
+ * Keepsake asks the shared resolver how long each beat wants to be. The export
+ * keeps its fixed 15/30/60 s presets and offers no tempo control (decision D3),
+ * so the mode and tempo are pinned here; the `keepsake` profile is seeded from
+ * the legacy `PLAYBACK_PACING` numbers this call replaced, which keeps the
+ * switch a no-visual-change refactor. `fitKeepsakeSceneDurations()` still owns
+ * the preset fit — the resolver answers "how long is this beat", never "how
+ * many beats fit".
+ */
+function keepsakeDurationMs(
+  context: Omit<NarrativeTimingContext, "mode" | "tempo">,
+): number {
+  return resolveNarrativeTiming({ mode: "keepsake", tempo: "standard", ...context });
+}
+
 export function buildKeepsakeNarrativeSnapshot(
   journey: Pick<Journey, "routePoints" | "media">,
 ): KeepsakeNarrativeSnapshot {
@@ -123,14 +139,13 @@ function narrativeSnapshotsEqual(
 }
 
 function sceneForStep(journey: Journey, step: PlaybackStep): SceneDraft[] {
-  const desired = stepDurationMs(journey, step);
   const camera = playbackCameraTargetForStep(step);
   switch (step.kind) {
     case "intro":
       return [{
         kind: "map",
         role: "intro",
-        desiredDurationMs: desired,
+        desiredDurationMs: keepsakeDurationMs({ segmentKind: "intro" }),
         minimumDurationMs: KEEPSAKE_MIN_DURATION_MS.intro,
       }];
     case "travel": {
@@ -144,7 +159,10 @@ function sceneForStep(journey: Journey, step: PlaybackStep): SceneDraft[] {
         pointIndex: toPointIndex,
         fromRoutePointId: fromPoint.id,
         toRoutePointId: toPoint.id,
-        desiredDurationMs: desired,
+        desiredDurationMs: keepsakeDurationMs({
+          segmentKind: "travel",
+          routeDistanceRadians: routePointAngularDistance(fromPoint, toPoint),
+        }),
         minimumDurationMs: KEEPSAKE_MIN_DURATION_MS.travel,
       }];
     }
@@ -156,7 +174,10 @@ function sceneForStep(journey: Journey, step: PlaybackStep): SceneDraft[] {
         role: "arrival",
         pointIndex: step.pointIndex,
         routePointId: point.id,
-        desiredDurationMs: desired,
+        desiredDurationMs: keepsakeDurationMs({
+          segmentKind: "arrival",
+          noteLength: point.note?.trim().length ?? 0,
+        }),
         minimumDurationMs: KEEPSAKE_MIN_DURATION_MS.stop,
       }];
     }
@@ -172,7 +193,7 @@ function sceneForStep(journey: Journey, step: PlaybackStep): SceneDraft[] {
         routePointId: point.id,
         mediaAssetId: asset.id,
         mediaType: type,
-        desiredDurationMs: desired,
+        desiredDurationMs: keepsakeDurationMs({ segmentKind: "media", mediaKind: type }),
         minimumDurationMs: type === "video"
           ? KEEPSAKE_MIN_DURATION_MS.video
           : KEEPSAKE_MIN_DURATION_MS.image,
@@ -182,7 +203,7 @@ function sceneForStep(journey: Journey, step: PlaybackStep): SceneDraft[] {
       return [{
         kind: "map",
         role: "outro",
-        desiredDurationMs: desired,
+        desiredDurationMs: keepsakeDurationMs({ segmentKind: "outro" }),
         minimumDurationMs: KEEPSAKE_MIN_DURATION_MS.outro,
       }];
   }
@@ -231,7 +252,7 @@ export function buildKeepsakeRenderManifest(
       routePointId: null,
       mediaAssetId: asset.id,
       mediaType: type,
-      desiredDurationMs: type === "video" ? 6000 : 4500,
+      desiredDurationMs: keepsakeDurationMs({ segmentKind: "media", mediaKind: type }),
       minimumDurationMs: type === "video"
         ? KEEPSAKE_MIN_DURATION_MS.video
         : KEEPSAKE_MIN_DURATION_MS.image,
