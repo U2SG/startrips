@@ -5,6 +5,7 @@ import {
   index,
   integer,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   uniqueIndex,
@@ -132,6 +133,55 @@ export const mediaAssets = pgTable(
       table.routePointId,
       table.sortOrder,
     ),
+  ],
+);
+
+// #200: an expiring read-only capability over an explicit Journey set. The
+// raw bearer token is never stored; only its SHA-256 hash, which is what the
+// guest request is resolved by. Atlas deletion cascades the grants away, so a
+// hard-deleted Atlas can never leave an orphan public capability behind.
+export const shareGrants = pgTable(
+  "share_grants",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    atlasId: uuid("atlas_id")
+      .notNull()
+      .references(() => atlases.id, { onDelete: "cascade" }),
+    createdByUserId: text("created_by_user_id").notNull(),
+    tokenHash: text("token_hash").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    lastAccessedAt: timestamp("last_accessed_at", { withTimezone: true }),
+  },
+  (table) => [
+    uniqueIndex("share_grants_token_hash_unique").on(table.tokenHash),
+    index("share_grants_atlas_created_idx").on(table.atlasId, table.createdAt),
+  ],
+);
+
+// #200: the selected Journey set of one grant. A join table rather than a JSON
+// array so membership is validated by the database and a hard Journey deletion
+// cascades it out of every grant scope.
+export const shareGrantJourneys = pgTable(
+  "share_grant_journeys",
+  {
+    shareGrantId: uuid("share_grant_id")
+      .notNull()
+      .references(() => shareGrants.id, { onDelete: "cascade" }),
+    journeyId: uuid("journey_id")
+      .notNull()
+      .references(() => journeys.id, { onDelete: "cascade" }),
+    sortOrder: integer("sort_order").notNull(),
+  },
+  (table) => [
+    primaryKey({
+      name: "share_grant_journeys_pk",
+      columns: [table.shareGrantId, table.journeyId],
+    }),
+    index("share_grant_journeys_journey_idx").on(table.journeyId),
   ],
 );
 

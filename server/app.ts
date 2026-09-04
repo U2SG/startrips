@@ -3,6 +3,7 @@ import { bodyLimit } from "hono/body-limit";
 import { sql } from "drizzle-orm";
 import { auth } from "./auth";
 import { AtlasAccessError } from "./authorization/atlas-access";
+import { ShareAccessError } from "./authorization/share-access";
 import { serverConfig } from "./config";
 import { db } from "./db/client";
 import { LocationSearchUnavailableError } from "./location/location-search";
@@ -12,6 +13,7 @@ import { atlasRoutes } from "./routes/atlases";
 import { journeyRoutes } from "./routes/journeys";
 import { locationRoutes } from "./routes/locations";
 import { mapStyleRoutes } from "./routes/mapstyle";
+import { shareRoutes, sharedRoutes } from "./routes/shares";
 import { uploadRoutes } from "./routes/uploads";
 import { StorageUnavailableError } from "./storage/multipart-storage";
 
@@ -55,6 +57,11 @@ app.route("/api/atlases", atlasRoutes);
 app.route("/api/journeys", journeyRoutes);
 app.route("/api/locations", locationRoutes);
 app.route("/api/mapstyle", mapStyleRoutes);
+// #200: owner-authorized share management, and the guest capability path kept
+// deliberately separate so no route can serve both an Atlas member and a
+// bearer token.
+app.route("/api/shares", shareRoutes);
+app.route("/api/shared", sharedRoutes);
 app.route("/api/uploads", uploadRoutes);
 
 app.notFound((context) =>
@@ -63,6 +70,12 @@ app.notFound((context) =>
 
 app.onError((error, context) => {
   if (error instanceof AtlasAccessError) {
+    return context.json(
+      { error: error.code, message: error.message },
+      error.status,
+    );
+  }
+  if (error instanceof ShareAccessError) {
     return context.json(
       { error: error.code, message: error.message },
       error.status,

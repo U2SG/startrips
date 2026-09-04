@@ -39,6 +39,31 @@ export class JourneyRouteChangedError extends Error {
 
 export const JOURNEY_DELETION_GRACE_MS = 7 * 24 * 60 * 60 * 1_000;
 
+type Transaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/**
+ * The Atlas row lock every Atlas-scoped write serializes on. Taking it first
+ * and refusing a `deletionStartedAt` Atlas in the same statement means a write
+ * cannot interleave with an Atlas deletion: either this transaction holds the
+ * row and the Atlas was alive when it did, or it waits and then sees the mark.
+ *
+ * Callers must take this lock before any other row lock, so every write path
+ * acquires locks in the same order.
+ */
+export async function lockActiveAtlas(
+  transaction: Transaction,
+  atlasId: string,
+): Promise<boolean> {
+  const locked = await transaction.execute<{ id: string }>(sql`
+    select ${atlases.id} as id
+    from ${atlases}
+    where ${atlases.id} = ${atlasId}
+      and ${atlases.deletionStartedAt} is null
+    for update
+  `);
+  return locked.rows.length > 0;
+}
+
 async function loadJourneys(atlasId: string, journeyId?: string) {
   const atlasScope = journeyId
     ? and(eq(journeys.atlasId, atlasId), eq(journeys.id, journeyId))
@@ -115,14 +140,7 @@ export async function createJourneyForAtlas(
   values: JourneyValues,
 ) {
   const journeyId = await db.transaction(async (transaction) => {
-    const lockedAtlas = await transaction.execute<{ id: string }>(sql`
-      select ${atlases.id} as id
-      from ${atlases}
-      where ${atlases.id} = ${atlasId}
-        and ${atlases.deletionStartedAt} is null
-      for update
-    `);
-    if (lockedAtlas.rows.length === 0) return undefined;
+    if (!await lockActiveAtlas(transaction, atlasId)) return undefined;
 
     const [journey] = await transaction
       .insert(journeys)
@@ -155,14 +173,7 @@ export async function updateJourneyForAtlas(
   values: JourneyValues,
 ) {
   const updated = await db.transaction(async (transaction) => {
-    const lockedAtlas = await transaction.execute<{ id: string }>(sql`
-      select ${atlases.id} as id
-      from ${atlases}
-      where ${atlases.id} = ${atlasId}
-        and ${atlases.deletionStartedAt} is null
-      for update
-    `);
-    if (lockedAtlas.rows.length === 0) return false;
+    if (!await lockActiveAtlas(transaction, atlasId)) return false;
 
     const [journey] = await transaction
       .update(journeys)
