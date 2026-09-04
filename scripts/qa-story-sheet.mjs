@@ -156,7 +156,7 @@ try {
     await media.click();
     await page.locator(".journey-story-fullscreen").waitFor({state: "visible"});
     await page.evaluate(() => history.back());
-    await page.locator(".journey-story-fullscreen").waitFor({ state: "detached" });
+    await page.locator(".journey-story-fullscreen").waitFor({ state: "hidden" });
     add({
       name: "story-sheet-fullscreen-restores-snap",
       presentation: await story.getAttribute("data-mobile-presentation"),

@@ -710,7 +710,9 @@ try {
     await fullscreenStage.dispatchEvent("pointerup", { pointerId: 52, pointerType: "touch", isPrimary: true, clientX: fullStartX + 110, clientY: fullSwipeY, bubbles: true });
     await fullscreenVideo.waitFor({ state: "visible", timeout: 3_000 });
     await mixedMediaMobile.page.keyboard.press("Escape");
-    await fullscreenStage.waitFor({ state: "detached" });
+    // The fullscreen stage stays mounted but hidden so its exact <video> node
+    // keeps playback authorization; dismissal is semantic, not DOM detachment.
+    await fullscreenStage.waitFor({ state: "hidden" });
 
     const inlineVideo = inlineStage.locator(":scope > video:not(.journey-story__media-incoming)");
     await inlineVideo.waitFor({ state: "visible", timeout: 3_000 });
@@ -802,18 +804,23 @@ try {
     const primingVideoEvent = primingEvents.find((event) => (
       event.tagName === "VIDEO" && event.userActivation === true
     ));
+    // Events cross the bridge as fresh objects on every evaluate(), so identity
+    // comparison against the priming event can never exclude it. Everything
+    // recorded after the gesture is identified by this index instead, and the
+    // wait below observes the same window as the assertion.
+    const primingEventCount = primingEvents.length;
 
     await primedVideo.waitFor({ state: "visible", timeout: 7_000 });
-    await futureVideoAuthorization.page.waitForFunction(() => (
-      window.__qaMediaPlayEvents.filter((event) => event.tagName === "VIDEO").length >= 2
-    ), undefined, { timeout: 3_000 });
+    await futureVideoAuthorization.page.waitForFunction((recorded) => (
+      window.__qaMediaPlayEvents.slice(recorded).some((event) => event.tagName === "VIDEO")
+    ), primingEventCount, { timeout: 3_000 });
     const laterEvents = await futureVideoAuthorization.page.evaluate(() => [...window.__qaMediaPlayEvents]);
+    const playsAfterGesture = laterEvents.slice(primingEventCount);
     const reusedAuthorizedVideo = Boolean(
       primingVideoEvent
-      && laterEvents.some((event) => (
+      && playsAfterGesture.some((event) => (
         event.tagName === "VIDEO"
         && event.elementId === primingVideoEvent.elementId
-        && event !== primingVideoEvent
       )),
     );
     const futureVideoAuthorizationFailed = !primingVideoEvent
@@ -823,7 +830,7 @@ try {
     checks.push({
       name: "story-autoplay-future-video-authorization",
       primingVideoEvent,
-      laterEvents,
+      playsAfterGesture,
       reusedAuthorizedVideo,
       consoleErrors: futureVideoAuthorization.consoleErrors,
       pageErrors: futureVideoAuthorization.pageErrors,
