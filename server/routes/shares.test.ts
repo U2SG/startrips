@@ -25,6 +25,20 @@ describe("share creation input", () => {
     ).toMatchObject({ journeyIds: [JOURNEY_A, JOURNEY_B] });
   });
 
+  it("rejects a body that parsed to something other than an object", () => {
+    // `JSON.parse` accepts all of these, so `context.req.json()` resolves
+    // without a SyntaxError and only this guard stands between a non-object
+    // body and a property read that would surface as a 500.
+    expect(parseShareInput(null, NOW)).toBeNull();
+    expect(parseShareInput(undefined, NOW)).toBeNull();
+    expect(parseShareInput(42, NOW)).toBeNull();
+    expect(parseShareInput("journey", NOW)).toBeNull();
+    expect(parseShareInput(true, NOW)).toBeNull();
+    // An array is an object, so it survives the guard and is then rejected by
+    // the selection rules like any other body without usable `journeyIds`.
+    expect(parseShareInput([JOURNEY_A], NOW)).toBeNull();
+  });
+
   it("rejects an empty, oversized, duplicated or malformed selection", () => {
     expect(parseShareInput({ journeyIds: [], expiresAt: IN_A_WEEK }, NOW)).toBeNull();
     expect(parseShareInput({ expiresAt: IN_A_WEEK }, NOW)).toBeNull();

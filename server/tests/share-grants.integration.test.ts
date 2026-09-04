@@ -298,12 +298,46 @@ describe("share grant creation", () => {
     });
     if (!doomed) throw new Error("Journey fixture was not created");
     await markJourneyForDeletionForAtlas(doomed.id, identity.atlasId);
+    const grantsBefore = await db
+      .select({ id: shareGrants.id })
+      .from(shareGrants)
+      .where(eq(shareGrants.atlasId, identity.atlasId));
     const deleting = await app.request(`${TEST_ORIGIN}/api/shares`, {
       method: "POST",
       headers: authHeaders(identity.cookie),
       body: JSON.stringify({ journeyIds: [doomed.id], expiresAt: inDays(7) }),
     });
     expect(deleting.status).toBe(404);
+    await expect(deleting.json()).resolves.toMatchObject({
+      error: "JOURNEY_NOT_FOUND",
+    });
+
+    // The selection and the `deletion_started_at` checks run inside the
+    // insert transaction under the Atlas row lock, so a refusal leaves
+    // nothing behind: no grant row, and therefore no token that
+    // `requireActiveShareGrant` would have to reject on sight. A genuine
+    // concurrent race cannot be driven deterministically from this suite
+    // without a second connection and lock choreography, so this asserts the
+    // in-transaction check itself.
+    const grantsAfter = await db
+      .select({ id: shareGrants.id })
+      .from(shareGrants)
+      .where(eq(shareGrants.atlasId, identity.atlasId));
+    expect(grantsAfter).toHaveLength(grantsBefore.length);
+  });
+
+  it("rejects a well-formed JSON body that is not an object", async () => {
+    for (const body of ["null", "42", '"journeyIds"', "[]"]) {
+      const response = await app.request(`${TEST_ORIGIN}/api/shares`, {
+        method: "POST",
+        headers: authHeaders(identity.cookie),
+        body,
+      });
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toMatchObject({
+        error: "INVALID_SHARE",
+      });
+    }
   });
 
   it("requires atlas membership", async () => {
