@@ -70,6 +70,11 @@ import {
   solveScreenAnchorRotation,
   resolveGlobeFocusIntent,
 } from "./ParticleEarthScene";
+import {
+  buildRouteArcSamples,
+  ROUTE_ANCHOR_RADIUS,
+  routePointAnchor,
+} from "./geo";
 import { disposeSceneGraph } from "./useThreeScene";
 
 describe("ParticleEarthScene contracts", () => {
@@ -725,19 +730,90 @@ describe("ParticleEarthScene contracts", () => {
   });
 
   it("projects connected route segments and breaks paths across hidden spans", () => {
-    const segments = new Float32Array([
-      0, 0, 1, 1, 0, 1,
-      1, 0, 1, -1, 0, 1,
-      2, 0, 1, 3, 0, 1,
-    ]);
-    const path = buildProjectedRoutePath(segments, (x, y, _z, target) => {
-      target.x = x * 10;
-      target.y = y * 10;
-      return x >= 0;
-    });
-    expect(path).toBe(
-      "M0.0 0.0L10.0 0.0M20.0 0.0L30.0 0.0",
+    const samples = {
+      directions: new Float32Array([
+        0, 0, 1, 1, 0, 0,
+        1, 0, 0, -1, 0, 0,
+        0, 1, 0, 0, 0, -1,
+      ]),
+      lifts: new Float32Array([0, 0, 0, 0, 0, 0]),
+    };
+    const path = buildProjectedRoutePath(
+      samples,
+      (x, y, _z, target) => {
+        target.x = x * 10;
+        target.y = y * 10;
+        return x >= 0 && y >= 0;
+      },
+      { radius: 1, liftScale: 0 },
     );
+    // The middle segment leaves the visible half, so it is clipped at the
+    // crossing instead of joining the two visible spans.
+    expect(path.d.startsWith("M0.0 0.0L10.0 0.0")).toBe(true);
+    expect(path.d.endsWith("M0.0 10.0L0.0 0.0")).toBe(true);
+    expect(path.start).toEqual({ x: 0, y: 0 });
+    expect(path.end).toEqual({ x: 0, y: 0 });
+  });
+
+  it("resolves stored lift with the frame's lift strength (#193)", () => {
+    const samples = {
+      directions: new Float32Array([0, 0, 1, 0, 0, 1]),
+      lifts: new Float32Array([0, 0.25]),
+    };
+    const radii: number[] = [];
+    const project = (world: { radius: number; liftScale: number }) => {
+      buildProjectedRoutePath(
+        samples,
+        (x, y, z, target) => {
+          radii.push(Math.hypot(x, y, z));
+          target.x = 0;
+          target.y = 0;
+          return true;
+        },
+        world,
+      );
+    };
+    project({ radius: 1.46, liftScale: 1 });
+    project({ radius: 1.46, liftScale: 0 });
+    // Endpoint radius never moves; only the lifted interior vertex responds.
+    expect(radii[0]).toBeCloseTo(1.46, 6);
+    expect(radii[1]).toBeCloseTo(1.46 * 1.25, 6);
+    expect(radii[2]).toBeCloseTo(1.46, 6);
+    expect(radii[3]).toBeCloseTo(1.46, 6);
+  });
+
+  it("clips a route into the horizon instead of dropping the endpoint (#193)", () => {
+    const camera = new Vector3(0, 0, 5.4);
+    const anchor = routePointAnchor(0, 0);
+    // A leg that runs from the visible anchor around the globe until the far
+    // vertices fall behind the limb.
+    const samples = buildRouteArcSamples(
+      [{ lat: 0, lon: 0 }, { lat: 0, lon: 170 }],
+      Math.PI / 96,
+      8192,
+      { arcHeightRatio: 0.22, arcSaturationAngle: Math.PI / 3 },
+    );
+    const project = (x: number, y: number, z: number, target: { x: number; y: number }) => {
+      if (!isSphericalPointVisible(camera, new Vector3(x, y, z))) return false;
+      target.x = 400 + x * 100;
+      target.y = 400 - y * 100;
+      return true;
+    };
+    const path = buildProjectedRoutePath(
+      samples,
+      project,
+      { radius: ROUTE_ANCHOR_RADIUS, liftScale: 1 },
+    );
+    const marker = { x: 0, y: 0 };
+    expect(project(anchor.x, anchor.y, anchor.z, marker)).toBe(true);
+    // The visible Route Point keeps its line: the path starts on the marker.
+    expect(path.start).not.toBe(null);
+    expect(
+      Math.hypot(path.start!.x - marker.x, path.start!.y - marker.y),
+    ).toBeLessThan(0.01);
+    // The far end is behind the globe, so the line stops at the horizon.
+    expect(path.end).toBe(null);
+    expect(path.d.startsWith(`M${marker.x.toFixed(1)} ${marker.y.toFixed(1)}`)).toBe(true);
   });
 
   it("keeps route labels bounded while preserving the first and last stops", () => {

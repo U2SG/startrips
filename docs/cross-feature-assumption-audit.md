@@ -96,7 +96,7 @@ already exercises its subsystem rather than building one large end-to-end suite.
 | Invariant | Automated QA that encodes it |
 | --- | --- |
 | 1. One product mode per viewport | **partial** — `scripts/qa-media-controls.mjs` drives a real phone viewport and asserts the shared `data-mobile-mode` contract on `.journey-story` across its viewer, manage, back and fullscreen-exit checks. That is Story layout state only: nothing asserts the repository-wide half of the invariant, that no other subsystem re-derives posture from a raw width threshold. See the gaps below |
-| 2. One geographic anchor across layers | **none targeted** — see the gaps below |
+| 2. One geographic anchor across layers | **partial, route layer only** — `scripts/qa-route-anchoring.mjs` runs as its own `browser-qa` lane and measures, on the reported US Southwest fixture at 1x, 2x and 3x zoom, the screen distance between every rendered route-line end and the rendered Route Point marker it should meet, failing above 1.5 CSS px; it also asserts that the decorative arc attenuates with zoom and stays inside its screen ceiling. `src/scene/geo.test.ts` proves a leg endpoint resolves to the canonical anchor at every lift strength and `src/scene/routeArcLift.test.ts` covers the attenuation, the screen cap and the near-plane budget. The place-label layer (#196) is still unmeasured. See the gaps below |
 | 3. One tempo, one consumption rate | `src/journey/narrativeTiming.test.ts` for the shared resolver, `src/journey/quickRecapPlayback.test.ts` for recap chapter booking, `src/journey/playbackPrefetchPlan.test.ts` for tempo-aware prefetch distance, plus the `story-mobile-viewer-playback-video-completion` and `playback-runtime-errors` checks in `scripts/qa-media-controls.mjs` |
 | 4. A meaningful route point survives every projection | `src/journey/autoEditPlan.test.ts` validates the plan grammar without narrowing media type, and `src/journey/quickRecapPlayback.test.ts` covers the recap production handoff |
 | 5. Newer intent wins | **none targeted** — see the gaps below |
@@ -117,9 +117,10 @@ cannot rely on is worse than an admitted gap.
   for the route-label safe area, the journey connector and the route-label budget, so a coarse-pointer
   landscape phone at 844x390 resolves compact in Story and desktop in the globe. That divergence is
   tracked in #194; the missing assertion is what let it survive the #58 fix.
-- **High-zoom anchor error** (invariant 2). Nothing measures the screen-space distance between a
-  route endpoint, its marker and its place label at maximum zoom. #193 and #196 were both found
-  by eye.
+- **High-zoom anchor error, place-label half** (invariant 2). The route-endpoint-to-marker distance
+  is measured now (`scripts/qa-route-anchoring.mjs`), but nothing measures a place label or its
+  leader against the point it annotates at maximum zoom, which is the #196 half of the family. #193
+  and #196 were both found by eye.
 - **Focus revision ownership** (invariant 5). Nothing asserts that a late async result is rejected
   after a newer focus intent has already won; the ownership rule is currently enforced only by
   reading the code.

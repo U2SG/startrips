@@ -71,6 +71,20 @@ const globeQaRoutes: JourneyRoute[] = [
     ],
   },
   {
+    // #193 fixture: the reported US Southwest reproduction. Los Angeles and
+    // Yosemite are the pair whose route visibly detached under wheel zoom.
+    id: "qa-route-southwest",
+    color: "#f4ce73",
+    points: [
+      { id: "qa-p-15", lat: 34.0522, lon: -118.2437, isStop: true, label: "Los Angeles" },
+      { id: "qa-p-16", lat: 37.8651, lon: -119.5383, isStop: true, label: "Yosemite" },
+      { id: "qa-p-17", lat: 36.1699, lon: -115.1398, isStop: true, label: "Las Vegas" },
+      { id: "qa-p-18", lat: 35.1894, lon: -114.053, isStop: false, label: "Kingman" },
+      { id: "qa-p-19", lat: 36.9147, lon: -111.4558, isStop: true, label: "Page" },
+      { id: "qa-p-20", lat: 34.0522, lon: -118.2437, isStop: true, label: "Los Angeles" },
+    ],
+  },
+  {
     id: "qa-route-alone-at-sea",
     color: "#ffd166",
     points: [
