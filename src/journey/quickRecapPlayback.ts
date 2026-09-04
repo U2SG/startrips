@@ -3,6 +3,7 @@ import {
   type AutoEditPlanV1,
   type AutoEditTempo,
   type MediaDigestV1,
+  type QuickRecapRouteGeometryV1,
 } from "./autoEditPlan";
 import {
   playbackMediaForPoint,
@@ -120,6 +121,38 @@ export function quickRecapDigestsForJourney(journey: Journey): MediaDigestV1[] {
   });
 }
 
+function noteLengthFor(point: RoutePoint) {
+  return point.note?.trim().length ?? 0;
+}
+
+/**
+ * The route geometry the planner needs, measured on the recap's own route.
+ *
+ * A route point with no visual media never becomes a chapter and is dropped
+ * from the projected Journey, so the camera flies from the previous *surviving*
+ * point. Measuring against the canonical neighbour instead would book a leg the
+ * recap never flies. `candidateRoutePointIds` is `journey.routePoints` filtered,
+ * so it already carries the recap's playing order.
+ */
+function quickRecapRouteGeometry(
+  journey: Journey,
+  candidateRoutePointIds: readonly string[],
+): Record<string, QuickRecapRouteGeometryV1> {
+  const byId = new Map(journey.routePoints.map((point) => [point.id, point]));
+  const geometry: Record<string, QuickRecapRouteGeometryV1> = {};
+  for (const [index, routePointId] of candidateRoutePointIds.entries()) {
+    const point = byId.get(routePointId);
+    if (!point) continue;
+    const previous = index === 0 ? undefined : byId.get(candidateRoutePointIds[index - 1]);
+    geometry[routePointId] = {
+      // The first point has no leg in front of it, so it resolves to the floor.
+      ...(previous ? { angularDistanceFromPrevious: routePointAngularDistance(previous, point) } : {}),
+      noteLength: noteLengthFor(point),
+    };
+  }
+  return geometry;
+}
+
 export function prepareQuickRecapPlaybackResult(
   journey: Journey,
   options: {
@@ -160,6 +193,7 @@ export function prepareQuickRecapPlaybackResult(
     targetDurationMs: chapterBudgetMs,
     tempo,
     generatedAt: options.generatedAt,
+    routePointGeometry: quickRecapRouteGeometry(journey, candidateRoutePointIds),
   });
   if (plan.plannedDurationMs > chapterBudgetMs) return { playback: null, fallbackReason: "over-budget" };
   const selectedIds = new Set(plan.chapters.flatMap((chapter) => chapter.items.map((item) => item.assetId)));
@@ -195,29 +229,20 @@ export function prepareQuickRecapPlayback(
   return prepareQuickRecapPlaybackResult(journey, options).playback;
 }
 
-function noteLengthFor(point: RoutePoint) {
-  return point.note?.trim().length ?? 0;
-}
-
 /**
- * How long one Quick Recap beat lasts at the runtime tempo.
+ * How long one Quick Recap beat lasts.
  *
- * The Edit Plan stays the source of *what* plays and in what order: a step
- * whose route point has no chapter, or whose asset the plan did not select,
- * still resolves to `undefined` and falls through to Full Playback's timing.
- * What the plan no longer decides is *how long*. Travel and arrival used to be
- * read straight out of the frozen plan, where they were one flat camera and one
- * flat arrival value per route point, planned once at `standard` for the whole
- * session; they now go through `resolveNarrativeTiming` with the real route
- * geometry and note length, so the recap answers the tempo control and a nearby
- * leg stops being paced like an intercontinental one (decisions D1 and D2).
- *
- * Media dwell stays pinned by the plan, because the plan's greedy selection
- * budget was measured against exactly those milliseconds; overriding it here
- * would spend a length the budget never booked. Dwell is already tempo-aware
- * and a tempo change rebuilds the plan, so it follows tempo through the plan
- * rather than around it. The resolver only supplies a dwell the plan left
- * unpinned.
+ * The Edit Plan is the source of *what* plays, in what order, and for how long:
+ * a step whose route point has no chapter, or whose asset the plan did not
+ * select, resolves to `undefined` and falls through to Full Playback's timing;
+ * every step the plan does own spends exactly the milliseconds the plan booked.
+ * Camera, arrival and dwell are all read from the frozen plan rather than
+ * re-resolved here, because the plan's greedy budget was measured against those
+ * numbers — resolving independently is how the recap came to play 45.2 s
+ * against a 45 s plan. The plan is now booked with real route geometry and note
+ * length, so reading it back is still distance- and note-aware (decision D2),
+ * and a tempo change rebuilds the plan rather than reinterpreting it (D1). The
+ * resolver is left with one job here: a dwell the plan did not pin.
  *
  * `intro` / `outro` return `undefined` on purpose: the director spends the live
  * tempo profile for those two beats, and `prepareQuickRecapPlaybackResult`
@@ -236,30 +261,13 @@ export function quickRecapStepDurationMs(
   const chapter = plan.chapters.find((candidate) => candidate.routePointId === point.id);
   if (!chapter) return undefined;
 
-  const cameraMs = (index: number) => {
-    const from = journey.routePoints[index - 1];
-    const to = journey.routePoints[index];
-    return resolveNarrativeTiming({
-      mode: "quick-recap",
-      tempo,
-      segmentKind: "travel",
-      // The first route point has no leg to fly, so it resolves to the floor.
-      routeDistanceRadians: from && to ? routePointAngularDistance(from, to) : undefined,
-    });
-  };
-
-  if (step.kind === "travel") return cameraMs(step.to);
+  if (step.kind === "travel") return chapter.camera.durationMs;
   if (step.kind === "stop") {
     // Point 0 has no travel step in front of it, so its chapter camera is paid
-    // for inside the stop — the same fold the frozen-plan reader performed.
-    const firstPointCameraMs = step.pointIndex === 0 ? cameraMs(0) : 0;
-    if (!chapter.arrival) return firstPointCameraMs;
-    return firstPointCameraMs + resolveNarrativeTiming({
-      mode: "quick-recap",
-      tempo,
-      segmentKind: "arrival",
-      noteLength: noteLengthFor(point),
-    });
+    // for inside the stop. Every later chapter's camera belongs to the travel
+    // step that flies into it, so folding it in again here would double-book.
+    const firstPointCameraMs = step.pointIndex === 0 ? chapter.camera.durationMs : 0;
+    return firstPointCameraMs + (chapter.arrival?.durationMs ?? 0);
   }
 
   const asset = playbackMediaForPoint(journey, step.pointIndex)[step.mediaIndex];
