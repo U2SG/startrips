@@ -205,6 +205,16 @@ describe("deterministic auto-edit foundation (#127)", () => {
       expect(validateAutoEditPlanV1(variant, { ...baseInput, routePointIds: ["tokyo"], digests }), primitive)
         .toMatchObject({ valid: true, errors: [] });
     }
+
+    // Permissive is not unbounded. The grammar check is the complement of
+    // `hold`, so on its own it would wave through a primitive that does not
+    // exist; the vocabulary check in the same chapter loop is what stops it.
+    const unknown = structuredClone(plan);
+    unknown.chapters[0]!.camera = { primitive: "barrel-roll" as unknown as typeof plan.chapters[0]["camera"]["primitive"], durationMs: 1_337 };
+    unknown.plannedDurationMs = sumPlannedDurationMs(unknown);
+    const unknownResult = validateAutoEditPlanV1(unknown, { ...baseInput, routePointIds: ["tokyo"], digests });
+    expect(unknownResult.valid).toBe(false);
+    expect(unknownResult.errors).toContain("camera primitive invalid route:tokyo");
   });
 
   it("rejects Quick Recap chapters that break the intro and route choreography (#166)", () => {

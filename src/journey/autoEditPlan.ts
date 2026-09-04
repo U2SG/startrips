@@ -356,6 +356,11 @@ export function buildDeterministicQuickRecapPlan(input: DeterministicQuickRecapI
  * The route travel grammar: every camera primitive except `hold`. It is the
  * complement of `hold`, not a curated list, so a new choreography primitive is
  * accepted on a route chapter without another validator change.
+ *
+ * This is a complement, not a membership test, and it relies on the
+ * unconditional `AUTO_EDIT_CAMERA_PRIMITIVES` check in the same chapter loop to
+ * reject a primitive outside the vocabulary. Both errors accumulate, so a
+ * chapter naming a primitive that does not exist still fails validation.
  */
 function isRouteTravelPrimitive(primitive: AutoEditCameraPrimitive) {
   return primitive !== "hold";
