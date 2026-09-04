@@ -72,6 +72,12 @@ export function parseShareInput(
   return { journeyIds: journeyIds as string[], expiresAt };
 }
 
+/** Byte-order text comparison, matching how Postgres ordered these columns. */
+function compareText(first: string, second: string): number {
+  if (first < second) return -1;
+  return first > second ? 1 : 0;
+}
+
 /**
  * The owner-facing status. `requireAtlasAccess` already refuses a deleting
  * Atlas, so the guest-only `atlas-unavailable` branch cannot appear here.
@@ -108,29 +114,46 @@ shareRoutes.post("/", async (context) => {
   // `requireActiveShareGrant()` rejects on sight, or a foreign-key 500 once
   // the row is gone. Both the Atlas row lock and the Journey rows are taken
   // inside the transaction, so the grant is written against exactly the state
-  // it was authorized against. Lock order is Atlas then Journeys, matching
-  // every other Atlas-scoped write.
+  // it was authorized against. Lock order is Atlas first, then the Journey
+  // rows by ascending id, matching every other Atlas-scoped write.
   const outcome = await db.transaction(async (transaction) => {
     if (!await lockActiveAtlas(transaction, atlas.id)) {
       return { error: "ATLAS_NOT_FOUND" } as const;
     }
 
-    // Canonical Journey chronology is the one deterministic order #200 asks
-    // for, so the stored sortOrder does not depend on how the client listed
-    // the ids — and every caller locks these rows in that same order.
-    const selected = await transaction
-      .select({ id: journeys.id })
+    // The Journey rows are locked in ascending id order, the order every
+    // other multi-Journey write in `uploads.ts` sorts its ids into, so two
+    // writers holding an overlapping selection can never take the same two
+    // rows in opposite orders and deadlock.
+    const locked = await transaction
+      .select({
+        id: journeys.id,
+        startedOn: journeys.startedOn,
+        createdAt: journeys.createdAt,
+      })
       .from(journeys)
       .where(and(
         eq(journeys.atlasId, atlas.id),
         inArray(journeys.id, input.journeyIds),
         isNull(journeys.deletionStartedAt),
       ))
-      .orderBy(asc(journeys.startedOn), asc(journeys.createdAt))
+      .orderBy(asc(journeys.id))
       .for("update");
-    if (selected.length !== input.journeyIds.length) {
+    if (locked.length !== input.journeyIds.length) {
       return { error: "JOURNEY_NOT_FOUND" } as const;
     }
+
+    // Lock order is an implementation detail; the stored sortOrder is not.
+    // Canonical Journey chronology is the one deterministic order #200 asks
+    // for, so the locked rows are re-ordered here and the recorded order
+    // never depends on how the client listed the ids. `startedOn` is a
+    // fixed-width ISO `date` string, so comparing it as text reproduces the
+    // Postgres ordering, and the id breaks the tie the SQL ordering left
+    // open.
+    const selected = [...locked].sort((first, second) =>
+      compareText(first.startedOn, second.startedOn)
+      || first.createdAt.valueOf() - second.createdAt.valueOf()
+      || compareText(first.id, second.id));
 
     const [created] = await transaction
       .insert(shareGrants)
