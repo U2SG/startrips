@@ -2725,7 +2725,7 @@ export function JourneyStory({
         setOverview(false);
       },
       resolveTarget: () => dialogRef.current?.querySelector<HTMLElement>(
-        ".journey-story__media > img, .journey-story__media > video",
+        ".journey-story__media > [data-shared-media-id]",
       ) ?? null,
     });
   }
@@ -2744,8 +2744,11 @@ export function JourneyStory({
     }
 
     const current = scopedMedia[assetIndex];
+    // #204 CFAA: hidden priming/authorization media carries no shared-media id,
+    // so the morph anchors on the visible settled frame instead of a zero-sized
+    // node that would silently drop the shared-element transition.
     const source = dialogRef.current?.querySelector<HTMLElement>(
-      ".journey-story__media > img, .journey-story__media > video",
+      ".journey-story__media > [data-shared-media-id]",
     ) ?? null;
     runSharedElementMorph({
       source,
