@@ -15,7 +15,7 @@ import { db } from "../db/client";
 
 /**
  * What the route needs to sign one guest media read: which backend holds the
- * object, its key, and how long the URL may live.
+ * object, its key, and the instant the signature may not outlive.
  *
  * `storageKey` never leaves the server — the guest payload built by
  * `shared-journey-repository.ts` deliberately omits it, and this value exists
@@ -24,7 +24,23 @@ import { db } from "../db/client";
 export type SharedMediaRead = {
   storageDriver: string;
   storageKey: string;
-  expiresInSeconds: number;
+  /**
+   * The grant's expiry as an absolute instant, not a duration.
+   *
+   * A duration computed here would be measured from whenever this resolver
+   * was entered, while the signature is stamped by the storage adapter's own
+   * later clock. Under a saturated connection pool those two instants can be
+   * seconds apart, and the difference is time the signed URL would live past
+   * the grant. Handing back the deadline instead makes the lifetime the
+   * caller's arithmetic, taken immediately before it signs.
+   */
+  grantExpiresAt: Date;
+};
+
+/** The two configured ceilings, applied on top of the grant's own deadline. */
+export type ShareMediaTtlLimits = {
+  shareTtlSeconds: number;
+  ownerTtlSeconds: number;
 };
 
 /**
@@ -40,9 +56,14 @@ export type SharedMediaRead = {
  * is exactly the guarantee this function exists to keep. The result is
  * therefore 0 for the final sub-second of a grant; the caller refuses rather
  * than signing a URL that is already dead.
+ *
+ * `now` is a parameter with no default on purpose. The only correct value is
+ * the clock read immediately before the signature is stamped, so the caller
+ * has to say which instant it means rather than inheriting one from whenever
+ * the request happened to start.
  */
 export function capShareMediaTtlSeconds(
-  limits: { shareTtlSeconds: number; ownerTtlSeconds: number },
+  limits: ShareMediaTtlLimits,
   expiresAt: Date,
   now: Date,
 ): number {
@@ -87,11 +108,15 @@ export function capShareMediaTtlSeconds(
  * authorization decision and the ownership check then describe one instant, so
  * an owner revoking or moving media concurrently either commits before that
  * instant and is honoured, or after it and cannot be half-applied.
+ *
+ * This resolver deliberately computes no lifetime. It returns the grant's
+ * deadline and the caller derives the TTL from it against the clock it is
+ * about to sign with; `now` here decides only whether the grant is active,
+ * which is a question about this snapshot rather than about the signature.
  */
 export async function resolveSharedMediaRead(
   grant: ActiveShareGrant,
   assetId: string,
-  limits: { shareTtlSeconds: number; ownerTtlSeconds: number },
   now: Date = new Date(),
 ): Promise<SharedMediaRead | null> {
   return db.transaction(
@@ -110,15 +135,6 @@ export async function resolveSharedMediaRead(
       if (!current || evaluateShareGrant(current, now) !== "active") {
         throw shareUnavailable();
       }
-
-      const expiresInSeconds = capShareMediaTtlSeconds(
-        limits,
-        current.expiresAt,
-        now,
-      );
-      // The grant is active but has under a second left. There is no honest
-      // URL to issue here: any presign would outlive the grant it came from.
-      if (expiresInSeconds < 1) throw shareUnavailable();
 
       const [row] = await transaction
         .select({
@@ -140,7 +156,7 @@ export async function resolveSharedMediaRead(
         .limit(1);
       if (!row) return null;
 
-      return { ...row, expiresInSeconds };
+      return { ...row, grantExpiresAt: current.expiresAt };
     },
     { isolationLevel: "repeatable read", accessMode: "read only" },
   );

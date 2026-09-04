@@ -7,6 +7,7 @@ import {
   hashShareToken,
   MAX_SHARE_LIFETIME_MS,
   requireActiveShareGrant,
+  shareUnavailable,
   type ShareGrantStatus,
 } from "../authorization/share-access";
 import { serverConfig } from "../config";
@@ -14,7 +15,13 @@ import { journeys, shareGrantJourneys, shareGrants } from "../db/app-schema";
 import { db } from "../db/client";
 import { lockActiveAtlas } from "../repositories/journey-repository";
 import { loadSharedJourneyView } from "../repositories/shared-journey-repository";
-import { resolveSharedMediaRead } from "../repositories/shared-media-repository";
+import {
+  capShareMediaTtlSeconds,
+  resolveSharedMediaRead,
+  type ShareMediaTtlLimits,
+  type SharedMediaRead,
+} from "../repositories/shared-media-repository";
+import type { MultipartStorage } from "../storage/multipart-storage";
 import { getMultipartStorage } from "../storage/storage-registry";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -388,6 +395,51 @@ sharedRoutes.get("/journeys", async (context) => {
 });
 
 /**
+ * Turn a resolved asset into a signed URL that cannot outlive its grant.
+ *
+ * The lifetime is derived here rather than by the resolver because it has to
+ * be measured from the clock the signature is about to be stamped with. A
+ * duration computed before the authorization transaction ran would be a
+ * promise about a moment already in the past: a request that waited on a
+ * saturated connection pool would take the remaining lifetime it saw at entry
+ * and start counting it from a later instant, so the URL would still be valid
+ * for that long *after* the grant expired. `now` defaults here, one statement
+ * before the presign, and nowhere earlier.
+ *
+ * The post-condition is checked rather than argued. `expiresInSeconds` is a
+ * duration and the adapter stamps its own signing time, so the interface alone
+ * cannot express "not past this instant"; comparing what came back against the
+ * deadline is what makes the guarantee hold for any adapter, including one
+ * that rounds its own expiry up. It refuses rather than returning a URL it
+ * cannot stand behind.
+ *
+ * `resolveStorage` is injectable for tests only; the route always uses the
+ * real registry.
+ */
+export async function signSharedMediaRead(
+  resolved: SharedMediaRead,
+  limits: ShareMediaTtlLimits,
+  now: Date = new Date(),
+  resolveStorage: (driver: string) => MultipartStorage = getMultipartStorage,
+): Promise<{ url: string; expiresAt: string }> {
+  const expiresInSeconds = capShareMediaTtlSeconds(
+    limits,
+    resolved.grantExpiresAt,
+    now,
+  );
+  // The grant is still active but has under a second left. There is no honest
+  // URL to issue: any signature would outlive the grant it came from.
+  if (expiresInSeconds < 1) throw shareUnavailable();
+
+  const signed = await resolveStorage(resolved.storageDriver)
+    .createPrivateReadUrl({ key: resolved.storageKey, expiresInSeconds });
+  if (signed.expiresAt.valueOf() > resolved.grantExpiresAt.valueOf()) {
+    throw shareUnavailable();
+  }
+  return { url: signed.url, expiresAt: signed.expiresAt.toISOString() };
+}
+
+/**
  * #200 phase C: one short-lived signed storage URL for one asset of one
  * active grant.
  *
@@ -424,10 +476,7 @@ sharedRoutes.get("/assets/:assetId/read-url", async (context) => {
   // Postgres raises 22P02, and the generic 500 from `onError` would tell a
   // guest that its id was malformed rather than simply unavailable.
   const resolved = UUID_PATTERN.test(assetId)
-    ? await resolveSharedMediaRead(grant, assetId, {
-      shareTtlSeconds: serverConfig.shareMediaReadUrlExpiresInSeconds,
-      ownerTtlSeconds: serverConfig.mediaReadUrlExpiresInSeconds,
-    })
+    ? await resolveSharedMediaRead(grant, assetId)
     : null;
   if (!resolved) {
     return context.json(
@@ -435,15 +484,8 @@ sharedRoutes.get("/assets/:assetId/read-url", async (context) => {
       404,
     );
   }
-
-  const signed = await getMultipartStorage(
-    resolved.storageDriver,
-  ).createPrivateReadUrl({
-    key: resolved.storageKey,
-    expiresInSeconds: resolved.expiresInSeconds,
-  });
-  return context.json({
-    url: signed.url,
-    expiresAt: signed.expiresAt.toISOString(),
-  });
+  return context.json(await signSharedMediaRead(resolved, {
+    shareTtlSeconds: serverConfig.shareMediaReadUrlExpiresInSeconds,
+    ownerTtlSeconds: serverConfig.mediaReadUrlExpiresInSeconds,
+  }));
 });

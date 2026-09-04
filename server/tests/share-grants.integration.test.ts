@@ -28,7 +28,12 @@ import {
   markJourneyForDeletionForAtlas,
 } from "../repositories/journey-repository";
 import { loadSharedJourneyView } from "../repositories/shared-journey-repository";
-import { resolveSharedMediaRead } from "../repositories/shared-media-repository";
+import {
+  capShareMediaTtlSeconds,
+  resolveSharedMediaRead,
+} from "../repositories/shared-media-repository";
+import { signSharedMediaRead } from "../routes/shares";
+import { disabledStorage } from "../storage/disabled-storage";
 
 const TEST_ORIGIN = "http://127.0.0.1:5173";
 const TOKEN_SHAPE = /^[A-Za-z0-9_-]{43}$/;
@@ -1046,6 +1051,27 @@ describe("guest media read", () => {
     ownerTtlSeconds: serverConfig.mediaReadUrlExpiresInSeconds,
   };
 
+  /**
+   * Object storage is unconfigured here, so the signing step is driven through
+   * an injected adapter for the cases that are about the lifetime rather than
+   * about the bucket. It records the duration it was asked for and honours it
+   * exactly, which is the contract a real presign keeps.
+   */
+  const signedLifetimes: number[] = [];
+  const fakeStorage = () => ({
+    ...disabledStorage,
+    driver: "s3",
+    async createPrivateReadUrl(
+      input: { key: string; expiresInSeconds: number },
+    ) {
+      signedLifetimes.push(input.expiresInSeconds);
+      return {
+        url: "https://storage.test/" + encodeURIComponent(input.key),
+        expiresAt: new Date(Date.now() + input.expiresInSeconds * 1000),
+      };
+    },
+  });
+
   let unsharedJourneyId = "";
   let unsharedAssetId = "";
   let foreignAssetId = "";
@@ -1070,6 +1096,11 @@ describe("guest media read", () => {
       })
       .returning({ id: mediaAssets.id });
     return asset.id;
+  }
+
+  /** A storage key nobody else in this file can collide with. */
+  function uniqueKey(label: string) {
+    return "share-phase-c/" + randomUUID() + "/" + label + ".jpg";
   }
 
   function guestReadUrl(token: string, assetId: string) {
@@ -1132,17 +1163,29 @@ describe("guest media read", () => {
     expect(body).not.toContain(token);
     expect(body).not.toContain(GRANTED_STORAGE_KEY);
 
-    // What the route would have signed: the asset's real key, and a lifetime.
-    const resolved = await resolveSharedMediaRead(
-      await authorizedGrant(token),
-      assetId,
-      LIMITS,
-    );
+    // What the route would have signed: the asset's real key, its grant's
+    // deadline, and - through the injected adapter - an actual URL.
+    const grant = await authorizedGrant(token);
+    const resolved = await resolveSharedMediaRead(grant, assetId);
     expect(resolved).toMatchObject({
       storageDriver: "s3",
       storageKey: GRANTED_STORAGE_KEY,
-      expiresInSeconds: serverConfig.shareMediaReadUrlExpiresInSeconds,
+      grantExpiresAt: grant.expiresAt,
     });
+
+    signedLifetimes.length = 0;
+    const issued = await signSharedMediaRead(
+      resolved!,
+      LIMITS,
+      new Date(),
+      fakeStorage,
+    );
+    expect(issued.url).toContain(encodeURIComponent(GRANTED_STORAGE_KEY));
+    expect(signedLifetimes).toEqual([
+      serverConfig.shareMediaReadUrlExpiresInSeconds,
+    ]);
+    expect(Date.parse(issued.expiresAt))
+      .toBeLessThanOrEqual(grant.expiresAt.valueOf());
   });
 
   it("applies the TTL cap so no signed URL can outlive the grant", async () => {
@@ -1158,25 +1201,84 @@ describe("guest media read", () => {
       new Date(Date.now() + 20_000),
     );
     const short = await authorizedGrant(shortGrant.token);
-    const resolvedShort = await resolveSharedMediaRead(short, assetId, LIMITS);
-    expect(resolvedShort?.expiresInSeconds).toBeLessThanOrEqual(20);
-    expect(resolvedShort?.expiresInSeconds).toBeGreaterThan(0);
+    const resolvedShort = await resolveSharedMediaRead(short, assetId);
+    expect(resolvedShort?.grantExpiresAt).toEqual(short.expiresAt);
+    // The lifetime is derived at signing time from that deadline, which is the
+    // whole point: the clock passed below is the one the signature is stamped
+    // with.
+    signedLifetimes.length = 0;
+    const issued = await signSharedMediaRead(
+      resolvedShort!,
+      LIMITS,
+      new Date(),
+      fakeStorage,
+    );
+    expect(signedLifetimes[0]).toBeLessThanOrEqual(20);
+    expect(signedLifetimes[0]).toBeGreaterThan(0);
     // The promise, stated as the arithmetic it is.
-    expect(Date.now() + (resolvedShort?.expiresInSeconds ?? 0) * 1000)
+    expect(Date.parse(issued.expiresAt))
       .toBeLessThanOrEqual(short.expiresAt.valueOf());
 
     // A long grant is capped by the share ceiling instead, never by the
     // owner's ~15 minutes.
     const longGrant = await authorizedGrant(await createShare([journeyA]));
-    const resolvedLong = await resolveSharedMediaRead(
-      longGrant,
-      assetId,
-      LIMITS,
-    );
-    expect(resolvedLong?.expiresInSeconds)
+    const resolvedLong = await resolveSharedMediaRead(longGrant, assetId);
+    signedLifetimes.length = 0;
+    await signSharedMediaRead(resolvedLong!, LIMITS, new Date(), fakeStorage);
+    expect(signedLifetimes[0])
       .toBe(serverConfig.shareMediaReadUrlExpiresInSeconds);
-    expect(resolvedLong?.expiresInSeconds)
+    expect(signedLifetimes[0])
       .toBeLessThan(serverConfig.mediaReadUrlExpiresInSeconds);
+  });
+
+  it("derives the TTL from the signing clock, not from when the request started", async () => {
+    const assetId = await insertAsset(journeyA, uniqueKey("slow"));
+    const stalled = await insertGrant(
+      identity.atlasId,
+      journeyA,
+      new Date(Date.now() + 30_000),
+    );
+    const grant = await authorizedGrant(stalled.token);
+    const resolved = await resolveSharedMediaRead(grant, assetId);
+
+    // The request is authorized with 30 s left, then stalls - a saturated
+    // connection pool, a slow query - and signs only 25 s later. A lifetime
+    // computed at entry would still be 30 s, and the URL would outlive the
+    // grant by 25 s. Signing-time arithmetic issues 5 s instead.
+    signedLifetimes.length = 0;
+    const late = new Date(grant.expiresAt.valueOf() - 5_000);
+    const issued = await signSharedMediaRead(
+      resolved!,
+      LIMITS,
+      late,
+      fakeStorage,
+    );
+    expect(signedLifetimes[0]).toBe(5);
+    expect(late.valueOf() + signedLifetimes[0] * 1000)
+      .toBeLessThanOrEqual(grant.expiresAt.valueOf());
+    expect(issued.url).toBeTruthy();
+  });
+
+  it("refuses a signature that would reach past the grant deadline", async () => {
+    const assetId = await insertAsset(journeyA, uniqueKey("overrun"));
+    const grant = await authorizedGrant(await createShare([journeyA]));
+    const resolved = await resolveSharedMediaRead(grant, assetId);
+    // An adapter that honours the duration but stamps it from a later clock,
+    // or rounds its own expiry up, must not have its URL reach a guest. The
+    // guarantee is enforced against what came back, not argued from the
+    // interface.
+    const overrunning = () => ({
+      ...disabledStorage,
+      async createPrivateReadUrl() {
+        return {
+          url: "https://storage.test/overrun",
+          expiresAt: new Date(grant.expiresAt.valueOf() + 1_000),
+        };
+      },
+    });
+    await expect(
+      signSharedMediaRead(resolved!, LIMITS, new Date(), overrunning),
+    ).rejects.toThrow(ShareAccessError);
   });
 
   it("signs nothing for the final sub-second of a grant", async () => {
@@ -1185,12 +1287,14 @@ describe("guest media read", () => {
       `share-phase-c/${randomUUID()}/edge.jpg`,
     );
     const grant = await authorizedGrant(await createShare([journeyA]));
+    const resolved = await resolveSharedMediaRead(grant, assetId);
     // 400 ms before the grant expires it is still active, so the refusal has
-    // to come from the TTL cap rather than from the expiry check. `now` is
+    // to come from the TTL cap rather than from the expiry check. The clock is
     // explicit so the case does not depend on wall-clock timing.
     const almostOver = new Date(grant.expiresAt.valueOf() - 400);
+    expect(capShareMediaTtlSeconds(LIMITS, grant.expiresAt, almostOver)).toBe(0);
     await expect(
-      resolveSharedMediaRead(grant, assetId, LIMITS, almostOver),
+      signSharedMediaRead(resolved!, LIMITS, almostOver, fakeStorage),
     ).rejects.toThrow(ShareAccessError);
   });
 
@@ -1201,7 +1305,7 @@ describe("guest media read", () => {
     );
     const token = await createShare([journeyA]);
     const grant = await authorizedGrant(token);
-    expect(await resolveSharedMediaRead(grant, assetId, LIMITS)).not.toBeNull();
+    expect(await resolveSharedMediaRead(grant, assetId)).not.toBeNull();
 
     // The real owner mutation, not an UPDATE: this is the transition #200
     // describes, an owner moving a photo into a journey the link never shared.
@@ -1218,7 +1322,7 @@ describe("guest media read", () => {
 
     // No cache to invalidate: the next call re-derives membership from the
     // asset's current journey and finds nothing.
-    expect(await resolveSharedMediaRead(grant, assetId, LIMITS)).toBeNull();
+    expect(await resolveSharedMediaRead(grant, assetId)).toBeNull();
     const response = await guestReadUrl(token, assetId);
     expect(response.status).toBe(404);
     expect(await response.text()).toBe(MEDIA_UNAVAILABLE_BODY);
@@ -1311,7 +1415,7 @@ describe("guest media read", () => {
     expect(await response.text()).toBe(SHARE_UNAVAILABLE_BODY);
     // And a stale authorization already in hand does not buy one either: the
     // resolver re-evaluates the grant inside its own snapshot.
-    await expect(resolveSharedMediaRead(grant, assetId, LIMITS))
+    await expect(resolveSharedMediaRead(grant, assetId))
       .rejects.toThrow(ShareAccessError);
   });
 
