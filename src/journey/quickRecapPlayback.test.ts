@@ -4,12 +4,16 @@ import {
   playbackMediaForPoint,
   playbackStepIdentity,
   routePointAngularDistance,
+  type PlaybackStep,
 } from "./journeyPlayback";
 import { resolveNarrativeTiming, type NarrativeTempo } from "./narrativeTiming";
+import { validateAutoEditPlanV1 } from "./autoEditPlan";
 import {
   prepareQuickRecapPlayback,
   prepareQuickRecapPlaybackResult,
+  type PreparedQuickRecapPlayback,
   quickRecapDigestsForJourney,
+  quickRecapRouteGeometry,
   quickRecapStepDurationMs,
   remapPlaybackStepIndex,
   QUICK_RECAP_PENDING_VIDEO_DURATION_MS,
@@ -376,17 +380,21 @@ function annotatedFixture(): Journey {
 }
 
 describe("Quick Recap tempo wiring (S1 PR 4)", () => {
-  it("resolves travel and stop differently at every tempo for one fixed plan", () => {
+  it("resolves travel and stop differently at every tempo", () => {
     const journey = annotatedFixture();
-    const prepared = prepareQuickRecapPlayback(journey, { generatedAt: "2026-09-02T00:00:00.000Z" })!;
-    const steps = buildPlaybackSteps(prepared.journey);
-    const travel = steps.find((step) => step.kind === "travel")!;
-    const firstStop = steps.find((step) => step.kind === "stop" && step.pointIndex === 0)!;
-    const secondStop = steps.find((step) => step.kind === "stop" && step.pointIndex === 1)!;
+    // A tempo change rebuilds the plan (`handlePlaybackTempoChange`), and the
+    // rebuilt plan is what carries the new camera and arrival numbers. Reading
+    // one standard-tempo plan at three tempi would have to reinterpret beats the
+    // budget never booked — the drift this pass removes.
+    const stepMsAt = (tempo: NarrativeTempo, find: (step: PlaybackStep) => boolean) => {
+      const prepared = prepareQuickRecapPlayback(journey, { generatedAt: "2026-09-02T00:00:00.000Z", tempo })!;
+      const step = buildPlaybackSteps(prepared.journey).find(find)!;
+      return quickRecapStepDurationMs(prepared.journey, step, prepared.plan, tempo);
+    };
 
-    const travelMs = TEMPI.map((tempo) => quickRecapStepDurationMs(prepared.journey, travel, prepared.plan, tempo));
-    const firstStopMs = TEMPI.map((tempo) => quickRecapStepDurationMs(prepared.journey, firstStop, prepared.plan, tempo));
-    const secondStopMs = TEMPI.map((tempo) => quickRecapStepDurationMs(prepared.journey, secondStop, prepared.plan, tempo));
+    const travelMs = TEMPI.map((tempo) => stepMsAt(tempo, (step) => step.kind === "travel"));
+    const firstStopMs = TEMPI.map((tempo) => stepMsAt(tempo, (step) => step.kind === "stop" && step.pointIndex === 0));
+    const secondStopMs = TEMPI.map((tempo) => stepMsAt(tempo, (step) => step.kind === "stop" && step.pointIndex === 1));
 
     expect(new Set(travelMs).size).toBe(3);
     expect(new Set(firstStopMs).size).toBe(3);
@@ -496,5 +504,158 @@ describe("Quick Recap step identity across a plan rebuild (S1 PR 4)", () => {
     expect(remapPlaybackStepIndex(["a", "b", "c"], ["x", "y"], 2)).toBe(1);
     expect(remapPlaybackStepIndex(["a", "b", "c"], [], 2)).toBe(0);
     expect(remapPlaybackStepIndex([], ["x", "y"], 5)).toBe(1);
+  });
+});
+
+/**
+ * Five intercontinental cities: every leg saturates the quick-recap travel
+ * ceiling, which is exactly where a flat per-route-point overhead under-booked
+ * the recap. Three of the five stops carry a note, so the arrival term moves as
+ * well, and the middle leg to Istanbul is the longest.
+ */
+const FIVE_CITIES: Array<[string, number, number, string | null]> = [
+  ["hong-kong", 22.3193, 114.1694, "启程。"],
+  ["dubai", 25.2048, 55.2708, null],
+  ["istanbul", 41.0082, 28.9784, "在博斯普鲁斯海峡边停留了整个下午。"],
+  ["paris", 48.8566, 2.3522, null],
+  ["new-york", 40.7128, -74.006, "旅程的终点。"],
+];
+
+function intercontinentalFixture(): Journey {
+  const journey = fixture();
+  journey.coverMediaAssetId = null;
+  journey.routePoints = FIVE_CITIES.map(([id, latitude, longitude, note], index) => ({
+    ...point(id, index),
+    latitude,
+    longitude,
+    note,
+  }));
+  journey.media = journey.routePoints.flatMap((routePoint, index) => (
+    [0, 1, 2].map((n) => media(`${routePoint.id}-${n}`, routePoint.id, "image/jpeg", index * 10 + n))
+  ));
+  return journey;
+}
+
+/** Every beat the recap plays, as the director will spend it. */
+function runtimeChapterDurationMs(prepared: PreparedQuickRecapPlayback, tempo: NarrativeTempo) {
+  let total = 0;
+  let unpriced = 0;
+  for (const step of buildPlaybackSteps(prepared.journey)) {
+    if (step.kind === "intro" || step.kind === "outro") continue;
+    const stepMs = quickRecapStepDurationMs(prepared.journey, step, prepared.plan, tempo);
+    if (stepMs === undefined) {
+      unpriced += 1;
+      continue;
+    }
+    total += stepMs;
+  }
+  return { total, unpriced };
+}
+
+describe("Quick Recap planner and runtime timing parity (S1, follow-up to #208 and #210)", () => {
+  it("books exactly what playback spends, at every tempo", () => {
+    for (const tempo of TEMPI) {
+      const prepared = prepareQuickRecapPlayback(intercontinentalFixture(), {
+        generatedAt: "2026-09-04T00:00:00.000Z",
+        tempo,
+      })!;
+      const runtime = runtimeChapterDurationMs(prepared, tempo);
+      // A step the plan does not price falls through to Full Playback's timing,
+      // which the recap budget never booked. Without this assertion a drift
+      // between the step stream and the plan's chapters would read as parity.
+      expect(runtime.unpriced).toBe(0);
+      expect(runtime.total).toBe(prepared.plan.plannedDurationMs);
+      // The whole point: the recap still fits inside its promise once the intro
+      // and outro the director times itself are added back.
+      const framingMs = resolveNarrativeTiming({ mode: "quick-recap", tempo, segmentKind: "intro" })
+        + resolveNarrativeTiming({ mode: "quick-recap", tempo, segmentKind: "outro" });
+      expect(runtime.total + framingMs).toBeLessThanOrEqual(QUICK_RECAP_TARGET_MS);
+    }
+  });
+
+  it("books a long-haul leg above a nearby one instead of one flat camera value", () => {
+    const cameraMsFor = (journey: Journey) => {
+      const prepared = prepareQuickRecapPlayback(journey, { generatedAt: "2026-09-04T00:00:00.000Z" })!;
+      return prepared.plan.chapters.find((chapter) => chapter.routePointId === "p1")!.camera.durationMs;
+    };
+    const nearby = fixture();
+    nearby.routePoints = [
+      { ...point("p0", 0), latitude: 22.30, longitude: 114.10 },
+      { ...point("p1", 1), latitude: 22.32, longitude: 114.13 },
+    ];
+    const longHaul = fixture();
+    longHaul.routePoints = [
+      { ...point("p0", 0), latitude: 22.3, longitude: 114.1 },
+      { ...point("p1", 1), latitude: 51.5, longitude: -0.13 },
+    ];
+
+    expect(cameraMsFor(nearby)).toBeLessThan(cameraMsFor(longHaul));
+  });
+
+  it("books a longer arrival for a stop that carries a note", () => {
+    const journey = annotatedFixture();
+    const noteFree = fixture();
+    const arrivalMsFor = (source: Journey, routePointId: string) => {
+      const prepared = prepareQuickRecapPlayback(source, { generatedAt: "2026-09-04T00:00:00.000Z" })!;
+      return prepared.plan.chapters.find((chapter) => chapter.routePointId === routePointId)!.arrival!.durationMs;
+    };
+
+    expect(arrivalMsFor(journey, "p0")).toBeGreaterThan(arrivalMsFor(noteFree, "p0"));
+    // The longer of the two notes buys the longer arrival.
+    expect(arrivalMsFor(journey, "p1")).toBeGreaterThan(arrivalMsFor(journey, "p0"));
+  });
+
+  it("books the leg the recap actually flies over a route point it drops", () => {
+    const journey = fixture();
+    journey.coverMediaAssetId = null;
+    journey.routePoints = [
+      { ...point("p0", 0), latitude: 22.3, longitude: 114.1 },
+      // No media, so this point never becomes a chapter and the camera flies past it.
+      { ...point("p1", 1), latitude: 35.7, longitude: 139.7 },
+      { ...point("p2", 2), latitude: 51.5, longitude: -0.13 },
+    ];
+    journey.media = [media("p0-a", "p0", "image/jpeg", 0), media("p2-a", "p2", "image/jpeg", 1)];
+
+    const prepared = prepareQuickRecapPlayback(journey, { generatedAt: "2026-09-04T00:00:00.000Z" })!;
+    expect(prepared.journey.routePoints.map((routePoint) => routePoint.id)).toEqual(["p0", "p2"]);
+    expect(prepared.plan.chapters.find((chapter) => chapter.routePointId === "p2")!.camera.durationMs).toBe(
+      resolveNarrativeTiming({
+        mode: "quick-recap",
+        tempo: "standard",
+        segmentKind: "travel",
+        routeDistanceRadians: routePointAngularDistance(journey.routePoints[0], journey.routePoints[2]),
+      }),
+    );
+    expect(runtimeChapterDurationMs(prepared, "standard")).toEqual({
+      total: prepared.plan.plannedDurationMs,
+      unpriced: 0,
+    });
+  });
+
+  it("keeps the geometry-priced plan valid under validateAutoEditPlanV1", () => {
+    const journey = intercontinentalFixture();
+    const prepared = prepareQuickRecapPlayback(journey, { generatedAt: "2026-09-04T00:00:00.000Z" })!;
+    const digests = quickRecapDigestsForJourney(journey);
+
+    expect(validateAutoEditPlanV1(prepared.plan, {
+      journeyId: journey.id,
+      journeyRevision: String(journey.revision),
+      routePointIds: prepared.journey.routePoints.map((routePoint) => routePoint.id),
+      digests,
+      // The plan was priced with this geometry, so validation has to replay the
+      // planner with it too.
+      routePointGeometry: quickRecapRouteGeometry(
+        journey,
+        prepared.journey.routePoints.map((routePoint) => routePoint.id),
+      ),
+    })).toMatchObject({ valid: true, errors: [] });
+
+    for (const chapter of prepared.plan.chapters) {
+      expect(chapter.camera.durationMs).toBeGreaterThan(0);
+      expect(chapter.arrival!.durationMs).toBeGreaterThan(0);
+      for (const item of chapter.items) {
+        if (item.trim) expect(item.trim.inMs).toBe(0);
+      }
+    }
   });
 });

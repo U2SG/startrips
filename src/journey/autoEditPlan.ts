@@ -1,4 +1,4 @@
-import { resolveNarrativeTiming } from "./narrativeTiming";
+import { resolveNarrativeTiming, type NarrativeTimingContext } from "./narrativeTiming";
 
 export const AUTO_EDIT_MODES = ["full", "quick-recap", "keepsake"] as const;
 export type AutoEditMode = typeof AUTO_EDIT_MODES[number];
@@ -95,6 +95,23 @@ export type AutoEditPlanV1 = {
   omittedAssetIds: string[];
 };
 
+/**
+ * The narrative geometry of one route point, as playback will experience it.
+ *
+ * Supplied by the caller because the planner never sees a Journey: it works
+ * from digests and route point ids. `angularDistanceFromPrevious` is the
+ * great-circle distance from the route point that plays *before* this one
+ * (`routePointAngularDistance`), which is the leg the camera actually flies —
+ * for a recap that skips a media-less route point, that is not the canonical
+ * neighbour. `noteLength` is the length of the trimmed note the arrival beat
+ * reads out. Both are optional; an absent term resolves to the quick-recap
+ * floor, which is what a first route point (no leg) and a note-free stop spend.
+ */
+export type QuickRecapRouteGeometryV1 = {
+  angularDistanceFromPrevious?: number;
+  noteLength?: number;
+};
+
 export type DeterministicQuickRecapInput = {
   journeyId: string;
   journeyRevision: string;
@@ -103,6 +120,8 @@ export type DeterministicQuickRecapInput = {
   targetDurationMs: number;
   tempo?: AutoEditTempo;
   generatedAt: string;
+  /** Keyed by route point id, so it cannot fall out of step with `routePointIds`. */
+  routePointGeometry?: Readonly<Record<string, QuickRecapRouteGeometryV1>>;
 };
 
 function technicalScore(digest: MediaDigestV1) {
@@ -144,7 +163,7 @@ function selectDuplicateRepresentatives(digests: MediaDigestV1[]) {
 function quickRecapTiming(
   segmentKind: "travel" | "arrival" | "media",
   tempo: AutoEditTempo,
-  extra: { mediaKind?: "image" | "video"; mediaRole?: AutoEditPhotoRole; intrinsicDurationMs?: number } = {},
+  extra: Omit<NarrativeTimingContext, "mode" | "tempo" | "segmentKind"> = {},
 ) {
   return resolveNarrativeTiming({ mode: "quick-recap", tempo, segmentKind, ...extra });
 }
@@ -250,13 +269,24 @@ export function buildDeterministicQuickRecapPlan(input: DeterministicQuickRecapI
   const introCandidates = representatives.filter((digest) => digest.routePointId === null).sort(stableCandidateSort);
   if (introCandidates[0]) selected.set(introCandidates[0].assetId, introCandidates[0]);
 
-  // Route geometry and notes are not part of the deterministic plan input, so
-  // the resolver is called without a distance or note term and returns the
-  // quick-recap floor for both beats. Distance- and note-aware quick recap
-  // timing arrives with the director wiring, not here.
-  const routeCameraMs = quickRecapTiming("travel", tempo);
-  const routeArrivalMs = quickRecapTiming("arrival", tempo);
-  const baseOverhead = input.routePointIds.length * (routeCameraMs + routeArrivalMs);
+  // Book each route point at the numbers playback will spend on it. The planner
+  // calls the same resolver the runtime step reader calls, with the same
+  // geometry, so `plannedDurationMs` is the recap's real length rather than a
+  // flat per-point estimate. A flat estimate was not a safe upper bound: it
+  // under-booked every long-haul leg and every annotated stop, which is how a
+  // 45 s recap came to play for 45.2 s.
+  const routeBeatMs = (routePointId: string) => {
+    const geometry = input.routePointGeometry?.[routePointId];
+    return {
+      cameraMs: quickRecapTiming("travel", tempo, { routeDistanceRadians: geometry?.angularDistanceFromPrevious }),
+      arrivalMs: quickRecapTiming("arrival", tempo, { noteLength: geometry?.noteLength }),
+    };
+  };
+  const baseOverhead = input.routePointIds
+    .reduce((sum, routePointId) => {
+      const beat = routeBeatMs(routePointId);
+      return sum + beat.cameraMs + beat.arrivalMs;
+    }, 0);
   let selectedDuration = selectedMediaDuration(selected.values(), tempo);
   const optional = representatives
     .filter((digest) => !selected.has(digest.assetId))
@@ -277,7 +307,7 @@ export function buildDeterministicQuickRecapPlan(input: DeterministicQuickRecapI
   }
 
   const chapterOrder: Array<string | null> = [null, ...input.routePointIds];
-  const chapters = chapterOrder.flatMap((routePointId) => {
+  const chapters = chapterOrder.flatMap<AutoEditPlanV1["chapters"][number]>((routePointId) => {
     let imageIndex = 0;
     const chapterItems = [...selected.values()]
       .filter((digest) => digest.routePointId === routePointId)
@@ -300,11 +330,20 @@ export function buildDeterministicQuickRecapPlan(input: DeterministicQuickRecapI
         };
       });
     if (chapterItems.length === 0) return [];
+    if (routePointId === null) {
+      return [{
+        chapterId: "journey-intro",
+        routePointId,
+        camera: { primitive: "hold" as const, durationMs: 0 },
+        items: chapterItems,
+      }];
+    }
+    const beat = routeBeatMs(routePointId);
     return [{
-      chapterId: routePointId === null ? "journey-intro" : `route:${routePointId}`,
+      chapterId: `route:${routePointId}`,
       routePointId,
-      camera: { primitive: routePointId === null ? "hold" as const : "travel" as const, durationMs: routePointId === null ? 0 : routeCameraMs },
-      ...(routePointId === null ? {} : { arrival: { durationMs: routeArrivalMs, showPlaceLabel: true, showNote: true } }),
+      camera: { primitive: "travel" as const, durationMs: beat.cameraMs },
+      arrival: { durationMs: beat.arrivalMs, showPlaceLabel: true, showNote: true },
       items: chapterItems,
     }];
   });
@@ -468,6 +507,16 @@ export function validateAutoEditPlanV1(planInput: unknown, input: {
   journeyRevision: string;
   routePointIds: string[];
   digests: MediaDigestV1[];
+  /**
+   * The same geometry the plan was built with. Validation replays the planner
+   * to check its selection, so a rebuild that priced chapters at the floor
+   * while the plan priced them by distance and note length would reject the
+   * planner's own valid output near the target duration. Optional because a
+   * plan built without geometry is validated without it; the two inputs have
+   * to match, not merely be present. This lives on the validator input rather
+   * than on `AutoEditPlanV1`, which stays at schema version 1.
+   */
+  routePointGeometry?: Readonly<Record<string, QuickRecapRouteGeometryV1>>;
 }) {
   const structural = structurallyValidateAutoEditPlanV1(planInput);
   if (!structural.plan) {
@@ -747,6 +796,7 @@ export function validateAutoEditPlanV1(planInput: unknown, input: {
       targetDurationMs: plan.targetDurationMs,
       tempo: plan.tempo,
       generatedAt: typeof plan.generatedAt === "string" ? plan.generatedAt : "",
+      routePointGeometry: input.routePointGeometry,
     });
     const actualSelectedAssetIds = plan.chapters.flatMap((chapter) => chapter.items.map((item) => item.assetId));
     const expectedSelectedAssetIds = expectedPlan.chapters.flatMap((chapter) => chapter.items.map((item) => item.assetId));
