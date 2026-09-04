@@ -228,7 +228,10 @@ try {
     for (const entry of [MATRIX[6], MATRIX[7]]) {
       const preview = await openPreview(qaState, entry);
       try {
-        await preview.page.waitForSelector(selector, { timeout: 15_000 });
+        // `attached`, not `visible`: a route label is an SVG <text> whose group
+        // may still be at zero reveal opacity, and the computed value is what
+        // this case is about.
+        await preview.page.waitForSelector(selector, { state: "attached", timeout: 30_000 });
         observed[entry.compact ? "compact" : "base"] = await preview.page.evaluate(
           ({ target, prop }) => {
             const element = document.querySelector(target);
@@ -278,6 +281,10 @@ try {
       baseVisibleLabels: counts.base,
       compactCap: 3,
       baseCap: 6,
+      // Reported, not asserted: whether this fixture actually projects more
+      // than the compact cap at desktop, i.e. whether the cap bound here. The
+      // cap arithmetic itself is proved purely in the core lane.
+      capExercised: counts.base > 3,
       failed: !(counts.compact <= 3 && counts.base <= 6 && counts.base >= counts.compact),
     });
   }
