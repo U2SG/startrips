@@ -340,6 +340,30 @@ describe("share grant creation", () => {
     }
   });
 
+  it("rejects a body that is not valid JSON", async () => {
+    const grantsBefore = await db
+      .select({ id: shareGrants.id })
+      .from(shareGrants)
+      .where(eq(shareGrants.atlasId, identity.atlasId));
+    const response = await app.request(`${TEST_ORIGIN}/api/shares`, {
+      method: "POST",
+      headers: authHeaders(identity.cookie),
+      body: '{"journeyIds": [',
+    });
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "INVALID_SHARE",
+    });
+
+    // The route answers a `SyntaxError` with its own envelope rather than the
+    // global `INVALID_JSON`, and never reaches the insert.
+    const grantsAfter = await db
+      .select({ id: shareGrants.id })
+      .from(shareGrants)
+      .where(eq(shareGrants.atlasId, identity.atlasId));
+    expect(grantsAfter).toHaveLength(grantsBefore.length);
+  });
+
   it("requires atlas membership", async () => {
     const anonymous = await app.request(`${TEST_ORIGIN}/api/shares`, {
       method: "POST",
