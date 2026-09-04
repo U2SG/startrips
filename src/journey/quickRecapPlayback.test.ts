@@ -1,11 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { buildPlaybackSteps, playbackMediaForPoint } from "./journeyPlayback";
+import {
+  buildPlaybackSteps,
+  playbackMediaForPoint,
+  playbackStepIdentity,
+  routePointAngularDistance,
+} from "./journeyPlayback";
+import { resolveNarrativeTiming, type NarrativeTempo } from "./narrativeTiming";
 import {
   prepareQuickRecapPlayback,
   prepareQuickRecapPlaybackResult,
   quickRecapDigestsForJourney,
   quickRecapStepDurationMs,
+  remapPlaybackStepIndex,
   QUICK_RECAP_PENDING_VIDEO_DURATION_MS,
+  QUICK_RECAP_TARGET_MS,
 } from "./quickRecapPlayback";
 import type { Journey, JourneyMediaAsset, RoutePoint } from "./types";
 
@@ -154,16 +162,33 @@ describe("Quick Recap playback handoff (#127)", () => {
     expect(journey.media).toHaveLength(6);
   });
 
-  it("uses auto-edit camera, arrival, and photo-role dwell in the live playback step timing", () => {
+  it("resolves camera and arrival from route geometry while the plan keeps pinning dwell", () => {
     const prepared = prepareQuickRecapPlayback(fixture(), { generatedAt: "2026-09-02T00:00:00.000Z" })!;
     const steps = buildPlaybackSteps(prepared.journey);
     const firstStop = steps.find((step) => step.kind === "stop" && step.pointIndex === 0)!;
     const travel = steps.find((step) => step.kind === "travel")!;
     const secondStop = steps.find((step) => step.kind === "stop" && step.pointIndex === 1)!;
     const firstMedia = steps.find((step) => step.kind === "media" && step.pointIndex === 0)!;
+    const legRadians = routePointAngularDistance(
+      prepared.journey.routePoints[0],
+      prepared.journey.routePoints[1],
+    );
+
+    // Point 0 has no leg in front of it, so its folded camera stays at the
+    // quick-recap floor and the stop reads floor + note-free arrival.
     expect(quickRecapStepDurationMs(prepared.journey, firstStop, prepared.plan)).toBe(1_800);
-    expect(quickRecapStepDurationMs(prepared.journey, travel, prepared.plan)).toBe(1_000);
     expect(quickRecapStepDurationMs(prepared.journey, secondStop, prepared.plan)).toBe(800);
+    // The travelled leg is no longer the frozen flat camera value.
+    expect(quickRecapStepDurationMs(prepared.journey, travel, prepared.plan)).toBe(
+      resolveNarrativeTiming({
+        mode: "quick-recap",
+        tempo: "standard",
+        segmentKind: "travel",
+        routeDistanceRadians: legRadians,
+      }),
+    );
+    expect(quickRecapStepDurationMs(prepared.journey, travel, prepared.plan)).toBeGreaterThan(1_000);
+    // Dwell stays the plan's, because the plan's budget was measured with it.
     expect(quickRecapStepDurationMs(prepared.journey, firstMedia, prepared.plan)).toBe(3_100);
   });
 
@@ -336,5 +361,140 @@ describe("Quick Recap visual-media topology (#195)", () => {
     // Photo roles stay photo-only: the hero of the chapter is still a photo.
     expect(chapter.items.find((item) => item.photoRole === "hero")?.assetId).toBe("p0-photo-0");
     expect(chapter.items.find((item) => item.assetId === "p0-video")?.photoRole).toBeUndefined();
+  });
+});
+
+const TEMPI: NarrativeTempo[] = ["fast", "standard", "immersive"];
+
+function annotatedFixture(): Journey {
+  const journey = fixture();
+  journey.routePoints = [
+    { ...point("p0", 0), note: "抵达第一站的说明文字。" },
+    { ...point("p1", 1), note: "一段足够长的到站说明文字，用来验证到站时长随备注长度变化。" },
+  ];
+  return journey;
+}
+
+describe("Quick Recap tempo wiring (S1 PR 4)", () => {
+  it("resolves travel and stop differently at every tempo for one fixed plan", () => {
+    const journey = annotatedFixture();
+    const prepared = prepareQuickRecapPlayback(journey, { generatedAt: "2026-09-02T00:00:00.000Z" })!;
+    const steps = buildPlaybackSteps(prepared.journey);
+    const travel = steps.find((step) => step.kind === "travel")!;
+    const firstStop = steps.find((step) => step.kind === "stop" && step.pointIndex === 0)!;
+    const secondStop = steps.find((step) => step.kind === "stop" && step.pointIndex === 1)!;
+
+    const travelMs = TEMPI.map((tempo) => quickRecapStepDurationMs(prepared.journey, travel, prepared.plan, tempo));
+    const firstStopMs = TEMPI.map((tempo) => quickRecapStepDurationMs(prepared.journey, firstStop, prepared.plan, tempo));
+    const secondStopMs = TEMPI.map((tempo) => quickRecapStepDurationMs(prepared.journey, secondStop, prepared.plan, tempo));
+
+    expect(new Set(travelMs).size).toBe(3);
+    expect(new Set(firstStopMs).size).toBe(3);
+    expect(new Set(secondStopMs).size).toBe(3);
+    // Point 0 has no leg in front of it, so its folded camera is the flat
+    // quick-recap floor at every tempo and only its note-aware arrival moves.
+    expect(firstStopMs[0]!).toBeLessThan(firstStopMs[1]!);
+    expect(firstStopMs[1]!).toBeLessThan(firstStopMs[2]!);
+    expect(travelMs[0]!).toBeLessThan(travelMs[1]!);
+    expect(travelMs[1]!).toBeLessThan(travelMs[2]!);
+    expect(secondStopMs[0]!).toBeLessThan(secondStopMs[1]!);
+    expect(secondStopMs[1]!).toBeLessThan(secondStopMs[2]!);
+  });
+
+  it("changes media dwell with tempo through the rebuilt plan, not around it", () => {
+    const journey = annotatedFixture();
+    const dwellMs = TEMPI.map((tempo) => {
+      const prepared = prepareQuickRecapPlayback(journey, { generatedAt: "2026-09-02T00:00:00.000Z", tempo })!;
+      const steps = buildPlaybackSteps(prepared.journey);
+      const media = steps.find((step) => step.kind === "media" && step.pointIndex === 0)!;
+      return quickRecapStepDurationMs(prepared.journey, media, prepared.plan, tempo);
+    });
+    expect(new Set(dwellMs).size).toBe(3);
+    expect(dwellMs[0]!).toBeLessThan(dwellMs[1]!);
+    expect(dwellMs[1]!).toBeLessThan(dwellMs[2]!);
+  });
+
+  it("stops pacing a nearby leg like an intercontinental one", () => {
+    const nearby = fixture();
+    nearby.routePoints = [
+      { ...point("p0", 0), latitude: 22.30, longitude: 114.10 },
+      { ...point("p1", 1), latitude: 22.32, longitude: 114.13 },
+    ];
+    const longHaul = fixture();
+    longHaul.routePoints = [
+      { ...point("p0", 0), latitude: 22.3, longitude: 114.1 },
+      { ...point("p1", 1), latitude: 51.5, longitude: -0.13 },
+    ];
+
+    const travelMsFor = (journey: Journey) => {
+      const prepared = prepareQuickRecapPlayback(journey, { generatedAt: "2026-09-02T00:00:00.000Z" })!;
+      const travel = buildPlaybackSteps(prepared.journey).find((step) => step.kind === "travel")!;
+      return quickRecapStepDurationMs(prepared.journey, travel, prepared.plan)!;
+    };
+
+    expect(travelMsFor(nearby)).toBeLessThan(travelMsFor(longHaul));
+  });
+
+  it("budgets the intro and outro it actually spends, per tempo", () => {
+    const journey = annotatedFixture();
+    const chapterBudgets = TEMPI.map((tempo) => {
+      const prepared = prepareQuickRecapPlayback(journey, { generatedAt: "2026-09-02T00:00:00.000Z", tempo })!;
+      return prepared.plan.targetDurationMs!;
+    });
+    const expected = TEMPI.map((tempo) => QUICK_RECAP_TARGET_MS
+      - resolveNarrativeTiming({ mode: "quick-recap", tempo, segmentKind: "intro" })
+      - resolveNarrativeTiming({ mode: "quick-recap", tempo, segmentKind: "outro" }));
+    expect(chapterBudgets).toEqual(expected);
+    // `fast` pays less for the two framing beats, so more of the target is left
+    // for chapters; the legacy flat 1200 + 1800 could not express that.
+    expect(chapterBudgets[0]!).toBeGreaterThan(chapterBudgets[2]!);
+  });
+
+  it("rebuilds the plan on a tempo change so the recap keeps its target length", () => {
+    const journey = annotatedFixture();
+    const plans = TEMPI.map((tempo) => prepareQuickRecapPlayback(journey, {
+      generatedAt: "2026-09-02T00:00:00.000Z",
+      tempo,
+    })!.plan);
+    expect(new Set(plans.map((plan) => plan.planId)).size).toBe(3);
+    expect(new Set(plans.map((plan) => plan.plannedDurationMs)).size).toBe(3);
+    for (const [index, tempo] of TEMPI.entries()) {
+      expect(plans[index]!.tempo).toBe(tempo);
+      expect(plans[index]!.plannedDurationMs).toBeLessThanOrEqual(plans[index]!.targetDurationMs!);
+    }
+  });
+});
+
+describe("Quick Recap step identity across a plan rebuild (S1 PR 4)", () => {
+  it("identifies a step by route point or asset, never by index", () => {
+    const prepared = prepareQuickRecapPlayback(fixture(), { generatedAt: "2026-09-02T00:00:00.000Z" })!;
+    const identities = buildPlaybackSteps(prepared.journey)
+      .map((step) => playbackStepIdentity(prepared.journey, step));
+    expect(identities[0]).toBe("intro");
+    expect(identities.at(-1)).toBe("outro");
+    expect(identities).toContain("stop:p0");
+    expect(identities).toContain("travel:p1");
+    expect(identities.some((identity) => identity.startsWith("media:"))).toBe(true);
+    expect(new Set(identities).size).toBe(identities.length);
+  });
+
+  it("keeps the same step when it survives the rebuild", () => {
+    const previous = ["intro", "stop:p0", "media:a", "media:b", "travel:p1", "stop:p1", "outro"];
+    const next = ["intro", "stop:p0", "media:a", "travel:p1", "stop:p1", "outro"];
+    expect(remapPlaybackStepIndex(previous, next, 2)).toBe(2);
+    expect(remapPlaybackStepIndex(previous, next, 5)).toBe(4);
+  });
+
+  it("lands on the nearest surviving step, preferring the one just before it", () => {
+    const previous = ["intro", "stop:p0", "media:a", "media:b", "travel:p1", "stop:p1", "outro"];
+    const next = ["intro", "stop:p0", "media:a", "travel:p1", "stop:p1", "outro"];
+    // media:b is gone; the beat just before it survives at index 2.
+    expect(remapPlaybackStepIndex(previous, next, 3)).toBe(2);
+  });
+
+  it("clamps into the new range when nothing survives", () => {
+    expect(remapPlaybackStepIndex(["a", "b", "c"], ["x", "y"], 2)).toBe(1);
+    expect(remapPlaybackStepIndex(["a", "b", "c"], [], 2)).toBe(0);
+    expect(remapPlaybackStepIndex([], ["x", "y"], 5)).toBe(1);
   });
 });

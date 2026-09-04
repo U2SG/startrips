@@ -3,6 +3,7 @@ import {
   buildPlaybackSteps,
   initialPlaybackState,
   playbackReducer,
+  playbackStepIdentity,
   type JourneyPlaybackPhase,
   type PlaybackControl,
   type PlaybackState,
@@ -30,6 +31,72 @@ export function replanPlaybackTimerBudget(
   return Math.max(0, nextDurationMs * remainingFraction);
 }
 
+/** The elapsed-time budget the director keeps for the beat that is playing. */
+export type PlaybackTimerBudget = { remainingMs: number; fullDurationMs: number };
+
+/** The budget of the beat that stopped playing, tagged with the beat it belongs to. */
+export type PlaybackTimerCarry = PlaybackTimerBudget & { key: string };
+
+/**
+ * Which budget the beat identified by `nextKey` should play with.
+ *
+ * Three cases, in order:
+ *
+ * - Same beat, new length (a tempo change re-resolves it): scale the remaining
+ *   budget so the viewer keeps the fraction of the beat already watched.
+ * - The beat we carried a budget for is the beat we are landing on, and the
+ *   landing is a plan-rebuild remap: restore that carried fraction. A Quick
+ *   Recap rebuild can add or drop beats before the one playing, so the same
+ *   beat comes back under a different step index; without this the surviving
+ *   beat would restart from the top every time the tempo control moved.
+ * - Anything else — an ordinary advance, a user seek, a beat the rebuild
+ *   deleted — starts fresh.
+ *
+ * `carryAllowed` is what separates a rebuild remap from a user seek: seeking
+ * back to a beat is a request to watch it again, not to resume it.
+ */
+export function resolvePlaybackTimerBudget(input: {
+  previousKey: string | null;
+  nextKey: string;
+  current: PlaybackTimerBudget | null;
+  nextFullDurationMs: number;
+  carry: PlaybackTimerCarry | null;
+  carryAllowed: boolean;
+}): { budget: PlaybackTimerBudget; carry: PlaybackTimerCarry | null } {
+  const { previousKey, nextKey, current, nextFullDurationMs, carry, carryAllowed } = input;
+  if (previousKey === nextKey && current) {
+    if (current.fullDurationMs === nextFullDurationMs) return { budget: current, carry };
+    return {
+      budget: {
+        remainingMs: replanPlaybackTimerBudget(
+          current.remainingMs,
+          current.fullDurationMs,
+          nextFullDurationMs,
+        ),
+        fullDurationMs: nextFullDurationMs,
+      },
+      carry,
+    };
+  }
+  if (carryAllowed && carry && carry.key === nextKey) {
+    return {
+      budget: {
+        remainingMs: replanPlaybackTimerBudget(
+          carry.remainingMs,
+          carry.fullDurationMs,
+          nextFullDurationMs,
+        ),
+        fullDurationMs: nextFullDurationMs,
+      },
+      carry: null,
+    };
+  }
+  return {
+    budget: { remainingMs: nextFullDurationMs, fullDurationMs: nextFullDurationMs },
+    carry: previousKey && current ? { key: previousKey, ...current } : carry,
+  };
+}
+
 /**
  * #19 Journey Playback director.
  *
@@ -39,7 +106,23 @@ export function replanPlaybackTimerBudget(
  * element directly — the overlay translates phases into focus/route/media
  * commands.
  */
-export type PlaybackStepDurationResolver = (journey: Journey, step: PlaybackStep) => number | undefined;
+/**
+ * An override for one step's length.
+ *
+ * The director owns tempo state, so it passes its own tempo at the call site
+ * rather than making the caller lift that state: a resolver built in the app
+ * shell (Quick Recap) cannot take tempo as a dependency, but it can receive it
+ * as an argument.
+ */
+export type PlaybackStepDurationResolver = (
+  journey: Journey,
+  step: PlaybackStep,
+  tempo: PlaybackTempo,
+) => number | undefined;
+
+/** The tempo every playback run starts at; callers that pre-build a plan for
+ * the first beat must plan at the same tempo. */
+export const PLAYBACK_INITIAL_TEMPO: PlaybackTempo = "standard";
 
 export function useJourneyPlaybackDirector(
   journey: Journey | null,
@@ -47,12 +130,14 @@ export function useJourneyPlaybackDirector(
   resolveStepDuration?: PlaybackStepDurationResolver,
 ) {
   const [state, setState] = useState<PlaybackState>(initialPlaybackState);
-  const [tempo, setTempo] = useState<PlaybackTempo>("standard");
+  const [tempo, setTempo] = useState<PlaybackTempo>(PLAYBACK_INITIAL_TEMPO);
   const timerRef = useRef<number>(0);
   const timerStepKeyRef = useRef<string | null>(null);
   const timerRemainingMsRef = useRef<number | null>(null);
   const timerFullDurationMsRef = useRef<number | null>(null);
   const timerStartedAtMsRef = useRef<number | null>(null);
+  const timerCarryRef = useRef<PlaybackTimerCarry | null>(null);
+  const pendingRemapSeekRef = useRef(false);
   const journeyRef = useRef(journey);
   journeyRef.current = journey;
 
@@ -73,7 +158,13 @@ export function useJourneyPlaybackDirector(
   const next = useCallback(() => transition({ type: "next" }), [transition]);
   const complete = useCallback(() => transition({ type: "advance" }), [transition]);
   const back = useCallback(() => transition({ type: "previous" }), [transition]);
-  const seek = useCallback((stepIndex: number) => transition({ type: "seek", stepIndex }), [transition]);
+  // `carryProgress` marks a seek that only re-addresses the beat already
+  // playing after a plan rebuild moved it, so the timer resumes it instead of
+  // restarting it. A user seek leaves it unset and gets a fresh beat.
+  const seek = useCallback((stepIndex: number, options?: { carryProgress?: boolean }) => {
+    if (options?.carryProgress) pendingRemapSeekRef.current = true;
+    transition({ type: "seek", stepIndex });
+  }, [transition]);
   const exit = useCallback(() => transition({ type: "exit" }), [transition]);
 
   // The single place a step becomes a number of milliseconds: the injected
@@ -83,7 +174,7 @@ export function useJourneyPlaybackDirector(
   const durationForStep = useCallback((target: PlaybackStep) => {
     const current = journeyRef.current;
     if (!current) return 0;
-    const overrideDurationMs = resolveStepDuration?.(current, target);
+    const overrideDurationMs = resolveStepDuration?.(current, target, tempo);
     return overrideDurationMs !== undefined
       && Number.isFinite(overrideDurationMs)
       && overrideDurationMs >= 0
@@ -96,29 +187,48 @@ export function useJourneyPlaybackDirector(
   // same point in the current beat rather than granting a fresh full timeout.
   useEffect(() => {
     window.clearTimeout(timerRef.current);
+    const carryAllowed = pendingRemapSeekRef.current;
+    pendingRemapSeekRef.current = false;
     if (!journey || !step) {
       timerStepKeyRef.current = null;
       timerRemainingMsRef.current = null;
       timerFullDurationMsRef.current = null;
       timerStartedAtMsRef.current = null;
+      timerCarryRef.current = null;
       return;
     }
 
     const fullDurationMs = durationForStep(step);
-    const stepKey = `${journey.id}:${state.stepIndex}:${step.kind}:${fullDurationMs}`;
-    if (timerStepKeyRef.current !== stepKey) {
-      timerStepKeyRef.current = stepKey;
-      timerRemainingMsRef.current = fullDurationMs;
-      timerFullDurationMsRef.current = fullDurationMs;
-      timerStartedAtMsRef.current = null;
-    } else if (timerFullDurationMsRef.current !== fullDurationMs) {
-      timerRemainingMsRef.current = replanPlaybackTimerBudget(
-        timerRemainingMsRef.current ?? timerFullDurationMsRef.current ?? fullDurationMs,
-        timerFullDurationMsRef.current ?? fullDurationMs,
-        fullDurationMs,
-      );
-      timerFullDurationMsRef.current = fullDurationMs;
-    }
+    // The key identifies *which* beat is playing, deliberately not how long it
+    // is and deliberately not where it sits in the step list. Length is out
+    // because a tempo change re-resolves the same beat to a new one, and that
+    // must scale the remaining budget instead of resetting it. Step index is
+    // out because a Quick Recap rebuild can add or drop beats ahead of the one
+    // playing, which moves the surviving beat to another index; keyed by index
+    // that remap looked like a different beat and restarted the image.
+    //
+    // The remap needs the carry slot as well as the identity key: the rebuild
+    // and the remapping `seek` land in two separate commits, and in the one
+    // between them the director still sees the old index — now pointing at some
+    // other beat — so the running budget has to be parked under its own
+    // identity until the seek arrives.
+    const stepKey = `${journey.id}:${playbackStepIdentity(journey, step)}`;
+    const resolved = resolvePlaybackTimerBudget({
+      previousKey: timerStepKeyRef.current,
+      nextKey: stepKey,
+      current: timerFullDurationMsRef.current === null ? null : {
+        remainingMs: timerRemainingMsRef.current ?? timerFullDurationMsRef.current,
+        fullDurationMs: timerFullDurationMsRef.current,
+      },
+      nextFullDurationMs: fullDurationMs,
+      carry: timerCarryRef.current,
+      carryAllowed,
+    });
+    if (timerStepKeyRef.current !== stepKey) timerStartedAtMsRef.current = null;
+    timerStepKeyRef.current = stepKey;
+    timerRemainingMsRef.current = resolved.budget.remainingMs;
+    timerFullDurationMsRef.current = resolved.budget.fullDurationMs;
+    timerCarryRef.current = resolved.carry;
 
     if (state.paused || hold) return;
 
@@ -145,7 +255,7 @@ export function useJourneyPlaybackDirector(
         timerStartedAtMsRef.current = null;
       }
     };
-  }, [durationForStep, hold, journey, state.stepIndex, state.paused, step, transition]);
+  }, [durationForStep, hold, journey, state.paused, step, transition]);
 
   // Reset when the journey changes.
   useEffect(() => {
@@ -153,8 +263,10 @@ export function useJourneyPlaybackDirector(
     timerRemainingMsRef.current = null;
     timerFullDurationMsRef.current = null;
     timerStartedAtMsRef.current = null;
+    timerCarryRef.current = null;
+    pendingRemapSeekRef.current = false;
     setState(initialPlaybackState());
-    setTempo("standard");
+    setTempo(PLAYBACK_INITIAL_TEMPO);
   }, [journey?.id]);
 
   useEffect(() => () => window.clearTimeout(timerRef.current), []);

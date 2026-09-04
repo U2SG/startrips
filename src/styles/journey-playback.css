@@ -205,12 +205,6 @@
   border: 1px solid var(--atlas-line);
 }
 
-/* Quick Recap hides the tempo control (decision D4), so the control row loses
-   its fourth column instead of leaving a gap where the select used to sit. */
-.journey-playback[data-playback-mode="quick-recap"] .journey-playback__controls {
-  grid-template-columns: 44px 44px 44px minmax(120px, 220px);
-}
-
 .journey-playback__controls button {
   width: 44px;
   height: 44px;
@@ -418,10 +412,6 @@
     grid-template-columns: 44px 44px 44px 64px minmax(60px, 100px);
     gap: 6px;
     bottom: 14px;
-  }
-
-  .journey-playback[data-playback-mode="quick-recap"] .journey-playback__controls {
-    grid-template-columns: 44px 44px 44px minmax(60px, 100px);
   }
 
   .journey-playback__tempo {

@@ -28,12 +28,14 @@ import {
   playbackCameraTargetKey,
   playbackMediaForPoint,
   playbackMediaWaitPolicy,
+  playbackStepIdentity,
   type PlaybackCameraTarget,
   type PlaybackStep,
 } from "./journeyPlayback";
 import { planPrefetchWindow, readyMsAheadForTempo } from "./playbackPrefetchPlan";
 import { syncPlaybackMediaElement } from "./mediaPlaybackSync";
-import { playbackControlsMayAutoHide, playbackTempoControlVisible } from "./playbackControls";
+import { remapPlaybackStepIndex } from "./quickRecapPlayback";
+import { playbackControlsMayAutoHide } from "./playbackControls";
 import type { PlaybackTempo } from "./journeyPlaybackPlan";
 import { journeySoundtrack, stripMediaExtension } from "./journeyModel";
 import { createSoundtrackSampler } from "../motion/audioSampler";
@@ -81,6 +83,7 @@ export function JourneyPlaybackOverlay({
   initialSoundtrackRead,
   reduceMotion,
   stepDurationResolver,
+  onTempoChange,
   playbackMode = "full",
   statusMessage,
 }: {
@@ -92,6 +95,10 @@ export function JourneyPlaybackOverlay({
   initialSoundtrackRead?: { url: string } | null;
   reduceMotion?: boolean;
   stepDurationResolver?: PlaybackStepDurationResolver;
+  // Quick Recap's target duration wins over tempo (decision D1), so the owner of
+  // the Edit Plan has to rebuild it when the runtime tempo changes. Tempo state
+  // stays here in the director; this only reports a change upwards.
+  onTempoChange?: (tempo: PlaybackTempo) => void;
   playbackMode?: "full" | "quick-recap";
   statusMessage?: string | null;
 }) {
@@ -101,7 +108,47 @@ export function JourneyPlaybackOverlay({
   const [hold, setHold] = useState(false);
   const [videoFallbackAssetId, setVideoFallbackAssetId] = useState<string | null>(null);
   const director = useJourneyPlaybackDirector(journey, hold, stepDurationResolver);
-  const { phase, paused, pause, resume, next, back, seek, exit, tempo, setTempo } = director;
+  const { phase, paused, pause, resume, next, back, seek, exit, steps, stepIndex, tempo, setTempo } = director;
+  // Report a real tempo change only. The director resets to the initial tempo
+  // whenever the journey changes, and a rebuilt plan hands us a new `journey`
+  // object every time, so re-announcing the current tempo would loop.
+  const notifiedTempoRef = useRef<PlaybackTempo>(tempo);
+  useEffect(() => {
+    if (notifiedTempoRef.current === tempo) return;
+    notifiedTempoRef.current = tempo;
+    onTempoChange?.(tempo);
+  }, [onTempoChange, tempo]);
+
+  // A Quick Recap rebuild can add or drop beats, so a step index taken before
+  // it is meaningless. Keep the same step when it survives, otherwise land on
+  // the nearest surviving one (`remapPlaybackStepIndex`). Reads the live index
+  // through a ref so the effect fires on a rebuilt journey only, never on an
+  // ordinary step advance.
+  const stepIdentitiesRef = useRef<string[]>([]);
+  const stepIndexRef = useRef(stepIndex);
+  stepIndexRef.current = stepIndex;
+  const stepsRef = useRef(steps);
+  stepsRef.current = steps;
+  const remapJourneyIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    const nextIdentities = journey
+      ? stepsRef.current.map((candidate) => playbackStepIdentity(journey, candidate))
+      : [];
+    const previousIdentities = stepIdentitiesRef.current;
+    stepIdentitiesRef.current = nextIdentities;
+    const sameJourney = remapJourneyIdRef.current === (journey?.id ?? null);
+    remapJourneyIdRef.current = journey?.id ?? null;
+    if (!journey || !sameJourney || previousIdentities.length === 0) return;
+    if (
+      previousIdentities.length === nextIdentities.length
+      && previousIdentities.every((identity, index) => identity === nextIdentities[index])
+    ) return;
+    const target = remapPlaybackStepIndex(previousIdentities, nextIdentities, stepIndexRef.current);
+    // `carryProgress`: this seek re-addresses the beat that is already playing,
+    // so it resumes where it was instead of restarting the image. A beat the
+    // rebuild deleted lands on its neighbour, which the director starts fresh.
+    if (target !== stepIndexRef.current) seek(target, { carryProgress: true });
+  }, [journey, seek]);
   // Review P2: `exit()` only resets the local director; the overlay must also
   // tell the parent to drop playbackJourneyId, or playback can never close.
   const requestClose = useCallback(() => {
@@ -709,19 +756,17 @@ export function JourneyPlaybackOverlay({
             : <IconPlayerPause size={20} stroke={1.35} aria-hidden="true" />}
         </button>
         <button type="button" onClick={next} aria-label="下一个章节"><IconChevronRight size={20} stroke={1.35} aria-hidden="true" /></button>
-        {playbackTempoControlVisible(playbackMode) ? (
-          <label className="journey-playback__tempo">
-            <select
-              value={tempo}
-              aria-label="播放节奏"
-              onChange={(event) => setTempo(event.currentTarget.value as PlaybackTempo)}
-            >
-              <option value="fast">快速</option>
-              <option value="standard">标准</option>
-              <option value="immersive">沉浸</option>
-            </select>
-          </label>
-        ) : null}
+        <label className="journey-playback__tempo">
+          <select
+            value={tempo}
+            aria-label="播放节奏"
+            onChange={(event) => setTempo(event.currentTarget.value as PlaybackTempo)}
+          >
+            <option value="fast">快速</option>
+            <option value="standard">标准</option>
+            <option value="immersive">沉浸</option>
+          </select>
+        </label>
         <div className="journey-playback__progress">
           <span className="journey-playback__progress-fill" style={{ width: `${progress * 100}%` }} />
           <div className="journey-playback__progress-chapters" aria-hidden="true">
