@@ -1510,6 +1510,21 @@
   z-index: 0;
 }
 
+/* #204: the stage <video> is mounted before its own step so a user gesture can
+   authorize the exact node that will play later. Until it owns the stage it
+   must neither take layout nor paint — the `display: block` above outranks the
+   UA `[hidden]` rule, so without this the primed node would occupy the whole
+   stage and clip the current frame. It stays rendered (out of flow and fully
+   transparent) rather than `display: none`, because per-element playback
+   authorization only survives on an element the browser still renders. */
+.journey-story__media > video[hidden],
+.journey-story-fullscreen > video[hidden] {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
 /* #11 two-layer stage: the incoming frame crossfades over the settled base
    frame (180–280ms) and is released only after the switch settles, so a
    slideshow step never flashes an empty stage. */

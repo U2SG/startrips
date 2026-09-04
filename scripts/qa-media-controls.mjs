@@ -810,10 +810,14 @@ try {
     // wait below observes the same window as the assertion.
     const primingEventCount = primingEvents.length;
 
-    await primedVideo.waitFor({ state: "visible", timeout: 7_000 });
+    // The play() recorded after the gesture is the only observable step
+    // boundary here: the stage video is mounted from the start, so element
+    // visibility says nothing about which step the sequence is on. The budget
+    // must therefore cover a full image step (STORY_AUTOPLAY_STEP_MS = 5.2s)
+    // plus the settle that follows it.
     await futureVideoAuthorization.page.waitForFunction((recorded) => (
       window.__qaMediaPlayEvents.slice(recorded).some((event) => event.tagName === "VIDEO")
-    ), primingEventCount, { timeout: 3_000 });
+    ), primingEventCount, { timeout: 10_000 });
     const laterEvents = await futureVideoAuthorization.page.evaluate(() => [...window.__qaMediaPlayEvents]);
     const playsAfterGesture = laterEvents.slice(primingEventCount);
     const reusedAuthorizedVideo = Boolean(
