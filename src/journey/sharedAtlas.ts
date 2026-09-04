@@ -163,6 +163,28 @@ export function sharedAtlasStatusForFailure(
   return null;
 }
 
+/**
+ * The floor on how often an open viewer re-reads its grant.
+ *
+ * Only reached when the browser clock has already passed the reported expiry
+ * and the server still says the grant is live. Without a floor the viewer
+ * would re-read as fast as React re-armed the timer, which is a poll loop
+ * against a public endpoint; with one, the session ends within this interval
+ * of the server agreeing, and that is the authority #200 asks for.
+ */
+export const SHARE_EXPIRY_RECHECK_MIN_MS = 15_000;
+
+/**
+ * How long to wait before re-reading the grant of an open viewer: until the
+ * reported expiry, or the floor above once that moment has passed.
+ */
+export function sharedAtlasRecheckDelayMs(
+  expiresAt: number,
+  now: number,
+): number {
+  return Math.max(SHARE_EXPIRY_RECHECK_MIN_MS, expiresAt - now);
+}
+
 export type SharedAtlasClient = {
   getJourneys: () => Promise<SharedJourneyView>;
   getMediaRead: (assetId: string) => Promise<PrivateMediaRead>;
@@ -200,7 +222,19 @@ async function readGuestJson<T>(
       payload?.message ?? `请求失败 (${response.status})`,
     );
   }
-  return response.json() as Promise<T>;
+  try {
+    return await (response.json() as Promise<T>);
+  } catch (error) {
+    // A 200 whose body is empty or truncated — an interrupted transfer, or a
+    // proxy that answered for the origin. `response.json()` rejects with a
+    // plain `SyntaxError`, which is not a `SharedAtlasError`, so the viewer
+    // would ignore it and sit on the loading screen with nothing to retry.
+    // It is a transport failure and is reported as one.
+    throw new SharedAtlasError(
+      "network",
+      error instanceof Error ? error.message : "响应内容无法解析",
+    );
+  }
 }
 
 /**

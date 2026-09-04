@@ -6,6 +6,8 @@ import {
   createShareTokenHolder,
   createSharedAtlasClient,
   isSharedAtlasPathname,
+  SHARE_EXPIRY_RECHECK_MIN_MS,
+  sharedAtlasRecheckDelayMs,
   readShareTokenFromHash,
   sharedAtlasJourneys,
   sharedAtlasScopeIsClosed,
@@ -123,6 +125,26 @@ describe("createShareTokenHolder", () => {
     hash = `#${TOKEN}`;
     expect(holder()).toBeNull();
     expect(readHash).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("sharedAtlasRecheckDelayMs", () => {
+  const now = 1_700_000_000_000;
+
+  it("waits until the reported expiry while it is still ahead", () => {
+    expect(sharedAtlasRecheckDelayMs(now + 600_000, now)).toBe(600_000);
+  });
+
+  it("falls back to the floor once the expiry has passed on this clock", () => {
+    // A browser clock running ahead of the server: the grant is still live, so
+    // the read succeeds and the viewer re-arms. Without a floor that would be
+    // a poll loop against a public endpoint.
+    expect(sharedAtlasRecheckDelayMs(now - 1, now)).toBe(SHARE_EXPIRY_RECHECK_MIN_MS);
+    expect(sharedAtlasRecheckDelayMs(now - 3_600_000, now)).toBe(SHARE_EXPIRY_RECHECK_MIN_MS);
+  });
+
+  it("never schedules sooner than the floor", () => {
+    expect(sharedAtlasRecheckDelayMs(now + 1_000, now)).toBe(SHARE_EXPIRY_RECHECK_MIN_MS);
   });
 });
 

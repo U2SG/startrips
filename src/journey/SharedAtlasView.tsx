@@ -11,6 +11,7 @@ import {
   SharedAtlasError,
   createSharedAtlasClient,
   sharedAtlasJourneys,
+  sharedAtlasRecheckDelayMs,
   sharedAtlasScopeIsClosed,
   sharedAtlasStatusForFailure,
   shareToken,
@@ -65,12 +66,21 @@ type SharedAtlasState = {
   message: string;
   /** The grant expiry the last successful read reported, in epoch ms. */
   expiresAt: number | null;
+  /**
+   * How many successful grant reads have happened. The expiry check below
+   * depends on it, so a read that succeeds because this browser's clock ran
+   * ahead of the server re-arms the timer instead of being the last one: the
+   * expiry and the status are both unchanged in that case, and without a
+   * distinct value React would keep the stale timer and never look again.
+   */
+  reads: number;
 };
 
 const LOADING_STATE: SharedAtlasState = {
   status: "loading",
   message: "",
   expiresAt: null,
+  reads: 0,
 };
 
 /**
@@ -138,11 +148,12 @@ export function SharedAtlasView({
         );
       }
       const expiresAt = Date.parse(view.share.expiresAt);
-      setState({
+      setState((current) => ({
         status: view.journeys.length === 0 ? "empty" : "ready",
         message: "",
         expiresAt: Number.isFinite(expiresAt) ? expiresAt : null,
-      });
+        reads: current.reads + 1,
+      }));
       return sharedAtlasJourneys(view);
     } catch (error) {
       reportFailure(error);
@@ -178,7 +189,7 @@ export function SharedAtlasView({
 
   useEffect(() => {
     if (!client) {
-      setState({ status: "unavailable", message: "这条分享链接已失效", expiresAt: null });
+      setState({ status: "unavailable", message: "这条分享链接已失效", expiresAt: null, reads: 0 });
       return;
     }
     let cancelled = false;
@@ -195,17 +206,17 @@ export function SharedAtlasView({
   // must not be the authority either. When the reported expiry passes with the
   // viewer still open, re-read the grant: the server answers the generic 404
   // and the session ends, or — if this browser's clock ran fast — it answers
-  // with the current payload and a fresh expiry, and nothing happens.
+  // with the current payload, `reads` advances, and this re-arms for another
+  // pass rather than giving up after one wrong guess about the time.
   useEffect(() => {
     if (state.expiresAt === null) return;
     if (state.status !== "ready" && state.status !== "empty") return;
-    const delay = Math.max(1_000, state.expiresAt - Date.now());
     const timer = window.setTimeout(
       () => void readSharedJourneys().catch(() => undefined),
-      delay,
+      sharedAtlasRecheckDelayMs(state.expiresAt, Date.now()),
     );
     return () => window.clearTimeout(timer);
-  }, [state.expiresAt, state.status, readSharedJourneys]);
+  }, [state.expiresAt, state.status, state.reads, readSharedJourneys]);
 
   if (state.status === "unavailable" || state.status === "error") {
     const unavailable = state.status === "unavailable";

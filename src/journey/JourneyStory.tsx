@@ -3452,7 +3452,7 @@ export function JourneyStory({
                 <span>{scopedMedia.length > 0 ? `${assetIndex + 1} / ${scopedMedia.length}` : "0 / 0"}</span>
                 <button type="button" disabled={assetIndex === scopedMedia.length - 1 || mutationPending} onClick={() => navigateToMedia(assetIndex + 1)} aria-label="下一个媒体"><IconArrowRight size={17} stroke={1.35} aria-hidden="true" /></button>
                 </nav>
-                {asset && visualMedia.length > 1 ? (
+                {manageMedia && asset && visualMedia.length > 1 ? (
                   <div className="journey-story__media-order" role="group" aria-label="媒体排序">
                     <span>排序</span>
                     <IconActionButton type="button" disabled={!canMoveEarlier || mutationPending} onClick={() => void moveMedia(-1)} label="向前调整媒体顺序" tooltip="上移媒体"><IconArrowUp size={16} stroke={1.35} aria-hidden="true" /></IconActionButton>
@@ -3504,7 +3504,7 @@ export function JourneyStory({
                       : <IconPlayerPlay size={19} stroke={1.5} aria-hidden="true" />}
                   </IconActionButton>
                 ) : null}
-                <IconActionButton
+                {manageMedia ? <IconActionButton
                   type="button"
                   className="journey-story__mobile-media-menu-trigger"
                   buttonRef={mobileManageViewerTriggerRef}
@@ -3524,7 +3524,7 @@ export function JourneyStory({
                   }}
                 >
                   <IconDots size={19} stroke={1.5} aria-hidden="true" />
-                </IconActionButton>
+                </IconActionButton> : null}
                 {mobileManageMode && mobileMediaMenuOpen && mediaDeleteState === "idle" ? (
                   <>
                     <button

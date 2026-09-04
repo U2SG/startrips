@@ -42,6 +42,8 @@ const FORBIDDEN_CONTROL_TEXT = [
   "记录第一段旅程",
   "下一段旅程",
   "管理旅程",
+  "管理当前媒体",
+  "媒体排序",
   "编辑旅程",
   "删除旅程",
   "添加照片或视频",
@@ -619,7 +621,9 @@ try {
       { timeout: 20_000 },
     );
     state.journeysStatus = 404;
-    await page.locator('[data-shared-atlas-state="unavailable"]').waitFor({ timeout: 20_000 });
+    // The viewer re-reads at SHARE_EXPIRY_RECHECK_MIN_MS (15 s) at the
+    // earliest, so this waits well past that floor rather than racing it.
+    await page.locator('[data-shared-atlas-state="unavailable"]').waitFor({ timeout: 45_000 });
     const expired = await page.evaluate(() => ({
       text: document.body.innerText,
       atlas: document.querySelectorAll(".living-atlas").length,
