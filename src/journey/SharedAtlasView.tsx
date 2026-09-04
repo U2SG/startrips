@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { IconRoute, IconWorld } from "@tabler/icons-react";
 import { StartripsBrandLoader } from "../brand/StartripsBrandMark";
+import { usePersistentEarth } from "../scene/LivingAtlasGlobe";
 import {
   AtlasViewProvider,
   GUEST_ATLAS_VIEW_CAPABILITIES,
@@ -105,6 +106,7 @@ export function SharedAtlasView({
   readToken?: () => string | null;
 } = {}) {
   usePrivateDocumentHeaders();
+  const persistentEarth = usePersistentEarth();
   const [state, setState] = useState<SharedAtlasState>(LOADING_STATE);
   const [attempt, setAttempt] = useState(0);
   // Resolved once per mount from a holder that itself reads the fragment once
@@ -201,6 +203,17 @@ export function SharedAtlasView({
     );
     return () => { cancelled = true; };
   }, [client, readSharedJourneys, attempt]);
+
+  // The globe lives in the persistent earth host, which only renders its scene
+  // once a stage has been declared. `AuthGateway` normally does that, and it
+  // does not mount here — without this the shared viewer would render the whole
+  // Atlas shell around an empty space where the globe belongs. There is no
+  // login and no handoff on this route, so the stage goes straight to `atlas`
+  // once the grant resolves, and back to `idle` for the gate states so no globe
+  // sits behind the unavailable panel.
+  useEffect(() => {
+    persistentEarth.setStage(state.status === "ready" ? "atlas" : "idle");
+  }, [persistentEarth, state.status]);
 
   // #200: expiry must not be enforced only at page load, and the client clock
   // must not be the authority either. When the reported expiry passes with the

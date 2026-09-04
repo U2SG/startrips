@@ -219,7 +219,13 @@ try {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await page.goto(shareUrl(), { waitUntil: "domcontentloaded" });
     await page.locator(".living-atlas").waitFor({ timeout: 30_000 });
-    await page.locator('[data-scene-ready="true"]').waitFor({ timeout: 30_000 });
+    // The scene lives inside the aria-hidden persistent-earth host, so this
+    // reads its readiness attribute rather than asking about visibility.
+    await page.waitForFunction(
+      () => document.querySelector(".particle-earth-scene")?.getAttribute("data-scene-ready") === "true",
+      undefined,
+      { timeout: 30_000 },
+    );
 
     const compact = await page.evaluate(
       (query) => window.matchMedia(query).matches,
@@ -337,7 +343,13 @@ try {
     await page.setViewportSize({ width: 1280, height: 800 });
     await page.goto(shareUrl(), { waitUntil: "domcontentloaded" });
     await page.locator(".living-atlas").waitFor({ timeout: 30_000 });
-    await page.locator('[data-scene-ready="true"]').waitFor({ timeout: 30_000 });
+    // The scene lives inside the aria-hidden persistent-earth host, so this
+    // reads its readiness attribute rather than asking about visibility.
+    await page.waitForFunction(
+      () => document.querySelector(".particle-earth-scene")?.getAttribute("data-scene-ready") === "true",
+      undefined,
+      { timeout: 30_000 },
+    );
 
     // A guest reaches a Journey through the rail, exactly like an owner.
     await page.locator(".living-atlas__journey-rail ol li button").first().click();
@@ -584,7 +596,13 @@ try {
     const { page } = await newGuestPage(context, state);
     await page.goto(shareUrl(), { waitUntil: "domcontentloaded" });
     await page.locator(".living-atlas").waitFor({ timeout: 30_000 });
-    await page.locator('[data-scene-ready="true"]').waitFor({ timeout: 30_000 });
+    // The scene lives inside the aria-hidden persistent-earth host, so this
+    // reads its readiness attribute rather than asking about visibility.
+    await page.waitForFunction(
+      () => document.querySelector(".particle-earth-scene")?.getAttribute("data-scene-ready") === "true",
+      undefined,
+      { timeout: 30_000 },
+    );
     // Give every read-url attempt time to fail.
     await page.waitForTimeout(900);
     const survived = await page.evaluate(() => ({
