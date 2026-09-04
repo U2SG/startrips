@@ -190,6 +190,47 @@ describe("deterministic auto-edit foundation (#127)", () => {
     expect(result.errors).toContain("invalid trim clip");
   });
 
+  it("rejects a source-bounded Quick Recap trim whose in-point is not zero", () => {
+    const digests = [digest("clip", "tokyo", 0, {
+      mediaType: "video",
+      mimeType: "video/mp4",
+      intrinsic: { durationMs: 12_000 },
+    })];
+    const plan = buildDeterministicQuickRecapPlan({
+      ...baseInput,
+      routePointIds: ["tokyo"],
+      targetDurationMs: 60_000,
+      digests,
+    });
+    // Phase 1 of #195 keeps a Quick Recap video whole, so the planner itself
+    // never emits a late in-point.
+    expect(plan.chapters[0]!.items[0]!.trim!.inMs).toBe(0);
+    expect(validateAutoEditPlanV1(plan, { ...baseInput, routePointIds: ["tokyo"], digests }).valid).toBe(true);
+
+    // An externally authored plan selecting the clip's final second stays inside
+    // the source bounds and reconciles with `plannedDurationMs`, so neither the
+    // bounds check nor the duration recompute catches it. Live playback would
+    // still autoplay the clip from 0 and hold the step until `ended`, i.e. play
+    // the *first* second while claiming the last one.
+    const forged = structuredClone(plan);
+    forged.chapters[0]!.items[0]!.trim = { inMs: 9_000, outMs: 10_000 };
+    forged.plannedDurationMs = sumPlannedDurationMs(forged);
+    const result = validateAutoEditPlanV1(forged, { ...baseInput, routePointIds: ["tokyo"], digests });
+    expect(result.valid).toBe(false);
+    expect(result.errors).toContain("trim in-point unsupported clip");
+    expect(result.errors).not.toContain("invalid trim clip");
+    expect(result.errors).not.toContain("planned duration mismatch");
+
+    // A zero in-point selecting a shorter window remains legitimate: the media
+    // element starts where the plan says it starts.
+    const shortened = structuredClone(plan);
+    shortened.chapters[0]!.items[0]!.trim = { inMs: 0, outMs: 1_000 };
+    shortened.plannedDurationMs = sumPlannedDurationMs(shortened);
+    const shortenedResult = validateAutoEditPlanV1(shortened, { ...baseInput, routePointIds: ["tokyo"], digests });
+    expect(shortenedResult.errors).toEqual([]);
+    expect(shortenedResult.valid).toBe(true);
+  });
+
   it("accepts any route travel primitive and any resolver-shaped Quick Recap timing", () => {
     const digests = [digest("tokyo-photo", "tokyo", 0)];
     const plan = buildDeterministicQuickRecapPlan({

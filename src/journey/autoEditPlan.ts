@@ -704,11 +704,23 @@ export function validateAutoEditPlanV1(planInput: unknown, input: {
           || item.trim.outMs > sourceDuration
         ) {
           errors.push(`invalid trim ${item.assetId}`);
-        } else if (
-          plan.mode === "full"
-          && (item.trim.inMs !== 0 || item.trim.outMs !== sourceDuration)
-        ) {
-          errors.push(`full video trim mismatch ${item.assetId}`);
+        } else {
+          if (item.trim.inMs !== 0) {
+            // No playback path seeks a <video> to a declared in-point: the
+            // element autoplays from the beginning and the step completes on the
+            // real `ended` event, while `quickRecapStepDurationMs()` measures
+            // only `outMs - inMs`. A non-zero in-point would therefore claim a
+            // later segment and play the opening one instead. Deliberately
+            // mode-independent - the limitation is in the shared media element,
+            // not in one mode - and lifted only when trim-aware playback lands.
+            errors.push(`trim in-point unsupported ${item.assetId}`);
+          }
+          if (
+            plan.mode === "full"
+            && (item.trim.inMs !== 0 || item.trim.outMs !== sourceDuration)
+          ) {
+            errors.push(`full video trim mismatch ${item.assetId}`);
+          }
         }
       }
     }
