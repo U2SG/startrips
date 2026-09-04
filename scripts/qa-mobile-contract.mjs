@@ -39,7 +39,12 @@ const SURFACES = {
   "journey-routes": [".particle-earth-scene"],
 };
 
-const browser = await launchQaBrowser();
+// The journey-routes preview needs a real WebGL context for the particle globe
+// to build its route layer, and the CI runner has no GPU - the same software
+// rasteriser the other globe lanes use.
+const browser = await launchQaBrowser({
+  args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"],
+});
 const checks = [];
 let failed = false;
 
