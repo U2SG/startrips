@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { AuthGateway } from "./auth/AuthGateway";
 import { LivingAtlasApp } from "./journey/LivingAtlasApp";
+import { useCompactMobileLayout } from "./journey/mobileLayout";
 import { JourneyComposer } from "./journey/JourneyComposer";
 import { JourneyStory } from "./journey/JourneyStory";
 import { JourneyPlaybackOverlay } from "./journey/JourneyPlaybackOverlay";
@@ -94,6 +95,10 @@ const globeQaRoutes: JourneyRoute[] = [
 ];
 
 function JourneyRoutesQaPreview() {
+  // #194: the preview is a second owner of the scene, so it supplies the same
+  // compact flag the product owner does - otherwise the QA lane that measures
+  // the contract would always see the desktop default.
+  const compactMobileLayout = useCompactMobileLayout();
   const [activeRouteId, setActiveRouteId] = useState<string | null>(null);
   const [focusRevision, setFocusRevision] = useState(0);
   const activeRoute = globeQaRoutes.find((route) => route.id === activeRouteId) ?? null;
@@ -128,6 +133,7 @@ function JourneyRoutesQaPreview() {
           dragToRotate
           wheelToZoom
           reduceMotion={new URLSearchParams(window.location.search).get("qaMotion") !== "animate"}
+          compactMobileLayout={compactMobileLayout}
         />
       </div>
       <div

@@ -106,6 +106,8 @@ jobs:
             command: pnpm qa:final-acceptance
           - name: route-anchoring
             command: pnpm qa:route-anchoring
+          - name: mobile-contract
+            command: pnpm qa:mobile-contract
     steps:
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6

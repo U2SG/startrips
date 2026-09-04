@@ -38,6 +38,7 @@ import { remapPlaybackStepIndex } from "./quickRecapPlayback";
 import { playbackControlsMayAutoHide } from "./playbackControls";
 import type { PlaybackTempo } from "./journeyPlaybackPlan";
 import { journeySoundtrack, stripMediaExtension } from "./journeyModel";
+import { compactMobileLayoutMarker, useCompactMobileLayout } from "./mobileLayout";
 import { createSoundtrackSampler } from "../motion/audioSampler";
 import {
   resetAudioAtmosphereEnergy,
@@ -102,6 +103,9 @@ export function JourneyPlaybackOverlay({
   playbackMode?: "full" | "quick-recap";
   statusMessage?: string | null;
 }) {
+  // #194: the one product-level compact-mobile answer, published as an
+  // attribute so journey-playback.css never states a breakpoint of its own.
+  const compactMobileLayout = useCompactMobileLayout();
   // Review P2: hold the director while a media chapter's image is not yet
   // decoded, so a slow network never flashes an empty frame — the chapter
   // waits on the decode settle instead of advancing on a fixed timer.
@@ -637,6 +641,9 @@ export function JourneyPlaybackOverlay({
       role="dialog"
       aria-modal="true"
       aria-label="播放旅程"
+      // #194: Playback follows the one product-level compact-mobile contract
+      // instead of a breakpoint of its own; journey-playback.css keys off this.
+      data-mobile-v2={compactMobileLayoutMarker(compactMobileLayout)}
       data-playback-phase={step?.kind ?? "idle"}
       data-playback-mode={playbackMode}
       data-playback-step={director.stepIndex}

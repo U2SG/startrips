@@ -41,6 +41,7 @@ import {
   type CityPoint,
 } from "./cityLabels";
 import type { PlaybackTravelChoreography } from "../journey/journeyPlayback";
+import { compactMobileLayoutMarker } from "../journey/mobileLayout";
 import type { JourneyRoute } from "../journey/types";
 import {
   buildArtworkPointPositions,
@@ -4688,6 +4689,9 @@ export function ParticleEarthScene({
     <div
       ref={hostRef}
       className="particle-earth-scene"
+      // #194: the overlays this scene draws are styled from the injected
+      // product mode, so app.css keys off this instead of a breakpoint.
+      data-mobile-v2={compactMobileLayoutMarker(compactMobileLayout)}
       data-scene-ready={ready ? "true" : "false"}
       data-personal-point-interactive={
         centerFocusPoint && onFocusPointActivate ? "true" : "false"

@@ -403,29 +403,26 @@
   }
 }
 
-/* #194: Playback landed after #58 and must use the one product-level
-   compact-mobile contract, not a width-only breakpoint. Keep this prelude
-   byte-identical to COMPACT_MOBILE_MEDIA_QUERY in src/journey/mobileLayout.ts;
-   src/journey/compactMobileContract.test.ts fails the build if it drifts. */
-@media (max-width: 760px), (max-width: 960px) and (max-height: 480px) and (any-pointer: coarse) {
-  .journey-playback__stage {
-    padding: 24px;
-  }
+/* #194: Playback compacts for the product interaction mode. The overlay
+   publishes data-mobile-v2 from useCompactMobileLayout(), so this file states
+   no breakpoint of its own and cannot drift from COMPACT_MOBILE_MEDIA_QUERY. */
 
-  .journey-playback__controls {
-    grid-template-columns: 44px 44px 44px 64px minmax(60px, 100px);
-    gap: 6px;
-    bottom: 14px;
-  }
+.journey-playback[data-mobile-v2="on"] .journey-playback__stage {
+  padding: 24px;
+}
 
-  .journey-playback__tempo {
-    min-width: 64px;
-  }
+.journey-playback[data-mobile-v2="on"] .journey-playback__controls {
+  grid-template-columns: 44px 44px 44px 64px minmax(60px, 100px);
+  gap: 6px;
+  bottom: 14px;
+}
 
-  .journey-playback__soundtrack {
-    right: 12px;
-    bottom: 88px;
-    width: min(180px, 36vw);
-  }
+.journey-playback[data-mobile-v2="on"] .journey-playback__tempo {
+  min-width: 64px;
+}
 
+.journey-playback[data-mobile-v2="on"] .journey-playback__soundtrack {
+  right: 12px;
+  bottom: 88px;
+  width: min(180px, 36vw);
 }
