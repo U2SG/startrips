@@ -76,6 +76,21 @@ export function useJourneyPlaybackDirector(
   const seek = useCallback((stepIndex: number) => transition({ type: "seek", stepIndex }), [transition]);
   const exit = useCallback(() => transition({ type: "exit" }), [transition]);
 
+  // The single place a step becomes a number of milliseconds: the injected
+  // resolver when it answers, the tempo profile otherwise. The timer below and
+  // #197's prefetch window both read durations through this, so the window is
+  // always planned against the beats that actually play.
+  const durationForStep = useCallback((target: PlaybackStep) => {
+    const current = journeyRef.current;
+    if (!current) return 0;
+    const overrideDurationMs = resolveStepDuration?.(current, target);
+    return overrideDurationMs !== undefined
+      && Number.isFinite(overrideDurationMs)
+      && overrideDurationMs >= 0
+      ? overrideDurationMs
+      : playbackStepDurationForTempo(current, target, PLAYBACK_TEMPO_PROFILES[tempo]);
+  }, [resolveStepDuration, tempo]);
+
   // Keep one elapsed-time budget per expanded step. Pausing (or decode hold)
   // freezes that budget instead of discarding it, so resume continues from the
   // same point in the current beat rather than granting a fresh full timeout.
@@ -89,13 +104,7 @@ export function useJourneyPlaybackDirector(
       return;
     }
 
-    const overrideDurationMs = resolveStepDuration?.(journey, step);
-    const profile = PLAYBACK_TEMPO_PROFILES[tempo];
-    const fullDurationMs = overrideDurationMs !== undefined
-      && Number.isFinite(overrideDurationMs)
-      && overrideDurationMs >= 0
-      ? overrideDurationMs
-      : playbackStepDurationForTempo(journey, step, profile);
+    const fullDurationMs = durationForStep(step);
     const stepKey = `${journey.id}:${state.stepIndex}:${step.kind}:${fullDurationMs}`;
     if (timerStepKeyRef.current !== stepKey) {
       timerStepKeyRef.current = stepKey;
@@ -136,7 +145,7 @@ export function useJourneyPlaybackDirector(
         timerStartedAtMsRef.current = null;
       }
     };
-  }, [hold, journey, resolveStepDuration, state.stepIndex, state.paused, step, tempo, transition]);
+  }, [durationForStep, hold, journey, state.stepIndex, state.paused, step, transition]);
 
   // Reset when the journey changes.
   useEffect(() => {
@@ -156,6 +165,7 @@ export function useJourneyPlaybackDirector(
     steps,
     stepIndex: state.stepIndex,
     step,
+    durationForStep,
     phase,
     paused: state.paused,
     tempo,

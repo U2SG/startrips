@@ -23,6 +23,7 @@ import {
 } from "./mediaPrefetch";
 import { useJourneyPlaybackDirector, type PlaybackStepDurationResolver } from "./useJourneyPlaybackDirector";
 import {
+  buildPlaybackSteps,
   playbackCameraTargetForStep,
   playbackCameraTargetKey,
   playbackMediaForPoint,
@@ -30,6 +31,7 @@ import {
   type PlaybackCameraTarget,
   type PlaybackStep,
 } from "./journeyPlayback";
+import { planPrefetchWindow, readyMsAheadForTempo } from "./playbackPrefetchPlan";
 import { syncPlaybackMediaElement } from "./mediaPlaybackSync";
 import { playbackControlsMayAutoHide, playbackTempoControlVisible } from "./playbackControls";
 import type { PlaybackTempo } from "./journeyPlaybackPlan";
@@ -208,44 +210,74 @@ export function JourneyPlaybackOverlay({
     if (soundtrack) loadMediaRead(soundtrack.id);
   }, [loadMediaRead, soundtrack?.id]);
 
-  // Load the media the current step needs.
-  useEffect(() => {
-    if (!journey) return;
-    const step = director.step;
-    if (step?.kind === "media") {
-      const asset = playbackMediaForPoint(journey, step.pointIndex)[step.mediaIndex];
-      if (asset) loadMediaRead(asset.id);
-    } else if (step?.kind === "stop") {
-      for (const asset of playbackMediaForPoint(journey, step.pointIndex)) {
-        loadMediaRead(asset.id);
-      }
+  // #197: the prefetch window is a time budget, not an asset count. It walks
+  // the expanded steps forward from the current index, spending each step's
+  // duration as resolved by the director for the active plan and tempo, so a
+  // faster tempo naturally prepares more assets over roughly the same seconds
+  // of prepared playback. Deriving it from `stepIndex` alone is what makes a
+  // seek, next or back invalidate the old window without any cancellation.
+  const playbackSteps = useMemo(
+    () => journey ? buildPlaybackSteps(journey) : [],
+    [journey],
+  );
+  const mediaById = useMemo(() => {
+    const index = new Map<string, JourneyMediaAsset>();
+    for (const asset of journey?.media ?? []) index.set(asset.id, asset);
+    return index;
+  }, [journey]);
+  const { durationForStep } = director;
+  const prefetchAssetIds = useMemo(() => {
+    if (!journey) return [] as string[];
+    const prefetchWindow = planPrefetchWindow({
+      stepCount: playbackSteps.length,
+      stepIndex: director.stepIndex,
+      budgetMs: readyMsAheadForTempo(director.tempo),
+      durationForStep: (index) => {
+        const step = playbackSteps[index];
+        return step ? durationForStep(step) : 0;
+      },
+      assetIdsForStep: (index) => {
+        const step = playbackSteps[index];
+        if (step?.kind !== "media") return [];
+        const asset = playbackMediaForPoint(journey, step.pointIndex)[step.mediaIndex];
+        return asset ? [asset.id] : [];
+      },
+    });
+    // The asset the director may hold on is prepared even when the beats
+    // leading to it are longer than the whole budget — a video-first chapter
+    // must never leave its first image unread while the stop phase waits.
+    const holdTarget = playbackHoldTargetMedia(journey, playbackSteps[director.stepIndex]);
+    if (holdTarget && !prefetchWindow.assetIds.includes(holdTarget.id)) {
+      return [holdTarget.id, ...prefetchWindow.assetIds];
     }
-  }, [journey, director.step, loadMediaRead]);
+    return prefetchWindow.assetIds;
+  }, [director.stepIndex, director.tempo, durationForStep, journey, playbackSteps]);
+  // `playbackSteps` is rebuilt per journey, but the window is a plain array;
+  // the effects below key off its contents so they do not churn per render.
+  const prefetchKey = prefetchAssetIds.join(",");
+  const prefetchAssetIdsRef = useRef(prefetchAssetIds);
+  prefetchAssetIdsRef.current = prefetchAssetIds;
 
-  // Review P2: decode the media of the current chapter AHEAD of display —
-  // during the stop phase we already request reads, so the following media
-  // step mounts <img> without a loading gap. During a media step, decode the
-  // current image and prefetch the next one in the same chapter.
+  // Signed reads follow the same window, through the same single read path, so
+  // a decode is never scheduled for an asset that has no URL yet. This is
+  // strictly fewer concurrent reads than before, when arriving at a stop
+  // requested every asset of the chapter at once.
   useEffect(() => {
-    if (!journey) return;
-    const step = director.step;
-    const chapterMedia = step?.kind === "stop" || step?.kind === "media"
-      ? playbackMediaForPoint(journey, step.pointIndex)
-      : [];
-    const nextChapterMedia = step?.kind === "stop" && journey.routePoints[step.pointIndex + 1]
-      ? playbackMediaForPoint(journey, step.pointIndex + 1)
-      : [];
-    const targets = step?.kind === "media"
-      ? [...chapterMedia.slice(step.mediaIndex, step.mediaIndex + 2)] // current + next
-      : [...chapterMedia.slice(0, 2), ...nextChapterMedia.slice(0, 1)]; // stop chapter + next stop
-    for (const asset of targets) {
-      if (!asset.mimeType.startsWith("image/")) continue;
-      const read = mediaReads[asset.id];
+    for (const assetId of prefetchAssetIdsRef.current) loadMediaRead(assetId);
+  }, [loadMediaRead, prefetchKey]);
+
+  // Review P2: decode media AHEAD of display so a chapter never mounts <img>
+  // with a loading gap. Videos stay at read only; images alone are decoded.
+  useEffect(() => {
+    for (const assetId of prefetchAssetIdsRef.current) {
+      const asset = mediaById.get(assetId);
+      if (!asset?.mimeType.startsWith("image/")) continue;
+      const read = mediaReads[assetId];
       if (read?.status === "ready") {
-        decodeRegistryRef.current.ensure(asset.id, read.url);
+        decodeRegistryRef.current.ensure(assetId, read.url);
       }
     }
-  }, [decodeSettleRevision, director.step, journey, mediaReads]);
+  }, [decodeSettleRevision, mediaById, mediaReads, prefetchKey]);
 
   // Review P2: while a media chapter's image is not decoded yet, hold the
   // director so it never advances into a blank frame. Terminal read/decode
@@ -258,8 +290,7 @@ export function JourneyPlaybackOverlay({
       // Hold the STOP phase until this chapter's first image is decoded. If
       // the signed read or browser decode fails, release the hold and let the
       // media step render its recoverable error state.
-      const firstImage = playbackMediaForPoint(journey, step.pointIndex)
-        .find((asset) => asset.mimeType.startsWith("image/"));
+      const firstImage = playbackHoldTargetMedia(journey, step);
       if (!firstImage) {
         setHold(false);
         return;
@@ -728,6 +759,21 @@ export function JourneyPlaybackOverlay({
 function stepsProgress(stepIndex: number, total: number) {
   if (total <= 1) return 1;
   return Math.min(1, Math.max(0, stepIndex / (total - 1)));
+}
+
+/**
+ * The asset the director may hold on for a step: a media step's own asset, and
+ * a stop step's first image — the frame the stop phase waits to decode.
+ */
+export function playbackHoldTargetMedia(
+  journey: Journey,
+  step: PlaybackStep | undefined,
+): JourneyMediaAsset | null {
+  if (step?.kind === "stop") {
+    return playbackMediaForPoint(journey, step.pointIndex)
+      .find((asset) => asset.mimeType.startsWith("image/")) ?? null;
+  }
+  return playbackMediaForStep(journey, step);
 }
 
 export function playbackMediaForStep(
