@@ -4,10 +4,8 @@ import { sql } from "drizzle-orm";
 import { auth } from "./auth";
 import { AtlasAccessError } from "./authorization/atlas-access";
 import { ShareAccessError } from "./authorization/share-access";
-import { serverConfig } from "./config";
 import { db } from "./db/client";
 import { LocationSearchUnavailableError } from "./location/location-search";
-import { createAnonymousRateLimiter } from "./rate-limit";
 import { requestLog } from "./request-log";
 import { atlasRoutes } from "./routes/atlases";
 import { journeyRoutes } from "./routes/journeys";
@@ -26,14 +24,6 @@ app.use(
   bodyLimit({
     maxSize: 512 * 1024,
     onError: (context) => context.json({ error: "REQUEST_TOO_LARGE" }, 413),
-  }),
-);
-
-app.use(
-  "/api/*",
-  createAnonymousRateLimiter({
-    windowSeconds: serverConfig.anonymousRateLimitWindowSeconds,
-    maxRequests: serverConfig.anonymousRateLimitMaxRequests,
   }),
 );
 
