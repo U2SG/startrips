@@ -275,7 +275,18 @@ try {
         [932, 430, true],
       ]) {
         await preview.page.setViewportSize({ width, height });
-        await preview.page.waitForTimeout(120);
+        // `matches` is read straight from `matchMedia`, so it is correct the
+        // instant the viewport changes; the marker is React state and only
+        // appears after a commit. A fixed pause therefore raced the commit on a
+        // loaded runner and reported a marker that was merely late as one that
+        // was stale. Waiting for convergence is strictly stronger than the
+        // pause it replaces: a marker that never updates still fails, one
+        // timeout later, with the same stale value recorded below.
+        await preview.page.waitForFunction(
+          ({ selector, wanted }) => document.querySelector(selector)?.getAttribute("data-mobile-v2") === wanted,
+          { selector: SURFACES["journey-playback"][0], wanted: expected ? "on" : "off" },
+          { timeout: 4_000 },
+        ).catch(() => undefined);
         const contract = await readContract(preview.page, SURFACES["journey-playback"]);
         steps.push({
           viewport: [width, height],
