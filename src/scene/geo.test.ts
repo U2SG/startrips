@@ -12,6 +12,8 @@ import {
   GEOGRAPHIC_SURFACE_RADIUS,
   getSphericalRouteFocus,
   latLonToVector3,
+  MAX_ROUTE_ARC_LIFT_PER_CHORD,
+  MIN_LIFTED_ROUTE_ARC_SEGMENTS,
   rotationXForLatitude,
   rotationYForLongitude,
   ROUTE_ANCHOR_RADIUS,
@@ -137,6 +139,22 @@ describe("seeded geographic point generation", () => {
 });
 
 describe("route arc geometry", () => {
+  // #242 probe angles. 1.875 degrees (PI/96) is the segment angle the scene
+  // asks for, so 1.86 sits just below the old one-segment threshold and 1.90
+  // just above it.
+  const SAMPLE_THRESHOLD_DEGREES = [1.86, 1.9, 2, 3, 5];
+  const SHORT_LEG_DEGREES = [1.9, 2, 3, 5];
+
+  /** One synthetic leg of the given angular length, with lift requested. */
+  function shortLeg(degrees: number) {
+    return buildRouteArcSamples(
+      [{ lat: 0, lon: 0 }, { lat: 0, lon: degrees }],
+      Math.PI / 96,
+      8192,
+      { arcHeightRatio: 0.22, arcSaturationAngle: Math.PI / 3 },
+    );
+  }
+
   it("returns no line for a single point", () => {
     expect(routeArcVertexCount(buildRouteArcSamples([{ lat: 0, lon: 0 }]))).toBe(0);
   });
@@ -184,16 +202,134 @@ describe("route arc geometry", () => {
     expect(maxRadius(flat)).toBeCloseTo(1, 6);
   });
 
-  it("keeps short legs hugging the surface (hump scales nonlinearly) (#15)", () => {
-    const samples = buildRouteArcSamples(
-      [{ lat: 0, lon: 0 }, { lat: 0, lon: 3 }],
-      Math.PI / 360,
-      4096,
-      { arcHeightRatio: 0.5, arcSaturationAngle: Math.PI / 3 },
-    );
-    // 3 degrees is ~0.052 rad; sqrt(0.052/1.047) ~ 0.223 -> lift ~ 1.11 max
-    expect(maxRadius(samples)).toBeGreaterThan(1.02);
-    expect(maxRadius(samples)).toBeLessThan(1.16);
+  // #242 replaces the retired "keeps short legs hugging the surface (hump
+  // scales nonlinearly) (#15)" assertion. That test pinned a 3 degree leg
+  // above 1.02, which is exactly the sawtooth this issue reports: under the
+  // sqrt policy a short leg's hump grew WITHOUT BOUND relative to its own
+  // length - about 1.181 chord lengths at 1.90 degrees. The invariant below
+  // replaces it rather than sitting beside it, because the two cannot both
+  // hold.
+  it("bounds a leg's hump against its own chord (#242)", () => {
+    const heights = SHORT_LEG_DEGREES.map((degrees) => {
+      const samples = shortLeg(degrees);
+      const chord = 2 * Math.sin((degrees * Math.PI) / 360);
+      return {
+        degrees,
+        // Peak lift and chord are both fractions of the anchor radius.
+        ratio: Math.max(...samples.lifts) / chord,
+      };
+    });
+
+    // A leg 1.90 degrees long may not stand 1.18 of its own length tall.
+    const shortest = heights[0];
+    expect(shortest.degrees).toBe(1.9);
+    expect(shortest.ratio).toBeLessThanOrEqual(0.25);
+    expect(shortest.ratio).toBeLessThanOrEqual(MAX_ROUTE_ARC_LIFT_PER_CHORD);
+
+    // Shorter must never mean proportionally taller: the ratio is
+    // non-increasing as the leg shortens, so it tends to a flat local trace
+    // instead of diverging.
+    for (let index = 1; index < heights.length; index += 1) {
+      expect(heights[index - 1].ratio).toBeLessThanOrEqual(heights[index].ratio);
+    }
+
+    // The legacy sqrt policy, recomputed here as the "before" reading the
+    // issue tabulated, is what this leg used to do.
+    const legacyRatio = (0.22 * Math.sqrt((1.9 * Math.PI / 180) / (Math.PI / 3)))
+      / (2 * Math.sin((1.9 * Math.PI) / 360));
+    expect(legacyRatio).toBeGreaterThan(1.18);
+    expect(shortest.ratio).toBeLessThan(legacyRatio / 100);
+  });
+
+  it("never draws a lifted leg as a triangular peak (#242)", () => {
+    const counts = SAMPLE_THRESHOLD_DEGREES.map((degrees) => ({
+      degrees,
+      segments: routeArcVertexCount(shortLeg(degrees)) / 2,
+    }));
+
+    // Two straight segments through one elevated midpoint IS the sawtooth.
+    for (const { degrees, segments } of counts) {
+      expect(
+        segments,
+        `a ${degrees} degree leg drew ${segments} segments`,
+      ).toBeGreaterThanOrEqual(4);
+      expect(segments).toBeGreaterThanOrEqual(MIN_LIFTED_ROUTE_ARC_SEGMENTS);
+    }
+
+    // The count follows the curve, so it only ever grows with the leg.
+    for (let index = 1; index < counts.length; index += 1) {
+      expect(counts[index].segments).toBeGreaterThanOrEqual(
+        counts[index - 1].segments,
+      );
+    }
+
+    // The old rule jumped a 1.86 degree leg from one flat segment to a
+    // two-segment peak at 1.875 degrees. Crossing that angle may no longer
+    // change the drawn representation by more than a single segment.
+    const [below, above] = counts;
+    expect(below.degrees).toBe(1.86);
+    expect(above.degrees).toBe(1.9);
+    expect(Math.abs(above.segments - below.segments)).toBeLessThanOrEqual(1);
+  });
+
+  it("keeps every stored Route Point on the anchor shell (#242)", () => {
+    const points = [
+      { lat: 22.5431, lon: 114.0579 },
+      { lat: 23.1291, lon: 113.2644 },
+      { lat: 22.8167, lon: 113.2333 },
+      { lat: 22.1987, lon: 113.5439 },
+      { lat: 22.2793, lon: 114.1628 },
+    ];
+    const samples = buildRouteArcSamples(points, Math.PI / 96, 8192, {
+      arcHeightRatio: 0.22,
+      arcSaturationAngle: Math.PI / 3,
+    });
+
+    // Every leg endpoint resolves exactly onto the Route Point anchor at any
+    // lift strength, because a leg carries lift 0 at both of its ends.
+    for (const liftScale of [0, 0.25, 1]) {
+      for (const point of points) {
+        const anchor = routePointAnchor(point.lat, point.lon);
+        let nearest = Number.POSITIVE_INFINITY;
+        for (
+          let vertex = 0;
+          vertex < routeArcVertexCount(samples);
+          vertex += 1
+        ) {
+          const world = sampleAt(samples, vertex, ROUTE_ANCHOR_RADIUS, liftScale);
+          nearest = Math.min(nearest, world.distanceTo(anchor));
+        }
+        // The stored direction is present in the sampled route, unmoved.
+        expect(nearest).toBeLessThan(1e-6);
+      }
+    }
+  });
+
+  it("spreads a squeezed budget over every leg instead of dropping the tail (#242)", () => {
+    const points = Array.from({ length: 24 }, (_, index) => ({
+      lat: 0,
+      lon: index * 5,
+    }));
+    // Far less budget than the curve of 23 legs asks for.
+    const samples = buildRouteArcSamples(points, Math.PI / 96, 120, {
+      arcHeightRatio: 0.22,
+      arcSaturationAngle: Math.PI / 3,
+    });
+    expect(routeArcVertexCount(samples)).toBeLessThanOrEqual(120);
+
+    // No Route Point is silently dropped by the shortage; the route degrades
+    // to a faithful surface trace rather than losing its tail.
+    for (const point of points) {
+      const anchor = routePointAnchor(point.lat, point.lon);
+      let nearest = Number.POSITIVE_INFINITY;
+      for (let vertex = 0; vertex < routeArcVertexCount(samples); vertex += 1) {
+        nearest = Math.min(
+          nearest,
+          sampleAt(samples, vertex, ROUTE_ANCHOR_RADIUS, 1).distanceTo(anchor),
+        );
+      }
+      expect(nearest).toBeLessThan(1e-6);
+    }
   });
 
   it("handles the 180 degree antipodal case with the orthonormal fallback (#15)", () => {

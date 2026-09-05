@@ -2528,10 +2528,16 @@ export function ParticleEarthScene({
         // #21 review: build one path per leg so the rewind reveals the trail
         // stop by stop. Each leg path reuses the core gradient stroke and is
         // faded by its destination point's temporal progress.
+        //
+        // #242: the same points, segment angle, budget and arc options as the
+        // whole-route build above, so the leg a rewind draws is the very span
+        // the static stroke draws. The old build handed the legs a separate
+        // 2048-vertex budget, which let the two disagree geometrically and
+        // doubled a bright peak wherever they did.
         const legSamples = buildRouteArcLegSamples(
           route.points,
           Math.PI / 96,
-          Math.min(remainingVertices, 2048),
+          remainingVertices,
           {
             arcHeightRatio: ROUTE_ARC_HEIGHT_RATIO,
             arcSaturationAngle: ROUTE_ARC_SATURATION_ANGLE,

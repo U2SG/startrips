@@ -32,6 +32,7 @@ import {
   MAX_RENDERED_JOURNEYS,
   MAX_RENDERED_MOBILE_ROUTE_LABELS,
   MAX_RENDERED_ROUTE_LABELS,
+  MAX_RENDERED_ROUTE_LINE_VERTICES,
   MAX_RENDERED_ROUTE_POINTS,
   resolveRouteLabelLimit,
   resolveRouteLabelSafeArea,
@@ -80,9 +81,11 @@ import {
   resolveGlobeFocusIntent,
 } from "./ParticleEarthScene";
 import {
+  buildRouteArcLegSamples,
   buildRouteArcSamples,
   GEOGRAPHIC_SURFACE_RADIUS,
   ROUTE_ANCHOR_RADIUS,
+  routeArcVertexCount,
   routePointAnchor,
 } from "./geo";
 import { disposeSceneGraph } from "./useThreeScene";
@@ -1173,5 +1176,246 @@ describe("#219 the focus signal shares the Route Point anchor", () => {
     const projections = source.match(/\.project\(camera\)/g) ?? [];
     expect(projections).toHaveLength(1);
     expect(source).toMatch(/interactionWorldCenter\.copy\(globe\.position\)\.project\(camera\);/);
+  });
+});
+
+// #242: the sawtooth is an INTERIOR defect. Exact endpoints and a shared
+// projection say nothing about whether the curve between two Route Points is
+// drawn faithfully, so these cases grade the interior: one evaluator behind
+// both consumers, and a bounded screen-space error against the curve the
+// geometry stands for.
+describe("#242 route curve fidelity", () => {
+  const camera = new Vector3(0, 0, 5.4);
+  const arc = { arcHeightRatio: 0.22, arcSaturationAngle: Math.PI / 3 };
+  const SEGMENT_ANGLE = Math.PI / 96;
+  const scale = 900;
+
+  /**
+   * A synthetic evenly spaced chain of ~0.5 degree legs - the local multi-stop
+   * shape the issue reports as a row of steep takeoffs. Every fixture here
+   * sits on the camera-facing hemisphere so a path is one unbroken fragment;
+   * occlusion has its own case at the end.
+   */
+  const shortLegRoute = Array.from({ length: 7 }, (_, index) => ({
+    lat: 34 + index * 0.3,
+    lon: -118 + index * 0.4,
+  }));
+  /** Short, regional and intercontinental legs in one route. */
+  const mixedRoute = [
+    { lat: 34.0522, lon: -118.2437 },
+    { lat: 37.8651, lon: -119.5383 },
+    { lat: 36.1699, lon: -115.1398 },
+    { lat: 19.4326, lon: -99.1332 },
+    { lat: -12.0464, lon: -77.0428 },
+  ];
+
+  /** The projector both the drawn path and its reference are measured through. */
+  function project(x: number, y: number, z: number, target: { x: number; y: number }) {
+    if (!isSphericalPointVisible(camera, new Vector3(x, y, z))) return false;
+    target.x = 640 + x * scale;
+    target.y = 400 - y * scale;
+    return true;
+  }
+
+  /** Screen points of each drawn fragment of a path, fragment by fragment. */
+  function readFragments(d: string) {
+    const fragments: Array<Array<{ x: number; y: number }>> = [];
+    for (const command of d.match(/[ML]-?[\d.]+ -?[\d.]+/g) ?? []) {
+      const [x, y] = command.slice(1).split(" ").map(Number);
+      if (command.startsWith("M") || fragments.length === 0) fragments.push([]);
+      fragments[fragments.length - 1].push({ x, y });
+    }
+    return fragments;
+  }
+
+  function distanceToSegment(
+    point: { x: number; y: number },
+    a: { x: number; y: number },
+    b: { x: number; y: number },
+  ) {
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const lengthSquared = (dx * dx) + (dy * dy);
+    if (lengthSquared === 0) return Math.hypot(point.x - a.x, point.y - a.y);
+    const t = Math.min(1, Math.max(
+      0,
+      (((point.x - a.x) * dx) + ((point.y - a.y) * dy)) / lengthSquared,
+    ));
+    return Math.hypot(point.x - a.x - (t * dx), point.y - a.y - (t * dy));
+  }
+
+  function drawPath(points: typeof mixedRoute, segmentAngle: number, budget: number, liftScale: number) {
+    return buildProjectedRoutePath(
+      buildRouteArcSamples(points, segmentAngle, budget, arc),
+      project,
+      { radius: ROUTE_ANCHOR_RADIUS, liftScale },
+    );
+  }
+
+  /**
+   * Worst screen distance from a high-resolution sampling of the SAME lifted
+   * curve to the polyline actually drawn. The reference comes from the same
+   * builder at a far finer segment angle, so it is that curve at a density the
+   * drawn path is graded against, not a second model of it. Both are in curve
+   * order, so the search walks forward with a window instead of comparing
+   * every reference sample against every drawn segment.
+   */
+  function referenceErrorPx(points: typeof mixedRoute, liftScale: number) {
+    const drawn = readFragments(drawPath(
+      points,
+      SEGMENT_ANGLE,
+      MAX_RENDERED_ROUTE_LINE_VERTICES,
+      liftScale,
+    ).d);
+    const reference = readFragments(drawPath(
+      points,
+      Math.PI / 4000,
+      1_000_000,
+      liftScale,
+    ).d);
+    // Both fixtures are fully visible, so each is a single fragment; a broken
+    // one would make this metric meaningless rather than merely lenient.
+    expect(drawn).toHaveLength(1);
+    expect(reference).toHaveLength(1);
+    const polyline = drawn[0];
+    expect(polyline.length).toBeGreaterThan(2);
+
+    let worst = 0;
+    let cursor = 1;
+    for (const sample of reference[0]) {
+      let nearest = Number.POSITIVE_INFINITY;
+      let nearestIndex = cursor;
+      const from = Math.max(1, cursor - 8);
+      const to = Math.min(polyline.length - 1, cursor + 8);
+      for (let index = from; index <= to; index += 1) {
+        const distance = distanceToSegment(
+          sample,
+          polyline[index - 1],
+          polyline[index],
+        );
+        if (distance < nearest) {
+          nearest = distance;
+          nearestIndex = index;
+        }
+      }
+      cursor = nearestIndex;
+      worst = Math.max(worst, nearest);
+    }
+    return worst;
+  }
+
+  it("draws the whole route and its rewind legs from one evaluator", () => {
+    for (const points of [shortLegRoute, mixedRoute]) {
+      const whole = buildRouteArcSamples(
+        points,
+        SEGMENT_ANGLE,
+        MAX_RENDERED_ROUTE_LINE_VERTICES,
+        arc,
+      );
+      const legs = buildRouteArcLegSamples(
+        points,
+        SEGMENT_ANGLE,
+        MAX_RENDERED_ROUTE_LINE_VERTICES,
+        arc,
+      );
+      expect(legs).toHaveLength(points.length - 1);
+      expect(routeArcVertexCount(whole))
+        .toBeLessThanOrEqual(MAX_RENDERED_ROUTE_LINE_VERTICES);
+
+      // Each leg is the corresponding SPAN of the whole-route samples, vertex
+      // for vertex. Before #242 the two carried different vertex budgets from
+      // the same points, so the static stroke and the leg that redraws it
+      // could disagree and double a bright peak where they did.
+      let offset = 0;
+      let legVertices = 0;
+      for (const leg of legs) {
+        const count = routeArcVertexCount(leg);
+        legVertices += count;
+        for (let vertex = 0; vertex < count; vertex += 1) {
+          expect(leg.lifts[vertex]).toBeCloseTo(whole.lifts[offset + vertex], 6);
+          for (let axis = 0; axis < 3; axis += 1) {
+            expect(leg.directions[(vertex * 3) + axis]).toBeCloseTo(
+              whole.directions[((offset + vertex) * 3) + axis],
+              6,
+            );
+          }
+        }
+        offset += count;
+      }
+      expect(legVertices).toBe(routeArcVertexCount(whole));
+      expect(legVertices).toBeLessThanOrEqual(MAX_RENDERED_ROUTE_LINE_VERTICES);
+    }
+  });
+
+  it("stays within a CSS pixel of the curve it stands for", () => {
+    for (const liftScale of [1, 0.25]) {
+      expect(referenceErrorPx(shortLegRoute, liftScale)).toBeLessThanOrEqual(1);
+      expect(referenceErrorPx(mixedRoute, liftScale)).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it("holds that tolerance for a dense route inside the vertex budget", () => {
+    // 60 Route Points around a small circle: many more legs than a front-to-
+    // back build could pay for, so the old build returned early and dropped
+    // the tail of the route - and with it the Route Points on it.
+    const dense = Array.from({ length: 60 }, (_, index) => ({
+      lat: 10 + (6 * Math.sin((index / 60) * Math.PI * 2)),
+      lon: -90 + (6 * Math.cos((index / 60) * Math.PI * 2)),
+    }));
+    const samples = buildRouteArcSamples(
+      dense,
+      SEGMENT_ANGLE,
+      MAX_RENDERED_ROUTE_LINE_VERTICES,
+      arc,
+    );
+    expect(routeArcVertexCount(samples))
+      .toBeLessThanOrEqual(MAX_RENDERED_ROUTE_LINE_VERTICES);
+    // Every stored Route Point still appears in the sampled route.
+    for (const point of dense) {
+      const anchor = routePointAnchor(point.lat, point.lon);
+      let nearest = Number.POSITIVE_INFINITY;
+      for (let vertex = 0; vertex < routeArcVertexCount(samples); vertex += 1) {
+        const offset = vertex * 3;
+        const lift = 1 + samples.lifts[vertex];
+        nearest = Math.min(nearest, anchor.distanceTo(new Vector3(
+          samples.directions[offset] * ROUTE_ANCHOR_RADIUS * lift,
+          samples.directions[offset + 1] * ROUTE_ANCHOR_RADIUS * lift,
+          samples.directions[offset + 2] * ROUTE_ANCHOR_RADIUS * lift,
+        )));
+      }
+      expect(nearest).toBeLessThan(1e-5);
+    }
+    expect(referenceErrorPx(dense, 1)).toBeLessThanOrEqual(1);
+  });
+
+  it("never bridges two visible fragments across an occluded span", () => {
+    // A route whose middle runs behind the globe.
+    const aroundTheGlobe = [
+      { lat: 0, lon: -80 },
+      { lat: 0, lon: -20 },
+      { lat: 10, lon: 100 },
+      { lat: 0, lon: 175 },
+      { lat: 0, lon: -100 },
+    ];
+    const fragments = readFragments(drawPath(
+      aroundTheGlobe,
+      SEGMENT_ANGLE,
+      MAX_RENDERED_ROUTE_LINE_VERTICES,
+      1,
+    ).d);
+    expect(fragments.length).toBeGreaterThan(1);
+    // Within one fragment every step is a real step of the sampled curve, so
+    // no single line joins two spans separated by hidden geometry. The globe
+    // spans 2 * ROUTE_ANCHOR_RADIUS * scale pixels; a bridged span would be a
+    // sizeable fraction of that, while a sampled step is far smaller.
+    const globeWidthPx = 2 * ROUTE_ANCHOR_RADIUS * scale;
+    for (const fragment of fragments) {
+      for (let index = 1; index < fragment.length; index += 1) {
+        expect(Math.hypot(
+          fragment[index].x - fragment[index - 1].x,
+          fragment[index].y - fragment[index - 1].y,
+        )).toBeLessThan(globeWidthPx / 10);
+      }
+    }
   });
 });
