@@ -889,8 +889,10 @@ describe("ParticleEarthScene contracts", () => {
       const startAngle = limbAngle - 0.0004;
       const { path, points } = clipFlatSegment(startAngle, limbAngle + 0.2);
       expect(path.d).not.toBe("");
-      expect(points[0].x).toBeCloseTo(ROUTE_ANCHOR_RADIUS * Math.sin(startAngle), 6);
-      expect(points[0].z).toBeCloseTo(ROUTE_ANCHOR_RADIUS * Math.cos(startAngle), 6);
+      // Path coordinates are rounded to 0.1 screen units, i.e. 1e-4 of a world
+      // unit at this scale, so the endpoint is pinned no tighter than that.
+      expect(points[0].x).toBeCloseTo(ROUTE_ANCHOR_RADIUS * Math.sin(startAngle), 3);
+      expect(points[0].z).toBeCloseTo(ROUTE_ANCHOR_RADIUS * Math.cos(startAngle), 3);
     });
   });
 
