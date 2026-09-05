@@ -21,6 +21,7 @@ import {
   type ShareMediaTtlLimits,
   type SharedMediaRead,
 } from "../repositories/shared-media-repository";
+import { createShareRateLimiter } from "../share-rate-limit";
 import type { MultipartStorage } from "../storage/multipart-storage";
 import { getMultipartStorage } from "../storage/storage-registry";
 
@@ -344,6 +345,22 @@ sharedRoutes.use("*", async (context, next) => {
   context.header("X-Robots-Tag", "noindex, nofollow");
   return next();
 });
+
+/**
+ * #200 phase F: the guest prefix is public and unauthenticated, so it carries
+ * its own abuse budgets. Mounted here rather than in `app.ts` on purpose —
+ * #217 removed the blanket `/api/*` limiter and its ledger asks any
+ * replacement to be endpoint-specific, so nothing outside `/api/shared/*` is
+ * throttled by this. It runs after the header middleware above so a refused
+ * request still answers with the guest cache and robots headers, and before
+ * every handler so it costs one map lookup rather than a database round trip.
+ */
+sharedRoutes.use("*", createShareRateLimiter({
+  windowSeconds: serverConfig.shareRateLimitWindowSeconds,
+  dataMaxRequests: serverConfig.shareDataRateLimit,
+  mediaMaxRequests: serverConfig.shareMediaRateLimit,
+  unknownTokenMaxRequests: serverConfig.shareUnknownTokenRateLimit,
+}));
 
 /** An access record for the owner's audit column, not per-request telemetry. */
 async function recordShareAccess(shareGrantId: string): Promise<void> {

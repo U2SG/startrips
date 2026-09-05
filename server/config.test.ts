@@ -158,4 +158,48 @@ describe("media read URL configuration", () => {
     expect(config.mediaReadUrlExpiresInSeconds).toBe(60);
     expect(config.shareMediaReadUrlExpiresInSeconds).toBe(90);
   });
+
+  // #200 phase F: the guest prefix carries its own budgets. #217 removed the
+  // blanket `/api/*` bucket and these knobs deliberately do not restore it —
+  // they configure `/api/shared/*` alone.
+  it("defaults the guest share budgets", () => {
+    const config = loadServerConfig(productionEnvironment);
+    expect(config.shareRateLimitWindowSeconds).toBe(60);
+    expect(config.shareDataRateLimit).toBe(60);
+    expect(config.shareMediaRateLimit).toBe(240);
+    expect(config.shareUnknownTokenRateLimit).toBe(30);
+  });
+
+  it("accepts explicit guest share budgets", () => {
+    const config = loadServerConfig({
+      ...productionEnvironment,
+      SHARE_RATE_LIMIT_WINDOW_SECONDS: "30",
+      SHARE_DATA_RATE_LIMIT: "120",
+      SHARE_MEDIA_RATE_LIMIT: "600",
+      SHARE_UNKNOWN_TOKEN_RATE_LIMIT: "10",
+    });
+    expect(config.shareRateLimitWindowSeconds).toBe(30);
+    expect(config.shareDataRateLimit).toBe(120);
+    expect(config.shareMediaRateLimit).toBe(600);
+    expect(config.shareUnknownTokenRateLimit).toBe(10);
+  });
+
+  // The floors are product floors: #200 asks that a limit never break a normal
+  // image-heavy Journey during playback prefetch, so a deployment cannot set a
+  // budget below what one recipient legitimately needs.
+  it("rejects a guest budget below its product floor or above its ceiling", () => {
+    for (
+      const [name, value, message] of [
+        ["SHARE_RATE_LIMIT_WINDOW_SECONDS", "5", "between 10 and 3600"],
+        ["SHARE_RATE_LIMIT_WINDOW_SECONDS", "7200", "between 10 and 3600"],
+        ["SHARE_DATA_RATE_LIMIT", "1", "between 10 and 100000"],
+        ["SHARE_MEDIA_RATE_LIMIT", "8", "between 30 and 100000"],
+        ["SHARE_UNKNOWN_TOKEN_RATE_LIMIT", "0", "between 5 and 100000"],
+        ["SHARE_DATA_RATE_LIMIT", "60.5", "between 10 and 100000"],
+      ] as const
+    ) {
+      expect(() => loadServerConfig({ ...productionEnvironment, [name]: value }))
+        .toThrow(`${name} must be ${message}`);
+    }
+  });
 });

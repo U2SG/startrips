@@ -56,6 +56,22 @@ export function loadServerConfig(
   const shareMediaReadUrlExpiresInSeconds = Number(
     environment.SHARE_MEDIA_READ_URL_EXPIRES_IN_SECONDS ?? 90,
   );
+  // #200 phase F: the guest prefix is the only public, unauthenticated surface
+  // Startrips exposes, so it carries its own budgets rather than the blanket
+  // `/api/*` bucket #217 removed. One window, three ceilings; see
+  // `server/share-rate-limit.ts` for what each subject is.
+  const shareRateLimitWindowSeconds = Number(
+    environment.SHARE_RATE_LIMIT_WINDOW_SECONDS ?? 60,
+  );
+  const shareDataRateLimit = Number(
+    environment.SHARE_DATA_RATE_LIMIT ?? 60,
+  );
+  const shareMediaRateLimit = Number(
+    environment.SHARE_MEDIA_RATE_LIMIT ?? 240,
+  );
+  const shareUnknownTokenRateLimit = Number(
+    environment.SHARE_UNKNOWN_TOKEN_RATE_LIMIT ?? 30,
+  );
   const s3ConfigurationPresent = Boolean(
     s3BackendId
     || s3Endpoint
@@ -127,6 +143,37 @@ export function loadServerConfig(
     throw new Error(
       "SHARE_MEDIA_READ_URL_EXPIRES_IN_SECONDS must be between 15 and 600",
     );
+  }
+  // The floors are product floors, not safety margins: #200 is explicit that a
+  // limit which breaks a normal image-heavy Journey during playback prefetch
+  // is a worse outcome than the abuse it prevents, so a deployment cannot set
+  // a budget below what one recipient legitimately needs.
+  //
+  // At the defaults, per grant per minute:
+  //
+  // - data 60. One open viewer boots with one `/journeys` read and re-reads no
+  //   faster than `SHARE_EXPIRY_RECHECK_MIN_MS` (15 s), i.e. 4/min per tab, so
+  //   60 carries roughly fifteen simultaneous recipients of one link.
+  // - media 240. A guest presign lives 90 s and `mediaReadRefreshAt` replaces
+  //   it at half-life, so one continuously displayed asset costs about 1.3
+  //   reads/min; 240 sustains roughly 180 such assets, or thirty full
+  //   `MAX_PREFETCH_ASSETS` (8) prefetch bursts a minute. The budget belongs to
+  //   the link, so a #197 fast-tempo burst is measured against the grant rather
+  //   than against whichever recipient happens to share an address.
+  //
+  // The address budget is 30 unusable requests per minute. It does not make a
+  // 256-bit token guessable-or-not — nothing does — it caps what a flood costs.
+  for (
+    const [name, value, floor, ceiling] of [
+      ["SHARE_RATE_LIMIT_WINDOW_SECONDS", shareRateLimitWindowSeconds, 10, 3600],
+      ["SHARE_DATA_RATE_LIMIT", shareDataRateLimit, 10, 100_000],
+      ["SHARE_MEDIA_RATE_LIMIT", shareMediaRateLimit, 30, 100_000],
+      ["SHARE_UNKNOWN_TOKEN_RATE_LIMIT", shareUnknownTokenRateLimit, 5, 100_000],
+    ] as const
+  ) {
+    if (!Number.isInteger(value) || value < floor || value > ceiling) {
+      throw new Error(`${name} must be between ${floor} and ${ceiling}`);
+    }
   }
   if (storageDriver === "s3" || s3ConfigurationPresent) {
     const missing = [
@@ -219,6 +266,10 @@ export function loadServerConfig(
     s3UploadPartExpiresInSeconds,
     mediaReadUrlExpiresInSeconds,
     shareMediaReadUrlExpiresInSeconds,
+    shareRateLimitWindowSeconds,
+    shareDataRateLimit,
+    shareMediaRateLimit,
+    shareUnknownTokenRateLimit,
     locationSearchDriver,
     locationSearchBaseUrl,
     locationSearchUserAgent,

@@ -582,6 +582,175 @@ try {
     await page.close();
   }
 
+
+  // ------------------------------ 2b. #199 media playback under a share grant
+  //
+  // #200 phase F acceptance: the media-playback affordance #199 added must
+  // stay discoverable in a SHARED Story view. It is the one capability that
+  // exists nowhere else in the phone viewer, so a guest losing it would be
+  // invariant 6 ("low chrome removes redundancy, not capability") failing
+  // against a narrower identity rather than against a narrower layout.
+  //
+  // The control renders from `scopedMedia.length > 1` and the mobile layout,
+  // neither of which is capability-gated — but nothing asserted that until
+  // now, and the Manage entry that shares its action cluster IS gated, so the
+  // two could have been removed together.
+  {
+    const withMedia = sharedJourneys.map((journey, index) => (index === 0
+      ? {
+        ...journey,
+        media: [
+          { id: "cccccccc-1111-4111-8111-111111111111", routePointId: null, fileName: "one.png", mimeType: "image/png", bytes: 128 },
+          { id: "cccccccc-2222-4222-8222-222222222222", routePointId: null, fileName: "two.png", mimeType: "image/png", bytes: 128 },
+        ],
+      }
+      : journey));
+    const state = { journeysStatus: 200, journeys: withMedia, expiresAt: undefined };
+    const { page, consoleErrors } = await newGuestPage(context, state);
+    // Registered after `installGuestApi`, so it wins: this page's guest media
+    // reads resolve to a decodable one-pixel PNG instead of the 404 the rest
+    // of the lane wants. The URL is a data URI, so no image request leaves the
+    // page and the token-exposure assertions elsewhere are unaffected.
+    await page.route("**/api/shared/assets/*/read-url", (route) => route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      headers: { "cache-control": "private, no-store" },
+      body: JSON.stringify({
+        url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+        expiresAt: new Date(Date.now() + 90_000).toISOString(),
+      }),
+    }));
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(shareUrl(), { waitUntil: "domcontentloaded" });
+    await page.locator(".living-atlas").waitFor({ timeout: 30_000 });
+    await page.waitForFunction(
+      () => document.querySelector(".particle-earth-scene")?.getAttribute("data-scene-ready") === "true",
+      undefined,
+      { timeout: 30_000 },
+    );
+
+    const mediaJourneyTitle = withMedia[0].title;
+    // A compact viewport renders no desktop journey rail — section 1 above
+    // measures that same contract — so the guest reaches a Journey through
+    // 全部旅程 and the journey sheet, exactly as a recipient on a phone does.
+    //
+    // Every step waits for the element it is about to click rather than
+    // pausing a fixed number of milliseconds. A pause is a guess about how
+    // long a React commit takes on the runner, and a loaded runner turns that
+    // guess into a failure about the product; a wait that times out fails for
+    // the same reason but only after the element genuinely never appeared.
+    const openStory = async () => {
+      const step = async (label, locator) => {
+        try {
+          await locator.first().waitFor({ state: "visible", timeout: 15_000 });
+        } catch {
+          // Keep the diagnostic: name the step and enumerate what WAS there,
+          // so a future divergence in the mobile navigation is legible rather
+          // than an opaque timeout.
+          const labels = await page.evaluate(() => [...document.querySelectorAll("button")]
+            .map((button) => (button.getAttribute("aria-label") || button.textContent || "")
+              .trim().replace(/\s+/g, " ").slice(0, 24))
+            .filter(Boolean)
+            .slice(0, 12));
+          throw new Error(`${label}: ${JSON.stringify(labels)}`);
+        }
+        await locator.first().click();
+      };
+      await step("no-picker-entry", page.locator('button[aria-label="打开全部旅程"]'));
+      await page.locator(".mobile-v2__picker").waitFor({ timeout: 15_000 });
+      await step(
+        "no-picker-row",
+        page.locator(".mobile-v2__picker ol li button", { hasText: mediaJourneyTitle }),
+      );
+      // On a compact viewport the picker only selects; the Story lives behind
+      // the journey sheet the card opens.
+      await step("no-journey-card", page.locator('button[aria-label^="查看当前旅程详情"]'));
+      await step("no-story-entry", page.locator("button", { hasText: "打开故事" }));
+    };
+    let opened = true;
+    try {
+      await openStory();
+    } catch (error) {
+      opened = false;
+      failures.push(`guest #199: could not open the shared story (${error.message})`);
+    }
+    if (opened) {
+      await storyShowing(page, mediaJourneyTitle);
+      const affordance = await page.evaluate(() => {
+        const story = document.querySelector(".journey-story");
+        const play = document.querySelector(".journey-story__mobile-media-play");
+        const box = play?.getBoundingClientRect();
+        return {
+          mobileMode: story?.getAttribute("data-mobile-mode") ?? null,
+          present: Boolean(play),
+          disabled: play instanceof HTMLButtonElement ? play.disabled : null,
+          pressed: play?.getAttribute("aria-pressed") ?? null,
+          label: play?.getAttribute("aria-label") ?? null,
+          // #199 put it in the viewer cluster, never inside the management
+          // sheet — which a guest has none of, so it must be in the cluster.
+          inViewerCluster: Boolean(play?.closest(".journey-story__mobile-media-actions")),
+          manageSheets: document.querySelectorAll(".journey-story__mobile-media-sheet").length,
+          // A guest still gets no Manage entry sharing that cluster.
+          manageTriggers: document.querySelectorAll(".journey-story__mobile-media-menu-trigger").length,
+          width: box?.width ?? 0,
+          height: box?.height ?? 0,
+        };
+      });
+      if (!affordance.present || affordance.disabled !== false) {
+        failures.push(`guest #199: no usable media playback affordance ${JSON.stringify(affordance)}`);
+      }
+      if (!affordance.inViewerCluster || affordance.manageTriggers !== 0 || affordance.manageSheets !== 0) {
+        failures.push(`guest #199: affordance is misplaced or a manage surface leaked ${JSON.stringify(affordance)}`);
+      }
+      // The 44px touch target #199 established, unchanged by the guest mode.
+      if (affordance.width < 44 || affordance.height < 44) {
+        failures.push(`guest #199: touch target ${affordance.width}x${affordance.height} is under 44px`);
+      }
+      // It has to actually drive the sequence, not merely render.
+      let toggled = null;
+      try {
+        await page.locator(".journey-story__mobile-media-play").click();
+        await page.waitForFunction(
+          () => document.querySelector(".journey-story__mobile-media-play")?.getAttribute("aria-pressed") === "true",
+          undefined,
+          { timeout: 5_000 },
+        );
+        await page.locator(".journey-story__mobile-media-play").click();
+        await page.waitForFunction(
+          () => document.querySelector(".journey-story__mobile-media-play")?.getAttribute("aria-pressed") === "false",
+          undefined,
+          { timeout: 5_000 },
+        );
+        toggled = true;
+      } catch (error) {
+        toggled = false;
+        failures.push(`guest #199: playback did not toggle under a grant (${error.message})`);
+      }
+      // #126 Playback and #199 sequence playback are viewing capabilities; the
+      // guest Story must still expose no owner affordance around them.
+      const storyText = await page.evaluate(() => document.querySelector(".journey-story")?.textContent ?? "");
+      const leaked = FORBIDDEN_CONTROL_TEXT.filter((text) => storyText.includes(text));
+      if (leaked.length > 0) {
+        failures.push(`guest #199: owner affordances beside the play control ${JSON.stringify(leaked)}`);
+      }
+      console.log([
+        "[qa-guest-share] guest #199 media playback",
+        `mobileMode=${affordance.mobileMode}`,
+        `present=${affordance.present}`,
+        `cluster=${affordance.inViewerCluster}`,
+        `target=${Math.round(affordance.width)}x${Math.round(affordance.height)}`,
+        `toggled=${toggled}`,
+        `manageTriggers=${affordance.manageTriggers}`,
+      ].join(" "));
+    }
+    const unexpected = consoleErrors.filter((message) =>
+      !/read-url/.test(message) && !/404/.test(message));
+    if (unexpected.length > 0) {
+      failures.push(`guest #199 console errors ${JSON.stringify(unexpected.slice(0, 4))}`);
+    }
+    await page.close();
+  }
+
   // ----------------------------------------------------- 3. unavailable states
   {
     // An invalid fragment never makes a request at all.
