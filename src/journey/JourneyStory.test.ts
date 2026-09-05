@@ -21,6 +21,7 @@ import {
   reorderInvalidatesMediaMoveUndo,
   retainMediaMoveUndoAfterError,
   replaceJourneySoundtrack,
+  showMobileStoryFullscreenControl,
   showMobileStoryPlayControl,
   storyAssetIndexForId,
   storyAutoplayAdvance,
@@ -552,6 +553,36 @@ describe("showMobileStoryPlayControl (#199)", () => {
       expect(showMobileStoryPlayControl({ ...viewer, scopedMediaCount }))
         .toBe(scopedMediaCount > 1);
     }
+  });
+});
+
+describe("showMobileStoryFullscreenControl (#199 follow-up)", () => {
+  const viewer = {
+    mobileLayout: true,
+    overview: false,
+    mobileManageMode: false,
+    hasAsset: true,
+  };
+
+  it("gives mobile Viewer its own immersive entry whenever a media asset is on stage", () => {
+    expect(showMobileStoryFullscreenControl(viewer)).toBe(true);
+  });
+
+  it("stays out of desktop, the overview grid, Manage mode and an empty stage", () => {
+    expect(showMobileStoryFullscreenControl({ ...viewer, mobileLayout: false })).toBe(false);
+    expect(showMobileStoryFullscreenControl({ ...viewer, overview: true })).toBe(false);
+    expect(showMobileStoryFullscreenControl({ ...viewer, mobileManageMode: true })).toBe(false);
+    expect(showMobileStoryFullscreenControl({ ...viewer, hasAsset: false })).toBe(false);
+  });
+
+  it("does not inherit the sequence gate: one asset is still worth the full stage", () => {
+    expect(showMobileStoryFullscreenControl(viewer)).toBe(true);
+    expect(showMobileStoryPlayControl({
+      mobileLayout: true,
+      overview: false,
+      mobileManageMode: false,
+      scopedMediaCount: 1,
+    })).toBe(false);
   });
 });
 
@@ -1091,6 +1122,58 @@ describe("JourneyStory", () => {
     expect(
       sequence.indexOf("journey-story__mobile-media-play"),
     ).toBeLessThan(sequence.indexOf("journey-story__mobile-media-menu-trigger"));
+  });
+
+  it("gives mobile Viewer the immersive entry the manage sheet used to own (#199)", () => {
+    vi.stubGlobal("matchMedia", vi.fn(() => ({
+      matches: true,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })));
+
+    const render = (media: JourneyMediaAsset[]) => renderToStaticMarkup(createElement(JourneyStory, {
+      journeys: [{ ...journey, media }],
+      journeyId: journey.id,
+      onClose: () => undefined,
+      onNavigate: () => undefined,
+      onEdit: () => undefined,
+      onMediaAdded: () => null,
+    }));
+
+    const sequence = render([
+      asset("media-1", "image/jpeg", 0),
+      asset("media-2", "video/mp4", 1),
+    ]);
+    expect(sequence).toContain('class="icon-action-button journey-story__mobile-media-fullscreen"');
+    expect(sequence).toContain('aria-label="沉浸查看媒体"');
+    // Immersive viewing is a viewing action: it sits in the Viewer cluster and
+    // the management sheet is not even mounted here.
+    expect(sequence).not.toContain("journey-story__mobile-media-sheet");
+    // Focus order follows the rendered row: immersive, playback, management.
+    expect(
+      sequence.indexOf("journey-story__mobile-media-fullscreen"),
+    ).toBeGreaterThan(sequence.indexOf('class="journey-story__mobile-media-actions"'));
+    expect(
+      sequence.indexOf("journey-story__mobile-media-fullscreen"),
+    ).toBeLessThan(sequence.indexOf("journey-story__mobile-media-play"));
+    expect(
+      sequence.indexOf("journey-story__mobile-media-play"),
+    ).toBeLessThan(sequence.indexOf("journey-story__mobile-media-menu-trigger"));
+
+    // A single asset has no sequence to play, so the immersive entry takes the
+    // playback slot rather than leaving a hole in the row.
+    const single = render([asset("media-1", "image/jpeg", 0)]);
+    expect(single).toContain("journey-story__mobile-media-fullscreen is-compact");
+    expect(single).not.toContain("journey-story__mobile-media-play");
+    expect(single).toContain('aria-label="沉浸查看媒体"');
+
+    // The words that used to name the management-sheet action are gone from the
+    // product entirely; the Viewer entry is media-aware and count-independent.
+    for (const markup of [sequence, single]) {
+      expect(markup).not.toContain("沉浸播放</");
+      expect(markup).not.toContain("沉浸查看</");
+      expect(markup).not.toContain("自动播放照片");
+    }
   });
 
   it("keeps mobile management reachable when the selected media scope is empty", () => {

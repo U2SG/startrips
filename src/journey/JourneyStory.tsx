@@ -282,6 +282,24 @@ export function showMobileStoryPlayControl({
   return mobileLayout && !overview && !mobileManageMode && scopedMediaCount > 1;
 }
 
+// #199 follow-up: immersive viewing is a viewing action too, so Viewer owns the
+// fullscreen entry instead of the management sheet. Unlike sequence playback it
+// is meaningful for a single asset — one photo still deserves the full stage —
+// so this gate asks for a current asset rather than a sequence.
+export function showMobileStoryFullscreenControl({
+  mobileLayout,
+  overview,
+  mobileManageMode,
+  hasAsset,
+}: {
+  mobileLayout: boolean;
+  overview: boolean;
+  mobileManageMode: boolean;
+  hasAsset: boolean;
+}) {
+  return mobileLayout && !overview && !mobileManageMode && hasAsset;
+}
+
 export function journeyDeleteDescription(journey: Journey) {
   return `先从图谱隐藏；7 天内可撤销，之后才会清理路线和 ${journey.media.length} 个私有媒体。`;
 }
@@ -3141,6 +3159,13 @@ export function JourneyStory({
     }
   }
 
+  const mobileStoryPlayControlVisible = showMobileStoryPlayControl({
+    mobileLayout,
+    overview,
+    mobileManageMode,
+    scopedMediaCount: scopedMedia.length,
+  });
+
   const content = (
     <div
       className={`journey-story-backdrop${mobileLayout ? " is-mobile-context" : ""}${mobileLayout && mobileStoryExpanded ? " is-story-expanded" : ""}`}
@@ -3489,12 +3514,27 @@ export function JourneyStory({
             ) : null}
             {mobileLayout && !overview && asset ? (
               <div className="journey-story__mobile-media-actions">
-                {showMobileStoryPlayControl({
+                {showMobileStoryFullscreenControl({
                   mobileLayout,
                   overview,
                   mobileManageMode,
-                  scopedMediaCount: scopedMedia.length,
+                  hasAsset: Boolean(asset),
                 }) ? (
+                  /* `is-compact` closes the row when a single-asset scope
+                     renders no play control. The entry is playback-transparent:
+                     it hands the current sequence state to the fullscreen stage
+                     instead of starting or stopping it, and spends the same
+                     gesture authorizing the fullscreen video element. */
+                  <IconActionButton
+                    type="button"
+                    className={`journey-story__mobile-media-fullscreen${mobileStoryPlayControlVisible ? "" : " is-compact"}`}
+                    label="沉浸查看媒体"
+                    onClick={() => enterFullscreen(playing)}
+                  >
+                    <IconMaximize size={19} stroke={1.5} aria-hidden="true" />
+                  </IconActionButton>
+                ) : null}
+                {mobileStoryPlayControlVisible ? (
                   <IconActionButton
                     type="button"
                     className={`journey-story__mobile-media-play${playing ? " is-active" : ""}`}
@@ -3585,21 +3625,9 @@ export function JourneyStory({
                           </button>
                         </>
                       ) : null}
-                      <button
-                        type="button"
-                        disabled={
-                          mutationPending
-                          || (scopedMedia.length > 1
-                            && !storyAutoplayCanStart(
-                              autoplayVideoCandidate,
-                              storyMediaAvailability(autoplayVideoCandidateRead?.status),
-                            ))
-                        }
-                        onClick={() => enterFullscreen(scopedMedia.length > 1)}
-                      >
-                        <IconPlayerPlay size={18} stroke={1.35} aria-hidden="true" />
-                        {scopedMedia.length > 1 ? "沉浸播放" : "沉浸查看"}
-                      </button>
+                      {/* #199: immersive playback and immersive viewing both
+                          left this sheet for the Viewer action cluster. Manage
+                          keeps cover, ordering, reclassification and deletion. */}
                       <button
                         type="button"
                         className="is-destructive"

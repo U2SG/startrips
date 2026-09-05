@@ -5306,7 +5306,8 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   }
 
   .journey-story__mobile-media-menu-trigger,
-  .journey-story__mobile-media-play {
+  .journey-story__mobile-media-play,
+  .journey-story__mobile-media-fullscreen {
     position: absolute;
     top: 12px;
     right: 12px;
@@ -5327,7 +5328,8 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   }
 
   .journey-story__mobile-media-menu-trigger::after,
-  .journey-story__mobile-media-play::after {
+  .journey-story__mobile-media-play::after,
+  .journey-story__mobile-media-fullscreen::after {
     display: none;
   }
 
@@ -5335,6 +5337,17 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
      hit target to its left, so the pair stays put across image/video and
      aspect-ratio changes and never lands on the swipe surface. */
   .journey-story__mobile-media-play {
+    right: calc(12px + var(--mobile-control-hit-size, 44px) + 8px);
+  }
+
+  /* #199 follow-up: the immersive entry takes the third slot of the same row,
+     so Viewer keeps one cluster with one anchor and the swipe surface below the
+     control band stays whole. */
+  .journey-story__mobile-media-fullscreen {
+    right: calc(12px + 2 * (var(--mobile-control-hit-size, 44px) + 8px));
+  }
+
+  .journey-story__mobile-media-fullscreen.is-compact {
     right: calc(12px + var(--mobile-control-hit-size, 44px) + 8px);
   }
 

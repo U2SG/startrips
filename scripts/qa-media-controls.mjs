@@ -448,6 +448,19 @@ try {
     const reclassifyBox = await reclassifyMedia.boundingBox();
     const organizeBox = await organizeMedia.boundingBox();
     const bothSheetActionsAvailable = await reclassifyMedia.count() === 1 && await organizeMedia.count() === 1;
+    // #199 follow-up: Manage owns cover, ordering, reclassification and
+    // deletion. No playback or immersive-viewing action may live here, and the
+    // check reads the sheet's real buttons rather than one known label.
+    const sheetActionLabels = (await scanButtons(story.page, ".journey-story__mobile-media-sheet")).items
+      .map((item) => item.name);
+    const sheetOffersPlayback = sheetActionLabels.some((label) => /沉浸|播放/.test(label));
+    checks.push({
+      name: "story-mobile-manage-sheet-has-no-playback",
+      sheetActionLabels,
+      sheetOffersPlayback,
+      failed: sheetOffersPlayback || sheetActionLabels.length === 0,
+    });
+    if (sheetOffersPlayback || sheetActionLabels.length === 0) failed = true;
     await reclassifyMedia.click();
     await mobileSheet.waitFor({ state: "detached" });
     const moveSelectToggle = story.page.locator(".journey-story__media-select-toggle");
@@ -920,6 +933,19 @@ try {
       // an overlap here would mean the pair collided at this width.
       const clusterScan = await scanButtons(viewerPlayback.page, ".journey-story__mobile-media-actions");
       const clusterOverlap = overlapPairs(clusterScan.items);
+      // #199 follow-up: immersive viewing is a viewing action, so its entry
+      // shares the Viewer cluster with playback instead of living in the
+      // management sheet. It must clear the same 44px target at every phone
+      // width the playback control is graded at.
+      const fullscreenControl = viewerPlayback.page.locator(".journey-story__mobile-media-fullscreen");
+      await fullscreenControl.waitFor({ state: "visible", timeout: 5_000 });
+      const fullscreenBox = await fullscreenControl.boundingBox();
+      const fullscreenPlacement = await fullscreenControl.evaluate((element) => ({
+        label: element.getAttribute("aria-label"),
+        inViewerCluster: Boolean(element.closest(".journey-story__mobile-media-actions")),
+        insideManageSheet: Boolean(element.closest(".journey-story__mobile-media-sheet")),
+        mobileMode: element.closest(".journey-story")?.dataset.mobileMode ?? null,
+      }));
       await playControl.click();
       await viewerPlayback.page.waitForFunction(
         () => document.querySelector(".journey-story__mobile-media-play")?.getAttribute("aria-pressed") === "true",
@@ -937,6 +963,13 @@ try {
       const playbackFailed = !playBox
         || playBox.width < 44
         || playBox.height < 44
+        || !fullscreenBox
+        || fullscreenBox.width < 44
+        || fullscreenBox.height < 44
+        || fullscreenPlacement.label !== "沉浸查看媒体"
+        || !fullscreenPlacement.inViewerCluster
+        || fullscreenPlacement.insideManageSheet
+        || fullscreenPlacement.mobileMode !== "viewer"
         || placement.idlePressed !== "false"
         || placement.idleLabel !== "自动播放媒体"
         || playingLabel !== "暂停自动播放"
@@ -951,6 +984,8 @@ try {
       checks.push({
         name: `story-mobile-viewer-playback-${label}`,
         playBox: playBox ? { width: Math.round(playBox.width), height: Math.round(playBox.height) } : null,
+        fullscreenBox: fullscreenBox ? { width: Math.round(fullscreenBox.width), height: Math.round(fullscreenBox.height) } : null,
+        fullscreenPlacement,
         ...placement,
         playingLabel,
         restoredPressed,
@@ -1066,6 +1101,102 @@ try {
     if (videoAutoplayFailed) failed = true;
   } finally {
     await videoAutoplay.page.close();
+  }
+
+  // #199 follow-up: the immersive entry the management sheet used to own now
+  // belongs to Viewer, must work when the current asset is a VIDEO (the sheet
+  // button was the only entry there, because the tap-to-open path is bound to
+  // the image element), and must be playback-transparent: entering and leaving
+  // fullscreen hands the sequence over instead of starting or stopping it.
+  const videoImmersive = await createQaPage("/?qaState=journey-story&qaMode=mixed-media", onePixelGif, {
+    instrumentMedia: true,
+    mixedMedia: true,
+    mobile: true,
+  });
+  try {
+    await videoImmersive.page.locator(".journey-story").waitFor({ state: "visible" });
+    const stage = videoImmersive.page.locator(".journey-story__media");
+    await stage.locator(":scope > img:not(.journey-story__media-incoming)").first().waitFor({ state: "visible" });
+    const stageBox = await stage.boundingBox();
+    if (!stageBox) throw new Error("mixed-media story stage has no bounds");
+    const swipeX = stageBox.x + stageBox.width * 0.72;
+    const swipeY = stageBox.y + stageBox.height * 0.5;
+    await stage.dispatchEvent("pointerdown", { pointerId: 81, pointerType: "touch", isPrimary: true, clientX: swipeX, clientY: swipeY, bubbles: true });
+    await stage.dispatchEvent("pointermove", { pointerId: 81, pointerType: "touch", isPrimary: true, clientX: swipeX - 110, clientY: swipeY, bubbles: true });
+    await stage.dispatchEvent("pointerup", { pointerId: 81, pointerType: "touch", isPrimary: true, clientX: swipeX - 110, clientY: swipeY, bubbles: true });
+    await stage.locator(":scope > video:not(.journey-story__media-incoming)").waitFor({ state: "visible", timeout: 5_000 });
+    const currentIsVideo = await videoImmersive.page.evaluate(() => (
+      document.querySelector(
+        ".journey-story__media > img:not(.journey-story__media-incoming), .journey-story__media > video:not(.journey-story__media-incoming)",
+      )?.tagName === "VIDEO"
+    ));
+
+    const immersiveEntry = videoImmersive.page.locator(".journey-story__mobile-media-fullscreen");
+    const playControl = videoImmersive.page.locator(".journey-story__mobile-media-play");
+    const overlay = videoImmersive.page.locator(".journey-story-fullscreen");
+    await immersiveEntry.waitFor({ state: "visible", timeout: 5_000 });
+    const entryReachableInViewer = await videoImmersive.page.evaluate(() => (
+      document.querySelector(".journey-story")?.getAttribute("data-mobile-mode") === "viewer"
+    ));
+    await immersiveEntry.click();
+    const videoOpenedFullscreen = await overlay
+      .waitFor({ state: "visible", timeout: 5_000 })
+      .then(() => true)
+      .catch(() => false);
+    // Idle: the entry did not invent playback for a viewer that was not playing.
+    const stayedPausedOnEntry = await overlay.evaluate((root) => !root.classList.contains("is-playing"));
+    await overlay.locator(".journey-story-fullscreen__close").click();
+    await overlay.waitFor({ state: "hidden", timeout: 5_000 });
+
+    // Playing: the sequence survives the round trip, and both controls agree.
+    await playControl.click();
+    await videoImmersive.page.waitForFunction(
+      () => document.querySelector(".journey-story__mobile-media-play")?.getAttribute("aria-pressed") === "true",
+      undefined,
+      { timeout: 3_000 },
+    );
+    await immersiveEntry.click();
+    await overlay.waitFor({ state: "visible", timeout: 5_000 });
+    const keptPlayingInFullscreen = await videoImmersive.page.waitForFunction(
+      () => {
+        const root = document.querySelector(".journey-story-fullscreen");
+        const navPlay = document.querySelector(".journey-story-fullscreen__nav button[aria-pressed]");
+        return Boolean(root?.classList.contains("is-playing") && navPlay?.getAttribute("aria-pressed") === "true");
+      },
+      undefined,
+      { timeout: 3_000 },
+    ).then(() => true).catch(() => false);
+    await overlay.locator(".journey-story-fullscreen__close").click();
+    await overlay.waitFor({ state: "hidden", timeout: 5_000 });
+    const keptPlayingAfterExit = await videoImmersive.page.waitForFunction(
+      () => document.querySelector(".journey-story__mobile-media-play")?.getAttribute("aria-pressed") === "true",
+      undefined,
+      { timeout: 3_000 },
+    ).then(() => true).catch(() => false);
+
+    const videoImmersiveFailed = !currentIsVideo
+      || !entryReachableInViewer
+      || !videoOpenedFullscreen
+      || !stayedPausedOnEntry
+      || !keptPlayingInFullscreen
+      || !keptPlayingAfterExit
+      || videoImmersive.consoleErrors.length > 0
+      || videoImmersive.pageErrors.length > 0;
+    checks.push({
+      name: "story-mobile-viewer-immersive-entry-video",
+      currentIsVideo,
+      entryReachableInViewer,
+      videoOpenedFullscreen,
+      stayedPausedOnEntry,
+      keptPlayingInFullscreen,
+      keptPlayingAfterExit,
+      consoleErrors: videoImmersive.consoleErrors,
+      pageErrors: videoImmersive.pageErrors,
+      failed: videoImmersiveFailed,
+    });
+    if (videoImmersiveFailed) failed = true;
+  } finally {
+    await videoImmersive.page.close();
   }
 
   for (const [label, viewport] of [
