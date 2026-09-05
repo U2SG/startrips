@@ -1143,9 +1143,13 @@ try {
       .waitFor({ state: "visible", timeout: 5_000 })
       .then(() => true)
       .catch(() => false);
+    // The entry keeps the mobile immersive contract: the overlay opens with its
+    // chrome hidden, which is also why this lane leaves through Browser Back
+    // rather than through a close button that is deliberately not visible yet.
+    const enteredImmersive = await overlay.evaluate((root) => root.classList.contains("is-controls-hidden"));
     // Idle: the entry did not invent playback for a viewer that was not playing.
     const stayedPausedOnEntry = await overlay.evaluate((root) => !root.classList.contains("is-playing"));
-    await overlay.locator(".journey-story-fullscreen__close").click();
+    await videoImmersive.page.evaluate(() => window.history.back());
     await overlay.waitFor({ state: "hidden", timeout: 5_000 });
 
     // Playing: the sequence survives the round trip, and both controls agree.
@@ -1166,7 +1170,7 @@ try {
       undefined,
       { timeout: 3_000 },
     ).then(() => true).catch(() => false);
-    await overlay.locator(".journey-story-fullscreen__close").click();
+    await videoImmersive.page.evaluate(() => window.history.back());
     await overlay.waitFor({ state: "hidden", timeout: 5_000 });
     const keptPlayingAfterExit = await videoImmersive.page.waitForFunction(
       () => document.querySelector(".journey-story__mobile-media-play")?.getAttribute("aria-pressed") === "true",
@@ -1177,6 +1181,7 @@ try {
     const videoImmersiveFailed = !currentIsVideo
       || !entryReachableInViewer
       || !videoOpenedFullscreen
+      || !enteredImmersive
       || !stayedPausedOnEntry
       || !keptPlayingInFullscreen
       || !keptPlayingAfterExit
@@ -1187,6 +1192,7 @@ try {
       currentIsVideo,
       entryReachableInViewer,
       videoOpenedFullscreen,
+      enteredImmersive,
       stayedPausedOnEntry,
       keptPlayingInFullscreen,
       keptPlayingAfterExit,
