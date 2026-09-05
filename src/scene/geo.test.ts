@@ -9,6 +9,7 @@ import {
   buildSphericalRingSegments,
   formatLatitude,
   formatLongitude,
+  GEOGRAPHIC_SURFACE_RADIUS,
   getSphericalRouteFocus,
   latLonToVector3,
   rotationXForLatitude,
@@ -377,8 +378,32 @@ describe("spherical coastline geometry", () => {
       polygons.forEach((polygon) => rings.push(...polygon));
     });
 
-    const positions = buildSphericalRingSegments(rings, 1.405, 20_000);
+    // #237: the coastline is a geographic reference layer, so it is built on
+    // the canonical surface radius rather than on the 1.405 shell it used to
+    // occupy. The vertex budget is unchanged - decimation selects paths and
+    // segments by index, so the radius never moved the count.
+    const positions = buildSphericalRingSegments(
+      rings,
+      GEOGRAPHIC_SURFACE_RADIUS,
+      20_000,
+    );
     expect(positions.length / 3).toBe(10_030);
     expect(positions.length / 3).toBeLessThanOrEqual(20_000);
+    let maxRadiusError = 0;
+    for (let index = 0; index < positions.length; index += 3) {
+      const radius = Math.hypot(
+        positions[index],
+        positions[index + 1],
+        positions[index + 2],
+      );
+      maxRadiusError = Math.max(
+        maxRadiusError,
+        Math.abs(radius - GEOGRAPHIC_SURFACE_RADIUS),
+      );
+    }
+    // Every coastline vertex lives on the surface a Place Label is anchored to,
+    // so no part of the map sits on an Earth of its own.
+    expect(maxRadiusError).toBeLessThan(1e-6);
+    expect(GEOGRAPHIC_SURFACE_RADIUS).not.toBe(1.405);
   });
 });

@@ -42,6 +42,28 @@ const FOCUS_MATCH_TOLERANCE_PX = 1.5;
 // The readability offset the place-label layer applies after projection.
 const TEXT_OFFSET = { x: 6, y: -5 };
 
+// #237: the coastline is the layer a viewer READS as the map. A place label
+// that is mathematically correct against a 1.39 sphere still looks wrong while
+// the coastline it is compared against lives on 1.405, so this lane measures
+// the map itself, not only the annotation.
+//
+// Two points on the same sphere, separated by a small angle, do not move
+// identically on screen - the projected motion field varies across the visible
+// cap. The allowance is therefore derived from the separation the frame
+// PUBLISHES rather than picked: the field varies by order one per radian, and
+// SEPARATION_GAIN is a deliberate factor-of-three margin over that. A coastline
+// back on the old shell moves about 5% faster than a label beside it at maximum
+// zoom, which is far outside this allowance for a drag step of any size.
+const SEPARATION_GAIN = 3;
+// Anchors are published to 0.01px, so a difference of two differences carries
+// up to 0.04px of rounding.
+const MOTION_FLOOR_PX = 0.2;
+// Beyond this the two samples are no longer "the same geographic vicinity".
+const MAX_PAIR_SEPARATION_DEG = 1.5;
+// Enough paired steps across the dense-coastline pass that a thin frame or a
+// label lost to #79 collision cannot quietly empty the measurement.
+const MIN_MOTION_PAIRS = 10;
+
 // #196 acceptance: a dense-coastline city, a large US city, an island city and
 // an inland control. Coordinates are the fixture framing; the label matched in
 // the DOM is whichever rendered place is nearest to them.
@@ -107,6 +129,24 @@ function measure(page) {
       scale: state.scale,
       surfaceRadius: Number(host.dataset.geographicSurfaceRadius),
       labelAnchorRadius: Number(host.dataset.cityLabelAnchorRadius),
+      coastlineSemanticRadius: Number(host.dataset.coastlineSemanticRadius),
+      projectionSpace: host.dataset.projectionSpace ?? "",
+      coastlineLod: host.dataset.coastlineLod ?? "",
+      // #237: a real vertex of the coastline this frame is drawing, projected
+      // through the same frame as the place labels. `lat`/`lon` are the
+      // vertex's own coordinates, which is how a drag step can tell a LOD
+      // rebuild (a different vertex) apart from motion (the same one moving).
+      coastline: Number.isFinite(Number(host.dataset.coastlineAnchorX))
+        ? {
+          anchor: {
+            x: Number(host.dataset.coastlineAnchorX),
+            y: Number(host.dataset.coastlineAnchorY),
+          },
+          lat: Number(host.dataset.coastlineAnchorLat),
+          lon: Number(host.dataset.coastlineAnchorLon),
+          radius: Number(host.dataset.coastlineAnchorRadius),
+        }
+        : null,
       viewport: { width: host.clientWidth, height: host.clientHeight },
       focus: {
         x: Number(host.dataset.personalPointX),
@@ -173,6 +213,26 @@ function reachableContainment(sample) {
   // overflows the window would be a statement about place density.
   const halfEdge = Math.min(sample.viewport.width, sample.viewport.height) / 2;
   return Math.min(offAxisAllowance(sample), halfEdge / sample.silhouettePx);
+}
+
+/** Great-circle separation in degrees. */
+function separationDegrees(left, right) {
+  const toRadians = Math.PI / 180;
+  const cosine = Math.sin(left.lat * toRadians) * Math.sin(right.lat * toRadians)
+    + Math.cos(left.lat * toRadians) * Math.cos(right.lat * toRadians)
+      * Math.cos((right.lon - left.lon) * toRadians);
+  return Math.acos(Math.min(1, Math.max(-1, cosine))) / toRadians;
+}
+
+/** The rendered place label closest to a geographic point, or null. */
+function nearestLabel(sample, point) {
+  let best = null;
+  for (const label of sample.labels) {
+    if (!Number.isFinite(label.lat) || !Number.isFinite(label.lon)) continue;
+    const separation = separationDegrees(point, { lat: label.lat, lon: label.lon });
+    if (!best || separation < best.separation) best = { label, separation };
+  }
+  return best;
 }
 
 /** The label nearest to the fixture coordinates, if the frame rendered it. */
@@ -312,6 +372,11 @@ let checks = 0;
 let framesMeasured = 0;
 let labelsMeasured = 0;
 let worstContainment = { ratio: 0, where: "none", name: "" };
+// #237 dense-coastline pass.
+let motionPairs = 0;
+let motionSkipped = 0;
+let worstMotion = { excessPx: -Infinity, where: "none", detail: "" };
+let worstCoastlineContainment = { ratio: 0, where: "none" };
 
 function check(condition, message) {
   checks += 1;
@@ -338,6 +403,106 @@ function checkFrame(sample, where) {
     `${where}: place label "${worst.label?.name}" projects ${worst.ratio.toFixed(4)} of the way out of the geographic silhouette (this framing allows ${limit.toFixed(4)}) - it is anchored above the map surface`,
   );
   return worst;
+}
+
+/**
+ * #237: the coastline vertex this frame is drawing, measured the same two ways
+ * a place label is measured.
+ *
+ * Containment needs no new tolerance: a point ON the geographic surface can
+ * never project outside that surface's own silhouette, and the file's own
+ * history records what the superseded 1.46 shell scored against the same
+ * inequality (1.056 at 1x, 1.081 at 2x, 1.340 at max). A coastline back on
+ * 1.405 fails it by construction; one on the surface cannot.
+ */
+function checkCoastlineFrame(sample, where) {
+  if (!sample.coastline) {
+    check(false, `${where}: the scene published no coastline anchor to measure the map against`);
+    return null;
+  }
+  check(
+    sample.coastlineSemanticRadius === sample.surfaceRadius,
+    `${where}: the coastline semantic radius ${sample.coastlineSemanticRadius} is not the geographic surface radius ${sample.surfaceRadius}`,
+  );
+  check(
+    sample.projectionSpace === "single",
+    `${where}: the scene reports projection space "${sample.projectionSpace}" rather than a single space`,
+  );
+  check(
+    Math.abs(sample.coastline.radius - sample.surfaceRadius) < 0.0006,
+    `${where}: the drawn coastline vertex sits at radius ${sample.coastline.radius}, not on the geographic surface ${sample.surfaceRadius}`,
+  );
+  const ratio = containment(sample, sample.coastline.anchor);
+  const limit = offAxisAllowance(sample) + CONTAINMENT_MARGIN;
+  const normalised = ratio / offAxisAllowance(sample);
+  if (normalised > worstCoastlineContainment.ratio) {
+    worstCoastlineContainment = { ratio: normalised, where };
+  }
+  check(
+    ratio <= limit,
+    `${where}: the coastline vertex projects ${ratio.toFixed(4)} of the way out of the geographic silhouette (this framing allows ${limit.toFixed(4)}) - the map is drawn above the surface its labels are anchored to`,
+  );
+  return ratio;
+}
+
+/**
+ * The invariant the issue asks for in motion: one geographic vicinity, one
+ * projected motion vector. Measured between CONSECUTIVE steps of a continuous
+ * drag, because that is the shape of the reported symptom.
+ *
+ * A step is skipped when the coastline anchor identity changed - a LOD or
+ * refinement rebuild picks a different nearest vertex, and comparing two
+ * different points frame-to-frame would be a rebuild reported as drift.
+ */
+function checkMotionPair(previous, current, where) {
+  if (!previous?.coastline || !current?.coastline) return;
+  if (
+    previous.coastline.lat !== current.coastline.lat
+    || previous.coastline.lon !== current.coastline.lon
+  ) {
+    motionSkipped += 1;
+    return;
+  }
+  const before = nearestLabel(previous, previous.coastline);
+  const after = nearestLabel(current, current.coastline);
+  if (
+    !before || !after
+    || before.label.lat !== after.label.lat
+    || before.label.lon !== after.label.lon
+    || after.separation > MAX_PAIR_SEPARATION_DEG
+  ) {
+    motionSkipped += 1;
+    return;
+  }
+  const coastMotion = {
+    x: current.coastline.anchor.x - previous.coastline.anchor.x,
+    y: current.coastline.anchor.y - previous.coastline.anchor.y,
+  };
+  const labelMotion = {
+    x: after.label.anchor.x - before.label.anchor.x,
+    y: after.label.anchor.y - before.label.anchor.y,
+  };
+  const labelMotionPx = Math.hypot(labelMotion.x, labelMotion.y);
+  const differencePx = Math.hypot(
+    coastMotion.x - labelMotion.x,
+    coastMotion.y - labelMotion.y,
+  );
+  const separationRadians = after.separation * Math.PI / 180;
+  const allowance = MOTION_FLOOR_PX
+    + labelMotionPx * separationRadians * SEPARATION_GAIN;
+  motionPairs += 1;
+  const excess = differencePx - allowance;
+  if (excess > worstMotion.excessPx) {
+    worstMotion = {
+      excessPx: excess,
+      where,
+      detail: `diff=${differencePx.toFixed(3)}px allowance=${allowance.toFixed(3)}px labelMotion=${labelMotionPx.toFixed(2)}px separation=${after.separation.toFixed(3)}deg label="${after.label.name}"`,
+    };
+  }
+  check(
+    differencePx <= allowance,
+    `${where}: across one drag step the coastline moved ${differencePx.toFixed(3)}px differently than place label "${after.label.name}" ${after.separation.toFixed(3)} degrees away (allowed ${allowance.toFixed(3)}px for a ${labelMotionPx.toFixed(2)}px step) - the map and its labels are not on one Earth`,
+  );
 }
 
 /** #79 must be untouched: rendered labels still never overlap one another. */
@@ -395,6 +560,16 @@ try {
       const settled = await measure(page);
       checkFrame(settled, `${label} settled`);
       checkNoOverlap(settled, `${label} settled`);
+      // #237 asks for Shenzhen / Pearl River Delta specifically, and the lane
+      // already runs four fixtures x three zooms x fifteen frames inside a
+      // twelve-minute job. Scoping the map measurement to the dense-coastline
+      // fixture keeps it in the same page turns the labels already cost.
+      const measuresCoastline = fixture.key === "dense-coastline";
+      let previousCoastlineSample = null;
+      if (measuresCoastline) {
+        checkCoastlineFrame(settled, `${label} settled`);
+        previousCoastlineSample = settled;
+      }
 
       let nearestSeen = Number.POSITIVE_INFINITY;
       let farthestSeen = 0;
@@ -422,6 +597,11 @@ try {
         const sample = await measure(page);
         checkFrame(sample, `${label} drag step ${step}`);
         record(sample);
+        if (measuresCoastline) {
+          checkCoastlineFrame(sample, `${label} drag step ${step}`);
+          checkMotionPair(previousCoastlineSample, sample, `${label} drag step ${step}`);
+          previousCoastlineSample = sample;
+        }
       }
       const dragged = await measure(page);
       // Drag back so the next zoom starts from the same framing.
@@ -453,6 +633,22 @@ try {
         farthestSeen >= reachable * OUTWARD_COVERAGE,
         `${label}: place labels only ever reached ${farthestSeen.toFixed(3)} of the silhouette across ${steps + 1} frames, short of ${(reachable * OUTWARD_COVERAGE).toFixed(3)} - ${reachable.toFixed(3)} was reachable in this framing`,
       );
+
+      if (measuresCoastline) {
+        console.log([
+          `[qa-city-label-anchoring] ${fixture.key} map-vs-label @${settled.zoom.toFixed(2)}x`,
+          `coastlineLod=${settled.coastlineLod}`,
+          `coastlineSemanticRadius=${settled.coastlineSemanticRadius}`,
+          `surfaceRadius=${settled.surfaceRadius}`,
+          `projectionSpace=${settled.projectionSpace}`,
+          `coastlineVertexRadius=${settled.coastline ? settled.coastline.radius : "n/a"}`,
+          `coastlineVertex=${settled.coastline ? `(${settled.coastline.lat}, ${settled.coastline.lon})` : "n/a"}`,
+          `coastlineContainment=${settled.coastline ? containment(settled, settled.coastline.anchor).toFixed(4) : "n/a"}`,
+          `pairsSoFar=${motionPairs}`,
+          `skippedSoFar=${motionSkipped}`,
+          `worstMotionExcessPx=${worstMotion.excessPx === -Infinity ? "n/a" : worstMotion.excessPx.toFixed(3)}`,
+        ].join(" "));
+      }
 
       console.log([
         `[qa-city-label-anchoring] ${fixture.key}`,
@@ -600,6 +796,21 @@ try {
   if (pageErrors.length > 0 || consoleErrors.length > 0) {
     failures.push(`page errors: ${JSON.stringify({ pageErrors, consoleErrors })}`);
   }
+  // A pass that compared nothing would report zero failures, so the number of
+  // comparable steps is itself an assertion.
+  check(
+    motionPairs >= MIN_MOTION_PAIRS,
+    `only ${motionPairs} drag steps compared coastline motion against a place label within ${MAX_PAIR_SEPARATION_DEG} degrees (${motionSkipped} skipped); at least ${MIN_MOTION_PAIRS} are required for the measurement to mean anything`,
+  );
+  console.log([
+    `[qa-city-label-anchoring] map-vs-label:`,
+    `${motionPairs} paired drag steps,`,
+    `${motionSkipped} skipped,`,
+    `worst motion excess ${worstMotion.excessPx === -Infinity ? "n/a" : `${worstMotion.excessPx.toFixed(3)}px`}`,
+    `(${worstMotion.where}${worstMotion.detail ? `, ${worstMotion.detail}` : ""}),`,
+    `worst coastline containment ${worstCoastlineContainment.ratio.toFixed(4)}`,
+    `(${worstCoastlineContainment.where})`,
+  ].join(" "));
   console.log([
     `[qa-city-label-anchoring] ${checks} checks,`,
     `${failures.length} failed,`,
@@ -611,7 +822,7 @@ try {
   if (failures.length > 0) {
     throw new Error(`[qa-city-label-anchoring] ${failures.join("; ")}`);
   }
-  console.log("[qa-city-label-anchoring] place labels stay on the geographic surface at every zoom and through continuous drag");
+  console.log("[qa-city-label-anchoring] place labels and the coastline share one Earth at every zoom and through continuous drag");
 } finally {
   await context.close();
   await browser.close();
