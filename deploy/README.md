@@ -102,6 +102,39 @@ this setting, so raising it lengthens how long a revoked share can still fetch
 bytes. Lowering it costs a guest an extra API round trip per asset while a page
 is open. Do not raise it to match the owner value.
 
+### Guest share abuse budgets
+
+Startrips has no application-wide API rate limiter; that blanket `/api/*`
+bucket was removed deliberately because a limit belongs to an endpoint's own
+cost and threat model. `/api/shared/*` is the one public, unauthenticated
+surface the product exposes, so it carries its own budgets and nothing else in
+the API is throttled by them.
+
+`SHARE_RATE_LIMIT_WINDOW_SECONDS` (10-3600, default 60) is the fixed window all
+three ceilings are measured over.
+
+`SHARE_DATA_RATE_LIMIT` (>=10, default 60) and `SHARE_MEDIA_RATE_LIMIT` (>=30,
+default 240) are counted **per share grant**, not per client address. A share
+link is meant to be forwarded, so many addresses legitimately hold one
+capability and charging them individually would throttle the feature's own
+purpose. The two are separate budgets because one open Journey issues far more
+media read-URLs than payload reads: at the default 90-second guest presign a
+continuously displayed asset costs about 1.3 reads per minute, so 240 sustains
+roughly 180 such assets or thirty full eight-asset playback prefetch bursts a
+minute, while 60 data reads carries about fifteen simultaneous recipients of
+one link.
+
+`SHARE_UNKNOWN_TOKEN_RATE_LIMIT` (>=5, default 30) is the only budget counted
+per client address, and it is charged only for a request whose token resolved
+to nothing — an unknown, revoked, expired or absent token. A request that
+reaches a live grant never spends it, and a `MEDIA_UNAVAILABLE` answer does not
+either, because that is the owner having moved one photo rather than an attack.
+It does not make a 256-bit token guessable or not; it caps what a flood costs.
+
+Raising a budget weakens abuse resistance. Lowering one below its floor is
+refused at startup, because #200 is explicit that a limit which breaks a normal
+image-heavy Journey during playback prefetch is the worse outcome.
+
 ## Access log redaction
 
 Caddy's access log records `request>uri`, which is the path plus the query
