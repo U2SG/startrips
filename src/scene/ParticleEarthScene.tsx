@@ -722,7 +722,12 @@ export type ProjectedRoutePath = {
   end: ProjectedRoutePoint | null;
 };
 
-const HORIZON_CLIP_ITERATIONS = 8;
+// #196 review: the probe walk below is a bisection, so the smallest visible
+// fraction of a segment it can still resolve is 2^-ITERATIONS. Eight steps
+// dropped a straddling segment whose visible part was under ~0.4% of its
+// length; twelve costs at most four extra projections on the few segments
+// that actually cross the horizon and makes that residue ~0.02%.
+const HORIZON_CLIP_ITERATIONS = 12;
 
 /**
  * #193: route geometry is stored as unit directions plus a per-vertex lift, so
@@ -796,8 +801,17 @@ export function buildProjectedRoutePath(
       continue;
     }
 
-    // One end is behind the horizon (or past a clip plane): walk the chord to
+    // One end is behind the horizon (or past a clip plane): walk the arc to
     // the crossing so the visible side still reaches its Route Point anchor.
+    //
+    // #196 review: the probe follows the SPHERICAL path, not the straight
+    // chord between the two vertices. Now that a zero-lift Route Point sits on
+    // the occluding surface itself rather than on a shell above it, every
+    // interior point of that chord is a secant and dips below the occluder, so
+    // a chord probe reported the crossing up to ~5 degrees PAST the true limb
+    // and drew the line into the globe's own silhouette. Renormalising the
+    // interpolated direction keeps each probe on the arc the route actually
+    // occupies, which is where the visible portion ends.
     let crossingFound = false;
     if (startVisible !== endVisible) {
       let low = 0;
@@ -805,10 +819,27 @@ export function buildProjectedRoutePath(
       for (let step = 0; step < HORIZON_CLIP_ITERATIONS; step += 1) {
         const middle = (low + high) / 2;
         const progress = startVisible ? middle : 1 - middle;
+        const probeDirectionX =
+          directions[startOffset] + (directions[endOffset] - directions[startOffset]) * progress;
+        const probeDirectionY =
+          directions[startOffset + 1]
+          + (directions[endOffset + 1] - directions[startOffset + 1]) * progress;
+        const probeDirectionZ =
+          directions[startOffset + 2]
+          + (directions[endOffset + 2] - directions[startOffset + 2]) * progress;
+        const probeDirectionLength = Math.hypot(
+          probeDirectionX,
+          probeDirectionY,
+          probeDirectionZ,
+        );
+        // Both directions are unit vectors a fraction of a degree apart, so
+        // their interpolation is never near zero length and needs no guard.
+        const probeRadius =
+          (startRadius + (endRadius - startRadius) * progress) / probeDirectionLength;
         const visible = projectPoint(
-          startWorldX + (endWorldX - startWorldX) * progress,
-          startWorldY + (endWorldY - startWorldY) * progress,
-          startWorldZ + (endWorldZ - startWorldZ) * progress,
+          probeDirectionX * probeRadius,
+          probeDirectionY * probeRadius,
+          probeDirectionZ * probeRadius,
           probe,
         );
         if (visible) {
@@ -3032,6 +3063,15 @@ export function ParticleEarthScene({
           entry.element.style.removeProperty("display");
           entry.element.setAttribute("x", textX.toFixed(1));
           entry.element.setAttribute("y", textY.toFixed(1));
+          // #196: x/y above are the typography position, i.e. the anchor plus
+          // the screen-space readability offset. The anchor itself is what
+          // claims a latitude/longitude, so it is published separately -
+          // exactly as a Route Point marker does - and QA measures that rather
+          // than glyph bounds.
+          entry.element.dataset.anchorX = routeProjectedPoint.x.toFixed(2);
+          entry.element.dataset.anchorY = routeProjectedPoint.y.toFixed(2);
+          entry.element.dataset.cityLat = city.latitude.toFixed(4);
+          entry.element.dataset.cityLon = city.longitude.toFixed(4);
           entry.element.textContent = displayName;
           entry.city = city;
           visibleCityCount += 1;

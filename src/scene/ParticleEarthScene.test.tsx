@@ -829,6 +829,71 @@ describe("ParticleEarthScene contracts", () => {
     expect(path.d.startsWith(`M${marker.x.toFixed(1)} ${marker.y.toFixed(1)}`)).toBe(true);
   });
 
+  // #196: a Route Point now sits ON the occluding surface instead of a shell
+  // above it, so the straight chord between two zero-lift vertices is a secant
+  // that dips inside the globe. These two cases pin the clip walk to the arc
+  // the route actually occupies.
+  describe("#196 horizon clipping of surface-level route geometry", () => {
+    const camera = new Vector3(0, 0, 5.4);
+    // Where the surface turns away from the camera. Everything at a greater
+    // polar angle than this is behind the limb.
+    const limbAngle = Math.acos(GLOBE_SURFACE_RADIUS / camera.z);
+    // Screen units per world unit. buildProjectedRoutePath rounds path
+    // coordinates to 0.1, so the probe has to be projected large enough for
+    // that rounding not to swallow the effect being measured.
+    const scale = 1000;
+
+    /**
+     * One flat segment in the y = 0 plane, from `startAngle` to `endAngle`
+     * measured from the camera axis. The projection is deliberately the
+     * identity on (x, z) so a path coordinate can be read straight back as a
+     * world position and its radius and polar angle recovered.
+     */
+    function clipFlatSegment(startAngle: number, endAngle: number) {
+      const samples = {
+        directions: new Float32Array([
+          Math.sin(startAngle), 0, Math.cos(startAngle),
+          Math.sin(endAngle), 0, Math.cos(endAngle),
+        ]),
+        lifts: new Float32Array([0, 0]),
+      };
+      const path = buildProjectedRoutePath(
+        samples,
+        (x, y, z, target) => {
+          if (!isSphericalPointVisible(camera, new Vector3(x, y, z))) return false;
+          target.x = x * scale;
+          target.y = z * scale;
+          return true;
+        },
+        { radius: ROUTE_ANCHOR_RADIUS, liftScale: 1 },
+      );
+      const points = [...path.d.matchAll(/[ML](-?[\d.]+) (-?[\d.]+)/g)].map(
+        ([, x, z]) => ({ x: Number(x) / scale, z: Number(z) / scale }),
+      );
+      return { path, points };
+    }
+
+    it("ends the clipped line on the surface at the limb, not inside the globe", () => {
+      const { path, points } = clipFlatSegment(limbAngle - 0.25, limbAngle + 0.25);
+      expect(path.d).not.toBe("");
+      const crossing = points[points.length - 1];
+      // On the chord the crossing landed at radius ~1.347 and ~0.47 degrees
+      // past the limb, i.e. the line was drawn into the globe's silhouette.
+      expect(Math.hypot(crossing.x, crossing.z)).toBeCloseTo(ROUTE_ANCHOR_RADIUS, 3);
+      expect(Math.atan2(crossing.x, crossing.z)).toBeLessThanOrEqual(limbAngle + 1e-6);
+    });
+
+    it("still draws a segment whose visible part is a fraction of a percent", () => {
+      // Visible for ~0.2% of its length: below the 2^-8 the previous eight
+      // bisection steps could resolve, so the whole segment used to vanish.
+      const startAngle = limbAngle - 0.0004;
+      const { path, points } = clipFlatSegment(startAngle, limbAngle + 0.2);
+      expect(path.d).not.toBe("");
+      expect(points[0].x).toBeCloseTo(ROUTE_ANCHOR_RADIUS * Math.sin(startAngle), 6);
+      expect(points[0].z).toBeCloseTo(ROUTE_ANCHOR_RADIUS * Math.cos(startAngle), 6);
+    });
+  });
+
   it("keeps route labels bounded while preserving the first and last stops", () => {
     const stops = Array.from({ length: 10 }, (_, index) => ({
       isStop: true,

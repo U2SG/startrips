@@ -1,0 +1,379 @@
+// #196 place-label anchoring QA.
+//
+// A place name is an annotation of a geographic point, so its screen anchor
+// must be the projection of that point on the map surface - not of a point on
+// some larger shell that happens to share the latitude/longitude. The failure
+// this lane exists to catch is invisible in a screenshot and grows with zoom:
+// an annotation lifted above the surface travels along a different projected
+// trajectory than the geography it names, so it drifts while dragging.
+//
+// The measurement is a containment ratio, and it needs no reference
+// implementation of the projection. The globe's own interaction geometry
+// publishes the projected silhouette of the geographic surface - centre and
+// radius in CSS pixels, computed from GLOBE_SURFACE_RADIUS through a code path
+// that has nothing to do with label projection. A point ON that surface can
+// never project outside its own silhouette, so for every rendered label:
+//
+//     hypot(anchor - silhouetteCentre) / silhouetteRadius <= 1
+//
+// On the superseded 1.46 shell this ratio reached 1.056 at 1x, 1.081 at 2x and
+// 1.340 at max zoom - the drift, quantified. Anything at or under 1 is a label
+// that lives on the map.
+import { launchQaBrowser } from "./qa-browser.mjs";
+
+const baseUrl = process.env.QA_BASE_URL ?? "http://127.0.0.1:4173";
+
+// A surface point projects exactly onto the silhouette at the limb, so the
+// budget only has to absorb the 0.01px the anchor is published at.
+const CONTAINMENT_LIMIT = 1.005;
+// Two projection paths for one clicked place: the label anchor goes through
+// the city vector layer, the focus signal through the focus solver.
+const FOCUS_MATCH_TOLERANCE_PX = 1.5;
+// The readability offset the place-label layer applies after projection.
+const TEXT_OFFSET = { x: 6, y: -5 };
+
+// #196 acceptance: a dense-coastline city, a large US city, an island city and
+// an inland control. Coordinates are the fixture framing; the label matched in
+// the DOM is whichever rendered place is nearest to them.
+const FIXTURES = [
+  { key: "dense-coastline", name: "Shenzhen", lat: 22.54554, lon: 114.0683 },
+  { key: "large-us", name: "San Francisco", lat: 37.77493, lon: -122.41942 },
+  { key: "island", name: "Singapore", lat: 1.28967, lon: 103.85007 },
+  { key: "inland-control", name: "Denver", lat: 39.73915, lon: -104.9847 },
+];
+
+// Where the fixture label must be seen at least once while it is dragged from
+// the centre of the view out to the limb (#196 QA: centred, well off-centre,
+// and near the visible limb).
+const POSITION_BANDS = [
+  { key: "centred", min: 0, max: 0.12 },
+  { key: "off-centre", min: 0.22, max: 0.6 },
+  { key: "near-limb", min: 0.68, max: CONTAINMENT_LIMIT },
+];
+
+const browser = await launchQaBrowser({
+  headless: true,
+  args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"],
+});
+
+function debug(page) {
+  return page.evaluate(() => window.__particleEarthDebug?.() ?? null);
+}
+
+/**
+ * Every rendered place label with its published geographic anchor, measured
+ * against the projected silhouette of the geographic surface.
+ */
+function measure(page) {
+  return page.evaluate(() => {
+    const host = document.querySelector(".particle-earth-scene");
+    const state = window.__particleEarthDebug?.();
+    if (!host || !state) return { error: "scene debug state is unavailable" };
+    const labels = [];
+    for (const element of document.querySelectorAll(".particle-earth-city")) {
+      // A pooled label keeps its last anchor after it is hidden.
+      if (element.style.display === "none") continue;
+      const x = Number(element.dataset.anchorX);
+      const y = Number(element.dataset.anchorY);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+      const box = element.getBBox();
+      labels.push({
+        name: element.textContent ?? "",
+        lat: Number(element.dataset.cityLat),
+        lon: Number(element.dataset.cityLon),
+        anchor: { x, y },
+        // The typography offset is applied after projection, so the drawn text
+        // is allowed to sit away from the anchor - by a constant.
+        text: { x: Number(element.getAttribute("x")), y: Number(element.getAttribute("y")) },
+        box: { left: box.x, top: box.y, right: box.x + box.width, bottom: box.y + box.height },
+      });
+    }
+    return {
+      labels,
+      centre: state.projectedGlobeCenterPx,
+      silhouettePx: state.projectedGlobeRadiusPx,
+      interactionRadiusPx: 1 / state.effectiveDragRadiansPerPixel,
+      zoom: state.zoom,
+      scale: state.scale,
+      surfaceRadius: Number(host.dataset.geographicSurfaceRadius),
+      labelAnchorRadius: Number(host.dataset.cityLabelAnchorRadius),
+      focus: {
+        x: Number(host.dataset.personalPointX),
+        y: Number(host.dataset.personalPointY),
+      },
+    };
+  });
+}
+
+function containment(sample, anchor) {
+  return Math.hypot(anchor.x - sample.centre.x, anchor.y - sample.centre.y)
+    / sample.silhouettePx;
+}
+
+/** The label nearest to the fixture coordinates, if the frame rendered it. */
+function findFixture(sample, fixture) {
+  let best = null;
+  for (const label of sample.labels) {
+    const distance = Math.hypot(label.lat - fixture.lat, label.lon - fixture.lon);
+    if (distance <= 0.25 && (!best || distance < best.distance)) best = { label, distance };
+  }
+  return best?.label ?? null;
+}
+
+async function setZoom(page, targetZoom) {
+  const before = await debug(page);
+  if (!before) throw new Error("Particle Earth debug state is unavailable");
+  if (Math.abs(before.zoom - targetZoom) > 0.02) {
+    const canvas = page.locator('canvas[data-three-scene="particle-earth"]');
+    const bounds = await canvas.boundingBox();
+    if (!bounds) throw new Error("Particle Earth canvas has no bounds");
+    await canvas.evaluate((node, init) => node.dispatchEvent(new WheelEvent("wheel", init)), {
+      bubbles: true,
+      cancelable: true,
+      clientX: bounds.x + bounds.width / 2,
+      clientY: bounds.y + bounds.height / 2,
+      deltaY: -Math.log(targetZoom / before.zoom) / 0.0012,
+    });
+    await page.waitForTimeout(160);
+  }
+  const after = await debug(page);
+  if (!after || Math.abs(after.zoom - targetZoom) > 0.03) {
+    throw new Error(`Unable to set city QA zoom: ${JSON.stringify({ targetZoom, after })}`);
+  }
+  return after;
+}
+
+/**
+ * Camera distance in globe-local units, derived from the two published pixel
+ * radii rather than hard-coded. Both share the same focal length, so
+ * silhouette/interaction = (d - R) / sqrt(d^2 - R^2) = sqrt((d - R)/(d + R)),
+ * which inverts to d = R (1 + r^2) / (1 - r^2). Used only to size the drag
+ * that walks a label out to the limb.
+ */
+function horizonRadians(sample) {
+  const worldRadius = sample.surfaceRadius * sample.scale;
+  const ratioSquared = (sample.silhouettePx / sample.interactionRadiusPx) ** 2;
+  const cameraDistance = worldRadius * (1 + ratioSquared) / (1 - ratioSquared);
+  return Math.acos(Math.min(1, worldRadius / cameraDistance));
+}
+
+const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+const page = await context.newPage();
+const consoleErrors = [];
+const pageErrors = [];
+page.on("console", (message) => {
+  if (message.type() === "error") consoleErrors.push(message.text());
+});
+page.on("pageerror", (error) => pageErrors.push(error.message));
+await page.route("**/api/auth/get-session", (route) => route.fulfill({
+  status: 200,
+  contentType: "application/json",
+  body: "null",
+}));
+
+const failures = [];
+let checks = 0;
+let framesMeasured = 0;
+let labelsMeasured = 0;
+let worstContainment = { ratio: 0, where: "none", name: "" };
+
+function check(condition, message) {
+  checks += 1;
+  if (!condition) failures.push(message);
+}
+
+/** The invariant, applied to every label in one frame. */
+function checkFrame(sample, where) {
+  framesMeasured += 1;
+  labelsMeasured += sample.labels.length;
+  let worst = { ratio: 0, label: null };
+  for (const label of sample.labels) {
+    const ratio = containment(sample, label.anchor);
+    if (ratio > worst.ratio) worst = { ratio, label };
+  }
+  if (worst.ratio > worstContainment.ratio) {
+    worstContainment = { ratio: worst.ratio, where, name: worst.label?.name ?? "" };
+  }
+  check(
+    worst.ratio <= CONTAINMENT_LIMIT,
+    `${where}: place label "${worst.label?.name}" projects ${worst.ratio.toFixed(4)} of the way out of the geographic silhouette (limit ${CONTAINMENT_LIMIT}) - it is anchored above the map surface`,
+  );
+  return worst;
+}
+
+/** #79 must be untouched: rendered labels still never overlap one another. */
+function checkNoOverlap(sample, where) {
+  let overlaps = 0;
+  for (let a = 0; a < sample.labels.length; a += 1) {
+    for (let b = a + 1; b < sample.labels.length; b += 1) {
+      const one = sample.labels[a].box;
+      const two = sample.labels[b].box;
+      if (
+        one.left < two.right && two.left < one.right
+        && one.top < two.bottom && two.top < one.bottom
+      ) overlaps += 1;
+    }
+  }
+  check(overlaps === 0, `${where}: ${overlaps} rendered place labels overlap, #79 collision handling regressed`);
+}
+
+try {
+  for (const fixture of FIXTURES) {
+    const url = new URL(
+      `/?qaState=journey-routes&qaQuality=high&qaFocusLat=${fixture.lat}&qaFocusLon=${fixture.lon}`,
+      baseUrl,
+    ).toString();
+    await page.goto(url, { waitUntil: "domcontentloaded" });
+    await page.locator('[data-scene-ready="true"]').waitFor({ timeout: 30_000 });
+    await page.waitForFunction(() => Boolean(window.__particleEarthDebug?.()));
+    // City data is fetched, so the first frames legitimately have no labels.
+    await page.waitForFunction(() => Number(
+      document.querySelector(".particle-earth-scene")?.dataset.journeyCityLabelCount ?? 0,
+    ) > 0, null, { timeout: 30_000 });
+    await page.waitForTimeout(400);
+
+    const opening = await measure(page);
+    if (opening.error) throw new Error(`[qa-city-label-anchoring] ${fixture.key}: ${opening.error}`);
+    check(
+      opening.labelAnchorRadius === opening.surfaceRadius,
+      `${fixture.key}: the place-label anchor radius ${opening.labelAnchorRadius} is not the geographic surface radius ${opening.surfaceRadius}`,
+    );
+    // The offset that keeps the text readable must be a screen-space constant
+    // applied after projection - never a different geographic anchor.
+    for (const label of opening.labels) {
+      check(
+        Math.abs(label.text.x - label.anchor.x - TEXT_OFFSET.x) < 0.06
+        && Math.abs(label.text.y - label.anchor.y - TEXT_OFFSET.y) < 0.06,
+        `${fixture.key}: label "${label.name}" text offset (${(label.text.x - label.anchor.x).toFixed(2)}, ${(label.text.y - label.anchor.y).toFixed(2)}) is not the constant screen-space offset (${TEXT_OFFSET.x}, ${TEXT_OFFSET.y})`,
+      );
+    }
+
+    for (const zoom of [1, 2, 3]) {
+      const state = await setZoom(page, zoom);
+      await page.waitForTimeout(220);
+      const label = `${fixture.key} @${state.zoom.toFixed(2)}x`;
+
+      const settled = await measure(page);
+      checkFrame(settled, `${label} settled`);
+      checkNoOverlap(settled, `${label} settled`);
+
+      const seenBands = new Map(POSITION_BANDS.map((band) => [band.key, false]));
+      const observed = [];
+      const canvas = page.locator('canvas[data-three-scene="particle-earth"]');
+      const bounds = await canvas.boundingBox();
+      if (!bounds) throw new Error("Particle Earth canvas has no bounds");
+      const start = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
+      // Enough rotation to walk the centred fixture out to its own limb. The
+      // pointer stays down across every step: this is the continuous drag the
+      // regression was reported against, not a sequence of separate gestures.
+      const steps = 16;
+      const stepPx = (horizonRadians(settled) * 0.97 * settled.interactionRadiusPx) / steps;
+
+      await page.mouse.move(start.x, start.y);
+      await page.mouse.down();
+      for (let step = 1; step <= steps; step += 1) {
+        await page.mouse.move(start.x + stepPx * step, start.y);
+        const sample = await measure(page);
+        checkFrame(sample, `${label} drag step ${step}`);
+        const found = findFixture(sample, fixture);
+        if (found) {
+          const ratio = containment(sample, found.anchor);
+          observed.push(ratio);
+          for (const band of POSITION_BANDS) {
+            if (ratio >= band.min && ratio <= band.max) seenBands.set(band.key, true);
+          }
+        }
+      }
+      // Drag back so the next zoom starts from the same framing.
+      for (let step = steps - 1; step >= 0; step -= 1) {
+        await page.mouse.move(start.x + stepPx * step, start.y);
+      }
+      await page.mouse.up();
+      await page.waitForTimeout(200);
+
+      for (const band of POSITION_BANDS) {
+        check(
+          seenBands.get(band.key) === true,
+          `${label}: the ${fixture.name} label was never measured ${band.key} (containment ${band.min}-${band.max}); observed ${observed.map((value) => value.toFixed(2)).join(",") || "none"}`,
+        );
+      }
+      // Dragging a place toward the limb must move it outward monotonically.
+      // A label on a different shell overshoots its own horizon and snaps back
+      // when the visibility test removes it, which shows up here as a reversal.
+      let reversals = 0;
+      for (let index = 1; index < observed.length; index += 1) {
+        if (observed[index] < observed[index - 1] - 0.02) reversals += 1;
+      }
+      check(reversals === 0, `${label}: the ${fixture.name} label moved back toward the centre ${reversals}x while the globe was dragged outward`);
+
+      const returned = await measure(page);
+      checkFrame(returned, `${label} after drag return`);
+
+      console.log([
+        `[qa-city-label-anchoring] ${fixture.key}`,
+        `zoom=${settled.zoom.toFixed(3)}`,
+        `labels=${settled.labels.length}`,
+        `silhouettePx=${settled.silhouettePx.toFixed(1)}`,
+        `maxContainment=${Math.max(...observed, 0).toFixed(4)}`,
+        `bands=${[...seenBands.entries()].map(([key, seen]) => `${key}:${seen ? "yes" : "NO"}`).join(",")}`,
+      ].join(" "));
+    }
+
+    // #196 acceptance: clicking a place name focuses the place it claimed.
+    // The label anchor and the focus signal are projected by two different
+    // subsystems, so their agreement after the focus settles is the check that
+    // the click does not reveal a hidden geographic mismatch.
+    await setZoom(page, 3);
+    await page.waitForTimeout(220);
+    const beforeClick = await measure(page);
+    const target = findFixture(beforeClick, fixture);
+    check(Boolean(target), `${fixture.key}: no ${fixture.name} label to click at max zoom`);
+    if (target) {
+      await page
+        .locator(`.particle-earth-city[data-city-lat="${target.lat.toFixed(4)}"][data-city-lon="${target.lon.toFixed(4)}"]`)
+        .first()
+        .click({ force: true });
+      await page.waitForTimeout(1200);
+      const afterClick = await measure(page);
+      const focused = findFixture(afterClick, fixture);
+      check(Boolean(focused), `${fixture.key}: the ${fixture.name} label disappeared after being clicked`);
+      if (focused) {
+        const drift = Math.hypot(
+          afterClick.focus.x - focused.anchor.x,
+          afterClick.focus.y - focused.anchor.y,
+        );
+        check(
+          drift <= FOCUS_MATCH_TOLERANCE_PX,
+          `${fixture.key}: clicking ${fixture.name} focused a point ${drift.toFixed(2)}px from where the label claimed it was (limit ${FOCUS_MATCH_TOLERANCE_PX}px)`,
+        );
+        checkFrame(afterClick, `${fixture.key} after click`);
+        console.log([
+          `[qa-city-label-anchoring] ${fixture.key} click`,
+          `clicked=(${target.anchor.x.toFixed(1)}, ${target.anchor.y.toFixed(1)})`,
+          `focusSignal=(${afterClick.focus.x.toFixed(1)}, ${afterClick.focus.y.toFixed(1)})`,
+          `labelAnchor=(${focused.anchor.x.toFixed(1)}, ${focused.anchor.y.toFixed(1)})`,
+          `focusToLabelPx=${drift.toFixed(3)}`,
+        ].join(" "));
+      }
+    }
+  }
+
+  if (pageErrors.length > 0 || consoleErrors.length > 0) {
+    failures.push(`page errors: ${JSON.stringify({ pageErrors, consoleErrors })}`);
+  }
+  console.log([
+    `[qa-city-label-anchoring] ${checks} checks,`,
+    `${failures.length} failed,`,
+    `${framesMeasured} frames,`,
+    `${labelsMeasured} label measurements,`,
+    `worst containment ${worstContainment.ratio.toFixed(4)}`,
+    `(${worstContainment.where}${worstContainment.name ? `, "${worstContainment.name}"` : ""})`,
+  ].join(" "));
+  if (failures.length > 0) {
+    throw new Error(`[qa-city-label-anchoring] ${failures.join("; ")}`);
+  }
+  console.log("[qa-city-label-anchoring] place labels stay on the geographic surface at every zoom and through continuous drag");
+} finally {
+  await context.close();
+  await browser.close();
+}
