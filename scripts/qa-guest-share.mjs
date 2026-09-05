@@ -630,15 +630,29 @@ try {
     );
 
     const mediaJourneyTitle = withMedia[0].title;
+    // A compact viewport renders no desktop journey rail — section 1 above
+    // measures that same contract — so the guest reaches a Journey through
+    // 全部旅程, exactly as a recipient on a phone does.
     const opened = await page.evaluate(async (title) => {
-      const rail = [...document.querySelectorAll(".living-atlas__journey-rail ol li button")]
+      const settle = () => new Promise((resolve) => setTimeout(resolve, 400));
+      const trigger = [...document.querySelectorAll("button")]
+        .find((button) => button.getAttribute("aria-label") === "打开全部旅程");
+      if (!trigger) return "no-picker-entry";
+      trigger.click();
+      await settle();
+      const entry = [...document.querySelectorAll(".mobile-v2__picker ol li button")]
         .find((button) => (button.textContent ?? "").includes(title));
-      if (!rail) return "no-rail-entry";
-      rail.click();
-      await new Promise((resolve) => setTimeout(resolve, 400));
+      if (!entry) return "no-picker-row";
+      entry.click();
+      await settle();
       const open = [...document.querySelectorAll("button")]
         .find((button) => (button.textContent ?? "").includes("打开故事"));
-      if (!open) return "no-story-entry";
+      if (!open) {
+        const labels = [...document.querySelectorAll("button")]
+          .map((button) => (button.getAttribute("aria-label") || button.textContent || "").trim().slice(0, 24))
+          .filter(Boolean);
+        return `no-story-entry: ${JSON.stringify(labels.slice(0, 12))}`;
+      }
       open.click();
       return "opened";
     }, mediaJourneyTitle);

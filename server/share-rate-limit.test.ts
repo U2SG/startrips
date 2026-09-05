@@ -144,6 +144,29 @@ describe("guest share rate limiting", () => {
     })).status).toBe(404);
   });
 
+  it("bounds a CONCURRENT token-guessing batch, not only a serial one", async () => {
+    const app = limitedApp();
+    const address = "203.0.113.66";
+    // The reason the address budget is reserved before the handler rather
+    // than charged after it: every request in one batch would otherwise read
+    // an un-charged counter and pass, so the ceiling would cap nothing an
+    // attacker could simply send all at once — and each of those requests
+    // costs a database lookup, which is what the budget exists to bound.
+    const statuses = await Promise.all(
+      Array.from({ length: 10 }, async () => {
+        const response = await guestRequest(app, "/dead", {
+          token: generateShareToken(),
+          address,
+        });
+        return response.status;
+      }),
+    );
+    expect(statuses.filter((status) => status === 404))
+      .toHaveLength(LIMITS.unknownTokenMaxRequests);
+    expect(statuses.filter((status) => status === 429))
+      .toHaveLength(10 - LIMITS.unknownTokenMaxRequests);
+  });
+
   it("charges a bearer-less request to the address budget too", async () => {
     const app = limitedApp();
     const address = "203.0.113.77";
@@ -225,20 +248,33 @@ describe("FixedWindowCounter", () => {
     expect(counter.hit("k", 2, 60_000)).toBe(true);
   });
 
-  it("reads a budget without charging it", () => {
+  it("gives one charge back without wiping the window", () => {
     const counter = new FixedWindowCounter(60_000);
-    expect(counter.exceeded("k", 1, 0)).toBe(false);
-    expect(counter.exceeded("k", 1, 0)).toBe(false);
+    expect(counter.hit("k", 2, 0)).toBe(true);
+    expect(counter.hit("k", 2, 0)).toBe(true);
+    counter.release("k", 0);
+    // One charge back, not the whole window: the earlier charge survives, so
+    // a valid request cannot reset a flood of invalid ones.
+    expect(counter.hit("k", 2, 0)).toBe(true);
+    expect(counter.hit("k", 2, 0)).toBe(false);
+  });
+
+  it("never releases below zero", () => {
+    const counter = new FixedWindowCounter(60_000);
+    counter.hit("k", 2, 0);
+    counter.release("k", 0);
+    counter.release("k", 0);
+    counter.release("k", 0);
     expect(counter.hit("k", 1, 0)).toBe(true);
-    expect(counter.exceeded("k", 1, 0)).toBe(true);
+    expect(counter.hit("k", 1, 0)).toBe(false);
   });
 
   it("forgets a key so a garbage token leaves no entry behind", () => {
     const counter = new FixedWindowCounter(60_000);
     expect(counter.hit("k", 1, 0)).toBe(true);
-    expect(counter.exceeded("k", 1, 0)).toBe(true);
+    expect(counter.hit("k", 1, 0)).toBe(false);
     counter.forget("k");
-    expect(counter.exceeded("k", 1, 0)).toBe(false);
+    expect(counter.hit("k", 1, 0)).toBe(true);
   });
 
   it("prunes expired keys once the map reaches its cap", () => {
@@ -248,11 +284,27 @@ describe("FixedWindowCounter", () => {
     }
     // A whole window later, admitting a fifth key sweeps the four stale ones,
     // so the map is bounded by traffic inside one window rather than by all
-    // traffic ever seen.
-    counter.hit("fresh", 1, 60_000);
+    // traffic ever seen. A swept key starts over, which is what `true` means.
+    expect(counter.hit("fresh", 1, 60_000)).toBe(true);
     for (let index = 0; index < 4; index += 1) {
-      expect(counter.exceeded(`old-${index}`, 1, 60_000)).toBe(false);
+      expect(counter.hit(`old-${index}`, 1, 60_000)).toBe(true);
     }
-    expect(counter.exceeded("fresh", 1, 60_000)).toBe(true);
+  });
+
+  it("evicts the oldest window when one window's keys reach the cap", () => {
+    // The case a sweep cannot help with: every key is fresh, so nothing is
+    // expired to remove. Without an eviction the map would grow without bound
+    // on exactly the traffic shape this cap exists for — a flood of distinct
+    // bearer tokens inside one window.
+    const counter = new FixedWindowCounter(60_000, 4);
+    for (let index = 0; index < 4; index += 1) {
+      counter.hit(`key-${index}`, 1, index);
+    }
+    counter.hit("newest", 1, 10);
+    // `key-0` started first, so it is the one that went.
+    expect(counter.hit("key-0", 1, 10)).toBe(true);
+    // `newest` is still counted, and so is a key that was not evicted.
+    expect(counter.hit("newest", 1, 10)).toBe(false);
+    expect(counter.hit("key-3", 1, 10)).toBe(false);
   });
 });

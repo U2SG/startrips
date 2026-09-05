@@ -68,28 +68,38 @@ export class FixedWindowCounter {
   /** Count one request for `key`; true when it is still inside the budget. */
   hit(key: string, max: number, now: number): boolean {
     const state = this.windows.get(key);
-    if (!state || now - state.startedAt >= this.windowMs) {
-      if (this.windows.size >= this.maxKeys) this.sweep(now);
-      this.windows.set(key, { startedAt: now, count: 1 });
-      return 1 <= max;
+    if (state && now - state.startedAt < this.windowMs) {
+      state.count += 1;
+      return state.count <= max;
     }
-    state.count += 1;
-    return state.count <= max;
+    // A rolled window is deleted before being re-inserted so the map's
+    // insertion order stays the order the windows STARTED in, which is what
+    // makes evicting its first entry an eviction of the oldest one.
+    this.windows.delete(key);
+    this.admit(now);
+    this.windows.set(key, { startedAt: now, count: 1 });
+    return 1 <= max;
   }
 
   /**
-   * Whether `key` has ALREADY spent its budget, without charging a request.
+   * Give one charge back.
    *
-   * The address budget is read this way before the handler runs and charged
-   * only afterwards, and only for a request that turned out to be unusable.
-   * A peek-then-charge-on-failure shape is what keeps a recipient who holds a
-   * real link from ever spending the probe budget, without letting one valid
-   * request reset a flood of invalid ones.
+   * The address budget is reserved BEFORE the handler runs — a peek would let
+   * an arbitrarily large concurrent batch pass, because every request in it
+   * reads the counter before any of them has charged it, which is exactly the
+   * database cost this budget exists to bound. A request that then turns out
+   * to hold a live grant releases its reservation here, so a recipient with a
+   * real link costs nothing net.
+   *
+   * It decrements rather than forgetting the key: forgetting would let one
+   * valid request wipe a whole window, so an attacker holding any working link
+   * could interleave a real request and never accumulate a probe charge at
+   * all.
    */
-  exceeded(key: string, max: number, now: number): boolean {
+  release(key: string, now: number): void {
     const state = this.windows.get(key);
-    if (!state || now - state.startedAt >= this.windowMs) return false;
-    return state.count >= max;
+    if (!state || now - state.startedAt >= this.windowMs) return;
+    if (state.count > 0) state.count -= 1;
   }
 
   /**
@@ -97,10 +107,30 @@ export class FixedWindowCounter {
    *
    * Used for a token hash that turned out not to name a grant: keeping it
    * would let anyone mint unbounded map entries out of random tokens, which is
-   * exactly the memory shape the address-keyed budget exists to bound.
+   * exactly the memory shape the eviction below exists to bound.
    */
   forget(key: string): void {
     this.windows.delete(key);
+  }
+
+  /**
+   * Make room for one new key.
+   *
+   * Sweeping alone is not a cap: a burst of distinct keys inside ONE window
+   * leaves nothing expired to sweep, so every admission would still grow the
+   * map. High-cardinality traffic on a public endpoint is exactly that shape,
+   * so once the sweep has not freed anything the oldest window is evicted.
+   * Insertion order is window-start order, so that is the map's first entry
+   * and the eviction is O(1) rather than a scan per admission.
+   */
+  private admit(now: number): void {
+    if (this.windows.size < this.maxKeys) return;
+    this.sweep(now);
+    while (this.windows.size >= this.maxKeys) {
+      const oldest = this.windows.keys().next();
+      if (oldest.done) return;
+      this.windows.delete(oldest.value);
+    }
   }
 
   private sweep(now: number): void {
@@ -154,11 +184,15 @@ function tooManyRequests(context: Context, windowSeconds: number) {
  *
  * The order is the design:
  *
- * 1. the address budget is READ first, without touching the database, so a
- *    token-guessing flood is refused before it can cost a query;
+ * 1. the address budget is RESERVED first, without touching the database, so a
+ *    token-guessing flood is refused before it can cost a query. Reserving
+ *    rather than peeking is what bounds a *concurrent* batch: every request in
+ *    one batch would read an un-charged counter and pass, so a peek would cap
+ *    nothing an attacker could not simply send all at once;
  * 2. the grant budget is CHARGED before the handler runs, because a budget
  *    charged afterwards cannot refuse anything;
- * 3. a `ShareAccessError` out of the handler charges the address budget and
+ * 3. afterwards the reservation is RELEASED for a request that reached a live
+ *    grant, and kept for one that raised `ShareAccessError` — which also
  *    un-charges the grant budget, since a token that resolved to nothing has
  *    no grant to charge and must not leave a map entry behind.
  *
@@ -168,13 +202,13 @@ function tooManyRequests(context: Context, windowSeconds: number) {
  * `context.res` never carries that answer. Inspecting the response here would
  * therefore have counted nothing at all.
  *
- * The one class it charges is `ShareAccessError`, which is the link itself
- * being unusable. `MEDIA_UNAVAILABLE` is a returned 404 rather than a throw
- * and deliberately costs nothing: the caller holds a working link and one
- * asset is gone, which is #200's live-scope product state, not an attack. A
- * throttled caller still learns nothing a plain request would not have told
- * it — the 429 says "you have sent too many unusable tokens", never "this
- * token exists".
+ * The one class that keeps its reservation is `ShareAccessError`, which is the
+ * link itself being unusable. `MEDIA_UNAVAILABLE` is a returned 404 rather
+ * than a throw and is released like any other success: the caller holds a
+ * working link and one asset is gone, which is #200's live-scope product
+ * state, not an attack. A throttled caller still learns nothing a plain
+ * request would not have told it — the 429 says "you have sent too many
+ * unusable tokens", never "this token exists".
  */
 export function createShareRateLimiter(config: ShareRateLimitConfig) {
   const windowMs = config.windowSeconds * 1000;
@@ -187,7 +221,7 @@ export function createShareRateLimiter(config: ShareRateLimitConfig) {
     const probeKey = address === undefined ? null : `probe:${address}`;
     if (
       probeKey
-      && byAddress.exceeded(probeKey, config.unknownTokenMaxRequests, now)
+      && !byAddress.hit(probeKey, config.unknownTokenMaxRequests, now)
     ) {
       return tooManyRequests(context, config.windowSeconds);
     }
@@ -206,23 +240,35 @@ export function createShareRateLimiter(config: ShareRateLimitConfig) {
         ? config.mediaMaxRequests
         : config.dataMaxRequests;
       if (!byGrant.hit(grantKey, max, now)) {
+        if (probeKey) byAddress.release(probeKey, now);
         return tooManyRequests(context, config.windowSeconds);
       }
     }
 
+    // The token named no live grant. There is no grant to charge, and the
+    // entry the grant budget just created would otherwise let anyone mint
+    // unbounded map keys out of random tokens; the address reservation is KEPT,
+    // because this is the one outcome the probe budget counts.
+    const settle = (unusable: boolean) => {
+      if (unusable) {
+        if (grantKey) byGrant.forget(grantKey);
+        return;
+      }
+      if (probeKey) byAddress.release(probeKey, Date.now());
+    };
+
     try {
       await next();
     } catch (error) {
-      if (error instanceof ShareAccessError) {
-        // The token named no live grant, so there is no grant to charge and
-        // the entry it just created would otherwise let anyone mint unbounded
-        // map keys out of random tokens.
-        if (grantKey) byGrant.forget(grantKey);
-        if (probeKey) {
-          byAddress.hit(probeKey, config.unknownTokenMaxRequests, Date.now());
-        }
-      }
+      settle(error instanceof ShareAccessError);
       throw error;
     }
+    // Hono's own dispatch catches a handler throw and lets `app.ts`'s
+    // `onError` build the response, so `await next()` above RESOLVES for the
+    // generic unavailable 404 and the catch never sees it. `context.error` is
+    // where the raised error is recorded in that case, and reading it is what
+    // makes the probe budget count the requests it exists to count. The catch
+    // is kept for a rethrow that reaches here directly.
+    settle(context.error instanceof ShareAccessError);
   };
 }

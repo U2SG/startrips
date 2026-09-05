@@ -1862,20 +1862,26 @@ describe("share hardening", () => {
     const [, ...outcomes] = await Promise.all([
       markJourneyForDeletionForAtlas(doomed.id, identity.atlasId),
       ...Array.from({ length: 12 }, async () => {
-        const [payload, media] = await Promise.all([
-          (async () => (await guestJourneys(token)).json())(),
-          resolveSharedMediaRead(grant, assetId),
-        ]);
+        // Deliberately SEQUENTIAL, and in this order. Each call takes its own
+        // snapshot, so running them concurrently would compare two unrelated
+        // instants and a deletion committing between them would fail an
+        // assertion that both reads answered correctly. Reading the payload
+        // first makes the pair ordered in time, and deletion is one-way, so
+        // "the payload no longer listed it" implies "the LATER media read
+        // cannot resolve it" for every interleaving.
+        const payload = await (await guestJourneys(token)).json() as HardeningPayload;
+        const media = await resolveSharedMediaRead(grant, assetId);
         return [payload, media] as const;
       }),
     ]);
 
-    // A journey that is deleting is never in a payload, and its media is never
-    // resolvable, so the two answers can never disagree inside one outcome.
-    for (const outcome of outcomes as Array<[HardeningPayload, unknown]>) {
+    for (const outcome of outcomes as Array<readonly [HardeningPayload, unknown]>) {
       const [payload, media] = outcome;
       const listed = payload.journeys.some((journey) => journey.id === doomed.id);
       if (!listed) expect(media).toBeNull();
+      // The other direction is not asserted: a payload taken before the
+      // deletion legitimately lists the journey while the later media read
+      // legitimately refuses it, and that is not a disagreement.
     }
 
     // Deterministic post-condition: the grant is still live and its scope is

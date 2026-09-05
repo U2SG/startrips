@@ -129,7 +129,9 @@ per client address, and it is charged only for a request whose token resolved
 to nothing — an unknown, revoked, expired or absent token. A request that
 reaches a live grant never spends it, and a `MEDIA_UNAVAILABLE` answer does not
 either, because that is the owner having moved one photo rather than an attack.
-It does not make a 256-bit token guessable or not; it caps what a flood costs.
+It does not make a 256-bit token guessable or not; it caps what a flood costs,
+including a batch sent all at once: the budget is reserved before the token is
+looked up and released again when it turns out to name a live grant.
 
 Raising a budget weakens abuse resistance. Lowering one below its floor is
 refused at startup, because #200 is explicit that a limit which breaks a normal
