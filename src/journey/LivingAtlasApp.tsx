@@ -29,6 +29,7 @@ import { JourneyPlaybackOverlay } from "./JourneyPlaybackOverlay";
 import {
   prepareQuickRecapPlaybackResult,
   quickRecapStepDurationMs,
+  quickRecapStepTrim,
   type PreparedQuickRecapPlayback,
 } from "./quickRecapPlayback";
 import type { PlaybackCameraTarget, PlaybackStep } from "./journeyPlayback";
@@ -815,6 +816,18 @@ export function LivingAtlasApp({
       : undefined
   ), [playbackQuickRecap]);
 
+  // #195 Phase 2: the Edit Plan owns the trim window, so the overlay reads it
+  // from here the same way it reads a beat's length. Without a plan there is no
+  // declared trim and Full Playback keeps its `ended` ownership.
+  const playbackMediaTrimResolver = useCallback((
+    targetJourney: Journey,
+    step: PlaybackStep,
+  ) => (
+    playbackQuickRecap
+      ? quickRecapStepTrim(targetJourney, step, playbackQuickRecap.plan)
+      : null
+  ), [playbackQuickRecap]);
+
   // Decision D1: in Quick Recap the target duration wins over tempo, so a tempo
   // change is a plan rebuild rather than a rescale — the recap keeps its ~45 s
   // promise at every tempo. The director still owns tempo state; it only
@@ -1430,6 +1443,7 @@ export function LivingAtlasApp({
           }}
           initialSoundtrackRead={playbackSession.soundtrackRead}
           stepDurationResolver={playbackStepDurationResolver}
+          mediaTrimResolver={playbackMediaTrimResolver}
           onTempoChange={handlePlaybackTempoChange}
           playbackMode={playbackQuickRecap ? "quick-recap" : "full"}
           statusMessage={playbackFallbackMessage}

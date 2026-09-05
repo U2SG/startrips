@@ -15,10 +15,16 @@ import {
   quickRecapDigestsForJourney,
   quickRecapRouteGeometry,
   quickRecapStepDurationMs,
+  quickRecapStepTrim,
   remapPlaybackStepIndex,
   QUICK_RECAP_PENDING_VIDEO_DURATION_MS,
   QUICK_RECAP_TARGET_MS,
 } from "./quickRecapPlayback";
+import {
+  resolveVideoTrim,
+  videoTrimEntryAction,
+  videoTrimSegmentDurationMs,
+} from "./videoTrimPlayback";
 import type { Journey, JourneyMediaAsset, RoutePoint } from "./types";
 
 function point(id: string, sortOrder: number): RoutePoint {
@@ -284,8 +290,9 @@ describe("Quick Recap visual-media topology (#195)", () => {
       .toBe(QUICK_RECAP_PENDING_VIDEO_DURATION_MS);
 
     const prepared = prepareQuickRecapPlayback(journey, { generatedAt: "2026-09-02T00:00:00.000Z" })!;
-    // Phase 1 keeps the item whole: `inMs` stays 0, so the live <video> still
-    // starts from the beginning while the plan carries a bounded budget.
+    // The planner keeps the item whole: `inMs` stays 0 and the plan carries a
+    // bounded budget. #195 Phase 2 added the runtime contract for a late
+    // in-point; producing one is highlight planning's job, not the planner's.
     const videoItem = prepared.plan.chapters.find((chapter) => chapter.routePointId === "p1")!.items[0]!;
     expect(videoItem.trim).toEqual({ inMs: 0, outMs: 3_500 });
     expect(videoItem.dwellMs).toBeUndefined();
@@ -657,5 +664,76 @@ describe("Quick Recap planner and runtime timing parity (S1, follow-up to #208 a
         if (item.trim) expect(item.trim.inMs).toBe(0);
       }
     }
+  });
+});
+
+describe("Quick Recap trim handoff (#195 Phase 2)", () => {
+  function videoJourney(): Journey {
+    const journey = fixture();
+    journey.coverMediaAssetId = null;
+    journey.routePoints = [point("p0", 0), point("p1", 1)];
+    journey.media = [
+      media("p0-a", "p0", "image/jpeg", 0),
+      media("p1-video", "p1", "video/mp4", 1),
+    ];
+    return journey;
+  }
+
+  function stepsOf(prepared: PreparedQuickRecapPlayback) {
+    const steps = buildPlaybackSteps(prepared.journey);
+    return {
+      video: steps.find((step) => step.kind === "media" && step.pointIndex === 1)!,
+      image: steps.find((step) => step.kind === "media" && step.pointIndex === 0)!,
+      stop: steps.find((step) => step.kind === "stop")!,
+    };
+  }
+
+  it("hands the runtime the trim window of the video beat it is playing", () => {
+    const prepared = prepareQuickRecapPlayback(videoJourney(), {
+      generatedAt: "2026-09-02T00:00:00.000Z",
+    })!;
+    const steps = stepsOf(prepared);
+    expect(quickRecapStepTrim(prepared.journey, steps.video, prepared.plan))
+      .toEqual({ inMs: 0, outMs: 3_500 });
+    // Only a video beat carries a trim; a photo beat is a dwell and a stop beat
+    // is not media at all, so both leave the media element alone.
+    expect(quickRecapStepTrim(prepared.journey, steps.image, prepared.plan)).toBeNull();
+    expect(quickRecapStepTrim(prepared.journey, steps.stop, prepared.plan)).toBeNull();
+  });
+
+  it("keeps step accounting and the played segment equal for a non-zero in-point", () => {
+    const prepared = prepareQuickRecapPlayback(videoJourney(), {
+      generatedAt: "2026-09-02T00:00:00.000Z",
+    })!;
+    const steps = stepsOf(prepared);
+    // The planner itself still emits `inMs: 0`; a late in-point is what #195's
+    // Phase 2 highlight planning will produce, and this is the runtime contract
+    // that has to exist before the validator may accept one.
+    const planned = structuredClone(prepared.plan);
+    planned.chapters.find((chapter) => chapter.routePointId === "p1")!.items[0]!.trim =
+      { inMs: 1_200, outMs: 4_700 };
+
+    const budgetMs = quickRecapStepDurationMs(prepared.journey, steps.video, planned);
+    expect(budgetMs).toBe(3_500);
+
+    const trim = quickRecapStepTrim(prepared.journey, steps.video, planned)!;
+    const resolved = resolveVideoTrim(trim, QUICK_RECAP_PENDING_VIDEO_DURATION_MS / 1_000);
+    // The element is moved to the in-point before the budget starts, and the
+    // segment it then plays is exactly the budget the director spends.
+    expect(videoTrimEntryAction(resolved, 0)).toEqual({ kind: "seek", toSeconds: 1.2 });
+    expect(videoTrimSegmentDurationMs(resolved)).toBe(budgetMs);
+  });
+
+  it("declares no trim for a beat the Edit Plan does not own", () => {
+    const journey = videoJourney();
+    const prepared = prepareQuickRecapPlayback(journey, {
+      generatedAt: "2026-09-02T00:00:00.000Z",
+    })!;
+    const steps = stepsOf(prepared);
+    // Full Playback has no plan of its own, and a plan that does not own the
+    // chapter must not reach into it: both keep the pre-#195 `ended` ownership.
+    const foreign = structuredClone(prepared.plan);
+    foreign.chapters = [];
+    expect(quickRecapStepTrim(prepared.journey, steps.video, foreign)).toBeNull();
   });
 });

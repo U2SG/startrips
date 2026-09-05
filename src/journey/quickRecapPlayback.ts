@@ -1,5 +1,6 @@
 import {
   buildDeterministicQuickRecapPlan,
+  type AutoEditPlanItemV1,
   type AutoEditPlanV1,
   type AutoEditTempo,
   type MediaDigestV1,
@@ -12,6 +13,7 @@ import {
 } from "./journeyPlayback";
 import { isSoundtrackAsset, isVisualMediaAsset } from "./journeyModel";
 import { UNMEASURED_VIDEO_DURATION_MS, resolveNarrativeTiming } from "./narrativeTiming";
+import type { VideoTrimWindow } from "./videoTrimPlayback";
 import type { Journey, JourneyMediaAsset, RoutePoint } from "./types";
 
 export const QUICK_RECAP_TARGET_MS = 45_000;
@@ -230,6 +232,49 @@ export function prepareQuickRecapPlayback(
 }
 
 /**
+ * The plan item a media step plays, together with the asset it renders.
+ *
+ * Both the beat's length and its trim window are read from the same item, so
+ * they resolve through one lookup: a step whose route point has no chapter, or
+ * whose asset the plan did not select, belongs to Full Playback and answers
+ * `null` here.
+ */
+function quickRecapItemForStep(
+  journey: Journey,
+  step: PlaybackStep,
+  plan: AutoEditPlanV1,
+): { asset: JourneyMediaAsset; item: AutoEditPlanItemV1 } | null {
+  if (step.kind !== "media") return null;
+  const point = journey.routePoints[step.pointIndex];
+  if (!point) return null;
+  const chapter = plan.chapters.find((candidate) => candidate.routePointId === point.id);
+  if (!chapter) return null;
+  const asset = playbackMediaForPoint(journey, step.pointIndex)[step.mediaIndex];
+  if (!asset) return null;
+  const item = chapter.items.find((candidate) => candidate.assetId === asset.id);
+  return item ? { asset, item } : null;
+}
+
+/**
+ * #195 Phase 2: the trim window the runtime must honour for one media beat.
+ *
+ * This is the plan half of the trim-aware playback contract — the declared
+ * `[inMs, outMs)` of the source that the step plays. `videoTrimPlayback.ts`
+ * owns what to do with it against a real media element, including every way it
+ * can degrade. Full Playback has no Edit Plan, so it never reaches this
+ * resolver and keeps ending its video chapters on the real `ended` event.
+ */
+export function quickRecapStepTrim(
+  journey: Journey,
+  step: PlaybackStep,
+  plan: AutoEditPlanV1,
+): VideoTrimWindow | null {
+  const found = quickRecapItemForStep(journey, step, plan);
+  if (!found || !found.asset.mimeType.startsWith("video/")) return null;
+  return found.item.trim ?? null;
+}
+
+/**
  * How long one Quick Recap beat lasts.
  *
  * The Edit Plan is the source of *what* plays, in what order, and for how long:
@@ -270,10 +315,9 @@ export function quickRecapStepDurationMs(
     return firstPointCameraMs + (chapter.arrival?.durationMs ?? 0);
   }
 
-  const asset = playbackMediaForPoint(journey, step.pointIndex)[step.mediaIndex];
-  if (!asset) return undefined;
-  const item = chapter.items.find((candidate) => candidate.assetId === asset.id);
-  if (!item) return undefined;
+  const found = quickRecapItemForStep(journey, step, plan);
+  if (!found) return undefined;
+  const { asset, item } = found;
   if (item.dwellMs !== undefined) return item.dwellMs;
   if (item.trim) return item.trim.outMs - item.trim.inMs;
   return resolveNarrativeTiming({
