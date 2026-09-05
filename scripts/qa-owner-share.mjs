@@ -286,6 +286,20 @@ try {
           return original(text);
         };
       }
+      // Headless Chromium on Linux exposes no `navigator.share`, so without
+      // this the native-share half of the acceptance would never render and
+      // never be measured — the lane would only ever prove the fallback. This
+      // defines it before the app loads, which is the "where available" case;
+      // the copy affordance is asserted separately and does not depend on it.
+      window.__qaShareCalls = [];
+      Object.defineProperty(navigator, "share", {
+        configurable: true,
+        writable: true,
+        value: (data) => {
+          window.__qaShareCalls.push(data);
+          return Promise.resolve();
+        },
+      });
     });
     const state = { shares: [], requests: [] };
     await installOwnerApi(page, state);
@@ -373,6 +387,27 @@ try {
       written,
     );
 
+    // Acceptance 4, second clause: native share is used where available. The
+    // button exists only because `navigator.share` does, and it must hand over
+    // the same fragment link the copy affordance yields.
+    await clickText(page, "分享…");
+    const shared = await page.evaluate(() => window.__qaShareCalls ?? []);
+    check(
+      `${viewport.name}/native-share-hands-over-the-fragment-link`,
+      shared.length === 1 && shared[0]?.url === created.link,
+      shared,
+    );
+
+    // Acceptance 8 says "the UI", not "the compose step": audit the created
+    // surface, which carries controls the compose step never renders.
+    const createdOrnament = await ornamentScan(page);
+    check(`${viewport.name}/created-no-gradient`, createdOrnament?.offenders.gradient.length === 0, createdOrnament?.offenders.gradient);
+    check(`${viewport.name}/created-no-drop-shadow`, createdOrnament?.offenders.shadow.length === 0, createdOrnament?.offenders.shadow);
+    check(`${viewport.name}/created-no-decorative-rounding`, createdOrnament?.offenders.rounding.length === 0, createdOrnament?.offenders.rounding);
+    check(`${viewport.name}/created-no-blur`, createdOrnament?.offenders.blur.length === 0, createdOrnament?.offenders.blur);
+    check(`${viewport.name}/created-no-emoji-ornament`, createdOrnament?.offenders.emoji.length === 0, createdOrnament?.offenders.emoji);
+    check(`${viewport.name}/created-touch-targets-at-least-44px`, createdOrnament?.smallTargets.length === 0, createdOrnament?.smallTargets);
+
     // Acceptance 7: the token is not re-retrievable. Leave the creation
     // surface and assert the raw token is gone from the whole document.
     await clickText(page, "完成");
@@ -389,6 +424,22 @@ try {
       afterDone.rowText.every((text) => text.includes("有效至") && text.includes(expectedText)),
       afterDone.rowText,
     );
+
+    // The custom `datetime-local` input is only mounted by the 自定义 preset,
+    // so the scans above have never seen it. Tick it once and audit it.
+    await page.evaluate(() => {
+      const custom = [...document.querySelectorAll('input[name="journey-share-expiry"]')]
+        .find((input) => input.value === "custom");
+      custom?.click();
+    });
+    await page.waitForTimeout(160);
+    const customOrnament = await ornamentScan(page);
+    const customMounted = await page.evaluate(
+      () => Boolean(document.querySelector(".journey-share__custom-expiry")),
+    );
+    check(`${viewport.name}/custom-expiry-input-is-offered`, customMounted === true);
+    check(`${viewport.name}/custom-expiry-touch-target-at-least-44px`, customOrnament?.smallTargets.length === 0, customOrnament?.smallTargets);
+    check(`${viewport.name}/custom-expiry-no-decorative-rounding`, customOrnament?.offenders.rounding.length === 0, customOrnament?.offenders.rounding);
 
     const ornament = await ornamentScan(page);
     check(`${viewport.name}/no-gradient`, ornament?.offenders.gradient.length === 0, ornament?.offenders.gradient);
