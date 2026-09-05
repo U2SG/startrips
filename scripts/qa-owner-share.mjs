@@ -20,10 +20,26 @@ import { launchQaBrowser } from "./qa-browser.mjs";
 const origin = process.env.QA_ORIGIN ?? "http://127.0.0.1:4173";
 
 const TOKEN = "qaOwnerShareToken00000000000000000000000000";
-// Deliberately NOT the value any preset would produce from the test clock: if
-// the UI echoed its own requested expiry instead of the response, this exact
-// minute could not appear on screen.
-const SERVER_EXPIRES_AT = "2027-03-04T05:06:00.000Z";
+
+/**
+ * The expiry the stubbed server answers with.
+ *
+ * Derived from the clock the lane runs on rather than written as a literal: a
+ * fixed date would silently become a past instant once the calendar passed it,
+ * `activeShareRows` would filter the freshly created grant straight back out,
+ * and the active-list and revoke assertions would start failing for a reason
+ * that has nothing to do with the product.
+ *
+ * 123 days is deliberately not what any preset produces (1, 7 or 30), and the
+ * odd minute is deliberately not a round offset from now, so a UI that echoed
+ * its own requested expiry instead of the response could not render this value.
+ */
+const SERVER_EXPIRES_AT = (() => {
+  const value = new Date(Date.now() + 123 * 24 * 60 * 60 * 1000);
+  value.setSeconds(0, 0);
+  value.setMinutes(6);
+  return value.toISOString();
+})();
 
 const VIEWPORTS = [
   { name: "desktop", width: 1280, height: 800, compact: false },
@@ -97,7 +113,7 @@ async function installOwnerApi(page, state) {
       const id = `share-${state.shares.length + 1}`;
       state.shares.unshift({
         id,
-        createdAt: "2026-09-05T04:00:00.000Z",
+        createdAt: new Date().toISOString(),
         expiresAt: SERVER_EXPIRES_AT,
         revokedAt: null,
         lastAccessedAt: null,
@@ -114,7 +130,7 @@ async function installOwnerApi(page, state) {
         body: JSON.stringify({
           share: {
             id,
-            createdAt: "2026-09-05T04:00:00.000Z",
+            createdAt: new Date().toISOString(),
             expiresAt: SERVER_EXPIRES_AT,
             journeyCount: body.journeyIds.length,
           },
@@ -135,7 +151,7 @@ async function installOwnerApi(page, state) {
     const share = state.shares.find((entry) => entry.id === id);
     if (share) {
       share.status = "revoked";
-      share.revokedAt = "2026-09-05T04:10:00.000Z";
+      share.revokedAt = new Date().toISOString();
     }
     await route.fulfill({
       status: 200,

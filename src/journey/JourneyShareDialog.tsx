@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   IconCheck,
   IconCopy,
@@ -79,6 +79,12 @@ export function JourneyShareDialog({
   const [copied, setCopied] = useState(false);
   const [revokingId, setRevokingId] = useState<string | null>(null);
   const [listTick, setListTick] = useState(0);
+  // `now` is a clock the caller may pass as an inline arrow, so its identity
+  // changes every render. Reading it through a ref keeps it out of the effect
+  // dependency lists below, where it would re-arm the expiry timer on every
+  // render and, because that timer sets state, never settle.
+  const nowRef = useRef(now);
+  nowRef.current = now;
 
   const linkOrigin = origin ?? (typeof window === "undefined" ? "" : window.location.origin);
 
@@ -99,13 +105,39 @@ export function JourneyShareDialog({
   }, [refreshShares, listTick]);
 
   const rows: ShareLinkRow[] = useMemo(
-    () => (grants ? activeShareRows(grants, now()) : []),
-    // `now` is a clock, not a value: re-deriving on every grant change and on
-    // every explicit tick is what keeps a link that expires while the panel is
-    // open from staying listed as active.
+    () => (grants ? activeShareRows(grants, nowRef.current()) : []),
+    // `nowRef` is a clock, not a value, so it is deliberately not a dependency:
+    // the list re-derives when the grants change, when an action ticks it, and
+    // when the timer below fires at the next expiry.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [grants, listTick],
   );
+
+  /**
+   * Re-derive at the instant the nearest active grant expires.
+   *
+   * `deriveShareStatus` already refuses to call an expired grant active, but
+   * nothing re-ran it: a panel left open past an expiry, with no create or
+   * revoke in between, would go on listing a link that had already stopped
+   * working. The timer is what makes the derivation happen at the moment it
+   * becomes true rather than at the owner's next click.
+   */
+  useEffect(() => {
+    if (!grants) return;
+    const current = nowRef.current().valueOf();
+    const nextExpiry = grants
+      .filter((grant) => grant.status === "active")
+      .map((grant) => new Date(grant.expiresAt).valueOf())
+      .filter((value) => Number.isFinite(value) && value > current)
+      .sort((left, right) => left - right)[0];
+    if (nextExpiry === undefined) return;
+    // A share may be up to a year out, well past the 32-bit ceiling a timeout
+    // delay is clamped to; capping it re-arms instead of firing immediately.
+    const delay = Math.min(nextExpiry - current + 1_000, 2_147_483_647);
+    const timer = globalThis.setTimeout(() => setListTick((tick) => tick + 1), delay);
+    return () => globalThis.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [grants, listTick]);
 
   const selectionMessage = shareSelectionMessage(selected.length);
   const maxCustom = toDateTimeLocalValue(maxCustomExpiry(now()));
