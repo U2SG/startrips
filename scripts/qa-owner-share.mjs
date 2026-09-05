@@ -174,6 +174,28 @@ async function clickLabel(page, label) {
   await page.waitForTimeout(180);
 }
 
+/**
+ * Click a control by whichever way this viewport names it.
+ *
+ * The share entries are labelled buttons in the desktop header and icon-only
+ * buttons in the compact mobile header, so the accessible name is the stable
+ * identity across viewports while the visible text is not.
+ */
+async function clickNamed(page, name) {
+  const clicked = await page.evaluate((wanted) => {
+    const button = [...document.querySelectorAll("button")].find((element) => {
+      const label = (element.getAttribute("aria-label") ?? "").trim();
+      const text = (element.textContent ?? "").trim();
+      return label === wanted || text.includes(wanted);
+    });
+    if (!button) return false;
+    button.click();
+    return true;
+  }, name);
+  if (!clicked) throw new Error(`no control named ${name}`);
+  await page.waitForTimeout(180);
+}
+
 async function clickText(page, text) {
   const clicked = await page.evaluate((label) => {
     const button = [...document.querySelectorAll("button")]
@@ -276,7 +298,7 @@ try {
     );
 
     // --- Entry path B: several Journeys, one link. -------------------------
-    await clickText(page, "分享多段旅程");
+    await clickNamed(page, "分享多段旅程");
     await page.locator(".journey-share__dialog").waitFor({ timeout: 10_000 });
     check(`${viewport.name}/multi-entry-reachable`, true);
 
