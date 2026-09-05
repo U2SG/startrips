@@ -4449,6 +4449,12 @@ export function ParticleEarthScene({
         host.dataset.personalPointY = String(
           ((1 - personalScreenPosition.y) * targetSize.y) / 2,
         );
+        // #196: the coordinates the focus signal is standing on. A place label
+        // sends these when it is clicked, so publishing them is what makes
+        // "the click focused the place the label claimed" checkable without
+        // depending on that label surviving the tier change during the flight.
+        host.dataset.focusPointLat = latestFocusPoint.current.lat.toFixed(4);
+        host.dataset.focusPointLon = latestFocusPoint.current.lon.toFixed(4);
       }
 
       renderer.render(scene, camera);
