@@ -172,6 +172,12 @@ export function JourneyPlaybackOverlay({
   // a stale elapsed time. Sample the live position while the scrubber has
   // focus - the state that reads it - instead of re-rendering the whole overlay
   // once a second for everyone.
+  // Which beat, if any, the media element is currently positioning the fill
+  // for. A video beat holds the director, so its budget never drains and the
+  // budget-driven write below would keep resetting the fill to that beat's
+  // start — most visibly on a pause, which re-runs that effect while no
+  // `timeupdate` is left to correct it. One owner per beat.
+  const mediaDrivenStepRef = useRef<number | null>(null);
   const [scrubberFocused, setScrubberFocused] = useState(false);
   const [livePositionFraction, setLivePositionFraction] = useState<number | null>(null);
   // Report a real tempo change only. The director resets to the initial tempo
@@ -882,6 +888,7 @@ export function JourneyPlaybackOverlay({
       element.duration,
     );
     const elapsedMs = segment.startMs + segment.durationMs * playedFraction;
+    mediaDrivenStepRef.current = stepIndexRef.current;
     fill.style.transitionDuration = "0ms";
     fill.style.width = `${Math.min(1, elapsedMs / plan.totalDurationMs) * 100}%`;
   }, [plan]);
@@ -895,6 +902,13 @@ export function JourneyPlaybackOverlay({
   useEffect(() => {
     const fill = progressFillRef.current;
     if (!fill || !plan) return;
+    if (mediaDrivenStepRef.current === stepIndex) {
+      // The element owns this beat's position; leave the width it wrote alone
+      // and only make sure nothing is still animating toward a stale target.
+      fill.style.transitionDuration = "0ms";
+      return;
+    }
+    mediaDrivenStepRef.current = null;
     const budget = getTimerBudget();
     const fraction = playbackProgressFraction(
       plan,
