@@ -26,6 +26,7 @@
     "qa:globe-interaction": "node scripts/qa-globe-interaction.mjs",
     "qa:particle-spatial-lod": "node scripts/qa-particle-spatial-lod.mjs",
     "qa:route-anchoring": "node scripts/qa-route-anchoring.mjs",
+    "qa:city-label-anchoring": "node scripts/qa-city-label-anchoring.mjs",
     "qa:guest-share": "node scripts/qa-guest-share.mjs",
     "qa:owner-share": "node scripts/qa-owner-share.mjs",
     "qa:composer": "node scripts/capture-journey-composer.mjs",

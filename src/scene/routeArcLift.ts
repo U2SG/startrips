@@ -15,8 +15,10 @@ export const ROUTE_ARC_SATURATION_ANGLE = Math.PI / 3;
 /** Zoom range over which the cinematic arc attenuates toward geographic. */
 const ARC_ATTENUATION_START_ZOOM = 1;
 const ARC_ATTENUATION_END_ZOOM = 2.55;
-/** Residual lift at the end of the attenuation range: a hint, not a hump. */
+/** Residual lift at the end of regional attenuation: a hint, not a hump. */
 const ARC_ATTENUATION_FLOOR = 0.06;
+/** After regional attenuation, finish flattening onto geography by max zoom. */
+const ARC_GEOGRAPHIC_FLATTEN_END_ZOOM = 3.0;
 
 /**
  * Decorative lift never occupies more than this fraction of the smaller
@@ -27,11 +29,10 @@ const ARC_ATTENUATION_FLOOR = 0.06;
 const ARC_SCREEN_LIFT_BUDGET = 0.12;
 
 /**
- * Camera z is 5.4 with a 0.1 near plane, and the label shell already sits at
- * 1.46 * 1.15 * zoom - about 5.10 world units at max zoom, the documented
- * ceiling in ParticleEarthScene. A lifted vertex above that budget is clipped
- * by the near plane, which is how a lifted arc used to tear apart at high
- * zoom, so the lift is capped by the remaining radial headroom.
+ * Camera z is 5.4 with a 0.1 near plane. Decorative route vertices must stay
+ * comfortably in front of that plane at every zoom. The geographic anchor is
+ * now the real surface (#196), so this is purely a safety ceiling for lifted
+ * interior arc vertices rather than a second semantic shell.
  */
 const ARC_WORLD_RADIUS_BUDGET = 5.02;
 
@@ -130,11 +131,17 @@ export function resolveRouteArcLift({
     return empty;
   }
 
-  const semanticLift = 1 - (1 - ARC_ATTENUATION_FLOOR) * smoothstep(
+  const regionalLift = 1 - (1 - ARC_ATTENUATION_FLOOR) * smoothstep(
     ARC_ATTENUATION_START_ZOOM,
     ARC_ATTENUATION_END_ZOOM,
     zoom,
   );
+  const geographicFlatten = 1 - smoothstep(
+    ARC_ATTENUATION_END_ZOOM,
+    ARC_GEOGRAPHIC_FLATTEN_END_ZOOM,
+    zoom,
+  );
+  const semanticLift = regionalLift * geographicFlatten;
 
   const anchorExtent = anchorRadius * globeScale;
   const radialHeadroom = ARC_WORLD_RADIUS_BUDGET - anchorExtent;

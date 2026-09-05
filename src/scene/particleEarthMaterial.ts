@@ -14,6 +14,7 @@ interface ParticleMaterialOptions {
   opacity: number;
   size: number;
   spatialLod?: boolean;
+  radialPulseScale?: number;
 }
 
 export function createParticleEarthMaterial({
@@ -21,6 +22,7 @@ export function createParticleEarthMaterial({
   opacity,
   size,
   spatialLod = false,
+  radialPulseScale = 1,
 }: ParticleMaterialOptions) {
   return new ShaderMaterial({
     transparent: true,
@@ -43,6 +45,7 @@ export function createParticleEarthMaterial({
       },
       uActiveDimStrength: { value: 0 },
       uLodProgress: { value: spatialLod ? 0 : 1 },
+      uRadialPulseScale: { value: radialPulseScale },
       // Angular falloff is evaluated with dot products so attenuation stays
       // stable across zoom, DPR and screen size. 0.978 ~= 12°, 0.994 ~= 6°.
       uDimOuterCos: { value: 0.978 },
@@ -63,6 +66,7 @@ export function createParticleEarthMaterial({
       uniform float uDimOuterCos;
       uniform float uDimInnerCos;
       uniform float uLodProgress;
+      uniform float uRadialPulseScale;
       varying float vStrength;
       varying float vTwinkle;
       varying float vDimBrightness;
@@ -109,7 +113,7 @@ export function createParticleEarthMaterial({
           uTime * (0.72 + seed * 1.18) + seed * 6.2831853
         );
         float spark = smoothstep(0.86, 0.995, shimmer) * step(0.68, seed);
-        transformed *= 1.0 + pulse * mix(1.0, 0.3, dimAmount);
+        transformed *= 1.0 + pulse * uRadialPulseScale * mix(1.0, 0.3, dimAmount);
         vec4 mvPosition = modelViewMatrix * vec4(transformed, 1.0);
         gl_Position = projectionMatrix * mvPosition;
 

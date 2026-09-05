@@ -51,6 +51,7 @@ import {
   buildSphericalRingSegments,
   getSphericalRouteFocus,
   latLonToVector3,
+  GEOGRAPHIC_SURFACE_RADIUS,
   ROUTE_ANCHOR_RADIUS,
   routeArcVertexCount,
   routePointAnchor,
@@ -126,12 +127,19 @@ export const GLOBE_DRAG_THRESHOLD_PX = 6;
 // former +/-35 degree clamp and turn it completely over.
 export const GLOBE_TILT_LIMIT_RADIANS = Number.POSITIVE_INFINITY;
 export const GLOBE_ZOOM_MIN = 0.72;
-// City labels project at ROUTE_ANCHOR_RADIUS (above the 1.39 surface) and the
-// largest mode scale is 1.15, so at max zoom the label layer sits at
-// ROUTE_ANCHOR_RADIUS * 1.15 * zoom. Keep it well in front of the camera (z = 5.4):
-// anything above ~3.04 pushes labels inside the near plane and they vanish.
+// #196: geographic annotations now project from the true surface, so zoom can
+// no longer magnify a radial offset they never had into screen-space drift.
+// The ceiling remains because decorative route lift and the glow still need
+// near-plane headroom in front of the camera at z = 5.4.
 export const GLOBE_ZOOM_MAX = 3.0;
-export const GLOBE_SURFACE_RADIUS = 1.39;
+export const GLOBE_SURFACE_RADIUS = GEOGRAPHIC_SURFACE_RADIUS;
+/**
+ * #196: the personal glow is a Points sprite drawn against the particle
+ * surface it now shares a radius with, so it carries a render-only epsilon to
+ * stay off the depth-fighting boundary. It is deliberately far too small to
+ * move the projected anchor: the semantic position stays focusSignalAnchor.
+ */
+const PERSONAL_SIGNAL_RENDER_LIFT = 1 + 1e-4;
 export const GLOBE_IDLE_ROTATION_RADIANS_PER_SECOND = (Math.PI * 2) / 180;
 export const GLOBE_IDLE_RESUME_DELAY_MS = 20_000;
 export const GLOBE_IDLE_RELEASE_BLEND_MS = 2_400;
@@ -714,7 +722,12 @@ export type ProjectedRoutePath = {
   end: ProjectedRoutePoint | null;
 };
 
-const HORIZON_CLIP_ITERATIONS = 8;
+// #196 review: the probe walk below is a bisection, so the smallest visible
+// fraction of a segment it can still resolve is 2^-ITERATIONS. Eight steps
+// dropped a straddling segment whose visible part was under ~0.4% of its
+// length; twelve costs at most four extra projections on the few segments
+// that actually cross the horizon and makes that residue ~0.02%.
+const HORIZON_CLIP_ITERATIONS = 12;
 
 /**
  * #193: route geometry is stored as unit directions plus a per-vertex lift, so
@@ -788,8 +801,17 @@ export function buildProjectedRoutePath(
       continue;
     }
 
-    // One end is behind the horizon (or past a clip plane): walk the chord to
+    // One end is behind the horizon (or past a clip plane): walk the arc to
     // the crossing so the visible side still reaches its Route Point anchor.
+    //
+    // #196 review: the probe follows the SPHERICAL path, not the straight
+    // chord between the two vertices. Now that a zero-lift Route Point sits on
+    // the occluding surface itself rather than on a shell above it, every
+    // interior point of that chord is a secant and dips below the occluder, so
+    // a chord probe reported the crossing up to ~5 degrees PAST the true limb
+    // and drew the line into the globe's own silhouette. Renormalising the
+    // interpolated direction keeps each probe on the arc the route actually
+    // occupies, which is where the visible portion ends.
     let crossingFound = false;
     if (startVisible !== endVisible) {
       let low = 0;
@@ -797,10 +819,27 @@ export function buildProjectedRoutePath(
       for (let step = 0; step < HORIZON_CLIP_ITERATIONS; step += 1) {
         const middle = (low + high) / 2;
         const progress = startVisible ? middle : 1 - middle;
+        const probeDirectionX =
+          directions[startOffset] + (directions[endOffset] - directions[startOffset]) * progress;
+        const probeDirectionY =
+          directions[startOffset + 1]
+          + (directions[endOffset + 1] - directions[startOffset + 1]) * progress;
+        const probeDirectionZ =
+          directions[startOffset + 2]
+          + (directions[endOffset + 2] - directions[startOffset + 2]) * progress;
+        const probeDirectionLength = Math.hypot(
+          probeDirectionX,
+          probeDirectionY,
+          probeDirectionZ,
+        );
+        // Both directions are unit vectors a fraction of a degree apart, so
+        // their interpolation is never near zero length and needs no guard.
+        const probeRadius =
+          (startRadius + (endRadius - startRadius) * progress) / probeDirectionLength;
         const visible = projectPoint(
-          startWorldX + (endWorldX - startWorldX) * progress,
-          startWorldY + (endWorldY - startWorldY) * progress,
-          startWorldZ + (endWorldZ - startWorldZ) * progress,
+          probeDirectionX * probeRadius,
+          probeDirectionY * probeRadius,
+          probeDirectionZ * probeRadius,
           probe,
         );
         if (visible) {
@@ -1811,7 +1850,7 @@ export function ParticleEarthScene({
     };
     syncRouteFocusPhase();
 
-    const sphereGeometry = new SphereGeometry(1.39, 64, 40);
+    const sphereGeometry = new SphereGeometry(GLOBE_SURFACE_RADIUS, 64, 40);
     const surfaceMaterial = new MeshPhongMaterial({
       color: 0xd1d7d4,
       emissive: 0x010403,
@@ -2028,7 +2067,7 @@ export function ParticleEarthScene({
     const personalPosition = focusSignalAnchor(
       latestFocusPoint.current,
       initialFallback,
-    );
+    ).multiplyScalar(PERSONAL_SIGNAL_RENDER_LIFT);
     const personalPositions = new Float32Array(personalPosition.toArray());
     personalGeometry.setAttribute("position", new BufferAttribute(personalPositions, 3));
     personalGeometry.setAttribute(
@@ -2039,6 +2078,7 @@ export function ParticleEarthScene({
       color: 0xffdc72,
       opacity: 0,
       size: 58,
+      radialPulseScale: 0,
     });
     personalMaterial.uniforms.uColor.value.set(
       latestFocusColor.current ?? 0xffdc72,
@@ -2580,13 +2620,15 @@ export function ParticleEarthScene({
     const updateJourneyConnector = () => {
       let path = "";
       if (journeyConnectorCardRect && latestFocusPoint.current) {
-        const focusAttribute = personalGeometry.getAttribute(
-          "position",
-        ) as BufferAttribute;
+        const focusAnchor = latLonToVector3(
+          latestFocusPoint.current.lat,
+          latestFocusPoint.current.lon,
+          GLOBE_SURFACE_RADIUS,
+        );
         const visible = projectRoutePoint(
-          focusAttribute.getX(0),
-          focusAttribute.getY(0),
-          focusAttribute.getZ(0),
+          focusAnchor.x,
+          focusAnchor.y,
+          focusAnchor.z,
           routeProjectedPoint,
         );
         if (visible) {
@@ -2910,6 +2952,8 @@ export function ParticleEarthScene({
       host.dataset.routeArcLiftPx = arcLift.screenLiftPx.toFixed(2);
       host.dataset.routeArcLiftCapPx = arcLift.screenLiftCapPx.toFixed(2);
       host.dataset.routeEndpointMaxErrorPx = routeEndpointMaxErrorPx.toFixed(3);
+      host.dataset.cityLabelAnchorRadius = ROUTE_ANCHOR_RADIUS.toFixed(3);
+      host.dataset.geographicSurfaceRadius = GLOBE_SURFACE_RADIUS.toFixed(3);
       host.dataset.journeyRouteVisibleLabelCount = String(visibleLabelCount);
       host.dataset.journeyRouteLabelSafeRight = routeLabelSafeArea.right.toFixed(1);
       host.dataset.journeyRouteLabelSafeBottom = routeLabelSafeArea.bottom.toFixed(1);
@@ -3019,6 +3063,15 @@ export function ParticleEarthScene({
           entry.element.style.removeProperty("display");
           entry.element.setAttribute("x", textX.toFixed(1));
           entry.element.setAttribute("y", textY.toFixed(1));
+          // #196: x/y above are the typography position, i.e. the anchor plus
+          // the screen-space readability offset. The anchor itself is what
+          // claims a latitude/longitude, so it is published separately -
+          // exactly as a Route Point marker does - and QA measures that rather
+          // than glyph bounds.
+          entry.element.dataset.anchorX = routeProjectedPoint.x.toFixed(2);
+          entry.element.dataset.anchorY = routeProjectedPoint.y.toFixed(2);
+          entry.element.dataset.cityLat = city.latitude.toFixed(4);
+          entry.element.dataset.cityLon = city.longitude.toFixed(4);
           entry.element.textContent = displayName;
           entry.city = city;
           visibleCityCount += 1;
@@ -3791,7 +3844,8 @@ export function ParticleEarthScene({
         currentMode === "archiveBurst"
           ? { lat: -10, lon: -180 }
           : { lat: 34.0522, lon: -118.2437 };
-      const vector = focusSignalAnchor(point, fallback);
+      const vector = focusSignalAnchor(point, fallback)
+        .multiplyScalar(PERSONAL_SIGNAL_RENDER_LIFT);
       const attribute = personalGeometry.getAttribute("position") as BufferAttribute;
       attribute.setXYZ(0, vector.x, vector.y, vector.z);
       attribute.needsUpdate = true;
@@ -4382,9 +4436,12 @@ export function ParticleEarthScene({
       }
 
       if (latestCenterFocusPoint.current && latestFocusPoint.current) {
-        const positionAttribute = personalGeometry.getAttribute("position") as BufferAttribute;
-        personalScreenPosition.fromBufferAttribute(positionAttribute, 0);
-        personalSignal.localToWorld(personalScreenPosition);
+        personalScreenPosition.copy(latLonToVector3(
+          latestFocusPoint.current.lat,
+          latestFocusPoint.current.lon,
+          GLOBE_SURFACE_RADIUS,
+        ));
+        globe.localToWorld(personalScreenPosition);
         personalScreenPosition.project(camera);
         host.dataset.personalPointX = String(
           ((personalScreenPosition.x + 1) * targetSize.x) / 2,
@@ -4392,6 +4449,12 @@ export function ParticleEarthScene({
         host.dataset.personalPointY = String(
           ((1 - personalScreenPosition.y) * targetSize.y) / 2,
         );
+        // #196: the coordinates the focus signal is standing on. A place label
+        // sends these when it is clicked, so publishing them is what makes
+        // "the click focused the place the label claimed" checkable without
+        // depending on that label surviving the tier change during the flight.
+        host.dataset.focusPointLat = latestFocusPoint.current.lat.toFixed(4);
+        host.dataset.focusPointLon = latestFocusPoint.current.lon.toFixed(4);
       }
 
       renderer.render(scene, camera);

@@ -103,13 +103,17 @@ function JourneyRoutesQaPreview() {
   const compactMobileLayout = useCompactMobileLayout();
   const [activeRouteId, setActiveRouteId] = useState<string | null>(null);
   const [focusRevision, setFocusRevision] = useState(0);
+  // #196: a place label claims a geographic point, and clicking it must focus
+  // that point. The preview owns the pick the product owns so the QA lane can
+  // measure the claim against where the globe actually lands.
+  const [pickedPoint, setPickedPoint] = useState<{ lat: number; lon: number } | null>(null);
   const activeRoute = globeQaRoutes.find((route) => route.id === activeRouteId) ?? null;
   const qaParams = new URLSearchParams(window.location.search);
   const requestedLatRaw = qaParams.get("qaFocusLat");
   const requestedLonRaw = qaParams.get("qaFocusLon");
   const requestedLat = requestedLatRaw === null ? Number.NaN : Number(requestedLatRaw);
   const requestedLon = requestedLonRaw === null ? Number.NaN : Number(requestedLonRaw);
-  const qaFocusPoint = {
+  const qaFocusPoint = pickedPoint ?? {
     lat: Number.isFinite(requestedLat) ? requestedLat : 30,
     lon: Number.isFinite(requestedLon) ? requestedLon : 110,
   };
@@ -129,6 +133,10 @@ function JourneyRoutesQaPreview() {
             setFocusRevision((revision) => revision + 1);
           }}
           onJourneyRoutePointActivate={() => undefined}
+          onGlobePointPick={(point) => {
+            setPickedPoint({ lat: point.latitude, lon: point.longitude });
+            setFocusRevision((revision) => revision + 1);
+          }}
           focusPoint={qaFocusPoint}
           focusColor="#77c8c2"
           centerFocusPoint
