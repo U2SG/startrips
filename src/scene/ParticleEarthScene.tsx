@@ -126,9 +126,9 @@ export const GLOBE_DRAG_THRESHOLD_PX = 6;
 // former +/-35 degree clamp and turn it completely over.
 export const GLOBE_TILT_LIMIT_RADIANS = Number.POSITIVE_INFINITY;
 export const GLOBE_ZOOM_MIN = 0.72;
-// City labels project at radius 1.46 (above the 1.39 surface) and the
+// City labels project at ROUTE_ANCHOR_RADIUS (above the 1.39 surface) and the
 // largest mode scale is 1.15, so at max zoom the label layer sits at
-// 1.46 * 1.15 * zoom. Keep it well in front of the camera (z = 5.4):
+// ROUTE_ANCHOR_RADIUS * 1.15 * zoom. Keep it well in front of the camera (z = 5.4):
 // anything above ~3.04 pushes labels inside the near plane and they vanish.
 export const GLOBE_ZOOM_MAX = 3.0;
 export const GLOBE_SURFACE_RADIUS = 1.39;
@@ -2104,9 +2104,9 @@ export function ParticleEarthScene({
     const routeProjectedPoint = { x: 0, y: 0 };
     const cityClipMatrix = new Matrix4();
     const isCityCandidateInsideViewport = (city: CityPoint) => {
-      const x = city.direction[0] * 1.46;
-      const y = city.direction[1] * 1.46;
-      const z = city.direction[2] * 1.46;
+      const x = city.direction[0] * ROUTE_ANCHOR_RADIUS;
+      const y = city.direction[1] * ROUTE_ANCHOR_RADIUS;
+      const z = city.direction[2] * ROUTE_ANCHOR_RADIUS;
       routeLocalPoint.set(x, y, z);
       if (!isSphericalPointVisible(routeCameraPosition, routeLocalPoint)) return false;
       return isLocalPointInsideClipViewport(cityClipMatrix.elements, x, y, z);
@@ -2927,7 +2927,7 @@ export function ParticleEarthScene({
             .filter((entry) => {
               const city = entry.city;
               if (!city || entry.element.style.display === "none") return false;
-              const vector = latLonToVector3(city.latitude, city.longitude, 1.46);
+              const vector = routePointAnchor(city.latitude, city.longitude);
               if (!projectRoutePoint(vector.x, vector.y, vector.z, routeProjectedPoint)) {
                 return false;
               }
@@ -2983,11 +2983,7 @@ export function ParticleEarthScene({
           const displayName = resolveCityDisplayName(city, cityLabelLocale);
           const entry = ensureCityLabel(index);
           if (!entry) break;
-          const vector = latLonToVector3(
-            city.latitude,
-            city.longitude,
-            1.46,
-          );
+          const vector = routePointAnchor(city.latitude, city.longitude);
           if (!projectRoutePoint(
             vector.x,
             vector.y,

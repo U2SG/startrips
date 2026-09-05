@@ -1009,6 +1009,10 @@ describe("#219 the focus signal shares the Route Point anchor", () => {
       "utf8",
     );
     expect(source).not.toMatch(/\b1\.45\b/);
+    // Place labels agreed with the route layer only because they repeated the
+    // same number; they now name the constant, so no Route Point radius in the
+    // module is a literal that could silently drift from ROUTE_ANCHOR_RADIUS.
+    expect(source).not.toMatch(/\b1\.46\b/);
     expect(source.match(/pointRadius = ROUTE_ANCHOR_RADIUS,/g)).toHaveLength(2);
   });
 });
