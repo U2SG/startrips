@@ -1336,6 +1336,33 @@ describe("#242 route curve fidelity", () => {
     expect(resolveRouteVertexShare(MAX_RENDERED_ROUTE_LINE_VERTICES + 500, 2)).toBe(0);
     expect(resolveRouteVertexShare(0, 1)).toBe(MAX_RENDERED_ROUTE_LINE_VERTICES);
     expect(resolveRouteVertexShare(0, 0)).toBe(MAX_RENDERED_ROUTE_LINE_VERTICES);
+
+    // #242 review: an equal share is a different unfairness when one route
+    // needs more than a share just to pass through its own Route Points. A
+    // route's topology floor is reserved, never competed for.
+    const bigRouteFloor = 400 * 2;
+    expect(resolveRouteVertexShare(0, 64, bigRouteFloor, 0)).toBe(bigRouteFloor);
+    // And the floors still owed to later routes are held back, so an early
+    // route's fair share cannot eat the minimum a later one needs.
+    const owedToOthers = 300 * 2;
+    expect(resolveRouteVertexShare(0, 2, 0, owedToOthers))
+      .toBe((MAX_RENDERED_ROUTE_LINE_VERTICES - owedToOthers) / 2);
+    expect(
+      resolveRouteVertexShare(0, 2, 0, owedToOthers) + owedToOthers,
+    ).toBeLessThanOrEqual(MAX_RENDERED_ROUTE_LINE_VERTICES);
+    // The floor is honoured only as far as the pool actually reaches.
+    expect(resolveRouteVertexShare(
+      MAX_RENDERED_ROUTE_LINE_VERTICES - 10,
+      1,
+      bigRouteFloor,
+      0,
+    )).toBe(10);
+
+    // The rendered point cap keeps every floor affordable at once: even the
+    // largest legal set of routes needs far less than the pool to keep all of
+    // its topology.
+    expect((MAX_RENDERED_ROUTE_POINTS - 1) * 2)
+      .toBeLessThan(MAX_RENDERED_ROUTE_LINE_VERTICES);
   });
 
   it("draws the whole route and its rewind legs from one evaluator", () => {

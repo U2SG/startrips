@@ -129,13 +129,30 @@ export const MAX_RENDERED_ROUTE_LINE_VERTICES = 8192;
  * Each route takes an equal share of whatever is still unspent, so a route that
  * needs less than its share leaves the surplus to the ones after it and no
  * route can starve the rest.
+ *
+ * Two reservations keep an equal share from becoming a different unfairness.
+ * `ownMinimum` is the vertices this route needs to pass through every one of
+ * its Route Points at one straight segment per leg - its topology floor, which
+ * is never traded away, because a route drawn without a stored Route Point is a
+ * lie about the Journey rather than a lower-quality picture of it.
+ * `reservedForOthers` is the same floor summed over the routes still to come,
+ * held back so an early route's fair share cannot consume the minimum a later
+ * one needs. `selectRenderableJourneyRoutes` caps the rendered point total at
+ * MAX_RENDERED_ROUTE_POINTS, so those floors sum to well under the pool and
+ * every rendered route is guaranteed its complete topology.
  */
 export function resolveRouteVertexShare(
   spentVertices: number,
   routesRemaining: number,
+  ownMinimum = 0,
+  reservedForOthers = 0,
 ) {
   const unspent = Math.max(0, MAX_RENDERED_ROUTE_LINE_VERTICES - spentVertices);
-  return Math.floor(unspent / Math.max(1, routesRemaining));
+  const shareable = Math.max(0, unspent - reservedForOthers);
+  return Math.max(
+    Math.min(ownMinimum, unspent),
+    Math.floor(shareable / Math.max(1, routesRemaining)),
+  );
 }
 
 export const MAX_RENDERED_ROUTE_LABELS = 6;
@@ -2301,6 +2318,18 @@ export function ParticleEarthScene({
         (total, route) => total + route.points.length,
         0,
       );
+      // #242 review: the vertices each route needs to pass through every one of
+      // its Route Points, and the running total still owed to the routes after
+      // it. Reserved rather than competed for, so no route loses a stored point
+      // to a route drawn before it.
+      const routeTopologyFloors = visibleRoutes.map(
+        (route) => Math.max(0, route.points.length - 1) * 2,
+      );
+      const routeTopologyFloorsAfter = routeTopologyFloors.map(
+        (_, index) => routeTopologyFloors
+          .slice(index + 1)
+          .reduce((total, floor) => total + floor, 0),
+      );
       const pointPositions = new Float32Array(pointCount * 3);
       const pointTargets: Array<{ journeyId: string; routePointId?: string }> = [];
       let pointIndex = 0;
@@ -2534,6 +2563,8 @@ export function ParticleEarthScene({
         const remainingVertices = resolveRouteVertexShare(
           routeVertexCount,
           visibleRoutes.length - routeIndex,
+          routeTopologyFloors[routeIndex],
+          routeTopologyFloorsAfter[routeIndex],
         );
         // #15: long legs lift off the surface as a natural spatial arc
         // (great circle + altitude hump); short legs hug the globe. The

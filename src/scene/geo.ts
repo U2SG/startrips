@@ -269,10 +269,13 @@ export type RouteArcLegPlan = {
  * The budget is spread across legs instead of being spent front to back: the
  * old build returned early when it ran out, which silently dropped the tail of
  * a dense route and with it the Route Points on it. Every leg keeps at least
- * one segment, so every stored Route Point survives, and a leg granted fewer
- * segments than its hump needs gives up as much of the hump as it cannot draw
- * faithfully. Degradation is always in the decoration first and in the extent
- * of the route last.
+ * one segment, so every stored Route Point survives and the returned leg count
+ * always matches the route's own legs one for one; a leg granted fewer segments
+ * than its hump needs gives up as much of the hump as it cannot draw
+ * faithfully. Degradation order is fixed: decorative lift first, then interior
+ * subdivision down to one segment per stored leg, and only then - when even
+ * that will not fit - the route is not drawn at all. A Route Point is never
+ * omitted from a route that IS drawn.
  */
 export function planRouteArcLegs(
   points: readonly GeographicPoint[],
@@ -285,24 +288,23 @@ export function planRouteArcLegs(
   const availableSegments = Math.floor(maxVertices / 2);
   const plans: RouteArcLegPlan[] = [];
 
-  // #242 review: maxVertices is a hard ceiling, and one segment per leg can
-  // already breach it. When it does, sample the Route Points evenly instead of
-  // truncating: a budget this small cannot draw every stored point, and a
-  // coarser line through the WHOLE Journey is a smaller lie than a complete
-  // line through the first half of it. Both ends are always kept.
-  const drawn = points.length - 1 > availableSegments
-    ? Array.from({ length: availableSegments + 1 }, (_, index) => points[
-      Math.round((index * (points.length - 1)) / availableSegments)
-    ])
-    : points;
+  // #242 review: maxVertices is a hard ceiling, and one straight segment per
+  // leg is the least a route can be drawn as while still passing through every
+  // Route Point it stores. A budget below that cannot render this route
+  // truthfully, so it renders none of it: dropping a route at the selection
+  // level is a policy the viewer can be told about, while a stroke that
+  // shortcuts across omitted Route Points is a quiet lie about the Journey.
+  // The scene reserves this floor for every route it renders, so a rendered
+  // route never reaches this guard.
+  if (points.length - 1 > availableSegments) return [];
 
-  for (let index = 1; index < drawn.length; index += 1) {
+  for (let index = 1; index < points.length; index += 1) {
     const start = latLonToVector3(
-      drawn[index - 1].lat,
-      drawn[index - 1].lon,
+      points[index - 1].lat,
+      points[index - 1].lon,
       1,
     ).normalize();
-    const end = latLonToVector3(drawn[index].lat, drawn[index].lon, 1).normalize();
+    const end = latLonToVector3(points[index].lat, points[index].lon, 1).normalize();
     const angle = Math.acos(Math.min(1, Math.max(-1, start.dot(end))));
     const heightRatio = arcHeightRatioFor(angle, arc);
     plans.push({
@@ -324,8 +326,8 @@ export function planRouteArcLegs(
 
   // Not enough budget for the curve every leg asked for. Scale proportionally,
   // never below one segment, then shave the widest remaining allocations until
-  // the total fits. Every leg still has at least one segment here, because the
-  // decimation above guarantees there are no more legs than segments.
+  // the total fits. The guard above already established that there are no more
+  // legs than segments, so flooring at one segment cannot breach the ceiling.
   const scale = availableSegments / requested;
   for (const plan of plans) {
     plan.segmentCount = Math.max(1, Math.floor(plan.segmentCount * scale));

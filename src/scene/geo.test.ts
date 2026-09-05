@@ -387,36 +387,66 @@ describe("route arc geometry", () => {
     }
   });
 
-  it("never returns more vertices than its budget allows (#242 review)", () => {
-    // 63 legs but only 50 segments of budget: one segment each would be 126
-    // vertices against a declared ceiling of 100.
+  it("keeps every Route Point under budget pressure, or draws nothing (#242 review)", () => {
     const points = Array.from({ length: 64 }, (_, index) => ({
       lat: 0,
       lon: -90 + (index * 0.4),
     }));
-    for (const maxVertices of [100, 40, 8, 4, 2]) {
-      const samples = buildRouteArcSamples(points, Math.PI / 96, maxVertices, {
-        arcHeightRatio: 0.22,
-        arcSaturationAngle: Math.PI / 3,
-      });
-      expect(routeArcVertexCount(samples)).toBeLessThanOrEqual(maxVertices);
-      expect(routeArcVertexCount(samples)).toBeGreaterThan(0);
-      // The route still spans its whole extent rather than being truncated:
-      // both of its ends are drawn even when interior points cannot be.
-      const first = routePointAnchor(points[0].lat, points[0].lon);
-      const last = routePointAnchor(points.at(-1)!.lat, points.at(-1)!.lon);
+    const arc = { arcHeightRatio: 0.22, arcSaturationAngle: Math.PI / 3 };
+    const legCount = points.length - 1;
+    // One straight segment per stored leg is the least this route can be drawn
+    // as while still passing through every Route Point it stores.
+    const topologyFloor = legCount * 2;
+
+    // At the floor and just above it, the topology is complete: no Route Point
+    // is omitted and no stroke shortcuts across one.
+    for (const maxVertices of [topologyFloor, topologyFloor + 40, 8192]) {
+      const samples = buildRouteArcSamples(points, Math.PI / 96, maxVertices, arc);
       const count = routeArcVertexCount(samples);
-      expect(sampleAt(samples, 0, ROUTE_ANCHOR_RADIUS, 1).distanceTo(first))
-        .toBeLessThan(1e-6);
-      expect(sampleAt(samples, count - 1, ROUTE_ANCHOR_RADIUS, 1).distanceTo(last))
-        .toBeLessThan(1e-6);
-      // The legs agree with the whole route under the same pressure.
-      const legs = buildRouteArcLegSamples(points, Math.PI / 96, maxVertices, {
-        arcHeightRatio: 0.22,
-        arcSaturationAngle: Math.PI / 3,
-      });
+      expect(count).toBeLessThanOrEqual(maxVertices);
+      expect(count).toBeGreaterThanOrEqual(topologyFloor);
+
+      // Every stored Route Point is a vertex of the drawn route, in order.
+      for (const point of points) {
+        const anchor = routePointAnchor(point.lat, point.lon);
+        let nearest = Number.POSITIVE_INFINITY;
+        for (let vertex = 0; vertex < count; vertex += 1) {
+          nearest = Math.min(
+            nearest,
+            sampleAt(samples, vertex, ROUTE_ANCHOR_RADIUS, 1).distanceTo(anchor),
+          );
+        }
+        expect(nearest).toBeLessThan(1e-6);
+      }
+
+      // The per-leg array still maps one to one onto the route's own legs, so
+      // Playback temporal reveal keeps its point-to-point mapping.
+      const legs = buildRouteArcLegSamples(points, Math.PI / 96, maxVertices, arc);
+      expect(legs).toHaveLength(legCount);
       expect(legs.reduce((sum, leg) => sum + routeArcVertexCount(leg), 0))
         .toBe(count);
+      // Each leg still starts on its own Route Point and ends on the next.
+      legs.forEach((leg, index) => {
+        const legVertices = routeArcVertexCount(leg);
+        expect(legVertices).toBeGreaterThanOrEqual(2);
+        expect(sampleAt(leg, 0, ROUTE_ANCHOR_RADIUS, 1).distanceTo(
+          routePointAnchor(points[index].lat, points[index].lon),
+        )).toBeLessThan(1e-6);
+        expect(sampleAt(leg, legVertices - 1, ROUTE_ANCHOR_RADIUS, 1).distanceTo(
+          routePointAnchor(points[index + 1].lat, points[index + 1].lon),
+        )).toBeLessThan(1e-6);
+      });
+    }
+
+    // Below that floor the route is not drawn at all. A stroke that shortcut
+    // across omitted Route Points would be a lie about the Journey rather than
+    // a lower-quality picture of it, so this degrades at the route level.
+    for (const maxVertices of [topologyFloor - 2, 100, 40, 8, 4, 2]) {
+      expect(routeArcVertexCount(
+        buildRouteArcSamples(points, Math.PI / 96, maxVertices, arc),
+      )).toBe(0);
+      expect(buildRouteArcLegSamples(points, Math.PI / 96, maxVertices, arc))
+        .toEqual([]);
     }
   });
 
