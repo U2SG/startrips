@@ -102,6 +102,8 @@ jobs:
             command: pnpm qa:login-v3 && pnpm qa:media-controls
           - name: post-login
             command: pnpm qa:post-login-controls
+          - name: playback-prefetch
+            command: pnpm qa:playback-prefetch
           - name: final-acceptance
             command: pnpm qa:final-acceptance
           - name: route-anchoring

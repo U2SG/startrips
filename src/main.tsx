@@ -1,4 +1,4 @@
-import { StrictMode, useState } from "react";
+import { StrictMode, useCallback, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { AuthGateway } from "./auth/AuthGateway";
@@ -8,6 +8,12 @@ import { JourneyComposer } from "./journey/JourneyComposer";
 import { JourneyStory } from "./journey/JourneyStory";
 import { JourneyPlaybackOverlay } from "./journey/JourneyPlaybackOverlay";
 import { playbackMediaForPoint, type PlaybackStep } from "./journey/journeyPlayback";
+import { PLAYBACK_INITIAL_TEMPO } from "./journey/useJourneyPlaybackDirector";
+import type { PlaybackTempo } from "./journey/journeyPlaybackPlan";
+import {
+  prepareQuickRecapPlayback,
+  quickRecapStepDurationMs,
+} from "./journey/quickRecapPlayback";
 import { SharedAtlasView } from "./journey/SharedAtlasView";
 import { isSharedAtlasPathname } from "./journey/sharedAtlas";
 import type { Journey, JourneyRoute } from "./journey/types";
@@ -487,12 +493,118 @@ function JourneyPlaybackQaPreview() {
   );
 }
 
+// #197: the image-heavy Playback fixtures the prefetch capture needs. A
+// time-budget lookahead only differs from the old fixed `current + next` when
+// there are many assets to prepare, and the tempo difference only shows on
+// image beats. These live in this dev-only preview alone: `LivingAtlasApp`
+// builds its journeys from the API, and the default `?qaState=journey-playback`
+// preview above is untouched because `qa:media-controls` and
+// `qa:final-acceptance` still grade it.
+const PREFETCH_QA_SINGLE_POINT_IMAGES = 20;
+const PREFETCH_QA_MULTI_POINTS = 5;
+const PREFETCH_QA_MULTI_POINT_IMAGES = 12;
+
+function prefetchQaJourney(pointCount: number, imagesPerPoint: number): Journey {
+  const journeyId = "00000000-0000-4000-8000-000000000012";
+  const routePoints = Array.from({ length: pointCount }, (_unused, pointIndex) => ({
+    id: `00000000-0000-4000-8000-2${`${pointIndex}`.padStart(2, "0")}000000000`,
+    journeyId,
+    sortOrder: pointIndex,
+    latitude: 1.290256 + pointIndex * 1.4,
+    longitude: 103.851471 + pointIndex * 1.9,
+    label: `QA POINT ${pointIndex}`,
+    isStop: true,
+    occurredAt: null,
+    createdAt: "2026-08-11T00:00:00.000Z",
+  }));
+  const media = routePoints.flatMap((point, pointIndex) => (
+    Array.from({ length: imagesPerPoint }, (_unused, mediaIndex) => ({
+      // The id carries its own route point and media index, so the QA script
+      // can map a signed read back to the beat that displays it without any
+      // extra DOM contract.
+      id: `00000000-0000-4000-8000-1${`${pointIndex}`.padStart(2, "0")}${`${mediaIndex}`.padStart(3, "0")}000000`,
+      journeyId,
+      routePointId: point.id,
+      storageDriver: "qa",
+      storageKey: `qa/prefetch-${pointIndex}-${mediaIndex}`,
+      fileName: `prefetch-${pointIndex}-${mediaIndex}.png`,
+      mimeType: "image/png",
+      bytes: 68,
+      sortOrder: pointIndex * 1_000 + mediaIndex,
+      uploadedByUserId: storyQaJourney.createdByUserId,
+      createdAt: "2026-08-11T00:00:00.000Z",
+    }))
+  ));
+  return {
+    ...storyQaJourney,
+    id: journeyId,
+    title: "QA · PLAYBACK PREFETCH",
+    routePoints,
+    media,
+  };
+}
+
+const prefetchQaSingleJourney = prefetchQaJourney(1, PREFETCH_QA_SINGLE_POINT_IMAGES);
+const prefetchQaMultiJourney = prefetchQaJourney(
+  PREFETCH_QA_MULTI_POINTS,
+  PREFETCH_QA_MULTI_POINT_IMAGES,
+);
+
+function JourneyPlaybackPrefetchQaPreview() {
+  const params = new URLSearchParams(window.location.search);
+  const journey = params.get("qaFixture") === "multi"
+    ? prefetchQaMultiJourney
+    : prefetchQaSingleJourney;
+  // Quick Recap is wired the way `LivingAtlasApp` wires it, not approximated:
+  // the recap owns an Edit Plan, the plan is rebuilt at the live tempo
+  // (decision D1), and the same resolver answers each beat's length — which is
+  // what makes the prefetch window walk the beats the recap actually plays.
+  const recap = params.get("qaRecap") === "1";
+  const [tempo, setTempo] = useState<PlaybackTempo>(PLAYBACK_INITIAL_TEMPO);
+  const quickRecap = useMemo(
+    () => (recap
+      ? prepareQuickRecapPlayback(journey, {
+        generatedAt: "2026-09-05T00:00:00.000Z",
+        tempo,
+      })
+      : null),
+    [journey, recap, tempo],
+  );
+  const stepDurationResolver = useCallback((
+    targetJourney: Journey,
+    step: PlaybackStep,
+    activeTempo: PlaybackTempo,
+  ) => (
+    quickRecap
+      ? quickRecapStepDurationMs(targetJourney, step, quickRecap.plan, activeTempo)
+      : undefined
+  ), [quickRecap]);
+  return (
+    <main className="living-atlas">
+      <div className="living-atlas__globe journey-story-qa__backdrop" aria-hidden="true" />
+      <JourneyPlaybackOverlay
+        journey={quickRecap?.journey ?? journey}
+        onClose={() => undefined}
+        onCameraTargetChange={() => undefined}
+        stepDurationResolver={recap ? stepDurationResolver : undefined}
+        onTempoChange={setTempo}
+        playbackMode={quickRecap ? "quick-recap" : "full"}
+        reduceMotion
+      />
+    </main>
+  );
+}
+
 const Experience = import.meta.env.DEV && qaState === "journey-composer"
   ? JourneyComposerQaPreview
   : import.meta.env.DEV && qaState === "journey-story"
     ? JourneyStoryQaPreview
   : import.meta.env.DEV && qaState === "journey-playback"
-    ? JourneyPlaybackQaPreview
+    // #197: the prefetch capture needs its own image-heavy fixture, so it is a
+    // sibling mode of the playback preview rather than a change to it.
+    ? (new URLSearchParams(window.location.search).get("qaMode") === "prefetch"
+      ? JourneyPlaybackPrefetchQaPreview
+      : JourneyPlaybackQaPreview)
   : import.meta.env.DEV && qaState === "journey-routes"
     ? JourneyRoutesQaPreview
   : import.meta.env.DEV && (qaState === "globe-controls" || qaState === "globe-controls-gateway")

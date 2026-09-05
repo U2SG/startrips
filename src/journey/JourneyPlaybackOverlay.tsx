@@ -95,6 +95,50 @@ export function playbackReadIsReusable(
 
 export type PlaybackMediaGate = "waiting" | "ready" | "error";
 
+/**
+ * Why playback is waiting on the current beat, if it is.
+ *
+ * #197 needs `decode` separable from the rest: a video beat legitimately holds
+ * the director for its whole runtime, and a trim positions the element before
+ * its segment starts. Neither is a symptom of a lookahead that stayed fixed
+ * while tempo got faster, so a capture that counted them all as one number
+ * could not tell continuity apart from ordinary video playback.
+ */
+export type PlaybackHoldReason = "none" | "decode" | "video" | "trim";
+
+/**
+ * The single decision behind the hold, taken from already-resolved inputs so it
+ * is unit-checkable without a journey, a director or a DOM.
+ */
+export function playbackHoldReason(input: {
+  /** The current step's kind; `undefined` outside a run. */
+  stepKind: PlaybackStep["kind"] | undefined;
+  /** The asset this beat may wait on: a media step's own, or a stop's first image. */
+  asset: JourneyMediaAsset | null;
+  gate: PlaybackMediaGate;
+  /** This asset has already failed to play, so the legacy fallback timer owns the beat. */
+  videoPlaybackFailed: boolean;
+  /** The trim transport's status when the segment owns this beat, else null. */
+  trimStatus: VideoTrimSeekStatus | null;
+}): PlaybackHoldReason {
+  const { stepKind, asset, gate } = input;
+  if (!asset) return "none";
+  // A stop step waits only for its first image to be decodable, so the frame it
+  // hands to the media step is never blank.
+  if (stepKind === "stop") return gate === "waiting" ? "decode" : "none";
+  if (stepKind !== "media") return "none";
+  if (input.videoPlaybackFailed) return "none";
+  if (input.trimStatus) return videoTrimHoldsStep(input.trimStatus) ? "trim" : "none";
+  switch (playbackMediaWaitPolicy(asset, gate)) {
+    case "decode":
+      return "decode";
+    case "video-ended":
+      return "video";
+    case "none":
+      return "none";
+  }
+}
+
 const VIDEO_STALL_WATCHDOG_MS = 4_000;
 
 export function playbackMediaGate(
@@ -160,7 +204,11 @@ export function JourneyPlaybackOverlay({
   // Review P2: hold the director while a media chapter's image is not yet
   // decoded, so a slow network never flashes an empty frame — the chapter
   // waits on the decode settle instead of advancing on a fixed timer.
-  const [hold, setHold] = useState(false);
+  const [holdReason, setHoldReason] = useState<PlaybackHoldReason>("none");
+  // Every existing reader only asks whether playback is waiting at all. The
+  // reason exists so the decode hold #197 is about can be told apart from a
+  // video beat that simply owns its own completion.
+  const hold = holdReason !== "none";
   const [videoFallbackAssetId, setVideoFallbackAssetId] = useState<string | null>(null);
   const director = useJourneyPlaybackDirector(journey, hold, stepDurationResolver);
   const { phase, paused, pause, resume, next, back, seek, exit, steps, stepIndex, tempo, setTempo } = director;
@@ -275,7 +323,7 @@ export function JourneyPlaybackOverlay({
       videoStallTimerRef.current = null;
       if (videoStalledAssetIdRef.current === assetId) videoStalledAssetIdRef.current = null;
       setVideoFallbackAssetId(assetId);
-      setHold(false);
+      setHoldReason("none");
     }, VIDEO_STALL_WATCHDOG_MS);
   }, [clearVideoStallWatchdog]);
   // #195 Phase 2. A video beat whose plan item declares a trim is owned by the
@@ -582,64 +630,42 @@ export function JourneyPlaybackOverlay({
   // director so it never advances into a blank frame. Terminal read/decode
   // failures are settled too: they release the hold so playback can show an
   // explicit fallback instead of deadlocking forever.
+  //
+  // #197: the decision itself is `playbackHoldReason` below, so what holds
+  // playback is a pure, unit-covered answer and this effect only gathers the
+  // inputs — the same split `playbackMediaGate` already uses.
   useEffect(() => {
     if (!journey) return;
     const step = director.step;
-    if (step?.kind === "stop") {
-      // Hold the STOP phase until this chapter's first image is decoded. If
-      // the signed read or browser decode fails, release the hold and let the
-      // media step render its recoverable error state.
-      const firstImage = playbackHoldTargetMedia(journey, step);
-      if (!firstImage) {
-        setHold(false);
-        return;
-      }
-      const gate = playbackMediaGate(
-        mediaReads[firstImage.id],
-        decodeRegistryRef.current.readiness(firstImage.id),
-        true,
-      );
-      setHold(gate === "waiting");
-      return;
-    }
-    if (step?.kind !== "media") {
-      setHold(false);
-      return;
-    }
-    const asset = playbackMediaForPoint(journey, step.pointIndex)[step.mediaIndex];
-    if (!asset) {
-      setHold(false);
-      return;
-    }
-    const isImage = asset.mimeType.startsWith("image/");
-    const gate = playbackMediaGate(
-      mediaReads[asset.id],
-      isImage ? decodeRegistryRef.current.readiness(asset.id) : undefined,
-      isImage,
-    );
-    // Successful Full Journey video chapters are owned by the media element's
-    // real `ended` event. Once this asset has recorded a media/play() failure,
-    // keep the failure state stable across renders so the legacy fallback timer
-    // can run instead of immediately re-acquiring the hold.
-    if (asset.mimeType.startsWith("video/") && videoFallbackAssetId === asset.id) {
-      setHold(false);
-      return;
-    }
+    // A stop step waits on the chapter's first image; a media step waits on its
+    // own asset. `playbackHoldTargetMedia` answers both, and it is the same
+    // asset the prefetch window guarantees to have prepared.
+    const asset = step?.kind === "stop" || step?.kind === "media"
+      ? playbackHoldTargetMedia(journey, step)
+      : null;
+    const isImage = asset?.mimeType.startsWith("image/") ?? false;
+    const gate = asset
+      ? playbackMediaGate(
+        mediaReads[asset.id],
+        isImage ? decodeRegistryRef.current.readiness(asset.id) : undefined,
+        isImage,
+      )
+      : "ready";
     // #195 Phase 2: a trimmed video beat is owned by its segment instead of by
-    // the element's `ended` event. Hold only while the element is being moved
-    // onto the in-point, then release so the director spends exactly the
-    // `outMs - inMs` the plan booked — that equality is what makes step
-    // accounting and real elapsed playback agree for a non-zero in-point. An
-    // `unavailable` trim falls through to the untrimmed policy below.
-    if (
-      asset.mimeType.startsWith("video/")
+    // the element's `ended` event. An `unavailable` trim is not owned by the
+    // segment at all, so it falls through to the untrimmed policy.
+    const trimOwnsStep = Boolean(
+      asset?.mimeType.startsWith("video/")
       && videoTrimSeekApplies(videoTrimSeek, asset.id, director.stepIndex)
-      && videoTrimSeek!.status !== "unavailable"
-    ) {
-      setHold(videoTrimHoldsStep(videoTrimSeek!.status));
-      return;
-    }
-    setHold(playbackMediaWaitPolicy(asset, gate) !== "none");
+      && videoTrimSeek!.status !== "unavailable",
+    );
+    setHoldReason(playbackHoldReason({
+      stepKind: step?.kind,
+      asset,
+      gate,
+      videoPlaybackFailed: asset ? videoFallbackAssetId === asset.id : false,
+      trimStatus: trimOwnsStep ? videoTrimSeek!.status : null,
+    }));
   }, [
     decodeSettleRevision,
     director.step,
@@ -1040,6 +1066,11 @@ export function JourneyPlaybackOverlay({
       // QA lane can grade the segment handover directly instead of inferring
       // it from wall-clock timing.
       data-video-trim={videoTrimHoldingStatus ?? "none"}
+      // #197: why playback is waiting, published beside the step so the
+      // browser QA lane counts decode holds directly instead of inferring them
+      // from wall-clock gaps. `video` and `trim` are a beat's own ownership of
+      // its runtime, not a lookahead that ran out.
+      data-playback-hold={holdReason}
     >
       <audio
         ref={audioRef}
@@ -1099,7 +1130,7 @@ export function JourneyPlaybackOverlay({
                     onEnded={() => {
                       clearVideoStallWatchdog();
                       videoStalledAssetIdRef.current = null;
-                      setHold(false);
+                      setHoldReason("none");
                       director.complete();
                     }}
                     onError={() => {
@@ -1107,7 +1138,7 @@ export function JourneyPlaybackOverlay({
                       videoStalledAssetIdRef.current = null;
                       setVideoFallbackAssetId(activeMedia.id);
                       settleVideoTrimSeek(activeMedia.id, director.stepIndex, "unavailable");
-                      setHold(false);
+                      setHoldReason("none");
                     }}
                     onLoadedMetadata={(event) => {
                       if (!activeVideoTrim || activeVideoTrim.assetId !== activeMedia.id) return;
@@ -1188,7 +1219,7 @@ export function JourneyPlaybackOverlay({
                         element.currentTime,
                       );
                       if (action.kind === "complete") {
-                        setHold(false);
+                        setHoldReason("none");
                         director.complete();
                         return;
                       }
