@@ -2,10 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   buildPlaybackSteps,
   initialPlaybackState,
-  nextMeaningfulPlaybackStepIndex,
+  meaningfulPlaybackStepIndex,
+  meaningfulPlaybackStepIndexes,
   playbackReducer,
-  previousMeaningfulPlaybackStepIndex,
 } from "./journeyPlayback";
+import { buildPlaybackPlan, nextMeaningfulStepIndex } from "./journeyPlaybackPlan";
 import type { Journey, JourneyMediaAsset, RoutePoint } from "./types";
 
 const point = (id: string, sortOrder: number): RoutePoint => ({
@@ -57,10 +58,32 @@ describe("meaningful Journey Playback navigation (#126)", () => {
     expect(steps.map((step) => step.kind)).toEqual([
       "intro", "stop", "media", "travel", "stop", "media", "outro",
     ]);
-    expect(nextMeaningfulPlaybackStepIndex(steps, 2)).toBe(4);
-    expect(nextMeaningfulPlaybackStepIndex(steps, 3)).toBe(4);
-    expect(previousMeaningfulPlaybackStepIndex(steps, 4)).toBe(2);
-    expect(previousMeaningfulPlaybackStepIndex(steps, 3)).toBe(2);
+    const meaningful = meaningfulPlaybackStepIndexes(steps);
+    expect(meaningfulPlaybackStepIndex(meaningful, 2, 1)).toBe(4);
+    expect(meaningfulPlaybackStepIndex(meaningful, 3, 1)).toBe(4);
+    expect(meaningfulPlaybackStepIndex(meaningful, 4, -1)).toBe(2);
+    expect(meaningfulPlaybackStepIndex(meaningful, 3, -1)).toBe(2);
+  });
+
+  it("gives the plan and the reducer the same meaningful moments", () => {
+    const steps = buildPlaybackSteps(journey);
+    const plan = buildPlaybackPlan(journey, "standard");
+    const meaningful = meaningfulPlaybackStepIndexes(steps);
+    expect(plan.meaningfulStepIndexes).toEqual(meaningful);
+    for (let stepIndex = 0; stepIndex < steps.length; stepIndex += 1) {
+      const forward = playbackReducer(
+        journey,
+        { stepIndex, phase: { type: "intro" }, paused: false },
+        { type: "next" },
+      );
+      const backward = playbackReducer(
+        journey,
+        { stepIndex, phase: { type: "intro" }, paused: false },
+        { type: "previous" },
+      );
+      expect(nextMeaningfulStepIndex(plan, stepIndex, 1)).toBe(forward.stepIndex);
+      expect(nextMeaningfulStepIndex(plan, stepIndex, -1)).toBe(backward.stepIndex);
+    }
   });
 
   it("keeps automatic advance on the full cinematic stream", () => {

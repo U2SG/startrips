@@ -216,24 +216,30 @@ export function isMeaningfulPlaybackStep(step: PlaybackStep | undefined): boolea
   return Boolean(step && step.kind !== "travel");
 }
 
-export function nextMeaningfulPlaybackStepIndex(
-  steps: readonly PlaybackStep[],
-  currentIndex: number,
-): number {
-  for (let index = Math.max(0, currentIndex + 1); index < steps.length; index += 1) {
-    if (isMeaningfulPlaybackStep(steps[index])) return index;
-  }
-  return Math.min(Math.max(0, currentIndex), Math.max(0, steps.length - 1));
+/** The indexes of the beats next / back may land on: everything but travel. */
+export function meaningfulPlaybackStepIndexes(steps: readonly PlaybackStep[]): number[] {
+  return steps.flatMap((step, index) => (isMeaningfulPlaybackStep(step) ? [index] : []));
 }
 
-export function previousMeaningfulPlaybackStepIndex(
-  steps: readonly PlaybackStep[],
-  currentIndex: number,
+/**
+ * The one implementation of "the next meaningful moment in this direction".
+ *
+ * It takes the meaningful indexes rather than the steps so the elapsed-time
+ * plan (`journeyPlaybackPlan.ts`, which already carries
+ * `meaningfulStepIndexes`) and `playbackReducer` share this scan instead of
+ * keeping a second copy that can drift from it. Landing on nothing keeps the
+ * current beat: reaching the end of the Journey is not a reason to jump.
+ */
+export function meaningfulPlaybackStepIndex(
+  meaningfulStepIndexes: readonly number[],
+  currentStepIndex: number,
+  direction: 1 | -1,
 ): number {
-  for (let index = Math.min(currentIndex - 1, steps.length - 1); index >= 0; index -= 1) {
-    if (isMeaningfulPlaybackStep(steps[index])) return index;
-  }
-  return Math.min(Math.max(0, currentIndex), Math.max(0, steps.length - 1));
+  const found = direction > 0
+    ? meaningfulStepIndexes.find((index) => index > currentStepIndex)
+    : [...meaningfulStepIndexes].reverse().find((index) => index < currentStepIndex);
+  if (found !== undefined) return found;
+  return Math.min(Math.max(0, currentStepIndex), Math.max(0, meaningfulStepIndexes.at(-1) ?? 0));
 }
 
 /**
@@ -264,11 +270,15 @@ export function playbackReducer(
     }
     case "next": {
       if (state.paused) return state;
-      const next = nextMeaningfulPlaybackStepIndex(steps, state.stepIndex);
+      const next = meaningfulPlaybackStepIndex(meaningfulPlaybackStepIndexes(steps), state.stepIndex, 1);
       return { stepIndex: next, phase: phaseForStep(steps[next]), paused: false };
     }
     case "previous": {
-      const previous = previousMeaningfulPlaybackStepIndex(steps, state.stepIndex);
+      const previous = meaningfulPlaybackStepIndex(
+        meaningfulPlaybackStepIndexes(steps),
+        state.stepIndex,
+        -1,
+      );
       const phase = phaseForStep(steps[previous]);
       return state.paused
         ? { stepIndex: previous, phase: { type: "paused", previous: phase }, paused: true }
