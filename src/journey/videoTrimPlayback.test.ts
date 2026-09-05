@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   resolveVideoTrim,
+  videoTrimBuffersOnStall,
+  videoTrimStatusAfterPauseChange,
   videoTrimEntryAction,
   videoTrimHoldsStep,
   videoTrimProgressAction,
@@ -34,6 +36,39 @@ describe("trim-aware video playback contract (#195 Phase 2)", () => {
     expect(videoTrimHoldsStep("playing")).toBe(false);
     expect(videoTrimHoldsStep("unavailable")).toBe(false);
     expect(videoTrimHoldsStep(null)).toBe(false);
+  });
+
+  it("treats a not-progressing signal as a stall only while the beat is meant to play", () => {
+    // `waiting` and `stalled` also fire around a pause and around the refill
+    // that follows a resume. A paused beat's budget is already frozen, so
+    // calling that a stall would arm the escape watchdog against a beat that is
+    // playing correctly.
+    expect(videoTrimBuffersOnStall("playing", false)).toBe(true);
+    expect(videoTrimBuffersOnStall("playing", true)).toBe(false);
+    expect(videoTrimBuffersOnStall("positioning", false)).toBe(false);
+    expect(videoTrimBuffersOnStall("buffering", false)).toBe(false);
+    expect(videoTrimBuffersOnStall("unavailable", false)).toBe(false);
+    expect(videoTrimBuffersOnStall(null, false)).toBe(false);
+  });
+
+  it("never carries a buffering beat across a pause or a resume", () => {
+    // Resuming starts from `playing`; a stall that is still real re-reports
+    // itself at once, and the watchdog window then measures the resume rather
+    // than the length of the pause.
+    expect(videoTrimStatusAfterPauseChange("buffering")).toBe("playing");
+    expect(videoTrimStatusAfterPauseChange("playing")).toBe("playing");
+    expect(videoTrimStatusAfterPauseChange("positioning")).toBe("positioning");
+    expect(videoTrimStatusAfterPauseChange("unavailable")).toBe("unavailable");
+    expect(videoTrimStatusAfterPauseChange(null)).toBeNull();
+  });
+
+  it("keeps a paused and resumed beat inside its segment", () => {
+    // Pause freezes the element where it stands, so resume re-enters from the
+    // same position and the entry rule leaves it alone: no seek, no restart,
+    // and the remaining budget is what is left of the segment.
+    const resolved = resolveVideoTrim({ inMs: 1_200, outMs: 4_700 }, 12);
+    expect(videoTrimEntryAction(resolved, 2.5)).toEqual({ kind: "none" });
+    expect(videoTrimProgressAction(resolved, 2.5)).toEqual({ kind: "none" });
   });
 
   it("seeks to the in-point on entry and does nothing once inside the segment", () => {

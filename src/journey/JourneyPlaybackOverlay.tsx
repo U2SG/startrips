@@ -37,9 +37,11 @@ import { planPrefetchWindow, readyMsAheadForTempo } from "./playbackPrefetchPlan
 import { syncPlaybackMediaElement } from "./mediaPlaybackSync";
 import {
   resolveVideoTrim,
+  videoTrimBuffersOnStall,
   videoTrimEntryAction,
   videoTrimHoldsStep,
   videoTrimProgressAction,
+  videoTrimStatusAfterPauseChange,
   type VideoTrimSeekStatus,
   type VideoTrimWindow,
 } from "./videoTrimPlayback";
@@ -346,13 +348,11 @@ export function JourneyPlaybackOverlay({
   ]);
   // The bounded escape acceptance 5 asks for, covering both holding states. It
   // starts only once the signed read is ready and playback is running, so a slow
-  // read is never mistaken for an unseekable source. A `positioning` beat that
-  // never reaches its in-point degrades to `ended` ownership — the source may
-  // simply be unseekable and is still worth playing whole. A `buffering` beat
-  // has already proved it plays, so a segment that never resumes degrades to the
-  // overlay's existing media fallback, which releases the hold and lets the
-  // director's timer end the beat rather than waiting on an `ended` that a stuck
-  // source will never fire.
+  // read is never mistaken for an unseekable source. Either way the beat
+  // degrades to `ended` ownership — the pre-#195 behaviour — and deliberately no
+  // further: the overlay's media fallback stays owned by the existing
+  // `stalled` watchdog alone, so a slow refill after a resume cannot push a beat
+  // that was playing correctly out of the product's normal video path.
   const videoTrimHoldingStatus = videoTrimSeek?.assetId === activeVideoTrimAssetId
     ? videoTrimSeek?.status ?? null
     : null;
@@ -365,11 +365,9 @@ export function JourneyPlaybackOverlay({
     if (!videoTrimWaiting || !videoTrimReadReady || paused) return;
     const assetId = activeVideoTrimAssetId;
     if (!assetId) return;
-    const buffering = videoTrimHoldingStatus === "buffering";
     clearVideoTrimWatchdog();
     videoTrimTimerRef.current = window.setTimeout(() => {
       videoTrimTimerRef.current = null;
-      if (buffering) setVideoFallbackAssetId(assetId);
       setVideoTrimSeek({ assetId, status: "unavailable" });
     }, VIDEO_STALL_WATCHDOG_MS);
     return () => clearVideoTrimWatchdog();
@@ -381,6 +379,16 @@ export function JourneyPlaybackOverlay({
     videoTrimReadReady,
     videoTrimWaiting,
   ]);
+  // A pause freezes the budget by itself, so a beat never carries `buffering`
+  // across one: the resumed beat starts from `playing` and re-reports a stall
+  // that is still real, which keeps the watchdog window measuring the resume.
+  useEffect(() => {
+    setVideoTrimSeek((current) => {
+      if (!current) return current;
+      const next = videoTrimStatusAfterPauseChange(current.status);
+      return next === current.status ? current : { ...current, status: next! };
+    });
+  }, [paused]);
   // #20: one sampler per soundtrack element; analyser built on first play.
   const samplerRef = useRef(createSoundtrackSampler());
   const lightStripRef = useRef<HTMLDivElement>(null);
@@ -916,22 +924,39 @@ export function JourneyPlaybackOverlay({
                     }}
                     onLoadedMetadata={(event) => {
                       if (!activeVideoTrim || activeVideoTrim.assetId !== activeMedia.id) return;
+                      // Only while the beat is still holding: once it is
+                      // `playing` the segment is under way, and once it is
+                      // `unavailable` the watchdog has already given up, so
+                      // neither state may issue another seek. That is what
+                      // bounds the retry.
+                      if (videoTrimSeek?.assetId !== activeMedia.id) return;
+                      if (!videoTrimHoldsStep(videoTrimSeek.status)) return;
                       applyVideoTrimEntry(
                         event.currentTarget,
                         resolveVideoTrim(activeVideoTrim.trim, event.currentTarget.duration),
                         activeMedia.id,
                       );
                     }}
-                    onSeeked={() => {
+                    onSeeked={(event) => {
+                      // A seek lands on the nearest decodable frame, which can
+                      // be short of the in-point. Re-run the entry rule instead
+                      // of assuming the first attempt succeeded: it answers
+                      // `playing` when the element really is inside the segment
+                      // and re-seeks when it is not, so releasing the budget
+                      // always means the segment is under way.
                       if (!activeVideoTrim || activeVideoTrim.assetId !== activeMedia.id) return;
-                      settleVideoTrimSeek(activeMedia.id, "playing");
+                      applyVideoTrimEntry(
+                        event.currentTarget,
+                        resolveVideoTrim(activeVideoTrim.trim, event.currentTarget.duration),
+                        activeMedia.id,
+                      );
                     }}
                     onWaiting={() => {
                       // The director spends the beat's budget on the wall clock,
                       // so a segment that stops progressing has to freeze it.
                       if (!activeVideoTrim || activeVideoTrim.assetId !== activeMedia.id) return;
                       if (videoTrimSeek?.assetId !== activeMedia.id) return;
-                      if (videoTrimSeek.status !== "playing") return;
+                      if (!videoTrimBuffersOnStall(videoTrimSeek.status, paused)) return;
                       settleVideoTrimSeek(activeMedia.id, "buffering");
                     }}
                     onPlaying={() => {
@@ -981,7 +1006,7 @@ export function JourneyPlaybackOverlay({
                       else scheduleVideoStallWatchdog(activeMedia.id);
                       if (!activeVideoTrim || activeVideoTrim.assetId !== activeMedia.id) return;
                       if (videoTrimSeek?.assetId !== activeMedia.id) return;
-                      if (videoTrimSeek.status !== "playing") return;
+                      if (!videoTrimBuffersOnStall(videoTrimSeek.status, paused)) return;
                       settleVideoTrimSeek(activeMedia.id, "buffering");
                     }}
                   />

@@ -158,3 +158,33 @@ export type VideoTrimSeekStatus = "positioning" | "buffering" | "playing" | "una
 export function videoTrimHoldsStep(status: VideoTrimSeekStatus | null): boolean {
   return status === "positioning" || status === "buffering";
 }
+
+/**
+ * Whether a not-progressing signal means the segment stopped.
+ *
+ * `waiting` and `stalled` also fire around an ordinary pause and around the
+ * refill that follows a resume, and a paused beat is not a stalled one — its
+ * budget is already frozen by the pause. Only a beat that is supposed to be
+ * moving can start buffering.
+ */
+export function videoTrimBuffersOnStall(
+  status: VideoTrimSeekStatus | null,
+  paused: boolean,
+): boolean {
+  return status === "playing" && !paused;
+}
+
+/**
+ * The status a beat carries across a pause or a resume.
+ *
+ * A pause freezes the budget on its own, so carrying `buffering` through one
+ * would hand the resumed beat an already-aged watchdog window for a stall that
+ * may no longer exist. Resuming starts from `playing`; if the element really is
+ * still refilling it says so again immediately, and the window then measures
+ * the resume rather than the pause.
+ */
+export function videoTrimStatusAfterPauseChange(
+  status: VideoTrimSeekStatus | null,
+): VideoTrimSeekStatus | null {
+  return status === "buffering" ? "playing" : status;
+}
