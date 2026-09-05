@@ -474,11 +474,28 @@ try {
     await setZoom(page, 3);
     await page.waitForTimeout(220);
     const beforeClick = await measure(page);
+    // The scene ignores a label activation while any pointer is still tracked,
+    // so the drag pointer is explicitly released before clicking. Without this
+    // a click is swallowed silently and the measurement below runs against the
+    // place that was never focused.
+    await canvasOf(page).evaluate((node) => {
+      for (const type of ["pointerup", "pointercancel"]) {
+        node.dispatchEvent(new PointerEvent(type, {
+          bubbles: true,
+          button: 0,
+          buttons: 0,
+          isPrimary: true,
+          pointerId: 71,
+          pointerType: "mouse",
+        }));
+      }
+    });
+    await page.waitForTimeout(120);
     // Choosing the label and activating it happen in ONE page turn. The label
     // pool is rewritten every frame, so selecting an element in Node and
     // clicking it in a second round trip can activate a recycled element - or
     // nothing at all, silently.
-    const target = await page.evaluate((centre) => {
+    const activateNearestLabel = (viewCentre) => page.evaluate((centre) => {
       let best = null;
       for (const element of document.querySelectorAll(".particle-earth-city")) {
         if (element.style.display === "none") continue;
@@ -505,8 +522,28 @@ try {
         lat: Number(best.element.dataset.cityLat),
         lon: Number(best.element.dataset.cityLon),
       };
-    }, beforeClick.centre);
-    check(Boolean(target), `${fixture.key}: no place label to click at max zoom`);
+    }, viewCentre);
+
+    // Activation is confirmed rather than assumed. A swallowed click leaves the
+    // globe on its original framing, and every measurement after it would then
+    // be describing a place nobody clicked.
+    let target = null;
+    for (let attempt = 0; attempt < 3 && !target; attempt += 1) {
+      const candidate = await activateNearestLabel(beforeClick.centre);
+      if (!candidate) break;
+      for (let poll = 0; poll < 12; poll += 1) {
+        const state = await measure(page);
+        if (
+          Math.abs(state.focus.lat - candidate.lat) < 0.0002
+          && Math.abs(state.focus.lon - candidate.lon) < 0.0002
+        ) {
+          target = candidate;
+          break;
+        }
+        await page.waitForTimeout(120);
+      }
+    }
+    check(Boolean(target), `${fixture.key}: no place label at max zoom accepted an activation`);
     if (target) {
       // Focusing a picked point flies the globe and drops it to a low zoom for
       // the flight. Zooming before the flight ends would cancel it - a wheel
@@ -518,7 +555,7 @@ try {
       check(
         Math.abs(settledFocus.focus.lat - target.lat) < 0.0002
         && Math.abs(settledFocus.focus.lon - target.lon) < 0.0002,
-        `${fixture.key}: clicking "${target.name}" at (${target.lat}, ${target.lon}) focused (${settledFocus.focus.lat}, ${settledFocus.focus.lon})`,
+        `${fixture.key}: clicking "${target.name}" at (${target.lat}, ${target.lon}) settled on (${settledFocus.focus.lat}, ${settledFocus.focus.lon})`,
       );
       // The other half - no visible jump - needs the label on screen. Which
       // zoom renders it depends on the place's tier and on #79 collision, so
