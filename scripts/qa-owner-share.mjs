@@ -161,6 +161,19 @@ async function installOwnerApi(page, state) {
   });
 }
 
+/** Click an icon-only control, which carries its name as `aria-label`. */
+async function clickLabel(page, label) {
+  const clicked = await page.evaluate((wanted) => {
+    const button = [...document.querySelectorAll("button")]
+      .find((element) => (element.getAttribute("aria-label") ?? "").trim() === wanted);
+    if (!button) return false;
+    button.click();
+    return true;
+  }, label);
+  if (!clicked) throw new Error(`no control labelled ${label}`);
+  await page.waitForTimeout(180);
+}
+
 async function clickText(page, text) {
   const clicked = await page.evaluate((label) => {
     const button = [...document.querySelectorAll("button")]
@@ -374,7 +387,7 @@ try {
       state.requests.map((entry) => entry.kind),
     );
 
-    await clickText(page, "关闭分享");
+    await clickLabel(page, "关闭分享");
     await page.waitForTimeout(200);
 
     // --- Entry path A: exactly one Journey. --------------------------------
