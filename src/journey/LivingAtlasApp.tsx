@@ -10,7 +10,8 @@ import {
   IconWorld,
   IconX,
 } from "@tabler/icons-react";
-import { MobileAccountActionSlot, useAtlasCapabilities, useAtlasCinematicIsolation } from "../auth/AuthGateway";
+import { MobileAccountActionSlot, useAtlasCinematicIsolation } from "../auth/AuthGateway";
+import { useAtlasView, type AtlasMediaRead } from "./atlasView";
 import { StartripsBrandLoader } from "../brand/StartripsBrandMark";
 import { CountUp } from "../motion/primitives/CountUp";
 import { useMagnet } from "../motion/primitives/Magnet";
@@ -44,11 +45,8 @@ import { useModalFocus } from "./useModalFocus";
 import { compactMobileLayoutMarker, useCompactMobileLayout } from "./mobileLayout";
 import { useMobileSurfaceHistory } from "./useMobileSurfaceHistory";
 import {
-  deleteJourney,
-  getPrivateMediaRead,
-  listJourneys,
-  restoreJourney,
-} from "./journeyApi";
+  mediaReadRefreshDelayMs,
+} from "./mediaReadRefresh";
 import {
   journeyCover,
   journeySoundtrack,
@@ -161,9 +159,11 @@ type JourneyCardMediaRead =
 function JourneyCardMedia({
   journey,
   reduceMotion,
+  readMedia,
 }: {
   journey: Journey;
   reduceMotion: boolean;
+  readMedia: AtlasMediaRead;
 }) {
   // #14: the card cover is the explicit coverMediaAssetId when set, else the
   // first visual media by sortOrder, else nothing. The soundtrack never
@@ -184,16 +184,15 @@ function JourneyCardMedia({
     const load = async () => {
       setRead({ status: "loading" });
       try {
-        const next = await getPrivateMediaRead(asset.id);
+        const issuedAt = Date.now();
+        const next = await readMedia(asset.id);
         if (cancelled) return;
         setRead({ status: "ready", url: next.url });
-        const expiresAt = Date.parse(next.expiresAt);
-        const refreshIn = Number.isFinite(expiresAt)
-          ? Math.max(30_000, expiresAt - Date.now() - 30_000)
-          : 5 * 60_000;
+        // A guest read can be shorter-lived than the old fixed 30 s margin,
+        // so the delay is derived from this read's own lifetime.
         refreshTimer = window.setTimeout(
           () => void load(),
-          refreshIn,
+          mediaReadRefreshDelayMs(issuedAt, Date.parse(next.expiresAt), Date.now()),
         );
       } catch {
         if (!cancelled) setRead({ status: "error" });
@@ -314,7 +313,11 @@ export function LivingAtlasApp({
   lightweightGlobe?: boolean;
   GlobeComponent?: ComponentType<LivingAtlasGlobeProps>;
 } = {}) {
-  const { canDeleteJourney } = useAtlasCapabilities();
+  // #200 phase D: the product mode. `capabilities` decides which affordances
+  // exist; `mutations` is null in shared mode, so there is no client here that
+  // could write and the owner-only surfaces below are never constructed.
+  const { capabilities, listJourneys, readMedia, mutations } = useAtlasView();
+  const { canCreateJourney, canDeleteJourney, canEditJourney, canManageAtlas } = capabilities;
   const setCinematicIsolation = useAtlasCinematicIsolation();
   const [journeys, setJourneys] = useState<Journey[]>([]);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
@@ -504,7 +507,7 @@ export function LivingAtlasApp({
       }
       return null;
     }
-  }, [showNotice]);
+  }, [listJourneys, showNotice]);
 
   useEffect(() => {
     void load();
@@ -544,7 +547,7 @@ export function LivingAtlasApp({
   // so 播放旅程 can start audio synchronously inside the click gesture.
   useEffect(() => {
     if (!activeJourney) return;
-    void prefetchSoundtrackRead(activeJourney).catch(() => undefined);
+    void prefetchSoundtrackRead(activeJourney, readMedia).catch(() => undefined);
   }, [activeJourney?.id]);
   useEffect(() => {
     setPlaybackModeMenuJourneyId(null);
@@ -626,11 +629,13 @@ export function LivingAtlasApp({
   }
 
   function openCreateComposer() {
+    if (!canCreateJourney) return;
     setEditingJourneyId(null);
     setComposerOpen(true);
   }
 
   function editJourney(journeyId: string) {
+    if (!canEditJourney) return;
     timeCursor.selectJourney(journeyId);
     setStoryJourneyId(null);
     setStoryRoutePointId(null);
@@ -641,8 +646,9 @@ export function LivingAtlasApp({
   }
 
   async function removeJourney(journeyId: string) {
+    if (!mutations) return;
     const removed = journeys.find((journey) => journey.id === journeyId) ?? null;
-    await deleteJourney(journeyId);
+    await mutations.deleteJourney(journeyId);
     const remaining = journeys.filter((journey) => journey.id !== journeyId);
     setJourneys(remaining);
     setStoryJourneyId(null);
@@ -653,9 +659,9 @@ export function LivingAtlasApp({
   }
 
   async function undoRemovedJourney() {
-    if (!undoJourney) return;
+    if (!undoJourney || !mutations) return;
     try {
-      const restored = await restoreJourney(undoJourney.id);
+      const restored = await mutations.restoreJourney(undoJourney.id);
       setJourneys((current) => mergeJourney(current, restored));
       setArrivalJourneyId(restored.id);
       setUndoJourney(null);
@@ -764,7 +770,7 @@ export function LivingAtlasApp({
       setPlaybackPendingMode({ journeyId, mode, fallbackMessage });
       setPlaybackModeMenuJourneyId(null);
       setPlaybackPreparingId(journeyId);
-      void prefetchSoundtrackRead(journey)
+      void prefetchSoundtrackRead(journey, readMedia)
         .catch(() => null)
         .finally(() => setPlaybackPreparingId((current) => (
           current === journeyId ? null : current
@@ -911,8 +917,8 @@ export function LivingAtlasApp({
         <header className="mobile-v2__header">
           <div className="mobile-v2__brand"><IconWorld size={18} stroke={1.2} aria-hidden="true" /><strong>Startrips</strong></div>
           <nav aria-label="移动端旅程操作">
-            <MobileAccountActionSlot />
-            <button type="button" onClick={openCreateComposer} aria-label="记录新旅程"><IconPlus size={18} stroke={1.4} aria-hidden="true" /></button>
+            {canManageAtlas ? <MobileAccountActionSlot /> : null}
+            {canCreateJourney ? <button type="button" onClick={openCreateComposer} aria-label="记录新旅程"><IconPlus size={18} stroke={1.4} aria-hidden="true" /></button> : null}
             {journeys.length > 0 ? (
               <button type="button" onClick={() => setMobilePickerOpen(true)} aria-label="打开全部旅程"><IconTimeline size={18} stroke={1.4} aria-hidden="true" /></button>
             ) : null}
@@ -924,7 +930,7 @@ export function LivingAtlasApp({
           <nav aria-label="图谱视图">
             <button type="button" className={view === "planet" ? "is-active" : ""} aria-current={view === "planet" ? "page" : undefined} onClick={() => setView("planet")}><IconWorld size={16} stroke={1.35} aria-hidden="true" />地球</button>
             <button type="button" className={view === "timeline" ? "is-active" : ""} aria-current={view === "timeline" ? "page" : undefined} onClick={() => setView("timeline")}><IconTimeline size={16} stroke={1.35} aria-hidden="true" />时间线</button>
-            <button ref={createMagnet.ref} onMouseMove={createMagnet.onMouseMove} onMouseLeave={createMagnet.onMouseLeave} type="button" className="living-atlas__create" onClick={openCreateComposer}><IconPlus size={17} stroke={1.4} aria-hidden="true" />记录旅程</button>
+            {canCreateJourney ? <button ref={createMagnet.ref} onMouseMove={createMagnet.onMouseMove} onMouseLeave={createMagnet.onMouseLeave} type="button" className="living-atlas__create" onClick={openCreateComposer}><IconPlus size={17} stroke={1.4} aria-hidden="true" />记录旅程</button> : null}
             <button
               ref={globeFocusTriggerRef}
               type="button"
@@ -982,7 +988,7 @@ export function LivingAtlasApp({
             setStoryRoutePointId(null);
             setStoryJourneyId(id);
           }}
-          onCreate={openCreateComposer}
+          onCreate={canCreateJourney ? openCreateComposer : undefined}
         />
       ) : null}
 
@@ -992,7 +998,7 @@ export function LivingAtlasApp({
           <IconRoute size={34} stroke={1.05} aria-hidden="true" />
           <h2>你的地球还没有留下路线</h2>
           <p>一次跨城移动、一段海上航行，或只停留在一个地方，都可以成为第一段旅程。</p>
-          <button type="button" onClick={openCreateComposer}><IconPlus size={17} stroke={1.4} aria-hidden="true" />记录第一段旅程</button>
+          {canCreateJourney ? <button type="button" onClick={openCreateComposer}><IconPlus size={17} stroke={1.4} aria-hidden="true" />记录第一段旅程</button> : null}
         </section>
       ) : null}
 
@@ -1020,7 +1026,7 @@ export function LivingAtlasApp({
               <IconMapPin className="living-atlas__active-marker" size={18} stroke={1.25} aria-hidden="true" />
               <h2><ScrambledText text={activeJourney.title} /></h2>
               <span>{activeJourney.routePoints.length} 个路线点 · {activeJourney.routePoints.filter((point) => point.isStop).length} 次停靠</span>
-              <JourneyCardMedia journey={activeJourney} reduceMotion={reduceMotion} />
+              <JourneyCardMedia journey={activeJourney} reduceMotion={reduceMotion} readMedia={readMedia} />
               <p className={`living-atlas__active-note${activeJourney.note ? "" : " is-empty"}`}>
                 {activeJourney.note || "路线已经留在地球上，故事等待被打开。"}
               </p>
@@ -1191,7 +1197,7 @@ export function LivingAtlasApp({
               <h2 id="mobile-v2-sheet-title">{mobileSheetJourney.title}</h2>
               <span>{mobileSheetJourney.routePoints[0]?.label ?? "未命名起点"}{mobileSheetJourney.routePoints.length > 1 ? ` → ${mobileSheetJourney.routePoints.at(-1)?.label ?? "未命名终点"}` : ""}</span>
             </div>
-            <JourneyCardMedia journey={mobileSheetJourney} reduceMotion={reduceMotion} />
+            <JourneyCardMedia journey={mobileSheetJourney} reduceMotion={reduceMotion} readMedia={readMedia} />
             <dl className="mobile-v2__stats">
               <div><dt>路线点</dt><dd>{mobileSheetJourney.routePoints.length}</dd></div>
               <div><dt>媒体</dt><dd>{journeyVisualMedia(mobileSheetJourney).length}</dd></div>
@@ -1215,13 +1221,15 @@ export function LivingAtlasApp({
                   setMobileMapJourneyId(mobileSheetJourney.id);
                 }}
               ><IconWorld size={16} stroke={1.35} aria-hidden="true" />真实地图</button>
-              <button
-                type="button"
-                onClick={() => {
-                  setMobileSheetJourneyId(null);
-                  editJourney(mobileSheetJourney.id);
-                }}
-              ><IconRoute size={16} stroke={1.35} aria-hidden="true" />管理旅程</button>
+              {canEditJourney ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMobileSheetJourneyId(null);
+                    editJourney(mobileSheetJourney.id);
+                  }}
+                ><IconRoute size={16} stroke={1.35} aria-hidden="true" />管理旅程</button>
+              ) : null}
             </div>
           </section>
         </div>
@@ -1257,10 +1265,12 @@ export function LivingAtlasApp({
               </li>
             ))}
           </ol>
-          <button className="mobile-v2__picker-create" type="button" onClick={() => {
-            setMobilePickerOpen(false);
-            openCreateComposer();
-          }}><IconPlus size={17} stroke={1.4} aria-hidden="true" />记录新旅程</button>
+          {canCreateJourney ? (
+            <button className="mobile-v2__picker-create" type="button" onClick={() => {
+              setMobilePickerOpen(false);
+              openCreateComposer();
+            }}><IconPlus size={17} stroke={1.4} aria-hidden="true" />记录新旅程</button>
+          ) : null}
         </section>
       ) : null}
 
@@ -1316,7 +1326,10 @@ export function LivingAtlasApp({
       {/* #21: the rewind time axis, only in globe focus mode. */}
       {globeFocusMode ? <GlobeTimeScrubber {...timeCursor} /> : null}
 
-      {composerOpen ? (
+      {/* The composer is the only mutation-capable component in this tree.
+          Shared mode never renders it, so its state, its handlers and the
+          upload client it builds do not exist there. */}
+      {composerOpen && (canCreateJourney || canEditJourney) ? (
         <JourneyComposer
           key={editingJourney?.id ?? "new-journey"}
           open
@@ -1345,8 +1358,8 @@ export function LivingAtlasApp({
             setStoryRoutePointId(null);
             setStoryJourneyId(id);
           }}
-          onEdit={editJourney}
-          onDelete={canDeleteJourney ? removeJourney : undefined}
+          onEdit={canEditJourney ? editJourney : undefined}
+          onDelete={canDeleteJourney && mutations ? removeJourney : undefined}
           onMediaAdded={async (id) => {
             const loaded = await load(true);
             return loaded?.find((journey) => journey.id === id) ?? null;

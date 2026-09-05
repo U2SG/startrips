@@ -7,6 +7,8 @@ import { useCompactMobileLayout } from "./journey/mobileLayout";
 import { JourneyComposer } from "./journey/JourneyComposer";
 import { JourneyStory } from "./journey/JourneyStory";
 import { JourneyPlaybackOverlay } from "./journey/JourneyPlaybackOverlay";
+import { SharedAtlasView } from "./journey/SharedAtlasView";
+import { isSharedAtlasPathname } from "./journey/sharedAtlas";
 import type { Journey, JourneyRoute } from "./journey/types";
 import { ParticleEarthScene } from "./scene/ParticleEarthScene";
 import {
@@ -449,12 +451,29 @@ const Experience = import.meta.env.DEV && qaState === "journey-composer"
     ? App
     : LivingAtlasApp;
 
+/**
+ * #200 phase D: `/share#<token>` is a read-only product mode, not a state of
+ * the owner app.
+ *
+ * It is mounted OUTSIDE `AuthGateway` on purpose. A recipient has no account,
+ * and the gateway's first act is to list the viewer's organizations and read
+ * `/api/atlases/current`; running that for a guest would mean two failing
+ * requests and a login gate in front of a link that is already authorized.
+ * Mounting the shared view here instead means the guest tree never contains
+ * an owner atlas, an owner capability provider, or an account surface.
+ */
+const shared = isSharedAtlasPathname(window.location.pathname);
+
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <PersistentEarthProvider>
-      <AuthGateway>
-        <Experience />
-      </AuthGateway>
+      {shared ? (
+        <SharedAtlasView />
+      ) : (
+        <AuthGateway>
+          <Experience />
+        </AuthGateway>
+      )}
     </PersistentEarthProvider>
   </StrictMode>,
 );

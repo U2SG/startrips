@@ -2,6 +2,7 @@ import {
   createContext,
   useEffect,
   useContext,
+  useMemo,
   useState,
   type FormEvent,
   type ReactNode,
@@ -13,6 +14,7 @@ import { useCompactMobileLayout } from "../journey/mobileLayout";
 import { useMobileSurfaceHistory } from "../journey/useMobileSurfaceHistory";
 import { useModalFocus } from "../journey/useModalFocus";
 import { usePersistentEarth } from "../scene/LivingAtlasGlobe";
+import { AtlasViewProvider, createOwnerAtlasView } from "../journey/atlasView";
 import { previousAccountSurface, shouldActivateAccountSheetFocus, shouldRenderStandaloneAccountDock, type AccountSurface } from "./accountSurface";
 import { authClient } from "./auth-client";
 
@@ -35,14 +37,6 @@ type GateState =
   | { kind: "bootstrap"; organization: OrganizationSummary }
   | { kind: "ready"; atlas: AtlasSummary; role: string }
   | { kind: "error"; message: string };
-
-const AtlasCapabilitiesContext = createContext({
-  canDeleteJourney: false,
-});
-
-export function useAtlasCapabilities() {
-  return useContext(AtlasCapabilitiesContext);
-}
 
 const AtlasCinematicContext = createContext<(active: boolean) => void>(() => undefined);
 
@@ -374,6 +368,16 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cine
   const [accountSurface, setAccountSurface] = useState<AccountSurface>(null);
   const [mobileAccountHost, setMobileAccountHost] = useState<HTMLElement | null>(null);
   const isMobileV2 = useCompactMobileLayout();
+  // #200 phase D: the owner product mode. Built here rather than at module
+  // scope so that entering shared mode — where this component never renders —
+  // constructs no owner mutation client at all.
+  const ownerRole = gate.kind === "ready" ? gate.role : "";
+  const ownerView = useMemo(
+    () => createOwnerAtlasView({
+      canDeleteJourney: ownerRole.split(",").includes("owner"),
+    }),
+    [ownerRole],
+  );
   const accountSheetOpen = isMobileV2 && accountSurface !== null;
   const accountFormOpen = accountSurface === "invite" || accountSurface === "edit";
   const accountSheetFocusActive = shouldActivateAccountSheetFocus(accountSheetOpen, gate.kind === "ready");
@@ -680,15 +684,16 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cine
           </section>
         </div>
       ) : null}
-      <AtlasCapabilitiesContext.Provider value={{ canDeleteJourney: isOwner }}>
+      <AtlasViewProvider value={ownerView}>
         {children}
-      </AtlasCapabilitiesContext.Provider>
+      </AtlasViewProvider>
     </MobileAccountSlotContext.Provider>
   );
 }
 
 export function AuthGateway({ children }: { children: ReactNode }) {
   const persistentEarth = usePersistentEarth();
+  const qaOwnerView = useMemo(() => createOwnerAtlasView(), []);
   const session = authClient.useSession();
   const [revision, setRevision] = useState(0);
   const [cinematicActive, setCinematicActive] = useState(false);
@@ -784,9 +789,9 @@ export function AuthGateway({ children }: { children: ReactNode }) {
 
   if (qaBypass) {
     return (
-      <AtlasCapabilitiesContext.Provider value={{ canDeleteJourney: true }}>
+      <AtlasViewProvider value={qaOwnerView}>
         {children}
-      </AtlasCapabilitiesContext.Provider>
+      </AtlasViewProvider>
     );
   }
 

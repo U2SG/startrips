@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 
 // The full app module pulls in the better-auth client, which needs a browser
-// runtime; mock the auth capability hook so the pure focus-state helper can
-// be imported in the node test environment.
+// runtime; mock the gateway module so the pure helpers can be imported in the
+// node test environment. The capability contract moved to ./atlasView (#200),
+// so what is stubbed here is only the account slot and the cinematic hook.
 vi.mock("../auth/AuthGateway", () => ({
-  useAtlasCapabilities: () => ({ canDeleteJourney: false }),
+  MobileAccountActionSlot: () => null,
+  useAtlasCinematicIsolation: () => () => undefined,
 }));
 
 import { readFileSync } from "node:fs";
@@ -327,7 +329,12 @@ describe("playbackMediaGate (PR #24 review)", () => {
   });
 
   it("treats decode failure as settled and decoded images as ready", () => {
-    const ready = { status: "ready" as const, url: "signed-image" };
+    const ready = {
+      status: "ready" as const,
+      url: "signed-image",
+      issuedAt: 0,
+      expiresAt: 900_000,
+    };
     expect(playbackMediaGate(ready, { status: "error", message: "decode failed" }, true))
       .toBe("error");
     expect(playbackMediaGate(ready, { status: "decoded" }, true)).toBe("ready");

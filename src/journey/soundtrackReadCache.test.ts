@@ -1,10 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const getPrivateMediaRead = vi.hoisted(() => vi.fn());
-
-vi.mock("./journeyApi", () => ({
-  getPrivateMediaRead,
-}));
+// The cache no longer imports an owner API client; the reader is injected, so
+// the test hands in the same double the module used to be mocked with.
+const getPrivateMediaRead = vi.fn();
 
 import { cachedSoundtrackRead, prefetchSoundtrackRead } from "./soundtrackReadCache";
 import type { Journey } from "./types";
@@ -63,11 +61,11 @@ describe("soundtrackReadCache", () => {
       expiresAt: "2026-09-01T12:02:00.000Z",
     });
 
-    await expect(prefetchSoundtrackRead(journey)).resolves.toBe("https://media.example/healthy");
+    await expect(prefetchSoundtrackRead(journey, getPrivateMediaRead)).resolves.toBe("https://media.example/healthy");
     vi.setSystemTime(new Date("2026-09-01T12:00:45.000Z"));
 
     expect(cachedSoundtrackRead(journey)).toEqual({ url: "https://media.example/healthy" });
-    await expect(prefetchSoundtrackRead(journey)).resolves.toBe("https://media.example/healthy");
+    await expect(prefetchSoundtrackRead(journey, getPrivateMediaRead)).resolves.toBe("https://media.example/healthy");
     expect(getPrivateMediaRead).toHaveBeenCalledTimes(1);
   });
 
@@ -85,25 +83,50 @@ describe("soundtrackReadCache", () => {
         expiresAt: "2026-09-01T12:05:00.000Z",
       });
 
-    await prefetchSoundtrackRead(journey);
+    await prefetchSoundtrackRead(journey, getPrivateMediaRead);
     vi.setSystemTime(new Date("2026-09-01T12:01:40.000Z"));
 
     expect(cachedSoundtrackRead(journey)).toBeNull();
-    await expect(prefetchSoundtrackRead(journey)).resolves.toBe("https://media.example/new");
+    await expect(prefetchSoundtrackRead(journey, getPrivateMediaRead)).resolves.toBe("https://media.example/new");
     expect(cachedSoundtrackRead(journey)).toEqual({ url: "https://media.example/new" });
     expect(getPrivateMediaRead).toHaveBeenCalledTimes(2);
   });
 
-  it("does not expose a freshly fetched URL that is already inside the safety margin", async () => {
+  it("keeps a short share-scoped read for the first half of its life", async () => {
+    // This used to assert the opposite. The fixed 30 s margin was sound while
+    // every read came from the owner route and lived 900 s, but #200 phase C
+    // caps a share-scoped read at 90 s by default, floor 15 s, and again by the
+    // remaining grant. Discarding every read shorter than the margin would
+    // leave a guest with no cached soundtrack at all, so `播放旅程` could never
+    // start audio inside the click gesture — the whole reason this cache
+    // exists. Freshness is now measured against the read's own lifetime.
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-09-01T12:00:00.000Z"));
-    const journey = makeJourney("too-short");
+    const journey = makeJourney("short-lived");
     getPrivateMediaRead.mockResolvedValue({
       url: "https://media.example/short",
       expiresAt: "2026-09-01T12:00:20.000Z",
     });
 
-    await expect(prefetchSoundtrackRead(journey)).resolves.toBeNull();
+    await expect(prefetchSoundtrackRead(journey, getPrivateMediaRead))
+      .resolves.toBe("https://media.example/short");
+    expect(cachedSoundtrackRead(journey)).toEqual({ url: "https://media.example/short" });
+
+    // Half spent: replaced well before it dies, not reused to the last second.
+    vi.setSystemTime(new Date("2026-09-01T12:00:11.000Z"));
+    expect(cachedSoundtrackRead(journey)).toBeNull();
+  });
+
+  it("still refuses a read that is already expired on arrival", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-01T12:00:00.000Z"));
+    const journey = makeJourney("already-dead");
+    getPrivateMediaRead.mockResolvedValue({
+      url: "https://media.example/expired",
+      expiresAt: "2026-09-01T11:59:50.000Z",
+    });
+
+    await expect(prefetchSoundtrackRead(journey, getPrivateMediaRead)).resolves.toBeNull();
     expect(cachedSoundtrackRead(journey)).toBeNull();
   });
 });

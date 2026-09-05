@@ -15,7 +15,8 @@ import {
   IconPlayerPlay,
   IconX,
 } from "@tabler/icons-react";
-import { getPrivateMediaRead } from "./journeyApi";
+import { useAtlasView } from "./atlasView";
+import { mediaReadIsFresh } from "./mediaReadRefresh";
 import {
   createDecodeRegistry,
   decodeImageUrl,
@@ -49,8 +50,25 @@ import type { Journey, JourneyMediaAsset } from "./types";
 
 type MediaRead =
   | { status: "loading" }
-  | { status: "ready"; url: string }
+  | { status: "ready"; url: string; issuedAt: number; expiresAt: number }
   | { status: "error"; message: string };
+
+/**
+ * Whether a cached read may still be reused instead of re-signed.
+ *
+ * The overlay used to reuse a ready read forever, which was safe while every
+ * signed URL lived 900 s: a whole playback ran well inside one lifetime. A
+ * share-scoped read is capped at 90 s by default and again by the remaining
+ * grant, so a URL prefetched at the head of the window can expire before the
+ * chapter that needs it. Reuse is now a lifetime question.
+ */
+export function playbackReadIsReusable(
+  read: MediaRead | undefined,
+  now: number,
+): boolean {
+  return read?.status === "ready"
+    && mediaReadIsFresh(read.issuedAt, read.expiresAt, now);
+}
 
 export type PlaybackMediaGate = "waiting" | "ready" | "error";
 
@@ -106,6 +124,10 @@ export function JourneyPlaybackOverlay({
   // #194: the one product-level compact-mobile answer, published as an
   // attribute so journey-playback.css never states a breakpoint of its own.
   const compactMobileLayout = useCompactMobileLayout();
+  // #200 phase D: playback is a viewing capability, so this overlay reads the
+  // product mode only for its media reader. In shared mode that is the
+  // grant-scoped route; there is no write here to gate.
+  const { readMedia } = useAtlasView();
   // Review P2: hold the director while a media chapter's image is not yet
   // decoded, so a slow network never flashes an empty frame — the chapter
   // waits on the decode settle instead of advancing on a fixed timer.
@@ -163,7 +185,16 @@ export function JourneyPlaybackOverlay({
     if (!journey || !initialSoundtrackRead) return {};
     const soundtrack = journeySoundtrack(journey);
     if (!soundtrack) return {};
-    return { [soundtrack.id]: { status: "ready", url: initialSoundtrackRead.url } };
+    // The prefetch cache handed this one over as fresh, and the soundtrack is
+    // deliberately never re-read while it plays, so no lifetime is known here.
+    return {
+      [soundtrack.id]: {
+        status: "ready",
+        url: initialSoundtrackRead.url,
+        issuedAt: Number.NEGATIVE_INFINITY,
+        expiresAt: Number.POSITIVE_INFINITY,
+      },
+    };
   });
   const mediaReadsRef = useRef(mediaReads);
   mediaReadsRef.current = mediaReads;
@@ -226,22 +257,35 @@ export function JourneyPlaybackOverlay({
     [journey],
   );
   const soundtrackRead = soundtrack ? mediaReads[soundtrack.id] : null;
+  const soundtrackIdRef = useRef<string | null>(null);
+  soundtrackIdRef.current = soundtrack?.id ?? null;
   const audioReactiveReducedMotion = reduceMotion ?? prefersReducedMotion();
 
   const loadMediaRead = useCallback((assetId: string) => {
-    // Review P1: once an asset is ready, never re-request its signed read —
-    // a new URL would replace <audio src> and reset the soundtrack mid-play.
-    if (mediaReadsRef.current[assetId]?.status === "ready") return;
+    // Review P1: the soundtrack's signed read is never replaced while it is
+    // ready — a new URL would reset <audio src> and restart the music
+    // mid-play. Every other asset is reusable only while its own read is
+    // still fresh, so a short share-scoped URL is re-signed before the
+    // chapter that needs it rather than failing to load.
+    const existing = mediaReadsRef.current[assetId];
+    if (existing?.status === "ready" && assetId === soundtrackIdRef.current) return;
+    if (playbackReadIsReusable(existing, Date.now())) return;
     if (pendingReads.current.has(assetId)) return;
     pendingReads.current.add(assetId);
     setMediaReads((current) => ({
       ...current,
       [assetId]: { status: "loading" },
     }));
-    void getPrivateMediaRead(assetId).then(
+    const issuedAt = Date.now();
+    void readMedia(assetId).then(
       (read) => setMediaReads((current) => ({
         ...current,
-        [assetId]: { status: "ready", url: read.url },
+        [assetId]: {
+          status: "ready",
+          url: read.url,
+          issuedAt,
+          expiresAt: Date.parse(read.expiresAt),
+        },
       })),
       (error) => setMediaReads((current) => ({
         ...current,
@@ -251,7 +295,7 @@ export function JourneyPlaybackOverlay({
         },
       })),
     ).finally(() => pendingReads.current.delete(assetId));
-  }, []);
+  }, [readMedia]);
 
   // Load the soundtrack and any media the current step needs.
   // Review P1: the soundtrack read is loaded exactly ONCE per journey — it

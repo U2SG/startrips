@@ -6,11 +6,12 @@
 // read while the active card is on screen, then seed the overlay from this
 // cache — no async wait between the click and the first play().
 
-import { getPrivateMediaRead } from "./journeyApi";
+import type { AtlasMediaRead } from "./atlasView";
+import { mediaReadIsFresh } from "./mediaReadRefresh";
 import { journeySoundtrack } from "./journeyModel";
 import type { Journey } from "./types";
 
-type CachedRead = { url: string; expiresAt: number };
+type CachedRead = { url: string; issuedAt: number; expiresAt: number };
 
 const cache = new Map<string, CachedRead>();
 const pending = new Map<string, Promise<void>>();
@@ -18,12 +19,32 @@ const pending = new Map<string, Promise<void>>();
 const CACHE_TTL_MS = 8 * 60 * 1000;
 const SIGNED_READ_FRESHNESS_MARGIN_MS = 30_000;
 
+/**
+ * Freshness is measured against the read's own lifetime, not a fixed margin:
+ * a share-scoped read can be capped below 30 s by the remaining grant, and a
+ * fixed margin would then discard every copy on arrival, leaving the overlay
+ * with no cached soundtrack to start inside the click gesture.
+ */
 function isFreshSignedRead(read: CachedRead, now = Date.now()) {
-  return read.expiresAt - now > SIGNED_READ_FRESHNESS_MARGIN_MS;
+  return mediaReadIsFresh(
+    read.issuedAt,
+    read.expiresAt,
+    now,
+    SIGNED_READ_FRESHNESS_MARGIN_MS,
+  );
 }
 
-/** Prefetch (and cache) the soundtrack signed read for one journey. */
-export async function prefetchSoundtrackRead(journey: Journey): Promise<string | null> {
+/**
+ * Prefetch (and cache) the soundtrack signed read for one journey.
+ *
+ * The reader is passed in rather than imported: in shared mode the only route
+ * that may sign this asset is the guest one, and a module-level owner import
+ * would be a second, unauthorized way to reach the same media.
+ */
+export async function prefetchSoundtrackRead(
+  journey: Journey,
+  readMedia: AtlasMediaRead,
+): Promise<string | null> {
   const soundtrack = journeySoundtrack(journey);
   if (!soundtrack) return null;
   const existing = cache.get(soundtrack.id);
@@ -35,11 +56,13 @@ export async function prefetchSoundtrackRead(journey: Journey): Promise<string |
     return cache.get(soundtrack.id)?.url ?? null;
   }
   const task = (async () => {
-    const read = await getPrivateMediaRead(soundtrack.id);
+    const issuedAt = Date.now();
+    const read = await readMedia(soundtrack.id);
     const parsedExpiresAt = Date.parse(read.expiresAt);
     const cachedRead = {
       url: read.url,
-      expiresAt: Number.isFinite(parsedExpiresAt) ? parsedExpiresAt : Date.now() + CACHE_TTL_MS,
+      issuedAt,
+      expiresAt: Number.isFinite(parsedExpiresAt) ? parsedExpiresAt : issuedAt + CACHE_TTL_MS,
     };
     if (isFreshSignedRead(cachedRead)) cache.set(soundtrack.id, cachedRead);
     else cache.delete(soundtrack.id);
