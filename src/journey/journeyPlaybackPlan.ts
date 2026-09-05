@@ -1,6 +1,7 @@
 import {
   buildPlaybackSteps,
-  playbackIntroMedia,
+  meaningfulPlaybackStepIndex,
+  meaningfulPlaybackStepIndexes,
   playbackMediaForPoint,
   routePointAngularDistance,
   type PlaybackStep,
@@ -64,8 +65,9 @@ export const PLAYBACK_TEMPO_PROFILES: Record<PlaybackTempo, PlaybackTempoProfile
 export type PlannedPlaybackSegment = {
   id: string;
   kind: "intro" | "travel" | "arrival" | "media" | "outro";
+  /** The index of this beat in `buildPlaybackSteps(journey)` — the same index
+   * the director seeks to. The plan describes the beats that actually play. */
   stepIndex: number;
-  sourceStepIndex: number;
   routePointId: string | null;
   assetId?: string;
   startMs: number;
@@ -113,6 +115,41 @@ export function playbackStepDurationForTempo(
   }
 }
 
+/**
+ * An override for one beat's length.
+ *
+ * Declared here, beside the tempo profiles, because both the live director and
+ * the elapsed-time plan resolve durations through the same call; the director
+ * re-exports the type from its own module for its callers.
+ */
+export type PlaybackStepDurationResolver = (
+  journey: Journey,
+  step: PlaybackStep,
+  tempo: PlaybackTempo,
+) => number | undefined;
+
+/**
+ * The single place a beat becomes a number of milliseconds: the injected
+ * resolver when it answers with a usable number, the tempo profile otherwise.
+ * The director's timer and `buildPlaybackPlan` both call this, so a plan-driven
+ * progress bar cannot disagree with the timer that is draining — in Quick Recap
+ * the resolver overrides most beats, and a plan that ignored it would place
+ * every later beat at the wrong point on the bar.
+ */
+export function resolvePlaybackStepDurationMs(
+  journey: Journey,
+  step: PlaybackStep,
+  tempo: PlaybackTempo,
+  resolveStepDuration?: PlaybackStepDurationResolver,
+): number {
+  const overrideDurationMs = resolveStepDuration?.(journey, step, tempo);
+  return overrideDurationMs !== undefined
+    && Number.isFinite(overrideDurationMs)
+    && overrideDurationMs >= 0
+    ? overrideDurationMs
+    : playbackStepDurationForTempo(journey, step, PLAYBACK_TEMPO_PROFILES[tempo]);
+}
+
 type PlaybackSegmentIdentity = Pick<
   PlannedPlaybackSegment,
   "id" | "kind" | "routePointId" | "assetId"
@@ -158,61 +195,37 @@ function segmentIdentity(
 }
 
 /**
- * Playback V2 full-Journey planner. Every canonical visual asset remains in
- * the plan; tempo changes phase-specific timing rather than multiplying one
- * global speed constant.
+ * Playback V2 full-Journey planner.
+ *
+ * One segment per beat of `buildPlaybackSteps`, in the same order and at the
+ * same index, so a segment can be seeked to directly and an elapsed time can be
+ * turned into a step index. Tempo changes phase-specific timing rather than
+ * multiplying one global speed constant, and an injected resolver overrides a
+ * beat exactly as it does for the director's timer.
  */
 export function buildPlaybackPlan(
   journey: Journey,
   tempo: PlaybackTempo = "standard",
+  resolveStepDuration?: PlaybackStepDurationResolver,
 ): PlaybackPlan {
-  const profile = PLAYBACK_TEMPO_PROFILES[tempo];
   const steps = buildPlaybackSteps(journey);
-  const drafts: Array<{
-    identity: PlaybackSegmentIdentity;
-    durationMs: number;
-    sourceStepIndex: number;
-  }> = [];
-  steps.forEach((step, sourceStepIndex) => {
-    drafts.push({
-      identity: segmentIdentity(journey, step, sourceStepIndex),
-      durationMs: playbackStepDurationForTempo(journey, step, profile),
-      sourceStepIndex,
-    });
-    if (step.kind !== "intro") return;
-    for (const asset of playbackIntroMedia(journey)) {
-      drafts.push({
-        identity: {
-          id: `media:${asset.id}`,
-          kind: "media" as const,
-          routePointId: null,
-          assetId: asset.id,
-        },
-        durationMs: asset.mimeType.startsWith("video/") ? profile.videoMs : profile.imageMs,
-        sourceStepIndex,
-      });
-    }
-  });
-
   let cursorMs = 0;
-  const segments = drafts.map((draft, stepIndex) => {
+  const segments = steps.map((step, stepIndex) => {
+    const durationMs = resolvePlaybackStepDurationMs(journey, step, tempo, resolveStepDuration);
     const segment: PlannedPlaybackSegment = {
-      ...draft.identity,
+      ...segmentIdentity(journey, step, stepIndex),
       stepIndex,
-      sourceStepIndex: draft.sourceStepIndex,
       startMs: cursorMs,
-      durationMs: draft.durationMs,
+      durationMs,
     };
-    cursorMs += draft.durationMs;
+    cursorMs += durationMs;
     return segment;
   });
   return {
     tempo,
     segments,
     totalDurationMs: cursorMs,
-    meaningfulStepIndexes: segments
-      .filter((segment) => segment.kind !== "travel")
-      .map((segment) => segment.stepIndex),
+    meaningfulStepIndexes: meaningfulPlaybackStepIndexes(steps),
   };
 }
 
@@ -232,15 +245,13 @@ export function playbackElapsedForFraction(plan: PlaybackPlan, fraction: number)
   return plan.totalDurationMs * clamped;
 }
 
+/** The plan's view of next / back. The scan itself lives in `journeyPlayback.ts`
+ * and is the same one `playbackReducer` runs, so the timeline and the transport
+ * can never disagree about which beats next and back may land on. */
 export function nextMeaningfulStepIndex(
   plan: PlaybackPlan,
   currentStepIndex: number,
   direction: 1 | -1,
 ) {
-  const indexes = plan.meaningfulStepIndexes;
-  if (indexes.length === 0) return currentStepIndex;
-  if (direction > 0) {
-    return indexes.find((index) => index > currentStepIndex) ?? indexes.at(-1)!;
-  }
-  return [...indexes].reverse().find((index) => index < currentStepIndex) ?? indexes[0];
+  return meaningfulPlaybackStepIndex(plan.meaningfulStepIndexes, currentStepIndex, direction);
 }

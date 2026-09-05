@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   buildPlaybackSteps,
   initialPlaybackState,
@@ -10,8 +10,10 @@ import {
   type PlaybackStep,
 } from "./journeyPlayback";
 import {
-  PLAYBACK_TEMPO_PROFILES,
-  playbackStepDurationForTempo,
+  buildPlaybackPlan,
+  resolvePlaybackStepDurationMs,
+  type PlaybackPlan,
+  type PlaybackStepDurationResolver,
   type PlaybackTempo,
 } from "./journeyPlaybackPlan";
 import type { Journey } from "./types";
@@ -98,6 +100,46 @@ export function resolvePlaybackTimerBudget(input: {
 }
 
 /**
+ * An override for one step's length.
+ *
+ * The director owns tempo state, so it passes its own tempo at the call site
+ * rather than making the caller lift that state: a resolver built in the app
+ * shell (Quick Recap) cannot take tempo as a dependency, but it can receive it
+ * as an argument. The type itself lives beside the tempo profiles, because the
+ * elapsed-time plan resolves durations through the very same call.
+ */
+export type { PlaybackStepDurationResolver };
+
+/**
+ * Where the transport is on the planned timeline: the beat's own start plus the
+ * share of the beat already watched, over the whole plan.
+ *
+ * The consumed share is taken as a fraction of the live budget and then applied
+ * to the *planned* segment length, so a transient disagreement between the two
+ * — the frame between a tempo change and the plan rebuilt at that tempo — moves
+ * the bar inside its own beat instead of running it into the next one.
+ */
+export function playbackProgressFraction(
+  plan: PlaybackPlan | null,
+  stepIndex: number,
+  remainingMs: number,
+  fullDurationMs: number,
+): number {
+  if (!plan || plan.totalDurationMs <= 0) return 0;
+  const segment = plan.segments[stepIndex];
+  if (!segment) return 0;
+  const consumedFraction = fullDurationMs > 0
+    ? Math.min(1, Math.max(0, (fullDurationMs - remainingMs) / fullDurationMs))
+    : 1;
+  const elapsedMs = segment.startMs + segment.durationMs * consumedFraction;
+  return Math.min(1, Math.max(0, elapsedMs / plan.totalDurationMs));
+}
+
+/** The tempo every playback run starts at; callers that pre-build a plan for
+ * the first beat must plan at the same tempo. */
+export const PLAYBACK_INITIAL_TEMPO: PlaybackTempo = "standard";
+
+/**
  * #19 Journey Playback director.
  *
  * Drives the pure state machine with a timer per step, and exposes the
@@ -106,24 +148,6 @@ export function resolvePlaybackTimerBudget(input: {
  * element directly — the overlay translates phases into focus/route/media
  * commands.
  */
-/**
- * An override for one step's length.
- *
- * The director owns tempo state, so it passes its own tempo at the call site
- * rather than making the caller lift that state: a resolver built in the app
- * shell (Quick Recap) cannot take tempo as a dependency, but it can receive it
- * as an argument.
- */
-export type PlaybackStepDurationResolver = (
-  journey: Journey,
-  step: PlaybackStep,
-  tempo: PlaybackTempo,
-) => number | undefined;
-
-/** The tempo every playback run starts at; callers that pre-build a plan for
- * the first beat must plan at the same tempo. */
-export const PLAYBACK_INITIAL_TEMPO: PlaybackTempo = "standard";
-
 export function useJourneyPlaybackDirector(
   journey: Journey | null,
   hold = false,
@@ -174,13 +198,32 @@ export function useJourneyPlaybackDirector(
   const durationForStep = useCallback((target: PlaybackStep) => {
     const current = journeyRef.current;
     if (!current) return 0;
-    const overrideDurationMs = resolveStepDuration?.(current, target, tempo);
-    return overrideDurationMs !== undefined
-      && Number.isFinite(overrideDurationMs)
-      && overrideDurationMs >= 0
-      ? overrideDurationMs
-      : playbackStepDurationForTempo(current, target, PLAYBACK_TEMPO_PROFILES[tempo]);
+    return resolvePlaybackStepDurationMs(current, target, tempo, resolveStepDuration);
   }, [resolveStepDuration, tempo]);
+
+  // The elapsed-time plan of the run that is playing, at this tempo and through
+  // this resolver: the same two inputs the timer resolves each beat with, so
+  // `plan.totalDurationMs` is the length the timers will actually add up to.
+  const plan = useMemo(
+    () => (journey ? buildPlaybackPlan(journey, tempo, resolveStepDuration) : null),
+    [journey, resolveStepDuration, tempo],
+  );
+
+  // The live budget of the beat that is playing, read from the refs rather than
+  // published as state: the timer effect below re-runs on every render (`step`
+  // is derived fresh each time), so a `setState` here would not settle.
+  const getTimerBudget = useCallback((): PlaybackTimerBudget | null => {
+    const fullDurationMs = timerFullDurationMsRef.current;
+    if (fullDurationMs === null) return null;
+    const bookedMs = timerRemainingMsRef.current ?? fullDurationMs;
+    const startedAtMs = timerStartedAtMsRef.current;
+    return {
+      remainingMs: startedAtMs === null
+        ? bookedMs
+        : consumePlaybackTimerBudget(bookedMs, startedAtMs, performance.now()),
+      fullDurationMs,
+    };
+  }, []);
 
   // Keep one elapsed-time budget per expanded step. Pausing (or decode hold)
   // freezes that budget instead of discarding it, so resume continues from the
@@ -277,7 +320,9 @@ export function useJourneyPlaybackDirector(
     steps,
     stepIndex: state.stepIndex,
     step,
+    plan,
     durationForStep,
+    getTimerBudget,
     phase,
     paused: state.paused,
     tempo,

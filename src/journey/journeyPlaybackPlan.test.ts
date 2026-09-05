@@ -3,11 +3,13 @@ import {
   PLAYBACK_TEMPO_PROFILES,
   buildPlaybackPlan,
   nextMeaningfulStepIndex,
+  resolvePlaybackStepDurationMs,
+  type PlaybackStepDurationResolver,
   playbackElapsedForFraction,
   playbackSegmentAtElapsed,
   playbackStepDurationForTempo,
 } from "./journeyPlaybackPlan";
-import { buildPlaybackSteps } from "./journeyPlayback";
+import { buildPlaybackSteps, playbackStepIdentity } from "./journeyPlayback";
 import type { Journey, JourneyMediaAsset, RoutePoint } from "./types";
 
 function point(id: string, sortOrder: number, longitude: number, note: string | null = null): RoutePoint {
@@ -76,21 +78,61 @@ describe("Playback V2 timeline planner (#126)", () => {
       .toEqual(["p0-m0", "p0-m1", "p0-m2", "p1-m0", "p1-m1", "p1-m2"]);
   });
 
-  it("keeps journey-scoped visual media reachable in the elapsed-time plan", () => {
-    const journey = fixture(1);
+  // The discriminating fixture for the index space: journey-scoped media
+  // (routePointId null) is NOT a beat of `buildPlaybackSteps`, so a plan that
+  // gave it a segment of its own would address every later beat one index too
+  // late — the seek target and the timer would disagree from the intro on.
+  it("addresses the same beat as buildPlaybackSteps at every index", () => {
+    const journey = fixture(2);
     journey.media.unshift(
-      media("intro-image", null, "image/jpeg", 0),
-      media("intro-video", null, "video/mp4", 1),
+      media("journey-image", null, "image/jpeg", 0),
+      media("journey-video", null, "video/mp4", 1),
     );
+    const steps = buildPlaybackSteps(journey);
     const plan = buildPlaybackPlan(journey, "standard");
-    const mediaSegments = plan.segments.filter((segment) => segment.kind === "media");
-    expect(mediaSegments.map((segment) => segment.assetId)).toEqual([
-      "intro-image", "intro-video", "p0-m0", "p1-m0",
-    ]);
-    expect(mediaSegments[0]).toMatchObject({ routePointId: null, durationMs: PLAYBACK_TEMPO_PROFILES.standard.imageMs });
-    expect(mediaSegments[1]).toMatchObject({ routePointId: null, durationMs: PLAYBACK_TEMPO_PROFILES.standard.videoMs });
-    expect(playbackSegmentAtElapsed(plan, mediaSegments[0].startMs)?.assetId).toBe("intro-image");
-    expect(playbackSegmentAtElapsed(plan, mediaSegments[1].startMs)?.assetId).toBe("intro-video");
+    expect(plan.segments).toHaveLength(steps.length);
+    plan.segments.forEach((segment, index) => {
+      expect(segment.stepIndex).toBe(index);
+      expect(segment.id).toBe(
+        playbackStepIdentity(journey, steps[index]).replace(/^stop:/, "arrival:"),
+      );
+    });
+    expect(plan.segments.map((segment) => segment.assetId).filter(Boolean))
+      .toEqual(["p0-m0", "p0-m1", "p1-m0", "p1-m1"]);
+    expect(playbackSegmentAtElapsed(plan, plan.segments[3].startMs)?.stepIndex).toBe(3);
+  });
+
+  it("totals exactly what the director's durationForStep will spend, at every tempo", () => {
+    const journey = fixture(2);
+    const steps = buildPlaybackSteps(journey);
+    for (const tempo of ["fast", "standard", "immersive"] as const) {
+      const plan = buildPlaybackPlan(journey, tempo);
+      const directorTotalMs = steps.reduce(
+        (total, step) => total + resolvePlaybackStepDurationMs(journey, step, tempo),
+        0,
+      );
+      expect(plan.totalDurationMs).toBe(directorTotalMs);
+    }
+  });
+
+  it("plans the beats a Quick Recap-style resolver overrides at their overridden length", () => {
+    const journey = fixture(2);
+    const steps = buildPlaybackSteps(journey);
+    // Overrides one beat only, the way quickRecapStepDurationMs answers for the
+    // beats its Edit Plan owns and leaves the rest to the tempo profile.
+    const resolver: PlaybackStepDurationResolver = (target, step) => (
+      playbackStepIdentity(target, step) === "media:p0-m1" ? 640 : undefined
+    );
+    for (const tempo of ["fast", "standard", "immersive"] as const) {
+      const plan = buildPlaybackPlan(journey, tempo, resolver);
+      const directorTotalMs = steps.reduce(
+        (total, step) => total + resolvePlaybackStepDurationMs(journey, step, tempo, resolver),
+        0,
+      );
+      expect(plan.totalDurationMs).toBe(directorTotalMs);
+      expect(plan.segments.find((segment) => segment.assetId === "p0-m1")?.durationMs).toBe(640);
+      expect(plan.totalDurationMs).not.toBe(buildPlaybackPlan(journey, tempo).totalDurationMs);
+    }
   });
 
   it("exposes the same phase-specific duration policy to the live director", () => {
