@@ -95,19 +95,44 @@ export function resolveVideoTrim(
  * budget — the director holds while the video runs — so the element's own
  * position is the only honest source for that beat's share of the progress bar.
  */
-export function videoTrimPlayedFraction(
+function videoTrimPlayedBounds(
   resolved: ResolvedVideoTrim,
-  currentTimeSeconds: number,
   sourceDurationSeconds: number | undefined,
-): number {
+): { startSeconds: number; endSeconds: number } | null {
   const bounds = resolved.kind === "trimmed"
     ? { startSeconds: resolved.startSeconds, endSeconds: resolved.endSeconds }
     : isPlayableDuration(sourceDurationSeconds)
       ? { startSeconds: 0, endSeconds: sourceDurationSeconds }
       : null;
+  if (!bounds || bounds.endSeconds - bounds.startSeconds <= 0) return null;
+  return bounds;
+}
+
+/**
+ * Whether the element's position can be read as a share of this beat at all.
+ *
+ * `videoTrimPlayedFraction` answers `0` both for "at the very start" and for
+ * "there is no span to measure against" — an untrimmed source whose `duration`
+ * is still `NaN`, or a live stream reporting `Infinity`. The caller that takes
+ * over a beat's transport position has to tell those apart: claiming a beat it
+ * can only ever answer `0` for would pin the bar at that beat's start and, by
+ * claiming it, stop the wall-clock write that would otherwise have moved it.
+ */
+export function videoTrimPositionKnown(
+  resolved: ResolvedVideoTrim,
+  sourceDurationSeconds: number | undefined,
+): boolean {
+  return videoTrimPlayedBounds(resolved, sourceDurationSeconds) !== null;
+}
+
+export function videoTrimPlayedFraction(
+  resolved: ResolvedVideoTrim,
+  currentTimeSeconds: number,
+  sourceDurationSeconds: number | undefined,
+): number {
+  const bounds = videoTrimPlayedBounds(resolved, sourceDurationSeconds);
   if (!bounds || !Number.isFinite(currentTimeSeconds)) return 0;
   const spanSeconds = bounds.endSeconds - bounds.startSeconds;
-  if (spanSeconds <= 0) return 0;
   return Math.min(1, Math.max(0, (currentTimeSeconds - bounds.startSeconds) / spanSeconds));
 }
 

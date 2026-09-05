@@ -6,6 +6,7 @@ import {
   resolvePlaybackTimerBudget,
 } from "./useJourneyPlaybackDirector";
 import { buildPlaybackPlan } from "./journeyPlaybackPlan";
+import { resolveVideoTrim, videoTrimPlayedFraction } from "./videoTrimPlayback";
 import type { Journey, JourneyMediaAsset, RoutePoint } from "./types";
 
 describe("consumePlaybackTimerBudget (#126)", () => {
@@ -215,5 +216,41 @@ describe("playbackProgressFraction (#126)", () => {
     expect(playbackProgressFraction(plan, 0, 0, 0))
       .toBe(plan.segments[0].durationMs / plan.totalDurationMs);
     expect(playbackProgressFraction({ ...plan, segments: [], totalDurationMs: 0 }, 0, 0, 0)).toBe(0);
+  });
+
+  // Review follow-up on #236: an untrimmed video beat is held by
+  // `playbackMediaWaitPolicy` until `ended`, so its budget never drains and the
+  // budget-driven position stands still for the video's whole runtime. The
+  // overlay reads that beat from the element instead, through this same
+  // helper — the composition below is what both the visible fill and the
+  // scrubber's announced value are given, so they cannot disagree.
+  it("positions a media-owned beat from the element's played share of it", () => {
+    const stepIndex = 2;
+    const planned = plan.segments[stepIndex];
+    const sourceSeconds = 12;
+    const untrimmed = resolveVideoTrim(null, sourceSeconds);
+    const positionAt = (currentTimeSeconds: number) => playbackProgressFraction(
+      plan,
+      stepIndex,
+      1 - videoTrimPlayedFraction(untrimmed, currentTimeSeconds, sourceSeconds),
+      1,
+    );
+
+    // Held: the budget says the beat has not started, for the whole video.
+    const heldByBudget = playbackProgressFraction(plan, stepIndex, planned.durationMs, planned.durationMs);
+    expect(heldByBudget).toBe(planned.startMs / plan.totalDurationMs);
+
+    const samples = [0, 3, 6, 9, 12].map(positionAt);
+    for (let index = 1; index < samples.length; index += 1) {
+      expect(samples[index]).toBeGreaterThan(samples[index - 1]);
+    }
+    // Mid-video the element's position and the pinned budget disagree — that
+    // disagreement is the defect this covers.
+    expect(samples[2]).toBeGreaterThan(heldByBudget);
+    // The beat still owns exactly its own stretch of the bar, whatever the
+    // source's real length is against the length the plan booked for it.
+    expect(samples[0]).toBe(planned.startMs / plan.totalDurationMs);
+    expect(samples.at(-1)).toBe((planned.startMs + planned.durationMs) / plan.totalDurationMs);
+    expect(samples[2]).toBe((planned.startMs + planned.durationMs / 2) / plan.totalDurationMs);
   });
 });

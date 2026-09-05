@@ -6,6 +6,7 @@ import {
   videoTrimEntryAction,
   videoTrimHoldsStep,
   videoTrimPlayedFraction,
+  videoTrimPositionKnown,
   videoTrimProgressAction,
   videoTrimSeekApplies,
   videoTrimSegmentDurationMs,
@@ -191,5 +192,20 @@ describe("videoTrimPlayedFraction (#126)", () => {
     expect(videoTrimPlayedFraction(pending, 3, Number.NaN)).toBe(0);
     expect(videoTrimPlayedFraction(pending, 3, Number.POSITIVE_INFINITY)).toBe(0);
     expect(videoTrimPlayedFraction(pending, Number.NaN, 12)).toBe(0);
+  });
+
+  it("separates a measurable beat from one whose zero is only ignorance", () => {
+    // The two cases above both answer `0`, and the transport has to tell them
+    // apart: it takes over a beat's bar position only when the element's
+    // position can actually move it, and leaves the wall-clock write in charge
+    // otherwise.
+    expect(videoTrimPositionKnown(resolveVideoTrim(null, 12), 12)).toBe(true);
+    expect(videoTrimPositionKnown(resolveVideoTrim({ inMs: 4_000, outMs: 8_000 }, 12), 12)).toBe(true);
+    expect(videoTrimPositionKnown(resolveVideoTrim(null, Number.NaN), Number.NaN)).toBe(false);
+    expect(videoTrimPositionKnown(
+      resolveVideoTrim(null, Number.POSITIVE_INFINITY),
+      Number.POSITIVE_INFINITY,
+    )).toBe(false);
+    expect(videoTrimPositionKnown(resolveVideoTrim(null, 0), 0)).toBe(false);
   });
 });

@@ -46,6 +46,7 @@ import {
   videoTrimHoldsStep,
   videoTrimProgressAction,
   videoTrimPlayedFraction,
+  videoTrimPositionKnown,
   videoTrimSeekApplies,
   videoTrimStatusAfterPauseChange,
   type VideoTrimSeekStatus,
@@ -172,12 +173,20 @@ export function JourneyPlaybackOverlay({
   // a stale elapsed time. Sample the live position while the scrubber has
   // focus - the state that reads it - instead of re-rendering the whole overlay
   // once a second for everyone.
-  // Which beat, if any, the media element is currently positioning the fill
-  // for. A video beat holds the director, so its budget never drains and the
+  // Which beat, if any, the media element is positioning — and where it put
+  // it. A video beat holds the director, so its budget never drains and the
   // budget-driven write below would keep resetting the fill to that beat's
   // start — most visibly on a pause, which re-runs that effect while no
   // `timeupdate` is left to correct it. One owner per beat.
-  const mediaDrivenStepRef = useRef<number | null>(null);
+  //
+  // The fraction lives here rather than in the element because the visible fill
+  // is not its only reader: the range's own `value` and `aria-valuetext` have
+  // to announce the position the fill is showing, and a screen-reader user must
+  // not be told a different elapsed time from the one on screen. Keyed by step
+  // for the same reason `videoTrimSeek` is (`videoTrimSeekApplies`): a
+  // `timeupdate` that arrives after the beat changed belongs to the beat it was
+  // raised for, and must not move the new beat's bar.
+  const mediaPositionRef = useRef<{ stepIndex: number; fraction: number } | null>(null);
   const [scrubberFocused, setScrubberFocused] = useState(false);
   const [livePositionFraction, setLivePositionFraction] = useState<number | null>(null);
   // Report a real tempo change only. The director resets to the initial tempo
@@ -878,19 +887,29 @@ export function JourneyPlaybackOverlay({
   const advanceProgressFillFromMedia = useCallback((
     element: HTMLVideoElement,
     trim: VideoTrimWindow | null,
+    stepIndex: number,
   ) => {
+    // The handler closes over the beat it was rendered for. A `timeupdate` that
+    // lands after the director moved on describes the previous beat's element,
+    // so it says nothing about where the bar is now.
+    if (stepIndex !== stepIndexRef.current) return;
     const fill = progressFillRef.current;
-    const segment = plan?.segments[stepIndexRef.current];
-    if (!fill || !plan || !segment || plan.totalDurationMs <= 0) return;
-    const playedFraction = videoTrimPlayedFraction(
-      resolveVideoTrim(trim, element.duration),
-      element.currentTime,
-      element.duration,
-    );
-    const elapsedMs = segment.startMs + segment.durationMs * playedFraction;
-    mediaDrivenStepRef.current = stepIndexRef.current;
+    if (!plan || !plan.segments[stepIndex] || plan.totalDurationMs <= 0) return;
+    const resolved = resolveVideoTrim(trim, element.duration);
+    // Refuse the beat rather than own it at a position that cannot move: with
+    // no measurable span every answer is `0`, and claiming the beat would also
+    // silence the budget-driven write that is this beat's remaining chance of
+    // advancing.
+    if (!videoTrimPositionKnown(resolved, element.duration)) return;
+    const playedFraction = videoTrimPlayedFraction(resolved, element.currentTime, element.duration);
+    // One number for both readers, through the same helper the wall-clock beats
+    // use: a fully played beat has consumed its whole span, so `remainingMs` is
+    // the unplayed share of a unit budget.
+    const fraction = playbackProgressFraction(plan, stepIndex, 1 - playedFraction, 1);
+    mediaPositionRef.current = { stepIndex, fraction };
+    if (!fill) return;
     fill.style.transitionDuration = "0ms";
-    fill.style.width = `${Math.min(1, elapsedMs / plan.totalDurationMs) * 100}%`;
+    fill.style.width = `${fraction * 100}%`;
   }, [plan]);
 
   // Hand the rest of the beat to one CSS transition instead of a per-frame
@@ -902,13 +921,13 @@ export function JourneyPlaybackOverlay({
   useEffect(() => {
     const fill = progressFillRef.current;
     if (!fill || !plan) return;
-    if (mediaDrivenStepRef.current === stepIndex) {
+    if (mediaPositionRef.current?.stepIndex === stepIndex) {
       // The element owns this beat's position; leave the width it wrote alone
       // and only make sure nothing is still animating toward a stale target.
       fill.style.transitionDuration = "0ms";
       return;
     }
-    mediaDrivenStepRef.current = null;
+    mediaPositionRef.current = null;
     const budget = getTimerBudget();
     const fraction = playbackProgressFraction(
       plan,
@@ -928,15 +947,27 @@ export function JourneyPlaybackOverlay({
     fill.style.width = `${playbackProgressFraction(plan, stepIndex, 0, budget.fullDurationMs) * 100}%`;
   }, [getTimerBudget, hold, paused, plan, reduceMotion, stepIndex]);
 
-  // Review P2: the accessible value follows the same budget the fill does, but
+  // Review P2: the accessible value follows whatever is moving the fill, but
   // only while the scrubber is focused, and at a rate an announcement can keep
   // up with. A paused beat samples once and stays put.
+  //
+  // Which source that is, is the beat's own answer, not this effect's: a
+  // media-owned beat reads the element's position, every other beat reads the
+  // wall-clock budget. Sampling the budget unconditionally is what the first
+  // fix got wrong — a `video-ended` beat pins the budget at that beat's start
+  // for the video's whole runtime, so the announced elapsed time stood still
+  // while the bar moved.
   useEffect(() => {
     if (!scrubberFocused || !plan) {
       setLivePositionFraction(null);
       return;
     }
     const sample = () => {
+      const media = mediaPositionRef.current;
+      if (media?.stepIndex === stepIndex) {
+        setLivePositionFraction(media.fraction);
+        return;
+      }
       const budget = getTimerBudget();
       setLivePositionFraction(playbackProgressFraction(
         plan,
@@ -946,10 +977,14 @@ export function JourneyPlaybackOverlay({
       ));
     };
     sample();
-    if (paused || hold) return;
+    // A held beat used to stop the sampler, which is exactly backwards for the
+    // beat a video holds: that is the beat whose position only the element
+    // knows. A held beat with no media owner re-reads a frozen budget and sets
+    // the identical number, which React drops without a render.
+    if (paused) return;
     const timer = window.setInterval(sample, 1_000);
     return () => window.clearInterval(timer);
-  }, [getTimerBudget, hold, paused, plan, scrubberFocused, stepIndex]);
+  }, [getTimerBudget, paused, plan, scrubberFocused, stepIndex]);
 
   if (!journey) return null;
 
@@ -1134,6 +1169,7 @@ export function JourneyPlaybackOverlay({
                       advanceProgressFillFromMedia(
                         event.currentTarget,
                         activeVideoTrim?.assetId === activeMedia.id ? activeVideoTrim.trim : null,
+                        director.stepIndex,
                       );
                       if (
                         !activeVideoTrim
