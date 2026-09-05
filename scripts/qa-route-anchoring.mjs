@@ -16,6 +16,18 @@ const qaUrl = new URL(
 // 1-2 CSS px of each other at every supported zoom (#193 acceptance).
 const ENDPOINT_TOLERANCE_PX = 1.5;
 
+// #219 focus-signal framing. A separate page load that frames the focus point
+// on a REAL Route Point of the same fixture - qa-p-17 "Las Vegas", index 2 of
+// qa-route-southwest in src/main.tsx - so the focus signal the journey
+// connector terminates on can be measured against the marker of the very Route
+// Point it represents. The framing above is left alone on purpose.
+const FOCUS_ROUTE_POINT_INDEX = 2;
+const focusRoutePoint = { lat: 36.1699, lon: -115.1398 };
+const focusQaUrl = new URL(
+  `/?qaState=journey-routes&qaQuality=high&qaFocusLat=${focusRoutePoint.lat}&qaFocusLon=${focusRoutePoint.lon}`,
+  baseUrl,
+).toString();
+
 const browser = await launchQaBrowser({
   headless: true,
   args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"],
@@ -141,6 +153,45 @@ async function measureRoute(page, id) {
   }, id);
 }
 
+/**
+ * #219: the focus signal and the Route Point marker are two renderings of ONE
+ * geographic object, so read both projections back and return their distance.
+ * data-personal-point-* is the focus signal the journey connector reads;
+ * data-anchor-* is the canonical anchor the marker graphic was drawn around.
+ */
+async function measureFocusSignal(page, routeIdentifier, pointIndex) {
+  return page.evaluate(([identifier, index]) => {
+    const host = document.querySelector(".particle-earth-scene");
+    const personal = {
+      x: Number(host?.dataset.personalPointX),
+      y: Number(host?.dataset.personalPointY),
+    };
+    if (!Number.isFinite(personal.x) || !Number.isFinite(personal.y)) {
+      return { error: "the focus signal published no data-personal-point-x/y" };
+    }
+    const group = document.querySelector(`[data-journey-route="${identifier}"]`);
+    if (!group) return { error: "route group not rendered" };
+    const marker = [...group.querySelectorAll(".particle-earth-route__point")]
+      .find((element) => Number(element.dataset.routePointIndex) === index);
+    if (!marker) return { error: `Route Point ${index} rendered no marker` };
+    if (marker.style.display === "none") {
+      return { error: `Route Point ${index} marker is hidden, nothing to measure` };
+    }
+    const anchor = {
+      x: Number(marker.dataset.anchorX),
+      y: Number(marker.dataset.anchorY),
+    };
+    if (!Number.isFinite(anchor.x) || !Number.isFinite(anchor.y)) {
+      return { error: `Route Point ${index} marker carries no anchor` };
+    }
+    return {
+      personal,
+      anchor,
+      deltaPx: Math.hypot(personal.x - anchor.x, personal.y - anchor.y),
+    };
+  }, [routeIdentifier, pointIndex]);
+}
+
 const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
 const page = await context.newPage();
 const consoleErrors = [];
@@ -219,6 +270,53 @@ try {
     failures.push(`page errors: ${JSON.stringify({ pageErrors, consoleErrors })}`);
   }
 
+  if (failures.length > 0) {
+    throw new Error(`[qa-route-anchoring] ${failures.join("; ")}`);
+  }
+
+  // #219: same page (the console and pageerror listeners keep accumulating),
+  // new framing - the focus point now sits on a Route Point of the fixture.
+  await page.goto(focusQaUrl, { waitUntil: "domcontentloaded" });
+  await page.locator('[data-scene-ready="true"]').waitFor({ timeout: 30_000 });
+  await page.waitForFunction(() => Boolean(window.__particleEarthDebug?.()));
+  await page.waitForFunction((identifier) => Boolean(
+    document.querySelector(`[data-journey-route="${identifier}"] .particle-earth-route__leg`),
+  ), routeId, { timeout: 30_000 });
+  await page.waitForFunction(() => Number.isFinite(
+    Number(document.querySelector(".particle-earth-scene")?.dataset.personalPointX),
+  ), null, { timeout: 30_000 });
+  await page.waitForTimeout(400);
+
+  const focusSamples = [];
+  for (const zoom of [1, 2, 3]) {
+    const state = await setZoom(page, zoom);
+    await page.waitForTimeout(220);
+    const measured = await measureFocusSignal(page, routeId, FOCUS_ROUTE_POINT_INDEX);
+    if (measured.error) {
+      throw new Error(`[qa-route-anchoring] focus signal: ${measured.error}`);
+    }
+    focusSamples.push({ zoom: state.zoom, ...measured });
+  }
+
+  for (const sample of focusSamples) {
+    console.log([
+      `[qa-route-anchoring] focus zoom=${sample.zoom.toFixed(3)}`,
+      `routePointIndex=${FOCUS_ROUTE_POINT_INDEX}`,
+      `focusSignal=(${sample.personal.x.toFixed(2)}, ${sample.personal.y.toFixed(2)})`,
+      `markerAnchor=(${sample.anchor.x.toFixed(2)}, ${sample.anchor.y.toFixed(2)})`,
+      `focusSignalToMarkerPx=${sample.deltaPx.toFixed(3)}`,
+    ].join(" "));
+  }
+
+  for (const sample of focusSamples) {
+    if (!(sample.deltaPx <= ENDPOINT_TOLERANCE_PX)) {
+      failures.push(`focus zoom ${sample.zoom.toFixed(2)}: the focus signal is ${sample.deltaPx.toFixed(2)}px from the Route Point marker it represents, over ${ENDPOINT_TOLERANCE_PX}px`);
+    }
+  }
+
+  if (pageErrors.length > 0 || consoleErrors.length > 0) {
+    failures.push(`page errors: ${JSON.stringify({ pageErrors, consoleErrors })}`);
+  }
   if (failures.length > 0) {
     throw new Error(`[qa-route-anchoring] ${failures.join("; ")}`);
   }

@@ -862,6 +862,17 @@ export function focusViewportCenter(
   };
 }
 
+// #219: the focus signal marks a selected Route Point, so it occupies the one
+// canonical Route Point anchor instead of a radius of its own. Sharing the
+// anchor is what makes the signal, the journey connector that terminates on it
+// and the Route Point marker resolve to the same screen pixel at every zoom.
+export function focusSignalAnchor(
+  point: { lat: number; lon: number } | null | undefined,
+  fallback: { lat: number; lon: number },
+) {
+  return routePointAnchor(point?.lat ?? fallback.lat, point?.lon ?? fallback.lon);
+}
+
 // The active journey card is docked to the right on wide layouts and becomes a
 // bottom sheet on compact ones, so the connector leaves from a different edge.
 export function journeyConnectorAnchor(
@@ -1671,7 +1682,7 @@ export function ParticleEarthScene({
       positionX: number,
       positionY: number,
       targetScreen: Vector2,
-      pointRadius = 1.45,
+      pointRadius = ROUTE_ANCHOR_RADIUS,
     ) => {
       focusProjectionWorld
         .copy(latLonToVector3(point.lat, point.lon, pointRadius))
@@ -1694,7 +1705,7 @@ export function ParticleEarthScene({
       positionX: number,
       positionY: number,
       targetScreen: ScreenPoint = sampledFocusCenter,
-      pointRadius = 1.45,
+      pointRadius = ROUTE_ANCHOR_RADIUS,
     ) => {
       return solveScreenAnchorRotation(
         seedRotationX,
@@ -2014,10 +2025,9 @@ export function ParticleEarthScene({
       currentMode === "archiveBurst"
         ? { lat: -10, lon: -180 }
         : { lat: 34.0522, lon: -118.2437 };
-    const personalPosition = latLonToVector3(
-      latestFocusPoint.current?.lat ?? initialFallback.lat,
-      latestFocusPoint.current?.lon ?? initialFallback.lon,
-      1.45,
+    const personalPosition = focusSignalAnchor(
+      latestFocusPoint.current,
+      initialFallback,
     );
     const personalPositions = new Float32Array(personalPosition.toArray());
     personalGeometry.setAttribute("position", new BufferAttribute(personalPositions, 3));
@@ -3785,11 +3795,7 @@ export function ParticleEarthScene({
         currentMode === "archiveBurst"
           ? { lat: -10, lon: -180 }
           : { lat: 34.0522, lon: -118.2437 };
-      const vector = latLonToVector3(
-        point?.lat ?? fallback.lat,
-        point?.lon ?? fallback.lon,
-        1.45,
-      );
+      const vector = focusSignalAnchor(point, fallback);
       const attribute = personalGeometry.getAttribute("position") as BufferAttribute;
       attribute.setXYZ(0, vector.x, vector.y, vector.z);
       attribute.needsUpdate = true;

@@ -8,6 +8,7 @@ import {
   Texture,
   Vector3,
 } from "three";
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import type { GlobeMode } from "../experience/types";
 import {
@@ -35,6 +36,7 @@ import {
   advanceGlobeIdleReleasePhase,
   buildProjectedRoutePath,
   collectJourneyDimDirections,
+  focusSignalAnchor,
   focusViewportCenter,
   canTrackGlobePointer,
   clampGlobeTilt,
@@ -973,5 +975,40 @@ describe("#194 compact mobile layout is injected, never inferred", () => {
     });
     expect(safeArea.bottom).toBe(host.height - 18);
     expect(safeArea.right).toBe(host.width - 16);
+  });
+});
+
+describe("#219 the focus signal shares the Route Point anchor", () => {
+  // qa-p-17 of the qa-route-southwest fixture in src/main.tsx: the Route Point
+  // scripts/qa-route-anchoring.mjs frames the focus signal on.
+  const lasVegas = { lat: 36.1699, lon: -115.1398 };
+  const fallback = { lat: 34.0522, lon: -118.2437 };
+
+  it("places a focused Route Point on ROUTE_ANCHOR_RADIUS, not a radius of its own", () => {
+    const focus = focusSignalAnchor(lasVegas, fallback);
+    expect(focus.length()).toBeCloseTo(ROUTE_ANCHOR_RADIUS, 12);
+    // The focus layer and the route layer resolve the same Route Point to the
+    // same world position, so one geographic object is drawn once, not twice.
+    expect(focus.distanceTo(routePointAnchor(lasVegas.lat, lasVegas.lon))).toBe(0);
+  });
+
+  it("puts the fallback on the same anchor when no Route Point is focused", () => {
+    for (const point of [null, undefined]) {
+      const focus = focusSignalAnchor(point, fallback);
+      expect(focus.length()).toBeCloseTo(ROUTE_ANCHOR_RADIUS, 12);
+      expect(focus.distanceTo(routePointAnchor(fallback.lat, fallback.lon))).toBe(0);
+    }
+  });
+
+  it("leaves no focus radius literal behind in the scene", () => {
+    // focusSignalAnchor cannot cover the pointRadius parameter defaults of
+    // projectFocusPointForRotation and solveFocusRotationForViewport, so the
+    // superseded 1.45 is asserted gone from the whole module instead.
+    const source = readFileSync(
+      new URL("./ParticleEarthScene.tsx", import.meta.url),
+      "utf8",
+    );
+    expect(source).not.toMatch(/\b1\.45\b/);
+    expect(source.match(/pointRadius = ROUTE_ANCHOR_RADIUS,/g)).toHaveLength(2);
   });
 });
