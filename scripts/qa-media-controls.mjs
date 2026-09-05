@@ -62,6 +62,7 @@ async function createQaPage(path, mediaUrl, {
   mobile = true,
   readDelayMs = 0,
   blockedReadAssetId = null,
+  videoTimeline = null,
   reducedMotion = "reduce",
   viewport = mobile ? { width: 390, height: 844 } : { width: 1280, height: 800 },
 } = {}) {
@@ -78,6 +79,146 @@ async function createQaPage(path, mediaUrl, {
     if (message.type() === "error") consoleErrors.push(message.text());
   });
   page.on("pageerror", (error) => pageErrors.push(error.message));
+  // #195 Phase 2. The trim transport is ~245 lines of event handling on a real
+  // <video>, and no assertion executed it: the repo has no jsdom, and the data
+  // URI the other media checks use decodes to nothing, so `duration` is NaN,
+  // `loadedmetadata` never fires and the trim degrades before it starts. This
+  // gives the element a synthesized timeline instead — a real DOM element, real
+  // React handlers, a real `element.currentTime = x`, a real director — with
+  // deterministic media time in place of a decoder. It deliberately never
+  // dispatches `ended`, so a beat that finishes can only have been finished by
+  // the out-point.
+  if (videoTimeline) {
+    await page.addInitScript(({ sourceDurationSeconds, tickMs, tickSeconds }) => {
+      const media = new WeakMap();
+      const trace = { samples: [], seeks: [], endedEvents: 0, playCalls: 0 };
+      window.__qaVideoTimeline = trace;
+      const overlayState = () => {
+        const overlay = document.querySelector(".journey-playback");
+        return {
+          step: overlay ? Number(overlay.getAttribute("data-playback-step")) : null,
+          trim: overlay ? overlay.getAttribute("data-video-trim") : null,
+        };
+      };
+      const sample = (element, reason) => {
+        const entry = media.get(element);
+        if (!entry) return;
+        trace.samples.push({
+          reason,
+          at: Math.round(performance.now()),
+          time: Number(entry.time.toFixed(3)),
+          playing: entry.playing,
+          ...overlayState(),
+        });
+      };
+      const stop = (element) => {
+        const entry = media.get(element);
+        if (!entry || entry.timer === null) return;
+        clearInterval(entry.timer);
+        entry.timer = null;
+      };
+      const arm = (element, src) => {
+        const entry = media.get(element)
+          ?? { time: 0, playing: false, metadata: false, timer: null, src: null };
+        entry.src = src;
+        media.set(element, entry);
+        // Metadata arrives a task later, as it does for a real source: the
+        // overlay's entry effect must survive an element that is not ready yet.
+        setTimeout(() => {
+          entry.metadata = true;
+          element.dispatchEvent(new Event("loadedmetadata"));
+          sample(element, "loadedmetadata");
+        }, 10);
+      };
+      const define = (name, descriptor) => {
+        Object.defineProperty(HTMLMediaElement.prototype, name, {
+          configurable: true,
+          ...descriptor,
+        });
+      };
+      define("duration", {
+        get() {
+          return media.get(this)?.metadata ? sourceDurationSeconds : Number.NaN;
+        },
+      });
+      define("readyState", {
+        get() {
+          return media.get(this)?.metadata ? 1 : 0;
+        },
+      });
+      define("paused", {
+        get() {
+          return media.get(this)?.playing !== true;
+        },
+      });
+      define("currentTime", {
+        get() {
+          return media.get(this)?.time ?? 0;
+        },
+        set(value) {
+          const entry = media.get(this);
+          if (!entry) return;
+          entry.time = Math.max(0, Math.min(sourceDurationSeconds, Number(value)));
+          trace.seeks.push({ to: Number(entry.time.toFixed(3)), ...overlayState() });
+          sample(this, "seek");
+          // A real seek settles asynchronously.
+          setTimeout(() => {
+            this.dispatchEvent(new Event("seeked"));
+            sample(this, "seeked");
+          }, 0);
+        },
+      });
+      define("src", {
+        get() {
+          return media.get(this)?.src ?? "";
+        },
+        set(value) {
+          arm(this, value);
+        },
+      });
+      // React writes `src` as an attribute, and a real attribute write would
+      // start the resource load this shim exists to replace — the bogus source
+      // would fire `error` and hand the beat to the media fallback before the
+      // trim could be applied.
+      const setAttribute = Element.prototype.setAttribute;
+      Element.prototype.setAttribute = function qaSetAttribute(name, value) {
+        if (this instanceof HTMLMediaElement && name === "src") {
+          arm(this, value);
+          return;
+        }
+        return setAttribute.call(this, name, value);
+      };
+      HTMLMediaElement.prototype.play = function qaPlay() {
+        const entry = media.get(this) ?? { time: 0, metadata: false, timer: null, src: null };
+        media.set(this, entry);
+        trace.playCalls += 1;
+        if (entry.playing) return Promise.resolve();
+        entry.playing = true;
+        sample(this, "play");
+        this.dispatchEvent(new Event("playing"));
+        entry.timer = setInterval(() => {
+          if (!this.isConnected) {
+            stop(this);
+            return;
+          }
+          if (!entry.playing) return;
+          entry.time = Math.min(sourceDurationSeconds, entry.time + tickSeconds);
+          this.dispatchEvent(new Event("timeupdate"));
+          sample(this, "timeupdate");
+        }, tickMs);
+        return Promise.resolve();
+      };
+      HTMLMediaElement.prototype.pause = function qaPause() {
+        const entry = media.get(this);
+        if (!entry || !entry.playing) return;
+        entry.playing = false;
+        stop(this);
+        sample(this, "pause");
+      };
+      HTMLMediaElement.prototype.load = function qaLoad() {};
+      document.addEventListener("ended", () => { trace.endedEvents += 1; }, true);
+    }, videoTimeline);
+  }
   if (instrumentMedia) {
     await page.addInitScript(() => {
       const state = new WeakMap();
@@ -1575,6 +1716,172 @@ try {
     }
   } finally {
     await playback.page.close();
+  }
+
+  // ── #195 Phase 2: the trim transport, executed ──────────────────────────
+  // Acceptance 1, 2 and 6 are behaviour of a real element under a real
+  // director, so they are graded here rather than by a pure-function assertion:
+  // the element must reach the in-point before the beat's budget starts, the
+  // beat must end at the out-point instead of on `ended`, and a pause must
+  // leave it inside its segment.
+  const TRIM_SOURCE_SECONDS = 12;
+  const trimTimeline = { sourceDurationSeconds: TRIM_SOURCE_SECONDS, tickMs: 40, tickSeconds: 0.1 };
+
+  async function openTrimmedBeat(inMs, outMs) {
+    const opened = await createQaPage(
+      `/?qaState=journey-playback&qaMode=trim&qaTrimIn=${inMs}&qaTrimOut=${outMs}`,
+      // The element's source is synthesized by the timeline shim, so the read
+      // only has to be a valid image for the beat that follows the video.
+      onePixelGif,
+      { videoTimeline: trimTimeline },
+    );
+    await opened.page.locator(".journey-playback").waitFor({ state: "visible" });
+    const next = opened.page.getByRole("button", { name: "下一个章节" });
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      if (await opened.page.locator(".journey-playback__media video").count() === 1) break;
+      await next.click();
+      await opened.page.waitForTimeout(80);
+    }
+    await opened.page.locator('.journey-playback[data-video-trim="playing"]')
+      .waitFor({ timeout: 15_000 });
+    const videoStep = Number(
+      await opened.page.locator(".journey-playback").getAttribute("data-playback-step"),
+    );
+    return { ...opened, videoStep };
+  }
+
+  async function readTimeline(page) {
+    return page.evaluate(() => window.__qaVideoTimeline);
+  }
+
+  async function waitForStepAfter(page, videoStep) {
+    await page.waitForFunction((step) => {
+      const overlay = document.querySelector(".journey-playback");
+      return !!overlay && Number(overlay.getAttribute("data-playback-step")) > step;
+    }, videoStep, { timeout: 20_000 });
+  }
+
+  // Acceptance 1 + 2: entry lands on the in-point while the budget is still
+  // held, and the beat ends at the out-point.
+  const trimIn = 1_200;
+  const trimOut = 4_700;
+  const segment = await openTrimmedBeat(trimIn, trimOut);
+  try {
+    const entered = await readTimeline(segment.page);
+    await waitForStepAfter(segment.page, segment.videoStep);
+    const finished = await readTimeline(segment.page);
+    const inSeconds = trimIn / 1_000;
+    const outSeconds = trimOut / 1_000;
+    const seekedToInPoint = entered.seeks.some((seek) => Math.abs(seek.to - inSeconds) < 0.01);
+    // The budget is held while the element is being positioned: every seek onto
+    // the in-point is issued from a holding state, never from `playing`.
+    const seekedWhileHolding = entered.seeks.every(
+      (seek) => seek.trim === "positioning" || seek.trim === "buffering",
+    );
+    const firstPlaying = entered.samples.find((entry) => entry.trim === "playing");
+    const sawPositioning = entered.samples.some((entry) => entry.trim === "positioning");
+    const onSegment = finished.samples
+      .filter((entry) => entry.trim === "playing" && entry.step === segment.videoStep)
+      .map((entry) => entry.time);
+    const lastSegmentTime = onSegment.length ? Math.max(...onSegment) : null;
+    const firstSegmentTime = onSegment.length ? Math.min(...onSegment) : null;
+    const failedTrimSegment = !seekedToInPoint
+      || !seekedWhileHolding
+      || !sawPositioning
+      || !firstPlaying
+      || firstPlaying.time < inSeconds - 0.15
+      || firstSegmentTime === null
+      || firstSegmentTime < inSeconds - 0.15
+      || lastSegmentTime === null
+      // Ended at the out-point, not at the end of a 12 s source and not on the
+      // wall-clock budget, which would have stopped a tick short of it.
+      || lastSegmentTime > outSeconds + 0.15
+      || lastSegmentTime < outSeconds - 0.35
+      || finished.endedEvents !== 0
+      || finished.playCalls < 1;
+    checks.push({
+      name: "playback-video-trim-segment",
+      trim: { inSeconds, outSeconds, sourceDurationSeconds: TRIM_SOURCE_SECONDS },
+      seeks: entered.seeks,
+      sawPositioning,
+      firstPlayingTime: firstPlaying?.time ?? null,
+      firstSegmentTime,
+      lastSegmentTime,
+      endedEvents: finished.endedEvents,
+      failed: failedTrimSegment,
+    });
+    if (failedTrimSegment) failed = true;
+    if (segment.consoleErrors.length || segment.pageErrors.length) {
+      checks.push({
+        name: "playback-video-trim-runtime-errors",
+        consoleErrors: segment.consoleErrors,
+        pageErrors: segment.pageErrors,
+      });
+      failed = true;
+    }
+  } finally {
+    await segment.page.close();
+  }
+
+  // Acceptance 6: a pause inside a trimmed segment is transparent — the media
+  // time freezes, the trim keeps owning the beat rather than degrading, and the
+  // resumed beat still ends at its own out-point.
+  const pauseIn = 1_200;
+  const pauseOut = 9_200;
+  const paused = await openTrimmedBeat(pauseIn, pauseOut);
+  try {
+    await paused.page.waitForTimeout(400);
+    await paused.page.getByRole("button", { name: "暂停播放" }).click();
+    await paused.page.waitForTimeout(120);
+    const atPause = await readTimeline(paused.page);
+    const pausedTime = atPause.samples[atPause.samples.length - 1].time;
+    const trimDuringPause = await paused.page.locator(".journey-playback")
+      .getAttribute("data-video-trim");
+    await paused.page.waitForTimeout(700);
+    const afterHold = await readTimeline(paused.page);
+    const heldTime = afterHold.samples[afterHold.samples.length - 1].time;
+    await paused.page.getByRole("button", { name: "继续播放" }).click();
+    await waitForStepAfter(paused.page, paused.videoStep);
+    const finished = await readTimeline(paused.page);
+    const inSeconds = pauseIn / 1_000;
+    const outSeconds = pauseOut / 1_000;
+    const onSegment = finished.samples
+      .filter((entry) => entry.trim === "playing" && entry.step === paused.videoStep)
+      .map((entry) => entry.time);
+    const escapedSegment = onSegment.some(
+      (time) => time < inSeconds - 0.15 || time > outSeconds + 0.15,
+    );
+    const lastSegmentTime = onSegment.length ? Math.max(...onSegment) : null;
+    const failedTrimPause = pausedTime !== heldTime
+      || pausedTime < inSeconds
+      || trimDuringPause !== "playing"
+      || escapedSegment
+      || lastSegmentTime === null
+      || lastSegmentTime > outSeconds + 0.15
+      || lastSegmentTime < outSeconds - 0.35
+      || finished.endedEvents !== 0;
+    checks.push({
+      name: "playback-video-trim-pause",
+      trim: { inSeconds, outSeconds },
+      pausedTime,
+      heldTime,
+      trimDuringPause,
+      escapedSegment,
+      lastSegmentTime,
+      endedEvents: finished.endedEvents,
+      failed: failedTrimPause,
+    });
+    if (failedTrimPause) failed = true;
+    if (paused.consoleErrors.length || paused.pageErrors.length) {
+      checks.push({
+        name: "playback-video-trim-pause-runtime-errors",
+        consoleErrors: paused.consoleErrors,
+        pageErrors: paused.pageErrors,
+      });
+      failed = true;
+    }
+  } finally {
+    await paused.page.close();
   }
 } finally {
   await browser.close();

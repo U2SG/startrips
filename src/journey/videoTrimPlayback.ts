@@ -188,3 +188,22 @@ export function videoTrimStatusAfterPauseChange(
 ): VideoTrimSeekStatus | null {
   return status === "buffering" ? "playing" : status;
 }
+
+/**
+ * Which beat a trim state belongs to.
+ *
+ * The state used to be keyed by `assetId` alone, which is enough only while no
+ * two consecutive beats trim the same source. Highlight planning under #195
+ * Phase 2 produces exactly that shape — several windows over one video — and
+ * then a late `seeked`, `waiting` or watchdog settle from the previous beat
+ * carries the same asset id as the new one and would settle it, releasing a
+ * budget the new beat is still holding. The step index is what makes the newer
+ * intent win.
+ */
+export function videoTrimSeekApplies(
+  state: { assetId: string; stepIndex: number } | null | undefined,
+  assetId: string,
+  stepIndex: number,
+): boolean {
+  return !!state && state.assetId === assetId && state.stepIndex === stepIndex;
+}

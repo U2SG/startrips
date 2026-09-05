@@ -7,6 +7,7 @@ import { useCompactMobileLayout } from "./journey/mobileLayout";
 import { JourneyComposer } from "./journey/JourneyComposer";
 import { JourneyStory } from "./journey/JourneyStory";
 import { JourneyPlaybackOverlay } from "./journey/JourneyPlaybackOverlay";
+import { playbackMediaForPoint, type PlaybackStep } from "./journey/journeyPlayback";
 import { SharedAtlasView } from "./journey/SharedAtlasView";
 import { isSharedAtlasPathname } from "./journey/sharedAtlas";
 import type { Journey, JourneyRoute } from "./journey/types";
@@ -427,14 +428,59 @@ const playbackQaJourney: Journey = {
   }],
 };
 
+// #195 Phase 2: the trimmed variant. A second asset follows the video on the
+// same route point, because "the segment ended the beat" is only distinguishable
+// from "playback ended" if there is a next beat to advance into.
+const PLAYBACK_QA_TRIM_VIDEO_ASSET_ID = "00000000-0000-4000-8000-000000000111";
+const playbackQaTrimJourney: Journey = {
+  ...playbackQaJourney,
+  media: [
+    playbackQaJourney.media[0],
+    {
+      ...playbackQaJourney.media[0],
+      id: "00000000-0000-4000-8000-000000000112",
+      storageKey: "qa/playback-after-trim",
+      fileName: "playback-after-trim.png",
+      mimeType: "image/png",
+      sortOrder: 1,
+    },
+  ],
+};
+
 function JourneyPlaybackQaPreview() {
+  // A trim is declared by the Edit Plan, so the preview supplies it the way
+  // Quick Recap does: the resolver answers the window, and the beat's booked
+  // length is the same `outMs - inMs` the plan would have booked. Without the
+  // trim mode this stays the untrimmed preview the other lanes already drive.
+  const qaParams = new URLSearchParams(window.location.search);
+  const trimMode = qaParams.get("qaMode") === "trim";
+  const trimInMs = Number(qaParams.get("qaTrimIn") ?? 1_200);
+  const trimOutMs = Number(qaParams.get("qaTrimOut") ?? 4_700);
+  const trim = Number.isFinite(trimInMs) && Number.isFinite(trimOutMs)
+    ? { inMs: trimInMs, outMs: trimOutMs }
+    : { inMs: 1_200, outMs: 4_700 };
+  const journey = trimMode ? playbackQaTrimJourney : playbackQaJourney;
+  const trimmedAsset = (targetJourney: Journey, step: PlaybackStep) => (
+    step.kind === "media"
+    && playbackMediaForPoint(targetJourney, step.pointIndex)[step.mediaIndex]?.id
+      === PLAYBACK_QA_TRIM_VIDEO_ASSET_ID
+  );
   return (
     <main className="living-atlas">
       <div className="living-atlas__globe journey-story-qa__backdrop" aria-hidden="true" />
       <JourneyPlaybackOverlay
-        journey={playbackQaJourney}
+        journey={journey}
         onClose={() => undefined}
         onCameraTargetChange={() => undefined}
+        mediaTrimResolver={trimMode
+          ? (targetJourney, step) => trimmedAsset(targetJourney, step) ? trim : null
+          : undefined}
+        stepDurationResolver={trimMode
+          ? (targetJourney, step) => (
+            trimmedAsset(targetJourney, step) ? trim.outMs - trim.inMs : undefined
+          )
+          : undefined}
+        playbackMode={trimMode ? "quick-recap" : "full"}
         reduceMotion
       />
     </main>

@@ -6,6 +6,7 @@ import {
   videoTrimEntryAction,
   videoTrimHoldsStep,
   videoTrimProgressAction,
+  videoTrimSeekApplies,
   videoTrimSegmentDurationMs,
   VIDEO_TRIM_TOLERANCE_SECONDS,
 } from "./videoTrimPlayback";
@@ -137,5 +138,30 @@ describe("trim-aware video playback contract (#195 Phase 2)", () => {
       expect(videoTrimProgressAction(resolved, 11.99)).toEqual({ kind: "none" });
       expect(videoTrimSegmentDurationMs(resolved)).toBeNull();
     }
+  });
+
+  it("lets the newer beat win when two consecutive beats trim the same source", () => {
+    // Highlight planning under #195 Phase 2 emits several windows over one
+    // video, so `assetId` alone stops identifying a beat. A settle computed for
+    // step 3 must not land on the beat that is now at step 4, or a late
+    // `seeked` from the previous window would release a budget the current one
+    // is still holding.
+    const beat = { assetId: "asset-a", stepIndex: 3 };
+    expect(videoTrimSeekApplies(beat, "asset-a", 3)).toBe(true);
+    expect(videoTrimSeekApplies(beat, "asset-a", 4)).toBe(false);
+    expect(videoTrimSeekApplies(beat, "asset-b", 3)).toBe(false);
+    expect(videoTrimSeekApplies(null, "asset-a", 3)).toBe(false);
+    expect(videoTrimSeekApplies(undefined, "asset-a", 3)).toBe(false);
+  });
+
+  it("keeps `unavailable` terminal for every event that could re-seek the beat", () => {
+    // `loadedmetadata` and `seeked` both re-run the entry rule, so both are
+    // bounded by the holding states: once the watchdog has given up, the beat
+    // is on `ended` ownership and a native scrub must not quietly take it back.
+    expect(videoTrimHoldsStep("positioning")).toBe(true);
+    expect(videoTrimHoldsStep("buffering")).toBe(true);
+    expect(videoTrimHoldsStep("playing")).toBe(false);
+    expect(videoTrimHoldsStep("unavailable")).toBe(false);
+    expect(videoTrimHoldsStep(null)).toBe(false);
   });
 });
