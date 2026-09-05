@@ -13,6 +13,7 @@ import {
   getSphericalRouteFocus,
   latLonToVector3,
   MAX_ROUTE_ARC_LIFT_PER_CHORD,
+  maxRepresentableArcLift,
   MIN_LIFTED_ROUTE_ARC_SEGMENTS,
   rotationXForLatitude,
   rotationYForLongitude,
@@ -144,6 +145,11 @@ describe("route arc geometry", () => {
   // just above it.
   const SAMPLE_THRESHOLD_DEGREES = [1.86, 1.9, 2, 3, 5];
   const SHORT_LEG_DEGREES = [1.9, 2, 3, 5];
+  /** The hump a 20 degree leg carries when its budget is not squeezed. */
+  const arcHeightAt20Degrees = Math.min(
+    0.22 * Math.sqrt(((20 * Math.PI) / 180) / (Math.PI / 3)),
+    MAX_ROUTE_ARC_LIFT_PER_CHORD * 2 * Math.sin((20 * Math.PI) / 360),
+  );
 
   /** One synthetic leg of the given angular length, with lift requested. */
   function shortLeg(degrees: number) {
@@ -378,6 +384,72 @@ describe("route arc geometry", () => {
     for (const liftScale of [0, 0.5, 1]) {
       const endpoint = sampleAt(samples, 0, ROUTE_ANCHOR_RADIUS, liftScale);
       expect(endpoint.distanceTo(anchor)).toBeLessThan(1e-6);
+    }
+  });
+
+  it("never returns more vertices than its budget allows (#242 review)", () => {
+    // 63 legs but only 50 segments of budget: one segment each would be 126
+    // vertices against a declared ceiling of 100.
+    const points = Array.from({ length: 64 }, (_, index) => ({
+      lat: 0,
+      lon: -90 + (index * 0.4),
+    }));
+    for (const maxVertices of [100, 40, 8, 4, 2]) {
+      const samples = buildRouteArcSamples(points, Math.PI / 96, maxVertices, {
+        arcHeightRatio: 0.22,
+        arcSaturationAngle: Math.PI / 3,
+      });
+      expect(routeArcVertexCount(samples)).toBeLessThanOrEqual(maxVertices);
+      expect(routeArcVertexCount(samples)).toBeGreaterThan(0);
+      // The route still spans its whole extent rather than being truncated:
+      // both of its ends are drawn even when interior points cannot be.
+      const first = routePointAnchor(points[0].lat, points[0].lon);
+      const last = routePointAnchor(points.at(-1)!.lat, points.at(-1)!.lon);
+      const count = routeArcVertexCount(samples);
+      expect(sampleAt(samples, 0, ROUTE_ANCHOR_RADIUS, 1).distanceTo(first))
+        .toBeLessThan(1e-6);
+      expect(sampleAt(samples, count - 1, ROUTE_ANCHOR_RADIUS, 1).distanceTo(last))
+        .toBeLessThan(1e-6);
+      // The legs agree with the whole route under the same pressure.
+      const legs = buildRouteArcLegSamples(points, Math.PI / 96, maxVertices, {
+        arcHeightRatio: 0.22,
+        arcSaturationAngle: Math.PI / 3,
+      });
+      expect(legs.reduce((sum, leg) => sum + routeArcVertexCount(leg), 0))
+        .toBe(count);
+    }
+  });
+
+  it("gives up the hump a squeezed leg cannot draw faithfully (#242 review)", () => {
+    // Twenty 20 degree legs: each asks for many segments, and the budget below
+    // grants roughly a tenth of them. Clearing the four-segment floor is not
+    // enough - a coarse raised polygon is the very shape being removed.
+    const points = Array.from({ length: 21 }, (_, index) => ({
+      lat: 0,
+      lon: -180 + (index * 20),
+    }));
+    const arc = { arcHeightRatio: 0.22, arcSaturationAngle: Math.PI / 3 };
+    const generous = buildRouteArcSamples(points, Math.PI / 96, 8192 * 8, arc);
+    const squeezed = buildRouteArcSamples(points, Math.PI / 96, 800, arc);
+
+    expect(routeArcVertexCount(squeezed)).toBeLessThanOrEqual(800);
+    // Same legs, far fewer segments each.
+    expect(routeArcVertexCount(squeezed))
+      .toBeLessThan(routeArcVertexCount(generous));
+    // So the decoration, not the fidelity of the path, is what gave way: the
+    // hump drops by far more than the sample count did.
+    expect(Math.max(...squeezed.lifts))
+      .toBeLessThan(Math.max(...generous.lifts) / 4);
+    expect(maxRepresentableArcLift((20 * Math.PI) / 180, 10))
+      .toBeLessThan(arcHeightAt20Degrees);
+    // A count below the four-segment floor carries no hump at all.
+    expect(maxRepresentableArcLift((20 * Math.PI) / 180, 3)).toBe(0);
+    // More segments can always carry at least as much as fewer.
+    let previous = -1;
+    for (const segments of [4, 8, 16, 32, 64, 128]) {
+      const affordable = maxRepresentableArcLift((20 * Math.PI) / 180, segments);
+      expect(affordable).toBeGreaterThanOrEqual(previous);
+      previous = affordable;
     }
   });
 

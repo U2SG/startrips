@@ -117,6 +117,27 @@ export const QUALITY_PROFILE = {
 export const MAX_RENDERED_JOURNEYS = 64;
 export const MAX_RENDERED_ROUTE_POINTS = 512;
 export const MAX_RENDERED_ROUTE_LINE_VERTICES = 8192;
+
+/**
+ * #242 review: the line-vertex pool is shared by every visible route, and it
+ * used to be spent front to back. A curvature-aware sample count asks for
+ * several times as many vertices per leg as the old angular rule, so the FIRST
+ * long route could consume nearly the whole pool and leave the routes after it
+ * as single-segment traces or nothing at all - a dense multi-Journey overview
+ * would lose its later Journeys to whichever one happened to be drawn first.
+ *
+ * Each route takes an equal share of whatever is still unspent, so a route that
+ * needs less than its share leaves the surplus to the ones after it and no
+ * route can starve the rest.
+ */
+export function resolveRouteVertexShare(
+  spentVertices: number,
+  routesRemaining: number,
+) {
+  const unspent = Math.max(0, MAX_RENDERED_ROUTE_LINE_VERTICES - spentVertices);
+  return Math.floor(unspent / Math.max(1, routesRemaining));
+}
+
 export const MAX_RENDERED_ROUTE_LABELS = 6;
 export const MAX_RENDERED_MOBILE_ROUTE_LABELS = 3;
 export const CITY_LABEL_BUDGET = 72;
@@ -2510,8 +2531,10 @@ export function ParticleEarthScene({
         });
         group.append(...routeLabelElements);
 
-        const remainingVertices = MAX_RENDERED_ROUTE_LINE_VERTICES
-          - routeVertexCount;
+        const remainingVertices = resolveRouteVertexShare(
+          routeVertexCount,
+          visibleRoutes.length - routeIndex,
+        );
         // #15: long legs lift off the surface as a natural spatial arc
         // (great circle + altitude hump); short legs hug the globe. The
         // hump scales nonlinearly with angular distance and is clamped.

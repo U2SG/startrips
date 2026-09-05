@@ -36,6 +36,7 @@ import {
   MAX_RENDERED_ROUTE_POINTS,
   resolveRouteLabelLimit,
   resolveRouteLabelSafeArea,
+  resolveRouteVertexShare,
   QUALITY_PROFILE,
   buildJourneyConnector,
   buildJourneyConnectorPath,
@@ -1303,6 +1304,39 @@ describe("#242 route curve fidelity", () => {
     }
     return worst;
   }
+
+  it("shares the line-vertex pool across every visible route (#242 review)", () => {
+    // One route may not starve the rest. A curvature-aware count asks for
+    // several times the vertices the old angular rule did, so spending the
+    // pool front to back would leave later Journeys as single-segment traces.
+    const routes = 8;
+    let spent = 0;
+    const shares = [];
+    for (let index = 0; index < routes; index += 1) {
+      const share = resolveRouteVertexShare(spent, routes - index);
+      shares.push(share);
+      // Each route asks for its whole share, the worst case for the ones after.
+      spent += share;
+    }
+    expect(shares).toHaveLength(routes);
+    expect(spent).toBeLessThanOrEqual(MAX_RENDERED_ROUTE_LINE_VERTICES);
+    // Nobody is starved, and the last route is not left with a stub.
+    for (const share of shares) {
+      expect(share).toBeGreaterThan(MAX_RENDERED_ROUTE_LINE_VERTICES / (routes * 2));
+    }
+
+    // A frugal route leaves its surplus to the ones after it.
+    expect(resolveRouteVertexShare(0, 4)).toBe(MAX_RENDERED_ROUTE_LINE_VERTICES / 4);
+    expect(resolveRouteVertexShare(64, 3))
+      .toBeGreaterThan(resolveRouteVertexShare(0, 4));
+
+    // A pool already spent yields no budget rather than a negative one, and a
+    // single route may still take all of it.
+    expect(resolveRouteVertexShare(MAX_RENDERED_ROUTE_LINE_VERTICES, 3)).toBe(0);
+    expect(resolveRouteVertexShare(MAX_RENDERED_ROUTE_LINE_VERTICES + 500, 2)).toBe(0);
+    expect(resolveRouteVertexShare(0, 1)).toBe(MAX_RENDERED_ROUTE_LINE_VERTICES);
+    expect(resolveRouteVertexShare(0, 0)).toBe(MAX_RENDERED_ROUTE_LINE_VERTICES);
+  });
 
   it("draws the whole route and its rewind legs from one evaluator", () => {
     for (const points of [shortLegRoute, mixedRoute]) {

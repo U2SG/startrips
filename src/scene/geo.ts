@@ -216,6 +216,24 @@ export function routeArcSegmentCount(
 }
 
 /**
+ * #242 review: the inverse of routeArcSegmentCount - the tallest hump a leg
+ * drawn with `segmentCount` straight segments can carry and still meet
+ * ROUTE_ARC_CHORD_TOLERANCE.
+ *
+ * Under budget pressure a leg can be granted far fewer segments than its hump
+ * asked for. Keeping the full height at that density draws the coarse raised
+ * polygon this change exists to remove, so the decoration is what gives way,
+ * never the fidelity of the path.
+ */
+export function maxRepresentableArcLift(angle: number, segmentCount: number) {
+  if (!(angle > 0) || segmentCount < MIN_LIFTED_ROUTE_ARC_SEGMENTS) return 0;
+  const affordable = 8 * ROUTE_ARC_CHORD_TOLERANCE * segmentCount * segmentCount;
+  const angular = angle * angle;
+  if (affordable <= angular) return 0;
+  return (affordable - angular) / (angular + ROUTE_ARC_LIFT_CURVATURE);
+}
+
+/**
  * The hump peaks mid-leg and is exactly zero at both ends, so a leg endpoint
  * always resolves to the Route Point anchor itself rather than to a value a
  * sine rounds to 1e-26.
@@ -232,6 +250,8 @@ export function routeArcVertexCount(samples: RouteArcSamples) {
 export type RouteArcLegPlan = {
   start: Vector3;
   end: Vector3;
+  /** Angular length of the leg in radians; sizes both the count and the lift. */
+  angle: number;
   heightRatio: number;
   segmentCount: number;
 };
@@ -249,9 +269,10 @@ export type RouteArcLegPlan = {
  * The budget is spread across legs instead of being spent front to back: the
  * old build returned early when it ran out, which silently dropped the tail of
  * a dense route and with it the Route Points on it. Every leg keeps at least
- * one segment, so every stored Route Point survives; a leg squeezed below the
- * segments its hump needs gives the hump up and is drawn as a faithful surface
- * trace, which is the honest degradation rather than an invented shortcut.
+ * one segment, so every stored Route Point survives, and a leg granted fewer
+ * segments than its hump needs gives up as much of the hump as it cannot draw
+ * faithfully. Degradation is always in the decoration first and in the extent
+ * of the route last.
  */
 export function planRouteArcLegs(
   points: readonly GeographicPoint[],
@@ -261,20 +282,33 @@ export function planRouteArcLegs(
 ): RouteArcLegPlan[] {
   if (points.length < 2 || maxVertices < 2) return [];
   const liftRequested = (arc.arcHeightRatio ?? 0) > 0;
+  const availableSegments = Math.floor(maxVertices / 2);
   const plans: RouteArcLegPlan[] = [];
 
-  for (let index = 1; index < points.length; index += 1) {
+  // #242 review: maxVertices is a hard ceiling, and one segment per leg can
+  // already breach it. When it does, sample the Route Points evenly instead of
+  // truncating: a budget this small cannot draw every stored point, and a
+  // coarser line through the WHOLE Journey is a smaller lie than a complete
+  // line through the first half of it. Both ends are always kept.
+  const drawn = points.length - 1 > availableSegments
+    ? Array.from({ length: availableSegments + 1 }, (_, index) => points[
+      Math.round((index * (points.length - 1)) / availableSegments)
+    ])
+    : points;
+
+  for (let index = 1; index < drawn.length; index += 1) {
     const start = latLonToVector3(
-      points[index - 1].lat,
-      points[index - 1].lon,
+      drawn[index - 1].lat,
+      drawn[index - 1].lon,
       1,
     ).normalize();
-    const end = latLonToVector3(points[index].lat, points[index].lon, 1).normalize();
+    const end = latLonToVector3(drawn[index].lat, drawn[index].lon, 1).normalize();
     const angle = Math.acos(Math.min(1, Math.max(-1, start.dot(end))));
     const heightRatio = arcHeightRatioFor(angle, arc);
     plans.push({
       start,
       end,
+      angle,
       heightRatio,
       segmentCount: routeArcSegmentCount(
         angle,
@@ -285,14 +319,13 @@ export function planRouteArcLegs(
     });
   }
 
-  const availableSegments = Math.floor(maxVertices / 2);
   let requested = plans.reduce((sum, plan) => sum + plan.segmentCount, 0);
   if (requested <= availableSegments) return plans;
 
   // Not enough budget for the curve every leg asked for. Scale proportionally,
   // never below one segment, then shave the widest remaining allocations until
-  // the total fits. A leg left with fewer segments than a hump needs is
-  // flattened rather than drawn as a peak.
+  // the total fits. Every leg still has at least one segment here, because the
+  // decimation above guarantees there are no more legs than segments.
   const scale = availableSegments / requested;
   for (const plan of plans) {
     plan.segmentCount = Math.max(1, Math.floor(plan.segmentCount * scale));
@@ -307,8 +340,15 @@ export function planRouteArcLegs(
     widest.segmentCount -= 1;
     requested -= 1;
   }
+  // #242 review: a leg keeps only the hump the segments it was granted can
+  // draw faithfully. The four-segment floor is not the test - a 20 degree leg
+  // that asked for 70 segments and got 10 would clear that floor while drawing
+  // exactly the coarse raised polygon this change removes.
   for (const plan of plans) {
-    if (plan.segmentCount < MIN_LIFTED_ROUTE_ARC_SEGMENTS) plan.heightRatio = 0;
+    plan.heightRatio = Math.min(
+      plan.heightRatio,
+      maxRepresentableArcLift(plan.angle, plan.segmentCount),
+    );
   }
   return plans;
 }
