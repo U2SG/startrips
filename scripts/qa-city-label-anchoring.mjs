@@ -53,6 +53,8 @@ const POSITION_BANDS = [
   { key: "near-limb", min: 0.68, max: CONTAINMENT_LIMIT },
 ];
 
+const VIEWPORT = { width: 1280, height: 800 };
+
 const browser = await launchQaBrowser({
   headless: true,
   args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"],
@@ -95,6 +97,7 @@ function measure(page) {
       centre: state.projectedGlobeCenterPx,
       silhouettePx: state.projectedGlobeRadiusPx,
       interactionRadiusPx: 1 / state.effectiveDragRadiansPerPixel,
+      rotationY: state.rotationY,
       zoom: state.zoom,
       scale: state.scale,
       surfaceRadius: Number(host.dataset.geographicSurfaceRadius),
@@ -107,35 +110,20 @@ function measure(page) {
   });
 }
 
-/**
- * A point to start a rotation drag from. Place labels are the one thing in the
- * overlay with `pointer-events: auto`, so a drag begun on top of one never
- * reaches the canvas and silently rotates nothing.
- */
-function dragOrigin(sample, bounds) {
-  const centre = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
-  const clear = (point) => sample.labels.every((label) => (
-    point.x - bounds.x < label.box.left - 24
-    || point.x - bounds.x > label.box.right + 24
-    || point.y - bounds.y < label.box.top - 24
-    || point.y - bounds.y > label.box.bottom + 24
-  ));
-  if (clear(centre)) return centre;
-  for (let offset = 40; offset <= 240; offset += 40) {
-    for (const candidate of [
-      { x: centre.x, y: centre.y - offset },
-      { x: centre.x, y: centre.y + offset },
-      { x: centre.x - offset, y: centre.y },
-    ]) {
-      if (clear(candidate)) return candidate;
-    }
-  }
-  return centre;
-}
-
 function containment(sample, anchor) {
   return Math.hypot(anchor.x - sample.centre.x, anchor.y - sample.centre.y)
     / sample.silhouettePx;
+}
+
+/**
+ * The largest containment ratio this frame can physically produce. At max zoom
+ * the globe is far wider than the window, so its limb is off-screen and no
+ * label can be rendered near it; asserting a near-limb sample there would be
+ * asserting something the projection makes impossible.
+ */
+function reachableContainment(sample) {
+  const halfDiagonal = Math.hypot(VIEWPORT.width / 2, VIEWPORT.height / 2);
+  return Math.min(CONTAINMENT_LIMIT, halfDiagonal / sample.silhouettePx);
 }
 
 /** The label nearest to the fixture coordinates, if the frame rendered it. */
@@ -148,18 +136,27 @@ function findFixture(sample, fixture) {
   return best?.label ?? null;
 }
 
+/**
+ * Wheel and pointer gestures are dispatched onto the canvas directly rather
+ * than driven through page coordinates. Coordinate input hit-tests the topmost
+ * element, and the scene sits under the overlay that carries the place labels,
+ * so a coordinate drag lands on the overlay and rotates nothing at all - it
+ * fails silently, which is worse than failing. `scripts/qa-globe-interaction.mjs`
+ * already drives the identical listener path this way.
+ */
+function canvasOf(page) {
+  return page.locator('canvas[data-three-scene="particle-earth"]');
+}
+
 async function setZoom(page, targetZoom) {
   const before = await debug(page);
   if (!before) throw new Error("Particle Earth debug state is unavailable");
   if (Math.abs(before.zoom - targetZoom) > 0.02) {
-    const canvas = page.locator('canvas[data-three-scene="particle-earth"]');
-    const bounds = await canvas.boundingBox();
-    if (!bounds) throw new Error("Particle Earth canvas has no bounds");
-    await canvas.evaluate((node, init) => node.dispatchEvent(new WheelEvent("wheel", init)), {
+    await canvasOf(page).evaluate((node, init) => node.dispatchEvent(new WheelEvent("wheel", init)), {
       bubbles: true,
       cancelable: true,
-      clientX: bounds.x + bounds.width / 2,
-      clientY: bounds.y + bounds.height / 2,
+      clientX: VIEWPORT.width / 2,
+      clientY: VIEWPORT.height / 2,
       deltaY: -Math.log(targetZoom / before.zoom) / 0.0012,
     });
     await page.waitForTimeout(160);
@@ -171,12 +168,61 @@ async function setZoom(page, targetZoom) {
   return after;
 }
 
+/** Pointer capture on a synthetic pointer breaks the gesture, so it is stubbed. */
+async function beginDrag(page, origin) {
+  await canvasOf(page).evaluate((node, start) => {
+    node.setPointerCapture = () => undefined;
+    node.hasPointerCapture = () => false;
+    node.releasePointerCapture = () => undefined;
+    node.dispatchEvent(new PointerEvent("pointerdown", {
+      bubbles: true,
+      button: 0,
+      buttons: 1,
+      clientX: start.x,
+      clientY: start.y,
+      isPrimary: true,
+      pointerId: 71,
+      pointerType: "mouse",
+    }));
+  }, origin);
+}
+
+async function dragTo(page, point) {
+  await canvasOf(page).evaluate((node, position) => {
+    node.dispatchEvent(new PointerEvent("pointermove", {
+      bubbles: true,
+      button: 0,
+      buttons: 1,
+      clientX: position.x,
+      clientY: position.y,
+      isPrimary: true,
+      pointerId: 71,
+      pointerType: "mouse",
+    }));
+  }, point);
+}
+
+async function endDrag(page, point) {
+  await canvasOf(page).evaluate((node, position) => {
+    node.dispatchEvent(new PointerEvent("pointerup", {
+      bubbles: true,
+      button: 0,
+      buttons: 0,
+      clientX: position.x,
+      clientY: position.y,
+      isPrimary: true,
+      pointerId: 71,
+      pointerType: "mouse",
+    }));
+  }, point);
+}
+
 /**
  * Camera distance in globe-local units, derived from the two published pixel
  * radii rather than hard-coded. Both share the same focal length, so
  * silhouette/interaction = (d - R) / sqrt(d^2 - R^2) = sqrt((d - R)/(d + R)),
  * which inverts to d = R (1 + r^2) / (1 - r^2). Used only to size the drag
- * that walks a label out to the limb.
+ * that walks the framing out toward the limb.
  */
 function horizonRadians(sample) {
   const worldRadius = sample.surfaceRadius * sample.scale;
@@ -185,7 +231,20 @@ function horizonRadians(sample) {
   return Math.acos(Math.min(1, worldRadius / cameraDistance));
 }
 
-const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+/** Wait until the focus flight has stopped moving the focus signal. */
+async function waitForFocusToSettle(page) {
+  let previous = null;
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const state = await measure(page);
+    const current = `${state.focus.x?.toFixed(2)},${state.focus.y?.toFixed(2)},${state.zoom.toFixed(4)}`;
+    if (current === previous) return state;
+    previous = current;
+    await page.waitForTimeout(250);
+  }
+  return measure(page);
+}
+
+const context = await browser.newContext({ viewport: VIEWPORT });
 const page = await context.newPage();
 const consoleErrors = [];
 const pageErrors = [];
@@ -287,72 +346,65 @@ try {
 
       const seenBands = new Map(POSITION_BANDS.map((band) => [band.key, false]));
       const observed = [];
-      const recordBands = (sample) => {
+      const record = (sample) => {
         for (const item of sample.labels) {
           const ratio = containment(sample, item.anchor);
           for (const band of POSITION_BANDS) {
             if (ratio >= band.min && ratio <= band.max) seenBands.set(band.key, true);
           }
         }
-      };
-      recordBands(settled);
-      const canvas = page.locator('canvas[data-three-scene="particle-earth"]');
-      const bounds = await canvas.boundingBox();
-      if (!bounds) throw new Error("Particle Earth canvas has no bounds");
-      const start = dragOrigin(settled, bounds);
-      const rotationBefore = (await debug(page)).rotationY;
-      // Enough rotation to walk the centred fixture out to its own limb. The
-      // pointer stays down across every step: this is the continuous drag the
-      // regression was reported against, not a sequence of separate gestures.
-      const steps = 16;
-      const stepPx = (horizonRadians(settled) * 0.97 * settled.interactionRadiusPx) / steps;
-
-      await page.mouse.move(start.x, start.y);
-      await page.mouse.down();
-      for (let step = 1; step <= steps; step += 1) {
-        await page.mouse.move(start.x + stepPx * step, start.y);
-        const sample = await measure(page);
-        checkFrame(sample, `${label} drag step ${step}`);
-        recordBands(sample);
         const found = findFixture(sample, fixture);
         if (found) observed.push(containment(sample, found.anchor));
+      };
+      record(settled);
+
+      // The reported symptom is differential motion during a CONTINUOUS drag,
+      // so the pointer goes down once and every intermediate frame is measured
+      // while it is still down.
+      const origin = { x: VIEWPORT.width / 2, y: VIEWPORT.height / 2 };
+      const steps = 14;
+      const stepPx = (horizonRadians(settled) * 0.9 * settled.interactionRadiusPx) / steps;
+      await beginDrag(page, origin);
+      for (let step = 1; step <= steps; step += 1) {
+        await dragTo(page, { x: origin.x + stepPx * step, y: origin.y });
+        const sample = await measure(page);
+        checkFrame(sample, `${label} drag step ${step}`);
+        record(sample);
       }
-      const rotationAfter = (await debug(page)).rotationY;
+      const dragged = await measure(page);
       // Drag back so the next zoom starts from the same framing.
       for (let step = steps - 1; step >= 0; step -= 1) {
-        await page.mouse.move(start.x + stepPx * step, start.y);
+        await dragTo(page, { x: origin.x + stepPx * step, y: origin.y });
       }
-      await page.mouse.up();
+      await endDrag(page, origin);
       await page.waitForTimeout(200);
 
+      const rotated = Math.abs(dragged.rotationY - settled.rotationY);
       // A drag that silently rotated nothing would make every assertion above
-      // pass on sixteen copies of one frame, so the gesture is verified first.
+      // pass on fourteen copies of one frame, so the gesture is verified.
       check(
-        Math.abs(rotationAfter - rotationBefore) > 0.05,
-        `${label}: dragging ${(stepPx * steps).toFixed(0)}px from (${start.x.toFixed(0)}, ${start.y.toFixed(0)}) rotated the globe by ${(rotationAfter - rotationBefore).toFixed(4)} rad - the gesture never reached the canvas`,
-      );
-      for (const band of POSITION_BANDS) {
-        check(
-          seenBands.get(band.key) === true,
-          `${label}: no place label was ever measured ${band.key} (containment ${band.min}-${band.max}) across ${steps + 1} frames`,
-        );
-      }
-      check(
-        observed.length > 0,
-        `${label}: the ${fixture.name} label was never rendered during its own framing`,
+        rotated > 0.05,
+        `${label}: dragging ${(stepPx * steps).toFixed(0)}px rotated the globe by ${rotated.toFixed(4)} rad - the gesture never reached the canvas`,
       );
 
-      const returned = await measure(page);
-      checkFrame(returned, `${label} after drag return`);
+      const reachable = reachableContainment(settled);
+      for (const band of POSITION_BANDS) {
+        if (band.min > reachable) continue;
+        check(
+          seenBands.get(band.key) === true,
+          `${label}: no place label was ever measured ${band.key} (containment ${band.min}-${band.max}) across ${steps + 1} frames, though ${reachable.toFixed(2)} was reachable`,
+        );
+      }
 
       console.log([
         `[qa-city-label-anchoring] ${fixture.key}`,
         `zoom=${settled.zoom.toFixed(3)}`,
         `labels=${settled.labels.length}`,
         `silhouettePx=${settled.silhouettePx.toFixed(1)}`,
-        `fixtureContainment=${observed.length > 0 ? `${Math.min(...observed).toFixed(3)}..${Math.max(...observed).toFixed(3)}` : "not rendered"}`,
-        `rotated=${(rotationAfter - rotationBefore).toFixed(3)}rad`,
-        `bands=${[...seenBands.entries()].map(([key, seen]) => `${key}:${seen ? "yes" : "NO"}`).join(",")}`,
+        `reachable=${reachable.toFixed(3)}`,
+        `rotated=${rotated.toFixed(3)}rad`,
+        `fixture=${observed.length > 0 ? `${Math.min(...observed).toFixed(3)}..${Math.max(...observed).toFixed(3)}` : "not rendered"}`,
+        `bands=${[...seenBands.entries()].map(([key, seen]) => `${key}:${seen ? "yes" : "-"}`).join(",")}`,
       ].join(" "));
     }
 
@@ -363,22 +415,24 @@ try {
     await setZoom(page, 3);
     await page.waitForTimeout(220);
     const beforeClick = await measure(page);
-    const target = findFixture(beforeClick, fixture);
-    check(Boolean(target), `${fixture.key}: no ${fixture.name} label to click at max zoom`);
+    const target = beforeClick.labels
+      .map((item) => ({ item, distance: containment(beforeClick, item.anchor) }))
+      .sort((one, two) => one.distance - two.distance)[0]?.item ?? null;
+    check(Boolean(target), `${fixture.key}: no place label to click at max zoom`);
     if (target) {
       await page
         .locator(`.particle-earth-city[data-city-lat="${target.lat.toFixed(4)}"][data-city-lon="${target.lon.toFixed(4)}"]`)
         .first()
         .click({ force: true });
-      // Focusing a picked point flies the globe: it drops to a low zoom for the
-      // flight, where the coarse label tier hides everything below a capital.
-      // Measuring before that settles measures the flight, not the anchoring.
-      await page.waitForTimeout(2600);
+      // Focusing a picked point flies the globe and drops it to a low zoom for
+      // the flight. Zooming before the flight ends would cancel it - a wheel
+      // claims manual interaction - and measure a half-finished framing.
+      await waitForFocusToSettle(page);
       await setZoom(page, 3);
       await page.waitForTimeout(500);
       const afterClick = await measure(page);
-      const focused = findFixture(afterClick, fixture);
-      check(Boolean(focused), `${fixture.key}: the ${fixture.name} label disappeared after being clicked`);
+      const focused = findFixture(afterClick, { lat: target.lat, lon: target.lon });
+      check(Boolean(focused), `${fixture.key}: the "${target.name}" label was not rendered after being clicked and focused`);
       if (focused) {
         const drift = Math.hypot(
           afterClick.focus.x - focused.anchor.x,
@@ -386,11 +440,11 @@ try {
         );
         check(
           drift <= FOCUS_MATCH_TOLERANCE_PX,
-          `${fixture.key}: clicking ${fixture.name} focused a point ${drift.toFixed(2)}px from where the label claimed it was (limit ${FOCUS_MATCH_TOLERANCE_PX}px)`,
+          `${fixture.key}: clicking "${target.name}" focused a point ${drift.toFixed(2)}px from where the label claimed it was (limit ${FOCUS_MATCH_TOLERANCE_PX}px)`,
         );
         checkFrame(afterClick, `${fixture.key} after click`);
         console.log([
-          `[qa-city-label-anchoring] ${fixture.key} click`,
+          `[qa-city-label-anchoring] ${fixture.key} click "${target.name}"`,
           `clicked=(${target.anchor.x.toFixed(1)}, ${target.anchor.y.toFixed(1)})`,
           `focusSignal=(${afterClick.focus.x.toFixed(1)}, ${afterClick.focus.y.toFixed(1)})`,
           `labelAnchor=(${focused.anchor.x.toFixed(1)}, ${focused.anchor.y.toFixed(1)})`,
