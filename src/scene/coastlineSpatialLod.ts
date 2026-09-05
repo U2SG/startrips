@@ -1,4 +1,4 @@
-import { buildSphericalRingSegments } from "./geo";
+import { GEOGRAPHIC_SURFACE_RADIUS, buildSphericalRingSegments } from "./geo";
 import {
   resolveParticleRefinementRegion,
   type ParticleRefinementRegion,
@@ -98,7 +98,11 @@ export function buildRegionalCoastlinePositions({
   rings,
   region,
   quality,
-  radius = 1.405,
+  // #237: regional refinement is the same map layer at higher detail, so it is
+  // built on the canonical geographic surface rather than on a shell of its
+  // own. A caller may still pass a radius, but there is no longer a second
+  // default for the coastline to drift onto.
+  radius = GEOGRAPHIC_SURFACE_RADIUS,
 }: {
   rings: readonly (readonly (readonly number[])[])[];
   region: CoastlineRefinementRegion;

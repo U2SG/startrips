@@ -6,7 +6,6 @@ import {
   BufferGeometry,
   Color,
   DirectionalLight,
-  Euler,
   Group,
   LineBasicMaterial,
   LineSegments,
@@ -90,6 +89,17 @@ import {
   type ParticleRefinementRegion,
   type RegionalLandSample,
 } from "./particleSpatialLod";
+import {
+  composeGlobeModelMatrix,
+  createGeoProjectionFrame,
+  isLocalPointInsideClipViewport,
+  isSphericalPointVisible,
+  projectGeographicAnchor,
+  projectGeographicAnchorToViewport,
+  projectLocalPoint,
+  updateGeoProjectionFrame,
+  type GeoProjectionFrame,
+} from "./projection";
 import { disposeSceneGraph, useThreeScene } from "./useThreeScene";
 import {
   resolveGlobeSemanticZoom,
@@ -113,6 +123,86 @@ export const CITY_LABEL_BUDGET = 72;
 export const MAX_RENDERED_COASTLINE_VERTICES = 20_000;
 export const COASTLINE_LOD_VERTEX_BUDGET = { far: 20_000, mid: 32_000, near: 52_000 } as const;
 export type CoastlineLod = keyof typeof COASTLINE_LOD_VERTEX_BUDGET;
+/**
+ * #237 Phase A - the coastline reads above the particle surface through DEPTH,
+ * not through a larger radius.
+ *
+ * The coastline now shares GEOGRAPHIC_SURFACE_RADIUS with the surface sphere it
+ * is drawn against, and that sphere writes depth on every frame (its material
+ * is transparent but `depthWrite` is on, which is what hides the far side of
+ * the planet). A 64x40 SphereGeometry is INSCRIBED in the sphere it
+ * approximates, so a coastline vertex on the analytic radius is at worst
+ * coplanar with it and never inside it; with the default LEQUAL depth function
+ * that already passes. "At worst coplanar" is decided by float noise though,
+ * so an explicit bias is what turns a coin flip along the mesh's own vertices
+ * into a guarantee.
+ *
+ * The bias is applied to CLIP-SPACE Z ONLY, scaled by the clip W so it is a
+ * constant offset in normalised device coordinates at any distance. Clip x, y
+ * and w are untouched, so the projected screen position of a coastline vertex
+ * is bit-for-bit the position the shared projection frame computes for the same
+ * latitude/longitude - which is the whole point of the change. An eye-space
+ * offset would have been wrong here: moving z in eye space changes w, and
+ * therefore moves x and y on screen.
+ *
+ * The bias tapers with how directly the vertex faces the camera. At the limb it
+ * falls to zero and on the far side it is clamped away entirely, so the near
+ * side gets its guarantee while the far side stays occluded by exactly the same
+ * depth test as before.
+ */
+export const COASTLINE_DEPTH_POLICY = {
+  depthTest: true,
+  depthWrite: false,
+  /**
+   * In NDC units. The worst case it has to clear is the sagitta of the
+   * surface mesh's own tessellation - about 0.0027 globe-local units at the
+   * widest 64x40 quad - which reaches roughly 0.0011 NDC at maximum zoom.
+   */
+  ndcDepthBias: 0.0035,
+} as const;
+
+/**
+ * The largest distance, in globe-local units, by which the inscribed
+ * SphereGeometry falls inside the analytic sphere the geographic layers use.
+ * Documented as a number because it is what sizes ndcDepthBias.
+ */
+export const SURFACE_TESSELLATION_SAGITTA =
+  GEOGRAPHIC_SURFACE_RADIUS * (1 - Math.cos(Math.PI / 64));
+
+export function createCoastlineMaterial() {
+  const material = new LineBasicMaterial({
+    blending: AdditiveBlending,
+    color: 0x7af4ed,
+    depthTest: COASTLINE_DEPTH_POLICY.depthTest,
+    depthWrite: COASTLINE_DEPTH_POLICY.depthWrite,
+    opacity: 0,
+    transparent: true,
+  });
+  material.onBeforeCompile = applyCoastlineDepthBias;
+  return material;
+}
+
+/** Exported for assertion: the patch may move clip z and nothing else. */
+export const COASTLINE_DEPTH_BIAS_CHUNK = `
+  vec3 coastlineNormal = normalize(position);
+  vec3 coastlineWorld = (modelMatrix * vec4(position, 1.0)).xyz;
+  vec3 coastlineWorldNormal = normalize(mat3(modelMatrix) * coastlineNormal);
+  float coastlineFacing = clamp(
+    dot(coastlineWorldNormal, normalize(cameraPosition - coastlineWorld)),
+    0.0,
+    1.0
+  );
+  gl_Position.z -= ${COASTLINE_DEPTH_POLICY.ndcDepthBias.toFixed(5)} * coastlineFacing * gl_Position.w;
+`;
+
+export function applyCoastlineDepthBias(shader: { vertexShader: string }) {
+  shader.vertexShader = shader.vertexShader.replace(
+    "#include <fog_vertex>",
+    `#include <fog_vertex>
+${COASTLINE_DEPTH_BIAS_CHUNK}`,
+  );
+}
+
 export const GLOBE_RENDER_ORDER = {
   relief: -1,
   particle: 0,
@@ -562,6 +652,13 @@ export function getRouteFocusPhase(
   return routeFocusZoomResetting ? "releasing" : "idle";
 }
 
+/**
+ * #237: horizon occlusion and the cheap clip-space scan are properties of the
+ * shared projection frame, so they live in ./projection. They stay exported
+ * here because they are part of this module's established surface.
+ */
+export { isLocalPointInsideClipViewport, isSphericalPointVisible };
+
 export function isProjectedPointInsideViewport(
   x: number,
   y: number,
@@ -578,41 +675,6 @@ export function isProjectedPointInsideViewport(
     && y <= height;
 }
 
-export function isLocalPointInsideClipViewport(
-  matrixElements: readonly number[],
-  x: number,
-  y: number,
-  z: number,
-): boolean {
-  if (matrixElements.length < 16) return false;
-  const clipX = matrixElements[0] * x
-    + matrixElements[4] * y
-    + matrixElements[8] * z
-    + matrixElements[12];
-  const clipY = matrixElements[1] * x
-    + matrixElements[5] * y
-    + matrixElements[9] * z
-    + matrixElements[13];
-  const clipZ = matrixElements[2] * x
-    + matrixElements[6] * y
-    + matrixElements[10] * z
-    + matrixElements[14];
-  const clipW = matrixElements[3] * x
-    + matrixElements[7] * y
-    + matrixElements[11] * z
-    + matrixElements[15];
-  return Number.isFinite(clipX)
-    && Number.isFinite(clipY)
-    && Number.isFinite(clipZ)
-    && Number.isFinite(clipW)
-    && clipW > 0
-    && clipX >= -clipW
-    && clipX <= clipW
-    && clipY >= -clipW
-    && clipY <= clipW
-    && clipZ >= -clipW
-    && clipZ <= clipW;
-}
 
 export type RouteLabelSafeArea = {
   left: number;
@@ -685,34 +747,6 @@ export function selectRouteLabelPointIndexes(
 
 type ProjectedRoutePoint = { x: number; y: number };
 
-export function isSphericalPointVisible(
-  camera: Vector3,
-  point: Vector3,
-  occluderRadius = GLOBE_SURFACE_RADIUS,
-) {
-  const directionX = point.x - camera.x;
-  const directionY = point.y - camera.y;
-  const directionZ = point.z - camera.z;
-  const directionLengthSquared =
-    directionX * directionX
-    + directionY * directionY
-    + directionZ * directionZ;
-  if (directionLengthSquared === 0) return true;
-  const closestProgress = -(
-    camera.x * directionX
-    + camera.y * directionY
-    + camera.z * directionZ
-  ) / directionLengthSquared;
-  if (closestProgress <= 0 || closestProgress >= 1) return true;
-  const closestX = camera.x + directionX * closestProgress;
-  const closestY = camera.y + directionY * closestProgress;
-  const closestZ = camera.z + directionZ * closestProgress;
-  return (
-    closestX * closestX
-    + closestY * closestY
-    + closestZ * closestZ
-  ) >= occluderRadius * occluderRadius;
-}
 
 export type ProjectedRoutePath = {
   d: string;
@@ -1400,12 +1434,20 @@ async function buildLandVisualData(count: number) {
     particlePositions: points,
     coastlinePositions: buildSphericalRingSegments(
       source.rings,
-      1.405,
+      GEOGRAPHIC_SURFACE_RADIUS,
       MAX_RENDERED_COASTLINE_VERTICES,
     ),
     detailedCoastlinePositions: {
-      mid: buildSphericalRingSegments(source.rings, 1.405, COASTLINE_LOD_VERTEX_BUDGET.mid),
-      near: buildSphericalRingSegments(source.rings, 1.405, COASTLINE_LOD_VERTEX_BUDGET.near),
+      mid: buildSphericalRingSegments(
+        source.rings,
+        GEOGRAPHIC_SURFACE_RADIUS,
+        COASTLINE_LOD_VERTEX_BUDGET.mid,
+      ),
+      near: buildSphericalRingSegments(
+        source.rings,
+        GEOGRAPHIC_SURFACE_RADIUS,
+        COASTLINE_LOD_VERTEX_BUDGET.near,
+      ),
     },
     landSourceAvailable: true,
   };
@@ -1426,7 +1468,11 @@ async function loadDetailedCoastlineData() {
     });
     return {
       rings,
-      mid: buildSphericalRingSegments(rings, 1.405, COASTLINE_LOD_VERTEX_BUDGET.mid),
+      mid: buildSphericalRingSegments(
+        rings,
+        GEOGRAPHIC_SURFACE_RADIUS,
+        COASTLINE_LOD_VERTEX_BUDGET.mid,
+      ),
     };
   } catch {
     return null;
@@ -1457,6 +1503,9 @@ function buildRegionalClusterPositions(
     const angle = ((index * 0.414213562373095 + 0.61) % 1) * Math.PI * 2;
     const lat = center.lat + Math.sin(angle) * radial * spread.lat * 0.5;
     const lon = center.lon + Math.cos(angle) * radial * spread.lon * 0.5;
+    // #237: the archive cluster is decoration, not a geographic reference
+    // layer - nothing reads a latitude/longitude off it - so it keeps its own
+    // jittered shell rather than joining GEOGRAPHIC_SURFACE_RADIUS.
     const radius = 1.405 + ((index * 31) % 17) * 0.002;
     latLonToVector3(lat, lon, radius).toArray(positions, index * 3);
   }
@@ -1710,9 +1759,16 @@ export function ParticleEarthScene({
       -0.03,
     );
     scene.add(globe);
-    const focusProjectionEuler = new Euler();
-    const focusProjectionWorld = new Vector3();
     const focusProjectionScreen = new Vector2();
+    // #237: the focus solver used to apply an Euler, a scalar and the viewport
+    // mapping by hand - a third spelling of the projection. It now COMPOSES the
+    // candidate placement into the same model matrix Object3D builds and reads
+    // it through the same frame, so "where would this place land if the globe
+    // were rotated like this" is answered by the projection authority rather
+    // than by an algebraically-equal copy of it.
+    const focusCandidateFrame = createGeoProjectionFrame();
+    const focusCandidateModel = new Matrix4();
+    const focusCandidatePoint = { x: 0, y: 0 };
     const projectFocusPointForRotation = (
       point: { lat: number; lon: number },
       rotationX: number,
@@ -1723,18 +1779,30 @@ export function ParticleEarthScene({
       targetScreen: Vector2,
       pointRadius = ROUTE_ANCHOR_RADIUS,
     ) => {
-      focusProjectionWorld
-        .copy(latLonToVector3(point.lat, point.lon, pointRadius))
-        .applyEuler(focusProjectionEuler.set(rotationX, rotationY, globe.rotation.z))
-        .multiplyScalar(scale);
-      focusProjectionWorld.x += positionX;
-      focusProjectionWorld.y += positionY;
-      focusProjectionWorld.z += globe.position.z;
-      focusProjectionWorld.project(camera);
-      return targetScreen.set(
-        ((focusProjectionWorld.x + 1) * targetSize.x) / 2,
-        ((1 - focusProjectionWorld.y) * targetSize.y) / 2,
+      composeGlobeModelMatrix(focusCandidateModel, {
+        rotationX,
+        rotationY,
+        rotationZ: globe.rotation.z,
+        scale,
+        positionX,
+        positionY,
+        positionZ: globe.position.z,
+      });
+      updateGeoProjectionFrame(
+        focusCandidateFrame,
+        camera,
+        focusCandidateModel,
+        targetSize.x,
+        targetSize.y,
       );
+      projectGeographicAnchorToViewport(
+        focusCandidateFrame,
+        point.lat,
+        point.lon,
+        focusCandidatePoint,
+        pointRadius,
+      );
+      return targetScreen.set(focusCandidatePoint.x, focusCandidatePoint.y);
     };
     const solveFocusRotationForViewport = (
       point: { lat: number; lon: number },
@@ -1891,21 +1959,17 @@ export function ParticleEarthScene({
     globe.add(wire);
 
     let coastlineGeometry = new BufferGeometry();
-    const coastlineMaterial = new LineBasicMaterial({
-      blending: AdditiveBlending,
-      color: 0x7af4ed,
-      depthTest: true,
-      depthWrite: false,
-      opacity: 0,
-      transparent: true,
-    });
+    const coastlineMaterial = createCoastlineMaterial();
     const coastlines = new LineSegments(coastlineGeometry, coastlineMaterial);
     coastlines.renderOrder = GLOBE_RENDER_ORDER.coastline;
     globe.add(coastlines);
     let midCoastlineGeometry = new BufferGeometry();
     let nearCoastlineGeometry = new BufferGeometry();
-    const midCoastlineMaterial = coastlineMaterial.clone();
-    const nearCoastlineMaterial = coastlineMaterial.clone();
+    // #237: built through the factory rather than cloned - Material.copy does
+    // not carry onBeforeCompile, so a clone would silently lose the depth bias
+    // and only the far LOD would keep it.
+    const midCoastlineMaterial = createCoastlineMaterial();
+    const nearCoastlineMaterial = createCoastlineMaterial();
     const midCoastlines = new LineSegments(midCoastlineGeometry, midCoastlineMaterial);
     const nearCoastlines = new LineSegments(nearCoastlineGeometry, nearCoastlineMaterial);
     midCoastlines.renderOrder = GLOBE_RENDER_ORDER.coastline;
@@ -2016,6 +2080,7 @@ export function ParticleEarthScene({
     const shellGeometry = new BufferGeometry();
     const shellPositions = buildSeededSpherePoints(3_200, 2087);
     for (let index = 0; index < shellPositions.length; index += 1) {
+      // #237: decorative archive shell, deliberately not a geographic layer.
       shellPositions[index] *= 1.405;
     }
     shellGeometry.setAttribute("position", new BufferAttribute(shellPositions, 3));
@@ -2087,7 +2152,8 @@ export function ParticleEarthScene({
     const personalSignal = new Points(personalGeometry, personalMaterial);
     personalSignal.renderOrder = GLOBE_RENDER_ORDER.personalPoint;
     globe.add(personalSignal);
-    const personalScreenPosition = new Vector3();
+    const focusSignalScreenPoint = { x: 0, y: 0 };
+    const coastlineAnchorWorld = new Vector3();
 
     let routePointGeometry = new BufferGeometry();
     const routePointMaterial = new PointsMaterial({
@@ -2138,18 +2204,21 @@ export function ParticleEarthScene({
     let routeVectorEntries: RouteVectorEntry[] = [];
     let routeVectorOpacity = 0;
     const sceneToken = Math.random().toString(36).slice(2, 8);
-    const routeCameraPosition = new Vector3();
+    // #237: ONE projection frame for every geographic layer. Place Labels,
+    // Route Point anchors, the Journey connector, the focus signal and the
+    // coastline QA anchor all read this frame, so a latitude/longitude yields
+    // one screen coordinate no matter which layer asks for it.
+    const geoFrame = createGeoProjectionFrame();
+    const routeCameraPosition = geoFrame.cameraLocal;
     const routeLocalPoint = new Vector3();
-    const routeScreenPoint = new Vector3();
     const routeProjectedPoint = { x: 0, y: 0 };
-    const cityClipMatrix = new Matrix4();
     const isCityCandidateInsideViewport = (city: CityPoint) => {
       const x = city.direction[0] * ROUTE_ANCHOR_RADIUS;
       const y = city.direction[1] * ROUTE_ANCHOR_RADIUS;
       const z = city.direction[2] * ROUTE_ANCHOR_RADIUS;
       routeLocalPoint.set(x, y, z);
       if (!isSphericalPointVisible(routeCameraPosition, routeLocalPoint)) return false;
-      return isLocalPointInsideClipViewport(cityClipMatrix.elements, x, y, z);
+      return isLocalPointInsideClipViewport(geoFrame.clip.elements, x, y, z);
     };
     // Slots 10..13 carry the active card's bounds so a still globe still
     // redraws the connector when the card moves or the layout changes; the
@@ -2526,24 +2595,94 @@ export function ParticleEarthScene({
       y: number,
       z: number,
       target: ProjectedRoutePoint,
+    ) => projectLocalPoint(geoFrame, x, y, z, target);
+
+    // #237 QA anchor: a real vertex of the coastline the frame is DRAWING,
+    // projected through the shared frame and published beside the place-label
+    // anchors. That is what lets a browser lane compare the motion of "the map"
+    // against the motion of a label naming the same vicinity, instead of
+    // comparing a label against a second copy of the label's own maths.
+    //
+    // The vertex is chosen once per (geometry, query point) pair rather than
+    // per frame: coastline geometry lives in globe-local space and does not
+    // move when the globe rotates, so the nearest vertex only changes when the
+    // buffer is rebuilt by a LOD or refinement switch. Its own latitude and
+    // longitude are published as its identity so a lane can tell a rebuild
+    // apart from motion.
+    let coastlineAnchorSource: BufferAttribute | null = null;
+    let coastlineAnchorQuery: string | null = null;
+    let coastlineAnchorVertex: { x: number; y: number; z: number } | null = null;
+    const coastlineAnchorPoint = { x: 0, y: 0 };
+    const selectCoastlineAnchorVertex = (
+      positions: BufferAttribute,
+      query: { lat: number; lon: number },
     ) => {
-      routeLocalPoint.set(x, y, z);
-      if (!isSphericalPointVisible(routeCameraPosition, routeLocalPoint)) return false;
-      routeScreenPoint
-        .copy(routeLocalPoint)
-        .applyMatrix4(globe.matrixWorld)
-        .project(camera);
-      if (
-        !Number.isFinite(routeScreenPoint.x)
-        || !Number.isFinite(routeScreenPoint.y)
-        || routeScreenPoint.z < -1
-        || routeScreenPoint.z > 1
-      ) {
-        return false;
+      const target = latLonToVector3(query.lat, query.lon, GEOGRAPHIC_SURFACE_RADIUS);
+      let bestIndex = -1;
+      let bestDistance = Number.POSITIVE_INFINITY;
+      for (let index = 0; index < positions.count; index += 1) {
+        const x = positions.getX(index);
+        const y = positions.getY(index);
+        const z = positions.getZ(index);
+        const distance = (x - target.x) ** 2 + (y - target.y) ** 2 + (z - target.z) ** 2;
+        if (distance < bestDistance) {
+          bestDistance = distance;
+          bestIndex = index;
+        }
       }
-      target.x = ((routeScreenPoint.x + 1) * targetSize.x) / 2;
-      target.y = ((1 - routeScreenPoint.y) * targetSize.y) / 2;
-      return true;
+      if (bestIndex < 0) return null;
+      return {
+        x: positions.getX(bestIndex),
+        y: positions.getY(bestIndex),
+        z: positions.getZ(bestIndex),
+      };
+    };
+    const publishCoastlineAnchor = () => {
+      const query = latestFocusPoint.current;
+      const lod = semanticZoomState.coastlineLod;
+      const readPositions = (geometry: BufferGeometry) => {
+        const attribute = geometry.getAttribute("position") as BufferAttribute | undefined;
+        return attribute && attribute.count > 0 ? attribute : null;
+      };
+      // The active LOD is what the viewer is looking at, so that is what is
+      // measured. The far buffer is the fallback because it is built once at
+      // scene setup and never empty, and a detail buffer can legitimately be
+      // empty for a frame while a refinement chunk is being rebuilt.
+      const positions = readPositions(
+        lod === "far"
+          ? coastlineGeometry
+          : lod === "mid" ? midCoastlineGeometry : nearCoastlineGeometry,
+      ) ?? readPositions(coastlineGeometry);
+      if (!query || !positions) {
+        coastlineAnchorSource = null;
+        coastlineAnchorQuery = null;
+        coastlineAnchorVertex = null;
+        delete host.dataset.coastlineAnchorX;
+        delete host.dataset.coastlineAnchorY;
+        delete host.dataset.coastlineAnchorLat;
+        delete host.dataset.coastlineAnchorLon;
+        delete host.dataset.coastlineAnchorRadius;
+        return;
+      }
+      const queryKey = `${query.lat.toFixed(4)}:${query.lon.toFixed(4)}`;
+      if (positions !== coastlineAnchorSource || queryKey !== coastlineAnchorQuery) {
+        coastlineAnchorSource = positions;
+        coastlineAnchorQuery = queryKey;
+        coastlineAnchorVertex = selectCoastlineAnchorVertex(positions, query);
+      }
+      const vertex = coastlineAnchorVertex;
+      if (!vertex) return;
+      const geographic = vector3ToLatLon(coastlineAnchorWorld.set(vertex.x, vertex.y, vertex.z));
+      host.dataset.coastlineAnchorLat = geographic.lat.toFixed(4);
+      host.dataset.coastlineAnchorLon = geographic.lon.toFixed(4);
+      host.dataset.coastlineAnchorRadius = coastlineAnchorWorld.length().toFixed(3);
+      if (projectLocalPoint(geoFrame, vertex.x, vertex.y, vertex.z, coastlineAnchorPoint)) {
+        host.dataset.coastlineAnchorX = coastlineAnchorPoint.x.toFixed(2);
+        host.dataset.coastlineAnchorY = coastlineAnchorPoint.y.toFixed(2);
+      } else {
+        delete host.dataset.coastlineAnchorX;
+        delete host.dataset.coastlineAnchorY;
+      }
     };
 
     // ML-09 city labels: GeoNames cities15000 with containment-aware zoom —
@@ -2712,7 +2851,7 @@ export function ParticleEarthScene({
       renderedRouteProjectionRevision = routeProjectionRevision;
       camera.updateMatrixWorld();
       globe.updateWorldMatrix(true, false);
-      globe.worldToLocal(routeCameraPosition.copy(camera.position));
+      updateGeoProjectionFrame(geoFrame, camera, globe.matrixWorld, targetSize.x, targetSize.y);
 
       const labelBoxes: ProjectedRouteLabelBox[] = [];
       const labelLimit = resolveRouteLabelLimit(currentCompactMobileLayout);
@@ -2954,6 +3093,13 @@ export function ParticleEarthScene({
       host.dataset.routeEndpointMaxErrorPx = routeEndpointMaxErrorPx.toFixed(3);
       host.dataset.cityLabelAnchorRadius = ROUTE_ANCHOR_RADIUS.toFixed(3);
       host.dataset.geographicSurfaceRadius = GLOBE_SURFACE_RADIUS.toFixed(3);
+      // #237: the coastline is the layer a viewer READS as the map, so it
+      // publishes its own semantic radius next to the surface's. The two being
+      // equal is the invariant; a regression that puts a map layer back on a
+      // shell of its own shows up here before anyone has to look at a globe.
+      host.dataset.coastlineSemanticRadius = GEOGRAPHIC_SURFACE_RADIUS.toFixed(3);
+      host.dataset.projectionSpace = "single";
+      publishCoastlineAnchor();
       host.dataset.journeyRouteVisibleLabelCount = String(visibleLabelCount);
       host.dataset.journeyRouteLabelSafeRight = routeLabelSafeArea.right.toFixed(1);
       host.dataset.journeyRouteLabelSafeBottom = routeLabelSafeArea.bottom.toFixed(1);
@@ -2998,13 +3144,12 @@ export function ParticleEarthScene({
         // dense metro labels, while route labels still win every collision.
         const facingThreshold = cityLabelFacingThreshold(scale);
         const maxRank = tier === "capitals" ? 1 : tier === "prefectures" ? 2 : 3;
-        // Precompute local -> clip once for this projection state. The regional
-        // all-tier scan can contain ~15k cities; a scalar clip/frustum check
-        // keeps that scan cheap, while full camera projection remains bounded
-        // to the <=72 retained labels below (plus the <=72 persistence snapshot).
-        cityClipMatrix
-          .multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)
-          .multiply(globe.matrixWorld);
+        // The regional all-tier scan can contain ~15k cities, so a scalar
+        // clip/frustum check against the shared frame's matrix keeps that scan
+        // cheap while full projection stays bounded to the <=72 retained labels
+        // below (plus the <=72 persistence snapshot). #237: it reads the SAME
+        // matrix the projection uses - previously the cheap scan and the real
+        // projection composed the camera transform two different ways.
         const cities = selectCityCandidates(
           cityTierData.cities,
           [routeCameraPosition.x, routeCameraPosition.y, routeCameraPosition.z],
@@ -3131,7 +3276,7 @@ export function ParticleEarthScene({
       if (canActivateJourney) {
         camera.updateMatrixWorld();
         globe.updateWorldMatrix(true, false);
-        globe.worldToLocal(routeCameraPosition.copy(camera.position));
+        updateGeoProjectionFrame(geoFrame, camera, globe.matrixWorld, targetSize.x, targetSize.y);
         const positions = routePointSignals.geometry.getAttribute("position") as
           | BufferAttribute
           | undefined;
@@ -4436,19 +4581,20 @@ export function ParticleEarthScene({
       }
 
       if (latestCenterFocusPoint.current && latestFocusPoint.current) {
-        personalScreenPosition.copy(latLonToVector3(
+        // #237: the focus signal is a geographic annotation like any other, so
+        // it publishes the shared frame's answer for its latitude/longitude
+        // instead of re-deriving the transform. QA compares this against place
+        // label anchors, and comparing two subsystems is only meaningful once
+        // they are two READERS of one projection rather than two projections.
+        updateGeoProjectionFrame(geoFrame, camera, globe.matrixWorld, targetSize.x, targetSize.y);
+        projectGeographicAnchorToViewport(
+          geoFrame,
           latestFocusPoint.current.lat,
           latestFocusPoint.current.lon,
-          GLOBE_SURFACE_RADIUS,
-        ));
-        globe.localToWorld(personalScreenPosition);
-        personalScreenPosition.project(camera);
-        host.dataset.personalPointX = String(
-          ((personalScreenPosition.x + 1) * targetSize.x) / 2,
+          focusSignalScreenPoint,
         );
-        host.dataset.personalPointY = String(
-          ((1 - personalScreenPosition.y) * targetSize.y) / 2,
-        );
+        host.dataset.personalPointX = String(focusSignalScreenPoint.x);
+        host.dataset.personalPointY = String(focusSignalScreenPoint.y);
         // #196: the coordinates the focus signal is standing on. A place label
         // sends these when it is clicked, so publishing them is what makes
         // "the click focused the place the label claimed" checkable without

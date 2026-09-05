@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { GEOGRAPHIC_SURFACE_RADIUS } from "./geo";
 import {
   COASTLINE_SPATIAL_VERTEX_BUDGET,
   CoastlineRefinementCache,
@@ -48,6 +49,46 @@ describe("spatial coastline refinement foundation (#154)", () => {
     const positions = buildRegionalCoastlinePositions({ rings: [ring], region, quality: "low" });
     expect(positions.length / 3).toBeLessThanOrEqual(COASTLINE_SPATIAL_VERTEX_BUDGET.low);
     expect(positions.length).toBeGreaterThan(0);
+  });
+
+  it("builds regional refinement on the canonical geographic surface (#237)", () => {
+    const region = resolveCoastlineRefinementRegion({ lat: 22.3, lon: 114.1 });
+    const ring = [[113.8, 22.1], [114.3, 22.4], [114.1, 22.6], [113.8, 22.1]];
+    const positions = buildRegionalCoastlinePositions({
+      rings: [ring],
+      region,
+      quality: "high",
+    });
+    expect(positions.length).toBeGreaterThan(0);
+    // The default is the constant itself, not a shell that merely happens to
+    // equal it today: a refinement chunk that drifted onto its own radius would
+    // put the local map somewhere the Place Labels above it are not.
+    let maxRadiusError = 0;
+    for (let index = 0; index < positions.length; index += 3) {
+      const radius = Math.hypot(
+        positions[index],
+        positions[index + 1],
+        positions[index + 2],
+      );
+      maxRadiusError = Math.max(
+        maxRadiusError,
+        Math.abs(radius - GEOGRAPHIC_SURFACE_RADIUS),
+      );
+    }
+    expect(maxRadiusError).toBeLessThan(1e-6);
+    expect(GEOGRAPHIC_SURFACE_RADIUS).not.toBe(1.405);
+
+    // An explicit radius is still honoured - the change removes the second
+    // DEFAULT, it does not take the parameter away from a future caller.
+    const explicit = buildRegionalCoastlinePositions({
+      rings: [ring],
+      region,
+      quality: "high",
+      radius: 1,
+    });
+    // Positions are a Float32Array, so the comparison lives at single
+    // precision - about 3e-8 here - not at double.
+    expect(Math.hypot(explicit[0], explicit[1], explicit[2])).toBeCloseTo(1, 6);
   });
 
   it("keeps a bounded LRU of recently viewed regions", () => {

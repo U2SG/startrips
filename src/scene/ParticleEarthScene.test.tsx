@@ -20,6 +20,11 @@ import {
   GLOBE_IDLE_ROTATION_RADIANS_PER_SECOND,
   GLOBE_RENDER_ORDER,
   GLOBE_SURFACE_RADIUS,
+  COASTLINE_DEPTH_BIAS_CHUNK,
+  COASTLINE_DEPTH_POLICY,
+  SURFACE_TESSELLATION_SAGITTA,
+  applyCoastlineDepthBias,
+  createCoastlineMaterial,
   GLOBE_TILT_LIMIT_RADIANS,
   GLOBE_UPRIGHT_ROTATION_X,
   GLOBE_ZOOM_MAX,
@@ -1090,5 +1095,83 @@ describe("#219 the focus signal shares the Route Point anchor", () => {
     // module is a literal that could silently drift from ROUTE_ANCHOR_RADIUS.
     expect(source).not.toMatch(/\b1\.46\b/);
     expect(source.match(/pointRadius = ROUTE_ANCHOR_RADIUS,/g)).toHaveLength(2);
+  });
+
+  it("keeps the coastline above the surface with depth, not with radius (#237)", () => {
+    // The coastline shares the surface radius now, so what makes it READ above
+    // the particle body has to be a render policy. It is drawn after the
+    // particles and before every journey signal...
+    expect(GLOBE_RENDER_ORDER.particle).toBeLessThan(GLOBE_RENDER_ORDER.coastline);
+    expect(GLOBE_RENDER_ORDER.coastline).toBeLessThan(GLOBE_RENDER_ORDER.signal);
+
+    // ...and it still depth-tests against the surface sphere, so the far side of
+    // the planet stays hidden. It never WRITES depth, which is why no bias
+    // magnitude can let it occlude a route line or a marker.
+    const material = createCoastlineMaterial();
+    expect(material.depthTest).toBe(COASTLINE_DEPTH_POLICY.depthTest);
+    expect(material.depthTest).toBe(true);
+    expect(material.depthWrite).toBe(COASTLINE_DEPTH_POLICY.depthWrite);
+    expect(material.depthWrite).toBe(false);
+    expect(material.transparent).toBe(true);
+    // Cloning drops onBeforeCompile, so every LOD must be built by the factory.
+    expect(material.onBeforeCompile).toBe(applyCoastlineDepthBias);
+    const cloned = material.clone();
+    expect(cloned.onBeforeCompile).not.toBe(applyCoastlineDepthBias);
+    const source = readFileSync(
+      new URL("./ParticleEarthScene.tsx", import.meta.url),
+      "utf8",
+    );
+    expect(source.match(/createCoastlineMaterial\(\)/g)).toHaveLength(4);
+    expect(source).not.toMatch(/coastlineMaterial\.clone\(\)/);
+
+    // The bias clears the worst gap between the analytic sphere the coastline
+    // sits on and the inscribed mesh that occludes it, with margin.
+    expect(SURFACE_TESSELLATION_SAGITTA).toBeGreaterThan(0);
+    expect(SURFACE_TESSELLATION_SAGITTA).toBeLessThan(0.003);
+    expect(COASTLINE_DEPTH_POLICY.ndcDepthBias).toBeGreaterThan(0);
+    expect(COASTLINE_DEPTH_POLICY.ndcDepthBias).toBeLessThan(0.01);
+
+    // The patch may move clip Z and nothing else: the projected screen position
+    // of a coastline vertex has to stay the position the shared frame computes
+    // for the same latitude/longitude.
+    expect(COASTLINE_DEPTH_BIAS_CHUNK).toContain("gl_Position.z -=");
+    expect(COASTLINE_DEPTH_BIAS_CHUNK).not.toMatch(/gl_Position\.(x|y|w)\s*[-+*\/]?=/);
+    expect(COASTLINE_DEPTH_BIAS_CHUNK).toContain("coastlineFacing");
+    const shader = { vertexShader: "void main() { #include <fog_vertex> }" };
+    applyCoastlineDepthBias(shader);
+    expect(shader.vertexShader).toContain("#include <fog_vertex>");
+    expect(shader.vertexShader).toContain(COASTLINE_DEPTH_BIAS_CHUNK);
+  });
+
+  it("keeps every coastline path on the geographic surface radius (#237)", () => {
+    const source = readFileSync(
+      new URL("./ParticleEarthScene.tsx", import.meta.url),
+      "utf8",
+    );
+    // The two surviving 1.405 literals are the decorative archive shell and its
+    // cluster jitter - nothing reads a latitude/longitude off either, so they
+    // are not geographic reference layers and deliberately keep their radii.
+    const shells = source.match(/\b1\.405\b/g) ?? [];
+    expect(shells).toHaveLength(2);
+    expect(source).toMatch(/shellPositions\[index\] \*= 1\.405;/);
+    expect(source).toMatch(/const radius = 1\.405 \+ \(\(index \* 31\) % 17\) \* 0\.002;/);
+    // Every buildSphericalRingSegments call in the module - the far, mid and
+    // near builders plus the detailed loader - names the constant.
+    const ringBuilds = source.match(/buildSphericalRingSegments\(/g) ?? [];
+    expect(ringBuilds).toHaveLength(4);
+    expect(
+      source.match(/buildSphericalRingSegments\(\s*[A-Za-z.]+,\s*GEOGRAPHIC_SURFACE_RADIUS,/g),
+    ).toHaveLength(4);
+
+    // The decorative layers named out of scope by #237 keep their own scales.
+    expect(source).toMatch(/wire\.scale\.setScalar\(1\.006\);/);
+    expect(source).toMatch(/reliefSupport\.scale\.setScalar\(1\.0015\);/);
+
+    // One projection authority: the only surviving direct camera projection is
+    // the globe interaction centre, which is drag math rather than a
+    // geographic anchor.
+    const projections = source.match(/\.project\(camera\)/g) ?? [];
+    expect(projections).toHaveLength(1);
+    expect(source).toMatch(/interactionWorldCenter\.copy\(globe\.position\)\.project\(camera\);/);
   });
 });
