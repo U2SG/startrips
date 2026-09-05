@@ -22,6 +22,7 @@ import {
   retainMediaMoveUndoAfterError,
   replaceJourneySoundtrack,
   showMobileStoryFullscreenControl,
+  storyImmersiveEntryKeepsPlaying,
   showMobileStoryPlayControl,
   storyAssetIndexForId,
   storyAutoplayAdvance,
@@ -583,6 +584,29 @@ describe("showMobileStoryFullscreenControl (#199 follow-up)", () => {
       mobileManageMode: false,
       scopedMediaCount: 1,
     })).toBe(false);
+  });
+});
+
+describe("storyImmersiveEntryKeepsPlaying (#199 follow-up review)", () => {
+  const video = asset("video-1", "video/mp4", 0, "clip.mp4");
+
+  it("carries a running sequence into fullscreen when the gesture can authorize the candidate", () => {
+    expect(storyImmersiveEntryKeepsPlaying(true, video, "ready")).toBe(true);
+    expect(storyImmersiveEntryKeepsPlaying(true, null, "ready")).toBe(true);
+    // A failed read is terminal for this step; the existing playback policy
+    // already degrades it through the timer, so the handoff is still honest.
+    expect(storyImmersiveEntryKeepsPlaying(true, video, "error")).toBe(true);
+  });
+
+  it("stops the sequence rather than claiming a handoff it cannot authorize", () => {
+    expect(storyImmersiveEntryKeepsPlaying(true, video, "waiting")).toBe(false);
+  });
+
+  it("never starts playback that the viewer did not ask for", () => {
+    for (const availability of ["ready", "waiting", "error"] as const) {
+      expect(storyImmersiveEntryKeepsPlaying(false, video, availability)).toBe(false);
+      expect(storyImmersiveEntryKeepsPlaying(false, null, availability)).toBe(false);
+    }
   });
 });
 

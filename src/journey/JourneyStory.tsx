@@ -381,6 +381,21 @@ export function storyAutoplayCanStart(
   return !videoCandidate || candidateAvailability !== "waiting";
 }
 
+// #199 follow-up review P2: the Viewer immersive entry may only carry the
+// sequence into fullscreen when the initiating gesture can authorize the
+// fullscreen video node. While the next video candidate's signed read is still
+// resolving, `setPlayingFromGesture` returns early, so claiming the handoff
+// would leave the sequence marked as playing behind an unauthorized element.
+// Immersive viewing itself is never blocked for that — the entry stops the
+// sequence, and both play controls immediately say so.
+export function storyImmersiveEntryKeepsPlaying(
+  playing: boolean,
+  videoCandidate: JourneyMediaAsset | null,
+  candidateAvailability: PlaybackMediaAvailability,
+) {
+  return playing && storyAutoplayCanStart(videoCandidate, candidateAvailability);
+}
+
 export function storyStageVideoOwner(
   shown: JourneyMediaAsset | null,
   incoming: JourneyMediaAsset | null,
@@ -3165,6 +3180,11 @@ export function JourneyStory({
     mobileManageMode,
     scopedMediaCount: scopedMedia.length,
   });
+  const mobileStoryImmersiveKeepsPlaying = storyImmersiveEntryKeepsPlaying(
+    playing,
+    autoplayVideoCandidate,
+    storyMediaAvailability(autoplayVideoCandidateRead?.status),
+  );
 
   const content = (
     <div
@@ -3523,13 +3543,13 @@ export function JourneyStory({
                   /* `is-compact` closes the row when a single-asset scope
                      renders no play control. The entry is playback-transparent:
                      it hands the current sequence state to the fullscreen stage
-                     instead of starting or stopping it, and spends the same
-                     gesture authorizing the fullscreen video element. */
+                     instead of starting it, and spends the same gesture
+                     authorizing the fullscreen video element. */
                   <IconActionButton
                     type="button"
                     className={`journey-story__mobile-media-fullscreen${mobileStoryPlayControlVisible ? "" : " is-compact"}`}
                     label="沉浸查看媒体"
-                    onClick={() => enterFullscreen(playing)}
+                    onClick={() => enterFullscreen(mobileStoryImmersiveKeepsPlaying)}
                   >
                     <IconMaximize size={19} stroke={1.5} aria-hidden="true" />
                   </IconActionButton>
