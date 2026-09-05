@@ -390,15 +390,18 @@ try {
       if (story.routePoints < 2) {
         failures.push(`story: only ${story.routePoints} route points are inspectable`);
       }
-      // Scope closure: the first shared journey has a next and no previous,
-      // so 上一段 must be disabled and 下一段 must not be.
+      // Scope closure, far end. The rail is `[...journeys].reverse()` over a
+      // chronologically sorted list (LivingAtlasApp), so its FIRST entry is the
+      // chronologically LAST journey of the granted set: 上一段 leads back into
+      // the set and 下一段 has nowhere to go. Asserting the opposite here is
+      // what made this lane red — the product was closing the set correctly.
       const previous = story.navigation.find((button) => button.label.includes("上一段"));
       const next = story.navigation.find((button) => button.label.includes("下一段"));
-      if (!previous?.disabled) {
-        failures.push("story: 上一段 is reachable from the first journey of the granted set");
+      if (previous?.disabled !== false) {
+        failures.push("story: 上一段 is not reachable inside the granted set");
       }
-      if (next?.disabled !== false) {
-        failures.push("story: 下一段 is not reachable inside the granted set");
+      if (!next?.disabled) {
+        failures.push("story: 下一段 leaves the granted set at its last journey");
       }
       console.log([
         "[qa-guest-share] story",
@@ -410,6 +413,45 @@ try {
       ].join(" "));
       await page.keyboard.press("Escape");
       await page.waitForTimeout(250);
+
+      // Scope closure, near end. Both ends of the granted set have to be shut,
+      // and only one of them is visible from a single journey. The rail's last
+      // entry is the chronologically first journey, where the pair inverts.
+      await page.locator(".living-atlas__journey-rail ol li button").last().click();
+      await page.waitForTimeout(300);
+      const nearOpened = await page.evaluate(() => {
+        const open = [...document.querySelectorAll("button")]
+          .find((button) => (button.textContent ?? "").includes("打开故事"));
+        if (!open) return false;
+        open.click();
+        return true;
+      });
+      if (!nearOpened) {
+        failures.push("story: no 打开故事 entry point for the first journey of the granted set");
+      } else {
+        await page.locator(".journey-story").waitFor({ timeout: 15_000 });
+        const near = await page.evaluate(() =>
+          [...(document.querySelectorAll(".journey-story__navigation button") ?? [])]
+            .map((button) => ({
+              label: (button.textContent ?? "").trim(),
+              disabled: button.disabled,
+            })));
+        const nearPrevious = near.find((button) => button.label.includes("上一段"));
+        const nearNext = near.find((button) => button.label.includes("下一段"));
+        if (!nearPrevious?.disabled) {
+          failures.push("story: 上一段 leaves the granted set at its first journey");
+        }
+        if (nearNext?.disabled !== false) {
+          failures.push("story: 下一段 is not reachable from the first journey of the granted set");
+        }
+        console.log([
+          "[qa-guest-share] story near end",
+          `previousDisabled=${nearPrevious?.disabled}`,
+          `nextDisabled=${nearNext?.disabled}`,
+        ].join(" "));
+        await page.keyboard.press("Escape");
+        await page.waitForTimeout(250);
+      }
     }
 
     // Playback stays available: it is a viewing capability (#200), and the
@@ -536,6 +578,15 @@ try {
     const { page } = await newGuestPage(context, state);
     await page.goto(new URL(`/share/#${TOKEN}`, baseUrl).toString(), { waitUntil: "domcontentloaded" });
     await page.locator(".living-atlas").waitFor({ timeout: 30_000 });
+    // `.living-atlas` mounts while the guest read is still in flight, so the
+    // rail is empty for a frame or two. Wait for the thing being asserted —
+    // reading the document straight after the shell appears was a race, not a
+    // routing failure.
+    await page.waitForFunction(
+      (title) => (document.body.innerText ?? "").includes(title),
+      sharedJourneys[0].title,
+      { timeout: 30_000 },
+    );
     const trailing = await page.evaluate(() => ({
       text: document.body.innerText,
       authGate: document.querySelectorAll(".auth-gate").length,
