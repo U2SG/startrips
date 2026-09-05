@@ -41,6 +41,7 @@ import {
   videoTrimEntryAction,
   videoTrimHoldsStep,
   videoTrimProgressAction,
+  videoTrimSeekApplies,
   videoTrimStatusAfterPauseChange,
   type VideoTrimSeekStatus,
   type VideoTrimWindow,
@@ -246,8 +247,11 @@ export function JourneyPlaybackOverlay({
   // `positioning` holds the budget while the seek is in flight, `playing`
   // releases it, and `unavailable` means the trim could not be applied and the
   // beat falls back to the pre-#195 `ended` ownership.
+  // The step index is part of the key, not decoration: consecutive beats may
+  // trim the same source, and then only the step tells a late settle from the
+  // previous beat apart from one meant for the current beat.
   const [videoTrimSeek, setVideoTrimSeek] = useState<
-    { assetId: string; status: VideoTrimSeekStatus } | null
+    { assetId: string; stepIndex: number; status: VideoTrimSeekStatus } | null
   >(null);
   const videoTrimTimerRef = useRef<number | null>(null);
   const clearVideoTrimWatchdog = useCallback(() => {
@@ -255,14 +259,23 @@ export function JourneyPlaybackOverlay({
     window.clearTimeout(videoTrimTimerRef.current);
     videoTrimTimerRef.current = null;
   }, []);
-  const settleVideoTrimSeek = useCallback((assetId: string, status: VideoTrimSeekStatus) => {
-    clearVideoTrimWatchdog();
+  // A settle only ever updates the beat it was computed for. It never creates a
+  // state: the entry effect is the single writer that opens one, so a settle
+  // arriving for a beat that has no trim — an `error` on an untrimmed video —
+  // has nothing to say and says nothing. The watchdog is not cleared here: the
+  // updater must stay pure (React may call it twice), and the effect that owns
+  // the timer re-runs on every status change and clears it in its cleanup.
+  const settleVideoTrimSeek = useCallback((
+    assetId: string,
+    stepIndex: number,
+    status: VideoTrimSeekStatus,
+  ) => {
     setVideoTrimSeek((current) => (
-      current && current.assetId === assetId && current.status === status
-        ? current
-        : { assetId, status }
+      videoTrimSeekApplies(current, assetId, stepIndex) && current!.status !== status
+        ? { ...current!, status }
+        : current
     ));
-  }, [clearVideoTrimWatchdog]);
+  }, []);
   useEffect(() => () => clearVideoTrimWatchdog(), [clearVideoTrimWatchdog]);
   // Position the element on the in-point. A seek can be refused outright (an
   // unseekable source throws) or silently never land, so the caller's bounded
@@ -271,20 +284,21 @@ export function JourneyPlaybackOverlay({
     element: HTMLVideoElement,
     resolved: ReturnType<typeof resolveVideoTrim>,
     assetId: string,
+    stepIndex: number,
   ) => {
     if (resolved.kind !== "trimmed") {
-      settleVideoTrimSeek(assetId, "unavailable");
+      settleVideoTrimSeek(assetId, stepIndex, "unavailable");
       return;
     }
     const action = videoTrimEntryAction(resolved, element.currentTime);
     if (action.kind !== "seek") {
-      settleVideoTrimSeek(assetId, "playing");
+      settleVideoTrimSeek(assetId, stepIndex, "playing");
       return;
     }
     try {
       element.currentTime = action.toSeconds;
     } catch {
-      settleVideoTrimSeek(assetId, "unavailable");
+      settleVideoTrimSeek(assetId, stepIndex, "unavailable");
     }
   }, [settleVideoTrimSeek]);
   const recoverVideoPlayback = useCallback((assetId: string) => {
@@ -330,13 +344,15 @@ export function JourneyPlaybackOverlay({
       setVideoTrimSeek(null);
       return;
     }
-    setVideoTrimSeek({ assetId: activeVideoTrimAssetId, status: "positioning" });
+    const stepIndex = director.stepIndex;
+    setVideoTrimSeek({ assetId: activeVideoTrimAssetId, stepIndex, status: "positioning" });
     const element = videoRef.current;
     if (!element || element.readyState < 1) return;
     applyVideoTrimEntry(
       element,
       resolveVideoTrim({ inMs: activeVideoTrimInMs, outMs: activeVideoTrimOutMs }, element.duration),
       activeVideoTrimAssetId,
+      stepIndex,
     );
   }, [
     applyVideoTrimEntry,
@@ -353,8 +369,9 @@ export function JourneyPlaybackOverlay({
   // further: the overlay's media fallback stays owned by the existing
   // `stalled` watchdog alone, so a slow refill after a resume cannot push a beat
   // that was playing correctly out of the product's normal video path.
-  const videoTrimHoldingStatus = videoTrimSeek?.assetId === activeVideoTrimAssetId
-    ? videoTrimSeek?.status ?? null
+  const videoTrimHoldingStatus = activeVideoTrimAssetId
+    && videoTrimSeekApplies(videoTrimSeek, activeVideoTrimAssetId, director.stepIndex)
+    ? videoTrimSeek!.status
     : null;
   const videoTrimWaiting = videoTrimHoldingStatus === "positioning"
     || videoTrimHoldingStatus === "buffering";
@@ -365,16 +382,19 @@ export function JourneyPlaybackOverlay({
     if (!videoTrimWaiting || !videoTrimReadReady || paused) return;
     const assetId = activeVideoTrimAssetId;
     if (!assetId) return;
+    const stepIndex = director.stepIndex;
     clearVideoTrimWatchdog();
     videoTrimTimerRef.current = window.setTimeout(() => {
       videoTrimTimerRef.current = null;
-      setVideoTrimSeek({ assetId, status: "unavailable" });
+      settleVideoTrimSeek(assetId, stepIndex, "unavailable");
     }, VIDEO_STALL_WATCHDOG_MS);
     return () => clearVideoTrimWatchdog();
   }, [
     activeVideoTrimAssetId,
     clearVideoTrimWatchdog,
+    director.stepIndex,
     paused,
+    settleVideoTrimSeek,
     videoTrimHoldingStatus,
     videoTrimReadReady,
     videoTrimWaiting,
@@ -576,14 +596,22 @@ export function JourneyPlaybackOverlay({
     // `unavailable` trim falls through to the untrimmed policy below.
     if (
       asset.mimeType.startsWith("video/")
-      && videoTrimSeek?.assetId === asset.id
-      && videoTrimSeek.status !== "unavailable"
+      && videoTrimSeekApplies(videoTrimSeek, asset.id, director.stepIndex)
+      && videoTrimSeek!.status !== "unavailable"
     ) {
-      setHold(videoTrimHoldsStep(videoTrimSeek.status));
+      setHold(videoTrimHoldsStep(videoTrimSeek!.status));
       return;
     }
     setHold(playbackMediaWaitPolicy(asset, gate) !== "none");
-  }, [decodeSettleRevision, director.step, journey, mediaReads, videoFallbackAssetId, videoTrimSeek]);
+  }, [
+    decodeSettleRevision,
+    director.step,
+    director.stepIndex,
+    journey,
+    mediaReads,
+    videoFallbackAssetId,
+    videoTrimSeek,
+  ]);
 
   // The soundtrack follows playback: play on any non-paused phase after the
   // user started playback; pause when paused; never reset between chapters.
@@ -853,6 +881,12 @@ export function JourneyPlaybackOverlay({
       data-playback-mode={playbackMode}
       data-playback-step={director.stepIndex}
       data-playback-steps={director.steps.length}
+      // #195 Phase 2: who owns the current beat's completion. `none` is an
+      // untrimmed beat, still on the pre-#195 `ended` ownership; the other
+      // values are the trim transport's own states, published so the browser
+      // QA lane can grade the segment handover directly instead of inferring
+      // it from wall-clock timing.
+      data-video-trim={videoTrimHoldingStatus ?? "none"}
     >
       <audio
         ref={audioRef}
@@ -919,7 +953,7 @@ export function JourneyPlaybackOverlay({
                       clearVideoStallWatchdog();
                       videoStalledAssetIdRef.current = null;
                       setVideoFallbackAssetId(activeMedia.id);
-                      settleVideoTrimSeek(activeMedia.id, "unavailable");
+                      settleVideoTrimSeek(activeMedia.id, director.stepIndex, "unavailable");
                       setHold(false);
                     }}
                     onLoadedMetadata={(event) => {
@@ -929,12 +963,13 @@ export function JourneyPlaybackOverlay({
                       // `unavailable` the watchdog has already given up, so
                       // neither state may issue another seek. That is what
                       // bounds the retry.
-                      if (videoTrimSeek?.assetId !== activeMedia.id) return;
-                      if (!videoTrimHoldsStep(videoTrimSeek.status)) return;
+                      if (!videoTrimSeekApplies(videoTrimSeek, activeMedia.id, director.stepIndex)) return;
+                      if (!videoTrimHoldsStep(videoTrimSeek!.status)) return;
                       applyVideoTrimEntry(
                         event.currentTarget,
                         resolveVideoTrim(activeVideoTrim.trim, event.currentTarget.duration),
                         activeMedia.id,
+                        director.stepIndex,
                       );
                     }}
                     onSeeked={(event) => {
@@ -944,27 +979,36 @@ export function JourneyPlaybackOverlay({
                       // `playing` when the element really is inside the segment
                       // and re-seeks when it is not, so releasing the budget
                       // always means the segment is under way.
+                      //
+                      // Bounded to the holding states exactly as
+                      // `loadedmetadata` is, and for the same reason: once the
+                      // watchdog has settled `unavailable` that degradation is
+                      // decided, and a later native scrub must not re-seek the
+                      // element and hand the beat a second completion owner.
                       if (!activeVideoTrim || activeVideoTrim.assetId !== activeMedia.id) return;
+                      if (!videoTrimSeekApplies(videoTrimSeek, activeMedia.id, director.stepIndex)) return;
+                      if (!videoTrimHoldsStep(videoTrimSeek!.status)) return;
                       applyVideoTrimEntry(
                         event.currentTarget,
                         resolveVideoTrim(activeVideoTrim.trim, event.currentTarget.duration),
                         activeMedia.id,
+                        director.stepIndex,
                       );
                     }}
                     onWaiting={() => {
                       // The director spends the beat's budget on the wall clock,
                       // so a segment that stops progressing has to freeze it.
                       if (!activeVideoTrim || activeVideoTrim.assetId !== activeMedia.id) return;
-                      if (videoTrimSeek?.assetId !== activeMedia.id) return;
-                      if (!videoTrimBuffersOnStall(videoTrimSeek.status, paused)) return;
-                      settleVideoTrimSeek(activeMedia.id, "buffering");
+                      if (!videoTrimSeekApplies(videoTrimSeek, activeMedia.id, director.stepIndex)) return;
+                      if (!videoTrimBuffersOnStall(videoTrimSeek!.status, paused)) return;
+                      settleVideoTrimSeek(activeMedia.id, director.stepIndex, "buffering");
                     }}
                     onPlaying={() => {
                       recoverVideoPlayback(activeMedia.id);
                       if (!activeVideoTrim || activeVideoTrim.assetId !== activeMedia.id) return;
-                      if (videoTrimSeek?.assetId !== activeMedia.id) return;
-                      if (videoTrimSeek.status !== "buffering") return;
-                      settleVideoTrimSeek(activeMedia.id, "playing");
+                      if (!videoTrimSeekApplies(videoTrimSeek, activeMedia.id, director.stepIndex)) return;
+                      if (videoTrimSeek!.status !== "buffering") return;
+                      settleVideoTrimSeek(activeMedia.id, director.stepIndex, "playing");
                     }}
                     onProgress={() => clearVideoStallWatchdog()}
                     onTimeUpdate={(event) => {
@@ -972,13 +1016,13 @@ export function JourneyPlaybackOverlay({
                       if (
                         !activeVideoTrim
                         || activeVideoTrim.assetId !== activeMedia.id
-                        || videoTrimSeek?.assetId !== activeMedia.id
-                        || (videoTrimSeek.status !== "playing" && videoTrimSeek.status !== "buffering")
+                        || !videoTrimSeekApplies(videoTrimSeek, activeMedia.id, director.stepIndex)
+                        || (videoTrimSeek!.status !== "playing" && videoTrimSeek!.status !== "buffering")
                       ) return;
                       // `timeupdate` is the proof a buffering segment resumed:
                       // it only fires when `currentTime` actually moved.
-                      if (videoTrimSeek.status === "buffering") {
-                        settleVideoTrimSeek(activeMedia.id, "playing");
+                      if (videoTrimSeek!.status === "buffering") {
+                        settleVideoTrimSeek(activeMedia.id, director.stepIndex, "playing");
                       }
                       const element = event.currentTarget;
                       const action = videoTrimProgressAction(
@@ -994,7 +1038,7 @@ export function JourneyPlaybackOverlay({
                         try {
                           element.currentTime = action.toSeconds;
                         } catch {
-                          settleVideoTrimSeek(activeMedia.id, "unavailable");
+                          settleVideoTrimSeek(activeMedia.id, director.stepIndex, "unavailable");
                         }
                       }
                     }}
@@ -1005,9 +1049,9 @@ export function JourneyPlaybackOverlay({
                       if (paused) videoStalledAssetIdRef.current = activeMedia.id;
                       else scheduleVideoStallWatchdog(activeMedia.id);
                       if (!activeVideoTrim || activeVideoTrim.assetId !== activeMedia.id) return;
-                      if (videoTrimSeek?.assetId !== activeMedia.id) return;
-                      if (!videoTrimBuffersOnStall(videoTrimSeek.status, paused)) return;
-                      settleVideoTrimSeek(activeMedia.id, "buffering");
+                      if (!videoTrimSeekApplies(videoTrimSeek, activeMedia.id, director.stepIndex)) return;
+                      if (!videoTrimBuffersOnStall(videoTrimSeek!.status, paused)) return;
+                      settleVideoTrimSeek(activeMedia.id, director.stepIndex, "buffering");
                     }}
                   />
                 : <div className="journey-playback__media-state">正在打开媒体…</div>
