@@ -632,40 +632,49 @@ try {
     const mediaJourneyTitle = withMedia[0].title;
     // A compact viewport renders no desktop journey rail — section 1 above
     // measures that same contract — so the guest reaches a Journey through
-    // 全部旅程, exactly as a recipient on a phone does.
-    const opened = await page.evaluate(async (title) => {
-      const settle = () => new Promise((resolve) => setTimeout(resolve, 400));
-      const trigger = [...document.querySelectorAll("button")]
-        .find((button) => button.getAttribute("aria-label") === "打开全部旅程");
-      if (!trigger) return "no-picker-entry";
-      trigger.click();
-      await settle();
-      const entry = [...document.querySelectorAll(".mobile-v2__picker ol li button")]
-        .find((button) => (button.textContent ?? "").includes(title));
-      if (!entry) return "no-picker-row";
-      entry.click();
-      await settle();
+    // 全部旅程 and the journey sheet, exactly as a recipient on a phone does.
+    //
+    // Every step waits for the element it is about to click rather than
+    // pausing a fixed number of milliseconds. A pause is a guess about how
+    // long a React commit takes on the runner, and a loaded runner turns that
+    // guess into a failure about the product; a wait that times out fails for
+    // the same reason but only after the element genuinely never appeared.
+    const openStory = async () => {
+      const step = async (label, locator) => {
+        try {
+          await locator.first().waitFor({ state: "visible", timeout: 15_000 });
+        } catch {
+          // Keep the diagnostic: name the step and enumerate what WAS there,
+          // so a future divergence in the mobile navigation is legible rather
+          // than an opaque timeout.
+          const labels = await page.evaluate(() => [...document.querySelectorAll("button")]
+            .map((button) => (button.getAttribute("aria-label") || button.textContent || "")
+              .trim().replace(/\s+/g, " ").slice(0, 24))
+            .filter(Boolean)
+            .slice(0, 12));
+          throw new Error(`${label}: ${JSON.stringify(labels)}`);
+        }
+        await locator.first().click();
+      };
+      await step("no-picker-entry", page.locator('button[aria-label="打开全部旅程"]'));
+      await page.locator(".mobile-v2__picker").waitFor({ timeout: 15_000 });
+      await step(
+        "no-picker-row",
+        page.locator(".mobile-v2__picker ol li button", { hasText: mediaJourneyTitle }),
+      );
       // On a compact viewport the picker only selects; the Story lives behind
       // the journey sheet the card opens.
-      const card = [...document.querySelectorAll("button")]
-        .find((button) => (button.getAttribute("aria-label") ?? "").startsWith("查看当前旅程详情"));
-      if (!card) return "no-journey-card";
-      card.click();
-      await settle();
-      const open = [...document.querySelectorAll("button")]
-        .find((button) => (button.textContent ?? "").includes("打开故事"));
-      if (!open) {
-        const labels = [...document.querySelectorAll("button")]
-          .map((button) => (button.getAttribute("aria-label") || button.textContent || "").trim().slice(0, 24))
-          .filter(Boolean);
-        return `no-story-entry: ${JSON.stringify(labels.slice(0, 12))}`;
-      }
-      open.click();
-      return "opened";
-    }, mediaJourneyTitle);
-    if (opened !== "opened") {
-      failures.push(`guest #199: could not open the shared story (${opened})`);
-    } else {
+      await step("no-journey-card", page.locator('button[aria-label^="查看当前旅程详情"]'));
+      await step("no-story-entry", page.locator("button", { hasText: "打开故事" }));
+    };
+    let opened = true;
+    try {
+      await openStory();
+    } catch (error) {
+      opened = false;
+      failures.push(`guest #199: could not open the shared story (${error.message})`);
+    }
+    if (opened) {
       await storyShowing(page, mediaJourneyTitle);
       const affordance = await page.evaluate(() => {
         const story = document.querySelector(".journey-story");
