@@ -86,7 +86,9 @@ describe("spatial coastline refinement foundation (#154)", () => {
       quality: "high",
       radius: 1,
     });
-    expect(Math.hypot(explicit[0], explicit[1], explicit[2])).toBeCloseTo(1, 9);
+    // Positions are a Float32Array, so the comparison lives at single
+    // precision - about 3e-8 here - not at double.
+    expect(Math.hypot(explicit[0], explicit[1], explicit[2])).toBeCloseTo(1, 6);
   });
 
   it("keeps a bounded LRU of recently viewed regions", () => {

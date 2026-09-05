@@ -63,6 +63,11 @@ const MAX_PAIR_SEPARATION_DEG = 1.5;
 // Enough paired steps across the dense-coastline pass that a thin frame or a
 // label lost to #79 collision cannot quietly empty the measurement.
 const MIN_MOTION_PAIRS = 10;
+// A pair whose anchors did not move is the SAME rendered frame read twice: the
+// pointermove landed but no animation frame ran before the DOM was sampled.
+// Comparing it would report a perfect match for a measurement that never
+// happened, so it is excluded and counted separately.
+const MIN_STEP_MOTION_PX = 1;
 
 // #196 acceptance: a dense-coastline city, a large US city, an island city and
 // an inland control. Coordinates are the fixture framing; the label matched in
@@ -304,6 +309,20 @@ async function beginDrag(page, origin) {
   }, origin);
 }
 
+/**
+ * Wait until the render loop has produced a frame after the last gesture.
+ * `measure` reads the DOM, and the scene writes its anchors inside
+ * requestAnimationFrame, so sampling straight after a pointermove can return
+ * the previous frame - two identical samples that compare perfectly while
+ * measuring nothing. Two frames deep because the pointer handler and the
+ * anchor write land in different ones.
+ */
+function waitForRenderedFrame(page) {
+  return page.evaluate(() => new Promise((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve(true)));
+  }));
+}
+
 async function dragTo(page, point) {
   await canvasOf(page).evaluate((node, position) => {
     node.dispatchEvent(new PointerEvent("pointermove", {
@@ -375,6 +394,9 @@ let worstContainment = { ratio: 0, where: "none", name: "" };
 // #237 dense-coastline pass.
 let motionPairs = 0;
 let motionSkipped = 0;
+let motionStalled = 0;
+let widestStepPx = 0;
+let worstMotionRatio = { ratio: 0, detail: "none" };
 let worstMotion = { excessPx: -Infinity, where: "none", detail: "" };
 let worstCoastlineContainment = { ratio: 0, where: "none" };
 
@@ -487,10 +509,25 @@ function checkMotionPair(previous, current, where) {
     coastMotion.x - labelMotion.x,
     coastMotion.y - labelMotion.y,
   );
+  if (labelMotionPx < MIN_STEP_MOTION_PX) {
+    motionStalled += 1;
+    return;
+  }
   const separationRadians = after.separation * Math.PI / 180;
   const allowance = MOTION_FLOOR_PX
     + labelMotionPx * separationRadians * SEPARATION_GAIN;
   motionPairs += 1;
+  if (labelMotionPx > widestStepPx) widestStepPx = labelMotionPx;
+  // The scale-free form of the same measurement. A coastline back on the 1.405
+  // shell runs about 5% faster than a label beside it at maximum zoom, so this
+  // ratio is what says how much room the pass actually had.
+  const ratio = differencePx / labelMotionPx;
+  if (ratio > worstMotionRatio.ratio) {
+    worstMotionRatio = {
+      ratio,
+      detail: `${where}, labelMotion=${labelMotionPx.toFixed(2)}px separation=${after.separation.toFixed(3)}deg`,
+    };
+  }
   const excess = differencePx - allowance;
   if (excess > worstMotion.excessPx) {
     worstMotion = {
@@ -594,6 +631,9 @@ try {
       await beginDrag(page, origin);
       for (let step = 1; step <= steps; step += 1) {
         await dragTo(page, { x: origin.x + stepPx * step, y: origin.y });
+        // #237 measures motion BETWEEN consecutive samples, so this fixture
+        // waits for the frame its pointermove produced instead of racing it.
+        if (measuresCoastline) await waitForRenderedFrame(page);
         const sample = await measure(page);
         checkFrame(sample, `${label} drag step ${step}`);
         record(sample);
@@ -645,7 +685,9 @@ try {
           `coastlineVertex=${settled.coastline ? `(${settled.coastline.lat}, ${settled.coastline.lon})` : "n/a"}`,
           `coastlineContainment=${settled.coastline ? containment(settled, settled.coastline.anchor).toFixed(4) : "n/a"}`,
           `pairsSoFar=${motionPairs}`,
-          `skippedSoFar=${motionSkipped}`,
+          `unpairedSoFar=${motionSkipped}`,
+          `stalledSoFar=${motionStalled}`,
+          `widestStepPx=${widestStepPx.toFixed(2)}`,
           `worstMotionExcessPx=${worstMotion.excessPx === -Infinity ? "n/a" : worstMotion.excessPx.toFixed(3)}`,
         ].join(" "));
       }
@@ -800,12 +842,21 @@ try {
   // comparable steps is itself an assertion.
   check(
     motionPairs >= MIN_MOTION_PAIRS,
-    `only ${motionPairs} drag steps compared coastline motion against a place label within ${MAX_PAIR_SEPARATION_DEG} degrees (${motionSkipped} skipped); at least ${MIN_MOTION_PAIRS} are required for the measurement to mean anything`,
+    `only ${motionPairs} drag steps compared coastline motion against a place label within ${MAX_PAIR_SEPARATION_DEG} degrees that actually moved (${motionSkipped} unpaired, ${motionStalled} stalled on an unchanged frame); at least ${MIN_MOTION_PAIRS} are required for the measurement to mean anything`,
+  );
+  // The widest step measured bounds how much differential motion this pass
+  // could have detected at all.
+  check(
+    widestStepPx >= 5,
+    `the widest paired drag step moved a place label only ${widestStepPx.toFixed(2)}px, too little for a differential of a few percent to be visible above the ${MOTION_FLOOR_PX}px floor`,
   );
   console.log([
     `[qa-city-label-anchoring] map-vs-label:`,
     `${motionPairs} paired drag steps,`,
-    `${motionSkipped} skipped,`,
+    `${motionSkipped} unpaired,`,
+    `${motionStalled} stalled,`,
+    `widest step ${widestStepPx.toFixed(2)}px,`,
+    `worst motion ratio ${(worstMotionRatio.ratio * 100).toFixed(3)}% (${worstMotionRatio.detail}),`,
     `worst motion excess ${worstMotion.excessPx === -Infinity ? "n/a" : `${worstMotion.excessPx.toFixed(3)}px`}`,
     `(${worstMotion.where}${worstMotion.detail ? `, ${worstMotion.detail}` : ""}),`,
     `worst coastline containment ${worstCoastlineContainment.ratio.toFixed(4)}`,

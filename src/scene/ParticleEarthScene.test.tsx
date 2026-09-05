@@ -1151,7 +1151,7 @@ describe("#219 the focus signal shares the Route Point anchor", () => {
     // The two surviving 1.405 literals are the decorative archive shell and its
     // cluster jitter - nothing reads a latitude/longitude off either, so they
     // are not geographic reference layers and deliberately keep their radii.
-    const shells = source.match(/1\.405/g) ?? [];
+    const shells = source.match(/\b1\.405\b/g) ?? [];
     expect(shells).toHaveLength(2);
     expect(source).toMatch(/shellPositions\[index\] \*= 1\.405;/);
     expect(source).toMatch(/const radius = 1\.405 \+ \(\(index \* 31\) % 17\) \* 0\.002;/);
