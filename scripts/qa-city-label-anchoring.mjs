@@ -197,15 +197,23 @@ function canvasOf(page) {
   return page.locator('canvas[data-three-scene="particle-earth"]');
 }
 
-async function setZoom(page, targetZoom) {
+/**
+ * `anchor` is the screen point the zoom keeps still. It defaults to the middle
+ * of the window, but zooming toward a place that is NOT in the middle has to
+ * name that place: the scene anchors a wheel zoom on the cursor, so zooming on
+ * the window centre magnifies whatever offset the framing already had and
+ * pushes an off-centre place off the screen entirely.
+ */
+async function setZoom(page, targetZoom, anchor = null) {
   const before = await debug(page);
   if (!before) throw new Error("Particle Earth debug state is unavailable");
   if (Math.abs(before.zoom - targetZoom) > 0.02) {
+    const point = anchor ?? { x: VIEWPORT.width / 2, y: VIEWPORT.height / 2 };
     await canvasOf(page).evaluate((node, init) => node.dispatchEvent(new WheelEvent("wheel", init)), {
       bubbles: true,
       cancelable: true,
-      clientX: VIEWPORT.width / 2,
-      clientY: VIEWPORT.height / 2,
+      clientX: point.x,
+      clientY: point.y,
       deltaY: -Math.log(targetZoom / before.zoom) / 0.0012,
     });
     await page.waitForTimeout(160);
@@ -515,15 +523,20 @@ try {
       // The other half - no visible jump - needs the label on screen. Which
       // zoom renders it depends on the place's tier and on #79 collision, so
       // every supported zoom is tried before giving up.
-      let afterClick = null;
-      let focused = null;
-      for (const zoom of [3, 2, 1]) {
-        await setZoom(page, zoom);
+      let afterClick = settledFocus;
+      let focused = findFixture(settledFocus, { lat: target.lat, lon: target.lon });
+      checkFrame(settledFocus, `${fixture.key} after click, settled`);
+      // The flight ends at a low zoom, where the coarse tier shows only the
+      // largest places. Zoom back in ANCHORED ON THE FOCUS SIGNAL so the place
+      // that was just focused stays where it is while its tier becomes visible.
+      for (const zoom of [2, 3]) {
+        if (focused) break;
+        const anchor = { x: afterClick.focus.x, y: afterClick.focus.y };
+        await setZoom(page, zoom, Number.isFinite(anchor.x) ? anchor : null);
         await page.waitForTimeout(600);
         afterClick = await measure(page);
         checkFrame(afterClick, `${fixture.key} after click @${zoom}x`);
         focused = findFixture(afterClick, { lat: target.lat, lon: target.lon });
-        if (focused) break;
       }
       const drift = focused
         ? Math.hypot(
