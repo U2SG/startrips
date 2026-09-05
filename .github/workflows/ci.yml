@@ -110,6 +110,8 @@ jobs:
             command: pnpm qa:mobile-contract
           - name: guest-share
             command: pnpm qa:guest-share
+          - name: owner-share
+            command: pnpm qa:owner-share
     steps:
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6

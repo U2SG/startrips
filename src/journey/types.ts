@@ -101,3 +101,45 @@ export type LocationSearchResponse = {
   results: LocationSearchResult[];
   attribution: { label: string; url: string } | null;
 };
+
+/**
+ * #200 owner share grants. `atlas-unavailable` exists in the server union and
+ * is mirrored here so a status the owner list could theoretically carry has a
+ * label, but `requireAtlasAccess` refuses a deleting Atlas before the owner
+ * route runs, so it cannot appear on this side today.
+ */
+export type ShareGrantStatus = "active" | "revoked" | "expired" | "atlas-unavailable";
+
+export type ShareGrantJourney = {
+  id: string;
+  title: string;
+};
+
+/**
+ * One row of `GET /api/shares`. There is no token field because the server
+ * stores only a hash and can never return one.
+ */
+export type ShareGrantSummary = {
+  id: string;
+  createdAt: string;
+  expiresAt: string;
+  revokedAt: string | null;
+  lastAccessedAt: string | null;
+  status: ShareGrantStatus;
+  journeyCount: number;
+  journeys: ShareGrantJourney[];
+};
+
+/**
+ * The `POST /api/shares` response: the only moment a raw token exists outside
+ * the recipient's browser.
+ */
+export type CreatedShareGrant = {
+  share: {
+    id: string;
+    createdAt: string;
+    expiresAt: string;
+    journeyCount: number;
+  };
+  token: string;
+};

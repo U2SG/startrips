@@ -6724,3 +6724,336 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
     transition-duration: 0.01ms !important;
   }
 }
+
+/* #200 phase E: the owner share surface.
+   Editorial-ink discipline throughout: no gradient, no drop shadow, no blur
+   and no ornament. Every box is square. The one `border-radius` in this block
+   is the radio dot of the expiry choice, which is the selection grammar
+   itself - a round mark is what distinguishes single choice from the square
+   multi-select mark next to it - not decorative rounding on a container.
+   Every interactive control is at least 44px tall, the #92 minimum hit
+   target. */
+.journey-share {
+  position: fixed;
+  z-index: 60;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: max(16px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom));
+}
+
+.journey-share__backdrop {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  background: rgba(2, 7, 6, 0.82);
+  cursor: pointer;
+}
+
+.journey-share__dialog {
+  position: relative;
+  z-index: 1;
+  overflow-y: auto;
+  width: min(560px, 100%);
+  max-height: 100%;
+  padding: 20px;
+  border: 1px solid var(--archive-line);
+  background: var(--archive-bg);
+  color: var(--archive-ink);
+  display: grid;
+  align-content: start;
+  gap: 18px;
+}
+
+.journey-share__heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid var(--archive-line);
+  padding-bottom: 14px;
+}
+
+.journey-share__heading p {
+  margin: 0 0 6px;
+  color: rgba(111, 226, 207, 0.62);
+  font: 600 8px/1 ui-monospace, "SFMono-Regular", Consolas, monospace;
+  letter-spacing: 0.15em;
+}
+
+.journey-share__heading h2 {
+  margin: 0;
+  font: 500 23px/1.15 var(--archive-serif);
+  letter-spacing: -0.01em;
+}
+
+.journey-share__heading > button {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--archive-line);
+  background: none;
+  color: var(--archive-ink);
+  cursor: pointer;
+}
+
+.journey-share__compose,
+.journey-share__created {
+  display: grid;
+  gap: 14px;
+}
+
+.journey-share fieldset {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.journey-share legend {
+  padding: 0;
+  color: var(--archive-muted);
+  font: 500 10px/1 var(--archive-sans);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.journey-share__selection ol {
+  margin: 0;
+  padding: 0;
+  max-height: 232px;
+  overflow-y: auto;
+  list-style: none;
+  border: 1px solid var(--archive-line);
+}
+
+.journey-share__selection li + li {
+  border-top: 1px solid var(--archive-line);
+}
+
+.journey-share__selection label,
+.journey-share__expiry label {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+  cursor: pointer;
+}
+
+.journey-share__selection strong {
+  flex: 1;
+  overflow: hidden;
+  font: 500 14px/1.2 var(--archive-serif);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.journey-share__selection small,
+.journey-share__links small {
+  color: var(--archive-muted);
+  font: 500 10px/1 ui-monospace, "SFMono-Regular", Consolas, monospace;
+  letter-spacing: 0.06em;
+}
+
+/* One selection grammar for both controls: the native input is the state, the
+   span is the mark. A radio-dot for the single-choice expiry, a filled square
+   for the multi-choice Journey set, so cardinality is visible before reading. */
+.journey-share input[type="checkbox"],
+.journey-share input[type="radio"] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.journey-share label > span[aria-hidden] {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--archive-faint);
+}
+
+.journey-share input[type="radio"] + span[aria-hidden] {
+  border-radius: 50%;
+}
+
+.journey-share input:checked + span[aria-hidden] {
+  border-color: var(--archive-cyan);
+}
+
+.journey-share input:checked + span[aria-hidden]::after {
+  content: "";
+  width: 7px;
+  height: 7px;
+  background: var(--archive-cyan);
+}
+
+.journey-share input[type="radio"]:checked + span[aria-hidden]::after {
+  border-radius: 50%;
+}
+
+.journey-share input:focus-visible + span[aria-hidden] {
+  outline: 2px solid var(--archive-cyan);
+  outline-offset: 2px;
+}
+
+.journey-share__expiry {
+  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+}
+
+.journey-share__expiry legend {
+  grid-column: 1 / -1;
+}
+
+.journey-share__expiry label {
+  border: 1px solid var(--archive-line);
+  font: 500 13px/1 var(--archive-sans);
+}
+
+.journey-share__custom-expiry {
+  grid-column: 1 / -1;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--archive-line);
+  background: none;
+  color: var(--archive-ink);
+  font: 500 13px/1 var(--archive-sans);
+}
+
+.journey-share__selection-count,
+.journey-share__notice,
+.journey-share__message,
+.journey-share__links-empty {
+  margin: 0;
+  color: var(--archive-muted);
+  font: 400 12px/1.55 var(--archive-sans);
+}
+
+.journey-share__message {
+  border-top: 1px solid var(--archive-line);
+  padding-top: 12px;
+  color: var(--archive-ink);
+}
+
+.journey-share button {
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px solid var(--archive-line);
+  background: none;
+  color: var(--archive-ink);
+  font: 500 13px/1 var(--archive-sans);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.journey-share button:disabled {
+  color: var(--archive-muted);
+  cursor: not-allowed;
+}
+
+.journey-share__create {
+  width: 100%;
+  border-color: rgba(116, 231, 208, 0.42);
+}
+
+.journey-share__created-expiry,
+.journey-share__created-scope {
+  margin: 0;
+  font: 400 13px/1.5 var(--archive-sans);
+}
+
+.journey-share__created-expiry strong {
+  color: var(--archive-cyan);
+  font-weight: 600;
+}
+
+.journey-share__link {
+  display: block;
+  overflow-wrap: anywhere;
+  padding: 12px;
+  border: 1px solid var(--archive-line);
+  color: var(--archive-ink);
+  font: 500 12px/1.5 ui-monospace, "SFMono-Regular", Consolas, monospace;
+}
+
+.journey-share__created-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.journey-share__created-actions button {
+  flex: 1 1 132px;
+}
+
+.journey-share__links {
+  border-top: 1px solid var(--archive-line);
+  padding-top: 14px;
+  display: grid;
+  gap: 10px;
+}
+
+.journey-share__links h3 {
+  margin: 0;
+  color: var(--archive-muted);
+  font: 500 10px/1 var(--archive-sans);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.journey-share__links ol {
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+  list-style: none;
+}
+
+.journey-share__links li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid var(--archive-line);
+  padding: 10px 12px;
+}
+
+.journey-share__links li > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.journey-share__links strong {
+  overflow: hidden;
+  font: 500 14px/1.2 var(--archive-serif);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.journey-share__links .is-destructive {
+  flex: none;
+  border-color: rgba(226, 122, 122, 0.36);
+}
+
+@media (max-width: 760px), (max-height: 480px) {
+  .journey-share__dialog {
+    width: 100%;
+    padding: 16px;
+    gap: 14px;
+  }
+
+  .journey-share__selection ol {
+    max-height: 152px;
+  }
+}

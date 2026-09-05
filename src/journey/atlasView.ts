@@ -1,18 +1,26 @@
 import { createContext, useContext } from "react";
 import {
+  createShare,
   deleteJourney,
   deleteMedia,
   getPrivateMediaRead,
   listJourneys,
+  listShares,
   moveJourneyMedia,
   reorderJourneyMedia,
   restoreJourney,
+  revokeShare,
   setJourneyCover,
   undoJourneyMediaMove,
   type JourneyMediaMoveUndo,
 } from "./journeyApi";
 import { uploadJourneyMedia } from "./JourneyComposer";
-import type { Journey, PrivateMediaRead } from "./types";
+import type {
+  CreatedShareGrant,
+  Journey,
+  PrivateMediaRead,
+  ShareGrantSummary,
+} from "./types";
 
 /**
  * #200 phase D: what an Atlas view is allowed to do.
@@ -127,6 +135,19 @@ export type AtlasMutations = {
     coverMediaAssetId: string | null,
   ) => Promise<Journey>;
   uploadJourneyMedia: UploadJourneyMedia;
+  /**
+   * #200 phase E. Creating and revoking a share are owner writes, and the
+   * owner's list of its own links is owner-private, so all three live here
+   * rather than being imported by the surface that renders them. `canShareAtlas`
+   * decides whether the affordance exists; this object decides whether a client
+   * capable of the call exists at all, and in shared mode it is `null`.
+   */
+  createShare: (
+    journeyIds: readonly string[],
+    expiresAt: Date,
+  ) => Promise<CreatedShareGrant>;
+  listShares: () => Promise<ShareGrantSummary[]>;
+  revokeShare: (shareId: string) => Promise<void>;
 };
 
 /**
@@ -151,6 +172,9 @@ export function createOwnerAtlasMutations(): AtlasMutations {
     undoJourneyMediaMove,
     setJourneyCover,
     uploadJourneyMedia,
+    createShare,
+    listShares,
+    revokeShare,
   };
 }
 

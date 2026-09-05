@@ -6,6 +6,7 @@ import {
   IconPlayerPlay,
   IconPlus,
   IconRoute,
+  IconShare,
   IconTimeline,
   IconWorld,
   IconX,
@@ -38,6 +39,7 @@ import {
   cachedSoundtrackRead,
   prefetchSoundtrackRead,
 } from "./soundtrackReadCache";
+import { JourneyShareDialog } from "./JourneyShareDialog";
 import { JourneyTimeline } from "./JourneyTimeline";
 import { GlobeTimeScrubber, formatCursorDate } from "./GlobeTimeScrubber";
 import { useGlobeTimeCursor } from "./useGlobeTimeCursor";
@@ -318,6 +320,10 @@ export function LivingAtlasApp({
   // could write and the owner-only surfaces below are never constructed.
   const { capabilities, listJourneys, readMedia, mutations } = useAtlasView();
   const { canCreateJourney, canDeleteJourney, canEditJourney, canManageAtlas } = capabilities;
+  // #200 phase E. Both halves must hold: the capability decides the affordance
+  // exists, `mutations` decides a client capable of the call exists. In shared
+  // mode both are false, so no share surface is ever constructed.
+  const shareClient = capabilities.canShareAtlas ? mutations : null;
   const setCinematicIsolation = useAtlasCinematicIsolation();
   const [journeys, setJourneys] = useState<Journey[]>([]);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
@@ -372,6 +378,15 @@ export function LivingAtlasApp({
   const [mobileSheetJourneyId, setMobileSheetJourneyId] = useState<string | null>(null);
   const [mobilePickerOpen, setMobilePickerOpen] = useState(false);
   const [mobileMapJourneyId, setMobileMapJourneyId] = useState<string | null>(null);
+  /**
+   * The open share surface, and which Journey it is locked to.
+   *
+   * `null` is closed; `{ lockedJourneyId: null }` is the multi-Journey path.
+   * This is deliberately its own state rather than a reuse of the media
+   * multi-select: #200 says sharing Journeys is its own operation, and a
+   * selection whose entries mean "asset" cannot also mean "Journey".
+   */
+  const [shareTarget, setShareTarget] = useState<{ lockedJourneyId: string | null } | null>(null);
   const closeMobileMap = useCallback(() => {
     setMobileMapJourneyId(null);
     if (typeof requestAnimationFrame !== "function") return;
@@ -919,6 +934,9 @@ export function LivingAtlasApp({
           <nav aria-label="移动端旅程操作">
             {canManageAtlas ? <MobileAccountActionSlot /> : null}
             {canCreateJourney ? <button type="button" onClick={openCreateComposer} aria-label="记录新旅程"><IconPlus size={18} stroke={1.4} aria-hidden="true" /></button> : null}
+            {shareClient && journeys.length > 0 ? (
+              <button type="button" onClick={() => setShareTarget({ lockedJourneyId: null })} aria-label="分享多段旅程"><IconShare size={18} stroke={1.4} aria-hidden="true" /></button>
+            ) : null}
             {journeys.length > 0 ? (
               <button type="button" onClick={() => setMobilePickerOpen(true)} aria-label="打开全部旅程"><IconTimeline size={18} stroke={1.4} aria-hidden="true" /></button>
             ) : null}
@@ -931,6 +949,9 @@ export function LivingAtlasApp({
             <button type="button" className={view === "planet" ? "is-active" : ""} aria-current={view === "planet" ? "page" : undefined} onClick={() => setView("planet")}><IconWorld size={16} stroke={1.35} aria-hidden="true" />地球</button>
             <button type="button" className={view === "timeline" ? "is-active" : ""} aria-current={view === "timeline" ? "page" : undefined} onClick={() => setView("timeline")}><IconTimeline size={16} stroke={1.35} aria-hidden="true" />时间线</button>
             {canCreateJourney ? <button ref={createMagnet.ref} onMouseMove={createMagnet.onMouseMove} onMouseLeave={createMagnet.onMouseLeave} type="button" className="living-atlas__create" onClick={openCreateComposer}><IconPlus size={17} stroke={1.4} aria-hidden="true" />记录旅程</button> : null}
+            {shareClient && journeys.length > 0 ? (
+              <button type="button" className="living-atlas__share" onClick={() => setShareTarget({ lockedJourneyId: null })}><IconShare size={16} stroke={1.35} aria-hidden="true" />分享多段旅程</button>
+            ) : null}
             <button
               ref={globeFocusTriggerRef}
               type="button"
@@ -1230,6 +1251,16 @@ export function LivingAtlasApp({
                   }}
                 ><IconRoute size={16} stroke={1.35} aria-hidden="true" />管理旅程</button>
               ) : null}
+              {shareClient ? (
+                <button
+                  type="button"
+                  data-share-journey-trigger="true"
+                  onClick={() => {
+                    setMobileSheetJourneyId(null);
+                    setShareTarget({ lockedJourneyId: mobileSheetJourney.id });
+                  }}
+                ><IconShare size={16} stroke={1.35} aria-hidden="true" />分享旅程</button>
+              ) : null}
             </div>
           </section>
         </div>
@@ -1360,10 +1391,25 @@ export function LivingAtlasApp({
           }}
           onEdit={canEditJourney ? editJourney : undefined}
           onDelete={canDeleteJourney && mutations ? removeJourney : undefined}
+          onShare={shareClient
+            ? (id) => {
+              closeJourneyStory(null);
+              setShareTarget({ lockedJourneyId: id });
+            }
+            : undefined}
           onMediaAdded={async (id) => {
             const loaded = await load(true);
             return loaded?.find((journey) => journey.id === id) ?? null;
           }}
+        />
+      ) : null}
+
+      {shareTarget && shareClient ? (
+        <JourneyShareDialog
+          journeys={journeyRail}
+          lockedJourneyId={shareTarget.lockedJourneyId}
+          mutations={shareClient}
+          onClose={() => setShareTarget(null)}
         />
       ) : null}
 

@@ -1,9 +1,11 @@
 import type {
+  CreatedShareGrant,
   Journey,
   JourneyInput,
   LocationSearchResponse,
   LocationSearchResult,
   PrivateMediaRead,
+  ShareGrantSummary,
 } from "./types";
 
 type Fetcher = typeof fetch;
@@ -282,4 +284,52 @@ export async function reverseGeocode(
   } finally {
     globalThis.clearTimeout(timeout);
   }
+}
+
+/**
+ * #200 phase E owner share routes.
+ *
+ * These are owner-authorized writes and an owner-private read, so they reach
+ * the browser only through `AtlasMutations`. A component importing them
+ * directly would be the exact fall-through phase D removed: a share affordance
+ * that keeps working after the capability that gates it is turned off.
+ */
+export async function createShare(
+  journeyIds: readonly string[],
+  expiresAt: Date,
+  fetcher: Fetcher = fetch,
+): Promise<CreatedShareGrant> {
+  return requestJson<CreatedShareGrant>(
+    "/api/shares",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        journeyIds: [...journeyIds],
+        expiresAt: expiresAt.toISOString(),
+      }),
+    },
+    fetcher,
+  );
+}
+
+export async function listShares(
+  fetcher: Fetcher = fetch,
+): Promise<ShareGrantSummary[]> {
+  const payload = await requestJson<{ shares: ShareGrantSummary[] }>(
+    "/api/shares",
+    { cache: "no-store" },
+    fetcher,
+  );
+  return payload.shares;
+}
+
+export async function revokeShare(
+  shareId: string,
+  fetcher: Fetcher = fetch,
+): Promise<void> {
+  await requestJson<unknown>(
+    `/api/shares/${encodeURIComponent(shareId)}/revoke`,
+    { method: "POST" },
+    fetcher,
+  );
 }
