@@ -141,17 +141,20 @@ export function videoTrimSegmentDurationMs(resolved: ResolvedVideoTrim): number 
 }
 
 /**
- * Whether the director's beat budget must not start yet.
+ * Whether the director's beat budget must not run right now.
  *
- * The budget is `outMs - inMs`, so it may only start once the element sits at
- * the in-point: a seek costs real time, and starting the timer at step entry
- * would spend part of the segment's budget on the seek and truncate its tail.
- * Non-video and untrimmed steps are unaffected — `positioning` is only ever
- * true while a trimmed segment is being reached, and the overlay releases it on
- * a bounded watchdog so a source that never seeks degrades instead of stalling.
+ * The budget is `outMs - inMs` of *played* segment, but the director spends it
+ * on the wall clock, so it may only run while the element is actually moving
+ * through the segment. It must not start before the element sits at the
+ * in-point — a seek costs real time, and starting the timer at step entry would
+ * spend part of the budget on the seek and truncate the tail — and it must stop
+ * again whenever playback stops progressing, or a buffering video would be
+ * skipped by a timer that kept counting against a stationary `currentTime`.
+ * Both states are released on a bounded watchdog, so a source that never seeks
+ * and a source that never resumes degrade instead of stalling.
  */
-export type VideoTrimSeekStatus = "positioning" | "playing" | "unavailable";
+export type VideoTrimSeekStatus = "positioning" | "buffering" | "playing" | "unavailable";
 
 export function videoTrimHoldsStep(status: VideoTrimSeekStatus | null): boolean {
-  return status === "positioning";
+  return status === "positioning" || status === "buffering";
 }

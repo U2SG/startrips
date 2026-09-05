@@ -23,8 +23,14 @@ describe("trim-aware video playback contract (#195 Phase 2)", () => {
     expect(videoTrimSegmentDurationMs(resolved)).toBe(trim.outMs - trim.inMs);
   });
 
-  it("holds the beat's budget only while the element is being positioned", () => {
+  it("holds the beat's budget whenever the segment is not progressing", () => {
+    // The director spends the budget on the wall clock, so it may run only
+    // while the element is really moving through the segment: not while it is
+    // being seeked onto the in-point, and not while it is buffering — a timer
+    // that kept counting against a stationary currentTime would skip most of a
+    // 3.5 s beat before any fallback fired.
     expect(videoTrimHoldsStep("positioning")).toBe(true);
+    expect(videoTrimHoldsStep("buffering")).toBe(true);
     expect(videoTrimHoldsStep("playing")).toBe(false);
     expect(videoTrimHoldsStep("unavailable")).toBe(false);
     expect(videoTrimHoldsStep(null)).toBe(false);

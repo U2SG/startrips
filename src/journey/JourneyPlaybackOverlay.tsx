@@ -344,22 +344,32 @@ export function JourneyPlaybackOverlay({
     activeVideoTrimOutMs,
     director.stepIndex,
   ]);
-  // The bounded escape acceptance 5 asks for. It starts only once the signed
-  // read is ready and playback is running, so a slow read is never mistaken for
-  // an unseekable source; when it fires, the beat degrades to `ended`
-  // ownership rather than holding the director forever.
-  const videoTrimPositioning = videoTrimSeek?.status === "positioning"
-    && videoTrimSeek.assetId === activeVideoTrimAssetId;
+  // The bounded escape acceptance 5 asks for, covering both holding states. It
+  // starts only once the signed read is ready and playback is running, so a slow
+  // read is never mistaken for an unseekable source. A `positioning` beat that
+  // never reaches its in-point degrades to `ended` ownership — the source may
+  // simply be unseekable and is still worth playing whole. A `buffering` beat
+  // has already proved it plays, so a segment that never resumes degrades to the
+  // overlay's existing media fallback, which releases the hold and lets the
+  // director's timer end the beat rather than waiting on an `ended` that a stuck
+  // source will never fire.
+  const videoTrimHoldingStatus = videoTrimSeek?.assetId === activeVideoTrimAssetId
+    ? videoTrimSeek?.status ?? null
+    : null;
+  const videoTrimWaiting = videoTrimHoldingStatus === "positioning"
+    || videoTrimHoldingStatus === "buffering";
   const videoTrimReadReady = activeVideoTrimAssetId
     ? mediaReads[activeVideoTrimAssetId]?.status === "ready"
     : false;
   useEffect(() => {
-    if (!videoTrimPositioning || !videoTrimReadReady || paused) return;
+    if (!videoTrimWaiting || !videoTrimReadReady || paused) return;
     const assetId = activeVideoTrimAssetId;
     if (!assetId) return;
+    const buffering = videoTrimHoldingStatus === "buffering";
     clearVideoTrimWatchdog();
     videoTrimTimerRef.current = window.setTimeout(() => {
       videoTrimTimerRef.current = null;
+      if (buffering) setVideoFallbackAssetId(assetId);
       setVideoTrimSeek({ assetId, status: "unavailable" });
     }, VIDEO_STALL_WATCHDOG_MS);
     return () => clearVideoTrimWatchdog();
@@ -367,8 +377,9 @@ export function JourneyPlaybackOverlay({
     activeVideoTrimAssetId,
     clearVideoTrimWatchdog,
     paused,
-    videoTrimPositioning,
+    videoTrimHoldingStatus,
     videoTrimReadReady,
+    videoTrimWaiting,
   ]);
   // #20: one sampler per soundtrack element; analyser built on first play.
   const samplerRef = useRef(createSoundtrackSampler());
@@ -915,7 +926,21 @@ export function JourneyPlaybackOverlay({
                       if (!activeVideoTrim || activeVideoTrim.assetId !== activeMedia.id) return;
                       settleVideoTrimSeek(activeMedia.id, "playing");
                     }}
-                    onPlaying={() => recoverVideoPlayback(activeMedia.id)}
+                    onWaiting={() => {
+                      // The director spends the beat's budget on the wall clock,
+                      // so a segment that stops progressing has to freeze it.
+                      if (!activeVideoTrim || activeVideoTrim.assetId !== activeMedia.id) return;
+                      if (videoTrimSeek?.assetId !== activeMedia.id) return;
+                      if (videoTrimSeek.status !== "playing") return;
+                      settleVideoTrimSeek(activeMedia.id, "buffering");
+                    }}
+                    onPlaying={() => {
+                      recoverVideoPlayback(activeMedia.id);
+                      if (!activeVideoTrim || activeVideoTrim.assetId !== activeMedia.id) return;
+                      if (videoTrimSeek?.assetId !== activeMedia.id) return;
+                      if (videoTrimSeek.status !== "buffering") return;
+                      settleVideoTrimSeek(activeMedia.id, "playing");
+                    }}
                     onProgress={() => clearVideoStallWatchdog()}
                     onTimeUpdate={(event) => {
                       clearVideoStallWatchdog();
@@ -923,8 +948,13 @@ export function JourneyPlaybackOverlay({
                         !activeVideoTrim
                         || activeVideoTrim.assetId !== activeMedia.id
                         || videoTrimSeek?.assetId !== activeMedia.id
-                        || videoTrimSeek.status !== "playing"
+                        || (videoTrimSeek.status !== "playing" && videoTrimSeek.status !== "buffering")
                       ) return;
+                      // `timeupdate` is the proof a buffering segment resumed:
+                      // it only fires when `currentTime` actually moved.
+                      if (videoTrimSeek.status === "buffering") {
+                        settleVideoTrimSeek(activeMedia.id, "playing");
+                      }
                       const element = event.currentTarget;
                       const action = videoTrimProgressAction(
                         resolveVideoTrim(activeVideoTrim.trim, element.duration),
@@ -949,6 +979,10 @@ export function JourneyPlaybackOverlay({
                       // progress/timeupdate may clear only this bounded watchdog; `playing` is the proof that playback resumed and may clear a persisted play failure.
                       if (paused) videoStalledAssetIdRef.current = activeMedia.id;
                       else scheduleVideoStallWatchdog(activeMedia.id);
+                      if (!activeVideoTrim || activeVideoTrim.assetId !== activeMedia.id) return;
+                      if (videoTrimSeek?.assetId !== activeMedia.id) return;
+                      if (videoTrimSeek.status !== "playing") return;
+                      settleVideoTrimSeek(activeMedia.id, "buffering");
                     }}
                   />
                 : <div className="journey-playback__media-state">正在打开媒体…</div>
