@@ -4,10 +4,26 @@ import {
   Color,
   ShaderMaterial,
   Vector3,
+  type WebGLRenderer,
 } from "three";
 
 export const PARTICLE_DIM_POINT_LIMIT = 24;
 export const PARTICLE_ACTIVE_DIM_POINT_LIMIT = 12;
+
+/**
+ * Sizes are authored in CSS pixels, while gl_PointSize uses drawing-buffer
+ * pixels. Read the effective renderer ratio, not window.devicePixelRatio,
+ * so a quality cap changes sampling resolution rather than optical size.
+ * A prototype method also survives ShaderMaterial.clone().
+ *
+ * This contract covers the current default framebuffer. A future offscreen
+ * export pass must supply its own logical viewport / render-target scale.
+ */
+class ParticleEarthMaterial extends ShaderMaterial {
+  override onBeforeRender(renderer: WebGLRenderer) {
+    this.uniforms.uPixelRatio.value = renderer.getPixelRatio();
+  }
+}
 
 interface ParticleMaterialOptions {
   color: number;
@@ -24,7 +40,7 @@ export function createParticleEarthMaterial({
   spatialLod = false,
   radialPulseScale = 1,
 }: ParticleMaterialOptions) {
-  return new ShaderMaterial({
+  return new ParticleEarthMaterial({
     transparent: true,
     depthWrite: false,
     blending: AdditiveBlending,
@@ -34,7 +50,9 @@ export function createParticleEarthMaterial({
       uOpacity: { value: opacity },
       uPointSize: { value: size },
       uTime: { value: 0 },
+      // Logical (CSS) height; physical scaling is owned by uPixelRatio.
       uViewportHeight: { value: 720 },
+      uPixelRatio: { value: 1 },
       uDimPointCount: { value: 0 },
       uDimPoints: {
         value: Array.from({ length: PARTICLE_DIM_POINT_LIMIT }, () => new Vector3(0, 0, 1)),
@@ -58,6 +76,7 @@ export function createParticleEarthMaterial({
       uniform float uPointSize;
       uniform float uTime;
       uniform float uViewportHeight;
+      uniform float uPixelRatio;
       uniform int uDimPointCount;
       uniform vec3 uDimPoints[${PARTICLE_DIM_POINT_LIMIT}];
       uniform int uActiveDimPointCount;
@@ -127,7 +146,7 @@ export function createParticleEarthMaterial({
           1.0,
           uPointSize * (uViewportHeight / 720.0) * (1.7 / -mvPosition.z)
             * (0.9 + spark * 0.32 * mix(1.0, 0.28, dimAmount))
-        );
+        ) * uPixelRatio;
         vStrength = mix(1.0, 0.72, uMorph);
       }
     `,
