@@ -29,21 +29,22 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
+  IconArrowDown,
   IconArrowLeft,
   IconArrowRight,
-  IconArrowDown,
   IconArrowUp,
   IconChevronDown,
   IconChevronUp,
   IconDots,
-  IconPhotoStar,
   IconEdit,
   IconLayoutGrid,
   IconMaximize,
   IconMusic,
   IconPhoto,
+  IconPhotoStar,
   IconPlayerPause,
   IconPlayerPlay,
+  IconShare,
   IconTrash,
   IconUpload,
   IconVideo,
@@ -181,6 +182,13 @@ type JourneyStoryProps = {
   /** Absent when the view has no edit capability (#200 shared mode). */
   onEdit?: (journeyId: string) => void;
   onDelete?: (journeyId: string) => void | Promise<void>;
+  /**
+   * #200 phase E. Opening the owner share surface for this Journey. Like
+   * `onEdit`, its absence is one half of the gate and `canShareAtlas` is the
+   * other: the dialog itself lives in the Atlas shell, so the story never
+   * holds a share client of its own.
+   */
+  onShare?: (journeyId: string) => void;
   onMediaAdded: (journeyId: string) => Journey | null | Promise<Journey | null>;
   onMediaDelete?: (assetId: string) => void | Promise<void>;
   onMediaReorder?: (
@@ -818,6 +826,7 @@ export function JourneyStory({
   onNavigate,
   onEdit,
   onDelete,
+  onShare,
   onMediaAdded,
   onMediaDelete,
   onMediaReorder,
@@ -830,6 +839,7 @@ export function JourneyStory({
   const manageMedia: AtlasMutations | null = capabilities.canManageMedia ? mutations : null;
   const removeMedia = onMediaDelete ?? manageMedia?.deleteMedia ?? null;
   const canEditJourney = capabilities.canEditJourney && Boolean(onEdit);
+  const canShareJourney = capabilities.canShareAtlas && Boolean(onShare);
   const journeyIndex = journeys.findIndex((candidate) => candidate.id === journeyId);
   const journey = journeys[journeyIndex];
   const initialMediaSelection = storyInitialMediaSelection(journey, routePointId);
@@ -3947,9 +3957,10 @@ export function JourneyStory({
         </div>
 
         <footer>
-          {(canEditJourney || onDelete) && (!mobileLayout || mobileManageMode) ? (
+          {(canEditJourney || canShareJourney || onDelete) && (!mobileLayout || mobileManageMode) ? (
             <div className="journey-story__manage">
               {canEditJourney ? <button type="button" disabled={mutationPending || deleteState !== "idle"} onClick={() => onEdit?.(journey.id)}><IconEdit size={16} stroke={1.35} aria-hidden="true" />编辑旅程</button> : null}
+              {canShareJourney ? <button type="button" data-share-journey-trigger="true" disabled={mutationPending || deleteState !== "idle"} onClick={() => onShare?.(journey.id)}><IconShare size={16} stroke={1.35} aria-hidden="true" />分享旅程</button> : null}
               {onDelete ? <button ref={journeyDeleteTriggerRef} className="is-destructive" type="button" disabled={mutationPending || deleteState !== "idle"} onClick={() => { setDeleteState("confirming"); setDeleteMessage(""); }}><IconTrash size={16} stroke={1.35} aria-hidden="true" />删除旅程</button> : null}
             </div>
           ) : null}

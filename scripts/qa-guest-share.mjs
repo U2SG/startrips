@@ -14,8 +14,8 @@
 // given a well-formed guest payload; the server side of the same contract is
 // covered by the integration tests from phases A to C.
 //
-// What this lane deliberately does NOT cover: the owner share UI (phase E does
-// not exist yet, so no link can be created here), the real presign lifetime
+// What this lane deliberately does NOT cover: creating a link, which is the
+// owner surface `qa-owner-share.mjs` drives; the real presign lifetime
 // (the stub answers instantly), and Story fullscreen media playback, which
 // needs a decodable video the stub does not serve.
 import { launchQaBrowser } from "./qa-browser.mjs";
@@ -55,6 +55,13 @@ const FORBIDDEN_CONTROL_TEXT = [
   "邀请另一位",
   "编辑图谱",
   "退出登录",
+  // #200 phase E owner share affordances. `canShareAtlas` was declared but
+  // unused until phase E, so before it these four could not have been rendered
+  // by anything; now that they exist, a guest must still reach none of them.
+  "分享旅程",
+  "分享多段旅程",
+  "创建分享链接",
+  "撤销链接",
 ];
 
 const sharedJourneys = [

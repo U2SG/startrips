@@ -70,7 +70,9 @@ function storyMarkup(view: AtlasView | null) {
     // A guest tree passes no owner callback at all. Before #200 phase D an
     // absent `onMediaDelete` fell through to the owner API client, so this is
     // exactly the shape that used to leave deletion reachable.
-    ...(view === null ? { onEdit: () => undefined, onDelete: () => undefined } : {}),
+    ...(view === null
+      ? { onEdit: () => undefined, onDelete: () => undefined, onShare: () => undefined }
+      : {}),
   });
   return renderToStaticMarkup(
     view === null ? story : createElement(AtlasViewProvider, { value: view }, story),
@@ -89,6 +91,10 @@ const MUTATION_AFFORDANCES = [
   "添加照片或视频",
   "编辑旅程",
   "删除旅程",
+  // #200 phase E. `canShareAtlas` was declared by phase D and unused until the
+  // owner share UI landed; now that it gates a real control, a guest tree that
+  // regained it would render a create-link affordance over the owner routes.
+  "分享旅程",
   "删除媒体",
   "设为封面",
   "上传配乐",
@@ -128,6 +134,7 @@ describe("JourneyStory in a read-only capability set (#200 phase D)", () => {
     expect(ownerMarkup).toContain("添加照片或视频");
     expect(ownerMarkup).toContain("编辑旅程");
     expect(ownerMarkup).toContain("删除旅程");
+    expect(ownerMarkup).toContain("分享旅程");
     expect(OWNER_ATLAS_VIEW_CAPABILITIES.canManageMedia).toBe(true);
   });
 });
@@ -156,10 +163,21 @@ const OWNER_MUTATION_EXPORTS = [
   "undoJourneyMediaMove",
   "setJourneyCover",
   "getPrivateMediaRead",
+  // #200 phase E: creating and revoking a link are owner writes, and the
+  // owner's list of its own links is owner-private. All three reach the UI
+  // through `AtlasMutations`, so naming one here would be the same
+  // fall-through this list exists to catch.
+  "createShare",
+  "listShares",
+  "revokeShare",
 ];
 
 const GUEST_REACHABLE_MODULES = [
   "JourneyStory.tsx",
+  // Statically imported by `LivingAtlasApp`, so it is in a guest bundle even
+  // though a guest can never mount it: its share client arrives as a prop.
+  "JourneyShareDialog.tsx",
+  "shareLinks.ts",
   "JourneyPlaybackOverlay.tsx",
   "LivingAtlasApp.tsx",
   "JourneyTimeline.tsx",
