@@ -73,9 +73,9 @@ export type RouteArcOptions = {
    */
   arcHeightRatio?: number;
   /**
-   * Angular distance (radians) at which the hump saturates; shorter legs get
-   * a proportionally lower hump. The mapping is nonlinear (sqrt) so small
-   * hops stay flat while long transits curve gracefully.
+   * Angular distance (radians) at which the cinematic hump saturates. #242:
+   * the resulting height is then bounded against the leg's own chord, so a
+   * local hop hugs geography instead of standing taller than it is long.
    */
   arcSaturationAngle?: number;
 };
@@ -127,11 +127,110 @@ const EMPTY_ROUTE_ARC_SAMPLES: RouteArcSamples = {
   lifts: new Float32Array(),
 };
 
+/**
+ * #242: decorative lift is bounded relative to the leg it decorates.
+ *
+ * The sqrt policy alone made peak lift divided by endpoint chord length grow
+ * without bound as legs shortened - about 1.18 chord lengths at 1.9 degrees -
+ * so a chain of local stops rendered as a row of steep takeoffs. The cap below
+ * is the highest a hump may stand relative to its own chord, and the ramp
+ * takes that fraction smoothly to zero as a leg becomes local, which is what
+ * "short hops stay flat" always meant but never enforced.
+ */
+export const MAX_ROUTE_ARC_LIFT_PER_CHORD = 0.25;
+
+/** Below this leg angle the chord-relative bound ramps toward a flat trace. */
+export const ROUTE_ARC_SHORT_LEG_ANGLE = Math.PI / 9;
+
+/**
+ * #242: how far the drawn polyline may depart from the lifted curve it stands
+ * for, as a fraction of the anchor radius. It is the quality policy the sample
+ * count is solved for, rather than a vertex count chosen by hand.
+ */
+export const ROUTE_ARC_CHORD_TOLERANCE = 5e-5;
+
+/**
+ * A lifted leg is never drawn as one or two straight segments. Two segments
+ * through one elevated midpoint IS the reported sawtooth: the midpoint is a
+ * literal triangular peak, and crossing the old one-segment threshold made a
+ * flat leg jump straight to it.
+ */
+export const MIN_LIFTED_ROUTE_ARC_SEGMENTS = 4;
+
+/**
+ * Bound on the second derivative of the sin^1.6 hump in the leg parameter,
+ * around its peak: |d2/dt2 of h*sin(pi*t)^1.6| is 1.6*pi^2*h there, and the
+ * margin covers the sharper shoulders of the profile.
+ */
+const ROUTE_ARC_LIFT_CURVATURE = 20;
+
+const ROUTE_ARC_EXPONENT = 1.6;
+
+function smoothstep(edge0: number, edge1: number, value: number) {
+  const t = Math.min(1, Math.max(0, (value - edge0) / (edge1 - edge0)));
+  return t * t * (3 - 2 * t);
+}
+
 function arcHeightRatioFor(angle: number, options: RouteArcOptions) {
   const ratio = options.arcHeightRatio ?? 0;
-  if (ratio <= 0) return 0;
+  if (ratio <= 0 || angle <= 0) return 0;
   const saturation = options.arcSaturationAngle ?? Math.PI / 3;
-  return ratio * Math.min(1, Math.sqrt(angle / saturation));
+  const cinematic = ratio * Math.min(1, Math.sqrt(angle / saturation));
+  // The chord between the two Route Points, in the same units as the lift.
+  const chord = 2 * Math.sin(angle / 2);
+  const localBound = MAX_ROUTE_ARC_LIFT_PER_CHORD
+    * chord
+    * smoothstep(0, ROUTE_ARC_SHORT_LEG_ANGLE, angle);
+  return Math.min(cinematic, localBound);
+}
+
+/**
+ * #242: how many straight segments the lifted curve of one leg needs.
+ *
+ * The old rule counted angular distance alone, so it could not see the
+ * curvature the radial lift itself introduces. Here the leg is a curve in its
+ * own plane whose parameter-space acceleration has an angular term and a lift
+ * term; the chord error of an n-segment polyline through a curve of
+ * acceleration a is at most a / (8 n^2), which inverts to the count below.
+ *
+ * The count is even so the peak at t = 0.5 is always sampled - an odd count
+ * reads the hump about 8 percent low and makes the sampled peak depend on
+ * parity rather than on policy.
+ */
+export function routeArcSegmentCount(
+  angle: number,
+  heightRatio: number,
+  maxSegmentAngle: number,
+  liftRequested: boolean,
+) {
+  if (!(angle > 0)) return 1;
+  const angular = Math.ceil(angle / maxSegmentAngle);
+  const acceleration = angle * angle * (1 + heightRatio)
+    + ROUTE_ARC_LIFT_CURVATURE * heightRatio;
+  const curvature = Math.ceil(
+    Math.sqrt(acceleration / (8 * ROUTE_ARC_CHORD_TOLERANCE)),
+  );
+  let count = Math.max(1, angular, curvature);
+  if (liftRequested) count = Math.max(count, MIN_LIFTED_ROUTE_ARC_SEGMENTS);
+  return count % 2 === 0 ? count : count + 1;
+}
+
+/**
+ * #242 review: the inverse of routeArcSegmentCount - the tallest hump a leg
+ * drawn with `segmentCount` straight segments can carry and still meet
+ * ROUTE_ARC_CHORD_TOLERANCE.
+ *
+ * Under budget pressure a leg can be granted far fewer segments than its hump
+ * asked for. Keeping the full height at that density draws the coarse raised
+ * polygon this change exists to remove, so the decoration is what gives way,
+ * never the fidelity of the path.
+ */
+export function maxRepresentableArcLift(angle: number, segmentCount: number) {
+  if (!(angle > 0) || segmentCount < MIN_LIFTED_ROUTE_ARC_SEGMENTS) return 0;
+  const affordable = 8 * ROUTE_ARC_CHORD_TOLERANCE * segmentCount * segmentCount;
+  const angular = angle * angle;
+  if (affordable <= angular) return 0;
+  return (affordable - angular) / (angular + ROUTE_ARC_LIFT_CURVATURE);
 }
 
 /**
@@ -148,16 +247,56 @@ export function routeArcVertexCount(samples: RouteArcSamples) {
   return samples.lifts.length;
 }
 
-export function buildRouteArcSamples(
+export type RouteArcLegPlan = {
+  start: Vector3;
+  end: Vector3;
+  /** Angular length of the leg in radians; sizes both the count and the lift. */
+  angle: number;
+  heightRatio: number;
+  segmentCount: number;
+};
+
+/**
+ * #242: ONE decision about the geometry of a route, shared by the whole-route
+ * stroke and the per-leg rewind paths.
+ *
+ * Both used to build their own samples with their own vertex budget from the
+ * same Route Points, so the static stroke and the leg that redraws it could
+ * disagree. They now read the same plan, and because the plan is a pure
+ * function of the route's points and its budget, the two are identical rather
+ * than merely similar.
+ *
+ * The budget is spread across legs instead of being spent front to back: the
+ * old build returned early when it ran out, which silently dropped the tail of
+ * a dense route and with it the Route Points on it. Every leg keeps at least
+ * one segment, so every stored Route Point survives and the returned leg count
+ * always matches the route's own legs one for one; a leg granted fewer segments
+ * than its hump needs gives up as much of the hump as it cannot draw
+ * faithfully. Degradation order is fixed: decorative lift first, then interior
+ * subdivision down to one segment per stored leg, and only then - when even
+ * that will not fit - the route is not drawn at all. A Route Point is never
+ * omitted from a route that IS drawn.
+ */
+export function planRouteArcLegs(
   points: readonly GeographicPoint[],
-  maxSegmentAngle = Math.PI / 24,
-  maxVertices = 8192,
-  arc: RouteArcOptions = {},
-): RouteArcSamples {
-  if (points.length < 2 || maxVertices < 2) return EMPTY_ROUTE_ARC_SAMPLES;
-  const directions: number[] = [];
-  const lifts: number[] = [];
-  const arcExponent = 1.6;
+  maxSegmentAngle: number,
+  maxVertices: number,
+  arc: RouteArcOptions,
+): RouteArcLegPlan[] {
+  if (points.length < 2 || maxVertices < 2) return [];
+  const liftRequested = (arc.arcHeightRatio ?? 0) > 0;
+  const availableSegments = Math.floor(maxVertices / 2);
+  const plans: RouteArcLegPlan[] = [];
+
+  // #242 review: maxVertices is a hard ceiling, and one straight segment per
+  // leg is the least a route can be drawn as while still passing through every
+  // Route Point it stores. A budget below that cannot render this route
+  // truthfully, so it renders none of it: dropping a route at the selection
+  // level is a policy the viewer can be told about, while a stroke that
+  // shortcuts across omitted Route Points is a quiet lie about the Journey.
+  // The scene reserves this floor for every route it renders, so a rendered
+  // route never reaches this guard.
+  if (points.length - 1 > availableSegments) return [];
 
   for (let index = 1; index < points.length; index += 1) {
     const start = latLonToVector3(
@@ -167,41 +306,103 @@ export function buildRouteArcSamples(
     ).normalize();
     const end = latLonToVector3(points[index].lat, points[index].lon, 1).normalize();
     const angle = Math.acos(Math.min(1, Math.max(-1, start.dot(end))));
-    const stepCount = Math.max(1, Math.ceil(angle / maxSegmentAngle));
-    // #15: the hump peaks mid-leg and touches the surface at both ends, so a
-    // multi-stop route reads as a continuous trail, not disconnected arcs.
     const heightRatio = arcHeightRatioFor(angle, arc);
-
-    for (let step = 1; step <= stepCount; step += 1) {
-      if (lifts.length + 2 > maxVertices) {
-        return {
-          directions: new Float32Array(directions),
-          lifts: new Float32Array(lifts),
-        };
-      }
-      const previousProgress = (step - 1) / stepCount;
-      const currentProgress = step / stepCount;
-      const previous = slerpUnitVectors(start, end, previousProgress);
-      const current = slerpUnitVectors(start, end, currentProgress);
-      directions.push(...previous.toArray(), ...current.toArray());
-      lifts.push(
-        liftAt(previousProgress, heightRatio, arcExponent),
-        liftAt(currentProgress, heightRatio, arcExponent),
-      );
-    }
+    plans.push({
+      start,
+      end,
+      angle,
+      heightRatio,
+      segmentCount: routeArcSegmentCount(
+        angle,
+        heightRatio,
+        maxSegmentAngle,
+        liftRequested,
+      ),
+    });
   }
 
+  let requested = plans.reduce((sum, plan) => sum + plan.segmentCount, 0);
+  if (requested <= availableSegments) return plans;
+
+  // Not enough budget for the curve every leg asked for. Scale proportionally,
+  // never below one segment, then shave the widest remaining allocations until
+  // the total fits. The guard above already established that there are no more
+  // legs than segments, so flooring at one segment cannot breach the ceiling.
+  const scale = availableSegments / requested;
+  for (const plan of plans) {
+    plan.segmentCount = Math.max(1, Math.floor(plan.segmentCount * scale));
+  }
+  requested = plans.reduce((sum, plan) => sum + plan.segmentCount, 0);
+  while (requested > availableSegments) {
+    let widest = plans[0];
+    for (const plan of plans) {
+      if (plan.segmentCount > widest.segmentCount) widest = plan;
+    }
+    if (widest.segmentCount <= 1) break;
+    widest.segmentCount -= 1;
+    requested -= 1;
+  }
+  // #242 review: a leg keeps only the hump the segments it was granted can
+  // draw faithfully. The four-segment floor is not the test - a 20 degree leg
+  // that asked for 70 segments and got 10 would clear that floor while drawing
+  // exactly the coarse raised polygon this change removes.
+  for (const plan of plans) {
+    plan.heightRatio = Math.min(
+      plan.heightRatio,
+      maxRepresentableArcLift(plan.angle, plan.segmentCount),
+    );
+  }
+  return plans;
+}
+
+function appendLegSamples(
+  plan: RouteArcLegPlan,
+  into: { directions: number[]; lifts: number[] },
+) {
+  const { start, end, heightRatio, segmentCount } = plan;
+  for (let step = 1; step <= segmentCount; step += 1) {
+    const previousProgress = (step - 1) / segmentCount;
+    const currentProgress = step / segmentCount;
+    const previous = slerpUnitVectors(start, end, previousProgress);
+    const current = slerpUnitVectors(start, end, currentProgress);
+    into.directions.push(...previous.toArray(), ...current.toArray());
+    into.lifts.push(
+      liftAt(previousProgress, heightRatio, ROUTE_ARC_EXPONENT),
+      liftAt(currentProgress, heightRatio, ROUTE_ARC_EXPONENT),
+    );
+  }
+}
+
+function toSamples(buffer: { directions: number[]; lifts: number[] }): RouteArcSamples {
   return {
-    directions: new Float32Array(directions),
-    lifts: new Float32Array(lifts),
+    directions: new Float32Array(buffer.directions),
+    lifts: new Float32Array(buffer.lifts),
   };
+}
+
+export function buildRouteArcSamples(
+  points: readonly GeographicPoint[],
+  maxSegmentAngle = Math.PI / 24,
+  maxVertices = 8192,
+  arc: RouteArcOptions = {},
+): RouteArcSamples {
+  const plans = planRouteArcLegs(points, maxSegmentAngle, maxVertices, arc);
+  if (plans.length === 0) return EMPTY_ROUTE_ARC_SAMPLES;
+  // #15: the hump peaks mid-leg and touches the surface at both ends, so a
+  // multi-stop route reads as a continuous trail, not disconnected arcs.
+  const buffer = { directions: [] as number[], lifts: [] as number[] };
+  for (const plan of plans) appendLegSamples(plan, buffer);
+  return toSamples(buffer);
 }
 
 /**
  * #21 review: build each route leg as its own sample set, so a rewind can
  * reveal one leg at a time (the trail grows stop by stop) instead of fading
- * the whole path. Each returned entry covers points[i] -> points[i+1]; legs
- * whose points fail validation are skipped.
+ * the whole path. Each returned entry covers points[i] -> points[i+1].
+ *
+ * #242: the plan is built from the WHOLE route, so a leg here is the same
+ * geometry as the corresponding span of buildRouteArcSamples given the same
+ * budget - not a second, independently budgeted copy of it.
  */
 export function buildRouteArcLegSamples(
   points: readonly GeographicPoint[],
@@ -209,17 +410,11 @@ export function buildRouteArcLegSamples(
   maxVertices = 8192,
   arc: RouteArcOptions = {},
 ): RouteArcSamples[] {
-  const legs: RouteArcSamples[] = [];
-  for (let index = 1; index < points.length; index += 1) {
-    const leg = buildRouteArcSamples(
-      [points[index - 1], points[index]],
-      maxSegmentAngle,
-      maxVertices,
-      arc,
-    );
-    if (leg.directions.length > 0) legs.push(leg);
-  }
-  return legs;
+  return planRouteArcLegs(points, maxSegmentAngle, maxVertices, arc).map((plan) => {
+    const buffer = { directions: [] as number[], lifts: [] as number[] };
+    appendLegSamples(plan, buffer);
+    return toSamples(buffer);
+  });
 }
 
 export function buildSphericalRingSegments(

@@ -117,6 +117,44 @@ export const QUALITY_PROFILE = {
 export const MAX_RENDERED_JOURNEYS = 64;
 export const MAX_RENDERED_ROUTE_POINTS = 512;
 export const MAX_RENDERED_ROUTE_LINE_VERTICES = 8192;
+
+/**
+ * #242 review: the line-vertex pool is shared by every visible route, and it
+ * used to be spent front to back. A curvature-aware sample count asks for
+ * several times as many vertices per leg as the old angular rule, so the FIRST
+ * long route could consume nearly the whole pool and leave the routes after it
+ * as single-segment traces or nothing at all - a dense multi-Journey overview
+ * would lose its later Journeys to whichever one happened to be drawn first.
+ *
+ * Each route takes an equal share of whatever is still unspent, so a route that
+ * needs less than its share leaves the surplus to the ones after it and no
+ * route can starve the rest.
+ *
+ * Two reservations keep an equal share from becoming a different unfairness.
+ * `ownMinimum` is the vertices this route needs to pass through every one of
+ * its Route Points at one straight segment per leg - its topology floor, which
+ * is never traded away, because a route drawn without a stored Route Point is a
+ * lie about the Journey rather than a lower-quality picture of it.
+ * `reservedForOthers` is the same floor summed over the routes still to come,
+ * held back so an early route's fair share cannot consume the minimum a later
+ * one needs. `selectRenderableJourneyRoutes` caps the rendered point total at
+ * MAX_RENDERED_ROUTE_POINTS, so those floors sum to well under the pool and
+ * every rendered route is guaranteed its complete topology.
+ */
+export function resolveRouteVertexShare(
+  spentVertices: number,
+  routesRemaining: number,
+  ownMinimum = 0,
+  reservedForOthers = 0,
+) {
+  const unspent = Math.max(0, MAX_RENDERED_ROUTE_LINE_VERTICES - spentVertices);
+  const shareable = Math.max(0, unspent - reservedForOthers);
+  return Math.max(
+    Math.min(ownMinimum, unspent),
+    Math.floor(shareable / Math.max(1, routesRemaining)),
+  );
+}
+
 export const MAX_RENDERED_ROUTE_LABELS = 6;
 export const MAX_RENDERED_MOBILE_ROUTE_LABELS = 3;
 export const CITY_LABEL_BUDGET = 72;
@@ -2280,6 +2318,18 @@ export function ParticleEarthScene({
         (total, route) => total + route.points.length,
         0,
       );
+      // #242 review: the vertices each route needs to pass through every one of
+      // its Route Points, and the running total still owed to the routes after
+      // it. Reserved rather than competed for, so no route loses a stored point
+      // to a route drawn before it.
+      const routeTopologyFloors = visibleRoutes.map(
+        (route) => Math.max(0, route.points.length - 1) * 2,
+      );
+      const routeTopologyFloorsAfter = routeTopologyFloors.map(
+        (_, index) => routeTopologyFloors
+          .slice(index + 1)
+          .reduce((total, floor) => total + floor, 0),
+      );
       const pointPositions = new Float32Array(pointCount * 3);
       const pointTargets: Array<{ journeyId: string; routePointId?: string }> = [];
       let pointIndex = 0;
@@ -2510,8 +2560,12 @@ export function ParticleEarthScene({
         });
         group.append(...routeLabelElements);
 
-        const remainingVertices = MAX_RENDERED_ROUTE_LINE_VERTICES
-          - routeVertexCount;
+        const remainingVertices = resolveRouteVertexShare(
+          routeVertexCount,
+          visibleRoutes.length - routeIndex,
+          routeTopologyFloors[routeIndex],
+          routeTopologyFloorsAfter[routeIndex],
+        );
         // #15: long legs lift off the surface as a natural spatial arc
         // (great circle + altitude hump); short legs hug the globe. The
         // hump scales nonlinearly with angular distance and is clamped.
@@ -2528,10 +2582,16 @@ export function ParticleEarthScene({
         // #21 review: build one path per leg so the rewind reveals the trail
         // stop by stop. Each leg path reuses the core gradient stroke and is
         // faded by its destination point's temporal progress.
+        //
+        // #242: the same points, segment angle, budget and arc options as the
+        // whole-route build above, so the leg a rewind draws is the very span
+        // the static stroke draws. The old build handed the legs a separate
+        // 2048-vertex budget, which let the two disagree geometrically and
+        // doubled a bright peak wherever they did.
         const legSamples = buildRouteArcLegSamples(
           route.points,
           Math.PI / 96,
-          Math.min(remainingVertices, 2048),
+          remainingVertices,
           {
             arcHeightRatio: ROUTE_ARC_HEIGHT_RATIO,
             arcSaturationAngle: ROUTE_ARC_SATURATION_ANGLE,

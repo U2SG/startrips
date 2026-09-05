@@ -95,6 +95,22 @@ const globeQaRoutes: JourneyRoute[] = [
     ],
   },
   {
+    // #242 fixture: a SYNTHETIC chain of eight evenly spaced ~0.5 degree legs,
+    // generated from one origin and a constant step rather than taken from any
+    // real itinerary. Short legs are where the old sqrt lift policy stood
+    // tallest relative to the leg it decorated, so this is the shape that read
+    // as a row of raised sawteeth when the globe rotated it toward the limb.
+    id: "qa-route-short-legs",
+    color: "#8fd0c4",
+    points: Array.from({ length: 8 }, (_, index) => ({
+      id: `qa-p-3${index}`,
+      lat: 12 + (index * 0.35),
+      lon: 8 + (index * 0.4),
+      isStop: index === 0 || index === 7,
+      label: `Synthetic stop ${index + 1}`,
+    })),
+  },
+  {
     id: "qa-route-alone-at-sea",
     color: "#ffd166",
     points: [
