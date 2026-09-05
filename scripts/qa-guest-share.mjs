@@ -95,6 +95,24 @@ const sharedJourneys = [
   },
 ];
 
+// The two ends of the granted set, derived the way the product derives them:
+// `LivingAtlasApp` sorts with `sortJourneysChronologically` on load, so the
+// story's 上一段/下一段 pair is decided by date order, not payload order. The
+// rail is that sorted list reversed, so its FIRST entry is the far end.
+const CHRONOLOGICAL = [...sharedJourneys].sort((left, right) => left.startedOn.localeCompare(right.startedOn));
+const NEAR_END_TITLE = CHRONOLOGICAL[0].title;
+const FAR_END_TITLE = CHRONOLOGICAL[CHRONOLOGICAL.length - 1].title;
+
+/** Wait until the open story dialog is actually showing `title`. */
+async function storyShowing(page, title) {
+  await page.locator(".journey-story").waitFor({ timeout: 15_000 });
+  await page.waitForFunction(
+    (wanted) => (document.querySelector(".journey-story")?.textContent ?? "").includes(wanted),
+    title,
+    { timeout: 15_000 },
+  );
+}
+
 function sharedPayload(journeys = sharedJourneys, expiresAt = "2036-10-10T10:30:00.000Z") {
   return {
     share: { expiresAt, journeyCount: journeys.length },
@@ -364,7 +382,7 @@ try {
     if (!storyOpened) {
       failures.push("story: no 打开故事 entry point in the shared viewer");
     } else {
-      await page.locator(".journey-story").waitFor({ timeout: 15_000 });
+      await storyShowing(page, FAR_END_TITLE);
       const story = await page.evaluate(() => {
         const root = document.querySelector(".journey-story");
         return {
@@ -412,13 +430,19 @@ try {
         `nextDisabled=${next?.disabled}`,
       ].join(" "));
       await page.keyboard.press("Escape");
-      await page.waitForTimeout(250);
+      // The dialog is conditionally rendered, so a closed story is a detached
+      // node. Waiting for that rather than for a fixed delay is what keeps the
+      // next block from reading the journey that was already open.
+      await page.locator(".journey-story").waitFor({ state: "detached", timeout: 15_000 });
 
       // Scope closure, near end. Both ends of the granted set have to be shut,
       // and only one of them is visible from a single journey. The rail's last
       // entry is the chronologically first journey, where the pair inverts.
       await page.locator(".living-atlas__journey-rail ol li button").last().click();
-      await page.waitForTimeout(300);
+      // The rail marks the selected Journey with aria-current, so this waits on
+      // the selection itself rather than on a delay.
+      await page.locator('.living-atlas__journey-rail ol li:last-child button[aria-current="true"]')
+        .waitFor({ timeout: 15_000 });
       const nearOpened = await page.evaluate(() => {
         const open = [...document.querySelectorAll("button")]
           .find((button) => (button.textContent ?? "").includes("打开故事"));
@@ -429,7 +453,7 @@ try {
       if (!nearOpened) {
         failures.push("story: no 打开故事 entry point for the first journey of the granted set");
       } else {
-        await page.locator(".journey-story").waitFor({ timeout: 15_000 });
+        await storyShowing(page, NEAR_END_TITLE);
         const near = await page.evaluate(() =>
           [...(document.querySelectorAll(".journey-story__navigation button") ?? [])]
             .map((button) => ({
