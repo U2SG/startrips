@@ -190,7 +190,7 @@ describe("deterministic auto-edit foundation (#127)", () => {
     expect(result.errors).toContain("invalid trim clip");
   });
 
-  it("rejects a source-bounded Quick Recap trim whose in-point is not zero", () => {
+  it("accepts a source-bounded Quick Recap trim whose in-point is not zero", () => {
     const digests = [digest("clip", "tokyo", 0, {
       mediaType: "video",
       mimeType: "video/mp4",
@@ -208,18 +208,27 @@ describe("deterministic auto-edit foundation (#127)", () => {
     expect(validateAutoEditPlanV1(plan, { ...baseInput, routePointIds: ["tokyo"], digests }).valid).toBe(true);
 
     // An externally authored plan selecting the clip's final second stays inside
-    // the source bounds and reconciles with `plannedDurationMs`, so neither the
-    // bounds check nor the duration recompute catches it. Live playback would
-    // still autoplay the clip from 0 and hold the step until `ended`, i.e. play
-    // the *first* second while claiming the last one.
-    const forged = structuredClone(plan);
-    forged.chapters[0]!.items[0]!.trim = { inMs: 9_000, outMs: 10_000 };
-    forged.plannedDurationMs = sumPlannedDurationMs(forged);
-    const result = validateAutoEditPlanV1(forged, { ...baseInput, routePointIds: ["tokyo"], digests });
-    expect(result.valid).toBe(false);
-    expect(result.errors).toContain("trim in-point unsupported clip");
-    expect(result.errors).not.toContain("invalid trim clip");
-    expect(result.errors).not.toContain("planned duration mismatch");
+    // the source bounds and reconciles with `plannedDurationMs`. Before #195
+    // Phase 2 it was rejected anyway, because live playback would autoplay the
+    // clip from 0 and hold the step until `ended` - playing the *first* second
+    // while claiming the last one. `videoTrimPlayback.ts` now seeks the element
+    // onto the in-point and ends the beat at the out-point, so the plan and the
+    // runtime describe the same second and the rule is gone.
+    const late = structuredClone(plan);
+    late.chapters[0]!.items[0]!.trim = { inMs: 9_000, outMs: 10_000 };
+    late.plannedDurationMs = sumPlannedDurationMs(late);
+    const result = validateAutoEditPlanV1(late, { ...baseInput, routePointIds: ["tokyo"], digests });
+    expect(result.errors).toEqual([]);
+    expect(result.valid).toBe(true);
+
+    // The source bounds are what the relaxation deliberately did not touch: an
+    // in-point outside the known source duration is still not a window.
+    const beyond = structuredClone(plan);
+    beyond.chapters[0]!.items[0]!.trim = { inMs: 12_000, outMs: 13_000 };
+    beyond.plannedDurationMs = sumPlannedDurationMs(beyond);
+    const beyondResult = validateAutoEditPlanV1(beyond, { ...baseInput, routePointIds: ["tokyo"], digests });
+    expect(beyondResult.valid).toBe(false);
+    expect(beyondResult.errors).toContain("invalid trim clip");
 
     // A zero in-point selecting a shorter window remains legitimate: the media
     // element starts where the plan says it starts.

@@ -755,16 +755,14 @@ export function validateAutoEditPlanV1(planInput: unknown, input: {
         ) {
           errors.push(`invalid trim ${item.assetId}`);
         } else {
-          if (item.trim.inMs !== 0) {
-            // No playback path seeks a <video> to a declared in-point: the
-            // element autoplays from the beginning and the step completes on the
-            // real `ended` event, while `quickRecapStepDurationMs()` measures
-            // only `outMs - inMs`. A non-zero in-point would therefore claim a
-            // later segment and play the opening one instead. Deliberately
-            // mode-independent - the limitation is in the shared media element,
-            // not in one mode - and lifted only when trim-aware playback lands.
-            errors.push(`trim in-point unsupported ${item.assetId}`);
-          }
+          // #195 Phase 2 lifted the `trim in-point unsupported` rule. It existed
+          // because no playback path seeked a <video> to a declared in-point, so
+          // a non-zero in-point claimed a later segment and played the opening
+          // one. `videoTrimPlayback.ts` is now that path: the element is moved
+          // onto `inMs` before the beat's budget starts and the beat ends at
+          // `outMs`, so the plan's arithmetic and the segment that plays agree.
+          // The source bounds above stay as they were - a trim still has to name
+          // a real window inside a known source duration.
           if (
             plan.mode === "full"
             && (item.trim.inMs !== 0 || item.trim.outMs !== sourceDuration)
