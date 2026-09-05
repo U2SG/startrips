@@ -15,6 +15,7 @@ import {
   activeShareRows,
   formatShareExpiry,
   maxCustomExpiry,
+  nextShareExpiryDelay,
   resolveShareExpiry,
   shareExpiryMessage,
   shareLinkUrl,
@@ -124,16 +125,8 @@ export function JourneyShareDialog({
    */
   useEffect(() => {
     if (!grants) return;
-    const current = nowRef.current().valueOf();
-    const nextExpiry = grants
-      .filter((grant) => grant.status === "active")
-      .map((grant) => new Date(grant.expiresAt).valueOf())
-      .filter((value) => Number.isFinite(value) && value > current)
-      .sort((left, right) => left - right)[0];
-    if (nextExpiry === undefined) return;
-    // A share may be up to a year out, well past the 32-bit ceiling a timeout
-    // delay is clamped to; capping it re-arms instead of firing immediately.
-    const delay = Math.min(nextExpiry - current + 1_000, 2_147_483_647);
+    const delay = nextShareExpiryDelay(grants, nowRef.current());
+    if (delay === null) return;
     const timer = globalThis.setTimeout(() => setListTick((tick) => tick + 1), delay);
     return () => globalThis.clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -276,3 +276,34 @@ export const SHARE_BEARER_NOTICE = "任何获得此链接的人都可以在有�
 
 /** Why the raw link cannot be produced again from the management list. */
 export const SHARE_TOKEN_ONCE_NOTICE = "链接只在创建时显示一次，之后无法再次复制；需要新链接请重新创建。";
+
+/**
+ * The largest delay `setTimeout` can hold before it is clamped and fires
+ * immediately. A share may be up to a year out, which is well past it.
+ */
+export const MAX_TIMEOUT_DELAY_MS = 2_147_483_647;
+
+/**
+ * How long until the nearest still-active grant expires, or `null` when
+ * nothing is going to change on its own.
+ *
+ * `deriveShareStatus` refuses to call an expired grant active, but something
+ * has to re-run it: a panel left open past an expiry, with no create or revoke
+ * in between, would otherwise go on listing a link that had already stopped
+ * working. The returned delay is what schedules that re-derivation for the
+ * instant it becomes true rather than the owner's next click, and it is capped
+ * so a far-future expiry re-arms instead of firing at once.
+ */
+export function nextShareExpiryDelay(
+  grants: readonly ShareGrantSummary[],
+  now: Date,
+): number | null {
+  const current = now.valueOf();
+  const soonest = grants
+    .filter((grant) => grant.status === "active")
+    .map((grant) => new Date(grant.expiresAt).valueOf())
+    .filter((value) => Number.isFinite(value) && value > current)
+    .sort((left, right) => left - right)[0];
+  if (soonest === undefined) return null;
+  return Math.min(soonest - current + 1_000, MAX_TIMEOUT_DELAY_MS);
+}

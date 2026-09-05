@@ -7,8 +7,10 @@ import {
   SHARE_TOKEN_ONCE_NOTICE,
   activeShareRows,
   deriveShareStatus,
+  MAX_TIMEOUT_DELAY_MS,
   formatShareExpiry,
   maxCustomExpiry,
+  nextShareExpiryDelay,
   resolveShareExpiry,
   shareExpiryMessage,
   shareLinkRow,
@@ -239,5 +241,38 @@ describe("owner copy", () => {
     expect(SHARE_BEARER_NOTICE).toContain("有效期内查看");
     expect(SHARE_BEARER_NOTICE).toContain("不能编辑");
     expect(SHARE_TOKEN_ONCE_NOTICE).toContain("只在创建时显示一次");
+  });
+});
+
+describe("nextShareExpiryDelay", () => {
+  it("schedules the re-derivation for the nearest expiry", () => {
+    const delay = nextShareExpiryDelay([
+      grant({ id: "later", expiresAt: "2026-09-05T06:00:00.000Z" }),
+      grant({ id: "sooner", expiresAt: "2026-09-05T05:00:00.000Z" }),
+    ], NOW);
+    expect(delay).toBe(60 * 60 * 1000 + 1_000);
+  });
+
+  it("ignores grants that are already inactive or already past", () => {
+    expect(nextShareExpiryDelay([
+      grant({ status: "revoked", expiresAt: "2026-09-05T05:00:00.000Z" }),
+      grant({ expiresAt: "2026-09-05T03:00:00.000Z" }),
+      grant({ expiresAt: "not a date" }),
+    ], NOW)).toBeNull();
+  });
+
+  it("returns null when there is nothing that will change on its own", () => {
+    expect(nextShareExpiryDelay([], NOW)).toBeNull();
+  });
+
+  it("caps a far-future expiry rather than letting the timer fire at once", () => {
+    // A delay past the 32-bit ceiling is clamped by `setTimeout` and fires
+    // immediately, which would spin the panel instead of waiting.
+    const delay = nextShareExpiryDelay(
+      [grant({ expiresAt: new Date(NOW.valueOf() + MAX_SHARE_LIFETIME_MS).toISOString() })],
+      NOW,
+    );
+    expect(delay).toBe(MAX_TIMEOUT_DELAY_MS);
+    expect(MAX_SHARE_LIFETIME_MS).toBeGreaterThan(MAX_TIMEOUT_DELAY_MS);
   });
 });
