@@ -645,6 +645,13 @@ try {
       if (!entry) return "no-picker-row";
       entry.click();
       await settle();
+      // On a compact viewport the picker only selects; the Story lives behind
+      // the journey sheet the card opens.
+      const card = [...document.querySelectorAll("button")]
+        .find((button) => (button.getAttribute("aria-label") ?? "").startsWith("查看当前旅程详情"));
+      if (!card) return "no-journey-card";
+      card.click();
+      await settle();
       const open = [...document.querySelectorAll("button")]
         .find((button) => (button.textContent ?? "").includes("打开故事"));
       if (!open) {
