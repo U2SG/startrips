@@ -168,8 +168,11 @@ function offAxisAllowance(sample) {
  * asserting something the projection makes impossible.
  */
 function reachableContainment(sample) {
-  const halfDiagonal = Math.hypot(sample.viewport.width / 2, sample.viewport.height / 2);
-  return Math.min(offAxisAllowance(sample), halfDiagonal / sample.silhouettePx);
+  // The nearest edge, not the far corner: a label only appears where there is
+  // geography to name, so requiring one in the corners of a globe that
+  // overflows the window would be a statement about place density.
+  const halfEdge = Math.min(sample.viewport.width, sample.viewport.height) / 2;
+  return Math.min(offAxisAllowance(sample), halfEdge / sample.silhouettePx);
 }
 
 /** The label nearest to the fixture coordinates, if the frame rendered it. */
@@ -463,15 +466,40 @@ try {
     await setZoom(page, 3);
     await page.waitForTimeout(220);
     const beforeClick = await measure(page);
-    const target = beforeClick.labels
-      .map((item) => ({ item, distance: containment(beforeClick, item.anchor) }))
-      .sort((one, two) => one.distance - two.distance)[0]?.item ?? null;
+    // Choosing the label and activating it happen in ONE page turn. The label
+    // pool is rewritten every frame, so selecting an element in Node and
+    // clicking it in a second round trip can activate a recycled element - or
+    // nothing at all, silently.
+    const target = await page.evaluate((centre) => {
+      let best = null;
+      for (const element of document.querySelectorAll(".particle-earth-city")) {
+        if (element.style.display === "none") continue;
+        const x = Number(element.dataset.anchorX);
+        const y = Number(element.dataset.anchorY);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+        const distance = Math.hypot(x - centre.x, y - centre.y);
+        if (!best || distance < best.distance) {
+          best = { distance, element, name: element.textContent ?? "" };
+        }
+      }
+      if (!best) return null;
+      best.element.dispatchEvent(new PointerEvent("pointerup", {
+        bubbles: true,
+        button: 0,
+        clientX: Number(best.element.dataset.anchorX),
+        clientY: Number(best.element.dataset.anchorY),
+        isPrimary: true,
+        pointerId: 73,
+        pointerType: "mouse",
+      }));
+      return {
+        name: best.name,
+        lat: Number(best.element.dataset.cityLat),
+        lon: Number(best.element.dataset.cityLon),
+      };
+    }, beforeClick.centre);
     check(Boolean(target), `${fixture.key}: no place label to click at max zoom`);
     if (target) {
-      await page
-        .locator(`.particle-earth-city[data-city-lat="${target.lat.toFixed(4)}"][data-city-lon="${target.lon.toFixed(4)}"]`)
-        .first()
-        .click({ force: true });
       // Focusing a picked point flies the globe and drops it to a low zoom for
       // the flight. Zooming before the flight ends would cancel it - a wheel
       // claims manual interaction - and measure a half-finished framing.
@@ -484,13 +512,19 @@ try {
         && Math.abs(settledFocus.focus.lon - target.lon) < 0.0002,
         `${fixture.key}: clicking "${target.name}" at (${target.lat}, ${target.lon}) focused (${settledFocus.focus.lat}, ${settledFocus.focus.lon})`,
       );
-      await setZoom(page, 3);
-      await page.waitForTimeout(600);
-      const afterClick = await measure(page);
-      checkFrame(afterClick, `${fixture.key} after click`);
-      const focused = findFixture(afterClick, { lat: target.lat, lon: target.lon });
-      // The other half - no visible jump - needs the label on screen. #79 may
-      // legitimately drop it, so a missing label is reported, not failed.
+      // The other half - no visible jump - needs the label on screen. Which
+      // zoom renders it depends on the place's tier and on #79 collision, so
+      // every supported zoom is tried before giving up.
+      let afterClick = null;
+      let focused = null;
+      for (const zoom of [3, 2, 1]) {
+        await setZoom(page, zoom);
+        await page.waitForTimeout(600);
+        afterClick = await measure(page);
+        checkFrame(afterClick, `${fixture.key} after click @${zoom}x`);
+        focused = findFixture(afterClick, { lat: target.lat, lon: target.lon });
+        if (focused) break;
+      }
       const drift = focused
         ? Math.hypot(
           afterClick.focus.x - focused.anchor.x,
@@ -507,7 +541,8 @@ try {
         `[qa-city-label-anchoring] ${fixture.key} click "${target.name}"`,
         `clicked=(${target.lat}, ${target.lon})`,
         `focused=(${settledFocus.focus.lat}, ${settledFocus.focus.lon})`,
-        `focusToLabelPx=${drift === null ? "label not re-rendered" : drift.toFixed(3)}`,
+        `measuredAtZoom=${afterClick ? afterClick.zoom.toFixed(2) : "n/a"}`,
+        `focusToLabelPx=${drift === null ? "label not re-rendered at any zoom" : drift.toFixed(3)}`,
       ].join(" "));
     }
   }
