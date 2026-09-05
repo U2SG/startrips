@@ -87,6 +87,30 @@ export function resolveVideoTrim(
   return { kind: "trimmed", startSeconds, endSeconds };
 }
 
+/**
+ * How much of a video beat has played, over the stretch of the beat the plan
+ * paid for: the trimmed segment when one resolved, the whole source otherwise.
+ *
+ * A video beat is owned by the element, not by the director's wall-clock
+ * budget — the director holds while the video runs — so the element's own
+ * position is the only honest source for that beat's share of the progress bar.
+ */
+export function videoTrimPlayedFraction(
+  resolved: ResolvedVideoTrim,
+  currentTimeSeconds: number,
+  sourceDurationSeconds: number | undefined,
+): number {
+  const bounds = resolved.kind === "trimmed"
+    ? { startSeconds: resolved.startSeconds, endSeconds: resolved.endSeconds }
+    : isPlayableDuration(sourceDurationSeconds)
+      ? { startSeconds: 0, endSeconds: sourceDurationSeconds }
+      : null;
+  if (!bounds || !Number.isFinite(currentTimeSeconds)) return 0;
+  const spanSeconds = bounds.endSeconds - bounds.startSeconds;
+  if (spanSeconds <= 0) return 0;
+  return Math.min(1, Math.max(0, (currentTimeSeconds - bounds.startSeconds) / spanSeconds));
+}
+
 export type VideoTrimAction =
   | { kind: "none" }
   | { kind: "seek"; toSeconds: number }

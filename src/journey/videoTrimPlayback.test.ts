@@ -5,6 +5,7 @@ import {
   videoTrimStatusAfterPauseChange,
   videoTrimEntryAction,
   videoTrimHoldsStep,
+  videoTrimPlayedFraction,
   videoTrimProgressAction,
   videoTrimSeekApplies,
   videoTrimSegmentDurationMs,
@@ -163,5 +164,32 @@ describe("trim-aware video playback contract (#195 Phase 2)", () => {
     expect(videoTrimHoldsStep("playing")).toBe(false);
     expect(videoTrimHoldsStep("unavailable")).toBe(false);
     expect(videoTrimHoldsStep(null)).toBe(false);
+  });
+});
+
+describe("videoTrimPlayedFraction (#126)", () => {
+  it("measures an untrimmed beat against the whole source", () => {
+    const untrimmed = resolveVideoTrim(null, 12);
+    expect(videoTrimPlayedFraction(untrimmed, 0, 12)).toBe(0);
+    expect(videoTrimPlayedFraction(untrimmed, 3, 12)).toBe(0.25);
+    expect(videoTrimPlayedFraction(untrimmed, 12, 12)).toBe(1);
+  });
+
+  it("measures a trimmed beat against the segment the plan paid for", () => {
+    const trimmed = resolveVideoTrim({ inMs: 4_000, outMs: 8_000 }, 12);
+    expect(trimmed.kind).toBe("trimmed");
+    expect(videoTrimPlayedFraction(trimmed, 4, 12)).toBe(0);
+    expect(videoTrimPlayedFraction(trimmed, 6, 12)).toBe(0.5);
+    expect(videoTrimPlayedFraction(trimmed, 8, 12)).toBe(1);
+    // Outside the segment the beat still owns only its own stretch of the bar.
+    expect(videoTrimPlayedFraction(trimmed, 1, 12)).toBe(0);
+    expect(videoTrimPlayedFraction(trimmed, 11.5, 12)).toBe(1);
+  });
+
+  it("stays at the beat's start when the source duration is not known yet", () => {
+    const pending = resolveVideoTrim(null, Number.NaN);
+    expect(videoTrimPlayedFraction(pending, 3, Number.NaN)).toBe(0);
+    expect(videoTrimPlayedFraction(pending, 3, Number.POSITIVE_INFINITY)).toBe(0);
+    expect(videoTrimPlayedFraction(pending, Number.NaN, 12)).toBe(0);
   });
 });

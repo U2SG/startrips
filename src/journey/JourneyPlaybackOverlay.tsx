@@ -45,6 +45,7 @@ import {
   videoTrimEntryAction,
   videoTrimHoldsStep,
   videoTrimProgressAction,
+  videoTrimPlayedFraction,
   videoTrimSeekApplies,
   videoTrimStatusAfterPauseChange,
   type VideoTrimSeekStatus,
@@ -53,6 +54,7 @@ import {
 import { remapPlaybackStepIndex } from "./quickRecapPlayback";
 import { playbackControlsMayAutoHide } from "./playbackControls";
 import {
+  nextMeaningfulStepIndex,
   playbackElapsedForFraction,
   playbackSegmentAtElapsed,
   type PlaybackPlan,
@@ -165,6 +167,13 @@ export function JourneyPlaybackOverlay({
   // time-weighted instead of step-weighted and a scrub has a time model.
   const { plan, getTimerBudget } = director;
   const progressFillRef = useRef<HTMLSpanElement | null>(null);
+  // Review P2: the fill animates without re-rendering, so the range's own value
+  // would stay at the beat's start all beat long and a screen reader would hear
+  // a stale elapsed time. Sample the live position while the scrubber has
+  // focus - the state that reads it - instead of re-rendering the whole overlay
+  // once a second for everyone.
+  const [scrubberFocused, setScrubberFocused] = useState(false);
+  const [livePositionFraction, setLivePositionFraction] = useState<number | null>(null);
   // Report a real tempo change only. The director resets to the initial tempo
   // whenever the journey changes, and a rebuilt plan hands us a new `journey`
   // object every time, so re-announcing the current tempo would loop.
@@ -854,6 +863,29 @@ export function JourneyPlaybackOverlay({
     };
   }, []);
 
+  // Review P1: a video beat is owned by the element, not by the wall-clock
+  // budget - `playbackMediaWaitPolicy` holds the director until `ended`, so the
+  // budget never drains and the CSS transition below never starts. The
+  // element's real position is the honest source, mapped onto the stretch of the
+  // bar the plan gave that beat, and written straight to the node on the
+  // `timeupdate` the trim transport already listens to.
+  const advanceProgressFillFromMedia = useCallback((
+    element: HTMLVideoElement,
+    trim: VideoTrimWindow | null,
+  ) => {
+    const fill = progressFillRef.current;
+    const segment = plan?.segments[stepIndexRef.current];
+    if (!fill || !plan || !segment || plan.totalDurationMs <= 0) return;
+    const playedFraction = videoTrimPlayedFraction(
+      resolveVideoTrim(trim, element.duration),
+      element.currentTime,
+      element.duration,
+    );
+    const elapsedMs = segment.startMs + segment.durationMs * playedFraction;
+    fill.style.transitionDuration = "0ms";
+    fill.style.width = `${Math.min(1, elapsedMs / plan.totalDurationMs) * 100}%`;
+  }, [plan]);
+
   // Hand the rest of the beat to one CSS transition instead of a per-frame
   // render: at the start of a beat the fill is placed at the live position and
   // then animated, linearly and over exactly the remaining budget, to the point
@@ -882,6 +914,29 @@ export function JourneyPlaybackOverlay({
     fill.style.width = `${playbackProgressFraction(plan, stepIndex, 0, budget.fullDurationMs) * 100}%`;
   }, [getTimerBudget, hold, paused, plan, reduceMotion, stepIndex]);
 
+  // Review P2: the accessible value follows the same budget the fill does, but
+  // only while the scrubber is focused, and at a rate an announcement can keep
+  // up with. A paused beat samples once and stays put.
+  useEffect(() => {
+    if (!scrubberFocused || !plan) {
+      setLivePositionFraction(null);
+      return;
+    }
+    const sample = () => {
+      const budget = getTimerBudget();
+      setLivePositionFraction(playbackProgressFraction(
+        plan,
+        stepIndex,
+        budget?.remainingMs ?? 0,
+        budget?.fullDurationMs ?? 0,
+      ));
+    };
+    sample();
+    if (paused || hold) return;
+    const timer = window.setInterval(sample, 1_000);
+    return () => window.clearInterval(timer);
+  }, [getTimerBudget, hold, paused, plan, scrubberFocused, stepIndex]);
+
   if (!journey) return null;
 
   const step: PlaybackStep | undefined = director.step;
@@ -906,6 +961,7 @@ export function JourneyPlaybackOverlay({
   // Where the beat that is playing starts on the plan: a full remaining budget
   // means nothing of it has been consumed yet.
   const beatStartFraction = playbackProgressFraction(plan, director.stepIndex, 1, 1);
+  const positionFraction = livePositionFraction ?? beatStartFraction;
   const chapterTicks = plan
     ? plan.segments
       .filter((segment) => segment.kind === "arrival")
@@ -1061,6 +1117,10 @@ export function JourneyPlaybackOverlay({
                     onProgress={() => clearVideoStallWatchdog()}
                     onTimeUpdate={(event) => {
                       clearVideoStallWatchdog();
+                      advanceProgressFillFromMedia(
+                        event.currentTarget,
+                        activeVideoTrim?.assetId === activeMedia.id ? activeVideoTrim.trim : null,
+                      );
                       if (
                         !activeVideoTrim
                         || activeVideoTrim.assetId !== activeMedia.id
@@ -1173,18 +1233,27 @@ export function JourneyPlaybackOverlay({
             min={0}
             max={PROGRESS_SCRUB_STEPS}
             step={1}
-            value={Math.round(beatStartFraction * PROGRESS_SCRUB_STEPS)}
+            value={Math.round(positionFraction * PROGRESS_SCRUB_STEPS)}
             aria-label="播放进度"
-            aria-valuetext={playbackElapsedLabel(plan, director.stepIndex)}
+            aria-valuetext={playbackElapsedLabel(plan, positionFraction)}
+            onFocus={() => setScrubberFocused(true)}
+            onBlur={() => setScrubberFocused(false)}
             // Arrows stay chapter-sized. The bar is time-scaled now, so a
-            // native arrow step would move a fraction of a percent and usually
+            // native arrow step would move a thousandth of the run and usually
             // land back on the same beat; the overlay's global arrow handler
-            // deliberately ignores a focused input, so next/back are wired here.
+            // deliberately ignores a focused input, so the keys are wired here.
+            // Review P2: they seek rather than calling next/back, because the
+            // reducer ignores `next` while paused and a paused scrubber has to
+            // stay navigable - which is the whole point of scrubbing.
             onKeyDown={(event) => {
-              if (event.key !== "ArrowRight" && event.key !== "ArrowLeft") return;
+              const direction = event.key === "ArrowRight" || event.key === "ArrowUp"
+                ? 1
+                : event.key === "ArrowLeft" || event.key === "ArrowDown"
+                  ? -1
+                  : 0;
+              if (direction === 0 || !plan) return;
               event.preventDefault();
-              if (event.key === "ArrowRight") next();
-              else back();
+              seek(nextMeaningfulStepIndex(plan, director.stepIndex, direction));
             }}
             onChange={(event) => {
               if (!plan) return;
@@ -1214,9 +1283,9 @@ export function JourneyPlaybackOverlay({
  * thousandth of the plan, fine enough that dragging never skips a short beat. */
 const PROGRESS_SCRUB_STEPS = 1000;
 
-function playbackElapsedLabel(plan: PlaybackPlan | null, stepIndex: number) {
+function playbackElapsedLabel(plan: PlaybackPlan | null, positionFraction: number) {
   if (!plan) return "0:00 / 0:00";
-  const elapsedMs = plan.segments[stepIndex]?.startMs ?? 0;
+  const elapsedMs = playbackElapsedForFraction(plan, positionFraction);
   return `${formatPlaybackClock(elapsedMs)} / ${formatPlaybackClock(plan.totalDurationMs)}`;
 }
 
