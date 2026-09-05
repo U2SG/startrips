@@ -81,11 +81,19 @@ export type RouteArcOptions = {
 };
 
 /**
- * #193: the one canonical radius a Route Point occupies. Route line endpoints,
- * the marker shell and the point sprites all sit on it, so a Route Point and
- * the route line meeting it project to the same screen pixel at every zoom.
+ * The canonical geographic surface radius used whenever a latitude/longitude
+ * is projected for product semantics. Visual glow/lift may render slightly
+ * above this surface, but labels, route endpoints and focus geometry must not
+ * invent a different geographic shell.
  */
-export const ROUTE_ANCHOR_RADIUS = 1.46;
+export const GEOGRAPHIC_SURFACE_RADIUS = 1.39;
+
+/**
+ * #193/#196: Route Point semantics live on the geographic surface. Route line
+ * endpoints, SVG markers and labels all derive from this same anchor so they
+ * stay attached both to one another and to the map while zooming/dragging.
+ */
+export const ROUTE_ANCHOR_RADIUS = GEOGRAPHIC_SURFACE_RADIUS;
 
 /**
  * #193: the canonical anchor of a Route Point. Anything that has to agree with

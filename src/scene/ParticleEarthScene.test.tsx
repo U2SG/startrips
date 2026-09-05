@@ -76,12 +76,21 @@ import {
 } from "./ParticleEarthScene";
 import {
   buildRouteArcSamples,
+  GEOGRAPHIC_SURFACE_RADIUS,
   ROUTE_ANCHOR_RADIUS,
   routePointAnchor,
 } from "./geo";
 import { disposeSceneGraph } from "./useThreeScene";
 
 describe("ParticleEarthScene contracts", () => {
+  it("uses one geographic surface anchor for map semantics", () => {
+    // #224 already unified place labels, the focus signal and route geometry
+    // behind ROUTE_ANCHOR_RADIUS. #196 is the remaining half: that one anchor
+    // is the real map surface, so there is no second shell left to drift.
+    expect(GLOBE_SURFACE_RADIUS).toBe(GEOGRAPHIC_SURFACE_RADIUS);
+    expect(ROUTE_ANCHOR_RADIUS).toBe(GEOGRAPHIC_SURFACE_RADIUS);
+  });
+
   it("resolves one route intent instead of competing route and point intents", () => {
     const route = {
       id: "journey-a",
@@ -788,11 +797,11 @@ describe("ParticleEarthScene contracts", () => {
 
   it("clips a route into the horizon instead of dropping the endpoint (#193)", () => {
     const camera = new Vector3(0, 0, 5.4);
-    const anchor = routePointAnchor(0, 0);
-    // A leg that runs from the visible anchor around the globe until the far
-    // vertices fall behind the limb.
+    const anchor = routePointAnchor(0, -90);
+    // A leg that runs from the camera-facing surface anchor around the globe
+    // until the far vertices fall behind the limb.
     const samples = buildRouteArcSamples(
-      [{ lat: 0, lon: 0 }, { lat: 0, lon: 170 }],
+      [{ lat: 0, lon: -90 }, { lat: 0, lon: 80 }],
       Math.PI / 96,
       8192,
       { arcHeightRatio: 0.22, arcSaturationAngle: Math.PI / 3 },
