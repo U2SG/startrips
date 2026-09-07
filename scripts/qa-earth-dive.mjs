@@ -11,19 +11,19 @@
 //   3. a detail surface that cannot load leaves the particle Earth fully usable,
 //      with no loading dialog and no premature reveal.
 //
-// The second one is a measurement, not an assertion. `DetailedEarthMap`
-// publishes the two screen-space quantities #252 section 2 asks for - where the
-// focused anchor projects, and how many CSS pixels a degree of latitude spans
-// there - through MapLibre's own projection, plus the map zoom that produced
-// them. Latitude is deliberate: a degree of longitude shrinks with latitude, so
-// a north-south probe measures the projection rather than the anchor's place on
-// the globe.
+// The second one is a measurement, and it has to compare the TWO RENDERERS -
+// not one renderer against itself. Both publish the two screen-space
+// quantities #252 section 2 asks for, in the same unit and the same frame of
+// reference: where the focused anchor lands in viewport CSS pixels, and how
+// many of those pixels a degree of LATITUDE spans there. The particle Earth
+// reads them from the shared projection frame its place labels use; the detail
+// map reads them from MapLibre's own `project`. Latitude is deliberate: a
+// degree of longitude shrinks with latitude, so a north-south probe measures
+// how large the world is drawn rather than where the anchor sits on it.
 //
-// Crossing the commit edge is a zoom step, so the raw scale ratio across the
-// handoff contains the user's own deliberate zoom. That part is legitimate
-// motion. The handoff error is what is left after it is divided out: a map
-// whose scale changed by exactly 2^(zoom change) did nothing of its own, and
-// anything else is the seam this lane exists to catch.
+// Comparing the map to the map would report a perfect handoff even if the
+// particle Earth were visibly a different scale at the ownership edge, which is
+// exactly the mistake this lane exists to make impossible.
 import { launchQaBrowser } from "./qa-browser.mjs";
 
 const baseUrl = process.env.QA_BASE_URL ?? "http://127.0.0.1:4173";
@@ -204,17 +204,43 @@ async function wheelUntil(page, point, deltaY, predicate, label, maxSteps = 90) 
   })}`);
 }
 
-/** The frame the detail map is publishing right now. */
-async function readFrame(page) {
+/**
+ * What each renderer is publishing right now, plus the error between them.
+ * Both anchors are viewport CSS pixels and both scales are viewport CSS pixels
+ * per degree of latitude, so the comparison is dimensionally honest.
+ */
+async function readFrames(page) {
   return page.evaluate(() => {
-    const map = document.querySelector(".detailed-earth-map");
-    if (!map) return null;
     const read = (value) => (value === undefined ? null : Number(value));
+    const scene = document.querySelector(".particle-earth-scene");
+    const map = document.querySelector(".detailed-earth-map");
+    const particle = scene
+      ? {
+        anchorX: read(scene.dataset.focusAnchorViewportX),
+        anchorY: read(scene.dataset.focusAnchorViewportY),
+        scale: read(scene.dataset.focusAnchorScale),
+      }
+      : null;
+    const detail = map
+      ? {
+        anchorX: read(map.dataset.handoffAnchorX),
+        anchorY: read(map.dataset.handoffAnchorY),
+        scale: read(map.dataset.handoffScale),
+        mapZoom: read(map.dataset.handoffZoom),
+      }
+      : null;
+    const comparable = Boolean(
+      particle && detail
+      && Number.isFinite(particle.anchorX) && Number.isFinite(detail.anchorX)
+      && particle.scale > 0 && detail.scale > 0,
+    );
     return {
-      anchorX: read(map.dataset.handoffAnchorX),
-      anchorY: read(map.dataset.handoffAnchorY),
-      scale: read(map.dataset.handoffScale),
-      mapZoom: read(map.dataset.handoffZoom),
+      particle,
+      detail,
+      anchorDeltaPx: comparable
+        ? Math.hypot(particle.anchorX - detail.anchorX, particle.anchorY - detail.anchorY)
+        : null,
+      localScaleError: comparable ? Math.abs(detail.scale / particle.scale - 1) : null,
     };
   });
 }
@@ -288,7 +314,7 @@ try {
   // possible.
   await forward.page.waitForTimeout(500);
   const beforeCommit = await readDive(forward.page);
-  const blendingFrame = await readFrame(forward.page);
+  const blendingFrames = await readFrames(forward.page);
   const committed = await wheelUntil(
     forward.page,
     point,
@@ -297,7 +323,7 @@ try {
     "the dive never committed to detail on wheel zoom alone",
   );
   await forward.page.waitForTimeout(500);
-  const detailFrame = await readFrame(forward.page);
+  const detailFrames = await readFrames(forward.page);
 
   const forwardStages = await stages(forward.page);
 
@@ -321,20 +347,26 @@ try {
   );
 
   const stageLadder = await stages(forward.page);
-  const anchorDeltaPx = blendingFrame && detailFrame
-    ? Math.hypot(
-      detailFrame.anchorX - blendingFrame.anchorX,
-      detailFrame.anchorY - blendingFrame.anchorY,
-    )
-    : Number.NaN;
-  // The deliberate zoom inside the sample interval scales the projection by
-  // 2^(zoom change); what is left over is the handoff's own error.
-  const zoomChange = blendingFrame && detailFrame
-    ? detailFrame.mapZoom - blendingFrame.mapZoom
-    : Number.NaN;
-  const localScaleError = blendingFrame && detailFrame
-    ? Math.abs((detailFrame.scale / blendingFrame.scale) / 2 ** zoomChange - 1)
-    : Number.NaN;
+  // The two renderers, at the last frame before ownership moved and at the
+  // first frame after. Both edges are graded: a surface that only agrees once
+  // it owns the view still moved the place the user was looking at.
+  const worstAnchorDeltaPx = Math.max(
+    blendingFrames.anchorDeltaPx ?? Number.NaN,
+    detailFrames.anchorDeltaPx ?? Number.NaN,
+  );
+  const worstLocalScaleError = Math.max(
+    blendingFrames.localScaleError ?? Number.NaN,
+    detailFrames.localScaleError ?? Number.NaN,
+  );
+  // The map's own continuity across the commit, kept as a second, weaker fact:
+  // the frame must not jump as ownership transfers. The deliberate zoom inside
+  // the interval scales the projection by 2^(zoom change), so it is divided out.
+  const mapZoomChange = (detailFrames.detail?.mapZoom ?? Number.NaN)
+    - (blendingFrames.detail?.mapZoom ?? Number.NaN);
+  const mapSelfContinuityError = Math.abs(
+    ((detailFrames.detail?.scale ?? Number.NaN) / (blendingFrames.detail?.scale ?? Number.NaN))
+    / 2 ** mapZoomChange - 1,
+  );
 
   result.forward = {
     stageLadder,
@@ -367,13 +399,14 @@ try {
       semanticZoom: returned.semanticZoom,
     },
     handoff: {
-      blendingFrame,
-      detailFrame,
-      anchorDeltaPx,
+      atBlending: blendingFrames,
+      atDetail: detailFrames,
+      worstAnchorDeltaPx,
       anchorTolerancePx: ANCHOR_TOLERANCE_PX,
-      mapZoomChange: zoomChange,
-      localScaleError,
+      worstLocalScaleError,
       localScaleTolerance: LOCAL_SCALE_TOLERANCE,
+      mapZoomChange,
+      mapSelfContinuityError,
     },
     consoleErrors: forward.consoleErrors,
     pageErrors: forward.pageErrors,
@@ -396,11 +429,14 @@ try {
   if (blendingHit && blendingHit.className && blendingHit.className.includes("detailed-earth-map")) {
     ladderFailures.push("the blending detail surface was already the hit-test owner");
   }
-  if (!(anchorDeltaPx <= ANCHOR_TOLERANCE_PX)) {
-    ladderFailures.push(`focused anchor moved ${anchorDeltaPx} CSS px across the handoff`);
+  if (!(worstAnchorDeltaPx <= ANCHOR_TOLERANCE_PX)) {
+    ladderFailures.push(`the two renderers put the focused anchor ${worstAnchorDeltaPx} CSS px apart`);
   }
-  if (!(localScaleError <= LOCAL_SCALE_TOLERANCE)) {
-    ladderFailures.push(`local geographic scale moved ${localScaleError} across the handoff`);
+  if (!(worstLocalScaleError <= LOCAL_SCALE_TOLERANCE)) {
+    ladderFailures.push(`the two renderers disagree on local scale by ${worstLocalScaleError}`);
+  }
+  if (!(mapSelfContinuityError <= LOCAL_SCALE_TOLERANCE)) {
+    ladderFailures.push(`the detail frame jumped by ${mapSelfContinuityError} as ownership transferred`);
   }
   if (forward.pageErrors.length > 0) {
     ladderFailures.push("the page raised an error during the dive");

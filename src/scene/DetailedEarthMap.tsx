@@ -12,6 +12,9 @@ import {
   getDetailedEarthRouteFrame,
   getDetailedEarthFocusDuration,
   getEarthDiveHandoffFrame,
+  detailedEarthAnchorCorrection,
+  solveDetailedEarthHandoffZoom,
+  type ParticleAnchorFrame,
   DETAILED_EARTH_INITIAL_ZOOM,
   DETAILED_EARTH_MAX_PITCH,
   DETAILED_EARTH_MAX_ZOOM,
@@ -36,6 +39,12 @@ import type { SemanticZoomSnapshot } from "./semanticZoom";
 // for the scale on purpose: a degree of longitude shrinks with latitude, so a
 // north-south probe measures the projection and not the anchor's latitude.
 const LOCAL_SCALE_PROBE_DEG = 0.05;
+// The solver is exact, so a pass is a correction and not a step: two passes
+// exist to absorb the projection's own non-linearity across a large first
+// correction, not to creep towards the answer.
+const CALIBRATION_PASSES = 2;
+const CALIBRATION_ZOOM_EPSILON = 0.0005;
+const CALIBRATION_ANCHOR_EPSILON_PX = 0.05;
 
 type DetailedEarthMapProps = {
   /** Which Dive stage this map is mounted under. */
@@ -46,8 +55,14 @@ type DetailedEarthMapProps = {
    * already is; opacity never decides ownership.
    */
   diveOwner?: EarthDiveOwner;
-  /** The zoom authority's snapshot the handoff frame is derived from. */
+  /** The zoom authority's snapshot the handoff frame is seeded from. */
   diveSnapshot?: SemanticZoomSnapshot;
+  /**
+   * What the particle Earth is showing at the focused place, in viewport CSS
+   * pixels. This map solves its own camera to it, so the two renderers are
+   * known to agree in screen space rather than assumed to.
+   */
+  particleFrame?: ParticleAnchorFrame | null;
   focusPoint?: { lat: number; lon: number } | null;
   focusRoute?: JourneyRoute | null;
   focusRevision?: number;
@@ -106,6 +121,7 @@ export default function DetailedEarthMap({
   diveStage = "detail",
   diveOwner = "detail",
   diveSnapshot = { level: "local", zoom: Number.NaN, localProgress: 1 },
+  particleFrame = null,
   focusPoint,
   focusRoute,
   focusRevision = 0,
@@ -121,6 +137,7 @@ export default function DetailedEarthMap({
   // latch is released when ownership is no longer the map's, so a second dive
   // through the same instance can ask again.
   const overviewRequestedRef = useRef(false);
+  const calibrateRef = useRef<(() => void) | null>(null);
   const languageRef = useRef(language);
   const focusPointRef = useRef(focusPoint);
   const focusRouteRef = useRef(focusRoute);
@@ -130,9 +147,11 @@ export default function DetailedEarthMap({
   const diveStageRef = useRef(diveStage);
   const diveOwnerRef = useRef(diveOwner);
   const diveSnapshotRef = useRef(diveSnapshot);
+  const particleFrameRef = useRef(particleFrame);
   diveStageRef.current = diveStage;
   diveOwnerRef.current = diveOwner;
   diveSnapshotRef.current = diveSnapshot;
+  particleFrameRef.current = particleFrame;
   languageRef.current = language;
   focusPointRef.current = focusPoint;
   focusRouteRef.current = focusRoute;
@@ -145,6 +164,7 @@ export default function DetailedEarthMap({
     snapshot: diveSnapshotRef.current,
     focusPoint: focusPointRef.current,
     routePoints: focusRouteRef.current?.points ?? [],
+    particleFrame: particleFrameRef.current,
   });
 
   useEffect(() => {
@@ -198,17 +218,75 @@ export default function DetailedEarthMap({
     // #252 section 2: publish where the focused anchor lands and how large a
     // degree of latitude is there, so the handoff can be measured rather than
     // asserted. Both come from MapLibre's own projection.
-    const publishAnchorFrame = () => {
+    /** This renderer's own anchor and local scale, measured with `project`. */
+    const measureAnchorFrame = () => {
       const anchor = handoffFrame()?.center;
-      if (!anchor) return;
+      if (!anchor) return null;
       const projected = map.project(anchor);
       const probe = map.project([anchor[0], anchor[1] + LOCAL_SCALE_PROBE_DEG]);
-      host.dataset.handoffAnchorX = projected.x.toFixed(2);
-      host.dataset.handoffAnchorY = projected.y.toFixed(2);
+      return {
+        anchor,
+        projected,
+        pxPerDegreeLat: Math.hypot(projected.x - probe.x, projected.y - probe.y)
+          / LOCAL_SCALE_PROBE_DEG,
+      };
+    };
+
+    const publishAnchorFrame = () => {
+      const measured = measureAnchorFrame();
+      if (!measured) return;
+      // Published in VIEWPORT pixels, like the particle side's: the two
+      // renderers live in different boxes, so a container-relative number
+      // could not be compared with the other one.
+      const rect = host.getBoundingClientRect();
+      host.dataset.handoffAnchorX = (rect.left + measured.projected.x).toFixed(2);
+      host.dataset.handoffAnchorY = (rect.top + measured.projected.y).toFixed(2);
       host.dataset.handoffZoom = map.getZoom().toFixed(4);
-      host.dataset.handoffScale = (
-        Math.hypot(projected.x - probe.x, projected.y - probe.y) / LOCAL_SCALE_PROBE_DEG
-      ).toFixed(3);
+      host.dataset.handoffScale = measured.pxPerDegreeLat.toFixed(3);
+    };
+
+    /**
+     * Solve this map's camera to what the particle Earth is showing.
+     *
+     * Two questions, both answered by MapLibre's own projection and applied
+     * with non-animated camera updates: what zoom reproduces the particle's
+     * local scale, and which centre puts the anchor on the particle's screen
+     * point. Each is a measurement followed by a correction, and the solver is
+     * a fixed point once they agree, so a bounded loop converges instead of
+     * hunting.
+     */
+    const calibrateToParticle = () => {
+      const particle = particleFrameRef.current;
+      const frame = handoffFrame();
+      if (!particle || !frame) return;
+      map.jumpTo({ center: frame.center });
+      for (let pass = 0; pass < CALIBRATION_PASSES; pass += 1) {
+        const measured = measureAnchorFrame();
+        if (!measured) return;
+        const zoom = solveDetailedEarthHandoffZoom({
+          measuredZoom: map.getZoom(),
+          measuredPxPerDegreeLat: measured.pxPerDegreeLat,
+          targetPxPerDegreeLat: particle.pxPerDegreeLat,
+        });
+        if (Math.abs(zoom - map.getZoom()) > CALIBRATION_ZOOM_EPSILON) map.jumpTo({ zoom });
+        // The anchor's screen target is the particle's viewport point read in
+        // this container's coordinates.
+        const rect = host.getBoundingClientRect();
+        const target = {
+          x: particle.screen.x - rect.left,
+          y: particle.screen.y - rect.top,
+        };
+        const after = measureAnchorFrame();
+        if (!after) return;
+        const correction = detailedEarthAnchorCorrection(after.projected, target);
+        if (Math.hypot(correction.x, correction.y) > CALIBRATION_ANCHOR_EPSILON_PX) {
+          const centre = map.project(map.getCenter());
+          map.jumpTo({
+            center: map.unproject([centre.x + correction.x, centre.y + correction.y]),
+          });
+        }
+      }
+      publishAnchorFrame();
     };
 
     map.on("load", () => {
@@ -221,11 +299,16 @@ export default function DetailedEarthMap({
       host.dataset.mapReady = "true";
       // The style is parsed and the handoff frame can be drawn. This is the
       // blend gate, and it is an event from the renderer rather than a timer.
+      // Calibrate BEFORE reporting the blend gate: the surface the Dive is
+      // allowed to reveal is a surface already standing where the particle
+      // Earth stands.
+      calibrateToParticle();
       publishReadiness("visual-ready");
       publishAnchorFrame();
       map.once("idle", () => publishReadiness("fully-settled"));
     });
 
+    calibrateRef.current = calibrateToParticle;
     map.on("move", publishAnchorFrame);
 
     map.on("click", (event) => {
@@ -251,6 +334,7 @@ export default function DetailedEarthMap({
 
     return () => {
       mapRef.current = null;
+      calibrateRef.current = null;
       map.remove();
     };
   }, []);
@@ -280,22 +364,14 @@ export default function DetailedEarthMap({
     );
   }, [focusFlightProfile, focusPoint, focusRevision, focusRoute]);
 
-  // While the particle globe owns the camera the map FOLLOWS the handoff frame,
-  // through a non-animated camera update: the surface the user is about to be
-  // handed is already standing where the particle camera stands, so the commit
-  // moves nothing. Once ownership transfers the map keeps its own camera.
+  // While the particle globe owns the camera the map is re-solved to it on
+  // every published particle frame, so the surface the user is about to be
+  // handed is already standing exactly where the particle camera stands and the
+  // commit moves nothing. Once ownership transfers the map keeps its own camera.
   useEffect(() => {
-    const map = mapRef.current;
-    if (!map || diveOwner === "detail") return;
-    const frame = getEarthDiveHandoffFrame({
-      stage: diveStage,
-      snapshot: diveSnapshot,
-      focusPoint,
-      routePoints: focusRoute?.points ?? [],
-    });
-    if (!frame) return;
-    map.jumpTo({ center: frame.center, zoom: frame.zoom });
-  }, [diveOwner, diveSnapshot, diveStage, focusPoint, focusRoute]);
+    if (diveOwner === "detail") return;
+    calibrateRef.current?.();
+  }, [diveOwner, diveSnapshot, diveStage, focusPoint, focusRoute, particleFrame]);
 
   // Stage and interaction owner are different state (#252 section 4): a
   // prewarmed or blending map is on the screen budget but must not take the

@@ -15,7 +15,7 @@ import { IconMap2, IconMapPin, IconWorld } from "@tabler/icons-react";
 import type { PlaybackTravelChoreography } from "../journey/journeyPlayback";
 import { useCompactMobileLayout } from "../journey/mobileLayout";
 import type { JourneyRoute } from "../journey/types";
-import type { DetailedEarthLanguage } from "./detailedEarthModel";
+import type { DetailedEarthLanguage, ParticleAnchorFrame } from "./detailedEarthModel";
 import {
   INITIAL_EARTH_DIVE_STATE,
   resolveEarthDive,
@@ -162,6 +162,7 @@ type AtlasEarthPresentation = Pick<
    * a hand-back of the camera to the zoom at which the band reopens.
    */
   onSemanticZoomSnapshot?: (snapshot: SemanticZoomSnapshot) => void;
+  onParticleAnchorFrame?: (frame: ParticleAnchorFrame) => void;
   zoomIntent?: { zoom: number; revision: number };
   /** Who owns camera and gesture input on this frame. */
   inputOwner?: EarthDiveOwner;
@@ -243,6 +244,7 @@ export function PersistentEarthProvider({ children }: { children: ReactNode }) {
                   onJourneyRoutePointActivate={atlas?.onJourneyRoutePointActivate}
                   onGlobePointPick={atlas?.onGlobePointPick}
                   onSemanticZoomSnapshot={atlas?.onSemanticZoomSnapshot}
+                  onParticleAnchorFrame={atlas?.onParticleAnchorFrame}
                   zoomIntent={atlas?.zoomIntent}
                   showArchiveSignals={false}
                   // #252: exactly one subsystem owns the camera on any frame.
@@ -295,6 +297,10 @@ export function LivingAtlasGlobe({
   // the snapshot has to reach React — but only while a map exists, and only on
   // a move large enough to matter.
   const [handoffSnapshot, setHandoffSnapshot] = useState<SemanticZoomSnapshot | null>(null);
+  // What the particle Earth is showing at the focused place. The detail surface
+  // solves its own camera to this, so it only has to reach React while a map
+  // exists and only when it has moved enough to change that solution.
+  const [particleFrame, setParticleFrame] = useState<ParticleAnchorFrame | null>(null);
   const [zoomIntent, setZoomIntent] = useState<{ zoom: number; revision: number } | null>(null);
   const diveRef = useRef<EarthDiveState>(INITIAL_EARTH_DIVE_STATE);
   const detailLayerRef = useRef<HTMLDivElement>(null);
@@ -318,6 +324,11 @@ export function LivingAtlasGlobe({
         ? previous
         : snapshot
     ));
+  }, []);
+
+  const handleParticleAnchorFrame = useCallback((frame: ParticleAnchorFrame) => {
+    if (diveRef.current.stage === "particle") return;
+    setParticleFrame(frame);
   }, []);
 
   const handleDetailReadiness = useCallback((readiness: DetailReadiness) => {
@@ -395,6 +406,7 @@ export function LivingAtlasGlobe({
         readinessRef.current = "unavailable";
         commandRequestedRef.current = false;
         setHandoffSnapshot(null);
+        setParticleFrame(null);
       }
       diveRef.current = next;
       setDive(next);
@@ -417,6 +429,7 @@ export function LivingAtlasGlobe({
       onJourneyRoutePointActivate,
       onGlobePointPick,
       onSemanticZoomSnapshot: handleSemanticZoomSnapshot,
+      onParticleAnchorFrame: handleParticleAnchorFrame,
       zoomIntent: zoomIntent ?? undefined,
       inputOwner: dive.owner,
       reduceMotion,
@@ -429,6 +442,7 @@ export function LivingAtlasGlobe({
     focusRevision,
     focusFlightProfile,
     focusRoute,
+    handleParticleAnchorFrame,
     handleSemanticZoomSnapshot,
     journeyRoutes,
     zoomIntent,
@@ -476,6 +490,7 @@ export function LivingAtlasGlobe({
               diveStage={dive.stage}
               diveOwner={dive.owner}
               diveSnapshot={handoffSnapshot ?? snapshotRef.current}
+              particleFrame={particleFrame}
               focusPoint={focusPoint}
               focusRoute={focusRoute}
               focusRevision={focusRevision}
