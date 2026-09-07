@@ -29,6 +29,33 @@ export function modalSurfaceFor(root: HTMLElement, atlas: Element | null) {
 }
 
 /**
+ * #250: `inert` on a background surface has more than one possible owner. React
+ * inerts the mobile Journey sheet layer for as long as any Story is open, and a
+ * nested trap (an expanded Story, a picker over a sheet) starts while that flag
+ * is already set. Capturing it as a `previous` value and writing it back at
+ * cleanup resurrects an interaction lock whose owner released it in the very
+ * commit that tore the trap down.
+ *
+ * The invariant is ownership, not syntax: a trap may only release and reapply
+ * `inert` it actually claimed, so an element that is already inert on
+ * activation is left entirely alone — its external owner, whether React or an
+ * outer trap, keeps it for exactly as long as that owner needs it.
+ *
+ * Returns the release function for what this trap claimed.
+ */
+export function claimInertOwnership(targets: Iterable<HTMLElement>) {
+  const claimed: HTMLElement[] = [];
+  for (const target of targets) {
+    if (target.inert) continue;
+    target.inert = true;
+    claimed.push(target);
+  }
+  return () => {
+    for (const target of claimed) target.inert = false;
+  };
+}
+
+/**
  * Focus ownership for a modal surface nested inside an already-trapped parent.
  * The nested surface is expected to carry `data-focus-trap-exempt` so the
  * parent's Tab handler yields while focus is inside this layer.
@@ -154,7 +181,7 @@ export function useModalFocus<T extends HTMLElement>(
     const root = rootRef.current;
     if (!root) return;
 
-    const inerted: Array<{ element: HTMLElement; previous: boolean }> = [];
+    const background: HTMLElement[] = [];
     const atlas = root.closest(".living-atlas") ?? document.querySelector(".living-atlas");
     // Some dialogs (Story/Composer) are portaled to document.body while their
     // background Atlas stays in the application tree. Fall back to the live
@@ -164,15 +191,14 @@ export function useModalFocus<T extends HTMLElement>(
     if (atlas && modalSurface) {
       for (const child of atlas.children) {
         if (!(child instanceof HTMLElement) || child === modalSurface) continue;
-        inerted.push({ element: child, previous: child.inert });
-        child.inert = true;
+        background.push(child);
       }
     }
     const accountDock = document.querySelector<HTMLElement>(".account-dock");
-    if (accountDock) {
-      inerted.push({ element: accountDock, previous: accountDock.inert });
-      accountDock.inert = true;
-    }
+    if (accountDock) background.push(accountDock);
+    // The Atlas children and the account dock go through one claim path, so
+    // neither can drift into reasserting an externally owned flag.
+    const releaseInert = claimInertOwnership(background);
 
     trapActiveRef.current = true;
     const focusable = () => [...root.querySelectorAll<HTMLElement>(FOCUSABLE)]
@@ -219,7 +245,7 @@ export function useModalFocus<T extends HTMLElement>(
 
     return () => {
       document.removeEventListener("keydown", onKeyDown, true);
-      for (const entry of inerted) entry.element.inert = entry.previous;
+      releaseInert();
       trapActiveRef.current = false;
 
       // A modal close queues its opener above; restore only after every inert
