@@ -263,46 +263,48 @@ describe("solveDetailedEarthHandoffZoom", () => {
     // MapLibre's scale is exponential in zoom, so a factor of two in pixels per
     // degree is exactly one zoom level, whichever level the measurement was
     // taken at.
+    // The fixtures stay inside the map's own zoom range, so what is asserted
+    // is the solve and not the clamp.
     expect(solveDetailedEarthHandoffZoom({
-      measuredZoom: 6,
+      measuredZoom: 7,
       measuredPxPerDegreeLat: 100,
       targetPxPerDegreeLat: 200,
-    })).toBeCloseTo(7, 10);
+    })).toBeCloseTo(8, 10);
     expect(solveDetailedEarthHandoffZoom({
-      measuredZoom: 6,
+      measuredZoom: 7,
       measuredPxPerDegreeLat: 100,
       targetPxPerDegreeLat: 50,
-    })).toBeCloseTo(5, 10);
+    })).toBeCloseTo(6, 10);
   });
 
   it("is a fixed point once the two renderers already agree", () => {
     // This is what makes the measure-correct-measure loop safe to bound: a
     // second pass over an exact answer moves nothing.
     const solved = solveDetailedEarthHandoffZoom({
-      measuredZoom: 5.25,
-      measuredPxPerDegreeLat: 48.2,
-      targetPxPerDegreeLat: 48.2,
+      measuredZoom: 6.75,
+      measuredPxPerDegreeLat: 111.4,
+      targetPxPerDegreeLat: 111.4,
     });
-    expect(solved).toBe(5.25);
+    expect(solved).toBe(6.75);
   });
 
   it("stays inside the map's own zoom limits and survives a useless measurement", () => {
     expect(solveDetailedEarthHandoffZoom({
-      measuredZoom: 6,
+      measuredZoom: 7,
       measuredPxPerDegreeLat: 100,
       targetPxPerDegreeLat: 100_000_000,
     })).toBe(DETAILED_EARTH_MAX_ZOOM);
     expect(solveDetailedEarthHandoffZoom({
-      measuredZoom: 6,
+      measuredZoom: 7,
       measuredPxPerDegreeLat: 100,
       targetPxPerDegreeLat: 0.000_001,
     })).toBe(DETAILED_EARTH_MIN_ZOOM);
     for (const measuredPxPerDegreeLat of [0, -1, Number.NaN]) {
       expect(solveDetailedEarthHandoffZoom({
-        measuredZoom: 5.5,
+        measuredZoom: 7,
         measuredPxPerDegreeLat,
-        targetPxPerDegreeLat: 48,
-      })).toBe(5.5);
+        targetPxPerDegreeLat: 111.4,
+      })).toBe(7);
     }
     expect(clampDetailedEarthZoom(Number.NaN)).toBe(DETAILED_EARTH_HANDOFF_SEED_ZOOM);
   });
