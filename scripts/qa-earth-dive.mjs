@@ -141,6 +141,7 @@ async function readDive(page) {
       readiness: map?.getAttribute("data-map-readiness") ?? null,
       mapError: map?.getAttribute("data-map-error") ?? null,
       particleZoom: window.__particleEarthDebug?.().zoom ?? null,
+      particleRotationX: window.__particleEarthDebug?.().rotationX ?? null,
       particleRotationY: window.__particleEarthDebug?.().rotationY ?? null,
     };
   });
@@ -437,11 +438,14 @@ try {
   await wheelAt(blocked.page, await gesturePoint(blocked.page, blockedPoint), RETREAT_WHEEL_DELTA);
   await blocked.page.waitForTimeout(250);
   const afterWheel = await readDive(blocked.page);
-  await blocked.page.mouse.move(blockedPoint.x, blockedPoint.y);
+  // Re-resolve first: a place label that drifted under the cursor would take
+  // the pointerdown for a pick and the globe would never rotate.
+  const dragPoint = await gesturePoint(blocked.page, blockedPoint);
+  await blocked.page.mouse.move(dragPoint.x, dragPoint.y);
   await blocked.page.mouse.down();
-  await blocked.page.mouse.move(blockedPoint.x + 140, blockedPoint.y + 18, { steps: 8 });
+  await blocked.page.mouse.move(dragPoint.x + 56, dragPoint.y + 30, { steps: 5 });
   await blocked.page.mouse.up();
-  await blocked.page.waitForTimeout(250);
+  await blocked.page.waitForTimeout(400);
   const afterDrag = await readDive(blocked.page);
   const chrome = await blocked.page.evaluate(() => ({
     dialogs: document.querySelectorAll('[role="dialog"]').length,
@@ -477,7 +481,9 @@ try {
       afterDrag: {
         zoom: afterDrag.particleZoom,
         semanticZoom: afterDrag.semanticZoom,
+        rotationX: afterDrag.particleRotationX,
         rotationY: afterDrag.particleRotationY,
+        point: dragPoint,
       },
     },
     chrome,
@@ -508,7 +514,9 @@ try {
   ) {
     blockedFailures.push("the wheel no longer changed the particle camera");
   }
-  if (afterDrag.particleRotationY === afterWheel.particleRotationY) {
+  const rotated = Math.abs(afterDrag.particleRotationY - afterWheel.particleRotationY) > 0.01
+    || Math.abs(afterDrag.particleRotationX - afterWheel.particleRotationX) > 0.01;
+  if (!rotated) {
     blockedFailures.push("the drag no longer rotated the particle Earth");
   }
   if (chrome.dialogs > 0 || chrome.statuses > 0 || chrome.legacyTransitionStatus > 0 || chrome.loading > 0) {
