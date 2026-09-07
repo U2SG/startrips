@@ -158,8 +158,27 @@ async function openRun({ fixture, recap = false }) {
   // wall-clock gap: a video beat holding for its own runtime reads `video`, a
   // trim positioning reads `trim`, and only `decode` is a lookahead symptom.
   await page.addInitScript(() => {
-    const trace = { events: [] };
+    const trace = { events: [], reads: [] };
     window.__qaPlaybackPrefetch = trace;
+    // Every signed read is also logged HERE, on the page's own thread, with the
+    // step the overlay was publishing at the moment the app asked for it. The
+    // route handler below sees the same request only after it has crossed to
+    // the node process, so its clock cannot tell which window issued a read
+    // that arrives around a seek; the live step at request time can.
+    const nativeFetch = window.fetch.bind(window);
+    window.fetch = (input, init) => {
+      const url = typeof input === "string" ? input : (input?.url ?? String(input));
+      const match = /\/api\/uploads\/assets\/([^/]+)\/read-url/.exec(url);
+      if (match) {
+        const step = document.querySelector(".journey-playback")?.getAttribute("data-playback-step");
+        trace.reads.push({
+          assetId: decodeURIComponent(match[1]),
+          step: step == null ? null : Number(step),
+          at: Date.now(),
+        });
+      }
+      return nativeFetch(input, init);
+    };
     const sample = (overlay) => ({
       at: Date.now(),
       step: Number(overlay.getAttribute("data-playback-step")),
@@ -499,12 +518,24 @@ try {
     // Scrub through the transport the product exposes rather than calling into
     // it: the range is time-scaled, so a fraction lands wherever the plan says
     // that elapsed time is, and where playback landed is then read back.
-    const seekAt = Date.now();
-    await seekRun.page.evaluate(() => {
+    //
+    // The seek is anchored in the page's own order of events, not in this
+    // process's clock. A read the pre-seek window issued a few milliseconds
+    // before the scrub reaches the route handler only after the CDP round
+    // trip, so a `Date.now()` taken here before the dispatch filed exactly such
+    // a straggler as post-seek (main run 33989079241). Two counters taken
+    // inside the dispatching script draw the line instead: reads logged before
+    // the dispatch are the old window's by construction, and the observers
+    // that sample the seek commit run at the microtask checkpoint after this
+    // script returns, so every trace event from that index on is post-seek.
+    const { readsBeforeSeek, eventsBeforeSeek } = await seekRun.page.evaluate(() => {
+      const trace = window.__qaPlaybackPrefetch;
+      const readsBeforeSeek = trace.reads.length;
       const input = document.querySelector(".journey-playback__progress input[type=\"range\"]");
       const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
       setter.call(input, String(Math.round(Number(input.max) * 0.62)));
       input.dispatchEvent(new Event("input", { bubbles: true }));
+      return { readsBeforeSeek, eventsBeforeSeek: trace.events.length };
     });
     // The seek target may be a travel or stop beat; what has to hold is that
     // playback reaches a RENDERED media beat at the new narrative position.
@@ -515,24 +546,44 @@ try {
       )));
     }, preSeekStep, { timeout: 60_000 });
     const events = await readTrace(seekRun.page);
-    const landed = renderedMediaSteps(events).find((entry) => entry.at > seekAt);
+    const postSeekEvents = events.slice(eventsBeforeSeek);
+    const landed = renderedMediaSteps(postSeekEvents)[0] ?? null;
     const landedPointIndex = landed ? steps[landed.step]?.pointIndex ?? null : null;
-    // The window is derived from the live step index alone, so nothing behind
-    // the new position may still be requested after the seek.
-    const postSeekReads = seekRun.reads.filter((read) => read.requestedAt > seekAt);
+    // Two separate questions, and only the first one was re-anchored here.
+    //
+    // WHICH reads count as post-seek is answered on the page's own thread:
+    // `readsBeforeSeek` was taken inside the dispatching script, so every read
+    // from that index on was issued after the scrub was dispatched, and the
+    // pre-dispatch straggler this process's clock used to misfile is excluded
+    // by construction instead of by a threshold.
+    //
+    // WHETHER a post-seek read is stale is still answered against the LANDED
+    // window, exactly as it was before the re-anchoring. `newer intent wins` is
+    // a claim about the new narrative position: a read for a beat behind where
+    // playback landed is the old window still driving, even when the old window
+    // issued it for a beat AHEAD of its own step - old step 2 asking for step 6
+    // while the seek lands at 44 is stale, and grading it against
+    // `stepAtRequest` alone would have passed it. `stepAtRequest` stays in the
+    // record as diagnostics: it names which window issued the read.
     const stepForAsset = new Map(
       steps.flatMap((step, index) => (step.assetId ? [[step.assetId, index]] : [])),
     );
+    const pageReads = await seekRun.page.evaluate(() => window.__qaPlaybackPrefetch.reads);
+    const postSeekReads = pageReads.slice(readsBeforeSeek).map((read) => ({
+      assetId: read.assetId,
+      assetStep: stepForAsset.get(read.assetId) ?? null,
+      stepAtRequest: read.step,
+    }));
     const staleReads = landed
       ? postSeekReads.filter((read) => (
-        (stepForAsset.get(read.assetId) ?? Number.POSITIVE_INFINITY) < landed.step
+        read.assetStep !== null && read.assetStep < landed.step
       ))
       : [];
     // A hold on the seek target itself is legitimate — its read had not been
     // asked for before the scrub. A hold on a beat BEHIND the new position is
     // the pre-seek window still controlling playback, which is the defect.
     const preSeekWindowHolds = landed
-      ? decodeHolds(events).filter((hold) => hold.at > seekAt && hold.step < landed.step)
+      ? decodeHolds(postSeekEvents).filter((hold) => hold.step < landed.step)
       : [];
     record("playback-prefetch-seek-fast", {
       preSeekStep,
@@ -541,7 +592,7 @@ try {
       landedPointIndex,
       chaptersAdvanced: landedPointIndex === null ? null : landedPointIndex - preSeekPointIndex,
       postSeekReadCount: postSeekReads.length,
-      staleReads: staleReads.map((read) => read.assetId),
+      staleReads,
       preSeekWindowHolds,
       failed: landedPointIndex === null
         || landedPointIndex - preSeekPointIndex < 2
