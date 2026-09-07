@@ -495,6 +495,178 @@ async function verifyMobileV2InteractionContract() {
   }
 }
 
+// #250: an expanded mobile Story runs a modal focus trap while React already
+// owns `inert` on the parent `.mobile-v2__sheet-layer`. The trap must not claim
+// that externally owned flag, because its owner releases it during the very
+// commit that tears the trap down — writing a stale `true` back leaves a
+// visible Journey detail sheet permanently non-interactive.
+async function verifyMobileStoryInertOwnership() {
+  console.error("[qa-post-login] mobile expanded-story inert ownership");
+  // Normal motion on purpose. Closing an expanded Story runs through
+  // runSharedElementMorph's View Transition, and the stale write lands in a
+  // passive effect cleanup ordered after that commit, so a reduced-motion page
+  // would not exercise the sequence the owner recorded.
+  const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  const pageErrors = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  const storyJourneys = journeys.map((journey, index) => ({
+    ...journey,
+    media: [{
+      id: `qa-story-media-${index}`,
+      journeyId: journey.id,
+      routePointId: null,
+      storageDriver: "qa",
+      storageKey: `qa/story-media-${index}.gif`,
+      fileName: `story-media-${index}.gif`,
+      mimeType: "image/gif",
+      bytes: 35,
+      sortOrder: 0,
+      uploadedByUserId: "qa-user",
+      createdAt: `${journey.startedOn}T00:10:00.000Z`,
+    }],
+  }));
+  const rounds = [];
+  try {
+    await page.route("**/api/journeys", (route) => route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ journeys: storyJourneys }),
+    }));
+    await page.route("**/api/uploads/assets/*/read-url", (route) => route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        url: "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=",
+        expiresAt: "2026-08-30T00:00:00.000Z",
+      }),
+    }));
+    await page.goto(`${origin}/?qaState=living-atlas`, { waitUntil: "domcontentloaded" });
+    const chip = page.locator(".mobile-v2__journey-chip");
+    await chip.waitFor({ state: "visible" });
+
+    const sheet = page.locator(".mobile-v2__sheet");
+    const storySurface = page.locator(".journey-story");
+    const realMap = page.locator(".mobile-v2__real-map");
+    const readSheetLayer = () => page.evaluate(() => {
+      const layer = document.querySelector(".mobile-v2__sheet-layer");
+      if (!layer) return null;
+      return {
+        inert: layer.hasAttribute("inert"),
+        ariaHidden: layer.getAttribute("aria-hidden"),
+      };
+    });
+    const surfaceStackDepth = () => page.evaluate(() => {
+      const stack = window.history.state?.__startripsMobileSurfaceStack;
+      return Array.isArray(stack) ? stack.length : 0;
+    });
+    const presentationIs = (presentation) => page.waitForFunction(
+      (expected) => document.querySelector(".journey-story")?.getAttribute("data-mobile-presentation") === expected,
+      presentation,
+      { timeout: 8_000 },
+    );
+
+    const runRound = async (label, closeVia) => {
+      const round = { label, closeVia };
+      try {
+        await chip.click();
+        await sheet.waitFor({ state: "visible" });
+        await sheet.getByRole("button", { name: /打开故事/ }).click();
+        await storySurface.waitFor({ state: "visible" });
+        await presentationIs("in-context");
+
+        const sheetHandle = storySurface.locator(".journey-story__sheet-handle");
+        round.expandControlLabel = await sheetHandle.getAttribute("aria-label");
+        await sheetHandle.click();
+        await presentationIs("expanded");
+        round.underExpandedStory = await readSheetLayer();
+        round.expandedStackDepth = await surfaceStackDepth();
+
+        if (closeVia === "browser-back") {
+          // `story-expanded` is its own mobile history layer, so the first Back
+          // collapses the Story rather than closing it. React still owns the
+          // parent flag while any Story is open, so it must stay inert here.
+          await page.evaluate(() => window.history.back());
+          await presentationIs("in-context");
+          round.underCollapsedStory = await readSheetLayer();
+          await page.evaluate(() => window.history.back());
+        } else {
+          await storySurface.locator(".journey-story__close").click({ timeout: 6_000 });
+        }
+        await storySurface.waitFor({ state: "detached" });
+        // The stale write happens in the trap's passive cleanup, i.e. after the
+        // commit that dropped the attribute. Let that cleanup land before
+        // reading, so a pass cannot come from reading too early.
+        await page.waitForTimeout(600);
+        round.afterClose = await readSheetLayer();
+        round.sheetVisibleAfterClose = await sheet.isVisible();
+
+        // First tap, not a retry: an inert layer swallows a pointer silently,
+        // which is exactly what the owner's recordings show.
+        await sheet.getByRole("button", { name: /真实地图/ }).click({ timeout: 6_000 });
+        await realMap.waitFor({ state: "visible", timeout: 8_000 });
+        round.realMapOpenedOnFirstClick = true;
+        await page.keyboard.press("Escape");
+        await realMap.waitFor({ state: "detached" });
+        // Review P2: the map's `useMobileSurfaceHistory` cleanup schedules a
+        // history.go(-1) that can still be in flight when the DOM detaches.
+        // Reopening the Story before the stack is back to sheet-only depth
+        // would let that pending pop swallow the new Story token.
+        await page.waitForFunction(() => {
+          const stack = window.history.state?.__startripsMobileSurfaceStack;
+          return Array.isArray(stack) && stack.length === 1;
+        });
+        round.mapCloseStackDepth = await surfaceStackDepth();
+
+        await sheet.getByRole("button", { name: /打开故事/ }).click({ timeout: 6_000 });
+        await storySurface.waitFor({ state: "visible", timeout: 8_000 });
+        round.storyReopenable = true;
+        await storySurface.locator(".journey-story__close").click({ timeout: 6_000 });
+        await storySurface.waitFor({ state: "detached" });
+        await page.waitForTimeout(400);
+        round.afterReopenRoundTrip = await readSheetLayer();
+
+        await page.keyboard.press("Escape");
+        await sheet.waitFor({ state: "detached" });
+        await page.waitForFunction(() => {
+          const stack = window.history.state?.__startripsMobileSurfaceStack;
+          return !Array.isArray(stack) || stack.length === 0;
+        });
+        round.residualStackDepth = await surfaceStackDepth();
+      } catch (error) {
+        round.error = error instanceof Error ? error.stack ?? error.message : String(error);
+      }
+      const notInert = (state) => Boolean(state) && state.inert === false && state.ariaHidden !== "true";
+      round.failed = Boolean(round.error)
+        || round.expandControlLabel !== "展开旅程故事"
+        || round.underExpandedStory?.inert !== true
+        || (closeVia === "browser-back" && round.underCollapsedStory?.inert !== true)
+        || !notInert(round.afterClose)
+        || !round.sheetVisibleAfterClose
+        || round.realMapOpenedOnFirstClick !== true
+        || round.mapCloseStackDepth !== 1
+        || round.storyReopenable !== true
+        || !notInert(round.afterReopenRoundTrip)
+        || round.residualStackDepth !== 0;
+      return round;
+    };
+
+    rounds.push(await runRound("expanded-close-control", "close-control"));
+    rounds.push(await runRound("expanded-browser-back", "browser-back"));
+    rounds.push(await runRound("expanded-close-control-repeat", "close-control"));
+
+    const interaction = {
+      name: "mobile-expanded-story-inert-ownership",
+      rounds,
+      pageErrors,
+      failed: rounds.some((round) => round.failed) || pageErrors.length > 0,
+    };
+    if (interaction.failed) failed = true;
+    results.push(interaction);
+  } finally {
+    await page.close();
+  }
+}
+
 async function verifyComposerMediaActions() {
   console.error("[qa-post-login] composer media actions");
   const page = await browser.newPage({ viewport: { width: 390, height: 844 }, reducedMotion: "reduce" });
@@ -2568,6 +2740,7 @@ try {
   } else {
     await verifyAtlasShell();
     await verifyMobileV2InteractionContract();
+    await verifyMobileStoryInertOwnership();
     await verifyComposerMediaActions();
     await verifyComposerGlobeRoundTrip();
     await verifyTransientJourneyFocus();
