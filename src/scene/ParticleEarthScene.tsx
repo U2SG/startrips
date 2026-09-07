@@ -100,12 +100,14 @@ import {
   updateGeoProjectionFrame,
   type GeoProjectionFrame,
 } from "./projection";
+import type { ParticleAnchorFrame } from "./detailedEarthModel";
 import { disposeSceneGraph, useThreeScene } from "./useThreeScene";
 import {
   resolveGlobeSemanticZoom,
   resolveGlobeSemanticZoomForFrame,
   type GlobeSemanticZoom,
   type GlobeSemanticZoomState,
+  type SemanticZoomSnapshot,
 } from "./semanticZoom";
 import { terrainReliefBumpScale, terrainReliefOpacity } from "./terrainRelief";
 
@@ -261,6 +263,10 @@ export const GLOBE_ZOOM_MIN = 0.72;
 // near-plane headroom in front of the camera at z = 5.4.
 export const GLOBE_ZOOM_MAX = 3.0;
 export const GLOBE_SURFACE_RADIUS = GEOGRAPHIC_SURFACE_RADIUS;
+// #252: the latitude step the local geographic scale is measured over. Small
+// enough that the projection is locally linear across it, large enough that the
+// difference is far above the 0.01px the anchor is published at.
+const ANCHOR_SCALE_PROBE_DEG = 0.05;
 /**
  * #196: the personal glow is a Points sprite drawn against the particle
  * surface it now shares a radius with, so it carries a render-only epsilon to
@@ -1253,6 +1259,28 @@ interface ParticleEarthSceneProps {
   };
   showArchiveSignals?: boolean;
   onReady?: () => void;
+  /**
+   * #252: the scene owns the camera, so it is the only place that can report
+   * where the semantic-zoom authority currently stands. It publishes that
+   * authority's own snapshot and never a raw camera value, so a React owner
+   * cannot start classifying zoom on its own.
+   */
+  onSemanticZoomSnapshot?: (snapshot: SemanticZoomSnapshot) => void;
+  /**
+   * #252 section 2: what this renderer is showing at the focused place, in
+   * viewport CSS pixels - where the anchor projects and how many pixels a
+   * degree of latitude spans there. The Dive's detail surface solves its own
+   * camera to these, which is the only way the two renderers can be known to
+   * agree in screen space rather than assumed to.
+   */
+  onParticleAnchorFrame?: (frame: ParticleAnchorFrame) => void;
+  /**
+   * #252: a camera hand-back. When a detail owner relinquishes the Semantic
+   * Earth Dive it asks the particle camera to stand where the zoom authority
+   * says the band reopens, so the two surfaces do not disagree about where the
+   * user is. The revision is what makes it an event rather than a value.
+   */
+  zoomIntent?: { zoom: number; revision: number };
   onGlobePointPick?: (point: { latitude: number; longitude: number }) => void;
   dragToRotate?: boolean;
   wheelToZoom?: boolean;
@@ -1571,6 +1599,9 @@ export function ParticleEarthScene({
   temporalReveal,
   showArchiveSignals = true,
   onReady,
+  onSemanticZoomSnapshot,
+  onParticleAnchorFrame,
+  zoomIntent,
   onGlobePointPick,
   dragToRotate = false,
   wheelToZoom = true,
@@ -1594,6 +1625,9 @@ export function ParticleEarthScene({
   const latestOnJourneyRoutePointActivate = useRef(onJourneyRoutePointActivate);
   const latestTemporalReveal = useRef(temporalReveal);
   const latestOnReady = useRef(onReady);
+  const latestOnSemanticZoomSnapshot = useRef(onSemanticZoomSnapshot);
+  const latestOnParticleAnchorFrame = useRef(onParticleAnchorFrame);
+  const latestZoomIntent = useRef(zoomIntent);
   const latestOnGlobePointPick = useRef(onGlobePointPick);
   const latestDragToRotate = useRef(dragToRotate);
   const latestWheelToZoom = useRef(wheelToZoom);
@@ -1614,6 +1648,9 @@ export function ParticleEarthScene({
   latestOnJourneyRoutePointActivate.current = onJourneyRoutePointActivate;
   latestTemporalReveal.current = temporalReveal;
   latestOnReady.current = onReady;
+  latestOnSemanticZoomSnapshot.current = onSemanticZoomSnapshot;
+  latestOnParticleAnchorFrame.current = onParticleAnchorFrame;
+  latestZoomIntent.current = zoomIntent;
   latestOnGlobePointPick.current = onGlobePointPick;
   latestDragToRotate.current = dragToRotate;
   latestWheelToZoom.current = wheelToZoom;
@@ -1633,6 +1670,8 @@ export function ParticleEarthScene({
     const camera = new PerspectiveCamera(38, 1, 0.1, 100);
     camera.position.set(0, 0, 5.4);
     const sampledFocusCenter = new Vector2();
+    const focusScaleProbePoint = { x: 0, y: 0 };
+    const anchorFrameRect = new Vector2();
     let focusViewportSampledAt = 0;
 
     const visibleElementRect = (element: HTMLElement | null): JourneyConnectorRect | null => {
@@ -2751,6 +2790,12 @@ export function ParticleEarthScene({
     let cityTierData: { cities: CityPoint[] } | null = null;
     let lastCityTier: "capitals" | "prefectures" | "all" | null = null;
     let semanticZoomState: GlobeSemanticZoomState = resolveGlobeSemanticZoom({ zoom: interactiveZoom, qualityProfile: currentQuality });
+    // Null until the first publish, so a Dive owner that mounts with the camera
+    // already inside a band still learns where it stands.
+    let publishedSemanticZoomSnapshot: SemanticZoomSnapshot | null = null;
+    let publishedAnchorFrame: ParticleAnchorFrame | null = null;
+    let anchorFrameRectSampledAt = 0;
+    let appliedZoomIntentRevision = latestZoomIntent.current?.revision ?? null;
     const activePointers = new Map<number, { x: number; y: number }>();
     let wheelInteractionUntil = 0;
     const rejectedPointerIds = new Set<number>();
@@ -4577,6 +4622,14 @@ export function ParticleEarthScene({
         Math.min(1, baseAtmosphereOpacity * audioGain.ambient),
       );
       wireMaterial.opacity = interpolate(wireMaterial.opacity, target.wireOpacity);
+      // #252: a camera hand-back arrives as a revision, and is treated exactly
+      // like a manual gesture so the focus machinery does not undo it.
+      const zoomIntentNow = latestZoomIntent.current;
+      if (zoomIntentNow && zoomIntentNow.revision !== appliedZoomIntentRevision) {
+        appliedZoomIntentRevision = zoomIntentNow.revision;
+        claimManualInteraction();
+        applyAnchoredZoom(zoomIntentNow.zoom, null, interactionAnchorScreen);
+      }
       semanticZoomState = resolveGlobeSemanticZoomForFrame({
         zoom: interactiveZoom,
         current: semanticZoomState,
@@ -4585,6 +4638,21 @@ export function ParticleEarthScene({
       });
       host.dataset.semanticZoom = semanticZoomState.state;
       host.dataset.cityLod = semanticZoomState.cityTier;
+      host.dataset.localProgress = semanticZoomState.snapshot.localProgress.toFixed(3);
+      // Publish the authority's snapshot to whoever owns the Dive. Only a
+      // material move is reported, so a resting camera costs nothing.
+      const snapshot = semanticZoomState.snapshot;
+      if (
+        latestOnSemanticZoomSnapshot.current
+        && (
+          !publishedSemanticZoomSnapshot
+          || snapshot.level !== publishedSemanticZoomSnapshot.level
+          || Math.abs(snapshot.localProgress - publishedSemanticZoomSnapshot.localProgress) >= 0.004
+        )
+      ) {
+        publishedSemanticZoomSnapshot = snapshot;
+        latestOnSemanticZoomSnapshot.current(snapshot);
+      }
       updateCoastlineRefinement(now);
       const coastlineWeights = semanticZoomState.coastlineWeights;
       const coastlineLod = semanticZoomState.coastlineLod;
@@ -4655,6 +4723,54 @@ export function ParticleEarthScene({
         );
         host.dataset.personalPointX = String(focusSignalScreenPoint.x);
         host.dataset.personalPointY = String(focusSignalScreenPoint.y);
+        // #252: the same frame, read once more a small step north, gives the
+        // local geographic scale in the only unit both renderers share -
+        // viewport CSS pixels per degree of LATITUDE. Latitude on purpose: a
+        // degree of longitude shrinks with latitude, so an east-west probe
+        // would measure where the anchor is rather than how large it is drawn.
+        projectGeographicAnchorToViewport(
+          geoFrame,
+          latestFocusPoint.current.lat + ANCHOR_SCALE_PROBE_DEG,
+          latestFocusPoint.current.lon,
+          focusScaleProbePoint,
+        );
+        const anchorPxPerDegreeLat = Math.hypot(
+          focusScaleProbePoint.x - focusSignalScreenPoint.x,
+          focusScaleProbePoint.y - focusSignalScreenPoint.y,
+        ) / ANCHOR_SCALE_PROBE_DEG;
+        // The canvas is offset inside the viewport, so the projection's own
+        // coordinates are canvas-relative. Publishing viewport pixels is what
+        // lets a second renderer in a different box compare against them.
+        if (now - anchorFrameRectSampledAt > 100) {
+          anchorFrameRectSampledAt = now;
+          const rect = renderer.domElement.getBoundingClientRect();
+          anchorFrameRect.set(rect.left, rect.top);
+        }
+        const anchorViewportX = anchorFrameRect.x + focusSignalScreenPoint.x;
+        const anchorViewportY = anchorFrameRect.y + focusSignalScreenPoint.y;
+        host.dataset.focusAnchorViewportX = anchorViewportX.toFixed(2);
+        host.dataset.focusAnchorViewportY = anchorViewportY.toFixed(2);
+        host.dataset.focusAnchorScale = anchorPxPerDegreeLat.toFixed(3);
+        if (
+          latestOnParticleAnchorFrame.current
+          && Number.isFinite(anchorPxPerDegreeLat)
+          && anchorPxPerDegreeLat > 0
+          && (
+            !publishedAnchorFrame
+            || Math.abs(publishedAnchorFrame.screen.x - anchorViewportX) >= 0.5
+            || Math.abs(publishedAnchorFrame.screen.y - anchorViewportY) >= 0.5
+            || Math.abs(publishedAnchorFrame.pxPerDegreeLat / anchorPxPerDegreeLat - 1) >= 0.002
+            || publishedAnchorFrame.anchor.lat !== latestFocusPoint.current.lat
+            || publishedAnchorFrame.anchor.lon !== latestFocusPoint.current.lon
+          )
+        ) {
+          publishedAnchorFrame = {
+            anchor: { ...latestFocusPoint.current },
+            screen: { x: anchorViewportX, y: anchorViewportY },
+            pxPerDegreeLat: anchorPxPerDegreeLat,
+          };
+          latestOnParticleAnchorFrame.current(publishedAnchorFrame);
+        }
         // #196: the coordinates the focus signal is standing on. A place label
         // sends these when it is clicked, so publishing them is what makes
         // "the click focused the place the label claimed" checkable without

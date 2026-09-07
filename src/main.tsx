@@ -1,4 +1,4 @@
-import { StrictMode, useCallback, useMemo, useState } from "react";
+import { StrictMode, useCallback, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { AuthGateway } from "./auth/AuthGateway";
@@ -22,6 +22,7 @@ import {
   LivingAtlasGlobe,
   LivingAtlasGlobeControls,
   PersistentEarthProvider,
+  usePersistentEarth,
   type LivingAtlasGlobeProps,
 } from "./scene/LivingAtlasGlobe";
 import "./styles/tokens.css";
@@ -241,6 +242,50 @@ function LivingAtlasQaGlobe({ onGlobePointPick, journeyRoutes }: LivingAtlasGlob
   );
 }
 
+/**
+ * #252: the Semantic Earth Dive lane needs the REAL `LivingAtlasGlobe` on the
+ * real persistent particle scene, because what it grades is the zoom-driven
+ * handoff between them. The other globe fixtures either stub the globe
+ * (`?qaState=living-atlas`) or mount the bare scene without the Atlas section
+ * that publishes `data-earth-dive` (`?qaState=journey-routes`), so this is a
+ * sibling fixture rather than a change to either.
+ */
+function EarthDiveQaPreview() {
+  const persistentEarth = usePersistentEarth();
+  const qaParams = new URLSearchParams(window.location.search);
+  const [focusRevision, setFocusRevision] = useState(0);
+  useEffect(() => {
+    persistentEarth.setStage("atlas");
+    return () => persistentEarth.setStage("idle");
+  }, [persistentEarth]);
+  const requestedLat = Number(qaParams.get("qaFocusLat") ?? Number.NaN);
+  const requestedLon = Number(qaParams.get("qaFocusLon") ?? Number.NaN);
+  const focusPoint = {
+    lat: Number.isFinite(requestedLat) ? requestedLat : 22.3193,
+    lon: Number.isFinite(requestedLon) ? requestedLon : 114.1694,
+  };
+  return (
+    <main className="living-atlas">
+      <div className="living-atlas__globe">
+        <LivingAtlasGlobe
+          focusPoint={focusPoint}
+          focusRevision={focusRevision}
+          journeyRoutes={[]}
+          onJourneyRouteActivate={() => undefined}
+          onJourneyRoutePointActivate={() => undefined}
+          reduceMotion={qaParams.get("qaMotion") !== "animate"}
+        />
+      </div>
+      <button
+        type="button"
+        data-qa-earth-dive-refocus
+        onClick={() => setFocusRevision((revision) => revision + 1)}
+        style={{ position: "absolute", zIndex: 60, bottom: 14, left: 14 }}
+      >QA 重新对焦</button>
+    </main>
+  );
+}
+
 function LivingAtlasQaPreview() {
   return <LivingAtlasApp GlobeComponent={LivingAtlasQaGlobe} />;
 }
@@ -256,10 +301,8 @@ function LivingAtlasGlobeControlsQaPreview() {
         aria-label={detailMode ? "高精度地球地图控制 QA" : "粒子地球控制 QA"}
       >
         <LivingAtlasGlobeControls
-          detailMode={detailMode}
-          transitionTarget={null}
+          diveStage={detailMode ? "detail" : "particle"}
           detailLanguage={language}
-          transitionLabel=""
           onModeToggle={() => undefined}
           onDetailLanguageChange={setLanguage}
           onPickRequest={() => undefined}
@@ -625,6 +668,8 @@ const Experience = import.meta.env.DEV && qaState === "journey-composer"
     ? JourneyRoutesQaPreview
   : import.meta.env.DEV && (qaState === "globe-controls" || qaState === "globe-controls-gateway")
     ? LivingAtlasGlobeControlsQaPreview
+  : import.meta.env.DEV && qaState === "earth-dive"
+    ? EarthDiveQaPreview
   : import.meta.env.DEV && (qaState === "living-atlas" || qaState === "atlas-gateway")
     ? LivingAtlasQaPreview
   : import.meta.env.DEV && qaState === "final-acceptance"

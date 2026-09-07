@@ -746,7 +746,7 @@ async function verifyDetailedEarthParticleContinuity() {
       const mountDebug = await gateway.page.evaluate(() => ({
         earthMode: document.querySelector(".living-atlas-globe")?.getAttribute("data-earth-mode") ?? null,
         globeClass: document.querySelector(".living-atlas-globe")?.className ?? null,
-        transitionStatus: document.querySelector(".living-atlas-globe__transition-status")?.textContent?.trim() ?? null,
+        earthDive: document.querySelector(".living-atlas-globe")?.getAttribute("data-earth-dive") ?? null,
         controlLabels: [...document.querySelectorAll(".living-atlas-globe__controls button")].map((button) => button.getAttribute("aria-label") || button.textContent?.trim() || ""),
       }));
       throw new Error(`detailed-earth map did not mount: ${JSON.stringify({ ...mountDebug, errors: gateway.errors })}`, { cause: error });
@@ -764,7 +764,7 @@ async function verifyDetailedEarthParticleContinuity() {
           mapError: map?.getAttribute("data-map-error") ?? null,
           earthMode: document.querySelector(".living-atlas-globe")?.getAttribute("data-earth-mode") ?? null,
           globeClass: document.querySelector(".living-atlas-globe")?.className ?? null,
-          transitionStatus: document.querySelector(".living-atlas-globe__transition-status")?.textContent?.trim() ?? null,
+          earthDive: document.querySelector(".living-atlas-globe")?.getAttribute("data-earth-dive") ?? null,
         };
       });
       throw new Error(`detailed-earth map did not become ready: ${JSON.stringify(mapDebug)}`, { cause: error });

@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   AMAP_RASTER_STYLE,
+  DETAILED_EARTH_FALLBACK_CENTER,
+  DETAILED_EARTH_HANDOFF_SEED_ZOOM,
+  clampDetailedEarthZoom,
+  detailedEarthAnchorCorrection,
+  getEarthDiveHandoffFrame,
+  solveDetailedEarthHandoffZoom,
   createDetailedEarthLabelExpression,
   DEFAULT_DETAILED_EARTH_STYLE_URL,
   DETAILED_EARTH_DRAG_PAN_OPTIONS,
@@ -23,6 +29,8 @@ import {
   shouldReturnToParticleEarth,
   useGlobeProjection,
 } from "./detailedEarthModel";
+import type { ParticleAnchorFrame } from "./detailedEarthModel";
+import type { SemanticZoomSnapshot } from "./semanticZoom";
 
 describe("detailedEarthModel", () => {
   it("uses a provider-neutral vector style by default", () => {
@@ -144,5 +152,167 @@ describe("getDetailedEarthFocusDuration", () => {
       getDetailedEarthFocusDuration("regional"),
     );
     expect(getDetailedEarthFocusDuration(undefined)).toBe(900);
+  });
+});
+
+describe("getEarthDiveHandoffFrame", () => {
+  const focusPoint = { lat: 22.3193, lon: 114.1694 };
+  const at = (localProgress: number): SemanticZoomSnapshot => ({
+    level: localProgress > 0 ? "local" : "regional",
+    zoom: Number.NaN,
+    localProgress,
+  });
+
+  it("frames the particle focus rather than a fixed mount position", () => {
+    const frame = getEarthDiveHandoffFrame({
+      stage: "prewarm",
+      snapshot: at(0),
+      focusPoint,
+    });
+    expect(frame?.center).toEqual([focusPoint.lon, focusPoint.lat]);
+  });
+
+  it("has no frame at all before the dive mounts a map", () => {
+    expect(getEarthDiveHandoffFrame({
+      stage: "particle",
+      snapshot: at(1),
+      focusPoint,
+    })).toBeNull();
+  });
+
+  it("keeps the frame identical across the blending -> detail handoff", () => {
+    // #252 section 2: nothing about the framing may change as the map becomes
+    // visible and then takes ownership, because that is exactly what would move
+    // the focused Route Point on screen.
+    for (const localProgress of [0, 0.45, 0.8, 1]) {
+      const snapshot = at(localProgress);
+      const prewarm = getEarthDiveHandoffFrame({ stage: "prewarm", snapshot, focusPoint });
+      const blending = getEarthDiveHandoffFrame({ stage: "blending", snapshot, focusPoint });
+      const detail = getEarthDiveHandoffFrame({ stage: "detail", snapshot, focusPoint });
+      expect(blending).toEqual(prewarm);
+      expect(detail).toEqual(blending);
+    }
+  });
+
+  it("seeds the calibration monotonically and never below the return threshold", () => {
+    // The seed is not a promise about scale - the solver overrides it from a
+    // measurement - but a seed that already leans the right way converges in
+    // fewer measurements, and a seed at or under the return threshold would
+    // make a freshly mounted map ask to go home before it was ever calibrated.
+    let previous = -1;
+    for (let localProgress = 0; localProgress <= 1.0001; localProgress += 0.05) {
+      const frame = getEarthDiveHandoffFrame({
+        stage: "blending",
+        snapshot: at(localProgress),
+        focusPoint,
+      });
+      expect(frame?.zoom).toBeGreaterThan(previous);
+      expect(shouldReturnToParticleEarth(frame?.zoom ?? 0)).toBe(false);
+      previous = frame?.zoom ?? Number.NaN;
+    }
+    expect(getEarthDiveHandoffFrame({ stage: "blending", snapshot: at(0), focusPoint })?.zoom)
+      .toBe(DETAILED_EARTH_HANDOFF_SEED_ZOOM);
+    expect(DETAILED_EARTH_HANDOFF_SEED_ZOOM).toBeGreaterThan(DETAILED_EARTH_RETURN_ZOOM);
+    expect(DETAILED_EARTH_RETURN_ZOOM).toBeGreaterThan(DETAILED_EARTH_MIN_ZOOM);
+  });
+
+  it("takes the anchor from the particle frame when the particle side has published one", () => {
+    const particleFrame: ParticleAnchorFrame = {
+      anchor: { lat: 35.6812, lon: 139.7671 },
+      screen: { x: 640, y: 430 },
+      pxPerDegreeLat: 48.2,
+    };
+    const frame = getEarthDiveHandoffFrame({
+      stage: "blending",
+      snapshot: at(0.5),
+      focusPoint,
+      routePoints: [{ lat: 10, lon: 100 }, { lat: 20, lon: 110 }],
+      particleFrame,
+    });
+    // The place the particle Earth is actually holding outranks both the route
+    // frame and the focus prop: those are intents, this is what is on screen.
+    expect(frame?.center).toEqual([particleFrame.anchor.lon, particleFrame.anchor.lat]);
+    expect(frame?.screen).toEqual(particleFrame.screen);
+    expect(getEarthDiveHandoffFrame({ stage: "blending", snapshot: at(0.5), focusPoint })?.screen)
+      .toBeNull();
+  });
+
+  it("prefers the Journey route frame over a single focus point", () => {
+    const frame = getEarthDiveHandoffFrame({
+      stage: "blending",
+      snapshot: at(0.5),
+      focusPoint,
+      routePoints: [{ lat: 10, lon: 100 }, { lat: 20, lon: 110 }],
+    });
+    expect(frame?.center).toEqual([105, 15]);
+  });
+
+  it("falls back to the product default when there is no focus at all", () => {
+    expect(getEarthDiveHandoffFrame({ stage: "prewarm", snapshot: at(0) })?.center)
+      .toEqual(DETAILED_EARTH_FALLBACK_CENTER);
+    expect(getEarthDiveHandoffFrame({
+      stage: "prewarm",
+      snapshot: at(0),
+      focusPoint: { lat: Number.NaN, lon: 114 },
+    })?.center).toEqual(DETAILED_EARTH_FALLBACK_CENTER);
+  });
+});
+
+describe("solveDetailedEarthHandoffZoom", () => {
+  it("answers the zoom whose local scale equals the particle Earth's", () => {
+    // MapLibre's scale is exponential in zoom, so a factor of two in pixels per
+    // degree is exactly one zoom level, whichever level the measurement was
+    // taken at.
+    // The fixtures stay inside the map's own zoom range, so what is asserted
+    // is the solve and not the clamp.
+    expect(solveDetailedEarthHandoffZoom({
+      measuredZoom: 7,
+      measuredPxPerDegreeLat: 100,
+      targetPxPerDegreeLat: 200,
+    })).toBeCloseTo(8, 10);
+    expect(solveDetailedEarthHandoffZoom({
+      measuredZoom: 7,
+      measuredPxPerDegreeLat: 100,
+      targetPxPerDegreeLat: 50,
+    })).toBeCloseTo(6, 10);
+  });
+
+  it("is a fixed point once the two renderers already agree", () => {
+    // This is what makes the measure-correct-measure loop safe to bound: a
+    // second pass over an exact answer moves nothing.
+    const solved = solveDetailedEarthHandoffZoom({
+      measuredZoom: 6.75,
+      measuredPxPerDegreeLat: 111.4,
+      targetPxPerDegreeLat: 111.4,
+    });
+    expect(solved).toBe(6.75);
+  });
+
+  it("stays inside the map's own zoom limits and survives a useless measurement", () => {
+    expect(solveDetailedEarthHandoffZoom({
+      measuredZoom: 7,
+      measuredPxPerDegreeLat: 100,
+      targetPxPerDegreeLat: 100_000_000,
+    })).toBe(DETAILED_EARTH_MAX_ZOOM);
+    expect(solveDetailedEarthHandoffZoom({
+      measuredZoom: 7,
+      measuredPxPerDegreeLat: 100,
+      targetPxPerDegreeLat: 0.000_001,
+    })).toBe(DETAILED_EARTH_MIN_ZOOM);
+    for (const measuredPxPerDegreeLat of [0, -1, Number.NaN]) {
+      expect(solveDetailedEarthHandoffZoom({
+        measuredZoom: 7,
+        measuredPxPerDegreeLat,
+        targetPxPerDegreeLat: 111.4,
+      })).toBe(7);
+    }
+    expect(clampDetailedEarthZoom(Number.NaN)).toBe(DETAILED_EARTH_HANDOFF_SEED_ZOOM);
+  });
+
+  it("corrects the map centre by the pixels the anchor is away from its target", () => {
+    expect(detailedEarthAnchorCorrection({ x: 700, y: 500 }, { x: 640, y: 430 }))
+      .toEqual({ x: 60, y: 70 });
+    expect(detailedEarthAnchorCorrection({ x: 640, y: 430 }, { x: 640, y: 430 }))
+      .toEqual({ x: 0, y: 0 });
   });
 });
