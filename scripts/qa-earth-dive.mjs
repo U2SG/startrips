@@ -36,10 +36,14 @@ const qaUrl = new URL(
 // The stated tolerances for the handoff, matching #252's measurement goals.
 const ANCHOR_TOLERANCE_PX = 2;
 const LOCAL_SCALE_TOLERANCE = 0.03;
-// The wheel step that crosses the commit edge. Small on purpose: the smaller
-// the deliberate zoom inside the sample interval, the less there is to divide
-// out of the scale measurement.
-const COMMIT_WHEEL_DELTA = -12;
+// Wheel deltas. The approach is coarse because the particle band is wide, but
+// the blend band is only a third of `local` and one coarse notch can cross the
+// whole of it - so the last part of the descent, and the commit itself, use a
+// step small enough to park inside the band and to keep the deliberate zoom
+// inside the measurement interval small.
+const APPROACH_WHEEL_DELTA = -120;
+const FINE_WHEEL_DELTA = -10;
+const RETREAT_WHEEL_DELTA = 240;
 const VIEWPORT = { width: 1440, height: 1024 };
 
 const EMPTY_STYLE = {
@@ -179,29 +183,39 @@ async function stages(page) {
   return page.evaluate(() => window.__qaEarthDiveStages.map((entry) => entry.stage));
 }
 
-/** The published frame at the moment the map's dive stage is exactly `stage`. */
-async function frameAt(page, stage) {
-  return page.evaluate((wanted) => (
-    window.__qaEarthDiveStages.filter((entry) => entry.stage === wanted).at(-1) ?? null
-  ), stage);
-}
-
-async function wheelUntil(page, point, deltaY, predicate, label, maxSteps = 60) {
+async function wheelUntil(page, point, deltaY, predicate, label, maxSteps = 90) {
   let target = point;
-  for (let step = 0; step < maxSteps; step += 1) {
+  for (let step = 0; step <= maxSteps; step += 1) {
     const state = await readDive(page);
-    if (predicate(state)) return state;
+    // The predicate reads the recorded ladder as well as the live state,
+    // because a stage the wheel passed through between two polls is a real
+    // published stage and the recorder saw it even when a poll did not.
+    if (predicate(state, await stages(page))) return state;
+    if (step === maxSteps) break;
     target = await gesturePoint(page, target);
     await wheelAt(page, target, deltaY);
-    await page.waitForTimeout(120);
+    await page.waitForTimeout(100);
   }
-  const state = await readDive(page);
-  if (predicate(state)) return state;
   throw new Error(`${label} never happened: ${JSON.stringify({
-    state,
+    state: await readDive(page),
     hit: await hitTarget(page, point),
     stages: await stages(page),
   })}`);
+}
+
+/** The frame the detail map is publishing right now. */
+async function readFrame(page) {
+  return page.evaluate(() => {
+    const map = document.querySelector(".detailed-earth-map");
+    if (!map) return null;
+    const read = (value) => (value === undefined ? null : Number(value));
+    return {
+      anchorX: read(map.dataset.handoffAnchorX),
+      anchorY: read(map.dataset.handoffAnchorY),
+      scale: read(map.dataset.handoffScale),
+      mapZoom: read(map.dataset.handoffZoom),
+    };
+  });
 }
 
 async function openDivePage(context, { blockStyle }) {
@@ -250,10 +264,19 @@ try {
   const forward = await openDivePage(context, { blockStyle: false });
   const point = await gesturePoint(forward.page);
 
+  // Approach coarsely to the door of the `local` band, then descend in small
+  // steps so the run parks INSIDE the blend band instead of crossing it whole.
+  await wheelUntil(
+    forward.page,
+    point,
+    APPROACH_WHEEL_DELTA,
+    (state) => state.semanticZoom === "local",
+    "the particle Earth never reached the local band on wheel zoom alone",
+  );
   const entered = await wheelUntil(
     forward.page,
     point,
-    -120,
+    FINE_WHEEL_DELTA,
     (state) => state.stage === "blending",
     "the dive never reached blending on wheel zoom alone",
   );
@@ -262,19 +285,18 @@ try {
   // Park just short of the commit edge, quiescent, then cross it with one
   // small step so the handoff is measured across as little deliberate zoom as
   // possible.
-  await forward.page.waitForTimeout(400);
+  await forward.page.waitForTimeout(500);
   const beforeCommit = await readDive(forward.page);
-  const blendingFrame = await frameAt(forward.page, "blending");
-  await wheelAt(forward.page, await gesturePoint(forward.page, point), COMMIT_WHEEL_DELTA);
+  const blendingFrame = await readFrame(forward.page);
   const committed = await wheelUntil(
     forward.page,
     point,
-    COMMIT_WHEEL_DELTA,
+    FINE_WHEEL_DELTA,
     (state) => state.stage === "detail",
     "the dive never committed to detail on wheel zoom alone",
   );
-  await forward.page.waitForTimeout(400);
-  const detailFrame = await frameAt(forward.page, "detail");
+  await forward.page.waitForTimeout(500);
+  const detailFrame = await readFrame(forward.page);
 
   const forwardStages = await stages(forward.page);
 
@@ -285,14 +307,14 @@ try {
   const released = await wheelUntil(
     forward.page,
     point,
-    240,
+    RETREAT_WHEEL_DELTA,
     (state) => state.stage === "prewarm",
     "the detail surface never handed the camera back on wheel zoom-out",
   );
   const returned = await wheelUntil(
     forward.page,
     point,
-    240,
+    RETREAT_WHEEL_DELTA,
     (state) => state.stage === "particle",
     "the dive never returned to the particle Earth on wheel zoom-out",
   );
@@ -393,14 +415,14 @@ try {
   await wheelUntil(
     blocked.page,
     blockedPoint,
-    -120,
+    APPROACH_WHEEL_DELTA,
     (state) => state.stage === "prewarm",
     "the dive never prewarmed with the map style blocked",
   );
   const deep = await wheelUntil(
     blocked.page,
     blockedPoint,
-    -120,
+    APPROACH_WHEEL_DELTA,
     (state) => state.semanticZoom === "local" && Number(state.localProgress) >= 0.95,
     "the particle Earth would not zoom into the local band with the map style blocked",
   );
@@ -412,7 +434,7 @@ try {
 
   // The particle Earth is still answering the wheel and the drag.
   const beforeGesture = await readDive(blocked.page);
-  await wheelAt(blocked.page, await gesturePoint(blocked.page, blockedPoint), 600);
+  await wheelAt(blocked.page, await gesturePoint(blocked.page, blockedPoint), RETREAT_WHEEL_DELTA);
   await blocked.page.waitForTimeout(250);
   const afterWheel = await readDive(blocked.page);
   await blocked.page.mouse.move(blockedPoint.x, blockedPoint.y);
