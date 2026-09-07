@@ -11,6 +11,7 @@ vi.mock("../auth/AuthGateway", () => ({
 
 import { readFileSync } from "node:fs";
 import {
+  atlasCinematicIsolationActive,
   globeFocusState,
   nextPlaybackCameraCommand,
   nextPlaybackReleaseFocusRevision,
@@ -22,6 +23,7 @@ import {
   releaseStalePlaybackSession,
   resolvePlaybackOwnership,
   resolveMobilePlaybackPresentation,
+  showsGlobeModeChrome,
 } from "./LivingAtlasApp";
 import { playbackHoldReason, playbackMediaGate } from "./JourneyPlaybackOverlay";
 import type { Journey } from "./types";
@@ -498,5 +500,55 @@ describe("atlas notice auto-dismiss identity", () => {
 
     expect(second.message).toBe(first.message);
     expect(second.id).toBe(first.id + 1);
+  });
+});
+
+// #253: globe focus mode is the wrong place for the permanent `深入真实地图 /
+// REGION MAP` product-model control, and for the account dock. Both answers
+// come from one expression each, so a future mode cannot half-apply them.
+describe("globe focus-mode chrome ownership (#253)", () => {
+  it("renders the globe mode chrome in ordinary desktop Atlas", () => {
+    expect(showsGlobeModeChrome(false, false)).toBe(true);
+  });
+
+  it("withholds it in globe focus mode, so no node and no layout slot exist", () => {
+    expect(showsGlobeModeChrome(false, true)).toBe(false);
+  });
+
+  it("keeps compact mobile without it, focus mode or not", () => {
+    expect(showsGlobeModeChrome(true, false)).toBe(false);
+    expect(showsGlobeModeChrome(true, true)).toBe(false);
+  });
+
+  it("isolates the account dock for either reason", () => {
+    expect(atlasCinematicIsolationActive(true, false)).toBe(true);
+    expect(atlasCinematicIsolationActive(false, true)).toBe(true);
+  });
+
+  it("keeps the dock isolated when playback ends inside focus mode", () => {
+    expect(atlasCinematicIsolationActive(true, true)).toBe(true);
+    expect(atlasCinematicIsolationActive(false, true)).toBe(true);
+  });
+
+  it("releases the dock only when neither owner holds the stage", () => {
+    expect(atlasCinematicIsolationActive(false, false)).toBe(false);
+  });
+
+  // The browser lane grades the rendered geometry; Chromium resolves `right`
+  // on a positioned element to a used length even when the rule says `auto`,
+  // so "no right anchor on desktop" is asserted against the stylesheet itself.
+  it("anchors the return control to the top-left safe area, with no right edge", () => {
+    const css = readFileSync(new URL("../styles/living-atlas.css", import.meta.url), "utf8");
+    // Anchor on the newline so this reads the control's own rule, not the
+    // `.living-atlas > .living-atlas__globe-focus-exit` pointer-events rule.
+    const start = css.indexOf("\n.living-atlas__globe-focus-exit {");
+    const rule = css.slice(start, css.indexOf("}", start));
+
+    expect(start).toBeGreaterThan(0);
+    expect(rule).toContain("left: calc(env(safe-area-inset-left)");
+    expect(rule).toContain("top: calc(env(safe-area-inset-top)");
+    expect(rule).toContain("min-width: 44px;");
+    expect(rule).toContain("min-height: 44px;");
+    expect(rule).not.toMatch(/(^|\s)right:/);
   });
 });

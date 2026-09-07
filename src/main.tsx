@@ -287,6 +287,13 @@ function EarthDiveQaPreview() {
 }
 
 function LivingAtlasQaPreview() {
+  // #253: the globe-focus chrome lane needs the real `LivingAtlasGlobe`, since
+  // `.living-atlas-globe__controls` and the transient gesture hint live there,
+  // and the stubbed globe below publishes neither. It is a sibling mode of
+  // this fixture rather than a change to it, so every existing lane keeps the
+  // deterministic pick/route stub it drives.
+  const globeChrome = new URLSearchParams(window.location.search).get("qaMode") === "globe-chrome";
+  if (globeChrome) return <LivingAtlasApp />;
   return <LivingAtlasApp GlobeComponent={LivingAtlasQaGlobe} />;
 }
 
