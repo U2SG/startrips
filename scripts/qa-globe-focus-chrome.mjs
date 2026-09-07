@@ -38,9 +38,10 @@
 //     reading records the dock's class list, its element count and the nearest
 //     `visibility: hidden` ancestor, so a future failure separates a genuinely
 //     stuck isolation from a too-early read.
-//   * #253's QA matrix also names 1366x768 and 125% browser zoom. This lane
-//     runs the three viewports the feature's acceptance names; the other two
-//     are not covered here.
+//   * #253's QA matrix also names 1366x768 and 125% browser zoom. Section 6
+//     covers both, narrowly, on top of the three viewports the acceptance
+//     names; see `ZOOM_CONDITIONS` for exactly what the zoom pass emulates and
+//     what it does not.
 import { launchQaBrowser } from "./qa-browser.mjs";
 
 const origin = process.env.QA_ORIGIN ?? "http://127.0.0.1:4173";
@@ -48,6 +49,32 @@ const VIEWPORTS = [
   { name: "1280x720", width: 1280, height: 720 },
   { name: "1440x900", width: 1440, height: 900 },
   { name: "2560x1440", width: 2560, height: 1440 },
+];
+// #253 review (U2SG P2): the owning issue's QA matrix names 1366x768 and
+// browser zoom 100% / 125% "at minimum", and its acceptance calls out short
+// desktop and 125% separately. These are the two conditions the acceptance
+// viewports above do not reach.
+//
+// How 125% is emulated, stated rather than implied: browser zoom shrinks the
+// CSS viewport and scales every CSS pixel. `deviceScaleFactor` alone does NOT
+// do that - it changes device pixels per CSS pixel and leaves layout identical,
+// which is DPR, the thing #243 owns. So the emulation is both halves: the CSS
+// viewport is divided by the zoom factor AND the scale factor is raised.
+// 1366 / 1.25 = 1092.8 -> 1093x614 CSS px, which is still comfortably above the
+// 760px compact-mobile breakpoint (`COMPACT_MOBILE_MEDIA_QUERY`), so this pass
+// grades the desktop composition and not the mobile one.
+//
+// What it does NOT emulate: real browser zoom also affects font boundary
+// rounding and scrollbar sizing. Those are not what this contract is about.
+// Note also what a 125% pass cannot discriminate: `getBoundingClientRect()`
+// reports CSS pixels, so the control's 44px floor reads 44 at any zoom and
+// re-asserting it here would prove nothing new. The reduced CSS viewport is the
+// real variable, so this pass grades the five things the reviewer named:
+// return-control geometry and position, top-right emptiness, the absent Region
+// Map chrome, the transient hint, and the preserved return context.
+const ZOOM_CONDITIONS = [
+  { name: "1366x768", width: 1366, height: 768 },
+  { name: "1366x768@125%", width: 1093, height: 614, deviceScaleFactor: 1.25 },
 ];
 const HINT_DWELL_MS = 4000; // src/scene/globeGestureHint.ts
 
@@ -122,7 +149,9 @@ async function stubAtlasApi(page) {
 async function openAtlas(viewport, { reducedMotion = "no-preference" } = {}) {
   const page = await browser.newPage({
     viewport: { width: viewport.width, height: viewport.height },
-    deviceScaleFactor: 1,
+    // A viewport may declare its own scale factor: that is how browser zoom is
+    // emulated (see the `ZOOM_CONDITIONS` note below). Everything else runs at 1.
+    deviceScaleFactor: viewport.deviceScaleFactor ?? 1,
     reducedMotion,
   });
   const pageErrors = [];
@@ -997,6 +1026,114 @@ try {
     }
   }
 
+  // 6. #253 review (U2SG P2): the two conditions #253's QA matrix names that
+  //    the acceptance viewports do not reach - short desktop (1366x768) and
+  //    125% browser zoom. Deliberately narrow, per the reviewer: the same
+  //    contract, not a duplicate of the whole matrix.
+  for (const viewport of ZOOM_CONDITIONS) {
+    const { page, pageErrors } = await openAtlas(viewport);
+    try {
+      const ordinary = await readComposition(page);
+      const journey = await selectNonDefaultJourney(page);
+      await enterFocus(page);
+      const focused = await readComposition(page);
+      const hintOnEntry = await countHint(page);
+
+      // The return control has to be genuinely inside the top-left safe area
+      // at a shorter viewport too, not merely "not on the right": a control
+      // that had drifted to the middle would still satisfy a right-anchor
+      // check on its own.
+      const topLeft = Boolean(
+        focused.exit
+        && focused.exit.cssRight === "auto"
+        && focused.exit.left >= 0
+        && focused.exit.left <= 64
+        && focused.exit.top >= 0
+        && focused.exit.top <= 64,
+      );
+      // The one geometry reading that is NOT trivially satisfied at 125%: the
+      // control must still fit inside the reduced viewport rather than being
+      // pushed under an edge.
+      const withinViewport = await page.evaluate(() => {
+        const exit = document.querySelector(".living-atlas__globe-focus-exit");
+        if (!exit) return null;
+        const rect = exit.getBoundingClientRect();
+        return {
+          fits: rect.right <= innerWidth && rect.bottom <= innerHeight,
+          innerWidth,
+          innerHeight,
+          devicePixelRatio: window.devicePixelRatio,
+          compactMobile: document.querySelector("[data-mobile-v2]") !== null,
+        };
+      });
+
+      await page.locator(".living-atlas__globe-focus-exit").click();
+      await waitForExitedFocus(page);
+      await settle(page);
+      const returned = await readComposition(page);
+
+      record({
+        name: "short-desktop-and-browser-zoom",
+        viewport: viewport.name,
+        emulates: viewport.deviceScaleFactor
+          ? `1366x768 at ${viewport.deviceScaleFactor * 100}% browser zoom, i.e. ${viewport.width}x${viewport.height} CSS px`
+          : "1366x768 at 100% browser zoom",
+        withinViewport,
+        journey,
+        ordinary: {
+          controlsCount: ordinary.controlsCount,
+          modeCount: ordinary.modeCount,
+          focusMarker: ordinary.focusMarker,
+        },
+        focused: {
+          focusMarker: focused.focusMarker,
+          controlsCount: focused.controlsCount,
+          modeCount: focused.modeCount,
+          regionMapCopy: focused.regionMapCopy,
+          interactiveTopRight: focused.interactiveTopRight,
+          exit: focused.exit,
+        },
+        topLeft,
+        hintOnEntry,
+        returned: {
+          focusMarker: returned.focusMarker,
+          controlsCount: returned.controlsCount,
+          modeCount: returned.modeCount,
+          activeRailJourney: returned.activeRailJourney,
+          historyLength: returned.historyLength,
+        },
+        historyUnchanged: returned.historyLength === ordinary.historyLength,
+        pageErrors,
+        failed: !withinViewport
+          // A compact-mobile composition here would mean this pass graded the
+          // wrong product surface, so it is a failure rather than a note.
+          || withinViewport.compactMobile
+          || !withinViewport.fits
+          || ordinary.controlsCount !== 1
+          // The Region Map chrome is absent from the DOM, not just off-screen.
+          || focused.controlsCount !== 0
+          || focused.modeCount !== 0
+          || focused.regionMapCopy
+          // The top right stays empty.
+          || focused.interactiveTopRight.length > 0
+          // The return control: top-left, named, unwrapped.
+          || !topLeft
+          || focused.exit?.accessibleName !== "返回图谱"
+          || focused.exit?.parentClass?.includes("living-atlas__header")
+          // The hint is present on entry, i.e. transient guidance still arms.
+          || hintOnEntry !== 1
+          // Return context survives at this size too.
+          || returned.focusMarker !== "off"
+          || returned.controlsCount !== 1
+          || returned.modeCount !== 1
+          || returned.activeRailJourney !== journey.selectedTitle
+          || returned.historyLength !== ordinary.historyLength
+          || pageErrors.length > 0,
+      });
+    } finally {
+      await page.close();
+    }
+  }
 } finally {
   await browser.close();
 }
