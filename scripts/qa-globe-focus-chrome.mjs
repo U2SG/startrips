@@ -1043,13 +1043,19 @@ try {
       // at a shorter viewport too, not merely "not on the right": a control
       // that had drifted to the middle would still satisfy a right-anchor
       // check on its own.
+      //
+      // Geometry, not the computed `right`, for the same reason section 1
+      // states: Chromium resolves `right` on an absolutely positioned element
+      // to a used length even when the stylesheet says `auto`, so reading it
+      // here would fail on a correct control. The absence of a `right` anchor
+      // in the rule is asserted statically in LivingAtlasApp.test.ts.
       const topLeft = Boolean(
         focused.exit
-        && focused.exit.cssRight === "auto"
         && focused.exit.left >= 0
-        && focused.exit.left <= 64
+        && focused.exit.left <= viewport.width / 3
         && focused.exit.top >= 0
-        && focused.exit.top <= 64,
+        && focused.exit.top <= 96
+        && viewport.width - focused.exit.right >= viewport.width / 2,
       );
       // The one geometry reading that is NOT trivially satisfied at 125%: the
       // control must still fit inside the reduced viewport rather than being
@@ -1063,7 +1069,10 @@ try {
           innerWidth,
           innerHeight,
           devicePixelRatio: window.devicePixelRatio,
-          compactMobile: document.querySelector("[data-mobile-v2]") !== null,
+          // `data-mobile-v2` is ALWAYS present and carries `on` / `off`
+          // (`compactMobileLayoutMarker`), so its presence proves nothing —
+          // the value is the contract.
+          compactMobile: document.querySelector('[data-mobile-v2="on"]') !== null,
         };
       });
 
