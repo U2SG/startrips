@@ -140,7 +140,11 @@ describe("Quick Recap playback handoff (#127)", () => {
   it("fails closed with an over-budget reason when mandatory represented chapters cannot fit the recap target", () => {
     const journey = fixture();
     journey.coverMediaAssetId = null;
-    journey.routePoints = Array.from({ length: 9 }, (_, index) => point(`p${index}`, index));
+    // Ten stops, because ST-010 lowered the standard zero-distance camera floor
+    // from 1000 to 650 ms and nine no longer overruns: at these coordinates the
+    // mandatory cost is ~41.0 s against a 42.4 s chapter budget. Ten books
+    // ~45.6 s, so the fail-closed path is still exercised with room to spare.
+    journey.routePoints = Array.from({ length: 10 }, (_, index) => point(`p${index}`, index));
     journey.media = journey.routePoints.map((routePoint, index) => media(`photo-${index}`, routePoint.id, "image/jpeg", index));
 
     const result = prepareQuickRecapPlaybackResult(journey, { generatedAt: "2026-09-02T00:00:00.000Z" });
@@ -185,8 +189,9 @@ describe("Quick Recap playback handoff (#127)", () => {
     );
 
     // Point 0 has no leg in front of it, so its folded camera stays at the
-    // quick-recap floor and the stop reads floor + note-free arrival.
-    expect(quickRecapStepDurationMs(prepared.journey, firstStop, prepared.plan)).toBe(1_800);
+    // standard-tempo quick-recap floor (650 since ST-010) and the stop reads
+    // floor + note-free arrival (800).
+    expect(quickRecapStepDurationMs(prepared.journey, firstStop, prepared.plan)).toBe(1_450);
     expect(quickRecapStepDurationMs(prepared.journey, secondStop, prepared.plan)).toBe(800);
     // The travelled leg is no longer the frozen flat camera value.
     expect(quickRecapStepDurationMs(prepared.journey, travel, prepared.plan)).toBe(
@@ -197,7 +202,10 @@ describe("Quick Recap playback handoff (#127)", () => {
         routeDistanceRadians: legRadians,
       }),
     );
-    expect(quickRecapStepDurationMs(prepared.journey, travel, prepared.plan)).toBeGreaterThan(1_000);
+    // Above its own floor because the leg has length, and below the flat 1000 ms
+    // every tempo used to spend on a camera before ST-010.
+    expect(quickRecapStepDurationMs(prepared.journey, travel, prepared.plan)).toBeGreaterThan(650);
+    expect(quickRecapStepDurationMs(prepared.journey, travel, prepared.plan)).toBeLessThan(1_000);
     // Dwell stays the plan's, because the plan's budget was measured with it.
     expect(quickRecapStepDurationMs(prepared.journey, firstMedia, prepared.plan)).toBe(3_100);
   });
@@ -406,8 +414,9 @@ describe("Quick Recap tempo wiring (S1 PR 4)", () => {
     expect(new Set(travelMs).size).toBe(3);
     expect(new Set(firstStopMs).size).toBe(3);
     expect(new Set(secondStopMs).size).toBe(3);
-    // Point 0 has no leg in front of it, so its folded camera is the flat
-    // quick-recap floor at every tempo and only its note-aware arrival moves.
+    // Point 0 has no leg in front of it, so its folded camera is this tempo's
+    // quick-recap floor — per-tempo since ST-010, so the first stop now moves
+    // with tempo through its camera as well as its note-aware arrival.
     expect(firstStopMs[0]!).toBeLessThan(firstStopMs[1]!);
     expect(firstStopMs[1]!).toBeLessThan(firstStopMs[2]!);
     expect(travelMs[0]!).toBeLessThan(travelMs[1]!);
