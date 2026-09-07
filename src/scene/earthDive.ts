@@ -88,6 +88,16 @@ export type EarthDiveInput = {
    * or a presentation with no transition at all) is not stalled.
    */
   blendPresented?: boolean;
+  /**
+   * #253: a surrounding Atlas mode has declared that the detail surface is not
+   * part of its composition at all. This outranks every other input, including
+   * the fallback command: the detail renderer brings chrome this app does not
+   * own (MapLibre's own navigation and attribution controls), so a mode whose
+   * whole promise is a single return control cannot host it. Suspension resolves
+   * TOWARDS `particle` rather than jumping there, so the ordinary one-step
+   * progression and the ownership rules below still describe every frame.
+   */
+  suspended?: boolean;
   reduceMotion?: boolean;
 };
 
@@ -123,7 +133,13 @@ function targetStage(previous: EarthDiveStage, input: EarthDiveInput): EarthDive
     commandRequested = false,
     releaseRequested = false,
     blendPresented = true,
+    suspended = false,
   } = input;
+
+  // #253: a mode that does not host the detail surface at all. Checked before
+  // the band and before the command, because the command is exactly the input
+  // that otherwise stands in for the zoom gate from anywhere.
+  if (suspended) return "particle";
 
   // The one way back to `particle`. `regional` holds the prewarm rather than
   // tearing it down, which is what makes the release asymmetric. The fallback

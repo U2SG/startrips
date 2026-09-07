@@ -1,5 +1,6 @@
 import { Suspense, lazy, type ComponentType, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  IconArrowNarrowLeft,
   IconArrowRight,
   IconMapPin,
   IconPhoto,
@@ -79,6 +80,32 @@ export function globeFocusState(focused: boolean) {
     className: focused ? " is-globe-focus" : "",
     dataAttribute: focused ? "on" : "off",
   };
+}
+
+/**
+ * #253: one expression owns whether the globe renders its mode chrome at all.
+ * Focus mode is the whole point of the mode: `深入真实地图 / REGION MAP` is a
+ * permanent product-model control, so in focus mode it must not exist in the
+ * DOM — visibility/opacity would leave a reserved slot and an accessibility-
+ * tree residue. Compact mobile has never rendered it.
+ */
+export function showsGlobeModeChrome(
+  compactMobileLayout: boolean,
+  globeFocusMode: boolean,
+): boolean {
+  return !compactMobileLayout && !globeFocusMode;
+}
+
+/**
+ * #253: one writer, both reasons. The account dock is isolated while playback
+ * owns the stage *or* while globe focus mode owns the viewport, so leaving
+ * playback inside focus mode cannot restore the dock into a quiet fullscreen.
+ */
+export function atlasCinematicIsolationActive(
+  playbackActive: boolean,
+  globeFocusMode: boolean,
+): boolean {
+  return playbackActive || globeFocusMode;
 }
 
 export function playbackEntryNeedsPreparation(
@@ -458,10 +485,11 @@ export function LivingAtlasApp({
   const timeCursor = useGlobeTimeCursor(journeys);
   const activeJourneyId = timeCursor.selection?.journeyId ?? journeys.at(-1)?.id ?? null;
 
+  const cinematicIsolation = atlasCinematicIsolationActive(playbackActive, globeFocusMode);
   useEffect(() => {
-    setCinematicIsolation(playbackActive);
+    setCinematicIsolation(cinematicIsolation);
     return () => setCinematicIsolation(false);
-  }, [playbackActive, setCinematicIsolation]);
+  }, [cinematicIsolation, setCinematicIsolation]);
 
   // Mobile V2 is immersive by default: desktop focus-mode and timeline views
   // are never part of the mobile state machine.
@@ -916,7 +944,8 @@ export function LivingAtlasApp({
                 points: timeCursor.reveal.pointProgress,
               }
               : undefined}
-            showControls={!isMobileV2}
+            showControls={showsGlobeModeChrome(isMobileV2, globeFocusMode)}
+            globeFocusMode={globeFocusMode}
             onJourneyRouteActivate={(id) => {
               if (id === "draft-route-preview") return;
               if (isMobileV2) selectMobileJourney(id);
@@ -1357,13 +1386,13 @@ export function LivingAtlasApp({
           ref={globeFocusExitRef}
           type="button"
           className="living-atlas__globe-focus-exit"
-          aria-label="退出专注地球"
+          aria-label="返回图谱"
           aria-hidden={!globeFocusMode}
           tabIndex={globeFocusMode ? 0 : -1}
           onClick={exitGlobeFocus}
         >
-          <IconX size={16} stroke={1.4} aria-hidden="true" />
-          返回界面
+          <IconArrowNarrowLeft size={16} stroke={1.4} aria-hidden="true" />
+          返回图谱
         </button>
       ) : null}
 

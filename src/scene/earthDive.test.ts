@@ -32,6 +32,7 @@ type Frame = {
   commandRequested?: boolean;
   releaseRequested?: boolean;
   blendPresented?: boolean;
+  suspended?: boolean;
   reduceMotion?: boolean;
 };
 
@@ -50,6 +51,7 @@ function input(frame: Frame = {}): EarthDiveInput {
     commandRequested: frame.commandRequested,
     releaseRequested: frame.releaseRequested,
     blendPresented: frame.blendPresented,
+    suspended: frame.suspended,
     reduceMotion: frame.reduceMotion,
   };
 }
@@ -331,5 +333,79 @@ describe("earth dive ownership", () => {
       { level: "macro", readiness: "mounted", commandRequested: true },
       { level: "macro", readiness: "mounted" },
     ], "prewarm"))).toEqual(["prewarm", "particle"]);
+  });
+  // #253: globe focus mode promises a viewport with exactly ONE piece of
+  // persistent chrome. The detail renderer brings MapLibre's own bottom-right
+  // navigation and bottom-left attribution controls, which this app does not
+  // own and therefore cannot restyle away, so the mode suspends the Dive
+  // outright rather than trying to hide its output.
+  describe("suspension by the surrounding Atlas mode (#253)", () => {
+    it("resolves home from a committed detail dive, one stage per frame", () => {
+      // The zoom authority still reports `local` at full depth and the map is
+      // fully settled: nothing except the suspension is asking to leave.
+      const deep = {
+        level: "local" as GlobeSemanticZoom,
+        localProgress: 1,
+        readiness: "fully-settled" as DetailReadiness,
+        suspended: true,
+      };
+      const published = settle("detail", deep);
+      expect(stagesOf(published)).toEqual(["blending", "prewarm", "particle"]);
+      // Ownership comes home on the first frame that leaves `detail`, so the
+      // particle globe answers the gestures again before the map is torn down.
+      expect(published[0].owner).toBe("particle");
+      expect(published.at(-1)).toMatchObject({ stage: "particle", owner: "particle" });
+    });
+
+    it("outranks the fallback command, which otherwise stands in for the zoom gate", () => {
+      // `commandRequested` is the one input that grants the zoom gate from any
+      // band. Focus mode removes the control that issues it, but a command
+      // latched before entry must not survive into the mode either.
+      expect(stagesOf(settle("particle", {
+        level: "planet",
+        readiness: "fully-settled",
+        commandRequested: true,
+        suspended: true,
+      }))).toEqual([]);
+      expect(resolveEarthDive(state("particle"), input({
+        level: "local",
+        localProgress: 1,
+        readiness: "fully-settled",
+        commandRequested: true,
+        suspended: true,
+      }))).toMatchObject({ stage: "particle", owner: "particle" });
+    });
+
+    it("cannot re-arm while it holds, however deep the zoom authority reads", () => {
+      // The gesture hint the mode shows says SCROLL TO ZOOM, so a suspended
+      // mode is precisely the state in which deep zoom readings arrive.
+      const frames = [0.5, 0.9, 1, 1, 1].map((localProgress) => ({
+        level: "local" as GlobeSemanticZoom,
+        localProgress,
+        readiness: "fully-settled" as DetailReadiness,
+        suspended: true,
+      }));
+      expect(stagesOf(run(frames))).toEqual([
+        "particle", "particle", "particle", "particle", "particle",
+      ]);
+    });
+
+    it("hands the band back its decision the moment it lifts", () => {
+      // Leaving the mode is not itself a dive: the band decides, exactly as it
+      // does for a user who never entered focus mode at all.
+      const deep = {
+        level: "local" as GlobeSemanticZoom,
+        localProgress: 1,
+        readiness: "fully-settled" as DetailReadiness,
+      };
+      expect(stagesOf(run([{ ...deep, suspended: true }, deep, deep, deep])))
+        .toEqual(["particle", "prewarm", "blending", "detail"]);
+      // ...and a shallow band still gets nothing, so lifting the suspension
+      // grants no zoom of its own.
+      expect(stagesOf(run([
+        { level: "planet", readiness: "fully-settled", suspended: true },
+        { level: "planet", readiness: "fully-settled" },
+      ]))).toEqual(["particle", "particle"]);
+    });
   });
 });

@@ -6,6 +6,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useReducer,
   useRef,
   useState,
   type CSSProperties,
@@ -24,6 +25,13 @@ import {
   type EarthDiveStage,
   type EarthDiveState,
 } from "./earthDive";
+import {
+  GLOBE_GESTURE_HINT_DWELL_MS,
+  globeGestureHintVisible,
+  globeModeNoteVisible,
+  initialGlobeGestureHintState,
+  resolveGlobeGestureHint,
+} from "./globeGestureHint";
 import { GLOBE_MODE_CONFIG, ParticleEarthScene } from "./ParticleEarthScene";
 import {
   SEMANTIC_ZOOM_RELEASE_ZOOM,
@@ -129,6 +137,12 @@ export type LivingAtlasGlobeProps = {
   onGlobePointPick?: (point: { latitude: number; longitude: number }) => void;
   onPickRequest?: () => void;
   showControls?: boolean;
+  /**
+   * #253: globe focus mode owns the whole viewport. It arms the transient
+   * zoom/drag guidance once per visit, and it SUSPENDS the Semantic Earth Dive
+   * — the detail surface is not part of this composition.
+   */
+  globeFocusMode?: boolean;
   reduceMotion?: boolean;
   cinematicActive?: boolean;
 };
@@ -280,11 +294,18 @@ export function LivingAtlasGlobe({
   onGlobePointPick,
   onPickRequest,
   showControls = true,
+  globeFocusMode = false,
   reduceMotion,
   cinematicActive = false,
 }: LivingAtlasGlobeProps) {
   const persistentEarth = usePersistentEarth();
   const [detailLanguage, setDetailLanguage] = useState<DetailedEarthLanguage>("zh");
+  const [gestureHint, signalGestureHint] = useReducer(
+    resolveGlobeGestureHint,
+    initialGlobeGestureHintState,
+  );
+  const gestureHintVisible = globeGestureHintVisible(gestureHint);
+  const modeNoteVisible = globeModeNoteVisible(gestureHint, { globeFocusMode, showControls });
 
   // #252: there is exactly one piece of Dive state and `earthDive.ts` decides
   // it. What used to be an `earthMode` / `transitionTarget` / `targetReady`
@@ -307,6 +328,11 @@ export function LivingAtlasGlobe({
   const snapshotRef = useRef<SemanticZoomSnapshot>({ level: "planet", zoom: 1, localProgress: 0 });
   const readinessRef = useRef<DetailReadiness>("unavailable");
   const commandRequestedRef = useRef(false);
+  // #253: the Dive resolves on a rAF loop, so the mode's own suspension has to
+  // reach it as a ref like every other per-frame input rather than as an
+  // effect dependency that would restart the loop.
+  const suspendedRef = useRef(globeFocusMode);
+  suspendedRef.current = globeFocusMode;
   const releaseRequestedRef = useRef(false);
   const focusRevisionRef = useRef(focusRevision ?? 0);
   const handoffRevisionRef = useRef(focusRevision ?? 0);
@@ -392,6 +418,7 @@ export function LivingAtlasGlobe({
         commandRequested: commandRequestedRef.current,
         releaseRequested: releaseRequestedRef.current,
         blendPresented,
+        suspended: suspendedRef.current,
         reduceMotion: Boolean(reduceMotion),
       });
       // The release is consumed as soon as ownership is home and the renderer
@@ -414,6 +441,38 @@ export function LivingAtlasGlobe({
     frame = window.requestAnimationFrame(tick);
     return () => window.cancelAnimationFrame(frame);
   }, [reduceMotion]);
+
+  // #253: entering focus mode arms the hint, leaving retires it and bumps the
+  // ordering token so this visit's dwell timer cannot speak for the next one.
+  useEffect(() => {
+    signalGestureHint({ kind: "focus-mode", active: globeFocusMode });
+  }, [globeFocusMode]);
+
+  // The dwell is a plain timer, not an animation or `transitionend` listener,
+  // so reduced motion reaches the same end state on the same schedule.
+  useEffect(() => {
+    if (!gestureHintVisible) return;
+    const session = gestureHint.session;
+    const dwell = window.setTimeout(
+      () => signalGestureHint({ kind: "dwell", session }),
+      GLOBE_GESTURE_HINT_DWELL_MS,
+    );
+    return () => window.clearTimeout(dwell);
+  }, [gestureHint.session, gestureHintVisible]);
+
+  // The particle globe owns wheel/drag on its own canvas outside this subtree,
+  // so the first gesture is observed on the window rather than on the section.
+  useEffect(() => {
+    if (!gestureHintVisible) return;
+    const session = gestureHint.session;
+    const dismiss = () => signalGestureHint({ kind: "gesture", session });
+    window.addEventListener("wheel", dismiss, { capture: true, passive: true });
+    window.addEventListener("pointerdown", dismiss, { capture: true, passive: true });
+    return () => {
+      window.removeEventListener("wheel", dismiss, { capture: true });
+      window.removeEventListener("pointerdown", dismiss, { capture: true });
+    };
+  }, [gestureHint.session, gestureHintVisible]);
 
   useEffect(() => {
     persistentEarth.setAtlasPresentation({
@@ -505,24 +564,29 @@ export function LivingAtlasGlobe({
       ) : null}
 
       {showControls ? (
-        <>
-          <LivingAtlasGlobeControls
-            diveStage={dive.stage}
-            detailLanguage={detailLanguage}
-            onModeToggle={requestDive}
-            onDetailLanguageChange={setDetailLanguage}
-            onPickRequest={onPickRequest}
-            inert={cinematicActive}
-          />
+        <LivingAtlasGlobeControls
+          diveStage={dive.stage}
+          detailLanguage={detailLanguage}
+          onModeToggle={requestDive}
+          onDetailLanguageChange={setDetailLanguage}
+          onPickRequest={onPickRequest}
+          inert={cinematicActive}
+        />
+      ) : null}
 
-          <div className="living-atlas-globe__mode-note" aria-hidden="true">
-            {dive.stage === "prewarm" || dive.stage === "blending"
-              ? "VECTOR MAP PREPARING"
-              : detailMode
-                ? "DRAG TO EXPLORE / ZOOM OUT TO RETURN"
-                : "SCROLL TO ZOOM / DRAG TO ROTATE"}
-          </div>
-        </>
+      {/* #253: one resolver owns this node in both compositions. In focus mode
+          it is transient onboarding — once dismissed it is gone rather than
+          transparent, so no permanent rectangle or layout reservation survives
+          it. Ordinary Atlas keeps the permanent line it has always had; #253
+          does not own that surface's discoverability. */}
+      {modeNoteVisible ? (
+        <div className="living-atlas-globe__mode-note" aria-hidden="true">
+          {dive.stage === "prewarm" || dive.stage === "blending"
+            ? "VECTOR MAP PREPARING"
+            : detailMode
+              ? "DRAG TO EXPLORE / ZOOM OUT TO RETURN"
+              : "SCROLL TO ZOOM / DRAG TO ROTATE"}
+        </div>
       ) : null}
     </section>
   );
