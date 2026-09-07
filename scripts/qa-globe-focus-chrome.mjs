@@ -138,9 +138,24 @@ async function stubAtlasApi(page) {
       contentType: "application/json",
       body: JSON.stringify({
         version: 8,
-        name: "QA empty detailed-earth style",
-        sources: {},
-        layers: [],
+        name: "QA detailed-earth style with attribution",
+        sources: {
+          "qa-attribution": {
+            type: "geojson",
+            attribution: "QA attribution",
+            data: { type: "FeatureCollection", features: [] },
+          },
+        },
+        // Keep the inline source active without drawing anything. This makes
+        // MapLibre's native AttributionControl non-vacuous, so the owner probe
+        // can prove that the shared non-owner boundary preserves required
+        // attribution rather than merely observing an empty control shell.
+        layers: [{
+          id: "qa-attribution-anchor",
+          type: "circle",
+          source: "qa-attribution",
+          paint: { "circle-opacity": 0 },
+        }],
       }),
     }),
   );
