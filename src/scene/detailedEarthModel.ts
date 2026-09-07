@@ -5,18 +5,14 @@ import type { SemanticZoomSnapshot } from "./semanticZoom";
 export type DetailedEarthLanguage = "zh" | "bilingual";
 
 export const DEFAULT_DETAILED_EARTH_STYLE_URL = "/api/mapstyle?path=styles%2Ffiord";
-// #252: the scale at which the Semantic Earth Dive hands over is not a chosen
-// number - it is whatever MapLibre zoom reproduces the particle Earth's own
-// local scale at the focused place, solved by measurement in
-// `solveDetailedEarthHandoffZoom`. At the particle camera's deepest zoom that
-// lands a little above MapLibre zoom 5, so the two constants below had to come
-// down with it: a return threshold ABOVE the calibrated handoff would make a
-// freshly handed-over map ask to go home on its first frame, and a floor above
-// it would clamp the calibration into a visible scale jump. They keep their
-// original meaning - the scale at which a flat map stops adding useful journey
-// detail - now expressed on the same scale as the handoff instead of beside it.
-export const DETAILED_EARTH_RETURN_ZOOM = 4.5;
-export const DETAILED_EARTH_MIN_ZOOM = 4.2;
+// Below this regional scale a flat map stops adding useful journey detail.
+// Returning to the particle globe also avoids presenting a second world view.
+// #252 measured where the calibrated handoff actually lands - MapLibre zoom
+// 6.2 to 6.7 for the particle camera's `local` band at 1440x1024, recorded in
+// the `browser-qa / earth-dive` lane - which is above both of these, so the
+// dive did not have to move either one.
+export const DETAILED_EARTH_RETURN_ZOOM = 5.85;
+export const DETAILED_EARTH_MIN_ZOOM = 5.6;
 
 export type DetailedEarthFocusFlightProfile = "nearby" | "regional" | "long-haul";
 
@@ -104,7 +100,7 @@ export function shouldReturnToParticleEarth(zoom: number) {
 // browser lane compares the two renderers, so a poor seed cannot pass as a
 // calibration. It deliberately is not a scale the product promises, and the
 // technical report's seed values are not used here at all.
-export const DETAILED_EARTH_HANDOFF_SEED_ZOOM = 5;
+export const DETAILED_EARTH_HANDOFF_SEED_ZOOM = 6.5;
 // A seed that also tracks the zoom authority converges in fewer measurements
 // than a constant one, so the seed leans by this much across the `local` band.
 export const DETAILED_EARTH_HANDOFF_SEED_SPAN = 0.5;
