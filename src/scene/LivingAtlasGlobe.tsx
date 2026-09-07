@@ -297,6 +297,7 @@ export function LivingAtlasGlobe({
   const [handoffSnapshot, setHandoffSnapshot] = useState<SemanticZoomSnapshot | null>(null);
   const [zoomIntent, setZoomIntent] = useState<{ zoom: number; revision: number } | null>(null);
   const diveRef = useRef<EarthDiveState>(INITIAL_EARTH_DIVE_STATE);
+  const detailLayerRef = useRef<HTMLDivElement>(null);
   const snapshotRef = useRef<SemanticZoomSnapshot>({ level: "planet", zoom: 1, localProgress: 0 });
   const readinessRef = useRef<DetailReadiness>("unavailable");
   const commandRequestedRef = useRef(false);
@@ -343,8 +344,12 @@ export function LivingAtlasGlobe({
     }
   }, []);
 
+  // The control is one command with one meaning: "take me to the other
+  // surface". Pressed while the dive is still pending it CANCELS, which is the
+  // only way back out when the detail style never becomes available — the
+  // 12 s load timeout that used to recover from that is gone on purpose.
   const requestDive = useCallback(() => {
-    if (diveRef.current.stage === "detail") {
+    if (diveRef.current.stage !== "particle") {
       releaseDive();
       return;
     }
@@ -363,6 +368,11 @@ export function LivingAtlasGlobe({
       if (previous.stage === "particle" || previous.stage === "prewarm") {
         handoffRevisionRef.current = focusRevisionRef.current;
       }
+      // The blend is presented by CSS over `blendMs`, so ownership must not
+      // transfer until the surface is actually on screen. That is measured
+      // from the layer itself rather than timed: no clock reaches the resolver.
+      const layer = detailLayerRef.current;
+      const blendPresented = !layer || Number(window.getComputedStyle(layer).opacity) >= 0.99;
       const next = resolveEarthDive(previous, {
         snapshot: snapshotRef.current,
         readiness: readinessRef.current,
@@ -370,12 +380,16 @@ export function LivingAtlasGlobe({
         focusRevision: focusRevisionRef.current,
         commandRequested: commandRequestedRef.current,
         releaseRequested: releaseRequestedRef.current,
+        blendPresented,
         reduceMotion: Boolean(reduceMotion),
       });
-      if (next.stage === previous.stage && next.owner === previous.owner && next.blendMs === previous.blendMs) return;
-      // The release is consumed once ownership is home and the renderer is
-      // back to warming: from there the band alone decides.
+      // The release is consumed as soon as ownership is home and the renderer
+      // is back to warming: from there the band alone decides. This happens
+      // before the no-change exit on purpose — a cancel that resolves to the
+      // stage the band already wanted would otherwise latch forever and block
+      // every later dive.
       if (next.stage === "prewarm" || next.stage === "particle") releaseRequestedRef.current = false;
+      if (next.stage === previous.stage && next.owner === previous.owner && next.blendMs === previous.blendMs) return;
       if (next.stage === "particle") {
         // The map is torn down with the Dive, so its readiness cannot outlive it.
         readinessRef.current = "unavailable";
@@ -456,7 +470,7 @@ export function LivingAtlasGlobe({
         <span className="living-atlas-ambience__blob living-atlas-ambience__blob-c" />
       </div>
       {showDetail ? (
-        <div className="living-atlas-globe__layer living-atlas-globe__detail-layer">
+        <div ref={detailLayerRef} className="living-atlas-globe__layer living-atlas-globe__detail-layer">
           <Suspense fallback={null}>
             <DetailedEarthMap
               diveStage={dive.stage}

@@ -59,31 +59,50 @@ function particleCanvas(page) {
   return page.locator('canvas[data-three-scene="particle-earth"]');
 }
 
-async function dispatchWheel(locator, deltaY) {
-  const bounds = await locator.boundingBox();
-  if (!bounds) throw new Error("wheel target has no browser bounds");
-  await locator.evaluate((node, init) => {
-    node.dispatchEvent(new WheelEvent("wheel", init));
-  }, {
-    bubbles: true,
-    cancelable: true,
-    clientX: bounds.x + bounds.width / 2,
-    clientY: bounds.y + bounds.height / 2,
-    deltaY,
-  });
+/**
+ * The gesture point: the centre of the particle globe's own canvas, which the
+ * detail layer covers exactly when that layer is allowed to be touched. Every
+ * wheel in this lane is a REAL wheel at that one point, so which surface
+ * receives it is decided by hit testing rather than by the lane - the ownership
+ * contract is graded rather than assumed.
+ */
+async function gesturePoint(page) {
+  const bounds = await particleCanvas(page).boundingBox();
+  if (!bounds) throw new Error("particle-earth canvas has no browser bounds");
+  return {
+    x: Math.max(4, Math.min(VIEWPORT.width - 4, bounds.x + bounds.width / 2)),
+    y: Math.max(4, Math.min(VIEWPORT.height - 4, bounds.y + bounds.height / 2)),
+  };
+}
+
+async function wheelAt(page, point, deltaY) {
+  await page.mouse.move(point.x, point.y);
+  await page.mouse.wheel(0, deltaY);
+}
+
+/** Which element a real gesture at this point would reach. */
+async function hitTarget(page, point) {
+  return page.evaluate(({ x, y }) => {
+    const element = document.elementFromPoint(x, y);
+    return element instanceof Element
+      ? { tag: element.tagName, className: element.getAttribute("class") }
+      : null;
+  }, point);
 }
 
 async function readDive(page) {
   return page.evaluate(() => {
     const section = document.querySelector(".living-atlas-globe");
     const host = document.querySelector('[data-persistent-earth-host]');
+    const scene = document.querySelector(".particle-earth-scene");
     const map = document.querySelector(".detailed-earth-map");
     return {
       stage: section?.getAttribute("data-earth-dive") ?? null,
       owner: section?.getAttribute("data-earth-dive-owner") ?? null,
       earthMode: section?.getAttribute("data-earth-mode") ?? null,
-      semanticZoom: host?.getAttribute("data-semantic-zoom") ?? null,
-      localProgress: host?.dataset?.localProgress ?? null,
+      semanticZoom: scene?.getAttribute("data-semantic-zoom") ?? null,
+      localProgress: scene?.dataset?.localProgress ?? null,
+      mapZoom: map?.dataset?.handoffZoom ? Number(map.dataset.handoffZoom) : null,
       interactive: host?.getAttribute("data-interactive") ?? null,
       readiness: map?.getAttribute("data-map-readiness") ?? null,
       mapError: map?.getAttribute("data-map-error") ?? null,
@@ -137,17 +156,18 @@ async function frameAt(page, stage) {
   ), stage);
 }
 
-async function wheelUntil(page, locator, deltaY, predicate, label, maxSteps = 60) {
+async function wheelUntil(page, point, deltaY, predicate, label, maxSteps = 60) {
   for (let step = 0; step < maxSteps; step += 1) {
     const state = await readDive(page);
     if (predicate(state)) return state;
-    await dispatchWheel(locator, deltaY);
-    await page.waitForTimeout(90);
+    await wheelAt(page, point, deltaY);
+    await page.waitForTimeout(120);
   }
   const state = await readDive(page);
   if (predicate(state)) return state;
   throw new Error(`${label} never happened: ${JSON.stringify({
     state,
+    hit: await hitTarget(page, point),
     stages: await stages(page),
   })}`);
 }
@@ -196,15 +216,16 @@ try {
   // ---------------------------------------------------------------- round A
   // Wheel alone, in both directions, with a detail surface that can load.
   const forward = await openDivePage(context, { blockStyle: false });
-  const particle = particleCanvas(forward.page);
+  const point = await gesturePoint(forward.page);
 
   const entered = await wheelUntil(
     forward.page,
-    particle,
+    point,
     -120,
     (state) => state.stage === "blending",
     "the dive never reached blending on wheel zoom alone",
   );
+  const blendingHit = await hitTarget(forward.page, point);
 
   // Park just short of the commit edge, quiescent, then cross it with one
   // small step so the handoff is measured across as little deliberate zoom as
@@ -212,10 +233,10 @@ try {
   await forward.page.waitForTimeout(400);
   const beforeCommit = await readDive(forward.page);
   const blendingFrame = await frameAt(forward.page, "blending");
-  await dispatchWheel(particle, COMMIT_WHEEL_DELTA);
+  await wheelAt(forward.page, point, COMMIT_WHEEL_DELTA);
   const committed = await wheelUntil(
     forward.page,
-    particle,
+    point,
     COMMIT_WHEEL_DELTA,
     (state) => state.stage === "detail",
     "the dive never committed to detail on wheel zoom alone",
@@ -225,19 +246,20 @@ try {
 
   const forwardStages = await stages(forward.page);
 
-  // Zoom out again. The map owns the wheel now, so this is the reverse handoff
-  // through the owner that actually has the camera.
-  const mapCanvas = forward.page.locator(".detailed-earth-map canvas").first();
+  // Zoom out again at the SAME point. The map owns the wheel now and its layer
+  // is the hit-test winner, so this is the reverse handoff through the owner
+  // that actually has the camera.
+  const detailHit = await hitTarget(forward.page, point);
   const released = await wheelUntil(
     forward.page,
-    mapCanvas,
+    point,
     240,
     (state) => state.stage === "prewarm",
     "the detail surface never handed the camera back on wheel zoom-out",
   );
   const returned = await wheelUntil(
     forward.page,
-    particle,
+    point,
     240,
     (state) => state.stage === "particle",
     "the dive never returned to the particle Earth on wheel zoom-out",
@@ -262,6 +284,8 @@ try {
   result.forward = {
     stageLadder,
     stagesToDetail: forwardStages,
+    gesturePoint: point,
+    hitTargets: { blending: blendingHit, detail: detailHit },
     entered: { stage: entered.stage, owner: entered.owner, semanticZoom: entered.semanticZoom },
     beforeCommit: {
       stage: beforeCommit.stage,
@@ -275,7 +299,12 @@ try {
       earthMode: committed.earthMode,
       readiness: committed.readiness,
     },
-    released: { stage: released.stage, owner: released.owner, semanticZoom: released.semanticZoom },
+    released: {
+      stage: released.stage,
+      owner: released.owner,
+      semanticZoom: released.semanticZoom,
+      mapZoom: released.mapZoom,
+    },
     returned: {
       stage: returned.stage,
       owner: returned.owner,
@@ -309,6 +338,9 @@ try {
   if (released.owner !== "particle" || returned.owner !== "particle") {
     ladderFailures.push("ownership did not come home on the reverse handoff");
   }
+  if (blendingHit && blendingHit.className && blendingHit.className.includes("detailed-earth-map")) {
+    ladderFailures.push("the blending detail surface was already the hit-test owner");
+  }
   if (!(anchorDeltaPx <= ANCHOR_TOLERANCE_PX)) {
     ladderFailures.push(`focused anchor moved ${anchorDeltaPx} CSS px across the handoff`);
   }
@@ -325,16 +357,17 @@ try {
   // particle Earth stays fully usable, nothing is revealed, and there is no
   // loading dialog.
   const blocked = await openDivePage(context, { blockStyle: true });
+  const blockedPoint = await gesturePoint(blocked.page);
   await wheelUntil(
     blocked.page,
-    particleCanvas(blocked.page),
+    blockedPoint,
     -120,
     (state) => state.stage === "prewarm",
     "the dive never prewarmed with the map style blocked",
   );
   const deep = await wheelUntil(
     blocked.page,
-    particleCanvas(blocked.page),
+    blockedPoint,
     -120,
     (state) => state.semanticZoom === "local" && Number(state.localProgress) >= 0.95,
     "the particle Earth would not zoom into the local band with the map style blocked",
@@ -347,13 +380,12 @@ try {
 
   // The particle Earth is still answering the wheel and the drag.
   const beforeGesture = await readDive(blocked.page);
-  await dispatchWheel(particleCanvas(blocked.page), 600);
+  await wheelAt(blocked.page, blockedPoint, 600);
   await blocked.page.waitForTimeout(250);
   const afterWheel = await readDive(blocked.page);
-  const canvasBounds = await particleCanvas(blocked.page).boundingBox();
-  await blocked.page.mouse.move(canvasBounds.x + canvasBounds.width * 0.5, canvasBounds.y + canvasBounds.height * 0.5);
+  await blocked.page.mouse.move(blockedPoint.x, blockedPoint.y);
   await blocked.page.mouse.down();
-  await blocked.page.mouse.move(canvasBounds.x + canvasBounds.width * 0.66, canvasBounds.y + canvasBounds.height * 0.52, { steps: 8 });
+  await blocked.page.mouse.move(blockedPoint.x + 140, blockedPoint.y + 18, { steps: 8 });
   await blocked.page.mouse.up();
   await blocked.page.waitForTimeout(250);
   const afterDrag = await readDive(blocked.page);
@@ -365,6 +397,8 @@ try {
   }));
 
   result.blocked = {
+    gesturePoint: blockedPoint,
+    hit: await hitTarget(blocked.page, blockedPoint),
     stages: blockedStages,
     deep: { stage: deep.stage, semanticZoom: deep.semanticZoom, localProgress: deep.localProgress },
     held: {

@@ -79,6 +79,15 @@ export type EarthDiveInput = {
    * whether the Dive leaves altogether is still the band's decision.
    */
   releaseRequested?: boolean;
+  /**
+   * Whether the blend the section is presenting has actually landed — the
+   * detail surface is on screen, not merely mounted and fading in. Ownership
+   * may not transfer to a surface the user cannot see yet, and this is how that
+   * is known without a clock: the caller MEASURES its own presentation and
+   * reports it. Defaults to true, so a caller with nothing to present (a test,
+   * or a presentation with no transition at all) is not stalled.
+   */
+  blendPresented?: boolean;
   reduceMotion?: boolean;
 };
 
@@ -113,6 +122,7 @@ function targetStage(previous: EarthDiveStage, input: EarthDiveInput): EarthDive
     focusRevision,
     commandRequested = false,
     releaseRequested = false,
+    blendPresented = true,
   } = input;
 
   // The one way back to `particle`. `regional` holds the prewarm rather than
@@ -146,7 +156,13 @@ function targetStage(previous: EarthDiveStage, input: EarthDiveInput): EarthDive
   const inBlend = previous === "blending" || inDetail;
 
   if (progress >= (inDetail ? EARTH_DIVE_DETAIL_EXIT_PROGRESS : EARTH_DIVE_DETAIL_ENTER_PROGRESS)) {
-    return "detail";
+    // One wheel notch can cross both cuts at once, and the fallback command
+    // crosses them both by definition. Committing on the next frame would hand
+    // the gestures to a surface still fading in, so the presentation is the
+    // last gate before ownership moves. Leaving `detail` is NOT gated the same
+    // way: a user reversing must be obeyed on the frame they reverse.
+    if (inDetail || blendPresented) return "detail";
+    return "blending";
   }
   if (progress >= (inBlend ? EARTH_DIVE_BLEND_EXIT_PROGRESS : EARTH_DIVE_BLEND_ENTER_PROGRESS)) {
     return "blending";

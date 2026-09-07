@@ -31,6 +31,7 @@ type Frame = {
   focusRevision?: number;
   commandRequested?: boolean;
   releaseRequested?: boolean;
+  blendPresented?: boolean;
   reduceMotion?: boolean;
 };
 
@@ -48,6 +49,7 @@ function input(frame: Frame = {}): EarthDiveInput {
     focusRevision: frame.focusRevision ?? 1,
     commandRequested: frame.commandRequested,
     releaseRequested: frame.releaseRequested,
+    blendPresented: frame.blendPresented,
     reduceMotion: frame.reduceMotion,
   };
 }
@@ -260,6 +262,26 @@ describe("earth dive ownership", () => {
     expect(transfers[0].stage).toBe("detail");
   });
 
+  it("does not transfer ownership to a surface the blend has not put on screen yet", () => {
+    // One wheel notch can cross both progress cuts, so the commit edge would
+    // otherwise be reached on the frame after `blending` — while the layer is
+    // still fading in and the user cannot see what they are steering.
+    const crossing = { ...dive, blendPresented: false };
+    expect(resolveEarthDive(state("blending"), input(crossing)))
+      .toMatchObject({ stage: "blending", owner: "particle" });
+    expect(stagesOf(settle("particle", crossing))).toEqual(["prewarm", "blending"]);
+    // It is a gate on the transfer, not a stage: once the surface is on screen
+    // the same frame commits.
+    expect(resolveEarthDive(state("blending"), input(dive)))
+      .toMatchObject({ stage: "detail", owner: "detail" });
+    // And it never delays a REVERSAL: a user zooming back out is obeyed on the
+    // frame they do it, however the presentation is doing.
+    expect(resolveEarthDive(state("detail"), input({ ...crossing, releaseRequested: true })))
+      .toMatchObject({ stage: "blending", owner: "particle" });
+    expect(resolveEarthDive(state("detail"), input({ ...crossing, level: "macro" })))
+      .toMatchObject({ stage: "blending", owner: "particle" });
+  });
+
   it("brings ownership home the moment the stage leaves detail", () => {
     expect(resolveEarthDive(state("detail"), input({
       ...dive,
@@ -303,5 +325,11 @@ describe("earth dive ownership", () => {
       { level: "regional", readiness: "mounted", commandRequested: true },
       { level: "regional", readiness: "mounted", commandRequested: true },
     ]))).toEqual(["prewarm", "prewarm"]);
+    // Withdrawing the command is the way out of a dive whose detail surface
+    // never becomes available: the band's own exit is reachable again.
+    expect(stagesOf(run([
+      { level: "macro", readiness: "mounted", commandRequested: true },
+      { level: "macro", readiness: "mounted" },
+    ], "prewarm"))).toEqual(["prewarm", "particle"]);
   });
 });
