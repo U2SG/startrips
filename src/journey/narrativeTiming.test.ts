@@ -36,8 +36,22 @@ const QUICK_RECAP_VIDEO_EXPECTED: Record<AutoEditTempo, number> = {
   standard: 3_500,
   immersive: 4_500,
 };
-/** The zero-distance / zero-note floors quick recap kept from its flat constants. */
-const QUICK_RECAP_CAMERA_FLOOR_MS = 1_000;
+/**
+ * The zero-distance / zero-note floors quick recap resolves to.
+ *
+ * The camera floor used to be a single flat 1000 at every tempo — the value
+ * `autoEditPlan.ts` carried before the resolver, kept so the move was a
+ * no-visual-change refactor. ST-010's owner decision replaced it with per-tempo
+ * numbers, so this is a record now. The arrival floor is still the seeded flat
+ * constant. Both stay literals on purpose: the tables they mirror are the only
+ * other place these numbers live, so reading them back from
+ * `NARRATIVE_TIMING_PROFILES` would delete the tripwire this file exists to be.
+ */
+const QUICK_RECAP_CAMERA_FLOOR_MS: Record<NarrativeTempo, number> = {
+  fast: 420,
+  standard: 650,
+  immersive: 900,
+};
 const QUICK_RECAP_ARRIVAL_FLOOR_MS = 800;
 const KEEPSAKE_EXPECTED = {
   introMs: 1_200,
@@ -108,7 +122,7 @@ describe("resolveNarrativeTiming", () => {
         const standard = resolveNarrativeTiming(contextFor(mode, "standard", segmentKind));
         const immersive = resolveNarrativeTiming(contextFor(mode, "immersive", segmentKind));
         // Non-strict: Keepsake is deliberately tempo-flat (D3) and Quick Recap's
-        // camera/arrival floors are shared across tempi.
+        // arrival floor is shared across tempi.
         expect(fast, `${mode}/${segmentKind} fast <= standard`).toBeLessThanOrEqual(standard);
         expect(standard, `${mode}/${segmentKind} standard <= immersive`)
           .toBeLessThanOrEqual(immersive);
@@ -306,8 +320,8 @@ describe("NARRATIVE_TIMING_PROFILES seed equivalence", () => {
         `${tempo} video budget`,
       ).toBe(QUICK_RECAP_VIDEO_EXPECTED[tempo]);
 
-      // Decision D2 keeps the former flat constants as the zero-distance /
-      // zero-note floor, so nothing changes for a same-place leg.
+      // A same-place leg resolves to the tempo's floor: per-tempo since ST-010
+      // for the camera, still the seeded flat constant for arrival.
       expect(
         resolveNarrativeTiming({
           mode: "quick-recap",
@@ -316,7 +330,7 @@ describe("NARRATIVE_TIMING_PROFILES seed equivalence", () => {
           routeDistanceRadians: 0,
         }),
         `${tempo} zero-distance camera`,
-      ).toBe(QUICK_RECAP_CAMERA_FLOOR_MS);
+      ).toBe(QUICK_RECAP_CAMERA_FLOOR_MS[tempo]);
       expect(
         resolveNarrativeTiming({
           mode: "quick-recap",
@@ -331,6 +345,7 @@ describe("NARRATIVE_TIMING_PROFILES seed equivalence", () => {
 
   it("makes a nearby and a long-haul quick recap leg differ (decision D2)", () => {
     for (const tempo of TEMPI) {
+      const floor = QUICK_RECAP_CAMERA_FLOOR_MS[tempo];
       const nearby = resolveNarrativeTiming({
         mode: "quick-recap",
         tempo,
@@ -343,16 +358,29 @@ describe("NARRATIVE_TIMING_PROFILES seed equivalence", () => {
         segmentKind: "travel",
         routeDistanceRadians: 2,
       });
-      // A ~6 km leg still resolves to the flat camera duration, give or take
+      // A ~6 km leg still resolves to this tempo's camera floor, give or take
       // the rounding of a sub-millisecond distance term.
-      expect(nearby, `${tempo} nearby stays at the floor`)
-        .toBeGreaterThanOrEqual(QUICK_RECAP_CAMERA_FLOOR_MS);
-      expect(nearby, `${tempo} nearby stays at the floor`)
-        .toBeLessThanOrEqual(QUICK_RECAP_CAMERA_FLOOR_MS + 1);
+      expect(nearby, `${tempo} nearby stays at the floor`).toBeGreaterThanOrEqual(floor);
+      expect(nearby, `${tempo} nearby stays at the floor`).toBeLessThanOrEqual(floor + 1);
       // An intercontinental leg no longer collapses to the same number.
-      expect(longHaul, `${tempo} long haul exceeds the floor`)
-        .toBeGreaterThan(QUICK_RECAP_CAMERA_FLOOR_MS + 1);
+      expect(longHaul, `${tempo} long haul exceeds the floor`).toBeGreaterThan(floor + 1);
     }
+  });
+
+  it("gives quick recap a per-tempo travel floor, ordered and under its ceiling (ST-010)", () => {
+    // The three values are the product owner's, and they are the same base
+    // rhythm Full Playback already plays; the alignment is the decision, so a
+    // later retune of one table must not silently be read as a retune of both.
+    for (const tempo of TEMPI) {
+      const recap = NARRATIVE_TIMING_PROFILES["quick-recap"][tempo];
+      expect(recap.travelBaseMs, tempo).toBe(QUICK_RECAP_CAMERA_FLOOR_MS[tempo]);
+      expect(recap.travelBaseMs, `${tempo} floor below ceiling`).toBeLessThan(recap.travelMaxMs);
+      expect(NARRATIVE_TIMING_PROFILES.full[tempo].travelBaseMs, `${tempo} aligned with full`)
+        .toBe(recap.travelBaseMs);
+    }
+    expect(QUICK_RECAP_CAMERA_FLOOR_MS.fast).toBeLessThan(QUICK_RECAP_CAMERA_FLOOR_MS.standard);
+    expect(QUICK_RECAP_CAMERA_FLOOR_MS.standard)
+      .toBeLessThan(QUICK_RECAP_CAMERA_FLOOR_MS.immersive);
   });
 
   it("keeps the keepsake numbers, identically at every tempo (decision D3)", () => {

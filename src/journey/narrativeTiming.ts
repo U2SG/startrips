@@ -116,13 +116,21 @@ const FULL_PROFILES: Record<NarrativeTempo, NarrativeTimingProfile> = {
  *
  * - `imageRoleMs` / `videoMs`: the per-role and per-tempo dwell tables that
  *   lived in `autoEditPlan.ts`, unchanged — dwell was already tempo-aware.
- * - `travelBaseMs` (1000) and `arrivalBaseMs` (800) are the flat camera and
- *   arrival constants `autoEditPlan.ts` carried before this resolver. Per
- *   decision D2 they become base values plus distance and note terms, so a
- *   nearby leg and a long-haul leg stop collapsing to one camera duration. The
- *   slopes and the base→max span are Full Playback's, i.e. the same distance and
- *   note sensitivity as live Playback over a different floor; a zero-distance /
- *   zero-note beat therefore still resolves to exactly today's 1000 / 800.
+ * - `travelBaseMs` and `arrivalBaseMs` descend from the flat camera (1000) and
+ *   arrival (800) constants `autoEditPlan.ts` carried before this resolver. Per
+ *   decision D2 they became base values plus distance and note terms, so a
+ *   nearby leg and a long-haul leg stop collapsing to one camera duration, and
+ *   both floors were deliberately kept flat across tempo at that point so the
+ *   move was a provable no-visual-change refactor: a zero-distance / zero-note
+ *   beat resolved to exactly the previous 1000 / 800.
+ * - `travelBaseMs` is no longer flat. Keeping 1000 at every tempo meant a tempo
+ *   change moved the slope and the ceiling but never the floor, so ST-010 asked
+ *   the product owner for real numbers and got 420 / 650 / 900 — the same base
+ *   rhythm Full Playback already uses, deliberately aligned rather than
+ *   independently tuned. `arrivalBaseMs` stays at the seeded flat 800 because
+ *   ST-010 scoped the decision to the camera floor alone.
+ * - The slopes and the base→max span are Full Playback's, i.e. the same distance
+ *   and note sensitivity as live Playback over a Quick Recap ceiling.
  * - `introMs` / `outroMs`: `PLAYBACK_TEMPO_PROFILES[tempo]` again, because
  *   `quickRecapStepDurationMs()` returns `undefined` for intro and outro
  *   (`quickRecapPlayback.ts:146`) and the director already spends the live
@@ -133,7 +141,7 @@ const FULL_PROFILES: Record<NarrativeTempo, NarrativeTimingProfile> = {
 const QUICK_RECAP_PROFILES: Record<NarrativeTempo, NarrativeTimingProfile> = {
   fast: {
     introMs: 800,
-    travelBaseMs: 1_000,
+    travelBaseMs: 420,
     travelPerRadiansMs: 300,
     travelMaxMs: 1_580,
     arrivalBaseMs: 800,
@@ -145,7 +153,7 @@ const QUICK_RECAP_PROFILES: Record<NarrativeTempo, NarrativeTimingProfile> = {
   },
   standard: {
     introMs: 1_100,
-    travelBaseMs: 1_000,
+    travelBaseMs: 650,
     travelPerRadiansMs: 450,
     travelMaxMs: 1_750,
     arrivalBaseMs: 800,
@@ -157,7 +165,7 @@ const QUICK_RECAP_PROFILES: Record<NarrativeTempo, NarrativeTimingProfile> = {
   },
   immersive: {
     introMs: 1_400,
-    travelBaseMs: 1_000,
+    travelBaseMs: 900,
     travelPerRadiansMs: 650,
     travelMaxMs: 2_000,
     arrivalBaseMs: 800,

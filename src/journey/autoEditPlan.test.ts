@@ -376,11 +376,12 @@ describe("deterministic auto-edit foundation (#127)", () => {
     expect(totals[0]!).toBeLessThan(totals[1]!);
     expect(totals[1]!).toBeLessThan(totals[2]!);
 
-    // Camera and arrival are flat across tempo in the plan because the
-    // deterministic input carries no route geometry and no notes. The resolver
-    // itself is already tempo-, distance- and note-sensitive; threading those
-    // terms into Quick Recap belongs to the director wiring.
-    expect(new Set(plans.map((plan) => plan.chapters[1]!.camera.durationMs)).size).toBe(1);
+    // The deterministic input carries no route geometry and no notes, so every
+    // beat here resolves to its floor. Arrival's floor is still flat across
+    // tempo; the camera's is not, because ST-010 gave `travelBaseMs` per-tempo
+    // values, so a tempo change now moves a zero-distance leg too.
+    expect(new Set(plans.map((plan) => plan.chapters[1]!.camera.durationMs)).size).toBe(3);
+    expect(new Set(plans.map((plan) => plan.chapters[1]!.arrival!.durationMs)).size).toBe(1);
     for (const tempo of ["fast", "standard", "immersive"] as const) {
       expect(resolveNarrativeTiming({ mode: "quick-recap", tempo, segmentKind: "travel", routeDistanceRadians: 2 }))
         .toBeGreaterThan(resolveNarrativeTiming({ mode: "quick-recap", tempo, segmentKind: "travel" }));
@@ -417,8 +418,29 @@ describe("deterministic auto-edit foundation (#127)", () => {
       targetDurationMs: 6_500,
       digests,
     });
-    expect(plan.chapters[0]?.items.map((item) => item.assetId)).toEqual(["tokyo-opener"]);
-    expect(plan.plannedDurationMs).toBe(4_900);
+    // Overhead is one zero-distance camera (650) plus one note-free arrival
+    // (800). The opener is mandatory at the hero dwell (3100), so the recap
+    // costs 4550 alone and 6350 once the detail photo is admitted at the
+    // `supporting` dwell (1800). Pricing that second photo as `representative`
+    // (2500) instead would cost 7050 and put it outside this budget, so the
+    // 6500 target is exactly the window where role-aware dwell decides.
+    expect(plan.chapters[0]?.items.map((item) => item.assetId))
+      .toEqual(["tokyo-opener", "tokyo-detail"]);
+    expect(plan.chapters[0]?.items.map((item) => item.photoRole))
+      .toEqual(["hero", "supporting"]);
+    expect(plan.plannedDurationMs).toBe(6_350);
+
+    // One notch tighter and the optional photo no longer fits, which is the
+    // branch the greedy loop has to keep taking.
+    const tight = buildDeterministicQuickRecapPlan({
+      ...baseInput,
+      routePointIds: ["tokyo"],
+      targetDurationMs: 6_000,
+      digests,
+    });
+    expect(tight.chapters[0]?.items.map((item) => item.assetId)).toEqual(["tokyo-opener"]);
+    expect(tight.omittedAssetIds).toEqual(["tokyo-detail"]);
+    expect(tight.plannedDurationMs).toBe(4_550);
   });
 
   it("keeps hero image dwell inside the intended tempo bands", () => {
