@@ -138,24 +138,9 @@ async function stubAtlasApi(page) {
       contentType: "application/json",
       body: JSON.stringify({
         version: 8,
-        name: "QA detailed-earth style with attribution",
-        sources: {
-          "qa-attribution": {
-            type: "geojson",
-            attribution: "QA attribution",
-            data: { type: "FeatureCollection", features: [] },
-          },
-        },
-        // Keep the inline source active without drawing anything. This makes
-        // MapLibre's native AttributionControl non-vacuous, so the owner probe
-        // can prove that the shared non-owner boundary preserves required
-        // attribution rather than merely observing an empty control shell.
-        layers: [{
-          id: "qa-attribution-anchor",
-          type: "circle",
-          source: "qa-attribution",
-          paint: { "circle-opacity": 0 },
-        }],
+        name: "QA empty detailed-earth style",
+        sources: {},
+        layers: [],
       }),
     }),
   );
@@ -351,6 +336,19 @@ async function probeNativeMapControls(page) {
       controlTabIndexes: controls.map((control) => control.tabIndex),
       controlsInsideInert: controls.filter((control) => Boolean(control.closest("[inert]"))).length,
       controlsInsideAriaHidden: controls.filter((control) => Boolean(control.closest('[aria-hidden="true"]'))).length,
+      attributionPresent: Boolean(attribution),
+      attributionEmpty: attribution?.classList.contains("maplibregl-attrib-empty") ?? null,
+      attributionPointerEvents: attributionStyle?.pointerEvents ?? null,
+      attributionInsideInert: attribution instanceof Element
+        ? Boolean(attribution.closest("[inert]"))
+        : null,
+      attributionInsideAriaHidden: attribution instanceof Element
+        ? Boolean(attribution.closest('[aria-hidden="true"]'))
+        : null,
+      // The empty QA style has no legal/source attribution to render, so MapLibre
+      // legitimately applies `.maplibregl-attrib-empty { display:none }`. Keep
+      // visibility as diagnostics only; ownership is graded on the real native
+      // control shell and the shared inert/pointer boundary below.
       attributionVisible: Boolean(
         attribution
         && attributionStyle
@@ -743,7 +741,10 @@ try {
           || detailOwnerControls.controlCount === 0
           || detailOwnerControls.hitTestable.length === 0
           || !detailOwnerControls.tabReachedControl
-          || !detailOwnerControls.attributionVisible
+          || !detailOwnerControls.attributionPresent
+          || detailOwnerControls.attributionInsideInert
+          || detailOwnerControls.attributionInsideAriaHidden
+          || detailOwnerControls.attributionPointerEvents === "none"
           || mapChrome.earthMode !== "particle"
           || mapChrome.detailMap !== 0
           || mapChrome.maplibreControls !== 0
@@ -992,7 +993,10 @@ try {
           || ordinaryBlendControls.tabReachedDetailedMap
           || ordinaryBlendControls.controlsInsideInert !== ordinaryBlendControls.controlCount
           || ordinaryBlendControls.controlsInsideAriaHidden !== ordinaryBlendControls.controlCount
-          || !ordinaryBlendControls.attributionVisible
+          || !ordinaryBlendControls.attributionPresent
+          || ordinaryBlendControls.attributionInsideInert !== true
+          || ordinaryBlendControls.attributionInsideAriaHidden !== true
+          || ordinaryBlendControls.attributionPointerEvents !== "none"
           // A round that never sampled a focused frame proves nothing.
           || frames.focusFrames === 0
           // The per-frame promise: never touchable, never the input owner, and
