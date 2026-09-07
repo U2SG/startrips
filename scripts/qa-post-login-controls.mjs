@@ -607,6 +607,15 @@ async function verifyMobileStoryInertOwnership() {
         round.realMapOpenedOnFirstClick = true;
         await page.keyboard.press("Escape");
         await realMap.waitFor({ state: "detached" });
+        // Review P2: the map's `useMobileSurfaceHistory` cleanup schedules a
+        // history.go(-1) that can still be in flight when the DOM detaches.
+        // Reopening the Story before the stack is back to sheet-only depth
+        // would let that pending pop swallow the new Story token.
+        await page.waitForFunction(() => {
+          const stack = window.history.state?.__startripsMobileSurfaceStack;
+          return Array.isArray(stack) && stack.length === 1;
+        });
+        round.mapCloseStackDepth = await surfaceStackDepth();
 
         await sheet.getByRole("button", { name: /打开故事/ }).click({ timeout: 6_000 });
         await storySurface.waitFor({ state: "visible", timeout: 8_000 });
@@ -634,6 +643,7 @@ async function verifyMobileStoryInertOwnership() {
         || !notInert(round.afterClose)
         || !round.sheetVisibleAfterClose
         || round.realMapOpenedOnFirstClick !== true
+        || round.mapCloseStackDepth !== 1
         || round.storyReopenable !== true
         || !notInert(round.afterReopenRoundTrip)
         || round.residualStackDepth !== 0;
