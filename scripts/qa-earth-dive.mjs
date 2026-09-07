@@ -27,9 +27,12 @@
 import { launchQaBrowser } from "./qa-browser.mjs";
 
 const baseUrl = process.env.QA_BASE_URL ?? "http://127.0.0.1:4173";
-const focus = { lat: 22.3193, lon: 114.1694 }; // Hong Kong / Shenzhen regional view.
-const qaUrl = new URL(
-  `/?qaState=earth-dive&qaFocusLat=${focus.lat}&qaFocusLon=${focus.lon}`,
+// The anchor this lane measures is a Route Point of a Journey the fixture
+// mounts - the thing #252 says must not move - not an arbitrary coordinate.
+// The fixture publishes which one it focused, and the lane checks that the
+// place both renderers are holding is that Route Point's own position.
+const qaUrl = (focus) => new URL(
+  `/?qaState=earth-dive${focus === "route" ? "&qaFocus=route" : ""}`,
   baseUrl,
 ).toString();
 
@@ -112,6 +115,20 @@ async function gesturePoint(page, fallback = null) {
 async function wheelAt(page, point, deltaY) {
   await page.mouse.move(point.x, point.y);
   await page.mouse.wheel(0, deltaY);
+}
+
+/** The Route Point the fixture focused, straight from its own published marker. */
+async function readRoutePoint(page) {
+  return page.evaluate(() => {
+    const marker = document.querySelector("[data-qa-earth-dive-route-point]");
+    if (!marker) return null;
+    return {
+      id: marker.dataset.routePointId ?? null,
+      lat: Number(marker.dataset.routePointLat),
+      lon: Number(marker.dataset.routePointLon),
+      focusShape: document.querySelector(".living-atlas")?.dataset?.qaEarthDiveFocus ?? null,
+    };
+  });
 }
 
 /** Which element a real gesture at this point would reach. */
@@ -245,7 +262,7 @@ async function readFrames(page) {
   });
 }
 
-async function openDivePage(context, { blockStyle }) {
+async function openDivePage(context, { blockStyle, focusShape = "route-point" }) {
   const page = await context.newPage();
   const consoleErrors = [];
   const pageErrors = [];
@@ -270,7 +287,7 @@ async function openDivePage(context, { blockStyle }) {
         body: JSON.stringify(EMPTY_STYLE),
       })
   ));
-  await page.goto(qaUrl, { waitUntil: "domcontentloaded" });
+  await page.goto(qaUrl(focusShape), { waitUntil: "domcontentloaded" });
   await page.locator('[data-scene-ready="true"]').waitFor({ timeout: 25_000 });
   await page.waitForFunction(() => Boolean(window.__particleEarthDebug?.()), null, { timeout: 25_000 });
   await page.waitForTimeout(300);
@@ -283,12 +300,13 @@ const context = await browser.newContext({
   deviceScaleFactor: 1,
 });
 
-const result = { baseUrl, viewport: VIEWPORT, focus };
+const result = { baseUrl, viewport: VIEWPORT };
 
 try {
   // ---------------------------------------------------------------- round A
   // Wheel alone, in both directions, with a detail surface that can load.
   const forward = await openDivePage(context, { blockStyle: false });
+  const routePoint = await readRoutePoint(forward.page);
   const point = await gesturePoint(forward.page);
 
   // Approach coarsely to the door of the `local` band, then descend in small
@@ -371,6 +389,7 @@ try {
   result.forward = {
     stageLadder,
     stagesToDetail: forwardStages,
+    routePoint,
     gesturePoint: point,
     hitTargets: { blending: blendingHit, detail: detailHit },
     entered: { stage: entered.stage, owner: entered.owner, semanticZoom: entered.semanticZoom },
@@ -429,6 +448,9 @@ try {
   if (blendingHit && blendingHit.className && blendingHit.className.includes("detailed-earth-map")) {
     ladderFailures.push("the blending detail surface was already the hit-test owner");
   }
+  if (routePoint?.focusShape !== "route-point" || !Number.isFinite(routePoint?.lat)) {
+    ladderFailures.push(`the fixture did not focus a Route Point: ${JSON.stringify(routePoint)}`);
+  }
   if (!(worstAnchorDeltaPx <= ANCHOR_TOLERANCE_PX)) {
     ladderFailures.push(`the two renderers put the focused anchor ${worstAnchorDeltaPx} CSS px apart`);
   }
@@ -444,6 +466,47 @@ try {
   await forward.page.close();
 
   // ---------------------------------------------------------------- round B
+  // The same handoff for a focused JOURNEY, which publishes no focus point at
+  // all: its anchor is the route frame's own centre. Without this round the
+  // whole route branch could hand over uncalibrated and nothing would notice.
+  const routeRun = await openDivePage(context, { blockStyle: false, focusShape: "route" });
+  const routeRunPoint = await gesturePoint(routeRun.page);
+  await wheelUntil(
+    routeRun.page,
+    routeRunPoint,
+    APPROACH_WHEEL_DELTA,
+    (state) => state.semanticZoom === "local",
+    "the particle Earth never reached the local band with a focused Journey",
+  );
+  const routeBlending = await wheelUntil(
+    routeRun.page,
+    routeRunPoint,
+    FINE_WHEEL_DELTA,
+    (state) => state.stage === "blending",
+    "the dive never reached blending with a focused Journey",
+  );
+  await routeRun.page.waitForTimeout(500);
+  const routeFrames = await readFrames(routeRun.page);
+  result.routeFocus = {
+    focusShape: (await readRoutePoint(routeRun.page))?.focusShape ?? null,
+    stage: routeBlending.stage,
+    owner: routeBlending.owner,
+    frames: routeFrames,
+    pageErrors: routeRun.pageErrors,
+  };
+  const routeFailures = [];
+  if (!(routeFrames.anchorDeltaPx <= ANCHOR_TOLERANCE_PX)) {
+    routeFailures.push(`with a focused Journey the two renderers put the anchor ${routeFrames.anchorDeltaPx} CSS px apart`);
+  }
+  if (!(routeFrames.localScaleError <= LOCAL_SCALE_TOLERANCE)) {
+    routeFailures.push(`with a focused Journey the two renderers disagree on local scale by ${routeFrames.localScaleError}`);
+  }
+  if (routeRun.pageErrors.length > 0) {
+    routeFailures.push("the page raised an error during the focused-Journey dive");
+  }
+  await routeRun.page.close();
+
+  // ---------------------------------------------------------------- round C
   // The same wheel gesture with the detail style unreachable. #252: the
   // particle Earth stays fully usable, nothing is revealed, and there is no
   // loading dialog.
@@ -563,7 +626,7 @@ try {
   }
   await blocked.page.close();
 
-  result.failures = [...ladderFailures, ...blockedFailures];
+  result.failures = [...ladderFailures, ...routeFailures, ...blockedFailures];
   console.log(JSON.stringify(result, null, 2));
   if (result.failures.length > 0) {
     throw new Error(`Semantic Earth Dive QA failed: ${JSON.stringify(result.failures)}`);

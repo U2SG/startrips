@@ -258,24 +258,42 @@ function EarthDiveQaPreview() {
     persistentEarth.setStage("atlas");
     return () => persistentEarth.setStage("idle");
   }, [persistentEarth]);
+  // The two focus shapes the product actually hands the globe, because the Dive
+  // has to hold its anchor in both: a focused Route Point publishes a focus
+  // point, while a focused Journey is owned by route fitting and publishes no
+  // point at all - the branch whose anchor comes from the route frame.
+  const focusRoute = globeQaRoutes[0];
+  const routePoint = focusRoute.points[1];
+  const routeFocus = qaParams.get("qaFocus") === "route";
   const requestedLat = Number(qaParams.get("qaFocusLat") ?? Number.NaN);
   const requestedLon = Number(qaParams.get("qaFocusLon") ?? Number.NaN);
-  const focusPoint = {
-    lat: Number.isFinite(requestedLat) ? requestedLat : 22.3193,
-    lon: Number.isFinite(requestedLon) ? requestedLon : 114.1694,
-  };
+  const focusPoint = routeFocus
+    ? null
+    : {
+      lat: Number.isFinite(requestedLat) ? requestedLat : routePoint.lat,
+      lon: Number.isFinite(requestedLon) ? requestedLon : routePoint.lon,
+    };
   return (
-    <main className="living-atlas">
+    <main className="living-atlas" data-qa-earth-dive-focus={routeFocus ? "route" : "route-point"}>
       <div className="living-atlas__globe">
         <LivingAtlasGlobe
           focusPoint={focusPoint}
+          focusRoute={routeFocus ? focusRoute : null}
           focusRevision={focusRevision}
-          journeyRoutes={[]}
+          journeyRoutes={globeQaRoutes}
+          activeJourneyRouteId={focusRoute.id}
           onJourneyRouteActivate={() => undefined}
           onJourneyRoutePointActivate={() => undefined}
           reduceMotion={qaParams.get("qaMotion") !== "animate"}
         />
       </div>
+      <output
+        data-qa-earth-dive-route-point
+        data-route-point-id={routePoint.id}
+        data-route-point-lat={routePoint.lat}
+        data-route-point-lon={routePoint.lon}
+        style={{ position: "fixed", width: 1, height: 1, overflow: "hidden", opacity: 0 }}
+      >{routePoint.label}</output>
       <button
         type="button"
         data-qa-earth-dive-refocus
