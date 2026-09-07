@@ -399,6 +399,8 @@ export default function DetailedEarthMap({
     if (canvas) canvas.style.cursor = onGlobePointPick ? "crosshair" : "grab";
   }, [onGlobePointPick]);
 
+  const ownsDetailInput = diveOwner === "detail";
+
   return (
     <div
       ref={hostRef}
@@ -407,6 +409,13 @@ export default function DetailedEarthMap({
       data-dive-stage={diveStage}
       data-dive-owner={diveOwner}
       data-map-language={language}
+      // The renderer prewarms while the particle globe still owns input. Keep
+      // the required attribution visible, but remove the whole MapLibre subtree
+      // from pointer/keyboard/accessibility ownership until the Dive commits.
+      // This is the shared owner boundary, so ordinary blending and focus-mode
+      // suspension use the same rule rather than two CSS/focus exceptions.
+      inert={!ownsDetailInput || undefined}
+      aria-hidden={!ownsDetailInput || undefined}
       data-point-pick={onGlobePointPick ? "true" : "false"}
       data-primary-drag="pan"
       data-alternate-drag="right-mouse-or-ctrl-rotate"

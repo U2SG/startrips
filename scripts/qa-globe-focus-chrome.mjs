@@ -295,6 +295,107 @@ const countHint = (page) => page.evaluate(() => (
   document.querySelectorAll(".living-atlas-globe__mode-note").length
 ));
 
+/**
+ * Probe MapLibre's actual native control subtree, not only its parent layer.
+ * `inert` must close keyboard/accessibility ownership and the owner-keyed
+ * pointer boundary must keep control centers out of hit testing while the
+ * particle globe owns input. The temporary sentinel gives us a real Tab walk
+ * from immediately before the map subtree instead of inferring tabbability from
+ * attributes alone.
+ */
+async function probeNativeMapControls(page) {
+  const snapshot = await page.evaluate(() => {
+    const map = document.querySelector(".detailed-earth-map");
+    const controls = [...document.querySelectorAll(
+      ".maplibregl-control-container button, .maplibregl-control-container a",
+    )].filter((control) => control instanceof HTMLElement);
+    const hitTestable = controls.flatMap((control) => {
+      const rect = control.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return [];
+      const x = Math.round(rect.left + rect.width / 2);
+      const y = Math.round(rect.top + rect.height / 2);
+      const hit = document.elementFromPoint(x, y);
+      return hit && (hit === control || control.contains(hit))
+        ? [{
+          tag: control.tagName,
+          name: control.getAttribute("aria-label") ?? control.textContent?.trim().slice(0, 40) ?? null,
+          x,
+          y,
+        }]
+        : [];
+    });
+    const attribution = document.querySelector(".maplibregl-ctrl-attrib");
+    const attributionStyle = attribution ? getComputedStyle(attribution) : null;
+    const attributionRect = attribution?.getBoundingClientRect() ?? null;
+    return {
+      owner: map?.getAttribute("data-dive-owner") ?? null,
+      rootInert: map instanceof HTMLElement ? map.inert : null,
+      rootAriaHidden: map?.getAttribute("aria-hidden") ?? null,
+      controlCount: controls.length,
+      hitTestable,
+      controlTabIndexes: controls.map((control) => control.tabIndex),
+      controlsInsideInert: controls.filter((control) => Boolean(control.closest("[inert]"))).length,
+      controlsInsideAriaHidden: controls.filter((control) => Boolean(control.closest('[aria-hidden="true"]'))).length,
+      attributionVisible: Boolean(
+        attribution
+        && attributionStyle
+        && attributionRect
+        && attributionStyle.display !== "none"
+        && attributionStyle.visibility !== "hidden"
+        && Number.parseFloat(attributionStyle.opacity || "1") > 0
+        && attributionRect.width > 0
+        && attributionRect.height > 0
+      ),
+    };
+  });
+
+  const tabSequence = [];
+  if (snapshot.controlCount > 0) {
+    await page.evaluate(() => {
+      document.querySelector("[data-qa-native-control-sentinel]")?.remove();
+      const map = document.querySelector(".detailed-earth-map");
+      if (!map?.parentElement) return;
+      const sentinel = document.createElement("button");
+      sentinel.type = "button";
+      sentinel.dataset.qaNativeControlSentinel = "true";
+      sentinel.textContent = "qa-tab-sentinel";
+      sentinel.style.cssText = "position:fixed;left:-9999px;top:0;width:1px;height:1px;opacity:0";
+      map.parentElement.insertBefore(sentinel, map);
+      sentinel.focus();
+    });
+    for (let index = 0; index < 8; index += 1) {
+      await page.keyboard.press("Tab");
+      tabSequence.push(await page.evaluate(() => {
+        const active = document.activeElement;
+        return {
+          tag: active?.tagName ?? null,
+          className: active && "className" in active && typeof active.className === "string"
+            ? active.className
+            : null,
+          inMapControl: active instanceof Element
+            ? Boolean(active.closest(".maplibregl-control-container"))
+            : false,
+          inDetailedMap: active instanceof Element
+            ? Boolean(active.closest(".detailed-earth-map"))
+            : false,
+        };
+      }));
+    }
+    await page.evaluate(() => {
+      const active = document.activeElement;
+      if (active instanceof HTMLElement) active.blur();
+      document.querySelector("[data-qa-native-control-sentinel]")?.remove();
+    });
+  }
+
+  return {
+    ...snapshot,
+    tabSequence,
+    tabReachedControl: tabSequence.some((entry) => entry.inMapControl),
+    tabReachedDetailedMap: tabSequence.some((entry) => entry.inDetailedMap),
+  };
+}
+
 try {
   // 1. The three acceptance viewports: chrome absence, empty top-right, the
   //    return control's own contract, and a click exit that preserves context.
@@ -542,6 +643,7 @@ try {
       await page.waitForFunction(() => (
         document.querySelector(".living-atlas-globe")?.getAttribute("data-earth-mode") === "detail"
       ), null, { timeout: 15_000 });
+      const detailOwnerControls = await probeNativeMapControls(page);
 
       await enterFocus(page);
       let returnedToParticle = true;
@@ -604,6 +706,7 @@ try {
         name: "focus-mode-entered-from-detail-map",
         viewport: viewport.name,
         returnedToParticle,
+        detailOwnerControls,
         ...mapChrome,
         strayChrome,
         focusMarker: composition.focusMarker,
@@ -617,6 +720,15 @@ try {
         },
         pageErrors,
         failed: !returnedToParticle
+          // The same shared boundary must restore MapLibre's native controls
+          // when detail legitimately owns input, including visible attribution.
+          || detailOwnerControls.owner !== "detail"
+          || detailOwnerControls.rootInert !== false
+          || detailOwnerControls.rootAriaHidden === "true"
+          || detailOwnerControls.controlCount === 0
+          || detailOwnerControls.hitTestable.length === 0
+          || !detailOwnerControls.tabReachedControl
+          || !detailOwnerControls.attributionVisible
           || mapChrome.earthMode !== "particle"
           || mapChrome.detailMap !== 0
           || mapChrome.maplibreControls !== 0
@@ -669,6 +781,12 @@ try {
       } catch {
         reachedBlendingWindow = false;
       }
+      // Regression-family check for ordinary Earth Dive: blending is visible,
+      // but particle still owns input. Grade the real MapLibre buttons/links
+      // here before focus mode is involved, including a real Tab walk.
+      const ordinaryBlendControls = reachedBlendingWindow
+        ? await probeNativeMapControls(page)
+        : null;
 
       // Every frame from here on is sampled. This is the replacement for the
       // old single-frame assertion: the resolver walks home over several
@@ -680,12 +798,32 @@ try {
         const tick = () => {
           const globe = document.querySelector(".living-atlas-globe");
           const layer = document.querySelector(".living-atlas-globe__detail-layer");
+          const map = document.querySelector(".detailed-earth-map");
+          const controls = [...document.querySelectorAll(
+            ".maplibregl-control-container button, .maplibregl-control-container a",
+          )].filter((control) => control instanceof HTMLElement);
+          const controlHitCount = controls.filter((control) => {
+            const rect = control.getBoundingClientRect();
+            if (rect.width <= 0 || rect.height <= 0) return false;
+            const hit = document.elementFromPoint(
+              Math.round(rect.left + rect.width / 2),
+              Math.round(rect.top + rect.height / 2),
+            );
+            return Boolean(hit && (hit === control || control.contains(hit)));
+          }).length;
           samples.push({
             focus: document.querySelector(".living-atlas")?.getAttribute("data-globe-focus") ?? null,
             stage: globe?.getAttribute("data-earth-dive") ?? null,
             owner: globe?.getAttribute("data-earth-dive-owner") ?? null,
             layerPointerEvents: layer ? window.getComputedStyle(layer).pointerEvents : null,
             maplibreControls: document.querySelectorAll(".maplibregl-control-container").length,
+            nativeControlCount: controls.length,
+            controlHitCount,
+            controlSequentialFocusCount: controls.filter((control) => (
+              control.tabIndex >= 0 && !control.closest("[inert]")
+            )).length,
+            detailRootInert: map instanceof HTMLElement ? map.inert : null,
+            detailRootAriaHidden: map?.getAttribute("aria-hidden") ?? null,
           });
           if (samples.length < 600) window.requestAnimationFrame(tick);
         };
@@ -729,6 +867,15 @@ try {
             sample.layerPointerEvents && sample.layerPointerEvents !== "none"
           )),
           ownedByDetailWhileFocused: focusFrames.filter((sample) => sample.owner === "detail"),
+          nativeControlsExposedWhileFocused: focusFrames.filter((sample) => (
+            sample.nativeControlCount > 0
+            && (
+              sample.controlHitCount > 0
+              || sample.controlSequentialFocusCount > 0
+              || sample.detailRootInert !== true
+              || sample.detailRootAriaHidden !== "true"
+            )
+          )),
           // Stages actually observed while focused, so a round that never saw
           // the return cannot look the same as one that did.
           stagesWhileFocused: [...new Set(focusFrames.map((sample) => sample.stage))],
@@ -794,6 +941,7 @@ try {
         name: "focus-suspends-unsettled-dive",
         viewport: viewport.name,
         reachedBlendingWindow,
+        ordinaryBlendControls,
         atFocusFrame,
         returnedToParticle,
         frames,
@@ -816,11 +964,28 @@ try {
         detailReachableAgain,
         pageErrors,
         failed: !reachedBlendingWindow
+          // Ordinary blending is the regression-family case: the map is visible
+          // but native controls must already have relinquished pointer/Tab/a11y
+          // ownership before focus mode exists. Attribution remains visible.
+          || !ordinaryBlendControls
+          || ordinaryBlendControls.owner !== "particle"
+          || ordinaryBlendControls.rootInert !== true
+          || ordinaryBlendControls.rootAriaHidden !== "true"
+          || ordinaryBlendControls.controlCount === 0
+          || ordinaryBlendControls.hitTestable.length > 0
+          || ordinaryBlendControls.tabReachedControl
+          || ordinaryBlendControls.tabReachedDetailedMap
+          || ordinaryBlendControls.controlsInsideInert !== ordinaryBlendControls.controlCount
+          || ordinaryBlendControls.controlsInsideAriaHidden !== ordinaryBlendControls.controlCount
+          || !ordinaryBlendControls.attributionVisible
           // A round that never sampled a focused frame proves nothing.
           || frames.focusFrames === 0
-          // The per-frame promise: never touchable, never the input owner.
+          // The per-frame promise: never touchable, never the input owner, and
+          // no MapLibre button/link regains hit-test/Tab/a11y ownership on the
+          // focus-suspension reverse path.
           || frames.interactiveWhileFocused.length > 0
           || frames.ownedByDetailWhileFocused.length > 0
+          || frames.nativeControlsExposedWhileFocused.length > 0
           // Ownership is already home on the very first focused frame: leaving
           // `detail` releases it on the same frame, so this holds even though
           // the stage itself needs a few frames to walk back.

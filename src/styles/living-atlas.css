@@ -167,6 +167,16 @@
   background: #010506;
 }
 
+/* Earth Dive can keep MapLibre mounted before it owns input. MapLibre's own
+   `.maplibregl-ctrl` rule opts native controls back into pointer-events, so the
+   parent detail layer alone is not an ownership boundary. Key this override to
+   the shared Dive owner; attribution stays visible, while inert/aria-hidden on
+   the map root closes keyboard and accessibility ownership too. */
+.detailed-earth-map[data-dive-owner="particle"] .maplibregl-control-container,
+.detailed-earth-map[data-dive-owner="particle"] .maplibregl-ctrl {
+  pointer-events: none;
+}
+
 .detailed-earth-map .maplibregl-canvas {
   outline: 0;
   touch-action: none;
