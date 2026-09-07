@@ -60,19 +60,49 @@ function particleCanvas(page) {
 }
 
 /**
- * The gesture point: the centre of the particle globe's own canvas, which the
- * detail layer covers exactly when that layer is allowed to be touched. Every
- * wheel in this lane is a REAL wheel at that one point, so which surface
- * receives it is decided by hit testing rather than by the lane - the ownership
- * contract is graded rather than assumed.
+ * Where to put a real wheel so it reaches whichever surface currently owns the
+ * gestures. Every wheel in this lane is a REAL wheel, so the receiving surface
+ * is decided by hit testing rather than by the lane - the ownership contract is
+ * graded rather than assumed.
+ *
+ * The point cannot simply be the canvas centre: the globe draws its place
+ * labels as DOM text above the canvas, and a wheel over one of those never
+ * reaches the canvas listener at all. So the point is re-resolved before every
+ * step by walking outwards from the centre until hit testing lands on a
+ * surface that steers - the particle canvas, or the detail map once it owns the
+ * view. A label that drifts under the cursor mid-gesture therefore costs one
+ * step rather than the run.
  */
-async function gesturePoint(page) {
-  const bounds = await particleCanvas(page).boundingBox();
-  if (!bounds) throw new Error("particle-earth canvas has no browser bounds");
-  return {
-    x: Math.max(4, Math.min(VIEWPORT.width - 4, bounds.x + bounds.width / 2)),
-    y: Math.max(4, Math.min(VIEWPORT.height - 4, bounds.y + bounds.height / 2)),
-  };
+async function gesturePoint(page, fallback = null) {
+  const resolved = await page.evaluate(() => {
+    const canvas = document.querySelector('canvas[data-three-scene="particle-earth"]');
+    if (!canvas) return null;
+    const rect = canvas.getBoundingClientRect();
+    const centre = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+    const steers = (element) => Boolean(
+      element === canvas
+      || (element instanceof Element && element.closest(".detailed-earth-map")),
+    );
+    for (let radius = 0; radius <= 200; radius += 20) {
+      for (let arm = 0; arm < 8; arm += 1) {
+        const angle = (arm * Math.PI) / 4;
+        const x = centre.x + Math.cos(angle) * radius;
+        const y = centre.y + Math.sin(angle) * radius;
+        if (x < 8 || y < 8 || x > window.innerWidth - 8 || y > window.innerHeight - 8) continue;
+        const hit = document.elementFromPoint(x, y);
+        if (!steers(hit)) continue;
+        return {
+          x,
+          y,
+          hit: { tag: hit.tagName, className: hit.getAttribute("class") },
+        };
+      }
+    }
+    return null;
+  });
+  if (resolved) return resolved;
+  if (fallback) return fallback;
+  throw new Error("no point on the globe reaches a surface that steers");
 }
 
 async function wheelAt(page, point, deltaY) {
@@ -157,10 +187,12 @@ async function frameAt(page, stage) {
 }
 
 async function wheelUntil(page, point, deltaY, predicate, label, maxSteps = 60) {
+  let target = point;
   for (let step = 0; step < maxSteps; step += 1) {
     const state = await readDive(page);
     if (predicate(state)) return state;
-    await wheelAt(page, point, deltaY);
+    target = await gesturePoint(page, target);
+    await wheelAt(page, target, deltaY);
     await page.waitForTimeout(120);
   }
   const state = await readDive(page);
@@ -233,7 +265,7 @@ try {
   await forward.page.waitForTimeout(400);
   const beforeCommit = await readDive(forward.page);
   const blendingFrame = await frameAt(forward.page, "blending");
-  await wheelAt(forward.page, point, COMMIT_WHEEL_DELTA);
+  await wheelAt(forward.page, await gesturePoint(forward.page, point), COMMIT_WHEEL_DELTA);
   const committed = await wheelUntil(
     forward.page,
     point,
@@ -380,7 +412,7 @@ try {
 
   // The particle Earth is still answering the wheel and the drag.
   const beforeGesture = await readDive(blocked.page);
-  await wheelAt(blocked.page, blockedPoint, 600);
+  await wheelAt(blocked.page, await gesturePoint(blocked.page, blockedPoint), 600);
   await blocked.page.waitForTimeout(250);
   const afterWheel = await readDive(blocked.page);
   await blocked.page.mouse.move(blockedPoint.x, blockedPoint.y);
