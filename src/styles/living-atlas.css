@@ -111,7 +111,9 @@
 .living-atlas-globe__layer {
   opacity: 0;
   pointer-events: none;
-  transition: opacity var(--motion-journey, 980ms) var(--motion-ease-out, ease);
+  /* #252: the blend length is the Dive's own, published by the section from
+     the resolver, so reduced motion shortens the blend in exactly one place. */
+  transition: opacity var(--earth-dive-blend-ms, var(--motion-journey, 980ms)) var(--motion-ease-out, ease);
   will-change: opacity;
 }
 
@@ -123,18 +125,31 @@
   z-index: 2;
 }
 
-.living-atlas-globe.is-overview .living-atlas-globe__particle-layer,
-.living-atlas-globe.is-detail .living-atlas-globe__detail-layer,
-.living-atlas-globe.is-to-particle.is-target-ready .living-atlas-globe__particle-layer,
-.living-atlas-globe.is-to-detail.is-target-ready .living-atlas-globe__detail-layer {
+.living-atlas-globe.is-overview .living-atlas-globe__particle-layer {
   opacity: 1;
   pointer-events: auto;
 }
 
-.living-atlas-globe.is-to-detail.is-target-ready .living-atlas-globe__particle-layer,
-.living-atlas-globe.is-to-particle.is-target-ready .living-atlas-globe__detail-layer {
+/* #252: the four Dive stages, and nothing else, decide what the detail layer
+   shows and whether it can be touched. Visibility and ownership are separate:
+   at `blending` the surface is fully visible while the particle globe is still
+   the interaction owner.
+     prewarm  - mounted and warming, invisible, particle owns everything;
+     blending - visible, particle STILL owns the gestures;
+     detail   - visible and owning the view. */
+.living-atlas-globe[data-earth-dive="prewarm"] .living-atlas-globe__detail-layer {
   opacity: 0;
   pointer-events: none;
+}
+
+.living-atlas-globe[data-earth-dive="blending"] .living-atlas-globe__detail-layer {
+  opacity: 1;
+  pointer-events: none;
+}
+
+.living-atlas-globe[data-earth-dive="detail"] .living-atlas-globe__detail-layer {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .living-atlas-globe__loading {
@@ -186,20 +201,6 @@
 
 .detailed-earth-map .maplibregl-ctrl-attrib a {
   color: #9fb4ae;
-}
-
-.living-atlas-globe__transition-status {
-  position: absolute;
-  z-index: 7;
-  right: 28px;
-  bottom: 28px;
-  color: rgba(189, 208, 202, 0.78);
-  font: 500 9px/1 ui-monospace, "SFMono-Regular", Consolas, monospace;
-  letter-spacing: 0.12em;
-}
-
-.living-atlas-globe__transition-status.is-error {
-  color: #ffb5a9;
 }
 
 .living-atlas-globe::after {
@@ -4949,11 +4950,6 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   .detailed-earth-map .maplibregl-ctrl-bottom-left {
     left: 4px;
     bottom: 74px;
-  }
-
-  .living-atlas-globe__transition-status {
-    right: 14px;
-    bottom: 94px;
   }
 
   .living-atlas__header {

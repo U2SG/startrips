@@ -110,6 +110,8 @@ jobs:
             command: pnpm qa:route-anchoring
           - name: city-label-anchoring
             command: pnpm qa:city-label-anchoring
+          - name: earth-dive
+            command: pnpm qa:earth-dive
           - name: mobile-contract
             command: pnpm qa:mobile-contract
           - name: guest-share

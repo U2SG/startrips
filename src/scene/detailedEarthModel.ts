@@ -1,4 +1,6 @@
 import type { ExpressionSpecification, StyleSpecification } from "maplibre-gl";
+import type { EarthDiveStage } from "./earthDive";
+import type { SemanticZoomSnapshot } from "./semanticZoom";
 
 export type DetailedEarthLanguage = "zh" | "bilingual";
 
@@ -86,6 +88,62 @@ export function getDetailedEarthRouteFrame(
 
 export function shouldReturnToParticleEarth(zoom: number) {
   return zoom <= DETAILED_EARTH_RETURN_ZOOM;
+}
+
+// #252: the MapLibre scale band a Semantic Earth Dive hands off across. The
+// floor sits above DETAILED_EARTH_RETURN_ZOOM so a freshly committed handoff
+// cannot immediately ask to go back, and the ceiling is where the particle
+// authority's own maximum zoom lands on the map.
+export const DETAILED_EARTH_HANDOFF_ZOOM_FLOOR = 6.4;
+export const DETAILED_EARTH_HANDOFF_ZOOM_CEILING = 9.6;
+// Where a map with no focus at all looks: the geographic centre the product has
+// always fallen back to.
+export const DETAILED_EARTH_FALLBACK_CENTER: [number, number] = [104, 34];
+
+export type EarthDiveHandoffFrame = {
+  center: [number, number];
+  zoom: number;
+};
+
+/**
+ * The MapLibre frame that corresponds to a particle focus at one Dive stage.
+ *
+ * Two properties make the handoff continuous, and both are asserted in
+ * `detailedEarthModel.test.ts`:
+ *
+ * - the frame is a function of the zoom AUTHORITY's snapshot, so the map tracks
+ *   the particle camera while the particle globe still owns input, instead of
+ *   mounting at a fixed scale and then flying to the focus;
+ * - it does not vary with the stage, so nothing about the framing changes as
+ *   the surface becomes visible and then takes ownership. The stage only says
+ *   whether a frame exists at all: at `particle` there is no map to frame.
+ */
+export function getEarthDiveHandoffFrame({
+  stage,
+  snapshot,
+  focusPoint,
+  routePoints,
+}: {
+  stage: EarthDiveStage;
+  snapshot: SemanticZoomSnapshot;
+  focusPoint?: { lat: number; lon: number } | null;
+  routePoints?: readonly { lat: number; lon: number }[];
+}): EarthDiveHandoffFrame | null {
+  if (stage === "particle") return null;
+  const routeFrame = getDetailedEarthRouteFrame(routePoints ?? []);
+  // The particle globe anchors a focused Journey on its route frame centre and
+  // falls back to the focused point, so the map must read the same order or the
+  // two surfaces would be centred on different places.
+  const center: [number, number] = routeFrame?.center
+    ?? (focusPoint && Number.isFinite(focusPoint.lat) && Number.isFinite(focusPoint.lon)
+      ? [focusPoint.lon, focusPoint.lat]
+      : DETAILED_EARTH_FALLBACK_CENTER);
+  const progress = Math.min(1, Math.max(0, snapshot.localProgress));
+  const span = DETAILED_EARTH_HANDOFF_ZOOM_CEILING - DETAILED_EARTH_HANDOFF_ZOOM_FLOOR;
+  return {
+    center,
+    zoom: DETAILED_EARTH_HANDOFF_ZOOM_FLOOR + progress * span,
+  };
 }
 
 export function clampDetailedEarthPitch(pitch: number) {

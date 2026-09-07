@@ -106,6 +106,7 @@ import {
   resolveGlobeSemanticZoomForFrame,
   type GlobeSemanticZoom,
   type GlobeSemanticZoomState,
+  type SemanticZoomSnapshot,
 } from "./semanticZoom";
 import { terrainReliefBumpScale, terrainReliefOpacity } from "./terrainRelief";
 
@@ -1253,6 +1254,20 @@ interface ParticleEarthSceneProps {
   };
   showArchiveSignals?: boolean;
   onReady?: () => void;
+  /**
+   * #252: the scene owns the camera, so it is the only place that can report
+   * where the semantic-zoom authority currently stands. It publishes that
+   * authority's own snapshot and never a raw camera value, so a React owner
+   * cannot start classifying zoom on its own.
+   */
+  onSemanticZoomSnapshot?: (snapshot: SemanticZoomSnapshot) => void;
+  /**
+   * #252: a camera hand-back. When a detail owner relinquishes the Semantic
+   * Earth Dive it asks the particle camera to stand where the zoom authority
+   * says the band reopens, so the two surfaces do not disagree about where the
+   * user is. The revision is what makes it an event rather than a value.
+   */
+  zoomIntent?: { zoom: number; revision: number };
   onGlobePointPick?: (point: { latitude: number; longitude: number }) => void;
   dragToRotate?: boolean;
   wheelToZoom?: boolean;
@@ -1571,6 +1586,8 @@ export function ParticleEarthScene({
   temporalReveal,
   showArchiveSignals = true,
   onReady,
+  onSemanticZoomSnapshot,
+  zoomIntent,
   onGlobePointPick,
   dragToRotate = false,
   wheelToZoom = true,
@@ -1594,6 +1611,8 @@ export function ParticleEarthScene({
   const latestOnJourneyRoutePointActivate = useRef(onJourneyRoutePointActivate);
   const latestTemporalReveal = useRef(temporalReveal);
   const latestOnReady = useRef(onReady);
+  const latestOnSemanticZoomSnapshot = useRef(onSemanticZoomSnapshot);
+  const latestZoomIntent = useRef(zoomIntent);
   const latestOnGlobePointPick = useRef(onGlobePointPick);
   const latestDragToRotate = useRef(dragToRotate);
   const latestWheelToZoom = useRef(wheelToZoom);
@@ -1614,6 +1633,8 @@ export function ParticleEarthScene({
   latestOnJourneyRoutePointActivate.current = onJourneyRoutePointActivate;
   latestTemporalReveal.current = temporalReveal;
   latestOnReady.current = onReady;
+  latestOnSemanticZoomSnapshot.current = onSemanticZoomSnapshot;
+  latestZoomIntent.current = zoomIntent;
   latestOnGlobePointPick.current = onGlobePointPick;
   latestDragToRotate.current = dragToRotate;
   latestWheelToZoom.current = wheelToZoom;
@@ -2751,6 +2772,10 @@ export function ParticleEarthScene({
     let cityTierData: { cities: CityPoint[] } | null = null;
     let lastCityTier: "capitals" | "prefectures" | "all" | null = null;
     let semanticZoomState: GlobeSemanticZoomState = resolveGlobeSemanticZoom({ zoom: interactiveZoom, qualityProfile: currentQuality });
+    // Null until the first publish, so a Dive owner that mounts with the camera
+    // already inside a band still learns where it stands.
+    let publishedSemanticZoomSnapshot: SemanticZoomSnapshot | null = null;
+    let appliedZoomIntentRevision = latestZoomIntent.current?.revision ?? null;
     const activePointers = new Map<number, { x: number; y: number }>();
     let wheelInteractionUntil = 0;
     const rejectedPointerIds = new Set<number>();
@@ -4577,6 +4602,14 @@ export function ParticleEarthScene({
         Math.min(1, baseAtmosphereOpacity * audioGain.ambient),
       );
       wireMaterial.opacity = interpolate(wireMaterial.opacity, target.wireOpacity);
+      // #252: a camera hand-back arrives as a revision, and is treated exactly
+      // like a manual gesture so the focus machinery does not undo it.
+      const zoomIntentNow = latestZoomIntent.current;
+      if (zoomIntentNow && zoomIntentNow.revision !== appliedZoomIntentRevision) {
+        appliedZoomIntentRevision = zoomIntentNow.revision;
+        claimManualInteraction();
+        applyAnchoredZoom(zoomIntentNow.zoom, null, interactionAnchorScreen);
+      }
       semanticZoomState = resolveGlobeSemanticZoomForFrame({
         zoom: interactiveZoom,
         current: semanticZoomState,
@@ -4585,6 +4618,21 @@ export function ParticleEarthScene({
       });
       host.dataset.semanticZoom = semanticZoomState.state;
       host.dataset.cityLod = semanticZoomState.cityTier;
+      host.dataset.localProgress = semanticZoomState.snapshot.localProgress.toFixed(3);
+      // Publish the authority's snapshot to whoever owns the Dive. Only a
+      // material move is reported, so a resting camera costs nothing.
+      const snapshot = semanticZoomState.snapshot;
+      if (
+        latestOnSemanticZoomSnapshot.current
+        && (
+          !publishedSemanticZoomSnapshot
+          || snapshot.level !== publishedSemanticZoomSnapshot.level
+          || Math.abs(snapshot.localProgress - publishedSemanticZoomSnapshot.localProgress) >= 0.004
+        )
+      ) {
+        publishedSemanticZoomSnapshot = snapshot;
+        latestOnSemanticZoomSnapshot.current(snapshot);
+      }
       updateCoastlineRefinement(now);
       const coastlineWeights = semanticZoomState.coastlineWeights;
       const coastlineLod = semanticZoomState.coastlineLod;

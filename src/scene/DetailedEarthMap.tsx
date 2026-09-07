@@ -11,6 +11,7 @@ import {
   DETAILED_EARTH_DRAG_PAN_OPTIONS,
   getDetailedEarthRouteFrame,
   getDetailedEarthFocusDuration,
+  getEarthDiveHandoffFrame,
   DETAILED_EARTH_INITIAL_ZOOM,
   DETAILED_EARTH_MAX_PITCH,
   DETAILED_EARTH_MAX_ZOOM,
@@ -26,8 +27,27 @@ import {
   shouldReturnToParticleEarth,
   useGlobeProjection,
 } from "./detailedEarthModel";
+import type { DetailReadiness, EarthDiveOwner, EarthDiveStage } from "./earthDive";
+import type { SemanticZoomSnapshot } from "./semanticZoom";
+
+// #252 section 2: the handoff has to prove "the same place did not move", so
+// the map publishes the two screen-space quantities that decide it — where the
+// focused anchor lands, and the local geographic scale there. Latitude is used
+// for the scale on purpose: a degree of longitude shrinks with latitude, so a
+// north-south probe measures the projection and not the anchor's latitude.
+const LOCAL_SCALE_PROBE_DEG = 0.05;
 
 type DetailedEarthMapProps = {
+  /** Which Dive stage this map is mounted under. */
+  diveStage?: EarthDiveStage;
+  /**
+   * Who owns camera and gesture input. While the particle globe owns it this
+   * map follows the handoff frame and answers no gestures, however visible it
+   * already is; opacity never decides ownership.
+   */
+  diveOwner?: EarthDiveOwner;
+  /** The zoom authority's snapshot the handoff frame is derived from. */
+  diveSnapshot?: SemanticZoomSnapshot;
   focusPoint?: { lat: number; lon: number } | null;
   focusRoute?: JourneyRoute | null;
   focusRevision?: number;
@@ -35,7 +55,14 @@ type DetailedEarthMapProps = {
   language: DetailedEarthLanguage;
   onGlobePointPick?: (point: { latitude: number; longitude: number }) => void;
   onOverviewRequest?: () => void;
-  onReady?: () => void;
+  /**
+   * How far this renderer has come. #252 section 3 separates renderer readiness
+   * from tile settlement: `visual-ready` means the style is parsed and the
+   * handoff frame can be drawn, `fully-settled` that the tiles stopped moving.
+   * The Dive blends on the former, so a slow or retrying network cannot strand
+   * the transition and no timer is involved in either.
+   */
+  onReadinessChange?: (readiness: DetailReadiness) => void;
 };
 
 function applyMapLanguage(map: MapLibreMap, language: DetailedEarthLanguage) {
@@ -76,6 +103,9 @@ function applyDetailedEarthFocus(
 }
 
 export default function DetailedEarthMap({
+  diveStage = "detail",
+  diveOwner = "detail",
+  diveSnapshot = { level: "local", zoom: Number.NaN, localProgress: 1 },
   focusPoint,
   focusRoute,
   focusRevision = 0,
@@ -83,36 +113,53 @@ export default function DetailedEarthMap({
   language,
   onGlobePointPick,
   onOverviewRequest,
-  onReady,
+  onReadinessChange,
 }: DetailedEarthMapProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
+  // One request per period of ownership: the map asks to go home once, and the
+  // latch is released when ownership is no longer the map's, so a second dive
+  // through the same instance can ask again.
+  const overviewRequestedRef = useRef(false);
   const languageRef = useRef(language);
   const focusPointRef = useRef(focusPoint);
   const focusRouteRef = useRef(focusRoute);
   const onPickRef = useRef(onGlobePointPick);
   const onOverviewRequestRef = useRef(onOverviewRequest);
-  const onReadyRef = useRef(onReady);
+  const onReadinessChangeRef = useRef(onReadinessChange);
+  const diveStageRef = useRef(diveStage);
+  const diveOwnerRef = useRef(diveOwner);
+  const diveSnapshotRef = useRef(diveSnapshot);
+  diveStageRef.current = diveStage;
+  diveOwnerRef.current = diveOwner;
+  diveSnapshotRef.current = diveSnapshot;
   languageRef.current = language;
   focusPointRef.current = focusPoint;
   focusRouteRef.current = focusRoute;
   onPickRef.current = onGlobePointPick;
   onOverviewRequestRef.current = onOverviewRequest;
-  onReadyRef.current = onReady;
+  onReadinessChangeRef.current = onReadinessChange;
+
+  const handoffFrame = () => getEarthDiveHandoffFrame({
+    stage: diveStageRef.current,
+    snapshot: diveSnapshotRef.current,
+    focusPoint: focusPointRef.current,
+    routePoints: focusRouteRef.current?.points ?? [],
+  });
 
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
-    const initialRouteFrame = getDetailedEarthRouteFrame(focusRouteRef.current?.points ?? []);
-    const initialCenter: [number, number] = initialRouteFrame?.center
-      ?? (focusPointRef.current
-        ? [focusPointRef.current.lon, focusPointRef.current.lat]
-        : [104, 34]);
+    // The map is framed ONCE, from the particle focus it is taking over from.
+    // The superseded path mounted at DETAILED_EARTH_INITIAL_ZOOM and then flew
+    // to the same focus, and that second flight is exactly the jump #252 is
+    // about.
+    const mountFrame = handoffFrame();
     const map = new MapLibreMap({
       container: host,
       style: getDetailedEarthStyle(),
-      center: initialCenter,
-      zoom: DETAILED_EARTH_INITIAL_ZOOM,
+      center: mountFrame?.center ?? [104, 34],
+      zoom: mountFrame?.zoom ?? DETAILED_EARTH_INITIAL_ZOOM,
       minZoom: DETAILED_EARTH_MIN_ZOOM,
       maxZoom: DETAILED_EARTH_MAX_ZOOM,
       maxPitch: DETAILED_EARTH_MAX_PITCH,
@@ -126,8 +173,6 @@ export default function DetailedEarthMap({
       fadeDuration: 650,
     });
     let initialLoadSettled = false;
-    let overviewRequested = false;
-    let settleTimer: number | null = null;
     mapRef.current = map;
     // Keep MapLibre's native gesture ownership: primary mouse / one-finger
     // touch pans, while right-button or Ctrl+drag rotates. This avoids the
@@ -143,24 +188,45 @@ export default function DetailedEarthMap({
     map.addControl(new NavigationControl({ showCompass: true }), "bottom-right");
     map.addControl(new AttributionControl({ compact: true }), "bottom-left");
 
+    const publishReadiness = (readiness: DetailReadiness) => {
+      host.dataset.mapReadiness = readiness;
+      onReadinessChangeRef.current?.(readiness);
+    };
+    // The renderer exists but has drawn nothing yet.
+    publishReadiness("mounted");
+
+    // #252 section 2: publish where the focused anchor lands and how large a
+    // degree of latitude is there, so the handoff can be measured rather than
+    // asserted. Both come from MapLibre's own projection.
+    const publishAnchorFrame = () => {
+      const anchor = handoffFrame()?.center;
+      if (!anchor) return;
+      const projected = map.project(anchor);
+      const probe = map.project([anchor[0], anchor[1] + LOCAL_SCALE_PROBE_DEG]);
+      host.dataset.handoffAnchorX = projected.x.toFixed(2);
+      host.dataset.handoffAnchorY = projected.y.toFixed(2);
+      host.dataset.handoffZoom = map.getZoom().toFixed(4);
+      host.dataset.handoffScale = (
+        Math.hypot(projected.x - probe.x, projected.y - probe.y) / LOCAL_SCALE_PROBE_DEG
+      ).toFixed(3);
+    };
+
     map.on("load", () => {
       // Raster fallback remains Mercator; vector styles use the globe so a
       // polar focus is not trapped by the flat-map viewport.
       if (useGlobeProjection()) map.setProjection({ type: "globe" });
       applyMapLanguage(map, languageRef.current);
-      applyDetailedEarthFocus(map, focusPointRef.current, focusRouteRef.current, 0);
-      const settle = () => {
-        if (initialLoadSettled) return;
-        initialLoadSettled = true;
-        host.dataset.mapReady = "true";
-        onReadyRef.current?.();
-      };
-      map.once("idle", settle);
-      // Safety net: under heavy load MapLibre can keep re-fetching tiles and
-      // never reach idle; enter the detail view anyway and let tiles finish
-      // progressively.
-      settleTimer = window.setTimeout(settle, 3000);
+      // No second focus flight at handoff: the mount frame already IS the focus.
+      initialLoadSettled = true;
+      host.dataset.mapReady = "true";
+      // The style is parsed and the handoff frame can be drawn. This is the
+      // blend gate, and it is an event from the renderer rather than a timer.
+      publishReadiness("visual-ready");
+      publishAnchorFrame();
+      map.once("idle", () => publishReadiness("fully-settled"));
     });
+
+    map.on("move", publishAnchorFrame);
 
     map.on("click", (event) => {
       if (!onPickRef.current) return;
@@ -172,10 +238,11 @@ export default function DetailedEarthMap({
     map.on("zoomend", () => {
       if (
         !initialLoadSettled
-        || overviewRequested
+        || diveOwnerRef.current !== "detail"
+        || overviewRequestedRef.current
         || !shouldReturnToParticleEarth(map.getZoom())
       ) return;
-      overviewRequested = true;
+      overviewRequestedRef.current = true;
       onOverviewRequestRef.current?.();
     });
     map.on("error", (event) => {
@@ -183,7 +250,6 @@ export default function DetailedEarthMap({
     });
 
     return () => {
-      if (settleTimer !== null) window.clearTimeout(settleTimer);
       mapRef.current = null;
       map.remove();
     };
@@ -195,9 +261,17 @@ export default function DetailedEarthMap({
     applyMapLanguage(map, language);
   }, [language]);
 
+  const handoffFramedRef = useRef(false);
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
+    // The first run would re-apply the focus the mount frame already shows, and
+    // that re-application WAS the visible second flight. Later runs are genuine
+    // focus changes and still fly.
+    if (!handoffFramedRef.current) {
+      handoffFramedRef.current = true;
+      return;
+    }
     applyDetailedEarthFocus(
       map,
       focusPoint,
@@ -205,6 +279,44 @@ export default function DetailedEarthMap({
       getDetailedEarthFocusDuration(focusFlightProfile),
     );
   }, [focusFlightProfile, focusPoint, focusRevision, focusRoute]);
+
+  // While the particle globe owns the camera the map FOLLOWS the handoff frame,
+  // through a non-animated camera update: the surface the user is about to be
+  // handed is already standing where the particle camera stands, so the commit
+  // moves nothing. Once ownership transfers the map keeps its own camera.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || diveOwner === "detail") return;
+    const frame = getEarthDiveHandoffFrame({
+      stage: diveStage,
+      snapshot: diveSnapshot,
+      focusPoint,
+      routePoints: focusRoute?.points ?? [],
+    });
+    if (!frame) return;
+    map.jumpTo({ center: frame.center, zoom: frame.zoom });
+  }, [diveOwner, diveSnapshot, diveStage, focusPoint, focusRoute]);
+
+  // Stage and interaction owner are different state (#252 section 4): a
+  // prewarmed or blending map is on the screen budget but must not take the
+  // gestures the particle globe is still answering.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const owns = diveOwner === "detail";
+    overviewRequestedRef.current = false;
+    for (const handler of [
+      map.dragPan,
+      map.dragRotate,
+      map.scrollZoom,
+      map.touchZoomRotate,
+      map.keyboard,
+      map.doubleClickZoom,
+    ]) {
+      if (owns) handler.enable();
+      else handler.disable();
+    }
+  }, [diveOwner]);
 
   useEffect(() => {
     const canvas = mapRef.current?.getCanvas();
@@ -216,6 +328,8 @@ export default function DetailedEarthMap({
       ref={hostRef}
       className="detailed-earth-map"
       data-map-provider="configurable-vector"
+      data-dive-stage={diveStage}
+      data-dive-owner={diveOwner}
       data-map-language={language}
       data-point-pick={onGlobePointPick ? "true" : "false"}
       data-primary-drag="pan"
