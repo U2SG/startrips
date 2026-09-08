@@ -2413,39 +2413,34 @@ async function verifyFinalAcceptanceMobileFlow() {
       console.error(`[qa-post-login] final:${viewportLabel}:playback-ready`);
       const historyLengthBeforePlaybackReturn = await page.evaluate(() => window.history.length);
       const progress = page.locator('.journey-playback__progress input[aria-label="播放进度"]');
-      // #245 return evidence needs a deterministic committed media beat. Keep
-      // the existing scrubber as the one seek owner. Home uses the native range
-      // change path to reset the run; subsequent ArrowRight presses exercise
-      // the scrubber's explicit meaningful-step handler using the same trusted
-      // keyboard path as a viewer.
-      // Wait for each presentation owner to settle before issuing a newer seek,
-      // otherwise a still-loading media beat can be skipped before it commits.
+      // #245 return evidence needs a deterministic committed media beat. Drive
+      // the public Playback range through its existing onChange -> elapsed plan
+      // -> seek contract. The fixture's second Route Point media occupies the
+      // broad late-middle window of the standard-tempo run, so 75% lands inside
+      // fa-image-2 without touching private app state or QA-only DOM datasets.
       await progress.focus();
       await progress.press("Home");
       await page.waitForFunction(() => (
         document.querySelector(".journey-playback")?.getAttribute("data-playback-step") === "0"
       ), null, { timeout: 2_000 });
+      await progress.evaluate((input, fraction) => {
+        if (!(input instanceof HTMLInputElement)) throw new Error("Playback progress input missing");
+        const min = Number(input.min || "0");
+        const max = Number(input.max || "1000");
+        const value = Math.round(min + (max - min) * fraction);
+        const nativeValueSetter = Object.getOwnPropertyDescriptor(
+          HTMLInputElement.prototype,
+          "value",
+        )?.set;
+        if (!nativeValueSetter) throw new Error("Playback progress value setter unavailable");
+        nativeValueSetter.call(input, String(value));
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      }, 0.75);
       const returnedMedia = page.locator('.journey-playback [data-shared-media-id="fa-image-2"]');
-      let reachedReturnedMedia = false;
-      for (let attempt = 0; attempt < 8; attempt += 1) {
-        if (await returnedMedia.isVisible()) {
-          reachedReturnedMedia = true;
-          break;
-        }
-        const previousStep = await page.locator(".journey-playback").getAttribute("data-playback-step");
-        await progress.press("ArrowRight");
-        await page.waitForFunction((step) => (
-          document.querySelector(".journey-playback")?.getAttribute("data-playback-step") !== step
-        ), previousStep, { timeout: 2_000 });
-        await page.waitForFunction(() => (
-          document.querySelector(".journey-playback")?.getAttribute("data-playback-presentation-hold") === "none"
-        ), null, { timeout: 5_000 });
-        reachedReturnedMedia = await returnedMedia.isVisible();
-        if (reachedReturnedMedia) break;
-      }
-      if (!reachedReturnedMedia) {
-        await returnedMedia.waitFor({ state: "visible", timeout: 5_000 });
-      }
+      await returnedMedia.waitFor({ state: "visible", timeout: 5_000 });
+      await page.waitForFunction(() => (
+        document.querySelector(".journey-playback")?.getAttribute("data-playback-presentation-hold") === "none"
+      ), null, { timeout: 5_000 });
       await progress.blur();
       // Freeze the now-presented beat before exiting so the autoplay clock cannot
       // advance after the presentation owner has committed the return identity.
