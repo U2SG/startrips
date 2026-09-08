@@ -100,13 +100,13 @@ async function createVerifiedSession(label: string) {
   return { cookie: cookie!, userId: signInPayload.user.id };
 }
 
-async function createAuthenticatedAtlas(label: string) {
-  const identity = await createVerifiedSession(label);
+/** Creating an organization also makes it the session's active one. */
+async function createOrganization(label: string, cookie: string) {
   const organizationResponse = await app.request(
     `${TEST_ORIGIN}/api/auth/organization/create`,
     {
       method: "POST",
-      headers: authHeaders(identity.cookie),
+      headers: authHeaders(cookie),
       body: JSON.stringify({
         name: `${label} Atlas`,
         slug: `${label.toLowerCase()}-${randomUUID()}`,
@@ -116,16 +116,26 @@ async function createAuthenticatedAtlas(label: string) {
   expect(organizationResponse.status).toBe(200);
   const organization = await organizationResponse.json() as { id: string };
   authOrganizationIds.push(organization.id);
+  return organization.id;
+}
 
+async function bootstrapAtlas(label: string, cookie: string) {
   const bootstrap = await app.request(`${TEST_ORIGIN}/api/atlases/bootstrap`, {
     method: "POST",
-    headers: authHeaders(identity.cookie),
+    headers: authHeaders(cookie),
     body: JSON.stringify({ title: `${label} Atlas`, dedication: "private" }),
   });
   expect([200, 201]).toContain(bootstrap.status);
   const payload = await bootstrap.json() as { atlas: { id: string } };
   atlasIds.push(payload.atlas.id);
-  return { ...identity, organizationId: organization.id, atlasId: payload.atlas.id };
+  return payload.atlas.id;
+}
+
+async function createAuthenticatedAtlas(label: string) {
+  const identity = await createVerifiedSession(label);
+  const organizationId = await createOrganization(label, identity.cookie);
+  const atlasId = await bootstrapAtlas(label, identity.cookie);
+  return { ...identity, organizationId, atlasId };
 }
 
 beforeAll(async () => {
@@ -311,17 +321,293 @@ describe("API robustness", () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ status: "ok" });
   });
+});
 
-  it("returns 400 for malformed JSON bodies instead of 500", async () => {
-    const identity = await createAuthenticatedAtlas("Malformed");
-    const response = await app.request(`${TEST_ORIGIN}/api/journeys`, {
-      method: "POST",
-      headers: authHeaders(identity.cookie),
-      body: '{"title": ',
+/**
+ * Every JSON-accepting route answers an unusable body with its own 400 rather
+ * than the global `INVALID_JSON`, and a malformed body, a well-formed
+ * non-object body and a well-shaped-but-invalid body are indistinguishable to
+ * the client.
+ *
+ * The whole block spends ONE sign-up: `/sign-up/email` allows five per ten
+ * minutes across the suite, and a user may own exactly one organization
+ * (`organizationLimit: 1`). The organization therefore starts without an
+ * atlas, so the bootstrap case reaches the body guard instead of being
+ * answered by an existing atlas, and the nested block creates the atlas the
+ * remaining cases need.
+ */
+describe("unusable request bodies", () => {
+  const MALFORMED = '{"title": ';
+  const NON_OBJECT_BODIES = ["null", '"journey"', "42", "[]"];
+
+  let session: Awaited<ReturnType<typeof createVerifiedSession>>;
+  let organizationId = "";
+
+  beforeAll(async () => {
+    session = await createVerifiedSession("Unusable");
+    organizationId = await createOrganization("Unusable", session.cookie);
+  });
+
+  /**
+   * Sends the malformed body, each well-formed non-object body and one
+   * well-shaped-but-invalid body, and asserts the route answers all of them
+   * identically.
+   */
+  async function expectOneRefusal(
+    method: string,
+    path: string,
+    wellShapedButInvalid: string,
+    error: string,
+  ) {
+    for (const body of [MALFORMED, ...NON_OBJECT_BODIES, wellShapedButInvalid]) {
+      const response = await app.request(`${TEST_ORIGIN}${path}`, {
+        method,
+        headers: authHeaders(session.cookie),
+        body,
+      });
+      expect(response.status, `${method} ${path} <- ${body}`).toBe(400);
+      await expect(response.json()).resolves.toMatchObject({ error });
+    }
+  }
+
+  it("refuses an unusable atlas bootstrap body without creating an atlas", async () => {
+    await expectOneRefusal("POST", "/api/atlases/bootstrap", "{}", "INVALID_ATLAS");
+
+    const [atlasCount] = await db
+      .select({ value: count() })
+      .from(atlases)
+      .where(eq(atlases.organizationId, organizationId));
+    expect(atlasCount.value).toBe(0);
+  });
+
+  describe("once the atlas exists", () => {
+    let atlasId = "";
+
+    beforeAll(async () => {
+      atlasId = await bootstrapAtlas("Unusable", session.cookie);
     });
-    expect(response.status).toBe(400);
-    await expect(response.json()).resolves.toMatchObject({
-      error: "INVALID_JSON",
+
+    it("refuses an unusable atlas update body without changing the atlas", async () => {
+      await expectOneRefusal("PATCH", "/api/atlases/current", "{}", "INVALID_ATLAS");
+
+      const [atlas] = await db
+        .select({ title: atlases.title })
+        .from(atlases)
+        .where(eq(atlases.id, atlasId));
+      expect(atlas.title).toBe("Unusable Atlas");
+    });
+
+    it("refuses an unusable journey create body without writing a journey", async () => {
+      const before = await listJourneysForAtlas(atlasId);
+      await expectOneRefusal("POST", "/api/journeys", "{}", "INVALID_JOURNEY");
+      const after = await listJourneysForAtlas(atlasId);
+      expect(after).toHaveLength(before.length);
+    });
+
+    it("refuses an unusable journey update body without changing the journey", async () => {
+      const journey = await createJourneyForAtlas(atlasId, session.userId, {
+        ...baseJourney,
+        title: "Unusable update",
+      });
+      if (!journey) throw new Error("Journey fixture was not created");
+
+      await expectOneRefusal(
+        "PATCH",
+        `/api/journeys/${journey.id}`,
+        "{}",
+        "INVALID_JOURNEY",
+      );
+
+      const [row] = await db
+        .select({ title: journeys.title, revision: journeys.revision })
+        .from(journeys)
+        .where(eq(journeys.id, journey.id));
+      expect(row.title).toBe("Unusable update");
+      expect(row.revision).toBe(journey.revision);
+    });
+
+    it("refuses an unusable cover body without clearing the cover", async () => {
+      const journey = await createJourneyForAtlas(atlasId, session.userId, {
+        ...baseJourney,
+        title: "Unusable cover",
+      });
+      if (!journey) throw new Error("Journey fixture was not created");
+      const [asset] = await db
+        .insert(mediaAssets)
+        .values({
+          journeyId: journey.id,
+          routePointId: null,
+          storageDriver: "test",
+          storageKey: `${atlasId}/${journey.id}/${randomUUID()}`,
+          fileName: "cover.jpg",
+          mimeType: "image/jpeg",
+          bytes: 128,
+          sortOrder: 0,
+          uploadedByUserId: session.userId,
+        })
+        .returning({ id: mediaAssets.id });
+      await setJourneyCoverForAtlas(journey.id, atlasId, asset.id);
+
+      // An omitted `coverMediaAssetId` clears the cover, so a non-object body
+      // used to read as a deliberate clear rather than as a refusal.
+      await expectOneRefusal(
+        "PATCH",
+        `/api/journeys/${journey.id}/cover`,
+        '{"coverMediaAssetId":5}',
+        "INVALID_COVER",
+      );
+
+      const [row] = await db
+        .select({ coverMediaAssetId: journeys.coverMediaAssetId })
+        .from(journeys)
+        .where(eq(journeys.id, journey.id));
+      expect(row.coverMediaAssetId).toBe(asset.id);
+    });
+
+    it("refuses an unusable upload start body without writing an upload", async () => {
+      const [before] = await db
+        .select({ value: count() })
+        .from(mediaUploads)
+        .where(eq(mediaUploads.atlasId, atlasId));
+
+      await expectOneRefusal("POST", "/api/uploads/start", "{}", "INVALID_UPLOAD");
+
+      const [after] = await db
+        .select({ value: count() })
+        .from(mediaUploads)
+        .where(eq(mediaUploads.atlasId, atlasId));
+      expect(after.value).toBe(before.value);
+    });
+
+    it("refuses an unusable completion body and leaves the upload initiated", async () => {
+      const journey = await createJourneyForAtlas(atlasId, session.userId, {
+        ...baseJourney,
+        title: "Unusable completion",
+      });
+      if (!journey) throw new Error("Journey fixture was not created");
+      const [upload] = await db
+        .insert(mediaUploads)
+        .values({
+          atlasId,
+          journeyId: journey.id,
+          storageDriver: "test",
+          storageKey: `${atlasId}/${journey.id}/${randomUUID()}`,
+          providerUploadId: randomUUID(),
+          fileName: "unusable.jpg",
+          mimeType: "image/jpeg",
+          bytes: 128,
+          partSize: 128,
+          partCount: 1,
+          status: "initiated",
+          createdByUserId: session.userId,
+        })
+        .returning({ id: mediaUploads.id });
+
+      await expectOneRefusal(
+        "POST",
+        `/api/uploads/${upload.id}/complete`,
+        "{}",
+        "INVALID_UPLOAD_PARTS",
+      );
+
+      // The refusal lands before the finalization claim, so the upload is
+      // still completable by a caller that sends a usable body.
+      const [row] = await db
+        .select({
+          status: mediaUploads.status,
+          completionAttemptId: mediaUploads.completionAttemptId,
+        })
+        .from(mediaUploads)
+        .where(eq(mediaUploads.id, upload.id));
+      expect(row.status).toBe("initiated");
+      expect(row.completionAttemptId).toBeNull();
+    });
+
+    it("refuses an unusable media order body without reordering media", async () => {
+      const journey = await createJourneyForAtlas(atlasId, session.userId, {
+        ...baseJourney,
+        title: "Unusable order",
+      });
+      if (!journey) throw new Error("Journey fixture was not created");
+      const assets = await db
+        .insert(mediaAssets)
+        .values(["a.jpg", "b.jpg"].map((fileName, index) => ({
+          journeyId: journey.id,
+          routePointId: null,
+          storageDriver: "test",
+          storageKey: `${atlasId}/${journey.id}/${randomUUID()}`,
+          fileName,
+          mimeType: "image/jpeg",
+          bytes: 128,
+          sortOrder: index,
+          uploadedByUserId: session.userId,
+        })))
+        .returning({ id: mediaAssets.id });
+
+      await expectOneRefusal(
+        "POST",
+        "/api/uploads/assets/reorder",
+        "{}",
+        "INVALID_MEDIA_ORDER",
+      );
+
+      const rows = await db
+        .select({ id: mediaAssets.id, sortOrder: mediaAssets.sortOrder })
+        .from(mediaAssets)
+        .where(eq(mediaAssets.journeyId, journey.id));
+      expect(
+        rows.sort((first, second) => first.sortOrder - second.sortOrder)
+          .map((row) => row.id),
+      ).toEqual(assets.map((asset) => asset.id));
+    });
+
+    it("refuses an unusable media move body without moving media", async () => {
+      const journey = await createJourneyForAtlas(atlasId, session.userId, {
+        ...baseJourney,
+        title: "Unusable move",
+      });
+      if (!journey) throw new Error("Journey fixture was not created");
+      const [asset] = await db
+        .insert(mediaAssets)
+        .values({
+          journeyId: journey.id,
+          routePointId: null,
+          storageDriver: "test",
+          storageKey: `${atlasId}/${journey.id}/${randomUUID()}`,
+          fileName: "moved.jpg",
+          mimeType: "image/jpeg",
+          bytes: 128,
+          sortOrder: 0,
+          uploadedByUserId: session.userId,
+        })
+        .returning({ id: mediaAssets.id });
+
+      await expectOneRefusal(
+        "POST",
+        "/api/uploads/assets/move",
+        "{}",
+        "INVALID_MEDIA_MOVE",
+      );
+      await expectOneRefusal(
+        "POST",
+        "/api/uploads/assets/move/undo",
+        "{}",
+        "INVALID_MEDIA_MOVE_UNDO",
+      );
+
+      const [row] = await db
+        .select({
+          journeyId: mediaAssets.journeyId,
+          routePointId: mediaAssets.routePointId,
+          sortOrder: mediaAssets.sortOrder,
+        })
+        .from(mediaAssets)
+        .where(eq(mediaAssets.id, asset.id));
+      expect(row).toEqual({
+        journeyId: journey.id,
+        routePointId: null,
+        sortOrder: 0,
+      });
     });
   });
 });

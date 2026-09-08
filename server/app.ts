@@ -83,6 +83,12 @@ app.onError((error, context) => {
       503,
     );
   }
+  // The backstop, not the normal path. Every route module that reads a JSON
+  // body answers a malformed one with its own 400 through `readJsonObject`
+  // (or `readShareInput`), so a client cannot tell a malformed body from a
+  // non-object or an invalid one. What still arrives here is the Better Auth
+  // handler mounted at `/api/auth/*`, whose bodies this app never parses, and
+  // any future route added without that guard.
   if (error instanceof SyntaxError) {
     return context.json(
       { error: "INVALID_JSON", message: "Request body is not valid JSON" },
