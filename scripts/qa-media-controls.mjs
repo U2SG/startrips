@@ -863,6 +863,189 @@ try {
     await story.page.close();
   }
 
+  const storyDesktop = await createQaPage("/?qaState=journey-story", onePixelGif, { mobile: false });
+  try {
+    const desktopStory = storyDesktop.page.locator(".journey-story");
+    await desktopStory.waitFor({ state: "visible" });
+    const readingView = await desktopStory.evaluate((root) => ({
+      layout: root.getAttribute("data-story-layout"),
+      editing: root.getAttribute("data-story-editing"),
+      editingControls: root.querySelectorAll(".journey-story__media-add, .journey-story__media-order, .journey-story__media-actions, .journey-story__media-overview").length,
+      sidebarStats: root.querySelectorAll(".journey-story__copy > dl").length,
+      thumbnailRail: root.querySelectorAll(".story-media-rail").length,
+      fullscreenEntry: root.querySelectorAll(".journey-story__fullscreen-entry").length,
+      navigationButtons: [...root.querySelectorAll(".journey-story__media-nav button")]
+        .map((button) => button.getAttribute("aria-label")),
+    }));
+    const readingViewFailed = readingView.layout !== "desktop" || readingView.editing !== null
+      || readingView.editingControls !== 0 || readingView.sidebarStats !== 0
+      || readingView.thumbnailRail !== 0 || readingView.fullscreenEntry !== 1
+      || JSON.stringify(readingView.navigationButtons) !== JSON.stringify(["全屏查看媒体", "自动播放媒体"]);
+    checks.push({ name: "story-desktop-reading-view", ...readingView, failed: readingViewFailed });
+    if (readingViewFailed) failed = true;
+    const currentPhoto = storyPicture(storyDesktop.page);
+    const firstPhotoId = "00000000-0000-4000-8000-000000000100";
+    const secondPhotoId = "00000000-0000-4000-8000-000000000101";
+    const lastPhotoId = "00000000-0000-4000-8000-000000000102";
+    await waitForStoryPicture(storyDesktop.page, firstPhotoId);
+    const photoButtonRole = await currentPhoto.getAttribute("role");
+    const photoKeyShortcuts = await currentPhoto.getAttribute("aria-keyshortcuts");
+    await clickStoryPicture(storyDesktop.page, 1);
+    await waitForStoryPicture(storyDesktop.page, secondPhotoId);
+    const photoFullscreen = storyDesktop.page.locator(".journey-story-fullscreen");
+    const clickStayedInline = !await photoFullscreen.isVisible();
+    await clickStoryPicture(storyDesktop.page, -1);
+    await waitForStoryPicture(storyDesktop.page, firstPhotoId);
+    const keyboardNavigation = [];
+    for (const [key, assetId] of [
+      ["ArrowRight", secondPhotoId],
+      ["ArrowLeft", firstPhotoId],
+      ["Enter", secondPhotoId],
+      ["ArrowRight", lastPhotoId],
+      ["Space", secondPhotoId], // At the last photo, activation chooses the available previous direction.
+    ]) {
+      await currentPhoto.press(key);
+      await waitForStoryPicture(storyDesktop.page, assetId);
+      keyboardNavigation.push({ key, assetId: await currentPhoto.getAttribute("data-shared-media-id") });
+    }
+    const keyboardStayedInline = !await photoFullscreen.isVisible();
+    const pictureNavigationFailed = photoButtonRole !== "button"
+      || photoKeyShortcuts !== "ArrowLeft ArrowRight" || !clickStayedInline || !keyboardStayedInline;
+    checks.push({ name: "story-desktop-picture-click-keyboard-navigation", photoButtonRole, photoKeyShortcuts,
+      clickStayedInline, keyboardStayedInline, keyboardNavigation, failed: pictureNavigationFailed });
+    if (pictureNavigationFailed) failed = true;
+
+    await desktopStory.getByRole("button", { name: "全屏查看媒体", exact: true }).click();
+    await photoFullscreen.waitFor({ state: "visible" });
+    await waitForStoryPicture(storyDesktop.page, secondPhotoId, ".journey-story-fullscreen");
+    const fullscreenNavigationButtons = await photoFullscreen.locator(".journey-story-fullscreen__nav button")
+      .evaluateAll((buttons) => buttons.map((button) => button.getAttribute("aria-label")));
+    await clickStoryPicture(storyDesktop.page, 1, ".journey-story-fullscreen");
+    await waitForStoryPicture(storyDesktop.page, lastPhotoId, ".journey-story-fullscreen");
+    await clickStoryPicture(storyDesktop.page, -1, ".journey-story-fullscreen");
+    await waitForStoryPicture(storyDesktop.page, secondPhotoId, ".journey-story-fullscreen");
+    const fullscreenPictureNavigation = await photoFullscreen.isVisible();
+    // A captured horizontal movement below the flip threshold must spring
+    // back without its release click being treated as backdrop dismissal.
+    const jitterStart = await storyPicturePoint(storyDesktop.page, 1, ".journey-story-fullscreen");
+    await storyDesktop.page.mouse.move(jitterStart.x, jitterStart.y);
+    await storyDesktop.page.mouse.down();
+    await storyDesktop.page.mouse.move(jitterStart.x + 12, jitterStart.y, { steps: 3 });
+    await storyDesktop.page.mouse.up();
+    await waitForStoryPicture(storyDesktop.page, secondPhotoId, ".journey-story-fullscreen");
+    const shortDragKeptFullscreen = await photoFullscreen.isVisible();
+    const fullscreenNavigationFailed = !fullscreenPictureNavigation || !shortDragKeptFullscreen
+      || JSON.stringify(fullscreenNavigationButtons) !== JSON.stringify(["自动播放媒体"]);
+    checks.push({ name: "story-desktop-fullscreen-picture-navigation", fullscreenNavigationButtons,
+      fullscreenPictureNavigation, shortDragKeptFullscreen, failed: fullscreenNavigationFailed });
+    if (fullscreenNavigationFailed) failed = true;
+    await photoFullscreen.getByRole("button", { name: "退出沉浸媒体" }).click();
+    await photoFullscreen.waitFor({ state: "hidden" });
+    await desktopStory.getByRole("button", { name: "编辑故事", exact: true }).click();
+    await desktopStory.locator(".story-media-organizer").waitFor({ state: "visible" });
+    const editingView = {
+      editing: await desktopStory.getAttribute("data-story-editing"),
+      uploadInput: await desktopStory.locator('.journey-story__media-add input[type="file"]').count(),
+      selectionControl: await desktopStory.locator(".journey-story__media-select-toggle").count(),
+    };
+    const editingViewFailed = editingView.editing !== "true" || editingView.uploadInput !== 1 || editingView.selectionControl !== 1;
+    checks.push({ name: "story-desktop-explicit-edit-entry", ...editingView, failed: editingViewFailed });
+    if (editingViewFailed) failed = true;
+    await desktopStory.getByRole("button", { name: "返回单张", exact: true }).click();
+    const coverAction = storyDesktop.page.getByRole("button", { name: "将当前媒体设为封面" });
+    await coverAction.hover();
+    await storyDesktop.page.waitForFunction(() => {
+      const button = document.querySelector(".journey-story__media-set-cover");
+      return button && Number(getComputedStyle(button, "::after").opacity) >= 0.9;
+    });
+    const hoverTooltip = await coverAction.evaluate((button) => {
+      const stage = button.closest(".journey-story__media");
+      const buttonRect = button.getBoundingClientRect();
+      const stageRect = stage?.getBoundingClientRect();
+      const tooltipStyle = getComputedStyle(button, "::after");
+      const tooltipHeight = Number.parseFloat(tooltipStyle.height)
+        + Number.parseFloat(tooltipStyle.paddingTop)
+        + Number.parseFloat(tooltipStyle.paddingBottom)
+        + Number.parseFloat(tooltipStyle.borderTopWidth)
+        + Number.parseFloat(tooltipStyle.borderBottomWidth);
+      const tooltipTop = tooltipStyle.top !== "auto"
+        ? buttonRect.top + Number.parseFloat(tooltipStyle.top)
+        : buttonRect.bottom - Number.parseFloat(tooltipStyle.bottom) - tooltipHeight;
+      const tooltipBottom = tooltipTop + tooltipHeight;
+      return {
+        opacity: Number(tooltipStyle.opacity),
+        content: tooltipStyle.content,
+        placement: tooltipStyle.top !== "auto" ? "below" : "above",
+        stageTop: stageRect ? Math.round(stageRect.top) : null,
+        stageBottom: stageRect ? Math.round(stageRect.bottom) : null,
+        tooltipTop: Math.round(tooltipTop),
+        tooltipBottom: Math.round(tooltipBottom),
+        fullyInsideStage: Boolean(stageRect)
+          && tooltipTop >= stageRect.top
+          && tooltipBottom <= stageRect.bottom,
+        insideViewport: tooltipTop >= 0 && tooltipBottom <= innerHeight,
+      };
+    });
+    await coverAction.focus();
+    await storyDesktop.page.keyboard.press("Shift+Tab");
+    await storyDesktop.page.keyboard.press("Tab");
+    await storyDesktop.page.waitForFunction(() => {
+      const button = document.querySelector(".journey-story__media-set-cover");
+      return button === document.activeElement
+        && button.matches(":focus-visible")
+        && Number(getComputedStyle(button, "::after").opacity) >= 0.9;
+    });
+    const focusTooltip = await coverAction.evaluate((button) => {
+      const stage = button.closest(".journey-story__media");
+      const buttonRect = button.getBoundingClientRect();
+      const stageRect = stage?.getBoundingClientRect();
+      const tooltipStyle = getComputedStyle(button, "::after");
+      const tooltipHeight = Number.parseFloat(tooltipStyle.height)
+        + Number.parseFloat(tooltipStyle.paddingTop)
+        + Number.parseFloat(tooltipStyle.paddingBottom)
+        + Number.parseFloat(tooltipStyle.borderTopWidth)
+        + Number.parseFloat(tooltipStyle.borderBottomWidth);
+      const tooltipTop = tooltipStyle.top !== "auto"
+        ? buttonRect.top + Number.parseFloat(tooltipStyle.top)
+        : buttonRect.bottom - Number.parseFloat(tooltipStyle.bottom) - tooltipHeight;
+      const tooltipBottom = tooltipTop + tooltipHeight;
+      return {
+        focused: document.activeElement === button,
+        focusVisible: button.matches(":focus-visible"),
+        opacity: Number(tooltipStyle.opacity),
+        content: tooltipStyle.content,
+        placement: tooltipStyle.top !== "auto" ? "below" : "above",
+        fullyInsideStage: Boolean(stageRect)
+          && tooltipTop >= stageRect.top
+          && tooltipBottom <= stageRect.bottom,
+        insideViewport: tooltipTop >= 0 && tooltipBottom <= innerHeight,
+      };
+    });
+    const desktopTooltipFailed = hoverTooltip.opacity < 0.9
+      || !hoverTooltip.content.includes("设为封面")
+      || !hoverTooltip.insideViewport
+      || !focusTooltip.focused
+      || !focusTooltip.focusVisible
+      || focusTooltip.opacity < 0.9
+      || !focusTooltip.content.includes("设为封面")
+      || !focusTooltip.insideViewport;
+    checks.push({
+      name: "story-icon-action-tooltip-hover-focus",
+      hoverTooltip,
+      focusTooltip,
+      failed: desktopTooltipFailed,
+    });
+    if (desktopTooltipFailed) failed = true;
+    await desktopStory.getByRole("button", { name: "完成编辑故事", exact: true }).click();
+    await desktopStory.getByRole("button", { name: "编辑故事", exact: true }).waitFor({ state: "visible" });
+    const returnedToReading = await desktopStory.evaluate((root) => root.getAttribute("data-story-editing") === null
+      && root.querySelectorAll(".story-media-organizer, .journey-story__media-add, .journey-story__media-actions, .journey-story__media-order").length === 0);
+    checks.push({ name: "story-desktop-finish-editing-restores-reading", returnedToReading, failed: !returnedToReading });
+    if (!returnedToReading) failed = true;
+  } finally {
+    await storyDesktop.page.close();
+  }
+
   const mixedMediaMobile = await createQaPage("/?qaState=journey-story&qaMode=mixed-media", onePixelGif, {
     instrumentMedia: true,
     mixedMedia: true,
@@ -2347,189 +2530,6 @@ try {
     if (mixedMediaFailed) failed = true;
   } finally {
     await mixedMedia.page.close();
-  }
-
-  const storyDesktop = await createQaPage("/?qaState=journey-story", onePixelGif, { mobile: false });
-  try {
-    const desktopStory = storyDesktop.page.locator(".journey-story");
-    await desktopStory.waitFor({ state: "visible" });
-    const readingView = await desktopStory.evaluate((root) => ({
-      layout: root.getAttribute("data-story-layout"),
-      editing: root.getAttribute("data-story-editing"),
-      editingControls: root.querySelectorAll(".journey-story__media-add, .journey-story__media-order, .journey-story__media-actions, .journey-story__media-overview").length,
-      sidebarStats: root.querySelectorAll(".journey-story__copy > dl").length,
-      thumbnailRail: root.querySelectorAll(".story-media-rail").length,
-      fullscreenEntry: root.querySelectorAll(".journey-story__fullscreen-entry").length,
-      navigationButtons: [...root.querySelectorAll(".journey-story__media-nav button")]
-        .map((button) => button.getAttribute("aria-label")),
-    }));
-    const readingViewFailed = readingView.layout !== "desktop" || readingView.editing !== null
-      || readingView.editingControls !== 0 || readingView.sidebarStats !== 0
-      || readingView.thumbnailRail !== 0 || readingView.fullscreenEntry !== 1
-      || JSON.stringify(readingView.navigationButtons) !== JSON.stringify(["全屏查看媒体", "自动播放媒体"]);
-    checks.push({ name: "story-desktop-reading-view", ...readingView, failed: readingViewFailed });
-    if (readingViewFailed) failed = true;
-    const currentPhoto = storyPicture(storyDesktop.page);
-    const firstPhotoId = "00000000-0000-4000-8000-000000000100";
-    const secondPhotoId = "00000000-0000-4000-8000-000000000101";
-    const lastPhotoId = "00000000-0000-4000-8000-000000000102";
-    await waitForStoryPicture(storyDesktop.page, firstPhotoId);
-    const photoButtonRole = await currentPhoto.getAttribute("role");
-    const photoKeyShortcuts = await currentPhoto.getAttribute("aria-keyshortcuts");
-    await clickStoryPicture(storyDesktop.page, 1);
-    await waitForStoryPicture(storyDesktop.page, secondPhotoId);
-    const photoFullscreen = storyDesktop.page.locator(".journey-story-fullscreen");
-    const clickStayedInline = !await photoFullscreen.isVisible();
-    await clickStoryPicture(storyDesktop.page, -1);
-    await waitForStoryPicture(storyDesktop.page, firstPhotoId);
-    const keyboardNavigation = [];
-    for (const [key, assetId] of [
-      ["ArrowRight", secondPhotoId],
-      ["ArrowLeft", firstPhotoId],
-      ["Enter", secondPhotoId],
-      ["ArrowRight", lastPhotoId],
-      ["Space", secondPhotoId], // At the last photo, activation chooses the available previous direction.
-    ]) {
-      await currentPhoto.press(key);
-      await waitForStoryPicture(storyDesktop.page, assetId);
-      keyboardNavigation.push({ key, assetId: await currentPhoto.getAttribute("data-shared-media-id") });
-    }
-    const keyboardStayedInline = !await photoFullscreen.isVisible();
-    const pictureNavigationFailed = photoButtonRole !== "button"
-      || photoKeyShortcuts !== "ArrowLeft ArrowRight" || !clickStayedInline || !keyboardStayedInline;
-    checks.push({ name: "story-desktop-picture-click-keyboard-navigation", photoButtonRole, photoKeyShortcuts,
-      clickStayedInline, keyboardStayedInline, keyboardNavigation, failed: pictureNavigationFailed });
-    if (pictureNavigationFailed) failed = true;
-
-    await desktopStory.getByRole("button", { name: "全屏查看媒体", exact: true }).click();
-    await photoFullscreen.waitFor({ state: "visible" });
-    await waitForStoryPicture(storyDesktop.page, secondPhotoId, ".journey-story-fullscreen");
-    const fullscreenNavigationButtons = await photoFullscreen.locator(".journey-story-fullscreen__nav button")
-      .evaluateAll((buttons) => buttons.map((button) => button.getAttribute("aria-label")));
-    await clickStoryPicture(storyDesktop.page, 1, ".journey-story-fullscreen");
-    await waitForStoryPicture(storyDesktop.page, lastPhotoId, ".journey-story-fullscreen");
-    await clickStoryPicture(storyDesktop.page, -1, ".journey-story-fullscreen");
-    await waitForStoryPicture(storyDesktop.page, secondPhotoId, ".journey-story-fullscreen");
-    const fullscreenPictureNavigation = await photoFullscreen.isVisible();
-    // A captured horizontal movement below the flip threshold must spring
-    // back without its release click being treated as backdrop dismissal.
-    const jitterStart = await storyPicturePoint(storyDesktop.page, 1, ".journey-story-fullscreen");
-    await storyDesktop.page.mouse.move(jitterStart.x, jitterStart.y);
-    await storyDesktop.page.mouse.down();
-    await storyDesktop.page.mouse.move(jitterStart.x + 12, jitterStart.y, { steps: 3 });
-    await storyDesktop.page.mouse.up();
-    await waitForStoryPicture(storyDesktop.page, secondPhotoId, ".journey-story-fullscreen");
-    const shortDragKeptFullscreen = await photoFullscreen.isVisible();
-    const fullscreenNavigationFailed = !fullscreenPictureNavigation || !shortDragKeptFullscreen
-      || JSON.stringify(fullscreenNavigationButtons) !== JSON.stringify(["自动播放媒体"]);
-    checks.push({ name: "story-desktop-fullscreen-picture-navigation", fullscreenNavigationButtons,
-      fullscreenPictureNavigation, shortDragKeptFullscreen, failed: fullscreenNavigationFailed });
-    if (fullscreenNavigationFailed) failed = true;
-    await photoFullscreen.getByRole("button", { name: "退出沉浸媒体" }).click();
-    await photoFullscreen.waitFor({ state: "hidden" });
-    await desktopStory.getByRole("button", { name: "编辑故事", exact: true }).click();
-    await desktopStory.locator(".story-media-organizer").waitFor({ state: "visible" });
-    const editingView = {
-      editing: await desktopStory.getAttribute("data-story-editing"),
-      uploadInput: await desktopStory.locator('.journey-story__media-add input[type="file"]').count(),
-      selectionControl: await desktopStory.locator(".journey-story__media-select-toggle").count(),
-    };
-    const editingViewFailed = editingView.editing !== "true" || editingView.uploadInput !== 1 || editingView.selectionControl !== 1;
-    checks.push({ name: "story-desktop-explicit-edit-entry", ...editingView, failed: editingViewFailed });
-    if (editingViewFailed) failed = true;
-    await desktopStory.getByRole("button", { name: "返回单张", exact: true }).click();
-    const coverAction = storyDesktop.page.getByRole("button", { name: "将当前媒体设为封面" });
-    await coverAction.hover();
-    await storyDesktop.page.waitForFunction(() => {
-      const button = document.querySelector(".journey-story__media-set-cover");
-      return button && Number(getComputedStyle(button, "::after").opacity) >= 0.9;
-    });
-    const hoverTooltip = await coverAction.evaluate((button) => {
-      const stage = button.closest(".journey-story__media");
-      const buttonRect = button.getBoundingClientRect();
-      const stageRect = stage?.getBoundingClientRect();
-      const tooltipStyle = getComputedStyle(button, "::after");
-      const tooltipHeight = Number.parseFloat(tooltipStyle.height)
-        + Number.parseFloat(tooltipStyle.paddingTop)
-        + Number.parseFloat(tooltipStyle.paddingBottom)
-        + Number.parseFloat(tooltipStyle.borderTopWidth)
-        + Number.parseFloat(tooltipStyle.borderBottomWidth);
-      const tooltipTop = tooltipStyle.top !== "auto"
-        ? buttonRect.top + Number.parseFloat(tooltipStyle.top)
-        : buttonRect.bottom - Number.parseFloat(tooltipStyle.bottom) - tooltipHeight;
-      const tooltipBottom = tooltipTop + tooltipHeight;
-      return {
-        opacity: Number(tooltipStyle.opacity),
-        content: tooltipStyle.content,
-        placement: tooltipStyle.top !== "auto" ? "below" : "above",
-        stageTop: stageRect ? Math.round(stageRect.top) : null,
-        stageBottom: stageRect ? Math.round(stageRect.bottom) : null,
-        tooltipTop: Math.round(tooltipTop),
-        tooltipBottom: Math.round(tooltipBottom),
-        fullyInsideStage: Boolean(stageRect)
-          && tooltipTop >= stageRect.top
-          && tooltipBottom <= stageRect.bottom,
-        insideViewport: tooltipTop >= 0 && tooltipBottom <= innerHeight,
-      };
-    });
-    await coverAction.focus();
-    await storyDesktop.page.keyboard.press("Shift+Tab");
-    await storyDesktop.page.keyboard.press("Tab");
-    await storyDesktop.page.waitForFunction(() => {
-      const button = document.querySelector(".journey-story__media-set-cover");
-      return button === document.activeElement
-        && button.matches(":focus-visible")
-        && Number(getComputedStyle(button, "::after").opacity) >= 0.9;
-    });
-    const focusTooltip = await coverAction.evaluate((button) => {
-      const stage = button.closest(".journey-story__media");
-      const buttonRect = button.getBoundingClientRect();
-      const stageRect = stage?.getBoundingClientRect();
-      const tooltipStyle = getComputedStyle(button, "::after");
-      const tooltipHeight = Number.parseFloat(tooltipStyle.height)
-        + Number.parseFloat(tooltipStyle.paddingTop)
-        + Number.parseFloat(tooltipStyle.paddingBottom)
-        + Number.parseFloat(tooltipStyle.borderTopWidth)
-        + Number.parseFloat(tooltipStyle.borderBottomWidth);
-      const tooltipTop = tooltipStyle.top !== "auto"
-        ? buttonRect.top + Number.parseFloat(tooltipStyle.top)
-        : buttonRect.bottom - Number.parseFloat(tooltipStyle.bottom) - tooltipHeight;
-      const tooltipBottom = tooltipTop + tooltipHeight;
-      return {
-        focused: document.activeElement === button,
-        focusVisible: button.matches(":focus-visible"),
-        opacity: Number(tooltipStyle.opacity),
-        content: tooltipStyle.content,
-        placement: tooltipStyle.top !== "auto" ? "below" : "above",
-        fullyInsideStage: Boolean(stageRect)
-          && tooltipTop >= stageRect.top
-          && tooltipBottom <= stageRect.bottom,
-        insideViewport: tooltipTop >= 0 && tooltipBottom <= innerHeight,
-      };
-    });
-    const desktopTooltipFailed = hoverTooltip.opacity < 0.9
-      || !hoverTooltip.content.includes("设为封面")
-      || !hoverTooltip.insideViewport
-      || !focusTooltip.focused
-      || !focusTooltip.focusVisible
-      || focusTooltip.opacity < 0.9
-      || !focusTooltip.content.includes("设为封面")
-      || !focusTooltip.insideViewport;
-    checks.push({
-      name: "story-icon-action-tooltip-hover-focus",
-      hoverTooltip,
-      focusTooltip,
-      failed: desktopTooltipFailed,
-    });
-    if (desktopTooltipFailed) failed = true;
-    await desktopStory.getByRole("button", { name: "完成编辑故事", exact: true }).click();
-    await desktopStory.getByRole("button", { name: "编辑故事", exact: true }).waitFor({ state: "visible" });
-    const returnedToReading = await desktopStory.evaluate((root) => root.getAttribute("data-story-editing") === null
-      && root.querySelectorAll(".story-media-organizer, .journey-story__media-add, .journey-story__media-actions, .journey-story__media-order").length === 0);
-    checks.push({ name: "story-desktop-finish-editing-restores-reading", returnedToReading, failed: !returnedToReading });
-    if (!returnedToReading) failed = true;
-  } finally {
-    await storyDesktop.page.close();
   }
 
   const playback = await createQaPage("/?qaState=journey-playback", tinyVideo, { instrumentMedia: true });
