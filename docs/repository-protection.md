@@ -44,6 +44,17 @@ review activity cancels the older controller run and returns the status to pendi
 requirement is enforced on the merge button through that required check, and the ordering in
 [`CONTRIBUTING.md`](../CONTRIBUTING.md) is not advisory.
 
+### Re-running `ci` withdraws a sign-off, and that is not a bug
+
+The controller looks for a **completed** `ci / verify` check-run on the exact head. Re-running or
+re-triggering the `ci` workflow replaces that check-run with one that is queued again, so a
+`merge-ready` applied during that window finds no completed `verify`, and the controller publishes
+`merge-readiness: failure` with `ci / verify is missing` and removes the label. That is the gate
+failing closed, not a lookup defect: at that moment the head really does not have a finished
+verification. Wait for `verify` to complete and apply `merge-ready` again. This is worth knowing
+before diagnosing it, because from the outside — a head whose `verify` reads `success` afterwards
+and a readiness status that says it was missing — it looks exactly like a bug in the controller.
+
 ## Re-verifying the configuration
 
 ```bash
