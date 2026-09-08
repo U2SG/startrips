@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { IconRoute, IconWorld } from "@tabler/icons-react";
-import { StartripsBrandLoader } from "../brand/StartripsBrandMark";
+import { StartripsBrandLoader, StartripsJourneyCue, StartripsWordmark } from "../brand/StartripsBrandMark";
 import { usePersistentEarth } from "../scene/LivingAtlasGlobe";
 import {
   AtlasViewProvider,
@@ -236,8 +235,8 @@ export function SharedAtlasView({
     return (
       <main className="shared-atlas-gate" data-shared-atlas-state={state.status}>
         <section className="shared-atlas-gate__panel">
-          <p>SHARED JOURNEYS</p>
-          <IconWorld size={34} stroke={1.05} aria-hidden="true" />
+          <StartripsWordmark size={32} companion={false} />
+          <StartripsJourneyCue state="rest" size={80} />
           <h1>{unavailable ? "这条分享链接已失效" : "暂时打不开这条分享链接"}</h1>
           <p>{unavailable
             ? "请联系分享者获取新的链接。"
@@ -261,8 +260,8 @@ export function SharedAtlasView({
     return (
       <main className="shared-atlas-gate" data-shared-atlas-state="empty">
         <section className="shared-atlas-gate__panel">
-          <p>SHARED JOURNEYS</p>
-          <IconRoute size={34} stroke={1.05} aria-hidden="true" />
+          <StartripsWordmark size={32} companion={false} />
+          <StartripsJourneyCue state="rest" size={80} />
           <h1>这些旅程目前不可查看</h1>
           <p>分享链接仍然有效，但其中的旅程已经不在图谱里了。</p>
         </section>

@@ -11,6 +11,7 @@ import {
   restoreJourney,
   revokeShare,
   setJourneyCover,
+  updateJourney,
   undoJourneyMediaMove,
   type JourneyMediaMoveUndo,
 } from "./journeyApi";
@@ -18,6 +19,7 @@ import { uploadJourneyMedia } from "./JourneyComposer";
 import type {
   CreatedShareGrant,
   Journey,
+  JourneyInput,
   PrivateMediaRead,
   ShareGrantSummary,
 } from "./types";
@@ -117,6 +119,8 @@ export type UploadJourneyMedia = typeof import("./JourneyComposer")["uploadJourn
  * hid the control and left deletion reachable. Absence must mean absence.
  */
 export type AtlasMutations = {
+  /** Story-only notes editing, exposed only when the view allows journey edits. */
+  updateJourneyNotes?: (journeyId: string, input: JourneyInput) => Promise<Journey>;
   deleteJourney: (journeyId: string) => Promise<void>;
   restoreJourney: (journeyId: string) => Promise<Journey>;
   deleteMedia: (assetId: string) => Promise<void>;
@@ -162,8 +166,8 @@ export type AtlasView = {
   mutations: AtlasMutations | null;
 };
 
-export function createOwnerAtlasMutations(): AtlasMutations {
-  return {
+export function createOwnerAtlasMutations(canEditJourney = true): AtlasMutations {
+  const mutations: AtlasMutations = {
     deleteJourney,
     restoreJourney,
     deleteMedia,
@@ -176,16 +180,19 @@ export function createOwnerAtlasMutations(): AtlasMutations {
     listShares,
     revokeShare,
   };
+  if (canEditJourney) mutations.updateJourneyNotes = updateJourney;
+  return mutations;
 }
 
 export function createOwnerAtlasView(
   overrides: Partial<AtlasViewCapabilities> = {},
 ): AtlasView {
+  const capabilities = { ...OWNER_ATLAS_VIEW_CAPABILITIES, ...overrides };
   return {
-    capabilities: { ...OWNER_ATLAS_VIEW_CAPABILITIES, ...overrides },
+    capabilities,
     listJourneys: () => listJourneys(),
     readMedia: (assetId) => getPrivateMediaRead(assetId),
-    mutations: createOwnerAtlasMutations(),
+    mutations: createOwnerAtlasMutations(capabilities.canEditJourney),
   };
 }
 

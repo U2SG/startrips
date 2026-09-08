@@ -1485,83 +1485,7 @@
    instead of jumping. Not applied during the drag itself, which writes
    `transform` on every pointermove with no transition for 1:1 tracking. */
 .journey-story__media-drag-settle {
-  transition: transform var(--motion-ui, 260ms) var(--motion-ease-out-soft, ease);
-}
-
-/* The fullscreen base layer is normally sized to its own intrinsic content
-   and centered by `place-items: center` (see .journey-story-fullscreen
-   below), which only works edge-to-edge for a single frame. A drag needs
-   the dragged frame and its peeking neighbor to share one full-bleed page
-   box so they can slide past each other regardless of each photo's own
-   aspect ratio; object-fit: contain still renders the same pixels inside
-   that larger box, so removing this class at rest is visually a no-op. */
-.journey-story-fullscreen > img.journey-story__media-drag-page,
-.journey-story-fullscreen > video.journey-story__media-drag-page {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-}
-
-.journey-story__media > img,
-.journey-story__media > video {
-  width: 100%;
-  height: 100%;
-  display: block;
-  object-fit: contain;
-  background: #010404;
-}
-
-/* Mobile swipe keeps compositor ownership stable across incoming -> settled.
-   The same media node stays absolutely positioned before and after settle. */
-.journey-story__media[data-mobile-layout="true"] > img,
-.journey-story__media[data-mobile-layout="true"] > video {
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-}
-
-/* #204: the stage <video> is mounted before its own step so a user gesture can
-   authorize the exact node that will play later. Until it owns the stage it
-   must neither take layout nor paint — the `display: block` above outranks the
-   UA `[hidden]` rule, so without this the primed node would occupy the whole
-   stage and clip the current frame. It stays rendered (out of flow and fully
-   transparent) rather than `display: none`, because per-element playback
-   authorization only survives on an element the browser still renders. */
-.journey-story__media > video[hidden],
-.journey-story-fullscreen > video[hidden] {
-  position: absolute;
-  inset: 0;
-  opacity: 0;
-  pointer-events: none;
-}
-
-/* #11 two-layer stage: the incoming frame crossfades over the settled base
-   frame (180–280ms) and is released only after the switch settles, so a
-   slideshow step never flashes an empty stage. */
-.journey-story__media > img.journey-story__media-incoming,
-.journey-story__media > video.journey-story__media-incoming,
-.journey-story-fullscreen > img.journey-story__media-incoming,
-.journey-story-fullscreen > video.journey-story__media-incoming {
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  /* In the inline stage width/height are already 100% (see the base rule
-     above), so this is a no-op there. In the fullscreen stage the base
-     layer has no explicit width/height (it's sized to its own intrinsic
-     content and centered by `place-items: center`), so an `inset: 0`
-     replaced element with auto width/height instead resolves to its
-     intrinsic size pinned to the top-left corner — a different box than
-     the settled base layer, which is exactly the "jumps in from a
-     corner, then snaps to the middle" flash. `margin: auto` centers it
-     to match once width/height are auto. */
-  margin: auto;
-  animation: motionMediaIn 240ms var(--motion-ease-out-soft, ease) forwards;
-}
-
-@keyframes motionMediaIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
+  transition: transform var(--motion-content, 560ms) var(--motion-ease-out-soft, ease);
 }
 
 .journey-story__empty-media,
@@ -1690,8 +1614,8 @@
   border-color: rgba(200, 255, 61, 0.6);
 }
 
-.journey-story__media:has(> video) .journey-story__media-nav,
-.journey-story__media:has(> video) .journey-story__media-order {
+.journey-story__media:has([data-story-media-pages] video[data-shared-media-id]) .journey-story__media-nav,
+.journey-story__media:has([data-story-media-pages] video[data-shared-media-id]) .journey-story__media-order {
   bottom: 72px;
 }
 
@@ -2002,47 +1926,6 @@
   color: var(--atlas-cyan);
 }
 
-@keyframes journey-kenburns-a {
-  from {
-    transform: scale(1) translate(0, 0);
-  }
-  to {
-    transform: scale(1.09) translate(-2.2%, -2.2%);
-  }
-}
-
-@keyframes journey-kenburns-b {
-  from {
-    transform: scale(1) translate(0, 0);
-  }
-  to {
-    transform: scale(1.09) translate(2.2%, 1.6%);
-  }
-}
-
-.journey-story__media > img.is-kenburns.kenburns-0 {
-  animation: journey-kenburns-a 8.4s ease-in-out forwards;
-}
-
-.journey-story__media > img.is-kenburns.kenburns-1 {
-  animation: journey-kenburns-b 8.4s ease-in-out forwards;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .journey-story__media > img.is-kenburns {
-    animation: none;
-  }
-
-  /* #11: reduced motion swaps frames instantly — no crossfade, no flash. */
-  .journey-story__media > img.journey-story__media-incoming,
-  .journey-story__media > video.journey-story__media-incoming,
-  .journey-story-fullscreen > img.journey-story__media-incoming,
-  .journey-story-fullscreen > video.journey-story__media-incoming {
-    animation: none;
-    opacity: 1;
-  }
-}
-
 .journey-story__media-nav button {
   width: 40px;
   height: 40px;
@@ -2095,7 +1978,7 @@
   cursor: default;
 }
 
-.journey-story__media > img.is-zoomable {
+.journey-story__media [data-media-page="current"] > img {
   cursor: zoom-in;
 }
 
@@ -5649,7 +5532,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
     height: 44px;
   }
 
-  .journey-story__media:has(> video) .journey-story__media-controls {
+  .journey-story__media:has([data-story-media-pages] video[data-shared-media-id]) .journey-story__media-controls {
     bottom: 64px;
   }
 
@@ -7078,4 +6961,18 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   .journey-share__selection ol {
     max-height: 152px;
   }
+}
+
+/* Organizing needs room for destinations, the sortable grid and undo. */
+.journey-story__media.is-organizing {
+  min-height: min(70dvh, 680px);
+}
+
+.journey-story__media.is-organizing > .journey-story__order-message {
+  z-index: 3;
+  bottom: 4px;
+  right: 16px;
+  max-width: none;
+  min-height: 44px;
+  padding-block: 0;
 }

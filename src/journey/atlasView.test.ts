@@ -69,6 +69,7 @@ describe("owner and guest atlas views", () => {
       "revokeShare",
       "setJourneyCover",
       "undoJourneyMediaMove",
+      "updateJourneyNotes",
       "uploadJourneyMedia",
     ]);
     expect(Object.values(createOwnerAtlasMutations())
@@ -82,6 +83,11 @@ describe("owner and guest atlas views", () => {
     expect(view.capabilities.canDeleteJourney).toBe(false);
     expect(view.capabilities.canCreateJourney).toBe(true);
     expect(view.mutations).not.toBeNull();
+  });
+
+  it("does not expose Story note editing when journey edits are disabled", () => {
+    const view = createOwnerAtlasView({ canEditJourney: false });
+    expect(view.mutations?.updateJourneyNotes).toBeUndefined();
   });
 
   it("gives a guest view no mutation client at all", () => {

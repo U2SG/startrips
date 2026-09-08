@@ -15,7 +15,10 @@ import {
   IconPlayerPlay,
   IconX,
 } from "@tabler/icons-react";
+import { StartripsJourneyCue, StartripsWordmark } from "../brand/StartripsBrandMark";
+import "../styles/starlight-media.css";
 import { useAtlasView } from "./atlasView";
+import { PlaybackMediaStage } from "./PlaybackMediaStage";
 import { mediaReadIsFresh } from "./mediaReadRefresh";
 import {
   createDecodeRegistry,
@@ -205,10 +208,11 @@ export function JourneyPlaybackOverlay({
   // decoded, so a slow network never flashes an empty frame — the chapter
   // waits on the decode settle instead of advancing on a fixed timer.
   const [holdReason, setHoldReason] = useState<PlaybackHoldReason>("none");
+  const [presentationPending, setPresentationPending] = useState(false);
   // Every existing reader only asks whether playback is waiting at all. The
   // reason exists so the decode hold #197 is about can be told apart from a
   // video beat that simply owns its own completion.
-  const hold = holdReason !== "none";
+  const hold = holdReason !== "none" || presentationPending;
   const [videoFallbackAssetId, setVideoFallbackAssetId] = useState<string | null>(null);
   const director = useJourneyPlaybackDirector(journey, hold, stepDurationResolver);
   const { phase, paused, pause, resume, next, back, seek, exit, steps, stepIndex, tempo, setTempo } = director;
@@ -309,6 +313,13 @@ export function JourneyPlaybackOverlay({
   ), []);
   const audioRef = useRef<HTMLAudioElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const [videoElementRevision, setVideoElementRevision] = useState(0);
+  const bindVideoElement = useCallback((element: HTMLVideoElement | null) => {
+    if (videoRef.current === element) return;
+    videoRef.current?.pause();
+    videoRef.current = element;
+    setVideoElementRevision((revision) => revision + 1);
+  }, []);
   const videoStallTimerRef = useRef<number | null>(null);
   const videoStalledAssetIdRef = useRef<string | null>(null);
   const clearVideoStallWatchdog = useCallback(() => {
@@ -395,6 +406,9 @@ export function JourneyPlaybackOverlay({
   useEffect(() => {
     clearVideoStallWatchdog();
     videoStalledAssetIdRef.current = null;
+    // A failed beat may fall back to its timer, but a later deliberate revisit
+    // must get its own attempt instead of inheriting that beat's failure.
+    setVideoFallbackAssetId(null);
   }, [clearVideoStallWatchdog, director.stepIndex]);
   useEffect(() => {
     if (paused) {
@@ -418,6 +432,10 @@ export function JourneyPlaybackOverlay({
   const activeVideoTrimAssetId = activeVideoTrim?.assetId ?? null;
   const activeVideoTrimInMs = activeVideoTrim?.trim.inMs ?? null;
   const activeVideoTrimOutMs = activeVideoTrim?.trim.outMs ?? null;
+  const activeVideoTrimKey = activeVideoTrim
+    ? `${activeVideoTrim.assetId}:${director.stepIndex}:${activeVideoTrimInMs}:${activeVideoTrimOutMs}`
+    : null;
+  const enteredVideoTrimKeyRef = useRef<string | null>(null);
   // Entering the beat — including re-entering it with the step scrubber, which
   // hands the director a fresh full budget while the `<video>` keeps its React
   // key and therefore its `currentTime`. A remounted element has no metadata
@@ -425,6 +443,7 @@ export function JourneyPlaybackOverlay({
   // here, because that event will not fire a second time.
   useEffect(() => {
     clearVideoTrimWatchdog();
+    enteredVideoTrimKeyRef.current = activeVideoTrimKey;
     if (!activeVideoTrimAssetId || activeVideoTrimInMs === null || activeVideoTrimOutMs === null) {
       setVideoTrimSeek(null);
       return;
@@ -445,7 +464,9 @@ export function JourneyPlaybackOverlay({
     activeVideoTrimAssetId,
     activeVideoTrimInMs,
     activeVideoTrimOutMs,
+    activeVideoTrimKey,
     director.stepIndex,
+    videoElementRevision,
   ]);
   // The bounded escape acceptance 5 asks for, covering both holding states. It
   // starts only once the signed read is ready and playback is running, so a slow
@@ -706,7 +727,7 @@ export function JourneyPlaybackOverlay({
       : null;
     return syncPlaybackMediaElement(
       videoRef.current,
-      director.isPlaying && !paused,
+      director.isPlaying && !paused && !presentationPending && videoFallbackAssetId !== asset?.id,
       asset?.mimeType.startsWith("video/")
         ? () => {
             clearVideoStallWatchdog();
@@ -715,7 +736,7 @@ export function JourneyPlaybackOverlay({
           }
         : undefined,
     );
-  }, [clearVideoStallWatchdog, director.isPlaying, director.stepIndex, journey, mediaReads, paused]);
+  }, [clearVideoStallWatchdog, director.isPlaying, director.stepIndex, journey, mediaReads, paused, presentationPending, videoElementRevision, videoFallbackAssetId]);
 
   // #20: one analyser graph writes a shared mutable energy channel; the light
   // strip and Three.js scene read that channel without React per-frame state.
@@ -820,14 +841,15 @@ export function JourneyPlaybackOverlay({
       }
       // Run video.play() inside the same user gesture as the Startrips resume
       // action so browser user-activation rules do not create a second state.
-      syncPlaybackMediaElement(videoRef.current, true);
+      const currentAsset = journey ? playbackMediaForStep(journey, director.step) : null;
+      syncPlaybackMediaElement(videoRef.current, !presentationPending && videoFallbackAssetId !== currentAsset?.id);
       resume();
     } else {
       samplerRef.current.setPlaying(false);
       syncPlaybackMediaElement(videoRef.current, false);
       pause();
     }
-  }, [audioReactiveReducedMotion, paused, pause, resume, soundtrackRead?.status === "ready"]);
+  }, [audioReactiveReducedMotion, director.step, journey, paused, pause, resume, presentationPending, soundtrackRead?.status === "ready", videoFallbackAssetId]);
 
   // Camera ownership follows playback semantics. Intro/outro frame the whole
   // Journey; travel/stop/media point at one route point. The key guard avoids
@@ -1071,6 +1093,7 @@ export function JourneyPlaybackOverlay({
       // from wall-clock gaps. `video` and `trim` are a beat's own ownership of
       // its runtime, not a lookahead that ran out.
       data-playback-hold={holdReason}
+      data-playback-presentation-hold={presentationPending ? "waiting" : "none"}
     >
       <audio
         ref={audioRef}
@@ -1088,15 +1111,23 @@ export function JourneyPlaybackOverlay({
 
       <div className="journey-playback__stage">
         {step?.kind === "intro" ? (
-          <div className="journey-playback__intro">
-            <p>{playbackMode === "quick-recap" ? "QUICK RECAP" : "JOURNEY PLAYBACK"}</p>
-            <h2>{journey.title}</h2>
-            <span>{journey.startedOn}{journey.endedOn ? ` — ${journey.endedOn}` : ""}</span>
-          </div>
+          <>
+            <div className="journey-playback__intro-brand" aria-hidden="true">
+              <StartripsWordmark size={42} intro />
+            </div>
+            <div className="journey-playback__intro">
+              <p>{playbackMode === "quick-recap" ? "QUICK RECAP" : "JOURNEY PLAYBACK"}</p>
+              <h2>{journey.title}</h2>
+              <span>{journey.startedOn}{journey.endedOn ? ` — ${journey.endedOn}` : ""}</span>
+            </div>
+          </>
         ) : null}
 
         {step?.kind === "travel" && activePoint ? (
           <div className="journey-playback__travel">
+            <div className="journey-playback__travel-cue" aria-hidden="true">
+              <StartripsJourneyCue state="travel" size={54} />
+            </div>
             <p>正在前往</p>
             <h3>{activePoint.label || `途径点 ${step.to + 1}`}</h3>
             <div className="journey-playback__route-hint" aria-hidden="true">
@@ -1107,6 +1138,9 @@ export function JourneyPlaybackOverlay({
 
         {step?.kind === "stop" && activePoint ? (
           <div className="journey-playback__stop">
+            <div className="journey-playback__stop-cue" aria-hidden="true">
+              <StartripsJourneyCue state="arrived" size={52} />
+            </div>
             <p>STOP {step.pointIndex + 1}</p>
             <h3>{activePoint.label || `途径点 ${step.pointIndex + 1}`}</h3>
             {activePoint.note ? (
@@ -1116,16 +1150,30 @@ export function JourneyPlaybackOverlay({
         ) : null}
 
         {step?.kind === "media" && activeMedia ? (
-          <div className="journey-playback__media">
-            {activeMediaGate === "error" ? (
-              <div className="journey-playback__media-state is-error">媒体暂不可用，继续播放下一段</div>
-            ) : activeMedia.mimeType.startsWith("video/")
-              ? activeRead?.status === "ready"
-                ? <video
-                    ref={videoRef}
+          <PlaybackMediaStage
+            asset={activeMedia}
+            url={activeRead?.status === "ready" ? activeRead.url : null}
+            intent={`${journey.id}:${playbackStepIdentity(journey, step)}:${director.stepIndex}:${activeVideoTrimInMs}:${activeVideoTrimOutMs}`}
+            stepIndex={director.stepIndex}
+            imageReady={activeMediaGate === "ready"}
+            videoPositionReady={!activeVideoTrim || (enteredVideoTrimKeyRef.current === activeVideoTrimKey
+              && (videoTrimHoldingStatus === "playing" || videoTrimHoldingStatus === "unavailable"))}
+            failed={activeMediaGate === "error" || videoFallbackAssetId === activeMedia.id}
+            buffering={videoTrimWaiting}
+            paused={paused}
+            reduceMotion={audioReactiveReducedMotion}
+            videoWaitTimeoutMs={VIDEO_STALL_WATCHDOG_MS}
+            onVideoElement={bindVideoElement}
+            onPendingChange={setPresentationPending}
+            onUnavailable={() => {
+              setVideoFallbackAssetId(activeMedia.id);
+              settleVideoTrimSeek(activeMedia.id, director.stepIndex, "unavailable");
+              setHoldReason("none");
+            }}
+            video={activeMedia.mimeType.startsWith("video/") && activeRead?.status === "ready" ? (
+                  <video
                     key={activeMedia.id}
                     src={activeRead.url}
-                    autoPlay
                     playsInline
                     onEnded={() => {
                       clearVideoStallWatchdog();
@@ -1243,21 +1291,20 @@ export function JourneyPlaybackOverlay({
                       settleVideoTrimSeek(activeMedia.id, director.stepIndex, "buffering");
                     }}
                   />
-                : <div className="journey-playback__media-state">正在打开媒体…</div>
-              // Review P2: images must wait for the decode gate too — showing
-              // the <img> as soon as the signed URL is ready can still flash
-              // a blank frame while the browser decodes (#11 requirement).
-              : activeMediaGate === "ready" && activeRead?.status === "ready"
-                ? <img key={activeMedia.id} src={activeRead.url} alt={activeMedia.fileName} />
-                : <div className="journey-playback__media-state">正在打开媒体…</div>}
-          </div>
+            ) : null}
+          />
         ) : null}
 
         {step?.kind === "outro" ? (
-          <div className="journey-playback__outro">
-            <h2>{journey.title}</h2>
-            <p>{journey.routePoints.length} 个地点 · 这段路已经走完</p>
-          </div>
+          <>
+            <div className="journey-playback__outro-brand" aria-hidden="true">
+              <StartripsWordmark size={42} />
+            </div>
+            <div className="journey-playback__outro">
+              <h2>{journey.title}</h2>
+              <p>{journey.routePoints.length} 个地点 · 这段路已经走完</p>
+            </div>
+          </>
         ) : null}
       </div>
 

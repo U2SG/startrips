@@ -1,7 +1,7 @@
 import {
   IconArrowUpRight,
-  IconPlus,
 } from "@tabler/icons-react";
+import { StartripsJourneyCue } from "../brand/StartripsBrandMark";
 import { useEffect, useRef, type CSSProperties } from "react";
 import { groupJourneysByYear } from "./journeyModel";
 import type { Journey } from "./types";
@@ -87,7 +87,7 @@ export function JourneyTimeline({
         ))}
         {onCreate ? (
           <button type="button" className="journey-timeline__future" onClick={onCreate}>
-            <IconPlus size={24} stroke={1.2} aria-hidden="true" /><strong>下一段旅程</strong><small>路线还没有发生</small>
+            <StartripsJourneyCue size={56} /><strong>下一段旅程</strong><small>下一颗星，等你出发</small>
           </button>
         ) : null}
       </div>

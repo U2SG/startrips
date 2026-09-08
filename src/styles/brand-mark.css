@@ -1,67 +1,332 @@
+/* Brand motion uses the shared tiers as a small grammar: one journey step,
+   one breath, and two breaths for the waiting point cycle. */
+.startrips-brand-mark,
+.startrips-wordmark {
+  --startrips-motion-journey: var(--motion-journey);
+  --startrips-motion-entry: calc(var(--motion-journey) + var(--motion-content) + var(--motion-ui));
+  --startrips-motion-breathe: var(--startrips-motion-entry);
+  --startrips-motion-wait: calc(var(--startrips-motion-entry) * 2);
+}
+
 .startrips-brand-mark {
+  position: relative;
+  display: inline-block;
   width: var(--startrips-mark-size, 64px);
   height: var(--startrips-mark-size, 64px);
-  overflow: visible;
   flex: 0 0 auto;
+  vertical-align: middle;
+  pointer-events: none;
+  isolation: isolate;
 }
 
-.startrips-brand-mark__planet,
-.startrips-brand-mark__journey {
-  fill: none;
-  vector-effect: non-scaling-stroke;
-  stroke-linecap: round;
-  stroke-linejoin: round;
+.startrips-lamb {
+  display: block;
+  overflow: visible;
+  width: 100%;
+  height: 100%;
+  color: var(--startrips-lamb-fill, #fff);
 }
 
-.startrips-brand-mark__planet {
-  stroke: #a4fff4;
-  stroke-width: 3.1;
-}
-
-.startrips-brand-mark__journey {
-  stroke: #49e5d3;
-  stroke-width: 2.7;
-}
-
-.startrips-brand-mark__waypoint {
-  fill: #49e5d3;
+.startrips-lamb__motion,
+.startrips-lamb__legs-motion,
+.startrips-lamb__body-motion,
+.startrips-lamb__head-motion,
+.startrips-lamb__leg-motion {
   transform-box: fill-box;
   transform-origin: center;
+}
+
+.startrips-lamb__head-motion {
+  transform-origin: 72% 48%;
+}
+
+.startrips-lamb__leg-motion--rear,
+.startrips-lamb__leg-motion--middle,
+.startrips-lamb__leg-motion--front {
+  transform-origin: 50% 12%;
+}
+
+.startrips-lamb__body,
+.startrips-lamb__legs,
+.startrips-lamb__head,
+.startrips-lamb__ear {
+  fill: var(--startrips-lamb-fill, #fff);
+}
+
+.startrips-brand-mark__lamb {
+  position: absolute;
+  z-index: 1;
+  inset: 5% 8% 0 0;
+  width: 90%;
+  height: 90%;
+  transform-box: fill-box;
+  transform-origin: 70% 55%;
 }
 
 .startrips-brand-mark__star {
-  fill: #ffd77a;
-  filter: drop-shadow(0 0 3px rgb(255 215 122 / 0.3));
-  transform-box: fill-box;
+  position: absolute;
+  z-index: 2;
+  top: 2%;
+  right: 0;
+  width: 24%;
+  height: 24%;
+  color: var(--startrips-starlight, #fff8e7);
   transform-origin: center;
 }
 
-/* The mark composes the shared motion language: SVG-stroke draw for the two
-   paths, then restrained fade-through reveals. Durations/easings are global
-   tier tokens; there are no per-feature timing curves or bounce/overshoot. */
-.startrips-brand-mark.is-loading .startrips-brand-mark__planet,
-.startrips-brand-mark.is-loading .startrips-brand-mark__journey {
-  stroke-dasharray: 1;
-  stroke-dashoffset: 1;
-  animation: startrips-brand-path-draw var(--motion-journey) var(--motion-ease-in-out-spatial) both;
+.startrips-loading-points {
+  display: block;
+  overflow: visible;
+  color: var(--startrips-aurora, var(--startrips-starlight, #fff8e7));
+  pointer-events: none;
 }
 
-.startrips-brand-mark.is-loading .startrips-brand-mark__journey {
-  animation-delay: var(--motion-ui);
+.startrips-loading-points__point {
+  fill: currentColor;
+  opacity: 0.52;
+  transform-box: view-box;
+  transform-origin: center;
+  transform: translate(var(--point-cluster-x), var(--point-cluster-y));
 }
 
-.startrips-brand-mark.is-loading .startrips-brand-mark__waypoint,
-.startrips-brand-mark.is-loading .startrips-brand-mark__star {
+.startrips-brand-mark__loading-points {
+  position: absolute;
+  z-index: 0;
+  inset: 8%;
+  width: 84%;
+  height: 84%;
   opacity: 0;
-  animation: startrips-brand-fade-through var(--motion-content) var(--motion-ease-out) both;
+  transition: opacity var(--motion-ui) var(--motion-ease-out-soft);
 }
 
-.startrips-brand-mark.is-loading .startrips-brand-mark__waypoint {
-  animation-delay: calc(var(--motion-ui) + var(--motion-journey));
+.startrips-brand-mark.is-waiting .startrips-brand-mark__loading-points,
+.startrips-brand-mark.is-loading .startrips-brand-mark__loading-points {
+  opacity: 0.74;
 }
 
-.startrips-brand-mark.is-loading .startrips-brand-mark__star {
-  animation-delay: calc(var(--motion-content) + var(--motion-journey));
+.startrips-brand-mark.is-waiting .startrips-loading-points__point,
+.startrips-brand-mark.is-loading .startrips-loading-points__point {
+  animation: starlight-point-morph var(--startrips-motion-wait) var(--motion-ease-in-out-spatial) infinite;
+}
+
+/* The dotted orbit is retained as a quiet trace around the living point
+   signal. Its mark and wordmark animations have separate transforms so the
+   wordmark's translateX(-50%) anchor cannot drift during rotation. */
+.startrips-brand-mark__orbit {
+  position: absolute;
+  z-index: 0;
+  inset: 1%;
+  border: 1px dotted currentColor;
+  border-left-color: transparent;
+  border-bottom-color: rgb(255 248 231 / 0.18);
+  border-radius: 50%;
+  color: var(--startrips-starlight, #fff8e7);
+  opacity: 0;
+  pointer-events: none;
+  transform: rotate(-26deg);
+}
+
+.startrips-brand-mark__orbit::after {
+  position: absolute;
+  top: -2px;
+  right: 22%;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: currentColor;
+  content: "";
+}
+
+.startrips-brand-mark.is-waiting .startrips-brand-mark__orbit,
+.startrips-brand-mark.is-loading .startrips-brand-mark__orbit {
+  opacity: 0.28;
+  animation: starlight-mark-orbit var(--startrips-motion-wait) linear infinite;
+}
+
+.startrips-brand-mark.is-waiting .startrips-brand-mark__lamb,
+.startrips-brand-mark.is-loading .startrips-brand-mark__lamb {
+  animation: starlight-breathe var(--startrips-motion-breathe) var(--motion-ease-soft) infinite;
+}
+
+.startrips-brand-mark.is-travel .startrips-brand-mark__lamb {
+  animation: starlight-approach var(--startrips-motion-entry) var(--motion-ease-in-out-spatial) both;
+}
+
+.startrips-brand-mark.is-arrived .startrips-brand-mark__lamb {
+  animation: starlight-arrival-step var(--motion-content) var(--motion-ease-out) both;
+}
+
+.startrips-brand-mark.is-arrived .startrips-brand-mark__star {
+  animation: starlight-arrive var(--motion-content) var(--motion-ease-out) both;
+}
+
+.startrips-lamb.is-travel .startrips-lamb__head-motion {
+  animation: starlight-head-reach var(--startrips-motion-entry) var(--motion-ease-out) both;
+}
+
+.startrips-lamb.is-travel .startrips-lamb__body-motion {
+  animation: starlight-body-contact var(--startrips-motion-entry) var(--motion-ease-out) both;
+}
+
+.startrips-lamb.is-travel .startrips-lamb__leg-motion--rear {
+  animation: starlight-leg-step var(--startrips-motion-entry) var(--motion-ease-out) both;
+}
+
+.startrips-lamb.is-travel .startrips-lamb__leg-motion--middle {
+  animation: starlight-leg-step var(--startrips-motion-entry) var(--motion-ease-out) var(--motion-ui) both;
+}
+
+.startrips-lamb.is-travel .startrips-lamb__leg-motion--front {
+  animation: starlight-leg-step var(--startrips-motion-entry) var(--motion-ease-out) var(--motion-content) both;
+}
+
+.startrips-lamb.is-arrived .startrips-lamb__head-motion {
+  animation: starlight-head-settle var(--motion-content) var(--motion-ease-out) both;
+}
+
+.startrips-lamb.is-arrived .startrips-lamb__leg-motion {
+  animation: starlight-leg-settle var(--motion-content) var(--motion-ease-out) both;
+}
+
+.startrips-wordmark {
+  position: relative;
+  display: inline-block;
+  flex: 0 0 auto;
+  width: max-content;
+  padding-top: 0.35em;
+  color: var(--startrips-starlight, #fff8e7);
+  font: 400 var(--startrips-wordmark-size, 32px)/1.1 var(--archive-serif, Georgia, serif);
+  letter-spacing: -0.045em;
+  white-space: nowrap;
+  isolation: isolate;
+}
+
+.startrips-wordmark__letters {
+  position: relative;
+  z-index: 1;
+  display: block;
+}
+
+.startrips-wordmark__letter,
+.startrips-wordmark__i {
+  display: inline-block;
+  transform-origin: center bottom;
+  transition: transform var(--motion-instant) var(--motion-ease-out-soft);
+}
+
+.startrips-wordmark__i {
+  position: relative;
+  z-index: 1;
+}
+
+.startrips-wordmark__star {
+  position: absolute;
+  z-index: 2;
+  top: 0.055em;
+  left: 50%;
+  width: 0.25em;
+  height: 0.25em;
+  transform: translateX(-50%);
+  transform-origin: center;
+}
+
+.startrips-wordmark__loading-points {
+  position: absolute;
+  z-index: -1;
+  top: -0.42em;
+  left: 50%;
+  width: 1.3em;
+  height: 1.3em;
+  color: var(--startrips-aurora, var(--startrips-starlight, #fff8e7));
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+
+.startrips-wordmark.is-loading .startrips-wordmark__loading-points {
+  opacity: 0.5;
+}
+
+.startrips-wordmark.is-loading .startrips-loading-points__point {
+  animation: starlight-point-morph var(--startrips-motion-wait) var(--motion-ease-in-out-spatial) infinite;
+}
+
+.startrips-wordmark__wait-orbit {
+  position: absolute;
+  z-index: -1;
+  top: -0.32em;
+  left: 50%;
+  display: none;
+  width: 1.12em;
+  height: 1.12em;
+  border: 1px dotted currentColor;
+  border-left-color: transparent;
+  border-radius: 50%;
+  opacity: 0.2;
+  pointer-events: none;
+  transform: translateX(-50%) rotate(-24deg);
+}
+
+.startrips-wordmark__wait-orbit::after {
+  position: absolute;
+  top: -2px;
+  right: 18%;
+  width: 0.12em;
+  height: 0.12em;
+  border-radius: 50%;
+  background: currentColor;
+  content: "";
+}
+
+.startrips-wordmark__lamb {
+  position: absolute;
+  z-index: 2;
+  left: 42%;
+  bottom: 0.66em;
+  width: 0.92em;
+  height: 0.72em;
+  color: var(--startrips-lamb-fill, #fff);
+  pointer-events: none;
+  transform-origin: 70% 55%;
+}
+
+.startrips-wordmark.is-intro .startrips-wordmark__lamb {
+  animation: starlight-follow var(--startrips-motion-entry) var(--motion-ease-in-out-spatial) both;
+}
+
+.startrips-wordmark.is-intro .startrips-wordmark__star {
+  animation: starlight-star-contact var(--startrips-motion-entry) var(--motion-ease-out) both;
+}
+
+.startrips-wordmark.is-loading .startrips-wordmark__lamb {
+  animation: starlight-breathe var(--startrips-motion-breathe) var(--motion-ease-soft) infinite;
+}
+
+.startrips-wordmark.is-loading .startrips-wordmark__wait-orbit {
+  display: block;
+  animation: starlight-wordmark-orbit var(--startrips-motion-wait) linear infinite;
+}
+
+/* The nearby letters yield in order, then the i-star becomes the contact
+   point. Delays are shared interaction tiers so the same sequence scales
+   with the rest of the product motion language. */
+.startrips-wordmark.is-intro .startrips-wordmark__letter:nth-child(5),
+.startrips-wordmark:hover .startrips-wordmark__letter:nth-child(5) {
+  animation: starlight-letter-yield var(--startrips-motion-entry) var(--motion-ease-out) var(--motion-ui) both;
+}
+
+.startrips-wordmark.is-intro .startrips-wordmark__letter:nth-child(6),
+.startrips-wordmark:hover .startrips-wordmark__letter:nth-child(6) {
+  animation: starlight-letter-yield var(--startrips-motion-entry) var(--motion-ease-out) calc(var(--motion-ui) + var(--motion-stagger)) both;
+}
+
+.startrips-wordmark.is-intro .startrips-wordmark__i,
+.startrips-wordmark:hover .startrips-wordmark__i {
+  animation: starlight-letter-yield var(--startrips-motion-entry) var(--motion-ease-out) calc(var(--motion-ui) + var(--motion-stagger) + var(--motion-stagger)) both;
+}
+
+.startrips-wordmark:hover .startrips-wordmark__lamb {
+  animation: starlight-wordmark-nudge var(--motion-content) var(--motion-ease-out) both;
 }
 
 .startrips-brand-loader {
@@ -70,51 +335,22 @@
   justify-items: center;
   gap: 16px;
   text-align: center;
-  color: #dce9e5;
-}
-
-.startrips-brand-loader::before {
-  content: "";
-  position: absolute;
-  z-index: -1;
-  top: 50%;
-  left: 50%;
-  width: 220px;
-  height: 220px;
-  border-radius: 50%;
-  pointer-events: none;
-  background: radial-gradient(circle, rgb(73 229 211 / 0.075), transparent 66%);
-  transform: translate(-50%, -56%);
+  color: var(--startrips-starlight, #fff8e7);
 }
 
 .startrips-brand-loader__copy {
   display: grid;
-  gap: 7px;
+  justify-items: center;
+  gap: 12px;
 }
 
-.startrips-brand-loader__copy strong {
-  color: #c9f8ef;
-  font: 600 9px/1 ui-monospace, "SFMono-Regular", Consolas, monospace;
-  letter-spacing: 0.28em;
+.startrips-brand-loader__copy > span:last-child {
+  max-width: 28ch;
+  color: var(--startrips-muted, #a6b3c3);
+  font: 400 12px/1.7 var(--archive-sans, Inter, sans-serif);
+  letter-spacing: 0.04em;
 }
 
-.startrips-brand-loader__copy span {
-  color: #7f9a94;
-  font: 500 9px/1.4 ui-monospace, "SFMono-Regular", Consolas, monospace;
-  letter-spacing: 0.16em;
-}
-
-@keyframes startrips-brand-path-draw {
-  to { stroke-dashoffset: 0; }
-}
-
-@keyframes startrips-brand-fade-through {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-
-/* Brand loading is a transparent UI layer over the persistent Earth. The
-   local pseudo-element above provides glow without replacing the scene. */
 .auth-gate--brand-loading,
 .living-atlas.is-loading {
   background: transparent;
@@ -124,14 +360,176 @@
   pointer-events: none;
 }
 
+@keyframes starlight-approach {
+  0% { transform: translate(-12%, 7%) rotate(-7deg); }
+  36% { transform: translate(-5%, 4%) rotate(-4deg); }
+  54% { transform: translate(2%, -1%) rotate(2deg); }
+  68% { transform: translate(6%, -4%) rotate(1deg); }
+  80% { transform: translate(2%, 0) rotate(7deg); }
+  100% { transform: translate(0, 0) rotate(0); }
+}
+
+@keyframes starlight-follow {
+  0% { transform: translate(-55%, 13%) rotate(-9deg); }
+  34% { transform: translate(-8%, 5%) rotate(-5deg); }
+  54% { transform: translate(3%, -2%) rotate(3deg); }
+  68% { transform: translate(7%, -4%) rotate(0); }
+  80% { transform: translate(3%, 0) rotate(8deg); }
+  91% { transform: translate(-1%, 1%) rotate(2deg); }
+  100% { transform: translate(0, 0) rotate(0); }
+}
+
+@keyframes starlight-wordmark-nudge {
+  0% { transform: translate(-2%, 3%) rotate(-3deg); }
+  58% { transform: translate(8%, -4%) rotate(2deg); }
+  100% { transform: translate(0, 0) rotate(0); }
+}
+
+@keyframes starlight-head-reach {
+  0%, 28% { transform: translate(0, 0) rotate(-2deg); }
+  48% { transform: translate(3%, -3%) rotate(4deg); }
+  66% { transform: translate(7%, -4%) rotate(1deg); }
+  79% { transform: translate(3%, 0) rotate(8deg); }
+  91% { transform: translate(-1%, 1%) rotate(2deg); }
+  100% { transform: translate(0, 0) rotate(0); }
+}
+
+@keyframes starlight-head-settle {
+  0% { transform: translate(3%, -2%) rotate(3deg); }
+  58% { transform: translate(-1%, 1%) rotate(-1deg); }
+  100% { transform: translate(0, 0) rotate(0); }
+}
+
+@keyframes starlight-leg-step {
+  0%, 28% { transform: rotate(0) translate(0, 0); }
+  50% { transform: rotate(-7deg) translate(2%, -1%); }
+  70% { transform: rotate(3deg) translate(-1%, 0); }
+  82% { transform: rotate(5deg) translate(1%, 0); }
+  100% { transform: rotate(0) translate(0, 0); }
+}
+
+@keyframes starlight-body-contact {
+  0%, 38% { transform: translate(0, 0) rotate(0); }
+  58% { transform: translate(1.5%, -1%) rotate(-1deg); }
+  73% { transform: translate(-1%, 0) rotate(1deg); }
+  100% { transform: translate(0, 0) rotate(0); }
+}
+
+@keyframes starlight-leg-settle {
+  0% { transform: rotate(3deg) translate(-1%, 0); }
+  56% { transform: rotate(-1deg) translate(0, 0); }
+  100% { transform: rotate(0) translate(0, 0); }
+}
+
+@keyframes starlight-letter-yield {
+  0%, 32% { transform: translateX(0) rotate(0); }
+  50% { transform: translateX(0.05em) rotate(-2deg); }
+  66% { transform: translateX(0.12em) rotate(-4deg); }
+  78% { transform: translateX(0.05em) rotate(-2deg); }
+  100% { transform: translateX(0) rotate(0); }
+}
+
+@keyframes starlight-breathe {
+  0%, 100% { transform: translate(0, 0) rotate(0); }
+  48% { transform: translate(1.5%, -2%) rotate(-1.5deg); }
+}
+
+@keyframes starlight-arrival-step {
+  0% { transform: translate(4%, -4%) rotate(-3deg); }
+  58% { transform: translate(-1%, 1%) rotate(1deg); }
+  100% { transform: translate(0, 0) rotate(0); }
+}
+
+@keyframes starlight-star-contact {
+  0%, 34% { opacity: 0.38; transform: translateX(-50%) scale(0.75); }
+  55% { opacity: 1; transform: translateX(-50%) scale(1.12); }
+  70% { opacity: 0.82; transform: translateX(-50%) scale(0.92); }
+  82%, 100% { opacity: 1; transform: translateX(-50%) scale(1); }
+}
+
+@keyframes starlight-arrive {
+  0%, 100% { filter: none; transform: scale(1); }
+  45% { filter: drop-shadow(0 0 5px var(--startrips-starlight, #fff8e7)); transform: scale(1.18); }
+}
+
+@keyframes starlight-point-morph {
+  0%, 12% {
+    opacity: 0.52;
+    transform: translate(var(--point-cluster-x), var(--point-cluster-y));
+  }
+  34% {
+    opacity: 0.9;
+    transform: translate(var(--point-ring-x), var(--point-ring-y));
+  }
+  52% {
+    opacity: 0.76;
+    transform: translate(var(--point-ring-x), var(--point-ring-y));
+  }
+  72%, 100% {
+    opacity: 0.52;
+    transform: translate(var(--point-cluster-x), var(--point-cluster-y));
+  }
+}
+
+@keyframes starlight-mark-orbit {
+  from { transform: rotate(-26deg); }
+  to { transform: rotate(334deg); }
+}
+
+@keyframes starlight-wordmark-orbit {
+  from { transform: translateX(-50%) rotate(-24deg); }
+  to { transform: translateX(-50%) rotate(336deg); }
+}
+
+@media (hover: hover) {
+  .startrips-wordmark:hover .startrips-wordmark__letter,
+  .startrips-wordmark:hover .startrips-wordmark__i {
+    transition: transform var(--motion-instant) var(--motion-ease-out-soft);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .startrips-brand-mark.is-loading .startrips-brand-mark__planet,
-  .startrips-brand-mark.is-loading .startrips-brand-mark__journey,
-  .startrips-brand-mark.is-loading .startrips-brand-mark__waypoint,
-  .startrips-brand-mark.is-loading .startrips-brand-mark__star {
+  .startrips-brand-mark__orbit,
+  .startrips-brand-mark.is-waiting .startrips-brand-mark__orbit,
+  .startrips-brand-mark.is-loading .startrips-brand-mark__orbit,
+  .startrips-brand-mark.is-waiting .startrips-brand-mark__lamb,
+  .startrips-brand-mark.is-loading .startrips-brand-mark__lamb,
+  .startrips-brand-mark.is-travel .startrips-brand-mark__lamb,
+  .startrips-brand-mark.is-arrived .startrips-brand-mark__lamb,
+  .startrips-brand-mark.is-arrived .startrips-brand-mark__star,
+  .startrips-wordmark.is-intro .startrips-wordmark__lamb,
+  .startrips-wordmark.is-intro .startrips-wordmark__star,
+  .startrips-wordmark.is-loading .startrips-wordmark__lamb,
+  .startrips-wordmark.is-loading .startrips-wordmark__wait-orbit,
+  .startrips-wordmark.is-intro .startrips-wordmark__letter:nth-child(5),
+  .startrips-wordmark.is-intro .startrips-wordmark__letter:nth-child(6),
+  .startrips-wordmark.is-intro .startrips-wordmark__i,
+  .startrips-wordmark:hover .startrips-wordmark__lamb,
+  .startrips-wordmark:hover .startrips-wordmark__letter:nth-child(5),
+  .startrips-wordmark:hover .startrips-wordmark__letter:nth-child(6),
+  .startrips-wordmark:hover .startrips-wordmark__i,
+  .startrips-lamb.is-travel .startrips-lamb__head-motion,
+  .startrips-lamb.is-travel .startrips-lamb__body-motion,
+  .startrips-lamb.is-travel .startrips-lamb__leg-motion,
+  .startrips-lamb.is-arrived .startrips-lamb__head-motion,
+  .startrips-lamb.is-arrived .startrips-lamb__leg-motion,
+  .startrips-brand-mark.is-waiting .startrips-loading-points__point,
+  .startrips-brand-mark.is-loading .startrips-loading-points__point,
+  .startrips-wordmark.is-loading .startrips-loading-points__point {
     animation: none;
-    opacity: 1;
-    transform: none;
-    stroke-dashoffset: 0;
+  }
+
+  .startrips-loading-points__point {
+    opacity: 0.52;
+    transform: translate(var(--point-cluster-x), var(--point-cluster-y));
+  }
+
+  .startrips-wordmark__wait-orbit {
+    transform: translateX(-50%) rotate(-24deg);
+  }
+
+  .startrips-wordmark__letter,
+  .startrips-wordmark__i {
+    transition: none;
   }
 }

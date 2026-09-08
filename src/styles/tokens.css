@@ -1,4 +1,9 @@
 :root {
+  --startrips-space: #0b1020;
+  --startrips-starlight: #fff8e7;
+  --startrips-aurora: #7ce0c3;
+  --startrips-muted: #a6b3c3;
+  --startrips-line: rgb(255 248 231 / 0.16);
   --archive-bg: #020706;
   --archive-ink: #e6eee9;
   --archive-muted: rgba(190, 209, 201, 0.56);

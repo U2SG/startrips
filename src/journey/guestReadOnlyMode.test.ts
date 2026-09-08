@@ -88,6 +88,8 @@ function storyMarkup(view: AtlasView | null) {
  * 390x844 and 932x430, where they are the reachable surface.
  */
 const MUTATION_AFFORDANCES = [
+  'aria-label="编辑故事"',
+  'aria-label="编辑旅程感想"',
   "添加照片或视频",
   "编辑旅程",
   "删除旅程",
@@ -126,15 +128,17 @@ describe("JourneyStory in a read-only capability set (#200 phase D)", () => {
     expect(markup).toContain("下一段");
   });
 
-  it("keeps every one of those affordances in owner mode", () => {
-    // The same component, the same props shape, the owner capability set: if
-    // this stops holding, the read-only assertions above have become vacuous.
+  it("offers the owner an edit entry while preserving the initial reading view", () => {
+    // Owner and guest both start in reading mode. Only the owner can enter
+    // editing; browser QA exercises the mutation controls after that gesture.
     const ownerMarkup = storyMarkup(null);
-    expect(ownerMarkup).toContain('type="file"');
-    expect(ownerMarkup).toContain("添加照片或视频");
-    expect(ownerMarkup).toContain("编辑旅程");
-    expect(ownerMarkup).toContain("删除旅程");
-    expect(ownerMarkup).toContain("分享旅程");
+    expect(ownerMarkup).toContain('aria-label="编辑故事"');
+    expect(ownerMarkup).not.toContain('data-story-editing="true"');
+    expect(ownerMarkup).not.toContain('type="file"');
+    expect(ownerMarkup).not.toContain("添加照片或视频");
+    expect(ownerMarkup).not.toContain("编辑旅程");
+    expect(ownerMarkup).not.toContain("删除旅程");
+    expect(ownerMarkup).not.toContain("分享旅程");
     expect(OWNER_ATLAS_VIEW_CAPABILITIES.canManageMedia).toBe(true);
   });
 });
@@ -174,6 +178,7 @@ const OWNER_MUTATION_EXPORTS = [
 
 const GUEST_REACHABLE_MODULES = [
   "JourneyStory.tsx",
+  "StoryNotesEditor.tsx",
   // Statically imported by `LivingAtlasApp`, so it is in a guest bundle even
   // though a guest can never mount it: its share client arrives as a prop.
   "JourneyShareDialog.tsx",

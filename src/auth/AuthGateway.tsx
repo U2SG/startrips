@@ -9,7 +9,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { IconChevronDown, IconUserCircle } from "@tabler/icons-react";
-import { StartripsBrandLoader } from "../brand/StartripsBrandMark";
+import { StartripsBrandLoader, StartripsJourneyCue, StartripsWordmark } from "../brand/StartripsBrandMark";
 import { useCompactMobileLayout } from "../journey/mobileLayout";
 import { useMobileSurfaceHistory } from "../journey/useMobileSurfaceHistory";
 import { useModalFocus } from "../journey/useModalFocus";
@@ -201,20 +201,27 @@ function AuthForm({ onAuthenticated, handoff = false, forceReady = false, lightw
       onFocusCapture={() => setIntroSkipped(true)}
     >
       <LoginV3Scene handoff={handoff} forceReady={presentationReady} lightweight={lightweightScene} />
-      <div className="auth-v3-brand" aria-hidden="true">
-        <span>STARTRIPS</span>
-        <span>PRIVATE MEMORY ATLAS</span>
+      <div className="auth-v3-brand">
+        <StartripsWordmark size={30} />
+        <span className="auth-v3-brand__caption">PRIVATE JOURNEY ATLAS</span>
+      </div>
+      <div className={`auth-starlight-intro${presentationReady ? " is-ready" : ""}`} aria-hidden="true">
+        <StartripsWordmark size={96} intro={!presentationReady} />
+        <p>向着星光，慢慢出发。</p>
+        <small>同一片星空，下一段故事。</small>
       </div>
       <section
         className={`auth-card auth-card--login-v3 is-${mode}${handoff ? " is-handoff" : ""}${presentationReady ? " is-ready" : ""}`}
         aria-labelledby="auth-title"
         aria-busy={pending}
       >
-        <p className="auth-eyebrow">STARTRIPS · PRIVATE ATLAS</p>
+        <p className="auth-eyebrow">YOUR JOURNEY STARTS HERE</p>
         <h1 id="auth-title">
           {mode === "sign-in" ? "进入你们的星轨" : mode === "sign-up" ? "创建私人入口" : "重置密码"}
         </h1>
-        <p className="auth-copy">一个账号只创建一份私人图谱，最多邀请另一位共同编辑。</p>
+        <p className="auth-copy">{mode === "sign-up"
+          ? "一个账号只创建一份私人图谱，最多邀请另一位共同编辑。"
+          : "把走过的路、沿途的照片与故事，留在你们的私人图谱里。"}</p>
 
         <form onSubmit={submit}>
           {mode === "sign-up" ? (
@@ -234,6 +241,7 @@ function AuthForm({ onAuthenticated, handoff = false, forceReady = false, lightw
             </label>
           ) : null}
           <button className="auth-primary" type="submit" disabled={pending}>
+            {pending ? <StartripsJourneyCue state="waiting" size={26} /> : null}
             {pending ? "请稍候…" : mode === "sign-in" ? "登录" : mode === "sign-up" ? "注册并验证邮箱" : "发送重置链接"}
           </button>
         </form>
@@ -288,7 +296,8 @@ function ResetPassword() {
   return (
     <main className="auth-gate">
       <section className="auth-card">
-        <p className="auth-eyebrow">STARTRIPS · ACCOUNT RECOVERY</p>
+        <StartripsWordmark size={38} />
+        <p className="auth-eyebrow">ACCOUNT RECOVERY</p>
         <h1>设置新密码</h1>
         {token ? (
           <form onSubmit={submit}>
@@ -335,7 +344,8 @@ function InvitationGate({ invitationId, onAccepted }: { invitationId: string; on
   return (
     <main className="auth-gate">
       <section className="auth-card">
-        <p className="auth-eyebrow">STARTRIPS · INVITATION</p>
+        <StartripsWordmark size={38} />
+        <p className="auth-eyebrow">INVITATION</p>
         <h1>加入共同图谱</h1>
         <p className="auth-copy">接受后，你将成为这份私人图谱的第二位成员。</p>
         <button className="auth-primary" type="button" disabled={pending} onClick={accept}>{pending ? "正在加入…" : "接受邀请"}</button>
@@ -571,7 +581,7 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cine
   if (gate.kind === "create-organization" || gate.kind === "bootstrap") {
     const isCreate = gate.kind === "create-organization";
     return (
-      <main className="auth-gate"><section className="auth-card"><p className="auth-eyebrow">STARTRIPS · PRIVATE ATLAS</p><h1>{isCreate ? "命名你们的图谱" : "完成图谱初始化"}</h1><p className="auth-copy">它将与账号及另一位受邀成员严格隔离。</p><form onSubmit={isCreate ? createOrganization : bootstrapAtlas}><label><span>图谱名称</span><input required maxLength={80} value={atlasName} onChange={(event) => setAtlasName(event.target.value)} /></label><label><span>题词（可选）</span><textarea maxLength={240} rows={3} value={dedication} onChange={(event) => setDedication(event.target.value)} /></label><button className="auth-primary" type="submit" disabled={pending}>{pending ? "正在创建…" : "创建私人图谱"}</button></form>{message ? <p className="auth-message" role="alert">{message}</p> : null}</section></main>
+      <main className="auth-gate"><section className="auth-card"><StartripsWordmark size={38} intro /><p className="auth-eyebrow">PRIVATE ATLAS</p><h1>{isCreate ? "命名你们的图谱" : "完成图谱初始化"}</h1><p className="auth-copy">它将与账号及另一位受邀成员严格隔离。</p><form onSubmit={isCreate ? createOrganization : bootstrapAtlas}><label><span>图谱名称</span><input required maxLength={80} value={atlasName} onChange={(event) => setAtlasName(event.target.value)} /></label><label><span>题词（可选）</span><textarea maxLength={240} rows={3} value={dedication} onChange={(event) => setDedication(event.target.value)} /></label><button className="auth-primary" type="submit" disabled={pending}>{pending ? "正在创建…" : "创建私人图谱"}</button></form>{message ? <p className="auth-message" role="alert">{message}</p> : null}</section></main>
     );
   }
 

@@ -1,7 +1,9 @@
-import { StrictMode, useCallback, useEffect, useMemo, useState } from "react";
+import { StrictMode, Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { AuthGateway } from "./auth/AuthGateway";
+import { StartripsNotFound } from "./brand/StartripsNotFound";
+import { StartripsBrandLoader } from "./brand/StartripsBrandMark";
 import { LivingAtlasApp } from "./journey/LivingAtlasApp";
 import { useCompactMobileLayout } from "./journey/mobileLayout";
 import { JourneyComposer } from "./journey/JourneyComposer";
@@ -36,6 +38,7 @@ import "./styles/brand-mark.css";
 import "./styles/living-atlas.css";
 import "./styles/journey-playback.css";
 import "./styles/globe-time-scrubber.css";
+import "./styles/starlight-experience.css";
 
 const qaState = new URLSearchParams(window.location.search).get("qaState");
 
@@ -697,11 +700,20 @@ const Experience = import.meta.env.DEV && qaState === "journey-composer"
  * an owner atlas, an owner capability provider, or an account surface.
  */
 const shared = isSharedAtlasPathname(window.location.pathname);
+const knownAppPath = ["/", "/reset-password", "/accept-invitation"].includes(window.location.pathname);
+const localDemo = import.meta.env.DEV
+  && window.location.pathname === "/"
+  && new URLSearchParams(window.location.search).get("demo") === "1";
+const ExperienceDemo = import.meta.env.DEV ? lazy(() => import("./preview/ExperienceDemo")) : null;
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <PersistentEarthProvider>
-      {shared ? (
+      {localDemo && ExperienceDemo ? (
+        <Suspense fallback={<main className="auth-gate auth-gate--brand-loading"><StartripsBrandLoader message="正在打开示例图谱…" /></main>}>
+          <ExperienceDemo />
+        </Suspense>
+      ) : !shared && !knownAppPath ? <StartripsNotFound /> : shared ? (
         <SharedAtlasView />
       ) : (
         <AuthGateway>

@@ -1,0 +1,155 @@
+/* Journey media states: a quiet lamb-to-star signal, reserved for real waits,
+   recoverable failures and deliberate journey transitions. */
+.starlight-media-state {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 14px;
+  padding: clamp(20px, 4vw, 48px);
+  color: var(--startrips-starlight, #fff8e7);
+  text-align: center;
+  pointer-events: none;
+}
+
+.journey-story__media-state.starlight-media-state {
+  height: auto;
+}
+
+.journey-playback__media {
+  position: relative;
+  min-height: 0;
+  min-width: 0;
+}
+
+.journey-playback__stage:has(> .journey-playback__media) {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.journey-story-fullscreen:has(> .starlight-media-state) > :is(.journey-story-fullscreen__close, .journey-story-fullscreen__nav) {
+  z-index: 3;
+}
+
+.journey-playback__media-state.starlight-media-state {
+  color: var(--startrips-starlight, #fff8e7);
+}
+
+.starlight-media-state.is-waiting {
+  background: radial-gradient(circle at 50% 50%, rgb(11 16 32 / 0.16), transparent 64%);
+}
+
+.starlight-media-state.is-error {
+  background: var(--startrips-space, #0b1020);
+}
+
+.starlight-media-state.is-error > button {
+  pointer-events: auto;
+}
+
+.starlight-media-state.is-over-media {
+  inset: 12px 12px auto;
+  justify-self: center;
+  width: fit-content;
+  max-width: calc(100% - 24px);
+  margin-inline: auto;
+  padding: 8px 12px;
+  border: 1px solid var(--startrips-line);
+  border-radius: 999px;
+  background: rgb(11 16 32 / 0.84);
+}
+
+.starlight-media-state.is-over-media strong {
+  font: 400 11px/1.5 var(--archive-sans, Inter, sans-serif);
+  letter-spacing: 0.02em;
+}
+
+.starlight-media-state__cue {
+  color: var(--startrips-starlight, #fff8e7);
+  filter: drop-shadow(0 0 18px rgb(255 248 231 / 0.12));
+}
+
+.starlight-media-state__copy {
+  display: grid;
+  gap: 6px;
+  max-width: min(34ch, 78vw);
+}
+
+.starlight-media-state__copy strong {
+  font: 400 clamp(16px, 2vw, 22px)/1.25 var(--archive-serif, Georgia, serif);
+  letter-spacing: 0.02em;
+}
+
+.starlight-media-state__copy span {
+  color: var(--startrips-muted, #a6b3c3);
+  font: 400 11px/1.65 var(--archive-sans, Inter, sans-serif);
+  letter-spacing: 0.04em;
+}
+
+.starlight-media-state > button {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 16px;
+  border: 1px solid var(--startrips-line, rgb(255 248 231 / 0.16));
+  border-radius: 999px;
+  background: rgb(255 248 231 / 0.08);
+  color: var(--startrips-starlight, #fff8e7);
+  cursor: pointer;
+  font: 500 11px/1 var(--archive-sans, Inter, sans-serif);
+  letter-spacing: 0.06em;
+  transition: background var(--motion-instant, 120ms) var(--motion-ease-out, ease),
+    border-color var(--motion-instant, 120ms) var(--motion-ease-out, ease),
+    transform var(--motion-instant, 120ms) var(--motion-ease-out, ease);
+}
+
+.starlight-media-state > button:hover,
+.starlight-media-state > button:focus-visible {
+  border-color: var(--startrips-aurora, #7ce0c3);
+  background: rgb(124 224 195 / 0.12);
+}
+
+.starlight-media-state > button:active {
+  transform: translateY(1px);
+}
+
+.journey-story__order-message .starlight-media-state__inline-cue {
+  flex: 0 0 auto;
+  margin-inline: -4px 2px;
+}
+
+.journey-playback__intro-brand,
+.journey-playback__outro-brand {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  padding-top: 20px;
+  margin-bottom: 28px;
+  color: var(--startrips-starlight, #fff8e7);
+}
+
+.journey-playback__intro-brand .startrips-wordmark,
+.journey-playback__outro-brand .startrips-wordmark {
+  color: var(--startrips-starlight, #fff8e7);
+}
+
+.journey-playback__travel-cue,
+.journey-playback__stop-cue {
+  min-height: 48px;
+  display: grid;
+  place-items: center;
+}
+
+@media (max-width: 640px) {
+  .starlight-media-state:not(.is-over-media) {
+    padding: 20px;
+  }
+
+
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .starlight-media-state > button {
+    transition: none;
+  }
+}

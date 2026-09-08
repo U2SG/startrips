@@ -21,6 +21,7 @@ import {
   IconX,
 } from "@tabler/icons-react";
 import { IconActionButton } from "../components/IconActionButton";
+import { StartripsJourneyCue } from "../brand/StartripsBrandMark";
 import {
   uploadMediaInParts,
   type UploadedMediaAsset,
@@ -1202,14 +1203,14 @@ export function JourneyComposer({
             {progress ? <div className="journey-upload-progress" aria-live="polite"><span>{progress.fileName}</span><progress max={100} value={progressPercent} /> <strong>{progressPercent}%</strong></div> : null}
             {savedResult?.mediaErrors.length ? (
               <div className="journey-save-partial" role="status">
-                <h4>旅程已保存，部分媒体没有上传成功</h4>
+                <div className="journey-save-partial__heading"><StartripsJourneyCue state="rest" size={40} /><h4>旅程已保存，部分媒体没有上传成功</h4></div>
                 <p>成功 {savedResult.uploadedCount} 个，失败 {savedResult.mediaErrors.length} 个。路线和故事不会丢失。</p>
                 <ul>{savedResult.mediaErrors.map((error) => <li key={`${error.fileIndex}-${error.fileName}`}><strong>{error.fileName}</strong>：{error.message}</li>)}</ul>
                 <button type="button" onClick={retryFailedMedia} disabled={saving}>{saving ? "正在重试…" : "重试失败媒体"}</button>
               </div>
             ) : null}
             {savedResult && savedResult.mediaErrors.length === 0 && mediaFiles.length > 0 ? (
-              <div className="journey-save-complete" role="status">媒体已经全部上传完成，可以返回地球查看这段旅程。</div>
+              <div className="journey-save-complete" role="status"><StartripsJourneyCue state="arrived" size={48} /><span>媒体已经全部上传完成，可以返回地球查看这段旅程。</span></div>
             ) : null}
           </div>
         ) : null}
@@ -1223,7 +1224,7 @@ export function JourneyComposer({
                 ? `${existingVisualMediaCount} 个已有媒体`
                 : "媒体可以稍后补充"}</span>
           </div>
-          {savedResult ? <button type="button" onClick={closeComposer}><IconCheck size={18} stroke={1.4} aria-hidden="true" />完成</button> : <button type="button" onClick={save} disabled={saving}><IconCheck size={18} stroke={1.4} aria-hidden="true" />{saving ? "正在保存…" : isEditing ? "保存修改" : "保存到星球"}</button>}
+          {savedResult ? <button type="button" onClick={closeComposer}><IconCheck size={18} stroke={1.4} aria-hidden="true" />完成</button> : <button type="button" onClick={save} disabled={saving}>{saving ? <StartripsJourneyCue state="waiting" size={32} /> : <IconCheck size={18} stroke={1.4} aria-hidden="true" />}{saving ? "正在保存…" : isEditing ? "保存修改" : "保存到星球"}</button>}
         </footer>
       </section>
     </div>

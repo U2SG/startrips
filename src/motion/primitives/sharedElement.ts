@@ -1,11 +1,22 @@
 import { flushSync } from "react-dom";
-import { prefersReducedMotion } from "../preferences";
+import { onMotionPreferenceChange, prefersReducedMotion } from "../preferences";
+
+type ViewTransitionHandle = {
+  finished: Promise<void>;
+  skipTransition: () => void;
+};
 
 type ViewTransitionDocument = Document & {
-  startViewTransition?: (update: () => void) => {
-    finished: Promise<void>;
-  };
+  startViewTransition?: (update: () => void) => ViewTransitionHandle;
 };
+
+let activeCardTransition: ViewTransitionHandle | null = null;
+
+function skipActiveCardTransition() {
+  const transition = activeCardTransition;
+  activeCardTransition = null;
+  transition?.skipTransition();
+}
 
 /**
  * ML-04 Shared-Element Morph.
@@ -21,6 +32,7 @@ export function morphJourneyCard(
   hasExistingActiveCard: boolean,
   update: () => void,
 ): void {
+  skipActiveCardTransition();
   const doc = document as ViewTransitionDocument;
   if (
     !doc.startViewTransition
@@ -38,7 +50,11 @@ export function morphJourneyCard(
     if (source) source.style.viewTransitionName = "";
     flushSync(update);
   });
-  void transition.finished.catch(() => undefined);
+  activeCardTransition = transition;
+  const clearTransition = () => {
+    if (activeCardTransition === transition) activeCardTransition = null;
+  };
+  void transition.finished.then(clearTransition, clearTransition);
 }
 
 /**
@@ -80,17 +96,20 @@ export type SharedElementMorphOptions = {
   update: () => void;
   name: string;
   durationMs?: number;
+  /** Keep the source while an asynchronous target is loading, only for as
+   * long as the caller's original destination is still the current intent. */
+  isTargetCurrent?: () => boolean;
 };
 
-let sharedElementMorphActive = false;
+let cancelActiveMorph: (() => void) | null = null;
 
 /**
  * #18 complete shared-element primitive.
  *
- * Uses the View Transitions API when available. Unsupported browsers get a
- * WAAPI fixed-clone/FLIP-style fallback that animates the exact source pixels
- * into the target rect. Reduced-motion intentionally skips the spatial morph
- * and lets the surrounding UI use its short crossfade.
+ * Owns one source clone and one destination, rather than a document snapshot.
+ * The Atlas card has its own view-transition-name; a document transition here
+ * would also lift that whole card above the Story's blurred backdrop. Keep
+ * View Transitions for morphJourneyCard, and use an element-only handoff here.
  */
 export function runSharedElementMorph({
   source,
@@ -98,66 +117,41 @@ export function runSharedElementMorph({
   update,
   name,
   durationMs = 560,
+  isTargetCurrent,
 }: SharedElementMorphOptions): void {
-  const doc = typeof document === "undefined"
-    ? undefined
-    : document as ViewTransitionDocument;
-
-  if (!source || prefersReducedMotion()) {
+  // A rail-to-card snapshot may still be above the document when Story opens.
+  // End that snapshot before the media clone takes ownership of the handoff.
+  skipActiveCardTransition();
+  // A close or a newer selection always wins, including non-animated updates.
+  // Never discard the user's state update because an older morph is active.
+  cancelActiveMorph?.();
+  if (!source || typeof document === "undefined" || prefersReducedMotion()) {
     update();
     return;
   }
-  // Repeated clicks during one spatial morph are ignored for only the motion
-  // window; the rest of the app remains interactive.
-  if (sharedElementMorphActive) return;
-  sharedElementMorphActive = true;
-
-  const release = () => {
-    sharedElementMorphActive = false;
-  };
-
-  if (doc?.startViewTransition) {
-    let target: HTMLElement | null = null;
-    const previousSourceName = source.style.viewTransitionName;
-    source.style.viewTransitionName = name;
-    const transition = doc.startViewTransition(() => {
-      source.style.viewTransitionName = previousSourceName;
-      flushSync(update);
-      target = resolveTarget();
-      if (target) target.style.viewTransitionName = name;
-    });
-    void transition.finished
-      .catch(() => undefined)
-      .finally(() => {
-        if (target?.style.viewTransitionName === name) {
-          target.style.viewTransitionName = "";
-        }
-        source.style.viewTransitionName = previousSourceName;
-        release();
-      });
-    return;
-  }
-
-  runFlipFallback(source, resolveTarget, update, durationMs, release);
-}
-
-function runFlipFallback(
-  source: HTMLElement,
-  resolveTarget: () => HTMLElement | null,
-  update: () => void,
-  durationMs: number,
-  release: () => void,
-) {
-  const sourceRect = source.getBoundingClientRect();
-  if (!hasRenderableRect(sourceRect) || typeof source.cloneNode !== "function") {
+  const sourceRect = mediaRect(source);
+  if (!canPresent(source, sourceRect) || typeof source.cloneNode !== "function") {
     update();
-    release();
     return;
   }
 
-  const clone = source.cloneNode(true) as HTMLElement;
-  clone.removeAttribute("id");
+  const clone = snapshotSource(source);
+  if (!clone) {
+    update();
+    return;
+  }
+  // A clone must never resolve as the destination or enter keyboard focus.
+  for (const node of [clone, ...clone.querySelectorAll<HTMLElement>("*")]) {
+    node.removeAttribute("id");
+    node.removeAttribute("data-shared-media-id");
+    node.removeAttribute("data-shared-journey-cover");
+    node.removeAttribute("role");
+    node.setAttribute("tabindex", "-1");
+    node.style.viewTransitionName = "none";
+  }
+  clone.dataset.sharedElementClone = name;
   clone.setAttribute("aria-hidden", "true");
+  clone.inert = true;
   const computed = getComputedStyle(source);
   Object.assign(clone.style, {
     position: "fixed",
@@ -170,9 +164,12 @@ function runFlipFallback(
     height: `${sourceRect.height}px`,
     maxWidth: "none",
     maxHeight: "none",
-    objectFit: computed.objectFit,
+    // mediaRect already removes contain letterboxing. Cover works at that
+    // aspect ratio and also recreates the crop when returning to a card.
+    objectFit: computed.objectFit === "contain" || computed.objectFit === "scale-down" ? "cover" : computed.objectFit,
     objectPosition: computed.objectPosition,
     borderRadius: computed.borderRadius,
+    transform: "none",
     transformOrigin: "top left",
     boxSizing: "border-box",
   });
@@ -180,70 +177,138 @@ function runFlipFallback(
 
   const previousSourceVisibility = source.style.visibility;
   source.style.visibility = "hidden";
-  flushSync(update);
-  const target = resolveTarget();
-  const targetRect = target?.getBoundingClientRect();
-  const previousTargetVisibility = target?.style.visibility ?? "";
-  if (target) target.style.visibility = "hidden";
-
+  let target: HTMLElement | null = null;
+  let previousTargetVisibility = "";
   let animation: Animation | null = null;
+  let observer: MutationObserver | null = null;
+  let stopMotionPreference: () => void = () => undefined;
   let settled = false;
   const cleanup = () => {
     if (settled) return;
     settled = true;
-    source.style.visibility = previousSourceVisibility;
-    if (target) target.style.visibility = previousTargetVisibility;
-    clone.remove();
-    window.removeEventListener("resize", cancelForLayoutChange);
-    window.removeEventListener("orientationchange", cancelForLayoutChange);
-    release();
-  };
-  const cancelForLayoutChange = () => {
+    observer?.disconnect();
+    stopMotionPreference();
     animation?.cancel();
-    cleanup();
+    if (source.style.visibility === "hidden") source.style.visibility = previousSourceVisibility;
+    if (target?.style.visibility === "hidden") target.style.visibility = previousTargetVisibility;
+    clone.remove();
+    window.removeEventListener("resize", cleanup);
+    window.removeEventListener("orientationchange", cleanup);
+    window.removeEventListener("blur", cleanup);
+    document.removeEventListener("scroll", cleanup, true);
+    document.removeEventListener("visibilitychange", onVisibilityChange);
+    if (cancelActiveMorph === cleanup) cancelActiveMorph = null;
   };
-  window.addEventListener("resize", cancelForLayoutChange, { once: true });
-  window.addEventListener("orientationchange", cancelForLayoutChange, { once: true });
-
-  if (!targetRect || !hasRenderableRect(targetRect) || !isViewportVisible(targetRect)) {
+  const onVisibilityChange = () => { if (document.hidden) cleanup(); };
+  const advance = () => {
+    if (settled) return;
+    if (isTargetCurrent && !isTargetCurrent()) {
+      cleanup();
+      return;
+    }
+    const candidate = resolveTarget();
+    if (target) {
+      if (candidate !== target || !target.isConnected) cleanup();
+      return;
+    }
+    const targetRect = candidate ? mediaRect(candidate) : null;
+    if (!candidate || !targetRect || !canPresent(candidate, targetRect)) {
+      if (!isTargetCurrent) cleanup();
+      return;
+    }
+    target = candidate;
+    previousTargetVisibility = target.style.visibility;
+    // The ready target is hidden before the next paint. The clone is the sole
+    // visible owner until animation completion restores the target and removes
+    // the clone in the same task; there is no extra fade/retention timeout.
+    target.style.visibility = "hidden";
     if (typeof clone.animate !== "function") {
       cleanup();
       return;
     }
-    animation = clone.animate(
-      [{ opacity: 1 }, { opacity: 0 }],
-      { duration: Math.min(220, durationMs), easing: "ease-out", fill: "forwards" },
-    );
-  } else if (typeof clone.animate === "function") {
-    animation = clone.animate([
-      {
-        left: `${sourceRect.left}px`,
-        top: `${sourceRect.top}px`,
-        width: `${sourceRect.width}px`,
-        height: `${sourceRect.height}px`,
-        borderRadius: computed.borderRadius,
-        opacity: 1,
-      },
-      {
-        left: `${targetRect.left}px`,
-        top: `${targetRect.top}px`,
-        width: `${targetRect.width}px`,
-        height: `${targetRect.height}px`,
-        borderRadius: target ? getComputedStyle(target).borderRadius : computed.borderRadius,
-        opacity: 1,
-      },
-    ], {
-      duration: durationMs,
-      easing: "cubic-bezier(0.16, 1, 0.3, 1)",
-      fill: "forwards",
-    });
-  }
-
-  if (!animation) {
+    const framesFor = (destination: DOMRect) => [
+        { left: `${sourceRect.left}px`, top: `${sourceRect.top}px`,
+          width: `${sourceRect.width}px`, height: `${sourceRect.height}px`, borderRadius: computed.borderRadius },
+        { left: `${destination.left}px`, top: `${destination.top}px`,
+          width: `${destination.width}px`, height: `${destination.height}px`, borderRadius: getComputedStyle(candidate).borderRadius },
+      ];
+    try {
+      animation = clone.animate(framesFor(targetRect), {
+        duration: durationMs, easing: "cubic-bezier(0.16, 1, 0.3, 1)", fill: "forwards",
+      });
+      void animation.finished.then(cleanup, cleanup);
+    } catch {
+      cleanup();
+    }
+  };
+  cancelActiveMorph = cleanup;
+  window.addEventListener("resize", cleanup);
+  window.addEventListener("orientationchange", cleanup);
+  window.addEventListener("blur", cleanup);
+  document.addEventListener("scroll", cleanup, true);
+  document.addEventListener("visibilitychange", onVisibilityChange);
+  stopMotionPreference = onMotionPreferenceChange((reduced) => { if (reduced) cleanup(); });
+  try {
+    flushSync(update);
+    if (settled) return;
+    observer = new MutationObserver(advance);
+    observer.observe(document.body, { childList: true, subtree: true, attributes: true,
+      attributeFilter: ["data-shared-media-id", "data-media-page-id", "data-media-incoming", "role", "hidden", "aria-hidden", "src", "style", "class"] });
+    advance();
+  } catch (error) {
     cleanup();
-    return;
+    throw error;
   }
-  void animation.finished.catch(() => undefined).finally(cleanup);
+}
+
+function snapshotSource(source: HTMLElement): HTMLElement | null {
+  if (source instanceof HTMLVideoElement) {
+    if (source.readyState < 2 || !source.videoWidth || !source.videoHeight) return null;
+    const canvas = document.createElement("canvas");
+    canvas.width = source.videoWidth;
+    canvas.height = source.videoHeight;
+    try {
+      const context = canvas.getContext("2d");
+      if (!context) return null;
+      context.drawImage(source, 0, 0);
+      return canvas;
+    } catch { return null; }
+  }
+  const clone = source.cloneNode(true) as HTMLElement;
+  if (source instanceof HTMLImageElement && clone instanceof HTMLImageElement) {
+    clone.removeAttribute("srcset");
+    clone.src = source.currentSrc || source.src;
+  }
+  return clone;
+}
+
+/** Contained photos have letterboxing in their DOM box; hand off at the pixels,
+ * otherwise a cover-cropped clone would snap when the real image is revealed. */
+function mediaRect(element: HTMLElement): DOMRect {
+  const rect = element.getBoundingClientRect();
+  const style = getComputedStyle(element);
+  const width = element instanceof HTMLImageElement ? element.naturalWidth
+    : element instanceof HTMLVideoElement ? element.videoWidth : 0;
+  const height = element instanceof HTMLImageElement ? element.naturalHeight
+    : element instanceof HTMLVideoElement ? element.videoHeight : 0;
+  if (!width || !height || (style.objectFit !== "contain" && style.objectFit !== "scale-down")) return rect;
+  const scale = Math.min(rect.width / width, rect.height / height, style.objectFit === "scale-down" ? 1 : Infinity);
+  const paintedWidth = width * scale, paintedHeight = height * scale;
+  const [x = "50%", y = "50%"] = style.objectPosition.split(/\s+/);
+  const offset = (value: string, space: number) => value.endsWith("%") ? space * Number.parseFloat(value) / 100
+    : value === "center" ? space / 2 : value === "right" || value === "bottom" ? space
+      : Number.parseFloat(value) || 0;
+  return new DOMRect(rect.left + offset(x, rect.width - paintedWidth), rect.top + offset(y, rect.height - paintedHeight), paintedWidth, paintedHeight);
+}
+
+function canPresent(element: HTMLElement, rect: DOMRect) {
+  if (element instanceof HTMLImageElement && (!element.complete || !element.naturalWidth)) return false;
+  if (element instanceof HTMLVideoElement && element.readyState < 2) return false;
+  // The visible Atlas card content is aria-hidden because its hit-area button
+  // supplies the accessible name. ARIA exclusion does not mean unpainted.
+  return element.isConnected && !element.closest("[hidden]")
+    && getComputedStyle(element).visibility !== "hidden"
+    && hasRenderableRect(rect) && isViewportVisible(rect);
 }
 
 function hasRenderableRect(rect: DOMRect) {

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { StartripsJourneyCue } from "../brand/StartripsBrandMark";
 import {
   IconCheck,
   IconCopy,
@@ -307,7 +308,7 @@ export function JourneyShareDialog({
               disabled={pending || selected.length === 0}
               onClick={() => void createLink()}
             >
-              <IconLink size={17} stroke={1.35} aria-hidden="true" />
+              {pending ? <StartripsJourneyCue state="waiting" size={28} /> : <IconLink size={17} stroke={1.35} aria-hidden="true" />}
               {pending ? "正在创建…" : "创建分享链接"}
             </button>
           </div>
@@ -315,6 +316,7 @@ export function JourneyShareDialog({
 
         {phase === "created" && created ? (
           <div className="journey-share__created">
+            <div className="journey-share__created-heading"><StartripsJourneyCue state="arrived" size={48} /><p>同一片星空，一起看这段旅程。</p></div>
             <p className="journey-share__created-expiry">
               链接有效至 <strong data-share-expires-at={created.expiresAt}>{formatShareExpiry(created.expiresAt)}</strong>
             </p>

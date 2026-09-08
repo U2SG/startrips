@@ -1,0 +1,112 @@
+.story-notes-editor {
+  display: grid;
+  min-width: 0;
+  gap: 1rem;
+  margin-top: 1.25rem;
+  color: var(--startrips-starlight);
+  font-family: var(--archive-sans);
+}
+
+.story-notes-editor__intro,
+.story-notes-editor__field {
+  display: grid;
+  min-width: 0;
+  gap: 0.45rem;
+}
+
+.story-notes-editor__intro h3 {
+  margin: 0;
+  color: var(--startrips-starlight);
+  font-size: 1.1rem;
+  font-weight: 500;
+}
+
+.story-notes-editor__field {
+  color: var(--startrips-muted);
+  font-size: 0.8rem;
+}
+
+.story-notes-editor__field textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 7rem;
+  resize: vertical;
+  padding: 0.7rem;
+  border: 1px solid var(--startrips-line);
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--startrips-space) 86%, transparent);
+  color: var(--startrips-starlight);
+  font: inherit;
+  line-height: 1.55;
+}
+
+.story-notes-editor__field textarea:focus-visible {
+  outline: 1px solid var(--startrips-starlight);
+  outline-offset: 2px;
+}
+
+.story-notes-editor__field textarea:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.story-notes-editor__field small {
+  justify-self: end;
+  color: var(--startrips-muted);
+  font-size: 0.7rem;
+}
+
+.story-notes-editor__message {
+  margin: 0;
+  color: var(--startrips-muted);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.story-notes-editor__message.is-error {
+  color: #ffb4aa;
+}
+
+.story-notes-editor__message.is-saved {
+  color: var(--startrips-aurora);
+}
+
+.story-notes-editor__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.story-notes-editor__actions button {
+  flex: 1 1 7rem;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0.5rem 0.7rem;
+  border: 1px solid var(--startrips-line);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--startrips-starlight);
+  font: 500 0.78rem/1.2 var(--archive-sans);
+  cursor: pointer;
+}
+
+.story-notes-editor__actions button:hover:not(:disabled) {
+  border-color: var(--startrips-starlight);
+}
+
+.story-notes-editor__actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.story-notes-editor__save {
+  border-color: var(--startrips-starlight);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .story-notes-editor__actions button {
+    transition: none;
+  }
+}

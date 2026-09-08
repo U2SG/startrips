@@ -1,0 +1,80 @@
+.story-media-rail {
+  margin-block: 20px 24px;
+  padding-block: 16px;
+  border-block: 1px solid var(--startrips-line);
+}
+.story-media-rail__heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  color: var(--startrips-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.story-media-rail ol {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.story-media-rail li { min-width: 0; }
+.story-media-rail button {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 100%;
+  min-height: 52px;
+  aspect-ratio: 4 / 5;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--startrips-line);
+  border-radius: 8px;
+  background: var(--startrips-space);
+  color: var(--startrips-starlight);
+  cursor: pointer;
+  transition: border-color var(--motion-instant), transform var(--motion-ui) var(--motion-ease-out);
+}
+.story-media-rail button img { width: 100%; height: 100%; object-fit: cover; }
+.story-media-rail button[aria-current="true"] {
+  border-color: var(--startrips-aurora);
+  transform: translateY(-4px);
+}
+.story-media-rail button[aria-busy="true"] { border-style: dashed; }
+.story-media-rail button:focus-visible { outline: 2px solid var(--startrips-starlight); outline-offset: 3px; }
+.story-media-rail button:disabled { cursor: default; opacity: 0.5; }
+.story-media-rail button.story-media-rail__organize {
+  display: flex;
+  justify-content: center;
+  min-height: 44px;
+  aspect-ratio: auto;
+  margin-top: 12px;
+  padding: 8px 16px;
+  border-radius: 6px;
+  background: rgb(255 248 231 / 5%);
+  font: inherit;
+  font-size: 12px;
+}
+.story-media-rail__number {
+  position: absolute;
+  left: 4px;
+  bottom: 4px;
+  padding: 2px 4px;
+  border-radius: 3px;
+  background: rgb(11 16 32 / 80%);
+  font-size: 9px;
+}
+.story-media-rail__star {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  color: var(--startrips-starlight);
+  fill: currentColor;
+  filter: drop-shadow(0 1px 3px var(--startrips-space));
+}
+@media (prefers-reduced-motion: reduce) {
+  .story-media-rail button { transition: none; }
+  .story-media-rail button[aria-current="true"] { transform: none; }
+}

@@ -440,30 +440,29 @@ async function verifyBrandLoaderContinuity() {
   try {
     const loader = gateway.page.locator(".living-atlas.is-loading .startrips-brand-loader");
     await loader.waitFor({ state: "visible", timeout: 5_000 });
+    await loader.locator("svg.startrips-wordmark__lamb").waitFor({ state: "visible" });
     await gateway.page.waitForFunction(() => (
       document.querySelector("[data-persistent-earth-host]")?.getAttribute("data-stage") === "atlas"
     ), null, { timeout: 5_000 });
     const loading = await gateway.page.evaluate(() => {
       const host = document.querySelector("[data-persistent-earth-host]");
       const surface = document.querySelector(".living-atlas.is-loading");
-      const planet = document.querySelector(".startrips-brand-mark__planet");
-      const journey = document.querySelector(".startrips-brand-mark__journey");
-      const waypoint = document.querySelector(".startrips-brand-mark__waypoint");
-      const star = document.querySelector(".startrips-brand-mark__star");
+      const lamb = document.querySelector(".startrips-brand-loader .startrips-wordmark__lamb");
+      const star = document.querySelector(".startrips-brand-loader .startrips-wordmark__star");
       window.__qaBrandLoaderHost = host;
       return {
         hostStage: host?.getAttribute("data-stage") ?? null,
         hasPersistentEarth: Boolean(document.querySelector('[data-three-scene="particle-earth"]')),
         backgroundColor: surface ? getComputedStyle(surface).backgroundColor : null,
         backgroundImage: surface ? getComputedStyle(surface).backgroundImage : null,
-        planetAnimation: planet ? getComputedStyle(planet).animationName : null,
-        journeyAnimation: journey ? getComputedStyle(journey).animationName : null,
-        waypointAnimation: waypoint ? getComputedStyle(waypoint).animationName : null,
-        waypointOpacity: waypoint ? getComputedStyle(waypoint).opacity : null,
-        waypointTransform: waypoint ? getComputedStyle(waypoint).transform : null,
+        lambReady: Boolean(lamb instanceof SVGSVGElement && lamb.querySelector(".startrips-lamb__body")
+          && lamb.getBoundingClientRect().width > 0),
+        lambAnimation: lamb ? getComputedStyle(lamb).animationName : null,
+        lambOpacity: lamb ? getComputedStyle(lamb).opacity : null,
+        lambTransform: lamb ? getComputedStyle(lamb).transform : null,
         starAnimation: star ? getComputedStyle(star).animationName : null,
         starOpacity: star ? getComputedStyle(star).opacity : null,
-        starTransform: star ? getComputedStyle(star).transform : null,
+        starVisible: Boolean(star && star.getBoundingClientRect().width > 0 && star.getBoundingClientRect().height > 0),
       };
     });
     await gateway.page.locator(".living-atlas[data-journey-count]").waitFor({ state: "attached", timeout: 5_000 });
@@ -482,14 +481,13 @@ async function verifyBrandLoaderContinuity() {
         || !loading.hasPersistentEarth
         || loading.backgroundColor !== "rgba(0, 0, 0, 0)"
         || loading.backgroundImage !== "none"
-        || loading.planetAnimation !== "none"
-        || loading.journeyAnimation !== "none"
-        || loading.waypointAnimation !== "none"
-        || loading.waypointOpacity !== "1"
-        || loading.waypointTransform !== "none"
+        || !loading.lambReady
+        || loading.lambAnimation !== "none"
+        || loading.lambOpacity !== "1"
+        || loading.lambTransform !== "none"
         || loading.starAnimation !== "none"
         || loading.starOpacity !== "1"
-        || loading.starTransform !== "none"
+        || !loading.starVisible
         || !settled.sameHost
         || settled.hostStage !== "atlas"
         || !settled.hasPersistentEarth

@@ -637,7 +637,7 @@ describe("storyUploadedAssetIndex (#76 review)", () => {
 });
 
 describe("aggregate organizer ownership (#76 review)", () => {
-  it("derives arrow-sort neighbors from the active ownership chapter", () => {
+  it("keeps organizer reorder neighbors within the active ownership chapter", () => {
     const pointA1 = { ...asset("a1", "image/jpeg", 0), routePointId: "point-a" };
     const pointB = { ...asset("b", "image/jpeg", 1), routePointId: "point-b" };
     const pointA2 = { ...asset("a2", "image/jpeg", 2), routePointId: "point-a" };
@@ -849,7 +849,7 @@ describe("replaceJourneySoundtrack", () => {
 });
 
 describe("JourneyStory", () => {
-  it("exposes explicit exit and append-media actions in the story dialog", () => {
+  it("opens desktop Story in reading mode with an explicit edit entry", () => {
     const markup = renderToStaticMarkup(createElement(JourneyStory, {
       journeys: [journey],
       journeyId: journey.id,
@@ -863,11 +863,18 @@ describe("JourneyStory", () => {
     expect(markup).toContain('role="dialog"');
     expect(markup).toContain('aria-label="退出旅程故事"');
     expect(markup).toContain('class="journey-story__close"');
+    expect(markup).toContain('data-story-layout="desktop"');
+    expect(markup).not.toContain('data-story-editing="true"');
+    expect(markup).toContain('aria-label="编辑故事"');
     expect(markup).not.toContain(">退出<");
-    expect(markup).toContain("添加照片或视频");
-    expect(markup).toContain('type="file"');
-    expect(markup).toContain("编辑旅程");
-    expect(markup).toContain("删除旅程");
+    expect(markup).not.toContain("添加照片或视频");
+    expect(markup).not.toContain('type="file"');
+    expect(markup).not.toContain("编辑旅程");
+    expect(markup).not.toContain("删除旅程");
+    expect(markup).not.toContain('aria-label="旅程媒体"');
+    expect(markup).not.toContain("journey-story__empty-media");
+    expect(markup).not.toContain("ROUTE POINTS");
+    expect(markup).not.toContain("story-media-rail");
     expect(markup).not.toContain("确认删除");
     expect(journeyDeleteDescription(journey)).toBe(
       "先从图谱隐藏；7 天内可撤销，之后才会清理路线和 0 个私有媒体。",
@@ -916,8 +923,9 @@ describe("JourneyStory", () => {
     }));
     expect(markup).toContain('data-route-point-id="point-1"');
     expect(markup).toContain("深圳");
-    expect(markup).toContain("1 个媒体片段");
-    expect(markup).toContain('aria-label="删除这段媒体"');
+    expect(markup).toContain('aria-label="旅程媒体"');
+    expect(markup).not.toContain("1 个媒体片段");
+    expect(markup).not.toContain('aria-label="删除这段媒体"');
     expect(markup).not.toContain("删除这段媒体？");
   });
 
@@ -934,9 +942,11 @@ describe("JourneyStory", () => {
     expect(markup).not.toContain('aria-label="删除这段媒体"');
     expect(markup).not.toContain("删除这段媒体？");
     expect(markup).not.toContain('aria-label="向前调整媒体顺序"');
+    expect(markup).not.toContain('aria-label="旅程媒体"');
+    expect(markup).not.toContain("journey-story__empty-media");
   });
 
-  it("offers media reordering controls when the journey holds multiple assets", () => {
+  it("keeps desktop picture navigation separate from fullscreen and playback controls", () => {
     const multiMediaJourney: Journey = {
       ...journey,
       media: [
@@ -978,12 +988,21 @@ describe("JourneyStory", () => {
       onMediaAdded: () => null,
     }));
 
-    expect(markup).toContain('aria-label="向前调整媒体顺序"');
-    expect(markup).toContain('aria-label="向后调整媒体顺序"');
-    expect(markup).toContain('aria-label="删除这段媒体"');
+    expect(markup).not.toContain('aria-label="向前调整媒体顺序"');
+    expect(markup).not.toContain('aria-label="向后调整媒体顺序"');
+    expect(markup).not.toContain('aria-label="删除这段媒体"');
+    expect(markup).not.toContain('aria-label="上一个媒体"');
+    expect(markup).not.toContain('aria-label="下一个媒体"');
+    expect(markup).toContain('aria-label="编辑故事"');
     expect(markup).toContain('aria-label="自动播放媒体"');
     expect(markup).toContain('aria-pressed="false"');
-    expect(markup).not.toContain('aria-label="全屏查看媒体"');
+    expect(markup).toContain('aria-label="全屏查看媒体"');
+    expect(markup).toContain('aria-label="first.jpg。左侧上一张，右侧下一张，方向键切换"');
+    expect(markup).toContain('aria-keyshortcuts="ArrowLeft ArrowRight"');
+    const mediaNavigation = markup.match(/<nav class="journey-story__media-nav"[^>]*>([\s\S]*?)<\/nav>/)?.[1];
+    expect(mediaNavigation).toBeDefined();
+    expect(mediaNavigation?.match(/<button\b/g)).toHaveLength(2);
+    expect(mediaNavigation).not.toContain("1 / 2");
   });
 
   it("clears expanded Story state across a compact breakpoint round trip", () => {
@@ -1217,11 +1236,14 @@ describe("JourneyStory", () => {
 
     expect(markup).toContain('data-mobile-mode="viewer"');
     expect(markup).toContain('aria-label="管理旅程"');
+    expect(markup).toContain('data-story-layout="mobile"');
+    expect(markup).not.toContain('aria-label="旅程媒体"');
+    expect(markup).not.toContain("journey-story__empty-media");
     expect(markup).not.toContain("添加照片或视频");
     vi.unstubAllGlobals();
   });
 
-  it("offers a direct-access overview for singleton and multi-media scopes", () => {
+  it("keeps singleton and multi-media reading views free of the editing overview", () => {
     const single = renderToStaticMarkup(createElement(JourneyStory, {
       journeys: [{ ...journey, media: [asset("media-1", "image/jpeg", 0)] }],
       journeyId: journey.id,
@@ -1230,7 +1252,9 @@ describe("JourneyStory", () => {
       onEdit: () => undefined,
       onMediaAdded: () => null,
     }));
-    expect(single).toContain("全部照片");
+    expect(single).not.toContain("全部照片");
+    expect(single).toContain('aria-label="编辑故事"');
+    expect(single).toContain('aria-label="旅程媒体"');
     expect(single).toContain('aria-pressed="false"');
 
     const many: Journey = {
@@ -1249,11 +1273,14 @@ describe("JourneyStory", () => {
       onEdit: () => undefined,
       onMediaAdded: () => null,
     }));
-    expect(markup).toContain("全部照片");
+    expect(markup).not.toContain("全部照片");
+    expect(markup).toContain('aria-label="编辑故事"');
     expect(markup).toContain('aria-pressed="false"');
-    // The grid itself only appears once the overview is opened.
+    // The editable grid only appears after entering Story editing.
     expect(markup).not.toContain("journey-story__media-grid");
-    expect(markup).toContain("3 个媒体片段");
+    expect(markup).not.toContain("story-media-organizer");
+    expect(markup).not.toContain("story-media-rail");
+    expect(markup).not.toContain("3 个媒体片段");
   });
 
   it("keeps a soundtrack out of the photo counts and shows it as audio", () => {
@@ -1274,15 +1301,17 @@ describe("JourneyStory", () => {
       onMediaAdded: () => null,
     }));
 
-    expect(markup).toContain("JOURNEY SOUNDTRACK");
+    expect(markup).not.toContain("JOURNEY SOUNDTRACK");
     // #7: the presentation strips the file extension — the UI shows the
     // friendly name, never `night-route.mp3`.
     expect(markup).toContain("night-route");
     expect(markup).not.toContain("night-route.mp3");
-    expect(markup).toContain("替换配乐");
-    expect(markup).toContain("移除配乐");
-    // Two photos, not three assets.
-    expect(markup).toContain("2 个媒体片段");
+    expect(markup).not.toContain("替换配乐");
+    expect(markup).not.toContain("移除配乐");
+    // Audio never becomes a third item in the visual reading sequence.
+    expect(markup).toContain('data-media-page-id="media-1"');
+    expect(markup).toContain('data-media-page-id="media-2"');
+    expect(markup).not.toContain('data-media-page-id="track"');
     // The light strip replaces the native control bar. (The <audio> playback
     // engine only mounts once the signed read resolves at runtime.)
     expect(markup).toContain("journey-story__soundtrack-light");
@@ -1302,7 +1331,9 @@ describe("JourneyStory", () => {
       onMediaAdded: () => null,
     }));
 
-    expect(markup).toContain("整段旅程还没有媒体");
+    expect(markup).not.toContain("整段旅程还没有媒体");
+    expect(markup).not.toContain('aria-label="旅程媒体"');
+    expect(markup).not.toContain("journey-story__empty-media");
     expect(markup).toContain("night-route");
     expect(markup).not.toContain("night-route.mp3");
     expect(markup).not.toContain("全部照片");
@@ -1310,7 +1341,7 @@ describe("JourneyStory", () => {
     expect(markup).not.toContain('aria-label="向前调整媒体顺序"');
   });
 
-  it("plays the slideshow silently when a journey has no soundtrack", () => {
+  it("omits empty soundtrack controls from the reading view", () => {
     const markup = renderToStaticMarkup(createElement(JourneyStory, {
       journeys: [journey],
       journeyId: journey.id,
@@ -1320,13 +1351,14 @@ describe("JourneyStory", () => {
       onMediaAdded: () => null,
     }));
 
-    expect(markup).toContain("还没有配乐，幻灯片会安静播放");
-    expect(markup).toContain("上传配乐");
+    expect(markup).not.toContain("还没有配乐，幻灯片会安静播放");
+    expect(markup).not.toContain("上传配乐");
+    expect(markup).not.toContain("journey-story__soundtrack");
     expect(markup).not.toContain("<audio");
     expect(markup).not.toContain("移除配乐");
   });
 
-  it("hides permanent deletion when the current member lacks permission", () => {
+  it("keeps Story editing reachable without a journey deletion callback", () => {
     const markup = renderToStaticMarkup(createElement(JourneyStory, {
       journeys: [journey],
       journeyId: journey.id,
@@ -1336,7 +1368,8 @@ describe("JourneyStory", () => {
       onMediaAdded: () => null,
     }));
 
-    expect(markup).toContain("编辑旅程");
+    expect(markup).toContain('aria-label="编辑故事"');
+    expect(markup).not.toContain("编辑旅程");
     expect(markup).not.toContain("删除旅程");
   });
 });

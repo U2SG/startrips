@@ -1,0 +1,138 @@
+/* Supplied brand direction, applied to existing product surfaces. */
+.auth-v3-brand { align-items: center; color: var(--startrips-starlight); }
+.auth-v3-brand > .auth-v3-brand__caption { color: var(--startrips-muted); }
+.auth-v3-brand .startrips-wordmark__lamb { display: none; }
+.auth-card > .startrips-wordmark { margin-bottom: 24px; }
+.auth-starlight-intro {
+  grid-column: 1;
+  grid-row: 1;
+  position: relative;
+  z-index: 2;
+  align-self: end;
+  justify-self: start;
+  padding-bottom: clamp(24px, 6vh, 80px);
+  pointer-events: none;
+  color: var(--startrips-starlight);
+}
+.auth-starlight-intro > .startrips-wordmark {
+  font-size: clamp(52px, 7.2vw, var(--startrips-wordmark-size));
+}
+.auth-starlight-intro > p {
+  margin: 28px 0 12px;
+  font: 400 clamp(18px, 2vw, 26px)/1.6 var(--archive-serif);
+  letter-spacing: 0.14em;
+}
+.auth-starlight-intro > small {
+  color: var(--startrips-muted);
+  font: 400 12px/1.6 var(--archive-sans);
+  letter-spacing: 0.12em;
+}
+.auth-starlight-intro.is-ready .startrips-wordmark__lamb,
+.auth-starlight-intro.is-ready .startrips-wordmark__star { animation: none; }
+.auth-card--login-v3 { grid-row: 1; border-radius: 20px; border-color: var(--startrips-line); }
+.auth-card--login-v3::after { display: none; }
+.auth-primary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border-color: var(--startrips-starlight);
+  border-radius: 10px;
+  background: var(--startrips-starlight);
+  color: var(--startrips-space);
+  box-shadow: none;
+  transition: transform var(--motion-instant) var(--motion-ease-out), box-shadow var(--motion-instant) var(--motion-ease-out);
+}
+.auth-primary:active:not(:disabled) { transform: translateY(0); }
+.auth-primary:hover:not(:disabled) { box-shadow: 0 8px 28px rgb(255 248 231 / 0.12); }
+.auth-primary:focus-visible { outline: 2px solid var(--startrips-aurora); }
+.auth-primary .startrips-brand-mark__star { color: var(--startrips-space); }
+.auth-card input:focus,
+.auth-card textarea:focus { border-color: var(--startrips-aurora); }
+.auth-switches button,
+.auth-link { min-height: 44px; }
+
+.living-atlas__brand { gap: 20px; }
+.living-atlas__brand > div > p { color: var(--startrips-muted); letter-spacing: 0.14em; }
+.living-atlas__brand > div > h1 { color: var(--startrips-starlight); font-size: 13px; letter-spacing: 0.04em; }
+.living-atlas__empty { border-left-color: var(--startrips-line); }
+.living-atlas__empty > p:first-child { color: var(--startrips-muted); }
+.living-atlas__empty h2 { color: var(--startrips-starlight); font-size: clamp(32px, 3.8vw, 48px); line-height: 1.2; }
+.living-atlas__empty > .startrips-journey-cue { display: block; }
+.living-atlas.is-mobile-v2 .living-atlas__empty > .startrips-journey-cue { width: 64px; height: 64px; }
+.living-atlas.is-mobile-v2 .living-atlas__empty::before { content: none; }
+.living-atlas__empty > button {
+  color: var(--startrips-space);
+  background: var(--startrips-starlight);
+  border-color: var(--startrips-starlight);
+}
+.living-atlas__create { --atlas-acid: var(--startrips-starlight); }
+.journey-composer__save-status .startrips-journey-cue { margin-right: 12px; }
+.journey-save-complete,
+.journey-save-partial__heading { display: flex; align-items: center; gap: 8px; }
+.journey-save-complete .startrips-journey-cue { flex: 0 0 auto; }
+.journey-composer__footer > button { min-width: 132px; }
+.journey-composer__footer .startrips-journey-cue { margin: -8px 0; }
+.journey-timeline__future > .startrips-journey-cue { margin-bottom: 12px; }
+.shared-atlas-gate__panel > .startrips-wordmark { margin-bottom: 24px; }
+.shared-atlas-gate__panel > .startrips-journey-cue { display: block; margin: 0 auto 16px; }
+.shared-atlas-gate__panel { border-left-color: var(--startrips-line); }
+.shared-atlas-gate__panel > button { background: var(--startrips-starlight); color: var(--startrips-space); border-color: var(--startrips-starlight); }
+.journey-share__created-heading { display: flex; align-items: center; gap: 12px; }
+
+.startrips-not-found {
+  height: 100svh;
+  min-height: 100svh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  justify-items: center;
+  gap: 40px;
+  padding: max(32px, env(safe-area-inset-top)) 24px max(24px, env(safe-area-inset-bottom));
+  background: var(--startrips-space);
+  color: var(--startrips-starlight);
+  font-family: var(--archive-sans);
+  text-align: center;
+}
+.startrips-not-found section { align-self: center; max-width: 440px; }
+.startrips-not-found__code { margin: 0; font: 400 clamp(64px, 16vw, 104px)/1.1 var(--archive-serif); }
+.startrips-not-found h1 { margin: 16px 0; font: 400 clamp(24px, 5vw, 32px)/1.4 var(--archive-serif); }
+.startrips-not-found section > p:not(.startrips-not-found__code) { color: var(--startrips-muted); font-size: 14px; line-height: 1.8; }
+.startrips-not-found a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 48px;
+  margin-top: 16px;
+  padding: 0 24px;
+  border-radius: 12px;
+  background: var(--startrips-starlight);
+  color: var(--startrips-space);
+  font-size: 14px;
+  text-decoration: none;
+}
+.startrips-not-found a:focus-visible { outline: 2px solid var(--startrips-aurora); outline-offset: 4px; }
+.startrips-not-found > small { color: var(--startrips-muted); line-height: 1.6; }
+
+@media (max-width: 1200px) {
+  .living-atlas__brand > div { display: none; }
+}
+@media (max-width: 760px) {
+  .auth-starlight-intro { display: none; }
+  .auth-v3-brand { align-items: center; top: max(20px, env(safe-area-inset-top)); }
+  .auth-v3-brand > .startrips-wordmark { font-size: 34px; }
+  .auth-v3-brand .startrips-wordmark__lamb { display: block; }
+  .auth-v3-brand > .auth-v3-brand__caption { max-width: 15ch; line-height: 1.8; text-align: right; }
+  .auth-card--login-v3 { border-radius: 20px; }
+  .mobile-v2__brand > .startrips-wordmark { margin-bottom: 3px; }
+}
+@media (max-height: 540px) {
+  .auth-starlight-intro { display: none; }
+  .auth-v3-brand > .startrips-wordmark { font-size: 26px; }
+  .auth-v3-brand .startrips-wordmark__lamb { display: block; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .auth-primary { transition: none; }
+}
