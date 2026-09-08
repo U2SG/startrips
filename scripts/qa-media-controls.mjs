@@ -1052,7 +1052,44 @@ try {
     mobile: true,
     reducedMotion: "reduce",
   });
+  const nativeTouchPoints = [];
+  async function nativeVideoTouchPoint(video, phase) {
+    const point = await video.evaluate((element) => {
+      const bounds = element.getBoundingClientRect();
+      const scale = Math.min(bounds.width / element.videoWidth, bounds.height / element.videoHeight);
+      const width = element.videoWidth * scale;
+      const height = element.videoHeight * scale;
+      const x = bounds.left + bounds.width / 2;
+      const y = bounds.top + (bounds.height - height) / 2 + height * .35;
+      const hit = document.elementFromPoint(x, y);
+      return { x, y, bounds: bounds.toJSON(), picture: [width, height],
+        asset: element.getAttribute("data-shared-media-id"), readyState: element.readyState,
+        hitIsVideo: hit === element, hit: hit instanceof Element ? `${hit.tagName}.${hit.className}` : null,
+        controlsTop: bounds.bottom - Math.min(72, bounds.height * .25),
+        viewport: [innerWidth, innerHeight] };
+    });
+    nativeTouchPoints.push({ phase, ...point });
+    if (!point.hitIsVideo || point.y >= point.controlsTop || !point.picture.every((value) => value > 0)) {
+      throw new Error(`Mobile video touch does not reach its picture: ${JSON.stringify(nativeTouchPoints.at(-1))}`);
+    }
+    return point;
+  }
   try {
+    await mixedMediaMobile.page.evaluate(() => {
+      window.__qaNativeVideoTouches = [];
+      for (const type of ["pointerdown", "pointermove", "pointerup", "pointercancel", "gotpointercapture", "lostpointercapture"]) {
+        document.addEventListener(type, (event) => {
+          const target = event.target;
+          if (!(target instanceof Element)) return;
+          const stage = target.closest(".journey-story__media, .journey-story-fullscreen");
+          window.__qaNativeVideoTouches.push({ type, time: event.timeStamp, pointerId: event.pointerId,
+            target: `${target.tagName}.${target.className}`, x: event.clientX, y: event.clientY,
+            stage: stage?.className ?? null,
+            asset: stage?.querySelector('[data-media-page="current"]')?.getAttribute("data-media-page-id") });
+          if (window.__qaNativeVideoTouches.length > 60) window.__qaNativeVideoTouches.shift();
+        }, true);
+      }
+    });
     await mixedMediaMobile.page.locator(".journey-story").waitFor({ state: "visible" });
     const inlineStage = mixedMediaMobile.page.locator(".journey-story__media");
     const initialImage = inlineStage.locator(storyCurrentImageSelector).first();
@@ -1089,10 +1126,9 @@ try {
         }
       });
     });
-    const fullscreenVideoBox = await fullscreenVideo.boundingBox();
-    if (!fullscreenVideoBox) throw new Error("mobile fullscreen video has no bounds");
-    const fullscreenVideoX = fullscreenVideoBox.x + fullscreenVideoBox.width * 0.5;
-    const fullscreenVideoY = fullscreenVideoBox.y + fullscreenVideoBox.height * 0.35;
+    const fullscreenVideoPoint = await nativeVideoTouchPoint(fullscreenVideo, "fullscreen-jitter");
+    const fullscreenVideoX = fullscreenVideoPoint.x;
+    const fullscreenVideoY = fullscreenVideoPoint.y;
     await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: fullscreenVideoX, y: fullscreenVideoY }] });
     await touch.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: fullscreenVideoX + 30, y: fullscreenVideoY }] });
     const fullscreenVideoStageCapturedOnJitter = await fullscreenStage.evaluate((stage) => Boolean(stage.dataset.qaVideoStageCapture));
@@ -1100,8 +1136,9 @@ try {
     const fullscreenVideoPointerUps = Number(await fullscreenVideo.getAttribute("data-qa-pointer-ups") ?? "0");
 
     const fullscreenPositionBeforeVideoSwipe = await fullscreenStage.locator(".journey-story-fullscreen__nav span").textContent();
-    await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: fullscreenVideoX, y: fullscreenVideoY }] });
-    await touch.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: fullscreenVideoX - 110, y: fullscreenVideoY }] });
+    const fullscreenSwipePoint = await nativeVideoTouchPoint(fullscreenVideo, "fullscreen-swipe");
+    await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: fullscreenSwipePoint.x, y: fullscreenSwipePoint.y }] });
+    await touch.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: fullscreenSwipePoint.x - 110, y: fullscreenSwipePoint.y }] });
     await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
     await mixedMediaMobile.page.waitForFunction((before) => {
       const position = document.querySelector(".journey-story-fullscreen__nav span")?.textContent;
@@ -1136,10 +1173,9 @@ try {
         }
       });
     });
-    const inlineVideoBox = await inlineVideo.boundingBox();
-    if (!inlineVideoBox) throw new Error("mobile inline video has no bounds");
-    const inlineVideoX = inlineVideoBox.x + inlineVideoBox.width * 0.5;
-    const inlineVideoY = inlineVideoBox.y + inlineVideoBox.height * 0.35;
+    const inlineVideoPoint = await nativeVideoTouchPoint(inlineVideo, "inline-jitter");
+    const inlineVideoX = inlineVideoPoint.x;
+    const inlineVideoY = inlineVideoPoint.y;
     await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: inlineVideoX, y: inlineVideoY }] });
     await touch.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: inlineVideoX + 30, y: inlineVideoY }] });
     const inlineVideoStageCapturedOnJitter = await inlineStage.evaluate((stage) => Boolean(stage.dataset.qaVideoStageCapture));
@@ -1150,8 +1186,9 @@ try {
     // This assertion exercises a warm video-to-photo swipe. Returning from
     // fullscreen may leave the inline neighbor waiting for its own decode.
     await inlineStage.locator(storyReadyPageSelector("next")).waitFor({ state: "attached", timeout: 3_000 });
-    await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: inlineVideoX, y: inlineVideoY }] });
-    await touch.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: inlineVideoX - 110, y: inlineVideoY }] });
+    const inlineSwipePoint = await nativeVideoTouchPoint(inlineVideo, "inline-swipe");
+    await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: inlineSwipePoint.x, y: inlineSwipePoint.y }] });
+    await touch.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: inlineSwipePoint.x - 110, y: inlineSwipePoint.y }] });
     await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
     await mixedMediaMobile.page.waitForFunction(({ selector, before }) => {
       const media = document.querySelector(".journey-story__media")?.querySelector(selector);
@@ -1175,11 +1212,26 @@ try {
       inlineVideoStageCapturedOnJitter,
       inlineVideoPointerUps,
       inlineVideoSwipeNavigated,
+      nativeTouchPoints,
       consoleErrors: mixedMediaMobile.consoleErrors,
       pageErrors: mixedMediaMobile.pageErrors,
       failed: videoNativeTapFailed,
     });
     if (videoNativeTapFailed) failed = true;
+  } catch (error) {
+    const state = await mixedMediaMobile.page.evaluate(() => ({
+      events: window.__qaNativeVideoTouches,
+      storyScrollTop: document.querySelector(".journey-story")?.scrollTop,
+      stages: [...document.querySelectorAll(".journey-story__media, .journey-story-fullscreen")].map((stage) => ({
+        className: stage.className, hidden: stage.hidden, bounds: stage.getBoundingClientRect().toJSON(),
+        presentation: stage.querySelector("[data-story-media-pages]")?.getAttribute("data-media-presentation"),
+        pages: [...stage.querySelectorAll("[data-media-page]")].map((page) => ({
+          id: page.getAttribute("data-media-page-id"), role: page.getAttribute("data-media-page"),
+          ready: page.getAttribute("data-media-page-ready"), transform: page.style.transform,
+        })),
+      })),
+    }));
+    throw new Error(`Mobile native video gesture failed: ${JSON.stringify({ nativeTouchPoints, ...state })}`, { cause: error });
   } finally {
     await mixedMediaMobile.page.close();
   }

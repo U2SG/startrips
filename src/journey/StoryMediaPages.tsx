@@ -408,7 +408,15 @@ export function StoryMediaPages({ active = true, ...props }: Props) {
         data-media-page={current ? "current" : offsets[slot] < 0 ? "previous" : "next"}
         data-media-page-id={id ?? undefined} data-media-page-ready={pageReady ? "true" : "false"}
         data-media-incoming={id !== null && id === props.incomingId ? "true" : undefined}
-        aria-hidden={!current} style={{ "--page-offset": offsets[slot], "--stack-depth": depths[slot] } as CSSProperties}>
+        aria-hidden={!current} style={{
+          "--page-offset": offsets[slot], "--stack-depth": depths[slot],
+          // A physical slot changes owners without remounting. Commit its
+          // painted order with that identity, including synchronous reduced-
+          // motion handoffs, so a former top page cannot intercept the next tap.
+          zIndex: current ? 5 : id !== null && id === props.incomingId ? 4 : 3 - depths[slot],
+          transform: mediaStackRest(depths[slot]),
+          pointerEvents: current ? "auto" : "none",
+        } as CSSProperties}>
         <img ref={(element) => { imageNodes.current[slot] = element; }}
           src={!isVideo ? url : undefined} hidden={isVideo || !url} alt={current ? asset?.fileName ?? "" : ""}
           draggable={false} decoding="async"
