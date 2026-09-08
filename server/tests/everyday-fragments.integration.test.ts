@@ -384,6 +384,51 @@ describe("removing an everyday fragment", () => {
       .toEqual({ groups: [], ungrouped: [remaining] });
   });
 
+  it("refuses a Home Base period that did not hold on the fragment's date", async () => {
+    // Ownership is not enough: a same-atlas period whose interval does not
+    // contain `occurredOn` would persist an association that disagrees with
+    // what `resolveHomeBaseForDate` answers, showing one fragment in two
+    // different chapters of the member's life.
+    const period = await createHomeBasePeriodForAtlas(atlasId, {
+      label: "Porto",
+      latitude: 41.157944,
+      longitude: -8.629105,
+      startedOn: "2019-01-01",
+      endedOn: "2020-01-01",
+      source: "manual",
+    });
+    if (!period) throw new Error("Home Base fixture was not created");
+
+    const outside = await createEverydayFragmentForAtlas(
+      atlasId,
+      "user-fragments",
+      { ...EVENING, homeBasePeriodId: period.id },
+    );
+    expect(outside).toEqual({ outcome: "home-base-not-covering" });
+
+    // The same period accepts a fragment recorded inside its interval, and
+    // the day it ended belongs to no period under the half-open rule.
+    const inside = await createEverydayFragmentForAtlas(
+      atlasId,
+      "user-fragments",
+      { ...EVENING, occurredOn: "2019-08-09", homeBasePeriodId: period.id },
+    );
+    expect(inside).toMatchObject({
+      outcome: "ok",
+      fragment: { homeBasePeriodId: period.id },
+    });
+    expect(await createEverydayFragmentForAtlas(atlasId, "user-fragments", {
+      ...EVENING,
+      occurredOn: "2020-01-01",
+      homeBasePeriodId: period.id,
+    })).toEqual({ outcome: "home-base-not-covering" });
+
+    if (inside.outcome === "ok") {
+      await deleteEverydayFragmentForAtlas(atlasId, inside.fragment.id);
+    }
+    await db.delete(homeBasePeriods).where(eq(homeBasePeriods.id, period.id));
+  });
+
   it("cannot reach a fragment owned by another atlas", async () => {
     expect(await deleteEverydayFragmentForAtlas(otherAtlasId, fragmentId))
       .toBeUndefined();

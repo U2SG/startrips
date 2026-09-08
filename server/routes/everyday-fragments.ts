@@ -104,6 +104,20 @@ function answerWriteResult(
   if (result.outcome === "home-base-missing") {
     return context.json({ error: "HOME_BASE_PERIOD_NOT_FOUND" }, 404);
   }
+  // A period this Atlas does own, which simply did not hold on the day the
+  // fragment happened. That is a statement about the recorded timeline, not
+  // about the document's syntax, so it leaves as the 409 `home-bases.ts`
+  // answers an impossible history with rather than as a 400.
+  if (result.outcome === "home-base-not-covering") {
+    return context.json(
+      {
+        error: "EVERYDAY_FRAGMENT_HOME_BASE_MISMATCH",
+        message:
+          "That Home Base period does not cover the date this fragment happened on",
+      },
+      409,
+    );
+  }
   context.header("Cache-Control", EVERYDAY_FRAGMENT_CACHE_CONTROL);
   return context.json({ fragment: result.fragment }, createdStatus);
 }

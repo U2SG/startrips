@@ -286,6 +286,45 @@ describe("an unusable fragment document", () => {
   });
 });
 
+describe("a Home Base association that does not hold", () => {
+  it("answers 409 when the period did not cover the fragment's date", async () => {
+    const periodResponse = await app.request(`${TEST_ORIGIN}/api/home-bases`, {
+      method: "POST",
+      headers: authHeaders(resident.cookie),
+      body: JSON.stringify({
+        label: "Porto",
+        latitude: 41.157944,
+        longitude: -8.629105,
+        startedOn: "2019-01-01",
+        endedOn: "2020-01-01",
+      }),
+    });
+    expect(periodResponse.status).toBe(201);
+    const { period } = await periodResponse.json() as {
+      period: { id: string };
+    };
+
+    // A 409, not a 400: the document is well formed, and what is wrong is the
+    // recorded timeline it claims to belong to.
+    const response = await app.request(FRAGMENTS_URL, {
+      method: "POST",
+      headers: authHeaders(resident.cookie),
+      body: JSON.stringify({ ...EVENING, homeBasePeriodId: period.id }),
+    });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({
+      error: "EVERYDAY_FRAGMENT_HOME_BASE_MISMATCH",
+    });
+
+    const accepted = await createFragment(resident.cookie, {
+      ...EVENING,
+      occurredOn: "2019-08-09",
+      homeBasePeriodId: period.id,
+    });
+    expect(accepted.homeBasePeriodId).toBe(period.id);
+  });
+});
+
 describe("the fragment lifecycle", () => {
   it("records, serves, corrects and withdraws one everyday moment", async () => {
     const fragment = await createFragment(neighbour.cookie, {

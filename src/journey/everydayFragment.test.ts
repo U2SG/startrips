@@ -69,6 +69,20 @@ describe("validateEverydayFragmentInput", () => {
     }
   });
 
+  it("rejects year zero, which PostgreSQL cannot store", () => {
+    // JavaScript accepts `0000-01-01` and round-trips it intact, so without
+    // this the value would reach a `date` column and fail as a generic 500
+    // instead of the reason code this module exists to produce.
+    expect(validateEverydayFragmentInput({
+      ...SHENZHEN_BAY,
+      occurredOn: "0000-01-01",
+    })).toEqual({ accepted: false, reason: "EVERYDAY_FRAGMENT_INVALID_DATE" });
+    expect(validateEverydayFragmentInput({
+      ...SHENZHEN_BAY,
+      occurredOn: "0001-01-01",
+    })).toMatchObject({ accepted: true });
+  });
+
   it("requires a coordinate pair", () => {
     expect(validateEverydayFragmentInput({
       occurredOn: SHENZHEN_BAY.occurredOn,

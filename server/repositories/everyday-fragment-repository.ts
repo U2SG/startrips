@@ -2,6 +2,7 @@ import { and, asc, eq, sql } from "drizzle-orm";
 import { everydayFragments, homeBasePeriods } from "../db/app-schema";
 import { db } from "../db/client";
 import { lockActiveAtlas } from "./journey-repository";
+import { homeBasePeriodCoversDate } from "../../src/journey/homeBase";
 import type { EverydayFragmentValues } from "../../src/journey/everydayFragment";
 
 /**
@@ -37,13 +38,15 @@ export type EverydayFragmentRecord = {
  * a null means. Each case is a different answer at the HTTP level, and the
  * route maps them without re-deriving anything: a missing Atlas, a fragment
  * this Atlas does not own, and a Home Base period this Atlas does not own are
- * three separate 404s.
+ * three separate 404s, and a period that does not cover the fragment's own
+ * date is a 409 about the recorded timeline rather than about the document.
  */
 export type EverydayFragmentWriteResult =
   | { outcome: "ok"; fragment: EverydayFragmentRecord }
   | { outcome: "atlas-missing" }
   | { outcome: "fragment-missing" }
-  | { outcome: "home-base-missing" };
+  | { outcome: "home-base-missing" }
+  | { outcome: "home-base-not-covering" };
 
 const RECORD_COLUMNS = {
   id: everydayFragments.id,
@@ -62,24 +65,40 @@ type Transaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 /**
  * A fragment may name the life period it belongs to, but only one of this
- * Atlas's. The foreign key alone would accept another Atlas's period id and
- * make it observable through the fragment it was attached to, which is the
- * same tenant leak `atlas-access.ts` exists to prevent one level up.
+ * Atlas's, and only one that actually held on the day the fragment happened.
+ *
+ * Ownership alone is not enough on either count. The foreign key would accept
+ * another Atlas's period id and make it observable through the fragment it was
+ * attached to — the same tenant leak `atlas-access.ts` exists to prevent one
+ * level up. And a same-Atlas period whose interval does not contain
+ * `occurredOn` would persist an association that disagrees with what
+ * `resolveHomeBaseForDate` answers for that date, so a stored grouping and a
+ * derived grouping would show the fragment in two different chapters of the
+ * member's life. Coverage is decided by `homeBasePeriodCoversDate`, #231's own
+ * half-open rule, so no second interval semantics is defined here.
  */
-async function homeBasePeriodBelongsToAtlas(
+async function classifyHomeBaseAssociation(
   transaction: Transaction,
   atlasId: string,
   periodId: string,
-): Promise<boolean> {
+  occurredOn: string,
+): Promise<"ok" | "home-base-missing" | "home-base-not-covering"> {
   const [period] = await transaction
-    .select({ id: homeBasePeriods.id })
+    .select({
+      id: homeBasePeriods.id,
+      startedOn: homeBasePeriods.startedOn,
+      endedOn: homeBasePeriods.endedOn,
+    })
     .from(homeBasePeriods)
     .where(and(
       eq(homeBasePeriods.id, periodId),
       eq(homeBasePeriods.atlasId, atlasId),
     ))
     .limit(1);
-  return period !== undefined;
+  if (!period) return "home-base-missing";
+  return homeBasePeriodCoversDate(period, occurredOn)
+    ? "ok"
+    : "home-base-not-covering";
 }
 
 /**
@@ -109,15 +128,14 @@ export async function createEverydayFragmentForAtlas(
     if (!await lockActiveAtlas(transaction, atlasId)) {
       return { outcome: "atlas-missing" };
     }
-    if (
-      values.homeBasePeriodId !== null
-      && !await homeBasePeriodBelongsToAtlas(
+    if (values.homeBasePeriodId !== null) {
+      const association = await classifyHomeBaseAssociation(
         transaction,
         atlasId,
         values.homeBasePeriodId,
-      )
-    ) {
-      return { outcome: "home-base-missing" };
+        values.occurredOn,
+      );
+      if (association !== "ok") return { outcome: association };
     }
     const [created] = await transaction
       .insert(everydayFragments)
@@ -145,15 +163,14 @@ export async function updateEverydayFragmentForAtlas(
     if (!await lockActiveAtlas(transaction, atlasId)) {
       return { outcome: "atlas-missing" };
     }
-    if (
-      values.homeBasePeriodId !== null
-      && !await homeBasePeriodBelongsToAtlas(
+    if (values.homeBasePeriodId !== null) {
+      const association = await classifyHomeBaseAssociation(
         transaction,
         atlasId,
         values.homeBasePeriodId,
-      )
-    ) {
-      return { outcome: "home-base-missing" };
+        values.occurredOn,
+      );
+      if (association !== "ok") return { outcome: association };
     }
     const [updated] = await transaction
       .update(everydayFragments)
