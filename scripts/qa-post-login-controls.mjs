@@ -2448,11 +2448,29 @@ async function verifyFinalAcceptanceMobileFlow() {
         document.querySelector(".journey-playback")?.getAttribute("data-playback-phase") === "stop"
         && document.querySelector(".journey-playback__stop h3")?.textContent?.trim() === expectedLabel
       ), targetJourney.routePoints.at(-1)?.label ?? "", { timeout: 2_000 });
-      // Leave the range before using Playback's normal keyboard transport. From
-      // the asserted final Route Point stop, the next meaningful beat is its
-      // media; the destination itself is still asserted below as fa-image-2.
+      // Leave the range, reveal the ordinary transport chrome, and use the
+      // same Next Chapter control a viewer can click. Unlike the earlier failed
+      // witness this path is not paused: the plan-derived seek owns the current
+      // final Route Point stop, then the public transport advances exactly one
+      // meaningful beat. The destination itself is still asserted as fa-image-2.
       await progress.blur();
-      await page.keyboard.press("ArrowRight");
+      const playbackPausedAtReturnSeek = await page.locator(".journey-playback").evaluate((playback) => (
+        playback.classList.contains("is-paused")
+      ));
+      if (playbackPausedAtReturnSeek) {
+        throw new Error("Playback return witness unexpectedly paused before semantic transport advance");
+      }
+      await page.mouse.move(Math.floor(width / 2), Math.floor(height / 2));
+      await page.waitForFunction(() => !(
+        document.querySelector(".journey-playback")?.classList.contains("is-controls-hidden")
+      ), null, { timeout: 2_000 });
+      await activateControl(
+        page.locator('.journey-playback__controls button[aria-label="下一个章节"]'),
+        "Playback next chapter from asserted Route Point",
+      );
+      await page.waitForFunction(() => (
+        document.querySelector(".journey-playback")?.getAttribute("data-playback-phase") === "media"
+      ), null, { timeout: 2_000 });
       const returnedMedia = page.locator('.journey-playback [data-shared-media-id="fa-image-2"]');
       await returnedMedia.waitFor({ state: "visible", timeout: 5_000 });
       await page.waitForFunction(() => (
