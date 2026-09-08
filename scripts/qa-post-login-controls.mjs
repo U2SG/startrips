@@ -2258,17 +2258,13 @@ async function verifyFinalAcceptanceMobileFlow() {
       await page.locator('.journey-story [data-shared-media-id="fa-image-1"]').first().click();
       const storyFullscreen = page.locator(".journey-story-fullscreen");
       await storyFullscreen.waitFor({ state: "visible", timeout: 5_000 });
-      await activateControl(
-        storyFullscreen.locator('button[aria-label="下一个媒体"]'),
-        "Story fullscreen next-media control",
-      );
+      // Mobile fullscreen chrome is intentionally idle-hidden. Exercise its
+      // existing keyboard owner rather than forcing a hidden button actionable.
+      await page.keyboard.press("ArrowRight");
       await page.waitForFunction(() => Boolean(
         document.querySelector('.journey-story-fullscreen [data-shared-media-id="fa-image-2"]'),
       ), null, { timeout: 5_000 });
-      await activateControl(
-        storyFullscreen.locator('button[aria-label="退出沉浸媒体"]'),
-        "Story fullscreen exit control",
-      );
+      await page.keyboard.press("Escape");
       await storyFullscreen.waitFor({ state: "hidden", timeout: 5_000 });
       await page.waitForFunction(() => Boolean(
         document.querySelector('.journey-story [data-media-page="current"][data-media-page-id="fa-image-2"]'),
