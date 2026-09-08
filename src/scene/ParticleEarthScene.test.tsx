@@ -984,6 +984,25 @@ describe("#219 the focus signal shares the Route Point anchor", () => {
     expect(source.match(/pointRadius = ROUTE_ANCHOR_RADIUS,/g)).toHaveLength(2);
   });
 
+  it("keeps the personal focus signal on the canonical radius and biases only its material (#240)", () => {
+    const source = readFileSync(
+      new URL("./ParticleEarthScene.tsx", import.meta.url),
+      "utf8",
+    );
+    expect(source).not.toContain("PERSONAL_SIGNAL_RENDER_LIFT");
+    expect(source).not.toContain("multiplyScalar(PERSONAL_SIGNAL");
+    expect(source.match(/clipDepthBias:/g)).toHaveLength(1);
+    expect(source).toMatch(/const personalMaterial = createParticleEarthMaterial\(\{[\s\S]*?clipDepthBias: PERSONAL_SIGNAL_CLIP_DEPTH_BIAS,/);
+    for (const materialName of ["clusterMaterial", "cyanClusterMaterial", "shellMaterial", "haloMaterial"]) {
+      const start = source.indexOf(`const ${materialName} = createParticleEarthMaterial({`);
+      expect(start).toBeGreaterThan(-1);
+      expect(source.slice(start, source.indexOf("});", start) + 3)).not.toContain("clipDepthBias");
+    }
+    expect(source).toContain("host.dataset.focusSignalRadius = GLOBE_SURFACE_RADIUS.toFixed(3)");
+    expect(source).toContain("host.dataset.geographicSurfaceRadius = GLOBE_SURFACE_RADIUS.toFixed(3)");
+    expect(GLOBE_SURFACE_RADIUS.toFixed(3)).toBe("1.390");
+  });
+
   it("keeps the coastline above the surface with depth, not with radius (#237)", () => {
     // The coastline shares the surface radius now, so what makes it READ above
     // the particle body has to be a render policy. It is drawn after the
