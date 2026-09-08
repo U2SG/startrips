@@ -56,6 +56,11 @@ import {
   type VideoTrimWindow,
 } from "./videoTrimPlayback";
 import { remapPlaybackStepIndex } from "./quickRecapPlayback";
+import type { AutoEditPlanV1, AutoEditSelectionReason } from "./autoEditPlan";
+import {
+  buildQuickRecapSelectionSummary,
+  type QuickRecapOmissionReason,
+} from "./quickRecapSelectionSummary";
 import { playbackControlsMayAutoHide } from "./playbackControls";
 import {
   nextMeaningfulStepIndex,
@@ -144,6 +149,24 @@ export function playbackHoldReason(input: {
 
 const VIDEO_STALL_WATCHDOG_MS = 4_000;
 
+function quickRecapSelectionReasonLabel(reason: AutoEditSelectionReason) {
+  switch (reason) {
+    case "all-media": return "完整媒体顺序";
+    case "journey-cover": return "旅程封面";
+    case "user-pinned": return "手动保留";
+    case "route-point-representative": return "Route Point 代表媒体";
+    case "visual-diversity": return "补充画面差异";
+    case "duplicate-cluster-representative": return "相似画面的代表";
+    case "video-highlight": return "代表视频片段";
+  }
+}
+
+function quickRecapOmissionReasonLabel(reason: QuickRecapOmissionReason) {
+  switch (reason) {
+    case "not-selected": return "本次快速回顾未选入";
+  }
+}
+
 export function playbackMediaGate(
   read: MediaRead | null | undefined,
   decodeReadiness: DecodedReadiness | undefined,
@@ -175,6 +198,8 @@ export function JourneyPlaybackOverlay({
   mediaTrimResolver,
   onTempoChange,
   playbackMode = "full",
+  quickRecapPlan,
+  quickRecapSourceJourney,
   statusMessage,
 }: {
   journey: Journey | null;
@@ -195,6 +220,8 @@ export function JourneyPlaybackOverlay({
   // stays here in the director; this only reports a change upwards.
   onTempoChange?: (tempo: PlaybackTempo) => void;
   playbackMode?: "full" | "quick-recap";
+  quickRecapPlan?: AutoEditPlanV1 | null;
+  quickRecapSourceJourney?: Journey | null;
   statusMessage?: string | null;
 }) {
   // #194: the one product-level compact-mobile answer, published as an
@@ -219,6 +246,11 @@ export function JourneyPlaybackOverlay({
   // #126 sections 3-4: the transport reads the elapsed-time plan, so the bar is
   // time-weighted instead of step-weighted and a scrub has a time model.
   const { plan, getTimerBudget } = director;
+  const quickRecapSelectionSummary = useMemo(() => (
+    playbackMode === "quick-recap" && quickRecapPlan && quickRecapSourceJourney
+      ? buildQuickRecapSelectionSummary(quickRecapPlan, quickRecapSourceJourney)
+      : null
+  ), [playbackMode, quickRecapPlan, quickRecapSourceJourney]);
   const progressFillRef = useRef<HTMLSpanElement | null>(null);
   // Review P2: the fill animates without re-rendering, so the range's own value
   // would stay at the beat's start all beat long and a screen reader would hear
@@ -1316,6 +1348,50 @@ export function JourneyPlaybackOverlay({
       </div>
 
       {/* ── Controls ────────────────────────────────────────────────────── */}
+      {playbackMode === "quick-recap" && quickRecapSelectionSummary ? (
+        <details className="journey-playback__selection-summary">
+          <summary>本次整理</summary>
+          <div className="journey-playback__selection-summary-body">
+            {quickRecapSelectionSummary.map((entry, chapterIndex) => {
+              const point = entry.routePointId
+                ? quickRecapSourceJourney?.routePoints.find((candidate) => candidate.id === entry.routePointId) ?? null
+                : null;
+              return (
+                <section key={`${entry.routePointId ?? "journey"}:${chapterIndex}`}>
+                  <header>
+                    <span>Route Point</span>
+                    <strong>{point?.label || (entry.routePointId ? `Route Point ${chapterIndex + 1}` : "旅程开场")}</strong>
+                  </header>
+                  <p>Route Point Media · 使用 {entry.included.length} · 省略 {entry.omitted.length}</p>
+                  <ul>
+                    {entry.included.map((item) => {
+                      const asset = quickRecapSourceJourney?.media.find((candidate) => candidate.id === item.assetId);
+                      return (
+                        <li key={`included:${item.assetId}`}>
+                          <span aria-hidden="true">✓</span>
+                          <strong>{asset ? stripMediaExtension(asset.fileName) : item.assetId}</strong>
+                          <small>{quickRecapSelectionReasonLabel(item.selectionReason)}</small>
+                        </li>
+                      );
+                    })}
+                    {entry.omitted.map((item) => {
+                      const asset = quickRecapSourceJourney?.media.find((candidate) => candidate.id === item.assetId);
+                      return (
+                        <li key={`omitted:${item.assetId}`} className="is-omitted">
+                          <span aria-hidden="true">–</span>
+                          <strong>{asset ? stripMediaExtension(asset.fileName) : item.assetId}</strong>
+                          <small>{quickRecapOmissionReasonLabel(item.reason)}</small>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </section>
+              );
+            })}
+          </div>
+        </details>
+      ) : null}
+
       <button className="journey-playback__close" type="button" onClick={requestClose} aria-label="退出播放">
         <IconX size={22} stroke={1.35} aria-hidden="true" />
       </button>
