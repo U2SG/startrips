@@ -12,6 +12,24 @@ function createMaterial(spatialLod = false) {
 }
 
 describe("particle earth material", () => {
+  it.each([false, true])("keeps terrain on the canonical surface with spatial LOD %s", (spatialLod) => {
+    const options = { color: 0xffffff, opacity: 1, size: 8, spatialLod };
+    const plain = createParticleEarthMaterial(options);
+    const terrain = createParticleEarthMaterial({ ...options, terrainRelief: true });
+    try {
+      // Compare every position-affecting assignment, not a particular lift
+      // variable name. Relief may change appearance, never the projection.
+      const positionAssignments = (shader: string) => shader.match(
+        /\b(?:transformed|mvPosition|gl_Position)(?:\.[xyzwrgba]+)?\s*(?:[+*/-]?=)\s*[^;]+;/g,
+      );
+      expect(positionAssignments(terrain.vertexShader)).toEqual(positionAssignments(plain.vertexShader));
+      // Terrain also disables the generic star pulse even if callers omit it.
+      expect(terrain.uniforms.uRadialPulseScale.value).toBe(0);
+      expect(terrain.vertexShader).toContain("* terrainBrightness");
+      expect(terrain.vertexShader).toContain("* terrainPointScale");
+    } finally { plain.dispose(); terrain.dispose(); }
+  });
+
   it("can disable world-space radial pulse for geographic signals", () => {
     const material = createParticleEarthMaterial({
       color: 0xffffff, opacity: 1, size: 8, radialPulseScale: 0,

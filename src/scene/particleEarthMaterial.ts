@@ -6,7 +6,6 @@ import {
   Vector3,
   type WebGLRenderer,
 } from "three";
-import { terrainParticleReliefScale } from "./terrainRelief";
 
 export const PARTICLE_DIM_POINT_LIMIT = 24;
 export const PARTICLE_ACTIVE_DIM_POINT_LIMIT = 12;
@@ -66,10 +65,10 @@ export function createParticleEarthMaterial({
       },
       uActiveDimStrength: { value: 0 },
       uLodProgress: { value: spatialLod ? 0 : 1 },
-      uRadialPulseScale: { value: radialPulseScale },
+      uRadialPulseScale: { value: terrainRelief ? 0 : radialPulseScale },
       ...(terrainRelief ? {
         uTerrainReliefMap: { value: null },
-        uTerrainReliefScale: { value: 0 },
+        uTerrainReliefEmphasis: { value: 0 },
       } : {}),
       // Angular falloff is evaluated with dot products so attenuation stays
       // stable across zoom, DPR and screen size. 0.978 ~= 12°, 0.994 ~= 6°.
@@ -95,7 +94,7 @@ export function createParticleEarthMaterial({
       uniform float uRadialPulseScale;
       ${terrainRelief ? `
       uniform sampler2D uTerrainReliefMap;
-      uniform float uTerrainReliefScale;
+      uniform float uTerrainReliefEmphasis;
       ` : ""}
       varying float vStrength;
       varying float vTwinkle;
@@ -148,7 +147,7 @@ export function createParticleEarthMaterial({
         float terrainBrightness = 1.0;
         float terrainPointScale = 1.0;
         ${terrainRelief ? `
-        if (uTerrainReliefScale > 0.0) {
+        if (uTerrainReliefEmphasis > 0.0) {
           // Geographic directions, rather than vertex IDs, keep both LOD
           // layers on the same fixed landforms without changing CPU coordinates.
           vec3 terrainDirection = normalize(position);
@@ -179,12 +178,10 @@ export function createParticleEarthMaterial({
             * mix(0.55, 1.0, localDetail);
           // Zoom controls emphasis; a changed view reveals different real
           // texture structure. No clock or procedural wave moves the terrain.
-          float terrainLift = structure * uTerrainReliefScale;
-          transformed += terrainDirection * terrainLift
-            * (1.0 - uMorph) * mix(1.0, 0.12, dimAmount);
-          // Geometry, brightness and grain follow one fixed geographic
-          // signal. Preserve the existing quiet corridor around route marks.
-          terrainEmphasis = clamp(uTerrainReliefScale / ${terrainParticleReliefScale(3).toFixed(4)}, 0.0, 1.0)
+          // Appearance only: particle centers must remain on the canonical
+          // surface shared by routes, labels, picking, focus and Earth Dive.
+          // Preserve the existing quiet corridor around route marks.
+          terrainEmphasis = clamp(uTerrainReliefEmphasis, 0.0, 1.0)
             * (1.0 - uMorph) * mix(1.0, 0.18, dimAmount);
           terrainBrightness = mix(1.0, mix(0.72, 1.8, structure), terrainEmphasis);
           terrainPointScale = mix(1.0, mix(0.82, 1.2, structure), terrainEmphasis);

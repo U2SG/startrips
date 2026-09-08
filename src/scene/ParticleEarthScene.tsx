@@ -111,7 +111,7 @@ import {
   type SemanticZoomSnapshot,
 } from "./semanticZoom";
 import {
-  terrainParticleReliefScale,
+  terrainParticleReliefEmphasis,
   terrainReliefBumpScale,
   terrainReliefOpacity,
 } from "./terrainRelief";
@@ -3808,9 +3808,6 @@ export function ParticleEarthScene({
     window.addEventListener("pointercancel", onRejectedPointerLifecycleEnd);
     renderer.domElement.addEventListener("wheel", onWheel, { passive: false });
 
-    // Cover the exaggerated near-view render lift in both base/refinement
-    // culling bounds; the sampled geographic and picking positions stay fixed.
-    const terrainBoundsPadding = terrainParticleReliefScale(3);
     let particleMaterial = createParticleEarthMaterial({
       color: 0x61e4dc,
       opacity: 0,
@@ -3906,8 +3903,6 @@ export function ParticleEarthScene({
       );
       if (sample.positions.length > 0) {
         geometry.computeBoundingSphere();
-        // Only expand the culling bound; geographic sample coordinates stay fixed.
-        if (geometry.boundingSphere) geometry.boundingSphere.radius += terrainBoundsPadding;
       }
       const material = createParticleEarthMaterial({
         color: 0x74eee6,
@@ -4108,7 +4103,7 @@ export function ParticleEarthScene({
       // Time belongs to the existing point shimmer, never terrain displacement.
       material.uniforms.uTime.value = time;
       material.uniforms.uTerrainReliefMap.value = reliefTexture;
-      material.uniforms.uTerrainReliefScale.value = particleTerrainRelief;
+      material.uniforms.uTerrainReliefEmphasis.value = particleTerrainRelief;
     };
 
     const texture = new TextureLoader().load(
@@ -4190,7 +4185,6 @@ export function ParticleEarthScene({
         new BufferAttribute(createBurstTargets(particlePositions), 3),
       );
       nextParticleGeometry.computeBoundingSphere();
-      if (nextParticleGeometry.boundingSphere) nextParticleGeometry.boundingSphere.radius += terrainBoundsPadding;
       if (particles) {
         const previousGeometry = particleGeometry;
         particles.geometry = nextParticleGeometry;
@@ -4713,7 +4707,7 @@ export function ParticleEarthScene({
       // Landforms stay geographically fixed. Existing zoom/focus interpolation
       // changes their emphasis as the viewer approaches a different place.
       particleTerrainRelief = interpolate(particleTerrainRelief,
-        terrainAvailable ? terrainParticleReliefScale(interactiveZoom, currentQuality) : 0);
+        terrainAvailable ? terrainParticleReliefEmphasis(interactiveZoom, currentQuality) : 0);
       updateTerrainParticles(particleMaterial, motionTime);
       if (activeRefinementLayer) {
         updateTerrainParticles(activeRefinementLayer.material, motionTime);

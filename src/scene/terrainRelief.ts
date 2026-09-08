@@ -31,15 +31,12 @@ export function terrainReliefBumpScale(
   return 0.001 + terrainReliefStrength(zoom, quality) * 0.0045;
 }
 
-// Render-space emphasis, not measured elevation: the source is shaded relief,
-// not a DEM. The geographic surface and all route/picking anchors stay fixed.
-// The scene's existing zoom interpolation reveals the structure without a clock.
-export function terrainParticleReliefScale(
+// Dimensionless appearance weight, never a world-space displacement. The source
+// is shaded relief, not a DEM; only brightness and point size reveal its detail.
+// The existing zoom interpolation changes emphasis without a periodic wave.
+export function terrainParticleReliefEmphasis(
   zoom: number,
   quality: TerrainReliefQuality = "high",
 ): number {
-  // Deliberately exaggerated relief: the previous 0.003..0.012 ceiling made
-  // ordinary local contrast subpixel. Keep global structure quiet, then give
-  // regional landforms enough separation to read as geometry while zooming.
-  return (0.012 + terrainReliefStrength(zoom) * 0.053) * (quality === "low" ? 0.5 : 1);
+  return (0.18 + terrainReliefStrength(zoom) * 0.82) * (quality === "low" ? 0.5 : 1);
 }
