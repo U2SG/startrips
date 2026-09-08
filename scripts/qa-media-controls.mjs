@@ -598,6 +598,43 @@ try {
       inlineJitterOpenedFullscreen = false;
     }
 
+    // #239: a sub-threshold image drag schedules fullscreen only after the
+    // settle window. A newer Route Point scope owns the Story before that
+    // deadline and must cancel the deferred entry rather than reopening stale
+    // fullscreen over the new scope.
+    const scopeTarget = story.page.locator(
+      ".journey-story__route-points button[data-route-point-id]",
+    ).first();
+    let deferredFullscreenCancelledByScopeChange = false;
+    if (await scopeTarget.count()) {
+      await touch.send("Input.dispatchTouchEvent", {
+        type: "touchStart",
+        touchPoints: [{ x: swipeStartX, y: swipeY }],
+      });
+      await touch.send("Input.dispatchTouchEvent", {
+        type: "touchMove",
+        touchPoints: [{ x: swipeStartX - 30, y: swipeY }],
+      });
+      await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+      await scopeTarget.evaluate((button) => button.click());
+      await story.page.waitForTimeout(320);
+      deferredFullscreenCancelledByScopeChange = !(await jitterFullscreen.isVisible());
+      const wholeJourneyScope = story.page.locator(
+        ".journey-story__route-points > button:not([data-route-point-id])",
+      ).first();
+      await wholeJourneyScope.evaluate((button) => button.click());
+      await story.page.waitForFunction(({ selector, expected }) => {
+        const media = document.querySelector(selector);
+        return media && (media.getAttribute("alt") ?? media.getAttribute("src")) === expected;
+      }, { selector: storyCurrentMediaSelector, expected: firstMediaLabel }, { timeout: 3_000 });
+    }
+    checks.push({
+      name: "story-mobile-deferred-fullscreen-cancelled-by-scope-change",
+      deferredFullscreenCancelledByScopeChange,
+      failed: !deferredFullscreenCancelledByScopeChange,
+    });
+    if (!deferredFullscreenCancelledByScopeChange) failed = true;
+
     // Issue #65: a short but fast flick should commit even below the 48px
     // distance threshold, while the 30px jitter above remains a tap. Use real
     // CDP touch timing so velocity comes from browser event timestamps.

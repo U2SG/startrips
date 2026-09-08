@@ -136,6 +136,36 @@ export function scheduleCancelableMediaDragSettle(
   };
 }
 
+export function scheduleCancelableDeferredFullscreenEntry(
+  run: () => void,
+  capturedScopeRevision: number,
+  currentScopeRevision: () => number,
+  delayMs: number = MEDIA_DRAG_SETTLE_MS,
+  schedule: (callback: () => void, delay: number) => number = (callback, delay) => window.setTimeout(callback, delay),
+  cancel: (timerId: number) => void = (timerId) => window.clearTimeout(timerId),
+) {
+  let active = true;
+  const timerId = schedule(() => {
+    if (!active) return;
+    active = false;
+    if (currentScopeRevision() !== capturedScopeRevision) return;
+    run();
+  }, delayMs);
+  return () => {
+    if (!active) return;
+    active = false;
+    cancel(timerId);
+  };
+}
+
+export function cancelPendingStoryMediaOwners(
+  cancelDragSettle: (() => void) | null,
+  cancelDeferredFullscreen: (() => void) | null,
+) {
+  cancelDragSettle?.();
+  cancelDeferredFullscreen?.();
+}
+
 type MediaReadState =
   | { status: "loading" }
   | { status: "ready"; url: string; preview?: MediaPreviewRead; issuedAt: number; expiresAt: number }
@@ -935,7 +965,7 @@ export function JourneyStory({
   const mediaDragSettleCancelRef = useRef<(() => void) | null>(null);
   const mediaDragSettleFinishRef = useRef<(() => void) | null>(null);
   const mediaDragSprings = useRef<SpringElementHandle[]>([]);
-  const mediaTapTimerRef = useRef(0);
+  const deferredFullscreenCancelRef = useRef<(() => void) | null>(null);
   const [mobileManageMode, setMobileManageMode] = useState(false);
   const mobileManageDoneRef = useRef<HTMLButtonElement>(null);
   const mobileManageViewerTriggerRef = useRef<HTMLButtonElement>(null);
@@ -981,6 +1011,15 @@ export function JourneyStory({
   const copyRef = useRef<HTMLElement>(null);
   const pendingReads = useRef(new Set<string>());
   const mediaReadScope = useRef({ journeyId, routePointId });
+  const storyScopeRevisionRef = useRef(0);
+  const storyScopeIdentityRef = useRef({ journeyId, routePointId });
+  if (
+    storyScopeIdentityRef.current.journeyId !== journeyId
+    || storyScopeIdentityRef.current.routePointId !== routePointId
+  ) {
+    storyScopeIdentityRef.current = { journeyId, routePointId };
+    storyScopeRevisionRef.current += 1;
+  }
   const mediaReadsRef = useRef(mediaReads);
   const uploading = uploadState.status === "uploading"
     || soundtrackUpload.status === "uploading";
@@ -2422,14 +2461,14 @@ export function JourneyStory({
   }
 
   function cancelPendingMediaDragSettle() {
-    window.clearTimeout(mediaTapTimerRef.current);
-    mediaTapTimerRef.current = 0;
     for (const spring of mediaDragSprings.current) spring.cancel();
     mediaDragSprings.current = [];
     const cancelPendingSettle = mediaDragSettleCancelRef.current;
+    const cancelDeferredFullscreen = deferredFullscreenCancelRef.current;
     mediaDragSettleCancelRef.current = null;
     mediaDragSettleFinishRef.current = null;
-    cancelPendingSettle?.();
+    deferredFullscreenCancelRef.current = null;
+    cancelPendingStoryMediaOwners(cancelPendingSettle, cancelDeferredFullscreen);
     const activeDrag = mediaDragRef.current;
     mediaDragRef.current = null;
     if (activeDrag) finishMediaDrag(activeDrag);
@@ -2643,10 +2682,17 @@ export function JourneyStory({
     }
     settleMediaDrag(commit, releaseVelocityX);
     if (reopenFullscreenAfterSettle) {
-      mediaTapTimerRef.current = window.setTimeout(() => {
-        mediaTapTimerRef.current = 0;
-        enterFullscreen(false);
-      }, prefersReducedMotion() ? 0 : MEDIA_DRAG_SETTLE_MS);
+      const capturedScopeRevision = storyScopeRevisionRef.current;
+      deferredFullscreenCancelRef.current?.();
+      deferredFullscreenCancelRef.current = scheduleCancelableDeferredFullscreenEntry(
+        () => {
+          deferredFullscreenCancelRef.current = null;
+          enterFullscreen(false);
+        },
+        capturedScopeRevision,
+        () => storyScopeRevisionRef.current,
+        prefersReducedMotion() ? 0 : MEDIA_DRAG_SETTLE_MS,
+      );
     }
   }
 
