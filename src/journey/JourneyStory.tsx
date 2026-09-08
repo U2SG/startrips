@@ -1863,7 +1863,9 @@ export function JourneyStory({
     document.addEventListener("keydown", onKeyDown, true);
     return () => {
       document.removeEventListener("keydown", onKeyDown, true);
-      if (previousFocus?.isConnected) previousFocus.focus();
+      // Returning to a persistent media node must not scroll the Story under
+      // its sticky mobile header (the original photo may now be a back page).
+      if (previousFocus?.isConnected) previousFocus.focus({ preventScroll: true });
     };
   }, [fullscreen]);
 
