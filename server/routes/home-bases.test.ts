@@ -10,6 +10,7 @@ import {
   rateLimit,
   user as authUsers,
 } from "../db/auth-schema";
+import { hasAtlasPermission } from "../authorization/permissions";
 import { db, pool } from "../db/client";
 import { parseHomeBaseInput, parseHomeBasePatch } from "./home-bases";
 
@@ -182,6 +183,19 @@ describe("home base period input", () => {
     expect(parseHomeBasePatch({ endedOn: null })).toEqual({ endedOn: null });
     expect(parseHomeBasePatch({ label: "  Tokyo  " })).toEqual({ label: "Tokyo" });
     expect(parseHomeBasePatch({ startedOn: "2026-9-1" })).toBeNull();
+  });
+});
+
+describe("the authorization level each verb asks for", () => {
+  it("keeps removal reachable by the member who can record and correct", () => {
+    // #231 makes Home Base member-confirmed and its manual editing include
+    // removing a period, so DELETE asks for `update`. The owner-only `delete`
+    // action would leave a member able to record a mistaken period and
+    // correct every field of it while unable to withdraw it.
+    expect(hasAtlasPermission("member", "create")).toBe(true);
+    expect(hasAtlasPermission("member", "update")).toBe(true);
+    expect(hasAtlasPermission("member", "delete")).toBe(false);
+    expect(hasAtlasPermission("owner", "update")).toBe(true);
   });
 });
 

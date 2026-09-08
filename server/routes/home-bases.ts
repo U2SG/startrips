@@ -190,14 +190,18 @@ homeBaseRoutes.patch("/:periodId", async (context) => {
 });
 
 /**
- * `delete` rather than the `update` action `shares.ts` chose for revoking a
- * link. That exception exists because a member could otherwise mint a public
- * capability they were unable to withdraw; nothing is leaked here, and a
- * member who mis-recorded a period can still correct every field of it
- * through PATCH. So Home Base history follows normal Atlas authorization.
+ * `update`, not `delete`, for the same reason `shares.ts` revokes a link under
+ * `update`: `delete` is owner-only in `permissions.ts`, and #231 makes Home
+ * Base member-confirmed and its manual editing explicitly include removing a
+ * period. Requiring the owner-only action would let a member record a mistaken
+ * period and correct every field of it while being unable to withdraw it.
+ *
+ * Removing a period is also not destructive in the sense that action names:
+ * this table is referenced by no Journey, route point or media row, so a
+ * removal deletes a statement about where the member lived and nothing else.
  */
 homeBaseRoutes.delete("/:periodId", async (context) => {
-  const { atlas } = await requireAtlasAccess(context.req.raw, "delete");
+  const { atlas } = await requireAtlasAccess(context.req.raw, "update");
   const periodId = context.req.param("periodId");
   if (!UUID_PATTERN.test(periodId)) {
     return context.json({ error: "HOME_BASE_PERIOD_NOT_FOUND" }, 404);
