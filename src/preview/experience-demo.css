@@ -1,0 +1,73 @@
+.experience-demo-notice {
+  position: fixed;
+  z-index: 50;
+  top: max(18px, env(safe-area-inset-top));
+  right: 24px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px;
+  max-width: min(340px, calc(100vw - 32px));
+  padding: 8px 12px;
+  border: 1px solid var(--startrips-line);
+  border-radius: 10px;
+  background: var(--startrips-space);
+  color: var(--startrips-starlight);
+  font: 400 12px/1.5 var(--archive-sans);
+  pointer-events: none;
+}
+
+.experience-demo-notice small {
+  grid-column: 1 / -1;
+  color: var(--startrips-muted);
+  font-size: 10px;
+}
+
+.experience-demo-notice__hint {
+  color: var(--startrips-starlight);
+}
+
+.experience-demo-notice__meta {
+  color: var(--startrips-muted);
+}
+
+.experience-demo-notice__reset {
+  grid-column: 2;
+  grid-row: 1;
+  min-height: 44px;
+  margin-block: -8px;
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  color: var(--startrips-muted);
+  font: inherit;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.experience-demo-notice__reset:hover,
+.experience-demo-notice__reset:focus-visible {
+  color: var(--startrips-starlight);
+}
+
+.experience-demo-notice__reset:focus-visible {
+  outline: 1px solid currentColor;
+  outline-offset: 2px;
+}
+
+@media (max-width: 760px), (pointer: coarse) and (max-height: 480px) {
+  .experience-demo-notice {
+    top: max(76px, calc(env(safe-area-inset-top) + 60px));
+    right: auto;
+    left: 16px;
+    max-width: calc(100% - 32px);
+    padding: 5px 10px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: baseline;
+    gap: 8px;
+    font-size: 10px;
+  }
+
+  .experience-demo-notice__hint,
+  .experience-demo-notice__meta { min-width: 0; }
+}

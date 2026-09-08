@@ -11,28 +11,11 @@ import {
   type WheelEvent,
 } from "react";
 import { createPortal, flushSync } from "react-dom";
+import type { DragEndEvent } from "@dnd-kit/core";
+import { arrayMove } from "@dnd-kit/sortable";
 import {
-  DndContext,
-  KeyboardSensor,
-  PointerSensor,
-  closestCenter,
-  useSensor,
-  useSensors,
-  type DragEndEvent,
-} from "@dnd-kit/core";
-import {
-  SortableContext,
-  arrayMove,
-  rectSortingStrategy,
-  sortableKeyboardCoordinates,
-  useSortable,
-} from "@dnd-kit/sortable";
-import { CSS } from "@dnd-kit/utilities";
-import {
-  IconArrowDown,
   IconArrowLeft,
   IconArrowRight,
-  IconArrowUp,
   IconChevronDown,
   IconChevronUp,
   IconDots,
@@ -51,6 +34,14 @@ import {
   IconX,
 } from "@tabler/icons-react";
 import { IconActionButton } from "../components/IconActionButton";
+import { StartripsJourneyCue } from "../brand/StartripsBrandMark";
+import { StoryMediaRail } from "./StoryMediaRail";
+import { StoryMediaPages } from "./StoryMediaPages";
+import { StoryMediaOrganizer } from "./StoryMediaOrganizer";
+import { StoryNotesEditor, type StoryNotesSaveState } from "./StoryNotesEditor";
+import { MEDIA_STACK_DURATION, mediaStackNeighbors, mediaStackPull, mediaStackRest, mediaStackReveal } from "./mediaStackMotion";
+import "../styles/starlight-media.css";
+import "../styles/story-experience.css";
 import {
   JourneyApiError,
   type JourneyMediaMoveUndo,
@@ -80,7 +71,7 @@ import {
 } from "./journeyModel";
 import { playbackIntroMedia, playbackMediaWaitPolicy, storyMediaForScope } from "./journeyPlayback";
 import type { PlaybackMediaAvailability } from "./journeyPlayback";
-import type { Journey, JourneyMediaAsset } from "./types";
+import type { Journey, JourneyInput, JourneyMediaAsset } from "./types";
 import {
   completeMediaPlacementUploadPlan,
   groupMediaPlacementSuggestions,
@@ -91,6 +82,7 @@ import { useModalFocus, useNestedModalFocus } from "./useModalFocus";
 import { useCompactMobileLayout } from "./mobileLayout";
 import { useMobileSurfaceHistory } from "./useMobileSurfaceHistory";
 import { MEDIA_SWIPE_VELOCITY_MAX_AGE_MS, isMediaSwipeIntent, nextMediaSwipeVelocity, shouldCommitMediaSwipe } from "./mediaSwipeDecision";
+import "../styles/story-notes.css";
 
 const SOUNDTRACK_INPUT_ACCEPT = [
   "audio/mpeg",
@@ -111,7 +103,7 @@ const MEDIA_READ_REFRESH_MARGIN_MS = 60_000;
 const MEDIA_READ_SWEEP_MS = 20_000;
 // Mobile drag settles after distance/velocity intent is resolved by
 // mediaSwipeDecision; keep the visual snap duration independent of that input.
-const MEDIA_DRAG_SETTLE_MS = 220;
+const MEDIA_DRAG_SETTLE_MS = MEDIA_STACK_DURATION;
 
 export function finalizeMediaDragCommit(
   commit: () => void,
@@ -125,7 +117,7 @@ export function finalizeMediaDragCommit(
 export function scheduleCancelableMediaDragSettle(
   run: () => void,
   cleanup: () => void,
-  delayMs = MEDIA_DRAG_SETTLE_MS,
+  delayMs: number = MEDIA_DRAG_SETTLE_MS,
   schedule: (callback: () => void, delay: number) => number = (callback, delay) => window.setTimeout(callback, delay),
   cancel: (timerId: number) => void = (timerId) => window.clearTimeout(timerId),
 ) {
@@ -181,6 +173,7 @@ type JourneyStoryProps = {
   onNavigate: (journeyId: string) => void;
   /** Absent when the view has no edit capability (#200 shared mode). */
   onEdit?: (journeyId: string) => void;
+  onJourneyUpdated?: (journey: Journey) => void | Promise<void>;
   onDelete?: (journeyId: string) => void | Promise<void>;
   /**
    * #200 phase E. Opening the owner share surface for this Journey. Like
@@ -788,69 +781,6 @@ function StoryMediaTile({
   );
 }
 
-// #12: a sortable wrapper around StoryMediaTile. The <li> becomes the drag
-// handle surface; dragging lifts the tile and leaves the grid layout animating
-// around it (dnd-kit layout animation), with the sortable styles applied via
-// transform/transition so reduced-motion falls back to instant moves.
-function SortableMediaTile({
-  asset,
-  index,
-  isCurrent,
-  isCover,
-  read,
-  disabled,
-  onRequestRead,
-  onSelect,
-  onSetCover,
-}: {
-  asset: JourneyMediaAsset;
-  index: number;
-  isCurrent: boolean;
-  isCover: boolean;
-  read: MediaReadState | undefined;
-  disabled: boolean;
-  onRequestRead: (assetId: string) => void;
-  onSelect: (index: number, source: HTMLButtonElement) => void;
-  onSetCover?: (assetId: string) => void;
-}) {
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({ id: asset.id });
-
-  const style = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-    zIndex: isDragging ? 2 : undefined,
-  };
-
-  return (
-    <li
-      ref={setNodeRef}
-      style={style}
-      className={`${isDragging ? "is-dragging" : ""}${isCover ? " is-cover" : ""}`}
-      {...attributes}
-      {...listeners}
-    >
-      <StoryMediaTile
-        asset={asset}
-        index={index}
-        isCurrent={isCurrent}
-        isCover={isCover}
-        read={read}
-        disabled={disabled || isDragging}
-        onRequestRead={onRequestRead}
-        onSelect={onSelect}
-        onSetCover={onSetCover}
-      />
-    </li>
-  );
-}
-
 export function JourneyStory({
   journeys,
   journeyId,
@@ -858,6 +788,7 @@ export function JourneyStory({
   onClose,
   onNavigate,
   onEdit,
+  onJourneyUpdated,
   onDelete,
   onShare,
   onMediaAdded,
@@ -868,9 +799,10 @@ export function JourneyStory({
   // is null too and every media write in this component has nothing to call.
   // Before this contract an absent `onMediaDelete` fell through to the owner
   // API, which meant hiding the control left deletion reachable.
-  const { capabilities, readMedia, mutations } = useAtlasView();
+  const { capabilities, readMedia, listJourneys, mutations } = useAtlasView();
   const manageMedia: AtlasMutations | null = capabilities.canManageMedia ? mutations : null;
   const removeMedia = onMediaDelete ?? manageMedia?.deleteMedia ?? null;
+  const updateJourneyNotes = mutations?.updateJourneyNotes ?? null;
   const canEditJourney = capabilities.canEditJourney && Boolean(onEdit);
   const canShareJourney = capabilities.canShareAtlas && Boolean(onShare);
   const journeyIndex = journeys.findIndex((candidate) => candidate.id === journeyId);
@@ -892,13 +824,21 @@ export function JourneyStory({
   useEffect(() => decodeRegistryRef.current.onSettle(
     () => setDecodeSettleRevision((current) => current + 1),
   ), []);
-  // Two-layer media stage (#11): `shownAssetId` is the frame that has fully
-  // settled (base layer); `incomingAssetId` is the frame fading in on top.
-  // When they are equal the stage is single-layered. A target that is not yet
-  // decoded stays pending and the current frame keeps showing until it is.
+  // The semantic current/requested/ready identities are independent of the
+  // three persistent presentation pages. A ready neighbor becomes current
+  // after its horizontal handoff; no image changes compositor at that seam.
   const [shownAssetId, setShownAssetId] = useState<string | null>(null);
   const [incomingAssetId, setIncomingAssetId] = useState<string | null>(null);
-  const pendingTargetRef = useRef<number | null>(null);
+  const pendingTargetRef = useRef<string | null>(null);
+  const [pendingMediaId, setPendingMediaId] = useState<string | null>(null);
+  const requestedMediaRef = useRef<string | null>(null);
+  const mediaNavigationDirection = useRef<-1 | 1>(1);
+  const incomingMediaRef = useRef(incomingAssetId);
+  incomingMediaRef.current = incomingAssetId;
+  const setPendingMediaTarget = useCallback((assetId: string | null) => {
+    pendingTargetRef.current = assetId;
+    setPendingMediaId(assetId);
+  }, []);
   const [uploadState, setUploadState] = useState<MediaUploadState>({ status: "idle" });
   const [retryFiles, setRetryFiles] = useState<File[]>([]);
   const [retryRoutePointId, setRetryRoutePointId] = useState<string | null>(null);
@@ -906,6 +846,26 @@ export function JourneyStory({
   const [placementRetryGroups, setPlacementRetryGroups] = useState<PendingPlacementUploadGroup[]>([]);
   const [placementAnalyzing, setPlacementAnalyzing] = useState(false);
   const [closeBlocked, setCloseBlocked] = useState(false);
+  const [journeyNoteDraft, setJourneyNoteDraft] = useState<string | undefined>(undefined);
+  const [routePointNoteDrafts, setRoutePointNoteDrafts] = useState<Record<string, string>>({});
+  const routePointDraftLabels = useRef(new Map<string, string>());
+  const [notesSaveState, setNotesSaveState] = useState<StoryNotesSaveState>("idle");
+  const [notesMessage, setNotesMessage] = useState("");
+  const [notesDirty, setNotesDirty] = useState(false);
+  const notesDirtyRef = useRef(false);
+  notesDirtyRef.current = notesDirty;
+  const notesDraftJourneyRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!journey) return;
+    if (notesDraftJourneyRef.current === journey.id && notesDirtyRef.current) return;
+    setJourneyNoteDraft(undefined);
+    setRoutePointNoteDrafts({});
+    routePointDraftLabels.current.clear();
+    setNotesSaveState("idle");
+    setNotesMessage("");
+    setNotesDirty(false);
+    notesDraftJourneyRef.current = journey.id;
+  }, [journey?.id, journey?.revision]);
   const [deleteState, setDeleteState] = useState<"idle" | "confirming" | "pending">("idle");
   const [deleteMessage, setDeleteMessage] = useState("");
   const [mediaDeleteState, setMediaDeleteState] = useState<"idle" | "confirming" | "pending">("idle");
@@ -932,6 +892,7 @@ export function JourneyStory({
     setMoveMessage("");
   }
   const [playing, setPlaying] = useState(false);
+  const [mediaGestureHolding, setMediaGestureHolding] = useState(false);
   // Review P2: mirrors `playing` so gesture handlers can read it synchronously.
   const playingRef = useRef(false);
   playingRef.current = playing;
@@ -946,20 +907,12 @@ export function JourneyStory({
   const [fullscreenControlsHidden, setFullscreenControlsHidden] = useState(false);
   const fullscreenMobileIdleTimerRef = useRef(0);
   const storyMediaGestureConsumedRef = useRef(false);
-  // Mobile swipe: a live, finger-following slide shared by the inline stage
-  // and the fullscreen stage, replacing a release-only "guess and crossfade"
-  // gesture that gave zero visual feedback while dragging. The dragged frame
-  // and (when the neighbor's signed read is already cached from the #11
-  // prefetch window) a peeking neighbor move directly with the pointer via
-  // imperative style writes, not React state, so tracking never waits on a
-  // re-render. It is a separate visual system from the settle-driven opacity
-  // crossfade below — it only ever ends by jumping straight to the
-  // already-settled state it just finished animating to, the same fast path
-  // selectMediaIndex uses when a target's read is already ready.
+  // Inline and fullscreen manipulate the same persistent-page contract.
+  // Pointer motion changes page transforms, never React state per frame.
   const mediaDragRef = useRef<{
     container: HTMLElement;
     base: HTMLElement;
-    peek: HTMLImageElement | null;
+    peek: HTMLElement | null;
     startX: number;
     startY: number;
     pointerId: number;
@@ -977,6 +930,7 @@ export function JourneyStory({
   } | null>(null);
   const mediaDragSettlingRef = useRef(false);
   const mediaDragSettleCancelRef = useRef<(() => void) | null>(null);
+  const mediaTapTimerRef = useRef(0);
   const [mobileManageMode, setMobileManageMode] = useState(false);
   const mobileManageDoneRef = useRef<HTMLButtonElement>(null);
   const mobileManageViewerTriggerRef = useRef<HTMLButtonElement>(null);
@@ -990,6 +944,9 @@ export function JourneyStory({
   // steal Tab focus back into the article).
   const fullscreenRef = useRef<HTMLDivElement>(null);
   const [overview, setOverview] = useState(false);
+  const [desktopEditing, setDesktopEditing] = useState(false);
+  const mediaEditing = mobileLayout ? mobileManageMode : desktopEditing;
+  const notesEditing = desktopEditing || mobileManageMode;
   const [soundtrackUpload, setSoundtrackUpload] = useState<MediaUploadState>({ status: "idle" });
   const [soundtrackRemovePending, setSoundtrackRemovePending] = useState(false);
   const [soundtrackNotice, setSoundtrackNotice] = useState("");
@@ -1000,6 +957,14 @@ export function JourneyStory({
   // drives whichever stage is on screen so a video step can end itself.
   const storyVideoRef = useRef<HTMLVideoElement>(null);
   const fullscreenVideoRef = useRef<HTMLVideoElement>(null);
+  const [stagePlaybackReady, setStagePlaybackReady] = useState<{ inline: string | null; fullscreen: string | null }>({ inline: null, fullscreen: null });
+  const inlinePlaybackReady = useCallback((id: string | null) => {
+    setStagePlaybackReady((current) => current.inline === id ? current : { ...current, inline: id });
+  }, []);
+  const fullscreenPlaybackReady = useCallback((id: string | null) => {
+    setStagePlaybackReady((current) => current.fullscreen === id ? current : { ...current, fullscreen: id });
+  }, []);
+  const activeStagePlaybackReadyId = fullscreen ? stagePlaybackReady.fullscreen : stagePlaybackReady.inline;
   // #20: one sampler per soundtrack element; the analyser is built on first
   // play and drives the light strip with smoothed energy.
   const audioSamplerRef = useRef(createSoundtrackSampler());
@@ -1019,7 +984,146 @@ export function JourneyStory({
     || soundtrackRemovePending
     || orderPending
     || coverPending
-    || movePending;
+    || movePending
+    || notesSaveState === "saving";
+
+  function setStoryJourneyNote(value: string) {
+    setJourneyNoteDraft(value);
+    setNotesDirty(true);
+    setNotesSaveState("idle");
+    setNotesMessage("");
+  }
+
+  function setStoryRoutePointNote(routePointId: string, value: string) {
+    routePointDraftLabels.current.set(routePointId, journey?.routePoints.find((point) => point.id === routePointId)?.label || "未命名地点");
+    setRoutePointNoteDrafts((current) => ({ ...current, [routePointId]: value }));
+    setNotesDirty(true);
+    setNotesSaveState("idle");
+    setNotesMessage("");
+  }
+
+  function notifyNotesGuard(message: string) {
+    setNotesMessage(message);
+    if (typeof window === "undefined") return;
+    window.requestAnimationFrame(() => {
+      document.querySelector<HTMLElement>(".story-notes-editor")?.scrollIntoView({
+        block: "nearest",
+        behavior: prefersReducedMotion() ? "auto" : "smooth",
+      });
+    });
+  }
+
+  function discardStoryNotes() {
+    if (!journey || notesSaveState === "saving") return;
+    setJourneyNoteDraft(undefined);
+    setRoutePointNoteDrafts({});
+    routePointDraftLabels.current.clear();
+    setNotesDirty(false);
+    setNotesSaveState("idle");
+    setNotesMessage("");
+  }
+
+  const removedRoutePointDrafts = Object.entries(routePointNoteDrafts)
+    .filter(([id]) => !journey?.routePoints.some((point) => point.id === id))
+    .map(([id, note]) => ({ id, note, label: routePointDraftLabels.current.get(id) || "已删除地点" }));
+
+  function discardRemovedRoutePointDraft(routePointId: string) {
+    if (mutationPending) return;
+    const next = { ...routePointNoteDrafts };
+    delete next[routePointId];
+    routePointDraftLabels.current.delete(routePointId);
+    setRoutePointNoteDrafts(next);
+    setNotesDirty(journeyNoteDraft !== undefined || Object.keys(next).length > 0);
+    setNotesSaveState("idle");
+    setNotesMessage("");
+  }
+
+  async function saveStoryNotes() {
+    if (!journey || !updateJourneyNotes || !notesDirty || mutationPending) return;
+    if (removedRoutePointDrafts.length > 0) {
+      notifyNotesGuard("有地点已被删除。请先复制需要保留的草稿，再放弃对应地点草稿。");
+      return;
+    }
+    const journeyNoteWasTouched = journeyNoteDraft !== undefined;
+    const touchedRoutePointIds = new Set(Object.keys(routePointNoteDrafts));
+    const input: JourneyInput = {
+      title: journey.title,
+      startedOn: journey.startedOn,
+      endedOn: journey.endedOn,
+      note: journeyNoteDraft ?? journey.note ?? "",
+      lightColor: journey.lightColor,
+      lightEffect: journey.lightEffect ?? null,
+      revision: journey.revision,
+      routePoints: journey.routePoints.map((point) => ({
+        id: point.id,
+        latitude: point.latitude,
+        longitude: point.longitude,
+        label: point.label,
+        isStop: point.isStop,
+        occurredAt: point.occurredAt,
+        note: Object.prototype.hasOwnProperty.call(routePointNoteDrafts, point.id)
+          ? routePointNoteDrafts[point.id] || null
+          : point.note ?? null,
+      })),
+    };
+    setNotesSaveState("saving");
+    setNotesMessage("");
+    try {
+      const updated = await updateJourneyNotes(journey.id, input);
+      setJourneyNoteDraft(journeyNoteWasTouched ? updated.note ?? "" : undefined);
+      setRoutePointNoteDrafts(Object.fromEntries(
+        updated.routePoints
+          .filter((point) => touchedRoutePointIds.has(point.id))
+          .map((point) => [point.id, point.note ?? ""]),
+      ));
+      setNotesDirty(false);
+      setNotesSaveState("saved");
+      setNotesMessage("感想已保存。");
+      try {
+        await onJourneyUpdated?.(updated);
+      } catch {
+        setNotesMessage("感想已保存，但画面刷新失败；重新打开故事即可看到最新内容。");
+      }
+    } catch (error) {
+      if (error instanceof JourneyApiError && error.code === "JOURNEY_ROUTE_CHANGED") {
+        try {
+          const latestJourney = (await listJourneys()).find((candidate) => candidate.id === journey.id);
+          if (!latestJourney) {
+            setNotesMessage("这段旅程已不在当前图谱中。草稿仍在，请复制需要保留的感想。");
+            return;
+          }
+          if (onJourneyUpdated) await onJourneyUpdated(latestJourney);
+          else {
+            const refreshed = await onMediaAdded(journey.id);
+            if (!refreshed || refreshed.revision < latestJourney.revision) throw new Error("Story refresh unavailable");
+          }
+          const removedDraft = [...touchedRoutePointIds].some((id) => !latestJourney.routePoints.some((point) => point.id === id));
+          setNotesMessage(removedDraft
+            ? "旅程已更新，部分地点已被删除。草稿仍在，请复制需要保留的内容，再放弃对应地点草稿。"
+            : "旅程已更新，草稿已保留。请核对最新地点和感想，再点击保存感想。");
+        } catch {
+          setNotesMessage("旅程已更新，但读取最新内容失败。草稿仍在，请再次点击保存感想重试。");
+        } finally {
+          setNotesSaveState("error");
+        }
+        return;
+      }
+      setNotesSaveState("error");
+      setNotesMessage(error instanceof Error ? error.message : "感想保存失败，请稍后重试。");
+    }
+  }
+
+  function navigateStory(targetJourneyId: string) {
+    if (notesSaveState === "saving") {
+      notifyNotesGuard("正在保存感想，完成后才能切换旅程。");
+      return;
+    }
+    if (notesDirty) {
+      notifyNotesGuard("还有未保存的感想，请先保存或放弃更改。");
+      return;
+    }
+    onNavigate(targetJourneyId);
+  }
 
   function collapseMobileStory() {
     setMobileStoryExpanded(false);
@@ -1057,12 +1161,46 @@ export function JourneyStory({
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
   }
 
+  function presentFullscreen(nextFullscreen: boolean) {
+    if (mobileLayout) {
+      setFullscreen(nextFullscreen);
+      return;
+    }
+    cancelPendingMediaDragSettle();
+    const inlineStage = () => dialogRef.current?.querySelector<HTMLElement>(".journey-story__media") ?? null;
+    const sourceRoot = nextFullscreen ? inlineStage() : fullscreenRef.current;
+    const source = sourceRoot?.querySelector<HTMLElement>("[data-shared-media-id]") ?? null;
+    // Keep a playing video's first frame and audio on the live transport;
+    // animating a frozen canvas over it would mask half a second of playback.
+    if (source instanceof HTMLVideoElement) {
+      setFullscreen(nextFullscreen);
+      return;
+    }
+    const mediaId = source?.dataset.sharedMediaId;
+    const targetRoot = () => nextFullscreen ? fullscreenRef.current : inlineStage();
+    runSharedElementMorph({
+      source,
+      name: `story-fullscreen-${mediaId ?? "media"}`,
+      update: () => setFullscreen(nextFullscreen),
+      resolveTarget: () => mediaId
+        ? [...targetRoot()?.querySelectorAll<HTMLElement>("[data-shared-media-id]") ?? []]
+          .find((node) => node.dataset.sharedMediaId === mediaId) ?? null
+        : null,
+      isTargetCurrent: () => {
+        const stage = targetRoot();
+        return Boolean(mediaId && stage && fullscreenRef.current?.hidden === !nextFullscreen
+          && stage.querySelector<HTMLElement>('[data-media-page="current"]')?.dataset.mediaPageId === mediaId
+          && !stage.querySelector('[data-media-incoming="true"], [role="alert"]'));
+      },
+    });
+  }
+
   function exitFullscreen() {
     if (typeof window !== "undefined") {
       window.clearTimeout(fullscreenMobileIdleTimerRef.current);
       fullscreenMobileIdleTimerRef.current = 0;
     }
-    setFullscreen(false);
+    presentFullscreen(false);
     setFullscreenControlsHidden(false);
   }
 
@@ -1072,7 +1210,7 @@ export function JourneyStory({
     setPlayingFromGesture(autoPlay, "fullscreen");
     setFullscreenControlsHidden(mobileLayout);
     setMobileMediaMenuOpen(false);
-    setFullscreen(true);
+    presentFullscreen(true);
   }
 
   function closeMobileMediaDelete() {
@@ -1116,6 +1254,14 @@ export function JourneyStory({
   }
 
   function exitMobileManageMode() {
+    if (notesSaveState === "saving") {
+      notifyNotesGuard("正在保存感想，完成后才能退出编辑。");
+      return false;
+    }
+    if (notesDirty) {
+      notifyNotesGuard("还有未保存的感想，请先保存或放弃更改。");
+      return false;
+    }
     if (mutationPending) return false;
     setDeleteState("idle");
     setDeleteMessage("");
@@ -1129,6 +1275,7 @@ export function JourneyStory({
     setMoveUndo(null);
     restoreMobileManageViewerFocusRef.current = true;
     setMobileManageMode(false);
+    setDesktopEditing(false);
     return true;
   }
 
@@ -1149,6 +1296,15 @@ export function JourneyStory({
       closeJourneyDelete();
       return;
     }
+    if (notesSaveState === "saving") {
+      setCloseBlocked(true);
+      notifyNotesGuard("正在保存感想，完成后即可安全退出。");
+      return;
+    }
+    if (notesDirty) {
+      notifyNotesGuard("还有未保存的感想，请先保存或放弃更改。");
+      return;
+    }
     if (mobileLayout && mobileManageMode) {
       if (!exitMobileManageMode() && uploading) setCloseBlocked(true);
       return;
@@ -1161,6 +1317,9 @@ export function JourneyStory({
       deleteState === "pending"
       || mediaDeleteState === "pending"
       || soundtrackRemovePending
+      || movePending
+      || orderPending
+      || coverPending
     ) {
       return;
     }
@@ -1274,6 +1433,7 @@ export function JourneyStory({
     setMobileStoryExpanded(false);
     exitFullscreen();
     setMobileManageMode(false);
+    setDesktopEditing(false);
     setMobileMediaMenuOpen(false);
     setOverview(false);
     setMoveSelectMode(false);
@@ -1289,7 +1449,7 @@ export function JourneyStory({
     decodeRegistryRef.current.reset();
     setShownAssetId(null);
     setIncomingAssetId(null);
-    pendingTargetRef.current = null;
+    setPendingMediaTarget(null);
     audioSamplerRef.current.stop();
     resetAudioAtmosphereEnergy();
     const audio = audioRef.current;
@@ -1301,6 +1461,19 @@ export function JourneyStory({
       cancelPendingMediaDragSettle();
     };
   }, [journeyId, routePointId]);
+
+  useEffect(() => {
+    const cancel = () => cancelPendingMediaDragSettle();
+    window.addEventListener("resize", cancel);
+    window.addEventListener("blur", cancel);
+    document.addEventListener("visibilitychange", cancel);
+    return () => {
+      window.removeEventListener("resize", cancel);
+      window.removeEventListener("blur", cancel);
+      document.removeEventListener("visibilitychange", cancel);
+      cancel();
+    };
+  }, [fullscreen, mobileLayout, overview]);
 
   useEffect(() => {
     if (deleteState === "confirming") deleteCancelRef.current?.focus();
@@ -1396,6 +1569,10 @@ export function JourneyStory({
   }, [localMediaOrder, scopedMedia]);
   const soundtrack = journey ? journeySoundtrack(journey) : null;
   const activeAsset = scopedMedia[assetIndex] ?? null;
+  if (incomingAssetId === null && pendingTargetRef.current === null) {
+    requestedMediaRef.current = activeAsset?.id ?? null;
+  }
+  const requestedMediaIndex = storyAssetIndexForId(scopedMedia, pendingMediaId ?? incomingAssetId, assetIndex);
   const autoplayVideoCandidate = storyAutoplayVideoCandidate(
     scopedMedia,
     assetIndex,
@@ -1419,14 +1596,14 @@ export function JourneyStory({
     return storyMediaForScope(target, selectedRoutePointId);
   }
 
-  // Ken Burns playback: advance every slide when playing, restarting the
-  // timer whenever the user navigates manually or the media list changes.
-  // #11: autoplay goes through the two-layer stage too, so a slow network
-  // keeps the current frame until the next one is decoded.
+  // Media duration begins once the requested page has become visible.
   const navigateToMediaRef = useRef<(index: number) => void>(() => undefined);
   navigateToMediaRef.current = navigateToMedia;
+  const navigateMediaStepRef = useRef<(direction: -1 | 1, wrap: boolean) => void>(() => undefined);
+  navigateMediaStepRef.current = navigateMediaStep;
   useLayoutEffect(() => {
-    if (!playing) return;
+    if (!playing || mediaGestureHolding || incomingAssetId !== null || pendingMediaId !== null) return;
+    if (activeRead?.status !== "error" && activeStagePlaybackReadyId !== activeAsset?.id) return;
     const advance = storyAutoplayAdvance(
       assetIndex,
       scopedMedia.length,
@@ -1501,9 +1678,13 @@ export function JourneyStory({
     assetIndex,
     fullscreen,
     playing,
+    mediaGestureHolding,
     scopedMedia.length,
     selectedRoutePointId,
     shownAssetId,
+    incomingAssetId,
+    pendingMediaId,
+    activeStagePlaybackReadyId,
   ]);
 
   // The soundtrack follows the slideshow: it keeps its position across pauses
@@ -1568,6 +1749,7 @@ export function JourneyStory({
 
   useEffect(() => {
     if (!mobileLayout) {
+      if (mobileManageMode) setDesktopEditing(true);
       setMobileStoryExpanded((expanded) => mobileStoryExpandedForLayout(false, expanded));
       setMobileMediaMenuOpen(false);
       return;
@@ -1576,7 +1758,8 @@ export function JourneyStory({
     // Never label the compact Story as Viewer while an edit-only surface is
     // still mounted; carry that state into explicit Manage mode instead.
     if (
-      overview
+      desktopEditing
+      || overview
       || deleteState !== "idle"
       || mediaDeleteState !== "idle"
       || moveSelectMode
@@ -1603,14 +1786,16 @@ export function JourneyStory({
     };
     const onKeyDown = (event: KeyboardEvent) => {
       restartIdle();
+      if (event.defaultPrevented) return;
+      const target = event.target;
+      if (target instanceof Element && target.closest("video, audio, input, textarea, select, [contenteditable='true']")) return;
+      if ((event.key === " " || event.key === "Spacebar") && target instanceof Element && target.closest("button")) return;
       if (event.key === "Escape") {
         exitFullscreen();
       } else if (event.key === "ArrowLeft") {
-        const index = storyMediaNeighborIndex(assetIndex, scopedMedia.length, -1, selectedRoutePointId !== null);
-        if (index !== null) navigateToMediaRef.current(index);
+        navigateMediaStepRef.current(-1, selectedRoutePointId !== null);
       } else if (event.key === "ArrowRight") {
-        const index = storyMediaNeighborIndex(assetIndex, scopedMedia.length, 1, selectedRoutePointId !== null);
-        if (index !== null) navigateToMediaRef.current(index);
+        navigateMediaStepRef.current(1, selectedRoutePointId !== null);
       } else if (event.key === " " || event.key === "Spacebar") {
         event.preventDefault();
         togglePlaying();
@@ -1678,7 +1863,9 @@ export function JourneyStory({
     document.addEventListener("keydown", onKeyDown, true);
     return () => {
       document.removeEventListener("keydown", onKeyDown, true);
-      if (previousFocus?.isConnected) previousFocus.focus();
+      // Returning to a persistent media node must not scroll the Story under
+      // its sticky mobile header (the original photo may now be a back page).
+      if (previousFocus?.isConnected) previousFocus.focus({ preventScroll: true });
     };
   }, [fullscreen]);
 
@@ -1702,7 +1889,7 @@ export function JourneyStory({
     if (shownAssetId && !scopedMedia.some((candidate) => candidate.id === shownAssetId)) {
       setShownAssetId(null);
       setIncomingAssetId(null);
-      pendingTargetRef.current = null;
+      setPendingMediaTarget(null);
     }
   }, [scopedMedia, shownAssetId]);
 
@@ -1739,12 +1926,21 @@ export function JourneyStory({
     ).finally(() => pendingReads.current.delete(assetId));
   }, []);
 
-  // #11: settle the two-layer stage after the incoming frame's crossfade.
-  // Under reduced motion the animation is disabled and never fires
-  // animationend, so the caller settles immediately in that case.
+  // Presentation commits only the latest requested asset after it is ready.
   const settleIncoming = useCallback((assetId: string) => {
+    // A late handoff from an abandoned request cannot replace the latest frame.
+    if (incomingMediaRef.current !== assetId) return;
     setShownAssetId((current) => current === assetId ? current : assetId);
     setIncomingAssetId((current) => current === assetId ? null : current);
+  }, []);
+
+  const reportStageMediaError = useCallback((assetId: string, message: string) => {
+    setMediaReads((current) => ({ ...current, [assetId]: { status: "error", message } }));
+    // Failed targets still own an unavailable interval in Story autoplay.
+    if (incomingMediaRef.current === assetId) {
+      setShownAssetId(assetId);
+      setIncomingAssetId(null);
+    }
   }, []);
 
   useEffect(() => {
@@ -1764,6 +1960,12 @@ export function JourneyStory({
     if (autoplayVideoCandidate) loadMediaRead(autoplayVideoCandidate.id);
   }, [autoplayVideoCandidate?.id, loadMediaRead]);
 
+  const stackNeighborIndices = useMemo(() => mediaStackNeighbors(
+    scopedMedia.findIndex((candidate) => candidate.id === (shownAssetId ?? activeAsset?.id)),
+    scopedMedia.length,
+    selectedRoutePointId !== null,
+  ), [shownAssetId, activeAsset?.id, scopedMedia, selectedRoutePointId]);
+
   // #11: prepare adjacent slideshow media while the active one is on screen.
   // The window is next 1 + previous 1 for manual browsing, next 2 for
   // autoplay. Only images are decoded ahead; videos stay at preload metadata.
@@ -1773,7 +1975,7 @@ export function JourneyStory({
     if (activeIndex < 0) return;
     const windowFor = prefetchWindowFor(activeIndex, scopedMedia.length, playing);
     const target = new Set(
-      [...windowFor.next, ...windowFor.previous]
+      [...windowFor.next, ...windowFor.previous, ...stackNeighborIndices]
         .map((index) => scopedMedia[index])
         .filter((asset): asset is JourneyMediaAsset => asset !== undefined),
     );
@@ -1783,7 +1985,7 @@ export function JourneyStory({
     }
     // Release decoded refs outside the window so hundreds of images are not
     // all kept in memory for one open dialog.
-    const keep = new Set<string>([activeAsset.id]);
+    const keep = new Set<string>([activeAsset.id, ...[...target].map((asset) => asset.id)]);
     for (const index of windowFor.next) keep.add(scopedMedia[index]?.id ?? "");
     for (const index of windowFor.previous) keep.add(scopedMedia[index]?.id ?? "");
     for (const [assetId, state] of Object.entries(mediaReadsRef.current)) {
@@ -1791,13 +1993,13 @@ export function JourneyStory({
         decodeRegistryRef.current.release(assetId);
       }
     }
-  }, [activeAsset?.id, scopedMedia, playing, loadMediaRead]);
+  }, [activeAsset?.id, scopedMedia, playing, loadMediaRead, stackNeighborIndices]);
 
   // #11: start the browser decode for any image whose signed read became
   // ready inside the prefetch window (or is the current frame). Runs whenever
   // reads settle, so an async read completion starts the decode automatically.
   useEffect(() => {
-    const windowTargets = new Set<string>([activeAsset?.id ?? ""]);
+    const windowTargets = new Set<string>([activeAsset?.id ?? "", ...stackNeighborIndices.map((index) => scopedMedia[index].id)]);
     if (activeAsset && scopedMedia.length >= 2) {
       const activeIndex = scopedMedia.findIndex((candidate) => candidate.id === activeAsset.id);
       if (activeIndex >= 0) {
@@ -1819,39 +2021,38 @@ export function JourneyStory({
         }
       }
     }
-  }, [mediaReads, activeAsset?.id, scopedMedia, playing]);
+  }, [mediaReads, activeAsset?.id, scopedMedia, playing, stackNeighborIndices]);
 
-  // #11: when the incoming layer settles (transition end handled in the JSX),
-  // the base layer follows. This effect covers the entry case: no incoming and
-  // no settled frame yet, so the active frame becomes the base immediately.
+  // Initial selection has no prior page to preserve.
   useEffect(() => {
     if (incomingAssetId !== null || shownAssetId !== null) return;
     if (activeAsset) setShownAssetId(activeAsset.id);
   }, [activeAsset?.id, incomingAssetId, shownAssetId]);
 
-  // #11: under reduced motion the crossfade animation is disabled, so no
-  // animationend fires; settle the stage as soon as the incoming frame mounts.
-  useEffect(() => {
-    if (incomingAssetId === null) return;
-    if (!prefersReducedMotion()) return;
-    const timer = window.setTimeout(() => settleIncoming(incomingAssetId), 16);
-    return () => window.clearTimeout(timer);
-  }, [incomingAssetId, settleIncoming]);
-
-  // #11: a navigation target that was not decoded yet stays pending; the
-  // current frame keeps showing until the target's read and decode settle,
-  // then the switch fires with the incoming layer crossfading in.
+  // A requested target waits for its read and decode while the current page
+  // remains visible. Only then may the presentation pages start their handoff.
   // Review P1: the effect re-runs on every decode settle revision, and when
   // the target's signed read is already ready it starts the decode so a
   // pending target can never stall.
   useEffect(() => {
-    const pendingIndex = pendingTargetRef.current;
-    if (pendingIndex === null) return;
+    // A cold target may become ready while the pointer is held on the old
+    // page. Let that gesture finish before changing its physical page owner.
+    if (mediaGestureHolding) return;
+    const pendingId = pendingTargetRef.current;
+    if (pendingId === null) return;
+    const pendingIndex = scopedMedia.findIndex((candidate) => candidate.id === pendingId);
     const target = scopedMedia[pendingIndex];
-    if (!target) return;
+    if (!target) {
+      setPendingMediaTarget(null);
+      return;
+    }
     const targetRead = mediaReads[target.id];
     if (targetRead?.status === "ready" && target.mimeType.startsWith("image/")) {
-      decodeRegistryRef.current.ensure(target.id, targetRead.url);
+      const readiness = decodeRegistryRef.current.ensure(target.id, targetRead.url);
+      if (readiness.status === "error") {
+        reportStageMediaError(target.id, readiness.message);
+        return;
+      }
     }
     const disposition = storyNavigationTargetDisposition(
       target,
@@ -1862,17 +2063,17 @@ export function JourneyStory({
       // A terminal read failure is still a completed navigation step. Promote
       // it so Story autoplay can own the unavailable-media interval and move
       // on, instead of leaving the prior frame pending forever.
-      pendingTargetRef.current = null;
+      setPendingMediaTarget(null);
       setIncomingAssetId(null);
       setShownAssetId(target.id);
       setAssetIndex(pendingIndex);
       return;
     }
     if (disposition !== "ready") return;
-    pendingTargetRef.current = null;
+    setPendingMediaTarget(null);
     setIncomingAssetId(target.id);
     setAssetIndex(pendingIndex);
-  }, [decodeSettleRevision, mediaReads, scopedMedia, activeAsset?.id, playing]);
+  }, [decodeSettleRevision, mediaReads, scopedMedia, activeAsset?.id, playing, pendingMediaId, mediaGestureHolding, setPendingMediaTarget, reportStageMediaError]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -1910,10 +2111,11 @@ export function JourneyStory({
   const activeChapterRoutePoint = activeChapterRoutePointId
     ? journey.routePoints.find((point) => point.id === activeChapterRoutePointId) ?? null
     : null;
-  const read = asset ? mediaReads[asset.id] : null;
-  // #11 two-layer stage: `shownAsset` is the settled base frame, `incoming`
-  // (when present) is fading in on top. The base frame is released only after
-  // the incoming one settles, so a switch never flashes an empty stage.
+  const notesRoutePoint = selectedRoutePoint ?? activeChapterRoutePoint;
+  const notesRoutePointNote = notesRoutePoint
+    ? routePointNoteDrafts[notesRoutePoint.id] ?? notesRoutePoint.note ?? ""
+    : "";
+  // These are semantic identities; StoryMediaPages retains the physical pages.
   const shownAsset = shownAssetId
     ? scopedMedia.find((candidate) => candidate.id === shownAssetId) ?? null
     : asset;
@@ -1921,7 +2123,58 @@ export function JourneyStory({
   const incoming = incomingAssetId && incomingAssetId !== shownAssetId
     ? scopedMedia.find((candidate) => candidate.id === incomingAssetId) ?? null
     : null;
-  const incomingRead = incoming ? mediaReads[incoming.id] : null;
+  const pendingTarget = pendingTargetRef.current !== null
+    ? scopedMedia.find((candidate) => candidate.id === pendingTargetRef.current) ?? null
+    : null;
+  const pendingTargetRead = pendingTarget ? mediaReads[pendingTarget.id] : null;
+  const mediaStageWaiting = Boolean(
+    (shownAsset && (!shownRead || shownRead.status === "loading"))
+    || (
+      pendingTarget
+      && pendingTarget.id !== shownAsset?.id
+      && pendingTargetRead?.status !== "error"
+    ),
+  );
+  const mediaStageStatus = (
+    <>
+      {mediaStageWaiting ? (
+        <div className={`journey-story__media-state starlight-media-state is-waiting${shownRead?.status === "ready" ? " is-over-media" : ""}`} role="status" aria-live="polite">
+          {shownRead?.status !== "ready" || !mobileLayout ? <StartripsJourneyCue state="waiting" size={shownRead?.status === "ready" ? 24 : 58} className="starlight-media-state__cue" /> : null}
+          <div className="starlight-media-state__copy" aria-label="正在载入媒体">
+            <strong className={!mobileLayout ? "story-visually-hidden" : undefined}>{pendingTarget ? "正在打开所选媒体…" : "正在打开媒体…"}</strong>
+          </div>
+        </div>
+      ) : null}
+      {shownAsset && shownRead?.status === "error" ? (
+        <div className="journey-story__media-state starlight-media-state is-error" role="alert">
+          <StartripsJourneyCue state="rest" size={58} className="starlight-media-state__cue" />
+          <div className="starlight-media-state__copy">
+            <strong>媒体暂时无法打开</strong>
+            <span>{shownRead.message}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              decodeRegistryRef.current.release(shownAsset.id);
+              loadMediaRead(shownAsset.id);
+            }}
+            onKeyDown={(event) => {
+              // Let Space activate Retry instead of the fullscreen play shortcut.
+              if (event.key === " " || event.key === "Spacebar") event.stopPropagation();
+            }}
+          >重试打开</button>
+          {!mobileLayout && scopedMedia.length > 1 ? <button
+            type="button"
+            disabled={mutationPending}
+            onClick={() => navigateFromPicture(
+              selectedRoutePointId !== null || requestedMediaIndex < scopedMedia.length - 1 ? 1 : -1,
+              true,
+            )}
+          >{selectedRoutePointId !== null || requestedMediaIndex < scopedMedia.length - 1 ? "查看下一张" : "查看上一张"}</button> : null}
+        </div>
+      ) : null}
+    </>
+  );
   // #204 CFAA family fix: one persistent video node owns priming, incoming, and
   // settled video states. Prefer the incoming video over the old settled video
   // so video→video navigation can actually mount and settle the destination.
@@ -1945,20 +2198,19 @@ export function JourneyStory({
     && storyStageVideoRead?.status === "ready",
   );
   const storyStageVideoVisible = storyStageVideoSettled || storyStageVideoIncoming;
-  const shownIndex = shownAsset
-    ? scopedMedia.findIndex((candidate) => candidate.id === shownAsset.id)
-    : -1;
-  const activeChapterMedia = storyChapterMedia(scopedMedia, asset);
-  const activeChapterIndex = asset
-    ? activeChapterMedia.findIndex((candidate) => candidate.id === asset.id)
-    : -1;
-  const canMoveEarlier = activeChapterIndex > 0;
-  const canMoveLater = activeChapterIndex >= 0
-    && activeChapterIndex < activeChapterMedia.length - 1;
-  const selectionContainsRoutePointMedia = storySelectionContainsRoutePointMedia(
-    orderedScopedMedia,
-    moveSelection,
-  );
+  function renderStageVideo(immersive: boolean) {
+    return storyStageVideoAsset ? <video
+      ref={immersive ? fullscreenVideoRef : storyVideoRef}
+      src={storyStageVideoRead?.status === "ready" ? storyStageVideoRead.url : undefined}
+      controls={storyStageVideoSettled}
+      playsInline
+      preload="metadata"
+      hidden={!storyStageVideoVisible}
+      aria-hidden={storyStageVideoVisible ? undefined : true}
+      data-shared-media-id={storyStageVideoSettled ? storyStageVideoAsset.id : undefined}
+      data-shared-journey-cover={storyStageVideoSettled && cover?.id === storyStageVideoAsset.id ? "true" : undefined}
+    /> : null;
+  }
   const previousJourney = journeyIndex > 0 ? journeys[journeyIndex - 1] : null;
   const nextJourney = journeyIndex < journeys.length - 1 ? journeys[journeyIndex + 1] : null;
   const uploadPercent = uploadState.status === "uploading" && uploadState.totalBytes > 0
@@ -1991,38 +2243,41 @@ export function JourneyStory({
       const nativeControlGuard = Math.min(72, rect.height * 0.25);
       if (clientY >= rect.bottom - nativeControlGuard) return false;
     }
-    return !target.closest("button, input, select, textarea, [role='button']");
+    return !target.closest("button, input, select, textarea, [role='button']:not(img)");
   }
 
   function resolveMediaDragNeighbor(dx: number, wrap: boolean) {
     if (dx === 0) return null;
     const direction: -1 | 1 = dx < 0 ? 1 : -1;
-    const index = storyMediaNeighborIndex(assetIndex, scopedMedia.length, direction, wrap && selectedRoutePointId !== null);
+    const anchorIndex = storyAssetIndexForId(scopedMedia, shownAssetId, assetIndex);
+    const index = storyMediaNeighborIndex(anchorIndex, scopedMedia.length, direction, wrap && selectedRoutePointId !== null);
     if (index === null) return null;
     const asset = scopedMedia[index];
     return asset ? { index, asset } : null;
   }
 
   function attachMediaDragPeek(container: HTMLElement, neighbor: JourneyMediaAsset | null) {
-    if (!neighbor || !neighbor.mimeType.startsWith("image/")) return null;
+    if (!neighbor) return null;
     const read = mediaReads[neighbor.id];
     if (read?.status !== "ready") return null;
-    const peek = container.querySelector<HTMLImageElement>("[data-media-drag-peek]");
-    if (!peek) return null;
-    peek.src = read.url;
-    peek.style.display = "block";
-    peek.classList.toggle("journey-story__media-drag-page", container === fullscreenRef.current);
-    return peek;
+    const page = Array.from(container.querySelectorAll<HTMLElement>("[data-media-page-id]"))
+      .find((candidate) => candidate.dataset.mediaPageId === neighbor.id);
+    return page?.dataset.mediaPageReady === "true" ? page : null;
   }
 
   function applyMediaDragTransform() {
     const drag = mediaDragRef.current;
     if (!drag) return;
-    const dx = drag.neighborAsset ? drag.dx : drag.dx * 0.3;
-    drag.base.style.transform = `translateX(${dx}px)`;
+    const dx = drag.peek ? drag.dx : drag.dx * 0.3;
+    const transform = mediaStackPull(dx, drag.width);
+    drag.base.style.transform = transform;
+    const pages = drag.container.querySelector<HTMLElement>("[data-story-media-pages]");
+    pages?.style.setProperty("--story-drag-x", `${dx}px`);
+    pages?.style.setProperty("--story-live-transform", transform);
     if (drag.peek) {
-      const edge = drag.dx < 0 ? drag.width : -drag.width;
-      drag.peek.style.transform = `translateX(${edge + dx}px)`;
+      const depth = Number(drag.peek.style.getPropertyValue("--stack-depth")) || 1;
+      drag.peek.style.zIndex = "4";
+      drag.peek.style.transform = mediaStackReveal(depth, Math.abs(dx) / drag.width);
     }
   }
 
@@ -2030,9 +2285,11 @@ export function JourneyStory({
     if (!container || mediaDragSettlingRef.current || incomingAssetId !== null || mutationPending || overview || scopedMedia.length < 2) return;
     // #204 CFAA: hidden authorization/priming media is implementation detail,
     // not the semantic settled frame the user's finger is manipulating.
-    const base = container.querySelector<HTMLElement>(":scope > [data-shared-media-id]");
+    const base = container.querySelector<HTMLElement>('[data-media-page="current"]');
     if (!base) return;
-    base.classList.toggle("journey-story__media-drag-page", container === fullscreenRef.current);
+    // A pointer-down may still become a picture click. Keep the latest cold
+    // navigation intent until an actual horizontal drag takes ownership.
+    setMediaGestureHolding(true);
     mediaDragRef.current = {
       container,
       base,
@@ -2050,7 +2307,7 @@ export function JourneyStory({
       wrap,
       neighborIndex: -1,
       neighborAsset: null,
-      width: container.clientWidth,
+      width: base.clientWidth,
     };
   }
 
@@ -2070,6 +2327,9 @@ export function JourneyStory({
         return;
       }
       drag.axis = "x";
+      setPendingMediaTarget(null);
+      requestedMediaRef.current = shownAssetId;
+      setAssetIndex(storyAssetIndexForId(scopedMedia, shownAssetId, assetIndex));
       if (!drag.preserveNativeVideoCapture) {
         try {
           if (!drag.container.hasPointerCapture(pointerId)) {
@@ -2092,7 +2352,7 @@ export function JourneyStory({
     }
     const neighbor = resolveMediaDragNeighbor(drag.dx, drag.wrap);
     const neighborIndex = neighbor?.index ?? -1;
-    if (neighborIndex !== drag.neighborIndex) {
+    if (neighborIndex !== drag.neighborIndex || !drag.peek) {
       drag.neighborIndex = neighborIndex;
       drag.neighborAsset = neighbor?.asset ?? null;
       const previousPeek = drag.peek;
@@ -2100,8 +2360,7 @@ export function JourneyStory({
       if (previousPeek && previousPeek !== drag.peek) {
         previousPeek.style.transition = "";
         previousPeek.style.transform = "";
-        previousPeek.style.display = "none";
-        previousPeek.removeAttribute("src");
+        previousPeek.style.zIndex = "";
         previousPeek.classList.remove("journey-story__media-drag-settle", "journey-story__media-drag-page");
       }
     }
@@ -2109,24 +2368,34 @@ export function JourneyStory({
   }
 
   function cancelPendingMediaDragSettle() {
+    window.clearTimeout(mediaTapTimerRef.current);
+    mediaTapTimerRef.current = 0;
     const cancelPendingSettle = mediaDragSettleCancelRef.current;
     mediaDragSettleCancelRef.current = null;
     cancelPendingSettle?.();
     const activeDrag = mediaDragRef.current;
     mediaDragRef.current = null;
     if (activeDrag) finishMediaDrag(activeDrag);
+    setMediaGestureHolding(false);
     mediaDragSettlingRef.current = false;
   }
 
   function finishMediaDrag(drag: NonNullable<typeof mediaDragRef.current>) {
+    setMediaGestureHolding(false);
+    const pages = drag.container.querySelector<HTMLElement>("[data-story-media-pages]");
+    pages?.style.removeProperty("--story-drag-x");
+    pages?.style.removeProperty("--story-live-transform");
+    pages?.classList.remove("is-drag-settling");
+    try {
+      if (drag.container.hasPointerCapture(drag.pointerId)) drag.container.releasePointerCapture(drag.pointerId);
+    } catch { /* The browser may already have cancelled this pointer. */ }
     drag.base.style.transition = "";
     drag.base.style.transform = "";
     drag.base.classList.remove("journey-story__media-drag-settle", "journey-story__media-drag-page");
     if (drag.peek) {
       drag.peek.style.transition = "";
       drag.peek.style.transform = "";
-      drag.peek.style.display = "none";
-      drag.peek.removeAttribute("src");
+      drag.peek.style.zIndex = "";
       drag.peek.classList.remove("journey-story__media-drag-settle", "journey-story__media-drag-page");
     }
   }
@@ -2141,20 +2410,14 @@ export function JourneyStory({
   }
 
   function landMediaDrag(asset: JourneyMediaAsset, index: number) {
-    pendingTargetRef.current = null;
+    setPendingMediaTarget(null);
     setIncomingAssetId(null);
     setAssetIndex(index);
     setShownAssetId(asset.id);
   }
 
-  // Commits to the neighbor the drag already dragged into view, or springs
-  // the current frame back to rest. Committing lands directly on the
-  // settled two-layer state (bypassing the crossfade above) because the
-  // slide the user just watched *was* the transition — unless the target
-  // wasn't actually ready yet (slow network outrunning a fast swipe), in
-  // which case it falls back to the same pending-navigation path a
-  // release-only swipe onto unready media already used, and only springs
-  // back visually since landing on it now would flash an undecoded frame.
+  // The same neighbor page becomes current after the snap. A cold neighbor
+  // resists and returns to rest; its eventual decode never navigates by itself.
   function settleMediaDrag(commit: boolean) {
     const drag = mediaDragRef.current;
     mediaDragRef.current = null;
@@ -2184,19 +2447,23 @@ export function JourneyStory({
           () => finishMediaDrag(drag),
         );
       } else {
-        if (commit && asset) navigateToMedia(drag.neighborIndex);
         finishMediaDrag(drag);
       }
       mediaDragSettlingRef.current = false;
       return;
     }
     drag.base.classList.add("journey-story__media-drag-settle");
+    drag.container.querySelector<HTMLElement>("[data-story-media-pages]")?.classList.add("is-drag-settling");
     if (drag.peek) drag.peek.classList.add("journey-story__media-drag-settle");
     if (ready && asset) {
       const index = drag.neighborIndex;
-      const edge = drag.dx < 0 ? -drag.width : drag.width;
-      drag.base.style.transform = `translateX(${edge}px)`;
-      if (drag.peek) drag.peek.style.transform = "translateX(0)";
+      const edge = (drag.dx < 0 ? -1 : 1) * drag.width * 1.4;
+      const transform = mediaStackPull(edge, drag.width);
+      drag.base.style.transform = transform;
+      const pages = drag.container.querySelector<HTMLElement>("[data-story-media-pages]");
+      pages?.style.setProperty("--story-drag-x", `${edge}px`);
+      pages?.style.setProperty("--story-live-transform", transform);
+      if (drag.peek) drag.peek.style.transform = mediaStackRest(0);
       mediaDragSettleCancelRef.current?.();
       mediaDragSettleCancelRef.current = scheduleCancelableMediaDragSettle(
         () => {
@@ -2217,10 +2484,11 @@ export function JourneyStory({
       );
       return;
     }
-    drag.base.style.transform = "translateX(0)";
+    drag.base.style.transform = mediaStackRest(0);
+    drag.container.querySelector<HTMLElement>("[data-story-media-pages]")?.style.setProperty("--story-drag-x", "0px");
+    drag.container.querySelector<HTMLElement>("[data-story-media-pages]")?.style.setProperty("--story-live-transform", mediaStackRest(0));
     if (drag.peek) {
-      const edge = drag.dx < 0 ? drag.width : -drag.width;
-      drag.peek.style.transform = `translateX(${edge}px)`;
+      drag.peek.style.transform = mediaStackRest(Number(drag.peek.style.getPropertyValue("--stack-depth")) || 1);
     }
     mediaDragSettleCancelRef.current?.();
     mediaDragSettleCancelRef.current = scheduleCancelableMediaDragSettle(
@@ -2228,7 +2496,6 @@ export function JourneyStory({
         mediaDragSettleCancelRef.current = null;
         finishMediaDrag(drag);
         mediaDragSettlingRef.current = false;
-        if (commit && asset) navigateToMedia(drag.neighborIndex);
       },
       () => {
         finishMediaDrag(drag);
@@ -2239,16 +2506,16 @@ export function JourneyStory({
 
   function handleStoryMediaPointerDown(event: ReactPointerEvent<HTMLElement>) {
     storyMediaGestureConsumedRef.current = false;
-    if (!mobileLayout || overview || !event.isPrimary || !mediaGestureCanStart(event.target, event.clientY)) return;
+    if (overview || !event.isPrimary || !mediaGestureCanStart(event.target, event.clientY)) return;
     beginMediaDrag(
       event.currentTarget,
       event.pointerId,
       event.clientX,
       event.clientY,
       event.timeStamp,
-      false,
-      event.target instanceof HTMLImageElement,
-      event.target instanceof Element && event.target.closest("video") instanceof HTMLVideoElement,
+      !mobileLayout && selectedRoutePointId !== null,
+      mobileLayout && event.target instanceof HTMLImageElement,
+      mobileLayout && event.target instanceof Element && event.target.closest("video") instanceof HTMLVideoElement,
     );
   }
 
@@ -2273,10 +2540,15 @@ export function JourneyStory({
       && !swipeIntent
       && drag.tapOpensFullscreen,
     );
-    if (swipeIntent || reopenFullscreenAfterSettle) storyMediaGestureConsumedRef.current = true;
+    if (swipeIntent || reopenFullscreenAfterSettle || (!mobileLayout && drag && drag.axis !== null)) {
+      storyMediaGestureConsumedRef.current = true;
+    }
     settleMediaDrag(commit);
     if (reopenFullscreenAfterSettle) {
-      window.setTimeout(() => enterFullscreen(false), prefersReducedMotion() ? 0 : MEDIA_DRAG_SETTLE_MS);
+      mediaTapTimerRef.current = window.setTimeout(() => {
+        mediaTapTimerRef.current = 0;
+        enterFullscreen(false);
+      }, prefersReducedMotion() ? 0 : MEDIA_DRAG_SETTLE_MS);
     }
   }
 
@@ -2291,12 +2563,24 @@ export function JourneyStory({
     settleMediaDrag(false);
   }
 
-  function openImageFullscreenAfterTap() {
-    if (mobileLayout && storyMediaGestureConsumedRef.current) {
+  function openImageFullscreenAfterTap(accessibleActivation = false) {
+    if (!accessibleActivation && storyMediaGestureConsumedRef.current) {
       storyMediaGestureConsumedRef.current = false;
       return;
     }
-    enterFullscreen(false);
+    storyMediaGestureConsumedRef.current = false;
+    cancelPendingMediaDragSettle();
+    enterFullscreen(mobileLayout ? false : playingRef.current);
+  }
+
+  function navigateFromPicture(direction: -1 | 1, accessibleActivation = false) {
+    if (!accessibleActivation && storyMediaGestureConsumedRef.current) {
+      storyMediaGestureConsumedRef.current = false;
+      return;
+    }
+    if (mutationPending || overview) return;
+    storyMediaGestureConsumedRef.current = false;
+    navigateMediaStep(direction, selectedRoutePointId !== null);
   }
 
   function revealMobileFullscreenControls() {
@@ -2310,7 +2594,8 @@ export function JourneyStory({
   }
 
   function handleFullscreenPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
-    if (!mobileLayout || !event.isPrimary || !mediaGestureCanStart(event.target, event.clientY)) return;
+    storyMediaGestureConsumedRef.current = false;
+    if (!event.isPrimary || !mediaGestureCanStart(event.target, event.clientY)) return;
     beginMediaDrag(
       event.currentTarget,
       event.pointerId,
@@ -2319,7 +2604,7 @@ export function JourneyStory({
       event.timeStamp,
       true,
       false,
-      event.target instanceof Element && event.target.closest("video") instanceof HTMLVideoElement,
+      mobileLayout && event.target instanceof Element && event.target.closest("video") instanceof HTMLVideoElement,
     );
   }
 
@@ -2329,7 +2614,7 @@ export function JourneyStory({
   }
 
   function handleFullscreenPointerUp(event: ReactPointerEvent<HTMLDivElement>) {
-    if (!mobileLayout || !event.isPrimary) return;
+    if (!event.isPrimary) return;
     const drag = mediaDragRef.current;
     if (drag && drag.pointerId !== event.pointerId) return;
     if (!drag) {
@@ -2339,12 +2624,17 @@ export function JourneyStory({
     const dx = event.clientX - drag.startX;
     const dy = event.clientY - drag.startY;
     const releaseVelocityX = event.timeStamp - drag.lastTime <= MEDIA_SWIPE_VELOCITY_MAX_AGE_MS ? drag.velocityX : 0;
+    // Once a desktop drag owns an axis, its synthetic click is not a backdrop
+    // click, even when the distance only warrants springing the photo back.
+    if ((!mobileLayout && drag.axis !== null) || (drag.axis === "x" && isMediaSwipeIntent(dx, releaseVelocityX))) {
+      storyMediaGestureConsumedRef.current = true;
+    }
     if (drag.axis === "x" && shouldCommitMediaSwipe(dx, releaseVelocityX, Boolean(drag.neighborAsset))) {
       settleMediaDrag(true);
       return;
     }
     settleMediaDrag(false);
-    if (dy >= 72 && Math.abs(dy) > Math.abs(dx) * 1.15) {
+    if (mobileLayout && dy >= 72 && Math.abs(dy) > Math.abs(dx) * 1.15) {
       exitFullscreen();
       return;
     }
@@ -2407,7 +2697,7 @@ export function JourneyStory({
           setAssetIndex(uploadedAssetIndex);
           setShownAssetId(refreshedMedia[uploadedAssetIndex].id);
           setIncomingAssetId(null);
-          pendingTargetRef.current = null;
+          setPendingMediaTarget(null);
         } else {
           refreshFailed = true;
         }
@@ -2540,7 +2830,7 @@ export function JourneyStory({
               setAssetIndex(selection.assetIndex);
               setShownAssetId(selection.assetId);
               setIncomingAssetId(null);
-              pendingTargetRef.current = null;
+              setPendingMediaTarget(null);
             }
           }
         } catch {
@@ -2614,6 +2904,14 @@ export function JourneyStory({
     if (!onDelete || uploadState.status === "uploading" || deleteState === "pending") {
       return;
     }
+    if (notesSaveState === "saving") {
+      notifyNotesGuard("正在保存感想，完成后才能删除旅程。");
+      return;
+    }
+    if (notesDirty) {
+      notifyNotesGuard("还有未保存的感想，请先保存或放弃更改。");
+      return;
+    }
     setDeleteState("pending");
     setDeleteMessage("");
     try {
@@ -2661,53 +2959,6 @@ export function JourneyStory({
     setMediaDeleteMessage("");
   }
 
-  async function moveMedia(direction: -1 | 1) {
-    if (!asset || mutationPending || !manageMedia) return;
-    invalidateMoveUndo();
-    // The Story's aggregate view groups media by ownership chapter. Arrow
-    // sorting therefore moves inside the active chapter sequence, then maps
-    // that chapter order back onto the full visual-media payload.
-    const chapterMedia = storyChapterMedia(scopedMedia, asset);
-    const currentIndex = chapterMedia.findIndex((candidate) => candidate.id === asset.id);
-    const targetIndex = currentIndex + direction;
-    if (currentIndex < 0 || targetIndex < 0 || targetIndex >= chapterMedia.length) return;
-
-    const nextChapter = [...chapterMedia];
-    [nextChapter[currentIndex], nextChapter[targetIndex]] = [
-      nextChapter[targetIndex],
-      nextChapter[currentIndex],
-    ];
-    const nextOrder = applyScopeReorder(
-      visualMedia,
-      asset.routePointId,
-      nextChapter.map((candidate) => candidate.id),
-    );
-    setOrderPending(true);
-    setOrderMessage("");
-    try {
-      if (onMediaReorder) {
-        // The parent owns the state change in previews.
-        await onMediaReorder(journey.id, nextOrder.map((candidate) => candidate.id));
-      } else {
-        await manageMedia.reorderJourneyMedia(journey.id, nextOrder.map((candidate) => candidate.id));
-        const refreshedJourney = await onMediaAdded(journey.id);
-        const scoped = scopedVisualMedia(refreshedJourney ?? journey);
-        const movedIndex = scoped.findIndex((candidate) => candidate.id === asset.id);
-        if (movedIndex >= 0) {
-          setAssetIndex(movedIndex);
-          setShownAssetId(asset.id);
-          setIncomingAssetId(null);
-          pendingTargetRef.current = null;
-        }
-      }
-    } catch (error) {
-      setOrderMessage(error instanceof Error ? error.message : "顺序调整失败，请稍后重试。");
-      return;
-    } finally {
-      setOrderPending(false);
-    }
-  }
-
   function selectMediaScope(routePointId: string | null) {
     if (mutationPending) return;
     cancelPendingMediaDragSettle();
@@ -2716,7 +2967,7 @@ export function JourneyStory({
     setAssetIndex(0);
     setShownAssetId(null);
     setIncomingAssetId(null);
-    pendingTargetRef.current = null;
+    setPendingMediaTarget(null);
     setLocalMediaOrder(null);
     setOverview(false);
     setMoveSelectMode(false);
@@ -2726,14 +2977,34 @@ export function JourneyStory({
     setUploadState({ status: "idle" });
   }
 
-  // #11: navigate to an index through the two-layer stage. The target must be
-  // decoded before it replaces the current frame; otherwise the target stays
-  // pending and the current frame remains until it settles.
-  function navigateToMedia(index: number) {
+  // Buttons, keyboard and automatic advance share the same readiness gate.
+  function navigateMediaStep(direction: -1 | 1, wrap = false) {
+    const anchorIndex = storyAssetIndexForId(scopedMedia, requestedMediaRef.current, assetIndex);
+    const index = storyMediaNeighborIndex(anchorIndex, scopedMedia.length, direction, wrap);
+    if (index !== null) navigateToMedia(index, direction);
+  }
+
+  function navigateToMedia(index: number, direction?: -1 | 1) {
     if (index < 0 || index >= scopedMedia.length) return;
-    if (index === assetIndex) return;
+    cancelPendingMediaDragSettle();
     const target = scopedMedia[index];
     if (!target) return;
+    mediaNavigationDirection.current = direction
+      ?? (index < storyAssetIndexForId(scopedMedia, shownAssetId, assetIndex) ? -1 : 1);
+    requestedMediaRef.current = target.id;
+    // Reversing an in-flight transition back to the visible base needs no new
+    // incoming layer (it would equal shownAssetId and never emit animationend).
+    if (target.id === shownAssetId) {
+      setPendingMediaTarget(null);
+      setIncomingAssetId(null);
+      setAssetIndex(index);
+      return;
+    }
+    // A reverse input can cancel a cold next-frame request while staying here.
+    if (index === assetIndex) {
+      setPendingMediaTarget(null);
+      return;
+    }
     const targetRead = mediaReads[target.id];
     const disposition = storyNavigationTargetDisposition(
       target,
@@ -2741,18 +3012,21 @@ export function JourneyStory({
       decodeRegistryRef.current.isDecoded(target.id),
     );
     if (disposition === "failed") {
-      pendingTargetRef.current = null;
+      setPendingMediaTarget(null);
       setIncomingAssetId(null);
       setShownAssetId(target.id);
       setAssetIndex(index);
     } else if (disposition === "ready") {
+      setPendingMediaTarget(null);
       setIncomingAssetId(target.id);
       setAssetIndex(index);
     } else {
       // Review P1: even when the read is already ready, a pending target
       // must start its decode; otherwise it can sit forever with a decoded
       // image that never triggers a re-check.
-      pendingTargetRef.current = index;
+      setPendingMediaTarget(target.id);
+      setIncomingAssetId(null);
+      setAssetIndex(storyAssetIndexForId(scopedMedia, shownAssetId, assetIndex));
       if (targetRead?.status !== "ready") {
         loadMediaRead(target.id);
       } else if (target.mimeType.startsWith("image/")) {
@@ -2775,7 +3049,7 @@ export function JourneyStory({
       name: `story-media-${target.id}`,
       update: () => {
         if (targetRead?.status === "ready") {
-          pendingTargetRef.current = null;
+          setPendingMediaTarget(null);
           setIncomingAssetId(null);
           setAssetIndex(index);
           setShownAssetId(target.id);
@@ -2788,7 +3062,7 @@ export function JourneyStory({
         setOverview(false);
       },
       resolveTarget: () => dialogRef.current?.querySelector<HTMLElement>(
-        ".journey-story__media > [data-shared-media-id]",
+        ".journey-story__media [data-shared-media-id]",
       ) ?? null,
     });
   }
@@ -2796,7 +3070,7 @@ export function JourneyStory({
   function toggleMediaOverview() {
     if (overview) {
       const tile = dialogRef.current?.querySelector<HTMLButtonElement>(
-        `.journey-story__media-grid [data-media-tile-index="${assetIndex}"]`,
+        `:is(.journey-story__media-grid, .story-media-organizer__grid) [data-media-tile-index="${assetIndex}"]`,
       );
       if (tile) {
         selectMediaIndex(assetIndex, tile);
@@ -2811,7 +3085,7 @@ export function JourneyStory({
     // so the morph anchors on the visible settled frame instead of a zero-sized
     // node that would silently drop the shared-element transition.
     const source = dialogRef.current?.querySelector<HTMLElement>(
-      ".journey-story__media > [data-shared-media-id]",
+      ".journey-story__media [data-shared-media-id]",
     ) ?? null;
     runSharedElementMorph({
       source,
@@ -2822,26 +3096,12 @@ export function JourneyStory({
       },
       resolveTarget: () => {
         const tile = dialogRef.current?.querySelector<HTMLButtonElement>(
-          `.journey-story__media-grid [data-media-tile-index="${assetIndex}"]`,
+          `:is(.journey-story__media-grid, .story-media-organizer__grid) [data-media-tile-index="${assetIndex}"]`,
         );
         return tile?.querySelector<HTMLElement>("img") ?? tile ?? null;
       },
     });
   }
-
-  // #12: overview drag-and-drop reordering. Pointer (mouse + touch) and
-  // keyboard; keyboard uses sortable arrow-key coordinates. Review P2: the
-  // pointer sensor uses a small distance for mouse but a long-press (delay)
-  // activation on touch so a scrollable grid does not fight the drag.
-  const dragSensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: {
-        delay: 200,
-        tolerance: 8,
-      },
-    }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
-  );
 
   async function handleMediaReorderEnd(event: DragEndEvent) {
     const { active, over } = event;
@@ -2894,7 +3154,7 @@ export function JourneyStory({
           setAssetIndex((current) => Math.min(current, Math.max(0, refreshedScoped.length - 1)));
           setShownAssetId(null);
           setIncomingAssetId(null);
-          pendingTargetRef.current = null;
+          setPendingMediaTarget(null);
         }
       }
       setAssetIndex(Math.max(0, nextAssetIndex));
@@ -2931,16 +3191,16 @@ export function JourneyStory({
   // target route point's media (see server/routes/uploads.ts). Refreshing
   // from the server afterward lets the scope-shrink effects above settle
   // the stage if the moved media included the one currently shown.
-  async function moveSelectedMediaTo(targetRoutePointId: string | null) {
-    if (moveSelection.size === 0 || mutationPending || !manageMedia) return;
-    const assetIds = [...moveSelection];
+  async function moveSelectedMediaTo(targetRoutePointId: string | null, selectedIds: readonly string[] = [...moveSelection]): Promise<boolean> {
+    if (selectedIds.length === 0 || mutationPending || !manageMedia) return false;
+    const assetIds = [...selectedIds];
     const undo = mediaMoveUndoForSelection(journey, assetIds, targetRoutePointId);
     if (!undo) {
       setMoveMessage("所选媒体已经变化，请重新选择。");
-      return;
+      return false;
     }
     const destination = targetRoutePointId === null
-      ? "整段旅程"
+      ? "旅程散页"
       : journey.routePoints.find((point) => point.id === targetRoutePointId)?.label
         || "所选途径点";
     setMovePending(true);
@@ -2951,7 +3211,7 @@ export function JourneyStory({
     } catch (error) {
       setMoveMessage(error instanceof Error ? error.message : "移动失败，请稍后重试。");
       setMovePending(false);
-      return;
+      return false;
     }
 
     setMoveUndo(undo);
@@ -2965,6 +3225,7 @@ export function JourneyStory({
     } finally {
       setMovePending(false);
     }
+    return true;
   }
 
   async function undoLastMediaMove() {
@@ -3047,7 +3308,8 @@ export function JourneyStory({
       : fullscreen ? fullscreenVideoRef.current : storyVideoRef.current;
     if (willPlay && gestureVideo && autoplayVideoCandidate) {
       const currentVideoIsSettled = activeAsset?.mimeType.startsWith("video/")
-        && (shownAssetId ?? activeAsset.id) === activeAsset.id;
+        && (shownAssetId ?? activeAsset.id) === activeAsset.id
+        && (targetStage === "fullscreen" ? stagePlaybackReady.fullscreen : activeStagePlaybackReadyId) === activeAsset.id;
       if (currentVideoIsSettled) {
         // Keep the first video.play() inside the initiating click/tap/keyboard
         // activation. The effect remains authoritative for synchronization.
@@ -3186,6 +3448,54 @@ export function JourneyStory({
     storyMediaAvailability(autoplayVideoCandidateRead?.status),
   );
 
+  function openJourneyComposer() {
+    if (notesSaveState === "saving") {
+      notifyNotesGuard("正在保存感想，完成后才能编辑旅程。");
+      return;
+    }
+    if (notesDirty) {
+      notifyNotesGuard("还有未保存的感想，请先保存或放弃更改。");
+      return;
+    }
+    onEdit?.(journey.id);
+  }
+
+  function openJourneyShare() {
+    if (notesSaveState === "saving") {
+      notifyNotesGuard("正在保存感想，完成后才能分享旅程。");
+      return;
+    }
+    if (notesDirty) {
+      notifyNotesGuard("还有未保存的感想，请先保存或放弃更改。");
+      return;
+    }
+    onShare?.(journey.id);
+  }
+
+  function toggleDesktopEditing() {
+    if (mutationPending || placementAnalyzing) return;
+    if (desktopEditing && notesDirty) {
+      notifyNotesGuard("还有未保存的感想，请先保存或放弃更改。");
+      return;
+    }
+    cancelPendingMediaDragSettle();
+    setPlaying(false);
+    setOverview(!desktopEditing && scopedMedia.length > 0);
+    setDesktopEditing((value) => !value);
+    if (desktopEditing) setMobileManageMode(false);
+    setMoveSelectMode(false);
+    setMoveSelection(new Set());
+    setPlacementReview(null);
+    setMediaDeleteState("idle");
+    setMediaDeleteMessage("");
+    setDeleteState("idle");
+    setDeleteMessage("");
+  }
+
+  const hasStoryMedia = scopedMedia.length > 0;
+  const canEditStory = Boolean(manageMedia || updateJourneyNotes || canEditJourney || canShareJourney || onDelete);
+  const showSoundtrack = Boolean(soundtrack || (manageMedia && mediaEditing));
+
   const content = (
     <div
       className={`journey-story-backdrop${mobileLayout ? " is-mobile-context" : ""}${mobileLayout && mobileStoryExpanded ? " is-story-expanded" : ""}`}
@@ -3196,6 +3506,9 @@ export function JourneyStory({
         ref={dialogRef}
         tabIndex={-1}
         className={`journey-story motion-staged${mobileLayout && mobileManageMode ? " is-mobile-manage" : ""}`}
+        data-story-layout={mobileLayout ? "mobile" : "desktop"}
+        data-story-editing={mediaEditing ? "true" : undefined}
+        data-has-media={hasStoryMedia ? "true" : "false"}
         data-mobile-mode={mobileLayout ? (mobileManageMode ? "manage" : "viewer") : undefined}
         data-mobile-presentation={mobileLayout ? (mobileStoryExpanded ? "expanded" : "in-context") : undefined}
         role="dialog"
@@ -3221,33 +3534,42 @@ export function JourneyStory({
           </button>
         ) : null}
         <header>
-          <div>
+          {mobileLayout ? <div>
             <p>PRIVATE JOURNEY · {journeyRange(journey)}</p>
             <h2 id="journey-story-title">{journey.title}</h2>
-          </div>
+          </div> : canEditStory ? <button
+            className="journey-story__edit-toggle"
+            type="button"
+            aria-label={desktopEditing ? "完成编辑故事" : "编辑故事"}
+            aria-pressed={desktopEditing}
+            disabled={mutationPending || placementAnalyzing}
+            onClick={toggleDesktopEditing}
+          >{desktopEditing ? "完成" : "编辑"}</button> : null}
           {/* An upload in flight keeps this button clickable so pressing it
               explains the wait instead of silently doing nothing. */}
           <button
-            className={`journey-story__close${deleteState === "pending" || uploading ? " is-status" : ""}`}
+            className={`journey-story__close${deleteState === "pending" || uploading || notesSaveState === "saving" ? " is-status" : ""}`}
             type="button"
             disabled={mutationPending && !uploading}
             onClick={requestClose}
             aria-label="退出旅程故事"
           >
-            {deleteState === "pending" || uploading ? (
-              <span>{deleteState === "pending" ? "删除中" : "上传中"}</span>
+            {deleteState === "pending" || uploading || notesSaveState === "saving" ? (
+              <span>{deleteState === "pending" ? "删除中" : notesSaveState === "saving" ? "保存中" : "上传中"}</span>
             ) : null}
             <IconX size={19} stroke={1.35} aria-hidden="true" />
           </button>
         </header>
 
-        {closeBlocked && uploading ? (
-          <p className="journey-story__close-blocked" role="status">正在完成分块上传，完成后即可安全退出。</p>
+        {closeBlocked && (uploading || notesSaveState === "saving") ? (
+          <p className="journey-story__close-blocked" role="status">
+            {notesSaveState === "saving" ? "正在保存感想，完成后即可安全退出。" : "正在完成分块上传，完成后即可安全退出。"}
+          </p>
         ) : null}
 
         <div className="journey-story__layout">
-          <section
-            className="journey-story__media"
+          {hasStoryMedia ? <section
+            className={`journey-story__media${overview && manageMedia ? " is-organizing" : ""}`}
             aria-label="旅程媒体"
             data-mobile-layout={mobileLayout ? "true" : undefined}
             onPointerDown={handleStoryMediaPointerDown}
@@ -3256,8 +3578,7 @@ export function JourneyStory({
             onPointerCancel={handleStoryMediaPointerCancel}
             onLostPointerCapture={handleStoryMediaLostPointerCapture}
           >
-            {!asset ? <div className="journey-story__empty-media"><IconPhoto size={36} stroke={1.05} style={{ color: journey.lightColor }} aria-hidden="true" />{selectedRoutePoint ? "这个途径点还没有媒体" : "整段旅程还没有媒体"}</div> : null}
-            {scopedMedia.length > 0 && !mobileLayout ? (
+            {scopedMedia.length > 0 && !mobileLayout && desktopEditing ? (
               <button
                 type="button"
                 className={`journey-story__media-overview${overview ? " is-active" : ""}`}
@@ -3266,24 +3587,6 @@ export function JourneyStory({
               >
                 <IconLayoutGrid size={16} stroke={1.35} aria-hidden="true" />
                 {overview ? "返回单张" : "全部照片"}
-              </button>
-            ) : null}
-            {!overview && asset && read?.status === "ready" && !mobileLayout ? (
-              <button
-                type="button"
-                className="journey-story__fullscreen-entry"
-                aria-label="全屏播放"
-                title="全屏播放"
-                disabled={
-                  scopedMedia.length > 1
-                  && !storyAutoplayCanStart(
-                    autoplayVideoCandidate,
-                    storyMediaAvailability(autoplayVideoCandidateRead?.status),
-                  )
-                }
-                onClick={() => enterFullscreen(scopedMedia.length > 1)}
-              >
-                <IconMaximize size={16} stroke={1.35} aria-hidden="true" />
               </button>
             ) : null}
             {overview && mobileLayout ? (
@@ -3307,103 +3610,45 @@ export function JourneyStory({
                 {moveSelectMode ? "取消选择" : "选择"}
               </button>
             ) : null}
-            {overview && moveSelectMode ? (
-              <ul className="journey-story__media-grid is-selecting" aria-label={`全部媒体，共 ${orderedScopedMedia.length} 个`}>
-                {orderedScopedMedia.map((tile, index) => (
-                  <li key={tile.id}>
-                    <StoryMediaTile
-                      asset={tile}
-                      index={index}
-                      isCurrent={index === assetIndex}
-                      isCover={cover?.id === tile.id}
-                      read={mediaReads[tile.id]}
-                      disabled={mutationPending}
-                      onRequestRead={loadMediaRead}
-                      onSelect={selectMediaIndex}
-                      selected={moveSelection.has(tile.id)}
-                      onToggleSelect={toggleMoveSelection}
-                    />
-                  </li>
-                ))}
-              </ul>
-            ) : overview && !manageMedia ? (
-              /* Read-only overview: a plain grid, not a drag surface. Wrapping
-                 these tiles in a DndContext whose drop handler refuses would
-                 still make every tile draggable, which is the sort of live
-                 handler under a hidden control #200 rules out. */
+            {overview && manageMedia ? (
+              <StoryMediaOrganizer
+                media={orderedScopedMedia}
+                allMedia={visualMedia}
+                routePoints={journey.routePoints}
+                reads={mediaReads}
+                currentId={shownAsset?.id ?? null}
+                coverId={cover?.id ?? null}
+                selectedIds={moveSelection}
+                selecting={moveSelectMode}
+                disabled={mutationPending}
+                onToggleSelect={toggleMoveSelection}
+                onSelect={selectMediaIndex}
+                onRequestRead={loadMediaRead}
+                onSetCover={handleSetCover}
+                onReorder={(event) => void handleMediaReorderEnd(event)}
+                onMove={(ids, target) => moveSelectedMediaTo(target, ids)}
+              />
+            ) : overview ? (
               <ul className="journey-story__media-grid" aria-label={`全部媒体，共 ${orderedScopedMedia.length} 个`}>
                 {orderedScopedMedia.map((tile, index) => (
                   <li key={tile.id}>
                     <StoryMediaTile
-                      asset={tile}
-                      index={index}
-                      isCurrent={index === assetIndex}
-                      isCover={cover?.id === tile.id}
-                      read={mediaReads[tile.id]}
-                      disabled={mutationPending}
-                      onRequestRead={loadMediaRead}
+                      asset={tile} index={index} isCurrent={index === assetIndex}
+                      isCover={cover?.id === tile.id} read={mediaReads[tile.id]}
+                      disabled={mutationPending} onRequestRead={loadMediaRead}
                       onSelect={selectMediaIndex}
                     />
                   </li>
                 ))}
               </ul>
-            ) : overview ? (
-              <DndContext
-                sensors={dragSensors}
-                collisionDetection={closestCenter}
-                onDragEnd={(event) => void handleMediaReorderEnd(event)}
-              >
-                <SortableContext
-                  items={orderedScopedMedia.map((candidate) => candidate.id)}
-                  strategy={rectSortingStrategy}
-                >
-                  <ul className="journey-story__media-grid" aria-label={`全部媒体，共 ${orderedScopedMedia.length} 个`}>
-                    {orderedScopedMedia.map((tile, index) => (
-                      <SortableMediaTile
-                        key={tile.id}
-                        asset={tile}
-                        index={index}
-                        isCurrent={index === assetIndex}
-                        isCover={cover?.id === tile.id}
-                        read={mediaReads[tile.id]}
-                        disabled={mutationPending}
-                        onRequestRead={loadMediaRead}
-                        onSelect={selectMediaIndex}
-                        onSetCover={mobileLayout ? undefined : handleSetCover}
-                      />
-                    ))}
-                  </ul>
-                </SortableContext>
-              </DndContext>
-            ) : null}
-            {overview && moveSelectMode ? (
-              <div className="journey-story__media-move-bar" role="group" aria-label="移动所选媒体">
-                <span>{moveSelection.size > 0 ? `已选 ${moveSelection.size} 个` : "点击照片进行选择"}</span>
-                <select
-                  aria-label="移动到途径点"
-                  disabled={moveSelection.size === 0 || movePending}
-                  defaultValue=""
-                  onChange={(event) => {
-                    const value = event.target.value;
-                    if (!value) return;
-                    void moveSelectedMediaTo(value === "__journey__" ? null : value);
-                    event.target.value = "";
-                  }}
-                >
-                  <option value="" disabled>移动到…</option>
-                  {selectedRoutePointId !== null || selectionContainsRoutePointMedia ? (
-                    <option value="__journey__">整段旅程（不属于途径点）</option>
-                  ) : null}
-                  {namedStops
-                    .filter((stop) => stop.id !== selectedRoutePointId)
-                    .map((stop) => (
-                      <option key={stop.id} value={stop.id}>{stop.label || "未命名途径点"}</option>
-                    ))}
-                </select>
-              </div>
             ) : null}
             {overview && moveMessage ? (
               <p className="journey-story__order-message" role="status">
+                <StartripsJourneyCue
+                  state={movePending ? "travel" : moveUndo ? "arrived" : "rest"}
+                  size={28}
+                  className="starlight-media-state__inline-cue"
+                />
                 <span>{moveMessage}</span>
                 {moveUndo ? (
                   <button
@@ -3417,79 +3662,43 @@ export function JourneyStory({
                 ) : null}
               </p>
             ) : null}
-            {!overview && shownAsset && (!shownRead || shownRead.status === "loading") ? <div className="journey-story__media-state">正在打开私有媒体…</div> : null}
-            {!overview && shownAsset && shownRead?.status === "error" ? <div className="journey-story__media-state is-error">{shownRead.message}</div> : null}
-            {!overview && storyStageVideoAsset ? (
-              <video
-                ref={storyVideoRef}
-                className={storyStageVideoIncoming ? "journey-story__media-incoming" : undefined}
-                src={storyStageVideoRead?.status === "ready" ? storyStageVideoRead.url : undefined}
-                controls={storyStageVideoSettled}
-                playsInline
-                preload="metadata"
-                hidden={!storyStageVideoVisible}
-                aria-hidden={storyStageVideoVisible ? undefined : true}
-                data-shared-media-id={storyStageVideoVisible ? storyStageVideoAsset.id : undefined}
-                data-shared-journey-cover={
-                  storyStageVideoVisible && cover?.id === storyStageVideoAsset.id ? "true" : undefined
-                }
-                onAnimationEnd={(event) => {
-                  if (
-                    storyStageVideoIncoming
-                    && event.target === event.currentTarget
-                    && event.animationName === "motionMediaIn"
-                  ) {
-                    settleIncoming(storyStageVideoAsset.id);
-                  }
-                }}
-              />
-            ) : null}
-            {!overview && shownAsset && shownRead?.status === "ready" && !shownAsset.mimeType.startsWith("video/") ? (
-              <img
-                key={`media-${shownAsset.id}`}
-                className={playing && scopedMedia.length > 1
-                  ? `is-kenburns kenburns-${shownIndex % 2}`
-                  : "is-zoomable"}
-                src={shownRead.url}
-                alt={shownAsset.fileName}
-                data-shared-media-id={shownAsset.id}
-                data-shared-journey-cover={cover?.id === shownAsset.id ? "true" : undefined}
-                onClick={openImageFullscreenAfterTap}
-              />
-            ) : null}
-            {!overview && incoming && incomingRead?.status === "ready" && !incoming.mimeType.startsWith("video/") ? (
-              <img
-                key={`media-${incoming.id}`}
-                className={`journey-story__media-incoming${playing && scopedMedia.length > 1 ? " is-kenburns" : ""}`}
-                src={incomingRead.url}
-                alt={incoming.fileName}
-                onAnimationEnd={(event) => {
-                  // Settle the stage only once the fade completes; the base
-                  // frame is released after this, never before.
-                  if (event.target === event.currentTarget && event.animationName === "motionMediaIn") {
-                    settleIncoming(incoming.id);
-                  }
-                }}
-                onClick={openImageFullscreenAfterTap}
-              />
-            ) : null}
-            {mobileLayout && !overview ? (
-              <img
-                data-media-drag-peek
-                alt=""
-                aria-hidden="true"
-                style={{ display: "none" }}
-              />
-            ) : null}
-            {!mobileLayout && !overview && (scopedMedia.length > 1 || visualMedia.length > 1) ? (
+            {!overview && !fullscreen ? mediaStageStatus : null}
+            {!overview ? <StoryMediaPages
+              active={!fullscreen}
+              media={scopedMedia}
+              currentId={shownAsset?.id ?? null}
+              coverId={cover?.id ?? null}
+              incomingId={incoming?.id ?? null}
+              direction={mediaNavigationDirection.current}
+              reads={mediaReads}
+              wrap={selectedRoutePointId !== null}
+              videoAssetId={storyStageVideoAsset?.id ?? null}
+              onSettled={settleIncoming}
+              onMediaError={reportStageMediaError}
+              onPlaybackReady={inlinePlaybackReady}
+              onImageClick={mobileLayout ? openImageFullscreenAfterTap : undefined}
+              onNavigate={!mobileLayout ? navigateFromPicture : undefined}
+              canNavigatePrevious={!mutationPending && scopedMedia.length > 1 && (selectedRoutePointId !== null || requestedMediaIndex > 0)}
+              canNavigateNext={!mutationPending && scopedMedia.length > 1 && (selectedRoutePointId !== null || requestedMediaIndex < scopedMedia.length - 1)}
+              onBackdropClick={!mobileLayout ? () => { if (!storyMediaGestureConsumedRef.current) requestClose(); } : undefined}
+              video={renderStageVideo(false)}
+            /> : null}
+            {!mobileLayout && !overview && asset ? (
               <div className="journey-story__media-controls">
                 <nav className="journey-story__media-nav" aria-label="媒体导航">
+                <IconActionButton
+                  type="button"
+                  className="journey-story__fullscreen-entry"
+                  label="全屏查看媒体"
+                  disabled={mutationPending}
+                  onClick={() => enterFullscreen(mobileStoryImmersiveKeepsPlaying)}
+                ><IconMaximize size={19} stroke={1.35} aria-hidden="true" /></IconActionButton>
                 <button
                   type="button"
                   className={playing ? "is-active" : ""}
                   disabled={
                     mutationPending
-                    || scopedMedia.length < 2
+                    || (scopedMedia.length < 2 && !asset.mimeType.startsWith("video/"))
                     || (!playing && !storyAutoplayCanStart(
                       autoplayVideoCandidate,
                       storyMediaAvailability(autoplayVideoCandidateRead?.status),
@@ -3503,35 +3712,10 @@ export function JourneyStory({
                     ? <IconPlayerPause size={17} stroke={1.35} aria-hidden="true" />
                     : <IconPlayerPlay size={17} stroke={1.35} aria-hidden="true" />}
                 </button>
-                <button type="button" disabled={assetIndex === 0 || mutationPending} onClick={() => navigateToMedia(assetIndex - 1)} aria-label="上一个媒体"><IconArrowLeft size={17} stroke={1.35} aria-hidden="true" /></button>
-                <span>{scopedMedia.length > 0 ? `${assetIndex + 1} / ${scopedMedia.length}` : "0 / 0"}</span>
-                <button type="button" disabled={assetIndex === scopedMedia.length - 1 || mutationPending} onClick={() => navigateToMedia(assetIndex + 1)} aria-label="下一个媒体"><IconArrowRight size={17} stroke={1.35} aria-hidden="true" /></button>
                 </nav>
-                {manageMedia && asset && visualMedia.length > 1 ? (
-                  <div className="journey-story__media-order" role="group" aria-label="媒体排序">
-                    <span>排序</span>
-                    <IconActionButton type="button" disabled={!canMoveEarlier || mutationPending} onClick={() => void moveMedia(-1)} label="向前调整媒体顺序" tooltip="上移媒体"><IconArrowUp size={16} stroke={1.35} aria-hidden="true" /></IconActionButton>
-                    <IconActionButton type="button" disabled={!canMoveLater || mutationPending} onClick={() => void moveMedia(1)} label="向后调整媒体顺序" tooltip="下移媒体"><IconArrowDown size={16} stroke={1.35} aria-hidden="true" /></IconActionButton>
-                  </div>
-                ) : null}
               </div>
             ) : null}
             {orderMessage ? <p className="journey-story__order-message" role="status">{orderMessage}</p> : null}
-            {mobileLayout && !overview && !asset && !mobileManageMode ? (
-              <div className="journey-story__mobile-media-actions">
-                {manageMedia ? <IconActionButton
-                  type="button"
-                  className="journey-story__mobile-media-menu-trigger"
-                  buttonRef={mobileManageViewerTriggerRef}
-                  label="管理旅程"
-                  tooltip="管理旅程"
-                  disabled={mutationPending}
-                  onClick={enterMobileManageMode}
-                >
-                  <IconDots size={19} stroke={1.5} aria-hidden="true" />
-                </IconActionButton> : null}
-              </div>
-            ) : null}
             {mobileLayout && !overview && asset ? (
               <div className="journey-story__mobile-media-actions">
                 {showMobileStoryFullscreenControl({
@@ -3688,7 +3872,7 @@ export function JourneyStory({
                 ) : null}
               </div>
             ) : null}
-            {manageMedia && !mobileLayout && !overview && asset ? (
+            {manageMedia && desktopEditing && !mobileLayout && !overview && asset ? (
               <div className="journey-story__media-actions">
                 {mediaDeleteState === "idle" ? (
                   cover?.id !== asset.id ? (
@@ -3722,9 +3906,28 @@ export function JourneyStory({
                 </div>
               </div>
             ) : null}
-          </section>
+          </section> : null}
 
           <section ref={copyRef} className="journey-story__copy">
+            {!mobileLayout ? <div className="journey-story__heading">
+              <p>{journeyRange(journey)}</p>
+              <h2 id="journey-story-title">{journey.title}</h2>
+            </div> : null}
+            {mobileLayout && !overview && !asset && !mobileManageMode ? (
+              <div className="journey-story__mobile-media-actions">
+                {manageMedia ? <IconActionButton
+                  type="button"
+                  className="journey-story__mobile-media-menu-trigger"
+                  buttonRef={mobileManageViewerTriggerRef}
+                  label="管理旅程"
+                  tooltip="管理旅程"
+                  disabled={mutationPending}
+                  onClick={enterMobileManageMode}
+                >
+                  <IconDots size={19} stroke={1.5} aria-hidden="true" />
+                </IconActionButton> : null}
+              </div>
+            ) : null}
             <nav className="journey-story__route-points" aria-label="选择旅程途径点">
               <button
                 type="button"
@@ -3733,9 +3936,9 @@ export function JourneyStory({
                 aria-pressed={selectedRoutePointId === null}
                 onClick={() => selectMediaScope(null)}
               >
-                <span>00</span>
-                <strong>整段旅程</strong>
-                <small>{visualMedia.length}</small>
+                {mobileLayout ? <span>00</span> : null}
+                <strong>{mobileLayout ? "整段旅程" : "全部"}</strong>
+                {mobileLayout ? <small>{visualMedia.length}</small> : null}
               </button>
               {journey.routePoints.map((point, index) => (
                 <button
@@ -3751,24 +3954,57 @@ export function JourneyStory({
                   data-route-point-id={point.id}
                   onClick={() => selectMediaScope(point.id)}
                 >
-                  <span>{String(index + 1).padStart(2, "0")}</span>
+                  {mobileLayout ? <span>{String(index + 1).padStart(2, "0")}</span> : null}
                   <strong>{point.label || `途径点 ${index + 1}`}</strong>
-                  <small>{visualMediaCount(point.id)}</small>
+                  {mobileLayout ? <small>{visualMediaCount(point.id)}</small> : null}
                 </button>
               ))}
             </nav>
-            <dl>
+            {mobileLayout && !overview ? <StoryMediaRail
+              media={scopedMedia}
+              currentId={shownAsset?.id ?? null}
+              requestedId={pendingMediaId ?? incomingAssetId}
+              reads={mediaReads}
+              disabled={mutationPending}
+              onSelect={navigateToMedia}
+              onOrganize={manageMedia ? () => {
+                if (mobileLayout) enterMobileManageMode();
+                setPlaying(false);
+                setOverview(true);
+              } : undefined}
+            /> : null}
+            {mobileLayout ? <dl>
               <div><dt>ROUTE POINTS</dt><dd>{journey.routePoints.length}</dd></div>
               <div><dt>STOPS</dt><dd>{namedStops.length}</dd></div>
-            </dl>
-            {namedStops.length > 0 ? <p className="journey-story__stops">{namedStops.map((stop) => stop.label).join(" · ")}</p> : null}
+            </dl> : null}
+            {mobileLayout && namedStops.length > 0 ? <p className="journey-story__stops">{namedStops.map((stop) => stop.label).join(" · ")}</p> : null}
             {/* #10: a selected route point shows its own note near the place
                 name — distinct from system metadata. Journey-scoped view never
                 fabricates a note. */}
-            {activeChapterRoutePoint && activeChapterRoutePoint.note ? (
-              <blockquote className="journey-story__point-note">{activeChapterRoutePoint.note}</blockquote>
-            ) : null}
-            {journey.note ? <p className="journey-story__note">{journey.note}</p> : <p className="journey-story__note is-empty">没有文字，只有这条路线留下来。</p>}
+            {notesEditing && updateJourneyNotes ? (
+              <StoryNotesEditor
+                journeyNote={journeyNoteDraft ?? journey.note ?? ""}
+                selectedRoutePoint={notesRoutePoint}
+                selectedRoutePointNote={notesRoutePointNote}
+                removedRoutePointDrafts={removedRoutePointDrafts}
+                saving={mutationPending}
+                saveState={notesSaveState}
+                message={notesMessage}
+                dirty={notesDirty}
+                onJourneyNoteChange={setStoryJourneyNote}
+                onRoutePointNoteChange={setStoryRoutePointNote}
+                onSave={() => void saveStoryNotes()}
+                onDiscard={discardStoryNotes}
+                onDiscardRoutePointDraft={discardRemovedRoutePointDraft}
+              />
+            ) : (
+              <>
+                {(!desktopEditing || mobileLayout) && activeChapterRoutePoint && activeChapterRoutePoint.note ? (
+                  <blockquote className="journey-story__point-note">{activeChapterRoutePoint.note}</blockquote>
+                ) : null}
+                {journey.note && (!desktopEditing || mobileLayout) && (mobileLayout || (!selectedRoutePoint && !activeChapterRoutePoint?.note)) ? <p className="journey-story__note">{journey.note}</p> : null}
+              </>
+            )}
             {mobileLayout && mobileManageMode ? (
               <div className="journey-story__mobile-manage-bar" role="status">
                 <div><small>MANAGE JOURNEY</small><strong>管理旅程</strong></div>
@@ -3789,13 +4025,13 @@ export function JourneyStory({
                 {deleteMessage ? <p className="journey-story__delete-error" role="alert">{deleteMessage}</p> : null}
               </section>
             ) : null}
-            {manageMedia && (!mobileLayout || mobileManageMode) ? <div className="journey-story__media-add">
-              <div>
+            {manageMedia && mediaEditing ? <div className="journey-story__media-add">
+              {mobileLayout ? <div>
                 <p>PRIVATE MEDIA</p>
                 <strong>{selectedRoutePoint
                   ? `${scopedMedia.length} 个媒体片段 · ${selectedRoutePoint.label || `途径点 ${selectedRoutePoint.sortOrder + 1}`}`
                   : `${playbackIntroMedia(journey).length} 个媒体片段 · 旅程级媒体 / 开场章节`}</strong>
-              </div>
+              </div> : null}
               <input
                 ref={fileInputRef}
                 type="file"
@@ -3916,10 +4152,10 @@ export function JourneyStory({
               ) : null}
             </div> : null}
 
-            <div className={`journey-story__soundtrack${soundtrack && soundtrackRead?.status === "ready" ? " has-track" : ""}${playing ? " is-playing" : ""}`}>
+            {showSoundtrack ? <div className={`journey-story__soundtrack${soundtrack && soundtrackRead?.status === "ready" ? " has-track" : ""}${playing ? " is-playing" : ""}`}>
               <div className="journey-story__soundtrack-head">
-                <p>JOURNEY SOUNDTRACK</p>
-                <strong>{soundtrack ? stripMediaExtension(soundtrack.fileName) : "还没有配乐，幻灯片会安静播放"}</strong>
+                {mobileLayout ? <p>JOURNEY SOUNDTRACK</p> : null}
+                {soundtrack ? <strong>{stripMediaExtension(soundtrack.fileName)}</strong> : null}
               </div>
               {/* #7: the audio element is a hidden playback engine only — no
                   native control bar; play/pause follows the slideshow. */}
@@ -3947,7 +4183,7 @@ export function JourneyStory({
               {soundtrack && soundtrackRead?.status === "error" ? (
                 <p className="journey-story__upload-message is-error" role="alert">{soundtrackRead.message}</p>
               ) : null}
-              {manageMedia && (!mobileLayout || mobileManageMode) ? <>
+              {manageMedia && mediaEditing ? <>
               <input
                 ref={soundtrackInputRef}
                 type="file"
@@ -4000,21 +4236,32 @@ export function JourneyStory({
               {soundtrackNotice ? (
                 <p className="journey-story__upload-message is-error" role="status">{soundtrackNotice}</p>
               ) : null}
-            </div>
+            </div> : null}
           </section>
         </div>
 
         <footer>
-          {(canEditJourney || canShareJourney || onDelete) && (!mobileLayout || mobileManageMode) ? (
+          {(canEditJourney || canShareJourney || onDelete) && mediaEditing ? (
             <div className="journey-story__manage">
-              {canEditJourney ? <button type="button" disabled={mutationPending || deleteState !== "idle"} onClick={() => onEdit?.(journey.id)}><IconEdit size={16} stroke={1.35} aria-hidden="true" />编辑旅程</button> : null}
-              {canShareJourney ? <button type="button" data-share-journey-trigger="true" disabled={mutationPending || deleteState !== "idle"} onClick={() => onShare?.(journey.id)}><IconShare size={16} stroke={1.35} aria-hidden="true" />分享旅程</button> : null}
-              {onDelete ? <button ref={journeyDeleteTriggerRef} className="is-destructive" type="button" disabled={mutationPending || deleteState !== "idle"} onClick={() => { setDeleteState("confirming"); setDeleteMessage(""); }}><IconTrash size={16} stroke={1.35} aria-hidden="true" />删除旅程</button> : null}
+              {canEditJourney ? <button type="button" disabled={mutationPending || deleteState !== "idle"} onClick={openJourneyComposer}><IconEdit size={16} stroke={1.35} aria-hidden="true" />编辑旅程</button> : null}
+              {canShareJourney ? <button type="button" data-share-journey-trigger="true" disabled={mutationPending || deleteState !== "idle"} onClick={openJourneyShare}><IconShare size={16} stroke={1.35} aria-hidden="true" />分享旅程</button> : null}
+              {onDelete ? <button ref={journeyDeleteTriggerRef} className="is-destructive" type="button" disabled={mutationPending || deleteState !== "idle"} onClick={() => {
+                if (notesSaveState === "saving") {
+                  notifyNotesGuard("正在保存感想，完成后才能删除旅程。");
+                  return;
+                }
+                if (notesDirty) {
+                  notifyNotesGuard("还有未保存的感想，请先保存或放弃更改。");
+                  return;
+                }
+                setDeleteState("confirming");
+                setDeleteMessage("");
+              }}><IconTrash size={16} stroke={1.35} aria-hidden="true" />删除旅程</button> : null}
             </div>
           ) : null}
           <div className="journey-story__navigation">
-            <button type="button" disabled={!previousJourney || mutationPending || deleteState !== "idle"} onClick={() => previousJourney && onNavigate(previousJourney.id)}><IconArrowLeft size={17} stroke={1.35} aria-hidden="true" />上一段</button>
-            <button type="button" disabled={!nextJourney || mutationPending || deleteState !== "idle"} onClick={() => nextJourney && onNavigate(nextJourney.id)}>下一段<IconArrowRight size={17} stroke={1.35} aria-hidden="true" /></button>
+            <button type="button" disabled={!previousJourney || mutationPending || deleteState !== "idle"} onClick={() => previousJourney && navigateStory(previousJourney.id)}><IconArrowLeft size={17} stroke={1.35} aria-hidden="true" />上一段</button>
+            <button type="button" disabled={!nextJourney || mutationPending || deleteState !== "idle"} onClick={() => nextJourney && navigateStory(nextJourney.id)}>下一段<IconArrowRight size={17} stroke={1.35} aria-hidden="true" /></button>
           </div>
         </footer>
       </article>
@@ -4037,57 +4284,51 @@ export function JourneyStory({
           onPointerCancel={handleFullscreenPointerCancel}
           onLostPointerCapture={handleFullscreenLostPointerCapture}
           onClick={(event) => {
+            if (storyMediaGestureConsumedRef.current) {
+              storyMediaGestureConsumedRef.current = false;
+              return;
+            }
             if (!mobileLayout && event.target === event.currentTarget) exitFullscreen();
           }}
         >
           <button className="journey-story-fullscreen__close" type="button" onClick={() => exitFullscreen()} aria-label="退出沉浸媒体"><IconX size={22} stroke={1.35} aria-hidden="true" /></button>
-          {/* #11 two-layer stage also serves fullscreen: the incoming frame
-              crossfades over the settled base frame without flashing. */}
-          {storyStageVideoAsset ? (
-            <video
-              ref={fullscreenVideoRef}
-              className={storyStageVideoIncoming ? "journey-story__media-incoming" : undefined}
-              src={storyStageVideoRead?.status === "ready" ? storyStageVideoRead.url : undefined}
-              controls={storyStageVideoSettled}
-              playsInline
-              hidden={!storyStageVideoVisible}
-              aria-hidden={storyStageVideoVisible ? undefined : true}
-              data-shared-media-id={storyStageVideoVisible ? storyStageVideoAsset.id : undefined}
-              onAnimationEnd={(event) => {
-                if (
-                  storyStageVideoIncoming
-                  && event.target === event.currentTarget
-                  && event.animationName === "motionMediaIn"
-                ) {
-                  settleIncoming(storyStageVideoAsset.id);
-                }
-              }}
-            />
-          ) : null}
-          {shownAsset && shownRead?.status === "ready" && !shownAsset.mimeType.startsWith("video/")
-            ? <img key={`media-${shownAsset.id}`} src={shownRead.url} alt={shownAsset.fileName} data-shared-media-id={shownAsset.id} />
-            : null}
-          {incoming && incomingRead?.status === "ready" && !incoming.mimeType.startsWith("video/")
-            ? <img key={`media-${incoming.id}`} className="journey-story__media-incoming" src={incomingRead.url} alt={incoming.fileName} onAnimationEnd={(event) => { if (event.target === event.currentTarget && event.animationName === "motionMediaIn") settleIncoming(incoming.id); }} />
-            : null}
-          {mobileLayout ? <img data-media-drag-peek alt="" aria-hidden="true" style={{ display: "none" }} /> : null}
-          {scopedMedia.length > 1 ? (
+          {fullscreen ? mediaStageStatus : null}
+          <StoryMediaPages
+            active={fullscreen}
+            media={scopedMedia}
+            currentId={shownAsset?.id ?? null}
+            coverId={cover?.id ?? null}
+            incomingId={incoming?.id ?? null}
+            direction={mediaNavigationDirection.current}
+            reads={mediaReads}
+            wrap={selectedRoutePointId !== null}
+            videoAssetId={storyStageVideoAsset?.id ?? null}
+            onSettled={settleIncoming}
+            onMediaError={reportStageMediaError}
+            onPlaybackReady={fullscreenPlaybackReady}
+            onNavigate={!mobileLayout ? navigateFromPicture : undefined}
+            canNavigatePrevious={!mutationPending && scopedMedia.length > 1 && (selectedRoutePointId !== null || requestedMediaIndex > 0)}
+            canNavigateNext={!mutationPending && scopedMedia.length > 1 && (selectedRoutePointId !== null || requestedMediaIndex < scopedMedia.length - 1)}
+            onBackdropClick={!mobileLayout ? () => { if (!storyMediaGestureConsumedRef.current) exitFullscreen(); } : undefined}
+            video={renderStageVideo(true)}
+          />
+          {scopedMedia.length > 1 || !mobileLayout ? (
             <nav className="journey-story-fullscreen__nav" aria-label="全屏媒体导航">
-              <button
+              {mobileLayout ? <button
                 type="button"
-                disabled={selectedRoutePointId === null && assetIndex === 0}
-                onClick={() => { const index = storyMediaNeighborIndex(assetIndex, scopedMedia.length, -1, selectedRoutePointId !== null); if (index !== null) navigateToMedia(index); }}
+                disabled={selectedRoutePointId === null && requestedMediaIndex === 0}
+                onClick={() => navigateMediaStep(-1, selectedRoutePointId !== null)}
                 aria-label="上一个媒体"
               >
                 <IconArrowLeft size={22} stroke={1.35} aria-hidden="true" />
-              </button>
+              </button> : null}
               <button
                 type="button"
                 className={playing ? "is-active" : ""}
-                disabled={!playing && !storyAutoplayCanStart(
+                disabled={mutationPending || (scopedMedia.length < 2 && !asset.mimeType.startsWith("video/")) || (!playing && !storyAutoplayCanStart(
                   autoplayVideoCandidate,
                   storyMediaAvailability(autoplayVideoCandidateRead?.status),
-                )}
+                ))}
                 onClick={togglePlaying}
                 aria-label={playing ? "暂停自动播放" : "自动播放媒体"}
                 aria-pressed={playing}
@@ -4096,15 +4337,15 @@ export function JourneyStory({
                   ? <IconPlayerPause size={22} stroke={1.35} aria-hidden="true" />
                   : <IconPlayerPlay size={22} stroke={1.35} aria-hidden="true" />}
               </button>
-              <span>{assetIndex + 1} / {scopedMedia.length}</span>
-              <button
+              {mobileLayout ? <span>{assetIndex + 1} / {scopedMedia.length}</span> : null}
+              {mobileLayout ? <button
                 type="button"
-                disabled={selectedRoutePointId === null && assetIndex === scopedMedia.length - 1}
-                onClick={() => { const index = storyMediaNeighborIndex(assetIndex, scopedMedia.length, 1, selectedRoutePointId !== null); if (index !== null) navigateToMedia(index); }}
+                disabled={selectedRoutePointId === null && requestedMediaIndex === scopedMedia.length - 1}
+                onClick={() => navigateMediaStep(1, selectedRoutePointId !== null)}
                 aria-label="下一个媒体"
               >
                 <IconArrowRight size={22} stroke={1.35} aria-hidden="true" />
-              </button>
+              </button> : null}
             </nav>
           ) : null}
         </div>

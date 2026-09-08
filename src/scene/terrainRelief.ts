@@ -30,3 +30,13 @@ export function terrainReliefBumpScale(
 ): number {
   return 0.001 + terrainReliefStrength(zoom, quality) * 0.0045;
 }
+
+// Dimensionless appearance weight, never a world-space displacement. The source
+// is shaded relief, not a DEM; only brightness and point size reveal its detail.
+// The existing zoom interpolation changes emphasis without a periodic wave.
+export function terrainParticleReliefEmphasis(
+  zoom: number,
+  quality: TerrainReliefQuality = "high",
+): number {
+  return (0.18 + terrainReliefStrength(zoom) * 0.82) * (quality === "low" ? 0.5 : 1);
+}

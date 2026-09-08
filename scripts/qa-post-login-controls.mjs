@@ -1,6 +1,10 @@
 import { launchQaBrowser } from "./qa-browser.mjs";
 
 const origin = process.env.QA_ORIGIN ?? "http://127.0.0.1:4173";
+const storyCurrentMediaSelector = [
+  '[data-story-media-pages] [data-media-page="current"][data-media-page-ready="true"] [data-shared-media-id]',
+  '[data-story-media-pages] video[data-shared-media-id]',
+].join(", ");
 const finalAcceptanceOnly = process.argv.includes("--final-acceptance");
 const atlasShellOnly = process.argv.includes("--atlas-shell-only");
 const browser = await launchQaBrowser(finalAcceptanceOnly
@@ -366,9 +370,7 @@ async function verifyMobileV2InteractionContract() {
     await storySurface.waitFor({ state: "visible" });
     const storyStackDepth = await historyStackDepth();
     const sheetInertUnderStory = await page.locator(".mobile-v2__sheet-layer").evaluate((element) => element.inert);
-    const storyMedia = storySurface.locator(
-      ".journey-story__media > img:not(.journey-story__media-incoming), .journey-story__media > video:not(.journey-story__media-incoming)",
-    ).first();
+    const storyMedia = storySurface.locator(storyCurrentMediaSelector).first();
     await storyMedia.waitFor({ state: "visible" });
     await storyMedia.click();
     const fullscreenSurface = page.locator(".journey-story-fullscreen");
@@ -2135,6 +2137,11 @@ async function verifyFinalAcceptanceMobileFlow() {
       const storyTitle = await page.locator(".journey-story h2").first().textContent();
       if (!String(storyTitle).includes(targetTitle)) {
         throw new Error(`Story continuity selected the wrong journey: ${storyTitle}`);
+      }
+      const storyLayout = await page.locator(".journey-story").getAttribute("data-story-layout");
+      const desktopEditControls = await page.locator(".journey-story").getByRole("button", { name: "编辑故事", exact: true }).count();
+      if (storyLayout !== "mobile" || desktopEditControls !== 0) {
+        throw new Error(`Mobile Story inherited desktop editing chrome: ${JSON.stringify({ storyLayout, desktopEditControls })}`);
       }
       console.error(`[qa-post-login] final:${viewportLabel}:story-ready`);
       await activateControl(page.locator(".journey-story__close"), "story close control");

@@ -31,6 +31,7 @@ interface ParticleMaterialOptions {
   size: number;
   spatialLod?: boolean;
   radialPulseScale?: number;
+  terrainRelief?: boolean;
 }
 
 export function createParticleEarthMaterial({
@@ -39,6 +40,7 @@ export function createParticleEarthMaterial({
   size,
   spatialLod = false,
   radialPulseScale = 1,
+  terrainRelief = false,
 }: ParticleMaterialOptions) {
   return new ParticleEarthMaterial({
     transparent: true,
@@ -63,7 +65,11 @@ export function createParticleEarthMaterial({
       },
       uActiveDimStrength: { value: 0 },
       uLodProgress: { value: spatialLod ? 0 : 1 },
-      uRadialPulseScale: { value: radialPulseScale },
+      uRadialPulseScale: { value: terrainRelief ? 0 : radialPulseScale },
+      ...(terrainRelief ? {
+        uTerrainReliefMap: { value: null },
+        uTerrainReliefEmphasis: { value: 0 },
+      } : {}),
       // Angular falloff is evaluated with dot products so attenuation stays
       // stable across zoom, DPR and screen size. 0.978 ~= 12°, 0.994 ~= 6°.
       uDimOuterCos: { value: 0.978 },
@@ -86,6 +92,10 @@ export function createParticleEarthMaterial({
       uniform float uDimInnerCos;
       uniform float uLodProgress;
       uniform float uRadialPulseScale;
+      ${terrainRelief ? `
+      uniform sampler2D uTerrainReliefMap;
+      uniform float uTerrainReliefEmphasis;
+      ` : ""}
       varying float vStrength;
       varying float vTwinkle;
       varying float vDimBrightness;
@@ -133,19 +143,65 @@ export function createParticleEarthMaterial({
         );
         float spark = smoothstep(0.86, 0.995, shimmer) * step(0.68, seed);
         transformed *= 1.0 + pulse * uRadialPulseScale * mix(1.0, 0.3, dimAmount);
+        float terrainEmphasis = 0.0;
+        float terrainBrightness = 1.0;
+        float terrainPointScale = 1.0;
+        ${terrainRelief ? `
+        if (uTerrainReliefEmphasis > 0.0) {
+          // Geographic directions, rather than vertex IDs, keep both LOD
+          // layers on the same fixed landforms without changing CPU coordinates.
+          vec3 terrainDirection = normalize(position);
+          float longitudeAngle = length(terrainDirection.xz) > 0.0001
+            ? atan(terrainDirection.z, -terrainDirection.x) : 0.0;
+          vec2 reliefUv = vec2(
+            fract(longitudeAngle / 6.2831853),
+            asin(clamp(terrainDirection.y, -1.0, 1.0)) / 3.14159265 + 0.5
+          );
+          // A four-pixel neighborhood joins the relief source's fine ridges
+          // into readable landforms, with the same five texture fetches.
+          vec2 texel = vec2(4.0 / 2048.0, 4.0 / 1024.0);
+          float center = texture2D(uTerrainReliefMap, reliefUv).r;
+          float east = texture2D(uTerrainReliefMap, reliefUv + vec2(texel.x, 0.0)).r;
+          float west = texture2D(uTerrainReliefMap, reliefUv - vec2(texel.x, 0.0)).r;
+          float north = texture2D(uTerrainReliefMap, reliefUv + vec2(0.0, texel.y)).r;
+          float south = texture2D(uTerrainReliefMap, reliefUv - vec2(0.0, texel.y)).r;
+          // Local range exposes mountain belts; the center's deviation from
+          // its neighbors sculpts detail within them. Absolute gray level is
+          // never altitude, and flat source regions stay flat.
+          float low = min(center, min(min(east, west), min(north, south)));
+          float high = max(center, max(max(east, west), max(north, south)));
+          float localRange = high - low;
+          float localMean = (east + west + north + south) * 0.25;
+          float localDetail = smoothstep(-0.45, 0.45,
+            (center - localMean) / max(localRange, 0.008));
+          float structure = smoothstep(0.008, 0.09, localRange)
+            * mix(0.55, 1.0, localDetail);
+          // Zoom controls emphasis; a changed view reveals different real
+          // texture structure. No clock or procedural wave moves the terrain.
+          // Appearance only: particle centers must remain on the canonical
+          // surface shared by routes, labels, picking, focus and Earth Dive.
+          // Preserve the existing quiet corridor around route marks.
+          terrainEmphasis = clamp(uTerrainReliefEmphasis, 0.0, 1.0)
+            * (1.0 - uMorph) * mix(1.0, 0.18, dimAmount);
+          terrainBrightness = mix(1.0, mix(0.72, 1.8, structure), terrainEmphasis);
+          terrainPointScale = mix(1.0, mix(0.82, 1.2, structure), terrainEmphasis);
+        }
+        ` : ""}
         vec4 mvPosition = modelViewMatrix * vec4(transformed, 1.0);
         gl_Position = projectionMatrix * mvPosition;
 
         float twinkleSignal = shimmer * 0.3 + spark * 0.95;
-        vTwinkle = 0.78 + twinkleSignal * mix(1.0, 0.24, dimAmount);
-        vDimBrightness = mix(1.0, 0.46, dimAmount);
+        vTwinkle = mix(0.78 + twinkleSignal * mix(1.0, 0.24, dimAmount),
+          1.0, terrainEmphasis * 0.72);
+        vDimBrightness = mix(1.0, 0.46, dimAmount) * terrainBrightness;
         ${spatialLod
           ? "vLodAlpha = smoothstep(lodThreshold - 0.035, lodThreshold + 0.015, uLodProgress);"
           : "vLodAlpha = 1.0;"}
         gl_PointSize = max(
           1.0,
           uPointSize * (uViewportHeight / 720.0) * (1.7 / -mvPosition.z)
-            * (0.9 + spark * 0.32 * mix(1.0, 0.28, dimAmount))
+            * (0.9 + spark * 0.32 * mix(1.0, 0.28, dimAmount) * (1.0 - terrainEmphasis * 0.72))
+            * terrainPointScale
         ) * uPixelRatio;
         vStrength = mix(1.0, 0.72, uMorph);
       }

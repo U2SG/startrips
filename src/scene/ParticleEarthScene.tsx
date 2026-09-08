@@ -17,6 +17,7 @@ import {
   Points,
   PointsMaterial,
   Raycaster,
+  RepeatWrapping,
   Scene,
   SphereGeometry,
   SRGBColorSpace,
@@ -109,7 +110,11 @@ import {
   type GlobeSemanticZoomState,
   type SemanticZoomSnapshot,
 } from "./semanticZoom";
-import { terrainReliefBumpScale, terrainReliefOpacity } from "./terrainRelief";
+import {
+  terrainParticleReliefEmphasis,
+  terrainReliefBumpScale,
+  terrainReliefOpacity,
+} from "./terrainRelief";
 
 export const QUALITY_PROFILE = {
   low: { particleCount: 12_000, maxDpr: 1 },
@@ -3807,6 +3812,8 @@ export function ParticleEarthScene({
       color: 0x61e4dc,
       opacity: 0,
       size: 8.8,
+      radialPulseScale: 0,
+      terrainRelief: true,
     });
     particleDimmingMaterials.push(particleMaterial);
     syncParticleDimming(latestJourneyRoutes.current, latestActiveJourneyRouteId.current);
@@ -3894,12 +3901,16 @@ export function ParticleEarthScene({
         "lodThreshold",
         new BufferAttribute(sample.lodThresholds, 1),
       );
-      if (sample.positions.length > 0) geometry.computeBoundingSphere();
+      if (sample.positions.length > 0) {
+        geometry.computeBoundingSphere();
+      }
       const material = createParticleEarthMaterial({
         color: 0x74eee6,
         opacity: 0,
         size: 7.2,
         spatialLod: true,
+        radialPulseScale: 0,
+        terrainRelief: true,
       });
       material.uniforms.uViewportHeight.value = targetSize.y;
       const points = new Points(geometry, material);
@@ -4062,23 +4073,38 @@ export function ParticleEarthScene({
     };
 
     let reliefTextureReady = false;
-    host.dataset.reliefTexture = reliefExperimentEnabled ? "loading" : "disabled";
-    const reliefTexture = reliefExperimentEnabled
-      ? new TextureLoader().load(
-          "/earth/natural-earth-shaded-relief-2048.jpg",
-          (loadedTexture) => {
-            reliefMaterial.bumpMap = loadedTexture;
-            reliefMaterial.needsUpdate = true;
-            reliefTextureReady = true;
-            host.dataset.reliefTexture = "ready";
-          },
-          undefined,
-          () => {
-            reliefTextureReady = false;
-            host.dataset.reliefTexture = "unavailable";
-          },
-        )
-      : null;
+    let particleTerrainRelief = 0;
+    host.dataset.reliefTexture = "loading";
+    host.dataset.particleTerrainSource = "natural-earth-shaded-relief;structural-contrast;not-dem";
+    // One existing geographic source serves the optional bump support and the
+    // default particle relief. A failed source leaves the geographic globe
+    // intact instead of substituting procedural terrain.
+    const reliefTexture = new TextureLoader().load(
+      "/earth/natural-earth-shaded-relief-2048.jpg",
+      (loadedTexture) => {
+        if (disposed) { loadedTexture.dispose(); return; }
+        loadedTexture.wrapS = RepeatWrapping;
+        reliefMaterial.bumpMap = loadedTexture;
+        reliefMaterial.needsUpdate = true;
+        reliefTextureReady = true;
+        host.dataset.reliefTexture = "ready";
+      },
+      undefined,
+      () => {
+        if (disposed) return;
+        reliefTextureReady = false;
+        host.dataset.reliefTexture = "unavailable";
+      },
+    );
+    const updateTerrainParticles = (
+      material: ReturnType<typeof createParticleEarthMaterial>,
+      time: number,
+    ) => {
+      // Time belongs to the existing point shimmer, never terrain displacement.
+      material.uniforms.uTime.value = time;
+      material.uniforms.uTerrainReliefMap.value = reliefTexture;
+      material.uniforms.uTerrainReliefEmphasis.value = particleTerrainRelief;
+    };
 
     const texture = new TextureLoader().load(
       "/earth/nasa-earth-with-clouds-2048.jpg",
@@ -4158,6 +4184,7 @@ export function ParticleEarthScene({
         "targetPosition",
         new BufferAttribute(createBurstTargets(particlePositions), 3),
       );
+      nextParticleGeometry.computeBoundingSphere();
       if (particles) {
         const previousGeometry = particleGeometry;
         particles.geometry = nextParticleGeometry;
@@ -4675,13 +4702,20 @@ export function ParticleEarthScene({
       // Keep the particle world alive while idle without involving React's
       // render cycle. Reduced-motion resolves to a stable final frame.
       const motionTime = reduceMotion ? 0 : now / 1000;
-      particleMaterial.uniforms.uTime.value = motionTime;
+      const terrainAvailable = reliefTextureReady && baseCoastlineSourceAvailable
+        && currentMode !== "surfaceEarth";
+      // Landforms stay geographically fixed. Existing zoom/focus interpolation
+      // changes their emphasis as the viewer approaches a different place.
+      particleTerrainRelief = interpolate(particleTerrainRelief,
+        terrainAvailable ? terrainParticleReliefEmphasis(interactiveZoom, currentQuality) : 0);
+      updateTerrainParticles(particleMaterial, motionTime);
       if (activeRefinementLayer) {
-        activeRefinementLayer.material.uniforms.uTime.value = motionTime;
+        updateTerrainParticles(activeRefinementLayer.material, motionTime);
       }
       if (departingRefinementLayer) {
-        departingRefinementLayer.material.uniforms.uTime.value = motionTime;
+        updateTerrainParticles(departingRefinementLayer.material, motionTime);
       }
+      host.dataset.particleTerrainRelief = particleTerrainRelief.toFixed(4);
       if (archiveMaterial) archiveMaterial.uniforms.uTime.value = motionTime;
       clusterMaterial.uniforms.uTime.value = motionTime;
       cyanClusterMaterial.uniforms.uTime.value = motionTime;

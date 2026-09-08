@@ -2,9 +2,113 @@ import { launchQaBrowser } from "./qa-browser.mjs";
 
 const origin = process.env.QA_ORIGIN ?? "http://127.0.0.1:4173";
 const onePixelGif = "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=";
-const tinyVideo = "data:video/mp4;base64,AAAA";
+// Use a checked-in, decodable clip so StoryMediaPages and PlaybackMediaStage
+// exercise their real metadata/first-frame gates. `instrumentMedia` below
+// only makes play/pause deterministic; it does not fake readyState or frames.
+const tinyVideo = "/demo-media/east-star-orbit.webm";
+
+// Story media is rendered as three physical page slots. Images live inside a
+// page slot; the single persistent video root lives beside those slots and
+// carries data-shared-media-id only while it is the current asset. Keep these
+// selectors descendant-based because the page rail may be nested in the
+// presentation stage, and never use the old incoming/fade implementation as
+// a readiness signal.
+const storyMediaPagesSelector = "[data-story-media-pages]";
+const storyPageSelector = (page) => `${storyMediaPagesSelector} [data-media-page="${page}"]`;
+const storyReadyPageSelector = (page) => `${storyPageSelector(page)}[data-media-page-ready="true"]`;
+const storyCurrentPageSelector = storyReadyPageSelector("current");
+const storyCurrentImageSelector = `${storyCurrentPageSelector} [data-shared-media-id]`;
+const storyCurrentVideoSelector = `${storyMediaPagesSelector} video[data-shared-media-id]`;
+const storyPersistentVideoSelector = `${storyMediaPagesSelector} .story-media-pages__video video`;
+const storyCurrentMediaSelector = `${storyCurrentImageSelector}, ${storyCurrentVideoSelector}`;
+const storyFixedPageNames = ["previous", "current", "next"];
 
 const browser = await launchQaBrowser();
+
+// Desktop navigation belongs to the painted half of the current picture, not
+// its contain letterbox or a hidden fullscreen presenter. Video clicks stay
+// above native controls. Mouse input also exercises Story's gesture ownership.
+function storyPicture(page, surfaceSelector = ".journey-story__media") {
+  return page.locator(`${surfaceSelector}:visible`)
+    .locator('img[data-shared-media-id]:visible, video[data-shared-media-id]:visible');
+}
+
+async function storyPicturePoint(page, direction, surfaceSelector = ".journey-story__media") {
+  const picture = storyPicture(page, surfaceSelector);
+  await picture.waitFor({ state: "visible" });
+  return picture.evaluate((media, step) => {
+    const bounds = media.getBoundingClientRect();
+    const naturalWidth = media instanceof HTMLVideoElement ? media.videoWidth : media.naturalWidth;
+    const naturalHeight = media instanceof HTMLVideoElement ? media.videoHeight : media.naturalHeight;
+    if (!naturalWidth || !naturalHeight || !bounds.width || !bounds.height) {
+      throw new Error("Story navigation requires a decoded picture with non-zero bounds");
+    }
+    const scale = Math.min(bounds.width / naturalWidth, bounds.height / naturalHeight);
+    const width = naturalWidth * scale;
+    const height = naturalHeight * scale;
+    const x = bounds.left + (bounds.width - width) / 2 + width * (step < 0 ? .25 : .75);
+    const y = bounds.top + (bounds.height - height) / 2 + height * (media instanceof HTMLVideoElement ? .3 : .5);
+    if (media instanceof HTMLVideoElement && media.controls
+      && y >= bounds.bottom - Math.min(72, bounds.height * .25)) {
+      throw new Error("Story video navigation point overlaps native controls");
+    }
+    const hit = document.elementFromPoint(x, y);
+    const describe = (node) => node instanceof Element ? {
+      tag: node.tagName, asset: node.getAttribute("data-shared-media-id"),
+      pageId: node.closest("[data-media-page]")?.getAttribute("data-media-page-id"),
+      pageRole: node.closest("[data-media-page]")?.getAttribute("data-media-page"),
+      transform: getComputedStyle(node.closest("[data-media-page]") ?? node).transform,
+      zIndex: getComputedStyle(node.closest("[data-media-page]") ?? node).zIndex,
+      bounds: node.getBoundingClientRect().toJSON(),
+    } : null;
+    return { x, y, expected: describe(media), hit: describe(hit) };
+  }, direction);
+}
+
+async function clickStoryPicture(page, direction, surfaceSelector = ".journey-story__media") {
+  const point = await storyPicturePoint(page, direction, surfaceSelector);
+  await page.evaluate(({ point, direction }) => {
+    window.__qaStoryLastPictureClick = { point, direction, events: [] };
+    if (window.__qaStoryPictureTraceInstalled) return;
+    window.__qaStoryPictureTraceInstalled = true;
+    for (const type of ["pointerdown", "pointerup", "click"]) {
+      document.addEventListener(type, (event) => {
+        const trace = window.__qaStoryLastPictureClick;
+        const target = event.target;
+        if (!trace || !(target instanceof Element)) return;
+        trace.events.push({ type, tag: target.tagName, class: target.className,
+          asset: target.getAttribute("data-shared-media-id"),
+          pageId: target.closest("[data-media-page]")?.getAttribute("data-media-page-id"),
+          x: event.clientX, y: event.clientY });
+      }, true);
+    }
+  }, { point, direction });
+  await page.mouse.click(point.x, point.y);
+}
+
+async function waitForStoryPicture(page, assetId, surfaceSelector = ".journey-story__media") {
+  await page.waitForFunction(({ surfaceSelector, assetId }) => {
+    const root = document.querySelector(surfaceSelector)?.querySelector("[data-story-media-pages]");
+    const current = root?.querySelector('[data-media-page="current"]');
+    const media = root?.querySelector("[data-shared-media-id]");
+    return root?.getAttribute("data-media-presentation") === "settled"
+      && current?.getAttribute("data-media-page-id") === assetId
+      && current?.getAttribute("data-media-page-ready") === "true"
+      && media?.getAttribute("data-shared-media-id") === assetId
+      && (media instanceof HTMLImageElement ? media.complete && media.naturalWidth > 0
+        : media instanceof HTMLVideoElement && media.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA);
+  }, { surfaceSelector, assetId }, { polling: "raf", timeout: 3_000 }).catch(async (error) => {
+    const state = await page.evaluate((selector) => {
+      const root = document.querySelector(selector)?.querySelector("[data-story-media-pages]");
+      return { presentation: root?.getAttribute("data-media-presentation"),
+        pages: [...root?.querySelectorAll("[data-media-page]") ?? []].map((node) => ({
+          id: node.getAttribute("data-media-page-id"), role: node.getAttribute("data-media-page"),
+          ready: node.getAttribute("data-media-page-ready"), incoming: node.getAttribute("data-media-incoming"),
+        })), lastClick: window.__qaStoryLastPictureClick };
+    }, surfaceSelector);
+    throw new Error(`Story picture ${assetId} did not settle: ${JSON.stringify(state)}`, { cause: error });
+  });
+}
 
 function overlapPairs(items) {
   const pairs = [];
@@ -63,6 +167,8 @@ async function createQaPage(path, mediaUrl, {
   readDelayMs = 0,
   blockedReadAssetId = null,
   videoTimeline = null,
+  videoMediaUrl = null,
+  videoAssetId = null,
   reducedMotion = "reduce",
   viewport = mobile ? { width: 390, height: 844 } : { width: 1280, height: 800 },
 } = {}) {
@@ -80,14 +186,11 @@ async function createQaPage(path, mediaUrl, {
   });
   page.on("pageerror", (error) => pageErrors.push(error.message));
   // #195 Phase 2. The trim transport is ~245 lines of event handling on a real
-  // <video>, and no assertion executed it: the repo has no jsdom, and the data
-  // URI the other media checks use decodes to nothing, so `duration` is NaN,
-  // `loadedmetadata` never fires and the trim degrades before it starts. This
-  // gives the element a synthesized timeline instead — a real DOM element, real
-  // React handlers, a real `element.currentTime = x`, a real director — with
-  // deterministic media time in place of a decoder. It deliberately never
-  // dispatches `ended`, so a beat that finishes can only have been finished by
-  // the out-point.
+  // <video>, and no assertion executed it: the trim needs deterministic timing
+  // while still loading a real, decodable source for the first-frame gate. This
+  // keeps native metadata/frame readiness, React handlers and the director,
+  // while making duration/currentTime/play/pause deterministic. It deliberately
+  // never dispatches `ended`, so a beat can only finish at the out-point.
   if (videoTimeline) {
     await page.addInitScript(({ sourceDurationSeconds, tickMs, tickSeconds }) => {
       const media = new WeakMap();
@@ -117,18 +220,12 @@ async function createQaPage(path, mediaUrl, {
         clearInterval(entry.timer);
         entry.timer = null;
       };
-      const arm = (element, src) => {
+      const ensureEntry = (element) => {
         const entry = media.get(element)
           ?? { time: 0, playing: false, metadata: false, timer: null, src: null };
-        entry.src = src;
+        entry.src = element.currentSrc || element.getAttribute("src") || null;
         media.set(element, entry);
-        // Metadata arrives a task later, as it does for a real source: the
-        // overlay's entry effect must survive an element that is not ready yet.
-        setTimeout(() => {
-          entry.metadata = true;
-          element.dispatchEvent(new Event("loadedmetadata"));
-          sample(element, "loadedmetadata");
-        }, 10);
+        return entry;
       };
       const define = (name, descriptor) => {
         Object.defineProperty(HTMLMediaElement.prototype, name, {
@@ -141,11 +238,6 @@ async function createQaPage(path, mediaUrl, {
           return media.get(this)?.metadata ? sourceDurationSeconds : Number.NaN;
         },
       });
-      define("readyState", {
-        get() {
-          return media.get(this)?.metadata ? 1 : 0;
-        },
-      });
       define("paused", {
         get() {
           return media.get(this)?.playing !== true;
@@ -156,8 +248,7 @@ async function createQaPage(path, mediaUrl, {
           return media.get(this)?.time ?? 0;
         },
         set(value) {
-          const entry = media.get(this);
-          if (!entry) return;
+          const entry = ensureEntry(this);
           entry.time = Math.max(0, Math.min(sourceDurationSeconds, Number(value)));
           trace.seeks.push({ to: Number(entry.time.toFixed(3)), ...overlayState() });
           sample(this, "seek");
@@ -168,29 +259,15 @@ async function createQaPage(path, mediaUrl, {
           }, 0);
         },
       });
-      define("src", {
-        get() {
-          return media.get(this)?.src ?? "";
-        },
-        set(value) {
-          arm(this, value);
-        },
-      });
-      // React writes `src` as an attribute, and a real attribute write would
-      // start the resource load this shim exists to replace — the bogus source
-      // would fire `error` and hand the beat to the media fallback before the
-      // trim could be applied.
-      const setAttribute = Element.prototype.setAttribute;
-      Element.prototype.setAttribute = function qaSetAttribute(name, value) {
-        if (this instanceof HTMLMediaElement && name === "src") {
-          arm(this, value);
-          return;
-        }
-        return setAttribute.call(this, name, value);
-      };
+      document.addEventListener("loadedmetadata", (event) => {
+        const element = event.target;
+        if (!(element instanceof HTMLMediaElement)) return;
+        const entry = ensureEntry(element);
+        entry.metadata = true;
+        sample(element, "loadedmetadata");
+      }, true);
       HTMLMediaElement.prototype.play = function qaPlay() {
-        const entry = media.get(this) ?? { time: 0, metadata: false, timer: null, src: null };
-        media.set(this, entry);
+        const entry = ensureEntry(this);
         trace.playCalls += 1;
         if (entry.playing) return Promise.resolve();
         entry.playing = true;
@@ -215,7 +292,6 @@ async function createQaPage(path, mediaUrl, {
         stop(this);
         sample(this, "pause");
       };
-      HTMLMediaElement.prototype.load = function qaLoad() {};
       document.addEventListener("ended", () => { trace.endedEvents += 1; }, true);
     }, videoTimeline);
   }
@@ -264,7 +340,9 @@ async function createQaPage(path, mediaUrl, {
       body: JSON.stringify({
         url: mixedMedia && route.request().url().includes("00000000-0000-4000-8000-000000000152")
           ? tinyVideo
-          : mediaUrl,
+          : videoMediaUrl && videoAssetId && route.request().url().includes(videoAssetId)
+            ? videoMediaUrl
+            : mediaUrl,
         expiresAt: "2026-08-26T00:00:00.000Z",
       }),
     });
@@ -291,9 +369,7 @@ try {
 
     const mediaStage = story.page.locator(".journey-story__media");
     const touch = await story.page.context().newCDPSession(story.page);
-    const settledMedia = story.page.locator(
-      ".journey-story__media > img:not(.journey-story__media-incoming), .journey-story__media > video:not(.journey-story__media-incoming)",
-    ).first();
+    const settledMedia = story.page.locator(storyCurrentMediaSelector).first();
     const firstMediaLabel = await settledMedia.getAttribute("alt");
     const desktopOnlyControls = await story.page.locator(
       ".journey-story__media-overview, .journey-story__fullscreen-entry, .journey-story__media-controls, .journey-story__media-actions",
@@ -372,15 +448,11 @@ try {
       touchPoints: [{ x: swipeStartX - 40, y: swipeY }],
     });
     await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
-    await story.page.waitForFunction((before) => {
-      const media = document.querySelector(
-        ".journey-story__media > img:not(.journey-story__media-incoming), .journey-story__media > video:not(.journey-story__media-incoming)",
-      );
+    await story.page.waitForFunction(({ selector, before }) => {
+      const media = document.querySelector(selector);
       return media && (media.getAttribute("alt") ?? media.getAttribute("src")) !== before;
-    }, firstMediaLabel, { timeout: 3_000 });
-    const flickedMedia = story.page.locator(
-      ".journey-story__media > img:not(.journey-story__media-incoming), .journey-story__media > video:not(.journey-story__media-incoming)",
-    ).first();
+    }, { selector: storyCurrentMediaSelector, before: firstMediaLabel }, { timeout: 3_000 });
+    const flickedMedia = story.page.locator(storyCurrentMediaSelector).first();
     const flickedMediaLabel = (await flickedMedia.getAttribute("alt")) ?? (await flickedMedia.getAttribute("src"));
     const inlineVelocityFlickNavigated = Boolean(flickedMediaLabel && flickedMediaLabel !== firstMediaLabel);
 
@@ -394,12 +466,10 @@ try {
       touchPoints: [{ x: swipeStartX + 40, y: swipeY }],
     });
     await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
-    await story.page.waitForFunction((expected) => {
-      const media = document.querySelector(
-        ".journey-story__media > img:not(.journey-story__media-incoming), .journey-story__media > video:not(.journey-story__media-incoming)",
-      );
+    await story.page.waitForFunction(({ selector, expected }) => {
+      const media = document.querySelector(selector);
       return media && (media.getAttribute("alt") ?? media.getAttribute("src")) === expected;
-    }, firstMediaLabel, { timeout: 3_000 });
+    }, { selector: storyCurrentMediaSelector, expected: firstMediaLabel }, { timeout: 3_000 });
     const inlineVelocityReverseReturned = true;
 
     await mediaStage.dispatchEvent("pointerdown", {
@@ -426,12 +496,10 @@ try {
       clientY: swipeY,
       bubbles: true,
     });
-    await story.page.waitForFunction((before) => {
-      const media = document.querySelector(
-        ".journey-story__media > img:not(.journey-story__media-incoming), .journey-story__media > video:not(.journey-story__media-incoming)",
-      );
+    await story.page.waitForFunction(({ selector, before }) => {
+      const media = document.querySelector(selector);
       return media && (media.getAttribute("alt") ?? media.getAttribute("src")) !== before;
-    }, firstMediaLabel, { timeout: 3_000 });
+    }, { selector: storyCurrentMediaSelector, before: firstMediaLabel }, { timeout: 3_000 });
     checks.push({
       name: "story-mobile-swipe-navigation",
       desktopOnlyControls,
@@ -585,7 +653,7 @@ try {
 
     await mediaManageTrigger.click();
     const reclassifyMedia = story.page.getByRole("button", { name: "移动媒体 / 重新归类" });
-    const organizeMedia = story.page.getByRole("button", { name: "整理媒体" });
+    const organizeMedia = mobileSheet.getByRole("button", { name: "整理媒体", exact: true });
     const reclassifyBox = await reclassifyMedia.boundingBox();
     const organizeBox = await organizeMedia.boundingBox();
     const bothSheetActionsAvailable = await reclassifyMedia.count() === 1 && await organizeMedia.count() === 1;
@@ -607,7 +675,8 @@ try {
     const moveSelectToggle = story.page.locator(".journey-story__media-select-toggle");
     await moveSelectToggle.waitFor({ state: "visible" });
     await story.page.waitForFunction(() => (
-      document.querySelector(".journey-story__media-grid")?.classList.contains("is-selecting") ?? false
+      document.querySelector(".journey-story__media-select-toggle")?.getAttribute("aria-pressed") === "true"
+      && document.querySelector(".story-media-organizer") !== null
     ));
     const directMoveModeActive = await moveSelectToggle.getAttribute("aria-pressed") === "true";
     const directMoveFocusTransferred = await moveSelectToggle.evaluate((button) => document.activeElement === button);
@@ -794,16 +863,253 @@ try {
     await story.page.close();
   }
 
+  const storyDesktop = await createQaPage("/?qaState=journey-story", onePixelGif, { mobile: false });
+  try {
+    const desktopStory = storyDesktop.page.locator(".journey-story");
+    await desktopStory.waitFor({ state: "visible" });
+    const readingView = await desktopStory.evaluate((root) => ({
+      layout: root.getAttribute("data-story-layout"),
+      editing: root.getAttribute("data-story-editing"),
+      editingControls: root.querySelectorAll(".journey-story__media-add, .journey-story__media-order, .journey-story__media-actions, .journey-story__media-overview").length,
+      sidebarStats: root.querySelectorAll(".journey-story__copy > dl").length,
+      thumbnailRail: root.querySelectorAll(".story-media-rail").length,
+      fullscreenEntry: root.querySelectorAll(".journey-story__fullscreen-entry").length,
+      navigationButtons: [...root.querySelectorAll(".journey-story__media-nav button")]
+        .map((button) => button.getAttribute("aria-label")),
+    }));
+    const readingViewFailed = readingView.layout !== "desktop" || readingView.editing !== null
+      || readingView.editingControls !== 0 || readingView.sidebarStats !== 0
+      || readingView.thumbnailRail !== 0 || readingView.fullscreenEntry !== 1
+      || JSON.stringify(readingView.navigationButtons) !== JSON.stringify(["全屏查看媒体", "自动播放媒体"]);
+    checks.push({ name: "story-desktop-reading-view", ...readingView, failed: readingViewFailed });
+    if (readingViewFailed) failed = true;
+    const currentPhoto = storyPicture(storyDesktop.page);
+    const firstPhotoId = "00000000-0000-4000-8000-000000000100";
+    const secondPhotoId = "00000000-0000-4000-8000-000000000101";
+    const lastPhotoId = "00000000-0000-4000-8000-000000000102";
+    await waitForStoryPicture(storyDesktop.page, firstPhotoId);
+    const photoButtonRole = await currentPhoto.getAttribute("role");
+    const photoKeyShortcuts = await currentPhoto.getAttribute("aria-keyshortcuts");
+    await clickStoryPicture(storyDesktop.page, 1);
+    await waitForStoryPicture(storyDesktop.page, secondPhotoId);
+    const photoFullscreen = storyDesktop.page.locator(".journey-story-fullscreen");
+    const clickStayedInline = !await photoFullscreen.isVisible();
+    await clickStoryPicture(storyDesktop.page, -1);
+    await waitForStoryPicture(storyDesktop.page, firstPhotoId);
+    const keyboardNavigation = [];
+    for (const [key, assetId] of [
+      ["ArrowRight", secondPhotoId],
+      ["ArrowLeft", firstPhotoId],
+      ["Enter", secondPhotoId],
+      ["ArrowRight", lastPhotoId],
+      ["Space", secondPhotoId], // At the last photo, activation chooses the available previous direction.
+    ]) {
+      await currentPhoto.press(key);
+      await waitForStoryPicture(storyDesktop.page, assetId);
+      keyboardNavigation.push({ key, assetId: await currentPhoto.getAttribute("data-shared-media-id") });
+    }
+    const keyboardStayedInline = !await photoFullscreen.isVisible();
+    const pictureNavigationFailed = photoButtonRole !== "button"
+      || photoKeyShortcuts !== "ArrowLeft ArrowRight" || !clickStayedInline || !keyboardStayedInline;
+    checks.push({ name: "story-desktop-picture-click-keyboard-navigation", photoButtonRole, photoKeyShortcuts,
+      clickStayedInline, keyboardStayedInline, keyboardNavigation, failed: pictureNavigationFailed });
+    if (pictureNavigationFailed) failed = true;
+
+    await desktopStory.getByRole("button", { name: "全屏查看媒体", exact: true }).click();
+    await photoFullscreen.waitFor({ state: "visible" });
+    await waitForStoryPicture(storyDesktop.page, secondPhotoId, ".journey-story-fullscreen");
+    const fullscreenNavigationButtons = await photoFullscreen.locator(".journey-story-fullscreen__nav button")
+      .evaluateAll((buttons) => buttons.map((button) => button.getAttribute("aria-label")));
+    await clickStoryPicture(storyDesktop.page, 1, ".journey-story-fullscreen");
+    await waitForStoryPicture(storyDesktop.page, lastPhotoId, ".journey-story-fullscreen");
+    await clickStoryPicture(storyDesktop.page, -1, ".journey-story-fullscreen");
+    await waitForStoryPicture(storyDesktop.page, secondPhotoId, ".journey-story-fullscreen");
+    const fullscreenPictureNavigation = await photoFullscreen.isVisible();
+    // A captured horizontal movement below the flip threshold must spring
+    // back without its release click being treated as backdrop dismissal.
+    const jitterStart = await storyPicturePoint(storyDesktop.page, 1, ".journey-story-fullscreen");
+    await storyDesktop.page.mouse.move(jitterStart.x, jitterStart.y);
+    await storyDesktop.page.mouse.down();
+    await storyDesktop.page.mouse.move(jitterStart.x + 12, jitterStart.y, { steps: 3 });
+    await storyDesktop.page.mouse.up();
+    await waitForStoryPicture(storyDesktop.page, secondPhotoId, ".journey-story-fullscreen");
+    const shortDragKeptFullscreen = await photoFullscreen.isVisible();
+    const fullscreenNavigationFailed = !fullscreenPictureNavigation || !shortDragKeptFullscreen
+      || JSON.stringify(fullscreenNavigationButtons) !== JSON.stringify(["自动播放媒体"]);
+    checks.push({ name: "story-desktop-fullscreen-picture-navigation", fullscreenNavigationButtons,
+      fullscreenPictureNavigation, shortDragKeptFullscreen, failed: fullscreenNavigationFailed });
+    if (fullscreenNavigationFailed) failed = true;
+    await photoFullscreen.getByRole("button", { name: "退出沉浸媒体" }).click();
+    await photoFullscreen.waitFor({ state: "hidden" });
+    await desktopStory.getByRole("button", { name: "编辑故事", exact: true }).click();
+    await desktopStory.locator(".story-media-organizer").waitFor({ state: "visible" });
+    const editingView = {
+      editing: await desktopStory.getAttribute("data-story-editing"),
+      uploadInput: await desktopStory.locator('.journey-story__media-add input[type="file"]').count(),
+      selectionControl: await desktopStory.locator(".journey-story__media-select-toggle").count(),
+    };
+    const editingViewFailed = editingView.editing !== "true" || editingView.uploadInput !== 1 || editingView.selectionControl !== 1;
+    checks.push({ name: "story-desktop-explicit-edit-entry", ...editingView, failed: editingViewFailed });
+    if (editingViewFailed) failed = true;
+    await desktopStory.getByRole("button", { name: "返回单张", exact: true }).click();
+    const coverAction = storyDesktop.page.getByRole("button", { name: "将当前媒体设为封面" });
+    await coverAction.hover();
+    await storyDesktop.page.waitForFunction(() => {
+      const button = document.querySelector(".journey-story__media-set-cover");
+      return button && Number(getComputedStyle(button, "::after").opacity) >= 0.9;
+    });
+    const hoverTooltip = await coverAction.evaluate((button) => {
+      const stage = button.closest(".journey-story__media");
+      const buttonRect = button.getBoundingClientRect();
+      const stageRect = stage?.getBoundingClientRect();
+      const tooltipStyle = getComputedStyle(button, "::after");
+      const tooltipHeight = Number.parseFloat(tooltipStyle.height)
+        + Number.parseFloat(tooltipStyle.paddingTop)
+        + Number.parseFloat(tooltipStyle.paddingBottom)
+        + Number.parseFloat(tooltipStyle.borderTopWidth)
+        + Number.parseFloat(tooltipStyle.borderBottomWidth);
+      const tooltipTop = tooltipStyle.top !== "auto"
+        ? buttonRect.top + Number.parseFloat(tooltipStyle.top)
+        : buttonRect.bottom - Number.parseFloat(tooltipStyle.bottom) - tooltipHeight;
+      const tooltipBottom = tooltipTop + tooltipHeight;
+      return {
+        opacity: Number(tooltipStyle.opacity),
+        content: tooltipStyle.content,
+        placement: tooltipStyle.top !== "auto" ? "below" : "above",
+        stageTop: stageRect ? Math.round(stageRect.top) : null,
+        stageBottom: stageRect ? Math.round(stageRect.bottom) : null,
+        tooltipTop: Math.round(tooltipTop),
+        tooltipBottom: Math.round(tooltipBottom),
+        fullyInsideStage: Boolean(stageRect)
+          && tooltipTop >= stageRect.top
+          && tooltipBottom <= stageRect.bottom,
+        insideViewport: tooltipTop >= 0 && tooltipBottom <= innerHeight,
+      };
+    });
+    await coverAction.focus();
+    await storyDesktop.page.keyboard.press("Shift+Tab");
+    await storyDesktop.page.keyboard.press("Tab");
+    await storyDesktop.page.waitForFunction(() => {
+      const button = document.querySelector(".journey-story__media-set-cover");
+      return button === document.activeElement
+        && button.matches(":focus-visible")
+        && Number(getComputedStyle(button, "::after").opacity) >= 0.9;
+    });
+    const focusTooltip = await coverAction.evaluate((button) => {
+      const stage = button.closest(".journey-story__media");
+      const buttonRect = button.getBoundingClientRect();
+      const stageRect = stage?.getBoundingClientRect();
+      const tooltipStyle = getComputedStyle(button, "::after");
+      const tooltipHeight = Number.parseFloat(tooltipStyle.height)
+        + Number.parseFloat(tooltipStyle.paddingTop)
+        + Number.parseFloat(tooltipStyle.paddingBottom)
+        + Number.parseFloat(tooltipStyle.borderTopWidth)
+        + Number.parseFloat(tooltipStyle.borderBottomWidth);
+      const tooltipTop = tooltipStyle.top !== "auto"
+        ? buttonRect.top + Number.parseFloat(tooltipStyle.top)
+        : buttonRect.bottom - Number.parseFloat(tooltipStyle.bottom) - tooltipHeight;
+      const tooltipBottom = tooltipTop + tooltipHeight;
+      return {
+        focused: document.activeElement === button,
+        focusVisible: button.matches(":focus-visible"),
+        opacity: Number(tooltipStyle.opacity),
+        content: tooltipStyle.content,
+        placement: tooltipStyle.top !== "auto" ? "below" : "above",
+        fullyInsideStage: Boolean(stageRect)
+          && tooltipTop >= stageRect.top
+          && tooltipBottom <= stageRect.bottom,
+        insideViewport: tooltipTop >= 0 && tooltipBottom <= innerHeight,
+      };
+    });
+    const desktopTooltipFailed = hoverTooltip.opacity < 0.9
+      || !hoverTooltip.content.includes("设为封面")
+      || !hoverTooltip.insideViewport
+      || !focusTooltip.focused
+      || !focusTooltip.focusVisible
+      || focusTooltip.opacity < 0.9
+      || !focusTooltip.content.includes("设为封面")
+      || !focusTooltip.insideViewport;
+    checks.push({
+      name: "story-icon-action-tooltip-hover-focus",
+      hoverTooltip,
+      focusTooltip,
+      failed: desktopTooltipFailed,
+    });
+    if (desktopTooltipFailed) failed = true;
+    await desktopStory.getByRole("button", { name: "完成编辑故事", exact: true }).click();
+    await desktopStory.getByRole("button", { name: "编辑故事", exact: true }).waitFor({ state: "visible" });
+    const returnedToReading = await desktopStory.evaluate((root) => root.getAttribute("data-story-editing") === null
+      && root.querySelectorAll(".story-media-organizer, .journey-story__media-add, .journey-story__media-actions, .journey-story__media-order").length === 0);
+    checks.push({ name: "story-desktop-finish-editing-restores-reading", returnedToReading, failed: !returnedToReading });
+    if (!returnedToReading) failed = true;
+  } finally {
+    await storyDesktop.page.close();
+  }
+
   const mixedMediaMobile = await createQaPage("/?qaState=journey-story&qaMode=mixed-media", onePixelGif, {
     instrumentMedia: true,
     mixedMedia: true,
     mobile: true,
     reducedMotion: "reduce",
   });
+  const nativeTouchPoints = [];
+  async function nativeVideoTouchPoint(video, phase) {
+    const point = await video.evaluate((element) => {
+      const bounds = element.getBoundingClientRect();
+      const scale = Math.min(bounds.width / element.videoWidth, bounds.height / element.videoHeight);
+      const width = element.videoWidth * scale;
+      const height = element.videoHeight * scale;
+      const controlsTop = bounds.bottom - Math.min(72, bounds.height * .25);
+      const pictureLeft = bounds.left + (bounds.width - width) / 2;
+      const pictureTop = bounds.top + (bounds.height - height) / 2;
+      const left = Math.max(0, pictureLeft);
+      const right = Math.min(innerWidth, pictureLeft + width);
+      const top = Math.max(0, pictureTop);
+      const bottom = Math.min(innerHeight, pictureTop + height, controlsTop);
+      // The sticky Story header can cover the upper picture after scrolling.
+      // Choose an exposed row that fits both the 30px jitter and 110px swipe.
+      const pathFits = right - left > 142 && bottom > top;
+      const x = Math.min(right - 31, Math.max(left + 111, bounds.left + bounds.width / 2));
+      const candidates = pathFits ? [.35, .5, .65, .8, .9].map((fraction) => {
+        const y = top + (bottom - top) * fraction;
+        const hits = [-110, -55, 0, 30].map((offset) => document.elementFromPoint(x + offset, y));
+        return { y, exposed: hits.every((hit) => hit === element),
+          hits: hits.map((hit) => hit instanceof Element ? `${hit.tagName}.${hit.className}` : null) };
+      }) : [];
+      const selected = candidates.find((candidate) => candidate.exposed);
+      const y = selected?.y ?? top;
+      const hit = selected ? document.elementFromPoint(x, y) : null;
+      return { x, y, bounds: bounds.toJSON(), picture: [width, height],
+        asset: element.getAttribute("data-shared-media-id"), readyState: element.readyState,
+        hitIsVideo: hit === element, hit: hit instanceof Element ? `${hit.tagName}.${hit.className}` : null,
+        controlsTop, pathFits, candidates,
+        viewport: [innerWidth, innerHeight] };
+    });
+    nativeTouchPoints.push({ phase, ...point });
+    if (!point.hitIsVideo || point.y >= point.controlsTop || !point.picture.every((value) => value > 0)) {
+      throw new Error(`Mobile video touch does not reach its picture: ${JSON.stringify(nativeTouchPoints.at(-1))}`);
+    }
+    return point;
+  }
   try {
+    await mixedMediaMobile.page.evaluate(() => {
+      window.__qaNativeVideoTouches = [];
+      for (const type of ["pointerdown", "pointermove", "pointerup", "pointercancel", "gotpointercapture", "lostpointercapture"]) {
+        document.addEventListener(type, (event) => {
+          const target = event.target;
+          if (!(target instanceof Element)) return;
+          const stage = target.closest(".journey-story__media, .journey-story-fullscreen");
+          window.__qaNativeVideoTouches.push({ type, time: event.timeStamp, pointerId: event.pointerId,
+            target: `${target.tagName}.${target.className}`, x: event.clientX, y: event.clientY,
+            stage: stage?.className ?? null,
+            asset: stage?.querySelector('[data-media-page="current"]')?.getAttribute("data-media-page-id") });
+          if (window.__qaNativeVideoTouches.length > 60) window.__qaNativeVideoTouches.shift();
+        }, true);
+      }
+    });
     await mixedMediaMobile.page.locator(".journey-story").waitFor({ state: "visible" });
     const inlineStage = mixedMediaMobile.page.locator(".journey-story__media");
-    const initialImage = inlineStage.locator(":scope > img:not(.journey-story__media-incoming)").first();
+    const initialImage = inlineStage.locator(storyCurrentImageSelector).first();
     await initialImage.waitFor({ state: "visible" });
     await initialImage.click();
 
@@ -820,7 +1126,7 @@ try {
     await fullscreenStage.dispatchEvent("pointermove", { pointerId: 51, pointerType: "touch", isPrimary: true, clientX: fullStartX - 110, clientY: fullSwipeY, bubbles: true });
     await fullscreenStage.dispatchEvent("pointerup", { pointerId: 51, pointerType: "touch", isPrimary: true, clientX: fullStartX - 110, clientY: fullSwipeY, bubbles: true });
 
-    const fullscreenVideo = fullscreenStage.locator(":scope > video:not(.journey-story__media-incoming)");
+    const fullscreenVideo = fullscreenStage.locator("video[data-shared-media-id]");
     await fullscreenVideo.waitFor({ state: "visible", timeout: 3_000 });
     const touch = await mixedMediaMobile.page.context().newCDPSession(mixedMediaMobile.page);
     await fullscreenStage.evaluate((stage) => {
@@ -837,10 +1143,9 @@ try {
         }
       });
     });
-    const fullscreenVideoBox = await fullscreenVideo.boundingBox();
-    if (!fullscreenVideoBox) throw new Error("mobile fullscreen video has no bounds");
-    const fullscreenVideoX = fullscreenVideoBox.x + fullscreenVideoBox.width * 0.5;
-    const fullscreenVideoY = fullscreenVideoBox.y + fullscreenVideoBox.height * 0.35;
+    const fullscreenVideoPoint = await nativeVideoTouchPoint(fullscreenVideo, "fullscreen-jitter");
+    const fullscreenVideoX = fullscreenVideoPoint.x;
+    const fullscreenVideoY = fullscreenVideoPoint.y;
     await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: fullscreenVideoX, y: fullscreenVideoY }] });
     await touch.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: fullscreenVideoX + 30, y: fullscreenVideoY }] });
     const fullscreenVideoStageCapturedOnJitter = await fullscreenStage.evaluate((stage) => Boolean(stage.dataset.qaVideoStageCapture));
@@ -848,8 +1153,9 @@ try {
     const fullscreenVideoPointerUps = Number(await fullscreenVideo.getAttribute("data-qa-pointer-ups") ?? "0");
 
     const fullscreenPositionBeforeVideoSwipe = await fullscreenStage.locator(".journey-story-fullscreen__nav span").textContent();
-    await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: fullscreenVideoX, y: fullscreenVideoY }] });
-    await touch.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: fullscreenVideoX - 110, y: fullscreenVideoY }] });
+    const fullscreenSwipePoint = await nativeVideoTouchPoint(fullscreenVideo, "fullscreen-swipe");
+    await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: fullscreenSwipePoint.x, y: fullscreenSwipePoint.y }] });
+    await touch.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: fullscreenSwipePoint.x - 110, y: fullscreenSwipePoint.y }] });
     await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
     await mixedMediaMobile.page.waitForFunction((before) => {
       const position = document.querySelector(".journey-story-fullscreen__nav span")?.textContent;
@@ -868,7 +1174,7 @@ try {
     // keeps playback authorization; dismissal is semantic, not DOM detachment.
     await fullscreenStage.waitFor({ state: "hidden" });
 
-    const inlineVideo = inlineStage.locator(":scope > video:not(.journey-story__media-incoming)");
+    const inlineVideo = inlineStage.locator(storyCurrentVideoSelector);
     await inlineVideo.waitFor({ state: "visible", timeout: 3_000 });
     await inlineStage.evaluate((stage) => {
       stage.dataset.qaVideoStageCapture = "";
@@ -884,10 +1190,9 @@ try {
         }
       });
     });
-    const inlineVideoBox = await inlineVideo.boundingBox();
-    if (!inlineVideoBox) throw new Error("mobile inline video has no bounds");
-    const inlineVideoX = inlineVideoBox.x + inlineVideoBox.width * 0.5;
-    const inlineVideoY = inlineVideoBox.y + inlineVideoBox.height * 0.35;
+    const inlineVideoPoint = await nativeVideoTouchPoint(inlineVideo, "inline-jitter");
+    const inlineVideoX = inlineVideoPoint.x;
+    const inlineVideoY = inlineVideoPoint.y;
     await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: inlineVideoX, y: inlineVideoY }] });
     await touch.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: inlineVideoX + 30, y: inlineVideoY }] });
     const inlineVideoStageCapturedOnJitter = await inlineStage.evaluate((stage) => Boolean(stage.dataset.qaVideoStageCapture));
@@ -895,15 +1200,17 @@ try {
     const inlineVideoPointerUps = Number(await inlineVideo.getAttribute("data-qa-pointer-ups") ?? "0");
 
     const inlineVideoSrcBeforeSwipe = await inlineVideo.getAttribute("src");
-    await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: inlineVideoX, y: inlineVideoY }] });
-    await touch.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: inlineVideoX - 110, y: inlineVideoY }] });
+    // This assertion exercises a warm video-to-photo swipe. Returning from
+    // fullscreen may leave the inline neighbor waiting for its own decode.
+    await inlineStage.locator(storyReadyPageSelector("next")).waitFor({ state: "attached", timeout: 3_000 });
+    const inlineSwipePoint = await nativeVideoTouchPoint(inlineVideo, "inline-swipe");
+    await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: inlineSwipePoint.x, y: inlineSwipePoint.y }] });
+    await touch.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: inlineSwipePoint.x - 110, y: inlineSwipePoint.y }] });
     await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
-    await mixedMediaMobile.page.waitForFunction((before) => {
-      const media = document.querySelector(
-        ".journey-story__media > img:not(.journey-story__media-incoming), .journey-story__media > video:not(.journey-story__media-incoming)",
-      );
+    await mixedMediaMobile.page.waitForFunction(({ selector, before }) => {
+      const media = document.querySelector(".journey-story__media")?.querySelector(selector);
       return Boolean(media && media.getAttribute("src") !== before);
-    }, inlineVideoSrcBeforeSwipe, { timeout: 3_000 });
+    }, { selector: storyCurrentMediaSelector, before: inlineVideoSrcBeforeSwipe }, { timeout: 3_000 });
     const inlineVideoSwipeNavigated = true;
 
     const videoNativeTapFailed = fullscreenVideoStageCapturedOnJitter
@@ -922,11 +1229,26 @@ try {
       inlineVideoStageCapturedOnJitter,
       inlineVideoPointerUps,
       inlineVideoSwipeNavigated,
+      nativeTouchPoints,
       consoleErrors: mixedMediaMobile.consoleErrors,
       pageErrors: mixedMediaMobile.pageErrors,
       failed: videoNativeTapFailed,
     });
     if (videoNativeTapFailed) failed = true;
+  } catch (error) {
+    const state = await mixedMediaMobile.page.evaluate(() => ({
+      events: window.__qaNativeVideoTouches,
+      storyScrollTop: document.querySelector(".journey-story")?.scrollTop,
+      stages: [...document.querySelectorAll(".journey-story__media, .journey-story-fullscreen")].map((stage) => ({
+        className: stage.className, hidden: stage.hidden, bounds: stage.getBoundingClientRect().toJSON(),
+        presentation: stage.querySelector("[data-story-media-pages]")?.getAttribute("data-media-presentation"),
+        pages: [...stage.querySelectorAll("[data-media-page]")].map((page) => ({
+          id: page.getAttribute("data-media-page-id"), role: page.getAttribute("data-media-page"),
+          ready: page.getAttribute("data-media-page-ready"), transform: page.style.transform,
+        })),
+      })),
+    }));
+    throw new Error(`Mobile native video gesture failed: ${JSON.stringify({ nativeTouchPoints, ...state })}`, { cause: error });
   } finally {
     await mixedMediaMobile.page.close();
   }
@@ -943,13 +1265,13 @@ try {
   try {
     await futureVideoAuthorization.page.locator(".journey-story").waitFor({ state: "visible" });
     const stage = futureVideoAuthorization.page.locator(".journey-story__media");
-    await stage.locator(":scope > img:not(.journey-story__media-incoming)").first().waitFor({ state: "visible" });
-    const primedVideo = stage.locator(":scope > video:not(.journey-story__media-incoming)");
+    await stage.locator(storyCurrentImageSelector).first().waitFor({ state: "visible" });
+    const primedVideo = stage.locator(storyPersistentVideoSelector);
     await primedVideo.waitFor({ state: "attached", timeout: 5_000 });
-    await futureVideoAuthorization.page.waitForFunction(() => {
-      const video = document.querySelector(".journey-story__media > video:not(.journey-story__media-incoming)");
+    await futureVideoAuthorization.page.waitForFunction((selector) => {
+      const video = document.querySelector(selector);
       return Boolean(video?.getAttribute("src"));
-    }, undefined, { timeout: 5_000 });
+    }, storyPersistentVideoSelector, { timeout: 5_000 });
 
     const playControl = futureVideoAuthorization.page.locator(".journey-story__mobile-media-play");
     await futureVideoAuthorization.page.evaluate(() => { window.__qaMediaPlayEvents.length = 0; });
@@ -981,8 +1303,14 @@ try {
         && event.elementId === primingVideoEvent.elementId
       )),
     );
+    const videoOwnerElementIds = [...new Set(
+      laterEvents.filter((event) => event.tagName === "VIDEO").map((event) => event.elementId),
+    )];
+    const singleVideoPlaybackOwner = videoOwnerElementIds.length === 1
+      && videoOwnerElementIds[0] === primingVideoEvent?.elementId;
     const futureVideoAuthorizationFailed = !primingVideoEvent
       || !reusedAuthorizedVideo
+      || !singleVideoPlaybackOwner
       || futureVideoAuthorization.consoleErrors.length > 0
       || futureVideoAuthorization.pageErrors.length > 0;
     checks.push({
@@ -990,6 +1318,8 @@ try {
       primingVideoEvent,
       playsAfterGesture,
       reusedAuthorizedVideo,
+      videoOwnerElementIds,
+      singleVideoPlaybackOwner,
       consoleErrors: futureVideoAuthorization.consoleErrors,
       pageErrors: futureVideoAuthorization.pageErrors,
       failed: futureVideoAuthorizationFailed,
@@ -1153,7 +1483,7 @@ try {
   try {
     await videoAutoplay.page.locator(".journey-story").waitFor({ state: "visible" });
     const videoStage = videoAutoplay.page.locator(".journey-story__media");
-    const firstImage = videoStage.locator(":scope > img:not(.journey-story__media-incoming)").first();
+    const firstImage = videoStage.locator(storyCurrentImageSelector).first();
     await firstImage.waitFor({ state: "visible" });
     const videoStageBox = await videoStage.boundingBox();
     if (!videoStageBox) throw new Error("mixed-media story stage has no bounds");
@@ -1163,7 +1493,7 @@ try {
     await videoStage.dispatchEvent("pointerdown", { pointerId: 71, pointerType: "touch", isPrimary: true, clientX: videoSwipeX, clientY: videoSwipeY, bubbles: true });
     await videoStage.dispatchEvent("pointermove", { pointerId: 71, pointerType: "touch", isPrimary: true, clientX: videoSwipeX - 110, clientY: videoSwipeY, bubbles: true });
     await videoStage.dispatchEvent("pointerup", { pointerId: 71, pointerType: "touch", isPrimary: true, clientX: videoSwipeX - 110, clientY: videoSwipeY, bubbles: true });
-    const settledVideo = videoStage.locator(":scope > video:not(.journey-story__media-incoming)");
+    const settledVideo = videoStage.locator(storyCurrentVideoSelector);
     await settledVideo.waitFor({ state: "visible", timeout: 5_000 });
 
     const videoPlayControl = videoAutoplay.page.locator(".journey-story__mobile-media-play");
@@ -1182,11 +1512,11 @@ try {
     // The sequence, not the markup, starts this element: the inline stage
     // never sets `autoPlay`, so an unplayed video would stay paused.
     const videoDrivenBySequence = await videoAutoplay.page.waitForFunction(
-      () => {
-        const element = document.querySelector(".journey-story__media > video:not(.journey-story__media-incoming)");
+      (selector) => {
+        const element = document.querySelector(selector);
         return element ? !element.paused : false;
       },
-      undefined,
+      storyCurrentVideoSelector,
       { timeout: 3_000 },
     ).then(() => true).catch(() => false);
 
@@ -1211,12 +1541,10 @@ try {
     await settledVideo.evaluate((element) => element.dispatchEvent(new Event("ended")));
     let videoEndAdvancedMs = null;
     try {
-      await videoAutoplay.page.waitForFunction(() => {
-        const element = document.querySelector(
-          ".journey-story__media > img:not(.journey-story__media-incoming), .journey-story__media > video:not(.journey-story__media-incoming)",
-        );
+      await videoAutoplay.page.waitForFunction((selector) => {
+        const element = document.querySelector(selector);
         return element?.tagName === "IMG" && element.getAttribute("alt") === "seed-2.png";
-      }, undefined, { timeout: 4_000 });
+      }, storyCurrentMediaSelector, { timeout: 4_000 });
       videoEndAdvancedMs = Date.now() - endedAt;
     } catch {
       videoEndAdvancedMs = null;
@@ -1257,7 +1585,7 @@ try {
   try {
     await videoImmersive.page.locator(".journey-story").waitFor({ state: "visible" });
     const stage = videoImmersive.page.locator(".journey-story__media");
-    await stage.locator(":scope > img:not(.journey-story__media-incoming)").first().waitFor({ state: "visible" });
+    await stage.locator(storyCurrentImageSelector).first().waitFor({ state: "visible" });
     const stageBox = await stage.boundingBox();
     if (!stageBox) throw new Error("mixed-media story stage has no bounds");
     const swipeX = stageBox.x + stageBox.width * 0.72;
@@ -1265,12 +1593,10 @@ try {
     await stage.dispatchEvent("pointerdown", { pointerId: 81, pointerType: "touch", isPrimary: true, clientX: swipeX, clientY: swipeY, bubbles: true });
     await stage.dispatchEvent("pointermove", { pointerId: 81, pointerType: "touch", isPrimary: true, clientX: swipeX - 110, clientY: swipeY, bubbles: true });
     await stage.dispatchEvent("pointerup", { pointerId: 81, pointerType: "touch", isPrimary: true, clientX: swipeX - 110, clientY: swipeY, bubbles: true });
-    await stage.locator(":scope > video:not(.journey-story__media-incoming)").waitFor({ state: "visible", timeout: 5_000 });
-    const currentIsVideo = await videoImmersive.page.evaluate(() => (
-      document.querySelector(
-        ".journey-story__media > img:not(.journey-story__media-incoming), .journey-story__media > video:not(.journey-story__media-incoming)",
-      )?.tagName === "VIDEO"
-    ));
+    await stage.locator(storyCurrentVideoSelector).waitFor({ state: "visible", timeout: 5_000 });
+    const currentIsVideo = await videoImmersive.page.evaluate((selector) => (
+      document.querySelector(selector)?.tagName === "VIDEO"
+    ), storyCurrentMediaSelector);
 
     const immersiveEntry = videoImmersive.page.locator(".journey-story__mobile-media-fullscreen");
     const playControl = videoImmersive.page.locator(".journey-story__mobile-media-play");
@@ -1361,11 +1687,30 @@ try {
     try {
       const stage = mobileContinuity.page.locator(".journey-story__media");
       await stage.waitFor({ state: "visible" });
-      const base = stage.locator(
-        ":scope > img:not(.journey-story__media-incoming), :scope > video:not(.journey-story__media-incoming)",
-      ).first();
+      const base = stage.locator(storyCurrentMediaSelector).first();
       await base.waitFor({ state: "visible", timeout: 3_000 });
       const beforeLabel = (await base.getAttribute("alt")) ?? (await base.getAttribute("src"));
+      const initialRailState = await mobileContinuity.page.evaluate(({ pagesSelector, currentMediaSelector, pageNames }) => {
+        const root = document.querySelector(pagesSelector);
+        if (!root) return null;
+        const wrappers = [...root.querySelectorAll("[data-media-page]")];
+        const current = root.querySelector('[data-media-page="current"]');
+        const next = root.querySelector('[data-media-page="next"]');
+        const nextImage = next?.querySelector("img") ?? null;
+        window.__qaStoryMediaPageNodes = wrappers;
+        window.__qaStoryNextImageNode = nextImage;
+        return {
+          wrapperCount: wrappers.length,
+          roles: wrappers.map((element) => element.getAttribute("data-media-page")),
+          ids: wrappers.map((element) => element.getAttribute("data-media-page-id")),
+          pageOffsets: wrappers.map((element) => getComputedStyle(element).getPropertyValue("--page-offset").trim()),
+          currentId: current?.getAttribute("data-media-page-id") ?? null,
+          currentReady: current?.getAttribute("data-media-page-ready") === "true",
+          nextImageId: nextImage?.getAttribute("data-shared-media-id") ?? null,
+          pageNames,
+          legacyIncomingCount: root.querySelectorAll(".journey-story__media-incoming").length,
+        };
+      }, { pagesSelector: storyMediaPagesSelector, currentMediaSelector: storyCurrentMediaSelector, pageNames: storyFixedPageNames });
       const box = await stage.boundingBox();
       if (!box) throw new Error(`mobile continuity ${label}: stage has no bounds`);
       const startX = box.x + box.width * 0.72;
@@ -1388,6 +1733,38 @@ try {
         clientY: y,
         bubbles: true,
       });
+      const dragState = await mobileContinuity.page.evaluate(({ pagesSelector }) => {
+        const root = document.querySelector(pagesSelector);
+        if (!root) return null;
+        const wrappers = [...root.querySelectorAll("[data-media-page]")];
+        const current = root.querySelector('[data-media-page="current"]');
+        const next = root.querySelector('[data-media-page="next"]');
+        const readTransform = (element) => element ? getComputedStyle(element).transform : null;
+        const currentTransform = readTransform(current);
+        const nextTransform = readTransform(next);
+        const nextImage = next?.querySelector("img") ?? null;
+        return {
+          fixedWrapperIdentity: wrappers.length === 3
+            && wrappers.every((element, index) => window.__qaStoryMediaPageNodes?.[index] === element),
+          currentId: current?.getAttribute("data-media-page-id") ?? null,
+          nextId: next?.getAttribute("data-media-page-id") ?? null,
+          pageOffsets: wrappers.map((element) => getComputedStyle(element).getPropertyValue("--page-offset").trim()),
+          currentTransform,
+          nextTransform,
+          currentTransformActive: Boolean(currentTransform && currentTransform !== "none"),
+          nextTransformActive: Boolean(nextTransform && nextTransform !== "none"),
+          dragOffset: getComputedStyle(root).getPropertyValue("--story-drag-x").trim(),
+          dragOffsetActive: getComputedStyle(root).getPropertyValue("--story-drag-x").trim() !== ""
+            && getComputedStyle(root).getPropertyValue("--story-drag-x").trim() !== "0px",
+          nextImageSameNode: !window.__qaStoryNextImageNode || window.__qaStoryNextImageNode === nextImage,
+          nextImageMounted: Boolean(nextImage),
+          animationCount: typeof root.getAnimations === "function" ? root.getAnimations({ subtree: true }).length : null,
+          animationNames: typeof root.getAnimations === "function"
+            ? root.getAnimations({ subtree: true }).map((animation) => animation.animationName ?? null)
+            : [],
+          legacyIncomingCount: root.querySelectorAll(".journey-story__media-incoming").length,
+        };
+      }, { pagesSelector: storyMediaPagesSelector });
       await stage.dispatchEvent("pointerup", {
         pointerId: 41,
         pointerType: "touch",
@@ -1397,67 +1774,112 @@ try {
         bubbles: true,
       });
       await mobileContinuity.page.waitForTimeout(60);
-      const incoming = stage.locator(":scope > .journey-story__media-incoming");
-      const incomingWhileReadBlocked = await incoming.count();
-      const oldFrameHeldDuringRead = await stage.locator(
-        ":scope > img:not(.journey-story__media-incoming), :scope > video:not(.journey-story__media-incoming)",
-      ).first().evaluate((element, expected) => (
-        (element.getAttribute("alt") ?? element.getAttribute("src")) === expected
-      ), beforeLabel);
+      const blockedState = await mobileContinuity.page.evaluate(({ pagesSelector, currentMediaSelector }) => {
+        const root = document.querySelector(pagesSelector);
+        const current = root?.querySelector('[data-media-page="current"]');
+        const media = document.querySelector(currentMediaSelector);
+        return {
+          currentId: current?.getAttribute("data-media-page-id") ?? null,
+          currentReady: current?.getAttribute("data-media-page-ready") === "true",
+          mediaLabel: media?.getAttribute("alt") ?? media?.getAttribute("src") ?? null,
+          targetReadyCount: root?.querySelectorAll('[data-media-page][data-media-page-ready="true"]').length ?? 0,
+          legacyIncomingCount: root?.querySelectorAll(".journey-story__media-incoming").length ?? 0,
+        };
+      }, { pagesSelector: storyMediaPagesSelector, currentMediaSelector: storyCurrentMediaSelector });
+      const oldFrameHeldDuringRead = blockedState?.mediaLabel === beforeLabel;
+      const currentNotPromotedWhileReadBlocked = blockedState?.currentId === initialRailState?.currentId;
       mobileContinuity.releaseBlockedRead();
-      await incoming.waitFor({ state: "attached", timeout: 3_000 });
-      const incomingState = await incoming.evaluate((element) => {
-        window.__qaMobileIncomingMediaNode = element;
-        const style = getComputedStyle(element);
-        const rect = element.getBoundingClientRect();
-        return {
-          position: style.position,
-          animationName: style.animationName,
-          rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
-          layout: { x: element.offsetLeft, y: element.offsetTop, width: element.offsetWidth, height: element.offsetHeight },
-        };
-      });
-      await mobileContinuity.page.waitForFunction(() => (
-        !document.querySelector(".journey-story__media > .journey-story__media-incoming")
-      ), null, { timeout: 3_000 });
-      const settledState = await mobileContinuity.page.evaluate(() => {
-        const settled = document.querySelector(
-          ".journey-story__media > img:not(.journey-story__media-incoming), .journey-story__media > video:not(.journey-story__media-incoming)",
-        );
-        if (!settled) return null;
-        const style = getComputedStyle(settled);
-        const rect = settled.getBoundingClientRect();
-        return {
-          sameNode: window.__qaMobileIncomingMediaNode === settled,
-          position: style.position,
-          rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
-          layout: { x: settled.offsetLeft, y: settled.offsetTop, width: settled.offsetWidth, height: settled.offsetHeight },
-        };
-      });
-      const layoutDelta = settledState
-        ? Math.max(
-          Math.abs(settledState.layout.x - incomingState.layout.x),
-          Math.abs(settledState.layout.y - incomingState.layout.y),
-          Math.abs(settledState.layout.width - incomingState.layout.width),
-          Math.abs(settledState.layout.height - incomingState.layout.height),
-        )
-        : Number.POSITIVE_INFINITY;
+      const settledState = await mobileContinuity.page.waitForFunction(({ pagesSelector, currentMediaSelector, currentId, targetId }) => {
+        const root = document.querySelector(pagesSelector);
+        const current = root?.querySelector('[data-media-page="current"]');
+        const media = document.querySelector(currentMediaSelector);
+        const target = [...(root?.querySelectorAll("[data-media-page]") ?? [])]
+          .find((page) => page.getAttribute("data-media-page-id") === targetId);
+        const stillOld = current?.getAttribute("data-media-page-id") === currentId
+          && media?.getAttribute("data-shared-media-id") === currentId
+          && root?.getAttribute("data-media-presentation") === "settled";
+        if (stillOld && target?.getAttribute("data-media-page-ready") === "true") {
+          window.__qaColdNeighbourStableFrames = (window.__qaColdNeighbourStableFrames ?? 0) + 1;
+        } else {
+          window.__qaColdNeighbourStableFrames = 0;
+        }
+        return (window.__qaColdNeighbourStableFrames ?? 0) >= 3;
+      }, { pagesSelector: storyMediaPagesSelector, currentMediaSelector: storyCurrentMediaSelector, currentId: "00000000-0000-4000-8000-000000000100", targetId: "00000000-0000-4000-8000-000000000101" }, { polling: "raf", timeout: 3_000 })
+        .then(() => mobileContinuity.page.evaluate(({ pagesSelector, currentMediaSelector }) => {
+          const root = document.querySelector(pagesSelector);
+          const wrappers = [...(root?.querySelectorAll("[data-media-page]") ?? [])];
+          const current = root?.querySelector('[data-media-page="current"]');
+          const next = root?.querySelector('[data-media-page="next"]');
+          const media = document.querySelector(currentMediaSelector);
+          const readTransform = (element) => element ? getComputedStyle(element).transform : null;
+          const animationList = typeof root?.getAnimations === "function"
+            ? root.getAnimations({ subtree: true })
+            : [];
+          const nextImage = next?.querySelector("img") ?? null;
+          return {
+            fixedWrapperIdentity: wrappers.length === 3
+              && wrappers.every((element, index) => window.__qaStoryMediaPageNodes?.[index] === element),
+            currentId: current?.getAttribute("data-media-page-id") ?? null,
+            currentReady: current?.getAttribute("data-media-page-ready") === "true",
+            mediaId: media?.getAttribute("data-shared-media-id") ?? null,
+            mediaLabel: media?.getAttribute("alt") ?? media?.getAttribute("src") ?? null,
+            targetReady: [...(root?.querySelectorAll("[data-media-page]") ?? [])]
+              .some((page) => page.getAttribute("data-media-page-id") === "00000000-0000-4000-8000-000000000101"
+                && page.getAttribute("data-media-page-ready") === "true"),
+            presentation: root?.getAttribute("data-media-presentation") ?? null,
+            currentTransform: readTransform(current),
+            nextTransform: readTransform(next),
+            pageOffsets: wrappers.map((element) => getComputedStyle(element).getPropertyValue("--page-offset").trim()),
+            nextImageSameNode: !window.__qaStoryNextImageNode || window.__qaStoryNextImageNode === nextImage,
+            animationCount: animationList.length,
+            animationNames: animationList.map((animation) => animation.animationName ?? null),
+            legacyIncomingCount: root?.querySelectorAll(".journey-story__media-incoming").length ?? 0,
+          };
+        }, { pagesSelector: storyMediaPagesSelector, currentMediaSelector: storyCurrentMediaSelector }))
+        .catch(() => null);
+      const dragOffsetActive = Boolean(dragState?.dragOffsetActive);
+      const transformFollowedPointer = Boolean(
+        dragState?.currentTransformActive || dragState?.nextTransformActive || dragOffsetActive,
+      );
+      const initialRailShapeValid = Boolean(
+        initialRailState
+        && initialRailState.wrapperCount === 3
+        && initialRailState.roles.filter((role) => role === "current").length === 1
+        && initialRailState.roles.every((role) => storyFixedPageNames.includes(role))
+        && initialRailState.currentId === "00000000-0000-4000-8000-000000000100"
+        && initialRailState.ids.some((id, index) => (
+          id === "00000000-0000-4000-8000-000000000101"
+          && Number(initialRailState.pageOffsets?.[index]) === 1
+        )),
+      );
       const continuityFailed = !oldFrameHeldDuringRead
-        || incomingWhileReadBlocked !== 0
-        || incomingState.position !== "absolute"
-        || incomingState.animationName !== "motionMediaIn"
-        || !settledState?.sameNode
-        || settledState.position !== "absolute"
-        || layoutDelta > 0
+        || !currentNotPromotedWhileReadBlocked
+        || !initialRailShapeValid
+        || !initialRailState.pageOffsets?.some((offset) => Number(offset) === 0)
+        || !dragState?.fixedWrapperIdentity
+        || !dragState?.nextImageSameNode
+        || !dragState?.pageOffsets?.every((offset) => offset !== "")
+        || !transformFollowedPointer
+        || !settledState?.fixedWrapperIdentity
+        || settledState.currentId !== "00000000-0000-4000-8000-000000000100"
+        || settledState.mediaId !== "00000000-0000-4000-8000-000000000100"
+        || settledState.currentReady !== true
+        || settledState.targetReady !== true
+        || settledState.presentation !== "settled"
+        || !settledState.nextImageSameNode
+        || settledState.legacyIncomingCount !== 0
         || mobileContinuity.consoleErrors.length > 0
         || mobileContinuity.pageErrors.length > 0;
       checks.push({
         name: `story-mobile-swipe-compositor-continuity-${label}`,
         oldFrameHeldDuringRead,
-        incomingWhileReadBlocked,
-        incoming: incomingState,
+        currentNotPromotedWhileReadBlocked,
+        initialRail: initialRailState,
+        blocked: blockedState,
+        drag: dragState,
+        dragOffsetActive,
+        transformFollowedPointer,
         settled: settledState,
-        layoutDelta,
         consoleErrors: mobileContinuity.consoleErrors,
         pageErrors: mobileContinuity.pageErrors,
         failed: continuityFailed,
@@ -1474,43 +1896,68 @@ try {
   });
   try {
     await mediaContinuity.page.locator(".journey-story").waitFor({ state: "visible" });
-    await mediaContinuity.page.getByRole("button", { name: "下一个媒体" }).click();
-    const incoming = mediaContinuity.page.locator(
-      ".journey-story__media > .journey-story__media-incoming",
-    );
-    await incoming.waitFor({ state: "attached", timeout: 3_000 });
-    const incomingState = await incoming.evaluate((element) => {
-      window.__qaIncomingMediaNode = element;
-      const style = getComputedStyle(element);
+    const initialRailState = await mediaContinuity.page.evaluate(({ pagesSelector }) => {
+      const root = document.querySelector(pagesSelector);
+      const wrappers = [...(root?.querySelectorAll("[data-media-page]") ?? [])];
+      window.__qaStoryMediaPageNodes = wrappers;
       return {
-        tagName: element.tagName,
-        animationName: style.animationName,
-        opacity: Number(style.opacity),
+        wrapperCount: wrappers.length,
+        roles: wrappers.map((element) => element.getAttribute("data-media-page")),
+        currentId: root?.querySelector('[data-media-page="current"]')?.getAttribute("data-media-page-id") ?? null,
       };
-    });
-    await mediaContinuity.page.waitForFunction(() => (
-      !document.querySelector(".journey-story__media > .journey-story__media-incoming")
-    ), null, { timeout: 3_000 });
-    const settledState = await mediaContinuity.page.evaluate(() => {
-      const settled = document.querySelector(
-        ".journey-story__media > img, .journey-story__media > video",
-      );
-      return {
-        sameNode: Boolean(settled && window.__qaIncomingMediaNode === settled),
-        opacity: settled ? Number(getComputedStyle(settled).opacity) : 0,
-        complete: settled instanceof HTMLImageElement ? settled.complete : true,
-      };
-    });
-    const continuityFailed = incomingState.animationName !== "motionMediaIn"
-      || !settledState.sameNode
-      || settledState.opacity < 0.99
+    }, { pagesSelector: storyMediaPagesSelector });
+    await clickStoryPicture(mediaContinuity.page, 1);
+    const settledState = await mediaContinuity.page.waitForFunction(({ pagesSelector, currentMediaSelector, targetId }) => {
+      const root = document.querySelector(pagesSelector);
+      const current = root?.querySelector('[data-media-page="current"]');
+      const media = document.querySelector(currentMediaSelector);
+      return current?.getAttribute("data-media-page-id") === targetId
+        && current?.getAttribute("data-media-page-ready") === "true"
+        && media?.getAttribute("data-shared-media-id") === targetId;
+    }, { pagesSelector: storyMediaPagesSelector, currentMediaSelector: storyCurrentMediaSelector, targetId: "00000000-0000-4000-8000-000000000101" }, { polling: "raf", timeout: 3_000 })
+      .then(() => mediaContinuity.page.evaluate(({ pagesSelector, currentMediaSelector }) => {
+        const root = document.querySelector(pagesSelector);
+        const wrappers = [...(root?.querySelectorAll("[data-media-page]") ?? [])];
+        const current = root?.querySelector('[data-media-page="current"]');
+        const media = document.querySelector(currentMediaSelector);
+        const animations = typeof root?.getAnimations === "function"
+          ? root.getAnimations({ subtree: true })
+          : [];
+        return {
+          fixedWrapperIdentity: wrappers.length === 3
+            && wrappers.every((element, index) => window.__qaStoryMediaPageNodes?.[index] === element),
+          currentId: current?.getAttribute("data-media-page-id") ?? null,
+          currentReady: current?.getAttribute("data-media-page-ready") === "true",
+          mediaId: media?.getAttribute("data-shared-media-id") ?? null,
+          presentation: root?.getAttribute("data-media-presentation") ?? null,
+          tagName: media?.tagName ?? null,
+          transform: current ? getComputedStyle(current).transform : null,
+          transition: current ? getComputedStyle(current).transition : null,
+          animationCount: animations.length,
+          animationNames: animations.map((animation) => animation.animationName ?? null),
+          complete: media instanceof HTMLImageElement ? media.complete : true,
+          legacyIncomingCount: root?.querySelectorAll(".journey-story__media-incoming").length ?? 0,
+        };
+      }, { pagesSelector: storyMediaPagesSelector, currentMediaSelector: storyCurrentMediaSelector }))
+      .catch(() => null);
+    const uniqueStoryVideoCount = await mediaContinuity.page.locator(`${storyMediaPagesSelector} video`).count();
+    const continuityFailed = !initialRailState
+      || initialRailState.wrapperCount !== 3
+      || !settledState?.fixedWrapperIdentity
+      || settledState.currentId !== "00000000-0000-4000-8000-000000000101"
+      || settledState.currentReady !== true
+      || settledState.mediaId !== "00000000-0000-4000-8000-000000000101"
+      || settledState.presentation !== "settled"
+      || settledState.legacyIncomingCount !== 0
+      || uniqueStoryVideoCount > 1
       || !settledState.complete
       || mediaContinuity.consoleErrors.length > 0
       || mediaContinuity.pageErrors.length > 0;
     checks.push({
       name: "story-media-switch-dom-continuity",
-      incoming: incomingState,
+      initialRail: initialRailState,
       settled: settledState,
+      uniqueStoryVideoCount,
       consoleErrors: mediaContinuity.consoleErrors,
       pageErrors: mediaContinuity.pageErrors,
       failed: continuityFailed,
@@ -1518,6 +1965,526 @@ try {
     if (continuityFailed) failed = true;
   } finally {
     await mediaContinuity.page.close();
+  }
+
+  const reducedMotionStory = await createQaPage("/?qaState=journey-story", onePixelGif, {
+    mobile: true,
+    reducedMotion: "reduce",
+  });
+  try {
+    await reducedMotionStory.page.locator(".journey-story").waitFor({ state: "visible" });
+    const reducedInitial = await reducedMotionStory.page.evaluate(({ pagesSelector }) => {
+      const root = document.querySelector(pagesSelector);
+      const pages = [...(root?.querySelectorAll("[data-media-page]") ?? [])];
+      window.__qaStoryReducedPageNodes = pages;
+      return { count: pages.length, currentId: root?.querySelector('[data-media-page="current"]')?.getAttribute("data-media-page-id") ?? null };
+    }, { pagesSelector: storyMediaPagesSelector });
+    await reducedMotionStory.page.getByRole("button", { name: "查看第 2 个照片：seed-1.png", exact: true }).click();
+    const reducedState = await reducedMotionStory.page.waitForFunction(({ pagesSelector, currentMediaSelector, targetId }) => {
+      const root = document.querySelector(pagesSelector);
+      const current = root?.querySelector('[data-media-page="current"]');
+      const media = document.querySelector(currentMediaSelector);
+      return current?.getAttribute("data-media-page-id") === targetId
+        && current?.getAttribute("data-media-page-ready") === "true"
+        && media?.getAttribute("data-shared-media-id") === targetId;
+    }, { pagesSelector: storyMediaPagesSelector, currentMediaSelector: storyCurrentMediaSelector, targetId: "00000000-0000-4000-8000-000000000101" }, { polling: "raf", timeout: 3_000 })
+      .then(() => reducedMotionStory.page.evaluate(({ pagesSelector }) => {
+        const root = document.querySelector(pagesSelector);
+        const current = root?.querySelector('[data-media-page="current"]');
+        const pages = [...(root?.querySelectorAll("[data-media-page]") ?? [])];
+        const transform = current ? getComputedStyle(current).transform : "none";
+        const transformX = transform !== "none" ? new DOMMatrixReadOnly(transform).e : 0;
+        const animations = typeof root?.getAnimations === "function" ? root.getAnimations({ subtree: true }) : [];
+        return {
+          currentId: current?.getAttribute("data-media-page-id") ?? null,
+          currentReady: current?.getAttribute("data-media-page-ready") === "true",
+          fixedWrapperIdentity: pages.length === 3
+            && pages.every((page, index) => window.__qaStoryReducedPageNodes?.[index] === page),
+          animationCount: animations.length,
+          transform,
+          transformX,
+          legacyIncomingCount: root?.querySelectorAll(".journey-story__media-incoming").length ?? 0,
+        };
+      }, { pagesSelector: storyMediaPagesSelector }))
+      .catch(() => null);
+    const reducedMotionFailed = reducedInitial?.count !== 3
+      || reducedState?.currentId !== "00000000-0000-4000-8000-000000000101"
+      || reducedState?.currentReady !== true
+      || !reducedState?.fixedWrapperIdentity
+      || reducedState?.animationCount !== 0
+      || Math.abs(reducedState?.transformX ?? Number.POSITIVE_INFINITY) > 1
+      || reducedState?.legacyIncomingCount !== 0
+      || reducedMotionStory.consoleErrors.length > 0
+      || reducedMotionStory.pageErrors.length > 0;
+    checks.push({
+      name: "story-media-pages-reduced-motion",
+      initial: reducedInitial,
+      settled: reducedState,
+      failed: reducedMotionFailed,
+      consoleErrors: reducedMotionStory.consoleErrors,
+      pageErrors: reducedMotionStory.pageErrors,
+    });
+    if (reducedMotionFailed) failed = true;
+  } finally {
+    await reducedMotionStory.page.close();
+  }
+
+  // Cold-media race: the fixture's middle asset is held at the signed-read
+  // boundary while the user reverses the navigation. The late read may settle
+  // in the cache, but it must not promote the stale next target over the
+  // user's reverse input.
+  const coldMediaRaceTargetId = "00000000-0000-4000-8000-000000000101";
+  const coldMediaRaceReadDelayMs = 80;
+  const coldMediaRace = await createQaPage("/?qaState=journey-story", onePixelGif, {
+    mobile: false,
+    blockedReadAssetId: coldMediaRaceTargetId,
+    readDelayMs: coldMediaRaceReadDelayMs,
+    reducedMotion: "reduce",
+  });
+  try {
+    // The target read is blocked until after the reverse click, so this probe
+    // can observe the target image's actual browser decode completion. Waiting
+    // on the API response alone would let the assertion pass before the
+    // decode-settle effect has had a chance to process the late target.
+    const coldDecodeProbeInstalled = await coldMediaRace.page.evaluate(() => {
+      const originalDecode = HTMLImageElement.prototype.decode;
+      if (typeof originalDecode !== "function") return false;
+      window.__qaImageDecodeCompletions = 0;
+      window.__qaImageDecodeFailures = 0;
+      HTMLImageElement.prototype.decode = function qaDecodeProbe() {
+        return Promise.resolve(originalDecode.call(this)).then(
+          (value) => {
+            window.__qaImageDecodeCompletions += 1;
+            return value;
+          },
+          (error) => {
+            window.__qaImageDecodeFailures += 1;
+            throw error;
+          },
+        );
+      };
+      return true;
+    });
+    const coldStage = coldMediaRace.page.locator(".journey-story__media");
+    const coldSettled = coldStage.locator(storyCurrentMediaSelector).first();
+    await coldMediaRace.page.locator(".journey-story").waitFor({ state: "visible" });
+    const initialSettledAtFirstAsset = await coldMediaRace.page.waitForFunction(({ pagesSelector, currentMediaSelector, expectedId, expectedLabel }) => {
+      const root = document.querySelector(pagesSelector);
+      const current = root?.querySelector('[data-media-page="current"]');
+      const settled = document.querySelector(currentMediaSelector);
+      return current?.getAttribute("data-media-page-id") === expectedId
+        && current?.getAttribute("data-media-page-ready") === "true"
+        && settled?.getAttribute("data-shared-media-id") === expectedId
+        && settled?.getAttribute("alt") === expectedLabel;
+    }, {
+      pagesSelector: storyMediaPagesSelector,
+      currentMediaSelector: storyCurrentMediaSelector,
+      expectedId: "00000000-0000-4000-8000-000000000100",
+      expectedLabel: "seed-0.png",
+    }, { timeout: 3_000 }).then(() => true).catch(() => false);
+    const initialDecodeSettled = coldDecodeProbeInstalled
+      ? await coldMediaRace.page.evaluate(async () => {
+        const root = document.querySelector("[data-story-media-pages]");
+        const settled = root?.querySelector('[data-media-page="current"] [data-shared-media-id]');
+        if (!(settled instanceof HTMLImageElement)) return false;
+        await settled.decode();
+        return true;
+      }).catch(() => false)
+      : false;
+
+    await clickStoryPicture(coldMediaRace.page, 1);
+
+    // The reverse action must become available while the next signed read is
+    // still blocked. This is the user input that makes the response stale.
+    const reversePoint = await storyPicturePoint(coldMediaRace.page, -1);
+    await coldMediaRace.page.mouse.move(reversePoint.x, reversePoint.y);
+    const reverseEnabledDuringBlockedRead = await coldMediaRace.page.waitForFunction(() => {
+      const root = document.querySelector(".journey-story__media [data-story-media-pages]");
+      return root?.getAttribute("data-click-direction") === "previous";
+    }, undefined, { timeout: 1_500 }).then(() => true).catch(() => false);
+    let reverseClickIssued = false;
+    if (reverseEnabledDuringBlockedRead) {
+      await coldMediaRace.page.mouse.click(reversePoint.x, reversePoint.y);
+      reverseClickIssued = true;
+    }
+
+    // Start observing before release so the assertion covers the delayed
+    // response itself rather than only a fixed wall-clock pause.
+    const lateReadResponse = coldMediaRace.page.waitForResponse(
+      (response) => response.url().includes(`/assets/${coldMediaRaceTargetId}/read-url`),
+      { timeout: 3_000 },
+    ).then(() => true).catch(() => false);
+    const coldDecodeCompletionsBeforeRelease = coldDecodeProbeInstalled
+      ? await coldMediaRace.page.evaluate(() => window.__qaImageDecodeCompletions ?? 0)
+      : null;
+    coldMediaRace.releaseBlockedRead();
+    const coldReadResponseObserved = await lateReadResponse;
+    const coldDecodeCompletedAfterLateRead = coldDecodeProbeInstalled
+      ? await coldMediaRace.page.waitForFunction((before) => (
+        (window.__qaImageDecodeCompletions ?? 0) > before
+      ), coldDecodeCompletionsBeforeRelease, { polling: "raf", timeout: 3_000 }).then(() => true).catch(() => false)
+      : false;
+    const finalSettledAtOriginal = coldDecodeCompletedAfterLateRead
+      ? await coldMediaRace.page.waitForFunction(({ pagesSelector, currentMediaSelector, expectedId, expectedLabel }) => {
+        const root = document.querySelector(pagesSelector);
+        const current = root?.querySelector('[data-media-page="current"]');
+        const settled = document.querySelector(currentMediaSelector);
+        return current?.getAttribute("data-media-page-id") === expectedId
+          && current?.getAttribute("data-media-page-ready") === "true"
+          && settled?.getAttribute("data-shared-media-id") === expectedId
+          && settled?.getAttribute("alt") === expectedLabel;
+      }, {
+        pagesSelector: storyMediaPagesSelector,
+        currentMediaSelector: storyCurrentMediaSelector,
+        expectedId: "00000000-0000-4000-8000-000000000100",
+        expectedLabel: "seed-0.png",
+      }, { polling: "raf", timeout: 3_000 }).then(() => true).catch(() => false)
+      : false;
+    const coldFinalState = await coldSettled.count() > 0
+      ? await coldMediaRace.page.evaluate(({ pagesSelector, currentMediaSelector }) => {
+        const root = document.querySelector(pagesSelector);
+        const current = root?.querySelector('[data-media-page="current"]');
+        const element = document.querySelector(currentMediaSelector);
+        return {
+          id: current?.getAttribute("data-media-page-id") ?? null,
+          ready: current?.getAttribute("data-media-page-ready") === "true",
+          mediaId: element?.getAttribute("data-shared-media-id") ?? null,
+          alt: element?.getAttribute("alt") ?? null,
+          pageIds: [...(root?.querySelectorAll("[data-media-page]") ?? [])]
+            .map((page) => ({ role: page.getAttribute("data-media-page"), id: page.getAttribute("data-media-page-id") })),
+          legacyIncomingCount: root?.querySelectorAll(".journey-story__media-incoming").length ?? 0,
+        };
+      }, { pagesSelector: storyMediaPagesSelector, currentMediaSelector: storyCurrentMediaSelector })
+      : null;
+    const coldMediaRaceFailed = !initialSettledAtFirstAsset
+      || !initialDecodeSettled
+      || !reverseEnabledDuringBlockedRead
+      || !reverseClickIssued
+      || !coldReadResponseObserved
+      || !coldDecodeProbeInstalled
+      || !coldDecodeCompletedAfterLateRead
+      || !finalSettledAtOriginal
+      || coldFinalState?.id !== "00000000-0000-4000-8000-000000000100"
+      || coldFinalState?.mediaId !== "00000000-0000-4000-8000-000000000100"
+      || coldFinalState?.alt !== "seed-0.png"
+      || coldFinalState?.ready !== true
+      || coldFinalState?.legacyIncomingCount !== 0
+      || coldMediaRace.consoleErrors.length > 0
+      || coldMediaRace.pageErrors.length > 0;
+    checks.push({
+      name: "story-cold-media-next-reverse-no-stale-return",
+      fixture: {
+        initialAssetId: "00000000-0000-4000-8000-000000000100",
+        blockedReadAssetId: coldMediaRaceTargetId,
+        expectedFinalAssetId: "00000000-0000-4000-8000-000000000100",
+        readDelayMs: coldMediaRaceReadDelayMs,
+      },
+      initialSettledAtFirstAsset,
+      initialDecodeSettled,
+      reverseEnabledDuringBlockedRead,
+      reverseClickIssued,
+      coldReadResponseObserved,
+      coldDecodeProbeInstalled,
+      coldDecodeCompletionsBeforeRelease,
+      coldDecodeCompletedAfterLateRead,
+      finalSettledAtOriginal,
+      final: coldFinalState,
+      consoleErrors: coldMediaRace.consoleErrors,
+      pageErrors: coldMediaRace.pageErrors,
+      failed: coldMediaRaceFailed,
+    });
+    if (coldMediaRaceFailed) failed = true;
+  } finally {
+    // Always release the intercepted read before closing the page, including
+    // assertion failures, so the route cannot retain an in-flight promise.
+    coldMediaRace.releaseBlockedRead();
+    await coldMediaRace.page.close();
+  }
+
+  // Read/decode completion must not take the current page away from a held
+  // pointer. Releasing a small vertical movement consumes the resulting click
+  // without changing the latest horizontal navigation intent.
+  const heldColdTarget = "00000000-0000-4000-8000-000000000101";
+  const heldColdMedia = await createQaPage("/?qaState=journey-story", onePixelGif, {
+    mobile: false,
+    blockedReadAssetId: heldColdTarget,
+    reducedMotion: "no-preference",
+  });
+  let heldColdPointerDown = false;
+  try {
+    await waitForStoryPicture(heldColdMedia.page, "00000000-0000-4000-8000-000000000100");
+    // Keyboard navigation avoids starting an earlier pointer settle; this
+    // pointer-down is the one whose ownership the delayed response challenges.
+    await storyPicture(heldColdMedia.page).press("ArrowRight");
+    const holdPoint = await storyPicturePoint(heldColdMedia.page, -1);
+    await heldColdMedia.page.mouse.move(holdPoint.x, holdPoint.y);
+    await heldColdMedia.page.mouse.down();
+    heldColdPointerDown = true;
+    const heldResponse = heldColdMedia.page.waitForResponse(
+      (response) => response.url().includes(`/assets/${heldColdTarget}/read-url`),
+      { timeout: 3_000 },
+    );
+    heldColdMedia.releaseBlockedRead();
+    await heldResponse;
+    // This is the physical neighbor's real image decode gate, not merely a
+    // fulfilled read-url response or a fixed timer.
+    await heldColdMedia.page.waitForFunction((targetId) => {
+      const root = document.querySelector(".journey-story__media [data-story-media-pages]");
+      return [...(root?.querySelectorAll("[data-media-page]") ?? [])].some((page) => (
+        page.getAttribute("data-media-page-id") === targetId && page.getAttribute("data-media-page-ready") === "true"
+      ));
+    }, heldColdTarget, { polling: "raf", timeout: 3_000 });
+    const stateWhileHeld = await heldColdMedia.page.evaluate(async () => {
+      // Give decode-triggered React effects two rendering opportunities while
+      // the real pointer remains down, so an early snapshot cannot hide a race.
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const root = document.querySelector(".journey-story__media [data-story-media-pages]");
+      return {
+        currentId: root?.querySelector('[data-media-page="current"]')?.getAttribute("data-media-page-id"),
+        presentation: root?.getAttribute("data-media-presentation"),
+        incomingCount: root?.querySelectorAll('[data-media-incoming="true"]').length,
+      };
+    });
+    await heldColdMedia.page.mouse.move(holdPoint.x, holdPoint.y + 12, { steps: 3 });
+    await heldColdMedia.page.mouse.up();
+    heldColdPointerDown = false;
+    const latestTargetAfterRelease = await waitForStoryPicture(heldColdMedia.page, heldColdTarget)
+      .then(() => true).catch(() => false);
+    const heldColdFailed = stateWhileHeld.currentId !== "00000000-0000-4000-8000-000000000100"
+      || stateWhileHeld.presentation !== "settled" || stateWhileHeld.incomingCount !== 0
+      || !latestTargetAfterRelease || heldColdMedia.consoleErrors.length > 0 || heldColdMedia.pageErrors.length > 0;
+    checks.push({ name: "story-cold-media-ready-during-pointer-hold", stateWhileHeld, latestTargetAfterRelease,
+      consoleErrors: heldColdMedia.consoleErrors, pageErrors: heldColdMedia.pageErrors, failed: heldColdFailed });
+    if (heldColdFailed) failed = true;
+  } finally {
+    heldColdMedia.releaseBlockedRead();
+    if (heldColdPointerDown) await heldColdMedia.page.mouse.up();
+    await heldColdMedia.page.close();
+  }
+
+  // Cached normal-motion race: the fixture prefetches the middle asset while A
+  // is shown, then the test reverses B before its transform transition ends.
+  // Pausing the presentation animations keeps the race deterministic without
+  // binding the QA contract to a worker-chosen animation name.
+  const cachedRapidReverse = await createQaPage("/?qaState=journey-story", onePixelGif, {
+    mobile: false,
+    readDelayMs: 0,
+    reducedMotion: "no-preference",
+  });
+  try {
+    const settledAsset = async (expectedId, expectedLabel) => cachedRapidReverse.page.waitForFunction(({ pagesSelector, currentMediaSelector, assetId, fileName }) => {
+      const root = document.querySelector(pagesSelector);
+      const current = root?.querySelector('[data-media-page="current"]');
+      const settled = document.querySelector(currentMediaSelector);
+      return current?.getAttribute("data-media-page-id") === assetId
+        && current?.getAttribute("data-media-page-ready") === "true"
+        && settled?.getAttribute("data-shared-media-id") === assetId
+        && settled?.getAttribute("alt") === fileName;
+    }, {
+      pagesSelector: storyMediaPagesSelector,
+      currentMediaSelector: storyCurrentMediaSelector,
+      assetId: expectedId,
+      fileName: expectedLabel,
+    }, { polling: "raf", timeout: 3_000 }).then(() => true).catch(() => false);
+    await cachedRapidReverse.page.locator(".journey-story").waitFor({ state: "visible" });
+    const initialShownA = await settledAsset("00000000-0000-4000-8000-000000000100", "seed-0.png");
+
+    let pausedTransitionState = null;
+    let returnedToAAfterReverse = false;
+    let returnedState = null;
+    let mobileModeEntered = false;
+    let mobileDragTransform = null;
+    let mobileDragSettled = false;
+    let desktopModeRestored = false;
+    let nextAfterReverseTargetReady = false;
+    let nextAfterReverseSettled = false;
+    if (initialShownA) {
+      await clickStoryPicture(cachedRapidReverse.page, 1);
+      try {
+        const pausedHandle = await cachedRapidReverse.page.waitForFunction(({ pagesSelector }) => {
+          const root = document.querySelector(pagesSelector);
+          // A picture click first releases Story's pointer hold. Only pause
+          // the subsequent ready-target handoff, never that pointer's settle.
+          if (root?.getAttribute("data-media-presentation") !== "moving") return false;
+          const target = [...(root?.querySelectorAll("[data-media-page]") ?? [])]
+            .find((page) => page.getAttribute("data-media-page-id") === "00000000-0000-4000-8000-000000000101");
+          if (!target || target.getAttribute("data-media-page-ready") !== "true") return false;
+          const animations = typeof root.getAnimations === "function" ? root.getAnimations({ subtree: true }) : [];
+          const animation = animations.find((candidate) => {
+            const timing = candidate.effect?.getComputedTiming?.();
+            return candidate.playState === "running"
+              && Number(timing?.duration) > 0
+              && Number(candidate.currentTime) < Number(timing.duration);
+          });
+          if (!animation) return false;
+          const timing = animation.effect?.getComputedTiming?.();
+          const currentTime = Number(animation.currentTime);
+          const duration = Number(timing?.duration);
+          for (const active of animations) active.pause();
+          return {
+            targetId: target.getAttribute("data-media-page-id"),
+            targetReady: target.getAttribute("data-media-page-ready") === "true",
+            currentId: root.querySelector('[data-media-page="current"]')?.getAttribute("data-media-page-id") ?? null,
+            playState: animation.playState,
+            currentTime,
+            duration,
+            transform: getComputedStyle(target).transform,
+            animationCount: animations.length,
+          };
+        }, { pagesSelector: storyMediaPagesSelector }, { polling: "raf", timeout: 3_000 });
+        pausedTransitionState = await pausedHandle.jsonValue();
+      } catch {
+        pausedTransitionState = null;
+      }
+
+      if (pausedTransitionState) {
+        // Focused keyboard input must reverse the pending intent even while
+        // the physical pages are paused partway through their transition.
+        await storyPicture(cachedRapidReverse.page).press("ArrowLeft");
+        returnedToAAfterReverse = await settledAsset("00000000-0000-4000-8000-000000000100", "seed-0.png");
+        returnedState = await cachedRapidReverse.page.evaluate(({ pagesSelector, currentMediaSelector }) => {
+          const root = document.querySelector(pagesSelector);
+          const current = root?.querySelector('[data-media-page="current"]');
+          const settled = document.querySelector(currentMediaSelector);
+          return {
+            id: current?.getAttribute("data-media-page-id") ?? null,
+            ready: current?.getAttribute("data-media-page-ready") === "true",
+            mediaId: settled?.getAttribute("data-shared-media-id") ?? null,
+            alt: settled?.getAttribute("alt") ?? null,
+            pageIds: [...(root?.querySelectorAll("[data-media-page]") ?? [])]
+              .map((page) => ({ role: page.getAttribute("data-media-page"), id: page.getAttribute("data-media-page-id") })),
+            legacyIncomingCount: root?.querySelectorAll(".journey-story__media-incoming").length ?? 0,
+          };
+        }, { pagesSelector: storyMediaPagesSelector, currentMediaSelector: storyCurrentMediaSelector });
+      }
+    }
+
+    if (returnedToAAfterReverse) {
+      await cachedRapidReverse.page.setViewportSize({ width: 390, height: 844 });
+      mobileModeEntered = await cachedRapidReverse.page.waitForFunction(() => (
+        document.querySelector(".journey-story")?.getAttribute("data-mobile-mode") === "viewer"
+      ), undefined, { polling: "raf", timeout: 3_000 }).then(() => true).catch(() => false);
+      if (mobileModeEntered) {
+        const mobileStage = cachedRapidReverse.page.locator(".journey-story__media");
+        const box = await mobileStage.boundingBox();
+        if (box) {
+          const startX = box.x + box.width * 0.5;
+          const startY = box.y + box.height * 0.5;
+          let mouseDown = false;
+          try {
+            await cachedRapidReverse.page.mouse.move(startX, startY);
+            await cachedRapidReverse.page.mouse.down();
+            mouseDown = true;
+            // At the first asset, moving right has no neighbor: the gesture
+            // must track the visible base, then spring back to A on release.
+            await cachedRapidReverse.page.mouse.move(startX + 80, startY);
+            try {
+              const transformHandle = await cachedRapidReverse.page.waitForFunction(({ pagesSelector, currentMediaSelector }) => {
+                const root = document.querySelector(pagesSelector);
+                const current = root?.querySelector('[data-media-page="current"]');
+                const base = document.querySelector(currentMediaSelector);
+                const transform = current ? getComputedStyle(current).transform : "";
+                const transformX = transform && transform !== "none" ? new DOMMatrixReadOnly(transform).e : 0;
+                const dragOffset = getComputedStyle(root).getPropertyValue("--story-drag-x").trim();
+                const dragOffsetX = Number.parseFloat(dragOffset) || 0;
+                return base && current && (Math.abs(transformX) > 1 || Math.abs(dragOffsetX) > 1)
+                  ? {
+                    alt: base.getAttribute("alt"),
+                    id: current.getAttribute("data-media-page-id"),
+                    transform,
+                    transformX,
+                    dragOffset,
+                    dragOffsetX,
+                  }
+                  : false;
+              }, { pagesSelector: storyMediaPagesSelector, currentMediaSelector: storyCurrentMediaSelector }, { polling: "raf", timeout: 1_500 });
+              mobileDragTransform = await transformHandle.jsonValue();
+            } catch {
+              mobileDragTransform = null;
+            }
+          } finally {
+            if (mouseDown) await cachedRapidReverse.page.mouse.up();
+          }
+          mobileDragSettled = await cachedRapidReverse.page.waitForFunction(({ pagesSelector, currentMediaSelector }) => {
+            const root = document.querySelector(pagesSelector);
+            const current = root?.querySelector('[data-media-page="current"]');
+            const base = document.querySelector(currentMediaSelector);
+            const transform = current ? getComputedStyle(current).transform : "";
+            const transformX = transform && transform !== "none" ? new DOMMatrixReadOnly(transform).e : 0;
+            const dragOffset = Number.parseFloat(getComputedStyle(root).getPropertyValue("--story-drag-x")) || 0;
+            return current?.getAttribute("data-media-page-id") === "00000000-0000-4000-8000-000000000100"
+              && base?.getAttribute("data-shared-media-id") === "00000000-0000-4000-8000-000000000100"
+              && base?.getAttribute("alt") === "seed-0.png"
+              && Math.abs(transformX) < 1
+              && Math.abs(dragOffset) < 1
+              && (root?.querySelectorAll(".journey-story__media-incoming").length ?? 0) === 0;
+          }, { pagesSelector: storyMediaPagesSelector, currentMediaSelector: storyCurrentMediaSelector }, { polling: "raf", timeout: 3_000 }).then(() => true).catch(() => false);
+        }
+      }
+      await cachedRapidReverse.page.setViewportSize({ width: 1280, height: 800 });
+      desktopModeRestored = await cachedRapidReverse.page.waitForFunction(() => (
+        document.querySelector(".journey-story")?.getAttribute("data-mobile-mode") === null
+      ), undefined, { polling: "raf", timeout: 3_000 }).then(() => true).catch(() => false);
+    }
+
+    if (returnedToAAfterReverse && mobileDragSettled && desktopModeRestored) {
+      await clickStoryPicture(cachedRapidReverse.page, 1);
+      nextAfterReverseTargetReady = await cachedRapidReverse.page.waitForFunction(({ pagesSelector, targetId }) => {
+        const root = document.querySelector(pagesSelector);
+        const target = [...(root?.querySelectorAll("[data-media-page]") ?? [])]
+          .find((page) => page.getAttribute("data-media-page-id") === targetId);
+        return target?.getAttribute("data-media-page-ready") === "true";
+      }, { pagesSelector: storyMediaPagesSelector, targetId: "00000000-0000-4000-8000-000000000101" }, { polling: "raf", timeout: 3_000 }).then(() => true).catch(() => false);
+      nextAfterReverseSettled = await settledAsset("00000000-0000-4000-8000-000000000101", "seed-1.png");
+    }
+
+    const cachedRapidReverseFailed = !initialShownA
+      || pausedTransitionState?.targetId !== "00000000-0000-4000-8000-000000000101"
+      || pausedTransitionState?.targetReady !== true
+      || pausedTransitionState?.currentId !== "00000000-0000-4000-8000-000000000100"
+      || pausedTransitionState?.playState !== "paused"
+      || !(pausedTransitionState?.currentTime < pausedTransitionState?.duration)
+      || !returnedToAAfterReverse
+      || returnedState?.id !== "00000000-0000-4000-8000-000000000100"
+      || returnedState?.mediaId !== "00000000-0000-4000-8000-000000000100"
+      || returnedState?.ready !== true
+      || returnedState?.alt !== "seed-0.png"
+      || returnedState?.legacyIncomingCount !== 0
+      || !mobileModeEntered
+      || !mobileDragTransform
+      || mobileDragTransform.alt !== "seed-0.png"
+      || mobileDragTransform.id !== "00000000-0000-4000-8000-000000000100"
+      || !mobileDragSettled
+      || !desktopModeRestored
+      || !nextAfterReverseTargetReady
+      || !nextAfterReverseSettled
+      || cachedRapidReverse.consoleErrors.length > 0
+      || cachedRapidReverse.pageErrors.length > 0;
+    checks.push({
+      name: "story-cached-normal-motion-rapid-reverse",
+      fixture: {
+        initialAssetId: "00000000-0000-4000-8000-000000000100",
+        cachedTargetAssetId: "00000000-0000-4000-8000-000000000101",
+        expectedReturnedAssetId: "00000000-0000-4000-8000-000000000100",
+        expectedNextAssetId: "00000000-0000-4000-8000-000000000101",
+      },
+      initialShownA,
+      pausedTransition: pausedTransitionState,
+      returnedToAAfterReverse,
+      returned: returnedState,
+      mobileModeEntered,
+      mobileDragTransform,
+      mobileDragSettled,
+      desktopModeRestored,
+      nextAfterReverseTargetReady,
+      nextAfterReverseSettled,
+      consoleErrors: cachedRapidReverse.consoleErrors,
+      pageErrors: cachedRapidReverse.pageErrors,
+      failed: cachedRapidReverseFailed,
+    });
+    if (cachedRapidReverseFailed) failed = true;
+  } finally {
+    await cachedRapidReverse.page.close();
   }
 
   const mixedMedia = await createQaPage("/?qaState=journey-story&qaMode=mixed-media", onePixelGif, {
@@ -1528,45 +2495,103 @@ try {
   });
   try {
     await mixedMedia.page.locator(".journey-story").waitFor({ state: "visible" });
-    const stageNext = mixedMedia.page.locator(".journey-story__media-nav button").last();
-    await stageNext.click();
-    const stageIncomingVideo = mixedMedia.page.locator(".journey-story__media > video.journey-story__media-incoming");
-    await stageIncomingVideo.waitFor({ state: "attached", timeout: 3_000 });
-    await stageIncomingVideo.waitFor({ state: "detached", timeout: 3_000 });
-    const settledStageVideo = mixedMedia.page.locator(".journey-story__media > video:not(.journey-story__media-incoming)");
-    const stageVideoSettled = await settledStageVideo.count() === 1;
+    await clickStoryPicture(mixedMedia.page, 1);
+    const stageVideoSettled = await mixedMedia.page.waitForFunction(({ pagesSelector, currentMediaSelector, expectedId }) => {
+      const root = document.querySelector(pagesSelector);
+      const current = root?.querySelector('[data-media-page="current"]');
+      const video = document.querySelector(currentMediaSelector);
+      return current?.getAttribute("data-media-page-id") === expectedId
+        && current?.getAttribute("data-media-page-ready") === "true"
+        && video instanceof HTMLVideoElement
+        && video.getAttribute("data-shared-media-id") === expectedId;
+    }, {
+      pagesSelector: storyMediaPagesSelector,
+      currentMediaSelector: storyCurrentMediaSelector,
+      expectedId: "00000000-0000-4000-8000-000000000152",
+    }, { polling: "raf", timeout: 3_000 }).then(() => true).catch(() => false);
+    const stageVideoNodeCount = await mixedMedia.page.locator(`.journey-story__media ${storyPersistentVideoSelector}`).count();
+    await mixedMedia.page.locator(".journey-story__media").locator(storyCurrentVideoSelector).evaluate((video) => {
+      window.__qaStoryInlineVideoNode = video;
+    });
 
-    await mixedMedia.page.locator(".journey-story__fullscreen-entry").click();
+    // Fullscreen has its own explicit control; upper video halves navigate.
+    await mixedMedia.page.getByRole("button", { name: "全屏查看媒体", exact: true }).click();
     const mixedFullscreen = mixedMedia.page.locator(".journey-story-fullscreen");
     await mixedFullscreen.waitFor({ state: "visible" });
-    const fullscreenVideoControls = await mixedFullscreen.locator(":scope > video:not(.journey-story__media-incoming)").evaluate((video) => video.controls);
+    await waitForStoryPicture(mixedMedia.page, "00000000-0000-4000-8000-000000000152", ".journey-story-fullscreen");
+    const fullscreenVideo = mixedFullscreen.locator("video[data-shared-media-id]").first();
+    const fullscreenVideoControls = await fullscreenVideo.evaluate((video) => {
+      window.__qaStoryFullscreenVideoNode = video;
+      return video.controls;
+    });
 
-    const fullscreenNext = mixedFullscreen.locator(".journey-story-fullscreen__nav button").last();
-    const fullscreenPrevious = mixedFullscreen.locator(".journey-story-fullscreen__nav button").first();
-    await fullscreenNext.click();
-    await mixedFullscreen.locator(":scope > .journey-story__media-incoming").waitFor({ state: "attached", timeout: 3_000 });
-    await mixedFullscreen.locator(":scope > .journey-story__media-incoming").waitFor({ state: "detached", timeout: 3_000 });
-    await fullscreenPrevious.click();
-    const fullscreenIncomingVideo = mixedFullscreen.locator(":scope > video.journey-story__media-incoming");
-    await fullscreenIncomingVideo.waitFor({ state: "attached", timeout: 3_000 });
-    await fullscreenIncomingVideo.waitFor({ state: "detached", timeout: 3_000 });
-    const settledFullscreenVideo = mixedFullscreen.locator(":scope > video:not(.journey-story__media-incoming)");
-    const fullscreenVideoSettled = await settledFullscreenVideo.count() === 1;
+    await clickStoryPicture(mixedMedia.page, 1, ".journey-story-fullscreen");
+    const fullscreenImageSettled = await mixedMedia.page.waitForFunction(({ fullscreenSelector, expectedId }) => {
+      const root = document.querySelector(fullscreenSelector);
+      const media = root?.querySelector("[data-shared-media-id]");
+      const pages = root?.querySelector("[data-story-media-pages]");
+      const current = pages?.querySelector('[data-media-page="current"]');
+      return media?.getAttribute("data-shared-media-id") === expectedId
+        && (!pages || (
+          current?.getAttribute("data-media-page-id") === expectedId
+          && current?.getAttribute("data-media-page-ready") === "true"
+        ));
+    }, { fullscreenSelector: ".journey-story-fullscreen", expectedId: "00000000-0000-4000-8000-000000000102" }, { polling: "raf", timeout: 3_000 }).then(() => true).catch(() => false);
+    const outgoingVideoState = await mixedFullscreen.evaluate((root) => {
+      const video = root.querySelector(".story-media-pages__video video");
+      return {
+        nodeRetained: video === window.__qaStoryFullscreenVideoNode,
+        paused: video instanceof HTMLVideoElement && video.paused,
+        hidden: video instanceof HTMLVideoElement && video.hidden,
+        noCurrentAsset: video?.getAttribute("data-shared-media-id") === null,
+      };
+    });
+    await clickStoryPicture(mixedMedia.page, -1, ".journey-story-fullscreen");
+    const fullscreenVideoSettled = await mixedMedia.page.waitForFunction(({ fullscreenSelector, expectedId }) => {
+      const root = document.querySelector(fullscreenSelector);
+      const media = root?.querySelector("[data-shared-media-id]");
+      const pages = root?.querySelector("[data-story-media-pages]");
+      const current = pages?.querySelector('[data-media-page="current"]');
+      return media?.getAttribute("data-shared-media-id") === expectedId
+        && (!pages || (
+          current?.getAttribute("data-media-page-id") === expectedId
+          && current?.getAttribute("data-media-page-ready") === "true"
+        ))
+        && media instanceof HTMLVideoElement;
+    }, { fullscreenSelector: ".journey-story-fullscreen", expectedId: "00000000-0000-4000-8000-000000000152" }, { polling: "raf", timeout: 3_000 }).then(() => true).catch(() => false);
+    const settledFullscreenVideo = mixedFullscreen.locator("video[data-shared-media-id]").first();
     const fullscreenControlsAfterReturn = fullscreenVideoSettled
       ? await settledFullscreenVideo.evaluate((video) => video.controls)
       : false;
+    const videoIdentityAfterReturn = await mixedFullscreen.evaluate((root) => ({
+      count: root.querySelectorAll("video").length,
+      sameNode: root.querySelector("video[data-shared-media-id]") === window.__qaStoryFullscreenVideoNode,
+      inlineNodeRetained: document.querySelector(".journey-story__media .story-media-pages__video video")
+        === window.__qaStoryInlineVideoNode,
+      inactiveInlinePaused: window.__qaStoryInlineVideoNode?.paused === true,
+    }));
     const mixedMediaFailed = !stageVideoSettled
+      || stageVideoNodeCount !== 1
       || !fullscreenVideoControls
+      || !fullscreenImageSettled
+      || !outgoingVideoState.nodeRetained || !outgoingVideoState.paused
+      || !outgoingVideoState.hidden || !outgoingVideoState.noCurrentAsset
       || !fullscreenVideoSettled
       || !fullscreenControlsAfterReturn
+      || videoIdentityAfterReturn.count !== 1 || !videoIdentityAfterReturn.sameNode
+      || !videoIdentityAfterReturn.inlineNodeRetained || !videoIdentityAfterReturn.inactiveInlinePaused
       || mixedMedia.consoleErrors.length > 0
       || mixedMedia.pageErrors.length > 0;
     checks.push({
       name: "story-fullscreen-mixed-media-settle",
       stageVideoSettled,
+      stageVideoNodeCount,
       fullscreenVideoControls,
+      fullscreenImageSettled,
+      outgoingVideoState,
       fullscreenVideoSettled,
       fullscreenControlsAfterReturn,
+      videoIdentityAfterReturn,
       consoleErrors: mixedMedia.consoleErrors,
       pageErrors: mixedMedia.pageErrors,
       failed: mixedMediaFailed,
@@ -1576,111 +2601,22 @@ try {
     await mixedMedia.page.close();
   }
 
-  const storyDesktop = await createQaPage("/?qaState=journey-story", onePixelGif, { mobile: false });
-  try {
-    await storyDesktop.page.locator(".journey-story").waitFor({ state: "visible" });
-    const desktopPrevious = storyDesktop.page.getByRole("button", { name: "上一个媒体" });
-    const desktopNext = storyDesktop.page.getByRole("button", { name: "下一个媒体" });
-    const desktopButtonsVisible = await desktopPrevious.isVisible() && await desktopNext.isVisible();
-    await desktopNext.click();
-    await desktopPrevious.click();
-    await desktopNext.click();
-    checks.push({ name: "story-desktop-explicit-navigation", desktopButtonsVisible, failed: !desktopButtonsVisible });
-    if (!desktopButtonsVisible) failed = true;
-    const coverAction = storyDesktop.page.getByRole("button", { name: "将当前媒体设为封面" });
-    await coverAction.hover();
-    await storyDesktop.page.waitForFunction(() => {
-      const button = document.querySelector(".journey-story__media-set-cover");
-      return button && Number(getComputedStyle(button, "::after").opacity) >= 0.9;
-    });
-    const hoverTooltip = await coverAction.evaluate((button) => {
-      const stage = button.closest(".journey-story__media");
-      const buttonRect = button.getBoundingClientRect();
-      const stageRect = stage?.getBoundingClientRect();
-      const tooltipStyle = getComputedStyle(button, "::after");
-      const tooltipHeight = Number.parseFloat(tooltipStyle.height);
-      const tooltipTop = buttonRect.bottom + 8;
-      const tooltipBottom = tooltipTop + tooltipHeight
-        + Number.parseFloat(tooltipStyle.paddingTop)
-        + Number.parseFloat(tooltipStyle.paddingBottom)
-        + Number.parseFloat(tooltipStyle.borderTopWidth)
-        + Number.parseFloat(tooltipStyle.borderBottomWidth);
-      return {
-        opacity: Number(tooltipStyle.opacity),
-        content: tooltipStyle.content,
-        placement: tooltipStyle.top !== "auto" ? "below" : "above",
-        stageTop: stageRect ? Math.round(stageRect.top) : null,
-        stageBottom: stageRect ? Math.round(stageRect.bottom) : null,
-        tooltipTop: Math.round(tooltipTop),
-        tooltipBottom: Math.round(tooltipBottom),
-        fullyInsideStage: Boolean(stageRect)
-          && tooltipTop >= stageRect.top
-          && tooltipBottom <= stageRect.bottom,
-      };
-    });
-    await coverAction.focus();
-    await storyDesktop.page.keyboard.press("Shift+Tab");
-    await storyDesktop.page.keyboard.press("Tab");
-    await storyDesktop.page.waitForFunction(() => {
-      const button = document.querySelector(".journey-story__media-set-cover");
-      return button === document.activeElement
-        && button.matches(":focus-visible")
-        && Number(getComputedStyle(button, "::after").opacity) >= 0.9;
-    });
-    const focusTooltip = await coverAction.evaluate((button) => {
-      const stage = button.closest(".journey-story__media");
-      const buttonRect = button.getBoundingClientRect();
-      const stageRect = stage?.getBoundingClientRect();
-      const tooltipStyle = getComputedStyle(button, "::after");
-      const tooltipHeight = Number.parseFloat(tooltipStyle.height);
-      const tooltipTop = buttonRect.bottom + 8;
-      const tooltipBottom = tooltipTop + tooltipHeight
-        + Number.parseFloat(tooltipStyle.paddingTop)
-        + Number.parseFloat(tooltipStyle.paddingBottom)
-        + Number.parseFloat(tooltipStyle.borderTopWidth)
-        + Number.parseFloat(tooltipStyle.borderBottomWidth);
-      return {
-        focused: document.activeElement === button,
-        focusVisible: button.matches(":focus-visible"),
-        opacity: Number(tooltipStyle.opacity),
-        content: tooltipStyle.content,
-        placement: tooltipStyle.top !== "auto" ? "below" : "above",
-        fullyInsideStage: Boolean(stageRect)
-          && tooltipTop >= stageRect.top
-          && tooltipBottom <= stageRect.bottom,
-      };
-    });
-    const desktopTooltipFailed = hoverTooltip.opacity < 0.9
-      || !hoverTooltip.content.includes("设为封面")
-      || hoverTooltip.placement !== "below"
-      || !hoverTooltip.fullyInsideStage
-      || !focusTooltip.focused
-      || !focusTooltip.focusVisible
-      || focusTooltip.opacity < 0.9
-      || !focusTooltip.content.includes("设为封面")
-      || focusTooltip.placement !== "below"
-      || !focusTooltip.fullyInsideStage;
-    checks.push({
-      name: "story-icon-action-tooltip-hover-focus",
-      hoverTooltip,
-      focusTooltip,
-      failed: desktopTooltipFailed,
-    });
-    if (desktopTooltipFailed) failed = true;
-  } finally {
-    await storyDesktop.page.close();
-  }
-
   const playback = await createQaPage("/?qaState=journey-playback", tinyVideo, { instrumentMedia: true });
   try {
     await playback.page.locator(".journey-playback").waitFor({ state: "visible" });
     const next = playback.page.getByRole("button", { name: "下一个章节" });
     await next.click();
     await next.click();
-    await playback.page.waitForTimeout(80);
+    const playbackPresentation = playback.page.locator(".playback-media-presentation");
+    await playbackPresentation.waitFor({ state: "visible", timeout: 5_000 });
+    await playback.page.locator('.playback-media-presentation[data-media-presentation="settled"]')
+      .waitFor({ state: "attached", timeout: 5_000 });
     const phase = await playback.page.locator(".journey-playback").getAttribute("data-playback-phase");
-    const video = playback.page.locator(".journey-playback__media video");
+    const presentedAsset = await playbackPresentation.getAttribute("data-presented-asset");
+    const requestedAsset = await playbackPresentation.getAttribute("data-requested-asset");
+    const video = playbackPresentation.locator("[data-media-slot][aria-hidden=\"false\"] video");
     const videoVisible = await video.count() === 1;
+    const liveVideoCount = await playbackPresentation.locator("video").count();
     const nativeControls = videoVisible ? await video.evaluate((element) => element.controls) : null;
     const initiallyPaused = videoVisible ? await video.evaluate((element) => element.paused) : null;
     const pauseButton = playback.page.getByRole("button", { name: "暂停播放" });
@@ -1696,14 +2632,20 @@ try {
     });
     record("playback-video", await scanButtons(playback.page, ".journey-playback"), {
       phase,
+      presentedAsset,
+      requestedAsset,
       videoVisible,
+      liveVideoCount,
       nativeControls,
       initiallyPaused,
       pausedAfterStartripsPause,
       pausedAfterStartripsResume,
       bottomGap,
       failed: phase !== "media"
+        || presentedAsset !== "00000000-0000-4000-8000-000000000111"
+        || requestedAsset !== presentedAsset
         || !videoVisible
+        || liveVideoCount !== 1
         || nativeControls !== false
         || initiallyPaused !== false
         || pausedAfterStartripsPause !== true
@@ -1718,6 +2660,130 @@ try {
     await playback.page.close();
   }
 
+  // Playback presentation contract: a cold image request keeps the already
+  // presented frame visible until read + browser decode settle, then commits
+  // the requested asset into one of the two fixed slots. This fixture's first
+  // point has deterministic image ids generated by the prefetch QA preview.
+  const playbackColdInitialAssetId = "00000000-0000-4000-8000-100000000000";
+  const playbackColdTargetAssetId = "00000000-0000-4000-8000-100001000000";
+  const playbackCold = await createQaPage(
+    "/?qaState=journey-playback&qaMode=prefetch&qaFixture=single",
+    onePixelGif,
+    {
+      blockedReadAssetId: playbackColdTargetAssetId,
+      reducedMotion: "no-preference",
+    },
+  );
+  try {
+    const playbackSurface = playbackCold.page.locator(".journey-playback");
+    const presentation = playbackCold.page.locator(".playback-media-presentation");
+    await playbackSurface.waitFor({ state: "visible" });
+    await presentation.waitFor({ state: "visible", timeout: 8_000 });
+    const initialSettled = await playbackCold.page.waitForFunction(({ presentationSelector, assetId }) => {
+      const stage = document.querySelector(presentationSelector);
+      return stage?.getAttribute("data-media-presentation") === "settled"
+        && stage.getAttribute("data-presented-asset") === assetId;
+    }, { presentationSelector: ".playback-media-presentation", assetId: playbackColdInitialAssetId }, { polling: "raf", timeout: 8_000 }).then(() => true).catch(() => false);
+    const initialSlots = await presentation.evaluate((stage) => {
+      const slots = [...stage.querySelectorAll("[data-media-slot]")];
+      const visibleImage = stage.querySelector('[data-media-slot][aria-hidden="false"] img');
+      window.__qaPlaybackSlotNodes = slots;
+      window.__qaPlaybackPresentedImage = visibleImage;
+      return {
+        slotCount: slots.length,
+        presentedAsset: stage.getAttribute("data-presented-asset"),
+        requestedAsset: stage.getAttribute("data-requested-asset"),
+        presentation: stage.getAttribute("data-media-presentation"),
+        visibleImageAlt: visibleImage?.getAttribute("alt") ?? null,
+      };
+    });
+    const nextChapter = playbackCold.page.getByRole("button", { name: "下一个章节" });
+    await nextChapter.click();
+    const waitingForColdRead = await playbackCold.page.waitForFunction(({ presentationSelector, overlaySelector, initialAssetId, targetAssetId }) => {
+      const stage = document.querySelector(presentationSelector);
+      const overlay = document.querySelector(overlaySelector);
+      const visibleImage = stage?.querySelector('[data-media-slot][aria-hidden="false"] img');
+      return stage?.getAttribute("data-requested-asset") === targetAssetId
+        && stage.getAttribute("data-presented-asset") === initialAssetId
+        && stage.getAttribute("data-media-presentation") === "waiting"
+        && overlay?.getAttribute("data-playback-presentation-hold") === "waiting"
+        && visibleImage === window.__qaPlaybackPresentedImage
+        && visibleImage?.getAttribute("alt") === "prefetch-0-0.png";
+    }, {
+      presentationSelector: ".playback-media-presentation",
+      overlaySelector: ".journey-playback",
+      initialAssetId: playbackColdInitialAssetId,
+      targetAssetId: playbackColdTargetAssetId,
+    }, { polling: "raf", timeout: 5_000 }).then(() => true).catch(() => false);
+    playbackCold.releaseBlockedRead();
+    const committed = await playbackCold.page.waitForFunction(({ presentationSelector, targetAssetId }) => {
+      const stage = document.querySelector(presentationSelector);
+      const visibleImage = stage?.querySelector('[data-media-slot][aria-hidden="false"] img');
+      return stage?.getAttribute("data-media-presentation") === "settled"
+        && stage.getAttribute("data-presented-asset") === targetAssetId
+        && stage.getAttribute("data-requested-asset") === targetAssetId
+        && visibleImage?.getAttribute("alt") === "prefetch-0-1.png"
+        && visibleImage.complete
+        && visibleImage.naturalWidth > 0;
+    }, { presentationSelector: ".playback-media-presentation", targetAssetId: playbackColdTargetAssetId }, { polling: "raf", timeout: 8_000 }).then(() => true).catch(() => false);
+    const committedState = await presentation.evaluate((stage) => {
+      const slots = [...stage.querySelectorAll("[data-media-slot]")];
+      const visibleImage = stage.querySelector('[data-media-slot][aria-hidden="false"] img');
+      return {
+        slotCount: slots.length,
+        fixedSlotIdentity: slots.length === 2
+          && slots.every((slot, index) => window.__qaPlaybackSlotNodes?.[index] === slot),
+        presentation: stage.getAttribute("data-media-presentation"),
+        presentedAsset: stage.getAttribute("data-presented-asset"),
+        requestedAsset: stage.getAttribute("data-requested-asset"),
+        visibleImageAlt: visibleImage?.getAttribute("alt") ?? null,
+        visibleImageComplete: visibleImage instanceof HTMLImageElement && visibleImage.complete,
+        visibleImageNaturalWidth: visibleImage instanceof HTMLImageElement ? visibleImage.naturalWidth : 0,
+        visibleImageIsOldNode: visibleImage === window.__qaPlaybackPresentedImage,
+        videoCount: stage.querySelectorAll("video").length,
+      };
+    });
+    const playbackColdFailed = !initialSettled
+      || initialSlots.slotCount !== 2
+      || initialSlots.presentedAsset !== playbackColdInitialAssetId
+      || initialSlots.requestedAsset !== playbackColdInitialAssetId
+      || initialSlots.presentation !== "settled"
+      || initialSlots.visibleImageAlt !== "prefetch-0-0.png"
+      || !waitingForColdRead
+      || !committed
+      || committedState.slotCount !== 2
+      || !committedState.fixedSlotIdentity
+      || committedState.presentation !== "settled"
+      || committedState.presentedAsset !== playbackColdTargetAssetId
+      || committedState.requestedAsset !== playbackColdTargetAssetId
+      || committedState.visibleImageAlt !== "prefetch-0-1.png"
+      || !committedState.visibleImageComplete
+      || committedState.visibleImageNaturalWidth <= 0
+      || committedState.visibleImageIsOldNode
+      || committedState.videoCount !== 0
+      || playbackCold.consoleErrors.length > 0
+      || playbackCold.pageErrors.length > 0;
+    checks.push({
+      name: "playback-cold-image-presentation-contract",
+      fixture: {
+        initialAssetId: playbackColdInitialAssetId,
+        targetAssetId: playbackColdTargetAssetId,
+      },
+      initialSettled,
+      initial: initialSlots,
+      waitingForColdRead,
+      committed,
+      committedState,
+      consoleErrors: playbackCold.consoleErrors,
+      pageErrors: playbackCold.pageErrors,
+      failed: playbackColdFailed,
+    });
+    if (playbackColdFailed) failed = true;
+  } finally {
+    playbackCold.releaseBlockedRead();
+    await playbackCold.page.close();
+  }
+
   // ── #195 Phase 2: the trim transport, executed ──────────────────────────
   // Acceptance 1, 2 and 6 are behaviour of a real element under a real
   // director, so they are graded here rather than by a pure-function assertion:
@@ -1725,29 +2791,35 @@ try {
   // beat must end at the out-point instead of on `ended`, and a pause must
   // leave it inside its segment.
   const TRIM_SOURCE_SECONDS = 12;
+  const trimVideoAssetId = "00000000-0000-4000-8000-000000000111";
   const trimTimeline = { sourceDurationSeconds: TRIM_SOURCE_SECONDS, tickMs: 40, tickSeconds: 0.1 };
 
   async function openTrimmedBeat(inMs, outMs) {
     const opened = await createQaPage(
       `/?qaState=journey-playback&qaMode=trim&qaTrimIn=${inMs}&qaTrimOut=${outMs}`,
-      // The element's source is synthesized by the timeline shim, so the read
-      // only has to be a valid image for the beat that follows the video.
+      // The video asset gets the real WebM source; the following image keeps
+      // the valid GIF fallback URL through the per-asset read route.
       onePixelGif,
-      { videoTimeline: trimTimeline },
+      { videoTimeline: trimTimeline, videoMediaUrl: tinyVideo, videoAssetId: trimVideoAssetId },
     );
     await opened.page.locator(".journey-playback").waitFor({ state: "visible" });
+    const presentation = opened.page.locator(".playback-media-presentation");
     const next = opened.page.getByRole("button", { name: "下一个章节" });
     for (let attempt = 0; attempt < 5; attempt += 1) {
-      if (await opened.page.locator(".journey-playback__media video").count() === 1) break;
+      if (await presentation.count() === 1 && await presentation.locator("video").count() === 1) break;
       await next.click();
       await opened.page.waitForTimeout(80);
     }
     await opened.page.locator('.journey-playback[data-video-trim="playing"]')
       .waitFor({ timeout: 15_000 });
+    await opened.page.locator('.playback-media-presentation[data-media-presentation="settled"]')
+      .waitFor({ state: "attached", timeout: 8_000 });
+    const presentedAsset = await presentation.getAttribute("data-presented-asset");
+    const presentedMediaCount = await presentation.locator('[data-media-slot][aria-hidden="false"] :is(img, video)').count();
     const videoStep = Number(
       await opened.page.locator(".journey-playback").getAttribute("data-playback-step"),
     );
-    return { ...opened, videoStep };
+    return { ...opened, videoStep, presentedAsset, presentedMediaCount };
   }
 
   async function readTimeline(page) {
@@ -1789,6 +2861,8 @@ try {
       || !seekedWhileHolding
       || !sawPositioning
       || !firstPlaying
+      || segment.presentedAsset !== "00000000-0000-4000-8000-000000000111"
+      || segment.presentedMediaCount !== 1
       || firstPlaying.time < inSeconds - 0.15
       || firstSegmentTime === null
       || firstSegmentTime < inSeconds - 0.15
@@ -1805,6 +2879,8 @@ try {
       seeks: entered.seeks,
       sawPositioning,
       firstPlayingTime: firstPlaying?.time ?? null,
+      presentedAsset: segment.presentedAsset,
+      presentedMediaCount: segment.presentedMediaCount,
       firstSegmentTime,
       lastSegmentTime,
       endedEvents: finished.endedEvents,
@@ -1855,6 +2931,8 @@ try {
     const failedTrimPause = pausedTime !== heldTime
       || pausedTime < inSeconds
       || trimDuringPause !== "playing"
+      || paused.presentedAsset !== "00000000-0000-4000-8000-000000000111"
+      || paused.presentedMediaCount !== 1
       || escapedSegment
       || lastSegmentTime === null
       || lastSegmentTime > outSeconds + 0.15
@@ -1866,6 +2944,8 @@ try {
       pausedTime,
       heldTime,
       trimDuringPause,
+      presentedAsset: paused.presentedAsset,
+      presentedMediaCount: paused.presentedMediaCount,
       escapedSegment,
       lastSegmentTime,
       endedEvents: finished.endedEvents,
@@ -1884,6 +2964,7 @@ try {
     await paused.page.close();
   }
 } finally {
+  console.log("Media checks completed before exit:", JSON.stringify(checks));
   await browser.close();
 }
 

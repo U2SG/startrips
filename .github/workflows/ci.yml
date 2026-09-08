@@ -99,7 +99,7 @@ jobs:
       matrix:
         include:
           - name: login-media
-            command: pnpm qa:login-v3 && pnpm qa:media-controls
+            command: pnpm qa:login-v3 && pnpm qa:media-controls && pnpm qa:media-reclassification
           - name: post-login
             command: pnpm qa:post-login-controls
           - name: playback-prefetch

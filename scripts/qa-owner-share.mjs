@@ -219,10 +219,12 @@ async function ornamentScan(page) {
     if (!root) return null;
     const offenders = { gradient: [], shadow: [], rounding: [], blur: [], emoji: [] };
     const smallTargets = [];
-    // The radio dot of the expiry choice is the selection grammar itself: a
-    // round mark is what distinguishes single choice from the square
-    // multi-select mark beside it. It is allowed to be round; nothing else is.
-    const roundingAllowed = (element) => element.matches('input[type="radio"] + span[aria-hidden]');
+    // The radio dot identifies single choice; the lamb's orbit is part of the
+    // shared brand mark. Neither is a rounded panel or control. Keep the
+    // exemption on these exact shapes so surrounding surfaces remain audited.
+    const roundingAllowed = (element) => element.matches(
+      'input[type="radio"] + span[aria-hidden], .startrips-brand-mark > .startrips-brand-mark__orbit[aria-hidden="true"]',
+    );
     const emojiPattern = /\p{Extended_Pictographic}/u;
     for (const element of root.querySelectorAll("*")) {
       const style = getComputedStyle(element);
@@ -465,7 +467,7 @@ try {
 
     // --- Entry path A: exactly one Journey. --------------------------------
     // Reached from the surface each viewport actually offers: the mobile sheet
-    // on a compact screen, the story's manage row on desktop.
+    // on a compact screen, the story's edit mode on desktop.
     if (viewport.compact) {
       await page.evaluate(() => {
         const chip = document.querySelector(".mobile-v2__journey-chip")
@@ -485,6 +487,12 @@ try {
         open?.click();
       });
       await page.locator(".journey-story").waitFor({ timeout: 15_000 });
+      check(
+        `${viewport.name}/reading-keeps-share-in-edit-mode`,
+        await page.locator(".journey-story [data-share-journey-trigger]").count() === 0,
+      );
+      await page.locator(".journey-story").getByRole("button", { name: "编辑故事", exact: true }).click();
+      await page.locator(".journey-story [data-share-journey-trigger]").waitFor({ timeout: 10_000 });
     }
 
     const singleTrigger = await page.evaluate(() => {

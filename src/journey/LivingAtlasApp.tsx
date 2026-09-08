@@ -14,7 +14,7 @@ import {
 } from "@tabler/icons-react";
 import { MobileAccountActionSlot, useAtlasCinematicIsolation } from "../auth/AuthGateway";
 import { useAtlasView, type AtlasMediaRead } from "./atlasView";
-import { StartripsBrandLoader } from "../brand/StartripsBrandMark";
+import { StartripsBrandLoader, StartripsJourneyCue, StartripsWordmark } from "../brand/StartripsBrandMark";
 import { CountUp } from "../motion/primitives/CountUp";
 import { useMagnet } from "../motion/primitives/Magnet";
 import { ScrambledText } from "../motion/primitives/ScrambledText";
@@ -723,9 +723,9 @@ export function LivingAtlasApp({
     });
   }
 
-  // #18: opening the story from the active card uses a true shared-element
-  // morph. View Transitions handles supported browsers; the primitive falls
-  // back to a fixed-clone WAAPI morph without remounting the globe.
+  // Only the cover participates in the Story handoff. A document-level View
+  // Transition would also snapshot the independently named active journey card
+  // and leave that whole card floating above the Story's blurred backdrop.
   function openJourneyStory(journeyId: string, routePointId: string | null) {
     const targetJourney = journeys.find((candidate) => candidate.id === journeyId) ?? null;
     const sharedCoverId = routePointId === null && targetJourney
@@ -748,9 +748,19 @@ export function LivingAtlasApp({
       // happens to render first. The Story initializes to journeyCover(), and
       // this lookup additionally requires the exact same asset id.
       resolveTarget: () => sharedCoverId
-        ? [...document.querySelectorAll<HTMLElement>("[data-shared-media-id]")]
+        ? [...document.querySelectorAll<HTMLElement>(".journey-story .journey-story__media [data-shared-media-id]")]
           .find((element) => element.dataset.sharedMediaId === sharedCoverId) ?? null
         : null,
+      // Signed reads and image decode settle after the opening React commit.
+      // Wait for that exact cover, but release immediately if the user changes
+      // chapter/media, enters another surface, closes, or the read fails.
+      isTargetCurrent: () => {
+        const stage = document.querySelector(".journey-story .journey-story__media");
+        return Boolean(sharedCoverId && stage
+          && stage.querySelector<HTMLElement>('[data-media-page="current"]')?.dataset.mediaPageId === sharedCoverId
+          && !stage.querySelector('[data-media-incoming="true"], [role="alert"]')
+          && !document.querySelector('.journey-story-fullscreen:not([hidden])'));
+      },
     });
   }
 
@@ -909,7 +919,7 @@ export function LivingAtlasApp({
   if (status === "error") {
     return (
       <main className="living-atlas is-error">
-        <section><p>PRIVATE ATLAS</p><h1>暂时无法读取旅程</h1><p role="alert">{loadError}</p><button type="button" onClick={() => void load()}>重试</button></section>
+        <section><StartripsJourneyCue state="rest" size={80} /><p>PRIVATE ATLAS</p><h1>暂时无法读取旅程</h1><p role="alert">{loadError}</p><button type="button" onClick={() => void load()}>重试</button></section>
       </main>
     );
   }
@@ -972,7 +982,7 @@ export function LivingAtlasApp({
 
       {isMobileV2 ? (
         <header className="mobile-v2__header">
-          <div className="mobile-v2__brand"><IconWorld size={18} stroke={1.2} aria-hidden="true" /><strong>Startrips</strong></div>
+          <div className="mobile-v2__brand"><StartripsWordmark size={27} /></div>
           <nav aria-label="移动端旅程操作">
             {canManageAtlas ? <MobileAccountActionSlot /> : null}
             {canCreateJourney ? <button type="button" onClick={openCreateComposer} aria-label="记录新旅程"><IconPlus size={18} stroke={1.4} aria-hidden="true" /></button> : null}
@@ -986,7 +996,7 @@ export function LivingAtlasApp({
         </header>
       ) : (
         <header className="living-atlas__header" inert={globeFocusMode || globePickActive || playbackActive || undefined}>
-          <div className="living-atlas__brand"><IconWorld size={25} stroke={1.1} aria-hidden="true" /><div><p>STARTRIPS · LIVING ATLAS</p><h1><ShinyText>把走过的路留在地球上</ShinyText></h1></div></div>
+          <div className="living-atlas__brand"><StartripsWordmark size={34} /><div><p>PRIVATE JOURNEY ATLAS</p><h1><ShinyText>把走过的路留在地球上</ShinyText></h1></div></div>
           <nav aria-label="图谱视图">
             <button type="button" className={view === "planet" ? "is-active" : ""} aria-current={view === "planet" ? "page" : undefined} onClick={() => setView("planet")}><IconWorld size={16} stroke={1.35} aria-hidden="true" />地球</button>
             <button type="button" className={view === "timeline" ? "is-active" : ""} aria-current={view === "timeline" ? "page" : undefined} onClick={() => setView("timeline")}><IconTimeline size={16} stroke={1.35} aria-hidden="true" />时间线</button>
@@ -1058,9 +1068,9 @@ export function LivingAtlasApp({
       {view === "planet" && journeys.length === 0 ? (
         <section className="living-atlas__empty">
           <p>NO JOURNEYS YET</p>
-          <IconRoute size={34} stroke={1.05} aria-hidden="true" />
-          <h2>你的地球还没有留下路线</h2>
-          <p>一次跨城移动、一段海上航行，或只停留在一个地方，都可以成为第一段旅程。</p>
+          <StartripsJourneyCue state="rest" size={88} />
+          <h2>第一颗星，从这里亮起</h2>
+          <p>一段远行，或只在一个地方停留。记下第一段旅程，让走过的路留在地球上。</p>
           {canCreateJourney ? <button type="button" onClick={openCreateComposer}><IconPlus size={17} stroke={1.4} aria-hidden="true" />记录第一段旅程</button> : null}
         </section>
       ) : null}
@@ -1432,6 +1442,9 @@ export function LivingAtlasApp({
             setStoryJourneyId(id);
           }}
           onEdit={canEditJourney ? editJourney : undefined}
+          onJourneyUpdated={mutations?.updateJourneyNotes
+            ? (updated) => setJourneys((current) => mergeJourney(current, updated))
+            : undefined}
           onDelete={canDeleteJourney && mutations ? removeJourney : undefined}
           onShare={shareClient
             ? (id) => {

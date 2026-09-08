@@ -2,6 +2,10 @@ import { launchQaBrowser } from "./qa-browser.mjs";
 
 const origin = process.env.QA_ORIGIN ?? "http://127.0.0.1:4173";
 const onePixelGif = "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=";
+const storyCurrentMediaSelector = [
+  '[data-story-media-pages] [data-media-page="current"][data-media-page-ready="true"] [data-shared-media-id]',
+  '[data-story-media-pages] video[data-shared-media-id]',
+].join(", ");
 const browser = await launchQaBrowser();
 const checks = [];
 let failed = false;
@@ -68,14 +72,19 @@ try {
       const handle = page.locator(".journey-story__sheet-handle");
       const initialPresentation = await story.getAttribute("data-mobile-presentation");
       const initialModal = await story.getAttribute("aria-modal");
+      const storyLayout = await story.getAttribute("data-story-layout");
+      const desktopEditControls = await story.getByRole("button", { name: "编辑故事", exact: true }).count();
       const handleBox = await handle.boundingBox();
       const handleHit = handleBox ? Math.min(handleBox.width, handleBox.height) : 0;
       add({
         name: `story-sheet-contract-${label}`,
         initialPresentation,
         initialModal,
+        storyLayout,
+        desktopEditControls,
         handleHit,
-        failed: initialPresentation !== "in-context" || initialModal !== null || handleHit < 44,
+        failed: initialPresentation !== "in-context" || initialModal !== null || handleHit < 44
+          || storyLayout !== "mobile" || desktopEditControls !== 0,
       });
 
       await handle.click();
@@ -150,9 +159,7 @@ try {
       failed: scroll.presentation !== "in-context",
     });
 
-    const media = page.locator(
-      ".journey-story__media > img:not(.journey-story__media-incoming), .journey-story__media > video:not(.journey-story__media-incoming)"
-    ).first();
+    const media = story.locator(storyCurrentMediaSelector).first();
     await media.click();
     await page.locator(".journey-story-fullscreen").waitFor({state: "visible"});
     await page.evaluate(() => history.back());
