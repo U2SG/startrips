@@ -2413,21 +2413,29 @@ async function verifyFinalAcceptanceMobileFlow() {
       console.error(`[qa-post-login] final:${viewportLabel}:playback-ready`);
       const historyLengthBeforePlaybackReturn = await page.evaluate(() => window.history.length);
       const progress = page.locator('.journey-playback__progress input[aria-label="播放进度"]');
-      // #245 return evidence needs a deterministic committed media beat. Drive
-      // the public Playback range through its existing onChange -> elapsed plan
-      // -> seek contract. The fixture's second Route Point media occupies the
-      // broad late-middle window of the standard-tempo run, so 75% lands inside
-      // fa-image-2 without touching private app state or QA-only DOM datasets.
+      // #245 return evidence needs a deterministic committed media beat, but its
+      // elapsed-time fraction is not a product contract. Read Playback's rendered
+      // chapter marker for the fixture's final Route Point: those markers come
+      // from the active plan's arrival segments, so tempo/budget changes move the
+      // seek target with the plan instead of invalidating a hard-coded fraction.
+      const routePointChapterTicks = page.locator(".journey-playback__progress-chapters i");
+      const routePointChapterCount = await routePointChapterTicks.count();
+      if (routePointChapterCount !== targetJourney.routePoints.length) {
+        throw new Error(`Playback chapter marker count drifted: expected ${targetJourney.routePoints.length}, got ${routePointChapterCount}`);
+      }
+      const finalRoutePointFraction = await routePointChapterTicks.last().evaluate((marker) => {
+        const leftPercent = Number.parseFloat(marker.style.left);
+        if (!Number.isFinite(leftPercent)) throw new Error("Playback chapter marker lacks a plan fraction");
+        return leftPercent / 100;
+      });
       await progress.focus();
-      await progress.press("Home");
-      await page.waitForFunction(() => (
-        document.querySelector(".journey-playback")?.getAttribute("data-playback-step") === "0"
-      ), null, { timeout: 2_000 });
       await progress.evaluate((input, fraction) => {
         if (!(input instanceof HTMLInputElement)) throw new Error("Playback progress input missing");
         const min = Number(input.min || "0");
         const max = Number(input.max || "1000");
-        const value = Math.round(min + (max - min) * fraction);
+        // Round forward so a marker that falls between scrubber units lands
+        // inside its arrival segment rather than one unit before it.
+        const value = Math.min(max, Math.ceil(min + (max - min) * fraction));
         const nativeValueSetter = Object.getOwnPropertyDescriptor(
           HTMLInputElement.prototype,
           "value",
@@ -2435,13 +2443,21 @@ async function verifyFinalAcceptanceMobileFlow() {
         if (!nativeValueSetter) throw new Error("Playback progress value setter unavailable");
         nativeValueSetter.call(input, String(value));
         input.dispatchEvent(new Event("input", { bubbles: true }));
-      }, 0.75);
+      }, finalRoutePointFraction);
+      await page.waitForFunction((expectedLabel) => (
+        document.querySelector(".journey-playback")?.getAttribute("data-playback-phase") === "stop"
+        && document.querySelector(".journey-playback__stop h3")?.textContent?.trim() === expectedLabel
+      ), targetJourney.routePoints.at(-1)?.label ?? "", { timeout: 2_000 });
+      // Leave the range before using Playback's normal keyboard transport. From
+      // the asserted final Route Point stop, the next meaningful beat is its
+      // media; the destination itself is still asserted below as fa-image-2.
+      await progress.blur();
+      await page.keyboard.press("ArrowRight");
       const returnedMedia = page.locator('.journey-playback [data-shared-media-id="fa-image-2"]');
       await returnedMedia.waitFor({ state: "visible", timeout: 5_000 });
       await page.waitForFunction(() => (
         document.querySelector(".journey-playback")?.getAttribute("data-playback-presentation-hold") === "none"
       ), null, { timeout: 5_000 });
-      await progress.blur();
       // Freeze the now-presented beat before exiting so the autoplay clock cannot
       // advance after the presentation owner has committed the return identity.
       const pauseControl = page.locator('.journey-playback__controls button[aria-label="暂停播放"]');
