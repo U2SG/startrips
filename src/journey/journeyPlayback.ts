@@ -235,6 +235,22 @@ export function committedPlaybackPosition(
   }
 }
 
+/**
+ * Advance the return commit log only when the presentation owner confirms that
+ * the current media asset actually owns the visible slot. A failed or stale
+ * request therefore leaves the last successfully committed position intact.
+ */
+export function commitPresentedPlaybackPosition(
+  previous: CommittedPlaybackPosition | null,
+  journey: Journey,
+  committedStep: PlaybackStep | undefined,
+  presentedAssetId: string,
+): CommittedPlaybackPosition | null {
+  if (!committedStep || committedStep.kind !== "media") return previous;
+  const next = committedPlaybackPosition(journey, committedStep);
+  return next.assetId === presentedAssetId ? next : previous;
+}
+
 export type PlaybackControl =
   | { type: "advance" }
   | { type: "next" }

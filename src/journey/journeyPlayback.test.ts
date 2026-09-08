@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildPlaybackSteps,
+  commitPresentedPlaybackPosition,
   committedPlaybackPosition,
   initialPlaybackState,
   isPlaybackTerminalState,
@@ -363,6 +364,31 @@ describe("committedPlaybackPosition (#245)", () => {
       journeyId: journey.id,
       routePointId: "point-0",
       assetId: "media-0",
+    });
+  });
+
+
+  it("keeps the last presented position when the requested media fails before presentation", () => {
+    const steps = buildPlaybackSteps(journey);
+    const presented = steps.find((step) => step.kind === "media" && step.pointIndex === 0);
+    const failedRequested = steps.find((step) => step.kind === "media" && step.pointIndex === 1);
+    const lastCommitted = committedPlaybackPosition(journey, presented);
+
+    expect(commitPresentedPlaybackPosition(
+      lastCommitted,
+      journey,
+      failedRequested,
+      lastCommitted.assetId!,
+    )).toEqual(lastCommitted);
+    expect(commitPresentedPlaybackPosition(
+      lastCommitted,
+      journey,
+      failedRequested,
+      "media-1",
+    )).toEqual({
+      journeyId: journey.id,
+      routePointId: "point-1",
+      assetId: "media-1",
     });
   });
 

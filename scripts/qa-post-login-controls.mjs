@@ -2413,6 +2413,20 @@ async function verifyFinalAcceptanceMobileFlow() {
       console.error(`[qa-post-login] final:${viewportLabel}:playback-ready`);
       const historyLengthBeforePlaybackReturn = await page.evaluate(() => window.history.length);
       const progress = page.locator('.journey-playback__progress input[aria-label="播放进度"]');
+      // #245 return evidence needs a deterministic committed beat. Reset the
+      // scrubber to the beginning and pause the director before walking chapter
+      // arrows, otherwise the autoplay clock can race past the target while the
+      // cinematic assertions above are still running.
+      await progress.focus();
+      await progress.press("Home");
+      await page.waitForFunction(() => (
+        document.querySelector(".journey-playback")?.getAttribute("data-playback-step") === "0"
+      ), null, { timeout: 2_000 });
+      await progress.blur();
+      await page.keyboard.press(" ");
+      await page.waitForFunction(() => Boolean(
+        document.querySelector('.journey-playback__controls button[aria-label="继续播放"]'),
+      ), null, { timeout: 2_000 });
       await progress.focus();
       let reachedReturnedMedia = false;
       for (let attempt = 0; attempt < 8; attempt += 1) {

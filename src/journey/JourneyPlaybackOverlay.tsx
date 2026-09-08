@@ -32,6 +32,7 @@ import {
 } from "./useJourneyPlaybackDirector";
 import {
   buildPlaybackSteps,
+  commitPresentedPlaybackPosition,
   committedPlaybackPosition,
   playbackCameraTargetForStep,
   playbackCameraTargetKey,
@@ -267,8 +268,15 @@ export function JourneyPlaybackOverlay({
   }, [director.step, journey]);
   const handlePresentationPendingChange = useCallback((pending: boolean) => {
     setPresentationPending(pending);
-    if (pending || !journey || director.step?.kind !== "media") return;
-    committedPositionRef.current = committedPlaybackPosition(journey, director.step);
+  }, []);
+  const handlePresentationCommit = useCallback((presentedAssetId: string) => {
+    if (!journey) return;
+    committedPositionRef.current = commitPresentedPlaybackPosition(
+      committedPositionRef.current,
+      journey,
+      director.step,
+      presentedAssetId,
+    );
   }, [director.step, journey]);
   const quickRecapSelectionSummary = useMemo(() => (
     playbackMode === "quick-recap" && quickRecapPlan && quickRecapSourceJourney
@@ -1231,6 +1239,7 @@ export function JourneyPlaybackOverlay({
             videoWaitTimeoutMs={VIDEO_STALL_WATCHDOG_MS}
             onVideoElement={bindVideoElement}
             onPendingChange={handlePresentationPendingChange}
+            onPresented={handlePresentationCommit}
             onUnavailable={() => {
               setVideoFallbackAssetId(activeMedia.id);
               settleVideoTrimSeek(activeMedia.id, director.stepIndex, "unavailable");

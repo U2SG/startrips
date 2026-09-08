@@ -41,6 +41,7 @@ type Props = {
   videoWaitTimeoutMs: number;
   onVideoElement: (element: HTMLVideoElement | null) => void;
   onPendingChange: (pending: boolean) => void;
+  onPresented: (assetId: string) => void;
   onUnavailable: () => void;
 };
 
@@ -173,6 +174,14 @@ export function PlaybackMediaStage(props: Props) {
   useLayoutEffect(() => {
     props.onPendingChange(pending);
   }, [pending, props.onPendingChange]);
+
+  // Presentation commit is distinct from pending=false: failures also stop
+  // pending, but only a request that owns the visible slot may advance the
+  // narrative return commit log.
+  useLayoutEffect(() => {
+    if (!presented) return;
+    props.onPresented(props.asset.id);
+  }, [presented, props.asset.id, props.onPresented]);
 
   useLayoutEffect(() => {
     if (!ready || failed || presented || stage.requested === null) return;
