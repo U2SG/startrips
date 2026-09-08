@@ -1290,7 +1290,7 @@ interface ParticleEarthSceneProps {
    * camera to these, which is the only way the two renderers can be known to
    * agree in screen space rather than assumed to.
    */
-  onParticleAnchorFrame?: (frame: ParticleAnchorFrame) => void;
+  onParticleAnchorFrame?: (frame: ParticleAnchorFrame | null) => void;
   /**
    * #252: a camera hand-back. When a detail owner relinquishes the Semantic
    * Earth Dive it asks the particle camera to stand where the zoom authority
@@ -4833,6 +4833,18 @@ export function ParticleEarthScene({
         } else {
           delete host.dataset.focusPointLat;
           delete host.dataset.focusPointLon;
+        }
+      } else {
+        delete host.dataset.personalPointX;
+        delete host.dataset.personalPointY;
+        delete host.dataset.focusAnchorViewportX;
+        delete host.dataset.focusAnchorViewportY;
+        delete host.dataset.focusAnchorScale;
+        delete host.dataset.focusPointLat;
+        delete host.dataset.focusPointLon;
+        if (publishedAnchorFrame) {
+          publishedAnchorFrame = null;
+          latestOnParticleAnchorFrame.current?.(null);
         }
       }
 

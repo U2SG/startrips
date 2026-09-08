@@ -133,6 +133,16 @@ describe("ParticleEarthScene contracts", () => {
     expect(resolveParticleDiveAnchor(null, null)).toBeNull();
   });
 
+  it("invalidates a published Dive anchor when focus disappears", () => {
+    const source = readFileSync(
+      new URL("./ParticleEarthScene.tsx", import.meta.url),
+      "utf8",
+    );
+    expect(source).toMatch(
+      /publishedAnchorFrame = null;\s+latestOnParticleAnchorFrame\.current\?\.\(null\);/,
+    );
+  });
+
   it("lets only a newer focus revision supersede the active owner", () => {
     expect(shouldApplyFocusIntentRevision(10, 10)).toBe(false);
     expect(shouldApplyFocusIntentRevision(10, 9)).toBe(false);

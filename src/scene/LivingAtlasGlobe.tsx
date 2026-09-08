@@ -176,7 +176,7 @@ type AtlasEarthPresentation = Pick<
    * a hand-back of the camera to the zoom at which the band reopens.
    */
   onSemanticZoomSnapshot?: (snapshot: SemanticZoomSnapshot) => void;
-  onParticleAnchorFrame?: (frame: ParticleAnchorFrame) => void;
+  onParticleAnchorFrame?: (frame: ParticleAnchorFrame | null) => void;
   zoomIntent?: { zoom: number; revision: number };
   /** Who owns camera and gesture input on this frame. */
   inputOwner?: EarthDiveOwner;
@@ -352,7 +352,7 @@ export function LivingAtlasGlobe({
     ));
   }, []);
 
-  const handleParticleAnchorFrame = useCallback((frame: ParticleAnchorFrame) => {
+  const handleParticleAnchorFrame = useCallback((frame: ParticleAnchorFrame | null) => {
     if (diveRef.current.stage === "particle") return;
     setParticleFrame(frame);
   }, []);
