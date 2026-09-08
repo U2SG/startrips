@@ -2434,7 +2434,11 @@ async function verifyFinalAcceptanceMobileFlow() {
       await page.waitForFunction(() => Boolean(
         document.querySelector('.journey-playback__controls button[aria-label="继续播放"]'),
       ), null, { timeout: 2_000 });
-      await progress.focus();
+      // Keep the returned beat deterministic while paused. The scrubber Home
+      // above exercises seek ownership; chapter stepping then uses the same
+      // transport command the scrubber ArrowRight delegates to, without relying
+      // on a hidden range retaining keyboard focus after the pause rerender.
+      const nextControl = page.locator('.journey-playback__controls button[aria-label="下一个章节"]');
       let reachedReturnedMedia = false;
       for (let attempt = 0; attempt < 8; attempt += 1) {
         reachedReturnedMedia = await page.locator(
@@ -2442,7 +2446,7 @@ async function verifyFinalAcceptanceMobileFlow() {
         ).count() > 0;
         if (reachedReturnedMedia) break;
         const previousStep = await page.locator(".journey-playback").getAttribute("data-playback-step");
-        await progress.press("ArrowRight");
+        await nextControl.evaluate((button) => button.click());
         await page.waitForFunction((step) => (
           document.querySelector(".journey-playback")?.getAttribute("data-playback-step") !== step
         ), previousStep, { timeout: 2_000 });
