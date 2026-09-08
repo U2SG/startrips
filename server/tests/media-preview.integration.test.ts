@@ -7,6 +7,7 @@ import { serverConfig } from "../config";
 import { atlases, mediaAssets } from "../db/app-schema";
 import {
   organization as authOrganizations,
+  rateLimit,
   user as authUsers,
 } from "../db/auth-schema";
 import { db, pool } from "../db/client";
@@ -82,6 +83,13 @@ async function createAuthenticatedAtlas(label: string) {
   const email = `${label}-${randomUUID()}@example.test`;
   const password = "test-only-password-123";
   authUserEmails.push(email);
+  // `/sign-up/email` allows five attempts per address per ten minutes, and the
+  // other integration files have already spent most of that budget by the time
+  // this one runs, so a fresh identity here would answer 429 rather than 200.
+  // The counters a previous FILE left behind are cleared; the product limit
+  // itself is untouched, the key format is not assumed, and this file still
+  // creates exactly one identity.
+  await db.delete(rateLimit);
   const signUp = await app.request(`${TEST_ORIGIN}/api/auth/sign-up/email`, {
     method: "POST",
     headers: authHeaders(),
