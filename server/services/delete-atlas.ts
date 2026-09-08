@@ -10,7 +10,11 @@ export type DeleteAtlasDependencies = {
   ) => Promise<typeof atlases.$inferSelect | undefined>;
   listJourneys: (atlasId: string) => Promise<Array<{ id: string }>>;
   listStorageRefs: (journeyId: string) => Promise<{
-    media: Array<{ storageDriver: string; storageKey: string }>;
+    media: Array<{
+      storageDriver: string;
+      storageKey: string;
+      previewStorageKey: string | null;
+    }>;
     uploads: Array<{
       storageDriver: string;
       storageKey: string;
@@ -44,6 +48,10 @@ const defaultDependencies: DeleteAtlasDependencies = {
         .select({
           storageDriver: mediaAssets.storageDriver,
           storageKey: mediaAssets.storageKey,
+          // #260: the derived preview is a second object under the same row,
+          // and the atlas row delete cascades that row away, so this select is
+          // the last moment its key can be read for cleanup.
+          previewStorageKey: mediaAssets.previewStorageKey,
         })
         .from(mediaAssets)
         .where(eq(mediaAssets.journeyId, journeyId)),
@@ -100,12 +108,16 @@ export async function deleteAtlasForOrganization(
       const refs = await dependencies.listStorageRefs(journey.id);
       const deletedObjects = new Set<string>();
       for (const asset of refs.media) {
-        const reference = storageReference(asset.storageDriver, asset.storageKey);
-        if (deletedObjects.has(reference)) continue;
-        await dependencies.storageForBackend(asset.storageDriver).deleteObject({
-          key: asset.storageKey,
-        });
-        deletedObjects.add(reference);
+        // Both objects of the asset, deduplicated together because they share
+        // one backend.
+        for (const key of [asset.previewStorageKey, asset.storageKey]) {
+          if (!key) continue;
+          const reference = storageReference(asset.storageDriver, key);
+          if (deletedObjects.has(reference)) continue;
+          await dependencies.storageForBackend(asset.storageDriver)
+            .deleteObject({ key });
+          deletedObjects.add(reference);
+        }
       }
       for (const upload of refs.uploads) {
         const reference = storageReference(upload.storageDriver, upload.storageKey);

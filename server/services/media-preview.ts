@@ -207,16 +207,28 @@ export async function completeAssetPreview(
     return { ok: false, error: "PREVIEW_OBJECT_MISSING", status: 409 };
   }
   if (!previewObjectFitsCeiling(inspected.bytes, ceilings)) {
-    await db
+    // Guarded by the key that was actually inspected, exactly like the success
+    // path below. Without it, a completion that measured generation A would
+    // clear generation B out of a row a concurrent re-derivation had already
+    // moved on, stranding B's object and leaving its producer holding an
+    // upload URL it could never complete.
+    const [cleared] = await db
       .update(mediaAssets)
       .set(CLEARED_PREVIEW)
-      .where(eq(mediaAssets.id, asset.id));
-    await discardPreviewObject(
-      asset.storageDriver,
-      asset.previewStorageKey,
-      dependencies,
-    );
-    return { ok: false, error: "PREVIEW_TOO_LARGE", status: 409 };
+      .where(and(
+        eq(mediaAssets.id, asset.id),
+        eq(mediaAssets.previewStorageKey, asset.previewStorageKey),
+      ))
+      .returning({ id: mediaAssets.id });
+    if (cleared) {
+      await discardPreviewObject(
+        asset.storageDriver,
+        asset.previewStorageKey,
+        dependencies,
+      );
+      return { ok: false, error: "PREVIEW_TOO_LARGE", status: 409 };
+    }
+    return { ok: false, error: "PREVIEW_NOT_PENDING", status: 409 };
   }
 
   const [updated] = await db

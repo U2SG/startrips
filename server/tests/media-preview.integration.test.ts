@@ -445,6 +445,53 @@ describe("#260 same-asset preview for private media reads", () => {
     expect(read.preview).toBeUndefined();
   });
 
+  it("clears only the generation it inspected when a re-derivation raced it", async () => {
+    const asset = await insertAsset();
+    const oversized = recordingStorage({
+      async inspectObject() {
+        return { exists: true, bytes: serverConfig.mediaPreviewMaxBytes + 1 };
+      },
+    });
+    await beginAssetPreview(
+      asset,
+      identity.atlasId,
+      { sourceWidth: 6000, sourceHeight: 4000, exifOrientation: 1 },
+      CEILINGS,
+      UPLOAD_TTL_SECONDS,
+      { storageForBackend: oversized.resolve },
+    );
+    // Generation A, read by a completion that is about to stall.
+    const stale = await readAsset(asset.id);
+
+    // Generation B replaces it while that completion is in flight.
+    const fresh = recordingStorage();
+    await beginAssetPreview(
+      stale,
+      identity.atlasId,
+      { sourceWidth: 4000, sourceHeight: 3000, exifOrientation: 1 },
+      CEILINGS,
+      UPLOAD_TTL_SECONDS,
+      { storageForBackend: fresh.resolve },
+    );
+    const current = await readAsset(asset.id);
+    expect(current.previewStorageKey).not.toBe(stale.previewStorageKey);
+
+    // A's completion now finds its object oversized. It must not clear B: B's
+    // producer still holds a valid upload URL for a key this call never saw.
+    const completed = await completeAssetPreview(stale, CEILINGS, {
+      storageForBackend: oversized.resolve,
+    });
+
+    expect(completed).toMatchObject({
+      ok: false,
+      error: "PREVIEW_NOT_PENDING",
+    });
+    const after = await readAsset(asset.id);
+    expect(after.previewStorageKey).toBe(current.previewStorageKey);
+    expect(after.previewState).toBe("pending");
+    expect(oversized.deleted).not.toContain(current.previewStorageKey);
+  });
+
   it("keeps a write that never landed retryable instead of failing it", async () => {
     const asset = await insertAsset();
     const backend = recordingStorage({

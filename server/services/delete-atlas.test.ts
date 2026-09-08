@@ -60,6 +60,7 @@ function dependencies(overrides: Partial<DeleteAtlasDependencies> = {}) {
           media: [{
             storageDriver: "primary-media-v1",
             storageKey: "atlas/journey/photo.jpg",
+            previewStorageKey: "atlas/journey/previews/photo",
           }],
           uploads: [{
             storageDriver: "primary-media-v1",
@@ -88,6 +89,12 @@ describe("deleteAtlasForOrganization", () => {
     expect(deleted).toBe(true);
     expect(storage.deleteObject).toHaveBeenCalledWith({
       key: "atlas/journey/photo.jpg",
+    });
+    // #260: the derived preview is a second object under the same asset row,
+    // and the cascade takes the only record of it, so atlas deletion has to
+    // reach it here or it is orphaned in storage forever.
+    expect(storage.deleteObject).toHaveBeenCalledWith({
+      key: "atlas/journey/previews/photo",
     });
     expect(storage.abortMultipartUpload).toHaveBeenCalledWith({
       key: "atlas/journey/pending.mp4",
