@@ -67,6 +67,20 @@ import {
   ROUTE_ARC_SATURATION_ANGLE,
 } from "./routeArcLift";
 import {
+  canTrackGlobePointer,
+  clampGlobeZoom,
+  getGlobeInertiaSpeedLimit,
+  isGlobeDrag,
+  isPrimaryPointerActivation,
+  isReliablePinchAnchor,
+  projectedRadiusRotationDelta,
+  rebaseGlobeDragSample,
+  shouldRememberUntrackedPointerStart,
+  shouldRetainGlobeInertia,
+  shouldSuppressUntrackedPointerActivation,
+  type ScreenPoint,
+} from "./globePointerIntent";
+import {
   createAtmosphereMaterial,
   createParticleEarthMaterial,
   PARTICLE_ACTIVE_DIM_POINT_LIMIT,
@@ -257,16 +271,9 @@ export const GLOBE_RENDER_ORDER = {
   routePoint: 4,
   personalPoint: 5,
 } as const;
-export const GLOBE_DRAG_THRESHOLD_PX = 6;
 // The globe is a real sphere: vertical dragging must be able to pass the
 // former +/-35 degree clamp and turn it completely over.
 export const GLOBE_TILT_LIMIT_RADIANS = Number.POSITIVE_INFINITY;
-export const GLOBE_ZOOM_MIN = 0.72;
-// #196: geographic annotations now project from the true surface, so zoom can
-// no longer magnify a radial offset they never had into screen-space drift.
-// The ceiling remains because decorative route lift and the glow still need
-// near-plane headroom in front of the camera at z = 5.4.
-export const GLOBE_ZOOM_MAX = 3.0;
 export const GLOBE_SURFACE_RADIUS = GEOGRAPHIC_SURFACE_RADIUS;
 // #252: the latitude step the local geographic scale is measured over. Small
 // enough that the projection is locally linear across it, large enough that the
@@ -286,7 +293,6 @@ export const GLOBE_UPRIGHT_ROTATION_X = 0;
 export const GLOBE_IDLE_ALIGNMENT_SPEED = (Math.PI * 15) / 180;
 
 export const GLOBE_DRAG_MAPPING_MODE = "projected-surface-linear";
-export const GLOBE_MAX_INERTIA_SCREEN_SPEED_PX_PER_SECOND = 640;
 const GLOBE_INERTIA_FRICTION = 5.2;
 const GLOBE_WHEEL_ZOOM_SPEED = 0.0012;
 const JOURNEY_ROUTE_LINE_REFERENCE_SCALE = 1.15;
@@ -446,21 +452,6 @@ export function getGlobeIdleAlignmentRotation(
   return rotation + Math.sign(remaining) * maxStep;
 }
 
-export function isGlobeDrag(distance: number) {
-  return distance >= GLOBE_DRAG_THRESHOLD_PX;
-}
-
-export function isPrimaryPointerActivation(
-  event: Pick<PointerEvent, "button" | "isPrimary" | "pointerType">,
-) {
-  return event.isPrimary
-    && (event.pointerType !== "mouse" || event.button === 0);
-}
-
-export function clampGlobeZoom(zoom: number) {
-  return Math.max(GLOBE_ZOOM_MIN, Math.min(GLOBE_ZOOM_MAX, zoom));
-}
-
 export function coastlineLodWeights(zoom: number): Record<CoastlineLod, number> {
   return resolveGlobeSemanticZoom({ zoom }).coastlineWeights;
 }
@@ -494,78 +485,6 @@ export function getProjectedSurfaceInteractionRadiusPx(
   // per radian grows faster than the center-plane silhouette as zoom brings
   // that surface toward the camera.
   return focalLengthPx * worldRadius / Math.max(0.25, cameraDistance - worldRadius);
-}
-
-type ScreenPoint = { x: number; y: number };
-
-export function projectedRadiusRotationDelta(
-  previous: ScreenPoint,
-  current: ScreenPoint,
-  radius: number,
-) {
-  const safeRadius = Math.max(1, radius);
-  const rotationX = (current.y - previous.y) / safeRadius;
-  const rotationY = (current.x - previous.x) / safeRadius;
-  return {
-    rotationX,
-    rotationY,
-    angularDelta: Math.hypot(rotationX, rotationY),
-  };
-}
-
-export function getGlobeInertiaSpeedLimit(interactionRadiusPx: number) {
-  return GLOBE_MAX_INERTIA_SCREEN_SPEED_PX_PER_SECOND
-    / Math.max(1, interactionRadiusPx);
-}
-
-export function shouldRetainGlobeInertia(
-  lastSampleAt: number,
-  releaseAt: number,
-  angularDelta: number,
-) {
-  return releaseAt - lastSampleAt <= 80 && angularDelta >= 0.0002;
-}
-
-export function isReliablePinchAnchor(
-  point: ScreenPoint,
-  globeCenter: ScreenPoint,
-  projectedGlobeRadiusPx: number,
-) {
-  return Number.isFinite(projectedGlobeRadiusPx)
-    && projectedGlobeRadiusPx > 0
-    && Math.hypot(point.x - globeCenter.x, point.y - globeCenter.y)
-      <= projectedGlobeRadiusPx * 0.98;
-}
-
-export function canTrackGlobePointer(activePointerCount: number) {
-  return activePointerCount < 2;
-}
-
-export function shouldSuppressUntrackedPointerActivation(
-  rejectedByGestureCapacity: boolean,
-  activePointerCount: number,
-) {
-  return rejectedByGestureCapacity || activePointerCount > 0;
-}
-
-export function shouldRememberUntrackedPointerStart(activePointerCount: number) {
-  return activePointerCount > 0;
-}
-
-export function rebaseGlobeDragSample(
-  pointerId: number,
-  pointer: ScreenPoint,
-  timeStamp: number,
-  alreadyConsumed: boolean,
-) {
-  return {
-    pointerId,
-    lastX: pointer.x,
-    lastY: pointer.y,
-    lastTime: timeStamp,
-    travel: alreadyConsumed ? GLOBE_DRAG_THRESHOLD_PX : 0,
-    started: alreadyConsumed,
-  };
 }
 
 export function shouldFocusRevisionOwnState(
