@@ -41,7 +41,7 @@ import {
   type PlaybackStep,
 } from "./journeyPlayback";
 import { planPrefetchWindow, readyMsAheadForTempo } from "./playbackPrefetchPlan";
-import { syncPlaybackMediaElement } from "./mediaPlaybackSync";
+import { rewindPlaybackMediaElement, syncPlaybackMediaElement } from "./mediaPlaybackSync";
 import {
   resolveVideoTrim,
   videoTrimBuffersOnStall,
@@ -215,7 +215,7 @@ export function JourneyPlaybackOverlay({
   const hold = holdReason !== "none" || presentationPending;
   const [videoFallbackAssetId, setVideoFallbackAssetId] = useState<string | null>(null);
   const director = useJourneyPlaybackDirector(journey, hold, stepDurationResolver);
-  const { phase, paused, pause, resume, next, back, seek, exit, steps, stepIndex, tempo, setTempo } = director;
+  const { phase, paused, pause, resume, next, back, replay, seek, exit, steps, stepIndex, tempo, setTempo } = director;
   // #126 sections 3-4: the transport reads the elapsed-time plan, so the bar is
   // time-weighted instead of step-weighted and a scrub has a time model.
   const { plan, getTimerBudget } = director;
@@ -832,6 +832,13 @@ export function JourneyPlaybackOverlay({
   // inside user activation; the soundtrack effect below stays as the
   // synchronization/fallback path.
   const togglePlayback = useCallback(() => {
+    if (director.completed) {
+      samplerRef.current.setPlaying(false);
+      rewindPlaybackMediaElement(audioRef.current);
+      syncPlaybackMediaElement(videoRef.current, false);
+      replay();
+      return;
+    }
     if (paused) {
       const audio = audioRef.current;
       if (audio && soundtrackRead?.status === "ready") {
@@ -849,7 +856,7 @@ export function JourneyPlaybackOverlay({
       syncPlaybackMediaElement(videoRef.current, false);
       pause();
     }
-  }, [audioReactiveReducedMotion, director.step, journey, paused, pause, resume, presentationPending, soundtrackRead?.status === "ready", videoFallbackAssetId]);
+  }, [audioReactiveReducedMotion, director.completed, director.step, journey, paused, pause, replay, resume, presentationPending, soundtrackRead?.status === "ready", videoFallbackAssetId]);
 
   // Camera ownership follows playback semantics. Intro/outro frame the whole
   // Journey; travel/stop/media point at one route point. The key guard avoids
@@ -866,7 +873,7 @@ export function JourneyPlaybackOverlay({
 
   // Keyboard: arrows step, space pauses, Esc exits.
   useEffect(() => {
-    if (!director.isPlaying && !paused) return;
+    if (!director.isPlaying && !paused && !director.completed) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         requestClose();
@@ -887,7 +894,7 @@ export function JourneyPlaybackOverlay({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [director.isPlaying, paused, togglePlayback, next, back, requestClose]);
+  }, [director.completed, director.isPlaying, paused, togglePlayback, next, back, requestClose]);
 
   // Review P2: keep Tab focus inside the playback overlay.
   useEffect(() => {
@@ -1318,10 +1325,10 @@ export function JourneyPlaybackOverlay({
           type="button"
           className={paused ? "is-active" : ""}
           onClick={togglePlayback}
-          aria-label={paused ? "继续播放" : "暂停播放"}
+          aria-label={director.completed ? "重新播放" : paused ? "继续播放" : "暂停播放"}
           aria-pressed={paused}
         >
-          {paused
+          {paused || director.completed
             ? <IconPlayerPlay size={20} stroke={1.35} aria-hidden="true" />
             : <IconPlayerPause size={20} stroke={1.35} aria-hidden="true" />}
         </button>
@@ -1370,9 +1377,9 @@ export function JourneyPlaybackOverlay({
             // native arrow step would move a thousandth of the run and usually
             // land back on the same beat; the overlay's global arrow handler
             // deliberately ignores a focused input, so the keys are wired here.
-            // Review P2: they seek rather than calling next/back, because the
-            // reducer ignores `next` while paused and a paused scrubber has to
-            // stay navigable - which is the whole point of scrubbing.
+            // Review P2: scrubber arrows seek the plan's explicit target beat
+            // rather than re-deriving elapsed-time navigation here. The reducer
+            // preserves pause ownership for that seek just as it does for next/back.
             onKeyDown={(event) => {
               const direction = event.key === "ArrowRight" || event.key === "ArrowUp"
                 ? 1

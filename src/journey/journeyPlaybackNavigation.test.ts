@@ -122,6 +122,40 @@ describe("meaningful Journey Playback navigation (#126)", () => {
     });
   });
 
+  it("keeps next, back and raw advance meaningful while paused without resuming", () => {
+    let pausedMedia = initialPlaybackState();
+    pausedMedia = playbackReducer(journey, pausedMedia, { type: "seek", stepIndex: 2 });
+    pausedMedia = playbackReducer(journey, pausedMedia, { type: "pause" });
+
+    const next = playbackReducer(journey, pausedMedia, { type: "next" });
+    expect(next).toEqual({
+      stepIndex: 4,
+      phase: { type: "paused", previous: { type: "stop", pointIndex: 1 } },
+      paused: true,
+    });
+
+    const advanced = playbackReducer(journey, pausedMedia, { type: "advance" });
+    expect(advanced).toEqual(next);
+
+    const back = playbackReducer(journey, next, { type: "back" });
+    expect(back).toEqual({
+      stepIndex: 2,
+      phase: { type: "paused", previous: { type: "media", pointIndex: 0, mediaIndex: 0 } },
+      paused: true,
+    });
+  });
+
+  it("replay leaves completion at exactly the initial transport state", () => {
+    const steps = buildPlaybackSteps(journey);
+    let state = playbackReducer(journey, initialPlaybackState(), {
+      type: "seek",
+      stepIndex: steps.length - 1,
+    });
+    state = playbackReducer(journey, state, { type: "advance" });
+    expect(state.phase).toEqual({ type: "completed" });
+    expect(playbackReducer(journey, state, { type: "replay" })).toEqual(initialPlaybackState());
+  });
+
   it("clamps manual navigation at intro and outro", () => {
     let state = initialPlaybackState();
     state = playbackReducer(journey, state, { type: "previous" });

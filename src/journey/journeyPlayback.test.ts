@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildPlaybackSteps,
   initialPlaybackState,
+  isPlaybackTerminalState,
   playbackReducer,
   playbackCameraTargetForStep,
   playbackTravelChoreography,
@@ -217,13 +218,16 @@ describe("playbackReducer (#19)", () => {
     expect(state.phase).toEqual({ type: "media", pointIndex: 0, mediaIndex: 0 });
     state = playbackReducer(journey, state, { type: "back" });
     expect(state.phase).toEqual({ type: "stop", pointIndex: 0 });
-    // Outro is the last step and advance clamps there.
+    // Consuming outro enters a distinct terminal transport state. Further
+    // automatic advancement is the exact same state object.
     for (let index = 0; index < steps.length; index += 1) {
       state = playbackReducer(journey, state, { type: "advance" });
     }
-    expect(state.phase).toEqual({ type: "outro" });
+    expect(state.phase).toEqual({ type: "completed" });
     const clamped = playbackReducer(journey, state, { type: "advance" });
-    expect(clamped.phase).toEqual({ type: "outro" });
+    expect(clamped).toBe(state);
+    expect(isPlaybackTerminalState(state)).toBe(true);
+    expect(isPlaybackTerminalState(initialPlaybackState())).toBe(false);
   });
 
   it("seeks atomically to a requested playback step and clamps boundaries", () => {
@@ -260,7 +264,7 @@ describe("playbackReducer (#19)", () => {
     });
   });
 
-  it("pause freezes advancement and resume restores the previous phase", () => {
+  it("pause keeps ownership while raw advance moves to the requested next beat", () => {
     let state = initialPlaybackState();
     state = playbackReducer(journey, state, { type: "advance" });
     state = playbackReducer(journey, state, { type: "pause" });
@@ -270,10 +274,15 @@ describe("playbackReducer (#19)", () => {
       previous: { type: "stop", pointIndex: 0 },
     });
     const advanced = playbackReducer(journey, state, { type: "advance" });
-    expect(advanced.stepIndex).toBe(state.stepIndex); // paused: no advance
-    const resumed = playbackReducer(journey, state, { type: "resume" });
+    expect(advanced.stepIndex).toBe(state.stepIndex + 1);
+    expect(advanced.paused).toBe(true);
+    expect(advanced.phase).toEqual({
+      type: "paused",
+      previous: { type: "media", pointIndex: 0, mediaIndex: 0 },
+    });
+    const resumed = playbackReducer(journey, advanced, { type: "resume" });
     expect(resumed.paused).toBe(false);
-    expect(resumed.phase).toEqual({ type: "stop", pointIndex: 0 });
+    expect(resumed.phase).toEqual({ type: "media", pointIndex: 0, mediaIndex: 0 });
   });
 });
 
