@@ -11,6 +11,7 @@ import {
   type JourneyValues,
 } from "../repositories/journey-repository";
 import { deleteJourneyWithStorage } from "../services/delete-journey";
+import { readJsonObject } from "./json-body";
 
 const MAX_ROUTE_POINTS = 64;
 const MAX_ROUTE_POINT_NOTE_LENGTH = 2000;
@@ -167,7 +168,8 @@ journeyRoutes.get("/:id", async (context) => {
 
 journeyRoutes.post("/", async (context) => {
   const { atlas, session } = await requireAtlasAccess(context.req.raw, "create");
-  const input = parseJourneyInput(await context.req.json<JourneyInput>());
+  const body = await readJsonObject(() => context.req.json());
+  const input = body && parseJourneyInput(body);
   if (!input) {
     return context.json(
       { error: "INVALID_JOURNEY", message: "Invalid journey data" },
@@ -187,7 +189,8 @@ journeyRoutes.post("/", async (context) => {
 
 journeyRoutes.patch("/:id", async (context) => {
   const { atlas } = await requireAtlasAccess(context.req.raw, "update");
-  const input = parseJourneyInput(await context.req.json<JourneyInput>());
+  const body = await readJsonObject(() => context.req.json());
+  const input = body && parseJourneyInput(body);
   if (!input) {
     return context.json(
       { error: "INVALID_JOURNEY", message: "Invalid journey data" },
@@ -226,15 +229,20 @@ journeyRoutes.post("/:id/restore", async (context) => {
 
 // #14: set or clear the journey's explicit cover media. A dedicated lightweight
 // endpoint avoids overwriting any other journey field through the full update.
+// An omitted `coverMediaAssetId` clears the cover, so an unusable body has to
+// be refused before that reading applies: a string or an array body used to
+// yield `undefined` here and clear the cover the caller never asked about.
 journeyRoutes.patch("/:id/cover", async (context) => {
   const { atlas } = await requireAtlasAccess(context.req.raw, "update");
-  const body = await context.req.json<{ coverMediaAssetId?: unknown }>();
-  const coverMediaAssetId = body.coverMediaAssetId === null
-    || body.coverMediaAssetId === undefined
-    ? null
-    : typeof body.coverMediaAssetId === "string" && UUID_PATTERN.test(body.coverMediaAssetId)
-      ? body.coverMediaAssetId
-      : "invalid";
+  const body = await readJsonObject(() => context.req.json());
+  const coverMediaAssetId = !body
+    ? "invalid"
+    : body.coverMediaAssetId === null || body.coverMediaAssetId === undefined
+      ? null
+      : typeof body.coverMediaAssetId === "string"
+        && UUID_PATTERN.test(body.coverMediaAssetId)
+        ? body.coverMediaAssetId
+        : "invalid";
   if (coverMediaAssetId === "invalid") {
     return context.json(
       { error: "INVALID_COVER", message: "Invalid cover media asset" },

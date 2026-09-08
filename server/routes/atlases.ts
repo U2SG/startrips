@@ -7,6 +7,7 @@ import {
 import { db } from "../db/client";
 import { atlases } from "../db/app-schema";
 import { deleteAtlasForOrganization } from "../services/delete-atlas";
+import { readJsonObject } from "./json-body";
 
 export type AtlasDetails = {
   title: string;
@@ -49,11 +50,8 @@ atlasRoutes.post("/bootstrap", async (context) => {
     return context.json({ atlas: existing[0], created: false });
   }
 
-  const body = await context.req.json<{
-    title?: unknown;
-    dedication?: unknown;
-  }>();
-  const details = parseAtlasDetails(body);
+  const body = await readJsonObject(() => context.req.json());
+  const details = body && parseAtlasDetails(body);
   if (!details) {
     return context.json(
       { error: "INVALID_ATLAS", message: "Invalid atlas title or dedication" },
@@ -82,7 +80,8 @@ atlasRoutes.post("/bootstrap", async (context) => {
 
 atlasRoutes.patch("/current", async (context) => {
   const { atlas } = await requireAtlasAccess(context.req.raw, "update");
-  const details = parseAtlasDetails(await context.req.json());
+  const body = await readJsonObject(() => context.req.json());
+  const details = body && parseAtlasDetails(body);
   if (!details) {
     return context.json(
       { error: "INVALID_ATLAS", message: "Invalid atlas title or dedication" },

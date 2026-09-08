@@ -22,6 +22,7 @@ import {
   type MultipartPart,
   type MultipartStorage,
 } from "../storage/multipart-storage";
+import { readJsonObject } from "./json-body";
 
 const PART_SIZE = 8 * 1024 * 1024;
 const MAX_UPLOAD_BYTES = 2_000_000_000;
@@ -779,7 +780,8 @@ export const uploadRoutes = new Hono();
 
 uploadRoutes.post("/start", async (context) => {
   const { atlas, session } = await requireAtlasAccess(context.req.raw, "create");
-  const input = parseStartUpload(await context.req.json<StartUploadInput>());
+  const body = await readJsonObject(() => context.req.json());
+  const input = body && parseStartUpload(body);
   if (!input) {
     return context.json({ error: "INVALID_UPLOAD" }, 400);
   }
@@ -963,8 +965,8 @@ uploadRoutes.post("/:id/complete", async (context) => {
     );
   }
 
-  const body = await context.req.json<{ parts?: unknown }>();
-  const parts = parseParts(body.parts, upload.partCount);
+  const body = await readJsonObject(() => context.req.json());
+  const parts = body && parseParts(body.parts, upload.partCount);
   if (!parts) return context.json({ error: "INVALID_UPLOAD_PARTS" }, 400);
 
   const attemptId = randomUUID();
@@ -1138,7 +1140,8 @@ uploadRoutes.delete("/assets/:id", async (context) => {
 
 uploadRoutes.post("/assets/reorder", async (context) => {
   const { atlas } = await requireAtlasAccess(context.req.raw, "update");
-  const input = parseReorderInput(await context.req.json<ReorderMediaInput>());
+  const body = await readJsonObject(() => context.req.json());
+  const input = body && parseReorderInput(body);
   if (!input) {
     return context.json(
       { error: "INVALID_MEDIA_ORDER", message: "Invalid media order" },
@@ -1198,7 +1201,8 @@ uploadRoutes.post("/assets/reorder", async (context) => {
 
 uploadRoutes.post("/assets/move", async (context) => {
   const { atlas } = await requireAtlasAccess(context.req.raw, "update");
-  const input = parseMoveMediaInput(await context.req.json<MoveMediaInput>());
+  const body = await readJsonObject(() => context.req.json());
+  const input = body && parseMoveMediaInput(body);
   if (!input) {
     return context.json(
       { error: "INVALID_MEDIA_MOVE", message: "Invalid media move" },
@@ -1405,10 +1409,10 @@ uploadRoutes.post("/assets/move", async (context) => {
 
 uploadRoutes.post("/assets/move/undo", async (context) => {
   const { atlas } = await requireAtlasAccess(context.req.raw, "update");
-  const body = await context.req.json<UndoMediaMoveInput & UndoMoveMediaInput>();
-  const input = parseUndoMediaMoveInput(body);
+  const body = await readJsonObject(() => context.req.json());
+  const input = body && parseUndoMediaMoveInput(body);
   if (!input) {
-    const sameJourneyInput = parseUndoMoveMediaInput(body);
+    const sameJourneyInput = body && parseUndoMoveMediaInput(body);
     if (!sameJourneyInput) {
       return context.json(
         { error: "INVALID_MEDIA_MOVE_UNDO", message: "Invalid media move undo" },
