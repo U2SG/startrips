@@ -204,7 +204,10 @@ export async function updateHomeBasePeriodForAtlas(
         eq(homeBasePeriods.atlasId, atlasId),
       ))
       .returning(RECORD_COLUMNS);
-    return asRecord(updated);
+    // The Atlas lock above already excludes a concurrent removal of this row,
+    // so an empty result is unreachable rather than merely unlikely. Answered
+    // as "not found" anyway, so the read cannot become a dereference.
+    return updated ? asRecord(updated) : undefined;
   });
 }
 
@@ -214,21 +217,33 @@ export async function updateHomeBasePeriodForAtlas(
  * removing a life period is exactly a statement about where the member lived
  * and never a deletion of recorded travel.
  *
- * A single statement scoped by Atlas, so no lock ordering applies and a
- * foreign id is indistinguishable from a missing one.
+ * Takes the Atlas lock like every other write here, even though the statement
+ * itself is a single scoped DELETE. Without it a removal could commit inside
+ * the window an amend has already opened — between the history it loaded and
+ * the row it is about to write — and the amend's own UPDATE would then match
+ * nothing. Sharing one serialization point makes the two orders the only two
+ * outcomes: the amend lands and the removal takes the amended row, or the
+ * removal lands and the amend answers "not found".
+ *
+ * Returns undefined when the Atlas is gone or being deleted as well as when
+ * the period is not this Atlas's, so a foreign id stays indistinguishable
+ * from a missing one.
  */
 export async function deleteHomeBasePeriodForAtlas(
   atlasId: string,
   periodId: string,
 ): Promise<{ id: string } | undefined> {
-  const [deleted] = await db
-    .delete(homeBasePeriods)
-    .where(and(
-      eq(homeBasePeriods.id, periodId),
-      eq(homeBasePeriods.atlasId, atlasId),
-    ))
-    .returning({ id: homeBasePeriods.id });
-  return deleted;
+  return await db.transaction(async (transaction) => {
+    if (!await lockActiveAtlas(transaction, atlasId)) return undefined;
+    const [deleted] = await transaction
+      .delete(homeBasePeriods)
+      .where(and(
+        eq(homeBasePeriods.id, periodId),
+        eq(homeBasePeriods.atlasId, atlasId),
+      ))
+      .returning({ id: homeBasePeriods.id });
+    return deleted;
+  });
 }
 
 /** Diagnostic count, used by the isolation and cascade assertions. */

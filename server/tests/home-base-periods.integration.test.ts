@@ -237,13 +237,24 @@ describe("atlas ownership", () => {
     expect(await countHomeBasePeriodsForAtlas(atlasA)).toBe(2);
   });
 
-  it("refuses to write a period for an atlas that is being deleted", async () => {
+  it("refuses every write for an atlas that is being deleted", async () => {
     const closing = await freshAtlas("closing");
+    const period = await createHomeBasePeriodForAtlas(closing, SHENZHEN);
+    expect(period).toBeTruthy();
+
     await db
       .update(atlases)
       .set({ deletionStartedAt: new Date() })
       .where(eq(atlases.id, closing));
-    expect(await createHomeBasePeriodForAtlas(closing, SHENZHEN))
+
+    // Create, amend and removal all serialize on the same Atlas lock, so all
+    // three see the deletion mark instead of writing behind it.
+    expect(await createHomeBasePeriodForAtlas(closing, TOKYO)).toBeUndefined();
+    expect(await updateHomeBasePeriodForAtlas(closing, period!.id, {
+      label: "Too late",
+    })).toBeUndefined();
+    expect(await deleteHomeBasePeriodForAtlas(closing, period!.id))
       .toBeUndefined();
+    expect(await countHomeBasePeriodsForAtlas(closing)).toBe(1);
   });
 });
