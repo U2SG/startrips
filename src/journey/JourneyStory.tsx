@@ -1925,8 +1925,12 @@ export function JourneyStory({
       : { ...current, [assetId]: { status: "loading" } });
     const issuedAt = Date.now();
     const scope = mediaReadScope.current;
+    // Playback can claim the existing resource while this request is in flight.
+    // Check again when React applies either completion; the next expiry sweep
+    // may retry after playback releases it, without resetting a live transport.
     void readMedia(assetId).then(
-      (read) => setMediaReads((current) => mediaReadScope.current !== scope ? current : ({
+      (read) => setMediaReads((current) => mediaReadScope.current !== scope
+        || (protectedPlaybackRead.current === assetId && current[assetId]?.status === "ready") ? current : ({
         ...current,
         [assetId]: {
           status: "ready",
@@ -1936,7 +1940,8 @@ export function JourneyStory({
           expiresAt: Date.parse(read.expiresAt),
         },
       })),
-      (error) => setMediaReads((current) => mediaReadScope.current !== scope ? current : ({
+      (error) => setMediaReads((current) => mediaReadScope.current !== scope
+        || (protectedPlaybackRead.current === assetId && current[assetId]?.status === "ready") ? current : ({
         ...current,
         [assetId]: {
           status: "error",

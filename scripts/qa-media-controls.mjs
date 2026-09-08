@@ -1736,6 +1736,79 @@ try {
     await videoAutoplay.page.close();
   }
 
+  // A renewal can start while paused and finish after a user starts playback.
+  // Exercise the real expiry sweep and async read boundary, including failure;
+  // the current transport must survive, and refresh must resume after pause.
+  for (const outcome of ["success", "error"]) {
+    const refreshRace = await createQaPage("/?qaState=journey-story&qaMode=mixed-media", onePixelGif,
+      { instrumentMedia: true, mixedMedia: true, mobile: false });
+    let releaseRefresh = () => undefined;
+    try {
+      const page = refreshRace.page;
+      const videoId = "00000000-0000-4000-8000-000000000152";
+      await waitForStoryPicture(page, "00000000-0000-4000-8000-000000000100");
+      await clickStoryPicture(page, 1);
+      await waitForStoryPicture(page, videoId);
+      const video = page.locator(".journey-story__media video[data-shared-media-id]");
+      await video.evaluate((element) => {
+        window.__qaRefreshVideo = element;
+        window.__qaRefreshSource = element.getAttribute("src");
+        window.__qaRefreshSourceChanges = 0;
+        window.__qaRefreshEmptied = 0;
+        new MutationObserver((records) => { window.__qaRefreshSourceChanges += records.length; })
+          .observe(element, { attributes: true, attributeFilter: ["src"] });
+        element.addEventListener("emptied", () => { window.__qaRefreshEmptied += 1; });
+      });
+      const held = new Promise((resolve) => { releaseRefresh = resolve; });
+      let requestCount = 0;
+      let startedRefresh;
+      const started = new Promise((resolve) => { startedRefresh = resolve; });
+      const expiredNow = Date.now() + 901_000;
+      await page.route(`**/api/uploads/assets/${videoId}/read-url`, async (route) => {
+        const attempt = ++requestCount;
+        if (attempt === 1) { startedRefresh(); await held; }
+        await route.fulfill({
+          status: attempt === 1 && outcome === "error" ? 500 : 200,
+          contentType: "application/json",
+          body: JSON.stringify(attempt === 1 && outcome === "error" ? { message: "QA refresh unavailable" } : {
+            url: `${tinyVideo}?renewal=${attempt}`,
+            expiresAt: new Date(expiredNow + 900_000).toISOString(),
+          }),
+        });
+      });
+      // Only Date changes. Real timers, media readiness and user input continue.
+      await page.clock.setFixedTime(expiredNow);
+      await Promise.race([started, new Promise((_, reject) => setTimeout(() => reject(new Error("Story refresh did not start")), 25_000))]);
+      await page.locator(".journey-story").getByRole("button", { name: "自动播放媒体", exact: true }).click();
+      await page.waitForFunction(() => !window.__qaRefreshVideo.paused);
+      const completion = page.waitForResponse((response) => response.url().includes(`/assets/${videoId}/read-url`));
+      releaseRefresh();
+      await (await completion).finished();
+      const retained = await page.evaluate(async () => {
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        const element = document.querySelector(".journey-story__media video[data-shared-media-id]");
+        return { sameNode: element === window.__qaRefreshVideo,
+          sameSource: element?.getAttribute("src") === window.__qaRefreshSource,
+          sourceChanges: window.__qaRefreshSourceChanges, emptied: window.__qaRefreshEmptied,
+          playing: Boolean(element && !element.paused),
+          storyPlaying: Boolean(document.querySelector('.journey-story button[aria-label="暂停自动播放"]')) };
+      });
+      await page.locator(".journey-story").getByRole("button", { name: "暂停自动播放", exact: true }).click();
+      await page.waitForFunction(() => document.querySelector(".journey-story__media video[data-shared-media-id]")
+        ?.getAttribute("src")?.includes("renewal=2"), undefined, { timeout: 25_000 });
+      const unexpectedErrors = refreshRace.consoleErrors.filter((message) => outcome !== "error" || !message.includes("500"));
+      const raceFailed = !retained.sameNode || !retained.sameSource || retained.sourceChanges !== 0
+        || retained.emptied !== 0 || !retained.playing || !retained.storyPlaying || requestCount !== 2
+        || unexpectedErrors.length > 0 || refreshRace.pageErrors.length > 0;
+      checks.push({ name: `story-slow-refresh-then-play-${outcome}`, ...retained,
+        refreshedAfterPause: true, requestCount, unexpectedErrors, pageErrors: refreshRace.pageErrors, failed: raceFailed });
+      if (raceFailed) failed = true;
+    } finally {
+      releaseRefresh();
+      await refreshRace.page.close();
+    }
+  }
+
   // #199 follow-up: the immersive entry the management sheet used to own now
   // belongs to Viewer, must work when the current asset is a VIDEO (the sheet
   // button was the only entry there, because the tap-to-open path is bound to
