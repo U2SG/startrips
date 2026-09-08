@@ -381,6 +381,18 @@ export function resolveGlobeFocusIntent(
     : null;
 }
 
+/**
+ * The geographic anchor the particle renderer is actually holding for a Dive.
+ * Whole-Journey focus deliberately has no focusPoint, so route fitting owns the
+ * anchor whenever a route frame exists; point focus remains the fallback.
+ */
+export function resolveParticleDiveAnchor(
+  routeFocusFrame: { center: { lat: number; lon: number } } | null | undefined,
+  focusPoint: { lat: number; lon: number } | null | undefined,
+) {
+  return routeFocusFrame?.center ?? focusPoint ?? null;
+}
+
 export function isGlobeUpright(rotation: number, tolerance = 0.002) {
   return Math.abs(getShortestRotationDelta(rotation, GLOBE_UPRIGHT_ROTATION_X))
     <= tolerance;
@@ -1278,7 +1290,7 @@ interface ParticleEarthSceneProps {
    * camera to these, which is the only way the two renderers can be known to
    * agree in screen space rather than assumed to.
    */
-  onParticleAnchorFrame?: (frame: ParticleAnchorFrame) => void;
+  onParticleAnchorFrame?: (frame: ParticleAnchorFrame | null) => void;
   /**
    * #252: a camera hand-back. When a detail owner relinquishes the Semantic
    * Earth Dive it asks the particle camera to stand where the zoom authority
@@ -4742,7 +4754,8 @@ export function ParticleEarthScene({
         delete host.dataset.focusTargetY;
       }
 
-      if (latestCenterFocusPoint.current && latestFocusPoint.current) {
+      const diveAnchor = resolveParticleDiveAnchor(routeFocusFrame, latestFocusPoint.current);
+      if (latestCenterFocusPoint.current && diveAnchor) {
         // #237: the focus signal is a geographic annotation like any other, so
         // it publishes the shared frame's answer for its latitude/longitude
         // instead of re-deriving the transform. QA compares this against place
@@ -4751,12 +4764,17 @@ export function ParticleEarthScene({
         updateGeoProjectionFrame(geoFrame, camera, globe.matrixWorld, targetSize.x, targetSize.y);
         projectGeographicAnchorToViewport(
           geoFrame,
-          latestFocusPoint.current.lat,
-          latestFocusPoint.current.lon,
+          diveAnchor.lat,
+          diveAnchor.lon,
           focusSignalScreenPoint,
         );
-        host.dataset.personalPointX = String(focusSignalScreenPoint.x);
-        host.dataset.personalPointY = String(focusSignalScreenPoint.y);
+        if (latestFocusPoint.current) {
+          host.dataset.personalPointX = String(focusSignalScreenPoint.x);
+          host.dataset.personalPointY = String(focusSignalScreenPoint.y);
+        } else {
+          delete host.dataset.personalPointX;
+          delete host.dataset.personalPointY;
+        }
         // #252: the same frame, read once more a small step north, gives the
         // local geographic scale in the only unit both renderers share -
         // viewport CSS pixels per degree of LATITUDE. Latitude on purpose: a
@@ -4764,8 +4782,8 @@ export function ParticleEarthScene({
         // would measure where the anchor is rather than how large it is drawn.
         projectGeographicAnchorToViewport(
           geoFrame,
-          latestFocusPoint.current.lat + ANCHOR_SCALE_PROBE_DEG,
-          latestFocusPoint.current.lon,
+          diveAnchor.lat + ANCHOR_SCALE_PROBE_DEG,
+          diveAnchor.lon,
           focusScaleProbePoint,
         );
         const anchorPxPerDegreeLat = Math.hypot(
@@ -4794,12 +4812,12 @@ export function ParticleEarthScene({
             || Math.abs(publishedAnchorFrame.screen.x - anchorViewportX) >= 0.5
             || Math.abs(publishedAnchorFrame.screen.y - anchorViewportY) >= 0.5
             || Math.abs(publishedAnchorFrame.pxPerDegreeLat / anchorPxPerDegreeLat - 1) >= 0.002
-            || publishedAnchorFrame.anchor.lat !== latestFocusPoint.current.lat
-            || publishedAnchorFrame.anchor.lon !== latestFocusPoint.current.lon
+            || publishedAnchorFrame.anchor.lat !== diveAnchor.lat
+            || publishedAnchorFrame.anchor.lon !== diveAnchor.lon
           )
         ) {
           publishedAnchorFrame = {
-            anchor: { ...latestFocusPoint.current },
+            anchor: { lat: diveAnchor.lat, lon: diveAnchor.lon },
             screen: { x: anchorViewportX, y: anchorViewportY },
             pxPerDegreeLat: anchorPxPerDegreeLat,
           };
@@ -4809,8 +4827,25 @@ export function ParticleEarthScene({
         // sends these when it is clicked, so publishing them is what makes
         // "the click focused the place the label claimed" checkable without
         // depending on that label surviving the tier change during the flight.
-        host.dataset.focusPointLat = latestFocusPoint.current.lat.toFixed(4);
-        host.dataset.focusPointLon = latestFocusPoint.current.lon.toFixed(4);
+        if (latestFocusPoint.current) {
+          host.dataset.focusPointLat = latestFocusPoint.current.lat.toFixed(4);
+          host.dataset.focusPointLon = latestFocusPoint.current.lon.toFixed(4);
+        } else {
+          delete host.dataset.focusPointLat;
+          delete host.dataset.focusPointLon;
+        }
+      } else {
+        delete host.dataset.personalPointX;
+        delete host.dataset.personalPointY;
+        delete host.dataset.focusAnchorViewportX;
+        delete host.dataset.focusAnchorViewportY;
+        delete host.dataset.focusAnchorScale;
+        delete host.dataset.focusPointLat;
+        delete host.dataset.focusPointLon;
+        if (publishedAnchorFrame) {
+          publishedAnchorFrame = null;
+          latestOnParticleAnchorFrame.current?.(null);
+        }
       }
 
       renderer.render(scene, camera);

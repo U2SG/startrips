@@ -80,6 +80,7 @@ import {
   shouldRetainGlobeInertia,
   solveScreenAnchorRotation,
   resolveGlobeFocusIntent,
+  resolveParticleDiveAnchor,
 } from "./ParticleEarthScene";
 import {
   buildRouteArcLegSamples,
@@ -122,6 +123,24 @@ describe("ParticleEarthScene contracts", () => {
       zoom: 1,
       route: null,
     });
+  });
+
+  it("publishes the fitted Journey centre as the Dive anchor before point focus", () => {
+    const routeFrame = { center: { lat: 35.5, lon: 110.25 } };
+    const point = { lat: 31.2, lon: 121.5 };
+    expect(resolveParticleDiveAnchor(routeFrame, point)).toBe(routeFrame.center);
+    expect(resolveParticleDiveAnchor(null, point)).toBe(point);
+    expect(resolveParticleDiveAnchor(null, null)).toBeNull();
+  });
+
+  it("invalidates a published Dive anchor when focus disappears", () => {
+    const source = readFileSync(
+      new URL("./ParticleEarthScene.tsx", import.meta.url),
+      "utf8",
+    );
+    expect(source).toMatch(
+      /publishedAnchorFrame = null;\s+latestOnParticleAnchorFrame\.current\?\.\(null\);/,
+    );
   });
 
   it("lets only a newer focus revision supersede the active owner", () => {
