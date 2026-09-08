@@ -5,6 +5,7 @@ import {
   DeleteObjectCommand,
   GetObjectCommand,
   HeadObjectCommand,
+  ListObjectsV2Command,
   PutObjectCommand,
   S3Client,
   UploadPartCommand,
@@ -17,6 +18,8 @@ import {
 } from "./multipart-storage";
 
 const DEFAULT_UPLOAD_PART_EXPIRY_SECONDS = 15 * 60;
+/** One page of a prefix listing; the provider's own maximum. */
+const LIST_OBJECTS_PAGE_SIZE = 1_000;
 
 type SignableCommand = UploadPartCommand | GetObjectCommand;
 type SignUrl = (
@@ -92,6 +95,20 @@ export function createS3CompatibleStorage(
     Bucket: options.bucket,
     Key: keyPrefix ? `${keyPrefix}/${key}` : key,
   });
+  /**
+   * The inverse of `objectInput`, so a listed key comes back in the terms the
+   * database stores it in.
+   *
+   * `null` means the provider handed back something outside this deployment's
+   * namespace. The caller drops it: reporting it unchanged would let a sweep
+   * conclude that a key nothing in this application named is unreferenced.
+   */
+  const stripKeyPrefix = (key: string | undefined): string | null => {
+    if (!key) return null;
+    if (!keyPrefix) return key;
+    const prefixed = `${keyPrefix}/`;
+    return key.startsWith(prefixed) ? key.slice(prefixed.length) : null;
+  };
 
   return {
     driver: options.backendId,
@@ -206,6 +223,51 @@ export function createS3CompatibleStorage(
           );
         }
         return { exists: true, bytes: result.ContentLength as number };
+      } catch (error) {
+        if (isMissingObject(error)) return { exists: false };
+        throw error;
+      }
+    },
+
+    async listObjects(input) {
+      const result = await client.send(new ListObjectsV2Command({
+        Bucket: options.bucket,
+        Prefix: keyPrefix ? `${keyPrefix}/${input.prefix}` : input.prefix,
+        ContinuationToken: input.continuationToken,
+        MaxKeys: LIST_OBJECTS_PAGE_SIZE,
+      }));
+      const keys: string[] = [];
+      for (const object of result.Contents ?? []) {
+        // A key that does not sit under the deployment prefix is not this
+        // application's object to name, so it is skipped rather than reported
+        // with a mangled name. The provider filtered by the prefixed form, so
+        // this only fires if a bucket is shared in a way the adapter did not
+        // configure.
+        const stripped = stripKeyPrefix(object.Key);
+        if (stripped !== null) keys.push(stripped);
+      }
+      return {
+        keys,
+        // Present only while the provider says the listing is truncated, so a
+        // caller loops on the token's presence and never on a key count.
+        ...(result.IsTruncated && result.NextContinuationToken
+          ? { continuationToken: result.NextContinuationToken }
+          : {}),
+      };
+    },
+
+    async readObject(input) {
+      try {
+        const result = await client.send(new GetObjectCommand(
+          objectInput(input.key),
+        ));
+        if (!result.Body) {
+          throw new Error("Object storage returned an object with no body");
+        }
+        return {
+          exists: true,
+          bytes: await result.Body.transformToByteArray(),
+        };
       } catch (error) {
         if (isMissingObject(error)) return { exists: false };
         throw error;

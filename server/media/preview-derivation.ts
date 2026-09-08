@@ -10,13 +10,12 @@
  * measures the produced object against `maxBytes` before the preview is ever
  * marked ready, so an oversized still cannot be served whoever produced it.
  *
- * The two ceilings are not enforced at the same strength, and the difference
- * is deliberate: `maxBytes` is checked against the object that actually
- * landed, while `maxEdgePixels` fixes the pixel size the plan ASKS for and is
- * asserted against the plan. Measuring the stored still's encoded dimensions
- * needs an object-read capability `MultipartStorage` does not have; that is
- * #265, and until it lands the pixel ceiling is a requested bound rather than
- * a verified one.
+ * Both ceilings are checked against the object that actually landed, not
+ * against the plan: `POST .../preview/complete` measures the produced object's
+ * byte size and reads it back to establish its encoded pixel size, so neither
+ * an oversized file nor an oversized frame can reach `ready` whoever produced
+ * it. The spec is what the server asks for; `MEDIA_PREVIEW_MAX_BYTES` and
+ * `MEDIA_PREVIEW_MAX_EDGE_PIXELS` are what it enforces.
  *
  * Keeping the decision here, rather than inside the route, is what makes the
  * ceilings assertable on a pinned input with no storage, no database and no
@@ -31,6 +30,20 @@
  * the pixels are rasterised where a decoder for both photographs and video
  * frames already exists.
  */
+
+/**
+ * Whether a produced still's encoded pixel size is inside the ceiling.
+ *
+ * The longest edge is what bounds a decode, so a portrait and a landscape
+ * still are measured the same way — the same test `planPreviewDerivation`
+ * applies to the size it asks for, applied here to the size that arrived.
+ */
+export function previewPixelsFitCeiling(
+  pixels: { width: number; height: number },
+  ceilings: PreviewCeilings,
+): boolean {
+  return Math.max(pixels.width, pixels.height) <= ceilings.maxEdgePixels;
+}
 
 /**
  * The lifecycle of the derived object beside an asset.

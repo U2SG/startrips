@@ -1,13 +1,15 @@
 import { randomUUID } from "node:crypto";
-import { and, eq, isNull, lt } from "drizzle-orm";
+import { and, eq, inArray, isNull, lt } from "drizzle-orm";
 import { mediaAssets, mediaPreviewWrites } from "../db/app-schema";
 import { db } from "../db/client";
 import {
   planPreviewDerivation,
   previewObjectFitsCeiling,
+  previewPixelsFitCeiling,
   type PreviewCeilings,
   type PreviewSpec,
 } from "../media/preview-derivation";
+import { readJpegPixelSize } from "../media/preview-image";
 import type { MultipartStorage } from "../storage/multipart-storage";
 import {
   getMultipartStorage,
@@ -23,13 +25,41 @@ import {
  */
 export type MediaPreviewDependencies = {
   storageForBackend: (backendId: string) => MultipartStorage;
+  /**
+   * The backend whose preview namespace the prefix sweep enumerates: the one
+   * this deployment writes to now. Separate from `storageForBackend` because
+   * the sweep is not answering a question about a known key — it is asking a
+   * whole backend what it holds.
+   */
+  configuredStorage: () => MultipartStorage;
 };
 
 const defaultDependencies: MediaPreviewDependencies = {
   storageForBackend: getMultipartStorage,
+  configuredStorage: () => getMultipartStorage(),
 };
 
 type MediaAsset = typeof mediaAssets.$inferSelect;
+
+/**
+ * Every derived preview object lives directly under this one prefix.
+ *
+ * The layout is flat and global on purpose. A key used to carry the Atlas and
+ * the Journey that owned it, which reads well but makes the namespace
+ * un-enumerable: a sweep would have to know every Atlas id that ever existed
+ * to look for objects belonging to Atlases that no longer do — exactly the
+ * objects it is looking for. One prefix can be enumerated with no knowledge of
+ * any tenant at all, and ownership is answered where it is actually
+ * authoritative: `media_assets.preview_storage_key`.
+ *
+ * Nothing is lost in the move, because the key was never an authorization
+ * input. Both read paths resolve the asset first — the owner read through
+ * `requireAtlasAccess`, the guest read through the share grant — and sign the
+ * key the row hands them. And the key still carries nothing about the
+ * original: no name, no capture time, no coordinates, and now not even the
+ * Journey it belongs to.
+ */
+export const PREVIEW_KEY_PREFIX = "previews/";
 
 export type PreviewFailure = {
   ok: false;
@@ -39,7 +69,9 @@ export type PreviewFailure = {
     | "PREVIEW_NOT_PENDING"
     | "PREVIEW_OBJECT_MISSING"
     | "PREVIEW_SUPERSEDED"
-    | "PREVIEW_TOO_LARGE";
+    | "PREVIEW_TOO_LARGE"
+    | "PREVIEW_PIXELS_TOO_LARGE"
+    | "PREVIEW_UNREADABLE";
   status: 400 | 409;
 };
 
@@ -145,7 +177,6 @@ async function discardPreviewObject(
  */
 export async function beginAssetPreview(
   asset: MediaAsset,
-  atlasId: string,
   values: PreviewSourceValues,
   ceilings: PreviewCeilings,
   uploadExpiresInSeconds: number,
@@ -176,9 +207,7 @@ export async function beginAssetPreview(
   }
 
   const { spec } = planned;
-  // No file name, no capture time, no coordinates: a derived key is an opaque
-  // identity under the Journey that owns it, exactly like the original's.
-  const previewStorageKey = `${atlasId}/${asset.journeyId}/previews/${randomUUID()}`;
+  const previewStorageKey = `${PREVIEW_KEY_PREFIX}${randomUUID()}`;
   const signed = await dependencies
     .storageForBackend(asset.storageDriver)
     .signObjectUpload({
@@ -237,12 +266,18 @@ export async function beginAssetPreview(
 /**
  * Measure what was written, then make it servable — or not.
  *
- * The produced object is inspected rather than trusted. A write that never
+ * The produced object is inspected and READ rather than trusted, so both
+ * ceilings are established from the bytes that arrived. A write that never
  * landed leaves the asset `pending`, because that is a retryable state and
  * turning a retryable fault into a permanent loss is exactly what #260
- * forbids. A write that landed but broke the byte ceiling is a decided
- * outcome: the object is dropped and the asset is `failed`, so no oversized
- * still can ever be signed.
+ * forbids. Three things are decided outcomes instead — a file over the byte
+ * ceiling, a frame over the pixel ceiling, and bytes that are not a readable
+ * JPEG at all: the object is dropped and the asset is `failed`, so nothing
+ * oversized or unreadable can ever be signed, whoever produced it.
+ *
+ * Reading the whole object is affordable precisely because the byte ceiling is
+ * checked first: nothing larger than `MEDIA_PREVIEW_MAX_BYTES` is ever pulled
+ * into memory here.
  */
 export async function completeAssetPreview(
   asset: MediaAsset,
@@ -260,26 +295,51 @@ export async function completeAssetPreview(
   if (!inspected.exists) {
     return { ok: false, error: "PREVIEW_OBJECT_MISSING", status: 409 };
   }
-  if (!previewObjectFitsCeiling(inspected.bytes, ceilings)) {
-    // Guarded by the key that was actually inspected, exactly like the success
-    // path below. Without it, a completion that measured generation A would
-    // clear generation B out of a row a concurrent re-derivation had already
-    // moved on, stranding B's object and leaving its producer holding an
-    // upload URL it could never complete.
+  /**
+   * One decided failure: clear this generation's columns and drop its object.
+   *
+   * Guarded by the key that was actually measured, exactly like the success
+   * path below. Without that guard, a completion that measured generation A
+   * would clear generation B out of a row a concurrent re-derivation had
+   * already moved on, stranding B's object and leaving its producer holding an
+   * upload URL it could never complete.
+   */
+  const rejectPreview = async (
+    error: "PREVIEW_TOO_LARGE" | "PREVIEW_PIXELS_TOO_LARGE" | "PREVIEW_UNREADABLE",
+  ): Promise<PreviewFailure> => {
     const [cleared] = await db
       .update(mediaAssets)
       .set(CLEARED_PREVIEW)
       .where(stillHoldsGeneration(asset.id, asset.previewStorageKey))
       .returning({ id: mediaAssets.id });
-    if (cleared) {
-      await discardPreviewObject(
-        asset.storageDriver,
-        asset.previewStorageKey,
-        dependencies,
-      );
-      return { ok: false, error: "PREVIEW_TOO_LARGE", status: 409 };
+    if (!cleared) {
+      return { ok: false, error: "PREVIEW_NOT_PENDING", status: 409 };
     }
-    return { ok: false, error: "PREVIEW_NOT_PENDING", status: 409 };
+    await discardPreviewObject(
+      asset.storageDriver,
+      asset.previewStorageKey,
+      dependencies,
+    );
+    return { ok: false, error, status: 409 };
+  };
+
+  if (!previewObjectFitsCeiling(inspected.bytes, ceilings)) {
+    return rejectPreview("PREVIEW_TOO_LARGE");
+  }
+
+  // The pixel ceiling, established from the object rather than from the spec.
+  // A read that comes back empty is the same retryable "nothing landed" state
+  // the inspection above answers, not a decided failure.
+  const stored = await storage.readObject({ key: asset.previewStorageKey });
+  if (!stored.exists) {
+    return { ok: false, error: "PREVIEW_OBJECT_MISSING", status: 409 };
+  }
+  const pixels = readJpegPixelSize(stored.bytes);
+  if (!pixels) {
+    return rejectPreview("PREVIEW_UNREADABLE");
+  }
+  if (!previewPixelsFitCeiling(pixels, ceilings)) {
+    return rejectPreview("PREVIEW_PIXELS_TOO_LARGE");
   }
 
   const [updated] = await db
@@ -304,53 +364,59 @@ export async function completeAssetPreview(
 }
 
 /**
- * How long after a preview write's own expiry the sweep first looks at it.
+ * How long after a preview write's own expiry its record is retired.
  *
  * A presigned signature is checked when the request starts, so past the
  * expiry no new PUT can begin. It says nothing about a PUT that began just
- * before it and is still streaming, which is why the expiry is a starting
- * point here and not a terminal state.
+ * before it and is still streaming, which is why nothing here concludes that a
+ * write has finished: the margin only makes the window this record describes a
+ * closed one, and what a late write leaves behind is the namespace sweep's
+ * job rather than this clock's.
  */
 const PREVIEW_WRITE_GRACE_MS = 5 * 60 * 1_000;
-/**
- * How long a key must stay absent before its record may be forgotten.
- *
- * The sweep never concludes anything from one look. It acts, records when it
- * acted, and only drops the record when a later pass — at least this far
- * after that — still finds nothing under the key. A write that was streaming
- * at the first look has by then either finished, in which case the object is
- * there and is deleted and the clock restarts, or it never landed at all. A
- * preview is at most `MEDIA_PREVIEW_MAX_BYTES` of a size-bounded still, so
- * half an hour is far past any request that could still be running.
- */
-const PREVIEW_WRITE_SETTLE_MS = 30 * 60 * 1_000;
-const PREVIEW_WRITE_RECONCILE_INTERVAL_MS = 10 * 60 * 1_000;
+const PREVIEW_RECONCILE_INTERVAL_MS = 10 * 60 * 1_000;
 const PREVIEW_WRITE_BATCH_SIZE = 50;
+/**
+ * Pages of the preview namespace one pass enumerates before yielding.
+ *
+ * The sweep is a background pass over a whole bucket, so it is bounded per
+ * pass and resumes from the provider's continuation token on the next one. A
+ * namespace larger than this drains across several passes instead of holding
+ * one pass open over tens of thousands of keys.
+ */
+const PREVIEW_NAMESPACE_PAGES_PER_PASS = 10;
 
 /**
- * Retire the objects that issued preview writes may have left behind.
+ * Retire the record of every preview write whose signature has closed.
  *
- * An expired signature is not a terminal write state, so this pass is a
- * repeated-retirement contract rather than a single sweep. For every record
- * past its expiry it looks at what is actually under the key:
+ * This pass is the prompt half of the contract: it knows the exact keys that
+ * were issued, so a superseded generation, a begin that lost its swap, or a
+ * write whose media, Journey or Atlas cascaded away is retired within minutes
+ * rather than waiting for a bucket-wide enumeration.
  *
- *  - the key is referenced by an asset and the object is there — the write
- *    completed and has a live owner, so the record has nothing left to do and
- *    the deletion paths take it from here;
- *  - the key is not referenced and the object is there — a superseded
- *    generation, a begin that lost its swap, or a PUT that landed after the
- *    media, Journey or Atlas cascaded away. The object is deleted, the
- *    attempt is stamped, and the record is KEPT so a later pass can confirm
- *    nothing came back;
- *  - nothing is under the key — either nothing ever landed, or a PUT is still
- *    streaming. The attempt is stamped and the record is kept, and only once
- *    a later pass a full settle interval afterwards still finds nothing is
- *    the record dropped.
+ * For each record past its expiry plus the grace margin:
  *
- * So a write is only forgotten after the key has been observed empty across a
- * window longer than any request that could still have been in flight, and a
- * failed storage delete keeps its record too, because this sweep is the last
- * owner able to name that key.
+ *  - the key is referenced by an asset — the write completed and has a live
+ *    owner, so the deletion paths take it from here and the record is dropped;
+ *  - the key is not referenced — a superseded generation, a lost swap, or a
+ *    cascade. Whatever is under it belongs to nobody, so it is deleted and the
+ *    record is dropped. A delete of an absent key succeeds, so this covers the
+ *    write that never landed as well as the one that did.
+ *
+ * Dropping the record of a write that may still be in flight is only sound
+ * because it is not the last word. Nothing on this storage interface proves an
+ * in-flight PUT has finished, and waiting out a fixed interval does not prove
+ * it either — a slow enough request crosses any interval — so the previous
+ * shape of this pass, which kept a record until its key had stayed empty for
+ * half an hour, was a clock dressed as a proof. Keeping records forever
+ * instead would trade a storage orphan for an unbounded Postgres one, since a
+ * producer may begin a derivation and never write at all.
+ * `reconcilePreviewNamespace` below closes it properly: a late object is
+ * discoverable from the namespace itself long after every record that could
+ * name it is gone, so a record may be forgotten freely.
+ *
+ * A failed storage delete keeps its record, so the prompt path retries a key
+ * it still knows by name rather than handing it to a bucket-wide pass.
  */
 export async function reconcilePreviewWrites(
   now = new Date(),
@@ -377,31 +443,9 @@ export async function reconcilePreviewWrites(
       .where(eq(mediaAssets.previewStorageKey, write.storageKey))
       .limit(1);
 
-    let present: boolean;
-    try {
-      present = (
-        await dependencies
-          .storageForBackend(write.storageDriver)
-          .inspectObject({ key: write.storageKey })
-      ).exists;
-    } catch (error) {
-      console.error(
-        "Preview write inspection failed",
-        write.storageKey,
-        error instanceof Error ? error.message : "unknown error",
-      );
-      continue;
-    }
-
-    if (referencing && present) {
+    if (referencing) {
       settled += 1;
-      await db
-        .delete(mediaPreviewWrites)
-        .where(eq(mediaPreviewWrites.id, write.id));
-      continue;
-    }
-
-    if (!referencing && present) {
+    } else {
       const discarded = await discardPreviewObject(
         write.storageDriver,
         write.storageKey,
@@ -409,57 +453,113 @@ export async function reconcilePreviewWrites(
       );
       if (!discarded) continue;
       retired += 1;
-      await db
-        .update(mediaPreviewWrites)
-        .set({ retireAttemptedAt: now })
-        .where(eq(mediaPreviewWrites.id, write.id));
-      continue;
     }
-
-    // Nothing under the key. One empty look proves nothing; two, far enough
-    // apart, do.
-    const settledSince = write.retireAttemptedAt;
-    if (
-      settledSince
-      && now.getTime() - settledSince.getTime() >= PREVIEW_WRITE_SETTLE_MS
-    ) {
-      settled += 1;
-      await db
-        .delete(mediaPreviewWrites)
-        .where(eq(mediaPreviewWrites.id, write.id));
-      continue;
-    }
-    if (!settledSince) {
-      await db
-        .update(mediaPreviewWrites)
-        .set({ retireAttemptedAt: now })
-        .where(eq(mediaPreviewWrites.id, write.id));
-    }
+    await db
+      .delete(mediaPreviewWrites)
+      .where(eq(mediaPreviewWrites.id, write.id));
   }
   return { examined: writes.length, retired, settled };
 }
 
-export function startPreviewWriteReconciler() {
-  // The guard lives here rather than inside the pass, so a deployment with no
-  // object storage never schedules it while the pass itself stays callable
-  // against an injected backend.
+/**
+ * Delete every object in the preview namespace that no asset references.
+ *
+ * This is the half that needs no records and no clock. It asks storage what is
+ * actually under `PREVIEW_KEY_PREFIX` and deletes whatever nothing points at,
+ * so an object that landed after its write record was forgotten — a PUT
+ * authorised just before a Journey was deleted and still streaming well
+ * afterwards — is found by a later pass and retired, however long it took to
+ * arrive.
+ *
+ * The reference check is the whole authority, and it is terminal in one
+ * direction only. An enumerated key cannot become referenced after the fact:
+ * `beginAssetPreview` mints a fresh UUID and claims it before any producer
+ * holds a URL for it, so a key with an object under it has already been
+ * claimed, and a claim it has since lost it can never regain. "Nothing
+ * references this" therefore stays true, which is why deletion may be driven
+ * by that fact alone and never by how old an object is.
+ *
+ * One pass is bounded and resumable: it hands back the provider's continuation
+ * token so the next pass carries on instead of restarting at the first page.
+ */
+export async function reconcilePreviewNamespace(
+  continuationToken?: string,
+  dependencies: MediaPreviewDependencies = defaultDependencies,
+) {
+  const storage = dependencies.configuredStorage();
+  let cursor = continuationToken;
+  let examined = 0;
+  let retired = 0;
+
+  for (let page = 0; page < PREVIEW_NAMESPACE_PAGES_PER_PASS; page += 1) {
+    const listed = await storage.listObjects({
+      prefix: PREVIEW_KEY_PREFIX,
+      ...(cursor ? { continuationToken: cursor } : {}),
+    });
+    examined += listed.keys.length;
+    if (listed.keys.length > 0) {
+      const referenced = new Set(
+        (
+          await db
+            .select({ key: mediaAssets.previewStorageKey })
+            .from(mediaAssets)
+            .where(inArray(mediaAssets.previewStorageKey, listed.keys))
+        ).map((row) => row.key),
+      );
+      for (const key of listed.keys) {
+        if (referenced.has(key)) continue;
+        const discarded = await discardPreviewObject(
+          storage.driver,
+          key,
+          dependencies,
+        );
+        if (discarded) retired += 1;
+      }
+    }
+    cursor = listed.continuationToken;
+    // The listing ran out. The next pass starts from the first page again,
+    // which is what makes this a repeated contract and not a one-off cleanup.
+    if (!cursor) break;
+  }
+
+  return { examined, retired, continuationToken: cursor };
+}
+
+export function startPreviewReconciler() {
+  // The guard lives here rather than inside the passes, so a deployment with
+  // no object storage never schedules them while the passes themselves stay
+  // callable against an injected backend.
   if (!hasConfiguredStorageBackends()) return;
   let running = false;
+  let namespaceCursor: string | undefined;
   const run = async () => {
     if (running) return;
     running = true;
     try {
+      // The record pass runs first: it retires the keys it knows by name, so
+      // the enumeration behind it has less to find.
       await reconcilePreviewWrites();
     } catch (error) {
       console.error(
         "Preview write reconciliation pass failed",
         error instanceof Error ? error.message : "unknown error",
       );
-    } finally {
-      running = false;
     }
+    try {
+      namespaceCursor = (
+        await reconcilePreviewNamespace(namespaceCursor)
+      ).continuationToken;
+    } catch (error) {
+      // A failed listing leaves the cursor where it was, so the next pass
+      // retries that page rather than skipping past it.
+      console.error(
+        "Preview namespace reconciliation pass failed",
+        error instanceof Error ? error.message : "unknown error",
+      );
+    }
+    running = false;
   };
   void run();
-  const interval = setInterval(run, PREVIEW_WRITE_RECONCILE_INTERVAL_MS);
+  const interval = setInterval(run, PREVIEW_RECONCILE_INTERVAL_MS);
   interval.unref();
 }

@@ -1,5 +1,5 @@
 {
-  "id": "25b097d8-b973-4faa-bb13-fd2823828b5f",
+  "id": "763e8671-7082-42f7-8c5a-cb3609348771",
   "prevId": "f52021a1-ba38-480f-a226-64a441e2a1eb",
   "version": "7",
   "dialect": "postgresql",
@@ -1326,12 +1326,6 @@
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": true
-        },
-        "retire_attempted_at": {
-          "name": "retire_attempted_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": false
         },
         "created_at": {
           "name": "created_at",

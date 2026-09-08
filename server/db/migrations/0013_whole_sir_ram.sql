@@ -4,7 +4,6 @@ CREATE TABLE "media_preview_writes" (
 	"storage_driver" text NOT NULL,
 	"storage_key" text NOT NULL,
 	"expires_at" timestamp with time zone NOT NULL,
-	"retire_attempted_at" timestamp with time zone,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint

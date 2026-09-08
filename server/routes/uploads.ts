@@ -1235,7 +1235,6 @@ uploadRoutes.post("/assets/:id/preview", async (context) => {
 
   const result = await beginAssetPreview(
     asset,
-    atlas.id,
     values,
     previewCeilings(),
     serverConfig.mediaPreviewUploadExpiresInSeconds,

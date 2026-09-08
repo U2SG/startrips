@@ -5,6 +5,7 @@ import {
   DeleteObjectCommand,
   GetObjectCommand,
   HeadObjectCommand,
+  ListObjectsV2Command,
   S3Client,
   UploadPartCommand,
 } from "@aws-sdk/client-s3";
@@ -228,5 +229,81 @@ describe("S3-compatible multipart storage", () => {
       expiresAt: new Date("2026-08-12T01:05:00.000Z"),
     });
     expect(signUrl.mock.calls[0][1]).toBeInstanceOf(GetObjectCommand);
+  });
+
+  it("lists a prefix in the application's own key terms", async () => {
+    const { send, storage } = setup();
+    send.mockResolvedValue({
+      Contents: [
+        { Key: "live/previews/first" },
+        { Key: "live/previews/second" },
+      ],
+      IsTruncated: true,
+      NextContinuationToken: "page-2",
+    });
+
+    await expect(storage.listObjects({ prefix: "previews/" })).resolves.toEqual({
+      // The deployment prefix is added on the way out and stripped on the way
+      // back, so a caller can compare a listed key against the one the
+      // database stores without knowing the prefix exists.
+      keys: ["previews/first", "previews/second"],
+      continuationToken: "page-2",
+    });
+
+    const command = send.mock.calls[0][0];
+    expect(command).toBeInstanceOf(ListObjectsV2Command);
+    expect(command.input).toEqual({
+      Bucket: "private-atlas",
+      Prefix: "live/previews/",
+      ContinuationToken: undefined,
+      MaxKeys: 1_000,
+    });
+  });
+
+  it("ends a listing when the provider stops truncating and drops foreign keys", async () => {
+    const { send, storage } = setup();
+    send.mockResolvedValue({
+      Contents: [
+        { Key: "live/previews/mine" },
+        // A key from outside this deployment's namespace, which only a shared
+        // bucket produces. Reporting it unprefixed would hand a sweep a key no
+        // row could ever reference, and the sweep would delete it.
+        { Key: "other-deployment/previews/theirs" },
+        { Key: undefined },
+      ],
+      IsTruncated: false,
+      NextContinuationToken: "ignored-when-not-truncated",
+    });
+
+    await expect(storage.listObjects({
+      prefix: "previews/",
+      continuationToken: "page-2",
+    })).resolves.toEqual({ keys: ["previews/mine"] });
+    expect(send.mock.calls[0][0].input.ContinuationToken).toBe("page-2");
+  });
+
+  it("reads a whole small object and distinguishes a missing one", async () => {
+    const { send, storage } = setup();
+    send.mockResolvedValueOnce({
+      Body: { transformToByteArray: async () => new Uint8Array([1, 2, 3]) },
+    });
+
+    await expect(storage.readObject({ key: "previews/still" })).resolves.toEqual({
+      exists: true,
+      bytes: new Uint8Array([1, 2, 3]),
+    });
+    const command = send.mock.calls[0][0];
+    expect(command).toBeInstanceOf(GetObjectCommand);
+    expect(command.input).toEqual({
+      Bucket: "private-atlas",
+      Key: "live/previews/still",
+    });
+
+    send.mockRejectedValueOnce(Object.assign(new Error("missing"), {
+      Code: "NoSuchKey",
+    }));
+    await expect(storage.readObject({ key: "previews/gone" })).resolves.toEqual({
+      exists: false,
+    });
   });
 });

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { createEmailVerificationToken } from "better-auth/api";
 import { eq, inArray, like } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -12,6 +13,7 @@ import {
 } from "../db/auth-schema";
 import { db, pool } from "../db/client";
 import { PREVIEW_MIME_TYPE } from "../media/preview-derivation";
+import { readJpegPixelSize } from "../media/preview-image";
 import {
   createJourneyForAtlas,
   deferJourneyDeletionRetryForAtlas,
@@ -28,6 +30,8 @@ import { reconcileJourneyDeletionCandidates } from "../services/delete-journey";
 import {
   beginAssetPreview,
   completeAssetPreview,
+  PREVIEW_KEY_PREFIX,
+  reconcilePreviewNamespace,
   reconcilePreviewWrites,
 } from "../services/media-preview";
 import { disabledStorage } from "../storage/disabled-storage";
@@ -39,6 +43,23 @@ const CEILINGS = {
   maxEdgePixels: serverConfig.mediaPreviewMaxEdgePixels,
   maxBytes: serverConfig.mediaPreviewMaxBytes,
 };
+
+/**
+ * The pinned inputs for the ceiling checks: two real JPEGs, one inside the
+ * shipped 640 px / 512 KiB ceilings and one over the pixel ceiling while
+ * staying under the byte ceiling, so each ceiling can be failed on its own.
+ *
+ * A produced preview is written by a producer this deployment does not
+ * contain, so a test cannot rasterise one. What it can do — and what #260
+ * asks for — is put real bytes under the key a producer was handed and assert
+ * the ceilings against the object that is then read back out of storage.
+ */
+const PRODUCED_PREVIEW = new Uint8Array(readFileSync(
+  new URL("./fixtures/derived-preview-600x467.jpg", import.meta.url),
+));
+const OVERSIZED_STILL = new Uint8Array(readFileSync(
+  new URL("./fixtures/oversized-still-2048x1024.jpg", import.meta.url),
+));
 
 const atlasIds: string[] = [];
 const authOrganizationIds: string[] = [];
@@ -155,24 +176,53 @@ async function createAuthenticatedAtlas(label: string) {
  * backend and every route that reaches it degrades truthfully to 503, which
  * is itself asserted below.
  */
-function recordingStorage(overrides: Partial<MultipartStorage> = {}) {
+function recordingStorage(
+  overrides: Partial<MultipartStorage> = {},
+  producedBody: Uint8Array = PRODUCED_PREVIEW,
+) {
   const signedReads: Array<{ key: string; expiresInSeconds: number }> = [];
   const deleted: string[] = [];
+  /**
+   * What is actually stored, keyed by key. Real bytes, because the completion
+   * path reads the object back to establish its pixel size: a stub that
+   * answered a fixed size, or answered the same body whatever it was asked
+   * for, would assert nothing about the object that landed.
+   */
+  const objects = new Map<string, Uint8Array>();
   const storage: MultipartStorage = {
     ...disabledStorage,
     driver: "s3",
     async signObjectUpload(input) {
+      // The producer writing to the URL it was just handed, modelled as the
+      // one thing a producer does. A case that needs a write NOT to land, or
+      // to land late, overrides this or writes to `objects` itself.
+      objects.set(input.key, producedBody);
       return {
         url: `https://storage.test/put/${encodeURIComponent(input.key)}`,
         headers: { "content-type": input.mimeType },
         expiresAt: new Date(Date.now() + input.expiresInSeconds * 1000),
       };
     },
-    async inspectObject() {
-      return { exists: true, bytes: 48_000 };
+    async inspectObject(input) {
+      const stored = objects.get(input.key);
+      return stored
+        ? { exists: true as const, bytes: stored.byteLength }
+        : { exists: false as const };
+    },
+    async readObject(input) {
+      const stored = objects.get(input.key);
+      return stored
+        ? { exists: true as const, bytes: stored }
+        : { exists: false as const };
+    },
+    async listObjects(input) {
+      return {
+        keys: [...objects.keys()].filter((key) => key.startsWith(input.prefix)),
+      };
     },
     async deleteObject(input) {
       deleted.push(input.key);
+      objects.delete(input.key);
     },
     async createPrivateReadUrl(input) {
       signedReads.push(input);
@@ -186,8 +236,14 @@ function recordingStorage(overrides: Partial<MultipartStorage> = {}) {
   return {
     signedReads,
     deleted,
+    objects,
     resolve: () => storage,
     storage,
+    /** Both seams the preview service takes, pointed at this one backend. */
+    dependencies: {
+      storageForBackend: () => storage,
+      configuredStorage: () => storage,
+    },
   };
 }
 
@@ -237,17 +293,16 @@ describe("#260 same-asset preview for private media reads", () => {
   ) {
     const begun = await beginAssetPreview(
       await readAsset(assetId),
-      identity.atlasId,
       source,
       CEILINGS,
       UPLOAD_TTL_SECONDS,
-      { storageForBackend: backend.resolve },
+      backend.dependencies,
     );
     expect(begun.ok).toBe(true);
     const completed = await completeAssetPreview(
       await readAsset(assetId),
       CEILINGS,
-      { storageForBackend: backend.resolve },
+      backend.dependencies,
     );
     expect(completed.ok).toBe(true);
     return { begun, completed };
@@ -269,12 +324,11 @@ describe("#260 same-asset preview for private media reads", () => {
   afterAll(async () => {
     // Nothing ties a preview write record to the Atlas — that is the point of
     // the table — so the fixture retires its own rather than waiting for a
-    // cascade that will never reach them.
-    if (identity) {
-      await db
-        .delete(mediaPreviewWrites)
-        .where(like(mediaPreviewWrites.storageKey, `${identity.atlasId}/%`));
-    }
+    // cascade that will never reach them. This file is the only one that
+    // derives previews, so the whole namespace is its own.
+    await db
+      .delete(mediaPreviewWrites)
+      .where(like(mediaPreviewWrites.storageKey, `${PREVIEW_KEY_PREFIX}%`));
     if (atlasIds.length) {
       await db.delete(atlases).where(inArray(atlases.id, atlasIds));
     }
@@ -294,11 +348,10 @@ describe("#260 same-asset preview for private media reads", () => {
     const backend = recordingStorage();
     const begun = await beginAssetPreview(
       asset,
-      identity.atlasId,
       { sourceWidth: 6000, sourceHeight: 4000, exifOrientation: 6 },
       CEILINGS,
       UPLOAD_TTL_SECONDS,
-      { storageForBackend: backend.resolve },
+      backend.dependencies,
     );
 
     expect(begun.ok).toBe(true);
@@ -328,7 +381,7 @@ describe("#260 same-asset preview for private media reads", () => {
     await deriveReadyPreview(asset.id, backend);
     const stored = await readAsset(asset.id);
     expect(stored.previewState).toBe("ready");
-    expect(stored.previewBytes).toBe(48_000);
+    expect(stored.previewBytes).toBe(PRODUCED_PREVIEW.byteLength);
 
     backend.signedReads.length = 0;
     const read = await signPrivateMediaRead(
@@ -371,11 +424,10 @@ describe("#260 same-asset preview for private media reads", () => {
     const backend = recordingStorage();
     await beginAssetPreview(
       asset,
-      identity.atlasId,
       { sourceWidth: 4000, sourceHeight: 3000, exifOrientation: 1 },
       CEILINGS,
       UPLOAD_TTL_SECONDS,
-      { storageForBackend: backend.resolve },
+      backend.dependencies,
     );
 
     const pending = await readAsset(asset.id);
@@ -398,11 +450,10 @@ describe("#260 same-asset preview for private media reads", () => {
     const backend = recordingStorage();
     const begun = await beginAssetPreview(
       asset,
-      identity.atlasId,
       { sourceWidth: 1, sourceHeight: 1, exifOrientation: null },
       CEILINGS,
       UPLOAD_TTL_SECONDS,
-      { storageForBackend: backend.resolve },
+      backend.dependencies,
     );
 
     expect(begun).toMatchObject({
@@ -419,6 +470,110 @@ describe("#260 same-asset preview for private media reads", () => {
     expect(read.url).toContain(encodeURIComponent(stored.storageKey));
   });
 
+  it("verifies the produced object against both configured ceilings", async () => {
+    // Acceptance item 6, against the object rather than against the plan: a
+    // pinned real JPEG is written to the key the producer was handed, the
+    // asset is completed, and the ceilings are then asserted on the bytes
+    // read back out of storage. Neither ceiling is a literal here — both come
+    // from the config this deployment loads.
+    const asset = await insertAsset();
+    const backend = recordingStorage();
+    await deriveReadyPreview(asset.id, backend);
+    const stored = await readAsset(asset.id);
+
+    const landed = await backend.storage.readObject({
+      key: stored.previewStorageKey!,
+    });
+    expect(landed.exists).toBe(true);
+    if (!landed.exists) return;
+
+    expect(landed.bytes.byteLength)
+      .toBeLessThanOrEqual(serverConfig.mediaPreviewMaxBytes);
+    const pixels = readJpegPixelSize(landed.bytes);
+    expect(pixels).not.toBeNull();
+    expect(Math.max(pixels!.width, pixels!.height))
+      .toBeLessThanOrEqual(serverConfig.mediaPreviewMaxEdgePixels);
+    // The recorded size is the measured one, so a reader is told what is
+    // actually stored.
+    expect(stored.previewBytes).toBe(landed.bytes.byteLength);
+    expect(stored.previewState).toBe("ready");
+  });
+
+  it("refuses a produced still over the pixel ceiling and serves no preview", async () => {
+    // A real 2048x1024 JPEG that is comfortably under the byte ceiling, so
+    // the only thing it breaks is the pixel one. Before the object could be
+    // read back this was unreachable: the size the plan asked for was the
+    // only number anything had.
+    const asset = await insertAsset();
+    const backend = recordingStorage({}, OVERSIZED_STILL);
+    expect(OVERSIZED_STILL.byteLength)
+      .toBeLessThan(serverConfig.mediaPreviewMaxBytes);
+
+    const begun = await beginAssetPreview(
+      await readAsset(asset.id),
+      { sourceWidth: 6000, sourceHeight: 3000, exifOrientation: 1 },
+      CEILINGS,
+      UPLOAD_TTL_SECONDS,
+      backend.dependencies,
+    );
+    expect(begun.ok).toBe(true);
+    const pending = await readAsset(asset.id);
+    const oversizedKey = pending.previewStorageKey!;
+
+    const completed = await completeAssetPreview(
+      pending,
+      CEILINGS,
+      backend.dependencies,
+    );
+
+    expect(completed).toMatchObject({
+      ok: false,
+      error: "PREVIEW_PIXELS_TOO_LARGE",
+    });
+    const stored = await readAsset(asset.id);
+    expect(stored.previewState).toBe("failed");
+    expect(stored.previewStorageKey).toBeNull();
+    // The oversized object is gone rather than left unreferenced.
+    expect(backend.deleted).toContain(oversizedKey);
+    expect(backend.objects.has(oversizedKey)).toBe(false);
+    // The original is untouched and still reads.
+    const read = await signPrivateMediaRead(stored, 900, backend.resolve);
+    expect(read.preview).toBeUndefined();
+    expect(read.url).toContain(encodeURIComponent(stored.storageKey));
+  });
+
+  it("refuses bytes that are not a readable still", async () => {
+    // A producer that wrote something, but not the still it was asked for.
+    // Unreadable is a decided outcome, not a retry: nothing can establish a
+    // frame size for it, so it can never be shown to a reader.
+    const asset = await insertAsset();
+    const backend = recordingStorage({}, new Uint8Array([1, 2, 3, 4, 5]));
+
+    await beginAssetPreview(
+      await readAsset(asset.id),
+      { sourceWidth: 6000, sourceHeight: 4000, exifOrientation: 1 },
+      CEILINGS,
+      UPLOAD_TTL_SECONDS,
+      backend.dependencies,
+    );
+    const pending = await readAsset(asset.id);
+    const unreadableKey = pending.previewStorageKey!;
+
+    const completed = await completeAssetPreview(
+      pending,
+      CEILINGS,
+      backend.dependencies,
+    );
+
+    expect(completed).toMatchObject({
+      ok: false,
+      error: "PREVIEW_UNREADABLE",
+    });
+    const stored = await readAsset(asset.id);
+    expect(stored.previewState).toBe("failed");
+    expect(backend.deleted).toContain(unreadableKey);
+  });
+
   it("refuses a produced object over the byte ceiling and serves no preview", async () => {
     const asset = await insertAsset();
     const backend = recordingStorage({
@@ -431,18 +586,15 @@ describe("#260 same-asset preview for private media reads", () => {
     });
     await beginAssetPreview(
       asset,
-      identity.atlasId,
       { sourceWidth: 6000, sourceHeight: 4000, exifOrientation: 1 },
       CEILINGS,
       UPLOAD_TTL_SECONDS,
-      { storageForBackend: backend.resolve },
+      backend.dependencies,
     );
     const pending = await readAsset(asset.id);
     const oversizedKey = pending.previewStorageKey!;
 
-    const completed = await completeAssetPreview(pending, CEILINGS, {
-      storageForBackend: backend.resolve,
-    });
+    const completed = await completeAssetPreview(pending, CEILINGS, backend.dependencies);
 
     expect(completed).toMatchObject({ ok: false, error: "PREVIEW_TOO_LARGE" });
     const stored = await readAsset(asset.id);
@@ -463,19 +615,17 @@ describe("#260 same-asset preview for private media reads", () => {
 
     const winner = await beginAssetPreview(
       snapshot,
-      identity.atlasId,
       { sourceWidth: 6000, sourceHeight: 4000, exifOrientation: 1 },
       CEILINGS,
       UPLOAD_TTL_SECONDS,
-      { storageForBackend: backend.resolve },
+      backend.dependencies,
     );
     const loser = await beginAssetPreview(
       snapshot,
-      identity.atlasId,
       { sourceWidth: 4000, sourceHeight: 3000, exifOrientation: 1 },
       CEILINGS,
       UPLOAD_TTL_SECONDS,
-      { storageForBackend: backend.resolve },
+      backend.dependencies,
     );
 
     expect(winner.ok).toBe(true);
@@ -486,9 +636,7 @@ describe("#260 same-asset preview for private media reads", () => {
     expect(row.previewState).toBe("pending");
     expect(row.displayWidth).toBe(6000);
     // Exactly one live key, and completion promotes that one.
-    const completed = await completeAssetPreview(row, CEILINGS, {
-      storageForBackend: backend.resolve,
-    });
+    const completed = await completeAssetPreview(row, CEILINGS, backend.dependencies);
     expect(completed.ok).toBe(true);
     expect((await readAsset(asset.id)).previewStorageKey)
       .toBe(row.previewStorageKey);
@@ -524,11 +672,10 @@ describe("#260 same-asset preview for private media reads", () => {
     // cannot be aborted, so the clock is the only thing that retires it.
     await beginAssetPreview(
       await readAsset(asset.id),
-      identity.atlasId,
       { sourceWidth: 800, sourceHeight: 600, exifOrientation: 1 },
       CEILINGS,
       serverConfig.mediaPreviewUploadExpiresInSeconds,
-      { storageForBackend: backend.resolve },
+      backend.dependencies,
     );
     expect(requested).toBe(serverConfig.mediaPreviewUploadExpiresInSeconds);
     expect(requested)
@@ -544,11 +691,10 @@ describe("#260 same-asset preview for private media reads", () => {
     });
     await beginAssetPreview(
       asset,
-      identity.atlasId,
       { sourceWidth: 6000, sourceHeight: 4000, exifOrientation: 1 },
       CEILINGS,
       UPLOAD_TTL_SECONDS,
-      { storageForBackend: oversized.resolve },
+      oversized.dependencies,
     );
     // Generation A, read by a completion that is about to stall.
     const stale = await readAsset(asset.id);
@@ -557,20 +703,17 @@ describe("#260 same-asset preview for private media reads", () => {
     const fresh = recordingStorage();
     await beginAssetPreview(
       stale,
-      identity.atlasId,
       { sourceWidth: 4000, sourceHeight: 3000, exifOrientation: 1 },
       CEILINGS,
       UPLOAD_TTL_SECONDS,
-      { storageForBackend: fresh.resolve },
+      fresh.dependencies,
     );
     const current = await readAsset(asset.id);
     expect(current.previewStorageKey).not.toBe(stale.previewStorageKey);
 
     // A's completion now finds its object oversized. It must not clear B: B's
     // producer still holds a valid upload URL for a key this call never saw.
-    const completed = await completeAssetPreview(stale, CEILINGS, {
-      storageForBackend: oversized.resolve,
-    });
+    const completed = await completeAssetPreview(stale, CEILINGS, oversized.dependencies);
 
     expect(completed).toMatchObject({
       ok: false,
@@ -591,17 +734,16 @@ describe("#260 same-asset preview for private media reads", () => {
     });
     await beginAssetPreview(
       asset,
-      identity.atlasId,
       { sourceWidth: 2000, sourceHeight: 1000, exifOrientation: 1 },
       CEILINGS,
       UPLOAD_TTL_SECONDS,
-      { storageForBackend: backend.resolve },
+      backend.dependencies,
     );
 
     const completed = await completeAssetPreview(
       await readAsset(asset.id),
       CEILINGS,
-      { storageForBackend: backend.resolve },
+      backend.dependencies,
     );
 
     expect(completed).toMatchObject({
@@ -636,13 +778,15 @@ describe("#260 same-asset preview for private media reads", () => {
     const stored = await readAsset(asset.id);
     const read = await signPrivateMediaRead(stored, 900, backend.resolve);
 
-    // The derived key is opaque: it names the Atlas and Journey that own it
-    // and nothing about the file it came from.
+    // The derived key is opaque and says nothing about anyone: not the file it
+    // came from, and — since the namespace became flat so a sweep can
+    // enumerate it — not the Journey or the Atlas either. Ownership is the
+    // database's answer, not the key's.
     expect(stored.previewStorageKey).not.toContain(stored.fileName);
     expect(stored.previewStorageKey).not.toContain("route-point-media");
-    expect(stored.previewStorageKey!.startsWith(
-      `${identity.atlasId}/${journeyId}/previews/`,
-    )).toBe(true);
+    expect(stored.previewStorageKey!.startsWith(PREVIEW_KEY_PREFIX)).toBe(true);
+    expect(stored.previewStorageKey).not.toContain(identity.atlasId);
+    expect(stored.previewStorageKey).not.toContain(journeyId);
     // The block is exactly the five agreed fields, so no capture time, no
     // coordinates and no source path can ride along inside it.
     expect(Object.keys(read.preview!).sort()).toEqual([
@@ -708,38 +852,23 @@ describe("#260 same-asset preview for private media reads", () => {
   });
 
   /**
-   * A storage stub with an object store as well as a log, so a case can say
-   * what is actually under a key rather than only what was asked for. The
-   * overrides replace `recordingStorage`'s own `deleted` array, so deletions
-   * are recorded here instead.
+   * Begin a derivation and delete the media out from under its signed write.
+   *
+   * The write is signed but nothing is written: the producer is holding a URL
+   * it has not used yet, which is the state every late-write ordering below
+   * starts from. `signObjectUpload` is overridden so the fixture, not the
+   * stub, decides when bytes appear.
    */
-  function objectStoreBackend() {
-    const objects = new Set<string>();
-    const deletedKeys: string[] = [];
-    const backend = recordingStorage({
-      async deleteObject(input) {
-        deletedKeys.push(input.key);
-        objects.delete(input.key);
-      },
-      async inspectObject(input) {
-        return objects.has(input.key)
-          ? { exists: true as const, bytes: 48_000 }
-          : { exists: false as const };
-      },
-    });
-    return { objects, deletedKeys, resolve: backend.resolve };
-  }
-
-  /** Begin a derivation and delete the media out from under its signed write. */
-  async function signThenDeleteMedia(backend: ReturnType<typeof objectStoreBackend>) {
+  async function signThenDeleteMedia(
+    backend: ReturnType<typeof recordingStorage>,
+  ) {
     const asset = await insertAsset();
     const begun = await beginAssetPreview(
       asset,
-      identity.atlasId,
       { sourceWidth: 6000, sourceHeight: 4000, exifOrientation: 6 },
       CEILINGS,
       UPLOAD_TTL_SECONDS,
-      { storageForBackend: backend.resolve },
+      backend.dependencies,
     );
     expect(begun.ok).toBe(true);
     const pendingKey = (await readAsset(asset.id)).previewStorageKey!;
@@ -762,8 +891,21 @@ describe("#260 same-asset preview for private media reads", () => {
         .from(mediaAssets)
         .where(eq(mediaAssets.previewStorageKey, pendingKey)),
     ).toEqual([]);
-    backend.deletedKeys.length = 0;
+    backend.deleted.length = 0;
     return { assetId: asset.id, pendingKey };
+  }
+
+  /** A backend whose signed write lands only when a case says so. */
+  function unwrittenBackend() {
+    return recordingStorage({
+      async signObjectUpload(input) {
+        return {
+          url: `https://storage.test/put/${encodeURIComponent(input.key)}`,
+          headers: { "content-type": input.mimeType },
+          expiresAt: new Date(Date.now() + input.expiresInSeconds * 1000),
+        };
+      },
+    });
   }
 
   async function writeRecordFor(storageKey: string) {
@@ -778,80 +920,151 @@ describe("#260 same-asset preview for private media reads", () => {
     // The interleaving the single-object write makes possible and the
     // multipart pipeline does not: begin signs a PUT, the media is deleted
     // while that signature is still valid, and the PUT lands afterwards.
-    const backend = objectStoreBackend();
+    const backend = unwrittenBackend();
     const { assetId, pendingKey } = await signThenDeleteMedia(backend);
 
     // The late PUT: the producer still holds a valid URL and writes to it
     // after every row that referenced the key has cascaded away.
-    backend.objects.add(pendingKey);
+    backend.objects.set(pendingKey, PRODUCED_PREVIEW);
 
-    // The write record outlives the cascade, so the sweep can still name the
-    // object once the signature can no longer be used.
+    // The write record outlives the cascade, so the prompt pass can still name
+    // the object once the signature can no longer be used.
     const record = await writeRecordFor(pendingKey);
     expect(record).toBeTruthy();
     expect(record.mediaAssetId).toBe(assetId);
-    expect(record.retireAttemptedAt).toBeNull();
 
-    const firstPass = new Date(record.expiresAt.getTime() + 60 * 60 * 1_000);
-    const swept = await reconcilePreviewWrites(firstPass, {
-      storageForBackend: backend.resolve,
-    });
-    expect(swept.retired).toBeGreaterThanOrEqual(1);
-    expect(backend.deletedKeys).toContain(pendingKey);
-    expect(backend.objects.has(pendingKey)).toBe(false);
-    // The record is kept, not forgotten: one look does not prove the write is
-    // over, so the sweep stamps the attempt and comes back.
-    const afterRetire = await writeRecordFor(pendingKey);
-    expect(afterRetire.retireAttemptedAt).toEqual(firstPass);
-
-    // A later pass finds the key still empty and only then forgets it.
-    await reconcilePreviewWrites(
-      new Date(firstPass.getTime() + 31 * 60 * 1_000),
-      { storageForBackend: backend.resolve },
+    const swept = await reconcilePreviewWrites(
+      new Date(record.expiresAt.getTime() + 60 * 60 * 1_000),
+      backend.dependencies,
     );
+    expect(swept.retired).toBeGreaterThanOrEqual(1);
+    expect(backend.deleted).toContain(pendingKey);
+    expect(backend.objects.has(pendingKey)).toBe(false);
+    // Nothing references the key and no object is under it, so there is
+    // nothing left for a record to own.
     expect(await writeRecordFor(pendingKey)).toBeUndefined();
+  });
+
+  it("forgets an abandoned write without waiting out a clock", async () => {
+    // A producer that begins a derivation and never writes. The record is
+    // released on the first pass past its signature, so an authorized caller
+    // cannot accumulate one durable row per abandoned generation — and
+    // releasing it costs nothing, because the namespace sweep below can still
+    // find an object that arrives afterwards.
+    const backend = unwrittenBackend();
+    const { pendingKey } = await signThenDeleteMedia(backend);
+    const record = await writeRecordFor(pendingKey);
+    expect(record).toBeTruthy();
+
+    const swept = await reconcilePreviewWrites(
+      new Date(record.expiresAt.getTime() + 6 * 60 * 1_000),
+      backend.dependencies,
+    );
+
+    expect(swept.examined).toBeGreaterThanOrEqual(1);
+    expect(await writeRecordFor(pendingKey)).toBeUndefined();
+    // Nothing was there to delete, and nothing was concluded from that.
     expect(backend.objects.has(pendingKey)).toBe(false);
   });
 
-  it("keeps sweeping a preview write whose PUT was still in flight", async () => {
-    // The ordering an expired signature does not settle: begin, the PUT
-    // starts, the media is deleted, the first sweep runs while the request is
-    // still streaming and therefore sees nothing, and the object appears
-    // afterwards. A sweep that forgot the record at the first empty look
-    // would leave exactly the orphan the record exists to prevent.
-    const backend = objectStoreBackend();
+  it("retires an object that landed after its write record was forgotten", async () => {
+    // The ordering no clock settles, and the reason the record may be
+    // forgotten: begin signs a PUT, the media is deleted, the request is still
+    // streaming when the record is released, and the object appears long
+    // afterwards. A presigned PUT has no provider-enforced request lifetime,
+    // so "the signature expired" never proves the write is over — only asking
+    // storage what it actually holds does.
+    const backend = unwrittenBackend();
     const { pendingKey } = await signThenDeleteMedia(backend);
     const record = await writeRecordFor(pendingKey);
-
-    const firstPass = new Date(record.expiresAt.getTime() + 60 * 60 * 1_000);
-    await reconcilePreviewWrites(firstPass, {
-      storageForBackend: backend.resolve,
-    });
-    // Nothing to delete yet, and nothing concluded from that.
-    expect(backend.deletedKeys).not.toContain(pendingKey);
-    const stamped = await writeRecordFor(pendingKey);
-    expect(stamped).toBeTruthy();
-    expect(stamped.retireAttemptedAt).toEqual(firstPass);
-
-    // The in-flight PUT finishes, after the expiry and after the first sweep.
-    backend.objects.add(pendingKey);
-
-    const secondPass = new Date(firstPass.getTime() + 31 * 60 * 1_000);
-    await reconcilePreviewWrites(secondPass, {
-      storageForBackend: backend.resolve,
-    });
-    expect(backend.deletedKeys).toContain(pendingKey);
-    expect(backend.objects.has(pendingKey)).toBe(false);
-    // Retiring restarts the clock rather than ending the record.
-    const afterRetire = await writeRecordFor(pendingKey);
-    expect(afterRetire.retireAttemptedAt).toEqual(secondPass);
-
     await reconcilePreviewWrites(
-      new Date(secondPass.getTime() + 31 * 60 * 1_000),
-      { storageForBackend: backend.resolve },
+      new Date(record.expiresAt.getTime() + 6 * 60 * 1_000),
+      backend.dependencies,
     );
     expect(await writeRecordFor(pendingKey)).toBeUndefined();
+
+    // The in-flight PUT finishes here, with no row and no record left that
+    // could name its key.
+    backend.objects.set(pendingKey, PRODUCED_PREVIEW);
+
+    const swept = await reconcilePreviewNamespace(
+      undefined,
+      backend.dependencies,
+    );
+
+    expect(swept.examined).toBeGreaterThanOrEqual(1);
+    expect(backend.deleted).toContain(pendingKey);
     expect(backend.objects.has(pendingKey)).toBe(false);
+    // Nothing is left to enumerate, so the next pass starts over rather than
+    // resuming a cursor.
+    expect(swept.continuationToken).toBeUndefined();
+  });
+
+  it("keeps every object the namespace sweep finds a row for", async () => {
+    // The other half of the same authority: an object is deleted because no
+    // `media_assets` row references it, never because of its age. A ready
+    // preview is referenced, so a sweep that runs a moment after it was
+    // derived must leave it exactly where it is.
+    const backend = recordingStorage();
+    const asset = await insertAsset();
+    await deriveReadyPreview(asset.id, backend);
+    const stored = await readAsset(asset.id);
+    backend.deleted.length = 0;
+    // An object under the same prefix that nothing has ever referenced.
+    const orphanKey = `${PREVIEW_KEY_PREFIX}${randomUUID()}`;
+    backend.objects.set(orphanKey, PRODUCED_PREVIEW);
+
+    const swept = await reconcilePreviewNamespace(
+      undefined,
+      backend.dependencies,
+    );
+
+    expect(swept.retired).toBe(1);
+    expect(backend.deleted).toEqual([orphanKey]);
+    expect(backend.objects.has(stored.previewStorageKey!)).toBe(true);
+    expect((await readAsset(asset.id)).previewState).toBe("ready");
+  });
+
+  it("resumes the namespace sweep from the provider's own cursor", async () => {
+    // A namespace bigger than one pass. The pages come back with a
+    // continuation token, the pass stops at its page budget and hands the
+    // token back, and nothing outside the pages it actually read is touched.
+    const requested: Array<string | undefined> = [];
+    // A provider that never runs out of pages, so the pass has to stop itself.
+    const backend = recordingStorage({
+      async listObjects(input) {
+        requested.push(input.continuationToken);
+        const page = Number(input.continuationToken ?? "0");
+        return {
+          keys: [`${PREVIEW_KEY_PREFIX}page-${page}`],
+          continuationToken: String(page + 1),
+        };
+      },
+    });
+
+    const first = await reconcilePreviewNamespace(
+      undefined,
+      backend.dependencies,
+    );
+    expect(requested[0]).toBeUndefined();
+    // Bounded: it did not read a bucket's worth of pages in one pass, and it
+    // stopped while the provider still had more to give.
+    expect(requested.length).toBeGreaterThan(1);
+    expect(requested.length).toBeLessThan(50);
+    expect(first.examined).toBe(requested.length);
+    expect(first.continuationToken).toBeDefined();
+    // Everything it did read was unreferenced, so all of it is retired.
+    expect(backend.deleted.length).toBe(first.examined);
+    expect(first.retired).toBe(first.examined);
+
+    const pagesRead = requested.length;
+    await reconcilePreviewNamespace(
+      first.continuationToken,
+      backend.dependencies,
+    );
+    // The next pass carries on from the cursor rather than re-reading the
+    // pages this one already swept.
+    expect(requested[pagesRead]).toBe(first.continuationToken);
   });
 
   it("leaves a served preview in place when its write record expires", async () => {
@@ -873,7 +1086,7 @@ describe("#260 same-asset preview for private media reads", () => {
 
     await reconcilePreviewWrites(
       new Date(record.expiresAt.getTime() + 60 * 60 * 1_000),
-      { storageForBackend: backend.resolve },
+      backend.dependencies,
     );
 
     expect(backend.deleted).not.toContain(stored.previewStorageKey);
@@ -908,16 +1121,13 @@ describe("#260 same-asset preview for private media reads", () => {
     const backend = recordingStorage();
     const begun = await beginAssetPreview(
       asset,
-      identity.atlasId,
       { sourceWidth: 3000, sourceHeight: 2000, exifOrientation: 1 },
       CEILINGS,
       UPLOAD_TTL_SECONDS,
-      { storageForBackend: backend.resolve },
+      backend.dependencies,
     );
     expect(begun.ok).toBe(true);
-    await completeAssetPreview(await readAsset(asset.id), CEILINGS, {
-      storageForBackend: backend.resolve,
-    });
+    await completeAssetPreview(await readAsset(asset.id), CEILINGS, backend.dependencies);
     const ready = await readAsset(asset.id);
 
     // Soft delete then restore: the grace window is a recovery path, so the

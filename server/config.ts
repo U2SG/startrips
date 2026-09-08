@@ -56,19 +56,15 @@ export function loadServerConfig(
   const shareMediaReadUrlExpiresInSeconds = Number(
     environment.SHARE_MEDIA_READ_URL_EXPIRES_IN_SECONDS ?? 90,
   );
-  // #260: the two ceilings every derived preview is planned against, and they
-  // are enforced at different strengths — deliberately, and stated here so
-  // nothing downstream reads more into them than holds.
+  // #260: the two ceilings every derived preview is planned against, and both
+  // are enforced against the object that actually landed rather than against
+  // the plan a producer was handed.
   //
-  // The byte ceiling is a post-upload bound: completion inspects the produced
-  // object and a preview over it never reaches "ready", so no oversized still
-  // is ever signed. The longest-edge ceiling is the pixel size the server
-  // ASKS for. It is fixed in the plan a producer is handed and asserted
-  // against that plan, but the stored object's encoded dimensions are not
-  // measured, because `inspectObject()` reports existence and bytes only.
-  // Verifying them needs an object-read capability `MultipartStorage` does
-  // not yet have; that is #265, and no consumer may treat the pixel ceiling
-  // as a decode-cost guarantee until it lands.
+  // Completion measures the produced object's byte size and reads it back to
+  // establish its encoded pixel size; a preview that breaks either ceiling
+  // never reaches "ready" and is never signed. So a consumer may treat both
+  // numbers as properties of anything it is served, which is what makes the
+  // longest-edge ceiling usable as a decode-cost bound.
   //
   // 640 px carries a full-bleed phone frame at 2x without approaching the
   // original, and 512 KiB is several times what a 640 px JPEG of a photograph
@@ -86,11 +82,12 @@ export function loadServerConfig(
   // `MEDIA_PREVIEW_MAX_BYTES`, so two minutes is generous, and it bounds the
   // window in which a write issued just before a Journey is deleted could
   // still land after the row cascaded away. What that write leaves behind is
-  // not bounded by the clock at all: every issued write is recorded in
-  // `media_preview_writes`, outside the cascade, and `reconcilePreviewWrites()`
-  // keeps retiring the key until it has stayed empty across a settle window,
-  // because an expired signature says a new request cannot START, not that
-  // one already running has finished.
+  // not bounded by this clock at all, and deliberately so: an expired
+  // signature says a new request cannot START, never that one already running
+  // has finished. `reconcilePreviewWrites()` retires the keys it recorded, and
+  // `reconcilePreviewNamespace()` enumerates the preview prefix itself and
+  // deletes every object no `media_assets` row references, so a late write is
+  // discoverable however long it took to arrive.
   const mediaPreviewUploadExpiresInSeconds = Number(
     environment.MEDIA_PREVIEW_UPLOAD_EXPIRES_IN_SECONDS ?? 120,
   );

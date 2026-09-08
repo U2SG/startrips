@@ -274,14 +274,13 @@ export const mediaPreviewWrites = pgTable(
     // When the presigned write stops being usable. The sweep waits out this
     // instant plus a grace margin, so it can only ever see a window that is
     // already closed.
+    //
+    // It is not a terminal write state and nothing here treats it as one: a
+    // PUT authorised a moment before it may still be streaming afterwards.
+    // Past the margin this record is retired and dropped, and a write that
+    // lands later is found by the prefix sweep over the preview namespace,
+    // which is what makes forgetting a record safe.
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
-    // When the sweep last acted on this key: deleted the object it found, or
-    // observed that no object was there. A record is only dropped once the
-    // key has been absent across a full settle interval measured from here,
-    // so an expired signature alone never ends a write's life — a PUT that
-    // began before the expiry and was still streaming is seen by the next
-    // pass and retired then.
-    retireAttemptedAt: timestamp("retire_attempted_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
