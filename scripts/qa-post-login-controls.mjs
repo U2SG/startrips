@@ -2414,23 +2414,43 @@ async function verifyFinalAcceptanceMobileFlow() {
       const historyLengthBeforePlaybackReturn = await page.evaluate(() => window.history.length);
       const progress = page.locator('.journey-playback__progress input[aria-label="播放进度"]');
       // #245 return evidence needs a deterministic committed media beat. Keep
-      // the existing scrubber as the one seek owner: End seeks to the outro,
-      // then ArrowLeft uses its existing meaningful-step handler to land on the
-      // last media beat (Route Point 2 / fa-image-2). Keeping focus on the range
-      // avoids coupling the evidence to auto-hidden transport chrome.
+      // the existing scrubber as the one seek owner. Home uses the native range
+      // change path to reset the run; subsequent synthetic ArrowRight keydowns
+      // exercise the scrubber's explicit meaningful-step handler without also
+      // applying the browser's native one-unit range step after React seeks.
+      // Wait for each presentation owner to settle before issuing a newer seek,
+      // otherwise a still-loading media beat can be skipped before it commits.
       await progress.focus();
-      await progress.press("End");
-      await page.waitForFunction(() => {
-        const playback = document.querySelector(".journey-playback");
-        const step = Number(playback?.getAttribute("data-playback-step"));
-        const stepCount = Number(playback?.getAttribute("data-playback-steps"));
-        return Number.isFinite(step) && Number.isFinite(stepCount) && step === stepCount - 1;
-      }, null, { timeout: 2_000 });
-      await progress.press("ArrowLeft");
-      await page.locator('.journey-playback [data-shared-media-id="fa-image-2"]').waitFor({
-        state: "visible",
-        timeout: 5_000,
-      });
+      await progress.press("Home");
+      await page.waitForFunction(() => (
+        document.querySelector(".journey-playback")?.getAttribute("data-playback-step") === "0"
+      ), null, { timeout: 2_000 });
+      const returnedMedia = page.locator('.journey-playback [data-shared-media-id="fa-image-2"]');
+      let reachedReturnedMedia = false;
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        if (await returnedMedia.isVisible()) {
+          reachedReturnedMedia = true;
+          break;
+        }
+        const previousStep = await page.locator(".journey-playback").getAttribute("data-playback-step");
+        await progress.dispatchEvent("keydown", {
+          key: "ArrowRight",
+          code: "ArrowRight",
+          bubbles: true,
+          cancelable: true,
+        });
+        await page.waitForFunction((step) => (
+          document.querySelector(".journey-playback")?.getAttribute("data-playback-step") !== step
+        ), previousStep, { timeout: 2_000 });
+        await page.waitForFunction(() => (
+          document.querySelector(".journey-playback")?.getAttribute("data-playback-presentation-hold") === "none"
+        ), null, { timeout: 5_000 });
+        reachedReturnedMedia = await returnedMedia.isVisible();
+        if (reachedReturnedMedia) break;
+      }
+      if (!reachedReturnedMedia) {
+        await returnedMedia.waitFor({ state: "visible", timeout: 5_000 });
+      }
       await progress.blur();
       // Freeze the now-presented beat before exiting so the autoplay clock cannot
       // advance after the presentation owner has committed the return identity.
