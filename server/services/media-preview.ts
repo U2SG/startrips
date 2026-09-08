@@ -361,6 +361,11 @@ export async function reconcilePreviewWrites(
     .select()
     .from(mediaPreviewWrites)
     .where(lt(mediaPreviewWrites.expiresAt, cutoff))
+    // Oldest signature first, so a backlog larger than one batch drains in the
+    // order the writes were issued rather than in whatever order the heap
+    // hands back, and the record that has waited longest is never the one a
+    // batch limit keeps skipping.
+    .orderBy(mediaPreviewWrites.expiresAt)
     .limit(PREVIEW_WRITE_BATCH_SIZE);
 
   let retired = 0;
