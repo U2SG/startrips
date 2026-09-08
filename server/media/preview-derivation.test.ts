@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  plannedStill,
+  issuedStillSize,
   planPreviewDerivation,
   previewObjectFitsCeiling,
   previewPixelsWithinPlan,
@@ -202,71 +202,53 @@ describe("#260 servable preview", () => {
   });
 });
 
-describe("#265 the produced still against the still that was planned", () => {
+describe("#265 the produced still against the still that was issued", () => {
   /** The row `POST .../preview` leaves behind for the pinned portrait. */
-  const PLANNED_ROW = {
-    mimeType: "image/jpeg",
-    displayWidth: 4000,
-    displayHeight: 6000,
-  };
+  const ISSUED_ROW = { previewWidth: 427, previewHeight: 640 };
 
-  it("recovers the plan from the persisted display size alone", () => {
-    // No column stores the still's size, so the recovered plan has to be the
-    // same value `planPreviewDerivation` produced when the write was signed.
+  it("takes the issued size from the row, not from the live ceiling", () => {
+    // The pinned portrait's plan under the shipped ceiling is what the row
+    // records, so the value completion compares against is the one begin
+    // wrote rather than one re-derived from whatever config is loaded then.
     const planned = planPreviewDerivation(PINNED_PORTRAIT, CEILINGS);
     expect(planned.ok).toBe(true);
     if (!planned.ok) return;
-    expect(plannedStill(PLANNED_ROW, CEILINGS)).toEqual(planned.spec);
-  });
-
-  it("plans a source already inside the ceiling at its own size", () => {
-    expect(plannedStill(
-      { mimeType: "image/jpeg", displayWidth: 600, displayHeight: 467 },
-      CEILINGS,
-    )).toMatchObject({ width: 600, height: 467 });
+    expect(issuedStillSize(ISSUED_ROW)).toEqual({
+      width: planned.spec.width,
+      height: planned.spec.height,
+    });
   });
 
   it.each([
-    ["no display width", { displayWidth: null }],
-    ["no display height", { displayHeight: null }],
-    ["a source nothing can be derived from", { mimeType: "audio/mpeg" }],
-  ])("states no plan rather than a guess for %s", (_label, damage) => {
-    expect(plannedStill({ ...PLANNED_ROW, ...damage }, CEILINGS)).toBeNull();
+    ["no issued width", { previewWidth: null }],
+    ["no issued height", { previewHeight: null }],
+    ["a zero edge", { previewWidth: 0 }],
+  ])("states nothing rather than a guess for %s", (_label, damage) => {
+    expect(issuedStillSize({ ...ISSUED_ROW, ...damage })).toBeNull();
   });
 
-  it("bounds a produced frame by the plan, not only by the ceiling", () => {
-    const plan = plannedStill(
-      { mimeType: "image/jpeg", displayWidth: 400, displayHeight: 300 },
-      CEILINGS,
-    );
-    expect(plan).not.toBeNull();
-    if (!plan) return;
+  it("bounds a produced frame by the issued size, not only by the ceiling", () => {
+    const issued = { width: 400, height: 300 };
     // Inside the deployment's pixel ceiling and still not the frame this asset
     // was asked for — the case the ceiling alone cannot see.
     expect(Math.max(600, 467)).toBeLessThanOrEqual(CEILINGS.maxEdgePixels);
-    expect(previewPixelsWithinPlan({ width: 600, height: 467 }, plan))
+    expect(previewPixelsWithinPlan({ width: 600, height: 467 }, issued))
       .toBe(false);
-    expect(previewPixelsWithinPlan({ width: 400, height: 400 }, plan))
+    expect(previewPixelsWithinPlan({ width: 400, height: 400 }, issued))
       .toBe(false);
-    expect(previewPixelsWithinPlan({ width: 400, height: 300 }, plan))
+    expect(previewPixelsWithinPlan({ width: 400, height: 300 }, issued))
       .toBe(true);
   });
 
-  it("accepts a frame at or under the plan rather than demanding equality", () => {
-    const plan = plannedStill(PLANNED_ROW, CEILINGS);
-    expect(plan).not.toBeNull();
-    if (!plan) return;
+  it("accepts a frame at or under the issued size rather than demanding equality", () => {
+    const issued = { width: 427, height: 640 };
     // A producer that rounded an edge differently, or handed back a source
     // already smaller than the plan rather than upscaling it, has broken
     // nothing a reader can see.
-    expect(previewPixelsWithinPlan(
-      { width: plan.width - 1, height: plan.height },
-      plan,
-    )).toBe(true);
-    expect(previewPixelsWithinPlan({ width: 1, height: 1 }, plan)).toBe(true);
-    expect(previewPixelsWithinPlan(
-      { width: plan.width, height: plan.height + 1 },
-      plan,
-    )).toBe(false);
+    expect(previewPixelsWithinPlan({ width: 426, height: 640 }, issued))
+      .toBe(true);
+    expect(previewPixelsWithinPlan({ width: 1, height: 1 }, issued)).toBe(true);
+    expect(previewPixelsWithinPlan({ width: 427, height: 641 }, issued))
+      .toBe(false);
   });
 });

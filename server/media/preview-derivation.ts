@@ -200,61 +200,55 @@ export function planPreviewDerivation(
 }
 
 /**
- * #265: the still that WAS planned for an asset, recovered at completion time.
+ * #265: the still THIS generation's producer was issued, as the row records it.
  *
- * `POST .../preview` persists the orientation-corrected display size on the
- * row before it hands out a write, and the planned still is a pure function of
- * that size and the configured ceiling — so the plan needs no column of its
- * own and cannot drift out of step with the arithmetic that produced it.
- * Re-planning from the display size is the same call with the orientation
- * already applied, which is why it is passed as upright.
+ * `POST .../preview` writes the planned pixel size beside the storage key that
+ * identifies the generation, so completion reads an instruction rather than
+ * reconstructing one. Reconstruction was the defect: the plan is a function of
+ * the display size AND `MEDIA_PREVIEW_MAX_EDGE_PIXELS`, so a ceiling raised
+ * between begin and completion — a rolling deployment is enough — would
+ * re-derive a larger plan and retroactively widen what an already-issued
+ * producer was authorized to create. The asymmetry is the point: a later
+ * policy may tighten what is servable, through the live ceiling gate that
+ * still applies independently, but it may not rewrite an earlier generation's
+ * instructions. It is the same rule `previewStorageKey` already enforces —
+ * newer state supersedes a generation, it does not redefine one.
  *
- * `null` means the row cannot say what it asked for: a display size that is
- * absent or not a size. Nothing can be verified against that, and the caller
- * refuses rather than promoting an unverified object.
+ * `null` means the row cannot state what it issued. Nothing can be verified
+ * against that, and the caller refuses rather than promoting an unverified
+ * object.
  */
-export function plannedStill(
-  columns: {
-    mimeType: string;
-    displayWidth: number | null;
-    displayHeight: number | null;
-  },
-  ceilings: PreviewCeilings,
-): PreviewSpec | null {
-  if (columns.displayWidth === null || columns.displayHeight === null) {
-    return null;
-  }
-  const planned = planPreviewDerivation({
-    mimeType: columns.mimeType,
-    sourceWidth: columns.displayWidth,
-    sourceHeight: columns.displayHeight,
-    exifOrientation: 1,
-  }, ceilings);
-  return planned.ok ? planned.spec : null;
+export function issuedStillSize(
+  columns: { previewWidth: number | null; previewHeight: number | null },
+): { width: number; height: number } | null {
+  const { previewWidth, previewHeight } = columns;
+  if (previewWidth === null || previewHeight === null) return null;
+  if (previewWidth < 1 || previewHeight < 1) return null;
+  return { width: previewWidth, height: previewHeight };
 }
 
 /**
- * Whether a produced still is inside the still that was planned.
+ * Whether a produced still is inside the still that was issued.
  *
  * The ceiling above bounds the longest edge, so it bounds a decode's cost at
  * the ceiling SQUARED however small the still the server actually asked for.
- * This bounds it at the planned area instead: a presigned PUT binds only the
+ * This bounds it at the issued area instead: a presigned PUT binds only the
  * content type, so a producer handed a spec for a 320x240 still can write a
  * highly compressible 640x640 one that is under every byte ceiling and pass
  * the pixel ceiling untouched, and a share guest then pays the decode.
  *
- * Neither edge may EXCEED the plan, and equality is deliberately not required.
- * The contract is a bound, not an encoder specification: a producer that
- * rounds a scaled edge one pixel differently, or hands back a source already
- * smaller than the plan rather than upscaling it, has broken nothing a reader
- * can see. That boundary is the one #263's review settled for the ceilings,
- * applied here to the plan.
+ * Neither edge may EXCEED the issued size, and equality is deliberately not
+ * required. The contract is a bound, not an encoder specification: a producer
+ * that rounds a scaled edge one pixel differently, or hands back a source
+ * already smaller than the plan rather than upscaling it, has broken nothing a
+ * reader can see. That boundary is the one #263's review settled for the
+ * ceilings, applied here to the issued plan.
  */
 export function previewPixelsWithinPlan(
   pixels: { width: number; height: number },
-  spec: PreviewSpec,
+  issued: { width: number; height: number },
 ): boolean {
-  return pixels.width <= spec.width && pixels.height <= spec.height;
+  return pixels.width <= issued.width && pixels.height <= issued.height;
 }
 
 /** The completion gate: what was actually written, against the plan's ceiling. */

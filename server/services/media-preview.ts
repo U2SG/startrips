@@ -3,7 +3,7 @@ import { and, eq, inArray, isNull, lt } from "drizzle-orm";
 import { mediaAssets, mediaPreviewWrites } from "../db/app-schema";
 import { db } from "../db/client";
 import {
-  plannedStill,
+  issuedStillSize,
   planPreviewDerivation,
   previewObjectFitsCeiling,
   previewPixelsFitCeiling,
@@ -109,6 +109,10 @@ const CLEARED_PREVIEW = {
   previewStorageKey: null,
   previewMimeType: null,
   previewBytes: null,
+  // #265: the issued pixel size belongs to the generation, so it goes when the
+  // key that identifies that generation goes.
+  previewWidth: null,
+  previewHeight: null,
 } as const;
 
 /**
@@ -245,6 +249,11 @@ export async function beginAssetPreview(
       previewStorageKey,
       previewMimeType: spec.mimeType,
       previewBytes: null,
+      // #265: recorded here, with the key, because this is the instruction the
+      // producer about to hold that URL is issued. Completion compares against
+      // it and never against a plan re-derived from a later config.
+      previewWidth: spec.width,
+      previewHeight: spec.height,
       previewState: "pending",
     })
     .where(stillHoldsGeneration(asset.id, asset.previewStorageKey))
@@ -356,13 +365,15 @@ export async function completeAssetPreview(
   if (!previewPixelsFitCeiling(pixels, ceilings)) {
     return rejectPreview("PREVIEW_PIXELS_TOO_LARGE");
   }
-  // #265: and then against the still this asset was actually planned. The
-  // ceiling is the deployment's outer bound; the plan is what this producer
-  // was asked for, and it is usually far smaller. A row that cannot state its
-  // plan is refused rather than promoted unverified — fail closed, since the
-  // object is about to become servable to a share guest.
-  const plan = plannedStill(asset, ceilings);
-  if (!plan || !previewPixelsWithinPlan(pixels, plan)) {
+  // #265: and then against the still this generation's producer was ISSUED,
+  // read from the row rather than re-derived. The two gates are deliberately
+  // independent and both bind: the ceiling above is the deployment's current
+  // safety policy, which a later config may tighten, and this is the earlier
+  // instruction, which a later config may not widen. A row that cannot state
+  // what it issued is refused rather than promoted unverified — fail closed,
+  // since the object is about to become servable to a share guest.
+  const issued = issuedStillSize(asset);
+  if (!issued || !previewPixelsWithinPlan(pixels, issued)) {
     return rejectPreview("PREVIEW_PIXELS_MISMATCH");
   }
 

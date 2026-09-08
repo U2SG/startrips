@@ -651,6 +651,9 @@ describe("#260 same-asset preview for private media reads", () => {
     expect(begun.ok).toBe(true);
     if (!begun.ok) return;
     expect(begun.preview).toMatchObject({ width: 600, height: 467 });
+    const issued = await readAsset(asset.id);
+    expect(issued.previewWidth).toBe(600);
+    expect(issued.previewHeight).toBe(467);
 
     const completed = await completeAssetPreview(
       await readAsset(asset.id),
@@ -667,11 +670,92 @@ describe("#260 same-asset preview for private media reads", () => {
       .toEqual({ width: 600, height: 467 });
   });
 
-  it("refuses a produced still whose row cannot state what was planned", async () => {
-    // A `pending` row always carries the display size `POST .../preview` wrote,
-    // so this is a contradiction rather than an expected state. It is asserted
+  it("holds a raised ceiling to the size the generation was issued", async () => {
+    // #265's config-drift case, and the reason the issued size is a column
+    // rather than arithmetic. Begin runs under the shipped 640 ceiling and
+    // issues a 640x320 still; completion runs under a ceiling of 1280, as it
+    // would during a rolling deployment. Re-deriving the plan there would
+    // answer 1280x640 and admit the 600x467 frame, which is precisely the
+    // producer latitude this gate exists to close.
+    const asset = await insertAsset();
+    const backend = recordingStorage();
+    const begun = await beginAssetPreview(
+      await readAsset(asset.id),
+      { sourceWidth: 6000, sourceHeight: 3000, exifOrientation: 1 },
+      CEILINGS,
+      UPLOAD_TTL_SECONDS,
+      backend.dependencies,
+    );
+    expect(begun.ok).toBe(true);
+    if (!begun.ok) return;
+    expect(begun.preview).toMatchObject({ width: 640, height: 320 });
+    const pending = await readAsset(asset.id);
+    // The instruction is recorded with the generation's key.
+    expect(pending.previewWidth).toBe(640);
+    expect(pending.previewHeight).toBe(320);
+    const issuedKey = pending.previewStorageKey!;
+
+    const raised = { ...CEILINGS, maxEdgePixels: 1280 };
+    // The frame is inside the RAISED safety ceiling, so that gate cannot be
+    // what refuses it, and a plan re-derived under 1280 would have allowed it.
+    expect(Math.max(600, 467)).toBeLessThanOrEqual(raised.maxEdgePixels);
+    const completed = await completeAssetPreview(
+      pending,
+      raised,
+      backend.dependencies,
+    );
+
+    expect(completed).toMatchObject({
+      ok: false,
+      error: "PREVIEW_PIXELS_MISMATCH",
+      status: 409,
+    });
+    const stored = await readAsset(asset.id);
+    expect(stored.previewState).toBe("failed");
+    expect(stored.previewStorageKey).toBeNull();
+    // The issued size goes with the generation it belonged to.
+    expect(stored.previewWidth).toBeNull();
+    expect(stored.previewHeight).toBeNull();
+    expect(backend.deleted).toContain(issuedKey);
+  });
+
+  it("still applies a lowered ceiling as the current safety gate", async () => {
+    // The other direction, pinned as a distinct contract rather than folded
+    // into plan identity: a later policy MAY tighten what is servable. The
+    // frame is inside the size this generation was issued and is refused
+    // anyway, by the ceiling and under the ceiling's own error code.
+    const asset = await insertAsset();
+    const backend = recordingStorage();
+    const begun = await beginAssetPreview(
+      await readAsset(asset.id),
+      SOURCE_OF_PRODUCED_PREVIEW,
+      CEILINGS,
+      UPLOAD_TTL_SECONDS,
+      backend.dependencies,
+    );
+    expect(begun.ok).toBe(true);
+    const pending = await readAsset(asset.id);
+    expect(pending.previewWidth).toBe(600);
+    expect(pending.previewHeight).toBe(467);
+
+    const completed = await completeAssetPreview(
+      pending,
+      { ...CEILINGS, maxEdgePixels: 500 },
+      backend.dependencies,
+    );
+
+    expect(completed).toMatchObject({
+      ok: false,
+      error: "PREVIEW_PIXELS_TOO_LARGE",
+    });
+    expect((await readAsset(asset.id)).previewState).toBe("failed");
+  });
+
+  it("refuses a produced still whose row cannot state what it issued", async () => {
+    // A `pending` row always carries the size `POST .../preview` issued, so
+    // this is a contradiction rather than an expected state. It is asserted
     // because the answer to a contradiction has to be fail-closed: nothing can
-    // be verified against a plan that cannot be recovered, and an unverified
+    // be verified against an instruction that is not there, and an unverified
     // object must not become servable to a guest.
     const asset = await insertAsset();
     const backend = recordingStorage();
@@ -684,7 +768,7 @@ describe("#260 same-asset preview for private media reads", () => {
     );
     await db
       .update(mediaAssets)
-      .set({ displayWidth: null, displayHeight: null })
+      .set({ previewWidth: null, previewHeight: null })
       .where(eq(mediaAssets.id, asset.id));
 
     const completed = await completeAssetPreview(
