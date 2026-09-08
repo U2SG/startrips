@@ -185,11 +185,13 @@ export function runSharedElementMorph({
   let previousTargetVisibility = "";
   let animation: Animation | null = null;
   let observer: MutationObserver | null = null;
+  let readinessTimer = 0;
   let stopMotionPreference: () => void = () => undefined;
   let settled = false;
   const cleanup = () => {
     if (settled) return;
     settled = true;
+    window.clearTimeout(readinessTimer);
     observer?.disconnect();
     stopMotionPreference();
     animation?.cancel();
@@ -221,6 +223,7 @@ export function runSharedElementMorph({
       return;
     }
     target = candidate;
+    window.clearTimeout(readinessTimer);
     previousTargetVisibility = target.style.visibility;
     // The ready target is hidden before the next paint. The clone is the sole
     // visible owner until animation completion restores the target and removes
@@ -252,6 +255,10 @@ export function runSharedElementMorph({
   document.addEventListener("scroll", cleanup, true);
   document.addEventListener("visibilitychange", onVisibilityChange);
   stopMotionPreference = onMotionPreferenceChange((reduced) => { if (reduced) cleanup(); });
+  // A stalled signed read/decode must reveal the Story's normal loading UI.
+  // Allow one content-transition duration to find a ready destination, then
+  // release the clone and its observer without changing the pending media read.
+  readinessTimer = window.setTimeout(cleanup, durationMs);
   try {
     flushSync(update);
     if (settled) return;

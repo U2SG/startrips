@@ -953,11 +953,14 @@ try {
     const inlineVideoPointerUps = Number(await inlineVideo.getAttribute("data-qa-pointer-ups") ?? "0");
 
     const inlineVideoSrcBeforeSwipe = await inlineVideo.getAttribute("src");
+    // This assertion exercises a warm video-to-photo swipe. Returning from
+    // fullscreen may leave the inline neighbor waiting for its own decode.
+    await inlineStage.locator(storyReadyPageSelector("next")).waitFor({ state: "attached", timeout: 3_000 });
     await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: inlineVideoX, y: inlineVideoY }] });
     await touch.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: inlineVideoX - 110, y: inlineVideoY }] });
     await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
     await mixedMediaMobile.page.waitForFunction(({ selector, before }) => {
-      const media = document.querySelector(selector);
+      const media = document.querySelector(".journey-story__media")?.querySelector(selector);
       return Boolean(media && media.getAttribute("src") !== before);
     }, { selector: storyCurrentMediaSelector, before: inlineVideoSrcBeforeSwipe }, { timeout: 3_000 });
     const inlineVideoSwipeNavigated = true;
@@ -2881,6 +2884,7 @@ try {
     await paused.page.close();
   }
 } finally {
+  console.log("Media checks completed before exit:", JSON.stringify(checks));
   await browser.close();
 }
 
