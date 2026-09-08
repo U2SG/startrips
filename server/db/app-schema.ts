@@ -275,6 +275,13 @@ export const mediaPreviewWrites = pgTable(
     // instant plus a grace margin, so it can only ever see a window that is
     // already closed.
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    // When the sweep last acted on this key: deleted the object it found, or
+    // observed that no object was there. A record is only dropped once the
+    // key has been absent across a full settle interval measured from here,
+    // so an expired signature alone never ends a write's life — a PUT that
+    // began before the expiry and was still streaming is seen by the next
+    // pass and retired then.
+    retireAttemptedAt: timestamp("retire_attempted_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

@@ -707,16 +707,13 @@ describe("#260 same-asset preview for private media reads", () => {
     expect(await readAsset(asset.id)).toBeUndefined();
   });
 
-  it("retires a preview write that landed after its media was deleted", async () => {
-    // The interleaving the single-object write makes possible and the
-    // multipart pipeline does not: begin signs a PUT, the media is deleted
-    // while that signature is still valid, and the PUT lands afterwards. The
-    // row that named the key is already gone, so nothing in `media_assets`
-    // can ever mention the object again.
-    // The stub keeps an object store as well as a log, because the point of
-    // the case is what survives in storage, not only what was asked for. The
-    // override replaces `recordingStorage`'s own `deleted` array, so it
-    // records here instead.
+  /**
+   * A storage stub with an object store as well as a log, so a case can say
+   * what is actually under a key rather than only what was asked for. The
+   * overrides replace `recordingStorage`'s own `deleted` array, so deletions
+   * are recorded here instead.
+   */
+  function objectStoreBackend() {
     const objects = new Set<string>();
     const deletedKeys: string[] = [];
     const backend = recordingStorage({
@@ -724,7 +721,17 @@ describe("#260 same-asset preview for private media reads", () => {
         deletedKeys.push(input.key);
         objects.delete(input.key);
       },
+      async inspectObject(input) {
+        return objects.has(input.key)
+          ? { exists: true as const, bytes: 48_000 }
+          : { exists: false as const };
+      },
     });
+    return { objects, deletedKeys, resolve: backend.resolve };
+  }
+
+  /** Begin a derivation and delete the media out from under its signed write. */
+  async function signThenDeleteMedia(backend: ReturnType<typeof objectStoreBackend>) {
     const asset = await insertAsset();
     const begun = await beginAssetPreview(
       asset,
@@ -748,38 +755,103 @@ describe("#260 same-asset preview for private media reads", () => {
     });
     expect(deleted).toBe(true);
     expect(await readAsset(asset.id)).toBeUndefined();
+    // Every row that could name the key is gone; only the write record is left.
+    expect(
+      await db
+        .select({ id: mediaAssets.id })
+        .from(mediaAssets)
+        .where(eq(mediaAssets.previewStorageKey, pendingKey)),
+    ).toEqual([]);
+    backend.deletedKeys.length = 0;
+    return { assetId: asset.id, pendingKey };
+  }
 
-    // The late PUT: the producer still holds a valid URL and writes to it
-    // after every row that referenced the key has cascaded away.
-    objects.add(pendingKey);
-    const orphaned = await db
-      .select({ id: mediaAssets.id })
-      .from(mediaAssets)
-      .where(eq(mediaAssets.previewStorageKey, pendingKey));
-    expect(orphaned).toEqual([]);
-
-    // The write record outlives the cascade, so the sweep can still name the
-    // object once the signature can no longer be used.
+  async function writeRecordFor(storageKey: string) {
     const [record] = await db
       .select()
       .from(mediaPreviewWrites)
-      .where(eq(mediaPreviewWrites.storageKey, pendingKey));
-    expect(record).toBeTruthy();
-    expect(record.mediaAssetId).toBe(asset.id);
+      .where(eq(mediaPreviewWrites.storageKey, storageKey));
+    return record;
+  }
 
-    const swept = await reconcilePreviewWrites(
-      new Date(record.expiresAt.getTime() + 60 * 60 * 1_000),
+  it("retires a preview write that landed after its media was deleted", async () => {
+    // The interleaving the single-object write makes possible and the
+    // multipart pipeline does not: begin signs a PUT, the media is deleted
+    // while that signature is still valid, and the PUT lands afterwards.
+    const backend = objectStoreBackend();
+    const { assetId, pendingKey } = await signThenDeleteMedia(backend);
+
+    // The late PUT: the producer still holds a valid URL and writes to it
+    // after every row that referenced the key has cascaded away.
+    backend.objects.add(pendingKey);
+
+    // The write record outlives the cascade, so the sweep can still name the
+    // object once the signature can no longer be used.
+    const record = await writeRecordFor(pendingKey);
+    expect(record).toBeTruthy();
+    expect(record.mediaAssetId).toBe(assetId);
+    expect(record.retireAttemptedAt).toBeNull();
+
+    const firstPass = new Date(record.expiresAt.getTime() + 60 * 60 * 1_000);
+    const swept = await reconcilePreviewWrites(firstPass, {
+      storageForBackend: backend.resolve,
+    });
+    expect(swept.retired).toBeGreaterThanOrEqual(1);
+    expect(backend.deletedKeys).toContain(pendingKey);
+    expect(backend.objects.has(pendingKey)).toBe(false);
+    // The record is kept, not forgotten: one look does not prove the write is
+    // over, so the sweep stamps the attempt and comes back.
+    const afterRetire = await writeRecordFor(pendingKey);
+    expect(afterRetire.retireAttemptedAt).toEqual(firstPass);
+
+    // A later pass finds the key still empty and only then forgets it.
+    await reconcilePreviewWrites(
+      new Date(firstPass.getTime() + 31 * 60 * 1_000),
       { storageForBackend: backend.resolve },
     );
-    expect(swept.retired).toBeGreaterThanOrEqual(1);
-    expect(deletedKeys).toContain(pendingKey);
-    expect(objects.has(pendingKey)).toBe(false);
-    expect(
-      await db
-        .select()
-        .from(mediaPreviewWrites)
-        .where(eq(mediaPreviewWrites.storageKey, pendingKey)),
-    ).toEqual([]);
+    expect(await writeRecordFor(pendingKey)).toBeUndefined();
+    expect(backend.objects.has(pendingKey)).toBe(false);
+  });
+
+  it("keeps sweeping a preview write whose PUT was still in flight", async () => {
+    // The ordering an expired signature does not settle: begin, the PUT
+    // starts, the media is deleted, the first sweep runs while the request is
+    // still streaming and therefore sees nothing, and the object appears
+    // afterwards. A sweep that forgot the record at the first empty look
+    // would leave exactly the orphan the record exists to prevent.
+    const backend = objectStoreBackend();
+    const { pendingKey } = await signThenDeleteMedia(backend);
+    const record = await writeRecordFor(pendingKey);
+
+    const firstPass = new Date(record.expiresAt.getTime() + 60 * 60 * 1_000);
+    await reconcilePreviewWrites(firstPass, {
+      storageForBackend: backend.resolve,
+    });
+    // Nothing to delete yet, and nothing concluded from that.
+    expect(backend.deletedKeys).not.toContain(pendingKey);
+    const stamped = await writeRecordFor(pendingKey);
+    expect(stamped).toBeTruthy();
+    expect(stamped.retireAttemptedAt).toEqual(firstPass);
+
+    // The in-flight PUT finishes, after the expiry and after the first sweep.
+    backend.objects.add(pendingKey);
+
+    const secondPass = new Date(firstPass.getTime() + 31 * 60 * 1_000);
+    await reconcilePreviewWrites(secondPass, {
+      storageForBackend: backend.resolve,
+    });
+    expect(backend.deletedKeys).toContain(pendingKey);
+    expect(backend.objects.has(pendingKey)).toBe(false);
+    // Retiring restarts the clock rather than ending the record.
+    const afterRetire = await writeRecordFor(pendingKey);
+    expect(afterRetire.retireAttemptedAt).toEqual(secondPass);
+
+    await reconcilePreviewWrites(
+      new Date(secondPass.getTime() + 31 * 60 * 1_000),
+      { storageForBackend: backend.resolve },
+    );
+    expect(await writeRecordFor(pendingKey)).toBeUndefined();
+    expect(backend.objects.has(pendingKey)).toBe(false);
   });
 
   it("leaves a served preview in place when its write record expires", async () => {

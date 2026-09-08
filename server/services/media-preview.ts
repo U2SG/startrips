@@ -304,32 +304,53 @@ export async function completeAssetPreview(
 }
 
 /**
- * How long after a preview write's own expiry the sweep waits before it acts.
+ * How long after a preview write's own expiry the sweep first looks at it.
  *
- * A presigned signature is checked when the request starts, so once the
- * expiry has passed no new PUT can begin, and a still-streaming one is
- * writing at most `MEDIA_PREVIEW_MAX_BYTES` of a size-bounded still. One pass
- * per record is therefore enough: by the time a record is picked up, nothing
- * further can land under its key.
+ * A presigned signature is checked when the request starts, so past the
+ * expiry no new PUT can begin. It says nothing about a PUT that began just
+ * before it and is still streaming, which is why the expiry is a starting
+ * point here and not a terminal state.
  */
 const PREVIEW_WRITE_GRACE_MS = 5 * 60 * 1_000;
+/**
+ * How long a key must stay absent before its record may be forgotten.
+ *
+ * The sweep never concludes anything from one look. It acts, records when it
+ * acted, and only drops the record when a later pass — at least this far
+ * after that — still finds nothing under the key. A write that was streaming
+ * at the first look has by then either finished, in which case the object is
+ * there and is deleted and the clock restarts, or it never landed at all. A
+ * preview is at most `MEDIA_PREVIEW_MAX_BYTES` of a size-bounded still, so
+ * half an hour is far past any request that could still be running.
+ */
+const PREVIEW_WRITE_SETTLE_MS = 30 * 60 * 1_000;
 const PREVIEW_WRITE_RECONCILE_INTERVAL_MS = 10 * 60 * 1_000;
 const PREVIEW_WRITE_BATCH_SIZE = 50;
 
 /**
  * Retire the objects that issued preview writes may have left behind.
  *
- * A record whose key an asset still references describes a live generation —
- * pending, ready, or one a completion is about to promote — so only the
- * record is dropped and the object is left exactly where it is. A record no
- * asset references is the case this whole table exists for: a superseded
- * generation whose best-effort cleanup failed, a begin that lost its swap, or
- * a write that landed after the media, the Journey or the Atlas that owned it
- * was deleted. That object is unreachable through every read path and belongs
- * to nobody, so it is deleted here.
+ * An expired signature is not a terminal write state, so this pass is a
+ * repeated-retirement contract rather than a single sweep. For every record
+ * past its expiry it looks at what is actually under the key:
  *
- * The record survives a failed delete on purpose. This sweep is the last
- * owner of the key; if it forgot the object it could not name it again.
+ *  - the key is referenced by an asset and the object is there — the write
+ *    completed and has a live owner, so the record has nothing left to do and
+ *    the deletion paths take it from here;
+ *  - the key is not referenced and the object is there — a superseded
+ *    generation, a begin that lost its swap, or a PUT that landed after the
+ *    media, Journey or Atlas cascaded away. The object is deleted, the
+ *    attempt is stamped, and the record is KEPT so a later pass can confirm
+ *    nothing came back;
+ *  - nothing is under the key — either nothing ever landed, or a PUT is still
+ *    streaming. The attempt is stamped and the record is kept, and only once
+ *    a later pass a full settle interval afterwards still finds nothing is
+ *    the record dropped.
+ *
+ * So a write is only forgotten after the key has been observed empty across a
+ * window longer than any request that could still have been in flight, and a
+ * failed storage delete keeps its record too, because this sweep is the last
+ * owner able to name that key.
  */
 export async function reconcilePreviewWrites(
   now = new Date(),
@@ -343,13 +364,39 @@ export async function reconcilePreviewWrites(
     .limit(PREVIEW_WRITE_BATCH_SIZE);
 
   let retired = 0;
+  let settled = 0;
   for (const write of writes) {
     const [referencing] = await db
       .select({ id: mediaAssets.id })
       .from(mediaAssets)
       .where(eq(mediaAssets.previewStorageKey, write.storageKey))
       .limit(1);
-    if (!referencing) {
+
+    let present: boolean;
+    try {
+      present = (
+        await dependencies
+          .storageForBackend(write.storageDriver)
+          .inspectObject({ key: write.storageKey })
+      ).exists;
+    } catch (error) {
+      console.error(
+        "Preview write inspection failed",
+        write.storageKey,
+        error instanceof Error ? error.message : "unknown error",
+      );
+      continue;
+    }
+
+    if (referencing && present) {
+      settled += 1;
+      await db
+        .delete(mediaPreviewWrites)
+        .where(eq(mediaPreviewWrites.id, write.id));
+      continue;
+    }
+
+    if (!referencing && present) {
       const discarded = await discardPreviewObject(
         write.storageDriver,
         write.storageKey,
@@ -357,12 +404,34 @@ export async function reconcilePreviewWrites(
       );
       if (!discarded) continue;
       retired += 1;
+      await db
+        .update(mediaPreviewWrites)
+        .set({ retireAttemptedAt: now })
+        .where(eq(mediaPreviewWrites.id, write.id));
+      continue;
     }
-    await db
-      .delete(mediaPreviewWrites)
-      .where(eq(mediaPreviewWrites.id, write.id));
+
+    // Nothing under the key. One empty look proves nothing; two, far enough
+    // apart, do.
+    const settledSince = write.retireAttemptedAt;
+    if (
+      settledSince
+      && now.getTime() - settledSince.getTime() >= PREVIEW_WRITE_SETTLE_MS
+    ) {
+      settled += 1;
+      await db
+        .delete(mediaPreviewWrites)
+        .where(eq(mediaPreviewWrites.id, write.id));
+      continue;
+    }
+    if (!settledSince) {
+      await db
+        .update(mediaPreviewWrites)
+        .set({ retireAttemptedAt: now })
+        .where(eq(mediaPreviewWrites.id, write.id));
+    }
   }
-  return { examined: writes.length, retired };
+  return { examined: writes.length, retired, settled };
 }
 
 export function startPreviewWriteReconciler() {

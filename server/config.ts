@@ -86,9 +86,11 @@ export function loadServerConfig(
   // `MEDIA_PREVIEW_MAX_BYTES`, so two minutes is generous, and it bounds the
   // window in which a write issued just before a Journey is deleted could
   // still land after the row cascaded away. What that write leaves behind is
-  // not bounded by the clock: every issued write is recorded in
-  // `media_preview_writes`, outside the cascade, and retired by
-  // `reconcilePreviewWrites()` once this lifetime has passed.
+  // not bounded by the clock at all: every issued write is recorded in
+  // `media_preview_writes`, outside the cascade, and `reconcilePreviewWrites()`
+  // keeps retiring the key until it has stayed empty across a settle window,
+  // because an expired signature says a new request cannot START, not that
+  // one already running has finished.
   const mediaPreviewUploadExpiresInSeconds = Number(
     environment.MEDIA_PREVIEW_UPLOAD_EXPIRES_IN_SECONDS ?? 120,
   );
