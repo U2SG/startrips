@@ -157,6 +157,7 @@ async function installStageRecorder(page) {
       return {
         stage: section.getAttribute("data-earth-dive"),
         owner: section.getAttribute("data-earth-dive-owner"),
+        semanticZoom: document.querySelector(".particle-earth-scene")?.getAttribute("data-semantic-zoom") ?? null,
         anchorX: map?.dataset?.handoffAnchorX ? Number(map.dataset.handoffAnchorX) : null,
         anchorY: map?.dataset?.handoffAnchorY ? Number(map.dataset.handoffAnchorY) : null,
         scale: map?.dataset?.handoffScale ? Number(map.dataset.handoffScale) : null,
@@ -331,13 +332,23 @@ try {
   // is the hit-test winner, so this is the reverse handoff through the owner
   // that actually has the camera.
   const detailHit = await hitTarget(forward.page, point);
-  const released = await wheelUntil(
+  await wheelUntil(
     forward.page,
     point,
     RETREAT_WHEEL_DELTA,
-    (state) => state.stage === "prewarm",
+    (state, ladder) => state.owner === "particle"
+      && ladder.lastIndexOf("detail") >= 0
+      && ladder.lastIndexOf("prewarm") > ladder.lastIndexOf("detail"),
     "the detail surface never handed the camera back on wheel zoom-out",
   );
+  // Reverse prewarm can last less than the polling interval. Grade the actual
+  // recorded handoff after detail, not a later live frame or forward prewarm.
+  // The exact ladder and this checkpoint's owner are still asserted below.
+  const released = await forward.page.evaluate(() => {
+    const recorded = window.__qaEarthDiveStages;
+    const detailIndex = recorded.findLastIndex((entry) => entry.stage === "detail");
+    return recorded.slice(detailIndex + 1).find((entry) => entry.stage === "prewarm");
+  });
   const returned = await wheelUntil(
     forward.page,
     point,
