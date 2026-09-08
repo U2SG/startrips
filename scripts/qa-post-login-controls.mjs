@@ -2415,9 +2415,9 @@ async function verifyFinalAcceptanceMobileFlow() {
       const progress = page.locator('.journey-playback__progress input[aria-label="播放进度"]');
       // #245 return evidence needs a deterministic committed media beat. Keep
       // the existing scrubber as the one seek owner. Home uses the native range
-      // change path to reset the run; subsequent synthetic ArrowRight keydowns
-      // exercise the scrubber's explicit meaningful-step handler without also
-      // applying the browser's native one-unit range step after React seeks.
+      // change path to reset the run; subsequent ArrowRight presses exercise
+      // the scrubber's explicit meaningful-step handler using the same trusted
+      // keyboard path as a viewer.
       // Wait for each presentation owner to settle before issuing a newer seek,
       // otherwise a still-loading media beat can be skipped before it commits.
       await progress.focus();
@@ -2433,12 +2433,7 @@ async function verifyFinalAcceptanceMobileFlow() {
           break;
         }
         const previousStep = await page.locator(".journey-playback").getAttribute("data-playback-step");
-        await progress.dispatchEvent("keydown", {
-          key: "ArrowRight",
-          code: "ArrowRight",
-          bubbles: true,
-          cancelable: true,
-        });
+        await progress.press("ArrowRight");
         await page.waitForFunction((step) => (
           document.querySelector(".journey-playback")?.getAttribute("data-playback-step") !== step
         ), previousStep, { timeout: 2_000 });
