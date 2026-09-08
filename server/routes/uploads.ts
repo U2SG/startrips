@@ -576,7 +576,15 @@ export async function finalizeUpload(
           .where(eq(mediaAssets.storageKey, upload.storageKey))
           .limit(1)
       )[0];
-      if (!asset || asset.journeyId !== upload.journeyId) {
+      // #234: an asset with no `journeyId` is owned by an Everyday Fragment,
+      // so it can never be the asset this Journey upload just completed. Named
+      // as its own condition rather than left to `null !== <id>`, which would
+      // reach the same refusal by accident instead of by rule.
+      if (
+        !asset
+        || asset.journeyId === null
+        || asset.journeyId !== upload.journeyId
+      ) {
         throw new Error("Completed media asset could not be reconciled");
       }
     }

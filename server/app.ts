@@ -9,6 +9,10 @@ import { LocationSearchUnavailableError } from "./location/location-search";
 import { HomeBasePeriodConflictError } from "./repositories/home-base-repository";
 import { requestLog } from "./request-log";
 import { atlasRoutes } from "./routes/atlases";
+import {
+  everydayFragmentRoutes,
+  EverydayFragmentInvalidError,
+} from "./routes/everyday-fragments";
 import { homeBaseRoutes } from "./routes/home-bases";
 import { journeyRoutes } from "./routes/journeys";
 import { locationRoutes } from "./routes/locations";
@@ -50,6 +54,10 @@ app.route("/api/atlases", atlasRoutes);
 // derived from the session inside the route module, never from the path or
 // the body.
 app.route("/api/home-bases", homeBaseRoutes);
+// #234: Everyday Fragments. A separate content type with its own list, so the
+// Journey surface stays Journey-only; the Atlas is still derived from the
+// session inside the route module, never from the path or the body.
+app.route("/api/everyday-fragments", everydayFragmentRoutes);
 app.route("/api/journeys", journeyRoutes);
 app.route("/api/locations", locationRoutes);
 app.route("/api/mapstyle", mapStyleRoutes);
@@ -85,6 +93,15 @@ app.onError((error, context) => {
     return context.json(
       { error: error.code, message: error.message },
       409,
+    );
+  }
+  // #234: an unusable Everyday Fragment document. The reason code the pure
+  // validator produced travels as `error`, so the refusal names the field that
+  // is wrong instead of the route composing its own JSON shape.
+  if (error instanceof EverydayFragmentInvalidError) {
+    return context.json(
+      { error: error.code, message: error.message },
+      400,
     );
   }
   if (error instanceof StorageUnavailableError) {

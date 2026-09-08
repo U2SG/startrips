@@ -269,6 +269,15 @@ async function readSharedJourneyView(
   return buildSharedJourneyView(current, {
     journeys: journeyRows,
     routePoints: routePointRows,
-    media: mediaRows,
+    // #234: `journeyId` became nullable when Everyday Fragments gained media
+    // ownership. The `inArray` predicate above already matches only the shared
+    // Journeys, so `journey_id is null` rows — the fragment-owned ones — are
+    // excluded by the query and this filter is provably lossless. It is here
+    // so the guest view keeps its non-null owner type, and so a fragment's
+    // media could not enter the payload even if that predicate were widened.
+    media: mediaRows.filter(
+      (asset): asset is typeof asset & { journeyId: string } =>
+        asset.journeyId !== null,
+    ),
   });
 }

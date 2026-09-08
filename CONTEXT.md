@@ -44,13 +44,18 @@ _Avoid_: Home, address, origin, hometown
 The effective interval of one home base, `startedOn <= date < endedOn`, with `endedOn = null` for the current period. A move creates a new period instead of overwriting history, so a journey resolves the home base that applied to its own date.
 _Avoid_: Current home, move date, relocation event
 
+**Everyday Fragment / 日常片段**:
+A lightweight record of one everyday experience, carrying the date it occurred, one geographic position, and optionally text and media. It requires neither a title nor a Route and can exist independently of a Home Base, so an ordinary evening can be kept without being turned into a journey.
+_Avoid_: Memory, local memory, local moment, daily note
+
 ## Implementation invariants
 
 - Browser payload order defines Route Point order; clients never provide database `sortOrder` values.
 - Atlas ownership is derived from the authenticated active Organization on the server, never from a browser-supplied atlas or organization ID.
 - Journey metadata and its complete ordered Route are written atomically.
-- Media belongs to a Journey and may additionally belong to one Route Point in that Journey. It stays private and is read through short-lived signed URLs only after tenant authorization.
+- Media belongs to exactly one owner: one Journey or one Everyday Fragment, never both and never neither. Journey-owned media may additionally belong to one Route Point in that Journey; fragment-owned media belongs to no Route Point, because every Route Point belongs to some other owner's Journey. Media stays private and is read through short-lived signed URLs only after tenant authorization.
 - Persisted Route size and rendered geometry budgets are separate. The client may simplify or omit old geometry without changing the saved Journey.
 - Sparse routes are approximate paths, not a claim that every point was GPS-recorded.
 - Location search and object storage are optional deployment adapters. Their absence must degrade truthfully, without fake results or fake persistence.
+- Everyday fragments are atlas-owned and keep their own date and position. Grouping them under a home base period never rewrites either, and fragments are never part of a guest share payload.
 - Home base history is atlas-owned and resolved by date. Adding a later period never changes which home base an earlier journey resolves to, no home base value is written onto a route point, and home base history is never part of a guest share payload.
