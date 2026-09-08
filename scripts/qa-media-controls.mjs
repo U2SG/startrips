@@ -52,7 +52,16 @@ async function storyPicturePoint(page, direction, surfaceSelector = ".journey-st
       && y >= bounds.bottom - Math.min(72, bounds.height * .25)) {
       throw new Error("Story video navigation point overlaps native controls");
     }
-    return { x, y };
+    const hit = document.elementFromPoint(x, y);
+    const describe = (node) => node instanceof Element ? {
+      tag: node.tagName, asset: node.getAttribute("data-shared-media-id"),
+      pageId: node.closest("[data-media-page]")?.getAttribute("data-media-page-id"),
+      pageRole: node.closest("[data-media-page]")?.getAttribute("data-media-page"),
+      transform: getComputedStyle(node.closest("[data-media-page]") ?? node).transform,
+      zIndex: getComputedStyle(node.closest("[data-media-page]") ?? node).zIndex,
+      bounds: node.getBoundingClientRect().toJSON(),
+    } : null;
+    return { x, y, expected: describe(media), hit: describe(hit) };
   }, direction);
 }
 
@@ -68,7 +77,9 @@ async function clickStoryPicture(page, direction, surfaceSelector = ".journey-st
         const target = event.target;
         if (!trace || !(target instanceof Element)) return;
         trace.events.push({ type, tag: target.tagName, class: target.className,
-          asset: target.getAttribute("data-shared-media-id"), x: event.clientX, y: event.clientY });
+          asset: target.getAttribute("data-shared-media-id"),
+          pageId: target.closest("[data-media-page]")?.getAttribute("data-media-page-id"),
+          x: event.clientX, y: event.clientY });
       }, true);
     }
   }, { point, direction });
