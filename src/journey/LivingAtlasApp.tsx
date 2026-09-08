@@ -403,6 +403,7 @@ export function LivingAtlasApp({
   const [storyRoutePointId, setStoryRoutePointId] = useState<string | null>(null);
   const [storyInitialAssetId, setStoryInitialAssetId] = useState<string | null>(null);
   const [storyInitialSnapState, setStoryInitialSnapState] = useState<Exclude<StorySnapState, "closed">>("in-context");
+  const [storyFocusVisibleControlOnOpen, setStoryFocusVisibleControlOnOpen] = useState(false);
   const storyObservationRef = useRef<StoryLogicalObservation | null>(null);
   const playbackReturnIntentRevisionRef = useRef(0);
   const playbackEntryRef = useRef<PlaybackEntry | null>(null);
@@ -710,6 +711,7 @@ export function LivingAtlasApp({
     setStoryInitialSnapState(
       resolution.storySnapState === "expanded" ? "expanded" : "in-context",
     );
+    setStoryFocusVisibleControlOnOpen(true);
     setStoryJourneyId(resolution.journeyId);
   }, [journeys, playbackPendingMode, playbackSession.journeyId, timeCursor.selectJourney]);
   const mobileSheetJourney = journeys.find((journey) => journey.id === mobileSheetJourneyId) ?? null;
@@ -824,6 +826,7 @@ export function LivingAtlasApp({
     claimPlaybackReturnIntent();
     setStoryInitialAssetId(null);
     setStoryInitialSnapState("in-context");
+    setStoryFocusVisibleControlOnOpen(false);
     const targetJourney = journeys.find((candidate) => candidate.id === journeyId) ?? null;
     const sharedCoverId = routePointId === null && targetJourney
       ? journeyCover(targetJourney)?.id ?? null
@@ -877,6 +880,7 @@ export function LivingAtlasApp({
         setStoryRoutePointId(null);
         setStoryInitialAssetId(null);
         setStoryInitialSnapState("in-context");
+        setStoryFocusVisibleControlOnOpen(false);
       },
       resolveTarget: () => document.querySelector<HTMLElement>(
         ".living-atlas__active-media img, .living-atlas__active-media video",
@@ -954,6 +958,7 @@ export function LivingAtlasApp({
     setStoryRoutePointId(null);
     setStoryInitialAssetId(null);
     setStoryInitialSnapState("in-context");
+    setStoryFocusVisibleControlOnOpen(false);
     setPlaybackSession({
       journeyId,
       soundtrackRead: cachedRead,
@@ -1041,6 +1046,7 @@ export function LivingAtlasApp({
       setStoryRoutePointId(null);
       setStoryInitialAssetId(null);
       setStoryInitialSnapState("in-context");
+      setStoryFocusVisibleControlOnOpen(false);
       if (resolution.fallbackReason === "journey-unavailable") {
         showNotice("这段旅程已不在当前图谱中，已返回图谱。");
       }
@@ -1051,6 +1057,7 @@ export function LivingAtlasApp({
     setStoryInitialSnapState(
       resolution.storySnapState === "expanded" ? "expanded" : "in-context",
     );
+    setStoryFocusVisibleControlOnOpen(true);
     setStoryJourneyId(resolution.journeyId);
   }
 
@@ -1225,6 +1232,7 @@ export function LivingAtlasApp({
             setStoryRoutePointId(null);
             setStoryInitialAssetId(null);
             setStoryInitialSnapState("in-context");
+            setStoryFocusVisibleControlOnOpen(false);
             setStoryJourneyId(id);
           }}
           onCreate={canCreateJourney ? openCreateComposer : undefined}
@@ -1603,6 +1611,7 @@ export function LivingAtlasApp({
           routePointId={storyRoutePointId}
           initialAssetId={storyInitialAssetId}
           initialSnapState={storyInitialSnapState}
+          focusVisibleControlOnOpen={storyFocusVisibleControlOnOpen}
           onObservationChange={handleStoryObservationChange}
           onClose={(source) => closeJourneyStory(source ?? null)}
           onNavigate={(id) => {
@@ -1611,6 +1620,7 @@ export function LivingAtlasApp({
             setStoryRoutePointId(null);
             setStoryInitialAssetId(null);
             setStoryInitialSnapState("in-context");
+            setStoryFocusVisibleControlOnOpen(false);
             setStoryJourneyId(id);
           }}
           onEdit={canEditJourney ? editJourney : undefined}

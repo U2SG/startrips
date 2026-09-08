@@ -79,7 +79,7 @@ import {
   readMediaPlacementSignal,
   type MediaPlacementBatchResult,
 } from "./mediaPlacement";
-import { useModalFocus, useNestedModalFocus } from "./useModalFocus";
+import { isModalFocusCandidate, useModalFocus, useNestedModalFocus } from "./useModalFocus";
 import { useCompactMobileLayout } from "./mobileLayout";
 import { useMobileSurfaceHistory } from "./useMobileSurfaceHistory";
 import { MEDIA_SWIPE_VELOCITY_MAX_AGE_MS, isMediaSwipeIntent, nextMediaSwipeVelocity, shouldCommitMediaSwipe } from "./mediaSwipeDecision";
@@ -231,6 +231,7 @@ type JourneyStoryProps = {
   routePointId?: string | null;
   initialAssetId?: string | null;
   initialSnapState?: "in-context" | "expanded";
+  focusVisibleControlOnOpen?: boolean;
   onObservationChange?: (observation: StoryLogicalObservation | null) => void;
   onClose: (sharedSource?: HTMLElement | null) => void;
   onNavigate: (journeyId: string) => void;
@@ -861,6 +862,7 @@ export function JourneyStory({
   routePointId = null,
   initialAssetId = null,
   initialSnapState = "in-context",
+  focusVisibleControlOnOpen = false,
   onObservationChange,
   onClose,
   onNavigate,
@@ -1452,6 +1454,25 @@ export function JourneyStory({
   useMobileSurfaceHistory(mobileHistoryLayers.journeyDelete, "story-journey-delete", closeJourneyDelete);
   const storyModal = !mobileLayout || mobileStoryExpanded;
   const dialogRef = useModalFocus<HTMLElement>(requestClose, storyModal);
+
+  // #245: Playback can return to the in-context mobile Story, where the modal
+  // trap is intentionally inactive. Restore keyboard ownership to a real visible
+  // Story control instead of leaving focus on the now-unmounted Playback overlay.
+  // This is a one-shot open handoff; subsequent Story navigation keeps its own
+  // focus semantics and does not re-run this effect.
+  useLayoutEffect(() => {
+    if (!focusVisibleControlOnOpen) return;
+    const root = dialogRef.current;
+    if (!root) return;
+    const preferred = mobileLayout
+      ? root.querySelector<HTMLElement>(".journey-story__sheet-handle")
+      : null;
+    const fallback = root.querySelector<HTMLElement>(".journey-story__close");
+    const target = [preferred, fallback].find((candidate): candidate is HTMLElement => (
+      candidate !== null && isModalFocusCandidate(candidate)
+    ));
+    target?.focus({ preventScroll: true });
+  }, [focusVisibleControlOnOpen]);
 
   // A collapsed mobile Story is intentionally not a modal, so useModalFocus
   // does not own Escape there. Manage still needs the same keyboard exit
