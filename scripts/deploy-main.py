@@ -242,10 +242,16 @@ def main() -> int:
     print("1/7 Fetching the exact origin/main commit...")
     if run_local(["git", "status", "--porcelain"], capture=True):
         print("Local changes detected; deployment will not switch branches or modify the worktree.")
-    run_local(["git", "fetch", "origin", "main"])
-    commit = run_local(
-        ["git", "rev-parse", "refs/remotes/origin/main"], capture=True
+    deploy_ref = "refs/startrips/deploy-main"
+    run_local(
+        [
+            "git",
+            "fetch",
+            "origin",
+            f"+refs/heads/main:{deploy_ref}",
+        ]
     )
+    commit = run_local(["git", "rev-parse", deploy_ref], capture=True)
     if not commit:
         raise RuntimeError("Unable to resolve origin/main after fetch")
     run_local(["git", "cat-file", "-e", f"{commit}^{{commit}}"])
