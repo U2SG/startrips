@@ -2288,8 +2288,8 @@ export function JourneyStory({
 
   function beginMediaDrag(container: HTMLElement | null, pointerId: number, clientX: number, clientY: number, eventTime: number, wrap: boolean, tapOpensFullscreen = false, preserveNativeVideoCapture = false) {
     if (!container || mutationPending || overview || scopedMedia.length < 2) return;
-    // A new gesture can take over the already-decoded destination instead of
-    // waiting for the visual tail of the preceding drag to finish.
+    // A new gesture takes over the pixels of a settling drag, whether it was
+    // committed to a decoded destination or is returning from an edge.
     const completePreviousDrag = mediaDragSettleFinishRef.current;
     if (completePreviousDrag) {
       completePreviousDrag();
@@ -2541,7 +2541,7 @@ export function JourneyStory({
       else finishMediaDrag(drag);
       mediaDragSettlingRef.current = false;
     };
-    mediaDragSettleFinishRef.current = ready ? () => {
+    mediaDragSettleFinishRef.current = () => {
       // Commit identity for the new input, while preserving the pixels and
       // momentum from which its gesture (or click) will take over.
       for (const spring of springs) spring.cancel();
@@ -2553,7 +2553,7 @@ export function JourneyStory({
         node.style.opacity = opacity;
       }
       pages?.dispatchEvent(new Event("story-media-recover"));
-    } : null;
+    };
     mediaDragSettleCancelRef.current = () => {
       pending = false;
       for (const spring of springs) spring.cancel();
@@ -2690,10 +2690,10 @@ export function JourneyStory({
       storyMediaGestureConsumedRef.current = true;
     }
     if (drag.axis === "x" && shouldCommitMediaSwipe(dx, releaseVelocityX, Boolean(drag.neighborAsset))) {
-      settleMediaDrag(true);
+      settleMediaDrag(true, releaseVelocityX);
       return;
     }
-    settleMediaDrag(false);
+    settleMediaDrag(false, releaseVelocityX);
     if (mobileLayout && dy >= 72 && Math.abs(dy) > Math.abs(dx) * 1.15) {
       exitFullscreen();
       return;

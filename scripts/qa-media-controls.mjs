@@ -39,6 +39,18 @@ function storyPicture(page, surfaceSelector = ".journey-story__media") {
 async function storyPicturePoint(page, direction, surfaceSelector = ".journey-story__media") {
   const picture = storyPicture(page, surfaceSelector);
   await picture.waitFor({ state: "visible" });
+  // A stable photo target is still carried by the Story's entrance/layout
+  // animation. Wait for that outer motion only; photo children keep moving
+  // during rapid-click checks and must remain immediately interruptible.
+  await page.waitForFunction((selector) => {
+    let node = document.querySelector(selector)?.querySelector("[data-story-hit-surface]");
+    if (!node) return false;
+    while (node) {
+      if (node.getAnimations().some((animation) => animation.pending || animation.playState === "running")) return false;
+      node = node.parentElement;
+    }
+    return true;
+  }, surfaceSelector, { polling: "raf", timeout: 3_000 });
   return picture.evaluate((media, step) => {
     const root = media.closest("[data-story-media-pages]");
     const surface = root?.querySelector("[data-story-hit-surface]");
@@ -145,6 +157,87 @@ async function clickStoryNativeControlStrip(page, surfaceSelector) {
   // actual hit-testing plus Playwright mouse input establishes the input path.
   return { before, after, failed: !after.connected || !after.sameNode || after.id !== before.id
     || after.presentation !== "settled" || after.fullscreen !== before.fullscreen };
+}
+
+async function exerciseStoryEdgeRegrab(page) {
+  const point = await storyPicturePoint(page, -1);
+  const current = page.locator(`.journey-story__media ${storyCurrentPageSelector}`);
+  const rest = await current.evaluate((element) => element.getBoundingClientRect().toJSON());
+  await page.mouse.move(point.x, point.y);
+  await page.mouse.down();
+  let pulled;
+  try {
+    await page.mouse.move(point.x + 120, point.y, { steps: 6 });
+    pulled = await current.evaluate((element) => element.getBoundingClientRect().toJSON());
+  } finally {
+    await page.mouse.up();
+  }
+  // Start with real mouse input. Re-grab in the same rendering task as both
+  // geometry reads, so a RAF between RPC calls cannot conceal a reset to rest.
+  const regrab = await page.evaluate(({ point, rest, pulled }) => new Promise((resolve, reject) => {
+    const started = performance.now();
+    const root = document.querySelector(".journey-story__media [data-story-media-pages]");
+    const surface = root?.querySelector("[data-story-hit-surface]");
+    const current = root?.querySelector('[data-media-page="current"]');
+    if (!surface || !current || pulled.x - rest.x <= 3) {
+      reject(new Error(`Boundary mouse drag did not visibly displace its photo: ${JSON.stringify({ rest, pulled })}`));
+      return;
+    }
+    const inspect = () => {
+      const before = current.getBoundingClientRect().toJSON();
+      const displacement = before.x - rest.x;
+      if (displacement > 3 && displacement < (pulled.x - rest.x) * .85) {
+        const pointer = { pointerId: 991, pointerType: "mouse", isPrimary: true,
+          clientX: point.x, clientY: point.y, button: 0, buttons: 1,
+          bubbles: true, cancelable: true, composed: true };
+        surface.dispatchEvent(new PointerEvent("pointerdown", pointer));
+        const after = current.getBoundingClientRect().toJSON();
+        resolve({ pointer, before, after, displacement,
+          jump: Math.max(...["x", "y", "width", "height"].map((key) => Math.abs(after[key] - before[key]))) });
+        return;
+      }
+      if (performance.now() - started >= 3_000) {
+        reject(new Error(`No intermediate boundary spring pixels to re-grab: ${JSON.stringify({ rest, pulled, before })}`));
+        return;
+      }
+      requestAnimationFrame(inspect);
+    };
+    requestAnimationFrame(inspect);
+  }), { point, rest, pulled });
+  let continuation;
+  try {
+    if (captureMotion) await page.screenshot({ path: `${motionArtifactDir}/story-stack-regrab-held.png`, animations: "allow" });
+    continuation = await page.evaluate((pointer) => {
+      const root = document.querySelector(".journey-story__media [data-story-media-pages]");
+      const surface = root.querySelector("[data-story-hit-surface]");
+      const current = root.querySelector('[data-media-page="current"]');
+      const before = current.getBoundingClientRect().toJSON();
+      surface.dispatchEvent(new PointerEvent("pointermove", { ...pointer, clientX: pointer.clientX + 48 }));
+      const after = current.getBoundingClientRect().toJSON();
+      return { before, after, followedPointer: after.x - before.x > 2 };
+    }, regrab.pointer);
+  } finally {
+    await page.evaluate((pointer) => document.querySelector(".journey-story__media [data-story-hit-surface]")
+      ?.dispatchEvent(new PointerEvent("pointerup", { ...pointer, clientX: pointer.clientX + 48, buttons: 0 })), regrab.pointer);
+  }
+  await page.waitForFunction((rest) => {
+    const root = document.querySelector(".journey-story__media [data-story-media-pages]");
+    const current = root?.querySelector('[data-media-page="current"]');
+    if (!current || current.getAttribute("data-media-page-id") !== "00000000-0000-4000-8000-000000000100") return false;
+    const bounds = current.getBoundingClientRect();
+    const atRest = ["x", "y", "width", "height"].every((key) => Math.abs(bounds[key] - rest[key]) <= .5);
+    window.__qaEdgeRegrabRestFrames = atRest ? (window.__qaEdgeRegrabRestFrames ?? 0) + 1 : 0;
+    return window.__qaEdgeRegrabRestFrames >= 3 && root.getAttribute("data-media-presentation") === "settled";
+  }, rest, { polling: "raf", timeout: 3_000 });
+  await waitForStoryPicture(page, "00000000-0000-4000-8000-000000000100");
+  const nodes = await page.evaluate(() => {
+    const root = document.querySelector(".journey-story__media [data-story-media-pages]");
+    const pages = [...root.querySelectorAll("[data-media-page]")];
+    return { count: pages.length, sameNodes: pages.every((node, index) => node === window.__qaStoryMediaPageNodes[index]),
+      asset: root.querySelector("[data-shared-media-id]")?.getAttribute("data-shared-media-id") };
+  });
+  return { rest, pulled, regrab, continuation, nodes, failed: regrab.jump > .5 || !continuation.followedPointer
+    || nodes.count !== 3 || !nodes.sameNodes || nodes.asset !== "00000000-0000-4000-8000-000000000100" };
 }
 
 async function waitForStoryPicture(page, assetId, surfaceSelector = ".journey-story__media") {
@@ -2052,6 +2145,9 @@ try {
         observer.observe(root, { childList: true, subtree: true });
         window.__qaMotionNodeTrace = { trace, observer };
       }, storyMediaPagesSelector);
+      const edgeRegrab = await exerciseStoryEdgeRegrab(mediaContinuity.page);
+      checks.push({ name: "story-boundary-spring-regrab-keeps-visible-pixels", ...edgeRegrab });
+      if (edgeRegrab.failed) failed = true;
       // Reverse through actual picture clicks while motion is still running;
       // the recording preserves those frames without pausing any animation.
       const forwardPoint = await storyPicturePoint(mediaContinuity.page, 1);
@@ -2391,9 +2487,8 @@ try {
   }
 
   // Cached normal-motion race: the fixture prefetches the middle asset while A
-  // is shown, then the test reverses B before its transform transition ends.
-  // Pausing the presentation animations keeps the race deterministic without
-  // binding the QA contract to a worker-chosen animation name.
+  // is shown, then the test reverses B after observing actual intermediate
+  // pixels. Springs keep running; this contract has no WAAPI object or timer.
   const cachedRapidReverse = await createQaPage("/?qaState=journey-story", onePixelGif, {
     mobile: false,
     readDelayMs: 0,
@@ -2404,7 +2499,8 @@ try {
       const root = document.querySelector(pagesSelector);
       const current = root?.querySelector('[data-media-page="current"]');
       const settled = document.querySelector(currentMediaSelector);
-      return current?.getAttribute("data-media-page-id") === assetId
+      return root?.getAttribute("data-media-presentation") === "settled"
+        && current?.getAttribute("data-media-page-id") === assetId
         && current?.getAttribute("data-media-page-ready") === "true"
         && settled?.getAttribute("data-shared-media-id") === assetId
         && settled?.getAttribute("alt") === fileName;
@@ -2417,7 +2513,7 @@ try {
     await cachedRapidReverse.page.locator(".journey-story").waitFor({ state: "visible" });
     const initialShownA = await settledAsset("00000000-0000-4000-8000-000000000100", "seed-0.png");
 
-    let pausedTransitionState = null;
+    let interruptedTransitionState = null;
     let returnedToAAfterReverse = false;
     let returnedState = null;
     let mobileModeEntered = false;
@@ -2427,48 +2523,40 @@ try {
     let nextAfterReverseTargetReady = false;
     let nextAfterReverseSettled = false;
     if (initialShownA) {
-      await clickStoryPicture(cachedRapidReverse.page, 1);
+      const forward = await storyPicturePoint(cachedRapidReverse.page, 1);
+      const reverse = await storyPicturePoint(cachedRapidReverse.page, -1);
+      const initialBounds = await cachedRapidReverse.page.locator(storyCurrentPageSelector)
+        .evaluate((element) => element.getBoundingClientRect().toJSON());
+      await clickStoryPicture(cachedRapidReverse.page, 1, ".journey-story__media", forward);
       try {
-        const pausedHandle = await cachedRapidReverse.page.waitForFunction(({ pagesSelector }) => {
+        const movingHandle = await cachedRapidReverse.page.waitForFunction(({ pagesSelector, initialBounds }) => {
           const root = document.querySelector(pagesSelector);
-          // A picture click first releases Story's pointer hold. Only pause
-          // the subsequent ready-target handoff, never that pointer's settle.
           if (root?.getAttribute("data-media-presentation") !== "moving") return false;
           const target = [...(root?.querySelectorAll("[data-media-page]") ?? [])]
             .find((page) => page.getAttribute("data-media-page-id") === "00000000-0000-4000-8000-000000000101");
           if (!target || target.getAttribute("data-media-page-ready") !== "true") return false;
-          const animations = typeof root.getAnimations === "function" ? root.getAnimations({ subtree: true }) : [];
-          const animation = animations.find((candidate) => {
-            const timing = candidate.effect?.getComputedTiming?.();
-            return candidate.playState === "running"
-              && Number(timing?.duration) > 0
-              && Number(candidate.currentTime) < Number(timing.duration);
-          });
-          if (!animation) return false;
-          const timing = animation.effect?.getComputedTiming?.();
-          const currentTime = Number(animation.currentTime);
-          const duration = Number(timing?.duration);
-          for (const active of animations) active.pause();
+          const current = root.querySelector('[data-media-page="current"]');
+          if (!current) return false;
+          const bounds = current.getBoundingClientRect();
+          const movement = Math.max(...["x", "y", "width", "height"].map((key) => Math.abs(bounds[key] - initialBounds[key])));
+          if (movement <= 1) return false;
           return {
             targetId: target.getAttribute("data-media-page-id"),
             targetReady: target.getAttribute("data-media-page-ready") === "true",
-            currentId: root.querySelector('[data-media-page="current"]')?.getAttribute("data-media-page-id") ?? null,
-            playState: animation.playState,
-            currentTime,
-            duration,
+            currentId: current.getAttribute("data-media-page-id"),
+            presentation: root.getAttribute("data-media-presentation"),
+            movement,
             transform: getComputedStyle(target).transform,
-            animationCount: animations.length,
+            currentBounds: bounds.toJSON(),
           };
-        }, { pagesSelector: storyMediaPagesSelector }, { polling: "raf", timeout: 3_000 });
-        pausedTransitionState = await pausedHandle.jsonValue();
+        }, { pagesSelector: storyMediaPagesSelector, initialBounds }, { polling: "raf", timeout: 3_000 });
+        interruptedTransitionState = await movingHandle.jsonValue();
       } catch {
-        pausedTransitionState = null;
+        interruptedTransitionState = null;
       }
 
-      if (pausedTransitionState) {
-        // Focused keyboard input must reverse the pending intent even while
-        // the physical pages are paused partway through their transition.
-        await storyPicture(cachedRapidReverse.page).press("ArrowLeft");
+      if (interruptedTransitionState) {
+        await clickStoryPicture(cachedRapidReverse.page, -1, ".journey-story__media", reverse);
         returnedToAAfterReverse = await settledAsset("00000000-0000-4000-8000-000000000100", "seed-0.png");
         returnedState = await cachedRapidReverse.page.evaluate(({ pagesSelector, currentMediaSelector }) => {
           const root = document.querySelector(pagesSelector);
@@ -2567,11 +2655,11 @@ try {
     }
 
     const cachedRapidReverseFailed = !initialShownA
-      || pausedTransitionState?.targetId !== "00000000-0000-4000-8000-000000000101"
-      || pausedTransitionState?.targetReady !== true
-      || pausedTransitionState?.currentId !== "00000000-0000-4000-8000-000000000100"
-      || pausedTransitionState?.playState !== "paused"
-      || !(pausedTransitionState?.currentTime < pausedTransitionState?.duration)
+      || interruptedTransitionState?.targetId !== "00000000-0000-4000-8000-000000000101"
+      || interruptedTransitionState?.targetReady !== true
+      || interruptedTransitionState?.currentId !== "00000000-0000-4000-8000-000000000100"
+      || interruptedTransitionState?.presentation !== "moving"
+      || !(interruptedTransitionState?.movement > 1)
       || !returnedToAAfterReverse
       || returnedState?.id !== "00000000-0000-4000-8000-000000000100"
       || returnedState?.mediaId !== "00000000-0000-4000-8000-000000000100"
@@ -2597,7 +2685,7 @@ try {
         expectedNextAssetId: "00000000-0000-4000-8000-000000000101",
       },
       initialShownA,
-      pausedTransition: pausedTransitionState,
+      interruptedTransition: interruptedTransitionState,
       returnedToAAfterReverse,
       returned: returnedState,
       mobileModeEntered,

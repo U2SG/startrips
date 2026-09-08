@@ -300,7 +300,8 @@ export function StoryMediaOrganizer(props: StoryMediaOrganizerProps) {
       }
     });
   };
-  const flyPhoto = (photo: FlightPhoto, end: DOMRect, index: number, extraCount = 0, onArrived?: () => void) => {
+  const flyPhoto = (photo: FlightPhoto, end: DOMRect, index: number, extraCount = 0,
+    onArrived?: () => void, onCancelled?: () => void) => {
     const node = document.createElement("div");
     node.className = "story-media-organizer__flight";
     node.setAttribute("aria-hidden", "true");
@@ -322,18 +323,19 @@ export function StoryMediaOrganizer(props: StoryMediaOrganizerProps) {
     const scaleY = end.height / photo.rect.height;
     const arrived = `translate(${x}px, ${y}px) scale(${scaleX}, ${scaleY})`;
     afterDelay(index * motionTokens.tiers.instant / 3, () => {
-      if (!node.isConnected) return;
+      if (!node.isConnected) { onCancelled?.(); return; }
       const spring = springElementTo(node, { transform: arrived }, { owner: `organizer-flight:${photo.id}` });
       animations.current.add(spring);
       void spring.finished.then(() => {
         animations.current.delete(spring);
-        if (!node.isConnected) return;
+        if (!node.isConnected) { onCancelled?.(); return; }
         onArrived?.();
         trackAnimation(node.animate([{ opacity: 1 }, { opacity: 0 }], { duration: motionTokens.tiers.instant, fill: "both" }), node);
       }, () => {
         animations.current.delete(spring);
         flightNodes.current.delete(node);
         node.remove();
+        onCancelled?.();
       });
     });
   };
@@ -447,21 +449,44 @@ export function StoryMediaOrganizer(props: StoryMediaOrganizerProps) {
       cancelPresentation();
       if (canPresent()) {
         const from = visibleRect(destinationPreview(move.targetId));
-        if (from) move.photos.forEach((photo, index) => {
+        const returns = from ? move.photos.flatMap((photo) => {
           const tile = tileNodes.current.get(photo.id);
           const tileRect = visibleRect(tile);
+          const destinationId = move.assignments.get(photo.id) ?? null;
           const to = tileRect
-            ?? visibleRect(destinationPreview(move.assignments.get(photo.id) ?? null));
-          if (to) {
-            flyPhoto({ ...photo, rect: from }, to, index);
-            if (tile && tileRect) trackAnimation(tile.animate([
-              { opacity: 0, offset: 0 }, { opacity: 0, offset: 0.82 }, { opacity: 1, offset: 1 },
-            ], { duration: motionTokens.tiers.content, delay: index * motionTokens.tiers.instant / 3, fill: "backwards" }));
-          }
-        });
+            ?? visibleRect(destinationPreview(destinationId));
+          return to ? [{ photo: { ...photo, rect: from }, to, tile: tileRect ? tile : undefined, destinationId }] : [];
+        }) : [];
+        // Start layout springs before hiding arrivals: their opacity remains the
+        // final visible value, independent of the temporary photo handoff.
         settleLayout(previous);
-        new Set(move.assignments.values()).forEach((id) => acknowledgeDestination(id));
-        acknowledgeDestination(move.targetId);
+        const pending = new Map<string | null, number>();
+        returns.forEach(({ destinationId }) => pending.set(destinationId, (pending.get(destinationId) ?? 0) + 1));
+        let remaining = returns.length;
+        returns.forEach(({ photo, to, tile, destinationId }, index) => {
+          const hold = tile?.animate([{ opacity: 0 }, { opacity: 0 }], { duration: 1, fill: "both" });
+          if (hold) {
+            hold.pause();
+            hold.currentTime = 0;
+            animations.current.add(hold);
+            void hold.finished.then(() => undefined, () => undefined);
+          }
+          const reveal = () => {
+            if (hold) { animations.current.delete(hold); hold.cancel(); }
+          };
+          flyPhoto(photo, to, index, 0, () => {
+            reveal();
+            const count = (pending.get(destinationId) ?? 1) - 1;
+            pending.set(destinationId, count);
+            if (!count) acknowledgeDestination(destinationId);
+            remaining -= 1;
+            if (!remaining) acknowledgeDestination(move.targetId);
+          }, reveal);
+        });
+        if (!returns.length) {
+          new Set(move.assignments.values()).forEach((id) => acknowledgeDestination(id));
+          acknowledgeDestination(move.targetId);
+        }
       }
     }
     layoutRectsRef.current = next;

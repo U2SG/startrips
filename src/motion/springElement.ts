@@ -128,6 +128,12 @@ function paint(state: ElementSpring) {
   state.element.style.opacity = String(Math.max(0, Math.min(1, state.current[16])));
 }
 
+function matchesPainted(actual: number[], expected: number[]) {
+  // getComputedStyle serializes matrices with rounded coefficients. Allow
+  // sub-pixel translation rounding without treating it as a new pointer pose.
+  return actual.every((value, index) => Math.abs(value - expected[index]) < (index >= 12 && index <= 14 ? 0.01 : 0.0001));
+}
+
 function releaseScheduler() {
   if (active.size) return;
   if (frame !== null) cancelAnimationFrame(frame);
@@ -176,7 +182,7 @@ function cancel(state: ElementSpring, run: Run) {
   // Freeze at the cancellation instant, retaining velocity for the next intent.
   // A pointer handler can already have painted a new position in this event.
   const actual = computedValues(state.element);
-  if (actual.every((value, index) => Math.abs(value - state.current[index]) < 0.0001)) {
+  if (matchesPainted(actual, state.current)) {
     advance(state, performance.now());
   } else {
     state.current = actual;
@@ -209,7 +215,7 @@ export function springElementTo(
   // Direct manipulation may have written a different transform after cancel.
   // Retain momentum only while this same owner still owns the painted state.
   const continuous = previous && previous.owner === options.owner
-    && current.every((value, index) => Math.abs(value - previous.current[index]) < 0.0001);
+    && matchesPainted(current, previous.current);
   const state: ElementSpring = {
     element, owner: options.owner, current,
     velocity: continuous ? [...previous.velocity] : current.map(() => 0),
