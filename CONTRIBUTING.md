@@ -34,4 +34,13 @@ Never merge a child directly from its old feature-branch base just because the e
 
 ## Repository protection
 
-When GitHub branch protection or repository rulesets are available for the repository plan, `main` should require both `verify` and `merge-readiness`, require all review conversations to be resolved, require pull requests, and block force-pushes/deletion. No additional approving reviewer is required for the solo-maintainer workflow.
+The workflow above is enforced by the repository, not only documented here. The active ruleset
+`queue` applies to `main`: changes land only through a squash-merged pull request, both `verify`
+and `merge-readiness` are required status checks, every review conversation must be resolved, and
+force-pushing or deleting `main` is refused. No additional approving reviewer is required, so a
+solo maintainer can still merge their own pull request.
+
+Note that `main` reports `404 Branch not protected` on the classic branch-protection endpoint, which
+does not mean it is unprotected — the rules come from a ruleset. See
+[`docs/repository-protection.md`](docs/repository-protection.md) for the enforced parameters and the
+commands that re-verify them.
