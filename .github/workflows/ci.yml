@@ -135,6 +135,7 @@ jobs:
       - name: Run browser QA
         env:
           QA_COMMAND: ${{ matrix.command }}
+          QA_CAPTURE_MEDIA_MOTION: ${{ matrix.name == 'login-media' && '1' || '0' }}
         run: |
           set -euo pipefail
           pnpm exec vite --host 127.0.0.1 --port 4173 > /tmp/startrips-vite.log 2>&1 &
@@ -148,6 +149,14 @@ jobs:
           done
           curl --fail --silent http://127.0.0.1:4173/ > /dev/null || (cat /tmp/startrips-vite.log && exit 1)
           bash -lc "$QA_COMMAND"
+      - name: Upload media motion review
+        if: ${{ always() && matrix.name == 'login-media' }}
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: media-motion-${{ github.run_attempt }}
+          path: artifacts/media-motion/
+          if-no-files-found: warn
+          retention-days: 7
 
   verify:
     name: verify

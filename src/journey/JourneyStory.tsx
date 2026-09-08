@@ -39,7 +39,7 @@ import { StoryMediaRail } from "./StoryMediaRail";
 import { StoryMediaPages } from "./StoryMediaPages";
 import { StoryMediaOrganizer } from "./StoryMediaOrganizer";
 import { StoryNotesEditor, type StoryNotesSaveState } from "./StoryNotesEditor";
-import { MEDIA_STACK_DURATION, mediaStackNeighbors, mediaStackPull, mediaStackRest, mediaStackReveal } from "./mediaStackMotion";
+import { MEDIA_STACK_DURATION, mediaStackOpacity, mediaStackNeighbors, mediaStackPull, mediaStackRest, mediaStackReveal } from "./mediaStackMotion";
 import "../styles/starlight-media.css";
 import "../styles/story-experience.css";
 import {
@@ -71,7 +71,7 @@ import {
 } from "./journeyModel";
 import { playbackIntroMedia, playbackMediaWaitPolicy, storyMediaForScope } from "./journeyPlayback";
 import type { PlaybackMediaAvailability } from "./journeyPlayback";
-import type { Journey, JourneyInput, JourneyMediaAsset } from "./types";
+import type { Journey, JourneyInput, JourneyMediaAsset, MediaPreviewRead } from "./types";
 import {
   completeMediaPlacementUploadPlan,
   groupMediaPlacementSuggestions,
@@ -137,7 +137,7 @@ export function scheduleCancelableMediaDragSettle(
 
 type MediaReadState =
   | { status: "loading" }
-  | { status: "ready"; url: string; issuedAt: number; expiresAt: number }
+  | { status: "ready"; url: string; preview?: MediaPreviewRead; issuedAt: number; expiresAt: number }
   | { status: "error"; message: string };
 
 /**
@@ -930,6 +930,7 @@ export function JourneyStory({
   } | null>(null);
   const mediaDragSettlingRef = useRef(false);
   const mediaDragSettleCancelRef = useRef<(() => void) | null>(null);
+  const mediaDragSettleFinishRef = useRef<(() => void) | null>(null);
   const mediaTapTimerRef = useRef(0);
   const [mobileManageMode, setMobileManageMode] = useState(false);
   const mobileManageDoneRef = useRef<HTMLButtonElement>(null);
@@ -1912,6 +1913,7 @@ export function JourneyStory({
         [assetId]: {
           status: "ready",
           url: read.url,
+          preview: read.preview,
           issuedAt,
           expiresAt: Date.parse(read.expiresAt),
         },
@@ -2282,7 +2284,16 @@ export function JourneyStory({
   }
 
   function beginMediaDrag(container: HTMLElement | null, pointerId: number, clientX: number, clientY: number, eventTime: number, wrap: boolean, tapOpensFullscreen = false, preserveNativeVideoCapture = false) {
-    if (!container || mediaDragSettlingRef.current || incomingAssetId !== null || mutationPending || overview || scopedMedia.length < 2) return;
+    if (!container || incomingAssetId !== null || mutationPending || overview || scopedMedia.length < 2) return;
+    // A new gesture can take over the already-decoded destination instead of
+    // waiting for the visual tail of the preceding drag to finish.
+    const completePreviousDrag = mediaDragSettleFinishRef.current;
+    if (completePreviousDrag) {
+      cancelPendingMediaDragSettle();
+      completePreviousDrag();
+    } else if (mediaDragSettlingRef.current) {
+      cancelPendingMediaDragSettle();
+    }
     // #204 CFAA: hidden authorization/priming media is implementation detail,
     // not the semantic settled frame the user's finger is manipulating.
     const base = container.querySelector<HTMLElement>('[data-media-page="current"]');
@@ -2372,6 +2383,7 @@ export function JourneyStory({
     mediaTapTimerRef.current = 0;
     const cancelPendingSettle = mediaDragSettleCancelRef.current;
     mediaDragSettleCancelRef.current = null;
+    mediaDragSettleFinishRef.current = null;
     cancelPendingSettle?.();
     const activeDrag = mediaDragRef.current;
     mediaDragRef.current = null;
@@ -2385,17 +2397,22 @@ export function JourneyStory({
     const pages = drag.container.querySelector<HTMLElement>("[data-story-media-pages]");
     pages?.style.removeProperty("--story-drag-x");
     pages?.style.removeProperty("--story-live-transform");
+    pages?.style.removeProperty("--story-live-opacity");
+    pages?.style.removeProperty("--story-live-z");
     pages?.classList.remove("is-drag-settling");
     try {
       if (drag.container.hasPointerCapture(drag.pointerId)) drag.container.releasePointerCapture(drag.pointerId);
     } catch { /* The browser may already have cancelled this pointer. */ }
     drag.base.style.transition = "";
     drag.base.style.transform = "";
+    drag.base.style.zIndex = "";
+    drag.base.style.opacity = "";
     drag.base.classList.remove("journey-story__media-drag-settle", "journey-story__media-drag-page");
     if (drag.peek) {
       drag.peek.style.transition = "";
       drag.peek.style.transform = "";
       drag.peek.style.zIndex = "";
+      drag.peek.style.opacity = "";
       drag.peek.classList.remove("journey-story__media-drag-settle", "journey-story__media-drag-page");
     }
   }
@@ -2457,31 +2474,36 @@ export function JourneyStory({
     if (drag.peek) drag.peek.classList.add("journey-story__media-drag-settle");
     if (ready && asset) {
       const index = drag.neighborIndex;
-      const edge = (drag.dx < 0 ? -1 : 1) * drag.width * 1.4;
-      const transform = mediaStackPull(edge, drag.width);
+      const rearDepth = drag.dx < 0 ? 2 : 1;
+      const transform = mediaStackRest(rearDepth);
       drag.base.style.transform = transform;
       const pages = drag.container.querySelector<HTMLElement>("[data-story-media-pages]");
-      pages?.style.setProperty("--story-drag-x", `${edge}px`);
+      drag.base.style.zIndex = "2";
+      drag.base.style.opacity = String(mediaStackOpacity(rearDepth));
       pages?.style.setProperty("--story-live-transform", transform);
-      if (drag.peek) drag.peek.style.transform = mediaStackRest(0);
+      pages?.style.setProperty("--story-live-opacity", String(mediaStackOpacity(rearDepth)));
+      pages?.style.setProperty("--story-live-z", "2");
+      if (drag.peek) {
+        drag.peek.style.zIndex = "5";
+        drag.peek.style.opacity = "1";
+        drag.peek.style.transform = mediaStackRest(0);
+      }
       mediaDragSettleCancelRef.current?.();
-      mediaDragSettleCancelRef.current = scheduleCancelableMediaDragSettle(
-        () => {
-          mediaDragSettleCancelRef.current = null;
-          // Commit the semantic target before removing the already-visible peek.
-          // Otherwise the imperative cleanup can briefly snap the old base back
-          // to center while React has not committed the new media node yet.
-          finalizeMediaDragCommit(
-            () => landMediaDrag(asset, index),
-            () => finishMediaDrag(drag),
-          );
-          mediaDragSettlingRef.current = false;
-        },
-        () => {
-          finishMediaDrag(drag);
-          mediaDragSettlingRef.current = false;
-        },
-      );
+      const commitDrag = () => {
+        mediaDragSettleCancelRef.current = null;
+        mediaDragSettleFinishRef.current = null;
+        finalizeMediaDragCommit(
+          () => landMediaDrag(asset, index),
+          () => finishMediaDrag(drag),
+        );
+        mediaDragSettlingRef.current = false;
+      };
+      mediaDragSettleFinishRef.current = commitDrag;
+      mediaDragSettleCancelRef.current = scheduleCancelableMediaDragSettle(commitDrag, () => {
+        mediaDragSettleFinishRef.current = null;
+        finishMediaDrag(drag);
+        mediaDragSettlingRef.current = false;
+      });
       return;
     }
     drag.base.style.transform = mediaStackRest(0);
@@ -3169,7 +3191,7 @@ export function JourneyStory({
   }
 
   // #20: batch move. Toggling selection mode always resets the selection —
-  // entering starts clean, and leaving (cancel or after a move) should not
+  // entering starts clean, and explicitly leaving should not
   // leave stale ids selected against a grid that may have just changed.
   function toggleMoveSelectMode() {
     if (mutationPending) return;
@@ -3216,8 +3238,8 @@ export function JourneyStory({
 
     setMoveUndo(undo);
     setMoveMessage(`已移动 ${assetIds.length} 个媒体到 ${destination}`);
-    setMoveSelectMode(false);
-    setMoveSelection(new Set());
+    // Preserve any new selection made while this batch was in flight.
+    setMoveSelection((current) => new Set([...current].filter((id) => !assetIds.includes(id))));
     try {
       await onMediaAdded(journey.id);
     } catch {

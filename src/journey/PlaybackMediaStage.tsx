@@ -12,7 +12,7 @@ import {
   type VideoHTMLAttributes,
 } from "react";
 import { StartripsJourneyCue } from "../brand/StartripsBrandMark";
-import { MEDIA_STACK_DURATION, MEDIA_STACK_EASING, mediaStackPull, mediaStackRest } from "./mediaStackMotion";
+import { MEDIA_STACK_DURATION, MEDIA_STACK_EASING, mediaStackDeparture, mediaStackOpacity, mediaStackRest } from "./mediaStackMotion";
 import type { JourneyMediaAsset } from "./types";
 import "../styles/playback-media-presentation.css";
 
@@ -94,7 +94,7 @@ export function PlaybackMediaStage(props: Props) {
   const [movingKey, setMovingKey] = useState("");
   const [failedKey, setFailedKey] = useState("");
   const lastStepIndex = useRef(props.stepIndex);
-  const direction = useRef(1);
+  const direction = useRef<-1 | 1>(1);
   const requestInput = `${props.intent}:${props.url ?? ""}`;
   const requestRevision = useRef({ input: requestInput, revision: 0 });
   if (requestRevision.current.input !== requestInput) {
@@ -206,13 +206,10 @@ export function PlaybackMediaStage(props: Props) {
       easing: MEDIA_STACK_EASING,
       fill: "forwards",
     };
-    const outgoing = from.animate([
-      { transform: mediaStackRest(0) },
-      { transform: mediaStackPull(-direction.current * from.clientWidth * 1.4, from.clientWidth) },
-    ], options);
+    const outgoing = from.animate(mediaStackDeparture(direction.current, from.clientWidth), options);
     const incoming = to.animate([
-      { transform: mediaStackRest(1) },
-      { transform: mediaStackRest(0) },
+      { transform: mediaStackRest(1), opacity: mediaStackOpacity(1), zIndex: 4 },
+      { transform: mediaStackRest(0), opacity: 1, zIndex: 4 },
     ], options);
     void Promise.all([outgoing.finished, incoming.finished]).then(commit, () => undefined);
     return () => { outgoing.cancel(); incoming.cancel(); };

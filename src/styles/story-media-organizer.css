@@ -54,11 +54,11 @@
   background: rgba(61, 69, 44, .88);
 }
 .story-media-organizer__folder { position: relative; display: block; width: 72px; height: 60px; }
-.story-media-organizer__folder-icon { position: absolute; inset: 12px 0 0; width: 72px; height: 48px; fill: #3e5041; color: #899376; stroke-width: 1.2; }
-.story-media-organizer__folder-cover { position: absolute; left: 13px; top: 3px; width: 43px; height: 36px; border: 2px solid #dcded0; border-radius: 4px; overflow: hidden; transform: rotate(-7deg); background: #26332b; }
+.story-media-organizer__folder-icon { width: 30px; height: 30px; color: #899376; stroke-width: 1.2; }
+.story-media-organizer__folder-cover { position: absolute; display: grid; place-items: center; left: 6px; top: 2px; width: 60px; height: 48px; border-radius: 6px; overflow: hidden; background: #26332b; }
 .story-media-organizer__folder-cover img { width: 100%; height: 100%; object-fit: cover; }
 .story-media-organizer__folder-cover .story-media-organizer__placeholder span { display: none; }
-.story-media-organizer__folder b { position: absolute; inset: 32px 0 auto; text-align: center; font-size: 12px; font-weight: 600; color: #f4f1da; }
+.story-media-organizer__folder b { position: absolute; right: 0; bottom: 0; min-width: 22px; padding: 3px 5px; border-radius: 6px; background: #26332b; text-align: center; font-size: 12px; font-weight: 600; color: #f4f1da; transform-origin: center; }
 .story-media-organizer__destination-name { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 600; }
 .story-media-organizer__destination-hint { font-size: 10px; color: #c5c7b5; }
 .story-media-organizer__destination:disabled .story-media-organizer__destination-hint { color: #8d978e; }
@@ -106,14 +106,14 @@
 .story-media-organizer__tile-actions .story-media-organizer__grip { cursor: grab; touch-action: none; }
 .story-media-organizer button:focus-visible { outline: 2px solid #e4ddad; outline-offset: 3px; }
 .story-media-organizer__empty { padding: 20px 8px; font-size: 12px; color: #b0baad; }
-.story-media-organizer__flight { position: fixed; z-index: 12000; pointer-events: none; overflow: hidden; border: 2px solid #e3e3d5; border-radius: 10px; background: #182019; box-shadow: 0 12px 28px #0006; transform-origin: center; }
+.story-media-organizer__flight { position: fixed; z-index: 12000; pointer-events: none; overflow: hidden; border-radius: 8px; background: #182019; box-shadow: 0 10px 24px #0005; transform-origin: center; }
 .story-media-organizer__flight img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .story-media-organizer__flight b,
 .story-media-organizer__drag-stack > b { position: absolute; bottom: 6px; right: 6px; padding: 4px 7px; border-radius: 12px; background: #d8d8ae; color: #192018; font: 600 12px/1.3 system-ui, sans-serif; }
 .story-media-organizer__drag-stack { position: relative; isolation: isolate; width: 110px; height: 110px; pointer-events: none; }
-.story-media-organizer__drag-stack > div { position: absolute; inset: 0; overflow: hidden; border: 2px solid #e0e2d4; border-radius: 10px; background: #263127; box-shadow: 0 10px 22px #0005; }
-.story-media-organizer__drag-stack > div:nth-child(2) { transform: translate(7px, -7px) rotate(6deg); z-index: -1; }
-.story-media-organizer__drag-stack > div:nth-child(3) { transform: translate(-7px, -11px) rotate(-7deg); z-index: -2; }
+.story-media-organizer__drag-stack > div { position: absolute; inset: 0; overflow: hidden; border-radius: 8px; background: #263127; box-shadow: 0 10px 22px #0005; }
+.story-media-organizer__drag-stack > div:nth-child(2) { transform: translate(4px, -5px) scale(.97); z-index: -1; }
+.story-media-organizer__drag-stack > div:nth-child(3) { transform: translate(7px, -9px) scale(.94); z-index: -2; }
 .story-media-organizer__drag-stack img { width: 100%; height: 100%; object-fit: cover; }
 @media (max-width: 760px) {
   .story-media-organizer { inset-block: 64px 54px; padding-inline: 12px; }
@@ -123,9 +123,7 @@
 @media (max-height: 520px) and (orientation: landscape) {
   .story-media-organizer__destination { padding-block: 5px; }
   .story-media-organizer__folder { height: 42px; }
-  .story-media-organizer__folder-icon { top: 0; height: 42px; }
-  .story-media-organizer__folder-cover { top: -1px; height: 28px; }
-  .story-media-organizer__folder b { top: 21px; }
+  .story-media-organizer__folder-cover { top: 0; height: 36px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .story-media-organizer *, .story-media-organizer__flight, .story-media-organizer__drag-stack { transition: none !important; animation: none !important; }

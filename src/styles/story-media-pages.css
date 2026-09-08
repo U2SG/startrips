@@ -4,19 +4,21 @@
   overflow: hidden;
   background: transparent;
   isolation: isolate;
-  --stack-x: clamp(28px, 7%, 84px);
-  --stack-y: clamp(36px, 10%, 88px);
+  perspective: 1400px;
+  --stack-x: clamp(24px, 5%, 60px);
+  --stack-y: clamp(28px, 6%, 60px);
 }
 .story-media-pages__page,
 .story-media-pages__video {
   position: absolute;
   inset: var(--stack-y) var(--stack-x);
   transform-origin: 50% 50%;
-  transform: translate3d(calc(var(--stack-depth, 0) * 3.2%), calc(var(--stack-depth, 0) * 1.2%), 0)
-    rotate(calc(var(--stack-depth, 0) * 5deg)) scale(calc(1 - var(--stack-depth, 0) * 0.035));
+  transform: translate3d(calc(var(--stack-depth, 0) * 3.6%), calc(var(--stack-depth, 0) * 2.8%), calc(var(--stack-depth, 0) * -12px))
+    rotateY(calc(var(--stack-depth, 0) * -3deg)) scale(calc(1 - var(--stack-depth, 0) * 0.055));
   will-change: transform;
 }
 .story-media-pages__page {
+  opacity: calc(1 - var(--stack-depth, 0) * 0.18);
   z-index: calc(3 - var(--stack-depth, 0));
   overflow: visible;
   border: 0;
@@ -42,7 +44,8 @@
 }
 .story-media-pages__page > [hidden] { display: none; }
 .story-media-pages__video {
-  z-index: 6;
+  z-index: var(--story-live-z, 6);
+  opacity: var(--story-live-opacity, 1);
   border: 0;
   pointer-events: none;
   transform: var(--story-live-transform, translate3d(0, 0, 0));
@@ -50,7 +53,10 @@
 .story-media-pages__video[data-video-visible="true"] { pointer-events: auto; }
 .story-media-pages__video > video[hidden] { opacity: 0; pointer-events: none; }
 .story-media-pages.is-drag-settling .story-media-pages__video {
-  transition: transform var(--motion-content, 560ms) var(--motion-ease-out-soft, ease);
+  transition: transform var(--media-settle-duration) var(--media-settle-easing), opacity var(--media-settle-duration) var(--media-settle-easing);
+}
+.story-media-pages .journey-story__media-drag-settle {
+  transition: transform var(--media-settle-duration) var(--media-settle-easing), opacity var(--media-settle-duration) var(--media-settle-easing);
 }
 .story-media-pages__page[data-media-page="current"] > img { cursor: zoom-in; }
 .story-media-pages__page > img:focus-visible { outline: 1px solid currentColor; outline-offset: 8px; }

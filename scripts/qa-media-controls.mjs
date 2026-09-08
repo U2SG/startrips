@@ -2,6 +2,9 @@ import { launchQaBrowser } from "./qa-browser.mjs";
 
 const origin = process.env.QA_ORIGIN ?? "http://127.0.0.1:4173";
 const onePixelGif = "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=";
+const captureMotion = process.env.CI === "true" && process.env.QA_CAPTURE_MEDIA_MOTION === "1";
+const motionArtifactDir = "artifacts/media-motion";
+const motionPhotos = ["/artworks/hokusai-wave.jpg", "/artworks/monet-water-lilies.jpg", "/artworks/stieglitz-hand-of-man.jpg"];
 // Use a checked-in, decodable clip so StoryMediaPages and PlaybackMediaStage
 // exercise their real metadata/first-frame gates. `instrumentMedia` below
 // only makes play/pause deterministic; it does not fake readyState or frames.
@@ -170,6 +173,7 @@ async function createQaPage(path, mediaUrl, {
   videoMediaUrl = null,
   videoAssetId = null,
   reducedMotion = "reduce",
+  recordMotion = false,
   viewport = mobile ? { width: 390, height: 844 } : { width: 1280, height: 800 },
 } = {}) {
   const page = await browser.newPage({
@@ -178,6 +182,7 @@ async function createQaPage(path, mediaUrl, {
     hasTouch: mobile,
     deviceScaleFactor: 1,
     reducedMotion,
+    ...(captureMotion && recordMotion ? { recordVideo: { dir: `${motionArtifactDir}/raw`, size: viewport } } : {}),
   });
   const consoleErrors = [];
   const pageErrors = [];
@@ -342,7 +347,7 @@ async function createQaPage(path, mediaUrl, {
           ? tinyVideo
           : videoMediaUrl && videoAssetId && route.request().url().includes(videoAssetId)
             ? videoMediaUrl
-            : mediaUrl,
+            : typeof mediaUrl === "function" ? mediaUrl(route.request().url()) : mediaUrl,
         expiresAt: "2026-08-26T00:00:00.000Z",
       }),
     });
@@ -1890,12 +1895,21 @@ try {
     }
   }
 
-  const mediaContinuity = await createQaPage("/?qaState=journey-story", onePixelGif, {
+  // Only this existing desktop motion scenario records; the many transport and
+  // reduced-motion checks retain their tiny deterministic fixtures.
+  const mediaContinuity = await createQaPage("/?qaState=journey-story", captureMotion
+    ? (url) => motionPhotos[Number(url.match(/assets\/[^/]*(\d{3})\/read-url/)?.[1] ?? 100) % motionPhotos.length]
+    : onePixelGif, {
     mobile: false,
     reducedMotion: "no-preference",
+    recordMotion: true,
   });
   try {
     await mediaContinuity.page.locator(".journey-story").waitFor({ state: "visible" });
+    if (captureMotion) {
+      await waitForStoryPicture(mediaContinuity.page, "00000000-0000-4000-8000-000000000100");
+      await mediaContinuity.page.screenshot({ path: `${motionArtifactDir}/story-stack-before.png`, animations: "allow" });
+    }
     const initialRailState = await mediaContinuity.page.evaluate(({ pagesSelector }) => {
       const root = document.querySelector(pagesSelector);
       const wrappers = [...(root?.querySelectorAll("[data-media-page]") ?? [])];
@@ -1963,8 +1977,51 @@ try {
       failed: continuityFailed,
     });
     if (continuityFailed) failed = true;
+    if (captureMotion) {
+      await mediaContinuity.page.screenshot({ path: `${motionArtifactDir}/story-stack-next.png`, animations: "allow" });
+      await clickStoryPicture(mediaContinuity.page, -1);
+      await waitForStoryPicture(mediaContinuity.page, "00000000-0000-4000-8000-000000000100");
+      await mediaContinuity.page.screenshot({ path: `${motionArtifactDir}/story-stack-return.png`, animations: "allow" });
+      await mediaContinuity.page.evaluate((selector) => {
+        const root = document.querySelector(selector);
+        const trace = { maxPages: 0, maxVideos: 0 };
+        const sample = () => {
+          trace.maxPages = Math.max(trace.maxPages, root.querySelectorAll("[data-media-page]").length);
+          trace.maxVideos = Math.max(trace.maxVideos, root.querySelectorAll("video").length);
+        };
+        sample();
+        const observer = new MutationObserver(sample);
+        observer.observe(root, { childList: true, subtree: true });
+        window.__qaMotionNodeTrace = { trace, observer };
+      }, storyMediaPagesSelector);
+      // Reverse through actual picture clicks while motion is still running;
+      // the recording preserves those frames without pausing any animation.
+      for (let cycle = 0; cycle < 2; cycle += 1) {
+        await clickStoryPicture(mediaContinuity.page, 1);
+        await mediaContinuity.page.waitForFunction((selector) => document.querySelector(selector)
+          ?.getAttribute("data-media-presentation") === "moving", storyMediaPagesSelector, { polling: "raf", timeout: 3_000 });
+        await clickStoryPicture(mediaContinuity.page, -1);
+        await waitForStoryPicture(mediaContinuity.page, "00000000-0000-4000-8000-000000000100");
+      }
+      const nodeTrace = await mediaContinuity.page.evaluate((selector) => {
+        const { trace, observer } = window.__qaMotionNodeTrace;
+        observer.disconnect();
+        const pages = [...document.querySelector(selector).querySelectorAll("[data-media-page]")];
+        return { ...trace, samePhysicalPages: pages.length === 3
+          && pages.every((node, index) => node === window.__qaStoryMediaPageNodes[index]) };
+      }, storyMediaPagesSelector);
+      const traceFailed = nodeTrace.maxPages !== 3 || nodeTrace.maxVideos > 1 || !nodeTrace.samePhysicalPages;
+      checks.push({ name: "story-motion-capture-rapid-reverse-node-stability", ...nodeTrace, failed: traceFailed });
+      if (traceFailed) failed = true;
+      await mediaContinuity.page.screenshot({ path: `${motionArtifactDir}/story-stack-rapid-return.png`, animations: "allow" });
+    }
   } finally {
+    const video = mediaContinuity.page.video();
     await mediaContinuity.page.close();
+    if (video) {
+      await video.saveAs(`${motionArtifactDir}/story-stack-switch.webm`);
+      await video.delete();
+    }
   }
 
   const reducedMotionStory = await createQaPage("/?qaState=journey-story", onePixelGif, {

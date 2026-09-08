@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import {
   DndContext, DragOverlay, KeyboardSensor, PointerSensor,
@@ -35,6 +35,7 @@ export type StoryMediaOrganizerProps = {
 type Destination = { id: string | null; name: string; assets: JourneyMediaAsset[]; cover?: JourneyMediaAsset };
 type FlightPhoto = { id: string; rect: DOMRect; src: string };
 type MoveCapture = { photos: FlightPhoto[]; tiles: Map<string, DOMRect> };
+type MovePresentation = { targetId: string | null; photos: FlightPhoto[]; assignments: Map<string, string | null> };
 const destinationKey = (id: string | null) => `story-destination:${id ?? "loose-pages"}`;
 
 // Only visible image thumbnails need signed URLs. Videos remain file tiles here,
@@ -86,8 +87,8 @@ function Thumbnail({ asset, read }: { asset: JourneyMediaAsset; read?: MediaRead
   return <span className="story-media-organizer__placeholder"><IconPhoto aria-hidden="true" /><span>{read?.status === "error" || read?.status === "ready" ? "暂不可用" : "载入中"}</span></span>;
 }
 
-function OrganizerTile({ asset, index, props, busy, register }: {
-  asset: JourneyMediaAsset; index: number; props: StoryMediaOrganizerProps; busy: boolean;
+function OrganizerTile({ asset, index, props, busy, moving, register }: {
+  asset: JourneyMediaAsset; index: number; props: StoryMediaOrganizerProps; busy: boolean; moving: boolean;
   register: (id: string, node: HTMLButtonElement | null) => void;
 }) {
   const buttonRef = useRef<HTMLButtonElement | null>(null);
@@ -103,7 +104,7 @@ function OrganizerTile({ asset, index, props, busy, register }: {
   return <li ref={setNodeRef} className={`story-media-organizer__item${isDragging ? " is-dragging" : ""}`}
     style={{ transform: CSS.Transform.toString(transform), transition }}>
     <button ref={setButton} type="button" className={`story-media-organizer__tile${selected ? " is-selected" : ""}`}
-      disabled={props.disabled || busy} data-media-tile-index={index}
+      disabled={moving || (!props.selecting && (props.disabled || busy))} data-media-tile-index={index}
       aria-current={props.currentId === asset.id ? "true" : undefined}
       aria-pressed={props.selecting ? selected : undefined}
       aria-label={`${props.selecting ? "选择" : "查看"}第 ${index + 1} 项：${asset.fileName}${props.coverId === asset.id ? "，旅程封面" : ""}`}
@@ -144,12 +145,13 @@ function DestinationCard({ destination, props, moveCount, canDrop, busy, registe
     disabled={props.disabled || busy || (moveCount === 0 && !canDrop)} onClick={onMove}
     aria-label={`${destination.name}，现有 ${destination.assets.length} 项${moveCount ? `，移入所选 ${moveCount} 项` : "，先选择其他位置的媒体"}`}>
     <span className="story-media-organizer__folder" aria-hidden="true">
-      {destination.cover && <span className="story-media-organizer__folder-cover"><Thumbnail asset={destination.cover} read={props.reads[destination.cover.id]} /></span>}
-      <IconFolder className="story-media-organizer__folder-icon" />
+      <span className="story-media-organizer__folder-cover">{destination.cover
+        ? <Thumbnail asset={destination.cover} read={props.reads[destination.cover.id]} />
+        : <IconFolder className="story-media-organizer__folder-icon" />}</span>
       <b>{destination.assets.length}</b>
     </span>
     <span className="story-media-organizer__destination-name">{destination.name}</span>
-    <span className="story-media-organizer__destination-hint">{moveCount ? `移入 ${moveCount} 项` : "整理到这里"}</span>
+    {moveCount > 0 && <span className="story-media-organizer__destination-hint">移入 {moveCount} 项</span>}
   </button>;
 }
 
@@ -166,7 +168,11 @@ export function StoryMediaOrganizer(props: StoryMediaOrganizerProps) {
   const aliveRef = useRef(true);
   const busyRef = useRef(false);
   const dragCaptureRef = useRef<MoveCapture | null>(null);
+  const dragStackRef = useRef<HTMLDivElement | null>(null);
+  const lastMoveRef = useRef<MovePresentation | null>(null);
+  const layoutRectsRef = useRef(new Map<string, DOMRect>());
   const [busy, setBusy] = useState(false);
+  const [movingIds, setMovingIds] = useState<ReadonlySet<string>>(new Set());
   const [moveError, setMoveError] = useState("");
   const [dragIds, setDragIds] = useState<string[]>([]);
   const keyboardCoordinates: typeof sortableKeyboardCoordinates = (event, args) => {
@@ -246,15 +252,20 @@ export function StoryMediaOrganizer(props: StoryMediaOrganizerProps) {
     void animation.finished.then(finish, finish);
   };
 
-  const presentMove = (capture: MoveCapture, targetId: string | null, count: number) => {
-    if (prefersReducedMotion() || typeof Element.prototype.animate !== "function") return;
-    const target = destinationNodes.current.get(destinationKey(targetId));
-    if (!target?.isConnected) return;
-    const end = target.getBoundingClientRect();
-    const rootBounds = rootRef.current?.getBoundingClientRect();
-    if (!end.width || end.bottom < Math.max(0, rootBounds?.top ?? 0)
-      || end.top > Math.min(window.innerHeight, rootBounds?.bottom ?? window.innerHeight)) return;
-    capture.tiles.forEach((before, id) => {
+  const canPresent = () => !prefersReducedMotion() && typeof Element.prototype.animate === "function";
+  const visibleRect = (node: HTMLElement | undefined | null) => {
+    if (!node?.isConnected) return null;
+    const rect = node.getBoundingClientRect();
+    const bounds = rootRef.current?.getBoundingClientRect();
+    return rect.width && rect.height && rect.bottom > Math.max(0, bounds?.top ?? 0)
+      && rect.top < Math.min(window.innerHeight, bounds?.bottom ?? window.innerHeight)
+      && rect.right > Math.max(0, bounds?.left ?? 0)
+      && rect.left < Math.min(window.innerWidth, bounds?.right ?? window.innerWidth) ? rect : null;
+  };
+  const destinationPreview = (targetId: string | null) =>
+    destinationNodes.current.get(destinationKey(targetId))?.querySelector<HTMLElement>(".story-media-organizer__folder-cover");
+  const settleLayout = (tiles: Map<string, DOMRect>) => {
+    tiles.forEach((before, id) => {
       const node = tileNodes.current.get(id);
       if (!node?.isConnected) return;
       const after = node.getBoundingClientRect();
@@ -264,38 +275,50 @@ export function StoryMediaOrganizer(props: StoryMediaOrganizerProps) {
         { transform: `translate(${x}px, ${y}px)` }, { transform: "translate(0, 0)" },
       ], { duration: motionTokens.tiers.ui, easing: motionTokens.easings.easeOutSoft }));
     });
-    capture.photos.forEach((photo, index) => {
-      const node = document.createElement("div");
-      node.className = "story-media-organizer__flight";
-      node.setAttribute("aria-hidden", "true");
-      Object.assign(node.style, { left: `${photo.rect.left}px`, top: `${photo.rect.top}px`, width: `${photo.rect.width}px`, height: `${photo.rect.height}px` });
-      const image = document.createElement("img");
-      image.src = photo.src;
-      image.alt = "";
-      node.append(image);
-      if (index === capture.photos.length - 1 && count > capture.photos.length) {
-        const badge = document.createElement("b");
-        badge.textContent = `${count} 项`;
-        node.append(badge);
-      }
-      document.body.append(node);
-      flightNodes.current.add(node);
-      const x = end.left + end.width / 2 - photo.rect.left - photo.rect.width / 2;
-      const y = end.top + Math.min(48, end.height / 2) - photo.rect.top - photo.rect.height / 2;
-      const angle = index % 2 ? 5 : -5;
-      const scale = Math.min(0.45, 42 / Math.max(photo.rect.width, photo.rect.height));
-      trackAnimation(node.animate([
-        { transform: "translate(0, 0) rotate(0deg) scale(1)", offset: 0 },
-        { transform: `translate(0, -20px) rotate(${angle}deg) scale(0.94)`, offset: 0.22 },
-        { transform: `translate(${x}px, ${y}px) rotate(${angle / 2}deg) scale(${scale})`, offset: 1 },
-      ], { duration: motionTokens.tiers.content, delay: index * motionTokens.tiers.ui / 4,
-        easing: motionTokens.easings.easeInOutSpatial, fill: "both" }), node);
-    });
-    const folder = target.querySelector<HTMLElement>(".story-media-organizer__folder");
-    if (folder) trackAnimation(folder.animate([{ transform: "scale(1)" }, { transform: "scale(1.08)" }, { transform: "scale(1)" }], {
-      duration: motionTokens.tiers.ui, delay: capture.photos.length ? motionTokens.tiers.content : 0,
+  };
+  const flyPhoto = (photo: FlightPhoto, end: DOMRect, index: number, extraCount = 0) => {
+    const node = document.createElement("div");
+    node.className = "story-media-organizer__flight";
+    node.setAttribute("aria-hidden", "true");
+    Object.assign(node.style, { left: `${photo.rect.left}px`, top: `${photo.rect.top}px`, width: `${photo.rect.width}px`, height: `${photo.rect.height}px` });
+    const image = document.createElement("img");
+    image.src = photo.src;
+    image.alt = "";
+    node.append(image);
+    if (extraCount > 0) {
+      const badge = document.createElement("b");
+      badge.textContent = `${extraCount} 项`;
+      node.append(badge);
+    }
+    document.body.append(node);
+    flightNodes.current.add(node);
+    const x = end.left + end.width / 2 - photo.rect.left - photo.rect.width / 2;
+    const y = end.top + end.height / 2 - photo.rect.top - photo.rect.height / 2;
+    const scaleX = end.width / photo.rect.width;
+    const scaleY = end.height / photo.rect.height;
+    const arrived = `translate(${x}px, ${y}px) scale(${scaleX}, ${scaleY})`;
+    trackAnimation(node.animate([
+      { transform: "translate(0, 0) scale(1)", opacity: 1, offset: 0, easing: motionTokens.easings.easeOutSoft },
+      { transform: arrived, opacity: 1, offset: 0.82 },
+      { transform: arrived, opacity: 0, offset: 1 },
+    ], { duration: motionTokens.tiers.content, delay: index * motionTokens.tiers.instant / 3,
+      fill: "both" }), node);
+  };
+  const acknowledgeDestination = (targetId: string | null, delay = 0) => {
+    const count = destinationNodes.current.get(destinationKey(targetId))?.querySelector<HTMLElement>(".story-media-organizer__folder b");
+    if (count) trackAnimation(count.animate([{ transform: "scale(1.18)" }, { transform: "scale(1)" }], {
+      duration: motionTokens.tiers.ui, delay,
       easing: motionTokens.easings.easeOutSoft,
     }));
+  };
+  const presentMove = (capture: MoveCapture, targetId: string | null, count: number) => {
+    if (!canPresent()) return;
+    settleLayout(capture.tiles);
+    const end = visibleRect(destinationPreview(targetId));
+    if (!end) return;
+    capture.photos.forEach((photo, index) => flyPhoto(photo, end, index,
+      index === capture.photos.length - 1 && count > capture.photos.length ? count : 0));
+    acknowledgeDestination(targetId, capture.photos.length ? motionTokens.tiers.content * 0.82 : 0);
   };
 
   const move = async (ids: readonly string[], targetId: string | null, captured?: MoveCapture | null) => {
@@ -306,7 +329,11 @@ export function StoryMediaOrganizer(props: StoryMediaOrganizerProps) {
     const epoch = epochRef.current;
     const before = captured ?? captureMove(actualIds);
     const capture = { ...before, photos: before.photos.filter((photo) => actualIds.includes(photo.id)) };
+    const assignments = new Map(props.media.filter((asset) => actualIds.includes(asset.id))
+      .map((asset) => [asset.id, asset.routePointId]));
     busyRef.current = true;
+    lastMoveRef.current = null;
+    setMovingIds(new Set(actualIds));
     setMoveError("");
     setBusy(true);
     try {
@@ -317,7 +344,10 @@ export function StoryMediaOrganizer(props: StoryMediaOrganizerProps) {
         frameRef.current = requestAnimationFrame(() => {
           frameRef.current = null;
           const reflected = actualIds.every((id) => latestMediaRef.current.some((asset) => asset.id === id && asset.routePointId === targetId));
-          if (aliveRef.current && epoch === epochRef.current && reflected) presentMove(capture, targetId, actualIds.length);
+          if (aliveRef.current && epoch === epochRef.current && reflected) {
+            lastMoveRef.current = { targetId, assignments, photos: capture.photos };
+            presentMove(capture, targetId, actualIds.length);
+          }
         });
       }
     } catch (error) {
@@ -326,7 +356,7 @@ export function StoryMediaOrganizer(props: StoryMediaOrganizerProps) {
       if (aliveRef.current) setMoveError(error instanceof Error ? error.message : "移动失败，请重试。");
     } finally {
       busyRef.current = false;
-      if (aliveRef.current) setBusy(false);
+      if (aliveRef.current) { setBusy(false); setMovingIds(new Set()); }
     }
   };
 
@@ -351,7 +381,15 @@ export function StoryMediaOrganizer(props: StoryMediaOrganizerProps) {
   };
   const onDragEnd = (event: DragEndEvent) => {
     const ids = dragIds;
-    const capture = dragCaptureRef.current;
+    const capture = captureMove(ids);
+    const overlay = dragStackRef.current;
+    // Continue from the photograph under the pointer, never jump back to its
+    // pre-drag grid position after the assignment request completes.
+    capture.photos = (dragCaptureRef.current?.photos ?? capture.photos).map((photo, index) => {
+      const page = overlay?.children.item(Math.min(index, 2));
+      const rect = page?.getBoundingClientRect();
+      return rect?.width && rect.height ? { ...photo, rect } : photo;
+    });
     dragCaptureRef.current = null;
     setDragIds([]);
     if (props.disabled || busyRef.current || !event.over) return;
@@ -363,15 +401,46 @@ export function StoryMediaOrganizer(props: StoryMediaOrganizerProps) {
   };
   const dragged = props.media.filter((asset) => dragIds.includes(asset.id));
 
+  useLayoutEffect(() => {
+    const previous = layoutRectsRef.current;
+    const next = captureMove([]).tiles;
+    const move = lastMoveRef.current;
+    if (move && [...move.assignments].every(([id, routePointId]) =>
+      props.allMedia.some((asset) => asset.id === id && asset.routePointId === routePointId))) {
+      // The parent alone owns Undo and server reconciliation. Animate a return
+      // only after every assignment in that confirmed move is restored.
+      lastMoveRef.current = null;
+      cancelPresentation();
+      if (canPresent()) {
+        const from = visibleRect(destinationPreview(move.targetId));
+        if (from) move.photos.forEach((photo, index) => {
+          const tile = tileNodes.current.get(photo.id);
+          const tileRect = visibleRect(tile);
+          const to = tileRect
+            ?? visibleRect(destinationPreview(move.assignments.get(photo.id) ?? null));
+          if (to) {
+            flyPhoto({ ...photo, rect: from }, to, index);
+            if (tile && tileRect) trackAnimation(tile.animate([
+              { opacity: 0, offset: 0 }, { opacity: 0, offset: 0.82 }, { opacity: 1, offset: 1 },
+            ], { duration: motionTokens.tiers.content, delay: index * motionTokens.tiers.instant / 3, fill: "backwards" }));
+          }
+        });
+        settleLayout(previous);
+        new Set(move.assignments.values()).forEach((id) => acknowledgeDestination(id));
+        acknowledgeDestination(move.targetId);
+      }
+    }
+    layoutRectsRef.current = next;
+  }, [props.allMedia, props.media]);
+
   return <section ref={rootRef} className="story-media-organizer" aria-label="媒体整理" aria-busy={busy}
-    onScroll={cancelPresentation}>
-    <p className="story-media-organizer__instruction" aria-live="polite">{moveError || (busy ? "正在整理所选媒体…" : selected.length
-      ? `已选 ${selected.length} 项，点击下面的位置移入；也可以拖入卡片。`
-      : props.selecting ? "点选要整理的媒体，再点击目标位置。单张可拖动排序。"
-        : "点击上方“选择”开始多选，再点击目标位置。单张可拖动排序。")}</p>
+    onScroll={() => { cancelPresentation(); layoutRectsRef.current = captureMove([]).tiles; }}>
+    <p className="story-media-organizer__instruction" aria-live="polite">{moveError || (busy ? "正在整理…" : selected.length
+      ? `已选 ${selected.length} 项`
+      : props.selecting ? "选择媒体，再点选目标位置" : "拖动排序，或选择媒体移入其他位置")}</p>
     <DndContext sensors={sensors} collisionDetection={collisionDetection} onDragStart={onDragStart}
       onDragEnd={onDragEnd} onDragCancel={() => { dragCaptureRef.current = null; setDragIds([]); }}>
-      <div className="story-media-organizer__destinations" aria-label="移动到旅程位置">
+      <div className="story-media-organizer__destinations" aria-label="移动到旅程位置" onScroll={cancelPresentation}>
         {destinations.map((destination) => <DestinationCard key={destinationKey(destination.id)} destination={destination}
           props={props} busy={busy} register={registerDestination}
           moveCount={selected.filter((asset) => asset.routePointId !== destination.id).length}
@@ -381,12 +450,12 @@ export function StoryMediaOrganizer(props: StoryMediaOrganizerProps) {
       <SortableContext items={props.media.map((asset) => asset.id)} strategy={rectSortingStrategy}>
         <ul className="story-media-organizer__grid" aria-label={`当前范围媒体，共 ${props.media.length} 项`}>
           {props.media.map((asset, index) => <OrganizerTile key={asset.id} asset={asset} index={index} props={props}
-            busy={busy} register={registerTile} />)}
+            busy={busy} moving={movingIds.has(asset.id)} register={registerTile} />)}
         </ul>
       </SortableContext>
       {!props.media.length && <p className="story-media-organizer__empty">这里还没有媒体，其他位置的照片可移入这里。</p>}
       {typeof document !== "undefined" && createPortal(<DragOverlay dropAnimation={null} zIndex={12000}>
-        {dragged.length > 0 && <div className="story-media-organizer__drag-stack" aria-hidden="true">
+        {dragged.length > 0 && <div ref={dragStackRef} className="story-media-organizer__drag-stack" aria-hidden="true">
           {dragged.slice(0, 3).map((asset) => <div key={asset.id}><Thumbnail asset={asset} read={props.reads[asset.id]} /></div>)}
           <b>{dragged.length} 项</b>
         </div>}

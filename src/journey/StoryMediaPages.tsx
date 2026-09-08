@@ -1,11 +1,11 @@
 import { cloneElement, useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type MouseEvent, type ReactElement, type Ref, type VideoHTMLAttributes } from "react";
-import { MEDIA_STACK_DURATION, MEDIA_STACK_EASING, mediaStackPull, mediaStackRest } from "./mediaStackMotion";
+import { MEDIA_STACK_DURATION, MEDIA_STACK_EASING, mediaStackDeparture, mediaStackOpacity, mediaStackRest } from "./mediaStackMotion";
 import { prefersReducedMotion } from "../motion/preferences";
 import { StartripsJourneyCue } from "../brand/StartripsBrandMark";
-import type { JourneyMediaAsset } from "./types";
+import type { JourneyMediaAsset, MediaPreviewRead } from "./types";
 import "../styles/story-media-pages.css";
 
-type Read = { status: "ready"; url: string } | { status: "loading" } | { status: "error"; message: string };
+type Read = { status: "ready"; url: string; preview?: MediaPreviewRead } | { status: "loading" } | { status: "error"; message: string };
 type VideoElement = ReactElement<VideoHTMLAttributes<HTMLVideoElement> & { ref?: Ref<HTMLVideoElement> }>;
 type Frame = { url: string; state: "waiting" | "ready" | "error"; canvas?: HTMLCanvasElement; message?: string };
 type Props = {
@@ -273,6 +273,7 @@ export function StoryMediaPages({ active = true, ...props }: Props) {
   useLayoutEffect(() => {
     props.onPlaybackReady(playbackReady ? props.currentId : null);
   }, [playbackReady, props.currentId, props.onPlaybackReady]);
+  const interrupted = useRef(new Map<string, { transform: string; opacity: string }>());
   const reportKey = useRef("");
   useEffect(() => {
     if (!active) return;
@@ -293,7 +294,20 @@ export function StoryMediaPages({ active = true, ...props }: Props) {
 
   useLayoutEffect(() => {
     const id = props.incomingId;
-    if (!active || !id || !targetReady) { setMovingId(null); return; }
+    if (!active || !id || !targetReady) {
+      setMovingId(null);
+      // Reverse/cancel keeps the pixels at their current position and settles
+      // back into the same pile, without snapping to the authored rest frame.
+      const recovery = active && !prefersReducedMotion() ? pageNodes.current.flatMap((node, slot) => {
+        const assetId = assigned[slot];
+        const from = assetId ? interrupted.current.get(assetId) : null;
+        if (!node?.animate || !from) return [];
+        return [node.animate([from, { transform: mediaStackRest(depths[slot]), opacity: mediaStackOpacity(depths[slot]) }],
+          { duration: MEDIA_STACK_DURATION, easing: MEDIA_STACK_EASING })];
+      }) : [];
+      interrupted.current.clear();
+      return () => { for (const animation of recovery) animation.cancel(); };
+    }
     let cancelled = false;
     const finish = () => {
       if (cancelled || !latest.current.active || latest.current.incomingId !== id) return;
@@ -310,15 +324,33 @@ export function StoryMediaPages({ active = true, ...props }: Props) {
       const isCurrent = assigned[slot] === props.currentId;
       const isTarget = assigned[slot] === id;
       if (!isCurrent && !isTarget) return [];
-      // Keep the actual top card above its successor while it is pulled away.
-      const width = node.clientWidth;
-      return [node.animate([
-        { transform: mediaStackRest(depths[slot]) },
-        { transform: isCurrent ? mediaStackPull(-direction * width * 1.4, width) : mediaStackRest(0) },
-      ], { duration: MEDIA_STACK_DURATION, easing: MEDIA_STACK_EASING, fill: "forwards" })];
+      const assetId = assigned[slot]!;
+      const from = interrupted.current.get(assetId) ?? {
+        transform: getComputedStyle(node).transform,
+        opacity: getComputedStyle(node).opacity,
+      };
+      const keyframes = isCurrent
+        ? mediaStackDeparture(direction, node.clientWidth, direction > 0 ? 2 : 1)
+        : [from, { transform: mediaStackRest(0), opacity: 1 }];
+      keyframes[0] = { ...keyframes[0], ...from };
+      return [node.animate(keyframes,
+        { duration: MEDIA_STACK_DURATION, easing: MEDIA_STACK_EASING, fill: "forwards" })];
     });
     void Promise.all(animations.map((animation) => animation.finished)).then(finish, () => undefined);
-    return () => { cancelled = true; for (const animation of animations) animation.cancel(); };
+    interrupted.current.clear();
+    return () => {
+      cancelled = true;
+      if (latest.current.currentId === props.currentId) {
+        for (const [slot, node] of pageNodes.current.entries()) {
+          const assetId = assigned[slot];
+          if (node && assetId) {
+            const style = getComputedStyle(node);
+            interrupted.current.set(assetId, { transform: style.transform, opacity: style.opacity });
+          }
+        }
+      }
+      for (const animation of animations) animation.cancel();
+    };
   }, [active, props.currentId, props.incomingId, targetReady, direction, rememberLiveFrame]);
 
   useLayoutEffect(() => {
@@ -377,6 +409,7 @@ export function StoryMediaPages({ active = true, ...props }: Props) {
     if (!containsMediaPoint(target, event.clientX, event.clientY)) props.onBackdropClick();
   };
   return <div ref={root} className="story-media-pages" data-story-media-pages
+    style={{ "--media-settle-duration": `${MEDIA_STACK_DURATION}ms`, "--media-settle-easing": MEDIA_STACK_EASING } as CSSProperties}
     onClick={handleBackdropClick}
     onPointerMove={props.onNavigate ? (event) => {
       const target = event.target;
@@ -415,6 +448,12 @@ export function StoryMediaPages({ active = true, ...props }: Props) {
           // motion handoffs, so a former top page cannot intercept the next tap.
           zIndex: current ? 5 : id !== null && id === props.incomingId ? 4 : 3 - depths[slot],
           transform: mediaStackRest(depths[slot]),
+          opacity: mediaStackOpacity(depths[slot]),
+          // A signed preview belongs to this exact asset. It holds the same
+          // contained frame until the original image/video is actually ready.
+          backgroundImage: !pageReady && read?.status === "ready" && read.preview
+            ? `url(${JSON.stringify(read.preview.url)})` : undefined,
+          backgroundSize: "contain", backgroundPosition: "center", backgroundRepeat: "no-repeat",
           pointerEvents: current ? "auto" : "none",
         } as CSSProperties}>
         <img ref={(element) => { imageNodes.current[slot] = element; }}
