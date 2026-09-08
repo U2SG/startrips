@@ -270,14 +270,28 @@ try {
     await organizer.evaluate((element) => { element.scrollTop = 0; });
     const grip = page.getByRole("button", { name: "拖动 seed-0.png：同地点排序，或移到目标卡片", exact: true });
     await grip.scrollIntoViewIfNeeded();
-    const start = await grip.boundingBox(), drop = await destination("旅程散页").boundingBox();
-    if (!start || !drop) throw new Error("QA drag source or destination has no bounds");
+    const start = await grip.boundingBox();
+    if (!start) throw new Error("QA drag source has no bounds");
     const beforeDragOrder = ordered().map((asset) => asset.id);
     await page.mouse.move(start.x + start.width / 2, start.y + start.height / 2);
     await page.mouse.down();
     await page.waitForTimeout(240);
     await page.locator(".story-media-organizer__drag-stack").waitFor({ state: "visible" });
+    // Pointer activation focuses the handle and can scroll its containers.
+    // Measure the sticky destination after that focus/activation has happened.
+    const drop = await destination("旅程散页").boundingBox();
+    if (!drop) throw new Error("QA drag destination has no bounds");
     await page.mouse.move(drop.x + drop.width / 2, drop.y + drop.height / 2, { steps: 12 });
+    await page.waitForFunction((selector) => [...document.querySelectorAll(selector)]
+      .some((node) => node.querySelector(".story-media-organizer__destination-name")?.textContent === "旅程散页"
+        && node.classList.contains("is-over")), destinationSelector, { timeout: 3_000 })
+      .catch(async (error) => {
+        const state = await page.locator(destinationSelector).evaluateAll((nodes) => nodes.map((node) => ({
+          name: node.getAttribute("aria-label"), disabled: node.disabled, class: node.className,
+          bounds: node.getBoundingClientRect().toJSON(),
+        })));
+        throw new Error(`Pointer drop did not select loose pages: ${JSON.stringify({ drop, state })}`, { cause: error });
+      });
     const dragRequest = page.waitForRequest((request) => request.url().endsWith("/api/uploads/assets/move"));
     await page.mouse.up();
     await dragRequest;
