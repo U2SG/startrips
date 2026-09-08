@@ -192,7 +192,7 @@ def public_check(server: str) -> bool:
 
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Pull main, require passing CI, and deploy it to Startrips."
+        description="Fetch origin/main, require passing CI, and deploy that exact commit to Startrips."
     )
     parser.add_argument("--key", required=True, type=Path, help="SSH private-key path")
     parser.add_argument("--server", default="106.53.130.142", help="SSH/HTTPS host")
@@ -239,15 +239,22 @@ def main() -> int:
     if not allowed_host_keys:
         raise ValueError("A non-default server requires --host-key-sha256")
 
-    print("1/7 Updating local main...")
+    print("1/7 Fetching the exact origin/main commit...")
     if run_local(["git", "status", "--porcelain"], capture=True):
-        print("Local changes detected; the deployment archive will still use the exact main commit.")
-    run_local(["git", "switch", "main"])
-    run_local(["git", "pull", "--ff-only", "origin", "main"])
-    commit = run_local(["git", "rev-parse", "HEAD"], capture=True)
-    origin_main = run_local(["git", "rev-parse", "origin/main"], capture=True)
-    if commit != origin_main:
-        raise RuntimeError("Local main does not exactly match origin/main")
+        print("Local changes detected; deployment will not switch branches or modify the worktree.")
+    deploy_ref = "refs/startrips/deploy-main"
+    run_local(
+        [
+            "git",
+            "fetch",
+            "origin",
+            f"+refs/heads/main:{deploy_ref}",
+        ]
+    )
+    commit = run_local(["git", "rev-parse", deploy_ref], capture=True)
+    if not commit:
+        raise RuntimeError("Unable to resolve origin/main after fetch")
+    run_local(["git", "cat-file", "-e", f"{commit}^{{commit}}"])
     short_commit = commit[:7]
 
     print("2/7 Waiting for the exact commit's CI gate...")
