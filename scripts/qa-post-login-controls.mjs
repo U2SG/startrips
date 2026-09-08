@@ -1211,52 +1211,70 @@ async function verifyComposerGlobeRoundTrip() {
     const desktopOwnershipFailed = desktopChromeDuringPick.header !== true
       || desktopChromeDuringPick.rail !== true
       || desktopChromeDuringPick.active !== true;
-    results.push({
+    const desktopOwnershipResult = {
       name: "app-desktop-globe-pick-chrome-inert",
       desktopChromeDuringPick,
       failed: desktopOwnershipFailed,
-    });
+    };
+    results.push(desktopOwnershipResult);
+    // #255 review evidence must survive a later cancel/close failure. Emit the
+    // active-pick measurement now rather than relying on the aggregate JSON
+    // printed only after the whole post-login suite completes.
+    console.error(`[qa-post-login] ${JSON.stringify(desktopOwnershipResult)}`);
     if (desktopOwnershipFailed) failed = true;
 
-    await page.locator(".journey-globe-pick-hint button").click();
-    await page.waitForFunction(() => (
-      !document.querySelector(".living-atlas")?.classList.contains("is-globe-picking")
-      && getComputedStyle(document.querySelector(".journey-composer")).visibility === "visible"
-    ));
-    await page.getByRole("button", { name: /关闭(?:旅程编辑器|创建器)/ }).click();
-    await page.locator(".journey-composer").waitFor({ state: "detached" });
+    let desktopReleaseResult;
+    try {
+      await page.locator(".journey-globe-pick-hint button").click();
+      await page.waitForFunction(() => (
+        !document.querySelector(".living-atlas")?.classList.contains("is-globe-picking")
+        && getComputedStyle(document.querySelector(".journey-composer")).visibility === "visible"
+      ));
+      await page.getByRole("button", { name: /关闭(?:旅程编辑器|创建器)/ }).click();
+      await page.locator(".journey-composer").waitFor({ state: "detached" });
 
-    const desktopChromeAfterClose = await page.evaluate(() => {
-      const inert = (selector) => {
-        const element = document.querySelector(selector);
-        return element instanceof HTMLElement ? element.inert : null;
+      const desktopChromeAfterClose = await page.evaluate(() => {
+        const inert = (selector) => {
+          const element = document.querySelector(selector);
+          return element instanceof HTMLElement ? element.inert : null;
+        };
+        return {
+          header: inert(".living-atlas__header"),
+          rail: inert(".living-atlas__journey-rail"),
+          active: inert(".living-atlas__active"),
+        };
+      });
+      const earthNav = page.getByRole("button", { name: "地球", exact: true });
+      await earthNav.evaluate((button) => {
+        button.dataset.qaClickProbe = "armed";
+        button.addEventListener("click", () => {
+          button.dataset.qaClickProbe = "clicked";
+        }, { once: true });
+      });
+      await earthNav.click();
+      const headerNavClicked = await earthNav.evaluate((button) => button.dataset.qaClickProbe === "clicked");
+      desktopReleaseResult = {
+        name: "app-desktop-globe-pick-chrome-release",
+        desktopChromeAfterClose,
+        headerNavClicked,
+        failed: desktopChromeAfterClose.header !== false
+          || desktopChromeAfterClose.rail !== false
+          || desktopChromeAfterClose.active !== false
+          || !headerNavClicked,
       };
-      return {
-        header: inert(".living-atlas__header"),
-        rail: inert(".living-atlas__journey-rail"),
-        active: inert(".living-atlas__active"),
+    } catch (error) {
+      desktopReleaseResult = {
+        name: "app-desktop-globe-pick-chrome-release",
+        failed: true,
+        error: error instanceof Error ? error.stack ?? error.message : String(error),
       };
-    });
-    const earthNav = page.getByRole("button", { name: "地球", exact: true });
-    await earthNav.evaluate((button) => {
-      button.dataset.qaClickProbe = "armed";
-      button.addEventListener("click", () => {
-        button.dataset.qaClickProbe = "clicked";
-      }, { once: true });
-    });
-    await earthNav.click();
-    const headerNavClicked = await earthNav.evaluate((button) => button.dataset.qaClickProbe === "clicked");
-    const desktopReleaseFailed = desktopChromeAfterClose.header !== false
-      || desktopChromeAfterClose.rail !== false
-      || desktopChromeAfterClose.active !== false
-      || !headerNavClicked;
-    results.push({
-      name: "app-desktop-globe-pick-chrome-release",
-      desktopChromeAfterClose,
-      headerNavClicked,
-      failed: desktopReleaseFailed,
-    });
-    if (desktopReleaseFailed) failed = true;
+    }
+    results.push(desktopReleaseResult);
+    console.error(`[qa-post-login] ${JSON.stringify(desktopReleaseResult)}`);
+    if (desktopReleaseResult.failed) {
+      failed = true;
+      return;
+    }
 
     for (const mode of ["empty", "failure"]) {
       resetReverse(mode);
