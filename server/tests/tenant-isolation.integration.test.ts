@@ -100,13 +100,17 @@ async function createVerifiedSession(label: string) {
   return { cookie: cookie!, userId: signInPayload.user.id };
 }
 
-async function createSessionWithOrganization(label: string) {
-  const identity = await createVerifiedSession(label);
+/**
+ * Creating an organization also makes it the session's active one, which is how
+ * a test reaches an organization without an atlas without spending a sign-up:
+ * `/sign-up/email` is rate limited to five per ten minutes for the whole suite.
+ */
+async function createOrganization(label: string, cookie: string) {
   const organizationResponse = await app.request(
     `${TEST_ORIGIN}/api/auth/organization/create`,
     {
       method: "POST",
-      headers: authHeaders(identity.cookie),
+      headers: authHeaders(cookie),
       body: JSON.stringify({
         name: `${label} Atlas`,
         slug: `${label.toLowerCase()}-${randomUUID()}`,
@@ -116,11 +120,12 @@ async function createSessionWithOrganization(label: string) {
   expect(organizationResponse.status).toBe(200);
   const organization = await organizationResponse.json() as { id: string };
   authOrganizationIds.push(organization.id);
-  return { ...identity, organizationId: organization.id };
+  return organization.id;
 }
 
 async function createAuthenticatedAtlas(label: string) {
-  const identity = await createSessionWithOrganization(label);
+  const identity = await createVerifiedSession(label);
+  const organizationId = await createOrganization(label, identity.cookie);
   const bootstrap = await app.request(`${TEST_ORIGIN}/api/atlases/bootstrap`, {
     method: "POST",
     headers: authHeaders(identity.cookie),
@@ -129,7 +134,7 @@ async function createAuthenticatedAtlas(label: string) {
   expect([200, 201]).toContain(bootstrap.status);
   const payload = await bootstrap.json() as { atlas: { id: string } };
   atlasIds.push(payload.atlas.id);
-  return { ...identity, atlasId: payload.atlas.id };
+  return { ...identity, organizationId, atlasId: payload.atlas.id };
 }
 
 beforeAll(async () => {
@@ -356,29 +361,6 @@ describe("unusable request bodies", () => {
     }
   }
 
-  it("refuses an unusable atlas bootstrap body without creating an atlas", async () => {
-    // A fresh organization: bootstrap answers an existing atlas before it ever
-    // reads the body, so only an organization without one reaches the guard.
-    const fresh = await createSessionWithOrganization("UnusableBootstrap");
-    for (const body of [MALFORMED, ...NON_OBJECT_BODIES, "{}"]) {
-      const response = await app.request(`${TEST_ORIGIN}/api/atlases/bootstrap`, {
-        method: "POST",
-        headers: authHeaders(fresh.cookie),
-        body,
-      });
-      expect(response.status, `bootstrap <- ${body}`).toBe(400);
-      await expect(response.json()).resolves.toMatchObject({
-        error: "INVALID_ATLAS",
-      });
-    }
-
-    const [atlasCount] = await db
-      .select({ value: count() })
-      .from(atlases)
-      .where(eq(atlases.organizationId, fresh.organizationId));
-    expect(atlasCount.value).toBe(0);
-  });
-
   it("refuses an unusable atlas update body without changing the atlas", async () => {
     await expectOneRefusal("PATCH", "/api/atlases/current", "{}", "INVALID_ATLAS");
 
@@ -600,6 +582,35 @@ describe("unusable request bodies", () => {
       routePointId: null,
       sortOrder: 0,
     });
+  });
+
+  // Last in the block: it leaves the shared identity pointing at an atlas-less
+  // organization, which every test above would otherwise fail against.
+  it("refuses an unusable atlas bootstrap body without creating an atlas", async () => {
+    // Bootstrap answers an existing atlas before it ever reads the body, so
+    // only an organization without one reaches the guard. Creating a second
+    // organization for the same user makes it active and costs no sign-up.
+    const emptyOrganizationId = await createOrganization(
+      "UnusableBootstrap",
+      identity.cookie,
+    );
+    for (const body of [MALFORMED, ...NON_OBJECT_BODIES, "{}"]) {
+      const response = await app.request(`${TEST_ORIGIN}/api/atlases/bootstrap`, {
+        method: "POST",
+        headers: authHeaders(identity.cookie),
+        body,
+      });
+      expect(response.status, `bootstrap <- ${body}`).toBe(400);
+      await expect(response.json()).resolves.toMatchObject({
+        error: "INVALID_ATLAS",
+      });
+    }
+
+    const [atlasCount] = await db
+      .select({ value: count() })
+      .from(atlases)
+      .where(eq(atlases.organizationId, emptyOrganizationId));
+    expect(atlasCount.value).toBe(0);
   });
 });
 
