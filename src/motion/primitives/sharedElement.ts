@@ -2,6 +2,7 @@ import { flushSync } from "react-dom";
 import { onMotionPreferenceChange, prefersReducedMotion } from "../preferences";
 
 type ViewTransitionHandle = {
+  ready: Promise<void>;
   finished: Promise<void>;
   skipTransition: () => void;
 };
@@ -51,6 +52,8 @@ export function morphJourneyCard(
     flushSync(update);
   });
   activeCardTransition = transition;
+  // Skipping an obsolete snapshot rejects ready independently of finished.
+  void transition.ready.catch(() => undefined);
   const clearTransition = () => {
     if (activeCardTransition === transition) activeCardTransition = null;
   };
@@ -88,6 +91,7 @@ export function runSharedElementTransition(
   const transition = doc.startViewTransition(() => {
     flushSync(update);
   });
+  void transition.ready.catch(() => undefined);
   void transition.finished.catch(() => undefined);
 }
 export type SharedElementMorphOptions = {

@@ -618,7 +618,7 @@ try {
 
     await mediaManageTrigger.click();
     const reclassifyMedia = story.page.getByRole("button", { name: "移动媒体 / 重新归类" });
-    const organizeMedia = story.page.getByRole("button", { name: "整理媒体" });
+    const organizeMedia = mobileSheet.getByRole("button", { name: "整理媒体", exact: true });
     const reclassifyBox = await reclassifyMedia.boundingBox();
     const organizeBox = await organizeMedia.boundingBox();
     const bothSheetActionsAvailable = await reclassifyMedia.count() === 1 && await organizeMedia.count() === 1;

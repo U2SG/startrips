@@ -107,7 +107,7 @@ function OrganizerTile({ asset, index, props, busy, register }: {
       aria-current={props.currentId === asset.id ? "true" : undefined}
       aria-pressed={props.selecting ? selected : undefined}
       aria-label={`${props.selecting ? "选择" : "查看"}第 ${index + 1} 项：${asset.fileName}${props.coverId === asset.id ? "，旅程封面" : ""}`}
-      onPointerDown={listeners?.onPointerDown}
+      onPointerDown={listeners?.onPointerDown ? (event) => listeners.onPointerDown(event) : undefined}
       onClick={(event) => props.selecting ? props.onToggleSelect(asset.id) : props.onSelect(index, event.currentTarget)}>
       <Thumbnail asset={asset} read={props.reads[asset.id]} />
       {props.selecting && <span className="story-media-organizer__check">{selected && <IconCheck aria-hidden="true" />}</span>}

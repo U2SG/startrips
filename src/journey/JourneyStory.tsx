@@ -117,7 +117,7 @@ export function finalizeMediaDragCommit(
 export function scheduleCancelableMediaDragSettle(
   run: () => void,
   cleanup: () => void,
-  delayMs = MEDIA_DRAG_SETTLE_MS,
+  delayMs: number = MEDIA_DRAG_SETTLE_MS,
   schedule: (callback: () => void, delay: number) => number = (callback, delay) => window.setTimeout(callback, delay),
   cancel: (timerId: number) => void = (timerId) => window.clearTimeout(timerId),
 ) {
@@ -799,7 +799,7 @@ export function JourneyStory({
   // is null too and every media write in this component has nothing to call.
   // Before this contract an absent `onMediaDelete` fell through to the owner
   // API, which meant hiding the control left deletion reachable.
-  const { capabilities, readMedia, mutations } = useAtlasView();
+  const { capabilities, readMedia, listJourneys, mutations } = useAtlasView();
   const manageMedia: AtlasMutations | null = capabilities.canManageMedia ? mutations : null;
   const removeMedia = onMediaDelete ?? manageMedia?.deleteMedia ?? null;
   const updateJourneyNotes = mutations?.updateJourneyNotes ?? null;
@@ -848,6 +848,7 @@ export function JourneyStory({
   const [closeBlocked, setCloseBlocked] = useState(false);
   const [journeyNoteDraft, setJourneyNoteDraft] = useState<string | undefined>(undefined);
   const [routePointNoteDrafts, setRoutePointNoteDrafts] = useState<Record<string, string>>({});
+  const routePointDraftLabels = useRef(new Map<string, string>());
   const [notesSaveState, setNotesSaveState] = useState<StoryNotesSaveState>("idle");
   const [notesMessage, setNotesMessage] = useState("");
   const [notesDirty, setNotesDirty] = useState(false);
@@ -859,6 +860,7 @@ export function JourneyStory({
     if (notesDraftJourneyRef.current === journey.id && notesDirtyRef.current) return;
     setJourneyNoteDraft(undefined);
     setRoutePointNoteDrafts({});
+    routePointDraftLabels.current.clear();
     setNotesSaveState("idle");
     setNotesMessage("");
     setNotesDirty(false);
@@ -993,6 +995,7 @@ export function JourneyStory({
   }
 
   function setStoryRoutePointNote(routePointId: string, value: string) {
+    routePointDraftLabels.current.set(routePointId, journey?.routePoints.find((point) => point.id === routePointId)?.label || "未命名地点");
     setRoutePointNoteDrafts((current) => ({ ...current, [routePointId]: value }));
     setNotesDirty(true);
     setNotesSaveState("idle");
@@ -1014,13 +1017,33 @@ export function JourneyStory({
     if (!journey || notesSaveState === "saving") return;
     setJourneyNoteDraft(undefined);
     setRoutePointNoteDrafts({});
+    routePointDraftLabels.current.clear();
     setNotesDirty(false);
+    setNotesSaveState("idle");
+    setNotesMessage("");
+  }
+
+  const removedRoutePointDrafts = Object.entries(routePointNoteDrafts)
+    .filter(([id]) => !journey?.routePoints.some((point) => point.id === id))
+    .map(([id, note]) => ({ id, note, label: routePointDraftLabels.current.get(id) || "已删除地点" }));
+
+  function discardRemovedRoutePointDraft(routePointId: string) {
+    if (mutationPending) return;
+    const next = { ...routePointNoteDrafts };
+    delete next[routePointId];
+    routePointDraftLabels.current.delete(routePointId);
+    setRoutePointNoteDrafts(next);
+    setNotesDirty(journeyNoteDraft !== undefined || Object.keys(next).length > 0);
     setNotesSaveState("idle");
     setNotesMessage("");
   }
 
   async function saveStoryNotes() {
     if (!journey || !updateJourneyNotes || !notesDirty || mutationPending) return;
+    if (removedRoutePointDrafts.length > 0) {
+      notifyNotesGuard("有地点已被删除。请先复制需要保留的草稿，再放弃对应地点草稿。");
+      return;
+    }
     const journeyNoteWasTouched = journeyNoteDraft !== undefined;
     const touchedRoutePointIds = new Set(Object.keys(routePointNoteDrafts));
     const input: JourneyInput = {
@@ -1062,6 +1085,29 @@ export function JourneyStory({
         setNotesMessage("感想已保存，但画面刷新失败；重新打开故事即可看到最新内容。");
       }
     } catch (error) {
+      if (error instanceof JourneyApiError && error.code === "JOURNEY_ROUTE_CHANGED") {
+        try {
+          const latestJourney = (await listJourneys()).find((candidate) => candidate.id === journey.id);
+          if (!latestJourney) {
+            setNotesMessage("这段旅程已不在当前图谱中。草稿仍在，请复制需要保留的感想。");
+            return;
+          }
+          if (onJourneyUpdated) await onJourneyUpdated(latestJourney);
+          else {
+            const refreshed = await onMediaAdded(journey.id);
+            if (!refreshed || refreshed.revision < latestJourney.revision) throw new Error("Story refresh unavailable");
+          }
+          const removedDraft = [...touchedRoutePointIds].some((id) => !latestJourney.routePoints.some((point) => point.id === id));
+          setNotesMessage(removedDraft
+            ? "旅程已更新，部分地点已被删除。草稿仍在，请复制需要保留的内容，再放弃对应地点草稿。"
+            : "旅程已更新，草稿已保留。请核对最新地点和感想，再点击保存感想。");
+        } catch {
+          setNotesMessage("旅程已更新，但读取最新内容失败。草稿仍在，请再次点击保存感想重试。");
+        } finally {
+          setNotesSaveState("error");
+        }
+        return;
+      }
       setNotesSaveState("error");
       setNotesMessage(error instanceof Error ? error.message : "感想保存失败，请稍后重试。");
     }
@@ -3938,6 +3984,7 @@ export function JourneyStory({
                 journeyNote={journeyNoteDraft ?? journey.note ?? ""}
                 selectedRoutePoint={notesRoutePoint}
                 selectedRoutePointNote={notesRoutePointNote}
+                removedRoutePointDrafts={removedRoutePointDrafts}
                 saving={mutationPending}
                 saveState={notesSaveState}
                 message={notesMessage}
@@ -3946,6 +3993,7 @@ export function JourneyStory({
                 onRoutePointNoteChange={setStoryRoutePointNote}
                 onSave={() => void saveStoryNotes()}
                 onDiscard={discardStoryNotes}
+                onDiscardRoutePointDraft={discardRemovedRoutePointDraft}
               />
             ) : (
               <>
