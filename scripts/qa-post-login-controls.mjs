@@ -1182,6 +1182,77 @@ async function verifyComposerGlobeRoundTrip() {
       if (successFailed) failed = true;
     }
 
+    // #255: the real desktop Atlas chrome must stay inert for the entire globe
+    // pick. The synthetic composer-only fixture cannot see these siblings, so
+    // drive the live LivingAtlasApp at a desktop viewport and grade the actual
+    // header, rail and active Journey card before and after suspension.
+    resetReverse("success");
+    await openFreshComposer(1280, 800);
+    const desktopPickTrigger = page.getByRole("button", { name: /直接在地球上取点/ });
+    await desktopPickTrigger.scrollIntoViewIfNeeded();
+    await settleRender();
+    await desktopPickTrigger.click();
+    await page.locator(".journey-globe-pick-hint").waitFor({ state: "visible" });
+    await page.waitForFunction(() => (
+      document.querySelector(".living-atlas")?.classList.contains("is-globe-picking")
+      && getComputedStyle(document.querySelector(".journey-composer")).visibility === "hidden"
+    ));
+    const desktopChromeDuringPick = await page.evaluate(() => {
+      const inert = (selector) => {
+        const element = document.querySelector(selector);
+        return element instanceof HTMLElement ? element.inert : null;
+      };
+      return {
+        header: inert(".living-atlas__header"),
+        rail: inert(".living-atlas__journey-rail"),
+        active: inert(".living-atlas__active"),
+      };
+    });
+
+    await page.locator(".journey-globe-pick-hint button").click();
+    await page.waitForFunction(() => (
+      !document.querySelector(".living-atlas")?.classList.contains("is-globe-picking")
+      && getComputedStyle(document.querySelector(".journey-composer")).visibility === "visible"
+    ));
+    await page.getByRole("button", { name: "关闭旅程编辑器" }).click();
+    await page.locator(".journey-composer").waitFor({ state: "detached" });
+
+    const desktopChromeAfterClose = await page.evaluate(() => {
+      const inert = (selector) => {
+        const element = document.querySelector(selector);
+        return element instanceof HTMLElement ? element.inert : null;
+      };
+      return {
+        header: inert(".living-atlas__header"),
+        rail: inert(".living-atlas__journey-rail"),
+        active: inert(".living-atlas__active"),
+      };
+    });
+    const earthNav = page.getByRole("button", { name: "地球", exact: true });
+    await earthNav.evaluate((button) => {
+      button.dataset.qaClickProbe = "armed";
+      button.addEventListener("click", () => {
+        button.dataset.qaClickProbe = "clicked";
+      }, { once: true });
+    });
+    await earthNav.click();
+    const headerNavClicked = await earthNav.evaluate((button) => button.dataset.qaClickProbe === "clicked");
+    const desktopChromeFailed = desktopChromeDuringPick.header !== true
+      || desktopChromeDuringPick.rail !== true
+      || desktopChromeDuringPick.active !== true
+      || desktopChromeAfterClose.header !== false
+      || desktopChromeAfterClose.rail !== false
+      || desktopChromeAfterClose.active !== false
+      || !headerNavClicked;
+    results.push({
+      name: "app-desktop-globe-pick-chrome-inert",
+      desktopChromeDuringPick,
+      desktopChromeAfterClose,
+      headerNavClicked,
+      failed: desktopChromeFailed,
+    });
+    if (desktopChromeFailed) failed = true;
+
     for (const mode of ["empty", "failure"]) {
       resetReverse(mode);
       await openFreshComposer(390, 844);
