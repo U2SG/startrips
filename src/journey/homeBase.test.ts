@@ -4,7 +4,6 @@ import {
   homeBasePeriodCoversDate,
   isHomeBaseSource,
   resolveHomeBaseForDate,
-  sortHomeBasePeriods,
   type HomeBasePeriodInterval,
 } from "./homeBase";
 
@@ -79,16 +78,6 @@ describe("resolveHomeBaseForDate", () => {
     expect(resolveHomeBaseForDate(overlapping, "2027-01-01")?.id).toBe(TOKYO);
     expect(resolveHomeBaseForDate([...overlapping].reverse(), "2027-01-01")?.id)
       .toBe(TOKYO);
-  });
-});
-
-describe("sortHomeBasePeriods", () => {
-  it("orders oldest first with the id as the final tiebreak", () => {
-    expect(sortHomeBasePeriods([
-      { id: TOKYO, startedOn: "2026-09-01", endedOn: null },
-      { id: LISBON, startedOn: "2022-06-01", endedOn: "2022-12-01" },
-      { id: SHENZHEN, startedOn: "2022-06-01", endedOn: "2026-09-01" },
-    ]).map((period) => period.id)).toEqual([SHENZHEN, LISBON, TOKYO]);
   });
 });
 

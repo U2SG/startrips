@@ -91,15 +91,6 @@ export function resolveHomeBaseForDate<T extends HomeBasePeriodInterval>(
   return resolved;
 }
 
-/** Chronological order, with the id as the final tiebreak. */
-export function sortHomeBasePeriods<T extends HomeBasePeriodInterval>(
-  periods: readonly T[],
-): T[] {
-  return [...periods].sort((first, second) =>
-    (first.startedOn < second.startedOn ? -1 : first.startedOn > second.startedOn ? 1 : 0)
-    || (first.id < second.id ? -1 : first.id > second.id ? 1 : 0));
-}
-
 export type HomeBasePeriodConflictCode =
   /** `endedOn` is not after `startedOn`, so the period answers for no date. */
   | "HOME_BASE_PERIOD_INVALID_INTERVAL"
