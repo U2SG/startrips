@@ -10,6 +10,8 @@ import {
   JourneyStory,
   finalizeMediaDragCommit,
   scheduleCancelableMediaDragSettle,
+  scheduleCancelableDeferredFullscreenEntry,
+  cancelPendingStoryMediaOwners,
   groupedPlacementRefreshSelection,
   journeyDeleteDescription,
   mobileStoryExpandedForLayout,
@@ -119,6 +121,86 @@ describe("scheduleCancelableMediaDragSettle (#140)", () => {
     expect(events).toEqual(["commit"]);
   });
 });
+
+describe("scheduleCancelableDeferredFullscreenEntry (#239)", () => {
+  it("cancels deferred fullscreen work before the deadline", () => {
+    const events: string[] = [];
+    const scheduled: { current: (() => void) | null } = { current: null };
+    const cancel = scheduleCancelableDeferredFullscreenEntry(
+      () => events.push("fullscreen"),
+      4,
+      () => 4,
+      220,
+      (callback, delay) => {
+        events.push(`schedule:${delay}`);
+        scheduled.current = callback;
+        return 17;
+      },
+      (timerId) => events.push(`clear:${timerId}`),
+    );
+
+    cancel();
+    scheduled.current?.();
+
+    expect(events).toEqual(["schedule:220", "clear:17"]);
+  });
+
+  it("drops a stale captured Story scope revision even if the timer fires", () => {
+    const run = vi.fn();
+    const scheduled: { current: (() => void) | null } = { current: null };
+    let revision = 8;
+    scheduleCancelableDeferredFullscreenEntry(
+      run,
+      revision,
+      () => revision,
+      220,
+      (callback) => {
+        scheduled.current = callback;
+        return 19;
+      },
+      () => undefined,
+    );
+
+    revision += 1;
+    scheduled.current?.();
+
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("keeps reduced-motion delay zero deferred and cancellable", () => {
+    const run = vi.fn();
+    const scheduled: { current: (() => void) | null } = { current: null };
+    const delays: number[] = [];
+    const cancel = scheduleCancelableDeferredFullscreenEntry(
+      run,
+      1,
+      () => 1,
+      0,
+      (callback, delay) => {
+        delays.push(delay);
+        scheduled.current = callback;
+        return 23;
+      },
+      () => undefined,
+    );
+
+    expect(run).not.toHaveBeenCalled();
+    expect(delays).toEqual([0]);
+    cancel();
+    scheduled.current?.();
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("one Story cancellation clears drag settle and deferred fullscreen owners", () => {
+    const events: string[] = [];
+    cancelPendingStoryMediaOwners(
+      () => events.push("drag-settle"),
+      () => events.push("deferred-fullscreen"),
+    );
+    expect(events).toEqual(["drag-settle", "deferred-fullscreen"]);
+  });
+});
+
 
 function asset(
   id: string,
