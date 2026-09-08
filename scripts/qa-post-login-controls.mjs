@@ -2471,11 +2471,17 @@ async function verifyFinalAcceptanceMobileFlow() {
       await page.waitForFunction(() => (
         document.querySelector(".journey-playback")?.getAttribute("data-playback-phase") === "media"
       ), null, { timeout: 2_000 });
-      const returnedMedia = page.locator('.journey-playback [data-shared-media-id="fa-image-2"]');
-      await returnedMedia.waitFor({ state: "visible", timeout: 5_000 });
-      await page.waitForFunction(() => (
-        document.querySelector(".journey-playback")?.getAttribute("data-playback-presentation-hold") === "none"
-      ), null, { timeout: 5_000 });
+      const returnedMediaStage = page.locator('.journey-playback__media[data-requested-asset="fa-image-2"]');
+      await returnedMediaStage.waitFor({ state: "visible", timeout: 5_000 });
+      // PlaybackMediaStage is the presentation owner. Require the requested
+      // semantic destination to become the successfully presented/settled frame
+      // before exit; a failed or merely requested asset is not a return commit.
+      await page.waitForFunction(() => {
+        const stage = document.querySelector('.journey-playback__media[data-requested-asset="fa-image-2"]');
+        return stage?.getAttribute("data-presented-asset") === "fa-image-2"
+          && stage?.getAttribute("data-media-presentation") === "settled"
+          && document.querySelector(".journey-playback")?.getAttribute("data-playback-presentation-hold") === "none";
+      }, null, { timeout: 5_000 });
       // Freeze the now-presented beat before exiting so the autoplay clock cannot
       // advance after the presentation owner has committed the return identity.
       const pauseControl = page.locator('.journey-playback__controls button[aria-label="暂停播放"]');
