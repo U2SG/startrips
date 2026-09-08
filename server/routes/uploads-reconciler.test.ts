@@ -47,6 +47,15 @@ function storageWithInspection(
     },
     async completeMultipartUpload() {},
     abortMultipartUpload: vi.fn(async () => undefined),
+    async listObjects() {
+      return { keys: [] };
+    },
+    async readObject() {
+      return { exists: false as const };
+    },
+    async signObjectUpload() {
+      return { url: "https://unused", expiresAt: new Date(0) };
+    },
     deleteObject: vi.fn(async () => undefined),
     inspectObject: vi.fn(async () => inspection),
     async createPrivateReadUrl() {

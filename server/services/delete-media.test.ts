@@ -21,6 +21,12 @@ const ASSET: Asset = {
   contentHash: null,
   sortOrder: 0,
   uploadedByUserId: "user-1",
+  displayWidth: null,
+  displayHeight: null,
+  previewStorageKey: null,
+  previewMimeType: null,
+  previewBytes: null,
+  previewState: "none",
   createdAt: new Date("2026-08-12T00:00:00.000Z"),
 };
 
@@ -35,6 +41,15 @@ function dependencies(asset: Asset | undefined) {
     },
     async completeMultipartUpload() {},
     async abortMultipartUpload() {},
+    async listObjects() {
+      return { keys: [] };
+    },
+    async readObject() {
+      return { exists: false as const };
+    },
+    async signObjectUpload() {
+      return { url: "https://unused", expiresAt: new Date(0) };
+    },
     deleteObject: vi.fn(async () => undefined),
     async inspectObject() {
       return { exists: true, bytes: 16 };

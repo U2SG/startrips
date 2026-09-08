@@ -5,6 +5,10 @@ import { requireAtlasAccess } from "../authorization/atlas-access";
 import { serverConfig } from "../config";
 import { db } from "../db/client";
 import {
+  servablePreview,
+  type PreviewCeilings,
+} from "../media/preview-derivation";
+import {
   atlases,
   journeyRoutePoints,
   mediaAssets,
@@ -12,6 +16,11 @@ import {
   journeys,
 } from "../db/app-schema";
 import { deleteMediaAssetForAtlas } from "../services/delete-media";
+import {
+  beginAssetPreview,
+  completeAssetPreview,
+  type PreviewSourceValues,
+} from "../services/media-preview";
 import { getJourneyForAtlas } from "../repositories/journey-repository";
 import {
   getMultipartStorage,
@@ -23,6 +32,7 @@ import {
   type MultipartStorage,
 } from "../storage/multipart-storage";
 import { readJsonObject } from "./json-body";
+import type { PrivateMediaRead } from "../../src/journey/types";
 
 const PART_SIZE = 8 * 1024 * 1024;
 const MAX_UPLOAD_BYTES = 2_000_000_000;
@@ -1100,32 +1110,163 @@ uploadRoutes.delete("/:id", async (context) => {
   return context.body(null, 204);
 });
 
-uploadRoutes.get("/assets/:id/read-url", async (context) => {
-  const { atlas } = await requireAtlasAccess(context.req.raw, "read");
+/**
+ * #260: sign the owner read of one asset, and its preview when there is one.
+ *
+ * The original is signed first and is never conditional: whatever happens to
+ * the preview, this function either returns the original or throws the same
+ * `StorageUnavailableError` the route threw before #260, so a preview can
+ * neither add a failure mode nor change an existing one.
+ *
+ * The preview signature, by contrast, is best-effort by construction. A
+ * preview is an optimisation over an original that already works, so a backend
+ * that cannot sign the derived key must produce a response without the block
+ * rather than an error: the alternative would let a stale or unreachable
+ * derived object take down a read of media that is perfectly available.
+ *
+ * `resolveStorage` is injectable for tests only, the same seam
+ * `signSharedMediaRead` uses; the route always passes the real registry.
+ */
+export async function signPrivateMediaRead(
+  asset: typeof mediaAssets.$inferSelect,
+  expiresInSeconds: number,
+  resolveStorage: (driver: string) => MultipartStorage = getMultipartStorage,
+): Promise<PrivateMediaRead> {
+  const storage = resolveStorage(asset.storageDriver);
+  const signed = await storage.createPrivateReadUrl({
+    key: asset.storageKey,
+    expiresInSeconds,
+  });
+  const read: PrivateMediaRead = {
+    url: signed.url,
+    expiresAt: signed.expiresAt.toISOString(),
+  };
+
+  const preview = servablePreview(asset);
+  if (!preview) return read;
+  try {
+    const signedPreview = await storage.createPrivateReadUrl({
+      key: preview.storageKey,
+      expiresInSeconds,
+    });
+    read.preview = {
+      url: signedPreview.url,
+      expiresAt: signedPreview.expiresAt.toISOString(),
+      mimeType: preview.mimeType,
+      width: preview.width,
+      height: preview.height,
+    };
+  } catch (error) {
+    console.error(
+      "Preview read URL signing failed",
+      asset.id,
+      error instanceof Error ? error.message : "unknown error",
+    );
+  }
+  return read;
+}
+
+/** One asset of this Atlas, in a Journey that is not deleting. */
+async function findAssetForAtlas(assetId: string, atlasId: string) {
   const [row] = await db
     .select({ asset: mediaAssets })
     .from(mediaAssets)
     .innerJoin(journeys, eq(journeys.id, mediaAssets.journeyId))
     .where(
       and(
-        eq(mediaAssets.id, context.req.param("id")),
-        eq(journeys.atlasId, atlas.id),
+        eq(mediaAssets.id, assetId),
+        eq(journeys.atlasId, atlasId),
         isNull(journeys.deletionStartedAt),
       ),
     )
     .limit(1);
-  if (!row) return context.json({ error: "MEDIA_NOT_FOUND" }, 404);
+  return row?.asset;
+}
 
-  const signed = await getMultipartStorage(
-    row.asset.storageDriver,
-  ).createPrivateReadUrl({
-    key: row.asset.storageKey,
-    expiresInSeconds: serverConfig.mediaReadUrlExpiresInSeconds,
-  });
-  return context.json({
-    url: signed.url,
-    expiresAt: signed.expiresAt.toISOString(),
-  });
+function previewCeilings(): PreviewCeilings {
+  return {
+    maxEdgePixels: serverConfig.mediaPreviewMaxEdgePixels,
+    maxBytes: serverConfig.mediaPreviewMaxBytes,
+  };
+}
+
+type PreviewRequest = {
+  sourceWidth?: unknown;
+  sourceHeight?: unknown;
+  exifOrientation?: unknown;
+};
+
+/**
+ * The only three things a producer is allowed to say about the source. Shape
+ * only: whether the numbers describe a real image is
+ * `planPreviewDerivation`'s decision, so there is exactly one place that knows
+ * what a derivable source is.
+ */
+export function readPreviewRequest(
+  parsed: unknown,
+): PreviewSourceValues | null {
+  if (typeof parsed !== "object" || parsed === null) return null;
+  const body = parsed as PreviewRequest;
+  const exifOrientation = body.exifOrientation;
+  if (
+    typeof body.sourceWidth !== "number"
+    || typeof body.sourceHeight !== "number"
+    || (exifOrientation !== undefined
+      && exifOrientation !== null
+      && typeof exifOrientation !== "number")
+  ) {
+    return null;
+  }
+  return {
+    sourceWidth: body.sourceWidth,
+    sourceHeight: body.sourceHeight,
+    exifOrientation: (exifOrientation ?? null) as number | null,
+  };
+}
+
+/** #260 step 1: plan the preview and sign a write for exactly that plan. */
+uploadRoutes.post("/assets/:id/preview", async (context) => {
+  const { atlas } = await requireAtlasAccess(context.req.raw, "update");
+  const asset = await findAssetForAtlas(context.req.param("id"), atlas.id);
+  if (!asset) return context.json({ error: "MEDIA_NOT_FOUND" }, 404);
+
+  const values = readPreviewRequest(await context.req.json().catch(() => null));
+  if (!values) return context.json({ error: "INVALID_PREVIEW_REQUEST" }, 400);
+
+  const result = await beginAssetPreview(
+    asset,
+    values,
+    previewCeilings(),
+    serverConfig.mediaPreviewUploadExpiresInSeconds,
+  );
+  if (!result.ok) {
+    return context.json({ error: result.error }, result.status);
+  }
+  return context.json({ upload: result.upload, preview: result.preview });
+});
+
+/** #260 step 2: measure what was written, then make it servable — or not. */
+uploadRoutes.post("/assets/:id/preview/complete", async (context) => {
+  const { atlas } = await requireAtlasAccess(context.req.raw, "update");
+  const asset = await findAssetForAtlas(context.req.param("id"), atlas.id);
+  if (!asset) return context.json({ error: "MEDIA_NOT_FOUND" }, 404);
+
+  const result = await completeAssetPreview(asset, previewCeilings());
+  if (!result.ok) {
+    return context.json({ error: result.error }, result.status);
+  }
+  return context.json({ preview: result.preview });
+});
+
+uploadRoutes.get("/assets/:id/read-url", async (context) => {
+  const { atlas } = await requireAtlasAccess(context.req.raw, "read");
+  const asset = await findAssetForAtlas(context.req.param("id"), atlas.id);
+  if (!asset) return context.json({ error: "MEDIA_NOT_FOUND" }, 404);
+
+  return context.json(await signPrivateMediaRead(
+    asset,
+    serverConfig.mediaReadUrlExpiresInSeconds,
+  ));
 });
 
 uploadRoutes.delete("/assets/:id", async (context) => {

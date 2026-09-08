@@ -12,6 +12,7 @@ import {
   shareGrants,
 } from "../db/app-schema";
 import { db } from "../db/client";
+import type { PreviewColumns } from "../media/preview-derivation";
 
 /**
  * What the route needs to sign one guest media read: which backend holds the
@@ -24,6 +25,14 @@ import { db } from "../db/client";
 export type SharedMediaRead = {
   storageDriver: string;
   storageKey: string;
+  /**
+   * #260: the derived preview of the SAME asset, resolved by the same
+   * authorization query as the original above and never by a second lookup.
+   * A separate preview resolution would be a second, weaker path to an
+   * object under a Journey the grant may not select; there is only one path,
+   * so a preview cannot reach further than the original it belongs to.
+   */
+  preview: PreviewColumns;
   /**
    * The grant's expiry as an absolute instant, not a duration.
    *
@@ -140,6 +149,11 @@ export async function resolveSharedMediaRead(
         .select({
           storageDriver: mediaAssets.storageDriver,
           storageKey: mediaAssets.storageKey,
+          previewStorageKey: mediaAssets.previewStorageKey,
+          previewMimeType: mediaAssets.previewMimeType,
+          previewState: mediaAssets.previewState,
+          displayWidth: mediaAssets.displayWidth,
+          displayHeight: mediaAssets.displayHeight,
         })
         .from(mediaAssets)
         .innerJoin(journeys, eq(journeys.id, mediaAssets.journeyId))
@@ -156,7 +170,13 @@ export async function resolveSharedMediaRead(
         .limit(1);
       if (!row) return null;
 
-      return { ...row, grantExpiresAt: current.expiresAt };
+      const { storageDriver, storageKey, ...preview } = row;
+      return {
+        storageDriver,
+        storageKey,
+        preview,
+        grantExpiresAt: current.expiresAt,
+      };
     },
     { isolationLevel: "repeatable read", accessMode: "read only" },
   );

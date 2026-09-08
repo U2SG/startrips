@@ -56,6 +56,41 @@ export function loadServerConfig(
   const shareMediaReadUrlExpiresInSeconds = Number(
     environment.SHARE_MEDIA_READ_URL_EXPIRES_IN_SECONDS ?? 90,
   );
+  // #260: the two ceilings every derived preview is planned against, and both
+  // are enforced against the object that actually landed rather than against
+  // the plan a producer was handed.
+  //
+  // Completion measures the produced object's byte size and reads it back to
+  // establish its encoded pixel size; a preview that breaks either ceiling
+  // never reaches "ready" and is never signed. So a consumer may treat both
+  // numbers as properties of anything it is served, which is what makes the
+  // longest-edge ceiling usable as a decode-cost bound.
+  //
+  // 640 px carries a full-bleed phone frame at 2x without approaching the
+  // original, and 512 KiB is several times what a 640 px JPEG of a photograph
+  // costs, so the byte ceiling bites only on pathological input.
+  const mediaPreviewMaxEdgePixels = Number(
+    environment.MEDIA_PREVIEW_MAX_EDGE_PIXELS ?? 640,
+  );
+  const mediaPreviewMaxBytes = Number(
+    environment.MEDIA_PREVIEW_MAX_BYTES ?? 512 * 1024,
+  );
+  // The preview write is presigned to its own short lifetime rather than
+  // borrowing the multipart part window. A single-object PUT has no upload
+  // session, so there is nothing to abort mid-flight. A producer calls
+  // `POST .../preview` with the still already rasterised and under
+  // `MEDIA_PREVIEW_MAX_BYTES`, so two minutes is generous, and it bounds the
+  // window in which a write issued just before a Journey is deleted could
+  // still land after the row cascaded away. What that write leaves behind is
+  // not bounded by this clock at all, and deliberately so: an expired
+  // signature says a new request cannot START, never that one already running
+  // has finished. `reconcilePreviewWrites()` retires the keys it recorded, and
+  // `reconcilePreviewNamespace()` enumerates the preview prefix itself and
+  // deletes every object no `media_assets` row references, so a late write is
+  // discoverable however long it took to arrive.
+  const mediaPreviewUploadExpiresInSeconds = Number(
+    environment.MEDIA_PREVIEW_UPLOAD_EXPIRES_IN_SECONDS ?? 120,
+  );
   // #200 phase F: the guest prefix is the only public, unauthenticated surface
   // Startrips exposes, so it carries its own budgets rather than the blanket
   // `/api/*` bucket #217 removed. One window, three ceilings; see
@@ -142,6 +177,33 @@ export function loadServerConfig(
   ) {
     throw new Error(
       "SHARE_MEDIA_READ_URL_EXPIRES_IN_SECONDS must be between 15 and 600",
+    );
+  }
+  if (
+    !Number.isInteger(mediaPreviewMaxEdgePixels)
+    || mediaPreviewMaxEdgePixels < 64
+    || mediaPreviewMaxEdgePixels > 4096
+  ) {
+    throw new Error(
+      "MEDIA_PREVIEW_MAX_EDGE_PIXELS must be between 64 and 4096",
+    );
+  }
+  if (
+    !Number.isInteger(mediaPreviewUploadExpiresInSeconds)
+    || mediaPreviewUploadExpiresInSeconds < 30
+    || mediaPreviewUploadExpiresInSeconds > 15 * 60
+  ) {
+    throw new Error(
+      "MEDIA_PREVIEW_UPLOAD_EXPIRES_IN_SECONDS must be between 30 and 900",
+    );
+  }
+  if (
+    !Number.isInteger(mediaPreviewMaxBytes)
+    || mediaPreviewMaxBytes < 16 * 1024
+    || mediaPreviewMaxBytes > 8 * 1024 * 1024
+  ) {
+    throw new Error(
+      "MEDIA_PREVIEW_MAX_BYTES must be between 16384 and 8388608",
     );
   }
   // The floors are product floors, not safety margins: #200 is explicit that a
@@ -266,6 +328,9 @@ export function loadServerConfig(
     s3UploadPartExpiresInSeconds,
     mediaReadUrlExpiresInSeconds,
     shareMediaReadUrlExpiresInSeconds,
+    mediaPreviewMaxEdgePixels,
+    mediaPreviewMaxBytes,
+    mediaPreviewUploadExpiresInSeconds,
     shareRateLimitWindowSeconds,
     shareDataRateLimit,
     shareMediaRateLimit,

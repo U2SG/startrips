@@ -40,9 +40,14 @@ export async function deleteMediaAssetForAtlas(
 ) {
   const asset = await dependencies.findAsset(assetId, atlasId);
   if (!asset) return false;
-  await dependencies.storageForBackend(asset.storageDriver).deleteObject({
-    key: asset.storageKey,
-  });
+  const storage = dependencies.storageForBackend(asset.storageDriver);
+  // #260: the derived preview goes first. It exists only for this asset, so
+  // the row that names it is the only record of it anywhere; deleting the row
+  // before the object is what would leave an unreachable orphan behind.
+  if (asset.previewStorageKey) {
+    await storage.deleteObject({ key: asset.previewStorageKey });
+  }
+  await storage.deleteObject({ key: asset.storageKey });
   await dependencies.deleteRow(asset.id);
   return true;
 }

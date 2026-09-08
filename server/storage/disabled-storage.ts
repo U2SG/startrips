@@ -21,7 +21,16 @@ export const disabledStorage: MultipartStorage = {
   async abortMultipartUpload() {
     return unavailable();
   },
+  async signObjectUpload() {
+    return unavailable();
+  },
   async deleteObject() {
+    return unavailable();
+  },
+  async listObjects() {
+    return unavailable();
+  },
+  async readObject() {
     return unavailable();
   },
   async inspectObject() {
