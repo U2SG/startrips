@@ -2147,7 +2147,7 @@ try {
       const sample = (now) => {
         const next = new Map();
         for (const node of root.querySelectorAll("[data-media-page-id]")) {
-          const clip = getComputedStyle(node).clipPath.match(/[-\d.]+/g)?.map(Number) ?? [0, 0];
+          const clip = getComputedStyle(node).clipPath.match(/[-+]?(?:\d*\.?\d+)(?:e[-+]?\d+)?/gi)?.map(Number) ?? [0, 0];
           const state = { clip: [clip[0], clip[1] ?? clip[0]],
             role: `${node.dataset.mediaPage}:${node.dataset.mediaIncoming ?? "false"}` };
           const before = previous.get(node.dataset.mediaPageId);

@@ -103,7 +103,7 @@ function computedValues(element: HTMLElement, withClip = false): number[] {
   const matrix = new DOMMatrixReadOnly(!style.transform || style.transform === "none" ? undefined : style.transform);
   // Opt-in symmetric percentage insets share the transform's clock and
   // interruption velocity. Callers initialize these before starting motion.
-  const inset = style.clipPath.match(/^inset\(([-\d.]+)%(?:\s+([-\d.]+)%)?\)$/);
+  const inset = style.clipPath.match(/^inset\(([-+\d.e]+)%(?:\s+([-+\d.e]+)%)?\)$/i);
   return [...matrix.toFloat64Array(), Number.parseFloat(style.opacity) || 0,
     ...(withClip ? [Number(inset?.[1] ?? 0), Number(inset?.[2] ?? inset?.[1] ?? 0)] : [])];
 }
