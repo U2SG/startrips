@@ -35,8 +35,16 @@ import {
 } from "./quickRecapPlayback";
 import type { PlaybackCameraTarget, PlaybackStep } from "./journeyPlayback";
 import type { PlaybackTempo } from "./journeyPlaybackPlan";
+import {
+  capturePlaybackEntry,
+  resolvePlaybackReturn,
+  type PlaybackEntry,
+  type PlaybackLogicalPosition,
+  type PlaybackReturnReason,
+  type StorySnapState,
+} from "./playbackReturn";
 import { PLAYBACK_INITIAL_TEMPO } from "./useJourneyPlaybackDirector";
-import { JourneyStory } from "./JourneyStory";
+import { JourneyStory, type StoryLogicalObservation } from "./JourneyStory";
 import {
   cachedSoundtrackRead,
   prefetchSoundtrackRead,
@@ -66,6 +74,40 @@ import type { Journey, JourneyRoute } from "./types";
 type AtlasView = "planet" | "timeline";
 
 type AtlasNotice = { id: number; message: string };
+
+export function capturePlaybackEntryForContext(
+  journeyId: string,
+  storyJourneyId: string | null,
+  storyRoutePointId: string | null,
+  observation: StoryLogicalObservation | null,
+  intentRevision: number,
+): PlaybackEntry {
+  const storyOwnsEntry = storyJourneyId === journeyId;
+  // Entry surface and last observed Story media are deliberately independent.
+  // A viewer may close Story after browsing A -> D and start Playback from the
+  // Atlas card; D remains the session's logical observation even though the
+  // Playback entry source is now Atlas.
+  const currentObservation = observation?.journeyId === journeyId ? observation : null;
+  return capturePlaybackEntry({
+    journeyId,
+    routePointId: currentObservation?.routePointId
+      ?? (storyOwnsEntry ? storyRoutePointId : null),
+    assetId: currentObservation?.assetId ?? null,
+    intentRevision,
+    source: storyOwnsEntry ? "story" : "atlas",
+    storySnapState: currentObservation?.storySnapState
+      ?? (storyOwnsEntry ? "expanded" : "closed"),
+  });
+}
+
+export function pendingPlaybackStoryRestore(entry: PlaybackEntry | null) {
+  if (!entry || entry.source !== "story") return null;
+  return {
+    journeyId: entry.journeyId,
+    routePointId: entry.routePointId,
+    assetId: entry.assetId,
+  };
+}
 
 export function nextAtlasNotice(current: AtlasNotice | null, message: string): AtlasNotice {
   return { id: (current?.id ?? 0) + 1, message };
@@ -359,6 +401,11 @@ export function LivingAtlasApp({
   const [view, setView] = useState<AtlasView>("planet");
   const [storyJourneyId, setStoryJourneyId] = useState<string | null>(null);
   const [storyRoutePointId, setStoryRoutePointId] = useState<string | null>(null);
+  const [storyInitialAssetId, setStoryInitialAssetId] = useState<string | null>(null);
+  const [storyInitialSnapState, setStoryInitialSnapState] = useState<Exclude<StorySnapState, "closed">>("in-context");
+  const storyObservationRef = useRef<StoryLogicalObservation | null>(null);
+  const playbackReturnIntentRevisionRef = useRef(0);
+  const playbackEntryRef = useRef<PlaybackEntry | null>(null);
   // #19: cinematic journey playback. The globe stays mounted underneath; the
   // director drives phases and the overlay translates them into focus calls.
   const [playbackSession, setPlaybackSession] = useState<PlaybackSessionState>({
@@ -373,6 +420,7 @@ export function LivingAtlasApp({
     mode: "full" | "quick-recap";
     fallbackMessage: string | null;
   } | null>(null);
+  const previousPlaybackPendingRef = useRef<typeof playbackPendingMode>(null);
   const [playbackFallbackMessage, setPlaybackFallbackMessage] = useState<string | null>(null);
   const [playbackReleaseFocusRevision, setPlaybackReleaseFocusRevision] = useState(0);
   // Review P1: when the soundtrack read is not cached yet, the first click
@@ -395,6 +443,9 @@ export function LivingAtlasApp({
     setNotice((current) => nextAtlasNotice(current, message));
   }, []);
   const clearNotice = useCallback(() => setNotice(null), []);
+  const handleStoryObservationChange = useCallback((observation: StoryLogicalObservation | null) => {
+    storyObservationRef.current = observation;
+  }, []);
   const [globePickActive, setGlobePickActive] = useState(false);
   const [draftRoute, setDraftRoute] = useState<JourneyRoute | null>(null);
   // #8: globe-only focus mode hides every sidebar/card and lets the globe take
@@ -625,6 +676,42 @@ export function LivingAtlasApp({
     setPlaybackPendingMode(null);
     setPlaybackFallbackMessage(null);
   }, [focusRevision, playbackOwnership.releaseStaleState, playbackSession.cameraCommand?.revision]);
+  useEffect(() => {
+    if (!playbackPendingMode || !activeJourneyId) return;
+    if (activeJourneyId === playbackPendingMode.journeyId) return;
+    // A selection change can arrive through more than one UI surface. Make the
+    // newer-intent claim here too, at the ownership boundary, so a pending
+    // soundtrack completion can never restore the Story that initiated it.
+    if (playbackEntryRef.current?.intentRevision === playbackReturnIntentRevisionRef.current) {
+      playbackReturnIntentRevisionRef.current += 1;
+    }
+    setPlaybackPendingMode(null);
+    setPlaybackFallbackMessage(null);
+  }, [activeJourneyId, playbackPendingMode]);
+
+  useEffect(() => {
+    const previous = previousPlaybackPendingRef.current;
+    previousPlaybackPendingRef.current = playbackPendingMode;
+    if (!previous || playbackPendingMode || playbackSession.journeyId !== null) return;
+    const entry = playbackEntryRef.current;
+    if (!entry || entry.journeyId !== previous.journeyId) return;
+    const resolution = resolvePlaybackReturn({
+      entry,
+      committedPosition: null,
+      reason: "exited",
+      currentIntentRevision: playbackReturnIntentRevisionRef.current,
+      journeys,
+    });
+    playbackEntryRef.current = null;
+    if (resolution?.surface !== "story") return;
+    timeCursor.selectJourney(resolution.journeyId);
+    setStoryRoutePointId(resolution.routePointId);
+    setStoryInitialAssetId(resolution.assetId);
+    setStoryInitialSnapState(
+      resolution.storySnapState === "expanded" ? "expanded" : "in-context",
+    );
+    setStoryJourneyId(resolution.journeyId);
+  }, [journeys, playbackPendingMode, playbackSession.journeyId, timeCursor.selectJourney]);
   const mobileSheetJourney = journeys.find((journey) => journey.id === mobileSheetJourneyId) ?? null;
   const mobileMapJourney = journeys.find((journey) => journey.id === mobileMapJourneyId) ?? null;
   const mobileMapRoute = routes.find((route) => route.id === mobileMapJourneyId) ?? null;
@@ -640,7 +727,13 @@ export function LivingAtlasApp({
     ? playbackFocusRouteForCameraTarget(playbackJourneyRoute, playbackCameraTarget)
     : null;
 
+  function claimPlaybackReturnIntent() {
+    playbackReturnIntentRevisionRef.current += 1;
+    return playbackReturnIntentRevisionRef.current;
+  }
+
   function selectMobileJourney(journeyId: string) {
+    claimPlaybackReturnIntent();
     timeCursor.selectJourney(journeyId);
     setView("planet");
     setMobilePickerOpen(false);
@@ -716,6 +809,7 @@ export function LivingAtlasApp({
   }
 
   function selectJourney(journeyId: string, source?: HTMLElement | null) {
+    claimPlaybackReturnIntent();
     morphJourneyCard(source ?? null, activeJourneyId !== null, () => {
       timeCursor.selectJourney(journeyId);
       setArrivalJourneyId(journeyId);
@@ -727,6 +821,9 @@ export function LivingAtlasApp({
   // Transition would also snapshot the independently named active journey card
   // and leave that whole card floating above the Story's blurred backdrop.
   function openJourneyStory(journeyId: string, routePointId: string | null) {
+    claimPlaybackReturnIntent();
+    setStoryInitialAssetId(null);
+    setStoryInitialSnapState("in-context");
     const targetJourney = journeys.find((candidate) => candidate.id === journeyId) ?? null;
     const sharedCoverId = routePointId === null && targetJourney
       ? journeyCover(targetJourney)?.id ?? null
@@ -766,12 +863,20 @@ export function LivingAtlasApp({
 
   function closeJourneyStory(source: HTMLElement | null) {
     const journeyId = storyJourneyId;
+    claimPlaybackReturnIntent();
+    if (playbackPendingMode?.journeyId === journeyId && playbackSession.journeyId === null) {
+      playbackEntryRef.current = null;
+      setPlaybackPendingMode(null);
+      setPlaybackFallbackMessage(null);
+    }
     runSharedElementMorph({
       source,
       name: `journey-cover-${journeyId ?? "story"}`,
       update: () => {
         setStoryJourneyId(null);
         setStoryRoutePointId(null);
+        setStoryInitialAssetId(null);
+        setStoryInitialSnapState("in-context");
       },
       resolveTarget: () => document.querySelector<HTMLElement>(
         ".living-atlas__active-media img, .living-atlas__active-media video",
@@ -792,8 +897,18 @@ export function LivingAtlasApp({
   ) {
     const journey = journeys.find((candidate) => candidate.id === journeyId) ?? null;
     if (!journey) return;
-    setStoryJourneyId(null);
-    setStoryRoutePointId(null);
+    const continuingPending = playbackPendingMode?.journeyId === journeyId
+      && playbackEntryRef.current?.journeyId === journeyId;
+    const entryRevision = continuingPending
+      ? playbackEntryRef.current!.intentRevision
+      : claimPlaybackReturnIntent();
+    playbackEntryRef.current = capturePlaybackEntryForContext(
+      journeyId,
+      storyJourneyId,
+      storyRoutePointId,
+      storyObservationRef.current,
+      entryRevision,
+    );
 
     let mode = requestedMode;
     let quickRecap: PreparedQuickRecapPlayback | null = null;
@@ -835,6 +950,10 @@ export function LivingAtlasApp({
     setPlaybackFallbackMessage(fallbackMessage);
     setPlaybackPendingMode(null);
     setPlaybackModeMenuJourneyId(null);
+    setStoryJourneyId(null);
+    setStoryRoutePointId(null);
+    setStoryInitialAssetId(null);
+    setStoryInitialSnapState("in-context");
     setPlaybackSession({
       journeyId,
       soundtrackRead: cachedRead,
@@ -890,6 +1009,50 @@ export function LivingAtlasApp({
       return rebuilt.playback ?? current;
     });
   }, [playbackSourceJourney]);
+
+  function handlePlaybackClose(handoff: {
+    reason: PlaybackReturnReason;
+    position: PlaybackLogicalPosition | null;
+  }) {
+    const entry = playbackEntryRef.current;
+    playbackEntryRef.current = null;
+    setPlaybackReleaseFocusRevision((current) => nextPlaybackReleaseFocusRevision(
+      current,
+      playbackSession.cameraCommand?.revision ?? 0,
+      focusRevision,
+    ));
+    setPlaybackSession({ journeyId: null, soundtrackRead: null, cameraCommand: null });
+    setPlaybackQuickRecap(null);
+    setPlaybackPendingMode(null);
+    setPlaybackFallbackMessage(null);
+    if (!entry) return;
+
+    const resolution = resolvePlaybackReturn({
+      entry,
+      committedPosition: handoff.position,
+      reason: handoff.reason,
+      currentIntentRevision: playbackReturnIntentRevisionRef.current,
+      journeys,
+    });
+    if (!resolution) return;
+    if (resolution.journeyId) timeCursor.selectJourney(resolution.journeyId);
+    if (resolution.surface === "atlas") {
+      setStoryJourneyId(null);
+      setStoryRoutePointId(null);
+      setStoryInitialAssetId(null);
+      setStoryInitialSnapState("in-context");
+      if (resolution.fallbackReason === "journey-unavailable") {
+        showNotice("这段旅程已不在当前图谱中，已返回图谱。");
+      }
+      return;
+    }
+    setStoryRoutePointId(resolution.routePointId);
+    setStoryInitialAssetId(resolution.assetId);
+    setStoryInitialSnapState(
+      resolution.storySnapState === "expanded" ? "expanded" : "in-context",
+    );
+    setStoryJourneyId(resolution.journeyId);
+  }
 
   function startGlobePick(accept: (point: GlobePointPick) => void) {
     globePickAccept.current = accept;
@@ -1057,8 +1220,11 @@ export function LivingAtlasApp({
           journeys={journeys}
           activeJourneyId={activeJourneyId}
           onOpenStory={(id: string) => {
+            claimPlaybackReturnIntent();
             timeCursor.selectJourney(id);
             setStoryRoutePointId(null);
+            setStoryInitialAssetId(null);
+            setStoryInitialSnapState("in-context");
             setStoryJourneyId(id);
           }}
           onCreate={canCreateJourney ? openCreateComposer : undefined}
@@ -1435,10 +1601,16 @@ export function LivingAtlasApp({
           journeys={journeys}
           journeyId={storyJourneyId}
           routePointId={storyRoutePointId}
+          initialAssetId={storyInitialAssetId}
+          initialSnapState={storyInitialSnapState}
+          onObservationChange={handleStoryObservationChange}
           onClose={(source) => closeJourneyStory(source ?? null)}
           onNavigate={(id) => {
+            claimPlaybackReturnIntent();
             timeCursor.selectJourney(id);
             setStoryRoutePointId(null);
+            setStoryInitialAssetId(null);
+            setStoryInitialSnapState("in-context");
             setStoryJourneyId(id);
           }}
           onEdit={canEditJourney ? editJourney : undefined}
@@ -1471,12 +1643,7 @@ export function LivingAtlasApp({
       {playbackSession.journeyId ? (
         <JourneyPlaybackOverlay
           journey={playbackJourney}
-          onClose={() => {
-            setPlaybackSession({ journeyId: null, soundtrackRead: null, cameraCommand: null });
-            setPlaybackQuickRecap(null);
-            setPlaybackPendingMode(null);
-            setPlaybackFallbackMessage(null);
-          }}
+          onClose={handlePlaybackClose}
           onCameraTargetChange={(target) => {
             setPlaybackSession((current) => ({
               ...current,

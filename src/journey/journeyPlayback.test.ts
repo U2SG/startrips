@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildPlaybackSteps,
+  committedPlaybackPosition,
   initialPlaybackState,
   isPlaybackTerminalState,
   playbackReducer,
@@ -337,6 +338,44 @@ describe("playbackTravelChoreography (#126)", () => {
     expect(playbackTravelChoreography(target, 1)).toBe("long-haul");
     expect(playbackCameraTargetForStep({ kind: "travel", to: 1 }, target)).toMatchObject({
       choreography: "long-haul",
+    });
+  });
+});
+
+
+describe("committedPlaybackPosition (#245)", () => {
+  it("derives logical identity from the committed media step", () => {
+    const steps = buildPlaybackSteps(journey);
+    const mediaStep = steps.find((step) => step.kind === "media" && step.pointIndex === 1);
+    expect(committedPlaybackPosition(journey, mediaStep)).toEqual({
+      journeyId: journey.id,
+      routePointId: "point-1",
+      assetId: "media-1",
+    });
+  });
+
+  it("uses the committed step rather than an unrelated pending seek target", () => {
+    const steps = buildPlaybackSteps(journey);
+    const committed = steps.find((step) => step.kind === "media" && step.pointIndex === 0);
+    const pendingSeekTarget = steps.find((step) => step.kind === "media" && step.pointIndex === 1);
+    expect(pendingSeekTarget).not.toEqual(committed);
+    expect(committedPlaybackPosition(journey, committed)).toEqual({
+      journeyId: journey.id,
+      routePointId: "point-0",
+      assetId: "media-0",
+    });
+  });
+
+  it("keeps intro/outro at Journey-level context", () => {
+    expect(committedPlaybackPosition(journey, { kind: "intro" })).toEqual({
+      journeyId: journey.id,
+      routePointId: null,
+      assetId: null,
+    });
+    expect(committedPlaybackPosition(journey, { kind: "outro" })).toEqual({
+      journeyId: journey.id,
+      routePointId: null,
+      assetId: null,
     });
   });
 });

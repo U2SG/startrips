@@ -196,10 +196,42 @@ export function shouldRefreshStoryMediaRead(
   return !mediaReadIsFresh(issuedAt, expiresAt, now, MEDIA_READ_REFRESH_MARGIN_MS);
 }
 
+export type StoryLogicalObservation = {
+  journeyId: string;
+  routePointId: string | null;
+  assetId: string | null;
+  storySnapState: "in-context" | "expanded";
+};
+
+export function storyLogicalObservation(
+  journey: Pick<Journey, "id" | "media">,
+  selectedRoutePointId: string | null,
+  assetId: string | null,
+  mobileLayout: boolean,
+  expanded: boolean,
+): StoryLogicalObservation {
+  const observedAsset = assetId === null
+    ? null
+    : journey.media.find((asset) => asset.id === assetId) ?? null;
+  return {
+    journeyId: journey.id,
+    // Logical media identity owns its current Route Point association. This is
+    // deliberately not the Story's DOM/page index: a moved asset follows its
+    // current Journey model ownership, while an unavailable asset falls back
+    // to the currently selected Story scope.
+    routePointId: observedAsset?.routePointId ?? selectedRoutePointId,
+    assetId: observedAsset?.id ?? null,
+    storySnapState: mobileLayout && !expanded ? "in-context" : "expanded",
+  };
+}
+
 type JourneyStoryProps = {
   journeys: readonly Journey[];
   journeyId: string;
   routePointId?: string | null;
+  initialAssetId?: string | null;
+  initialSnapState?: "in-context" | "expanded";
+  onObservationChange?: (observation: StoryLogicalObservation | null) => void;
   onClose: (sharedSource?: HTMLElement | null) => void;
   onNavigate: (journeyId: string) => void;
   /** Absent when the view has no edit capability (#200 shared mode). */
@@ -599,12 +631,23 @@ export function reorderInvalidatesMediaMoveUndo(
 export function storyInitialMediaSelection(
   journey: Journey | undefined,
   requestedRoutePointId: string | null,
+  requestedAssetId: string | null = null,
 ) {
   if (!journey) {
     return { routePointId: requestedRoutePointId, assetIndex: 0, assetId: null };
   }
 
   const scoped = storyMediaForScope(journey, requestedRoutePointId);
+  const requestedAssetIndex = requestedAssetId === null
+    ? -1
+    : scoped.findIndex((asset) => asset.id === requestedAssetId);
+  if (requestedAssetIndex >= 0) {
+    return {
+      routePointId: requestedRoutePointId,
+      assetIndex: requestedAssetIndex,
+      assetId: scoped[requestedAssetIndex].id,
+    };
+  }
   if (requestedRoutePointId !== null) {
     return {
       routePointId: requestedRoutePointId,
@@ -816,6 +859,9 @@ export function JourneyStory({
   journeys,
   journeyId,
   routePointId = null,
+  initialAssetId = null,
+  initialSnapState = "in-context",
+  onObservationChange,
   onClose,
   onNavigate,
   onEdit,
@@ -838,7 +884,7 @@ export function JourneyStory({
   const canShareJourney = capabilities.canShareAtlas && Boolean(onShare);
   const journeyIndex = journeys.findIndex((candidate) => candidate.id === journeyId);
   const journey = journeys[journeyIndex];
-  const initialMediaSelection = storyInitialMediaSelection(journey, routePointId);
+  const initialMediaSelection = storyInitialMediaSelection(journey, routePointId, initialAssetId);
   const [assetIndex, setAssetIndex] = useState(initialMediaSelection.assetIndex);
   const [selectedRoutePointId, setSelectedRoutePointId] = useState<string | null>(
     initialMediaSelection.routePointId,
@@ -928,7 +974,7 @@ export function JourneyStory({
   const playingRef = useRef(false);
   playingRef.current = playing;
   const mobileLayout = useCompactMobileLayout();
-  const [mobileStoryExpanded, setMobileStoryExpanded] = useState(false);
+  const [mobileStoryExpanded, setMobileStoryExpanded] = useState(initialSnapState === "expanded");
   const storySheetGestureRef = useRef<{ startY: number; pointerId: number } | null>(null);
   const storySheetGestureConsumedRef = useRef(false);
   const [fullscreen, setFullscreen] = useState(false);
@@ -1458,7 +1504,7 @@ export function JourneyStory({
   useEffect(() => {
     cancelPendingMediaDragSettle();
 
-    const nextInitialMedia = storyInitialMediaSelection(journey, routePointId);
+    const nextInitialMedia = storyInitialMediaSelection(journey, routePointId, initialAssetId);
     setAssetIndex(nextInitialMedia.assetIndex);
     setSelectedRoutePointId(nextInitialMedia.routePointId);
     setUploadState({ status: "idle" });
@@ -1475,7 +1521,7 @@ export function JourneyStory({
     setOrderPending(false);
     setOrderMessage("");
     setPlaying(false);
-    setMobileStoryExpanded(false);
+    setMobileStoryExpanded(initialSnapState === "expanded");
     exitFullscreen();
     setMobileManageMode(false);
     setDesktopEditing(false);
@@ -1510,7 +1556,7 @@ export function JourneyStory({
     return () => {
       cancelPendingMediaDragSettle();
     };
-  }, [journeyId, routePointId]);
+  }, [initialAssetId, initialSnapState, journeyId, routePointId]);
 
   useEffect(() => {
     const cancel = () => cancelPendingMediaDragSettle();
@@ -1640,6 +1686,24 @@ export function JourneyStory({
   // image; it is independent of slideshow order.
   const cover = journey ? journeyCover(journey) : null;
 
+  useEffect(() => {
+    if (!journey) return;
+    onObservationChange?.(storyLogicalObservation(
+      journey,
+      selectedRoutePointId,
+      shownAssetId ?? activeAsset?.id ?? null,
+      mobileLayout,
+      mobileStoryExpanded,
+    ));
+  }, [
+    activeAsset?.id,
+    journey,
+    mobileLayout,
+    mobileStoryExpanded,
+    onObservationChange,
+    selectedRoutePointId,
+    shownAssetId,
+  ]);
   function visualMediaCount(pointId: string | null) {
     return visualMedia.filter((asset) => asset.routePointId === pointId).length;
   }

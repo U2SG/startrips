@@ -193,6 +193,48 @@ export function playbackStepIdentity(journey: Journey, step: PlaybackStep): stri
   }
 }
 
+export type CommittedPlaybackPosition = {
+  journeyId: string;
+  routePointId: string | null;
+  assetId: string | null;
+};
+
+/**
+ * Resolve return identity from the step React has already committed. Pending
+ * seek targets and camera commands never enter this helper, so they cannot
+ * masquerade as something the viewer has actually reached.
+ */
+export function committedPlaybackPosition(
+  journey: Journey,
+  committedStep: PlaybackStep | undefined,
+): CommittedPlaybackPosition {
+  if (!committedStep) {
+    return { journeyId: journey.id, routePointId: null, assetId: null };
+  }
+  switch (committedStep.kind) {
+    case "intro":
+    case "outro":
+      return { journeyId: journey.id, routePointId: null, assetId: null };
+    case "travel":
+      return {
+        journeyId: journey.id,
+        routePointId: journey.routePoints[committedStep.to]?.id ?? null,
+        assetId: null,
+      };
+    case "stop":
+      return {
+        journeyId: journey.id,
+        routePointId: journey.routePoints[committedStep.pointIndex]?.id ?? null,
+        assetId: null,
+      };
+    case "media": {
+      const routePointId = journey.routePoints[committedStep.pointIndex]?.id ?? null;
+      const asset = playbackMediaForPoint(journey, committedStep.pointIndex)[committedStep.mediaIndex];
+      return { journeyId: journey.id, routePointId, assetId: asset?.id ?? null };
+    }
+  }
+}
+
 export type PlaybackControl =
   | { type: "advance" }
   | { type: "next" }
