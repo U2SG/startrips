@@ -551,6 +551,7 @@ export function JourneyPlaybackOverlay({
   const samplerRef = useRef(createSoundtrackSampler());
   const lightStripRef = useRef<HTMLDivElement>(null);
   const [controlsHidden, setControlsHidden] = useState(false);
+  const [selectionSummaryOpen, setSelectionSummaryOpen] = useState(false);
   const playbackInputModalityRef = useRef<"pointer" | "keyboard">("pointer");
   const pendingReads = useRef(new Set<string>());
   // Review P2: the playback overlay is its own focus trap (rendered outside
@@ -824,7 +825,7 @@ export function JourneyPlaybackOverlay({
     const focusWithinOverlay = () => Boolean(
       overlayRef.current?.contains(document.activeElement),
     );
-    const mayAutoHide = () => playbackControlsMayAutoHide({
+    const mayAutoHide = () => !selectionSummaryOpen && playbackControlsMayAutoHide({
       paused,
       keyboardNavigation: playbackInputModalityRef.current === "keyboard",
       focusWithinOverlay: focusWithinOverlay(),
@@ -858,7 +859,7 @@ export function JourneyPlaybackOverlay({
       window.removeEventListener("touchstart", onPointerActivity);
       window.removeEventListener("keydown", onKeyboardActivity);
     };
-  }, [director.isPlaying, director.stepIndex, paused]);
+  }, [director.isPlaying, director.stepIndex, paused, selectionSummaryOpen]);
 
   // Review P2: toggle playback from the user gesture so audio.play() runs
   // inside user activation; the soundtrack effect below stays as the
@@ -1349,7 +1350,10 @@ export function JourneyPlaybackOverlay({
 
       {/* ── Controls ────────────────────────────────────────────────────── */}
       {playbackMode === "quick-recap" && quickRecapSelectionSummary ? (
-        <details className="journey-playback__selection-summary">
+        <details
+          className="journey-playback__selection-summary"
+          onToggle={(event) => setSelectionSummaryOpen(event.currentTarget.open)}
+        >
           <summary>本次整理</summary>
           <div className="journey-playback__selection-summary-body">
             {quickRecapSelectionSummary.map((entry, chapterIndex) => {

@@ -88,8 +88,12 @@
 
 .journey-playback__selection-summary > summary {
   width: fit-content;
+  min-height: 44px;
   margin-left: auto;
-  padding: 9px 13px;
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  padding: 0 13px;
   border: 1px solid rgba(118, 198, 188, 0.26);
   border-radius: 999px;
   background: rgba(2, 10, 11, 0.82);
@@ -420,13 +424,15 @@
 
 .journey-playback__close,
 .journey-playback__controls,
-.journey-playback__soundtrack {
+.journey-playback__soundtrack,
+.journey-playback__selection-summary {
   transition: opacity var(--motion-ui, 260ms) var(--motion-ease-out, ease);
 }
 
 .journey-playback.is-controls-hidden .journey-playback__close,
 .journey-playback.is-controls-hidden .journey-playback__controls,
-.journey-playback.is-controls-hidden .journey-playback__soundtrack {
+.journey-playback.is-controls-hidden .journey-playback__soundtrack,
+.journey-playback.is-controls-hidden .journey-playback__selection-summary {
   opacity: 0;
   pointer-events: none;
 }
