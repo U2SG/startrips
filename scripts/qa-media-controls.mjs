@@ -58,6 +58,20 @@ async function storyPicturePoint(page, direction, surfaceSelector = ".journey-st
 
 async function clickStoryPicture(page, direction, surfaceSelector = ".journey-story__media") {
   const point = await storyPicturePoint(page, direction, surfaceSelector);
+  await page.evaluate(({ point, direction }) => {
+    window.__qaStoryLastPictureClick = { point, direction, events: [] };
+    if (window.__qaStoryPictureTraceInstalled) return;
+    window.__qaStoryPictureTraceInstalled = true;
+    for (const type of ["pointerdown", "pointerup", "click"]) {
+      document.addEventListener(type, (event) => {
+        const trace = window.__qaStoryLastPictureClick;
+        const target = event.target;
+        if (!trace || !(target instanceof Element)) return;
+        trace.events.push({ type, tag: target.tagName, class: target.className,
+          asset: target.getAttribute("data-shared-media-id"), x: event.clientX, y: event.clientY });
+      }, true);
+    }
+  }, { point, direction });
   await page.mouse.click(point.x, point.y);
 }
 
@@ -72,7 +86,17 @@ async function waitForStoryPicture(page, assetId, surfaceSelector = ".journey-st
       && media?.getAttribute("data-shared-media-id") === assetId
       && (media instanceof HTMLImageElement ? media.complete && media.naturalWidth > 0
         : media instanceof HTMLVideoElement && media.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA);
-  }, { surfaceSelector, assetId }, { polling: "raf", timeout: 3_000 });
+  }, { surfaceSelector, assetId }, { polling: "raf", timeout: 3_000 }).catch(async (error) => {
+    const state = await page.evaluate((selector) => {
+      const root = document.querySelector(selector)?.querySelector("[data-story-media-pages]");
+      return { presentation: root?.getAttribute("data-media-presentation"),
+        pages: [...root?.querySelectorAll("[data-media-page]") ?? []].map((node) => ({
+          id: node.getAttribute("data-media-page-id"), role: node.getAttribute("data-media-page"),
+          ready: node.getAttribute("data-media-page-ready"), incoming: node.getAttribute("data-media-incoming"),
+        })), lastClick: window.__qaStoryLastPictureClick };
+    }, surfaceSelector);
+    throw new Error(`Story picture ${assetId} did not settle: ${JSON.stringify(state)}`, { cause: error });
+  });
 }
 
 function overlapPairs(items) {
