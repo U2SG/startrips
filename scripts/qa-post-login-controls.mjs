@@ -2413,49 +2413,33 @@ async function verifyFinalAcceptanceMobileFlow() {
       console.error(`[qa-post-login] final:${viewportLabel}:playback-ready`);
       const historyLengthBeforePlaybackReturn = await page.evaluate(() => window.history.length);
       const progress = page.locator('.journey-playback__progress input[aria-label="播放进度"]');
-      // #245 return evidence needs a deterministic committed beat. Reset the
-      // scrubber to the beginning and pause the director before walking chapter
-      // arrows, otherwise the autoplay clock can race past the target while the
-      // cinematic assertions above are still running.
+      // #245 return evidence needs a deterministic committed media beat. Keep
+      // the existing scrubber as the one seek owner: End seeks to the outro,
+      // then ArrowLeft uses its existing meaningful-step handler to land on the
+      // last media beat (Route Point 2 / fa-image-2). Keeping focus on the range
+      // avoids coupling the evidence to auto-hidden transport chrome.
       await progress.focus();
-      await progress.press("Home");
-      await page.waitForFunction(() => (
-        document.querySelector(".journey-playback")?.getAttribute("data-playback-step") === "0"
-      ), null, { timeout: 2_000 });
+      await progress.press("End");
+      await page.waitForFunction(() => {
+        const playback = document.querySelector(".journey-playback");
+        const step = Number(playback?.getAttribute("data-playback-step"));
+        const stepCount = Number(playback?.getAttribute("data-playback-steps"));
+        return Number.isFinite(step) && Number.isFinite(stepCount) && step === stepCount - 1;
+      }, null, { timeout: 2_000 });
+      await progress.press("ArrowLeft");
+      await page.locator('.journey-playback [data-shared-media-id="fa-image-2"]').waitFor({
+        state: "visible",
+        timeout: 5_000,
+      });
       await progress.blur();
-      // The cinematic phase intentionally auto-hides Playback chrome, so a
-      // body-level Space can be swallowed by transient focus ownership after
-      // the scrubber blur. Pause through the existing transport owner directly;
-      // this is setup for deterministic seeking, not a separate transport path.
+      // Freeze the now-presented beat before exiting so the autoplay clock cannot
+      // advance after the presentation owner has committed the return identity.
       const pauseControl = page.locator('.journey-playback__controls button[aria-label="暂停播放"]');
       if (await pauseControl.count()) {
         await pauseControl.evaluate((button) => button.click());
-      }
-      await page.waitForFunction(() => Boolean(
-        document.querySelector('.journey-playback__controls button[aria-label="继续播放"]'),
-      ), null, { timeout: 2_000 });
-      // Keep the returned beat deterministic while paused. The scrubber Home
-      // above exercises seek ownership; chapter stepping then uses the same
-      // transport command the scrubber ArrowRight delegates to, without relying
-      // on a hidden range retaining keyboard focus after the pause rerender.
-      const nextControl = page.locator('.journey-playback__controls button[aria-label="下一个章节"]');
-      let reachedReturnedMedia = false;
-      for (let attempt = 0; attempt < 8; attempt += 1) {
-        reachedReturnedMedia = await page.locator(
-          '.journey-playback [data-shared-media-id="fa-image-2"]',
-        ).count() > 0;
-        if (reachedReturnedMedia) break;
-        const previousStep = await page.locator(".journey-playback").getAttribute("data-playback-step");
-        await nextControl.evaluate((button) => button.click());
-        await page.waitForFunction((step) => (
-          document.querySelector(".journey-playback")?.getAttribute("data-playback-step") !== step
-        ), previousStep, { timeout: 2_000 });
-      }
-      if (!reachedReturnedMedia) {
-        await page.locator('.journey-playback [data-shared-media-id="fa-image-2"]').waitFor({
-          state: "visible",
-          timeout: 5_000,
-        });
+        await page.waitForFunction(() => Boolean(
+          document.querySelector('.journey-playback__controls button[aria-label="继续播放"]'),
+        ), null, { timeout: 2_000 });
       }
       await page.waitForFunction(() => (
         document.querySelector(".journey-playback")?.getAttribute("data-playback-presentation-hold") === "none"
