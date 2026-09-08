@@ -1208,6 +1208,15 @@ async function verifyComposerGlobeRoundTrip() {
         active: inert(".living-atlas__active"),
       };
     });
+    const desktopOwnershipFailed = desktopChromeDuringPick.header !== true
+      || desktopChromeDuringPick.rail !== true
+      || desktopChromeDuringPick.active !== true;
+    results.push({
+      name: "app-desktop-globe-pick-chrome-inert",
+      desktopChromeDuringPick,
+      failed: desktopOwnershipFailed,
+    });
+    if (desktopOwnershipFailed) failed = true;
 
     await page.locator(".journey-globe-pick-hint button").click();
     await page.waitForFunction(() => (
@@ -1237,21 +1246,17 @@ async function verifyComposerGlobeRoundTrip() {
     });
     await earthNav.click();
     const headerNavClicked = await earthNav.evaluate((button) => button.dataset.qaClickProbe === "clicked");
-    const desktopChromeFailed = desktopChromeDuringPick.header !== true
-      || desktopChromeDuringPick.rail !== true
-      || desktopChromeDuringPick.active !== true
-      || desktopChromeAfterClose.header !== false
+    const desktopReleaseFailed = desktopChromeAfterClose.header !== false
       || desktopChromeAfterClose.rail !== false
       || desktopChromeAfterClose.active !== false
       || !headerNavClicked;
     results.push({
-      name: "app-desktop-globe-pick-chrome-inert",
-      desktopChromeDuringPick,
+      name: "app-desktop-globe-pick-chrome-release",
       desktopChromeAfterClose,
       headerNavClicked,
-      failed: desktopChromeFailed,
+      failed: desktopReleaseFailed,
     });
-    if (desktopChromeFailed) failed = true;
+    if (desktopReleaseFailed) failed = true;
 
     for (const mode of ["empty", "failure"]) {
       resetReverse(mode);
