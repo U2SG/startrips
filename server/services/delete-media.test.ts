@@ -12,6 +12,7 @@ type Asset = NonNullable<
 const ASSET: Asset = {
   id: "00000000-0000-4000-8000-000000000001",
   journeyId: "00000000-0000-4000-8000-000000000002",
+  everydayFragmentId: null,
   routePointId: null,
   storageDriver: "primary-media-v1",
   storageKey: "atlas/journey/object.jpg",

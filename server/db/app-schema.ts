@@ -1,5 +1,6 @@
 import {
   boolean,
+  check,
   date,
   doublePrecision,
   index,
@@ -12,6 +13,7 @@ import {
   uuid,
   type AnyPgColumn,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
 export const atlases = pgTable(
   "atlases",
@@ -146,13 +148,75 @@ export const journeyRoutePoints = pgTable(
   ],
 );
 
+// #234: an Everyday Fragment — one everyday experience rooted in a place,
+// recorded without the ceremony a Journey asks for. No title, no route, no
+// start/end pair: an occurrence date, one position, and optionally a place
+// label, a sentence and media.
+//
+// Atlas-owned like every other record here, so an Atlas deletion cascades the
+// fragments away. `home_base_period_id` is context, not ownership: it is
+// nullable because a member may record an ordinary evening long before any
+// Home Base is confirmed, and `on delete set null` because withdrawing a life
+// period must never delete the evening that happened during it. Grouping is
+// derived from the date by `resolveHomeBaseForDate`; this column only records
+// an association that was already made.
+//
+// A Journey that stays in one area is still a Journey. Nothing here
+// reclassifies one, and this table is not a second, lighter Journey: it has no
+// route, so no route point, segment or stop can exist on it.
+export const everydayFragments = pgTable(
+  "everyday_fragments",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    atlasId: uuid("atlas_id")
+      .notNull()
+      .references(() => atlases.id, { onDelete: "cascade" }),
+    // The day the fragment happened, which is the only date it has. Never
+    // rewritten by Home Base grouping.
+    occurredOn: date("occurred_on", { mode: "string" }).notNull(),
+    latitude: doublePrecision("latitude").notNull(),
+    longitude: doublePrecision("longitude").notNull(),
+    // Optional human context, exactly like a route point's Place Label: it
+    // describes the position without defining the fragment.
+    placeLabel: text("place_label"),
+    note: text("note"),
+    // Contextual association with the life period that held on `occurred_on`.
+    homeBasePeriodId: uuid("home_base_period_id").references(
+      () => homeBasePeriods.id,
+      { onDelete: "set null" },
+    ),
+    createdByUserId: text("created_by_user_id").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index("everyday_fragments_atlas_occurred_idx").on(
+      table.atlasId,
+      table.occurredOn,
+    ),
+    index("everyday_fragments_home_base_period_idx").on(table.homeBasePeriodId),
+  ],
+);
+
 export const mediaAssets = pgTable(
   "media_assets",
   {
     id: uuid("id").defaultRandom().primaryKey(),
-    journeyId: uuid("journey_id")
-      .notNull()
-      .references(() => journeys.id, { onDelete: "cascade" }),
+    // #234: nullable, because media now has two possible owners and exactly
+    // one of them at a time. A null here is not a missing Journey — it means
+    // an Everyday Fragment owns this asset instead, which the check
+    // constraint below makes the only other legal state.
+    journeyId: uuid("journey_id").references(() => journeys.id, {
+      onDelete: "cascade",
+    }),
+    everydayFragmentId: uuid("everyday_fragment_id").references(
+      () => everydayFragments.id,
+      { onDelete: "cascade" },
+    ),
     routePointId: uuid("route_point_id").references(() => journeyRoutePoints.id, {
       onDelete: "set null",
     }),
@@ -207,6 +271,21 @@ export const mediaAssets = pgTable(
     index("media_assets_route_point_order_idx").on(
       table.routePointId,
       table.sortOrder,
+    ),
+    index("media_assets_everyday_fragment_order_idx").on(
+      table.everydayFragmentId,
+      table.sortOrder,
+    ),
+    // #234: the media-ownership rule, in the database rather than in prose.
+    // One constraint because it is one rule: an asset belongs to exactly one
+    // owner, and a fragment-owned asset cannot borrow a Route Point, which
+    // by definition belongs to some other owner's Journey. Splitting it in
+    // two would let a future write satisfy one half and describe an asset
+    // that is owned by a fragment while hanging off a foreign route.
+    check(
+      "media_assets_single_owner",
+      sql`(${table.journeyId} is not null) <> (${table.everydayFragmentId} is not null)
+        and (${table.everydayFragmentId} is null or ${table.routePointId} is null)`,
     ),
   ],
 );

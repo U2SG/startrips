@@ -114,9 +114,16 @@ async function loadJourneys(atlasId: string, journeyId?: string) {
   });
   const mediaByJourney = new Map<string, typeof mediaRows>();
   mediaRows.forEach((asset) => {
-    const assets = mediaByJourney.get(asset.journeyId);
+    // #234: `journeyId` is nullable now, because an Everyday Fragment can own
+    // media instead. The `inArray` above already restricts this result to the
+    // Journeys loaded here, so a null owner cannot appear — narrowed rather
+    // than asserted so a future query that drops that predicate cannot group
+    // a fragment's asset under a Journey.
+    const journeyId = asset.journeyId;
+    if (journeyId === null) return;
+    const assets = mediaByJourney.get(journeyId);
     if (assets) assets.push(asset);
-    else mediaByJourney.set(asset.journeyId, [asset]);
+    else mediaByJourney.set(journeyId, [asset]);
   });
 
   return journeyRows.map((journey) => ({
@@ -308,8 +315,16 @@ export async function setJourneyCoverForAtlas(
           isNull(journeys.deletionStartedAt),
         ))
         .limit(1);
-      // An invalid cover target leaves the journey untouched.
-      if (!asset || asset.journeyId !== journeyId || asset.mimeType.startsWith("audio/")) {
+      // An invalid cover target leaves the journey untouched. #234: a
+      // fragment-owned asset has no `journeyId` at all, and is refused here
+      // explicitly rather than by a null-versus-string comparison happening
+      // to be unequal — a Journey cover must be media this Journey owns.
+      if (
+        !asset
+        || asset.journeyId === null
+        || asset.journeyId !== journeyId
+        || asset.mimeType.startsWith("audio/")
+      ) {
         return true;
       }
     }
