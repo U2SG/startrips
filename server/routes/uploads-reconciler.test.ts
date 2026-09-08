@@ -50,7 +50,7 @@ function storageWithInspection(
     async listObjects() {
       return { keys: [] };
     },
-    async readObject() {
+    async readObjectHead() {
       return { exists: false as const };
     },
     async signObjectUpload() {

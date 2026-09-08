@@ -282,28 +282,52 @@ describe("S3-compatible multipart storage", () => {
     expect(send.mock.calls[0][0].input.ContinuationToken).toBe("page-2");
   });
 
-  it("reads a whole small object and distinguishes a missing one", async () => {
+  it("reads an object head as a ranged GET and distinguishes a missing one", async () => {
     const { send, storage } = setup();
     send.mockResolvedValueOnce({
       Body: { transformToByteArray: async () => new Uint8Array([1, 2, 3]) },
     });
 
-    await expect(storage.readObject({ key: "previews/still" })).resolves.toEqual({
+    await expect(
+      storage.readObjectHead({ key: "previews/still", maxBytes: 8 }),
+    ).resolves.toEqual({
       exists: true,
       bytes: new Uint8Array([1, 2, 3]),
     });
     const command = send.mock.calls[0][0];
     expect(command).toBeInstanceOf(GetObjectCommand);
+    // The window is asked of the provider, so an object larger than the
+    // caller's bound never travels. Byte ranges are inclusive at both ends.
     expect(command.input).toEqual({
       Bucket: "private-atlas",
       Key: "live/previews/still",
+      Range: "bytes=0-7",
     });
 
     send.mockRejectedValueOnce(Object.assign(new Error("missing"), {
       Code: "NoSuchKey",
     }));
-    await expect(storage.readObject({ key: "previews/gone" })).resolves.toEqual({
-      exists: false,
+    await expect(
+      storage.readObjectHead({ key: "previews/gone", maxBytes: 8 }),
+    ).resolves.toEqual({ exists: false });
+  });
+
+  it("never returns more than the caller's bound", async () => {
+    // A provider that ignored the range would otherwise hand a caller more
+    // than it said it was prepared to hold, which is the whole point of the
+    // bound. The adapter's contract holds whatever the wire does.
+    const { send, storage } = setup();
+    send.mockResolvedValueOnce({
+      Body: {
+        transformToByteArray: async () => new Uint8Array([1, 2, 3, 4, 5, 6]),
+      },
+    });
+
+    await expect(
+      storage.readObjectHead({ key: "previews/long", maxBytes: 4 }),
+    ).resolves.toEqual({
+      exists: true,
+      bytes: new Uint8Array([1, 2, 3, 4]),
     });
   });
 });

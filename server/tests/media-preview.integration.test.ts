@@ -24,6 +24,7 @@ import {
   markJourneyForDeletionForAtlas,
   restoreJourneyForAtlas,
 } from "../repositories/journey-repository";
+import { signSharedMediaRead } from "../routes/shares";
 import { signPrivateMediaRead } from "../routes/uploads";
 import { deleteMediaAssetForAtlas } from "../services/delete-media";
 import { reconcileJourneyDeletionCandidates } from "../services/delete-journey";
@@ -33,6 +34,7 @@ import {
   PREVIEW_KEY_PREFIX,
   reconcilePreviewNamespace,
   reconcilePreviewWrites,
+  type PreviewSourceValues,
 } from "../services/media-preview";
 import { disabledStorage } from "../storage/disabled-storage";
 import type { MultipartStorage } from "../storage/multipart-storage";
@@ -60,6 +62,23 @@ const PRODUCED_PREVIEW = new Uint8Array(readFileSync(
 const OVERSIZED_STILL = new Uint8Array(readFileSync(
   new URL("./fixtures/oversized-still-2048x1024.jpg", import.meta.url),
 ));
+
+/**
+ * #265: the source whose plan IS the pinned still, so a successful completion
+ * models a producer that did what it was asked.
+ *
+ * Orientation 6 is a quarter turn, so a 467x600 source displays as 600x467,
+ * which is inside the 640 px ceiling and is therefore planned at its own size
+ * — exactly the frame `derived-preview-600x467.jpg` encodes. Every case below
+ * that expects `ready` derives from this, because completion now checks the
+ * produced frame against the plan and not only against the ceiling: a fixture
+ * unrelated to the plan would be refused, and rightly.
+ */
+const SOURCE_OF_PRODUCED_PREVIEW = {
+  sourceWidth: 467,
+  sourceHeight: 600,
+  exifOrientation: 6,
+} as const;
 
 const atlasIds: string[] = [];
 const authOrganizationIds: string[] = [];
@@ -209,10 +228,12 @@ function recordingStorage(
         ? { exists: true as const, bytes: stored.byteLength }
         : { exists: false as const };
     },
-    async readObject(input) {
+    async readObjectHead(input) {
       const stored = objects.get(input.key);
+      // The window is honoured, so a case cannot pass by being handed bytes
+      // the real adapter would have left on the provider.
       return stored
-        ? { exists: true as const, bytes: stored }
+        ? { exists: true as const, bytes: stored.subarray(0, input.maxBytes) }
         : { exists: false as const };
     },
     async listObjects(input) {
@@ -289,7 +310,7 @@ describe("#260 same-asset preview for private media reads", () => {
   async function deriveReadyPreview(
     assetId: string,
     backend = recordingStorage(),
-    source = { sourceWidth: 6000, sourceHeight: 4000, exifOrientation: 6 },
+    source: PreviewSourceValues = SOURCE_OF_PRODUCED_PREVIEW,
   ) {
     const begun = await beginAssetPreview(
       await readAsset(assetId),
@@ -396,8 +417,8 @@ describe("#260 same-asset preview for private media reads", () => {
       .toContain(encodeURIComponent(stored.previewStorageKey!));
     expect(read.preview!.mimeType).toBe(PREVIEW_MIME_TYPE);
     // The display size, so the preview and the original fill one frame.
-    expect(read.preview!.width).toBe(4000);
-    expect(read.preview!.height).toBe(6000);
+    expect(read.preview!.width).toBe(600);
+    expect(read.preview!.height).toBe(467);
     // Both signatures asked for the owner lifetime, and nothing else was
     // signed under this asset.
     expect(backend.signedReads.map((read) => read.expiresInSeconds)).toEqual([
@@ -481,8 +502,9 @@ describe("#260 same-asset preview for private media reads", () => {
     await deriveReadyPreview(asset.id, backend);
     const stored = await readAsset(asset.id);
 
-    const landed = await backend.storage.readObject({
+    const landed = await backend.storage.readObjectHead({
       key: stored.previewStorageKey!,
+      maxBytes: serverConfig.mediaPreviewMaxBytes,
     });
     expect(landed.exists).toBe(true);
     if (!landed.exists) return;
@@ -540,6 +562,142 @@ describe("#260 same-asset preview for private media reads", () => {
     const read = await signPrivateMediaRead(stored, 900, backend.resolve);
     expect(read.preview).toBeUndefined();
     expect(read.url).toContain(encodeURIComponent(stored.storageKey));
+  });
+
+  it("refuses a still larger than the planned frame and serves no preview", async () => {
+    // #265, acceptance item 6. The pinned 600x467 still against a plan for a
+    // 400x300 one: inside the 640 px ceiling, inside the byte ceiling, and
+    // still not what this asset was asked for. A presigned PUT binds only the
+    // content type, so this is exactly the frame a producer holding the URL
+    // could write, and before the plan was checked it would have been served.
+    const asset = await insertAsset();
+    const backend = recordingStorage();
+    expect(PRODUCED_PREVIEW.byteLength)
+      .toBeLessThan(serverConfig.mediaPreviewMaxBytes);
+
+    const begun = await beginAssetPreview(
+      await readAsset(asset.id),
+      { sourceWidth: 400, sourceHeight: 300, exifOrientation: 1 },
+      CEILINGS,
+      UPLOAD_TTL_SECONDS,
+      backend.dependencies,
+    );
+    expect(begun.ok).toBe(true);
+    if (!begun.ok) return;
+    // The plan is smaller than the still in both directions, and both are
+    // under the ceiling — so the ceiling cannot be what refuses this.
+    expect(begun.preview).toMatchObject({ width: 400, height: 300 });
+    expect(Math.max(600, 467))
+      .toBeLessThanOrEqual(serverConfig.mediaPreviewMaxEdgePixels);
+    const pending = await readAsset(asset.id);
+    const unplannedKey = pending.previewStorageKey!;
+
+    const completed = await completeAssetPreview(
+      pending,
+      CEILINGS,
+      backend.dependencies,
+    );
+
+    expect(completed).toMatchObject({
+      ok: false,
+      error: "PREVIEW_PIXELS_MISMATCH",
+      status: 409,
+    });
+    // The same clearing the byte and pixel ceilings do: the generation is
+    // cleared under its own key and the object is dropped, not orphaned.
+    const stored = await readAsset(asset.id);
+    expect(stored.previewState).toBe("failed");
+    expect(stored.previewStorageKey).toBeNull();
+    expect(stored.previewBytes).toBeNull();
+    expect(backend.deleted).toContain(unplannedKey);
+    expect(backend.objects.has(unplannedKey)).toBe(false);
+
+    // Neither read path offers a preview afterwards, and the original is
+    // untouched in both.
+    const ownerRead = await signPrivateMediaRead(stored, 900, backend.resolve);
+    expect(ownerRead.preview).toBeUndefined();
+    expect(ownerRead.url).toContain(encodeURIComponent(stored.storageKey));
+    const guestRead = await signSharedMediaRead(
+      {
+        storageDriver: stored.storageDriver,
+        storageKey: stored.storageKey,
+        preview: stored,
+        grantExpiresAt: new Date(Date.now() + 60 * 60 * 1000),
+      },
+      {
+        shareTtlSeconds: serverConfig.shareMediaReadUrlExpiresInSeconds,
+        ownerTtlSeconds: serverConfig.mediaReadUrlExpiresInSeconds,
+      },
+      new Date(),
+      backend.resolve,
+    );
+    expect(guestRead.preview).toBeUndefined();
+    expect(guestRead.url).toContain(encodeURIComponent(stored.storageKey));
+  });
+
+  it("promotes a still that matches the planned frame, at its measured size", async () => {
+    // The other half of acceptance item 6: a producer that wrote exactly the
+    // frame it was handed a spec for is promoted, and the size recorded is the
+    // one measured from storage rather than any number it claimed.
+    const asset = await insertAsset();
+    const backend = recordingStorage();
+    const begun = await beginAssetPreview(
+      await readAsset(asset.id),
+      SOURCE_OF_PRODUCED_PREVIEW,
+      CEILINGS,
+      UPLOAD_TTL_SECONDS,
+      backend.dependencies,
+    );
+    expect(begun.ok).toBe(true);
+    if (!begun.ok) return;
+    expect(begun.preview).toMatchObject({ width: 600, height: 467 });
+
+    const completed = await completeAssetPreview(
+      await readAsset(asset.id),
+      CEILINGS,
+      backend.dependencies,
+    );
+
+    expect(completed).toMatchObject({ ok: true });
+    const stored = await readAsset(asset.id);
+    expect(stored.previewState).toBe("ready");
+    expect(stored.previewBytes).toBe(PRODUCED_PREVIEW.byteLength);
+    // The frame that was promoted is the frame that was planned.
+    expect(readJpegPixelSize(backend.objects.get(stored.previewStorageKey!)!))
+      .toEqual({ width: 600, height: 467 });
+  });
+
+  it("refuses a produced still whose row cannot state what was planned", async () => {
+    // A `pending` row always carries the display size `POST .../preview` wrote,
+    // so this is a contradiction rather than an expected state. It is asserted
+    // because the answer to a contradiction has to be fail-closed: nothing can
+    // be verified against a plan that cannot be recovered, and an unverified
+    // object must not become servable to a guest.
+    const asset = await insertAsset();
+    const backend = recordingStorage();
+    await beginAssetPreview(
+      await readAsset(asset.id),
+      SOURCE_OF_PRODUCED_PREVIEW,
+      CEILINGS,
+      UPLOAD_TTL_SECONDS,
+      backend.dependencies,
+    );
+    await db
+      .update(mediaAssets)
+      .set({ displayWidth: null, displayHeight: null })
+      .where(eq(mediaAssets.id, asset.id));
+
+    const completed = await completeAssetPreview(
+      await readAsset(asset.id),
+      CEILINGS,
+      backend.dependencies,
+    );
+
+    expect(completed).toMatchObject({
+      ok: false,
+      error: "PREVIEW_PIXELS_MISMATCH",
+    });
+    expect((await readAsset(asset.id)).previewState).toBe("failed");
   });
 
   it("refuses bytes that are not a readable still", async () => {
@@ -615,7 +773,7 @@ describe("#260 same-asset preview for private media reads", () => {
 
     const winner = await beginAssetPreview(
       snapshot,
-      { sourceWidth: 6000, sourceHeight: 4000, exifOrientation: 1 },
+      SOURCE_OF_PRODUCED_PREVIEW,
       CEILINGS,
       UPLOAD_TTL_SECONDS,
       backend.dependencies,
@@ -634,7 +792,9 @@ describe("#260 same-asset preview for private media reads", () => {
     expect(loser).toMatchObject({ ok: false, error: "PREVIEW_SUPERSEDED" });
     const row = await readAsset(asset.id);
     expect(row.previewState).toBe("pending");
-    expect(row.displayWidth).toBe(6000);
+    // The winner's source, transposed by its orientation, not the loser's.
+    expect(row.displayWidth).toBe(600);
+    expect(row.displayHeight).toBe(467);
     // Exactly one live key, and completion promotes that one.
     const completed = await completeAssetPreview(row, CEILINGS, backend.dependencies);
     expect(completed.ok).toBe(true);
@@ -1121,7 +1281,7 @@ describe("#260 same-asset preview for private media reads", () => {
     const backend = recordingStorage();
     const begun = await beginAssetPreview(
       asset,
-      { sourceWidth: 3000, sourceHeight: 2000, exifOrientation: 1 },
+      SOURCE_OF_PRODUCED_PREVIEW,
       CEILINGS,
       UPLOAD_TTL_SECONDS,
       backend.dependencies,

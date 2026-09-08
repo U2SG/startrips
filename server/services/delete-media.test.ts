@@ -44,7 +44,7 @@ function dependencies(asset: Asset | undefined) {
     async listObjects() {
       return { keys: [] };
     },
-    async readObject() {
+    async readObjectHead() {
       return { exists: false as const };
     },
     async signObjectUpload() {

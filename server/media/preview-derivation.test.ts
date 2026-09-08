@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  plannedStill,
   planPreviewDerivation,
   previewObjectFitsCeiling,
+  previewPixelsWithinPlan,
   servablePreview,
   PREVIEW_MIME_TYPE,
   type PreviewCeilings,
@@ -197,5 +199,74 @@ describe("#260 servable preview", () => {
     ["a missing display height", { displayHeight: null }],
   ])("refuses to guess around %s on a ready row", (_label, damage) => {
     expect(servablePreview({ ...READY, ...damage })).toBeNull();
+  });
+});
+
+describe("#265 the produced still against the still that was planned", () => {
+  /** The row `POST .../preview` leaves behind for the pinned portrait. */
+  const PLANNED_ROW = {
+    mimeType: "image/jpeg",
+    displayWidth: 4000,
+    displayHeight: 6000,
+  };
+
+  it("recovers the plan from the persisted display size alone", () => {
+    // No column stores the still's size, so the recovered plan has to be the
+    // same value `planPreviewDerivation` produced when the write was signed.
+    const planned = planPreviewDerivation(PINNED_PORTRAIT, CEILINGS);
+    expect(planned.ok).toBe(true);
+    if (!planned.ok) return;
+    expect(plannedStill(PLANNED_ROW, CEILINGS)).toEqual(planned.spec);
+  });
+
+  it("plans a source already inside the ceiling at its own size", () => {
+    expect(plannedStill(
+      { mimeType: "image/jpeg", displayWidth: 600, displayHeight: 467 },
+      CEILINGS,
+    )).toMatchObject({ width: 600, height: 467 });
+  });
+
+  it.each([
+    ["no display width", { displayWidth: null }],
+    ["no display height", { displayHeight: null }],
+    ["a source nothing can be derived from", { mimeType: "audio/mpeg" }],
+  ])("states no plan rather than a guess for %s", (_label, damage) => {
+    expect(plannedStill({ ...PLANNED_ROW, ...damage }, CEILINGS)).toBeNull();
+  });
+
+  it("bounds a produced frame by the plan, not only by the ceiling", () => {
+    const plan = plannedStill(
+      { mimeType: "image/jpeg", displayWidth: 400, displayHeight: 300 },
+      CEILINGS,
+    );
+    expect(plan).not.toBeNull();
+    if (!plan) return;
+    // Inside the deployment's pixel ceiling and still not the frame this asset
+    // was asked for — the case the ceiling alone cannot see.
+    expect(Math.max(600, 467)).toBeLessThanOrEqual(CEILINGS.maxEdgePixels);
+    expect(previewPixelsWithinPlan({ width: 600, height: 467 }, plan))
+      .toBe(false);
+    expect(previewPixelsWithinPlan({ width: 400, height: 400 }, plan))
+      .toBe(false);
+    expect(previewPixelsWithinPlan({ width: 400, height: 300 }, plan))
+      .toBe(true);
+  });
+
+  it("accepts a frame at or under the plan rather than demanding equality", () => {
+    const plan = plannedStill(PLANNED_ROW, CEILINGS);
+    expect(plan).not.toBeNull();
+    if (!plan) return;
+    // A producer that rounded an edge differently, or handed back a source
+    // already smaller than the plan rather than upscaling it, has broken
+    // nothing a reader can see.
+    expect(previewPixelsWithinPlan(
+      { width: plan.width - 1, height: plan.height },
+      plan,
+    )).toBe(true);
+    expect(previewPixelsWithinPlan({ width: 1, height: 1 }, plan)).toBe(true);
+    expect(previewPixelsWithinPlan(
+      { width: plan.width, height: plan.height + 1 },
+      plan,
+    )).toBe(false);
   });
 });

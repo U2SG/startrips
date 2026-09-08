@@ -30,7 +30,15 @@ export const disabledStorage: MultipartStorage = {
   async listObjects() {
     return unavailable();
   },
-  async readObject() {
+  /**
+   * #265: no placeholder bytes and no fake success.
+   *
+   * A read that answered `{ exists: false }` here would be indistinguishable
+   * from an object that genuinely never landed, and completion treats that as
+   * retryable — so a deployment with no object storage would sit a preview in
+   * `pending` forever instead of saying it has nowhere to read from.
+   */
+  async readObjectHead() {
     return unavailable();
   },
   async inspectObject() {
