@@ -1,6 +1,7 @@
 import { cloneElement, useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type MouseEvent, type ReactElement, type Ref, type VideoHTMLAttributes } from "react";
-import { MEDIA_STACK_DURATION, MEDIA_STACK_EASING, mediaStackDeparture, mediaStackOpacity, mediaStackRest } from "./mediaStackMotion";
+import { MEDIA_STACK_DURATION, MEDIA_STACK_EASING, mediaStackOpacity, mediaStackRest } from "./mediaStackMotion";
 import { prefersReducedMotion } from "../motion/preferences";
+import { springElementTo, type SpringElementHandle } from "../motion/springElement";
 import { StartripsJourneyCue } from "../brand/StartripsBrandMark";
 import type { JourneyMediaAsset, MediaPreviewRead } from "./types";
 import "../styles/story-media-pages.css";
@@ -113,6 +114,7 @@ export function StoryMediaPages({ active = true, ...props }: Props) {
   const latest = useRef({ ...props, active });
   latest.current = { ...props, active };
   const root = useRef<HTMLDivElement>(null);
+  const hitSurface = useRef<HTMLDivElement>(null);
   const pageNodes = useRef<Array<HTMLDivElement | null>>([null, null, null]);
   const imageNodes = useRef<Array<HTMLImageElement | null>>([null, null, null]);
   const slotIds = useRef<Array<string | null>>([null, null, null]);
@@ -121,6 +123,7 @@ export function StoryMediaPages({ active = true, ...props }: Props) {
   const decodedImages = useRef(new Map<string, string>());
   const [revision, updateRevision] = useState(0);
   const [movingId, setMovingId] = useState<string | null>(null);
+  const [recoveryRevision, requestRecovery] = useState(0);
   const [failedLiveSource, setFailedLiveSource] = useState<string | null>(null);
   const liveVideo = useRef<HTMLVideoElement | null>(null);
   const videoShell = useRef<HTMLDivElement>(null);
@@ -265,6 +268,27 @@ export function StoryMediaPages({ active = true, ...props }: Props) {
     }
     return decodedImages.current.get(id) === read.url;
   };
+  useLayoutEffect(() => {
+    const element = root.current;
+    if (!element) return;
+    const measure = () => {
+      const slot = slotIds.current.indexOf(latest.current.currentId);
+      const page = pageNodes.current[slot];
+      const photo = imageNodes.current[slot];
+      const asset = latest.current.media.find((item) => item.id === latest.current.currentId);
+      const frame = asset ? frames.current.get(asset.id)?.canvas : null;
+      const width = asset?.displayWidth || photo?.naturalWidth || frame?.width || 0;
+      const height = asset?.displayHeight || photo?.naturalHeight || frame?.height || 0;
+      if (!page || !width || !height || !page.clientWidth || !page.clientHeight) return;
+      const fit = Math.min(page.clientWidth / width, page.clientHeight / height);
+      element.style.setProperty("--preview-inset-x", `${(page.clientWidth - width * fit) / 2}px`);
+      element.style.setProperty("--preview-inset-y", `${(page.clientHeight - height * fit) / 2}px`);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [props.currentId, revision, liveReady]);
   const targetReady = ready(props.incomingId);
   const currentReady = ready(props.currentId);
   const currentVideo = props.media.find((asset) => asset.id === props.currentId)?.mimeType.startsWith("video/");
@@ -273,7 +297,8 @@ export function StoryMediaPages({ active = true, ...props }: Props) {
   useLayoutEffect(() => {
     props.onPlaybackReady(playbackReady ? props.currentId : null);
   }, [playbackReady, props.currentId, props.onPlaybackReady]);
-  const interrupted = useRef(new Map<string, { transform: string; opacity: string }>());
+  const interrupted = useRef(false);
+  const motionHandles = useRef<SpringElementHandle[]>([]);
   const reportKey = useRef("");
   useEffect(() => {
     if (!active) return;
@@ -294,64 +319,79 @@ export function StoryMediaPages({ active = true, ...props }: Props) {
 
   useLayoutEffect(() => {
     const id = props.incomingId;
-    if (!active || !id || !targetReady) {
-      setMovingId(null);
-      // Reverse/cancel keeps the pixels at their current position and settles
-      // back into the same pile, without snapping to the authored rest frame.
-      const recovery = active && !prefersReducedMotion() ? pageNodes.current.flatMap((node, slot) => {
-        const assetId = assigned[slot];
-        const from = assetId ? interrupted.current.get(assetId) : null;
-        if (!node?.animate || !from) return [];
-        return [node.animate([from, { transform: mediaStackRest(depths[slot]), opacity: mediaStackOpacity(depths[slot]) }],
-          { duration: MEDIA_STACK_DURATION, easing: MEDIA_STACK_EASING })];
-      }) : [];
-      interrupted.current.clear();
-      return () => { for (const animation of recovery) animation.cancel(); };
-    }
     let cancelled = false;
+    let completed = false;
+    const recovering = !id || !targetReady;
+    if (!active || (recovering && !interrupted.current)) { setMovingId(null); return; }
     const finish = () => {
       if (cancelled || !latest.current.active || latest.current.incomingId !== id) return;
-      latest.current.onSettled(id);
+      completed = true;
+      interrupted.current = false;
+      setMovingId(null);
+      if (id && targetReady) latest.current.onSettled(id);
     };
-    if (prefersReducedMotion() || !root.current?.animate) { finish(); return; }
-    // Pages carry the handoff, including the last drawn frame of a departing
-    // video. The one live transport reappears only on its settled own page.
+    if (prefersReducedMotion()) { finish(); return; }
     rememberLiveFrame();
     liveVideo.current?.pause();
-    setMovingId(id);
+    // Recovery owns presentation too: never reveal the stationary video over
+    // a still-moving retained frame. The live transport returns at rest.
+    setMovingId(id ?? props.currentId);
     const animations = pageNodes.current.flatMap((node, slot) => {
-      if (!node || !assigned[slot]) return [];
-      const isCurrent = assigned[slot] === props.currentId;
-      const isTarget = assigned[slot] === id;
-      if (!isCurrent && !isTarget) return [];
-      const assetId = assigned[slot]!;
-      const from = interrupted.current.get(assetId) ?? {
-        transform: getComputedStyle(node).transform,
-        opacity: getComputedStyle(node).opacity,
-      };
-      const keyframes = isCurrent
-        ? mediaStackDeparture(direction, node.clientWidth, direction > 0 ? 2 : 1)
-        : [from, { transform: mediaStackRest(0), opacity: 1 }];
-      keyframes[0] = { ...keyframes[0], ...from };
-      return [node.animate(keyframes,
-        { duration: MEDIA_STACK_DURATION, easing: MEDIA_STACK_EASING, fill: "forwards" })];
+      const assetId = assigned[slot];
+      if (!node || !assetId) return [];
+      const isCurrent = assetId === props.currentId;
+      const isTarget = assetId === id;
+      const depth = recovering ? depths[slot]
+        : isTarget ? 0 : isCurrent ? (direction > 0 ? 2 : 1) : depths[slot];
+      node.style.zIndex = recovering ? (isCurrent ? "5" : String(3 - depth))
+        : isTarget ? "4" : "2";
+      return [springElementTo(node, { transform: mediaStackRest(depth), opacity: mediaStackOpacity(depth) },
+        { owner: assetId })];
     });
+    motionHandles.current = animations;
+    interrupted.current = false;
     void Promise.all(animations.map((animation) => animation.finished)).then(finish, () => undefined);
-    interrupted.current.clear();
     return () => {
       cancelled = true;
-      if (latest.current.currentId === props.currentId) {
-        for (const [slot, node] of pageNodes.current.entries()) {
-          const assetId = assigned[slot];
-          if (node && assetId) {
-            const style = getComputedStyle(node);
-            interrupted.current.set(assetId, { transform: style.transform, opacity: style.opacity });
-          }
-        }
-      }
       for (const animation of animations) animation.cancel();
+      // cancel freezes both position and velocity. The next spring consumes
+      // that state, including another reversal during recovery.
+      interrupted.current = !completed;
     };
-  }, [active, props.currentId, props.incomingId, targetReady, direction, rememberLiveFrame]);
+  }, [active, props.currentId, props.incomingId, targetReady, direction, rememberLiveFrame, recoveryRevision]);
+
+  useLayoutEffect(() => {
+    const element = root.current;
+    if (!element) return;
+    const grab = (event: Event) => {
+      for (const handle of motionHandles.current) handle.cancel();
+      const neighborId = (event as CustomEvent<{ neighborId?: string }>).detail?.neighborId;
+      // The pointer owns only the current page and the neighbor it reveals.
+      // Other pages still need to return from an interrupted navigation.
+      motionHandles.current = pageNodes.current.flatMap((node) => {
+        const assetId = node?.dataset.mediaPageId;
+        if (!node || !assetId || assetId === latest.current.currentId || assetId === neighborId) return [];
+        const depth = Number(node.style.getPropertyValue("--stack-depth")) || 1;
+        node.style.zIndex = String(3 - depth);
+        const spring = springElementTo(node, { transform: mediaStackRest(depth), opacity: mediaStackOpacity(depth) }, { owner: assetId });
+        void spring.finished.catch(() => undefined);
+        return [spring];
+      });
+      interrupted.current = false;
+      setMovingId(null);
+    };
+    const recover = () => {
+      interrupted.current = true;
+      requestRecovery((value) => value + 1);
+    };
+    element.addEventListener("story-media-grab", grab);
+    element.addEventListener("story-media-recover", recover);
+    return () => {
+      element.removeEventListener("story-media-grab", grab);
+      element.removeEventListener("story-media-recover", recover);
+      for (const handle of motionHandles.current) handle.cancel();
+    };
+  }, []);
 
   useLayoutEffect(() => {
     if (!active) liveVideo.current?.pause();
@@ -408,20 +448,31 @@ export function StoryMediaPages({ active = true, ...props }: Props) {
       && event.clientY >= rect.bottom - Math.min(72, rect.height * 0.25)) return;
     if (!containsMediaPoint(target, event.clientX, event.clientY)) props.onBackdropClick();
   };
+  const stablePictureContains = (x: number, y: number) => {
+    const surface = hitSurface.current;
+    if (!surface) return false;
+    const rect = surface.getBoundingClientRect();
+    const asset = props.media.find((item) => item.id === props.currentId);
+    const image = imageNodes.current[assigned.indexOf(props.currentId)];
+    const frame = props.currentId ? frames.current.get(props.currentId)?.canvas : null;
+    const width = asset?.displayWidth || (currentVideo ? frame?.width : image?.naturalWidth) || 0;
+    const height = asset?.displayHeight || (currentVideo ? frame?.height : image?.naturalHeight) || 0;
+    if (!width || !height) return false;
+    const scale = Math.min(rect.width / width, rect.height / height);
+    return Math.abs(x - (rect.left + rect.width / 2)) <= width * scale / 2
+      && Math.abs(y - (rect.top + rect.height / 2)) <= height * scale / 2;
+  };
   return <div ref={root} className="story-media-pages" data-story-media-pages
     style={{ "--media-settle-duration": `${MEDIA_STACK_DURATION}ms`, "--media-settle-easing": MEDIA_STACK_EASING } as CSSProperties}
     onClick={handleBackdropClick}
     onPointerMove={props.onNavigate ? (event) => {
-      const target = event.target;
-      if (!(target instanceof HTMLImageElement || target instanceof HTMLVideoElement)
-        || !containsMediaPoint(target, event.clientX, event.clientY)) {
+      if (!hitSurface.current || !stablePictureContains(event.clientX, event.clientY)) {
         delete event.currentTarget.dataset.clickDirection;
         return;
       }
-      const bounds = target.getBoundingClientRect();
-      const direction = navigationDirection(target, event.clientX);
-      const nativeControls = target instanceof HTMLVideoElement && target.controls
-        && event.clientY >= bounds.bottom - Math.min(72, bounds.height * .25);
+      const direction = navigationDirection(hitSurface.current, event.clientX);
+      const bounds = hitSurface.current.getBoundingClientRect();
+      const nativeControls = currentVideo && event.clientY >= bounds.bottom - Math.min(72, bounds.height * .25);
       event.currentTarget.dataset.clickDirection = nativeControls ? ""
         : direction < 0 && props.canNavigatePrevious ? "previous"
           : direction > 0 && props.canNavigateNext ? "next" : "";
@@ -498,6 +549,14 @@ export function StoryMediaPages({ active = true, ...props }: Props) {
         <FrameCanvas frame={isVideo && id ? frames.current.get(id)?.canvas : undefined} />
       </div>;
     })}
+    {props.onNavigate && active && currentReady ? <div ref={hitSurface}
+      className="story-media-pages__hit-surface" data-story-hit-surface aria-hidden="true"
+      style={currentVideo ? { clipPath: "inset(0 0 min(72px, 25%) 0)" } : undefined}
+      onClick={(event) => {
+        event.stopPropagation();
+        if (!stablePictureContains(event.clientX, event.clientY)) { props.onBackdropClick?.(); return; }
+        step(navigationDirection(event.currentTarget, event.clientX));
+      }} /> : null}
     <div ref={videoShell} className="story-media-pages__video" data-video-visible={videoVisible ? "true" : "false"}
       style={{ "--page-offset": videoOffset } as CSSProperties}>
       {videoSource ? cloneElement(videoSource, {

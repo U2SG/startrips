@@ -28,9 +28,9 @@ const storyFixedPageNames = ["previous", "current", "next"];
 
 const browser = await launchQaBrowser();
 
-// Desktop navigation belongs to the painted half of the current picture, not
-// its contain letterbox or a hidden fullscreen presenter. Video clicks stay
-// above native controls. Mouse input also exercises Story's gesture ownership.
+// Desktop navigation uses the stationary hit surface, even while the painted
+// photo is moving. Its contained picture halves exclude letterboxes and native
+// video controls. Real mouse input also exercises Story's gesture ownership.
 function storyPicture(page, surfaceSelector = ".journey-story__media") {
   return page.locator(`${surfaceSelector}:visible`)
     .locator('img[data-shared-media-id]:visible, video[data-shared-media-id]:visible');
@@ -40,7 +40,12 @@ async function storyPicturePoint(page, direction, surfaceSelector = ".journey-st
   const picture = storyPicture(page, surfaceSelector);
   await picture.waitFor({ state: "visible" });
   return picture.evaluate((media, step) => {
-    const bounds = media.getBoundingClientRect();
+    const root = media.closest("[data-story-media-pages]");
+    const surface = root?.querySelector("[data-story-hit-surface]");
+    if (root?.getAttribute("data-click-navigation") === "true" && !surface) {
+      throw new Error("Desktop Story has no stable click surface");
+    }
+    const bounds = (surface ?? media).getBoundingClientRect();
     const naturalWidth = media instanceof HTMLVideoElement ? media.videoWidth : media.naturalWidth;
     const naturalHeight = media instanceof HTMLVideoElement ? media.videoHeight : media.naturalHeight;
     if (!naturalWidth || !naturalHeight || !bounds.width || !bounds.height) {
@@ -56,6 +61,11 @@ async function storyPicturePoint(page, direction, surfaceSelector = ".journey-st
       throw new Error("Story video navigation point overlaps native controls");
     }
     const hit = document.elementFromPoint(x, y);
+    if (surface && (hit !== surface || getComputedStyle(surface).transform !== "none")) {
+      throw new Error(`Stable Story hit surface is blocked or transformed: ${JSON.stringify({
+        hit: hit?.className, surface: surface.className, transform: getComputedStyle(surface).transform, x, y,
+      })}`);
+    }
     const describe = (node) => node instanceof Element ? {
       tag: node.tagName, asset: node.getAttribute("data-shared-media-id"),
       pageId: node.closest("[data-media-page]")?.getAttribute("data-media-page-id"),
@@ -64,13 +74,24 @@ async function storyPicturePoint(page, direction, surfaceSelector = ".journey-st
       zIndex: getComputedStyle(node.closest("[data-media-page]") ?? node).zIndex,
       bounds: node.getBoundingClientRect().toJSON(),
     } : null;
-    return { x, y, expected: describe(media), hit: describe(hit) };
+    return { x, y, expected: describe(media), hit: describe(hit),
+      stableBounds: surface ? bounds.toJSON() : null };
   }, direction);
 }
 
-async function clickStoryPicture(page, direction, surfaceSelector = ".journey-story__media") {
-  const point = await storyPicturePoint(page, direction, surfaceSelector);
-  await page.evaluate(({ point, direction }) => {
+async function clickStoryPicture(page, direction, surfaceSelector = ".journey-story__media", fixedPoint = null) {
+  const point = fixedPoint ?? await storyPicturePoint(page, direction, surfaceSelector);
+  await page.evaluate(({ point, direction, surfaceSelector }) => {
+    if (point.stableBounds) {
+      const surface = document.querySelector(surfaceSelector)?.querySelector("[data-story-hit-surface]");
+      const bounds = surface?.getBoundingClientRect();
+      if (!bounds || document.elementFromPoint(point.x, point.y) !== surface
+        || ["x", "y", "width", "height"].some((key) => Math.abs(bounds[key] - point.stableBounds[key]) > .5)) {
+        throw new Error(`Story click geometry moved or lost its actual hit target: ${JSON.stringify({
+          before: point.stableBounds, now: bounds?.toJSON(), x: point.x, y: point.y,
+        })}`);
+      }
+    }
     window.__qaStoryLastPictureClick = { point, direction, events: [] };
     if (window.__qaStoryPictureTraceInstalled) return;
     window.__qaStoryPictureTraceInstalled = true;
@@ -85,8 +106,45 @@ async function clickStoryPicture(page, direction, surfaceSelector = ".journey-st
           x: event.clientX, y: event.clientY });
       }, true);
     }
-  }, { point, direction });
+  }, { point, direction, surfaceSelector });
   await page.mouse.click(point.x, point.y);
+}
+
+async function clickStoryNativeControlStrip(page, surfaceSelector) {
+  const video = page.locator(surfaceSelector).locator("video[data-shared-media-id]");
+  const before = await video.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    // Chromium's lower-left native play/pause region, outside the clipped
+    // navigation surface. Do not activate a React handler or DOM .click().
+    const point = { x: bounds.left + 28, y: bounds.bottom - 24 };
+    window.__qaNativeControlVideo = element;
+    window.__qaNativeControlEvents = [];
+    element.addEventListener("pointerdown", (event) => {
+      window.__qaNativeControlEvents.push({ type: event.type, trusted: event.isTrusted });
+    }, { once: true });
+    return { point, id: element.getAttribute("data-shared-media-id"), controls: element.controls,
+      fullscreen: Boolean(element.closest(".journey-story-fullscreen")),
+      actualHitIsVideo: document.elementFromPoint(point.x, point.y) === element };
+  });
+  if (!before.controls || !before.actualHitIsVideo) {
+    throw new Error(`Native video control strip is covered: ${JSON.stringify(before)}`);
+  }
+  await page.mouse.click(before.point.x, before.point.y);
+  const after = await page.evaluate(async (selector) => {
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const root = document.querySelector(selector);
+    const pages = root?.querySelector("[data-story-media-pages]");
+    const video = root?.querySelector("video[data-shared-media-id]");
+    const fullscreen = document.querySelector(".journey-story-fullscreen");
+    return { id: video?.getAttribute("data-shared-media-id"), sameNode: video === window.__qaNativeControlVideo,
+      presentation: pages?.getAttribute("data-media-presentation"), connected: Boolean(root?.isConnected),
+      fullscreen: Boolean(fullscreen && !fullscreen.hidden && fullscreen.getBoundingClientRect().width),
+      events: window.__qaNativeControlEvents };
+  }, surfaceSelector);
+  // Native shadow controls may intentionally contain their pointer events;
+  // actual hit-testing plus Playwright mouse input establishes the input path.
+  return { before, after, failed: !after.connected || !after.sameNode || after.id !== before.id
+    || after.presentation !== "settled" || after.fullscreen !== before.fullscreen };
 }
 
 async function waitForStoryPicture(page, assetId, surfaceSelector = ".journey-story__media") {
@@ -1977,11 +2035,11 @@ try {
       failed: continuityFailed,
     });
     if (continuityFailed) failed = true;
-    if (captureMotion) {
-      await mediaContinuity.page.screenshot({ path: `${motionArtifactDir}/story-stack-next.png`, animations: "allow" });
+    if (captureMotion) await mediaContinuity.page.screenshot({ path: `${motionArtifactDir}/story-stack-next.png`, animations: "allow" });
+    {
       await clickStoryPicture(mediaContinuity.page, -1);
       await waitForStoryPicture(mediaContinuity.page, "00000000-0000-4000-8000-000000000100");
-      await mediaContinuity.page.screenshot({ path: `${motionArtifactDir}/story-stack-return.png`, animations: "allow" });
+      if (captureMotion) await mediaContinuity.page.screenshot({ path: `${motionArtifactDir}/story-stack-return.png`, animations: "allow" });
       await mediaContinuity.page.evaluate((selector) => {
         const root = document.querySelector(selector);
         const trace = { maxPages: 0, maxVideos: 0 };
@@ -1996,13 +2054,26 @@ try {
       }, storyMediaPagesSelector);
       // Reverse through actual picture clicks while motion is still running;
       // the recording preserves those frames without pausing any animation.
+      const forwardPoint = await storyPicturePoint(mediaContinuity.page, 1);
+      const reversePoint = await storyPicturePoint(mediaContinuity.page, -1);
       for (let cycle = 0; cycle < 2; cycle += 1) {
-        await clickStoryPicture(mediaContinuity.page, 1);
+        await clickStoryPicture(mediaContinuity.page, 1, ".journey-story__media", forwardPoint);
         await mediaContinuity.page.waitForFunction((selector) => document.querySelector(selector)
           ?.getAttribute("data-media-presentation") === "moving", storyMediaPagesSelector, { polling: "raf", timeout: 3_000 });
-        await clickStoryPicture(mediaContinuity.page, -1);
+        await clickStoryPicture(mediaContinuity.page, -1, ".journey-story__media", reversePoint);
         await waitForStoryPicture(mediaContinuity.page, "00000000-0000-4000-8000-000000000100");
       }
+      // At the boundary the second click has no further semantic target. It
+      // must still leave the in-flight last-page spring free to finish.
+      await clickStoryPicture(mediaContinuity.page, 1, ".journey-story__media", forwardPoint);
+      await waitForStoryPicture(mediaContinuity.page, "00000000-0000-4000-8000-000000000101");
+      const boundaryPoint = await storyPicturePoint(mediaContinuity.page, 1);
+      await clickStoryPicture(mediaContinuity.page, 1, ".journey-story__media", boundaryPoint);
+      await mediaContinuity.page.waitForFunction((selector) => document.querySelector(selector)
+        ?.getAttribute("data-media-presentation") === "moving", storyMediaPagesSelector, { polling: "raf", timeout: 3_000 });
+      await clickStoryPicture(mediaContinuity.page, 1, ".journey-story__media", boundaryPoint);
+      await waitForStoryPicture(mediaContinuity.page, "00000000-0000-4000-8000-000000000102");
+      checks.push({ name: "story-stable-hit-surface-repeated-boundary-click", settledAsset: "00000000-0000-4000-8000-000000000102", failed: false });
       const nodeTrace = await mediaContinuity.page.evaluate((selector) => {
         const { trace, observer } = window.__qaMotionNodeTrace;
         observer.disconnect();
@@ -2011,9 +2082,9 @@ try {
           && pages.every((node, index) => node === window.__qaStoryMediaPageNodes[index]) };
       }, storyMediaPagesSelector);
       const traceFailed = nodeTrace.maxPages !== 3 || nodeTrace.maxVideos > 1 || !nodeTrace.samePhysicalPages;
-      checks.push({ name: "story-motion-capture-rapid-reverse-node-stability", ...nodeTrace, failed: traceFailed });
+      checks.push({ name: "story-stable-hit-surface-rapid-reverse-node-stability", ...nodeTrace, failed: traceFailed });
       if (traceFailed) failed = true;
-      await mediaContinuity.page.screenshot({ path: `${motionArtifactDir}/story-stack-rapid-return.png`, animations: "allow" });
+      if (captureMotion) await mediaContinuity.page.screenshot({ path: `${motionArtifactDir}/story-stack-boundary-settled.png`, animations: "allow" });
     }
   } finally {
     const video = mediaContinuity.page.video();
@@ -2570,6 +2641,10 @@ try {
     await mixedMedia.page.locator(".journey-story__media").locator(storyCurrentVideoSelector).evaluate((video) => {
       window.__qaStoryInlineVideoNode = video;
     });
+    await waitForStoryPicture(mixedMedia.page, "00000000-0000-4000-8000-000000000152");
+    const inlineNativeControls = await clickStoryNativeControlStrip(mixedMedia.page, ".journey-story__media");
+    checks.push({ name: "story-desktop-native-video-control-strip", ...inlineNativeControls });
+    if (inlineNativeControls.failed) failed = true;
 
     // Fullscreen has its own explicit control; upper video halves navigate.
     await mixedMedia.page.getByRole("button", { name: "全屏查看媒体", exact: true }).click();
@@ -2581,6 +2656,9 @@ try {
       window.__qaStoryFullscreenVideoNode = video;
       return video.controls;
     });
+    const fullscreenNativeControls = await clickStoryNativeControlStrip(mixedMedia.page, ".journey-story-fullscreen");
+    checks.push({ name: "story-fullscreen-native-video-control-strip", ...fullscreenNativeControls });
+    if (fullscreenNativeControls.failed) failed = true;
 
     await clickStoryPicture(mixedMedia.page, 1, ".journey-story-fullscreen");
     const fullscreenImageSettled = await mixedMedia.page.waitForFunction(({ fullscreenSelector, expectedId }) => {

@@ -10,6 +10,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { IconCheck, IconFolder, IconGripVertical, IconPhoto, IconStar, IconVideo } from "@tabler/icons-react";
 import { onMotionPreferenceChange, prefersReducedMotion } from "../motion/preferences";
 import { motionTokens } from "../motion/tokens";
+import { springElementTo, type SpringElementHandle } from "../motion/springElement";
 import type { Journey, JourneyMediaAsset } from "./types";
 import "../styles/story-media-organizer.css";
 
@@ -161,7 +162,9 @@ export function StoryMediaOrganizer(props: StoryMediaOrganizerProps) {
   latestMediaRef.current = props.allMedia;
   const tileNodes = useRef(new Map<string, HTMLButtonElement>());
   const destinationNodes = useRef(new Map<string, HTMLButtonElement>());
-  const animations = useRef(new Set<Animation>());
+  const animations = useRef(new Set<Animation | SpringElementHandle>());
+  const timers = useRef(new Set<ReturnType<typeof setTimeout>>());
+  const restingNodes = useRef(new Map<HTMLElement, { transform: string }>());
   const flightNodes = useRef(new Set<HTMLElement>());
   const frameRef = useRef<number | null>(null);
   const epochRef = useRef(0);
@@ -212,6 +215,10 @@ export function StoryMediaOrganizer(props: StoryMediaOrganizerProps) {
     frameRef.current = null;
     animations.current.forEach((animation) => animation.cancel());
     animations.current.clear();
+    timers.current.forEach((timer) => clearTimeout(timer));
+    timers.current.clear();
+    restingNodes.current.forEach(({ transform }, node) => { node.style.transform = transform; });
+    restingNodes.current.clear();
     flightNodes.current.forEach((node) => node.remove());
     flightNodes.current.clear();
   }, []);
@@ -243,13 +250,26 @@ export function StoryMediaOrganizer(props: StoryMediaOrganizerProps) {
     return { photos, tiles };
   };
 
-  const trackAnimation = (animation: Animation, node?: HTMLElement) => {
+  const trackAnimation = (animation: Animation | SpringElementHandle, node?: HTMLElement) => {
     animations.current.add(animation);
     const finish = () => {
       animations.current.delete(animation);
       if (node) { flightNodes.current.delete(node); node.remove(); }
     };
     void animation.finished.then(finish, finish);
+  };
+  const afterDelay = (delay: number, start: () => void) => {
+    if (!delay) { start(); return; }
+    const timer = setTimeout(() => { timers.current.delete(timer); start(); }, delay);
+    timers.current.add(timer);
+  };
+  const settleElement = (node: HTMLElement, transform: string, owner: string) => {
+    const resting = { transform };
+    restingNodes.current.set(node, resting);
+    const spring = springElementTo(node, { transform }, { owner });
+    trackAnimation(spring);
+    const cleanup = () => { if (restingNodes.current.get(node) === resting) restingNodes.current.delete(node); };
+    void spring.finished.then(cleanup, cleanup);
   };
 
   const canPresent = () => !prefersReducedMotion() && typeof Element.prototype.animate === "function";
@@ -268,15 +288,19 @@ export function StoryMediaOrganizer(props: StoryMediaOrganizerProps) {
     tiles.forEach((before, id) => {
       const node = tileNodes.current.get(id);
       if (!node?.isConnected) return;
+      const paintedTransform = node.style.transform;
+      node.style.transform = "none";
       const after = node.getBoundingClientRect();
+      node.style.transform = paintedTransform;
       const x = before.left - after.left;
       const y = before.top - after.top;
-      if (Math.abs(x) + Math.abs(y) > 1) trackAnimation(node.animate([
-        { transform: `translate(${x}px, ${y}px)` }, { transform: "translate(0, 0)" },
-      ], { duration: motionTokens.tiers.ui, easing: motionTokens.easings.easeOutSoft }));
+      if (Math.abs(x) + Math.abs(y) > 1) {
+        node.style.transform = `translate(${x}px, ${y}px)`;
+        settleElement(node, "translate(0, 0)", `organizer-layout:${id}`);
+      }
     });
   };
-  const flyPhoto = (photo: FlightPhoto, end: DOMRect, index: number, extraCount = 0) => {
+  const flyPhoto = (photo: FlightPhoto, end: DOMRect, index: number, extraCount = 0, onArrived?: () => void) => {
     const node = document.createElement("div");
     node.className = "story-media-organizer__flight";
     node.setAttribute("aria-hidden", "true");
@@ -297,19 +321,28 @@ export function StoryMediaOrganizer(props: StoryMediaOrganizerProps) {
     const scaleX = end.width / photo.rect.width;
     const scaleY = end.height / photo.rect.height;
     const arrived = `translate(${x}px, ${y}px) scale(${scaleX}, ${scaleY})`;
-    trackAnimation(node.animate([
-      { transform: "translate(0, 0) scale(1)", opacity: 1, offset: 0, easing: motionTokens.easings.easeOutSoft },
-      { transform: arrived, opacity: 1, offset: 0.82 },
-      { transform: arrived, opacity: 0, offset: 1 },
-    ], { duration: motionTokens.tiers.content, delay: index * motionTokens.tiers.instant / 3,
-      fill: "both" }), node);
+    afterDelay(index * motionTokens.tiers.instant / 3, () => {
+      if (!node.isConnected) return;
+      const spring = springElementTo(node, { transform: arrived }, { owner: `organizer-flight:${photo.id}` });
+      animations.current.add(spring);
+      void spring.finished.then(() => {
+        animations.current.delete(spring);
+        if (!node.isConnected) return;
+        onArrived?.();
+        trackAnimation(node.animate([{ opacity: 1 }, { opacity: 0 }], { duration: motionTokens.tiers.instant, fill: "both" }), node);
+      }, () => {
+        animations.current.delete(spring);
+        flightNodes.current.delete(node);
+        node.remove();
+      });
+    });
   };
-  const acknowledgeDestination = (targetId: string | null, delay = 0) => {
+  const acknowledgeDestination = (targetId: string | null) => {
     const count = destinationNodes.current.get(destinationKey(targetId))?.querySelector<HTMLElement>(".story-media-organizer__folder b");
-    if (count) trackAnimation(count.animate([{ transform: "scale(1.18)" }, { transform: "scale(1)" }], {
-      duration: motionTokens.tiers.ui, delay,
-      easing: motionTokens.easings.easeOutSoft,
-    }));
+    if (count) {
+      if (!count.style.transform || count.style.transform === "scale(1)") count.style.transform = "scale(1.18)";
+      settleElement(count, "scale(1)", `organizer-count:${destinationKey(targetId)}`);
+    }
   };
   const presentMove = (capture: MoveCapture, targetId: string | null, count: number) => {
     if (!canPresent()) return;
@@ -317,8 +350,9 @@ export function StoryMediaOrganizer(props: StoryMediaOrganizerProps) {
     const end = visibleRect(destinationPreview(targetId));
     if (!end) return;
     capture.photos.forEach((photo, index) => flyPhoto(photo, end, index,
-      index === capture.photos.length - 1 && count > capture.photos.length ? count : 0));
-    acknowledgeDestination(targetId, capture.photos.length ? motionTokens.tiers.content * 0.82 : 0);
+      index === capture.photos.length - 1 && count > capture.photos.length ? count : 0,
+      index === capture.photos.length - 1 ? () => acknowledgeDestination(targetId) : undefined));
+    if (!capture.photos.length) acknowledgeDestination(targetId);
   };
 
   const move = async (ids: readonly string[], targetId: string | null, captured?: MoveCapture | null) => {

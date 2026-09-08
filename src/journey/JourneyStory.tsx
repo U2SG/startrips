@@ -60,6 +60,7 @@ import {
   writeAudioAtmosphereEnergy,
 } from "../motion/audioAtmosphere";
 import { prefersReducedMotion } from "../motion/preferences";
+import { springElementTo, springTransformVelocity, type SpringElementHandle } from "../motion/springElement";
 import {
   applyScopeReorder,
   journeyCover,
@@ -927,10 +928,12 @@ export function JourneyStory({
     neighborIndex: number;
     neighborAsset: JourneyMediaAsset | null;
     width: number;
+    originTransform: string;
   } | null>(null);
   const mediaDragSettlingRef = useRef(false);
   const mediaDragSettleCancelRef = useRef<(() => void) | null>(null);
   const mediaDragSettleFinishRef = useRef<(() => void) | null>(null);
+  const mediaDragSprings = useRef<SpringElementHandle[]>([]);
   const mediaTapTimerRef = useRef(0);
   const [mobileManageMode, setMobileManageMode] = useState(false);
   const mobileManageDoneRef = useRef<HTMLButtonElement>(null);
@@ -2271,7 +2274,7 @@ export function JourneyStory({
     const drag = mediaDragRef.current;
     if (!drag) return;
     const dx = drag.peek ? drag.dx : drag.dx * 0.3;
-    const transform = mediaStackPull(dx, drag.width);
+    const transform = `${mediaStackPull(dx, drag.width)} ${drag.originTransform === "none" ? "" : drag.originTransform}`;
     drag.base.style.transform = transform;
     const pages = drag.container.querySelector<HTMLElement>("[data-story-media-pages]");
     pages?.style.setProperty("--story-drag-x", `${dx}px`);
@@ -2284,12 +2287,11 @@ export function JourneyStory({
   }
 
   function beginMediaDrag(container: HTMLElement | null, pointerId: number, clientX: number, clientY: number, eventTime: number, wrap: boolean, tapOpensFullscreen = false, preserveNativeVideoCapture = false) {
-    if (!container || incomingAssetId !== null || mutationPending || overview || scopedMedia.length < 2) return;
+    if (!container || mutationPending || overview || scopedMedia.length < 2) return;
     // A new gesture can take over the already-decoded destination instead of
     // waiting for the visual tail of the preceding drag to finish.
     const completePreviousDrag = mediaDragSettleFinishRef.current;
     if (completePreviousDrag) {
-      cancelPendingMediaDragSettle();
       completePreviousDrag();
     } else if (mediaDragSettlingRef.current) {
       cancelPendingMediaDragSettle();
@@ -2298,6 +2300,9 @@ export function JourneyStory({
     // not the semantic settled frame the user's finger is manipulating.
     const base = container.querySelector<HTMLElement>('[data-media-page="current"]');
     if (!base) return;
+    const pages = container.querySelector<HTMLElement>("[data-story-media-pages]");
+    const originTransform = getComputedStyle(base).transform;
+    pages?.style.setProperty("--story-live-transform", originTransform);
     // A pointer-down may still become a picture click. Keep the latest cold
     // navigation intent until an actual horizontal drag takes ownership.
     setMediaGestureHolding(true);
@@ -2319,6 +2324,7 @@ export function JourneyStory({
       neighborIndex: -1,
       neighborAsset: null,
       width: base.clientWidth,
+      originTransform,
     };
   }
 
@@ -2338,6 +2344,21 @@ export function JourneyStory({
         return;
       }
       drag.axis = "x";
+      for (const spring of mediaDragSprings.current) spring.cancel();
+      mediaDragSprings.current = [];
+      if (incomingMediaRef.current !== null) {
+        flushSync(() => {
+          setIncomingAssetId(null);
+          setPendingMediaTarget(null);
+        });
+      }
+      const pages = drag.container.querySelector<HTMLElement>("[data-story-media-pages]");
+      pages?.dispatchEvent(new CustomEvent("story-media-grab", {
+        detail: { neighborId: resolveMediaDragNeighbor(dx, drag.wrap)?.asset.id },
+      }));
+      drag.originTransform = getComputedStyle(drag.base).transform;
+      pages?.style.setProperty("--story-live-transform", drag.originTransform);
+      pages?.style.setProperty("--story-live-opacity", getComputedStyle(drag.base).opacity);
       setPendingMediaTarget(null);
       requestedMediaRef.current = shownAssetId;
       setAssetIndex(storyAssetIndexForId(scopedMedia, shownAssetId, assetIndex));
@@ -2369,11 +2390,11 @@ export function JourneyStory({
       const previousPeek = drag.peek;
       drag.peek = attachMediaDragPeek(drag.container, drag.neighborAsset);
       if (previousPeek && previousPeek !== drag.peek) {
-        previousPeek.style.transition = "";
-        previousPeek.style.transform = "";
-        previousPeek.style.zIndex = "";
         previousPeek.classList.remove("journey-story__media-drag-settle", "journey-story__media-drag-page");
       }
+      drag.container.querySelector<HTMLElement>("[data-story-media-pages]")?.dispatchEvent(new CustomEvent("story-media-grab", {
+        detail: { neighborId: drag.neighborAsset?.id },
+      }));
     }
     applyMediaDragTransform();
   }
@@ -2381,6 +2402,8 @@ export function JourneyStory({
   function cancelPendingMediaDragSettle() {
     window.clearTimeout(mediaTapTimerRef.current);
     mediaTapTimerRef.current = 0;
+    for (const spring of mediaDragSprings.current) spring.cancel();
+    mediaDragSprings.current = [];
     const cancelPendingSettle = mediaDragSettleCancelRef.current;
     mediaDragSettleCancelRef.current = null;
     mediaDragSettleFinishRef.current = null;
@@ -2399,6 +2422,8 @@ export function JourneyStory({
     pages?.style.removeProperty("--story-live-transform");
     pages?.style.removeProperty("--story-live-opacity");
     pages?.style.removeProperty("--story-live-z");
+    const liveShell = pages?.querySelector<HTMLElement>(".story-media-pages__video");
+    if (liveShell) { liveShell.style.transform = ""; liveShell.style.opacity = ""; }
     pages?.classList.remove("is-drag-settling");
     try {
       if (drag.container.hasPointerCapture(drag.pointerId)) drag.container.releasePointerCapture(drag.pointerId);
@@ -2435,7 +2460,7 @@ export function JourneyStory({
 
   // The same neighbor page becomes current after the snap. A cold neighbor
   // resists and returns to rest; its eventual decode never navigates by itself.
-  function settleMediaDrag(commit: boolean) {
+  function settleMediaDrag(commit: boolean, releaseVelocityX = 0) {
     const drag = mediaDragRef.current;
     mediaDragRef.current = null;
     if (!drag) return;
@@ -2445,6 +2470,14 @@ export function JourneyStory({
       }
     } catch {
       // The browser may already have dropped capture before pointercancel.
+    }
+    // A click or vertical gesture never owned the page transform. In
+    // particular, an ignored click at the last item must not cancel the
+    // ongoing navigation spring and strand its pending semantic handoff.
+    if (drag.axis !== "x") {
+      setMediaGestureHolding(false);
+      drag.container.querySelector<HTMLElement>("[data-story-media-pages]")?.style.removeProperty("--story-live-transform");
+      return;
     }
     mediaDragSettlingRef.current = !prefersReducedMotion();
     const asset = commit ? drag.neighborAsset : null;
@@ -2469,61 +2502,66 @@ export function JourneyStory({
       mediaDragSettlingRef.current = false;
       return;
     }
-    drag.base.classList.add("journey-story__media-drag-settle");
-    drag.container.querySelector<HTMLElement>("[data-story-media-pages]")?.classList.add("is-drag-settling");
-    if (drag.peek) drag.peek.classList.add("journey-story__media-drag-settle");
+    const pages = drag.container.querySelector<HTMLElement>("[data-story-media-pages]");
+    const rearDepth = ready && asset ? (drag.dx < 0 ? 2 : 1) : 0;
+    const targetTransform = mediaStackRest(rearDepth);
+    const velocitySampleSeconds = 1 / 120;
+    const sample = (distance: number) => new DOMMatrixReadOnly(mediaStackPull(
+      drag.peek ? distance : distance * 0.3, drag.width,
+    )).multiply(new DOMMatrixReadOnly(drag.originTransform === "none" ? undefined : drag.originTransform)).toFloat64Array();
+    const transformVelocity = springTransformVelocity(sample(drag.dx),
+      sample(drag.dx + releaseVelocityX * 1000 * velocitySampleSeconds), velocitySampleSeconds);
     if (ready && asset) {
-      const index = drag.neighborIndex;
-      const rearDepth = drag.dx < 0 ? 2 : 1;
-      const transform = mediaStackRest(rearDepth);
-      drag.base.style.transform = transform;
-      const pages = drag.container.querySelector<HTMLElement>("[data-story-media-pages]");
       drag.base.style.zIndex = "2";
-      drag.base.style.opacity = String(mediaStackOpacity(rearDepth));
-      pages?.style.setProperty("--story-live-transform", transform);
-      pages?.style.setProperty("--story-live-opacity", String(mediaStackOpacity(rearDepth)));
       pages?.style.setProperty("--story-live-z", "2");
-      if (drag.peek) {
-        drag.peek.style.zIndex = "5";
-        drag.peek.style.opacity = "1";
-        drag.peek.style.transform = mediaStackRest(0);
+      if (drag.peek) drag.peek.style.zIndex = "5";
+    }
+    const springs = [springElementTo(drag.base, {
+      transform: targetTransform, opacity: mediaStackOpacity(rearDepth),
+    }, { owner: drag.base.dataset.mediaPageId, transformVelocity })];
+    const liveShell = pages?.querySelector<HTMLElement>('.story-media-pages__video[data-video-visible="true"]');
+    if (liveShell) springs.push(springElementTo(liveShell, {
+      transform: targetTransform, opacity: mediaStackOpacity(rearDepth),
+    }, { owner: drag.base.dataset.mediaPageId, transformVelocity }));
+    if (drag.peek) springs.push(springElementTo(drag.peek, {
+      transform: mediaStackRest(ready ? 0 : Number(drag.peek.style.getPropertyValue("--stack-depth")) || 1),
+      opacity: ready ? 1 : mediaStackOpacity(Number(drag.peek.style.getPropertyValue("--stack-depth")) || 1),
+    }, { owner: drag.peek.dataset.mediaPageId }));
+    mediaDragSprings.current = springs;
+    let pending = true;
+    const commitDrag = () => {
+      if (!pending) return;
+      pending = false;
+      mediaDragSettleCancelRef.current = null;
+      mediaDragSettleFinishRef.current = null;
+      mediaDragSprings.current = [];
+      if (ready && asset) finalizeMediaDragCommit(
+        () => landMediaDrag(asset, drag.neighborIndex), () => finishMediaDrag(drag),
+      );
+      else finishMediaDrag(drag);
+      mediaDragSettlingRef.current = false;
+    };
+    mediaDragSettleFinishRef.current = ready ? () => {
+      // Commit identity for the new input, while preserving the pixels and
+      // momentum from which its gesture (or click) will take over.
+      for (const spring of springs) spring.cancel();
+      const painted = Array.from(pages?.querySelectorAll<HTMLElement>("[data-media-page-id]") ?? [])
+        .map((node) => ({ node, transform: getComputedStyle(node).transform, opacity: getComputedStyle(node).opacity }));
+      commitDrag();
+      for (const { node, transform, opacity } of painted) {
+        node.style.transform = transform;
+        node.style.opacity = opacity;
       }
-      mediaDragSettleCancelRef.current?.();
-      const commitDrag = () => {
-        mediaDragSettleCancelRef.current = null;
-        mediaDragSettleFinishRef.current = null;
-        finalizeMediaDragCommit(
-          () => landMediaDrag(asset, index),
-          () => finishMediaDrag(drag),
-        );
-        mediaDragSettlingRef.current = false;
-      };
-      mediaDragSettleFinishRef.current = commitDrag;
-      mediaDragSettleCancelRef.current = scheduleCancelableMediaDragSettle(commitDrag, () => {
-        mediaDragSettleFinishRef.current = null;
-        finishMediaDrag(drag);
-        mediaDragSettlingRef.current = false;
-      });
-      return;
-    }
-    drag.base.style.transform = mediaStackRest(0);
-    drag.container.querySelector<HTMLElement>("[data-story-media-pages]")?.style.setProperty("--story-drag-x", "0px");
-    drag.container.querySelector<HTMLElement>("[data-story-media-pages]")?.style.setProperty("--story-live-transform", mediaStackRest(0));
-    if (drag.peek) {
-      drag.peek.style.transform = mediaStackRest(Number(drag.peek.style.getPropertyValue("--stack-depth")) || 1);
-    }
-    mediaDragSettleCancelRef.current?.();
-    mediaDragSettleCancelRef.current = scheduleCancelableMediaDragSettle(
-      () => {
-        mediaDragSettleCancelRef.current = null;
-        finishMediaDrag(drag);
-        mediaDragSettlingRef.current = false;
-      },
-      () => {
-        finishMediaDrag(drag);
-        mediaDragSettlingRef.current = false;
-      },
-    );
+      pages?.dispatchEvent(new Event("story-media-recover"));
+    } : null;
+    mediaDragSettleCancelRef.current = () => {
+      pending = false;
+      for (const spring of springs) spring.cancel();
+      mediaDragSettleFinishRef.current = null;
+      finishMediaDrag(drag);
+      mediaDragSettlingRef.current = false;
+    };
+    void Promise.all(springs.map((spring) => spring.finished)).then(commitDrag, () => undefined);
   }
 
   function handleStoryMediaPointerDown(event: ReactPointerEvent<HTMLElement>) {
@@ -2565,7 +2603,7 @@ export function JourneyStory({
     if (swipeIntent || reopenFullscreenAfterSettle || (!mobileLayout && drag && drag.axis !== null)) {
       storyMediaGestureConsumedRef.current = true;
     }
-    settleMediaDrag(commit);
+    settleMediaDrag(commit, releaseVelocityX);
     if (reopenFullscreenAfterSettle) {
       mediaTapTimerRef.current = window.setTimeout(() => {
         mediaTapTimerRef.current = 0;
