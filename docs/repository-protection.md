@@ -46,10 +46,12 @@ requirement is enforced on the merge button through that required check, and the
 
 ### Re-running `ci` withdraws a sign-off, and that is not a bug
 
-The controller looks for a **completed** `ci / verify` check-run on the exact head. Re-running or
+The controller looks for a **completed** `ci / verify` check-run on the exact head, reading every
+page of the head's check-runs and reporting `absent`, `still queued` / `still in_progress` or the
+real failing conclusion separately. Re-running or
 re-triggering the `ci` workflow replaces that check-run with one that is queued again, so a
 `merge-ready` applied during that window finds no completed `verify`, and the controller publishes
-`merge-readiness: failure` with `ci / verify is missing` and removes the label. That is the gate
+`merge-readiness: failure` with `ci / verify is still in_progress` and removes the label. That is the gate
 failing closed, not a lookup defect: at that moment the head really does not have a finished
 verification. Wait for `verify` to complete and apply `merge-ready` again. This is worth knowing
 before diagnosing it, because from the outside — a head whose `verify` reads `success` afterwards
