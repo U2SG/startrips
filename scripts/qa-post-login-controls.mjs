@@ -2423,7 +2423,14 @@ async function verifyFinalAcceptanceMobileFlow() {
         document.querySelector(".journey-playback")?.getAttribute("data-playback-step") === "0"
       ), null, { timeout: 2_000 });
       await progress.blur();
-      await page.keyboard.press(" ");
+      // The cinematic phase intentionally auto-hides Playback chrome, so a
+      // body-level Space can be swallowed by transient focus ownership after
+      // the scrubber blur. Pause through the existing transport owner directly;
+      // this is setup for deterministic seeking, not a separate transport path.
+      const pauseControl = page.locator('.journey-playback__controls button[aria-label="暂停播放"]');
+      if (await pauseControl.count()) {
+        await pauseControl.evaluate((button) => button.click());
+      }
       await page.waitForFunction(() => Boolean(
         document.querySelector('.journey-playback__controls button[aria-label="继续播放"]'),
       ), null, { timeout: 2_000 });
