@@ -3,6 +3,17 @@ export type PlaybackMediaElement = {
   play: () => Promise<unknown> | void;
 };
 
+export type RestartablePlaybackMediaElement = Pick<PlaybackMediaElement, "pause"> & {
+  currentTime: number;
+};
+
+/** Replay starts soundtrack ownership from the beginning, never from completion's pause point. */
+export function rewindPlaybackMediaElement(element: RestartablePlaybackMediaElement | null) {
+  if (!element) return;
+  element.pause();
+  element.currentTime = 0;
+}
+
 /** Keep chapter video transport subordinate to the Startrips playback state. */
 export function syncPlaybackMediaElement(
   element: PlaybackMediaElement | null,

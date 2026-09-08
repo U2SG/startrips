@@ -15,6 +15,7 @@ export type JourneyPlaybackPhase =
   | { type: "stop"; pointIndex: number }
   | { type: "media"; pointIndex: number; mediaIndex: number }
   | { type: "outro" }
+  | { type: "completed" }
   | { type: "paused"; previous: JourneyPlaybackPhase };
 
 export function routePointAngularDistance(
@@ -199,6 +200,7 @@ export type PlaybackControl =
   | { type: "back" }
   | { type: "pause" }
   | { type: "resume" }
+  | { type: "replay" }
   | { type: "seek"; stepIndex: number }
   | { type: "exit" };
 
@@ -210,6 +212,11 @@ export type PlaybackState = {
 
 export function initialPlaybackState(): PlaybackState {
   return { stepIndex: 0, phase: { type: "intro" }, paused: false };
+}
+
+/** Terminal is a transport state, not an alias for "paused" or "not started". */
+export function isPlaybackTerminalState(state: PlaybackState): boolean {
+  return state.phase.type === "completed";
 }
 
 export function isMeaningfulPlaybackStep(step: PlaybackStep | undefined): boolean {
@@ -254,9 +261,16 @@ export function playbackReducer(
   const steps = buildPlaybackSteps(journey);
   const lastIndex = steps.length - 1;
 
+  const stateForStep = (stepIndex: number): PlaybackState => {
+    const phase = phaseForStep(steps[stepIndex]);
+    return state.paused
+      ? { stepIndex, phase: { type: "paused", previous: phase }, paused: true }
+      : { stepIndex, phase, paused: false };
+  };
+
   switch (control.type) {
     case "pause":
-      return state.paused
+      return state.paused || isPlaybackTerminalState(state)
         ? state
         : { ...state, paused: true, phase: { type: "paused", previous: state.phase } };
     case "resume":
@@ -264,14 +278,24 @@ export function playbackReducer(
         ? { ...state, paused: false, phase: state.phase.previous }
         : state;
     case "advance": {
-      const next = Math.min(lastIndex, state.stepIndex + 1);
-      if (state.paused) return state;
-      return { stepIndex: next, phase: phaseForStep(steps[next]), paused: false };
+      if (isPlaybackTerminalState(state)) return state;
+      if (state.paused) {
+        const next = meaningfulPlaybackStepIndex(
+          meaningfulPlaybackStepIndexes(steps),
+          state.stepIndex,
+          1,
+        );
+        return stateForStep(next);
+      }
+      if (state.stepIndex >= lastIndex) {
+        return { stepIndex: lastIndex, phase: { type: "completed" }, paused: false };
+      }
+      return stateForStep(state.stepIndex + 1);
     }
     case "next": {
-      if (state.paused) return state;
+      if (isPlaybackTerminalState(state)) return state;
       const next = meaningfulPlaybackStepIndex(meaningfulPlaybackStepIndexes(steps), state.stepIndex, 1);
-      return { stepIndex: next, phase: phaseForStep(steps[next]), paused: false };
+      return stateForStep(next);
     }
     case "previous": {
       const previous = meaningfulPlaybackStepIndex(
@@ -279,22 +303,23 @@ export function playbackReducer(
         state.stepIndex,
         -1,
       );
-      const phase = phaseForStep(steps[previous]);
-      return state.paused
-        ? { stepIndex: previous, phase: { type: "paused", previous: phase }, paused: true }
-        : { stepIndex: previous, phase, paused: false };
+      return stateForStep(previous);
     }
     case "back": {
-      const previous = Math.max(0, state.stepIndex - 1);
-      if (state.paused) return state;
-      return { stepIndex: previous, phase: phaseForStep(steps[previous]), paused: false };
+      const previous = state.paused
+        ? meaningfulPlaybackStepIndex(
+          meaningfulPlaybackStepIndexes(steps),
+          state.stepIndex,
+          -1,
+        )
+        : Math.max(0, state.stepIndex - 1);
+      return stateForStep(previous);
     }
+    case "replay":
+      return initialPlaybackState();
     case "seek": {
       const stepIndex = Math.min(lastIndex, Math.max(0, Math.trunc(control.stepIndex)));
-      const phase = phaseForStep(steps[stepIndex]);
-      return state.paused
-        ? { stepIndex, phase: { type: "paused", previous: phase }, paused: true }
-        : { stepIndex, phase, paused: false };
+      return stateForStep(stepIndex);
     }
     case "exit":
       return state;
