@@ -2,6 +2,9 @@ import { launchQaBrowser } from "./qa-browser.mjs";
 
 const origin = process.env.QA_ORIGIN ?? "http://127.0.0.1:4173";
 const onePixelGif = "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=";
+const captureMotion = process.env.CI === "true" && process.env.QA_CAPTURE_MEDIA_MOTION === "1";
+const motionArtifactDir = "artifacts/media-motion";
+const motionPhotos = ["/artworks/hokusai-wave.jpg", "/artworks/monet-water-lilies.jpg", "/artworks/stieglitz-hand-of-man.jpg"];
 const browser = await launchQaBrowser();
 const checks = [];
 let failed = false;
@@ -43,6 +46,7 @@ try {
   const page = await browser.newPage({
     viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true,
     deviceScaleFactor: 1, reducedMotion: "reduce",
+    ...(captureMotion ? { recordVideo: { dir: `${motionArtifactDir}/raw`, size: { width: 1280, height: 900 } } } : {}),
   });
   const consoleErrors = [];
   const pageErrors = [];
@@ -68,7 +72,10 @@ try {
     return fulfill(route, { journeys: [currentJourney] });
   });
   await page.route("**/api/uploads/assets/*/read-url", (route) => fulfill(route, {
-    url: onePixelGif, expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+    url: captureMotion
+      ? motionPhotos[Number(route.request().url().match(/assets\/[^/]*(\d)\/read-url/)?.[1] ?? 0) % motionPhotos.length]
+      : onePixelGif,
+    expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
   }));
   await page.route("**/api/uploads/assets/move", async (route) => {
     const input = route.request().postDataJSON();
@@ -317,12 +324,50 @@ try {
       failed: undoRequests.length !== 2 || !same(ordered().map((asset) => asset.id), beforeDragOrder)
         || !same(await gridNames(), reorderedOrder),
     });
+    if (captureMotion) {
+      // Reuse this stateful fixture and its real mutation/undo adapters. This
+      // short desktop pass exposes normal flight and return motion in the
+      // recording without changing the mobile reduced-motion assertions.
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await page.emulateMedia({ reducedMotion: "no-preference" });
+      await page.waitForFunction(() => document.querySelector(".journey-story")?.getAttribute("data-story-layout") === "desktop");
+      if (await storyRoot.getAttribute("data-story-editing") !== "true") {
+        await storyRoot.getByRole("button", { name: "编辑故事", exact: true }).click();
+      }
+      await organizer.waitFor({ state: "visible" });
+      if (await moveSelectToggle.getAttribute("aria-pressed") !== "true") await moveSelectToggle.click();
+      await organizer.evaluate((element) => { element.scrollTop = 0; });
+      await page.waitForFunction((selector) => [...document.querySelectorAll(`${selector} img`)]
+        .every((image) => image.complete && image.naturalWidth > 0), tileSelector);
+      await tile(0).click();
+      await tile(2).click();
+      await page.screenshot({ path: `${motionArtifactDir}/organizer-selected.png`, animations: "allow" });
+      await destination("城市终点").click();
+      await settledMove();
+      await waitForCounts(1, 3, 2);
+      // Video records the moving frames. The still follows completion so it
+      // documents destination counts and the settled layout, without freezing WAAPI.
+      await page.waitForFunction(() => !document.querySelector(".story-media-organizer__flight"), undefined, { polling: "raf" });
+      await page.screenshot({ path: `${motionArtifactDir}/organizer-moved.png`, animations: "allow" });
+      await undoMove();
+      await page.waitForFunction(() => !document.querySelector(".story-media-organizer__flight"), undefined, { polling: "raf" });
+      await page.screenshot({ path: `${motionArtifactDir}/organizer-undone.png`, animations: "allow" });
+      record("story-desktop-media-motion-capture", {
+        restoredOrder: await gridNames(),
+        failed: !same(await gridNames(), reorderedOrder) || !same(ordered().map((asset) => asset.id), beforeDragOrder),
+      });
+    }
     record("story-mobile-media-reclassification-runtime-errors", {
       consoleErrors, pageErrors, failed: consoleErrors.length > 0 || pageErrors.length > 0,
     });
   } finally {
     releaseMoveRequest();
+    const video = page.video();
     await page.close();
+    if (video) {
+      await video.saveAs(`${motionArtifactDir}/organizer-move-undo.webm`);
+      await video.delete();
+    }
   }
 } finally {
   console.log("Reclassification checks completed before exit:", JSON.stringify(checks));

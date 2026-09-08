@@ -12,7 +12,8 @@ import {
   type VideoHTMLAttributes,
 } from "react";
 import { StartripsJourneyCue } from "../brand/StartripsBrandMark";
-import { MEDIA_STACK_DURATION, MEDIA_STACK_EASING, mediaStackPull, mediaStackRest } from "./mediaStackMotion";
+import { mediaStackOpacity, mediaStackRest } from "./mediaStackMotion";
+import { springElementTo } from "../motion/springElement";
 import type { JourneyMediaAsset } from "./types";
 import "../styles/playback-media-presentation.css";
 
@@ -93,8 +94,6 @@ export function PlaybackMediaStage(props: Props) {
   const [presentedKey, setPresentedKey] = useState("");
   const [movingKey, setMovingKey] = useState("");
   const [failedKey, setFailedKey] = useState("");
-  const lastStepIndex = useRef(props.stepIndex);
-  const direction = useRef(1);
   const requestInput = `${props.intent}:${props.url ?? ""}`;
   const requestRevision = useRef({ input: requestInput, revision: 0 });
   if (requestRevision.current.input !== requestInput) {
@@ -134,8 +133,6 @@ export function PlaybackMediaStage(props: Props) {
     if (requested !== null && props.url) {
       nextSlots[requested] = { asset: props.asset, url: props.url, frame: null, video: props.video };
     }
-    direction.current = props.stepIndex < lastStepIndex.current ? -1 : 1;
-    lastStepIndex.current = props.stepIndex;
     setStage({ slots: nextSlots, shown, requested, intent: props.intent });
   }, [props.asset.id, props.intent, props.url]);
 
@@ -195,25 +192,28 @@ export function PlaybackMediaStage(props: Props) {
     const shown = stage.shown;
     const from = shown === null ? null : slots.current[shown];
     const to = slots.current[requested];
-    if (shown === null || shown === requested || props.reduceMotion || !from?.animate || !to?.animate
-      || stage.slots[shown]?.asset.id === props.asset.id) {
+    if (shown === null || props.reduceMotion || !from || !to) {
+      if (to) {
+        to.style.transform = mediaStackRest(0);
+        to.style.opacity = "1";
+        to.style.zIndex = "4";
+      }
       commit();
       return;
     }
     setMovingKey(requestKey);
-    const options: KeyframeAnimationOptions = {
-      duration: MEDIA_STACK_DURATION,
-      easing: MEDIA_STACK_EASING,
-      fill: "forwards",
-    };
-    const outgoing = from.animate([
-      { transform: mediaStackRest(0) },
-      { transform: mediaStackPull(-direction.current * from.clientWidth * 1.4, from.clientWidth) },
-    ], options);
-    const incoming = to.animate([
-      { transform: mediaStackRest(1) },
-      { transform: mediaStackRest(0) },
-    ], options);
+    if (shown === requested || stage.slots[shown]?.asset.id === props.asset.id) {
+      to.style.zIndex = "4";
+      const recovery = springElementTo(to, { transform: mediaStackRest(0), opacity: 1 }, { owner: props.asset.id });
+      void recovery.finished.then(commit, () => undefined);
+      return () => recovery.cancel();
+    }
+    from.style.zIndex = "2";
+    to.style.zIndex = "4";
+    const outgoing = springElementTo(from, { transform: mediaStackRest(1), opacity: mediaStackOpacity(1) },
+      { owner: stage.slots[shown]?.asset.id });
+    const incoming = springElementTo(to, { transform: mediaStackRest(0), opacity: 1 },
+      { owner: props.asset.id });
     void Promise.all([outgoing.finished, incoming.finished]).then(commit, () => undefined);
     return () => { outgoing.cancel(); incoming.cancel(); };
   }, [failed, presented, props.asset.id, props.intent, props.reduceMotion, ready, requestKey, stage.requested, stage.shown]);

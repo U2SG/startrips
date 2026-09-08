@@ -1,8 +1,10 @@
 import { motionTokens } from "../motion/tokens";
 
-// A card leaves the top of the pile while the next card straightens beneath it.
+// A photograph yields to the next one inside a compact, stable depth stack.
 // Shared by program navigation, direct manipulation and Playback presentation.
-export const MEDIA_STACK_DURATION = motionTokens.tiers.content;
+export const MEDIA_STACK_DURATION = motionTokens.tiers.ui + motionTokens.tiers.instant;
+// Compatibility timing for a short tap's auxiliary reveal; spatial movement
+// itself is integrated by springElementTo and has no fixed-duration timeline.
 export const MEDIA_STACK_EASING = motionTokens.easings.easeOutSoft;
 
 /** The two actual photographs visible behind the current card. */
@@ -14,13 +16,17 @@ export function mediaStackNeighbors(index: number, length: number, wrap: boolean
 }
 
 export function mediaStackRest(depth: number) {
-  return `translate3d(${depth * 3.2}%, ${depth * 1.2}%, 0) rotate(${depth * 5}deg) scale(${1 - depth * 0.035})`;
+  return `translate3d(${depth * 3.6}%, ${depth * 2.8}%, ${-depth * 12}px) rotateY(${-depth * 3}deg) scale(${1 - depth * 0.055})`;
 }
 
 export function mediaStackPull(distance: number, width: number) {
-  const progress = Math.min(1.4, Math.abs(distance) / Math.max(1, width));
-  return `translate3d(${distance}px, ${progress * 18}px, 0) rotate(${Math.sign(distance) * progress * 2}deg) scale(1)`;
+  // The pointer owns direction; resistance keeps the content inside its stage.
+  const limit = Math.max(1, width) * 0.22;
+  const displacement = Math.sign(distance) * limit * (1 - Math.exp(-Math.abs(distance) / limit));
+  return `translate3d(${displacement}px, 0, 0) rotateY(${displacement / Math.max(1, width) * -4}deg) scale(1)`;
 }
+
+export function mediaStackOpacity(depth: number) { return Math.max(0.64, 1 - depth * 0.18); }
 
 export function mediaStackReveal(depth: number, progress: number) {
   return mediaStackRest(depth * (1 - Math.min(1, Math.max(0, progress))));

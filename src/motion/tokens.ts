@@ -1,8 +1,12 @@
 // Semantic motion tokens for the Living Atlas motion language.
-// CSS mirrors these values in `:root` (see living-atlas.css "Motion tokens");
+// Canonical principles and acceptance: docs/motion-language.md.
+// Spatial interactions require interruptible springs with position/velocity
+// continuity; the durations/easings here serve timeline/fade and legacy callers,
+// and do not themselves implement a spring or impose its completion time.
+// CSS mirrors these values in `:root` (see src/styles/tokens.css);
 // keep the two in sync.
 //
-// The language has four motion tiers, each with a single pace. A feature
+// The language has four motion tiers describing semantic pace. A feature
 // picks a tier by what it is, not by tuning a number:
 //
 //   Tier 0 — instant feedback    (hover / press / focus)      80–160ms
@@ -14,7 +18,9 @@
 // `src/motion/primitives/` plus these tokens — no per-feature magic numbers.
 
 export const motionTokens = {
-  /** Tier durations — the only durations features should reference. */
+  /** Unit-mass spring response shared by DOM motion and its scalar integrator. */
+  spring: { stiffness: 300, damping: 28 },
+  /** Shared timeline/fade durations; not fixed completion times for springs. */
   tiers: {
     /** Tier 0: instant feedback for hover / press / focus. */
     instant: 120,
@@ -68,7 +74,7 @@ export const motionTokens = {
 export const motionPrimitiveClass = {
   /** Small state replacement (Tier 1–2): crossfade, content carries the change. */
   fadeThrough: "motion-fade-through",
-  /** Card/interactive surface spatial feedback (Tier 0–1): lift, no bounce. */
+  /** Card/interactive surface spatial feedback (Tier 0–1): lift, stable hit area. */
   lift: "motion-lift",
   /** Thumbnail/card expands into story/fullscreen (Tier 2). */
   sharedExpand: "motion-shared-expand",

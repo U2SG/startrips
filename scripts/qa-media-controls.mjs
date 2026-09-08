@@ -2,6 +2,9 @@ import { launchQaBrowser } from "./qa-browser.mjs";
 
 const origin = process.env.QA_ORIGIN ?? "http://127.0.0.1:4173";
 const onePixelGif = "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=";
+const captureMotion = process.env.CI === "true" && process.env.QA_CAPTURE_MEDIA_MOTION === "1";
+const motionArtifactDir = "artifacts/media-motion";
+const motionPhotos = ["/artworks/hokusai-wave.jpg", "/artworks/monet-water-lilies.jpg", "/artworks/stieglitz-hand-of-man.jpg"];
 // Use a checked-in, decodable clip so StoryMediaPages and PlaybackMediaStage
 // exercise their real metadata/first-frame gates. `instrumentMedia` below
 // only makes play/pause deterministic; it does not fake readyState or frames.
@@ -25,9 +28,9 @@ const storyFixedPageNames = ["previous", "current", "next"];
 
 const browser = await launchQaBrowser();
 
-// Desktop navigation belongs to the painted half of the current picture, not
-// its contain letterbox or a hidden fullscreen presenter. Video clicks stay
-// above native controls. Mouse input also exercises Story's gesture ownership.
+// Desktop navigation uses the stationary hit surface, even while the painted
+// photo is moving. Its contained picture halves exclude letterboxes and native
+// video controls. Real mouse input also exercises Story's gesture ownership.
 function storyPicture(page, surfaceSelector = ".journey-story__media") {
   return page.locator(`${surfaceSelector}:visible`)
     .locator('img[data-shared-media-id]:visible, video[data-shared-media-id]:visible');
@@ -36,8 +39,25 @@ function storyPicture(page, surfaceSelector = ".journey-story__media") {
 async function storyPicturePoint(page, direction, surfaceSelector = ".journey-story__media") {
   const picture = storyPicture(page, surfaceSelector);
   await picture.waitFor({ state: "visible" });
+  // A stable photo target is still carried by the Story's entrance/layout
+  // animation. Wait for that outer motion only; photo children keep moving
+  // during rapid-click checks and must remain immediately interruptible.
+  await page.waitForFunction((selector) => {
+    let node = document.querySelector(selector)?.querySelector("[data-story-hit-surface]");
+    if (!node) return false;
+    while (node) {
+      if (node.getAnimations().some((animation) => animation.pending || animation.playState === "running")) return false;
+      node = node.parentElement;
+    }
+    return true;
+  }, surfaceSelector, { polling: "raf", timeout: 3_000 });
   return picture.evaluate((media, step) => {
-    const bounds = media.getBoundingClientRect();
+    const root = media.closest("[data-story-media-pages]");
+    const surface = root?.querySelector("[data-story-hit-surface]");
+    if (root?.getAttribute("data-click-navigation") === "true" && !surface) {
+      throw new Error("Desktop Story has no stable click surface");
+    }
+    const bounds = (surface ?? media).getBoundingClientRect();
     const naturalWidth = media instanceof HTMLVideoElement ? media.videoWidth : media.naturalWidth;
     const naturalHeight = media instanceof HTMLVideoElement ? media.videoHeight : media.naturalHeight;
     if (!naturalWidth || !naturalHeight || !bounds.width || !bounds.height) {
@@ -53,6 +73,11 @@ async function storyPicturePoint(page, direction, surfaceSelector = ".journey-st
       throw new Error("Story video navigation point overlaps native controls");
     }
     const hit = document.elementFromPoint(x, y);
+    if (surface && (hit !== surface || getComputedStyle(surface).transform !== "none")) {
+      throw new Error(`Stable Story hit surface is blocked or transformed: ${JSON.stringify({
+        hit: hit?.className, surface: surface.className, transform: getComputedStyle(surface).transform, x, y,
+      })}`);
+    }
     const describe = (node) => node instanceof Element ? {
       tag: node.tagName, asset: node.getAttribute("data-shared-media-id"),
       pageId: node.closest("[data-media-page]")?.getAttribute("data-media-page-id"),
@@ -61,13 +86,24 @@ async function storyPicturePoint(page, direction, surfaceSelector = ".journey-st
       zIndex: getComputedStyle(node.closest("[data-media-page]") ?? node).zIndex,
       bounds: node.getBoundingClientRect().toJSON(),
     } : null;
-    return { x, y, expected: describe(media), hit: describe(hit) };
+    return { x, y, expected: describe(media), hit: describe(hit),
+      stableBounds: surface ? bounds.toJSON() : null };
   }, direction);
 }
 
-async function clickStoryPicture(page, direction, surfaceSelector = ".journey-story__media") {
-  const point = await storyPicturePoint(page, direction, surfaceSelector);
-  await page.evaluate(({ point, direction }) => {
+async function clickStoryPicture(page, direction, surfaceSelector = ".journey-story__media", fixedPoint = null) {
+  const point = fixedPoint ?? await storyPicturePoint(page, direction, surfaceSelector);
+  await page.evaluate(({ point, direction, surfaceSelector }) => {
+    if (point.stableBounds) {
+      const surface = document.querySelector(surfaceSelector)?.querySelector("[data-story-hit-surface]");
+      const bounds = surface?.getBoundingClientRect();
+      if (!bounds || document.elementFromPoint(point.x, point.y) !== surface
+        || ["x", "y", "width", "height"].some((key) => Math.abs(bounds[key] - point.stableBounds[key]) > .5)) {
+        throw new Error(`Story click geometry moved or lost its actual hit target: ${JSON.stringify({
+          before: point.stableBounds, now: bounds?.toJSON(), x: point.x, y: point.y,
+        })}`);
+      }
+    }
     window.__qaStoryLastPictureClick = { point, direction, events: [] };
     if (window.__qaStoryPictureTraceInstalled) return;
     window.__qaStoryPictureTraceInstalled = true;
@@ -82,8 +118,127 @@ async function clickStoryPicture(page, direction, surfaceSelector = ".journey-st
           x: event.clientX, y: event.clientY });
       }, true);
     }
-  }, { point, direction });
+  }, { point, direction, surfaceSelector });
   await page.mouse.click(point.x, point.y);
+}
+
+async function clickStoryNativeControlStrip(page, surfaceSelector) {
+  const video = page.locator(surfaceSelector).locator("video[data-shared-media-id]");
+  const before = await video.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    // Chromium's lower-left native play/pause region, outside the clipped
+    // navigation surface. Do not activate a React handler or DOM .click().
+    const point = { x: bounds.left + 28, y: bounds.bottom - 24 };
+    window.__qaNativeControlVideo = element;
+    window.__qaNativeControlEvents = [];
+    element.addEventListener("pointerdown", (event) => {
+      window.__qaNativeControlEvents.push({ type: event.type, trusted: event.isTrusted });
+    }, { once: true });
+    return { point, id: element.getAttribute("data-shared-media-id"), controls: element.controls,
+      fullscreen: Boolean(element.closest(".journey-story-fullscreen")),
+      actualHitIsVideo: document.elementFromPoint(point.x, point.y) === element };
+  });
+  if (!before.controls || !before.actualHitIsVideo) {
+    throw new Error(`Native video control strip is covered: ${JSON.stringify(before)}`);
+  }
+  await page.mouse.click(before.point.x, before.point.y);
+  const after = await page.evaluate(async (selector) => {
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const root = document.querySelector(selector);
+    const pages = root?.querySelector("[data-story-media-pages]");
+    const video = root?.querySelector("video[data-shared-media-id]");
+    const fullscreen = document.querySelector(".journey-story-fullscreen");
+    return { id: video?.getAttribute("data-shared-media-id"), sameNode: video === window.__qaNativeControlVideo,
+      presentation: pages?.getAttribute("data-media-presentation"), connected: Boolean(root?.isConnected),
+      fullscreen: Boolean(fullscreen && !fullscreen.hidden && fullscreen.getBoundingClientRect().width),
+      events: window.__qaNativeControlEvents };
+  }, surfaceSelector);
+  // Native shadow controls may intentionally contain their pointer events;
+  // actual hit-testing plus Playwright mouse input establishes the input path.
+  return { before, after, failed: !after.connected || !after.sameNode || after.id !== before.id
+    || after.presentation !== "settled" || after.fullscreen !== before.fullscreen };
+}
+
+async function exerciseStoryEdgeRegrab(page) {
+  const point = await storyPicturePoint(page, -1);
+  const current = page.locator(`.journey-story__media ${storyCurrentPageSelector}`);
+  const rest = await current.evaluate((element) => element.getBoundingClientRect().toJSON());
+  await page.mouse.move(point.x, point.y);
+  await page.mouse.down();
+  let pulled;
+  try {
+    await page.mouse.move(point.x + 120, point.y, { steps: 6 });
+    pulled = await current.evaluate((element) => element.getBoundingClientRect().toJSON());
+  } finally {
+    await page.mouse.up();
+  }
+  // Start with real mouse input. Re-grab in the same rendering task as both
+  // geometry reads, so a RAF between RPC calls cannot conceal a reset to rest.
+  const regrab = await page.evaluate(({ point, rest, pulled }) => new Promise((resolve, reject) => {
+    const started = performance.now();
+    const root = document.querySelector(".journey-story__media [data-story-media-pages]");
+    const surface = root?.querySelector("[data-story-hit-surface]");
+    const current = root?.querySelector('[data-media-page="current"]');
+    if (!surface || !current || pulled.x - rest.x <= 3) {
+      reject(new Error(`Boundary mouse drag did not visibly displace its photo: ${JSON.stringify({ rest, pulled })}`));
+      return;
+    }
+    const inspect = () => {
+      const before = current.getBoundingClientRect().toJSON();
+      const displacement = before.x - rest.x;
+      if (displacement > 3 && displacement < (pulled.x - rest.x) * .85) {
+        const pointer = { pointerId: 991, pointerType: "mouse", isPrimary: true,
+          clientX: point.x, clientY: point.y, button: 0, buttons: 1,
+          bubbles: true, cancelable: true, composed: true };
+        surface.dispatchEvent(new PointerEvent("pointerdown", pointer));
+        const after = current.getBoundingClientRect().toJSON();
+        resolve({ pointer, before, after, displacement,
+          jump: Math.max(...["x", "y", "width", "height"].map((key) => Math.abs(after[key] - before[key]))) });
+        return;
+      }
+      if (performance.now() - started >= 3_000) {
+        reject(new Error(`No intermediate boundary spring pixels to re-grab: ${JSON.stringify({ rest, pulled, before })}`));
+        return;
+      }
+      requestAnimationFrame(inspect);
+    };
+    requestAnimationFrame(inspect);
+  }), { point, rest, pulled });
+  let continuation;
+  try {
+    if (captureMotion) await page.screenshot({ path: `${motionArtifactDir}/story-stack-regrab-held.png`, animations: "allow" });
+    continuation = await page.evaluate((pointer) => {
+      const root = document.querySelector(".journey-story__media [data-story-media-pages]");
+      const surface = root.querySelector("[data-story-hit-surface]");
+      const current = root.querySelector('[data-media-page="current"]');
+      const before = current.getBoundingClientRect().toJSON();
+      surface.dispatchEvent(new PointerEvent("pointermove", { ...pointer, clientX: pointer.clientX + 48 }));
+      const after = current.getBoundingClientRect().toJSON();
+      return { before, after, followedPointer: after.x - before.x > 2 };
+    }, regrab.pointer);
+  } finally {
+    await page.evaluate((pointer) => document.querySelector(".journey-story__media [data-story-hit-surface]")
+      ?.dispatchEvent(new PointerEvent("pointerup", { ...pointer, clientX: pointer.clientX + 48, buttons: 0 })), regrab.pointer);
+  }
+  await page.waitForFunction((rest) => {
+    const root = document.querySelector(".journey-story__media [data-story-media-pages]");
+    const current = root?.querySelector('[data-media-page="current"]');
+    if (!current || current.getAttribute("data-media-page-id") !== "00000000-0000-4000-8000-000000000100") return false;
+    const bounds = current.getBoundingClientRect();
+    const atRest = ["x", "y", "width", "height"].every((key) => Math.abs(bounds[key] - rest[key]) <= .5);
+    window.__qaEdgeRegrabRestFrames = atRest ? (window.__qaEdgeRegrabRestFrames ?? 0) + 1 : 0;
+    return window.__qaEdgeRegrabRestFrames >= 3 && root.getAttribute("data-media-presentation") === "settled";
+  }, rest, { polling: "raf", timeout: 3_000 });
+  await waitForStoryPicture(page, "00000000-0000-4000-8000-000000000100");
+  const nodes = await page.evaluate(() => {
+    const root = document.querySelector(".journey-story__media [data-story-media-pages]");
+    const pages = [...root.querySelectorAll("[data-media-page]")];
+    return { count: pages.length, sameNodes: pages.every((node, index) => node === window.__qaStoryMediaPageNodes[index]),
+      asset: root.querySelector("[data-shared-media-id]")?.getAttribute("data-shared-media-id") };
+  });
+  const heldDrift = Math.max(...["x", "y", "width", "height"].map((key) => Math.abs(continuation.before[key] - regrab.after[key])));
+  return { rest, pulled, regrab, continuation, heldDrift, nodes, failed: regrab.jump > .5 || heldDrift > .5 || !continuation.followedPointer
+    || nodes.count !== 3 || !nodes.sameNodes || nodes.asset !== "00000000-0000-4000-8000-000000000100" };
 }
 
 async function waitForStoryPicture(page, assetId, surfaceSelector = ".journey-story__media") {
@@ -170,6 +325,7 @@ async function createQaPage(path, mediaUrl, {
   videoMediaUrl = null,
   videoAssetId = null,
   reducedMotion = "reduce",
+  recordMotion = false,
   viewport = mobile ? { width: 390, height: 844 } : { width: 1280, height: 800 },
 } = {}) {
   const page = await browser.newPage({
@@ -178,6 +334,7 @@ async function createQaPage(path, mediaUrl, {
     hasTouch: mobile,
     deviceScaleFactor: 1,
     reducedMotion,
+    ...(captureMotion && recordMotion ? { recordVideo: { dir: `${motionArtifactDir}/raw`, size: viewport } } : {}),
   });
   const consoleErrors = [];
   const pageErrors = [];
@@ -342,7 +499,7 @@ async function createQaPage(path, mediaUrl, {
           ? tinyVideo
           : videoMediaUrl && videoAssetId && route.request().url().includes(videoAssetId)
             ? videoMediaUrl
-            : mediaUrl,
+            : typeof mediaUrl === "function" ? mediaUrl(route.request().url()) : mediaUrl,
         expiresAt: "2026-08-26T00:00:00.000Z",
       }),
     });
@@ -1890,12 +2047,21 @@ try {
     }
   }
 
-  const mediaContinuity = await createQaPage("/?qaState=journey-story", onePixelGif, {
+  // Only this existing desktop motion scenario records; the many transport and
+  // reduced-motion checks retain their tiny deterministic fixtures.
+  const mediaContinuity = await createQaPage("/?qaState=journey-story", captureMotion
+    ? (url) => motionPhotos[Number(url.match(/assets\/[^/]*(\d{3})\/read-url/)?.[1] ?? 100) % motionPhotos.length]
+    : onePixelGif, {
     mobile: false,
     reducedMotion: "no-preference",
+    recordMotion: true,
   });
   try {
     await mediaContinuity.page.locator(".journey-story").waitFor({ state: "visible" });
+    if (captureMotion) {
+      await waitForStoryPicture(mediaContinuity.page, "00000000-0000-4000-8000-000000000100");
+      await mediaContinuity.page.screenshot({ path: `${motionArtifactDir}/story-stack-before.png`, animations: "allow" });
+    }
     const initialRailState = await mediaContinuity.page.evaluate(({ pagesSelector }) => {
       const root = document.querySelector(pagesSelector);
       const wrappers = [...(root?.querySelectorAll("[data-media-page]") ?? [])];
@@ -1963,8 +2129,67 @@ try {
       failed: continuityFailed,
     });
     if (continuityFailed) failed = true;
+    if (captureMotion) await mediaContinuity.page.screenshot({ path: `${motionArtifactDir}/story-stack-next.png`, animations: "allow" });
+    {
+      await clickStoryPicture(mediaContinuity.page, -1);
+      await waitForStoryPicture(mediaContinuity.page, "00000000-0000-4000-8000-000000000100");
+      if (captureMotion) await mediaContinuity.page.screenshot({ path: `${motionArtifactDir}/story-stack-return.png`, animations: "allow" });
+      await mediaContinuity.page.evaluate((selector) => {
+        const root = document.querySelector(selector);
+        const trace = { maxPages: 0, maxVideos: 0 };
+        const sample = () => {
+          trace.maxPages = Math.max(trace.maxPages, root.querySelectorAll("[data-media-page]").length);
+          trace.maxVideos = Math.max(trace.maxVideos, root.querySelectorAll("video").length);
+        };
+        sample();
+        const observer = new MutationObserver(sample);
+        observer.observe(root, { childList: true, subtree: true });
+        window.__qaMotionNodeTrace = { trace, observer };
+      }, storyMediaPagesSelector);
+      const edgeRegrab = await exerciseStoryEdgeRegrab(mediaContinuity.page);
+      checks.push({ name: "story-boundary-spring-regrab-keeps-visible-pixels", ...edgeRegrab });
+      if (edgeRegrab.failed) failed = true;
+      // Reverse through actual picture clicks while motion is still running;
+      // the recording preserves those frames without pausing any animation.
+      const forwardPoint = await storyPicturePoint(mediaContinuity.page, 1);
+      const reversePoint = await storyPicturePoint(mediaContinuity.page, -1);
+      for (let cycle = 0; cycle < 2; cycle += 1) {
+        await clickStoryPicture(mediaContinuity.page, 1, ".journey-story__media", forwardPoint);
+        await mediaContinuity.page.waitForFunction((selector) => document.querySelector(selector)
+          ?.getAttribute("data-media-presentation") === "moving", storyMediaPagesSelector, { polling: "raf", timeout: 3_000 });
+        await clickStoryPicture(mediaContinuity.page, -1, ".journey-story__media", reversePoint);
+        await waitForStoryPicture(mediaContinuity.page, "00000000-0000-4000-8000-000000000100");
+      }
+      // At the boundary the second click has no further semantic target. It
+      // must still leave the in-flight last-page spring free to finish.
+      await clickStoryPicture(mediaContinuity.page, 1, ".journey-story__media", forwardPoint);
+      await waitForStoryPicture(mediaContinuity.page, "00000000-0000-4000-8000-000000000101");
+      const boundaryPoint = await storyPicturePoint(mediaContinuity.page, 1);
+      await clickStoryPicture(mediaContinuity.page, 1, ".journey-story__media", boundaryPoint);
+      await mediaContinuity.page.waitForFunction((selector) => document.querySelector(selector)
+        ?.getAttribute("data-media-presentation") === "moving", storyMediaPagesSelector, { polling: "raf", timeout: 3_000 });
+      await clickStoryPicture(mediaContinuity.page, 1, ".journey-story__media", boundaryPoint);
+      await waitForStoryPicture(mediaContinuity.page, "00000000-0000-4000-8000-000000000102");
+      checks.push({ name: "story-stable-hit-surface-repeated-boundary-click", settledAsset: "00000000-0000-4000-8000-000000000102", failed: false });
+      const nodeTrace = await mediaContinuity.page.evaluate((selector) => {
+        const { trace, observer } = window.__qaMotionNodeTrace;
+        observer.disconnect();
+        const pages = [...document.querySelector(selector).querySelectorAll("[data-media-page]")];
+        return { ...trace, samePhysicalPages: pages.length === 3
+          && pages.every((node, index) => node === window.__qaStoryMediaPageNodes[index]) };
+      }, storyMediaPagesSelector);
+      const traceFailed = nodeTrace.maxPages !== 3 || nodeTrace.maxVideos > 1 || !nodeTrace.samePhysicalPages;
+      checks.push({ name: "story-stable-hit-surface-rapid-reverse-node-stability", ...nodeTrace, failed: traceFailed });
+      if (traceFailed) failed = true;
+      if (captureMotion) await mediaContinuity.page.screenshot({ path: `${motionArtifactDir}/story-stack-boundary-settled.png`, animations: "allow" });
+    }
   } finally {
+    const video = mediaContinuity.page.video();
     await mediaContinuity.page.close();
+    if (video) {
+      await video.saveAs(`${motionArtifactDir}/story-stack-switch.webm`);
+      await video.delete();
+    }
   }
 
   const reducedMotionStory = await createQaPage("/?qaState=journey-story", onePixelGif, {
@@ -2263,9 +2488,8 @@ try {
   }
 
   // Cached normal-motion race: the fixture prefetches the middle asset while A
-  // is shown, then the test reverses B before its transform transition ends.
-  // Pausing the presentation animations keeps the race deterministic without
-  // binding the QA contract to a worker-chosen animation name.
+  // is shown, then the test reverses B after observing actual intermediate
+  // pixels. Springs keep running; this contract has no WAAPI object or timer.
   const cachedRapidReverse = await createQaPage("/?qaState=journey-story", onePixelGif, {
     mobile: false,
     readDelayMs: 0,
@@ -2276,7 +2500,8 @@ try {
       const root = document.querySelector(pagesSelector);
       const current = root?.querySelector('[data-media-page="current"]');
       const settled = document.querySelector(currentMediaSelector);
-      return current?.getAttribute("data-media-page-id") === assetId
+      return root?.getAttribute("data-media-presentation") === "settled"
+        && current?.getAttribute("data-media-page-id") === assetId
         && current?.getAttribute("data-media-page-ready") === "true"
         && settled?.getAttribute("data-shared-media-id") === assetId
         && settled?.getAttribute("alt") === fileName;
@@ -2289,7 +2514,7 @@ try {
     await cachedRapidReverse.page.locator(".journey-story").waitFor({ state: "visible" });
     const initialShownA = await settledAsset("00000000-0000-4000-8000-000000000100", "seed-0.png");
 
-    let pausedTransitionState = null;
+    let interruptedTransitionState = null;
     let returnedToAAfterReverse = false;
     let returnedState = null;
     let mobileModeEntered = false;
@@ -2299,48 +2524,40 @@ try {
     let nextAfterReverseTargetReady = false;
     let nextAfterReverseSettled = false;
     if (initialShownA) {
-      await clickStoryPicture(cachedRapidReverse.page, 1);
+      const forward = await storyPicturePoint(cachedRapidReverse.page, 1);
+      const reverse = await storyPicturePoint(cachedRapidReverse.page, -1);
+      const initialBounds = await cachedRapidReverse.page.locator(`.journey-story__media ${storyCurrentPageSelector}`)
+        .evaluate((element) => element.getBoundingClientRect().toJSON());
+      await clickStoryPicture(cachedRapidReverse.page, 1, ".journey-story__media", forward);
       try {
-        const pausedHandle = await cachedRapidReverse.page.waitForFunction(({ pagesSelector }) => {
+        const movingHandle = await cachedRapidReverse.page.waitForFunction(({ pagesSelector, initialBounds }) => {
           const root = document.querySelector(pagesSelector);
-          // A picture click first releases Story's pointer hold. Only pause
-          // the subsequent ready-target handoff, never that pointer's settle.
           if (root?.getAttribute("data-media-presentation") !== "moving") return false;
           const target = [...(root?.querySelectorAll("[data-media-page]") ?? [])]
             .find((page) => page.getAttribute("data-media-page-id") === "00000000-0000-4000-8000-000000000101");
           if (!target || target.getAttribute("data-media-page-ready") !== "true") return false;
-          const animations = typeof root.getAnimations === "function" ? root.getAnimations({ subtree: true }) : [];
-          const animation = animations.find((candidate) => {
-            const timing = candidate.effect?.getComputedTiming?.();
-            return candidate.playState === "running"
-              && Number(timing?.duration) > 0
-              && Number(candidate.currentTime) < Number(timing.duration);
-          });
-          if (!animation) return false;
-          const timing = animation.effect?.getComputedTiming?.();
-          const currentTime = Number(animation.currentTime);
-          const duration = Number(timing?.duration);
-          for (const active of animations) active.pause();
+          const current = root.querySelector('[data-media-page="current"]');
+          if (!current) return false;
+          const bounds = current.getBoundingClientRect();
+          const movement = Math.max(...["x", "y", "width", "height"].map((key) => Math.abs(bounds[key] - initialBounds[key])));
+          if (movement <= 1) return false;
           return {
             targetId: target.getAttribute("data-media-page-id"),
             targetReady: target.getAttribute("data-media-page-ready") === "true",
-            currentId: root.querySelector('[data-media-page="current"]')?.getAttribute("data-media-page-id") ?? null,
-            playState: animation.playState,
-            currentTime,
-            duration,
+            currentId: current.getAttribute("data-media-page-id"),
+            presentation: root.getAttribute("data-media-presentation"),
+            movement,
             transform: getComputedStyle(target).transform,
-            animationCount: animations.length,
+            currentBounds: bounds.toJSON(),
           };
-        }, { pagesSelector: storyMediaPagesSelector }, { polling: "raf", timeout: 3_000 });
-        pausedTransitionState = await pausedHandle.jsonValue();
+        }, { pagesSelector: storyMediaPagesSelector, initialBounds }, { polling: "raf", timeout: 3_000 });
+        interruptedTransitionState = await movingHandle.jsonValue();
       } catch {
-        pausedTransitionState = null;
+        interruptedTransitionState = null;
       }
 
-      if (pausedTransitionState) {
-        // Focused keyboard input must reverse the pending intent even while
-        // the physical pages are paused partway through their transition.
-        await storyPicture(cachedRapidReverse.page).press("ArrowLeft");
+      if (interruptedTransitionState) {
+        await clickStoryPicture(cachedRapidReverse.page, -1, ".journey-story__media", reverse);
         returnedToAAfterReverse = await settledAsset("00000000-0000-4000-8000-000000000100", "seed-0.png");
         returnedState = await cachedRapidReverse.page.evaluate(({ pagesSelector, currentMediaSelector }) => {
           const root = document.querySelector(pagesSelector);
@@ -2439,11 +2656,11 @@ try {
     }
 
     const cachedRapidReverseFailed = !initialShownA
-      || pausedTransitionState?.targetId !== "00000000-0000-4000-8000-000000000101"
-      || pausedTransitionState?.targetReady !== true
-      || pausedTransitionState?.currentId !== "00000000-0000-4000-8000-000000000100"
-      || pausedTransitionState?.playState !== "paused"
-      || !(pausedTransitionState?.currentTime < pausedTransitionState?.duration)
+      || interruptedTransitionState?.targetId !== "00000000-0000-4000-8000-000000000101"
+      || interruptedTransitionState?.targetReady !== true
+      || interruptedTransitionState?.currentId !== "00000000-0000-4000-8000-000000000100"
+      || interruptedTransitionState?.presentation !== "moving"
+      || !(interruptedTransitionState?.movement > 1)
       || !returnedToAAfterReverse
       || returnedState?.id !== "00000000-0000-4000-8000-000000000100"
       || returnedState?.mediaId !== "00000000-0000-4000-8000-000000000100"
@@ -2469,7 +2686,7 @@ try {
         expectedNextAssetId: "00000000-0000-4000-8000-000000000101",
       },
       initialShownA,
-      pausedTransition: pausedTransitionState,
+      interruptedTransition: interruptedTransitionState,
       returnedToAAfterReverse,
       returned: returnedState,
       mobileModeEntered,
@@ -2513,6 +2730,10 @@ try {
     await mixedMedia.page.locator(".journey-story__media").locator(storyCurrentVideoSelector).evaluate((video) => {
       window.__qaStoryInlineVideoNode = video;
     });
+    await waitForStoryPicture(mixedMedia.page, "00000000-0000-4000-8000-000000000152");
+    const inlineNativeControls = await clickStoryNativeControlStrip(mixedMedia.page, ".journey-story__media");
+    checks.push({ name: "story-desktop-native-video-control-strip", ...inlineNativeControls });
+    if (inlineNativeControls.failed) failed = true;
 
     // Fullscreen has its own explicit control; upper video halves navigate.
     await mixedMedia.page.getByRole("button", { name: "全屏查看媒体", exact: true }).click();
@@ -2524,6 +2745,9 @@ try {
       window.__qaStoryFullscreenVideoNode = video;
       return video.controls;
     });
+    const fullscreenNativeControls = await clickStoryNativeControlStrip(mixedMedia.page, ".journey-story-fullscreen");
+    checks.push({ name: "story-fullscreen-native-video-control-strip", ...fullscreenNativeControls });
+    if (fullscreenNativeControls.failed) failed = true;
 
     await clickStoryPicture(mixedMedia.page, 1, ".journey-story-fullscreen");
     const fullscreenImageSettled = await mixedMedia.page.waitForFunction(({ fullscreenSelector, expectedId }) => {

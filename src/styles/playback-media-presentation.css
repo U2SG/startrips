@@ -2,6 +2,7 @@
   position: relative;
   overflow: hidden;
   isolation: isolate;
+  perspective: 1400px;
   min-width: 0;
   min-height: 0;
 }
