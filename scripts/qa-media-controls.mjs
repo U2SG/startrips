@@ -1059,13 +1059,30 @@ try {
       const scale = Math.min(bounds.width / element.videoWidth, bounds.height / element.videoHeight);
       const width = element.videoWidth * scale;
       const height = element.videoHeight * scale;
-      const x = bounds.left + bounds.width / 2;
-      const y = bounds.top + (bounds.height - height) / 2 + height * .35;
-      const hit = document.elementFromPoint(x, y);
+      const controlsTop = bounds.bottom - Math.min(72, bounds.height * .25);
+      const pictureLeft = bounds.left + (bounds.width - width) / 2;
+      const pictureTop = bounds.top + (bounds.height - height) / 2;
+      const left = Math.max(0, pictureLeft);
+      const right = Math.min(innerWidth, pictureLeft + width);
+      const top = Math.max(0, pictureTop);
+      const bottom = Math.min(innerHeight, pictureTop + height, controlsTop);
+      // The sticky Story header can cover the upper picture after scrolling.
+      // Choose an exposed row that fits both the 30px jitter and 110px swipe.
+      const pathFits = right - left > 142 && bottom > top;
+      const x = Math.min(right - 31, Math.max(left + 111, bounds.left + bounds.width / 2));
+      const candidates = pathFits ? [.35, .5, .65, .8, .9].map((fraction) => {
+        const y = top + (bottom - top) * fraction;
+        const hits = [-110, -55, 0, 30].map((offset) => document.elementFromPoint(x + offset, y));
+        return { y, exposed: hits.every((hit) => hit === element),
+          hits: hits.map((hit) => hit instanceof Element ? `${hit.tagName}.${hit.className}` : null) };
+      }) : [];
+      const selected = candidates.find((candidate) => candidate.exposed);
+      const y = selected?.y ?? top;
+      const hit = selected ? document.elementFromPoint(x, y) : null;
       return { x, y, bounds: bounds.toJSON(), picture: [width, height],
         asset: element.getAttribute("data-shared-media-id"), readyState: element.readyState,
         hitIsVideo: hit === element, hit: hit instanceof Element ? `${hit.tagName}.${hit.className}` : null,
-        controlsTop: bounds.bottom - Math.min(72, bounds.height * .25),
+        controlsTop, pathFits, candidates,
         viewport: [innerWidth, innerHeight] };
     });
     nativeTouchPoints.push({ phase, ...point });
