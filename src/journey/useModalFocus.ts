@@ -44,14 +44,48 @@ export function modalSurfaceFor(root: HTMLElement, atlas: Element | null) {
  * Returns the release function for what this trap claimed.
  */
 export function claimInertOwnership(targets: Iterable<HTMLElement>) {
-  const claimed: HTMLElement[] = [];
+  const claimed: Array<{
+    target: HTMLElement;
+    observer: MutationObserver | null;
+    externallyMutated: () => boolean;
+  }> = [];
+
   for (const target of targets) {
     if (target.inert) continue;
     target.inert = true;
-    claimed.push(target);
+
+    let externalMutationObserved = false;
+    const observer = typeof MutationObserver === "undefined"
+      ? null
+      : new MutationObserver((records) => {
+        if (records.some((record) => record.attributeName === "inert")) {
+          externalMutationObserved = true;
+        }
+      });
+    observer?.observe(target, { attributes: true, attributeFilter: ["inert"] });
+    claimed.push({
+      target,
+      observer,
+      externallyMutated: () => externalMutationObserved,
+    });
   }
+
   return () => {
-    for (const target of claimed) target.inert = false;
+    for (const claim of claimed) {
+      const pendingExternalMutation = claim.observer
+        ?.takeRecords()
+        .some((record) => record.attributeName === "inert") ?? false;
+      claim.observer?.disconnect();
+
+      // #255: React can acquire inert for globe point-picking during the same
+      // commit that suspends this trap. That host mutation runs before the
+      // passive cleanup, so releasing unconditionally would clear React's new
+      // ownership. Preserve any inert value touched after this trap claimed it;
+      // the external owner is now responsible for the eventual release.
+      if (claim.target.inert && !claim.externallyMutated() && !pendingExternalMutation) {
+        claim.target.inert = false;
+      }
+    }
   };
 }
 
