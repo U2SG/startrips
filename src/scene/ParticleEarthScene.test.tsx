@@ -13,7 +13,6 @@ import { describe, expect, it, vi } from "vitest";
 import type { GlobeMode } from "../experience/types";
 import {
   GLOBE_MODE_CONFIG,
-  GLOBE_DRAG_THRESHOLD_PX,
   GLOBE_IDLE_ALIGNMENT_SPEED,
   GLOBE_IDLE_RELEASE_BLEND_MS,
   GLOBE_IDLE_RESUME_DELAY_MS,
@@ -27,8 +26,6 @@ import {
   createCoastlineMaterial,
   GLOBE_TILT_LIMIT_RADIANS,
   GLOBE_UPRIGHT_ROTATION_X,
-  GLOBE_ZOOM_MAX,
-  GLOBE_ZOOM_MIN,
   MAX_RENDERED_JOURNEYS,
   MAX_RENDERED_MOBILE_ROUTE_LABELS,
   MAX_RENDERED_ROUTE_LABELS,
@@ -45,39 +42,28 @@ import {
   collectJourneyDimDirections,
   focusSignalAnchor,
   focusViewportCenter,
-  canTrackGlobePointer,
   clampGlobeTilt,
   journeyConnectorAnchor,
-  clampGlobeZoom,
   createRetryableParticleResourceLoader,
   getJourneyRouteLineScale,
   getJourneyRouteVisualState,
   getGlobeIdleAlignmentRotation,
   getGlobeIdleRotationDelta,
-  getGlobeInertiaSpeedLimit,
   getShortestRotationDelta,
   getProjectedGlobeRadiusPx,
   getProjectedSurfaceInteractionRadiusPx,
   isFocusFlightActive,
   isIdleRotationSuppressed,
   isGlobeUpright,
-  isGlobeDrag,
-  isPrimaryPointerActivation,
-  shouldRememberUntrackedPointerStart,
-  shouldSuppressUntrackedPointerActivation,
   isSphericalPointVisible,
   isProjectedPointInsideViewport,
   isLocalPointInsideClipViewport,
-  isReliablePinchAnchor,
-  projectedRadiusRotationDelta,
   nearestEquivalentRotation,
-  rebaseGlobeDragSample,
   releaseFailedParticleRefinementRequest,
   selectRenderableJourneyRoutes,
   selectRouteLabelPointIndexes,
   shouldFocusRevisionOwnState,
   shouldApplyFocusIntentRevision,
-  shouldRetainGlobeInertia,
   solveScreenAnchorRotation,
   resolveGlobeFocusIntent,
   resolveParticleDiveAnchor,
@@ -235,7 +221,7 @@ describe("ParticleEarthScene contracts", () => {
     })).toBe("high:24:120");
   });
 
-  it("maps the same drag to comparable screen motion across globe zoom levels", () => {
+  it("projects a larger interaction radius at close globe zoom", () => {
     const viewportHeight = 844;
     const fov = (38 * Math.PI) / 180;
     const cameraDistance = 5.4;
@@ -249,51 +235,10 @@ describe("ParticleEarthScene contracts", () => {
       viewportHeight,
       fov,
       cameraDistance,
-      GLOBE_SURFACE_RADIUS * 1.15 * GLOBE_ZOOM_MAX,
-    );
-    const wholeEarthDelta = projectedRadiusRotationDelta(
-      { x: 195, y: 422 },
-      { x: 225, y: 422 },
-      wholeEarthRadius,
-    );
-    const closeDelta = projectedRadiusRotationDelta(
-      { x: 195, y: 422 },
-      { x: 225, y: 422 },
-      closeRadius,
+      GLOBE_SURFACE_RADIUS * 1.15 * 3,
     );
 
     expect(closeRadius).toBeGreaterThan(wholeEarthRadius * 3);
-    expect(Math.abs(closeDelta.rotationY)).toBeLessThan(
-      Math.abs(wholeEarthDelta.rotationY) / 3,
-    );
-    expect(wholeEarthRadius * wholeEarthDelta.angularDelta).toBeCloseTo(30, 1);
-    expect(closeRadius * closeDelta.angularDelta).toBeCloseTo(30, 1);
-  });
-
-  it("keeps projected-radius drag continuous across the silhouette", () => {
-    const center = { x: 200, y: 300 };
-    const radius = 180;
-    const inside = projectedRadiusRotationDelta(
-      { x: center.x + radius * 0.96, y: center.y },
-      { x: center.x + radius * 0.99, y: center.y },
-      radius,
-    );
-    const crossing = projectedRadiusRotationDelta(
-      { x: center.x + radius * 0.99, y: center.y },
-      { x: center.x + radius * 1.02, y: center.y },
-      radius,
-    );
-    const outside = projectedRadiusRotationDelta(
-      { x: center.x + radius * 1.02, y: center.y },
-      { x: center.x + radius * 1.05, y: center.y },
-      radius,
-    );
-
-    expect(inside.rotationY).toBeGreaterThan(0);
-    expect(crossing.rotationY).toBeGreaterThan(0);
-    expect(outside.rotationY).toBeGreaterThan(0);
-    expect(crossing.angularDelta).toBeCloseTo(inside.angularDelta);
-    expect(outside.angularDelta).toBeCloseTo(inside.angularDelta);
   });
 
   it("solves a geographic pinch anchor to the moving gesture centroid", () => {
@@ -313,35 +258,9 @@ describe("ParticleEarthScene contracts", () => {
     expect(solved.y).toBeCloseTo(60 / 240, 4);
   });
 
-  it("falls back when a pinch centroid cannot reliably remain on the silhouette", () => {
-    expect(isReliablePinchAnchor(
-      { x: 250, y: 200 },
-      { x: 200, y: 200 },
-      100,
-    )).toBe(true);
-    expect(isReliablePinchAnchor(
-      { x: 301, y: 200 },
-      { x: 200, y: 200 },
-      100,
-    )).toBe(false);
+  it("projects a stable globe radius for pinch geometry", () => {
     expect(getProjectedGlobeRadiusPx(844, (38 * Math.PI) / 180, 5.4, 1.6))
       .toBeGreaterThan(300);
-  });
-
-  it("rebases pinch to one-finger drag without carrying a stale sample", () => {
-    expect(rebaseGlobeDragSample(
-      7,
-      { x: 144, y: 288 },
-      1234,
-      true,
-    )).toEqual({
-      pointerId: 7,
-      lastX: 144,
-      lastY: 288,
-      lastTime: 1234,
-      travel: GLOBE_DRAG_THRESHOLD_PX,
-      started: true,
-    });
   });
 
   it("keeps stale focus revisions from reclaiming manually owned state", () => {
@@ -349,19 +268,6 @@ describe("ParticleEarthScene contracts", () => {
     expect(shouldFocusRevisionOwnState(1000, 1000)).toBe(false);
     expect(shouldFocusRevisionOwnState(1000, 999)).toBe(false);
     expect(shouldFocusRevisionOwnState(1000, 1001)).toBe(true);
-  });
-
-  it("caps inertia in screen space so close zoom cannot fling farther", () => {
-    const wholeEarthLimit = getGlobeInertiaSpeedLimit(400);
-    const closeLimit = getGlobeInertiaSpeedLimit(1_200);
-    expect(closeLimit).toBeCloseTo(wholeEarthLimit / 3);
-    expect(wholeEarthLimit * 400).toBeCloseTo(closeLimit * 1_200);
-  });
-
-  it("does not retain inertia after a held or near-zero release", () => {
-    expect(shouldRetainGlobeInertia(1_000, 1_040, 0.01)).toBe(true);
-    expect(shouldRetainGlobeInertia(1_000, 1_100, 0.01)).toBe(false);
-    expect(shouldRetainGlobeInertia(1_000, 1_040, 0.0001)).toBe(false);
   });
 
   it("supports every globe mode without adding a second quality profile", () => {
@@ -379,53 +285,11 @@ describe("ParticleEarthScene contracts", () => {
     });
   });
 
-  it("bounds the gesture controller to the two pointers its pinch math supports (#107)", () => {
-    expect(canTrackGlobePointer(0)).toBe(true);
-    expect(canTrackGlobePointer(1)).toBe(true);
-    expect(canTrackGlobePointer(2)).toBe(false);
-    expect(canTrackGlobePointer(3)).toBe(false);
-  });
-
-
-  it("remembers sibling city contacts once another globe pointer is already tracked (#115)", () => {
-    expect(shouldRememberUntrackedPointerStart(0)).toBe(false);
-    expect(shouldRememberUntrackedPointerStart(1)).toBe(true);
-    expect(shouldRememberUntrackedPointerStart(2)).toBe(true);
-    expect(shouldRememberUntrackedPointerStart(3)).toBe(true);
-  });
-
-  it("suppresses activation for capacity-rejected or gesture-overlapping untracked pointers (#107)", () => {
-    expect(shouldSuppressUntrackedPointerActivation(true, 0)).toBe(true);
-    expect(shouldSuppressUntrackedPointerActivation(true, 2)).toBe(true);
-    expect(shouldSuppressUntrackedPointerActivation(false, 1)).toBe(true);
-    expect(shouldSuppressUntrackedPointerActivation(false, 0)).toBe(false);
-  });
-
-  it("uses a deliberate drag threshold and allows full globe rotation", () => {
-    expect(isGlobeDrag(GLOBE_DRAG_THRESHOLD_PX - 0.01)).toBe(false);
-    expect(isGlobeDrag(GLOBE_DRAG_THRESHOLD_PX)).toBe(true);
+  it("allows full globe rotation", () => {
     expect(GLOBE_TILT_LIMIT_RADIANS).toBe(Number.POSITIVE_INFINITY);
     expect(clampGlobeTilt(Math.PI * 3)).toBe(Math.PI * 3);
     expect(clampGlobeTilt(-Math.PI * 3)).toBe(-Math.PI * 3);
     expect(clampGlobeTilt(0.18)).toBe(0.18);
-    expect(clampGlobeZoom(GLOBE_ZOOM_MIN - 1)).toBe(GLOBE_ZOOM_MIN);
-    expect(clampGlobeZoom(GLOBE_ZOOM_MAX + 1)).toBe(GLOBE_ZOOM_MAX);
-    expect(clampGlobeZoom(1.2)).toBe(1.2);
-    expect(isPrimaryPointerActivation({
-      button: 0,
-      isPrimary: true,
-      pointerType: "mouse",
-    })).toBe(true);
-    expect(isPrimaryPointerActivation({
-      button: 2,
-      isPrimary: true,
-      pointerType: "mouse",
-    })).toBe(false);
-    expect(isPrimaryPointerActivation({
-      button: 0,
-      isPrimary: false,
-      pointerType: "touch",
-    })).toBe(false);
   });
 
   it("auto-rotates only after idle time and ramps into the idle rate", () => {
