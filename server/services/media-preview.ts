@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { and, eq, isNull } from "drizzle-orm";
-import { mediaAssets } from "../db/app-schema";
+import { and, eq, isNull, lt } from "drizzle-orm";
+import { mediaAssets, mediaPreviewWrites } from "../db/app-schema";
 import { db } from "../db/client";
 import {
   planPreviewDerivation,
@@ -9,7 +9,10 @@ import {
   type PreviewSpec,
 } from "../media/preview-derivation";
 import type { MultipartStorage } from "../storage/multipart-storage";
-import { getMultipartStorage } from "../storage/storage-registry";
+import {
+  getMultipartStorage,
+  hasConfiguredStorageBackends,
+} from "../storage/storage-registry";
 
 /**
  * #260: the two state transitions of a derived preview, kept out of the route
@@ -94,26 +97,30 @@ function stillHoldsGeneration(assetId: string, storageKey: string | null) {
 
 /**
  * Drop the object a preview column used to point at, once no row references it
- * any more. Best-effort on purpose, in the same spirit as the deduplicated
- * object cleanup in the upload pipeline: the row is already correct, so a
- * storage hiccup here costs an unreferenced object rather than a wrong answer.
+ * any more. Best-effort at the call sites that already hold a correct row, in
+ * the same spirit as the deduplicated object cleanup in the upload pipeline:
+ * a storage hiccup there costs an unreferenced object rather than a wrong
+ * answer. It reports whether the object is gone so the sweep below, which has
+ * nothing else to fall back on, can keep its record and try again.
  */
 async function discardPreviewObject(
   storageDriver: string,
   storageKey: string | null,
   dependencies: MediaPreviewDependencies,
 ) {
-  if (!storageKey) return;
+  if (!storageKey) return true;
   try {
     await dependencies.storageForBackend(storageDriver).deleteObject({
       key: storageKey,
     });
+    return true;
   } catch (error) {
     console.error(
       "Preview object cleanup failed",
       storageKey,
       error instanceof Error ? error.message : "unknown error",
     );
+    return false;
   }
 }
 
@@ -179,6 +186,17 @@ export async function beginAssetPreview(
       mimeType: spec.mimeType,
       expiresInSeconds: uploadExpiresInSeconds,
     });
+  // The write is recorded before the claim, and before any caller could hold
+  // the URL. From here on this key has an owner that no cascade can take
+  // away, so whatever happens next — a lost swap, a completion, or the media,
+  // its Journey or its Atlas being deleted a moment later — the sweep below
+  // can still find the object and retire it.
+  await db.insert(mediaPreviewWrites).values({
+    mediaAssetId: asset.id,
+    storageDriver: asset.storageDriver,
+    storageKey: previewStorageKey,
+    expiresAt: signed.expiresAt,
+  });
   // The claim is what makes this generation authoritative, and it happens
   // AFTER the presign because signing has no effect on storage: a begin that
   // loses the swap has handed nobody a URL that was ever usable, because it
@@ -283,4 +301,91 @@ export async function completeAssetPreview(
       height: updated.displayHeight,
     },
   };
+}
+
+/**
+ * How long after a preview write's own expiry the sweep waits before it acts.
+ *
+ * A presigned signature is checked when the request starts, so once the
+ * expiry has passed no new PUT can begin, and a still-streaming one is
+ * writing at most `MEDIA_PREVIEW_MAX_BYTES` of a size-bounded still. One pass
+ * per record is therefore enough: by the time a record is picked up, nothing
+ * further can land under its key.
+ */
+const PREVIEW_WRITE_GRACE_MS = 5 * 60 * 1_000;
+const PREVIEW_WRITE_RECONCILE_INTERVAL_MS = 10 * 60 * 1_000;
+const PREVIEW_WRITE_BATCH_SIZE = 50;
+
+/**
+ * Retire the objects that issued preview writes may have left behind.
+ *
+ * A record whose key an asset still references describes a live generation —
+ * pending, ready, or one a completion is about to promote — so only the
+ * record is dropped and the object is left exactly where it is. A record no
+ * asset references is the case this whole table exists for: a superseded
+ * generation whose best-effort cleanup failed, a begin that lost its swap, or
+ * a write that landed after the media, the Journey or the Atlas that owned it
+ * was deleted. That object is unreachable through every read path and belongs
+ * to nobody, so it is deleted here.
+ *
+ * The record survives a failed delete on purpose. This sweep is the last
+ * owner of the key; if it forgot the object it could not name it again.
+ */
+export async function reconcilePreviewWrites(
+  now = new Date(),
+  dependencies: MediaPreviewDependencies = defaultDependencies,
+) {
+  const cutoff = new Date(now.getTime() - PREVIEW_WRITE_GRACE_MS);
+  const writes = await db
+    .select()
+    .from(mediaPreviewWrites)
+    .where(lt(mediaPreviewWrites.expiresAt, cutoff))
+    .limit(PREVIEW_WRITE_BATCH_SIZE);
+
+  let retired = 0;
+  for (const write of writes) {
+    const [referencing] = await db
+      .select({ id: mediaAssets.id })
+      .from(mediaAssets)
+      .where(eq(mediaAssets.previewStorageKey, write.storageKey))
+      .limit(1);
+    if (!referencing) {
+      const discarded = await discardPreviewObject(
+        write.storageDriver,
+        write.storageKey,
+        dependencies,
+      );
+      if (!discarded) continue;
+      retired += 1;
+    }
+    await db
+      .delete(mediaPreviewWrites)
+      .where(eq(mediaPreviewWrites.id, write.id));
+  }
+  return { examined: writes.length, retired };
+}
+
+export function startPreviewWriteReconciler() {
+  // The guard lives here rather than inside the pass, so a deployment with no
+  // object storage never schedules it while the pass itself stays callable
+  // against an injected backend.
+  if (!hasConfiguredStorageBackends()) return;
+  let running = false;
+  const run = async () => {
+    if (running) return;
+    running = true;
+    try {
+      await reconcilePreviewWrites();
+    } catch (error) {
+      console.error(
+        "Preview write reconciliation pass failed",
+        error instanceof Error ? error.message : "unknown error",
+      );
+    } finally {
+      running = false;
+    }
+  };
+  void run();
+  const interval = setInterval(run, PREVIEW_WRITE_RECONCILE_INTERVAL_MS);
+  interval.unref();
 }

@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { createEmailVerificationToken } from "better-auth/api";
-import { eq, inArray } from "drizzle-orm";
+import { eq, inArray, like } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { app } from "../app";
 import { serverConfig } from "../config";
-import { atlases, mediaAssets } from "../db/app-schema";
+import { atlases, mediaAssets, mediaPreviewWrites } from "../db/app-schema";
 import {
   organization as authOrganizations,
   rateLimit,
@@ -28,6 +28,7 @@ import { reconcileJourneyDeletionCandidates } from "../services/delete-journey";
 import {
   beginAssetPreview,
   completeAssetPreview,
+  reconcilePreviewWrites,
 } from "../services/media-preview";
 import { disabledStorage } from "../storage/disabled-storage";
 import type { MultipartStorage } from "../storage/multipart-storage";
@@ -266,6 +267,14 @@ describe("#260 same-asset preview for private media reads", () => {
   });
 
   afterAll(async () => {
+    // Nothing ties a preview write record to the Atlas — that is the point of
+    // the table — so the fixture retires its own rather than waiting for a
+    // cascade that will never reach them.
+    if (identity) {
+      await db
+        .delete(mediaPreviewWrites)
+        .where(like(mediaPreviewWrites.storageKey, `${identity.atlasId}/%`));
+    }
     if (atlasIds.length) {
       await db.delete(atlases).where(inArray(atlases.id, atlasIds));
     }
@@ -696,6 +705,107 @@ describe("#260 same-asset preview for private media reads", () => {
       [stored.previewStorageKey!, stored.storageKey].sort(),
     );
     expect(await readAsset(asset.id)).toBeUndefined();
+  });
+
+  it("retires a preview write that landed after its media was deleted", async () => {
+    // The interleaving the single-object write makes possible and the
+    // multipart pipeline does not: begin signs a PUT, the media is deleted
+    // while that signature is still valid, and the PUT lands afterwards. The
+    // row that named the key is already gone, so nothing in `media_assets`
+    // can ever mention the object again.
+    const objects = new Set<string>();
+    const backend = recordingStorage({
+      async deleteObject(input) {
+        objects.delete(input.key);
+      },
+    });
+    const asset = await insertAsset();
+    const begun = await beginAssetPreview(
+      asset,
+      identity.atlasId,
+      { sourceWidth: 6000, sourceHeight: 4000, exifOrientation: 6 },
+      CEILINGS,
+      UPLOAD_TTL_SECONDS,
+      { storageForBackend: backend.resolve },
+    );
+    expect(begun.ok).toBe(true);
+    const pendingKey = (await readAsset(asset.id)).previewStorageKey!;
+
+    const deleted = await deleteMediaAssetForAtlas(asset.id, identity.atlasId, {
+      async findAsset(assetId) {
+        return await readAsset(assetId);
+      },
+      storageForBackend: backend.resolve,
+      async deleteRow(assetId) {
+        await db.delete(mediaAssets).where(eq(mediaAssets.id, assetId));
+      },
+    });
+    expect(deleted).toBe(true);
+    expect(await readAsset(asset.id)).toBeUndefined();
+
+    // The late PUT: the producer still holds a valid URL and writes to it
+    // after every row that referenced the key has cascaded away.
+    objects.add(pendingKey);
+    const orphaned = await db
+      .select({ id: mediaAssets.id })
+      .from(mediaAssets)
+      .where(eq(mediaAssets.previewStorageKey, pendingKey));
+    expect(orphaned).toEqual([]);
+
+    // The write record outlives the cascade, so the sweep can still name the
+    // object once the signature can no longer be used.
+    const [record] = await db
+      .select()
+      .from(mediaPreviewWrites)
+      .where(eq(mediaPreviewWrites.storageKey, pendingKey));
+    expect(record).toBeTruthy();
+    expect(record.mediaAssetId).toBe(asset.id);
+
+    const swept = await reconcilePreviewWrites(
+      new Date(record.expiresAt.getTime() + 60 * 60 * 1_000),
+      { storageForBackend: backend.resolve },
+    );
+    expect(swept.retired).toBeGreaterThanOrEqual(1);
+    expect(backend.deleted).toContain(pendingKey);
+    expect(objects.has(pendingKey)).toBe(false);
+    expect(
+      await db
+        .select()
+        .from(mediaPreviewWrites)
+        .where(eq(mediaPreviewWrites.storageKey, pendingKey)),
+    ).toEqual([]);
+  });
+
+  it("leaves a served preview in place when its write record expires", async () => {
+    // The other half of the same sweep: an expired write window says nothing
+    // about the object, only about the permission to write it. A key an asset
+    // still references is a live generation, so the record is retired and the
+    // object is not.
+    const backend = recordingStorage();
+    const asset = await insertAsset();
+    await deriveReadyPreview(asset.id, backend);
+    const stored = await readAsset(asset.id);
+    backend.deleted.length = 0;
+
+    const [record] = await db
+      .select()
+      .from(mediaPreviewWrites)
+      .where(eq(mediaPreviewWrites.storageKey, stored.previewStorageKey!));
+    expect(record).toBeTruthy();
+
+    await reconcilePreviewWrites(
+      new Date(record.expiresAt.getTime() + 60 * 60 * 1_000),
+      { storageForBackend: backend.resolve },
+    );
+
+    expect(backend.deleted).not.toContain(stored.previewStorageKey);
+    expect((await readAsset(asset.id)).previewState).toBe("ready");
+    expect(
+      await db
+        .select()
+        .from(mediaPreviewWrites)
+        .where(eq(mediaPreviewWrites.storageKey, stored.previewStorageKey!)),
+    ).toEqual([]);
   });
 
   it("keeps the preview across a soft delete and restore, and clears it on the hard delete", async () => {

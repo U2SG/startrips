@@ -5,9 +5,11 @@ import { pool } from "./db/client";
 import { startMapStyleCacheSweeper } from "./routes/mapstyle";
 import { startUploadReconciler } from "./routes/uploads";
 import { startJourneyDeletionReconciler } from "./services/delete-journey";
+import { startPreviewWriteReconciler } from "./services/media-preview";
 
 startUploadReconciler();
 startJourneyDeletionReconciler();
+startPreviewWriteReconciler();
 startMapStyleCacheSweeper();
 
 const server = serve(

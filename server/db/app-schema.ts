@@ -246,3 +246,41 @@ export const mediaUploads = pgTable(
     index("media_uploads_route_point_idx").on(table.routePointId),
   ],
 );
+
+// #260: the record of one issued preview write, deliberately outside the
+// cascade that owns everything else about the asset.
+//
+// A preview is written by a single presigned PUT, so unlike the multipart
+// pipeline there is no provider-side session to abort and no upload row to
+// consult: once the URL is handed out, the write can land at any moment
+// inside its short lifetime. If the media, its Journey or its Atlas is
+// deleted in that window, the row that named the key is gone before the
+// object exists, and the object that lands afterwards is referenced by
+// nothing and discoverable by nobody.
+//
+// This table is that missing owner. It carries no foreign key on purpose —
+// a reference to `media_assets`, `journeys` or `atlases` would cascade away
+// with exactly the row whose disappearance the record exists to survive.
+// `media_asset_id` is therefore a plain identifier kept for diagnosis, and
+// the sweep in `server/services/media-preview.ts` decides by asking whether
+// any asset still references the key, never by joining.
+export const mediaPreviewWrites = pgTable(
+  "media_preview_writes",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    mediaAssetId: uuid("media_asset_id").notNull(),
+    storageDriver: text("storage_driver").notNull(),
+    storageKey: text("storage_key").notNull(),
+    // When the presigned write stops being usable. The sweep waits out this
+    // instant plus a grace margin, so it can only ever see a window that is
+    // already closed.
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("media_preview_writes_storage_key_unique").on(table.storageKey),
+    index("media_preview_writes_expires_idx").on(table.expiresAt),
+  ],
+);
