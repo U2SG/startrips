@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   buildPlaybackSteps,
   initialPlaybackState,
+  isPlaybackTerminalState,
   playbackReducer,
   playbackStepIdentity,
   type JourneyPlaybackPhase,
@@ -35,6 +36,27 @@ export function replanPlaybackTimerBudget(
 
 /** The elapsed-time budget the director keeps for the beat that is playing. */
 export type PlaybackTimerBudget = { remainingMs: number; fullDurationMs: number };
+
+/**
+ * One timer gate for the director. Completion is deliberately separate from
+ * pause: both own no timeout, but only completion is the terminal transport
+ * state that keeps the final step selected.
+ */
+export function playbackTimerDelay(
+  state: PlaybackState,
+  hold: boolean,
+  remainingMs: number,
+): number | null {
+  if (state.paused || hold || isPlaybackTerminalState(state)) return null;
+  return Math.max(0, remainingMs);
+}
+
+export function playbackDirectorIsPlaying(
+  state: PlaybackState,
+  step: PlaybackStep | undefined,
+): boolean {
+  return !state.paused && !isPlaybackTerminalState(state) && step !== undefined;
+}
 
 /** The budget of the beat that stopped playing, tagged with the beat it belongs to. */
 export type PlaybackTimerCarry = PlaybackTimerBudget & { key: string };
@@ -168,6 +190,7 @@ export function useJourneyPlaybackDirector(
   // The current expanded step, derived from the step index.
   const steps = journey ? buildPlaybackSteps(journey) : [];
   const step: PlaybackStep | undefined = steps[state.stepIndex];
+  const completed = isPlaybackTerminalState(state);
 
   const transition = useCallback((control: PlaybackControl) => {
     setState((current) => {
@@ -182,6 +205,7 @@ export function useJourneyPlaybackDirector(
   const next = useCallback(() => transition({ type: "next" }), [transition]);
   const complete = useCallback(() => transition({ type: "advance" }), [transition]);
   const back = useCallback(() => transition({ type: "previous" }), [transition]);
+  const replay = useCallback(() => transition({ type: "replay" }), [transition]);
   // `carryProgress` marks a seek that only re-addresses the beat already
   // playing after a plan rebuild moved it, so the timer resumes it instead of
   // restarting it. A user seek leaves it unset and gets a fresh beat.
@@ -241,6 +265,14 @@ export function useJourneyPlaybackDirector(
       return;
     }
 
+    // Completion keeps the final beat selected for context, but owns no clock.
+    // Pin the spent budget and leave without scheduling another timeout.
+    if (completed) {
+      timerRemainingMsRef.current = 0;
+      timerStartedAtMsRef.current = null;
+      return;
+    }
+
     const fullDurationMs = durationForStep(step);
     // The key identifies *which* beat is playing, deliberately not how long it
     // is and deliberately not where it sits in the step list. Length is out
@@ -273,16 +305,17 @@ export function useJourneyPlaybackDirector(
     timerFullDurationMsRef.current = resolved.budget.fullDurationMs;
     timerCarryRef.current = resolved.carry;
 
-    if (state.paused || hold) return;
-
     const remainingMs = timerRemainingMsRef.current ?? fullDurationMs;
+    const delayMs = playbackTimerDelay(state, hold, remainingMs);
+    if (delayMs === null) return;
+
     const startedAtMs = performance.now();
     timerStartedAtMsRef.current = startedAtMs;
     timerRef.current = window.setTimeout(() => {
       timerRemainingMsRef.current = 0;
       timerStartedAtMsRef.current = null;
       transition({ type: "advance" });
-    }, remainingMs);
+    }, delayMs);
 
     return () => {
       window.clearTimeout(timerRef.current);
@@ -298,7 +331,7 @@ export function useJourneyPlaybackDirector(
         timerStartedAtMsRef.current = null;
       }
     };
-  }, [durationForStep, hold, journey, state.paused, step, transition]);
+  }, [completed, durationForStep, hold, journey, state.paused, step, transition]);
 
   // Reset when the journey changes.
   useEffect(() => {
@@ -325,14 +358,16 @@ export function useJourneyPlaybackDirector(
     getTimerBudget,
     phase,
     paused: state.paused,
+    completed,
     tempo,
     setTempo,
-    isPlaying: !state.paused && step !== undefined,
+    isPlaying: playbackDirectorIsPlaying(state, step),
     pause,
     resume,
     next,
     complete,
     back,
+    replay,
     seek,
     exit,
   };

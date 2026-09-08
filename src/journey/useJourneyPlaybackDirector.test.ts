@@ -1,7 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { buildPlaybackSteps, initialPlaybackState, playbackReducer } from "./journeyPlayback";
 import {
   consumePlaybackTimerBudget,
+  playbackDirectorIsPlaying,
   playbackProgressFraction,
+  playbackTimerDelay,
   replanPlaybackTimerBudget,
   resolvePlaybackTimerBudget,
 } from "./useJourneyPlaybackDirector";
@@ -122,6 +125,43 @@ describe("resolvePlaybackTimerBudget (#210)", () => {
   });
 });
 
+describe("playbackTimerDelay terminal gate (#126)", () => {
+  it("leaves no pending timeout after the outro budget enters completion", () => {
+    vi.useFakeTimers();
+    try {
+      const steps = buildPlaybackSteps(progressJourney);
+      let state = playbackReducer(progressJourney, initialPlaybackState(), {
+        type: "seek",
+        stepIndex: steps.length - 1,
+      });
+      const scheduleCurrentBeat = () => {
+        const delay = playbackTimerDelay(state, false, 900);
+        if (delay === null) return;
+        setTimeout(() => {
+          state = playbackReducer(progressJourney, state, { type: "advance" });
+        }, delay);
+      };
+
+      scheduleCurrentBeat();
+      expect(vi.getTimerCount()).toBe(1);
+      vi.advanceTimersByTime(900);
+      expect(state.phase).toEqual({ type: "completed" });
+      expect(vi.getTimerCount()).toBe(0);
+
+      const completed = state;
+      scheduleCurrentBeat();
+      expect(vi.getTimerCount()).toBe(0);
+      vi.advanceTimersByTime(5_000);
+      expect(state).toBe(completed);
+
+      expect(playbackTimerDelay({ ...initialPlaybackState(), paused: true }, false, 900)).toBeNull();
+      expect(playbackTimerDelay(initialPlaybackState(), true, 900)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 
 function progressPoint(id: string, sortOrder: number): RoutePoint {
   return {
@@ -169,6 +209,20 @@ const progressJourney: Journey = {
   routePoints: [progressPoint("point-0", 0), progressPoint("point-1", 1)],
   media: [progressMedia("media-0", "point-0"), progressMedia("media-1", "point-1")],
 };
+
+describe("completed director state (#126)", () => {
+  it("keeps the final step selected while reporting that playback is no longer playing", () => {
+    const steps = buildPlaybackSteps(progressJourney);
+    let state = playbackReducer(progressJourney, initialPlaybackState(), {
+      type: "seek",
+      stepIndex: steps.length - 1,
+    });
+    state = playbackReducer(progressJourney, state, { type: "advance" });
+    expect(state.stepIndex).toBe(steps.length - 1);
+    expect(steps[state.stepIndex]).toEqual({ kind: "outro" });
+    expect(playbackDirectorIsPlaying(state, steps[state.stepIndex])).toBe(false);
+  });
+});
 
 describe("playbackProgressFraction (#126)", () => {
   const plan = buildPlaybackPlan(progressJourney, "standard");
