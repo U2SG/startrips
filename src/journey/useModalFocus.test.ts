@@ -46,6 +46,39 @@ function background(inert = false) {
   return { inert } as unknown as HTMLElement;
 }
 
+function inertMutationHarness() {
+  let callback: MutationCallback | null = null;
+  let pending: MutationRecord[] = [];
+
+  class TestMutationObserver {
+    constructor(next: MutationCallback) {
+      callback = next;
+    }
+
+    observe() {}
+
+    disconnect() {}
+
+    takeRecords() {
+      const records = pending;
+      pending = [];
+      return records;
+    }
+  }
+
+  vi.stubGlobal("MutationObserver", TestMutationObserver);
+  const record = () => ({ attributeName: "inert" }) as MutationRecord;
+
+  return {
+    queueExternalWrite() {
+      pending.push(record());
+    },
+    flushExternalWrite() {
+      callback?.([record()], {} as MutationObserver);
+    },
+  };
+}
+
 describe("claimInertOwnership", () => {
   it("leaves an externally owned inert flag untouched through claim and release", () => {
     // The mobile Journey sheet layer while React holds inert={storyJourneyId !== null}.
@@ -100,5 +133,31 @@ describe("claimInertOwnership", () => {
     expect(child.inert).toBe(true);
     releaseOuter();
     expect(child.inert).toBe(false);
+  });
+
+  it("does not clear an external inert owner acquired just before trap suspension cleanup", () => {
+    const mutations = inertMutationHarness();
+    const atlasChrome = background(false);
+    const release = claimInertOwnership([atlasChrome]);
+    expect(atlasChrome.inert).toBe(true);
+
+    // React writes inert=true in the host mutation phase. The observer callback
+    // may still be pending when the passive trap cleanup begins, so release must
+    // consult takeRecords() as well as already-delivered records.
+    atlasChrome.inert = true;
+    mutations.queueExternalWrite();
+    release();
+    expect(atlasChrome.inert).toBe(true);
+  });
+
+  it("does not clear an external inert owner already observed before modal teardown cleanup", () => {
+    const mutations = inertMutationHarness();
+    const atlasChrome = background(false);
+    const release = claimInertOwnership([atlasChrome]);
+
+    atlasChrome.inert = true;
+    mutations.flushExternalWrite();
+    release();
+    expect(atlasChrome.inert).toBe(true);
   });
 });
