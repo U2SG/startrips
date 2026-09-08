@@ -598,43 +598,6 @@ try {
       inlineJitterOpenedFullscreen = false;
     }
 
-    // #239: a sub-threshold image drag schedules fullscreen only after the
-    // settle window. A newer Route Point scope owns the Story before that
-    // deadline and must cancel the deferred entry rather than reopening stale
-    // fullscreen over the new scope.
-    const scopeTarget = story.page.locator(
-      ".journey-story__route-points button[data-route-point-id]",
-    ).first();
-    let deferredFullscreenCancelledByScopeChange = false;
-    if (await scopeTarget.count()) {
-      await touch.send("Input.dispatchTouchEvent", {
-        type: "touchStart",
-        touchPoints: [{ x: swipeStartX, y: swipeY }],
-      });
-      await touch.send("Input.dispatchTouchEvent", {
-        type: "touchMove",
-        touchPoints: [{ x: swipeStartX - 30, y: swipeY }],
-      });
-      await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
-      await scopeTarget.evaluate((button) => button.click());
-      await story.page.waitForTimeout(320);
-      deferredFullscreenCancelledByScopeChange = !(await jitterFullscreen.isVisible());
-      const wholeJourneyScope = story.page.locator(
-        ".journey-story__route-points > button:not([data-route-point-id])",
-      ).first();
-      await wholeJourneyScope.evaluate((button) => button.click());
-      await story.page.waitForFunction(({ selector, expected }) => {
-        const media = document.querySelector(selector);
-        return media && (media.getAttribute("alt") ?? media.getAttribute("src")) === expected;
-      }, { selector: storyCurrentMediaSelector, expected: firstMediaLabel }, { timeout: 3_000 });
-    }
-    checks.push({
-      name: "story-mobile-deferred-fullscreen-cancelled-by-scope-change",
-      deferredFullscreenCancelledByScopeChange,
-      failed: !deferredFullscreenCancelledByScopeChange,
-    });
-    if (!deferredFullscreenCancelledByScopeChange) failed = true;
-
     // Issue #65: a short but fast flick should commit even below the 48px
     // distance threshold, while the 30px jitter above remains a tap. Use real
     // CDP touch timing so velocity comes from browser event timestamps.
@@ -1061,6 +1024,55 @@ try {
     }
   } finally {
     await story.page.close();
+  }
+
+  // #239 runs on its own Story page so changing Route Point scope cannot
+  // perturb the long-lived mobile-contract fixture that follows. The product
+  // behavior under test is still the real deferred image-tap entry: schedule a
+  // sub-threshold horizontal drag, let a newer scope win before 220 ms, then
+  // prove stale fullscreen never appears.
+  const deferredFullscreenStory = await createQaPage("/?qaState=journey-story", onePixelGif);
+  try {
+    const deferredStage = deferredFullscreenStory.page.locator(".journey-story__media");
+    await deferredFullscreenStory.page.locator(".journey-story").waitFor({ state: "visible" });
+    const deferredBox = await deferredStage.boundingBox();
+    if (!deferredBox) throw new Error("deferred-fullscreen Story stage has no bounds");
+    const deferredTouch = await deferredFullscreenStory.page.context().newCDPSession(deferredFullscreenStory.page);
+    const deferredX = deferredBox.x + deferredBox.width * 0.72;
+    const deferredY = deferredBox.y + deferredBox.height * 0.5;
+    const scopeTarget = deferredFullscreenStory.page.locator(
+      ".journey-story__route-points button[data-route-point-id]",
+    ).first();
+    await scopeTarget.waitFor({ state: "visible" });
+    await deferredTouch.send("Input.dispatchTouchEvent", {
+      type: "touchStart",
+      touchPoints: [{ x: deferredX, y: deferredY }],
+    });
+    await deferredTouch.send("Input.dispatchTouchEvent", {
+      type: "touchMove",
+      touchPoints: [{ x: deferredX - 30, y: deferredY }],
+    });
+    await deferredTouch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await scopeTarget.evaluate((button) => button.click());
+    await deferredFullscreenStory.page.waitForTimeout(320);
+    const deferredFullscreenCancelledByScopeChange = !(await deferredFullscreenStory.page
+      .locator(".journey-story-fullscreen").isVisible());
+    checks.push({
+      name: "story-mobile-deferred-fullscreen-cancelled-by-scope-change",
+      deferredFullscreenCancelledByScopeChange,
+      failed: !deferredFullscreenCancelledByScopeChange,
+    });
+    if (!deferredFullscreenCancelledByScopeChange) failed = true;
+    if (deferredFullscreenStory.consoleErrors.length || deferredFullscreenStory.pageErrors.length) {
+      checks.push({
+        name: "story-mobile-deferred-fullscreen-runtime-errors",
+        consoleErrors: deferredFullscreenStory.consoleErrors,
+        pageErrors: deferredFullscreenStory.pageErrors,
+      });
+      failed = true;
+    }
+  } finally {
+    await deferredFullscreenStory.page.close();
   }
 
   const storyDesktop = await createQaPage("/?qaState=journey-story", onePixelGif, { mobile: false });
