@@ -1586,6 +1586,8 @@ export function JourneyStory({
   const autoplayVideoCandidateRead = autoplayVideoCandidate
     ? mediaReads[autoplayVideoCandidate.id]
     : null;
+  const protectedPlaybackRead = useRef<string | null>(null);
+  protectedPlaybackRead.current = playing && activeAsset?.mimeType.startsWith("video/") ? activeAsset.id : null;
   const activeRead = activeAsset ? mediaReads[activeAsset.id] : null;
   const soundtrackRead = soundtrack ? mediaReads[soundtrack.id] : null;
   // #14: the journey cover — explicit coverMediaAssetId, else first visual
@@ -1904,7 +1906,12 @@ export function JourneyStory({
 
   // Signed reads are cached for the lifetime of the open dialog so revisiting a
   // photo, or opening the overview grid again, costs no extra request.
-  const loadMediaRead = useCallback((assetId: string) => {
+  const loadMediaRead = useCallback((assetId: string, refresh = false) => {
+    // A warm neighbor becoming current must keep the decoded resource. A new
+    // signature changes img.src and restarts an in-flight page handoff.
+    const cached = mediaReadsRef.current[assetId];
+    if (!refresh && cached?.status === "ready"
+      && !shouldRefreshStoryMediaRead(assetId, cached, Date.now(), protectedPlaybackRead.current)) return;
     if (pendingReads.current.has(assetId)) return;
     pendingReads.current.add(assetId);
     setMediaReads((current) => current[assetId]?.status === "ready"
@@ -2089,17 +2096,15 @@ export function JourneyStory({
       // the media resource and can pause/stall an otherwise healthy long clip.
       // Once autoplay releases ownership (pause/end/navigation), the next sweep
       // refreshes it normally before it is reused.
-      const protectedPlaybackAssetId = playing && activeAsset?.mimeType.startsWith("video/")
-        ? activeAsset.id
-        : null;
+      const protectedPlaybackAssetId = protectedPlaybackRead.current;
       for (const [assetId, state] of Object.entries(mediaReadsRef.current)) {
         if (shouldRefreshStoryMediaRead(assetId, state, now, protectedPlaybackAssetId)) {
-          loadMediaRead(assetId);
+          loadMediaRead(assetId, true);
         }
       }
     }, MEDIA_READ_SWEEP_MS);
     return () => window.clearInterval(timer);
-  }, [activeAsset?.id, activeAsset?.mimeType, loadMediaRead, playing]);
+  }, [loadMediaRead]);
 
   const namedStops = useMemo(
     () => journey?.routePoints.filter((point) => point.isStop) ?? [],

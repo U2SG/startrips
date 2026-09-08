@@ -326,6 +326,7 @@ async function createQaPage(path, mediaUrl, {
   videoAssetId = null,
   reducedMotion = "reduce",
   recordMotion = false,
+  rotateReadUrls = false,
   viewport = mobile ? { width: 390, height: 844 } : { width: 1280, height: 800 },
 } = {}) {
   const page = await browser.newPage({
@@ -488,7 +489,12 @@ async function createQaPage(path, mediaUrl, {
   const blockedRead = blockedReadAssetId
     ? new Promise((resolve) => { releaseBlockedRead = resolve; })
     : null;
+  const readRequests = new Map();
   await page.route("**/api/uploads/assets/*/read-url", async (route) => {
+    const assetId = route.request().url().match(/assets\/([^/]+)\/read-url/)?.[1];
+    const readCount = (readRequests.get(assetId) ?? 0) + 1;
+    readRequests.set(assetId, readCount);
+    const photoUrl = typeof mediaUrl === "function" ? mediaUrl(route.request().url()) : mediaUrl;
     if (blockedRead && route.request().url().includes(blockedReadAssetId)) await blockedRead;
     if (readDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, readDelayMs));
     await route.fulfill({
@@ -499,13 +505,13 @@ async function createQaPage(path, mediaUrl, {
           ? tinyVideo
           : videoMediaUrl && videoAssetId && route.request().url().includes(videoAssetId)
             ? videoMediaUrl
-            : typeof mediaUrl === "function" ? mediaUrl(route.request().url()) : mediaUrl,
-        expiresAt: "2026-08-26T00:00:00.000Z",
+            : rotateReadUrls ? `${photoUrl}?qaRead=${readCount}` : photoUrl,
+        expiresAt: new Date(Date.now() + 900_000).toISOString(),
       }),
     });
   });
   await page.goto(`${origin}${path}`, { waitUntil: "domcontentloaded" });
-  return { page, consoleErrors, pageErrors, releaseBlockedRead };
+  return { page, consoleErrors, pageErrors, releaseBlockedRead, readRequests };
 }
 
 const checks = [];
@@ -1054,6 +1060,7 @@ try {
     await clickStoryPicture(storyDesktop.page, -1);
     await waitForStoryPicture(storyDesktop.page, firstPhotoId);
     const keyboardNavigation = [];
+    await currentPhoto.focus();
     for (const [key, assetId] of [
       ["ArrowRight", secondPhotoId],
       ["ArrowLeft", firstPhotoId],
@@ -1061,7 +1068,7 @@ try {
       ["ArrowRight", lastPhotoId],
       ["Space", secondPhotoId], // At the last photo, activation chooses the available previous direction.
     ]) {
-      await currentPhoto.press(key);
+      await storyDesktop.page.keyboard.press(key);
       await waitForStoryPicture(storyDesktop.page, assetId);
       keyboardNavigation.push({ key, assetId: await currentPhoto.getAttribute("data-shared-media-id") });
     }
@@ -2045,6 +2052,60 @@ try {
     } finally {
       await mobileContinuity.page.close();
     }
+  }
+
+  // Real deployments re-sign the same asset. A fixed URL plus three photos
+  // concealed reloads at every handoff and focus loss when slots are recycled.
+  const manyPhotoPaths = ["hokusai-wave", "greek-amphora", "monet-water-lilies",
+    "woman-power-poster", "stieglitz-hand-of-man", "han-dancer", "mughal-akbarnama", "egypt-coffin"];
+  const manyPhotos = await createQaPage("/?qaState=journey-story&qaMode=many-media",
+    (url) => `/artworks/${manyPhotoPaths[Number(url.match(/assets\/[^/]*(\d{3})\/read-url/)?.[1]) - 100]}.jpg`,
+    { mobile: false, reducedMotion: "no-preference", rotateReadUrls: true });
+  try {
+    const idFor = (index) => `00000000-0000-4000-8000-${String(100 + index).padStart(12, "0")}`;
+    await waitForStoryPicture(manyPhotos.page, idFor(0));
+    await manyPhotos.page.evaluate(() => {
+      const root = document.querySelector(".journey-story__media [data-story-media-pages]");
+      window.__qaManyPhotoNodes = [...root.querySelectorAll("[data-media-page]")];
+      window.__qaManyPhotoReloads = [];
+      const observer = new MutationObserver((records) => {
+        for (const record of records) {
+          const image = record.target;
+          const before = record.oldValue;
+          const after = image.getAttribute("src");
+          if (before && after && before !== after
+            && new URL(before, location.href).pathname === new URL(after, location.href).pathname) {
+            window.__qaManyPhotoReloads.push(image.parentElement.dataset.mediaPageId);
+          }
+        }
+      });
+      observer.observe(root, { subtree: true, attributes: true, attributeFilter: ["src"], attributeOldValue: true });
+    });
+    await storyPicture(manyPhotos.page).focus();
+    for (const index of [1, 2, 3, 4, 5, 6, 7, 6, 5, 4, 3, 2, 1, 0]) {
+      const current = Number((await storyPicture(manyPhotos.page).getAttribute("data-shared-media-id")).slice(-3)) - 100;
+      // Do not refocus the new slot: subsequent keys must work as typed by a user.
+      await manyPhotos.page.keyboard.press(index > current ? "ArrowRight" : "ArrowLeft");
+      await waitForStoryPicture(manyPhotos.page, idFor(index));
+    }
+    await clickStoryPicture(manyPhotos.page, 1);
+    await waitForStoryPicture(manyPhotos.page, idFor(1));
+    await manyPhotos.page.keyboard.press("ArrowRight");
+    await waitForStoryPicture(manyPhotos.page, idFor(2));
+    const stable = await manyPhotos.page.evaluate(() => {
+      const root = document.querySelector(".journey-story__media [data-story-media-pages]");
+      return { reloads: window.__qaManyPhotoReloads,
+        sameSlots: [...root.querySelectorAll("[data-media-page]")].every((node, index) => node === window.__qaManyPhotoNodes[index]),
+        focusOnCurrent: document.activeElement === root.querySelector('[data-media-page="current"] img') };
+    });
+    const requests = Object.fromEntries(manyPhotos.readRequests);
+    const regressionFailed = stable.reloads.length > 0 || !stable.sameSlots || !stable.focusOnCurrent
+      || Object.keys(requests).length !== 8 || Object.values(requests).some((count) => count !== 1)
+      || manyPhotos.consoleErrors.length > 0 || manyPhotos.pageErrors.length > 0;
+    checks.push({ name: "story-eight-photos-signed-read-cache-and-continuous-focus", ...stable, requests, failed: regressionFailed });
+    if (regressionFailed) failed = true;
+  } finally {
+    await manyPhotos.page.close();
   }
 
   // Only this existing desktop motion scenario records; the many transport and
