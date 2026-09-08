@@ -85,16 +85,28 @@ export interface MultipartStorage {
   }): Promise<{ keys: string[]; continuationToken?: string }>;
 
   /**
-   * #260: the bytes of one whole small object.
+   * #265: the FIRST `maxBytes` bytes of one object, never more.
    *
-   * Only ever called for an object already measured against
-   * `MEDIA_PREVIEW_MAX_BYTES`, so a caller never asks for more than a preview
-   * of that size. Reading a preview back is what makes its pixel ceiling a
-   * verified property of the object that landed rather than a bound the
-   * server asked a producer to respect.
+   * Reading a preview back is what makes its pixel size a verified property of
+   * the object that landed rather than a bound the server asked a producer to
+   * respect. But the only part of a still anything here reads is its frame
+   * header, and `MEDIA_PREVIEW_MAX_BYTES` may be configured as high as 8 MiB,
+   * so pulling whole objects into memory to look at their first few kilobytes
+   * makes the completion path's memory cost the byte ceiling rather than the
+   * header window.
+   *
+   * The bound is the CALLER's, not the adapter's: a caller states how much it
+   * is prepared to hold, and an implementation returns at most that. Fewer
+   * bytes mean the object is smaller than the window, never that it was
+   * withheld.
+   *
+   * A missing object is the absence case, exactly like `inspectObject`. A
+   * preview write that never landed is retryable, and an adapter that threw
+   * would turn it into a request failure instead.
    */
-  readObject(input: {
+  readObjectHead(input: {
     key: string;
+    maxBytes: number;
   }): Promise<{ exists: false } | { exists: true; bytes: Uint8Array }>;
 
   createPrivateReadUrl(input: {

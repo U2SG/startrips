@@ -131,6 +131,17 @@ export const mediaAssets = pgTable(
     previewStorageKey: text("preview_storage_key"),
     previewMimeType: text("preview_mime_type"),
     previewBytes: integer("preview_bytes"),
+    // #265: the pixel size of the still THIS generation's producer was issued,
+    // written beside the key that identifies the generation and cleared with
+    // it. Recomputing the plan at completion would read the completing
+    // process's live `MEDIA_PREVIEW_MAX_EDGE_PIXELS`, so a ceiling raised
+    // between begin and completion would retroactively widen what an
+    // already-issued producer was authorized to create. A later policy may
+    // tighten what is servable; it may not redefine an earlier generation's
+    // instructions. Nullable for the same reason the display size is: an asset
+    // with no issued preview has none.
+    previewWidth: integer("preview_width"),
+    previewHeight: integer("preview_height"),
     // "none" | "pending" | "ready" | "failed"; only "ready" is ever served.
     previewState: text("preview_state").notNull().default("none"),
     createdAt: timestamp("created_at", { withTimezone: true })

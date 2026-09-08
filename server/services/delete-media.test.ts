@@ -26,6 +26,8 @@ const ASSET: Asset = {
   previewStorageKey: null,
   previewMimeType: null,
   previewBytes: null,
+  previewWidth: null,
+  previewHeight: null,
   previewState: "none",
   createdAt: new Date("2026-08-12T00:00:00.000Z"),
 };
@@ -44,7 +46,7 @@ function dependencies(asset: Asset | undefined) {
     async listObjects() {
       return { keys: [] };
     },
-    async readObject() {
+    async readObjectHead() {
       return { exists: false as const };
     },
     async signObjectUpload() {

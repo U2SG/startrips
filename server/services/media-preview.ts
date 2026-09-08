@@ -3,13 +3,18 @@ import { and, eq, inArray, isNull, lt } from "drizzle-orm";
 import { mediaAssets, mediaPreviewWrites } from "../db/app-schema";
 import { db } from "../db/client";
 import {
+  issuedStillSize,
   planPreviewDerivation,
   previewObjectFitsCeiling,
   previewPixelsFitCeiling,
+  previewPixelsWithinPlan,
   type PreviewCeilings,
   type PreviewSpec,
 } from "../media/preview-derivation";
-import { readJpegPixelSize } from "../media/preview-image";
+import {
+  JPEG_HEADER_WINDOW_BYTES,
+  readJpegPixelSize,
+} from "../media/preview-image";
 import type { MultipartStorage } from "../storage/multipart-storage";
 import {
   getMultipartStorage,
@@ -71,6 +76,7 @@ export type PreviewFailure = {
     | "PREVIEW_SUPERSEDED"
     | "PREVIEW_TOO_LARGE"
     | "PREVIEW_PIXELS_TOO_LARGE"
+    | "PREVIEW_PIXELS_MISMATCH"
     | "PREVIEW_UNREADABLE";
   status: 400 | 409;
 };
@@ -103,6 +109,10 @@ const CLEARED_PREVIEW = {
   previewStorageKey: null,
   previewMimeType: null,
   previewBytes: null,
+  // #265: the issued pixel size belongs to the generation, so it goes when the
+  // key that identifies that generation goes.
+  previewWidth: null,
+  previewHeight: null,
 } as const;
 
 /**
@@ -239,6 +249,11 @@ export async function beginAssetPreview(
       previewStorageKey,
       previewMimeType: spec.mimeType,
       previewBytes: null,
+      // #265: recorded here, with the key, because this is the instruction the
+      // producer about to hold that URL is issued. Completion compares against
+      // it and never against a plan re-derived from a later config.
+      previewWidth: spec.width,
+      previewHeight: spec.height,
       previewState: "pending",
     })
     .where(stillHoldsGeneration(asset.id, asset.previewStorageKey))
@@ -270,14 +285,15 @@ export async function beginAssetPreview(
  * ceilings are established from the bytes that arrived. A write that never
  * landed leaves the asset `pending`, because that is a retryable state and
  * turning a retryable fault into a permanent loss is exactly what #260
- * forbids. Three things are decided outcomes instead — a file over the byte
- * ceiling, a frame over the pixel ceiling, and bytes that are not a readable
- * JPEG at all: the object is dropped and the asset is `failed`, so nothing
- * oversized or unreadable can ever be signed, whoever produced it.
+ * forbids. Four things are decided outcomes instead — a file over the byte
+ * ceiling, a frame over the pixel ceiling, a frame larger than the still this
+ * asset was planned, and bytes that are not a readable JPEG at all: the object
+ * is dropped and the asset is `failed`, so nothing oversized, unplanned or
+ * unreadable can ever be signed, whoever produced it.
  *
- * Reading the whole object is affordable precisely because the byte ceiling is
- * checked first: nothing larger than `MEDIA_PREVIEW_MAX_BYTES` is ever pulled
- * into memory here.
+ * Only the frame header is read back, bounded by `JPEG_HEADER_WINDOW_BYTES`,
+ * so the memory this path costs is the window rather than whatever
+ * `MEDIA_PREVIEW_MAX_BYTES` a deployment allows.
  */
 export async function completeAssetPreview(
   asset: MediaAsset,
@@ -305,7 +321,11 @@ export async function completeAssetPreview(
    * upload URL it could never complete.
    */
   const rejectPreview = async (
-    error: "PREVIEW_TOO_LARGE" | "PREVIEW_PIXELS_TOO_LARGE" | "PREVIEW_UNREADABLE",
+    error:
+      | "PREVIEW_TOO_LARGE"
+      | "PREVIEW_PIXELS_TOO_LARGE"
+      | "PREVIEW_PIXELS_MISMATCH"
+      | "PREVIEW_UNREADABLE",
   ): Promise<PreviewFailure> => {
     const [cleared] = await db
       .update(mediaAssets)
@@ -327,10 +347,14 @@ export async function completeAssetPreview(
     return rejectPreview("PREVIEW_TOO_LARGE");
   }
 
-  // The pixel ceiling, established from the object rather than from the spec.
-  // A read that comes back empty is the same retryable "nothing landed" state
-  // the inspection above answers, not a decided failure.
-  const stored = await storage.readObject({ key: asset.previewStorageKey });
+  // The pixel size, established from the object rather than from the spec.
+  // Only the frame header is needed, so only a window of the object is asked
+  // for; a read that comes back empty is the same retryable "nothing landed"
+  // state the inspection above answers, not a decided failure.
+  const stored = await storage.readObjectHead({
+    key: asset.previewStorageKey,
+    maxBytes: JPEG_HEADER_WINDOW_BYTES,
+  });
   if (!stored.exists) {
     return { ok: false, error: "PREVIEW_OBJECT_MISSING", status: 409 };
   }
@@ -340,6 +364,17 @@ export async function completeAssetPreview(
   }
   if (!previewPixelsFitCeiling(pixels, ceilings)) {
     return rejectPreview("PREVIEW_PIXELS_TOO_LARGE");
+  }
+  // #265: and then against the still this generation's producer was ISSUED,
+  // read from the row rather than re-derived. The two gates are deliberately
+  // independent and both bind: the ceiling above is the deployment's current
+  // safety policy, which a later config may tighten, and this is the earlier
+  // instruction, which a later config may not widen. A row that cannot state
+  // what it issued is refused rather than promoted unverified — fail closed,
+  // since the object is about to become servable to a share guest.
+  const issued = issuedStillSize(asset);
+  if (!issued || !previewPixelsWithinPlan(pixels, issued)) {
+    return rejectPreview("PREVIEW_PIXELS_MISMATCH");
   }
 
   const [updated] = await db

@@ -41,6 +41,27 @@ function isStartOfFrame(marker: number) {
 export type PixelSize = { width: number; height: number };
 
 /**
+ * #265: how much of a produced still is read back to measure its frame.
+ *
+ * Everything `readJpegPixelSize` needs sits in the segments ahead of the first
+ * scan, so completion asks storage for a window rather than for the object.
+ * 64 KiB is chosen against what actually precedes a frame: one APP segment can
+ * carry at most 65,533 bytes, and the pinned 2048x1024 fixture — an ordinary
+ * camera JPEG with EXIF, XMP and a 4.5 KB ICC profile in front of its SOF —
+ * reaches its frame at byte 4,852. The window is therefore an order of
+ * magnitude clear of a realistic header while being a small fraction of the
+ * 8 MiB `MEDIA_PREVIEW_MAX_BYTES` may be configured to allow.
+ *
+ * A still whose frame header does not appear inside the window reads as
+ * unmeasurable and is refused, deliberately: the server chose this encoding
+ * and asked for a small still, so tens of kilobytes of metadata in front of
+ * the frame is not the preview that was planned. The refusal is not a loss of
+ * the media — the original reads through the unchanged contract, and a later
+ * `POST .../preview` may derive again.
+ */
+export const JPEG_HEADER_WINDOW_BYTES = 64 * 1024;
+
+/**
  * The encoded pixel size of a JPEG, or `null` if these bytes are not one.
  *
  * `null` covers every way the answer can be absent — truncated bytes, a

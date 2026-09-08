@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  issuedStillSize,
   planPreviewDerivation,
   previewObjectFitsCeiling,
+  previewPixelsWithinPlan,
   servablePreview,
   PREVIEW_MIME_TYPE,
   type PreviewCeilings,
@@ -197,5 +199,56 @@ describe("#260 servable preview", () => {
     ["a missing display height", { displayHeight: null }],
   ])("refuses to guess around %s on a ready row", (_label, damage) => {
     expect(servablePreview({ ...READY, ...damage })).toBeNull();
+  });
+});
+
+describe("#265 the produced still against the still that was issued", () => {
+  /** The row `POST .../preview` leaves behind for the pinned portrait. */
+  const ISSUED_ROW = { previewWidth: 427, previewHeight: 640 };
+
+  it("takes the issued size from the row, not from the live ceiling", () => {
+    // The pinned portrait's plan under the shipped ceiling is what the row
+    // records, so the value completion compares against is the one begin
+    // wrote rather than one re-derived from whatever config is loaded then.
+    const planned = planPreviewDerivation(PINNED_PORTRAIT, CEILINGS);
+    expect(planned.ok).toBe(true);
+    if (!planned.ok) return;
+    expect(issuedStillSize(ISSUED_ROW)).toEqual({
+      width: planned.spec.width,
+      height: planned.spec.height,
+    });
+  });
+
+  it.each([
+    ["no issued width", { previewWidth: null }],
+    ["no issued height", { previewHeight: null }],
+    ["a zero edge", { previewWidth: 0 }],
+  ])("states nothing rather than a guess for %s", (_label, damage) => {
+    expect(issuedStillSize({ ...ISSUED_ROW, ...damage })).toBeNull();
+  });
+
+  it("bounds a produced frame by the issued size, not only by the ceiling", () => {
+    const issued = { width: 400, height: 300 };
+    // Inside the deployment's pixel ceiling and still not the frame this asset
+    // was asked for — the case the ceiling alone cannot see.
+    expect(Math.max(600, 467)).toBeLessThanOrEqual(CEILINGS.maxEdgePixels);
+    expect(previewPixelsWithinPlan({ width: 600, height: 467 }, issued))
+      .toBe(false);
+    expect(previewPixelsWithinPlan({ width: 400, height: 400 }, issued))
+      .toBe(false);
+    expect(previewPixelsWithinPlan({ width: 400, height: 300 }, issued))
+      .toBe(true);
+  });
+
+  it("accepts a frame at or under the issued size rather than demanding equality", () => {
+    const issued = { width: 427, height: 640 };
+    // A producer that rounded an edge differently, or handed back a source
+    // already smaller than the plan rather than upscaling it, has broken
+    // nothing a reader can see.
+    expect(previewPixelsWithinPlan({ width: 426, height: 640 }, issued))
+      .toBe(true);
+    expect(previewPixelsWithinPlan({ width: 1, height: 1 }, issued)).toBe(true);
+    expect(previewPixelsWithinPlan({ width: 427, height: 641 }, issued))
+      .toBe(false);
   });
 });

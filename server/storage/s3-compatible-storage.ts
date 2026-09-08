@@ -256,17 +256,30 @@ export function createS3CompatibleStorage(
       };
     },
 
-    async readObject(input) {
+    async readObjectHead(input) {
       try {
-        const result = await client.send(new GetObjectCommand(
-          objectInput(input.key),
-        ));
+        const result = await client.send(new GetObjectCommand({
+          ...objectInput(input.key),
+          // A ranged GET, so the window is enforced by the provider and never
+          // travels: an object larger than the caller's bound costs the bound,
+          // not its own size. The header is inclusive of both ends, hence the
+          // `- 1`. A range past the end of a shorter object is satisfied with
+          // whatever it holds rather than refused, which is why a smaller
+          // object still reads whole.
+          Range: `bytes=0-${input.maxBytes - 1}`,
+        }));
         if (!result.Body) {
           throw new Error("Object storage returned an object with no body");
         }
+        const bytes = await result.Body.transformToByteArray();
+        // The provider is expected to honour the range, but the caller's bound
+        // is the contract this returns under, so it is applied here too rather
+        // than trusted from the wire.
         return {
           exists: true,
-          bytes: await result.Body.transformToByteArray(),
+          bytes: bytes.length > input.maxBytes
+            ? bytes.subarray(0, input.maxBytes)
+            : bytes,
         };
       } catch (error) {
         if (isMissingObject(error)) return { exists: false };
