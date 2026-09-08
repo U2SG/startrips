@@ -6,8 +6,10 @@ import { AtlasAccessError } from "./authorization/atlas-access";
 import { ShareAccessError } from "./authorization/share-access";
 import { db } from "./db/client";
 import { LocationSearchUnavailableError } from "./location/location-search";
+import { HomeBasePeriodConflictError } from "./repositories/home-base-repository";
 import { requestLog } from "./request-log";
 import { atlasRoutes } from "./routes/atlases";
+import { homeBaseRoutes } from "./routes/home-bases";
 import { journeyRoutes } from "./routes/journeys";
 import { locationRoutes } from "./routes/locations";
 import { mapStyleRoutes } from "./routes/mapstyle";
@@ -44,6 +46,10 @@ app.on(["GET", "POST"], "/api/auth/*", (context) =>
 );
 
 app.route("/api/atlases", atlasRoutes);
+// #231: Home Base periods. A dedicated HTTP surface, but the Atlas is still
+// derived from the session inside the route module, never from the path or
+// the body.
+app.route("/api/home-bases", homeBaseRoutes);
 app.route("/api/journeys", journeyRoutes);
 app.route("/api/locations", locationRoutes);
 app.route("/api/mapstyle", mapStyleRoutes);
@@ -69,6 +75,16 @@ app.onError((error, context) => {
     return context.json(
       { error: error.code, message: error.message },
       error.status,
+    );
+  }
+  // #231: an impossible Home Base history — end before start, an overlap, or
+  // a second current Home. All three are refusals about recorded state rather
+  // than about the request document, so they share one 409 envelope carrying
+  // the specific code.
+  if (error instanceof HomeBasePeriodConflictError) {
+    return context.json(
+      { error: error.code, message: error.message },
+      409,
     );
   }
   if (error instanceof StorageUnavailableError) {
