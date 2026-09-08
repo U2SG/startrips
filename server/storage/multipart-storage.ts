@@ -37,6 +37,21 @@ export interface MultipartStorage {
     providerUploadId: string;
   }): Promise<void>;
 
+  /**
+   * #260: a presigned write for one whole small object.
+   *
+   * A derived preview is bounded by `MEDIA_PREVIEW_MAX_BYTES` and is always a
+   * single object, so it has no use for a multipart session, its lease or its
+   * reconciliation. The size it will actually carry is measured afterwards
+   * with `inspectObject` rather than promised here, because a presigned PUT
+   * cannot bind one.
+   */
+  signObjectUpload(input: {
+    key: string;
+    mimeType: string;
+    expiresInSeconds: number;
+  }): Promise<SignedUploadPart>;
+
   deleteObject(input: {
     key: string;
   }): Promise<void>;

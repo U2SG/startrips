@@ -11,8 +11,22 @@ export type JourneyMediaAsset = {
   bytes: number;
   sortOrder: number;
   uploadedByUserId: string;
+  // #260: the presentable size of this asset with its EXIF orientation
+  // already applied, and the state of the derived preview beside it. Null
+  // dimensions and a `none` state are the normal shape of every asset
+  // uploaded before #260; the original read is identical either way.
+  // Optional rather than required: the owner payload always carries them,
+  // while the guest payload built by `sharedAtlas.ts` deliberately projects a
+  // narrower asset, and neither shape should have to invent the other's.
+  displayWidth?: number | null;
+  displayHeight?: number | null;
+  previewState?: MediaPreviewState;
+  previewMimeType?: string | null;
   createdAt: string;
 };
+
+/** #260. Only `ready` is ever served; see `server/media/preview-derivation.ts`. */
+export type MediaPreviewState = "none" | "pending" | "ready" | "failed";
 
 export type RoutePoint = {
   id: string;
@@ -63,9 +77,29 @@ export type JourneyInput = Pick<
   routePoints: RoutePointInput[];
 };
 
+/**
+ * #260: the same asset at a size that can be shown before the original
+ * arrives. `width` and `height` are the asset's orientation-corrected display
+ * size — the frame the preview and the original share — so the handover
+ * between them moves nothing.
+ */
+export type MediaPreviewRead = {
+  url: string;
+  expiresAt: string;
+  mimeType: string;
+  width: number;
+  height: number;
+};
+
 export type PrivateMediaRead = {
   url: string;
   expiresAt: string;
+  /**
+   * Present only when a preview of THIS asset is ready and signable. Absent
+   * for every other state, and its absence is never an error: the original
+   * `url` above is unaffected and remains authoritative.
+   */
+  preview?: MediaPreviewRead;
 };
 
 export type JourneyYearGroup = {

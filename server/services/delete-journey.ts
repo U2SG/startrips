@@ -64,12 +64,19 @@ async function finishJourneyDeletion(
 
   const deletedObjects = new Set<string>();
   for (const asset of candidate.media) {
-    const reference = storageReference(asset.storageDriver, asset.storageKey);
-    if (deletedObjects.has(reference)) continue;
-    await dependencies.storageForBackend(asset.storageDriver).deleteObject({
-      key: asset.storageKey,
-    });
-    deletedObjects.add(reference);
+    // #260: the original and its derived preview are two objects under one
+    // row, and both belong to the Journey being destroyed. They share the
+    // deduplication set because they share a backend, so a preview key that
+    // somehow coincided with an original would still be deleted once.
+    for (const key of [asset.previewStorageKey, asset.storageKey]) {
+      if (!key) continue;
+      const reference = storageReference(asset.storageDriver, key);
+      if (deletedObjects.has(reference)) continue;
+      await dependencies.storageForBackend(asset.storageDriver).deleteObject({
+        key,
+      });
+      deletedObjects.add(reference);
+    }
   }
 
   for (const upload of candidate.uploads) {

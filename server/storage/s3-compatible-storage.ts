@@ -5,6 +5,7 @@ import {
   DeleteObjectCommand,
   GetObjectCommand,
   HeadObjectCommand,
+  PutObjectCommand,
   S3Client,
   UploadPartCommand,
 } from "@aws-sdk/client-s3";
@@ -165,6 +166,26 @@ export function createS3CompatibleStorage(
       } catch (error) {
         if (!isMissingUpload(error)) throw error;
       }
+    },
+
+    async signObjectUpload(input) {
+      const signedAt = Date.now();
+      const url = await signUrl(
+        client,
+        new PutObjectCommand({
+          ...objectInput(input.key),
+          ContentType: input.mimeType,
+        }),
+        { expiresIn: input.expiresInSeconds },
+      );
+      return {
+        url,
+        // The signature covers this header, so a writer that omits or changes
+        // it is rejected by the backend rather than storing an object whose
+        // type disagrees with what the server planned.
+        headers: { "content-type": input.mimeType },
+        expiresAt: new Date(signedAt + input.expiresInSeconds * 1_000),
+      };
     },
 
     async deleteObject(input) {

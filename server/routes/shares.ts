@@ -21,8 +21,10 @@ import {
   type ShareMediaTtlLimits,
   type SharedMediaRead,
 } from "../repositories/shared-media-repository";
+import { servablePreview } from "../media/preview-derivation";
 import { createShareRateLimiter } from "../share-rate-limit";
 import type { MultipartStorage } from "../storage/multipart-storage";
+import type { PrivateMediaRead } from "../../src/journey/types";
 import { getMultipartStorage } from "../storage/storage-registry";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -430,6 +432,17 @@ sharedRoutes.get("/journeys", async (context) => {
  * that rounds its own expiry up. It refuses rather than returning a URL it
  * cannot stand behind.
  *
+ * #260: the derived preview is signed from the SAME resolved row, with the
+ * same capped lifetime and against the same deadline, so it is exactly as
+ * revocable as the original and can never point at media the grant does not
+ * select. It is also strictly optional: a preview that is missing, not ready,
+ * unsignable, or whose signature would outlive the grant is simply left out,
+ * and the original read is returned unchanged. That asymmetry is deliberate.
+ * Every grant-side and asset-side refusal in this file answers with one
+ * byte-identical `MEDIA_UNAVAILABLE` 404, and letting a derived object raise
+ * that same refusal would add a fifth outcome a guest could tell apart — while
+ * withholding media that is, in fact, available.
+ *
  * `resolveStorage` is injectable for tests only; the route always uses the
  * real registry.
  */
@@ -438,7 +451,7 @@ export async function signSharedMediaRead(
   limits: ShareMediaTtlLimits,
   now: Date = new Date(),
   resolveStorage: (driver: string) => MultipartStorage = getMultipartStorage,
-): Promise<{ url: string; expiresAt: string }> {
+): Promise<PrivateMediaRead> {
   const expiresInSeconds = capShareMediaTtlSeconds(
     limits,
     resolved.grantExpiresAt,
@@ -453,7 +466,31 @@ export async function signSharedMediaRead(
   if (signed.expiresAt.valueOf() > resolved.grantExpiresAt.valueOf()) {
     throw shareUnavailable();
   }
-  return { url: signed.url, expiresAt: signed.expiresAt.toISOString() };
+  const read: PrivateMediaRead = {
+    url: signed.url,
+    expiresAt: signed.expiresAt.toISOString(),
+  };
+
+  const preview = servablePreview(resolved.preview);
+  if (!preview) return read;
+  try {
+    const signedPreview = await resolveStorage(resolved.storageDriver)
+      .createPrivateReadUrl({ key: preview.storageKey, expiresInSeconds });
+    if (signedPreview.expiresAt.valueOf() > resolved.grantExpiresAt.valueOf()) {
+      return read;
+    }
+    read.preview = {
+      url: signedPreview.url,
+      expiresAt: signedPreview.expiresAt.toISOString(),
+      mimeType: preview.mimeType,
+      width: preview.width,
+      height: preview.height,
+    };
+  } catch {
+    // Nothing is logged: the only identifiers in reach are a storage key and a
+    // signed URL, and neither may ever be written down.
+  }
+  return read;
 }
 
 /**

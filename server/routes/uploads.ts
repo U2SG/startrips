@@ -5,6 +5,12 @@ import { requireAtlasAccess } from "../authorization/atlas-access";
 import { serverConfig } from "../config";
 import { db } from "../db/client";
 import {
+  planPreviewDerivation,
+  previewObjectFitsCeiling,
+  servablePreview,
+  type PreviewCeilings,
+} from "../media/preview-derivation";
+import {
   atlases,
   journeyRoutePoints,
   mediaAssets,
@@ -23,6 +29,7 @@ import {
   type MultipartStorage,
 } from "../storage/multipart-storage";
 import { readJsonObject } from "./json-body";
+import type { PrivateMediaRead } from "../../src/journey/types";
 
 const PART_SIZE = 8 * 1024 * 1024;
 const MAX_UPLOAD_BYTES = 2_000_000_000;
@@ -1100,32 +1107,282 @@ uploadRoutes.delete("/:id", async (context) => {
   return context.body(null, 204);
 });
 
-uploadRoutes.get("/assets/:id/read-url", async (context) => {
-  const { atlas } = await requireAtlasAccess(context.req.raw, "read");
+/**
+ * #260: sign the owner read of one asset, and its preview when there is one.
+ *
+ * The original is signed first and is never conditional: whatever happens to
+ * the preview, this function either returns the original or throws the same
+ * `StorageUnavailableError` the route threw before #260, so a preview can
+ * neither add a failure mode nor change an existing one.
+ *
+ * The preview signature, by contrast, is best-effort by construction. A
+ * preview is an optimisation over an original that already works, so a backend
+ * that cannot sign the derived key must produce a response without the block
+ * rather than an error: the alternative would let a stale or unreachable
+ * derived object take down a read of media that is perfectly available.
+ *
+ * `resolveStorage` is injectable for tests only, the same seam
+ * `signSharedMediaRead` uses; the route always passes the real registry.
+ */
+export async function signPrivateMediaRead(
+  asset: typeof mediaAssets.$inferSelect,
+  expiresInSeconds: number,
+  resolveStorage: (driver: string) => MultipartStorage = getMultipartStorage,
+): Promise<PrivateMediaRead> {
+  const storage = resolveStorage(asset.storageDriver);
+  const signed = await storage.createPrivateReadUrl({
+    key: asset.storageKey,
+    expiresInSeconds,
+  });
+  const read: PrivateMediaRead = {
+    url: signed.url,
+    expiresAt: signed.expiresAt.toISOString(),
+  };
+
+  const preview = servablePreview(asset);
+  if (!preview) return read;
+  try {
+    const signedPreview = await storage.createPrivateReadUrl({
+      key: preview.storageKey,
+      expiresInSeconds,
+    });
+    read.preview = {
+      url: signedPreview.url,
+      expiresAt: signedPreview.expiresAt.toISOString(),
+      mimeType: preview.mimeType,
+      width: preview.width,
+      height: preview.height,
+    };
+  } catch (error) {
+    console.error(
+      "Preview read URL signing failed",
+      asset.id,
+      error instanceof Error ? error.message : "unknown error",
+    );
+  }
+  return read;
+}
+
+/** One asset of this Atlas, in a Journey that is not deleting. */
+async function findAssetForAtlas(assetId: string, atlasId: string) {
   const [row] = await db
     .select({ asset: mediaAssets })
     .from(mediaAssets)
     .innerJoin(journeys, eq(journeys.id, mediaAssets.journeyId))
     .where(
       and(
-        eq(mediaAssets.id, context.req.param("id")),
-        eq(journeys.atlasId, atlas.id),
+        eq(mediaAssets.id, assetId),
+        eq(journeys.atlasId, atlasId),
         isNull(journeys.deletionStartedAt),
       ),
     )
     .limit(1);
-  if (!row) return context.json({ error: "MEDIA_NOT_FOUND" }, 404);
+  return row?.asset;
+}
 
-  const signed = await getMultipartStorage(
-    row.asset.storageDriver,
-  ).createPrivateReadUrl({
-    key: row.asset.storageKey,
-    expiresInSeconds: serverConfig.mediaReadUrlExpiresInSeconds,
-  });
+function previewCeilings(): PreviewCeilings {
+  return {
+    maxEdgePixels: serverConfig.mediaPreviewMaxEdgePixels,
+    maxBytes: serverConfig.mediaPreviewMaxBytes,
+  };
+}
+
+/**
+ * Drop the object a preview column used to point at, once no row references it
+ * any more. Best-effort on purpose and in the same spirit as the deduplicated
+ * object cleanup above: the row is already correct, and a storage hiccup here
+ * costs an unreferenced object rather than a wrong response.
+ */
+async function discardPreviewObject(
+  storageDriver: string,
+  storageKey: string | null,
+) {
+  if (!storageKey) return;
+  try {
+    await getMultipartStorage(storageDriver).deleteObject({ key: storageKey });
+  } catch (error) {
+    console.error(
+      "Preview object cleanup failed",
+      storageKey,
+      error instanceof Error ? error.message : "unknown error",
+    );
+  }
+}
+
+/** Clear every preview column, leaving the asset's original untouched. */
+const CLEARED_PREVIEW = {
+  previewState: "failed",
+  previewStorageKey: null,
+  previewMimeType: null,
+  previewBytes: null,
+} as const;
+
+type PreviewRequest = {
+  sourceWidth?: unknown;
+  sourceHeight?: unknown;
+  exifOrientation?: unknown;
+};
+
+function readPreviewRequest(parsed: unknown) {
+  if (typeof parsed !== "object" || parsed === null) return null;
+  const body = parsed as PreviewRequest;
+  const exifOrientation = body.exifOrientation;
+  if (
+    typeof body.sourceWidth !== "number"
+    || typeof body.sourceHeight !== "number"
+    || (exifOrientation !== undefined
+      && exifOrientation !== null
+      && typeof exifOrientation !== "number")
+  ) {
+    return null;
+  }
+  return {
+    sourceWidth: body.sourceWidth,
+    sourceHeight: body.sourceHeight,
+    exifOrientation: (exifOrientation ?? null) as number | null,
+  };
+}
+
+/**
+ * #260 step 1: the server plans the preview and hands back a write for exactly
+ * that plan.
+ *
+ * The caller supplies only what it can measure about the source — its pixel
+ * size and its EXIF orientation. Every decision that follows is the server's:
+ * the orientation-corrected display size, the pixel size of the still, its
+ * format, and the byte ceiling it must respect. The response is a signed
+ * single-object write plus the spec that write has to satisfy, so a producer
+ * has no room to widen anything and `complete` measures what actually arrived.
+ *
+ * Re-deriving is allowed from any state. The previous derived object is
+ * dropped as soon as the row stops referencing it, so a second derivation
+ * replaces the first rather than orphaning it.
+ *
+ * A source nothing can be derived from is answered as an explicit, recorded
+ * degradation: the state becomes `failed`, the read-url contract is untouched,
+ * and the Journey saves exactly as it did before.
+ */
+uploadRoutes.post("/assets/:id/preview", async (context) => {
+  const { atlas } = await requireAtlasAccess(context.req.raw, "update");
+  const asset = await findAssetForAtlas(context.req.param("id"), atlas.id);
+  if (!asset) return context.json({ error: "MEDIA_NOT_FOUND" }, 404);
+
+  const values = readPreviewRequest(await context.req.json().catch(() => null));
+  if (!values) return context.json({ error: "INVALID_PREVIEW_REQUEST" }, 400);
+
+  const planned = planPreviewDerivation(
+    { mimeType: asset.mimeType, ...values },
+    previewCeilings(),
+  );
+  if (!planned.ok) {
+    if (planned.reason === "invalid-source") {
+      return context.json({ error: "INVALID_PREVIEW_REQUEST" }, 400);
+    }
+    await db
+      .update(mediaAssets)
+      .set(CLEARED_PREVIEW)
+      .where(eq(mediaAssets.id, asset.id));
+    await discardPreviewObject(asset.storageDriver, asset.previewStorageKey);
+    return context.json({ error: "PREVIEW_UNSUPPORTED" }, 409);
+  }
+
+  const { spec } = planned;
+  // No file name, no capture time, no coordinates: a derived key is an opaque
+  // identity under the Journey that owns it, exactly like the original's.
+  const previewStorageKey =
+    `${atlas.id}/${asset.journeyId}/previews/${randomUUID()}`;
+  const signed = await getMultipartStorage(asset.storageDriver)
+    .signObjectUpload({
+      key: previewStorageKey,
+      mimeType: spec.mimeType,
+      expiresInSeconds: serverConfig.s3UploadPartExpiresInSeconds,
+    });
+  await db
+    .update(mediaAssets)
+    .set({
+      displayWidth: spec.displayWidth,
+      displayHeight: spec.displayHeight,
+      previewStorageKey,
+      previewMimeType: spec.mimeType,
+      previewBytes: null,
+      previewState: "pending",
+    })
+    .where(eq(mediaAssets.id, asset.id));
+  await discardPreviewObject(asset.storageDriver, asset.previewStorageKey);
+
   return context.json({
-    url: signed.url,
-    expiresAt: signed.expiresAt.toISOString(),
+    upload: {
+      url: signed.url,
+      headers: signed.headers ?? {},
+      expiresAt: signed.expiresAt.toISOString(),
+    },
+    preview: spec,
   });
+});
+
+/**
+ * #260 step 2: measure what was written, then make it servable — or not.
+ *
+ * The produced object is inspected rather than trusted. A write that never
+ * landed leaves the asset `pending`, because that is a retryable state and
+ * turning it into a permanent failure is exactly what #260 forbids. A write
+ * that landed but broke the byte ceiling is a decided outcome: the object is
+ * dropped and the asset is `failed`, so no oversized still can ever be signed.
+ */
+uploadRoutes.post("/assets/:id/preview/complete", async (context) => {
+  const { atlas } = await requireAtlasAccess(context.req.raw, "update");
+  const asset = await findAssetForAtlas(context.req.param("id"), atlas.id);
+  if (!asset) return context.json({ error: "MEDIA_NOT_FOUND" }, 404);
+  if (asset.previewState !== "pending" || !asset.previewStorageKey) {
+    return context.json({ error: "PREVIEW_NOT_PENDING" }, 409);
+  }
+
+  const storage = getMultipartStorage(asset.storageDriver);
+  const inspected = await storage.inspectObject({
+    key: asset.previewStorageKey,
+  });
+  if (!inspected.exists) {
+    return context.json({ error: "PREVIEW_OBJECT_MISSING" }, 409);
+  }
+  if (!previewObjectFitsCeiling(inspected.bytes, previewCeilings())) {
+    await db
+      .update(mediaAssets)
+      .set(CLEARED_PREVIEW)
+      .where(eq(mediaAssets.id, asset.id));
+    await discardPreviewObject(asset.storageDriver, asset.previewStorageKey);
+    return context.json({ error: "PREVIEW_TOO_LARGE" }, 409);
+  }
+
+  const [updated] = await db
+    .update(mediaAssets)
+    .set({ previewBytes: inspected.bytes, previewState: "ready" })
+    .where(and(
+      eq(mediaAssets.id, asset.id),
+      eq(mediaAssets.previewStorageKey, asset.previewStorageKey),
+    ))
+    .returning();
+  // A concurrent re-derivation moved the key out from under this completion;
+  // the object it measured belongs to that round, not this one.
+  if (!updated) return context.json({ error: "PREVIEW_NOT_PENDING" }, 409);
+  return context.json({
+    preview: {
+      mimeType: updated.previewMimeType,
+      bytes: updated.previewBytes,
+      width: updated.displayWidth,
+      height: updated.displayHeight,
+    },
+  });
+});
+
+uploadRoutes.get("/assets/:id/read-url", async (context) => {
+  const { atlas } = await requireAtlasAccess(context.req.raw, "read");
+  const asset = await findAssetForAtlas(context.req.param("id"), atlas.id);
+  if (!asset) return context.json({ error: "MEDIA_NOT_FOUND" }, 404);
+
+  return context.json(await signPrivateMediaRead(
+    asset,
+    serverConfig.mediaReadUrlExpiresInSeconds,
+  ));
 });
 
 uploadRoutes.delete("/assets/:id", async (context) => {

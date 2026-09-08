@@ -347,6 +347,9 @@ export async function getJourneyDeletionCandidateForAtlas(
       .select({
         storageDriver: mediaAssets.storageDriver,
         storageKey: mediaAssets.storageKey,
+        // #260: a hard Journey deletion has to reach the derived preview too,
+        // and this select is the only place its key is ever read for cleanup.
+        previewStorageKey: mediaAssets.previewStorageKey,
       })
       .from(mediaAssets)
       .where(eq(mediaAssets.journeyId, journey.id)),

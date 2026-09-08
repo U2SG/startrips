@@ -119,12 +119,31 @@ export const mediaAssets = pgTable(
     contentHash: text("content_hash"),
     sortOrder: integer("sort_order").notNull().default(0),
     uploadedByUserId: text("uploaded_by_user_id").notNull(),
+    // #260: the presentable size of this asset after its EXIF orientation has
+    // been applied, so a frame can be reserved before any byte of the original
+    // arrives. Nullable because every asset uploaded before #260 landed has no
+    // measured source size and stays preview-less by design.
+    displayWidth: integer("display_width"),
+    displayHeight: integer("display_height"),
+    // #260: the derived preview — a size-bounded still of THIS asset, kept
+    // under the same id. The original stays authoritative; these columns only
+    // ever describe a second, smaller object beside it.
+    previewStorageKey: text("preview_storage_key"),
+    previewMimeType: text("preview_mime_type"),
+    previewBytes: integer("preview_bytes"),
+    // "none" | "pending" | "ready" | "failed"; only "ready" is ever served.
+    previewState: text("preview_state").notNull().default("none"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
   },
   (table) => [
     uniqueIndex("media_assets_storage_key_unique").on(table.storageKey),
+    // Nullable unique: Postgres allows many NULLs, so preview-less assets are
+    // unconstrained while no two assets can ever claim one derived object.
+    uniqueIndex("media_assets_preview_storage_key_unique").on(
+      table.previewStorageKey,
+    ),
     index("media_assets_journey_order_idx").on(
       table.journeyId,
       table.sortOrder,

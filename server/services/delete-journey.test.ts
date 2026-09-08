@@ -34,6 +34,9 @@ function storageWithInspection(
     },
     async completeMultipartUpload() {},
     abortMultipartUpload: vi.fn(async () => undefined),
+    async signObjectUpload() {
+      return { url: "https://unused", expiresAt: new Date(0) };
+    },
     deleteObject: vi.fn(async () => undefined),
     inspectObject: vi.fn(async () => inspection),
     async createPrivateReadUrl() {
@@ -81,6 +84,7 @@ describe("journey deletion storage cleanup", () => {
       media: [{
         storageDriver: "primary-media-v1",
         storageKey: "atlas/journey/photo.jpg",
+        previewStorageKey: null,
       }],
     }));
     deps.markForDeletion.mockImplementation(async (journeyId) => {
@@ -155,6 +159,7 @@ describe("journey deletion storage cleanup", () => {
       media: [{
         storageDriver: "primary-media-v1",
         storageKey: "atlas/journey/shared.jpg",
+        previewStorageKey: null,
       }],
       uploads: [{
         storageDriver: "primary-media-v1",
@@ -200,10 +205,12 @@ describe("journey deletion storage cleanup", () => {
         {
           storageDriver: "primary-media-v1",
           storageKey: "atlas/journey/first.jpg",
+          previewStorageKey: null,
         },
         {
           storageDriver: "primary-media-v1",
           storageKey: "atlas/journey/second.jpg",
+          previewStorageKey: null,
         },
       ],
     });
@@ -244,6 +251,7 @@ describe("journey deletion storage cleanup", () => {
       media: [{
         storageDriver: "primary-media-v1",
         storageKey: `atlas/${journeyId}/photo.jpg`,
+        previewStorageKey: null,
       }],
     }));
 

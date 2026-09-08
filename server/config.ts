@@ -56,6 +56,21 @@ export function loadServerConfig(
   const shareMediaReadUrlExpiresInSeconds = Number(
     environment.SHARE_MEDIA_READ_URL_EXPIRES_IN_SECONDS ?? 90,
   );
+  // #260: the two ceilings every derived preview is planned against. The
+  // longest edge bounds the pixels the server asks for, and the byte ceiling
+  // is what the completion check measures the produced object against; a
+  // preview that misses either one never reaches the "ready" state, so a
+  // deployment can tighten both without ever serving something oversized.
+  //
+  // 640 px carries a full-bleed phone frame at 2x without approaching the
+  // original, and 512 KiB is several times what a 640 px JPEG of a photograph
+  // costs, so the byte ceiling bites only on pathological input.
+  const mediaPreviewMaxEdgePixels = Number(
+    environment.MEDIA_PREVIEW_MAX_EDGE_PIXELS ?? 640,
+  );
+  const mediaPreviewMaxBytes = Number(
+    environment.MEDIA_PREVIEW_MAX_BYTES ?? 512 * 1024,
+  );
   // #200 phase F: the guest prefix is the only public, unauthenticated surface
   // Startrips exposes, so it carries its own budgets rather than the blanket
   // `/api/*` bucket #217 removed. One window, three ceilings; see
@@ -142,6 +157,24 @@ export function loadServerConfig(
   ) {
     throw new Error(
       "SHARE_MEDIA_READ_URL_EXPIRES_IN_SECONDS must be between 15 and 600",
+    );
+  }
+  if (
+    !Number.isInteger(mediaPreviewMaxEdgePixels)
+    || mediaPreviewMaxEdgePixels < 64
+    || mediaPreviewMaxEdgePixels > 4096
+  ) {
+    throw new Error(
+      "MEDIA_PREVIEW_MAX_EDGE_PIXELS must be between 64 and 4096",
+    );
+  }
+  if (
+    !Number.isInteger(mediaPreviewMaxBytes)
+    || mediaPreviewMaxBytes < 16 * 1024
+    || mediaPreviewMaxBytes > 8 * 1024 * 1024
+  ) {
+    throw new Error(
+      "MEDIA_PREVIEW_MAX_BYTES must be between 16384 and 8388608",
     );
   }
   // The floors are product floors, not safety margins: #200 is explicit that a
@@ -266,6 +299,8 @@ export function loadServerConfig(
     s3UploadPartExpiresInSeconds,
     mediaReadUrlExpiresInSeconds,
     shareMediaReadUrlExpiresInSeconds,
+    mediaPreviewMaxEdgePixels,
+    mediaPreviewMaxBytes,
     shareRateLimitWindowSeconds,
     shareDataRateLimit,
     shareMediaRateLimit,
