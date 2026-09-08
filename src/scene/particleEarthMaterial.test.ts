@@ -1,6 +1,9 @@
 import type { WebGLRenderer } from "three";
 import { describe, expect, it } from "vitest";
-import { createParticleEarthMaterial } from "./particleEarthMaterial";
+import {
+  PARTICLE_CLIP_DEPTH_BIAS_CHUNK,
+  createParticleEarthMaterial,
+} from "./particleEarthMaterial";
 
 function rendererWithPixelRatio(ratio: number) {
   // Only this renderer capability is consumed; these tests allocate no WebGL context.
@@ -28,6 +31,27 @@ describe("particle earth material", () => {
       expect(terrain.vertexShader).toContain("* terrainBrightness");
       expect(terrain.vertexShader).toContain("* terrainPointScale");
     } finally { plain.dispose(); terrain.dispose(); }
+  });
+
+  it("keeps clip depth bias opt-in and changes only clip-space z", () => {
+    const plain = createParticleEarthMaterial({ color: 0xffffff, opacity: 1, size: 8 });
+    const biased = createParticleEarthMaterial({
+      color: 0xffffff, opacity: 1, size: 8, clipDepthBias: 0.0015,
+    });
+    try {
+      expect(plain.vertexShader).not.toContain(PARTICLE_CLIP_DEPTH_BIAS_CHUNK);
+      expect(plain.uniforms.uClipDepthBias).toBeUndefined();
+      expect(biased.vertexShader).toContain(PARTICLE_CLIP_DEPTH_BIAS_CHUNK);
+      expect(biased.uniforms.uClipDepthBias.value).toBe(0.0015);
+      expect(PARTICLE_CLIP_DEPTH_BIAS_CHUNK).toContain("gl_Position.z -=");
+      expect(PARTICLE_CLIP_DEPTH_BIAS_CHUNK).toContain("gl_Position.w");
+      expect(PARTICLE_CLIP_DEPTH_BIAS_CHUNK).toContain("particleDepthFacing");
+      expect(PARTICLE_CLIP_DEPTH_BIAS_CHUNK).toContain("cameraPosition - particleDepthWorld");
+      expect(PARTICLE_CLIP_DEPTH_BIAS_CHUNK).toContain("clamp(");
+      expect(PARTICLE_CLIP_DEPTH_BIAS_CHUNK).toContain("0.0");
+      expect(PARTICLE_CLIP_DEPTH_BIAS_CHUNK).toContain("1.0");
+      expect(PARTICLE_CLIP_DEPTH_BIAS_CHUNK).not.toMatch(/gl_Position\.(x|y|w)\s*[-+*\/]?=/);
+    } finally { plain.dispose(); biased.dispose(); }
   });
 
   it("can disable world-space radial pulse for geographic signals", () => {

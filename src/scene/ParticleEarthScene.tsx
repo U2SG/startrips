@@ -279,13 +279,9 @@ export const GLOBE_SURFACE_RADIUS = GEOGRAPHIC_SURFACE_RADIUS;
 // enough that the projection is locally linear across it, large enough that the
 // difference is far above the 0.01px the anchor is published at.
 const ANCHOR_SCALE_PROBE_DEG = 0.05;
-/**
- * #196: the personal glow is a Points sprite drawn against the particle
- * surface it now shares a radius with, so it carries a render-only epsilon to
- * stay off the depth-fighting boundary. It is deliberately far too small to
- * move the projected anchor: the semantic position stays focusSignalAnchor.
- */
-const PERSONAL_SIGNAL_RENDER_LIFT = 1 + 1e-4;
+// The personal signal is geographic, so its position stays on the canonical
+// surface. Readability priority is clip-space only, owned by its material.
+const PERSONAL_SIGNAL_CLIP_DEPTH_BIAS = 0.0015;
 export const GLOBE_IDLE_ROTATION_RADIANS_PER_SECOND = (Math.PI * 2) / 180;
 export const GLOBE_IDLE_RESUME_DELAY_MS = 20_000;
 export const GLOBE_IDLE_RELEASE_BLEND_MS = 2_400;
@@ -2145,7 +2141,7 @@ export function ParticleEarthScene({
     const personalPosition = focusSignalAnchor(
       latestFocusPoint.current,
       initialFallback,
-    ).multiplyScalar(PERSONAL_SIGNAL_RENDER_LIFT);
+    );
     const personalPositions = new Float32Array(personalPosition.toArray());
     personalGeometry.setAttribute("position", new BufferAttribute(personalPositions, 3));
     personalGeometry.setAttribute(
@@ -2157,6 +2153,7 @@ export function ParticleEarthScene({
       opacity: 0,
       size: 58,
       radialPulseScale: 0,
+      clipDepthBias: PERSONAL_SIGNAL_CLIP_DEPTH_BIAS,
     });
     personalMaterial.uniforms.uColor.value.set(
       latestFocusColor.current ?? 0xffdc72,
@@ -3134,6 +3131,7 @@ export function ParticleEarthScene({
       host.dataset.routeEndpointMaxErrorPx = routeEndpointMaxErrorPx.toFixed(3);
       host.dataset.cityLabelAnchorRadius = ROUTE_ANCHOR_RADIUS.toFixed(3);
       host.dataset.geographicSurfaceRadius = GLOBE_SURFACE_RADIUS.toFixed(3);
+      host.dataset.focusSignalRadius = GLOBE_SURFACE_RADIUS.toFixed(3);
       // #237: the coastline is the layer a viewer READS as the map, so it
       // publishes its own semantic radius next to the surface's. The two being
       // equal is the invariant; a regression that puts a map layer back on a
@@ -4051,8 +4049,7 @@ export function ParticleEarthScene({
         currentMode === "archiveBurst"
           ? { lat: -10, lon: -180 }
           : { lat: 34.0522, lon: -118.2437 };
-      const vector = focusSignalAnchor(point, fallback)
-        .multiplyScalar(PERSONAL_SIGNAL_RENDER_LIFT);
+      const vector = focusSignalAnchor(point, fallback);
       const attribute = personalGeometry.getAttribute("position") as BufferAttribute;
       attribute.setXYZ(0, vector.x, vector.y, vector.z);
       attribute.needsUpdate = true;

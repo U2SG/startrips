@@ -133,6 +133,7 @@ function measure(page) {
       zoom: state.zoom,
       scale: state.scale,
       surfaceRadius: Number(host.dataset.geographicSurfaceRadius),
+      focusSignalRadius: Number(host.dataset.focusSignalRadius),
       labelAnchorRadius: Number(host.dataset.cityLabelAnchorRadius),
       coastlineSemanticRadius: Number(host.dataset.coastlineSemanticRadius),
       projectionSpace: host.dataset.projectionSpace ?? "",
@@ -449,6 +450,10 @@ function checkCoastlineFrame(sample, where) {
   check(
     sample.projectionSpace === "single",
     `${where}: the scene reports projection space "${sample.projectionSpace}" rather than a single space`,
+  );
+  check(
+    Math.abs(sample.focusSignalRadius - sample.surfaceRadius) < 0.0005,
+    `${where}: focus signal radius ${sample.focusSignalRadius} drifted from geographic surface ${sample.surfaceRadius}`,
   );
   check(
     Math.abs(sample.coastline.radius - sample.surfaceRadius) < 0.0006,

@@ -11,6 +11,22 @@ export const PARTICLE_DIM_POINT_LIMIT = 24;
 export const PARTICLE_ACTIVE_DIM_POINT_LIMIT = 12;
 
 /**
+ * Exported for assertion: opt-in particle depth priority may move clip z only.
+ * The facing term reaches zero at the silhouette and stays clamped to zero on
+ * the far hemisphere so a biased point can never be pulled through the globe.
+ */
+export const PARTICLE_CLIP_DEPTH_BIAS_CHUNK = `
+  vec3 particleDepthWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;
+  vec3 particleDepthWorldNormal = normalize(mat3(modelMatrix) * normalize(transformed));
+  float particleDepthFacing = clamp(
+    dot(particleDepthWorldNormal, normalize(cameraPosition - particleDepthWorld)),
+    0.0,
+    1.0
+  );
+  gl_Position.z -= uClipDepthBias * particleDepthFacing * gl_Position.w;
+`;
+
+/**
  * Sizes are authored in CSS pixels, while gl_PointSize uses drawing-buffer
  * pixels. Read the effective renderer ratio, not window.devicePixelRatio,
  * so a quality cap changes sampling resolution rather than optical size.
@@ -32,6 +48,7 @@ interface ParticleMaterialOptions {
   spatialLod?: boolean;
   radialPulseScale?: number;
   terrainRelief?: boolean;
+  clipDepthBias?: number;
 }
 
 export function createParticleEarthMaterial({
@@ -41,6 +58,7 @@ export function createParticleEarthMaterial({
   spatialLod = false,
   radialPulseScale = 1,
   terrainRelief = false,
+  clipDepthBias = 0,
 }: ParticleMaterialOptions) {
   return new ParticleEarthMaterial({
     transparent: true,
@@ -66,6 +84,7 @@ export function createParticleEarthMaterial({
       uActiveDimStrength: { value: 0 },
       uLodProgress: { value: spatialLod ? 0 : 1 },
       uRadialPulseScale: { value: terrainRelief ? 0 : radialPulseScale },
+      ...(clipDepthBias !== 0 ? { uClipDepthBias: { value: clipDepthBias } } : {}),
       ...(terrainRelief ? {
         uTerrainReliefMap: { value: null },
         uTerrainReliefEmphasis: { value: 0 },
@@ -92,6 +111,7 @@ export function createParticleEarthMaterial({
       uniform float uDimInnerCos;
       uniform float uLodProgress;
       uniform float uRadialPulseScale;
+      ${clipDepthBias !== 0 ? "uniform float uClipDepthBias;" : ""}
       ${terrainRelief ? `
       uniform sampler2D uTerrainReliefMap;
       uniform float uTerrainReliefEmphasis;
@@ -189,6 +209,7 @@ export function createParticleEarthMaterial({
         ` : ""}
         vec4 mvPosition = modelViewMatrix * vec4(transformed, 1.0);
         gl_Position = projectionMatrix * mvPosition;
+        ${clipDepthBias !== 0 ? PARTICLE_CLIP_DEPTH_BIAS_CHUNK : ""}
 
         float twinkleSignal = shimmer * 0.3 + spark * 0.95;
         vTwinkle = mix(0.78 + twinkleSignal * mix(1.0, 0.24, dimAmount),
