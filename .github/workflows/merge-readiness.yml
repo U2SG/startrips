@@ -109,11 +109,28 @@ jobs:
             reject_gate 'Draft pull request is not merge-ready'
           fi
 
-          verify_conclusion=$(gh api \
-            "repos/$GH_REPO/commits/$HEAD_SHA/check-runs" \
-            --jq '[.check_runs[] | select(.name == "verify")] | sort_by(.started_at) | last | .conclusion // "missing"')
-          if [[ "$verify_conclusion" != "success" ]]; then
-            reject_gate "ci / verify is $verify_conclusion"
+          # Paginated on purpose: the default page holds 30 check-runs and a head
+          # whose CI has been re-run carries more than that, which would hide
+          # `verify` behind page one and read exactly like an absent check.
+          if ! verify_pages=$(gh api --paginate --slurp \
+            "repos/$GH_REPO/commits/$HEAD_SHA/check-runs?per_page=100"); then
+            reject_gate 'ci / verify could not be read from the GitHub API'
+          fi
+
+          # Report absent, in-flight and concluded separately. Collapsing all three
+          # into "missing" makes a check that is merely still running look like a
+          # lookup defect, which is exactly how a re-run of `ci` during sign-off
+          # reads from the outside.
+          verify_state=$(jq -r '
+            [.[].check_runs[] | select(.name == "verify")]
+            | sort_by(.started_at)
+            | last
+            | if . == null then "absent"
+              elif .conclusion != null then .conclusion
+              else "still " + .status
+              end' <<<"$verify_pages")
+          if [[ "$verify_state" != "success" ]]; then
+            reject_gate "ci / verify is $verify_state"
           fi
 
           owner="${GH_REPO%/*}"
