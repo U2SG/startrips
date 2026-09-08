@@ -2,7 +2,7 @@ import { onMotionPreferenceChange, prefersReducedMotion } from "./preferences";
 import { motionTokens } from "./tokens";
 
 export type SpringValue = { position: number; velocity: number };
-export type SpringElementTarget = { transform: string; opacity?: number };
+export type SpringElementTarget = { transform: string; opacity?: number; clipInset?: readonly [number, number] };
 export type SpringElementOptions = {
   owner?: string;
   stiffness?: number;
@@ -98,10 +98,14 @@ function observeLayout(element: HTMLElement) {
   resizeObserver.observe(element, { box: "border-box" });
 }
 
-function computedValues(element: HTMLElement): number[] {
+function computedValues(element: HTMLElement, withClip = false): number[] {
   const style = getComputedStyle(element);
   const matrix = new DOMMatrixReadOnly(!style.transform || style.transform === "none" ? undefined : style.transform);
-  return [...matrix.toFloat64Array(), Number.parseFloat(style.opacity) || 0];
+  // Opt-in symmetric percentage insets share the transform's clock and
+  // interruption velocity. Callers initialize these before starting motion.
+  const inset = style.clipPath.match(/^inset\(([-\d.]+)%(?:\s+([-\d.]+)%)?\)$/);
+  return [...matrix.toFloat64Array(), Number.parseFloat(style.opacity) || 0,
+    ...(withClip ? [Number(inset?.[1] ?? 0), Number(inset?.[2] ?? inset?.[1] ?? 0)] : [])];
 }
 
 function resolveTarget(element: HTMLElement, target: SpringElementTarget, opacity: number): number[] {
@@ -114,8 +118,9 @@ function resolveTarget(element: HTMLElement, target: SpringElementTarget, opacit
     // style behind or launching a competing CSS transition.
     element.style.setProperty("transition", "none", "important");
     element.style.setProperty("transform", target.transform, "important");
-    const values = computedValues(element);
+    const values = computedValues(element, target.clipInset !== undefined);
     values[16] = target.opacity ?? opacity;
+    if (target.clipInset) { values[17] = target.clipInset[0]; values[18] = target.clipInset[1]; }
     return values;
   } finally {
     element.style.setProperty("transform", oldTransform, transformPriority);
@@ -126,12 +131,13 @@ function resolveTarget(element: HTMLElement, target: SpringElementTarget, opacit
 function paint(state: ElementSpring) {
   state.element.style.transform = `matrix3d(${state.current.slice(0, 16).join(",")})`;
   state.element.style.opacity = String(Math.max(0, Math.min(1, state.current[16])));
+  if (state.expression.clipInset) state.element.style.clipPath = `inset(${state.current[17]}% ${state.current[18]}%)`;
 }
 
 function matchesPainted(actual: number[], expected: number[]) {
   // getComputedStyle serializes matrices with rounded coefficients. Allow
   // sub-pixel translation rounding without treating it as a new pointer pose.
-  return actual.every((value, index) => Math.abs(value - expected[index]) < (index >= 12 && index <= 14 ? 0.01 : 0.0001));
+  return actual.length === expected.length && actual.every((value, index) => Math.abs(value - expected[index]) < (index >= 12 && index <= 14 ? 0.01 : 0.0001));
 }
 
 function releaseScheduler() {
@@ -155,6 +161,7 @@ function finish(state: ElementSpring) {
   state.element.style.transform = state.expression.transform;
   if (state.expression.opacity !== undefined) state.element.style.opacity = String(state.expression.opacity);
   else state.element.style.setProperty("opacity", state.opacityStyle, state.opacityPriority);
+  if (state.expression.clipInset) state.element.style.clipPath = `inset(${state.expression.clipInset[0]}% ${state.expression.clipInset[1]}%)`;
   state.element.style.setProperty("transition", state.transitionStyle, state.transitionPriority);
   run.resolve();
   releaseScheduler();
@@ -181,7 +188,7 @@ function cancel(state: ElementSpring, run: Run) {
   if (state.run !== run) return;
   // Freeze the frame the user can actually see, retaining its velocity.
   // A pointer handler can already have painted a new position in this event.
-  const actual = computedValues(state.element);
+  const actual = computedValues(state.element, state.expression.clipInset !== undefined);
   if (!matchesPainted(actual, state.current)) state.velocity.fill(0);
   state.current = actual;
   state.time = performance.now();
@@ -208,7 +215,7 @@ export function springElementTo(
 ): SpringElementHandle {
   const previous = springs.get(element);
   if (previous?.run) cancel(previous, previous.run);
-  const current = computedValues(element);
+  const current = computedValues(element, target.clipInset !== undefined);
   // Direct manipulation may have written a different transform after cancel.
   // Retain momentum only while this same owner still owns the painted state.
   const continuous = previous && previous.owner === options.owner

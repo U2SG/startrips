@@ -2133,7 +2133,7 @@ try {
     "woman-power-poster", "stieglitz-hand-of-man", "han-dancer", "mughal-akbarnama", "egypt-coffin"];
   const manyPhotos = await createQaPage("/?qaState=journey-story&qaMode=many-media",
     (url) => `/artworks/${manyPhotoPaths[Number(url.match(/assets\/[^/]*(\d{3})\/read-url/)?.[1]) - 100]}.jpg`,
-    { mobile: false, reducedMotion: "no-preference", rotateReadUrls: true });
+    { mobile: false, reducedMotion: "no-preference", rotateReadUrls: true, recordMotion: true });
   try {
     const idFor = (index) => `00000000-0000-4000-8000-${String(100 + index).padStart(12, "0")}`;
     await waitForStoryPicture(manyPhotos.page, idFor(0));
@@ -2141,6 +2141,33 @@ try {
       const root = document.querySelector(".journey-story__media [data-story-media-pages]");
       window.__qaManyPhotoNodes = [...root.querySelectorAll("[data-media-page]")];
       window.__qaManyPhotoReloads = [];
+      const aperture = { boundaries: 0, jumps: [], samples: 0, maxBoundaryDelta: 0 };
+      let previous = new Map();
+      let lastTime = performance.now();
+      const sample = (now) => {
+        const next = new Map();
+        for (const node of root.querySelectorAll("[data-media-page-id]")) {
+          const clip = getComputedStyle(node).clipPath.match(/[-\d.]+/g)?.map(Number) ?? [0, 0];
+          const state = { clip: [clip[0], clip[1] ?? clip[0]],
+            role: `${node.dataset.mediaPage}:${node.dataset.mediaIncoming ?? "false"}` };
+          const before = previous.get(node.dataset.mediaPageId);
+          if (before && before.role !== state.role && now - lastTime < 80) {
+            aperture.boundaries += 1;
+            const delta = Math.max(...state.clip.map((value, index) => Math.abs(value - before.clip[index])));
+            aperture.maxBoundaryDelta = Math.max(aperture.maxBoundaryDelta, delta);
+            // At role handoff a retained photograph must not abruptly open or
+            // recrop. Allow actual spring travel during the sampled interval.
+            if (delta > Math.max(2, (now - lastTime) * .16)) aperture.jumps.push({ delta, elapsed: now - lastTime });
+          }
+          next.set(node.dataset.mediaPageId, state);
+        }
+        aperture.samples += 1;
+        previous = next;
+        lastTime = now;
+        window.__qaApertureFrame = requestAnimationFrame(sample);
+      };
+      window.__qaAperture = aperture;
+      sample(performance.now());
       const observer = new MutationObserver((records) => {
         for (const record of records) {
           const image = record.target;
@@ -2166,8 +2193,10 @@ try {
     await manyPhotos.page.keyboard.press("ArrowRight");
     await waitForStoryPicture(manyPhotos.page, idFor(2));
     const stable = await manyPhotos.page.evaluate(() => {
+      cancelAnimationFrame(window.__qaApertureFrame);
       const root = document.querySelector(".journey-story__media [data-story-media-pages]");
       return { reloads: window.__qaManyPhotoReloads,
+        aperture: window.__qaAperture,
         sameSlots: [...root.querySelectorAll("[data-media-page]")].every((node, index) => node === window.__qaManyPhotoNodes[index]),
         focusOnCurrent: document.activeElement === root.querySelector('[data-media-page="current"] img') };
     });
@@ -2177,8 +2206,13 @@ try {
       || manyPhotos.consoleErrors.length > 0 || manyPhotos.pageErrors.length > 0;
     checks.push({ name: "story-eight-photos-signed-read-cache-and-continuous-focus", ...stable, requests, failed: regressionFailed });
     if (regressionFailed) failed = true;
+    const apertureFailed = stable.aperture.boundaries < 12 || stable.aperture.jumps.length > 0;
+    checks.push({ name: "story-mixed-aspect-aperture-continuity", ...stable.aperture, failed: apertureFailed });
+    if (apertureFailed) failed = true;
   } finally {
+    const video = manyPhotos.page.video();
     await manyPhotos.page.close();
+    if (video) { await video.saveAs(`${motionArtifactDir}/story-mixed-aspect.webm`); await video.delete(); }
   }
 
   // Only this existing desktop motion scenario records; the many transport and

@@ -39,7 +39,7 @@ import { StoryMediaRail } from "./StoryMediaRail";
 import { StoryMediaPages } from "./StoryMediaPages";
 import { StoryMediaOrganizer } from "./StoryMediaOrganizer";
 import { StoryNotesEditor, type StoryNotesSaveState } from "./StoryNotesEditor";
-import { MEDIA_STACK_DURATION, mediaStackOpacity, mediaStackNeighbors, mediaStackPull, mediaStackRest, mediaStackReveal } from "./mediaStackMotion";
+import { MEDIA_STACK_DURATION, mediaStackClip, mediaStackOpacity, mediaStackNeighbors, mediaStackPull, mediaStackRest, mediaStackReveal } from "./mediaStackMotion";
 import "../styles/starlight-media.css";
 import "../styles/story-experience.css";
 import {
@@ -2445,7 +2445,7 @@ export function JourneyStory({
     pages?.style.removeProperty("--story-live-opacity");
     pages?.style.removeProperty("--story-live-z");
     const liveShell = pages?.querySelector<HTMLElement>(".story-media-pages__video");
-    if (liveShell) { liveShell.style.transform = ""; liveShell.style.opacity = ""; }
+    if (liveShell) { liveShell.style.transform = ""; liveShell.style.opacity = ""; liveShell.style.clipPath = ""; }
     pages?.classList.remove("is-drag-settling");
     try {
       if (drag.container.hasPointerCapture(drag.pointerId)) drag.container.releasePointerCapture(drag.pointerId);
@@ -2543,15 +2543,25 @@ export function JourneyStory({
     }
     const springs = [springElementTo(drag.base, {
       transform: targetTransform, opacity: mediaStackOpacity(rearDepth),
+      clipInset: mediaStackClip(drag.base, ready ? drag.peek : drag.base),
     }, { owner: drag.base.dataset.mediaPageId, transformVelocity })];
     const liveShell = pages?.querySelector<HTMLElement>('.story-media-pages__video[data-video-visible="true"]');
     if (liveShell) springs.push(springElementTo(liveShell, {
       transform: targetTransform, opacity: mediaStackOpacity(rearDepth),
+      clipInset: mediaStackClip(drag.base, ready ? drag.peek : drag.base),
     }, { owner: drag.base.dataset.mediaPageId, transformVelocity }));
     if (drag.peek) springs.push(springElementTo(drag.peek, {
       transform: mediaStackRest(ready ? 0 : Number(drag.peek.style.getPropertyValue("--stack-depth")) || 1),
       opacity: ready ? 1 : mediaStackOpacity(Number(drag.peek.style.getPropertyValue("--stack-depth")) || 1),
+      clipInset: mediaStackClip(drag.peek, ready ? drag.peek : drag.base),
     }, { owner: drag.peek.dataset.mediaPageId }));
+    for (const page of pages?.querySelectorAll<HTMLElement>("[data-media-page-id]") ?? []) {
+      if (page === drag.base || page === drag.peek) continue;
+      springs.push(springElementTo(page, {
+        transform: getComputedStyle(page).transform,
+        clipInset: mediaStackClip(page, ready ? drag.peek : drag.base),
+      }, { owner: page.dataset.mediaPageId }));
+    }
     mediaDragSprings.current = springs;
     let pending = true;
     const commitDrag = () => {
@@ -2571,11 +2581,13 @@ export function JourneyStory({
       // momentum from which its gesture (or click) will take over.
       for (const spring of springs) spring.cancel();
       const painted = Array.from(pages?.querySelectorAll<HTMLElement>("[data-media-page-id]") ?? [])
-        .map((node) => ({ node, transform: getComputedStyle(node).transform, opacity: getComputedStyle(node).opacity }));
+        .map((node) => ({ node, transform: getComputedStyle(node).transform, opacity: getComputedStyle(node).opacity,
+          clipPath: getComputedStyle(node).clipPath }));
       commitDrag();
-      for (const { node, transform, opacity } of painted) {
+      for (const { node, transform, opacity, clipPath } of painted) {
         node.style.transform = transform;
         node.style.opacity = opacity;
+        node.style.clipPath = clipPath;
       }
       // Keep the taken-over pixels under the held pointer. Pointer release
       // resumes recovery; a horizontal move takes over the whole stack.
