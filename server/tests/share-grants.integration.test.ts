@@ -1444,6 +1444,200 @@ describe("guest media read", () => {
     expect([...bodies][0]).toBe(MEDIA_UNAVAILABLE_BODY);
   });
 
+  /**
+   * #260: give an asset a ready derived preview, the way the two-step preview
+   * endpoints would have left it. Written straight in for the same reason the
+   * asset rows are: without a storage driver there is no reachable write path
+   * for the object those endpoints sign.
+   */
+  async function markPreviewReady(assetId: string, previewStorageKey: string) {
+    await db
+      .update(mediaAssets)
+      .set({
+        displayWidth: 4000,
+        displayHeight: 6000,
+        previewStorageKey,
+        previewMimeType: "image/jpeg",
+        previewBytes: 48_000,
+        previewState: "ready",
+      })
+      .where(eq(mediaAssets.id, assetId));
+  }
+
+  it("signs a guest preview with the same grant-capped lifetime as the original", async () => {
+    const assetId = await insertAsset(journeyA, uniqueKey("preview-original"));
+    const previewKey = uniqueKey("preview-derived");
+    await markPreviewReady(assetId, previewKey);
+    const grant = await authorizedGrant(await createShare([journeyA]));
+    const resolved = await resolveSharedMediaRead(grant, assetId);
+
+    signedLifetimes.length = 0;
+    const issued = await signSharedMediaRead(
+      resolved!,
+      LIMITS,
+      new Date(),
+      fakeStorage,
+    );
+
+    expect(issued.preview).toBeDefined();
+    expect(issued.preview!.url).toContain(encodeURIComponent(previewKey));
+    expect(issued.preview!.mimeType).toBe("image/jpeg");
+    // The orientation-corrected display size, so the frame the preview fills
+    // is the frame the original will fill.
+    expect(issued.preview!.width).toBe(4000);
+    expect(issued.preview!.height).toBe(6000);
+    // Both signatures asked for exactly the same capped duration, and neither
+    // may reach past the grant.
+    expect(signedLifetimes).toEqual([
+      serverConfig.shareMediaReadUrlExpiresInSeconds,
+      serverConfig.shareMediaReadUrlExpiresInSeconds,
+    ]);
+    expect(Date.parse(issued.preview!.expiresAt))
+      .toBeLessThanOrEqual(grant.expiresAt.valueOf());
+  });
+
+  it("caps a guest preview by the grant deadline, not only by the share ceiling", async () => {
+    const assetId = await insertAsset(journeyA, uniqueKey("preview-short"));
+    await markPreviewReady(assetId, uniqueKey("preview-short-derived"));
+    const shortGrant = await insertGrant(
+      identity.atlasId,
+      journeyA,
+      new Date(Date.now() + 20_000),
+    );
+    const grant = await authorizedGrant(shortGrant.token);
+    const resolved = await resolveSharedMediaRead(grant, assetId);
+
+    signedLifetimes.length = 0;
+    const issued = await signSharedMediaRead(
+      resolved!,
+      LIMITS,
+      new Date(),
+      fakeStorage,
+    );
+    expect(signedLifetimes[1]).toBe(signedLifetimes[0]);
+    expect(signedLifetimes[1]).toBeLessThanOrEqual(20);
+    expect(Date.parse(issued.preview!.expiresAt))
+      .toBeLessThanOrEqual(grant.expiresAt.valueOf());
+  });
+
+  it("omits a preview whose signature would outlive the grant, and still returns the original", async () => {
+    const assetId = await insertAsset(journeyA, uniqueKey("preview-overrun"));
+    await markPreviewReady(assetId, uniqueKey("preview-overrun-derived"));
+    const grant = await authorizedGrant(await createShare([journeyA]));
+    const resolved = await resolveSharedMediaRead(grant, assetId);
+
+    // An adapter that honours the original's deadline but stamps the derived
+    // object's signature past it. The preview is dropped; the original, which
+    // is authoritative and perfectly available, is not.
+    let signedKeys = 0;
+    const overrunningPreview = () => ({
+      ...disabledStorage,
+      async createPrivateReadUrl(input: { key: string }) {
+        signedKeys += 1;
+        return {
+          url: "https://storage.test/" + encodeURIComponent(input.key),
+          expiresAt: new Date(
+            grant.expiresAt.valueOf() + (signedKeys === 1 ? -1_000 : 1_000),
+          ),
+        };
+      },
+    });
+    const issued = await signSharedMediaRead(
+      resolved!,
+      LIMITS,
+      new Date(),
+      overrunningPreview,
+    );
+    expect(issued.preview).toBeUndefined();
+    expect(issued.url).toBeTruthy();
+  });
+
+  it("omits an unsignable preview rather than failing the read it belongs to", async () => {
+    const assetId = await insertAsset(journeyA, uniqueKey("preview-broken"));
+    const previewKey = uniqueKey("preview-broken-derived");
+    await markPreviewReady(assetId, previewKey);
+    const grant = await authorizedGrant(await createShare([journeyA]));
+    const resolved = await resolveSharedMediaRead(grant, assetId);
+
+    const brokenPreview = () => ({
+      ...disabledStorage,
+      async createPrivateReadUrl(input: { key: string }) {
+        if (input.key === previewKey) throw new Error("derived object gone");
+        return {
+          url: "https://storage.test/" + encodeURIComponent(input.key),
+          expiresAt: new Date(Date.now() + 30_000),
+        };
+      },
+    });
+    const issued = await signSharedMediaRead(
+      resolved!,
+      LIMITS,
+      new Date(),
+      brokenPreview,
+    );
+    expect(issued.preview).toBeUndefined();
+    expect(issued.url).toBeTruthy();
+  });
+
+  it("answers the same one MEDIA_UNAVAILABLE for an out-of-scope asset that HAS a preview", async () => {
+    // #260: the derived object must not become a second, weaker path to media
+    // the grant does not reach. Every asset here carries a ready preview, and
+    // the four refusals stay byte-identical to the preview-less ones above.
+    await markPreviewReady(unsharedAssetId, uniqueKey("unshared-derived"));
+    await markPreviewReady(foreignAssetId, uniqueKey("foreign-derived"));
+    const revocable = await insertAsset(journeyA, uniqueKey("revoked-original"));
+    await markPreviewReady(revocable, uniqueKey("revoked-derived"));
+
+    const token = await createShare([journeyA]);
+    const expiredGrant = await insertGrant(
+      identity.atlasId,
+      journeyA,
+      new Date(Date.now() - 1_000),
+    );
+    const revokedToken = await createShare([journeyA]);
+    const revoked = await authorizedGrant(revokedToken);
+    expect((await app.request(
+      `${TEST_ORIGIN}/api/shares/${revoked.id}/revoke`,
+      { method: "POST", headers: authHeaders(identity.cookie) },
+    )).status).toBe(200);
+
+    const unavailable = [
+      // Asset-side: an unshared journey of the same atlas, and another atlas.
+      await guestReadUrl(token, unsharedAssetId),
+      await guestReadUrl(token, foreignAssetId),
+    ];
+    for (const response of unavailable) {
+      expect(response.status).toBe(404);
+      expect(await response.text()).toBe(MEDIA_UNAVAILABLE_BODY);
+    }
+    // Grant-side refusals keep their own single shape, unchanged by #260.
+    for (const dead of [expiredGrant.token, revokedToken]) {
+      const response = await guestReadUrl(dead, revocable);
+      expect(response.status).toBe(404);
+      expect(await response.text()).toBe(SHARE_UNAVAILABLE_BODY);
+    }
+  });
+
+  it("never repeats a derived storage key back to a guest", async () => {
+    const assetId = await insertAsset(journeyA, uniqueKey("preview-secret"));
+    const previewKey = uniqueKey("preview-secret-derived");
+    await markPreviewReady(assetId, previewKey);
+    const token = await createShare([journeyA]);
+
+    // The route itself cannot presign here, and its truthful 503 must still
+    // name neither object.
+    const body = await (await guestReadUrl(token, assetId)).text();
+    expect(body).not.toContain(previewKey);
+    expect(body).not.toContain(token);
+
+    // The guest journey payload carries neither key either.
+    const journeysBody = await (await app.request(
+      `${TEST_ORIGIN}/api/shared/journeys`,
+      { headers: { authorization: `Bearer ${token}` } },
+    )).text();
+    expect(journeysBody).not.toContain(previewKey);
+  });
+
   it("leaks no unshared journey, storage key or owner field through the media path", async () => {
     const token = await createShare([journeyA]);
     const bodies = [

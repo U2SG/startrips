@@ -111,12 +111,26 @@ export function orientationSwapsAxes(orientation: number): boolean {
 }
 
 /**
+ * One scaled edge: rounded to the nearest pixel, never below one and never
+ * above the ceiling.
+ *
+ * Rounding rather than truncating is what keeps the aspect ratio honest — the
+ * scale factor is a binary fraction, so flooring turns a shorter edge that
+ * lands on 48.000000000000004 into 47 and visibly reshapes the frame. The
+ * clamp is the guarantee the rounding cannot break: the longest edge rounds to
+ * exactly the ceiling by construction, and `Math.min` makes that true for any
+ * ceiling, not just the ones that divide evenly.
+ */
+function clampEdge(value: number, maxEdgePixels: number): number {
+  return Math.max(1, Math.min(maxEdgePixels, Math.round(value)));
+}
+
+/**
  * Plan the derived still, or say why there is none.
  *
- * Scaling floors each edge and clamps it to at least one pixel, so the result
- * never exceeds `maxEdgePixels` in either direction and a very thin source
- * still yields a real image. A source already inside the ceiling is planned at
- * its own size: a preview is a bound, not a mandatory resample, and upscaling
+ * Each edge is scaled through `clampEdge`, so the result never exceeds
+ * `maxEdgePixels` in either direction and a very thin source still yields a
+ * real image. A source already inside the ceiling is planned at its own size: a preview is a bound, not a mandatory resample, and upscaling
  * would spend bytes inventing detail the original does not have.
  */
 export function planPreviewDerivation(
@@ -149,8 +163,8 @@ export function planPreviewDerivation(
   const scale = longestEdge > ceilings.maxEdgePixels
     ? ceilings.maxEdgePixels / longestEdge
     : 1;
-  const width = Math.max(1, Math.floor(displayWidth * scale));
-  const height = Math.max(1, Math.floor(displayHeight * scale));
+  const width = clampEdge(displayWidth * scale, ceilings.maxEdgePixels);
+  const height = clampEdge(displayHeight * scale, ceilings.maxEdgePixels);
 
   return {
     ok: true,
