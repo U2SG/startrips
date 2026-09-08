@@ -1214,7 +1214,7 @@ async function verifyComposerGlobeRoundTrip() {
       !document.querySelector(".living-atlas")?.classList.contains("is-globe-picking")
       && getComputedStyle(document.querySelector(".journey-composer")).visibility === "visible"
     ));
-    await page.getByRole("button", { name: "关闭旅程编辑器" }).click();
+    await page.getByRole("button", { name: /关闭(?:旅程编辑器|创建器)/ }).click();
     await page.locator(".journey-composer").waitFor({ state: "detached" });
 
     const desktopChromeAfterClose = await page.evaluate(() => {
