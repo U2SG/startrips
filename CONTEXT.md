@@ -36,6 +36,14 @@ _Avoid_: Route point, city
 Optional human-readable context attached to a route point, such as a city, station, road, or landmark. It describes a point but does not define the journey.
 _Avoid_: Journey title, route
 
+**Home Base / 常住地**:
+A member-confirmed city or metro-level life base that held for one period of a member's life. It is not a residential address, not a route point, and not a claim that any journey physically departed from it.
+_Avoid_: Home, address, origin, hometown
+
+**Home Base Period / 常住地阶段**:
+The effective interval of one home base, `startedOn <= date < endedOn`, with `endedOn = null` for the current period. A move creates a new period instead of overwriting history, so a journey resolves the home base that applied to its own date.
+_Avoid_: Current home, move date, relocation event
+
 ## Implementation invariants
 
 - Browser payload order defines Route Point order; clients never provide database `sortOrder` values.
@@ -45,3 +53,4 @@ _Avoid_: Journey title, route
 - Persisted Route size and rendered geometry budgets are separate. The client may simplify or omit old geometry without changing the saved Journey.
 - Sparse routes are approximate paths, not a claim that every point was GPS-recorded.
 - Location search and object storage are optional deployment adapters. Their absence must degrade truthfully, without fake results or fake persistence.
+- Home base history is atlas-owned and resolved by date. Adding a later period never changes which home base an earlier journey resolves to, no home base value is written onto a route point, and home base history is never part of a guest share payload.

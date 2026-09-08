@@ -33,6 +33,51 @@ export const atlases = pgTable(
   ],
 );
 
+// #231: Home Base as a timeline of dated life periods rather than one mutable
+// field. Each row is one primary life base over a half-open interval,
+// `started_on <= date < ended_on`, with `ended_on` null for the current
+// period. A move inserts a period and closes the previous one; it never
+// rewrites the base an earlier Journey resolved to.
+//
+// Atlas-owned like every other record here, so an Atlas deletion cascades the
+// history away. Deliberately a separate table and NOT a column on
+// `journey_route_points`: a Home Base is where a member lived for a while, not
+// a recorded coordinate on a route, and a Journey stays canonical recorded
+// travel data.
+//
+// `latitude` / `longitude` are a representative city or metro anchor. V1
+// neither needs nor stores an exact residential address.
+export const homeBasePeriods = pgTable(
+  "home_base_periods",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    atlasId: uuid("atlas_id")
+      .notNull()
+      .references(() => atlases.id, { onDelete: "cascade" }),
+    label: text("label").notNull(),
+    latitude: doublePrecision("latitude").notNull(),
+    longitude: doublePrecision("longitude").notNull(),
+    // Required in V1. An approximate month may be normalised into a date by
+    // the caller, but "unknown historical start" must never be stored as
+    // "valid from the infinite past".
+    startedOn: date("started_on", { mode: "string" }).notNull(),
+    // Null is the current period, not a missing value.
+    endedOn: date("ended_on", { mode: "string" }),
+    // "manual" | "suggested-confirmed"; a confirmed suggestion is still a
+    // member decision, which is why it is recorded rather than inferred.
+    source: text("source").notNull().default("manual"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index("home_base_periods_atlas_start_idx").on(table.atlasId, table.startedOn),
+  ],
+);
+
 export const journeys = pgTable(
   "journeys",
   {

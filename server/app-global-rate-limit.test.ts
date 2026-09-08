@@ -23,6 +23,11 @@ vi.mock("./routes/atlases", async () => {
   return { atlasRoutes };
 });
 
+vi.mock("./routes/home-bases", async () => {
+  const { Hono } = await import("hono");
+  return { homeBaseRoutes: new Hono() };
+});
+
 vi.mock("./routes/journeys", async () => {
   const { Hono } = await import("hono");
   return { journeyRoutes: new Hono() };
