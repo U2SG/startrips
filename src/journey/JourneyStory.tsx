@@ -980,6 +980,7 @@ export function JourneyStory({
   const mediaDeleteCancelRef = useRef<HTMLButtonElement>(null);
   const copyRef = useRef<HTMLElement>(null);
   const pendingReads = useRef(new Set<string>());
+  const mediaReadScope = useRef({ journeyId, routePointId });
   const mediaReadsRef = useRef(mediaReads);
   const uploading = uploadState.status === "uploading"
     || soundtrackUpload.status === "uploading";
@@ -1449,7 +1450,12 @@ export function JourneyStory({
     setSoundtrackRemovePending(false);
     setSoundtrackNotice("");
     // Signed reads belong to the journey that requested them.
-    pendingReads.current.clear();
+    // StrictMode replays setup for the same scope. Keep its in-flight reads
+    // coalesced; only a genuinely different selection invalidates ownership.
+    if (mediaReadScope.current.journeyId !== journeyId || mediaReadScope.current.routePointId !== routePointId) {
+      mediaReadScope.current = { journeyId, routePointId };
+      pendingReads.current.clear();
+    }
     setMediaReads({});
     decodeRegistryRef.current.reset();
     setShownAssetId(null);
@@ -1586,6 +1592,8 @@ export function JourneyStory({
   const autoplayVideoCandidateRead = autoplayVideoCandidate
     ? mediaReads[autoplayVideoCandidate.id]
     : null;
+  const protectedPlaybackRead = useRef<string | null>(null);
+  protectedPlaybackRead.current = playing && activeAsset?.mimeType.startsWith("video/") ? activeAsset.id : null;
   const activeRead = activeAsset ? mediaReads[activeAsset.id] : null;
   const soundtrackRead = soundtrack ? mediaReads[soundtrack.id] : null;
   // #14: the journey cover — explicit coverMediaAssetId, else first visual
@@ -1904,15 +1912,25 @@ export function JourneyStory({
 
   // Signed reads are cached for the lifetime of the open dialog so revisiting a
   // photo, or opening the overview grid again, costs no extra request.
-  const loadMediaRead = useCallback((assetId: string) => {
+  const loadMediaRead = useCallback((assetId: string, refresh = false) => {
+    // A warm neighbor becoming current must keep the decoded resource. A new
+    // signature changes img.src and restarts an in-flight page handoff.
+    const cached = mediaReadsRef.current[assetId];
+    if (!refresh && cached?.status === "ready"
+      && !shouldRefreshStoryMediaRead(assetId, cached, Date.now(), protectedPlaybackRead.current)) return;
     if (pendingReads.current.has(assetId)) return;
     pendingReads.current.add(assetId);
     setMediaReads((current) => current[assetId]?.status === "ready"
       ? current
       : { ...current, [assetId]: { status: "loading" } });
     const issuedAt = Date.now();
+    const scope = mediaReadScope.current;
+    // Playback can claim the existing resource while this request is in flight.
+    // Check again when React applies either completion; the next expiry sweep
+    // may retry after playback releases it, without resetting a live transport.
     void readMedia(assetId).then(
-      (read) => setMediaReads((current) => ({
+      (read) => setMediaReads((current) => mediaReadScope.current !== scope
+        || (protectedPlaybackRead.current === assetId && current[assetId]?.status === "ready") ? current : ({
         ...current,
         [assetId]: {
           status: "ready",
@@ -1922,14 +1940,17 @@ export function JourneyStory({
           expiresAt: Date.parse(read.expiresAt),
         },
       })),
-      (error) => setMediaReads((current) => ({
+      (error) => setMediaReads((current) => mediaReadScope.current !== scope
+        || (protectedPlaybackRead.current === assetId && current[assetId]?.status === "ready") ? current : ({
         ...current,
         [assetId]: {
           status: "error",
           message: error instanceof Error ? error.message : "媒体读取失败",
         },
       })),
-    ).finally(() => pendingReads.current.delete(assetId));
+    ).finally(() => {
+      if (mediaReadScope.current === scope) pendingReads.current.delete(assetId);
+    });
   }, []);
 
   // Presentation commits only the latest requested asset after it is ready.
@@ -2089,17 +2110,15 @@ export function JourneyStory({
       // the media resource and can pause/stall an otherwise healthy long clip.
       // Once autoplay releases ownership (pause/end/navigation), the next sweep
       // refreshes it normally before it is reused.
-      const protectedPlaybackAssetId = playing && activeAsset?.mimeType.startsWith("video/")
-        ? activeAsset.id
-        : null;
+      const protectedPlaybackAssetId = protectedPlaybackRead.current;
       for (const [assetId, state] of Object.entries(mediaReadsRef.current)) {
         if (shouldRefreshStoryMediaRead(assetId, state, now, protectedPlaybackAssetId)) {
-          loadMediaRead(assetId);
+          loadMediaRead(assetId, true);
         }
       }
     }, MEDIA_READ_SWEEP_MS);
     return () => window.clearInterval(timer);
-  }, [activeAsset?.id, activeAsset?.mimeType, loadMediaRead, playing]);
+  }, [loadMediaRead]);
 
   const namedStops = useMemo(
     () => journey?.routePoints.filter((point) => point.isStop) ?? [],

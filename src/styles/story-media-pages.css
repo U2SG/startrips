@@ -79,6 +79,10 @@
 }
 .journey-story-fullscreen > :is(.journey-story-fullscreen__close, .journey-story-fullscreen__nav) { z-index: 4; }
 @media (prefers-reduced-motion: reduce) {
+  /* The global 0.01ms duration still creates transitions for default "all".
+     Disable the property itself so a synchronous handoff paints at rest. */
+  .story-media-pages,
+  .story-media-pages * { transition: none !important; }
   .story-media-pages__page,
   .story-media-pages__video { will-change: auto; }
   .story-media-pages.is-drag-settling .story-media-pages__video,

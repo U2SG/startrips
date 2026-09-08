@@ -291,6 +291,16 @@ export function StoryMediaPages({ active = true, ...props }: Props) {
   }, [props.currentId, revision, liveReady]);
   const targetReady = ready(props.incomingId);
   const currentReady = ready(props.currentId);
+  useLayoutEffect(() => {
+    if (!active) return;
+    // Physical slots outlive their media. Carry keyboard focus with the
+    // presented image before its old slot becomes an inaccessible neighbor.
+    const focused = document.activeElement;
+    if (focused === root.current || imageNodes.current.some((image) => image === focused)) {
+      const image = imageNodes.current[assigned.indexOf(props.currentId)];
+      (image && !image.hidden ? image : root.current)?.focus({ preventScroll: true });
+    }
+  }, [active, props.currentId]);
   const currentVideo = props.media.find((asset) => asset.id === props.currentId)?.mimeType.startsWith("video/");
   const playbackReady = currentReady && !props.incomingId && !movingId
     && (!currentVideo || (binding.id === props.currentId && liveReady === liveKey));
@@ -462,7 +472,16 @@ export function StoryMediaPages({ active = true, ...props }: Props) {
     return Math.abs(x - (rect.left + rect.width / 2)) <= width * scale / 2
       && Math.abs(y - (rect.top + rect.height / 2)) <= height * scale / 2;
   };
-  return <div ref={root} className="story-media-pages" data-story-media-pages
+  return <div ref={root} className="story-media-pages" data-story-media-pages tabIndex={-1}
+    onKeyDown={(event) => {
+      // A video has no focusable picture slot. Keep arrow navigation on the
+      // stable stage without taking keys away from its native controls.
+      if (event.target !== event.currentTarget || !active || !props.onNavigate) return;
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      event.preventDefault();
+      event.stopPropagation();
+      step(event.key === "ArrowLeft" ? -1 : 1, true);
+    }}
     style={{ "--media-settle-duration": `${MEDIA_STACK_DURATION}ms`, "--media-settle-easing": MEDIA_STACK_EASING } as CSSProperties}
     onClick={handleBackdropClick}
     onPointerMove={props.onNavigate ? (event) => {
@@ -555,6 +574,8 @@ export function StoryMediaPages({ active = true, ...props }: Props) {
       onClick={(event) => {
         event.stopPropagation();
         if (!stablePictureContains(event.clientX, event.clientY)) { props.onBackdropClick?.(); return; }
+        const image = imageNodes.current[assigned.indexOf(props.currentId)];
+        (image && !image.hidden ? image : root.current)?.focus({ preventScroll: true });
         step(navigationDirection(event.currentTarget, event.clientX));
       }} /> : null}
     <div ref={videoShell} className="story-media-pages__video" data-video-visible={videoVisible ? "true" : "false"}

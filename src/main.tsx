@@ -416,7 +416,15 @@ const QA_SOUNDTRACK_ASSET_ID = "00000000-0000-4000-8000-000000000900";
 
 function JourneyStoryQaPreview() {
   const mixedMediaMode = new URLSearchParams(window.location.search).get("qaMode") === "mixed-media";
-  const initialJourney = mixedMediaMode ? storyQaMixedJourney : storyQaJourney;
+  const manyMediaMode = new URLSearchParams(window.location.search).get("qaMode") === "many-media";
+  const initialJourney = mixedMediaMode ? storyQaMixedJourney : manyMediaMode ? {
+    ...storyQaJourney,
+    media: Array.from({ length: 8 }, (_, index) => ({
+      ...storyQaJourney.media[0],
+      id: `00000000-0000-4000-8000-${String(100 + index).padStart(12, "0")}`,
+      storageKey: `qa/story-seed-${index}`, fileName: `seed-${index}.jpg`, sortOrder: index,
+    })),
+  } : storyQaJourney;
   const [open, setOpen] = useState(true);
   const [journeys, setJourneys] = useState<Journey[]>([initialJourney]);
   // The preview synthesizes the asset a real API would return, so it needs to
