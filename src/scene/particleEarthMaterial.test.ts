@@ -45,6 +45,11 @@ describe("particle earth material", () => {
       expect(biased.uniforms.uClipDepthBias.value).toBe(0.0015);
       expect(PARTICLE_CLIP_DEPTH_BIAS_CHUNK).toContain("gl_Position.z -=");
       expect(PARTICLE_CLIP_DEPTH_BIAS_CHUNK).toContain("gl_Position.w");
+      expect(PARTICLE_CLIP_DEPTH_BIAS_CHUNK).toContain("particleDepthFacing");
+      expect(PARTICLE_CLIP_DEPTH_BIAS_CHUNK).toContain("cameraPosition - particleDepthWorld");
+      expect(PARTICLE_CLIP_DEPTH_BIAS_CHUNK).toContain("clamp(");
+      expect(PARTICLE_CLIP_DEPTH_BIAS_CHUNK).toContain("0.0");
+      expect(PARTICLE_CLIP_DEPTH_BIAS_CHUNK).toContain("1.0");
       expect(PARTICLE_CLIP_DEPTH_BIAS_CHUNK).not.toMatch(/gl_Position\.(x|y|w)\s*[-+*\/]?=/);
     } finally { plain.dispose(); biased.dispose(); }
   });

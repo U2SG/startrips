@@ -10,9 +10,20 @@ import {
 export const PARTICLE_DIM_POINT_LIMIT = 24;
 export const PARTICLE_ACTIVE_DIM_POINT_LIMIT = 12;
 
-/** Exported for assertion: opt-in particle depth priority may move clip z only. */
+/**
+ * Exported for assertion: opt-in particle depth priority may move clip z only.
+ * The facing term reaches zero at the silhouette and stays clamped to zero on
+ * the far hemisphere so a biased point can never be pulled through the globe.
+ */
 export const PARTICLE_CLIP_DEPTH_BIAS_CHUNK = `
-  gl_Position.z -= uClipDepthBias * gl_Position.w;
+  vec3 particleDepthWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;
+  vec3 particleDepthWorldNormal = normalize(mat3(modelMatrix) * normalize(transformed));
+  float particleDepthFacing = clamp(
+    dot(particleDepthWorldNormal, normalize(cameraPosition - particleDepthWorld)),
+    0.0,
+    1.0
+  );
+  gl_Position.z -= uClipDepthBias * particleDepthFacing * gl_Position.w;
 `;
 
 /**
