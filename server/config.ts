@@ -56,11 +56,19 @@ export function loadServerConfig(
   const shareMediaReadUrlExpiresInSeconds = Number(
     environment.SHARE_MEDIA_READ_URL_EXPIRES_IN_SECONDS ?? 90,
   );
-  // #260: the two ceilings every derived preview is planned against. The
-  // longest edge bounds the pixels the server asks for, and the byte ceiling
-  // is what the completion check measures the produced object against; a
-  // preview that misses either one never reaches the "ready" state, so a
-  // deployment can tighten both without ever serving something oversized.
+  // #260: the two ceilings every derived preview is planned against, and they
+  // are enforced at different strengths — deliberately, and stated here so
+  // nothing downstream reads more into them than holds.
+  //
+  // The byte ceiling is a post-upload bound: completion inspects the produced
+  // object and a preview over it never reaches "ready", so no oversized still
+  // is ever signed. The longest-edge ceiling is the pixel size the server
+  // ASKS for. It is fixed in the plan a producer is handed and asserted
+  // against that plan, but the stored object's encoded dimensions are not
+  // measured, because `inspectObject()` reports existence and bytes only.
+  // Verifying them needs an object-read capability `MultipartStorage` does
+  // not yet have; that is #265, and no consumer may treat the pixel ceiling
+  // as a decode-cost guarantee until it lands.
   //
   // 640 px carries a full-bleed phone frame at 2x without approaching the
   // original, and 512 KiB is several times what a 640 px JPEG of a photograph
@@ -73,12 +81,14 @@ export function loadServerConfig(
   );
   // The preview write is presigned to its own short lifetime rather than
   // borrowing the multipart part window. A single-object PUT has no upload
-  // session, so there is nothing to abort and nothing for the upload
-  // reconciler to sweep: once issued, the only thing that limits it is the
-  // clock. A producer calls `POST .../preview` with the still already
-  // rasterised and under `MEDIA_PREVIEW_MAX_BYTES`, so two minutes is
-  // generous, and it bounds the window in which a write issued just before a
-  // Journey is deleted could still land after the row cascaded away.
+  // session, so there is nothing to abort mid-flight. A producer calls
+  // `POST .../preview` with the still already rasterised and under
+  // `MEDIA_PREVIEW_MAX_BYTES`, so two minutes is generous, and it bounds the
+  // window in which a write issued just before a Journey is deleted could
+  // still land after the row cascaded away. What that write leaves behind is
+  // not bounded by the clock: every issued write is recorded in
+  // `media_preview_writes`, outside the cascade, and retired by
+  // `reconcilePreviewWrites()` once this lifetime has passed.
   const mediaPreviewUploadExpiresInSeconds = Number(
     environment.MEDIA_PREVIEW_UPLOAD_EXPIRES_IN_SECONDS ?? 120,
   );

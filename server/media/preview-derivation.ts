@@ -8,8 +8,15 @@
  * latitude. Nothing downstream may widen that spec: `POST .../preview` signs a
  * single-object write for exactly this plan, and `POST .../preview/complete`
  * measures the produced object against `maxBytes` before the preview is ever
- * marked ready. A still that misses either ceiling therefore cannot be served,
- * whoever produced it.
+ * marked ready, so an oversized still cannot be served whoever produced it.
+ *
+ * The two ceilings are not enforced at the same strength, and the difference
+ * is deliberate: `maxBytes` is checked against the object that actually
+ * landed, while `maxEdgePixels` fixes the pixel size the plan ASKS for and is
+ * asserted against the plan. Measuring the stored still's encoded dimensions
+ * needs an object-read capability `MultipartStorage` does not have; that is
+ * #265, and until it lands the pixel ceiling is a requested bound rather than
+ * a verified one.
  *
  * Keeping the decision here, rather than inside the route, is what makes the
  * ceilings assertable on a pinned input with no storage, no database and no
