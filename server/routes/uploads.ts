@@ -1238,7 +1238,7 @@ uploadRoutes.post("/assets/:id/preview", async (context) => {
     atlas.id,
     values,
     previewCeilings(),
-    serverConfig.s3UploadPartExpiresInSeconds,
+    serverConfig.mediaPreviewUploadExpiresInSeconds,
   );
   if (!result.ok) {
     return context.json({ error: result.error }, result.status);

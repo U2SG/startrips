@@ -33,7 +33,7 @@ import { disabledStorage } from "../storage/disabled-storage";
 import type { MultipartStorage } from "../storage/multipart-storage";
 
 const TEST_ORIGIN = "http://127.0.0.1:5173";
-const UPLOAD_TTL_SECONDS = 900;
+const UPLOAD_TTL_SECONDS = serverConfig.mediaPreviewUploadExpiresInSeconds;
 const CEILINGS = {
   maxEdgePixels: serverConfig.mediaPreviewMaxEdgePixels,
   maxBytes: serverConfig.mediaPreviewMaxBytes,
@@ -443,6 +443,87 @@ describe("#260 same-asset preview for private media reads", () => {
     expect(backend.deleted).toContain(oversizedKey);
     const read = await signPrivateMediaRead(stored, 900, backend.resolve);
     expect(read.preview).toBeUndefined();
+  });
+
+  it("lets exactly one of two concurrent derivations own the row", async () => {
+    const asset = await insertAsset();
+    const backend = recordingStorage();
+    // Both begins read the same snapshot, which is the whole race: each one
+    // believes the key it read is the one it is replacing.
+    const snapshot = await readAsset(asset.id);
+
+    const winner = await beginAssetPreview(
+      snapshot,
+      identity.atlasId,
+      { sourceWidth: 6000, sourceHeight: 4000, exifOrientation: 1 },
+      CEILINGS,
+      UPLOAD_TTL_SECONDS,
+      { storageForBackend: backend.resolve },
+    );
+    const loser = await beginAssetPreview(
+      snapshot,
+      identity.atlasId,
+      { sourceWidth: 4000, sourceHeight: 3000, exifOrientation: 1 },
+      CEILINGS,
+      UPLOAD_TTL_SECONDS,
+      { storageForBackend: backend.resolve },
+    );
+
+    expect(winner.ok).toBe(true);
+    // The loser is told it lost rather than overwriting the newer intent, so
+    // the URL it signed is never handed back and nothing can be written to it.
+    expect(loser).toMatchObject({ ok: false, error: "PREVIEW_SUPERSEDED" });
+    const row = await readAsset(asset.id);
+    expect(row.previewState).toBe("pending");
+    expect(row.displayWidth).toBe(6000);
+    // Exactly one live key, and completion promotes that one.
+    const completed = await completeAssetPreview(row, CEILINGS, {
+      storageForBackend: backend.resolve,
+    });
+    expect(completed.ok).toBe(true);
+    expect((await readAsset(asset.id)).previewStorageKey)
+      .toBe(row.previewStorageKey);
+  });
+
+  it("signs the preview write for its own short lifetime, not the part window", async () => {
+    const asset = await insertAsset();
+    let requested = 0;
+    const backend = recordingStorage({
+      async signObjectUpload(input) {
+        requested = input.expiresInSeconds;
+        return {
+          url: "https://storage.test/put",
+          headers: { "content-type": input.mimeType },
+          expiresAt: new Date(Date.now() + input.expiresInSeconds * 1000),
+        };
+      },
+    });
+    const response = await app.request(
+      `${TEST_ORIGIN}/api/uploads/assets/${asset.id}/preview`,
+      {
+        method: "POST",
+        headers: authHeaders(identity.cookie),
+        body: JSON.stringify({ sourceWidth: 800, sourceHeight: 600 }),
+      },
+    );
+
+    // Storage is disabled in this lane, so the route degrades truthfully
+    // rather than signing anything.
+    expect(response.status).toBe(503);
+    // The lifetime the service asks for is the preview knob, which is far
+    // shorter than the multipart part window: an issued single-object write
+    // cannot be aborted, so the clock is the only thing that retires it.
+    await beginAssetPreview(
+      await readAsset(asset.id),
+      identity.atlasId,
+      { sourceWidth: 800, sourceHeight: 600, exifOrientation: 1 },
+      CEILINGS,
+      serverConfig.mediaPreviewUploadExpiresInSeconds,
+      { storageForBackend: backend.resolve },
+    );
+    expect(requested).toBe(serverConfig.mediaPreviewUploadExpiresInSeconds);
+    expect(requested)
+      .toBeLessThan(serverConfig.s3UploadPartExpiresInSeconds);
   });
 
   it("clears only the generation it inspected when a re-derivation raced it", async () => {

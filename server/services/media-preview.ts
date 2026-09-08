@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { mediaAssets } from "../db/app-schema";
 import { db } from "../db/client";
 import {
@@ -35,6 +35,7 @@ export type PreviewFailure = {
     | "PREVIEW_UNSUPPORTED"
     | "PREVIEW_NOT_PENDING"
     | "PREVIEW_OBJECT_MISSING"
+    | "PREVIEW_SUPERSEDED"
     | "PREVIEW_TOO_LARGE";
   status: 400 | 409;
 };
@@ -68,6 +69,28 @@ const CLEARED_PREVIEW = {
   previewMimeType: null,
   previewBytes: null,
 } as const;
+
+/**
+ * The row still holds the generation this call read.
+ *
+ * `previewStorageKey` is the generation marker for the whole protocol: begin
+ * claims the row by swapping the key it read for the key it just signed,
+ * complete promotes only the key it inspected, and the failure paths clear
+ * only the key they measured. Every write is therefore a compare-and-swap on
+ * one column, so of two concurrent derivations exactly one owns the row and
+ * the other is told it lost rather than silently overwriting a newer intent.
+ *
+ * `IS NULL` and `=` are separate predicates because SQL equality against NULL
+ * is never true, and a first-ever derivation reads a NULL key.
+ */
+function stillHoldsGeneration(assetId: string, storageKey: string | null) {
+  return and(
+    eq(mediaAssets.id, assetId),
+    storageKey === null
+      ? isNull(mediaAssets.previewStorageKey)
+      : eq(mediaAssets.previewStorageKey, storageKey),
+  );
+}
 
 /**
  * Drop the object a preview column used to point at, once no row references it
@@ -129,10 +152,14 @@ export async function beginAssetPreview(
     if (planned.reason === "invalid-source") {
       return { ok: false, error: "INVALID_PREVIEW_REQUEST", status: 400 };
     }
-    await db
+    const [cleared] = await db
       .update(mediaAssets)
       .set(CLEARED_PREVIEW)
-      .where(eq(mediaAssets.id, asset.id));
+      .where(stillHoldsGeneration(asset.id, asset.previewStorageKey))
+      .returning({ id: mediaAssets.id });
+    if (!cleared) {
+      return { ok: false, error: "PREVIEW_SUPERSEDED", status: 409 };
+    }
     await discardPreviewObject(
       asset.storageDriver,
       asset.previewStorageKey,
@@ -152,7 +179,12 @@ export async function beginAssetPreview(
       mimeType: spec.mimeType,
       expiresInSeconds: uploadExpiresInSeconds,
     });
-  await db
+  // The claim is what makes this generation authoritative, and it happens
+  // AFTER the presign because signing has no effect on storage: a begin that
+  // loses the swap has handed nobody a URL that was ever usable, because it
+  // answers 409 instead of returning it. Two begins racing from one snapshot
+  // therefore leave exactly one live key, not two.
+  const [claimed] = await db
     .update(mediaAssets)
     .set({
       displayWidth: spec.displayWidth,
@@ -162,7 +194,11 @@ export async function beginAssetPreview(
       previewBytes: null,
       previewState: "pending",
     })
-    .where(eq(mediaAssets.id, asset.id));
+    .where(stillHoldsGeneration(asset.id, asset.previewStorageKey))
+    .returning({ id: mediaAssets.id });
+  if (!claimed) {
+    return { ok: false, error: "PREVIEW_SUPERSEDED", status: 409 };
+  }
   await discardPreviewObject(
     asset.storageDriver,
     asset.previewStorageKey,
@@ -215,10 +251,7 @@ export async function completeAssetPreview(
     const [cleared] = await db
       .update(mediaAssets)
       .set(CLEARED_PREVIEW)
-      .where(and(
-        eq(mediaAssets.id, asset.id),
-        eq(mediaAssets.previewStorageKey, asset.previewStorageKey),
-      ))
+      .where(stillHoldsGeneration(asset.id, asset.previewStorageKey))
       .returning({ id: mediaAssets.id });
     if (cleared) {
       await discardPreviewObject(
@@ -234,10 +267,7 @@ export async function completeAssetPreview(
   const [updated] = await db
     .update(mediaAssets)
     .set({ previewBytes: inspected.bytes, previewState: "ready" })
-    .where(and(
-      eq(mediaAssets.id, asset.id),
-      eq(mediaAssets.previewStorageKey, asset.previewStorageKey),
-    ))
+    .where(stillHoldsGeneration(asset.id, asset.previewStorageKey))
     .returning();
   // A concurrent re-derivation moved the key out from under this completion;
   // the object it measured belongs to that round, not this one.

@@ -71,6 +71,17 @@ export function loadServerConfig(
   const mediaPreviewMaxBytes = Number(
     environment.MEDIA_PREVIEW_MAX_BYTES ?? 512 * 1024,
   );
+  // The preview write is presigned to its own short lifetime rather than
+  // borrowing the multipart part window. A single-object PUT has no upload
+  // session, so there is nothing to abort and nothing for the upload
+  // reconciler to sweep: once issued, the only thing that limits it is the
+  // clock. A producer calls `POST .../preview` with the still already
+  // rasterised and under `MEDIA_PREVIEW_MAX_BYTES`, so two minutes is
+  // generous, and it bounds the window in which a write issued just before a
+  // Journey is deleted could still land after the row cascaded away.
+  const mediaPreviewUploadExpiresInSeconds = Number(
+    environment.MEDIA_PREVIEW_UPLOAD_EXPIRES_IN_SECONDS ?? 120,
+  );
   // #200 phase F: the guest prefix is the only public, unauthenticated surface
   // Startrips exposes, so it carries its own budgets rather than the blanket
   // `/api/*` bucket #217 removed. One window, three ceilings; see
@@ -166,6 +177,15 @@ export function loadServerConfig(
   ) {
     throw new Error(
       "MEDIA_PREVIEW_MAX_EDGE_PIXELS must be between 64 and 4096",
+    );
+  }
+  if (
+    !Number.isInteger(mediaPreviewUploadExpiresInSeconds)
+    || mediaPreviewUploadExpiresInSeconds < 30
+    || mediaPreviewUploadExpiresInSeconds > 15 * 60
+  ) {
+    throw new Error(
+      "MEDIA_PREVIEW_UPLOAD_EXPIRES_IN_SECONDS must be between 30 and 900",
     );
   }
   if (
@@ -301,6 +321,7 @@ export function loadServerConfig(
     shareMediaReadUrlExpiresInSeconds,
     mediaPreviewMaxEdgePixels,
     mediaPreviewMaxBytes,
+    mediaPreviewUploadExpiresInSeconds,
     shareRateLimitWindowSeconds,
     shareDataRateLimit,
     shareMediaRateLimit,
