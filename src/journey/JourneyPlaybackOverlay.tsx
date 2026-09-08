@@ -56,6 +56,11 @@ import {
   type VideoTrimWindow,
 } from "./videoTrimPlayback";
 import { remapPlaybackStepIndex } from "./quickRecapPlayback";
+import type { AutoEditPlanV1, AutoEditSelectionReason } from "./autoEditPlan";
+import {
+  buildQuickRecapSelectionSummary,
+  type QuickRecapOmissionReason,
+} from "./quickRecapSelectionSummary";
 import { playbackControlsMayAutoHide } from "./playbackControls";
 import {
   nextMeaningfulStepIndex,
@@ -144,6 +149,24 @@ export function playbackHoldReason(input: {
 
 const VIDEO_STALL_WATCHDOG_MS = 4_000;
 
+function quickRecapSelectionReasonLabel(reason: AutoEditSelectionReason) {
+  switch (reason) {
+    case "all-media": return "完整媒体顺序";
+    case "journey-cover": return "旅程封面";
+    case "user-pinned": return "手动保留";
+    case "route-point-representative": return "Route Point 代表媒体";
+    case "visual-diversity": return "补充画面差异";
+    case "duplicate-cluster-representative": return "相似画面的代表";
+    case "video-highlight": return "代表视频片段";
+  }
+}
+
+function quickRecapOmissionReasonLabel(reason: QuickRecapOmissionReason) {
+  switch (reason) {
+    case "not-selected": return "本次快速回顾未选入";
+  }
+}
+
 export function playbackMediaGate(
   read: MediaRead | null | undefined,
   decodeReadiness: DecodedReadiness | undefined,
@@ -175,6 +198,8 @@ export function JourneyPlaybackOverlay({
   mediaTrimResolver,
   onTempoChange,
   playbackMode = "full",
+  quickRecapPlan,
+  quickRecapSourceJourney,
   statusMessage,
 }: {
   journey: Journey | null;
@@ -195,6 +220,8 @@ export function JourneyPlaybackOverlay({
   // stays here in the director; this only reports a change upwards.
   onTempoChange?: (tempo: PlaybackTempo) => void;
   playbackMode?: "full" | "quick-recap";
+  quickRecapPlan?: AutoEditPlanV1 | null;
+  quickRecapSourceJourney?: Journey | null;
   statusMessage?: string | null;
 }) {
   // #194: the one product-level compact-mobile answer, published as an
@@ -219,6 +246,11 @@ export function JourneyPlaybackOverlay({
   // #126 sections 3-4: the transport reads the elapsed-time plan, so the bar is
   // time-weighted instead of step-weighted and a scrub has a time model.
   const { plan, getTimerBudget } = director;
+  const quickRecapSelectionSummary = useMemo(() => (
+    playbackMode === "quick-recap" && quickRecapPlan && quickRecapSourceJourney
+      ? buildQuickRecapSelectionSummary(quickRecapPlan, quickRecapSourceJourney)
+      : null
+  ), [playbackMode, quickRecapPlan, quickRecapSourceJourney]);
   const progressFillRef = useRef<HTMLSpanElement | null>(null);
   // Review P2: the fill animates without re-rendering, so the range's own value
   // would stay at the beat's start all beat long and a screen reader would hear
@@ -519,6 +551,7 @@ export function JourneyPlaybackOverlay({
   const samplerRef = useRef(createSoundtrackSampler());
   const lightStripRef = useRef<HTMLDivElement>(null);
   const [controlsHidden, setControlsHidden] = useState(false);
+  const [selectionSummaryOpen, setSelectionSummaryOpen] = useState(false);
   const playbackInputModalityRef = useRef<"pointer" | "keyboard">("pointer");
   const pendingReads = useRef(new Set<string>());
   // Review P2: the playback overlay is its own focus trap (rendered outside
@@ -792,7 +825,7 @@ export function JourneyPlaybackOverlay({
     const focusWithinOverlay = () => Boolean(
       overlayRef.current?.contains(document.activeElement),
     );
-    const mayAutoHide = () => playbackControlsMayAutoHide({
+    const mayAutoHide = () => !selectionSummaryOpen && playbackControlsMayAutoHide({
       paused,
       keyboardNavigation: playbackInputModalityRef.current === "keyboard",
       focusWithinOverlay: focusWithinOverlay(),
@@ -826,7 +859,7 @@ export function JourneyPlaybackOverlay({
       window.removeEventListener("touchstart", onPointerActivity);
       window.removeEventListener("keydown", onKeyboardActivity);
     };
-  }, [director.isPlaying, director.stepIndex, paused]);
+  }, [director.isPlaying, director.stepIndex, paused, selectionSummaryOpen]);
 
   // Review P2: toggle playback from the user gesture so audio.play() runs
   // inside user activation; the soundtrack effect below stays as the
@@ -904,7 +937,7 @@ export function JourneyPlaybackOverlay({
       ? document.activeElement
       : null;
     const focusable = () => [...root.querySelectorAll<HTMLElement>(
-      'button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      'summary, button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
     )].filter((element) => (
       element.getClientRects().length > 0
       && getComputedStyle(element).visibility !== "hidden"
@@ -1316,6 +1349,53 @@ export function JourneyPlaybackOverlay({
       </div>
 
       {/* ── Controls ────────────────────────────────────────────────────── */}
+      {playbackMode === "quick-recap" && quickRecapSelectionSummary ? (
+        <details
+          className="journey-playback__selection-summary"
+          onToggle={(event) => setSelectionSummaryOpen(event.currentTarget.open)}
+        >
+          <summary>本次整理</summary>
+          <div className="journey-playback__selection-summary-body">
+            {quickRecapSelectionSummary.map((entry, chapterIndex) => {
+              const point = entry.routePointId
+                ? quickRecapSourceJourney?.routePoints.find((candidate) => candidate.id === entry.routePointId) ?? null
+                : null;
+              return (
+                <section key={`${entry.routePointId ?? "journey"}:${chapterIndex}`}>
+                  <header>
+                    <span>Route Point</span>
+                    <strong>{point?.label || (entry.routePointId ? `Route Point ${chapterIndex + 1}` : "旅程开场")}</strong>
+                  </header>
+                  <p>Route Point Media · 使用 {entry.included.length} · 省略 {entry.omitted.length}</p>
+                  <ul>
+                    {entry.included.map((item) => {
+                      const asset = quickRecapSourceJourney?.media.find((candidate) => candidate.id === item.assetId);
+                      return (
+                        <li key={`included:${item.assetId}`}>
+                          <span aria-hidden="true">✓</span>
+                          <strong>{asset ? stripMediaExtension(asset.fileName) : item.assetId}</strong>
+                          <small>{quickRecapSelectionReasonLabel(item.selectionReason)}</small>
+                        </li>
+                      );
+                    })}
+                    {entry.omitted.map((item) => {
+                      const asset = quickRecapSourceJourney?.media.find((candidate) => candidate.id === item.assetId);
+                      return (
+                        <li key={`omitted:${item.assetId}`} className="is-omitted">
+                          <span aria-hidden="true">–</span>
+                          <strong>{asset ? stripMediaExtension(asset.fileName) : item.assetId}</strong>
+                          <small>{quickRecapOmissionReasonLabel(item.reason)}</small>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </section>
+              );
+            })}
+          </div>
+        </details>
+      ) : null}
+
       <button className="journey-playback__close" type="button" onClick={requestClose} aria-label="退出播放">
         <IconX size={22} stroke={1.35} aria-hidden="true" />
       </button>

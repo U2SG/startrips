@@ -1488,6 +1488,8 @@ export function LivingAtlasApp({
           mediaTrimResolver={playbackMediaTrimResolver}
           onTempoChange={handlePlaybackTempoChange}
           playbackMode={playbackQuickRecap ? "quick-recap" : "full"}
+          quickRecapPlan={playbackQuickRecap?.plan ?? null}
+          quickRecapSourceJourney={playbackQuickRecap ? playbackSourceJourney : null}
           statusMessage={playbackFallbackMessage}
           reduceMotion={reduceMotion}
         />
