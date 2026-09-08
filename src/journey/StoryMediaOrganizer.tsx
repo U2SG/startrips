@@ -169,8 +169,21 @@ export function StoryMediaOrganizer(props: StoryMediaOrganizerProps) {
   const [busy, setBusy] = useState(false);
   const [moveError, setMoveError] = useState("");
   const [dragIds, setDragIds] = useState<string[]>([]);
+  const keyboardCoordinates: typeof sortableKeyboardCoordinates = (event, args) => {
+    const active = args.context.active;
+    const activeAsset = props.media.find((asset) => asset.id === String(active?.id));
+    const count = activeAsset && props.selectedIds.has(activeAsset.id) ? props.selectedIds.size : 1;
+    // Use the same eligible destinations as collision detection. Otherwise
+    // keyboard movement can aim at another chapter that cannot accept a sort.
+    const droppableRects = new Map([...args.context.droppableRects].filter(([id]) => {
+      const data = args.context.droppableContainers.get(id)?.data.current;
+      return data?.kind === "destination"
+        || (count <= 1 && data?.kind === "media" && data.routePointId === activeAsset?.routePointId);
+    }));
+    return sortableKeyboardCoordinates(event, { ...args, context: { ...args.context, droppableRects } });
+  };
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { delay: 200, tolerance: 8 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }));
+    useSensor(KeyboardSensor, { coordinateGetter: keyboardCoordinates }));
   const selected = props.media.filter((asset) => props.selectedIds.has(asset.id));
   const destinations = useMemo<Destination[]>(() => [
     { id: null, name: "旅程散页" },

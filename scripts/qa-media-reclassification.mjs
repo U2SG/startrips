@@ -243,6 +243,14 @@ try {
     await page.keyboard.press("Space");
     await page.locator(".story-media-organizer__drag-stack").waitFor({ state: "visible" });
     await page.keyboard.press("ArrowRight");
+    // Collision measurement and its accessible announcement settle after the
+    // key event. Dropping immediately can still use the previous over target.
+    await page.waitForFunction((id) => [...document.querySelectorAll('[id^="DndLiveRegion"]')]
+      .some((node) => node.textContent?.includes(`over droppable area ${id}`)), assetId(2), { timeout: 3_000 })
+      .catch(async (error) => {
+        const targets = await page.locator('[id^="DndLiveRegion"]').allTextContents();
+        throw new Error(`Keyboard sort did not select seed-2: ${JSON.stringify(targets)}`, { cause: error });
+      });
     const reorderResponse = page.waitForResponse((response) => response.url().endsWith("/api/uploads/assets/reorder"));
     await page.keyboard.press("Space");
     await reorderResponse;
@@ -294,6 +302,7 @@ try {
     await page.close();
   }
 } finally {
+  console.log("Reclassification checks completed before exit:", JSON.stringify(checks));
   await browser.close();
 }
 console.log(JSON.stringify(checks, null, 2));
