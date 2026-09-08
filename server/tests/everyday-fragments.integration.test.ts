@@ -191,6 +191,23 @@ function mediaValues(owners: {
   };
 }
 
+/**
+ * Asserts that the database itself refused the insert, by name.
+ *
+ * Drizzle wraps a driver error, so the thrown `message` is the SQL text and
+ * the constraint name lives on the wrapped `cause` — matching the message
+ * would silently pass on any failed insert. Both shapes are read so the
+ * assertion survives a driver that stops wrapping.
+ */
+async function expectSingleOwnerRefusal(insert: Promise<unknown>) {
+  const failure = await insert.then(() => null, (reason: unknown) => reason);
+  expect(failure).not.toBeNull();
+  const cause = (failure as { cause?: unknown }).cause;
+  const constraint = (cause as { constraint?: string } | undefined)?.constraint
+    ?? (failure as { constraint?: string }).constraint;
+  expect(constraint).toBe("media_assets_single_owner");
+}
+
 let atlasId = "";
 let otherAtlasId = "";
 let journeyId = "";
@@ -253,28 +270,27 @@ afterAll(async () => {
 
 describe("media belongs to exactly one owner", () => {
   it("rejects a media asset that names both a Journey and a fragment", async () => {
-    await expect(db
+    await expectSingleOwnerRefusal(db
       .insert(mediaAssets)
-      .values(mediaValues({ journeyId, everydayFragmentId: fragmentId })))
-      .rejects.toThrow(/media_assets_single_owner/);
+      .values(mediaValues({ journeyId, everydayFragmentId: fragmentId })));
   });
 
   it("rejects a media asset that names neither owner", async () => {
     // Before #234 this was impossible because `journey_id` was NOT NULL.
     // Relaxing it to admit a second owner would otherwise have admitted an
     // orphan owned by nobody and reachable from nothing.
-    await expect(db.insert(mediaAssets).values(mediaValues({})))
-      .rejects.toThrow(/media_assets_single_owner/);
+    await expectSingleOwnerRefusal(
+      db.insert(mediaAssets).values(mediaValues({})),
+    );
   });
 
   it("rejects a fragment-owned asset that carries a route point", async () => {
     // Every Route Point belongs to some Journey, so a fragment-owned asset
     // hanging off one would be media a fragment owns and a foreign Journey's
     // route positions.
-    await expect(db
+    await expectSingleOwnerRefusal(db
       .insert(mediaAssets)
-      .values(mediaValues({ everydayFragmentId: fragmentId, routePointId })))
-      .rejects.toThrow(/media_assets_single_owner/);
+      .values(mediaValues({ everydayFragmentId: fragmentId, routePointId })));
   });
 
   it("accepts each legal shape", async () => {
