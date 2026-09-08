@@ -929,6 +929,7 @@ export function JourneyStory({
     neighborAsset: JourneyMediaAsset | null;
     width: number;
     originTransform: string;
+    settleTakeover: boolean;
   } | null>(null);
   const mediaDragSettlingRef = useRef(false);
   const mediaDragSettleCancelRef = useRef<(() => void) | null>(null);
@@ -2303,6 +2304,7 @@ export function JourneyStory({
     const pages = container.querySelector<HTMLElement>("[data-story-media-pages]");
     const originTransform = getComputedStyle(base).transform;
     pages?.style.setProperty("--story-live-transform", originTransform);
+    pages?.style.setProperty("--story-live-opacity", getComputedStyle(base).opacity);
     // A pointer-down may still become a picture click. Keep the latest cold
     // navigation intent until an actual horizontal drag takes ownership.
     setMediaGestureHolding(true);
@@ -2325,6 +2327,7 @@ export function JourneyStory({
       neighborAsset: null,
       width: base.clientWidth,
       originTransform,
+      settleTakeover: Boolean(completePreviousDrag),
     };
   }
 
@@ -2476,7 +2479,10 @@ export function JourneyStory({
     // ongoing navigation spring and strand its pending semantic handoff.
     if (drag.axis !== "x") {
       setMediaGestureHolding(false);
-      drag.container.querySelector<HTMLElement>("[data-story-media-pages]")?.style.removeProperty("--story-live-transform");
+      const pages = drag.container.querySelector<HTMLElement>("[data-story-media-pages]");
+      pages?.style.removeProperty("--story-live-transform");
+      pages?.style.removeProperty("--story-live-opacity");
+      if (drag.settleTakeover) pages?.dispatchEvent(new Event("story-media-recover"));
       return;
     }
     mediaDragSettlingRef.current = !prefersReducedMotion();
@@ -2552,7 +2558,8 @@ export function JourneyStory({
         node.style.transform = transform;
         node.style.opacity = opacity;
       }
-      pages?.dispatchEvent(new Event("story-media-recover"));
+      // Keep the taken-over pixels under the held pointer. Pointer release
+      // resumes recovery; a horizontal move takes over the whole stack.
     };
     mediaDragSettleCancelRef.current = () => {
       pending = false;

@@ -179,15 +179,12 @@ function advance(state: ElementSpring, now: number) {
 
 function cancel(state: ElementSpring, run: Run) {
   if (state.run !== run) return;
-  // Freeze at the cancellation instant, retaining velocity for the next intent.
+  // Freeze the frame the user can actually see, retaining its velocity.
   // A pointer handler can already have painted a new position in this event.
   const actual = computedValues(state.element);
-  if (matchesPainted(actual, state.current)) {
-    advance(state, performance.now());
-  } else {
-    state.current = actual;
-    state.velocity.fill(0);
-  }
+  if (!matchesPainted(actual, state.current)) state.velocity.fill(0);
+  state.current = actual;
+  state.time = performance.now();
   state.element.style.setProperty("transition", state.transitionStyle, state.transitionPriority);
   state.run = null;
   active.delete(state);

@@ -236,7 +236,8 @@ async function exerciseStoryEdgeRegrab(page) {
     return { count: pages.length, sameNodes: pages.every((node, index) => node === window.__qaStoryMediaPageNodes[index]),
       asset: root.querySelector("[data-shared-media-id]")?.getAttribute("data-shared-media-id") };
   });
-  return { rest, pulled, regrab, continuation, nodes, failed: regrab.jump > .5 || !continuation.followedPointer
+  const heldDrift = Math.max(...["x", "y", "width", "height"].map((key) => Math.abs(continuation.before[key] - regrab.after[key])));
+  return { rest, pulled, regrab, continuation, heldDrift, nodes, failed: regrab.jump > .5 || heldDrift > .5 || !continuation.followedPointer
     || nodes.count !== 3 || !nodes.sameNodes || nodes.asset !== "00000000-0000-4000-8000-000000000100" };
 }
 
@@ -2525,7 +2526,7 @@ try {
     if (initialShownA) {
       const forward = await storyPicturePoint(cachedRapidReverse.page, 1);
       const reverse = await storyPicturePoint(cachedRapidReverse.page, -1);
-      const initialBounds = await cachedRapidReverse.page.locator(storyCurrentPageSelector)
+      const initialBounds = await cachedRapidReverse.page.locator(`.journey-story__media ${storyCurrentPageSelector}`)
         .evaluate((element) => element.getBoundingClientRect().toJSON());
       await clickStoryPicture(cachedRapidReverse.page, 1, ".journey-story__media", forward);
       try {
