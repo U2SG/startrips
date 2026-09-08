@@ -1,5 +1,5 @@
 import { cloneElement, useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type MouseEvent, type ReactElement, type Ref, type VideoHTMLAttributes } from "react";
-import { MEDIA_STACK_DURATION, MEDIA_STACK_EASING, mediaStackOpacity, mediaStackRest } from "./mediaStackMotion";
+import { MEDIA_STACK_DURATION, MEDIA_STACK_EASING, mediaStackClip, mediaStackOpacity, mediaStackRest } from "./mediaStackMotion";
 import { prefersReducedMotion } from "../motion/preferences";
 import { springElementTo, type SpringElementHandle } from "../motion/springElement";
 import { StartripsJourneyCue } from "../brand/StartripsBrandMark";
@@ -118,6 +118,9 @@ export function StoryMediaPages({ active = true, ...props }: Props) {
   const pageNodes = useRef<Array<HTMLDivElement | null>>([null, null, null]);
   const imageNodes = useRef<Array<HTMLImageElement | null>>([null, null, null]);
   const slotIds = useRef<Array<string | null>>([null, null, null]);
+  const clipOwners = useRef<Array<string | null>>([null, null, null]);
+  const interrupted = useRef(false);
+  const [layoutRevision, updateLayoutRevision] = useState(0);
   const frames = useRef(new Map<string, Frame>());
   const pendingFrames = useRef(new Map<string, () => void>());
   const decodedImages = useRef(new Map<string, string>());
@@ -271,24 +274,28 @@ export function StoryMediaPages({ active = true, ...props }: Props) {
   useLayoutEffect(() => {
     const element = root.current;
     if (!element) return;
-    const measure = () => {
-      const slot = slotIds.current.indexOf(latest.current.currentId);
-      const page = pageNodes.current[slot];
-      const photo = imageNodes.current[slot];
-      const asset = latest.current.media.find((item) => item.id === latest.current.currentId);
-      const frame = asset ? frames.current.get(asset.id)?.canvas : null;
-      const width = asset?.displayWidth || photo?.naturalWidth || frame?.width || 0;
-      const height = asset?.displayHeight || photo?.naturalHeight || frame?.height || 0;
-      if (!page || !width || !height || !page.clientWidth || !page.clientHeight) return;
-      const fit = Math.min(page.clientWidth / width, page.clientHeight / height);
-      element.style.setProperty("--preview-inset-x", `${(page.clientWidth - width * fit) / 2}px`);
-      element.style.setProperty("--preview-inset-y", `${(page.clientHeight - height * fit) / 2}px`);
-    };
-    measure();
-    const observer = new ResizeObserver(measure);
+    let size = `${element.clientWidth}:${element.clientHeight}`;
+    const observer = new ResizeObserver(() => {
+      const next = `${element.clientWidth}:${element.clientHeight}`;
+      if (next !== size) { size = next; updateLayoutRevision((value) => value + 1); }
+    });
     observer.observe(element);
     return () => observer.disconnect();
-  }, [props.currentId, revision, liveReady]);
+  }, []);
+  useLayoutEffect(() => {
+    const front = pageNodes.current[assigned.indexOf(props.currentId)];
+    pageNodes.current.forEach((node, slot) => {
+      if (!node) return;
+      // Retained pages keep their painted aperture when their semantic role
+      // changes. Only a recycled owner or an idle layout needs initialization.
+      if (clipOwners.current[slot] !== assigned[slot]
+        || (!props.incomingId && !movingId && !interrupted.current)) {
+        const [y, x] = mediaStackClip(node, front);
+        node.style.clipPath = `inset(${y}% ${x}%)`;
+      }
+      clipOwners.current[slot] = assigned[slot];
+    });
+  }, [slotSignature, props.currentId, revision, liveReady, layoutRevision]);
   const targetReady = ready(props.incomingId);
   const currentReady = ready(props.currentId);
   useLayoutEffect(() => {
@@ -307,7 +314,6 @@ export function StoryMediaPages({ active = true, ...props }: Props) {
   useLayoutEffect(() => {
     props.onPlaybackReady(playbackReady ? props.currentId : null);
   }, [playbackReady, props.currentId, props.onPlaybackReady]);
-  const interrupted = useRef(false);
   const motionHandles = useRef<SpringElementHandle[]>([]);
   const reportKey = useRef("");
   useEffect(() => {
@@ -355,7 +361,9 @@ export function StoryMediaPages({ active = true, ...props }: Props) {
         : isTarget ? 0 : isCurrent ? (direction > 0 ? 2 : 1) : depths[slot];
       node.style.zIndex = recovering ? (isCurrent ? "5" : String(3 - depth))
         : isTarget ? "4" : "2";
-      return [springElementTo(node, { transform: mediaStackRest(depth), opacity: mediaStackOpacity(depth) },
+      const front = pageNodes.current[assigned.indexOf(recovering ? props.currentId : id)];
+      return [springElementTo(node, { transform: mediaStackRest(depth), opacity: mediaStackOpacity(depth),
+        clipInset: mediaStackClip(node, front) },
         { owner: assetId })];
     });
     motionHandles.current = animations;
@@ -368,7 +376,7 @@ export function StoryMediaPages({ active = true, ...props }: Props) {
       // that state, including another reversal during recovery.
       interrupted.current = !completed;
     };
-  }, [active, props.currentId, props.incomingId, targetReady, direction, rememberLiveFrame, recoveryRevision]);
+  }, [active, props.currentId, props.incomingId, targetReady, direction, rememberLiveFrame, recoveryRevision, layoutRevision]);
 
   useLayoutEffect(() => {
     const element = root.current;

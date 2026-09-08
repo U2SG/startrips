@@ -28,9 +28,6 @@
   box-shadow: none;
 }
 .story-media-pages__page:not([data-media-page-id]) { display: none; }
-.story-media-pages__page:not([data-media-page="current"]):not([data-media-incoming="true"]) {
-  clip-path: inset(var(--preview-inset-y, 0px) var(--preview-inset-x, 0px));
-}
 .story-media-pages__page[data-media-incoming="true"] { z-index: 4; }
 .story-media-pages__page[data-media-page="current"] { z-index: 5; }
 .story-media-pages > .starlight-media-state { z-index: 7; }

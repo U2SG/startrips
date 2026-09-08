@@ -28,6 +28,17 @@ export function mediaStackPull(distance: number, width: number) {
 
 export function mediaStackOpacity(depth: number) { return Math.max(0.64, 1 - depth * 0.18); }
 
+/** Rear photographs fit within the front photograph's visible aperture. */
+export function mediaStackClip(page: HTMLElement, front: HTMLElement | null): [number, number] {
+  if (!front || page === front) return [0, 0];
+  const media = front.querySelector<HTMLImageElement | HTMLCanvasElement>('img:not([hidden]), canvas:not([hidden])');
+  const width = media instanceof HTMLImageElement ? media.naturalWidth : media?.width;
+  const height = media instanceof HTMLImageElement ? media.naturalHeight : media?.height;
+  if (!width || !height || !page.clientWidth || !page.clientHeight) return [0, 0];
+  const fit = Math.min(page.clientWidth / width, page.clientHeight / height);
+  return [(1 - height * fit / page.clientHeight) * 50, (1 - width * fit / page.clientWidth) * 50];
+}
+
 export function mediaStackReveal(depth: number, progress: number) {
   return mediaStackRest(depth * (1 - Math.min(1, Math.max(0, progress))));
 }
