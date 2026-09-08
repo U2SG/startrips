@@ -279,9 +279,18 @@ try {
     await page.locator(".story-media-organizer__drag-stack").waitFor({ state: "visible" });
     // Pointer activation focuses the handle and can scroll its containers.
     // Measure the sticky destination after that focus/activation has happened.
-    const drop = await destination("旅程散页").boundingBox();
-    if (!drop) throw new Error("QA drag destination has no bounds");
-    await page.mouse.move(drop.x + drop.width / 2, drop.y + drop.height / 2, { steps: 12 });
+    // Nested auto-scroll can move the sticky folder after the pointer enters
+    // an edge. Follow its live position, as a user does, before releasing.
+    let drop;
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      drop = await destination("旅程散页").boundingBox();
+      if (!drop) throw new Error("QA drag destination has no bounds");
+      await page.mouse.move(drop.x + drop.width / 2, drop.y + drop.height / 2, { steps: 12 });
+      const received = await page.waitForFunction((selector) => [...document.querySelectorAll(selector)]
+        .some((node) => node.querySelector(".story-media-organizer__destination-name")?.textContent === "旅程散页"
+          && node.classList.contains("is-over")), destinationSelector, { timeout: 500 }).then(() => true, () => false);
+      if (received) break;
+    }
     await page.waitForFunction((selector) => [...document.querySelectorAll(selector)]
       .some((node) => node.querySelector(".story-media-organizer__destination-name")?.textContent === "旅程散页"
         && node.classList.contains("is-over")), destinationSelector, { timeout: 3_000 })
