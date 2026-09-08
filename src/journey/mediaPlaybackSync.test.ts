@@ -1,5 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
-import { syncPlaybackMediaElement } from "./mediaPlaybackSync";
+import { rewindPlaybackMediaElement, syncPlaybackMediaElement } from "./mediaPlaybackSync";
+
+describe("rewindPlaybackMediaElement", () => {
+  it("pauses and rewinds a completed soundtrack before replay", () => {
+    const element = { pause: vi.fn(), currentTime: 37.5 };
+    rewindPlaybackMediaElement(element);
+    expect(element.pause).toHaveBeenCalledOnce();
+    expect(element.currentTime).toBe(0);
+  });
+});
 
 describe("syncPlaybackMediaElement", () => {
   it("pauses chapter video when Startrips playback pauses", () => {

@@ -41,7 +41,7 @@ import {
   type PlaybackStep,
 } from "./journeyPlayback";
 import { planPrefetchWindow, readyMsAheadForTempo } from "./playbackPrefetchPlan";
-import { syncPlaybackMediaElement } from "./mediaPlaybackSync";
+import { rewindPlaybackMediaElement, syncPlaybackMediaElement } from "./mediaPlaybackSync";
 import {
   resolveVideoTrim,
   videoTrimBuffersOnStall,
@@ -834,6 +834,7 @@ export function JourneyPlaybackOverlay({
   const togglePlayback = useCallback(() => {
     if (director.completed) {
       samplerRef.current.setPlaying(false);
+      rewindPlaybackMediaElement(audioRef.current);
       syncPlaybackMediaElement(videoRef.current, false);
       replay();
       return;
