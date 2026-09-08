@@ -713,9 +713,15 @@ describe("#260 same-asset preview for private media reads", () => {
     // while that signature is still valid, and the PUT lands afterwards. The
     // row that named the key is already gone, so nothing in `media_assets`
     // can ever mention the object again.
+    // The stub keeps an object store as well as a log, because the point of
+    // the case is what survives in storage, not only what was asked for. The
+    // override replaces `recordingStorage`'s own `deleted` array, so it
+    // records here instead.
     const objects = new Set<string>();
+    const deletedKeys: string[] = [];
     const backend = recordingStorage({
       async deleteObject(input) {
+        deletedKeys.push(input.key);
         objects.delete(input.key);
       },
     });
@@ -766,7 +772,7 @@ describe("#260 same-asset preview for private media reads", () => {
       { storageForBackend: backend.resolve },
     );
     expect(swept.retired).toBeGreaterThanOrEqual(1);
-    expect(backend.deleted).toContain(pendingKey);
+    expect(deletedKeys).toContain(pendingKey);
     expect(objects.has(pendingKey)).toBe(false);
     expect(
       await db
