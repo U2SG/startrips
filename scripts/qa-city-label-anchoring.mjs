@@ -269,6 +269,13 @@ function findFixture(sample, fixture) {
   return best?.label ?? null;
 }
 
+function findExactCityLabel(sample, point, tolerance = 0.0002) {
+  return sample.labels.find((label) => (
+    Math.abs(label.lat - point.lat) <= tolerance
+    && Math.abs(label.lon - point.lon) <= tolerance
+  )) ?? null;
+}
+
 /**
  * Wheel and pointer gestures are dispatched onto the canvas directly rather
  * than driven through page coordinates. Coordinate input hit-tests the topmost
@@ -674,6 +681,13 @@ try {
       }
       checkFrame(settled, `${label} settled`);
       checkNoOverlap(settled, `${label} settled`);
+      if (fixture.key === "dense-coastline" && zoom >= 2) {
+        const shenzhenLabel = findExactCityLabel(settled, fixture);
+        check(
+          shenzhenLabel?.name === "深圳",
+          `${label}: rendered Shenzhen label is ${JSON.stringify(shenzhenLabel?.name ?? null)}, expected Chinese text 深圳`,
+        );
+      }
       // #237 asks for Shenzhen / Pearl River Delta specifically, and the lane
       // already runs four fixtures x three zooms x fifteen frames inside a
       // twelve-minute job. Scoping the map measurement to the dense-coastline
@@ -910,6 +924,31 @@ try {
         `focusToLabelPx=${drift === null ? "label not re-rendered at any zoom" : drift.toFixed(3)}`,
       ].join(" "));
     }
+  }
+
+  // #16 reopened: inspect the actual rendered text at both regional and local
+  // zoom around Hong Kong too, reusing this lane instead of adding another CI
+  // owner. The DOM text is what the viewer reads; candidate ids alone are not
+  // localization evidence.
+  const hongKong = { lat: 22.27832, lon: 114.17469 };
+  await page.goto(new URL(
+    `/?qaState=journey-routes&qaQuality=high&qaFocusLat=${hongKong.lat}&qaFocusLon=${hongKong.lon}`,
+    baseUrl,
+  ).toString(), { waitUntil: "domcontentloaded" });
+  await page.locator('[data-scene-ready="true"]').waitFor({ timeout: 30_000 });
+  await page.waitForFunction(() => Number(
+    document.querySelector(".particle-earth-scene")?.dataset.journeyCityLabelCount ?? 0,
+  ) > 0, null, { timeout: 30_000 });
+  for (const zoom of [2, 3]) {
+    await setZoom(page, zoom);
+    await page.waitForTimeout(300);
+    const localized = await measure(page);
+    const rendered = findExactCityLabel(localized, hongKong);
+    check(
+      rendered?.name === "香港",
+      `hong-kong-localization @${zoom}x: rendered label is ${JSON.stringify(rendered?.name ?? null)}, expected Chinese text 香港`,
+    );
+    console.log(`[qa-city-label-anchoring] hong-kong-localization zoom=${zoom} rendered=${JSON.stringify(rendered?.name ?? null)}`);
   }
 
   if (pageErrors.length > 0 || consoleErrors.length > 0) {

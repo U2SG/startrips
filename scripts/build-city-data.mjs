@@ -1,7 +1,9 @@
 /**
  * Builds public/earth/cities.json from the GeoNames cities15000 export
  * (https://download.geonames.org/export/dump/cities15000.zip, CC BY 4.0) and
- * the alternateNamesV2 export (same site, same license).
+ * the alternateNamesV2 export (same site, same license). Chinese-region gaps
+ * that GeoNames cannot fill use the checked-in Wikidata CC0 crosswalk generated
+ * offline under scripts/data; the browser never calls either source at runtime.
  *
  * The fine tier keeps asciiname, latitude, longitude, population, and
  * administrative rank for every city with a valid location, sorted by
@@ -20,7 +22,9 @@
 import { createReadStream, readFileSync, writeFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 import {
+  applyAuthoritativeChineseFallback,
   applyChineseCandidates,
+  assertChineseRegionCoverage,
   chineseAlternateScore,
   parseCityRow,
 } from "./build-city-data-lib.mjs";
@@ -34,13 +38,15 @@ const alternatesPath = process.argv[3] ?? null;
 
 const lines = readFileSync(inputPath, "utf8").split("\n");
 const cities = [];
-// geonameId -> array index, for joining alternate names by id.
+// geonameId -> array index/country, for joining alternate names by stable id.
 const cityIndexByGeonameId = new Map();
+const countryByGeonameId = new Map();
 for (const line of lines) {
   if (!line) continue;
   const parsed = parseCityRow(line.split("\t"));
   if (!parsed) continue;
   cityIndexByGeonameId.set(parsed.geonameId, cities.length);
+  countryByGeonameId.set(parsed.geonameId, parsed.entry.c ?? "");
   cities.push(parsed.entry);
 }
 
@@ -61,7 +67,7 @@ if (alternatesPath) {
       const language = fields[2] ?? "";
       const alternateName = (fields[3] ?? "").trim();
       if (!geonameId) return;
-      const score = chineseAlternateScore(language, alternateName);
+      const score = chineseAlternateScore(language, alternateName, countryByGeonameId.get(geonameId));
       if (score === null) return;
       if (score <= 1) {
         const existing = preferred.get(geonameId);
@@ -77,9 +83,35 @@ if (alternatesPath) {
   });
   const joined = applyChineseCandidates(cities, cityIndexByGeonameId, preferred, fallback);
   console.log(`joined ${joined} Chinese names from ${alternatesPath}`);
+
+  const offlineFallback = JSON.parse(readFileSync(
+    new URL("./data/city-localization-wikidata.json", import.meta.url),
+    "utf8",
+  ));
+  const fallbackJoined = applyAuthoritativeChineseFallback(
+    cities,
+    cityIndexByGeonameId,
+    offlineFallback.entries,
+  );
+  console.log(`joined ${fallbackJoined} Chinese names from offline Wikidata CC0 crosswalk`);
 }
 
 cities.sort((left, right) => right.p - left.p);
+
+let coverage = null;
+if (alternatesPath) {
+  // Validate before replacing the checked-in asset so a failed coverage build
+  // cannot leave a partially-regressed payload behind.
+  coverage = assertChineseRegionCoverage(cities, [
+    "Shenzhen",
+    "Guangzhou",
+    "Hong Kong",
+    "Bao'an",
+    "Luohu District",
+    "Tseung Kwan O",
+    "Fanling",
+  ]);
+}
 
 const output = "public/earth/cities.json";
 writeFileSync(output, JSON.stringify({ cities }));
@@ -87,8 +119,16 @@ const rankCounts = [0, 1, 2, 3].map((rank) => (
   cities.filter((city) => city.r === rank).length
 ));
 const withChinese = cities.filter((city) => city.z).length;
+const outputBytes = readFileSync(output).length;
 console.log(
   `wrote ${output}: ${cities.length} cities (${withChinese} with Chinese names), ${Math.round(
-    readFileSync(output).length / 1024,
+    outputBytes / 1024,
   )} KiB (rank0=${rankCounts[0]} rank1=${rankCounts[1]} rank2=${rankCounts[2]} rank3=${rankCounts[3]})`,
 );
+if (coverage) {
+  console.log([
+    "Chinese-region localization:",
+    ...coverage.ranks.slice(0, 3).map((rank) => `rank${rank.rank}=${rank.localized}/${rank.total}`),
+    `prd-rank3=${coverage.prdRank3.localized}/${coverage.prdRank3.total} (${(coverage.prdRank3.ratio * 100).toFixed(1)}%)`,
+  ].join(" "));
+}

@@ -15,6 +15,18 @@ export const RANK_BY_FEATURE = new Map([
 const ZH_TAG = /^zh(?:[/_-][a-zA-Z]+)?$/i;
 /** Simplified-Chinese tags rank highest in the candidate pick. */
 const ZH_SIMPLIFIED_TAG = /^zh(?:[/_-](?:cn|hans|han))?$/i;
+const HAN_SCRIPT = /[\u3400-\u4dbf\u4e00-\u9fff]/;
+export const CHINESE_REGION_CODES = new Set(["CN", "HK", "MO", "TW"]);
+export const PRD_COVERAGE_BOUNDS = Object.freeze({ south: 21.5, north: 24.5, west: 112, east: 115.5 });
+export const PRD_RANK3_MIN_LOCALIZATION = 0.65;
+
+export function isChineseRegion(countryCode) {
+  return CHINESE_REGION_CODES.has(String(countryCode ?? "").toUpperCase());
+}
+
+export function containsHanScript(value) {
+  return HAN_SCRIPT.test(String(value ?? ""));
+}
 
 /** Parse one cities15000 TSV row into a compact city entry (or null). */
 export function parseCityRow(fields) {
@@ -24,6 +36,7 @@ export function parseCityRow(fields) {
   const longitude = Number(fields[5]);
   const population = Number(fields[14]);
   const feature = fields[7] ?? "";
+  const countryCode = (fields[8] ?? "").trim().toUpperCase();
   if (
     !name
     || !Number.isFinite(latitude)
@@ -45,6 +58,8 @@ export function parseCityRow(fields) {
       lo: longitude,
       p: population,
       r: RANK_BY_FEATURE.get(feature) ?? 3,
+      ...(isChineseRegion(countryCode) ? { c: countryCode } : {}),
+      ...(isChineseRegion(countryCode) && containsHanScript(name) ? { z: name } : {}),
     },
   };
 }
@@ -54,30 +69,34 @@ export function parseCityRow(fields) {
  * its priority. Returns a score or null: 0 = simplified-Chinese tag,
  * 1 = other Chinese tag, 2 = untagged CJK-script name.
  */
-export function chineseAlternateScore(language, alternateName) {
-  if (!alternateName) return null;
+export function chineseAlternateScore(language, alternateName, countryCode = "") {
+  if (!alternateName || !containsHanScript(alternateName)) return null;
   const normalizedLanguage = language.trim();
   if (ZH_TAG.test(normalizedLanguage)) {
     return ZH_SIMPLIFIED_TAG.test(normalizedLanguage) ? 0 : 1;
   }
-  // Script-only fallback is intentionally limited to untagged rows. A
-  // language-tagged CJK name (for example `ja` Kanji) must not become the
-  // zh-CN display name merely because it shares Han characters.
-  return !normalizedLanguage && /[\u4e00-\u9fff]/.test(alternateName) ? 2 : null;
+  // GeoNames contains Cantonese labels under `yue`. They are a truthful Han
+  // fallback for the Chinese-region records this build is localizing, but never
+  // for an unrelated country that merely shares Han/Kanji glyphs.
+  if (isChineseRegion(countryCode) && /^yue(?:[/_-][a-zA-Z]+)?$/i.test(normalizedLanguage)) return 1;
+  // Script-only fallback is intentionally both untagged AND country-scoped.
+  // Tagged Japanese/Korean rows, and untagged Han outside CN/HK/MO/TW, cannot
+  // silently become zh-CN display names.
+  return !normalizedLanguage && isChineseRegion(countryCode) ? 2 : null;
 }
 
 /**
  * Build the Chinese-name join maps from alternateNamesV2 rows: preferred
  * (tagged) and fallback (first untagged CJK) candidates per geonameId.
  */
-export function collectChineseCandidates(rows) {
+export function collectChineseCandidates(rows, countryByGeonameId = new Map()) {
   const preferred = new Map();
   const fallback = new Map();
   for (const fields of rows) {
     const geonameId = fields[1] ?? "";
     const language = fields[2] ?? "";
     const alternateName = (fields[3] ?? "").trim();
-    const score = chineseAlternateScore(language, alternateName);
+    const score = chineseAlternateScore(language, alternateName, countryByGeonameId.get(geonameId));
     if (score === null || !geonameId) continue;
     if (score <= 1) {
       const existing = preferred.get(geonameId);
@@ -113,4 +132,66 @@ export function applyChineseCandidates(cities, cityIndexByGeonameId, preferred, 
     }
   }
   return joined;
+}
+
+
+/** Apply a checked-in, offline authoritative fallback by the target GeoNames id. */
+export function applyAuthoritativeChineseFallback(cities, cityIndexByGeonameId, entries) {
+  let joined = 0;
+  for (const source of entries ?? []) {
+    const cityIndex = cityIndexByGeonameId.get(String(source.geonameId ?? ""));
+    if (cityIndex === undefined) continue;
+    const city = cities[cityIndex];
+    const country = String(source.country ?? "").toUpperCase();
+    const label = String(source.label ?? "").trim();
+    if (city.z !== undefined || city.c !== country || !isChineseRegion(country) || !containsHanScript(label)) continue;
+    city.z = label;
+    joined += 1;
+  }
+  return joined;
+}
+
+export function chineseRegionCoverage(cities) {
+  const ranks = [0, 1, 2, 3].map((rank) => ({ rank, total: 0, localized: 0 }));
+  let prdRank3Total = 0;
+  let prdRank3Localized = 0;
+  for (const city of cities) {
+    if (!isChineseRegion(city.c)) continue;
+    const rank = Math.max(0, Math.min(3, Number(city.r) || 0));
+    ranks[rank].total += 1;
+    if (containsHanScript(city.z)) ranks[rank].localized += 1;
+    if (
+      rank === 3
+      && city.la >= PRD_COVERAGE_BOUNDS.south && city.la <= PRD_COVERAGE_BOUNDS.north
+      && city.lo >= PRD_COVERAGE_BOUNDS.west && city.lo <= PRD_COVERAGE_BOUNDS.east
+    ) {
+      prdRank3Total += 1;
+      if (containsHanScript(city.z)) prdRank3Localized += 1;
+    }
+  }
+  return {
+    ranks,
+    prdRank3: {
+      total: prdRank3Total,
+      localized: prdRank3Localized,
+      ratio: prdRank3Total === 0 ? 1 : prdRank3Localized / prdRank3Total,
+    },
+  };
+}
+
+export function assertChineseRegionCoverage(cities, requiredNames = []) {
+  const coverage = chineseRegionCoverage(cities);
+  for (const rank of coverage.ranks.slice(0, 3)) {
+    if (rank.total > 0 && rank.localized !== rank.total) {
+      throw new Error(`Chinese-region rank ${rank.rank} localization regressed: ${rank.localized}/${rank.total}`);
+    }
+  }
+  if (coverage.prdRank3.ratio < PRD_RANK3_MIN_LOCALIZATION) {
+    throw new Error(`PRD rank-3 localization ${coverage.prdRank3.localized}/${coverage.prdRank3.total} (${coverage.prdRank3.ratio.toFixed(3)}) is below ${PRD_RANK3_MIN_LOCALIZATION}`);
+  }
+  for (const name of requiredNames) {
+    const city = cities.find((candidate) => candidate.n === name);
+    if (!city || !containsHanScript(city.z)) throw new Error(`required Chinese city label is missing: ${name}`);
+  }
+  return coverage;
 }
