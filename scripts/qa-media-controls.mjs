@@ -716,7 +716,7 @@ try {
   });
   try {
     const assetId = "00000000-0000-4000-8000-000000000100";
-    const pageSelector = `[data-media-page-id="${assetId}"]`;
+    const pageSelector = `.journey-story__media ${storyMediaPagesSelector} [data-media-page-id="${assetId}"]`;
     await previewPhoto.page.waitForFunction(({ pageSelector, assetId }) => {
       const page = document.querySelector(pageSelector);
       return page?.getAttribute("data-media-layer") === "preview"
@@ -757,7 +757,7 @@ try {
     await waitForStoryPicture(previewVideo.page, "00000000-0000-4000-8000-000000000100");
     await clickStoryPicture(previewVideo.page, 1);
     const assetId = "00000000-0000-4000-8000-000000000152";
-    const pageSelector = `[data-media-page-id="${assetId}"]`;
+    const pageSelector = `.journey-story__media ${storyMediaPagesSelector} [data-media-page-id="${assetId}"]`;
     await previewVideo.page.waitForFunction(({ pageSelector, assetId }) => {
       const page = document.querySelector(pageSelector);
       return page?.getAttribute("data-media-layer") === "preview"
