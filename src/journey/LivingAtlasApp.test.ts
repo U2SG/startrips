@@ -274,6 +274,11 @@ describe("optional Home hydration", () => {
     expect(rows).toEqual([playbackJourney]);
     expect(onHomeBasePeriods).not.toHaveBeenCalled();
     resolveHome([]);
+    // The detached hydration intentionally crosses the Promise.resolve() start
+    // boundary and then the Home request boundary before committing. Drain both
+    // microtasks without making Journey readiness await Home in production.
+    await homePending;
+    await Promise.resolve();
     await Promise.resolve();
     expect(onHomeBasePeriods).toHaveBeenCalledWith([]);
   });
