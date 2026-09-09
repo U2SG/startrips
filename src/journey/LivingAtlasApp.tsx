@@ -471,6 +471,7 @@ export function LivingAtlasApp({
   const [storyInitialAssetId, setStoryInitialAssetId] = useState<string | null>(null);
   const [storyInitialSnapState, setStoryInitialSnapState] = useState<Exclude<StorySnapState, "closed">>("in-context");
   const [storyFocusVisibleControlOnOpen, setStoryFocusVisibleControlOnOpen] = useState(false);
+  const [storyGlobeCover, setStoryGlobeCover] = useState({ opaqueMediaCover: false, coverTransitionActive: false });
   const [routePointContextSelection, setRoutePointContextSelection] = useState(
     () => emptyRoutePointContextSelection(),
   );
@@ -1236,6 +1237,7 @@ export function LivingAtlasApp({
             focusColor={focusPresentation.journey?.lightColor}
             journeyRoutes={routes}
             activeJourneyRouteId={draftRoute?.id ?? activeJourneyId}
+            mediaCoverHint={storyGlobeCover}
             temporalReveal={isMobileV2 || globeFocusMode
               ? {
                 journeys: timeCursor.reveal.journeyProgress,
@@ -1780,6 +1782,7 @@ export function LivingAtlasApp({
           initialSnapState={storyInitialSnapState}
           focusVisibleControlOnOpen={storyFocusVisibleControlOnOpen}
           onObservationChange={handleStoryObservationChange}
+          onGlobeCoverChange={setStoryGlobeCover}
           onClose={(source) => closeJourneyStory(source ?? null)}
           onNavigate={(id) => {
             claimPlaybackReturnIntent();

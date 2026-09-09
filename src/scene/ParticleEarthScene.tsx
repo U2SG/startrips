@@ -130,6 +130,13 @@ import {
   type GeoProjectionFrame,
 } from "./projection";
 import type { ParticleAnchorFrame } from "./detailedEarthModel";
+import { resolveRenderBudget, type ResolvedRenderBudget } from "./renderBudget";
+import {
+  globeRenderStateRunsScene,
+  resolveGlobeRenderState,
+  type GlobeRenderState,
+  type GlobeVisibilityInput,
+} from "./globeVisibility";
 import { disposeSceneGraph, useThreeScene } from "./useThreeScene";
 import {
   resolveGlobeSemanticZoom,
@@ -145,8 +152,8 @@ import {
 } from "./terrainRelief";
 
 export const QUALITY_PROFILE = {
-  low: { particleCount: 12_000, maxDpr: 1 },
-  high: { particleCount: 28_000, maxDpr: Number.POSITIVE_INFINITY },
+  low: { particleCount: 12_000, maxDpr: 1, maxDrawingBufferPixels: 1_500_000 },
+  high: { particleCount: 28_000, maxDpr: 2, maxDrawingBufferPixels: 4_000_000 },
 } as const;
 
 export const MAX_RENDERED_JOURNEYS = 64;
@@ -1237,6 +1244,12 @@ interface ParticleEarthSceneProps {
    * owner from `useCompactMobileLayout()`. The scene must not infer it.
    */
   compactMobileLayout?: boolean;
+  /** #247: product-state visibility input; never inferred from per-frame DOM rectangles. */
+  visibilityHint?: {
+    opaqueMediaCover: boolean;
+    coverTransitionActive: boolean;
+    earthDiveOverlapActive?: boolean;
+  };
 }
 
 interface LandGeometry {
@@ -1577,6 +1590,7 @@ export function ParticleEarthScene({
   wheelToZoom = true,
   reduceMotion = false,
   compactMobileLayout = false,
+  visibilityHint = { opaqueMediaCover: false, coverTransitionActive: false },
   rotationYOverride,
 }: ParticleEarthSceneProps) {
   const [ready, setReady] = useState(false);
@@ -1603,6 +1617,7 @@ export function ParticleEarthScene({
   const latestWheelToZoom = useRef(wheelToZoom);
   const latestRotationYOverride = useRef(rotationYOverride);
   const latestCompactMobileLayout = useRef(compactMobileLayout);
+  const latestVisibilityHint = useRef(visibilityHint);
   latestMode.current = mode;
   latestQuality.current = quality;
   latestFocusPoint.current = focusPoint;
@@ -1626,6 +1641,7 @@ export function ParticleEarthScene({
   latestWheelToZoom.current = wheelToZoom;
   latestRotationYOverride.current = rotationYOverride;
   latestCompactMobileLayout.current = compactMobileLayout;
+  latestVisibilityHint.current = visibilityHint;
 
   const { hostRef, controllerRef } = useThreeScene((host) => {
     let disposed = false;
@@ -1634,6 +1650,10 @@ export function ParticleEarthScene({
     let currentMode = latestMode.current;
     let currentQuality = latestQuality.current;
     let currentCompactMobileLayout = latestCompactMobileLayout.current;
+    let currentVisibilityHint = latestVisibilityHint.current;
+    let currentRenderState: GlobeRenderState = "rendering";
+    let resolvedRenderBudget: ResolvedRenderBudget = { effectiveDpr: 1, drawingBufferPixels: 1, drawingBufferWidth: 1, drawingBufferHeight: 1 };
+    let lastFrameDeltaMs = 0;
     let qualityBuildRevision = 0;
     const targetSize = new Vector2();
     const scene = new Scene();
@@ -1696,9 +1716,20 @@ export function ParticleEarthScene({
       powerPreference: "low-power",
       premultipliedAlpha: false,
     });
+    const applyRendererBudget = () => {
+      resolvedRenderBudget = resolveRenderBudget({
+        viewportWidth: targetSize.x,
+        viewportHeight: targetSize.y,
+        deviceDpr: window.devicePixelRatio,
+        qualityProfile: QUALITY_PROFILE[currentQuality],
+      });
+      renderer.setPixelRatio(resolvedRenderBudget.effectiveDpr);
+    };
+    const initialBounds = host.getBoundingClientRect();
+    targetSize.set(Math.max(1, initialBounds.width), Math.max(1, initialBounds.height));
+    applyRendererBudget();
     renderer.outputColorSpace = SRGBColorSpace;
     renderer.setClearColor(new Color(0x020807), 0);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, QUALITY_PROFILE[currentQuality].maxDpr));
     renderer.domElement.dataset.threeScene = "particle-earth";
     host.dataset.quality = currentQuality;
     host.appendChild(renderer.domElement);
@@ -1745,6 +1776,9 @@ export function ParticleEarthScene({
         manualFocusOwner: boolean;
         quality: keyof typeof QUALITY_PROFILE;
         pixelRatio: number;
+        drawingBufferPixels: number;
+        renderState: GlobeRenderState;
+        lastFrameDeltaMs: number;
         particleCount: number;
         particleBaseCount: number;
         particleRefinementCount: number;
@@ -1786,6 +1820,9 @@ export function ParticleEarthScene({
       manualFocusOwner: manualFocusRevision !== null,
       quality: currentQuality,
       pixelRatio: renderer.getPixelRatio(),
+      drawingBufferPixels: resolvedRenderBudget.drawingBufferPixels,
+      renderState: currentRenderState,
+      lastFrameDeltaMs,
       particleCount: particleGeometry?.getAttribute("position")?.count ?? 0,
       particleBaseCount: particleGeometry?.getAttribute("position")?.count ?? 0,
       particleRefinementCount: activeRefinementLayer
@@ -4290,9 +4327,7 @@ export function ParticleEarthScene({
     const resize = () => {
       const bounds = host.getBoundingClientRect();
       targetSize.set(Math.max(1, bounds.width), Math.max(1, bounds.height));
-      renderer.setPixelRatio(
-        Math.min(window.devicePixelRatio, QUALITY_PROFILE[currentQuality].maxDpr),
-      );
+      applyRendererBudget();
       renderer.setSize(targetSize.x, targetSize.y, false);
       routeVectorLayer.setAttribute(
         "viewBox",
@@ -4514,9 +4549,11 @@ export function ParticleEarthScene({
     };
 
     const render = (now: number) => {
+      animationFrame = 0;
       if (disposed) return;
       const elapsedDelta = Math.min(0.25, Math.max(0, (now - lastTime) / 1000));
       const delta = Math.min(0.05, elapsedDelta);
+      lastFrameDeltaMs = delta * 1_000;
       lastTime = now;
       const target = GLOBE_MODE_CONFIG[currentMode];
       const audioEnergy = reduceMotion
@@ -5021,30 +5058,72 @@ export function ParticleEarthScene({
       }
 
       renderer.render(scene, camera);
+      const interactionActive = activePointers.size > 0
+        || rotationVelocityX !== 0 || rotationVelocityY !== 0
+        || now < wheelInteractionUntil;
+      currentRenderState = resolveGlobeRenderState({
+        documentVisible: !document.hidden,
+        opaqueMediaCover: currentVisibilityHint.opaqueMediaCover,
+        coverTransitionActive: currentVisibilityHint.coverTransitionActive,
+        focusFlightActive,
+        interactionActive,
+        earthDiveOverlapActive: Boolean(currentVisibilityHint.earthDiveOverlapActive),
+      });
+      if (globeRenderStateRunsScene(currentRenderState)) {
+        refinementBuildGuard.setVisible(true);
+        coastlineRefinementBuildGuard.setVisible(true);
+        animationFrame = requestAnimationFrame(render);
+      } else {
+        refinementBuildGuard.setVisible(false);
+        coastlineRefinementBuildGuard.setVisible(false);
+        requestedRefinementCacheKey = null;
+        requestedCoastlineCacheKey = null;
+        refinementBuildState = "paused";
+        coastlineRefinementState = "paused";
+      }
+    };
+
+    const wakeRenderLoop = () => {
+      if (disposed || animationFrame !== 0 || document.hidden) return;
+      lastTime = performance.now();
+      lastFrameDeltaMs = 0;
+      lastCoastlineRefinementSampleAt = Number.NEGATIVE_INFINITY;
+      lastRefinementViewSampleAt = Number.NEGATIVE_INFINITY;
+      refinementBuildGuard.setVisible(true);
+      coastlineRefinementBuildGuard.setVisible(true);
       animationFrame = requestAnimationFrame(render);
     };
 
-    const onVisibilityChange = () => {
-      if (document.hidden) {
-        refinementBuildGuard.setVisible(false);
-        requestedRefinementCacheKey = null;
-        refinementBuildState = "paused";
-        coastlineRefinementBuildGuard.setVisible(false);
-        requestedCoastlineCacheKey = null;
-        coastlineRefinementState = "paused";
+    const pauseRenderLoop = (state: GlobeRenderState) => {
+      currentRenderState = state;
+      refinementBuildGuard.setVisible(false);
+      requestedRefinementCacheKey = null;
+      refinementBuildState = "paused";
+      coastlineRefinementBuildGuard.setVisible(false);
+      requestedCoastlineCacheKey = null;
+      coastlineRefinementState = "paused";
+      if (animationFrame !== 0) {
         cancelAnimationFrame(animationFrame);
-      } else {
-        refinementBuildGuard.setVisible(true);
-        requestedRefinementCacheKey = null;
-        refinementBuildState = "idle";
-        coastlineRefinementBuildGuard.setVisible(true);
-        requestedCoastlineCacheKey = null;
-        coastlineRefinementState = "idle";
-        lastCoastlineRefinementSampleAt = Number.NEGATIVE_INFINITY;
-        lastRefinementViewSampleAt = Number.NEGATIVE_INFINITY;
-        lastTime = performance.now();
-        animationFrame = requestAnimationFrame(render);
+        animationFrame = 0;
       }
+    };
+
+    const updateRenderLoopVisibility = () => {
+      const state = resolveGlobeRenderState({
+        documentVisible: !document.hidden,
+        opaqueMediaCover: currentVisibilityHint.opaqueMediaCover,
+        coverTransitionActive: currentVisibilityHint.coverTransitionActive,
+        focusFlightActive: isFocusFlightActive(pointFocusSettling, routeFocusSettling),
+        interactionActive: activePointers.size > 0 || rotationVelocityX !== 0 || rotationVelocityY !== 0 || performance.now() < wheelInteractionUntil,
+        earthDiveOverlapActive: Boolean(currentVisibilityHint.earthDiveOverlapActive),
+      });
+      currentRenderState = state;
+      if (globeRenderStateRunsScene(state)) wakeRenderLoop();
+      else pauseRenderLoop(state);
+    };
+
+    const onVisibilityChange = () => {
+      updateRenderLoopVisibility();
     };
     document.addEventListener("visibilitychange", onVisibilityChange);
 
@@ -5052,7 +5131,7 @@ export function ParticleEarthScene({
 
     applyFocusPoint(latestFocusPoint.current);
     applyJourneyRoutes(latestJourneyRoutes.current);
-    animationFrame = requestAnimationFrame(render);
+    updateRenderLoopVisibility();
 
     return {
       setQuality(nextQuality: keyof typeof QUALITY_PROFILE) {
@@ -5168,6 +5247,7 @@ export function ParticleEarthScene({
           delete host.dataset.routeFocusLon;
           delete host.dataset.routeFocusZoom;
         }
+        updateRenderLoopVisibility();
       },
       setCompactMobileLayout(compact: boolean) {
         if (currentCompactMobileLayout === compact) return;
@@ -5197,6 +5277,10 @@ export function ParticleEarthScene({
       // fades the whole trail); a journey/point absent from the maps (or an
       // undefined map after leaving focus mode) RESETS to full visibility so
       // rewind state never leaks into the normal home view.
+      setVisibilityHint(nextVisibilityHint: ParticleEarthSceneProps["visibilityHint"]) {
+        currentVisibilityHint = nextVisibilityHint ?? { opaqueMediaCover: false, coverTransitionActive: false };
+        updateRenderLoopVisibility();
+      },
       setTemporalReveal(reveal?: {
         journeys: ReadonlyMap<string, number>;
         points: ReadonlyMap<string, number>;
@@ -5309,6 +5393,10 @@ export function ParticleEarthScene({
   useEffect(() => {
     controllerRef.current?.setCompactMobileLayout(compactMobileLayout);
   }, [compactMobileLayout, controllerRef]);
+
+  useEffect(() => {
+    controllerRef.current?.setVisibilityHint(visibilityHint);
+  }, [controllerRef, visibilityHint.opaqueMediaCover, visibilityHint.coverTransitionActive, visibilityHint.earthDiveOverlapActive]);
 
   useEffect(() => {
     if (!ready) return;

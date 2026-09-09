@@ -278,11 +278,26 @@ describe("ParticleEarthScene contracts", () => {
       "focusPoint",
     ];
     expect(Object.keys(GLOBE_MODE_CONFIG)).toEqual(modes);
-    expect(QUALITY_PROFILE.low).toEqual({ particleCount: 12_000, maxDpr: 1 });
+    expect(QUALITY_PROFILE.low).toEqual({ particleCount: 12_000, maxDpr: 1, maxDrawingBufferPixels: 1_500_000 });
     expect(QUALITY_PROFILE.high).toEqual({
       particleCount: 28_000,
-      maxDpr: Number.POSITIVE_INFINITY,
+      maxDpr: 2,
+      maxDrawingBufferPixels: 4_000_000,
     });
+  });
+
+  it("routes initial and resize DPR through the single render-budget resolver", () => {
+    const source = readFileSync(new URL("./ParticleEarthScene.tsx", import.meta.url), "utf8");
+    expect(source.match(/resolveRenderBudget\(/g)?.length).toBe(1);
+    expect(source).not.toMatch(/Math\.min\(window\.devicePixelRatio/);
+    expect(source).toMatch(/renderer\.setPixelRatio\(resolvedRenderBudget\.effectiveDpr\)/);
+  });
+
+  it("keeps visibility suspension on the existing hidden-tab lifecycle and removes the listener on dispose", () => {
+    const source = readFileSync(new URL("./ParticleEarthScene.tsx", import.meta.url), "utf8");
+    expect(source).toContain('document.addEventListener("visibilitychange", onVisibilityChange)');
+    expect(source).toContain('document.removeEventListener("visibilitychange", onVisibilityChange)');
+    expect(source).toMatch(/lastTime = performance\.now\(\);\s+lastFrameDeltaMs = 0;/);
   });
 
   it("allows full globe rotation", () => {

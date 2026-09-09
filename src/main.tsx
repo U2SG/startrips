@@ -134,6 +134,7 @@ function JourneyRoutesQaPreview() {
   // that point. The preview owns the pick the product owns so the QA lane can
   // measure the claim against where the globe actually lands.
   const [pickedPoint, setPickedPoint] = useState<{ lat: number; lon: number } | null>(null);
+  const [qaVisibilityHint, setQaVisibilityHint] = useState({ opaqueMediaCover: false, coverTransitionActive: false });
   const activeRoute = globeQaRoutes.find((route) => route.id === activeRouteId) ?? null;
   const qaParams = new URLSearchParams(window.location.search);
   const requestedLatRaw = qaParams.get("qaFocusLat");
@@ -145,6 +146,7 @@ function JourneyRoutesQaPreview() {
     lon: Number.isFinite(requestedLon) ? requestedLon : 110,
   };
   const qaQuality = qaParams.get("qaQuality") === "high" ? "high" : "low";
+  const renderBudgetQa = qaParams.get("qaRenderBudget") === "1";
   return (
     <main className="living-atlas">
       <div className="living-atlas__globe">
@@ -171,6 +173,7 @@ function JourneyRoutesQaPreview() {
           wheelToZoom
           reduceMotion={new URLSearchParams(window.location.search).get("qaMotion") !== "animate"}
           compactMobileLayout={compactMobileLayout}
+          visibilityHint={qaVisibilityHint}
         />
       </div>
       <div
@@ -183,6 +186,14 @@ function JourneyRoutesQaPreview() {
           gap: 6,
         }}
       >
+        {renderBudgetQa ? (
+          <>
+            <button type="button" data-qa-render-visibility="partial" onClick={() => setQaVisibilityHint({ opaqueMediaCover: false, coverTransitionActive: false })}>partial</button>
+            <button type="button" data-qa-render-visibility="transition" onClick={() => setQaVisibilityHint({ opaqueMediaCover: true, coverTransitionActive: true })}>transition</button>
+            <button type="button" data-qa-render-visibility="covered" onClick={() => setQaVisibilityHint({ opaqueMediaCover: true, coverTransitionActive: false })}>covered</button>
+            <button type="button" data-qa-render-visibility="reveal" onClick={() => setQaVisibilityHint({ opaqueMediaCover: false, coverTransitionActive: false })}>reveal</button>
+          </>
+        ) : null}
         {globeQaRoutes.map((route) => (
           <button
             key={route.id}

@@ -5196,6 +5196,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
     height: 100svh;
     max-height: 100svh;
     border-radius: 0;
+    background: #020809;
   }
 
   .journey-story__sheet-handle {
