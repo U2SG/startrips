@@ -16,14 +16,14 @@ on:
   pull_request_review_comment:
     types: [created, edited, deleted]
 
-concurrency:
-  # One readiness state machine per PR. Never allow an older sign-off run and a
-  # newer invalidation run to write the same commit-status context concurrently.
-  group: merge-readiness-${{ github.event.pull_request.number }}
-  # Newer PR/review activity is authoritative and cancels any older controller.
-  cancel-in-progress: true
+# Do not use Actions concurrency cancellation here. Cancelled controller jobs remain
+# attached to the PR head and make GitHub render an otherwise-green merged PR with a
+# red aggregate check. Instead every event completes normally, while the controller
+# proves that its run is still the newest run for this PR head before mutating the
+# shared label/status state. Superseded runs therefore become successful no-ops.
 
 permissions:
+  actions: read
   contents: read
   checks: read
   statuses: write
@@ -39,6 +39,8 @@ jobs:
       GH_REPO: ${{ github.repository }}
       PR_NUMBER: ${{ github.event.pull_request.number }}
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      HEAD_REF: ${{ github.event.pull_request.head.ref }}
+      RUN_ID: ${{ github.run_id }}
       STATUS_TARGET_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
       - name: Defer stacked PRs until they target main
@@ -52,17 +54,60 @@ jobs:
           !(github.event_name == 'pull_request' &&
             github.event.action == 'labeled' &&
             github.event.label.name == 'merge-ready')
-        env:
-          HAS_MERGE_READY: ${{ contains(github.event.pull_request.labels.*.name, 'merge-ready') }}
         run: |
           set -euo pipefail
 
-          if [[ "$HAS_MERGE_READY" == "true" ]]; then
+          controller_is_authoritative() {
+            local live_head newer_runs
+
+            live_head=$(gh api "repos/$GH_REPO/pulls/$PR_NUMBER" --jq '.head.sha')
+            if [[ "$live_head" != "$HEAD_SHA" ]]; then
+              echo "Superseded controller: live PR head is $live_head, event head was $HEAD_SHA."
+              return 1
+            fi
+
+            newer_runs=$(gh api --paginate --slurp \
+              --method GET \
+              "repos/$GH_REPO/actions/workflows/merge-readiness.yml/runs" \
+              -f per_page=100 \
+              -f branch="$HEAD_REF" \
+              | jq --arg sha "$HEAD_SHA" --argjson run_id "$RUN_ID" '
+                  [.[].workflow_runs[]
+                    | select(.head_sha == $sha and .id > $run_id)]
+                  | length')
+            if [[ "$newer_runs" != "0" ]]; then
+              echo "Superseded controller: $newer_runs newer readiness run(s) already exist for $HEAD_SHA."
+              return 1
+            fi
+
+            return 0
+          }
+
+          if ! controller_is_authoritative; then
+            echo "A newer PR/review event owns readiness; finishing this older run as a successful no-op."
+            exit 0
+          fi
+
+          live_merge_ready=$(gh api \
+            "repos/$GH_REPO/issues/$PR_NUMBER/labels" \
+            --jq 'any(.[]; .name == "merge-ready")')
+          if [[ "$live_merge_ready" == "true" ]]; then
+            # Re-check immediately before the destructive label mutation so an
+            # already-created newer event wins even if this run started first.
+            if ! controller_is_authoritative; then
+              echo "A newer event arrived before label invalidation; leaving it to the newer controller."
+              exit 0
+            fi
             gh api \
               --method DELETE \
               "repos/$GH_REPO/issues/$PR_NUMBER/labels/merge-ready" \
               --silent
             echo "Removed stale merge-ready sign-off."
+          fi
+
+          if ! controller_is_authoritative; then
+            echo "A newer event arrived before pending status publication; leaving it to the newer controller."
+            exit 0
           fi
 
           gh api \
@@ -87,6 +132,32 @@ jobs:
         run: |
           set -euo pipefail
 
+          controller_is_authoritative() {
+            local live_head newer_runs
+
+            live_head=$(gh api "repos/$GH_REPO/pulls/$PR_NUMBER" --jq '.head.sha')
+            if [[ "$live_head" != "$HEAD_SHA" ]]; then
+              echo "Superseded controller: live PR head is $live_head, event head was $HEAD_SHA."
+              return 1
+            fi
+
+            newer_runs=$(gh api --paginate --slurp \
+              --method GET \
+              "repos/$GH_REPO/actions/workflows/merge-readiness.yml/runs" \
+              -f per_page=100 \
+              -f branch="$HEAD_REF" \
+              | jq --arg sha "$HEAD_SHA" --argjson run_id "$RUN_ID" '
+                  [.[].workflow_runs[]
+                    | select(.head_sha == $sha and .id > $run_id)]
+                  | length')
+            if [[ "$newer_runs" != "0" ]]; then
+              echo "Superseded controller: $newer_runs newer readiness run(s) already exist for $HEAD_SHA."
+              return 1
+            fi
+
+            return 0
+          }
+
           reject_gate() {
             local description="$1"
             gh api \
@@ -104,6 +175,33 @@ jobs:
             echo "merge-readiness rejected: $description"
             exit 0
           }
+
+          repair_pending() {
+            local description="$1"
+            local live_label
+            live_label=$(gh api \
+              "repos/$GH_REPO/issues/$PR_NUMBER/labels" \
+              --jq 'any(.[]; .name == "merge-ready")')
+            if [[ "$live_label" == "true" ]]; then
+              gh api \
+                --method DELETE \
+                "repos/$GH_REPO/issues/$PR_NUMBER/labels/merge-ready" \
+                --silent
+            fi
+            gh api \
+              --method POST \
+              "repos/$GH_REPO/statuses/$HEAD_SHA" \
+              -f state=pending \
+              -f context=merge-readiness \
+              -f description="$description" \
+              -f target_url="$STATUS_TARGET_URL" \
+              --silent
+          }
+
+          if ! controller_is_authoritative; then
+            echo "A newer PR/review event owns readiness; finishing this older sign-off as a successful no-op."
+            exit 0
+          fi
 
           if [[ "$IS_DRAFT" == "true" ]]; then
             reject_gate 'Draft pull request is not merge-ready'
@@ -146,6 +244,15 @@ jobs:
             reject_gate "$unresolved unresolved review conversation(s) remain"
           fi
 
+          # A newer workflow event must win before this run can publish success.
+          # This replaces Actions cancellation as the serialization authority, so
+          # superseded controllers end green/no-op instead of leaving cancelled
+          # check-runs attached to the PR head.
+          if ! controller_is_authoritative; then
+            echo "A newer event arrived during sign-off verification; refusing stale success."
+            exit 0
+          fi
+
           live_merge_ready=$(gh api \
             "repos/$GH_REPO/issues/$PR_NUMBER/labels" \
             --jq 'any(.[]; .name == "merge-ready")')
@@ -163,23 +270,23 @@ jobs:
             -f target_url="$STATUS_TARGET_URL" \
             --silent
 
-          # Close the tiny precheck/write window as well. If a newer invalidation
-          # removed the label while success was being posted, repair the shared
-          # context back to pending instead of leaving stale green readiness.
+          # Close both post-write races: a newer controller event can appear after
+          # the precheck, and a newer invalidation can remove the label while the
+          # success POST is in flight. Either case repairs the shared context back
+          # to pending instead of leaving stale green readiness.
+          if ! controller_is_authoritative; then
+            repair_pending 'Newer review/PR activity invalidated sign-off'
+            echo "A newer controller appeared during final sign-off; readiness repaired to pending."
+            exit 0
+          fi
+
           live_merge_ready_after=$(gh api \
             "repos/$GH_REPO/issues/$PR_NUMBER/labels" \
             --jq 'any(.[]; .name == "merge-ready")')
           if [[ "$live_merge_ready_after" != "true" ]]; then
-            gh api \
-              --method POST \
-              "repos/$GH_REPO/statuses/$HEAD_SHA" \
-              -f state=pending \
-              -f context=merge-readiness \
-              -f description='Newer review/PR activity invalidated sign-off' \
-              -f target_url="$STATUS_TARGET_URL" \
-              --silent
+            repair_pending 'Newer review/PR activity invalidated sign-off'
             echo "A newer invalidation raced final sign-off; readiness repaired to pending."
             exit 0
           fi
 
-          echo "merge-ready applies to $HEAD_SHA, ci / verify passed, and all review conversations are resolved."
+          echo "merge-ready applies to $HEAD_SHA, ci / verify passed, all review conversations are resolved, and no newer controller event exists."
