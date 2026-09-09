@@ -9,6 +9,7 @@ import {
   type ReverseLocationOptions,
 } from "./location-search";
 import {
+  namesSamePlace,
   resolveEnglishPlaceQuery,
   type PlaceNameAliasResolver,
 } from "./place-name-aliases";
@@ -130,13 +131,13 @@ function toLocationResult(feature: PhotonFeature): LocationSearchResult | null {
 
 /**
  * Whether the provider's own answer already names the place that was asked
- * for. A fuzzy hit that merely happens to be bilingual does not count, so an
- * exonym still earns its English round trip.
+ * for. A fuzzy hit that merely happens to be bilingual, or merely contains
+ * the query inside a different name, does not count — so an exonym still
+ * earns its English round trip.
  */
 function namesQuery(result: LocationSearchResult, query: string) {
-  const needle = query.toLocaleLowerCase();
   return [result.label, result.labelLocal, result.labelEnglish].some(
-    (label) => (label ?? "").toLocaleLowerCase().includes(needle),
+    (label) => namesSamePlace(label ?? "", query),
   );
 }
 
