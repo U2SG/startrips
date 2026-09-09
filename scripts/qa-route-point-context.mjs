@@ -106,12 +106,15 @@ async function openFocusAtlas() {
   const pageErrors = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
   await stubAtlasApi(page);
+  // This lane intentionally omits qaLite=1: the lightweight globe-chrome
+  // fixture replaces ParticleEarthScene with a static QA placeholder, while
+  // #291 must exercise the real route-marker raycaster activation path.
   await page.goto(
-    `${origin}/?qaState=living-atlas&qaMode=globe-chrome&qaLite=1`,
+    `${origin}/?qaState=living-atlas&qaMode=globe-chrome`,
     { waitUntil: "domcontentloaded" },
   );
   await page.locator(".living-atlas__active").waitFor({ state: "visible", timeout: 20_000 });
-  await page.locator(".particle-earth-scene[data-scene-ready=true]").waitFor({ state: "visible", timeout: 20_000 });
+  await page.locator(".particle-earth-scene[data-scene-ready=true]").waitFor({ state: "visible", timeout: 30_000 });
   await page.locator(".living-atlas__globe-focus").click();
   await page.waitForFunction(() => document.querySelector(".living-atlas")?.getAttribute("data-globe-focus") === "on");
   await page.waitForTimeout(80);
