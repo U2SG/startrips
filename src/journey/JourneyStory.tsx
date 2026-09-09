@@ -1587,8 +1587,10 @@ export function JourneyStory({
     currentPlacementAnalysisScope.routePointMembershipKey,
     currentPlacementAnalysisScope.valid,
   ]);
-  useLayoutEffect(() => () => {
-    placementAnalysisAuthorityRef.current?.dispose();
+  useLayoutEffect(() => {
+    const authority = placementAnalysisAuthorityRef.current;
+    authority?.resume(placementAnalysisScopeRef.current);
+    return () => authority?.dispose();
   }, []);
 
   useEffect(() => {

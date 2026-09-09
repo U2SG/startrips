@@ -1584,6 +1584,22 @@ describe("placement analysis supersession (#113)", () => {
     expect(authority.isCurrent(intent, scope)).toBe(false);
   });
 
+  it("reactivates with a fresh revision after StrictMode cleanup/setup replay", () => {
+    const authority = createPlacementAnalysisAuthority();
+    const current = withPoints(journey, ["p1"]);
+    const scope = placementAnalysisScope([current], current.id, "p1");
+    authority.syncScope(scope);
+    const preReplayIntent = authority.start(scope);
+
+    authority.dispose();
+    expect(authority.isCurrent(preReplayIntent, scope)).toBe(false);
+
+    authority.resume(scope);
+    expect(authority.isCurrent(preReplayIntent, scope)).toBe(false);
+    const postReplayIntent = authority.start(scope);
+    expect(authority.isCurrent(postReplayIntent, scope)).toBe(true);
+  });
+
   it("keeps the unchanged #86 current-scope happy path authoritative", () => {
     const authority = createPlacementAnalysisAuthority();
     const current = withPoints(journey, ["p1"]);

@@ -69,6 +69,14 @@ export function createPlacementAnalysisAuthority() {
       revision += 1;
       currentScope = null;
     },
+    resume(scope: PlacementAnalysisScope) {
+      // React StrictMode replays effect cleanup/setup in development. Cleanup
+      // still revokes every intent, while setup explicitly reactivates this
+      // same component-owned authority with a fresh revision/scope.
+      disposed = false;
+      revision += 1;
+      currentScope = scope;
+    },
     isCurrent(intent: PlacementAnalysisIntent, scope: PlacementAnalysisScope) {
       return !disposed
         && intent.revision === revision
