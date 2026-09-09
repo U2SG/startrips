@@ -547,6 +547,34 @@ describe("Route Point context integration (#291)", () => {
   });
 });
 
+describe("Quick Recap over-budget choice (ST-011)", () => {
+  const appSource = readFileSync(new URL("./LivingAtlasApp.tsx", import.meta.url), "utf8");
+
+  it("stops before playback-entry, soundtrack preparation, or Full Playback ownership", () => {
+    const branchStart = appSource.indexOf('if (!quickRecap && preparation.fallbackReason === "over-budget")');
+    const branchEnd = appSource.indexOf("if (!quickRecap) {", branchStart + 1);
+    const branch = appSource.slice(branchStart, branchEnd);
+    const playbackEntryStart = appSource.indexOf("const continuingPending =", branchStart);
+
+    expect(branchStart).toBeGreaterThan(0);
+    expect(branch).toContain("setPlaybackOverBudgetChoiceJourneyId(journeyId)");
+    expect(branch).toContain("setPlaybackModeMenuJourneyId(journeyId)");
+    expect(branch).toContain("return;");
+    expect(branch).not.toContain('mode = "full"');
+    expect(branch).not.toContain("cachedSoundtrackRead");
+    expect(branch).not.toContain("prefetchSoundtrackRead");
+    expect(playbackEntryStart).toBeGreaterThan(branchEnd);
+  });
+
+  it("offers an explicit accessible Full Playback action while preserving no-visual-media fallback", () => {
+    expect(appSource).toContain('data-quick-recap-fallback-message="over-budget"');
+    expect(appSource).toContain('data-quick-recap-fallback="over-budget"');
+    expect(appSource).toContain('aria-label="完整播放"');
+    expect(appSource).toContain("当前回顾时长放不下所有必要的旅程点。");
+    expect(appSource).toContain("这段旅程还没有可用于快速回顾的照片或视频，已切换为完整播放。");
+  });
+});
+
 describe("playbackEntryNeedsPreparation (PR #24 review)", () => {
   it("starts a silent journey immediately instead of waiting for soundtrack preparation", () => {
     expect(playbackEntryNeedsPreparation(playbackJourney, null)).toBe(false);

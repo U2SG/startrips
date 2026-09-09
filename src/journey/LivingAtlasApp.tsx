@@ -535,6 +535,7 @@ export function LivingAtlasApp({
     mode: "full" | "quick-recap";
     fallbackMessage: string | null;
   } | null>(null);
+  const [playbackOverBudgetChoiceJourneyId, setPlaybackOverBudgetChoiceJourneyId] = useState<string | null>(null);
   const previousPlaybackPendingRef = useRef<typeof playbackPendingMode>(null);
   const [playbackFallbackMessage, setPlaybackFallbackMessage] = useState<string | null>(null);
   const [playbackReleaseFocusRevision, setPlaybackReleaseFocusRevision] = useState(0);
@@ -788,6 +789,7 @@ export function LivingAtlasApp({
   }, [activeJourney?.id]);
   useEffect(() => {
     setPlaybackModeMenuJourneyId(null);
+    setPlaybackOverBudgetChoiceJourneyId(null);
   }, [activeJourney?.id]);
 
   const journeyRail = useMemo(() => [...journeys].reverse(), [journeys]);
@@ -1078,19 +1080,6 @@ export function LivingAtlasApp({
   ) {
     const journey = journeys.find((candidate) => candidate.id === journeyId) ?? null;
     if (!journey) return;
-    const continuingPending = playbackPendingMode?.journeyId === journeyId
-      && playbackEntryRef.current?.journeyId === journeyId;
-    const entryRevision = continuingPending
-      ? playbackEntryRef.current!.intentRevision
-      : claimPlaybackReturnIntent();
-    playbackEntryRef.current = capturePlaybackEntryForContext(
-      journeyId,
-      storyJourneyId,
-      storyRoutePointId,
-      storyObservationRef.current,
-      entryRevision,
-    );
-
     let mode = requestedMode;
     let quickRecap: PreparedQuickRecapPlayback | null = null;
     let fallbackMessage = carriedFallbackMessage;
@@ -1103,15 +1092,35 @@ export function LivingAtlasApp({
         homeNarrativeContext: homeNarrativeContextForJourney(journey),
       });
       quickRecap = preparation.playback;
+      if (!quickRecap && preparation.fallbackReason === "over-budget") {
+        setPlaybackQuickRecap(null);
+        setPlaybackFallbackMessage("当前回顾时长放不下所有必要的旅程点。");
+        setPlaybackPendingMode(null);
+        setPlaybackOverBudgetChoiceJourneyId(journeyId);
+        setPlaybackModeMenuJourneyId(journeyId);
+        return;
+      }
       if (!quickRecap) {
         mode = "full";
-        fallbackMessage = preparation.fallbackReason === "over-budget"
-          ? "这段旅程的必选回忆超过快速回顾时长，已切换为完整播放。"
-          : "这段旅程还没有可用于快速回顾的照片或视频，已切换为完整播放。";
+        fallbackMessage = "这段旅程还没有可用于快速回顾的照片或视频，已切换为完整播放。";
       }
     } else if (!carriedFallbackMessage) {
       fallbackMessage = null;
     }
+    setPlaybackOverBudgetChoiceJourneyId(null);
+
+    const continuingPending = playbackPendingMode?.journeyId === journeyId
+      && playbackEntryRef.current?.journeyId === journeyId;
+    const entryRevision = continuingPending
+      ? playbackEntryRef.current!.intentRevision
+      : claimPlaybackReturnIntent();
+    playbackEntryRef.current = capturePlaybackEntryForContext(
+      journeyId,
+      storyJourneyId,
+      storyRoutePointId,
+      storyObservationRef.current,
+      entryRevision,
+    );
 
     const cachedRead = cachedSoundtrackRead(journey);
     if (playbackEntryNeedsPreparation(journey, cachedRead)) {
@@ -1513,20 +1522,43 @@ export function LivingAtlasApp({
                   }
                 }}
               >
-                <button
-                  type="button"
-                  data-playback-mode-option="quick-recap"
-                  onClick={() => startPlayback(activeJourney.id, "quick-recap")}
-                >
-                  <strong>快速回顾</strong><span>约 45 秒 · 照片优先</span>
-                </button>
-                <button
-                  type="button"
-                  data-playback-mode-option="full"
-                  onClick={() => startPlayback(activeJourney.id, "full")}
-                >
-                  <strong>完整播放</strong><span>保留全部媒体与章节</span>
-                </button>
+                {playbackOverBudgetChoiceJourneyId === activeJourney.id ? (
+                  <>
+                    <span role="status" data-quick-recap-fallback-message="over-budget">
+                      当前回顾时长放不下所有必要的旅程点。
+                    </span>
+                    <button
+                      type="button"
+                      data-playback-mode-option="full"
+                      data-quick-recap-fallback="over-budget"
+                      aria-label="完整播放"
+                      onClick={() => startPlayback(
+                        activeJourney.id,
+                        "full",
+                        "快速回顾无法容纳所有必要的旅程点，已按你的选择开始完整播放。",
+                      )}
+                    >
+                      <strong>完整播放</strong><span>保留全部媒体与章节</span>
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      data-playback-mode-option="quick-recap"
+                      onClick={() => startPlayback(activeJourney.id, "quick-recap")}
+                    >
+                      <strong>快速回顾</strong><span>约 45 秒 · 照片优先</span>
+                    </button>
+                    <button
+                      type="button"
+                      data-playback-mode-option="full"
+                      onClick={() => startPlayback(activeJourney.id, "full")}
+                    >
+                      <strong>完整播放</strong><span>保留全部媒体与章节</span>
+                    </button>
+                  </>
+                )}
               </div>
             ) : null}
           </div>
