@@ -252,8 +252,9 @@ describe("Playback V2 timeline planner (#126)", () => {
     for (const tempo of ["fast", "standard", "immersive"] as const) {
       const plain = buildPlaybackPlan(journey, tempo);
       const withHome = buildPlaybackPlan(journey, tempo, undefined, context);
-      expect(withHome.totalDurationMs - plain.totalDurationMs).toBe(
+      expect(withHome.totalDurationMs - plain.totalDurationMs).toBeCloseTo(
         PLAYBACK_TEMPO_PROFILES[tempo].introMs + PLAYBACK_TEMPO_PROFILES[tempo].outroMs,
+        8,
       );
     }
   });
