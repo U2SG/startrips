@@ -160,6 +160,10 @@ jobs:
 
           reject_gate() {
             local description="$1"
+            if ! controller_is_authoritative; then
+              echo "A newer event owns readiness; stale rejection '$description' is a successful no-op."
+              exit 0
+            fi
             gh api \
               --method POST \
               "repos/$GH_REPO/statuses/$HEAD_SHA" \
@@ -176,17 +180,15 @@ jobs:
             exit 0
           }
 
-          repair_pending() {
+          repair_pending_if_owned() {
             local description="$1"
-            local live_label
-            live_label=$(gh api \
-              "repos/$GH_REPO/issues/$PR_NUMBER/labels" \
-              --jq 'any(.[]; .name == "merge-ready")')
-            if [[ "$live_label" == "true" ]]; then
-              gh api \
-                --method DELETE \
-                "repos/$GH_REPO/issues/$PR_NUMBER/labels/merge-ready" \
-                --silent
+            local latest_target
+            latest_target=$(gh api \
+              "repos/$GH_REPO/commits/$HEAD_SHA/status" \
+              --jq '[.statuses[] | select(.context == "merge-readiness")][0].target_url // ""')
+            if [[ "$latest_target" != "$STATUS_TARGET_URL" ]]; then
+              echo "A newer controller already owns merge-readiness; this run will not overwrite it."
+              return 0
             fi
             gh api \
               --method POST \
@@ -270,13 +272,13 @@ jobs:
             -f target_url="$STATUS_TARGET_URL" \
             --silent
 
-          # Close both post-write races: a newer controller event can appear after
-          # the precheck, and a newer invalidation can remove the label while the
-          # success POST is in flight. Either case repairs the shared context back
-          # to pending instead of leaving stale green readiness.
+          # Close both post-write races. If a newer controller appeared after the
+          # precheck, only repair this run's own status; never remove a label that
+          # may already belong to the newer event. If the newer controller has
+          # already written its own status, leave that newer state untouched.
           if ! controller_is_authoritative; then
-            repair_pending 'Newer review/PR activity invalidated sign-off'
-            echo "A newer controller appeared during final sign-off; readiness repaired to pending."
+            repair_pending_if_owned 'Newer review/PR activity invalidated sign-off'
+            echo "A newer controller appeared during final sign-off; stale readiness was repaired only if this run still owned it."
             exit 0
           fi
 
@@ -284,8 +286,8 @@ jobs:
             "repos/$GH_REPO/issues/$PR_NUMBER/labels" \
             --jq 'any(.[]; .name == "merge-ready")')
           if [[ "$live_merge_ready_after" != "true" ]]; then
-            repair_pending 'Newer review/PR activity invalidated sign-off'
-            echo "A newer invalidation raced final sign-off; readiness repaired to pending."
+            repair_pending_if_owned 'Newer review/PR activity invalidated sign-off'
+            echo "A newer invalidation raced final sign-off; stale readiness was repaired only if this run still owned it."
             exit 0
           fi
 
