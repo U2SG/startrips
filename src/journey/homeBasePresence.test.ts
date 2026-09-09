@@ -43,7 +43,7 @@ describe("resolveHomeBasePresence (#233)", () => {
     const [resolved] = resolveHomeBasePresence({
       periods: [CURRENT_HOME],
       semanticZoom: "regional",
-      timeline: { kind: "ordinary" },
+      timeline: { kind: "ordinary", date: "2026-09-10" },
     });
     expect(resolved).toMatchObject({
       periodId: CURRENT_HOME.id,
@@ -51,6 +51,38 @@ describe("resolveHomeBasePresence (#233)", () => {
       relativeWeight: 1,
       labelVisible: true,
     });
+  });
+
+  it("keeps the effective old Home current until a future move boundary", () => {
+    const moveDate = "2030-01-01";
+    const oldHome: HomeBasePeriod = { ...CURRENT_HOME, id: "home-old", endedOn: moveDate };
+    const futureHome: HomeBasePeriod = {
+      ...CURRENT_HOME,
+      id: "home-future",
+      label: "东京",
+      latitude: 35.6762,
+      longitude: 139.6503,
+      startedOn: moveDate,
+      endedOn: null,
+    };
+    const before = resolveHomeBasePresence({
+      periods: [oldHome, futureHome],
+      semanticZoom: "regional",
+      timeline: { kind: "ordinary", date: "2029-12-31" },
+    });
+    const boundary = resolveHomeBasePresence({
+      periods: [oldHome, futureHome],
+      semanticZoom: "regional",
+      timeline: { kind: "ordinary", date: moveDate },
+    });
+    expect(before.map(({ periodId, presence }) => [periodId, presence])).toEqual([
+      [oldHome.id, "current"],
+      [futureHome.id, "absent"],
+    ]);
+    expect(boundary.map(({ periodId, presence }) => [periodId, presence])).toEqual([
+      [oldHome.id, "absent"],
+      [futureHome.id, "current"],
+    ]);
   });
 
   it("reveals an ended period only when the timeline reaches its life span", () => {
@@ -74,7 +106,7 @@ describe("resolveHomeBasePresence (#233)", () => {
     const resolved = resolveHomeBasePresence({
       periods: [HISTORICAL_HOME, { ...HISTORICAL_HOME, id: "home-hk", startedOn: "2018-01-01", endedOn: "2022-01-01" }],
       semanticZoom: "local",
-      timeline: { kind: "all-time" },
+      timeline: { kind: "all-time", date: "2026-09-10" },
     });
     expect(resolved.map((item) => item.presence)).toEqual(["trace", "trace"]);
     expect(resolved.every((item) => item.labelVisible === false)).toBe(true);
@@ -83,7 +115,7 @@ describe("resolveHomeBasePresence (#233)", () => {
   it("is deterministic and side-effect free for the same input", () => {
     const periods = [Object.freeze({ ...HISTORICAL_HOME }), Object.freeze({ ...CURRENT_HOME })] as const;
     const before = JSON.stringify(periods);
-    const input = { periods, semanticZoom: "regional" as const, timeline: { kind: "all-time" as const } };
+    const input = { periods, semanticZoom: "regional" as const, timeline: { kind: "all-time" as const, date: "2026-09-10" } };
     expect(resolveHomeBasePresence(input)).toEqual(resolveHomeBasePresence(input));
     expect(JSON.stringify(periods)).toBe(before);
   });
@@ -98,7 +130,7 @@ describe("resolveHomeBasePresence (#233)", () => {
       const resolved = resolveHomeBasePresence({
         periods: [CURRENT_HOME],
         semanticZoom,
-        timeline: { kind: "ordinary" },
+        timeline: { kind: "ordinary", date: "2026-09-10" },
       })[0];
       expect(resolved.anchor.toArray()).toEqual(canonical.toArray());
       expect(resolved.anchor.length()).toBeCloseTo(GEOGRAPHIC_SURFACE_RADIUS, 12);

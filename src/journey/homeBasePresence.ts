@@ -2,7 +2,7 @@ import { MOTION_REDUCED_QUERY } from "../motion/preferences";
 import { motionTokens } from "../motion/tokens";
 import { GEOGRAPHIC_SURFACE_RADIUS, routePointAnchor } from "../scene/geo";
 import type { GlobeSemanticZoom } from "../scene/semanticZoom";
-import { homeBasePeriodCoversDate, type HomeBasePeriod } from "./homeBase";
+import { homeBasePeriodCoversDate, resolveHomeBaseForDate, type HomeBasePeriod } from "./homeBase";
 
 export type HomeBasePresenceLevel = "current" | "period-context" | "trace" | "absent";
 
@@ -27,9 +27,9 @@ export const SELECTED_JOURNEY_EMPHASIS_WEIGHT = motionTokens.glow.coreOpacity;
 export const HOME_BASE_LAYER_EMPHASIS_CEILING = motionTokens.glow.haloOpacity;
 
 export type HomeBaseTimelineContext =
-  | { kind: "ordinary" }
+  | { kind: "ordinary"; date: string }
   | { kind: "date"; date: string }
-  | { kind: "all-time" };
+  | { kind: "all-time"; date: string };
 
 export type ResolvedHomeBasePresence = {
   periodId: string;
@@ -46,12 +46,24 @@ function labelVisibleAtZoom(semanticZoom: GlobeSemanticZoom): boolean {
   return semanticZoom !== "planet";
 }
 
-function presenceForPeriod(period: HomeBasePeriod, timeline: HomeBaseTimelineContext): HomeBasePresenceLevel {
-  const current = period.endedOn === null;
-  if (timeline.kind === "ordinary") return current ? "current" : "absent";
-  if (timeline.kind === "all-time") return current ? "current" : "trace";
-  if (!homeBasePeriodCoversDate(period, timeline.date)) return "absent";
-  return current ? "current" : "period-context";
+export function resolveEffectiveCurrentHomeBase(
+  periods: readonly HomeBasePeriod[],
+  date: string,
+): HomeBasePeriod | null {
+  return resolveHomeBaseForDate(periods, date);
+}
+
+function presenceForPeriod(
+  period: HomeBasePeriod,
+  timeline: HomeBaseTimelineContext,
+  effectiveCurrentId: string | null,
+): HomeBasePresenceLevel {
+  if (timeline.kind === "ordinary") return period.id === effectiveCurrentId ? "current" : "absent";
+  if (timeline.kind === "all-time") {
+    if (period.id === effectiveCurrentId) return "current";
+    return period.startedOn < timeline.date ? "trace" : "absent";
+  }
+  return homeBasePeriodCoversDate(period, timeline.date) ? "period-context" : "absent";
 }
 
 export function resolvedHomeBaseEmphasisWeight(presence: HomeBasePresenceLevel): number {
@@ -67,8 +79,11 @@ export function resolveHomeBasePresence(input: {
   semanticZoom: GlobeSemanticZoom;
   timeline: HomeBaseTimelineContext;
 }): ResolvedHomeBasePresence[] {
+  const effectiveCurrentId = input.timeline.kind === "date"
+    ? null
+    : resolveEffectiveCurrentHomeBase(input.periods, input.timeline.date)?.id ?? null;
   return input.periods.map((period) => {
-    const presence = presenceForPeriod(period, input.timeline);
+    const presence = presenceForPeriod(period, input.timeline, effectiveCurrentId);
     const labelVisible = (presence === "current" || presence === "period-context")
       && labelVisibleAtZoom(input.semanticZoom);
     return {

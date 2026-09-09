@@ -1,5 +1,6 @@
 import { GEOGRAPHIC_SURFACE_RADIUS, routePointAnchor } from "../scene/geo";
 import type { HomeBasePeriod } from "./homeBase";
+import { resolveEffectiveCurrentHomeBase } from "./homeBasePresence";
 
 export type HomeBaseCameraIntent = {
   kind: "initial-home";
@@ -15,14 +16,15 @@ export type HomeBaseCameraIntent = {
  * and selected Journey focus always outranks Home.
  */
 export function resolveHomeBaseCameraIntent(input: {
-  currentPeriod: HomeBasePeriod | null;
+  periods: readonly HomeBasePeriod[];
+  effectiveDate: string;
   atlasIsFresh: boolean;
   hasManualCameraInteraction: boolean;
   selectedJourneyId: string | null;
 }): HomeBaseCameraIntent | null {
-  const period = input.currentPeriod;
   if (!input.atlasIsFresh || input.hasManualCameraInteraction || input.selectedJourneyId !== null) return null;
-  if (!period || period.endedOn !== null) return null;
+  const period = resolveEffectiveCurrentHomeBase(input.periods, input.effectiveDate);
+  if (!period) return null;
   return {
     kind: "initial-home",
     homeBaseId: period.id,
