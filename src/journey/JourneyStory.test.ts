@@ -16,6 +16,7 @@ import {
   journeyDeleteDescription,
   mobileStoryExpandedForLayout,
   mobileStoryHistoryLayers,
+  storyGlobeCoverState,
   mediaForRoutePoint,
   mediaForUploadRefreshScope,
   mediaMoveUndoForSelection,
@@ -1122,6 +1123,17 @@ describe("JourneyStory", () => {
     expect(mediaNavigation).toBeDefined();
     expect(mediaNavigation?.match(/<button\b/g)).toHaveLength(2);
     expect(mediaNavigation).not.toContain("1 / 2");
+  });
+
+  it("reports only expanded/fullscreen Story as opaque globe cover while transitions stay live", () => {
+    expect(storyGlobeCoverState({ mobileLayout: true, mobileStoryExpanded: false, fullscreen: false, coverTransitionActive: false }))
+      .toEqual({ opaqueMediaCover: false, coverTransitionActive: false });
+    expect(storyGlobeCoverState({ mobileLayout: true, mobileStoryExpanded: true, fullscreen: false, coverTransitionActive: true }))
+      .toEqual({ opaqueMediaCover: true, coverTransitionActive: true });
+    expect(storyGlobeCoverState({ mobileLayout: false, mobileStoryExpanded: true, fullscreen: false, coverTransitionActive: false }))
+      .toEqual({ opaqueMediaCover: false, coverTransitionActive: false });
+    expect(storyGlobeCoverState({ mobileLayout: true, mobileStoryExpanded: false, fullscreen: true, coverTransitionActive: true }))
+      .toEqual({ opaqueMediaCover: true, coverTransitionActive: false });
   });
 
   it("clears expanded Story state across a compact breakpoint round trip", () => {

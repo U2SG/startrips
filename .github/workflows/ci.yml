@@ -118,6 +118,8 @@ jobs:
             command: pnpm qa:globe-focus-chrome
           - name: route-point-context
             command: pnpm qa:route-point-context
+          - name: globe-render-budget
+            command: pnpm qa:globe-render-budget
           - name: guest-share
             command: pnpm qa:guest-share
           - name: owner-share

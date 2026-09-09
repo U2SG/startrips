@@ -233,6 +233,7 @@ type JourneyStoryProps = {
   initialSnapState?: "in-context" | "expanded";
   focusVisibleControlOnOpen?: boolean;
   onObservationChange?: (observation: StoryLogicalObservation | null) => void;
+  onGlobeCoverChange?: (state: StoryGlobeCoverState) => void;
   onClose: (sharedSource?: HTMLElement | null) => void;
   onNavigate: (journeyId: string) => void;
   /** Absent when the view has no edit capability (#200 shared mode). */
@@ -290,6 +291,19 @@ function formatUploadError(message: string) {
 
 export function mobileStoryExpandedForLayout(mobileLayout: boolean, expanded: boolean) {
   return mobileLayout ? expanded : false;
+}
+
+export type StoryGlobeCoverState = { opaqueMediaCover: boolean; coverTransitionActive: boolean };
+
+export function storyGlobeCoverState({
+  mobileLayout, mobileStoryExpanded, fullscreen, coverTransitionActive,
+}: {
+  mobileLayout: boolean; mobileStoryExpanded: boolean; fullscreen: boolean; coverTransitionActive: boolean;
+}): StoryGlobeCoverState {
+  return {
+    opaqueMediaCover: fullscreen || mobileStoryExpandedForLayout(mobileLayout, mobileStoryExpanded),
+    coverTransitionActive: !fullscreen && coverTransitionActive,
+  };
 }
 
 export function mobileStoryHistoryLayers({
@@ -864,6 +878,7 @@ export function JourneyStory({
   initialSnapState = "in-context",
   focusVisibleControlOnOpen = false,
   onObservationChange,
+  onGlobeCoverChange,
   onClose,
   onNavigate,
   onEdit,
@@ -977,9 +992,21 @@ export function JourneyStory({
   playingRef.current = playing;
   const mobileLayout = useCompactMobileLayout();
   const [mobileStoryExpanded, setMobileStoryExpanded] = useState(initialSnapState === "expanded");
+  const [mobileStoryCoverTransitionActive, setMobileStoryCoverTransitionActive] = useState(false);
   const storySheetGestureRef = useRef<{ startY: number; pointerId: number } | null>(null);
   const storySheetGestureConsumedRef = useRef(false);
   const [fullscreen, setFullscreen] = useState(false);
+  useEffect(() => {
+    onGlobeCoverChange?.(storyGlobeCoverState({
+      mobileLayout,
+      mobileStoryExpanded,
+      fullscreen,
+      coverTransitionActive: mobileStoryCoverTransitionActive,
+    }));
+  }, [fullscreen, mobileLayout, mobileStoryCoverTransitionActive, mobileStoryExpanded, onGlobeCoverChange]);
+  useEffect(() => () => {
+    onGlobeCoverChange?.({ opaqueMediaCover: false, coverTransitionActive: false });
+  }, [onGlobeCoverChange]);
   // #7: fullscreen controls fade out after idle; any pointer/key activity
   // brings them back. Mobile starts fully immersive and reveals controls only
   // after an explicit interaction.
@@ -1219,6 +1246,7 @@ export function JourneyStory({
   }
 
   function collapseMobileStory() {
+    setMobileStoryCoverTransitionActive(true);
     setMobileStoryExpanded(false);
   }
 
@@ -1227,6 +1255,7 @@ export function JourneyStory({
       storySheetGestureConsumedRef.current = false;
       return;
     }
+    setMobileStoryCoverTransitionActive(true);
     setMobileStoryExpanded((current) => !current);
   }
 
@@ -1244,8 +1273,13 @@ export function JourneyStory({
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
     const dy = event.clientY - gesture.startY;
     if (Math.abs(dy) >= 32) storySheetGestureConsumedRef.current = true;
-    if (dy <= -32) setMobileStoryExpanded(true);
-    else if (dy >= 32) setMobileStoryExpanded(false);
+    if (dy <= -32) {
+      setMobileStoryCoverTransitionActive(true);
+      setMobileStoryExpanded(true);
+    } else if (dy >= 32) {
+      setMobileStoryCoverTransitionActive(true);
+      setMobileStoryExpanded(false);
+    }
   }
 
   function handleStorySheetPointerCancel(event: ReactPointerEvent<HTMLButtonElement>) {
@@ -1549,6 +1583,7 @@ export function JourneyStory({
     setOrderPending(false);
     setOrderMessage("");
     setPlaying(false);
+    setMobileStoryCoverTransitionActive(false);
     setMobileStoryExpanded(initialSnapState === "expanded");
     exitFullscreen();
     setMobileManageMode(false);
@@ -1894,6 +1929,7 @@ export function JourneyStory({
   useEffect(() => {
     if (!mobileLayout) {
       if (mobileManageMode) setDesktopEditing(true);
+      setMobileStoryCoverTransitionActive(false);
       setMobileStoryExpanded((expanded) => mobileStoryExpandedForLayout(false, expanded));
       setMobileMediaMenuOpen(false);
       return;
@@ -3751,6 +3787,12 @@ export function JourneyStory({
         aria-modal={storyModal ? "true" : undefined}
         aria-labelledby="journey-story-title"
         onWheel={scrollCopyFromMedia}
+        onTransitionEnd={(event) => {
+          if (event.target !== event.currentTarget) return;
+          if (event.propertyName === "height" || event.propertyName === "max-height") {
+            setMobileStoryCoverTransitionActive(false);
+          }
+        }}
       >
         {mobileLayout ? (
           <button

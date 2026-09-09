@@ -145,6 +145,7 @@ export type LivingAtlasGlobeProps = {
   globeFocusMode?: boolean;
   reduceMotion?: boolean;
   cinematicActive?: boolean;
+  mediaCoverHint?: { opaqueMediaCover: boolean; coverTransitionActive: boolean };
 };
 
 type PersistentEarthStage = "idle" | "login" | "handoff" | "atlas";
@@ -168,6 +169,7 @@ type AtlasEarthPresentation = Pick<
   | "onJourneyRoutePointActivate"
   | "onGlobePointPick"
   | "reduceMotion"
+  | "mediaCoverHint"
 > & {
   /**
    * #252: the Dive controller lives with the Atlas globe, but the camera lives
@@ -180,6 +182,7 @@ type AtlasEarthPresentation = Pick<
   zoomIntent?: { zoom: number; revision: number };
   /** Who owns camera and gesture input on this frame. */
   inputOwner?: EarthDiveOwner;
+  earthDiveOverlapActive?: boolean;
 };
 
 type PersistentEarthContextValue = {
@@ -269,6 +272,11 @@ export function PersistentEarthProvider({ children }: { children: ReactNode }) {
                   reduceMotion={atlas?.reduceMotion ?? loginPresentation.reduceMotion}
                   rotationYOverride={atlas ? undefined : GLOBE_MODE_CONFIG.particleSphere.rotationY}
                   compactMobileLayout={compactMobileLayout}
+                  visibilityHint={{
+                    opaqueMediaCover: atlas?.mediaCoverHint?.opaqueMediaCover ?? false,
+                    coverTransitionActive: atlas?.mediaCoverHint?.coverTransitionActive ?? false,
+                    earthDiveOverlapActive: atlas?.earthDiveOverlapActive ?? false,
+                  }}
                 />
               )
             ) : null}
@@ -297,6 +305,7 @@ export function LivingAtlasGlobe({
   globeFocusMode = false,
   reduceMotion,
   cinematicActive = false,
+  mediaCoverHint,
 }: LivingAtlasGlobeProps) {
   const persistentEarth = usePersistentEarth();
   const [detailLanguage, setDetailLanguage] = useState<DetailedEarthLanguage>("zh");
@@ -491,11 +500,18 @@ export function LivingAtlasGlobe({
       onParticleAnchorFrame: handleParticleAnchorFrame,
       zoomIntent: zoomIntent ?? undefined,
       inputOwner: dive.owner,
+      earthDiveOverlapActive: dive.stage === "prewarm" || dive.stage === "blending",
+      mediaCoverHint: {
+        opaqueMediaCover: Boolean(mediaCoverHint?.opaqueMediaCover),
+        coverTransitionActive: Boolean(mediaCoverHint?.coverTransitionActive),
+      },
       reduceMotion,
     });
   }, [
     activeJourneyRouteId,
+    cinematicActive,
     dive.owner,
+    dive.stage,
     focusColor,
     focusPoint,
     focusRevision,
@@ -510,6 +526,8 @@ export function LivingAtlasGlobe({
     onJourneyRoutePointActivate,
     persistentEarth,
     reduceMotion,
+    mediaCoverHint?.opaqueMediaCover,
+    mediaCoverHint?.coverTransitionActive,
     temporalReveal,
   ]);
 
