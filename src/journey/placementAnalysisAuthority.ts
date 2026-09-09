@@ -5,6 +5,7 @@ export type PlacementAnalysisScope = {
   routePointId: string | null;
   journeyMembershipKey: string;
   routePointMembershipKey: string;
+  placementTruthKey: string;
   valid: boolean;
 };
 
@@ -25,11 +26,28 @@ export function placementAnalysisScope(
   const routePointMembershipKey = journeys
     .map((candidate) => `${candidate.id}:${candidate.routePoints.map((point) => point.id).join(",")}`)
     .join("\u001f");
+  // #113 CFAA: media-placement scoring consumes semantic truth, not only
+  // stable IDs. A same-ID edit to Journey dates or Route Point location/time
+  // must supersede metadata analysis captured against the old snapshot.
+  const placementTruthKey = journeys
+    .map((candidate) => [
+      candidate.id,
+      candidate.startedOn ?? "",
+      candidate.endedOn ?? "",
+      ...candidate.routePoints.flatMap((point) => [
+        point.id,
+        String(point.latitude),
+        String(point.longitude),
+        point.occurredAt ?? "",
+      ]),
+    ].join("\u001e"))
+    .join("\u001f");
   return {
     journeyId,
     routePointId,
     journeyMembershipKey,
     routePointMembershipKey,
+    placementTruthKey,
     valid: Boolean(current && (routePointId === null || current.routePoints.some((point) => point.id === routePointId))),
   };
 }
@@ -40,6 +58,7 @@ function sameScope(a: PlacementAnalysisScope | null, b: PlacementAnalysisScope) 
     && a.routePointId === b.routePointId
     && a.journeyMembershipKey === b.journeyMembershipKey
     && a.routePointMembershipKey === b.routePointMembershipKey
+    && a.placementTruthKey === b.placementTruthKey
     && a.valid === b.valid);
 }
 

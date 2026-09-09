@@ -1585,6 +1585,7 @@ export function JourneyStory({
     currentPlacementAnalysisScope.routePointId,
     currentPlacementAnalysisScope.journeyMembershipKey,
     currentPlacementAnalysisScope.routePointMembershipKey,
+    currentPlacementAnalysisScope.placementTruthKey,
     currentPlacementAnalysisScope.valid,
   ]);
   useLayoutEffect(() => {

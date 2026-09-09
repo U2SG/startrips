@@ -1562,6 +1562,44 @@ describe("placement analysis supersession (#113)", () => {
     expect(authority.isCurrent(intent, deleted)).toBe(false);
   });
 
+  it("invalidates same-ID analysis when placement-relevant Journey or Route Point truth changes", () => {
+    const authority = createPlacementAnalysisAuthority();
+    const current = {
+      ...withPoints(journey, ["p1"]),
+      startedOn: "2026-01-01",
+      endedOn: "2026-01-03",
+      routePoints: [{ ...point("p1"), latitude: 22.54, longitude: 114.06, occurredAt: "2026-01-02T10:00:00Z" }],
+    };
+    const scope = placementAnalysisScope([current], current.id, "p1");
+    authority.syncScope(scope);
+    const oldIntent = authority.start(scope);
+
+    const changed = {
+      ...current,
+      endedOn: "2026-01-04",
+      routePoints: [{ ...current.routePoints[0], latitude: 22.60, longitude: 114.12, occurredAt: "2026-01-02T12:00:00Z" }],
+    };
+    const changedScope = placementAnalysisScope([changed], changed.id, "p1");
+    expect(changedScope.journeyMembershipKey).toBe(scope.journeyMembershipKey);
+    expect(changedScope.routePointMembershipKey).toBe(scope.routePointMembershipKey);
+    expect(changedScope.placementTruthKey).not.toBe(scope.placementTruthKey);
+    authority.syncScope(changedScope);
+    const newerIntent = authority.start(changedScope);
+
+    const staleReview = vi.fn();
+    const staleUpload = vi.fn();
+    const staleFinallyClear = vi.fn();
+    if (authority.isCurrent(oldIntent, changedScope)) {
+      staleReview();
+      staleUpload();
+      staleFinallyClear();
+    }
+    expect(staleReview).not.toHaveBeenCalled();
+    expect(staleUpload).not.toHaveBeenCalled();
+    expect(staleFinallyClear).not.toHaveBeenCalled();
+    expect(authority.isCurrent(newerIntent, changedScope)).toBe(true);
+  });
+
   it("invalidates when a Route Point on another suggestion-target Journey disappears", () => {
     const authority = createPlacementAnalysisAuthority();
     const current = withPoints(journey, ["p1"]);
