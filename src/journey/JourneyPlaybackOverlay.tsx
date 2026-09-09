@@ -702,18 +702,25 @@ export function JourneyPlaybackOverlay({
   }, [director.getIntentRevision]);
 
   // Signed reads follow the same window, through the same single read path, so
-  // a decode is never scheduled for an asset that has no URL yet. This is
-  // strictly fewer concurrent reads than before, when arriving at a stop
-  // requested every asset of the chapter at once.
-  useEffect(() => {
-    if (!allowPrefetchDispatch(plannedPrefetchRevision)) return;
-    for (const assetId of prefetchAssetIds) {
-      overlayRef.current?.setAttribute(
-        "data-playback-prefetch-dispatch-intent",
-        String(plannedPrefetchRevision),
-      );
-      loadMediaRead(assetId);
-    }
+  // a decode is never scheduled for an asset that has no URL yet. Planning is
+  // committed first, then actual request dispatch yields to the microtask
+  // boundary. A seek/next/back/tempo/rebuild intent that wins in that boundary
+  // bumps the director ref synchronously, so this queued old window is observed
+  // and suppressed instead of issuing one last obsolete request. The newer
+  // render queues its own live-revision dispatch, preventing a suppress-only
+  // deadlock while keeping the delay below a frame.
+  useLayoutEffect(() => {
+    const assetIds = [...prefetchAssetIds];
+    queueMicrotask(() => {
+      if (!allowPrefetchDispatch(plannedPrefetchRevision)) return;
+      for (const assetId of assetIds) {
+        overlayRef.current?.setAttribute(
+          "data-playback-prefetch-dispatch-intent",
+          String(plannedPrefetchRevision),
+        );
+        loadMediaRead(assetId);
+      }
+    });
   }, [allowPrefetchDispatch, loadMediaRead, plannedPrefetchRevision, prefetchKey]);
 
   // Review P2: decode media AHEAD of display so a chapter never mounts <img>
