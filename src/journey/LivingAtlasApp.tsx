@@ -536,6 +536,7 @@ export function LivingAtlasApp({
     fallbackMessage: string | null;
   } | null>(null);
   const [playbackOverBudgetChoiceJourneyId, setPlaybackOverBudgetChoiceJourneyId] = useState<string | null>(null);
+  const playbackOverBudgetActionRef = useRef<HTMLButtonElement | null>(null);
   const previousPlaybackPendingRef = useRef<typeof playbackPendingMode>(null);
   const [playbackFallbackMessage, setPlaybackFallbackMessage] = useState<string | null>(null);
   const [playbackReleaseFocusRevision, setPlaybackReleaseFocusRevision] = useState(0);
@@ -791,6 +792,13 @@ export function LivingAtlasApp({
     setPlaybackModeMenuJourneyId(null);
     setPlaybackOverBudgetChoiceJourneyId(null);
   }, [activeJourney?.id]);
+  useEffect(() => {
+    setPlaybackOverBudgetChoiceJourneyId(null);
+  }, [activeJourney?.revision]);
+  useEffect(() => {
+    if (!playbackOverBudgetChoiceJourneyId) return;
+    playbackOverBudgetActionRef.current?.focus();
+  }, [playbackOverBudgetChoiceJourneyId]);
 
   const journeyRail = useMemo(() => [...journeys].reverse(), [journeys]);
   const routes = useMemo(() => {
@@ -1528,6 +1536,7 @@ export function LivingAtlasApp({
                       当前回顾时长放不下所有必要的旅程点。
                     </span>
                     <button
+                      ref={playbackOverBudgetActionRef}
                       type="button"
                       data-playback-mode-option="full"
                       data-quick-recap-fallback="over-budget"

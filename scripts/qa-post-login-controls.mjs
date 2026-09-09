@@ -2347,10 +2347,9 @@ async function verifyFinalAcceptanceMobileFlow() {
       await activateControl(overBudgetPlayButton, "over-budget playback mode chooser control");
       const overBudgetMenu = page.locator(".living-atlas__playback-mode-menu");
       await overBudgetMenu.waitFor({ state: "visible", timeout: 5_000 });
-      await activateControl(
-        overBudgetMenu.locator('[data-playback-mode-option="quick-recap"]'),
-        "over-budget quick recap option",
-      );
+      const overBudgetQuickRecapOption = overBudgetMenu.locator('[data-playback-mode-option="quick-recap"]');
+      await overBudgetQuickRecapOption.focus();
+      await page.keyboard.press("Enter");
       await page.waitForFunction(() => (
         Boolean(document.querySelector('[data-quick-recap-fallback-message="over-budget"]'))
         && !document.querySelector(".journey-playback")
@@ -2358,12 +2357,14 @@ async function verifyFinalAcceptanceMobileFlow() {
       const overBudgetDecision = await page.evaluate(() => ({
         message: document.querySelector('[data-quick-recap-fallback-message="over-budget"]')?.textContent?.trim() ?? "",
         fullAction: document.querySelector('[data-quick-recap-fallback="over-budget"]')?.getAttribute("aria-label") ?? "",
+        fullActionFocused: document.activeElement === document.querySelector('[data-quick-recap-fallback="over-budget"]'),
         playbackMounted: Boolean(document.querySelector(".journey-playback")),
         fullModeMounted: Boolean(document.querySelector('.journey-playback[data-playback-mode="full"]')),
       }));
       if (
         !overBudgetDecision.message.includes("放不下所有必要的旅程点")
         || overBudgetDecision.fullAction !== "完整播放"
+        || !overBudgetDecision.fullActionFocused
         || overBudgetDecision.playbackMounted
         || overBudgetDecision.fullModeMounted
       ) {
@@ -2384,6 +2385,13 @@ async function verifyFinalAcceptanceMobileFlow() {
         "close over-budget Full Playback",
       );
       await overBudgetPlayback.waitFor({ state: "detached", timeout: 5_000 });
+      const overBudgetReturnedStory = page.locator(".journey-story");
+      await overBudgetReturnedStory.waitFor({ state: "visible", timeout: 5_000 });
+      await activateControl(
+        overBudgetReturnedStory.locator(".journey-story__close"),
+        "close Story returned from over-budget Full Playback",
+      );
+      await overBudgetReturnedStory.waitFor({ state: "detached", timeout: 5_000 });
       results.push({
         name: `quick-recap-over-budget-explicit-full-${viewportLabel}`,
         ...overBudgetDecision,

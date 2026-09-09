@@ -570,8 +570,17 @@ describe("Quick Recap over-budget choice (ST-011)", () => {
     expect(appSource).toContain('data-quick-recap-fallback-message="over-budget"');
     expect(appSource).toContain('data-quick-recap-fallback="over-budget"');
     expect(appSource).toContain('aria-label="完整播放"');
+    expect(appSource).toContain("ref={playbackOverBudgetActionRef}");
+    expect(appSource).toContain("playbackOverBudgetActionRef.current?.focus()");
     expect(appSource).toContain("当前回顾时长放不下所有必要的旅程点。");
     expect(appSource).toContain("这段旅程还没有可用于快速回顾的照片或视频，已切换为完整播放。");
+  });
+
+  it("invalidates a stale over-budget choice when the same Journey revision changes", () => {
+    const revisionDependency = appSource.indexOf("[activeJourney?.revision]");
+    const resetWindow = appSource.slice(Math.max(0, revisionDependency - 180), revisionDependency + 40);
+    expect(revisionDependency).toBeGreaterThan(0);
+    expect(resetWindow).toContain("setPlaybackOverBudgetChoiceJourneyId(null)");
   });
 });
 
