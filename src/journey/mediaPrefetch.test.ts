@@ -2,8 +2,29 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createDecodeRegistry,
   decodeImageUrl,
+  mediaPrefetchUrlsForRead,
   prefetchWindowFor,
 } from "./mediaPrefetch";
+
+describe("same-asset preview prefetch (#264)", () => {
+  it("warms this asset's preview before the original and refuses a foreign read", () => {
+    const read = {
+      url: "https://media.example/original",
+      preview: {
+        url: "https://media.example/preview",
+        expiresAt: "2026-09-10T04:00:00.000Z",
+        mimeType: "image/jpeg",
+        width: 960,
+        height: 540,
+      },
+    };
+    expect(mediaPrefetchUrlsForRead("asset-a", "asset-a", read)).toEqual([
+      "https://media.example/preview",
+      "https://media.example/original",
+    ]);
+    expect(mediaPrefetchUrlsForRead("asset-a", "asset-b", read)).toEqual([]);
+  });
+});
 
 describe("prefetchWindowFor (#11)", () => {
   it("returns next 1 + previous 1 for manual browsing", () => {

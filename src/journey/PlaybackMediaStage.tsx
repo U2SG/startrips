@@ -14,11 +14,12 @@ import {
 import { StartripsJourneyCue } from "../brand/StartripsBrandMark";
 import { mediaStackOpacity, mediaStackRest } from "./mediaStackMotion";
 import { springElementTo } from "../motion/springElement";
-import type { JourneyMediaAsset } from "./types";
+import { mediaPreviewLayer } from "./mediaPreviewLayer";
+import type { JourneyMediaAsset, MediaPreviewRead } from "./types";
 import "../styles/playback-media-presentation.css";
 
 type SlotIndex = 0 | 1;
-type Slot = { asset: JourneyMediaAsset; url: string; frame: HTMLCanvasElement | null; video: VideoElement | null };
+type Slot = { asset: JourneyMediaAsset; url: string; preview?: MediaPreviewRead; frame: HTMLCanvasElement | null; video: VideoElement | null };
 type Stage = {
   slots: [Slot | null, Slot | null];
   shown: SlotIndex | null;
@@ -29,6 +30,7 @@ type VideoElement = ReactElement<VideoHTMLAttributes<HTMLVideoElement> & { ref?:
 type Props = {
   asset: JourneyMediaAsset;
   url: string | null;
+  preview?: MediaPreviewRead;
   intent: string;
   stepIndex: number;
   imageReady: boolean;
@@ -95,7 +97,7 @@ export function PlaybackMediaStage(props: Props) {
   const [presentedKey, setPresentedKey] = useState("");
   const [movingKey, setMovingKey] = useState("");
   const [failedKey, setFailedKey] = useState("");
-  const requestInput = `${props.intent}:${props.url ?? ""}`;
+  const requestInput = `${props.intent}:${props.url ?? ""}:${props.preview?.url ?? ""}`;
   const requestRevision = useRef({ input: requestInput, revision: 0 });
   if (requestRevision.current.input !== requestInput) {
     requestRevision.current = { input: requestInput, revision: requestRevision.current.revision + 1 };
@@ -132,10 +134,10 @@ export function PlaybackMediaStage(props: Props) {
       ? sameSource && shown !== null ? shown : shown === 0 ? 1 : 0
       : null;
     if (requested !== null && props.url) {
-      nextSlots[requested] = { asset: props.asset, url: props.url, frame: null, video: props.video };
+      nextSlots[requested] = { asset: props.asset, url: props.url, preview: props.preview, frame: null, video: props.video };
     }
     setStage({ slots: nextSlots, shown, requested, intent: props.intent });
-  }, [props.asset.id, props.intent, props.url]);
+  }, [props.asset.id, props.intent, props.preview?.url, props.url]);
 
   const target = stage.requested === null ? null : stage.slots[stage.requested];
   const matches = stage.intent === props.intent && target?.asset.id === props.asset.id && target.url === props.url;
@@ -277,12 +279,29 @@ export function PlaybackMediaStage(props: Props) {
             };
           }
         }
+        const layer = slot ? mediaPreviewLayer({
+          assetId: slot.asset.id,
+          readAssetId: slot.asset.id,
+          read: { url: slot.url, preview: slot.preview },
+          originalReady: stage.shown === index,
+        }) : null;
         return (
           <div key={index} ref={(element) => { slots.current[index] = element; }}
             className="playback-media-presentation__slot"
             data-media-slot={index} data-media-asset={slot?.asset.id}
+            data-media-layer={layer?.kind}
+            data-media-preview-asset={layer?.kind === "preview" ? layer.assetId : undefined}
+            data-media-preview-width={layer?.kind === "preview" ? layer.frame?.width : undefined}
+            data-media-preview-height={layer?.kind === "preview" ? layer.frame?.height : undefined}
             aria-hidden={stage.shown !== index}
-            style={{ transform: mediaStackRest(stage.shown === index ? 0 : 1), zIndex: stage.shown === index ? 2 : 1 }}>
+            style={{
+              transform: mediaStackRest(stage.shown === index ? 0 : 1),
+              zIndex: stage.shown === index ? 2 : 1,
+              backgroundImage: layer?.kind === "preview" ? `url(${JSON.stringify(layer.url)})` : undefined,
+              backgroundSize: "contain",
+              backgroundPosition: "center",
+              backgroundRepeat: "no-repeat",
+            }}>
             {slot?.frame ? <RetainedVideoFrame frame={slot.frame} /> : slot?.asset.mimeType.startsWith("image/") ? (
               <img key={slot.asset.id} ref={(element) => { images.current[index] = element; }}
                 src={slot.url} alt={slot.asset.fileName}

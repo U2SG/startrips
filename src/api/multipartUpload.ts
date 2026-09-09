@@ -1,3 +1,5 @@
+import { prepareMediaPreview, type MediaPreviewSpec, type PreparedMediaPreview } from "../journey/mediaPreviewProduction";
+
 export type UploadedMediaAsset = {
   id: string;
   journeyId: string;
@@ -8,6 +10,7 @@ export type UploadedMediaAsset = {
   mimeType: string;
   bytes: number;
   contentHash?: string | null;
+  previewState?: "none" | "pending" | "ready" | "failed";
 };
 
 type Fetcher = typeof fetch;
@@ -21,6 +24,7 @@ type MultipartUploadOptions = {
   signal?: AbortSignal;
   onProgress?: (progress: { uploadedBytes: number; totalBytes: number }) => void;
   fetcher?: Fetcher;
+  preparePreview?: (file: Blob) => Promise<PreparedMediaPreview>;
 };
 
 type StartedUpload = {
@@ -155,6 +159,61 @@ async function uploadPart(
   throw new Error(`Part ${partNumber} failed`);
 }
 
+type PreviewBeginResponse = {
+  upload: { url: string; headers: Record<string, string>; expiresAt: string };
+  preview: MediaPreviewSpec & { displayWidth?: number; displayHeight?: number };
+};
+
+async function uploadAssetPreviewBestEffort(input: {
+  fetcher: Fetcher;
+  file: Blob;
+  asset: UploadedMediaAsset;
+  signal?: AbortSignal;
+  preparePreview: (file: Blob) => Promise<PreparedMediaPreview>;
+}): Promise<void> {
+  // Completion may deduplicate onto an existing durable asset. A ready preview
+  // already belongs to that same asset, so best-effort derivation must not
+  // replace it with a pending generation that can subsequently fail.
+  if (input.asset.previewState === "ready") return;
+
+  let prepared: PreparedMediaPreview | null = null;
+  try {
+    prepared = await input.preparePreview(input.file);
+    const begun = await apiJson<PreviewBeginResponse>(
+      input.fetcher,
+      `/api/uploads/assets/${encodeURIComponent(input.asset.id)}/preview`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          sourceWidth: prepared.sourceWidth,
+          sourceHeight: prepared.sourceHeight,
+          exifOrientation: prepared.exifOrientation,
+        }),
+        signal: input.signal,
+      },
+    );
+    const preview = await prepared.rasterize(begun.preview);
+    if (preview.size > begun.preview.maxBytes) throw new Error("Preview exceeds issued byte budget");
+    const uploaded = await input.fetcher(begun.upload.url, {
+      method: "PUT",
+      body: preview,
+      headers: begun.upload.headers,
+      signal: input.signal,
+    });
+    if (!uploaded.ok) throw new Error(`Preview upload failed (${uploaded.status})`);
+    await apiJson<{ preview: unknown }>(
+      input.fetcher,
+      `/api/uploads/assets/${encodeURIComponent(input.asset.id)}/preview/complete`,
+      { method: "POST", signal: input.signal },
+    );
+  } catch {
+    // The original is already durable. A preview is a best-effort derivative
+    // and must never roll back or misreport the completed asset.
+  } finally {
+    prepared?.dispose();
+  }
+}
+
 export async function uploadMediaInParts({
   file,
   fileName,
@@ -164,6 +223,7 @@ export async function uploadMediaInParts({
   signal,
   onProgress,
   fetcher = fetch,
+  preparePreview = prepareMediaPreview,
 }: MultipartUploadOptions): Promise<UploadedMediaAsset> {
   if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 6) {
     throw new Error("Upload concurrency must be between 1 and 6");
@@ -237,6 +297,13 @@ export async function uploadMediaInParts({
           signal,
         },
       );
+      await uploadAssetPreviewBestEffort({
+        fetcher,
+        file,
+        asset: result.asset,
+        signal,
+        preparePreview,
+      });
       return result.asset;
     } catch (error) {
       completionError = error;

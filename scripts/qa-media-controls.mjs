@@ -485,6 +485,9 @@ async function createQaPage(path, mediaUrl, {
   reducedMotion = "reduce",
   recordMotion = false,
   rotateReadUrls = false,
+  previewMediaUrl = null,
+  originalResponseDelayMs = 0,
+  videoOriginalResponseDelayMs = null,
   viewport = mobile ? { width: 390, height: 844 } : { width: 1280, height: 800 },
 } = {}) {
   const page = await browser.newPage({
@@ -643,6 +646,17 @@ async function createQaPage(path, mediaUrl, {
     contentType: "application/json",
     body: "null",
   }));
+  const delayedMedia = [
+    [typeof mediaUrl === "string" && mediaUrl.startsWith("/") ? mediaUrl : null, originalResponseDelayMs],
+    [mixedMedia ? tinyVideo : null, videoOriginalResponseDelayMs ?? originalResponseDelayMs],
+  ];
+  for (const [url, delayMs] of delayedMedia) {
+    if (!url || delayMs <= 0) continue;
+    await page.route(`**${url}`, async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      await route.continue();
+    });
+  }
   let releaseBlockedRead = () => undefined;
   const blockedRead = blockedReadAssetId
     ? new Promise((resolve) => { releaseBlockedRead = resolve; })
@@ -665,6 +679,15 @@ async function createQaPage(path, mediaUrl, {
             ? videoMediaUrl
             : rotateReadUrls ? `${photoUrl}?qaRead=${readCount}` : photoUrl,
         expiresAt: new Date(Date.now() + 900_000).toISOString(),
+        ...(previewMediaUrl ? {
+          preview: {
+            url: previewMediaUrl,
+            expiresAt: new Date(Date.now() + 900_000).toISOString(),
+            mimeType: "image/gif",
+            width: 320,
+            height: 180,
+          },
+        } : {}),
       }),
     });
   });
@@ -683,6 +706,89 @@ function record(name, scan, extra = {}) {
 }
 
 try {
+  // #264: both photo and video must paint a preview belonging to that exact
+  // asset while its original is delayed, then replace it in the same physical
+  // page without changing the frame contract.
+  const previewPhoto = await createQaPage("/?qaState=journey-story", motionPhotos[0], {
+    mobile: false,
+    previewMediaUrl: onePixelGif,
+    originalResponseDelayMs: 1_200,
+  });
+  try {
+    const assetId = "00000000-0000-4000-8000-000000000100";
+    const pageSelector = `.journey-story__media ${storyMediaPagesSelector} [data-media-page-id="${assetId}"]`;
+    await previewPhoto.page.waitForFunction(({ pageSelector, assetId }) => {
+      const page = document.querySelector(pageSelector);
+      return page?.getAttribute("data-media-layer") === "preview"
+        && page.getAttribute("data-media-preview-asset") === assetId;
+    }, { pageSelector, assetId });
+    const before = await previewPhoto.page.locator(pageSelector).first().evaluate((page) => {
+      window.__qaPreviewPhotoPage = page;
+      return {
+        asset: page.getAttribute("data-media-preview-asset"),
+        width: Number(page.getAttribute("data-media-preview-width")),
+        height: Number(page.getAttribute("data-media-preview-height")),
+      };
+    });
+    await previewPhoto.page.waitForFunction((pageSelector) => {
+      const page = document.querySelector(pageSelector);
+      return page?.getAttribute("data-media-layer") === "original"
+        && page.getAttribute("data-media-page-ready") === "true";
+    }, pageSelector);
+    const after = await previewPhoto.page.locator(pageSelector).first().evaluate((page) => ({
+      samePage: page === window.__qaPreviewPhotoPage,
+      asset: page.getAttribute("data-media-page-id"),
+      layer: page.getAttribute("data-media-layer"),
+    }));
+    checks.push({ name: "same-asset-preview-photo-handoff", before, after });
+    if (before.asset !== assetId || before.width !== 320 || before.height !== 180
+      || !after.samePage || after.asset !== assetId || after.layer !== "original") failed = true;
+  } finally {
+    await previewPhoto.page.close();
+  }
+
+  const previewVideo = await createQaPage("/?qaState=journey-story&qaMode=mixed-media", motionPhotos[0], {
+    mobile: false,
+    mixedMedia: true,
+    previewMediaUrl: onePixelGif,
+    originalResponseDelayMs: 1_200,
+    videoOriginalResponseDelayMs: 5_000,
+  });
+  try {
+    await waitForStoryPicture(previewVideo.page, "00000000-0000-4000-8000-000000000100");
+    await clickStoryPicture(previewVideo.page, 1);
+    const assetId = "00000000-0000-4000-8000-000000000152";
+    const pageSelector = `.journey-story__media ${storyMediaPagesSelector} [data-media-page-id="${assetId}"]`;
+    await previewVideo.page.waitForFunction(({ pageSelector, assetId }) => {
+      const page = document.querySelector(pageSelector);
+      return page?.getAttribute("data-media-layer") === "preview"
+        && page.getAttribute("data-media-preview-asset") === assetId;
+    }, { pageSelector, assetId });
+    const before = await previewVideo.page.locator(pageSelector).first().evaluate((page) => {
+      window.__qaPreviewVideoPage = page;
+      return {
+        asset: page.getAttribute("data-media-preview-asset"),
+        width: Number(page.getAttribute("data-media-preview-width")),
+        height: Number(page.getAttribute("data-media-preview-height")),
+      };
+    });
+    await previewVideo.page.waitForFunction((pageSelector) => {
+      const page = document.querySelector(pageSelector);
+      return page?.getAttribute("data-media-layer") === "original"
+        && page.getAttribute("data-media-page-ready") === "true";
+    }, pageSelector);
+    const after = await previewVideo.page.locator(pageSelector).first().evaluate((page) => ({
+      samePage: page === window.__qaPreviewVideoPage,
+      asset: page.getAttribute("data-media-page-id"),
+      layer: page.getAttribute("data-media-layer"),
+    }));
+    checks.push({ name: "same-asset-preview-video-handoff", before, after });
+    if (before.asset !== assetId || before.width !== 320 || before.height !== 180
+      || !after.samePage || after.asset !== assetId || after.layer !== "original") failed = true;
+  } finally {
+    await previewVideo.page.close();
+  }
+
   const story = await createQaPage("/?qaState=journey-story", onePixelGif);
   try {
     await story.page.locator(".journey-story").waitFor({ state: "visible" });

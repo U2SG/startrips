@@ -1,3 +1,6 @@
+import type { PrivateMediaRead } from "./types";
+import { mediaPreviewPrefetchUrls } from "./mediaPreviewLayer";
+
 // #11 slideshow media prefetch — pure window math and a browser decode
 // registry, kept separate from the React layer so the window logic is unit
 // testable without a DOM.
@@ -9,6 +12,14 @@
 // A URL being ready never implies the image is decoded. The decode registry
 // records the browser-side readiness separately so the slideshow can hold the
 // current frame until the next one is truly ready.
+
+export function mediaPrefetchUrlsForRead(
+  assetId: string,
+  readAssetId: string,
+  read: Pick<PrivateMediaRead, "url" | "preview">,
+): string[] {
+  return mediaPreviewPrefetchUrls(assetId, readAssetId, read);
+}
 
 export type PrefetchWindow = {
   /** Indices to prefetch ahead of the active index. */

@@ -48,6 +48,7 @@ import {
 } from "./journeyApi";
 import { useAtlasView, type AtlasMutations, type UploadJourneyMedia } from "./atlasView";
 import { mediaReadIsFresh } from "./mediaReadRefresh";
+import { mediaPreviewLayer } from "./mediaPreviewLayer";
 import { runSharedElementMorph } from "../motion/primitives/sharedElement";
 import {
   createDecodeRegistry,
@@ -800,6 +801,15 @@ function StoryMediaTile({
 }) {
   const tileRef = useRef<HTMLButtonElement>(null);
   const isVideo = asset.mimeType.startsWith("video/");
+  const [originalReady, setOriginalReady] = useState(false);
+  const readUrl = read?.status === "ready" ? read.url : null;
+  useEffect(() => setOriginalReady(false), [asset.id, readUrl]);
+  const layer = read?.status === "ready" ? mediaPreviewLayer({
+    assetId: asset.id,
+    readAssetId: asset.id,
+    read,
+    originalReady: !isVideo && originalReady,
+  }) : null;
 
   // Every visible tile prefetches its signed read. Images render a thumbnail;
   // video tiles keep the lightweight badge but have the target URL ready so a
@@ -834,6 +844,15 @@ function StoryMediaTile({
           ? `第 ${index + 1} 个媒体 ${asset.fileName}${isCover ? "，当前封面" : ""}`
           : `${selected ? "取消选择" : "选择"} 第 ${index + 1} 个媒体 ${asset.fileName}`}
         data-media-tile-index={index}
+        data-media-layer={layer?.kind}
+        data-media-preview-asset={layer?.kind === "preview" ? layer.assetId : undefined}
+        data-media-preview-width={layer?.kind === "preview" ? layer.frame?.width : undefined}
+        data-media-preview-height={layer?.kind === "preview" ? layer.frame?.height : undefined}
+        style={layer?.kind === "preview" ? {
+          backgroundImage: `url(${JSON.stringify(layer.url)})`,
+          backgroundSize: "cover",
+          backgroundPosition: "center",
+        } : undefined}
         disabled={disabled}
         onClick={(event) => selected === undefined
           ? onSelect(index, event.currentTarget)
@@ -844,7 +863,8 @@ function StoryMediaTile({
             <IconVideo size={20} stroke={1.3} aria-hidden="true" />
           </span>
         ) : read?.status === "ready" ? (
-          <img src={read.url} alt={asset.fileName} loading="lazy" decoding="async" />
+          <img src={read.url} alt={asset.fileName} loading="lazy" decoding="async"
+            onLoad={() => setOriginalReady(true)} />
         ) : (
           <span className="journey-story__media-tile-badge">
             {read?.status === "error" ? "不可用" : "载入中"}
