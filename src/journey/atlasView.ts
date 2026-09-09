@@ -4,6 +4,7 @@ import {
   deleteJourney,
   deleteMedia,
   getPrivateMediaRead,
+  listHomeBasePeriods,
   listJourneys,
   listShares,
   moveJourneyMedia,
@@ -16,6 +17,7 @@ import {
   type JourneyMediaMoveUndo,
 } from "./journeyApi";
 import { uploadJourneyMedia } from "./JourneyComposer";
+import type { HomeBasePeriod } from "./homeBase";
 import type {
   CreatedShareGrant,
   Journey,
@@ -162,6 +164,8 @@ export type AtlasMutations = {
 export type AtlasView = {
   capabilities: AtlasViewCapabilities;
   listJourneys: () => Promise<Journey[]>;
+  /** Owner-private Home history. Shared/guest mode exposes no reader at all. */
+  listHomeBasePeriods: (() => Promise<HomeBasePeriod[]>) | null;
   readMedia: AtlasMediaRead;
   mutations: AtlasMutations | null;
 };
@@ -191,6 +195,7 @@ export function createOwnerAtlasView(
   return {
     capabilities,
     listJourneys: () => listJourneys(),
+    listHomeBasePeriods: () => listHomeBasePeriods(),
     readMedia: (assetId) => getPrivateMediaRead(assetId),
     mutations: createOwnerAtlasMutations(capabilities.canEditJourney),
   };

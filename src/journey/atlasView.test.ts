@@ -13,6 +13,7 @@ import {
 const GUEST_VIEW: AtlasView = {
   capabilities: GUEST_ATLAS_VIEW_CAPABILITIES,
   listJourneys: async () => [],
+  listHomeBasePeriods: null,
   readMedia: async () => ({ url: "signed", expiresAt: "2026-09-05T00:00:00.000Z" }),
   mutations: null,
 };
@@ -56,6 +57,7 @@ describe("owner and guest atlas views", () => {
     const view = createOwnerAtlasView();
     expect(view.capabilities).toEqual(OWNER_ATLAS_VIEW_CAPABILITIES);
     expect(view.mutations).not.toBeNull();
+    expect(view.listHomeBasePeriods).toEqual(expect.any(Function));
     expect(Object.keys(view.mutations ?? {}).sort()).toEqual([
       // #200 phase E: creating, listing and revoking a share are owner calls,
       // so they belong to the same client every other owner write goes through.
@@ -94,6 +96,7 @@ describe("owner and guest atlas views", () => {
     // Not "the buttons are hidden" — there is no object here with a write on
     // it, so nothing under this view can construct one.
     expect(GUEST_VIEW.mutations).toBeNull();
+    expect(GUEST_VIEW.listHomeBasePeriods).toBeNull();
   });
 });
 

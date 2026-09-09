@@ -18,6 +18,7 @@ import {
 import { StartripsJourneyCue, StartripsWordmark } from "../brand/StartripsBrandMark";
 import "../styles/starlight-media.css";
 import { useAtlasView } from "./atlasView";
+import type { HomeNarrativeContext } from "./homeBasePrelude";
 import { PlaybackMediaStage } from "./PlaybackMediaStage";
 import { mediaReadIsFresh } from "./mediaReadRefresh";
 import {
@@ -31,7 +32,6 @@ import {
   type PlaybackStepDurationResolver,
 } from "./useJourneyPlaybackDirector";
 import {
-  buildPlaybackSteps,
   commitPresentedPlaybackPosition,
   committedPlaybackPosition,
   playbackCameraTargetForStep,
@@ -207,6 +207,7 @@ export function JourneyPlaybackOverlay({
   quickRecapPlan,
   quickRecapSourceJourney,
   statusMessage,
+  homeNarrativeContext,
 }: {
   journey: Journey | null;
   onClose: (handoff: { reason: PlaybackReturnReason; position: CommittedPlaybackPosition | null }) => void;
@@ -230,6 +231,7 @@ export function JourneyPlaybackOverlay({
   quickRecapPlan?: AutoEditPlanV1 | null;
   quickRecapSourceJourney?: Journey | null;
   statusMessage?: string | null;
+  homeNarrativeContext?: HomeNarrativeContext | null;
 }) {
   // #194: the one product-level compact-mobile answer, published as an
   // attribute so journey-playback.css never states a breakpoint of its own.
@@ -255,7 +257,7 @@ export function JourneyPlaybackOverlay({
   // video beat that simply owns its own completion.
   const hold = holdReason !== "none" || presentationPending;
   const [videoFallbackAssetId, setVideoFallbackAssetId] = useState<string | null>(null);
-  const director = useJourneyPlaybackDirector(journey, hold, stepDurationResolver);
+  const director = useJourneyPlaybackDirector(journey, hold, stepDurationResolver, homeNarrativeContext);
   const { phase, paused, pause, resume, next, back, replay, seek, exit, steps, stepIndex, tempo, setTempo } = director;
   const globeCoverState = playbackGlobeCoverState(director.step?.kind ?? null, presentationPending);
   useEffect(() => {
@@ -667,10 +669,10 @@ export function JourneyPlaybackOverlay({
   // faster tempo naturally prepares more assets over roughly the same seconds
   // of prepared playback. Deriving it from `stepIndex` alone is what makes a
   // seek, next or back invalidate the old window without any cancellation.
-  const playbackSteps = useMemo(
-    () => journey ? buildPlaybackSteps(journey) : [],
-    [journey],
-  );
+  // Prefetch must share the director's session-frozen topology. Rebuilding from
+  // live Home context here would create a second step index space when Home
+  // hydration resolves after Playback has already started.
+  const playbackSteps = director.steps;
   const mediaById = useMemo(() => {
     const index = new Map<string, JourneyMediaAsset>();
     for (const asset of journey?.media ?? []) index.set(asset.id, asset);
@@ -700,8 +702,8 @@ export function JourneyPlaybackOverlay({
     const holdTarget = playbackHoldTargetMedia(journey, playbackSteps[director.stepIndex]);
     return includePlaybackPrefetchHoldTarget(prefetchWindow.assetIds, holdTarget?.id ?? null);
   }, [director.stepIndex, director.tempo, durationForStep, journey, playbackSteps]);
-  // `playbackSteps` is rebuilt per journey, but the window is a plain array;
-  // the effects below key off its contents so they do not churn per render.
+  // The window is a plain array; the effects below key off its contents so
+  // they do not churn per render.
   const prefetchKey = prefetchAssetIds.join(",");
   const plannedPrefetchRevision = director.intentRevision;
   const allowPrefetchDispatch = useCallback((plannedRevision: number) => {

@@ -1,3 +1,4 @@
+import type { HomeBasePeriod } from "./homeBase";
 import type {
   CreatedShareGrant,
   Journey,
@@ -49,6 +50,15 @@ async function requestJson<T>(
   }
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
+}
+
+export async function listHomeBasePeriods(fetcher: Fetcher = fetch): Promise<HomeBasePeriod[]> {
+  const payload = await requestJson<{ periods: HomeBasePeriod[] }>(
+    "/api/home-bases",
+    { cache: "no-store" },
+    fetcher,
+  );
+  return payload.periods;
 }
 
 export async function listJourneys(fetcher: Fetcher = fetch): Promise<Journey[]> {

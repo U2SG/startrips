@@ -251,6 +251,11 @@ async function createGatewayPage({
       body: JSON.stringify({ journeys: [] }),
     });
   });
+  await gatewayPage.route("**/api/home-bases", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({ periods: [] }),
+  }));
   await gatewayPage.goto(`${origin}${initialPath}`, { waitUntil: "domcontentloaded", timeout: 8_000 });
   if (!initialAuthenticated && waitForAuthCard) {
     await gatewayPage.locator(".auth-card--login-v3").waitFor({ state: "visible", timeout: 4_000 });

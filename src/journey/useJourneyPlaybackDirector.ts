@@ -17,6 +17,7 @@ import {
   type PlaybackStepDurationResolver,
   type PlaybackTempo,
 } from "./journeyPlaybackPlan";
+import type { HomeNarrativeContext } from "./homeBasePrelude";
 import type { Journey } from "./types";
 
 export function consumePlaybackTimerBudget(remainingMs: number, startedAtMs: number, nowMs: number) {
@@ -181,13 +182,32 @@ export function dispatchPlaybackNarrativeIntent(
   return revision;
 }
 
+
+export type PlaybackSessionHomeContextSnapshot = {
+  journeyId: string | null;
+  homeContext?: HomeNarrativeContext | null;
+};
+
+export function resolvePlaybackSessionHomeContextSnapshot(
+  previous: PlaybackSessionHomeContextSnapshot,
+  journey: Journey | null,
+  homeContext?: HomeNarrativeContext | null,
+): PlaybackSessionHomeContextSnapshot {
+  const journeyId = journey?.id ?? null;
+  return previous.journeyId === journeyId
+    ? previous
+    : { journeyId, homeContext };
+}
+
 export type PlaybackPlanScope = {
   journey: Journey | null;
+  homeContext?: HomeNarrativeContext | null;
   resolveStepDuration?: PlaybackStepDurationResolver;
 };
 
 export function playbackPlanScopeChanged(previous: PlaybackPlanScope, next: PlaybackPlanScope) {
   return previous.journey !== next.journey
+    || previous.homeContext !== next.homeContext
     || previous.resolveStepDuration !== next.resolveStepDuration;
 }
 
@@ -204,16 +224,27 @@ export function useJourneyPlaybackDirector(
   journey: Journey | null,
   hold = false,
   resolveStepDuration?: PlaybackStepDurationResolver,
+  homeContext?: HomeNarrativeContext | null,
 ) {
-  const [state, setState] = useState<PlaybackState>(initialPlaybackState);
+  const playbackSessionHomeContextRef = useRef<PlaybackSessionHomeContextSnapshot>({
+    journeyId: journey?.id ?? null,
+    homeContext,
+  });
+  playbackSessionHomeContextRef.current = resolvePlaybackSessionHomeContextSnapshot(
+    playbackSessionHomeContextRef.current,
+    journey,
+    homeContext,
+  );
+  const sessionHomeContext = playbackSessionHomeContextRef.current.homeContext;
+  const [state, setState] = useState<PlaybackState>(() => initialPlaybackState(sessionHomeContext));
   const [tempo, setTempoState] = useState<PlaybackTempo>(PLAYBACK_INITIAL_TEMPO);
   const tempoRef = useRef(tempo);
   tempoRef.current = tempo;
   const intentRevisionRef = useRef(0);
   const prefetchBlockedThroughRevisionRef = useRef<number | null>(null);
   const [, setIntentRenderRevision] = useState(0);
-  const planScopeRef = useRef({ journey, resolveStepDuration });
-  const currentPlanScope = { journey, resolveStepDuration };
+  const planScopeRef = useRef({ journey, homeContext: sessionHomeContext, resolveStepDuration });
+  const currentPlanScope = { journey, homeContext: sessionHomeContext, resolveStepDuration };
   if (playbackPlanScopeChanged(planScopeRef.current, currentPlanScope)) {
     planScopeRef.current = currentPlanScope;
     const revision = advancePlaybackIntentRevision(intentRevisionRef);
@@ -232,9 +263,14 @@ export function useJourneyPlaybackDirector(
   const pendingRemapSeekRef = useRef(false);
   const journeyRef = useRef(journey);
   journeyRef.current = journey;
+  const homeContextRef = useRef(sessionHomeContext);
+  homeContextRef.current = sessionHomeContext;
 
   // The current expanded step, derived from the step index.
-  const steps = journey ? buildPlaybackSteps(journey) : [];
+  const steps = useMemo(
+    () => (journey ? buildPlaybackSteps(journey, sessionHomeContext) : []),
+    [journey, sessionHomeContext],
+  );
   const step: PlaybackStep | undefined = steps[state.stepIndex];
   const completed = isPlaybackTerminalState(state);
 
@@ -242,7 +278,7 @@ export function useJourneyPlaybackDirector(
     setState((current) => {
       const target = journeyRef.current;
       if (!target) return current;
-      return playbackReducer(target, current, control);
+      return playbackReducer(target, current, control, homeContextRef.current);
     });
   }, []);
 
@@ -300,8 +336,8 @@ export function useJourneyPlaybackDirector(
   // this resolver: the same two inputs the timer resolves each beat with, so
   // `plan.totalDurationMs` is the length the timers will actually add up to.
   const plan = useMemo(
-    () => (journey ? buildPlaybackPlan(journey, tempo, resolveStepDuration) : null),
-    [journey, resolveStepDuration, tempo],
+    () => (journey ? buildPlaybackPlan(journey, tempo, resolveStepDuration, sessionHomeContext) : null),
+    [journey, resolveStepDuration, sessionHomeContext, tempo],
   );
 
   // The live budget of the beat that is playing, read from the refs rather than
@@ -413,7 +449,7 @@ export function useJourneyPlaybackDirector(
     timerCarryRef.current = null;
     pendingRemapSeekRef.current = false;
     prefetchBlockedThroughRevisionRef.current = null;
-    setState(initialPlaybackState());
+    setState(initialPlaybackState(homeContextRef.current));
     if (tempoRef.current !== PLAYBACK_INITIAL_TEMPO) {
       tempoRef.current = PLAYBACK_INITIAL_TEMPO;
       advancePlaybackIntentRevision(intentRevisionRef);

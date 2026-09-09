@@ -3,6 +3,7 @@ import {
   createJourney,
   deleteJourney,
   deleteMedia,
+  listHomeBasePeriods,
   listJourneys,
   moveJourneyMedia,
   moveMediaBetweenJourneys,
@@ -37,6 +38,17 @@ describe("journeyApi", () => {
     expect(fetcher).toHaveBeenCalledWith("/api/journeys", expect.objectContaining({
       cache: "no-store",
       credentials: "include",
+    }));
+  });
+
+  it("reads owner-private Home Base periods from the existing credentialed endpoint", async () => {
+    const periods = [{
+      id: "home-1", startedOn: "2020-01-01", endedOn: null, label: "深圳", latitude: 22.5431, longitude: 114.0579, source: "manual",
+    }];
+    const fetcher = vi.fn(async () => Response.json({ periods })) as unknown as typeof fetch;
+    await expect(listHomeBasePeriods(fetcher)).resolves.toEqual(periods);
+    expect(fetcher).toHaveBeenCalledWith("/api/home-bases", expect.objectContaining({
+      cache: "no-store", credentials: "include",
     }));
   });
 

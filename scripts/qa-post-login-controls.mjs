@@ -1445,6 +1445,11 @@ async function verifyAccountDock() {
       contentType: "application/json",
       body: JSON.stringify({ journeys }),
     }));
+    await page.route("**/api/home-bases", (route) => route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ periods: [] }),
+    }));
     await page.goto(`${origin}/?qaState=atlas-gateway&qaLite=1`, { waitUntil: "domcontentloaded" });
     await page.locator('input[type="email"]').fill("qa@example.com");
     await page.locator('input[type="password"]').fill("password1234");
@@ -1960,6 +1965,11 @@ async function verifyFinalAcceptanceMobileFlow() {
           atlas: { id: "qa-atlas", title: "QA Atlas", dedication: "Final acceptance" },
           role: "owner",
         }),
+      }));
+      await page.route("**/api/home-bases", (route) => route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ periods: [] }),
       }));
       await page.route("**/api/journeys", async (route) => {
         const request = route.request();

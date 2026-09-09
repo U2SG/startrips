@@ -9,7 +9,8 @@ import {
   playbackSegmentAtElapsed,
   playbackStepDurationForTempo,
 } from "./journeyPlaybackPlan";
-import { buildPlaybackSteps, playbackStepIdentity } from "./journeyPlayback";
+import { buildPlaybackSteps, playbackCameraTargetForStep, playbackStepIdentity } from "./journeyPlayback";
+import type { HomeNarrativeContext } from "./homeBasePrelude";
 import type { Journey, JourneyMediaAsset, RoutePoint } from "./types";
 
 function point(id: string, sortOrder: number, longitude: number, note: string | null = null): RoutePoint {
@@ -67,6 +68,28 @@ function fixture(mediaPerPoint = 2): Journey {
         mediaIndex,
       ),
     )),
+  };
+}
+
+
+function homeContext(): HomeNarrativeContext {
+  return {
+    prelude: {
+      eligible: true,
+      reason: "eligible",
+      cameraTarget: {
+        kind: "home", homeBaseId: "home-start", latitude: 22.54, longitude: 114.05,
+        anchor: { x: 1, y: 2, z: 3 },
+      },
+    },
+    epilogue: {
+      eligible: true,
+      reason: "eligible",
+      cameraTarget: {
+        kind: "home", homeBaseId: "home-end", latitude: 35.67, longitude: 139.65,
+        anchor: { x: 4, y: 5, z: 6 },
+      },
+    },
   };
 }
 
@@ -193,4 +216,47 @@ describe("Playback V2 timeline planner (#126)", () => {
     expect(fast.segments.filter((segment) => segment.kind === "media")).toHaveLength(50);
     expect(fast.totalDurationMs).toBeLessThan(standard.totalDurationMs);
   });
+  it("keeps Home context first-class and aligned without fabricating Route Points", () => {
+    const journey = fixture(1);
+    const routeBefore = structuredClone(journey.routePoints);
+    const context = homeContext();
+    const steps = buildPlaybackSteps(journey, context);
+    const plan = buildPlaybackPlan(journey, "standard", undefined, context);
+
+    expect(steps.map((step) => step.kind)).toEqual([
+      "home-prelude", "intro", "stop", "media", "travel", "stop", "media", "home-epilogue", "outro",
+    ]);
+    expect(plan.segments).toHaveLength(steps.length);
+    plan.segments.forEach((segment, index) => {
+      expect(segment.stepIndex).toBe(index);
+      expect(segment.id).toBe(playbackStepIdentity(journey, steps[index]).replace(/^stop:/, "arrival:"));
+    });
+    expect(plan.segments.filter((segment) => segment.kind.startsWith("home-")))
+      .toMatchObject([
+        { kind: "home-prelude", routePointId: null },
+        { kind: "home-epilogue", routePointId: null },
+      ]);
+    const routeIds = new Set(journey.routePoints.map((point) => point.id));
+    expect(plan.segments.every((segment) => segment.routePointId === null || routeIds.has(segment.routePointId)))
+      .toBe(true);
+    expect(journey.routePoints).toEqual(routeBefore);
+
+    const homeSteps = steps.filter((step) => step.kind === "home-prelude" || step.kind === "home-epilogue");
+    expect(homeSteps.map((step) => playbackCameraTargetForStep(step, journey)?.kind)).toEqual(["home", "home"]);
+    expect(homeSteps.map((step) => step.cameraTarget.kind)).toEqual(["home", "home"]);
+  });
+
+  it("adds exactly introMs + outroMs when both Home beats are eligible", () => {
+    const journey = fixture(1);
+    const context = homeContext();
+    for (const tempo of ["fast", "standard", "immersive"] as const) {
+      const plain = buildPlaybackPlan(journey, tempo);
+      const withHome = buildPlaybackPlan(journey, tempo, undefined, context);
+      expect(withHome.totalDurationMs - plain.totalDurationMs).toBeCloseTo(
+        PLAYBACK_TEMPO_PROFILES[tempo].introMs + PLAYBACK_TEMPO_PROFILES[tempo].outroMs,
+        8,
+      );
+    }
+  });
+
 });

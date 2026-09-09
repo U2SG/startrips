@@ -14,9 +14,11 @@ import {
   atlasCinematicIsolationActive,
   capturePlaybackEntryForContext,
   globeFocusState,
+  loadJourneyRowsWithOptionalHome,
   nextPlaybackCameraCommand,
   nextPlaybackReleaseFocusRevision,
   playbackEntryNeedsPreparation,
+  playbackCameraUsesPointFocus,
   playbackFocusPointForCameraTarget,
   playbackFocusRouteForCameraTarget,
   nextAtlasNotice,
@@ -256,6 +258,43 @@ describe("resolvePlaybackOwnership", () => {
 
 
 
+describe("optional Home hydration", () => {
+  it("lets Journeys resolve while private Home history remains pending", async () => {
+    let resolveHome!: (periods: []) => void;
+    const homePending = new Promise<[]>((resolve) => { resolveHome = resolve; });
+    const onHomeBasePeriods = vi.fn();
+
+    const rows = await loadJourneyRowsWithOptionalHome({
+      listJourneys: async () => [playbackJourney],
+      listHomeBasePeriods: () => homePending,
+      isCurrent: () => true,
+      onHomeBasePeriods,
+    });
+
+    expect(rows).toEqual([playbackJourney]);
+    expect(onHomeBasePeriods).not.toHaveBeenCalled();
+    resolveHome([]);
+    // The detached hydration intentionally crosses the Promise.resolve() start
+    // boundary and then the Home request boundary before committing. Drain both
+    // microtasks without making Journey readiness await Home in production.
+    await homePending;
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(onHomeBasePeriods).toHaveBeenCalledWith([]);
+  });
+
+  it("keeps guest/read-only views free of private Home hydration", async () => {
+    const onHomeBasePeriods = vi.fn();
+    await loadJourneyRowsWithOptionalHome({
+      listJourneys: async () => [playbackJourney],
+      listHomeBasePeriods: null,
+      isCurrent: () => true,
+      onHomeBasePeriods,
+    });
+    expect(onHomeBasePeriods).toHaveBeenCalledWith([]);
+  });
+});
+
 describe("playbackFocusPointForCameraTarget", () => {
   const journeyWithPoints: Journey = {
     ...playbackJourney,
@@ -284,6 +323,22 @@ describe("playbackFocusPointForCameraTarget", () => {
     )).toEqual({ lat: 22.5431, lon: 114.0579 });
   });
 
+  it("maps private Home camera context directly without fabricating a Route Point", () => {
+    expect(playbackFocusPointForCameraTarget(journeyWithPoints, {
+      kind: "home",
+      homeBaseId: "home-shenzhen",
+      latitude: 22.5431,
+      longitude: 114.0579,
+      anchor: { x: 1, y: 2, z: 3 },
+    })).toEqual({ lat: 22.5431, lon: 114.0579 });
+  });
+
+  it("lets Home camera context own the globe point channel without owning route geometry", () => {
+    expect(playbackCameraUsesPointFocus({ kind: "home", homeBaseId: "h", latitude: 1, longitude: 2, anchor: { x: 1, y: 0, z: 0 } })).toBe(true);
+    expect(playbackCameraUsesPointFocus({ kind: "point", pointIndex: 0 })).toBe(true);
+    expect(playbackCameraUsesPointFocus({ kind: "route" })).toBe(false);
+  });
+
   it("fails closed for a missing route point", () => {
     expect(playbackFocusPointForCameraTarget(
       journeyWithPoints,
@@ -304,6 +359,7 @@ describe("playbackFocusPointForCameraTarget", () => {
     };
     expect(playbackFocusRouteForCameraTarget(route, { kind: "route" })).toBe(route);
     expect(playbackFocusRouteForCameraTarget(route, { kind: "point", pointIndex: 0 })).toBeNull();
+    expect(playbackFocusRouteForCameraTarget(route, { kind: "home", homeBaseId: "h", latitude: 1, longitude: 2, anchor: { x: 1, y: 0, z: 0 } })).toBeNull();
   });
 
   it("increments a camera command revision even for the same route target", () => {

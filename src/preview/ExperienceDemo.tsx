@@ -179,6 +179,7 @@ function createDemoAtlasSession() {
     capabilities: { ...GUEST_ATLAS_VIEW_CAPABILITIES, canManageMedia: true },
     mutations,
     listJourneys: async () => structuredClone(journeys),
+    listHomeBasePeriods: null,
     readMedia: async (assetId) => {
       if (!journeys.some((journey) => journey.media.some((asset) => asset.id === assetId))) {
         fail("MEDIA_NOT_FOUND", "这项示例媒体已不存在。", 404);

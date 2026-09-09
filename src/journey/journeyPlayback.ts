@@ -7,13 +7,16 @@
 // `narrativeTiming.ts` is the single resolver every mode asks. Keeping the
 // machine pure makes the chapter order and pause/resume behavior unit-testable.
 
+import type { HomeNarrativeContext, HomeNarrativeCameraTarget } from "./homeBasePrelude";
 import type { Journey, JourneyMediaAsset, RoutePoint } from "./types";
 
 export type JourneyPlaybackPhase =
+  | { type: "home-prelude"; homeBaseId: string }
   | { type: "intro" }
   | { type: "travel"; from: number; to: number }
   | { type: "stop"; pointIndex: number }
   | { type: "media"; pointIndex: number; mediaIndex: number }
+  | { type: "home-epilogue"; homeBaseId: string }
   | { type: "outro" }
   | { type: "completed" }
   | { type: "paused"; previous: JourneyPlaybackPhase };
@@ -92,17 +95,20 @@ export function storyMediaForScope(
 }
 
 export type PlaybackStep =
+  | { kind: "home-prelude"; cameraTarget: HomeNarrativeCameraTarget }
   | { kind: "intro" }
   | { kind: "travel"; to: number }
   | { kind: "stop"; pointIndex: number; media: JourneyMediaAsset[] }
   | { kind: "media"; pointIndex: number; mediaIndex: number }
-  | { kind: "outro" };
+  | { kind: "home-epilogue"; cameraTarget: HomeNarrativeCameraTarget }
+  | { kind: "outro"; cameraTarget?: HomeNarrativeCameraTarget };
 
 export type PlaybackTravelChoreography = "nearby" | "regional" | "long-haul";
 
 export type PlaybackCameraTarget =
   | { kind: "route" }
-  | { kind: "point"; pointIndex: number; choreography?: PlaybackTravelChoreography };
+  | { kind: "point"; pointIndex: number; choreography?: PlaybackTravelChoreography }
+  | HomeNarrativeCameraTarget;
 
 /**
  * Camera ownership follows the playback chapter, not the entry click:
@@ -129,9 +135,17 @@ export function playbackCameraTargetForStep(
 ): PlaybackCameraTarget | null {
   if (!step) return null;
   switch (step.kind) {
+    case "home-prelude":
+    case "home-epilogue":
+      // Home remains camera-only narrative context. The target is carried by the
+      // beat itself rather than reinterpreted as a Journey Route Point.
+      return step.cameraTarget;
     case "intro":
-    case "outro":
       return { kind: "route" };
+    case "outro":
+      // An eligible Home epilogue owns the final life context through the
+      // title/date fade and completion. Without Home, preserve route framing.
+      return step.cameraTarget ?? { kind: "route" };
     case "travel":
       return {
         kind: "point",
@@ -145,7 +159,9 @@ export function playbackCameraTargetForStep(
 }
 
 export function playbackCameraTargetKey(target: PlaybackCameraTarget) {
-  return target.kind === "route" ? "route" : `point:${target.pointIndex}`;
+  if (target.kind === "route") return "route";
+  if (target.kind === "home") return `home:${target.homeBaseId}`;
+  return `point:${target.pointIndex}`;
 }
 
 /**
@@ -154,8 +170,15 @@ export function playbackCameraTargetKey(target: PlaybackCameraTarget) {
  * still get a stop step (a quiet beat), so the route always reads as one
  * continuous narrative.
  */
-export function buildPlaybackSteps(journey: Journey): PlaybackStep[] {
-  const steps: PlaybackStep[] = [{ kind: "intro" }];
+export function buildPlaybackSteps(
+  journey: Journey,
+  homeContext?: HomeNarrativeContext | null,
+): PlaybackStep[] {
+  const steps: PlaybackStep[] = [];
+  if (homeContext?.prelude.eligible) {
+    steps.push({ kind: "home-prelude", cameraTarget: homeContext.prelude.cameraTarget });
+  }
+  steps.push({ kind: "intro" });
   for (let pointIndex = 0; pointIndex < journey.routePoints.length; pointIndex += 1) {
     const media = playbackMediaForPoint(journey, pointIndex);
     if (pointIndex > 0) steps.push({ kind: "travel", to: pointIndex });
@@ -164,7 +187,15 @@ export function buildPlaybackSteps(journey: Journey): PlaybackStep[] {
       steps.push({ kind: "media", pointIndex, mediaIndex });
     }
   }
-  steps.push({ kind: "outro" });
+  const epilogueCameraTarget = homeContext?.epilogue.eligible
+    ? homeContext.epilogue.cameraTarget
+    : null;
+  if (epilogueCameraTarget) {
+    steps.push({ kind: "home-epilogue", cameraTarget: epilogueCameraTarget });
+  }
+  steps.push(epilogueCameraTarget
+    ? { kind: "outro", cameraTarget: epilogueCameraTarget }
+    : { kind: "outro" });
   return steps;
 }
 
@@ -178,8 +209,12 @@ export function buildPlaybackSteps(journey: Journey): PlaybackStep[] {
  */
 export function playbackStepIdentity(journey: Journey, step: PlaybackStep): string {
   switch (step.kind) {
+    case "home-prelude":
+      return `home-prelude:${step.cameraTarget.homeBaseId}`;
     case "intro":
       return "intro";
+    case "home-epilogue":
+      return `home-epilogue:${step.cameraTarget.homeBaseId}`;
     case "outro":
       return "outro";
     case "travel":
@@ -212,6 +247,8 @@ export function committedPlaybackPosition(
     return { journeyId: journey.id, routePointId: null, assetId: null };
   }
   switch (committedStep.kind) {
+    case "home-prelude":
+    case "home-epilogue":
     case "intro":
     case "outro":
       return { journeyId: journey.id, routePointId: null, assetId: null };
@@ -268,7 +305,14 @@ export type PlaybackState = {
   paused: boolean;
 };
 
-export function initialPlaybackState(): PlaybackState {
+export function initialPlaybackState(homeContext?: HomeNarrativeContext | null): PlaybackState {
+  if (homeContext?.prelude.eligible) {
+    return {
+      stepIndex: 0,
+      phase: { type: "home-prelude", homeBaseId: homeContext.prelude.cameraTarget.homeBaseId },
+      paused: false,
+    };
+  }
   return { stepIndex: 0, phase: { type: "intro" }, paused: false };
 }
 
@@ -315,8 +359,9 @@ export function playbackReducer(
   journey: Journey,
   state: PlaybackState,
   control: PlaybackControl,
+  homeContext?: HomeNarrativeContext | null,
 ): PlaybackState {
-  const steps = buildPlaybackSteps(journey);
+  const steps = buildPlaybackSteps(journey, homeContext);
   const lastIndex = steps.length - 1;
 
   const stateForStep = (stepIndex: number): PlaybackState => {
@@ -374,7 +419,7 @@ export function playbackReducer(
       return stateForStep(previous);
     }
     case "replay":
-      return initialPlaybackState();
+      return initialPlaybackState(homeContext);
     case "seek": {
       const stepIndex = Math.min(lastIndex, Math.max(0, Math.trunc(control.stepIndex)));
       return stateForStep(stepIndex);
@@ -386,6 +431,8 @@ export function playbackReducer(
 
 export function phaseForStep(step: PlaybackStep): JourneyPlaybackPhase {
   switch (step.kind) {
+    case "home-prelude":
+      return { type: "home-prelude", homeBaseId: step.cameraTarget.homeBaseId };
     case "intro":
       return { type: "intro" };
     case "travel":
@@ -394,6 +441,8 @@ export function phaseForStep(step: PlaybackStep): JourneyPlaybackPhase {
       return { type: "stop", pointIndex: step.pointIndex };
     case "media":
       return { type: "media", pointIndex: step.pointIndex, mediaIndex: step.mediaIndex };
+    case "home-epilogue":
+      return { type: "home-epilogue", homeBaseId: step.cameraTarget.homeBaseId };
     case "outro":
       return { type: "outro" };
   }

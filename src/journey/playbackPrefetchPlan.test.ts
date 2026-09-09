@@ -7,8 +7,9 @@ import {
   readyMsAheadForTempo,
 } from "./playbackPrefetchPlan";
 import { PLAYBACK_TEMPO_PROFILES, type PlaybackTempo } from "./journeyPlaybackPlan";
-import { buildPlaybackSteps, playbackMediaForPoint } from "./journeyPlayback";
+import { buildPlaybackSteps, playbackMediaForPoint, playbackStepIdentity } from "./journeyPlayback";
 import { playbackHoldTargetMedia } from "./JourneyPlaybackOverlay";
+import { resolvePlaybackSessionHomeContextSnapshot } from "./useJourneyPlaybackDirector";
 import type { Journey, JourneyMediaAsset, RoutePoint } from "./types";
 
 type PrefetchStep = { durationMs: number; assetIds: string[] };
@@ -103,6 +104,81 @@ describe("prefetchDispatchDecision", () => {
       .toBe("dispatch");
     expect(holdTarget?.id).toBe("i0");
     expect(liveAssets).toContain("i0");
+  });
+});
+
+describe("Home hydration prefetch topology (#235)", () => {
+  it("keeps prefetch window and hold target on the director session topology after late Home hydration", () => {
+    const journey = videoFirstJourney();
+    const initialSnapshot = { journeyId: journey.id, homeContext: null };
+    const frozenSteps = buildPlaybackSteps(journey, initialSnapshot.homeContext);
+    const stepIndex = frozenSteps.findIndex((step) => step.kind === "media");
+    const currentStep = frozenSteps[stepIndex];
+    if (!currentStep) throw new Error("media fixture missing");
+
+    const eligibleHome = {
+      prelude: {
+        eligible: true as const,
+        reason: "eligible" as const,
+        cameraTarget: {
+          kind: "home" as const,
+          homeBaseId: "home-1",
+          latitude: 22.3,
+          longitude: 114.2,
+          anchor: { x: 1, y: 2, z: 3 },
+        },
+      },
+      epilogue: {
+        eligible: true as const,
+        reason: "eligible" as const,
+        cameraTarget: {
+          kind: "home" as const,
+          homeBaseId: "home-1",
+          latitude: 22.3,
+          longitude: 114.2,
+          anchor: { x: 1, y: 2, z: 3 },
+        },
+      },
+    };
+
+    const planAssets = (steps: ReturnType<typeof buildPlaybackSteps>) => {
+      const window = planPrefetchWindow({
+        stepCount: steps.length,
+        stepIndex,
+        budgetMs: readyMsAheadForTempo("standard"),
+        durationForStep: () => PLAYBACK_TEMPO_PROFILES.standard.imageMs,
+        assetIdsForStep: (index) => {
+          const step = steps[index];
+          if (step?.kind !== "media") return [];
+          const asset = playbackMediaForPoint(journey, step.pointIndex)[step.mediaIndex];
+          return asset ? [asset.id] : [];
+        },
+      });
+      const holdTarget = playbackHoldTargetMedia(journey, steps[stepIndex]);
+      return {
+        assetIds: includePlaybackPrefetchHoldTarget(window.assetIds, holdTarget?.id ?? null),
+        holdTargetId: holdTarget?.id ?? null,
+      };
+    };
+
+    const before = planAssets(frozenSteps);
+    const hydratedSnapshot = resolvePlaybackSessionHomeContextSnapshot(
+      initialSnapshot,
+      journey,
+      eligibleHome,
+    );
+    expect(hydratedSnapshot).toBe(initialSnapshot);
+
+    const afterSteps = buildPlaybackSteps(journey, hydratedSnapshot.homeContext);
+    expect(playbackStepIdentity(journey, afterSteps[stepIndex])).toBe(
+      playbackStepIdentity(journey, currentStep),
+    );
+    expect(planAssets(afterSteps)).toEqual(before);
+
+    const liveHydratedSteps = buildPlaybackSteps(journey, eligibleHome);
+    expect(playbackStepIdentity(journey, liveHydratedSteps[stepIndex])).not.toBe(
+      playbackStepIdentity(journey, currentStep),
+    );
   });
 });
 
