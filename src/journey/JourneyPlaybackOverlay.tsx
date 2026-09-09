@@ -43,7 +43,7 @@ import {
   type PlaybackCameraTarget,
   type PlaybackStep,
 } from "./journeyPlayback";
-import { planPrefetchWindow, readyMsAheadForTempo } from "./playbackPrefetchPlan";
+import { planPrefetchWindow, prefetchDispatchDecision, readyMsAheadForTempo } from "./playbackPrefetchPlan";
 import { rewindPlaybackMediaElement, syncPlaybackMediaElement } from "./mediaPlaybackSync";
 import {
   resolveVideoTrim,
@@ -254,6 +254,7 @@ export function JourneyPlaybackOverlay({
   const [videoFallbackAssetId, setVideoFallbackAssetId] = useState<string | null>(null);
   const director = useJourneyPlaybackDirector(journey, hold, stepDurationResolver);
   const { phase, paused, pause, resume, next, back, replay, seek, exit, steps, stepIndex, tempo, setTempo } = director;
+  const [suppressedPrefetchDispatchCount, setSuppressedPrefetchDispatchCount] = useState(0);
   // #126 sections 3-4: the transport reads the elapsed-time plan, so the bar is
   // time-weighted instead of step-weighted and a scrub has a time model.
   const { plan, getTimerBudget } = director;
@@ -690,29 +691,58 @@ export function JourneyPlaybackOverlay({
   // `playbackSteps` is rebuilt per journey, but the window is a plain array;
   // the effects below key off its contents so they do not churn per render.
   const prefetchKey = prefetchAssetIds.join(",");
-  const prefetchAssetIdsRef = useRef(prefetchAssetIds);
-  prefetchAssetIdsRef.current = prefetchAssetIds;
+  const plannedPrefetchRevision = director.intentRevision;
+  const allowPrefetchDispatch = useCallback((plannedRevision: number) => {
+    const decision = prefetchDispatchDecision({
+      plannedRevision,
+      liveRevision: director.getIntentRevision(),
+    });
+    if (decision === "suppress-stale") {
+      setSuppressedPrefetchDispatchCount((current) => current + 1);
+      return false;
+    }
+    return true;
+  }, [director.getIntentRevision]);
 
   // Signed reads follow the same window, through the same single read path, so
   // a decode is never scheduled for an asset that has no URL yet. This is
   // strictly fewer concurrent reads than before, when arriving at a stop
   // requested every asset of the chapter at once.
   useEffect(() => {
-    for (const assetId of prefetchAssetIdsRef.current) loadMediaRead(assetId);
-  }, [loadMediaRead, prefetchKey]);
+    if (!allowPrefetchDispatch(plannedPrefetchRevision)) return;
+    for (const assetId of prefetchAssetIds) {
+      overlayRef.current?.setAttribute(
+        "data-playback-prefetch-dispatch-intent",
+        String(plannedPrefetchRevision),
+      );
+      loadMediaRead(assetId);
+    }
+  }, [allowPrefetchDispatch, loadMediaRead, plannedPrefetchRevision, prefetchKey]);
 
   // Review P2: decode media AHEAD of display so a chapter never mounts <img>
   // with a loading gap. Videos stay at read only; images alone are decoded.
   useEffect(() => {
-    for (const assetId of prefetchAssetIdsRef.current) {
+    if (!allowPrefetchDispatch(plannedPrefetchRevision)) return;
+    for (const assetId of prefetchAssetIds) {
       const asset = mediaById.get(assetId);
       if (!asset?.mimeType.startsWith("image/")) continue;
       const read = mediaReads[assetId];
       if (read?.status === "ready") {
+        overlayRef.current?.setAttribute(
+          "data-playback-prefetch-dispatch-intent",
+          String(plannedPrefetchRevision),
+        );
         decodeRegistryRef.current.ensure(assetId, read.url);
       }
     }
-  }, [decodeSettleRevision, mediaById, mediaReads, prefetchKey]);
+  }, [
+    allowPrefetchDispatch,
+    decodeSettleRevision,
+    mediaById,
+    mediaReads,
+    plannedPrefetchRevision,
+    prefetchKey,
+  ]);
 
   // Review P2: while a media chapter's image is not decoded yet, hold the
   // director so it never advances into a blank frame. Terminal read/decode
@@ -1156,6 +1186,9 @@ export function JourneyPlaybackOverlay({
       data-playback-mode={playbackMode}
       data-playback-step={director.stepIndex}
       data-playback-steps={director.steps.length}
+      data-playback-intent={director.intentRevision}
+      data-playback-prefetch-suppressed={suppressedPrefetchDispatchCount}
+      data-playback-prefetch-dispatch-intent={plannedPrefetchRevision}
       // #195 Phase 2: who owns the current beat's completion. `none` is an
       // untrimmed beat, still on the pre-#195 `ended` ownership; the other
       // values are the trim transport's own states, published so the browser

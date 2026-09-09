@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   MAX_PREFETCH_ASSETS,
   planPrefetchWindow,
+  prefetchDispatchDecision,
   readyMsAheadForTempo,
 } from "./playbackPrefetchPlan";
 import { PLAYBACK_TEMPO_PROFILES, type PlaybackTempo } from "./journeyPlaybackPlan";
@@ -47,6 +48,18 @@ function imageJourneySteps(tempo: PlaybackTempo, pointCount: number, imagesPerPo
 function mediaStepIndex(steps: PrefetchStep[], assetId: string) {
   return steps.findIndex((step) => step.assetIds.includes(assetId));
 }
+
+describe("prefetchDispatchDecision", () => {
+  it("suppresses a window planned before the live narrative intent", () => {
+    expect(prefetchDispatchDecision({ plannedRevision: 12, liveRevision: 13 }))
+      .toBe("suppress-stale");
+  });
+
+  it("dispatches the recomputed window at the live revision", () => {
+    expect(prefetchDispatchDecision({ plannedRevision: 13, liveRevision: 13 }))
+      .toBe("dispatch");
+  });
+});
 
 describe("readyMsAheadForTempo", () => {
   it("prepares farther ahead in time as tempo gets faster", () => {

@@ -1,8 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { buildPlaybackSteps, initialPlaybackState, playbackReducer } from "./journeyPlayback";
 import {
+  advancePlaybackIntentRevision,
   consumePlaybackTimerBudget,
+  dispatchPlaybackNarrativeIntent,
   playbackDirectorIsPlaying,
+  playbackPlanScopeChanged,
   playbackProgressFraction,
   playbackTimerDelay,
   replanPlaybackTimerBudget,
@@ -11,6 +14,38 @@ import {
 import { buildPlaybackPlan } from "./journeyPlaybackPlan";
 import { resolveVideoTrim, videoTrimPlayedFraction } from "./videoTrimPlayback";
 import type { Journey, JourneyMediaAsset, RoutePoint } from "./types";
+
+describe("playback narrative intent revision (#197)", () => {
+  it("advances monotonically before a narrative command dispatches", () => {
+    const revision = { current: 7 };
+    const observed: number[] = [];
+
+    expect(dispatchPlaybackNarrativeIntent(revision, () => observed.push(revision.current))).toBe(8);
+    expect(observed).toEqual([8]);
+    expect(advancePlaybackIntentRevision(revision)).toBe(9);
+  });
+
+  it("lets a synchronous seek-style caller observe the new revision before render work", () => {
+    const revision = { current: 2 };
+    let transitioned = false;
+    const seek = () => dispatchPlaybackNarrativeIntent(revision, () => { transitioned = true; });
+
+    const returnedRevision = seek();
+    expect(returnedRevision).toBe(3);
+    expect(revision.current).toBe(3);
+    expect(transitioned).toBe(true);
+  });
+
+
+  it("treats Journey or duration-resolver replacement as a plan rebuild scope change", () => {
+    const resolverA = () => 1000;
+    const resolverB = () => 1000;
+    const original = { journey: progressJourney, resolveStepDuration: resolverA };
+    expect(playbackPlanScopeChanged(original, original)).toBe(false);
+    expect(playbackPlanScopeChanged(original, { ...original, resolveStepDuration: resolverB })).toBe(true);
+    expect(playbackPlanScopeChanged(original, { ...original, journey: { ...progressJourney } })).toBe(true);
+  });
+});
 
 describe("consumePlaybackTimerBudget (#126)", () => {
   it("subtracts only elapsed active time from the current step budget", () => {

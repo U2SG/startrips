@@ -161,6 +161,32 @@ export function playbackProgressFraction(
  * the first beat must plan at the same tempo. */
 export const PLAYBACK_INITIAL_TEMPO: PlaybackTempo = "standard";
 
+export type PlaybackIntentRevisionRef = { current: number };
+
+export function advancePlaybackIntentRevision(ref: PlaybackIntentRevisionRef) {
+  ref.current += 1;
+  return ref.current;
+}
+
+export function dispatchPlaybackNarrativeIntent(
+  ref: PlaybackIntentRevisionRef,
+  dispatch: () => void,
+) {
+  const revision = advancePlaybackIntentRevision(ref);
+  dispatch();
+  return revision;
+}
+
+export type PlaybackPlanScope = {
+  journey: Journey | null;
+  resolveStepDuration?: PlaybackStepDurationResolver;
+};
+
+export function playbackPlanScopeChanged(previous: PlaybackPlanScope, next: PlaybackPlanScope) {
+  return previous.journey !== next.journey
+    || previous.resolveStepDuration !== next.resolveStepDuration;
+}
+
 /**
  * #19 Journey Playback director.
  *
@@ -176,7 +202,17 @@ export function useJourneyPlaybackDirector(
   resolveStepDuration?: PlaybackStepDurationResolver,
 ) {
   const [state, setState] = useState<PlaybackState>(initialPlaybackState);
-  const [tempo, setTempo] = useState<PlaybackTempo>(PLAYBACK_INITIAL_TEMPO);
+  const [tempo, setTempoState] = useState<PlaybackTempo>(PLAYBACK_INITIAL_TEMPO);
+  const tempoRef = useRef(tempo);
+  tempoRef.current = tempo;
+  const intentRevisionRef = useRef(0);
+  const planScopeRef = useRef({ journey, resolveStepDuration });
+  const currentPlanScope = { journey, resolveStepDuration };
+  if (playbackPlanScopeChanged(planScopeRef.current, currentPlanScope)) {
+    planScopeRef.current = currentPlanScope;
+    advancePlaybackIntentRevision(intentRevisionRef);
+  }
+  const intentRevision = intentRevisionRef.current;
   const timerRef = useRef<number>(0);
   const timerStepKeyRef = useRef<string | null>(null);
   const timerRemainingMsRef = useRef<number | null>(null);
@@ -200,19 +236,28 @@ export function useJourneyPlaybackDirector(
     });
   }, []);
 
+  const advanceNarrativeIntent = useCallback((dispatch: () => void) => (
+    dispatchPlaybackNarrativeIntent(intentRevisionRef, dispatch)
+  ), []);
+  const getIntentRevision = useCallback(() => intentRevisionRef.current, []);
   const pause = useCallback(() => transition({ type: "pause" }), [transition]);
   const resume = useCallback(() => transition({ type: "resume" }), [transition]);
-  const next = useCallback(() => transition({ type: "next" }), [transition]);
+  const next = useCallback(() => advanceNarrativeIntent(() => transition({ type: "next" })), [advanceNarrativeIntent, transition]);
   const complete = useCallback(() => transition({ type: "advance" }), [transition]);
-  const back = useCallback(() => transition({ type: "previous" }), [transition]);
+  const back = useCallback(() => advanceNarrativeIntent(() => transition({ type: "previous" })), [advanceNarrativeIntent, transition]);
   const replay = useCallback(() => transition({ type: "replay" }), [transition]);
   // `carryProgress` marks a seek that only re-addresses the beat already
   // playing after a plan rebuild moved it, so the timer resumes it instead of
   // restarting it. A user seek leaves it unset and gets a fresh beat.
   const seek = useCallback((stepIndex: number, options?: { carryProgress?: boolean }) => {
     if (options?.carryProgress) pendingRemapSeekRef.current = true;
-    transition({ type: "seek", stepIndex });
-  }, [transition]);
+    return advanceNarrativeIntent(() => transition({ type: "seek", stepIndex }));
+  }, [advanceNarrativeIntent, transition]);
+  const setTempo = useCallback((nextTempo: PlaybackTempo) => {
+    if (tempoRef.current === nextTempo) return intentRevisionRef.current;
+    tempoRef.current = nextTempo;
+    return advanceNarrativeIntent(() => setTempoState(nextTempo));
+  }, [advanceNarrativeIntent]);
   const exit = useCallback(() => transition({ type: "exit" }), [transition]);
 
   // The single place a step becomes a number of milliseconds: the injected
@@ -342,7 +387,11 @@ export function useJourneyPlaybackDirector(
     timerCarryRef.current = null;
     pendingRemapSeekRef.current = false;
     setState(initialPlaybackState());
-    setTempo(PLAYBACK_INITIAL_TEMPO);
+    if (tempoRef.current !== PLAYBACK_INITIAL_TEMPO) {
+      tempoRef.current = PLAYBACK_INITIAL_TEMPO;
+      advancePlaybackIntentRevision(intentRevisionRef);
+      setTempoState(PLAYBACK_INITIAL_TEMPO);
+    }
   }, [journey?.id]);
 
   useEffect(() => () => window.clearTimeout(timerRef.current), []);
@@ -361,6 +410,8 @@ export function useJourneyPlaybackDirector(
     completed,
     tempo,
     setTempo,
+    intentRevision,
+    getIntentRevision,
     isPlaying: playbackDirectorIsPlaying(state, step),
     pause,
     resume,
