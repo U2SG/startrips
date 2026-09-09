@@ -148,10 +148,30 @@ describe("resolveHomeBasePresence (#233)", () => {
     expect(resolvedHomeBaseEmphasisWeight("current")).toBeLessThan(SELECTED_JOURNEY_EMPHASIS_WEIGHT);
   });
 
-  it("formats the decided label and includes the historical span in accessibility copy", () => {
+  it("formats the decided label and derives accessibility wording from the effective Home date", () => {
+    const context = { periods: [HISTORICAL_HOME, CURRENT_HOME], effectiveDate: "2026-09-10" };
     expect(homeBaseLabel(CURRENT_HOME)).toBe("常住地 · 深圳");
-    expect(homeBaseAccessibleName(CURRENT_HOME)).toContain("当前常住地：深圳");
-    expect(homeBaseAccessibleName(HISTORICAL_HOME)).toContain("2022-01-01–2026-01-01");
+    expect(homeBaseAccessibleName(CURRENT_HOME, context)).toContain("当前常住地：深圳");
+    expect(homeBaseAccessibleName(HISTORICAL_HOME, context)).toContain("2022-01-01–2026-01-01");
+  });
+
+  it("switches accessible current-Home wording exactly on a scheduled move boundary", () => {
+    const moveDate = "2030-01-01";
+    const oldHome: HomeBasePeriod = { ...CURRENT_HOME, id: "home-old", endedOn: moveDate };
+    const futureHome: HomeBasePeriod = {
+      ...CURRENT_HOME,
+      id: "home-future",
+      label: "东京",
+      latitude: 35.6762,
+      longitude: 139.6503,
+      startedOn: moveDate,
+      endedOn: null,
+    };
+    const periods = [oldHome, futureHome];
+    expect(homeBaseAccessibleName(oldHome, { periods, effectiveDate: "2029-12-31" })).toContain("当前常住地：深圳");
+    expect(homeBaseAccessibleName(futureHome, { periods, effectiveDate: "2029-12-31" })).not.toContain("当前常住地");
+    expect(homeBaseAccessibleName(oldHome, { periods, effectiveDate: moveDate })).not.toContain("当前常住地");
+    expect(homeBaseAccessibleName(futureHome, { periods, effectiveDate: moveDate })).toContain("当前常住地：东京");
   });
 
   it("uses no ambient animation in V1 and reduced motion never changes semantic presence", () => {

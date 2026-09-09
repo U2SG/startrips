@@ -104,10 +104,13 @@ export function homeBaseLabel(period: Pick<HomeBasePeriod, "label">): string {
 }
 
 export function homeBaseAccessibleName(
-  period: Pick<HomeBasePeriod, "label" | "startedOn" | "endedOn">,
+  period: Pick<HomeBasePeriod, "id" | "label" | "startedOn" | "endedOn">,
+  context: { periods: readonly HomeBasePeriod[]; effectiveDate: string },
 ): string {
+  const isEffectiveCurrent = resolveEffectiveCurrentHomeBase(context.periods, context.effectiveDate)?.id === period.id;
+  if (isEffectiveCurrent) return `当前常住地：${period.label}，${period.startedOn} 起`;
   return period.endedOn === null
-    ? `当前常住地：${period.label}，${period.startedOn} 至今`
+    ? `常住地：${period.label}，${period.startedOn} 起`
     : `常住地：${period.label}，${period.startedOn}–${period.endedOn}`;
 }
 
