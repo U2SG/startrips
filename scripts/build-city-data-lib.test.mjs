@@ -8,6 +8,8 @@ import {
   chineseRegionCoverage,
   collectChineseCandidates,
   parseCityRow,
+  normalizeZhCnLabel,
+  isZhCnNormalizedLabel,
 } from "./build-city-data-lib.mjs";
 
 describe("parseCityRow (#16)", () => {
@@ -60,11 +62,20 @@ describe("parseCityRow (#16)", () => {
   });
 });
 
+describe("normalizeZhCnLabel (#16 zh-CN script truth)", () => {
+  it("normalizes known Traditional-only variants using checked-in Unicode Unihan data", () => {
+    expect(normalizeZhCnLabel("將軍澳新市鎮")).toBe("将军澳新市镇");
+    expect(normalizeZhCnLabel("楊屋村 鶴園 粉嶺")).toBe("杨屋村 鹤园 粉岭");
+    expect(isZhCnNormalizedLabel("将军澳新市镇")).toBe(true);
+    expect(isZhCnNormalizedLabel("將軍澳新市鎮")).toBe(false);
+  });
+});
+
 describe("chineseAlternateScore (#16)", () => {
   it("uses Chinese tags and country-scoped Han fallbacks without misclassifying Japanese/Korean", () => {
     expect(chineseAlternateScore("zh-CN", "深圳", "CN")).toBe(0);
     expect(chineseAlternateScore("zh-Hans", "深圳", "CN")).toBe(0);
-    expect(chineseAlternateScore("zh", "深圳", "CN")).toBe(0);
+    expect(chineseAlternateScore("zh", "深圳", "CN")).toBe(1);
     expect(chineseAlternateScore("zh-TW", "深圳", "CN")).toBe(1);
     expect(chineseAlternateScore("yue", "香港", "HK")).toBe(1);
     expect(chineseAlternateScore("en", "Shenzhen", "CN")).toBeNull();
@@ -174,7 +185,7 @@ describe("authoritative Chinese-region fallback and production coverage (#16 reo
       ["Hong Kong", "香港"],
       ["Bao'an", "宝安区"],
       ["Luohu District", "罗湖区"],
-      ["Tseung Kwan O", "將軍澳新市鎮"],
+      ["Tseung Kwan O", "将军澳新市镇"],
       ["Fanling", "粉岭"],
       ["Chéngguān Qū", "城关区"],
       ["Nyingchi", "林芝市"],
@@ -182,6 +193,7 @@ describe("authoritative Chinese-region fallback and production coverage (#16 reo
     for (const [name, label] of expected) {
       expect(cities.find((city) => city.n === name)?.z).toBe(label);
     }
+    expect(cities.filter((city) => city.z).every((city) => isZhCnNormalizedLabel(city.z))).toBe(true);
   });
 
   it("fails when a major Chinese-region rank or the PRD local coverage budget regresses", () => {
@@ -199,5 +211,8 @@ describe("authoritative Chinese-region fallback and production coverage (#16 reo
       .toThrow(/rank 2/);
     expect(() => assertChineseRegionCoverage(healthy.map((city) => city.n === "Local 12" ? { ...city, z: undefined } : city)))
       .toThrow(/PRD rank-3/);
+    expect(() => assertChineseRegionCoverage([
+      { n: "Traditional witness", c: "HK", z: "將軍澳新市鎮", la: 22.3, lo: 114.2, r: 3 },
+    ])).toThrow(/not simplified/);
   });
 });

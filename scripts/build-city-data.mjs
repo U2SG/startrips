@@ -11,7 +11,9 @@
  * cities first. Localization (#16): alternateNamesV2 rows are joined by
  * geonameId and, for cities that carry a Chinese alternate name, the build
  * writes a compact `z` field with the display name (preferring zh-CN /
- * zh-Hans / zh language tags, then any CJK-script alternate). Rows without a
+ * zh-Hans candidates, then country-scoped Chinese/Han fallbacks), and normalizes
+ * every accepted label to Simplified Chinese with checked-in Unicode Unihan
+ * single-target variant data before it reaches `z`. Rows without a
  * Chinese name get no `z`, so the browser payload does not grow with every
  * alternate name; runtime display falls back to the asciiname. There is no
  * hand-maintained dictionary — the mapping is data-driven by stable

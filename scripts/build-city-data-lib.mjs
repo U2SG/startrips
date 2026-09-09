@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 /**
  * Shared logic for the city-data build (#16). Kept module-level so the
  * localization pipeline is unit-testable without re-running the full
@@ -14,11 +16,34 @@ export const RANK_BY_FEATURE = new Map([
 /** Any Chinese language tag: zh, zh-CN, zh-Hans, zh-Hant, zh-TW, ... */
 const ZH_TAG = /^zh(?:[/_-][a-zA-Z]+)?$/i;
 /** Simplified-Chinese tags rank highest in the candidate pick. */
-const ZH_SIMPLIFIED_TAG = /^zh(?:[/_-](?:cn|hans|han))?$/i;
+const ZH_SIMPLIFIED_TAG = /^zh[/_-](?:cn|hans|han)$/i;
 const HAN_SCRIPT = /[\u3400-\u4dbf\u4e00-\u9fff]/;
 export const CHINESE_REGION_CODES = new Set(["CN", "HK", "MO", "TW"]);
 export const PRD_COVERAGE_BOUNDS = Object.freeze({ south: 21.5, north: 24.5, west: 112, east: 115.5 });
 export const PRD_RANK3_MIN_LOCALIZATION = 0.65;
+
+const UNIHAN_SIMPLIFIED_VARIANTS = JSON.parse(readFileSync(
+  new URL("./data/unihan-simplified-variants.json", import.meta.url),
+  "utf8",
+));
+const SIMPLIFIED_VARIANT_BY_CHARACTER = new Map(Object.entries(UNIHAN_SIMPLIFIED_VARIANTS.map ?? {}));
+
+/**
+ * Normalize a build-time Chinese-region label to the single zh-CN display
+ * script. The checked-in map is generated from Unicode 17.0 Unihan
+ * kSimplifiedVariant data (Unicode-3.0) and intentionally contains only
+ * single-target mappings, so the build never guesses between ambiguous forms.
+ */
+export function normalizeZhCnLabel(value) {
+  return [...String(value ?? "")].map((character) => (
+    SIMPLIFIED_VARIANT_BY_CHARACTER.get(character) ?? character
+  )).join("");
+}
+
+export function isZhCnNormalizedLabel(value) {
+  const label = String(value ?? "");
+  return label === normalizeZhCnLabel(label);
+}
 
 export function isChineseRegion(countryCode) {
   return CHINESE_REGION_CODES.has(String(countryCode ?? "").toUpperCase());
@@ -59,7 +84,7 @@ export function parseCityRow(fields) {
       p: population,
       r: RANK_BY_FEATURE.get(feature) ?? 3,
       ...(isChineseRegion(countryCode) ? { c: countryCode } : {}),
-      ...(isChineseRegion(countryCode) && containsHanScript(name) ? { z: name } : {}),
+      ...(isChineseRegion(countryCode) && containsHanScript(name) ? { z: normalizeZhCnLabel(name) } : {}),
     },
   };
 }
@@ -120,14 +145,14 @@ export function applyChineseCandidates(cities, cityIndexByGeonameId, preferred, 
   for (const [geonameId, candidate] of preferred) {
     const cityIndex = cityIndexByGeonameId.get(geonameId);
     if (cityIndex !== undefined) {
-      cities[cityIndex].z = candidate.name;
+      cities[cityIndex].z = normalizeZhCnLabel(candidate.name);
       joined += 1;
     }
   }
   for (const [geonameId, name] of fallback) {
     const cityIndex = cityIndexByGeonameId.get(geonameId);
     if (cityIndex !== undefined && cities[cityIndex].z === undefined) {
-      cities[cityIndex].z = name;
+      cities[cityIndex].z = normalizeZhCnLabel(name);
       joined += 1;
     }
   }
@@ -145,7 +170,7 @@ export function applyAuthoritativeChineseFallback(cities, cityIndexByGeonameId, 
     const country = String(source.country ?? "").toUpperCase();
     const label = String(source.label ?? "").trim();
     if (city.z !== undefined || city.c !== country || !isChineseRegion(country) || !containsHanScript(label)) continue;
-    city.z = label;
+    city.z = normalizeZhCnLabel(label);
     joined += 1;
   }
   return joined;
@@ -181,6 +206,12 @@ export function chineseRegionCoverage(cities) {
 
 export function assertChineseRegionCoverage(cities, requiredNames = []) {
   const coverage = chineseRegionCoverage(cities);
+  for (const city of cities) {
+    if (!containsHanScript(city.z)) continue;
+    if (!isZhCnNormalizedLabel(city.z)) {
+      throw new Error(`zh-CN asset label is not simplified: ${city.n} -> ${city.z}`);
+    }
+  }
   for (const rank of coverage.ranks.slice(0, 3)) {
     if (rank.total > 0 && rank.localized !== rank.total) {
       throw new Error(`Chinese-region rank ${rank.rank} localization regressed: ${rank.localized}/${rank.total}`);
