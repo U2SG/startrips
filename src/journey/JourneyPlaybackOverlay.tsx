@@ -32,7 +32,6 @@ import {
   type PlaybackStepDurationResolver,
 } from "./useJourneyPlaybackDirector";
 import {
-  buildPlaybackSteps,
   commitPresentedPlaybackPosition,
   committedPlaybackPosition,
   playbackCameraTargetForStep,
@@ -670,10 +669,10 @@ export function JourneyPlaybackOverlay({
   // faster tempo naturally prepares more assets over roughly the same seconds
   // of prepared playback. Deriving it from `stepIndex` alone is what makes a
   // seek, next or back invalidate the old window without any cancellation.
-  const playbackSteps = useMemo(
-    () => journey ? buildPlaybackSteps(journey, homeNarrativeContext) : [],
-    [homeNarrativeContext, journey],
-  );
+  // Prefetch must share the director's session-frozen topology. Rebuilding from
+  // live Home context here would create a second step index space when Home
+  // hydration resolves after Playback has already started.
+  const playbackSteps = director.steps;
   const mediaById = useMemo(() => {
     const index = new Map<string, JourneyMediaAsset>();
     for (const asset of journey?.media ?? []) index.set(asset.id, asset);
@@ -703,8 +702,8 @@ export function JourneyPlaybackOverlay({
     const holdTarget = playbackHoldTargetMedia(journey, playbackSteps[director.stepIndex]);
     return includePlaybackPrefetchHoldTarget(prefetchWindow.assetIds, holdTarget?.id ?? null);
   }, [director.stepIndex, director.tempo, durationForStep, journey, playbackSteps]);
-  // `playbackSteps` is rebuilt per journey, but the window is a plain array;
-  // the effects below key off its contents so they do not churn per render.
+  // The window is a plain array; the effects below key off its contents so
+  // they do not churn per render.
   const prefetchKey = prefetchAssetIds.join(",");
   const plannedPrefetchRevision = director.intentRevision;
   const allowPrefetchDispatch = useCallback((plannedRevision: number) => {

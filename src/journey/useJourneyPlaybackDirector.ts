@@ -267,7 +267,10 @@ export function useJourneyPlaybackDirector(
   homeContextRef.current = sessionHomeContext;
 
   // The current expanded step, derived from the step index.
-  const steps = journey ? buildPlaybackSteps(journey, sessionHomeContext) : [];
+  const steps = useMemo(
+    () => (journey ? buildPlaybackSteps(journey, sessionHomeContext) : []),
+    [journey, sessionHomeContext],
+  );
   const step: PlaybackStep | undefined = steps[state.stepIndex];
   const completed = isPlaybackTerminalState(state);
 
