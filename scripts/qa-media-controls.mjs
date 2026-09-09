@@ -265,6 +265,96 @@ async function waitForStoryPicture(page, assetId, surfaceSelector = ".journey-st
   });
 }
 
+async function exerciseMobileStoryContinuitySwipe(page, touch, direction, expectedId) {
+  const stage = page.locator(".journey-story__media");
+  const bounds = await stage.boundingBox();
+  if (!bounds) throw new Error("Story continuity stage has no bounds");
+  const startX = bounds.x + bounds.width * 0.72;
+  const y = bounds.y + bounds.height * 0.5;
+  const signed = direction > 0 ? -1 : 1;
+  const distances = [Math.min(28, bounds.width * 0.08), Math.min(64, bounds.width * 0.18), Math.min(118, bounds.width * 0.32)];
+  const samples = [];
+  await touch.send("Input.dispatchTouchEvent", {
+    type: "touchStart",
+    touchPoints: [{ x: startX, y }],
+  });
+  try {
+    for (const distance of distances) {
+      const movedAt = await page.evaluate(() => performance.now());
+      await touch.send("Input.dispatchTouchEvent", {
+        type: "touchMove",
+        touchPoints: [{ x: startX + signed * distance, y }],
+      });
+      const sample = await page.evaluate(({ pagesSelector, movedAt }) => new Promise((resolve) => {
+        requestAnimationFrame(() => {
+          const root = document.querySelector(pagesSelector);
+          const pages = [...(root?.querySelectorAll("[data-media-page]") ?? [])];
+          const described = pages.map((node) => {
+            const transform = getComputedStyle(node).transform;
+            return {
+              role: node.getAttribute("data-media-page"),
+              id: node.getAttribute("data-media-page-id"),
+              ready: node.getAttribute("data-media-page-ready") === "true",
+              incoming: node.getAttribute("data-media-incoming") === "true",
+              pointerEvents: getComputedStyle(node).pointerEvents,
+              zIndex: Number(getComputedStyle(node).zIndex || 0),
+              x: transform === "none" ? 0 : new DOMMatrixReadOnly(transform).e,
+            };
+          });
+          const current = described.find((entry) => entry.role === "current") ?? null;
+          const incoming = described.find((entry) => entry.incoming) ?? null;
+          resolve({
+            at: performance.now(),
+            rafDelayMs: performance.now() - movedAt,
+            presentation: root?.getAttribute("data-media-presentation") ?? null,
+            current,
+            incoming,
+            pages: described,
+            legacyIncomingCount: document.querySelectorAll(".journey-story__media-incoming").length,
+          });
+        });
+      }), { pagesSelector: storyMediaPagesSelector, movedAt });
+      samples.push(sample);
+    }
+  } finally {
+    await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  }
+  await waitForStoryPicture(page, expectedId);
+  const settled = await page.evaluate((pagesSelector) => {
+    const root = document.querySelector(pagesSelector);
+    const pages = [...(root?.querySelectorAll("[data-media-page]") ?? [])].map((node) => ({
+      role: node.getAttribute("data-media-page"),
+      id: node.getAttribute("data-media-page-id"),
+      ready: node.getAttribute("data-media-page-ready") === "true",
+      pointerEvents: getComputedStyle(node).pointerEvents,
+      zIndex: Number(getComputedStyle(node).zIndex || 0),
+    }));
+    return {
+      presentation: root?.getAttribute("data-media-presentation") ?? null,
+      current: pages.find((entry) => entry.role === "current") ?? null,
+      pages,
+      legacyIncomingCount: document.querySelectorAll(".journey-story__media-incoming").length,
+    };
+  }, storyMediaPagesSelector);
+  const currentXs = samples.map((sample) => sample.current?.x ?? 0);
+  const followsFinger = direction > 0
+    ? currentXs.every((value, index) => index === 0 || value <= currentXs[index - 1] + 1)
+      && currentXs.at(-1) < currentXs[0] - 8
+    : currentXs.every((value, index) => index === 0 || value >= currentXs[index - 1] - 1)
+      && currentXs.at(-1) > currentXs[0] + 8;
+  const ownershipStable = samples.every((sample) => {
+    const current = sample.current;
+    if (!current || !current.ready || current.pointerEvents !== "auto" || sample.legacyIncomingCount !== 0) return false;
+    const neighbors = sample.pages.filter((entry) => entry.role !== "current");
+    return neighbors.every((entry) => entry.pointerEvents === "none" && entry.zIndex < current.zIndex)
+      && (!sample.incoming || sample.incoming.zIndex < current.zIndex);
+  });
+  const noHitch = samples.every((sample) => sample.rafDelayMs < 500);
+  return { samples, settled, followsFinger, ownershipStable, noHitch, failed: !followsFinger || !ownershipStable || !noHitch
+    || settled.presentation !== "settled" || settled.current?.id !== expectedId || !settled.current.ready
+    || settled.legacyIncomingCount !== 0 || settled.pages.length !== 3 };
+}
+
 function overlapPairs(items) {
   const pairs = [];
   for (let index = 0; index < items.length; index += 1) {
@@ -1583,6 +1673,63 @@ try {
       if (composerMobileLayout !== "true") failed = true;
     } finally {
       await landscapeComposer.page.close();
+    }
+  }
+
+  // #65 residual acceptance on the compositor that #266 already shipped. Drive
+  // real touch input at every supported phone width and sample the persistent
+  // pages throughout each gesture. The second forward swipe crosses from the
+  // first Route Point's last asset to the second Route Point's first asset; the
+  // reverse crosses that semantic boundary back without changing physical page
+  // ownership or exposing a loading/incoming overlay as the visible owner.
+  for (const [label, viewport] of [
+    ["320x700", { width: 320, height: 700 }],
+    ["360x780", { width: 360, height: 780 }],
+    ["390x844", { width: 390, height: 844 }],
+    ["430x932", { width: 430, height: 932 }],
+    ["844x390", { width: 844, height: 390 }],
+  ]) {
+    const continuityMatrix = await createQaPage("/?qaState=journey-story&qaMode=route-boundary", onePixelGif, {
+      mobile: true,
+      viewport,
+      reducedMotion: "no-preference",
+    });
+    try {
+      await continuityMatrix.page.locator(".journey-story").waitFor({ state: "visible" });
+      await waitForStoryPicture(continuityMatrix.page, "00000000-0000-4000-8000-000000000100");
+      const touch = await continuityMatrix.page.context().newCDPSession(continuityMatrix.page);
+      const withinFirstPoint = await exerciseMobileStoryContinuitySwipe(
+        continuityMatrix.page, touch, 1, "00000000-0000-4000-8000-000000000101",
+      );
+      const acrossRoutePoint = await exerciseMobileStoryContinuitySwipe(
+        continuityMatrix.page, touch, 1, "00000000-0000-4000-8000-000000000102",
+      );
+      const reverseAcrossRoutePoint = await exerciseMobileStoryContinuitySwipe(
+        continuityMatrix.page, touch, -1, "00000000-0000-4000-8000-000000000101",
+      );
+      const routeButtons = await continuityMatrix.page.locator(
+        ".journey-story__route-points button[data-route-point-id]",
+      ).count();
+      const matrixFailed = routeButtons !== 2
+        || withinFirstPoint.failed
+        || acrossRoutePoint.failed
+        || reverseAcrossRoutePoint.failed
+        || continuityMatrix.consoleErrors.length > 0
+        || continuityMatrix.pageErrors.length > 0;
+      checks.push({
+        name: `story-direct-manipulation-continuity-${label}`,
+        viewport,
+        routeButtons,
+        withinFirstPoint,
+        acrossRoutePoint,
+        reverseAcrossRoutePoint,
+        consoleErrors: continuityMatrix.consoleErrors,
+        pageErrors: continuityMatrix.pageErrors,
+        failed: matrixFailed,
+      });
+      if (matrixFailed) failed = true;
+    } finally {
+      await continuityMatrix.page.close();
     }
   }
 

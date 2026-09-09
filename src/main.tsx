@@ -400,6 +400,37 @@ const storyQaJourney: Journey = {
   })),
 };
 
+const storyQaRouteBoundaryJourney: Journey = {
+  ...storyQaJourney,
+  routePoints: [
+    storyQaJourney.routePoints[0],
+    {
+      ...storyQaJourney.routePoints[0],
+      id: "00000000-0000-4000-8000-000000000005",
+      sortOrder: 1,
+      latitude: 1.3008,
+      longitude: 103.8394,
+      label: "Fort Canning Park",
+    },
+  ],
+  media: [
+    { ...storyQaJourney.media[0], routePointId: storyQaJourney.routePoints[0].id },
+    { ...storyQaJourney.media[1], routePointId: storyQaJourney.routePoints[0].id },
+    {
+      ...storyQaJourney.media[2],
+      routePointId: "00000000-0000-4000-8000-000000000005",
+    },
+    {
+      ...storyQaJourney.media[2],
+      id: "00000000-0000-4000-8000-000000000103",
+      storageKey: "qa/story-seed-3",
+      fileName: "seed-3.png",
+      sortOrder: 3,
+      routePointId: "00000000-0000-4000-8000-000000000005",
+    },
+  ],
+};
+
 const STORY_QA_MIXED_VIDEO_ASSET_ID = "00000000-0000-4000-8000-000000000152";
 const storyQaMixedJourney: Journey = {
   ...storyQaJourney,
@@ -415,9 +446,15 @@ const storyQaMixedJourney: Journey = {
 const QA_SOUNDTRACK_ASSET_ID = "00000000-0000-4000-8000-000000000900";
 
 function JourneyStoryQaPreview() {
-  const mixedMediaMode = new URLSearchParams(window.location.search).get("qaMode") === "mixed-media";
-  const manyMediaMode = new URLSearchParams(window.location.search).get("qaMode") === "many-media";
-  const initialJourney = mixedMediaMode ? storyQaMixedJourney : manyMediaMode ? {
+  const qaMode = new URLSearchParams(window.location.search).get("qaMode");
+  const mixedMediaMode = qaMode === "mixed-media";
+  const manyMediaMode = qaMode === "many-media";
+  const routeBoundaryMode = qaMode === "route-boundary";
+  const initialJourney = mixedMediaMode
+    ? storyQaMixedJourney
+    : routeBoundaryMode
+      ? storyQaRouteBoundaryJourney
+      : manyMediaMode ? {
     ...storyQaJourney,
     media: Array.from({ length: 8 }, (_, index) => ({
       ...storyQaJourney.media[0],
