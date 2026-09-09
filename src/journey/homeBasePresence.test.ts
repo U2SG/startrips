@@ -140,7 +140,10 @@ describe("resolveHomeBasePresence (#233)", () => {
       "src/journey/homeBaseCameraPolicy.ts",
     ]) {
       const source = readFileSync(path, "utf8");
-      expect(source, path).not.toMatch(/#[0-9a-f]{3,8}\b|rgba?\(|hsla?\(/i);
+      const codeOnly = source
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/\/\/.*$/gm, "");
+      expect(codeOnly, path).not.toMatch(/#[0-9a-f]{3,8}\b|rgba?\(|hsla?\(/i);
     }
   });
 });
