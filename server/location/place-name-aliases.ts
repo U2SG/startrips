@@ -18,10 +18,10 @@ import { LocationSearchUnavailableError } from "./location-search";
  *
  * - administrative suffixes are dropped (`纽约市` also answers `纽约`,
  *   `首尔特别市` also answers `首尔`), and
- * - a leading country or region qualifier is dropped when the remainder is a
- *   known place name and the qualifier itself is not, so a country-qualified
- *   exonym answers as the bare exonym, while `深圳南山区` stays a local query
- *   because `深圳` is itself a place name.
+ * - a leading country or region qualifier of any length is dropped when the
+ *   remainder is a known place name and no prefix of the qualifier is one, so
+ *   a country-qualified exonym answers as the bare exonym, while `深圳南山区`
+ *   stays a local query because `深圳` is itself a place name.
  */
 
 const PAYLOAD_URL = new URL("../../public/earth/cities.json", import.meta.url);
@@ -55,8 +55,6 @@ const TRANSLITERATION_VARIANTS: Readonly<Record<string, string>> = {
   "大阪": "大坂",
 };
 
-/** A country or region qualifier is at most four characters (`澳大利亚`). */
-const MAX_QUALIFIER_LENGTH = 4;
 const MIN_PLACE_NAME_LENGTH = 2;
 
 type PayloadEntry = { n?: unknown; z?: unknown };
@@ -146,10 +144,16 @@ export function createPlaceNameAliasResolver(
     const names = await load();
     const direct = lookup(names, query);
     if (direct) return direct;
-    const limit = Math.min(MAX_QUALIFIER_LENGTH, query.length - MIN_PLACE_NAME_LENGTH);
+    // Longest remainder first, and no cap on the qualifier beyond the query
+    // itself, so a full country name (`印度尼西亚雅加达`) strips as readily as
+    // a short one (`美国檀香山`).
+    const limit = query.length - MIN_PLACE_NAME_LENGTH;
     for (let qualifier = MIN_PLACE_NAME_LENGTH; qualifier <= limit; qualifier += 1) {
       // A query whose own head names a place is a local query, not a
-      // country-qualified exonym, so it is never rewritten.
+      // country-qualified exonym: `西安大雁塔` must stay a search for the
+      // pagoda rather than become one for `雁塔`. Scanning stops there rather
+      // than skipping the split point, because every longer remainder of such
+      // a query is a fragment of the same local place name.
       if (lookup(names, query.slice(0, qualifier))) break;
       const english = lookup(names, query.slice(qualifier));
       if (english) return english;

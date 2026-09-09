@@ -54,10 +54,18 @@ describe("place-name aliases", () => {
   it("drops a leading country qualifier but not a leading place name", async () => {
     await expect(resolve("美国檀香山")).resolves.toBe("Honolulu");
     await expect(resolve("巴西里约热内卢")).resolves.toBe("Rio de Janeiro");
-    // `深圳` and `上海` are themselves place names, so these stay local
-    // queries for the provider instead of being rewritten to another city.
+    // A full country name strips as readily as a short one: the qualifier has
+    // no length cap.
+    await expect(resolve("印度尼西亚雅加达")).resolves.toBe("Jakarta");
+    await expect(resolve("阿根廷布宜诺斯艾利斯")).resolves.toBe("Buenos Aires");
+    // `深圳`, `上海` and `西安` are themselves place names, so these stay
+    // local queries for the provider instead of being rewritten to another
+    // place. `西安大雁塔` is the case that requires the scan to stop at a
+    // leading place name rather than skip past it: `雁塔` is a district.
     await expect(resolve("深圳南山区")).resolves.toBe("深圳南山区");
     await expect(resolve("上海外滩")).resolves.toBe("上海外滩");
+    await expect(resolve("西安大雁塔")).resolves.toBe("西安大雁塔");
+    await expect(resolve("北京朝阳区")).resolves.toBe("北京朝阳区");
   });
 
   it("prefers the most populous claimant of a shared name", async () => {

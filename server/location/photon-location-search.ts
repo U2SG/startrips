@@ -128,6 +128,18 @@ function toLocationResult(feature: PhotonFeature): LocationSearchResult | null {
   };
 }
 
+/**
+ * Whether the provider's own answer already names the place that was asked
+ * for. A fuzzy hit that merely happens to be bilingual does not count, so an
+ * exonym still earns its English round trip.
+ */
+function namesQuery(result: LocationSearchResult, query: string) {
+  const needle = query.toLocaleLowerCase();
+  return [result.label, result.labelLocal, result.labelEnglish].some(
+    (label) => (label ?? "").toLocaleLowerCase().includes(needle),
+  );
+}
+
 function englishAlias(result: LocationSearchResult) {
   if (result.labelEnglish && !hasNonAscii(result.labelEnglish)) {
     return result.labelEnglish;
@@ -174,10 +186,12 @@ function mergeBilingualResults(
     if (!result.context && candidate.context) result.context = candidate.context;
   });
 
-  // Whenever the provider answered the query in its own language, keep that
-  // ordering and append only genuinely new English hits — a localized label
-  // the provider supplied is never dropped just to make a query work. When it
-  // answered nothing at all, the English hits are the whole list.
+  // For ordinary queries keep the provider's local ordering and append only
+  // genuinely new English hits. For a resolved exonym, the provider's
+  // same-language hits can be unrelated places, so English hits are the
+  // authoritative list and those false positives are omitted — otherwise a
+  // full page of unrelated local hits would push the resolved place past the
+  // limit and out of the answer.
   if (!preferEnglish) {
     secondary.forEach((candidate, index) => {
       if (matchedSecondary.has(index)) return;
@@ -232,20 +246,23 @@ export class PhotonLocationSearch implements LocationSearch {
       // The English request is queued behind the primary one — a full
       // requestIntervalMs (1s by default) of added latency — so only pay for
       // it when the primary answer is genuinely insufficient: a result carries
-      // no English label, or a non-ASCII query found nothing at all. A Chinese
-      // query the provider already answers bilingually must not trigger it.
-      // Whether the query has a known exonym is deliberately NOT a trigger:
-      // the shared place-name index knows Chinese names for domestic cities
-      // too, and those are exactly the queries the provider answers in one
-      // round trip.
+      // no English label, or a non-ASCII query did not actually name any place
+      // the provider returned. That second condition covers both an empty
+      // answer and a fuzzy one: an exonym query answered only with unrelated
+      // places still needs its English round trip, while a Chinese query the
+      // provider answers bilingually by name must not trigger one.
       const shouldFetchEnglish = (
         primaryResults.some((result) => !result.labelEnglish && hasNonAscii(result.label))
-        || (hasNonAscii(normalizedQuery) && primaryResults.length === 0)
+        || (
+          hasNonAscii(normalizedQuery)
+          && !primaryResults.some((result) => namesQuery(result, normalizedQuery))
+        )
       );
       if (!shouldFetchEnglish) return primaryResults;
 
-      // Only now is the exonym worth resolving, and a failure to read the
-      // shared place-name data is surfaced rather than silently narrowing
+      // Only now is the exonym worth resolving — a query the provider already
+      // answered by name never reads the shared place-name data — and a
+      // failure to read that data is surfaced rather than silently narrowing
       // recall back to whatever the provider answered in its own language.
       const englishQuery = await this.placeNameAliases(normalizedQuery);
       const englishUrl = new URL("api/", this.baseUrl);
@@ -267,7 +284,7 @@ export class PhotonLocationSearch implements LocationSearch {
         primaryResults,
         englishResults,
         options.limit,
-        primaryResults.length === 0 && hasNonAscii(normalizedQuery),
+        englishQuery !== normalizedQuery && hasNonAscii(normalizedQuery),
       );
     });
   }
