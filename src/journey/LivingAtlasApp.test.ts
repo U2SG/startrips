@@ -429,6 +429,68 @@ describe("Mobile V2 playback presentation", () => {
   });
 });
 
+describe("Route Point context integration (#291)", () => {
+  const appSource = readFileSync(new URL("./LivingAtlasApp.tsx", import.meta.url), "utf8");
+
+  it("reveals context from route-point activation without claiming camera or focus revision", () => {
+    const start = appSource.indexOf("onJourneyRoutePointActivate={(journeyId, routePointId) => {");
+    const end = appSource.indexOf("onGlobePointPick=", start);
+    const handler = appSource.slice(start, end);
+
+    expect(start).toBeGreaterThan(0);
+    expect(handler).toContain("revealRoutePointContext(journeyId, routePointId)");
+    expect(handler).not.toContain("timeCursor.selectPoint");
+    expect(handler).not.toContain("setStoryJourneyId");
+    expect(handler).not.toContain("setStoryRoutePointId");
+    expect(handler).not.toContain("focusRevision");
+    expect(handler).not.toContain("cameraCommand");
+  });
+
+  it("keeps representative-media readiness inside context ownership", () => {
+    const start = appSource.indexOf("function RoutePointContextRepresentative");
+    const end = appSource.indexOf("export function playbackFocusPointForCameraTarget", start);
+    const representative = appSource.slice(start, end);
+
+    expect(start).toBeGreaterThan(0);
+    expect(representative).toContain("let cancelled = false");
+    expect(representative).toContain("if (!cancelled) setRead");
+    expect(representative).not.toContain("timeCursor");
+    expect(representative).not.toContain("focusRevision");
+    expect(representative).not.toContain("cameraCommand");
+  });
+
+  it("opens Story through the existing identity-preserving entry", () => {
+    const start = appSource.indexOf('className="living-atlas__route-point-context-entry"');
+    const entry = appSource.slice(start, start + 500);
+    expect(start).toBeGreaterThan(0);
+    expect(entry).toContain("openJourneyStory(context.journeyId, context.routePointId)");
+  });
+
+  it("drops context outside planet view and refreshes retained context from the latest Journey", () => {
+    const refreshStart = appSource.indexOf("const intent = routePointContextSelection.intent;");
+    const refreshBlock = appSource.slice(refreshStart, refreshStart + 900);
+    const renderStart = appSource.indexOf('{view === "planet" && routePointContextSelection.context');
+
+    expect(refreshStart).toBeGreaterThan(0);
+    expect(refreshBlock).toContain("buildRoutePointContext(journey, intent.routePointId)");
+    expect(refreshBlock).toContain("resolveRoutePointContextSelection(");
+    expect(refreshBlock).toContain('view !== "planet"');
+    expect(refreshBlock).toContain("clearRoutePointContext()");
+    expect(renderStart).toBeGreaterThan(0);
+  });
+
+  it("keeps long context notes reachable within the clipped Atlas viewport", () => {
+    const css = readFileSync(new URL("../styles/living-atlas.css", import.meta.url), "utf8");
+    const start = css.indexOf(".living-atlas__route-point-context {");
+    const rule = css.slice(start, css.indexOf("}", start));
+
+    expect(start).toBeGreaterThan(0);
+    expect(rule).toContain("max-height:");
+    expect(rule).toContain("overflow-y: auto;");
+    expect(rule).toContain("overscroll-behavior: contain;");
+  });
+});
+
 describe("playbackEntryNeedsPreparation (PR #24 review)", () => {
   it("starts a silent journey immediately instead of waiting for soundtrack preparation", () => {
     expect(playbackEntryNeedsPreparation(playbackJourney, null)).toBe(false);

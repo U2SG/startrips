@@ -37,6 +37,7 @@
     "qa:media-reclassification": "node scripts/qa-media-reclassification.mjs",
     "qa:post-login-controls": "node scripts/qa-post-login-controls.mjs",
     "qa:globe-focus-chrome": "node scripts/qa-globe-focus-chrome.mjs",
+    "qa:route-point-context": "node scripts/qa-route-point-context.mjs",
     "qa:final-acceptance": "node scripts/qa-post-login-controls.mjs --final-acceptance",
     "qa:login-v3": "node scripts/qa-login-v3.mjs",
     "qa:mobile-contract": "node scripts/qa-mobile-contract.mjs",

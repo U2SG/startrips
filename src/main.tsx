@@ -219,9 +219,18 @@ const appQaPickPoints = [
   { latitude: 47.60621, longitude: -122.33207 },
 ];
 
-function LivingAtlasQaGlobe({ onGlobePointPick, journeyRoutes }: LivingAtlasGlobeProps) {
+function LivingAtlasQaGlobe({
+  onGlobePointPick,
+  onJourneyRoutePointActivate,
+  journeyRoutes,
+  activeJourneyRouteId,
+  focusPoint,
+  focusRoute,
+  focusRevision,
+}: LivingAtlasGlobeProps) {
   const [pickIndex, setPickIndex] = useState(0);
   const draftRoute = journeyRoutes.find((route) => route.id === "draft-route-preview") ?? null;
+  const routePointContextQa = new URLSearchParams(window.location.search).get("qaRoutePointContext") === "1";
   return (
     <div className="living-atlas__qa-globe">
       {onGlobePointPick ? (
@@ -236,11 +245,33 @@ function LivingAtlasQaGlobe({ onGlobePointPick, journeyRoutes }: LivingAtlasGlob
           style={{ position: "fixed", zIndex: 230, left: 12, bottom: 12 }}
         >QA 地球点击</button>
       ) : null}
+      {routePointContextQa ? journeyRoutes.flatMap((route) => route.points.flatMap((point, index) => (
+        point.id ? (
+          <button
+            key={`${route.id}:${point.id}`}
+            type="button"
+            data-qa-route-point-context-activate={point.id}
+            data-qa-route-point-index={index}
+            onClick={() => onJourneyRoutePointActivate(route.id, point.id!)}
+            style={{ position: "fixed", width: 1, height: 1, overflow: "hidden", opacity: 0 }}
+          >{point.label ?? point.id}</button>
+        ) : []
+      ))) : null}
       <output
         data-qa-app-route-preview
         data-route-points={JSON.stringify(draftRoute?.points ?? [])}
         style={{ position: "fixed", width: 1, height: 1, overflow: "hidden", opacity: 0 }}
       >{draftRoute?.points.length ?? 0}</output>
+      {routePointContextQa ? (
+        <output
+          data-qa-route-point-context-focus
+          data-focus-revision={focusRevision ?? 0}
+          data-focus-point={focusPoint ? `${focusPoint.lat},${focusPoint.lon}` : ""}
+          data-focus-route={focusRoute?.id ?? ""}
+          data-active-route={activeJourneyRouteId ?? ""}
+          style={{ position: "fixed", width: 1, height: 1, overflow: "hidden", opacity: 0 }}
+        />
+      ) : null}
     </div>
   );
 }
@@ -309,12 +340,14 @@ function EarthDiveQaPreview() {
 
 function LivingAtlasQaPreview() {
   // #253: the globe-focus chrome lane needs the real `LivingAtlasGlobe`, since
-  // `.living-atlas-globe__controls` and the transient gesture hint live there,
-  // and the stubbed globe below publishes neither. It is a sibling mode of
-  // this fixture rather than a change to it, so every existing lane keeps the
-  // deterministic pick/route stub it drives.
-  const globeChrome = new URLSearchParams(window.location.search).get("qaMode") === "globe-chrome";
-  if (globeChrome) return <LivingAtlasApp />;
+  // `.living-atlas-globe__controls` and the transient gesture hint live there.
+  // #291's dedicated lane adds qaRoutePointContext=1 and intentionally keeps
+  // the deterministic QA globe: it grades the product callback/identity/context
+  // contract, while scene boot/raycast timing is already owned by scene lanes.
+  const params = new URLSearchParams(window.location.search);
+  const globeChrome = params.get("qaMode") === "globe-chrome";
+  const routePointContextQa = params.get("qaRoutePointContext") === "1";
+  if (globeChrome && !routePointContextQa) return <LivingAtlasApp />;
   return <LivingAtlasApp GlobeComponent={LivingAtlasQaGlobe} />;
 }
 

@@ -60,6 +60,15 @@ import {
   mediaReadRefreshDelayMs,
 } from "./mediaReadRefresh";
 import {
+  buildRoutePointContext,
+  clearRoutePointContextSelection,
+  emptyRoutePointContextSelection,
+  requestRoutePointContextSelection,
+  resolveRoutePointContextSelection,
+  type RoutePointContext,
+  type RoutePointContextIntent,
+} from "./routePointContext";
+import {
   journeyCover,
   journeySoundtrack,
   journeyVisualMedia,
@@ -312,6 +321,64 @@ function JourneyCardMedia({
   );
 }
 
+type RoutePointContextMediaRead =
+  | { status: "idle" | "loading" | "error" }
+  | { status: "ready"; url: string };
+
+function RoutePointContextRepresentative({
+  journey,
+  context,
+  intent,
+  readMedia,
+}: {
+  journey: Journey;
+  context: RoutePointContext;
+  intent: RoutePointContextIntent;
+  readMedia: AtlasMediaRead;
+}) {
+  const asset = context.representativeAssetId
+    ? journey.media.find((candidate) => candidate.id === context.representativeAssetId) ?? null
+    : null;
+  const imageAsset = asset?.mimeType.startsWith("image/") ? asset : null;
+  const [read, setRead] = useState<RoutePointContextMediaRead>({ status: "idle" });
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!imageAsset) {
+      setRead({ status: "idle" });
+      return () => {
+        cancelled = true;
+      };
+    }
+    setRead({ status: "loading" });
+    void readMedia(imageAsset.id).then((next) => {
+      if (!cancelled) setRead({ status: "ready", url: next.url });
+    }).catch(() => {
+      if (!cancelled) setRead({ status: "error" });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [imageAsset?.id, intent.revision, readMedia]);
+
+  if (!asset) return null;
+  return (
+    <div
+      className={`living-atlas__route-point-context-media is-${imageAsset ? read.status : "video"}`}
+      data-route-point-context-media={imageAsset ? read.status : "video"}
+      aria-label={`代表记录：${asset.fileName}`}
+    >
+      {imageAsset && read.status === "ready" ? (
+        <img src={read.url} alt={asset.fileName} />
+      ) : null}
+      {imageAsset && read.status !== "ready" ? (
+        <span aria-hidden="true"><IconPhoto size={16} stroke={1.2} /></span>
+      ) : null}
+      {!imageAsset ? <span aria-hidden="true"><IconPlayerPlay size={15} stroke={1.2} /></span> : null}
+    </div>
+  );
+}
+
 export function playbackFocusPointForCameraTarget(
   journey: Journey | null,
   target: PlaybackCameraTarget,
@@ -404,6 +471,16 @@ export function LivingAtlasApp({
   const [storyInitialAssetId, setStoryInitialAssetId] = useState<string | null>(null);
   const [storyInitialSnapState, setStoryInitialSnapState] = useState<Exclude<StorySnapState, "closed">>("in-context");
   const [storyFocusVisibleControlOnOpen, setStoryFocusVisibleControlOnOpen] = useState(false);
+  const [routePointContextSelection, setRoutePointContextSelection] = useState(
+    () => emptyRoutePointContextSelection(),
+  );
+  const routePointContextSelectionRef = useRef(routePointContextSelection);
+  routePointContextSelectionRef.current = routePointContextSelection;
+  const clearRoutePointContext = useCallback(() => {
+    const next = clearRoutePointContextSelection(routePointContextSelectionRef.current);
+    routePointContextSelectionRef.current = next;
+    setRoutePointContextSelection(next);
+  }, []);
   const storyObservationRef = useRef<StoryLogicalObservation | null>(null);
   const playbackReturnIntentRevisionRef = useRef(0);
   const playbackEntryRef = useRef<PlaybackEntry | null>(null);
@@ -536,6 +613,26 @@ export function LivingAtlasApp({
   // the user is in globe focus mode; entering playback pauses rewind.
   const timeCursor = useGlobeTimeCursor(journeys);
   const activeJourneyId = timeCursor.selection?.journeyId ?? journeys.at(-1)?.id ?? null;
+  useEffect(() => {
+    const intent = routePointContextSelection.intent;
+    if (!intent) return;
+    const journey = journeys.find((candidate) => candidate.id === intent.journeyId) ?? null;
+    const nextContext = journey ? buildRoutePointContext(journey, intent.routePointId) : null;
+    if (!nextContext) {
+      clearRoutePointContext();
+      return;
+    }
+    const refreshed = resolveRoutePointContextSelection(
+      routePointContextSelectionRef.current,
+      intent,
+      nextContext,
+    );
+    routePointContextSelectionRef.current = refreshed;
+    setRoutePointContextSelection(refreshed);
+  }, [clearRoutePointContext, journeys, routePointContextSelection.intent]);
+  useEffect(() => {
+    if (view !== "planet" && routePointContextSelection.intent) clearRoutePointContext();
+  }, [clearRoutePointContext, routePointContextSelection.intent, view]);
 
   const cinematicIsolation = atlasCinematicIsolationActive(playbackActive, globeFocusMode);
   useEffect(() => {
@@ -566,9 +663,10 @@ export function LivingAtlasApp({
   }, [globeFocusMode]);
 
   const exitGlobeFocus = useCallback(() => {
+    clearRoutePointContext();
     setGlobeFocusMode(false);
     globeFocusTriggerRef.current?.focus();
-  }, []);
+  }, [clearRoutePointContext]);
 
   // Esc exits focus mode. The exit control is only visible inside focus mode,
   // so exiting returns focus to the trigger button in the header.
@@ -736,6 +834,7 @@ export function LivingAtlasApp({
 
   function selectMobileJourney(journeyId: string) {
     claimPlaybackReturnIntent();
+    clearRoutePointContext();
     timeCursor.selectJourney(journeyId);
     setView("planet");
     setMobilePickerOpen(false);
@@ -812,11 +911,29 @@ export function LivingAtlasApp({
 
   function selectJourney(journeyId: string, source?: HTMLElement | null) {
     claimPlaybackReturnIntent();
+    clearRoutePointContext();
     morphJourneyCard(source ?? null, activeJourneyId !== null, () => {
       timeCursor.selectJourney(journeyId);
       setArrivalJourneyId(journeyId);
       if (view === "timeline") setView("planet");
     });
+  }
+
+  function revealRoutePointContext(journeyId: string, routePointId: string) {
+    const requested = requestRoutePointContextSelection(
+      routePointContextSelectionRef.current,
+      journeyId,
+      routePointId,
+    );
+    routePointContextSelectionRef.current = requested.selection;
+    const journey = journeys.find((candidate) => candidate.id === journeyId) ?? null;
+    const resolved = resolveRoutePointContextSelection(
+      requested.selection,
+      requested.intent,
+      journey ? buildRoutePointContext(journey, routePointId) : null,
+    );
+    routePointContextSelectionRef.current = resolved;
+    setRoutePointContextSelection(resolved);
   }
 
   // Only the cover participates in the Story handoff. A document-level View
@@ -1134,11 +1251,16 @@ export function LivingAtlasApp({
             }}
             onJourneyRoutePointActivate={(journeyId, routePointId) => {
               if (journeyId === "draft-route-preview") return;
-              const journey = journeys.find((candidate) => candidate.id === journeyId);
-              const pointIndex = journey?.routePoints.findIndex((point) => point.id === routePointId) ?? -1;
-              if (pointIndex >= 0) timeCursor.selectPoint(journeyId, pointIndex);
-              setStoryRoutePointId(routePointId);
-              setStoryJourneyId(journeyId);
+              // #291 review: Route Point context is subordinate to the Atlas'
+              // single semantic Journey owner. Visible points on sibling routes
+              // stay ineligible until that Journey is selected through the
+              // existing owner path; revealing context must never create a
+              // second semantic owner or advance camera/focus ownership.
+              if (journeyId !== activeJourneyId) {
+                clearRoutePointContext();
+                return;
+              }
+              revealRoutePointContext(journeyId, routePointId);
             }}
             onGlobePointPick={globePickActive ? completeGlobePick : undefined}
             onPickRequest={() => {
@@ -1561,6 +1683,50 @@ export function LivingAtlasApp({
           <button type="button" onClick={() => { clearNotice(); setUndoJourney(null); }} aria-label="关闭提示"><IconX size={17} stroke={1.4} aria-hidden="true" /></button>
         </div>
       ) : null}
+
+      {view === "planet" && routePointContextSelection.context && routePointContextSelection.intent && !storyJourneyId && !playbackActive ? (() => {
+        const context = routePointContextSelection.context;
+        const intent = routePointContextSelection.intent;
+        const contextJourney = journeys.find((candidate) => candidate.id === context.journeyId) ?? null;
+        if (!contextJourney) return null;
+        return (
+          <aside
+            className="living-atlas__route-point-context motion-fade-through"
+            data-route-point-context
+            data-route-point-id={context.routePointId}
+            data-route-point-context-intent={intent.revision}
+            data-location-precision={context.location.precision}
+            style={{ "--journey-color": contextJourney.lightColor } as React.CSSProperties}
+            aria-live="polite"
+          >
+            <header>
+              <p>ROUTE POINT · {String(context.routePointIndex + 1).padStart(2, "0")}/{String(context.routePointCount).padStart(2, "0")}</p>
+              <h2>{context.routePointLabel}</h2>
+              <span>{context.journeyTitle}</span>
+            </header>
+            <div className="living-atlas__route-point-context-facts">
+              <span>{context.resolvedDate ? context.resolvedDate.slice(0, 10) : "日期未记录"}</span>
+              <span>{context.visualMediaCount > 0 ? `${context.visualMediaCount} 项影像` : "仅文字记录"}</span>
+              <span>路线点定位 · {context.location.latitude.toFixed(4)}, {context.location.longitude.toFixed(4)}</span>
+            </div>
+            {context.notePresent && context.note ? <blockquote>{context.note}</blockquote> : null}
+            <RoutePointContextRepresentative
+              journey={contextJourney}
+              context={context}
+              intent={intent}
+              readMedia={readMedia}
+            />
+            <button
+              type="button"
+              className="living-atlas__route-point-context-entry"
+              onClick={() => openJourneyStory(context.journeyId, context.routePointId)}
+            >
+              <span>打开这一站</span>
+              <IconArrowRight size={16} stroke={1.35} aria-hidden="true" />
+            </button>
+          </aside>
+        );
+      })() : null}
 
       {/* Desktop keeps an explicit focus-mode exit for keyboard discovery.
           Mobile V2 never renders this control: its globe is already the base
