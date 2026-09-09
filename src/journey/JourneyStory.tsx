@@ -79,6 +79,7 @@ import {
   readMediaPlacementSignal,
   type MediaPlacementBatchResult,
 } from "./mediaPlacement";
+import { createPlacementAnalysisAuthority, placementAnalysisScope, type PlacementAnalysisIntent } from "./placementAnalysisAuthority";
 import { isModalFocusCandidate, useModalFocus, useNestedModalFocus } from "./useModalFocus";
 import { useCompactMobileLayout } from "./mobileLayout";
 import { useMobileSurfaceHistory } from "./useMobileSurfaceHistory";
@@ -939,6 +940,13 @@ export function JourneyStory({
   const [placementReview, setPlacementReview] = useState<PendingPlacementReview | null>(null);
   const [placementRetryGroups, setPlacementRetryGroups] = useState<PendingPlacementUploadGroup[]>([]);
   const [placementAnalyzing, setPlacementAnalyzing] = useState(false);
+  const placementAnalysisAuthorityRef = useRef<ReturnType<typeof createPlacementAnalysisAuthority> | null>(null);
+  if (!placementAnalysisAuthorityRef.current) {
+    placementAnalysisAuthorityRef.current = createPlacementAnalysisAuthority();
+  }
+  const currentPlacementAnalysisScope = placementAnalysisScope(journeys, journeyId, selectedRoutePointId);
+  const placementAnalysisScopeRef = useRef(currentPlacementAnalysisScope);
+  placementAnalysisScopeRef.current = currentPlacementAnalysisScope;
   const [closeBlocked, setCloseBlocked] = useState(false);
   const [journeyNoteDraft, setJourneyNoteDraft] = useState<string | undefined>(undefined);
   const [routePointNoteDrafts, setRoutePointNoteDrafts] = useState<Record<string, string>>({});
@@ -1242,6 +1250,7 @@ export function JourneyStory({
       notifyNotesGuard("还有未保存的感想，请先保存或放弃更改。");
       return;
     }
+    invalidatePlacementAnalysis();
     onNavigate(targetJourneyId);
   }
 
@@ -1562,6 +1571,28 @@ export function JourneyStory({
     mobileLayout && (mobileMediaMenuOpen || mediaDeleteState !== "idle"),
     mobileMediaMenuOpen ? "manage" : mediaDeleteState !== "idle" ? "delete" : null,
   );
+
+  useLayoutEffect(() => {
+    const authority = placementAnalysisAuthorityRef.current;
+    if (!authority?.syncScope(currentPlacementAnalysisScope)) return;
+    // #113: visible reset and async authority are the same scope transition.
+    // A late metadata continuation can compute, but it no longer owns commits.
+    setPlacementReview(null);
+    setPlacementRetryGroups([]);
+    setPlacementAnalyzing(false);
+  }, [
+    currentPlacementAnalysisScope.journeyId,
+    currentPlacementAnalysisScope.routePointId,
+    currentPlacementAnalysisScope.journeyMembershipKey,
+    currentPlacementAnalysisScope.routePointMembershipKey,
+    currentPlacementAnalysisScope.placementTruthKey,
+    currentPlacementAnalysisScope.valid,
+  ]);
+  useLayoutEffect(() => {
+    const authority = placementAnalysisAuthorityRef.current;
+    authority?.resume(placementAnalysisScopeRef.current);
+    return () => authority?.dispose();
+  }, []);
 
   useEffect(() => {
     cancelPendingMediaDragSettle();
@@ -3008,19 +3039,34 @@ export function JourneyStory({
     }
   }
 
+  function placementAnalysisIsCurrent(intent: PlacementAnalysisIntent) {
+    return placementAnalysisAuthorityRef.current?.isCurrent(intent, placementAnalysisScopeRef.current) ?? false;
+  }
+
+  function invalidatePlacementAnalysis() {
+    placementAnalysisAuthorityRef.current?.invalidate(placementAnalysisScopeRef.current);
+    setPlacementReview(null);
+    setPlacementRetryGroups([]);
+    setPlacementAnalyzing(false);
+  }
+
   async function reviewSelectedFiles(files: File[]) {
+    const authority = placementAnalysisAuthorityRef.current;
+    if (!authority) return;
+    const intent = authority.start(placementAnalysisScopeRef.current);
     setPlacementRetryGroups([]);
     const validation = validateJourneyFiles(files);
     if (!validation.accepted) {
-      await uploadFiles(files);
+      if (placementAnalysisIsCurrent(intent)) await uploadFiles(files);
       return;
     }
     setPlacementAnalyzing(true);
     try {
       const signals = await Promise.all(files.map(readMediaPlacementSignal));
+      if (!placementAnalysisIsCurrent(intent)) return;
       const batch = groupMediaPlacementSuggestions(signals, journeys, journey.id);
       if (batch.groups.length === 0) {
-        await uploadFiles(files);
+        if (placementAnalysisIsCurrent(intent)) await uploadFiles(files);
         return;
       }
       const completeSingleGroup = batch.groups.length === 1
@@ -3032,12 +3078,14 @@ export function JourneyStory({
         && suggestion.journeyId === journey.id
         && suggestion.routePointId === selectedRoutePointId
       ) {
-        await uploadFiles(files);
+        if (placementAnalysisIsCurrent(intent)) await uploadFiles(files);
         return;
       }
-      setPlacementReview({ files, batch });
+      if (placementAnalysisIsCurrent(intent)) setPlacementReview({ files, batch });
     } finally {
-      setPlacementAnalyzing(false);
+      // Analysis B may have started while A was awaiting metadata. A's finally
+      // never clears B's analyzing owner.
+      if (placementAnalysisIsCurrent(intent)) setPlacementAnalyzing(false);
     }
   }
 
@@ -3235,6 +3283,7 @@ export function JourneyStory({
     if (mutationPending) return;
     cancelPendingMediaDragSettle();
     setPlayingFromGesture(false);
+    invalidatePlacementAnalysis();
     setSelectedRoutePointId(routePointId);
     setAssetIndex(0);
     setShownAssetId(null);

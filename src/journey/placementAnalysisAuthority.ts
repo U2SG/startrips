@@ -1,0 +1,109 @@
+import type { Journey } from "./types";
+
+export type PlacementAnalysisScope = {
+  journeyId: string;
+  routePointId: string | null;
+  journeyMembershipKey: string;
+  routePointMembershipKey: string;
+  placementTruthKey: string;
+  valid: boolean;
+};
+
+export type PlacementAnalysisIntent = {
+  revision: number;
+  scope: PlacementAnalysisScope;
+};
+
+export function placementAnalysisScope(
+  journeys: readonly Journey[],
+  journeyId: string,
+  routePointId: string | null,
+): PlacementAnalysisScope {
+  const current = journeys.find((candidate) => candidate.id === journeyId) ?? null;
+  const journeyMembershipKey = journeys.map((candidate) => candidate.id).join("\u001f");
+  // Placement can suggest another Journey, so every currently addressable Route
+  // Point belongs to the async scope, not only the Story's selected Journey.
+  const routePointMembershipKey = journeys
+    .map((candidate) => `${candidate.id}:${candidate.routePoints.map((point) => point.id).join(",")}`)
+    .join("\u001f");
+  // #113 CFAA: media-placement scoring consumes semantic truth, not only
+  // stable IDs. A same-ID edit to Journey dates or Route Point location/time
+  // must supersede metadata analysis captured against the old snapshot.
+  const placementTruthKey = journeys
+    .map((candidate) => [
+      candidate.id,
+      candidate.startedOn ?? "",
+      candidate.endedOn ?? "",
+      ...candidate.routePoints.flatMap((point) => [
+        point.id,
+        String(point.latitude),
+        String(point.longitude),
+        point.occurredAt ?? "",
+      ]),
+    ].join("\u001e"))
+    .join("\u001f");
+  return {
+    journeyId,
+    routePointId,
+    journeyMembershipKey,
+    routePointMembershipKey,
+    placementTruthKey,
+    valid: Boolean(current && (routePointId === null || current.routePoints.some((point) => point.id === routePointId))),
+  };
+}
+
+function sameScope(a: PlacementAnalysisScope | null, b: PlacementAnalysisScope) {
+  return Boolean(a
+    && a.journeyId === b.journeyId
+    && a.routePointId === b.routePointId
+    && a.journeyMembershipKey === b.journeyMembershipKey
+    && a.routePointMembershipKey === b.routePointMembershipKey
+    && a.placementTruthKey === b.placementTruthKey
+    && a.valid === b.valid);
+}
+
+export function createPlacementAnalysisAuthority() {
+  let revision = 0;
+  let disposed = false;
+  let currentScope: PlacementAnalysisScope | null = null;
+
+  return {
+    syncScope(scope: PlacementAnalysisScope) {
+      if (disposed || sameScope(currentScope, scope)) return false;
+      revision += 1;
+      currentScope = scope;
+      return true;
+    },
+    start(scope: PlacementAnalysisScope): PlacementAnalysisIntent {
+      revision += 1;
+      currentScope = scope;
+      return { revision, scope };
+    },
+    invalidate(scope: PlacementAnalysisScope | null = currentScope) {
+      revision += 1;
+      currentScope = scope;
+    },
+    dispose() {
+      disposed = true;
+      revision += 1;
+      currentScope = null;
+    },
+    resume(scope: PlacementAnalysisScope) {
+      // React StrictMode replays effect cleanup/setup in development. Cleanup
+      // still revokes every intent, while setup explicitly reactivates this
+      // same component-owned authority with a fresh revision/scope.
+      disposed = false;
+      revision += 1;
+      currentScope = scope;
+    },
+    isCurrent(intent: PlacementAnalysisIntent, scope: PlacementAnalysisScope) {
+      return !disposed
+        && intent.revision === revision
+        && intent.scope.valid
+        && scope.valid
+        && sameScope(intent.scope, scope)
+        && sameScope(currentScope, scope);
+    },
+    revision() { return revision; },
+  };
+}
