@@ -8,6 +8,10 @@ import {
   type LocationSearchResult,
   type ReverseLocationOptions,
 } from "./location-search";
+import {
+  resolveEnglishPlaceQuery,
+  type PlaceNameAliasResolver,
+} from "./place-name-aliases";
 
 type PhotonFeature = {
   geometry?: {
@@ -32,6 +36,7 @@ type PhotonLocationSearchOptions = {
   requestIntervalMs?: number;
   cacheTtlMs?: number;
   requestTimeoutMs?: number;
+  placeNameAliases?: PlaceNameAliasResolver;
 };
 
 const DEFAULT_REQUEST_INTERVAL_MS = 1_000;
@@ -39,34 +44,6 @@ const DEFAULT_CACHE_TTL_MS = 24 * 60 * 60 * 1_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
 const MAX_CACHE_ENTRIES = 256;
 const MAX_PENDING_REQUESTS = 24;
-
-// Photon does not translate every Chinese place-name query. These common
-// aliases keep the most frequent foreign-city searches useful while the
-// provider's own bilingual fields remain the source of truth for addresses.
-const ENGLISH_QUERY_ALIASES: Readonly<Record<string, string>> = {
-  "伦敦": "London",
-  "英国伦敦": "London",
-  "东京": "Tokyo",
-  "日本东京": "Tokyo",
-  "纽约": "New York City",
-  "纽约市": "New York City",
-  "巴黎": "Paris",
-  "新加坡": "Singapore",
-  "悉尼": "Sydney",
-  "墨尔本": "Melbourne",
-  "洛杉矶": "Los Angeles",
-  "旧金山": "San Francisco",
-  "芝加哥": "Chicago",
-  "罗马": "Rome",
-  "柏林": "Berlin",
-  "莫斯科": "Moscow",
-  "迪拜": "Dubai",
-  "曼谷": "Bangkok",
-  "首尔": "Seoul",
-  "香港": "Hong Kong",
-  "台北": "Taipei",
-  "大阪": "Osaka",
-};
 
 function text(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
@@ -82,14 +59,6 @@ function firstText(properties: Record<string, unknown>, keys: readonly string[])
 
 function hasNonAscii(value: string) {
   return /[^\u0000-\u007f]/.test(value);
-}
-
-function normalizedQueryKey(value: string) {
-  return value.toLocaleLowerCase().replace(/\s+/g, " ").trim();
-}
-
-function getEnglishQuery(query: string) {
-  return ENGLISH_QUERY_ALIASES[normalizedQueryKey(query)] ?? query;
 }
 
 function contextFrom(properties: Record<string, unknown>, label: string): string {
@@ -205,10 +174,10 @@ function mergeBilingualResults(
     if (!result.context && candidate.context) result.context = candidate.context;
   });
 
-  // For ordinary queries keep the provider's local ordering and append only
-  // genuinely new English hits. For a Chinese foreign-city alias, the
-  // provider's same-language hits can be unrelated places, so English hits
-  // are the authoritative list and those false positives are omitted.
+  // Whenever the provider answered the query in its own language, keep that
+  // ordering and append only genuinely new English hits — a localized label
+  // the provider supplied is never dropped just to make a query work. When it
+  // answered nothing at all, the English hits are the whole list.
   if (!preferEnglish) {
     secondary.forEach((candidate, index) => {
       if (matchedSecondary.has(index)) return;
@@ -231,6 +200,7 @@ export class PhotonLocationSearch implements LocationSearch {
   private readonly requestIntervalMs: number;
   private readonly cacheTtlMs: number;
   private readonly requestTimeoutMs: number;
+  private readonly placeNameAliases: PlaceNameAliasResolver;
   private readonly cache = new Map<string, CachedResults>();
   private queue: Promise<void> = Promise.resolve();
   private nextRequestAt = 0;
@@ -243,6 +213,7 @@ export class PhotonLocationSearch implements LocationSearch {
     this.requestIntervalMs = options.requestIntervalMs ?? DEFAULT_REQUEST_INTERVAL_MS;
     this.cacheTtlMs = options.cacheTtlMs ?? DEFAULT_CACHE_TTL_MS;
     this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    this.placeNameAliases = options.placeNameAliases ?? resolveEnglishPlaceQuery;
   }
 
   search(
@@ -253,7 +224,6 @@ export class PhotonLocationSearch implements LocationSearch {
     const primaryUrl = new URL("api/", this.baseUrl);
     primaryUrl.searchParams.set("q", normalizedQuery);
     primaryUrl.searchParams.set("limit", String(options.limit));
-    const englishQuery = getEnglishQuery(normalizedQuery);
     return this.requestFeatures(
       primaryUrl,
       `search:${normalizedQuery.toLocaleLowerCase()}::${options.limit}`,
@@ -261,17 +231,23 @@ export class PhotonLocationSearch implements LocationSearch {
     ).then(async (primaryResults) => {
       // The English request is queued behind the primary one — a full
       // requestIntervalMs (1s by default) of added latency — so only pay for
-      // it when the primary answer is genuinely insufficient: an alias needs
-      // correcting, a result carries no English label, or a non-ASCII query
-      // found nothing at all. A Chinese query the provider already answers
-      // bilingually must not trigger it.
-      const shouldFetchEnglish = englishQuery !== normalizedQuery
-        || primaryResults.some((result) => (
-          !result.labelEnglish && hasNonAscii(result.label)
-        ))
-        || (hasNonAscii(normalizedQuery) && primaryResults.length === 0);
+      // it when the primary answer is genuinely insufficient: a result carries
+      // no English label, or a non-ASCII query found nothing at all. A Chinese
+      // query the provider already answers bilingually must not trigger it.
+      // Whether the query has a known exonym is deliberately NOT a trigger:
+      // the shared place-name index knows Chinese names for domestic cities
+      // too, and those are exactly the queries the provider answers in one
+      // round trip.
+      const shouldFetchEnglish = (
+        primaryResults.some((result) => !result.labelEnglish && hasNonAscii(result.label))
+        || (hasNonAscii(normalizedQuery) && primaryResults.length === 0)
+      );
       if (!shouldFetchEnglish) return primaryResults;
 
+      // Only now is the exonym worth resolving, and a failure to read the
+      // shared place-name data is surfaced rather than silently narrowing
+      // recall back to whatever the provider answered in its own language.
+      const englishQuery = await this.placeNameAliases(normalizedQuery);
       const englishUrl = new URL("api/", this.baseUrl);
       englishUrl.searchParams.set("q", englishQuery);
       englishUrl.searchParams.set("limit", String(options.limit));
@@ -291,7 +267,7 @@ export class PhotonLocationSearch implements LocationSearch {
         primaryResults,
         englishResults,
         options.limit,
-        englishQuery !== normalizedQuery && hasNonAscii(normalizedQuery),
+        primaryResults.length === 0 && hasNonAscii(normalizedQuery),
       );
     });
   }
