@@ -1,5 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import { buildPlaybackSteps, initialPlaybackState, playbackReducer } from "./journeyPlayback";
+import {
+  buildPlaybackSteps,
+  initialPlaybackState,
+  playbackCameraTargetForStep,
+  playbackMediaForPoint,
+  playbackReducer,
+  playbackStepIdentity,
+} from "./journeyPlayback";
 import {
   advancePlaybackIntentRevision,
   consumePlaybackTimerBudget,
@@ -9,6 +16,7 @@ import {
   playbackProgressFraction,
   playbackTimerDelay,
   replanPlaybackTimerBudget,
+  resolvePlaybackSessionHomeContextSnapshot,
   resolvePlaybackTimerBudget,
 } from "./useJourneyPlaybackDirector";
 import { buildPlaybackPlan } from "./journeyPlaybackPlan";
@@ -51,6 +59,81 @@ describe("playback narrative intent revision (#197)", () => {
         epilogue: { eligible: false, reason: "no-home-base" },
       },
     })).toBe(true);
+  });
+});
+
+describe("playback session Home snapshot (#235)", () => {
+  const eligibleHome = {
+    prelude: {
+      eligible: true as const,
+      reason: "eligible" as const,
+      cameraTarget: {
+        kind: "home" as const,
+        homeBaseId: "home-1",
+        latitude: 22.3,
+        longitude: 114.2,
+        anchor: { x: 1, y: 2, z: 3 },
+      },
+    },
+    epilogue: {
+      eligible: true as const,
+      reason: "eligible" as const,
+      cameraTarget: {
+        kind: "home" as const,
+        homeBaseId: "home-1",
+        latitude: 22.3,
+        longitude: 114.2,
+        anchor: { x: 1, y: 2, z: 3 },
+      },
+    },
+  };
+
+  it("keeps an active Journey beat, media, camera and timer stable when Home hydrates late", () => {
+    const initialSnapshot = { journeyId: progressJourney.id, homeContext: null };
+    const initialSteps = buildPlaybackSteps(progressJourney, initialSnapshot.homeContext);
+    const mediaIndex = initialSteps.findIndex((step) => step.kind === "media");
+    const initialStep = initialSteps[mediaIndex];
+    expect(initialStep?.kind).toBe("media");
+    if (!initialStep || initialStep.kind !== "media") throw new Error("media fixture missing");
+
+    const identity = playbackStepIdentity(progressJourney, initialStep);
+    const mediaOwner = playbackMediaForPoint(progressJourney, initialStep.pointIndex)[initialStep.mediaIndex]?.id;
+    const cameraTarget = playbackCameraTargetForStep(initialStep, progressJourney);
+    const timer = { remainingMs: 1400, fullDurationMs: 2800 };
+
+    const hydratedSnapshot = resolvePlaybackSessionHomeContextSnapshot(
+      initialSnapshot,
+      progressJourney,
+      eligibleHome,
+    );
+    expect(hydratedSnapshot).toBe(initialSnapshot);
+
+    const hydratedSteps = buildPlaybackSteps(progressJourney, hydratedSnapshot.homeContext);
+    const hydratedStep = hydratedSteps[mediaIndex];
+    expect(hydratedStep?.kind).toBe("media");
+    if (!hydratedStep || hydratedStep.kind !== "media") throw new Error("media beat changed");
+    expect(playbackStepIdentity(progressJourney, hydratedStep)).toBe(identity);
+    expect(playbackMediaForPoint(progressJourney, hydratedStep.pointIndex)[hydratedStep.mediaIndex]?.id)
+      .toBe(mediaOwner);
+    expect(playbackCameraTargetForStep(hydratedStep, progressJourney)).toEqual(cameraTarget);
+    expect(resolvePlaybackTimerBudget({
+      previousKey: identity,
+      nextKey: playbackStepIdentity(progressJourney, hydratedStep),
+      current: timer,
+      nextFullDurationMs: timer.fullDurationMs,
+      carry: null,
+      carryAllowed: false,
+    }).budget).toEqual(timer);
+  });
+
+  it("lets a later playback session snapshot newly available Home context", () => {
+    const nextSession = resolvePlaybackSessionHomeContextSnapshot(
+      { journeyId: null, homeContext: null },
+      progressJourney,
+      eligibleHome,
+    );
+    expect(nextSession.homeContext).toBe(eligibleHome);
+    expect(buildPlaybackSteps(progressJourney, nextSession.homeContext).at(0)?.kind).toBe("home-prelude");
   });
 });
 
