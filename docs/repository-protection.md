@@ -39,10 +39,27 @@ Two parameters are deliberately left as they are:
 The ruleset does not read labels. It requires the `merge-readiness` status check, and the
 `merge-readiness` workflow is what reads the label: it publishes success only after `ci / verify`
 has passed for the current head, every review conversation is resolved, and `merge-ready` is
-present — revalidating the live label immediately before and after publishing. Any later push or
-review activity cancels the older controller run and returns the status to pending. So the label
-requirement is enforced on the merge button through that required check, and the ordering in
-[`CONTRIBUTING.md`](../CONTRIBUTING.md) is not advisory.
+present.
+
+Readiness is still latest-event-wins, but the workflow deliberately does **not** use Actions
+`cancel-in-progress`. GitHub keeps cancelled check-runs attached to the PR head and renders a red
+aggregate check even after the final required checks pass and the PR merges. Instead every
+controller run re-reads the live PR head and the readiness workflow's run list before changing the
+shared label/status state. If a newer readiness run already exists for that exact head, the older
+run exits successfully without writing anything.
+
+The preflight freshness read and a GitHub status write are not atomic, so every status write also
+performs a post-write handoff. If a newer controller appeared in that window and is still running,
+the stale writer repairs the shared context to fail-closed `pending` targeted at that newer run. If
+the newer controller already completed and published `merge-readiness`, the stale writer restores
+that exact newer state, description and target URL from commit-status history. A completed newer
+success also restores `merge-ready` if an older controller removed it after the newer sign-off.
+The same handoff runs after invalidation, rejection and final success, so neither an old `pending`
+can survive a newer success nor an old success survive a newer invalidation. Superseded Actions
+runs themselves finish successfully/no-op instead of leaving cancelled checks on the PR head.
+
+The label requirement is enforced on the merge button through the required `merge-readiness`
+status, and the ordering in [`CONTRIBUTING.md`](../CONTRIBUTING.md) is not advisory.
 
 ### Re-running `ci` withdraws a sign-off, and that is not a bug
 

@@ -16,14 +16,14 @@ on:
   pull_request_review_comment:
     types: [created, edited, deleted]
 
-concurrency:
-  # One readiness state machine per PR. Never allow an older sign-off run and a
-  # newer invalidation run to write the same commit-status context concurrently.
-  group: merge-readiness-${{ github.event.pull_request.number }}
-  # Newer PR/review activity is authoritative and cancels any older controller.
-  cancel-in-progress: true
+# Do not use Actions concurrency cancellation here. Cancelled controller jobs remain
+# attached to the PR head and make GitHub render an otherwise-green merged PR with a
+# red aggregate check. Every event completes normally. Before a write, a controller
+# proves that it is still the newest run for this PR head; after a write, it hands
+# the shared status back to a newer run if one appeared in the check/write window.
 
 permissions:
+  actions: read
   contents: read
   checks: read
   statuses: write
@@ -39,6 +39,8 @@ jobs:
       GH_REPO: ${{ github.repository }}
       PR_NUMBER: ${{ github.event.pull_request.number }}
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      HEAD_REF: ${{ github.event.pull_request.head.ref }}
+      RUN_ID: ${{ github.run_id }}
       STATUS_TARGET_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
       - name: Defer stacked PRs until they target main
@@ -46,18 +48,147 @@ jobs:
         run: |
           echo "This PR targets ${{ github.event.pull_request.base.ref }}; merge readiness is enforced after retargeting to main."
 
+      - name: Prepare readiness controller helpers
+        if: github.event.pull_request.base.ref == 'main'
+        run: |
+          cat > "$RUNNER_TEMP/merge-readiness-lib.sh" <<'READINESS_LIB'
+          latest_newer_run_id() {
+            gh api --paginate --slurp \
+              --method GET \
+              "repos/$GH_REPO/actions/workflows/merge-readiness.yml/runs" \
+              -f per_page=100 \
+              -f branch="$HEAD_REF" \
+              | jq -r --arg sha "$HEAD_SHA" --argjson run_id "$RUN_ID" '
+                  [.[].workflow_runs[]
+                    | select(.head_sha == $sha and .id > $run_id)
+                    | .id]
+                  | max // 0'
+          }
+
+          controller_is_authoritative() {
+            local live_head newer_run
+
+            live_head=$(gh api "repos/$GH_REPO/pulls/$PR_NUMBER" --jq '.head.sha')
+            if [[ "$live_head" != "$HEAD_SHA" ]]; then
+              echo "Superseded controller: live PR head is $live_head, event head was $HEAD_SHA."
+              return 1
+            fi
+
+            newer_run=$(latest_newer_run_id)
+            if [[ "$newer_run" != "0" ]]; then
+              echo "Superseded controller: newer readiness run $newer_run already exists for $HEAD_SHA."
+              return 1
+            fi
+
+            return 0
+          }
+
+          publish_readiness_status() {
+            local state="$1"
+            local description="$2"
+            local target_url="$3"
+            gh api \
+              --method POST \
+              "repos/$GH_REPO/statuses/$HEAD_SHA" \
+              -f state="$state" \
+              -f context=merge-readiness \
+              -f description="$description" \
+              -f target_url="$target_url" \
+              --silent
+          }
+
+          # Return 0 when this run became stale and the shared state was handed to
+          # the newest known controller; return 1 when this run is still authoritative.
+          handoff_after_status_write_if_superseded() {
+            local live_head newer_run newer_target newer_run_status status_pages newer_status newer_state newer_description live_label
+
+            live_head=$(gh api "repos/$GH_REPO/pulls/$PR_NUMBER" --jq '.head.sha')
+            if [[ "$live_head" != "$HEAD_SHA" ]]; then
+              echo "PR head moved to $live_head after this status write; the old-head status is no longer authoritative."
+              return 0
+            fi
+
+            newer_run=$(latest_newer_run_id)
+            if [[ "$newer_run" == "0" ]]; then
+              return 1
+            fi
+
+            newer_target="https://github.com/$GH_REPO/actions/runs/$newer_run"
+            newer_run_status=$(gh api "repos/$GH_REPO/actions/runs/$newer_run" --jq '.status')
+
+            if [[ "$newer_run_status" != "completed" ]]; then
+              publish_readiness_status \
+                pending \
+                'Newer review/PR activity is being reconciled' \
+                "$newer_target"
+              echo "Newer readiness run $newer_run is $newer_run_status; repaired the stale write to fail-closed pending."
+              return 0
+            fi
+
+            status_pages=$(gh api --paginate --slurp \
+              "repos/$GH_REPO/commits/$HEAD_SHA/statuses?per_page=100")
+            newer_status=$(jq -c --arg target "$newer_target" '
+              [.[].[]
+                | select(.context == "merge-readiness" and .target_url == $target)]
+              | first // empty' <<<"$status_pages")
+
+            if [[ -z "$newer_status" ]]; then
+              publish_readiness_status \
+                pending \
+                'Newer review/PR activity requires sign-off' \
+                "$newer_target"
+              echo "Newer readiness run $newer_run completed without publishing a status; repaired stale state to pending."
+              return 0
+            fi
+
+            newer_state=$(jq -r '.state' <<<"$newer_status")
+            newer_description=$(jq -r '.description // "Final review/CI sign-off required"' <<<"$newer_status")
+            publish_readiness_status "$newer_state" "$newer_description" "$newer_target"
+
+            # A completed newer success is proof that its final sign-off owned the
+            # label. If an older controller removed that label after the newer run
+            # completed, restore it along with the newer status.
+            if [[ "$newer_state" == "success" ]]; then
+              live_label=$(gh api \
+                "repos/$GH_REPO/issues/$PR_NUMBER/labels" \
+                --jq 'any(.[]; .name == "merge-ready")')
+              if [[ "$live_label" != "true" ]]; then
+                gh api \
+                  --method POST \
+                  "repos/$GH_REPO/issues/$PR_NUMBER/labels" \
+                  -f 'labels[]=merge-ready' \
+                  --silent
+              fi
+            fi
+
+            echo "Restored merge-readiness from newer completed run $newer_run after a stale write."
+            return 0
+          }
+          READINESS_LIB
+
       - name: Invalidate stale sign-off
         if: >-
           github.event.pull_request.base.ref == 'main' &&
           !(github.event_name == 'pull_request' &&
             github.event.action == 'labeled' &&
             github.event.label.name == 'merge-ready')
-        env:
-          HAS_MERGE_READY: ${{ contains(github.event.pull_request.labels.*.name, 'merge-ready') }}
         run: |
           set -euo pipefail
+          source "$RUNNER_TEMP/merge-readiness-lib.sh"
 
-          if [[ "$HAS_MERGE_READY" == "true" ]]; then
+          if ! controller_is_authoritative; then
+            echo "A newer PR/review event owns readiness; finishing this older run as a successful no-op."
+            exit 0
+          fi
+
+          live_merge_ready=$(gh api \
+            "repos/$GH_REPO/issues/$PR_NUMBER/labels" \
+            --jq 'any(.[]; .name == "merge-ready")')
+          if [[ "$live_merge_ready" == "true" ]]; then
+            if ! controller_is_authoritative; then
+              echo "A newer event arrived before label invalidation; leaving it to the newer controller."
+              exit 0
+            fi
             gh api \
               --method DELETE \
               "repos/$GH_REPO/issues/$PR_NUMBER/labels/merge-ready" \
@@ -65,14 +196,22 @@ jobs:
             echo "Removed stale merge-ready sign-off."
           fi
 
-          gh api \
-            --method POST \
-            "repos/$GH_REPO/statuses/$HEAD_SHA" \
-            -f state=pending \
-            -f context=merge-readiness \
-            -f description='Final review/CI sign-off required' \
-            -f target_url="$STATUS_TARGET_URL" \
-            --silent
+          if ! controller_is_authoritative; then
+            echo "A newer event arrived before pending status publication; leaving it to the newer controller."
+            exit 0
+          fi
+
+          publish_readiness_status \
+            pending \
+            'Final review/CI sign-off required' \
+            "$STATUS_TARGET_URL"
+
+          # The freshness check above and the status POST are not atomic. If a newer
+          # sign-off/invalidation completed in that gap, restore its state; if it is
+          # still running, leave the shared gate fail-closed pending for it to finish.
+          if handoff_after_status_write_if_superseded; then
+            exit 0
+          fi
 
           echo "merge-readiness is pending until merge-ready is re-applied as the final action."
 
@@ -86,24 +225,48 @@ jobs:
           IS_DRAFT: ${{ github.event.pull_request.draft }}
         run: |
           set -euo pipefail
+          source "$RUNNER_TEMP/merge-readiness-lib.sh"
 
           reject_gate() {
             local description="$1"
-            gh api \
-              --method POST \
-              "repos/$GH_REPO/statuses/$HEAD_SHA" \
-              -f state=failure \
-              -f context=merge-readiness \
-              -f description="$description" \
-              -f target_url="$STATUS_TARGET_URL" \
-              --silent
-            gh api \
-              --method DELETE \
-              "repos/$GH_REPO/issues/$PR_NUMBER/labels/merge-ready" \
-              --silent
+
+            if ! controller_is_authoritative; then
+              echo "A newer event owns readiness; stale rejection '$description' is a successful no-op."
+              exit 0
+            fi
+
+            publish_readiness_status \
+              failure \
+              "$description" \
+              "$STATUS_TARGET_URL"
+
+            if handoff_after_status_write_if_superseded; then
+              echo "A newer controller arrived during rejection; its state now owns merge-readiness."
+              exit 0
+            fi
+
+            live_label=$(gh api \
+              "repos/$GH_REPO/issues/$PR_NUMBER/labels" \
+              --jq 'any(.[]; .name == "merge-ready")')
+            if [[ "$live_label" == "true" ]]; then
+              if ! controller_is_authoritative; then
+                echo "A newer event arrived before stale-label removal; leaving its label untouched."
+                exit 0
+              fi
+              gh api \
+                --method DELETE \
+                "repos/$GH_REPO/issues/$PR_NUMBER/labels/merge-ready" \
+                --silent
+            fi
+
             echo "merge-readiness rejected: $description"
             exit 0
           }
+
+          if ! controller_is_authoritative; then
+            echo "A newer PR/review event owns readiness; finishing this older sign-off as a successful no-op."
+            exit 0
+          fi
 
           if [[ "$IS_DRAFT" == "true" ]]; then
             reject_gate 'Draft pull request is not merge-ready'
@@ -117,10 +280,6 @@ jobs:
             reject_gate 'ci / verify could not be read from the GitHub API'
           fi
 
-          # Report absent, in-flight and concluded separately. Collapsing all three
-          # into "missing" makes a check that is merely still running look like a
-          # lookup defect, which is exactly how a re-run of `ci` during sign-off
-          # reads from the outside.
           verify_state=$(jq -r '
             [.[].check_runs[] | select(.name == "verify")]
             | sort_by(.started_at)
@@ -146,40 +305,74 @@ jobs:
             reject_gate "$unresolved unresolved review conversation(s) remain"
           fi
 
+          if ! controller_is_authoritative; then
+            echo "A newer event arrived during sign-off verification; refusing stale success."
+            exit 0
+          fi
+
           live_merge_ready=$(gh api \
             "repos/$GH_REPO/issues/$PR_NUMBER/labels" \
             --jq 'any(.[]; .name == "merge-ready")')
           if [[ "$live_merge_ready" != "true" ]]; then
-            echo "A newer invalidation already removed merge-ready; refusing stale success."
+            # A stale older controller can remove the label after this newer labeled
+            # event was created. Give a genuinely newer invalidation time to appear;
+            # only the still-authoritative labeled event may restore its own label.
+            sleep 1
+            if ! controller_is_authoritative; then
+              echo "A newer invalidation owns the missing merge-ready label; refusing stale success."
+              exit 0
+            fi
+            live_merge_ready=$(gh api \
+              "repos/$GH_REPO/issues/$PR_NUMBER/labels" \
+              --jq 'any(.[]; .name == "merge-ready")')
+            if [[ "$live_merge_ready" != "true" ]]; then
+              gh api \
+                --method POST \
+                "repos/$GH_REPO/issues/$PR_NUMBER/labels" \
+                -f 'labels[]=merge-ready' \
+                --silent
+              echo "Restored merge-ready removed by an older superseded controller."
+            fi
+          fi
+
+          publish_readiness_status \
+            success \
+            'Final review and CI sign-off complete' \
+            "$STATUS_TARGET_URL"
+
+          # The post-write handoff closes both directions of the race: an older
+          # invalidation cannot leave pending after a newer success, and an older
+          # sign-off cannot leave success after a newer invalidation.
+          if handoff_after_status_write_if_superseded; then
             exit 0
           fi
 
-          gh api \
-            --method POST \
-            "repos/$GH_REPO/statuses/$HEAD_SHA" \
-            -f state=success \
-            -f context=merge-readiness \
-            -f description='Final review and CI sign-off complete' \
-            -f target_url="$STATUS_TARGET_URL" \
-            --silent
-
-          # Close the tiny precheck/write window as well. If a newer invalidation
-          # removed the label while success was being posted, repair the shared
-          # context back to pending instead of leaving stale green readiness.
           live_merge_ready_after=$(gh api \
             "repos/$GH_REPO/issues/$PR_NUMBER/labels" \
             --jq 'any(.[]; .name == "merge-ready")')
           if [[ "$live_merge_ready_after" != "true" ]]; then
-            gh api \
-              --method POST \
-              "repos/$GH_REPO/statuses/$HEAD_SHA" \
-              -f state=pending \
-              -f context=merge-readiness \
-              -f description='Newer review/PR activity invalidated sign-off' \
-              -f target_url="$STATUS_TARGET_URL" \
-              --silent
-            echo "A newer invalidation raced final sign-off; readiness repaired to pending."
+            sleep 1
+            if ! controller_is_authoritative; then
+              if handoff_after_status_write_if_superseded; then
+                exit 0
+              fi
+            fi
+
+            live_merge_ready_after=$(gh api \
+              "repos/$GH_REPO/issues/$PR_NUMBER/labels" \
+              --jq 'any(.[]; .name == "merge-ready")')
+            if [[ "$live_merge_ready_after" != "true" ]]; then
+              publish_readiness_status \
+                pending \
+                'Final sign-off label changed during verification' \
+                "$STATUS_TARGET_URL"
+              echo "merge-ready disappeared after final verification; readiness returned to pending."
+              exit 0
+            fi
+          fi
+
+          if handoff_after_status_write_if_superseded; then
             exit 0
           fi
 
-          echo "merge-ready applies to $HEAD_SHA, ci / verify passed, and all review conversations are resolved."
+          echo "merge-ready applies to $HEAD_SHA, ci / verify passed, all review conversations are resolved, and no newer controller event exists."
