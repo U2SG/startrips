@@ -487,6 +487,7 @@ async function createQaPage(path, mediaUrl, {
   rotateReadUrls = false,
   previewMediaUrl = null,
   originalResponseDelayMs = 0,
+  videoOriginalResponseDelayMs = null,
   viewport = mobile ? { width: 390, height: 844 } : { width: 1280, height: 800 },
 } = {}) {
   const page = await browser.newPage({
@@ -645,17 +646,16 @@ async function createQaPage(path, mediaUrl, {
     contentType: "application/json",
     body: "null",
   }));
-  if (originalResponseDelayMs > 0) {
-    const delayedMedia = new Set([
-      typeof mediaUrl === "string" && mediaUrl.startsWith("/") ? mediaUrl : null,
-      mixedMedia ? tinyVideo : null,
-    ].filter(Boolean));
-    for (const url of delayedMedia) {
-      await page.route(`**${url}`, async (route) => {
-        await new Promise((resolve) => setTimeout(resolve, originalResponseDelayMs));
-        await route.continue();
-      });
-    }
+  const delayedMedia = [
+    [typeof mediaUrl === "string" && mediaUrl.startsWith("/") ? mediaUrl : null, originalResponseDelayMs],
+    [mixedMedia ? tinyVideo : null, videoOriginalResponseDelayMs ?? originalResponseDelayMs],
+  ];
+  for (const [url, delayMs] of delayedMedia) {
+    if (!url || delayMs <= 0) continue;
+    await page.route(`**${url}`, async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      await route.continue();
+    });
   }
   let releaseBlockedRead = () => undefined;
   const blockedRead = blockedReadAssetId
@@ -752,6 +752,7 @@ try {
     mixedMedia: true,
     previewMediaUrl: onePixelGif,
     originalResponseDelayMs: 1_200,
+    videoOriginalResponseDelayMs: 5_000,
   });
   try {
     await waitForStoryPicture(previewVideo.page, "00000000-0000-4000-8000-000000000100");
