@@ -269,6 +269,18 @@ function findFixture(sample, fixture) {
   return best?.label ?? null;
 }
 
+function findExactCityLabel(sample, point, tolerance = 0.0002) {
+  return sample.labels.find((label) => (
+    Math.abs(label.lat - point.lat) <= tolerance
+    && Math.abs(label.lon - point.lon) <= tolerance
+  )) ?? null;
+}
+
+function containsHanText(value) {
+  return /[\u3400-\u4dbf\u4e00-\u9fff]/.test(String(value ?? ""));
+}
+
+
 /**
  * Wheel and pointer gestures are dispatched onto the canvas directly rather
  * than driven through page coordinates. Coordinate input hit-tests the topmost
@@ -674,6 +686,27 @@ try {
       }
       checkFrame(settled, `${label} settled`);
       checkNoOverlap(settled, `${label} settled`);
+      if (fixture.key === "dense-coastline" && zoom === 2) {
+        // Regional collision/declutter is allowed to pick a neighboring PRD
+        // anchor instead of Shenzhen itself. Grade what the viewer actually
+        // reads near the Shenzhen focus rather than requiring one exact city
+        // identity to survive the regional label budget.
+        const regional = nearestLabel(settled, fixture);
+        check(
+          Boolean(regional && regional.separation <= 0.8 && containsHanText(regional.label.name)),
+          `${label}: nearest rendered PRD label is ${JSON.stringify(regional?.label.name ?? null)} at ${regional?.separation?.toFixed(3) ?? "n/a"}deg, expected Chinese text within 0.8deg of Shenzhen`,
+        );
+        console.log(`[qa-city-label-anchoring] shenzhen-localization zoom=2 rendered=${JSON.stringify(regional?.label.name ?? null)} separation=${regional?.separation?.toFixed(3) ?? "n/a"}deg`);
+      } else if (fixture.key === "dense-coastline" && zoom === 3) {
+        // Local zoom has enough budget to require Shenzhen's own label, which
+        // proves the same generated city stays Chinese as the tier gets finer.
+        const shenzhenLabel = findExactCityLabel(settled, fixture);
+        check(
+          shenzhenLabel?.name === "深圳",
+          `${label}: rendered Shenzhen label is ${JSON.stringify(shenzhenLabel?.name ?? null)}, expected Chinese text 深圳`,
+        );
+        console.log(`[qa-city-label-anchoring] shenzhen-localization zoom=3 rendered=${JSON.stringify(shenzhenLabel?.name ?? null)}`);
+      }
       // #237 asks for Shenzhen / Pearl River Delta specifically, and the lane
       // already runs four fixtures x three zooms x fifteen frames inside a
       // twelve-minute job. Scoping the map measurement to the dense-coastline
@@ -910,6 +943,31 @@ try {
         `focusToLabelPx=${drift === null ? "label not re-rendered at any zoom" : drift.toFixed(3)}`,
       ].join(" "));
     }
+  }
+
+  // #16 reopened: inspect the actual rendered text at both regional and local
+  // zoom around Hong Kong too, reusing this lane instead of adding another CI
+  // owner. The DOM text is what the viewer reads; candidate ids alone are not
+  // localization evidence.
+  const hongKong = { lat: 22.27832, lon: 114.17469 };
+  await page.goto(new URL(
+    `/?qaState=journey-routes&qaQuality=high&qaFocusLat=${hongKong.lat}&qaFocusLon=${hongKong.lon}`,
+    baseUrl,
+  ).toString(), { waitUntil: "domcontentloaded" });
+  await page.locator('[data-scene-ready="true"]').waitFor({ timeout: 30_000 });
+  await page.waitForFunction(() => Number(
+    document.querySelector(".particle-earth-scene")?.dataset.journeyCityLabelCount ?? 0,
+  ) > 0, null, { timeout: 30_000 });
+  for (const zoom of [2, 3]) {
+    await setZoom(page, zoom);
+    await page.waitForTimeout(300);
+    const localized = await measure(page);
+    const rendered = findExactCityLabel(localized, hongKong);
+    check(
+      rendered?.name === "香港",
+      `hong-kong-localization @${zoom}x: rendered label is ${JSON.stringify(rendered?.name ?? null)}, expected Chinese text 香港`,
+    );
+    console.log(`[qa-city-label-anchoring] hong-kong-localization zoom=${zoom} rendered=${JSON.stringify(rendered?.name ?? null)}`);
   }
 
   if (pageErrors.length > 0 || consoleErrors.length > 0) {
