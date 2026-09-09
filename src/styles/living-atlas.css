@@ -4664,16 +4664,14 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   letter-spacing: 0.04em;
 }
 
-@media (max-width: 760px) {
-  .living-atlas__route-point-context {
-    top: auto;
-    right: calc(env(safe-area-inset-right) + 12px);
-    bottom: calc(env(safe-area-inset-bottom) + 136px);
-    left: calc(env(safe-area-inset-left) + 12px);
-    width: auto;
-    max-height: calc(100svh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 164px);
-    transform: none;
-  }
+.living-atlas[data-mobile-v2="on"] .living-atlas__route-point-context {
+  top: auto;
+  right: calc(env(safe-area-inset-right) + 12px);
+  bottom: calc(env(safe-area-inset-bottom) + 136px);
+  left: calc(env(safe-area-inset-left) + 12px);
+  width: auto;
+  max-height: calc(100svh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 164px);
+  transform: none;
 }
 
 /* #253: the only persistent chrome of this mode. It sits in the top-left safe

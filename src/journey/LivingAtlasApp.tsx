@@ -1251,6 +1251,15 @@ export function LivingAtlasApp({
             }}
             onJourneyRoutePointActivate={(journeyId, routePointId) => {
               if (journeyId === "draft-route-preview") return;
+              // #291 review: Route Point context is subordinate to the Atlas'
+              // single semantic Journey owner. Visible points on sibling routes
+              // stay ineligible until that Journey is selected through the
+              // existing owner path; revealing context must never create a
+              // second semantic owner or advance camera/focus ownership.
+              if (journeyId !== activeJourneyId) {
+                clearRoutePointContext();
+                return;
+              }
               revealRoutePointContext(journeyId, routePointId);
             }}
             onGlobePointPick={globePickActive ? completeGlobePick : undefined}

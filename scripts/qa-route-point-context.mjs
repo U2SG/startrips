@@ -7,6 +7,8 @@ const journeyId = "qa-context-journey";
 const photoPointId = "qa-context-photo";
 const textPointId = "qa-context-text";
 const photoAssetId = "qa-context-photo-asset";
+const siblingJourneyId = "qa-context-sibling-journey";
+const siblingPointId = "qa-context-sibling-point";
 
 const journey = {
   id: journeyId,
@@ -63,6 +65,27 @@ const journey = {
   }],
 };
 
+const siblingJourney = {
+  ...journey,
+  id: siblingJourneyId,
+  title: "另一段可见旅程",
+  coverMediaAssetId: null,
+  revision: 1,
+  routePoints: [{
+    id: siblingPointId,
+    journeyId: siblingJourneyId,
+    sortOrder: 0,
+    latitude: 22.31,
+    longitude: 114.22,
+    label: "另一段旅程的路线点",
+    isStop: true,
+    occurredAt: null,
+    note: "",
+    createdAt: "2026-04-05T10:00:00.000Z",
+  }],
+  media: [],
+};
+
 const browser = await launchQaBrowser({
   args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"],
 });
@@ -84,7 +107,7 @@ async function stubAtlasApi(page) {
   await page.route("**/api/journeys", (route) => route.fulfill({
     status: 200,
     contentType: "application/json",
-    body: JSON.stringify({ journeys: [journey] }),
+    body: JSON.stringify({ journeys: [siblingJourney, journey] }),
   }));
   await page.route(`**/api/uploads/assets/${photoAssetId}/read-url`, async (route) => {
     // Delay the representative read so focus/camera ownership is graded both
@@ -101,8 +124,12 @@ async function stubAtlasApi(page) {
   });
 }
 
-async function openFocusAtlas() {
-  const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+async function openFocusAtlas({ viewport = { width: 1280, height: 720 }, compact = false } = {}) {
+  const page = await browser.newPage({
+    viewport,
+    isMobile: compact,
+    hasTouch: compact,
+  });
   const pageErrors = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
   await stubAtlasApi(page);
@@ -116,10 +143,15 @@ async function openFocusAtlas() {
     `${origin}/?qaState=living-atlas&qaMode=globe-chrome&qaLite=1&qaRoutePointContext=1`,
     { waitUntil: "domcontentloaded" },
   );
-  await page.locator(".living-atlas__active").waitFor({ state: "visible", timeout: 20_000 });
-  await page.locator("[data-qa-route-point-context-focus]").waitFor({ state: "attached", timeout: 5_000 });
-  await page.locator(".living-atlas__globe-focus").click();
-  await page.waitForFunction(() => document.querySelector(".living-atlas")?.getAttribute("data-globe-focus") === "on");
+  await page.locator("[data-qa-route-point-context-focus]").waitFor({ state: "attached", timeout: 20_000 });
+  await page.locator(`[data-qa-route-point-context-activate="${photoPointId}"]`).waitFor({ state: "attached", timeout: 5_000 });
+  if (!compact) {
+    await page.locator(".living-atlas__active").waitFor({ state: "visible", timeout: 5_000 });
+    await page.locator(".living-atlas__globe-focus").click();
+    await page.waitForFunction(() => document.querySelector(".living-atlas")?.getAttribute("data-globe-focus") === "on");
+  } else {
+    await page.waitForFunction(() => document.querySelector(".living-atlas")?.getAttribute("data-mobile-v2") === "on");
+  }
   await page.waitForTimeout(80);
   return { page, pageErrors };
 }
@@ -146,6 +178,23 @@ try {
   const { page } = photoRun;
   const beforeFocus = await sceneFocusSnapshot(page);
   const controlsBefore = await page.locator(".living-atlas-globe__controls").count();
+
+  // Owner P2: the globe can expose hit targets for sibling Journeys, but Route
+  // Point context is subordinate to the existing semantic active-Journey owner.
+  // Attempting B while A is active must not reveal B or move focus/camera state.
+  const siblingTrigger = page.locator(`[data-qa-route-point-context-activate="${siblingPointId}"]`);
+  await siblingTrigger.waitFor({ state: "attached", timeout: 5_000 });
+  await siblingTrigger.evaluate((button) => button.click());
+  await page.waitForTimeout(80);
+  const afterSiblingAttempt = await sceneFocusSnapshot(page);
+  const siblingState = {
+    contextCount: await page.locator("[data-route-point-context]").count(),
+    activeRoute: afterSiblingAttempt.activeRoute,
+  };
+  record("sibling Journey Route Point cannot split semantic ownership", { beforeFocus, afterSiblingAttempt, siblingState },
+    siblingState.contextCount === 0
+    && siblingState.activeRoute === journeyId
+    && JSON.stringify(beforeFocus) === JSON.stringify(afterSiblingAttempt));
 
   await activateRoutePoint(page, 0);
   const context = page.locator("[data-route-point-context]");
@@ -232,6 +281,47 @@ try {
 
   record("text page errors", { pageErrors: textRun.pageErrors }, textRun.pageErrors.length === 0);
   await textPage.close();
+
+  for (const viewport of [
+    { name: "landscape-844x390", width: 844, height: 390 },
+    { name: "landscape-932x430", width: 932, height: 430 },
+  ]) {
+    const compactRun = await openFocusAtlas({
+      viewport: { width: viewport.width, height: viewport.height },
+      compact: true,
+    });
+    const compactPage = compactRun.page;
+    const compactFocusBefore = await sceneFocusSnapshot(compactPage);
+    await activateRoutePoint(compactPage, 0);
+    const compactContext = compactPage.locator("[data-route-point-context]");
+    await compactContext.waitFor({ state: "visible", timeout: 5_000 });
+    const compactFocusAfter = await sceneFocusSnapshot(compactPage);
+    const compactState = await compactContext.evaluate((node) => {
+      const root = node.closest(".living-atlas");
+      const panel = node.getBoundingClientRect();
+      const entry = node.querySelector(".living-atlas__route-point-context-entry")?.getBoundingClientRect() ?? null;
+      return {
+        mobileV2: root?.getAttribute("data-mobile-v2") ?? null,
+        contextCount: document.querySelectorAll("[data-route-point-context]").length,
+        panel: { left: panel.left, top: panel.top, right: panel.right, bottom: panel.bottom },
+        entry: entry ? { width: entry.width, height: entry.height } : null,
+        viewport: { width: innerWidth, height: innerHeight },
+      };
+    });
+    record(`${viewport.name} uses compact context posture`, { compactState },
+      compactState.mobileV2 === "on"
+      && compactState.contextCount === 1
+      && compactState.panel.left >= 0
+      && compactState.panel.top >= 0
+      && compactState.panel.right <= compactState.viewport.width
+      && compactState.panel.bottom <= compactState.viewport.height
+      && (compactState.entry?.height ?? 0) >= 44
+      && (compactState.entry?.width ?? 0) >= 44);
+    record(`${viewport.name} context keeps camera focus owner`, { compactFocusBefore, compactFocusAfter },
+      JSON.stringify(compactFocusBefore) === JSON.stringify(compactFocusAfter));
+    record(`${viewport.name} page errors`, { pageErrors: compactRun.pageErrors }, compactRun.pageErrors.length === 0);
+    await compactPage.close();
+  }
 } finally {
   await browser.close();
 }
