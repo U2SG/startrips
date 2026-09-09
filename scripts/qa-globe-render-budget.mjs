@@ -44,6 +44,36 @@ try {
 
   const run = await openFixture({ width: 932, height: 430, dpr: 3 });
   const { page } = run;
+  const viewportBeforeQuality = await page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
+  const highBefore = await page.evaluate(() => window.__particleEarthDebug?.());
+  await page.locator('[data-qa-render-quality="low"]').click();
+  await page.waitForFunction(() => window.__particleEarthDebug?.().quality === "low");
+  const lowAfter = await page.evaluate(() => window.__particleEarthDebug?.());
+  const viewportAfterLow = await page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
+  await page.locator('[data-qa-render-quality="high"]').click();
+  await page.waitForFunction(() => window.__particleEarthDebug?.().quality === "high");
+  const highAfter = await page.evaluate(() => window.__particleEarthDebug?.());
+  const viewportAfterHigh = await page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
+  record("budget:quality-high-low-high-without-resize", {
+    viewportBeforeQuality,
+    viewportAfterLow,
+    viewportAfterHigh,
+    highBefore,
+    lowAfter,
+    highAfter,
+  }, Boolean(highBefore && lowAfter && highAfter)
+    && viewportAfterLow.width === viewportBeforeQuality.width
+    && viewportAfterLow.height === viewportBeforeQuality.height
+    && viewportAfterHigh.width === viewportBeforeQuality.width
+    && viewportAfterHigh.height === viewportBeforeQuality.height
+    && highBefore.quality === "high"
+    && lowAfter.quality === "low"
+    && highAfter.quality === "high"
+    && lowAfter.pixelRatio < highBefore.pixelRatio
+    && highAfter.pixelRatio === highBefore.pixelRatio
+    && lowAfter.drawingBufferPixels < highBefore.drawingBufferPixels
+    && highAfter.drawingBufferPixels === highBefore.drawingBufferPixels);
+
   const click = async (state) => page.locator(`[data-qa-render-visibility="${state}"]`).click();
 
   await click("partial");

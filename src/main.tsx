@@ -145,7 +145,9 @@ function JourneyRoutesQaPreview() {
     lat: Number.isFinite(requestedLat) ? requestedLat : 30,
     lon: Number.isFinite(requestedLon) ? requestedLon : 110,
   };
-  const qaQuality = qaParams.get("qaQuality") === "high" ? "high" : "low";
+  const [qaQuality, setQaQuality] = useState<"low" | "high">(
+    qaParams.get("qaQuality") === "high" ? "high" : "low",
+  );
   const renderBudgetQa = qaParams.get("qaRenderBudget") === "1";
   return (
     <main className="living-atlas">
@@ -192,6 +194,8 @@ function JourneyRoutesQaPreview() {
             <button type="button" data-qa-render-visibility="transition" onClick={() => setQaVisibilityHint({ opaqueMediaCover: true, coverTransitionActive: true })}>transition</button>
             <button type="button" data-qa-render-visibility="covered" onClick={() => setQaVisibilityHint({ opaqueMediaCover: true, coverTransitionActive: false })}>covered</button>
             <button type="button" data-qa-render-visibility="reveal" onClick={() => setQaVisibilityHint({ opaqueMediaCover: false, coverTransitionActive: false })}>reveal</button>
+            <button type="button" data-qa-render-quality="low" onClick={() => setQaQuality("low")}>low quality</button>
+            <button type="button" data-qa-render-quality="high" onClick={() => setQaQuality("high")}>high quality</button>
           </>
         ) : null}
         {globeQaRoutes.map((route) => (
