@@ -43,7 +43,7 @@ import {
   type PlaybackCameraTarget,
   type PlaybackStep,
 } from "./journeyPlayback";
-import { planPrefetchWindow, readyMsAheadForTempo } from "./playbackPrefetchPlan";
+import { includePlaybackPrefetchHoldTarget, planPrefetchWindow, prefetchDispatchDecision, readyMsAheadForTempo } from "./playbackPrefetchPlan";
 import { rewindPlaybackMediaElement, syncPlaybackMediaElement } from "./mediaPlaybackSync";
 import {
   resolveVideoTrim,
@@ -222,7 +222,7 @@ export function JourneyPlaybackOverlay({
   // Quick Recap's target duration wins over tempo (decision D1), so the owner of
   // the Edit Plan has to rebuild it when the runtime tempo changes. Tempo state
   // stays here in the director; this only reports a change upwards.
-  onTempoChange?: (tempo: PlaybackTempo) => void;
+  onTempoChange?: (tempo: PlaybackTempo) => boolean | void;
   playbackMode?: "full" | "quick-recap";
   quickRecapPlan?: AutoEditPlanV1 | null;
   quickRecapSourceJourney?: Journey | null;
@@ -254,6 +254,7 @@ export function JourneyPlaybackOverlay({
   const [videoFallbackAssetId, setVideoFallbackAssetId] = useState<string | null>(null);
   const director = useJourneyPlaybackDirector(journey, hold, stepDurationResolver);
   const { phase, paused, pause, resume, next, back, replay, seek, exit, steps, stepIndex, tempo, setTempo } = director;
+  const [suppressedPrefetchDispatchCount, setSuppressedPrefetchDispatchCount] = useState(0);
   // #126 sections 3-4: the transport reads the elapsed-time plan, so the bar is
   // time-weighted instead of step-weighted and a scrub has a time model.
   const { plan, getTimerBudget } = director;
@@ -305,15 +306,16 @@ export function JourneyPlaybackOverlay({
   const mediaPositionRef = useRef<{ stepIndex: number; fraction: number } | null>(null);
   const [scrubberFocused, setScrubberFocused] = useState(false);
   const [livePositionFraction, setLivePositionFraction] = useState<number | null>(null);
-  // Report a real tempo change only. The director resets to the initial tempo
-  // whenever the journey changes, and a rebuilt plan hands us a new `journey`
-  // object every time, so re-announcing the current tempo would loop.
-  const notifiedTempoRef = useRef<PlaybackTempo>(tempo);
-  useEffect(() => {
-    if (notifiedTempoRef.current === tempo) return;
-    notifiedTempoRef.current = tempo;
-    onTempoChange?.(tempo);
-  }, [onTempoChange, tempo]);
+  // Tempo is a narrative intent and Quick Recap also rebuilds its projected
+  // Journey for that same user action. Report the owner rebuild synchronously in
+  // the select event, in the same React batch as the director's revision bump.
+  // That prevents an intermediate commit where new tempo N+1 can dispatch from
+  // the old Quick Recap projection before plan scope advances to N+2.
+  const changeTempo = useCallback((nextTempo: PlaybackTempo) => {
+    if (nextTempo === tempo) return;
+    const rebuildPending = onTempoChange?.(nextTempo) === true;
+    setTempo(nextTempo, { awaitPlanScopeCommit: rebuildPending });
+  }, [onTempoChange, setTempo, tempo]);
 
   // A Quick Recap rebuild can add or drop beats, so a step index taken before
   // it is meaningless. Keep the same step when it survives, otherwise land on
@@ -326,7 +328,11 @@ export function JourneyPlaybackOverlay({
   const stepsRef = useRef(steps);
   stepsRef.current = steps;
   const remapJourneyIdRef = useRef<string | null>(null);
-  useEffect(() => {
+  // Scope remap is part of the same narrative-intent commit as the rebuilt
+  // Quick Recap plan. Claim it in layout phase, before the later prefetch
+  // dispatch layout effect queues work, so a moved beat bumps the live revision
+  // first and the old-index window is suppressed rather than escaping.
+  useLayoutEffect(() => {
     const nextIdentities = journey
       ? stepsRef.current.map((candidate) => playbackStepIdentity(journey, candidate))
       : [];
@@ -682,37 +688,72 @@ export function JourneyPlaybackOverlay({
     // leading to it are longer than the whole budget — a video-first chapter
     // must never leave its first image unread while the stop phase waits.
     const holdTarget = playbackHoldTargetMedia(journey, playbackSteps[director.stepIndex]);
-    if (holdTarget && !prefetchWindow.assetIds.includes(holdTarget.id)) {
-      return [holdTarget.id, ...prefetchWindow.assetIds];
-    }
-    return prefetchWindow.assetIds;
+    return includePlaybackPrefetchHoldTarget(prefetchWindow.assetIds, holdTarget?.id ?? null);
   }, [director.stepIndex, director.tempo, durationForStep, journey, playbackSteps]);
   // `playbackSteps` is rebuilt per journey, but the window is a plain array;
   // the effects below key off its contents so they do not churn per render.
   const prefetchKey = prefetchAssetIds.join(",");
-  const prefetchAssetIdsRef = useRef(prefetchAssetIds);
-  prefetchAssetIdsRef.current = prefetchAssetIds;
+  const plannedPrefetchRevision = director.intentRevision;
+  const allowPrefetchDispatch = useCallback((plannedRevision: number) => {
+    const boundary = director.getPrefetchIntentBoundary();
+    const decision = prefetchDispatchDecision({
+      plannedRevision,
+      liveRevision: boundary.liveRevision,
+      blockedThroughRevision: boundary.blockedThroughRevision,
+    });
+    if (decision === "suppress-stale") {
+      setSuppressedPrefetchDispatchCount((current) => current + 1);
+      return false;
+    }
+    return true;
+  }, [director.getPrefetchIntentBoundary]);
 
   // Signed reads follow the same window, through the same single read path, so
-  // a decode is never scheduled for an asset that has no URL yet. This is
-  // strictly fewer concurrent reads than before, when arriving at a stop
-  // requested every asset of the chapter at once.
-  useEffect(() => {
-    for (const assetId of prefetchAssetIdsRef.current) loadMediaRead(assetId);
-  }, [loadMediaRead, prefetchKey]);
+  // a decode is never scheduled for an asset that has no URL yet. Planning is
+  // committed first, then actual request dispatch yields to the microtask
+  // boundary. Seek/next/back are suppressed by the director revision directly.
+  // Quick Recap tempo additionally blocks through the tempo revision until the
+  // parent's rebuilt plan scope commits and advances that same director revision
+  // again. The newer render then dispatches its live window, so suppression can
+  // never turn into a deadlock or a parallel scheduler.
+  useLayoutEffect(() => {
+    const assetIds = [...prefetchAssetIds];
+    queueMicrotask(() => {
+      if (!allowPrefetchDispatch(plannedPrefetchRevision)) return;
+      for (const assetId of assetIds) {
+        overlayRef.current?.setAttribute(
+          "data-playback-prefetch-dispatch-intent",
+          String(plannedPrefetchRevision),
+        );
+        loadMediaRead(assetId);
+      }
+    });
+  }, [allowPrefetchDispatch, loadMediaRead, plannedPrefetchRevision, prefetchKey]);
 
   // Review P2: decode media AHEAD of display so a chapter never mounts <img>
   // with a loading gap. Videos stay at read only; images alone are decoded.
   useEffect(() => {
-    for (const assetId of prefetchAssetIdsRef.current) {
+    if (!allowPrefetchDispatch(plannedPrefetchRevision)) return;
+    for (const assetId of prefetchAssetIds) {
       const asset = mediaById.get(assetId);
       if (!asset?.mimeType.startsWith("image/")) continue;
       const read = mediaReads[assetId];
       if (read?.status === "ready") {
+        overlayRef.current?.setAttribute(
+          "data-playback-prefetch-dispatch-intent",
+          String(plannedPrefetchRevision),
+        );
         decodeRegistryRef.current.ensure(assetId, read.url);
       }
     }
-  }, [decodeSettleRevision, mediaById, mediaReads, prefetchKey]);
+  }, [
+    allowPrefetchDispatch,
+    decodeSettleRevision,
+    mediaById,
+    mediaReads,
+    plannedPrefetchRevision,
+    prefetchKey,
+  ]);
 
   // Review P2: while a media chapter's image is not decoded yet, hold the
   // director so it never advances into a blank frame. Terminal read/decode
@@ -1156,6 +1197,9 @@ export function JourneyPlaybackOverlay({
       data-playback-mode={playbackMode}
       data-playback-step={director.stepIndex}
       data-playback-steps={director.steps.length}
+      data-playback-intent={director.intentRevision}
+      data-playback-prefetch-suppressed={suppressedPrefetchDispatchCount}
+      data-playback-prefetch-dispatch-intent={plannedPrefetchRevision}
       // #195 Phase 2: who owns the current beat's completion. `none` is an
       // untrimmed beat, still on the pre-#195 `ended` ownership; the other
       // values are the trim transport's own states, published so the browser
@@ -1452,7 +1496,7 @@ export function JourneyPlaybackOverlay({
           <select
             value={tempo}
             aria-label="播放节奏"
-            onChange={(event) => setTempo(event.currentTarget.value as PlaybackTempo)}
+            onChange={(event) => changeTempo(event.currentTarget.value as PlaybackTempo)}
           >
             <option value="fast">快速</option>
             <option value="standard">标准</option>

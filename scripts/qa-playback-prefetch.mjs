@@ -170,10 +170,16 @@ async function openRun({ fixture, recap = false }) {
       const url = typeof input === "string" ? input : (input?.url ?? String(input));
       const match = /\/api\/uploads\/assets\/([^/]+)\/read-url/.exec(url);
       if (match) {
-        const step = document.querySelector(".journey-playback")?.getAttribute("data-playback-step");
+        const overlay = document.querySelector(".journey-playback");
+        const step = overlay?.getAttribute("data-playback-step");
+        const intent = overlay?.getAttribute("data-playback-intent");
+        const plannedIntent = overlay?.getAttribute("data-playback-prefetch-dispatch-intent");
         trace.reads.push({
           assetId: decodeURIComponent(match[1]),
           step: step == null ? null : Number(step),
+          intent: intent == null ? null : Number(intent),
+          plannedIntent: plannedIntent == null ? null : Number(plannedIntent),
+          suppressed: Number(overlay?.getAttribute("data-playback-prefetch-suppressed") ?? 0),
           at: Date.now(),
         });
       }
@@ -185,6 +191,8 @@ async function openRun({ fixture, recap = false }) {
       hold: overlay.getAttribute("data-playback-hold"),
       phase: overlay.getAttribute("data-playback-phase"),
       mode: overlay.getAttribute("data-playback-mode"),
+      intent: Number(overlay.getAttribute("data-playback-intent") ?? 0),
+      suppressed: Number(overlay.getAttribute("data-playback-prefetch-suppressed") ?? 0),
       hasImage: Boolean(overlay.querySelector(".journey-playback__media img")),
     });
     const push = (overlay) => {
@@ -195,6 +203,8 @@ async function openRun({ fixture, recap = false }) {
         && last.step === entry.step
         && last.hold === entry.hold
         && last.phase === entry.phase
+        && last.intent === entry.intent
+        && last.suppressed === entry.suppressed
         && last.hasImage === entry.hasImage
       ) return;
       trace.events.push(entry);
@@ -212,6 +222,8 @@ async function openRun({ fixture, recap = false }) {
           "data-playback-hold",
           "data-playback-phase",
           "data-playback-mode",
+          "data-playback-intent",
+          "data-playback-prefetch-suppressed",
         ],
       });
       new MutationObserver(() => push(overlay)).observe(overlay, {
@@ -269,6 +281,59 @@ async function readTrace(page) {
   return page.evaluate(() => window.__qaPlaybackPrefetch.events);
 }
 
+async function readQaTrace(page) {
+  return page.evaluate(() => ({
+    events: [...window.__qaPlaybackPrefetch.events],
+    reads: [...window.__qaPlaybackPrefetch.reads],
+  }));
+}
+
+async function playbackIntentState(page) {
+  return page.locator(".journey-playback").evaluate((overlay) => ({
+    revision: Number(overlay.getAttribute("data-playback-intent") ?? 0),
+    suppressed: Number(overlay.getAttribute("data-playback-prefetch-suppressed") ?? 0),
+    step: Number(overlay.getAttribute("data-playback-step") ?? 0),
+  }));
+}
+
+async function waitForIntentAdvance(page, previousRevision) {
+  await page.waitForFunction((previous) => (
+    Number(document.querySelector(".journey-playback")?.getAttribute("data-playback-intent") ?? -1) > previous
+  ), previousRevision, { timeout: 5_000 });
+  // Let any plan-rebuild render triggered by the same product action settle too.
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  return playbackIntentState(page);
+}
+
+function revisionBoundaryReads(trace, readsBefore, liveRevision) {
+  const post = trace.reads.slice(readsBefore);
+  return {
+    post,
+    stale: post.filter((read) => (
+      read.plannedIntent !== null && read.plannedIntent < liveRevision
+    )),
+  };
+}
+
+async function waitForRenderedMediaAtIntent(page, revision, timeout = 60_000) {
+  await page.waitForFunction((targetRevision) => {
+    const trace = window.__qaPlaybackPrefetch;
+    return Boolean(trace?.events.some((entry) => (
+      entry.intent >= targetRevision
+      && entry.phase === "media"
+      && entry.hasImage
+      && entry.hold === "none"
+    )));
+  }, revision, { timeout });
+  const events = await readTrace(page);
+  return events.find((entry) => (
+    entry.intent >= revision
+    && entry.phase === "media"
+    && entry.hasImage
+    && entry.hold === "none"
+  )) ?? null;
+}
+
 /** Wait until `count` distinct media beats have rendered their image. */
 async function waitForRenderedMediaSteps(page, count, timeout) {
   await page.waitForFunction((target) => {
@@ -288,9 +353,14 @@ function renderedMediaSteps(events) {
   const seen = new Map();
   for (const entry of events) {
     if (entry.phase !== "media" || !entry.hasImage || entry.hold !== "none") continue;
-    if (!seen.has(entry.step)) seen.set(entry.step, entry.at);
+    if (!seen.has(entry.step)) seen.set(entry.step, {
+      step: entry.step,
+      at: entry.at,
+      intent: entry.intent,
+      suppressed: entry.suppressed,
+    });
   }
-  return [...seen].map(([step, at]) => ({ step, at }));
+  return [...seen.values()];
 }
 
 /**
@@ -418,6 +488,7 @@ function recordRuntimeErrors(label, run) {
 }
 
 const measurements = [];
+const invalidationMeasurements = [];
 
 try {
   // ── Acceptance 4 + 5: the Fast vs Standard differential ─────────────────
@@ -528,15 +599,17 @@ try {
     // the dispatch are the old window's by construction, and the observers
     // that sample the seek commit run at the microtask checkpoint after this
     // script returns, so every trace event from that index on is post-seek.
-    const { readsBeforeSeek, eventsBeforeSeek } = await seekRun.page.evaluate(() => {
-      const trace = window.__qaPlaybackPrefetch;
-      const readsBeforeSeek = trace.reads.length;
+    const beforeIntent = await playbackIntentState(seekRun.page);
+    const traceBeforeSeek = await readQaTrace(seekRun.page);
+    const readsBeforeSeek = traceBeforeSeek.reads.length;
+    const eventsBeforeSeek = traceBeforeSeek.events.length;
+    await seekRun.page.evaluate(() => {
       const input = document.querySelector(".journey-playback__progress input[type=\"range\"]");
       const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
       setter.call(input, String(Math.round(Number(input.max) * 0.62)));
       input.dispatchEvent(new Event("input", { bubbles: true }));
-      return { readsBeforeSeek, eventsBeforeSeek: trace.events.length };
     });
+    const liveIntent = await waitForIntentAdvance(seekRun.page, beforeIntent.revision);
     // The seek target may be a travel or stop beat; what has to hold is that
     // playback reaches a RENDERED media beat at the new narrative position.
     await seekRun.page.waitForFunction((step) => {
@@ -568,29 +641,38 @@ try {
     const stepForAsset = new Map(
       steps.flatMap((step, index) => (step.assetId ? [[step.assetId, index]] : [])),
     );
-    const pageReads = await seekRun.page.evaluate(() => window.__qaPlaybackPrefetch.reads);
-    const postSeekReads = pageReads.slice(readsBeforeSeek).map((read) => ({
+    const qaTrace = await readQaTrace(seekRun.page);
+    const revisionReads = revisionBoundaryReads(qaTrace, readsBeforeSeek, liveIntent.revision);
+    const postSeekReads = revisionReads.post.map((read) => ({
       assetId: read.assetId,
       assetStep: stepForAsset.get(read.assetId) ?? null,
       stepAtRequest: read.step,
+      intent: read.intent,
+      plannedIntent: read.plannedIntent,
     }));
-    const staleReads = landed
-      ? postSeekReads.filter((read) => (
-        read.assetStep !== null && read.assetStep < landed.step
-      ))
-      : [];
+    const staleReads = revisionReads.stale.map((read) => ({
+      assetId: read.assetId,
+      assetStep: stepForAsset.get(read.assetId) ?? null,
+      stepAtRequest: read.step,
+      intent: read.intent,
+      plannedIntent: read.plannedIntent,
+    }));
     // A hold on the seek target itself is legitimate — its read had not been
     // asked for before the scrub. A hold on a beat BEHIND the new position is
     // the pre-seek window still controlling playback, which is the defect.
     const preSeekWindowHolds = landed
       ? decodeHolds(postSeekEvents).filter((hold) => hold.step < landed.step)
       : [];
-    record("playback-prefetch-seek-fast", {
+    const seekInvalidation = {
+      label: "playback-prefetch-seek-fast",
       preSeekStep,
       preSeekPointIndex,
       landedStep: landed?.step ?? null,
       landedPointIndex,
       chaptersAdvanced: landedPointIndex === null ? null : landedPointIndex - preSeekPointIndex,
+      revisionBefore: beforeIntent.revision,
+      revisionAfter: liveIntent.revision,
+      suppressedDispatchCount: liveIntent.suppressed - beforeIntent.suppressed,
       postSeekReadCount: postSeekReads.length,
       staleReads,
       preSeekWindowHolds,
@@ -598,10 +680,187 @@ try {
         || landedPointIndex - preSeekPointIndex < 2
         || staleReads.length > 0
         || preSeekWindowHolds.length > 0,
-    });
+    };
+    invalidationMeasurements.push(seekInvalidation);
+    record("playback-prefetch-seek-fast", seekInvalidation);
     recordRuntimeErrors("playback-prefetch-seek-fast", seekRun);
   } finally {
     await seekRun.page.close();
+  }
+
+
+  // ── Residual invalidation race: two seeks before the earlier plan can dispatch ─
+  const rapidSeekRun = await openRun({ fixture: "multi" });
+  try {
+    await setTempo(rapidSeekRun.page, "fast");
+    await waitForRenderedMediaSteps(rapidSeekRun.page, WARMUP_MEDIA_STEPS, 60_000);
+    const before = await playbackIntentState(rapidSeekRun.page);
+    const traceBefore = await readQaTrace(rapidSeekRun.page);
+    const readsBeforeSecondSeek = await rapidSeekRun.page.evaluate((startingRevision) => (
+      new Promise((resolve) => {
+        const trace = window.__qaPlaybackPrefetch;
+        const overlay = document.querySelector('.journey-playback');
+        const input = overlay.querySelector('.journey-playback__progress input[type="range"]');
+        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+        const scrub = (fraction) => {
+          setter.call(input, String(Math.round(Number(input.max) * fraction)));
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+        };
+        // Observe the first seek's committed intent attribute. MutationObserver
+        // runs at the post-commit microtask checkpoint, before React's passive
+        // prefetch effect gets its later task. The second REAL scrub therefore
+        // wins while the first window is planned but not yet dispatched, which
+        // deterministically exercises the production revision guard without
+        // mutating private app state.
+        const observer = new MutationObserver(() => {
+          const revision = Number(overlay.getAttribute('data-playback-intent') ?? 0);
+          if (revision <= startingRevision) return;
+          observer.disconnect();
+          const boundary = trace.reads.length;
+          scrub(0.78);
+          resolve(boundary);
+        });
+        observer.observe(overlay, { attributes: true, attributeFilter: ['data-playback-intent'] });
+        scrub(0.36);
+      })
+    ), before.revision);
+    await rapidSeekRun.page.waitForFunction((target) => (
+      Number(document.querySelector('.journey-playback')?.getAttribute('data-playback-intent') ?? 0) >= target
+    ), before.revision + 2, { timeout: 5_000 });
+    await rapidSeekRun.page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    const live = await playbackIntentState(rapidSeekRun.page);
+    const landed = await waitForRenderedMediaAtIntent(rapidSeekRun.page, live.revision);
+    const trace = await readQaTrace(rapidSeekRun.page);
+    const boundary = revisionBoundaryReads(trace, readsBeforeSecondSeek, live.revision);
+    const measurement = {
+      label: "playback-prefetch-rapid-seeks-fast",
+      revisionBefore: before.revision,
+      revisionAfter: live.revision,
+      suppressedDispatchCount: live.suppressed - before.suppressed,
+      readsAfterNewestIntent: boundary.post.length,
+      staleReads: boundary.stale,
+      landedStep: landed?.step ?? null,
+      failed: live.revision < before.revision + 2
+        || live.suppressed - before.suppressed < 1
+        || boundary.stale.length > 0
+        || landed === null,
+    };
+    invalidationMeasurements.push(measurement);
+    record(measurement.label, measurement);
+    recordRuntimeErrors(measurement.label, rapidSeekRun);
+  } finally {
+    await rapidSeekRun.page.close();
+  }
+
+  // ── Next/back each own a fresh narrative intent boundary ──────────────────
+  const stepRun = await openRun({ fixture: "multi" });
+  try {
+    await setTempo(stepRun.page, "fast");
+    await waitForRenderedMediaSteps(stepRun.page, WARMUP_MEDIA_STEPS, 60_000);
+    const beforeNext = await playbackIntentState(stepRun.page);
+    const traceBeforeNext = await readQaTrace(stepRun.page);
+    await stepRun.page.locator('button[aria-label="下一个章节"]').click();
+    const nextIntent = await waitForIntentAdvance(stepRun.page, beforeNext.revision);
+    const nextLanded = await waitForRenderedMediaAtIntent(stepRun.page, nextIntent.revision);
+    const afterNextTrace = await readQaTrace(stepRun.page);
+    const nextBoundary = revisionBoundaryReads(afterNextTrace, traceBeforeNext.reads.length, nextIntent.revision);
+
+    const beforeBack = await playbackIntentState(stepRun.page);
+    const traceBeforeBack = await readQaTrace(stepRun.page);
+    await stepRun.page.locator('button[aria-label="上一个章节"]').click();
+    const backIntent = await waitForIntentAdvance(stepRun.page, beforeBack.revision);
+    const backLanded = await waitForRenderedMediaAtIntent(stepRun.page, backIntent.revision);
+    const afterBackTrace = await readQaTrace(stepRun.page);
+    const backBoundary = revisionBoundaryReads(afterBackTrace, traceBeforeBack.reads.length, backIntent.revision);
+    const measurement = {
+      label: "playback-prefetch-next-back-fast",
+      nextRevision: nextIntent.revision,
+      backRevision: backIntent.revision,
+      nextStaleReads: nextBoundary.stale,
+      backStaleReads: backBoundary.stale,
+      nextLandedStep: nextLanded?.step ?? null,
+      backLandedStep: backLanded?.step ?? null,
+      suppressedDispatchCount: backIntent.suppressed - beforeNext.suppressed,
+      failed: nextIntent.revision <= beforeNext.revision
+        || backIntent.revision <= nextIntent.revision
+        || nextBoundary.stale.length > 0
+        || backBoundary.stale.length > 0
+        || nextLanded === null
+        || backLanded === null,
+    };
+    invalidationMeasurements.push(measurement);
+    record(measurement.label, measurement);
+    recordRuntimeErrors(measurement.label, stepRun);
+  } finally {
+    await stepRun.page.close();
+  }
+
+  // ── Live Standard -> Fast recomputes and dispatches only at the new intent ─
+  const tempoRun = await openRun({ fixture: "multi" });
+  try {
+    await setTempo(tempoRun.page, "standard");
+    await waitForRenderedMediaSteps(tempoRun.page, WARMUP_MEDIA_STEPS, 60_000);
+    const before = await playbackIntentState(tempoRun.page);
+    const traceBefore = await readQaTrace(tempoRun.page);
+    await setTempo(tempoRun.page, "fast");
+    const live = await waitForIntentAdvance(tempoRun.page, before.revision);
+    const landed = await waitForRenderedMediaAtIntent(tempoRun.page, live.revision);
+    const trace = await readQaTrace(tempoRun.page);
+    const boundary = revisionBoundaryReads(trace, traceBefore.reads.length, live.revision);
+    const measurement = {
+      label: "playback-prefetch-tempo-standard-fast",
+      revisionBefore: before.revision,
+      revisionAfter: live.revision,
+      suppressedDispatchCount: live.suppressed - before.suppressed,
+      postChangeReads: boundary.post.length,
+      staleReads: boundary.stale,
+      landedStep: landed?.step ?? null,
+      failed: live.revision <= before.revision || boundary.stale.length > 0 || landed === null,
+    };
+    invalidationMeasurements.push(measurement);
+    record(measurement.label, measurement);
+    recordRuntimeErrors(measurement.label, tempoRun);
+  } finally {
+    await tempoRun.page.close();
+  }
+
+  // ── Quick Recap tempo rebuild changes both runtime tempo and projected plan scope ─
+  const recapRebuildRun = await openRun({ fixture: "multi", recap: true });
+  try {
+    await setTempo(recapRebuildRun.page, "standard");
+    await waitForRenderedMediaSteps(recapRebuildRun.page, WARMUP_MEDIA_STEPS, 60_000);
+    const before = await playbackIntentState(recapRebuildRun.page);
+    const traceBeforeTempo = await readQaTrace(recapRebuildRun.page);
+    await setTempo(recapRebuildRun.page, "fast");
+    await recapRebuildRun.page.waitForFunction((target) => (
+      Number(document.querySelector('.journey-playback')?.getAttribute('data-playback-intent') ?? 0) >= target
+    ), before.revision + 2, { timeout: 5_000 });
+    await recapRebuildRun.page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    const live = await playbackIntentState(recapRebuildRun.page);
+    const landed = await waitForRenderedMediaAtIntent(recapRebuildRun.page, live.revision);
+    const trace = await readQaTrace(recapRebuildRun.page);
+    // Grade the whole tempo/rebuild boundary, starting before the user action.
+    // A read from an intermediate old projection (N+1) is stale relative to the
+    // settled live plan (N+2 or later) and must not be hidden by snapshotting only
+    // after the rebuild already completed.
+    const boundary = revisionBoundaryReads(trace, traceBeforeTempo.reads.length, live.revision);
+    const measurement = {
+      label: "playback-prefetch-quick-recap-rebuild",
+      revisionBefore: before.revision,
+      revisionAfter: live.revision,
+      suppressedDispatchCount: live.suppressed - before.suppressed,
+      readsAfterTempoIntent: boundary.post.length,
+      staleReads: boundary.stale,
+      landedStep: landed?.step ?? null,
+      failed: live.revision < before.revision + 2
+        || boundary.stale.length > 0
+        || landed === null,
+    };
+    invalidationMeasurements.push(measurement);
+    record(measurement.label, measurement);
+    recordRuntimeErrors(measurement.label, recapRebuildRun);
+  } finally {
+    await recapRebuildRun.page.close();
   }
 } finally {
   await browser.close();
@@ -610,5 +869,6 @@ try {
 // One JSON line per measured run, as the acceptance asks, ahead of the full
 // check list so the numbers are greppable in the CI job log.
 for (const measurement of measurements) console.log(JSON.stringify(measurement));
+for (const measurement of invalidationMeasurements) console.log(JSON.stringify(measurement));
 console.log(JSON.stringify(checks, null, 2));
 if (failed) process.exitCode = 1;

@@ -1004,16 +1004,17 @@ export function LivingAtlasApp({
   // state: the projection carries only the previous plan's selection, so
   // re-planning from it could never bring an omitted asset back.
   const handlePlaybackTempoChange = useCallback((tempo: PlaybackTempo) => {
-    if (!playbackSourceJourney) return;
-    setPlaybackQuickRecap((current) => {
-      if (!current) return current;
-      const rebuilt = prepareQuickRecapPlaybackResult(playbackSourceJourney, {
-        generatedAt: new Date().toISOString(),
-        tempo,
-      });
-      return rebuilt.playback ?? current;
+    if (!playbackSourceJourney || !playbackQuickRecap) return false;
+    const rebuilt = prepareQuickRecapPlaybackResult(playbackSourceJourney, {
+      generatedAt: new Date().toISOString(),
+      tempo,
     });
-  }, [playbackSourceJourney]);
+    if (!rebuilt.playback) return false;
+    setPlaybackQuickRecap(rebuilt.playback);
+    // The overlay blocks prefetch at the tempo revision until this parent-owned
+    // projection commit is observed by the director as its plan-scope revision.
+    return true;
+  }, [playbackQuickRecap, playbackSourceJourney]);
 
   function handlePlaybackClose(handoff: {
     reason: PlaybackReturnReason;

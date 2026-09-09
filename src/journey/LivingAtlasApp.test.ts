@@ -519,6 +519,30 @@ describe("playbackHoldReason (#197)", () => {
     expect(playbackHoldReason({ ...base, stepKind: undefined, asset: null })).toBe("none");
   });
 
+  it("ignores a stale read settling behind the post-seek hold target", () => {
+    const currentRead = { status: "loading" as const };
+    const staleCompletion = {
+      status: "ready" as const,
+      url: "stale-signed-image",
+      issuedAt: 0,
+      expiresAt: 900_000,
+    };
+    const before = playbackHoldReason({
+      ...base,
+      gate: playbackMediaGate(currentRead, undefined, true),
+    });
+    // The old asset may populate its cache entry, but that entry is not an input
+    // to the CURRENT step's hold decision after the seek.
+    expect(staleCompletion.status).toBe("ready");
+    const afterStaleCompletion = playbackHoldReason({
+      ...base,
+      gate: playbackMediaGate(currentRead, undefined, true),
+    });
+
+    expect(before).toBe("decode");
+    expect(afterStaleCompletion).toBe(before);
+  });
+
   it("separates a video beat's own runtime and a trim's positioning from a decode hold", () => {
     // An untrimmed video beat is held until `ended`: that is the element owning
     // its runtime, not a lookahead that ran out, so #197's capture must not

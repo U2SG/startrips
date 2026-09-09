@@ -21,6 +21,29 @@ import { PLAYBACK_TEMPO_PROFILES, type PlaybackTempo } from "./journeyPlaybackPl
  */
 export const MAX_PREFETCH_ASSETS = 8;
 
+export type PlaybackPrefetchDispatchDecision = "dispatch" | "suppress-stale";
+
+export function prefetchDispatchDecision(input: {
+  plannedRevision: number;
+  liveRevision: number;
+  blockedThroughRevision?: number | null;
+}): PlaybackPrefetchDispatchDecision {
+  const rebuildPending = input.blockedThroughRevision !== null
+    && input.blockedThroughRevision !== undefined
+    && input.liveRevision <= input.blockedThroughRevision;
+  return input.plannedRevision === input.liveRevision && !rebuildPending
+    ? "dispatch"
+    : "suppress-stale";
+}
+
+export function includePlaybackPrefetchHoldTarget(
+  assetIds: readonly string[],
+  holdTargetId: string | null,
+) {
+  if (!holdTargetId || assetIds.includes(holdTargetId)) return [...assetIds];
+  return [holdTargetId, ...assetIds];
+}
+
 /**
  * Seconds of prepared playback the window aims to hold ahead of the current
  * step, per tempo.
