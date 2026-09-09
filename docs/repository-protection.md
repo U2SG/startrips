@@ -39,10 +39,21 @@ Two parameters are deliberately left as they are:
 The ruleset does not read labels. It requires the `merge-readiness` status check, and the
 `merge-readiness` workflow is what reads the label: it publishes success only after `ci / verify`
 has passed for the current head, every review conversation is resolved, and `merge-ready` is
-present — revalidating the live label immediately before and after publishing. Any later push or
-review activity cancels the older controller run and returns the status to pending. So the label
-requirement is enforced on the merge button through that required check, and the ordering in
-[`CONTRIBUTING.md`](../CONTRIBUTING.md) is not advisory.
+present.
+
+Readiness is still latest-event-wins, but the workflow deliberately does **not** use Actions
+`cancel-in-progress`. GitHub keeps cancelled check-runs attached to the PR head and renders a red
+aggregate check even after the final required checks pass and the PR merges. Instead every
+controller run re-reads the live PR head and the readiness workflow's run list before changing the
+shared label/status state. If a newer readiness run already exists for that exact head, the older
+run exits successfully without writing anything. Final sign-off repeats the freshness test before
+and after publishing success and still checks the live `merge-ready` label on both sides of the
+write. If newer activity races the success write, the older controller repairs the shared status
+back to pending and removes the stale label. Superseded runs therefore become green no-ops rather
+than cancelled failures while the same stale-success protection remains in force.
+
+The label requirement is enforced on the merge button through the required `merge-readiness`
+status, and the ordering in [`CONTRIBUTING.md`](../CONTRIBUTING.md) is not advisory.
 
 ### Re-running `ci` withdraws a sign-off, and that is not a bug
 
