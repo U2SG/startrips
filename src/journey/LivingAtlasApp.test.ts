@@ -465,6 +465,30 @@ describe("Route Point context integration (#291)", () => {
     expect(start).toBeGreaterThan(0);
     expect(entry).toContain("openJourneyStory(context.journeyId, context.routePointId)");
   });
+
+  it("drops context outside planet view and refreshes retained context from the latest Journey", () => {
+    const refreshStart = appSource.indexOf("const intent = routePointContextSelection.intent;");
+    const refreshBlock = appSource.slice(refreshStart, refreshStart + 900);
+    const renderStart = appSource.indexOf('{view === "planet" && routePointContextSelection.context');
+
+    expect(refreshStart).toBeGreaterThan(0);
+    expect(refreshBlock).toContain("buildRoutePointContext(journey, intent.routePointId)");
+    expect(refreshBlock).toContain("resolveRoutePointContextSelection(");
+    expect(refreshBlock).toContain('view !== "planet"');
+    expect(refreshBlock).toContain("clearRoutePointContext()");
+    expect(renderStart).toBeGreaterThan(0);
+  });
+
+  it("keeps long context notes reachable within the clipped Atlas viewport", () => {
+    const css = readFileSync(new URL("../styles/living-atlas.css", import.meta.url), "utf8");
+    const start = css.indexOf(".living-atlas__route-point-context {");
+    const rule = css.slice(start, css.indexOf("}", start));
+
+    expect(start).toBeGreaterThan(0);
+    expect(rule).toContain("max-height:");
+    expect(rule).toContain("overflow-y: auto;");
+    expect(rule).toContain("overscroll-behavior: contain;");
+  });
 });
 
 describe("playbackEntryNeedsPreparation (PR #24 review)", () => {

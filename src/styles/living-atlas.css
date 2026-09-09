@@ -4574,7 +4574,10 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   top: 50%;
   right: calc(env(safe-area-inset-right) + 24px);
   width: min(340px, calc(100vw - 48px));
+  max-height: min(70svh, 620px);
   padding: 18px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   border: 1px solid color-mix(in srgb, var(--journey-color, var(--atlas-cyan)) 34%, var(--atlas-line));
   border-radius: 18px;
   background: rgba(2, 10, 11, 0.76);
@@ -4668,6 +4671,7 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
     bottom: calc(env(safe-area-inset-bottom) + 136px);
     left: calc(env(safe-area-inset-left) + 12px);
     width: auto;
+    max-height: calc(100svh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 164px);
     transform: none;
   }
 }

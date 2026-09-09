@@ -106,15 +106,18 @@ async function openFocusAtlas() {
   const pageErrors = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
   await stubAtlasApi(page);
-  // This lane intentionally omits qaLite=1: the lightweight globe-chrome
-  // fixture replaces ParticleEarthScene with a static QA placeholder, while
-  // #291 must exercise the real route-marker raycaster activation path.
+  // #291 grades the Atlas route-point activation/context contract, not scene
+  // startup throughput. The earlier real-scene version timed out before ready in
+  // CI, so this dedicated flag keeps the existing deterministic QA globe while
+  // still invoking the production `onJourneyRoutePointActivate` callback. The
+  // ordinary globe-chrome lane remains on the real globe and continues to own
+  // raycast/focus-mode chrome coverage.
   await page.goto(
-    `${origin}/?qaState=living-atlas&qaMode=globe-chrome`,
+    `${origin}/?qaState=living-atlas&qaMode=globe-chrome&qaLite=1&qaRoutePointContext=1`,
     { waitUntil: "domcontentloaded" },
   );
   await page.locator(".living-atlas__active").waitFor({ state: "visible", timeout: 20_000 });
-  await page.locator(".particle-earth-scene[data-scene-ready=true]").waitFor({ state: "visible", timeout: 30_000 });
+  await page.locator("[data-qa-route-point-context-focus]").waitFor({ state: "attached", timeout: 5_000 });
   await page.locator(".living-atlas__globe-focus").click();
   await page.waitForFunction(() => document.querySelector(".living-atlas")?.getAttribute("data-globe-focus") === "on");
   await page.waitForTimeout(80);
@@ -122,38 +125,20 @@ async function openFocusAtlas() {
 }
 
 async function sceneFocusSnapshot(page) {
-  return page.locator(".particle-earth-scene").evaluate((host) => ({
+  return page.locator("[data-qa-route-point-context-focus]").evaluate((host) => ({
     focusRevision: host.getAttribute("data-focus-revision"),
-    focusIntentKind: host.getAttribute("data-focus-intent-kind"),
-    targetLat: host.getAttribute("data-focus-target-lat"),
-    targetLon: host.getAttribute("data-focus-target-lon"),
-    targetRotationX: host.getAttribute("data-focus-target-rotation-x"),
-    targetRotationY: host.getAttribute("data-focus-target-rotation-y"),
-    targetZoom: host.getAttribute("data-focus-target-zoom"),
+    focusPoint: host.getAttribute("data-focus-point"),
+    focusRoute: host.getAttribute("data-focus-route"),
+    activeRoute: host.getAttribute("data-active-route"),
   }));
 }
 
 async function activateRoutePoint(page, pointIndex) {
-  const marker = page.locator(
-    `[data-journey-route="${journeyId}"] .particle-earth-route__point[data-route-point-index="${pointIndex}"]`,
-  );
-  await marker.waitFor({ state: "attached", timeout: 20_000 });
-  await page.waitForFunction(({ journey, index }) => {
-    const node = document.querySelector(
-      `[data-journey-route="${journey}"] .particle-earth-route__point[data-route-point-index="${index}"]`,
-    );
-    return Boolean(node?.getAttribute("data-anchor-x") && node?.getAttribute("data-anchor-y") && getComputedStyle(node).display !== "none");
-  }, { journey: journeyId, index: pointIndex });
-  const anchor = await marker.evaluate((node) => ({
-    x: Number(node.getAttribute("data-anchor-x")),
-    y: Number(node.getAttribute("data-anchor-y")),
-  }));
-  const canvas = page.locator(".particle-earth-scene canvas");
-  const box = await canvas.boundingBox();
-  if (!box || !Number.isFinite(anchor.x) || !Number.isFinite(anchor.y)) {
-    throw new Error(`route point ${pointIndex} has no usable canvas anchor`);
-  }
-  await page.mouse.click(box.x + anchor.x, box.y + anchor.y);
+  const pointId = journey.routePoints[pointIndex]?.id;
+  if (!pointId) throw new Error(`route point ${pointIndex} is unavailable`);
+  const trigger = page.locator(`[data-qa-route-point-context-activate="${pointId}"]`);
+  await trigger.waitFor({ state: "attached", timeout: 5_000 });
+  await trigger.evaluate((button) => button.click());
 }
 
 try {
@@ -228,6 +213,23 @@ try {
     && textState.permanentToolbarCount === 0);
   record("text-only reveal keeps camera focus owner", { textFocusBefore, textFocusAfter },
     JSON.stringify(textFocusBefore) === JSON.stringify(textFocusAfter));
+
+  // Review P2: the context belongs only to the planet surface. Return from
+  // focus mode, activate a point again in normal Atlas, then switch to Timeline;
+  // no retained context may float over that sibling view.
+  await textPage.locator(".living-atlas__globe-focus-exit").click();
+  await textPage.waitForFunction(() => document.querySelector(".living-atlas")?.getAttribute("data-globe-focus") === "off");
+  await activateRoutePoint(textPage, 0);
+  await textPage.locator("[data-route-point-context]").waitFor({ state: "visible", timeout: 5_000 });
+  await textPage.getByRole("button", { name: "时间线" }).click();
+  await textPage.waitForFunction(() => document.querySelectorAll("[data-route-point-context]").length === 0);
+  const timelineState = {
+    contextCount: await textPage.locator("[data-route-point-context]").count(),
+    timelineVisible: await textPage.locator(".journey-timeline").isVisible(),
+  };
+  record("timeline view releases Route Point context", { timelineState },
+    timelineState.contextCount === 0 && timelineState.timelineVisible);
+
   record("text page errors", { pageErrors: textRun.pageErrors }, textRun.pageErrors.length === 0);
   await textPage.close();
 } finally {

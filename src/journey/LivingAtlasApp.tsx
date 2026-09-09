@@ -614,13 +614,25 @@ export function LivingAtlasApp({
   const timeCursor = useGlobeTimeCursor(journeys);
   const activeJourneyId = timeCursor.selection?.journeyId ?? journeys.at(-1)?.id ?? null;
   useEffect(() => {
-    const context = routePointContextSelection.context;
-    if (!context) return;
-    const journey = journeys.find((candidate) => candidate.id === context.journeyId);
-    if (!journey?.routePoints.some((point) => point.id === context.routePointId)) {
+    const intent = routePointContextSelection.intent;
+    if (!intent) return;
+    const journey = journeys.find((candidate) => candidate.id === intent.journeyId) ?? null;
+    const nextContext = journey ? buildRoutePointContext(journey, intent.routePointId) : null;
+    if (!nextContext) {
       clearRoutePointContext();
+      return;
     }
-  }, [clearRoutePointContext, journeys, routePointContextSelection.context]);
+    const refreshed = resolveRoutePointContextSelection(
+      routePointContextSelectionRef.current,
+      intent,
+      nextContext,
+    );
+    routePointContextSelectionRef.current = refreshed;
+    setRoutePointContextSelection(refreshed);
+  }, [clearRoutePointContext, journeys, routePointContextSelection.intent]);
+  useEffect(() => {
+    if (view !== "planet" && routePointContextSelection.intent) clearRoutePointContext();
+  }, [clearRoutePointContext, routePointContextSelection.intent, view]);
 
   const cinematicIsolation = atlasCinematicIsolationActive(playbackActive, globeFocusMode);
   useEffect(() => {
@@ -1663,7 +1675,7 @@ export function LivingAtlasApp({
         </div>
       ) : null}
 
-      {routePointContextSelection.context && routePointContextSelection.intent && !storyJourneyId && !playbackActive ? (() => {
+      {view === "planet" && routePointContextSelection.context && routePointContextSelection.intent && !storyJourneyId && !playbackActive ? (() => {
         const context = routePointContextSelection.context;
         const intent = routePointContextSelection.intent;
         const contextJourney = journeys.find((candidate) => candidate.id === context.journeyId) ?? null;
