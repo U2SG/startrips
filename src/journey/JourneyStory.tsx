@@ -1453,26 +1453,33 @@ export function JourneyStory({
   });
   useMobileSurfaceHistory(mobileHistoryLayers.journeyDelete, "story-journey-delete", closeJourneyDelete);
   const storyModal = !mobileLayout || mobileStoryExpanded;
-  const dialogRef = useModalFocus<HTMLElement>(requestClose, storyModal);
-
-  // #245: Playback can return to the in-context mobile Story, where the modal
-  // trap is intentionally inactive. Restore keyboard ownership to a real visible
-  // Story control instead of leaving focus on the now-unmounted Playback overlay.
-  // This is a one-shot open handoff; subsequent Story navigation keeps its own
-  // focus semantics and does not re-run this effect.
-  useLayoutEffect(() => {
-    if (!focusVisibleControlOnOpen) return;
-    const root = dialogRef.current;
-    if (!root) return;
+  const resolvePlaybackReturnInitialFocus = useCallback((root: HTMLElement) => {
+    if (!focusVisibleControlOnOpen) return null;
     const preferred = mobileLayout
       ? root.querySelector<HTMLElement>(".journey-story__sheet-handle")
       : null;
     const fallback = root.querySelector<HTMLElement>(".journey-story__close");
-    const target = [preferred, fallback].find((candidate): candidate is HTMLElement => (
+    return [preferred, fallback].find((candidate): candidate is HTMLElement => (
       candidate !== null && isModalFocusCandidate(candidate)
-    ));
-    target?.focus({ preventScroll: true });
-  }, [focusVisibleControlOnOpen]);
+    )) ?? null;
+  }, [focusVisibleControlOnOpen, mobileLayout]);
+  const dialogRef = useModalFocus<HTMLElement>(
+    requestClose,
+    storyModal,
+    false,
+    resolvePlaybackReturnInitialFocus,
+  );
+
+  // #245: an active Story modal gives initial-focus ownership to useModalFocus
+  // itself, so the trap cannot overwrite the Playback-return target in a later
+  // passive effect. A collapsed mobile Story intentionally has no active trap;
+  // only that path performs the one-shot focus handoff here.
+  useLayoutEffect(() => {
+    if (!focusVisibleControlOnOpen || storyModal) return;
+    const root = dialogRef.current;
+    if (!root) return;
+    resolvePlaybackReturnInitialFocus(root)?.focus({ preventScroll: true });
+  }, [focusVisibleControlOnOpen, resolvePlaybackReturnInitialFocus, storyModal]);
 
   // A collapsed mobile Story is intentionally not a modal, so useModalFocus
   // does not own Escape there. Manage still needs the same keyboard exit
