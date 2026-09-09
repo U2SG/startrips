@@ -383,25 +383,41 @@ async function exerciseMobileStoryContinuitySwipe(page, touch, direction, expect
       legacyIncomingCount: document.querySelectorAll(".journey-story__media-incoming").length,
     };
   }, storyMediaPagesSelector);
-  const currentXs = samples.map((sample) => sample.current?.x ?? 0);
+  const dragSamples = samples.slice(0, distances.length);
+  const currentXs = dragSamples.map((sample) => sample.current?.x ?? 0);
   const followsFinger = direction > 0
     ? currentXs.every((value, index) => index === 0 || value <= currentXs[index - 1] + 1)
       && currentXs.at(-1) < currentXs[0] - 8
     : currentXs.every((value, index) => index === 0 || value >= currentXs[index - 1] - 1)
       && currentXs.at(-1) > currentXs[0] + 8;
-  const ownershipStable = samples.every((sample) => {
+  // While the finger owns the stage, current is both visual and input owner.
+  // During the release spring the destination slot may intentionally rise above
+  // current in z-order, but it must remain pointer-inert until the semantic commit.
+  // Keep those authorities separate so the QA catches a second input owner without
+  // rejecting the stable three-page visual handoff itself.
+  const dragOwnershipStable = dragSamples.every((sample) => {
     const current = sample.current;
     if (!current || !current.ready || current.pointerEvents !== "auto" || sample.legacyIncomingCount !== 0) return false;
     const neighbors = sample.pages.filter((entry) => entry.role !== "current");
     return neighbors.every((entry) => entry.pointerEvents === "none" && entry.zIndex < current.zIndex)
       && (!sample.incoming || sample.incoming.zIndex < current.zIndex);
   });
+  const releaseOwnershipStable = releaseSamples.every((sample) => {
+    const current = sample.current;
+    if (!current || !current.ready || current.pointerEvents !== "auto" || sample.legacyIncomingCount !== 0) return false;
+    const neighbors = sample.pages.filter((entry) => entry.role !== "current");
+    return neighbors.every((entry) => entry.pointerEvents === "none")
+      && sample.incoming === null
+      && sample.pages.length === 3;
+  });
+  const ownershipStable = dragOwnershipStable && releaseOwnershipStable;
   const settledOwnershipStable = Boolean(settled.current
     && settled.current.pointerEvents === "auto"
     && settled.pages.filter((entry) => entry.role !== "current")
       .every((entry) => entry.pointerEvents === "none" && entry.zIndex < settled.current.zIndex));
   const noHitch = samples.every((sample) => sample.rafDelayMs < 500);
-  return { samples, settled, followsFinger, ownershipStable, settledOwnershipStable, noHitch,
+  return { samples, settled, followsFinger, dragOwnershipStable, releaseOwnershipStable, ownershipStable,
+    settledOwnershipStable, noHitch,
     failed: !followsFinger || !ownershipStable || !settledOwnershipStable || !noHitch
       || settled.presentation !== "settled" || settled.current?.id !== expectedId || !settled.current.ready
       || settled.legacyIncomingCount !== 0 || settled.pages.length !== 3 };
