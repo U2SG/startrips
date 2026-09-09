@@ -116,6 +116,8 @@ jobs:
             command: pnpm qa:mobile-contract
           - name: globe-focus-chrome
             command: pnpm qa:globe-focus-chrome
+          - name: route-point-context
+            command: pnpm qa:route-point-context
           - name: guest-share
             command: pnpm qa:guest-share
           - name: owner-share

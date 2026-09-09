@@ -4564,6 +4564,114 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   z-index: 60;
 }
 
+/* #291: Route Point context is transient content, not another mode toolbar.
+   It sits above the globe only after a Route Point intent and yields completely
+   to Story/Playback. The selected point owns content only; camera ownership
+   remains with the globe underneath. */
+.living-atlas__route-point-context {
+  position: absolute;
+  z-index: 72;
+  top: 50%;
+  right: calc(env(safe-area-inset-right) + 24px);
+  width: min(340px, calc(100vw - 48px));
+  padding: 18px;
+  border: 1px solid color-mix(in srgb, var(--journey-color, var(--atlas-cyan)) 34%, var(--atlas-line));
+  border-radius: 18px;
+  background: rgba(2, 10, 11, 0.76);
+  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.34);
+  backdrop-filter: blur(18px);
+  transform: translateY(-50%);
+}
+
+.living-atlas__route-point-context > header {
+  display: grid;
+  gap: 5px;
+}
+
+.living-atlas__route-point-context > header p,
+.living-atlas__route-point-context > header span,
+.living-atlas__route-point-context-facts {
+  color: var(--atlas-muted);
+  font: 500 9px/1.5 ui-monospace, "SFMono-Regular", Consolas, monospace;
+  letter-spacing: 0.08em;
+}
+
+.living-atlas__route-point-context > header p {
+  margin: 0;
+  color: color-mix(in srgb, var(--journey-color, var(--atlas-cyan)) 72%, var(--atlas-text));
+}
+
+.living-atlas__route-point-context > header h2 {
+  margin: 1px 0 0;
+  color: var(--atlas-text);
+  font-size: clamp(19px, 2vw, 25px);
+  font-weight: 520;
+  line-height: 1.08;
+  letter-spacing: -0.025em;
+}
+
+.living-atlas__route-point-context-facts {
+  display: grid;
+  gap: 3px;
+  margin-top: 14px;
+}
+
+.living-atlas__route-point-context blockquote {
+  margin: 14px 0 0;
+  padding-left: 11px;
+  border-left: 1px solid color-mix(in srgb, var(--journey-color, var(--atlas-cyan)) 45%, transparent);
+  color: #c6d2ce;
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.living-atlas__route-point-context-media {
+  width: 76px;
+  height: 58px;
+  margin-top: 14px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid rgba(118, 198, 188, 0.16);
+  border-radius: 10px;
+  background: rgba(118, 198, 188, 0.04);
+  color: var(--atlas-muted);
+}
+
+.living-atlas__route-point-context-media img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.living-atlas__route-point-context-entry {
+  width: 100%;
+  min-height: 44px;
+  margin-top: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 14px;
+  border: 1px solid rgba(118, 198, 188, 0.24);
+  border-radius: 999px;
+  background: rgba(118, 227, 211, 0.06);
+  color: var(--atlas-text);
+  cursor: pointer;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+
+@media (max-width: 760px) {
+  .living-atlas__route-point-context {
+    top: auto;
+    right: calc(env(safe-area-inset-right) + 12px);
+    bottom: calc(env(safe-area-inset-bottom) + 136px);
+    left: calc(env(safe-area-inset-left) + 12px);
+    width: auto;
+    transform: none;
+  }
+}
+
 /* #253: the only persistent chrome of this mode. It sits in the top-left safe
    area — the top right stays intentionally empty, with the account dock
    isolated by the cinematic owner — and reads as a return path rather than a
