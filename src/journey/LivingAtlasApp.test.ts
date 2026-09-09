@@ -12,6 +12,7 @@ vi.mock("../auth/AuthGateway", () => ({
 import { readFileSync } from "node:fs";
 import {
   atlasCinematicIsolationActive,
+  capturePlaybackEntryForContext,
   globeFocusState,
   nextPlaybackCameraCommand,
   nextPlaybackReleaseFocusRevision,
@@ -19,6 +20,7 @@ import {
   playbackFocusPointForCameraTarget,
   playbackFocusRouteForCameraTarget,
   nextAtlasNotice,
+  pendingPlaybackStoryRestore,
   railContentSignature,
   releaseStalePlaybackSession,
   resolvePlaybackOwnership,
@@ -26,6 +28,7 @@ import {
   showsGlobeModeChrome,
 } from "./LivingAtlasApp";
 import { playbackHoldReason, playbackMediaGate } from "./JourneyPlaybackOverlay";
+import { resolvePlaybackReturn } from "./playbackReturn";
 import type { Journey } from "./types";
 
 // #8 globe focus mode: the root class/data contract drives the layout CSS
@@ -63,6 +66,137 @@ const playbackJourney: Journey = {
   routePoints: [],
   media: [],
 };
+
+
+
+describe("Story to Playback return entry (#245)", () => {
+  it("captures the currently observed Story asset separately from the entry route", () => {
+    const entry = capturePlaybackEntryForContext(
+      playbackJourney.id,
+      playbackJourney.id,
+      "point-a",
+      {
+        journeyId: playbackJourney.id,
+        routePointId: "point-d",
+        assetId: "asset-d",
+        storySnapState: "expanded",
+      },
+      11,
+    );
+    expect(entry).toMatchObject({
+      journeyId: playbackJourney.id,
+      routePointId: "point-d",
+      assetId: "asset-d",
+      intentRevision: 11,
+      source: "story",
+      storySnapState: "expanded",
+    });
+  });
+
+  it("captures Atlas entry without inventing Story media identity", () => {
+    expect(capturePlaybackEntryForContext(
+      playbackJourney.id,
+      null,
+      null,
+      null,
+      12,
+    )).toEqual({
+      journeyId: playbackJourney.id,
+      routePointId: null,
+      assetId: null,
+      intentRevision: 12,
+      source: "atlas",
+      storySnapState: "closed",
+    });
+  });
+
+  it("keeps last Story observation separate from an Atlas playback entry source", () => {
+    expect(capturePlaybackEntryForContext(
+      playbackJourney.id,
+      null,
+      null,
+      {
+        journeyId: playbackJourney.id,
+        routePointId: "point-d",
+        assetId: "asset-d",
+        storySnapState: "expanded",
+      },
+      12,
+    )).toMatchObject({
+      routePointId: "point-d",
+      assetId: "asset-d",
+      source: "atlas",
+      storySnapState: "expanded",
+    });
+  });
+
+  it("retains the pre-entry Story identity while soundtrack preparation is pending", () => {
+    const entry = capturePlaybackEntryForContext(
+      playbackJourney.id,
+      playbackJourney.id,
+      "point-a",
+      {
+        journeyId: playbackJourney.id,
+        routePointId: "point-d",
+        assetId: "asset-d",
+        storySnapState: "in-context",
+      },
+      13,
+    );
+    expect(pendingPlaybackStoryRestore(entry)).toEqual({
+      journeyId: playbackJourney.id,
+      routePointId: "point-d",
+      assetId: "asset-d",
+    });
+  });
+
+  it("does not invent a Story restore for Atlas-origin preparation", () => {
+    const entry = capturePlaybackEntryForContext(playbackJourney.id, null, null, null, 14);
+    expect(pendingPlaybackStoryRestore(entry)).toBeNull();
+  });
+
+  it("returns the currently observed D asset instead of the Story entry route A", () => {
+    const returnJourney: Journey = {
+      ...playbackJourney,
+      routePoints: [
+        { id: "point-a", journeyId: playbackJourney.id, sortOrder: 0, latitude: 1, longitude: 2, label: "A", isStop: true, occurredAt: null, createdAt: playbackJourney.createdAt },
+        { id: "point-d", journeyId: playbackJourney.id, sortOrder: 1, latitude: 3, longitude: 4, label: "D", isStop: true, occurredAt: null, createdAt: playbackJourney.createdAt },
+      ],
+      media: [{
+        id: "asset-d", journeyId: playbackJourney.id, routePointId: "point-d", storageDriver: "s3", storageKey: "d",
+        fileName: "d.jpg", mimeType: "image/jpeg", bytes: 1, sortOrder: 0, uploadedByUserId: "user-1", createdAt: playbackJourney.createdAt,
+      }],
+    };
+    const entry = capturePlaybackEntryForContext(
+      returnJourney.id,
+      returnJourney.id,
+      "point-a",
+      {
+        journeyId: returnJourney.id,
+        routePointId: "point-d",
+        assetId: "asset-d",
+        storySnapState: "expanded",
+      },
+      15,
+    );
+
+    expect(resolvePlaybackReturn({
+      entry,
+      // Intro/whole-Journey playback has not committed a more specific point,
+      // so the Story observation remains the meaningful position.
+      committedPosition: { journeyId: returnJourney.id, routePointId: null, assetId: null },
+      reason: "exited",
+      currentIntentRevision: 15,
+      journeys: [returnJourney],
+    })).toMatchObject({
+      surface: "story",
+      journeyId: returnJourney.id,
+      routePointId: "point-d",
+      assetId: "asset-d",
+      storySnapState: "expanded",
+    });
+  });
+});
 
 describe("resolvePlaybackOwnership", () => {
   it("requires the playback id to resolve before granting cinematic ownership", () => {

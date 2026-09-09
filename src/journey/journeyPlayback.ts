@@ -193,6 +193,64 @@ export function playbackStepIdentity(journey: Journey, step: PlaybackStep): stri
   }
 }
 
+export type CommittedPlaybackPosition = {
+  journeyId: string;
+  routePointId: string | null;
+  assetId: string | null;
+};
+
+/**
+ * Resolve return identity from the step React has already committed. Pending
+ * seek targets and camera commands never enter this helper, so they cannot
+ * masquerade as something the viewer has actually reached.
+ */
+export function committedPlaybackPosition(
+  journey: Journey,
+  committedStep: PlaybackStep | undefined,
+): CommittedPlaybackPosition {
+  if (!committedStep) {
+    return { journeyId: journey.id, routePointId: null, assetId: null };
+  }
+  switch (committedStep.kind) {
+    case "intro":
+    case "outro":
+      return { journeyId: journey.id, routePointId: null, assetId: null };
+    case "travel":
+      return {
+        journeyId: journey.id,
+        routePointId: journey.routePoints[committedStep.to]?.id ?? null,
+        assetId: null,
+      };
+    case "stop":
+      return {
+        journeyId: journey.id,
+        routePointId: journey.routePoints[committedStep.pointIndex]?.id ?? null,
+        assetId: null,
+      };
+    case "media": {
+      const routePointId = journey.routePoints[committedStep.pointIndex]?.id ?? null;
+      const asset = playbackMediaForPoint(journey, committedStep.pointIndex)[committedStep.mediaIndex];
+      return { journeyId: journey.id, routePointId, assetId: asset?.id ?? null };
+    }
+  }
+}
+
+/**
+ * Advance the return commit log only when the presentation owner confirms that
+ * the current media asset actually owns the visible slot. A failed or stale
+ * request therefore leaves the last successfully committed position intact.
+ */
+export function commitPresentedPlaybackPosition(
+  previous: CommittedPlaybackPosition | null,
+  journey: Journey,
+  committedStep: PlaybackStep | undefined,
+  presentedAssetId: string,
+): CommittedPlaybackPosition | null {
+  if (!committedStep || committedStep.kind !== "media") return previous;
+  const next = committedPlaybackPosition(journey, committedStep);
+  return next.assetId === presentedAssetId ? next : previous;
+}
+
 export type PlaybackControl =
   | { type: "advance" }
   | { type: "next" }

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { claimInertOwnership, isModalFocusCandidate, modalSurfaceFor } from "./useModalFocus";
+import { claimInertOwnership, isModalFocusCandidate, modalSurfaceFor, resolveModalInitialFocusTarget } from "./useModalFocus";
 
 function candidate({ inert = false, rendered = true } = {}) {
   return {
@@ -21,6 +21,24 @@ describe("isModalFocusCandidate", () => {
     vi.stubGlobal("getComputedStyle", () => ({ visibility: "visible" }));
     expect(isModalFocusCandidate(candidate())).toBe(true);
     expect(isModalFocusCandidate(candidate({ rendered: false }))).toBe(false);
+  });
+});
+
+describe("resolveModalInitialFocusTarget", () => {
+  it("lets the modal trap own a visible preferred initial control", () => {
+    vi.stubGlobal("getComputedStyle", () => ({ visibility: "visible" }));
+    const preferred = candidate();
+    const root = { contains: vi.fn((target) => target === preferred) } as unknown as HTMLElement;
+
+    expect(resolveModalInitialFocusTarget(root, () => preferred)).toBe(preferred);
+  });
+
+  it("falls back to the modal root when the preferred target is not usable", () => {
+    vi.stubGlobal("getComputedStyle", () => ({ visibility: "visible" }));
+    const hidden = candidate({ rendered: false });
+    const root = { contains: vi.fn(() => true) } as unknown as HTMLElement;
+
+    expect(resolveModalInitialFocusTarget(root, () => hidden)).toBe(root);
   });
 });
 

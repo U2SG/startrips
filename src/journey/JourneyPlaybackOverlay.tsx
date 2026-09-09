@@ -32,11 +32,14 @@ import {
 } from "./useJourneyPlaybackDirector";
 import {
   buildPlaybackSteps,
+  commitPresentedPlaybackPosition,
+  committedPlaybackPosition,
   playbackCameraTargetForStep,
   playbackCameraTargetKey,
   playbackMediaForPoint,
   playbackMediaWaitPolicy,
   playbackStepIdentity,
+  type CommittedPlaybackPosition,
   type PlaybackCameraTarget,
   type PlaybackStep,
 } from "./journeyPlayback";
@@ -78,6 +81,7 @@ import {
 } from "../motion/audioAtmosphere";
 import { prefersReducedMotion } from "../motion/preferences";
 import type { Journey, JourneyMediaAsset } from "./types";
+import type { PlaybackReturnReason } from "./playbackReturn";
 
 type MediaRead =
   | { status: "loading" }
@@ -203,7 +207,7 @@ export function JourneyPlaybackOverlay({
   statusMessage,
 }: {
   journey: Journey | null;
-  onClose: () => void;
+  onClose: (handoff: { reason: PlaybackReturnReason; position: CommittedPlaybackPosition | null }) => void;
   onCameraTargetChange: (target: PlaybackCameraTarget) => void;
   // Review P1: a prefetched soundtrack signed read, so the first play() can
   // run inside the click gesture (browser user-activation policy).
@@ -236,6 +240,13 @@ export function JourneyPlaybackOverlay({
   // waits on the decode settle instead of advancing on a fixed timer.
   const [holdReason, setHoldReason] = useState<PlaybackHoldReason>("none");
   const [presentationPending, setPresentationPending] = useState(false);
+  // Narrative return position is a commit log, not a mirror of the director's
+  // latest requested index. Non-media beats commit with their React render; a
+  // media beat commits only after PlaybackMediaStage has actually handed the
+  // visible slot over. A seek that is still decoding/transitioning therefore
+  // cannot masquerade as something the viewer already reached.
+  const committedPositionRef = useRef<CommittedPlaybackPosition | null>(null);
+  const committedJourneyIdRef = useRef<string | null>(null);
   // Every existing reader only asks whether playback is waiting at all. The
   // reason exists so the decode hold #197 is about can be told apart from a
   // video beat that simply owns its own completion.
@@ -246,6 +257,27 @@ export function JourneyPlaybackOverlay({
   // #126 sections 3-4: the transport reads the elapsed-time plan, so the bar is
   // time-weighted instead of step-weighted and a scrub has a time model.
   const { plan, getTimerBudget } = director;
+  useLayoutEffect(() => {
+    const journeyId = journey?.id ?? null;
+    if (committedJourneyIdRef.current !== journeyId) {
+      committedJourneyIdRef.current = journeyId;
+      committedPositionRef.current = null;
+    }
+    if (!journey || !director.step || director.step.kind === "media") return;
+    committedPositionRef.current = committedPlaybackPosition(journey, director.step);
+  }, [director.step, journey]);
+  const handlePresentationPendingChange = useCallback((pending: boolean) => {
+    setPresentationPending(pending);
+  }, []);
+  const handlePresentationCommit = useCallback((presentedAssetId: string) => {
+    if (!journey) return;
+    committedPositionRef.current = commitPresentedPlaybackPosition(
+      committedPositionRef.current,
+      journey,
+      director.step,
+      presentedAssetId,
+    );
+  }, [director.step, journey]);
   const quickRecapSelectionSummary = useMemo(() => (
     playbackMode === "quick-recap" && quickRecapPlan && quickRecapSourceJourney
       ? buildQuickRecapSelectionSummary(quickRecapPlan, quickRecapSourceJourney)
@@ -316,9 +348,11 @@ export function JourneyPlaybackOverlay({
   // Review P2: `exit()` only resets the local director; the overlay must also
   // tell the parent to drop playbackJourneyId, or playback can never close.
   const requestClose = useCallback(() => {
+    const reason: PlaybackReturnReason = director.completed ? "completed" : "exited";
+    const position = committedPositionRef.current;
     exit();
-    onClose();
-  }, [exit, onClose]);
+    onClose({ reason, position });
+  }, [director.completed, exit, onClose]);
   const [mediaReads, setMediaReads] = useState<Record<string, MediaRead>>(() => {
     if (!journey || !initialSoundtrackRead) return {};
     const soundtrack = journeySoundtrack(journey);
@@ -1204,7 +1238,8 @@ export function JourneyPlaybackOverlay({
             reduceMotion={audioReactiveReducedMotion}
             videoWaitTimeoutMs={VIDEO_STALL_WATCHDOG_MS}
             onVideoElement={bindVideoElement}
-            onPendingChange={setPresentationPending}
+            onPendingChange={handlePresentationPendingChange}
+            onPresented={handlePresentationCommit}
             onUnavailable={() => {
               setVideoFallbackAssetId(activeMedia.id);
               settleVideoTrimSeek(activeMedia.id, director.stepIndex, "unavailable");

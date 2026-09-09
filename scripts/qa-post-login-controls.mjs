@@ -1731,6 +1731,19 @@ async function verifyFinalAcceptanceMobileFlow() {
         createdAt: "2026-08-20T00:10:00.000Z",
       },
       {
+        id: "fa-image-2",
+        journeyId: "fa-journey-target",
+        routePointId: "fa-point-2",
+        storageDriver: "qa",
+        storageKey: "qa/final-image-2.gif",
+        fileName: "final-route-point-2.gif",
+        mimeType: "image/gif",
+        bytes: 35,
+        sortOrder: 1,
+        uploadedByUserId: "qa-user",
+        createdAt: "2026-08-20T01:10:00.000Z",
+      },
+      {
         id: "fa-soundtrack-1",
         journeyId: "fa-journey-target",
         routePointId: null,
@@ -1739,7 +1752,7 @@ async function verifyFinalAcceptanceMobileFlow() {
         fileName: "final-night-theme.mp3",
         mimeType: "audio/mpeg",
         bytes: 4,
-        sortOrder: 1,
+        sortOrder: 2,
         uploadedByUserId: "qa-user",
         createdAt: "2026-08-20T00:11:00.000Z",
       },
@@ -2238,9 +2251,27 @@ async function verifyFinalAcceptanceMobileFlow() {
         throw new Error(`Mobile Story inherited desktop editing chrome: ${JSON.stringify({ storyLayout, desktopEditControls })}`);
       }
       console.error(`[qa-post-login] final:${viewportLabel}:story-ready`);
+      // #245: establish a logical observation different from the entry cover.
+      // Mobile image tap owns fullscreen; its existing next-media control moves
+      // the Story observation from Route Point 1 / image 1 to Route Point 2 /
+      // image 2 without inventing a DOM index contract.
+      await page.locator('.journey-story [data-shared-media-id="fa-image-1"]').first().click();
+      const storyFullscreen = page.locator(".journey-story-fullscreen");
+      await storyFullscreen.waitFor({ state: "visible", timeout: 5_000 });
+      // Mobile fullscreen chrome is intentionally idle-hidden. Exercise its
+      // existing keyboard owner rather than forcing a hidden button actionable.
+      await page.keyboard.press("ArrowRight");
+      await page.waitForFunction(() => Boolean(
+        document.querySelector('.journey-story-fullscreen [data-shared-media-id="fa-image-2"]'),
+      ), null, { timeout: 5_000 });
+      await page.keyboard.press("Escape");
+      await storyFullscreen.waitFor({ state: "hidden", timeout: 5_000 });
+      await page.waitForFunction(() => Boolean(
+        document.querySelector('.journey-story [data-media-page="current"][data-media-page-id="fa-image-2"]'),
+      ), null, { timeout: 5_000 });
       await activateControl(page.locator(".journey-story__close"), "story close control");
       await page.locator(".journey-story").waitFor({ state: "detached" });
-      console.error(`[qa-post-login] final:${viewportLabel}:story-closed`);
+      console.error(`[qa-post-login] final:${viewportLabel}:story-closed-at-second-route-point`);
 
       // #43's cinematic playback surface remains a desktop contract. Cross the
       // responsive boundary on the same authenticated page and require the
@@ -2380,13 +2411,126 @@ async function verifyFinalAcceptanceMobileFlow() {
       }
       console.error(`[qa-post-login] final:${viewportLabel}:cinematic-verified`);
       console.error(`[qa-post-login] final:${viewportLabel}:playback-ready`);
-      const playbackStepBefore = await page.locator(".journey-playback").getAttribute("data-playback-step");
-      await page.keyboard.press("ArrowRight");
-      await page.waitForFunction((previousStep) => (
-        document.querySelector(".journey-playback")?.getAttribute("data-playback-step") !== previousStep
-      ), playbackStepBefore, { timeout: 2_000 });
+      const historyLengthBeforePlaybackReturn = await page.evaluate(() => window.history.length);
+      const progress = page.locator('.journey-playback__progress input[aria-label="播放进度"]');
+      // #245 return evidence needs a deterministic committed media beat, but its
+      // elapsed-time fraction is not a product contract. Read Playback's rendered
+      // chapter marker for the fixture's final Route Point: those markers come
+      // from the active plan's arrival segments, so tempo/budget changes move the
+      // seek target with the plan instead of invalidating a hard-coded fraction.
+      const routePointChapterTicks = page.locator(".journey-playback__progress-chapters i");
+      const routePointChapterCount = await routePointChapterTicks.count();
+      if (routePointChapterCount !== targetJourney.routePoints.length) {
+        throw new Error(`Playback chapter marker count drifted: expected ${targetJourney.routePoints.length}, got ${routePointChapterCount}`);
+      }
+      const finalRoutePointFraction = await routePointChapterTicks.last().evaluate((marker) => {
+        const leftPercent = Number.parseFloat(marker.style.left);
+        if (!Number.isFinite(leftPercent)) throw new Error("Playback chapter marker lacks a plan fraction");
+        return leftPercent / 100;
+      });
+      await progress.focus();
+      await progress.evaluate((input, fraction) => {
+        if (!(input instanceof HTMLInputElement)) throw new Error("Playback progress input missing");
+        const min = Number(input.min || "0");
+        const max = Number(input.max || "1000");
+        // Round forward so a marker that falls between scrubber units lands
+        // inside its arrival segment rather than one unit before it.
+        const value = Math.min(max, Math.ceil(min + (max - min) * fraction));
+        const nativeValueSetter = Object.getOwnPropertyDescriptor(
+          HTMLInputElement.prototype,
+          "value",
+        )?.set;
+        if (!nativeValueSetter) throw new Error("Playback progress value setter unavailable");
+        nativeValueSetter.call(input, String(value));
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      }, finalRoutePointFraction);
+      await page.waitForFunction((expectedLabel) => (
+        document.querySelector(".journey-playback")?.getAttribute("data-playback-phase") === "stop"
+        && document.querySelector(".journey-playback__stop h3")?.textContent?.trim() === expectedLabel
+      ), targetJourney.routePoints.at(-1)?.label ?? "", { timeout: 2_000 });
+      // Leave the range, reveal the ordinary transport chrome, and use the
+      // same Next Chapter control a viewer can click. Unlike the earlier failed
+      // witness this path is not paused: the plan-derived seek owns the current
+      // final Route Point stop, then the public transport advances exactly one
+      // meaningful beat. The destination itself is still asserted as fa-image-2.
+      await progress.blur();
+      const playbackPausedAtReturnSeek = await page.locator(".journey-playback").evaluate((playback) => (
+        playback.classList.contains("is-paused")
+      ));
+      if (playbackPausedAtReturnSeek) {
+        throw new Error("Playback return witness unexpectedly paused before semantic transport advance");
+      }
+      await page.mouse.move(Math.floor(width / 2), Math.floor(height / 2));
+      await page.waitForFunction(() => !(
+        document.querySelector(".journey-playback")?.classList.contains("is-controls-hidden")
+      ), null, { timeout: 2_000 });
+      await activateControl(
+        page.locator('.journey-playback__controls button[aria-label="下一个章节"]'),
+        "Playback next chapter from asserted Route Point",
+      );
+      await page.waitForFunction(() => (
+        document.querySelector(".journey-playback")?.getAttribute("data-playback-phase") === "media"
+      ), null, { timeout: 2_000 });
+      const returnedMediaStage = page.locator('.journey-playback__media[data-requested-asset="fa-image-2"]');
+      await returnedMediaStage.waitFor({ state: "visible", timeout: 5_000 });
+      // PlaybackMediaStage is the presentation owner. Require the requested
+      // semantic destination to become the successfully presented/settled frame
+      // before exit; a failed or merely requested asset is not a return commit.
+      await page.waitForFunction(() => {
+        const stage = document.querySelector('.journey-playback__media[data-requested-asset="fa-image-2"]');
+        return stage?.getAttribute("data-presented-asset") === "fa-image-2"
+          && stage?.getAttribute("data-media-presentation") === "settled"
+          && document.querySelector(".journey-playback")?.getAttribute("data-playback-presentation-hold") === "none";
+      }, null, { timeout: 5_000 });
+      // Freeze the now-presented beat before exiting so the autoplay clock cannot
+      // advance after the presentation owner has committed the return identity.
+      const pauseControl = page.locator('.journey-playback__controls button[aria-label="暂停播放"]');
+      if (await pauseControl.count()) {
+        await pauseControl.evaluate((button) => button.click());
+        await page.waitForFunction(() => Boolean(
+          document.querySelector('.journey-playback__controls button[aria-label="继续播放"]'),
+        ), null, { timeout: 2_000 });
+      }
+      await page.waitForFunction(() => (
+        document.querySelector(".journey-playback")?.getAttribute("data-playback-presentation-hold") === "none"
+      ), null, { timeout: 5_000 });
       await page.keyboard.press("Escape");
       await page.locator(".journey-playback").waitFor({ state: "detached" });
+      const returnedStory = page.locator(".journey-story");
+      await returnedStory.waitFor({ state: "visible", timeout: 5_000 });
+      await page.waitForFunction(() => Boolean(
+        document.querySelector('.journey-story [data-media-page="current"][data-media-page-id="fa-image-2"]'),
+      ), null, { timeout: 5_000 });
+      const playbackReturnState = await page.evaluate((historyLengthBefore) => {
+        const story = document.querySelector(".journey-story");
+        const active = document.activeElement;
+        const media = [...document.querySelectorAll("audio, video")];
+        const activeVisible = active instanceof HTMLElement
+          && story?.contains(active)
+          && active.matches('button, input, select, textarea, a[href], [tabindex]:not([tabindex="-1"])')
+          && active.getClientRects().length > 0
+          && getComputedStyle(active).visibility !== "hidden";
+        return {
+          currentAssetId: story?.querySelector('[data-media-page="current"]')?.getAttribute("data-media-page-id") ?? null,
+          focusInsideVisibleStoryControl: Boolean(activeVisible),
+          historyLengthBefore,
+          historyLengthAfter: window.history.length,
+          playingMedia: media.filter((element) => !element.paused && !element.ended).length,
+          playbackStillMounted: Boolean(document.querySelector(".journey-playback")),
+        };
+      }, historyLengthBeforePlaybackReturn);
+      if (
+        playbackReturnState.currentAssetId !== "fa-image-2"
+        || !playbackReturnState.focusInsideVisibleStoryControl
+        || playbackReturnState.historyLengthAfter !== playbackReturnState.historyLengthBefore
+        || playbackReturnState.playingMedia !== 0
+        || playbackReturnState.playbackStillMounted
+      ) {
+        throw new Error(`Story Playback return handoff failed: ${JSON.stringify(playbackReturnState)}`);
+      }
+      results.push({ name: "story-full-playback-return", ...playbackReturnState, failed: false });
+      await activateControl(returnedStory.locator(".journey-story__close"), "returned Story close control");
+      await returnedStory.waitFor({ state: "detached" });
       await page.waitForFunction(() => {
         const account = document.querySelector(".account-dock");
         const header = document.querySelector(".living-atlas__header");

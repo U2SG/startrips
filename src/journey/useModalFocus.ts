@@ -28,6 +28,20 @@ export function modalSurfaceFor(root: HTMLElement, atlas: Element | null) {
   return root.parentElement === atlas ? root : root.parentElement;
 }
 
+export type ModalInitialFocusResolver<T extends HTMLElement> = (root: T) => HTMLElement | null;
+
+export function resolveModalInitialFocusTarget<T extends HTMLElement>(
+  root: T,
+  resolver?: ModalInitialFocusResolver<T>,
+) {
+  const preferred = resolver?.(root) ?? null;
+  return preferred
+    && root.contains(preferred)
+    && isModalFocusCandidate(preferred)
+    ? preferred
+    : root;
+}
+
 /**
  * #250: `inert` on a background surface has more than one possible owner. React
  * inerts the mobile Journey sheet layer for as long as any Story is open, and a
@@ -159,11 +173,14 @@ export function useModalFocus<T extends HTMLElement>(
   onClose: () => void,
   active = true,
   trapSuspended = false,
+  initialFocus?: ModalInitialFocusResolver<T>,
 ) {
   const rootRef = useRef<T>(null);
   const onCloseRef = useRef(onClose);
+  const initialFocusRef = useRef(initialFocus);
   const trapActiveRef = useRef(false);
   const pendingFocusRestoreRef = useRef<HTMLElement | null>(null);
+  initialFocusRef.current = initialFocus;
 
   useEffect(() => {
     onCloseRef.current = onClose;
@@ -237,7 +254,8 @@ export function useModalFocus<T extends HTMLElement>(
     trapActiveRef.current = true;
     const focusable = () => [...root.querySelectorAll<HTMLElement>(FOCUSABLE)]
       .filter(isModalFocusCandidate);
-    root.focus({ preventScroll: true });
+    resolveModalInitialFocusTarget(root, initialFocusRef.current)
+      .focus({ preventScroll: true });
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {

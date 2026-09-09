@@ -35,6 +35,7 @@ import {
   storyChapterMedia,
   shouldHoldWholeJourneyTerminalFrame,
   storyInitialMediaSelection,
+  storyLogicalObservation,
   storyMediaNeighborIndex,
   storySelectionContainsRoutePointMedia,
   storyUploadedAssetIndex,
@@ -319,6 +320,42 @@ describe("storyInitialMediaSelection (#18 follow-up)", () => {
     });
   });
 
+
+  it("restores an explicit logical asset within the requested Story scope", () => {
+    const first = { ...asset("first", "image/jpeg", 0, "first.jpg"), routePointId: "point-1" };
+    const returned = { ...asset("returned", "image/jpeg", 1, "returned.jpg"), routePointId: "point-1" };
+    const withReturnedAsset: Journey = {
+      ...journey,
+      routePoints: [{
+        id: "point-1", journeyId: journey.id, sortOrder: 0, latitude: 1, longitude: 2,
+        label: "Point", isStop: true, occurredAt: null, createdAt: journey.createdAt,
+      }],
+      media: [first, returned],
+    };
+    expect(storyInitialMediaSelection(withReturnedAsset, "point-1", returned.id)).toEqual({
+      routePointId: "point-1",
+      assetIndex: 1,
+      assetId: returned.id,
+    });
+  });
+
+  it("publishes logical observation identity without viewport pixels or media internals", () => {
+    const observedAsset = {
+      ...asset("asset-d", "image/jpeg", 0, "asset-d.jpg"),
+      routePointId: "point-d",
+    };
+    const observedJourney = { ...journey, media: [observedAsset] };
+    expect(storyLogicalObservation(observedJourney, null, "asset-d", true, false)).toEqual({
+      journeyId: journey.id,
+      routePointId: "point-d",
+      assetId: "asset-d",
+      storySnapState: "in-context",
+    });
+    expect(storyLogicalObservation(observedJourney, null, "asset-d", true, true).storySnapState)
+      .toBe("expanded");
+    expect(storyLogicalObservation(observedJourney, "point-a", "deleted-asset", true, false))
+      .toMatchObject({ routePointId: "point-a", assetId: null });
+  });
   it("keeps whole-Journey mode when the explicit cover belongs to a route point", () => {
     const journeyLevel = asset("journey-level", "image/jpeg", 0, "journey.jpg");
     const pointFirst = {
