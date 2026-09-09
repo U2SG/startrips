@@ -1,11 +1,13 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { GEOGRAPHIC_SURFACE_RADIUS } from "./geo";
+import { GEOGRAPHIC_SURFACE_RADIUS, latLonToVector3 } from "./geo";
 import {
+  COASTLINE_LOCAL_COMBINED_VERTEX_BUDGET,
   COASTLINE_LOCAL_VERTEX_BUDGET,
   CoastlineLocalChunkCache,
   buildLocalCoastlinePositions,
   isLocalCoastlineTarget,
+  mergeRegionalAndLocalCoastlinePositions,
   resolveCoastlineInspectionTarget,
   resolveLocalCoastlineCell,
   resolveLocalCoastlineChunkIds,
@@ -153,6 +155,29 @@ describe("local 10m coastline refinement (#154)", () => {
       expect(Math.hypot(positions[index], positions[index + 1], positions[index + 2]))
         .toBeCloseTo(GEOGRAPHIC_SURFACE_RADIUS, 5);
     }
+  });
+
+  it("keeps regional coverage outside local chunks while replacing the overlapping 50m segments", () => {
+    const segment = (a: { lat: number; lon: number }, b: { lat: number; lon: number }) => {
+      const values = new Float32Array(6);
+      latLonToVector3(a.lat, a.lon, GEOGRAPHIC_SURFACE_RADIUS).toArray(values, 0);
+      latLonToVector3(b.lat, b.lon, GEOGRAPHIC_SURFACE_RADIUS).toArray(values, 3);
+      return values;
+    };
+    const insideRegional = segment({ lat: 22.3, lon: 114.1 }, { lat: 22.35, lon: 114.15 });
+    const outsideRegional = segment({ lat: 30, lon: 120 }, { lat: 30.1, lon: 120.1 });
+    const regional = new Float32Array([...insideRegional, ...outsideRegional]);
+    const local = segment({ lat: 22.31, lon: 114.11 }, { lat: 22.36, lon: 114.16 });
+    const merged = mergeRegionalAndLocalCoastlinePositions({
+      regionalPositions: regional,
+      localPositions: local,
+      localBounds: [{ west: 114, south: 22, east: 116, north: 24 }],
+      quality: "high",
+    });
+
+    expect(Array.from(merged.slice(0, 6))).toEqual(Array.from(outsideRegional));
+    expect(Array.from(merged.slice(-6))).toEqual(Array.from(local));
+    expect(merged.length / 3).toBeLessThanOrEqual(COASTLINE_LOCAL_COMBINED_VERTEX_BUDGET.high);
   });
 
   it("keeps a bounded LRU of immutable local chunks", () => {

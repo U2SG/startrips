@@ -95,6 +95,7 @@ import {
   COASTLINE_LOCAL_MANIFEST_PATH,
   CoastlineLocalChunkCache,
   buildLocalCoastlinePositions,
+  mergeRegionalAndLocalCoastlinePositions,
   isLocalCoastlineTarget,
   resolveCoastlineInspectionTarget,
   resolveLocalCoastlineCell,
@@ -4087,33 +4088,29 @@ export function ParticleEarthScene({
       requestedCoastlineCacheKey = cacheKey;
       const ticket = coastlineRefinementBuildGuard.request(cacheKey);
       const regionalCacheKey = `${qualityAtRequest}:50m:${regional.key}`;
-      const applyRegionalFallback = (source: string) => {
-        if (currentQuality !== qualityAtRequest || !coastlineRefinementBuildGuard.isCurrent(ticket)) return;
-        if (detailedCoastlineRings.length === 0) {
-          requestedCoastlineCacheKey = null;
-          coastlineRefinementState = "awaiting-50m";
-          return;
-        }
+      const readRegionalPositions = () => {
+        if (detailedCoastlineRings.length === 0) return null;
         const cached = coastlineRefinementCache.get(regionalCacheKey);
-        if (cached) {
-          applyNearCoastlinePositions(cached, {
-            cacheKey: regionalCacheKey,
-            terminalState: "cached",
-            source,
-            inspectionTarget,
-            regionCenter: regional.center,
-            chunkIds: [],
-          });
-          return;
-        }
+        if (cached) return { positions: cached, cached: true };
         const positions = buildRegionalCoastlinePositions({
           rings: detailedCoastlineRings,
           region: regional,
           quality: qualityAtRequest,
         });
         coastlineRefinementCache.set(regionalCacheKey, positions);
-        applyNearCoastlinePositions(positions, {
+        return { positions, cached: false };
+      };
+      const applyRegionalFallback = (source: string) => {
+        if (currentQuality !== qualityAtRequest || !coastlineRefinementBuildGuard.isCurrent(ticket)) return;
+        const regionalResult = readRegionalPositions();
+        if (!regionalResult) {
+          requestedCoastlineCacheKey = null;
+          coastlineRefinementState = "awaiting-50m";
+          return;
+        }
+        applyNearCoastlinePositions(regionalResult.positions, {
           cacheKey: regionalCacheKey,
+          terminalState: regionalResult.cached ? "cached" : "ready",
           source,
           inspectionTarget,
           regionCenter: regional.center,
@@ -4160,14 +4157,26 @@ export function ParticleEarthScene({
           applyRegionalFallback("50m-regional-fallback");
           return;
         }
+        const regionalResult = readRegionalPositions();
+        if (!regionalResult) {
+          requestedCoastlineCacheKey = null;
+          coastlineRefinementState = "awaiting-50m";
+          return;
+        }
         localCoastlineRetryAt = Number.NEGATIVE_INFINITY;
-        const positions = buildLocalCoastlinePositions({
+        const localPositions = buildLocalCoastlinePositions({
           chunks: chunks as CoastlineLocalChunk[],
+          quality: qualityAtRequest,
+        });
+        const positions = mergeRegionalAndLocalCoastlinePositions({
+          regionalPositions: regionalResult.positions,
+          localPositions,
+          localBounds: entries.map((entry) => entry.bounds),
           quality: qualityAtRequest,
         });
         applyNearCoastlinePositions(positions, {
           cacheKey,
-          source: "10m-local-natural-earth",
+          source: "50m-regional+10m-local-natural-earth",
           inspectionTarget,
           regionCenter: localCell.center,
           chunkIds,
@@ -4359,6 +4368,12 @@ export function ParticleEarthScene({
           if (positions.length > 0) nextGeometry.computeBoundingSphere();
           if (lod === "mid") {
             const previous = midCoastlineGeometry; midCoastlineGeometry = nextGeometry; midCoastlines.geometry = nextGeometry; previous.dispose();
+          } else if (activeCoastlineRegionKey) {
+            // #154 review: a quality rebuild owns the base/mid data, but an
+            // already-committed near refinement has its own exact cache key.
+            // Keep that geometry visible until the new-quality refinement
+            // replaces it, so the key and pixels cannot diverge for one frame.
+            nextGeometry.dispose();
           } else {
             const previous = nearCoastlineGeometry; nearCoastlineGeometry = nextGeometry; nearCoastlines.geometry = nextGeometry; previous.dispose();
           }

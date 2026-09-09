@@ -379,7 +379,7 @@ function horizonRadians(sample) {
 }
 
 /** Wait until the focus flight has stopped moving the focus signal. */
-async function waitForLocalCoastline(page, expectedSource = "10m-local-natural-earth") {
+async function waitForLocalCoastline(page, expectedSource = "50m-regional+10m-local-natural-earth") {
   await page.waitForFunction((source) => {
     const host = document.querySelector(".particle-earth-scene");
     return host?.dataset.coastlineSource === source
@@ -630,8 +630,8 @@ try {
       if (fixture.key === "dense-coastline" && zoom === 3) {
         settled = await waitForLocalCoastline(page);
         check(
-          settled.coastlineSource === "10m-local-natural-earth",
-          `${label}: near coastline source is ${settled.coastlineSource}, not the 10m local source`,
+          settled.coastlineSource === "50m-regional+10m-local-natural-earth",
+          `${label}: near coastline source is ${settled.coastlineSource}, not the 50m-regional + 10m-local composite source`,
         );
         check(
           settled.coastlineInspection?.source === "focus",

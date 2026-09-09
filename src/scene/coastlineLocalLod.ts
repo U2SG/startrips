@@ -5,6 +5,7 @@ export const COASTLINE_LOCAL_GRID_DEGREES = 2;
 export const COASTLINE_LOCAL_ACTIVE_CELL_RADIUS = 1;
 export const COASTLINE_LOCAL_CACHE_LIMIT = 12;
 export const COASTLINE_LOCAL_VERTEX_BUDGET = { low: 8_000, high: 12_000 } as const;
+export const COASTLINE_LOCAL_COMBINED_VERTEX_BUDGET = { low: 26_000, high: 48_000 } as const;
 export const COASTLINE_LOCAL_COVERAGE = { west: 110, south: 18, east: 118, north: 26 } as const;
 
 export type CoastlineLocalQuality = keyof typeof COASTLINE_LOCAL_VERTEX_BUDGET;
@@ -172,6 +173,70 @@ export function buildLocalCoastlinePositions({
     point.offset += 3;
   }
   return positions;
+}
+
+function vectorPointToLatLon(x: number, y: number, z: number) {
+  const length = Math.hypot(x, y, z) || 1;
+  return {
+    lat: Math.asin(Math.min(1, Math.max(-1, y / length))) * 180 / Math.PI,
+    lon: wrapLongitude(Math.atan2(-z, x) * 180 / Math.PI),
+  };
+}
+
+function pointInsideBounds(
+  point: { lat: number; lon: number },
+  bounds: { west: number; south: number; east: number; north: number },
+) {
+  return point.lon >= bounds.west && point.lon < bounds.east
+    && point.lat >= bounds.south && point.lat < bounds.north;
+}
+
+export function mergeRegionalAndLocalCoastlinePositions({
+  regionalPositions,
+  localPositions,
+  localBounds,
+  quality,
+}: {
+  regionalPositions: Float32Array;
+  localPositions: Float32Array;
+  localBounds: readonly { west: number; south: number; east: number; north: number }[];
+  quality: CoastlineLocalQuality;
+}) {
+  const regionalSegments: number[][] = [];
+  for (let index = 0; index + 5 < regionalPositions.length; index += 6) {
+    const midpoint = vectorPointToLatLon(
+      regionalPositions[index] + regionalPositions[index + 3],
+      regionalPositions[index + 1] + regionalPositions[index + 4],
+      regionalPositions[index + 2] + regionalPositions[index + 5],
+    );
+    if (localBounds.some((bounds) => pointInsideBounds(midpoint, bounds))) continue;
+    regionalSegments.push(Array.from(regionalPositions.slice(index, index + 6)));
+  }
+
+  const combinedVertexBudget = COASTLINE_LOCAL_COMBINED_VERTEX_BUDGET[quality];
+  const localVertexCount = Math.min(localPositions.length / 3, combinedVertexBudget);
+  const regionalVertexBudget = Math.max(0, combinedVertexBudget - localVertexCount);
+  const regionalSegmentBudget = Math.floor(regionalVertexBudget / 2);
+  const selectedRegionalSegments: number[][] = [];
+  if (regionalSegments.length <= regionalSegmentBudget) {
+    selectedRegionalSegments.push(...regionalSegments);
+  } else if (regionalSegmentBudget > 0) {
+    const stride = regionalSegments.length / regionalSegmentBudget;
+    for (let index = 0; index < regionalSegmentBudget; index += 1) {
+      selectedRegionalSegments.push(regionalSegments[Math.floor(index * stride)]);
+    }
+  }
+
+  const regionalLength = selectedRegionalSegments.length * 6;
+  const localLength = localVertexCount * 3;
+  const merged = new Float32Array(regionalLength + localLength);
+  let offset = 0;
+  for (const segment of selectedRegionalSegments) {
+    merged.set(segment, offset);
+    offset += 6;
+  }
+  merged.set(localPositions.slice(0, localLength), offset);
+  return merged;
 }
 
 export class CoastlineLocalChunkCache {
