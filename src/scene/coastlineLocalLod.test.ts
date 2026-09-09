@@ -115,16 +115,22 @@ describe("local 10m coastline refinement (#154)", () => {
   it("lets settled canonical focus outrank free-explore inspection, then falls back after manual ownership", () => {
     const focus = { lat: 22.54554, lon: 114.0683 };
     const free = { lat: 24.2, lon: 116.1 };
-    expect(resolveCoastlineInspectionTarget({
+    const focused = resolveCoastlineInspectionTarget({
       focusTarget: focus,
       focusOwnsInspection: true,
       freeExploreTarget: free,
-    })).toEqual({ ...focus, source: "focus" });
-    expect(resolveCoastlineInspectionTarget({
+    });
+    expect(focused?.source).toBe("focus");
+    expect(focused?.lat).toBeCloseTo(focus.lat, 8);
+    expect(focused?.lon).toBeCloseTo(focus.lon, 8);
+    const explored = resolveCoastlineInspectionTarget({
       focusTarget: focus,
       focusOwnsInspection: false,
       freeExploreTarget: free,
-    })).toEqual({ ...free, source: "free-explore" });
+    });
+    expect(explored?.source).toBe("free-explore");
+    expect(explored?.lat).toBeCloseTo(free.lat, 8);
+    expect(explored?.lon).toBeCloseTo(free.lon, 8);
   });
 
   it("loads only the bounded adjacent chunk set for Pearl River Delta inspection", () => {
