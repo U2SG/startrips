@@ -1562,6 +1562,18 @@ describe("placement analysis supersession (#113)", () => {
     expect(authority.isCurrent(intent, deleted)).toBe(false);
   });
 
+  it("invalidates when a Route Point on another suggestion-target Journey disappears", () => {
+    const authority = createPlacementAnalysisAuthority();
+    const current = withPoints(journey, ["p1"]);
+    const other = withPoints({ ...journey, id: "journey-2", title: "B" }, ["b1"]);
+    const scope = placementAnalysisScope([current, other], current.id, "p1");
+    authority.syncScope(scope);
+    const intent = authority.start(scope);
+    const changed = placementAnalysisScope([current, withPoints(other, [])], current.id, "p1");
+    authority.syncScope(changed);
+    expect(authority.isCurrent(intent, changed)).toBe(false);
+  });
+
   it("rejects every late commit after Story unmount", () => {
     const authority = createPlacementAnalysisAuthority();
     const current = withPoints(journey, ["p1"]);

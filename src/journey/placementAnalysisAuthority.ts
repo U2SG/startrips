@@ -20,7 +20,11 @@ export function placementAnalysisScope(
 ): PlacementAnalysisScope {
   const current = journeys.find((candidate) => candidate.id === journeyId) ?? null;
   const journeyMembershipKey = journeys.map((candidate) => candidate.id).join("\u001f");
-  const routePointMembershipKey = current?.routePoints.map((point) => point.id).join("\u001f") ?? "<missing>";
+  // Placement can suggest another Journey, so every currently addressable Route
+  // Point belongs to the async scope, not only the Story's selected Journey.
+  const routePointMembershipKey = journeys
+    .map((candidate) => `${candidate.id}:${candidate.routePoints.map((point) => point.id).join(",")}`)
+    .join("\u001f");
   return {
     journeyId,
     routePointId,
