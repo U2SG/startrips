@@ -48,9 +48,10 @@ controller run re-reads the live PR head and the readiness workflow's run list b
 shared label/status state. If a newer readiness run already exists for that exact head, the older
 run exits successfully without writing anything. Final sign-off repeats the freshness test before
 and after publishing success and still checks the live `merge-ready` label on both sides of the
-write. If newer activity races the success write, the older controller repairs the shared status
-back to pending and removes the stale label. Superseded runs therefore become green no-ops rather
-than cancelled failures while the same stale-success protection remains in force.
+write. If newer activity races the success write, the older controller repairs its own status back
+to pending only while that status is still the latest one; it never removes a label or overwrites a
+status that may already belong to the newer controller. Superseded runs therefore become green
+no-ops rather than cancelled failures while the stale-success protection remains in force.
 
 The label requirement is enforced on the merge button through the required `merge-readiness`
 status, and the ordering in [`CONTRIBUTING.md`](../CONTRIBUTING.md) is not advisory.
