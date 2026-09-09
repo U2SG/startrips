@@ -830,22 +830,26 @@ try {
     await setTempo(recapRebuildRun.page, "standard");
     await waitForRenderedMediaSteps(recapRebuildRun.page, WARMUP_MEDIA_STEPS, 60_000);
     const before = await playbackIntentState(recapRebuildRun.page);
+    const traceBeforeTempo = await readQaTrace(recapRebuildRun.page);
     await setTempo(recapRebuildRun.page, "fast");
     await recapRebuildRun.page.waitForFunction((target) => (
       Number(document.querySelector('.journey-playback')?.getAttribute('data-playback-intent') ?? 0) >= target
     ), before.revision + 2, { timeout: 5_000 });
     await recapRebuildRun.page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     const live = await playbackIntentState(recapRebuildRun.page);
-    const traceAtLiveScope = await readQaTrace(recapRebuildRun.page);
     const landed = await waitForRenderedMediaAtIntent(recapRebuildRun.page, live.revision);
     const trace = await readQaTrace(recapRebuildRun.page);
-    const boundary = revisionBoundaryReads(trace, traceAtLiveScope.reads.length, live.revision);
+    // Grade the whole tempo/rebuild boundary, starting before the user action.
+    // A read from an intermediate old projection (N+1) is stale relative to the
+    // settled live plan (N+2 or later) and must not be hidden by snapshotting only
+    // after the rebuild already completed.
+    const boundary = revisionBoundaryReads(trace, traceBeforeTempo.reads.length, live.revision);
     const measurement = {
       label: "playback-prefetch-quick-recap-rebuild",
       revisionBefore: before.revision,
       revisionAfter: live.revision,
       suppressedDispatchCount: live.suppressed - before.suppressed,
-      readsAfterLiveScope: boundary.post.length,
+      readsAfterTempoIntent: boundary.post.length,
       staleReads: boundary.stale,
       landedStep: landed?.step ?? null,
       failed: live.revision < before.revision + 2 || boundary.stale.length > 0 || landed === null,

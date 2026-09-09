@@ -306,15 +306,16 @@ export function JourneyPlaybackOverlay({
   const mediaPositionRef = useRef<{ stepIndex: number; fraction: number } | null>(null);
   const [scrubberFocused, setScrubberFocused] = useState(false);
   const [livePositionFraction, setLivePositionFraction] = useState<number | null>(null);
-  // Report a real tempo change only. The director resets to the initial tempo
-  // whenever the journey changes, and a rebuilt plan hands us a new `journey`
-  // object every time, so re-announcing the current tempo would loop.
-  const notifiedTempoRef = useRef<PlaybackTempo>(tempo);
-  useEffect(() => {
-    if (notifiedTempoRef.current === tempo) return;
-    notifiedTempoRef.current = tempo;
-    onTempoChange?.(tempo);
-  }, [onTempoChange, tempo]);
+  // Tempo is a narrative intent and Quick Recap also rebuilds its projected
+  // Journey for that same user action. Report the owner rebuild synchronously in
+  // the select event, in the same React batch as the director's revision bump.
+  // That prevents an intermediate commit where new tempo N+1 can dispatch from
+  // the old Quick Recap projection before plan scope advances to N+2.
+  const changeTempo = useCallback((nextTempo: PlaybackTempo) => {
+    if (nextTempo === tempo) return;
+    onTempoChange?.(nextTempo);
+    setTempo(nextTempo);
+  }, [onTempoChange, setTempo, tempo]);
 
   // A Quick Recap rebuild can add or drop beats, so a step index taken before
   // it is meaningless. Keep the same step when it survives, otherwise land on
@@ -327,7 +328,11 @@ export function JourneyPlaybackOverlay({
   const stepsRef = useRef(steps);
   stepsRef.current = steps;
   const remapJourneyIdRef = useRef<string | null>(null);
-  useEffect(() => {
+  // Scope remap is part of the same narrative-intent commit as the rebuilt
+  // Quick Recap plan. Claim it in layout phase, before the later prefetch
+  // dispatch layout effect queues work, so a moved beat bumps the live revision
+  // first and the old-index window is suppressed rather than escaping.
+  useLayoutEffect(() => {
     const nextIdentities = journey
       ? stepsRef.current.map((candidate) => playbackStepIdentity(journey, candidate))
       : [];
@@ -1489,7 +1494,7 @@ export function JourneyPlaybackOverlay({
           <select
             value={tempo}
             aria-label="播放节奏"
-            onChange={(event) => setTempo(event.currentTarget.value as PlaybackTempo)}
+            onChange={(event) => changeTempo(event.currentTarget.value as PlaybackTempo)}
           >
             <option value="fast">快速</option>
             <option value="standard">标准</option>
