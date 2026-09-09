@@ -1,0 +1,96 @@
+{
+  "version": 1,
+  "source": {
+    "name": "Natural Earth land",
+    "scale": "10m",
+    "license": "public-domain",
+    "upstream": "https://www.naturalearthdata.com/"
+  },
+  "gridDegrees": 2,
+  "coverage": {
+    "west": 110,
+    "south": 18,
+    "east": 118,
+    "north": 26
+  },
+  "chunkSegmentLimit": 4000,
+  "chunks": [
+    {
+      "id": "+18_+110",
+      "bounds": {
+        "west": 110,
+        "south": 18,
+        "east": 112,
+        "north": 20
+      },
+      "path": "+18_+110.json",
+      "segmentCount": 236
+    },
+    {
+      "id": "+20_+110",
+      "bounds": {
+        "west": 110,
+        "south": 20,
+        "east": 112,
+        "north": 22
+      },
+      "path": "+20_+110.json",
+      "segmentCount": 703
+    },
+    {
+      "id": "+20_+112",
+      "bounds": {
+        "west": 112,
+        "south": 20,
+        "east": 114,
+        "north": 22
+      },
+      "path": "+20_+112.json",
+      "segmentCount": 226
+    },
+    {
+      "id": "+22_+112",
+      "bounds": {
+        "west": 112,
+        "south": 22,
+        "east": 114,
+        "north": 24
+      },
+      "path": "+22_+112.json",
+      "segmentCount": 595
+    },
+    {
+      "id": "+22_+114",
+      "bounds": {
+        "west": 114,
+        "south": 22,
+        "east": 116,
+        "north": 24
+      },
+      "path": "+22_+114.json",
+      "segmentCount": 827
+    },
+    {
+      "id": "+22_+116",
+      "bounds": {
+        "west": 116,
+        "south": 22,
+        "east": 118,
+        "north": 24
+      },
+      "path": "+22_+116.json",
+      "segmentCount": 341
+    },
+    {
+      "id": "+24_+116",
+      "bounds": {
+        "west": 116,
+        "south": 24,
+        "east": 118,
+        "north": 26
+      },
+      "path": "+24_+116.json",
+      "segmentCount": 59
+    }
+  ]
+}
