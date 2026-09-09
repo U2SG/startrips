@@ -42,6 +42,7 @@ import {
   storyUploadedAssetIndex,
 } from "./JourneyStory";
 import { JourneyApiError } from "./journeyApi";
+import { createPlacementAnalysisAuthority, placementAnalysisScope } from "./placementAnalysisAuthority";
 import type { Journey, JourneyMediaAsset } from "./types";
 
 const journey: Journey = {
@@ -1502,5 +1503,81 @@ describe("JourneyStory", () => {
     expect(markup).toContain('aria-label="编辑故事"');
     expect(markup).not.toContain("编辑旅程");
     expect(markup).not.toContain("删除旅程");
+  });
+});
+
+
+describe("placement analysis supersession (#113)", () => {
+  const point = (id: string, owner = "journey-1") => ({
+    id, journeyId: owner, sortOrder: 0, label: id, latitude: 1, longitude: 1, occurredAt: null, note: null, isStop: true, createdAt: journey.createdAt,
+  });
+  const withPoints = (base: Journey, ids: string[]): Journey => ({ ...base, routePoints: ids.map((id) => point(id, base.id)) });
+
+  it("drops Journey A analysis after Journey B becomes the scope, so late A cannot review or upload", () => {
+    const authority = createPlacementAnalysisAuthority();
+    const journeyA = withPoints(journey, ["a1"]);
+    const journeyB = withPoints({ ...journey, id: "journey-2", title: "B" }, ["b1"]);
+    const a = placementAnalysisScope([journeyA, journeyB], journeyA.id, "a1");
+    authority.syncScope(a);
+    const intentA = authority.start(a);
+    const b = placementAnalysisScope([journeyA, journeyB], journeyB.id, "b1");
+    authority.syncScope(b);
+    const review = vi.fn();
+    const upload = vi.fn();
+    if (authority.isCurrent(intentA, b)) { review(); upload(); }
+    expect(review).not.toHaveBeenCalled();
+    expect(upload).not.toHaveBeenCalled();
+  });
+
+  it("keeps analysis B active when stale A reaches finally", () => {
+    const authority = createPlacementAnalysisAuthority();
+    const scope = placementAnalysisScope([withPoints(journey, ["p1"])], journey.id, "p1");
+    authority.syncScope(scope);
+    const intentA = authority.start(scope);
+    const intentB = authority.start(scope);
+    expect(authority.isCurrent(intentA, scope)).toBe(false);
+    expect(authority.isCurrent(intentB, scope)).toBe(true);
+  });
+
+  it("invalidates an analysis when the same Journey switches Route Point", () => {
+    const authority = createPlacementAnalysisAuthority();
+    const current = withPoints(journey, ["p1", "p2"]);
+    const p1 = placementAnalysisScope([current], current.id, "p1");
+    authority.syncScope(p1);
+    const intent = authority.start(p1);
+    const p2 = placementAnalysisScope([current], current.id, "p2");
+    authority.syncScope(p2);
+    expect(authority.isCurrent(intent, p2)).toBe(false);
+  });
+
+  it("invalidates analysis when its Journey or captured Route Point leaves current membership", () => {
+    const authority = createPlacementAnalysisAuthority();
+    const current = withPoints(journey, ["p1"]);
+    const scope = placementAnalysisScope([current], current.id, "p1");
+    authority.syncScope(scope);
+    const intent = authority.start(scope);
+    const deleted = placementAnalysisScope([], current.id, "p1");
+    authority.syncScope(deleted);
+    expect(deleted.valid).toBe(false);
+    expect(authority.isCurrent(intent, deleted)).toBe(false);
+  });
+
+  it("rejects every late commit after Story unmount", () => {
+    const authority = createPlacementAnalysisAuthority();
+    const current = withPoints(journey, ["p1"]);
+    const scope = placementAnalysisScope([current], current.id, "p1");
+    authority.syncScope(scope);
+    const intent = authority.start(scope);
+    authority.dispose();
+    expect(authority.isCurrent(intent, scope)).toBe(false);
+  });
+
+  it("keeps the unchanged #86 current-scope happy path authoritative", () => {
+    const authority = createPlacementAnalysisAuthority();
+    const current = withPoints(journey, ["p1"]);
+    const scope = placementAnalysisScope([current], current.id, "p1");
+    authority.syncScope(scope);
+    const intent = authority.start(scope);
+    expect(authority.isCurrent(intent, scope)).toBe(true);
   });
 });
