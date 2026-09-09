@@ -31,12 +31,17 @@ export function resolveRenderBudget({
   const width = Math.max(1, finitePositive(viewportWidth, 1));
   const height = Math.max(1, finitePositive(viewportHeight, 1));
   const maxDpr = finitePositive(qualityProfile.maxDpr, 1);
-  const maxPixels = finitePositive(qualityProfile.maxDrawingBufferPixels, width * height);
+  const maxPixels = Math.max(1, finitePositive(qualityProfile.maxDrawingBufferPixels, width * height));
   const requestedDpr = Math.min(finitePositive(deviceDpr, 1), maxDpr);
   const areaDpr = Math.sqrt(maxPixels / (width * height));
-  const effectiveDpr = Math.max(0.5, Math.min(requestedDpr, areaDpr));
-  const drawingBufferWidth = Math.max(1, Math.round(width * effectiveDpr));
-  const drawingBufferHeight = Math.max(1, Math.round(height * effectiveDpr));
+  // The area budget is authoritative even when it requires sub-0.5 DPR on a
+  // very large viewport. A visual-quality floor here would make the advertised
+  // pixel cap false exactly on the expensive screens this resolver protects.
+  const effectiveDpr = Math.min(requestedDpr, areaDpr);
+  // Three.js floors drawing-buffer dimensions after applying pixel ratio. Mirror
+  // that contract so the published pixel count cannot round above maxPixels.
+  const drawingBufferWidth = Math.max(1, Math.floor(width * effectiveDpr));
+  const drawingBufferHeight = Math.max(1, Math.floor(height * effectiveDpr));
   return {
     effectiveDpr,
     drawingBufferPixels: drawingBufferWidth * drawingBufferHeight,

@@ -5193,8 +5193,10 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   }
 
   .journey-story-backdrop.is-story-expanded .journey-story {
-    height: 100svh;
-    max-height: 100svh;
+    /* #247: suspension is valid only while this opaque surface fills the current
+       dynamic viewport; 100svh can leave a visible strip after browser chrome retracts. */
+    height: 100dvh;
+    max-height: 100dvh;
     border-radius: 0;
     background: #020809;
   }

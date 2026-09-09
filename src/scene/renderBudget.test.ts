@@ -21,6 +21,15 @@ describe("resolveRenderBudget", () => {
     expect(Number.isFinite(budget.effectiveDpr)).toBe(true);
   });
 
+  it("honors the pixel cap even when a very large viewport needs DPR below 0.5", () => {
+    const budget = resolveRenderBudget({
+      viewportWidth: 3840, viewportHeight: 2160, deviceDpr: 3,
+      qualityProfile: { maxDpr: 1, maxDrawingBufferPixels: 1_500_000 },
+    });
+    expect(budget.effectiveDpr).toBeLessThan(0.5);
+    expect(budget.drawingBufferPixels).toBeLessThanOrEqual(1_500_000);
+  });
+
   it("returns finite defaults for invalid browser measurements", () => {
     const budget = resolveRenderBudget({
       viewportWidth: Number.NaN, viewportHeight: 0, deviceDpr: Number.POSITIVE_INFINITY,

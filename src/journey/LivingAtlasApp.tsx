@@ -472,6 +472,7 @@ export function LivingAtlasApp({
   const [storyInitialSnapState, setStoryInitialSnapState] = useState<Exclude<StorySnapState, "closed">>("in-context");
   const [storyFocusVisibleControlOnOpen, setStoryFocusVisibleControlOnOpen] = useState(false);
   const [storyGlobeCover, setStoryGlobeCover] = useState({ opaqueMediaCover: false, coverTransitionActive: false });
+  const [playbackGlobeCover, setPlaybackGlobeCover] = useState({ opaqueMediaCover: false, coverTransitionActive: false });
   const [routePointContextSelection, setRoutePointContextSelection] = useState(
     () => emptyRoutePointContextSelection(),
   );
@@ -1237,7 +1238,10 @@ export function LivingAtlasApp({
             focusColor={focusPresentation.journey?.lightColor}
             journeyRoutes={routes}
             activeJourneyRouteId={draftRoute?.id ?? activeJourneyId}
-            mediaCoverHint={storyGlobeCover}
+            mediaCoverHint={{
+              opaqueMediaCover: storyGlobeCover.opaqueMediaCover || playbackGlobeCover.opaqueMediaCover,
+              coverTransitionActive: storyGlobeCover.coverTransitionActive || playbackGlobeCover.coverTransitionActive,
+            }}
             temporalReveal={isMobileV2 || globeFocusMode
               ? {
                 journeys: timeCursor.reveal.journeyProgress,
@@ -1834,6 +1838,7 @@ export function LivingAtlasApp({
           stepDurationResolver={playbackStepDurationResolver}
           mediaTrimResolver={playbackMediaTrimResolver}
           onTempoChange={handlePlaybackTempoChange}
+          onGlobeCoverChange={setPlaybackGlobeCover}
           playbackMode={playbackQuickRecap ? "quick-recap" : "full"}
           quickRecapPlan={playbackQuickRecap?.plan ?? null}
           quickRecapSourceJourney={playbackQuickRecap ? playbackSourceJourney : null}

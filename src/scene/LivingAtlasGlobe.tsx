@@ -502,7 +502,7 @@ export function LivingAtlasGlobe({
       inputOwner: dive.owner,
       earthDiveOverlapActive: dive.stage === "prewarm" || dive.stage === "blending",
       mediaCoverHint: {
-        opaqueMediaCover: cinematicActive || Boolean(mediaCoverHint?.opaqueMediaCover),
+        opaqueMediaCover: Boolean(mediaCoverHint?.opaqueMediaCover),
         coverTransitionActive: Boolean(mediaCoverHint?.coverTransitionActive),
       },
       reduceMotion,

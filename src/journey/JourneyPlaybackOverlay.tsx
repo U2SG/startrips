@@ -74,6 +74,7 @@ import {
 } from "./journeyPlaybackPlan";
 import { journeySoundtrack, stripMediaExtension } from "./journeyModel";
 import { compactMobileLayoutMarker, useCompactMobileLayout } from "./mobileLayout";
+import { EMPTY_PLAYBACK_GLOBE_COVER, playbackGlobeCoverState, type PlaybackGlobeCoverState } from "./playbackGlobeCover";
 import { createSoundtrackSampler } from "../motion/audioSampler";
 import {
   resetAudioAtmosphereEnergy,
@@ -201,6 +202,7 @@ export function JourneyPlaybackOverlay({
   stepDurationResolver,
   mediaTrimResolver,
   onTempoChange,
+  onGlobeCoverChange,
   playbackMode = "full",
   quickRecapPlan,
   quickRecapSourceJourney,
@@ -223,6 +225,7 @@ export function JourneyPlaybackOverlay({
   // the Edit Plan has to rebuild it when the runtime tempo changes. Tempo state
   // stays here in the director; this only reports a change upwards.
   onTempoChange?: (tempo: PlaybackTempo) => boolean | void;
+  onGlobeCoverChange?: (state: PlaybackGlobeCoverState) => void;
   playbackMode?: "full" | "quick-recap";
   quickRecapPlan?: AutoEditPlanV1 | null;
   quickRecapSourceJourney?: Journey | null;
@@ -254,6 +257,13 @@ export function JourneyPlaybackOverlay({
   const [videoFallbackAssetId, setVideoFallbackAssetId] = useState<string | null>(null);
   const director = useJourneyPlaybackDirector(journey, hold, stepDurationResolver);
   const { phase, paused, pause, resume, next, back, replay, seek, exit, steps, stepIndex, tempo, setTempo } = director;
+  const globeCoverState = playbackGlobeCoverState(director.step?.kind ?? null, presentationPending);
+  useEffect(() => {
+    onGlobeCoverChange?.(globeCoverState);
+  }, [globeCoverState.coverTransitionActive, globeCoverState.opaqueMediaCover, onGlobeCoverChange]);
+  useEffect(() => () => {
+    onGlobeCoverChange?.(EMPTY_PLAYBACK_GLOBE_COVER);
+  }, [onGlobeCoverChange]);
   const [suppressedPrefetchDispatchCount, setSuppressedPrefetchDispatchCount] = useState(0);
   // #126 sections 3-4: the transport reads the elapsed-time plan, so the bar is
   // time-weighted instead of step-weighted and a scrub has a time model.
