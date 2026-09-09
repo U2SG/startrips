@@ -515,7 +515,7 @@ export function parseJpegExifPlacementSignal(buffer: ArrayBuffer): MediaPlacemen
     const marker = view.getUint8(markerOffset);
     cursor = markerOffset + 1;
     if (marker === 0xd9 || marker === 0xda) break;
-    if (marker >= 0xd0 && marker <= 0xd7) continue;
+    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) continue;
     if (!inBounds(view, cursor, 2)) break;
     const segmentLength = view.getUint16(cursor, false);
     if (segmentLength < 2 || !inBounds(view, cursor, segmentLength)) break;
