@@ -458,6 +458,55 @@ describe("PhotonLocationSearch", () => {
     expect(new URL(String(fetchMock.mock.calls[1][0])).searchParams.get("q")).toBe("Honolulu");
   });
 
+  it("does not let a larger administrative region suppress the city lookup", async () => {
+    // `纽约州` is New York State. It differs from `纽约` by an administrative
+    // suffix, but it is a different geographic entity, so a primary hit on it
+    // must not stand in for the `New York City` the query names. The state hit
+    // is deliberately bilingual: the English round trip must be earned by the
+    // identity rule, not by a missing English label.
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => Response.json({
+      features: new URL(String(input)).searchParams.get("q") === "New York City"
+        ? [{
+          geometry: { coordinates: [-74.00597, 40.71427] },
+          properties: {
+            osm_type: "R",
+            osm_id: 175905,
+            name: "New York",
+            "name:en": "New York",
+            state: "New York",
+            country: "United States",
+            countrycode: "US",
+          },
+        }]
+        : [{
+          geometry: { coordinates: [-75.4999, 43.00035] },
+          properties: {
+            osm_type: "R",
+            osm_id: 61320,
+            name: "纽约州",
+            "name:en": "New York State",
+            country: "United States",
+            countrycode: "US",
+          },
+        }],
+    }));
+    const search = new PhotonLocationSearch({
+      baseUrl: "https://photon.example.test",
+      userAgent: "Startrips/1.0",
+      fetcher: fetchMock as unknown as typeof fetch,
+      requestIntervalMs: 0,
+    });
+
+    const results = await search.search("纽约", { limit: 8 });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(new URL(String(fetchMock.mock.calls[1][0])).searchParams.get("q"))
+      .toBe("New York City");
+    expect(results[0]).toMatchObject({ label: "New York", countryCode: "US" });
+    expect(Math.abs(results[0].latitude - 40.714)).toBeLessThan(0.05);
+    expect(Math.abs(results[0].longitude - -74.006)).toBeLessThan(0.05);
+  });
+
   it("returns nothing for an unknown Chinese query and never invents a place", async () => {
     const fetchMock = vi.fn(async (_input: RequestInfo | URL) => Response.json({
       features: [],

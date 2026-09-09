@@ -18,7 +18,8 @@ import { LocationSearchUnavailableError } from "./location-search";
  * the forms people actually type, without naming any city:
  *
  * - administrative suffixes are dropped (`纽约市` also answers `纽约`,
- *   `首尔特别市` also answers `首尔`), and
+ *   `首尔特别市` also answers `首尔`) — a wider set widens the index than the
+ *   narrow municipality set that may prove two labels name the same place, and
  * - a leading qualifier of any length is dropped only when that qualifier is
  *   itself the Chinese name of a country or region, so `美国檀香山` answers as
  *   `檀香山` while `不存在巴黎` and `深圳南山区` stay untouched local queries.
@@ -40,8 +41,31 @@ const HAN_QUERY = /^[㐀-䶿一-鿿]+$/;
 /** The payload separates several Chinese display names with a fullwidth slash. */
 const NAME_SEPARATOR = /[／/、]/;
 
-/** Longest first: `特别市` must be tried before `市`. */
-const ADMINISTRATIVE_SUFFIXES = [
+/**
+ * Suffixes that name the municipality of the settlement itself, so a label
+ * carrying one is the same place as the bare name: `深圳市` is `深圳`,
+ * `香港特别行政区` is `香港`. `特别行政区` is a whole municipality token and
+ * is deliberately not the bare `区` below. Longest first, so `特别市` is tried
+ * before `市`.
+ */
+const MUNICIPALITY_SUFFIXES = [
+  "特别行政区",
+  "自治市",
+  "特别市",
+  "市",
+] as const;
+
+/**
+ * Suffixes that widen the index only. `市区` is a city's urban core, `区` a
+ * district and `县` a county: each is a shorter name for the *same* payload
+ * entry, so it is a safe extra key for that entry, but the level it names is
+ * not the level the bare name names — which is why identity comparison never
+ * uses them. `州` is excluded from both lists: in this payload it marks a
+ * first-level division rather than a city name variant, so stripping it
+ * equates a state with an unrelated city (`马里兰州` -> `马里兰` -> Randallstown,
+ * `麻萨诸塞州` -> `麻萨诸塞` -> Grafton).
+ */
+const INDEX_NAME_SUFFIXES = [
   "特别行政区",
   "自治市",
   "特别市",
@@ -49,7 +73,6 @@ const ADMINISTRATIVE_SUFFIXES = [
   "市",
   "区",
   "县",
-  "州",
 ] as const;
 
 /**
@@ -76,8 +99,8 @@ function chineseNames(entry: PayloadEntry): string[] {
   return entry.z.split(NAME_SEPARATOR).map((name) => name.trim()).filter(Boolean);
 }
 
-function withoutAdministrativeSuffix(name: string): string {
-  for (const suffix of ADMINISTRATIVE_SUFFIXES) {
+function withoutSuffix(name: string, suffixes: readonly string[]): string {
+  for (const suffix of suffixes) {
     if (!name.endsWith(suffix)) continue;
     const base = name.slice(0, -suffix.length);
     return base.length >= MIN_PLACE_NAME_LENGTH ? base : "";
@@ -99,7 +122,7 @@ function buildIndex(entries: readonly PayloadEntry[]): Map<string, string> {
     if (!english) continue;
     for (const name of chineseNames(entry)) {
       if (!index.has(name)) index.set(name, english);
-      const base = withoutAdministrativeSuffix(name);
+      const base = withoutSuffix(name, INDEX_NAME_SUFFIXES);
       if (base) stripped.push([base, english]);
     }
   }
@@ -120,17 +143,24 @@ function parseIndex(payload: string): Map<string, string> {
 
 /**
  * Whether a provider label names the same place a query asked for. `深圳市`
- * names `深圳` because the difference is an administrative suffix, while
- * `伦敦街` does not name `伦敦` and `檀香山路` does not name `檀香山` — a hit
- * that merely contains the query is a different place and must not stand in
- * for it.
+ * names `深圳` because the difference is the municipality suffix of that same
+ * settlement, while `伦敦街` does not name `伦敦` and `檀香山路` does not name
+ * `檀香山` — a hit that merely contains the query is a different place and
+ * must not stand in for it.
+ *
+ * Only the municipality suffixes count here, never the wider set the index is
+ * built with. A suffix that moves the administrative level names a different
+ * geographic entity: `纽约州` is New York State, not `纽约`, so accepting it
+ * as an answer would suppress the `New York City` lookup and return the wrong
+ * place. Morphology that is sound for widening recall is not proof of
+ * identity.
  */
 export function namesSamePlace(label: string, query: string): boolean {
   const needle = query.trim().toLocaleLowerCase();
   const candidate = label.trim();
   if (!needle || !candidate) return false;
   if (candidate.toLocaleLowerCase() === needle) return true;
-  const base = withoutAdministrativeSuffix(candidate);
+  const base = withoutSuffix(candidate, MUNICIPALITY_SUFFIXES);
   return base !== "" && base.toLocaleLowerCase() === needle;
 }
 

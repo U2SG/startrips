@@ -97,6 +97,22 @@ describe("place-name aliases", () => {
     expect(namesSamePlace("", "檀香山")).toBe(false);
   });
 
+  it("does not accept a larger administrative region as the place a query names", async () => {
+    // A suffix that moves the administrative level is a different geographic
+    // entity, so it cannot prove identity: `纽约州` is New York State while
+    // `纽约` must still answer New York City, and a district or county is not
+    // the bare name either. Only the municipality suffixes of the settlement
+    // itself count.
+    expect(namesSamePlace("纽约州", "纽约")).toBe(false);
+    expect(namesSamePlace("南山区", "南山")).toBe(false);
+    expect(namesSamePlace("深圳市区", "深圳")).toBe(false);
+    expect(namesSamePlace("嘉义县", "嘉义")).toBe(false);
+    expect(namesSamePlace("香港特别行政区", "香港")).toBe(true);
+    // The place the exonym must keep resolving to, so the identity rule and
+    // the index rule cannot drift apart.
+    await expect(resolve("纽约")).resolves.toBe("New York City");
+  });
+
   it("returns an unknown or non-Chinese query untouched", async () => {
     await expect(resolve("这个地方并不存在")).resolves.toBe("这个地方并不存在");
     await expect(resolve("Honolulu")).resolves.toBe("Honolulu");
