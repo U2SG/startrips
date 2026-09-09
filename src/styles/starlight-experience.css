@@ -1,7 +1,6 @@
 /* Supplied brand direction, applied to existing product surfaces. */
 .auth-v3-brand { align-items: center; color: var(--startrips-starlight); }
 .auth-v3-brand > .auth-v3-brand__caption { color: var(--startrips-muted); }
-.auth-v3-brand .startrips-wordmark__lamb { display: none; }
 .auth-card > .startrips-wordmark { margin-bottom: 24px; }
 .auth-starlight-intro {
   grid-column: 1;
@@ -15,7 +14,7 @@
   color: var(--startrips-starlight);
 }
 .auth-starlight-intro > .startrips-wordmark {
-  font-size: clamp(52px, 7.2vw, var(--startrips-wordmark-size));
+  height: clamp(52px, 7.2vw, var(--startrips-wordmark-size));
 }
 .auth-starlight-intro > p {
   margin: 28px 0 12px;
@@ -27,8 +26,6 @@
   font: 400 12px/1.6 var(--archive-sans);
   letter-spacing: 0.12em;
 }
-.auth-starlight-intro.is-ready .startrips-wordmark__lamb,
-.auth-starlight-intro.is-ready .startrips-wordmark__star { animation: none; }
 .auth-card--login-v3 { grid-row: 1; border-radius: 20px; border-color: var(--startrips-line); }
 .auth-card--login-v3::after { display: none; }
 .auth-primary {
@@ -46,7 +43,6 @@
 .auth-primary:active:not(:disabled) { transform: translateY(0); }
 .auth-primary:hover:not(:disabled) { box-shadow: 0 8px 28px rgb(255 248 231 / 0.12); }
 .auth-primary:focus-visible { outline: 2px solid var(--startrips-aurora); }
-.auth-primary .startrips-brand-mark__star { color: var(--startrips-space); }
 .auth-card input:focus,
 .auth-card textarea:focus { border-color: var(--startrips-aurora); }
 .auth-switches button,
@@ -122,16 +118,14 @@
 @media (max-width: 760px) {
   .auth-starlight-intro { display: none; }
   .auth-v3-brand { align-items: center; top: max(20px, env(safe-area-inset-top)); }
-  .auth-v3-brand > .startrips-wordmark { font-size: 34px; }
-  .auth-v3-brand .startrips-wordmark__lamb { display: block; }
+  .auth-v3-brand > .startrips-wordmark { height: 34px; }
   .auth-v3-brand > .auth-v3-brand__caption { max-width: 15ch; line-height: 1.8; text-align: right; }
   .auth-card--login-v3 { border-radius: 20px; }
   .mobile-v2__brand > .startrips-wordmark { margin-bottom: 3px; }
 }
 @media (max-height: 540px) {
   .auth-starlight-intro { display: none; }
-  .auth-v3-brand > .startrips-wordmark { font-size: 26px; }
-  .auth-v3-brand .startrips-wordmark__lamb { display: block; }
+  .auth-v3-brand > .startrips-wordmark { height: 26px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .auth-primary { transition: none; }
