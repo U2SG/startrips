@@ -11,6 +11,7 @@ import {
   routePointAngularDistance,
   type PlaybackStep,
 } from "./journeyPlayback";
+import type { HomeNarrativeContext, HomeNarrativeBeatDecision } from "./homeBasePrelude";
 import { isSoundtrackAsset, isVisualMediaAsset } from "./journeyModel";
 import { UNMEASURED_VIDEO_DURATION_MS, resolveNarrativeTiming } from "./narrativeTiming";
 import type { VideoTrimWindow } from "./videoTrimPlayback";
@@ -31,9 +32,39 @@ export const QUICK_RECAP_PENDING_VIDEO_DURATION_MS = UNMEASURED_VIDEO_DURATION_M
 export type PreparedQuickRecapPlayback = {
   journey: Journey;
   plan: AutoEditPlanV1;
+  homeNarrativeContext?: HomeNarrativeContext;
 };
 
 export type QuickRecapFallbackReason = "no-visual-media" | "over-budget";
+
+function homeBeatCostMs(
+  decision: HomeNarrativeBeatDecision,
+  kind: "home-prelude" | "home-epilogue",
+  tempo: AutoEditTempo,
+) {
+  return decision.eligible
+    ? resolveNarrativeTiming({ mode: "quick-recap", tempo, segmentKind: kind })
+    : 0;
+}
+
+/**
+ * Actual Journey memories own the Quick Recap target. Home ceremony is admitted
+ * only when every otherwise-eligible Home beat fits in the unused envelope; a
+ * partial pair is not manufactured merely because one side happened to fit.
+ */
+export function fitHomeNarrativeContextToQuickRecapBudget(
+  context: HomeNarrativeContext,
+  remainingMs: number,
+  tempo: AutoEditTempo,
+): HomeNarrativeContext {
+  const requiredMs = homeBeatCostMs(context.prelude, "home-prelude", tempo)
+    + homeBeatCostMs(context.epilogue, "home-epilogue", tempo);
+  if (requiredMs <= Math.max(0, remainingMs)) return context;
+  const omit = (decision: HomeNarrativeBeatDecision): HomeNarrativeBeatDecision => (
+    decision.eligible ? { eligible: false, reason: "quick-recap-budget" } : decision
+  );
+  return { prelude: omit(context.prelude), epilogue: omit(context.epilogue) };
+}
 
 export type QuickRecapPreparationResult =
   | { playback: PreparedQuickRecapPlayback; fallbackReason: null }
@@ -161,6 +192,7 @@ export function prepareQuickRecapPlaybackResult(
     generatedAt: string;
     targetDurationMs?: number;
     tempo?: AutoEditTempo;
+    homeNarrativeContext?: HomeNarrativeContext | null;
   },
 ): QuickRecapPreparationResult {
   if (journey.routePoints.length === 0) return { playback: null, fallbackReason: "no-visual-media" };
@@ -210,12 +242,22 @@ export function prepareQuickRecapPlaybackResult(
     if (!selectedIds.has(asset.id)) return [];
     return [projectedCandidates.get(asset.id) ?? asset];
   });
+  const introMs = resolveNarrativeTiming({ mode: "quick-recap", tempo, segmentKind: "intro" });
+  const outroMs = resolveNarrativeTiming({ mode: "quick-recap", tempo, segmentKind: "outro" });
+  const homeNarrativeContext = options.homeNarrativeContext
+    ? fitHomeNarrativeContextToQuickRecapBudget(
+      options.homeNarrativeContext,
+      requestedTargetMs - (plan.plannedDurationMs + introMs + outroMs),
+      tempo,
+    )
+    : undefined;
 
   return {
     fallbackReason: null,
     playback: {
       plan,
       journey: { ...journey, routePoints: projectedRoutePoints, media: projectedMedia },
+      ...(homeNarrativeContext ? { homeNarrativeContext } : {}),
     },
   };
 }
@@ -226,6 +268,7 @@ export function prepareQuickRecapPlayback(
     generatedAt: string;
     targetDurationMs?: number;
     tempo?: AutoEditTempo;
+    homeNarrativeContext?: HomeNarrativeContext | null;
   },
 ): PreparedQuickRecapPlayback | null {
   return prepareQuickRecapPlaybackResult(journey, options).playback;
@@ -299,6 +342,9 @@ export function quickRecapStepDurationMs(
   plan: AutoEditPlanV1,
   tempo: AutoEditTempo = "standard",
 ): number | undefined {
+  if (step.kind === "home-prelude" || step.kind === "home-epilogue") {
+    return resolveNarrativeTiming({ mode: "quick-recap", tempo, segmentKind: step.kind });
+  }
   if (step.kind === "intro" || step.kind === "outro") return undefined;
   const pointIndex = step.kind === "travel" ? step.to : step.pointIndex;
   const point = journey.routePoints[pointIndex];

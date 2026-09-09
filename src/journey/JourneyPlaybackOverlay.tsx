@@ -18,6 +18,7 @@ import {
 import { StartripsJourneyCue, StartripsWordmark } from "../brand/StartripsBrandMark";
 import "../styles/starlight-media.css";
 import { useAtlasView } from "./atlasView";
+import type { HomeNarrativeContext } from "./homeBasePrelude";
 import { PlaybackMediaStage } from "./PlaybackMediaStage";
 import { mediaReadIsFresh } from "./mediaReadRefresh";
 import {
@@ -207,6 +208,7 @@ export function JourneyPlaybackOverlay({
   quickRecapPlan,
   quickRecapSourceJourney,
   statusMessage,
+  homeNarrativeContext,
 }: {
   journey: Journey | null;
   onClose: (handoff: { reason: PlaybackReturnReason; position: CommittedPlaybackPosition | null }) => void;
@@ -230,6 +232,7 @@ export function JourneyPlaybackOverlay({
   quickRecapPlan?: AutoEditPlanV1 | null;
   quickRecapSourceJourney?: Journey | null;
   statusMessage?: string | null;
+  homeNarrativeContext?: HomeNarrativeContext | null;
 }) {
   // #194: the one product-level compact-mobile answer, published as an
   // attribute so journey-playback.css never states a breakpoint of its own.
@@ -255,7 +258,7 @@ export function JourneyPlaybackOverlay({
   // video beat that simply owns its own completion.
   const hold = holdReason !== "none" || presentationPending;
   const [videoFallbackAssetId, setVideoFallbackAssetId] = useState<string | null>(null);
-  const director = useJourneyPlaybackDirector(journey, hold, stepDurationResolver);
+  const director = useJourneyPlaybackDirector(journey, hold, stepDurationResolver, homeNarrativeContext);
   const { phase, paused, pause, resume, next, back, replay, seek, exit, steps, stepIndex, tempo, setTempo } = director;
   const globeCoverState = playbackGlobeCoverState(director.step?.kind ?? null, presentationPending);
   useEffect(() => {
@@ -668,8 +671,8 @@ export function JourneyPlaybackOverlay({
   // of prepared playback. Deriving it from `stepIndex` alone is what makes a
   // seek, next or back invalidate the old window without any cancellation.
   const playbackSteps = useMemo(
-    () => journey ? buildPlaybackSteps(journey) : [],
-    [journey],
+    () => journey ? buildPlaybackSteps(journey, homeNarrativeContext) : [],
+    [homeNarrativeContext, journey],
   );
   const mediaById = useMemo(() => {
     const index = new Map<string, JourneyMediaAsset>();

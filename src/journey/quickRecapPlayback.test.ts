@@ -9,6 +9,7 @@ import {
 import { resolveNarrativeTiming, type NarrativeTempo } from "./narrativeTiming";
 import { validateAutoEditPlanV1 } from "./autoEditPlan";
 import {
+  fitHomeNarrativeContextToQuickRecapBudget,
   prepareQuickRecapPlayback,
   prepareQuickRecapPlaybackResult,
   type PreparedQuickRecapPlayback,
@@ -25,6 +26,7 @@ import {
   videoTrimEntryAction,
   videoTrimSegmentDurationMs,
 } from "./videoTrimPlayback";
+import type { HomeNarrativeContext } from "./homeBasePrelude";
 import type { Journey, JourneyMediaAsset, RoutePoint } from "./types";
 
 function point(id: string, sortOrder: number): RoutePoint {
@@ -55,6 +57,20 @@ function fixture(): Journey {
       media("video", "p1", "video/mp4", 4),
       media("soundtrack", null, "audio/mpeg", 5),
     ],
+  };
+}
+
+
+function homeContext(): HomeNarrativeContext {
+  return {
+    prelude: {
+      eligible: true, reason: "eligible",
+      cameraTarget: { kind: "home", homeBaseId: "home-a", latitude: 22.54, longitude: 114.05, anchor: { x: 1, y: 2, z: 3 } },
+    },
+    epilogue: {
+      eligible: true, reason: "eligible",
+      cameraTarget: { kind: "home", homeBaseId: "home-b", latitude: 22.54, longitude: 114.05, anchor: { x: 1, y: 2, z: 3 } },
+    },
   };
 }
 
@@ -745,4 +761,59 @@ describe("Quick Recap trim handoff (#195 Phase 2)", () => {
     foreign.chapters = [];
     expect(quickRecapStepTrim(prepared.journey, steps.video, foreign)).toBeNull();
   });
+  it("keeps no-Home Quick Recap output byte-identical when Home context is absent", () => {
+    const journey = fixture();
+    const base = prepareQuickRecapPlaybackResult(journey, { generatedAt: "2026-09-03T00:00:00.000Z" });
+    const explicitNone = prepareQuickRecapPlaybackResult(journey, {
+      generatedAt: "2026-09-03T00:00:00.000Z",
+      homeNarrativeContext: null,
+    });
+    expect(explicitNone).toEqual(base);
+  });
+
+  it("omits all eligible Home ceremony when the remaining Quick Recap envelope cannot fit it", () => {
+    const context = homeContext();
+    const homeCost = resolveNarrativeTiming({ mode: "quick-recap", tempo: "standard", segmentKind: "home-prelude" })
+      + resolveNarrativeTiming({ mode: "quick-recap", tempo: "standard", segmentKind: "home-epilogue" });
+    expect(fitHomeNarrativeContextToQuickRecapBudget(context, homeCost - 1, "standard")).toEqual({
+      prelude: { eligible: false, reason: "quick-recap-budget" },
+      epilogue: { eligible: false, reason: "quick-recap-budget" },
+    });
+    expect(fitHomeNarrativeContextToQuickRecapBudget(context, homeCost, "standard")).toEqual(context);
+  });
+
+  it("passes Home context through only when the actual recap plan leaves enough budget", () => {
+    const journey = fixture();
+    journey.media = [media("p0-a", "p0", "image/jpeg", 0)];
+    const context = homeContext();
+    const generous = prepareQuickRecapPlaybackResult(journey, {
+      generatedAt: "2026-09-03T00:00:00.000Z",
+      targetDurationMs: 60_000,
+      homeNarrativeContext: context,
+    });
+    expect(generous.playback?.homeNarrativeContext).toEqual(context);
+
+    let budgeted: ReturnType<typeof prepareQuickRecapPlaybackResult> | null = null;
+    for (let targetDurationMs = 4_000; targetDurationMs <= 20_000; targetDurationMs += 250) {
+      const plain = prepareQuickRecapPlaybackResult(journey, {
+        generatedAt: "2026-09-03T00:00:00.000Z", targetDurationMs,
+      });
+      if (!plain.playback) continue;
+      const introMs = resolveNarrativeTiming({ mode: "quick-recap", tempo: "standard", segmentKind: "intro" });
+      const outroMs = resolveNarrativeTiming({ mode: "quick-recap", tempo: "standard", segmentKind: "outro" });
+      const remaining = targetDurationMs - (plain.playback.plan.plannedDurationMs + introMs + outroMs);
+      const homeCost = resolveNarrativeTiming({ mode: "quick-recap", tempo: "standard", segmentKind: "home-prelude" })
+        + resolveNarrativeTiming({ mode: "quick-recap", tempo: "standard", segmentKind: "home-epilogue" });
+      if (remaining >= homeCost) continue;
+      budgeted = prepareQuickRecapPlaybackResult(journey, {
+        generatedAt: "2026-09-03T00:00:00.000Z", targetDurationMs, homeNarrativeContext: context,
+      });
+      break;
+    }
+    expect(budgeted?.playback?.homeNarrativeContext).toEqual({
+      prelude: { eligible: false, reason: "quick-recap-budget" },
+      epilogue: { eligible: false, reason: "quick-recap-budget" },
+    });
+  });
+
 });

@@ -184,6 +184,7 @@ export function SharedAtlasView({
   const atlasView = useMemo<AtlasView>(() => ({
     capabilities: GUEST_ATLAS_VIEW_CAPABILITIES,
     listJourneys,
+    listHomeBasePeriods: null,
     readMedia,
     mutations: null,
   }), [listJourneys, readMedia]);

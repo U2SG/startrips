@@ -15,6 +15,7 @@ import type { Journey } from "./types";
 const GUEST_VIEW: AtlasView = {
   capabilities: GUEST_ATLAS_VIEW_CAPABILITIES,
   listJourneys: async () => [],
+  listHomeBasePeriods: null,
   readMedia: async () => ({ url: "signed", expiresAt: "2026-09-05T00:01:30.000Z" }),
   mutations: null,
 };

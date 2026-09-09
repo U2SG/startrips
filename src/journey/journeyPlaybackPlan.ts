@@ -6,6 +6,8 @@ import {
   routePointAngularDistance,
   type PlaybackStep,
 } from "./journeyPlayback";
+import type { HomeNarrativeContext } from "./homeBasePrelude";
+import { resolveNarrativeTiming } from "./narrativeTiming";
 import type { Journey } from "./types";
 
 export type PlaybackTempo = "fast" | "standard" | "immersive";
@@ -64,7 +66,7 @@ export const PLAYBACK_TEMPO_PROFILES: Record<PlaybackTempo, PlaybackTempoProfile
 
 export type PlannedPlaybackSegment = {
   id: string;
-  kind: "intro" | "travel" | "arrival" | "media" | "outro";
+  kind: "home-prelude" | "intro" | "travel" | "arrival" | "media" | "home-epilogue" | "outro";
   /** The index of this beat in `buildPlaybackSteps(journey)` — the same index
    * the director seeks to. The plan describes the beats that actually play. */
   stepIndex: number;
@@ -87,6 +89,7 @@ export function playbackStepDurationForTempo(
   profile: PlaybackTempoProfile,
 ) {
   switch (step.kind) {
+    case "home-prelude":
     case "intro":
       return profile.introMs;
     case "travel": {
@@ -110,6 +113,7 @@ export function playbackStepDurationForTempo(
       const asset = playbackMediaForPoint(journey, step.pointIndex)[step.mediaIndex];
       return asset?.mimeType.startsWith("video/") ? profile.videoMs : profile.imageMs;
     }
+    case "home-epilogue":
     case "outro":
       return profile.outroMs;
   }
@@ -143,11 +147,15 @@ export function resolvePlaybackStepDurationMs(
   resolveStepDuration?: PlaybackStepDurationResolver,
 ): number {
   const overrideDurationMs = resolveStepDuration?.(journey, step, tempo);
-  return overrideDurationMs !== undefined
+  if (overrideDurationMs !== undefined
     && Number.isFinite(overrideDurationMs)
-    && overrideDurationMs >= 0
-    ? overrideDurationMs
-    : playbackStepDurationForTempo(journey, step, PLAYBACK_TEMPO_PROFILES[tempo]);
+    && overrideDurationMs >= 0) {
+    return overrideDurationMs;
+  }
+  if (step.kind === "home-prelude" || step.kind === "home-epilogue") {
+    return resolveNarrativeTiming({ mode: "full", tempo, segmentKind: step.kind });
+  }
+  return playbackStepDurationForTempo(journey, step, PLAYBACK_TEMPO_PROFILES[tempo]);
 }
 
 type PlaybackSegmentIdentity = Pick<
@@ -161,6 +169,12 @@ function segmentIdentity(
   stepIndex: number,
 ): PlaybackSegmentIdentity {
   switch (step.kind) {
+    case "home-prelude":
+      return {
+        id: `home-prelude:${step.cameraTarget.homeBaseId}`,
+        kind: "home-prelude" as const,
+        routePointId: null,
+      };
     case "intro":
       return { id: "intro", kind: "intro" as const, routePointId: null };
     case "travel": {
@@ -189,6 +203,12 @@ function segmentIdentity(
         ...(asset ? { assetId: asset.id } : {}),
       };
     }
+    case "home-epilogue":
+      return {
+        id: `home-epilogue:${step.cameraTarget.homeBaseId}`,
+        kind: "home-epilogue" as const,
+        routePointId: null,
+      };
     case "outro":
       return { id: "outro", kind: "outro" as const, routePointId: null };
   }
@@ -207,8 +227,9 @@ export function buildPlaybackPlan(
   journey: Journey,
   tempo: PlaybackTempo = "standard",
   resolveStepDuration?: PlaybackStepDurationResolver,
+  homeContext?: HomeNarrativeContext | null,
 ): PlaybackPlan {
-  const steps = buildPlaybackSteps(journey);
+  const steps = buildPlaybackSteps(journey, homeContext);
   let cursorMs = 0;
   const segments = steps.map((step, stepIndex) => {
     const durationMs = resolvePlaybackStepDurationMs(journey, step, tempo, resolveStepDuration);

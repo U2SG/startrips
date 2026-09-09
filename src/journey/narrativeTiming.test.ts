@@ -68,7 +68,9 @@ const KEEPSAKE_EXPECTED = {
 
 const MODES: NarrativeMode[] = ["full", "quick-recap", "keepsake"];
 const TEMPI: NarrativeTempo[] = ["fast", "standard", "immersive"];
-const SEGMENT_KINDS: NarrativeSegmentKind[] = ["intro", "travel", "arrival", "media", "outro"];
+const SEGMENT_KINDS: NarrativeSegmentKind[] = [
+  "home-prelude", "intro", "travel", "arrival", "media", "outro", "home-epilogue",
+];
 
 /**
  * One representative context per segment kind, carrying non-trivial and
@@ -100,6 +102,17 @@ describe("resolveNarrativeTiming", () => {
           expect(Number.isInteger(resolved), `${mode}/${tempo}/${segmentKind}`).toBe(true);
           expect(resolved).toBeGreaterThanOrEqual(0);
         }
+      }
+    }
+  });
+
+  it("reuses the existing intro/outro timing for Home narrative beats", () => {
+    for (const mode of MODES) {
+      for (const tempo of TEMPI) {
+        expect(resolveNarrativeTiming({ mode, tempo, segmentKind: "home-prelude" }))
+          .toBe(resolveNarrativeTiming({ mode, tempo, segmentKind: "intro" }));
+        expect(resolveNarrativeTiming({ mode, tempo, segmentKind: "home-epilogue" }))
+          .toBe(resolveNarrativeTiming({ mode, tempo, segmentKind: "outro" }));
       }
     }
   });

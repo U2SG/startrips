@@ -141,6 +141,11 @@ function narrativeSnapshotsEqual(
 function sceneForStep(journey: Journey, step: PlaybackStep): SceneDraft[] {
   const camera = playbackCameraTargetForStep(step);
   switch (step.kind) {
+    case "home-prelude":
+    case "home-epilogue":
+      // #235 Home context is live camera narrative only; a downloadable
+      // keepsake remains a record of canonical Journey content.
+      return [];
     case "intro":
       return [{
         kind: "map",

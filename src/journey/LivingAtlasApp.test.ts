@@ -17,6 +17,7 @@ import {
   nextPlaybackCameraCommand,
   nextPlaybackReleaseFocusRevision,
   playbackEntryNeedsPreparation,
+  playbackCameraUsesPointFocus,
   playbackFocusPointForCameraTarget,
   playbackFocusRouteForCameraTarget,
   nextAtlasNotice,
@@ -284,6 +285,22 @@ describe("playbackFocusPointForCameraTarget", () => {
     )).toEqual({ lat: 22.5431, lon: 114.0579 });
   });
 
+  it("maps private Home camera context directly without fabricating a Route Point", () => {
+    expect(playbackFocusPointForCameraTarget(journeyWithPoints, {
+      kind: "home",
+      homeBaseId: "home-shenzhen",
+      latitude: 22.5431,
+      longitude: 114.0579,
+      anchor: { x: 1, y: 2, z: 3 },
+    })).toEqual({ lat: 22.5431, lon: 114.0579 });
+  });
+
+  it("lets Home camera context own the globe point channel without owning route geometry", () => {
+    expect(playbackCameraUsesPointFocus({ kind: "home", homeBaseId: "h", latitude: 1, longitude: 2, anchor: { x: 1, y: 0, z: 0 } })).toBe(true);
+    expect(playbackCameraUsesPointFocus({ kind: "point", pointIndex: 0 })).toBe(true);
+    expect(playbackCameraUsesPointFocus({ kind: "route" })).toBe(false);
+  });
+
   it("fails closed for a missing route point", () => {
     expect(playbackFocusPointForCameraTarget(
       journeyWithPoints,
@@ -304,6 +321,7 @@ describe("playbackFocusPointForCameraTarget", () => {
     };
     expect(playbackFocusRouteForCameraTarget(route, { kind: "route" })).toBe(route);
     expect(playbackFocusRouteForCameraTarget(route, { kind: "point", pointIndex: 0 })).toBeNull();
+    expect(playbackFocusRouteForCameraTarget(route, { kind: "home", homeBaseId: "h", latitude: 1, longitude: 2, anchor: { x: 1, y: 0, z: 0 } })).toBeNull();
   });
 
   it("increments a camera command revision even for the same route target", () => {

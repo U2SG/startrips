@@ -16,6 +16,7 @@ import {
   playbackMediaWaitPolicy,
   phaseForStep,
 } from "./journeyPlayback";
+import type { HomeNarrativeContext } from "./homeBasePrelude";
 import type { Journey, JourneyMediaAsset, RoutePoint } from "./types";
 
 const point = (
@@ -77,6 +78,32 @@ const journey: Journey = {
     media("media-1", "point-1", "video/mp4", 0),
     media("track", null, "audio/mpeg", 0),
   ],
+};
+
+
+const homeNarrativeContext: HomeNarrativeContext = {
+  prelude: {
+    eligible: true,
+    reason: "eligible",
+    cameraTarget: {
+      kind: "home",
+      homeBaseId: "home-start",
+      latitude: 22.5431,
+      longitude: 114.0579,
+      anchor: { x: 1, y: 2, z: 3 },
+    },
+  },
+  epilogue: {
+    eligible: true,
+    reason: "eligible",
+    cameraTarget: {
+      kind: "home",
+      homeBaseId: "home-end",
+      latitude: 35.6762,
+      longitude: 139.6503,
+      anchor: { x: 4, y: 5, z: 6 },
+    },
+  },
 };
 
 describe("routePointAngularDistance (#19)", () => {
@@ -204,8 +231,37 @@ describe("playback camera ownership", () => {
     expect(playbackCameraTargetKey(mediaTarget!)).toBe("point:0");
   });
 
+  it("keeps Home as its own camera-only target", () => {
+    const home = homeNarrativeContext.prelude.eligible ? homeNarrativeContext.prelude.cameraTarget : null;
+    expect(home).not.toBeNull();
+    expect(playbackCameraTargetForStep({ kind: "home-prelude", cameraTarget: home! })).toEqual(home);
+    expect(playbackCameraTargetKey(home!)).toBe("home:home-start");
+  });
+
   it("returns no camera command when playback has no current step", () => {
     expect(playbackCameraTargetForStep(undefined)).toBeNull();
+  });
+});
+
+describe("Home narrative playback topology (#235)", () => {
+  it("keeps Home beats in the same reducer index space as the expanded steps", () => {
+    const steps = buildPlaybackSteps(journey, homeNarrativeContext);
+    expect(steps[0]).toMatchObject({ kind: "home-prelude" });
+    expect(steps.at(-2)).toMatchObject({ kind: "home-epilogue" });
+
+    let state = initialPlaybackState(homeNarrativeContext);
+    expect(state.phase).toEqual({ type: "home-prelude", homeBaseId: "home-start" });
+    state = playbackReducer(journey, state, { type: "advance" }, homeNarrativeContext);
+    expect(state.phase).toEqual({ type: "intro" });
+
+    state = playbackReducer(
+      journey,
+      state,
+      { type: "seek", stepIndex: steps.length - 2 },
+      homeNarrativeContext,
+    );
+    expect(state.phase).toEqual({ type: "home-epilogue", homeBaseId: "home-end" });
+    expect(state.stepIndex).toBe(steps.length - 2);
   });
 });
 

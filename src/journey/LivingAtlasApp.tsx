@@ -27,6 +27,8 @@ import {
   type JourneySaveResult,
 } from "./JourneyComposer";
 import { JourneyPlaybackOverlay } from "./JourneyPlaybackOverlay";
+import { resolveHomeNarrativeContext, type HomeNarrativeContext } from "./homeBasePrelude";
+import type { HomeBasePeriod } from "./homeBase";
 import {
   prepareQuickRecapPlaybackResult,
   quickRecapStepDurationMs,
@@ -384,8 +386,13 @@ export function playbackFocusPointForCameraTarget(
   target: PlaybackCameraTarget,
 ): { lat: number; lon: number } | null {
   if (target.kind === "route") return null;
+  if (target.kind === "home") return { lat: target.latitude, lon: target.longitude };
   const point = journey?.routePoints[target.pointIndex];
   return point ? { lat: point.latitude, lon: point.longitude } : null;
+}
+
+export function playbackCameraUsesPointFocus(target: PlaybackCameraTarget | null): boolean {
+  return target?.kind === "point" || target?.kind === "home";
 }
 
 export type PlaybackCameraCommand = {
@@ -455,7 +462,7 @@ export function LivingAtlasApp({
   // #200 phase D: the product mode. `capabilities` decides which affordances
   // exist; `mutations` is null in shared mode, so there is no client here that
   // could write and the owner-only surfaces below are never constructed.
-  const { capabilities, listJourneys, readMedia, mutations } = useAtlasView();
+  const { capabilities, listJourneys, listHomeBasePeriods, readMedia, mutations } = useAtlasView();
   const { canCreateJourney, canDeleteJourney, canEditJourney, canManageAtlas } = capabilities;
   // #200 phase E. Both halves must hold: the capability decides the affordance
   // exists, `mutations` decides a client capable of the call exists. In shared
@@ -463,6 +470,7 @@ export function LivingAtlasApp({
   const shareClient = capabilities.canShareAtlas ? mutations : null;
   const setCinematicIsolation = useAtlasCinematicIsolation();
   const [journeys, setJourneys] = useState<Journey[]>([]);
+  const [homeBasePeriods, setHomeBasePeriods] = useState<HomeBasePeriod[]>([]);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [loadError, setLoadError] = useState("");
   const [view, setView] = useState<AtlasView>("planet");
@@ -687,9 +695,16 @@ export function LivingAtlasApp({
     const revision = ++loadRevision.current;
     if (!quiet) setStatus("loading");
     try {
-      const loaded = sortJourneysChronologically(await listJourneys());
+      const [journeyRows, homePeriods] = await Promise.all([
+        listJourneys(),
+        listHomeBasePeriods
+          ? listHomeBasePeriods().catch(() => [] as HomeBasePeriod[])
+          : Promise.resolve([] as HomeBasePeriod[]),
+      ]);
+      const loaded = sortJourneysChronologically(journeyRows);
       if (revision !== loadRevision.current) return;
       setJourneys(loaded);
+      setHomeBasePeriods(homePeriods);
       setLoadError("");
       setStatus("ready");
       return loaded;
@@ -703,7 +718,7 @@ export function LivingAtlasApp({
       }
       return null;
     }
-  }, [listJourneys, showNotice]);
+  }, [listHomeBasePeriods, listJourneys, showNotice]);
 
   useEffect(() => {
     void load();
@@ -1007,6 +1022,23 @@ export function LivingAtlasApp({
     });
   }
 
+  const homeNarrativeContextForJourney = useCallback((targetJourney: Journey | null): HomeNarrativeContext | null => {
+    if (!targetJourney) return null;
+    return resolveHomeNarrativeContext({
+      startedOn: targetJourney.startedOn,
+      endedOn: targetJourney.endedOn,
+      firstRoutePoint: targetJourney.routePoints[0] ?? null,
+      lastRoutePoint: targetJourney.routePoints.at(-1) ?? null,
+      periods: homeBasePeriods,
+      capabilities,
+    });
+  }, [capabilities, homeBasePeriods]);
+
+  const playbackHomeNarrativeContext = useMemo(
+    () => playbackQuickRecap?.homeNarrativeContext ?? homeNarrativeContextForJourney(playbackSourceJourney),
+    [homeNarrativeContextForJourney, playbackQuickRecap?.homeNarrativeContext, playbackSourceJourney],
+  );
+
   // Review P1: a network await does NOT preserve the click's transient user
   // activation. So: if the soundtrack read is already cached, start playback
   // synchronously (the overlay's first play() stays inside the gesture);
@@ -1042,6 +1074,7 @@ export function LivingAtlasApp({
       const preparation = prepareQuickRecapPlaybackResult(journey, {
         generatedAt: new Date().toISOString(),
         tempo: PLAYBACK_INITIAL_TEMPO,
+        homeNarrativeContext: homeNarrativeContextForJourney(journey),
       });
       quickRecap = preparation.playback;
       if (!quickRecap) {
@@ -1127,13 +1160,14 @@ export function LivingAtlasApp({
     const rebuilt = prepareQuickRecapPlaybackResult(playbackSourceJourney, {
       generatedAt: new Date().toISOString(),
       tempo,
+      homeNarrativeContext: homeNarrativeContextForJourney(playbackSourceJourney),
     });
     if (!rebuilt.playback) return false;
     setPlaybackQuickRecap(rebuilt.playback);
     // The overlay blocks prefetch at the tempo revision until this parent-owned
     // projection commit is observed by the director as its plan-scope revision.
     return true;
-  }, [playbackQuickRecap, playbackSourceJourney]);
+  }, [homeNarrativeContextForJourney, playbackQuickRecap, playbackSourceJourney]);
 
   function handlePlaybackClose(handoff: {
     reason: PlaybackReturnReason;
@@ -1227,7 +1261,7 @@ export function LivingAtlasApp({
           <div className="living-atlas__qa-globe" aria-hidden="true" />
         ) : (
           <GlobeComponent
-            focusPoint={playbackCameraTarget?.kind === "point"
+            focusPoint={playbackCameraUsesPointFocus(playbackCameraTarget)
               ? playbackFocusPoint
               : focusPoint}
             focusRoute={playbackCameraTarget
@@ -1827,6 +1861,7 @@ export function LivingAtlasApp({
       {playbackSession.journeyId ? (
         <JourneyPlaybackOverlay
           journey={playbackJourney}
+          homeNarrativeContext={playbackHomeNarrativeContext}
           onClose={handlePlaybackClose}
           onCameraTargetChange={(target) => {
             setPlaybackSession((current) => ({

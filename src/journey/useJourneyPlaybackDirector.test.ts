@@ -44,6 +44,13 @@ describe("playback narrative intent revision (#197)", () => {
     expect(playbackPlanScopeChanged(original, original)).toBe(false);
     expect(playbackPlanScopeChanged(original, { ...original, resolveStepDuration: resolverB })).toBe(true);
     expect(playbackPlanScopeChanged(original, { ...original, journey: { ...progressJourney } })).toBe(true);
+    expect(playbackPlanScopeChanged(original, {
+      ...original,
+      homeContext: {
+        prelude: { eligible: false, reason: "no-home-base" },
+        epilogue: { eligible: false, reason: "no-home-base" },
+      },
+    })).toBe(true);
   });
 });
 

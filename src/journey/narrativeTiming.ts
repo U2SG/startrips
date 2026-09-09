@@ -27,7 +27,14 @@ export type NarrativeMode = "full" | "quick-recap" | "keepsake";
 /** Identical to `PlaybackTempo` (journeyPlaybackPlan) and `AutoEditTempo` (autoEditPlan). */
 export type NarrativeTempo = "fast" | "standard" | "immersive";
 
-export type NarrativeSegmentKind = "intro" | "travel" | "arrival" | "media" | "outro";
+export type NarrativeSegmentKind =
+  | "home-prelude"
+  | "intro"
+  | "travel"
+  | "arrival"
+  | "media"
+  | "outro"
+  | "home-epilogue";
 
 export type NarrativeTimingProfile = {
   introMs: number;
@@ -250,8 +257,10 @@ function mediaDurationMsFor(profile: NarrativeTimingProfile, context: NarrativeT
 
 function narrativeDurationMs(profile: NarrativeTimingProfile, context: NarrativeTimingContext) {
   switch (context.segmentKind) {
+    case "home-prelude":
     case "intro":
       return profile.introMs;
+    case "home-epilogue":
     case "outro":
       return profile.outroMs;
     case "travel":
