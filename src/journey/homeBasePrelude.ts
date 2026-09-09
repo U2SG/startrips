@@ -103,11 +103,12 @@ export function resolveHomeNarrativeContext(
       epilogue: { eligible: false, reason: "unknown-dates" },
     };
   }
-  const epilogueDateKnown = isDeterminateJourneyDate(input.endedOn);
+  const epilogueDate = isDeterminateJourneyDate(input.endedOn) ? input.endedOn : null;
+  const epilogueDateKnown = epilogueDate !== null;
 
   const preludeHome = resolveHomeBaseForDate(input.periods, input.startedOn);
-  const epilogueHome = epilogueDateKnown
-    ? resolveHomeBaseForDate(input.periods, input.endedOn)
+  const epilogueHome = epilogueDate
+    ? resolveHomeBaseForDate(input.periods, epilogueDate)
     : null;
 
   let prelude: HomeNarrativeBeatDecision;

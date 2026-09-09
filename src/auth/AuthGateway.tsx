@@ -703,7 +703,13 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cine
 
 export function AuthGateway({ children }: { children: ReactNode }) {
   const persistentEarth = usePersistentEarth();
-  const qaOwnerView = useMemo(() => createOwnerAtlasView(), []);
+  const qaOwnerView = useMemo(() => ({
+    ...createOwnerAtlasView(),
+    // Browser QA fixtures do not emulate the owner-private Home history API.
+    // Keep the fixture truthful instead of issuing an unowned /api/home-bases
+    // request that only produces a caught 500 and contaminates QA evidence.
+    listHomeBasePeriods: null,
+  }), []);
   const session = authClient.useSession();
   const [revision, setRevision] = useState(0);
   const [cinematicActive, setCinematicActive] = useState(false);

@@ -27,7 +27,7 @@ const HOME: HomeNarrativeContext = {
 describe("Home Playback route truth (#235)", () => {
   it("does not change canonical route arc or Quick Recap route geometry", () => {
     const routeBefore = structuredClone(JOURNEY.routePoints);
-    const locations = JOURNEY.routePoints.map((point) => ({ point: { lat: point.latitude, lon: point.longitude } }));
+    const locations = JOURNEY.routePoints.map((point) => ({ lat: point.latitude, lon: point.longitude }));
     const arcBefore = buildRouteArcSamples(locations);
     const recapBefore = quickRecapRouteGeometry(JOURNEY, JOURNEY.routePoints.map((point) => point.id));
 
