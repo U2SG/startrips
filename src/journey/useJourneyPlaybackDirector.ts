@@ -162,6 +162,10 @@ export function playbackProgressFraction(
 export const PLAYBACK_INITIAL_TEMPO: PlaybackTempo = "standard";
 
 export type PlaybackIntentRevisionRef = { current: number };
+export type PlaybackPrefetchIntentBoundary = {
+  liveRevision: number;
+  blockedThroughRevision: number | null;
+};
 
 export function advancePlaybackIntentRevision(ref: PlaybackIntentRevisionRef) {
   ref.current += 1;
@@ -206,12 +210,17 @@ export function useJourneyPlaybackDirector(
   const tempoRef = useRef(tempo);
   tempoRef.current = tempo;
   const intentRevisionRef = useRef(0);
+  const prefetchBlockedThroughRevisionRef = useRef<number | null>(null);
   const [, setIntentRenderRevision] = useState(0);
   const planScopeRef = useRef({ journey, resolveStepDuration });
   const currentPlanScope = { journey, resolveStepDuration };
   if (playbackPlanScopeChanged(planScopeRef.current, currentPlanScope)) {
     planScopeRef.current = currentPlanScope;
-    advancePlaybackIntentRevision(intentRevisionRef);
+    const revision = advancePlaybackIntentRevision(intentRevisionRef);
+    if (prefetchBlockedThroughRevisionRef.current !== null
+      && revision > prefetchBlockedThroughRevisionRef.current) {
+      prefetchBlockedThroughRevisionRef.current = null;
+    }
   }
   const intentRevision = intentRevisionRef.current;
   const timerRef = useRef<number>(0);
@@ -246,6 +255,10 @@ export function useJourneyPlaybackDirector(
     return revision;
   }, []);
   const getIntentRevision = useCallback(() => intentRevisionRef.current, []);
+  const getPrefetchIntentBoundary = useCallback((): PlaybackPrefetchIntentBoundary => ({
+    liveRevision: intentRevisionRef.current,
+    blockedThroughRevision: prefetchBlockedThroughRevisionRef.current,
+  }), []);
   const pause = useCallback(() => transition({ type: "pause" }), [transition]);
   const resume = useCallback(() => transition({ type: "resume" }), [transition]);
   const next = useCallback(() => advanceNarrativeIntent(() => transition({ type: "next" })), [advanceNarrativeIntent, transition]);
@@ -259,10 +272,17 @@ export function useJourneyPlaybackDirector(
     if (options?.carryProgress) pendingRemapSeekRef.current = true;
     return advanceNarrativeIntent(() => transition({ type: "seek", stepIndex }));
   }, [advanceNarrativeIntent, transition]);
-  const setTempo = useCallback((nextTempo: PlaybackTempo) => {
+  const setTempo = useCallback((
+    nextTempo: PlaybackTempo,
+    options?: { awaitPlanScopeCommit?: boolean },
+  ) => {
     if (tempoRef.current === nextTempo) return intentRevisionRef.current;
     tempoRef.current = nextTempo;
-    return advanceNarrativeIntent(() => setTempoState(nextTempo));
+    const revision = advanceNarrativeIntent(() => setTempoState(nextTempo));
+    if (options?.awaitPlanScopeCommit) {
+      prefetchBlockedThroughRevisionRef.current = revision;
+    }
+    return revision;
   }, [advanceNarrativeIntent]);
   const exit = useCallback(() => transition({ type: "exit" }), [transition]);
 
@@ -392,6 +412,7 @@ export function useJourneyPlaybackDirector(
     timerStartedAtMsRef.current = null;
     timerCarryRef.current = null;
     pendingRemapSeekRef.current = false;
+    prefetchBlockedThroughRevisionRef.current = null;
     setState(initialPlaybackState());
     if (tempoRef.current !== PLAYBACK_INITIAL_TEMPO) {
       tempoRef.current = PLAYBACK_INITIAL_TEMPO;
@@ -418,6 +439,7 @@ export function useJourneyPlaybackDirector(
     setTempo,
     intentRevision,
     getIntentRevision,
+    getPrefetchIntentBoundary,
     isPlaying: playbackDirectorIsPlaying(state, step),
     pause,
     resume,
