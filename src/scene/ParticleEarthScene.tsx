@@ -92,6 +92,19 @@ import {
   resolveCoastlineRefinementRegion,
 } from "./coastlineSpatialLod";
 import {
+  COASTLINE_LOCAL_MANIFEST_PATH,
+  CoastlineLocalChunkCache,
+  buildLocalCoastlinePositions,
+  isLocalCoastlineTarget,
+  resolveCoastlineInspectionTarget,
+  resolveLocalCoastlineCell,
+  shouldUseCoastlineFocusTarget,
+  resolveLocalCoastlineChunkIds,
+  type CoastlineInspectionTarget,
+  type CoastlineLocalChunk,
+  type CoastlineLocalManifest,
+} from "./coastlineLocalLod";
+import {
   PARTICLE_BASE_LAND_SOURCE,
   PARTICLE_REFINEMENT_CACHE_LIMIT,
   PARTICLE_REFINEMENT_LAND_SOURCE,
@@ -1477,6 +1490,30 @@ async function loadDetailedCoastlineData() {
   }
 }
 
+const loadLocalCoastlineManifest = createRetryableParticleResourceLoader(
+  async (): Promise<CoastlineLocalManifest | null> => {
+    const response = await fetch(COASTLINE_LOCAL_MANIFEST_PATH);
+    if (!response.ok) return null;
+    const manifest = await response.json() as CoastlineLocalManifest;
+    return manifest.version === 1 && manifest.source?.scale === "10m" ? manifest : null;
+  },
+);
+
+async function loadLocalCoastlineChunk(
+  entry: { id: string; path: string },
+): Promise<CoastlineLocalChunk | null> {
+  try {
+    const response = await fetch(`/earth/coastline-10m/${entry.path}`);
+    if (!response.ok) return null;
+    const chunk = await response.json() as CoastlineLocalChunk;
+    return chunk.version === 1 && chunk.id === entry.id && chunk.sourceScale === "10m"
+      ? chunk
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 function createBurstTargets(source: Float32Array) {
   const targets = new Float32Array(source.length);
   for (let index = 0; index < source.length; index += 3) {
@@ -1717,6 +1754,12 @@ export function ParticleEarthScene({
         semanticLod: GlobeSemanticZoom;
         semanticLodProgress: number;
         coastlineVertices: number;
+        coastlineSource: string;
+        coastlineInspectionTarget: CoastlineInspectionTarget | null;
+        coastlineRegionCenter: { lat: number; lon: number } | null;
+        coastlineActiveChunks: string[];
+        coastlineRefinement: string;
+        coastlineLocalChunkCache: number;
       };
     };
     debugWindow.__particleEarthDebug = () => ({
@@ -1753,7 +1796,20 @@ export function ParticleEarthScene({
       particleLandSource: landSourceDebug,
       semanticLod: currentParticleLod.level,
       semanticLodProgress: currentParticleLod.refinementProgress,
-      coastlineVertices: coastlineGeometry.getAttribute("position")?.count ?? 0,
+      coastlineVertices: (semanticZoomState.coastlineLod === "far"
+        ? coastlineGeometry
+        : semanticZoomState.coastlineLod === "mid" ? midCoastlineGeometry : nearCoastlineGeometry)
+        .getAttribute("position")?.count ?? 0,
+      coastlineSource: activeCoastlineSource,
+      coastlineInspectionTarget: activeCoastlineInspectionTarget
+        ? { ...activeCoastlineInspectionTarget }
+        : null,
+      coastlineRegionCenter: activeCoastlineRegionCenter
+        ? { ...activeCoastlineRegionCenter }
+        : null,
+      coastlineActiveChunks: [...activeCoastlineChunkIds],
+      coastlineRefinement: coastlineRefinementState,
+      coastlineLocalChunkCache: coastlineLocalChunkCache.size,
     });
 
     scene.add(new AmbientLight(0x69736f, 0.72));
@@ -3768,10 +3824,18 @@ export function ParticleEarthScene({
     let refinementBuildState = document.hidden ? "paused" : "idle";
     let landSourceDebug = "loading:ne_110m_land.geojson@110m";
     const coastlineRefinementCache = new CoastlineRefinementCache();
-    const coastlineViewPosition = new Vector3();
+    const coastlineLocalChunkCache = new CoastlineLocalChunkCache();
+    const coastlineRefinementBuildGuard = new ParticleRefinementBuildGuard();
+    coastlineRefinementBuildGuard.setVisible(!document.hidden);
     let detailedCoastlineRings: number[][][] = [];
     let detailedMidCoastlineReady = false;
     let activeCoastlineRegionKey: string | null = null;
+    let requestedCoastlineCacheKey: string | null = null;
+    let activeCoastlineSource = "50m-regional-foundation";
+    let activeCoastlineInspectionTarget: CoastlineInspectionTarget | null = null;
+    let activeCoastlineRegionCenter: { lat: number; lon: number } | null = null;
+    let activeCoastlineChunkIds: string[] = [];
+    let localCoastlineRetryAt = Number.NEGATIVE_INFINITY;
     let coastlineRefinementState = document.hidden ? "paused" : "fallback";
     let lastCoastlineRefinementSampleAt = Number.NEGATIVE_INFINITY;
 
@@ -3951,7 +4015,24 @@ export function ParticleEarthScene({
       })();
     };
 
-    const applyNearCoastlinePositions = (positions: Float32Array, regionKey: string, terminalState: "ready" | "cached" = "ready") => {
+    const applyNearCoastlinePositions = (
+      positions: Float32Array,
+      {
+        cacheKey,
+        terminalState = "ready",
+        source,
+        inspectionTarget,
+        regionCenter,
+        chunkIds,
+      }: {
+        cacheKey: string;
+        terminalState?: "ready" | "cached";
+        source: string;
+        inspectionTarget: CoastlineInspectionTarget;
+        regionCenter: { lat: number; lon: number };
+        chunkIds: string[];
+      },
+    ) => {
       const nextGeometry = new BufferGeometry();
       nextGeometry.setAttribute("position", new BufferAttribute(positions, 3));
       if (positions.length > 0) nextGeometry.computeBoundingSphere();
@@ -3959,46 +4040,185 @@ export function ParticleEarthScene({
       nearCoastlineGeometry = nextGeometry;
       nearCoastlines.geometry = nextGeometry;
       previous.dispose();
-      activeCoastlineRegionKey = regionKey;
+      activeCoastlineRegionKey = cacheKey;
+      requestedCoastlineCacheKey = null;
+      activeCoastlineSource = source;
+      activeCoastlineInspectionTarget = inspectionTarget;
+      activeCoastlineRegionCenter = regionCenter;
+      activeCoastlineChunkIds = [...chunkIds];
       coastlineRefinementState = terminalState;
     };
 
-    const requestCoastlineRefinement = (viewCenter: { lat: number; lon: number }) => {
-      if (detailedCoastlineRings.length === 0 || document.hidden) return;
-      const region = resolveCoastlineRefinementRegion(viewCenter);
-      const cacheKey = `${currentQuality}:${region.key}`;
-      if (activeCoastlineRegionKey === cacheKey) return;
-      const cached = coastlineRefinementCache.get(cacheKey);
-      if (cached) {
-        applyNearCoastlinePositions(cached, cacheKey, "cached");
+    const readLocalCoastlineChunk = async (
+      entry: { id: string; path: string },
+    ) => {
+      const cached = coastlineLocalChunkCache.get(entry.id);
+      if (cached) return cached;
+      const loaded = await loadLocalCoastlineChunk(entry);
+      if (loaded) coastlineLocalChunkCache.set(entry.id, loaded);
+      return loaded;
+    };
+
+    const requestCoastlineRefinement = (inspectionTarget: CoastlineInspectionTarget) => {
+      const qualityAtRequest = currentQuality;
+      const regional = resolveCoastlineRefinementRegion(inspectionTarget);
+      const localCell = isLocalCoastlineTarget(inspectionTarget)
+        ? resolveLocalCoastlineCell(inspectionTarget)
+        : null;
+      const useLocalSource = Boolean(localCell && performance.now() >= localCoastlineRetryAt);
+      const cacheKey = useLocalSource && localCell
+        ? `${qualityAtRequest}:10m:${localCell.id}`
+        : `${qualityAtRequest}:50m:${regional.key}`;
+
+      if (activeCoastlineRegionKey === cacheKey) {
+        if (requestedCoastlineCacheKey && requestedCoastlineCacheKey !== cacheKey) {
+          coastlineRefinementBuildGuard.invalidate();
+          requestedCoastlineCacheKey = null;
+        }
+        activeCoastlineInspectionTarget = inspectionTarget;
+        activeCoastlineRegionCenter = useLocalSource && localCell
+          ? localCell.center
+          : regional.center;
+        coastlineRefinementState = "ready";
         return;
       }
-      coastlineRefinementState = "building";
-      const positions = buildRegionalCoastlinePositions({
-        rings: detailedCoastlineRings,
-        region,
-        quality: currentQuality,
-      });
-      coastlineRefinementCache.set(cacheKey, positions);
-      applyNearCoastlinePositions(positions, cacheKey);
+      if (requestedCoastlineCacheKey === cacheKey) return;
+
+      requestedCoastlineCacheKey = cacheKey;
+      const ticket = coastlineRefinementBuildGuard.request(cacheKey);
+      const regionalCacheKey = `${qualityAtRequest}:50m:${regional.key}`;
+      const applyRegionalFallback = (source: string) => {
+        if (currentQuality !== qualityAtRequest || !coastlineRefinementBuildGuard.isCurrent(ticket)) return;
+        if (detailedCoastlineRings.length === 0) {
+          requestedCoastlineCacheKey = null;
+          coastlineRefinementState = "awaiting-50m";
+          return;
+        }
+        const cached = coastlineRefinementCache.get(regionalCacheKey);
+        if (cached) {
+          applyNearCoastlinePositions(cached, {
+            cacheKey: regionalCacheKey,
+            terminalState: "cached",
+            source,
+            inspectionTarget,
+            regionCenter: regional.center,
+            chunkIds: [],
+          });
+          return;
+        }
+        const positions = buildRegionalCoastlinePositions({
+          rings: detailedCoastlineRings,
+          region: regional,
+          quality: qualityAtRequest,
+        });
+        coastlineRefinementCache.set(regionalCacheKey, positions);
+        applyNearCoastlinePositions(positions, {
+          cacheKey: regionalCacheKey,
+          source,
+          inspectionTarget,
+          regionCenter: regional.center,
+          chunkIds: [],
+        });
+      };
+
+      if (!localCell || !useLocalSource) {
+        coastlineRefinementState = "building";
+        applyRegionalFallback(localCell ? "50m-regional-local-backoff" : "50m-regional-foundation");
+        return;
+      }
+
+      coastlineRefinementState = "loading-local";
+      void (async () => {
+        const manifest = await loadLocalCoastlineManifest();
+        if (
+          !manifest
+          || currentQuality !== qualityAtRequest
+          || !coastlineRefinementBuildGuard.isCurrent(ticket)
+        ) {
+          if (manifest === null && coastlineRefinementBuildGuard.isCurrent(ticket)) {
+            localCoastlineRetryAt = performance.now() + 5_000;
+            applyRegionalFallback("50m-regional-fallback");
+          }
+          return;
+        }
+        const chunkIds = resolveLocalCoastlineChunkIds(manifest, inspectionTarget);
+        const entries = chunkIds
+          .map((id) => manifest.chunks.find((entry) => entry.id === id))
+          .filter((entry): entry is CoastlineLocalManifest["chunks"][number] => Boolean(entry));
+        if (entries.length === 0) {
+          localCoastlineRetryAt = performance.now() + 5_000;
+          applyRegionalFallback("50m-regional-fallback");
+          return;
+        }
+        const chunks = await Promise.all(entries.map(readLocalCoastlineChunk));
+        if (
+          currentQuality !== qualityAtRequest
+          || !coastlineRefinementBuildGuard.isCurrent(ticket)
+        ) return;
+        if (chunks.some((chunk) => chunk === null)) {
+          localCoastlineRetryAt = performance.now() + 5_000;
+          applyRegionalFallback("50m-regional-fallback");
+          return;
+        }
+        localCoastlineRetryAt = Number.NEGATIVE_INFINITY;
+        const positions = buildLocalCoastlinePositions({
+          chunks: chunks as CoastlineLocalChunk[],
+          quality: qualityAtRequest,
+        });
+        applyNearCoastlinePositions(positions, {
+          cacheKey,
+          source: "10m-local-natural-earth",
+          inspectionTarget,
+          regionCenter: localCell.center,
+          chunkIds,
+        });
+      })();
+    };
+
+    const cancelPendingCoastlineRefinement = (state: string) => {
+      if (requestedCoastlineCacheKey !== null) {
+        coastlineRefinementBuildGuard.invalidate();
+        requestedCoastlineCacheKey = null;
+      }
+      coastlineRefinementState = state;
     };
 
     const updateCoastlineRefinement = (now: number) => {
-      if (semanticZoomState.coastlineWeights.near <= 0.001) return;
+      if (semanticZoomState.coastlineWeights.near <= 0.001) {
+        cancelPendingCoastlineRefinement("idle");
+        return;
+      }
       if (isFocusFlightActive(pointFocusSettling, routeFocusSettling)) {
-        coastlineRefinementState = "deferred-flight";
+        cancelPendingCoastlineRefinement("deferred-flight");
         return;
       }
       if (activePointers.size > 0 || rotationVelocityX !== 0 || rotationVelocityY !== 0 || now < wheelInteractionUntil) {
-        coastlineRefinementState = "deferred-interaction";
+        cancelPendingCoastlineRefinement("deferred-interaction");
         return;
       }
       if (document.hidden || now - lastCoastlineRefinementSampleAt < 200) return;
       lastCoastlineRefinementSampleAt = now;
-      camera.updateMatrixWorld();
-      globe.updateWorldMatrix(true, false);
-      globe.worldToLocal(coastlineViewPosition.copy(camera.position));
-      requestCoastlineRefinement(vector3ToLatLon(coastlineViewPosition));
+      sampleFocusViewport(false);
+      const focusTarget = resolveParticleDiveAnchor(routeFocusFrame, latestFocusPoint.current);
+      const bounds = renderer.domElement.getBoundingClientRect();
+      const freeExploreTarget = resolveSurfaceAnchor({
+        x: bounds.left + sampledFocusCenter.x,
+        y: bounds.top + sampledFocusCenter.y,
+      });
+      const inspectionTarget = resolveCoastlineInspectionTarget({
+        focusTarget,
+        focusOwnsInspection: shouldUseCoastlineFocusTarget(
+          focusTarget,
+          freeExploreTarget,
+          manualFocusRevision !== null,
+        ),
+        freeExploreTarget,
+      });
+      if (!inspectionTarget) {
+        coastlineRefinementState = "fallback";
+        return;
+      }
+      requestCoastlineRefinement(inspectionTarget);
     };
 
     let reliefTextureReady = false;
@@ -4169,8 +4389,9 @@ export function ParticleEarthScene({
           ? new Float32Array((nearCoastlineGeometry.getAttribute("position") as BufferAttribute).array as ArrayLike<number>)
           : new Float32Array() });
         detailedMidCoastlineReady = true;
-        activeCoastlineRegionKey = null;
-        coastlineRefinementState = "idle";
+        if (!activeCoastlineRegionKey && requestedCoastlineCacheKey === null) {
+          coastlineRefinementState = "idle";
+        }
       });
     };
 
@@ -4181,6 +4402,9 @@ export function ParticleEarthScene({
       refinementBuildGuard.invalidate();
       requestedRefinementCacheKey = null;
       refinementBuildState = document.hidden ? "paused" : "idle";
+      coastlineRefinementBuildGuard.invalidate();
+      requestedCoastlineCacheKey = null;
+      coastlineRefinementState = document.hidden ? "paused" : activeCoastlineRegionKey ? "ready" : "idle";
       resize();
       void rebuildLandVisualData(nextQuality);
     };
@@ -4623,10 +4847,27 @@ export function ParticleEarthScene({
         ? (baseCoastlineSourceAvailable ? "110m-global" : "unavailable")
         : coastlineLod === "mid"
           ? (detailedMidCoastlineReady ? "50m-global" : baseCoastlineSourceAvailable ? "110m-global-fallback" : "unavailable")
-          : activeCoastlineRegionKey ? "50m-regional-foundation" : baseCoastlineSourceAvailable ? "110m-global-fallback" : "unavailable";
-      host.dataset.coastlineActiveChunks = activeCoastlineRegionKey ?? "";
+          : activeCoastlineRegionKey ? activeCoastlineSource : baseCoastlineSourceAvailable ? "110m-global-fallback" : "unavailable";
+      host.dataset.coastlineActiveChunks = activeCoastlineChunkIds.join(",");
       host.dataset.coastlineCacheChunks = String(coastlineRefinementCache.size);
+      host.dataset.coastlineLocalChunkCache = String(coastlineLocalChunkCache.size);
       host.dataset.coastlineRefinement = coastlineRefinementState;
+      if (activeCoastlineInspectionTarget) {
+        host.dataset.coastlineInspectionSource = activeCoastlineInspectionTarget.source;
+        host.dataset.coastlineInspectionLat = activeCoastlineInspectionTarget.lat.toFixed(5);
+        host.dataset.coastlineInspectionLon = activeCoastlineInspectionTarget.lon.toFixed(5);
+      } else {
+        delete host.dataset.coastlineInspectionSource;
+        delete host.dataset.coastlineInspectionLat;
+        delete host.dataset.coastlineInspectionLon;
+      }
+      if (activeCoastlineRegionCenter) {
+        host.dataset.coastlineRegionCenterLat = activeCoastlineRegionCenter.lat.toFixed(5);
+        host.dataset.coastlineRegionCenterLon = activeCoastlineRegionCenter.lon.toFixed(5);
+      } else {
+        delete host.dataset.coastlineRegionCenterLat;
+        delete host.dataset.coastlineRegionCenterLon;
+      }
       // Keep the particle world alive while idle without involving React's
       // render cycle. Reduced-motion resolves to a stable final frame.
       const motionTime = reduceMotion ? 0 : now / 1000;
@@ -4773,11 +5014,18 @@ export function ParticleEarthScene({
         refinementBuildGuard.setVisible(false);
         requestedRefinementCacheKey = null;
         refinementBuildState = "paused";
+        coastlineRefinementBuildGuard.setVisible(false);
+        requestedCoastlineCacheKey = null;
+        coastlineRefinementState = "paused";
         cancelAnimationFrame(animationFrame);
       } else {
         refinementBuildGuard.setVisible(true);
         requestedRefinementCacheKey = null;
         refinementBuildState = "idle";
+        coastlineRefinementBuildGuard.setVisible(true);
+        requestedCoastlineCacheKey = null;
+        coastlineRefinementState = "idle";
+        lastCoastlineRefinementSampleAt = Number.NEGATIVE_INFINITY;
         lastRefinementViewSampleAt = Number.NEGATIVE_INFINITY;
         lastTime = performance.now();
         animationFrame = requestAnimationFrame(render);
@@ -5006,8 +5254,10 @@ export function ParticleEarthScene({
         departingRefinementLayer = null;
         disposeRefinementLayer(activeRefinementLayer);
         activeRefinementLayer = null;
+        coastlineRefinementBuildGuard.dispose();
         refinementCache.clear();
         coastlineRefinementCache.clear();
+        coastlineLocalChunkCache.clear();
         if (particles) globe.remove(particles);
         if (particleGeometry) particleGeometry.dispose();
         particleMaterial.dispose();

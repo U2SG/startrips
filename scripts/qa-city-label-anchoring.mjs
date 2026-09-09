@@ -138,6 +138,24 @@ function measure(page) {
       coastlineSemanticRadius: Number(host.dataset.coastlineSemanticRadius),
       projectionSpace: host.dataset.projectionSpace ?? "",
       coastlineLod: host.dataset.coastlineLod ?? "",
+      coastlineSource: host.dataset.coastlineSource ?? "",
+      coastlineVertices: Number(host.dataset.coastlineVertices ?? 0),
+      coastlineRefinement: host.dataset.coastlineRefinement ?? "",
+      coastlineActiveChunks: (host.dataset.coastlineActiveChunks ?? "").split(",").filter(Boolean),
+      coastlineLocalChunkCache: Number(host.dataset.coastlineLocalChunkCache ?? 0),
+      coastlineInspection: host.dataset.coastlineInspectionSource
+        ? {
+          source: host.dataset.coastlineInspectionSource,
+          lat: Number(host.dataset.coastlineInspectionLat),
+          lon: Number(host.dataset.coastlineInspectionLon),
+        }
+        : null,
+      coastlineRegionCenter: Number.isFinite(Number(host.dataset.coastlineRegionCenterLat))
+        ? {
+          lat: Number(host.dataset.coastlineRegionCenterLat),
+          lon: Number(host.dataset.coastlineRegionCenterLon),
+        }
+        : null,
       // #237: a real vertex of the coastline this frame is drawing, projected
       // through the same frame as the place labels. `lat`/`lon` are the
       // vertex's own coordinates, which is how a drag step can tell a LOD
@@ -361,6 +379,15 @@ function horizonRadians(sample) {
 }
 
 /** Wait until the focus flight has stopped moving the focus signal. */
+async function waitForLocalCoastline(page, expectedSource = "10m-local-natural-earth") {
+  await page.waitForFunction((source) => {
+    const host = document.querySelector(".particle-earth-scene");
+    return host?.dataset.coastlineSource === source
+      && ["ready", "cached"].includes(host?.dataset.coastlineRefinement ?? "");
+  }, expectedSource, { timeout: 5_000 });
+  return measure(page);
+}
+
 async function waitForFocusToSettle(page) {
   let previous = null;
   for (let attempt = 0; attempt < 40; attempt += 1) {
@@ -599,7 +626,52 @@ try {
       await page.waitForTimeout(220);
       const label = `${fixture.key} @${state.zoom.toFixed(2)}x`;
 
-      const settled = await measure(page);
+      let settled = await measure(page);
+      if (fixture.key === "dense-coastline" && zoom === 3) {
+        settled = await waitForLocalCoastline(page);
+        check(
+          settled.coastlineSource === "10m-local-natural-earth",
+          `${label}: near coastline source is ${settled.coastlineSource}, not the 10m local source`,
+        );
+        check(
+          settled.coastlineInspection?.source === "focus",
+          `${label}: local refinement inspection source is ${settled.coastlineInspection?.source ?? "none"}, not canonical focus`,
+        );
+        check(
+          Math.abs((settled.coastlineInspection?.lat ?? Number.NaN) - fixture.lat) < 0.5
+          && Math.abs((settled.coastlineInspection?.lon ?? Number.NaN) - fixture.lon) < 0.5,
+          `${label}: local refinement inspected ${JSON.stringify(settled.coastlineInspection)} instead of Shenzhen/PRD focus`,
+        );
+        check(
+          settled.coastlineRegionCenter?.lat === 23
+          && settled.coastlineRegionCenter?.lon === 115,
+          `${label}: local chunk region center is ${JSON.stringify(settled.coastlineRegionCenter)}, expected (23, 115)`,
+        );
+        check(
+          settled.coastlineActiveChunks.includes("+22_+114")
+          && settled.coastlineActiveChunks.length > 0
+          && settled.coastlineActiveChunks.length <= 9,
+          `${label}: unexpected bounded local chunk set ${JSON.stringify(settled.coastlineActiveChunks)}`,
+        );
+        check(
+          settled.coastlineLocalChunkCache <= 12,
+          `${label}: local coastline cache grew to ${settled.coastlineLocalChunkCache} chunks`,
+        );
+        check(
+          settled.coastlineVertices > 0,
+          `${label}: 10m local coastline committed no vertices`,
+        );
+        console.log([
+          `[qa-city-label-anchoring] ${fixture.key} local-detail`,
+          `source=${settled.coastlineSource}`,
+          `inspection=${JSON.stringify(settled.coastlineInspection)}`,
+          `region=${JSON.stringify(settled.coastlineRegionCenter)}`,
+          `chunks=${settled.coastlineActiveChunks.join(",")}`,
+          `vertices=${settled.coastlineVertices}`,
+          `cache=${settled.coastlineLocalChunkCache}`,
+          `state=${settled.coastlineRefinement}`,
+        ].join(" "));
+      }
       checkFrame(settled, `${label} settled`);
       checkNoOverlap(settled, `${label} settled`);
       // #237 asks for Shenzhen / Pearl River Delta specifically, and the lane
