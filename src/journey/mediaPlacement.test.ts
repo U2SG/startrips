@@ -136,6 +136,16 @@ function jpegWithExif() {
   return bytes.buffer;
 }
 
+function jpegWithTemBeforeExif() {
+  const source = new Uint8Array(jpegWithExif());
+  const bytes = new Uint8Array(source.length + 2);
+  bytes.set(source.subarray(0, 2), 0);
+  bytes[2] = 0xff;
+  bytes[3] = 0x01;
+  bytes.set(source.subarray(2), 4);
+  return bytes.buffer;
+}
+
 function jpegWithGpsParts(
   latitude: Array<[number, number]>,
   longitude: Array<[number, number]>,
@@ -201,6 +211,11 @@ describe("JPEG EXIF placement parsing (#86)", () => {
       longitude: expect.closeTo(114.17469, 5),
       capturedAt: "2026-08-30T14:15:00+08:00",
     });
+  });
+
+  it("continues from standalone TEM to the following APP1 Exif segment", () => {
+    expect(parseJpegExifPlacementSignal(jpegWithTemBeforeExif()))
+      .toEqual(parseJpegExifPlacementSignal(jpegWithExif()));
   });
 
   it.each([
