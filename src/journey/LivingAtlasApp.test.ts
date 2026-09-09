@@ -520,22 +520,23 @@ describe("playbackHoldReason (#197)", () => {
   });
 
   it("ignores a stale read settling behind the post-seek hold target", () => {
-    const reads = {
-      "asset-image": { status: "loading" as const },
-      "asset-stale": {
-        status: "ready" as const,
-        url: "stale-signed-image",
-        issuedAt: 0,
-        expiresAt: 900_000,
-      },
+    const currentRead = { status: "loading" as const };
+    const staleCompletion = {
+      status: "ready" as const,
+      url: "stale-signed-image",
+      issuedAt: 0,
+      expiresAt: 900_000,
     };
     const before = playbackHoldReason({
       ...base,
-      gate: playbackMediaGate(reads[image.id], undefined, true),
+      gate: playbackMediaGate(currentRead, undefined, true),
     });
+    // The old asset may populate its cache entry, but that entry is not an input
+    // to the CURRENT step's hold decision after the seek.
+    expect(staleCompletion.status).toBe("ready");
     const afterStaleCompletion = playbackHoldReason({
       ...base,
-      gate: playbackMediaGate(reads[image.id], undefined, true),
+      gate: playbackMediaGate(currentRead, undefined, true),
     });
 
     expect(before).toBe("decode");
