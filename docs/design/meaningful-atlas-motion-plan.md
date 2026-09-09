@@ -378,4 +378,4 @@ https://github.com/U2SG/startrips/issues/244#issuecomment-5595378056
 
 唯一动效权威仍是 `docs/motion-language.md`；本文引用而不取代。需要添加 docs 导航入口时，先读取当前 README/文档索引选择现有位置，不预先改动未知文件。正式 PR 创建后，再按仓库当时有效的分片 ledger 规则补 `docs/pr-history/<真实PR号>.md`，使用真实审查 SHA；不能预填不存在的 PR 号或伪造 CI 结果。
 
-对 issue 的具体定义见同批候选材料中的 `ISSUE_DRAFTS.md`。该文件是提交准备材料，不是第二张运行队列；只有最新 main 查重后才写入 GitHub，编号由 GitHub 实际创建结果决定。
+对当前新增 scope 的具体定义已在最新 main 查重后发布为 GitHub #291。候选 issue 草稿不作为仓库中的第二张运行队列提交；后续新增 issue 仍必须先按最新 main 查重，编号以 GitHub 实际创建结果为准。
