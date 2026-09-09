@@ -61,6 +61,19 @@ describe("prefetchDispatchDecision", () => {
       .toBe("dispatch");
   });
 
+  it("suppresses the live tempo revision while its Quick Recap rebuild is still pending", () => {
+    expect(prefetchDispatchDecision({
+      plannedRevision: 13,
+      liveRevision: 13,
+      blockedThroughRevision: 13,
+    })).toBe("suppress-stale");
+    expect(prefetchDispatchDecision({
+      plannedRevision: 14,
+      liveRevision: 14,
+      blockedThroughRevision: 13,
+    })).toBe("dispatch");
+  });
+
 
   it("re-dispatches the current hold target after a rebuild remap", () => {
     const journey = videoFirstJourney();

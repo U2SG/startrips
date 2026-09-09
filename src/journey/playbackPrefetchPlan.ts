@@ -26,8 +26,14 @@ export type PlaybackPrefetchDispatchDecision = "dispatch" | "suppress-stale";
 export function prefetchDispatchDecision(input: {
   plannedRevision: number;
   liveRevision: number;
+  blockedThroughRevision?: number | null;
 }): PlaybackPrefetchDispatchDecision {
-  return input.plannedRevision === input.liveRevision ? "dispatch" : "suppress-stale";
+  const rebuildPending = input.blockedThroughRevision !== null
+    && input.blockedThroughRevision !== undefined
+    && input.liveRevision <= input.blockedThroughRevision;
+  return input.plannedRevision === input.liveRevision && !rebuildPending
+    ? "dispatch"
+    : "suppress-stale";
 }
 
 export function includePlaybackPrefetchHoldTarget(

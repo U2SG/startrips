@@ -852,7 +852,10 @@ try {
       readsAfterTempoIntent: boundary.post.length,
       staleReads: boundary.stale,
       landedStep: landed?.step ?? null,
-      failed: live.revision < before.revision + 2 || boundary.stale.length > 0 || landed === null,
+      failed: live.revision < before.revision + 2
+        || live.suppressed - before.suppressed < 1
+        || boundary.stale.length > 0
+        || landed === null,
     };
     invalidationMeasurements.push(measurement);
     record(measurement.label, measurement);

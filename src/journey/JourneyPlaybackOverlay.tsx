@@ -222,7 +222,7 @@ export function JourneyPlaybackOverlay({
   // Quick Recap's target duration wins over tempo (decision D1), so the owner of
   // the Edit Plan has to rebuild it when the runtime tempo changes. Tempo state
   // stays here in the director; this only reports a change upwards.
-  onTempoChange?: (tempo: PlaybackTempo) => void;
+  onTempoChange?: (tempo: PlaybackTempo) => boolean;
   playbackMode?: "full" | "quick-recap";
   quickRecapPlan?: AutoEditPlanV1 | null;
   quickRecapSourceJourney?: Journey | null;
@@ -255,6 +255,12 @@ export function JourneyPlaybackOverlay({
   const director = useJourneyPlaybackDirector(journey, hold, stepDurationResolver);
   const { phase, paused, pause, resume, next, back, replay, seek, exit, steps, stepIndex, tempo, setTempo } = director;
   const [suppressedPrefetchDispatchCount, setSuppressedPrefetchDispatchCount] = useState(0);
+  // A Quick Recap tempo change has two commits owned by one user intent: the
+  // director claims the tempo revision synchronously, then the parent commits
+  // the rebuilt projected Journey/plan scope. Block prefetch through the tempo
+  // revision when that rebuild is pending; the director's existing plan-scope
+  // revision is the commit that releases this gate. No second scheduler exists.
+  const prefetchBlockedThroughRevisionRef = useRef<number | null>(null);
   // #126 sections 3-4: the transport reads the elapsed-time plan, so the bar is
   // time-weighted instead of step-weighted and a scrub has a time model.
   const { plan, getTimerBudget } = director;
@@ -313,8 +319,9 @@ export function JourneyPlaybackOverlay({
   // the old Quick Recap projection before plan scope advances to N+2.
   const changeTempo = useCallback((nextTempo: PlaybackTempo) => {
     if (nextTempo === tempo) return;
-    onTempoChange?.(nextTempo);
-    setTempo(nextTempo);
+    const tempoRevision = setTempo(nextTempo);
+    const rebuildPending = onTempoChange?.(nextTempo) ?? false;
+    if (rebuildPending) prefetchBlockedThroughRevisionRef.current = tempoRevision;
   }, [onTempoChange, setTempo, tempo]);
 
   // A Quick Recap rebuild can add or drop beats, so a step index taken before
@@ -695,9 +702,15 @@ export function JourneyPlaybackOverlay({
   const prefetchKey = prefetchAssetIds.join(",");
   const plannedPrefetchRevision = director.intentRevision;
   const allowPrefetchDispatch = useCallback((plannedRevision: number) => {
+    const liveRevision = director.getIntentRevision();
+    const blockedThroughRevision = prefetchBlockedThroughRevisionRef.current;
+    if (blockedThroughRevision !== null && liveRevision > blockedThroughRevision) {
+      prefetchBlockedThroughRevisionRef.current = null;
+    }
     const decision = prefetchDispatchDecision({
       plannedRevision,
-      liveRevision: director.getIntentRevision(),
+      liveRevision,
+      blockedThroughRevision,
     });
     if (decision === "suppress-stale") {
       setSuppressedPrefetchDispatchCount((current) => current + 1);
@@ -709,11 +722,11 @@ export function JourneyPlaybackOverlay({
   // Signed reads follow the same window, through the same single read path, so
   // a decode is never scheduled for an asset that has no URL yet. Planning is
   // committed first, then actual request dispatch yields to the microtask
-  // boundary. A seek/next/back/tempo/rebuild intent that wins in that boundary
-  // bumps the director ref synchronously, so this queued old window is observed
-  // and suppressed instead of issuing one last obsolete request. The newer
-  // render queues its own live-revision dispatch, preventing a suppress-only
-  // deadlock while keeping the delay below a frame.
+  // boundary. Seek/next/back are suppressed by the director revision directly.
+  // Quick Recap tempo additionally blocks through the tempo revision until the
+  // parent's rebuilt plan scope commits and advances that same director revision
+  // again. The newer render then dispatches its live window, so suppression can
+  // never turn into a deadlock or a parallel scheduler.
   useLayoutEffect(() => {
     const assetIds = [...prefetchAssetIds];
     queueMicrotask(() => {
