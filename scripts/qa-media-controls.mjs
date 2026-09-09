@@ -722,7 +722,7 @@ try {
       return page?.getAttribute("data-media-layer") === "preview"
         && page.getAttribute("data-media-preview-asset") === assetId;
     }, { pageSelector, assetId });
-    const before = await previewPhoto.page.locator(pageSelector).evaluate((page) => {
+    const before = await previewPhoto.page.locator(pageSelector).first().evaluate((page) => {
       window.__qaPreviewPhotoPage = page;
       return {
         asset: page.getAttribute("data-media-preview-asset"),
@@ -735,7 +735,7 @@ try {
       return page?.getAttribute("data-media-layer") === "original"
         && page.getAttribute("data-media-page-ready") === "true";
     }, pageSelector);
-    const after = await previewPhoto.page.locator(pageSelector).evaluate((page) => ({
+    const after = await previewPhoto.page.locator(pageSelector).first().evaluate((page) => ({
       samePage: page === window.__qaPreviewPhotoPage,
       asset: page.getAttribute("data-media-page-id"),
       layer: page.getAttribute("data-media-layer"),
@@ -763,7 +763,7 @@ try {
       return page?.getAttribute("data-media-layer") === "preview"
         && page.getAttribute("data-media-preview-asset") === assetId;
     }, { pageSelector, assetId });
-    const before = await previewVideo.page.locator(pageSelector).evaluate((page) => {
+    const before = await previewVideo.page.locator(pageSelector).first().evaluate((page) => {
       window.__qaPreviewVideoPage = page;
       return {
         asset: page.getAttribute("data-media-preview-asset"),
@@ -776,7 +776,7 @@ try {
       return page?.getAttribute("data-media-layer") === "original"
         && page.getAttribute("data-media-page-ready") === "true";
     }, pageSelector);
-    const after = await previewVideo.page.locator(pageSelector).evaluate((page) => ({
+    const after = await previewVideo.page.locator(pageSelector).first().evaluate((page) => ({
       samePage: page === window.__qaPreviewVideoPage,
       asset: page.getAttribute("data-media-page-id"),
       layer: page.getAttribute("data-media-layer"),
