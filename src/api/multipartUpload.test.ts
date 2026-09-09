@@ -119,7 +119,10 @@ describe("uploadMediaInParts", () => {
     };
   }
 
-  function previewUploadFetcher(failAt?: "request" | "put" | "complete") {
+  function previewUploadFetcher(
+    failAt?: "request" | "put" | "complete",
+    existingPreviewReady = false,
+  ) {
     const asset = {
       id: "asset-preview",
       journeyId: "journey-preview",
@@ -129,6 +132,7 @@ describe("uploadMediaInParts", () => {
       fileName: "photo.jpg",
       mimeType: "image/jpeg",
       bytes: 8,
+      previewState: existingPreviewReady ? "ready" as const : "none" as const,
     };
     const calls: string[] = [];
     const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -204,17 +208,7 @@ describe("uploadMediaInParts", () => {
   }
 
   it("preserves an existing ready preview when completion deduplicates to that asset", async () => {
-    const { asset, calls, fetcher } = previewUploadFetcher("request");
-    const duplicateWithPreview = { ...asset, previewState: "ready" as const };
-    const completion = fetcher.getMockImplementation();
-    fetcher.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
-      if (String(input) === "/api/uploads/upload-preview/complete") {
-        calls.push(String(input));
-        return Response.json({ asset: duplicateWithPreview });
-      }
-      if (!completion) throw new Error("Missing preview upload fixture");
-      return completion(input, init);
-    });
+    const { asset, calls, fetcher } = previewUploadFetcher("request", true);
     const preparePreview = vi.fn(async () => {
       throw new Error("a ready duplicate must not regenerate its preview");
     });
@@ -225,11 +219,11 @@ describe("uploadMediaInParts", () => {
       journeyId: "journey-preview",
       fetcher,
       preparePreview,
-    })).resolves.toEqual(duplicateWithPreview);
+    })).resolves.toEqual(asset);
 
     expect(preparePreview).not.toHaveBeenCalled();
     expect(calls).not.toContain("/api/uploads/assets/asset-preview/preview");
-    expect(duplicateWithPreview.previewState).toBe("ready");
+    expect(asset.previewState).toBe("ready");
   });
 
   it("cancels and settles sibling workers before aborting the server upload", async () => {
