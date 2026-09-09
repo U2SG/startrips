@@ -10,6 +10,7 @@ export type UploadedMediaAsset = {
   mimeType: string;
   bytes: number;
   contentHash?: string | null;
+  previewState?: "none" | "pending" | "ready" | "failed";
 };
 
 type Fetcher = typeof fetch;
@@ -170,6 +171,11 @@ async function uploadAssetPreviewBestEffort(input: {
   signal?: AbortSignal;
   preparePreview: (file: Blob) => Promise<PreparedMediaPreview>;
 }): Promise<void> {
+  // Completion may deduplicate onto an existing durable asset. A ready preview
+  // already belongs to that same asset, so best-effort derivation must not
+  // replace it with a pending generation that can subsequently fail.
+  if (input.asset.previewState === "ready") return;
+
   let prepared: PreparedMediaPreview | null = null;
   try {
     prepared = await input.preparePreview(input.file);

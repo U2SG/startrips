@@ -203,6 +203,35 @@ describe("uploadMediaInParts", () => {
     });
   }
 
+  it("preserves an existing ready preview when completion deduplicates to that asset", async () => {
+    const { asset, calls, fetcher } = previewUploadFetcher("request");
+    const duplicateWithPreview = { ...asset, previewState: "ready" as const };
+    const completion = fetcher.getMockImplementation();
+    fetcher.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/uploads/upload-preview/complete") {
+        calls.push(String(input));
+        return Response.json({ asset: duplicateWithPreview });
+      }
+      if (!completion) throw new Error("Missing preview upload fixture");
+      return completion(input, init);
+    });
+    const preparePreview = vi.fn(async () => {
+      throw new Error("a ready duplicate must not regenerate its preview");
+    });
+
+    await expect(uploadMediaInParts({
+      file: new Blob(["original"], { type: "image/jpeg" }),
+      fileName: "photo.jpg",
+      journeyId: "journey-preview",
+      fetcher,
+      preparePreview,
+    })).resolves.toEqual(duplicateWithPreview);
+
+    expect(preparePreview).not.toHaveBeenCalled();
+    expect(calls).not.toContain("/api/uploads/assets/asset-preview/preview");
+    expect(duplicateWithPreview.previewState).toBe("ready");
+  });
+
   it("cancels and settles sibling workers before aborting the server upload", async () => {
     let siblingSettled = false;
     let serverAbortAfterSettle = false;
