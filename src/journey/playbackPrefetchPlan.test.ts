@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   MAX_PREFETCH_ASSETS,
+  includePlaybackPrefetchHoldTarget,
   planPrefetchWindow,
   prefetchDispatchDecision,
   readyMsAheadForTempo,
@@ -58,6 +59,37 @@ describe("prefetchDispatchDecision", () => {
   it("dispatches the recomputed window at the live revision", () => {
     expect(prefetchDispatchDecision({ plannedRevision: 13, liveRevision: 13 }))
       .toBe("dispatch");
+  });
+
+
+  it("re-dispatches the current hold target after a rebuild remap", () => {
+    const journey = videoFirstJourney();
+    const steps = buildPlaybackSteps(journey);
+    const stopIndex = steps.findIndex((step) => step.kind === "stop");
+    const holdTarget = playbackHoldTargetMedia(journey, steps[stopIndex]);
+    const planned = planPrefetchWindow({
+      stepCount: steps.length,
+      stepIndex: stopIndex,
+      budgetMs: readyMsAheadForTempo("standard"),
+      durationForStep: () => PLAYBACK_TEMPO_PROFILES.standard.imageMs,
+      assetIdsForStep: (index) => {
+        const step = steps[index];
+        if (step?.kind !== "media") return [];
+        const asset = playbackMediaForPoint(journey, step.pointIndex)[step.mediaIndex];
+        return asset ? [asset.id] : [];
+      },
+    });
+    const liveAssets = includePlaybackPrefetchHoldTarget(
+      planned.assetIds,
+      holdTarget?.id ?? null,
+    );
+
+    expect(prefetchDispatchDecision({ plannedRevision: 20, liveRevision: 21 }))
+      .toBe("suppress-stale");
+    expect(prefetchDispatchDecision({ plannedRevision: 21, liveRevision: 21 }))
+      .toBe("dispatch");
+    expect(holdTarget?.id).toBe("i0");
+    expect(liveAssets).toContain("i0");
   });
 });
 

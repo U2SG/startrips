@@ -206,6 +206,7 @@ export function useJourneyPlaybackDirector(
   const tempoRef = useRef(tempo);
   tempoRef.current = tempo;
   const intentRevisionRef = useRef(0);
+  const [, setIntentRenderRevision] = useState(0);
   const planScopeRef = useRef({ journey, resolveStepDuration });
   const currentPlanScope = { journey, resolveStepDuration };
   if (playbackPlanScopeChanged(planScopeRef.current, currentPlanScope)) {
@@ -236,9 +237,14 @@ export function useJourneyPlaybackDirector(
     });
   }, []);
 
-  const advanceNarrativeIntent = useCallback((dispatch: () => void) => (
-    dispatchPlaybackNarrativeIntent(intentRevisionRef, dispatch)
-  ), []);
+  const advanceNarrativeIntent = useCallback((dispatch: () => void) => {
+    const revision = dispatchPlaybackNarrativeIntent(intentRevisionRef, dispatch);
+    // A boundary next/back/seek may be a reducer no-op. The revision is still a
+    // newer user intent, so guarantee one render at that revision rather than
+    // relying on the playback reducer to make the live prefetch window run.
+    setIntentRenderRevision(revision);
+    return revision;
+  }, []);
   const getIntentRevision = useCallback(() => intentRevisionRef.current, []);
   const pause = useCallback(() => transition({ type: "pause" }), [transition]);
   const resume = useCallback(() => transition({ type: "resume" }), [transition]);

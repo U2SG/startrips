@@ -326,7 +326,12 @@ async function waitForRenderedMediaAtIntent(page, revision, timeout = 60_000) {
     )));
   }, revision, { timeout });
   const events = await readTrace(page);
-  return renderedMediaSteps(events).find((entry) => entry.intent >= revision) ?? null;
+  return events.find((entry) => (
+    entry.intent >= revision
+    && entry.phase === "media"
+    && entry.hasImage
+    && entry.hold === "none"
+  )) ?? null;
 }
 
 /** Wait until `count` distinct media beats have rendered their image. */
@@ -691,20 +696,34 @@ try {
     await waitForRenderedMediaSteps(rapidSeekRun.page, WARMUP_MEDIA_STEPS, 60_000);
     const before = await playbackIntentState(rapidSeekRun.page);
     const traceBefore = await readQaTrace(rapidSeekRun.page);
-    const readsBeforeSecondSeek = await rapidSeekRun.page.evaluate(async () => {
-      const trace = window.__qaPlaybackPrefetch;
-      const input = document.querySelector('.journey-playback__progress input[type="range"]');
-      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
-      const scrub = (fraction) => {
-        setter.call(input, String(Math.round(Number(input.max) * fraction)));
-        input.dispatchEvent(new Event("input", { bubbles: true }));
-      };
-      scrub(0.36);
-      await Promise.resolve();
-      const boundary = trace.reads.length;
-      scrub(0.78);
-      return boundary;
-    });
+    const readsBeforeSecondSeek = await rapidSeekRun.page.evaluate((startingRevision) => (
+      new Promise((resolve) => {
+        const trace = window.__qaPlaybackPrefetch;
+        const overlay = document.querySelector('.journey-playback');
+        const input = overlay.querySelector('.journey-playback__progress input[type="range"]');
+        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+        const scrub = (fraction) => {
+          setter.call(input, String(Math.round(Number(input.max) * fraction)));
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+        };
+        // Observe the first seek's committed intent attribute. MutationObserver
+        // runs at the post-commit microtask checkpoint, before React's passive
+        // prefetch effect gets its later task. The second REAL scrub therefore
+        // wins while the first window is planned but not yet dispatched, which
+        // deterministically exercises the production revision guard without
+        // mutating private app state.
+        const observer = new MutationObserver(() => {
+          const revision = Number(overlay.getAttribute('data-playback-intent') ?? 0);
+          if (revision <= startingRevision) return;
+          observer.disconnect();
+          const boundary = trace.reads.length;
+          scrub(0.78);
+          resolve(boundary);
+        });
+        observer.observe(overlay, { attributes: true, attributeFilter: ['data-playback-intent'] });
+        scrub(0.36);
+      })
+    ), before.revision);
     await rapidSeekRun.page.waitForFunction((target) => (
       Number(document.querySelector('.journey-playback')?.getAttribute('data-playback-intent') ?? 0) >= target
     ), before.revision + 2, { timeout: 5_000 });

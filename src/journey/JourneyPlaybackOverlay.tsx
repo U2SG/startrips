@@ -43,7 +43,7 @@ import {
   type PlaybackCameraTarget,
   type PlaybackStep,
 } from "./journeyPlayback";
-import { planPrefetchWindow, prefetchDispatchDecision, readyMsAheadForTempo } from "./playbackPrefetchPlan";
+import { includePlaybackPrefetchHoldTarget, planPrefetchWindow, prefetchDispatchDecision, readyMsAheadForTempo } from "./playbackPrefetchPlan";
 import { rewindPlaybackMediaElement, syncPlaybackMediaElement } from "./mediaPlaybackSync";
 import {
   resolveVideoTrim,
@@ -683,10 +683,7 @@ export function JourneyPlaybackOverlay({
     // leading to it are longer than the whole budget — a video-first chapter
     // must never leave its first image unread while the stop phase waits.
     const holdTarget = playbackHoldTargetMedia(journey, playbackSteps[director.stepIndex]);
-    if (holdTarget && !prefetchWindow.assetIds.includes(holdTarget.id)) {
-      return [holdTarget.id, ...prefetchWindow.assetIds];
-    }
-    return prefetchWindow.assetIds;
+    return includePlaybackPrefetchHoldTarget(prefetchWindow.assetIds, holdTarget?.id ?? null);
   }, [director.stepIndex, director.tempo, durationForStep, journey, playbackSteps]);
   // `playbackSteps` is rebuilt per journey, but the window is a plain array;
   // the effects below key off its contents so they do not churn per render.

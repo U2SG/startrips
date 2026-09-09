@@ -30,6 +30,14 @@ export function prefetchDispatchDecision(input: {
   return input.plannedRevision === input.liveRevision ? "dispatch" : "suppress-stale";
 }
 
+export function includePlaybackPrefetchHoldTarget(
+  assetIds: readonly string[],
+  holdTargetId: string | null,
+) {
+  if (!holdTargetId || assetIds.includes(holdTargetId)) return [...assetIds];
+  return [holdTargetId, ...assetIds];
+}
+
 /**
  * Seconds of prepared playback the window aims to hold ahead of the current
  * step, per tempo.
