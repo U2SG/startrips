@@ -416,6 +416,48 @@ describe("PhotonLocationSearch", () => {
     expect(results[0]).toMatchObject({ label: "Honolulu", countryCode: "US" });
   });
 
+  it("does not let a longer name containing the exonym stand in for it", async () => {
+    // `檀香山路` is a street in China whose name contains the query. Treating
+    // it as an answer would narrow recall exactly where the alias table used
+    // to force the English round trip unconditionally.
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => Response.json({
+      features: new URL(String(input)).searchParams.get("q") === "Honolulu"
+        ? [{
+          geometry: { coordinates: [-157.85833, 21.30694] },
+          properties: {
+            osm_type: "R",
+            osm_id: 6980,
+            name: "Honolulu",
+            country: "United States",
+            countrycode: "US",
+          },
+        }]
+        : [{
+          geometry: { coordinates: [114.06, 22.54] },
+          properties: {
+            osm_type: "W",
+            osm_id: 77,
+            name: "檀香山路",
+            "name:en": "Tanxiangshan Road",
+            country: "中国",
+            countrycode: "CN",
+          },
+        }],
+    }));
+    const search = new PhotonLocationSearch({
+      baseUrl: "https://photon.example.test",
+      userAgent: "Startrips/1.0",
+      fetcher: fetchMock as unknown as typeof fetch,
+      requestIntervalMs: 0,
+    });
+
+    await expect(search.search("檀香山", { limit: 8 })).resolves.toMatchObject([{
+      label: "Honolulu",
+      countryCode: "US",
+    }]);
+    expect(new URL(String(fetchMock.mock.calls[1][0])).searchParams.get("q")).toBe("Honolulu");
+  });
+
   it("returns nothing for an unknown Chinese query and never invents a place", async () => {
     const fetchMock = vi.fn(async (_input: RequestInfo | URL) => Response.json({
       features: [],
@@ -432,6 +474,26 @@ describe("PhotonLocationSearch", () => {
     // English name is synthesized for it.
     const englishUrl = new URL(String(fetchMock.mock.calls[1][0]));
     expect(englishUrl.searchParams.get("q")).toBe("这个地方并不存在");
+  });
+
+  it("keeps an unknown query that merely ends in a known exonym", async () => {
+    // `巴黎` is an indexed exonym, but `不存在` is no country or region, so the
+    // query names no place and must reach the provider unchanged rather than
+    // become a search for Paris.
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL) => Response.json({
+      features: [],
+    }));
+    const search = new PhotonLocationSearch({
+      baseUrl: "https://photon.example.test",
+      userAgent: "Startrips/1.0",
+      fetcher: fetchMock as unknown as typeof fetch,
+      requestIntervalMs: 0,
+    });
+
+    await expect(search.search("不存在巴黎", { limit: 8 })).resolves.toEqual([]);
+    for (const call of fetchMock.mock.calls) {
+      expect(new URL(String(call[0])).searchParams.get("q")).toBe("不存在巴黎");
+    }
   });
 
   it("surfaces an unavailable place-name source instead of degrading silently", async () => {

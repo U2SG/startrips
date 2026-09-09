@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { isChineseRegionName } from "./chinese-region-names";
 import { LocationSearchUnavailableError } from "./location-search";
 
 /**
@@ -18,10 +19,17 @@ import { LocationSearchUnavailableError } from "./location-search";
  *
  * - administrative suffixes are dropped (`纽约市` also answers `纽约`,
  *   `首尔特别市` also answers `首尔`), and
- * - a leading country or region qualifier of any length is dropped when the
- *   remainder is a known place name and no prefix of the qualifier is one, so
- *   a country-qualified exonym answers as the bare exonym, while `深圳南山区`
- *   stays a local query because `深圳` is itself a place name.
+ * - a leading qualifier of any length is dropped only when that qualifier is
+ *   itself the Chinese name of a country or region, so `美国檀香山` answers as
+ *   `檀香山` while `不存在巴黎` and `深圳南山区` stay untouched local queries.
+ *
+ * Qualifier removal requires that positive evidence deliberately. Treating
+ * "this prefix is not a known city" as proof of a country qualifier would let
+ * any unverified prefix in front of an indexed exonym silently change which
+ * place the query means, and the payload's suffix vocabulary is wide enough
+ * for that to matter. The region vocabulary comes from the platform's CLDR
+ * data (`./chinese-region-names`), so the payload stays the sole authority on
+ * which English name a place carries and nothing here names a country either.
  */
 
 const PAYLOAD_URL = new URL("../../public/earth/cities.json", import.meta.url);
@@ -110,6 +118,22 @@ function parseIndex(payload: string): Map<string, string> {
   return buildIndex(parsed.cities as PayloadEntry[]);
 }
 
+/**
+ * Whether a provider label names the same place a query asked for. `深圳市`
+ * names `深圳` because the difference is an administrative suffix, while
+ * `伦敦街` does not name `伦敦` and `檀香山路` does not name `檀香山` — a hit
+ * that merely contains the query is a different place and must not stand in
+ * for it.
+ */
+export function namesSamePlace(label: string, query: string): boolean {
+  const needle = query.trim().toLocaleLowerCase();
+  const candidate = label.trim();
+  if (!needle || !candidate) return false;
+  if (candidate.toLocaleLowerCase() === needle) return true;
+  const base = withoutAdministrativeSuffix(candidate);
+  return base !== "" && base.toLocaleLowerCase() === needle;
+}
+
 export type PlaceNameAliasResolver = (query: string) => Promise<string>;
 
 export function createPlaceNameAliasResolver(
@@ -145,16 +169,15 @@ export function createPlaceNameAliasResolver(
     const direct = lookup(names, query);
     if (direct) return direct;
     // Longest remainder first, and no cap on the qualifier beyond the query
-    // itself, so a full country name (`印度尼西亚雅加达`) strips as readily as
-    // a short one (`美国檀香山`).
+    // itself, so a full country name (`印度尼西亚雅加达`,
+    // `阿拉伯联合酋长国阿布扎比`) strips as readily as a short one
+    // (`美国檀香山`). A split point only counts when the head is a country
+    // or region name, so an unrecognised head (`不存在巴黎`) or a head that
+    // names a city rather than a country (`西安大雁塔`, `深圳南山区`) leaves
+    // the query exactly as the user typed it.
     const limit = query.length - MIN_PLACE_NAME_LENGTH;
     for (let qualifier = MIN_PLACE_NAME_LENGTH; qualifier <= limit; qualifier += 1) {
-      // A query whose own head names a place is a local query, not a
-      // country-qualified exonym: `西安大雁塔` must stay a search for the
-      // pagoda rather than become one for `雁塔`. Scanning stops there rather
-      // than skipping the split point, because every longer remainder of such
-      // a query is a fragment of the same local place name.
-      if (lookup(names, query.slice(0, qualifier))) break;
+      if (!isChineseRegionName(query.slice(0, qualifier))) continue;
       const english = lookup(names, query.slice(qualifier));
       if (english) return english;
     }
