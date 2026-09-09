@@ -46,12 +46,17 @@ Readiness is still latest-event-wins, but the workflow deliberately does **not**
 aggregate check even after the final required checks pass and the PR merges. Instead every
 controller run re-reads the live PR head and the readiness workflow's run list before changing the
 shared label/status state. If a newer readiness run already exists for that exact head, the older
-run exits successfully without writing anything. Final sign-off repeats the freshness test before
-and after publishing success and still checks the live `merge-ready` label on both sides of the
-write. If newer activity races the success write, the older controller repairs its own status back
-to pending only while that status is still the latest one; it never removes a label or overwrites a
-status that may already belong to the newer controller. Superseded runs therefore become green
-no-ops rather than cancelled failures while the stale-success protection remains in force.
+run exits successfully without writing anything.
+
+The preflight freshness read and a GitHub status write are not atomic, so every status write also
+performs a post-write handoff. If a newer controller appeared in that window and is still running,
+the stale writer repairs the shared context to fail-closed `pending` targeted at that newer run. If
+the newer controller already completed and published `merge-readiness`, the stale writer restores
+that exact newer state, description and target URL from commit-status history. A completed newer
+success also restores `merge-ready` if an older controller removed it after the newer sign-off.
+The same handoff runs after invalidation, rejection and final success, so neither an old `pending`
+can survive a newer success nor an old success survive a newer invalidation. Superseded Actions
+runs themselves finish successfully/no-op instead of leaving cancelled checks on the PR head.
 
 The label requirement is enforced on the merge button through the required `merge-readiness`
 status, and the ordering in [`CONTRIBUTING.md`](../CONTRIBUTING.md) is not advisory.
