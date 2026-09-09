@@ -3,6 +3,7 @@ import { MEDIA_STACK_DURATION, MEDIA_STACK_EASING, mediaStackClip, mediaStackOpa
 import { prefersReducedMotion } from "../motion/preferences";
 import { springElementTo, type SpringElementHandle } from "../motion/springElement";
 import { StartripsJourneyCue } from "../brand/StartripsBrandMark";
+import { mediaPreviewLayer } from "./mediaPreviewLayer";
 import type { JourneyMediaAsset, MediaPreviewRead } from "./types";
 import "../styles/story-media-pages.css";
 
@@ -514,10 +515,20 @@ export function StoryMediaPages({ active = true, ...props }: Props) {
       const current = id !== null && id === props.currentId;
       const url = read?.status === "ready" ? read.url : undefined;
       const pageReady = ready(id);
+      const layer = id && read?.status === "ready" ? mediaPreviewLayer({
+        assetId: id,
+        readAssetId: id,
+        read,
+        originalReady: pageReady,
+      }) : null;
       return <div key={slot} ref={(element) => { pageNodes.current[slot] = element; }}
         className="story-media-pages__page"
         data-media-page={current ? "current" : offsets[slot] < 0 ? "previous" : "next"}
         data-media-page-id={id ?? undefined} data-media-page-ready={pageReady ? "true" : "false"}
+        data-media-layer={layer?.kind}
+        data-media-preview-asset={layer?.kind === "preview" ? layer.assetId : undefined}
+        data-media-preview-width={layer?.kind === "preview" ? layer.frame?.width : undefined}
+        data-media-preview-height={layer?.kind === "preview" ? layer.frame?.height : undefined}
         data-media-incoming={id !== null && id === props.incomingId ? "true" : undefined}
         aria-hidden={!current} style={{
           "--page-offset": offsets[slot], "--stack-depth": depths[slot],
@@ -527,10 +538,10 @@ export function StoryMediaPages({ active = true, ...props }: Props) {
           zIndex: current ? 5 : id !== null && id === props.incomingId ? 4 : 3 - depths[slot],
           transform: mediaStackRest(depths[slot]),
           opacity: mediaStackOpacity(depths[slot]),
-          // A signed preview belongs to this exact asset. It holds the same
-          // contained frame until the original image/video is actually ready.
-          backgroundImage: !pageReady && read?.status === "ready" && read.preview
-            ? `url(${JSON.stringify(read.preview.url)})` : undefined,
+          // Same-asset layer authority keeps the preview under this physical
+          // page until its own original is decoded/presentable.
+          backgroundImage: layer?.kind === "preview"
+            ? `url(${JSON.stringify(layer.url)})` : undefined,
           backgroundSize: "contain", backgroundPosition: "center", backgroundRepeat: "no-repeat",
           pointerEvents: current ? "auto" : "none",
         } as CSSProperties}>

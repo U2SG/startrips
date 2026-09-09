@@ -109,6 +109,100 @@ describe("uploadMediaInParts", () => {
     expect(abortAttempts).toBe(0);
   });
 
+  function preparedPreview() {
+    return {
+      sourceWidth: 1600,
+      sourceHeight: 900,
+      exifOrientation: null,
+      rasterize: vi.fn(async (spec: { mimeType: string }) => new Blob(["preview"], { type: spec.mimeType })),
+      dispose: vi.fn(),
+    };
+  }
+
+  function previewUploadFetcher(failAt?: "request" | "put" | "complete") {
+    const asset = {
+      id: "asset-preview",
+      journeyId: "journey-preview",
+      routePointId: null,
+      storageDriver: "s3",
+      storageKey: "original/key",
+      fileName: "photo.jpg",
+      mimeType: "image/jpeg",
+      bytes: 8,
+    };
+    const calls: string[] = [];
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      calls.push(url);
+      if (url === "/api/uploads/start") return Response.json({ uploadId: "upload-preview", partSize: 8, partCount: 1 });
+      if (url === "/api/uploads/upload-preview/parts/1") {
+        return Response.json({ url: "https://storage.invalid/original", headers: {} });
+      }
+      if (url === "https://storage.invalid/original") {
+        return new Response(null, { status: 200, headers: { etag: "etag-original" } });
+      }
+      if (url === "/api/uploads/upload-preview/complete") return Response.json({ asset });
+      if (url === "/api/uploads/assets/asset-preview/preview") {
+        if (failAt === "request") return Response.json({ error: "PREVIEW_UNAVAILABLE" }, { status: 500 });
+        expect(JSON.parse(String(init?.body))).toEqual({
+          sourceWidth: 1600,
+          sourceHeight: 900,
+          exifOrientation: null,
+        });
+        return Response.json({
+          upload: { url: "https://storage.invalid/preview", headers: { "x-preview": "one" }, expiresAt: "2026-09-10T04:00:00.000Z" },
+          preview: { width: 960, height: 540, displayWidth: 1600, displayHeight: 900, mimeType: "image/jpeg", maxBytes: 4096 },
+        });
+      }
+      if (url === "https://storage.invalid/preview") {
+        expect(init?.headers).toEqual({ "x-preview": "one" });
+        return new Response(null, { status: failAt === "put" ? 500 : 200 });
+      }
+      if (url === "/api/uploads/assets/asset-preview/preview/complete") {
+        return failAt === "complete"
+          ? Response.json({ error: "PREVIEW_UNREADABLE" }, { status: 409 })
+          : Response.json({ preview: { mimeType: "image/jpeg", bytes: 7, width: 960, height: 540 } });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    }) as unknown as typeof fetch;
+    return { asset, calls, fetcher };
+  }
+
+  it("produces the preview only after the original asset completes", async () => {
+    const { asset, calls, fetcher } = previewUploadFetcher();
+    const prepared = preparedPreview();
+    await expect(uploadMediaInParts({
+      file: new Blob(["original"], { type: "image/jpeg" }),
+      fileName: "photo.jpg",
+      journeyId: "journey-preview",
+      fetcher,
+      preparePreview: async () => prepared,
+    })).resolves.toEqual(asset);
+    expect(calls.indexOf("/api/uploads/upload-preview/complete")).toBeLessThan(calls.indexOf("/api/uploads/assets/asset-preview/preview"));
+    expect(calls.slice(-3)).toEqual([
+      "/api/uploads/assets/asset-preview/preview",
+      "https://storage.invalid/preview",
+      "/api/uploads/assets/asset-preview/preview/complete",
+    ]);
+    expect(prepared.rasterize).toHaveBeenCalledWith(expect.objectContaining({ width: 960, height: 540, maxBytes: 4096 }));
+    expect(prepared.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  for (const failure of ["request", "put", "complete"] as const) {
+    it(`keeps the completed original successful when preview ${failure} fails`, async () => {
+      const { asset, fetcher } = previewUploadFetcher(failure);
+      const prepared = preparedPreview();
+      await expect(uploadMediaInParts({
+        file: new Blob(["original"], { type: "image/jpeg" }),
+        fileName: "photo.jpg",
+        journeyId: "journey-preview",
+        fetcher,
+        preparePreview: async () => prepared,
+      })).resolves.toEqual(asset);
+      expect(prepared.dispose).toHaveBeenCalledTimes(1);
+    });
+  }
+
   it("cancels and settles sibling workers before aborting the server upload", async () => {
     let siblingSettled = false;
     let serverAbortAfterSettle = false;

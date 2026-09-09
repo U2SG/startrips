@@ -24,6 +24,7 @@ import { mediaReadIsFresh } from "./mediaReadRefresh";
 import {
   createDecodeRegistry,
   decodeImageUrl,
+  mediaPrefetchUrlsForRead,
   type DecodedReadiness,
 } from "./mediaPrefetch";
 import {
@@ -81,12 +82,12 @@ import {
   writeAudioAtmosphereEnergy,
 } from "../motion/audioAtmosphere";
 import { prefersReducedMotion } from "../motion/preferences";
-import type { Journey, JourneyMediaAsset } from "./types";
+import type { Journey, JourneyMediaAsset, MediaPreviewRead } from "./types";
 import type { PlaybackReturnReason } from "./playbackReturn";
 
 type MediaRead =
   | { status: "loading" }
-  | { status: "ready"; url: string; issuedAt: number; expiresAt: number }
+  | { status: "ready"; url: string; preview?: MediaPreviewRead; issuedAt: number; expiresAt: number }
   | { status: "error"; message: string };
 
 /**
@@ -641,6 +642,7 @@ export function JourneyPlaybackOverlay({
         [assetId]: {
           status: "ready",
           url: read.url,
+          preview: read.preview,
           issuedAt,
           expiresAt: Date.parse(read.expiresAt),
         },
@@ -743,18 +745,21 @@ export function JourneyPlaybackOverlay({
   }, [allowPrefetchDispatch, loadMediaRead, plannedPrefetchRevision, prefetchKey]);
 
   // Review P2: decode media AHEAD of display so a chapter never mounts <img>
-  // with a loading gap. Videos stay at read only; images alone are decoded.
+  // with a loading gap. #264 also warms a same-asset preview for photos/videos;
+  // the original image decode remains the only readiness gate.
   useEffect(() => {
     if (!allowPrefetchDispatch(plannedPrefetchRevision)) return;
     for (const assetId of prefetchAssetIds) {
       const asset = mediaById.get(assetId);
-      if (!asset?.mimeType.startsWith("image/")) continue;
       const read = mediaReads[assetId];
-      if (read?.status === "ready") {
-        overlayRef.current?.setAttribute(
-          "data-playback-prefetch-dispatch-intent",
-          String(plannedPrefetchRevision),
-        );
+      if (!asset || read?.status !== "ready") continue;
+      overlayRef.current?.setAttribute(
+        "data-playback-prefetch-dispatch-intent",
+        String(plannedPrefetchRevision),
+      );
+      const layerUrls = mediaPrefetchUrlsForRead(assetId, assetId, read);
+      if (read.preview) void decodeImageUrl(layerUrls[0]).catch(() => undefined);
+      if (asset.mimeType.startsWith("image/")) {
         decodeRegistryRef.current.ensure(assetId, read.url);
       }
     }
@@ -1283,6 +1288,7 @@ export function JourneyPlaybackOverlay({
           <PlaybackMediaStage
             asset={activeMedia}
             url={activeRead?.status === "ready" ? activeRead.url : null}
+            preview={activeRead?.status === "ready" ? activeRead.preview : undefined}
             intent={`${journey.id}:${playbackStepIdentity(journey, step)}:${director.stepIndex}:${activeVideoTrimInMs}:${activeVideoTrimOutMs}`}
             stepIndex={director.stepIndex}
             imageReady={activeMediaGate === "ready"}
