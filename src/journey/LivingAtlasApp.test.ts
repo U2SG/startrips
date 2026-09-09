@@ -14,6 +14,7 @@ import {
   atlasCinematicIsolationActive,
   capturePlaybackEntryForContext,
   globeFocusState,
+  loadJourneyRowsWithOptionalHome,
   nextPlaybackCameraCommand,
   nextPlaybackReleaseFocusRevision,
   playbackEntryNeedsPreparation,
@@ -256,6 +257,38 @@ describe("resolvePlaybackOwnership", () => {
 });
 
 
+
+describe("optional Home hydration", () => {
+  it("lets Journeys resolve while private Home history remains pending", async () => {
+    let resolveHome!: (periods: []) => void;
+    const homePending = new Promise<[]>((resolve) => { resolveHome = resolve; });
+    const onHomeBasePeriods = vi.fn();
+
+    const rows = await loadJourneyRowsWithOptionalHome({
+      listJourneys: async () => [playbackJourney],
+      listHomeBasePeriods: () => homePending,
+      isCurrent: () => true,
+      onHomeBasePeriods,
+    });
+
+    expect(rows).toEqual([playbackJourney]);
+    expect(onHomeBasePeriods).not.toHaveBeenCalled();
+    resolveHome([]);
+    await Promise.resolve();
+    expect(onHomeBasePeriods).toHaveBeenCalledWith([]);
+  });
+
+  it("keeps guest/read-only views free of private Home hydration", async () => {
+    const onHomeBasePeriods = vi.fn();
+    await loadJourneyRowsWithOptionalHome({
+      listJourneys: async () => [playbackJourney],
+      listHomeBasePeriods: null,
+      isCurrent: () => true,
+      onHomeBasePeriods,
+    });
+    expect(onHomeBasePeriods).toHaveBeenCalledWith([]);
+  });
+});
 
 describe("playbackFocusPointForCameraTarget", () => {
   const journeyWithPoints: Journey = {

@@ -101,7 +101,7 @@ export type PlaybackStep =
   | { kind: "stop"; pointIndex: number; media: JourneyMediaAsset[] }
   | { kind: "media"; pointIndex: number; mediaIndex: number }
   | { kind: "home-epilogue"; cameraTarget: HomeNarrativeCameraTarget }
-  | { kind: "outro" };
+  | { kind: "outro"; cameraTarget?: HomeNarrativeCameraTarget };
 
 export type PlaybackTravelChoreography = "nearby" | "regional" | "long-haul";
 
@@ -141,8 +141,11 @@ export function playbackCameraTargetForStep(
       // beat itself rather than reinterpreted as a Journey Route Point.
       return step.cameraTarget;
     case "intro":
-    case "outro":
       return { kind: "route" };
+    case "outro":
+      // An eligible Home epilogue owns the final life context through the
+      // title/date fade and completion. Without Home, preserve route framing.
+      return step.cameraTarget ?? { kind: "route" };
     case "travel":
       return {
         kind: "point",
@@ -184,10 +187,15 @@ export function buildPlaybackSteps(
       steps.push({ kind: "media", pointIndex, mediaIndex });
     }
   }
-  if (homeContext?.epilogue.eligible) {
-    steps.push({ kind: "home-epilogue", cameraTarget: homeContext.epilogue.cameraTarget });
+  const epilogueCameraTarget = homeContext?.epilogue.eligible
+    ? homeContext.epilogue.cameraTarget
+    : null;
+  if (epilogueCameraTarget) {
+    steps.push({ kind: "home-epilogue", cameraTarget: epilogueCameraTarget });
   }
-  steps.push({ kind: "outro" });
+  steps.push(epilogueCameraTarget
+    ? { kind: "outro", cameraTarget: epilogueCameraTarget }
+    : { kind: "outro" });
   return steps;
 }
 

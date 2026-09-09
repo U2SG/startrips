@@ -243,6 +243,24 @@ describe("playback camera ownership", () => {
   });
 });
 
+describe("Home epilogue camera continuity (#235)", () => {
+  it("keeps Home camera ownership through outro and preserves route outro without Home", () => {
+    const steps = buildPlaybackSteps(journey, homeNarrativeContext);
+    const epilogue = steps.at(-2);
+    const outro = steps.at(-1);
+    expect(epilogue).toMatchObject({ kind: "home-epilogue" });
+    expect(outro).toMatchObject({ kind: "outro" });
+    const epilogueTarget = playbackCameraTargetForStep(epilogue, journey);
+    const outroTarget = playbackCameraTargetForStep(outro, journey);
+    expect(epilogueTarget).toMatchObject({ kind: "home", homeBaseId: "home-end" });
+    expect(outroTarget).toEqual(epilogueTarget);
+    expect(playbackCameraTargetKey(outroTarget!)).toBe("home:home-end");
+
+    const withoutHome = buildPlaybackSteps(journey);
+    expect(playbackCameraTargetForStep(withoutHome.at(-1), journey)).toEqual({ kind: "route" });
+  });
+});
+
 describe("Home narrative playback topology (#235)", () => {
   it("keeps Home beats in the same reducer index space as the expanded steps", () => {
     const steps = buildPlaybackSteps(journey, homeNarrativeContext);

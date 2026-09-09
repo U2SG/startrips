@@ -86,6 +86,33 @@ type AtlasView = "planet" | "timeline";
 
 type AtlasNotice = { id: number; message: string };
 
+export async function loadJourneyRowsWithOptionalHome({
+  listJourneys,
+  listHomeBasePeriods,
+  isCurrent,
+  onHomeBasePeriods,
+}: {
+  listJourneys: () => Promise<Journey[]>;
+  listHomeBasePeriods?: (() => Promise<HomeBasePeriod[]>) | null;
+  isCurrent: () => boolean;
+  onHomeBasePeriods: (periods: HomeBasePeriod[]) => void;
+}) {
+  // Home history is optional private narrative context. Start it beside the
+  // Journey read, but never await it before the Atlas can become usable.
+  if (listHomeBasePeriods) {
+    void Promise.resolve()
+      .then(() => listHomeBasePeriods())
+      .then((periods) => {
+        if (isCurrent()) onHomeBasePeriods(periods);
+      })
+      .catch(() => undefined);
+  } else if (isCurrent()) {
+    onHomeBasePeriods([]);
+  }
+  return listJourneys();
+}
+
+
 export function capturePlaybackEntryForContext(
   journeyId: string,
   storyJourneyId: string | null,
@@ -695,16 +722,15 @@ export function LivingAtlasApp({
     const revision = ++loadRevision.current;
     if (!quiet) setStatus("loading");
     try {
-      const [journeyRows, homePeriods] = await Promise.all([
-        listJourneys(),
-        listHomeBasePeriods
-          ? listHomeBasePeriods().catch(() => [] as HomeBasePeriod[])
-          : Promise.resolve([] as HomeBasePeriod[]),
-      ]);
+      const journeyRows = await loadJourneyRowsWithOptionalHome({
+        listJourneys,
+        listHomeBasePeriods,
+        isCurrent: () => revision === loadRevision.current,
+        onHomeBasePeriods: setHomeBasePeriods,
+      });
       const loaded = sortJourneysChronologically(journeyRows);
       if (revision !== loadRevision.current) return;
       setJourneys(loaded);
-      setHomeBasePeriods(homePeriods);
       setLoadError("");
       setStatus("ready");
       return loaded;
