@@ -232,3 +232,13 @@ describe("sharedAtlasStatusForFailure", () => {
     expect(sharedAtlasStatusForFailure("network")).toBe("error");
   });
 });
+
+
+describe("ST-056 guest Home privacy contract", () => {
+  it("keeps Home Base private in SharedAtlasView and supplies no private Home loader", () => {
+    const source = readFileSync(new URL("SharedAtlasView.tsx", import.meta.url), "utf8");
+    expect(GUEST_VIEW.listHomeBasePeriods).toBeNull();
+    expect(source).toContain("listHomeBasePeriods: null");
+    expect(source).not.toContain("homeBasePresence=");
+  });
+});

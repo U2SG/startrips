@@ -13,9 +13,16 @@ import {
   type ReactNode,
 } from "react";
 import { IconMap2, IconMapPin, IconWorld } from "@tabler/icons-react";
+import type { HomeBasePeriod } from "../journey/homeBase";
+import type { ResolvedHomeBasePresence } from "../journey/homeBasePresence";
 import type { PlaybackTravelChoreography } from "../journey/journeyPlayback";
 import { useCompactMobileLayout } from "../journey/mobileLayout";
 import type { JourneyRoute } from "../journey/types";
+import {
+  buildHomeBasePresenceLayer,
+  type HomeBasePresenceDrawable,
+  type ProjectedHomeBasePresence,
+} from "./homeBasePresenceLayer";
 import type { DetailedEarthLanguage, ParticleAnchorFrame } from "./detailedEarthModel";
 import {
   INITIAL_EARTH_DIVE_STATE,
@@ -35,6 +42,7 @@ import {
 import { GLOBE_MODE_CONFIG, ParticleEarthScene } from "./ParticleEarthScene";
 import {
   SEMANTIC_ZOOM_RELEASE_ZOOM,
+  type GlobeSemanticZoom,
   type SemanticZoomSnapshot,
 } from "./semanticZoom";
 
@@ -123,6 +131,8 @@ export function LivingAtlasGlobeControls({
 export type LivingAtlasGlobeProps = {
   focusPoint?: { lat: number; lon: number } | null;
   focusRoute?: JourneyRoute | null;
+  /** One-shot camera orientation seed; never a semantic focus object. */
+  initialCameraAnchor?: { lat: number; lon: number } | null;
   focusRevision?: number;
   focusFlightProfile?: PlaybackTravelChoreography;
   focusColor?: string;
@@ -132,6 +142,13 @@ export type LivingAtlasGlobeProps = {
     journeys: ReadonlyMap<string, number>;
     points: ReadonlyMap<string, number>;
   };
+  homeBasePresence?: {
+    resolved: readonly ResolvedHomeBasePresence[];
+    periods: readonly HomeBasePeriod[];
+    effectiveDate: string;
+  };
+  onSemanticZoomChange?: (level: GlobeSemanticZoom) => void;
+  onManualCameraInteraction?: () => void;
   onJourneyRouteActivate: (journeyId: string) => void;
   onJourneyRoutePointActivate: (journeyId: string, routePointId: string) => void;
   onGlobePointPick?: (point: { latitude: number; longitude: number }) => void;
@@ -148,6 +165,18 @@ export type LivingAtlasGlobeProps = {
   mediaCoverHint?: { opaqueMediaCover: boolean; coverTransitionActive: boolean };
 };
 
+export function resolveLivingAtlasHomeBaseLayer(
+  homeBasePresence: LivingAtlasGlobeProps["homeBasePresence"],
+): HomeBasePresenceDrawable[] {
+  return homeBasePresence
+    ? buildHomeBasePresenceLayer({
+      presence: homeBasePresence.resolved,
+      periods: homeBasePresence.periods,
+      effectiveDate: homeBasePresence.effectiveDate,
+    })
+    : [];
+}
+
 type PersistentEarthStage = "idle" | "login" | "handoff" | "atlas";
 
 type LoginEarthPresentation = {
@@ -159,6 +188,7 @@ type AtlasEarthPresentation = Pick<
   LivingAtlasGlobeProps,
   | "focusPoint"
   | "focusRoute"
+  | "initialCameraAnchor"
   | "focusRevision"
   | "focusFlightProfile"
   | "focusColor"
@@ -179,6 +209,9 @@ type AtlasEarthPresentation = Pick<
    */
   onSemanticZoomSnapshot?: (snapshot: SemanticZoomSnapshot) => void;
   onParticleAnchorFrame?: (frame: ParticleAnchorFrame | null) => void;
+  homeBasePresence?: readonly HomeBasePresenceDrawable[];
+  onHomeBasePresenceFrame?: (frame: readonly ProjectedHomeBasePresence[]) => void;
+  onManualCameraInteraction?: () => void;
   zoomIntent?: { zoom: number; revision: number };
   /** Who owns camera and gesture input on this frame. */
   inputOwner?: EarthDiveOwner;
@@ -250,6 +283,7 @@ export function PersistentEarthProvider({ children }: { children: ReactNode }) {
                   quality={stage === "atlas" ? "high" : "low"}
                   focusPoint={atlas?.focusPoint}
                   focusRoute={atlas?.focusRoute}
+                  initialCameraAnchor={atlas?.initialCameraAnchor}
                   focusRevision={atlas?.focusRevision}
                   focusFlightProfile={atlas?.focusFlightProfile}
                   focusColor={atlas?.focusColor}
@@ -262,6 +296,9 @@ export function PersistentEarthProvider({ children }: { children: ReactNode }) {
                   onGlobePointPick={atlas?.onGlobePointPick}
                   onSemanticZoomSnapshot={atlas?.onSemanticZoomSnapshot}
                   onParticleAnchorFrame={atlas?.onParticleAnchorFrame}
+                  homeBasePresence={atlas?.homeBasePresence ?? []}
+                  onHomeBasePresenceFrame={atlas?.onHomeBasePresenceFrame}
+                  onManualCameraInteraction={atlas?.onManualCameraInteraction}
                   zoomIntent={atlas?.zoomIntent}
                   showArchiveSignals={false}
                   // #252: exactly one subsystem owns the camera on any frame.
@@ -291,12 +328,16 @@ export function PersistentEarthProvider({ children }: { children: ReactNode }) {
 export function LivingAtlasGlobe({
   focusPoint,
   focusRoute,
+  initialCameraAnchor,
   focusRevision,
   focusFlightProfile,
   focusColor,
   journeyRoutes,
   activeJourneyRouteId,
   temporalReveal,
+  homeBasePresence,
+  onSemanticZoomChange,
+  onManualCameraInteraction,
   onJourneyRouteActivate,
   onJourneyRoutePointActivate,
   onGlobePointPick,
@@ -315,6 +356,29 @@ export function LivingAtlasGlobe({
   );
   const gestureHintVisible = globeGestureHintVisible(gestureHint);
   const modeNoteVisible = globeModeNoteVisible(gestureHint, { globeFocusMode, showControls });
+  const homeBaseLayer = useMemo(() => resolveLivingAtlasHomeBaseLayer(homeBasePresence), [homeBasePresence]);
+  const homeBaseElementsRef = useRef(new Map<string, HTMLDivElement>());
+  const homeBaseFramesRef = useRef(new Map<string, ProjectedHomeBasePresence>());
+  const applyHomeBaseFrame = useCallback((
+    element: HTMLDivElement,
+    frame: ProjectedHomeBasePresence | undefined,
+  ) => {
+    const visible = Boolean(frame?.visible);
+    element.hidden = !visible;
+    element.style.display = visible ? "" : "none";
+    element.tabIndex = visible ? 0 : -1;
+    if (!frame || !visible) return;
+    element.style.left = `${frame.x}px`;
+    element.style.top = `${frame.y}px`;
+  }, []);
+  const bindHomeBaseElement = useCallback((periodId: string, element: HTMLDivElement | null) => {
+    if (!element) {
+      homeBaseElementsRef.current.delete(periodId);
+      return;
+    }
+    homeBaseElementsRef.current.set(periodId, element);
+    applyHomeBaseFrame(element, homeBaseFramesRef.current.get(periodId));
+  }, [applyHomeBaseFrame]);
 
   // #252: there is exactly one piece of Dive state and `earthDive.ts` decides
   // it. What used to be an `earthMode` / `transitionTarget` / `targetReady`
@@ -351,6 +415,7 @@ export function LivingAtlasGlobe({
   // presentation, which is itself an effect dependency.
   const handleSemanticZoomSnapshot = useCallback((snapshot: SemanticZoomSnapshot) => {
     snapshotRef.current = snapshot;
+    onSemanticZoomChange?.(snapshot.level);
     if (diveRef.current.stage === "particle") return;
     setHandoffSnapshot((previous) => (
       previous
@@ -359,12 +424,20 @@ export function LivingAtlasGlobe({
         ? previous
         : snapshot
     ));
-  }, []);
+  }, [onSemanticZoomChange]);
 
   const handleParticleAnchorFrame = useCallback((frame: ParticleAnchorFrame | null) => {
     if (diveRef.current.stage === "particle") return;
     setParticleFrame(frame);
   }, []);
+
+  const handleHomeBasePresenceFrame = useCallback((frame: readonly ProjectedHomeBasePresence[]) => {
+    const nextFrames = new Map(frame.map((entry) => [entry.periodId, entry]));
+    homeBaseFramesRef.current = nextFrames;
+    for (const [periodId, element] of homeBaseElementsRef.current) {
+      applyHomeBaseFrame(element, nextFrames.get(periodId));
+    }
+  }, [applyHomeBaseFrame]);
 
   const handleDetailReadiness = useCallback((readiness: DetailReadiness) => {
     readinessRef.current = readiness;
@@ -487,6 +560,7 @@ export function LivingAtlasGlobe({
     persistentEarth.setAtlasPresentation({
       focusPoint,
       focusRoute,
+      initialCameraAnchor,
       focusRevision,
       focusFlightProfile,
       focusColor,
@@ -498,6 +572,9 @@ export function LivingAtlasGlobe({
       onGlobePointPick,
       onSemanticZoomSnapshot: handleSemanticZoomSnapshot,
       onParticleAnchorFrame: handleParticleAnchorFrame,
+      homeBasePresence: homeBaseLayer,
+      onHomeBasePresenceFrame: handleHomeBasePresenceFrame,
+      onManualCameraInteraction,
       zoomIntent: zoomIntent ?? undefined,
       inputOwner: dive.owner,
       earthDiveOverlapActive: dive.stage === "prewarm" || dive.stage === "blending",
@@ -517,11 +594,15 @@ export function LivingAtlasGlobe({
     focusRevision,
     focusFlightProfile,
     focusRoute,
+    initialCameraAnchor,
+    handleHomeBasePresenceFrame,
     handleParticleAnchorFrame,
     handleSemanticZoomSnapshot,
+    homeBaseLayer,
     journeyRoutes,
     zoomIntent,
     onGlobePointPick,
+    onManualCameraInteraction,
     onJourneyRouteActivate,
     onJourneyRoutePointActivate,
     persistentEarth,
@@ -580,6 +661,29 @@ export function LivingAtlasGlobe({
           </Suspense>
         </div>
       ) : null}
+
+      {dive.owner !== "detail" && !cinematicActive ? homeBaseLayer.map((descriptor) => (
+          <div
+            key={descriptor.periodId}
+            ref={(element) => bindHomeBaseElement(descriptor.periodId, element)}
+            className="living-atlas-globe__home-base"
+            role="img"
+            tabIndex={-1}
+            hidden
+            aria-label={descriptor.accessibleName}
+            data-home-base-presence={descriptor.presence}
+            style={{
+              minWidth: descriptor.touchTargetPx,
+              minHeight: descriptor.touchTargetPx,
+              "--home-base-emphasis": descriptor.emphasisWeight,
+            } as CSSProperties}
+          >
+            <span className="living-atlas-globe__home-base-core" aria-hidden="true" />
+            {descriptor.label ? (
+              <span className="living-atlas-globe__home-base-label" aria-hidden="true">{descriptor.label}</span>
+            ) : null}
+          </div>
+        )) : null}
 
       {showControls ? (
         <LivingAtlasGlobeControls

@@ -7089,3 +7089,46 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   min-height: 44px;
   padding-block: 0;
 }
+
+/* ST-056: Home is a geographic presence, not a permanent control. The
+   position comes from ParticleEarthScene's shared projection frame. */
+.living-atlas-globe__home-base {
+  position: fixed;
+  z-index: 4;
+  display: grid;
+  place-items: center;
+  box-sizing: border-box;
+  transform: translate(-50%, -50%);
+  /* Keep the 44px accessibility box keyboard-focusable without creating a
+     dead wheel/drag/touch island over the canvas sibling. */
+  pointer-events: none;
+  cursor: default;
+  border-radius: 50%;
+  outline: none;
+}
+
+.living-atlas-globe__home-base:focus-visible {
+  outline: 1px solid var(--atlas-acid);
+  outline-offset: 2px;
+}
+
+.living-atlas-globe__home-base-core {
+  width: 8px;
+  height: 8px;
+  border: 1px solid var(--atlas-cyan);
+  border-radius: 50%;
+  background: var(--atlas-cyan);
+  opacity: var(--home-base-emphasis);
+}
+
+.living-atlas-globe__home-base-label {
+  position: absolute;
+  left: calc(50% + 10px);
+  top: 50%;
+  transform: translateY(-50%);
+  white-space: nowrap;
+  color: var(--atlas-muted);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  opacity: var(--home-base-emphasis);
+}

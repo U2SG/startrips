@@ -43,6 +43,7 @@ import {
 import type { PlaybackTravelChoreography } from "../journey/journeyPlayback";
 import { compactMobileLayoutMarker } from "../journey/mobileLayout";
 import type { JourneyRoute } from "../journey/types";
+import type { HomeBasePresenceDrawable, ProjectedHomeBasePresence } from "./homeBasePresenceLayer";
 import {
   buildArtworkPointPositions,
   buildSeededSpherePoints,
@@ -406,14 +407,15 @@ export function resolveGlobeFocusIntent(
 
 /**
  * The geographic anchor the particle renderer is actually holding for a Dive.
- * Whole-Journey focus deliberately has no focusPoint, so route fitting owns the
- * anchor whenever a route frame exists; point focus remains the fallback.
+ * The orientation-only initial camera anchor owns the fresh Atlas before any
+ * semantic Journey focus; once it retires, route fitting then point focus own it.
  */
 export function resolveParticleDiveAnchor(
   routeFocusFrame: { center: { lat: number; lon: number } } | null | undefined,
   focusPoint: { lat: number; lon: number } | null | undefined,
+  initialCameraAnchor?: { lat: number; lon: number } | null,
 ) {
-  return routeFocusFrame?.center ?? focusPoint ?? null;
+  return initialCameraAnchor ?? routeFocusFrame?.center ?? focusPoint ?? null;
 }
 
 export function isGlobeUpright(rotation: number, tolerance = 0.002) {
@@ -1193,6 +1195,8 @@ interface ParticleEarthSceneProps {
   quality?: keyof typeof QUALITY_PROFILE;
   focusPoint?: { lat: number; lon: number } | null;
   focusRoute?: JourneyRoute | null;
+  /** Orientation-only seed; it does not create a focus signal or route owner. */
+  initialCameraAnchor?: { lat: number; lon: number } | null;
   focusRevision?: number;
   focusFlightProfile?: PlaybackTravelChoreography;
   focusColor?: string;
@@ -1227,6 +1231,11 @@ interface ParticleEarthSceneProps {
    * agree in screen space rather than assumed to.
    */
   onParticleAnchorFrame?: (frame: ParticleAnchorFrame | null) => void;
+  /** ST-056: resolved Home descriptors use this scene's canonical projection frame. */
+  homeBasePresence?: readonly HomeBasePresenceDrawable[];
+  onHomeBasePresenceFrame?: (frame: readonly ProjectedHomeBasePresence[]) => void;
+  /** First real wheel/drag/touch camera claim; programmatic focus never calls this. */
+  onManualCameraInteraction?: () => void;
   /**
    * #252: a camera hand-back. When a detail owner relinquishes the Semantic
    * Earth Dive it asks the particle camera to stand where the zoom authority
@@ -1570,6 +1579,7 @@ export function ParticleEarthScene({
   quality = "low",
   focusPoint,
   focusRoute,
+  initialCameraAnchor,
   focusRevision = 0,
   focusFlightProfile,
   focusColor,
@@ -1584,6 +1594,9 @@ export function ParticleEarthScene({
   onReady,
   onSemanticZoomSnapshot,
   onParticleAnchorFrame,
+  homeBasePresence = [],
+  onHomeBasePresenceFrame,
+  onManualCameraInteraction,
   zoomIntent,
   onGlobePointPick,
   dragToRotate = false,
@@ -1598,6 +1611,7 @@ export function ParticleEarthScene({
   const latestQuality = useRef(quality);
   const latestFocusPoint = useRef(focusPoint);
   const latestFocusRoute = useRef(focusRoute);
+  const latestInitialCameraAnchor = useRef(initialCameraAnchor);
   const latestFocusRevision = useRef(focusRevision);
   const latestFocusFlightProfile = useRef(focusFlightProfile);
   const latestFocusColor = useRef(focusColor);
@@ -1611,6 +1625,9 @@ export function ParticleEarthScene({
   const latestOnReady = useRef(onReady);
   const latestOnSemanticZoomSnapshot = useRef(onSemanticZoomSnapshot);
   const latestOnParticleAnchorFrame = useRef(onParticleAnchorFrame);
+  const latestHomeBasePresence = useRef(homeBasePresence);
+  const latestOnHomeBasePresenceFrame = useRef(onHomeBasePresenceFrame);
+  const latestOnManualCameraInteraction = useRef(onManualCameraInteraction);
   const latestZoomIntent = useRef(zoomIntent);
   const latestOnGlobePointPick = useRef(onGlobePointPick);
   const latestDragToRotate = useRef(dragToRotate);
@@ -1622,6 +1639,7 @@ export function ParticleEarthScene({
   latestQuality.current = quality;
   latestFocusPoint.current = focusPoint;
   latestFocusRoute.current = focusRoute;
+  latestInitialCameraAnchor.current = initialCameraAnchor;
   latestFocusRevision.current = focusRevision;
   latestFocusFlightProfile.current = focusFlightProfile;
   latestFocusColor.current = focusColor;
@@ -1635,6 +1653,9 @@ export function ParticleEarthScene({
   latestOnReady.current = onReady;
   latestOnSemanticZoomSnapshot.current = onSemanticZoomSnapshot;
   latestOnParticleAnchorFrame.current = onParticleAnchorFrame;
+  latestHomeBasePresence.current = homeBasePresence;
+  latestOnHomeBasePresenceFrame.current = onHomeBasePresenceFrame;
+  latestOnManualCameraInteraction.current = onManualCameraInteraction;
   latestZoomIntent.current = zoomIntent;
   latestOnGlobePointPick.current = onGlobePointPick;
   latestDragToRotate.current = dragToRotate;
@@ -2821,6 +2842,8 @@ export function ParticleEarthScene({
     // already inside a band still learns where it stands.
     let publishedSemanticZoomSnapshot: SemanticZoomSnapshot | null = null;
     let publishedAnchorFrame: ParticleAnchorFrame | null = null;
+    let publishedHomeBasePresenceFrame: ProjectedHomeBasePresence[] = [];
+    const homeBaseProjectionPoint = { x: 0, y: 0 };
     let anchorFrameRectSampledAt = 0;
     let appliedZoomIntentRevision = latestZoomIntent.current?.revision ?? null;
     const activePointers = new Map<number, { x: number; y: number }>();
@@ -3460,7 +3483,8 @@ export function ParticleEarthScene({
       if (!intersection) return null;
       return vector3ToLatLon(globe.worldToLocal(intersection.point.clone()));
     };
-    const claimManualInteraction = () => {
+    const claimManualInteraction = (publishExternalOwnership = true) => {
+      if (publishExternalOwnership) latestOnManualCameraInteraction.current?.();
       manualFocusRevision = latestFocusRevision.current;
       pointFocusSettling = false;
       routeFocusSettling = false;
@@ -4562,28 +4586,37 @@ export function ParticleEarthScene({
       // #20: restrained energy mapping. Even at full energy the environment
       // only gains 12–15%, so it feels alive rather than becoming a visualizer.
       const audioGain = audioAtmosphereGains(audioEnergy);
-      const spatialFocusPoint = focusTarget?.point ?? routeFocusFrame?.center ?? latestFocusPoint.current;
       const focusSolverOwnsState = manualFocusRevision === null;
+      const initialCameraAnchorNow = focusSolverOwnsState ? latestInitialCameraAnchor.current : null;
+      const spatialFocusPoint = initialCameraAnchorNow
+        ?? focusTarget?.point
+        ?? routeFocusFrame?.center
+        ?? latestFocusPoint.current;
       const focusFlightActive = Boolean(
         focusSolverOwnsState
         &&
         currentMode === "focusPoint"
+        && !initialCameraAnchorNow
         && latestCenterFocusPoint.current
         && spatialFocusPoint
         && isFocusFlightActive(pointFocusSettling, routeFocusSettling),
       );
-      let targetRotationX = focusSolverOwnsState && focusTarget
-        ? focusTarget.rotationX
-        : focusSolverOwnsState && spatialFocusPoint
-          ? rotationXForLatitude(spatialFocusPoint.lat)
-        : interactiveRotationX;
-      let targetBaseRotationY = focusSolverOwnsState && focusTarget
-        ? focusTarget.rotationY
-        : focusSolverOwnsState && spatialFocusPoint
-          ? rotationYForLongitude(spatialFocusPoint.lon)
-        : manualFocusRevision !== null
-          ? baseRotationY
-          : latestRotationYOverride.current ?? target.rotationY;
+      let targetRotationX = focusSolverOwnsState && initialCameraAnchorNow
+        ? rotationXForLatitude(initialCameraAnchorNow.lat)
+        : focusSolverOwnsState && focusTarget
+          ? focusTarget.rotationX
+          : focusSolverOwnsState && spatialFocusPoint
+            ? rotationXForLatitude(spatialFocusPoint.lat)
+            : interactiveRotationX;
+      let targetBaseRotationY = focusSolverOwnsState && initialCameraAnchorNow
+        ? rotationYForLongitude(initialCameraAnchorNow.lon)
+        : focusSolverOwnsState && focusTarget
+          ? focusTarget.rotationY
+          : focusSolverOwnsState && spatialFocusPoint
+            ? rotationYForLongitude(spatialFocusPoint.lon)
+            : manualFocusRevision !== null
+              ? baseRotationY
+              : latestRotationYOverride.current ?? target.rotationY;
       if (import.meta.env.DEV && focusFlightActive && focusTarget) {
         host.dataset.focusFlightCurrentRotationX = interactiveRotationX.toFixed(6);
         host.dataset.focusFlightCurrentRotationY = baseRotationY.toFixed(6);
@@ -4610,6 +4643,11 @@ export function ParticleEarthScene({
           material.uniforms.uActiveDimStrength.value,
           particleActiveDimStrengthTarget,
         );
+      }
+
+      if (initialCameraAnchorNow && activePointers.size === 0) {
+        interactiveRotationX = interpolate(interactiveRotationX, targetRotationX);
+        interactiveRotationY = interpolate(interactiveRotationY, 0);
       }
 
       if (
@@ -4704,7 +4742,7 @@ export function ParticleEarthScene({
       // its screen position. The globe's x/y belongs to the layout/mode only.
       globe.position.x = interpolate(globe.position.x, target.x);
       globe.position.y = interpolate(globe.position.y, target.y);
-      if (activePointers.size === 0 && !reduceMotion && !focusSettledThisFrame) {
+      if (activePointers.size === 0 && !reduceMotion && !focusSettledThisFrame && !initialCameraAnchorNow) {
         interactiveRotationX = clampGlobeTilt(
           interactiveRotationX + rotationVelocityX * delta,
         );
@@ -4858,7 +4896,7 @@ export function ParticleEarthScene({
       const zoomIntentNow = latestZoomIntent.current;
       if (zoomIntentNow && zoomIntentNow.revision !== appliedZoomIntentRevision) {
         appliedZoomIntentRevision = zoomIntentNow.revision;
-        claimManualInteraction();
+        claimManualInteraction(false);
         applyAnchoredZoom(zoomIntentNow.zoom, null, interactionAnchorScreen);
       }
       semanticZoomState = resolveGlobeSemanticZoomForFrame({
@@ -4946,6 +4984,48 @@ export function ParticleEarthScene({
 
       updateRouteVectorLayer();
 
+      if (latestOnHomeBasePresenceFrame.current) {
+        updateGeoProjectionFrame(geoFrame, camera, globe.matrixWorld, targetSize.x, targetSize.y);
+        if (now - anchorFrameRectSampledAt > 100) {
+          anchorFrameRectSampledAt = now;
+          const rect = renderer.domElement.getBoundingClientRect();
+          anchorFrameRect.set(rect.left, rect.top);
+        }
+        const nextHomeBasePresenceFrame = latestHomeBasePresence.current.map((descriptor) => {
+          const visible = projectLocalPoint(
+            geoFrame,
+            descriptor.anchor.x,
+            descriptor.anchor.y,
+            descriptor.anchor.z,
+            homeBaseProjectionPoint,
+          );
+          return {
+            periodId: descriptor.periodId,
+            x: anchorFrameRect.x + homeBaseProjectionPoint.x,
+            y: anchorFrameRect.y + homeBaseProjectionPoint.y,
+            visible: visible && isProjectedPointInsideViewport(
+              homeBaseProjectionPoint.x,
+              homeBaseProjectionPoint.y,
+              targetSize.x,
+              targetSize.y,
+            ),
+          };
+        });
+        const homeBaseFrameChanged = nextHomeBasePresenceFrame.length !== publishedHomeBasePresenceFrame.length
+          || nextHomeBasePresenceFrame.some((candidate, index) => {
+            const previous = publishedHomeBasePresenceFrame[index];
+            return !previous
+              || candidate.periodId !== previous.periodId
+              || candidate.visible !== previous.visible
+              || Math.abs(candidate.x - previous.x) >= 0.5
+              || Math.abs(candidate.y - previous.y) >= 0.5;
+          });
+        if (homeBaseFrameChanged) {
+          publishedHomeBasePresenceFrame = nextHomeBasePresenceFrame;
+          latestOnHomeBasePresenceFrame.current(nextHomeBasePresenceFrame);
+        }
+      }
+
       if (latestCenterFocusPoint.current && spatialFocusPoint) {
         const focusScreen = projectFocusPointForRotation(
           spatialFocusPoint,
@@ -4963,7 +5043,11 @@ export function ParticleEarthScene({
         delete host.dataset.focusTargetY;
       }
 
-      const diveAnchor = resolveParticleDiveAnchor(routeFocusFrame, latestFocusPoint.current);
+      const diveAnchor = resolveParticleDiveAnchor(
+        routeFocusFrame,
+        latestFocusPoint.current,
+        initialCameraAnchorNow,
+      );
       if (latestCenterFocusPoint.current && diveAnchor) {
         // #237: the focus signal is a geographic annotation like any other, so
         // it publishes the shared frame's answer for its latitude/longitude

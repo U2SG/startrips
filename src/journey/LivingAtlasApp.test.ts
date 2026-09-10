@@ -12,11 +12,13 @@ vi.mock("../auth/AuthGateway", () => ({
 import { readFileSync } from "node:fs";
 import {
   atlasCinematicIsolationActive,
+  explicitSelectedJourneyIdForHomeCamera,
   capturePlaybackEntryForContext,
   globeFocusState,
   loadJourneyRowsWithOptionalHome,
   nextPlaybackCameraCommand,
   nextPlaybackReleaseFocusRevision,
+  nextInitialHomeCameraFocusRevision,
   playbackEntryNeedsPreparation,
   playbackCameraUsesPointFocus,
   playbackFocusPointForCameraTarget,
@@ -26,12 +28,19 @@ import {
   pendingPlaybackStoryRestore,
   railContentSignature,
   releaseStalePlaybackSession,
+  resolveInitialAtlasHomeCameraIntent,
+  resolveInitialHomeOwnedFocusPoint,
+  resolveAtlasHomeTimelineContext,
+  resolveOrdinaryAtlasHomePresence,
   resolvePlaybackOwnership,
   resolveMobilePlaybackPresentation,
   showsGlobeModeChrome,
 } from "./LivingAtlasApp";
 import { playbackHoldReason, playbackMediaGate } from "./JourneyPlaybackOverlay";
 import { resolvePlaybackReturn } from "./playbackReturn";
+import { buildJourneyTimeline, resolveJourneyTimelineSelection } from "./globeTimeline";
+import type { HomeBasePeriod } from "./homeBase";
+import { resolveHomeBasePresence } from "./homeBasePresence";
 import type { Journey } from "./types";
 
 // #8 globe focus mode: the root class/data contract drives the layout CSS
@@ -51,6 +60,198 @@ describe("globeFocusState (#8)", () => {
       className: " is-globe-focus",
       dataAttribute: "on",
     });
+  });
+});
+
+const atlasCurrentHome: HomeBasePeriod = {
+  id: "home-shenzhen",
+  label: "Shenzhen",
+  latitude: 22.5431,
+  longitude: 114.0579,
+  startedOn: "2026-01-01",
+  endedOn: null,
+  source: "manual",
+};
+
+describe("ordinary Atlas Home runtime (ST-056)", () => {
+  it("presents one effective Home entry and none when private periods are absent", () => {
+    const presented = resolveOrdinaryAtlasHomePresence([atlasCurrentHome], "regional", "2026-09-10")
+      .filter((entry) => entry.presence !== "absent");
+    expect(presented).toHaveLength(1);
+    expect(presented[0]).toMatchObject({ periodId: atlasCurrentHome.id, presence: "current" });
+    expect(resolveOrdinaryAtlasHomePresence([], "regional", "2026-09-10")).toEqual([]);
+  });
+
+  it("distinguishes explicit Journey ownership from the default derived cursor selection", () => {
+    expect(explicitSelectedJourneyIdForHomeCamera(false, "derived-journey")).toBeNull();
+    expect(explicitSelectedJourneyIdForHomeCamera(true, "selected-journey")).toBe("selected-journey");
+  });
+
+  it("follows Globe Rewind dates and all-time state instead of pinning Home to today", () => {
+    const timeDomain = {
+      minTime: Date.UTC(2020, 0, 1),
+      maxTime: Date.UTC(2020, 0, 11),
+    };
+    expect(resolveAtlasHomeTimelineContext({
+      cursor: 1,
+      timeDomain,
+      timelineRevision: 0,
+      hasExplicitSelection: false,
+      effectiveDate: "2026-09-10",
+    })).toEqual({ kind: "ordinary", date: "2026-09-10" });
+    expect(resolveAtlasHomeTimelineContext({
+      cursor: 0.5,
+      timeDomain,
+      timelineRevision: 1,
+      hasExplicitSelection: false,
+      effectiveDate: "2026-09-10",
+    })).toEqual({ kind: "date", date: "2020-01-06" });
+    expect(resolveAtlasHomeTimelineContext({
+      cursor: 1,
+      timeDomain,
+      timelineRevision: 0,
+      hasExplicitSelection: true,
+      effectiveDate: "2026-09-10",
+    })).toEqual({ kind: "date", date: "2020-01-11" });
+    expect(resolveAtlasHomeTimelineContext({
+      cursor: 1,
+      timeDomain,
+      timelineRevision: 1,
+      hasExplicitSelection: false,
+      effectiveDate: "2026-09-10",
+    })).toEqual({ kind: "all-time", date: "2026-09-10" });
+
+    const historicalHome: HomeBasePeriod = {
+      ...atlasCurrentHome,
+      id: "home-2020",
+      label: "Old Home",
+      startedOn: "2019-01-01",
+      endedOn: "2021-01-01",
+    };
+    const rewindPresence = resolveHomeBasePresence({
+      periods: [historicalHome, atlasCurrentHome],
+      semanticZoom: "regional",
+      timeline: { kind: "date", date: "2020-01-06" },
+    });
+    expect(rewindPresence.find((entry) => entry.periodId === historicalHome.id)?.presence).toBe("period-context");
+    expect(rewindPresence.find((entry) => entry.periodId === atlasCurrentHome.id)?.presence).toBe("absent");
+    const allTimePresence = resolveHomeBasePresence({
+      periods: [historicalHome, atlasCurrentHome],
+      semanticZoom: "regional",
+      timeline: { kind: "all-time", date: "2026-09-10" },
+    });
+    expect(allTimePresence.find((entry) => entry.periodId === historicalHome.id)?.presence).toBe("trace");
+    expect(allTimePresence.find((entry) => entry.periodId === atlasCurrentHome.id)?.presence).toBe("current");
+  });
+
+  it("advances the semantic revision when async Home seeding clears stale fallback focus", () => {
+    expect(nextInitialHomeCameraFocusRevision(0)).toBe(1);
+    expect(nextInitialHomeCameraFocusRevision(7)).toBe(8);
+    const source = readFileSync(new URL("./LivingAtlasApp.tsx", import.meta.url), "utf8");
+    expect(source).toContain("setInitialHomeCameraRevision(nextInitialHomeCameraFocusRevision)");
+    expect(source).toContain("+ initialHomeCameraRevision");
+  });
+
+  it("seeds Home camera only for a fresh, unclaimed Atlas with no selected Journey", () => {
+    const base = {
+      periods: [atlasCurrentHome],
+      effectiveDate: "2026-09-10",
+      atlasIsFresh: true,
+      hasManualCameraInteraction: false,
+      selectedJourneyId: null,
+    };
+    expect(resolveInitialAtlasHomeCameraIntent(base)).toMatchObject({
+      kind: "initial-home",
+      homeBaseId: atlasCurrentHome.id,
+      latitude: atlasCurrentHome.latitude,
+      longitude: atlasCurrentHome.longitude,
+    });
+    expect(resolveInitialAtlasHomeCameraIntent({ ...base, hasManualCameraInteraction: true })).toBeNull();
+    expect(resolveInitialAtlasHomeCameraIntent({ ...base, selectedJourneyId: "journey-1" })).toBeNull();
+    expect(resolveInitialAtlasHomeCameraIntent({ ...base, atlasIsFresh: false })).toBeNull();
+  });
+
+  it("suppresses the untouched timeline point while Home owns the fresh Atlas camera, then restores explicit point focus", () => {
+    const journeyWithPoint: Journey = {
+      id: "journey-latest",
+      atlasId: "atlas-1",
+      title: "Latest Journey",
+      startedOn: "2026-08-25",
+      endedOn: null,
+      note: "",
+      lightColor: "#8ad9d0",
+      revision: 1,
+      createdByUserId: "user-1",
+      createdAt: "2026-08-25T00:00:00.000Z",
+      updatedAt: "2026-08-25T00:00:00.000Z",
+      routePoints: [{
+        id: "point-latest",
+        journeyId: "journey-latest",
+        sortOrder: 0,
+        latitude: 31.2304,
+        longitude: 121.4737,
+        label: "Shanghai",
+        isStop: true,
+        occurredAt: "2026-08-25T12:00:00.000Z",
+        note: null,
+        createdAt: "2026-08-25T00:00:00.000Z",
+      }],
+      media: [],
+    };
+    const timeline = buildJourneyTimeline([journeyWithPoint]);
+    const untouchedSelection = resolveJourneyTimelineSelection(timeline.entries, 1);
+    expect(untouchedSelection).toMatchObject({ journeyId: journeyWithPoint.id, pointIndex: 0 });
+
+    const presentation = resolveMobilePlaybackPresentation([journeyWithPoint], untouchedSelection);
+    expect(presentation.focusPoint).toEqual({ lat: 31.2304, lon: 121.4737 });
+    const derivedJourneyOwner = explicitSelectedJourneyIdForHomeCamera(
+      false,
+      untouchedSelection?.journeyId ?? null,
+    );
+    const homeIntent = resolveInitialAtlasHomeCameraIntent({
+      periods: [atlasCurrentHome],
+      effectiveDate: "2026-09-10",
+      atlasIsFresh: true,
+      hasManualCameraInteraction: false,
+      selectedJourneyId: derivedJourneyOwner,
+    });
+    const homeAnchor = homeIntent
+      ? { lat: homeIntent.latitude, lon: homeIntent.longitude }
+      : null;
+    expect(homeAnchor).toEqual({ lat: atlasCurrentHome.latitude, lon: atlasCurrentHome.longitude });
+    expect(resolveInitialHomeOwnedFocusPoint(presentation.focusPoint, homeAnchor)).toBeNull();
+
+    const explicitJourneyOwner = explicitSelectedJourneyIdForHomeCamera(true, journeyWithPoint.id);
+    expect(resolveInitialAtlasHomeCameraIntent({
+      periods: [atlasCurrentHome],
+      effectiveDate: "2026-09-10",
+      atlasIsFresh: true,
+      hasManualCameraInteraction: false,
+      selectedJourneyId: explicitJourneyOwner,
+    })).toBeNull();
+    expect(resolveInitialHomeOwnedFocusPoint(presentation.focusPoint, null))
+      .toEqual({ lat: 31.2304, lon: 121.4737 });
+
+    const source = readFileSync(new URL("./LivingAtlasApp.tsx", import.meta.url), "utf8");
+    expect(source).toContain("focusPoint={playbackCameraUsesPointFocus(playbackCameraTarget)");
+    expect(source).toContain("resolveInitialHomeOwnedFocusPoint(focusPoint, initialHomeCameraAnchor)");
+  });
+
+  it("passes Home only from the private Home source and publishes semantic/manual camera ownership", () => {
+    const source = readFileSync(new URL("./LivingAtlasApp.tsx", import.meta.url), "utf8");
+    expect(source).toContain("homeBasePresence={listHomeBasePeriods ? {");
+    expect(source).toContain("onSemanticZoomChange={setAtlasSemanticZoom}");
+    expect(source).toContain("onManualCameraInteraction={claimManualAtlasCamera}");
+    expect(source).toContain("initialHomeCameraAnchor ? null : focusRoute");
+    expect(source).toContain("initialCameraAnchor={initialHomeCameraAnchor}");
+    expect(source).toContain("timeCursor.hasExplicitSelection");
+    expect(source).toContain("timeCursor.timelineRevision > 0");
+    expect(source).toContain("timeline: atlasHomeTimelineContext");
+    expect(source).toContain("playbackActive || timeCursor.timelineRevision > 0");
+    expect(source).toContain("Math.max(focusRevision + initialHomeCameraRevision, playbackReleaseFocusRevision)");
+    expect(source).toContain('inert={view !== "planet" || undefined}');
+    const cursorSource = readFileSync(new URL("./useGlobeTimeCursor.ts", import.meta.url), "utf8");
+    expect(cursorSource).toContain("hasExplicitSelection: selectionOwner !== null");
   });
 });
 

@@ -29,6 +29,9 @@ import {
 import { JourneyPlaybackOverlay } from "./JourneyPlaybackOverlay";
 import { resolveHomeNarrativeContext, type HomeNarrativeContext } from "./homeBasePrelude";
 import type { HomeBasePeriod } from "./homeBase";
+import { resolveHomeBaseCameraIntent, type HomeBaseCameraIntent } from "./homeBaseCameraPolicy";
+import { resolveHomeBasePresence, type HomeBaseTimelineContext, type ResolvedHomeBasePresence } from "./homeBasePresence";
+import type { GlobeSemanticZoom } from "../scene/semanticZoom";
 import {
   prepareQuickRecapPlaybackResult,
   quickRecapDigestsForJourney,
@@ -87,6 +90,70 @@ import type { Journey, JourneyRoute } from "./types";
 type AtlasView = "planet" | "timeline";
 
 type AtlasNotice = { id: number; message: string };
+
+export function atlasHomeEffectiveDate(now: Date) {
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+export function resolveOrdinaryAtlasHomePresence(
+  periods: readonly HomeBasePeriod[],
+  semanticZoom: GlobeSemanticZoom,
+  effectiveDate: string,
+): ResolvedHomeBasePresence[] {
+  return resolveHomeBasePresence({
+    periods,
+    semanticZoom,
+    timeline: { kind: "ordinary", date: effectiveDate },
+  });
+}
+
+export function resolveAtlasHomeTimelineContext(input: {
+  cursor: number;
+  timeDomain: { minTime: number; maxTime: number } | null;
+  timelineRevision: number;
+  hasExplicitSelection: boolean;
+  effectiveDate: string;
+}): HomeBaseTimelineContext {
+  if (!input.timeDomain) return { kind: "ordinary", date: input.effectiveDate };
+  if (input.cursor < 1 || input.hasExplicitSelection) {
+    return { kind: "date", date: formatCursorDate(input.cursor, input.timeDomain) };
+  }
+  if (input.timelineRevision > 0) {
+    return { kind: "all-time", date: input.effectiveDate };
+  }
+  return { kind: "ordinary", date: input.effectiveDate };
+}
+
+export function explicitSelectedJourneyIdForHomeCamera(
+  hasExplicitSelection: boolean,
+  selectionJourneyId: string | null,
+): string | null {
+  return hasExplicitSelection ? selectionJourneyId : null;
+}
+
+export function nextInitialHomeCameraFocusRevision(current: number) {
+  return current + 1;
+}
+
+export function resolveInitialAtlasHomeCameraIntent(input: {
+  periods: readonly HomeBasePeriod[];
+  effectiveDate: string;
+  atlasIsFresh: boolean;
+  hasManualCameraInteraction: boolean;
+  selectedJourneyId: string | null;
+}): HomeBaseCameraIntent | null {
+  return resolveHomeBaseCameraIntent(input);
+}
+
+export function resolveInitialHomeOwnedFocusPoint(
+  focusPoint: { lat: number; lon: number } | null,
+  initialHomeCameraAnchor: { lat: number; lon: number } | null,
+): { lat: number; lon: number } | null {
+  return initialHomeCameraAnchor ? null : focusPoint;
+}
 
 export async function loadJourneyRowsWithOptionalHome({
   listJourneys,
@@ -521,6 +588,11 @@ export function LivingAtlasApp({
   const setCinematicIsolation = useAtlasCinematicIsolation();
   const [journeys, setJourneys] = useState<Journey[]>([]);
   const [homeBasePeriods, setHomeBasePeriods] = useState<HomeBasePeriod[]>([]);
+  const [atlasSemanticZoom, setAtlasSemanticZoom] = useState<GlobeSemanticZoom>("planet");
+  const [hasManualAtlasCameraInteraction, setHasManualAtlasCameraInteraction] = useState(false);
+  const [initialHomeCameraIntent, setInitialHomeCameraIntent] = useState<HomeBaseCameraIntent | null>(null);
+  const [initialHomeCameraRevision, setInitialHomeCameraRevision] = useState(0);
+  const atlasHomeCameraFreshRef = useRef(true);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [loadError, setLoadError] = useState("");
   const [view, setView] = useState<AtlasView>("planet");
@@ -678,6 +750,62 @@ export function LivingAtlasApp({
   // the user is in globe focus mode; entering playback pauses rewind.
   const timeCursor = useGlobeTimeCursor(journeys);
   const activeJourneyId = timeCursor.selection?.journeyId ?? journeys.at(-1)?.id ?? null;
+  const selectedJourneyIdForHomeCamera = explicitSelectedJourneyIdForHomeCamera(
+    timeCursor.hasExplicitSelection,
+    timeCursor.selection?.journeyId ?? null,
+  );
+  const homeEffectiveDate = atlasHomeEffectiveDate(new Date());
+  const atlasHomeTimelineContext = useMemo(
+    () => resolveAtlasHomeTimelineContext({
+      cursor: timeCursor.cursor,
+      timeDomain: timeCursor.timeDomain,
+      timelineRevision: timeCursor.timelineRevision,
+      hasExplicitSelection: timeCursor.hasExplicitSelection,
+      effectiveDate: homeEffectiveDate,
+    }),
+    [
+      homeEffectiveDate,
+      timeCursor.cursor,
+      timeCursor.hasExplicitSelection,
+      timeCursor.timeDomain?.maxTime,
+      timeCursor.timeDomain?.minTime,
+      timeCursor.timelineRevision,
+    ],
+  );
+  const ordinaryAtlasHomePresence = useMemo(
+    () => listHomeBasePeriods
+      ? resolveHomeBasePresence({
+          periods: homeBasePeriods,
+          semanticZoom: atlasSemanticZoom,
+          timeline: atlasHomeTimelineContext,
+        })
+      : [],
+    [atlasHomeTimelineContext, atlasSemanticZoom, homeBasePeriods, listHomeBasePeriods],
+  );
+  const claimManualAtlasCamera = useCallback(() => {
+    atlasHomeCameraFreshRef.current = false;
+    setHasManualAtlasCameraInteraction(true);
+    setInitialHomeCameraIntent(null);
+  }, []);
+  useEffect(() => {
+    if (selectedJourneyIdForHomeCamera !== null || hasManualAtlasCameraInteraction || playbackActive || timeCursor.timelineRevision > 0) {
+      atlasHomeCameraFreshRef.current = false;
+      setInitialHomeCameraIntent(null);
+      return;
+    }
+    if (!listHomeBasePeriods || !atlasHomeCameraFreshRef.current || initialHomeCameraIntent) return;
+    const intent = resolveInitialAtlasHomeCameraIntent({
+      periods: homeBasePeriods,
+      effectiveDate: homeEffectiveDate,
+      atlasIsFresh: true,
+      hasManualCameraInteraction: false,
+      selectedJourneyId: null,
+    });
+    if (!intent) return;
+    atlasHomeCameraFreshRef.current = false;
+    setInitialHomeCameraRevision(nextInitialHomeCameraFocusRevision);
+    setInitialHomeCameraIntent(intent);
+  }, [hasManualAtlasCameraInteraction, playbackActive, homeBasePeriods, homeEffectiveDate, initialHomeCameraIntent, listHomeBasePeriods, selectedJourneyIdForHomeCamera, timeCursor.timelineRevision]);
   useEffect(() => {
     const intent = routePointContextSelection.intent;
     if (!intent) return;
@@ -856,6 +984,11 @@ export function LivingAtlasApp({
   const focusRoute = focusPresentation.point
     ? null
     : routes.find((route) => route.id === focusPresentation.activeRouteId) ?? null;
+  const initialHomeCameraAnchor = initialHomeCameraIntent
+    && selectedJourneyIdForHomeCamera === null
+    && !hasManualAtlasCameraInteraction
+    ? { lat: initialHomeCameraIntent.latitude, lon: initialHomeCameraIntent.longitude }
+    : null;
   const focusRevision = focusPresentation.focusRevision + (timeCursor.selectionRevision + timeCursor.timelineRevision) * 100_000;
   useEffect(() => {
     if (!playbackOwnership.releaseStaleState) return;
@@ -1198,6 +1331,8 @@ export function LivingAtlasApp({
     setStoryInitialAssetId(null);
     setStoryInitialSnapState("in-context");
     setStoryFocusVisibleControlOnOpen(false);
+    atlasHomeCameraFreshRef.current = false;
+    setInitialHomeCameraIntent(null);
     setPlaybackSession({
       journeyId,
       soundtrackRead: cachedRead,
@@ -1343,22 +1478,30 @@ export function LivingAtlasApp({
       data-arrival-journey={arrivalJourneyId ?? undefined}
       data-journey-count={journeys.length}
     >
-      <div className="living-atlas__globe" aria-hidden={view !== "planet"}>
+      <div
+        className="living-atlas__globe"
+        aria-hidden={view !== "planet"}
+        inert={view !== "planet" || undefined}
+      >
         {lightweightGlobe ? (
           <div className="living-atlas__qa-globe" aria-hidden="true" />
         ) : (
           <GlobeComponent
             focusPoint={playbackCameraUsesPointFocus(playbackCameraTarget)
               ? playbackFocusPoint
-              : focusPoint}
+              : resolveInitialHomeOwnedFocusPoint(focusPoint, initialHomeCameraAnchor)}
             focusRoute={playbackCameraTarget
               ? playbackFocusRoute
-              : focusRoute}
-            focusRevision={playbackSession.cameraCommand?.revision ?? Math.max(focusRevision, playbackReleaseFocusRevision)}
+              : initialHomeCameraAnchor ? null : focusRoute}
+            initialCameraAnchor={initialHomeCameraAnchor}
+            focusRevision={playbackSession.cameraCommand?.revision
+              ?? (initialHomeCameraAnchor
+                ? Math.max(focusRevision, playbackReleaseFocusRevision) + initialHomeCameraRevision
+                : Math.max(focusRevision, playbackReleaseFocusRevision))}
             focusFlightProfile={playbackCameraTarget?.kind === "point" ? playbackCameraTarget.choreography : undefined}
             focusColor={focusPresentation.journey?.lightColor}
             journeyRoutes={routes}
-            activeJourneyRouteId={draftRoute?.id ?? activeJourneyId}
+            activeJourneyRouteId={draftRoute?.id ?? (initialHomeCameraAnchor ? null : activeJourneyId)}
             mediaCoverHint={{
               opaqueMediaCover: storyGlobeCover.opaqueMediaCover || playbackGlobeCover.opaqueMediaCover,
               coverTransitionActive: storyGlobeCover.coverTransitionActive || playbackGlobeCover.coverTransitionActive,
@@ -1369,6 +1512,13 @@ export function LivingAtlasApp({
                 points: timeCursor.reveal.pointProgress,
               }
               : undefined}
+            homeBasePresence={listHomeBasePeriods ? {
+              resolved: ordinaryAtlasHomePresence,
+              periods: homeBasePeriods,
+              effectiveDate: homeEffectiveDate,
+            } : undefined}
+            onSemanticZoomChange={setAtlasSemanticZoom}
+            onManualCameraInteraction={claimManualAtlasCamera}
             showControls={showsGlobeModeChrome(isMobileV2, globeFocusMode)}
             globeFocusMode={globeFocusMode}
             onJourneyRouteActivate={(id) => {
@@ -1977,7 +2127,11 @@ export function LivingAtlasApp({
           onCameraTargetChange={(target) => {
             setPlaybackSession((current) => ({
               ...current,
-              cameraCommand: nextPlaybackCameraCommand(current.cameraCommand, target, Math.max(focusRevision, playbackReleaseFocusRevision)),
+              cameraCommand: nextPlaybackCameraCommand(
+                current.cameraCommand,
+                target,
+                Math.max(focusRevision + initialHomeCameraRevision, playbackReleaseFocusRevision),
+              ),
             }));
           }}
           initialSoundtrackRead={playbackSession.soundtrackRead}
