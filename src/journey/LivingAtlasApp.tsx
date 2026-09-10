@@ -1478,7 +1478,11 @@ export function LivingAtlasApp({
       data-arrival-journey={arrivalJourneyId ?? undefined}
       data-journey-count={journeys.length}
     >
-      <div className="living-atlas__globe" aria-hidden={view !== "planet"}>
+      <div
+        className="living-atlas__globe"
+        aria-hidden={view !== "planet"}
+        inert={view !== "planet" || undefined}
+      >
         {lightweightGlobe ? (
           <div className="living-atlas__qa-globe" aria-hidden="true" />
         ) : (

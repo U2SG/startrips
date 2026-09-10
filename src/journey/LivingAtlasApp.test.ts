@@ -249,6 +249,7 @@ describe("ordinary Atlas Home runtime (ST-056)", () => {
     expect(source).toContain("timeline: atlasHomeTimelineContext");
     expect(source).toContain("playbackActive || timeCursor.timelineRevision > 0");
     expect(source).toContain("Math.max(focusRevision + initialHomeCameraRevision, playbackReleaseFocusRevision)");
+    expect(source).toContain('inert={view !== "planet" || undefined}');
     const cursorSource = readFileSync(new URL("./useGlobeTimeCursor.ts", import.meta.url), "utf8");
     expect(cursorSource).toContain("hasExplicitSelection: selectionOwner !== null");
   });
