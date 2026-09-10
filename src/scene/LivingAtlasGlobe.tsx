@@ -12,7 +12,7 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
-import { IconMap2, IconMapPin, IconWorld } from "@tabler/icons-react";
+import { IconMapPin } from "@tabler/icons-react";
 import type { HomeBasePeriod } from "../journey/homeBase";
 import type { ResolvedHomeBasePresence } from "../journey/homeBasePresence";
 import type { PlaybackTravelChoreography } from "../journey/journeyPlayback";
@@ -49,15 +49,10 @@ import {
 const loadDetailedEarthMap = () => import("./DetailedEarthMap");
 const DetailedEarthMap = lazy(loadDetailedEarthMap);
 
-// #252: the control is the fallback COMMAND for the same Semantic Earth Dive,
-// not a second product mode. Its label reports where the zoom-driven
-// controller stands.
-const DIVE_PENDING_LABEL = "正在深入真实地图…";
-
 type LivingAtlasGlobeControlsProps = {
   diveStage: EarthDiveStage;
   detailLanguage: DetailedEarthLanguage;
-  onModeToggle: () => void;
+  onDiveIntent: () => void;
   onDetailLanguageChange: (language: DetailedEarthLanguage) => void;
   onPickRequest?: () => void;
   inert?: boolean;
@@ -66,29 +61,30 @@ type LivingAtlasGlobeControlsProps = {
 export function LivingAtlasGlobeControls({
   diveStage,
   detailLanguage,
-  onModeToggle,
+  onDiveIntent,
   onDetailLanguageChange,
   onPickRequest,
   inert = false,
 }: LivingAtlasGlobeControlsProps) {
   const detailMode = diveStage === "detail";
-  const pending = diveStage === "prewarm" || diveStage === "blending";
+  const diveIntentLabel = diveStage === "particle" ? "靠近查看更多细节" : "返回远景";
   return (
     <div
       className="living-atlas-globe__controls"
       inert={inert || undefined}
       aria-hidden={inert || undefined}
     >
+      {/* #308: keyboard fallback for the SAME semantic Dive. It is visually
+          quiet until keyboard focus reaches it, and names the spatial intent
+          rather than exposing either renderer as a product mode. */}
       <button
         type="button"
-        className="living-atlas-globe__mode"
-        onClick={onModeToggle}
-        aria-label={detailMode ? "返回粒子地球" : "深入真实地图"}
-        aria-pressed={detailMode}
+        className="living-atlas-globe__dive-intent"
+        data-earth-dive-intent="true"
+        onClick={onDiveIntent}
+        aria-label={diveIntentLabel}
       >
-        {detailMode ? <IconWorld size={16} stroke={1.25} aria-hidden="true" /> : <IconMap2 size={16} stroke={1.25} aria-hidden="true" />}
-        <span>{pending ? DIVE_PENDING_LABEL : detailMode ? "返回粒子地球" : "深入真实地图"}</span>
-        <small>{detailMode ? "ART GLOBE" : "REGION MAP"}</small>
+        {diveIntentLabel}
       </button>
 
       {detailMode ? (
@@ -349,13 +345,14 @@ export function LivingAtlasGlobe({
   mediaCoverHint,
 }: LivingAtlasGlobeProps) {
   const persistentEarth = usePersistentEarth();
+  const compactMobileLayout = useCompactMobileLayout();
   const [detailLanguage, setDetailLanguage] = useState<DetailedEarthLanguage>("zh");
   const [gestureHint, signalGestureHint] = useReducer(
     resolveGlobeGestureHint,
     initialGlobeGestureHintState,
   );
   const gestureHintVisible = globeGestureHintVisible(gestureHint);
-  const modeNoteVisible = globeModeNoteVisible(gestureHint, { globeFocusMode, showControls });
+  const modeNoteVisible = globeModeNoteVisible(gestureHint, { globeFocusMode, compactMobileLayout });
   const homeBaseLayer = useMemo(() => resolveLivingAtlasHomeBaseLayer(homeBasePresence), [homeBasePresence]);
   const homeBaseElementsRef = useRef(new Map<string, HTMLDivElement>());
   const homeBaseFramesRef = useRef(new Map<string, ProjectedHomeBasePresence>());
@@ -463,10 +460,10 @@ export function LivingAtlasGlobe({
     }
   }, []);
 
-  // The control is one command with one meaning: "take me to the other
-  // surface". Pressed while the dive is still pending it CANCELS, which is the
-  // only way back out when the detail style never becomes available — the
-  // 12 s load timeout that used to recover from that is gone on purpose.
+  // #308: wheel/pinch and the keyboard intent affordance converge here. This
+  // remains one semantic navigation command rather than a renderer switch.
+  // Invoked while a Dive is pending or owned by detail, it releases back to
+  // the overview path; the readiness/failure semantics remain owned by #252.
   const requestDive = useCallback(() => {
     if (diveRef.current.stage !== "particle") {
       releaseDive();
@@ -689,18 +686,17 @@ export function LivingAtlasGlobe({
         <LivingAtlasGlobeControls
           diveStage={dive.stage}
           detailLanguage={detailLanguage}
-          onModeToggle={requestDive}
+          onDiveIntent={requestDive}
           onDetailLanguageChange={setDetailLanguage}
           onPickRequest={onPickRequest}
           inert={cinematicActive}
         />
       ) : null}
 
-      {/* #253: one resolver owns this node in both compositions. In focus mode
-          it is transient onboarding — once dismissed it is gone rather than
-          transparent, so no permanent rectangle or layout reservation survives
-          it. Ordinary Atlas keeps the permanent line it has always had; #253
-          does not own that surface's discoverability. */}
+      {/* #308: one resolver owns gesture-note discoverability. Focus mode keeps
+          #253's transient onboarding; ordinary desktop keeps one quiet gesture
+          line even though renderer-mode chrome is gone; compact mobile stays
+          uncluttered and relies on its native pinch gesture. */}
       {modeNoteVisible ? (
         <div className="living-atlas-globe__mode-note" aria-hidden="true">
           {dive.stage === "prewarm" || dive.stage === "blending"

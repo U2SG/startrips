@@ -725,23 +725,32 @@ async function verifyDetailedEarthParticleContinuity() {
       throw new Error(`persistent particle-earth responsive handoff failed: ${JSON.stringify(desktopBoundary)}`);
     }
 
-    const detailModeButton = gateway.page.getByRole("button", { name: "深入真实地图" });
-    const detailModeHit = await detailModeButton.evaluate((button) => {
+    const diveIntent = gateway.page.locator('[data-earth-dive-intent="true"]');
+    if (await diveIntent.count() !== 1) {
+      throw new Error("Semantic Earth Dive keyboard intent affordance is missing or duplicated");
+    }
+    await diveIntent.focus();
+    const diveIntentState = await diveIntent.evaluate((button) => {
       const rect = button.getBoundingClientRect();
       const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+      const name = button.getAttribute("aria-label") ?? "";
       return {
+        name,
+        focused: document.activeElement === button,
+        visible: getComputedStyle(button).visibility !== "hidden" && Number(getComputedStyle(button).opacity) > 0.01,
         hitOwned: hit === button || button.contains(hit),
         hitTag: hit?.tagName ?? null,
         hitClass: hit instanceof HTMLElement || hit instanceof SVGElement ? hit.getAttribute("class") : null,
         hitAriaLabel: hit instanceof Element ? hit.getAttribute("aria-label") : null,
         buttonPointerEvents: getComputedStyle(button).pointerEvents,
         buttonRect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+        forbiddenModeLanguage: /真实地图|REGION MAP|ART GLOBE|particle|detail/i.test(name),
       };
     });
-    if (!detailModeHit.hitOwned) {
-      throw new Error(`detailed-earth mode control is covered: ${JSON.stringify(detailModeHit)}`);
+    if (!diveIntentState.focused || !diveIntentState.visible || !diveIntentState.hitOwned || diveIntentState.forbiddenModeLanguage) {
+      throw new Error(`Semantic Earth Dive keyboard intent is not actionable: ${JSON.stringify(diveIntentState)}`);
     }
-    await detailModeButton.click();
+    await gateway.page.keyboard.press("Enter");
     try {
       await gateway.page.locator(".detailed-earth-map").waitFor({
         state: "attached",
@@ -787,7 +796,12 @@ async function verifyDetailedEarthParticleContinuity() {
       };
     });
 
-    await gateway.page.getByRole("button", { name: "返回粒子地球" }).click();
+    await diveIntent.focus();
+    const returnIntentName = await diveIntent.getAttribute("aria-label");
+    if (!returnIntentName || /真实地图|REGION MAP|ART GLOBE|particle|detail/i.test(returnIntentName)) {
+      throw new Error(`Semantic Earth Dive return intent leaked renderer terminology: ${returnIntentName}`);
+    }
+    await gateway.page.keyboard.press("Enter");
     await gateway.page.waitForFunction(() => (
       document.querySelector(".living-atlas-globe")?.getAttribute("data-earth-mode") === "particle"
     ), null, { timeout: 5_000 });

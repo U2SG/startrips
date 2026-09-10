@@ -118,7 +118,6 @@
 }
 
 /* --- Globe control cluster: unify interaction feedback --- */
-.living-atlas .living-atlas-globe__mode,
 .living-atlas .living-atlas-globe__language button,
 .living-atlas .living-atlas-globe__pick {
   transition:
