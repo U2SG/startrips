@@ -31,6 +31,8 @@ import { resolveHomeNarrativeContext, type HomeNarrativeContext } from "./homeBa
 import type { HomeBasePeriod } from "./homeBase";
 import {
   prepareQuickRecapPlaybackResult,
+  quickRecapDigestsForJourney,
+  quickRecapRouteGeometry,
   quickRecapStepDurationMs,
   quickRecapStepTrim,
   type PreparedQuickRecapPlayback,
@@ -458,6 +460,27 @@ export function railContentSignature(journeys: readonly Journey[]): string {
     .join("\n");
 }
 
+// ST-011: the Full-only overflow choice is derived from Quick Recap planning
+// truth, which is narrower than the Journey object but broader than revision.
+// Reuse the planner's own normalized digest + route geometry inputs so same-ID
+// media edits cannot leave a stale derived choice behind.
+export function quickRecapPlanningContentFingerprint(journey: Journey | null): string {
+  if (!journey) return "";
+  const digests = quickRecapDigestsForJourney(journey);
+  const digestRoutePointIds = new Set(digests.map((digest) => digest.routePointId));
+  const routePointIds = journey.routePoints
+    .filter((point) => digestRoutePointIds.has(point.id))
+    .map((point) => point.id);
+  return JSON.stringify({
+    journeyId: journey.id,
+    journeyRevision: journey.revision,
+    coverMediaAssetId: journey.coverMediaAssetId ?? null,
+    routePointIds,
+    digests,
+    routePointGeometry: quickRecapRouteGeometry(journey, routePointIds),
+  });
+}
+
 // Callback ref (not useRef) so the observer always attaches to the currently
 // mounted rail: switching to the timeline or Mobile V2 unmounts the <ol>, and
 // a detached element would otherwise keep the stale measurement forever.
@@ -535,7 +558,10 @@ export function LivingAtlasApp({
     mode: "full" | "quick-recap";
     fallbackMessage: string | null;
   } | null>(null);
-  const [playbackOverBudgetChoiceJourneyId, setPlaybackOverBudgetChoiceJourneyId] = useState<string | null>(null);
+  const [playbackOverBudgetChoice, setPlaybackOverBudgetChoice] = useState<{
+    journeyId: string;
+    planningContentFingerprint: string;
+  } | null>(null);
   const playbackOverBudgetActionRef = useRef<HTMLButtonElement | null>(null);
   const previousPlaybackPendingRef = useRef<typeof playbackPendingMode>(null);
   const [playbackFallbackMessage, setPlaybackFallbackMessage] = useState<string | null>(null);
@@ -781,6 +807,10 @@ export function LivingAtlasApp({
   }, [notice, undoJourney, clearNotice]);
 
   const activeJourney = journeys.find((journey) => journey.id === activeJourneyId) ?? null;
+  const activeJourneyQuickRecapPlanningFingerprint = useMemo(
+    () => quickRecapPlanningContentFingerprint(activeJourney),
+    [activeJourney],
+  );
   const editingJourney = journeys.find((journey) => journey.id === editingJourneyId) ?? null;
   // Review P1: prefetch the soundtrack read while the active card is visible
   // so 播放旅程 can start audio synchronously inside the click gesture.
@@ -790,15 +820,26 @@ export function LivingAtlasApp({
   }, [activeJourney?.id]);
   useEffect(() => {
     setPlaybackModeMenuJourneyId(null);
-    setPlaybackOverBudgetChoiceJourneyId(null);
+    setPlaybackOverBudgetChoice(null);
   }, [activeJourney?.id]);
   useEffect(() => {
-    setPlaybackOverBudgetChoiceJourneyId(null);
-  }, [activeJourney?.revision]);
+    setPlaybackOverBudgetChoice((current) => {
+      if (!current) return null;
+      if (current.journeyId !== activeJourney?.id) return null;
+      return current.planningContentFingerprint === activeJourneyQuickRecapPlanningFingerprint
+        ? current
+        : null;
+    });
+  }, [activeJourney?.id, activeJourneyQuickRecapPlanningFingerprint]);
+  const playbackOverBudgetChoiceIsCurrent = Boolean(
+    playbackOverBudgetChoice
+      && playbackOverBudgetChoice.journeyId === activeJourney?.id
+      && playbackOverBudgetChoice.planningContentFingerprint === activeJourneyQuickRecapPlanningFingerprint,
+  );
   useEffect(() => {
-    if (!playbackOverBudgetChoiceJourneyId) return;
+    if (!playbackOverBudgetChoiceIsCurrent) return;
     playbackOverBudgetActionRef.current?.focus();
-  }, [playbackOverBudgetChoiceJourneyId]);
+  }, [playbackOverBudgetChoiceIsCurrent]);
 
   const journeyRail = useMemo(() => [...journeys].reverse(), [journeys]);
   const routes = useMemo(() => {
@@ -1104,7 +1145,10 @@ export function LivingAtlasApp({
         setPlaybackQuickRecap(null);
         setPlaybackFallbackMessage("当前回顾时长放不下所有必要的旅程点。");
         setPlaybackPendingMode(null);
-        setPlaybackOverBudgetChoiceJourneyId(journeyId);
+        setPlaybackOverBudgetChoice({
+          journeyId,
+          planningContentFingerprint: quickRecapPlanningContentFingerprint(journey),
+        });
         setPlaybackModeMenuJourneyId(journeyId);
         return;
       }
@@ -1115,7 +1159,7 @@ export function LivingAtlasApp({
     } else if (!carriedFallbackMessage) {
       fallbackMessage = null;
     }
-    setPlaybackOverBudgetChoiceJourneyId(null);
+    setPlaybackOverBudgetChoice(null);
 
     const continuingPending = playbackPendingMode?.journeyId === journeyId
       && playbackEntryRef.current?.journeyId === journeyId;
@@ -1530,7 +1574,7 @@ export function LivingAtlasApp({
                   }
                 }}
               >
-                {playbackOverBudgetChoiceJourneyId === activeJourney.id ? (
+                {playbackOverBudgetChoiceIsCurrent ? (
                   <>
                     <span role="status" data-quick-recap-fallback-message="over-budget">
                       当前回顾时长放不下所有必要的旅程点。

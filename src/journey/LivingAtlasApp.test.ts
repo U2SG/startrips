@@ -21,6 +21,7 @@ import {
   playbackCameraUsesPointFocus,
   playbackFocusPointForCameraTarget,
   playbackFocusRouteForCameraTarget,
+  quickRecapPlanningContentFingerprint,
   nextAtlasNotice,
   pendingPlaybackStoryRestore,
   railContentSignature,
@@ -557,7 +558,7 @@ describe("Quick Recap over-budget choice (ST-011)", () => {
     const playbackEntryStart = appSource.indexOf("const continuingPending =", branchStart);
 
     expect(branchStart).toBeGreaterThan(0);
-    expect(branch).toContain("setPlaybackOverBudgetChoiceJourneyId(journeyId)");
+    expect(branch).toContain("setPlaybackOverBudgetChoice({");
     expect(branch).toContain("setPlaybackModeMenuJourneyId(journeyId)");
     expect(branch).toContain("return;");
     expect(branch).not.toContain('mode = "full"');
@@ -576,11 +577,67 @@ describe("Quick Recap over-budget choice (ST-011)", () => {
     expect(appSource).toContain("这段旅程还没有可用于快速回顾的照片或视频，已切换为完整播放。");
   });
 
-  it("invalidates a stale over-budget choice when the same Journey revision changes", () => {
-    const revisionDependency = appSource.indexOf("[activeJourney?.revision]");
-    const resetWindow = appSource.slice(Math.max(0, revisionDependency - 180), revisionDependency + 40);
-    expect(revisionDependency).toBeGreaterThan(0);
-    expect(resetWindow).toContain("setPlaybackOverBudgetChoiceJourneyId(null)");
+  it("keys a stored overflow decision to current Quick Recap planning truth", () => {
+    expect(appSource).toContain("activeJourneyQuickRecapPlanningFingerprint");
+    expect(appSource).toContain("[activeJourney?.id, activeJourneyQuickRecapPlanningFingerprint]");
+    expect(appSource).toContain("current.planningContentFingerprint === activeJourneyQuickRecapPlanningFingerprint");
+    expect(appSource).not.toContain("[activeJourney?.revision]");
+  });
+
+  it("changes the planning fingerprint for same-revision media topology and route geometry edits", () => {
+    const planningJourney: Journey = {
+      ...playbackJourney,
+      coverMediaAssetId: "asset-a",
+      routePoints: [
+        {
+          id: "point-a", journeyId: playbackJourney.id, sortOrder: 0, latitude: 22.54, longitude: 114.05,
+          label: "A", isStop: true, occurredAt: null, note: "short note", createdAt: playbackJourney.createdAt,
+        },
+        {
+          id: "point-b", journeyId: playbackJourney.id, sortOrder: 1, latitude: 39.90, longitude: 116.40,
+          label: "B", isStop: true, occurredAt: null, note: "second note", createdAt: playbackJourney.createdAt,
+        },
+      ],
+      media: [
+        {
+          id: "asset-a", journeyId: playbackJourney.id, routePointId: "point-a", storageDriver: "test",
+          storageKey: "a", fileName: "a.jpg", mimeType: "image/jpeg", bytes: 1, sortOrder: 0,
+          uploadedByUserId: "user-1", createdAt: playbackJourney.createdAt,
+        },
+        {
+          id: "asset-b", journeyId: playbackJourney.id, routePointId: "point-b", storageDriver: "test",
+          storageKey: "b", fileName: "b.jpg", mimeType: "image/jpeg", bytes: 1, sortOrder: 1,
+          uploadedByUserId: "user-1", createdAt: playbackJourney.createdAt,
+        },
+      ],
+    };
+    const baseline = quickRecapPlanningContentFingerprint(planningJourney);
+    const reordered: Journey = {
+      ...planningJourney,
+      media: planningJourney.media.map((asset) => asset.id === "asset-a"
+        ? { ...asset, sortOrder: 2 }
+        : { ...asset, sortOrder: 0 }),
+    };
+    const moved: Journey = {
+      ...planningJourney,
+      media: planningJourney.media.map((asset) => asset.id === "asset-b"
+        ? { ...asset, routePointId: "point-a" }
+        : asset),
+    };
+    const fewer: Journey = { ...planningJourney, media: planningJourney.media.slice(0, 1) };
+    const geometryChanged: Journey = {
+      ...planningJourney,
+      routePoints: planningJourney.routePoints.map((point) => point.id === "point-b"
+        ? { ...point, latitude: point.latitude + 1 }
+        : point),
+    };
+
+    expect(quickRecapPlanningContentFingerprint(reordered)).not.toBe(baseline);
+    expect(quickRecapPlanningContentFingerprint(moved)).not.toBe(baseline);
+    expect(quickRecapPlanningContentFingerprint(fewer)).not.toBe(baseline);
+    expect(quickRecapPlanningContentFingerprint(geometryChanged)).not.toBe(baseline);
+    expect(quickRecapPlanningContentFingerprint({ ...planningJourney, revision: planningJourney.revision + 1 })).not.toBe(baseline);
+    expect(quickRecapPlanningContentFingerprint({ ...planningJourney, updatedAt: "later" })).toBe(baseline);
   });
 });
 
