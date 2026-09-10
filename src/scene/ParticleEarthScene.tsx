@@ -2693,9 +2693,9 @@ export function ParticleEarthScene({
       host.dataset.journeyRouteVectorVertices = String(routeVertexCount);
       host.dataset.journeyRouteLabelCount = String(routeLabelCount);
       host.dataset.journeyRouteOverflow = String(routes.length - visibleRoutes.length);
-      host.dataset.routeStyle = "strands";
+      host.dataset.routeStyle = "quiet-core";
       // Rebuilding the layer clears its children, so the connector is put back
-      // last and therefore stays above the route strands.
+      // last and therefore stays above the route presentation.
       routeVectorLayer.appendChild(journeyConnectorPath);
       updateRouteLabelSafeArea();
     };

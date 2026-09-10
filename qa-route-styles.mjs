@@ -28,13 +28,15 @@ snap("INIT", await page.evaluate(() => {
   return {
     routeStyle: document.querySelector(".particle-earth-scene")?.dataset.routeStyle ?? null,
     switcherRemoved: document.querySelectorAll("[data-route-style-option]").length === 0,
-    strandA: Boolean(group?.querySelector(".particle-earth-route__strand-a")),
-    strandB: Boolean(group?.querySelector(".particle-earth-route__strand-b")),
-    strandDash: group ? getComputedStyle(group.querySelector(".particle-earth-route__strand-a")).strokeDasharray : null,
-    coreGradient: group?.querySelector(".particle-earth-route__core")?.getAttribute("stroke")?.startsWith("url(#") ?? false,
+    leader: Boolean(group?.querySelector(".particle-earth-route__travel-leader")),
+    leaderDash: (() => {
+      const leader = group?.querySelector(".particle-earth-route__travel-leader");
+      return leader ? getComputedStyle(leader).strokeDasharray : null;
+    })(),
+    coreSolidIdentity: group?.querySelector(".particle-earth-route__core")?.getAttribute("stroke")?.startsWith("#") ?? false,
   };
 }));
-await page.screenshot({ path: "D:\\startrips\\qa-style-strands.png" });
+await page.screenshot({ path: "D:\\startrips\\qa-style-quiet-core.png" });
 
 // Activate one journey: active alone, others muted but visible.
 await page.click('[data-qa-route="qa-route-rhine"]');
