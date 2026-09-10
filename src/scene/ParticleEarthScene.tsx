@@ -5003,7 +5003,12 @@ export function ParticleEarthScene({
             periodId: descriptor.periodId,
             x: anchorFrameRect.x + homeBaseProjectionPoint.x,
             y: anchorFrameRect.y + homeBaseProjectionPoint.y,
-            visible,
+            visible: visible && isProjectedPointInsideViewport(
+              homeBaseProjectionPoint.x,
+              homeBaseProjectionPoint.y,
+              targetSize.x,
+              targetSize.y,
+            ),
           };
         });
         const homeBaseFrameChanged = nextHomeBasePresenceFrame.length !== publishedHomeBasePresenceFrame.length

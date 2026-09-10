@@ -80,6 +80,7 @@ describe("Home Base presence projection (ST-056)", () => {
     const source = readFileSync(new URL("./ParticleEarthScene.tsx", import.meta.url), "utf8");
     expect(source).toContain("projectLocalPoint(");
     expect(source).toContain("descriptor.anchor.x");
+    expect(source).toMatch(/visible:\s*visible\s*&&\s*isProjectedPointInsideViewport\(\s*homeBaseProjectionPoint\.x,/);
     expect(source).toContain("latestOnManualCameraInteraction.current?.()");
     expect(source).toContain("claimManualInteraction(false)");
   });
