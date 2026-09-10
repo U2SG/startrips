@@ -587,7 +587,7 @@ describe("Quick Recap over-budget choice (ST-011)", () => {
   it("changes the planning fingerprint for same-revision media topology and route geometry edits", () => {
     const planningJourney: Journey = {
       ...playbackJourney,
-      coverMediaAssetId: "asset-a",
+      coverMediaAssetId: null,
       routePoints: [
         {
           id: "point-a", journeyId: playbackJourney.id, sortOrder: 0, latitude: 22.54, longitude: 114.05,
