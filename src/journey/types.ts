@@ -11,6 +11,10 @@ export type JourneyMediaAsset = {
   bytes: number;
   sortOrder: number;
   uploadedByUserId: string;
+  // #127/ST-058: owner payloads carry the persisted byte-identity hash. Shared
+  // Journey projections intentionally omit it, so Quick Recap must treat the
+  // signal as optional and never invent a duplicate cluster for missing data.
+  contentHash?: string | null;
   // #260: the presentable size of this asset with its EXIF orientation
   // already applied, and the state of the derived preview beside it. Null
   // dimensions and a `none` state are the normal shape of every asset
