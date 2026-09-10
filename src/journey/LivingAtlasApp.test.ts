@@ -26,12 +26,15 @@ import {
   pendingPlaybackStoryRestore,
   railContentSignature,
   releaseStalePlaybackSession,
+  resolveInitialAtlasHomeCameraIntent,
+  resolveOrdinaryAtlasHomePresence,
   resolvePlaybackOwnership,
   resolveMobilePlaybackPresentation,
   showsGlobeModeChrome,
 } from "./LivingAtlasApp";
 import { playbackHoldReason, playbackMediaGate } from "./JourneyPlaybackOverlay";
 import { resolvePlaybackReturn } from "./playbackReturn";
+import type { HomeBasePeriod } from "./homeBase";
 import type { Journey } from "./types";
 
 // #8 globe focus mode: the root class/data contract drives the layout CSS
@@ -51,6 +54,53 @@ describe("globeFocusState (#8)", () => {
       className: " is-globe-focus",
       dataAttribute: "on",
     });
+  });
+});
+
+const atlasCurrentHome: HomeBasePeriod = {
+  id: "home-shenzhen",
+  label: "Shenzhen",
+  latitude: 22.5431,
+  longitude: 114.0579,
+  startedOn: "2026-01-01",
+  endedOn: null,
+  source: "manual",
+};
+
+describe("ordinary Atlas Home runtime (ST-056)", () => {
+  it("presents one effective Home entry and none when private periods are absent", () => {
+    const presented = resolveOrdinaryAtlasHomePresence([atlasCurrentHome], "regional", "2026-09-10")
+      .filter((entry) => entry.presence !== "absent");
+    expect(presented).toHaveLength(1);
+    expect(presented[0]).toMatchObject({ periodId: atlasCurrentHome.id, presence: "current" });
+    expect(resolveOrdinaryAtlasHomePresence([], "regional", "2026-09-10")).toEqual([]);
+  });
+
+  it("seeds Home camera only for a fresh, unclaimed Atlas with no selected Journey", () => {
+    const base = {
+      periods: [atlasCurrentHome],
+      effectiveDate: "2026-09-10",
+      atlasIsFresh: true,
+      hasManualCameraInteraction: false,
+      selectedJourneyId: null,
+    };
+    expect(resolveInitialAtlasHomeCameraIntent(base)).toMatchObject({
+      kind: "initial-home",
+      homeBaseId: atlasCurrentHome.id,
+      latitude: atlasCurrentHome.latitude,
+      longitude: atlasCurrentHome.longitude,
+    });
+    expect(resolveInitialAtlasHomeCameraIntent({ ...base, hasManualCameraInteraction: true })).toBeNull();
+    expect(resolveInitialAtlasHomeCameraIntent({ ...base, selectedJourneyId: "journey-1" })).toBeNull();
+    expect(resolveInitialAtlasHomeCameraIntent({ ...base, atlasIsFresh: false })).toBeNull();
+  });
+
+  it("passes Home only from the private Home source and publishes semantic/manual camera ownership", () => {
+    const source = readFileSync(new URL("./LivingAtlasApp.tsx", import.meta.url), "utf8");
+    expect(source).toContain("homeBasePresence={listHomeBasePeriods ? {");
+    expect(source).toContain("onSemanticZoomChange={setAtlasSemanticZoom}");
+    expect(source).toContain("onManualCameraInteraction={claimManualAtlasCamera}");
+    expect(source).toContain("ordinaryAtlasHomeFocusPoint ? null : focusRoute");
   });
 });
 

@@ -43,6 +43,7 @@ import {
 import type { PlaybackTravelChoreography } from "../journey/journeyPlayback";
 import { compactMobileLayoutMarker } from "../journey/mobileLayout";
 import type { JourneyRoute } from "../journey/types";
+import type { HomeBasePresenceDrawable, ProjectedHomeBasePresence } from "./homeBasePresenceLayer";
 import {
   buildArtworkPointPositions,
   buildSeededSpherePoints,
@@ -1227,6 +1228,11 @@ interface ParticleEarthSceneProps {
    * agree in screen space rather than assumed to.
    */
   onParticleAnchorFrame?: (frame: ParticleAnchorFrame | null) => void;
+  /** ST-056: resolved Home descriptors use this scene's canonical projection frame. */
+  homeBasePresence?: readonly HomeBasePresenceDrawable[];
+  onHomeBasePresenceFrame?: (frame: readonly ProjectedHomeBasePresence[]) => void;
+  /** First real wheel/drag/touch camera claim; programmatic focus never calls this. */
+  onManualCameraInteraction?: () => void;
   /**
    * #252: a camera hand-back. When a detail owner relinquishes the Semantic
    * Earth Dive it asks the particle camera to stand where the zoom authority
@@ -1584,6 +1590,9 @@ export function ParticleEarthScene({
   onReady,
   onSemanticZoomSnapshot,
   onParticleAnchorFrame,
+  homeBasePresence = [],
+  onHomeBasePresenceFrame,
+  onManualCameraInteraction,
   zoomIntent,
   onGlobePointPick,
   dragToRotate = false,
@@ -1611,6 +1620,9 @@ export function ParticleEarthScene({
   const latestOnReady = useRef(onReady);
   const latestOnSemanticZoomSnapshot = useRef(onSemanticZoomSnapshot);
   const latestOnParticleAnchorFrame = useRef(onParticleAnchorFrame);
+  const latestHomeBasePresence = useRef(homeBasePresence);
+  const latestOnHomeBasePresenceFrame = useRef(onHomeBasePresenceFrame);
+  const latestOnManualCameraInteraction = useRef(onManualCameraInteraction);
   const latestZoomIntent = useRef(zoomIntent);
   const latestOnGlobePointPick = useRef(onGlobePointPick);
   const latestDragToRotate = useRef(dragToRotate);
@@ -1635,6 +1647,9 @@ export function ParticleEarthScene({
   latestOnReady.current = onReady;
   latestOnSemanticZoomSnapshot.current = onSemanticZoomSnapshot;
   latestOnParticleAnchorFrame.current = onParticleAnchorFrame;
+  latestHomeBasePresence.current = homeBasePresence;
+  latestOnHomeBasePresenceFrame.current = onHomeBasePresenceFrame;
+  latestOnManualCameraInteraction.current = onManualCameraInteraction;
   latestZoomIntent.current = zoomIntent;
   latestOnGlobePointPick.current = onGlobePointPick;
   latestDragToRotate.current = dragToRotate;
@@ -2821,6 +2836,8 @@ export function ParticleEarthScene({
     // already inside a band still learns where it stands.
     let publishedSemanticZoomSnapshot: SemanticZoomSnapshot | null = null;
     let publishedAnchorFrame: ParticleAnchorFrame | null = null;
+    let publishedHomeBasePresenceFrame: ProjectedHomeBasePresence[] = [];
+    const homeBaseProjectionPoint = { x: 0, y: 0 };
     let anchorFrameRectSampledAt = 0;
     let appliedZoomIntentRevision = latestZoomIntent.current?.revision ?? null;
     const activePointers = new Map<number, { x: number; y: number }>();
@@ -3460,7 +3477,8 @@ export function ParticleEarthScene({
       if (!intersection) return null;
       return vector3ToLatLon(globe.worldToLocal(intersection.point.clone()));
     };
-    const claimManualInteraction = () => {
+    const claimManualInteraction = (publishExternalOwnership = true) => {
+      if (publishExternalOwnership) latestOnManualCameraInteraction.current?.();
       manualFocusRevision = latestFocusRevision.current;
       pointFocusSettling = false;
       routeFocusSettling = false;
@@ -4858,7 +4876,7 @@ export function ParticleEarthScene({
       const zoomIntentNow = latestZoomIntent.current;
       if (zoomIntentNow && zoomIntentNow.revision !== appliedZoomIntentRevision) {
         appliedZoomIntentRevision = zoomIntentNow.revision;
-        claimManualInteraction();
+        claimManualInteraction(false);
         applyAnchoredZoom(zoomIntentNow.zoom, null, interactionAnchorScreen);
       }
       semanticZoomState = resolveGlobeSemanticZoomForFrame({
@@ -4945,6 +4963,43 @@ export function ParticleEarthScene({
       personalMaterial.uniforms.uTime.value = motionTime;
 
       updateRouteVectorLayer();
+
+      if (latestOnHomeBasePresenceFrame.current) {
+        updateGeoProjectionFrame(geoFrame, camera, globe.matrixWorld, targetSize.x, targetSize.y);
+        if (now - anchorFrameRectSampledAt > 100) {
+          anchorFrameRectSampledAt = now;
+          const rect = renderer.domElement.getBoundingClientRect();
+          anchorFrameRect.set(rect.left, rect.top);
+        }
+        const nextHomeBasePresenceFrame = latestHomeBasePresence.current.map((descriptor) => {
+          const visible = projectLocalPoint(
+            geoFrame,
+            descriptor.anchor.x,
+            descriptor.anchor.y,
+            descriptor.anchor.z,
+            homeBaseProjectionPoint,
+          );
+          return {
+            periodId: descriptor.periodId,
+            x: anchorFrameRect.x + homeBaseProjectionPoint.x,
+            y: anchorFrameRect.y + homeBaseProjectionPoint.y,
+            visible,
+          };
+        });
+        const homeBaseFrameChanged = nextHomeBasePresenceFrame.length !== publishedHomeBasePresenceFrame.length
+          || nextHomeBasePresenceFrame.some((candidate, index) => {
+            const previous = publishedHomeBasePresenceFrame[index];
+            return !previous
+              || candidate.periodId !== previous.periodId
+              || candidate.visible !== previous.visible
+              || Math.abs(candidate.x - previous.x) >= 0.5
+              || Math.abs(candidate.y - previous.y) >= 0.5;
+          });
+        if (homeBaseFrameChanged) {
+          publishedHomeBasePresenceFrame = nextHomeBasePresenceFrame;
+          latestOnHomeBasePresenceFrame.current(nextHomeBasePresenceFrame);
+        }
+      }
 
       if (latestCenterFocusPoint.current && spatialFocusPoint) {
         const focusScreen = projectFocusPointForRotation(
