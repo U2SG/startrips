@@ -34,7 +34,7 @@ import {
   resolveOrdinaryAtlasHomePresence,
   resolvePlaybackOwnership,
   resolveMobilePlaybackPresentation,
-  showsGlobeModeChrome,
+  showsGlobeDetailControls,
 } from "./LivingAtlasApp";
 import { playbackHoldReason, playbackMediaGate } from "./JourneyPlaybackOverlay";
 import { resolvePlaybackReturn } from "./playbackReturn";
@@ -1074,21 +1074,21 @@ describe("atlas notice auto-dismiss identity", () => {
   });
 });
 
-// #253: globe focus mode is the wrong place for the permanent `深入真实地图 /
-// REGION MAP` product-model control, and for the account dock. Both answers
-// come from one expression each, so a future mode cannot half-apply them.
-describe("globe focus-mode chrome ownership (#253)", () => {
-  it("renders the globe mode chrome in ordinary desktop Atlas", () => {
-    expect(showsGlobeModeChrome(false, false)).toBe(true);
+// #308: renderer-mode chrome is gone. This resolver now controls only the
+// detail-stage cluster and keyboard-only Dive affordance while #253 still owns
+// focus-mode isolation and compact mobile stays gesture-first.
+describe("globe detail-control ownership (#308)", () => {
+  it("keeps the detail-control owner mounted in ordinary desktop Atlas", () => {
+    expect(showsGlobeDetailControls(false, false)).toBe(true);
   });
 
   it("withholds it in globe focus mode, so no node and no layout slot exist", () => {
-    expect(showsGlobeModeChrome(false, true)).toBe(false);
+    expect(showsGlobeDetailControls(false, true)).toBe(false);
   });
 
   it("keeps compact mobile without it, focus mode or not", () => {
-    expect(showsGlobeModeChrome(true, false)).toBe(false);
-    expect(showsGlobeModeChrome(true, true)).toBe(false);
+    expect(showsGlobeDetailControls(true, false)).toBe(false);
+    expect(showsGlobeDetailControls(true, true)).toBe(false);
   });
 
   it("isolates the account dock for either reason", () => {

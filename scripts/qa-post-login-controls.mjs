@@ -333,32 +333,17 @@ async function verifyMobileV2InteractionContract() {
 
     await chip.click();
     await sheet.waitFor({ state: "visible" });
-    await sheet.getByRole("button", { name: /真实地图/ }).click();
-    const realMap = page.locator(".mobile-v2__real-map");
-    await realMap.waitFor({ state: "visible" });
-    const mapRootFocused = await realMap.evaluate((element) => document.activeElement === element);
-    const mapCloseBox = await realMap.locator(":scope > header > button").boundingBox();
-    const mapCloseTouchTarget = mapCloseBox ? Math.min(mapCloseBox.width, mapCloseBox.height) : 0;
-    const mapBackgroundInert = await page.locator(".mobile-v2__header").evaluate((element) => element.inert);
-    await page.keyboard.press("Escape");
-    await realMap.waitFor({ state: "detached" });
-    let mapFocusRestored = false;
-    try {
-      await page.waitForFunction(
-        () => document.activeElement?.getAttribute("data-mobile-map-trigger") === "true",
-        null,
-        { timeout: 1_500 },
-      );
-      mapFocusRestored = true;
-    } catch {
-      mapFocusRestored = false;
-    }
-
     const historyStackDepth = () => page.evaluate(() => {
       const stack = window.history.state?.__startripsMobileSurfaceStack;
       return Array.isArray(stack) ? stack.length : 0;
     });
-    const mapCloseStackDepth = await historyStackDepth();
+    const retiredMobileMapChrome = await page.evaluate(() => ({
+      triggerCount: document.querySelectorAll("[data-mobile-map-trigger]").length,
+      dialogCount: document.querySelectorAll(".mobile-v2__real-map").length,
+      actionCount: [...document.querySelectorAll(".mobile-v2__sheet button")]
+        .filter((button) => button.textContent?.includes("真实地图")).length,
+    }));
+    const sheetStackDepthBeforeStory = await historyStackDepth();
     await page.waitForFunction(() => {
       const layer = document.querySelector(".mobile-v2__sheet-layer");
       return layer && !layer.hasAttribute("inert") && layer.getAttribute("aria-hidden") !== "true";
@@ -438,11 +423,8 @@ async function verifyMobileV2InteractionContract() {
       playbackJourneyAfter,
       sheetTabTrapped,
       sheetFocusRestored,
-      mapRootFocused,
-      mapCloseTouchTarget,
-      mapBackgroundInert,
-      mapFocusRestored,
-      mapCloseStackDepth,
+      retiredMobileMapChrome,
+      sheetStackDepthBeforeStory,
       storyStackDepth,
       sheetInertUnderStory,
       fullscreenStackDepth,
@@ -470,11 +452,10 @@ async function verifyMobileV2InteractionContract() {
         || playbackJourneyAfter === selectedJourneyId
         || !sheetTabTrapped
         || !sheetFocusRestored
-        || !mapRootFocused
-        || mapCloseTouchTarget < 44
-        || !mapBackgroundInert
-        || !mapFocusRestored
-        || mapCloseStackDepth !== 1
+        || retiredMobileMapChrome.triggerCount !== 0
+        || retiredMobileMapChrome.dialogCount !== 0
+        || retiredMobileMapChrome.actionCount !== 0
+        || sheetStackDepthBeforeStory !== 1
         || storyStackDepth !== 2
         || !sheetInertUnderStory
         || fullscreenStackDepth !== 3
@@ -548,7 +529,6 @@ async function verifyMobileStoryInertOwnership() {
 
     const sheet = page.locator(".mobile-v2__sheet");
     const storySurface = page.locator(".journey-story");
-    const realMap = page.locator(".mobile-v2__real-map");
     const readSheetLayer = () => page.evaluate(() => {
       const layer = document.querySelector(".mobile-v2__sheet-layer");
       if (!layer) return null;
@@ -602,22 +582,27 @@ async function verifyMobileStoryInertOwnership() {
         round.afterClose = await readSheetLayer();
         round.sheetVisibleAfterClose = await sheet.isVisible();
 
-        // First tap, not a retry: an inert layer swallows a pointer silently,
-        // which is exactly what the owner's recordings show.
-        await sheet.getByRole("button", { name: /真实地图/ }).click({ timeout: 6_000 });
-        await realMap.waitFor({ state: "visible", timeout: 8_000 });
-        round.realMapOpenedOnFirstClick = true;
-        await page.keyboard.press("Escape");
-        await realMap.waitFor({ state: "detached" });
-        // Review P2: the map's `useMobileSurfaceHistory` cleanup schedules a
-        // history.go(-1) that can still be in flight when the DOM detaches.
-        // Reopening the Story before the stack is back to sheet-only depth
-        // would let that pending pop swallow the new Story token.
+        // First tap, not a retry: an inert layer swallows a pointer silently.
+        // The retired standalone map is no longer available as that witness, so
+        // reuse the sheet's primary Story action and prove the same parent-layer
+        // ownership release without reviving renderer-mode chrome.
+        round.retiredMobileMapChrome = await page.evaluate(() => ({
+          triggerCount: document.querySelectorAll("[data-mobile-map-trigger]").length,
+          dialogCount: document.querySelectorAll(".mobile-v2__real-map").length,
+          actionCount: [...document.querySelectorAll(".mobile-v2__sheet button")]
+            .filter((button) => button.textContent?.includes("真实地图")).length,
+        }));
+        await sheet.getByRole("button", { name: /打开故事/ }).click({ timeout: 6_000 });
+        await storySurface.waitFor({ state: "visible", timeout: 8_000 });
+        round.storyOpenedOnFirstClick = true;
+        await storySurface.locator(".journey-story__close").click({ timeout: 6_000 });
+        await storySurface.waitFor({ state: "detached" });
         await page.waitForFunction(() => {
           const stack = window.history.state?.__startripsMobileSurfaceStack;
           return Array.isArray(stack) && stack.length === 1;
         });
-        round.mapCloseStackDepth = await surfaceStackDepth();
+        round.firstClickStoryCloseStackDepth = await surfaceStackDepth();
+        await page.waitForTimeout(400);
 
         await sheet.getByRole("button", { name: /打开故事/ }).click({ timeout: 6_000 });
         await storySurface.waitFor({ state: "visible", timeout: 8_000 });
@@ -644,8 +629,11 @@ async function verifyMobileStoryInertOwnership() {
         || (closeVia === "browser-back" && round.underCollapsedStory?.inert !== true)
         || !notInert(round.afterClose)
         || !round.sheetVisibleAfterClose
-        || round.realMapOpenedOnFirstClick !== true
-        || round.mapCloseStackDepth !== 1
+        || round.retiredMobileMapChrome?.triggerCount !== 0
+        || round.retiredMobileMapChrome?.dialogCount !== 0
+        || round.retiredMobileMapChrome?.actionCount !== 0
+        || round.storyOpenedOnFirstClick !== true
+        || round.firstClickStoryCloseStackDepth !== 1
         || round.storyReopenable !== true
         || !notInert(round.afterReopenRoundTrip)
         || round.residualStackDepth !== 0;
@@ -1578,7 +1566,7 @@ async function verifyAccountDock() {
           },
           overlapArea: Math.round(overlapX * overlapY),
           viewportOverflowX: Math.max(0, Math.round(controlsRect.right - innerWidth)) + Math.max(0, Math.round(-controlsRect.left)),
-          buttons: [...controls.querySelectorAll("button")].map((button) => {
+          buttons: [...controls.querySelectorAll("button:not([data-earth-dive-intent])")].map((button) => {
             const rect = button.getBoundingClientRect();
             return {
               name: (button.getAttribute("aria-label") || button.textContent || "button").trim().replace(/\s+/g, " "),
@@ -1586,7 +1574,8 @@ async function verifyAccountDock() {
               height: Math.round(rect.height),
             };
           }),
-          modeTextVisible: getComputedStyle(document.querySelector(".living-atlas-globe__mode > span")).display !== "none",
+          modeCount: document.querySelectorAll(".living-atlas-globe__mode").length,
+          diveIntentCount: document.querySelectorAll('[data-earth-dive-intent="true"]').length,
           compactPickVisible: getComputedStyle(document.querySelector(".living-atlas-globe__pick-label-compact")).display !== "none",
           overflowX: Math.max(0, document.documentElement.scrollWidth - innerWidth),
           overflowY: Math.max(0, document.documentElement.scrollHeight - innerHeight),
@@ -1599,9 +1588,11 @@ async function verifyAccountDock() {
         || metrics.overflowX > 0
         || metrics.overflowY > 0
         || metrics.buttons.some((button) => button.height < minimumButtonHeight)
+        || metrics.modeCount !== 0
+        || metrics.diveIntentCount !== 1
         || (mobile && metrics.controls.height > 52)
         || (mobile && width > 340 && !metrics.compactPickVisible)
-        || (mobile && width <= 340 && (metrics.modeTextVisible || metrics.compactPickVisible));
+        || (mobile && width <= 340 && metrics.compactPickVisible);
       results.push({
         name: `globe-controls-${label}`,
         ...metrics,

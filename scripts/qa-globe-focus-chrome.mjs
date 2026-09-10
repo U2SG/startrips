@@ -5,13 +5,12 @@
 // living-atlas&qaMode=globe-chrome` sibling fixture, which swaps the stubbed QA
 // globe for the product one):
 //
-//   * in focus mode `.living-atlas-globe__controls`, `.living-atlas-globe__mode`
-//     and the `深入真实地图 / REGION MAP` copy are ABSENT from the DOM, not
-//     merely transparent, and reserve no layout slot;
+//   * ordinary Atlas and focus mode render zero `.living-atlas-globe__mode`
+//     nodes and none of the retired renderer-mode copy;
 //   * nothing interactive can be sampled in the top-right region;
-//   * outside focus mode the mode control is still there and still opens the
-//     detail map, i.e. #252 has not been pre-empted, and ordinary Atlas keeps
-//     the permanent zoom/drag line it has always shown next to that control;
+//   * ordinary desktop keeps one keyboard-reachable intent affordance which
+//     enters the SAME Semantic Earth Dive path, while the zoom/drag guidance
+//     remains independent from whether the detail utility cluster is mounted;
 //   * entering focus mode from the detail map lands on the particle earth, so
 //     MapLibre's own navigation and attribution controls are not left behind
 //     as a second piece of chrome;
@@ -70,8 +69,8 @@ const VIEWPORTS = [
 // reports CSS pixels, so the control's 44px floor reads 44 at any zoom and
 // re-asserting it here would prove nothing new. The reduced CSS viewport is the
 // real variable, so this pass grades the five things the reviewer named:
-// return-control geometry and position, top-right emptiness, the absent Region
-// Map chrome, the transient hint, and the preserved return context.
+// return-control geometry and position, top-right emptiness, retired renderer
+// chrome, the transient hint, and the preserved return context.
 const ZOOM_CONDITIONS = [
   { name: "1366x768", width: 1366, height: 768 },
   { name: "1366x768@125%", width: 1093, height: 614, deviceScaleFactor: 1.25 },
@@ -167,7 +166,7 @@ async function openAtlas(viewport, { reducedMotion = "no-preference" } = {}) {
     { waitUntil: "domcontentloaded" },
   );
   await page.locator(".living-atlas__active").waitFor({ state: "visible", timeout: 20_000 });
-  await page.locator(".living-atlas-globe__controls").waitFor({ state: "visible", timeout: 20_000 });
+  await page.locator(".living-atlas-globe__controls").waitFor({ state: "attached", timeout: 20_000 });
   return { page, pageErrors };
 }
 
@@ -215,8 +214,10 @@ function readComposition(page) {
       focusMarker: root?.getAttribute("data-globe-focus") ?? null,
       controlsCount: document.querySelectorAll(".living-atlas-globe__controls").length,
       modeCount: document.querySelectorAll(".living-atlas-globe__mode").length,
+      diveIntentCount: document.querySelectorAll('[data-earth-dive-intent="true"]').length,
+      diveIntentName: document.querySelector('[data-earth-dive-intent="true"]')?.getAttribute("aria-label") ?? null,
       modeNoteCount: document.querySelectorAll(".living-atlas-globe__mode-note").length,
-      regionMapCopy: text.includes("深入真实地图") || text.includes("REGION MAP"),
+      legacyModeCopy: ["深入真实地图", "返回粒子地球", "REGION MAP", "ART GLOBE"].some((copy) => text.includes(copy)),
       globeSectionChildren: [...(document.querySelector(".living-atlas-globe")?.children ?? [])]
         .map((child) => (typeof child.className === "string" ? child.className : child.tagName)),
       interactiveTopRight: samples,
@@ -269,6 +270,90 @@ async function selectNonDefaultJourney(page) {
     { timeout: 5_000 },
   );
   return { defaultTitle, selectedTitle: wanted, changed: wanted !== defaultTitle };
+}
+
+async function activateDiveIntent(page, { targetStage = "detail", tabWalk = false } = {}) {
+  const intent = page.locator('[data-earth-dive-intent="true"]');
+  const count = await intent.count();
+  if (count !== 1) throw new Error(`expected one semantic Dive intent affordance, got ${count}`);
+
+  let tabReached = false;
+  if (tabWalk) {
+    await page.evaluate(() => {
+      document.querySelector("[data-qa-dive-tab-sentinel]")?.remove();
+      const controls = document.querySelector(".living-atlas-globe__controls");
+      if (!controls?.parentElement) return;
+      const sentinel = document.createElement("button");
+      sentinel.type = "button";
+      sentinel.dataset.qaDiveTabSentinel = "true";
+      sentinel.textContent = "qa-before-semantic-dive";
+      sentinel.style.cssText = "position:fixed;left:-9999px;top:0;width:1px;height:1px;opacity:0";
+      controls.parentElement.insertBefore(sentinel, controls);
+      sentinel.focus();
+    });
+    await page.keyboard.press("Tab");
+    tabReached = await intent.evaluate((button) => document.activeElement === button);
+  } else {
+    await intent.focus();
+  }
+
+  const before = await intent.evaluate((button) => {
+    const rect = button.getBoundingClientRect();
+    const style = getComputedStyle(button);
+    const name = button.getAttribute("aria-label") ?? "";
+    return {
+      name,
+      focused: document.activeElement === button,
+      focusVisible: button.matches(":focus-visible"),
+      width: rect.width,
+      height: rect.height,
+      visible: style.display !== "none" && style.visibility !== "hidden" && Number(style.opacity) > 0.01,
+      forbiddenModeLanguage: /真实地图|REGION MAP|ART GLOBE|particle|detail/i.test(name),
+    };
+  });
+  await page.keyboard.press("Enter");
+  await page.evaluate(() => document.querySelector("[data-qa-dive-tab-sentinel]")?.remove());
+
+  if (targetStage === "detail") {
+    await page.locator(".detailed-earth-map").waitFor({ state: "attached", timeout: 8_000 });
+    await page.waitForFunction(() => (
+      document.querySelector(".living-atlas-globe")?.getAttribute("data-earth-mode") === "detail"
+    ), null, { timeout: 20_000 });
+  } else if (targetStage === "particle") {
+    await page.waitForFunction(() => {
+      const globe = document.querySelector(".living-atlas-globe");
+      return globe?.getAttribute("data-earth-mode") === "particle"
+        && globe?.getAttribute("data-earth-dive") === "particle";
+    }, null, { timeout: 20_000 });
+  } else if (targetStage === "blending") {
+    await page.waitForFunction(() => (
+      document.querySelector(".living-atlas-globe")?.getAttribute("data-earth-dive") === "blending"
+    ), null, { timeout: 20_000 });
+  }
+
+  return { count, tabReached, ...before };
+}
+
+async function readDetailUtilities(page) {
+  return page.evaluate(() => {
+    const hitOwned = (element) => {
+      if (!(element instanceof HTMLElement)) return false;
+      const rect = element.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return false;
+      const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+      return hit === element || Boolean(hit && element.contains(hit));
+    };
+    const language = document.querySelector(".living-atlas-globe__language");
+    const languageButtons = [...(language?.querySelectorAll("button") ?? [])];
+    const pick = document.querySelector(".living-atlas-globe__pick");
+    return {
+      languageCount: language ? 1 : 0,
+      languageButtons: languageButtons.length,
+      languageHitTestable: languageButtons.every(hitOwned),
+      pickCount: pick ? 1 : 0,
+      pickHitTestable: hitOwned(pick),
+    };
+  });
 }
 
 async function enterFocus(page, { keyboard = false } = {}) {
@@ -440,16 +525,18 @@ try {
       const exit = focused.exit;
       const invalid = ordinary.focusMarker !== "off"
         || ordinary.controlsCount !== 1
-        || ordinary.modeCount !== 1
+        || ordinary.modeCount !== 0
+        || ordinary.diveIntentCount !== 1
+        || ordinary.legacyModeCopy
         // Owner review on PR 257: #253 owns the focus-mode composition, so the
         // ordinary surface keeps the permanent guidance it has always shown.
         || ordinary.modeNoteCount !== 1
-        || !ordinary.regionMapCopy
         || !selection.changed
         || focused.focusMarker !== "on"
         || focused.controlsCount !== 0
         || focused.modeCount !== 0
-        || focused.regionMapCopy
+        || focused.diveIntentCount !== 0
+        || focused.legacyModeCopy
         || focused.interactiveTopRight.length > 0
         || !exit
         || exit.accessibleName !== "返回图谱"
@@ -470,6 +557,9 @@ try {
         || hintAfterGesture !== 0
         || returned.focusMarker !== "off"
         || returned.controlsCount !== 1
+        || returned.modeCount !== 0
+        || returned.diveIntentCount !== 1
+        || returned.legacyModeCopy
         // Retiring the hint inside focus mode does not consume the ordinary
         // surface's own line: returning restores the full ordinary chrome.
         || returned.modeNoteCount !== 1
@@ -484,13 +574,13 @@ try {
           controlsCount: ordinary.controlsCount,
           modeCount: ordinary.modeCount,
           modeNoteCount: ordinary.modeNoteCount,
-          regionMapCopy: ordinary.regionMapCopy,
+          legacyModeCopy: ordinary.legacyModeCopy,
         },
         focused: {
           focusMarker: focused.focusMarker,
           controlsCount: focused.controlsCount,
           modeCount: focused.modeCount,
-          regionMapCopy: focused.regionMapCopy,
+          legacyModeCopy: focused.legacyModeCopy,
           globeSectionChildren: focused.globeSectionChildren,
           interactiveTopRight: focused.interactiveTopRight,
         },
@@ -610,38 +700,129 @@ try {
     }
   }
 
-  // 4. Ordinary Atlas keeps its detail-map path: #252 owns removing it, not
-  //    this slice. The mode control must still mount the real detail map.
+  // 4. #308: renderer-mode chrome is gone, but ordinary Atlas still exposes one
+  //    keyboard-reachable spatial intent that enters and exits the SAME Semantic
+  //    Earth Dive. Establish the timeline value inside the existing #253 focus
+  //    composition, then prove Journey + explicit Route Point + timeline + history
+  //    survive the complete ordinary particle -> detail -> particle round trip.
   {
     const viewport = VIEWPORTS[0];
     const { page, pageErrors } = await openAtlas(viewport);
     try {
-      await page.locator(".living-atlas-globe__mode").click();
-      let detailMounted = true;
-      try {
-        await page.locator(".detailed-earth-map").waitFor({ state: "attached", timeout: 8_000 });
-      } catch {
-        detailMounted = false;
-      }
-      const state = await page.evaluate(() => ({
-        earthMode: document.querySelector(".living-atlas-globe")?.getAttribute("data-earth-mode") ?? null,
-        transitionStatus: document.querySelector(".living-atlas-globe__transition-status")
-          ?.textContent?.trim() ?? null,
-        detailLayer: document.querySelectorAll(".living-atlas-globe__detail-layer").length,
-      }));
+      const selection = await selectNonDefaultJourney(page);
+      const selectedJourney = journeys.find((journey) => journey.title === selection.selectedTitle);
+      const routePointId = selectedJourney?.routePoints[0]?.id ?? null;
+      if (!routePointId) throw new Error("selected QA Journey has no Route Point");
+      await page.locator(`[data-qa-globe-route-point-activate="${routePointId}"]`).evaluate((button) => button.click());
+      await page.locator(`[data-route-point-context][data-route-point-id="${routePointId}"]`).waitFor({ state: "attached", timeout: 5_000 });
+
+      // The rewind scrubber belongs to globe-focus composition, not ordinary
+      // desktop Atlas. Read the explicit Route Point-derived position there,
+      // then return to ordinary Atlas before exercising Semantic Dive.
+      await enterFocus(page);
+      const timelineInFocus = page.locator('.globe-time-scrubber__track');
+      await timelineInFocus.waitFor({ state: "visible", timeout: 5_000 });
+      await timelineInFocus.focus();
+      const timelineBefore = await timelineInFocus.getAttribute("aria-valuenow");
+      await page.locator(".living-atlas__globe-focus-exit").click();
+      await waitForExitedFocus(page);
+      await settle(page);
+
+      // #253 intentionally clears the contextual panel when focus composition
+      // exits. Re-assert the same explicit Route Point before starting the Dive;
+      // this makes the preservation boundary exactly particle -> detail -> particle
+      // instead of accidentally grading focus-mode teardown semantics.
+      await page.locator(`[data-qa-globe-route-point-activate="${routePointId}"]`).evaluate((button) => button.click());
+      await page.locator(`[data-route-point-context][data-route-point-id="${routePointId}"]`).waitFor({ state: "attached", timeout: 5_000 });
+
+      const ordinary = await readComposition(page);
+      const historyBefore = ordinary.historyLength;
+      const routePointBefore = await page.locator("[data-route-point-context]").getAttribute("data-route-point-id");
+      const enterIntent = await activateDiveIntent(page, { tabWalk: true });
+      const detailUtilities = await readDetailUtilities(page);
+      const detailOwnerControls = await probeNativeMapControls(page);
+      const detail = await readComposition(page);
+      const returnIntent = await activateDiveIntent(page, { targetStage: "particle" });
+      await settle(page);
+      const returned = await readComposition(page);
+      const routePointAfter = await page.locator("[data-route-point-context]").getAttribute("data-route-point-id");
+
+      // Re-enter the same focus/timeline composition only to observe the value;
+      // Semantic Dive itself must not invent a second timeline surface.
+      await enterFocus(page);
+      const timelineAfter = await page.locator('.globe-time-scrubber__track').getAttribute("aria-valuenow");
+      await page.locator(".living-atlas__globe-focus-exit").click();
+      await waitForExitedFocus(page);
+      await settle(page);
+
       record({
-        name: "ordinary-atlas-detail-map-intact",
+        name: "semantic-dive-keyboard-context-roundtrip",
         viewport: viewport.name,
-        detailMounted,
-        ...state,
+        selection,
+        routePoint: { before: routePointBefore, after: routePointAfter },
+        timeline: { before: timelineBefore, after: timelineAfter },
+        historyLength: { before: historyBefore, afterDiveReturn: returned.historyLength },
+        enterIntent,
+        returnIntent,
+        ordinary: {
+          modeCount: ordinary.modeCount,
+          diveIntentCount: ordinary.diveIntentCount,
+          legacyModeCopy: ordinary.legacyModeCopy,
+        },
+        detail: {
+          modeCount: detail.modeCount,
+          diveIntentCount: detail.diveIntentCount,
+          legacyModeCopy: detail.legacyModeCopy,
+        },
+        detailUtilities,
+        detailOwnerControls,
+        returned: {
+          modeCount: returned.modeCount,
+          diveIntentCount: returned.diveIntentCount,
+          legacyModeCopy: returned.legacyModeCopy,
+          activeRailJourney: returned.activeRailJourney,
+        },
         pageErrors,
-        failed: !detailMounted || state.detailLayer !== 1,
+        failed: !selection.changed
+          || routePointBefore !== routePointId
+          || routePointAfter !== routePointId
+          || timelineBefore === null
+          || timelineAfter !== timelineBefore
+          || returned.historyLength !== historyBefore
+          || ordinary.modeCount !== 0
+          || ordinary.diveIntentCount !== 1
+          || ordinary.legacyModeCopy
+          || !enterIntent.tabReached
+          || !enterIntent.focused
+          || !enterIntent.focusVisible
+          || !enterIntent.visible
+          || enterIntent.width < 43.5
+          || enterIntent.height < 43.5
+          || enterIntent.forbiddenModeLanguage
+          || detail.modeCount !== 0
+          || detail.diveIntentCount !== 1
+          || detail.legacyModeCopy
+          || detailUtilities.languageCount !== 1
+          || detailUtilities.languageButtons < 2
+          || !detailUtilities.languageHitTestable
+          || detailUtilities.pickCount !== 1
+          || !detailUtilities.pickHitTestable
+          || detailOwnerControls.owner !== "detail"
+          || !detailOwnerControls.attributionPresent
+          || detailOwnerControls.attributionInsideInert
+          || detailOwnerControls.attributionInsideAriaHidden
+          || detailOwnerControls.attributionPointerEvents === "none"
+          || returnIntent.forbiddenModeLanguage
+          || returned.modeCount !== 0
+          || returned.diveIntentCount !== 1
+          || returned.legacyModeCopy
+          || returned.activeRailJourney !== selection.selectedTitle
+          || pageErrors.length > 0,
       });
     } finally {
       await page.close();
     }
   }
-
   // 4b. Codex review on PR 257: focus mode can be entered from the detail map.
   //     MapLibre installs its own navigation control bottom-right and its
   //     attribution bottom-left, so leaving the detail renderer mounted would
@@ -651,7 +832,7 @@ try {
     const viewport = VIEWPORTS[1];
     const { page, pageErrors } = await openAtlas(viewport);
     try {
-      await page.locator(".living-atlas-globe__mode").click();
+      await activateDiveIntent(page);
       await page.locator(".detailed-earth-map").waitFor({ state: "attached", timeout: 8_000 });
       await page.waitForFunction(() => (
         document.querySelector(".living-atlas-globe")?.getAttribute("data-earth-mode") === "detail"
@@ -754,7 +935,7 @@ try {
           || composition.interactiveTopRight.length > 0
           || returned.focusMarker !== "off"
           || returned.controlsCount !== 1
-          || returned.modeCount !== 1
+          || returned.modeCount !== 0
           || returned.modeNoteCount !== 1
           || pageErrors.length > 0,
       });
@@ -788,15 +969,9 @@ try {
     const viewport = VIEWPORTS[1];
     const { page, pageErrors } = await openAtlas(viewport);
     try {
-      await page.locator(".living-atlas-globe__mode").click();
+      const blendingIntent = await activateDiveIntent(page, { targetStage: "blending" });
       let reachedBlendingWindow = true;
-      try {
-        await page.waitForFunction(() => (
-          document.querySelector(".living-atlas-globe")?.getAttribute("data-earth-dive") === "blending"
-        ), null, { timeout: 20_000 });
-      } catch {
-        reachedBlendingWindow = false;
-      }
+      reachedBlendingWindow = blendingIntent.focused && !blendingIntent.forbiddenModeLanguage;
       // Regression-family check for ordinary Earth Dive: blending is visible,
       // but particle still owns input. Grade the real MapLibre buttons/links
       // here before focus mode is involved, including a real Tab walk.
@@ -944,7 +1119,7 @@ try {
       // reported again on a second mount.
       let detailReachableAgain = true;
       try {
-        await page.locator(".living-atlas-globe__mode").click();
+        await activateDiveIntent(page);
         await page.locator(".detailed-earth-map").waitFor({ state: "attached", timeout: 8_000 });
         await page.waitForFunction(() => (
           document.querySelector(".living-atlas-globe")?.getAttribute("data-earth-mode") === "detail"
@@ -1022,7 +1197,7 @@ try {
           || composition.interactiveTopRight.length > 0
           || returned.focusMarker !== "off"
           || returned.controlsCount !== 1
-          || returned.modeCount !== 1
+          || returned.modeCount !== 0
           || !detailReachableAgain
           || pageErrors.length > 0,
       });
@@ -1106,7 +1281,7 @@ try {
       await page.locator('input[type="password"]').fill("password1234");
       await page.getByRole("button", { name: "登录", exact: true }).click();
       await page.locator(".account-dock__tab").waitFor({ state: "visible", timeout: 20_000 });
-      await page.locator(".living-atlas-globe__controls").waitFor({ state: "visible", timeout: 20_000 });
+      await page.locator(".living-atlas-globe__controls").waitFor({ state: "attached", timeout: 20_000 });
 
       // Owner review on PR 257: record the state that OWNS the presentation,
       // not just the symptom, so a red round says which half is wrong.
@@ -1282,7 +1457,7 @@ try {
           focusMarker: focused.focusMarker,
           controlsCount: focused.controlsCount,
           modeCount: focused.modeCount,
-          regionMapCopy: focused.regionMapCopy,
+          legacyModeCopy: focused.legacyModeCopy,
           interactiveTopRight: focused.interactiveTopRight,
           exit: focused.exit,
         },
@@ -1303,10 +1478,14 @@ try {
           || withinViewport.compactMobile
           || !withinViewport.fits
           || ordinary.controlsCount !== 1
-          // The Region Map chrome is absent from the DOM, not just off-screen.
+          || ordinary.modeCount !== 0
+          || ordinary.diveIntentCount !== 1
+          || ordinary.legacyModeCopy
+          // Retired renderer-mode chrome is absent from the DOM, not just off-screen.
           || focused.controlsCount !== 0
           || focused.modeCount !== 0
-          || focused.regionMapCopy
+          || focused.diveIntentCount !== 0
+          || focused.legacyModeCopy
           // The top right stays empty.
           || focused.interactiveTopRight.length > 0
           // The return control: top-left, named, unwrapped.
@@ -1318,7 +1497,9 @@ try {
           // Return context survives at this size too.
           || returned.focusMarker !== "off"
           || returned.controlsCount !== 1
-          || returned.modeCount !== 1
+          || returned.modeCount !== 0
+          || returned.diveIntentCount !== 1
+          || returned.legacyModeCopy
           || returned.activeRailJourney !== journey.selectedTitle
           || returned.historyLength !== ordinary.historyLength
           || pageErrors.length > 0,

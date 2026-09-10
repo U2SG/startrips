@@ -1,4 +1,4 @@
-import { Suspense, lazy, type ComponentType, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type ComponentType, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   IconArrowNarrowLeft,
   IconArrowRight,
@@ -220,8 +220,6 @@ export function nextAtlasNotice(current: AtlasNotice | null, message: string): A
   return { id: (current?.id ?? 0) + 1, message };
 }
 
-const MobileDetailedEarthMap = lazy(() => import("../scene/DetailedEarthMap"));
-
 // #8: the root class/data contract for globe focus mode, kept pure so the
 // layout toggle is unit-testable without mounting the full app.
 export function globeFocusState(focused: boolean) {
@@ -232,13 +230,12 @@ export function globeFocusState(focused: boolean) {
 }
 
 /**
- * #253: one expression owns whether the globe renders its mode chrome at all.
- * Focus mode is the whole point of the mode: `深入真实地图 / REGION MAP` is a
- * permanent product-model control, so in focus mode it must not exist in the
- * DOM — visibility/opacity would leave a reserved slot and an accessibility-
- * tree residue. Compact mobile has never rendered it.
+ * #308: ordinary desktop keeps the small detail-stage control cluster plus one
+ * keyboard-only semantic Dive affordance. Focus mode and compact mobile keep
+ * that cluster out of the DOM, preserving the #253 quiet composition and the
+ * mobile native-gesture surface without restoring renderer-mode chrome.
  */
-export function showsGlobeModeChrome(
+export function showsGlobeDetailControls(
   compactMobileLayout: boolean,
   globeFocusMode: boolean,
 ): boolean {
@@ -671,7 +668,6 @@ export function LivingAtlasApp({
   const isMobileV2 = useCompactMobileLayout();
   const [mobileSheetJourneyId, setMobileSheetJourneyId] = useState<string | null>(null);
   const [mobilePickerOpen, setMobilePickerOpen] = useState(false);
-  const [mobileMapJourneyId, setMobileMapJourneyId] = useState<string | null>(null);
   /**
    * The open share surface, and which Journey it is locked to.
    *
@@ -681,20 +677,6 @@ export function LivingAtlasApp({
    * selection whose entries mean "asset" cannot also mean "Journey".
    */
   const [shareTarget, setShareTarget] = useState<{ lockedJourneyId: string | null } | null>(null);
-  const closeMobileMap = useCallback(() => {
-    setMobileMapJourneyId(null);
-    if (typeof requestAnimationFrame !== "function") return;
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        const trigger = document.querySelector<HTMLButtonElement>(
-          '.mobile-v2__sheet button[data-mobile-map-trigger="true"]',
-        );
-        if (trigger?.isConnected && !trigger.closest("[inert]")) {
-          trigger.focus({ preventScroll: true });
-        }
-      });
-    });
-  }, []);
   useMobileSurfaceHistory(
     isMobileV2 && mobileSheetJourneyId !== null,
     "journey-sheet",
@@ -706,18 +688,13 @@ export function LivingAtlasApp({
     () => setMobilePickerOpen(false),
   );
   useMobileSurfaceHistory(
-    isMobileV2 && mobileMapJourneyId !== null,
-    "journey-map",
-    closeMobileMap,
-  );
-  useMobileSurfaceHistory(
     isMobileV2 && storyJourneyId !== null,
     "journey-story",
     () => closeJourneyStory(null),
   );
   const mobileSheetActive = isMobileV2 && mobileSheetJourneyId !== null;
   const mobileSheetStoryActive = storyJourneyId !== null;
-  const mobileSheetChildActive = mobileSheetStoryActive || mobileMapJourneyId !== null;
+  const mobileSheetChildActive = mobileSheetStoryActive;
   const mobileChipStartX = useRef<number | null>(null);
   const mobileChipSwiped = useRef(false);
   const mobileSheetStartY = useRef<number | null>(null);
@@ -729,10 +706,6 @@ export function LivingAtlasApp({
   const mobilePickerDialogRef = useModalFocus<HTMLElement>(
     () => setMobilePickerOpen(false),
     isMobileV2 && mobilePickerOpen,
-  );
-  const mobileMapDialogRef = useModalFocus<HTMLElement>(
-    closeMobileMap,
-    isMobileV2 && mobileMapJourneyId !== null,
   );
   const globeFocusExitRef = useRef<HTMLButtonElement | null>(null);
   const globeFocusTriggerRef = useRef<HTMLButtonElement | null>(null);
@@ -839,7 +812,6 @@ export function LivingAtlasApp({
     if (!isMobileV2) {
       setMobileSheetJourneyId(null);
       setMobilePickerOpen(false);
-      setMobileMapJourneyId(null);
       return;
     }
     setView("planet");
@@ -1040,11 +1012,6 @@ export function LivingAtlasApp({
     setStoryJourneyId(resolution.journeyId);
   }, [journeys, playbackPendingMode, playbackSession.journeyId, timeCursor.selectJourney]);
   const mobileSheetJourney = journeys.find((journey) => journey.id === mobileSheetJourneyId) ?? null;
-  const mobileMapJourney = journeys.find((journey) => journey.id === mobileMapJourneyId) ?? null;
-  const mobileMapRoute = routes.find((route) => route.id === mobileMapJourneyId) ?? null;
-  const mobileMapFocusRevision = mobileMapJourney
-    ? (Math.max(0, journeys.findIndex((journey) => journey.id === mobileMapJourney.id)) + 1) * 1000
-    : 0;
   const playbackCameraTarget = playbackSession.cameraCommand?.target ?? null;
   const playbackJourneyRoute = routes.find((route) => route.id === playbackSession.journeyId) ?? null;
   const playbackFocusPoint = playbackCameraTarget
@@ -1519,7 +1486,7 @@ export function LivingAtlasApp({
             } : undefined}
             onSemanticZoomChange={setAtlasSemanticZoom}
             onManualCameraInteraction={claimManualAtlasCamera}
-            showControls={showsGlobeModeChrome(isMobileV2, globeFocusMode)}
+            showControls={showsGlobeDetailControls(isMobileV2, globeFocusMode)}
             globeFocusMode={globeFocusMode}
             onJourneyRouteActivate={(id) => {
               if (id === "draft-route-preview") return;
@@ -1768,7 +1735,7 @@ export function LivingAtlasApp({
         </aside>
       ) : null}
 
-      {isMobileV2 && view === "planet" && mobileJourney && !mobileMapJourney ? (
+      {isMobileV2 && view === "planet" && mobileJourney ? (
         <section
           className="mobile-v2__chrome"
           aria-label="当前旅程与时间轴"
@@ -1885,13 +1852,6 @@ export function LivingAtlasApp({
                   openJourneyStory(mobileSheetJourney.id, null);
                 }}
               >打开故事 <IconArrowRight size={17} stroke={1.35} aria-hidden="true" /></button>
-              <button
-                type="button"
-                data-mobile-map-trigger="true"
-                onClick={() => {
-                  setMobileMapJourneyId(mobileSheetJourney.id);
-                }}
-              ><IconWorld size={16} stroke={1.35} aria-hidden="true" />真实地图</button>
               {canEditJourney ? (
                 <button
                   type="button"
@@ -1952,28 +1912,6 @@ export function LivingAtlasApp({
               openCreateComposer();
             }}><IconPlus size={17} stroke={1.4} aria-hidden="true" />记录新旅程</button>
           ) : null}
-        </section>
-      ) : null}
-
-      {isMobileV2 && mobileMapJourney ? (
-        <section ref={mobileMapDialogRef} tabIndex={-1} className="mobile-v2__real-map" role="dialog" aria-modal="true" aria-labelledby="mobile-v2-real-map-title">
-          <Suspense fallback={<div className="mobile-v2__map-loading">正在打开真实地图…</div>}>
-            <MobileDetailedEarthMap
-              focusPoint={journeyFocus(mobileMapJourney)}
-              focusRoute={mobileMapRoute}
-              focusRevision={mobileMapFocusRevision}
-              language="zh"
-            />
-          </Suspense>
-          <header>
-            <button type="button" onClick={closeMobileMap} aria-label="返回地球"><IconX size={19} stroke={1.4} aria-hidden="true" /></button>
-            <div><p>REAL MAP</p><strong id="mobile-v2-real-map-title">{mobileMapJourney.title}</strong></div>
-          </header>
-          <div className="mobile-v2__map-card">
-            <span className="mobile-v2__journey-light" aria-hidden="true" />
-            <div><small>{mobileMapJourney.startedOn}</small><strong>{mobileMapJourney.routePoints[0]?.label ?? mobileMapJourney.title}</strong><span>{mobileMapJourney.routePoints.length} 个路线点</span></div>
-            <button type="button" onClick={closeMobileMap}>返回地球</button>
-          </div>
         </section>
       ) : null}
 

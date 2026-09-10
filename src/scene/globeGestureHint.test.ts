@@ -80,25 +80,23 @@ describe("globe gesture hint lifecycle (#253)", () => {
     expect(globeGestureHintVisible(dismissed)).toBe(false);
   });
 
-  it("keeps the ordinary Atlas guidance permanent, hint state notwithstanding", () => {
-    // Owner review on PR 257: #253 owns the focus-mode composition only. The
-    // ordinary surface must keep the line it has always shown next to its mode
-    // chrome, whatever the transient resolver says.
-    const ordinary = { globeFocusMode: false, showControls: true };
+  it("keeps ordinary desktop guidance independent from the control cluster", () => {
+    // #308 removes renderer-mode chrome, but ordinary desktop still needs one
+    // quiet discoverability line. Its visibility is now an explicit surface
+    // rule instead of piggybacking on whether controls happen to render.
+    const ordinary = { globeFocusMode: false, compactMobileLayout: false };
     expect(globeModeNoteVisible(initialGlobeGestureHintState, ordinary)).toBe(true);
     expect(globeModeNoteVisible(play(enter, { kind: "gesture", session: 1 }, leave), ordinary)).toBe(true);
-    // Compact mobile has never rendered the mode chrome, and the note belongs
-    // to it, so it stays absent there.
     expect(globeModeNoteVisible(initialGlobeGestureHintState, {
       globeFocusMode: false,
-      showControls: false,
+      compactMobileLayout: true,
     })).toBe(false);
   });
 
   it("makes the focus-mode note follow the transient resolver alone", () => {
-    // `showControls` is false in focus mode by the #253 contract, and the note
-    // must still appear: the two levers are independent.
-    const focus = { globeFocusMode: true, showControls: false };
+    // Compact layout does not suppress focus-mode onboarding: #253's transient
+    // resolver remains the sole owner once focus mode takes the viewport.
+    const focus = { globeFocusMode: true, compactMobileLayout: false };
     expect(globeModeNoteVisible(play(enter), focus)).toBe(true);
     expect(globeModeNoteVisible(play(enter, { kind: "dwell", session: 1 }), focus)).toBe(false);
     expect(globeModeNoteVisible(initialGlobeGestureHintState, focus)).toBe(false);

@@ -67,19 +67,16 @@ export function globeGestureHintVisible(state: GlobeGestureHintState): boolean {
 }
 
 /**
- * #253 review: the render decision for `.living-atlas-globe__mode-note`, for
- * BOTH compositions, so the element has exactly one source of truth.
- *
- * Focus mode is the only place #253 makes the guidance transient — there it
- * follows the resolver above and disappears for good once retired. Ordinary
- * Atlas keeps the permanent onboarding line it has always shown next to its
- * mode chrome: removing it there would be a discoverability decision about the
- * ordinary surface, which this issue does not own.
+ * #308: the gesture note has its own discoverability rule now that permanent
+ * renderer-mode chrome is gone. Focus mode keeps #253's transient onboarding;
+ * ordinary desktop keeps one quiet zoom/drag line; compact mobile stays clear
+ * because pinch is native to that surface. This decision deliberately does not
+ * derive from whether the separate detail-control cluster is mounted.
  */
 export function globeModeNoteVisible(
   state: GlobeGestureHintState,
-  composition: { globeFocusMode: boolean; showControls: boolean },
+  composition: { globeFocusMode: boolean; compactMobileLayout: boolean },
 ): boolean {
   if (composition.globeFocusMode) return globeGestureHintVisible(state);
-  return composition.showControls;
+  return !composition.compactMobileLayout;
 }

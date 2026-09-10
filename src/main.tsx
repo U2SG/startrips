@@ -353,6 +353,29 @@ function EarthDiveQaPreview() {
   );
 }
 
+function LivingAtlasGlobeChromeQa(props: LivingAtlasGlobeProps) {
+  const qaRoundTrip = new URLSearchParams(window.location.search).get("qaMode") === "globe-chrome";
+  return (
+    <>
+      <LivingAtlasGlobe {...props} />
+      {qaRoundTrip ? props.journeyRoutes.flatMap((route) => route.points.flatMap((point) => (
+        point.id ? (
+          <button
+            key={`globe-chrome:${route.id}:${point.id}`}
+            type="button"
+            data-qa-globe-route-point-activate={point.id}
+            data-qa-globe-route-id={route.id}
+            aria-hidden="true"
+            tabIndex={-1}
+            onClick={() => props.onJourneyRoutePointActivate(route.id, point.id!)}
+            style={{ position: "fixed", width: 1, height: 1, overflow: "hidden", opacity: 0, pointerEvents: "none" }}
+          >{point.label ?? point.id}</button>
+        ) : []
+      ))) : null}
+    </>
+  );
+}
+
 function LivingAtlasQaPreview() {
   // #253: the globe-focus chrome lane needs the real `LivingAtlasGlobe`, since
   // `.living-atlas-globe__controls` and the transient gesture hint live there.
@@ -362,7 +385,7 @@ function LivingAtlasQaPreview() {
   const params = new URLSearchParams(window.location.search);
   const globeChrome = params.get("qaMode") === "globe-chrome";
   const routePointContextQa = params.get("qaRoutePointContext") === "1";
-  if (globeChrome && !routePointContextQa) return <LivingAtlasApp />;
+  if (globeChrome && !routePointContextQa) return <LivingAtlasApp GlobeComponent={LivingAtlasGlobeChromeQa} />;
   return <LivingAtlasApp GlobeComponent={LivingAtlasQaGlobe} />;
 }
 
@@ -379,7 +402,7 @@ function LivingAtlasGlobeControlsQaPreview() {
         <LivingAtlasGlobeControls
           diveStage={detailMode ? "detail" : "particle"}
           detailLanguage={language}
-          onModeToggle={() => undefined}
+          onDiveIntent={() => undefined}
           onDetailLanguageChange={setLanguage}
           onPickRequest={() => undefined}
         />
