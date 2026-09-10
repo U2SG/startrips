@@ -357,11 +357,28 @@ export function LivingAtlasGlobe({
   const gestureHintVisible = globeGestureHintVisible(gestureHint);
   const modeNoteVisible = globeModeNoteVisible(gestureHint, { globeFocusMode, showControls });
   const homeBaseLayer = useMemo(() => resolveLivingAtlasHomeBaseLayer(homeBasePresence), [homeBasePresence]);
-  const [homeBaseFrames, setHomeBaseFrames] = useState<readonly ProjectedHomeBasePresence[]>([]);
-  const homeBaseFramesById = useMemo(
-    () => new Map(homeBaseFrames.map((frame) => [frame.periodId, frame])),
-    [homeBaseFrames],
-  );
+  const homeBaseElementsRef = useRef(new Map<string, HTMLDivElement>());
+  const homeBaseFramesRef = useRef(new Map<string, ProjectedHomeBasePresence>());
+  const applyHomeBaseFrame = useCallback((
+    element: HTMLDivElement,
+    frame: ProjectedHomeBasePresence | undefined,
+  ) => {
+    const visible = Boolean(frame?.visible);
+    element.hidden = !visible;
+    element.style.display = visible ? "" : "none";
+    element.tabIndex = visible ? 0 : -1;
+    if (!frame || !visible) return;
+    element.style.left = `${frame.x}px`;
+    element.style.top = `${frame.y}px`;
+  }, []);
+  const bindHomeBaseElement = useCallback((periodId: string, element: HTMLDivElement | null) => {
+    if (!element) {
+      homeBaseElementsRef.current.delete(periodId);
+      return;
+    }
+    homeBaseElementsRef.current.set(periodId, element);
+    applyHomeBaseFrame(element, homeBaseFramesRef.current.get(periodId));
+  }, [applyHomeBaseFrame]);
 
   // #252: there is exactly one piece of Dive state and `earthDive.ts` decides
   // it. What used to be an `earthMode` / `transitionTarget` / `targetReady`
@@ -415,8 +432,12 @@ export function LivingAtlasGlobe({
   }, []);
 
   const handleHomeBasePresenceFrame = useCallback((frame: readonly ProjectedHomeBasePresence[]) => {
-    setHomeBaseFrames(frame);
-  }, []);
+    const nextFrames = new Map(frame.map((entry) => [entry.periodId, entry]));
+    homeBaseFramesRef.current = nextFrames;
+    for (const [periodId, element] of homeBaseElementsRef.current) {
+      applyHomeBaseFrame(element, nextFrames.get(periodId));
+    }
+  }, [applyHomeBaseFrame]);
 
   const handleDetailReadiness = useCallback((readiness: DetailReadiness) => {
     readinessRef.current = readiness;
@@ -641,20 +662,17 @@ export function LivingAtlasGlobe({
         </div>
       ) : null}
 
-      {dive.owner !== "detail" && !cinematicActive ? homeBaseLayer.map((descriptor) => {
-        const frame = homeBaseFramesById.get(descriptor.periodId);
-        if (!frame?.visible) return null;
-        return (
+      {dive.owner !== "detail" && !cinematicActive ? homeBaseLayer.map((descriptor) => (
           <div
             key={descriptor.periodId}
+            ref={(element) => bindHomeBaseElement(descriptor.periodId, element)}
             className="living-atlas-globe__home-base"
             role="img"
-            tabIndex={0}
+            tabIndex={-1}
+            hidden
             aria-label={descriptor.accessibleName}
             data-home-base-presence={descriptor.presence}
             style={{
-              left: frame.x,
-              top: frame.y,
               minWidth: descriptor.touchTargetPx,
               minHeight: descriptor.touchTargetPx,
               "--home-base-emphasis": descriptor.emphasisWeight,
@@ -665,8 +683,7 @@ export function LivingAtlasGlobe({
               <span className="living-atlas-globe__home-base-label" aria-hidden="true">{descriptor.label}</span>
             ) : null}
           </div>
-        );
-      }) : null}
+        )) : null}
 
       {showControls ? (
         <LivingAtlasGlobeControls

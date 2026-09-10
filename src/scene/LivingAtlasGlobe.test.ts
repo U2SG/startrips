@@ -84,6 +84,15 @@ describe("Home Base presence projection (ST-056)", () => {
     expect(source).toContain("latestOnManualCameraInteraction.current?.()");
     expect(source).toContain("claimManualInteraction(false)");
   });
+  it("updates projected Home overlays outside React render cadence", () => {
+    const source = readFileSync(new URL("./LivingAtlasGlobe.tsx", import.meta.url), "utf8");
+    expect(source).not.toContain("setHomeBaseFrames");
+    expect(source).toContain("element.hidden = !visible");
+    expect(source).toContain('element.style.display = visible ? "" : "none"');
+    expect(source).toContain("element.tabIndex = visible ? 0 : -1");
+    expect(source).toContain("element.style.left = `${frame.x}px`");
+    expect(source).toContain("element.style.top = `${frame.y}px`");
+  });
   it("keeps initial Home camera seeding separate from semantic focus ownership", () => {
     const globeSource = readFileSync(new URL("./LivingAtlasGlobe.tsx", import.meta.url), "utf8");
     const particleSource = readFileSync(new URL("./ParticleEarthScene.tsx", import.meta.url), "utf8");
