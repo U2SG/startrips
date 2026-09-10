@@ -94,6 +94,7 @@ describe("Home Base presence projection (ST-056)", () => {
     expect(particleSource).toContain("rotationYForLongitude(initialCameraAnchorNow.lon)");
     expect(particleSource).toContain("if (initialCameraAnchorNow && activePointers.size === 0)");
     expect(particleSource).toContain("interactiveRotationX = interpolate(interactiveRotationX, targetRotationX)");
+    expect(particleSource).toMatch(/resolveParticleDiveAnchor\(\s*routeFocusFrame,\s*latestFocusPoint\.current,\s*initialCameraAnchorNow,/);
   });
   it("keeps Home presence on the particle owner through prewarm/blend and off the detail owner", () => {
     const source = readFileSync(new URL("./LivingAtlasGlobe.tsx", import.meta.url), "utf8");

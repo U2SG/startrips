@@ -407,14 +407,15 @@ export function resolveGlobeFocusIntent(
 
 /**
  * The geographic anchor the particle renderer is actually holding for a Dive.
- * Whole-Journey focus deliberately has no focusPoint, so route fitting owns the
- * anchor whenever a route frame exists; point focus remains the fallback.
+ * The orientation-only initial camera anchor owns the fresh Atlas before any
+ * semantic Journey focus; once it retires, route fitting then point focus own it.
  */
 export function resolveParticleDiveAnchor(
   routeFocusFrame: { center: { lat: number; lon: number } } | null | undefined,
   focusPoint: { lat: number; lon: number } | null | undefined,
+  initialCameraAnchor?: { lat: number; lon: number } | null,
 ) {
-  return routeFocusFrame?.center ?? focusPoint ?? null;
+  return initialCameraAnchor ?? routeFocusFrame?.center ?? focusPoint ?? null;
 }
 
 export function isGlobeUpright(rotation: number, tolerance = 0.002) {
@@ -5037,7 +5038,11 @@ export function ParticleEarthScene({
         delete host.dataset.focusTargetY;
       }
 
-      const diveAnchor = resolveParticleDiveAnchor(routeFocusFrame, latestFocusPoint.current);
+      const diveAnchor = resolveParticleDiveAnchor(
+        routeFocusFrame,
+        latestFocusPoint.current,
+        initialCameraAnchorNow,
+      );
       if (latestCenterFocusPoint.current && diveAnchor) {
         // #237: the focus signal is a geographic annotation like any other, so
         // it publishes the shared frame's answer for its latitude/longitude

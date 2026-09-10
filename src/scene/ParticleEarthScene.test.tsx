@@ -111,9 +111,11 @@ describe("ParticleEarthScene contracts", () => {
     });
   });
 
-  it("publishes the fitted Journey centre as the Dive anchor before point focus", () => {
+  it("publishes the camera owner as the Dive anchor before route or point focus", () => {
     const routeFrame = { center: { lat: 35.5, lon: 110.25 } };
     const point = { lat: 31.2, lon: 121.5 };
+    const homeAnchor = { lat: 22.5431, lon: 114.0579 };
+    expect(resolveParticleDiveAnchor(routeFrame, point, homeAnchor)).toBe(homeAnchor);
     expect(resolveParticleDiveAnchor(routeFrame, point)).toBe(routeFrame.center);
     expect(resolveParticleDiveAnchor(null, point)).toBe(point);
     expect(resolveParticleDiveAnchor(null, null)).toBeNull();
