@@ -112,6 +112,8 @@ describe("ordinary Atlas Home runtime (ST-056)", () => {
     expect(source).toContain("initialHomeCameraAnchor ? null : focusRoute");
     expect(source).toContain("initialCameraAnchor={initialHomeCameraAnchor}");
     expect(source).toContain("timeCursor.selection?.journeyId ?? null");
+    expect(source).toContain("|| playbackActive) {");
+    expect(source).toContain("Math.max(focusRevision + initialHomeCameraRevision, playbackReleaseFocusRevision)");
   });
 });
 

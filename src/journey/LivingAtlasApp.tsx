@@ -733,7 +733,7 @@ export function LivingAtlasApp({
     setInitialHomeCameraIntent(null);
   }, []);
   useEffect(() => {
-    if (selectedJourneyIdForHomeCamera !== null || hasManualAtlasCameraInteraction) {
+    if (selectedJourneyIdForHomeCamera !== null || hasManualAtlasCameraInteraction || playbackActive) {
       atlasHomeCameraFreshRef.current = false;
       setInitialHomeCameraIntent(null);
       return;
@@ -750,7 +750,7 @@ export function LivingAtlasApp({
     atlasHomeCameraFreshRef.current = false;
     setInitialHomeCameraRevision(nextInitialHomeCameraFocusRevision);
     setInitialHomeCameraIntent(intent);
-  }, [hasManualAtlasCameraInteraction, homeBasePeriods, homeEffectiveDate, initialHomeCameraIntent, listHomeBasePeriods, selectedJourneyIdForHomeCamera]);
+  }, [hasManualAtlasCameraInteraction, playbackActive, homeBasePeriods, homeEffectiveDate, initialHomeCameraIntent, listHomeBasePeriods, selectedJourneyIdForHomeCamera]);
   useEffect(() => {
     const intent = routePointContextSelection.intent;
     if (!intent) return;
@@ -1276,6 +1276,8 @@ export function LivingAtlasApp({
     setStoryInitialAssetId(null);
     setStoryInitialSnapState("in-context");
     setStoryFocusVisibleControlOnOpen(false);
+    atlasHomeCameraFreshRef.current = false;
+    setInitialHomeCameraIntent(null);
     setPlaybackSession({
       journeyId,
       soundtrackRead: cachedRead,
@@ -2066,7 +2068,11 @@ export function LivingAtlasApp({
           onCameraTargetChange={(target) => {
             setPlaybackSession((current) => ({
               ...current,
-              cameraCommand: nextPlaybackCameraCommand(current.cameraCommand, target, Math.max(focusRevision, playbackReleaseFocusRevision)),
+              cameraCommand: nextPlaybackCameraCommand(
+                current.cameraCommand,
+                target,
+                Math.max(focusRevision + initialHomeCameraRevision, playbackReleaseFocusRevision),
+              ),
             }));
           }}
           initialSoundtrackRead={playbackSession.soundtrackRead}

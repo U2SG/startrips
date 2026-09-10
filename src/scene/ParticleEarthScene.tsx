@@ -4644,6 +4644,11 @@ export function ParticleEarthScene({
         );
       }
 
+      if (initialCameraAnchorNow && activePointers.size === 0) {
+        interactiveRotationX = interpolate(interactiveRotationX, targetRotationX);
+        interactiveRotationY = interpolate(interactiveRotationY, 0);
+      }
+
       if (
         pointFocusSettling
         && !routeFocusFrame
@@ -4736,7 +4741,7 @@ export function ParticleEarthScene({
       // its screen position. The globe's x/y belongs to the layout/mode only.
       globe.position.x = interpolate(globe.position.x, target.x);
       globe.position.y = interpolate(globe.position.y, target.y);
-      if (activePointers.size === 0 && !reduceMotion && !focusSettledThisFrame) {
+      if (activePointers.size === 0 && !reduceMotion && !focusSettledThisFrame && !initialCameraAnchorNow) {
         interactiveRotationX = clampGlobeTilt(
           interactiveRotationX + rotationVelocityX * delta,
         );
