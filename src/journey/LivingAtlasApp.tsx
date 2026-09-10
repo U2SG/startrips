@@ -148,6 +148,13 @@ export function resolveInitialAtlasHomeCameraIntent(input: {
   return resolveHomeBaseCameraIntent(input);
 }
 
+export function resolveInitialHomeOwnedFocusPoint(
+  focusPoint: { lat: number; lon: number } | null,
+  initialHomeCameraAnchor: { lat: number; lon: number } | null,
+): { lat: number; lon: number } | null {
+  return initialHomeCameraAnchor ? null : focusPoint;
+}
+
 export async function loadJourneyRowsWithOptionalHome({
   listJourneys,
   listHomeBasePeriods,
@@ -1478,7 +1485,7 @@ export function LivingAtlasApp({
           <GlobeComponent
             focusPoint={playbackCameraUsesPointFocus(playbackCameraTarget)
               ? playbackFocusPoint
-              : focusPoint}
+              : resolveInitialHomeOwnedFocusPoint(focusPoint, initialHomeCameraAnchor)}
             focusRoute={playbackCameraTarget
               ? playbackFocusRoute
               : initialHomeCameraAnchor ? null : focusRoute}
