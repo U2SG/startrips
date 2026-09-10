@@ -728,6 +728,13 @@ try {
       await waitForExitedFocus(page);
       await settle(page);
 
+      // #253 intentionally clears the contextual panel when focus composition
+      // exits. Re-assert the same explicit Route Point before starting the Dive;
+      // this makes the preservation boundary exactly particle -> detail -> particle
+      // instead of accidentally grading focus-mode teardown semantics.
+      await page.locator(`[data-qa-globe-route-point-activate="${routePointId}"]`).evaluate((button) => button.click());
+      await page.locator(`[data-route-point-context][data-route-point-id="${routePointId}"]`).waitFor({ state: "attached", timeout: 5_000 });
+
       const ordinary = await readComposition(page);
       const historyBefore = ordinary.historyLength;
       const routePointBefore = await page.locator("[data-route-point-context]").getAttribute("data-route-point-id");
