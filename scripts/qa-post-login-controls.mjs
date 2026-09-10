@@ -1763,6 +1763,37 @@ async function verifyFinalAcceptanceMobileFlow() {
       },
     ],
   };
+  const overBudgetJourney = {
+    ...targetJourney,
+    id: "fa-journey-over-budget",
+    title: "FINAL ACCEPTANCE · INTERCONTINENTAL",
+    coverMediaAssetId: null,
+    routePoints: Array.from({ length: 10 }, (_, index) => ({
+      id: `fa-over-budget-point-${index}`,
+      journeyId: "fa-journey-over-budget",
+      sortOrder: index,
+      latitude: 18 + index * 6,
+      longitude: -150 + index * 30,
+      label: `跨洲停靠 ${index + 1}`,
+      isStop: true,
+      occurredAt: `2026-08-${String(10 + index).padStart(2, "0")}T12:00:00.000Z`,
+      note: null,
+      createdAt: "2026-08-10T00:00:00.000Z",
+    })),
+    media: Array.from({ length: 10 }, (_, index) => ({
+      id: `fa-over-budget-image-${index}`,
+      journeyId: "fa-journey-over-budget",
+      routePointId: `fa-over-budget-point-${index}`,
+      storageDriver: "qa",
+      storageKey: `qa/over-budget-${index}.gif`,
+      fileName: `over-budget-${index}.gif`,
+      mimeType: "image/gif",
+      bytes: 35,
+      sortOrder: index,
+      uploadedByUserId: "qa-user",
+      createdAt: `2026-08-${String(10 + index).padStart(2, "0")}T12:10:00.000Z`,
+    })),
+  };
   const latestJourney = {
     ...makeJourney(90, "2026-08-25", "LATEST EMPTY JOURNEY", "#e8a87c", "默认最新地点"),
     id: "fa-journey-latest",
@@ -1891,7 +1922,7 @@ async function verifyFinalAcceptanceMobileFlow() {
     let authenticated = false;
     let signInRequests = 0;
     let sessionRequests = 0;
-    let stateJourneys = [targetJourney, latestJourney];
+    let stateJourneys = [overBudgetJourney, targetJourney, latestJourney];
     let createdJourney = null;
     let uploadSequence = 0;
     const uploadMetadata = new Map();
@@ -2304,6 +2335,70 @@ async function verifyFinalAcceptanceMobileFlow() {
       if (!responsiveDesktop.sameCanvas || !responsiveDesktop.sameControllerDebug || responsiveDesktop.canvases !== 1) {
         throw new Error(`Final acceptance responsive desktop handoff failed: ${JSON.stringify(responsiveDesktop)}`);
       }
+
+      await activateControl(
+        page.locator(".living-atlas__journey-rail li button").filter({ hasText: overBudgetJourney.title }),
+        "desktop over-budget journey control",
+      );
+      await page.waitForFunction((expectedTitle) => (
+        document.querySelector(".living-atlas__active h2")?.textContent?.includes(expectedTitle) ?? false
+      ), overBudgetJourney.title, { timeout: 5_000 });
+      const overBudgetPlayButton = page.locator(".living-atlas__active-play");
+      await activateControl(overBudgetPlayButton, "over-budget playback mode chooser control");
+      const overBudgetMenu = page.locator(".living-atlas__playback-mode-menu");
+      await overBudgetMenu.waitFor({ state: "visible", timeout: 5_000 });
+      const overBudgetQuickRecapOption = overBudgetMenu.locator('[data-playback-mode-option="quick-recap"]');
+      await overBudgetQuickRecapOption.focus();
+      await page.keyboard.press("Enter");
+      await page.waitForFunction(() => (
+        Boolean(document.querySelector('[data-quick-recap-fallback-message="over-budget"]'))
+        && !document.querySelector(".journey-playback")
+      ), null, { timeout: 5_000 });
+      const overBudgetDecision = await page.evaluate(() => ({
+        message: document.querySelector('[data-quick-recap-fallback-message="over-budget"]')?.textContent?.trim() ?? "",
+        fullAction: document.querySelector('[data-quick-recap-fallback="over-budget"]')?.getAttribute("aria-label") ?? "",
+        fullActionFocused: document.activeElement === document.querySelector('[data-quick-recap-fallback="over-budget"]'),
+        playbackMounted: Boolean(document.querySelector(".journey-playback")),
+        fullModeMounted: Boolean(document.querySelector('.journey-playback[data-playback-mode="full"]')),
+      }));
+      if (
+        !overBudgetDecision.message.includes("放不下所有必要的旅程点")
+        || overBudgetDecision.fullAction !== "完整播放"
+        || !overBudgetDecision.fullActionFocused
+        || overBudgetDecision.playbackMounted
+        || overBudgetDecision.fullModeMounted
+      ) {
+        throw new Error(`Quick Recap over-budget choice surface failed: ${JSON.stringify(overBudgetDecision)}`);
+      }
+      await activateControl(
+        overBudgetMenu.locator('[data-quick-recap-fallback="over-budget"]'),
+        "explicit Full Playback action after over-budget Quick Recap",
+      );
+      const overBudgetPlayback = page.locator('.journey-playback[data-playback-mode="full"]');
+      await overBudgetPlayback.waitFor({ state: "visible", timeout: 8_000 });
+      const overBudgetPlaybackTitle = await overBudgetPlayback.locator("h2").first().textContent();
+      if (!overBudgetPlaybackTitle?.includes(overBudgetJourney.title)) {
+        throw new Error(`Explicit Full Playback started the wrong Journey: ${overBudgetPlaybackTitle ?? "missing"}`);
+      }
+      await activateControl(
+        overBudgetPlayback.locator('button[aria-label="退出播放"]'),
+        "close over-budget Full Playback",
+      );
+      await overBudgetPlayback.waitFor({ state: "detached", timeout: 5_000 });
+      const overBudgetReturnedStory = page.locator(".journey-story");
+      await overBudgetReturnedStory.waitFor({ state: "visible", timeout: 5_000 });
+      await activateControl(
+        overBudgetReturnedStory.locator(".journey-story__close"),
+        "close Story returned from over-budget Full Playback",
+      );
+      await overBudgetReturnedStory.waitFor({ state: "detached", timeout: 5_000 });
+      results.push({
+        name: `quick-recap-over-budget-explicit-full-${viewportLabel}`,
+        ...overBudgetDecision,
+        explicitFullPlaybackStarted: true,
+        failed: false,
+      });
+
       await activateControl(
         page.locator(".living-atlas__journey-rail li button").filter({ hasText: targetTitle }),
         "desktop target journey control",
