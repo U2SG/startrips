@@ -83,4 +83,25 @@ describe("Home Base presence projection (ST-056)", () => {
     expect(source).toContain("latestOnManualCameraInteraction.current?.()");
     expect(source).toContain("claimManualInteraction(false)");
   });
+  it("keeps initial Home camera seeding separate from semantic focus ownership", () => {
+    const globeSource = readFileSync(new URL("./LivingAtlasGlobe.tsx", import.meta.url), "utf8");
+    const particleSource = readFileSync(new URL("./ParticleEarthScene.tsx", import.meta.url), "utf8");
+    expect(globeSource).toContain("focusPoint={atlas?.focusPoint}");
+    expect(globeSource).toContain("initialCameraAnchor={atlas?.initialCameraAnchor}");
+    expect(globeSource).not.toContain("focusPoint={atlas?.focusPoint ?? atlas?.initialCameraAnchor}");
+    expect(particleSource).toContain("initialCameraAnchorNow");
+    expect(particleSource).toContain("rotationXForLatitude(initialCameraAnchorNow.lat)");
+    expect(particleSource).toContain("rotationYForLongitude(initialCameraAnchorNow.lon)");
+  });
+  it("keeps Home presence on the particle owner through prewarm/blend and off the detail owner", () => {
+    const source = readFileSync(new URL("./LivingAtlasGlobe.tsx", import.meta.url), "utf8");
+    expect(source).toContain('dive.owner !== "detail" && !cinematicActive');
+  });
+  it("keeps the Home accessibility target transparent to pointer camera gestures", () => {
+    const css = readFileSync(new URL("../styles/living-atlas.css", import.meta.url), "utf8");
+    const start = css.indexOf(".living-atlas-globe__home-base {");
+    const rule = css.slice(start, css.indexOf("}", start));
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(rule).toContain("pointer-events: none;");
+  });
 });

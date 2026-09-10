@@ -7099,7 +7099,9 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   place-items: center;
   box-sizing: border-box;
   transform: translate(-50%, -50%);
-  pointer-events: auto;
+  /* Keep the 44px accessibility box keyboard-focusable without creating a
+     dead wheel/drag/touch island over the canvas sibling. */
+  pointer-events: none;
   cursor: default;
   border-radius: 50%;
   outline: none;

@@ -1194,6 +1194,8 @@ interface ParticleEarthSceneProps {
   quality?: keyof typeof QUALITY_PROFILE;
   focusPoint?: { lat: number; lon: number } | null;
   focusRoute?: JourneyRoute | null;
+  /** Orientation-only seed; it does not create a focus signal or route owner. */
+  initialCameraAnchor?: { lat: number; lon: number } | null;
   focusRevision?: number;
   focusFlightProfile?: PlaybackTravelChoreography;
   focusColor?: string;
@@ -1576,6 +1578,7 @@ export function ParticleEarthScene({
   quality = "low",
   focusPoint,
   focusRoute,
+  initialCameraAnchor,
   focusRevision = 0,
   focusFlightProfile,
   focusColor,
@@ -1607,6 +1610,7 @@ export function ParticleEarthScene({
   const latestQuality = useRef(quality);
   const latestFocusPoint = useRef(focusPoint);
   const latestFocusRoute = useRef(focusRoute);
+  const latestInitialCameraAnchor = useRef(initialCameraAnchor);
   const latestFocusRevision = useRef(focusRevision);
   const latestFocusFlightProfile = useRef(focusFlightProfile);
   const latestFocusColor = useRef(focusColor);
@@ -1634,6 +1638,7 @@ export function ParticleEarthScene({
   latestQuality.current = quality;
   latestFocusPoint.current = focusPoint;
   latestFocusRoute.current = focusRoute;
+  latestInitialCameraAnchor.current = initialCameraAnchor;
   latestFocusRevision.current = focusRevision;
   latestFocusFlightProfile.current = focusFlightProfile;
   latestFocusColor.current = focusColor;
@@ -4580,28 +4585,37 @@ export function ParticleEarthScene({
       // #20: restrained energy mapping. Even at full energy the environment
       // only gains 12–15%, so it feels alive rather than becoming a visualizer.
       const audioGain = audioAtmosphereGains(audioEnergy);
-      const spatialFocusPoint = focusTarget?.point ?? routeFocusFrame?.center ?? latestFocusPoint.current;
       const focusSolverOwnsState = manualFocusRevision === null;
+      const initialCameraAnchorNow = focusSolverOwnsState ? latestInitialCameraAnchor.current : null;
+      const spatialFocusPoint = initialCameraAnchorNow
+        ?? focusTarget?.point
+        ?? routeFocusFrame?.center
+        ?? latestFocusPoint.current;
       const focusFlightActive = Boolean(
         focusSolverOwnsState
         &&
         currentMode === "focusPoint"
+        && !initialCameraAnchorNow
         && latestCenterFocusPoint.current
         && spatialFocusPoint
         && isFocusFlightActive(pointFocusSettling, routeFocusSettling),
       );
-      let targetRotationX = focusSolverOwnsState && focusTarget
-        ? focusTarget.rotationX
-        : focusSolverOwnsState && spatialFocusPoint
-          ? rotationXForLatitude(spatialFocusPoint.lat)
-        : interactiveRotationX;
-      let targetBaseRotationY = focusSolverOwnsState && focusTarget
-        ? focusTarget.rotationY
-        : focusSolverOwnsState && spatialFocusPoint
-          ? rotationYForLongitude(spatialFocusPoint.lon)
-        : manualFocusRevision !== null
-          ? baseRotationY
-          : latestRotationYOverride.current ?? target.rotationY;
+      let targetRotationX = focusSolverOwnsState && initialCameraAnchorNow
+        ? rotationXForLatitude(initialCameraAnchorNow.lat)
+        : focusSolverOwnsState && focusTarget
+          ? focusTarget.rotationX
+          : focusSolverOwnsState && spatialFocusPoint
+            ? rotationXForLatitude(spatialFocusPoint.lat)
+            : interactiveRotationX;
+      let targetBaseRotationY = focusSolverOwnsState && initialCameraAnchorNow
+        ? rotationYForLongitude(initialCameraAnchorNow.lon)
+        : focusSolverOwnsState && focusTarget
+          ? focusTarget.rotationY
+          : focusSolverOwnsState && spatialFocusPoint
+            ? rotationYForLongitude(spatialFocusPoint.lon)
+            : manualFocusRevision !== null
+              ? baseRotationY
+              : latestRotationYOverride.current ?? target.rotationY;
       if (import.meta.env.DEV && focusFlightActive && focusTarget) {
         host.dataset.focusFlightCurrentRotationX = interactiveRotationX.toFixed(6);
         host.dataset.focusFlightCurrentRotationY = baseRotationY.toFixed(6);

@@ -131,6 +131,8 @@ export function LivingAtlasGlobeControls({
 export type LivingAtlasGlobeProps = {
   focusPoint?: { lat: number; lon: number } | null;
   focusRoute?: JourneyRoute | null;
+  /** One-shot camera orientation seed; never a semantic focus object. */
+  initialCameraAnchor?: { lat: number; lon: number } | null;
   focusRevision?: number;
   focusFlightProfile?: PlaybackTravelChoreography;
   focusColor?: string;
@@ -186,6 +188,7 @@ type AtlasEarthPresentation = Pick<
   LivingAtlasGlobeProps,
   | "focusPoint"
   | "focusRoute"
+  | "initialCameraAnchor"
   | "focusRevision"
   | "focusFlightProfile"
   | "focusColor"
@@ -280,6 +283,7 @@ export function PersistentEarthProvider({ children }: { children: ReactNode }) {
                   quality={stage === "atlas" ? "high" : "low"}
                   focusPoint={atlas?.focusPoint}
                   focusRoute={atlas?.focusRoute}
+                  initialCameraAnchor={atlas?.initialCameraAnchor}
                   focusRevision={atlas?.focusRevision}
                   focusFlightProfile={atlas?.focusFlightProfile}
                   focusColor={atlas?.focusColor}
@@ -324,6 +328,7 @@ export function PersistentEarthProvider({ children }: { children: ReactNode }) {
 export function LivingAtlasGlobe({
   focusPoint,
   focusRoute,
+  initialCameraAnchor,
   focusRevision,
   focusFlightProfile,
   focusColor,
@@ -534,6 +539,7 @@ export function LivingAtlasGlobe({
     persistentEarth.setAtlasPresentation({
       focusPoint,
       focusRoute,
+      initialCameraAnchor,
       focusRevision,
       focusFlightProfile,
       focusColor,
@@ -567,6 +573,7 @@ export function LivingAtlasGlobe({
     focusRevision,
     focusFlightProfile,
     focusRoute,
+    initialCameraAnchor,
     handleHomeBasePresenceFrame,
     handleParticleAnchorFrame,
     handleSemanticZoomSnapshot,
@@ -634,7 +641,7 @@ export function LivingAtlasGlobe({
         </div>
       ) : null}
 
-      {!showDetail && !cinematicActive ? homeBaseLayer.map((descriptor) => {
+      {dive.owner !== "detail" && !cinematicActive ? homeBaseLayer.map((descriptor) => {
         const frame = homeBaseFramesById.get(descriptor.periodId);
         if (!frame?.visible) return null;
         return (

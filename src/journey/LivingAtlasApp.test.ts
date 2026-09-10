@@ -17,6 +17,7 @@ import {
   loadJourneyRowsWithOptionalHome,
   nextPlaybackCameraCommand,
   nextPlaybackReleaseFocusRevision,
+  nextInitialHomeCameraFocusRevision,
   playbackEntryNeedsPreparation,
   playbackCameraUsesPointFocus,
   playbackFocusPointForCameraTarget,
@@ -76,6 +77,14 @@ describe("ordinary Atlas Home runtime (ST-056)", () => {
     expect(resolveOrdinaryAtlasHomePresence([], "regional", "2026-09-10")).toEqual([]);
   });
 
+  it("advances the semantic revision when async Home seeding clears stale fallback focus", () => {
+    expect(nextInitialHomeCameraFocusRevision(0)).toBe(1);
+    expect(nextInitialHomeCameraFocusRevision(7)).toBe(8);
+    const source = readFileSync(new URL("./LivingAtlasApp.tsx", import.meta.url), "utf8");
+    expect(source).toContain("setInitialHomeCameraRevision(nextInitialHomeCameraFocusRevision)");
+    expect(source).toContain("+ initialHomeCameraRevision");
+  });
+
   it("seeds Home camera only for a fresh, unclaimed Atlas with no selected Journey", () => {
     const base = {
       periods: [atlasCurrentHome],
@@ -100,7 +109,9 @@ describe("ordinary Atlas Home runtime (ST-056)", () => {
     expect(source).toContain("homeBasePresence={listHomeBasePeriods ? {");
     expect(source).toContain("onSemanticZoomChange={setAtlasSemanticZoom}");
     expect(source).toContain("onManualCameraInteraction={claimManualAtlasCamera}");
-    expect(source).toContain("ordinaryAtlasHomeFocusPoint ? null : focusRoute");
+    expect(source).toContain("initialHomeCameraAnchor ? null : focusRoute");
+    expect(source).toContain("initialCameraAnchor={initialHomeCameraAnchor}");
+    expect(source).toContain("timeCursor.selection?.journeyId ?? null");
   });
 });
 
