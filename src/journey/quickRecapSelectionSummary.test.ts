@@ -162,7 +162,7 @@ describe("buildQuickRecapSelectionSummary", () => {
     ];
     const prepared = prepareQuickRecapPlayback(sourceJourney, {
       generatedAt: "2026-09-10T00:00:00.000Z",
-      targetDurationMs: 5_000,
+      targetDurationMs: 7_600,
     })!;
 
     const summary = buildQuickRecapSelectionSummary(prepared.plan, sourceJourney)!;

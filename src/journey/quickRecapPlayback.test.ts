@@ -138,7 +138,7 @@ describe("Quick Recap playback handoff (#127)", () => {
 
     const prepared = prepareQuickRecapPlayback(journey, {
       generatedAt: "2026-09-10T00:00:00.000Z",
-      targetDurationMs: 10_000,
+      targetDurationMs: 11_000,
     })!;
     expect(prepared.plan.chapters[0]?.items.map((item) => item.assetId))
       .toEqual(["guest-a", "guest-b", "guest-c"]);
@@ -167,7 +167,7 @@ describe("Quick Recap playback handoff (#127)", () => {
     };
     const options = {
       generatedAt: "2026-09-10T00:00:00.000Z",
-      targetDurationMs: 5_000,
+      targetDurationMs: 7_600,
     };
 
     const prepared = prepareQuickRecapPlayback(journey, options)!;
