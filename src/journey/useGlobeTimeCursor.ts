@@ -175,6 +175,7 @@ export function useGlobeTimeCursor(journeys: readonly Journey[]) {
     selectJourney,
     selectPoint,
     selection,
+    hasExplicitSelection: selectionOwner !== null,
     selectionRevision,
     timelineRevision,
     scrub,

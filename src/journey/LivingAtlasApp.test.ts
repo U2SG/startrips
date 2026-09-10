@@ -12,6 +12,7 @@ vi.mock("../auth/AuthGateway", () => ({
 import { readFileSync } from "node:fs";
 import {
   atlasCinematicIsolationActive,
+  explicitSelectedJourneyIdForHomeCamera,
   capturePlaybackEntryForContext,
   globeFocusState,
   loadJourneyRowsWithOptionalHome,
@@ -28,6 +29,7 @@ import {
   railContentSignature,
   releaseStalePlaybackSession,
   resolveInitialAtlasHomeCameraIntent,
+  resolveAtlasHomeTimelineContext,
   resolveOrdinaryAtlasHomePresence,
   resolvePlaybackOwnership,
   resolveMobilePlaybackPresentation,
@@ -36,6 +38,7 @@ import {
 import { playbackHoldReason, playbackMediaGate } from "./JourneyPlaybackOverlay";
 import { resolvePlaybackReturn } from "./playbackReturn";
 import type { HomeBasePeriod } from "./homeBase";
+import { resolveHomeBasePresence } from "./homeBasePresence";
 import type { Journey } from "./types";
 
 // #8 globe focus mode: the root class/data contract drives the layout CSS
@@ -77,6 +80,61 @@ describe("ordinary Atlas Home runtime (ST-056)", () => {
     expect(resolveOrdinaryAtlasHomePresence([], "regional", "2026-09-10")).toEqual([]);
   });
 
+  it("distinguishes explicit Journey ownership from the default derived cursor selection", () => {
+    expect(explicitSelectedJourneyIdForHomeCamera(false, "derived-journey")).toBeNull();
+    expect(explicitSelectedJourneyIdForHomeCamera(true, "selected-journey")).toBe("selected-journey");
+  });
+
+  it("follows Globe Rewind dates and all-time state instead of pinning Home to today", () => {
+    const timeDomain = {
+      minTime: Date.UTC(2020, 0, 1),
+      maxTime: Date.UTC(2020, 0, 11),
+    };
+    expect(resolveAtlasHomeTimelineContext({
+      cursor: 1,
+      timeDomain,
+      timelineRevision: 0,
+      hasExplicitSelection: false,
+      effectiveDate: "2026-09-10",
+    })).toEqual({ kind: "ordinary", date: "2026-09-10" });
+    expect(resolveAtlasHomeTimelineContext({
+      cursor: 0.5,
+      timeDomain,
+      timelineRevision: 1,
+      hasExplicitSelection: false,
+      effectiveDate: "2026-09-10",
+    })).toEqual({ kind: "date", date: "2020-01-06" });
+    expect(resolveAtlasHomeTimelineContext({
+      cursor: 1,
+      timeDomain,
+      timelineRevision: 0,
+      hasExplicitSelection: true,
+      effectiveDate: "2026-09-10",
+    })).toEqual({ kind: "date", date: "2020-01-11" });
+    expect(resolveAtlasHomeTimelineContext({
+      cursor: 1,
+      timeDomain,
+      timelineRevision: 1,
+      hasExplicitSelection: false,
+      effectiveDate: "2026-09-10",
+    })).toEqual({ kind: "all-time", date: "2020-01-11" });
+
+    const historicalHome: HomeBasePeriod = {
+      ...atlasCurrentHome,
+      id: "home-2020",
+      label: "Old Home",
+      startedOn: "2019-01-01",
+      endedOn: "2021-01-01",
+    };
+    const rewindPresence = resolveHomeBasePresence({
+      periods: [historicalHome, atlasCurrentHome],
+      semanticZoom: "regional",
+      timeline: { kind: "date", date: "2020-01-06" },
+    });
+    expect(rewindPresence.find((entry) => entry.periodId === historicalHome.id)?.presence).toBe("period-context");
+    expect(rewindPresence.find((entry) => entry.periodId === atlasCurrentHome.id)?.presence).toBe("absent");
+  });
+
   it("advances the semantic revision when async Home seeding clears stale fallback focus", () => {
     expect(nextInitialHomeCameraFocusRevision(0)).toBe(1);
     expect(nextInitialHomeCameraFocusRevision(7)).toBe(8);
@@ -111,9 +169,13 @@ describe("ordinary Atlas Home runtime (ST-056)", () => {
     expect(source).toContain("onManualCameraInteraction={claimManualAtlasCamera}");
     expect(source).toContain("initialHomeCameraAnchor ? null : focusRoute");
     expect(source).toContain("initialCameraAnchor={initialHomeCameraAnchor}");
-    expect(source).toContain("timeCursor.selection?.journeyId ?? null");
+    expect(source).toContain("timeCursor.hasExplicitSelection");
+    expect(source).toContain("timeCursor.timelineRevision > 0");
+    expect(source).toContain("timeline: atlasHomeTimelineContext");
     expect(source).toContain("|| playbackActive) {");
     expect(source).toContain("Math.max(focusRevision + initialHomeCameraRevision, playbackReleaseFocusRevision)");
+    const cursorSource = readFileSync(new URL("./useGlobeTimeCursor.ts", import.meta.url), "utf8");
+    expect(cursorSource).toContain("hasExplicitSelection: selectionOwner !== null");
   });
 });
 
