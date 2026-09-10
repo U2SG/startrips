@@ -122,7 +122,7 @@ export function resolveAtlasHomeTimelineContext(input: {
     return { kind: "date", date: formatCursorDate(input.cursor, input.timeDomain) };
   }
   if (input.timelineRevision > 0) {
-    return { kind: "all-time", date: formatCursorDate(1, input.timeDomain) };
+    return { kind: "all-time", date: input.effectiveDate };
   }
   return { kind: "ordinary", date: input.effectiveDate };
 }

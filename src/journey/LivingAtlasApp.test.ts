@@ -117,7 +117,7 @@ describe("ordinary Atlas Home runtime (ST-056)", () => {
       timelineRevision: 1,
       hasExplicitSelection: false,
       effectiveDate: "2026-09-10",
-    })).toEqual({ kind: "all-time", date: "2020-01-11" });
+    })).toEqual({ kind: "all-time", date: "2026-09-10" });
 
     const historicalHome: HomeBasePeriod = {
       ...atlasCurrentHome,
@@ -133,6 +133,13 @@ describe("ordinary Atlas Home runtime (ST-056)", () => {
     });
     expect(rewindPresence.find((entry) => entry.periodId === historicalHome.id)?.presence).toBe("period-context");
     expect(rewindPresence.find((entry) => entry.periodId === atlasCurrentHome.id)?.presence).toBe("absent");
+    const allTimePresence = resolveHomeBasePresence({
+      periods: [historicalHome, atlasCurrentHome],
+      semanticZoom: "regional",
+      timeline: { kind: "all-time", date: "2026-09-10" },
+    });
+    expect(allTimePresence.find((entry) => entry.periodId === historicalHome.id)?.presence).toBe("trace");
+    expect(allTimePresence.find((entry) => entry.periodId === atlasCurrentHome.id)?.presence).toBe("current");
   });
 
   it("advances the semantic revision when async Home seeding clears stale fallback focus", () => {
