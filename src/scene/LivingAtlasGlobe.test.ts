@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { LivingAtlasGlobe, PersistentEarthProvider, resolveLivingAtlasHomeBaseLayer } from "./LivingAtlasGlobe";
+import { LivingAtlasGlobe, LivingAtlasGlobeControls, PersistentEarthProvider, resolveLivingAtlasHomeBaseLayer } from "./LivingAtlasGlobe";
 import { getRouteFocusPhase } from "./ParticleEarthScene";
 import type { HomeBasePeriod } from "../journey/homeBase";
 import { resolveHomeBasePresence } from "../journey/homeBasePresence";
@@ -47,6 +47,33 @@ describe("LivingAtlasGlobe ambience", () => {
   });
 });
 
+describe("Semantic Earth Dive accessibility fallback (#308)", () => {
+  it("keeps the intent mounted when optional detail utilities are suppressed", () => {
+    const rendered = renderToStaticMarkup(createElement(LivingAtlasGlobeControls, {
+      diveStage: "detail",
+      detailLanguage: "zh",
+      onDiveIntent: () => undefined,
+      onDetailLanguageChange: () => undefined,
+      onPickRequest: () => undefined,
+      showDiveIntent: true,
+      showDetailControls: false,
+    }));
+
+    expect(rendered).toContain('data-earth-dive-intent="true"');
+    expect(rendered).toContain('aria-label="返回远景"');
+    expect(rendered).not.toContain("living-atlas-globe__language");
+    expect(rendered).not.toContain("living-atlas-globe__pick");
+    expect(rendered).not.toMatch(/真实地图|REGION MAP|ART GLOBE|particle|detail/i);
+  });
+
+  it("keeps ordinary compact layout Dive ownership independent from detail chrome", () => {
+    const source = readFileSync(new URL("./LivingAtlasGlobe.tsx", import.meta.url), "utf8");
+    expect(source).toContain("const showDiveIntent = !globeFocusMode && !cinematicActive;");
+    expect(source).toContain("{showControls || showDiveIntent ? (");
+    expect(source).toContain("showDiveIntent={showDiveIntent}");
+    expect(source).toContain("showDetailControls={showControls}");
+  });
+});
 describe("route focus choreography phase", () => {
   it("derives flying and settled from route ownership", () => {
     expect(getRouteFocusPhase(true, true, false)).toBe("flying");

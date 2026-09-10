@@ -702,25 +702,31 @@ try {
 
   // 4. #308: renderer-mode chrome is gone, but ordinary Atlas still exposes one
   //    keyboard-reachable spatial intent that enters and exits the SAME Semantic
-  //    Earth Dive. Preserve Journey, explicit Route Point context, timeline
-  //    position and history across the complete particle -> detail -> particle
-  //    round trip while detail-only language/pick + MapLibre legal controls
-  //    remain owned by the detailed geography surface.
+  //    Earth Dive. Establish the timeline value inside the existing #253 focus
+  //    composition, then prove Journey + explicit Route Point + timeline + history
+  //    survive the complete ordinary particle -> detail -> particle round trip.
   {
     const viewport = VIEWPORTS[0];
     const { page, pageErrors } = await openAtlas(viewport);
     try {
-      const timeline = page.locator('.globe-time-scrubber__track');
-      await timeline.focus();
-      await page.keyboard.press("Home");
-      const timelineBefore = await timeline.getAttribute("aria-valuenow");
-
       const selection = await selectNonDefaultJourney(page);
       const selectedJourney = journeys.find((journey) => journey.title === selection.selectedTitle);
       const routePointId = selectedJourney?.routePoints[0]?.id ?? null;
       if (!routePointId) throw new Error("selected QA Journey has no Route Point");
       await page.locator(`[data-qa-globe-route-point-activate="${routePointId}"]`).evaluate((button) => button.click());
       await page.locator(`[data-route-point-context][data-route-point-id="${routePointId}"]`).waitFor({ state: "attached", timeout: 5_000 });
+
+      // The rewind scrubber belongs to globe-focus composition, not ordinary
+      // desktop Atlas. Read the explicit Route Point-derived position there,
+      // then return to ordinary Atlas before exercising Semantic Dive.
+      await enterFocus(page);
+      const timelineInFocus = page.locator('.globe-time-scrubber__track');
+      await timelineInFocus.waitFor({ state: "visible", timeout: 5_000 });
+      await timelineInFocus.focus();
+      const timelineBefore = await timelineInFocus.getAttribute("aria-valuenow");
+      await page.locator(".living-atlas__globe-focus-exit").click();
+      await waitForExitedFocus(page);
+      await settle(page);
 
       const ordinary = await readComposition(page);
       const historyBefore = ordinary.historyLength;
@@ -733,7 +739,14 @@ try {
       await settle(page);
       const returned = await readComposition(page);
       const routePointAfter = await page.locator("[data-route-point-context]").getAttribute("data-route-point-id");
-      const timelineAfter = await timeline.getAttribute("aria-valuenow");
+
+      // Re-enter the same focus/timeline composition only to observe the value;
+      // Semantic Dive itself must not invent a second timeline surface.
+      await enterFocus(page);
+      const timelineAfter = await page.locator('.globe-time-scrubber__track').getAttribute("aria-valuenow");
+      await page.locator(".living-atlas__globe-focus-exit").click();
+      await waitForExitedFocus(page);
+      await settle(page);
 
       record({
         name: "semantic-dive-keyboard-context-roundtrip",
@@ -741,7 +754,7 @@ try {
         selection,
         routePoint: { before: routePointBefore, after: routePointAfter },
         timeline: { before: timelineBefore, after: timelineAfter },
-        historyLength: { before: historyBefore, after: returned.historyLength },
+        historyLength: { before: historyBefore, afterDiveReturn: returned.historyLength },
         enterIntent,
         returnIntent,
         ordinary: {
@@ -803,7 +816,6 @@ try {
       await page.close();
     }
   }
-
   // 4b. Codex review on PR 257: focus mode can be entered from the detail map.
   //     MapLibre installs its own navigation control bottom-right and its
   //     attribution bottom-left, so leaving the detail renderer mounted would

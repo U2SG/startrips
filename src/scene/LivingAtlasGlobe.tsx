@@ -55,6 +55,8 @@ type LivingAtlasGlobeControlsProps = {
   onDiveIntent: () => void;
   onDetailLanguageChange: (language: DetailedEarthLanguage) => void;
   onPickRequest?: () => void;
+  showDiveIntent?: boolean;
+  showDetailControls?: boolean;
   inert?: boolean;
 };
 
@@ -64,6 +66,8 @@ export function LivingAtlasGlobeControls({
   onDiveIntent,
   onDetailLanguageChange,
   onPickRequest,
+  showDiveIntent = true,
+  showDetailControls = true,
   inert = false,
 }: LivingAtlasGlobeControlsProps) {
   const detailMode = diveStage === "detail";
@@ -77,17 +81,19 @@ export function LivingAtlasGlobeControls({
       {/* #308: keyboard fallback for the SAME semantic Dive. It is visually
           quiet until keyboard focus reaches it, and names the spatial intent
           rather than exposing either renderer as a product mode. */}
-      <button
-        type="button"
-        className="living-atlas-globe__dive-intent"
-        data-earth-dive-intent="true"
-        onClick={onDiveIntent}
-        aria-label={diveIntentLabel}
-      >
-        {diveIntentLabel}
-      </button>
+      {showDiveIntent ? (
+        <button
+          type="button"
+          className="living-atlas-globe__dive-intent"
+          data-earth-dive-intent="true"
+          onClick={onDiveIntent}
+          aria-label={diveIntentLabel}
+        >
+          {diveIntentLabel}
+        </button>
+      ) : null}
 
-      {detailMode ? (
+      {detailMode && showDetailControls ? (
         <div className="living-atlas-globe__language" role="group" aria-label="地图语言">
           <button
             type="button"
@@ -108,7 +114,7 @@ export function LivingAtlasGlobeControls({
         </div>
       ) : null}
 
-      {detailMode && onPickRequest ? (
+      {detailMode && showDetailControls && onPickRequest ? (
         <button
           type="button"
           className="living-atlas-globe__pick"
@@ -620,6 +626,11 @@ export function LivingAtlasGlobe({
   // something real to reveal and nothing has to be revealed on a timer.
   const showDetail = dive.stage !== "particle";
   const detailMode = dive.stage === "detail";
+  // #308 review: compact mobile still needs a non-gesture path for external
+  // keyboards and switch-control users. Keep the semantic Dive intent mounted
+  // independently from the optional detail utility cluster; focus mode and
+  // cinematic isolation remain intentionally control-free.
+  const showDiveIntent = !globeFocusMode && !cinematicActive;
 
   return (
     <section
@@ -682,13 +693,15 @@ export function LivingAtlasGlobe({
           </div>
         )) : null}
 
-      {showControls ? (
+      {showControls || showDiveIntent ? (
         <LivingAtlasGlobeControls
           diveStage={dive.stage}
           detailLanguage={detailLanguage}
           onDiveIntent={requestDive}
           onDetailLanguageChange={setDetailLanguage}
           onPickRequest={onPickRequest}
+          showDiveIntent={showDiveIntent}
+          showDetailControls={showControls}
           inert={cinematicActive}
         />
       ) : null}

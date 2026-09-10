@@ -700,11 +700,55 @@ async function verifyDetailedEarthParticleContinuity() {
       })}`);
     }
 
-    // Mobile V2 intentionally removes the desktop globe controls. Keep the real
-    // drag/wheel ownership assertion above at 390x844, then cross the responsive
-    // boundary on the same page before exercising particle -> detail -> particle.
-    // The persistent Earth contract requires the canvas/controller to survive that
-    // viewport transition as well, so this does not weaken the continuity check.
+    // Mobile V2 retires the detail utility cluster, but #308 still requires one
+    // non-gesture Semantic Dive path for keyboard/switch users. Prove that the
+    // renderer-agnostic intent is independently mounted and exposes a touch-safe
+    // focus target before crossing the responsive boundary.
+    const mobileDiveIntent = gateway.page.locator('[data-earth-dive-intent="true"]');
+    if (await mobileDiveIntent.count() !== 1) {
+      throw new Error("compact mobile Semantic Earth Dive keyboard intent is missing or duplicated");
+    }
+    await gateway.page.evaluate(() => {
+      document.querySelector("[data-qa-mobile-dive-tab-sentinel]")?.remove();
+      const controls = document.querySelector(".living-atlas-globe__controls");
+      if (!controls?.parentElement) return;
+      const sentinel = document.createElement("button");
+      sentinel.type = "button";
+      sentinel.dataset.qaMobileDiveTabSentinel = "true";
+      sentinel.textContent = "qa-before-mobile-semantic-dive";
+      sentinel.style.cssText = "position:fixed;left:-9999px;top:0;width:1px;height:1px;opacity:0";
+      controls.parentElement.insertBefore(sentinel, controls);
+      sentinel.focus();
+    });
+    await gateway.page.keyboard.press("Tab");
+    const mobileDiveIntentState = await mobileDiveIntent.evaluate((button) => {
+      const rect = button.getBoundingClientRect();
+      const style = getComputedStyle(button);
+      const name = button.getAttribute("aria-label") ?? "";
+      return {
+        name,
+        focused: document.activeElement === button,
+        focusVisible: button.matches(":focus-visible"),
+        width: rect.width,
+        height: rect.height,
+        visible: style.display !== "none" && style.visibility !== "hidden" && Number(style.opacity) > 0.01,
+        forbiddenModeLanguage: /真实地图|REGION MAP|ART GLOBE|particle|detail/i.test(name),
+      };
+    });
+    await gateway.page.evaluate(() => document.querySelector("[data-qa-mobile-dive-tab-sentinel]")?.remove());
+    if (!mobileDiveIntentState.focused
+      || !mobileDiveIntentState.focusVisible
+      || !mobileDiveIntentState.visible
+      || mobileDiveIntentState.width < 43.5
+      || mobileDiveIntentState.height < 43.5
+      || mobileDiveIntentState.forbiddenModeLanguage) {
+      throw new Error(`compact mobile Semantic Earth Dive keyboard intent is not actionable: ${JSON.stringify(mobileDiveIntentState)}`);
+    }
+
+    // Keep the real drag/wheel ownership assertion above at 390x844, then cross
+    // the responsive boundary on the same page before exercising the full
+    // particle -> detail -> particle round trip. The persistent Earth contract
+    // requires the canvas/controller to survive that viewport transition too.
     await gateway.page.setViewportSize({ width: 768, height: 1024 });
     await gateway.page.waitForFunction(() => (
       document.querySelector(".living-atlas")?.getAttribute("data-mobile-v2") === "off"
