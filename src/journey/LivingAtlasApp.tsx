@@ -311,10 +311,15 @@ function journeyFocus(journey: Journey | null) {
 export function resolveMobilePlaybackPresentation(
   journeys: readonly Journey[],
   selection: { journeyId: string; pointIndex: number | null } | null,
+  fallbackJourneyId: string | null | undefined = undefined,
 ) {
+  const fallbackJourney = fallbackJourneyId === undefined
+    ? journeys.at(-1) ?? null
+    : fallbackJourneyId === null
+      ? null
+      : journeys.find((candidate) => candidate.id === fallbackJourneyId) ?? null;
   const journey = journeys.find((candidate) => candidate.id === selection?.journeyId)
-    ?? journeys.at(-1)
-    ?? null;
+    ?? fallbackJourney;
   const point = selection?.pointIndex === null || selection?.pointIndex === undefined
     ? null
     : journey?.routePoints[selection.pointIndex] ?? null;
@@ -334,6 +339,55 @@ export function resolveMobilePlaybackPresentation(
     focusRevision: journeyIndex >= 0
       ? (journeyIndex + 1) * 1000 + (selection?.pointIndex ?? 0)
       : 0,
+  };
+}
+
+
+export type UnknownCreateObservationOwnership = {
+  activeJourneyId: string | null;
+  selection: { journeyId: string; pointIndex: number | null } | null;
+  selectionRevision: number;
+  timelineRevision: number;
+};
+
+export function resolveUnknownCreateObservationOwnership({
+  journeys,
+  timelineSelection,
+  selectionRevision,
+  timelineRevision,
+  preserved,
+}: {
+  journeys: readonly Journey[];
+  timelineSelection: { journeyId: string; pointIndex: number | null } | null;
+  selectionRevision: number;
+  timelineRevision: number;
+  preserved: UnknownCreateObservationOwnership | null;
+}) {
+  const preservedStillOwns = preserved !== null
+    && preserved.selectionRevision === selectionRevision
+    && preserved.timelineRevision === timelineRevision;
+  if (!preservedStillOwns) {
+    return {
+      activeJourneyId: timelineSelection?.journeyId ?? journeys.at(-1)?.id ?? null,
+      selection: timelineSelection,
+      fallbackJourneyId: undefined as string | null | undefined,
+      observationOnly: false,
+    };
+  }
+  const hasJourney = (journeyId: string | null | undefined) => Boolean(
+    journeyId && journeys.some((journey) => journey.id === journeyId),
+  );
+  const activeJourneyId = hasJourney(preserved.activeJourneyId)
+    ? preserved.activeJourneyId
+    : null;
+  const selection = hasJourney(preserved.selection?.journeyId)
+    ? preserved.selection
+    : null;
+  return {
+    activeJourneyId,
+    selection,
+    fallbackJourneyId: activeJourneyId,
+    observationOnly: true,
   };
 }
 
@@ -784,6 +838,7 @@ export function LivingAtlasApp({
   const playbackActive = playbackOwnership.active;
   const [composerOpen, setComposerOpen] = useState(false);
   const [pendingUnknownCreateAttempt, setPendingUnknownCreateAttempt] = useState<UnknownJourneyCreateAttempt | null>(null);
+  const [unknownCreateObservationOwnership, setUnknownCreateObservationOwnership] = useState<UnknownCreateObservationOwnership | null>(null);
   const [editingJourneyId, setEditingJourneyId] = useState<string | null>(null);
   const [arrivalJourneyId, setArrivalJourneyId] = useState<string | null>(null);
   const [notice, setNotice] = useState<AtlasNotice | null>(null);
@@ -859,7 +914,14 @@ export function LivingAtlasApp({
   // #21: the rewind cursor over the whole journey timeline. Only active while
   // the user is in globe focus mode; entering playback pauses rewind.
   const timeCursor = useGlobeTimeCursor(journeys);
-  const activeJourneyId = timeCursor.selection?.journeyId ?? journeys.at(-1)?.id ?? null;
+  const unknownCreateSemanticOwnership = resolveUnknownCreateObservationOwnership({
+    journeys,
+    timelineSelection: timeCursor.selection,
+    selectionRevision: timeCursor.selectionRevision,
+    timelineRevision: timeCursor.timelineRevision,
+    preserved: unknownCreateObservationOwnership,
+  });
+  const activeJourneyId = unknownCreateSemanticOwnership.activeJourneyId;
   const activeJourneyIdRef = useRef(activeJourneyId);
   activeJourneyIdRef.current = activeJourneyId;
   const selectedJourneyIdForHomeCamera = explicitSelectedJourneyIdForHomeCamera(
@@ -1088,7 +1150,11 @@ export function LivingAtlasApp({
       ? savedRoutes.map((route) => route.id === draftRoute.id ? draftRoute : route)
       : [...savedRoutes, draftRoute];
   }, [draftRoute, journeys]);
-  const focusPresentation = resolveMobilePlaybackPresentation(journeys, timeCursor.selection);
+  const focusPresentation = resolveMobilePlaybackPresentation(
+    journeys,
+    unknownCreateSemanticOwnership.selection,
+    unknownCreateSemanticOwnership.fallbackJourneyId,
+  );
   const mobileJourney = focusPresentation.journey;
   const mobilePoint = focusPresentation.point;
   const focusPoint = focusPresentation.focusPoint;
@@ -2218,6 +2284,22 @@ export function LivingAtlasApp({
             cancelGlobePick();
             setDraftRoute(null);
             if (!editingJourney) {
+              if (
+                unknownCreateAttempt?.mode === "confirmation-required"
+                || unknownCreateAttempt?.mode === "ambiguous"
+              ) {
+                setUnknownCreateObservationOwnership({
+                  activeJourneyId,
+                  selection: timeCursor.selection
+                    ? {
+                        journeyId: timeCursor.selection.journeyId,
+                        pointIndex: timeCursor.selection.pointIndex,
+                      }
+                    : null,
+                  selectionRevision: timeCursor.selectionRevision,
+                  timelineRevision: timeCursor.timelineRevision,
+                });
+              }
               void closeUnknownCreateWithCurrentAtlasTruth({
                 attempt: unknownCreateAttempt ?? null,
                 preserveAttempt: setPendingUnknownCreateAttempt,

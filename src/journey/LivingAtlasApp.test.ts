@@ -35,6 +35,7 @@ import {
   resolveOrdinaryAtlasHomePresence,
   resolvePlaybackOwnership,
   resolveMobilePlaybackPresentation,
+  resolveUnknownCreateObservationOwnership,
   showsGlobeDetailControls,
 } from "./LivingAtlasApp";
 import { playbackHoldReason, playbackMediaGate } from "./JourneyPlaybackOverlay";
@@ -522,6 +523,119 @@ describe("unknown-create confirmation close", () => {
     expect(uploadPendingMedia).not.toHaveBeenCalled();
     expect(onSaved).not.toHaveBeenCalled();
     expect(handoffArrival).not.toHaveBeenCalled();
+
+    const semanticState = resolveUnknownCreateObservationOwnership({
+      journeys: atlasVisibleJourneys,
+      timelineSelection: { journeyId: candidate.id, pointIndex: null },
+      selectionRevision: 0,
+      timelineRevision: 0,
+      preserved: {
+        activeJourneyId: null,
+        selection: null,
+        selectionRevision: 0,
+        timelineRevision: 0,
+      },
+    });
+    expect(semanticState.activeJourneyId).toBeNull();
+    expect(resolveMobilePlaybackPresentation(
+      atlasVisibleJourneys,
+      semanticState.selection,
+      semanticState.fallbackJourneyId,
+    ).journey).toBeNull();
+  });
+});
+
+describe("unknown-create verification focus ownership", () => {
+  const candidate = { ...playbackJourney, id: "unproven-candidate" };
+  const otherCandidate = { ...playbackJourney, id: "other-unproven-candidate" };
+
+  it("keeps a first-Journey candidate visible but semantically neutral", () => {
+    const state = resolveUnknownCreateObservationOwnership({
+      journeys: [candidate],
+      timelineSelection: { journeyId: candidate.id, pointIndex: null },
+      selectionRevision: 0,
+      timelineRevision: 0,
+      preserved: {
+        activeJourneyId: null,
+        selection: null,
+        selectionRevision: 0,
+        timelineRevision: 0,
+      },
+    });
+
+    expect(state.observationOnly).toBe(true);
+    expect(state.activeJourneyId).toBeNull();
+    expect(state.selection).toBeNull();
+    expect(resolveMobilePlaybackPresentation(
+      [candidate],
+      state.selection,
+      state.fallbackJourneyId,
+    ).activeRouteId).toBeNull();
+  });
+
+  it("keeps every ambiguous candidate observation-only", () => {
+    const state = resolveUnknownCreateObservationOwnership({
+      journeys: [candidate, otherCandidate],
+      timelineSelection: { journeyId: otherCandidate.id, pointIndex: null },
+      selectionRevision: 4,
+      timelineRevision: 7,
+      preserved: {
+        activeJourneyId: null,
+        selection: null,
+        selectionRevision: 4,
+        timelineRevision: 7,
+      },
+    });
+
+    expect(state.activeJourneyId).toBeNull();
+    expect(state.selection).toBeNull();
+    expect(resolveMobilePlaybackPresentation(
+      [candidate, otherCandidate],
+      state.selection,
+      state.fallbackJourneyId,
+    ).journey).toBeNull();
+  });
+
+  it("preserves the pre-close current owner instead of switching to a recovery candidate", () => {
+    const existing = { ...playbackJourney, id: "existing-owner" };
+    const state = resolveUnknownCreateObservationOwnership({
+      journeys: [existing, candidate],
+      timelineSelection: { journeyId: candidate.id, pointIndex: null },
+      selectionRevision: 2,
+      timelineRevision: 3,
+      preserved: {
+        activeJourneyId: existing.id,
+        selection: { journeyId: existing.id, pointIndex: null },
+        selectionRevision: 2,
+        timelineRevision: 3,
+      },
+    });
+
+    expect(state.activeJourneyId).toBe(existing.id);
+    expect(state.selection?.journeyId).toBe(existing.id);
+    expect(resolveMobilePlaybackPresentation(
+      [existing, candidate],
+      state.selection,
+      state.fallbackJourneyId,
+    ).activeRouteId).toBe(existing.id);
+  });
+
+  it("releases observation-only ownership after an explicit selection revision", () => {
+    const state = resolveUnknownCreateObservationOwnership({
+      journeys: [candidate],
+      timelineSelection: { journeyId: candidate.id, pointIndex: null },
+      selectionRevision: 1,
+      timelineRevision: 0,
+      preserved: {
+        activeJourneyId: null,
+        selection: null,
+        selectionRevision: 0,
+        timelineRevision: 0,
+      },
+    });
+
+    expect(state.observationOnly).toBe(false);
+    expect(state.activeJourneyId).toBe(candidate.id);
   });
 });
 
