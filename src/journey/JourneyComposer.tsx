@@ -844,7 +844,11 @@ export function JourneyComposer({
       });
       await applySavedResult(result, "initial-save");
     } catch (errorValue) {
-      if (!journey && !(errorValue instanceof JourneyApiError)) {
+      const createOutcomeMayBeUnknown = !journey && (
+        !(errorValue instanceof JourneyApiError)
+        || errorValue.status >= 500
+      );
+      if (createOutcomeMayBeUnknown) {
         await recoverUnknownCreate(submittedInput, knownJourneyIdsBeforeCreate);
       } else {
         setMessage(errorValue instanceof Error ? errorValue.message : "旅程保存失败");
