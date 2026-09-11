@@ -44,6 +44,7 @@ const LOCAL_SCALE_PROBE_DEG = 0.05;
 // one published particle frame, not another animation loop; most point focuses
 // exit after 1-2 passes, while large whole-Journey frames may use more.
 const CALIBRATION_MAX_PASSES = 6;
+const CALIBRATION_RETRY_PASSES = 2;
 const CALIBRATION_ZOOM_EPSILON = 0.0005;
 const CALIBRATION_ANCHOR_EPSILON_PX = 0.05;
 const CALIBRATION_SCALE_ERROR_EPSILON = 0.0005;
@@ -83,7 +84,10 @@ type DetailedEarthMapProps = {
   /** Existing screen-space calibration exposed to the Dive owner so a newly
    * published particle frame can be applied in the same event, without a
    * React-render frame of lag during continuous wheel/pinch input. */
-  calibrationHandleRef?: MutableRefObject<((frame: ParticleAnchorFrame) => void) | null>;
+  calibrationHandleRef?: MutableRefObject<((
+    frame: ParticleAnchorFrame,
+    mode?: "sync" | "retry",
+  ) => void) | null>;
 };
 
 function applyMapLanguage(map: MapLibreMap, language: DetailedEarthLanguage) {
@@ -264,12 +268,19 @@ export default function DetailedEarthMap({
      * a fixed point once they agree, so a bounded loop converges instead of
      * hunting.
      */
-    const calibrateToParticle = (frameOverride?: ParticleAnchorFrame | null) => {
+    const calibrateToParticle = (
+      frameOverride?: ParticleAnchorFrame | null,
+      mode: "sync" | "retry" = "sync",
+    ) => {
       const particle = frameOverride ?? particleFrameRef.current;
       const frame = handoffFrame(frameOverride);
       if (!particle || !frame) return;
-      map.jumpTo({ center: frame.center });
-      for (let pass = 0; pass < CALIBRATION_MAX_PASSES; pass += 1) {
+      // A NEW particle frame reseeds the geographic center. A retry of the SAME
+      // stable frame must preserve the center correction already accumulated by
+      // previous passes, otherwise every Dive rAF would erase its own progress.
+      if (mode === "sync") map.jumpTo({ center: frame.center });
+      const maxPasses = mode === "retry" ? CALIBRATION_RETRY_PASSES : CALIBRATION_MAX_PASSES;
+      for (let pass = 0; pass < maxPasses; pass += 1) {
         const measured = measureAnchorFrame(frameOverride);
         if (!measured) return;
         const zoom = solveDetailedEarthHandoffZoom({
@@ -330,7 +341,7 @@ export default function DetailedEarthMap({
 
     calibrateRef.current = () => calibrateToParticle();
     if (calibrationHandleRef) {
-      calibrationHandleRef.current = (frame) => calibrateToParticle(frame);
+      calibrationHandleRef.current = (frame, mode = "sync") => calibrateToParticle(frame, mode);
     }
     map.on("move", () => publishAnchorFrame());
 
@@ -409,19 +420,30 @@ export default function DetailedEarthMap({
       // before user handlers wake.
       map.stop();
     }
+    const canvas = map.getCanvas();
     if (owns) {
+      // `interactive:false` is intentional during prewarm, but MapLibre also
+      // makes the canvas tabindex=-1 and leaves boxZoom/touchPitch disabled.
+      // Restore the complete ordinary interactive contract only after detail
+      // owns input, including sequential keyboard reachability.
+      canvas.tabIndex = 0;
+      map.boxZoom.enable();
       map.dragPan.enable(DETAILED_EARTH_DRAG_PAN_OPTIONS);
       map.dragRotate.enable();
       map.scrollZoom.enable();
       map.touchZoomRotate.enable();
       map.touchZoomRotate.enableRotation();
+      map.touchPitch.enable();
       map.keyboard.enable();
       map.doubleClickZoom.enable();
     } else {
+      canvas.tabIndex = -1;
+      map.boxZoom.disable();
       map.dragPan.disable();
       map.dragRotate.disable();
       map.scrollZoom.disable();
       map.touchZoomRotate.disable();
+      map.touchPitch.disable();
       map.keyboard.disable();
       map.doubleClickZoom.disable();
     }

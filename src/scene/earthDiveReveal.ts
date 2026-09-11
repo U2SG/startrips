@@ -36,9 +36,12 @@ function clamp(value: number, min: number, max: number) {
 export function earthDiveSpatialRevealProgress(
   stage: EarthDiveStage,
   snapshot: SemanticZoomSnapshot,
-) {
+): number | null {
   if (stage !== "blending") return stage === "detail" ? 1 : 0;
-  if (snapshot.level !== "local") return 1;
+  // Keyboard/accessibility Dive can enter blending without a local-band
+  // trajectory. `null` means: preserve the existing full-frame opacity blend;
+  // do not pretend a completed radial reveal is equivalent.
+  if (snapshot.level !== "local") return null;
   const span = EARTH_DIVE_DETAIL_EXIT_PROGRESS - EARTH_DIVE_BLEND_ENTER_PROGRESS;
   if (!(span > 0)) return 1;
   return clamp(
@@ -85,6 +88,7 @@ export function resolveEarthDiveRevealGeometry(
     Math.hypot(bounds.width - anchorX, bounds.height - anchorY),
   );
   const progress = earthDiveSpatialRevealProgress(stage, snapshot);
+  if (progress === null) return null;
   const edgeRadius = (fullCoverageRadius + Math.max(0, featherPx)) * progress;
   const coreRadius = Math.max(0, edgeRadius - Math.max(0, featherPx));
   return { anchorX, anchorY, coreRadius, edgeRadius, progress };

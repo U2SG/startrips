@@ -55,6 +55,12 @@ describe("Semantic Earth Dive renderer ownership", () => {
     expect(globe).toContain('cameraHold={Boolean(atlas) && atlas?.inputOwner === "detail"}');
     expect(detail).toContain("interactive: false");
     expect(detail).toContain('const owns = diveOwner === "detail";');
+    expect(detail).toContain("canvas.tabIndex = 0");
+    expect(detail).toContain("canvas.tabIndex = -1");
+    expect(detail).toContain("map.boxZoom.enable()");
+    expect(detail).toContain("map.boxZoom.disable()");
+    expect(detail).toContain("map.touchPitch.enable()");
+    expect(detail).toContain("map.touchPitch.disable()");
     expect(detail).toContain("map.scrollZoom.enable()");
     expect(detail).toContain("map.scrollZoom.disable()");
   });
@@ -62,8 +68,11 @@ describe("Semantic Earth Dive renderer ownership", () => {
   it("keeps per-frame handoff calibration on the imperative publish path", () => {
     const globe = readFileSync(new URL("./LivingAtlasGlobe.tsx", import.meta.url), "utf8");
     const detail = readFileSync(new URL("./DetailedEarthMap.tsx", import.meta.url), "utf8");
-    expect(globe).toContain("detailCalibrationRef.current?.(frame)");
-    expect(detail).toContain("calibrationHandleRef.current = (frame) => calibrateToParticle(frame)");
+    expect(globe).toContain('detailCalibrationRef.current?.(frame, "sync")');
+    expect(globe).toContain('detailCalibrationRef.current?.(particleFrameRef.current, "retry")');
+    expect(detail).toContain('mode: "sync" | "retry" = "sync"');
+    expect(detail).toContain('if (mode === "sync") map.jumpTo({ center: frame.center })');
+    expect(detail).toContain("CALIBRATION_RETRY_PASSES = 2");
     expect(detail).toContain("[diveOwner, diveStage, focusPoint, focusRoute]");
     expect(detail).not.toContain("[diveOwner, diveSnapshot, diveStage, focusPoint, focusRoute, particleFrame]");
   });

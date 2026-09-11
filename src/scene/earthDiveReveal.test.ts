@@ -23,7 +23,13 @@ describe("earthDiveSpatialRevealProgress", () => {
   it("keeps the keyboard/fallback command on the existing full-frame blend", () => {
     expect(earthDiveSpatialRevealProgress("blending", {
       level: "planet", zoom: 1, localProgress: 0,
-    })).toBe(1);
+    })).toBeNull();
+    expect(resolveEarthDiveRevealGeometry(
+      { anchor: { lat: 0, lon: 0 }, screen: { x: 50, y: 50 }, pxPerDegreeLat: 10 },
+      { left: 0, top: 0, width: 100, height: 100 },
+      "blending",
+      { level: "planet", zoom: 1, localProgress: 0 },
+    )).toBeNull();
   });
 });
 

@@ -174,6 +174,9 @@ async function installStageRecorder(page) {
     if (!section) throw new Error("living-atlas-globe section is absent");
     const sample = () => {
       const map = document.querySelector(".detailed-earth-map");
+      const detailLayer = document.querySelector(".living-atlas-globe__detail-layer");
+      const detailStyle = detailLayer instanceof HTMLElement ? getComputedStyle(detailLayer) : null;
+      const canvas = document.querySelector(".maplibregl-canvas");
       return {
         stage: section.getAttribute("data-earth-dive"),
         owner: section.getAttribute("data-earth-dive-owner"),
@@ -182,6 +185,11 @@ async function installStageRecorder(page) {
         anchorY: map?.dataset?.handoffAnchorY ? Number(map.dataset.handoffAnchorY) : null,
         scale: map?.dataset?.handoffScale ? Number(map.dataset.handoffScale) : null,
         mapZoom: map?.dataset?.handoffZoom ? Number(map.dataset.handoffZoom) : null,
+        revealMode: detailLayer?.getAttribute("data-earth-dive-spatial-reveal") ?? null,
+        maskImage: detailStyle?.maskImage || detailStyle?.webkitMaskImage || "none",
+        transitionDuration: detailStyle?.transitionDuration ?? null,
+        opacity: detailStyle ? Number(detailStyle.opacity) : null,
+        canvasTabIndex: canvas instanceof HTMLElement ? canvas.tabIndex : null,
       };
     };
     window.__qaEarthDiveStages = [sample()];
@@ -217,6 +225,10 @@ async function stages(page) {
   return page.evaluate(() => window.__qaEarthDiveStages.map((entry) => entry.stage));
 }
 
+async function stageEntries(page) {
+  return page.evaluate(() => [...window.__qaEarthDiveStages]);
+}
+
 
 async function wheelEvents(page) {
   return page.evaluate(() => window.__qaEarthDiveWheelEvents ?? []);
@@ -241,6 +253,68 @@ async function wheelUntil(page, point, deltaY, predicate, label, maxSteps = 90) 
     hit: await hitTarget(page, point),
     stages: await stages(page),
   })}`);
+}
+
+async function wheelUntilDetailWithStableRetry(page, point, deltaY, label, maxSteps = 90) {
+  let target = point;
+  for (let step = 0; step <= maxSteps; step += 1) {
+    const state = await readDive(page);
+    if (state.stage === "detail") return state;
+    if (
+      state.stage === "blending"
+      && state.semanticZoom === "local"
+      && Number(state.localProgress) >= 0.999
+    ) {
+      // Stop sending wheel input. A fully-settled but non-converged detail
+      // renderer must finish through the EXISTING Dive rAF retry path while the
+      // particle frame is stable; otherwise this wait times out as a liveness
+      // failure instead of hiding it with more user input.
+      await page.waitForFunction(
+        () => document.querySelector(".living-atlas-globe")?.getAttribute("data-earth-dive") === "detail",
+        null,
+        { timeout: 5_000 },
+      );
+      return readDive(page);
+    }
+    if (step === maxSteps) break;
+    target = await gesturePoint(page, target);
+    await wheelAt(page, target, deltaY);
+    await page.waitForTimeout(100);
+  }
+  throw new Error(`${label} never happened: ${JSON.stringify({
+    state: await readDive(page),
+    frames: await readFrames(page),
+    reveal: await readSpatialReveal(page),
+    hit: await hitTarget(page, point),
+    stages: await stages(page),
+  })}`);
+}
+
+async function tabToDetailCanvas(page) {
+  const ready = await page.evaluate(() => {
+    const canvas = document.querySelector(".maplibregl-canvas");
+    if (!(canvas instanceof HTMLElement) || !canvas.parentElement) return false;
+    const sentinel = document.createElement("button");
+    sentinel.type = "button";
+    sentinel.dataset.qaTabSentinel = "true";
+    sentinel.textContent = "before map";
+    canvas.parentElement.insertBefore(sentinel, canvas);
+    sentinel.focus();
+    return document.activeElement === sentinel;
+  });
+  if (!ready) return false;
+  await page.keyboard.press("Tab");
+  const reached = await page.evaluate(() => document.activeElement?.classList.contains("maplibregl-canvas") ?? false);
+  await page.evaluate(() => document.querySelector('[data-qa-tab-sentinel="true"]')?.remove());
+  return reached;
+}
+
+function cssDurationMs(value) {
+  if (typeof value !== "string") return Number.NaN;
+  const first = value.split(",")[0]?.trim() ?? "";
+  if (first.endsWith("ms")) return Number.parseFloat(first);
+  if (first.endsWith("s")) return Number.parseFloat(first) * 1000;
+  return Number.NaN;
 }
 
 /**
@@ -399,11 +473,10 @@ try {
   const beforeCommit = await readDive(forward.page);
   const blendingFrames = await readFrames(forward.page);
   const blendingReveal = await readSpatialReveal(forward.page);
-  const committed = await wheelUntil(
+  const committed = await wheelUntilDetailWithStableRetry(
     forward.page,
     point,
     FINE_WHEEL_DELTA,
-    (state) => state.stage === "detail",
     "the dive never committed to detail on wheel zoom alone",
   );
   const commitAlignment = await readCommitAlignment(forward.page);
@@ -419,6 +492,8 @@ try {
   // is the hit-test winner, so this is the reverse handoff through the owner
   // that actually has the camera.
   const detailHit = await hitTarget(forward.page, point);
+  const detailCanvasTabIndex = await forward.page.locator(".maplibregl-canvas").evaluate((node) => node.tabIndex);
+  const detailCanvasTabReachable = await tabToDetailCanvas(forward.page);
   await wheelUntil(
     forward.page,
     point,
@@ -443,6 +518,13 @@ try {
     (state) => state.stage === "particle",
     "the dive never returned to the particle Earth on wheel zoom-out",
   );
+  await forward.page.waitForTimeout(50);
+  const returnedMapFocusability = await forward.page.evaluate(() => {
+    const canvas = document.querySelector(".maplibregl-canvas");
+    return canvas instanceof HTMLElement
+      ? { present: true, tabIndex: canvas.tabIndex }
+      : { present: false, tabIndex: null };
+  });
 
   const stageLadder = await stages(forward.page);
   // Hard grade the overlap and the exact frame that AUTHORIZED ownership.
@@ -469,6 +551,11 @@ try {
     routePoint,
     gesturePoint: point,
     hitTargets: { blending: blendingHit, detail: detailHit },
+    detailAccessibility: {
+      canvasTabIndex: detailCanvasTabIndex,
+      tabReachable: detailCanvasTabReachable,
+      returned: returnedMapFocusability,
+    },
     entered: { stage: entered.stage, owner: entered.owner, semanticZoom: entered.semanticZoom },
     beforeCommit: {
       stage: beforeCommit.stage,
@@ -520,6 +607,12 @@ try {
   }
   if (committed.owner !== "detail" || committed.earthMode !== "detail") {
     ladderFailures.push("ownership did not transfer on the commit edge");
+  }
+  if (detailCanvasTabIndex !== 0 || !detailCanvasTabReachable) {
+    ladderFailures.push(`detail ownership did not restore sequential keyboard reachability: ${JSON.stringify({ detailCanvasTabIndex, detailCanvasTabReachable })}`);
+  }
+  if (returnedMapFocusability.present && Number(returnedMapFocusability.tabIndex) >= 0) {
+    ladderFailures.push(`particle ownership left the detail canvas in sequential focus order: ${JSON.stringify(returnedMapFocusability)}`);
   }
   if (released.owner !== "particle" || returned.owner !== "particle") {
     ladderFailures.push("ownership did not come home on the reverse handoff");
@@ -591,11 +684,10 @@ try {
   await routeRun.page.waitForTimeout(500);
   const routeBlendingFrames = await readFrames(routeRun.page);
   const routeBlendingReveal = await readSpatialReveal(routeRun.page);
-  const routeCommitted = await wheelUntil(
+  const routeCommitted = await wheelUntilDetailWithStableRetry(
     routeRun.page,
     routeRunPoint,
     FINE_WHEEL_DELTA,
-    (state) => state.stage === "detail",
     "the focused-Journey dive never committed to detail",
   );
   const routeCommitAlignment = await readCommitAlignment(routeRun.page);
@@ -658,6 +750,68 @@ try {
     routeFailures.push("the page raised an error during the focused-Journey dive");
   }
   await routeRun.page.close();
+
+  // ------------------------------------------------ keyboard command fallback
+  // The accessibility command can enter the Dive from a non-local semantic
+  // band. It must keep the existing full-frame opacity blend instead of using
+  // a radial reveal with synthetic progress=1.
+  const commandRun = await openDivePage(context, { blockStyle: false, motion: "animate" });
+  const commandIntent = commandRun.page.locator('[data-earth-dive-intent="true"]');
+  await commandIntent.focus();
+  await commandRun.page.keyboard.press("Enter");
+  await commandRun.page.waitForFunction(() => window.__qaEarthDiveStages.some((entry) => entry.stage === "blending"));
+  try {
+    await commandRun.page.waitForFunction(() => window.__qaEarthDiveStages.some((entry) => entry.stage === "detail"), null, { timeout: 10_000 });
+  } catch (error) {
+    throw new Error(`keyboard command never committed: ${JSON.stringify({
+      state: await readDive(commandRun.page),
+      entries: await stageEntries(commandRun.page),
+      frames: await readFrames(commandRun.page),
+      reveal: await readSpatialReveal(commandRun.page),
+    })}`, { cause: error });
+  }
+  const commandEntries = await stageEntries(commandRun.page);
+  const commandBlend = commandEntries.find((entry) => entry.stage === "blending");
+  const commandFailures = [];
+  if (commandBlend?.owner !== "particle" || commandBlend?.revealMode !== "fallback" || commandBlend?.maskImage !== "none") {
+    commandFailures.push(`keyboard command did not retain the normal full-frame blend: ${JSON.stringify(commandBlend)}`);
+  }
+  const commandBlendMs = cssDurationMs(commandBlend?.transitionDuration);
+  if (!(commandBlendMs >= 500)) {
+    commandFailures.push(`keyboard command lost the normal opacity transition duration: ${JSON.stringify(commandBlend)}`);
+  }
+  if (commandRun.pageErrors.length > 0) commandFailures.push("keyboard command page raised an error");
+  result.keyboardCommand = { blend: commandBlend, failures: commandFailures };
+  await commandRun.page.close();
+
+  const reducedCommandRun = await openDivePage(context, { blockStyle: false, motion: "reduce" });
+  const reducedCommandIntent = reducedCommandRun.page.locator('[data-earth-dive-intent="true"]');
+  await reducedCommandIntent.focus();
+  await reducedCommandRun.page.keyboard.press("Enter");
+  await reducedCommandRun.page.waitForFunction(() => window.__qaEarthDiveStages.some((entry) => entry.stage === "blending"));
+  try {
+    await reducedCommandRun.page.waitForFunction(() => window.__qaEarthDiveStages.some((entry) => entry.stage === "detail"), null, { timeout: 10_000 });
+  } catch (error) {
+    throw new Error(`reduced keyboard command never committed: ${JSON.stringify({
+      state: await readDive(reducedCommandRun.page),
+      entries: await stageEntries(reducedCommandRun.page),
+      frames: await readFrames(reducedCommandRun.page),
+      reveal: await readSpatialReveal(reducedCommandRun.page),
+    })}`, { cause: error });
+  }
+  const reducedCommandEntries = await stageEntries(reducedCommandRun.page);
+  const reducedCommandBlend = reducedCommandEntries.find((entry) => entry.stage === "blending");
+  const reducedCommandFailures = [];
+  if (reducedCommandBlend?.owner !== "particle" || reducedCommandBlend?.revealMode !== "off" || reducedCommandBlend?.maskImage !== "none") {
+    reducedCommandFailures.push(`reduced-motion keyboard command did not retain full-frame fallback: ${JSON.stringify(reducedCommandBlend)}`);
+  }
+  const reducedCommandBlendMs = cssDurationMs(reducedCommandBlend?.transitionDuration);
+  if (!(reducedCommandBlendMs > 0 && reducedCommandBlendMs < commandBlendMs)) {
+    reducedCommandFailures.push(`reduced-motion keyboard command did not keep the shortened opacity transition: ${JSON.stringify(reducedCommandBlend)}`);
+  }
+  if (reducedCommandRun.pageErrors.length > 0) reducedCommandFailures.push("reduced keyboard command page raised an error");
+  result.reducedKeyboardCommand = { blend: reducedCommandBlend, failures: reducedCommandFailures };
+  await reducedCommandRun.page.close();
 
   // ---------------------------------------------------------- reduced motion
   // Spatial reveal is motion, so reduced motion keeps the same calibrated
@@ -804,7 +958,14 @@ try {
   }
   await blocked.page.close();
 
-  result.failures = [...ladderFailures, ...routeFailures, ...reducedFailures, ...blockedFailures];
+  result.failures = [
+    ...ladderFailures,
+    ...routeFailures,
+    ...commandFailures,
+    ...reducedCommandFailures,
+    ...reducedFailures,
+    ...blockedFailures,
+  ];
   console.log(JSON.stringify(result, null, 2));
   if (result.failures.length > 0) {
     throw new Error(`Semantic Earth Dive QA failed: ${JSON.stringify(result.failures)}`);

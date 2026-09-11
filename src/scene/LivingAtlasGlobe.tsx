@@ -418,7 +418,10 @@ export function LivingAtlasGlobe({
   const [zoomIntent, setZoomIntent] = useState<{ zoom: number; revision: number } | null>(null);
   const diveRef = useRef<EarthDiveState>(INITIAL_EARTH_DIVE_STATE);
   const detailLayerRef = useRef<HTMLDivElement>(null);
-  const detailCalibrationRef = useRef<((frame: ParticleAnchorFrame) => void) | null>(null);
+  const detailCalibrationRef = useRef<((
+    frame: ParticleAnchorFrame,
+    mode?: "sync" | "retry",
+  ) => void) | null>(null);
   const particleFrameRef = useRef<ParticleAnchorFrame | null>(null);
   const snapshotRef = useRef<SemanticZoomSnapshot>({ level: "planet", zoom: 1, localProgress: 0 });
   const readinessRef = useRef<DetailReadiness>("unavailable");
@@ -444,6 +447,19 @@ export function LivingAtlasGlobe({
     if (!layer) return;
     if (reduceMotionRef.current || stage !== "blending") {
       layer.dataset.earthDiveSpatialReveal = "off";
+      delete layer.dataset.earthDiveAlignment;
+      delete layer.dataset.earthDiveAnchorDelta;
+      delete layer.dataset.earthDiveScaleError;
+      layer.style.removeProperty("--earth-dive-reveal-progress");
+      return;
+    }
+
+    if (snapshot.level !== "local") {
+      // Accessibility/keyboard Dive has no local-band spatial trajectory, and
+      // the detail renderer cannot reproduce a planet-scale particle view at
+      // its minimum zoom anyway. Preserve the pre-existing full-frame opacity
+      // blend/readiness gate; local wheel/pinch remains strictly calibrated.
+      layer.dataset.earthDiveSpatialReveal = "fallback";
       delete layer.dataset.earthDiveAlignment;
       delete layer.dataset.earthDiveAnchorDelta;
       delete layer.dataset.earthDiveScaleError;
@@ -535,7 +551,7 @@ export function LivingAtlasGlobe({
     if (frame && diveRef.current.owner === "particle") {
       // Keep the hidden/blending detail camera on the exact frame that was
       // just published, rather than waiting one React render/effect behind.
-      detailCalibrationRef.current?.(frame);
+      detailCalibrationRef.current?.(frame, "sync");
     }
     syncDetailSpatialReveal(diveRef.current.stage, snapshotRef.current, frame);
     if (diveRef.current.stage === "particle") return;
@@ -620,13 +636,35 @@ export function LivingAtlasGlobe({
         particleFrameRef.current,
         snapshotRef.current,
       );
-      const alignment = particleFrameMatchesZoom
+      let alignment = particleFrameMatchesZoom
         ? resolveEarthDiveAlignment(
           particleFrameRef.current,
           readDetailedEarthScreenFrame(layer),
         )
         : null;
-      const alignmentPresented = !particleFrameRef.current
+      if (
+        previous.stage === "blending"
+        && snapshotRef.current.level === "local"
+        && revealMode !== "fallback"
+        && readinessRef.current === "fully-settled"
+        && particleFrameMatchesZoom
+        && particleFrameRef.current
+        && !alignment?.aligned
+      ) {
+        // A stable max-zoom particle frame may need another bounded projection
+        // correction after MapLibre has drawn. Reuse the EXISTING Dive rAF as
+        // the only retry authority and preserve the current corrected center;
+        // no timer/state loop and no center reseed.
+        detailCalibrationRef.current?.(particleFrameRef.current, "retry");
+        syncDetailSpatialReveal(previous.stage, snapshotRef.current, particleFrameRef.current);
+        alignment = resolveEarthDiveAlignment(
+          particleFrameRef.current,
+          readDetailedEarthScreenFrame(layer),
+        );
+      }
+      const alignmentPresented = snapshotRef.current.level !== "local"
+        || revealMode === "fallback"
+        || !particleFrameRef.current
         || (particleFrameMatchesZoom && Boolean(alignment?.aligned));
       const blendPresented = spatialRevealPresented && alignmentPresented;
       const next = resolveEarthDive(previous, {
