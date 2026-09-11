@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -63,6 +64,20 @@ const journey: Journey = {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+describe("Story shared-element ownership", () => {
+  it("does not start a fullscreen morph during Story scope initialization", () => {
+    const source = readFileSync(new URL("./JourneyStory.tsx", import.meta.url), "utf8");
+    const start = source.indexOf("const nextInitialMedia = storyInitialMediaSelection");
+    const end = source.indexOf("setMediaReads({});", start);
+    const initialization = source.slice(start, end);
+    expect(start).toBeGreaterThan(0);
+    expect(initialization).toContain("setFullscreen(false)");
+    expect(initialization).toContain("setFullscreenControlsHidden(false)");
+    expect(initialization).not.toContain("exitFullscreen()");
+    expect(initialization).not.toContain("presentFullscreen(");
+  });
 });
 
 describe("finalizeMediaDragCommit (#65)", () => {

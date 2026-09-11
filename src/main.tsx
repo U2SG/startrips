@@ -265,7 +265,9 @@ function LivingAtlasQaGlobe({
 }: LivingAtlasGlobeProps) {
   const [pickIndex, setPickIndex] = useState(0);
   const draftRoute = journeyRoutes.find((route) => route.id === "draft-route-preview") ?? null;
-  const routePointContextQa = new URLSearchParams(window.location.search).get("qaRoutePointContext") === "1";
+  const qaParams = new URLSearchParams(window.location.search);
+  const routePointContextQa = qaParams.get("qaRoutePointContext") === "1";
+  const spatialHandoffQa = qaParams.get("qaSpatialHandoff") === "1";
   return (
     <div className="living-atlas__qa-globe">
       {onGlobePointPick ? (
@@ -292,6 +294,28 @@ function LivingAtlasQaGlobe({
           >{point.label ?? point.id}</button>
         ) : []
       ))) : null}
+      {spatialHandoffQa ? (
+        <svg
+          data-qa-spatial-route-points
+          viewBox="0 0 620 360"
+          aria-hidden="true"
+          style={{ position: "fixed", left: 90, top: 90, width: 620, height: 360, pointerEvents: "none", zIndex: 2 }}
+        >
+          {journeyRoutes.flatMap((route, routeIndex) => route.points.flatMap((point, pointIndex) => (
+            point.id ? (
+              <circle
+                key={`spatial:${route.id}:${point.id}`}
+                className="particle-earth-route__point"
+                data-journey-route={route.id}
+                data-route-point-id={point.id}
+                cx={150 + pointIndex * 115 + routeIndex * 12}
+                cy={150 + routeIndex * 54}
+                r={7}
+              />
+            ) : []
+          )))}
+        </svg>
+      ) : null}
       <output
         data-qa-app-route-preview
         data-route-points={JSON.stringify(draftRoute?.points ?? [])}

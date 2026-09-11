@@ -85,7 +85,11 @@ import {
 } from "./journeyModel";
 import { getLightEffectGradient } from "./lightEffects";
 import "../styles/living-atlas-polish.css";
-import type { Journey, JourneyRoute } from "./types";
+import type { Journey, JourneyRoute, MediaPreviewRead } from "./types";
+import {
+  resolvePlaceMediaObservationRect,
+  resolvePlaceMediaReturnRoutePointId,
+} from "./placeMediaHandoff";
 
 type AtlasView = "planet" | "timeline";
 
@@ -418,7 +422,7 @@ function JourneyCardMedia({
 
 type RoutePointContextMediaRead =
   | { status: "idle" | "loading" | "error" }
-  | { status: "ready"; url: string };
+  | { status: "ready"; url: string; preview?: MediaPreviewRead };
 
 function RoutePointContextRepresentative({
   journey,
@@ -439,39 +443,146 @@ function RoutePointContextRepresentative({
 
   useEffect(() => {
     let cancelled = false;
-    if (!imageAsset) {
+    if (!asset) {
       setRead({ status: "idle" });
       return () => {
         cancelled = true;
       };
     }
     setRead({ status: "loading" });
-    void readMedia(imageAsset.id).then((next) => {
-      if (!cancelled) setRead({ status: "ready", url: next.url });
+    void readMedia(asset.id).then((next) => {
+      if (!cancelled) setRead({ status: "ready", url: next.url, preview: next.preview });
     }).catch(() => {
       if (!cancelled) setRead({ status: "error" });
     });
     return () => {
       cancelled = true;
     };
-  }, [imageAsset?.id, intent.revision, readMedia]);
+  }, [asset?.id, intent.revision, readMedia]);
 
   if (!asset) return null;
+  const representativeUrl = read.status === "ready"
+    ? read.preview?.url ?? (imageAsset ? read.url : null)
+    : null;
+  const presentationState = representativeUrl
+    ? "ready"
+    : imageAsset ? read.status : "video";
   return (
     <div
-      className={`living-atlas__route-point-context-media is-${imageAsset ? read.status : "video"}`}
-      data-route-point-context-media={imageAsset ? read.status : "video"}
+      className={`living-atlas__route-point-context-media is-${presentationState}`}
+      data-route-point-context-media={presentationState}
+      data-route-point-context-media-asset={asset.id}
       aria-label={`代表记录：${asset.fileName}`}
     >
-      {imageAsset && read.status === "ready" ? (
-        <img src={read.url} alt={asset.fileName} />
+      {representativeUrl ? (
+        <img
+          src={representativeUrl}
+          alt={asset.fileName}
+          data-route-point-context-representative={asset.id}
+        />
       ) : null}
-      {imageAsset && read.status !== "ready" ? (
+      {!representativeUrl && imageAsset ? (
         <span aria-hidden="true"><IconPhoto size={16} stroke={1.2} /></span>
       ) : null}
-      {!imageAsset ? <span aria-hidden="true"><IconPlayerPlay size={15} stroke={1.2} /></span> : null}
+      {!representativeUrl && !imageAsset ? (
+        <span aria-hidden="true"><IconPlayerPlay size={15} stroke={1.2} /></span>
+      ) : null}
     </div>
   );
+}
+
+
+function liveRoutePointMarker(journeyId: string, routePointId: string) {
+  if (typeof document === "undefined") return null;
+  return [...document.querySelectorAll<SVGElement>(".particle-earth-route__point")].find((element) => {
+    if (element.dataset.journeyRoute !== journeyId || element.dataset.routePointId !== routePointId) return false;
+    const rect = element.getBoundingClientRect();
+    const style = getComputedStyle(element);
+    return style.display !== "none"
+      && style.visibility !== "hidden"
+      && Number(style.opacity || "1") > 0
+      && rect.right > 0
+      && rect.bottom > 0
+      && rect.left < window.innerWidth
+      && rect.top < window.innerHeight;
+  }) ?? null;
+}
+
+function routePointRepresentativeVisual(assetId: string) {
+  if (typeof document === "undefined") return null;
+  return [...document.querySelectorAll<HTMLImageElement>("[data-route-point-context-representative]")]
+    .find((element) => element.dataset.routePointContextRepresentative === assetId
+      && Boolean(element.currentSrc || element.src)) ?? null;
+}
+
+function placeMediaSourceDimensions(element: HTMLElement) {
+  const rect = element.getBoundingClientRect();
+  if (element instanceof HTMLImageElement && element.naturalWidth && element.naturalHeight) {
+    return { left: 0, top: 0, width: element.naturalWidth, height: element.naturalHeight };
+  }
+  if (element instanceof HTMLVideoElement && element.videoWidth && element.videoHeight) {
+    return { left: 0, top: 0, width: element.videoWidth, height: element.videoHeight };
+  }
+  return { left: 0, top: 0, width: rect.width, height: rect.height };
+}
+
+/**
+ * Build one short-lived observation aperture beside the CURRENT projected
+ * Route Point. It carries no click target and no semantic state; the live SVG
+ * marker remains the geographic source of truth.
+ */
+function createPlaceMediaObservationElement({
+  journeyId,
+  routePointId,
+  mediaSource,
+  compact,
+  paintSource,
+}: {
+  journeyId: string;
+  routePointId: string;
+  mediaSource: HTMLElement;
+  compact: boolean;
+  paintSource: boolean;
+}) {
+  const marker = liveRoutePointMarker(journeyId, routePointId);
+  if (!marker || typeof document === "undefined") return null;
+  const markerRect = marker.getBoundingClientRect();
+  const frame = resolvePlaceMediaObservationRect(
+    { left: markerRect.left, top: markerRect.top, width: markerRect.width, height: markerRect.height },
+    placeMediaSourceDimensions(mediaSource),
+    { width: window.innerWidth, height: window.innerHeight },
+    compact,
+  );
+  if (!frame) return null;
+
+  const element = document.createElement("div");
+  element.className = "living-atlas__place-media-observation";
+  element.dataset.placeMediaObservation = `${journeyId}:${routePointId}`;
+  element.setAttribute("aria-hidden", "true");
+  element.inert = true;
+  const imageUrl = paintSource && mediaSource instanceof HTMLImageElement
+    ? mediaSource.currentSrc || mediaSource.src
+    : "";
+  Object.assign(element.style, {
+    position: "fixed",
+    zIndex: "71",
+    pointerEvents: "none",
+    left: `${frame.left}px`,
+    top: `${frame.top}px`,
+    width: `${frame.width}px`,
+    height: `${frame.height}px`,
+    boxSizing: "border-box",
+    overflow: "hidden",
+    borderRadius: compact ? "10px" : "12px",
+    border: "1px solid rgba(180, 245, 228, 0.24)",
+    backgroundColor: "rgba(5, 15, 14, 0.92)",
+    backgroundImage: imageUrl ? `url(${JSON.stringify(imageUrl)})` : "none",
+    backgroundSize: "cover",
+    backgroundPosition: "center",
+    boxShadow: "0 14px 38px rgba(0, 0, 0, 0.38)",
+  });
+  document.body.appendChild(element);
+  return element;
 }
 
 export function playbackFocusPointForCameraTarget(
@@ -584,6 +695,8 @@ export function LivingAtlasApp({
   const shareClient = capabilities.canShareAtlas ? mutations : null;
   const setCinematicIsolation = useAtlasCinematicIsolation();
   const [journeys, setJourneys] = useState<Journey[]>([]);
+  const journeysRef = useRef(journeys);
+  journeysRef.current = journeys;
   const [homeBasePeriods, setHomeBasePeriods] = useState<HomeBasePeriod[]>([]);
   const [atlasSemanticZoom, setAtlasSemanticZoom] = useState<GlobeSemanticZoom>("planet");
   const [hasManualAtlasCameraInteraction, setHasManualAtlasCameraInteraction] = useState(false);
@@ -723,6 +836,8 @@ export function LivingAtlasApp({
   // the user is in globe focus mode; entering playback pauses rewind.
   const timeCursor = useGlobeTimeCursor(journeys);
   const activeJourneyId = timeCursor.selection?.journeyId ?? journeys.at(-1)?.id ?? null;
+  const activeJourneyIdRef = useRef(activeJourneyId);
+  activeJourneyIdRef.current = activeJourneyId;
   const selectedJourneyIdForHomeCamera = explicitSelectedJourneyIdForHomeCamera(
     timeCursor.hasExplicitSelection,
     timeCursor.selection?.journeyId ?? null,
@@ -1120,7 +1235,7 @@ export function LivingAtlasApp({
       routePointId,
     );
     routePointContextSelectionRef.current = requested.selection;
-    const journey = journeys.find((candidate) => candidate.id === journeyId) ?? null;
+    const journey = journeysRef.current.find((candidate) => candidate.id === journeyId) ?? null;
     const resolved = resolveRoutePointContextSelection(
       requested.selection,
       requested.intent,
@@ -1130,53 +1245,101 @@ export function LivingAtlasApp({
     setRoutePointContextSelection(resolved);
   }
 
-  // Only the cover participates in the Story handoff. A document-level View
-  // Transition would also snapshot the independently named active journey card
-  // and leave that whole card floating above the Story's blurred backdrop.
+  // The media shell is one presentation owner whether the user enters from a
+  // Journey cover or a Route Point. Route Point entry gets one short-lived
+  // observation aperture beside the CURRENT projected marker; no geographic
+  // coordinate is persisted in React state.
   function openJourneyStory(journeyId: string, routePointId: string | null) {
     claimPlaybackReturnIntent();
-    setStoryInitialAssetId(null);
     setStoryInitialSnapState("in-context");
     setStoryFocusVisibleControlOnOpen(false);
     const targetJourney = journeys.find((candidate) => candidate.id === journeyId) ?? null;
-    const sharedCoverId = routePointId === null && targetJourney
-      ? journeyCover(targetJourney)?.id ?? null
+    const routeContext = routePointId && targetJourney
+      ? buildRoutePointContext(targetJourney, routePointId)
+      : null;
+    const sharedAssetId = routePointId === null
+      ? targetJourney ? journeyCover(targetJourney)?.id ?? null : null
+      : routeContext?.representativeAssetId ?? null;
+    setStoryInitialAssetId(routePointId ? sharedAssetId : null);
+
+    const representative = routePointId && sharedAssetId
+      ? routePointRepresentativeVisual(sharedAssetId)
+      : null;
+    const observationSource = routePointId && representative
+      ? createPlaceMediaObservationElement({
+          journeyId,
+          routePointId,
+          mediaSource: representative,
+          compact: isMobileV2,
+          paintSource: true,
+        })
       : null;
     const sourceElement = routePointId === null
       ? document.querySelector<HTMLElement>(
         ".living-atlas__active-media img, .living-atlas__active-media video",
       )
-      : null;
+      : observationSource;
+
     runSharedElementMorph({
       source: sourceElement,
-      name: `journey-cover-${journeyId}`,
+      name: routePointId
+        ? `place-media-${journeyId}-${routePointId}-${sharedAssetId ?? "media"}`
+        : `journey-cover-${journeyId}`,
       update: () => {
         timeCursor.selectJourney(journeyId);
         setStoryRoutePointId(routePointId);
         setStoryJourneyId(journeyId);
       },
-      // #18 follow-up: never morph the card cover into whichever Story asset
-      // happens to render first. The Story initializes to journeyCover(), and
-      // this lookup additionally requires the exact same asset id.
-      resolveTarget: () => sharedCoverId
-        ? [...document.querySelectorAll<HTMLElement>(".journey-story .journey-story__media [data-shared-media-id]")]
-          .find((element) => element.dataset.sharedMediaId === sharedCoverId) ?? null
-        : null,
-      // Signed reads and image decode settle after the opening React commit.
-      // Wait for that exact cover, but release immediately if the user changes
-      // chapter/media, enters another surface, closes, or the read fails.
+      // Same-asset identity is mandatory. An image/video element is the best
+      // destination; a ready persistent media page is the video-preview
+      // fallback and still belongs to that exact asset.
+      resolveTarget: () => {
+        if (!sharedAssetId) return null;
+        const stage = document.querySelector<HTMLElement>(".journey-story .journey-story__media");
+        if (!stage) return null;
+        const direct = [...stage.querySelectorAll<HTMLElement>("[data-shared-media-id]")]
+          .find((element) => element.dataset.sharedMediaId === sharedAssetId);
+        if (direct) return direct;
+        return [...stage.querySelectorAll<HTMLElement>("[data-media-page-id]")]
+          .find((element) => element.dataset.mediaPageId === sharedAssetId
+            && element.dataset.mediaPageReady === "true") ?? null;
+      },
+      // Signed reads/decode settle after the opening commit. Keep the source
+      // only while the same asset remains the current Story intent.
       isTargetCurrent: () => {
-        const stage = document.querySelector(".journey-story .journey-story__media");
-        return Boolean(sharedCoverId && stage
-          && stage.querySelector<HTMLElement>('[data-media-page="current"]')?.dataset.mediaPageId === sharedCoverId
+        const stage = document.querySelector<HTMLElement>(".journey-story .journey-story__media");
+        return Boolean(sharedAssetId && stage
+          && stage.querySelector<HTMLElement>('[data-media-page="current"]')?.dataset.mediaPageId === sharedAssetId
           && !stage.querySelector('[data-media-incoming="true"], [role="alert"]')
           && !document.querySelector('.journey-story-fullscreen:not([hidden])'));
       },
+      onCleanup: observationSource ? () => observationSource.remove() : undefined,
     });
   }
 
   function closeJourneyStory(source: HTMLElement | null) {
     const journeyId = storyJourneyId;
+    const observation = storyObservationRef.current;
+    const currentJourney = journeyId
+      ? journeysRef.current.find((candidate) => candidate.id === journeyId) ?? null
+      : null;
+    const returnRoutePointId = resolvePlaceMediaReturnRoutePointId({
+      storyJourneyId: journeyId,
+      activeJourneyId: activeJourneyIdRef.current,
+      observation,
+      openingRoutePointId: storyRoutePointId,
+      currentRoutePointIds: currentJourney?.routePoints.map((point) => point.id) ?? [],
+    });
+    const observationTarget = source && journeyId && returnRoutePointId
+      ? createPlaceMediaObservationElement({
+          journeyId,
+          routePointId: returnRoutePointId,
+          mediaSource: source,
+          compact: isMobileV2,
+          paintSource: false,
+        })
+      : null;
+
     claimPlaybackReturnIntent();
     if (playbackPendingMode?.journeyId === journeyId && playbackSession.journeyId === null) {
       playbackEntryRef.current = null;
@@ -1185,17 +1348,34 @@ export function LivingAtlasApp({
     }
     runSharedElementMorph({
       source,
-      name: `journey-cover-${journeyId ?? "story"}`,
+      name: observationTarget && journeyId && returnRoutePointId
+        ? `place-media-${journeyId}-${returnRoutePointId}-return`
+        : `journey-cover-${journeyId ?? "story"}`,
       update: () => {
         setStoryJourneyId(null);
         setStoryRoutePointId(null);
         setStoryInitialAssetId(null);
         setStoryInitialSnapState("in-context");
         setStoryFocusVisibleControlOnOpen(false);
+        if (observationTarget && journeyId && returnRoutePointId) {
+          revealRoutePointContext(journeyId, returnRoutePointId);
+        }
       },
-      resolveTarget: () => document.querySelector<HTMLElement>(
+      resolveTarget: () => observationTarget ?? document.querySelector<HTMLElement>(
         ".living-atlas__active-media img, .living-atlas__active-media video",
       ),
+      isTargetCurrent: observationTarget && journeyId && returnRoutePointId
+        ? () => {
+            if (activeJourneyIdRef.current !== journeyId) return false;
+            const latestJourney = journeysRef.current.find((candidate) => candidate.id === journeyId);
+            if (!latestJourney?.routePoints.some((point) => point.id === returnRoutePointId)) return false;
+            const latestObservation = storyObservationRef.current;
+            return latestObservation?.journeyId === journeyId
+              && latestObservation.routePointId === returnRoutePointId
+              && Boolean(liveRoutePointMarker(journeyId, returnRoutePointId));
+          }
+        : undefined,
+      onCleanup: observationTarget ? () => observationTarget.remove() : undefined,
     });
   }
 

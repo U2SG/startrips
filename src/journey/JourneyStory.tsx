@@ -1480,7 +1480,9 @@ export function JourneyStory({
       return;
     }
     const sharedSource = dialogRef.current?.querySelector<HTMLElement>(
-      '[data-shared-journey-cover="true"]',
+      routePointId !== null
+        ? '.journey-story__media [data-shared-media-id]'
+        : '[data-shared-journey-cover="true"]',
     ) ?? null;
     onClose(sharedSource);
   }
@@ -1636,7 +1638,15 @@ export function JourneyStory({
     setPlaying(false);
     setMobileStoryCoverTransitionActive(false);
     setMobileStoryExpanded(initialSnapState === "expanded");
-    exitFullscreen();
+    // Scope initialization is not a user fullscreen transition. Reset that
+    // presentation state directly so this no-op cannot steal ownership from
+    // the Atlas -> Story shared-element handoff that mounted the Story.
+    if (typeof window !== "undefined") {
+      window.clearTimeout(fullscreenMobileIdleTimerRef.current);
+      fullscreenMobileIdleTimerRef.current = 0;
+    }
+    setFullscreen(false);
+    setFullscreenControlsHidden(false);
     setMobileManageMode(false);
     setDesktopEditing(false);
     setMobileMediaMenuOpen(false);

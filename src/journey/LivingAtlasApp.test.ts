@@ -724,6 +724,44 @@ describe("Route Point context integration (#291)", () => {
     expect(entry).toContain("openJourneyStory(context.journeyId, context.routePointId)");
   });
 
+  it("hands the representative asset off from live Route Point geometry instead of stored x/y", () => {
+    const helperStart = appSource.indexOf("function createPlaceMediaObservationElement");
+    const helperEnd = appSource.indexOf("export function playbackFocusPointForCameraTarget", helperStart);
+    const helper = appSource.slice(helperStart, helperEnd);
+    const openStart = appSource.indexOf("function openJourneyStory(journeyId: string, routePointId: string | null)");
+    const closeStart = appSource.indexOf("function closeJourneyStory", openStart);
+    const open = appSource.slice(openStart, closeStart);
+    const close = appSource.slice(closeStart, appSource.indexOf("const homeNarrativeContextForJourney", closeStart));
+
+    expect(helperStart).toBeGreaterThan(0);
+    expect(helper).toContain("liveRoutePointMarker(journeyId, routePointId)");
+    expect(helper).toContain("marker.getBoundingClientRect()");
+    expect(helper).toContain("resolvePlaceMediaObservationRect(");
+    expect(open).toContain("routePointRepresentativeVisual(sharedAssetId)");
+    expect(open).toContain("setStoryInitialAssetId(routePointId ? sharedAssetId : null)");
+    expect(open).toContain("createPlaceMediaObservationElement({");
+    expect(open).toContain("onCleanup: observationSource ? () => observationSource.remove() : undefined");
+    expect(close).toContain("storyObservationRef.current");
+    expect(close).toContain("createPlaceMediaObservationElement({");
+    expect(close).toContain("paintSource: false");
+    expect(close).toContain("resolvePlaceMediaReturnRoutePointId({");
+    expect(close).toContain("storyObservationRef.current");
+    expect(close).toContain("activeJourneyIdRef.current");
+    expect(close).toContain("journeysRef.current");
+    expect(close).toContain("revealRoutePointContext(journeyId, returnRoutePointId)");
+    expect(close).not.toContain("routePointContextSelectionRef.current");
+    expect(helper).not.toContain("setState");
+  });
+
+  it("keeps video entry on same-asset preview identity when a preview is available", () => {
+    const start = appSource.indexOf("function RoutePointContextRepresentative");
+    const end = appSource.indexOf("function liveRoutePointMarker", start);
+    const representative = appSource.slice(start, end);
+    expect(representative).toContain("readMedia(asset.id)");
+    expect(representative).toContain("read.preview?.url ?? (imageAsset ? read.url : null)");
+    expect(representative).toContain("data-route-point-context-representative={asset.id}");
+  });
+
   it("drops context outside planet view and refreshes retained context from the latest Journey", () => {
     const refreshStart = appSource.indexOf("const intent = routePointContextSelection.intent;");
     const refreshBlock = appSource.slice(refreshStart, refreshStart + 900);
