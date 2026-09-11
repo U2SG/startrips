@@ -6,6 +6,7 @@ import {
   Vector3,
   type WebGLRenderer,
 } from "three";
+import { VISITED_IMPRINT_GAIN_CAP } from "./visitedImprint";
 
 export const PARTICLE_DIM_POINT_LIMIT = 24;
 export const PARTICLE_ACTIVE_DIM_POINT_LIMIT = 12;
@@ -49,6 +50,7 @@ interface ParticleMaterialOptions {
   radialPulseScale?: number;
   terrainRelief?: boolean;
   clipDepthBias?: number;
+  visitedImprint?: boolean;
 }
 
 export function createParticleEarthMaterial({
@@ -59,6 +61,7 @@ export function createParticleEarthMaterial({
   radialPulseScale = 1,
   terrainRelief = false,
   clipDepthBias = 0,
+  visitedImprint = false,
 }: ParticleMaterialOptions) {
   return new ParticleEarthMaterial({
     transparent: true,
@@ -89,6 +92,11 @@ export function createParticleEarthMaterial({
         uTerrainReliefMap: { value: null },
         uTerrainReliefEmphasis: { value: 0 },
       } : {}),
+      ...(visitedImprint ? {
+        uVisitedImprintMap: { value: null },
+        uVisitedImprintGainCap: { value: VISITED_IMPRINT_GAIN_CAP },
+        uVisitedImprintAttenuation: { value: 1 },
+      } : {}),
       // Angular falloff is evaluated with dot products so attenuation stays
       // stable across zoom, DPR and screen size. 0.978 ~= 12°, 0.994 ~= 6°.
       uDimOuterCos: { value: 0.978 },
@@ -115,6 +123,11 @@ export function createParticleEarthMaterial({
       ${terrainRelief ? `
       uniform sampler2D uTerrainReliefMap;
       uniform float uTerrainReliefEmphasis;
+      ` : ""}
+      ${visitedImprint ? `
+      uniform sampler2D uVisitedImprintMap;
+      uniform float uVisitedImprintGainCap;
+      uniform float uVisitedImprintAttenuation;
       ` : ""}
       varying float vStrength;
       varying float vTwinkle;
@@ -154,6 +167,24 @@ export function createParticleEarthMaterial({
           0.0,
           1.0
         );
+        float visitedImprintGain = 0.0;
+        float visitedImprintStrength = 0.0;
+        ${visitedImprint ? `
+        // ST-020: sample the one cached low-resolution history field using the
+        // same geographic direction as terrain relief. It changes only the
+        // brightness/stability of existing particles; coordinates and size stay put.
+        float imprintLongitudeAngle = length(surfaceDirection.xz) > 0.0001
+          ? atan(surfaceDirection.z, -surfaceDirection.x) : 0.0;
+        vec2 imprintUv = vec2(
+          fract(imprintLongitudeAngle / 6.2831853),
+          asin(clamp(surfaceDirection.y, -1.0, 1.0)) / 3.14159265 + 0.5
+        );
+        visitedImprintStrength = texture2D(uVisitedImprintMap, imprintUv).r;
+        visitedImprintGain = visitedImprintStrength
+          * uVisitedImprintGainCap
+          * uVisitedImprintAttenuation
+          * (1.0 - dimAmount * 0.85);
+        ` : ""}
 
         float vertexId = float(gl_VertexID);
         float seed = fract(sin(vertexId * 12.9898) * 43758.5453);
@@ -212,9 +243,12 @@ export function createParticleEarthMaterial({
         ${clipDepthBias !== 0 ? PARTICLE_CLIP_DEPTH_BIAS_CHUNK : ""}
 
         float twinkleSignal = shimmer * 0.3 + spark * 0.95;
-        vTwinkle = mix(0.78 + twinkleSignal * mix(1.0, 0.24, dimAmount),
+        float baseTwinkle = mix(0.78 + twinkleSignal * mix(1.0, 0.24, dimAmount),
           1.0, terrainEmphasis * 0.72);
-        vDimBrightness = mix(1.0, 0.46, dimAmount) * terrainBrightness;
+        vTwinkle = mix(baseTwinkle, 1.0, visitedImprintStrength * 0.22);
+        vDimBrightness = mix(1.0, 0.46, dimAmount)
+          * terrainBrightness
+          * (1.0 + visitedImprintGain);
         ${spatialLod
           ? "vLodAlpha = smoothstep(lodThreshold - 0.035, lodThreshold + 0.015, uLodProgress);"
           : "vLodAlpha = 1.0;"}

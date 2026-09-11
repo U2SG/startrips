@@ -161,6 +161,14 @@ jobs:
           path: artifacts/media-motion/
           if-no-files-found: warn
           retention-days: 7
+      - name: Upload visited imprint review
+        if: ${{ always() && matrix.name == 'globe-render-budget' }}
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: visited-imprint-${{ github.run_attempt }}
+          path: artifacts/visited-imprint/
+          if-no-files-found: warn
+          retention-days: 7
 
   verify:
     name: verify
