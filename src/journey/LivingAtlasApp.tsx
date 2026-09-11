@@ -682,6 +682,24 @@ function useRailOverflow<T extends HTMLElement>(deps: readonly unknown[] = []) {
   return { ref: setElement, overflowing };
 }
 
+export async function closeUnknownCreateWithCurrentAtlasTruth({
+  attempt,
+  preserveAttempt,
+  closeComposer,
+  refreshAtlas,
+}: {
+  attempt: UnknownJourneyCreateAttempt | null;
+  preserveAttempt: (attempt: UnknownJourneyCreateAttempt | null) => void;
+  closeComposer: () => void;
+  refreshAtlas: () => Promise<unknown>;
+}) {
+  preserveAttempt(attempt);
+  closeComposer();
+  if (attempt?.mode === "confirmation-required" || attempt?.mode === "ambiguous") {
+    await refreshAtlas();
+  }
+}
+
 export function LivingAtlasApp({
   lightweightGlobe = false,
   GlobeComponent = LivingAtlasGlobe,
@@ -967,7 +985,7 @@ export function LivingAtlasApp({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [globeFocusMode, exitGlobeFocus]);
 
-  const load = useCallback(async (quiet = false) => {
+  const load = useCallback(async (quiet = false, quietErrorNotice?: string) => {
     const revision = ++loadRevision.current;
     if (!quiet) setStatus("loading");
     try {
@@ -986,7 +1004,7 @@ export function LivingAtlasApp({
     } catch (error) {
       if (revision !== loadRevision.current) return;
       if (quiet) {
-        showNotice("旅程已保存，但最新媒体列表暂时无法刷新。稍后重新进入即可重试。");
+        showNotice(quietErrorNotice ?? "旅程已保存，但最新媒体列表暂时无法刷新。稍后重新进入即可重试。");
       } else {
         setLoadError(error instanceof Error ? error.message : "无法读取旅程");
         setStatus("error");
@@ -2200,7 +2218,19 @@ export function LivingAtlasApp({
             cancelGlobePick();
             setDraftRoute(null);
             if (!editingJourney) {
-              setPendingUnknownCreateAttempt(unknownCreateAttempt ?? null);
+              void closeUnknownCreateWithCurrentAtlasTruth({
+                attempt: unknownCreateAttempt ?? null,
+                preserveAttempt: setPendingUnknownCreateAttempt,
+                closeComposer: () => {
+                  setEditingJourneyId(null);
+                  setComposerOpen(false);
+                },
+                refreshAtlas: () => load(
+                  true,
+                  "Atlas 当前服务端旅程列表暂时无法刷新；这次创建结果仍未确认，请稍后在当前会话中重试核对。",
+                ),
+              });
+              return;
             }
             setEditingJourneyId(null);
             setComposerOpen(false);

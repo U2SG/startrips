@@ -12,6 +12,7 @@ vi.mock("../auth/AuthGateway", () => ({
 import { readFileSync } from "node:fs";
 import {
   atlasCinematicIsolationActive,
+  closeUnknownCreateWithCurrentAtlasTruth,
   explicitSelectedJourneyIdForHomeCamera,
   capturePlaybackEntryForContext,
   globeFocusState,
@@ -459,6 +460,70 @@ describe("resolvePlaybackOwnership", () => {
 });
 
 
+
+describe("unknown-create confirmation close", () => {
+  it("refreshes Atlas server truth without consuming the unresolved attempt", async () => {
+    const pendingFile = { name: "pending.jpg", size: 12, type: "image/jpeg" } as File;
+    const attempt = {
+      input: {
+        title: "Night train",
+        startedOn: "2026-08-11",
+        endedOn: null,
+        note: "",
+        lightColor: "#f4ce73",
+        routePoints: [{
+          latitude: 31.2304,
+          longitude: 121.4737,
+          label: "Shanghai",
+          isStop: true,
+          occurredAt: null,
+        }],
+      },
+      knownJourneyIdsBeforeCreate: ["known-before-attempt"],
+      mode: "confirmation-required" as const,
+      routePoints: [{
+        draftId: "draft-shanghai",
+        latitude: 31.2304,
+        longitude: 121.4737,
+        label: "Shanghai",
+        isStop: true,
+        occurredAt: null,
+      }],
+      mediaFiles: [{ file: pendingFile, routePointDraftId: "draft-shanghai" }],
+    };
+    const candidate = { ...playbackJourney, id: "other-writer-candidate" };
+    const preservedAttempts: typeof attempt[] = [];
+    let atlasVisibleJourneys: Journey[] = [];
+    const closeComposer = vi.fn();
+    const createAgain = vi.fn();
+    const uploadPendingMedia = vi.fn();
+    const onSaved = vi.fn();
+    const handoffArrival = vi.fn();
+
+    await closeUnknownCreateWithCurrentAtlasTruth({
+      attempt,
+      preserveAttempt: (next) => {
+        if (next) preservedAttempts.push(next as typeof attempt);
+      },
+      closeComposer,
+      refreshAtlas: async () => {
+        atlasVisibleJourneys = [candidate];
+        return atlasVisibleJourneys;
+      },
+    });
+
+    expect(closeComposer).toHaveBeenCalledTimes(1);
+    expect(atlasVisibleJourneys.map((journey) => journey.id)).toEqual(["other-writer-candidate"]);
+    expect(preservedAttempts).toEqual([attempt]);
+    expect(preservedAttempts[0].mode).toBe("confirmation-required");
+    expect(preservedAttempts[0].mediaFiles?.[0].file).toBe(pendingFile);
+    expect(preservedAttempts[0].mediaFiles?.[0].routePointDraftId).toBe("draft-shanghai");
+    expect(createAgain).not.toHaveBeenCalled();
+    expect(uploadPendingMedia).not.toHaveBeenCalled();
+    expect(onSaved).not.toHaveBeenCalled();
+    expect(handoffArrival).not.toHaveBeenCalled();
+  });
+});
 
 describe("optional Home hydration", () => {
   it("lets Journeys resolve while private Home history remains pending", async () => {
