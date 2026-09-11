@@ -276,6 +276,21 @@ export type UnknownJourneyCreateAttempt = {
   mediaFiles?: PendingJourneyMedia[];
 };
 
+export function unknownCreateRecheckMessage(hasPendingMedia: boolean) {
+  const sameSession = "你可以重新确认，或先关闭创建器，稍后在当前 Atlas 会话中重新打开继续核对。";
+  const pendingMediaNotice = hasPendingMedia
+    ? "当前会话会保留尚未上传的本地媒体和路线点归属；请不要刷新整个页面，刷新后这些本地内容需要重新选择。"
+    : "请继续在当前 Atlas 会话中核对，不要把刷新整个页面当作保留这次恢复状态的方式。";
+  return `暂时无法确认这段旅程是否已经保存。${sameSession}${pendingMediaNotice}关闭不会创建另一段 Journey，也不会把这次不确定结果当作未保存。`;
+}
+
+function ambiguousUnknownCreateMessage(hasPendingMedia: boolean) {
+  const refreshWarning = hasPendingMedia
+    ? "如果你选择刷新整个页面，尚未上传的本地媒体和路线点归属会丢失，需要重新选择。"
+    : "";
+  return `检测到多条与本次提交完全相同的新 Journey，无法安全判断哪一条属于这次保存。为避免重复创建，当前不会再次提交；请关闭创建器后在 Atlas 中核对这些 Journey。${refreshWarning}`;
+}
+
 type JourneyComposerProps = {
   open: boolean;
   journey?: Journey | null;
@@ -847,7 +862,7 @@ export function JourneyComposer({
         routePoints: routePoints.map((point) => ({ ...point })),
         mediaFiles: mediaFiles.map((media) => ({ ...media })),
       });
-      setMessage("暂时无法确认这段旅程是否已经保存。你可以重新确认，或安全关闭创建器后刷新 Atlas；关闭不会创建另一段 Journey，也不会把这次不确定结果当作未保存。");
+      setMessage(unknownCreateRecheckMessage(mediaFiles.length > 0));
       return;
     }
 
@@ -865,7 +880,7 @@ export function JourneyComposer({
         routePoints: routePoints.map((point) => ({ ...point })),
         mediaFiles: mediaFiles.map((media) => ({ ...media })),
       });
-      setMessage("检测到多条与本次提交完全相同的新 Journey，无法安全判断哪一条属于这次保存。为避免重复创建，当前不会再次提交；请关闭创建器并刷新 Atlas 核对。");
+      setMessage(ambiguousUnknownCreateMessage(mediaFiles.length > 0));
       return;
     }
 
@@ -904,7 +919,7 @@ export function JourneyComposer({
     try {
       if (!journey && unknownCreateAttempt) {
         if (unknownCreateAttempt.mode === "ambiguous") {
-          setMessage("当前保存结果仍有多条完全相同的服务器记录，不能安全重试创建。请关闭创建器并刷新 Atlas 核对。");
+          setMessage(ambiguousUnknownCreateMessage(mediaFiles.length > 0));
           return;
         }
         await recoverUnknownCreate(
@@ -1425,7 +1440,7 @@ export function JourneyComposer({
                 ? `${existingVisualMediaCount} 个已有媒体`
                 : "媒体可以稍后补充"}</span>
           </div>
-          {savedResult ? <button type="button" onClick={closeComposer}><IconCheck size={18} stroke={1.4} aria-hidden="true" />完成</button> : <button type="button" onClick={save} disabled={saving || unknownCreateAttempt?.mode === "ambiguous"}>{saving ? <StartripsJourneyCue state="waiting" size={32} /> : <IconCheck size={18} stroke={1.4} aria-hidden="true" />}{saving ? "正在保存…" : unknownCreateAttempt?.mode === "ambiguous" ? "请刷新 Atlas 核对" : unknownCreateAttempt ? "重新确认保存结果" : isEditing ? "保存修改" : "保存到星球"}</button>}
+          {savedResult ? <button type="button" onClick={closeComposer}><IconCheck size={18} stroke={1.4} aria-hidden="true" />完成</button> : <button type="button" onClick={save} disabled={saving || unknownCreateAttempt?.mode === "ambiguous"}>{saving ? <StartripsJourneyCue state="waiting" size={32} /> : <IconCheck size={18} stroke={1.4} aria-hidden="true" />}{saving ? "正在保存…" : unknownCreateAttempt?.mode === "ambiguous" ? "请关闭后核对 Atlas" : unknownCreateAttempt ? "重新确认保存结果" : isEditing ? "保存修改" : "保存到星球"}</button>}
         </footer>
       </section>
     </div>
