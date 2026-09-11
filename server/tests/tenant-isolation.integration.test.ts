@@ -24,6 +24,8 @@ import {
   updateJourneyForAtlas,
 } from "../repositories/journey-repository";
 import { finalizeUpload as finalizeVerifiedUpload } from "../routes/uploads";
+import { resolveJourneySaveRecovery } from "../../src/journey/journeySaveRecovery";
+import type { Journey, JourneyInput } from "../../src/journey/types";
 
 const atlasIds: string[] = [];
 const authOrganizationIds: string[] = [];
@@ -632,6 +634,43 @@ describe("media and atlas HTTP endpoints", () => {
     });
     if (!shared) throw new Error("Shared journey fixture was not created");
     sharedJourneyId = shared.id;
+  });
+
+  it("keeps a single authenticated canonical match confirmation-only without attempt provenance", async () => {
+    const submitted = {
+      title: "Unknown result recovery",
+      startedOn: baseJourney.startedOn,
+      endedOn: baseJourney.endedOn,
+      note: baseJourney.note,
+      lightColor: baseJourney.lightColor,
+      lightEffect: null,
+      routePoints: baseJourney.routePoints.map((point) => ({
+        latitude: point.latitude,
+        longitude: point.longitude,
+        label: point.label,
+        isStop: point.isStop,
+        occurredAt: point.occurredAt?.toISOString() ?? null,
+      })),
+    } satisfies JourneyInput;
+
+    const createdResponse = await app.request(`${TEST_ORIGIN}/api/journeys`, {
+      method: "POST",
+      headers: authHeaders(identity.cookie),
+      body: JSON.stringify(submitted),
+    });
+    expect(createdResponse.status).toBe(201);
+    const created = await createdResponse.json() as { journey: Journey };
+
+    const listingResponse = await app.request(`${TEST_ORIGIN}/api/journeys`, {
+      headers: authHeaders(identity.cookie),
+    });
+    expect(listingResponse.status).toBe(200);
+    const listing = await listingResponse.json() as { journeys: Journey[] };
+    expect(listing.journeys.filter((journey) => journey.id === created.journey.id)).toHaveLength(1);
+    expect(resolveJourneySaveRecovery(submitted, listing.journeys)).toEqual({
+      status: "confirmation-required",
+      matchingJourneyId: created.journey.id,
+    });
   });
 
   it("reads a single tenant-scoped journey and rejects foreign ids", async () => {

@@ -4,10 +4,13 @@ import { describe, expect, it, vi } from "vitest";
 import {
   clearRemovedMediaTarget,
   JourneyComposer,
+  JourneyMediaContinuationError,
   journeyToDraftPoints,
   parseCoordinateInput,
   persistJourneyDraft,
+  reconcileUnknownJourneyCreate,
   resolvePendingMediaUploads,
+  unknownCreateRecheckMessage,
   uploadJourneyMedia,
 } from "./JourneyComposer";
 import type { RouteDraftPoint } from "./routeDraft";
@@ -95,6 +98,38 @@ describe("persistJourneyDraft", () => {
       fileName: "b.mp4",
       uploadedBytes: 30,
       totalBytes: 30,
+    });
+  });
+
+  it("keeps a confirmed server Journey authoritative when media assignment fails after create", async () => {
+    const file = { name: "point.jpg", size: 10, type: "image/jpeg" } as File;
+    const persist = vi.fn(async () => journey);
+    const routePoints = [{
+      draftId: "draft-point",
+      latitude: 31.2304,
+      longitude: 121.4737,
+      label: "Shanghai",
+      isStop: true,
+      occurredAt: null,
+    }] satisfies RouteDraftPoint[];
+
+    let failure: unknown;
+    try {
+      await persistJourneyDraft({
+        input,
+        mediaFiles: [{ file, routePointDraftId: "draft-point" }],
+        routePoints,
+        persist,
+      });
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(persist).toHaveBeenCalledTimes(1);
+    expect(failure).toBeInstanceOf(JourneyMediaContinuationError);
+    expect(failure).toMatchObject({
+      journey: { id: "journey-1" },
+      message: expect.stringContaining("媒体归属无法确认"),
     });
   });
 
@@ -265,4 +300,198 @@ describe("persistJourneyDraft", () => {
     expect(markup).toContain("1 个已有媒体");
     expect(markup).not.toContain("2 个已有媒体");
   });
+  it("keeps an unverifiable single canonical match confirmation-only", async () => {
+    const recoveredJourney = {
+      id: "server-created-id",
+      atlasId: "atlas-1",
+      title: input.title,
+      startedOn: input.startedOn,
+      endedOn: input.endedOn,
+      note: input.note,
+      lightColor: input.lightColor,
+      lightEffect: null,
+      revision: 1,
+      createdByUserId: "user-1",
+      createdAt: "2026-08-11T00:00:00.000Z",
+      updatedAt: "2026-08-11T00:00:00.000Z",
+      routePoints: [{
+        id: "server-point-id",
+        journeyId: "server-created-id",
+        sortOrder: 0,
+        latitude: 31.2304,
+        longitude: 121.4737,
+        label: "Shanghai",
+        isStop: true,
+        occurredAt: null,
+        createdAt: "2026-08-11T00:00:00.000Z",
+      }],
+      media: [],
+    } as Journey;
+    const readJourneys = vi.fn(async () => [recoveredJourney]);
+
+    await expect(reconcileUnknownJourneyCreate(input, readJourneys)).resolves.toEqual({
+      status: "confirmation-required",
+      matchingJourneyId: "server-created-id",
+    });
+    expect(readJourneys).toHaveBeenCalledTimes(1);
+  });
+
+  it("marks an unknown create explicitly not saved so one resubmission is permitted", async () => {
+    const readJourneys = vi.fn(async () => [] as Journey[]);
+
+    await expect(reconcileUnknownJourneyCreate(input, readJourneys)).resolves.toEqual({
+      status: "not-persisted",
+    });
+    expect(readJourneys).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps repeated reconciliation failures exit-safe without reopening create ownership", async () => {
+    const readJourneys = vi.fn(async () => {
+      throw new Error("journey list unavailable");
+    });
+    const knownJourneyIdsBeforeCreate = new Set(["known-before-attempt"]);
+
+    await expect(
+      reconcileUnknownJourneyCreate(input, readJourneys, knownJourneyIdsBeforeCreate),
+    ).rejects.toThrow("journey list unavailable");
+    await expect(
+      reconcileUnknownJourneyCreate(input, readJourneys, knownJourneyIdsBeforeCreate),
+    ).rejects.toThrow("journey list unavailable");
+
+    const onSaved = vi.fn();
+    const pendingAttempt = {
+      input,
+      knownJourneyIdsBeforeCreate: [...knownJourneyIdsBeforeCreate],
+      mode: "recheck" as const,
+    };
+    const markup = renderToStaticMarkup(createElement(JourneyComposer, {
+      open: true,
+      initialUnknownCreateAttempt: pendingAttempt,
+      onClose: () => undefined,
+      onSaved,
+    }));
+    const closeButton = markup.match(/<button[^>]*aria-label="关闭创建器"[^>]*>/)?.[0];
+
+    expect(readJourneys).toHaveBeenCalledTimes(2);
+    expect(closeButton).toBeDefined();
+    expect(closeButton).not.toContain("disabled");
+    expect(markup).toContain("重新确认保存结果");
+    expect(markup).not.toContain(">保存到星球<");
+    expect(markup).toContain('value="Night train"');
+    expect(onSaved).not.toHaveBeenCalled();
+  });
+
+  it("keeps pending-media recovery in-session instead of advertising destructive refresh as safe", () => {
+    const message = unknownCreateRecheckMessage(true);
+
+    expect(message).toContain("当前 Atlas 会话");
+    expect(message).toContain("请不要刷新整个页面");
+    expect(message).toContain("尚未上传的本地媒体和路线点归属");
+    expect(message).toContain("需要重新选择");
+    expect(message).not.toContain("安全关闭创建器后刷新 Atlas");
+  });
+
+  it("reopens an unresolved create in reconciliation mode instead of a blind create", () => {
+    const pendingAttempt = {
+      input,
+      knownJourneyIdsBeforeCreate: ["known-before-attempt"],
+      mode: "recheck" as const,
+    };
+    const renderReopened = () => renderToStaticMarkup(createElement(JourneyComposer, {
+      open: true,
+      initialUnknownCreateAttempt: pendingAttempt,
+      onClose: () => undefined,
+      onSaved: () => undefined,
+    }));
+
+    const firstReopen = renderReopened();
+    const secondReopen = renderReopened();
+    for (const markup of [firstReopen, secondReopen]) {
+      expect(markup).toContain("重新确认保存结果");
+      expect(markup).not.toContain(">保存到星球<");
+      expect(markup).toContain('value="Night train"');
+    }
+  });
+
+  it("preserves pending media while blocking concurrent-writer adoption and continuation", async () => {
+    const file = { name: "memory.jpg", size: 10, type: "image/jpeg", lastModified: 1 } as File;
+    const recoveryRoutePoints = [{
+      draftId: "draft-shanghai",
+      latitude: 31.2304,
+      longitude: 121.4737,
+      label: "Shanghai",
+      isStop: true,
+      occurredAt: null,
+    }] satisfies RouteDraftPoint[];
+    const pendingAttempt = {
+      input,
+      knownJourneyIdsBeforeCreate: ["known-before-attempt"],
+      mode: "recheck" as const,
+      routePoints: recoveryRoutePoints,
+      mediaFiles: [{ file, routePointDraftId: "draft-shanghai" }],
+    };
+
+    const otherWriterJourney = {
+      id: "other-session-id",
+      atlasId: "atlas-1",
+      title: input.title,
+      startedOn: input.startedOn,
+      endedOn: input.endedOn,
+      note: input.note,
+      lightColor: input.lightColor,
+      lightEffect: null,
+      revision: 1,
+      createdByUserId: "other-session-user",
+      createdAt: "2026-08-11T00:00:00.000Z",
+      updatedAt: "2026-08-11T00:00:00.000Z",
+      routePoints: [{
+        id: "other-session-point",
+        journeyId: "other-session-id",
+        sortOrder: 0,
+        latitude: 31.2304,
+        longitude: 121.4737,
+        label: "Shanghai",
+        isStop: true,
+        occurredAt: null,
+        createdAt: "2026-08-11T00:00:00.000Z",
+      }],
+      media: [],
+    } as Journey;
+    const readJourneys = vi.fn(async () => [otherWriterJourney]);
+    const recovery = await reconcileUnknownJourneyCreate(
+      pendingAttempt.input,
+      readJourneys,
+      new Set(pendingAttempt.knownJourneyIdsBeforeCreate),
+    );
+
+    expect(recovery).toEqual({
+      status: "confirmation-required",
+      matchingJourneyId: "other-session-id",
+    });
+
+    const createAgain = vi.fn();
+    const upload = vi.fn();
+    const onSaved = vi.fn();
+    const confirmationAttempt = {
+      ...pendingAttempt,
+      mode: "confirmation-required" as const,
+    };
+    const reopened = renderToStaticMarkup(createElement(JourneyComposer, {
+      open: true,
+      initialUnknownCreateAttempt: confirmationAttempt,
+      onClose: () => undefined,
+      onSaved,
+    }));
+    expect(readJourneys).toHaveBeenCalledTimes(1);
+    expect(reopened).toContain("memory.jpg");
+    expect(reopened).toContain("没有能证明它属于这次保存请求的服务端尝试标识");
+    expect(reopened).toContain("不会自动采用它、上传媒体或触发抵达焦点");
+    expect(reopened).toContain("请关闭后核对 Atlas");
+    expect(reopened).not.toContain(">保存到星球<");
+    expect(reopened).toContain('disabled=""');
+    expect(createAgain).not.toHaveBeenCalled();
+    expect(upload).not.toHaveBeenCalled();
+    expect(onSaved).not.toHaveBeenCalled();
+  });
+
 });

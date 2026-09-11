@@ -25,7 +25,12 @@ import {
   JourneyComposer,
   type GlobePointPick,
   type JourneySaveResult,
+  type UnknownJourneyCreateAttempt,
 } from "./JourneyComposer";
+import {
+  resolveJourneyArrivalHandoff,
+  type JourneySaveCallbackScope,
+} from "./journeySaveRecovery";
 import { JourneyPlaybackOverlay } from "./JourneyPlaybackOverlay";
 import { resolveHomeNarrativeContext, type HomeNarrativeContext } from "./homeBasePrelude";
 import type { HomeBasePeriod } from "./homeBase";
@@ -306,10 +311,15 @@ function journeyFocus(journey: Journey | null) {
 export function resolveMobilePlaybackPresentation(
   journeys: readonly Journey[],
   selection: { journeyId: string; pointIndex: number | null } | null,
+  fallbackJourneyId: string | null | undefined = undefined,
 ) {
+  const fallbackJourney = fallbackJourneyId === undefined
+    ? journeys.at(-1) ?? null
+    : fallbackJourneyId === null
+      ? null
+      : journeys.find((candidate) => candidate.id === fallbackJourneyId) ?? null;
   const journey = journeys.find((candidate) => candidate.id === selection?.journeyId)
-    ?? journeys.at(-1)
-    ?? null;
+    ?? fallbackJourney;
   const point = selection?.pointIndex === null || selection?.pointIndex === undefined
     ? null
     : journey?.routePoints[selection.pointIndex] ?? null;
@@ -329,6 +339,80 @@ export function resolveMobilePlaybackPresentation(
     focusRevision: journeyIndex >= 0
       ? (journeyIndex + 1) * 1000 + (selection?.pointIndex ?? 0)
       : 0,
+  };
+}
+
+
+export type UnknownCreateObservationOwnership = {
+  activeJourneyId: string | null;
+  selection: { journeyId: string; pointIndex: number | null } | null;
+  selectionRevision: number;
+  timelineRevision: number;
+};
+
+export function resolveUnknownCreateObservationOwnership({
+  journeys,
+  timelineSelection,
+  selectionRevision,
+  timelineRevision,
+  preserved,
+}: {
+  journeys: readonly Journey[];
+  timelineSelection: { journeyId: string; pointIndex: number | null } | null;
+  selectionRevision: number;
+  timelineRevision: number;
+  preserved: UnknownCreateObservationOwnership | null;
+}) {
+  const preservedStillOwns = preserved !== null
+    && preserved.selectionRevision === selectionRevision
+    && preserved.timelineRevision === timelineRevision;
+  if (!preservedStillOwns) {
+    return {
+      activeJourneyId: timelineSelection?.journeyId ?? journeys.at(-1)?.id ?? null,
+      selection: timelineSelection,
+      fallbackJourneyId: undefined as string | null | undefined,
+      observationOnly: false,
+    };
+  }
+  const hasJourney = (journeyId: string | null | undefined) => Boolean(
+    journeyId && journeys.some((journey) => journey.id === journeyId),
+  );
+  const activeJourneyId = hasJourney(preserved.activeJourneyId)
+    ? preserved.activeJourneyId
+    : null;
+  const selection = hasJourney(preserved.selection?.journeyId)
+    ? preserved.selection
+    : null;
+  return {
+    activeJourneyId,
+    selection,
+    fallbackJourneyId: activeJourneyId,
+    observationOnly: true,
+  };
+}
+
+export function captureUnknownCreateObservationOwnership({
+  semanticOwnership,
+  selectionRevision,
+  timelineRevision,
+}: {
+  semanticOwnership: Pick<
+    ReturnType<typeof resolveUnknownCreateObservationOwnership>,
+    "activeJourneyId" | "selection"
+  >;
+  selectionRevision: number;
+  timelineRevision: number;
+}): UnknownCreateObservationOwnership {
+  return {
+    activeJourneyId: semanticOwnership.activeJourneyId,
+    selection: semanticOwnership.selection
+      ? {
+          journeyId: semanticOwnership.selection.journeyId,
+          pointIndex: semanticOwnership.selection.pointIndex,
+        }
+      : null,
+    selectionRevision,
+    timelineRevision,
   };
 }
 
@@ -677,6 +761,24 @@ function useRailOverflow<T extends HTMLElement>(deps: readonly unknown[] = []) {
   return { ref: setElement, overflowing };
 }
 
+export async function closeUnknownCreateWithCurrentAtlasTruth({
+  attempt,
+  preserveAttempt,
+  closeComposer,
+  refreshAtlas,
+}: {
+  attempt: UnknownJourneyCreateAttempt | null;
+  preserveAttempt: (attempt: UnknownJourneyCreateAttempt | null) => void;
+  closeComposer: () => void;
+  refreshAtlas: () => Promise<unknown>;
+}) {
+  preserveAttempt(attempt);
+  closeComposer();
+  if (attempt?.mode === "confirmation-required" || attempt?.mode === "ambiguous") {
+    await refreshAtlas();
+  }
+}
+
 export function LivingAtlasApp({
   lightweightGlobe = false,
   GlobeComponent = LivingAtlasGlobe,
@@ -760,6 +862,8 @@ export function LivingAtlasApp({
     : playbackSourceJourney;
   const playbackActive = playbackOwnership.active;
   const [composerOpen, setComposerOpen] = useState(false);
+  const [pendingUnknownCreateAttempt, setPendingUnknownCreateAttempt] = useState<UnknownJourneyCreateAttempt | null>(null);
+  const [unknownCreateObservationOwnership, setUnknownCreateObservationOwnership] = useState<UnknownCreateObservationOwnership | null>(null);
   const [editingJourneyId, setEditingJourneyId] = useState<string | null>(null);
   const [arrivalJourneyId, setArrivalJourneyId] = useState<string | null>(null);
   const [notice, setNotice] = useState<AtlasNotice | null>(null);
@@ -835,7 +939,14 @@ export function LivingAtlasApp({
   // #21: the rewind cursor over the whole journey timeline. Only active while
   // the user is in globe focus mode; entering playback pauses rewind.
   const timeCursor = useGlobeTimeCursor(journeys);
-  const activeJourneyId = timeCursor.selection?.journeyId ?? journeys.at(-1)?.id ?? null;
+  const unknownCreateSemanticOwnership = resolveUnknownCreateObservationOwnership({
+    journeys,
+    timelineSelection: timeCursor.selection,
+    selectionRevision: timeCursor.selectionRevision,
+    timelineRevision: timeCursor.timelineRevision,
+    preserved: unknownCreateObservationOwnership,
+  });
+  const activeJourneyId = unknownCreateSemanticOwnership.activeJourneyId;
   const activeJourneyIdRef = useRef(activeJourneyId);
   activeJourneyIdRef.current = activeJourneyId;
   const selectedJourneyIdForHomeCamera = explicitSelectedJourneyIdForHomeCamera(
@@ -961,7 +1072,7 @@ export function LivingAtlasApp({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [globeFocusMode, exitGlobeFocus]);
 
-  const load = useCallback(async (quiet = false) => {
+  const load = useCallback(async (quiet = false, quietErrorNotice?: string) => {
     const revision = ++loadRevision.current;
     if (!quiet) setStatus("loading");
     try {
@@ -980,7 +1091,7 @@ export function LivingAtlasApp({
     } catch (error) {
       if (revision !== loadRevision.current) return;
       if (quiet) {
-        showNotice("旅程已保存，但最新媒体列表暂时无法刷新。稍后重新进入即可重试。");
+        showNotice(quietErrorNotice ?? "旅程已保存，但最新媒体列表暂时无法刷新。稍后重新进入即可重试。");
       } else {
         setLoadError(error instanceof Error ? error.message : "无法读取旅程");
         setStatus("error");
@@ -1064,7 +1175,11 @@ export function LivingAtlasApp({
       ? savedRoutes.map((route) => route.id === draftRoute.id ? draftRoute : route)
       : [...savedRoutes, draftRoute];
   }, [draftRoute, journeys]);
-  const focusPresentation = resolveMobilePlaybackPresentation(journeys, timeCursor.selection);
+  const focusPresentation = resolveMobilePlaybackPresentation(
+    journeys,
+    unknownCreateSemanticOwnership.selection,
+    unknownCreateSemanticOwnership.fallbackJourneyId,
+  );
   const mobileJourney = focusPresentation.journey;
   const mobilePoint = focusPresentation.point;
   const focusPoint = focusPresentation.focusPoint;
@@ -1158,19 +1273,31 @@ export function LivingAtlasApp({
     selectMobileJourney(journeys[nextIndex].id);
   }
 
-  async function handleSaved(result: JourneySaveResult) {
+  async function handleSaved(
+    result: JourneySaveResult,
+    callbackScope: JourneySaveCallbackScope,
+  ) {
     const edited = editingJourneyId === result.journey.id;
+    const arrivalHandoff = resolveJourneyArrivalHandoff({
+      journeyId: result.journey.id,
+      editingJourneyId,
+      callbackScope,
+    });
     setJourneys((current) => mergeJourney(current, result.journey));
-    if (!edited) setArrivalJourneyId(result.journey.id);
+    if (arrivalHandoff) setArrivalJourneyId(arrivalHandoff);
     setDraftRoute(null);
     setUndoJourney(null);
-    showNotice(edited
+    showNotice(callbackScope === "media-retry"
       ? result.mediaErrors.length > 0
-        ? "旅程修改已保存；未上传成功的媒体仍可重试。"
-        : "旅程修改已保存。"
-      : result.mediaErrors.length > 0
-      ? "旅程已抵达图谱；未上传成功的媒体已在创建器中列出。"
-      : "旅程已抵达你的私人图谱。"
+        ? "媒体重试完成；仍有部分媒体未上传成功。"
+        : "媒体重试已完成。"
+      : edited
+        ? result.mediaErrors.length > 0
+          ? "旅程修改已保存；未上传成功的媒体仍可重试。"
+          : "旅程修改已保存。"
+        : result.mediaErrors.length > 0
+          ? "旅程已抵达图谱；未上传成功的媒体已在创建器中列出。"
+          : "旅程已抵达你的私人图谱。"
     );
     await load(true);
   }
@@ -2177,9 +2304,35 @@ export function LivingAtlasApp({
           key={editingJourney?.id ?? "new-journey"}
           open
           journey={editingJourney}
-          onClose={() => {
+          initialUnknownCreateAttempt={editingJourney ? null : pendingUnknownCreateAttempt}
+          onClose={(unknownCreateAttempt) => {
             cancelGlobePick();
             setDraftRoute(null);
+            if (!editingJourney) {
+              if (
+                unknownCreateAttempt?.mode === "confirmation-required"
+                || unknownCreateAttempt?.mode === "ambiguous"
+              ) {
+                setUnknownCreateObservationOwnership(captureUnknownCreateObservationOwnership({
+                  semanticOwnership: unknownCreateSemanticOwnership,
+                  selectionRevision: timeCursor.selectionRevision,
+                  timelineRevision: timeCursor.timelineRevision,
+                }));
+              }
+              void closeUnknownCreateWithCurrentAtlasTruth({
+                attempt: unknownCreateAttempt ?? null,
+                preserveAttempt: setPendingUnknownCreateAttempt,
+                closeComposer: () => {
+                  setEditingJourneyId(null);
+                  setComposerOpen(false);
+                },
+                refreshAtlas: () => load(
+                  true,
+                  "Atlas 当前服务端旅程列表暂时无法刷新；这次创建结果仍未确认，请稍后在当前会话中重试核对。",
+                ),
+              });
+              return;
+            }
             setEditingJourneyId(null);
             setComposerOpen(false);
           }}

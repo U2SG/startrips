@@ -28,10 +28,17 @@ import {
 } from "../api/multipartUpload";
 import {
   createJourney,
+  JourneyApiError,
+  listJourneys,
   reverseGeocode,
   searchLocations,
   updateJourney,
 } from "./journeyApi";
+import { journeyLocationSearchErrorMessage } from "./journeyLocationSearchError";
+import {
+  resolveJourneySaveRecovery,
+  type JourneySaveCallbackScope,
+} from "./journeySaveRecovery";
 import {
   journeyVisualMedia,
   validateJourneyFiles,
@@ -212,6 +219,16 @@ export function clearRemovedMediaTarget(
   ));
 }
 
+export class JourneyMediaContinuationError extends Error {
+  readonly journey: Journey;
+
+  constructor(journey: Journey, cause: unknown) {
+    super(cause instanceof Error ? cause.message : "媒体继续处理失败");
+    this.name = "JourneyMediaContinuationError";
+    this.journey = journey;
+  }
+}
+
 export async function persistJourneyDraft({
   input,
   mediaFiles,
@@ -221,13 +238,29 @@ export async function persistJourneyDraft({
   onProgress,
 }: PersistJourneyDraftOptions): Promise<JourneySaveResult> {
   const journey = await persist(input);
-  const mediaResult = await uploadJourneyMediaAssignments({
-    journeyId: journey.id,
-    assignments: resolvePendingMediaUploads(mediaFiles, routePoints, journey),
-    upload,
-    onProgress,
-  });
-  return { journey, ...mediaResult };
+  try {
+    const mediaResult = await uploadJourneyMediaAssignments({
+      journeyId: journey.id,
+      assignments: resolvePendingMediaUploads(mediaFiles, routePoints, journey),
+      upload,
+      onProgress,
+    });
+    return { journey, ...mediaResult };
+  } catch (error) {
+    throw new JourneyMediaContinuationError(journey, error);
+  }
+}
+
+export async function reconcileUnknownJourneyCreate(
+  submittedDraft: JourneyInput,
+  readJourneys: () => Promise<Journey[]> = listJourneys,
+  knownJourneyIdsBeforeCreate: ReadonlySet<string> = new Set(),
+) {
+  return resolveJourneySaveRecovery(
+    submittedDraft,
+    await readJourneys(),
+    { knownJourneyIdsBeforeCreate },
+  );
 }
 
 export type GlobePointPick = {
@@ -235,11 +268,45 @@ export type GlobePointPick = {
   longitude: number;
 };
 
+export type UnknownJourneyCreateAttempt = {
+  input: JourneyInput;
+  knownJourneyIdsBeforeCreate: string[];
+  mode: "recheck" | "confirmation-required" | "ambiguous";
+  routePoints?: RouteDraftPoint[];
+  mediaFiles?: PendingJourneyMedia[];
+};
+
+export function unknownCreateRecheckMessage(hasPendingMedia: boolean) {
+  const sameSession = "你可以重新确认，或先关闭创建器，稍后在当前 Atlas 会话中重新打开继续核对。";
+  const pendingMediaNotice = hasPendingMedia
+    ? "当前会话会保留尚未上传的本地媒体和路线点归属；请不要刷新整个页面，刷新后这些本地内容需要重新选择。"
+    : "请继续在当前 Atlas 会话中核对，不要把刷新整个页面当作保留这次恢复状态的方式。";
+  return `暂时无法确认这段旅程是否已经保存。${sameSession}${pendingMediaNotice}关闭不会创建另一段 Journey，也不会把这次不确定结果当作未保存。`;
+}
+
+function confirmationRequiredUnknownCreateMessage(hasPendingMedia: boolean) {
+  const pendingMediaNotice = hasPendingMedia
+    ? "当前会话仍会保留尚未上传的本地媒体和路线点归属；请不要刷新整个页面。"
+    : "";
+  return `检测到一条与本次提交内容完全相同、且在本次尝试后出现的 Journey，但当前系统没有能证明它属于这次保存请求的服务端尝试标识。为避免把其他会话创建的 Journey 当成本次结果，当前不会自动采用它、上传媒体或触发抵达焦点，也不会再次创建。请先关闭创建器，在 Atlas 中核对这条 Journey。${pendingMediaNotice}`;
+}
+
+function ambiguousUnknownCreateMessage(hasPendingMedia: boolean) {
+  const refreshWarning = hasPendingMedia
+    ? "如果你选择刷新整个页面，尚未上传的本地媒体和路线点归属会丢失，需要重新选择。"
+    : "";
+  return `检测到多条与本次提交完全相同的新 Journey，无法安全判断哪一条属于这次保存。为避免重复创建，当前不会再次提交；请关闭创建器后在 Atlas 中核对这些 Journey。${refreshWarning}`;
+}
+
 type JourneyComposerProps = {
   open: boolean;
   journey?: Journey | null;
-  onClose: () => void;
-  onSaved: (result: JourneySaveResult) => void | Promise<void>;
+  initialUnknownCreateAttempt?: UnknownJourneyCreateAttempt | null;
+  onClose: (unknownCreateAttempt?: UnknownJourneyCreateAttempt | null) => void;
+  onSaved: (
+    result: JourneySaveResult,
+    callbackScope: JourneySaveCallbackScope,
+  ) => void | Promise<void>;
   onGlobePickRequest?: (accept: (point: GlobePointPick) => void) => void;
   onGlobePickCancel?: () => void;
   onRoutePreviewChange?: (route: JourneyRoute | null) => void;
@@ -304,14 +371,28 @@ export function parseCoordinateInput(
 export function JourneyComposer({
   open,
   journey,
+  initialUnknownCreateAttempt = null,
   onClose,
   onSaved,
   onGlobePickRequest,
   onGlobePickCancel,
   onRoutePreviewChange,
 }: JourneyComposerProps) {
+  const recoveryInput = !journey ? initialUnknownCreateAttempt?.input : undefined;
+  const recoveryRoutePoints = !journey ? initialUnknownCreateAttempt?.routePoints : undefined;
   const [routePoints, setRoutePoints] = useState<RouteDraftPoint[]>(
-    () => journey ? journeyToDraftPoints(journey) : [],
+    () => journey
+      ? journeyToDraftPoints(journey)
+      : recoveryRoutePoints?.map((point) => ({ ...point }))
+        ?? (recoveryInput?.routePoints ?? []).map((point) => ({
+          draftId: draftId(),
+          latitude: Number(point.latitude),
+          longitude: Number(point.longitude),
+          label: point.label,
+          isStop: point.isStop,
+          occurredAt: point.occurredAt ?? null,
+          note: point.note ?? null,
+        })),
   );
   const [latitude, setLatitude] = useState("");
   const [longitude, setLongitude] = useState("");
@@ -326,23 +407,40 @@ export function JourneyComposer({
     LocationSearchResponse["attribution"]
   >(null);
   const [searchPending, setSearchPending] = useState(false);
-  const [title, setTitle] = useState(journey?.title ?? "");
+  const [title, setTitle] = useState(journey?.title ?? recoveryInput?.title ?? "");
   const [startedOn, setStartedOn] = useState(
-    () => journey?.startedOn ?? new Date().toISOString().slice(0, 10),
+    () => journey?.startedOn ?? recoveryInput?.startedOn ?? new Date().toISOString().slice(0, 10),
   );
-  const [endedOn, setEndedOn] = useState(journey?.endedOn ?? "");
-  const [note, setNote] = useState(journey?.note ?? "");
-  const [lightColor, setLightColor] = useState(journey?.lightColor ?? LIGHT_COLORS[0]);
-  const [lightEffect, setLightEffect] = useState<LightEffectId | null>(journey?.lightEffect ?? null);
-  const [mediaFiles, setMediaFiles] = useState<PendingJourneyMedia[]>([]);
+  const [endedOn, setEndedOn] = useState(journey?.endedOn ?? recoveryInput?.endedOn ?? "");
+  const [note, setNote] = useState(journey?.note ?? recoveryInput?.note ?? "");
+  const [lightColor, setLightColor] = useState(journey?.lightColor ?? recoveryInput?.lightColor ?? LIGHT_COLORS[0]);
+  const [lightEffect, setLightEffect] = useState<LightEffectId | null>(journey?.lightEffect ?? recoveryInput?.lightEffect ?? null);
+  const [mediaFiles, setMediaFiles] = useState<PendingJourneyMedia[]>(
+    () => journey
+      ? []
+      : (initialUnknownCreateAttempt?.mediaFiles ?? []).map((media) => ({ ...media })),
+  );
   const mobileLayout = useCompactMobileLayout();
   const [mobileMediaMenuIndex, setMobileMediaMenuIndex] = useState<number | null>(null);
   const [mobileMediaAssignmentIndex, setMobileMediaAssignmentIndex] = useState<number | null>(null);
   const [mobileMediaDeleteIndex, setMobileMediaDeleteIndex] = useState<number | null>(null);
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useState(() => {
+    if (journey || !initialUnknownCreateAttempt) return "";
+    const hasPendingMedia = (initialUnknownCreateAttempt.mediaFiles?.length ?? 0) > 0;
+    if (initialUnknownCreateAttempt.mode === "confirmation-required") {
+      return confirmationRequiredUnknownCreateMessage(hasPendingMedia);
+    }
+    if (initialUnknownCreateAttempt.mode === "ambiguous") {
+      return ambiguousUnknownCreateMessage(hasPendingMedia);
+    }
+    return unknownCreateRecheckMessage(hasPendingMedia);
+  });
   const [saving, setSaving] = useState(false);
   const [progress, setProgress] = useState<UploadProgress | null>(null);
   const [savedResult, setSavedResult] = useState<JourneySaveResult | null>(null);
+  const [unknownCreateAttempt, setUnknownCreateAttempt] = useState<UnknownJourneyCreateAttempt | null>(
+    () => journey ? null : initialUnknownCreateAttempt,
+  );
   const [retryAssignments, setRetryAssignments] = useState<JourneyMediaUploadAssignment[]>([]);
   const [globePicking, setGlobePicking] = useState(false);
   const activeLightEffect = LIGHT_EFFECTS.find((effect) => effect.id === lightEffect) ?? null;
@@ -540,7 +638,7 @@ export function JourneyComposer({
     } catch (error) {
       setSearchResults([]);
       setSearchAttribution(null);
-      setMessage(error instanceof Error ? error.message : "地点搜索暂时不可用");
+      setMessage(journeyLocationSearchErrorMessage(error));
     } finally {
       setSearchPending(false);
     }
@@ -630,13 +728,19 @@ export function JourneyComposer({
     restoreGlobePickTriggerFocus();
   }
 
-  function closeComposer() {
+  function closeComposerWithUnknownCreateAttempt(
+    preservedUnknownCreateAttempt: UnknownJourneyCreateAttempt | null,
+  ) {
     globePickRequestRevisionRef.current += 1;
     reverseGeocodeRevisionRef.current += 1;
     activeReverseGeocodeDraftIdRef.current = null;
     if (globePicking) onGlobePickCancel?.();
     onRoutePreviewChange?.(null);
-    onClose();
+    onClose(preservedUnknownCreateAttempt);
+  }
+
+  function closeComposer() {
+    closeComposerWithUnknownCreateAttempt(unknownCreateAttempt);
   }
 
   function selectFiles(event: ChangeEvent<HTMLInputElement>) {
@@ -716,20 +820,139 @@ export function JourneyComposer({
     }
   }
 
+  async function applySavedResult(
+    result: JourneySaveResult,
+    callbackScope: JourneySaveCallbackScope,
+    options: { resolveRetryAssignments?: boolean } = {},
+  ) {
+    const shouldResolveRetryAssignments = options.resolveRetryAssignments ?? true;
+    const resolvedAssignments = shouldResolveRetryAssignments
+      ? resolvePendingMediaUploads(mediaFiles, routePoints, result.journey)
+      : [];
+    setUnknownCreateAttempt(null);
+    setSavedResult(result);
+    setRetryAssignments(shouldResolveRetryAssignments
+      ? result.mediaErrors.map((error) => resolvedAssignments[error.fileIndex])
+      : []);
+    try {
+      await onSaved(result, callbackScope);
+    } catch {
+      setMessage("旅程已经保存，但 Atlas 暂时没有刷新成功；重新打开后会从服务器恢复。");
+      return;
+    }
+    if (result.mediaErrors.length === 0) closeComposerWithUnknownCreateAttempt(null);
+  }
+
+  async function applyPersistedMediaContinuationFailure(
+    error: JourneyMediaContinuationError,
+    callbackScope: JourneySaveCallbackScope,
+  ) {
+    const result: JourneySaveResult = {
+      journey: error.journey,
+      uploadedCount: 0,
+      mediaErrors: mediaFiles.map((media, fileIndex) => ({
+        fileIndex,
+        fileName: media.file.name,
+        message: error.message,
+      })),
+    };
+    await applySavedResult(result, callbackScope, { resolveRetryAssignments: false });
+    setMessage("Journey 已保存，但媒体归属暂时无法安全确认。请完成后重新打开这段 Journey，再添加这些媒体；不会再次创建 Journey。");
+  }
+
+  async function recoverUnknownCreate(
+    submittedDraft: JourneyInput,
+    knownJourneyIdsBeforeCreate: readonly string[],
+  ) {
+    let recovery;
+    try {
+      recovery = await reconcileUnknownJourneyCreate(
+        submittedDraft,
+        listJourneys,
+        new Set(knownJourneyIdsBeforeCreate),
+      );
+    } catch {
+      setUnknownCreateAttempt({
+        input: submittedDraft,
+        knownJourneyIdsBeforeCreate: [...knownJourneyIdsBeforeCreate],
+        mode: "recheck",
+        routePoints: routePoints.map((point) => ({ ...point })),
+        mediaFiles: mediaFiles.map((media) => ({ ...media })),
+      });
+      setMessage(unknownCreateRecheckMessage(mediaFiles.length > 0));
+      return;
+    }
+
+    if (recovery.status === "not-persisted") {
+      setUnknownCreateAttempt(null);
+      setMessage("已确认这段旅程没有保存到 Atlas；你可以重新提交一次。");
+      return;
+    }
+
+    if (recovery.status === "confirmation-required") {
+      setUnknownCreateAttempt({
+        input: submittedDraft,
+        knownJourneyIdsBeforeCreate: [...knownJourneyIdsBeforeCreate],
+        mode: "confirmation-required",
+        routePoints: routePoints.map((point) => ({ ...point })),
+        mediaFiles: mediaFiles.map((media) => ({ ...media })),
+      });
+      setMessage(confirmationRequiredUnknownCreateMessage(mediaFiles.length > 0));
+      return;
+    }
+
+    setUnknownCreateAttempt({
+      input: submittedDraft,
+      knownJourneyIdsBeforeCreate: [...knownJourneyIdsBeforeCreate],
+      mode: "ambiguous",
+      routePoints: routePoints.map((point) => ({ ...point })),
+      mediaFiles: mediaFiles.map((media) => ({ ...media })),
+    });
+    setMessage(ambiguousUnknownCreateMessage(mediaFiles.length > 0));
+  }
+
   async function save() {
-    const validation = validateJourneyInput(input);
+    const submittedInput = unknownCreateAttempt?.input ?? input;
+    const validation = validateJourneyInput(submittedInput);
     const mediaValidation = validateJourneyFiles(mediaFiles.map((media) => media.file));
     const error = validation.errors[0] ?? mediaValidation.errors[0];
     if (error) {
       setMessage(error);
       return;
     }
+
+    let knownJourneyIdsBeforeCreate = unknownCreateAttempt?.knownJourneyIdsBeforeCreate ?? [];
     setSaving(true);
     setMessage("");
     setProgress(null);
     try {
+      if (!journey && unknownCreateAttempt) {
+        if (unknownCreateAttempt.mode === "ambiguous") {
+          setMessage(ambiguousUnknownCreateMessage(mediaFiles.length > 0));
+          return;
+        }
+        if (unknownCreateAttempt.mode === "confirmation-required") {
+          setMessage(confirmationRequiredUnknownCreateMessage(mediaFiles.length > 0));
+          return;
+        }
+        await recoverUnknownCreate(
+          unknownCreateAttempt.input,
+          unknownCreateAttempt.knownJourneyIdsBeforeCreate,
+        );
+        return;
+      }
+
+      if (!journey) {
+        try {
+          knownJourneyIdsBeforeCreate = (await listJourneys()).map((candidate) => candidate.id);
+        } catch {
+          setMessage("暂时无法核对 Atlas 中已有的 Journey，因此这次没有提交。请稍后再试。");
+          return;
+        }
+      }
+
       const result = await persistJourneyDraft({
-        input,
+        input: submittedInput,
         mediaFiles,
         routePoints,
         persist: journey
@@ -737,19 +960,21 @@ export function JourneyComposer({
           : createJourney,
         onProgress: setProgress,
       });
-      const resolvedAssignments = resolvePendingMediaUploads(
-        mediaFiles,
-        routePoints,
-        result.journey,
-      );
-      setSavedResult(result);
-      setRetryAssignments(
-        result.mediaErrors.map((error) => resolvedAssignments[error.fileIndex]),
-      );
-      await onSaved(result);
-      if (result.mediaErrors.length === 0) closeComposer();
+      await applySavedResult(result, "initial-save");
     } catch (errorValue) {
-      setMessage(errorValue instanceof Error ? errorValue.message : "旅程保存失败");
+      if (errorValue instanceof JourneyMediaContinuationError) {
+        await applyPersistedMediaContinuationFailure(errorValue, "initial-save");
+      } else {
+        const createOutcomeMayBeUnknown = !journey && (
+          !(errorValue instanceof JourneyApiError)
+          || errorValue.status >= 500
+        );
+        if (createOutcomeMayBeUnknown) {
+          await recoverUnknownCreate(submittedInput, knownJourneyIdsBeforeCreate);
+        } else {
+          setMessage(errorValue instanceof Error ? errorValue.message : "旅程保存失败");
+        }
+      }
     } finally {
       setSaving(false);
     }
@@ -775,7 +1000,7 @@ export function JourneyComposer({
       setRetryAssignments(
         retried.mediaErrors.map((error) => retryAssignments[error.fileIndex]),
       );
-      await onSaved(nextResult);
+      await onSaved(nextResult, "media-retry");
     } catch (errorValue) {
       setMessage(errorValue instanceof Error ? errorValue.message : "媒体重试失败");
     } finally {
@@ -787,7 +1012,7 @@ export function JourneyComposer({
     ? Math.round((progress.uploadedBytes / progress.totalBytes) * 100)
     : 0;
   const isEditing = Boolean(journey);
-  const editorLocked = saving || savedResult !== null;
+  const editorLocked = saving || savedResult !== null || unknownCreateAttempt !== null;
   const mobileMenuMedia = mobileMediaMenuIndex === null ? null : mediaFiles[mobileMediaMenuIndex] ?? null;
   const mobileAssignmentMedia = mobileMediaAssignmentIndex === null ? null : mediaFiles[mobileMediaAssignmentIndex] ?? null;
   const mobileDeleteMedia = mobileMediaDeleteIndex === null ? null : mediaFiles[mobileMediaDeleteIndex] ?? null;
@@ -1206,7 +1431,11 @@ export function JourneyComposer({
                 <div className="journey-save-partial__heading"><StartripsJourneyCue state="rest" size={40} /><h4>旅程已保存，部分媒体没有上传成功</h4></div>
                 <p>成功 {savedResult.uploadedCount} 个，失败 {savedResult.mediaErrors.length} 个。路线和故事不会丢失。</p>
                 <ul>{savedResult.mediaErrors.map((error) => <li key={`${error.fileIndex}-${error.fileName}`}><strong>{error.fileName}</strong>：{error.message}</li>)}</ul>
-                <button type="button" onClick={retryFailedMedia} disabled={saving}>{saving ? "正在重试…" : "重试失败媒体"}</button>
+                {retryAssignments.length > 0 ? (
+                  <button type="button" onClick={retryFailedMedia} disabled={saving}>{saving ? "正在重试…" : "重试失败媒体"}</button>
+                ) : (
+                  <p>这些媒体暂时无法安全重试；请完成后重新打开这段 Journey，再添加这些媒体。</p>
+                )}
               </div>
             ) : null}
             {savedResult && savedResult.mediaErrors.length === 0 && mediaFiles.length > 0 ? (
@@ -1224,7 +1453,7 @@ export function JourneyComposer({
                 ? `${existingVisualMediaCount} 个已有媒体`
                 : "媒体可以稍后补充"}</span>
           </div>
-          {savedResult ? <button type="button" onClick={closeComposer}><IconCheck size={18} stroke={1.4} aria-hidden="true" />完成</button> : <button type="button" onClick={save} disabled={saving}>{saving ? <StartripsJourneyCue state="waiting" size={32} /> : <IconCheck size={18} stroke={1.4} aria-hidden="true" />}{saving ? "正在保存…" : isEditing ? "保存修改" : "保存到星球"}</button>}
+          {savedResult ? <button type="button" onClick={closeComposer}><IconCheck size={18} stroke={1.4} aria-hidden="true" />完成</button> : <button type="button" onClick={save} disabled={saving || unknownCreateAttempt?.mode === "ambiguous" || unknownCreateAttempt?.mode === "confirmation-required"}>{saving ? <StartripsJourneyCue state="waiting" size={32} /> : <IconCheck size={18} stroke={1.4} aria-hidden="true" />}{saving ? "正在保存…" : unknownCreateAttempt?.mode === "ambiguous" || unknownCreateAttempt?.mode === "confirmation-required" ? "请关闭后核对 Atlas" : unknownCreateAttempt ? "重新确认保存结果" : isEditing ? "保存修改" : "保存到星球"}</button>}
         </footer>
       </section>
     </div>
