@@ -402,4 +402,86 @@ describe("persistJourneyDraft", () => {
     }
   });
 
+  it("preserves pending media ownership across safe exit, reopen, and recovered adoption", async () => {
+    const file = { name: "memory.jpg", size: 10, type: "image/jpeg", lastModified: 1 } as File;
+    const recoveryRoutePoints = [{
+      draftId: "draft-shanghai",
+      latitude: 31.2304,
+      longitude: 121.4737,
+      label: "Shanghai",
+      isStop: true,
+      occurredAt: null,
+    }] satisfies RouteDraftPoint[];
+    const pendingAttempt = {
+      input,
+      knownJourneyIdsBeforeCreate: ["known-before-attempt"],
+      mode: "recheck" as const,
+      routePoints: recoveryRoutePoints,
+      mediaFiles: [{ file, routePointDraftId: "draft-shanghai" }],
+    };
+
+    const reopened = renderToStaticMarkup(createElement(JourneyComposer, {
+      open: true,
+      initialUnknownCreateAttempt: pendingAttempt,
+      onClose: () => undefined,
+      onSaved: () => undefined,
+    }));
+    expect(reopened).toContain("memory.jpg");
+    expect(reopened).toContain("重新确认保存结果");
+    expect(reopened).not.toContain(">保存到星球<");
+
+    const recoveredJourney = {
+      id: "server-created-id",
+      atlasId: "atlas-1",
+      title: input.title,
+      startedOn: input.startedOn,
+      endedOn: input.endedOn,
+      note: input.note,
+      lightColor: input.lightColor,
+      lightEffect: null,
+      revision: 1,
+      createdByUserId: "user-1",
+      createdAt: "2026-08-11T00:00:00.000Z",
+      updatedAt: "2026-08-11T00:00:00.000Z",
+      routePoints: [{
+        id: "server-point-id",
+        journeyId: "server-created-id",
+        sortOrder: 0,
+        latitude: 31.2304,
+        longitude: 121.4737,
+        label: "Shanghai",
+        isStop: true,
+        occurredAt: null,
+        createdAt: "2026-08-11T00:00:00.000Z",
+      }],
+      media: [],
+    } as Journey;
+    const readJourneys = vi.fn(async () => [recoveredJourney]);
+    const recovery = await reconcileUnknownJourneyCreate(
+      pendingAttempt.input,
+      readJourneys,
+      new Set(pendingAttempt.knownJourneyIdsBeforeCreate),
+    );
+    expect(recovery.status).toBe("already-persisted");
+    if (recovery.status !== "already-persisted") throw new Error("expected recovery adoption");
+
+    const adoptPersistedJourney = vi.fn(async () => recovery.journey);
+    const upload = vi.fn(async () => ({} as Awaited<ReturnType<NonNullable<Parameters<typeof persistJourneyDraft>[0]["upload"]>>>));
+    await persistJourneyDraft({
+      input: pendingAttempt.input,
+      mediaFiles: pendingAttempt.mediaFiles,
+      routePoints: pendingAttempt.routePoints,
+      persist: adoptPersistedJourney,
+      upload,
+    });
+
+    expect(readJourneys).toHaveBeenCalledTimes(1);
+    expect(adoptPersistedJourney).toHaveBeenCalledTimes(1);
+    expect(upload).toHaveBeenCalledWith(expect.objectContaining({
+      journeyId: "server-created-id",
+      routePointId: "server-point-id",
+      file,
+    }));
+  });
+
 });

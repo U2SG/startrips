@@ -272,6 +272,8 @@ export type UnknownJourneyCreateAttempt = {
   input: JourneyInput;
   knownJourneyIdsBeforeCreate: string[];
   mode: "recheck" | "ambiguous";
+  routePoints?: RouteDraftPoint[];
+  mediaFiles?: PendingJourneyMedia[];
 };
 
 type JourneyComposerProps = {
@@ -355,10 +357,12 @@ export function JourneyComposer({
   onRoutePreviewChange,
 }: JourneyComposerProps) {
   const recoveryInput = !journey ? initialUnknownCreateAttempt?.input : undefined;
+  const recoveryRoutePoints = !journey ? initialUnknownCreateAttempt?.routePoints : undefined;
   const [routePoints, setRoutePoints] = useState<RouteDraftPoint[]>(
     () => journey
       ? journeyToDraftPoints(journey)
-      : (recoveryInput?.routePoints ?? []).map((point) => ({
+      : recoveryRoutePoints?.map((point) => ({ ...point }))
+        ?? (recoveryInput?.routePoints ?? []).map((point) => ({
           draftId: draftId(),
           latitude: Number(point.latitude),
           longitude: Number(point.longitude),
@@ -389,7 +393,11 @@ export function JourneyComposer({
   const [note, setNote] = useState(journey?.note ?? recoveryInput?.note ?? "");
   const [lightColor, setLightColor] = useState(journey?.lightColor ?? recoveryInput?.lightColor ?? LIGHT_COLORS[0]);
   const [lightEffect, setLightEffect] = useState<LightEffectId | null>(journey?.lightEffect ?? recoveryInput?.lightEffect ?? null);
-  const [mediaFiles, setMediaFiles] = useState<PendingJourneyMedia[]>([]);
+  const [mediaFiles, setMediaFiles] = useState<PendingJourneyMedia[]>(
+    () => journey
+      ? []
+      : (initialUnknownCreateAttempt?.mediaFiles ?? []).map((media) => ({ ...media })),
+  );
   const mobileLayout = useCompactMobileLayout();
   const [mobileMediaMenuIndex, setMobileMediaMenuIndex] = useState<number | null>(null);
   const [mobileMediaAssignmentIndex, setMobileMediaAssignmentIndex] = useState<number | null>(null);
@@ -836,6 +844,8 @@ export function JourneyComposer({
         input: submittedDraft,
         knownJourneyIdsBeforeCreate: [...knownJourneyIdsBeforeCreate],
         mode: "recheck",
+        routePoints: routePoints.map((point) => ({ ...point })),
+        mediaFiles: mediaFiles.map((media) => ({ ...media })),
       });
       setMessage("暂时无法确认这段旅程是否已经保存。你可以重新确认，或安全关闭创建器后刷新 Atlas；关闭不会创建另一段 Journey，也不会把这次不确定结果当作未保存。");
       return;
@@ -852,6 +862,8 @@ export function JourneyComposer({
         input: submittedDraft,
         knownJourneyIdsBeforeCreate: [...knownJourneyIdsBeforeCreate],
         mode: "ambiguous",
+        routePoints: routePoints.map((point) => ({ ...point })),
+        mediaFiles: mediaFiles.map((media) => ({ ...media })),
       });
       setMessage("检测到多条与本次提交完全相同的新 Journey，无法安全判断哪一条属于这次保存。为避免重复创建，当前不会再次提交；请关闭创建器并刷新 Atlas 核对。");
       return;
