@@ -5,8 +5,10 @@ import {
   BufferAttribute,
   BufferGeometry,
   Color,
+  DataTexture,
   DirectionalLight,
   Group,
+  LinearFilter,
   LineBasicMaterial,
   LineSegments,
   Matrix4,
@@ -151,6 +153,13 @@ import {
   terrainReliefBumpScale,
   terrainReliefOpacity,
 } from "./terrainRelief";
+import {
+  buildVisitedImprintField,
+  encodeVisitedImprintTexture,
+  visitedImprintFieldsEqual,
+  visitedImprintZoomAttenuation,
+  type VisitedImprintField,
+} from "./visitedImprint";
 
 export const QUALITY_PROFILE = {
   low: { particleCount: 12_000, maxDpr: 1, maxDrawingBufferPixels: 1_500_000 },
@@ -1808,6 +1817,11 @@ export function ParticleEarthScene({
         particleLandSource: string;
         semanticLod: GlobeSemanticZoom;
         semanticLodProgress: number;
+        visitedImprintRegions: number;
+        visitedImprintJourneyContributions: number;
+        visitedImprintMaxGain: number;
+        visitedImprintTextureUpdates: number;
+        visitedImprintAttenuation: number;
         coastlineVertices: number;
         coastlineSource: string;
         coastlineInspectionTarget: CoastlineInspectionTarget | null;
@@ -1854,6 +1868,12 @@ export function ParticleEarthScene({
       particleLandSource: landSourceDebug,
       semanticLod: currentParticleLod.level,
       semanticLodProgress: currentParticleLod.refinementProgress,
+      visitedImprintRegions: visitedImprintField.activeRegionCount,
+      visitedImprintJourneyContributions: visitedImprintField.journeyContributionCount,
+      visitedImprintMaxGain: visitedImprintField.maxGain,
+      visitedImprintTextureUpdates,
+      visitedImprintAttenuation: visitedImprintMaterials[0]
+        ?.uniforms.uVisitedImprintAttenuation.value ?? 1,
       coastlineVertices: (semanticZoomState.coastlineLod === "far"
         ? coastlineGeometry
         : semanticZoomState.coastlineLod === "mid" ? midCoastlineGeometry : nearCoastlineGeometry)
@@ -2142,6 +2162,52 @@ export function ParticleEarthScene({
     globe.add(archiveCluster);
 
     const particleDimmingMaterials: Array<ReturnType<typeof createParticleEarthMaterial>> = [];
+    const visitedImprintMaterials: Array<ReturnType<typeof createParticleEarthMaterial>> = [];
+    let visitedImprintField: VisitedImprintField = buildVisitedImprintField(
+      latestJourneyRoutes.current,
+      latestTemporalReveal.current,
+    );
+    const visitedImprintTexture = new DataTexture(
+      encodeVisitedImprintTexture(visitedImprintField),
+      visitedImprintField.width,
+      visitedImprintField.height,
+    );
+    visitedImprintTexture.wrapS = RepeatWrapping;
+    visitedImprintTexture.minFilter = LinearFilter;
+    visitedImprintTexture.magFilter = LinearFilter;
+    visitedImprintTexture.generateMipmaps = false;
+    visitedImprintTexture.needsUpdate = true;
+    let visitedImprintTextureUpdates = 1;
+    const attachVisitedImprintMaterial = (
+      material: ReturnType<typeof createParticleEarthMaterial>,
+    ) => {
+      visitedImprintMaterials.push(material);
+      material.uniforms.uVisitedImprintMap.value = visitedImprintTexture;
+    };
+    const removeVisitedImprintMaterial = (
+      material: ReturnType<typeof createParticleEarthMaterial>,
+    ) => {
+      const index = visitedImprintMaterials.indexOf(material);
+      if (index >= 0) visitedImprintMaterials.splice(index, 1);
+    };
+    const syncVisitedImprint = (
+      routes: readonly JourneyRoute[],
+      temporalReveal = latestTemporalReveal.current,
+    ) => {
+      const next = buildVisitedImprintField(routes, temporalReveal);
+      if (!visitedImprintFieldsEqual(visitedImprintField, next)) {
+        visitedImprintField = next;
+        visitedImprintTexture.image.data = encodeVisitedImprintTexture(next);
+        visitedImprintTexture.needsUpdate = true;
+        visitedImprintTextureUpdates += 1;
+      }
+      host.dataset.visitedImprintRegions = String(visitedImprintField.activeRegionCount);
+      host.dataset.visitedImprintJourneyContributions = String(
+        visitedImprintField.journeyContributionCount,
+      );
+      host.dataset.visitedImprintMaxGain = visitedImprintField.maxGain.toFixed(5);
+      host.dataset.visitedImprintTextureUpdates = String(visitedImprintTextureUpdates);
+    };
     let particleDimmingActiveRouteId: string | null | undefined;
     let particleActiveDimStrengthTarget = 0;
     const syncParticleDimming = (
@@ -3817,9 +3883,12 @@ export function ParticleEarthScene({
       size: 8.8,
       radialPulseScale: 0,
       terrainRelief: true,
+      visitedImprint: true,
     });
     particleDimmingMaterials.push(particleMaterial);
+    attachVisitedImprintMaterial(particleMaterial);
     syncParticleDimming(latestJourneyRoutes.current, latestActiveJourneyRouteId.current);
+    syncVisitedImprint(latestJourneyRoutes.current);
     let particleGeometry: BufferGeometry | null = null;
     let particles: Points | null = null;
     let landVisualReady = false;
@@ -3868,6 +3937,7 @@ export function ParticleEarthScene({
       if (!layer) return;
       globe.remove(layer.points);
       removeParticleDimmingMaterial(layer.material);
+      removeVisitedImprintMaterial(layer.material);
       layer.geometry.dispose();
       layer.material.dispose();
     };
@@ -3922,8 +3992,10 @@ export function ParticleEarthScene({
         spatialLod: true,
         radialPulseScale: 0,
         terrainRelief: true,
+        visitedImprint: true,
       });
       material.uniforms.uViewportHeight.value = targetSize.y;
+      attachVisitedImprintMaterial(material);
       const points = new Points(geometry, material);
       globe.add(points);
       particleDimmingMaterials.push(material);
@@ -4864,6 +4936,14 @@ export function ParticleEarthScene({
       host.dataset.semanticZoom = semanticZoomState.state;
       host.dataset.cityLod = semanticZoomState.cityTier;
       host.dataset.localProgress = semanticZoomState.snapshot.localProgress.toFixed(3);
+      const visitedImprintAttenuation = visitedImprintZoomAttenuation(
+        semanticZoomState.state,
+        semanticZoomState.snapshot.localProgress,
+      );
+      for (const material of visitedImprintMaterials) {
+        material.uniforms.uVisitedImprintAttenuation.value = visitedImprintAttenuation;
+      }
+      host.dataset.visitedImprintAttenuation = visitedImprintAttenuation.toFixed(3);
       // Publish the authority's snapshot to whoever owns the Dive. Only a
       // material move is reported, so a resting camera costs nothing.
       const snapshot = semanticZoomState.snapshot;
@@ -5309,6 +5389,7 @@ export function ParticleEarthScene({
       ) {
         latestActiveJourneyRouteId.current = activeRouteId;
         syncParticleDimming(routes, activeRouteId);
+        syncVisitedImprint(routes);
         applyJourneyRoutes(routes);
       },
       // #21: update per-route AND per-point temporal reveal without rebuilding
@@ -5330,6 +5411,7 @@ export function ParticleEarthScene({
           latestActiveJourneyRouteId.current,
           reveal,
         );
+        syncVisitedImprint(latestJourneyRoutes.current, reveal);
         for (const entry of routeVectorEntries) {
           const progress = reveal?.journeys.get(entry.routeId);
           if (progress === undefined) {
@@ -5392,6 +5474,7 @@ export function ParticleEarthScene({
         renderer.domElement.removeEventListener("wheel", onWheel);
         reliefTexture?.dispose();
         reliefMaterial.dispose();
+        visitedImprintTexture.dispose();
         texture.dispose();
         disposeRefinementLayer(departingRefinementLayer);
         departingRefinementLayer = null;

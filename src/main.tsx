@@ -149,6 +149,25 @@ function JourneyRoutesQaPreview() {
     qaParams.get("qaQuality") === "high" ? "high" : "low",
   );
   const renderBudgetQa = qaParams.get("qaRenderBudget") === "1";
+  const imprintQa = qaParams.get("qaImprint") === "1";
+  const imprintStage = qaParams.get("qaImprintStage") ?? "now";
+  const qaTemporalReveal = useMemo(() => {
+    if (!imprintQa) return undefined;
+    const journeys = new Map<string, number>();
+    const points = new Map<string, number>();
+    globeQaRoutes.forEach((route, routeIndex) => {
+      const progress = imprintStage === "first"
+        ? (routeIndex === 0 ? 1 : 0)
+        : imprintStage === "mid"
+          ? (routeIndex < 3 ? 1 : routeIndex === 3 ? 0.5 : 0)
+          : 1;
+      journeys.set(route.id, progress);
+      route.points.forEach((_point, pointIndex) => {
+        points.set(`${route.id}:${pointIndex}`, progress);
+      });
+    });
+    return { journeys, points };
+  }, [imprintQa, imprintStage]);
   return (
     <main className="living-atlas">
       <div className="living-atlas__globe">
@@ -156,6 +175,7 @@ function JourneyRoutesQaPreview() {
           mode="focusPoint"
           quality={qaQuality}
           journeyRoutes={globeQaRoutes}
+          temporalReveal={qaTemporalReveal}
           activeJourneyRouteId={activeRouteId}
           focusRoute={activeRoute}
           focusRevision={focusRevision}
