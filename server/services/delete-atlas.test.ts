@@ -43,6 +43,9 @@ function storageWith(uploadExists: boolean) {
     },
     deleteObject: vi.fn(async () => undefined),
     inspectObject: vi.fn(async () => inspection),
+    async hashObject() {
+      return { exists: true as const, sha256: "0".repeat(64) };
+    },
     async createPrivateReadUrl() {
       return { url: "https://unused", expiresAt: new Date() };
     },

@@ -463,8 +463,12 @@ async function withCompletionLease<T>(
 
 export async function finalizeUpload(
   upload: UploadRecord,
+  verifiedContentHash: string,
   lease?: CompletionLease,
 ) {
+  if (!/^[0-9a-f]{64}$/.test(verifiedContentHash)) {
+    throw new Error("Verified content identity must be a lowercase SHA-256");
+  }
   const result = await db.transaction(async (transaction) => {
     const lockedAtlas = await transaction.execute<{ id: string }>(sql`
       select ${atlases.id} as id
@@ -520,20 +524,19 @@ export async function finalizeUpload(
     // asset and a journey-scoped asset (routePointId = null) must never
     // collapse either. Within one journey + one route point + one media kind,
     // an identical content hash is still a user mistake and dedupes.
-    const [duplicate] = upload.contentHash
-      ? await transaction
+    const [duplicate] = await transaction
         .select({ id: mediaAssets.id })
         .from(mediaAssets)
         .where(and(
           eq(mediaAssets.journeyId, upload.journeyId),
-          eq(mediaAssets.contentHash, upload.contentHash),
+          eq(mediaAssets.contentHash, verifiedContentHash),
+          eq(mediaAssets.contentHashVerified, true),
           like(mediaAssets.mimeType, `${mediaKindOf(upload.mimeType)}/%`),
           upload.routePointId
             ? eq(mediaAssets.routePointId, upload.routePointId)
             : isNull(mediaAssets.routePointId),
         ))
-        .limit(1)
-      : [];
+        .limit(1);
 
     let asset: typeof mediaAssets.$inferSelect;
     let deduplicated = false;
@@ -563,7 +566,8 @@ export async function finalizeUpload(
           fileName: upload.fileName,
           mimeType: upload.mimeType,
           bytes: upload.bytes,
-          contentHash: upload.contentHash,
+          contentHash: verifiedContentHash,
+          contentHashVerified: true,
           sortOrder: (lastAsset?.sortOrder ?? -1) + 1,
           uploadedByUserId: upload.createdByUserId,
         })
@@ -619,15 +623,25 @@ export async function finalizeUpload(
   return result.asset;
 }
 
+async function verifiedContentHashForUpload(
+  upload: UploadRecord,
+  storage: MultipartStorage = getMultipartStorage(upload.storageDriver),
+) {
+  const identity = await storage.hashObject({ key: upload.storageKey });
+  if (!identity.exists) return null;
+  return identity.sha256;
+}
+
 async function recoverCompletedUpload(upload: UploadRecord) {
-  const inspected = await getMultipartStorage(upload.storageDriver).inspectObject({
-    key: upload.storageKey,
-  });
+  const storage = getMultipartStorage(upload.storageDriver);
+  const inspected = await storage.inspectObject({ key: upload.storageKey });
   if (!inspected.exists) return null;
   if (inspected.bytes !== upload.bytes) {
     throw new Error("Completed object size does not match the upload record");
   }
-  return finalizeUpload(upload);
+  const verifiedContentHash = await verifiedContentHashForUpload(upload, storage);
+  if (!verifiedContentHash) return null;
+  return finalizeUpload(upload, verifiedContentHash);
 }
 
 async function markUploadAborted(uploadId: string, attemptId: string) {
@@ -670,6 +684,7 @@ export type ReconciliationDependencies = {
   storageForBackend: (backendId: string) => MultipartStorage;
   finalize: (
     upload: UploadRecord,
+    verifiedContentHash: string,
     lease: CompletionLease,
   ) => Promise<unknown>;
   markAborted: (uploadId: string, attemptId: string) => Promise<void>;
@@ -727,7 +742,12 @@ export async function reconcileUploadCandidates(
           await dependencies.markAborted(claimed.id, attemptId);
           continue;
         }
-        await dependencies.finalize(claimed, {
+        const verifiedContentHash = await verifiedContentHashForUpload(claimed, storage);
+        if (!verifiedContentHash) {
+          await dependencies.markRetryable(claimed.id, attemptId);
+          continue;
+        }
+        await dependencies.finalize(claimed, verifiedContentHash, {
           status: "reconciling",
           attemptId,
         });
@@ -1015,8 +1035,9 @@ uploadRoutes.post("/:id/complete", async (context) => {
     .returning({ id: mediaUploads.id });
   if (!claimed) return context.json({ error: "UPLOAD_ALREADY_FINALIZING" }, 409);
 
+  let verifiedContentHash: string | null = null;
+  const storage = getMultipartStorage(upload.storageDriver);
   try {
-    const storage = getMultipartStorage(upload.storageDriver);
     await db.transaction(async (transaction) => {
       const lockedAtlas = await transaction.execute<{ id: string }>(sql`
         select ${atlases.id} as id
@@ -1039,14 +1060,19 @@ uploadRoutes.post("/:id/complete", async (context) => {
       if (lockedJourney.rows.length === 0) {
         throw new JourneyUnavailableForUploadError();
       }
-      await withCompletionLease(upload.id, attemptId, () =>
-        storage.completeMultipartUpload({
+      verifiedContentHash = await withCompletionLease(upload.id, attemptId, async () => {
+        await storage.completeMultipartUpload({
           key: upload.storageKey,
           providerUploadId: upload.providerUploadId,
           parts,
           bytes: upload.bytes,
-        }),
-      );
+        });
+        const hash = await verifiedContentHashForUpload(upload, storage);
+        if (!hash) {
+          throw new CompletedObjectIntegrityError("Completed upload object is missing");
+        }
+        return hash;
+      });
     });
   } catch (error) {
     if (error instanceof JourneyUnavailableForUploadError) {
@@ -1085,7 +1111,10 @@ uploadRoutes.post("/:id/complete", async (context) => {
 
   let asset;
   try {
-    asset = await finalizeUpload(upload, {
+    if (!verifiedContentHash) {
+      throw new CompletedObjectIntegrityError("Completed upload identity was not verified");
+    }
+    asset = await finalizeUpload(upload, verifiedContentHash, {
       status: "finalizing",
       attemptId,
     });

@@ -1,0 +1,1 @@
+ALTER TABLE "media_assets" ADD COLUMN "content_hash_verified" boolean DEFAULT false NOT NULL;

@@ -109,6 +109,14 @@ export interface MultipartStorage {
     maxBytes: number;
   }): Promise<{ exists: false } | { exists: true; bytes: Uint8Array }>;
 
+  /**
+   * #311: derive SHA-256 from the durable object itself. This is the trust
+   * boundary for exact duplicate identity; client declarations are hints only.
+   */
+  hashObject(input: {
+    key: string;
+  }): Promise<{ exists: false } | { exists: true; sha256: string }>;
+
   createPrivateReadUrl(input: {
     key: string;
     expiresInSeconds: number;

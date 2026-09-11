@@ -245,6 +245,9 @@ function recordingStorage(
       deleted.push(input.key);
       objects.delete(input.key);
     },
+    async hashObject() {
+      return { exists: true as const, sha256: "0".repeat(64) };
+    },
     async createPrivateReadUrl(input) {
       signedReads.push(input);
       return {

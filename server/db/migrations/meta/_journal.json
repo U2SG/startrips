@@ -120,6 +120,13 @@
       "when": 1788871621559,
       "tag": "0016_red_mister_fear",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1789091747920,
+      "tag": "0017_nosy_outlaw_kid",
+      "breakpoints": true
     }
   ]
 }

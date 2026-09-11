@@ -58,6 +58,9 @@ function storageWithInspection(
     },
     deleteObject: vi.fn(async () => undefined),
     inspectObject: vi.fn(async () => inspection),
+    async hashObject() {
+      return { exists: true as const, sha256: "0".repeat(64) };
+    },
     async createPrivateReadUrl() {
       return { url: "https://unused", expiresAt: NOW };
     },
@@ -114,6 +117,36 @@ describe("stale multipart reconciliation", () => {
 
     expect(deps.finalize).toHaveBeenCalledOnce();
     expect(deps.markAborted).not.toHaveBeenCalled();
+  });
+
+  it("passes durable-byte identity to finalization instead of the client declaration", async () => {
+    const storage = storageWithInspection({ exists: true, bytes: 16 });
+    const deps = dependencies(storage);
+    vi.mocked(storage.hashObject).mockResolvedValue({
+      exists: true,
+      sha256: "4".repeat(64),
+    });
+
+    await reconcileUploadCandidates([upload({ contentHash: "5".repeat(64) })], NOW, CUTOFF, deps);
+
+    expect(storage.hashObject).toHaveBeenCalledWith({ key: "atlas/journey/object" });
+    expect(deps.finalize).toHaveBeenCalledWith(
+      expect.objectContaining({ contentHash: "5".repeat(64) }),
+      "4".repeat(64),
+      expect.objectContaining({ status: "reconciling" }),
+    );
+  });
+
+  it("keeps a completed object retryable when durable-byte hashing fails", async () => {
+    const storage = storageWithInspection({ exists: true, bytes: 16 });
+    const deps = dependencies(storage);
+    vi.mocked(storage.hashObject).mockRejectedValue(new Error("hash read failed"));
+
+    await reconcileUploadCandidates([upload()], NOW, CUTOFF, deps);
+
+    expect(deps.finalize).not.toHaveBeenCalled();
+    expect(deps.markRetryable).toHaveBeenCalledOnce();
+    expect(deps.onError).toHaveBeenCalledOnce();
   });
 
   it("deletes and aborts the record for a wrong-size object", async () => {

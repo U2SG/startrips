@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createEmailVerificationToken } from "better-auth/api";
 import { count, eq, inArray } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -23,7 +23,7 @@ import {
   setJourneyCoverForAtlas,
   updateJourneyForAtlas,
 } from "../repositories/journey-repository";
-import { finalizeUpload } from "../routes/uploads";
+import { finalizeUpload as finalizeVerifiedUpload } from "../routes/uploads";
 
 const atlasIds: string[] = [];
 const authOrganizationIds: string[] = [];
@@ -33,6 +33,12 @@ let atlasB = "";
 let journeyB = "";
 let guardedOrganizationId = "";
 const TEST_ORIGIN = "http://127.0.0.1:5173";
+
+function finalizeUpload(upload: Parameters<typeof finalizeVerifiedUpload>[0]) {
+  const verifiedContentHash = upload.contentHash
+    ?? createHash("sha256").update(upload.storageKey).digest("hex");
+  return finalizeVerifiedUpload(upload, verifiedContentHash);
+}
 
 const baseJourney = {
   startedOn: "2026-08-11",
@@ -1598,6 +1604,87 @@ describe("tenant-scoped journey repository", () => {
       .from(mediaUploads)
       .where(eq(mediaUploads.id, uploads[1].id));
     expect(completedUpload.mediaAssetId).toBe(first.id);
+  });
+
+  it("does not trust equal client declarations when durable-byte identities differ", async () => {
+    const journey = await createJourneyForAtlas(atlasA, "user-a", {
+      ...baseJourney,
+      title: "Declared hash is only a hint",
+    });
+    if (!journey) throw new Error("Journey fixture was not created");
+    const declaredHash = "a".repeat(64);
+    const [firstUpload, secondUpload] = await db
+      .insert(mediaUploads)
+      .values(["first.jpg", "second.jpg"].map((fileName) => ({
+        atlasId: atlasA,
+        journeyId: journey.id,
+        routePointId: null,
+        storageDriver: "test",
+        storageKey: `${atlasA}/${journey.id}/${randomUUID()}`,
+        providerUploadId: randomUUID(),
+        fileName,
+        mimeType: "image/jpeg",
+        bytes: 128,
+        contentHash: declaredHash,
+        partSize: 128,
+        partCount: 1,
+        status: "finalizing",
+        createdByUserId: "user-a",
+      })))
+      .returning();
+
+    const firstVerifiedHash = "1".repeat(64);
+    const secondVerifiedHash = "2".repeat(64);
+    const first = await finalizeVerifiedUpload(firstUpload, firstVerifiedHash);
+    const second = await finalizeVerifiedUpload(secondUpload, secondVerifiedHash);
+
+    expect(second.id).not.toBe(first.id);
+    expect(first.contentHash).toBe(firstVerifiedHash);
+    expect(second.contentHash).toBe(secondVerifiedHash);
+    expect(first.contentHashVerified).toBe(true);
+    expect(second.contentHashVerified).toBe(true);
+  });
+
+  it("does not deduplicate against a legacy unverified persisted hash", async () => {
+    const journey = await createJourneyForAtlas(atlasA, "user-a", {
+      ...baseJourney,
+      title: "Unverified legacy identity",
+    });
+    if (!journey) throw new Error("Journey fixture was not created");
+    const verifiedHash = "3".repeat(64);
+    const [legacy] = await db.insert(mediaAssets).values({
+      journeyId: journey.id,
+      routePointId: null,
+      storageDriver: "test",
+      storageKey: `${atlasA}/${journey.id}/${randomUUID()}`,
+      fileName: "legacy.jpg",
+      mimeType: "image/jpeg",
+      bytes: 128,
+      contentHash: verifiedHash,
+      sortOrder: 0,
+      uploadedByUserId: "user-a",
+    }).returning();
+    const [upload] = await db.insert(mediaUploads).values({
+      atlasId: atlasA,
+      journeyId: journey.id,
+      routePointId: null,
+      storageDriver: "test",
+      storageKey: `${atlasA}/${journey.id}/${randomUUID()}`,
+      providerUploadId: randomUUID(),
+      fileName: "new.jpg",
+      mimeType: "image/jpeg",
+      bytes: 128,
+      contentHash: verifiedHash,
+      partSize: 128,
+      partCount: 1,
+      status: "finalizing",
+      createdByUserId: "user-a",
+    }).returning();
+
+    const created = await finalizeVerifiedUpload(upload, verifiedHash);
+    expect(created.id).not.toBe(legacy.id);
+    expect(legacy.contentHashVerified).toBe(false);
+    expect(created.contentHashVerified).toBe(true);
   });
 
   it("never deduplicates a soundtrack onto identical visual content", async () => {

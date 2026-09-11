@@ -201,6 +201,35 @@ describe("S3-compatible multipart storage", () => {
     });
   });
 
+  it("derives SHA-256 from the durable object stream instead of provider metadata", async () => {
+    const { send, storage } = setup();
+    send.mockResolvedValueOnce({
+      Body: {
+        async *[Symbol.asyncIterator]() {
+          yield new Uint8Array([97, 98]);
+          yield new Uint8Array([99]);
+        },
+      },
+    });
+
+    await expect(storage.hashObject({ key: "stored" })).resolves.toEqual({
+      exists: true,
+      sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+    });
+    const command = send.mock.calls[0][0];
+    expect(command).toBeInstanceOf(GetObjectCommand);
+    expect(command.input).toEqual({
+      Bucket: "private-atlas",
+      Key: "live/stored",
+    });
+  });
+
+  it("reports a missing durable object instead of fabricating a hash", async () => {
+    const { send, storage } = setup();
+    send.mockRejectedValueOnce(Object.assign(new Error("missing"), { Code: "NoSuchKey" }));
+    await expect(storage.hashObject({ key: "gone" })).resolves.toEqual({ exists: false });
+  });
+
   it("inspects object size, distinguishes 404, and signs private reads", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-12T01:00:00.000Z"));
