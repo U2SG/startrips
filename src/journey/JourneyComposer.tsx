@@ -566,7 +566,7 @@ export function JourneyComposer({
     } catch (error) {
       setSearchResults([]);
       setSearchAttribution(null);
-      setMessage(error instanceof Error ? error.message : "地点搜索暂时不可用");
+      setMessage(journeyLocationSearchErrorMessage(error));
     } finally {
       setSearchPending(false);
     }
