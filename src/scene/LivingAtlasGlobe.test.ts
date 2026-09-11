@@ -47,6 +47,28 @@ describe("LivingAtlasGlobe ambience", () => {
   });
 });
 
+
+describe("Semantic Earth Dive renderer ownership", () => {
+  it("mounts detail non-interactive and only enables particle hold after detail owns input", () => {
+    const globe = readFileSync(new URL("./LivingAtlasGlobe.tsx", import.meta.url), "utf8");
+    const detail = readFileSync(new URL("./DetailedEarthMap.tsx", import.meta.url), "utf8");
+    expect(globe).toContain('cameraHold={Boolean(atlas) && atlas?.inputOwner === "detail"}');
+    expect(detail).toContain("interactive: false");
+    expect(detail).toContain('const owns = diveOwner === "detail";');
+    expect(detail).toContain("map.scrollZoom.enable()");
+    expect(detail).toContain("map.scrollZoom.disable()");
+  });
+
+  it("keeps per-frame handoff calibration on the imperative publish path", () => {
+    const globe = readFileSync(new URL("./LivingAtlasGlobe.tsx", import.meta.url), "utf8");
+    const detail = readFileSync(new URL("./DetailedEarthMap.tsx", import.meta.url), "utf8");
+    expect(globe).toContain("detailCalibrationRef.current?.(frame)");
+    expect(detail).toContain("calibrationHandleRef.current = (frame) => calibrateToParticle(frame)");
+    expect(detail).toContain("[diveOwner, diveStage, focusPoint, focusRoute]");
+    expect(detail).not.toContain("[diveOwner, diveSnapshot, diveStage, focusPoint, focusRoute, particleFrame]");
+  });
+});
+
 describe("Semantic Earth Dive accessibility fallback (#308)", () => {
   it("keeps the intent mounted when optional detail utilities are suppressed", () => {
     const rendered = renderToStaticMarkup(createElement(LivingAtlasGlobeControls, {
