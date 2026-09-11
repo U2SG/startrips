@@ -271,7 +271,7 @@ export type GlobePointPick = {
 export type UnknownJourneyCreateAttempt = {
   input: JourneyInput;
   knownJourneyIdsBeforeCreate: string[];
-  mode: "recheck" | "ambiguous";
+  mode: "recheck" | "confirmation-required" | "ambiguous";
   routePoints?: RouteDraftPoint[];
   mediaFiles?: PendingJourneyMedia[];
 };
@@ -282,6 +282,13 @@ export function unknownCreateRecheckMessage(hasPendingMedia: boolean) {
     ? "当前会话会保留尚未上传的本地媒体和路线点归属；请不要刷新整个页面，刷新后这些本地内容需要重新选择。"
     : "请继续在当前 Atlas 会话中核对，不要把刷新整个页面当作保留这次恢复状态的方式。";
   return `暂时无法确认这段旅程是否已经保存。${sameSession}${pendingMediaNotice}关闭不会创建另一段 Journey，也不会把这次不确定结果当作未保存。`;
+}
+
+function confirmationRequiredUnknownCreateMessage(hasPendingMedia: boolean) {
+  const pendingMediaNotice = hasPendingMedia
+    ? "当前会话仍会保留尚未上传的本地媒体和路线点归属；请不要刷新整个页面。"
+    : "";
+  return `检测到一条与本次提交内容完全相同、且在本次尝试后出现的 Journey，但当前系统没有能证明它属于这次保存请求的服务端尝试标识。为避免把其他会话创建的 Journey 当成本次结果，当前不会自动采用它、上传媒体或触发抵达焦点，也不会再次创建。请先关闭创建器，在 Atlas 中核对这条 Journey。${pendingMediaNotice}`;
 }
 
 function ambiguousUnknownCreateMessage(hasPendingMedia: boolean) {
@@ -417,7 +424,17 @@ export function JourneyComposer({
   const [mobileMediaMenuIndex, setMobileMediaMenuIndex] = useState<number | null>(null);
   const [mobileMediaAssignmentIndex, setMobileMediaAssignmentIndex] = useState<number | null>(null);
   const [mobileMediaDeleteIndex, setMobileMediaDeleteIndex] = useState<number | null>(null);
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useState(() => {
+    if (journey || !initialUnknownCreateAttempt) return "";
+    const hasPendingMedia = (initialUnknownCreateAttempt.mediaFiles?.length ?? 0) > 0;
+    if (initialUnknownCreateAttempt.mode === "confirmation-required") {
+      return confirmationRequiredUnknownCreateMessage(hasPendingMedia);
+    }
+    if (initialUnknownCreateAttempt.mode === "ambiguous") {
+      return ambiguousUnknownCreateMessage(hasPendingMedia);
+    }
+    return unknownCreateRecheckMessage(hasPendingMedia);
+  });
   const [saving, setSaving] = useState(false);
   const [progress, setProgress] = useState<UploadProgress | null>(null);
   const [savedResult, setSavedResult] = useState<JourneySaveResult | null>(null);
@@ -872,34 +889,26 @@ export function JourneyComposer({
       return;
     }
 
-    if (recovery.status === "ambiguous") {
+    if (recovery.status === "confirmation-required") {
       setUnknownCreateAttempt({
         input: submittedDraft,
         knownJourneyIdsBeforeCreate: [...knownJourneyIdsBeforeCreate],
-        mode: "ambiguous",
+        mode: "confirmation-required",
         routePoints: routePoints.map((point) => ({ ...point })),
         mediaFiles: mediaFiles.map((media) => ({ ...media })),
       });
-      setMessage(ambiguousUnknownCreateMessage(mediaFiles.length > 0));
+      setMessage(confirmationRequiredUnknownCreateMessage(mediaFiles.length > 0));
       return;
     }
 
-    try {
-      const recovered = await persistJourneyDraft({
-        input: submittedDraft,
-        mediaFiles,
-        routePoints,
-        persist: async () => recovery.journey,
-        onProgress: setProgress,
-      });
-      await applySavedResult(recovered, "initial-save");
-    } catch (error) {
-      if (error instanceof JourneyMediaContinuationError) {
-        await applyPersistedMediaContinuationFailure(error, "initial-save");
-        return;
-      }
-      throw error;
-    }
+    setUnknownCreateAttempt({
+      input: submittedDraft,
+      knownJourneyIdsBeforeCreate: [...knownJourneyIdsBeforeCreate],
+      mode: "ambiguous",
+      routePoints: routePoints.map((point) => ({ ...point })),
+      mediaFiles: mediaFiles.map((media) => ({ ...media })),
+    });
+    setMessage(ambiguousUnknownCreateMessage(mediaFiles.length > 0));
   }
 
   async function save() {
@@ -920,6 +929,10 @@ export function JourneyComposer({
       if (!journey && unknownCreateAttempt) {
         if (unknownCreateAttempt.mode === "ambiguous") {
           setMessage(ambiguousUnknownCreateMessage(mediaFiles.length > 0));
+          return;
+        }
+        if (unknownCreateAttempt.mode === "confirmation-required") {
+          setMessage(confirmationRequiredUnknownCreateMessage(mediaFiles.length > 0));
           return;
         }
         await recoverUnknownCreate(
@@ -1440,7 +1453,7 @@ export function JourneyComposer({
                 ? `${existingVisualMediaCount} 个已有媒体`
                 : "媒体可以稍后补充"}</span>
           </div>
-          {savedResult ? <button type="button" onClick={closeComposer}><IconCheck size={18} stroke={1.4} aria-hidden="true" />完成</button> : <button type="button" onClick={save} disabled={saving || unknownCreateAttempt?.mode === "ambiguous"}>{saving ? <StartripsJourneyCue state="waiting" size={32} /> : <IconCheck size={18} stroke={1.4} aria-hidden="true" />}{saving ? "正在保存…" : unknownCreateAttempt?.mode === "ambiguous" ? "请关闭后核对 Atlas" : unknownCreateAttempt ? "重新确认保存结果" : isEditing ? "保存修改" : "保存到星球"}</button>}
+          {savedResult ? <button type="button" onClick={closeComposer}><IconCheck size={18} stroke={1.4} aria-hidden="true" />完成</button> : <button type="button" onClick={save} disabled={saving || unknownCreateAttempt?.mode === "ambiguous" || unknownCreateAttempt?.mode === "confirmation-required"}>{saving ? <StartripsJourneyCue state="waiting" size={32} /> : <IconCheck size={18} stroke={1.4} aria-hidden="true" />}{saving ? "正在保存…" : unknownCreateAttempt?.mode === "ambiguous" || unknownCreateAttempt?.mode === "confirmation-required" ? "请关闭后核对 Atlas" : unknownCreateAttempt ? "重新确认保存结果" : isEditing ? "保存修改" : "保存到星球"}</button>}
         </footer>
       </section>
     </div>

@@ -60,18 +60,18 @@ function persisted(overrides: Partial<Journey> = {}): Journey {
 }
 
 describe("journey save recovery", () => {
-  it("adopts the unique server Journey whose canonical submitted fields match", () => {
+  it("keeps a unique canonical match confirmation-only without attempt-scoped provenance", () => {
     const decision = resolveJourneySaveRecovery(submitted, [
       persisted({ id: "other", title: "Different Journey" }),
       persisted(),
     ]);
-    expect(decision).toMatchObject({
-      status: "already-persisted",
-      journey: { id: "journey-server-id" },
+    expect(decision).toEqual({
+      status: "confirmation-required",
+      matchingJourneyId: "journey-server-id",
     });
   });
 
-  it("adopts a persisted Journey when a whitespace-only Route Point note was normalized to null", () => {
+  it("matches a whitespace-normalized Route Point note without inferring attempt ownership", () => {
     const submittedWithWhitespacePointNote: JourneyInput = {
       ...submitted,
       routePoints: [{
@@ -81,28 +81,28 @@ describe("journey save recovery", () => {
     };
 
     expect(resolveJourneySaveRecovery(submittedWithWhitespacePointNote, [persisted()]))
-      .toMatchObject({
-        status: "already-persisted",
-        journey: { id: "journey-server-id" },
+      .toEqual({
+        status: "confirmation-required",
+        matchingJourneyId: "journey-server-id",
       });
   });
 
-  it("ignores an identical Journey that already existed before the create attempt", () => {
+  it("does not adopt another writer's sole identical Journey created after the snapshot", () => {
     const oldJourney = persisted({
       id: "journey-old",
       createdAt: "2026-08-10T00:00:00.000Z",
     });
-    const newJourney = persisted({
-      id: "journey-new",
+    const concurrentWriterJourney = persisted({
+      id: "journey-other-session",
       createdAt: "2026-08-11T00:00:00.000Z",
     });
     expect(resolveJourneySaveRecovery(
       submitted,
-      [oldJourney, newJourney],
+      [oldJourney, concurrentWriterJourney],
       { knownJourneyIdsBeforeCreate: new Set(["journey-old"]) },
-    )).toMatchObject({
-      status: "already-persisted",
-      journey: { id: "journey-new" },
+    )).toEqual({
+      status: "confirmation-required",
+      matchingJourneyId: "journey-other-session",
     });
   });
 

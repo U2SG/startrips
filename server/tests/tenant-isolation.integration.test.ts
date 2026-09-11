@@ -636,7 +636,7 @@ describe("media and atlas HTTP endpoints", () => {
     sharedJourneyId = shared.id;
   });
 
-  it("recovers one authenticated create from the Journey listing without a second POST", async () => {
+  it("keeps a single authenticated canonical match confirmation-only without attempt provenance", async () => {
     const submitted = {
       title: "Unknown result recovery",
       startedOn: baseJourney.startedOn,
@@ -667,9 +667,9 @@ describe("media and atlas HTTP endpoints", () => {
     expect(listingResponse.status).toBe(200);
     const listing = await listingResponse.json() as { journeys: Journey[] };
     expect(listing.journeys.filter((journey) => journey.id === created.journey.id)).toHaveLength(1);
-    expect(resolveJourneySaveRecovery(submitted, listing.journeys)).toMatchObject({
-      status: "already-persisted",
-      journey: { id: created.journey.id },
+    expect(resolveJourneySaveRecovery(submitted, listing.journeys)).toEqual({
+      status: "confirmation-required",
+      matchingJourneyId: created.journey.id,
     });
   });
 
