@@ -6,7 +6,11 @@ import {
   Vector3,
   type WebGLRenderer,
 } from "three";
-import { VISITED_IMPRINT_GAIN_CAP } from "./visitedImprint";
+import {
+  VISITED_IMPRINT_ACTIVE_CONTEXT_SUPPRESSION,
+  VISITED_IMPRINT_GAIN_CAP,
+  VISITED_IMPRINT_STABILITY_WEIGHT,
+} from "./visitedImprint";
 
 export const PARTICLE_DIM_POINT_LIMIT = 24;
 export const PARTICLE_ACTIVE_DIM_POINT_LIMIT = 12;
@@ -179,11 +183,11 @@ export function createParticleEarthMaterial({
           fract(imprintLongitudeAngle / 6.2831853),
           asin(clamp(surfaceDirection.y, -1.0, 1.0)) / 3.14159265 + 0.5
         );
-        visitedImprintStrength = texture2D(uVisitedImprintMap, imprintUv).r;
-        visitedImprintGain = visitedImprintStrength
-          * uVisitedImprintGainCap
+        float visitedImprintSample = texture2D(uVisitedImprintMap, imprintUv).r;
+        visitedImprintStrength = visitedImprintSample
           * uVisitedImprintAttenuation
-          * (1.0 - dimAmount * 0.85);
+          * (1.0 - dimAmount * ${VISITED_IMPRINT_ACTIVE_CONTEXT_SUPPRESSION.toFixed(2)});
+        visitedImprintGain = visitedImprintStrength * uVisitedImprintGainCap;
         ` : ""}
 
         float vertexId = float(gl_VertexID);
@@ -245,7 +249,11 @@ export function createParticleEarthMaterial({
         float twinkleSignal = shimmer * 0.3 + spark * 0.95;
         float baseTwinkle = mix(0.78 + twinkleSignal * mix(1.0, 0.24, dimAmount),
           1.0, terrainEmphasis * 0.72);
-        vTwinkle = mix(baseTwinkle, 1.0, visitedImprintStrength * 0.22);
+        vTwinkle = mix(
+          baseTwinkle,
+          1.0,
+          visitedImprintStrength * ${VISITED_IMPRINT_STABILITY_WEIGHT.toFixed(2)}
+        );
         vDimBrightness = mix(1.0, 0.46, dimAmount)
           * terrainBrightness
           * (1.0 + visitedImprintGain);

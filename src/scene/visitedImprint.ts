@@ -12,6 +12,9 @@ export const VISITED_IMPRINT_REGION_DEGREES = 6;
 export const VISITED_IMPRINT_CORRIDOR_WEIGHT = 0.35;
 export const VISITED_IMPRINT_CORRIDOR_STEP_DEGREES = 18;
 export const VISITED_IMPRINT_MAX_CORRIDOR_SAMPLES_PER_LEG = 8;
+export const VISITED_IMPRINT_ACTIVE_CONTEXT_SUPPRESSION = 0.85;
+export const VISITED_IMPRINT_STABILITY_WEIGHT = 0.22;
+export const VISITED_IMPRINT_LOCAL_PROGRESS_REDUCTION = 0.75;
 
 export const VISITED_IMPRINT_ZOOM_ATTENUATION: Readonly<Record<GlobeSemanticZoom, number>> = {
   planet: 1,
@@ -165,7 +168,7 @@ export function visitedImprintZoomAttenuation(
   if (level !== "local") return base;
   // Once geography becomes local, the ambient history recedes further so
   // coastline, labels and the canonical geographic surface win visually.
-  return base * (1 - 0.75 * clamp01(localProgress));
+  return base * (1 - VISITED_IMPRINT_LOCAL_PROGRESS_REDUCTION * clamp01(localProgress));
 }
 
 export function buildVisitedImprintField(
