@@ -11,6 +11,7 @@ import {
   type JourneyValues,
 } from "../repositories/journey-repository";
 import { deleteJourneyWithStorage } from "../services/delete-journey";
+import { isPersistedCalendarDate } from "../../src/journey/calendarDate";
 import { readJsonObject } from "./json-body";
 
 const MAX_ROUTE_POINTS = 64;
@@ -29,13 +30,6 @@ type JourneyInput = {
   revision?: unknown;
   routePoints?: unknown;
 };
-
-function validDate(value: string): boolean {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
-  const parsed = new Date(`${value}T00:00:00.000Z`);
-  return !Number.isNaN(parsed.valueOf())
-    && parsed.toISOString().slice(0, 10) === value;
-}
 
 function coordinateValue(value: unknown, minimum: number, maximum: number) {
   if (
@@ -79,8 +73,8 @@ export function parseJourneyInput(body: JourneyInput): JourneyValues | null {
   if (
     !title
     || title.length > 80
-    || !validDate(startedOn)
-    || (endedOn !== null && !validDate(endedOn))
+    || !isPersistedCalendarDate(startedOn)
+    || (endedOn !== null && !isPersistedCalendarDate(endedOn))
     || (endedOn !== null && endedOn < startedOn)
     || note.length > 2000
     || !/^#[0-9a-fA-F]{6}$/.test(lightColor)
