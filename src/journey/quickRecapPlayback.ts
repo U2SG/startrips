@@ -133,7 +133,9 @@ function runtimeVisualCandidates(journey: Journey): JourneyMediaAsset[] {
 export function quickRecapDigestsForJourney(journey: Journey): MediaDigestV1[] {
   return runtimeVisualCandidates(journey).map<MediaDigestV1>((asset, sourceIndex) => {
     const mediaType = visualMediaType(asset);
-    const duplicateClusterId = asset.contentHash || undefined;
+    const duplicateClusterId = asset.contentHashVerified === true
+      ? asset.contentHash || undefined
+      : undefined;
     return {
       schemaVersion: 1,
       assetId: asset.id,

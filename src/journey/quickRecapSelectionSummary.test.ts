@@ -157,8 +157,8 @@ describe("buildQuickRecapSelectionSummary", () => {
     sourceJourney.coverMediaAssetId = null;
     sourceJourney.routePoints = [routePoint("route-a", 0)];
     sourceJourney.media = [
-      { ...media("journey-duplicate", null, 0), contentHash: duplicateHash },
-      { ...media("route-duplicate", "route-a", 1), contentHash: duplicateHash },
+      { ...media("journey-duplicate", null, 0), contentHash: duplicateHash, contentHashVerified: true },
+      { ...media("route-duplicate", "route-a", 1), contentHash: duplicateHash, contentHashVerified: true },
     ];
     const prepared = prepareQuickRecapPlayback(sourceJourney, {
       generatedAt: "2026-09-10T00:00:00.000Z",

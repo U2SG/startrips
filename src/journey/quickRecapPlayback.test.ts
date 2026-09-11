@@ -103,16 +103,16 @@ describe("Quick Recap playback handoff (#127)", () => {
     expect(journey.media.find((asset) => asset.id === "cover")?.routePointId).toBeNull();
   });
 
-  it("derives duplicate cluster identity only from non-empty persisted content hashes", () => {
+  it("derives duplicate cluster identity only from non-empty verified content hashes", () => {
     const journey = fixture();
     journey.coverMediaAssetId = null;
     journey.routePoints = [point("p0", 0)];
     const persistedHash = "c".repeat(64);
     journey.media = [
-      { ...media("hashed", "p0", "image/jpeg", 0), contentHash: persistedHash },
+      { ...media("hashed", "p0", "image/jpeg", 0), contentHash: persistedHash, contentHashVerified: true },
       { ...media("null-hash", "p0", "image/jpeg", 1), contentHash: null },
       media("missing-hash", "p0", "image/jpeg", 2),
-      { ...media("empty-hash", "p0", "image/jpeg", 3), contentHash: "" },
+      { ...media("empty-hash", "p0", "image/jpeg", 3), contentHash: "", contentHashVerified: true },
     ];
 
     const digests = quickRecapDigestsForJourney(journey);
@@ -121,6 +121,28 @@ describe("Quick Recap playback handoff (#127)", () => {
     for (const assetId of ["null-hash", "missing-hash", "empty-hash"]) {
       expect(digests.find((digest) => digest.assetId === assetId)?.similarity).toBeUndefined();
     }
+  });
+
+  it("does not promote equal unverified content hashes to exact duplicate identity", () => {
+    const journey = fixture();
+    journey.coverMediaAssetId = null;
+    journey.routePoints = [point("p0", 0)];
+    const declaredHash = "d".repeat(64);
+    journey.media = [
+      { ...media("unverified-a", "p0", "image/jpeg", 0), contentHash: declaredHash, contentHashVerified: false },
+      { ...media("unverified-b", "p0", "image/jpeg", 1), contentHash: declaredHash },
+    ];
+
+    const digests = quickRecapDigestsForJourney(journey);
+    expect(digests.every((digest) => digest.similarity === undefined)).toBe(true);
+
+    const prepared = prepareQuickRecapPlayback(journey, {
+      generatedAt: "2026-09-11T00:00:00.000Z",
+      targetDurationMs: 7_600,
+    })!;
+    expect(prepared.plan.chapters[0]?.items.some((item) => (
+      item.selectionReason === "duplicate-cluster-representative"
+    ))).toBe(false);
   });
 
   it("does not cluster guest-shaped media when content identity is missing", () => {
@@ -154,14 +176,15 @@ describe("Quick Recap playback handoff (#127)", () => {
     journey.coverMediaAssetId = null;
     journey.routePoints = [point("p0", 0)];
     journey.media = [
-      { ...media("journey-duplicate", null, "image/jpeg", 0), contentHash: duplicateHash },
-      { ...media("route-duplicate", "p0", "image/jpeg", 1), contentHash: duplicateHash },
+      { ...media("journey-duplicate", null, "image/jpeg", 0), contentHash: duplicateHash, contentHashVerified: true },
+      { ...media("route-duplicate", "p0", "image/jpeg", 1), contentHash: duplicateHash, contentHashVerified: true },
     ];
     const withoutSignal: Journey = {
       ...journey,
       media: journey.media.map((asset) => {
         const copy = { ...asset };
         delete copy.contentHash;
+        delete copy.contentHashVerified;
         return copy;
       }),
     };
@@ -206,12 +229,14 @@ describe("Quick Recap playback handoff (#127)", () => {
     journey.media = journey.media.map((asset, index) => ({
       ...asset,
       contentHash: index.toString(16).padStart(64, "0"),
+      contentHashVerified: true,
     }));
     const withoutSignal: Journey = {
       ...journey,
       media: journey.media.map((asset) => {
         const copy = { ...asset };
         delete copy.contentHash;
+        delete copy.contentHashVerified;
         return copy;
       }),
     };
