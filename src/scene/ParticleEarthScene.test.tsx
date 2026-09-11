@@ -66,6 +66,7 @@ import {
   shouldApplyFocusIntentRevision,
   solveScreenAnchorRotation,
   resolveGlobeFocusIntent,
+  earthDiveDirectManipulationOwnsCamera,
   resolveParticleDiveAnchor,
 } from "./ParticleEarthScene";
 import {
@@ -119,6 +120,21 @@ describe("ParticleEarthScene contracts", () => {
     expect(resolveParticleDiveAnchor(routeFrame, point)).toBe(routeFrame.center);
     expect(resolveParticleDiveAnchor(null, point)).toBe(point);
     expect(resolveParticleDiveAnchor(null, null)).toBeNull();
+  });
+
+  it("lets direct wheel/pinch input outrank programmatic focus only during Earth Dive overlap", () => {
+    expect(earthDiveDirectManipulationOwnsCamera({
+      overlapActive: true, activePointerCount: 0, now: 100, wheelInteractionUntil: 180,
+    })).toBe(true);
+    expect(earthDiveDirectManipulationOwnsCamera({
+      overlapActive: true, activePointerCount: 1, now: 200, wheelInteractionUntil: 180,
+    })).toBe(true);
+    expect(earthDiveDirectManipulationOwnsCamera({
+      overlapActive: true, activePointerCount: 0, now: 200, wheelInteractionUntil: 180,
+    })).toBe(false);
+    expect(earthDiveDirectManipulationOwnsCamera({
+      overlapActive: false, activePointerCount: 1, now: 100, wheelInteractionUntil: 180,
+    })).toBe(false);
   });
 
   it("invalidates a published Dive anchor when focus disappears", () => {

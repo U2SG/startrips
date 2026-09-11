@@ -117,6 +117,45 @@
   will-change: opacity;
 }
 
+/* #246 / Semantic Earth Dive polish: while the calibrated MapLibre surface is
+   blending in, reveal it from the exact particle anchor instead of dissolving
+   an unrelated full-screen rectangle over the globe. Radius is written from
+   semantic zoom progress, not a second clock; the mask exists only during the
+   overlap and disappears once detail owns the view. */
+/* A ready-but-not-yet-aligned map remains hidden while it follows the
+   particle camera. Removing this marker starts the SAME existing opacity blend;
+   no extra transition/timer is introduced. */
+.living-atlas-globe[data-earth-dive="blending"]
+  .living-atlas-globe__detail-layer[data-earth-dive-spatial-reveal="holding"] {
+  opacity: 0;
+}
+
+.living-atlas-globe[data-earth-dive="blending"]
+  .living-atlas-globe__detail-layer[data-earth-dive-spatial-reveal="on"] {
+  /* The mask follows semantic zoom directly, so a second 900ms opacity clock
+     would make the detail renderer lag behind direct manipulation. */
+  opacity: 1;
+  transition: none;
+  -webkit-mask-image: radial-gradient(
+    circle at var(--earth-dive-reveal-x) var(--earth-dive-reveal-y),
+    #000 0 var(--earth-dive-reveal-core-radius),
+    rgba(0, 0, 0, 0.92) var(--earth-dive-reveal-core-radius),
+    transparent var(--earth-dive-reveal-edge-radius)
+  );
+  mask-image: radial-gradient(
+    circle at var(--earth-dive-reveal-x) var(--earth-dive-reveal-y),
+    #000 0 var(--earth-dive-reveal-core-radius),
+    rgba(0, 0, 0, 0.92) var(--earth-dive-reveal-core-radius),
+    transparent var(--earth-dive-reveal-edge-radius)
+  );
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+}
+
+/* `detail` is deliberately unmasked: no permanent compositor/mask tax after
+   ownership commits. Reduced-motion and missing-anchor fallbacks also omit the
+   `on` marker, retaining the existing short full-frame blend. */
+
 .living-atlas-globe__particle-layer {
   z-index: 1;
 }

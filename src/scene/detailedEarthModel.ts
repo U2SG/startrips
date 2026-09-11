@@ -119,6 +119,10 @@ export type ParticleAnchorFrame = {
   anchor: { lat: number; lon: number };
   screen: { x: number; y: number };
   pxPerDegreeLat: number;
+  /** Canonical semantic zoom from the SAME particle render frame. Consumers
+   * use this as a version stamp so a new zoom snapshot can never commit with
+   * an older screen-space anchor. Optional for legacy/test fixtures only. */
+  zoom?: number;
 };
 
 export type EarthDiveHandoffFrame = {

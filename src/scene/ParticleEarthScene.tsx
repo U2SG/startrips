@@ -614,6 +614,16 @@ export function isFocusFlightActive(
   return pointFocusSettling || routeFocusSettling;
 }
 
+export function earthDiveDirectManipulationOwnsCamera(input: {
+  overlapActive: boolean;
+  activePointerCount: number;
+  now: number;
+  wheelInteractionUntil: number;
+}) {
+  return input.overlapActive
+    && (input.activePointerCount > 0 || input.now < input.wheelInteractionUntil);
+}
+
 export function isIdleRotationSuppressed(
   dragToRotate: boolean,
   pointFocusSettling: boolean,
@@ -1254,6 +1264,9 @@ interface ParticleEarthSceneProps {
   onGlobePointPick?: (point: { latitude: number; longitude: number }) => void;
   dragToRotate?: boolean;
   wheelToZoom?: boolean;
+  /** Hold the particle camera on the exact Semantic Earth Dive handoff frame
+   * while the detail renderer owns camera/input. */
+  cameraHold?: boolean;
   reduceMotion?: boolean;
   rotationYOverride?: number;
   /**
@@ -1609,6 +1622,7 @@ export function ParticleEarthScene({
   onGlobePointPick,
   dragToRotate = false,
   wheelToZoom = true,
+  cameraHold = false,
   reduceMotion = false,
   compactMobileLayout = false,
   visibilityHint = { opaqueMediaCover: false, coverTransitionActive: false },
@@ -1640,6 +1654,7 @@ export function ParticleEarthScene({
   const latestOnGlobePointPick = useRef(onGlobePointPick);
   const latestDragToRotate = useRef(dragToRotate);
   const latestWheelToZoom = useRef(wheelToZoom);
+  const latestCameraHold = useRef(cameraHold);
   const latestRotationYOverride = useRef(rotationYOverride);
   const latestCompactMobileLayout = useRef(compactMobileLayout);
   const latestVisibilityHint = useRef(visibilityHint);
@@ -1668,6 +1683,7 @@ export function ParticleEarthScene({
   latestOnGlobePointPick.current = onGlobePointPick;
   latestDragToRotate.current = dragToRotate;
   latestWheelToZoom.current = wheelToZoom;
+  latestCameraHold.current = cameraHold;
   latestRotationYOverride.current = rotationYOverride;
   latestCompactMobileLayout.current = compactMobileLayout;
   latestVisibilityHint.current = visibilityHint;
@@ -4620,7 +4636,16 @@ export function ParticleEarthScene({
       // #20: restrained energy mapping. Even at full energy the environment
       // only gains 12–15%, so it feels alive rather than becoming a visualizer.
       const audioGain = audioAtmosphereGains(audioEnergy);
-      const focusSolverOwnsState = manualFocusRevision === null;
+      const cameraHeldByDetail = latestCameraHold.current;
+      const diveDirectManipulation = earthDiveDirectManipulationOwnsCamera({
+        overlapActive: Boolean(latestVisibilityHint.current.earthDiveOverlapActive),
+        activePointerCount: activePointers.size,
+        now,
+        wheelInteractionUntil,
+      });
+      const focusSolverOwnsState = manualFocusRevision === null
+        && !cameraHeldByDetail
+        && !diveDirectManipulation;
       const initialCameraAnchorNow = focusSolverOwnsState ? latestInitialCameraAnchor.current : null;
       const spatialFocusPoint = initialCameraAnchorNow
         ?? focusTarget?.point
@@ -4635,22 +4660,26 @@ export function ParticleEarthScene({
         && spatialFocusPoint
         && isFocusFlightActive(pointFocusSettling, routeFocusSettling),
       );
-      let targetRotationX = focusSolverOwnsState && initialCameraAnchorNow
-        ? rotationXForLatitude(initialCameraAnchorNow.lat)
-        : focusSolverOwnsState && focusTarget
-          ? focusTarget.rotationX
-          : focusSolverOwnsState && spatialFocusPoint
-            ? rotationXForLatitude(spatialFocusPoint.lat)
-            : interactiveRotationX;
-      let targetBaseRotationY = focusSolverOwnsState && initialCameraAnchorNow
-        ? rotationYForLongitude(initialCameraAnchorNow.lon)
-        : focusSolverOwnsState && focusTarget
-          ? focusTarget.rotationY
-          : focusSolverOwnsState && spatialFocusPoint
-            ? rotationYForLongitude(spatialFocusPoint.lon)
-            : manualFocusRevision !== null
-              ? baseRotationY
-              : latestRotationYOverride.current ?? target.rotationY;
+      let targetRotationX = cameraHeldByDetail
+        ? interactiveRotationX
+        : focusSolverOwnsState && initialCameraAnchorNow
+          ? rotationXForLatitude(initialCameraAnchorNow.lat)
+          : focusSolverOwnsState && focusTarget
+            ? focusTarget.rotationX
+            : focusSolverOwnsState && spatialFocusPoint
+              ? rotationXForLatitude(spatialFocusPoint.lat)
+              : interactiveRotationX;
+      let targetBaseRotationY = cameraHeldByDetail
+        ? baseRotationY
+        : focusSolverOwnsState && initialCameraAnchorNow
+          ? rotationYForLongitude(initialCameraAnchorNow.lon)
+          : focusSolverOwnsState && focusTarget
+            ? focusTarget.rotationY
+            : focusSolverOwnsState && spatialFocusPoint
+              ? rotationYForLongitude(spatialFocusPoint.lon)
+              : manualFocusRevision !== null
+                ? baseRotationY
+                : latestRotationYOverride.current ?? target.rotationY;
       if (import.meta.env.DEV && focusFlightActive && focusTarget) {
         host.dataset.focusFlightCurrentRotationX = interactiveRotationX.toFixed(6);
         host.dataset.focusFlightCurrentRotationY = baseRotationY.toFixed(6);
@@ -4685,7 +4714,8 @@ export function ParticleEarthScene({
       }
 
       if (
-        pointFocusSettling
+        focusSolverOwnsState
+        && pointFocusSettling
         && !routeFocusFrame
         && spatialFocusPoint
         && activePointers.size === 0
@@ -4725,7 +4755,7 @@ export function ParticleEarthScene({
         }
       }
 
-      if (routeFocusSettling && routeFocusFrame && activePointers.size === 0) {
+      if (focusSolverOwnsState && routeFocusSettling && routeFocusFrame && activePointers.size === 0) {
         interactiveRotationX = interpolate(interactiveRotationX, targetRotationX);
         interactiveRotationY = interpolate(interactiveRotationY, 0);
         interactiveZoom = interpolate(interactiveZoom, routeFocusFrame.zoom);
@@ -4759,7 +4789,7 @@ export function ParticleEarthScene({
         }
       }
 
-      if (routeFocusZoomResetting && activePointers.size === 0) {
+      if (!cameraHeldByDetail && routeFocusZoomResetting && activePointers.size === 0) {
         interactiveZoom = interpolate(interactiveZoom, 1);
         if (Math.abs(interactiveZoom - 1) < 0.003) {
           interactiveZoom = 1;
@@ -4768,8 +4798,10 @@ export function ParticleEarthScene({
         }
       }
 
-      globe.scale.setScalar(interpolate(globe.scale.x, target.scale * interactiveZoom));
-      baseRotationY = interpolate(baseRotationY, targetBaseRotationY);
+      if (!cameraHeldByDetail) {
+        globe.scale.setScalar(interpolate(globe.scale.x, target.scale * interactiveZoom));
+        baseRotationY = interpolate(baseRotationY, targetBaseRotationY);
+      }
       globe.rotation.x = interactiveRotationX;
       globe.rotation.y = baseRotationY + interactiveRotationY;
       // Journey selection rotates (and may zoom) the globe, but never translates
@@ -5149,12 +5181,15 @@ export function ParticleEarthScene({
             || Math.abs(publishedAnchorFrame.pxPerDegreeLat / anchorPxPerDegreeLat - 1) >= 0.002
             || publishedAnchorFrame.anchor.lat !== diveAnchor.lat
             || publishedAnchorFrame.anchor.lon !== diveAnchor.lon
+            || publishedAnchorFrame.zoom === undefined
+            || Math.abs(publishedAnchorFrame.zoom - semanticZoomState.snapshot.zoom) >= 0.001
           )
         ) {
           publishedAnchorFrame = {
             anchor: { lat: diveAnchor.lat, lon: diveAnchor.lon },
             screen: { x: anchorViewportX, y: anchorViewportY },
             pxPerDegreeLat: anchorPxPerDegreeLat,
+            zoom: semanticZoomState.snapshot.zoom,
           };
           latestOnParticleAnchorFrame.current(publishedAnchorFrame);
         }
