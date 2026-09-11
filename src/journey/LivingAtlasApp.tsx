@@ -25,6 +25,7 @@ import {
   JourneyComposer,
   type GlobePointPick,
   type JourneySaveResult,
+  type UnknownJourneyCreateAttempt,
 } from "./JourneyComposer";
 import {
   resolveJourneyArrivalHandoff,
@@ -764,6 +765,7 @@ export function LivingAtlasApp({
     : playbackSourceJourney;
   const playbackActive = playbackOwnership.active;
   const [composerOpen, setComposerOpen] = useState(false);
+  const [pendingUnknownCreateAttempt, setPendingUnknownCreateAttempt] = useState<UnknownJourneyCreateAttempt | null>(null);
   const [editingJourneyId, setEditingJourneyId] = useState<string | null>(null);
   const [arrivalJourneyId, setArrivalJourneyId] = useState<string | null>(null);
   const [notice, setNotice] = useState<AtlasNotice | null>(null);
@@ -2193,9 +2195,13 @@ export function LivingAtlasApp({
           key={editingJourney?.id ?? "new-journey"}
           open
           journey={editingJourney}
-          onClose={() => {
+          initialUnknownCreateAttempt={editingJourney ? null : pendingUnknownCreateAttempt}
+          onClose={(unknownCreateAttempt) => {
             cancelGlobePick();
             setDraftRoute(null);
+            if (!editingJourney) {
+              setPendingUnknownCreateAttempt(unknownCreateAttempt ?? null);
+            }
             setEditingJourneyId(null);
             setComposerOpen(false);
           }}

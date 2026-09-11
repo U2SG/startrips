@@ -268,10 +268,17 @@ export type GlobePointPick = {
   longitude: number;
 };
 
+export type UnknownJourneyCreateAttempt = {
+  input: JourneyInput;
+  knownJourneyIdsBeforeCreate: string[];
+  mode: "recheck" | "ambiguous";
+};
+
 type JourneyComposerProps = {
   open: boolean;
   journey?: Journey | null;
-  onClose: () => void;
+  initialUnknownCreateAttempt?: UnknownJourneyCreateAttempt | null;
+  onClose: (unknownCreateAttempt?: UnknownJourneyCreateAttempt | null) => void;
   onSaved: (
     result: JourneySaveResult,
     callbackScope: JourneySaveCallbackScope,
@@ -340,14 +347,26 @@ export function parseCoordinateInput(
 export function JourneyComposer({
   open,
   journey,
+  initialUnknownCreateAttempt = null,
   onClose,
   onSaved,
   onGlobePickRequest,
   onGlobePickCancel,
   onRoutePreviewChange,
 }: JourneyComposerProps) {
+  const recoveryInput = !journey ? initialUnknownCreateAttempt?.input : undefined;
   const [routePoints, setRoutePoints] = useState<RouteDraftPoint[]>(
-    () => journey ? journeyToDraftPoints(journey) : [],
+    () => journey
+      ? journeyToDraftPoints(journey)
+      : (recoveryInput?.routePoints ?? []).map((point) => ({
+          draftId: draftId(),
+          latitude: Number(point.latitude),
+          longitude: Number(point.longitude),
+          label: point.label,
+          isStop: point.isStop,
+          occurredAt: point.occurredAt ?? null,
+          note: point.note ?? null,
+        })),
   );
   const [latitude, setLatitude] = useState("");
   const [longitude, setLongitude] = useState("");
@@ -362,14 +381,14 @@ export function JourneyComposer({
     LocationSearchResponse["attribution"]
   >(null);
   const [searchPending, setSearchPending] = useState(false);
-  const [title, setTitle] = useState(journey?.title ?? "");
+  const [title, setTitle] = useState(journey?.title ?? recoveryInput?.title ?? "");
   const [startedOn, setStartedOn] = useState(
-    () => journey?.startedOn ?? new Date().toISOString().slice(0, 10),
+    () => journey?.startedOn ?? recoveryInput?.startedOn ?? new Date().toISOString().slice(0, 10),
   );
-  const [endedOn, setEndedOn] = useState(journey?.endedOn ?? "");
-  const [note, setNote] = useState(journey?.note ?? "");
-  const [lightColor, setLightColor] = useState(journey?.lightColor ?? LIGHT_COLORS[0]);
-  const [lightEffect, setLightEffect] = useState<LightEffectId | null>(journey?.lightEffect ?? null);
+  const [endedOn, setEndedOn] = useState(journey?.endedOn ?? recoveryInput?.endedOn ?? "");
+  const [note, setNote] = useState(journey?.note ?? recoveryInput?.note ?? "");
+  const [lightColor, setLightColor] = useState(journey?.lightColor ?? recoveryInput?.lightColor ?? LIGHT_COLORS[0]);
+  const [lightEffect, setLightEffect] = useState<LightEffectId | null>(journey?.lightEffect ?? recoveryInput?.lightEffect ?? null);
   const [mediaFiles, setMediaFiles] = useState<PendingJourneyMedia[]>([]);
   const mobileLayout = useCompactMobileLayout();
   const [mobileMediaMenuIndex, setMobileMediaMenuIndex] = useState<number | null>(null);
@@ -379,11 +398,9 @@ export function JourneyComposer({
   const [saving, setSaving] = useState(false);
   const [progress, setProgress] = useState<UploadProgress | null>(null);
   const [savedResult, setSavedResult] = useState<JourneySaveResult | null>(null);
-  const [unknownCreateAttempt, setUnknownCreateAttempt] = useState<{
-    input: JourneyInput;
-    knownJourneyIdsBeforeCreate: string[];
-    mode: "recheck" | "ambiguous";
-  } | null>(null);
+  const [unknownCreateAttempt, setUnknownCreateAttempt] = useState<UnknownJourneyCreateAttempt | null>(
+    () => journey ? null : initialUnknownCreateAttempt,
+  );
   const [retryAssignments, setRetryAssignments] = useState<JourneyMediaUploadAssignment[]>([]);
   const [globePicking, setGlobePicking] = useState(false);
   const activeLightEffect = LIGHT_EFFECTS.find((effect) => effect.id === lightEffect) ?? null;
@@ -419,7 +436,7 @@ export function JourneyComposer({
       setMobileMediaMenuIndex(null);
       return;
     }
-    if (!saving && unknownCreateAttempt?.mode !== "recheck") closeComposer();
+    if (!saving) closeComposer();
   }, true, globePicking);
   const mobileMediaSheetRef = useNestedModalFocus<HTMLElement>(
     mobileLayout && (
@@ -671,13 +688,19 @@ export function JourneyComposer({
     restoreGlobePickTriggerFocus();
   }
 
-  function closeComposer() {
+  function closeComposerWithUnknownCreateAttempt(
+    preservedUnknownCreateAttempt: UnknownJourneyCreateAttempt | null,
+  ) {
     globePickRequestRevisionRef.current += 1;
     reverseGeocodeRevisionRef.current += 1;
     activeReverseGeocodeDraftIdRef.current = null;
     if (globePicking) onGlobePickCancel?.();
     onRoutePreviewChange?.(null);
-    onClose();
+    onClose(preservedUnknownCreateAttempt);
+  }
+
+  function closeComposer() {
+    closeComposerWithUnknownCreateAttempt(unknownCreateAttempt);
   }
 
   function selectFiles(event: ChangeEvent<HTMLInputElement>) {
@@ -777,7 +800,7 @@ export function JourneyComposer({
       setMessage("旅程已经保存，但 Atlas 暂时没有刷新成功；重新打开后会从服务器恢复。");
       return;
     }
-    if (result.mediaErrors.length === 0) closeComposer();
+    if (result.mediaErrors.length === 0) closeComposerWithUnknownCreateAttempt(null);
   }
 
   async function applyPersistedMediaContinuationFailure(
@@ -814,7 +837,7 @@ export function JourneyComposer({
         knownJourneyIdsBeforeCreate: [...knownJourneyIdsBeforeCreate],
         mode: "recheck",
       });
-      setMessage("暂时无法确认这段旅程是否已经保存。再次点击只会重新确认保存结果，不会创建另一段 Journey。");
+      setMessage("暂时无法确认这段旅程是否已经保存。你可以重新确认，或安全关闭创建器后刷新 Atlas；关闭不会创建另一段 Journey，也不会把这次不确定结果当作未保存。");
       return;
     }
 
@@ -979,7 +1002,7 @@ export function JourneyComposer({
             <h2 id="journey-composer-title">{isEditing ? "重新整理这段旅程" : "把一段旅程，收进你的星球"}</h2>
             <span>{isEditing ? "调整故事、日期和路线；已有媒体会原样保留。" : "一次停留、跨城路径，或一直在路上。"}</span>
           </div>
-          <button type="button" onClick={closeComposer} disabled={saving || unknownCreateAttempt?.mode === "recheck"} aria-label={isEditing ? "关闭旅程编辑器" : "关闭创建器"}><IconX size={20} stroke={1.35} aria-hidden="true" /></button>
+          <button type="button" onClick={closeComposer} disabled={saving} aria-label={isEditing ? "关闭旅程编辑器" : "关闭创建器"}><IconX size={20} stroke={1.35} aria-hidden="true" /></button>
         </header>
 
         <div className="journey-composer__body">

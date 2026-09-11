@@ -344,4 +344,62 @@ describe("persistJourneyDraft", () => {
     expect(readJourneys).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps repeated reconciliation failures exit-safe without reopening create ownership", async () => {
+    const readJourneys = vi.fn(async () => {
+      throw new Error("journey list unavailable");
+    });
+    const knownJourneyIdsBeforeCreate = new Set(["known-before-attempt"]);
+
+    await expect(
+      reconcileUnknownJourneyCreate(input, readJourneys, knownJourneyIdsBeforeCreate),
+    ).rejects.toThrow("journey list unavailable");
+    await expect(
+      reconcileUnknownJourneyCreate(input, readJourneys, knownJourneyIdsBeforeCreate),
+    ).rejects.toThrow("journey list unavailable");
+
+    const onSaved = vi.fn();
+    const pendingAttempt = {
+      input,
+      knownJourneyIdsBeforeCreate: [...knownJourneyIdsBeforeCreate],
+      mode: "recheck" as const,
+    };
+    const markup = renderToStaticMarkup(createElement(JourneyComposer, {
+      open: true,
+      initialUnknownCreateAttempt: pendingAttempt,
+      onClose: () => undefined,
+      onSaved,
+    }));
+    const closeButton = markup.match(/<button[^>]*aria-label="关闭创建器"[^>]*>/)?.[0];
+
+    expect(readJourneys).toHaveBeenCalledTimes(2);
+    expect(closeButton).toBeDefined();
+    expect(closeButton).not.toContain("disabled");
+    expect(markup).toContain("重新确认保存结果");
+    expect(markup).not.toContain(">保存到星球<");
+    expect(markup).toContain('value="Night train"');
+    expect(onSaved).not.toHaveBeenCalled();
+  });
+
+  it("reopens an unresolved create in reconciliation mode instead of a blind create", () => {
+    const pendingAttempt = {
+      input,
+      knownJourneyIdsBeforeCreate: ["known-before-attempt"],
+      mode: "recheck" as const,
+    };
+    const renderReopened = () => renderToStaticMarkup(createElement(JourneyComposer, {
+      open: true,
+      initialUnknownCreateAttempt: pendingAttempt,
+      onClose: () => undefined,
+      onSaved: () => undefined,
+    }));
+
+    const firstReopen = renderReopened();
+    const secondReopen = renderReopened();
+    for (const markup of [firstReopen, secondReopen]) {
+      expect(markup).toContain("重新确认保存结果");
+      expect(markup).not.toContain(">保存到星球<");
+      expect(markup).toContain('value="Night train"');
+    }
+  });
+
 });
