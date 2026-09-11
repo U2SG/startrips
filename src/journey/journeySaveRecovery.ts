@@ -20,7 +20,9 @@ function canonicalPoint(point: RoutePointInput | Journey["routePoints"][number])
     label: point.label.trim(),
     isStop: point.isStop,
     occurredAt: canonicalOccurredAt(point.occurredAt),
-    note: point.note ?? null,
+    note: typeof point.note === "string" && point.note.trim().length > 0
+      ? point.note
+      : null,
   };
 }
 

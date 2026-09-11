@@ -71,6 +71,22 @@ describe("journey save recovery", () => {
     });
   });
 
+  it("adopts a persisted Journey when a whitespace-only Route Point note was normalized to null", () => {
+    const submittedWithWhitespacePointNote: JourneyInput = {
+      ...submitted,
+      routePoints: [{
+        ...submitted.routePoints[0],
+        note: "   ",
+      }],
+    };
+
+    expect(resolveJourneySaveRecovery(submittedWithWhitespacePointNote, [persisted()]))
+      .toMatchObject({
+        status: "already-persisted",
+        journey: { id: "journey-server-id" },
+      });
+  });
+
   it("ignores an identical Journey that already existed before the create attempt", () => {
     const oldJourney = persisted({
       id: "journey-old",
