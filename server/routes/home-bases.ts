@@ -8,6 +8,7 @@ import {
   type HomeBasePeriodPatch,
   type HomeBasePeriodValues,
 } from "../repositories/home-base-repository";
+import { isPersistedCalendarDate } from "../../src/journey/calendarDate";
 import { isHomeBaseSource } from "../../src/journey/homeBase";
 import { readJsonObject } from "./json-body";
 
@@ -34,18 +35,6 @@ type HomeBaseInput = {
   endedOn?: unknown;
   source?: unknown;
 };
-
-/**
- * Fixed-width ISO calendar dates only. Ordering and resolution both compare
- * these as strings, so `2026-6-1` would parse as a date and then sort wrong
- * forever; it is refused here instead.
- */
-function validDate(value: string): boolean {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
-  const parsed = new Date(`${value}T00:00:00.000Z`);
-  return !Number.isNaN(parsed.valueOf())
-    && parsed.toISOString().slice(0, 10) === value;
-}
 
 function coordinateValue(value: unknown, minimum: number, maximum: number) {
   if (
@@ -89,9 +78,9 @@ export function parseHomeBaseInput(body: HomeBaseInput): HomeBasePeriodValues | 
     || label.length > MAX_LABEL_LENGTH
     || latitude === null
     || longitude === null
-    || !validDate(startedOn)
+    || !isPersistedCalendarDate(startedOn)
     || endedOn === "invalid"
-    || (endedOn !== null && !validDate(endedOn))
+    || (endedOn !== null && !isPersistedCalendarDate(endedOn))
     || !isHomeBaseSource(source)
   ) {
     return null;
@@ -124,7 +113,7 @@ export function parseHomeBasePatch(body: HomeBaseInput): HomeBasePeriodPatch | n
   }
   if (body.startedOn !== undefined) {
     const startedOn = typeof body.startedOn === "string" ? body.startedOn.trim() : "";
-    if (!validDate(startedOn)) return null;
+    if (!isPersistedCalendarDate(startedOn)) return null;
     patch.startedOn = startedOn;
   }
   if (body.endedOn !== undefined) {
@@ -132,7 +121,7 @@ export function parseHomeBasePatch(body: HomeBaseInput): HomeBasePeriodPatch | n
       patch.endedOn = null;
     } else {
       const endedOn = typeof body.endedOn === "string" ? body.endedOn.trim() : "";
-      if (!validDate(endedOn)) return null;
+      if (!isPersistedCalendarDate(endedOn)) return null;
       patch.endedOn = endedOn;
     }
   }
