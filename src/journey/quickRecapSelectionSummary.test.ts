@@ -4,6 +4,7 @@ import {
   QUICK_RECAP_OMISSION_REASONS,
   buildQuickRecapSelectionSummary,
 } from "./quickRecapSelectionSummary";
+import { prepareQuickRecapPlayback } from "./quickRecapPlayback";
 import type { Journey, JourneyMediaAsset, RoutePoint } from "./types";
 
 function routePoint(id: string, sortOrder: number): RoutePoint {
@@ -148,6 +149,29 @@ describe("buildQuickRecapSelectionSummary", () => {
         expect(QUICK_RECAP_OMISSION_REASONS).toContain(item.reason);
       }
     }
+  });
+
+  it("surfaces the persisted duplicate-cluster reason from the production recap plan", () => {
+    const sourceJourney = journey();
+    const duplicateHash = "b".repeat(64);
+    sourceJourney.coverMediaAssetId = null;
+    sourceJourney.routePoints = [routePoint("route-a", 0)];
+    sourceJourney.media = [
+      { ...media("journey-duplicate", null, 0), contentHash: duplicateHash, contentHashVerified: true },
+      { ...media("route-duplicate", "route-a", 1), contentHash: duplicateHash, contentHashVerified: true },
+    ];
+    const prepared = prepareQuickRecapPlayback(sourceJourney, {
+      generatedAt: "2026-09-10T00:00:00.000Z",
+      targetDurationMs: 7_600,
+    })!;
+
+    const summary = buildQuickRecapSelectionSummary(prepared.plan, sourceJourney)!;
+    expect(summary[0]?.included).toEqual([
+      expect.objectContaining({
+        assetId: "journey-duplicate",
+        selectionReason: "duplicate-cluster-representative",
+      }),
+    ]);
   });
 
   it("returns null for Full Playback plans", () => {

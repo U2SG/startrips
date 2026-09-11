@@ -11,6 +11,11 @@ export type JourneyMediaAsset = {
   bytes: number;
   sortOrder: number;
   uploadedByUserId: string;
+  // #127/ST-058 + #311/ST-059: owner payloads may carry a persisted content
+  // hash, but it is exact-byte identity only when the backend marks it verified.
+  // Shared Journey projections intentionally omit both fields.
+  contentHash?: string | null;
+  contentHashVerified?: boolean;
   // #260: the presentable size of this asset with its EXIF orientation
   // already applied, and the state of the derived preview beside it. Null
   // dimensions and a `none` state are the normal shape of every asset

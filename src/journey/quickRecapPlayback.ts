@@ -133,6 +133,9 @@ function runtimeVisualCandidates(journey: Journey): JourneyMediaAsset[] {
 export function quickRecapDigestsForJourney(journey: Journey): MediaDigestV1[] {
   return runtimeVisualCandidates(journey).map<MediaDigestV1>((asset, sourceIndex) => {
     const mediaType = visualMediaType(asset);
+    const duplicateClusterId = asset.contentHashVerified === true
+      ? asset.contentHash || undefined
+      : undefined;
     return {
       schemaVersion: 1,
       assetId: asset.id,
@@ -145,6 +148,7 @@ export function quickRecapDigestsForJourney(journey: Journey): MediaDigestV1[] {
       intrinsic: mediaType === "video"
         ? { durationMs: QUICK_RECAP_PENDING_VIDEO_DURATION_MS }
         : {},
+      ...(duplicateClusterId ? { similarity: { duplicateClusterId } } : {}),
       userSignals: {
         isJourneyCover: asset.id === journey.coverMediaAssetId,
         pinnedForRecap: false,

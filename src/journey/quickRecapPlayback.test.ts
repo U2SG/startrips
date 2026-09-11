@@ -103,6 +103,148 @@ describe("Quick Recap playback handoff (#127)", () => {
     expect(journey.media.find((asset) => asset.id === "cover")?.routePointId).toBeNull();
   });
 
+  it("derives duplicate cluster identity only from non-empty verified content hashes", () => {
+    const journey = fixture();
+    journey.coverMediaAssetId = null;
+    journey.routePoints = [point("p0", 0)];
+    const persistedHash = "c".repeat(64);
+    journey.media = [
+      { ...media("hashed", "p0", "image/jpeg", 0), contentHash: persistedHash, contentHashVerified: true },
+      { ...media("null-hash", "p0", "image/jpeg", 1), contentHash: null },
+      media("missing-hash", "p0", "image/jpeg", 2),
+      { ...media("empty-hash", "p0", "image/jpeg", 3), contentHash: "", contentHashVerified: true },
+    ];
+
+    const digests = quickRecapDigestsForJourney(journey);
+    expect(digests.find((digest) => digest.assetId === "hashed")?.similarity)
+      .toEqual({ duplicateClusterId: persistedHash });
+    for (const assetId of ["null-hash", "missing-hash", "empty-hash"]) {
+      expect(digests.find((digest) => digest.assetId === assetId)?.similarity).toBeUndefined();
+    }
+  });
+
+  it("does not promote equal unverified content hashes to exact duplicate identity", () => {
+    const journey = fixture();
+    journey.coverMediaAssetId = null;
+    journey.routePoints = [point("p0", 0)];
+    const declaredHash = "d".repeat(64);
+    journey.media = [
+      { ...media("unverified-a", "p0", "image/jpeg", 0), contentHash: declaredHash, contentHashVerified: false },
+      { ...media("unverified-b", "p0", "image/jpeg", 1), contentHash: declaredHash },
+    ];
+
+    const digests = quickRecapDigestsForJourney(journey);
+    expect(digests.every((digest) => digest.similarity === undefined)).toBe(true);
+
+    const prepared = prepareQuickRecapPlayback(journey, {
+      generatedAt: "2026-09-11T00:00:00.000Z",
+      targetDurationMs: 7_600,
+    })!;
+    expect(prepared.plan.chapters[0]?.items.some((item) => (
+      item.selectionReason === "duplicate-cluster-representative"
+    ))).toBe(false);
+  });
+
+  it("does not cluster guest-shaped media when content identity is missing", () => {
+    const journey = fixture();
+    journey.coverMediaAssetId = null;
+    journey.routePoints = [point("p0", 0)];
+    journey.media = [
+      media("guest-a", "p0", "image/jpeg", 0),
+      { ...media("guest-b", "p0", "image/jpeg", 1), contentHash: null },
+      { ...media("guest-c", "p0", "image/jpeg", 2), contentHash: "" },
+    ];
+
+    const digests = quickRecapDigestsForJourney(journey);
+    expect(digests.every((digest) => digest.similarity === undefined)).toBe(true);
+
+    const prepared = prepareQuickRecapPlayback(journey, {
+      generatedAt: "2026-09-10T00:00:00.000Z",
+      targetDurationMs: 11_000,
+    })!;
+    expect(prepared.plan.chapters[0]?.items.map((item) => item.assetId))
+      .toEqual(["guest-a", "guest-b", "guest-c"]);
+    expect(prepared.plan.omittedAssetIds).toEqual([]);
+    expect(prepared.plan.chapters[0]?.items.some((item) => (
+      item.selectionReason === "duplicate-cluster-representative"
+    ))).toBe(false);
+  });
+
+  it("makes persisted duplicate identity truthful without changing recap membership or timing", () => {
+    const duplicateHash = "a".repeat(64);
+    const journey = fixture();
+    journey.coverMediaAssetId = null;
+    journey.routePoints = [point("p0", 0)];
+    journey.media = [
+      { ...media("journey-duplicate", null, "image/jpeg", 0), contentHash: duplicateHash, contentHashVerified: true },
+      { ...media("route-duplicate", "p0", "image/jpeg", 1), contentHash: duplicateHash, contentHashVerified: true },
+    ];
+    const withoutSignal: Journey = {
+      ...journey,
+      media: journey.media.map((asset) => {
+        const copy = { ...asset };
+        delete copy.contentHash;
+        delete copy.contentHashVerified;
+        return copy;
+      }),
+    };
+    const options = {
+      generatedAt: "2026-09-10T00:00:00.000Z",
+      targetDurationMs: 7_600,
+    };
+
+    const prepared = prepareQuickRecapPlayback(journey, options)!;
+    const legacyPrepared = prepareQuickRecapPlayback(withoutSignal, options)!;
+    const includedIds = prepared.plan.chapters.flatMap((chapter) => chapter.items.map((item) => item.assetId));
+    const legacyIncludedIds = legacyPrepared.plan.chapters.flatMap((chapter) => chapter.items.map((item) => item.assetId));
+
+    expect(quickRecapDigestsForJourney(journey).map((digest) => [
+      digest.assetId,
+      digest.routePointId,
+      digest.similarity?.duplicateClusterId,
+    ])).toEqual([
+      ["journey-duplicate", "p0", duplicateHash],
+      ["route-duplicate", "p0", duplicateHash],
+    ]);
+    expect(includedIds).toEqual(legacyIncludedIds);
+    expect(prepared.plan.omittedAssetIds).toEqual(legacyPrepared.plan.omittedAssetIds);
+    expect(prepared.plan.plannedDurationMs).toBe(legacyPrepared.plan.plannedDurationMs);
+    expect(prepared.plan.chapters[0]?.items[0]?.selectionReason)
+      .toBe("duplicate-cluster-representative");
+    expect(legacyPrepared.plan.chapters[0]?.items[0]?.selectionReason)
+      .toBe("route-point-representative");
+
+    const routePointIds = prepared.journey.routePoints.map((routePoint) => routePoint.id);
+    expect(validateAutoEditPlanV1(prepared.plan, {
+      journeyId: journey.id,
+      journeyRevision: String(journey.revision),
+      routePointIds,
+      digests: quickRecapDigestsForJourney(journey),
+      routePointGeometry: quickRecapRouteGeometry(journey, routePointIds),
+    })).toMatchObject({ valid: true, errors: [] });
+  });
+
+  it("keeps pre-change plan semantics when persisted content hashes are all unique", () => {
+    const journey = fixture();
+    journey.media = journey.media.map((asset, index) => ({
+      ...asset,
+      contentHash: index.toString(16).padStart(64, "0"),
+      contentHashVerified: true,
+    }));
+    const withoutSignal: Journey = {
+      ...journey,
+      media: journey.media.map((asset) => {
+        const copy = { ...asset };
+        delete copy.contentHash;
+        delete copy.contentHashVerified;
+        return copy;
+      }),
+    };
+    const options = { generatedAt: "2026-09-10T00:00:00.000Z" };
+
+    expect(prepareQuickRecapPlayback(journey, options)?.plan)
+      .toEqual(prepareQuickRecapPlayback(withoutSignal, options)?.plan);
+  });
 
   it("promotes an explicit cover from a later route point into the opening recap chapter", () => {
     const journey = fixture();
