@@ -391,6 +391,31 @@ export function resolveUnknownCreateObservationOwnership({
   };
 }
 
+export function captureUnknownCreateObservationOwnership({
+  semanticOwnership,
+  selectionRevision,
+  timelineRevision,
+}: {
+  semanticOwnership: Pick<
+    ReturnType<typeof resolveUnknownCreateObservationOwnership>,
+    "activeJourneyId" | "selection"
+  >;
+  selectionRevision: number;
+  timelineRevision: number;
+}): UnknownCreateObservationOwnership {
+  return {
+    activeJourneyId: semanticOwnership.activeJourneyId,
+    selection: semanticOwnership.selection
+      ? {
+          journeyId: semanticOwnership.selection.journeyId,
+          pointIndex: semanticOwnership.selection.pointIndex,
+        }
+      : null,
+    selectionRevision,
+    timelineRevision,
+  };
+}
+
 type JourneyCardMediaRead =
   | { status: "idle" | "loading" | "error" }
   | { status: "ready"; url: string };
@@ -2288,17 +2313,11 @@ export function LivingAtlasApp({
                 unknownCreateAttempt?.mode === "confirmation-required"
                 || unknownCreateAttempt?.mode === "ambiguous"
               ) {
-                setUnknownCreateObservationOwnership({
-                  activeJourneyId,
-                  selection: timeCursor.selection
-                    ? {
-                        journeyId: timeCursor.selection.journeyId,
-                        pointIndex: timeCursor.selection.pointIndex,
-                      }
-                    : null,
+                setUnknownCreateObservationOwnership(captureUnknownCreateObservationOwnership({
+                  semanticOwnership: unknownCreateSemanticOwnership,
                   selectionRevision: timeCursor.selectionRevision,
                   timelineRevision: timeCursor.timelineRevision,
-                });
+                }));
               }
               void closeUnknownCreateWithCurrentAtlasTruth({
                 attempt: unknownCreateAttempt ?? null,

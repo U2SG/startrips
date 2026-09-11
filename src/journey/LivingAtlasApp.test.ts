@@ -12,6 +12,7 @@ vi.mock("../auth/AuthGateway", () => ({
 import { readFileSync } from "node:fs";
 import {
   atlasCinematicIsolationActive,
+  captureUnknownCreateObservationOwnership,
   closeUnknownCreateWithCurrentAtlasTruth,
   explicitSelectedJourneyIdForHomeCamera,
   capturePlaybackEntryForContext,
@@ -593,6 +594,79 @@ describe("unknown-create verification focus ownership", () => {
       [candidate, otherCandidate],
       state.selection,
       state.fallbackJourneyId,
+    ).journey).toBeNull();
+  });
+
+  it("keeps repeated first-Journey verification neutral when the raw cursor defaults to the candidate", () => {
+    const firstPass = resolveUnknownCreateObservationOwnership({
+      journeys: [candidate],
+      timelineSelection: { journeyId: candidate.id, pointIndex: null },
+      selectionRevision: 0,
+      timelineRevision: 0,
+      preserved: {
+        activeJourneyId: null,
+        selection: null,
+        selectionRevision: 0,
+        timelineRevision: 0,
+      },
+    });
+    const repeatedClose = captureUnknownCreateObservationOwnership({
+      semanticOwnership: firstPass,
+      selectionRevision: 0,
+      timelineRevision: 0,
+    });
+    const secondPass = resolveUnknownCreateObservationOwnership({
+      journeys: [candidate],
+      timelineSelection: { journeyId: candidate.id, pointIndex: null },
+      selectionRevision: 0,
+      timelineRevision: 0,
+      preserved: repeatedClose,
+    });
+
+    expect(repeatedClose.selection).toBeNull();
+    expect(secondPass.observationOnly).toBe(true);
+    expect(secondPass.activeJourneyId).toBeNull();
+    expect(secondPass.selection).toBeNull();
+    expect(resolveMobilePlaybackPresentation(
+      [candidate],
+      secondPass.selection,
+      secondPass.fallbackJourneyId,
+    ).activeRouteId).toBeNull();
+  });
+
+  it("keeps repeated ambiguous verification observation-only despite raw cursor defaulting", () => {
+    const firstPass = resolveUnknownCreateObservationOwnership({
+      journeys: [candidate, otherCandidate],
+      timelineSelection: { journeyId: otherCandidate.id, pointIndex: null },
+      selectionRevision: 4,
+      timelineRevision: 7,
+      preserved: {
+        activeJourneyId: null,
+        selection: null,
+        selectionRevision: 4,
+        timelineRevision: 7,
+      },
+    });
+    const repeatedClose = captureUnknownCreateObservationOwnership({
+      semanticOwnership: firstPass,
+      selectionRevision: 4,
+      timelineRevision: 7,
+    });
+    const secondPass = resolveUnknownCreateObservationOwnership({
+      journeys: [candidate, otherCandidate],
+      timelineSelection: { journeyId: otherCandidate.id, pointIndex: null },
+      selectionRevision: 4,
+      timelineRevision: 7,
+      preserved: repeatedClose,
+    });
+
+    expect(repeatedClose.selection).toBeNull();
+    expect(secondPass.activeJourneyId).toBeNull();
+    expect(secondPass.selection).toBeNull();
+    expect(resolveMobilePlaybackPresentation(
+      [candidate, otherCandidate],
+      secondPass.selection,
+      secondPass.fallbackJourneyId,
     ).journey).toBeNull();
   });
 
