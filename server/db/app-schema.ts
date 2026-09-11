@@ -226,6 +226,9 @@ export const mediaAssets = pgTable(
     mimeType: text("mime_type").notNull(),
     bytes: integer("bytes").notNull(),
     contentHash: text("content_hash"),
+    // #311: true only when contentHash was derived from the durable stored bytes.
+    // Historical/client-declared hashes remain false and cannot drive exact identity.
+    contentHashVerified: boolean("content_hash_verified").notNull().default(false),
     sortOrder: integer("sort_order").notNull().default(0),
     uploadedByUserId: text("uploaded_by_user_id").notNull(),
     // #260: the presentable size of this asset after its EXIF orientation has

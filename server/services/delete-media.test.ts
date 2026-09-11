@@ -20,6 +20,7 @@ const ASSET: Asset = {
   mimeType: "image/jpeg",
   bytes: 16,
   contentHash: null,
+  contentHashVerified: false,
   sortOrder: 0,
   uploadedByUserId: "user-1",
   displayWidth: null,
@@ -56,6 +57,9 @@ function dependencies(asset: Asset | undefined) {
     deleteObject: vi.fn(async () => undefined),
     async inspectObject() {
       return { exists: true, bytes: 16 };
+    },
+    async hashObject() {
+      return { exists: true as const, sha256: "0".repeat(64) };
     },
     async createPrivateReadUrl() {
       return { url: "https://unused", expiresAt: new Date() };

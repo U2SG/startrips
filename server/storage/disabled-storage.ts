@@ -44,6 +44,9 @@ export const disabledStorage: MultipartStorage = {
   async inspectObject() {
     return unavailable();
   },
+  async hashObject() {
+    return unavailable();
+  },
   async createPrivateReadUrl() {
     return unavailable();
   },

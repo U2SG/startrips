@@ -11,6 +11,7 @@ import {
   UploadPartCommand,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { createHash } from "node:crypto";
 import {
   CompletedObjectIntegrityError,
   type MultipartPart,
@@ -281,6 +282,23 @@ export function createS3CompatibleStorage(
             ? bytes.subarray(0, input.maxBytes)
             : bytes,
         };
+      } catch (error) {
+        if (isMissingObject(error)) return { exists: false };
+        throw error;
+      }
+    },
+
+    async hashObject(input) {
+      try {
+        const result = await client.send(new GetObjectCommand(objectInput(input.key)));
+        if (!result.Body) {
+          throw new Error("Object storage returned an object with no body");
+        }
+        const hash = createHash("sha256");
+        for await (const chunk of result.Body as AsyncIterable<Uint8Array>) {
+          hash.update(chunk);
+        }
+        return { exists: true, sha256: hash.digest("hex") };
       } catch (error) {
         if (isMissingObject(error)) return { exists: false };
         throw error;
