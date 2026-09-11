@@ -86,7 +86,10 @@ import {
 import { getLightEffectGradient } from "./lightEffects";
 import "../styles/living-atlas-polish.css";
 import type { Journey, JourneyRoute, MediaPreviewRead } from "./types";
-import { resolvePlaceMediaObservationRect } from "./placeMediaHandoff";
+import {
+  resolvePlaceMediaObservationRect,
+  resolvePlaceMediaReturnRoutePointId,
+} from "./placeMediaHandoff";
 
 type AtlasView = "planet" | "timeline";
 
@@ -692,6 +695,8 @@ export function LivingAtlasApp({
   const shareClient = capabilities.canShareAtlas ? mutations : null;
   const setCinematicIsolation = useAtlasCinematicIsolation();
   const [journeys, setJourneys] = useState<Journey[]>([]);
+  const journeysRef = useRef(journeys);
+  journeysRef.current = journeys;
   const [homeBasePeriods, setHomeBasePeriods] = useState<HomeBasePeriod[]>([]);
   const [atlasSemanticZoom, setAtlasSemanticZoom] = useState<GlobeSemanticZoom>("planet");
   const [hasManualAtlasCameraInteraction, setHasManualAtlasCameraInteraction] = useState(false);
@@ -831,6 +836,8 @@ export function LivingAtlasApp({
   // the user is in globe focus mode; entering playback pauses rewind.
   const timeCursor = useGlobeTimeCursor(journeys);
   const activeJourneyId = timeCursor.selection?.journeyId ?? journeys.at(-1)?.id ?? null;
+  const activeJourneyIdRef = useRef(activeJourneyId);
+  activeJourneyIdRef.current = activeJourneyId;
   const selectedJourneyIdForHomeCamera = explicitSelectedJourneyIdForHomeCamera(
     timeCursor.hasExplicitSelection,
     timeCursor.selection?.journeyId ?? null,
@@ -1228,7 +1235,7 @@ export function LivingAtlasApp({
       routePointId,
     );
     routePointContextSelectionRef.current = requested.selection;
-    const journey = journeys.find((candidate) => candidate.id === journeyId) ?? null;
+    const journey = journeysRef.current.find((candidate) => candidate.id === journeyId) ?? null;
     const resolved = resolveRoutePointContextSelection(
       requested.selection,
       requested.intent,
@@ -1313,20 +1320,17 @@ export function LivingAtlasApp({
   function closeJourneyStory(source: HTMLElement | null) {
     const journeyId = storyJourneyId;
     const observation = storyObservationRef.current;
-    const returnRoutePointId = observation?.journeyId === journeyId
-      ? observation.routePointId ?? storyRoutePointId
-      : storyRoutePointId;
-    const routePointSelection = routePointContextSelectionRef.current;
-    const canReturnToPlace = Boolean(
-      source
-        && journeyId
-        && returnRoutePointId
-        && routePointSelection.intent?.journeyId === journeyId
-        && routePointSelection.intent.routePointId === returnRoutePointId
-        && routePointSelection.context?.journeyId === journeyId
-        && routePointSelection.context.routePointId === returnRoutePointId,
-    );
-    const observationTarget = canReturnToPlace && source && journeyId && returnRoutePointId
+    const currentJourney = journeyId
+      ? journeysRef.current.find((candidate) => candidate.id === journeyId) ?? null
+      : null;
+    const returnRoutePointId = resolvePlaceMediaReturnRoutePointId({
+      storyJourneyId: journeyId,
+      activeJourneyId: activeJourneyIdRef.current,
+      observation,
+      openingRoutePointId: storyRoutePointId,
+      currentRoutePointIds: currentJourney?.routePoints.map((point) => point.id) ?? [],
+    });
+    const observationTarget = source && journeyId && returnRoutePointId
       ? createPlaceMediaObservationElement({
           journeyId,
           routePointId: returnRoutePointId,
@@ -1353,17 +1357,22 @@ export function LivingAtlasApp({
         setStoryInitialAssetId(null);
         setStoryInitialSnapState("in-context");
         setStoryFocusVisibleControlOnOpen(false);
+        if (observationTarget && journeyId && returnRoutePointId) {
+          revealRoutePointContext(journeyId, returnRoutePointId);
+        }
       },
       resolveTarget: () => observationTarget ?? document.querySelector<HTMLElement>(
         ".living-atlas__active-media img, .living-atlas__active-media video",
       ),
       isTargetCurrent: observationTarget && journeyId && returnRoutePointId
         ? () => {
-            const current = routePointContextSelectionRef.current;
-            return current.intent?.journeyId === journeyId
-              && current.intent.routePointId === returnRoutePointId
-              && current.context?.journeyId === journeyId
-              && current.context.routePointId === returnRoutePointId;
+            if (activeJourneyIdRef.current !== journeyId) return false;
+            const latestJourney = journeysRef.current.find((candidate) => candidate.id === journeyId);
+            if (!latestJourney?.routePoints.some((point) => point.id === returnRoutePointId)) return false;
+            const latestObservation = storyObservationRef.current;
+            return latestObservation?.journeyId === journeyId
+              && latestObservation.routePointId === returnRoutePointId
+              && Boolean(liveRoutePointMarker(journeyId, returnRoutePointId));
           }
         : undefined,
       onCleanup: observationTarget ? () => observationTarget.remove() : undefined,

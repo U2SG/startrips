@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { resolvePlaceMediaObservationRect } from "./placeMediaHandoff";
+import {
+  resolvePlaceMediaObservationRect,
+  resolvePlaceMediaReturnRoutePointId,
+} from "./placeMediaHandoff";
 
 describe("resolvePlaceMediaObservationRect", () => {
   it("places the frame beside a visible geographic marker while preserving media aspect", () => {
@@ -39,5 +42,45 @@ describe("resolvePlaceMediaObservationRect", () => {
       { width: 390, height: 844 },
       true,
     )).toBeNull();
+  });
+});
+
+
+describe("resolvePlaceMediaReturnRoutePointId", () => {
+  it("lets the latest same-Journey Story observation supersede the opening point", () => {
+    expect(resolvePlaceMediaReturnRoutePointId({
+      storyJourneyId: "journey-a",
+      activeJourneyId: "journey-a",
+      observation: { journeyId: "journey-a", routePointId: "point-b" },
+      openingRoutePointId: "point-a",
+      currentRoutePointIds: ["point-a", "point-b", "point-c"],
+    })).toBe("point-b");
+  });
+
+  it("rejects stale observations from another Journey or a removed Route Point", () => {
+    expect(resolvePlaceMediaReturnRoutePointId({
+      storyJourneyId: "journey-a",
+      activeJourneyId: "journey-a",
+      observation: { journeyId: "journey-b", routePointId: "point-b" },
+      openingRoutePointId: "point-a",
+      currentRoutePointIds: ["point-a"],
+    })).toBe("point-a");
+    expect(resolvePlaceMediaReturnRoutePointId({
+      storyJourneyId: "journey-a",
+      activeJourneyId: "journey-a",
+      observation: { journeyId: "journey-a", routePointId: "point-b" },
+      openingRoutePointId: "point-a",
+      currentRoutePointIds: ["point-a"],
+    })).toBeNull();
+  });
+
+  it("rejects return when another Journey owns the Atlas", () => {
+    expect(resolvePlaceMediaReturnRoutePointId({
+      storyJourneyId: "journey-a",
+      activeJourneyId: "journey-b",
+      observation: { journeyId: "journey-a", routePointId: "point-a" },
+      openingRoutePointId: "point-a",
+      currentRoutePointIds: ["point-a"],
+    })).toBeNull();
   });
 });

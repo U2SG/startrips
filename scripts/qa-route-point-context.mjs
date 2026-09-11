@@ -5,8 +5,12 @@ import { launchQaBrowser } from "./qa-browser.mjs";
 const origin = process.env.QA_ORIGIN ?? "http://127.0.0.1:4173";
 const journeyId = "qa-context-journey";
 const photoPointId = "qa-context-photo";
+const secondPhotoPointId = "qa-context-photo-b";
+const thirdPhotoPointId = "qa-context-photo-c";
 const textPointId = "qa-context-text";
 const photoAssetId = "qa-context-photo-asset";
+const secondPhotoAssetId = "qa-context-photo-asset-b";
+const thirdPhotoAssetId = "qa-context-photo-asset-c";
 const siblingJourneyId = "qa-context-sibling-journey";
 const siblingPointId = "qa-context-sibling-point";
 
@@ -38,31 +42,67 @@ const journey = {
       createdAt: "2026-04-06T09:30:00.000Z",
     },
     {
-      id: textPointId,
+      id: secondPhotoPointId,
       journeyId,
       sortOrder: 1,
+      latitude: 22.2912,
+      longitude: 114.1654,
+      label: "西九龙",
+      isStop: true,
+      occurredAt: "2026-04-06T10:00:00.000Z",
+      note: "第二段影像。",
+      createdAt: "2026-04-06T10:00:00.000Z",
+    },
+    {
+      id: thirdPhotoPointId,
+      journeyId,
+      sortOrder: 2,
+      latitude: 22.2774,
+      longitude: 114.1430,
+      label: "山顶",
+      isStop: true,
+      occurredAt: "2026-04-06T10:30:00.000Z",
+      note: "第三段影像。",
+      createdAt: "2026-04-06T10:30:00.000Z",
+    },
+    {
+      id: textPointId,
+      journeyId,
+      sortOrder: 3,
       latitude: 22.2931,
       longitude: 114.1694,
       label: "九龙海旁",
       isStop: true,
       occurredAt: null,
       note: "这一站只留下了一句话。",
-      createdAt: "2026-04-06T10:00:00.000Z",
+      createdAt: "2026-04-06T11:00:00.000Z",
     },
   ],
-  media: [{
-    id: photoAssetId,
-    journeyId,
-    routePointId: photoPointId,
-    storageDriver: "qa",
-    storageKey: photoAssetId,
-    fileName: "harbour.jpg",
-    mimeType: "image/jpeg",
-    bytes: 128,
-    sortOrder: 0,
-    uploadedByUserId: "qa-user",
-    createdAt: "2026-04-06T09:31:00.000Z",
-  }],
+  media: [
+    {
+      id: photoAssetId,
+      journeyId,
+      routePointId: photoPointId,
+      storageDriver: "qa",
+      storageKey: photoAssetId,
+      fileName: "harbour.jpg",
+      mimeType: "image/jpeg",
+      bytes: 128,
+      sortOrder: 0,
+      uploadedByUserId: "qa-user",
+      createdAt: "2026-04-06T09:31:00.000Z",
+    },
+    {
+      id: secondPhotoAssetId, journeyId, routePointId: secondPhotoPointId, storageDriver: "qa",
+      storageKey: secondPhotoAssetId, fileName: "kowloon.jpg", mimeType: "image/jpeg", bytes: 128,
+      sortOrder: 1, uploadedByUserId: "qa-user", createdAt: "2026-04-06T10:01:00.000Z",
+    },
+    {
+      id: thirdPhotoAssetId, journeyId, routePointId: thirdPhotoPointId, storageDriver: "qa",
+      storageKey: thirdPhotoAssetId, fileName: "peak.jpg", mimeType: "image/jpeg", bytes: 128,
+      sortOrder: 2, uploadedByUserId: "qa-user", createdAt: "2026-04-06T10:31:00.000Z",
+    },
+  ],
 };
 
 const siblingJourney = {
@@ -109,19 +149,23 @@ async function stubAtlasApi(page) {
     contentType: "application/json",
     body: JSON.stringify({ journeys: [siblingJourney, journey] }),
   }));
-  await page.route(`**/api/uploads/assets/${photoAssetId}/read-url`, async (route) => {
-    // Delay the representative read so focus/camera ownership is graded both
-    // at context reveal and when late media readiness settles.
-    await new Promise((resolve) => setTimeout(resolve, 120));
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify({
-        url: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='80' height='60'%3E%3Crect width='80' height='60' fill='%23254a48'/%3E%3C/svg%3E",
-        expiresAt: new Date(Date.now() + 60_000).toISOString(),
-      }),
+  for (const [assetId, color, delay] of [
+    [photoAssetId, "%23254a48", 120],
+    [secondPhotoAssetId, "%234a3525", 20],
+    [thirdPhotoAssetId, "%232c3555", 20],
+  ]) {
+    await page.route(`**/api/uploads/assets/${assetId}/read-url`, async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          url: `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='80' height='60'%3E%3Crect width='80' height='60' fill='${color}'/%3E%3C/svg%3E`,
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        }),
+      });
     });
-  });
+  }
 }
 
 async function openFocusAtlas({
@@ -276,10 +320,65 @@ try {
   record("photo page errors", { pageErrors: photoRun.pageErrors }, photoRun.pageErrors.length === 0);
   await page.close();
 
+  // Cross-point ownership: latest Story observation, not the opening context,
+  // owns the return place. Also prove fullscreen/back preserves that identity.
+  const crossRun = await openFocusAtlas();
+  const crossPage = crossRun.page;
+  await activateRoutePoint(crossPage, 0);
+  await crossPage.locator(`[data-route-point-context][data-route-point-id="${photoPointId}"]`).waitFor({ state: "visible", timeout: 5_000 });
+  await crossPage.waitForFunction(() => document.querySelector("[data-route-point-context-media]")?.getAttribute("data-route-point-context-media") === "ready");
+  await crossPage.locator(".living-atlas__route-point-context-entry").click();
+  await crossPage.locator(`.journey-story__media [data-media-page="current"][data-media-page-id="${photoAssetId}"][data-media-page-ready="true"]`).waitFor({ state: "attached", timeout: 5_000 });
+
+  await crossPage.locator(`.journey-story button[data-route-point-id="${secondPhotoPointId}"]`).click();
+  await crossPage.locator(`.journey-story__media [data-media-page="current"][data-media-page-id="${secondPhotoAssetId}"][data-media-page-ready="true"]`).waitFor({ state: "attached", timeout: 5_000 });
+  await crossPage.locator(".journey-story__fullscreen-entry").click();
+  await crossPage.locator(".journey-story-fullscreen:not([hidden])").waitFor({ state: "visible", timeout: 5_000 });
+  await crossPage.keyboard.press("Escape");
+  await crossPage.waitForFunction(() => document.querySelector(".journey-story-fullscreen")?.hasAttribute("hidden"));
+  const markerB = crossPage.locator(`.particle-earth-route__point[data-journey-route="${journeyId}"][data-route-point-id="${secondPhotoPointId}"]`);
+  const markerBRect = await markerB.boundingBox();
+  await crossPage.locator(".journey-story__close").click();
+  const returnB = crossPage.locator("[data-place-media-observation]:not([data-shared-element-clone])");
+  await returnB.waitFor({ state: "attached", timeout: 2_000 });
+  const returnBRect = await returnB.boundingBox();
+  await crossPage.locator(`[data-route-point-context][data-route-point-id="${secondPhotoPointId}"]`).waitFor({ state: "visible", timeout: 5_000 });
+  record("A -> B + fullscreen/back returns to current Story observation B", { markerBRect, returnBRect }, Boolean(
+    markerBRect && returnBRect
+    && Math.abs(returnBRect.x - (markerBRect.x + markerBRect.width + 16)) < 28
+  ));
+  await returnB.waitFor({ state: "detached", timeout: 5_000 });
+
+  // Rapid supersession: B may render briefly, but C must be the only return
+  // owner once C becomes the latest ready Story observation.
+  await activateRoutePoint(crossPage, 0);
+  await crossPage.locator(`[data-route-point-context][data-route-point-id="${photoPointId}"]`).waitFor({ state: "visible", timeout: 5_000 });
+  await crossPage.waitForFunction(() => document.querySelector("[data-route-point-context-media]")?.getAttribute("data-route-point-context-media") === "ready");
+  await crossPage.locator(".living-atlas__route-point-context-entry").click();
+  await crossPage.locator(`.journey-story__media [data-media-page="current"][data-media-page-id="${photoAssetId}"][data-media-page-ready="true"]`).waitFor({ state: "attached", timeout: 5_000 });
+  await crossPage.locator(`.journey-story button[data-route-point-id="${secondPhotoPointId}"]`).click();
+  await crossPage.locator(`.journey-story button[data-route-point-id="${thirdPhotoPointId}"]`).click();
+  await crossPage.locator(`.journey-story__media [data-media-page="current"][data-media-page-id="${thirdPhotoAssetId}"][data-media-page-ready="true"]`).waitFor({ state: "attached", timeout: 5_000 });
+  await crossPage.locator(`.journey-story button[data-route-point-id="${thirdPhotoPointId}"][aria-pressed="true"]`).waitFor({ state: "attached", timeout: 5_000 });
+  await crossPage.waitForTimeout(50);
+  const markerC = crossPage.locator(`.particle-earth-route__point[data-journey-route="${journeyId}"][data-route-point-id="${thirdPhotoPointId}"]`);
+  const markerCRect = await markerC.boundingBox();
+  await crossPage.locator(".journey-story__close").click();
+  const returnC = crossPage.locator("[data-place-media-observation]:not([data-shared-element-clone])");
+  await returnC.waitFor({ state: "attached", timeout: 2_000 });
+  const returnCRect = await returnC.boundingBox();
+  await crossPage.locator(`[data-route-point-context][data-route-point-id="${thirdPhotoPointId}"]`).waitFor({ state: "visible", timeout: 5_000 });
+  record("rapid A -> B -> C leaves C as the only return owner", { markerCRect, returnCRect }, Boolean(
+    markerCRect && returnCRect
+    && Math.abs(returnCRect.x - (markerCRect.x + markerCRect.width + 16)) < 28
+  ));
+  record("cross-point page errors", { pageErrors: crossRun.pageErrors }, crossRun.pageErrors.length === 0);
+  await crossPage.close();
+
   const textRun = await openFocusAtlas();
   const textPage = textRun.page;
   const textFocusBefore = await sceneFocusSnapshot(textPage);
-  await activateRoutePoint(textPage, 1);
+  await activateRoutePoint(textPage, 3);
   const textContext = textPage.locator("[data-route-point-context]");
   await textContext.waitFor({ state: "visible", timeout: 5_000 });
   const textState = await textContext.evaluate((node) => ({

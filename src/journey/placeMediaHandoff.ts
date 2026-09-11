@@ -52,3 +52,30 @@ export function resolvePlaceMediaObservationRect(
   const top = Math.max(margin, Math.min(viewport.height - margin - height, centerY - height / 2));
   return { left, top, width, height };
 }
+
+export type PlaceMediaLogicalObservation = {
+  journeyId: string;
+  routePointId: string | null;
+} | null;
+
+/**
+ * The Story's latest logical observation owns the return place. The opening
+ * Route Point is only a fallback for a Story that never emitted a newer
+ * observation. Current Journey/model truth still gates the result; live marker
+ * visibility is checked separately when the presentation target is measured.
+ */
+export function resolvePlaceMediaReturnRoutePointId(input: {
+  storyJourneyId: string | null;
+  activeJourneyId: string | null;
+  observation: PlaceMediaLogicalObservation;
+  openingRoutePointId: string | null;
+  currentRoutePointIds: readonly string[];
+}): string | null {
+  if (!input.storyJourneyId || input.activeJourneyId !== input.storyJourneyId) return null;
+  const observed = input.observation?.journeyId === input.storyJourneyId
+    ? input.observation.routePointId
+    : null;
+  const candidate = observed ?? input.openingRoutePointId;
+  if (!candidate || !input.currentRoutePointIds.includes(candidate)) return null;
+  return candidate;
+}

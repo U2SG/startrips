@@ -744,7 +744,12 @@ describe("Route Point context integration (#291)", () => {
     expect(close).toContain("storyObservationRef.current");
     expect(close).toContain("createPlaceMediaObservationElement({");
     expect(close).toContain("paintSource: false");
-    expect(close).toContain("routePointContextSelectionRef.current");
+    expect(close).toContain("resolvePlaceMediaReturnRoutePointId({");
+    expect(close).toContain("storyObservationRef.current");
+    expect(close).toContain("activeJourneyIdRef.current");
+    expect(close).toContain("journeysRef.current");
+    expect(close).toContain("revealRoutePointContext(journeyId, returnRoutePointId)");
+    expect(close).not.toContain("routePointContextSelectionRef.current");
     expect(helper).not.toContain("setState");
   });
 
