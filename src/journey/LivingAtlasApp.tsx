@@ -26,6 +26,10 @@ import {
   type GlobePointPick,
   type JourneySaveResult,
 } from "./JourneyComposer";
+import {
+  resolveJourneyArrivalHandoff,
+  type JourneySaveCallbackScope,
+} from "./journeySaveRecovery";
 import { JourneyPlaybackOverlay } from "./JourneyPlaybackOverlay";
 import { resolveHomeNarrativeContext, type HomeNarrativeContext } from "./homeBasePrelude";
 import type { HomeBasePeriod } from "./homeBase";
@@ -1158,19 +1162,31 @@ export function LivingAtlasApp({
     selectMobileJourney(journeys[nextIndex].id);
   }
 
-  async function handleSaved(result: JourneySaveResult) {
+  async function handleSaved(
+    result: JourneySaveResult,
+    callbackScope: JourneySaveCallbackScope,
+  ) {
     const edited = editingJourneyId === result.journey.id;
+    const arrivalHandoff = resolveJourneyArrivalHandoff({
+      journeyId: result.journey.id,
+      editingJourneyId,
+      callbackScope,
+    });
     setJourneys((current) => mergeJourney(current, result.journey));
-    if (!edited) setArrivalJourneyId(result.journey.id);
+    if (arrivalHandoff) setArrivalJourneyId(arrivalHandoff);
     setDraftRoute(null);
     setUndoJourney(null);
-    showNotice(edited
+    showNotice(callbackScope === "media-retry"
       ? result.mediaErrors.length > 0
-        ? "旅程修改已保存；未上传成功的媒体仍可重试。"
-        : "旅程修改已保存。"
-      : result.mediaErrors.length > 0
-      ? "旅程已抵达图谱；未上传成功的媒体已在创建器中列出。"
-      : "旅程已抵达你的私人图谱。"
+        ? "媒体重试完成；仍有部分媒体未上传成功。"
+        : "媒体重试已完成。"
+      : edited
+        ? result.mediaErrors.length > 0
+          ? "旅程修改已保存；未上传成功的媒体仍可重试。"
+          : "旅程修改已保存。"
+        : result.mediaErrors.length > 0
+          ? "旅程已抵达图谱；未上传成功的媒体已在创建器中列出。"
+          : "旅程已抵达你的私人图谱。"
     );
     await load(true);
   }

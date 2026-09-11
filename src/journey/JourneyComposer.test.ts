@@ -7,6 +7,7 @@ import {
   journeyToDraftPoints,
   parseCoordinateInput,
   persistJourneyDraft,
+  reconcileUnknownJourneyCreate,
   resolvePendingMediaUploads,
   uploadJourneyMedia,
 } from "./JourneyComposer";
@@ -265,4 +266,49 @@ describe("persistJourneyDraft", () => {
     expect(markup).toContain("1 个已有媒体");
     expect(markup).not.toContain("2 个已有媒体");
   });
+  it("recovers an unknown create from the server identity without a second create", async () => {
+    const recoveredJourney = {
+      id: "server-created-id",
+      atlasId: "atlas-1",
+      title: input.title,
+      startedOn: input.startedOn,
+      endedOn: input.endedOn,
+      note: input.note,
+      lightColor: input.lightColor,
+      lightEffect: null,
+      revision: 1,
+      createdByUserId: "user-1",
+      createdAt: "2026-08-11T00:00:00.000Z",
+      updatedAt: "2026-08-11T00:00:00.000Z",
+      routePoints: [{
+        id: "server-point-id",
+        journeyId: "server-created-id",
+        sortOrder: 0,
+        latitude: 31.2304,
+        longitude: 121.4737,
+        label: "Shanghai",
+        isStop: true,
+        occurredAt: null,
+        createdAt: "2026-08-11T00:00:00.000Z",
+      }],
+      media: [],
+    } as Journey;
+    const readJourneys = vi.fn(async () => [recoveredJourney]);
+
+    await expect(reconcileUnknownJourneyCreate(input, readJourneys)).resolves.toMatchObject({
+      status: "already-persisted",
+      journey: { id: "server-created-id" },
+    });
+    expect(readJourneys).toHaveBeenCalledTimes(1);
+  });
+
+  it("marks an unknown create explicitly not saved so one resubmission is permitted", async () => {
+    const readJourneys = vi.fn(async () => [] as Journey[]);
+
+    await expect(reconcileUnknownJourneyCreate(input, readJourneys)).resolves.toEqual({
+      status: "not-persisted",
+    });
+    expect(readJourneys).toHaveBeenCalledTimes(1);
+  });
+
 });

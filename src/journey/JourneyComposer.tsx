@@ -28,10 +28,17 @@ import {
 } from "../api/multipartUpload";
 import {
   createJourney,
+  JourneyApiError,
+  listJourneys,
   reverseGeocode,
   searchLocations,
   updateJourney,
 } from "./journeyApi";
+import { journeyLocationSearchErrorMessage } from "./journeyLocationSearchError";
+import {
+  resolveJourneySaveRecovery,
+  type JourneySaveCallbackScope,
+} from "./journeySaveRecovery";
 import {
   journeyVisualMedia,
   validateJourneyFiles,
@@ -230,6 +237,18 @@ export async function persistJourneyDraft({
   return { journey, ...mediaResult };
 }
 
+export async function reconcileUnknownJourneyCreate(
+  submittedDraft: JourneyInput,
+  readJourneys: () => Promise<Journey[]> = listJourneys,
+  knownJourneyIdsBeforeCreate: ReadonlySet<string> = new Set(),
+) {
+  return resolveJourneySaveRecovery(
+    submittedDraft,
+    await readJourneys(),
+    { knownJourneyIdsBeforeCreate },
+  );
+}
+
 export type GlobePointPick = {
   latitude: number;
   longitude: number;
@@ -239,7 +258,10 @@ type JourneyComposerProps = {
   open: boolean;
   journey?: Journey | null;
   onClose: () => void;
-  onSaved: (result: JourneySaveResult) => void | Promise<void>;
+  onSaved: (
+    result: JourneySaveResult,
+    callbackScope: JourneySaveCallbackScope,
+  ) => void | Promise<void>;
   onGlobePickRequest?: (accept: (point: GlobePointPick) => void) => void;
   onGlobePickCancel?: () => void;
   onRoutePreviewChange?: (route: JourneyRoute | null) => void;
@@ -343,6 +365,10 @@ export function JourneyComposer({
   const [saving, setSaving] = useState(false);
   const [progress, setProgress] = useState<UploadProgress | null>(null);
   const [savedResult, setSavedResult] = useState<JourneySaveResult | null>(null);
+  const [unknownCreateAttempt, setUnknownCreateAttempt] = useState<{
+    input: JourneyInput;
+    knownJourneyIdsBeforeCreate: string[];
+  } | null>(null);
   const [retryAssignments, setRetryAssignments] = useState<JourneyMediaUploadAssignment[]>([]);
   const [globePicking, setGlobePicking] = useState(false);
   const activeLightEffect = LIGHT_EFFECTS.find((effect) => effect.id === lightEffect) ?? null;
@@ -378,7 +404,7 @@ export function JourneyComposer({
       setMobileMediaMenuIndex(null);
       return;
     }
-    if (!saving) closeComposer();
+    if (!saving && !unknownCreateAttempt) closeComposer();
   }, true, globePicking);
   const mobileMediaSheetRef = useNestedModalFocus<HTMLElement>(
     mobileLayout && (
@@ -716,20 +742,99 @@ export function JourneyComposer({
     }
   }
 
+  async function applySavedResult(
+    result: JourneySaveResult,
+    callbackScope: JourneySaveCallbackScope,
+  ) {
+    const resolvedAssignments = resolvePendingMediaUploads(
+      mediaFiles,
+      routePoints,
+      result.journey,
+    );
+    setUnknownCreateAttempt(null);
+    setSavedResult(result);
+    setRetryAssignments(
+      result.mediaErrors.map((error) => resolvedAssignments[error.fileIndex]),
+    );
+    try {
+      await onSaved(result, callbackScope);
+    } catch {
+      setMessage("旅程已经保存，但 Atlas 暂时没有刷新成功；重新打开后会从服务器恢复。");
+      return;
+    }
+    if (result.mediaErrors.length === 0) closeComposer();
+  }
+
+  async function recoverUnknownCreate(
+    submittedDraft: JourneyInput,
+    knownJourneyIdsBeforeCreate: readonly string[],
+  ) {
+    let recovery;
+    try {
+      recovery = await reconcileUnknownJourneyCreate(
+        submittedDraft,
+        listJourneys,
+        new Set(knownJourneyIdsBeforeCreate),
+      );
+    } catch {
+      setUnknownCreateAttempt({
+        input: submittedDraft,
+        knownJourneyIdsBeforeCreate: [...knownJourneyIdsBeforeCreate],
+      });
+      setMessage("暂时无法确认这段旅程是否已经保存。再次点击只会重新确认保存结果，不会创建另一段 Journey。");
+      return;
+    }
+
+    if (recovery.status === "not-persisted") {
+      setUnknownCreateAttempt(null);
+      setMessage("已确认这段旅程没有保存到 Atlas；你可以重新提交一次。");
+      return;
+    }
+
+    const recovered = await persistJourneyDraft({
+      input: submittedDraft,
+      mediaFiles,
+      routePoints,
+      persist: async () => recovery.journey,
+      onProgress: setProgress,
+    });
+    await applySavedResult(recovered, "initial-save");
+  }
+
   async function save() {
-    const validation = validateJourneyInput(input);
+    const submittedInput = unknownCreateAttempt?.input ?? input;
+    const validation = validateJourneyInput(submittedInput);
     const mediaValidation = validateJourneyFiles(mediaFiles.map((media) => media.file));
     const error = validation.errors[0] ?? mediaValidation.errors[0];
     if (error) {
       setMessage(error);
       return;
     }
+
+    let knownJourneyIdsBeforeCreate = unknownCreateAttempt?.knownJourneyIdsBeforeCreate ?? [];
     setSaving(true);
     setMessage("");
     setProgress(null);
     try {
+      if (!journey && unknownCreateAttempt) {
+        await recoverUnknownCreate(
+          unknownCreateAttempt.input,
+          unknownCreateAttempt.knownJourneyIdsBeforeCreate,
+        );
+        return;
+      }
+
+      if (!journey) {
+        try {
+          knownJourneyIdsBeforeCreate = (await listJourneys()).map((candidate) => candidate.id);
+        } catch {
+          setMessage("暂时无法核对 Atlas 中已有的 Journey，因此这次没有提交。请稍后再试。");
+          return;
+        }
+      }
+
       const result = await persistJourneyDraft({
-        input,
+        input: submittedInput,
         mediaFiles,
         routePoints,
         persist: journey
@@ -737,19 +842,13 @@ export function JourneyComposer({
           : createJourney,
         onProgress: setProgress,
       });
-      const resolvedAssignments = resolvePendingMediaUploads(
-        mediaFiles,
-        routePoints,
-        result.journey,
-      );
-      setSavedResult(result);
-      setRetryAssignments(
-        result.mediaErrors.map((error) => resolvedAssignments[error.fileIndex]),
-      );
-      await onSaved(result);
-      if (result.mediaErrors.length === 0) closeComposer();
+      await applySavedResult(result, "initial-save");
     } catch (errorValue) {
-      setMessage(errorValue instanceof Error ? errorValue.message : "旅程保存失败");
+      if (!journey && !(errorValue instanceof JourneyApiError)) {
+        await recoverUnknownCreate(submittedInput, knownJourneyIdsBeforeCreate);
+      } else {
+        setMessage(errorValue instanceof Error ? errorValue.message : "旅程保存失败");
+      }
     } finally {
       setSaving(false);
     }
@@ -775,7 +874,7 @@ export function JourneyComposer({
       setRetryAssignments(
         retried.mediaErrors.map((error) => retryAssignments[error.fileIndex]),
       );
-      await onSaved(nextResult);
+      await onSaved(nextResult, "media-retry");
     } catch (errorValue) {
       setMessage(errorValue instanceof Error ? errorValue.message : "媒体重试失败");
     } finally {
@@ -787,7 +886,7 @@ export function JourneyComposer({
     ? Math.round((progress.uploadedBytes / progress.totalBytes) * 100)
     : 0;
   const isEditing = Boolean(journey);
-  const editorLocked = saving || savedResult !== null;
+  const editorLocked = saving || savedResult !== null || unknownCreateAttempt !== null;
   const mobileMenuMedia = mobileMediaMenuIndex === null ? null : mediaFiles[mobileMediaMenuIndex] ?? null;
   const mobileAssignmentMedia = mobileMediaAssignmentIndex === null ? null : mediaFiles[mobileMediaAssignmentIndex] ?? null;
   const mobileDeleteMedia = mobileMediaDeleteIndex === null ? null : mediaFiles[mobileMediaDeleteIndex] ?? null;
@@ -817,7 +916,7 @@ export function JourneyComposer({
             <h2 id="journey-composer-title">{isEditing ? "重新整理这段旅程" : "把一段旅程，收进你的星球"}</h2>
             <span>{isEditing ? "调整故事、日期和路线；已有媒体会原样保留。" : "一次停留、跨城路径，或一直在路上。"}</span>
           </div>
-          <button type="button" onClick={closeComposer} disabled={saving} aria-label={isEditing ? "关闭旅程编辑器" : "关闭创建器"}><IconX size={20} stroke={1.35} aria-hidden="true" /></button>
+          <button type="button" onClick={closeComposer} disabled={saving || unknownCreateAttempt !== null} aria-label={isEditing ? "关闭旅程编辑器" : "关闭创建器"}><IconX size={20} stroke={1.35} aria-hidden="true" /></button>
         </header>
 
         <div className="journey-composer__body">
@@ -1224,7 +1323,7 @@ export function JourneyComposer({
                 ? `${existingVisualMediaCount} 个已有媒体`
                 : "媒体可以稍后补充"}</span>
           </div>
-          {savedResult ? <button type="button" onClick={closeComposer}><IconCheck size={18} stroke={1.4} aria-hidden="true" />完成</button> : <button type="button" onClick={save} disabled={saving}>{saving ? <StartripsJourneyCue state="waiting" size={32} /> : <IconCheck size={18} stroke={1.4} aria-hidden="true" />}{saving ? "正在保存…" : isEditing ? "保存修改" : "保存到星球"}</button>}
+          {savedResult ? <button type="button" onClick={closeComposer}><IconCheck size={18} stroke={1.4} aria-hidden="true" />完成</button> : <button type="button" onClick={save} disabled={saving}>{saving ? <StartripsJourneyCue state="waiting" size={32} /> : <IconCheck size={18} stroke={1.4} aria-hidden="true" />}{saving ? "正在保存…" : unknownCreateAttempt ? "重新确认保存结果" : isEditing ? "保存修改" : "保存到星球"}</button>}
         </footer>
       </section>
     </div>
