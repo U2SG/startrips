@@ -90,6 +90,22 @@ describe("journey save recovery", () => {
     });
   });
 
+  it("does not adopt an arbitrary identity when multiple new Journeys match", () => {
+    const first = persisted({
+      id: "journey-new-a",
+      createdAt: "2026-08-11T00:00:01.000Z",
+    });
+    const second = persisted({
+      id: "journey-new-b",
+      createdAt: "2026-08-11T00:00:02.000Z",
+    });
+
+    expect(resolveJourneySaveRecovery(submitted, [second, first])).toEqual({
+      status: "ambiguous",
+      matchingJourneyIds: ["journey-new-a", "journey-new-b"],
+    });
+  });
+
   it("returns not-persisted when the read-back has no canonical match", () => {
     expect(resolveJourneySaveRecovery(submitted, [
       persisted({ title: "Different Journey" }),

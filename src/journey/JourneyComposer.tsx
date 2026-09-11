@@ -219,6 +219,16 @@ export function clearRemovedMediaTarget(
   ));
 }
 
+export class JourneyMediaContinuationError extends Error {
+  readonly journey: Journey;
+
+  constructor(journey: Journey, cause: unknown) {
+    super(cause instanceof Error ? cause.message : "媒体继续处理失败");
+    this.name = "JourneyMediaContinuationError";
+    this.journey = journey;
+  }
+}
+
 export async function persistJourneyDraft({
   input,
   mediaFiles,
@@ -228,13 +238,17 @@ export async function persistJourneyDraft({
   onProgress,
 }: PersistJourneyDraftOptions): Promise<JourneySaveResult> {
   const journey = await persist(input);
-  const mediaResult = await uploadJourneyMediaAssignments({
-    journeyId: journey.id,
-    assignments: resolvePendingMediaUploads(mediaFiles, routePoints, journey),
-    upload,
-    onProgress,
-  });
-  return { journey, ...mediaResult };
+  try {
+    const mediaResult = await uploadJourneyMediaAssignments({
+      journeyId: journey.id,
+      assignments: resolvePendingMediaUploads(mediaFiles, routePoints, journey),
+      upload,
+      onProgress,
+    });
+    return { journey, ...mediaResult };
+  } catch (error) {
+    throw new JourneyMediaContinuationError(journey, error);
+  }
 }
 
 export async function reconcileUnknownJourneyCreate(
@@ -368,6 +382,7 @@ export function JourneyComposer({
   const [unknownCreateAttempt, setUnknownCreateAttempt] = useState<{
     input: JourneyInput;
     knownJourneyIdsBeforeCreate: string[];
+    mode: "recheck" | "ambiguous";
   } | null>(null);
   const [retryAssignments, setRetryAssignments] = useState<JourneyMediaUploadAssignment[]>([]);
   const [globePicking, setGlobePicking] = useState(false);
@@ -404,7 +419,7 @@ export function JourneyComposer({
       setMobileMediaMenuIndex(null);
       return;
     }
-    if (!saving && !unknownCreateAttempt) closeComposer();
+    if (!saving && unknownCreateAttempt?.mode !== "recheck") closeComposer();
   }, true, globePicking);
   const mobileMediaSheetRef = useNestedModalFocus<HTMLElement>(
     mobileLayout && (
@@ -745,17 +760,17 @@ export function JourneyComposer({
   async function applySavedResult(
     result: JourneySaveResult,
     callbackScope: JourneySaveCallbackScope,
+    options: { resolveRetryAssignments?: boolean } = {},
   ) {
-    const resolvedAssignments = resolvePendingMediaUploads(
-      mediaFiles,
-      routePoints,
-      result.journey,
-    );
+    const shouldResolveRetryAssignments = options.resolveRetryAssignments ?? true;
+    const resolvedAssignments = shouldResolveRetryAssignments
+      ? resolvePendingMediaUploads(mediaFiles, routePoints, result.journey)
+      : [];
     setUnknownCreateAttempt(null);
     setSavedResult(result);
-    setRetryAssignments(
-      result.mediaErrors.map((error) => resolvedAssignments[error.fileIndex]),
-    );
+    setRetryAssignments(shouldResolveRetryAssignments
+      ? result.mediaErrors.map((error) => resolvedAssignments[error.fileIndex])
+      : []);
     try {
       await onSaved(result, callbackScope);
     } catch {
@@ -763,6 +778,23 @@ export function JourneyComposer({
       return;
     }
     if (result.mediaErrors.length === 0) closeComposer();
+  }
+
+  async function applyPersistedMediaContinuationFailure(
+    error: JourneyMediaContinuationError,
+    callbackScope: JourneySaveCallbackScope,
+  ) {
+    const result: JourneySaveResult = {
+      journey: error.journey,
+      uploadedCount: 0,
+      mediaErrors: mediaFiles.map((media, fileIndex) => ({
+        fileIndex,
+        fileName: media.file.name,
+        message: error.message,
+      })),
+    };
+    await applySavedResult(result, callbackScope, { resolveRetryAssignments: false });
+    setMessage("Journey 已保存，但媒体归属暂时无法安全确认。请完成后重新打开这段 Journey，再添加这些媒体；不会再次创建 Journey。");
   }
 
   async function recoverUnknownCreate(
@@ -780,6 +812,7 @@ export function JourneyComposer({
       setUnknownCreateAttempt({
         input: submittedDraft,
         knownJourneyIdsBeforeCreate: [...knownJourneyIdsBeforeCreate],
+        mode: "recheck",
       });
       setMessage("暂时无法确认这段旅程是否已经保存。再次点击只会重新确认保存结果，不会创建另一段 Journey。");
       return;
@@ -791,14 +824,32 @@ export function JourneyComposer({
       return;
     }
 
-    const recovered = await persistJourneyDraft({
-      input: submittedDraft,
-      mediaFiles,
-      routePoints,
-      persist: async () => recovery.journey,
-      onProgress: setProgress,
-    });
-    await applySavedResult(recovered, "initial-save");
+    if (recovery.status === "ambiguous") {
+      setUnknownCreateAttempt({
+        input: submittedDraft,
+        knownJourneyIdsBeforeCreate: [...knownJourneyIdsBeforeCreate],
+        mode: "ambiguous",
+      });
+      setMessage("检测到多条与本次提交完全相同的新 Journey，无法安全判断哪一条属于这次保存。为避免重复创建，当前不会再次提交；请关闭创建器并刷新 Atlas 核对。");
+      return;
+    }
+
+    try {
+      const recovered = await persistJourneyDraft({
+        input: submittedDraft,
+        mediaFiles,
+        routePoints,
+        persist: async () => recovery.journey,
+        onProgress: setProgress,
+      });
+      await applySavedResult(recovered, "initial-save");
+    } catch (error) {
+      if (error instanceof JourneyMediaContinuationError) {
+        await applyPersistedMediaContinuationFailure(error, "initial-save");
+        return;
+      }
+      throw error;
+    }
   }
 
   async function save() {
@@ -817,6 +868,10 @@ export function JourneyComposer({
     setProgress(null);
     try {
       if (!journey && unknownCreateAttempt) {
+        if (unknownCreateAttempt.mode === "ambiguous") {
+          setMessage("当前保存结果仍有多条完全相同的服务器记录，不能安全重试创建。请关闭创建器并刷新 Atlas 核对。");
+          return;
+        }
         await recoverUnknownCreate(
           unknownCreateAttempt.input,
           unknownCreateAttempt.knownJourneyIdsBeforeCreate,
@@ -844,14 +899,18 @@ export function JourneyComposer({
       });
       await applySavedResult(result, "initial-save");
     } catch (errorValue) {
-      const createOutcomeMayBeUnknown = !journey && (
-        !(errorValue instanceof JourneyApiError)
-        || errorValue.status >= 500
-      );
-      if (createOutcomeMayBeUnknown) {
-        await recoverUnknownCreate(submittedInput, knownJourneyIdsBeforeCreate);
+      if (errorValue instanceof JourneyMediaContinuationError) {
+        await applyPersistedMediaContinuationFailure(errorValue, "initial-save");
       } else {
-        setMessage(errorValue instanceof Error ? errorValue.message : "旅程保存失败");
+        const createOutcomeMayBeUnknown = !journey && (
+          !(errorValue instanceof JourneyApiError)
+          || errorValue.status >= 500
+        );
+        if (createOutcomeMayBeUnknown) {
+          await recoverUnknownCreate(submittedInput, knownJourneyIdsBeforeCreate);
+        } else {
+          setMessage(errorValue instanceof Error ? errorValue.message : "旅程保存失败");
+        }
       }
     } finally {
       setSaving(false);
@@ -920,7 +979,7 @@ export function JourneyComposer({
             <h2 id="journey-composer-title">{isEditing ? "重新整理这段旅程" : "把一段旅程，收进你的星球"}</h2>
             <span>{isEditing ? "调整故事、日期和路线；已有媒体会原样保留。" : "一次停留、跨城路径，或一直在路上。"}</span>
           </div>
-          <button type="button" onClick={closeComposer} disabled={saving || unknownCreateAttempt !== null} aria-label={isEditing ? "关闭旅程编辑器" : "关闭创建器"}><IconX size={20} stroke={1.35} aria-hidden="true" /></button>
+          <button type="button" onClick={closeComposer} disabled={saving || unknownCreateAttempt?.mode === "recheck"} aria-label={isEditing ? "关闭旅程编辑器" : "关闭创建器"}><IconX size={20} stroke={1.35} aria-hidden="true" /></button>
         </header>
 
         <div className="journey-composer__body">
@@ -1309,7 +1368,11 @@ export function JourneyComposer({
                 <div className="journey-save-partial__heading"><StartripsJourneyCue state="rest" size={40} /><h4>旅程已保存，部分媒体没有上传成功</h4></div>
                 <p>成功 {savedResult.uploadedCount} 个，失败 {savedResult.mediaErrors.length} 个。路线和故事不会丢失。</p>
                 <ul>{savedResult.mediaErrors.map((error) => <li key={`${error.fileIndex}-${error.fileName}`}><strong>{error.fileName}</strong>：{error.message}</li>)}</ul>
-                <button type="button" onClick={retryFailedMedia} disabled={saving}>{saving ? "正在重试…" : "重试失败媒体"}</button>
+                {retryAssignments.length > 0 ? (
+                  <button type="button" onClick={retryFailedMedia} disabled={saving}>{saving ? "正在重试…" : "重试失败媒体"}</button>
+                ) : (
+                  <p>这些媒体暂时无法安全重试；请完成后重新打开这段 Journey，再添加这些媒体。</p>
+                )}
               </div>
             ) : null}
             {savedResult && savedResult.mediaErrors.length === 0 && mediaFiles.length > 0 ? (
@@ -1327,7 +1390,7 @@ export function JourneyComposer({
                 ? `${existingVisualMediaCount} 个已有媒体`
                 : "媒体可以稍后补充"}</span>
           </div>
-          {savedResult ? <button type="button" onClick={closeComposer}><IconCheck size={18} stroke={1.4} aria-hidden="true" />完成</button> : <button type="button" onClick={save} disabled={saving}>{saving ? <StartripsJourneyCue state="waiting" size={32} /> : <IconCheck size={18} stroke={1.4} aria-hidden="true" />}{saving ? "正在保存…" : unknownCreateAttempt ? "重新确认保存结果" : isEditing ? "保存修改" : "保存到星球"}</button>}
+          {savedResult ? <button type="button" onClick={closeComposer}><IconCheck size={18} stroke={1.4} aria-hidden="true" />完成</button> : <button type="button" onClick={save} disabled={saving || unknownCreateAttempt?.mode === "ambiguous"}>{saving ? <StartripsJourneyCue state="waiting" size={32} /> : <IconCheck size={18} stroke={1.4} aria-hidden="true" />}{saving ? "正在保存…" : unknownCreateAttempt?.mode === "ambiguous" ? "请刷新 Atlas 核对" : unknownCreateAttempt ? "重新确认保存结果" : isEditing ? "保存修改" : "保存到星球"}</button>}
         </footer>
       </section>
     </div>

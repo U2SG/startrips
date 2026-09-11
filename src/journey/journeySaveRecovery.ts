@@ -2,7 +2,8 @@ import type { Journey, JourneyInput, RoutePointInput } from "./types";
 
 export type JourneySaveRecoveryDecision =
   | { status: "already-persisted"; journey: Journey }
-  | { status: "not-persisted" };
+  | { status: "not-persisted" }
+  | { status: "ambiguous"; matchingJourneyIds: string[] };
 
 export type JourneySaveCallbackScope = "initial-save" | "media-retry";
 
@@ -51,9 +52,14 @@ export function resolveJourneySaveRecovery(
   const knownIds = options.knownJourneyIdsBeforeCreate;
   const matches = journeys
     .filter((journey) => !knownIds?.has(journey.id))
-    .filter((journey) => matchesSubmittedDraft(submittedDraft, journey))
-    .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
-  if (matches.length > 0) return { status: "already-persisted", journey: matches[0] };
+    .filter((journey) => matchesSubmittedDraft(submittedDraft, journey));
+  if (matches.length === 1) return { status: "already-persisted", journey: matches[0] };
+  if (matches.length > 1) {
+    return {
+      status: "ambiguous",
+      matchingJourneyIds: matches.map((journey) => journey.id).sort(),
+    };
+  }
   return { status: "not-persisted" };
 }
 

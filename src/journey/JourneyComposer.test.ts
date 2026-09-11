@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   clearRemovedMediaTarget,
   JourneyComposer,
+  JourneyMediaContinuationError,
   journeyToDraftPoints,
   parseCoordinateInput,
   persistJourneyDraft,
@@ -96,6 +97,38 @@ describe("persistJourneyDraft", () => {
       fileName: "b.mp4",
       uploadedBytes: 30,
       totalBytes: 30,
+    });
+  });
+
+  it("keeps a confirmed server Journey authoritative when media assignment fails after create", async () => {
+    const file = { name: "point.jpg", size: 10, type: "image/jpeg" } as File;
+    const persist = vi.fn(async () => journey);
+    const routePoints = [{
+      draftId: "draft-point",
+      latitude: 31.2304,
+      longitude: 121.4737,
+      label: "Shanghai",
+      isStop: true,
+      occurredAt: null,
+    }] satisfies RouteDraftPoint[];
+
+    let failure: unknown;
+    try {
+      await persistJourneyDraft({
+        input,
+        mediaFiles: [{ file, routePointDraftId: "draft-point" }],
+        routePoints,
+        persist,
+      });
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(persist).toHaveBeenCalledTimes(1);
+    expect(failure).toBeInstanceOf(JourneyMediaContinuationError);
+    expect(failure).toMatchObject({
+      journey: { id: "journey-1" },
+      message: expect.stringContaining("媒体归属无法确认"),
     });
   });
 
