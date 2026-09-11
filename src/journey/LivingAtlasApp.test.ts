@@ -993,6 +993,33 @@ describe("Quiet Core route presentation", () => {
     expect(`${css}\n${atlasCss}`).not.toContain("motionClusterPulse");
   });
 
+  it("sequences destination arrival after the shared route travel duration", () => {
+    const css = readFileSync(new URL("../app.css", import.meta.url), "utf8");
+    const authority = css.indexOf(
+      "--journey-route-travel-duration: var(--motion-journey, 980ms);",
+    );
+    const drawRule = css.indexOf(
+      "animation: motionRouteDraw var(--journey-route-travel-duration)",
+      authority,
+    );
+    const leaderRule = css.indexOf(
+      "animation: motionRouteLeader var(--journey-route-travel-duration) linear 1 both;",
+      drawRule,
+    );
+    const arrivalRule = css.indexOf(
+      "animation: motionRouteArrival var(--journey-route-arrival-duration) var(--motion-ease-out, ease) var(--journey-route-travel-duration) 1 both;",
+      leaderRule,
+    );
+
+    expect(authority).toBeGreaterThanOrEqual(0);
+    expect(drawRule).toBeGreaterThan(authority);
+    expect(leaderRule).toBeGreaterThan(drawRule);
+    expect(arrivalRule).toBeGreaterThan(leaderRule);
+    expect(css).not.toContain(
+      "animation: motionRouteArrival var(--motion-content, 560ms) var(--motion-ease-out, ease) 1 both;",
+    );
+  });
+
   it("lets camera focus own attention before the one-shot route draw and leader", () => {
     const css = readFileSync(new URL("../app.css", import.meta.url), "utf8");
     const drawRule = css.indexOf(
@@ -1010,7 +1037,7 @@ describe("Quiet Core route presentation", () => {
     expect(leaderRule).toBeGreaterThan(drawRule);
     expect(flyingRule).toBeGreaterThan(leaderRule);
     expect(css.slice(leaderRule, flyingRule)).toContain(
-      "animation: motionRouteLeader var(--motion-journey, 980ms) linear 1 both;",
+      "animation: motionRouteLeader var(--journey-route-travel-duration) linear 1 both;",
     );
     const flyingBlock = css.slice(flyingRule, css.indexOf("@keyframes motionRouteDraw", flyingRule));
     expect(flyingBlock).toContain("animation: none;");

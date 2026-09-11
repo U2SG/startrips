@@ -68,6 +68,10 @@ button {
 
 .particle-earth-route {
   --journey-route-scale: 1;
+  /* One route timing authority: draw and leader share travel duration;
+     arrival is sequenced from that exact duration instead of starting beside it. */
+  --journey-route-travel-duration: var(--motion-journey, 980ms);
+  --journey-route-arrival-duration: var(--motion-content, 560ms);
 }
 
 /* The active journey card is tied to its real projected location. The path is
@@ -235,15 +239,15 @@ button {
 .particle-earth-route.is-style-quiet-core.is-active:not([data-temporal-reveal]) .particle-earth-route__glow {
   stroke-dasharray: 1;
   stroke-dashoffset: 1;
-  animation: motionRouteDraw var(--motion-journey, 980ms) var(--motion-ease-in-out-spatial, cubic-bezier(0.65, 0, 0.35, 1)) forwards;
+  animation: motionRouteDraw var(--journey-route-travel-duration) var(--motion-ease-in-out-spatial, cubic-bezier(0.65, 0, 0.35, 1)) forwards;
 }
 
 .particle-earth-route.is-style-quiet-core.is-active:not([data-temporal-reveal]) .particle-earth-route__travel-leader {
-  animation: motionRouteLeader var(--motion-journey, 980ms) linear 1 both;
+  animation: motionRouteLeader var(--journey-route-travel-duration) linear 1 both;
 }
 
 .particle-earth-route.is-style-quiet-core.is-active:not([data-temporal-reveal]) .particle-earth-route__point--destination {
-  animation: motionRouteArrival var(--motion-content, 560ms) var(--motion-ease-out, ease) 1 both;
+  animation: motionRouteArrival var(--journey-route-arrival-duration) var(--motion-ease-out, ease) var(--journey-route-travel-duration) 1 both;
 }
 
 .particle-earth-scene[data-route-focus-phase="flying"]
