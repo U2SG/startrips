@@ -5,6 +5,7 @@ import type {
   JourneyRoute,
   JourneyYearGroup,
 } from "./types";
+import { isPersistedCalendarDate } from "./calendarDate";
 import { isLightEffectId } from "./lightEffects";
 
 export const MAX_JOURNEY_FILE_BYTES = 2_000_000_000;
@@ -42,13 +43,6 @@ export type ValidationResult = {
   accepted: boolean;
   errors: string[];
 };
-
-function isValidDate(value: string): boolean {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
-  const parsed = new Date(`${value}T00:00:00.000Z`);
-  return !Number.isNaN(parsed.valueOf())
-    && parsed.toISOString().slice(0, 10) === value;
-}
 
 export function sortJourneysChronologically(journeys: readonly Journey[]) {
   return [...journeys].sort((left, right) => {
@@ -104,10 +98,10 @@ export function validateJourneyInput(input: JourneyInput): ValidationResult {
   if (!input.title.trim() || input.title.length > 80) {
     errors.push("旅程标题不能为空且不能超过 80 个字符");
   }
-  if (!isValidDate(input.startedOn)) {
+  if (!isPersistedCalendarDate(input.startedOn)) {
     errors.push("开始日期无效");
   }
-  if (input.endedOn !== null && !isValidDate(input.endedOn)) {
+  if (input.endedOn !== null && !isPersistedCalendarDate(input.endedOn)) {
     errors.push("结束日期无效");
   } else if (input.endedOn !== null && input.endedOn < input.startedOn) {
     errors.push("结束日期不能早于开始日期");

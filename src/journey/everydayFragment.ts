@@ -23,6 +23,7 @@
  * belong in no part of this file.
  */
 
+import { isPersistedCalendarDate } from "./calendarDate";
 import {
   resolveHomeBaseForDate,
   type HomeBasePeriodInterval,
@@ -83,26 +84,6 @@ export const MAX_EVERYDAY_FRAGMENT_NOTE_LENGTH = 2000;
 const ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-/**
- * Fixed-width ISO calendar dates only, and a real day that PostgreSQL can
- * store. `2026-6-1` would parse as a date and then sort wrong against every
- * other stored date, and `2026-02-30` is not a day at all.
- *
- * Year `0000` is refused explicitly: JavaScript accepts it and round-trips it
- * intact, but the PostgreSQL `date` type has no year zero, so a value that
- * passed here would reach the database and fail as a generic 500 instead of
- * the reason-coded refusal this module exists to produce.
- */
-function isCalendarDate(value: unknown): value is string {
-  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-    return false;
-  }
-  if (value.startsWith("0000-")) return false;
-  const parsed = new Date(`${value}T00:00:00.000Z`);
-  return !Number.isNaN(parsed.valueOf())
-    && parsed.toISOString().slice(0, 10) === value;
-}
-
 function coordinate(value: unknown, limit: number): number | null {
   if (typeof value !== "number" || !Number.isFinite(value)) return null;
   return value >= -limit && value <= limit ? value : null;
@@ -143,7 +124,7 @@ function optionalText(
 export function validateEverydayFragmentInput(
   input: EverydayFragmentInput,
 ): EverydayFragmentValidation {
-  if (!isCalendarDate(input.occurredOn)) {
+  if (!isPersistedCalendarDate(input.occurredOn)) {
     return { accepted: false, reason: "EVERYDAY_FRAGMENT_INVALID_DATE" };
   }
   const latitude = coordinate(input.latitude, 90);
