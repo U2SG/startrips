@@ -103,6 +103,9 @@ export type SharedElementMorphOptions = {
   /** Keep the source while an asynchronous target is loading, only for as
    * long as the caller's original destination is still the current intent. */
   isTargetCurrent?: () => boolean;
+  /** Presentation-only geometry may be created for a handoff. Tie its lifetime
+   * to this morph owner rather than introducing a second cleanup timer. */
+  onCleanup?: () => void;
 };
 
 let cancelActiveMorph: (() => void) | null = null;
@@ -122,6 +125,7 @@ export function runSharedElementMorph({
   name,
   durationMs = 560,
   isTargetCurrent,
+  onCleanup,
 }: SharedElementMorphOptions): void {
   // A rail-to-card snapshot may still be above the document when Story opens.
   // End that snapshot before the media clone takes ownership of the handoff.
@@ -129,19 +133,28 @@ export function runSharedElementMorph({
   // A close or a newer selection always wins, including non-animated updates.
   // Never discard the user's state update because an older morph is active.
   cancelActiveMorph?.();
+  let externalCleanupDone = false;
+  const cleanupExternal = () => {
+    if (externalCleanupDone) return;
+    externalCleanupDone = true;
+    onCleanup?.();
+  };
+  const updateWithoutMorph = () => {
+    try { update(); } finally { cleanupExternal(); }
+  };
   if (!source || typeof document === "undefined" || prefersReducedMotion()) {
-    update();
+    updateWithoutMorph();
     return;
   }
   const sourceRect = mediaRect(source);
   if (!canPresent(source, sourceRect) || typeof source.cloneNode !== "function") {
-    update();
+    updateWithoutMorph();
     return;
   }
 
   const clone = snapshotSource(source);
   if (!clone) {
-    update();
+    updateWithoutMorph();
     return;
   }
   // A clone must never resolve as the destination or enter keyboard focus.
@@ -204,6 +217,7 @@ export function runSharedElementMorph({
     document.removeEventListener("scroll", cleanup, true);
     document.removeEventListener("visibilitychange", onVisibilityChange);
     if (cancelActiveMorph === cleanup) cancelActiveMorph = null;
+    cleanupExternal();
   };
   const onVisibilityChange = () => { if (document.hidden) cleanup(); };
   const advance = () => {
@@ -264,7 +278,7 @@ export function runSharedElementMorph({
     if (settled) return;
     observer = new MutationObserver(advance);
     observer.observe(document.body, { childList: true, subtree: true, attributes: true,
-      attributeFilter: ["data-shared-media-id", "data-media-page-id", "data-media-incoming", "role", "hidden", "aria-hidden", "src", "style", "class"] });
+      attributeFilter: ["data-shared-media-id", "data-media-page-id", "data-media-page-ready", "data-media-incoming", "role", "hidden", "aria-hidden", "src", "style", "class"] });
     advance();
   } catch (error) {
     cleanup();

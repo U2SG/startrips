@@ -645,6 +645,16 @@ describe("ParticleEarthScene contracts", () => {
     expect(getJourneyRouteVisualState("journey-b", "journey-a")).toBe("is-muted");
   });
 
+  it("publishes identity on rendered Route Point markers without publishing a second coordinate state", () => {
+    const source = readFileSync(new URL("./ParticleEarthScene.tsx", import.meta.url), "utf8");
+    const markerStart = source.indexOf("element.dataset.journeyRoute = route.id;");
+    const markerBlock = source.slice(markerStart, markerStart + 260);
+    expect(markerStart).toBeGreaterThan(0);
+    expect(markerBlock).toContain("element.dataset.routePointId = point.id");
+    expect(markerBlock).not.toContain("anchorX");
+    expect(markerBlock).not.toContain("anchorY");
+  });
+
   it("hides vector route geometry occluded by the globe", () => {
     const camera = new Vector3(0, 0, 5.4);
     expect(isSphericalPointVisible(camera, new Vector3(0, 0, 1.445))).toBe(true);

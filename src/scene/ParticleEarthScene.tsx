@@ -2617,6 +2617,12 @@ export function ParticleEarthScene({
             "particle-earth-route__point",
             roleClass,
           );
+          // The rendered marker is the spatial source of truth for media
+          // handoff geometry. Identity-only data attributes let the React
+          // presentation re-measure the live marker at intent time without
+          // publishing per-frame coordinates or creating another camera owner.
+          element.dataset.journeyRoute = route.id;
+          if (point.id) element.dataset.routePointId = point.id;
           if (isDestinationPoint) {
             element.setAttribute(
               "points",

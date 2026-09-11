@@ -30,4 +30,18 @@ describe("runSharedElementMorph (#18)", () => {
     });
     expect(update).toHaveBeenCalledTimes(1);
   });
+
+  it("cleans presentation-only geometry on the non-animated fallback path", () => {
+    const update = vi.fn();
+    const onCleanup = vi.fn();
+    runSharedElementMorph({
+      source: null,
+      name: "place-media-test",
+      update,
+      resolveTarget: () => null,
+      onCleanup,
+    });
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(onCleanup).toHaveBeenCalledTimes(1);
+  });
 });

@@ -124,11 +124,16 @@ async function stubAtlasApi(page) {
   });
 }
 
-async function openFocusAtlas({ viewport = { width: 1280, height: 720 }, compact = false } = {}) {
+async function openFocusAtlas({
+  viewport = { width: 1280, height: 720 },
+  compact = false,
+  reduceMotion = false,
+} = {}) {
   const page = await browser.newPage({
     viewport,
     isMobile: compact,
     hasTouch: compact,
+    reducedMotion: reduceMotion ? "reduce" : "no-preference",
   });
   const pageErrors = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
@@ -140,7 +145,7 @@ async function openFocusAtlas({ viewport = { width: 1280, height: 720 }, compact
   // ordinary globe-chrome lane remains on the real globe and continues to own
   // raycast/focus-mode chrome coverage.
   await page.goto(
-    `${origin}/?qaState=living-atlas&qaMode=globe-chrome&qaLite=1&qaRoutePointContext=1`,
+    `${origin}/?qaState=living-atlas&qaMode=globe-chrome&qaLite=1&qaRoutePointContext=1&qaSpatialHandoff=1`,
     { waitUntil: "domcontentloaded" },
   );
   await page.locator("[data-qa-route-point-context-focus]").waitFor({ state: "attached", timeout: 20_000 });
@@ -225,14 +230,49 @@ try {
   record("late representative readiness keeps camera focus owner", { revealFocus, readyFocus },
     JSON.stringify(revealFocus) === JSON.stringify(readyFocus));
 
+  const marker = page.locator(`.particle-earth-route__point[data-journey-route="${journeyId}"][data-route-point-id="${photoPointId}"]`);
+  await marker.waitFor({ state: "attached", timeout: 5_000 });
+  const markerBefore = await marker.boundingBox();
   await page.locator(".living-atlas__route-point-context-entry").click();
+  const departureAperture = page.locator("[data-place-media-observation]:not([data-shared-element-clone])");
+  await departureAperture.waitFor({ state: "attached", timeout: 2_000 });
+  const departureRect = await departureAperture.boundingBox();
   await page.locator(".journey-story").waitFor({ state: "visible", timeout: 5_000 });
-  const storyIdentity = await page.locator(`[data-route-point-id="${photoPointId}"]`).evaluate((node) => ({
+  await page.locator(`.journey-story__media [data-media-page="current"][data-media-page-id="${photoAssetId}"][data-media-page-ready="true"]`).waitFor({
+    state: "attached", timeout: 5_000,
+  });
+  const storyIdentity = await page.locator(`.journey-story button[data-route-point-id="${photoPointId}"]`).evaluate((node) => ({
     pressed: node.getAttribute("aria-pressed"),
     label: node.textContent?.trim() ?? "",
   }));
   record("context entry preserves Journey + Route Point Story identity", { storyIdentity },
     storyIdentity.pressed === "true" && storyIdentity.label.includes("中环码头"));
+  record("Route Point departure uses live geographic marker geometry", { markerBefore, departureRect }, Boolean(
+    markerBefore && departureRect
+    && Math.abs(departureRect.x - (markerBefore.x + markerBefore.width + 16)) < 28
+    && Math.abs((departureRect.y + departureRect.height / 2) - (markerBefore.y + markerBefore.height / 2)) < 16
+  ));
+
+  // Camera/projection movement changes the SVG marker, not a stored React x/y.
+  // Returning from Story must read this new geometry.
+  await departureAperture.waitFor({ state: "detached", timeout: 5_000 });
+  await marker.evaluate((node) => {
+    node.setAttribute("cx", "470");
+    node.setAttribute("cy", "250");
+  });
+  const markerAfterMove = await marker.boundingBox();
+  await page.getByRole("button", { name: "退出旅程故事" }).click();
+  const returnAperture = page.locator("[data-place-media-observation]:not([data-shared-element-clone])");
+  await returnAperture.waitFor({ state: "attached", timeout: 2_000 });
+  const returnRect = await returnAperture.boundingBox();
+  record("Story return remeasures the current Route Point instead of stale opening coordinates", {
+    markerBefore, markerAfterMove, departureRect, returnRect,
+  }, Boolean(
+    markerBefore && markerAfterMove && departureRect && returnRect
+    && Math.abs(returnRect.x - (markerAfterMove.x + markerAfterMove.width + 16)) < 28
+    && Math.abs(returnRect.x - departureRect.x) > 120
+  ));
+  await page.locator("[data-route-point-context]").waitFor({ state: "visible", timeout: 5_000 });
   record("photo page errors", { pageErrors: photoRun.pageErrors }, photoRun.pageErrors.length === 0);
   await page.close();
 
@@ -282,6 +322,27 @@ try {
   record("text page errors", { pageErrors: textRun.pageErrors }, textRun.pageErrors.length === 0);
   await textPage.close();
 
+  const reducedRun = await openFocusAtlas({ reduceMotion: true });
+  const reducedPage = reducedRun.page;
+  await activateRoutePoint(reducedPage, 0);
+  await reducedPage.locator("[data-route-point-context]").waitFor({ state: "visible", timeout: 5_000 });
+  await reducedPage.waitForFunction(() => document.querySelector("[data-route-point-context-media]")?.getAttribute("data-route-point-context-media") === "ready");
+  await reducedPage.locator(".living-atlas__route-point-context-entry").click();
+  await reducedPage.locator(".journey-story").waitFor({ state: "visible", timeout: 5_000 });
+  const reducedState = await reducedPage.evaluate((assetId) => ({
+    reduced: matchMedia("(prefers-reduced-motion: reduce)").matches,
+    observations: document.querySelectorAll("[data-place-media-observation]").length,
+    placeMediaClones: document.querySelectorAll('[data-shared-element-clone^="place-media-"]').length,
+    currentAsset: document.querySelector('.journey-story__media [data-media-page="current"]')?.getAttribute("data-media-page-id") ?? null,
+  }), photoAssetId);
+  record("reduced motion keeps same Story identity without spatial travel", { reducedState },
+    reducedState.reduced
+    && reducedState.observations === 0
+    && reducedState.placeMediaClones === 0
+    && reducedState.currentAsset === photoAssetId);
+  record("reduced-motion page errors", { pageErrors: reducedRun.pageErrors }, reducedRun.pageErrors.length === 0);
+  await reducedPage.close();
+
   for (const viewport of [
     { name: "landscape-844x390", width: 844, height: 390 },
     { name: "landscape-932x430", width: 932, height: 430 },
@@ -319,6 +380,27 @@ try {
       && (compactState.entry?.width ?? 0) >= 44);
     record(`${viewport.name} context keeps camera focus owner`, { compactFocusBefore, compactFocusAfter },
       JSON.stringify(compactFocusBefore) === JSON.stringify(compactFocusAfter));
+    if (viewport.name === "landscape-844x390") {
+      await compactPage.waitForFunction(() => document.querySelector("[data-route-point-context-media]")?.getAttribute("data-route-point-context-media") === "ready");
+      const compactMarker = compactPage.locator(`.particle-earth-route__point[data-journey-route="${journeyId}"][data-route-point-id="${photoPointId}"]`);
+      const compactMarkerRect = await compactMarker.boundingBox();
+      await compactPage.locator(".living-atlas__route-point-context-entry").click();
+      const compactAperture = compactPage.locator("[data-place-media-observation]:not([data-shared-element-clone])");
+      await compactAperture.waitFor({ state: "attached", timeout: 2_000 });
+      const compactApertureRect = await compactAperture.boundingBox();
+      await compactPage.locator(".journey-story").waitFor({ state: "visible", timeout: 5_000 });
+      record(`${viewport.name} uses a bounded short spatial handoff`, { compactMarkerRect, compactApertureRect }, Boolean(
+        compactMarkerRect && compactApertureRect
+        && compactApertureRect.width <= 92.5
+        && compactApertureRect.height <= 78.5
+        && compactApertureRect.x >= 0
+        && compactApertureRect.y >= 0
+        && compactApertureRect.x + compactApertureRect.width <= viewport.width
+        && compactApertureRect.y + compactApertureRect.height <= viewport.height
+        && Math.abs((compactApertureRect.y + compactApertureRect.height / 2)
+          - (compactMarkerRect.y + compactMarkerRect.height / 2)) < 20
+      ));
+    }
     record(`${viewport.name} page errors`, { pageErrors: compactRun.pageErrors }, compactRun.pageErrors.length === 0);
     await compactPage.close();
   }
