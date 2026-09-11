@@ -37,8 +37,12 @@ snap("INIT", await page.evaluate(() => {
   return {
     routeStyle: document.querySelector(".particle-earth-scene")?.dataset.routeStyle ?? null,
     switcherRemoved: document.querySelectorAll("[data-route-style-option]").length === 0,
-    strandA: Boolean(group?.querySelector(".particle-earth-route__strand-a")),
-    coreGradient: group?.querySelector(".particle-earth-route__core")?.getAttribute("stroke")?.startsWith("url(#") ?? false,
+    leader: Boolean(group?.querySelector(".particle-earth-route__travel-leader")),
+    leaderDash: (() => {
+      const leader = group?.querySelector(".particle-earth-route__travel-leader");
+      return leader ? getComputedStyle(leader).strokeDasharray : null;
+    })(),
+    coreSolidIdentity: group?.querySelector(".particle-earth-route__core")?.getAttribute("stroke")?.startsWith("#") ?? false,
     shinyBrand: Boolean(document.querySelector(".living-atlas__brand h1 [data-shiny-text]")),
     countUpText: document.querySelector(".living-atlas__journey-rail > p")?.textContent ?? null,
     borderGlow: (() => {
@@ -47,7 +51,7 @@ snap("INIT", await page.evaluate(() => {
     })(),
   };
 }));
-await page.screenshot({ path: "D:\\startrips\\prod-style-strands.png" });
+await page.screenshot({ path: "D:\\startrips\\prod-style-quiet-core.png" });
 
 // Select a journey and verify focus/context states.
 await page.click(".living-atlas__journey-rail ol li button", { timeout: 15000 });

@@ -968,61 +968,93 @@ describe("playbackHoldReason (#197)", () => {
   });
 });
 
-describe("rewind route CSS (PR #24 review)", () => {
-  it("places the temporal-reveal override after strands active/muted opacity rules", () => {
+describe("Quiet Core route presentation", () => {
+  it("uses one normalized temporal leader and leg draw without perpetual route loops", () => {
     const css = readFileSync(new URL("../app.css", import.meta.url), "utf8");
-    const lastStyleOpacityRule = css.lastIndexOf(
-      ".particle-earth-route.is-style-strands.is-muted .particle-earth-route__strand-b",
-    );
-    const rewindOverride = css.lastIndexOf(
-      ".particle-earth-route.is-style-strands[data-temporal-reveal] .particle-earth-route__glow",
-    );
-    expect(lastStyleOpacityRule).toBeGreaterThanOrEqual(0);
-    expect(rewindOverride).toBeGreaterThan(lastStyleOpacityRule);
-    expect(css.slice(rewindOverride)).toContain(
-      ".particle-earth-route.is-style-strands[data-temporal-reveal] .particle-earth-route__flow",
-    );
-    expect(css.slice(rewindOverride)).toContain("opacity: 0;");
-    const focusFlightLocator = css.indexOf(
-      '.particle-earth-scene[data-route-focus-phase="flying"]',
-    );
-    const focusFlightBlock = css.slice(focusFlightLocator, rewindOverride);
-    expect(focusFlightBlock).toContain(":not([data-temporal-reveal])");
-  });
-});
+    const atlasCss = readFileSync(new URL("../styles/living-atlas.css", import.meta.url), "utf8");
+    const scene = readFileSync(new URL("../scene/ParticleEarthScene.tsx", import.meta.url), "utf8");
 
-describe("route focus-flight choreography", () => {
-  it("holds the active route draw while the camera is flying", () => {
+    expect(css).toContain(
+      ".particle-earth-route.is-style-quiet-core[data-temporal-reveal] .particle-earth-route__travel-leader",
+    );
+    expect(css).toContain(
+      "stroke-dashoffset: calc(-1 * var(--journey-temporal-progress, 0));",
+    );
+    expect(css).toContain(
+      "stroke-dashoffset: calc(1 - var(--journey-leg-temporal-progress, 0));",
+    );
+    expect(scene).toContain('leaderPath.setAttribute("pathLength", "1")');
+    expect(scene).toContain('path.setAttribute("pathLength", "1")');
+    expect(scene).not.toContain("particle-earth-route__strand-a");
+    expect(scene).not.toContain("particle-earth-route__point-ring");
+    expect(`${css}\n${atlasCss}`).not.toContain("motionStrandA");
+    expect(`${css}\n${atlasCss}`).not.toContain("motionStrandB");
+    expect(`${css}\n${atlasCss}`).not.toContain("motionJourneyPointTwinkle");
+    expect(`${css}\n${atlasCss}`).not.toContain("motionClusterPulse");
+  });
+
+  it("sequences destination arrival after the shared route travel duration", () => {
+    const css = readFileSync(new URL("../app.css", import.meta.url), "utf8");
+    const authority = css.indexOf(
+      "--journey-route-travel-duration: var(--motion-journey, 980ms);",
+    );
+    const drawRule = css.indexOf(
+      "animation: motionRouteDraw var(--journey-route-travel-duration)",
+      authority,
+    );
+    const leaderRule = css.indexOf(
+      "animation: motionRouteLeader var(--journey-route-travel-duration) linear 1 both;",
+      drawRule,
+    );
+    const arrivalRule = css.indexOf(
+      "animation: motionRouteArrival var(--journey-route-arrival-duration) var(--motion-ease-out, ease) var(--journey-route-travel-duration) 1 both;",
+      leaderRule,
+    );
+
+    expect(authority).toBeGreaterThanOrEqual(0);
+    expect(drawRule).toBeGreaterThan(authority);
+    expect(leaderRule).toBeGreaterThan(drawRule);
+    expect(arrivalRule).toBeGreaterThan(leaderRule);
+    expect(css).not.toContain(
+      "animation: motionRouteArrival var(--motion-content, 560ms) var(--motion-ease-out, ease) 1 both;",
+    );
+  });
+
+  it("lets camera focus own attention before the one-shot route draw and leader", () => {
     const css = readFileSync(new URL("../app.css", import.meta.url), "utf8");
     const drawRule = css.indexOf(
-      ".particle-earth-route.is-style-strands.is-active .particle-earth-route__core,",
+      ".particle-earth-route.is-style-quiet-core.is-active:not([data-temporal-reveal]) .particle-earth-route__core,",
+    );
+    const leaderRule = css.indexOf(
+      ".particle-earth-route.is-style-quiet-core.is-active:not([data-temporal-reveal]) .particle-earth-route__travel-leader",
+      drawRule,
     );
     const flyingRule = css.indexOf(
       '.particle-earth-scene[data-route-focus-phase="flying"]',
-      drawRule,
+      leaderRule,
     );
     expect(drawRule).toBeGreaterThanOrEqual(0);
-    expect(flyingRule).toBeGreaterThan(drawRule);
-    const flyingBlock = css.slice(flyingRule, css.indexOf("@keyframes motionRouteDraw", flyingRule));
-    expect(flyingBlock).toContain(
-      ".particle-earth-route.is-style-strands.is-active:not([data-temporal-reveal])",
+    expect(leaderRule).toBeGreaterThan(drawRule);
+    expect(flyingRule).toBeGreaterThan(leaderRule);
+    expect(css.slice(leaderRule, flyingRule)).toContain(
+      "animation: motionRouteLeader var(--journey-route-travel-duration) linear 1 both;",
     );
+    const flyingBlock = css.slice(flyingRule, css.indexOf("@keyframes motionRouteDraw", flyingRule));
     expect(flyingBlock).toContain("animation: none;");
-    expect(flyingBlock).toContain("stroke-dashoffset: 1200;");
-    expect(flyingBlock).toContain("animation-play-state: paused;");
+    expect(flyingBlock).toContain("stroke-dashoffset: 1;");
     expect(flyingBlock).toContain("opacity: 0;");
   });
 
-  it("lets reduced motion reveal the final route immediately", () => {
+  it("keeps reduced motion semantically complete without a travelling packet", () => {
     const css = readFileSync(new URL("../app.css", import.meta.url), "utf8");
-    const flyingRule = css.indexOf(
-      '.particle-earth-scene[data-route-focus-phase="flying"]',
-    );
-    const reducedMotion = css.indexOf("@media (prefers-reduced-motion: reduce)", flyingRule);
-    expect(reducedMotion).toBeGreaterThan(flyingRule);
-    const reducedBlock = css.slice(reducedMotion, css.indexOf("}", reducedMotion) + 1);
-    expect(reducedBlock).toContain("animation: none;");
+    const leaderKeyframes = css.indexOf("@keyframes motionRouteLeader");
+    const reducedMotion = css.indexOf("@media (prefers-reduced-motion: reduce)", leaderKeyframes);
+    expect(leaderKeyframes).toBeGreaterThanOrEqual(0);
+    expect(reducedMotion).toBeGreaterThan(leaderKeyframes);
+    const reducedBlock = css.slice(reducedMotion, reducedMotion + 900);
     expect(reducedBlock).toContain("stroke-dashoffset: 0;");
+    expect(reducedBlock).toContain(".particle-earth-route__travel-leader");
+    expect(reducedBlock).toContain("opacity: 0 !important;");
   });
 });
 

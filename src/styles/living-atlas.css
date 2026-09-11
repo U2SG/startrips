@@ -4265,98 +4265,9 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   from { opacity: 0.4; transform: scale(0.98); }
 }
 
-/* ML-09 Geographic Cluster Bloom: active journey stops breathe. */
-.particle-earth-route__point {
-  --journey-point-opacity-low: 0.42;
-  --journey-point-opacity-high: 0.92;
-  transform-box: fill-box;
-  transform-origin: center;
-  filter: drop-shadow(0 0 1px currentColor);
-  animation: motionJourneyPointTwinkle var(--journey-twinkle-duration, 3.8s) ease-in-out infinite;
-  animation-delay: var(--journey-twinkle-delay, 0s);
-}
-
-.particle-earth-route__point--transit,
-.particle-earth-route__point--stop {
-  --journey-point-opacity-low: 0.34;
-  --journey-point-opacity-high: 0.88;
-  animation-name: motionJourneyTransitTwinkle;
-}
-
-.particle-earth-route.is-active .particle-earth-route__point {
-  --journey-point-opacity-low: 0.58;
-  --journey-point-opacity-high: 1;
-}
-
-.particle-earth-route.is-active .particle-earth-route__point--transit,
-.particle-earth-route.is-active .particle-earth-route__point--stop {
-  --journey-point-opacity-low: 0.42;
-  --journey-point-opacity-high: 0.96;
-}
-
-.particle-earth-route.is-muted .particle-earth-route__point {
-  --journey-point-opacity-low: 0.2;
-  --journey-point-opacity-high: 0.5;
-}
-
-.particle-earth-route.is-muted .particle-earth-route__point--transit,
-.particle-earth-route.is-muted .particle-earth-route__point--stop {
-  --journey-point-opacity-low: 0.24;
-  --journey-point-opacity-high: 0.68;
-}
-
-@keyframes motionJourneyPointTwinkle {
-  0%, 18%, 100% {
-    opacity: var(--journey-point-opacity-low);
-    transform: scale(0.9);
-    filter: drop-shadow(0 0 0 currentColor);
-  }
-  42% {
-    opacity: var(--journey-point-opacity-high);
-    transform: scale(1.08);
-    filter: drop-shadow(0 0 3px currentColor) drop-shadow(0 0 7px currentColor);
-  }
-  56% {
-    opacity: calc(var(--journey-point-opacity-low) + 0.12);
-    transform: scale(0.96);
-    filter: drop-shadow(0 0 1px currentColor);
-  }
-}
-
-@keyframes motionJourneyTransitTwinkle {
-  0%, 16%, 100% {
-    opacity: var(--journey-point-opacity-low);
-    transform: scale(0.86);
-    filter: drop-shadow(0 0 1px currentColor);
-  }
-  38% {
-    opacity: var(--journey-point-opacity-high);
-    transform: scale(1.18);
-    filter: drop-shadow(0 0 2px currentColor) drop-shadow(0 0 5px currentColor);
-  }
-  54% {
-    opacity: calc(var(--journey-point-opacity-low) + 0.08);
-    transform: scale(0.96);
-    filter: drop-shadow(0 0 1px currentColor);
-  }
-}
-
-.particle-earth-route__point-ring {
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 0.75;
-  vector-effect: non-scaling-stroke;
-  transform-box: fill-box;
-  transform-origin: center;
-  animation: motionClusterPulse 2.4s cubic-bezier(0.2, 0.68, 0.25, 1) infinite;
-  animation-delay: var(--journey-pulse-delay, 0s);
-}
-
-@keyframes motionClusterPulse {
-  0%, 16% { transform: scale(0.92); opacity: 0; }
-  28% { opacity: 0.52; }
-  76%, 100% { transform: scale(1.9); opacity: 0; }
-}
+/* Quiet Core: route points are stable geographic anchors. Their visual
+   emphasis comes from active/muted state and temporal reveal, not perpetual
+   twinkle or breathing loops. */
 
 /* City labels on the particle globe: coarse tier at distance, fine tier when
    zoomed in; clickable to add the city as a route point. */
@@ -4380,34 +4291,8 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   fill: var(--atlas-acid);
 }
 
-/* ML-08 Spatial Particle Bridge: a light pulse flows along the active
-   journey route from its origin toward its destination. */
-.particle-earth-route__flow {
-  fill: none;
-  stroke: #eafdf5;
-  stroke-width: calc(1.4px * var(--journey-route-scale, 1));
-  stroke-linecap: round;
-  stroke-dasharray: 4 148;
-  opacity: 0;
-  animation: motionRouteFlow 3.4s linear infinite;
-}
-
-.particle-earth-route.is-active .particle-earth-route__flow {
-  opacity: 0.86;
-}
-
-@keyframes motionRouteFlow {
-  to { stroke-dashoffset: -152; }
-}
-
-/* Strands: interlaced threads flow at different speeds. */
-@keyframes motionStrandA {
-  to { stroke-dashoffset: -60; }
-}
-
-@keyframes motionStrandB {
-  to { stroke-dashoffset: -68; }
-}
+/* Route travel motion now lives in the normalized Quiet Core leader in
+   `src/app.css`; no independent infinite flow/strand clocks are defined here. */
 
 /* ML-13 ShinyText: a highlight sweeps across the brand title; the sweep
    spends most of the cycle parked off-text so the loop never flashes. */
@@ -4446,7 +4331,6 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
 @media (prefers-reduced-motion: reduce) {
   .motion-staged > *,
   .particle-earth-route__point,
-  .particle-earth-route__point-ring,
   .living-atlas__active.is-arriving {
     animation: none !important;
   }
@@ -4465,19 +4349,6 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
     filter: none;
   }
 
-  .particle-earth-route__point-ring {
-    opacity: 0.25;
-  }
-
-  .particle-earth-route__flow {
-    animation: none;
-    opacity: 0.5;
-  }
-
-  .particle-earth-route__strand-a,
-  .particle-earth-route__strand-b {
-    animation: none;
-  }
 
   .living-atlas-ambience__blob {
     animation: none;

@@ -318,7 +318,6 @@ const JOURNEY_ROUTE_LINE_SCALE_MIN = 0.72;
 const JOURNEY_ROUTE_LINE_SCALE_MAX = 2.4;
 const JOURNEY_ROUTE_MARKER_SIZE_PX = 15;
 const JOURNEY_ROUTE_MARKER_SCALE = JOURNEY_ROUTE_MARKER_SIZE_PX / (3.4 * 2);
-const JOURNEY_POINT_TWINKLE_SLOWDOWN = 5;
 
 export function collectJourneyDimDirections(
   routes: readonly JourneyRoute[],
@@ -2313,12 +2312,10 @@ export function ParticleEarthScene({
       }>;
       glowPath: SVGPathElement;
       corePath: SVGPathElement;
-      flowPath: SVGPathElement;
-      strandPaths: [SVGPathElement, SVGPathElement];
+      leaderPath: SVGPathElement;
       fadeGradient: SVGLinearGradientElement;
       points: Array<{
         element: SVGCircleElement | SVGPathElement | SVGPolygonElement;
-        ring?: SVGCircleElement;
         position: Vector3;
         label?: RouteVectorLabel;
         // #21: the route point's index inside its journey, for per-point
@@ -2440,7 +2437,7 @@ export function ParticleEarthScene({
         group.classList.add(
           "particle-earth-route",
           getJourneyRouteVisualState(route.id, latestActiveJourneyRouteId.current),
-          "is-style-strands",
+          "is-style-quiet-core",
         );
         group.style.color = route.color;
         group.dataset.journeyRoute = route.id;
@@ -2464,27 +2461,18 @@ export function ParticleEarthScene({
           "path",
         );
         corePath.classList.add("particle-earth-route__core");
-        // ML-08 Spatial Particle Bridge: a light pulse travels along the
-        // active route from its origin toward its destination.
-        const flowPath = document.createElementNS(
+        // Quiet Core: one directional leader is enough to explain motion.
+        // The route itself stays a crisp core + restrained halo; no parallel
+        // strand loops compete with the geographic content. `pathLength=1`
+        // keeps draw/leader math independent of projected pixel length.
+        const leaderPath = document.createElementNS(
           "http://www.w3.org/2000/svg",
           "path",
         );
-        flowPath.classList.add("particle-earth-route__flow");
-        // Strands: two interlaced thread layers that flow along the route at
-        // different speeds and dash rhythms, over a gradient core.
-        const strandPaths: [SVGPathElement, SVGPathElement] = [
-          document.createElementNS("http://www.w3.org/2000/svg", "path"),
-          document.createElementNS("http://www.w3.org/2000/svg", "path"),
-        ];
-        strandPaths[0].classList.add("particle-earth-route__strand-a");
-        strandPaths[1].classList.add("particle-earth-route__strand-b");
-        strandPaths.forEach((strand) => {
-          strand.setAttribute(
-            "stroke",
-            `url(#route-fade-${sceneToken}-${routeIndex})`,
-          );
-        });
+        leaderPath.classList.add("particle-earth-route__travel-leader");
+        glowPath.setAttribute("pathLength", "1");
+        corePath.setAttribute("pathLength", "1");
+        leaderPath.setAttribute("pathLength", "1");
         // The stroke fades toward the destination; the gradient is a
         // per-route user-space gradient whose endpoints follow the projected
         // origin and destination each projection pass.
@@ -2521,8 +2509,11 @@ export function ParticleEarthScene({
         routeDefs.appendChild(fadeGradient);
         const gradientReference = `url(#${fadeGradient.id})`;
         glowPath.setAttribute("stroke", gradientReference);
-        corePath.setAttribute("stroke", gradientReference);
-        group.append(glowPath, corePath, ...strandPaths, flowPath);
+        // Quiet Core keeps the geographic route readable end-to-end. The soft
+        // halo may inherit the old palette fade, but the crisp identity line
+        // must not disappear exactly where the destination needs clarity.
+        corePath.setAttribute("stroke", route.color);
+        group.append(glowPath, corePath, leaderPath);
         const vectorPoints: RouteVectorEntry["points"] = [];
         const routeLabelIndexes = route.id === latestActiveJourneyRouteId.current
           ? selectRouteLabelPointIndexes(route.points)
@@ -2560,14 +2551,6 @@ export function ParticleEarthScene({
             "particle-earth-route__point",
             roleClass,
           );
-          const twinkleOffset = (routeIndex * 0.83 + routePointIndex * 0.47) % 4.6;
-          const twinkleDuration = (
-            isWaypoint
-              ? 1.8 + ((routeIndex * 7 + routePointIndex * 3) % 5) * 0.18
-              : 3.2 + ((routeIndex * 7 + routePointIndex * 3) % 6) * 0.31
-          ) * JOURNEY_POINT_TWINKLE_SLOWDOWN;
-          element.style.setProperty("--journey-twinkle-delay", `${-twinkleOffset.toFixed(2)}s`);
-          element.style.setProperty("--journey-twinkle-duration", `${twinkleDuration.toFixed(2)}s`);
           if (isDestinationPoint) {
             element.setAttribute(
               "points",
@@ -2590,25 +2573,6 @@ export function ParticleEarthScene({
             );
           }
           group.appendChild(element);
-          let ring: SVGCircleElement | undefined;
-          if (
-            (point.isStop || routePointIndex === route.points.length - 1)
-            && route.id === latestActiveJourneyRouteId.current
-          ) {
-            // ML-09 Geographic Cluster Bloom: a restrained breathing ring on
-            // the stops (and final point) of the active journey.
-            ring = document.createElementNS(
-              "http://www.w3.org/2000/svg",
-              "circle",
-            );
-            ring.classList.add("particle-earth-route__point-ring");
-            ring.setAttribute(
-              "r",
-              String(3.2 * JOURNEY_ROUTE_MARKER_SCALE),
-            );
-            ring.style.setProperty("--journey-pulse-delay", `${-twinkleOffset.toFixed(2)}s`);
-            group.appendChild(ring);
-          }
           let label: RouteVectorLabel | undefined;
           if (routeLabelIndexSet.has(routePointIndex) && point.label?.trim()) {
             const labelElement = document.createElementNS(
@@ -2643,7 +2607,7 @@ export function ParticleEarthScene({
             };
             routeLabelCount += 1;
           }
-          vectorPoints.push({ element, ring, position, label, routePointIndex });
+          vectorPoints.push({ element, position, label, routePointIndex });
         });
         group.append(...routeLabelElements);
 
@@ -2694,6 +2658,7 @@ export function ParticleEarthScene({
           path.setAttribute("fill", "none");
           path.setAttribute("stroke-linecap", "round");
           path.setAttribute("stroke-linejoin", "round");
+          path.setAttribute("pathLength", "1");
           group.appendChild(path);
           return { path, toPointIndex: legIndex + 1, samples: leg };
         });
@@ -2706,8 +2671,7 @@ export function ParticleEarthScene({
           legs,
           glowPath,
           corePath,
-          flowPath,
-          strandPaths,
+          leaderPath,
           fadeGradient,
           points: vectorPoints,
         });
@@ -2729,9 +2693,9 @@ export function ParticleEarthScene({
       host.dataset.journeyRouteVectorVertices = String(routeVertexCount);
       host.dataset.journeyRouteLabelCount = String(routeLabelCount);
       host.dataset.journeyRouteOverflow = String(routes.length - visibleRoutes.length);
-      host.dataset.routeStyle = "strands";
+      host.dataset.routeStyle = "quiet-core";
       // Rebuilding the layer clears its children, so the connector is put back
-      // last and therefore stays above the route strands.
+      // last and therefore stays above the route presentation.
       routeVectorLayer.appendChild(journeyConnectorPath);
       updateRouteLabelSafeArea();
     };
@@ -3028,9 +2992,7 @@ export function ParticleEarthScene({
         );
         entry.glowPath.setAttribute("d", path.d);
         entry.corePath.setAttribute("d", path.d);
-        entry.flowPath.setAttribute("d", path.d);
-        entry.strandPaths[0].setAttribute("d", path.d);
-        entry.strandPaths[1].setAttribute("d", path.d);
+        entry.leaderPath.setAttribute("d", path.d);
         // #21 review: each leg projects independently so rewind reveal works
         // per leg (the whole-route paths above stay for the static look).
         // #193: a leg's projected ends are kept so the rendered line can be
@@ -3056,7 +3018,7 @@ export function ParticleEarthScene({
           x: number;
           y: number;
         }> = [];
-        entry.points.forEach(({ element, ring, position, label, routePointIndex }) => {
+        entry.points.forEach(({ element, position, label, routePointIndex }) => {
           if (!projectRoutePoint(
             position.x,
             position.y,
@@ -3064,7 +3026,6 @@ export function ParticleEarthScene({
             routeProjectedPoint,
           )) {
             element.style.display = "none";
-            if (ring) ring.style.display = "none";
             if (label) label.element.style.display = "none";
             return;
           }
@@ -3091,11 +3052,6 @@ export function ParticleEarthScene({
           } else {
             element.setAttribute("cx", routeProjectedPoint.x.toFixed(1));
             element.setAttribute("cy", routeProjectedPoint.y.toFixed(1));
-          }
-          if (ring) {
-            ring.style.removeProperty("display");
-            ring.setAttribute("cx", routeProjectedPoint.x.toFixed(1));
-            ring.setAttribute("cy", routeProjectedPoint.y.toFixed(1));
           }
           projectedMarkers.set(routePointIndex, {
             x: routeProjectedPoint.x,
@@ -5398,17 +5354,21 @@ export function ParticleEarthScene({
               point.element.dataset.temporalReveal = pointProgress.toFixed(3);
             }
           }
-          // #21 review: each leg's visibility follows its destination point's
-          // progress — the trail literally grows stop by stop.
+          // Quiet Core: each leg uses normalized dash progress instead of
+          // fading the entire segment in. The time cursor remains the single
+          // semantic clock; this only changes how that progress is painted.
           for (const leg of entry.legs) {
             const legProgress = reveal?.points.get(
               `${entry.routeId}:${leg.toPointIndex}`,
             );
             if (legProgress === undefined) {
-              leg.path.style.removeProperty("opacity");
+              leg.path.style.removeProperty("--journey-leg-temporal-progress");
               delete leg.path.dataset.temporalReveal;
             } else {
-              leg.path.style.opacity = legProgress.toFixed(3);
+              leg.path.style.setProperty(
+                "--journey-leg-temporal-progress",
+                legProgress.toFixed(3),
+              );
               leg.path.dataset.temporalReveal = legProgress.toFixed(3);
             }
           }
