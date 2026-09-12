@@ -554,6 +554,33 @@ describe("Home Base evidence fixtures", () => {
     expect(result.proposedPeriodStart).toBe("2025-01-01");
   });
 
+  it("keeps a regular sparse cadence intact even when later suffixes also qualify", () => {
+    const confirmed = {
+      startedOn: "2023-01-01",
+      endedOn: null,
+      latitude: SHENZHEN.latitude,
+      longitude: SHENZHEN.longitude,
+    } as const;
+    const dates = [
+      "2024-01-01",
+      "2024-05-01",
+      "2024-09-01",
+      "2025-01-01",
+      "2025-05-01",
+      "2025-09-01",
+      "2026-01-01",
+      "2026-05-01",
+    ];
+    const result = inferHomeBaseCandidate({
+      journeys: dates.map((date, index) => journey(`sparse-${index + 1}`, date, TOKYO, TOKYO)),
+      confirmedPeriod: confirmed,
+      evaluationDate: "2026-06-01",
+    });
+
+    expect(result.state).toBe("move_suggested");
+    expect(result.proposedPeriodStart).toBe("2024-01-01");
+  });
+
   it("orders sustained move states by when their own confidence is reached", () => {
     const confirmed = {
       startedOn: "2024-01-01",

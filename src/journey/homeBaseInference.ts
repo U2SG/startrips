@@ -610,13 +610,19 @@ function continuityBlocks(region: EvidenceRegion): ContinuityBlock[] {
 
       const hiatusDays = spanDays(blockDates[index - 1], suffixStart);
       const suffixSpanDays = spanDays(suffixStart, blockEnd);
-      // A suffix that independently reaches the full suggestion evidence contract
-      // is a sustained state in its own right, regardless of how long it later
-      // persists. This prevents one historical visit from moving the proposed
-      // start backward. For candidate-only suffixes, retain the conservative
-      // hiatus-vs-span guard so three recent Journeys cannot borrow an old visit,
-      // while sparse long-term four-Journey evidence is not given a max-gap rule.
-      if (!suggestionQualifiedSuffix && hiatusDays <= suffixSpanDays) continue;
+      const suffixIntervals = Math.max(1, blockDates.length - index - 1);
+      const suffixAverageGapDays = suffixSpanDays / suffixIntervals;
+      // Keep sparse repeated support intact: no ordinary gap is a maximum-gap
+      // boundary. A full suggestion-qualified suffix only detaches an earlier
+      // visit when that hiatus is itself longer than the 90-day sustained horizon
+      // and is a clear cadence outlier (>2x the suffix's average interval). The
+      // older candidate-only rule remains deliberately stricter so three recent
+      // Journeys still cannot borrow one remote historical visit.
+      const suggestionBoundary = suggestionQualifiedSuffix
+        && hiatusDays > HOME_BASE_SUGGESTED_MIN_SPAN_DAYS
+        && hiatusDays > suffixAverageGapDays * 2;
+      const candidateBoundary = candidateQualifiedSuffix && hiatusDays > suffixSpanDays;
+      if (!suggestionBoundary && !candidateBoundary) continue;
 
       return [
         ...split(blockDates.slice(0, index)),
