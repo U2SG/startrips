@@ -96,46 +96,16 @@ jobs:
     timeout-minutes: 8
     steps:
       - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-      - name: Detect Keepsake renderer changes
-        id: scope
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          PUSH_BEFORE_SHA: ${{ github.event.before }}
-        run: |
-          set -euo pipefail
-          if [[ "$EVENT_NAME" == "pull_request" ]]; then
-            BASE_SHA="$PR_BASE_SHA"
-          else
-            BASE_SHA="$PUSH_BEFORE_SHA"
-          fi
-          if [[ -z "$BASE_SHA" || "$BASE_SHA" =~ ^0+$ ]]; then
-            echo "run=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          changed="$(git diff --name-only "$BASE_SHA" "$GITHUB_SHA")"
-          printf '%s\n' "$changed"
-          if printf '%s\n' "$changed" | grep -Eq '^(.github/workflows/ci.yml|package.json|src/journey/(journeyKeepsake|keepsakePrivateRender)(\.test)?\.ts|scripts/qa-keepsake-private-render\.ts|docs/design/keepsake-private-render-prototype\.md)$'; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "run=false" >> "$GITHUB_OUTPUT"
-          fi
       - uses: pnpm/action-setup@v6
-        if: steps.scope.outputs.run == 'true'
         with:
           version: 10.17.1
       - uses: actions/setup-node@v7
-        if: steps.scope.outputs.run == 'true'
         with:
           node-version: 22
           cache: pnpm
       - name: Install dependencies
-        if: steps.scope.outputs.run == 'true'
         run: pnpm install --frozen-lockfile
       - name: Ensure FFmpeg is available
-        if: steps.scope.outputs.run == 'true'
         run: |
           set -euo pipefail
           if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1; then
@@ -144,13 +114,12 @@ jobs:
           fi
           ffmpeg -version | head -n 1
       - name: Render deterministic private Keepsake fixture twice
-        if: steps.scope.outputs.run == 'true'
         run: |
           set -euo pipefail
           pnpm qa:keepsake-render
           cat artifacts/keepsake-render/summary.md >> "$GITHUB_STEP_SUMMARY"
       - name: Upload Keepsake render evidence
-        if: ${{ always() && steps.scope.outputs.run == 'true' }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@v7.0.1
         with:
           name: keepsake-private-render-${{ github.run_attempt }}
