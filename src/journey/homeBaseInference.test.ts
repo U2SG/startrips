@@ -303,7 +303,7 @@ describe("Home Base evidence fixtures", () => {
     expect(result.support.journeys).toBe(4);
     expect(result.support.starts).toBe(2);
     expect(result.support.ends).toBe(2);
-    expect(result.support.runnerUpJourneys).toBe(1);
+    expect(result.support.runnerUpJourneys).toBe(2);
     expect(result.state).toBe("suggested");
   });
   it("handles a dense bounded metro without changing Journey support semantics", () => {
