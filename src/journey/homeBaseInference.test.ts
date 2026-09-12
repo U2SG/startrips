@@ -106,6 +106,18 @@ describe("inferHomeBaseCandidate thresholds", () => {
     expect(infer(shenzhenFour("2026-04-01")).state).toBe("suggested");
   });
 
+  it("preserves valid 00xx persisted calendar years in span arithmetic", () => {
+    const ancient = [
+      journey("j1", "0099-01-01"),
+      journey("j2", "0099-02-01"),
+      journey("j3", "0099-03-01"),
+      journey("j4", "0099-04-01"),
+    ];
+    const result = infer(ancient, "0099-06-01");
+    expect(result.support.evidenceSpanDays).toBe(90);
+    expect(result.state).toBe("suggested");
+  });
+
   it("does not suggest with only one supporting start", () => {
     const journeys = [
       journey("j1", "2026-01-01", SHENZHEN, SHENZHEN),
@@ -209,6 +221,80 @@ describe("Home Base evidence fixtures", () => {
     const result = infer(journeys);
     expect(result.support.journeys).toBeLessThan(6);
     expect(result.state).not.toBe("suggested");
+  });
+
+  it("finds the strongest bounded region when nearer incompatible endpoints would fool greedy admission", () => {
+    const validA = { latitude: 0, longitude: 0 };
+    const validB = { latitude: 0, longitude: 0.06 };
+    const validC = { latitude: 0, longitude: 0.12 };
+    const validD = { latitude: 0, longitude: 0.18 };
+    const spoilerA = { latitude: 0, longitude: -0.1 };
+    const spoilerB = { latitude: 0, longitude: -0.05 };
+    const spoilerC = { latitude: 0, longitude: 0.23 };
+    const spoilerD = { latitude: 0, longitude: 0.28 };
+    expect(haversineDistanceKm(validA.latitude, validA.longitude, validD.latitude, validD.longitude))
+      .toBeLessThan(25);
+    expect(haversineDistanceKm(spoilerB.latitude, spoilerB.longitude, validD.latitude, validD.longitude))
+      .toBeGreaterThan(25);
+
+    const journeys = [
+      journey("j1", "2026-01-01", validA, spoilerA),
+      journey("j2", "2026-02-01", validB, spoilerB),
+      journey("j3", "2026-03-01", spoilerC, validC),
+      journey("j4", "2026-04-01", spoilerD, validD),
+    ];
+    const result = infer(journeys);
+    expect(result.support.journeys).toBe(4);
+    expect(result.support.starts).toBe(2);
+    expect(result.support.ends).toBe(2);
+    expect(result.state).toBe("suggested");
+  });
+
+  it("ignores evidence older than the active confirmed period when evaluating a move", () => {
+    const confirmed = {
+      startedOn: "2026-01-01",
+      endedOn: null,
+      latitude: SHENZHEN.latitude,
+      longitude: SHENZHEN.longitude,
+    } as const;
+    const oldTokyo = Array.from({ length: 8 }, (_value, index) => journey(
+      `old-${index}`,
+      `2025-${String(index + 1).padStart(2, "0")}-01`,
+      TOKYO,
+      TOKYO,
+    ));
+    const result = inferHomeBaseCandidate({
+      journeys: [...oldTokyo, ...shenzhenFour()],
+      confirmedPeriod: confirmed,
+      evaluationDate: "2026-06-01",
+    });
+    expect(result.state).toBe("candidate");
+    expect(result.reasonCodes).toContain("MATCHES_CONFIRMED_HOME");
+    expect(result.support.evidenceStartedOn).toBe("2026-01-01");
+    expect(result.proposedPeriodStart).toBeNull();
+  });
+
+  it("does not treat a confirmed period that already ended as the current Home", () => {
+    const historical = {
+      startedOn: "2022-06-01",
+      endedOn: "2025-01-01",
+      latitude: SHENZHEN.latitude,
+      longitude: SHENZHEN.longitude,
+    } as const;
+    const tokyoJourneys = shenzhenFour().map((item) => journey(
+      item.id,
+      item.startedOn,
+      TOKYO,
+      TOKYO,
+      item.endedOn,
+    ));
+    const result = inferHomeBaseCandidate({
+      journeys: tokyoJourneys,
+      confirmedPeriod: historical,
+      evaluationDate: "2026-06-01",
+    });
+    expect(result.state).toBe("suggested");
+    expect(result.proposedPeriodStart).toBeNull();
   });
 
   it("returns move_suggested with a proposed start and never mutates the confirmed period", () => {

@@ -1,4 +1,5 @@
-import type { HomeBasePeriod } from "./homeBase";
+import { isPersistedCalendarDate } from "./calendarDate";
+import { homeBasePeriodCoversDate, type HomeBasePeriod } from "./homeBase";
 import { haversineDistanceKm } from "./mediaPlacement";
 import type { Journey, RoutePoint } from "./types";
 
@@ -115,23 +116,25 @@ type DigestSnapshot = {
   evidenceEndedOn: string;
 };
 
-const DAY_MS = 86_400_000;
 const DIGEST_PREFIX = "hbi-v1";
+const DAYS_BEFORE_MONTH = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334] as const;
+
+function isLeapYear(year: number): boolean {
+  return year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+}
 
 function dateOrdinal(value: string): number | null {
-  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
-  if (!match) return null;
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  const day = Number(match[3]);
-  const ms = Date.UTC(year, month - 1, day);
-  const date = new Date(ms);
-  if (
-    date.getUTCFullYear() !== year
-    || date.getUTCMonth() !== month - 1
-    || date.getUTCDate() !== day
-  ) return null;
-  return Math.floor(ms / DAY_MS);
+  if (!isPersistedCalendarDate(value)) return null;
+  const year = Number(value.slice(0, 4));
+  const month = Number(value.slice(5, 7));
+  const day = Number(value.slice(8, 10));
+  const previousYear = year - 1;
+  const daysBeforeYear = previousYear * 365
+    + Math.floor(previousYear / 4)
+    - Math.floor(previousYear / 100)
+    + Math.floor(previousYear / 400);
+  const leapDay = month > 2 && isLeapYear(year) ? 1 : 0;
+  return daysBeforeYear + DAYS_BEFORE_MONTH[month - 1] + leapDay + day - 1;
 }
 
 function spanDays(startedOn: string, endedOn: string): number {
@@ -187,45 +190,46 @@ function endpointEvidence(journeys: readonly HomeBaseInferenceJourney[]): Endpoi
   ));
 }
 
-function regionAtAnchor(
-  anchor: HomeBaseMetroAnchor,
+function evidencePointCompare(left: EndpointEvidence, right: EndpointEvidence): number {
+  return (
+    left.latitude - right.latitude
+    || left.longitude - right.longitude
+    || left.journeyId.localeCompare(right.journeyId)
+    || left.kind.localeCompare(right.kind)
+    || left.date.localeCompare(right.date)
+  );
+}
+
+function regionAnchor(selected: readonly EndpointEvidence[]): HomeBaseMetroAnchor {
+  // Use the deterministic medoid rather than an insertion-order seed. Besides
+  // making the digest stable, this keeps the public anchor on actual evidence.
+  const ranked = selected.map((candidate) => ({
+    candidate,
+    distanceSum: selected.reduce((sum, other) => sum + haversineDistanceKm(
+      candidate.latitude,
+      candidate.longitude,
+      other.latitude,
+      other.longitude,
+    ), 0),
+  })).sort((left, right) => (
+    left.distanceSum - right.distanceSum
+    || evidencePointCompare(left.candidate, right.candidate)
+  ));
+  return {
+    latitude: ranked[0].candidate.latitude,
+    longitude: ranked[0].candidate.longitude,
+  };
+}
+
+function regionFromClique(
+  selectedIndexes: readonly number[],
   evidence: readonly EndpointEvidence[],
 ): EvidenceRegion | null {
+  if (selectedIndexes.length === 0) return null;
+  const selected = selectedIndexes.map((index) => evidence[index]).sort(evidencePointCompare);
   const supportByJourney = new Map<string, JourneySupport>();
   const dates: string[] = [];
-  const selected: EndpointEvidence[] = [];
-  const candidates = evidence
-    .map((item) => ({
-      item,
-      distanceFromAnchor: haversineDistanceKm(
-        anchor.latitude,
-        anchor.longitude,
-        item.latitude,
-        item.longitude,
-      ),
-    }))
-    .filter(({ distanceFromAnchor }) => distanceFromAnchor <= HOME_BASE_CLUSTER_RADIUS_KM)
-    .sort((left, right) => (
-      left.distanceFromAnchor - right.distanceFromAnchor
-      || left.item.latitude - right.item.latitude
-      || left.item.longitude - right.item.longitude
-      || left.item.journeyId.localeCompare(right.item.journeyId)
-      || left.item.kind.localeCompare(right.item.kind)
-    ));
-
-  for (const { item } of candidates) {
-    // A region is bounded, not a connected-component chain: every admitted
-    // endpoint must remain within the V1 radius of every endpoint already in
-    // the region. A-B <= 25 and B-C <= 25 never implies A-C is the same metro.
-    if (selected.some((other) => (
-      haversineDistanceKm(
-        other.latitude,
-        other.longitude,
-        item.latitude,
-        item.longitude,
-      ) > HOME_BASE_CLUSTER_RADIUS_KM
-    ))) continue;
-    selected.push(item);
+  for (const item of selected) {
     const existing = supportByJourney.get(item.journeyId) ?? {
       journeyId: item.journeyId,
       supportsStart: false,
@@ -236,15 +240,13 @@ function regionAtAnchor(
     supportByJourney.set(item.journeyId, existing);
     dates.push(item.date);
   }
-  if (supportByJourney.size === 0 || dates.length === 0) return null;
-
   const supports = [...supportByJourney.values()].sort((left, right) =>
     left.journeyId.localeCompare(right.journeyId));
   const sortedDates = dates.sort();
   const evidenceStartedOn = sortedDates[0];
   const evidenceEndedOn = sortedDates.at(-1)!;
   return {
-    anchor,
+    anchor: regionAnchor(selected),
     supports,
     journeyCount: supports.length,
     startCount: supports.filter((support) => support.supportsStart).length,
@@ -273,14 +275,69 @@ function compareRegions(left: EvidenceRegion, right: EvidenceRegion): number {
 }
 
 function evidenceRegions(evidence: readonly EndpointEvidence[]): EvidenceRegion[] {
+  if (evidence.length === 0) return [];
+
+  // The 25 km contract is a bounded region, not graph connectivity. Enumerate
+  // maximal pairwise-compatible endpoint sets (maximal cliques in the distance
+  // graph) so a near outlier cannot greedily displace a stronger valid metro,
+  // and A-B / B-C proximity cannot transitively merge distant A and C.
+  const neighbors = evidence.map((item, index) => {
+    const adjacent = new Set<number>();
+    for (let otherIndex = 0; otherIndex < evidence.length; otherIndex += 1) {
+      if (otherIndex === index) continue;
+      const other = evidence[otherIndex];
+      if (haversineDistanceKm(
+        item.latitude,
+        item.longitude,
+        other.latitude,
+        other.longitude,
+      ) <= HOME_BASE_CLUSTER_RADIUS_KM) adjacent.add(otherIndex);
+    }
+    return adjacent;
+  });
+
   const bySupport = new Map<string, EvidenceRegion>();
-  for (const seed of evidence) {
-    const region = regionAtAnchor({ latitude: seed.latitude, longitude: seed.longitude }, evidence);
-    if (!region) continue;
+  const visitClique = (indexes: readonly number[]) => {
+    const region = regionFromClique(indexes, evidence);
+    if (!region) return;
     const key = regionKey(region);
     const existing = bySupport.get(key);
     if (!existing || compareRegions(region, existing) < 0) bySupport.set(key, region);
-  }
+  };
+
+  const intersectNeighbors = (values: readonly number[], vertex: number) =>
+    values.filter((value) => neighbors[vertex].has(value));
+
+  const bronKerbosch = (clique: number[], candidates: number[], excluded: number[]) => {
+    if (candidates.length === 0 && excluded.length === 0) {
+      visitClique(clique);
+      return;
+    }
+
+    const pivotPool = [...candidates, ...excluded];
+    const pivot = pivotPool.sort((left, right) => {
+      const leftConnections = candidates.filter((value) => neighbors[left].has(value)).length;
+      const rightConnections = candidates.filter((value) => neighbors[right].has(value)).length;
+      return rightConnections - leftConnections || left - right;
+    })[0];
+    const toExplore = pivot === undefined
+      ? [...candidates]
+      : candidates.filter((value) => !neighbors[pivot].has(value));
+
+    let remainingCandidates = [...candidates];
+    const remainingExcluded = [...excluded];
+    for (const vertex of toExplore) {
+      bronKerbosch(
+        [...clique, vertex],
+        intersectNeighbors(remainingCandidates, vertex),
+        intersectNeighbors(remainingExcluded, vertex),
+      );
+      remainingCandidates = remainingCandidates.filter((value) => value !== vertex);
+      remainingExcluded.push(vertex);
+    }
+  };
+
+  bronKerbosch([], evidence.map((_item, index) => index), []);
   return [...bySupport.values()].sort(compareRegions);
 }
 
@@ -448,7 +505,14 @@ export function inferHomeBaseCandidate(
   dismissal?: HomeBaseDismissal | null,
 ): HomeBaseInferenceResult {
   const input = normalizeInput(inputOrJourneys, confirmedPeriod, evaluationDate, dismissal);
-  const evidence = endpointEvidence(input.journeys);
+  const activeConfirmedPeriod = input.confirmedPeriod
+    && homeBasePeriodCoversDate(input.confirmedPeriod, input.evaluationDate)
+    ? input.confirmedPeriod
+    : null;
+  const evidence = endpointEvidence(input.journeys).filter((item) => (
+    item.date <= input.evaluationDate
+    && (!activeConfirmedPeriod || item.date >= activeConfirmedPeriod.startedOn)
+  ));
   const regions = evidenceRegions(evidence);
   const leader = regions[0];
   if (!leader) return emptyResult(["NO_ROUTE_ENDPOINT_EVIDENCE"]);
@@ -535,10 +599,10 @@ export function inferHomeBaseCandidate(
     };
   }
 
-  if (input.confirmedPeriod) {
+  if (activeConfirmedPeriod) {
     const confirmedDistance = haversineDistanceKm(
-      input.confirmedPeriod.latitude,
-      input.confirmedPeriod.longitude,
+      activeConfirmedPeriod.latitude,
+      activeConfirmedPeriod.longitude,
       leader.anchor.latitude,
       leader.anchor.longitude,
     );
