@@ -483,6 +483,19 @@ function isCandidateRegion(region: EvidenceRegion): boolean {
     && region.evidenceSpanDays >= HOME_BASE_CANDIDATE_MIN_SPAN_DAYS;
 }
 
+function hasCandidateEvidenceWindow(
+  region: EvidenceRegion,
+  startedOn: string,
+  endedOn: string,
+): boolean {
+  if (spanDays(startedOn, endedOn) < HOME_BASE_CANDIDATE_MIN_SPAN_DAYS) return false;
+  const journeys = new Set<string>();
+  for (const item of region.selectedEvidence) {
+    if (item.date >= startedOn && item.date <= endedOn) journeys.add(item.journeyId);
+  }
+  return journeys.size >= HOME_BASE_CANDIDATE_MIN_JOURNEYS;
+}
+
 function continuityBlocks(region: EvidenceRegion): ContinuityBlock[] {
   const dates = [...new Set(region.selectedEvidence.map((item) => item.date))].sort();
   if (dates.length === 0) return [];
@@ -500,13 +513,11 @@ function continuityBlocks(region: EvidenceRegion): ContinuityBlock[] {
     const blockEnd = blockDates[blockDates.length - 1];
     for (let index = blockDates.length - 1; index >= 1; index -= 1) {
       const suffixStart = blockDates[index];
-      const suffixRegion = regionFromSelectedEvidence(region.selectedEvidence.filter((item) => (
-        item.date >= suffixStart && item.date <= blockEnd
-      )));
-      if (!suffixRegion || !isCandidateRegion(suffixRegion)) continue;
+      if (!hasCandidateEvidenceWindow(region, suffixStart, blockEnd)) continue;
 
       const hiatusDays = spanDays(blockDates[index - 1], suffixStart);
-      if (hiatusDays <= suffixRegion.evidenceSpanDays) continue;
+      const suffixSpanDays = spanDays(suffixStart, blockEnd);
+      if (hiatusDays <= suffixSpanDays) continue;
 
       return [
         ...split(blockDates.slice(0, index)),
@@ -526,28 +537,25 @@ function findSustainedMove(
 ): MoveCandidate | null {
   const candidates: MoveCandidate[] = [];
   const observations: MoveWindowObservation[] = [];
+  const windowCache = new Map<string, EvidenceRegion[]>();
+  const regionsForWindow = (startedOn: string, endedOn: string): EvidenceRegion[] => {
+    const key = `${startedOn}|${endedOn}`;
+    const cached = windowCache.get(key);
+    if (cached) return cached;
+    const computed = windowRegions(regions, startedOn, endedOn);
+    windowCache.set(key, computed);
+    return computed;
+  };
 
   for (const targetRegion of regions) {
     for (const block of continuityBlocks(targetRegion)) {
-      let foundCandidate = false;
+      // Ascending dates find the earliest onset whose suffix satisfies the full
+      // V1 suggestion policy. Stop at the first match instead of rebuilding the
+      // medoid for every later suffix after the move is already established.
       for (const candidateDate of block.dates) {
-        // Reuse the already-enumerated maximal regions. Restricting them to the
-        // temporal window re-applies the complete V1 suggestion contract
-        // without rebuilding the pairwise graph/clique search for every date.
-        const candidateRegions = windowRegions(regions, candidateDate, block.endedOn);
+        const candidateRegions = regionsForWindow(candidateDate, block.endedOn);
         const windowLeader = candidateRegions[0];
         if (!windowLeader) continue;
-
-        const runnerUpJourneys = runnerUpSupport(windowLeader, candidateRegions);
-        if (isCandidateRegion(windowLeader)) {
-          observations.push({
-            region: windowLeader,
-            runnerUpJourneys,
-            endedOn: windowLeader.evidenceEndedOn,
-          });
-        }
-
-        if (foundCandidate) continue;
 
         const targetDistance = haversineDistanceKm(
           targetRegion.anchor.latitude,
@@ -555,15 +563,17 @@ function findSustainedMove(
           windowLeader.anchor.latitude,
           windowLeader.anchor.longitude,
         );
+        if (targetDistance > HOME_BASE_CLUSTER_RADIUS_KM) continue;
+
+        const runnerUpJourneys = runnerUpSupport(windowLeader, candidateRegions);
+        if (!meetsSuggestionPolicy(windowLeader, runnerUpJourneys)) continue;
+
         const confirmedDistance = haversineDistanceKm(
           confirmedPeriod.latitude,
           confirmedPeriod.longitude,
           windowLeader.anchor.latitude,
           windowLeader.anchor.longitude,
         );
-        if (targetDistance > HOME_BASE_CLUSTER_RADIUS_KM) continue;
-        if (!meetsSuggestionPolicy(windowLeader, runnerUpJourneys)) continue;
-
         candidates.push({
           region: windowLeader,
           runnerUpJourneys,
@@ -571,10 +581,24 @@ function findSustainedMove(
           blockEndedOn: windowLeader.evidenceEndedOn,
           matchesConfirmedHome: confirmedDistance <= HOME_BASE_CLUSTER_RADIUS_KM,
         });
-        // Dates are ascending, so retain the earliest qualifying onset inside
-        // this independently sustained block. Continue scanning later suffixes
-        // only so current-state observations remain available.
-        foundCandidate = true;
+        break;
+      }
+
+      // Currentness only needs the latest candidate-strength observation for a
+      // block. Scan backward and stop at that first observation; earlier suffixes
+      // cannot be more current, and expired competition is handled by endedOn.
+      for (let index = block.dates.length - 1; index >= 0; index -= 1) {
+        const currentRegions = regionsForWindow(block.dates[index], block.endedOn);
+        const currentLeader = currentRegions[0];
+        if (!currentLeader) continue;
+        const currentRunnerUp = runnerUpSupport(currentLeader, currentRegions);
+        if (!isCandidateRegion(currentLeader)) continue;
+        observations.push({
+          region: currentLeader,
+          runnerUpJourneys: currentRunnerUp,
+          endedOn: currentLeader.evidenceEndedOn,
+        });
+        break;
       }
     }
   }
