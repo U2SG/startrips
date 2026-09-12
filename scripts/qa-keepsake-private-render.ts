@@ -5,7 +5,7 @@ import { constants as fsConstants } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
-import { buildKeepsakeRenderManifest } from "../src/journey/journeyKeepsake";
+import { buildKeepsakeRenderManifest, keepsakeNarrativeSnapshotsEqual } from "../src/journey/journeyKeepsake";
 import {
   buildKeepsakePrivateRenderPlan,
   resolveKeepsakePrivateJourneyContext,
@@ -128,6 +128,9 @@ function fixtureJourney(): Journey {
 }
 
 class SyntheticPrivateMediaVault implements AuthorizedKeepsakeMediaResolver {
+  readonly #canonicalJourneyId: string;
+  readonly #canonicalJourneyRevision: number;
+  readonly #canonicalNarrativeSnapshot: KeepsakePrivateRenderPlan["narrativeSnapshot"];
   readonly #payloads = new Map<string, AuthorizedKeepsakeMedia>([
     ["opening-photo", {
       mediaAssetId: "opening-photo",
@@ -151,7 +154,22 @@ class SyntheticPrivateMediaVault implements AuthorizedKeepsakeMediaResolver {
     }],
   ]);
 
+  constructor(plan: KeepsakePrivateRenderPlan) {
+    this.#canonicalJourneyId = plan.journeyId;
+    this.#canonicalJourneyRevision = plan.journeyRevision;
+    this.#canonicalNarrativeSnapshot = structuredClone(plan.narrativeSnapshot);
+  }
+
   async resolveAuthorizedMedia(request: AuthorizedKeepsakeMediaRequest): Promise<AuthorizedKeepsakeMedia> {
+    if (request.journeyId !== this.#canonicalJourneyId) {
+      throw new Error("keepsake_fixture_journey_identity_mismatch");
+    }
+    if (request.journeyRevision !== this.#canonicalJourneyRevision) {
+      throw new Error("keepsake_fixture_journey_revision_mismatch");
+    }
+    if (!keepsakeNarrativeSnapshotsEqual(request.narrativeSnapshot, this.#canonicalNarrativeSnapshot)) {
+      throw new Error("keepsake_fixture_journey_narrative_mismatch");
+    }
     const media = this.#payloads.get(request.mediaAssetId);
     if (!media) throw new Error(`keepsake_fixture_media_not_authorized:${request.mediaAssetId}`);
     return {
@@ -695,7 +713,7 @@ async function main(): Promise<void> {
         })),
       }),
     });
-    const resolvedMedia = await resolveKeepsakePrivateMedia(plan, new SyntheticPrivateMediaVault());
+    const resolvedMedia = await resolveKeepsakePrivateMedia(plan, new SyntheticPrivateMediaVault(plan));
     const { concatFile, sceneMarkers } = await buildFrames(workDir, plan, resolvedMedia);
 
     const outputA = join(ARTIFACT_DIR, "keepsake-prototype-a.mp4");
