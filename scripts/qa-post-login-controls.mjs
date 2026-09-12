@@ -119,49 +119,6 @@ function record(name, scan, extra = {}) {
   results.push(result);
 }
 
-// #325: the 430 px iteration of the final acceptance flow intermittently finds
-// the desktop Journey rail button unmeasurable (`visible:false` with the hit
-// landing on the globe canvas). Record the rail's own DOM state at that moment
-// so an occurrence can be classified -- rail unmounted mid-reload versus rail
-// present but measured mid-animation or inert -- instead of retried away.
-async function captureJourneyRailState(page, matchTitle) {
-  try {
-    return await page.evaluate((title) => {
-      const boxOf = (element) => {
-        if (!element) return null;
-        const rect = element.getBoundingClientRect();
-        return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
-      };
-      // Mirror Playwright's `hasText` filter: whitespace-normalized and
-      // case-insensitive, so a zero count here really means the locator would
-      // not have resolved either.
-      const normalize = (value) => (value ?? "").replace(/\s+/g, " ").trim().toLowerCase();
-      const wanted = normalize(title);
-      const rail = document.querySelector(".living-atlas__journey-rail");
-      const railStyle = rail ? getComputedStyle(rail) : null;
-      const buttons = [...document.querySelectorAll(".living-atlas__journey-rail li button")];
-      const matching = buttons.filter((button) => normalize(button.textContent).includes(wanted));
-      const atlas = document.querySelector(".living-atlas");
-      return {
-        railPresent: Boolean(rail),
-        railDisplay: railStyle?.display ?? null,
-        railVisibility: railStyle?.visibility ?? null,
-        railOpacity: railStyle?.opacity ?? null,
-        railBox: boxOf(rail),
-        railInert: rail ? (Boolean(rail.inert) || rail.closest("[inert]") !== null) : null,
-        railButtons: buttons.length,
-        matchingButtons: matching.length,
-        atlasClass: atlas?.getAttribute("class") ?? null,
-        atlasMobileV2: atlas?.getAttribute("data-mobile-v2") ?? null,
-        targetBox: boxOf(matching[0] ?? null),
-      };
-    }, matchTitle);
-  } catch (error) {
-    // Never let the instrument replace the failure it is describing.
-    return { snapshotError: error instanceof Error ? error.message : String(error) };
-  }
-}
-
 async function clickText(page, text) {
   await page.evaluate((label) => {
     [...document.querySelectorAll("button")]
@@ -1862,17 +1819,40 @@ async function verifyFinalAcceptanceMobileFlow() {
     const consoleErrors = [];
     const pageErrors = [];
     const failedRequests = [];
-    const activateControl = async (locator, label) => {
+    // #325: the 430 px iteration intermittently finds the desktop Journey rail
+    // button unmeasurable (`visible:false`, the hit landing on the globe
+    // canvas), and probing the target element alone cannot tell a rail that was
+    // unmounted mid-reload from one measured mid-animation or inert. The rail is
+    // therefore read in the SAME browser evaluation as the actionability fields:
+    // a second evaluate would run a task later and could describe a DOM that had
+    // already recovered. `recordRailState` logs that one observation, in the
+    // iteration that passes as well as the one that fails.
+    const activateControl = async (locator, label, recordRailState = false) => {
       await locator.evaluate((element) => {
         element.scrollIntoView({ block: "center", inline: "center" });
       });
       await page.evaluate(() => new Promise((resolve) => (
         requestAnimationFrame(() => requestAnimationFrame(resolve))
       )));
-      const actionability = await locator.evaluate((element) => {
+      const { journeyRailState, ...actionability } = await locator.evaluate((element, title) => {
         const rect = element.getBoundingClientRect();
         const style = getComputedStyle(element);
         const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+        const boxOf = (node) => {
+          if (!node) return null;
+          const box = node.getBoundingClientRect();
+          return { x: box.x, y: box.y, width: box.width, height: box.height };
+        };
+        // Mirror Playwright's `hasText` filter -- whitespace-normalized and
+        // case-insensitive -- so a zero count here really means the locator
+        // would not have resolved either.
+        const normalize = (value) => (value ?? "").replace(/\s+/g, " ").trim().toLowerCase();
+        const wanted = normalize(title);
+        const rail = document.querySelector(".living-atlas__journey-rail");
+        const railStyle = rail ? getComputedStyle(rail) : null;
+        const railButtons = [...document.querySelectorAll(".living-atlas__journey-rail li button")];
+        const matching = railButtons.filter((button) => normalize(button.textContent).includes(wanted));
+        const atlas = document.querySelector(".living-atlas");
         return {
           visible: rect.width > 0
             && rect.height > 0
@@ -1884,20 +1864,36 @@ async function verifyFinalAcceptanceMobileFlow() {
           hitOwned: hit === element || element.contains(hit),
           hitTag: hit?.tagName ?? null,
           hitClass: hit instanceof Element ? hit.getAttribute("class") : null,
+          journeyRailState: {
+            railPresent: Boolean(rail),
+            railDisplay: railStyle?.display ?? null,
+            railVisibility: railStyle?.visibility ?? null,
+            railOpacity: railStyle?.opacity ?? null,
+            railBox: boxOf(rail),
+            railInert: rail ? (Boolean(rail.inert) || rail.closest("[inert]") !== null) : null,
+            railButtons: railButtons.length,
+            matchingButtons: matching.length,
+            atlasClass: atlas?.getAttribute("class") ?? null,
+            atlasMobileV2: atlas?.getAttribute("data-mobile-v2") ?? null,
+            targetBox: boxOf(element),
+          },
         };
-      });
+      }, targetTitle);
+      if (recordRailState) {
+        console.error(
+          `[qa-post-login] final:${viewportLabel}:journey-rail-state `
+          + JSON.stringify(journeyRailState),
+        );
+      }
       if (
         !actionability.visible
         || !actionability.enabled
         || actionability.pointerEvents === "none"
         || !actionability.hitOwned
       ) {
-        // #325: carry the rail's DOM state to the failure point, so a red
-        // iteration is classifiable from the lane log alone.
-        const railState = await captureJourneyRailState(page, targetTitle);
         throw new Error(
           `${label} is not actionable: ${JSON.stringify(actionability)}`
-          + ` journey-rail-state ${JSON.stringify(railState)}`,
+          + ` journey-rail-state ${JSON.stringify(journeyRailState)}`,
         );
       }
       await locator.evaluate((element) => element.click());
@@ -2439,15 +2435,12 @@ async function verifyFinalAcceptanceMobileFlow() {
         failed: false,
       });
 
-      // #325: record the rail unconditionally, so the passing iterations supply
-      // the healthy baseline the intermittent 430 one has to be read against.
-      console.error(
-        `[qa-post-login] final:${viewportLabel}:journey-rail-state `
-        + JSON.stringify(await captureJourneyRailState(page, targetTitle)),
-      );
       await activateControl(
         page.locator(".living-atlas__journey-rail li button").filter({ hasText: targetTitle }),
         "desktop target journey control",
+        // #325: record the rail here unconditionally, so the passing iterations
+        // supply the healthy baseline the intermittent 430 one is read against.
+        true,
       );
       await page.waitForFunction((expectedTitle) => (
         document.querySelector(".living-atlas__active h2")?.textContent?.includes(expectedTitle) ?? false
