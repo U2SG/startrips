@@ -250,6 +250,16 @@ describe("Home Base evidence fixtures", () => {
     expect(result.state).not.toBe("suggested");
   });
 
+  it("handles a dense bounded metro without changing Journey support semantics", () => {
+    const dense = Array.from({ length: 120 }, (_value, index) =>
+      journey(`dense-${index}`, `2026-${String((index % 12) + 1).padStart(2, "0")}-${String((index % 27) + 1).padStart(2, "0")}`));
+    const result = infer(dense, "2026-12-31");
+    expect(result.support.journeys).toBe(120);
+    expect(result.support.starts).toBe(120);
+    expect(result.support.ends).toBe(120);
+    expect(result.state).toBe("suggested");
+  });
+
   it("finds the strongest bounded region when nearer incompatible endpoints would fool greedy admission", () => {
     const validA = { latitude: 0, longitude: 0 };
     const validB = { latitude: 0, longitude: 0.06 };

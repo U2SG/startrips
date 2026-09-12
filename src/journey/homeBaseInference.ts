@@ -332,15 +332,47 @@ function evidenceRegions(evidence: readonly EndpointEvidence[]): EvidenceRegion[
       return;
     }
 
-    const pivotPool = [...candidates, ...excluded];
-    const pivot = pivotPool.sort((left, right) => {
-      const leftConnections = candidates.filter((value) => neighbors[left].has(value)).length;
-      const rightConnections = candidates.filter((value) => neighbors[right].has(value)).length;
-      return rightConnections - leftConnections || left - right;
-    })[0];
+    // A dense Home metro is a common case. If every remaining candidate is
+    // pairwise compatible, the current R + P set is the only not-yet-visited
+    // maximal clique unless an excluded vertex extends all of P. Collapse that
+    // case here instead of recursing once per endpoint.
+    let candidatesFormClique = true;
+    for (let leftIndex = 0; leftIndex < candidates.length && candidatesFormClique; leftIndex += 1) {
+      for (let rightIndex = leftIndex + 1; rightIndex < candidates.length; rightIndex += 1) {
+        if (!neighbors[candidates[leftIndex]].has(candidates[rightIndex])) {
+          candidatesFormClique = false;
+          break;
+        }
+      }
+    }
+    if (candidatesFormClique) {
+      const extendedByExcluded = excluded.some((vertex) =>
+        candidates.every((candidate) => neighbors[vertex].has(candidate)));
+      if (!extendedByExcluded) visitClique([...clique, ...candidates]);
+      return;
+    }
+
+    // Pick the pivot in one pass. The old sort comparator rescanned all of P
+    // for every comparison, multiplying work on large, dense histories. Cache
+    // each intersection count once for this recursion frame instead.
+    let pivot: number | undefined;
+    let pivotConnections = -1;
+    for (const vertex of [...candidates, ...excluded]) {
+      let connections = 0;
+      for (const candidate of candidates) {
+        if (neighbors[vertex].has(candidate)) connections += 1;
+      }
+      if (
+        connections > pivotConnections
+        || (connections === pivotConnections && (pivot === undefined || vertex < pivot))
+      ) {
+        pivot = vertex;
+        pivotConnections = connections;
+      }
+    }
     const toExplore = pivot === undefined
       ? [...candidates]
-      : candidates.filter((value) => !neighbors[pivot].has(value));
+      : candidates.filter((value) => !neighbors[pivot!].has(value));
 
     let remainingCandidates = [...candidates];
     const remainingExcluded = [...excluded];
