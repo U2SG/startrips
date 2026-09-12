@@ -475,7 +475,7 @@ type ContinuityBlock = {
 type MoveWindowObservation = {
   region: EvidenceRegion;
   runnerUpJourneys: number;
-  startedOn: string;
+  endedOn: string;
 };
 
 function isCandidateRegion(region: EvidenceRegion): boolean {
@@ -543,7 +543,7 @@ function findSustainedMove(
           observations.push({
             region: windowLeader,
             runnerUpJourneys,
-            startedOn: candidateDate,
+            endedOn: windowLeader.evidenceEndedOn,
           });
         }
 
@@ -591,7 +591,10 @@ function findSustainedMove(
   if (!latest || latest.matchesConfirmedHome) return null;
 
   const laterConflict = observations.some((observation) => {
-    if (observation.startedOn <= latest.proposedPeriodStart) return false;
+    // A competing window that ended before the move candidate's latest evidence
+    // is historical, not the current state. Only evidence that reaches at least
+    // as far forward as the candidate can invalidate an otherwise sustained move.
+    if (observation.endedOn < latest.blockEndedOn) return false;
     const moveDistance = haversineDistanceKm(
       latest.region.anchor.latitude,
       latest.region.anchor.longitude,

@@ -468,6 +468,37 @@ describe("Home Base evidence fixtures", () => {
     expect(result.proposedPeriodStart).toBe("2025-01-01");
   });
 
+  it("ignores an expired competing window when later move evidence stays unambiguous", () => {
+    const confirmed = {
+      startedOn: "2024-01-01",
+      endedOn: null,
+      latitude: SHENZHEN.latitude,
+      longitude: SHENZHEN.longitude,
+    } as const;
+    const tokyo = Array.from({ length: 12 }, (_value, index) => {
+      const month = String(index + 1).padStart(2, "0");
+      return journey(`tokyo-${index + 1}`, `2025-${month}-01`, TOKYO, TOKYO);
+    });
+    const earlyCompetition = [
+      journey("singapore-1", "2025-02-01", SINGAPORE, SINGAPORE),
+      journey("singapore-2", "2025-03-01", SINGAPORE, SINGAPORE),
+      journey("singapore-3", "2025-04-02", SINGAPORE, SINGAPORE),
+    ];
+    const result = inferHomeBaseCandidate({
+      journeys: [...tokyo, ...earlyCompetition],
+      confirmedPeriod: confirmed,
+      evaluationDate: "2026-01-15",
+    });
+    expect(result.state).toBe("move_suggested");
+    expect(result.proposedPeriodStart).toBe("2025-01-01");
+    expect(result.metroAnchor).not.toBeNull();
+    expect(haversineDistanceKm(
+      result.metroAnchor!.latitude,
+      result.metroAnchor!.longitude,
+      TOKYO.latitude,
+      TOKYO.longitude,
+    )).toBeLessThanOrEqual(HOME_BASE_CLUSTER_RADIUS_KM);
+  });
   it("retires a historical move when later candidate-strength evidence is ambiguous", () => {
     const confirmed = {
       startedOn: "2022-01-01",
