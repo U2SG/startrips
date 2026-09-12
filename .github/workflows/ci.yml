@@ -112,6 +112,8 @@ jobs:
             command: pnpm qa:city-label-anchoring
           - name: earth-dive
             command: pnpm qa:earth-dive
+          - name: attention-hierarchy
+            command: pnpm qa:attention-hierarchy
           - name: mobile-contract
             command: pnpm qa:mobile-contract
           - name: globe-focus-chrome

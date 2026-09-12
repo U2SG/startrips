@@ -35,6 +35,7 @@ import {
   audioAtmosphereGains,
   readAudioAtmosphereEnergy,
 } from "../motion/audioAtmosphere";
+import { motionTokens } from "../motion/tokens";
 import {
   cityLabelFacingThreshold,
   loadCityTiers,
@@ -169,6 +170,65 @@ export const QUALITY_PROFILE = {
 export const MAX_RENDERED_JOURNEYS = 64;
 export const MAX_RENDERED_ROUTE_POINTS = 512;
 export const MAX_RENDERED_ROUTE_LINE_VERTICES = 8192;
+
+export type AttentionParticleLayerId =
+  | "base-particle-surface"
+  | "spatial-lod-refinement"
+  | "archive-signal"
+  | "archive-cluster"
+  | "cyan-cluster"
+  | "particle-shell"
+  | "particle-halo"
+  | "personal-focus-signal";
+
+export type AttentionParticleLayerMeasurement = {
+  id: AttentionParticleLayerId;
+  present: boolean;
+  cssOpticalSizePx: number | null;
+  dprScaledAuthoredSizePx: number | null;
+  opacity: number;
+  strongGlow: boolean;
+};
+
+function roundAttentionMetric(value: number, digits = 4) {
+  const scale = 10 ** digits;
+  return Math.round(value * scale) / scale;
+}
+
+/**
+ * ST-037 observes the existing #243 CSS-pixel contract without retuning it.
+ * `uPointSize` is authored in CSS px; the shader multiplies by the effective
+ * renderer DPR immediately before drawing. Publishing both logical and DPR-scaled authored
+ * sizes makes DPR drift measurable without introducing a second visual formula.
+ */
+export function resolveAttentionLayerMeasurement({
+  id,
+  present,
+  cssOpticalSizePx,
+  opacity,
+  rendererDpr,
+}: {
+  id: AttentionParticleLayerId;
+  present: boolean;
+  cssOpticalSizePx: number | null;
+  opacity: number;
+  rendererDpr: number;
+}): AttentionParticleLayerMeasurement {
+  const logicalSize = present && cssOpticalSizePx !== null
+    ? roundAttentionMetric(cssOpticalSizePx, 3)
+    : null;
+  const resolvedOpacity = present ? roundAttentionMetric(opacity) : 0;
+  return {
+    id,
+    present,
+    cssOpticalSizePx: logicalSize,
+    dprScaledAuthoredSizePx: logicalSize === null
+      ? null
+      : roundAttentionMetric(logicalSize * rendererDpr, 3),
+    opacity: resolvedOpacity,
+    strongGlow: present && resolvedOpacity >= motionTokens.glow.coreOpacity,
+  };
+}
 
 /**
  * #242 review: the line-vertex pool is shared by every visible route, and it
@@ -3928,6 +3988,38 @@ export function ParticleEarthScene({
     const refinementViewPosition = new Vector3();
     let activeRefinementLayer: ParticleRefinementLayer | null = null;
     let departingRefinementLayer: ParticleRefinementLayer | null = null;
+    let lastAttentionLayerPayload = "";
+    const publishAttentionLayerMeasurements = () => {
+      if (!import.meta.env.DEV) return;
+      const rendererDpr = renderer.getPixelRatio();
+      const measure = (
+        id: AttentionParticleLayerId,
+        material: ReturnType<typeof createParticleEarthMaterial> | null,
+      ) => resolveAttentionLayerMeasurement({
+        id,
+        present: Boolean(material),
+        cssOpticalSizePx: material ? Number(material.uniforms.uPointSize.value) : null,
+        opacity: material ? Number(material.uniforms.uOpacity.value) : 0,
+        rendererDpr,
+      });
+      const payload = JSON.stringify({
+        devicePixelRatio: window.devicePixelRatio,
+        rendererPixelRatio: rendererDpr,
+        layers: [
+          measure("base-particle-surface", particleMaterial),
+          measure("spatial-lod-refinement", activeRefinementLayer?.material ?? null),
+          measure("archive-signal", archiveMaterial),
+          measure("archive-cluster", clusterMaterial),
+          measure("cyan-cluster", cyanClusterMaterial),
+          measure("particle-shell", shellMaterial),
+          measure("particle-halo", haloMaterial),
+          measure("personal-focus-signal", personalMaterial),
+        ],
+      });
+      if (payload === lastAttentionLayerPayload) return;
+      lastAttentionLayerPayload = payload;
+      host.dataset.attentionLayers = payload;
+    };
     let requestedRefinementCacheKey: string | null = null;
     let lastRefinementViewSampleAt = Number.NEGATIVE_INFINITY;
     let refinementBuildState = document.hidden ? "paused" : "idle";
@@ -4939,6 +5031,7 @@ export function ParticleEarthScene({
         personalMaterial.uniforms.uPointSize.value,
         currentMode === "particleSphere" ? 46 : 58,
       );
+      publishAttentionLayerMeasurements();
       const routeOpacity = currentMode === "surfaceEarth"
         ? 0
         : currentMode === "focusPoint"

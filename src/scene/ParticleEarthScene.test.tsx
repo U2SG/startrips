@@ -66,6 +66,7 @@ import {
   shouldApplyFocusIntentRevision,
   solveScreenAnchorRotation,
   resolveGlobeFocusIntent,
+  resolveAttentionLayerMeasurement,
   earthDiveDirectManipulationOwnsCamera,
   resolveParticleDiveAnchor,
 } from "./ParticleEarthScene";
@@ -80,6 +81,51 @@ import {
 import { disposeSceneGraph } from "./useThreeScene";
 
 describe("ParticleEarthScene contracts", () => {
+  it("publishes attention-layer optical measurements in CSS pixels independent of renderer DPR", () => {
+    const dpr1 = resolveAttentionLayerMeasurement({
+      id: "personal-focus-signal",
+      present: true,
+      cssOpticalSizePx: 58,
+      opacity: 1,
+      rendererDpr: 1,
+    });
+    const dpr3DeviceCappedTo2 = resolveAttentionLayerMeasurement({
+      id: "personal-focus-signal",
+      present: true,
+      cssOpticalSizePx: 58,
+      opacity: 1,
+      rendererDpr: 2,
+    });
+    expect(dpr1.cssOpticalSizePx).toBe(58);
+    expect(dpr3DeviceCappedTo2.cssOpticalSizePx).toBe(58);
+    expect(dpr1.dprScaledAuthoredSizePx).toBe(58);
+    expect(dpr3DeviceCappedTo2.dprScaledAuthoredSizePx).toBe(116);
+    expect(dpr1.strongGlow).toBe(true);
+    expect(resolveAttentionLayerMeasurement({
+      id: "particle-halo",
+      present: true,
+      cssOpticalSizePx: 10,
+      opacity: 0.35,
+      rendererDpr: 2,
+    }).strongGlow).toBe(false);
+  });
+
+  it("publishes every createParticleEarthMaterial consumer through data-attention-layers", () => {
+    const source = readFileSync(new URL("./ParticleEarthScene.tsx", import.meta.url), "utf8");
+    expect(source).toContain("host.dataset.attentionLayers = payload");
+    for (const id of [
+      "base-particle-surface",
+      "spatial-lod-refinement",
+      "archive-signal",
+      "archive-cluster",
+      "cyan-cluster",
+      "particle-shell",
+      "particle-halo",
+      "personal-focus-signal",
+    ]) {
+      expect(source).toContain(`measure("${id}"`);
+    }
+  });
   it("uses one geographic surface anchor for map semantics", () => {
     // #224 already unified place labels, the focus signal and route geometry
     // behind ROUTE_ANCHOR_RADIUS. #196 is the remaining half: that one anchor
