@@ -621,11 +621,40 @@ function findSustainedMove(
   const latest = candidates[0] ?? null;
   if (!latest || latest.matchesConfirmedHome) return null;
 
+  const moveEvidenceDates = [...new Set(latest.region.selectedEvidence.map((item) => item.date))].sort();
+  const continuationCache = new Map<string, boolean>();
+  const hasQualifyingMoveContinuation = (afterDate: string): boolean => {
+    const cached = continuationCache.get(afterDate);
+    if (cached !== undefined) return cached;
+    for (const startedOn of moveEvidenceDates) {
+      if (startedOn <= afterDate || startedOn > latest.blockEndedOn) continue;
+      const continuationRegions = regionsForWindow(startedOn, latest.blockEndedOn);
+      const continuationLeader = continuationRegions[0];
+      if (!continuationLeader) continue;
+      const continuationDistance = haversineDistanceKm(
+        latest.region.anchor.latitude,
+        latest.region.anchor.longitude,
+        continuationLeader.anchor.latitude,
+        continuationLeader.anchor.longitude,
+      );
+      if (continuationDistance > HOME_BASE_CLUSTER_RADIUS_KM) continue;
+      const continuationRunnerUp = runnerUpSupport(continuationLeader, continuationRegions);
+      if (!meetsSuggestionPolicy(continuationLeader, continuationRunnerUp)) continue;
+      continuationCache.set(afterDate, true);
+      return true;
+    }
+    continuationCache.set(afterDate, false);
+    return false;
+  };
+
   const laterConflict = observations.some((observation) => {
-    // A competing window that ended before the move candidate's latest evidence
-    // is historical, not the current state. Only evidence that reaches at least
-    // as far forward as the candidate can invalidate an otherwise sustained move.
-    if (observation.endedOn < latest.blockEndedOn) return false;
+    // Raw tail evidence must not make an old move current again. A competing
+    // state is expired only when the move metro independently re-satisfies the
+    // complete V1 suggestion contract after that state ended.
+    if (
+      observation.endedOn < latest.blockEndedOn
+      && hasQualifyingMoveContinuation(observation.endedOn)
+    ) return false;
     const moveDistance = haversineDistanceKm(
       latest.region.anchor.latitude,
       latest.region.anchor.longitude,

@@ -600,6 +600,34 @@ describe("Home Base evidence fixtures", () => {
     expect(result.reasonCodes).toContain("MATCHES_CONFIRMED_HOME");
   });
 
+  it("does not let one isolated revisit refresh a move retired by a later Home state", () => {
+    const confirmed = {
+      startedOn: "2022-01-01",
+      endedOn: null,
+      latitude: SHENZHEN.latitude,
+      longitude: SHENZHEN.longitude,
+    } as const;
+    const oldAway = [
+      journey("tokyo-1", "2023-01-01", TOKYO, TOKYO),
+      journey("tokyo-2", "2023-02-01", TOKYO, TOKYO),
+      journey("tokyo-3", "2023-03-01", TOKYO, TOKYO),
+      journey("tokyo-4", "2023-04-02", TOKYO, TOKYO),
+    ];
+    const returnedHome = [
+      journey("home-1", "2025-01-01", SHENZHEN, SHENZHEN),
+      journey("home-2", "2025-03-01", SHENZHEN, SHENZHEN),
+      journey("home-3", "2025-04-15", SHENZHEN, SHENZHEN),
+    ];
+    const isolatedRevisit = journey("tokyo-revisit", "2026-05-01", TOKYO, TOKYO);
+    const result = inferHomeBaseCandidate({
+      journeys: [...oldAway, ...returnedHome, isolatedRevisit],
+      confirmedPeriod: confirmed,
+      evaluationDate: "2026-06-01",
+    });
+    expect(result.state).toBe("candidate");
+    expect(result.proposedPeriodStart).toBeNull();
+  });
+
   it("does not let one old holiday turn three recent Journeys into a sustained move", () => {
     const confirmed = {
       startedOn: "2022-01-01",
