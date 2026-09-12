@@ -464,6 +464,7 @@ type MoveCandidate = {
   runnerUpJourneys: number;
   proposedPeriodStart: string;
   blockEndedOn: string;
+  matchesConfirmedHome: boolean;
 };
 
 type ContinuityBlock = {
@@ -495,14 +496,6 @@ function findSustainedMove(
   const candidates: MoveCandidate[] = [];
 
   for (const targetRegion of regions) {
-    const targetConfirmedDistance = haversineDistanceKm(
-      confirmedPeriod.latitude,
-      confirmedPeriod.longitude,
-      targetRegion.anchor.latitude,
-      targetRegion.anchor.longitude,
-    );
-    if (targetConfirmedDistance <= HOME_BASE_CLUSTER_RADIUS_KM) continue;
-
     for (const block of continuityBlocks(targetRegion)) {
       for (const candidateDate of block.dates) {
         // Reuse the already-enumerated maximal regions. Restricting them to the
@@ -524,10 +517,7 @@ function findSustainedMove(
           windowLeader.anchor.latitude,
           windowLeader.anchor.longitude,
         );
-        if (
-          targetDistance > HOME_BASE_CLUSTER_RADIUS_KM
-          || confirmedDistance <= HOME_BASE_CLUSTER_RADIUS_KM
-        ) continue;
+        if (targetDistance > HOME_BASE_CLUSTER_RADIUS_KM) continue;
 
         const runnerUpJourneys = runnerUpSupport(windowLeader, candidateRegions);
         if (!meetsSuggestionPolicy(windowLeader, runnerUpJourneys)) continue;
@@ -535,8 +525,9 @@ function findSustainedMove(
         candidates.push({
           region: windowLeader,
           runnerUpJourneys,
-          proposedPeriodStart: candidateDate,
-          blockEndedOn: block.endedOn,
+          proposedPeriodStart: windowLeader.evidenceStartedOn,
+          blockEndedOn: windowLeader.evidenceEndedOn,
+          matchesConfirmedHome: confirmedDistance <= HOME_BASE_CLUSTER_RADIUS_KM,
         });
         // Dates are ascending, so retain the earliest qualifying onset inside
         // this independently sustained block. A later isolated block cannot
@@ -548,10 +539,14 @@ function findSustainedMove(
 
   candidates.sort((left, right) => (
     right.blockEndedOn.localeCompare(left.blockEndedOn)
+    // If two independently sustained states end on the same date, retaining the
+    // already-confirmed Home is the conservative deterministic tie-break.
+    || Number(right.matchesConfirmedHome) - Number(left.matchesConfirmedHome)
     || compareRegions(left.region, right.region)
     || left.proposedPeriodStart.localeCompare(right.proposedPeriodStart)
   ));
-  return candidates[0] ?? null;
+  const latest = candidates[0] ?? null;
+  return latest?.matchesConfirmedHome ? null : latest;
 }
 
 function runnerUpSupport(leader: EvidenceRegion, regions: readonly EvidenceRegion[]): number {

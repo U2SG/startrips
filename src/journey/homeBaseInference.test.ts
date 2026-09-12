@@ -416,6 +416,7 @@ describe("Home Base evidence fixtures", () => {
     expect(result.state).toBe("move_suggested");
     expect(result.support.journeys).toBe(4);
     expect(result.proposedPeriodStart).toBe("2026-01-01");
+    expect(result.proposedPeriodStart).toBe(result.support.evidenceStartedOn);
     expect(haversineDistanceKm(
       result.metroAnchor!.latitude,
       result.metroAnchor!.longitude,
@@ -444,6 +445,33 @@ describe("Home Base evidence fixtures", () => {
     });
     expect(result.state).toBe("move_suggested");
     expect(result.proposedPeriodStart).toBe("2023-01-01");
+  });
+
+  it("does not keep an obsolete away move after a later sustained return Home", () => {
+    const confirmed = {
+      startedOn: "2022-01-01",
+      endedOn: null,
+      latitude: SHENZHEN.latitude,
+      longitude: SHENZHEN.longitude,
+    } as const;
+    const oldAway = [
+      journey("tokyo-1", "2023-01-01", TOKYO, TOKYO),
+      journey("tokyo-2", "2023-02-01", TOKYO, TOKYO),
+      journey("tokyo-3", "2023-03-01", TOKYO, TOKYO),
+      journey("tokyo-4", "2023-04-02", TOKYO, TOKYO),
+    ];
+    const returnedHome = Array.from({ length: 8 }, (_value, index) => {
+      const month = String(index + 1).padStart(2, "0");
+      return journey(`home-${index + 1}`, `2025-${month}-01`, SHENZHEN, SHENZHEN);
+    });
+    const result = inferHomeBaseCandidate({
+      journeys: [...oldAway, ...returnedHome],
+      confirmedPeriod: confirmed,
+      evaluationDate: "2026-01-01",
+    });
+    expect(result.state).toBe("candidate");
+    expect(result.proposedPeriodStart).toBeNull();
+    expect(result.reasonCodes).toContain("MATCHES_CONFIRMED_HOME");
   });
 
   it("does not let one old holiday turn three recent Journeys into a sustained move", () => {
