@@ -275,6 +275,16 @@ try {
 
   await page.keyboard.press("Escape");
   await page.locator(".journey-playback").waitFor({ state: "detached", timeout: 20_000 });
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  // Playback may hand its logical position back to Journey Story. That is a
+  // valid narrative return, and the Home Base card must remain suppressed
+  // there too. Close that returned narrative surface before proving the card
+  // comes back beside the Atlas timeline.
+  const returnedStory = page.locator(".journey-story");
+  if (await returnedStory.isVisible()) {
+    await returnedStory.locator(".journey-story__close").click();
+    await returnedStory.waitFor({ state: "detached", timeout: 15_000 });
+  }
   await openTimelineView(page);
   await page.locator(card).waitFor({ state: "visible", timeout: 15_000 });
 
