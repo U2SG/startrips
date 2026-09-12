@@ -1433,6 +1433,11 @@ async function verifyAccountDock() {
       contentType: "application/json",
       body: JSON.stringify({ journeys }),
     }));
+    await page.route("**/api/home-bases/dismissal", (route) => route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ dismissal: null }),
+    }));
     await page.route("**/api/home-bases", (route) => route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -1987,6 +1992,11 @@ async function verifyFinalAcceptanceMobileFlow() {
           atlas: { id: "qa-atlas", title: "QA Atlas", dedication: "Final acceptance" },
           role: "owner",
         }),
+      }));
+      await page.route("**/api/home-bases/dismissal", (route) => route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ dismissal: null }),
       }));
       await page.route("**/api/home-bases", (route) => route.fulfill({
         status: 200,

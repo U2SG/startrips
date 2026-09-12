@@ -745,6 +745,35 @@ describe("optional Home hydration", () => {
     expect(onHomeBasePeriods).toHaveBeenCalledWith([]);
   });
 
+  it("drops detached private Home reads once a newer load owns the view", async () => {
+    let resolvePeriods!: (periods: []) => void;
+    let resolveDismissal!: (dismissal: null) => void;
+    const periodsPending = new Promise<[]>((resolve) => { resolvePeriods = resolve; });
+    const dismissalPending = new Promise<null>((resolve) => { resolveDismissal = resolve; });
+    const onHomeBasePeriods = vi.fn();
+    const onHomeBaseDismissal = vi.fn();
+    let current = true;
+
+    const rows = await loadJourneyRowsWithOptionalHome({
+      listJourneys: async () => [playbackJourney],
+      listHomeBasePeriods: () => periodsPending,
+      listHomeBaseDismissal: () => dismissalPending,
+      isCurrent: () => current,
+      onHomeBasePeriods,
+      onHomeBaseDismissal,
+    });
+
+    expect(rows).toEqual([playbackJourney]);
+    current = false;
+    resolvePeriods([]);
+    resolveDismissal(null);
+    await Promise.all([periodsPending, dismissalPending]);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(onHomeBasePeriods).not.toHaveBeenCalled();
+    expect(onHomeBaseDismissal).not.toHaveBeenCalled();
+  });
+
   it("keeps guest/read-only views free of private Home hydration", async () => {
     const onHomeBasePeriods = vi.fn();
     await loadJourneyRowsWithOptionalHome({
@@ -1521,6 +1550,23 @@ describe("ST-060 the suggestion waits for every private read it depends on", () 
   it("computes nothing without a Home history reader or without Journeys", () => {
     expect(homeBaseInferenceInputsReady({ ...ready, periodsReader: false })).toBe(false);
     expect(homeBaseInferenceInputsReady({ ...ready, journeyCount: 0 })).toBe(false);
+  });
+});
+
+describe("ST-060 refresh readiness ownership", () => {
+  it("re-arms both private reads before launching a refreshed Atlas load", () => {
+    const source = readFileSync(new URL("./LivingAtlasApp.tsx", import.meta.url), "utf8");
+    const start = source.indexOf("const load = useCallback(async (quiet = false");
+    const block = source.slice(start, start + 1_600);
+    const resetPeriods = block.indexOf("setHomeBasePeriodsRead(false)");
+    const resetDismissal = block.indexOf("setHomeBaseDismissal(listHomeBaseDismissal ? undefined : null)");
+    const launch = block.indexOf("loadJourneyRowsWithOptionalHome({");
+
+    expect(start).toBeGreaterThan(0);
+    expect(resetPeriods).toBeGreaterThan(0);
+    expect(resetDismissal).toBeGreaterThan(0);
+    expect(launch).toBeGreaterThan(resetPeriods);
+    expect(launch).toBeGreaterThan(resetDismissal);
   });
 });
 

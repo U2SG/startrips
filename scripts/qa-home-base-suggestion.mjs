@@ -257,7 +257,7 @@ try {
   record("suggestion returns once the narrative surface closes", {}, true);
 
   // Journey Playback is started from the planet view's active Journey.
-  await page.locator(".living-atlas__header button", { hasText: "地球" }).click();
+  await page.getByRole("button", { name: "地球", exact: true }).click();
   await page.locator(".living-atlas__active-play").waitFor({ state: "visible", timeout: 15_000 });
   await page.locator(".living-atlas__active-play").click();
   await page.locator(".living-atlas__playback-mode-menu button", { hasText: "完整播放" })

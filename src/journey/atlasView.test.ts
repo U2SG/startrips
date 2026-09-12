@@ -62,11 +62,13 @@ describe("owner and guest atlas views", () => {
     expect(Object.keys(view.mutations ?? {}).sort()).toEqual([
       // #200 phase E: creating, listing and revoking a share are owner calls,
       // so they belong to the same client every other owner write goes through.
+      "confirmHomeBasePeriod",
       "createShare",
       "deleteJourney",
       "deleteMedia",
       "listShares",
       "moveJourneyMedia",
+      "recordHomeBaseDismissal",
       "reorderJourneyMedia",
       "restoreJourney",
       "revokeShare",

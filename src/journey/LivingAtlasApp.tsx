@@ -1256,6 +1256,17 @@ export function LivingAtlasApp({
 
   const load = useCallback(async (quiet = false, quietErrorNotice?: string) => {
     const revision = ++loadRevision.current;
+    // Every refresh owns fresh private-read readiness. Keep the last rendered
+    // Home history while its replacement is in flight, but never let that
+    // stale snapshot drive a new suggestion. If this view no longer has an
+    // owner reader, clear the private history outright.
+    if (listHomeBasePeriods) {
+      setHomeBasePeriodsRead(false);
+    } else {
+      setHomeBasePeriods([]);
+      setHomeBasePeriodsRead(false);
+    }
+    setHomeBaseDismissal(listHomeBaseDismissal ? undefined : null);
     if (!quiet) setStatus("loading");
     try {
       const journeyRows = await loadJourneyRowsWithOptionalHome({
