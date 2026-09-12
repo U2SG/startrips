@@ -125,7 +125,7 @@ export function buildKeepsakeNarrativeSnapshot(
   };
 }
 
-function narrativeSnapshotsEqual(
+export function keepsakeNarrativeSnapshotsEqual(
   left: KeepsakeNarrativeSnapshot,
   right: KeepsakeNarrativeSnapshot,
 ): boolean {
@@ -301,7 +301,7 @@ export function assertKeepsakeManifestRevision(
     throw new Error("keepsake_manifest_revision_mismatch");
   }
   const currentNarrative = buildKeepsakeNarrativeSnapshot(journey);
-  if (!narrativeSnapshotsEqual(manifest.narrativeSnapshot, currentNarrative)) {
+  if (!keepsakeNarrativeSnapshotsEqual(manifest.narrativeSnapshot, currentNarrative)) {
     throw new Error("keepsake_manifest_narrative_mismatch");
   }
 

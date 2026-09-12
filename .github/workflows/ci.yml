@@ -90,6 +90,44 @@ jobs:
       - name: Build
         run: pnpm build
 
+  keepsake-render:
+    name: keepsake-render
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.17.1
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Ensure FFmpeg is available
+        run: |
+          set -euo pipefail
+          if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y ffmpeg
+          fi
+          ffmpeg -version | head -n 1
+      - name: Render deterministic private Keepsake fixture twice
+        run: |
+          set -euo pipefail
+          pnpm qa:keepsake-render
+          cat artifacts/keepsake-render/summary.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload Keepsake render evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: keepsake-private-render-${{ github.run_attempt }}
+          path: artifacts/keepsake-render/
+          if-no-files-found: error
+          retention-days: 7
   browser-qa:
     name: browser-qa / ${{ matrix.name }}
     runs-on: ubuntu-latest
@@ -179,17 +217,21 @@ jobs:
       - ledger
       - core
       - browser-qa
+      - keepsake-render
     steps:
       - name: Require every validation lane to pass
         env:
           LEDGER_RESULT: ${{ needs.ledger.result }}
           CORE_RESULT: ${{ needs.core.result }}
           BROWSER_QA_RESULT: ${{ needs.browser-qa.result }}
+          KEEPSAKE_RENDER_RESULT: ${{ needs.keepsake-render.result }}
         run: |
           set -euo pipefail
           echo "ledger=$LEDGER_RESULT"
           echo "core=$CORE_RESULT"
           echo "browser-qa=$BROWSER_QA_RESULT"
+          echo "keepsake-render=$KEEPSAKE_RENDER_RESULT"
           [[ "$LEDGER_RESULT" == "success" ]]
           [[ "$CORE_RESULT" == "success" ]]
           [[ "$BROWSER_QA_RESULT" == "success" ]]
+          [[ "$KEEPSAKE_RENDER_RESULT" == "success" ]]
