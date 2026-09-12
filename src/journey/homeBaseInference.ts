@@ -189,13 +189,13 @@ function endpointEvidence(journeys: readonly HomeBaseInferenceJourney[]): Endpoi
       longitude: first.longitude,
       date: journey.startedOn,
     });
-    if (points.length > 1) {
+    if (points.length > 1 && journey.endedOn) {
       evidence.push({
         journeyId: journey.id,
         kind: "end",
         latitude: last.latitude,
         longitude: last.longitude,
-        date: journey.endedOn ?? journey.startedOn,
+        date: journey.endedOn,
       });
     }
   }

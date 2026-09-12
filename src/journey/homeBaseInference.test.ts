@@ -169,6 +169,20 @@ describe("inferHomeBaseCandidate thresholds", () => {
     expect(result.state).toBe("candidate");
   });
 
+  it("does not invent end evidence when the Journey end date is unknown", () => {
+    const openEnded = [
+      journey("j1", "2026-01-01", SHENZHEN, SHENZHEN, null),
+      journey("j2", "2026-02-01", SHENZHEN, SHENZHEN, null),
+      journey("j3", "2026-03-01", SHENZHEN, SHENZHEN, null),
+      journey("j4", "2026-04-01", SHENZHEN, SHENZHEN, null),
+    ];
+    const result = infer(openEnded);
+    expect(result.support.journeys).toBe(4);
+    expect(result.support.starts).toBe(4);
+    expect(result.support.ends).toBe(0);
+    expect(result.state).toBe("candidate");
+  });
+
   it("counts one Journey with many media rows only once", () => {
     const noisy = shenzhenFour().map((item, index) => ({
       ...item,
