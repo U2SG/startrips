@@ -1,5 +1,5 @@
 import { and, asc, eq, sql } from "drizzle-orm";
-import { homeBasePeriods } from "../db/app-schema";
+import { homeBaseDismissals, homeBasePeriods } from "../db/app-schema";
 import { db } from "../db/client";
 import { lockActiveAtlas } from "./journey-repository";
 import {
@@ -8,6 +8,7 @@ import {
   type HomeBasePeriodConflictCode,
   type HomeBaseSource,
 } from "../../src/journey/homeBase";
+import type { HomeBaseDismissal } from "../../src/journey/homeBaseInference";
 
 /**
  * #231: the write side of the Home Base timeline.
@@ -255,4 +256,61 @@ export async function countHomeBasePeriodsForAtlas(
     .from(homeBasePeriods)
     .where(eq(homeBasePeriods.atlasId, atlasId));
   return rows[0]?.total ?? 0;
+}
+
+/**
+ * #232: the member's answer to a Home Base suggestion.
+ *
+ * One row per Atlas, so recording an answer is an upsert on the Atlas: the
+ * surface asks about one region at a time and a later answer supersedes the
+ * earlier one. The digest is stored verbatim — the inference core parses the
+ * anchor and the supporting Journey ids back out of it — so this layer never
+ * trims, truncates or normalises it.
+ */
+export async function readHomeBaseDismissalForAtlas(
+  atlasId: string,
+): Promise<HomeBaseDismissal | null> {
+  const [row] = await db
+    .select({
+      kind: homeBaseDismissals.kind,
+      digest: homeBaseDismissals.evidenceDigest,
+      dismissedAt: homeBaseDismissals.dismissedOn,
+    })
+    .from(homeBaseDismissals)
+    .where(eq(homeBaseDismissals.atlasId, atlasId))
+    .limit(1);
+  if (!row) return null;
+  return { ...row, kind: row.kind as HomeBaseDismissal["kind"] };
+}
+
+export async function recordHomeBaseDismissalForAtlas(
+  atlasId: string,
+  values: { kind: HomeBaseDismissal["kind"]; digest: string; dismissedOn: string },
+): Promise<HomeBaseDismissal | undefined> {
+  return await db.transaction(async (transaction) => {
+    if (!await lockActiveAtlas(transaction, atlasId)) return undefined;
+    const [row] = await transaction
+      .insert(homeBaseDismissals)
+      .values({
+        atlasId,
+        kind: values.kind,
+        evidenceDigest: values.digest,
+        dismissedOn: values.dismissedOn,
+      })
+      .onConflictDoUpdate({
+        target: homeBaseDismissals.atlasId,
+        set: {
+          kind: values.kind,
+          evidenceDigest: values.digest,
+          dismissedOn: values.dismissedOn,
+          updatedAt: new Date(),
+        },
+      })
+      .returning({
+        kind: homeBaseDismissals.kind,
+        digest: homeBaseDismissals.evidenceDigest,
+        dismissedAt: homeBaseDismissals.dismissedOn,
+      });
+    return { ...row, kind: row.kind as HomeBaseDismissal["kind"] };
+  });
 }

@@ -1,11 +1,14 @@
 import { createContext, useContext } from "react";
 import {
+  createHomeBasePeriod,
   createShare,
   deleteJourney,
   deleteMedia,
   getPrivateMediaRead,
   listHomeBasePeriods,
   listJourneys,
+  readHomeBaseDismissal,
+  recordHomeBaseDismissal,
   listShares,
   moveJourneyMedia,
   reorderJourneyMedia,
@@ -18,6 +21,8 @@ import {
 } from "./journeyApi";
 import { uploadJourneyMedia } from "./JourneyComposer";
 import type { HomeBasePeriod } from "./homeBase";
+import type { HomeBaseDismissal } from "./homeBaseInference";
+import type { HomeBasePeriodDraft } from "./homeBaseSuggestion";
 import type {
   CreatedShareGrant,
   Journey,
@@ -148,6 +153,15 @@ export type AtlasMutations = {
    * decides whether the affordance exists; this object decides whether a client
    * capable of the call exists at all, and in shared mode it is `null`.
    */
+  /**
+   * #232: confirming or declining a quiet Home Base suggestion. Both are
+   * member writes and both are absent in shared mode, so a guest build has no
+   * client capable of the call rather than a hidden button.
+   */
+  confirmHomeBasePeriod: (draft: HomeBasePeriodDraft) => Promise<HomeBasePeriod>;
+  recordHomeBaseDismissal: (
+    input: { kind: HomeBaseDismissal["kind"]; evidenceDigest: string; dismissedOn: string },
+  ) => Promise<HomeBaseDismissal>;
   createShare: (
     journeyIds: readonly string[],
     expiresAt: Date,
@@ -166,6 +180,8 @@ export type AtlasView = {
   listJourneys: () => Promise<Journey[]>;
   /** Owner-private Home history. Shared/guest mode exposes no reader at all. */
   listHomeBasePeriods: (() => Promise<HomeBasePeriod[]>) | null;
+  /** Owner-private answer to a Home Base suggestion. Guest mode has no reader. */
+  listHomeBaseDismissal: (() => Promise<HomeBaseDismissal | null>) | null;
   readMedia: AtlasMediaRead;
   mutations: AtlasMutations | null;
 };
@@ -180,6 +196,8 @@ export function createOwnerAtlasMutations(canEditJourney = true): AtlasMutations
     undoJourneyMediaMove,
     setJourneyCover,
     uploadJourneyMedia,
+    confirmHomeBasePeriod: createHomeBasePeriod,
+    recordHomeBaseDismissal,
     createShare,
     listShares,
     revokeShare,
@@ -196,6 +214,7 @@ export function createOwnerAtlasView(
     capabilities,
     listJourneys: () => listJourneys(),
     listHomeBasePeriods: () => listHomeBasePeriods(),
+    listHomeBaseDismissal: () => readHomeBaseDismissal(),
     readMedia: (assetId) => getPrivateMediaRead(assetId),
     mutations: createOwnerAtlasMutations(capabilities.canEditJourney),
   };

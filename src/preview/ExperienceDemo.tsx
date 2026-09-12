@@ -89,6 +89,8 @@ function createDemoAtlasSession() {
     createShare: unavailable,
     listShares: unavailable,
     revokeShare: unavailable,
+    confirmHomeBasePeriod: unavailable,
+    recordHomeBaseDismissal: unavailable,
     deleteMedia: async (assetId) => {
       const journey = journeys.find((current) => current.media.some((asset) => asset.id === assetId))
         ?? fail("MEDIA_NOT_FOUND", "这项媒体已不存在。", 404);
@@ -180,6 +182,7 @@ function createDemoAtlasSession() {
     mutations,
     listJourneys: async () => structuredClone(journeys),
     listHomeBasePeriods: null,
+    listHomeBaseDismissal: null,
     readMedia: async (assetId) => {
       if (!journeys.some((journey) => journey.media.some((asset) => asset.id === assetId))) {
         fail("MEDIA_NOT_FOUND", "这项示例媒体已不存在。", 404);

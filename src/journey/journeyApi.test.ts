@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  createHomeBasePeriod,
   createJourney,
   deleteJourney,
   deleteMedia,
@@ -9,6 +10,8 @@ import {
   moveMediaBetweenJourneys,
   undoMediaMove,
   undoJourneyMediaMove,
+  readHomeBaseDismissal,
+  recordHomeBaseDismissal,
   reorderJourneyMedia,
   restoreJourney,
   reverseGeocode,
@@ -50,6 +53,71 @@ describe("journeyApi", () => {
     expect(fetcher).toHaveBeenCalledWith("/api/home-bases", expect.objectContaining({
       cache: "no-store", credentials: "include",
     }));
+  });
+
+  it("confirms a first Home Base suggestion by creating a period", async () => {
+    const period = {
+      id: "home-1", label: "深圳", latitude: 22.5431, longitude: 114.0579,
+      startedOn: "2026-01-04", endedOn: null, source: "suggested-confirmed",
+    };
+    const fetcher = vi.fn(async () => Response.json({ period })) as unknown as typeof fetch;
+    const draft = {
+      label: "深圳",
+      latitude: 22.5431,
+      longitude: 114.0579,
+      startedOn: "2026-01-04",
+      endedOn: null,
+      source: "suggested-confirmed",
+    } as const;
+    await expect(createHomeBasePeriod(draft, fetcher)).resolves.toEqual(period);
+    expect(fetcher).toHaveBeenCalledWith("/api/home-bases", expect.objectContaining({
+      method: "POST",
+      credentials: "include",
+      body: JSON.stringify(draft),
+    }));
+  });
+
+  it("confirms a move by sending the inferred onset as the new period start", async () => {
+    // The previous period is closed by #231's own write path at exactly this
+    // date; the client never patches or deletes the period it replaces.
+    const fetcher = vi.fn(async () => Response.json({
+      period: { id: "home-2", startedOn: "2026-05-02", endedOn: null },
+    })) as unknown as typeof fetch;
+    await createHomeBasePeriod({
+      label: "东京",
+      latitude: 35.689487,
+      longitude: 139.691711,
+      startedOn: "2026-05-02",
+      endedOn: null,
+      source: "suggested-confirmed",
+    }, fetcher);
+    const [, init] = (fetcher as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[0];
+    expect(JSON.parse(String(init.body))).toMatchObject({
+      startedOn: "2026-05-02",
+      endedOn: null,
+    });
+    expect((fetcher as unknown as { mock: { calls: unknown[] } }).mock.calls).toHaveLength(1);
+  });
+
+  it("reads and records the Home Base dismissal without naming an atlas", async () => {
+    const dismissal = { kind: "soft", digest: "hbv1:1:2:3", dismissedAt: "2026-04-02" };
+    const reader = vi.fn(async () => Response.json({ dismissal })) as unknown as typeof fetch;
+    await expect(readHomeBaseDismissal(reader)).resolves.toEqual(dismissal);
+    expect(reader).toHaveBeenCalledWith("/api/home-bases/dismissal", expect.objectContaining({
+      cache: "no-store", credentials: "include",
+    }));
+
+    const writer = vi.fn(async () => Response.json({ dismissal })) as unknown as typeof fetch;
+    await expect(recordHomeBaseDismissal({
+      kind: "soft", evidenceDigest: "hbv1:1:2:3", dismissedOn: "2026-04-02",
+    }, writer)).resolves.toEqual(dismissal);
+    const [, init] = (writer as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[0];
+    const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+    expect(body).toEqual({
+      kind: "soft", evidenceDigest: "hbv1:1:2:3", dismissedOn: "2026-04-02",
+    });
+    expect(Object.keys(body)).not.toContain("atlasId");
+    expect(Object.keys(body)).not.toContain("organizationId");
   });
 
   it("preserves structured server errors", async () => {

@@ -80,6 +80,45 @@ export const homeBasePeriods = pgTable(
   ],
 );
 
+// #232: the member's answer to a Home Base suggestion, so that answer can
+// survive the session it was given in. One row per Atlas: the suggestion
+// surface asks about at most one region at a time, so a later answer replaces
+// the earlier one rather than accumulating a history of refusals.
+//
+// `evidence_digest` stores `homeBaseEvidenceDigest()` verbatim. That string is
+// structured, not opaque — the inference core parses the anchor and the
+// supporting Journey ids back out of it to decide whether materially new
+// residence evidence exists — so it is stored unbounded and untrimmed.
+//
+// `kind` separates an ordinary "not now" from an explicit rejection, which the
+// issue asks to respect more strongly. `dismissed_on` is the calendar date the
+// 90-day re-prompt rule counts from.
+export const homeBaseDismissals = pgTable(
+  "home_base_dismissals",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    atlasId: uuid("atlas_id")
+      .notNull()
+      .references(() => atlases.id, { onDelete: "cascade" }),
+    kind: text("kind").notNull(),
+    evidenceDigest: text("evidence_digest").notNull(),
+    dismissedOn: date("dismissed_on", { mode: "string" }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("home_base_dismissals_atlas_unique").on(table.atlasId),
+    check(
+      "home_base_dismissals_kind_check",
+      sql`${table.kind} in ('soft', 'rejected')`,
+    ),
+  ],
+);
+
 export const journeys = pgTable(
   "journeys",
   {

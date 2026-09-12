@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { createEmailVerificationToken } from "better-auth/api";
-import { eq, inArray } from "drizzle-orm";
+import { eq, inArray, sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { app } from "../app";
 import { serverConfig } from "../config";
-import { atlases, homeBasePeriods } from "../db/app-schema";
+import { atlases, homeBaseDismissals, homeBasePeriods } from "../db/app-schema";
 import {
   organization as authOrganizations,
   rateLimit,
@@ -12,7 +12,7 @@ import {
 } from "../db/auth-schema";
 import { hasAtlasPermission } from "../authorization/permissions";
 import { db, pool } from "../db/client";
-import { parseHomeBaseInput, parseHomeBasePatch } from "./home-bases";
+import { parseHomeBaseDismissalInput, parseHomeBaseInput, parseHomeBasePatch } from "./home-bases";
 
 /**
  * #231: the HTTP surface, through the real `app` so the Atlas really is
@@ -292,6 +292,130 @@ describe("POST /api/home-bases", () => {
   it("refuses a request with no session at all", async () => {
     const response = await post("", { ...SHENZHEN });
     expect(response.status).toBe(401);
+  });
+});
+
+describe("the Home Base dismissal body", () => {
+  const DIGEST = "hbv1:22.5431:114.0579:4:2026-01-01:2026-04-01:j1=11,j2=11,j3=11,j4=11:1a2b3c4d";
+
+  it("accepts only the two answers the product defines", () => {
+    expect(parseHomeBaseDismissalInput({
+      kind: "soft",
+      evidenceDigest: DIGEST,
+      dismissedOn: "2026-04-02",
+    })).toEqual({ kind: "soft", digest: DIGEST, dismissedOn: "2026-04-02" });
+    expect(parseHomeBaseDismissalInput({
+      kind: "rejected",
+      evidenceDigest: DIGEST,
+      dismissedOn: "2026-04-02",
+    })).toMatchObject({ kind: "rejected" });
+    expect(parseHomeBaseDismissalInput({
+      kind: "snoozed",
+      evidenceDigest: DIGEST,
+      dismissedOn: "2026-04-02",
+    })).toBeNull();
+  });
+
+  it("keeps the evidence digest byte-exact instead of trimming or capping it", () => {
+    // The inference core parses the region anchor and the supporting Journey
+    // ids back out of this string. Normalising it here would silently disarm
+    // the 90-day / 2-new-Journey re-prompt rule.
+    const padded = ` ${DIGEST} `;
+    expect(parseHomeBaseDismissalInput({
+      kind: "soft",
+      evidenceDigest: padded,
+      dismissedOn: "2026-04-02",
+    })?.digest).toBe(padded);
+    expect(parseHomeBaseDismissalInput({
+      kind: "soft",
+      evidenceDigest: "",
+      dismissedOn: "2026-04-02",
+    })).toBeNull();
+  });
+
+  it("refuses a dismissal date that is not a fixed-width calendar date", () => {
+    expect(parseHomeBaseDismissalInput({
+      kind: "soft",
+      evidenceDigest: DIGEST,
+      dismissedOn: "2026-4-2",
+    })).toBeNull();
+  });
+});
+
+describe("GET and POST /api/home-bases/dismissal", () => {
+  const DIGEST = "hbv1:22.5431:114.0579:4:2026-01-01:2026-04-01:r1=11,r2=11,r3=11,r4=11:deadbeef";
+
+  async function postDismissal(cookie: string, body: unknown) {
+    return await app.request(`${TEST_ORIGIN}/api/home-bases/dismissal`, {
+      method: "POST",
+      headers: authHeaders(cookie),
+      body: JSON.stringify(body),
+    });
+  }
+
+  it("derives the atlas from the session and ignores an atlas or organization id in the body", async () => {
+    const response = await postDismissal(resident.cookie, {
+      kind: "soft",
+      evidenceDigest: DIGEST,
+      dismissedOn: "2026-04-02",
+      atlasId: neighbour.atlasId,
+      organizationId: neighbour.organizationId,
+    });
+    expect(response.status).toBe(201);
+    expect(await response.json()).toEqual({
+      dismissal: { kind: "soft", digest: DIGEST, dismissedAt: "2026-04-02" },
+    });
+
+    // The row landed in the session's own atlas, not the one the body named.
+    const rows = await db
+      .select({ atlasId: homeBaseDismissals.atlasId })
+      .from(homeBaseDismissals)
+      .where(eq(homeBaseDismissals.evidenceDigest, DIGEST));
+    expect(rows.map((row) => row.atlasId)).toEqual([resident.atlasId]);
+
+    // And the named atlas still has no answer on record.
+    const neighbourRead = await app.request(
+      `${TEST_ORIGIN}/api/home-bases/dismissal`,
+      { headers: authHeaders(neighbour.cookie) },
+    );
+    expect(neighbourRead.status).toBe(200);
+    expect(await neighbourRead.json()).toEqual({ dismissal: null });
+  });
+
+  it("replaces the earlier answer rather than accumulating refusals", async () => {
+    const second = `${DIGEST}-later`;
+    expect((await postDismissal(resident.cookie, {
+      kind: "rejected",
+      evidenceDigest: second,
+      dismissedOn: "2026-07-01",
+    })).status).toBe(201);
+
+    const read = await app.request(`${TEST_ORIGIN}/api/home-bases/dismissal`, {
+      headers: authHeaders(resident.cookie),
+    });
+    expect(await read.json()).toEqual({
+      dismissal: { kind: "rejected", digest: second, dismissedAt: "2026-07-01" },
+    });
+    const [row] = await db
+      .select({ total: sql<number>`count(*)::int` })
+      .from(homeBaseDismissals)
+      .where(eq(homeBaseDismissals.atlasId, resident.atlasId));
+    expect(row.total).toBe(1);
+  });
+
+  it("refuses an unusable body and a request with no session", async () => {
+    const invalid = await postDismissal(resident.cookie, {
+      kind: "soft",
+      evidenceDigest: DIGEST,
+    });
+    expect(invalid.status).toBe(400);
+    expect(await invalid.json()).toMatchObject({ error: "INVALID_HOME_BASE_DISMISSAL" });
+    expect((await postDismissal("", { kind: "soft", evidenceDigest: DIGEST, dismissedOn: "2026-04-02" })).status)
+      .toBe(401);
+    const anonymous = await app.request(`${TEST_ORIGIN}/api/home-bases/dismissal`, {
+      headers: authHeaders(),
+    });
+    expect(anonymous.status).toBe(401);
   });
 });
 

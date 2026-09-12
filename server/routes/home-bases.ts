@@ -4,12 +4,15 @@ import {
   createHomeBasePeriodForAtlas,
   deleteHomeBasePeriodForAtlas,
   listHomeBasePeriodsForAtlas,
+  readHomeBaseDismissalForAtlas,
+  recordHomeBaseDismissalForAtlas,
   updateHomeBasePeriodForAtlas,
   type HomeBasePeriodPatch,
   type HomeBasePeriodValues,
 } from "../repositories/home-base-repository";
 import { isPersistedCalendarDate } from "../../src/journey/calendarDate";
 import { isHomeBaseSource } from "../../src/journey/homeBase";
+import type { HomeBaseDismissal } from "../../src/journey/homeBaseInference";
 import { readJsonObject } from "./json-body";
 
 /**
@@ -132,12 +135,78 @@ export function parseHomeBasePatch(body: HomeBaseInput): HomeBasePeriodPatch | n
   return Object.keys(patch).length > 0 ? patch : null;
 }
 
+type HomeBaseDismissalInput = {
+  kind?: unknown;
+  evidenceDigest?: unknown;
+  dismissedOn?: unknown;
+};
+
+export type HomeBaseDismissalValues = {
+  kind: HomeBaseDismissal["kind"];
+  digest: string;
+  dismissedOn: string;
+};
+
+/**
+ * #232: the answer body. `evidenceDigest` is `homeBaseEvidenceDigest()`
+ * verbatim and is neither trimmed nor length-capped here: the inference core
+ * parses the region anchor and the supporting Journey ids back out of that
+ * string to decide whether materially new residence evidence has appeared, so
+ * any normalisation would quietly disarm the 90-day / 2-Journey re-prompt rule.
+ *
+ * There is deliberately no atlas or organization field. Like every other verb
+ * in this module the Atlas comes from `requireAtlasAccess` alone.
+ */
+export function parseHomeBaseDismissalInput(
+  body: HomeBaseDismissalInput,
+): HomeBaseDismissalValues | null {
+  const kind = body.kind;
+  const digest = typeof body.evidenceDigest === "string" ? body.evidenceDigest : "";
+  const dismissedOn = typeof body.dismissedOn === "string" ? body.dismissedOn.trim() : "";
+  if (
+    (kind !== "soft" && kind !== "rejected")
+    || !digest
+    || !isPersistedCalendarDate(dismissedOn)
+  ) {
+    return null;
+  }
+  return { kind, digest, dismissedOn };
+}
+
 export const homeBaseRoutes = new Hono();
 
 homeBaseRoutes.get("/", async (context) => {
   const { atlas } = await requireAtlasAccess(context.req.raw, "read");
   context.header("Cache-Control", HOME_BASE_CACHE_CONTROL);
   return context.json({ periods: await listHomeBasePeriodsForAtlas(atlas.id) });
+});
+
+/**
+ * The recorded answer, or `null` when the member has never answered. Read
+ * under `read` because it only says that a suggestion was declined; writing
+ * one is a member decision and asks for `create`, the same level recording a
+ * period does.
+ */
+homeBaseRoutes.get("/dismissal", async (context) => {
+  const { atlas } = await requireAtlasAccess(context.req.raw, "read");
+  context.header("Cache-Control", HOME_BASE_CACHE_CONTROL);
+  return context.json({ dismissal: await readHomeBaseDismissalForAtlas(atlas.id) });
+});
+
+homeBaseRoutes.post("/dismissal", async (context) => {
+  const { atlas } = await requireAtlasAccess(context.req.raw, "create");
+  const body = await readJsonObject(() => context.req.json());
+  const input = body && parseHomeBaseDismissalInput(body);
+  if (!input) {
+    return context.json(
+      { error: "INVALID_HOME_BASE_DISMISSAL", message: "Invalid Home Base dismissal data" },
+      400,
+    );
+  }
+  const dismissal = await recordHomeBaseDismissalForAtlas(atlas.id, input);
+  if (!dismissal) return context.json({ error: "ATLAS_NOT_FOUND" }, 404);
+  context.header("Cache-Control", HOME_BASE_CACHE_CONTROL);
+  return context.json({ dismissal }, 201);
 });
 
 homeBaseRoutes.post("/", async (context) => {

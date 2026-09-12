@@ -199,3 +199,26 @@ describe("shared journey view scope closure", () => {
     ]);
   });
 });
+
+describe("ST-060 Home Base stays out of the guest share payload", () => {
+  it("carries no Home Base suggestion, dismissal, metro anchor or confirmed period field", () => {
+    const view = buildSharedJourneyView(GRANT, rows({
+      journeys: [journeyRow(SHARED_A, "Shared")],
+      routePoints: [routePointRow(SHARED_A, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")],
+      media: [mediaRow(SHARED_A, "cccccccc-cccc-4ccc-8ccc-cccccccccccc")],
+    }));
+    const serialized = JSON.stringify(view);
+    for (const term of [
+      "homeBase",
+      "home_base",
+      "metroAnchor",
+      "evidenceDigest",
+      "dismissal",
+      "suggested-confirmed",
+    ]) {
+      expect(serialized).not.toContain(term);
+    }
+    expect(Object.keys(view).sort()).toEqual(["journeys", "share"]);
+    expect(Object.keys(view.share)).not.toContain("homeBasePeriods");
+  });
+});

@@ -703,13 +703,19 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cine
 
 export function AuthGateway({ children }: { children: ReactNode }) {
   const persistentEarth = usePersistentEarth();
-  const qaOwnerView = useMemo(() => ({
+  // #232's lane is the one fixture that DOES emulate the owner-private Home
+  // surface, because the suggestion card is what it grades. It opts in
+  // explicitly so every other lane keeps the truthful no-reader default.
+  const qaHomeBaseSuggestion = import.meta.env.DEV
+    && new URLSearchParams(window.location.search).get("qaHomeBaseSuggestion") === "1";
+  const qaOwnerView = useMemo(() => (qaHomeBaseSuggestion ? createOwnerAtlasView() : {
     ...createOwnerAtlasView(),
     // Browser QA fixtures do not emulate the owner-private Home history API.
     // Keep the fixture truthful instead of issuing an unowned /api/home-bases
     // request that only produces a caught 500 and contaminates QA evidence.
     listHomeBasePeriods: null,
-  }), []);
+    listHomeBaseDismissal: null,
+  }), [qaHomeBaseSuggestion]);
   const session = authClient.useSession();
   const [revision, setRevision] = useState(0);
   const [cinematicActive, setCinematicActive] = useState(false);

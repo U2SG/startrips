@@ -1446,3 +1446,39 @@ describe("globe detail-control ownership (#308)", () => {
     expect(rule).not.toMatch(/(^|\s)right:/);
   });
 });
+
+describe("ST-060 the Home Base suggestion card is quiet and non-modal", () => {
+  it("renders beside the Atlas timeline without an overlay, a dialog role or a focus trap", () => {
+    const source = readFileSync(new URL("./LivingAtlasApp.tsx", import.meta.url), "utf8");
+    const card = source.slice(
+      source.indexOf("living-atlas__home-base-suggestion motion-fade-through"),
+      source.indexOf("{view === \"planet\" && journeys.length === 0"),
+    );
+    expect(card.length).toBeGreaterThan(0);
+    expect(card).not.toContain("role=\"dialog\"");
+    expect(card).not.toContain("aria-modal");
+    expect(card).not.toContain("inert");
+    expect(card).not.toContain("useModalFocus");
+    // The condition is the decision's own, so a second call site cannot forget
+    // the Story/Playback suppression.
+    expect(source).toContain("homeBaseSuggestion?.visible");
+    expect(source).toContain("narrativeSurfaceActive: storyJourneyId !== null || playbackActive");
+  });
+
+  it("recomputes from the frozen inference core rather than holding its own thresholds", () => {
+    const source = readFileSync(new URL("./LivingAtlasApp.tsx", import.meta.url), "utf8");
+    expect(source).toContain("inferHomeBaseCandidate({");
+    expect(source).toContain("evaluationDate: homeEffectiveDate");
+    expect(source).toContain("dismissal: homeBaseDismissal");
+    // No threshold literal is re-stated here; the core owns all of them.
+    expect(source).not.toContain("HOME_BASE_SUGGESTED_MIN_JOURNEYS");
+    expect(source).not.toContain("HOME_BASE_CLUSTER_RADIUS_KM");
+  });
+
+  it("persists the answer before taking the card down", () => {
+    const source = readFileSync(new URL("./LivingAtlasApp.tsx", import.meta.url), "utf8");
+    const dismiss = source.slice(source.indexOf("const dismissHomeBaseSuggestion"));
+    expect(dismiss.indexOf("mutations.recordHomeBaseDismissal"))
+      .toBeLessThan(dismiss.indexOf("setHomeBaseDismissal(recorded)"));
+  });
+});

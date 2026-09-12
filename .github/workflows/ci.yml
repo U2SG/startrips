@@ -160,6 +160,8 @@ jobs:
             command: pnpm qa:globe-render-budget
           - name: guest-share
             command: pnpm qa:guest-share
+          - name: home-base-suggestion
+            command: pnpm qa:home-base-suggestion
           - name: owner-share
             command: pnpm qa:owner-share
     steps:
@@ -191,6 +193,14 @@ jobs:
           done
           curl --fail --silent http://127.0.0.1:4173/ > /dev/null || (cat /tmp/startrips-vite.log && exit 1)
           bash -lc "$QA_COMMAND"
+      - name: Upload Home Base suggestion capture
+        if: ${{ always() && matrix.name == 'home-base-suggestion' }}
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: home-base-suggestion-${{ github.run_attempt }}
+          path: artifacts/home-base-suggestion/
+          if-no-files-found: warn
+
       - name: Upload media motion review
         if: ${{ always() && matrix.name == 'login-media' }}
         uses: actions/upload-artifact@v7.0.1

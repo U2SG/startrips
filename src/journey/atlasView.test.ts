@@ -14,6 +14,7 @@ const GUEST_VIEW: AtlasView = {
   capabilities: GUEST_ATLAS_VIEW_CAPABILITIES,
   listJourneys: async () => [],
   listHomeBasePeriods: null,
+  listHomeBaseDismissal: null,
   readMedia: async () => ({ url: "signed", expiresAt: "2026-09-05T00:00:00.000Z" }),
   mutations: null,
 };
