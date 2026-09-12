@@ -575,6 +575,18 @@ function hasCandidateEvidenceWindow(
   return journeys.size >= HOME_BASE_CANDIDATE_MIN_JOURNEYS;
 }
 
+function hasSuggestionEvidenceWindow(
+  region: EvidenceRegion,
+  startedOn: string,
+  endedOn: string,
+): boolean {
+  const selected = region.selectedEvidence.filter((item) => (
+    item.date >= startedOn && item.date <= endedOn
+  ));
+  const windowRegion = regionFromSelectedEvidence(selected);
+  return windowRegion !== null && hasSuggestionEvidence(windowRegion);
+}
+
 function continuityBlocks(region: EvidenceRegion): ContinuityBlock[] {
   const dates = [...new Set(region.selectedEvidence.map((item) => item.date))].sort();
   if (dates.length === 0) return [];
@@ -592,11 +604,19 @@ function continuityBlocks(region: EvidenceRegion): ContinuityBlock[] {
     const blockEnd = blockDates[blockDates.length - 1];
     for (let index = blockDates.length - 1; index >= 1; index -= 1) {
       const suffixStart = blockDates[index];
-      if (!hasCandidateEvidenceWindow(region, suffixStart, blockEnd)) continue;
+      const suggestionQualifiedSuffix = hasSuggestionEvidenceWindow(region, suffixStart, blockEnd);
+      const candidateQualifiedSuffix = hasCandidateEvidenceWindow(region, suffixStart, blockEnd);
+      if (!suggestionQualifiedSuffix && !candidateQualifiedSuffix) continue;
 
       const hiatusDays = spanDays(blockDates[index - 1], suffixStart);
       const suffixSpanDays = spanDays(suffixStart, blockEnd);
-      if (hiatusDays <= suffixSpanDays) continue;
+      // A suffix that independently reaches the full suggestion evidence contract
+      // is a sustained state in its own right, regardless of how long it later
+      // persists. This prevents one historical visit from moving the proposed
+      // start backward. For candidate-only suffixes, retain the conservative
+      // hiatus-vs-span guard so three recent Journeys cannot borrow an old visit,
+      // while sparse long-term four-Journey evidence is not given a max-gap rule.
+      if (!suggestionQualifiedSuffix && hiatusDays <= suffixSpanDays) continue;
 
       return [
         ...split(blockDates.slice(0, index)),

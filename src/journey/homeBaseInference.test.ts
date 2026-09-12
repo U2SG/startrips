@@ -412,6 +412,30 @@ describe("Home Base evidence fixtures", () => {
     expect(result.proposedPeriodStart).toBe("2026-01-01");
   });
 
+  it("does not let a long-lived later move borrow an isolated historical visit", () => {
+    const confirmed = {
+      startedOn: "2022-01-01",
+      endedOn: null,
+      latitude: SHENZHEN.latitude,
+      longitude: SHENZHEN.longitude,
+    } as const;
+    const result = inferHomeBaseCandidate({
+      journeys: [
+        journey("old-holiday", "2023-06-01", TOKYO, TOKYO),
+        journey("tokyo-1", "2025-01-01", TOKYO, TOKYO),
+        journey("tokyo-2", "2025-07-01", TOKYO, TOKYO),
+        journey("tokyo-3", "2026-01-01", TOKYO, TOKYO),
+        journey("tokyo-4", "2026-12-31", TOKYO, TOKYO),
+      ],
+      confirmedPeriod: confirmed,
+      evaluationDate: "2027-01-15",
+    });
+
+    expect(result.state).toBe("move_suggested");
+    expect(result.support.evidenceStartedOn).toBe("2025-01-01");
+    expect(result.proposedPeriodStart).toBe("2025-01-01");
+  });
+
   it("keeps the earliest qualifying sustained move date when later suffixes also qualify", () => {
     const confirmed = {
       startedOn: "2025-01-01",
