@@ -456,7 +456,10 @@ type TransitionScheduleEntry = { scene: string; startFrame: number; endFrame: nu
 
 type DecodedTransitionProof = {
   scene: string;
-  sampledFrames: number[];
+  expectedStartFrame: number;
+  actualStartFrame: number;
+  expectedEndFrame: number;
+  actualEndFrame: number;
   decodedSceneMarker: number;
 };
 
@@ -504,50 +507,13 @@ function validatePrototypeOutput(
   return transitionSchedule;
 }
 
-function sampledTransitionFrames(schedule: readonly TransitionScheduleEntry[]): number[] {
-  const frames = new Set<number>();
-  for (const entry of schedule) {
-    if (entry.endFrame <= entry.startFrame) {
-      throw new Error("keepsake_render_transition_frame_range_invalid");
-    }
-    frames.add(entry.startFrame);
-    frames.add(Math.floor((entry.startFrame + entry.endFrame - 1) / 2));
-    frames.add(entry.endFrame - 1);
-  }
-  return [...frames].sort((left, right) => left - right);
-}
-
-async function decodedRgbFramesAt(filePath: string, frameIndexes: readonly number[]): Promise<Map<number, Buffer>> {
-  const uniqueFrames = [...new Set(frameIndexes)].sort((left, right) => left - right);
-  const selectExpression = uniqueFrames.map((frame) => `eq(n\\,${frame})`).join("+");
-  const result = await runBuffer("ffmpeg", [
-    "-hide_banner",
-    "-loglevel", "error",
-    "-i", filePath,
-    "-map", "0:v:0",
-    "-vf", `select=${selectExpression}`,
-    "-vsync", "0",
-    "-pix_fmt", "rgb24",
-    "-f", "rawvideo",
-    "-",
-  ]);
-  const bytesPerFrame = PROTOTYPE_WIDTH * PROTOTYPE_HEIGHT * 3;
-  if (result.stdout.byteLength !== uniqueFrames.length * bytesPerFrame) {
-    throw new Error("keepsake_render_decoded_transition_frame_count_mismatch");
-  }
-  const decoded = new Map<number, Buffer>();
-  uniqueFrames.forEach((frameIndex, index) => {
-    const start = index * bytesPerFrame;
-    decoded.set(frameIndex, result.stdout.subarray(start, start + bytesPerFrame));
-  });
-  return decoded;
-}
-
 const SCENE_MARKER_CELL_SIZE = 8;
 const SCENE_MARKER_COLUMNS = 4;
 const SCENE_MARKER_ROWS = 4;
 const SCENE_MARKER_X = 8;
 const SCENE_MARKER_Y = PROTOTYPE_HEIGHT - (SCENE_MARKER_ROWS * SCENE_MARKER_CELL_SIZE) - 8;
+const SCENE_MARKER_WIDTH = SCENE_MARKER_COLUMNS * SCENE_MARKER_CELL_SIZE;
+const SCENE_MARKER_HEIGHT = SCENE_MARKER_ROWS * SCENE_MARKER_CELL_SIZE;
 
 function stampSceneMarker(buffer: Buffer, sceneIndex: number): number {
   const marker = sceneIndex + 1;
@@ -568,22 +534,22 @@ function stampSceneMarker(buffer: Buffer, sceneIndex: number): number {
   return marker;
 }
 
-function decodeSceneMarker(buffer: Buffer): number {
-  const bytesPerFrame = PROTOTYPE_WIDTH * PROTOTYPE_HEIGHT * 3;
-  if (buffer.byteLength !== bytesPerFrame) {
+function decodeSceneMarkerPatch(buffer: Buffer): number {
+  const expectedBytes = SCENE_MARKER_WIDTH * SCENE_MARKER_HEIGHT * 3;
+  if (buffer.byteLength !== expectedBytes) {
     throw new Error("keepsake_render_decoded_transition_frame_size_mismatch");
   }
   let marker = 0;
   for (let bit = 0; bit < SCENE_MARKER_COLUMNS * SCENE_MARKER_ROWS; bit += 1) {
     const column = bit % SCENE_MARKER_COLUMNS;
     const row = Math.floor(bit / SCENE_MARKER_COLUMNS);
-    const startX = SCENE_MARKER_X + column * SCENE_MARKER_CELL_SIZE + 2;
-    const startY = SCENE_MARKER_Y + row * SCENE_MARKER_CELL_SIZE + 2;
+    const startX = column * SCENE_MARKER_CELL_SIZE + 2;
+    const startY = row * SCENE_MARKER_CELL_SIZE + 2;
     let sum = 0;
     let samples = 0;
     for (let y = startY; y < startY + SCENE_MARKER_CELL_SIZE - 4; y += 1) {
       for (let x = startX; x < startX + SCENE_MARKER_CELL_SIZE - 4; x += 1) {
-        const offset = (y * PROTOTYPE_WIDTH + x) * 3;
+        const offset = (y * SCENE_MARKER_WIDTH + x) * 3;
         sum += buffer[offset] + buffer[offset + 1] + buffer[offset + 2];
         samples += 3;
       }
@@ -593,32 +559,79 @@ function decodeSceneMarker(buffer: Buffer): number {
   return marker;
 }
 
+async function decodedSceneMarkers(filePath: string, expectedFrameCount: number): Promise<number[]> {
+  const result = await runBuffer("ffmpeg", [
+    "-hide_banner",
+    "-loglevel", "error",
+    "-i", filePath,
+    "-map", "0:v:0",
+    "-vf", `crop=${SCENE_MARKER_WIDTH}:${SCENE_MARKER_HEIGHT}:${SCENE_MARKER_X}:${SCENE_MARKER_Y},format=rgb24`,
+    "-vsync", "0",
+    "-f", "rawvideo",
+    "-",
+  ]);
+  const bytesPerFrame = SCENE_MARKER_WIDTH * SCENE_MARKER_HEIGHT * 3;
+  if (result.stdout.byteLength !== expectedFrameCount * bytesPerFrame) {
+    throw new Error("keepsake_render_decoded_transition_frame_count_mismatch");
+  }
+  return Array.from({ length: expectedFrameCount }, (_value, frameIndex) => {
+    const start = frameIndex * bytesPerFrame;
+    return decodeSceneMarkerPatch(result.stdout.subarray(start, start + bytesPerFrame));
+  });
+}
+
 function validateDecodedTransitions(
-  decodedFrames: ReadonlyMap<number, Buffer>,
+  decodedMarkers: readonly number[],
   schedule: readonly TransitionScheduleEntry[],
   expectedSceneMarkers: readonly number[],
 ): DecodedTransitionProof[] {
   if (schedule.length !== expectedSceneMarkers.length) {
     throw new Error("keepsake_render_decoded_transition_scene_count_mismatch");
   }
+  const expectedFrameCount = schedule.at(-1)?.endFrame ?? 0;
+  if (decodedMarkers.length !== expectedFrameCount) {
+    throw new Error("keepsake_render_decoded_transition_frame_count_mismatch");
+  }
+
+  const runs: Array<{ marker: number; startFrame: number; endFrame: number }> = [];
+  for (let frameIndex = 0; frameIndex < decodedMarkers.length; frameIndex += 1) {
+    const marker = decodedMarkers[frameIndex];
+    const previous = runs.at(-1);
+    if (!previous || previous.marker !== marker) {
+      runs.push({ marker, startFrame: frameIndex, endFrame: frameIndex + 1 });
+    } else {
+      previous.endFrame = frameIndex + 1;
+    }
+  }
+  if (runs.length !== schedule.length) {
+    throw new Error("keepsake_render_decoded_transition_scene_count_mismatch");
+  }
+
   return schedule.map((entry, sceneIndex) => {
-    const sampledFrames = [...new Set([
-      entry.startFrame,
-      Math.floor((entry.startFrame + entry.endFrame - 1) / 2),
-      entry.endFrame - 1,
-    ])];
+    const run = runs[sceneIndex];
     const expectedMarker = expectedSceneMarkers[sceneIndex];
-    for (const frameIndex of sampledFrames) {
-      const decoded = decodedFrames.get(frameIndex);
-      if (!decoded) throw new Error("keepsake_render_decoded_transition_frame_missing");
-      if (decodeSceneMarker(decoded) !== expectedMarker) {
-        throw new Error("keepsake_render_decoded_transition_scene_mismatch");
-      }
+    if (run.marker !== expectedMarker) {
+      throw new Error("keepsake_render_decoded_transition_scene_mismatch");
+    }
+    // The concat demuxer timestamps still-image packets on its own time base,
+    // while the fps filter emits a 12 fps CFR stream. One-frame quantization at
+    // an interior boundary is therefore acceptable; anything larger means the
+    // encoded scene timing no longer matches the semantic render schedule.
+    const startTolerance = sceneIndex === 0 ? 0 : 1;
+    const endTolerance = sceneIndex === schedule.length - 1 ? 0 : 1;
+    if (
+      Math.abs(run.startFrame - entry.startFrame) > startTolerance
+      || Math.abs(run.endFrame - entry.endFrame) > endTolerance
+    ) {
+      throw new Error("keepsake_render_decoded_transition_boundary_mismatch");
     }
     return {
       scene: entry.scene,
-      sampledFrames,
-      decodedSceneMarker: expectedMarker,
+      expectedStartFrame: entry.startFrame,
+      actualStartFrame: run.startFrame,
+      expectedEndFrame: entry.endFrame,
+      actualEndFrame: run.endFrame,
+      decodedSceneMarker: run.marker,
     };
   });
 }
@@ -699,12 +712,10 @@ async function main(): Promise<void> {
       throw new Error("keepsake_render_decoded_frame_signature_mismatch");
     }
     const transitionSchedule = validatePrototypeOutput(mediaProbe, plan);
-    const decodedTransitionFrames = await decodedRgbFramesAt(
-      outputA,
-      sampledTransitionFrames(transitionSchedule),
-    );
+    const expectedFrameCount = transitionSchedule.at(-1)?.endFrame ?? 0;
+    const decodedTransitionMarkers = await decodedSceneMarkers(outputA, expectedFrameCount);
     const decodedTransitionProof = validateDecodedTransitions(
-      decodedTransitionFrames,
+      decodedTransitionMarkers,
       transitionSchedule,
       sceneMarkers,
     );
@@ -749,7 +760,7 @@ async function main(): Promise<void> {
       `- Render A: ${firstMetrics.wallTimeMs} ms, ${firstMetrics.bytes} bytes, max RSS ${firstMetrics.maxRssKb ?? "unavailable"} KB`,
       `- Render B: ${secondMetrics.wallTimeMs} ms, ${secondMetrics.bytes} bytes, max RSS ${secondMetrics.maxRssKb ?? "unavailable"} KB`,
       `- Decoded frame signature identical: yes (${metrics.deterministic.decodedFrameSignatureSha256})`,
-      `- Decoded transition samples verified against source PPM scenes: ${decodedTransitionProof.reduce((sum, proof) => sum + proof.sampledFrames.length, 0)} frames`,
+      `- Decoded transition frames verified against source PPM scenes: ${decodedTransitionProof.reduce((sum, proof) => sum + proof.actualEndFrame - proof.actualStartFrame, 0)} frames`,
       `- Container bytes identical: ${metrics.deterministic.containerBytesIdentical ? "yes" : "no (decoded frames remain identical)"}`,
       "- Media acquisition: each private read carries the pinned Journey narrative and must be atomically re-authorized against canonical state; no storage coordinate or share URL enters the serializable render plan",
       "- Spatial presentation: fixture-only ROUTE_POINTS; production requires revision-pinned authorized Journey context",
