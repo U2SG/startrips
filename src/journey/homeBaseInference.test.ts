@@ -326,6 +326,30 @@ describe("Home Base evidence fixtures", () => {
     expect(result.proposedPeriodStart).toBeNull();
   });
 
+  it("starts a move at the sustained evidence window instead of an isolated old visit", () => {
+    const confirmed = {
+      startedOn: "2022-01-01",
+      endedOn: null,
+      latitude: SHENZHEN.latitude,
+      longitude: SHENZHEN.longitude,
+    } as const;
+    const tokyoJourneys = [
+      journey("old-holiday", "2023-06-01", TOKYO, TOKYO),
+      journey("j1", "2026-01-01", TOKYO, TOKYO),
+      journey("j2", "2026-02-01", TOKYO, TOKYO),
+      journey("j3", "2026-03-01", TOKYO, TOKYO),
+      journey("j4", "2026-04-02", TOKYO, TOKYO),
+    ];
+    const result = inferHomeBaseCandidate({
+      journeys: tokyoJourneys,
+      confirmedPeriod: confirmed,
+      evaluationDate: "2026-06-01",
+    });
+    expect(result.state).toBe("move_suggested");
+    expect(result.support.evidenceStartedOn).toBe("2023-06-01");
+    expect(result.proposedPeriodStart).toBe("2026-01-01");
+  });
+
   it("never proposes a move on the current confirmed period start date", () => {
     const confirmed = {
       startedOn: "2026-01-01",

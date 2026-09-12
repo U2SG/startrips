@@ -100,6 +100,7 @@ type JourneySupport = {
 
 type EvidenceRegion = {
   anchor: HomeBaseMetroAnchor;
+  selectedEvidence: readonly EndpointEvidence[];
   supports: JourneySupport[];
   journeyCount: number;
   startCount: number;
@@ -265,6 +266,7 @@ function regionFromClique(
   const evidenceEndedOn = sortedDates.at(-1)!;
   return {
     anchor: regionAnchor(selected),
+    selectedEvidence: selected,
     supports,
     journeyCount: supports.length,
     startCount: supports.filter((support) => support.supportsStart).length,
@@ -401,6 +403,39 @@ function evidenceRegions(evidence: readonly EndpointEvidence[]): EvidenceRegion[
 
   bronKerbosch([], evidence.map((_item, index) => index), []);
   return [...bySupport.values()].sort(compareRegions);
+}
+
+function sustainedMoveStart(region: EvidenceRegion): string {
+  const candidateDates = [...new Set(region.selectedEvidence.map((item) => item.date))].sort();
+  let sustainedStart = region.evidenceStartedOn;
+
+  for (const candidateDate of candidateDates) {
+    const suffixEvidence = region.selectedEvidence.filter((item) => item.date >= candidateDate);
+    const supportByJourney = new Map<string, JourneySupport>();
+    for (const item of suffixEvidence) {
+      const support = supportByJourney.get(item.journeyId) ?? {
+        journeyId: item.journeyId,
+        supportsStart: false,
+        supportsEnd: false,
+      };
+      if (item.kind === "start") support.supportsStart = true;
+      else support.supportsEnd = true;
+      supportByJourney.set(item.journeyId, support);
+    }
+
+    const supports = [...supportByJourney.values()];
+    const starts = supports.filter((support) => support.supportsStart).length;
+    const ends = supports.filter((support) => support.supportsEnd).length;
+    const evidenceSpanDays = spanDays(candidateDate, region.evidenceEndedOn);
+    const qualifies = supports.length >= HOME_BASE_SUGGESTED_MIN_JOURNEYS
+      && evidenceSpanDays >= HOME_BASE_SUGGESTED_MIN_SPAN_DAYS
+      && starts >= HOME_BASE_MIN_START_SUPPORT
+      && ends >= HOME_BASE_MIN_END_SUPPORT;
+    if (!qualifies) break;
+    sustainedStart = candidateDate;
+  }
+
+  return sustainedStart;
 }
 
 function runnerUpSupport(leader: EvidenceRegion, regions: readonly EvidenceRegion[]): number {
@@ -711,7 +746,7 @@ export function inferHomeBaseCandidate(
       state: "move_suggested",
       ...base,
       reasonCodes: [...reasonCodes, "DIFFERS_FROM_CONFIRMED_HOME"],
-      proposedPeriodStart: leader.evidenceStartedOn,
+      proposedPeriodStart: sustainedMoveStart(leader),
     };
   }
 
