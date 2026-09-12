@@ -477,12 +477,28 @@ type ContinuityBlock = {
 type MoveWindowObservation = {
   region: EvidenceRegion;
   runnerUpJourneys: number;
-  currentnessStartedOn: string;
+  currentnessReachedOn: string;
 };
 
 function isCandidateRegion(region: EvidenceRegion): boolean {
   return region.journeyCount >= HOME_BASE_CANDIDATE_MIN_JOURNEYS
     && region.evidenceSpanDays >= HOME_BASE_CANDIDATE_MIN_SPAN_DAYS;
+}
+function candidateEvidenceReachedOn(region: EvidenceRegion): string {
+  const evidence = [...region.selectedEvidence].sort((left, right) => (
+    left.date.localeCompare(right.date) || left.journeyId.localeCompare(right.journeyId)
+  ));
+  const journeys = new Set<string>();
+  for (const item of evidence) {
+    journeys.add(item.journeyId);
+    if (
+      journeys.size >= HOME_BASE_CANDIDATE_MIN_JOURNEYS
+      && spanDays(region.evidenceStartedOn, item.date) >= HOME_BASE_CANDIDATE_MIN_SPAN_DAYS
+    ) {
+      return item.date;
+    }
+  }
+  return region.evidenceEndedOn;
 }
 
 function hasCandidateEvidenceWindow(
@@ -611,7 +627,7 @@ function findSustainedMove(
           observations.push({
             region: currentLeader,
             runnerUpJourneys: currentRunnerUp,
-            currentnessStartedOn: currentLeader.evidenceStartedOn,
+            currentnessReachedOn: candidateEvidenceReachedOn(currentLeader),
           });
           observationRecorded = true;
         }
@@ -644,25 +660,25 @@ function findSustainedMove(
   const latest = candidates[0] ?? null;
   if (!latest || latest.matchesConfirmedHome) return null;
 
-  const latestMoveObservationStart = observations.reduce((latestStart, observation) => {
+  const latestMoveObservationReachedOn = observations.reduce((latestReachedOn, observation) => {
     const distance = haversineDistanceKm(
       latest.region.anchor.latitude,
       latest.region.anchor.longitude,
       observation.region.anchor.latitude,
       observation.region.anchor.longitude,
     );
-    if (distance > HOME_BASE_CLUSTER_RADIUS_KM) return latestStart;
-    return observation.currentnessStartedOn > latestStart
-      ? observation.currentnessStartedOn
-      : latestStart;
-  }, latest.currentnessStartedOn);
+    if (distance > HOME_BASE_CLUSTER_RADIUS_KM) return latestReachedOn;
+    return observation.currentnessReachedOn > latestReachedOn
+      ? observation.currentnessReachedOn
+      : latestReachedOn;
+  }, candidateEvidenceReachedOn(latest.region));
 
   const laterConflict = observations.some((observation) => {
     // Confidence and currentness must come from the same sustained suffix. An
     // observation whose newest self-supporting interval started before the move's
     // newest suggestion-quality interval is historical, even if a raw tail point
     // happened later.
-    if (observation.currentnessStartedOn < latestMoveObservationStart) return false;
+    if (observation.currentnessReachedOn < latestMoveObservationReachedOn) return false;
     const moveDistance = haversineDistanceKm(
       latest.region.anchor.latitude,
       latest.region.anchor.longitude,

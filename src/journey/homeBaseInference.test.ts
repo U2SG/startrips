@@ -580,6 +580,37 @@ describe("Home Base evidence fixtures", () => {
       TOKYO.longitude,
     )).toBeLessThanOrEqual(HOME_BASE_CLUSTER_RADIUS_KM);
   });
+  it("keeps a competitor current when it reaches candidate strength after the move metro", () => {
+    const confirmed = {
+      startedOn: "2022-01-01",
+      endedOn: null,
+      latitude: SHENZHEN.latitude,
+      longitude: SHENZHEN.longitude,
+    } as const;
+    const oldMove = [
+      journey("old-tokyo-1", "2023-01-01", TOKYO, TOKYO),
+      journey("old-tokyo-2", "2023-02-01", TOKYO, TOKYO),
+      journey("old-tokyo-3", "2023-03-01", TOKYO, TOKYO),
+      journey("old-tokyo-4", "2023-04-02", TOKYO, TOKYO),
+    ];
+    const newerTokyo = [
+      journey("new-tokyo-1", "2025-02-01", TOKYO, TOKYO),
+      journey("new-tokyo-2", "2025-03-01", TOKYO, TOKYO),
+      journey("new-tokyo-3", "2025-04-02", TOKYO, TOKYO),
+    ];
+    const laterCompetition = [
+      journey("singapore-1", "2025-01-01", SINGAPORE, SINGAPORE),
+      journey("singapore-2", "2025-03-15", SINGAPORE, SINGAPORE),
+      journey("singapore-3", "2025-05-01", SINGAPORE, SINGAPORE),
+    ];
+    const result = inferHomeBaseCandidate({
+      journeys: [...oldMove, ...newerTokyo, ...laterCompetition],
+      confirmedPeriod: confirmed,
+      evaluationDate: "2025-06-01",
+    });
+    expect(result.state).toBe("candidate");
+    expect(result.proposedPeriodStart).toBeNull();
+  });
   it("does not let an unrelated weak region resurrect expired move competition", () => {
     const confirmed = {
       startedOn: "2024-01-01",
