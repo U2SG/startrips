@@ -591,6 +591,13 @@ function findSustainedMove(
         const currentRegions = regionsForWindow(block.dates[index], block.endedOn);
         const currentLeader = currentRegions[0];
         if (!currentLeader) continue;
+        const currentTargetDistance = haversineDistanceKm(
+          targetRegion.anchor.latitude,
+          targetRegion.anchor.longitude,
+          currentLeader.anchor.latitude,
+          currentLeader.anchor.longitude,
+        );
+        if (currentTargetDistance > HOME_BASE_CLUSTER_RADIUS_KM) continue;
         const currentRunnerUp = runnerUpSupport(currentLeader, currentRegions);
         if (!isCandidateRegion(currentLeader)) continue;
         observations.push({
