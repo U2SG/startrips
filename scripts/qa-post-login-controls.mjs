@@ -1828,57 +1828,97 @@ async function verifyFinalAcceptanceMobileFlow() {
     // already recovered. `recordRailState` logs that one observation, in the
     // iteration that passes as well as the one that fails.
     const activateControl = async (locator, label, recordRailState = false) => {
-      await locator.evaluate((element) => {
-        element.scrollIntoView({ block: "center", inline: "center" });
-      });
+      if (recordRailState) {
+        // #325: the diagnostic branch must not depend on the target locator
+        // resolving. If the rail disappears during the responsive/reload race,
+        // a locator-scoped evaluation would wait for recovery (or time out) and
+        // lose the missing-rail state we are trying to classify.
+        await page.evaluate((title) => {
+          const normalize = (value) => (value ?? "").replace(/\s+/g, " ").trim().toLowerCase();
+          const wanted = normalize(title);
+          const target = [...document.querySelectorAll(".living-atlas__journey-rail li button")]
+            .find((button) => normalize(button.textContent).includes(wanted));
+          target?.scrollIntoView({ block: "center", inline: "center" });
+        }, targetTitle);
+      } else {
+        await locator.evaluate((element) => {
+          element.scrollIntoView({ block: "center", inline: "center" });
+        });
+      }
       await page.evaluate(() => new Promise((resolve) => (
         requestAnimationFrame(() => requestAnimationFrame(resolve))
       )));
-      const { journeyRailState, ...actionability } = await locator.evaluate((element, title) => {
-        const rect = element.getBoundingClientRect();
-        const style = getComputedStyle(element);
-        const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
-        const boxOf = (node) => {
-          if (!node) return null;
-          const box = node.getBoundingClientRect();
-          return { x: box.x, y: box.y, width: box.width, height: box.height };
-        };
-        // Mirror Playwright's `hasText` filter -- whitespace-normalized and
-        // case-insensitive -- so a zero count here really means the locator
-        // would not have resolved either.
-        const normalize = (value) => (value ?? "").replace(/\s+/g, " ").trim().toLowerCase();
-        const wanted = normalize(title);
-        const rail = document.querySelector(".living-atlas__journey-rail");
-        const railStyle = rail ? getComputedStyle(rail) : null;
-        const railButtons = [...document.querySelectorAll(".living-atlas__journey-rail li button")];
-        const matching = railButtons.filter((button) => normalize(button.textContent).includes(wanted));
-        const atlas = document.querySelector(".living-atlas");
-        return {
-          visible: rect.width > 0
-            && rect.height > 0
-            && style.display !== "none"
-            && style.visibility !== "hidden"
-            && Number(style.opacity) > 0.01,
-          enabled: !(element instanceof HTMLButtonElement) || !element.disabled,
-          pointerEvents: style.pointerEvents,
-          hitOwned: hit === element || element.contains(hit),
-          hitTag: hit?.tagName ?? null,
-          hitClass: hit instanceof Element ? hit.getAttribute("class") : null,
-          journeyRailState: {
-            railPresent: Boolean(rail),
-            railDisplay: railStyle?.display ?? null,
-            railVisibility: railStyle?.visibility ?? null,
-            railOpacity: railStyle?.opacity ?? null,
-            railBox: boxOf(rail),
-            railInert: rail ? (Boolean(rail.inert) || rail.closest("[inert]") !== null) : null,
-            railButtons: railButtons.length,
-            matchingButtons: matching.length,
-            atlasClass: atlas?.getAttribute("class") ?? null,
-            atlasMobileV2: atlas?.getAttribute("data-mobile-v2") ?? null,
-            targetBox: boxOf(element),
-          },
-        };
-      }, targetTitle);
+
+      const observation = recordRailState
+        ? await page.evaluate((title) => {
+            const boxOf = (node) => {
+              if (!node) return null;
+              const box = node.getBoundingClientRect();
+              return { x: box.x, y: box.y, width: box.width, height: box.height };
+            };
+            // Mirror Playwright's `hasText` filter -- whitespace-normalized and
+            // case-insensitive -- while resolving rail and target in this SAME
+            // page-scoped task. A missing target therefore produces evidence
+            // instead of preventing the diagnostic from running.
+            const normalize = (value) => (value ?? "").replace(/\s+/g, " ").trim().toLowerCase();
+            const wanted = normalize(title);
+            const rail = document.querySelector(".living-atlas__journey-rail");
+            const railStyle = rail ? getComputedStyle(rail) : null;
+            const railButtons = [...document.querySelectorAll(".living-atlas__journey-rail li button")];
+            const matching = railButtons.filter((button) => normalize(button.textContent).includes(wanted));
+            const element = matching[0] ?? null;
+            const atlas = document.querySelector(".living-atlas");
+            const rect = element?.getBoundingClientRect() ?? null;
+            const style = element ? getComputedStyle(element) : null;
+            const hit = rect
+              ? document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2)
+              : null;
+            return {
+              visible: Boolean(rect && style)
+                && rect.width > 0
+                && rect.height > 0
+                && style.display !== "none"
+                && style.visibility !== "hidden"
+                && Number(style.opacity) > 0.01,
+              enabled: element instanceof HTMLButtonElement && !element.disabled,
+              pointerEvents: style?.pointerEvents ?? null,
+              hitOwned: Boolean(element && (hit === element || element.contains(hit))),
+              hitTag: hit?.tagName ?? null,
+              hitClass: hit instanceof Element ? hit.getAttribute("class") : null,
+              journeyRailState: {
+                railPresent: Boolean(rail),
+                railDisplay: railStyle?.display ?? null,
+                railVisibility: railStyle?.visibility ?? null,
+                railOpacity: railStyle?.opacity ?? null,
+                railBox: boxOf(rail),
+                railInert: rail ? (Boolean(rail.inert) || rail.closest("[inert]") !== null) : null,
+                railButtons: railButtons.length,
+                matchingButtons: matching.length,
+                atlasClass: atlas?.getAttribute("class") ?? null,
+                atlasMobileV2: atlas?.getAttribute("data-mobile-v2") ?? null,
+                targetBox: boxOf(element),
+              },
+            };
+          }, targetTitle)
+        : await locator.evaluate((element) => {
+            const rect = element.getBoundingClientRect();
+            const style = getComputedStyle(element);
+            const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+            return {
+              visible: rect.width > 0
+                && rect.height > 0
+                && style.display !== "none"
+                && style.visibility !== "hidden"
+                && Number(style.opacity) > 0.01,
+              enabled: !(element instanceof HTMLButtonElement) || !element.disabled,
+              pointerEvents: style.pointerEvents,
+              hitOwned: hit === element || element.contains(hit),
+              hitTag: hit?.tagName ?? null,
+              hitClass: hit instanceof Element ? hit.getAttribute("class") : null,
+              journeyRailState: null,
+            };
+          });
+      const { journeyRailState, ...actionability } = observation;
       if (recordRailState) {
         console.error(
           `[qa-post-login] final:${viewportLabel}:journey-rail-state `
@@ -1893,7 +1933,7 @@ async function verifyFinalAcceptanceMobileFlow() {
       ) {
         throw new Error(
           `${label} is not actionable: ${JSON.stringify(actionability)}`
-          + ` journey-rail-state ${JSON.stringify(journeyRailState)}`,
+          + (recordRailState ? ` journey-rail-state ${JSON.stringify(journeyRailState)}` : ""),
         );
       }
       await locator.evaluate((element) => element.click());
