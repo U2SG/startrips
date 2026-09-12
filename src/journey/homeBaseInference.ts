@@ -644,12 +644,25 @@ function findSustainedMove(
   const latest = candidates[0] ?? null;
   if (!latest || latest.matchesConfirmedHome) return null;
 
+  const latestMoveObservationStart = observations.reduce((latestStart, observation) => {
+    const distance = haversineDistanceKm(
+      latest.region.anchor.latitude,
+      latest.region.anchor.longitude,
+      observation.region.anchor.latitude,
+      observation.region.anchor.longitude,
+    );
+    if (distance > HOME_BASE_CLUSTER_RADIUS_KM) return latestStart;
+    return observation.currentnessStartedOn > latestStart
+      ? observation.currentnessStartedOn
+      : latestStart;
+  }, latest.currentnessStartedOn);
+
   const laterConflict = observations.some((observation) => {
     // Confidence and currentness must come from the same sustained suffix. An
     // observation whose newest self-supporting interval started before the move's
     // newest suggestion-quality interval is historical, even if a raw tail point
     // happened later.
-    if (observation.currentnessStartedOn < latest.currentnessStartedOn) return false;
+    if (observation.currentnessStartedOn < latestMoveObservationStart) return false;
     const moveDistance = haversineDistanceKm(
       latest.region.anchor.latitude,
       latest.region.anchor.longitude,
