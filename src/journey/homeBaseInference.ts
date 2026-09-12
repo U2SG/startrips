@@ -472,21 +472,52 @@ type ContinuityBlock = {
   endedOn: string;
 };
 
+type MoveWindowObservation = {
+  region: EvidenceRegion;
+  runnerUpJourneys: number;
+  startedOn: string;
+};
+
+function isCandidateRegion(region: EvidenceRegion): boolean {
+  return region.journeyCount >= HOME_BASE_CANDIDATE_MIN_JOURNEYS
+    && region.evidenceSpanDays >= HOME_BASE_CANDIDATE_MIN_SPAN_DAYS;
+}
+
 function continuityBlocks(region: EvidenceRegion): ContinuityBlock[] {
   const dates = [...new Set(region.selectedEvidence.map((item) => item.date))].sort();
   if (dates.length === 0) return [];
 
-  const blocks: ContinuityBlock[] = [];
-  let blockDates: string[] = [dates[0]];
-  for (let index = 1; index < dates.length; index += 1) {
-    if (spanDays(dates[index - 1], dates[index]) > HOME_BASE_SUGGESTED_MIN_SPAN_DAYS) {
-      blocks.push({ dates: blockDates, endedOn: blockDates[blockDates.length - 1] });
-      blockDates = [];
+  // Do not turn the 90-day minimum evidence span into an undocumented maximum
+  // gap. A hiatus is only a boundary when the evidence after it already forms
+  // an independent V1 candidate and the hiatus is longer than that candidate's
+  // entire observed span. This drops an isolated historical visit before a
+  // coherent newer candidate without breaking sparse long-term repeated support.
+  const split = (blockDates: readonly string[]): ContinuityBlock[] => {
+    if (blockDates.length < 2) {
+      return [{ dates: blockDates, endedOn: blockDates[blockDates.length - 1] }];
     }
-    blockDates.push(dates[index]);
-  }
-  blocks.push({ dates: blockDates, endedOn: blockDates[blockDates.length - 1] });
-  return blocks;
+
+    const blockEnd = blockDates[blockDates.length - 1];
+    for (let index = blockDates.length - 1; index >= 1; index -= 1) {
+      const suffixStart = blockDates[index];
+      const suffixRegion = regionFromSelectedEvidence(region.selectedEvidence.filter((item) => (
+        item.date >= suffixStart && item.date <= blockEnd
+      )));
+      if (!suffixRegion || !isCandidateRegion(suffixRegion)) continue;
+
+      const hiatusDays = spanDays(blockDates[index - 1], suffixStart);
+      if (hiatusDays <= suffixRegion.evidenceSpanDays) continue;
+
+      return [
+        ...split(blockDates.slice(0, index)),
+        ...split(blockDates.slice(index)),
+      ];
+    }
+
+    return [{ dates: blockDates, endedOn: blockEnd }];
+  };
+
+  return split(dates);
 }
 
 function findSustainedMove(
@@ -494,16 +525,29 @@ function findSustainedMove(
   confirmedPeriod: ConfirmedHomeBasePeriod,
 ): MoveCandidate | null {
   const candidates: MoveCandidate[] = [];
+  const observations: MoveWindowObservation[] = [];
 
   for (const targetRegion of regions) {
     for (const block of continuityBlocks(targetRegion)) {
+      let foundCandidate = false;
       for (const candidateDate of block.dates) {
         // Reuse the already-enumerated maximal regions. Restricting them to the
-        // continuity window re-applies the complete V1 suggestion contract
+        // temporal window re-applies the complete V1 suggestion contract
         // without rebuilding the pairwise graph/clique search for every date.
         const candidateRegions = windowRegions(regions, candidateDate, block.endedOn);
         const windowLeader = candidateRegions[0];
         if (!windowLeader) continue;
+
+        const runnerUpJourneys = runnerUpSupport(windowLeader, candidateRegions);
+        if (isCandidateRegion(windowLeader)) {
+          observations.push({
+            region: windowLeader,
+            runnerUpJourneys,
+            startedOn: candidateDate,
+          });
+        }
+
+        if (foundCandidate) continue;
 
         const targetDistance = haversineDistanceKm(
           targetRegion.anchor.latitude,
@@ -518,8 +562,6 @@ function findSustainedMove(
           windowLeader.anchor.longitude,
         );
         if (targetDistance > HOME_BASE_CLUSTER_RADIUS_KM) continue;
-
-        const runnerUpJourneys = runnerUpSupport(windowLeader, candidateRegions);
         if (!meetsSuggestionPolicy(windowLeader, runnerUpJourneys)) continue;
 
         candidates.push({
@@ -530,9 +572,9 @@ function findSustainedMove(
           matchesConfirmedHome: confirmedDistance <= HOME_BASE_CLUSTER_RADIUS_KM,
         });
         // Dates are ascending, so retain the earliest qualifying onset inside
-        // this independently sustained block. A later isolated block cannot
-        // invalidate an earlier block that already qualified.
-        break;
+        // this independently sustained block. Continue scanning later suffixes
+        // only so current-state observations remain available.
+        foundCandidate = true;
       }
     }
   }
@@ -546,7 +588,28 @@ function findSustainedMove(
     || left.proposedPeriodStart.localeCompare(right.proposedPeriodStart)
   ));
   const latest = candidates[0] ?? null;
-  return latest?.matchesConfirmedHome ? null : latest;
+  if (!latest || latest.matchesConfirmedHome) return null;
+
+  const laterConflict = observations.some((observation) => {
+    if (observation.startedOn <= latest.proposedPeriodStart) return false;
+    const moveDistance = haversineDistanceKm(
+      latest.region.anchor.latitude,
+      latest.region.anchor.longitude,
+      observation.region.anchor.latitude,
+      observation.region.anchor.longitude,
+    );
+    if (moveDistance > HOME_BASE_CLUSTER_RADIUS_KM) return true;
+
+    // Corroborating candidate-strength evidence in the same metro does not
+    // retire an established move merely because it has fewer than four new
+    // Journeys. Genuine later competition does: once the same-metro leader can
+    // no longer clear the owner-defined >=2 Journey margin, the historical open
+    // move is no longer the unambiguous current state.
+    return observation.region.journeyCount - observation.runnerUpJourneys
+      < HOME_BASE_MIN_LEAD_JOURNEYS;
+  });
+
+  return laterConflict ? null : latest;
 }
 
 function runnerUpSupport(leader: EvidenceRegion, regions: readonly EvidenceRegion[]): number {

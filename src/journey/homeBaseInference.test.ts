@@ -447,6 +447,61 @@ describe("Home Base evidence fixtures", () => {
     expect(result.proposedPeriodStart).toBe("2023-01-01");
   });
 
+  it("keeps sparse long-term repeated move evidence without a maximum-gap rule", () => {
+    const confirmed = {
+      startedOn: "2024-01-01",
+      endedOn: null,
+      latitude: SHENZHEN.latitude,
+      longitude: SHENZHEN.longitude,
+    } as const;
+    const result = inferHomeBaseCandidate({
+      journeys: [
+        journey("tokyo-1", "2025-01-01", TOKYO, TOKYO),
+        journey("tokyo-2", "2025-04-15", TOKYO, TOKYO),
+        journey("tokyo-3", "2025-08-20", TOKYO, TOKYO),
+        journey("tokyo-4", "2025-12-31", TOKYO, TOKYO),
+      ],
+      confirmedPeriod: confirmed,
+      evaluationDate: "2026-01-15",
+    });
+    expect(result.state).toBe("move_suggested");
+    expect(result.proposedPeriodStart).toBe("2025-01-01");
+  });
+
+  it("retires a historical move when later candidate-strength evidence is ambiguous", () => {
+    const confirmed = {
+      startedOn: "2022-01-01",
+      endedOn: null,
+      latitude: SHENZHEN.latitude,
+      longitude: SHENZHEN.longitude,
+    } as const;
+    const oldAway = [
+      journey("tokyo-1", "2023-01-01", TOKYO, TOKYO),
+      journey("tokyo-2", "2023-02-01", TOKYO, TOKYO),
+      journey("tokyo-3", "2023-03-01", TOKYO, TOKYO),
+      journey("tokyo-4", "2023-04-02", TOKYO, TOKYO),
+    ];
+    const laterHome = [
+      journey("home-1", "2025-01-01", SHENZHEN, SHENZHEN),
+      journey("home-2", "2025-02-01", SHENZHEN, SHENZHEN),
+      journey("home-3", "2025-03-01", SHENZHEN, SHENZHEN),
+      journey("home-4", "2025-04-02", SHENZHEN, SHENZHEN),
+    ];
+    const competing = [
+      journey("singapore-1", "2025-01-15", SINGAPORE, SINGAPORE),
+      journey("singapore-2", "2025-02-15", SINGAPORE, SINGAPORE),
+      journey("singapore-3", "2025-04-15", SINGAPORE, SINGAPORE),
+    ];
+    const result = inferHomeBaseCandidate({
+      journeys: [...oldAway, ...laterHome, ...competing],
+      confirmedPeriod: confirmed,
+      evaluationDate: "2025-06-01",
+    });
+    expect(result.state).toBe("candidate");
+    expect(result.proposedPeriodStart).toBeNull();
+    expect(result.reasonCodes).toContain("MATCHES_CONFIRMED_HOME");
+  });
+
   it("does not keep an obsolete away move after a later sustained return Home", () => {
     const confirmed = {
       startedOn: "2022-01-01",
