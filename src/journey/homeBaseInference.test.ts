@@ -250,6 +250,21 @@ describe("Home Base evidence fixtures", () => {
     expect(result.state).not.toBe("suggested");
   });
 
+  it("prefers balanced directional support when tied bounded regions cover the same Journeys", () => {
+    const atKm = (kilometers: number): Coordinates => ({ latitude: kilometers / 111.2, longitude: 0 });
+    const journeys = [
+      journey("j1", "2026-01-01", atKm(0), atKm(-10)),
+      journey("j2", "2026-02-01", atKm(0), atKm(100)),
+      journey("j3", "2026-03-01", atKm(-20), atKm(20)),
+      journey("j4", "2026-04-02", atKm(-20), atKm(20)),
+    ];
+    const result = infer(journeys, "2026-06-01");
+    expect(result.support.journeys).toBe(4);
+    expect(result.support.starts).toBe(2);
+    expect(result.support.ends).toBe(2);
+    expect(result.state).toBe("suggested");
+  });
+
   it("handles a dense bounded metro without changing Journey support semantics", () => {
     const dense = Array.from({ length: 120 }, (_value, index) =>
       journey(`dense-${index}`, `2026-${String((index % 12) + 1).padStart(2, "0")}-${String((index % 27) + 1).padStart(2, "0")}`));

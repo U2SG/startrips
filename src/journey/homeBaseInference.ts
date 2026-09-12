@@ -281,9 +281,21 @@ function regionKey(region: EvidenceRegion): string {
   )).join("|");
 }
 
+function directionalSupportEligible(region: EvidenceRegion): number {
+  return Number(
+    region.startCount >= HOME_BASE_MIN_START_SUPPORT
+    && region.endCount >= HOME_BASE_MIN_END_SUPPORT
+  );
+}
+
 function compareRegions(left: EvidenceRegion, right: EvidenceRegion): number {
+  const leftBalancedSupport = Math.min(left.startCount, left.endCount);
+  const rightBalancedSupport = Math.min(right.startCount, right.endCount);
   return (
     right.journeyCount - left.journeyCount
+    || directionalSupportEligible(right) - directionalSupportEligible(left)
+    || rightBalancedSupport - leftBalancedSupport
+    || (right.startCount + right.endCount) - (left.startCount + left.endCount)
     || right.startCount - left.startCount
     || right.endCount - left.endCount
     || right.evidenceSpanDays - left.evidenceSpanDays
