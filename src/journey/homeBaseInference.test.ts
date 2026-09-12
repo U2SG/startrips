@@ -350,6 +350,47 @@ describe("Home Base evidence fixtures", () => {
     expect(result.proposedPeriodStart).toBe("2026-01-01");
   });
 
+  it("keeps the earliest qualifying sustained move date when later suffixes also qualify", () => {
+    const confirmed = {
+      startedOn: "2025-01-01",
+      endedOn: null,
+      latitude: SHENZHEN.latitude,
+      longitude: SHENZHEN.longitude,
+    } as const;
+    const tokyoJourneys = Array.from({ length: 8 }, (_value, index) => {
+      const month = String(index + 1).padStart(2, "0");
+      return journey(`tokyo-${index + 1}`, `2026-${month}-01`, TOKYO, TOKYO);
+    });
+    const result = inferHomeBaseCandidate({
+      journeys: tokyoJourneys,
+      confirmedPeriod: confirmed,
+      evaluationDate: "2026-09-01",
+    });
+    expect(result.state).toBe("move_suggested");
+    expect(result.proposedPeriodStart).toBe("2026-01-01");
+  });
+
+  it("keeps dense move inference bounded while reusing the initial region search", () => {
+    const confirmed = {
+      startedOn: "2010-01-01",
+      endedOn: null,
+      latitude: SHENZHEN.latitude,
+      longitude: SHENZHEN.longitude,
+    } as const;
+    const dense = Array.from({ length: 120 }, (_value, index) => {
+      const year = 2016 + Math.floor(index / 12);
+      const month = String((index % 12) + 1).padStart(2, "0");
+      return journey(`dense-move-${index}`, `${year}-${month}-01`, TOKYO, TOKYO);
+    });
+    const result = inferHomeBaseCandidate({
+      journeys: dense,
+      confirmedPeriod: confirmed,
+      evaluationDate: "2026-06-01",
+    });
+    expect(result.state).toBe("move_suggested");
+    expect(result.proposedPeriodStart).toBe("2016-01-01");
+  });
+
   it("does not let one old holiday turn three recent Journeys into a sustained move", () => {
     const confirmed = {
       startedOn: "2022-01-01",

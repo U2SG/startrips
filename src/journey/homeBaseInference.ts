@@ -240,12 +240,11 @@ function regionAnchor(selected: readonly EndpointEvidence[]): HomeBaseMetroAncho
   };
 }
 
-function regionFromClique(
-  selectedIndexes: readonly number[],
-  evidence: readonly EndpointEvidence[],
+function regionFromSelectedEvidence(
+  selectedEvidence: readonly EndpointEvidence[],
 ): EvidenceRegion | null {
-  if (selectedIndexes.length === 0) return null;
-  const selected = selectedIndexes.map((index) => evidence[index]).sort(evidencePointCompare);
+  if (selectedEvidence.length === 0) return null;
+  const selected = [...selectedEvidence].sort(evidencePointCompare);
   const supportByJourney = new Map<string, JourneySupport>();
   const dates: string[] = [];
   for (const item of selected) {
@@ -275,6 +274,13 @@ function regionFromClique(
     evidenceEndedOn,
     evidenceSpanDays: spanDays(evidenceStartedOn, evidenceEndedOn),
   };
+}
+
+function regionFromClique(
+  selectedIndexes: readonly number[],
+  evidence: readonly EndpointEvidence[],
+): EvidenceRegion | null {
+  return regionFromSelectedEvidence(selectedIndexes.map((index) => evidence[index]));
 }
 
 function regionKey(region: EvidenceRegion): string {
@@ -413,8 +419,45 @@ function meetsSuggestionPolicy(region: EvidenceRegion, runnerUpJourneys: number)
     && region.journeyCount - runnerUpJourneys >= HOME_BASE_MIN_LEAD_JOURNEYS;
 }
 
+function suffixRegions(
+  regions: readonly EvidenceRegion[],
+  candidateDate: string,
+): EvidenceRegion[] {
+  const selections = regions
+    .map((region) => region.selectedEvidence.filter((item) => item.date >= candidateDate))
+    .filter((selected) => selected.length > 0);
+
+  const uniqueSelections: Array<{ selected: EndpointEvidence[]; set: Set<EndpointEvidence> }> = [];
+  for (const selected of selections) {
+    const set = new Set(selected);
+    if (uniqueSelections.some((existing) => (
+      existing.selected.length === selected.length
+      && selected.every((item) => existing.set.has(item))
+    ))) continue;
+    uniqueSelections.push({ selected, set });
+  }
+
+  const maximalSelections = uniqueSelections.filter((candidate, candidateIndex) => (
+    !uniqueSelections.some((other, otherIndex) => (
+      otherIndex !== candidateIndex
+      && other.selected.length > candidate.selected.length
+      && candidate.selected.every((item) => other.set.has(item))
+    ))
+  ));
+
+  const bySupport = new Map<string, EvidenceRegion>();
+  for (const { selected } of maximalSelections) {
+    const region = regionFromSelectedEvidence(selected);
+    if (!region) continue;
+    const key = regionKey(region);
+    const existing = bySupport.get(key);
+    if (!existing || compareRegions(region, existing) < 0) bySupport.set(key, region);
+  }
+  return [...bySupport.values()].sort(compareRegions);
+}
+
 function sustainedMoveStart(
-  evidence: readonly EndpointEvidence[],
+  regions: readonly EvidenceRegion[],
   targetRegion: EvidenceRegion,
   confirmedPeriod: ConfirmedHomeBasePeriod,
 ): string | null {
@@ -431,12 +474,13 @@ function sustainedMoveStart(
     }
   }
 
-  let sustainedStart: string | null = null;
   for (const candidateDate of targetDates) {
     if (candidateDate < boundary) continue;
-    const suffixEvidence = evidence.filter((item) => item.date >= candidateDate);
-    const suffixRegions = evidenceRegions(suffixEvidence);
-    const suffixLeader = suffixRegions[0];
+    // Reuse the already-enumerated maximal regions instead of rebuilding the
+    // pairwise graph and clique search for every possible move date. Intersecting
+    // maximal cliques with the suffix yields the induced suffix clique candidates.
+    const candidateRegions = suffixRegions(regions, candidateDate);
+    const suffixLeader = candidateRegions[0];
     if (!suffixLeader) continue;
 
     const targetDistance = haversineDistanceKm(
@@ -456,13 +500,11 @@ function sustainedMoveStart(
       || confirmedDistance <= HOME_BASE_CLUSTER_RADIUS_KM
     ) continue;
 
-    const suffixRunnerUpJourneys = runnerUpSupport(suffixLeader, suffixRegions);
-    if (meetsSuggestionPolicy(suffixLeader, suffixRunnerUpJourneys)) {
-      sustainedStart = candidateDate;
-    }
+    const suffixRunnerUpJourneys = runnerUpSupport(suffixLeader, candidateRegions);
+    if (meetsSuggestionPolicy(suffixLeader, suffixRunnerUpJourneys)) return candidateDate;
   }
 
-  return sustainedStart;
+  return null;
 }
 
 function runnerUpSupport(leader: EvidenceRegion, regions: readonly EvidenceRegion[]): number {
@@ -765,7 +807,7 @@ export function inferHomeBaseCandidate(
         proposedPeriodStart: null,
       };
     }
-    const proposedPeriodStart = sustainedMoveStart(evidence, leader, activeConfirmedPeriod);
+    const proposedPeriodStart = sustainedMoveStart(regions, leader, activeConfirmedPeriod);
     if (!proposedPeriodStart) {
       return {
         state: "candidate",
