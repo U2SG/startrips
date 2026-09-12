@@ -34,6 +34,7 @@
     "qa:story": "node scripts/qa-journey-story.mjs",
     "qa:media-controls": "node scripts/qa-media-controls.mjs",
     "qa:playback-prefetch": "node scripts/qa-playback-prefetch.mjs",
+    "qa:keepsake-render": "tsx scripts/qa-keepsake-private-render.ts",
     "qa:media-reclassification": "node scripts/qa-media-reclassification.mjs",
     "qa:post-login-controls": "node scripts/qa-post-login-controls.mjs",
     "qa:globe-focus-chrome": "node scripts/qa-globe-focus-chrome.mjs",
