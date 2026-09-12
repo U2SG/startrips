@@ -509,6 +509,42 @@ describe("Home Base evidence fixtures", () => {
     expect(result.proposedPeriodStart).toBe("2025-01-01");
   });
 
+  it("orders sustained move states by when their own confidence is reached", () => {
+    const confirmed = {
+      startedOn: "2024-01-01",
+      endedOn: null,
+      latitude: SHENZHEN.latitude,
+      longitude: SHENZHEN.longitude,
+    } as const;
+    const laterSparseTokyo = [
+      journey("tokyo-1", "2025-01-01", TOKYO, TOKYO),
+      journey("tokyo-2", "2025-01-10", TOKYO, TOKYO),
+      journey("tokyo-3", "2025-01-20", TOKYO, TOKYO),
+      journey("tokyo-4", "2025-07-01", TOKYO, TOKYO),
+      journey("tokyo-5", "2025-10-01", TOKYO, TOKYO),
+      journey("tokyo-6", "2025-12-31", TOKYO, TOKYO),
+    ];
+    const earlierCompactSingapore = [
+      journey("singapore-1", "2025-02-01", SINGAPORE, SINGAPORE),
+      journey("singapore-2", "2025-03-01", SINGAPORE, SINGAPORE),
+      journey("singapore-3", "2025-04-01", SINGAPORE, SINGAPORE),
+      journey("singapore-4", "2025-05-02", SINGAPORE, SINGAPORE),
+    ];
+    const result = inferHomeBaseCandidate({
+      journeys: [...laterSparseTokyo, ...earlierCompactSingapore],
+      confirmedPeriod: confirmed,
+      evaluationDate: "2026-01-15",
+    });
+    expect(result.state).toBe("move_suggested");
+    expect(result.metroAnchor).not.toBeNull();
+    expect(haversineDistanceKm(
+      result.metroAnchor!.latitude,
+      result.metroAnchor!.longitude,
+      TOKYO.latitude,
+      TOKYO.longitude,
+    )).toBeLessThanOrEqual(HOME_BASE_CLUSTER_RADIUS_KM);
+  });
+
   it("ignores an expired competing window when later move evidence stays unambiguous", () => {
     const confirmed = {
       startedOn: "2024-01-01",

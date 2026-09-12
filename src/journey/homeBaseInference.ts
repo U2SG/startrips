@@ -464,7 +464,7 @@ type MoveCandidate = {
   region: EvidenceRegion;
   runnerUpJourneys: number;
   proposedPeriodStart: string;
-  currentnessStartedOn: string;
+  currentnessReachedOn: string;
   blockEndedOn: string;
   matchesConfirmedHome: boolean;
 };
@@ -484,21 +484,66 @@ function isCandidateRegion(region: EvidenceRegion): boolean {
   return region.journeyCount >= HOME_BASE_CANDIDATE_MIN_JOURNEYS
     && region.evidenceSpanDays >= HOME_BASE_CANDIDATE_MIN_SPAN_DAYS;
 }
-function candidateEvidenceReachedOn(region: EvidenceRegion): string {
+function evidenceThresholdReachedOn(
+  region: EvidenceRegion,
+  requirements: {
+    journeys: number;
+    spanDays: number;
+    starts: number;
+    ends: number;
+  },
+): string {
   const evidence = [...region.selectedEvidence].sort((left, right) => (
-    left.date.localeCompare(right.date) || left.journeyId.localeCompare(right.journeyId)
+    left.date.localeCompare(right.date)
+    || left.journeyId.localeCompare(right.journeyId)
+    || left.kind.localeCompare(right.kind)
   ));
-  const journeys = new Set<string>();
+  const supportByJourney = new Map<string, JourneySupport>();
+  let starts = 0;
+  let ends = 0;
   for (const item of evidence) {
-    journeys.add(item.journeyId);
+    const support = supportByJourney.get(item.journeyId) ?? {
+      journeyId: item.journeyId,
+      supportsStart: false,
+      supportsEnd: false,
+    };
+    if (item.kind === "start" && !support.supportsStart) {
+      support.supportsStart = true;
+      starts += 1;
+    }
+    if (item.kind === "end" && !support.supportsEnd) {
+      support.supportsEnd = true;
+      ends += 1;
+    }
+    supportByJourney.set(item.journeyId, support);
     if (
-      journeys.size >= HOME_BASE_CANDIDATE_MIN_JOURNEYS
-      && spanDays(region.evidenceStartedOn, item.date) >= HOME_BASE_CANDIDATE_MIN_SPAN_DAYS
+      supportByJourney.size >= requirements.journeys
+      && spanDays(region.evidenceStartedOn, item.date) >= requirements.spanDays
+      && starts >= requirements.starts
+      && ends >= requirements.ends
     ) {
       return item.date;
     }
   }
   return region.evidenceEndedOn;
+}
+
+function candidateEvidenceReachedOn(region: EvidenceRegion): string {
+  return evidenceThresholdReachedOn(region, {
+    journeys: HOME_BASE_CANDIDATE_MIN_JOURNEYS,
+    spanDays: HOME_BASE_CANDIDATE_MIN_SPAN_DAYS,
+    starts: 0,
+    ends: 0,
+  });
+}
+
+function suggestionEvidenceReachedOn(region: EvidenceRegion): string {
+  return evidenceThresholdReachedOn(region, {
+    journeys: HOME_BASE_SUGGESTED_MIN_JOURNEYS,
+    spanDays: HOME_BASE_SUGGESTED_MIN_SPAN_DAYS,
+    starts: HOME_BASE_MIN_START_SUPPORT,
+    ends: HOME_BASE_MIN_END_SUPPORT,
+  });
 }
 
 function hasCandidateEvidenceWindow(
@@ -598,7 +643,7 @@ function findSustainedMove(
           region: windowLeader,
           runnerUpJourneys,
           proposedPeriodStart: windowLeader.evidenceStartedOn,
-          currentnessStartedOn: windowLeader.evidenceStartedOn,
+          currentnessReachedOn: suggestionEvidenceReachedOn(windowLeader),
           blockEndedOn: windowLeader.evidenceEndedOn,
           matchesConfirmedHome: confirmedDistance <= HOME_BASE_CLUSTER_RADIUS_KM,
         };
@@ -637,7 +682,7 @@ function findSustainedMove(
           && !candidateCurrentnessResolved
           && meetsSuggestionPolicy(currentLeader, currentRunnerUp)
         ) {
-          candidateForBlock.currentnessStartedOn = currentLeader.evidenceStartedOn;
+          candidateForBlock.currentnessReachedOn = suggestionEvidenceReachedOn(currentLeader);
           candidateCurrentnessResolved = true;
         }
 
@@ -649,8 +694,8 @@ function findSustainedMove(
   }
 
   candidates.sort((left, right) => (
-    right.currentnessStartedOn.localeCompare(left.currentnessStartedOn)
-    // If two states have equally recent self-sustaining evidence, retaining the
+    right.currentnessReachedOn.localeCompare(left.currentnessReachedOn)
+    // If two states reach their own confidence at the same time, retaining the
     // already-confirmed Home is the conservative deterministic tie-break.
     || Number(right.matchesConfirmedHome) - Number(left.matchesConfirmedHome)
     || compareRegions(left.region, right.region)
