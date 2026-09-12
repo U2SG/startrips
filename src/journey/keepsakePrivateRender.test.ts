@@ -2,6 +2,7 @@
 import { buildKeepsakeRenderManifest } from "./journeyKeepsake";
 import {
   buildKeepsakePrivateRenderPlan,
+  resolveKeepsakePrivateJourneyContext,
   resolveKeepsakePrivateMedia,
   type AuthorizedKeepsakeMediaResolver,
 } from "./keepsakePrivateRender";
@@ -79,6 +80,45 @@ describe("private Keepsake render boundary (#87)", () => {
     expect(serialized).not.toContain("https://");
   });
 
+  it("requires revision-pinned authorized spatial context for every referenced Route Point", async () => {
+    const plan = buildKeepsakePrivateRenderPlan(buildKeepsakeRenderManifest(journey, 15));
+    const resolveAuthorizedJourneyContext = vi.fn(async (journeyId: string, journeyRevision: number) => ({
+      journeyId,
+      journeyRevision,
+      routePoints: journey.routePoints.map((routePoint) => ({
+        routePointId: routePoint.id,
+        latitude: routePoint.latitude,
+        longitude: routePoint.longitude,
+        label: routePoint.label ?? null,
+        note: routePoint.note ?? null,
+      })),
+    }));
+
+    const context = await resolveKeepsakePrivateJourneyContext(plan, { resolveAuthorizedJourneyContext });
+
+    expect(resolveAuthorizedJourneyContext).toHaveBeenCalledWith(plan.journeyId, plan.journeyRevision);
+    expect(context.routePoints.map((routePoint) => routePoint.routePointId)).toEqual(["p0", "p1", "p2"]);
+
+    await expect(resolveKeepsakePrivateJourneyContext(plan, {
+      resolveAuthorizedJourneyContext: async () => ({
+        ...context,
+        journeyId: "wrong-journey",
+      }),
+    })).rejects.toThrow("keepsake_render_journey_identity_mismatch");
+    await expect(resolveKeepsakePrivateJourneyContext(plan, {
+      resolveAuthorizedJourneyContext: async () => ({
+        ...context,
+        journeyRevision: plan.journeyRevision + 1,
+      }),
+    })).rejects.toThrow("keepsake_render_journey_revision_mismatch");
+
+    await expect(resolveKeepsakePrivateJourneyContext(plan, {
+      resolveAuthorizedJourneyContext: async () => ({
+        ...context,
+        routePoints: context.routePoints.filter((routePoint) => routePoint.routePointId !== "p1"),
+      }),
+    })).rejects.toThrow("keepsake_render_route_point_context_missing");
+  });
   it("lets only the authorized resolver materialize private bytes, once per asset", async () => {
     const plan = buildKeepsakePrivateRenderPlan(buildKeepsakeRenderManifest(journey, 15));
     const resolveAuthorizedMedia = vi.fn(async (mediaAssetId: string) => ({
@@ -112,5 +152,12 @@ describe("private Keepsake render boundary (#87)", () => {
         bytes: new Uint8Array(),
       }),
     })).rejects.toThrow("keepsake_render_media_empty");
+    await expect(resolveKeepsakePrivateMedia(plan, {
+      resolveAuthorizedMedia: async (mediaAssetId) => ({
+        mediaAssetId,
+        mimeType: "video/mp4",
+        bytes: new Uint8Array([1]),
+      }),
+    })).rejects.toThrow("keepsake_render_media_kind_mismatch");
   });
 });

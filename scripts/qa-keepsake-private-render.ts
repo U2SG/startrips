@@ -21,6 +21,8 @@ const PROTOTYPE_HEIGHT = 640;
 const PROTOTYPE_FPS = 12;
 const ARTIFACT_DIR = resolve("artifacts/keepsake-render");
 
+// Fixture-only presentation coordinates/labels. Production rendering must resolve
+// canonical spatial context for the exact journeyId + journeyRevision instead.
 const ROUTE_POINTS = [
   { x: 72, y: 500, label: "HONG KONG" },
   { x: 180, y: 352, label: "TAIPEI" },
@@ -532,6 +534,7 @@ async function main(): Promise<void> {
       `- Decoded frame signature identical: yes (${metrics.deterministic.decodedFrameSignatureSha256})`,
       `- Container bytes identical: ${metrics.deterministic.containerBytesIdentical ? "yes" : "no (decoded frames remain identical)"}`,
       "- Media acquisition: authorized asset IDs only; no storage coordinate or share URL enters the serializable render plan",
+      "- Spatial presentation: fixture-only ROUTE_POINTS; production requires revision-pinned authorized Journey context",
       `- Scene order: ${metrics.fixture.sceneOrder.join(" | ")}`,
       "",
     ].join("\n");

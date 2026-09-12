@@ -10,6 +10,27 @@ export interface AuthorizedKeepsakeMediaResolver {
   resolveAuthorizedMedia(mediaAssetId: string): Promise<AuthorizedKeepsakeMedia>;
 }
 
+export interface AuthorizedKeepsakeRoutePointContext {
+  routePointId: string;
+  latitude: number;
+  longitude: number;
+  label: string | null;
+  note: string | null;
+}
+
+export interface AuthorizedKeepsakeJourneyContext {
+  journeyId: string;
+  journeyRevision: number;
+  routePoints: AuthorizedKeepsakeRoutePointContext[];
+}
+
+export interface AuthorizedKeepsakeJourneyContextResolver {
+  resolveAuthorizedJourneyContext(
+    journeyId: string,
+    journeyRevision: number,
+  ): Promise<AuthorizedKeepsakeJourneyContext>;
+}
+
 export interface KeepsakePrivateRenderScene {
   index: number;
   startMs: number;
@@ -31,8 +52,10 @@ export interface KeepsakePrivateRenderPlan {
 /**
  * Turns the already-validated semantic Keepsake manifest into the narrow input
  * accepted by a trusted private renderer. The plan intentionally carries asset
- * identities rather than storage coordinates or share URLs; resolving private
- * bytes is a separate privileged step owned by AuthorizedKeepsakeMediaResolver.
+ * identities rather than storage coordinates or share URLs. Private bytes are
+ * resolved by AuthorizedKeepsakeMediaResolver; revision-pinned coordinates and
+ * place presentation data are resolved separately by
+ * AuthorizedKeepsakeJourneyContextResolver.
  */
 export function buildKeepsakePrivateRenderPlan(
   manifest: KeepsakeRenderManifest,
@@ -81,6 +104,50 @@ export function buildKeepsakePrivateRenderPlan(
   };
 }
 
+function referencedRoutePointIds(plan: KeepsakePrivateRenderPlan): Set<string> {
+  const ids = new Set<string>();
+  for (const { scene } of plan.scenes) {
+    if (scene.kind === "media") {
+      if (scene.routePointId !== null) ids.add(scene.routePointId);
+      continue;
+    }
+    if (scene.role === "arrival") {
+      ids.add(scene.routePointId);
+      continue;
+    }
+    if (scene.role === "travel") {
+      ids.add(scene.fromRoutePointId);
+      ids.add(scene.toRoutePointId);
+    }
+  }
+  return ids;
+}
+
+/**
+ * Resolve revision-pinned spatial/presentation truth separately from the
+ * serializable render plan. Production renderers must not infer labels or
+ * coordinates from Route Point IDs or read mutable Journey state implicitly.
+ */
+export async function resolveKeepsakePrivateJourneyContext(
+  plan: KeepsakePrivateRenderPlan,
+  resolver: AuthorizedKeepsakeJourneyContextResolver,
+): Promise<AuthorizedKeepsakeJourneyContext> {
+  const context = await resolver.resolveAuthorizedJourneyContext(plan.journeyId, plan.journeyRevision);
+  if (context.journeyId !== plan.journeyId) {
+    throw new Error("keepsake_render_journey_identity_mismatch");
+  }
+  if (context.journeyRevision !== plan.journeyRevision) {
+    throw new Error("keepsake_render_journey_revision_mismatch");
+  }
+  const availableRoutePointIds = new Set(context.routePoints.map((point) => point.routePointId));
+  for (const routePointId of referencedRoutePointIds(plan)) {
+    if (!availableRoutePointIds.has(routePointId)) {
+      throw new Error("keepsake_render_route_point_context_missing");
+    }
+  }
+  return context;
+}
+
 /**
  * Resolve each private media asset exactly once through the privileged
  * renderer boundary. A resolver may map an authorized ID to S3, local job
@@ -91,6 +158,16 @@ export async function resolveKeepsakePrivateMedia(
   plan: KeepsakePrivateRenderPlan,
   resolver: AuthorizedKeepsakeMediaResolver,
 ): Promise<Map<string, AuthorizedKeepsakeMedia>> {
+  const expectedMediaKindById = new Map<string, "image" | "video">();
+  for (const { scene } of plan.scenes) {
+    if (scene.kind !== "media") continue;
+    const previousKind = expectedMediaKindById.get(scene.mediaAssetId);
+    if (previousKind && previousKind !== scene.mediaType) {
+      throw new Error("keepsake_render_media_kind_conflict");
+    }
+    expectedMediaKindById.set(scene.mediaAssetId, scene.mediaType);
+  }
+
   const resolved = new Map<string, AuthorizedKeepsakeMedia>();
   for (const mediaAssetId of plan.mediaAssetIds) {
     const media = await resolver.resolveAuthorizedMedia(mediaAssetId);
@@ -100,8 +177,17 @@ export async function resolveKeepsakePrivateMedia(
     if (!(media.bytes instanceof Uint8Array) || media.bytes.byteLength === 0) {
       throw new Error("keepsake_render_media_empty");
     }
-    if (!media.mimeType.trim()) {
+    const mimeType = media.mimeType.trim().toLowerCase();
+    if (!mimeType) {
       throw new Error("keepsake_render_media_mime_missing");
+    }
+    const resolvedMediaKind = mimeType.startsWith("image/")
+      ? "image"
+      : mimeType.startsWith("video/")
+        ? "video"
+        : null;
+    if (resolvedMediaKind !== expectedMediaKindById.get(mediaAssetId)) {
+      throw new Error("keepsake_render_media_kind_mismatch");
     }
     resolved.set(mediaAssetId, media);
   }

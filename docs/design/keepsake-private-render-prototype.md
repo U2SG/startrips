@@ -6,9 +6,9 @@ This is an exploration artifact, not a shipped video editor or a Continuous Jour
 
 The contract exercised here is:
 
-`validated Keepsake manifest + authorized media IDs -> deterministic private render`
+`validated Keepsake manifest + authorized media IDs + revision-pinned Journey spatial/presentation context -> deterministic private render`
 
-The serialized render plan contains semantic scenes and authorized asset IDs only. It contains no storage key, signed URL, guest share URL, arbitrary render code or model-generated command. `AuthorizedKeepsakeMediaResolver` is the only privileged boundary that can materialize private bytes for a render job.
+The serialized render plan contains semantic scenes and authorized asset IDs only. It contains no storage key, signed URL, guest share URL, arbitrary render code or model-generated command. The plan is intentionally **not** geographically complete: a trusted `AuthorizedKeepsakeJourneyContextResolver` must resolve revision-pinned Route Point coordinates/labels/notes for the exact `journeyId + journeyRevision`, while `AuthorizedKeepsakeMediaResolver` is the separate privileged boundary that materializes private bytes. A worker must not infer geography from IDs or read mutable Journey state outside these declared boundaries.
 
 ## Mechanism decision
 
@@ -21,7 +21,7 @@ Why this mechanism first:
 - The render worker can remain the only holder of private-media read authority. The client never needs a storage coordinate or expiring public/share URL to produce an artifact.
 - The same manifest can be retried idempotently. Encoder-specific metadata can make byte equality an unnecessarily brittle contract, so CI compares decoded-frame `framemd5` output and also records whether the container bytes happened to be identical.
 
-The visual adapter is deliberately small: it renders Startrips-style dark world/route beats, Route Point labels and private media beats from the manifest rather than capturing interactive application chrome. It is evidence for the render boundary and pipeline, not the final production art direction.
+The visual adapter is deliberately small: it renders Startrips-style dark world/route beats, Route Point labels and private media beats rather than capturing interactive application chrome. In this CI fixture, the `ROUTE_POINTS` coordinates and labels are hard-coded **fixture-only** presentation data; they are not part of the manifest and must not be treated as a production renderer input. A production worker must obtain equivalent presentation truth through the revision-pinned Journey-context boundary above.
 
 ## Deterministic three-stop fixture
 
@@ -44,7 +44,7 @@ CI stores both encoded outputs, `metrics.json` and `summary.md` as short-lived w
 Recommended production boundary:
 
 - the owner explicitly requests a render for one Journey and one existing Keepsake preset;
-- the API validates current Journey revision/identity and persists or submits only the validated manifest plus authorized media IDs;
+- the API validates current Journey revision/identity and persists or submits the validated manifest plus authorized media IDs, while the render worker resolves canonical spatial/presentation context through a trusted resolver that verifies the same `journeyId + journeyRevision`;
 - a trusted render worker resolves IDs to private bytes using owner-scoped authorization;
 - inputs live only in job scratch storage and are deleted on success/failure/cancellation;
 - the encoded artifact is private by default and receives a bounded lifetime (recommended starting point: 24 hours unless the owner explicitly saves it);
