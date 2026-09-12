@@ -33,7 +33,7 @@ The visual adapter is deliberately small: it renders Startrips-style dark world/
 4. writes one deterministic visual frame per semantic scene;
 5. encodes the same frame/timing input twice to MP4;
 6. decodes both outputs to FFmpeg `framemd5` and requires identical decoded-frame signatures;
-7. decodes boundary/interior frames from the real MP4 and verifies each sample is closest to the source PPM for the manifest scene expected at that frame, so an encoder timestamp shift cannot pass on frame count/duration alone;
+7. stamps each synthetic source PPM with a small QA-only binary scene marker, decodes boundary/interior frames from the real MP4, and requires every sample to retain the marker for the manifest scene expected at that frame, so an encoder timestamp shift cannot pass on frame count/duration alone;
 8. records container hashes, wall time, peak RSS when `/usr/bin/time` is available, output bytes, codec, dimensions, pixel format, frame rate, frame count, decoded transition evidence and semantic scene order.
 
 The prototype encodes at 360x640 / 12 fps to keep CI cost bounded while remaining a real vertical H.264 artifact. The authoritative manifest continues to request the product portrait size (1080x1920); production output quality is a render-worker sizing decision, not a new narrative contract.
@@ -69,7 +69,7 @@ The `keepsake-render` CI lane is the executable evidence. It records, per exact 
 - render wall time, peak RSS where available and file size;
 - codec/resolution/fps/pixel-format probe data;
 - ordered semantic scene labels proving map/travel/arrival/media/outro order comes from the existing manifest;
-- decoded start/middle/end-frame samples for every semantic scene, checked against that scene's source PPM rather than inferred only from manifest timing;
+- decoded start/middle/end-frame samples for every semantic scene, checked against the QA-only scene marker stamped into that scene's source PPM rather than inferred only from manifest timing;
 - private media IDs plus the per-read Journey revision/narrative pin used by the trusted resolver contract.
 
 Known limits of this phase:

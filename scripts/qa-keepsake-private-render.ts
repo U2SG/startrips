@@ -457,7 +457,7 @@ type TransitionScheduleEntry = { scene: string; startFrame: number; endFrame: nu
 type DecodedTransitionProof = {
   scene: string;
   sampledFrames: number[];
-  maxExpectedMeanAbsoluteError: number;
+  decodedSceneMarker: number;
 };
 
 function validatePrototypeOutput(
@@ -543,51 +543,82 @@ async function decodedRgbFramesAt(filePath: string, frameIndexes: readonly numbe
   return decoded;
 }
 
-function meanAbsoluteError(left: Uint8Array, right: Uint8Array): number {
-  if (left.byteLength !== right.byteLength) {
+const SCENE_MARKER_CELL_SIZE = 8;
+const SCENE_MARKER_COLUMNS = 4;
+const SCENE_MARKER_ROWS = 4;
+const SCENE_MARKER_X = 8;
+const SCENE_MARKER_Y = PROTOTYPE_HEIGHT - (SCENE_MARKER_ROWS * SCENE_MARKER_CELL_SIZE) - 8;
+
+function stampSceneMarker(buffer: Buffer, sceneIndex: number): number {
+  const marker = sceneIndex + 1;
+  if (marker > 0xffff) throw new Error("keepsake_render_scene_marker_overflow");
+  for (let bit = 0; bit < SCENE_MARKER_COLUMNS * SCENE_MARKER_ROWS; bit += 1) {
+    const value = (marker & (1 << bit)) === 0 ? 32 : 224;
+    const column = bit % SCENE_MARKER_COLUMNS;
+    const row = Math.floor(bit / SCENE_MARKER_COLUMNS);
+    rect(
+      buffer,
+      SCENE_MARKER_X + column * SCENE_MARKER_CELL_SIZE,
+      SCENE_MARKER_Y + row * SCENE_MARKER_CELL_SIZE,
+      SCENE_MARKER_CELL_SIZE,
+      SCENE_MARKER_CELL_SIZE,
+      [value, value, value],
+    );
+  }
+  return marker;
+}
+
+function decodeSceneMarker(buffer: Buffer): number {
+  const bytesPerFrame = PROTOTYPE_WIDTH * PROTOTYPE_HEIGHT * 3;
+  if (buffer.byteLength !== bytesPerFrame) {
     throw new Error("keepsake_render_decoded_transition_frame_size_mismatch");
   }
-  let absoluteError = 0;
-  for (let index = 0; index < left.byteLength; index += 1) {
-    absoluteError += Math.abs(left[index] - right[index]);
+  let marker = 0;
+  for (let bit = 0; bit < SCENE_MARKER_COLUMNS * SCENE_MARKER_ROWS; bit += 1) {
+    const column = bit % SCENE_MARKER_COLUMNS;
+    const row = Math.floor(bit / SCENE_MARKER_COLUMNS);
+    const startX = SCENE_MARKER_X + column * SCENE_MARKER_CELL_SIZE + 2;
+    const startY = SCENE_MARKER_Y + row * SCENE_MARKER_CELL_SIZE + 2;
+    let sum = 0;
+    let samples = 0;
+    for (let y = startY; y < startY + SCENE_MARKER_CELL_SIZE - 4; y += 1) {
+      for (let x = startX; x < startX + SCENE_MARKER_CELL_SIZE - 4; x += 1) {
+        const offset = (y * PROTOTYPE_WIDTH + x) * 3;
+        sum += buffer[offset] + buffer[offset + 1] + buffer[offset + 2];
+        samples += 3;
+      }
+    }
+    if (sum / samples >= 128) marker |= (1 << bit);
   }
-  return absoluteError / left.byteLength;
+  return marker;
 }
 
 function validateDecodedTransitions(
   decodedFrames: ReadonlyMap<number, Buffer>,
   schedule: readonly TransitionScheduleEntry[],
-  expectedScenePixels: readonly Buffer[],
+  expectedSceneMarkers: readonly number[],
 ): DecodedTransitionProof[] {
-  if (schedule.length !== expectedScenePixels.length) {
+  if (schedule.length !== expectedSceneMarkers.length) {
     throw new Error("keepsake_render_decoded_transition_scene_count_mismatch");
   }
-  const expectedHashes = expectedScenePixels.map((pixels) => sha256(pixels));
   return schedule.map((entry, sceneIndex) => {
     const sampledFrames = [...new Set([
       entry.startFrame,
       Math.floor((entry.startFrame + entry.endFrame - 1) / 2),
       entry.endFrame - 1,
     ])];
-    const expectedPixels = expectedScenePixels[sceneIndex];
-    let maxExpectedMeanAbsoluteError = 0;
+    const expectedMarker = expectedSceneMarkers[sceneIndex];
     for (const frameIndex of sampledFrames) {
       const decoded = decodedFrames.get(frameIndex);
       if (!decoded) throw new Error("keepsake_render_decoded_transition_frame_missing");
-      const expectedError = meanAbsoluteError(decoded, expectedPixels);
-      maxExpectedMeanAbsoluteError = Math.max(maxExpectedMeanAbsoluteError, expectedError);
-      for (let otherIndex = 0; otherIndex < expectedScenePixels.length; otherIndex += 1) {
-        if (otherIndex === sceneIndex || expectedHashes[otherIndex] === expectedHashes[sceneIndex]) continue;
-        const competingError = meanAbsoluteError(decoded, expectedScenePixels[otherIndex]);
-        if (expectedError >= competingError) {
-          throw new Error("keepsake_render_decoded_transition_scene_mismatch");
-        }
+      if (decodeSceneMarker(decoded) !== expectedMarker) {
+        throw new Error("keepsake_render_decoded_transition_scene_mismatch");
       }
     }
     return {
       scene: entry.scene,
       sampledFrames,
-      maxExpectedMeanAbsoluteError: Number(maxExpectedMeanAbsoluteError.toFixed(3)),
+      decodedSceneMarker: expectedMarker,
     };
   });
 }
@@ -604,15 +635,15 @@ async function buildFrames(
   workDir: string,
   plan: KeepsakePrivateRenderPlan,
   resolvedMedia: Map<string, AuthorizedKeepsakeMedia>,
-): Promise<{ concatFile: string; scenePixels: Buffer[] }> {
+): Promise<{ concatFile: string; sceneMarkers: number[] }> {
   const lines: string[] = [];
-  const scenePixels: Buffer[] = [];
+  const sceneMarkers: number[] = [];
   for (const entry of plan.scenes) {
     const scene = entry.scene;
     const pixels = scene.kind === "media"
       ? frameForMedia(entry, resolvedMedia.get(scene.mediaAssetId)!)
       : frameForMap(entry);
-    scenePixels.push(pixels);
+    sceneMarkers.push(stampSceneMarker(pixels, entry.index));
     const framePath = join(workDir, `scene-${String(entry.index).padStart(3, "0")}.ppm`);
     await writePpm(framePath, pixels);
     lines.push(`file '${concatPath(framePath)}'`);
@@ -622,7 +653,7 @@ async function buildFrames(
   lines.push(`file '${concatPath(lastFrame)}'`);
   const concatFile = join(workDir, "scenes.concat.txt");
   await writeFile(concatFile, `${lines.join("\n")}\n`, "utf8");
-  return { concatFile, scenePixels };
+  return { concatFile, sceneMarkers };
 }
 
 async function main(): Promise<void> {
@@ -652,7 +683,7 @@ async function main(): Promise<void> {
       }),
     });
     const resolvedMedia = await resolveKeepsakePrivateMedia(plan, new SyntheticPrivateMediaVault());
-    const { concatFile, scenePixels } = await buildFrames(workDir, plan, resolvedMedia);
+    const { concatFile, sceneMarkers } = await buildFrames(workDir, plan, resolvedMedia);
 
     const outputA = join(ARTIFACT_DIR, "keepsake-prototype-a.mp4");
     const outputB = join(ARTIFACT_DIR, "keepsake-prototype-b.mp4");
@@ -675,7 +706,7 @@ async function main(): Promise<void> {
     const decodedTransitionProof = validateDecodedTransitions(
       decodedTransitionFrames,
       transitionSchedule,
-      scenePixels,
+      sceneMarkers,
     );
 
     const metrics = {
