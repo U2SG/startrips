@@ -714,7 +714,7 @@ export function AuthGateway({ children }: { children: ReactNode }) {
     // Keep the fixture truthful instead of issuing an unowned /api/home-bases
     // request that only produces a caught 500 and contaminates QA evidence.
     listHomeBasePeriods: null,
-    listHomeBaseDismissal: null,
+    listHomeBaseDismissals: null,
   }), [qaHomeBaseSuggestion]);
   const session = authClient.useSession();
   const [revision, setRevision] = useState(0);

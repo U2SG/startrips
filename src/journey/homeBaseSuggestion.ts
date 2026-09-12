@@ -1,6 +1,9 @@
 import {
   HOME_BASE_CLUSTER_RADIUS_KM,
+  inferHomeBaseCandidate,
+  type HomeBaseDismissal,
   type HomeBaseEvidenceReasonCode,
+  type HomeBaseInferenceInput,
   type HomeBaseInferenceResult,
   type HomeBaseMetroAnchor,
 } from "./homeBaseInference";
@@ -116,6 +119,42 @@ const HIDDEN: HomeBaseSuggestionDecision = {
 
 function hidden(): HomeBaseSuggestionDecision {
   return HIDDEN;
+}
+
+/**
+ * Run the frozen inference core against every persisted answer and keep the
+ * answer that the core itself says applies to the current evidence region.
+ *
+ * The persistence layer can now retain answers for several regions. We do not
+ * duplicate the core's 25 km / 90 day / two-new-Journeys matching policy here:
+ * each saved answer is offered back to `inferHomeBaseCandidate`, and only a
+ * result that becomes `dismissed` is considered a match. An explicit rejection
+ * wins over a soft dismissal when multiple historical revisions of the same
+ * region still match.
+ */
+export function inferHomeBaseCandidateWithDismissals(
+  input: Omit<HomeBaseInferenceInput, "dismissal">,
+  dismissals: readonly HomeBaseDismissal[],
+): HomeBaseInferenceResult {
+  const baseline = inferHomeBaseCandidate(input);
+  let selected: { dismissal: HomeBaseDismissal; result: HomeBaseInferenceResult } | null = null;
+  for (const dismissal of dismissals) {
+    const result = inferHomeBaseCandidate({ ...input, dismissal });
+    if (result.state !== "dismissed") continue;
+    if (
+      !selected
+      || (dismissal.kind === "rejected" && selected.dismissal.kind !== "rejected")
+      || (dismissal.kind === selected.dismissal.kind && dismissal.dismissedAt > selected.dismissal.dismissedAt)
+      || (
+        dismissal.kind === selected.dismissal.kind
+        && dismissal.dismissedAt === selected.dismissal.dismissedAt
+        && dismissal.digest < selected.dismissal.digest
+      )
+    ) {
+      selected = { dismissal, result };
+    }
+  }
+  return selected?.result ?? baseline;
 }
 
 export function resolveHomeBaseSuggestion(

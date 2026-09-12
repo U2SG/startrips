@@ -254,7 +254,7 @@ async function createGatewayPage({
   await gatewayPage.route("**/api/home-bases/dismissal", (route) => route.fulfill({
     status: 200,
     contentType: "application/json",
-    body: JSON.stringify({ dismissal: null }),
+    body: JSON.stringify({ dismissals: [] }),
   }));
   await gatewayPage.route("**/api/home-bases", (route) => route.fulfill({
     status: 200,

@@ -259,18 +259,18 @@ export async function countHomeBasePeriodsForAtlas(
 }
 
 /**
- * #232: the member's answer to a Home Base suggestion.
+ * #232: the member's answers to Home Base suggestions.
  *
- * One row per Atlas, so recording an answer is an upsert on the Atlas: the
- * surface asks about one region at a time and a later answer supersedes the
- * earlier one. The digest is stored verbatim — the inference core parses the
- * anchor and the supporting Journey ids back out of it — so this layer never
- * trims, truncates or normalises it.
+ * Answers are preserved per evidence revision rather than collapsed to one row
+ * per Atlas. The digest is stored verbatim — the frozen inference core parses
+ * its region anchor and supporting Journey ids — so the client can ask that
+ * same core which saved answer applies to the current candidate. Repeating the
+ * exact same answer is idempotent through the Atlas + digest unique key.
  */
-export async function readHomeBaseDismissalForAtlas(
+export async function listHomeBaseDismissalsForAtlas(
   atlasId: string,
-): Promise<HomeBaseDismissal | null> {
-  const [row] = await db
+): Promise<HomeBaseDismissal[]> {
+  const rows = await db
     .select({
       kind: homeBaseDismissals.kind,
       digest: homeBaseDismissals.evidenceDigest,
@@ -278,9 +278,8 @@ export async function readHomeBaseDismissalForAtlas(
     })
     .from(homeBaseDismissals)
     .where(eq(homeBaseDismissals.atlasId, atlasId))
-    .limit(1);
-  if (!row) return null;
-  return { ...row, kind: row.kind as HomeBaseDismissal["kind"] };
+    .orderBy(asc(homeBaseDismissals.dismissedOn), asc(homeBaseDismissals.evidenceDigest));
+  return rows.map((row) => ({ ...row, kind: row.kind as HomeBaseDismissal["kind"] }));
 }
 
 export async function recordHomeBaseDismissalForAtlas(
@@ -298,11 +297,13 @@ export async function recordHomeBaseDismissalForAtlas(
         dismissedOn: values.dismissedOn,
       })
       .onConflictDoUpdate({
-        target: homeBaseDismissals.atlasId,
+        target: [homeBaseDismissals.atlasId, homeBaseDismissals.evidenceDigest],
         set: {
-          kind: values.kind,
-          evidenceDigest: values.digest,
-          dismissedOn: values.dismissedOn,
+          // A hard rejection is stronger than "not now". A stale surface or
+          // retried soft-dismiss request for the same evidence must never
+          // downgrade an explicit rejection that is already persisted.
+          kind: sql`case when ${homeBaseDismissals.kind} = 'rejected' then 'rejected' else excluded.kind end`,
+          dismissedOn: sql`case when ${homeBaseDismissals.kind} = 'rejected' then ${homeBaseDismissals.dismissedOn} else excluded.dismissed_on end`,
           updatedAt: new Date(),
         },
       })

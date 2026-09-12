@@ -4,7 +4,7 @@ import {
   createHomeBasePeriodForAtlas,
   deleteHomeBasePeriodForAtlas,
   listHomeBasePeriodsForAtlas,
-  readHomeBaseDismissalForAtlas,
+  listHomeBaseDismissalsForAtlas,
   recordHomeBaseDismissalForAtlas,
   updateHomeBasePeriodForAtlas,
   type HomeBasePeriodPatch,
@@ -182,15 +182,15 @@ homeBaseRoutes.get("/", async (context) => {
 });
 
 /**
- * The recorded answer, or `null` when the member has never answered. Read
- * under `read` because it only says that a suggestion was declined; writing
- * one is a member decision and asks for `create`, the same level recording a
- * period does.
+ * The recorded answers, or an empty list when the member has never answered.
+ * Read under `read` because they only say that suggestions were declined;
+ * writing one is a member decision and asks for `create`, the same level
+ * recording a period does.
  */
 homeBaseRoutes.get("/dismissal", async (context) => {
   const { atlas } = await requireAtlasAccess(context.req.raw, "read");
   context.header("Cache-Control", HOME_BASE_CACHE_CONTROL);
-  return context.json({ dismissal: await readHomeBaseDismissalForAtlas(atlas.id) });
+  return context.json({ dismissals: await listHomeBaseDismissalsForAtlas(atlas.id) });
 });
 
 homeBaseRoutes.post("/dismissal", async (context) => {

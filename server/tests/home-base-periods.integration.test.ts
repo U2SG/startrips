@@ -14,7 +14,7 @@ import {
   createHomeBasePeriodForAtlas,
   deleteHomeBasePeriodForAtlas,
   listHomeBasePeriodsForAtlas,
-  readHomeBaseDismissalForAtlas,
+  listHomeBaseDismissalsForAtlas,
   recordHomeBaseDismissalForAtlas,
   updateHomeBasePeriodForAtlas,
 } from "../repositories/home-base-repository";
@@ -312,14 +312,14 @@ describe("the persisted answer to a Home Base suggestion", () => {
     expect(suggested.state).toBe("suggested");
     expect(suggested.evidenceDigest).toBeTruthy();
 
-    expect(await readHomeBaseDismissalForAtlas(atlas)).toBeNull();
+    expect(await listHomeBaseDismissalsForAtlas(atlas)).toEqual([]);
     expect(await recordHomeBaseDismissalForAtlas(atlas, {
       kind: "soft",
       digest: suggested.evidenceDigest!,
       dismissedOn: "2026-04-02",
     })).toEqual({ kind: "soft", digest: suggested.evidenceDigest, dismissedAt: "2026-04-02" });
 
-    const persisted = await readHomeBaseDismissalForAtlas(atlas);
+    const [persisted] = await listHomeBaseDismissalsForAtlas(atlas);
     // Byte-exact: the core parses the anchor and the supporting Journey ids
     // back out of this string, so any storage-layer normalisation would
     // silently disarm the re-prompt rule below.
@@ -344,7 +344,7 @@ describe("the persisted answer to a Home Base suggestion", () => {
       digest: suggested.evidenceDigest!,
       dismissedOn: "2026-04-02",
     });
-    const persisted = await readHomeBaseDismissalForAtlas(atlas);
+    const [persisted] = await listHomeBaseDismissalsForAtlas(atlas);
     const expanded = [
       ...original,
       inferenceJourney("j5", "2026-04-15"),
@@ -385,7 +385,7 @@ describe("the persisted answer to a Home Base suggestion", () => {
       digest: suggested.evidenceDigest!,
       dismissedOn: "2026-04-02",
     });
-    const persisted = await readHomeBaseDismissalForAtlas(atlas);
+    const [persisted] = await listHomeBaseDismissalsForAtlas(atlas);
     const expanded = [
       ...original,
       inferenceJourney("j5", "2026-04-15"),
@@ -406,7 +406,7 @@ describe("the persisted answer to a Home Base suggestion", () => {
       digest: "hbv1:22.5431:114.0579:1:2026-01-01:2026-01-01:j1=11:00000001",
       dismissedOn: "2026-04-02",
     });
-    expect(await readHomeBaseDismissalForAtlas(theirs)).toBeNull();
+    expect(await listHomeBaseDismissalsForAtlas(theirs)).toEqual([]);
   });
 });
 

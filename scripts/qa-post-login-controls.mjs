@@ -1436,7 +1436,7 @@ async function verifyAccountDock() {
     await page.route("**/api/home-bases/dismissal", (route) => route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify({ dismissal: null }),
+      body: JSON.stringify({ dismissals: [] }),
     }));
     await page.route("**/api/home-bases", (route) => route.fulfill({
       status: 200,
@@ -1996,7 +1996,7 @@ async function verifyFinalAcceptanceMobileFlow() {
       await page.route("**/api/home-bases/dismissal", (route) => route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify({ dismissal: null }),
+        body: JSON.stringify({ dismissals: [] }),
       }));
       await page.route("**/api/home-bases", (route) => route.fulfill({
         status: 200,

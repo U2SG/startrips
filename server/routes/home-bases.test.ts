@@ -379,13 +379,18 @@ describe("GET and POST /api/home-bases/dismissal", () => {
       { headers: authHeaders(neighbour.cookie) },
     );
     expect(neighbourRead.status).toBe(200);
-    expect(await neighbourRead.json()).toEqual({ dismissal: null });
+    expect(await neighbourRead.json()).toEqual({ dismissals: [] });
   });
 
-  it("replaces the earlier answer rather than accumulating refusals", async () => {
-    const second = `${DIGEST}-later`;
+  it("preserves answers for different evidence regions instead of replacing the Atlas row", async () => {
+    const second = "hbi-v2:35.6895:139.6917:4:2026-05-01:2026-08-01:t1=11,t2=11,t3=11,t4=11:feedbeef";
     expect((await postDismissal(resident.cookie, {
       kind: "rejected",
+      evidenceDigest: DIGEST,
+      dismissedOn: "2026-04-02",
+    })).status).toBe(201);
+    expect((await postDismissal(resident.cookie, {
+      kind: "soft",
       evidenceDigest: second,
       dismissedOn: "2026-07-01",
     })).status).toBe(201);
@@ -394,13 +399,33 @@ describe("GET and POST /api/home-bases/dismissal", () => {
       headers: authHeaders(resident.cookie),
     });
     expect(await read.json()).toEqual({
-      dismissal: { kind: "rejected", digest: second, dismissedAt: "2026-07-01" },
+      dismissals: [
+        { kind: "rejected", digest: DIGEST, dismissedAt: "2026-04-02" },
+        { kind: "soft", digest: second, dismissedAt: "2026-07-01" },
+      ],
     });
     const [row] = await db
       .select({ total: sql<number>`count(*)::int` })
       .from(homeBaseDismissals)
       .where(eq(homeBaseDismissals.atlasId, resident.atlasId));
-    expect(row.total).toBe(1);
+    expect(row.total).toBe(2);
+  });
+
+  it("never downgrades an explicit rejection for the same evidence to a later soft dismissal", async () => {
+    expect((await postDismissal(resident.cookie, {
+      kind: "rejected",
+      evidenceDigest: DIGEST,
+      dismissedOn: "2026-04-02",
+    })).status).toBe(201);
+    const retry = await postDismissal(resident.cookie, {
+      kind: "soft",
+      evidenceDigest: DIGEST,
+      dismissedOn: "2026-05-02",
+    });
+    expect(retry.status).toBe(201);
+    expect(await retry.json()).toEqual({
+      dismissal: { kind: "rejected", digest: DIGEST, dismissedAt: "2026-04-02" },
+    });
   });
 
   it("refuses an unusable body and a request with no session", async () => {

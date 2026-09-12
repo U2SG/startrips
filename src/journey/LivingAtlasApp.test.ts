@@ -748,31 +748,31 @@ describe("optional Home hydration", () => {
 
   it("drops detached private Home reads once a newer load owns the view", async () => {
     let resolvePeriods!: (periods: []) => void;
-    let resolveDismissal!: (dismissal: null) => void;
+    let resolveDismissals!: (dismissals: []) => void;
     const periodsPending = new Promise<[]>((resolve) => { resolvePeriods = resolve; });
-    const dismissalPending = new Promise<null>((resolve) => { resolveDismissal = resolve; });
+    const dismissalsPending = new Promise<[]>((resolve) => { resolveDismissals = resolve; });
     const onHomeBasePeriods = vi.fn();
-    const onHomeBaseDismissal = vi.fn();
+    const onHomeBaseDismissals = vi.fn();
     let current = true;
 
     const rows = await loadJourneyRowsWithOptionalHome({
       listJourneys: async () => [playbackJourney],
       listHomeBasePeriods: () => periodsPending,
-      listHomeBaseDismissal: () => dismissalPending,
+      listHomeBaseDismissals: () => dismissalsPending,
       isCurrent: () => current,
       onHomeBasePeriods,
-      onHomeBaseDismissal,
+      onHomeBaseDismissals,
     });
 
     expect(rows).toEqual([playbackJourney]);
     current = false;
     resolvePeriods([]);
-    resolveDismissal(null);
-    await Promise.all([periodsPending, dismissalPending]);
+    resolveDismissals([]);
+    await Promise.all([periodsPending, dismissalsPending]);
     await Promise.resolve();
     await Promise.resolve();
     expect(onHomeBasePeriods).not.toHaveBeenCalled();
-    expect(onHomeBaseDismissal).not.toHaveBeenCalled();
+    expect(onHomeBaseDismissals).not.toHaveBeenCalled();
   });
 
   it("keeps guest/read-only views free of private Home hydration", async () => {
@@ -1519,19 +1519,22 @@ describe("ST-060 the Home Base suggestion card is quiet and non-modal", () => {
 
   it("recomputes from the frozen inference core rather than holding its own thresholds", () => {
     const source = readFileSync(new URL("./LivingAtlasApp.tsx", import.meta.url), "utf8");
-    expect(source).toContain("inferHomeBaseCandidate({");
+    const suggestionSource = readFileSync(new URL("./homeBaseSuggestion.ts", import.meta.url), "utf8");
+    expect(source).toContain("inferHomeBaseCandidateWithDismissals({");
     expect(source).toContain("evaluationDate: homeEffectiveDate");
-    expect(source).toContain("dismissal: homeBaseDismissal");
-    // No threshold literal is re-stated here; the core owns all of them.
+    expect(suggestionSource).toContain("const baseline = inferHomeBaseCandidate(input)");
+    expect(suggestionSource).toContain("inferHomeBaseCandidate({ ...input, dismissal })");
+    // No threshold literal is re-stated outside the frozen core.
     expect(source).not.toContain("HOME_BASE_SUGGESTED_MIN_JOURNEYS");
     expect(source).not.toContain("HOME_BASE_CLUSTER_RADIUS_KM");
+    expect(suggestionSource).not.toContain("HOME_BASE_SUGGESTED_MIN_JOURNEYS");
   });
 
   it("persists the answer before taking the card down", () => {
     const source = readFileSync(new URL("./LivingAtlasApp.tsx", import.meta.url), "utf8");
     const dismiss = source.slice(source.indexOf("const dismissHomeBaseSuggestion"));
     expect(dismiss.indexOf("mutations.recordHomeBaseDismissal"))
-      .toBeLessThan(dismiss.indexOf("setHomeBaseDismissal(recorded)"));
+      .toBeLessThan(dismiss.indexOf("setHomeBaseDismissals((current)"));
   });
 });
 
@@ -1575,7 +1578,7 @@ describe("ST-060 refresh readiness ownership", () => {
     const start = source.indexOf("const load = useCallback(async (quiet = false");
     const block = source.slice(start, start + 1_600);
     const resetPeriods = block.indexOf("setHomeBasePeriodsRead(false)");
-    const resetDismissal = block.indexOf("setHomeBaseDismissal(listHomeBaseDismissal ? undefined : null)");
+    const resetDismissal = block.indexOf("setHomeBaseDismissals(listHomeBaseDismissals ? undefined : [])");
     const launch = block.indexOf("loadJourneyRowsWithOptionalHome({");
 
     expect(start).toBeGreaterThan(0);

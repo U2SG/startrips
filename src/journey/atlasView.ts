@@ -7,7 +7,7 @@ import {
   getPrivateMediaRead,
   listHomeBasePeriods,
   listJourneys,
-  readHomeBaseDismissal,
+  listHomeBaseDismissals,
   recordHomeBaseDismissal,
   listShares,
   moveJourneyMedia,
@@ -181,7 +181,7 @@ export type AtlasView = {
   /** Owner-private Home history. Shared/guest mode exposes no reader at all. */
   listHomeBasePeriods: (() => Promise<HomeBasePeriod[]>) | null;
   /** Owner-private answer to a Home Base suggestion. Guest mode has no reader. */
-  listHomeBaseDismissal: (() => Promise<HomeBaseDismissal | null>) | null;
+  listHomeBaseDismissals: (() => Promise<HomeBaseDismissal[]>) | null;
   readMedia: AtlasMediaRead;
   mutations: AtlasMutations | null;
 };
@@ -214,7 +214,7 @@ export function createOwnerAtlasView(
     capabilities,
     listJourneys: () => listJourneys(),
     listHomeBasePeriods: () => listHomeBasePeriods(),
-    listHomeBaseDismissal: () => readHomeBaseDismissal(),
+    listHomeBaseDismissals: () => listHomeBaseDismissals(),
     readMedia: (assetId) => getPrivateMediaRead(assetId),
     mutations: createOwnerAtlasMutations(capabilities.canEditJourney),
   };

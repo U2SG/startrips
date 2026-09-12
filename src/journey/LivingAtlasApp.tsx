@@ -41,6 +41,7 @@ import {
 } from "./homeBaseInference";
 import {
   homeBaseConfirmationDraft,
+  inferHomeBaseCandidateWithDismissals,
   resolveHomeBasePlaceLabel,
   resolveHomeBaseSuggestion,
 } from "./homeBaseSuggestion";
@@ -177,17 +178,17 @@ export function resolveInitialHomeOwnedFocusPoint(
 export async function loadJourneyRowsWithOptionalHome({
   listJourneys,
   listHomeBasePeriods,
-  listHomeBaseDismissal,
+  listHomeBaseDismissals,
   isCurrent,
   onHomeBasePeriods,
-  onHomeBaseDismissal,
+  onHomeBaseDismissals,
 }: {
   listJourneys: () => Promise<Journey[]>;
   listHomeBasePeriods?: (() => Promise<HomeBasePeriod[]>) | null;
-  listHomeBaseDismissal?: (() => Promise<HomeBaseDismissal | null>) | null;
+  listHomeBaseDismissals?: (() => Promise<HomeBaseDismissal[]>) | null;
   isCurrent: () => boolean;
   onHomeBasePeriods: (periods: HomeBasePeriod[]) => void;
-  onHomeBaseDismissal?: (dismissal: HomeBaseDismissal | null) => void;
+  onHomeBaseDismissals?: (dismissals: HomeBaseDismissal[]) => void;
 }) {
   // Home history is optional private narrative context. Start it beside the
   // Journey read, but never await it before the Atlas can become usable.
@@ -204,12 +205,12 @@ export async function loadJourneyRowsWithOptionalHome({
   // #232: the recorded answer to an earlier suggestion, read the same
   // non-blocking way. Until it arrives no card is shown, so a slow read can
   // never produce the nag the issue forbids.
-  if (listHomeBaseDismissal && onHomeBaseDismissal) {
-    const onDismissal = onHomeBaseDismissal;
+  if (listHomeBaseDismissals && onHomeBaseDismissals) {
+    const onDismissals = onHomeBaseDismissals;
     void Promise.resolve()
-      .then(() => listHomeBaseDismissal())
-      .then((dismissal) => {
-        if (isCurrent()) onDismissal(dismissal);
+      .then(() => listHomeBaseDismissals())
+      .then((dismissals) => {
+        if (isCurrent()) onDismissals(dismissals);
       })
       .catch(() => undefined);
   }
@@ -874,7 +875,7 @@ export function LivingAtlasApp({
   // #200 phase D: the product mode. `capabilities` decides which affordances
   // exist; `mutations` is null in shared mode, so there is no client here that
   // could write and the owner-only surfaces below are never constructed.
-  const { capabilities, listJourneys, listHomeBasePeriods, listHomeBaseDismissal, readMedia, mutations } = useAtlasView();
+  const { capabilities, listJourneys, listHomeBasePeriods, listHomeBaseDismissals, readMedia, mutations } = useAtlasView();
   const { canCreateJourney, canDeleteJourney, canEditJourney, canManageAtlas } = capabilities;
   // #200 phase E. Both halves must hold: the capability decides the affordance
   // exists, `mutations` decides a client capable of the call exists. In shared
@@ -893,7 +894,7 @@ export function LivingAtlasApp({
   // `null` means "no answer on record"; `undefined` means "not read yet", and
   // the card stays quiet until it is. A suggestion that flashed before the
   // recorded dismissal arrived would be exactly the nag the issue forbids.
-  const [homeBaseDismissal, setHomeBaseDismissal] = useState<HomeBaseDismissal | null | undefined>(undefined);
+  const [homeBaseDismissals, setHomeBaseDismissals] = useState<HomeBaseDismissal[] | undefined>(undefined);
   const [homeBaseSuggestionPending, setHomeBaseSuggestionPending] = useState(false);
   const [atlasSemanticZoom, setAtlasSemanticZoom] = useState<GlobeSemanticZoom>("planet");
   const [hasManualAtlasCameraInteraction, setHasManualAtlasCameraInteraction] = useState(false);
@@ -1092,11 +1093,11 @@ export function LivingAtlasApp({
     if (!homeBaseInferenceInputsReady({
       periodsReader: Boolean(listHomeBasePeriods),
       periodsRead: homeBasePeriodsRead,
-      dismissalReader: Boolean(listHomeBaseDismissal),
-      dismissalRead: homeBaseDismissal !== undefined,
+      dismissalReader: Boolean(listHomeBaseDismissals),
+      dismissalRead: homeBaseDismissals !== undefined,
       journeyCount: journeys.length,
     })) return null;
-    return inferHomeBaseCandidate({
+    return inferHomeBaseCandidateWithDismissals({
       journeys: journeys.map((journey) => ({
         id: journey.id,
         startedOn: journey.startedOn,
@@ -1105,9 +1106,8 @@ export function LivingAtlasApp({
       })),
       confirmedPeriod: currentHomeBasePeriod,
       evaluationDate: homeEffectiveDate,
-      dismissal: homeBaseDismissal,
-    });
-  }, [currentHomeBasePeriod, homeBaseDismissal, homeBasePeriodsRead, homeEffectiveDate, journeys, listHomeBaseDismissal, listHomeBasePeriods]);
+    }, homeBaseDismissals ?? []);
+  }, [currentHomeBasePeriod, homeBaseDismissals, homeBasePeriodsRead, homeEffectiveDate, journeys, listHomeBaseDismissals, listHomeBasePeriods]);
   const homeBaseSuggestion = useMemo(() => {
     if (!homeBaseInference) return null;
     const decision = resolveHomeBaseSuggestion({
@@ -1177,7 +1177,10 @@ export function LivingAtlasApp({
         evidenceDigest,
         dismissedOn: homeEffectiveDate,
       });
-      setHomeBaseDismissal(recorded);
+      setHomeBaseDismissals((current) => {
+        const existing = current ?? [];
+        return [...existing.filter((item) => item.digest !== recorded.digest), recorded];
+      });
     } catch {
       showNotice("这次选择暂时没有保存成功，请稍后再试。");
     } finally {
@@ -1288,19 +1291,19 @@ export function LivingAtlasApp({
       setHomeBasePeriods([]);
       setHomeBasePeriodsRead(false);
     }
-    setHomeBaseDismissal(listHomeBaseDismissal ? undefined : null);
+    setHomeBaseDismissals(listHomeBaseDismissals ? undefined : []);
     if (!quiet) setStatus("loading");
     try {
       const journeyRows = await loadJourneyRowsWithOptionalHome({
         listJourneys,
         listHomeBasePeriods,
-        listHomeBaseDismissal,
+        listHomeBaseDismissals,
         isCurrent: () => revision === loadRevision.current,
         onHomeBasePeriods: (periods) => {
           setHomeBasePeriods(periods);
           setHomeBasePeriodsRead(true);
         },
-        onHomeBaseDismissal: setHomeBaseDismissal,
+        onHomeBaseDismissals: setHomeBaseDismissals,
       });
       const loaded = sortJourneysChronologically(journeyRows);
       if (revision !== loadRevision.current) return;
@@ -1318,7 +1321,7 @@ export function LivingAtlasApp({
       }
       return null;
     }
-  }, [listHomeBaseDismissal, listHomeBasePeriods, listJourneys, showNotice]);
+  }, [listHomeBaseDismissals, listHomeBasePeriods, listJourneys, showNotice]);
 
   useEffect(() => {
     void load();

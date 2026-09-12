@@ -182,7 +182,7 @@ function createDemoAtlasSession() {
     mutations,
     listJourneys: async () => structuredClone(journeys),
     listHomeBasePeriods: null,
-    listHomeBaseDismissal: null,
+    listHomeBaseDismissals: null,
     readMedia: async (assetId) => {
       if (!journeys.some((journey) => journey.media.some((asset) => asset.id === assetId))) {
         fail("MEDIA_NOT_FOUND", "这项示例媒体已不存在。", 404);

@@ -125,7 +125,7 @@ async function stubAtlasApi(page) {
     await route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify({ dismissal: storedDismissal }),
+      body: JSON.stringify({ dismissals: storedDismissal ? [storedDismissal] : [] }),
     });
   });
   await page.route("**/api/home-bases", (route) => route.fulfill({

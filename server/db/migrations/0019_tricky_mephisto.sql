@@ -1,0 +1,2 @@
+DROP INDEX "home_base_dismissals_atlas_unique";--> statement-breakpoint
+CREATE UNIQUE INDEX "home_base_dismissals_atlas_digest_unique" ON "home_base_dismissals" USING btree ("atlas_id","evidence_digest");

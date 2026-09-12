@@ -68,15 +68,15 @@ export async function listHomeBasePeriods(fetcher: Fetcher = fetch): Promise<Hom
  * on record. Both are Atlas-scoped on the server; nothing here sends an atlas
  * or organization id.
  */
-export async function readHomeBaseDismissal(
+export async function listHomeBaseDismissals(
   fetcher: Fetcher = fetch,
-): Promise<HomeBaseDismissal | null> {
-  const payload = await requestJson<{ dismissal: HomeBaseDismissal | null }>(
+): Promise<HomeBaseDismissal[]> {
+  const payload = await requestJson<{ dismissals: HomeBaseDismissal[] }>(
     "/api/home-bases/dismissal",
     { cache: "no-store" },
     fetcher,
   );
-  return payload.dismissal;
+  return payload.dismissals;
 }
 
 export async function recordHomeBaseDismissal(

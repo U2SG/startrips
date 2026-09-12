@@ -16,7 +16,7 @@ const GUEST_VIEW: AtlasView = {
   capabilities: GUEST_ATLAS_VIEW_CAPABILITIES,
   listJourneys: async () => [],
   listHomeBasePeriods: null,
-  listHomeBaseDismissal: null,
+  listHomeBaseDismissals: null,
   readMedia: async () => ({ url: "signed", expiresAt: "2026-09-05T00:01:30.000Z" }),
   mutations: null,
 };
@@ -247,13 +247,13 @@ describe("ST-056 guest Home privacy contract", () => {
 describe("ST-060 guest Home Base suggestion privacy contract", () => {
   it("gives a guest no suggestion reader, no dismissal reader and no confirm client", () => {
     expect(GUEST_VIEW.listHomeBasePeriods).toBeNull();
-    expect(GUEST_VIEW.listHomeBaseDismissal).toBeNull();
+    expect(GUEST_VIEW.listHomeBaseDismissals).toBeNull();
     // `mutations: null` is the whole contract: absence, not a hidden button.
     // There is no client in a guest tree that could confirm a Home Base or
     // record a dismissal.
     expect(GUEST_VIEW.mutations).toBeNull();
     const source = readFileSync(new URL("SharedAtlasView.tsx", import.meta.url), "utf8");
-    expect(source).toContain("listHomeBaseDismissal: null");
+    expect(source).toContain("listHomeBaseDismissals: null");
     expect(source).not.toContain("homeBaseSuggestion");
     expect(source).not.toContain("inferHomeBaseCandidate");
   });

@@ -10,7 +10,7 @@ import {
   moveMediaBetweenJourneys,
   undoMediaMove,
   undoJourneyMediaMove,
-  readHomeBaseDismissal,
+  listHomeBaseDismissals,
   recordHomeBaseDismissal,
   reorderJourneyMedia,
   restoreJourney,
@@ -101,8 +101,8 @@ describe("journeyApi", () => {
 
   it("reads and records the Home Base dismissal without naming an atlas", async () => {
     const dismissal = { kind: "soft", digest: "hbv1:1:2:3", dismissedAt: "2026-04-02" };
-    const reader = vi.fn(async () => Response.json({ dismissal })) as unknown as typeof fetch;
-    await expect(readHomeBaseDismissal(reader)).resolves.toEqual(dismissal);
+    const reader = vi.fn(async () => Response.json({ dismissals: [dismissal] })) as unknown as typeof fetch;
+    await expect(listHomeBaseDismissals(reader)).resolves.toEqual([dismissal]);
     expect(reader).toHaveBeenCalledWith("/api/home-bases/dismissal", expect.objectContaining({
       cache: "no-store", credentials: "include",
     }));

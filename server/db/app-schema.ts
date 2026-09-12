@@ -83,7 +83,8 @@ export const homeBasePeriods = pgTable(
 // #232: the member's answer to a Home Base suggestion, so that answer can
 // survive the session it was given in. One row per Atlas: the suggestion
 // surface asks about at most one region at a time, so a later answer replaces
-// the earlier one rather than accumulating a history of refusals.
+// the same evidence revision rather than accumulating duplicate clicks; answers for
+// other regions/evidence revisions remain available to the inference selector.
 //
 // `evidence_digest` stores `homeBaseEvidenceDigest()` verbatim. That string is
 // structured, not opaque — the inference core parses the anchor and the
@@ -111,7 +112,7 @@ export const homeBaseDismissals = pgTable(
       .defaultNow(),
   },
   (table) => [
-    uniqueIndex("home_base_dismissals_atlas_unique").on(table.atlasId),
+    uniqueIndex("home_base_dismissals_atlas_digest_unique").on(table.atlasId, table.evidenceDigest),
     check(
       "home_base_dismissals_kind_check",
       sql`${table.kind} in ('soft', 'rejected')`,

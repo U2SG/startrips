@@ -3,11 +3,13 @@ import {
   HOME_BASE_EVIDENCE_REASON_CODES,
   HOME_BASE_EVIDENCE_REASON_COPY,
   homeBaseConfirmationDraft,
+  inferHomeBaseCandidateWithDismissals,
   resolveHomeBasePlaceLabel,
   resolveHomeBaseSuggestion,
 } from "./homeBaseSuggestion";
 import type {
   HomeBaseEvidenceReasonCode,
+  HomeBaseInferenceJourney,
   HomeBaseInferenceResult,
   HomeBaseInferenceState,
 } from "./homeBaseInference";
@@ -255,6 +257,48 @@ describe("the Place Label the card names", () => {
 
   it("fails closed when evidence identity cannot be read", () => {
     expect(resolveHomeBasePlaceLabel([journey("深圳")], ANCHOR, "malformed")).toBeNull();
+  });
+});
+
+
+describe("persisted answers across more than one Home Base region", () => {
+  const evidenceJourneys = (prefix: string, latitude: number, longitude: number): HomeBaseInferenceJourney[] =>
+    ["2026-01-01", "2026-02-15", "2026-04-15", "2026-05-15"].map((date, index) => ({
+      id: `${prefix}-${index + 1}`,
+      startedOn: date,
+      endedOn: date,
+      routePoints: [
+        { id: `${prefix}-${index + 1}-start`, sortOrder: 0, latitude, longitude },
+        { id: `${prefix}-${index + 1}-end`, sortOrder: 1, latitude, longitude },
+      ],
+    }));
+
+  it("keeps reject A after answering B when A becomes the leading region again", () => {
+    const shenzhen = evidenceJourneys("sz", 22.543096, 114.057865);
+    const tokyo = evidenceJourneys("tyo", 35.689487, 139.691711);
+    const shenzhenSuggestion = inferHomeBaseCandidateWithDismissals({
+      journeys: shenzhen, evaluationDate: "2026-06-01",
+    }, []);
+    expect(shenzhenSuggestion.state).toBe("suggested");
+
+    const afterShenzhenRejection = [
+      { kind: "rejected" as const, digest: shenzhenSuggestion.evidenceDigest!, dismissedAt: "2026-06-01" },
+    ];
+    const tokyoSuggestion = inferHomeBaseCandidateWithDismissals({
+      journeys: tokyo, evaluationDate: "2026-06-01",
+    }, afterShenzhenRejection);
+    expect(tokyoSuggestion.state).toBe("suggested");
+
+    const answers = [
+      ...afterShenzhenRejection,
+      { kind: "soft" as const, digest: tokyoSuggestion.evidenceDigest!, dismissedAt: "2026-06-02" },
+    ];
+    expect(inferHomeBaseCandidateWithDismissals({
+      journeys: shenzhen, evaluationDate: "2026-09-01",
+    }, answers).state).toBe("dismissed");
+    expect(inferHomeBaseCandidateWithDismissals({
+      journeys: tokyo, evaluationDate: "2026-06-15",
+    }, answers).state).toBe("dismissed");
   });
 });
 
