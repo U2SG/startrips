@@ -419,12 +419,15 @@ function meetsSuggestionPolicy(region: EvidenceRegion, runnerUpJourneys: number)
     && region.journeyCount - runnerUpJourneys >= HOME_BASE_MIN_LEAD_JOURNEYS;
 }
 
-function suffixRegions(
+function windowRegions(
   regions: readonly EvidenceRegion[],
-  candidateDate: string,
+  startedOn: string,
+  endedOn: string,
 ): EvidenceRegion[] {
   const selections = regions
-    .map((region) => region.selectedEvidence.filter((item) => item.date >= candidateDate))
+    .map((region) => region.selectedEvidence.filter((item) => (
+      item.date >= startedOn && item.date <= endedOn
+    )))
     .filter((selected) => selected.length > 0);
 
   const uniqueSelections: Array<{ selected: EndpointEvidence[]; set: Set<EndpointEvidence> }> = [];
@@ -456,55 +459,99 @@ function suffixRegions(
   return [...bySupport.values()].sort(compareRegions);
 }
 
-function sustainedMoveStart(
-  regions: readonly EvidenceRegion[],
-  targetRegion: EvidenceRegion,
-  confirmedPeriod: ConfirmedHomeBasePeriod,
-): string | null {
-  const targetDates = [...new Set(targetRegion.selectedEvidence.map((item) => item.date))].sort();
-  if (targetDates.length === 0) return null;
+type MoveCandidate = {
+  region: EvidenceRegion;
+  runnerUpJourneys: number;
+  proposedPeriodStart: string;
+  blockEndedOn: string;
+};
 
-  // A lone historical visit must not backdate a later residence change. Use the
-  // existing 90-day suggestion horizon as the continuity boundary: after a gap
-  // larger than that horizon, only the later evidence can establish the move.
-  let boundary = targetDates[0];
-  for (let index = 1; index < targetDates.length; index += 1) {
-    if (spanDays(targetDates[index - 1], targetDates[index]) > HOME_BASE_SUGGESTED_MIN_SPAN_DAYS) {
-      boundary = targetDates[index];
+type ContinuityBlock = {
+  dates: readonly string[];
+  endedOn: string;
+};
+
+function continuityBlocks(region: EvidenceRegion): ContinuityBlock[] {
+  const dates = [...new Set(region.selectedEvidence.map((item) => item.date))].sort();
+  if (dates.length === 0) return [];
+
+  const blocks: ContinuityBlock[] = [];
+  let blockDates: string[] = [dates[0]];
+  for (let index = 1; index < dates.length; index += 1) {
+    if (spanDays(dates[index - 1], dates[index]) > HOME_BASE_SUGGESTED_MIN_SPAN_DAYS) {
+      blocks.push({ dates: blockDates, endedOn: blockDates[blockDates.length - 1] });
+      blockDates = [];
+    }
+    blockDates.push(dates[index]);
+  }
+  blocks.push({ dates: blockDates, endedOn: blockDates[blockDates.length - 1] });
+  return blocks;
+}
+
+function findSustainedMove(
+  regions: readonly EvidenceRegion[],
+  confirmedPeriod: ConfirmedHomeBasePeriod,
+): MoveCandidate | null {
+  const candidates: MoveCandidate[] = [];
+
+  for (const targetRegion of regions) {
+    const targetConfirmedDistance = haversineDistanceKm(
+      confirmedPeriod.latitude,
+      confirmedPeriod.longitude,
+      targetRegion.anchor.latitude,
+      targetRegion.anchor.longitude,
+    );
+    if (targetConfirmedDistance <= HOME_BASE_CLUSTER_RADIUS_KM) continue;
+
+    for (const block of continuityBlocks(targetRegion)) {
+      for (const candidateDate of block.dates) {
+        // Reuse the already-enumerated maximal regions. Restricting them to the
+        // continuity window re-applies the complete V1 suggestion contract
+        // without rebuilding the pairwise graph/clique search for every date.
+        const candidateRegions = windowRegions(regions, candidateDate, block.endedOn);
+        const windowLeader = candidateRegions[0];
+        if (!windowLeader) continue;
+
+        const targetDistance = haversineDistanceKm(
+          targetRegion.anchor.latitude,
+          targetRegion.anchor.longitude,
+          windowLeader.anchor.latitude,
+          windowLeader.anchor.longitude,
+        );
+        const confirmedDistance = haversineDistanceKm(
+          confirmedPeriod.latitude,
+          confirmedPeriod.longitude,
+          windowLeader.anchor.latitude,
+          windowLeader.anchor.longitude,
+        );
+        if (
+          targetDistance > HOME_BASE_CLUSTER_RADIUS_KM
+          || confirmedDistance <= HOME_BASE_CLUSTER_RADIUS_KM
+        ) continue;
+
+        const runnerUpJourneys = runnerUpSupport(windowLeader, candidateRegions);
+        if (!meetsSuggestionPolicy(windowLeader, runnerUpJourneys)) continue;
+
+        candidates.push({
+          region: windowLeader,
+          runnerUpJourneys,
+          proposedPeriodStart: candidateDate,
+          blockEndedOn: block.endedOn,
+        });
+        // Dates are ascending, so retain the earliest qualifying onset inside
+        // this independently sustained block. A later isolated block cannot
+        // invalidate an earlier block that already qualified.
+        break;
+      }
     }
   }
 
-  for (const candidateDate of targetDates) {
-    if (candidateDate < boundary) continue;
-    // Reuse the already-enumerated maximal regions instead of rebuilding the
-    // pairwise graph and clique search for every possible move date. Intersecting
-    // maximal cliques with the suffix yields the induced suffix clique candidates.
-    const candidateRegions = suffixRegions(regions, candidateDate);
-    const suffixLeader = candidateRegions[0];
-    if (!suffixLeader) continue;
-
-    const targetDistance = haversineDistanceKm(
-      targetRegion.anchor.latitude,
-      targetRegion.anchor.longitude,
-      suffixLeader.anchor.latitude,
-      suffixLeader.anchor.longitude,
-    );
-    const confirmedDistance = haversineDistanceKm(
-      confirmedPeriod.latitude,
-      confirmedPeriod.longitude,
-      suffixLeader.anchor.latitude,
-      suffixLeader.anchor.longitude,
-    );
-    if (
-      targetDistance > HOME_BASE_CLUSTER_RADIUS_KM
-      || confirmedDistance <= HOME_BASE_CLUSTER_RADIUS_KM
-    ) continue;
-
-    const suffixRunnerUpJourneys = runnerUpSupport(suffixLeader, candidateRegions);
-    if (meetsSuggestionPolicy(suffixLeader, suffixRunnerUpJourneys)) return candidateDate;
-  }
-
-  return null;
+  candidates.sort((left, right) => (
+    right.blockEndedOn.localeCompare(left.blockEndedOn)
+    || compareRegions(left.region, right.region)
+    || left.proposedPeriodStart.localeCompare(right.proposedPeriodStart)
+  ));
+  return candidates[0] ?? null;
 }
 
 function runnerUpSupport(leader: EvidenceRegion, regions: readonly EvidenceRegion[]): number {
@@ -658,6 +705,58 @@ function matchingDismissal(
   return mayReprompt ? null : "soft";
 }
 
+function assessRegion(region: EvidenceRegion, runnerUpJourneys: number) {
+  const reasonCodes: HomeBaseEvidenceReasonCode[] = [];
+  if (region.journeyCount >= HOME_BASE_CANDIDATE_MIN_JOURNEYS) {
+    reasonCodes.push("CANDIDATE_JOURNEY_THRESHOLD_MET");
+  }
+  if (region.evidenceSpanDays >= HOME_BASE_CANDIDATE_MIN_SPAN_DAYS) {
+    reasonCodes.push("CANDIDATE_SPAN_THRESHOLD_MET");
+  }
+  if (region.journeyCount >= HOME_BASE_SUGGESTED_MIN_JOURNEYS) {
+    reasonCodes.push("SUGGESTED_JOURNEY_THRESHOLD_MET");
+  }
+  if (region.evidenceSpanDays >= HOME_BASE_SUGGESTED_MIN_SPAN_DAYS) {
+    reasonCodes.push("SUGGESTED_SPAN_THRESHOLD_MET");
+  }
+  if (region.startCount >= HOME_BASE_MIN_START_SUPPORT) {
+    reasonCodes.push("START_SUPPORT_THRESHOLD_MET");
+  }
+  if (region.endCount >= HOME_BASE_MIN_END_SUPPORT) {
+    reasonCodes.push("END_SUPPORT_THRESHOLD_MET");
+  }
+  if (region.journeyCount - runnerUpJourneys >= HOME_BASE_MIN_LEAD_JOURNEYS) {
+    reasonCodes.push("LEADER_MARGIN_THRESHOLD_MET");
+  }
+
+  const digest = homeBaseEvidenceDigest({
+    anchor: region.anchor,
+    supports: region.supports,
+    evidenceStartedOn: region.evidenceStartedOn,
+    evidenceEndedOn: region.evidenceEndedOn,
+  });
+  return {
+    reasonCodes,
+    digest,
+    base: {
+      metroAnchor: region.anchor,
+      evidenceDigest: digest,
+      support: {
+        journeys: region.journeyCount,
+        starts: region.startCount,
+        ends: region.endCount,
+        runnerUpJourneys,
+        evidenceSpanDays: region.evidenceSpanDays,
+        evidenceStartedOn: region.evidenceStartedOn,
+        evidenceEndedOn: region.evidenceEndedOn,
+      },
+    },
+    isCandidate: region.journeyCount >= HOME_BASE_CANDIDATE_MIN_JOURNEYS
+      && region.evidenceSpanDays >= HOME_BASE_CANDIDATE_MIN_SPAN_DAYS,
+    isSuggested: meetsSuggestionPolicy(region, runnerUpJourneys),
+  };
+}
+
 function emptyResult(reasonCodes: readonly HomeBaseEvidenceReasonCode[]): HomeBaseInferenceResult {
   return {
     state: "insufficient_evidence",
@@ -720,120 +819,105 @@ export function inferHomeBaseCandidate(
   const leader = regions[0];
   if (!leader) return emptyResult(["NO_ROUTE_ENDPOINT_EVIDENCE"]);
 
-  const runnerUpJourneys = runnerUpSupport(leader, regions);
-  const reasonCodes: HomeBaseEvidenceReasonCode[] = [];
-  if (leader.journeyCount >= HOME_BASE_CANDIDATE_MIN_JOURNEYS) {
-    reasonCodes.push("CANDIDATE_JOURNEY_THRESHOLD_MET");
-  }
-  if (leader.evidenceSpanDays >= HOME_BASE_CANDIDATE_MIN_SPAN_DAYS) {
-    reasonCodes.push("CANDIDATE_SPAN_THRESHOLD_MET");
-  }
-  if (leader.journeyCount >= HOME_BASE_SUGGESTED_MIN_JOURNEYS) {
-    reasonCodes.push("SUGGESTED_JOURNEY_THRESHOLD_MET");
-  }
-  if (leader.evidenceSpanDays >= HOME_BASE_SUGGESTED_MIN_SPAN_DAYS) {
-    reasonCodes.push("SUGGESTED_SPAN_THRESHOLD_MET");
-  }
-  if (leader.startCount >= HOME_BASE_MIN_START_SUPPORT) {
-    reasonCodes.push("START_SUPPORT_THRESHOLD_MET");
-  }
-  if (leader.endCount >= HOME_BASE_MIN_END_SUPPORT) {
-    reasonCodes.push("END_SUPPORT_THRESHOLD_MET");
-  }
-  if (leader.journeyCount - runnerUpJourneys >= HOME_BASE_MIN_LEAD_JOURNEYS) {
-    reasonCodes.push("LEADER_MARGIN_THRESHOLD_MET");
-  }
-
-  const digest = homeBaseEvidenceDigest({
-    anchor: leader.anchor,
-    supports: leader.supports,
-    evidenceStartedOn: leader.evidenceStartedOn,
-    evidenceEndedOn: leader.evidenceEndedOn,
-  });
-  const base = {
-    metroAnchor: leader.anchor,
-    evidenceDigest: digest,
-    support: {
-      journeys: leader.journeyCount,
-      starts: leader.startCount,
-      ends: leader.endCount,
-      runnerUpJourneys,
-      evidenceSpanDays: leader.evidenceSpanDays,
-      evidenceStartedOn: leader.evidenceStartedOn,
-      evidenceEndedOn: leader.evidenceEndedOn,
-    },
-  };
-
-  const isCandidate = leader.journeyCount >= HOME_BASE_CANDIDATE_MIN_JOURNEYS
-    && leader.evidenceSpanDays >= HOME_BASE_CANDIDATE_MIN_SPAN_DAYS;
-  if (!isCandidate) {
-    return {
-      state: "insufficient_evidence",
-      ...base,
-      reasonCodes,
-      proposedPeriodStart: null,
-    };
-  }
-
-  const isSuggested = meetsSuggestionPolicy(leader, runnerUpJourneys);
-  if (!isSuggested) {
-    return {
-      state: "candidate",
-      ...base,
-      reasonCodes,
-      proposedPeriodStart: null,
-    };
-  }
-
-  const dismissalState = matchingDismissal(input.dismissal, leader, digest, input.evaluationDate);
-  if (dismissalState) {
-    return {
-      state: "dismissed",
-      ...base,
-      reasonCodes: [
-        ...reasonCodes,
-        dismissalState === "rejected" ? "REJECTED_DISMISSAL_ACTIVE" : "SOFT_DISMISSAL_ACTIVE",
-      ],
-      proposedPeriodStart: null,
-    };
-  }
+  const leaderAssessment = assessRegion(leader, runnerUpSupport(leader, regions));
 
   if (activeConfirmedPeriod) {
+    // Move detection is temporal rather than cumulative: a long-lived confirmed
+    // Home may remain the all-history leader after a different metro has already
+    // formed a self-sufficient recent block.
+    const move = findSustainedMove(regions, activeConfirmedPeriod);
+    if (move) {
+      const moveAssessment = assessRegion(move.region, move.runnerUpJourneys);
+      const dismissalState = matchingDismissal(
+        input.dismissal,
+        move.region,
+        moveAssessment.digest,
+        input.evaluationDate,
+      );
+      if (dismissalState) {
+        return {
+          state: "dismissed",
+          ...moveAssessment.base,
+          reasonCodes: [
+            ...moveAssessment.reasonCodes,
+            dismissalState === "rejected" ? "REJECTED_DISMISSAL_ACTIVE" : "SOFT_DISMISSAL_ACTIVE",
+          ],
+          proposedPeriodStart: null,
+        };
+      }
+      return {
+        state: "move_suggested",
+        ...moveAssessment.base,
+        reasonCodes: [...moveAssessment.reasonCodes, "DIFFERS_FROM_CONFIRMED_HOME"],
+        proposedPeriodStart: move.proposedPeriodStart,
+      };
+    }
+
+    if (!leaderAssessment.isCandidate) {
+      return {
+        state: "insufficient_evidence",
+        ...leaderAssessment.base,
+        reasonCodes: leaderAssessment.reasonCodes,
+        proposedPeriodStart: null,
+      };
+    }
+
     const confirmedDistance = haversineDistanceKm(
       activeConfirmedPeriod.latitude,
       activeConfirmedPeriod.longitude,
       leader.anchor.latitude,
       leader.anchor.longitude,
     );
-    if (confirmedDistance <= HOME_BASE_CLUSTER_RADIUS_KM) {
-      return {
-        state: "candidate",
-        ...base,
-        reasonCodes: [...reasonCodes, "MATCHES_CONFIRMED_HOME"],
-        proposedPeriodStart: null,
-      };
-    }
-    const proposedPeriodStart = sustainedMoveStart(regions, leader, activeConfirmedPeriod);
-    if (!proposedPeriodStart) {
-      return {
-        state: "candidate",
-        ...base,
-        reasonCodes,
-        proposedPeriodStart: null,
-      };
-    }
     return {
-      state: "move_suggested",
-      ...base,
-      reasonCodes: [...reasonCodes, "DIFFERS_FROM_CONFIRMED_HOME"],
-      proposedPeriodStart,
+      state: "candidate",
+      ...leaderAssessment.base,
+      reasonCodes: confirmedDistance <= HOME_BASE_CLUSTER_RADIUS_KM
+        ? [...leaderAssessment.reasonCodes, "MATCHES_CONFIRMED_HOME"]
+        : leaderAssessment.reasonCodes,
+      proposedPeriodStart: null,
+    };
+  }
+
+  if (!leaderAssessment.isCandidate) {
+    return {
+      state: "insufficient_evidence",
+      ...leaderAssessment.base,
+      reasonCodes: leaderAssessment.reasonCodes,
+      proposedPeriodStart: null,
+    };
+  }
+
+  if (!leaderAssessment.isSuggested) {
+    return {
+      state: "candidate",
+      ...leaderAssessment.base,
+      reasonCodes: leaderAssessment.reasonCodes,
+      proposedPeriodStart: null,
+    };
+  }
+
+  const dismissalState = matchingDismissal(
+    input.dismissal,
+    leader,
+    leaderAssessment.digest,
+    input.evaluationDate,
+  );
+  if (dismissalState) {
+    return {
+      state: "dismissed",
+      ...leaderAssessment.base,
+      reasonCodes: [
+        ...leaderAssessment.reasonCodes,
+        dismissalState === "rejected" ? "REJECTED_DISMISSAL_ACTIVE" : "SOFT_DISMISSAL_ACTIVE",
+      ],
+      proposedPeriodStart: null,
     };
   }
 
   return {
     state: "suggested",
-    ...base,
-    reasonCodes,
+    ...leaderAssessment.base,
+    reasonCodes: leaderAssessment.reasonCodes,
     proposedPeriodStart: null,
   };
 }

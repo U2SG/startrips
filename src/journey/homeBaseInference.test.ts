@@ -346,7 +346,7 @@ describe("Home Base evidence fixtures", () => {
       evaluationDate: "2026-06-01",
     });
     expect(result.state).toBe("move_suggested");
-    expect(result.support.evidenceStartedOn).toBe("2023-06-01");
+    expect(result.support.evidenceStartedOn).toBe("2026-01-01");
     expect(result.proposedPeriodStart).toBe("2026-01-01");
   });
 
@@ -389,6 +389,61 @@ describe("Home Base evidence fixtures", () => {
     });
     expect(result.state).toBe("move_suggested");
     expect(result.proposedPeriodStart).toBe("2016-01-01");
+  });
+
+  it("detects a sustained new Home even while the confirmed Home remains the all-history leader", () => {
+    const confirmed = {
+      startedOn: "2025-01-01",
+      endedOn: null,
+      latitude: SHENZHEN.latitude,
+      longitude: SHENZHEN.longitude,
+    } as const;
+    const establishedHome = Array.from({ length: 10 }, (_value, index) => {
+      const month = String(index + 2).padStart(2, "0");
+      return journey(`shenzhen-${index + 1}`, `2025-${month}-01`, SHENZHEN, SHENZHEN);
+    });
+    const movedHome = [
+      journey("tokyo-1", "2026-01-01", TOKYO, TOKYO),
+      journey("tokyo-2", "2026-02-01", TOKYO, TOKYO),
+      journey("tokyo-3", "2026-03-01", TOKYO, TOKYO),
+      journey("tokyo-4", "2026-04-02", TOKYO, TOKYO),
+    ];
+    const result = inferHomeBaseCandidate({
+      journeys: [...establishedHome, ...movedHome],
+      confirmedPeriod: confirmed,
+      evaluationDate: "2026-06-01",
+    });
+    expect(result.state).toBe("move_suggested");
+    expect(result.support.journeys).toBe(4);
+    expect(result.proposedPeriodStart).toBe("2026-01-01");
+    expect(haversineDistanceKm(
+      result.metroAnchor!.latitude,
+      result.metroAnchor!.longitude,
+      TOKYO.latitude,
+      TOKYO.longitude,
+    )).toBeLessThanOrEqual(HOME_BASE_CLUSTER_RADIUS_KM);
+  });
+
+  it("retains an earlier qualifying move block after a later isolated visit", () => {
+    const confirmed = {
+      startedOn: "2022-01-01",
+      endedOn: null,
+      latitude: SHENZHEN.latitude,
+      longitude: SHENZHEN.longitude,
+    } as const;
+    const result = inferHomeBaseCandidate({
+      journeys: [
+        journey("tokyo-1", "2023-01-01", TOKYO, TOKYO),
+        journey("tokyo-2", "2023-02-01", TOKYO, TOKYO),
+        journey("tokyo-3", "2023-03-01", TOKYO, TOKYO),
+        journey("tokyo-4", "2023-04-02", TOKYO, TOKYO),
+        journey("late-visit", "2026-05-01", TOKYO, TOKYO),
+      ],
+      confirmedPeriod: confirmed,
+      evaluationDate: "2026-06-01",
+    });
+    expect(result.state).toBe("move_suggested");
+    expect(result.proposedPeriodStart).toBe("2023-01-01");
   });
 
   it("does not let one old holiday turn three recent Journeys into a sustained move", () => {
