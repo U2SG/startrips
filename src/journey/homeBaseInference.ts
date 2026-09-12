@@ -803,6 +803,7 @@ export function inferHomeBaseCandidate(
 ): HomeBaseInferenceResult {
   const input = normalizeInput(inputOrJourneys, confirmedPeriod, evaluationDate, dismissal);
   const activeConfirmedPeriod = input.confirmedPeriod
+    && input.confirmedPeriod.endedOn === null
     && homeBasePeriodCoversDate(input.confirmedPeriod, input.evaluationDate)
     ? input.confirmedPeriod
     : null;

@@ -574,6 +574,29 @@ describe("Home Base evidence fixtures", () => {
     expect(result.proposedPeriodStart).toBeNull();
   });
 
+  it("does not propose an open move from a bounded confirmed period", () => {
+    const bounded = {
+      startedOn: "2022-06-01",
+      endedOn: "2026-12-31",
+      latitude: SHENZHEN.latitude,
+      longitude: SHENZHEN.longitude,
+    } as const;
+    const tokyoJourneys = shenzhenFour().map((item) => journey(
+      item.id,
+      item.startedOn,
+      TOKYO,
+      TOKYO,
+      item.endedOn,
+    ));
+    const result = inferHomeBaseCandidate({
+      journeys: tokyoJourneys,
+      confirmedPeriod: bounded,
+      evaluationDate: "2026-06-01",
+    });
+    expect(result.state).toBe("suggested");
+    expect(result.proposedPeriodStart).toBeNull();
+  });
+
   it("returns move_suggested with a proposed start and never mutates the confirmed period", () => {
     const confirmed = {
       startedOn: "2022-06-01",
