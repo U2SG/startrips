@@ -229,6 +229,30 @@ describe("Home Base evidence fixtures", () => {
     expect(infer(journeys).state).toBe("insufficient_evidence");
   });
 
+  it("prefers a threshold-qualified candidate over a larger same-day cluster", () => {
+    const concentrated = [
+      journey("tokyo-1", "2026-01-01", TOKYO, TOKYO),
+      journey("tokyo-2", "2026-01-01", TOKYO, TOKYO),
+      journey("tokyo-3", "2026-01-01", TOKYO, TOKYO),
+      journey("tokyo-4", "2026-01-01", TOKYO, TOKYO),
+    ];
+    const qualified = [
+      journey("singapore-1", "2026-01-01", SINGAPORE, SINGAPORE),
+      journey("singapore-2", "2026-02-01", SINGAPORE, SINGAPORE),
+      journey("singapore-3", "2026-03-05", SINGAPORE, SINGAPORE),
+    ];
+    const result = infer([...concentrated, ...qualified]);
+    expect(result.state).toBe("candidate");
+    expect(result.support.journeys).toBe(3);
+    expect(result.metroAnchor).not.toBeNull();
+    expect(haversineDistanceKm(
+      result.metroAnchor!.latitude,
+      result.metroAnchor!.longitude,
+      SINGAPORE.latitude,
+      SINGAPORE.longitude,
+    )).toBeLessThanOrEqual(HOME_BASE_CLUSTER_RADIUS_KM);
+  });
+
   it("does not transitively chain coordinates that span beyond 25 km end-to-end", () => {
     const a = { latitude: 0, longitude: 0 };
     const b = { latitude: 0, longitude: 0.2 };

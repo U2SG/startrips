@@ -300,7 +300,8 @@ function compareRegions(left: EvidenceRegion, right: EvidenceRegion): number {
   const leftBalancedSupport = Math.min(left.startCount, left.endCount);
   const rightBalancedSupport = Math.min(right.startCount, right.endCount);
   return (
-    right.journeyCount - left.journeyCount
+    Number(isCandidateRegion(right)) - Number(isCandidateRegion(left))
+    || right.journeyCount - left.journeyCount
     || directionalSupportEligible(right) - directionalSupportEligible(left)
     || rightBalancedSupport - leftBalancedSupport
     || (right.startCount + right.endCount) - (left.startCount + left.endCount)
