@@ -194,7 +194,11 @@ def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Fetch origin/main, require passing CI, and deploy that exact commit to Startrips."
     )
-    parser.add_argument("--key", required=True, type=Path, help="SSH private-key path")
+    parser.add_argument(
+        "--key",
+        type=Path,
+        help="Optional SSH private-key path. When omitted, use ssh-agent/default SSH keys.",
+    )
     parser.add_argument("--server", default="106.53.130.142", help="SSH/HTTPS host")
     parser.add_argument("--user", default="ubuntu", help="SSH username")
     parser.add_argument(
@@ -220,8 +224,8 @@ def parse_arguments() -> argparse.Namespace:
 
 def main() -> int:
     arguments = parse_arguments()
-    key_path = arguments.key.expanduser().resolve()
-    if not key_path.is_file():
+    key_path = arguments.key.expanduser().resolve() if arguments.key else None
+    if key_path is not None and not key_path.is_file():
         raise FileNotFoundError(f"SSH key does not exist: {key_path}")
     if not SERVER_PATTERN.fullmatch(arguments.server):
         raise ValueError("--server may contain only letters, digits, dots, and hyphens")
@@ -282,9 +286,9 @@ def main() -> int:
         client.connect(
             hostname=arguments.server,
             username=arguments.user,
-            key_filename=str(key_path),
-            look_for_keys=False,
-            allow_agent=False,
+            key_filename=str(key_path) if key_path is not None else None,
+            look_for_keys=key_path is None,
+            allow_agent=key_path is None,
             timeout=20,
             banner_timeout=20,
             auth_timeout=20,
