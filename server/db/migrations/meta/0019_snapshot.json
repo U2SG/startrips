@@ -956,6 +956,12 @@
           "primaryKey": false,
           "notNull": true
         },
+        "evidence_digest_hash": {
+          "name": "evidence_digest_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
         "dismissed_on": {
           "name": "dismissed_on",
           "type": "date",
@@ -978,8 +984,8 @@
         }
       },
       "indexes": {
-        "home_base_dismissals_atlas_digest_unique": {
-          "name": "home_base_dismissals_atlas_digest_unique",
+        "home_base_dismissals_atlas_digest_hash_unique": {
+          "name": "home_base_dismissals_atlas_digest_hash_unique",
           "columns": [
             {
               "expression": "atlas_id",
@@ -988,7 +994,7 @@
               "nulls": "last"
             },
             {
-              "expression": "evidence_digest",
+              "expression": "evidence_digest_hash",
               "isExpression": false,
               "asc": true,
               "nulls": "last"

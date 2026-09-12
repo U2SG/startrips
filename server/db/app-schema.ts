@@ -103,6 +103,9 @@ export const homeBaseDismissals = pgTable(
       .references(() => atlases.id, { onDelete: "cascade" }),
     kind: text("kind").notNull(),
     evidenceDigest: text("evidence_digest").notNull(),
+    // Fixed-size SHA-256 hex key keeps the unique B-tree independent of the
+    // unbounded evidence digest while the full digest remains byte-exact.
+    evidenceDigestHash: text("evidence_digest_hash").notNull(),
     dismissedOn: date("dismissed_on", { mode: "string" }).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
@@ -112,7 +115,7 @@ export const homeBaseDismissals = pgTable(
       .defaultNow(),
   },
   (table) => [
-    uniqueIndex("home_base_dismissals_atlas_digest_unique").on(table.atlasId, table.evidenceDigest),
+    uniqueIndex("home_base_dismissals_atlas_digest_hash_unique").on(table.atlasId, table.evidenceDigestHash),
     check(
       "home_base_dismissals_kind_check",
       sql`${table.kind} in ('soft', 'rejected')`,

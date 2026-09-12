@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { and, asc, eq, sql } from "drizzle-orm";
 import { homeBaseDismissals, homeBasePeriods } from "../db/app-schema";
 import { db } from "../db/client";
@@ -262,11 +263,16 @@ export async function countHomeBasePeriodsForAtlas(
  * #232: the member's answers to Home Base suggestions.
  *
  * Answers are preserved per evidence revision rather than collapsed to one row
- * per Atlas. The digest is stored verbatim — the frozen inference core parses
- * its region anchor and supporting Journey ids — so the client can ask that
- * same core which saved answer applies to the current candidate. Repeating the
- * exact same answer is idempotent through the Atlas + digest unique key.
+ * per Atlas. The full digest remains byte-exact because the inference core
+ * parses its region anchor and Journey ids from it. Uniqueness uses a fixed-size
+ * SHA-256 key, so an unbounded digest never becomes a B-tree index entry. The
+ * Atlas row lock serializes this path; a theoretical hash collision fails closed
+ * instead of overwriting another answer.
  */
+function homeBaseDismissalDigestHash(digest: string): string {
+  return createHash("sha256").update(digest, "utf8").digest("hex");
+}
+
 export async function listHomeBaseDismissalsForAtlas(
   atlasId: string,
 ): Promise<HomeBaseDismissal[]> {
@@ -288,24 +294,51 @@ export async function recordHomeBaseDismissalForAtlas(
 ): Promise<HomeBaseDismissal | undefined> {
   return await db.transaction(async (transaction) => {
     if (!await lockActiveAtlas(transaction, atlasId)) return undefined;
+
+    const evidenceDigestHash = homeBaseDismissalDigestHash(values.digest);
+    const [existing] = await transaction
+      .select({
+        id: homeBaseDismissals.id,
+        kind: homeBaseDismissals.kind,
+        digest: homeBaseDismissals.evidenceDigest,
+        dismissedAt: homeBaseDismissals.dismissedOn,
+      })
+      .from(homeBaseDismissals)
+      .where(and(
+        eq(homeBaseDismissals.atlasId, atlasId),
+        eq(homeBaseDismissals.evidenceDigestHash, evidenceDigestHash),
+      ))
+      .limit(1);
+
+    if (existing) {
+      if (existing.digest !== values.digest) {
+        throw new Error("HOME_BASE_DISMISSAL_DIGEST_HASH_COLLISION");
+      }
+      const keepRejected = existing.kind === "rejected";
+      const [row] = await transaction
+        .update(homeBaseDismissals)
+        .set({
+          kind: keepRejected ? "rejected" : values.kind,
+          dismissedOn: keepRejected ? existing.dismissedAt : values.dismissedOn,
+          updatedAt: new Date(),
+        })
+        .where(eq(homeBaseDismissals.id, existing.id))
+        .returning({
+          kind: homeBaseDismissals.kind,
+          digest: homeBaseDismissals.evidenceDigest,
+          dismissedAt: homeBaseDismissals.dismissedOn,
+        });
+      return { ...row, kind: row.kind as HomeBaseDismissal["kind"] };
+    }
+
     const [row] = await transaction
       .insert(homeBaseDismissals)
       .values({
         atlasId,
         kind: values.kind,
         evidenceDigest: values.digest,
+        evidenceDigestHash,
         dismissedOn: values.dismissedOn,
-      })
-      .onConflictDoUpdate({
-        target: [homeBaseDismissals.atlasId, homeBaseDismissals.evidenceDigest],
-        set: {
-          // A hard rejection is stronger than "not now". A stale surface or
-          // retried soft-dismiss request for the same evidence must never
-          // downgrade an explicit rejection that is already persisted.
-          kind: sql`case when ${homeBaseDismissals.kind} = 'rejected' then 'rejected' else excluded.kind end`,
-          dismissedOn: sql`case when ${homeBaseDismissals.kind} = 'rejected' then ${homeBaseDismissals.dismissedOn} else excluded.dismissed_on end`,
-          updatedAt: new Date(),
-        },
       })
       .returning({
         kind: homeBaseDismissals.kind,

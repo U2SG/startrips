@@ -332,6 +332,22 @@ describe("the persisted answer to a Home Base suggestion", () => {
     }).state).toBe("dismissed");
   });
 
+  it("stores an unbounded evidence digest without indexing the full text", async () => {
+    const atlas = await freshAtlas("long-dismissal-digest");
+    const support = Array.from({ length: 1200 }, (_, index) => `journey-${index}=11`).join(",");
+    const digest = `hbv1:22.5431:114.0579:1200:2020-01-01:2026-04-01:${support}:deadbeef`;
+    expect(digest.length).toBeGreaterThan(10_000);
+
+    expect(await recordHomeBaseDismissalForAtlas(atlas, {
+      kind: "soft",
+      digest,
+      dismissedOn: "2026-04-02",
+    })).toEqual({ kind: "soft", digest, dismissedAt: "2026-04-02" });
+    expect(await listHomeBaseDismissalsForAtlas(atlas)).toEqual([
+      { kind: "soft", digest, dismissedAt: "2026-04-02" },
+    ]);
+  });
+
   it("re-reaches the suggestion only when both 90 days and two further Journeys exist", async () => {
     const atlas = await freshAtlas("reprompt");
     const original = shenzhenFour();
