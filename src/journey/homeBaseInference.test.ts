@@ -253,6 +253,27 @@ describe("Home Base evidence fixtures", () => {
     )).toBeLessThanOrEqual(HOME_BASE_CLUSTER_RADIUS_KM);
   });
 
+  it("prefers an overlapping suggestion-qualified region over a larger short-span neighbour", () => {
+    const atKm = (kilometers: number): Coordinates => ({ latitude: kilometers / 111.2, longitude: 0 });
+    const shared = [
+      journey("shared-1", "2026-04-01", atKm(0), atKm(0)),
+      journey("shared-2", "2026-04-10", atKm(0), atKm(0)),
+      journey("shared-3", "2026-04-20", atKm(0), atKm(0)),
+    ];
+    const largerShortSpan = [
+      journey("short-1", "2026-04-01", atKm(-20), atKm(-20)),
+      journey("short-2", "2026-05-02", atKm(-20), atKm(-20)),
+    ];
+    const longSpanTail = journey("long-1", "2026-01-20", atKm(20), atKm(20));
+
+    const result = infer([...shared, ...largerShortSpan, longSpanTail], "2026-06-01");
+
+    expect(result.state).toBe("suggested");
+    expect(result.support.journeys).toBe(4);
+    expect(result.support.runnerUpJourneys).toBe(2);
+    expect(result.support.evidenceSpanDays).toBeGreaterThanOrEqual(HOME_BASE_SUGGESTED_MIN_SPAN_DAYS);
+  });
+
   it("does not transitively chain coordinates that span beyond 25 km end-to-end", () => {
     const a = { latitude: 0, longitude: 0 };
     const b = { latitude: 0, longitude: 0.2 };

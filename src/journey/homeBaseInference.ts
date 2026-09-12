@@ -412,12 +412,28 @@ function evidenceRegions(evidence: readonly EndpointEvidence[]): EvidenceRegion[
   return [...bySupport.values()].sort(compareRegions);
 }
 
-function meetsSuggestionPolicy(region: EvidenceRegion, runnerUpJourneys: number): boolean {
+function hasSuggestionEvidence(region: EvidenceRegion): boolean {
   return region.journeyCount >= HOME_BASE_SUGGESTED_MIN_JOURNEYS
     && region.evidenceSpanDays >= HOME_BASE_SUGGESTED_MIN_SPAN_DAYS
     && region.startCount >= HOME_BASE_MIN_START_SUPPORT
-    && region.endCount >= HOME_BASE_MIN_END_SUPPORT
+    && region.endCount >= HOME_BASE_MIN_END_SUPPORT;
+}
+
+function meetsSuggestionPolicy(region: EvidenceRegion, runnerUpJourneys: number): boolean {
+  return hasSuggestionEvidence(region)
     && region.journeyCount - runnerUpJourneys >= HOME_BASE_MIN_LEAD_JOURNEYS;
+}
+
+function preferredRegion(regions: readonly EvidenceRegion[]): EvidenceRegion | null {
+  // A smaller bounded clique that satisfies the complete suggestion contract
+  // must not be hidden by a larger short-span neighbour. Regions are already
+  // deterministically ordered, so scan only suggestion-threshold candidates
+  // and keep the first one whose region-relative runner-up margin also passes.
+  for (const region of regions) {
+    if (!hasSuggestionEvidence(region)) continue;
+    if (meetsSuggestionPolicy(region, runnerUpSupport(region, regions))) return region;
+  }
+  return regions[0] ?? null;
 }
 
 function windowRegions(
@@ -619,7 +635,7 @@ function findSustainedMove(
       // still satisfies the same suggestion contract.
       for (const candidateDate of block.dates) {
         const candidateRegions = regionsForWindow(candidateDate, block.endedOn);
-        const windowLeader = candidateRegions[0];
+        const windowLeader = preferredRegion(candidateRegions);
         if (!windowLeader) continue;
 
         const targetDistance = haversineDistanceKm(
@@ -656,7 +672,7 @@ function findSustainedMove(
       // its own confidence. Raw late endpoints cannot borrow years-old support.
       for (let index = block.dates.length - 1; index >= 0; index -= 1) {
         const currentRegions = regionsForWindow(block.dates[index], block.endedOn);
-        const currentLeader = currentRegions[0];
+        const currentLeader = preferredRegion(currentRegions);
         if (!currentLeader) continue;
         const currentTargetDistance = haversineDistanceKm(
           targetRegion.anchor.latitude,
@@ -1007,7 +1023,7 @@ export function inferHomeBaseCandidate(
     && (!activeConfirmedPeriod || item.date > activeConfirmedPeriod.startedOn)
   ));
   const regions = evidenceRegions(evidence);
-  const leader = regions[0];
+  const leader = preferredRegion(regions);
   if (!leader) return emptyResult(["NO_ROUTE_ENDPOINT_EVIDENCE"]);
 
   const leaderAssessment = assessRegion(leader, runnerUpSupport(leader, regions));
