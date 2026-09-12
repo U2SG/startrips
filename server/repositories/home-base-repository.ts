@@ -265,12 +265,12 @@ export async function countHomeBasePeriodsForAtlas(
  * Answers are preserved per evidence revision rather than collapsed to one row
  * per Atlas. The full digest remains byte-exact because the inference core
  * parses its region anchor and Journey ids from it. Uniqueness uses a fixed-size
- * SHA-256 key, so an unbounded digest never becomes a B-tree index entry. The
+ * MD5 key, so an unbounded digest never becomes a B-tree index entry. The
  * Atlas row lock serializes this path; a theoretical hash collision fails closed
  * instead of overwriting another answer.
  */
 function homeBaseDismissalDigestHash(digest: string): string {
-  return createHash("sha256").update(digest, "utf8").digest("hex");
+  return createHash("md5").update(digest, "utf8").digest("hex");
 }
 
 export async function listHomeBaseDismissalsForAtlas(

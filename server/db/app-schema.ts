@@ -103,7 +103,7 @@ export const homeBaseDismissals = pgTable(
       .references(() => atlases.id, { onDelete: "cascade" }),
     kind: text("kind").notNull(),
     evidenceDigest: text("evidence_digest").notNull(),
-    // Fixed-size SHA-256 hex key keeps the unique B-tree independent of the
+    // Fixed-size MD5 hex key keeps the unique B-tree independent of the
     // unbounded evidence digest while the full digest remains byte-exact.
     evidenceDigestHash: text("evidence_digest_hash").notNull(),
     dismissedOn: date("dismissed_on", { mode: "string" }).notNull(),
