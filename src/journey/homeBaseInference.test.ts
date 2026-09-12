@@ -265,7 +265,7 @@ describe("Home Base evidence fixtures", () => {
       TOKYO,
     ));
     const result = inferHomeBaseCandidate({
-      journeys: [...oldTokyo, ...shenzhenFour()],
+      journeys: [...oldTokyo, ...shenzhenFour(), journey("j5", "2026-05-02")],
       confirmedPeriod: confirmed,
       evaluationDate: "2026-06-01",
     });
