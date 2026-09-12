@@ -350,6 +350,59 @@ describe("Home Base evidence fixtures", () => {
     expect(result.proposedPeriodStart).toBe("2026-01-01");
   });
 
+  it("does not let one old holiday turn three recent Journeys into a sustained move", () => {
+    const confirmed = {
+      startedOn: "2022-01-01",
+      endedOn: null,
+      latitude: SHENZHEN.latitude,
+      longitude: SHENZHEN.longitude,
+    } as const;
+    const tokyoJourneys = [
+      journey("old-holiday", "2023-06-01", TOKYO, TOKYO),
+      journey("j1", "2026-01-01", TOKYO, TOKYO),
+      journey("j2", "2026-02-15", TOKYO, TOKYO),
+      journey("j3", "2026-04-02", TOKYO, TOKYO),
+    ];
+    const result = inferHomeBaseCandidate({
+      journeys: tokyoJourneys,
+      confirmedPeriod: confirmed,
+      evaluationDate: "2026-06-01",
+    });
+    expect(result.support.journeys).toBe(4);
+    expect(result.state).toBe("candidate");
+    expect(result.proposedPeriodStart).toBeNull();
+  });
+
+  it("rechecks runner-up competition inside the sustained move window", () => {
+    const confirmed = {
+      startedOn: "2022-01-01",
+      endedOn: null,
+      latitude: SHENZHEN.latitude,
+      longitude: SHENZHEN.longitude,
+    } as const;
+    const target = [
+      journey("old-holiday", "2023-06-01", TOKYO, TOKYO),
+      journey("tokyo-1", "2026-01-01", TOKYO, TOKYO),
+      journey("tokyo-2", "2026-02-01", TOKYO, TOKYO),
+      journey("tokyo-3", "2026-03-01", TOKYO, TOKYO),
+      journey("tokyo-4", "2026-04-02", TOKYO, TOKYO),
+    ];
+    const runnerUp = [
+      journey("runner-1", "2026-01-15", SINGAPORE, SINGAPORE),
+      journey("runner-2", "2026-02-15", SINGAPORE, SINGAPORE),
+      journey("runner-3", "2026-03-15", SINGAPORE, SINGAPORE),
+    ];
+    const result = inferHomeBaseCandidate({
+      journeys: [...target, ...runnerUp],
+      confirmedPeriod: confirmed,
+      evaluationDate: "2026-06-01",
+    });
+    expect(result.support.journeys).toBe(5);
+    expect(result.support.runnerUpJourneys).toBe(3);
+    expect(result.state).toBe("candidate");
+    expect(result.proposedPeriodStart).toBeNull();
+  });
+
   it("never proposes a move on the current confirmed period start date", () => {
     const confirmed = {
       startedOn: "2026-01-01",

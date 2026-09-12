@@ -405,34 +405,61 @@ function evidenceRegions(evidence: readonly EndpointEvidence[]): EvidenceRegion[
   return [...bySupport.values()].sort(compareRegions);
 }
 
-function sustainedMoveStart(region: EvidenceRegion): string {
-  const candidateDates = [...new Set(region.selectedEvidence.map((item) => item.date))].sort();
-  let sustainedStart = region.evidenceStartedOn;
+function meetsSuggestionPolicy(region: EvidenceRegion, runnerUpJourneys: number): boolean {
+  return region.journeyCount >= HOME_BASE_SUGGESTED_MIN_JOURNEYS
+    && region.evidenceSpanDays >= HOME_BASE_SUGGESTED_MIN_SPAN_DAYS
+    && region.startCount >= HOME_BASE_MIN_START_SUPPORT
+    && region.endCount >= HOME_BASE_MIN_END_SUPPORT
+    && region.journeyCount - runnerUpJourneys >= HOME_BASE_MIN_LEAD_JOURNEYS;
+}
 
-  for (const candidateDate of candidateDates) {
-    const suffixEvidence = region.selectedEvidence.filter((item) => item.date >= candidateDate);
-    const supportByJourney = new Map<string, JourneySupport>();
-    for (const item of suffixEvidence) {
-      const support = supportByJourney.get(item.journeyId) ?? {
-        journeyId: item.journeyId,
-        supportsStart: false,
-        supportsEnd: false,
-      };
-      if (item.kind === "start") support.supportsStart = true;
-      else support.supportsEnd = true;
-      supportByJourney.set(item.journeyId, support);
+function sustainedMoveStart(
+  evidence: readonly EndpointEvidence[],
+  targetRegion: EvidenceRegion,
+  confirmedPeriod: ConfirmedHomeBasePeriod,
+): string | null {
+  const targetDates = [...new Set(targetRegion.selectedEvidence.map((item) => item.date))].sort();
+  if (targetDates.length === 0) return null;
+
+  // A lone historical visit must not backdate a later residence change. Use the
+  // existing 90-day suggestion horizon as the continuity boundary: after a gap
+  // larger than that horizon, only the later evidence can establish the move.
+  let boundary = targetDates[0];
+  for (let index = 1; index < targetDates.length; index += 1) {
+    if (spanDays(targetDates[index - 1], targetDates[index]) > HOME_BASE_SUGGESTED_MIN_SPAN_DAYS) {
+      boundary = targetDates[index];
     }
+  }
 
-    const supports = [...supportByJourney.values()];
-    const starts = supports.filter((support) => support.supportsStart).length;
-    const ends = supports.filter((support) => support.supportsEnd).length;
-    const evidenceSpanDays = spanDays(candidateDate, region.evidenceEndedOn);
-    const qualifies = supports.length >= HOME_BASE_SUGGESTED_MIN_JOURNEYS
-      && evidenceSpanDays >= HOME_BASE_SUGGESTED_MIN_SPAN_DAYS
-      && starts >= HOME_BASE_MIN_START_SUPPORT
-      && ends >= HOME_BASE_MIN_END_SUPPORT;
-    if (!qualifies) break;
-    sustainedStart = candidateDate;
+  let sustainedStart: string | null = null;
+  for (const candidateDate of targetDates) {
+    if (candidateDate < boundary) continue;
+    const suffixEvidence = evidence.filter((item) => item.date >= candidateDate);
+    const suffixRegions = evidenceRegions(suffixEvidence);
+    const suffixLeader = suffixRegions[0];
+    if (!suffixLeader) continue;
+
+    const targetDistance = haversineDistanceKm(
+      targetRegion.anchor.latitude,
+      targetRegion.anchor.longitude,
+      suffixLeader.anchor.latitude,
+      suffixLeader.anchor.longitude,
+    );
+    const confirmedDistance = haversineDistanceKm(
+      confirmedPeriod.latitude,
+      confirmedPeriod.longitude,
+      suffixLeader.anchor.latitude,
+      suffixLeader.anchor.longitude,
+    );
+    if (
+      targetDistance > HOME_BASE_CLUSTER_RADIUS_KM
+      || confirmedDistance <= HOME_BASE_CLUSTER_RADIUS_KM
+    ) continue;
+
+    const suffixRunnerUpJourneys = runnerUpSupport(suffixLeader, suffixRegions);
+    if (meetsSuggestionPolicy(suffixLeader, suffixRunnerUpJourneys)) {
+      sustainedStart = candidateDate;
+    }
   }
 
   return sustainedStart;
@@ -700,11 +727,7 @@ export function inferHomeBaseCandidate(
     };
   }
 
-  const isSuggested = leader.journeyCount >= HOME_BASE_SUGGESTED_MIN_JOURNEYS
-    && leader.evidenceSpanDays >= HOME_BASE_SUGGESTED_MIN_SPAN_DAYS
-    && leader.startCount >= HOME_BASE_MIN_START_SUPPORT
-    && leader.endCount >= HOME_BASE_MIN_END_SUPPORT
-    && leader.journeyCount - runnerUpJourneys >= HOME_BASE_MIN_LEAD_JOURNEYS;
+  const isSuggested = meetsSuggestionPolicy(leader, runnerUpJourneys);
   if (!isSuggested) {
     return {
       state: "candidate",
@@ -742,11 +765,20 @@ export function inferHomeBaseCandidate(
         proposedPeriodStart: null,
       };
     }
+    const proposedPeriodStart = sustainedMoveStart(evidence, leader, activeConfirmedPeriod);
+    if (!proposedPeriodStart) {
+      return {
+        state: "candidate",
+        ...base,
+        reasonCodes,
+        proposedPeriodStart: null,
+      };
+    }
     return {
       state: "move_suggested",
       ...base,
       reasonCodes: [...reasonCodes, "DIFFERS_FROM_CONFIRMED_HOME"],
-      proposedPeriodStart: sustainedMoveStart(leader),
+      proposedPeriodStart,
     };
   }
 
