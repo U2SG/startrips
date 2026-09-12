@@ -133,8 +133,8 @@ async function stubAtlasApi(page) {
   }));
 }
 
-async function openAtlas() {
-  const page = await browser.newPage({ viewport: { width: 1280, height: 860 } });
+async function openAtlas(viewport = { width: 1280, height: 860 }) {
+  const page = await browser.newPage({ viewport });
   const pageErrors = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
   await stubAtlasApi(page);
@@ -240,6 +240,40 @@ try {
     && nonModal.timelineInert === false
     && nonModal.topmostIsTimeline,
   ));
+
+  const mobileRun = await openAtlas({ width: 390, height: 844 });
+  const mobilePage = mobileRun.page;
+  const mobileSuggestion = mobilePage.locator(card);
+  await mobileSuggestion.waitFor({ state: "visible", timeout: 15_000 });
+  const mobilePlacement = await mobilePage.evaluate(() => {
+    const node = document.querySelector("[data-home-base-suggestion]");
+    const chrome = document.querySelector(".mobile-v2__chrome");
+    const atlas = document.querySelector(".living-atlas");
+    if (!node || !chrome || !atlas) return null;
+    const cardRect = node.getBoundingClientRect();
+    const chromeRect = chrome.getBoundingClientRect();
+    return {
+      mobileMode: atlas.getAttribute("data-mobile-v2"),
+      surface: node.getAttribute("data-home-base-surface"),
+      cardBottom: cardRect.bottom,
+      chromeTop: chromeRect.top,
+      noChromeOverlap: cardRect.bottom <= chromeRect.top,
+      dialogCount: document.querySelectorAll("[role=\"dialog\"], [aria-modal=\"true\"]").length,
+      actions: [...node.querySelectorAll("[data-home-base-suggestion-action]")]
+        .map((button) => button.getBoundingClientRect().height),
+    };
+  });
+  await mobilePage.screenshot({ path: `${captureDir}/01b-card-mobile-atlas.png`, fullPage: false });
+  record("compact mobile Atlas exposes the same quiet Home Base answer above native chrome", { mobilePlacement }, Boolean(
+    mobilePlacement
+    && mobilePlacement.mobileMode === "on"
+    && mobilePlacement.surface === "mobile-atlas"
+    && mobilePlacement.noChromeOverlap
+    && mobilePlacement.dialogCount === 0
+    && mobilePlacement.actions.length === 3
+    && mobilePlacement.actions.every((height) => height >= 44)
+  ));
+  await mobilePage.close();
 
   // Clicking straight through to Journey Story proves the Atlas really is
   // interactive, and gives the Story suppression its own observation.

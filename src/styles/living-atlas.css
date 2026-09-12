@@ -6981,3 +6981,42 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   cursor: progress;
   opacity: 0.55;
 }
+
+/* Compact mobile has no desktop timeline view, so #232 lives in the native
+   planet state instead. Keep it above the 118px journey chrome without
+   covering that chrome: the question stays optional and the globe remains
+   directly interactive everywhere outside the card. */
+.living-atlas[data-mobile-v2="on"] .living-atlas__home-base-suggestion {
+  z-index: 85;
+  right: 12px;
+  bottom: calc(env(safe-area-inset-bottom) + 142px);
+  left: 12px;
+  width: auto;
+  max-height: min(48svh, 360px);
+  overflow-y: auto;
+  padding: 14px;
+  transform: none;
+  border-radius: 16px;
+}
+
+.living-atlas[data-mobile-v2="on"] .living-atlas__home-base-suggestion h2 {
+  font-size: 15px;
+}
+
+.living-atlas[data-mobile-v2="on"] .living-atlas__home-base-suggestion-evidence,
+.living-atlas[data-mobile-v2="on"] .living-atlas__home-base-suggestion-question {
+  margin-top: 6px;
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.living-atlas[data-mobile-v2="on"] .living-atlas__home-base-suggestion-actions {
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.living-atlas[data-mobile-v2="on"] .living-atlas__home-base-suggestion-actions button {
+  flex: 1 1 calc(50% - 4px);
+  min-width: 0;
+  padding-inline: 12px;
+}

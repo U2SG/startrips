@@ -18,6 +18,7 @@ import {
   capturePlaybackEntryForContext,
   globeFocusState,
   homeBaseInferenceInputsReady,
+  homeBaseSuggestionCanBeConfirmed,
   loadJourneyRowsWithOptionalHome,
   mergeConfirmedHomeBasePeriod,
   nextPlaybackCameraCommand,
@@ -1501,6 +1502,21 @@ describe("ST-060 the Home Base suggestion card is quiet and non-modal", () => {
     expect(source).toContain("narrativeSurfaceActive: storyJourneyId !== null || playbackActive");
   });
 
+  it("keeps the same quiet suggestion reachable in compact mobile Atlas mode", () => {
+    const source = readFileSync(new URL("./LivingAtlasApp.tsx", import.meta.url), "utf8");
+    const css = readFileSync(new URL("../styles/living-atlas.css", import.meta.url), "utf8");
+    expect(source).toContain('(isMobileV2 && view === "planet")');
+    expect(source).toContain('data-home-base-surface={isMobileV2 ? "mobile-atlas" : "timeline"}');
+    const mobileRule = css.slice(
+      css.indexOf('.living-atlas[data-mobile-v2="on"] .living-atlas__home-base-suggestion {'),
+      css.indexOf('.living-atlas[data-mobile-v2="on"] .living-atlas__home-base-suggestion h2'),
+    );
+    expect(mobileRule).toContain("bottom: calc(env(safe-area-inset-bottom) + 142px)");
+    expect(mobileRule).toContain("left: 12px");
+    expect(mobileRule).toContain("right: 12px");
+    expect(mobileRule).not.toContain("position: fixed");
+  });
+
   it("recomputes from the frozen inference core rather than holding its own thresholds", () => {
     const source = readFileSync(new URL("./LivingAtlasApp.tsx", import.meta.url), "utf8");
     expect(source).toContain("inferHomeBaseCandidate({");
@@ -1668,6 +1684,45 @@ describe("ST-060 a successful confirmation takes the card down on its own", () =
     expect(draft).not.toBeNull();
     return { id, ...draft } as HomeBasePeriod;
   }
+
+  it("never offers a confirmation whose inferred period overlaps bounded Home history", () => {
+    const result = inferHomeBaseCandidate({
+      journeys,
+      confirmedPeriod: null,
+      evaluationDate: EVALUATION_DATE,
+    });
+    const decision = resolveHomeBaseSuggestion({ result, placeLabel: "深圳" });
+    const historical: HomeBasePeriod = {
+      id: "period-history",
+      startedOn: "2025-01-01",
+      endedOn: "2026-05-01",
+      label: "深圳",
+      latitude: SHENZHEN.latitude,
+      longitude: SHENZHEN.longitude,
+      source: "manual",
+    };
+    expect(decision.visible).toBe(true);
+    expect(homeBaseSuggestionCanBeConfirmed({ decision, result, periods: [historical] })).toBe(false);
+  });
+
+  it("still offers a first confirmation when its inferred period starts after bounded history", () => {
+    const result = inferHomeBaseCandidate({
+      journeys,
+      confirmedPeriod: null,
+      evaluationDate: EVALUATION_DATE,
+    });
+    const decision = resolveHomeBaseSuggestion({ result, placeLabel: "深圳" });
+    const historical: HomeBasePeriod = {
+      id: "period-history",
+      startedOn: "2024-01-01",
+      endedOn: "2025-12-31",
+      label: "广州",
+      latitude: GUANGZHOU.latitude,
+      longitude: GUANGZHOU.longitude,
+      source: "manual",
+    };
+    expect(homeBaseSuggestionCanBeConfirmed({ decision, result, periods: [historical] })).toBe(true);
+  });
 
   it("hides the first-time card once the returned period is merged in", () => {
     expect(cardFor([]).decision.visible).toBe(true);

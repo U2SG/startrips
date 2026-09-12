@@ -33,7 +33,7 @@ import {
 } from "./journeySaveRecovery";
 import { JourneyPlaybackOverlay } from "./JourneyPlaybackOverlay";
 import { resolveHomeNarrativeContext, type HomeNarrativeContext } from "./homeBasePrelude";
-import type { HomeBasePeriod } from "./homeBase";
+import { classifyHomeBasePeriodWrite, type HomeBasePeriod } from "./homeBase";
 import {
   inferHomeBaseCandidate,
   type HomeBaseDismissal,
@@ -261,6 +261,19 @@ export function mergeConfirmedHomeBasePeriod(
       : period))
     : others;
   return [...reconciled, confirmed];
+}
+
+export function homeBaseSuggestionCanBeConfirmed(input: {
+  decision: ReturnType<typeof resolveHomeBaseSuggestion>;
+  result: HomeBaseInferenceResult;
+  periods: readonly HomeBasePeriod[];
+}): boolean {
+  const draft = homeBaseConfirmationDraft(input.decision, input.result);
+  if (!draft) return false;
+  return classifyHomeBasePeriodWrite({
+    existing: input.periods,
+    candidate: draft,
+  }).outcome !== "conflict";
 }
 
 export function capturePlaybackEntryForContext(
@@ -1097,7 +1110,7 @@ export function LivingAtlasApp({
   }, [currentHomeBasePeriod, homeBaseDismissal, homeBasePeriodsRead, homeEffectiveDate, journeys, listHomeBaseDismissal, listHomeBasePeriods]);
   const homeBaseSuggestion = useMemo(() => {
     if (!homeBaseInference) return null;
-    return resolveHomeBaseSuggestion({
+    const decision = resolveHomeBaseSuggestion({
       result: homeBaseInference,
       placeLabel: resolveHomeBasePlaceLabel(journeys, homeBaseInference.metroAnchor),
       confirmedPlaceLabel: currentHomeBasePeriod?.label ?? null,
@@ -1105,7 +1118,16 @@ export function LivingAtlasApp({
       // setup never interrupts either.
       narrativeSurfaceActive: storyJourneyId !== null || playbackActive,
     });
-  }, [currentHomeBasePeriod, homeBaseInference, journeys, playbackActive, storyJourneyId]);
+    if (!decision.visible) return decision;
+    // A bounded historical Home can leave no open period while still owning
+    // the evidence dates the inference core sees. Never offer a button whose
+    // resulting period #231 would reject as overlap/already-open.
+    return homeBaseSuggestionCanBeConfirmed({
+      decision,
+      result: homeBaseInference,
+      periods: homeBasePeriods,
+    }) ? decision : null;
+  }, [currentHomeBasePeriod, homeBaseInference, homeBasePeriods, journeys, playbackActive, storyJourneyId]);
 
   const refreshHomeBasePeriods = useCallback(async () => {
     if (!listHomeBasePeriods) return;
@@ -2111,16 +2133,17 @@ export function LivingAtlasApp({
         />
       ) : null}
 
-      {/* #232: the quiet Home Base suggestion, beside the Atlas timeline.
-          Non-modal on purpose — no overlay, no `role="dialog"`, no focus trap
-          and no `inert` on the timeline behind it — so the member can keep
-          reading their Journeys and simply never answer. It is absent while
-          Story or Playback is open, which `resolveHomeBaseSuggestion` decides
-          rather than a condition repeated here. */}
-      {!isMobileV2 && view === "timeline" && homeBaseSuggestion?.visible ? (
+      {/* #232: the quiet Home Base suggestion. Desktop places it beside the
+          Atlas timeline; compact mobile has no timeline view, so the same
+          non-modal answer sits above native planet chrome instead. No overlay,
+          no `role="dialog"`, no focus trap and no `inert`: the Atlas remains
+          usable and the member can simply never answer. Story/Playback
+          suppression still belongs to `resolveHomeBaseSuggestion`. */}
+      {homeBaseSuggestion?.visible && ((!isMobileV2 && view === "timeline") || (isMobileV2 && view === "planet")) ? (
         <aside
           className="living-atlas__home-base-suggestion motion-fade-through"
           data-home-base-suggestion={homeBaseSuggestion.variant}
+          data-home-base-surface={isMobileV2 ? "mobile-atlas" : "timeline"}
           data-home-base-place-label={homeBaseSuggestion.placeLabel ?? ""}
           aria-live="polite"
         >
