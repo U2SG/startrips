@@ -628,6 +628,40 @@ describe("Home Base evidence fixtures", () => {
     expect(result.proposedPeriodStart).toBeNull();
   });
 
+  it("does not let one late Home revisit suppress a newer sustained move", () => {
+    const confirmed = {
+      startedOn: "2022-01-01",
+      endedOn: null,
+      latitude: SHENZHEN.latitude,
+      longitude: SHENZHEN.longitude,
+    } as const;
+    const oldHome = Array.from({ length: 8 }, (_value, index) => {
+      const month = String(index + 1).padStart(2, "0");
+      return journey(`old-home-${index + 1}`, `2023-${month}-01`, SHENZHEN, SHENZHEN);
+    });
+    const sustainedMove = [
+      journey("tokyo-1", "2025-01-01", TOKYO, TOKYO),
+      journey("tokyo-2", "2025-02-01", TOKYO, TOKYO),
+      journey("tokyo-3", "2025-03-01", TOKYO, TOKYO),
+      journey("tokyo-4", "2025-04-02", TOKYO, TOKYO),
+    ];
+    const isolatedHomeRevisit = journey("home-revisit", "2026-05-01", SHENZHEN, SHENZHEN);
+    const result = inferHomeBaseCandidate({
+      journeys: [...oldHome, ...sustainedMove, isolatedHomeRevisit],
+      confirmedPeriod: confirmed,
+      evaluationDate: "2026-06-01",
+    });
+    expect(result.state).toBe("move_suggested");
+    expect(result.proposedPeriodStart).toBe("2025-01-01");
+    expect(result.metroAnchor).not.toBeNull();
+    expect(haversineDistanceKm(
+      result.metroAnchor!.latitude,
+      result.metroAnchor!.longitude,
+      TOKYO.latitude,
+      TOKYO.longitude,
+    )).toBeLessThanOrEqual(HOME_BASE_CLUSTER_RADIUS_KM);
+  });
+
   it("does not let one old holiday turn three recent Journeys into a sustained move", () => {
     const confirmed = {
       startedOn: "2022-01-01",

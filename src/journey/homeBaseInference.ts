@@ -463,6 +463,7 @@ type MoveCandidate = {
   region: EvidenceRegion;
   runnerUpJourneys: number;
   proposedPeriodStart: string;
+  currentnessStartedOn: string;
   blockEndedOn: string;
   matchesConfirmedHome: boolean;
 };
@@ -475,7 +476,7 @@ type ContinuityBlock = {
 type MoveWindowObservation = {
   region: EvidenceRegion;
   runnerUpJourneys: number;
-  endedOn: string;
+  currentnessStartedOn: string;
 };
 
 function isCandidateRegion(region: EvidenceRegion): boolean {
@@ -549,9 +550,11 @@ function findSustainedMove(
 
   for (const targetRegion of regions) {
     for (const block of continuityBlocks(targetRegion)) {
-      // Ascending dates find the earliest onset whose suffix satisfies the full
-      // V1 suggestion policy. Stop at the first match instead of rebuilding the
-      // medoid for every later suffix after the move is already established.
+      let candidateForBlock: MoveCandidate | null = null;
+
+      // Ascending dates preserve the earliest onset for the user-visible move
+      // proposal. Currentness is resolved separately from the latest suffix that
+      // still satisfies the same suggestion contract.
       for (const candidateDate of block.dates) {
         const candidateRegions = regionsForWindow(candidateDate, block.endedOn);
         const windowLeader = candidateRegions[0];
@@ -574,19 +577,21 @@ function findSustainedMove(
           windowLeader.anchor.latitude,
           windowLeader.anchor.longitude,
         );
-        candidates.push({
+        candidateForBlock = {
           region: windowLeader,
           runnerUpJourneys,
           proposedPeriodStart: windowLeader.evidenceStartedOn,
+          currentnessStartedOn: windowLeader.evidenceStartedOn,
           blockEndedOn: windowLeader.evidenceEndedOn,
           matchesConfirmedHome: confirmedDistance <= HOME_BASE_CLUSTER_RADIUS_KM,
-        });
+        };
         break;
       }
 
-      // Currentness only needs the latest candidate-strength observation for a
-      // block. Scan backward and stop at that first observation; earlier suffixes
-      // cannot be more current, and expired competition is handled by endedOn.
+      let observationRecorded = false;
+      let candidateCurrentnessResolved = candidateForBlock === null;
+      // Walk backward to bind currentness to the newest suffix that still carries
+      // its own confidence. Raw late endpoints cannot borrow years-old support.
       for (let index = block.dates.length - 1; index >= 0; index -= 1) {
         const currentRegions = regionsForWindow(block.dates[index], block.endedOn);
         const currentLeader = currentRegions[0];
@@ -600,61 +605,50 @@ function findSustainedMove(
         if (currentTargetDistance > HOME_BASE_CLUSTER_RADIUS_KM) continue;
         const currentRunnerUp = runnerUpSupport(currentLeader, currentRegions);
         if (!isCandidateRegion(currentLeader)) continue;
-        observations.push({
-          region: currentLeader,
-          runnerUpJourneys: currentRunnerUp,
-          endedOn: currentLeader.evidenceEndedOn,
-        });
-        break;
+
+        if (!observationRecorded) {
+          observations.push({
+            region: currentLeader,
+            runnerUpJourneys: currentRunnerUp,
+            currentnessStartedOn: currentLeader.evidenceStartedOn,
+          });
+          observationRecorded = true;
+        }
+
+        if (
+          candidateForBlock
+          && !candidateCurrentnessResolved
+          && meetsSuggestionPolicy(currentLeader, currentRunnerUp)
+        ) {
+          candidateForBlock.currentnessStartedOn = currentLeader.evidenceStartedOn;
+          candidateCurrentnessResolved = true;
+        }
+
+        if (observationRecorded && candidateCurrentnessResolved) break;
       }
+
+      if (candidateForBlock) candidates.push(candidateForBlock);
     }
   }
 
   candidates.sort((left, right) => (
-    right.blockEndedOn.localeCompare(left.blockEndedOn)
-    // If two independently sustained states end on the same date, retaining the
+    right.currentnessStartedOn.localeCompare(left.currentnessStartedOn)
+    // If two states have equally recent self-sustaining evidence, retaining the
     // already-confirmed Home is the conservative deterministic tie-break.
     || Number(right.matchesConfirmedHome) - Number(left.matchesConfirmedHome)
     || compareRegions(left.region, right.region)
     || left.proposedPeriodStart.localeCompare(right.proposedPeriodStart)
+    || right.blockEndedOn.localeCompare(left.blockEndedOn)
   ));
   const latest = candidates[0] ?? null;
   if (!latest || latest.matchesConfirmedHome) return null;
 
-  const moveEvidenceDates = [...new Set(latest.region.selectedEvidence.map((item) => item.date))].sort();
-  const continuationCache = new Map<string, boolean>();
-  const hasQualifyingMoveContinuation = (afterDate: string): boolean => {
-    const cached = continuationCache.get(afterDate);
-    if (cached !== undefined) return cached;
-    for (const startedOn of moveEvidenceDates) {
-      if (startedOn <= afterDate || startedOn > latest.blockEndedOn) continue;
-      const continuationRegions = regionsForWindow(startedOn, latest.blockEndedOn);
-      const continuationLeader = continuationRegions[0];
-      if (!continuationLeader) continue;
-      const continuationDistance = haversineDistanceKm(
-        latest.region.anchor.latitude,
-        latest.region.anchor.longitude,
-        continuationLeader.anchor.latitude,
-        continuationLeader.anchor.longitude,
-      );
-      if (continuationDistance > HOME_BASE_CLUSTER_RADIUS_KM) continue;
-      const continuationRunnerUp = runnerUpSupport(continuationLeader, continuationRegions);
-      if (!meetsSuggestionPolicy(continuationLeader, continuationRunnerUp)) continue;
-      continuationCache.set(afterDate, true);
-      return true;
-    }
-    continuationCache.set(afterDate, false);
-    return false;
-  };
-
   const laterConflict = observations.some((observation) => {
-    // Raw tail evidence must not make an old move current again. A competing
-    // state is expired only when the move metro independently re-satisfies the
-    // complete V1 suggestion contract after that state ended.
-    if (
-      observation.endedOn < latest.blockEndedOn
-      && hasQualifyingMoveContinuation(observation.endedOn)
-    ) return false;
+    // Confidence and currentness must come from the same sustained suffix. An
+    // observation whose newest self-supporting interval started before the move's
+    // newest suggestion-quality interval is historical, even if a raw tail point
+    // happened later.
+    if (observation.currentnessStartedOn < latest.currentnessStartedOn) return false;
     const moveDistance = haversineDistanceKm(
       latest.region.anchor.latitude,
       latest.region.anchor.longitude,
