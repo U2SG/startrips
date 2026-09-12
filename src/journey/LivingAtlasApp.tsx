@@ -1112,7 +1112,7 @@ export function LivingAtlasApp({
     if (!homeBaseInference) return null;
     const decision = resolveHomeBaseSuggestion({
       result: homeBaseInference,
-      placeLabel: resolveHomeBasePlaceLabel(journeys, homeBaseInference.metroAnchor),
+      placeLabel: resolveHomeBasePlaceLabel(journeys, homeBaseInference.metroAnchor, homeBaseInference.evidenceDigest),
       confirmedPlaceLabel: currentHomeBasePeriod?.label ?? null,
       // Story and Playback own the screen while they are open, and Home Base
       // setup never interrupts either.

@@ -179,10 +179,12 @@ describe("the Place Label the card names", () => {
     label: string | null,
     latitude = ANCHOR.latitude,
     longitude = ANCHOR.longitude,
+    id = label ?? "journey",
   ) => ({
+    id,
     routePoints: [
-      { latitude, longitude, label },
-      { latitude, longitude, label },
+      { id: `${id}-start`, sortOrder: 0, latitude, longitude, label },
+      { id: `${id}-end`, sortOrder: 1, latitude, longitude, label },
     ],
   });
 
@@ -212,6 +214,47 @@ describe("the Place Label the card names", () => {
   it("returns nothing rather than inventing a name", () => {
     expect(resolveHomeBasePlaceLabel([journey(null), journey("   ")], ANCHOR)).toBeNull();
     expect(resolveHomeBasePlaceLabel([journey("深圳")], null)).toBeNull();
+  });
+
+  it("lets only Journeys named by the inference evidence vote on the label", () => {
+    const journeys = [
+      journey("深圳", ANCHOR.latitude, ANCHOR.longitude, "support-1"),
+      journey("深圳", ANCHOR.latitude, ANCHOR.longitude, "support-2"),
+      journey("东京", ANCHOR.latitude, ANCHOR.longitude, "future-1"),
+      journey("东京", ANCHOR.latitude, ANCHOR.longitude, "future-2"),
+      journey("东京", ANCHOR.latitude, ANCHOR.longitude, "future-3"),
+    ];
+    const digest = "hbi-v2:22.5431:114.0579:2:2026-01-04:2026-08-18:support-1=11,support-2=11:deadbeef";
+    expect(resolveHomeBasePlaceLabel(journeys, ANCHOR)).toBe("东京");
+    expect(resolveHomeBasePlaceLabel(journeys, ANCHOR, digest)).toBe("深圳");
+  });
+
+  it("lets only endpoint kinds carried by the inference evidence vote", () => {
+    const unfinished = {
+      id: "unfinished",
+      routePoints: [
+        { id: "unfinished-start", sortOrder: 0, latitude: ANCHOR.latitude, longitude: ANCHOR.longitude, label: "深圳" },
+        { id: "unfinished-draft-end", sortOrder: 1, latitude: ANCHOR.latitude, longitude: ANCHOR.longitude, label: "东京" },
+      ],
+    };
+    const digest = "hbi-v2:22.5431:114.0579:1:2026-01-04:2026-01-04:unfinished=10:deadbeef";
+    expect(resolveHomeBasePlaceLabel([unfinished], ANCHOR, digest)).toBe("深圳");
+  });
+
+  it("uses the core's sort-order endpoint semantics before applying evidence flags", () => {
+    const reversed = {
+      id: "ordered",
+      routePoints: [
+        { id: "ordered-end", sortOrder: 1, latitude: ANCHOR.latitude, longitude: ANCHOR.longitude, label: "东京" },
+        { id: "ordered-start", sortOrder: 0, latitude: ANCHOR.latitude, longitude: ANCHOR.longitude, label: "深圳" },
+      ],
+    };
+    const digest = "hbi-v2:22.5431:114.0579:1:2026-01-04:2026-01-04:ordered=10:deadbeef";
+    expect(resolveHomeBasePlaceLabel([reversed], ANCHOR, digest)).toBe("深圳");
+  });
+
+  it("fails closed when evidence identity cannot be read", () => {
+    expect(resolveHomeBasePlaceLabel([journey("深圳")], ANCHOR, "malformed")).toBeNull();
   });
 });
 

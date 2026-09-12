@@ -168,14 +168,64 @@ export function resolveHomeBaseSuggestion(
 }
 
 export type HomeBasePlaceLabelRoutePoint = {
+  id: string;
+  sortOrder: number;
   latitude: number;
   longitude: number;
   label: string | null;
 };
 
 export type HomeBasePlaceLabelJourney = {
+  id: string;
   routePoints: readonly HomeBasePlaceLabelRoutePoint[];
 };
+
+type HomeBasePlaceLabelEvidenceSupport = {
+  supportsStart: boolean;
+  supportsEnd: boolean;
+};
+
+function placeLabelEvidenceSupport(
+  digest: string | null,
+): ReadonlyMap<string, HomeBasePlaceLabelEvidenceSupport> | null {
+  if (!digest) return null;
+  const parts = digest.split(":");
+  if (parts.length !== 8) return null;
+  const expectedCount = Number(parts[3]);
+  if (!Number.isInteger(expectedCount) || expectedCount < 0) return null;
+
+  const supports = new Map<string, HomeBasePlaceLabelEvidenceSupport>();
+  if (parts[6].length > 0) {
+    for (const encodedSupport of parts[6].split(",")) {
+      const separator = encodedSupport.lastIndexOf("=");
+      const flags = encodedSupport.slice(separator + 1);
+      if (separator <= 0 || !/^[01][01]$/.test(flags)) return null;
+      let journeyId: string;
+      try {
+        journeyId = decodeURIComponent(encodedSupport.slice(0, separator));
+      } catch {
+        return null;
+      }
+      if (!journeyId || supports.has(journeyId)) return null;
+      supports.set(journeyId, {
+        supportsStart: flags[0] === "1",
+        supportsEnd: flags[1] === "1",
+      });
+    }
+  }
+  return supports.size === expectedCount ? supports : null;
+}
+
+function sortedPlaceLabelRoutePoints(
+  routePoints: readonly HomeBasePlaceLabelRoutePoint[],
+): HomeBasePlaceLabelRoutePoint[] {
+  return [...routePoints].sort((left, right) => (
+    left.sortOrder - right.sortOrder
+    || left.id.localeCompare(right.id)
+    || left.latitude - right.latitude
+    || left.longitude - right.longitude
+  ));
+}
 
 /**
  * The name the card uses, taken from the member's own Place Labels.
@@ -183,8 +233,16 @@ export type HomeBasePlaceLabelJourney = {
  * The core returns a metro anchor and no name, and V1 has no reverse geocoder
  * it is allowed to call — `LOCATION_SEARCH_DRIVER=disabled` must degrade
  * truthfully. So the label is the most frequent Place Label the member already
- * wrote on a Journey endpoint inside the region, and `null` when they never
- * wrote one. A card with no honest name is simply not shown.
+ * wrote on a supporting Journey endpoint inside the region, and `null` when
+ * they never wrote one. A card with no honest evidence-backed name is simply
+ * not shown.
+ *
+ * When `evidenceDigest` is supplied, its readable support token is the authority
+ * for exactly which Journey starts/ends produced the inference. This keeps a
+ * future plan or an unfinished Journey end from naming a suggestion it did not
+ * support. Invalid evidence fails closed instead of widening back to every
+ * endpoint. Omitting the digest preserves the generic helper behavior for
+ * callers that are not rendering an inference result.
  *
  * Ties break lexicographically so the same Atlas always produces the same
  * name, whatever order the Journeys arrive in.
@@ -192,19 +250,36 @@ export type HomeBasePlaceLabelJourney = {
 export function resolveHomeBasePlaceLabel(
   journeys: readonly HomeBasePlaceLabelJourney[],
   anchor: HomeBaseMetroAnchor | null,
+  evidenceDigest?: string | null,
 ): string | null {
   if (!anchor) return null;
+  const evidenceSupport = evidenceDigest === undefined
+    ? undefined
+    : placeLabelEvidenceSupport(evidenceDigest);
+  if (evidenceDigest !== undefined && evidenceSupport === null) return null;
+
   const counts = new Map<string, number>();
   for (const journey of journeys) {
-    const points = journey.routePoints;
+    const support = evidenceSupport?.get(journey.id);
+    if (evidenceSupport && !support) continue;
+    const points = sortedPlaceLabelRoutePoints(journey.routePoints);
     if (points.length === 0) continue;
     const endpoints = points.length === 1
-      ? [points[0]]
-      : [points[0], points[points.length - 1]];
+      ? [{ kind: "start" as const, point: points[0] }]
+      : [
+          { kind: "start" as const, point: points[0] },
+          { kind: "end" as const, point: points[points.length - 1] },
+        ];
     // One Journey contributes each distinct label once, mirroring the core's
-    // one-Journey-one-support rule: a return trip must not count double.
+    // one-Journey-one-support rule: a return trip must not count the same label
+    // twice even when both supported endpoints carry it.
     const seen = new Set<string>();
-    for (const point of endpoints) {
+    for (const endpoint of endpoints) {
+      if (support && (
+        (endpoint.kind === "start" && !support.supportsStart)
+        || (endpoint.kind === "end" && !support.supportsEnd)
+      )) continue;
+      const { point } = endpoint;
       const label = point.label?.trim();
       if (!label || seen.has(label)) continue;
       if (
