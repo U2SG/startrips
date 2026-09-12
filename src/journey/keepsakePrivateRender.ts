@@ -11,8 +11,21 @@ export interface AuthorizedKeepsakeMedia {
   bytes: Uint8Array;
 }
 
+export interface AuthorizedKeepsakeMediaRequest {
+  journeyId: string;
+  journeyRevision: number;
+  narrativeSnapshot: KeepsakeNarrativeSnapshot;
+  mediaAssetId: string;
+}
+
 export interface AuthorizedKeepsakeMediaResolver {
-  resolveAuthorizedMedia(mediaAssetId: string): Promise<AuthorizedKeepsakeMedia>;
+  /**
+   * Privileged consistency boundary. Implementations must verify that current
+   * canonical Journey narrative state still matches the supplied pin and
+   * authorize/materialize the requested private asset in the same consistency
+   * boundary. If the canonical narrative changed, reject before reading bytes.
+   */
+  resolveAuthorizedMedia(request: AuthorizedKeepsakeMediaRequest): Promise<AuthorizedKeepsakeMedia>;
 }
 
 export interface AuthorizedKeepsakeRoutePointContext {
@@ -168,19 +181,16 @@ export async function resolveKeepsakePrivateJourneyContext(
 
 /**
  * Resolve each private media asset exactly once through the privileged
- * renderer boundary. A resolver may map an authorized ID to S3, local job
+ * renderer boundary. Every read carries the immutable Journey narrative pin so
+ * the privileged resolver can atomically re-check canonical state before bytes
+ * are materialized. A resolver may map an authorized ID to S3, local job
  * scratch storage, or another trusted source, but that coordinate never enters
  * the serializable render plan.
  */
 export async function resolveKeepsakePrivateMedia(
   plan: KeepsakePrivateRenderPlan,
-  context: AuthorizedKeepsakeJourneyContext,
   resolver: AuthorizedKeepsakeMediaResolver,
 ): Promise<Map<string, AuthorizedKeepsakeMedia>> {
-  // Recheck narrative identity immediately before privileged byte access;
-  // Journey revision alone is not sufficient because media moves/reorders can
-  // preserve that revision while changing the Keepsake narrative snapshot.
-  assertKeepsakePrivateJourneyContext(plan, context);
   const expectedMediaKindById = new Map<string, "image" | "video">();
   for (const { scene } of plan.scenes) {
     if (scene.kind !== "media") continue;
@@ -193,7 +203,12 @@ export async function resolveKeepsakePrivateMedia(
 
   const resolved = new Map<string, AuthorizedKeepsakeMedia>();
   for (const mediaAssetId of plan.mediaAssetIds) {
-    const media = await resolver.resolveAuthorizedMedia(mediaAssetId);
+    const media = await resolver.resolveAuthorizedMedia({
+      journeyId: plan.journeyId,
+      journeyRevision: plan.journeyRevision,
+      narrativeSnapshot: structuredClone(plan.narrativeSnapshot),
+      mediaAssetId,
+    });
     if (media.mediaAssetId !== mediaAssetId) {
       throw new Error("keepsake_render_media_identity_mismatch");
     }

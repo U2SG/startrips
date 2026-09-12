@@ -11,6 +11,7 @@ import {
   resolveKeepsakePrivateJourneyContext,
   resolveKeepsakePrivateMedia,
   type AuthorizedKeepsakeMedia,
+  type AuthorizedKeepsakeMediaRequest,
   type AuthorizedKeepsakeMediaResolver,
   type KeepsakePrivateRenderPlan,
   type KeepsakePrivateRenderScene,
@@ -150,9 +151,9 @@ class SyntheticPrivateMediaVault implements AuthorizedKeepsakeMediaResolver {
     }],
   ]);
 
-  async resolveAuthorizedMedia(mediaAssetId: string): Promise<AuthorizedKeepsakeMedia> {
-    const media = this.#payloads.get(mediaAssetId);
-    if (!media) throw new Error(`keepsake_fixture_media_not_authorized:${mediaAssetId}`);
+  async resolveAuthorizedMedia(request: AuthorizedKeepsakeMediaRequest): Promise<AuthorizedKeepsakeMedia> {
+    const media = this.#payloads.get(request.mediaAssetId);
+    if (!media) throw new Error(`keepsake_fixture_media_not_authorized:${request.mediaAssetId}`);
     return {
       mediaAssetId: media.mediaAssetId,
       mimeType: media.mimeType,
@@ -370,6 +371,22 @@ async function run(command: string, args: string[]): Promise<{ stdout: string; s
   });
 }
 
+async function runBuffer(command: string, args: string[]): Promise<{ stdout: Buffer; stderr: string }> {
+  return await new Promise((resolvePromise, rejectPromise) => {
+    const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const stdoutChunks: Buffer[] = [];
+    let stderr = "";
+    child.stdout.on("data", (chunk: Buffer) => { stdoutChunks.push(Buffer.from(chunk)); });
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.once("error", rejectPromise);
+    child.once("close", (code) => {
+      if (code === 0) resolvePromise({ stdout: Buffer.concat(stdoutChunks), stderr });
+      else rejectPromise(new Error(`${command} exited ${code}: ${stderr}`));
+    });
+  });
+}
+
 async function encode(
   concatFile: string,
   outputFile: string,
@@ -435,10 +452,18 @@ async function probe(filePath: string): Promise<Record<string, unknown>> {
   return JSON.parse(result.stdout) as Record<string, unknown>;
 }
 
+type TransitionScheduleEntry = { scene: string; startFrame: number; endFrame: number };
+
+type DecodedTransitionProof = {
+  scene: string;
+  sampledFrames: number[];
+  maxExpectedMeanAbsoluteError: number;
+};
+
 function validatePrototypeOutput(
   mediaProbe: Record<string, unknown>,
   plan: KeepsakePrivateRenderPlan,
-): Array<{ scene: string; startFrame: number; endFrame: number }> {
+): TransitionScheduleEntry[] {
   const streams = mediaProbe.streams;
   if (!Array.isArray(streams) || streams.length !== 1 || typeof streams[0] !== "object" || streams[0] === null) {
     throw new Error("keepsake_render_probe_stream_missing");
@@ -479,6 +504,94 @@ function validatePrototypeOutput(
   return transitionSchedule;
 }
 
+function sampledTransitionFrames(schedule: readonly TransitionScheduleEntry[]): number[] {
+  const frames = new Set<number>();
+  for (const entry of schedule) {
+    if (entry.endFrame <= entry.startFrame) {
+      throw new Error("keepsake_render_transition_frame_range_invalid");
+    }
+    frames.add(entry.startFrame);
+    frames.add(Math.floor((entry.startFrame + entry.endFrame - 1) / 2));
+    frames.add(entry.endFrame - 1);
+  }
+  return [...frames].sort((left, right) => left - right);
+}
+
+async function decodedRgbFramesAt(filePath: string, frameIndexes: readonly number[]): Promise<Map<number, Buffer>> {
+  const uniqueFrames = [...new Set(frameIndexes)].sort((left, right) => left - right);
+  const selectExpression = uniqueFrames.map((frame) => `eq(n\\,${frame})`).join("+");
+  const result = await runBuffer("ffmpeg", [
+    "-hide_banner",
+    "-loglevel", "error",
+    "-i", filePath,
+    "-map", "0:v:0",
+    "-vf", `select=${selectExpression}`,
+    "-vsync", "0",
+    "-pix_fmt", "rgb24",
+    "-f", "rawvideo",
+    "-",
+  ]);
+  const bytesPerFrame = PROTOTYPE_WIDTH * PROTOTYPE_HEIGHT * 3;
+  if (result.stdout.byteLength !== uniqueFrames.length * bytesPerFrame) {
+    throw new Error("keepsake_render_decoded_transition_frame_count_mismatch");
+  }
+  const decoded = new Map<number, Buffer>();
+  uniqueFrames.forEach((frameIndex, index) => {
+    const start = index * bytesPerFrame;
+    decoded.set(frameIndex, result.stdout.subarray(start, start + bytesPerFrame));
+  });
+  return decoded;
+}
+
+function meanAbsoluteError(left: Uint8Array, right: Uint8Array): number {
+  if (left.byteLength !== right.byteLength) {
+    throw new Error("keepsake_render_decoded_transition_frame_size_mismatch");
+  }
+  let absoluteError = 0;
+  for (let index = 0; index < left.byteLength; index += 1) {
+    absoluteError += Math.abs(left[index] - right[index]);
+  }
+  return absoluteError / left.byteLength;
+}
+
+function validateDecodedTransitions(
+  decodedFrames: ReadonlyMap<number, Buffer>,
+  schedule: readonly TransitionScheduleEntry[],
+  expectedScenePixels: readonly Buffer[],
+): DecodedTransitionProof[] {
+  if (schedule.length !== expectedScenePixels.length) {
+    throw new Error("keepsake_render_decoded_transition_scene_count_mismatch");
+  }
+  const expectedHashes = expectedScenePixels.map((pixels) => sha256(pixels));
+  return schedule.map((entry, sceneIndex) => {
+    const sampledFrames = [...new Set([
+      entry.startFrame,
+      Math.floor((entry.startFrame + entry.endFrame - 1) / 2),
+      entry.endFrame - 1,
+    ])];
+    const expectedPixels = expectedScenePixels[sceneIndex];
+    let maxExpectedMeanAbsoluteError = 0;
+    for (const frameIndex of sampledFrames) {
+      const decoded = decodedFrames.get(frameIndex);
+      if (!decoded) throw new Error("keepsake_render_decoded_transition_frame_missing");
+      const expectedError = meanAbsoluteError(decoded, expectedPixels);
+      maxExpectedMeanAbsoluteError = Math.max(maxExpectedMeanAbsoluteError, expectedError);
+      for (let otherIndex = 0; otherIndex < expectedScenePixels.length; otherIndex += 1) {
+        if (otherIndex === sceneIndex || expectedHashes[otherIndex] === expectedHashes[sceneIndex]) continue;
+        const competingError = meanAbsoluteError(decoded, expectedScenePixels[otherIndex]);
+        if (expectedError >= competingError) {
+          throw new Error("keepsake_render_decoded_transition_scene_mismatch");
+        }
+      }
+    }
+    return {
+      scene: entry.scene,
+      sampledFrames,
+      maxExpectedMeanAbsoluteError: Number(maxExpectedMeanAbsoluteError.toFixed(3)),
+    };
+  });
+}
+
 function sceneLabel(entry: KeepsakePrivateRenderScene): string {
   const scene = entry.scene;
   if (scene.kind === "media") return `media:${scene.mediaAssetId}`;
@@ -491,13 +604,15 @@ async function buildFrames(
   workDir: string,
   plan: KeepsakePrivateRenderPlan,
   resolvedMedia: Map<string, AuthorizedKeepsakeMedia>,
-): Promise<string> {
+): Promise<{ concatFile: string; scenePixels: Buffer[] }> {
   const lines: string[] = [];
+  const scenePixels: Buffer[] = [];
   for (const entry of plan.scenes) {
     const scene = entry.scene;
     const pixels = scene.kind === "media"
       ? frameForMedia(entry, resolvedMedia.get(scene.mediaAssetId)!)
       : frameForMap(entry);
+    scenePixels.push(pixels);
     const framePath = join(workDir, `scene-${String(entry.index).padStart(3, "0")}.ppm`);
     await writePpm(framePath, pixels);
     lines.push(`file '${concatPath(framePath)}'`);
@@ -507,7 +622,7 @@ async function buildFrames(
   lines.push(`file '${concatPath(lastFrame)}'`);
   const concatFile = join(workDir, "scenes.concat.txt");
   await writeFile(concatFile, `${lines.join("\n")}\n`, "utf8");
-  return concatFile;
+  return { concatFile, scenePixels };
 }
 
 async function main(): Promise<void> {
@@ -522,7 +637,7 @@ async function main(): Promise<void> {
     const journey = fixtureJourney();
     const manifest = buildKeepsakeRenderManifest(journey, 15, "portrait");
     const plan = buildKeepsakePrivateRenderPlan(manifest);
-    const context = await resolveKeepsakePrivateJourneyContext(plan, {
+    await resolveKeepsakePrivateJourneyContext(plan, {
       resolveAuthorizedJourneyContext: async (journeyId, journeyRevision) => ({
         journeyId,
         journeyRevision,
@@ -536,8 +651,8 @@ async function main(): Promise<void> {
         })),
       }),
     });
-    const resolvedMedia = await resolveKeepsakePrivateMedia(plan, context, new SyntheticPrivateMediaVault());
-    const concatFile = await buildFrames(workDir, plan, resolvedMedia);
+    const resolvedMedia = await resolveKeepsakePrivateMedia(plan, new SyntheticPrivateMediaVault());
+    const { concatFile, scenePixels } = await buildFrames(workDir, plan, resolvedMedia);
 
     const outputA = join(ARTIFACT_DIR, "keepsake-prototype-a.mp4");
     const outputB = join(ARTIFACT_DIR, "keepsake-prototype-b.mp4");
@@ -553,6 +668,15 @@ async function main(): Promise<void> {
       throw new Error("keepsake_render_decoded_frame_signature_mismatch");
     }
     const transitionSchedule = validatePrototypeOutput(mediaProbe, plan);
+    const decodedTransitionFrames = await decodedRgbFramesAt(
+      outputA,
+      sampledTransitionFrames(transitionSchedule),
+    );
+    const decodedTransitionProof = validateDecodedTransitions(
+      decodedTransitionFrames,
+      transitionSchedule,
+      scenePixels,
+    );
 
     const metrics = {
       fixture: {
@@ -561,6 +685,7 @@ async function main(): Promise<void> {
         mediaAssetIds: plan.mediaAssetIds,
         sceneOrder: plan.scenes.map(sceneLabel),
         transitionSchedule,
+        decodedTransitionProof,
         manifestDurationMs: manifest.actualDurationMs,
         requestedOutput: manifest.output,
       },
@@ -593,8 +718,9 @@ async function main(): Promise<void> {
       `- Render A: ${firstMetrics.wallTimeMs} ms, ${firstMetrics.bytes} bytes, max RSS ${firstMetrics.maxRssKb ?? "unavailable"} KB`,
       `- Render B: ${secondMetrics.wallTimeMs} ms, ${secondMetrics.bytes} bytes, max RSS ${secondMetrics.maxRssKb ?? "unavailable"} KB`,
       `- Decoded frame signature identical: yes (${metrics.deterministic.decodedFrameSignatureSha256})`,
+      `- Decoded transition samples verified against source PPM scenes: ${decodedTransitionProof.reduce((sum, proof) => sum + proof.sampledFrames.length, 0)} frames`,
       `- Container bytes identical: ${metrics.deterministic.containerBytesIdentical ? "yes" : "no (decoded frames remain identical)"}`,
-      "- Media acquisition: authorized asset IDs only; no storage coordinate or share URL enters the serializable render plan",
+      "- Media acquisition: each private read carries the pinned Journey narrative and must be atomically re-authorized against canonical state; no storage coordinate or share URL enters the serializable render plan",
       "- Spatial presentation: fixture-only ROUTE_POINTS; production requires revision-pinned authorized Journey context",
       `- Scene order: ${metrics.fixture.sceneOrder.join(" | ")}`,
       "",

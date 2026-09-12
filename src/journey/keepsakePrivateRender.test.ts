@@ -4,7 +4,7 @@ import {
   buildKeepsakePrivateRenderPlan,
   resolveKeepsakePrivateJourneyContext,
   resolveKeepsakePrivateMedia,
-  type AuthorizedKeepsakeJourneyContext,
+  type AuthorizedKeepsakeMediaRequest,
   type AuthorizedKeepsakeMediaResolver,
 } from "./keepsakePrivateRender";
 import type { Journey, JourneyMediaAsset, RoutePoint } from "./types";
@@ -61,20 +61,6 @@ const journey: Journey = {
   ],
 };
 
-function authorizedContext(plan: ReturnType<typeof buildKeepsakePrivateRenderPlan>): AuthorizedKeepsakeJourneyContext {
-  return {
-    journeyId: plan.journeyId,
-    journeyRevision: plan.journeyRevision,
-    narrativeSnapshot: structuredClone(plan.narrativeSnapshot),
-    routePoints: journey.routePoints.map((routePoint) => ({
-      routePointId: routePoint.id,
-      latitude: routePoint.latitude,
-      longitude: routePoint.longitude,
-      label: routePoint.label ?? null,
-      note: routePoint.note ?? null,
-    })),
-  };
-}
 describe("private Keepsake render boundary (#87)", () => {
   it("preserves semantic scene order and exact manifest timing without storage coordinates", () => {
     const manifest = buildKeepsakeRenderManifest(journey, 15);
@@ -145,33 +131,61 @@ describe("private Keepsake render boundary (#87)", () => {
       }),
     })).rejects.toThrow("keepsake_render_route_point_context_missing");
   });
-  it("lets only the authorized resolver materialize private bytes, once per asset", async () => {
+  it("pins canonical narrative state on every privileged media read", async () => {
     const plan = buildKeepsakePrivateRenderPlan(buildKeepsakeRenderManifest(journey, 15));
-    const resolveAuthorizedMedia = vi.fn(async (mediaAssetId: string) => ({
-      mediaAssetId,
+    const resolveAuthorizedMedia = vi.fn(async (request: AuthorizedKeepsakeMediaRequest) => ({
+      mediaAssetId: request.mediaAssetId,
       mimeType: "image/x-portable-pixmap",
-      bytes: new Uint8Array([mediaAssetId.length, 7, 19]),
+      bytes: new Uint8Array([request.mediaAssetId.length, 7, 19]),
     }));
     const resolver: AuthorizedKeepsakeMediaResolver = { resolveAuthorizedMedia };
 
-    const resolved = await resolveKeepsakePrivateMedia(plan, authorizedContext(plan), resolver);
+    const resolved = await resolveKeepsakePrivateMedia(plan, resolver);
 
-    expect(resolveAuthorizedMedia.mock.calls.map(([id]) => id)).toEqual(plan.mediaAssetIds);
+    expect(resolveAuthorizedMedia.mock.calls.map(([request]) => request.mediaAssetId)).toEqual(plan.mediaAssetIds);
+    expect(resolveAuthorizedMedia.mock.calls.every(([request]) => (
+      request.journeyId === plan.journeyId
+      && request.journeyRevision === plan.journeyRevision
+      && JSON.stringify(request.narrativeSnapshot) === JSON.stringify(plan.narrativeSnapshot)
+    ))).toBe(true);
     expect(resolved.size).toBe(plan.mediaAssetIds.length);
     expect([...resolved.keys()]).toEqual(plan.mediaAssetIds);
   });
 
+  it("lets a privileged resolver fail closed when canonical narrative changes between reads", async () => {
+    const plan = buildKeepsakePrivateRenderPlan(buildKeepsakeRenderManifest(journey, 15));
+    let canonicalSnapshot = structuredClone(plan.narrativeSnapshot);
+    const materialized: string[] = [];
+    const resolver: AuthorizedKeepsakeMediaResolver = {
+      resolveAuthorizedMedia: async (request) => {
+        if (JSON.stringify(request.narrativeSnapshot) !== JSON.stringify(canonicalSnapshot)) {
+          throw new Error("keepsake_render_journey_narrative_mismatch");
+        }
+        materialized.push(request.mediaAssetId);
+        const resolved = {
+          mediaAssetId: request.mediaAssetId,
+          mimeType: "image/jpeg",
+          bytes: new Uint8Array([1]),
+        };
+        if (materialized.length === 1) {
+          canonicalSnapshot = {
+            ...canonicalSnapshot,
+            visualMedia: canonicalSnapshot.visualMedia.slice(1),
+          };
+        }
+        return resolved;
+      },
+    };
+
+    await expect(resolveKeepsakePrivateMedia(plan, resolver))
+      .rejects.toThrow("keepsake_render_journey_narrative_mismatch");
+    expect(materialized).toEqual([plan.mediaAssetIds[0]]);
+  });
+
   it("fails closed when the privileged resolver returns the wrong identity or empty bytes", async () => {
     const plan = buildKeepsakePrivateRenderPlan(buildKeepsakeRenderManifest(journey, 15));
-    const staleContext = authorizedContext(plan);
-    staleContext.narrativeSnapshot.visualMedia = staleContext.narrativeSnapshot.visualMedia.slice(1);
-    const unauthorizedRead = vi.fn();
-    await expect(resolveKeepsakePrivateMedia(plan, staleContext, {
-      resolveAuthorizedMedia: unauthorizedRead,
-    })).rejects.toThrow("keepsake_render_journey_narrative_mismatch");
-    expect(unauthorizedRead).not.toHaveBeenCalled();
 
-    await expect(resolveKeepsakePrivateMedia(plan, authorizedContext(plan), {
+    await expect(resolveKeepsakePrivateMedia(plan, {
       resolveAuthorizedMedia: async () => ({
         mediaAssetId: "wrong-id",
         mimeType: "image/jpeg",
@@ -179,15 +193,15 @@ describe("private Keepsake render boundary (#87)", () => {
       }),
     })).rejects.toThrow("keepsake_render_media_identity_mismatch");
 
-    await expect(resolveKeepsakePrivateMedia(plan, authorizedContext(plan), {
-      resolveAuthorizedMedia: async (mediaAssetId) => ({
+    await expect(resolveKeepsakePrivateMedia(plan, {
+      resolveAuthorizedMedia: async ({ mediaAssetId }) => ({
         mediaAssetId,
         mimeType: "image/jpeg",
         bytes: new Uint8Array(),
       }),
     })).rejects.toThrow("keepsake_render_media_empty");
-    await expect(resolveKeepsakePrivateMedia(plan, authorizedContext(plan), {
-      resolveAuthorizedMedia: async (mediaAssetId) => ({
+    await expect(resolveKeepsakePrivateMedia(plan, {
+      resolveAuthorizedMedia: async ({ mediaAssetId }) => ({
         mediaAssetId,
         mimeType: "video/mp4",
         bytes: new Uint8Array([1]),

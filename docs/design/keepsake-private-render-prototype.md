@@ -8,7 +8,7 @@ The contract exercised here is:
 
 `validated Keepsake manifest + authorized media IDs + revision-pinned Journey spatial/presentation context -> deterministic private render`
 
-The serialized render plan contains semantic scenes and authorized asset IDs only. It contains no storage key, signed URL, guest share URL, arbitrary render code or model-generated command. The plan is intentionally **not** geographically complete: a trusted `AuthorizedKeepsakeJourneyContextResolver` must resolve revision-pinned Route Point coordinates/labels/notes for the exact `journeyId + journeyRevision`, while `AuthorizedKeepsakeMediaResolver` is the separate privileged boundary that materializes private bytes. A worker must not infer geography from IDs or read mutable Journey state outside these declared boundaries. The plan also retains the canonical narrative snapshot, and the privileged byte resolver requires a freshly verified Journey context so media moves/reorders/deletes that do not bump `journeyRevision` still fail closed before private bytes are read.
+The serialized render plan contains semantic scenes and authorized asset IDs only. It contains no storage key, signed URL, guest share URL, arbitrary render code or model-generated command. The plan is intentionally **not** geographically complete: a trusted `AuthorizedKeepsakeJourneyContextResolver` must resolve revision-pinned Route Point coordinates/labels/notes for the exact `journeyId + journeyRevision`, while `AuthorizedKeepsakeMediaResolver` is the separate privileged boundary that materializes private bytes. A worker must not infer geography from IDs or read mutable Journey state outside these declared boundaries. The plan also retains the canonical narrative snapshot. Every privileged media read carries that immutable narrative pin, and the resolver contract requires canonical Journey state to be checked atomically with authorization/materialization for that asset. A move/reorder/upload/delete that changes the narrative without bumping `journeyRevision` therefore causes the read to fail before bytes are materialized; the same check is repeated for each sequential asset so a mutation during acquisition cannot be hidden by an earlier detached context.
 
 ## Mechanism decision
 
@@ -29,11 +29,12 @@ The visual adapter is deliberately small: it renders Startrips-style dark world/
 
 1. builds the normal `KeepsakeRenderManifest`;
 2. converts it to `KeepsakePrivateRenderPlan` without changing chapter/media/camera ordering or timing;
-3. resolves every private asset exactly once through `AuthorizedKeepsakeMediaResolver`;
+3. resolves every private asset exactly once through `AuthorizedKeepsakeMediaResolver`, carrying the pinned Journey revision/narrative on each privileged read so canonical state can be atomically re-authorized before bytes are returned;
 4. writes one deterministic visual frame per semantic scene;
 5. encodes the same frame/timing input twice to MP4;
 6. decodes both outputs to FFmpeg `framemd5` and requires identical decoded-frame signatures;
-7. records container hashes, wall time, peak RSS when `/usr/bin/time` is available, output bytes, codec, dimensions, pixel format, frame rate, frame count and semantic scene order.
+7. decodes boundary/interior frames from the real MP4 and verifies each sample is closest to the source PPM for the manifest scene expected at that frame, so an encoder timestamp shift cannot pass on frame count/duration alone;
+8. records container hashes, wall time, peak RSS when `/usr/bin/time` is available, output bytes, codec, dimensions, pixel format, frame rate, frame count, decoded transition evidence and semantic scene order.
 
 The prototype encodes at 360x640 / 12 fps to keep CI cost bounded while remaining a real vertical H.264 artifact. The authoritative manifest continues to request the product portrait size (1080x1920); production output quality is a render-worker sizing decision, not a new narrative contract.
 
@@ -68,7 +69,8 @@ The `keepsake-render` CI lane is the executable evidence. It records, per exact 
 - render wall time, peak RSS where available and file size;
 - codec/resolution/fps/pixel-format probe data;
 - ordered semantic scene labels proving map/travel/arrival/media/outro order comes from the existing manifest;
-- private media IDs used by the trusted resolver.
+- decoded start/middle/end-frame samples for every semantic scene, checked against that scene's source PPM rather than inferred only from manifest timing;
+- private media IDs plus the per-read Journey revision/narrative pin used by the trusted resolver contract.
 
 Known limits of this phase:
 
