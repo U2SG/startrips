@@ -217,6 +217,52 @@ export async function loadJourneyRowsWithOptionalHome({
 }
 
 
+/**
+ * #232: whether the quiet suggestion may be computed at all.
+ *
+ * The Home history and the recorded dismissal are both launched beside the
+ * Journey read and neither blocks the Atlas, so they can land after it. Until
+ * each read that exists has actually landed, no card is shown: inferring
+ * against an unread period list would offer a first-time Home Base to a member
+ * who already confirmed one, and inferring against an unread dismissal would
+ * re-ask a question already answered. Both are the nag the issue forbids.
+ */
+export function homeBaseInferenceInputsReady(input: {
+  periodsReader: boolean;
+  periodsRead: boolean;
+  dismissalReader: boolean;
+  dismissalRead: boolean;
+  journeyCount: number;
+}): boolean {
+  if (!input.periodsReader || input.journeyCount === 0) return false;
+  if (!input.periodsRead) return false;
+  return !input.dismissalReader || input.dismissalRead;
+}
+
+/**
+ * #232: fold a just-confirmed period into the history already held locally.
+ *
+ * A confirmation that moves Home is a `move` write, and `classifyHomeBasePeriodWrite`
+ * closes the previous open period at the new period's own `startedOn`. The
+ * local list must mirror that rather than simply appending, because the
+ * suggestion surface reads the open period out of this list: leaving the
+ * previous one open would keep the card computing against the period that was
+ * just replaced, and would leave the confirmed card enabled for a second click
+ * that can only conflict.
+ */
+export function mergeConfirmedHomeBasePeriod(
+  periods: readonly HomeBasePeriod[],
+  confirmed: HomeBasePeriod,
+): HomeBasePeriod[] {
+  const others = periods.filter((period) => period.id !== confirmed.id);
+  const reconciled = confirmed.endedOn === null
+    ? others.map((period) => (period.endedOn === null
+      ? { ...period, endedOn: confirmed.startedOn }
+      : period))
+    : others;
+  return [...reconciled, confirmed];
+}
+
 export function capturePlaybackEntryForContext(
   journeyId: string,
   storyJourneyId: string | null,
@@ -826,6 +872,11 @@ export function LivingAtlasApp({
   const journeysRef = useRef(journeys);
   journeysRef.current = journeys;
   const [homeBasePeriods, setHomeBasePeriods] = useState<HomeBasePeriod[]>([]);
+  // The Home history read is non-blocking, so an empty list means "not read
+  // yet" just as often as it means "no Home Base recorded". The suggestion
+  // surface must tell those apart; the presence and camera layers below do not,
+  // because an empty layer and an unread one render identically.
+  const [homeBasePeriodsRead, setHomeBasePeriodsRead] = useState(false);
   // `null` means "no answer on record"; `undefined` means "not read yet", and
   // the card stays quiet until it is. A suggestion that flashed before the
   // recorded dismissal arrived would be exactly the nag the issue forbids.
@@ -1025,8 +1076,13 @@ export function LivingAtlasApp({
     [homeBasePeriods],
   );
   const homeBaseInference = useMemo<HomeBaseInferenceResult | null>(() => {
-    if (!listHomeBasePeriods || journeys.length === 0) return null;
-    if (listHomeBaseDismissal && homeBaseDismissal === undefined) return null;
+    if (!homeBaseInferenceInputsReady({
+      periodsReader: Boolean(listHomeBasePeriods),
+      periodsRead: homeBasePeriodsRead,
+      dismissalReader: Boolean(listHomeBaseDismissal),
+      dismissalRead: homeBaseDismissal !== undefined,
+      journeyCount: journeys.length,
+    })) return null;
     return inferHomeBaseCandidate({
       journeys: journeys.map((journey) => ({
         id: journey.id,
@@ -1038,7 +1094,7 @@ export function LivingAtlasApp({
       evaluationDate: homeEffectiveDate,
       dismissal: homeBaseDismissal,
     });
-  }, [currentHomeBasePeriod, homeBaseDismissal, homeEffectiveDate, journeys, listHomeBaseDismissal, listHomeBasePeriods]);
+  }, [currentHomeBasePeriod, homeBaseDismissal, homeBasePeriodsRead, homeEffectiveDate, journeys, listHomeBaseDismissal, listHomeBasePeriods]);
   const homeBaseSuggestion = useMemo(() => {
     if (!homeBaseInference) return null;
     return resolveHomeBaseSuggestion({
@@ -1055,6 +1111,7 @@ export function LivingAtlasApp({
     if (!listHomeBasePeriods) return;
     try {
       setHomeBasePeriods(await listHomeBasePeriods());
+      setHomeBasePeriodsRead(true);
     } catch {
       // The confirmation itself already succeeded; a stale history refreshes
       // on the next load rather than being reported as a failed save.
@@ -1067,7 +1124,13 @@ export function LivingAtlasApp({
     if (!draft) return;
     setHomeBaseSuggestionPending(true);
     try {
-      await mutations.confirmHomeBasePeriod(draft);
+      const confirmed = await mutations.confirmHomeBasePeriod(draft);
+      // The returned period is the authority for the card coming down. The
+      // refresh below is best effort and swallows its own failure, so a card
+      // that waited for it would stay enabled after a successful save and
+      // invite a second, conflicting click.
+      setHomeBasePeriods((periods) => mergeConfirmedHomeBasePeriod(periods, confirmed));
+      setHomeBasePeriodsRead(true);
       await refreshHomeBasePeriods();
       showNotice(`已把${draft.label}记为常住地，之后可以随时修改。`);
     } catch (error) {
@@ -1200,7 +1263,10 @@ export function LivingAtlasApp({
         listHomeBasePeriods,
         listHomeBaseDismissal,
         isCurrent: () => revision === loadRevision.current,
-        onHomeBasePeriods: setHomeBasePeriods,
+        onHomeBasePeriods: (periods) => {
+          setHomeBasePeriods(periods);
+          setHomeBasePeriodsRead(true);
+        },
         onHomeBaseDismissal: setHomeBaseDismissal,
       });
       const loaded = sortJourneysChronologically(journeyRows);

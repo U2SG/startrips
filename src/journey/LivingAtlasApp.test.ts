@@ -17,7 +17,9 @@ import {
   explicitSelectedJourneyIdForHomeCamera,
   capturePlaybackEntryForContext,
   globeFocusState,
+  homeBaseInferenceInputsReady,
   loadJourneyRowsWithOptionalHome,
+  mergeConfirmedHomeBasePeriod,
   nextPlaybackCameraCommand,
   nextPlaybackReleaseFocusRevision,
   nextInitialHomeCameraFocusRevision,
@@ -44,6 +46,11 @@ import { resolvePlaybackReturn } from "./playbackReturn";
 import { buildJourneyTimeline, resolveJourneyTimelineSelection } from "./globeTimeline";
 import type { HomeBasePeriod } from "./homeBase";
 import { resolveHomeBasePresence } from "./homeBasePresence";
+import { inferHomeBaseCandidate } from "./homeBaseInference";
+import {
+  homeBaseConfirmationDraft,
+  resolveHomeBaseSuggestion,
+} from "./homeBaseSuggestion";
 import type { Journey } from "./types";
 
 // #8 globe focus mode: the root class/data contract drives the layout CSS
@@ -1480,5 +1487,173 @@ describe("ST-060 the Home Base suggestion card is quiet and non-modal", () => {
     const dismiss = source.slice(source.indexOf("const dismissHomeBaseSuggestion"));
     expect(dismiss.indexOf("mutations.recordHomeBaseDismissal"))
       .toBeLessThan(dismiss.indexOf("setHomeBaseDismissal(recorded)"));
+  });
+});
+
+describe("ST-060 the suggestion waits for every private read it depends on", () => {
+  const ready = {
+    periodsReader: true,
+    periodsRead: true,
+    dismissalReader: true,
+    dismissalRead: true,
+    journeyCount: 3,
+  };
+
+  it("computes nothing until the Home history read has landed", () => {
+    expect(homeBaseInferenceInputsReady(ready)).toBe(true);
+    // An unread history is indistinguishable from an empty one, and an empty
+    // one makes a member who already confirmed a Home Base look like a
+    // first-time candidate.
+    expect(homeBaseInferenceInputsReady({ ...ready, periodsRead: false })).toBe(false);
+  });
+
+  it("computes nothing until the recorded dismissal has landed", () => {
+    expect(homeBaseInferenceInputsReady({ ...ready, dismissalRead: false })).toBe(false);
+    // Shared mode has no dismissal reader at all, so there is nothing to wait
+    // for; the period reader alone decides.
+    expect(homeBaseInferenceInputsReady({
+      ...ready,
+      dismissalReader: false,
+      dismissalRead: false,
+    })).toBe(true);
+  });
+
+  it("computes nothing without a Home history reader or without Journeys", () => {
+    expect(homeBaseInferenceInputsReady({ ...ready, periodsReader: false })).toBe(false);
+    expect(homeBaseInferenceInputsReady({ ...ready, journeyCount: 0 })).toBe(false);
+  });
+});
+
+describe("ST-060 a confirmed period closes the one it replaces locally", () => {
+  const open: HomeBasePeriod = {
+    id: "period-open",
+    startedOn: "2024-01-01",
+    endedOn: null,
+    label: "杭州",
+    latitude: 30.25,
+    longitude: 120.17,
+    source: "manual",
+  };
+  const confirmed: HomeBasePeriod = {
+    id: "period-new",
+    startedOn: "2026-03-01",
+    endedOn: null,
+    label: "上海",
+    latitude: 31.23,
+    longitude: 121.47,
+    source: "suggested-confirmed",
+  };
+
+  it("closes the previous open period on the new period's own start day", () => {
+    const merged = mergeConfirmedHomeBasePeriod([open], confirmed);
+    expect(merged.filter((period) => period.endedOn === null)).toEqual([confirmed]);
+    expect(merged.find((period) => period.id === "period-open")?.endedOn).toBe("2026-03-01");
+  });
+
+  it("keeps the replaced period rather than dropping its dates", () => {
+    const merged = mergeConfirmedHomeBasePeriod([open], confirmed);
+    expect(merged).toHaveLength(2);
+    expect(merged.find((period) => period.id === "period-open")?.startedOn).toBe("2024-01-01");
+  });
+
+  it("leaves already-closed periods untouched and replaces its own row", () => {
+    const closed: HomeBasePeriod = { ...open, id: "period-closed", endedOn: "2023-06-01" };
+    const merged = mergeConfirmedHomeBasePeriod([closed, confirmed], {
+      ...confirmed,
+      label: "南京",
+    });
+    expect(merged.find((period) => period.id === "period-closed")?.endedOn).toBe("2023-06-01");
+    expect(merged.filter((period) => period.id === "period-new")).toHaveLength(1);
+    expect(merged.find((period) => period.id === "period-new")?.label).toBe("南京");
+  });
+});
+
+describe("ST-060 a successful confirmation takes the card down on its own", () => {
+  const SHENZHEN = { latitude: 22.5431, longitude: 114.0579 };
+  const GUANGZHOU = { latitude: 23.1291, longitude: 113.2644 };
+  const EVALUATION_DATE = "2026-06-01";
+
+  function endpointJourney(id: string, startedOn: string, at = SHENZHEN) {
+    return {
+      id,
+      startedOn,
+      endedOn: startedOn,
+      routePoints: [
+        { id: `${id}-start`, sortOrder: 0, latitude: at.latitude, longitude: at.longitude },
+        { id: `${id}-end`, sortOrder: 1, latitude: at.latitude, longitude: at.longitude },
+      ],
+    };
+  }
+
+  const journeys = [
+    endpointJourney("j1", "2026-01-01"),
+    endpointJourney("j2", "2026-02-01"),
+    endpointJourney("j3", "2026-03-01"),
+    endpointJourney("j4", "2026-04-01"),
+  ];
+
+  /**
+   * The shell's own derivation, in one place: the open period out of the list
+   * is what the core is told, and the core's answer is what the surface reads.
+   * The proposition under test is the whole chain, not the list alone — a
+   * merged list that still resolves to a visible card would leave the member
+   * one click away from a duplicate write, which is exactly the review finding.
+   */
+  function cardFor(periods: readonly HomeBasePeriod[]) {
+    const current = periods.find((period) => period.endedOn === null) ?? null;
+    const result = inferHomeBaseCandidate({
+      journeys,
+      confirmedPeriod: current,
+      evaluationDate: EVALUATION_DATE,
+    });
+    return {
+      result,
+      decision: resolveHomeBaseSuggestion({
+        result,
+        placeLabel: "深圳",
+        confirmedPlaceLabel: current?.label ?? null,
+      }),
+    };
+  }
+
+  function periodFromConfirmation(id: string, periods: readonly HomeBasePeriod[]) {
+    const { result, decision } = cardFor(periods);
+    const draft = homeBaseConfirmationDraft(decision, result);
+    expect(draft).not.toBeNull();
+    return { id, ...draft } as HomeBasePeriod;
+  }
+
+  it("hides the first-time card once the returned period is merged in", () => {
+    expect(cardFor([]).decision.visible).toBe(true);
+    const confirmed = periodFromConfirmation("period-new", []);
+    // Only the returned period is folded in; the best-effort history refresh
+    // is allowed to fail without the card surviving it.
+    const merged = mergeConfirmedHomeBasePeriod([], confirmed);
+    expect(cardFor(merged).decision.visible).toBe(false);
+    expect(cardFor(merged).decision.primaryAction).toBeNull();
+  });
+
+  it("hides the move card and keeps the period it replaced bounded", () => {
+    const previous: HomeBasePeriod = {
+      id: "period-open",
+      startedOn: "2025-01-01",
+      endedOn: null,
+      label: "广州",
+      latitude: GUANGZHOU.latitude,
+      longitude: GUANGZHOU.longitude,
+      source: "manual",
+    };
+    const before = cardFor([previous]).decision;
+    expect(before.visible).toBe(true);
+    expect(before.variant).toBe("move");
+
+    const confirmed = periodFromConfirmation("period-moved", [previous]);
+    const merged = mergeConfirmedHomeBasePeriod([previous], confirmed);
+    expect(cardFor(merged).decision.visible).toBe(false);
+    // #231 semantics locally: the replaced period survives with its own dates
+    // rather than being overwritten.
+    const replaced = merged.find((period) => period.id === "period-open");
+    expect(replaced?.startedOn).toBe("2025-01-01");
+    expect(replaced?.endedOn).toBe(confirmed.startedOn);
   });
 });
