@@ -137,6 +137,22 @@ function dateOrdinal(value: string): number | null {
   return daysBeforeYear + DAYS_BEFORE_MONTH[month - 1] + leapDay + day - 1;
 }
 
+function dateOrTimestampOrdinal(value: string): number | null {
+  const calendarOrdinal = dateOrdinal(value);
+  if (calendarOrdinal !== null) return calendarOrdinal;
+  if (!/^\d{4}-\d{2}-\d{2}T.*(?:Z|[+-]\d{2}:\d{2})$/.test(value)) return null;
+  const timestamp = new Date(value);
+  if (!Number.isFinite(timestamp.getTime())) return null;
+  const year = timestamp.getUTCFullYear();
+  if (year < 1 || year > 9999) return null;
+  const normalizedDate = [
+    String(year).padStart(4, "0"),
+    String(timestamp.getUTCMonth() + 1).padStart(2, "0"),
+    String(timestamp.getUTCDate()).padStart(2, "0"),
+  ].join("-");
+  return dateOrdinal(normalizedDate);
+}
+
 function spanDays(startedOn: string, endedOn: string): number {
   const start = dateOrdinal(startedOn);
   const end = dateOrdinal(endedOn);
@@ -173,13 +189,15 @@ function endpointEvidence(journeys: readonly HomeBaseInferenceJourney[]): Endpoi
       longitude: first.longitude,
       date: journey.startedOn,
     });
-    evidence.push({
-      journeyId: journey.id,
-      kind: "end",
-      latitude: last.latitude,
-      longitude: last.longitude,
-      date: journey.endedOn ?? journey.startedOn,
-    });
+    if (points.length > 1) {
+      evidence.push({
+        journeyId: journey.id,
+        kind: "end",
+        latitude: last.latitude,
+        longitude: last.longitude,
+        date: journey.endedOn ?? journey.startedOn,
+      });
+    }
   }
   return evidence.sort((left, right) => (
     left.latitude - right.latitude
@@ -472,7 +490,7 @@ function matchingDismissal(
 
   if (dismissal.kind === "rejected") return "rejected";
 
-  const dismissedOn = dateOrdinal(dismissal.dismissedAt);
+  const dismissedOn = dateOrTimestampOrdinal(dismissal.dismissedAt);
   const evaluatedOn = dateOrdinal(evaluationDate);
   const elapsedDays = dismissedOn === null || evaluatedOn === null
     ? 0

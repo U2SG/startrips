@@ -157,6 +157,18 @@ describe("inferHomeBaseCandidate thresholds", () => {
     expect(result.state).toBe("candidate");
   });
 
+  it("does not count a one-point Journey as both start and end evidence", () => {
+    const locationOnly = shenzhenFour().map((item) => ({
+      ...item,
+      routePoints: [item.routePoints[0]],
+    }));
+    const result = infer(locationOnly);
+    expect(result.support.journeys).toBe(4);
+    expect(result.support.starts).toBe(4);
+    expect(result.support.ends).toBe(0);
+    expect(result.state).toBe("candidate");
+  });
+
   it("counts one Journey with many media rows only once", () => {
     const noisy = shenzhenFour().map((item, index) => ({
       ...item,
@@ -420,6 +432,22 @@ describe("dismissal and evidence digest", () => {
       journeys: expanded,
       evaluationDate: "2026-07-01",
       dismissal: { kind: "soft", digest: base.evidenceDigest!, dismissedAt: "2026-04-02" },
+    });
+    expect(result.state).toBe("suggested");
+  });
+
+  it("accepts an ISO timestamp when measuring soft-dismissal elapsed days", () => {
+    const original = shenzhenFour();
+    const base = infer(original, "2026-04-02");
+    const expanded = [...original, journey("j5", "2026-04-15"), journey("j6", "2026-05-01")];
+    const result = inferHomeBaseCandidate({
+      journeys: expanded,
+      evaluationDate: "2026-07-02",
+      dismissal: {
+        kind: "soft",
+        digest: base.evidenceDigest!,
+        dismissedAt: "2026-04-02T10:00:00.000Z",
+      },
     });
     expect(result.state).toBe("suggested");
   });
