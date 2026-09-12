@@ -116,7 +116,7 @@ type DigestSnapshot = {
   evidenceEndedOn: string;
 };
 
-const DIGEST_PREFIX = "hbi-v1";
+const DIGEST_PREFIX = "hbi-v2";
 const DAYS_BEFORE_MONTH = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334] as const;
 
 function isLeapYear(year: number): boolean {
@@ -396,6 +396,9 @@ export function homeBaseEvidenceDigest(snapshot: DigestSnapshot): string {
     evidenceStartedOn: snapshot.evidenceStartedOn,
     evidenceEndedOn: snapshot.evidenceEndedOn,
   });
+  const supportToken = supports
+    .map((support) => `${encodeURIComponent(support.journeyId)}=${support.starts}${support.ends}`)
+    .join(",");
   return [
     DIGEST_PREFIX,
     latitude,
@@ -403,18 +406,19 @@ export function homeBaseEvidenceDigest(snapshot: DigestSnapshot): string {
     supports.length,
     snapshot.evidenceStartedOn,
     snapshot.evidenceEndedOn,
+    supportToken,
     fnv1a32(canonical),
   ].join(":");
 }
 
 type ParsedDigest = {
   anchor: HomeBaseMetroAnchor;
-  journeyCount: number;
+  journeyIds: readonly string[];
 };
 
 function parseEvidenceDigest(digest: string): ParsedDigest | null {
   const parts = digest.split(":");
-  if (parts.length !== 7 || parts[0] !== DIGEST_PREFIX) return null;
+  if (parts.length !== 8 || parts[0] !== DIGEST_PREFIX) return null;
   const latitude = Number(parts[1]);
   const longitude = Number(parts[2]);
   const journeyCount = Number(parts[3]);
@@ -424,7 +428,26 @@ function parseEvidenceDigest(digest: string): ParsedDigest | null {
     || !Number.isInteger(journeyCount)
     || journeyCount < 0
   ) return null;
-  return { anchor: { latitude, longitude }, journeyCount };
+
+  const journeyIds: string[] = [];
+  const seenJourneyIds = new Set<string>();
+  if (parts[6].length > 0) {
+    for (const encodedSupport of parts[6].split(",")) {
+      const separator = encodedSupport.lastIndexOf("=");
+      if (separator <= 0 || !/^[01][01]$/.test(encodedSupport.slice(separator + 1))) return null;
+      let journeyId: string;
+      try {
+        journeyId = decodeURIComponent(encodedSupport.slice(0, separator));
+      } catch {
+        return null;
+      }
+      if (journeyId.length === 0 || seenJourneyIds.has(journeyId)) return null;
+      seenJourneyIds.add(journeyId);
+      journeyIds.push(journeyId);
+    }
+  }
+  if (journeyIds.length !== journeyCount) return null;
+  return { anchor: { latitude, longitude }, journeyIds };
 }
 
 function matchingDismissal(
@@ -454,7 +477,10 @@ function matchingDismissal(
   const elapsedDays = dismissedOn === null || evaluatedOn === null
     ? 0
     : evaluatedOn - dismissedOn;
-  const newSupportingJourneys = region.journeyCount - previous.journeyCount;
+  const previousJourneyIds = new Set(previous.journeyIds);
+  const newSupportingJourneys = region.supports.filter(
+    (support) => !previousJourneyIds.has(support.journeyId),
+  ).length;
   const mayReprompt = elapsedDays >= HOME_BASE_SOFT_DISMISSAL_MIN_DAYS
     && newSupportingJourneys >= HOME_BASE_SOFT_DISMISSAL_MIN_NEW_JOURNEYS;
   return mayReprompt ? null : "soft";
@@ -516,7 +542,7 @@ export function inferHomeBaseCandidate(
     : null;
   const evidence = endpointEvidence(input.journeys).filter((item) => (
     item.date <= input.evaluationDate
-    && (!activeConfirmedPeriod || item.date >= activeConfirmedPeriod.startedOn)
+    && (!activeConfirmedPeriod || item.date > activeConfirmedPeriod.startedOn)
   ));
   const regions = evidenceRegions(evidence);
   const leader = regions[0];

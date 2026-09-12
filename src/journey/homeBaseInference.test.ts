@@ -271,8 +271,32 @@ describe("Home Base evidence fixtures", () => {
     });
     expect(result.state).toBe("candidate");
     expect(result.reasonCodes).toContain("MATCHES_CONFIRMED_HOME");
-    expect(result.support.evidenceStartedOn).toBe("2026-01-01");
+    expect(result.support.evidenceStartedOn).toBe("2026-02-01");
     expect(result.proposedPeriodStart).toBeNull();
+  });
+
+  it("never proposes a move on the current confirmed period start date", () => {
+    const confirmed = {
+      startedOn: "2026-01-01",
+      endedOn: null,
+      latitude: SHENZHEN.latitude,
+      longitude: SHENZHEN.longitude,
+    } as const;
+    const tokyoJourneys = [
+      journey("same-day", "2026-01-01", TOKYO, TOKYO),
+      journey("j2", "2026-02-01", TOKYO, TOKYO),
+      journey("j3", "2026-03-01", TOKYO, TOKYO),
+      journey("j4", "2026-04-01", TOKYO, TOKYO),
+      journey("j5", "2026-05-02", TOKYO, TOKYO),
+    ];
+    const result = inferHomeBaseCandidate({
+      journeys: tokyoJourneys,
+      confirmedPeriod: confirmed,
+      evaluationDate: "2026-06-01",
+    });
+    expect(result.state).toBe("move_suggested");
+    expect(result.support.evidenceStartedOn).toBe("2026-02-01");
+    expect(result.proposedPeriodStart).toBe("2026-02-01");
   });
 
   it("does not treat a confirmed period that already ended as the current Home", () => {
@@ -397,6 +421,24 @@ describe("dismissal and evidence digest", () => {
       evaluationDate: "2026-07-01",
       dismissal: { kind: "soft", digest: base.evidenceDigest!, dismissedAt: "2026-04-02" },
     });
+    expect(result.state).toBe("suggested");
+  });
+
+  it("counts new supporting Journey IDs even when old support is replaced", () => {
+    const original = shenzhenFour();
+    const base = infer(original, "2026-04-02");
+    const replacement = [
+      original[2],
+      original[3],
+      journey("j5", "2026-05-01"),
+      journey("j6", "2026-06-01"),
+    ];
+    const result = inferHomeBaseCandidate({
+      journeys: replacement,
+      evaluationDate: "2026-08-01",
+      dismissal: { kind: "soft", digest: base.evidenceDigest!, dismissedAt: "2026-04-02" },
+    });
+    expect(result.support.journeys).toBe(4);
     expect(result.state).toBe("suggested");
   });
 
