@@ -342,16 +342,21 @@ function evidenceRegions(evidence: readonly EndpointEvidence[]): EvidenceRegion[
 }
 
 function runnerUpSupport(leader: EvidenceRegion, regions: readonly EvidenceRegion[]): number {
+  const leaderJourneys = new Set(leader.supports.map((support) => support.journeyId));
   for (const region of regions) {
     if (region === leader) continue;
-    if (
-      haversineDistanceKm(
-        leader.anchor.latitude,
-        leader.anchor.longitude,
-        region.anchor.latitude,
-        region.anchor.longitude,
-      ) <= HOME_BASE_CLUSTER_RADIUS_KM
-    ) continue;
+    const anchorDistance = haversineDistanceKm(
+      leader.anchor.latitude,
+      leader.anchor.longitude,
+      region.anchor.latitude,
+      region.anchor.longitude,
+    );
+    const hasNovelJourney = region.supports.some((support) => !leaderJourneys.has(support.journeyId));
+    // Nearby maximal cliques made only from the leader's same Journey evidence
+    // are boundary variants of the same metro hypothesis, not a runner-up. A
+    // nearby clique with genuinely different Journeys still competes; skipping
+    // it would recreate transitive chaining through their overlapping points.
+    if (anchorDistance <= HOME_BASE_CLUSTER_RADIUS_KM && !hasNovelJourney) continue;
     return region.journeyCount;
   }
   return 0;

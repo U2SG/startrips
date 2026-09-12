@@ -220,6 +220,7 @@ describe("Home Base evidence fixtures", () => {
     ];
     const result = infer(journeys);
     expect(result.support.journeys).toBeLessThan(6);
+    expect(result.support.runnerUpJourneys).toBe(4);
     expect(result.state).not.toBe("suggested");
   });
 
