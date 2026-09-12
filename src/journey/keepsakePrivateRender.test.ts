@@ -4,6 +4,7 @@ import {
   buildKeepsakePrivateRenderPlan,
   resolveKeepsakePrivateJourneyContext,
   resolveKeepsakePrivateMedia,
+  type AuthorizedKeepsakeJourneyContext,
   type AuthorizedKeepsakeMediaResolver,
 } from "./keepsakePrivateRender";
 import type { Journey, JourneyMediaAsset, RoutePoint } from "./types";
@@ -60,6 +61,20 @@ const journey: Journey = {
   ],
 };
 
+function authorizedContext(plan: ReturnType<typeof buildKeepsakePrivateRenderPlan>): AuthorizedKeepsakeJourneyContext {
+  return {
+    journeyId: plan.journeyId,
+    journeyRevision: plan.journeyRevision,
+    narrativeSnapshot: structuredClone(plan.narrativeSnapshot),
+    routePoints: journey.routePoints.map((routePoint) => ({
+      routePointId: routePoint.id,
+      latitude: routePoint.latitude,
+      longitude: routePoint.longitude,
+      label: routePoint.label ?? null,
+      note: routePoint.note ?? null,
+    })),
+  };
+}
 describe("private Keepsake render boundary (#87)", () => {
   it("preserves semantic scene order and exact manifest timing without storage coordinates", () => {
     const manifest = buildKeepsakeRenderManifest(journey, 15);
@@ -85,6 +100,7 @@ describe("private Keepsake render boundary (#87)", () => {
     const resolveAuthorizedJourneyContext = vi.fn(async (journeyId: string, journeyRevision: number) => ({
       journeyId,
       journeyRevision,
+      narrativeSnapshot: structuredClone(plan.narrativeSnapshot),
       routePoints: journey.routePoints.map((routePoint) => ({
         routePointId: routePoint.id,
         latitude: routePoint.latitude,
@@ -115,6 +131,16 @@ describe("private Keepsake render boundary (#87)", () => {
     await expect(resolveKeepsakePrivateJourneyContext(plan, {
       resolveAuthorizedJourneyContext: async () => ({
         ...context,
+        narrativeSnapshot: {
+          ...context.narrativeSnapshot,
+          visualMedia: context.narrativeSnapshot.visualMedia.slice(1),
+        },
+      }),
+    })).rejects.toThrow("keepsake_render_journey_narrative_mismatch");
+
+    await expect(resolveKeepsakePrivateJourneyContext(plan, {
+      resolveAuthorizedJourneyContext: async () => ({
+        ...context,
         routePoints: context.routePoints.filter((routePoint) => routePoint.routePointId !== "p1"),
       }),
     })).rejects.toThrow("keepsake_render_route_point_context_missing");
@@ -128,7 +154,7 @@ describe("private Keepsake render boundary (#87)", () => {
     }));
     const resolver: AuthorizedKeepsakeMediaResolver = { resolveAuthorizedMedia };
 
-    const resolved = await resolveKeepsakePrivateMedia(plan, resolver);
+    const resolved = await resolveKeepsakePrivateMedia(plan, authorizedContext(plan), resolver);
 
     expect(resolveAuthorizedMedia.mock.calls.map(([id]) => id)).toEqual(plan.mediaAssetIds);
     expect(resolved.size).toBe(plan.mediaAssetIds.length);
@@ -137,7 +163,15 @@ describe("private Keepsake render boundary (#87)", () => {
 
   it("fails closed when the privileged resolver returns the wrong identity or empty bytes", async () => {
     const plan = buildKeepsakePrivateRenderPlan(buildKeepsakeRenderManifest(journey, 15));
-    await expect(resolveKeepsakePrivateMedia(plan, {
+    const staleContext = authorizedContext(plan);
+    staleContext.narrativeSnapshot.visualMedia = staleContext.narrativeSnapshot.visualMedia.slice(1);
+    const unauthorizedRead = vi.fn();
+    await expect(resolveKeepsakePrivateMedia(plan, staleContext, {
+      resolveAuthorizedMedia: unauthorizedRead,
+    })).rejects.toThrow("keepsake_render_journey_narrative_mismatch");
+    expect(unauthorizedRead).not.toHaveBeenCalled();
+
+    await expect(resolveKeepsakePrivateMedia(plan, authorizedContext(plan), {
       resolveAuthorizedMedia: async () => ({
         mediaAssetId: "wrong-id",
         mimeType: "image/jpeg",
@@ -145,14 +179,14 @@ describe("private Keepsake render boundary (#87)", () => {
       }),
     })).rejects.toThrow("keepsake_render_media_identity_mismatch");
 
-    await expect(resolveKeepsakePrivateMedia(plan, {
+    await expect(resolveKeepsakePrivateMedia(plan, authorizedContext(plan), {
       resolveAuthorizedMedia: async (mediaAssetId) => ({
         mediaAssetId,
         mimeType: "image/jpeg",
         bytes: new Uint8Array(),
       }),
     })).rejects.toThrow("keepsake_render_media_empty");
-    await expect(resolveKeepsakePrivateMedia(plan, {
+    await expect(resolveKeepsakePrivateMedia(plan, authorizedContext(plan), {
       resolveAuthorizedMedia: async (mediaAssetId) => ({
         mediaAssetId,
         mimeType: "video/mp4",

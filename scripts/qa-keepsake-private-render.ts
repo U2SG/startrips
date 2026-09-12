@@ -8,6 +8,7 @@ import { performance } from "node:perf_hooks";
 import { buildKeepsakeRenderManifest } from "../src/journey/journeyKeepsake";
 import {
   buildKeepsakePrivateRenderPlan,
+  resolveKeepsakePrivateJourneyContext,
   resolveKeepsakePrivateMedia,
   type AuthorizedKeepsakeMedia,
   type AuthorizedKeepsakeMediaResolver,
@@ -434,6 +435,50 @@ async function probe(filePath: string): Promise<Record<string, unknown>> {
   return JSON.parse(result.stdout) as Record<string, unknown>;
 }
 
+function validatePrototypeOutput(
+  mediaProbe: Record<string, unknown>,
+  plan: KeepsakePrivateRenderPlan,
+): Array<{ scene: string; startFrame: number; endFrame: number }> {
+  const streams = mediaProbe.streams;
+  if (!Array.isArray(streams) || streams.length !== 1 || typeof streams[0] !== "object" || streams[0] === null) {
+    throw new Error("keepsake_render_probe_stream_missing");
+  }
+  const stream = streams[0] as Record<string, unknown>;
+  const expectedFrameCount = Math.round((plan.actualDurationMs * PROTOTYPE_FPS) / 1000);
+  const expectedDurationSeconds = expectedFrameCount / PROTOTYPE_FPS;
+  if (
+    stream.codec_name !== "h264"
+    || stream.width !== PROTOTYPE_WIDTH
+    || stream.height !== PROTOTYPE_HEIGHT
+    || stream.pix_fmt !== "yuv420p"
+    || stream.avg_frame_rate !== `${PROTOTYPE_FPS}/1`
+    || Number(stream.nb_frames) !== expectedFrameCount
+    || Math.abs(Number(stream.duration) - expectedDurationSeconds) > (1 / PROTOTYPE_FPS / 10)
+  ) {
+    throw new Error("keepsake_render_probe_semantics_mismatch");
+  }
+
+  let expectedStartMs = 0;
+  const transitionSchedule = plan.scenes.map((entry) => {
+    if (entry.startMs !== expectedStartMs || entry.endMs !== entry.startMs + entry.scene.durationMs) {
+      throw new Error("keepsake_render_transition_schedule_mismatch");
+    }
+    expectedStartMs = entry.endMs;
+    return {
+      scene: sceneLabel(entry),
+      startFrame: Math.round((entry.startMs * PROTOTYPE_FPS) / 1000),
+      endFrame: Math.round((entry.endMs * PROTOTYPE_FPS) / 1000),
+    };
+  });
+  if (
+    expectedStartMs !== plan.actualDurationMs
+    || transitionSchedule.at(-1)?.endFrame !== expectedFrameCount
+  ) {
+    throw new Error("keepsake_render_transition_schedule_mismatch");
+  }
+  return transitionSchedule;
+}
+
 function sceneLabel(entry: KeepsakePrivateRenderScene): string {
   const scene = entry.scene;
   if (scene.kind === "media") return `media:${scene.mediaAssetId}`;
@@ -477,7 +522,21 @@ async function main(): Promise<void> {
     const journey = fixtureJourney();
     const manifest = buildKeepsakeRenderManifest(journey, 15, "portrait");
     const plan = buildKeepsakePrivateRenderPlan(manifest);
-    const resolvedMedia = await resolveKeepsakePrivateMedia(plan, new SyntheticPrivateMediaVault());
+    const context = await resolveKeepsakePrivateJourneyContext(plan, {
+      resolveAuthorizedJourneyContext: async (journeyId, journeyRevision) => ({
+        journeyId,
+        journeyRevision,
+        narrativeSnapshot: structuredClone(plan.narrativeSnapshot),
+        routePoints: journey.routePoints.map((routePoint) => ({
+          routePointId: routePoint.id,
+          latitude: routePoint.latitude,
+          longitude: routePoint.longitude,
+          label: routePoint.label ?? null,
+          note: routePoint.note ?? null,
+        })),
+      }),
+    });
+    const resolvedMedia = await resolveKeepsakePrivateMedia(plan, context, new SyntheticPrivateMediaVault());
     const concatFile = await buildFrames(workDir, plan, resolvedMedia);
 
     const outputA = join(ARTIFACT_DIR, "keepsake-prototype-a.mp4");
@@ -493,6 +552,7 @@ async function main(): Promise<void> {
     if (frameHashA !== frameHashB) {
       throw new Error("keepsake_render_decoded_frame_signature_mismatch");
     }
+    const transitionSchedule = validatePrototypeOutput(mediaProbe, plan);
 
     const metrics = {
       fixture: {
@@ -500,6 +560,7 @@ async function main(): Promise<void> {
         routePointIds: journey.routePoints.map((point) => point.id),
         mediaAssetIds: plan.mediaAssetIds,
         sceneOrder: plan.scenes.map(sceneLabel),
+        transitionSchedule,
         manifestDurationMs: manifest.actualDurationMs,
         requestedOutput: manifest.output,
       },

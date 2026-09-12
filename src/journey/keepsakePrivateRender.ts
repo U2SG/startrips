@@ -1,4 +1,9 @@
-﻿import type { KeepsakeRenderManifest, KeepsakeScene } from "./journeyKeepsake";
+﻿import {
+  keepsakeNarrativeSnapshotsEqual,
+  type KeepsakeNarrativeSnapshot,
+  type KeepsakeRenderManifest,
+  type KeepsakeScene,
+} from "./journeyKeepsake";
 
 export interface AuthorizedKeepsakeMedia {
   mediaAssetId: string;
@@ -21,6 +26,7 @@ export interface AuthorizedKeepsakeRoutePointContext {
 export interface AuthorizedKeepsakeJourneyContext {
   journeyId: string;
   journeyRevision: number;
+  narrativeSnapshot: KeepsakeNarrativeSnapshot;
   routePoints: AuthorizedKeepsakeRoutePointContext[];
 }
 
@@ -42,6 +48,7 @@ export interface KeepsakePrivateRenderPlan {
   version: 1;
   journeyId: string;
   journeyRevision: number;
+  narrativeSnapshot: KeepsakeNarrativeSnapshot;
   output: { width: number; height: number };
   targetDurationMs: number;
   actualDurationMs: number;
@@ -96,6 +103,7 @@ export function buildKeepsakePrivateRenderPlan(
     version: 1,
     journeyId: manifest.journeyId,
     journeyRevision: manifest.journeyRevision,
+    narrativeSnapshot: structuredClone(manifest.narrativeSnapshot),
     output: { ...manifest.output },
     targetDurationMs: manifest.targetDurationMs,
     actualDurationMs: manifest.actualDurationMs,
@@ -128,16 +136,18 @@ function referencedRoutePointIds(plan: KeepsakePrivateRenderPlan): Set<string> {
  * serializable render plan. Production renderers must not infer labels or
  * coordinates from Route Point IDs or read mutable Journey state implicitly.
  */
-export async function resolveKeepsakePrivateJourneyContext(
+function assertKeepsakePrivateJourneyContext(
   plan: KeepsakePrivateRenderPlan,
-  resolver: AuthorizedKeepsakeJourneyContextResolver,
-): Promise<AuthorizedKeepsakeJourneyContext> {
-  const context = await resolver.resolveAuthorizedJourneyContext(plan.journeyId, plan.journeyRevision);
+  context: AuthorizedKeepsakeJourneyContext,
+): void {
   if (context.journeyId !== plan.journeyId) {
     throw new Error("keepsake_render_journey_identity_mismatch");
   }
   if (context.journeyRevision !== plan.journeyRevision) {
     throw new Error("keepsake_render_journey_revision_mismatch");
+  }
+  if (!keepsakeNarrativeSnapshotsEqual(plan.narrativeSnapshot, context.narrativeSnapshot)) {
+    throw new Error("keepsake_render_journey_narrative_mismatch");
   }
   const availableRoutePointIds = new Set(context.routePoints.map((point) => point.routePointId));
   for (const routePointId of referencedRoutePointIds(plan)) {
@@ -145,6 +155,14 @@ export async function resolveKeepsakePrivateJourneyContext(
       throw new Error("keepsake_render_route_point_context_missing");
     }
   }
+}
+
+export async function resolveKeepsakePrivateJourneyContext(
+  plan: KeepsakePrivateRenderPlan,
+  resolver: AuthorizedKeepsakeJourneyContextResolver,
+): Promise<AuthorizedKeepsakeJourneyContext> {
+  const context = await resolver.resolveAuthorizedJourneyContext(plan.journeyId, plan.journeyRevision);
+  assertKeepsakePrivateJourneyContext(plan, context);
   return context;
 }
 
@@ -156,8 +174,13 @@ export async function resolveKeepsakePrivateJourneyContext(
  */
 export async function resolveKeepsakePrivateMedia(
   plan: KeepsakePrivateRenderPlan,
+  context: AuthorizedKeepsakeJourneyContext,
   resolver: AuthorizedKeepsakeMediaResolver,
 ): Promise<Map<string, AuthorizedKeepsakeMedia>> {
+  // Recheck narrative identity immediately before privileged byte access;
+  // Journey revision alone is not sufficient because media moves/reorders can
+  // preserve that revision while changing the Keepsake narrative snapshot.
+  assertKeepsakePrivateJourneyContext(plan, context);
   const expectedMediaKindById = new Map<string, "image" | "video">();
   for (const { scene } of plan.scenes) {
     if (scene.kind !== "media") continue;

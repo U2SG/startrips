@@ -8,7 +8,7 @@ The contract exercised here is:
 
 `validated Keepsake manifest + authorized media IDs + revision-pinned Journey spatial/presentation context -> deterministic private render`
 
-The serialized render plan contains semantic scenes and authorized asset IDs only. It contains no storage key, signed URL, guest share URL, arbitrary render code or model-generated command. The plan is intentionally **not** geographically complete: a trusted `AuthorizedKeepsakeJourneyContextResolver` must resolve revision-pinned Route Point coordinates/labels/notes for the exact `journeyId + journeyRevision`, while `AuthorizedKeepsakeMediaResolver` is the separate privileged boundary that materializes private bytes. A worker must not infer geography from IDs or read mutable Journey state outside these declared boundaries.
+The serialized render plan contains semantic scenes and authorized asset IDs only. It contains no storage key, signed URL, guest share URL, arbitrary render code or model-generated command. The plan is intentionally **not** geographically complete: a trusted `AuthorizedKeepsakeJourneyContextResolver` must resolve revision-pinned Route Point coordinates/labels/notes for the exact `journeyId + journeyRevision`, while `AuthorizedKeepsakeMediaResolver` is the separate privileged boundary that materializes private bytes. A worker must not infer geography from IDs or read mutable Journey state outside these declared boundaries. The plan also retains the canonical narrative snapshot, and the privileged byte resolver requires a freshly verified Journey context so media moves/reorders/deletes that do not bump `journeyRevision` still fail closed before private bytes are read.
 
 ## Mechanism decision
 
