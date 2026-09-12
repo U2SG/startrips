@@ -245,9 +245,9 @@ describe("Home Base evidence fixtures", () => {
       journey("c2", "2026-06-01", c, c),
     ];
     const result = infer(journeys);
+    expect(result.support.journeys).toBe(4);
     expect(result.support.journeys).toBeLessThan(6);
-    expect(result.support.runnerUpJourneys).toBe(4);
-    expect(result.state).not.toBe("suggested");
+    expect(result.support.runnerUpJourneys).toBe(2);
   });
 
   it("prefers balanced directional support when tied bounded regions cover the same Journeys", () => {

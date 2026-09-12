@@ -509,6 +509,7 @@ function sustainedMoveStart(
 
 function runnerUpSupport(leader: EvidenceRegion, regions: readonly EvidenceRegion[]): number {
   const leaderJourneys = new Set(leader.supports.map((support) => support.journeyId));
+  let strongestRunnerUp = 0;
   for (const region of regions) {
     if (region === leader) continue;
     const anchorDistance = haversineDistanceKm(
@@ -517,15 +518,20 @@ function runnerUpSupport(leader: EvidenceRegion, regions: readonly EvidenceRegio
       region.anchor.latitude,
       region.anchor.longitude,
     );
-    const hasNovelJourney = region.supports.some((support) => !leaderJourneys.has(support.journeyId));
-    // Nearby maximal cliques made only from the leader's same Journey evidence
-    // are boundary variants of the same metro hypothesis, not a runner-up. A
-    // nearby clique with genuinely different Journeys still competes; skipping
-    // it would recreate transitive chaining through their overlapping points.
-    if (anchorDistance <= HOME_BASE_CLUSTER_RADIUS_KM && !hasNovelJourney) continue;
-    return region.journeyCount;
+    if (anchorDistance <= HOME_BASE_CLUSTER_RADIUS_KM) {
+      // Overlapping bounded cliques near one metro are variants of the same
+      // hypothesis. Only genuinely novel Journeys compete with the leader;
+      // shared B evidence must not make A+B / B+C look like two four-Journey
+      // metros when the actual competing tail is only C's two Journeys.
+      const novelJourneys = region.supports.filter(
+        (support) => !leaderJourneys.has(support.journeyId),
+      ).length;
+      strongestRunnerUp = Math.max(strongestRunnerUp, novelJourneys);
+      continue;
+    }
+    strongestRunnerUp = Math.max(strongestRunnerUp, region.journeyCount);
   }
-  return 0;
+  return strongestRunnerUp;
 }
 
 function roundedCoordinate(value: number): number {
