@@ -1524,7 +1524,8 @@ describe("ST-060 the Home Base suggestion card is quiet and non-modal", () => {
     expect(source).toContain("inferHomeBaseCandidateWithDismissals({");
     expect(source).toContain("evaluationDate: homeEffectiveDate");
     expect(suggestionSource).toContain("const baseline = inferHomeBaseCandidate(input)");
-    expect(suggestionSource).toContain("inferHomeBaseCandidate({ ...input, dismissal })");
+    expect(suggestionSource).toContain("applyHomeBaseDismissalToInferenceResult(");
+    expect(suggestionSource).not.toContain("inferHomeBaseCandidate({ ...input, dismissal })");
     // No threshold literal is re-stated outside the frozen core.
     expect(source).not.toContain("HOME_BASE_SUGGESTED_MIN_JOURNEYS");
     expect(source).not.toContain("HOME_BASE_CLUSTER_RADIUS_KM");

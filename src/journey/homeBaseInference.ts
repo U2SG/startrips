@@ -903,9 +903,14 @@ function parseEvidenceDigest(digest: string): ParsedDigest | null {
   return { anchor: { latitude, longitude }, journeyIds };
 }
 
+type HomeBaseDismissalEvidence = {
+  anchor: HomeBaseMetroAnchor;
+  journeyIds: readonly string[];
+};
+
 function matchingDismissal(
   dismissal: HomeBaseDismissal | null | undefined,
-  region: EvidenceRegion,
+  evidence: HomeBaseDismissalEvidence,
   digest: string,
   evaluationDate: string,
 ): "soft" | "rejected" | null {
@@ -918,8 +923,8 @@ function matchingDismissal(
     haversineDistanceKm(
       previous.anchor.latitude,
       previous.anchor.longitude,
-      region.anchor.latitude,
-      region.anchor.longitude,
+      evidence.anchor.latitude,
+      evidence.anchor.longitude,
     ) > HOME_BASE_CLUSTER_RADIUS_KM
   ) return null;
 
@@ -931,12 +936,46 @@ function matchingDismissal(
     ? 0
     : evaluatedOn - dismissedOn;
   const previousJourneyIds = new Set(previous.journeyIds);
-  const newSupportingJourneys = region.supports.filter(
-    (support) => !previousJourneyIds.has(support.journeyId),
+  const newSupportingJourneys = evidence.journeyIds.filter(
+    (journeyId) => !previousJourneyIds.has(journeyId),
   ).length;
   const mayReprompt = elapsedDays >= HOME_BASE_SOFT_DISMISSAL_MIN_DAYS
     && newSupportingJourneys >= HOME_BASE_SOFT_DISMISSAL_MIN_NEW_JOURNEYS;
   return mayReprompt ? null : "soft";
+}
+
+/**
+ * Apply one persisted answer to an already-computed candidate without rebuilding
+ * endpoint regions. The digest carries the candidate region and supporting
+ * Journey ids needed by the frozen dismissal policy, so list-shaped dismissal
+ * history stays linear in the number of answers rather than rerunning the full
+ * clique search for every row.
+ */
+export function applyHomeBaseDismissalToInferenceResult(
+  result: HomeBaseInferenceResult,
+  dismissal: HomeBaseDismissal | null | undefined,
+  evaluationDate: string,
+): HomeBaseInferenceResult {
+  if (result.state !== "suggested" && result.state !== "move_suggested") return result;
+  if (!result.metroAnchor || !result.evidenceDigest) return result;
+  const current = parseEvidenceDigest(result.evidenceDigest);
+  if (!current) return result;
+  const dismissalState = matchingDismissal(
+    dismissal,
+    { anchor: result.metroAnchor, journeyIds: current.journeyIds },
+    result.evidenceDigest,
+    evaluationDate,
+  );
+  if (!dismissalState) return result;
+  return {
+    ...result,
+    state: "dismissed",
+    reasonCodes: [
+      ...result.reasonCodes,
+      dismissalState === "rejected" ? "REJECTED_DISMISSAL_ACTIVE" : "SOFT_DISMISSAL_ACTIVE",
+    ],
+    proposedPeriodStart: null,
+  };
 }
 
 function assessRegion(region: EvidenceRegion, runnerUpJourneys: number) {
@@ -1064,29 +1103,12 @@ export function inferHomeBaseCandidate(
     const move = findSustainedMove(regions, activeConfirmedPeriod);
     if (move) {
       const moveAssessment = assessRegion(move.region, move.runnerUpJourneys);
-      const dismissalState = matchingDismissal(
-        input.dismissal,
-        move.region,
-        moveAssessment.digest,
-        input.evaluationDate,
-      );
-      if (dismissalState) {
-        return {
-          state: "dismissed",
-          ...moveAssessment.base,
-          reasonCodes: [
-            ...moveAssessment.reasonCodes,
-            dismissalState === "rejected" ? "REJECTED_DISMISSAL_ACTIVE" : "SOFT_DISMISSAL_ACTIVE",
-          ],
-          proposedPeriodStart: null,
-        };
-      }
-      return {
+      return applyHomeBaseDismissalToInferenceResult({
         state: "move_suggested",
         ...moveAssessment.base,
         reasonCodes: [...moveAssessment.reasonCodes, "DIFFERS_FROM_CONFIRMED_HOME"],
         proposedPeriodStart: move.proposedPeriodStart,
-      };
+      }, input.dismissal, input.evaluationDate);
     }
 
     if (!leaderAssessment.isCandidate) {
@@ -1132,28 +1154,10 @@ export function inferHomeBaseCandidate(
     };
   }
 
-  const dismissalState = matchingDismissal(
-    input.dismissal,
-    leader,
-    leaderAssessment.digest,
-    input.evaluationDate,
-  );
-  if (dismissalState) {
-    return {
-      state: "dismissed",
-      ...leaderAssessment.base,
-      reasonCodes: [
-        ...leaderAssessment.reasonCodes,
-        dismissalState === "rejected" ? "REJECTED_DISMISSAL_ACTIVE" : "SOFT_DISMISSAL_ACTIVE",
-      ],
-      proposedPeriodStart: null,
-    };
-  }
-
-  return {
+  return applyHomeBaseDismissalToInferenceResult({
     state: "suggested",
     ...leaderAssessment.base,
     reasonCodes: leaderAssessment.reasonCodes,
     proposedPeriodStart: null,
-  };
+  }, input.dismissal, input.evaluationDate);
 }

@@ -1,5 +1,6 @@
 import {
   HOME_BASE_CLUSTER_RADIUS_KM,
+  applyHomeBaseDismissalToInferenceResult,
   inferHomeBaseCandidate,
   type HomeBaseDismissal,
   type HomeBaseEvidenceReasonCode,
@@ -160,7 +161,11 @@ export function inferHomeBaseCandidateWithDismissals(
   const baseline = inferHomeBaseCandidate(input);
   let selected: { dismissal: HomeBaseDismissal; result: HomeBaseInferenceResult } | null = null;
   for (const dismissal of dismissals) {
-    const result = inferHomeBaseCandidate({ ...input, dismissal });
+    const result = applyHomeBaseDismissalToInferenceResult(
+      baseline,
+      dismissal,
+      input.evaluationDate,
+    );
     if (result.state !== "dismissed") continue;
     if (
       !selected
