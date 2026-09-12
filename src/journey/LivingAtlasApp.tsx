@@ -41,7 +41,7 @@ import {
 } from "./homeBaseInference";
 import {
   homeBaseConfirmationDraft,
-  homeBaseInferenceJourneysAfterRecordedHistory,
+  homeBaseInferenceEvidenceBoundaryAfterRecordedHistory,
   inferHomeBaseCandidateWithDismissals,
   resolveHomeBasePlaceLabel,
   resolveHomeBaseSuggestion,
@@ -1098,19 +1098,17 @@ export function LivingAtlasApp({
       dismissalRead: homeBaseDismissals !== undefined,
       journeyCount: journeys.length,
     })) return null;
-    const inferenceJourneys = homeBaseInferenceJourneysAfterRecordedHistory(
-      journeys.map((journey) => ({
+    const evidenceNotBefore = homeBaseInferenceEvidenceBoundaryAfterRecordedHistory(homeBasePeriods);
+    return inferHomeBaseCandidateWithDismissals({
+      journeys: journeys.map((journey) => ({
         id: journey.id,
         startedOn: journey.startedOn,
         endedOn: journey.endedOn,
         routePoints: journey.routePoints,
       })),
-      homeBasePeriods,
-    );
-    return inferHomeBaseCandidateWithDismissals({
-      journeys: inferenceJourneys,
       confirmedPeriod: currentHomeBasePeriod,
       evaluationDate: homeEffectiveDate,
+      evidenceNotBefore,
     }, homeBaseDismissals ?? []);
   }, [currentHomeBasePeriod, homeBaseDismissals, homeBasePeriods, homeBasePeriodsRead, homeEffectiveDate, journeys, listHomeBaseDismissals, listHomeBasePeriods]);
   const homeBaseSuggestion = useMemo(() => {

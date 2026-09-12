@@ -4,7 +4,6 @@ import {
   type HomeBaseDismissal,
   type HomeBaseEvidenceReasonCode,
   type HomeBaseInferenceInput,
-  type HomeBaseInferenceJourney,
   type HomeBaseInferenceResult,
   type HomeBaseMetroAnchor,
 } from "./homeBaseInference";
@@ -124,28 +123,23 @@ function hidden(): HomeBaseSuggestionDecision {
 }
 
 /**
- * When every recorded Home period is closed, a new confirmation can only start
- * at or after the end of the latest recorded period: the V1 confirmation draft
- * is open-ended and #231 will reject an earlier start as an overlap. Historical
- * Journeys therefore cannot lend support to the next open Home hypothesis.
+ * When every recorded Home period is closed, only endpoint evidence on or after
+ * the latest recorded end may support the next open Home hypothesis. Home periods
+ * are half-open (`startedOn <= date < endedOn`), so an endpoint exactly on the
+ * boundary belongs to the current side.
  *
- * Keep this conservative at the Journey boundary instead of rewriting endpoint
- * kinds. A Journey that started before the boundary may have ended after it, but
- * turning that lone return point into a synthetic "start" would distort the
- * frozen start/end-support contract. Later Journeys can establish the next Home
- * on their own; if they cannot, the quiet card stays hidden.
+ * Return the boundary rather than filtering whole Journeys here. A Journey may
+ * start before the boundary and truthfully end after it; the inference core must
+ * keep that end as end-support while excluding only the historical start.
  */
-export function homeBaseInferenceJourneysAfterRecordedHistory(
-  journeys: readonly HomeBaseInferenceJourney[],
+export function homeBaseInferenceEvidenceBoundaryAfterRecordedHistory(
   periods: readonly HomeBasePeriod[],
-): HomeBaseInferenceJourney[] {
-  if (periods.some((period) => period.endedOn === null)) return [...journeys];
-  const latestRecordedEnd = periods.reduce<string | null>((latest, period) => {
+): string | null {
+  if (periods.some((period) => period.endedOn === null)) return null;
+  return periods.reduce<string | null>((latest, period) => {
     if (period.endedOn === null) return latest;
     return latest === null || period.endedOn > latest ? period.endedOn : latest;
   }, null);
-  if (latestRecordedEnd === null) return [...journeys];
-  return journeys.filter((journey) => journey.startedOn >= latestRecordedEnd);
 }
 
 /**

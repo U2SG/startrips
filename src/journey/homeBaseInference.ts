@@ -64,6 +64,8 @@ export type HomeBaseInferenceInput = {
   journeys: readonly HomeBaseInferenceJourney[];
   confirmedPeriod?: ConfirmedHomeBasePeriod | null;
   evaluationDate: string;
+  /** Inclusive lower bound for endpoint evidence; endpoint kinds remain unchanged. */
+  evidenceNotBefore?: string | null;
   dismissal?: HomeBaseDismissal | null;
 };
 
@@ -1046,6 +1048,7 @@ export function inferHomeBaseCandidate(
     : null;
   const evidence = endpointEvidence(input.journeys).filter((item) => (
     item.date <= input.evaluationDate
+    && (!input.evidenceNotBefore || item.date >= input.evidenceNotBefore)
     && (!activeConfirmedPeriod || item.date > activeConfirmedPeriod.startedOn)
   ));
   const regions = evidenceRegions(evidence);

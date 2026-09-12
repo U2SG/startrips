@@ -3,7 +3,7 @@ import {
   HOME_BASE_EVIDENCE_REASON_CODES,
   HOME_BASE_EVIDENCE_REASON_COPY,
   homeBaseConfirmationDraft,
-  homeBaseInferenceJourneysAfterRecordedHistory,
+  homeBaseInferenceEvidenceBoundaryAfterRecordedHistory,
   inferHomeBaseCandidateWithDismissals,
   resolveHomeBasePlaceLabel,
   resolveHomeBaseSuggestion,
@@ -265,10 +265,10 @@ describe("the Place Label the card names", () => {
 
 describe("recorded Home history bounds the next inference window", () => {
   const at = { latitude: 22.543096, longitude: 114.057865 };
-  const journey = (id: string, date: string): HomeBaseInferenceJourney => ({
+  const journey = (id: string, startedOn: string, endedOn = startedOn): HomeBaseInferenceJourney => ({
     id,
-    startedOn: date,
-    endedOn: date,
+    startedOn,
+    endedOn,
     routePoints: [
       { id: `${id}-start`, sortOrder: 0, ...at },
       { id: `${id}-end`, sortOrder: 1, ...at },
@@ -292,11 +292,13 @@ describe("recorded Home history bounds the next inference window", () => {
       journey("new-4", "2026-05-15"),
     ];
     const history = [period("home-2025", "2025-01-01", "2025-06-01")];
-    const eligible = homeBaseInferenceJourneysAfterRecordedHistory([...historical, ...later], history);
-    expect(eligible.map((item) => item.id)).toEqual(later.map((item) => item.id));
+    const evidenceNotBefore = homeBaseInferenceEvidenceBoundaryAfterRecordedHistory(history);
+    expect(evidenceNotBefore).toBe("2025-06-01");
 
     const result = inferHomeBaseCandidateWithDismissals({
-      journeys: eligible, evaluationDate: "2026-06-01",
+      journeys: [...historical, ...later],
+      evaluationDate: "2026-06-01",
+      evidenceNotBefore,
     }, []);
     const decision = resolveHomeBaseSuggestion({ result, placeLabel: "深圳" });
     const draft = homeBaseConfirmationDraft(decision, result);
@@ -306,7 +308,7 @@ describe("recorded Home history bounds the next inference window", () => {
     expect(classifyHomeBasePeriodWrite({ existing: history, candidate: draft! }).outcome).toBe("insert");
   });
 
-  it("does not turn evidence from a gap before a later recorded period into an open confirmation", () => {
+  it("ignores a strong older gap when a later recorded period makes it historical", () => {
     const gapJourneys = [
       journey("gap-1", "2025-02-01"),
       journey("gap-2", "2025-03-15"),
@@ -317,13 +319,32 @@ describe("recorded Home history bounds the next inference window", () => {
       period("home-1", "2024-01-01", "2025-01-01"),
       period("home-2", "2025-09-01", "2026-01-01"),
     ];
-    expect(homeBaseInferenceJourneysAfterRecordedHistory(gapJourneys, history)).toEqual([]);
+    const result = inferHomeBaseCandidateWithDismissals({
+      journeys: gapJourneys,
+      evaluationDate: "2026-06-01",
+      evidenceNotBefore: homeBaseInferenceEvidenceBoundaryAfterRecordedHistory(history),
+    }, []);
+    expect(result.state).toBe("insufficient_evidence");
+    expect(result.support.journeys).toBe(0);
   });
 
-  it("keeps the current-period move path on the complete Journey history", () => {
-    const rows = [journey("j1", "2026-01-01"), journey("j2", "2026-02-01")];
+  it("keeps only the truthful post-boundary endpoint of a Journey that spans the latest Home end", () => {
+    const history = [period("home-1", "2025-01-01", "2026-01-01")];
+    const result = inferHomeBaseCandidateWithDismissals({
+      journeys: [journey("spanning", "2025-12-15", "2026-01-15")],
+      evaluationDate: "2026-06-01",
+      evidenceNotBefore: homeBaseInferenceEvidenceBoundaryAfterRecordedHistory(history),
+    }, []);
+    expect(result.support.journeys).toBe(1);
+    expect(result.support.starts).toBe(0);
+    expect(result.support.ends).toBe(1);
+    expect(result.support.evidenceStartedOn).toBe("2026-01-15");
+    expect(result.support.evidenceEndedOn).toBe("2026-01-15");
+  });
+
+  it("leaves the current-period move path on the core's complete post-start history", () => {
     const history = [period("home-open", "2025-01-01", null)];
-    expect(homeBaseInferenceJourneysAfterRecordedHistory(rows, history)).toEqual(rows);
+    expect(homeBaseInferenceEvidenceBoundaryAfterRecordedHistory(history)).toBeNull();
   });
 });
 
