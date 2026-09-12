@@ -3,10 +3,12 @@ import {
   HOME_BASE_EVIDENCE_REASON_CODES,
   HOME_BASE_EVIDENCE_REASON_COPY,
   homeBaseConfirmationDraft,
+  homeBaseInferenceJourneysAfterRecordedHistory,
   inferHomeBaseCandidateWithDismissals,
   resolveHomeBasePlaceLabel,
   resolveHomeBaseSuggestion,
 } from "./homeBaseSuggestion";
+import { classifyHomeBasePeriodWrite } from "./homeBase";
 import type {
   HomeBaseEvidenceReasonCode,
   HomeBaseInferenceJourney,
@@ -260,6 +262,70 @@ describe("the Place Label the card names", () => {
   });
 });
 
+
+describe("recorded Home history bounds the next inference window", () => {
+  const at = { latitude: 22.543096, longitude: 114.057865 };
+  const journey = (id: string, date: string): HomeBaseInferenceJourney => ({
+    id,
+    startedOn: date,
+    endedOn: date,
+    routePoints: [
+      { id: `${id}-start`, sortOrder: 0, ...at },
+      { id: `${id}-end`, sortOrder: 1, ...at },
+    ],
+  });
+  const period = (id: string, startedOn: string, endedOn: string | null) => ({
+    id, startedOn, endedOn, label: "深圳", ...at, source: "manual" as const,
+  });
+
+  it("lets later independent evidence suggest again without borrowing dates from a closed Home", () => {
+    const historical = [
+      journey("old-1", "2025-01-01"),
+      journey("old-2", "2025-02-15"),
+      journey("old-3", "2025-04-15"),
+      journey("old-4", "2025-05-15"),
+    ];
+    const later = [
+      journey("new-1", "2026-01-01"),
+      journey("new-2", "2026-02-15"),
+      journey("new-3", "2026-04-15"),
+      journey("new-4", "2026-05-15"),
+    ];
+    const history = [period("home-2025", "2025-01-01", "2025-06-01")];
+    const eligible = homeBaseInferenceJourneysAfterRecordedHistory([...historical, ...later], history);
+    expect(eligible.map((item) => item.id)).toEqual(later.map((item) => item.id));
+
+    const result = inferHomeBaseCandidateWithDismissals({
+      journeys: eligible, evaluationDate: "2026-06-01",
+    }, []);
+    const decision = resolveHomeBaseSuggestion({ result, placeLabel: "深圳" });
+    const draft = homeBaseConfirmationDraft(decision, result);
+    expect(result.state).toBe("suggested");
+    expect(result.support.evidenceStartedOn).toBe("2026-01-01");
+    expect(draft?.startedOn).toBe("2026-01-01");
+    expect(classifyHomeBasePeriodWrite({ existing: history, candidate: draft! }).outcome).toBe("insert");
+  });
+
+  it("does not turn evidence from a gap before a later recorded period into an open confirmation", () => {
+    const gapJourneys = [
+      journey("gap-1", "2025-02-01"),
+      journey("gap-2", "2025-03-15"),
+      journey("gap-3", "2025-05-15"),
+      journey("gap-4", "2025-06-15"),
+    ];
+    const history = [
+      period("home-1", "2024-01-01", "2025-01-01"),
+      period("home-2", "2025-09-01", "2026-01-01"),
+    ];
+    expect(homeBaseInferenceJourneysAfterRecordedHistory(gapJourneys, history)).toEqual([]);
+  });
+
+  it("keeps the current-period move path on the complete Journey history", () => {
+    const rows = [journey("j1", "2026-01-01"), journey("j2", "2026-02-01")];
+    const history = [period("home-open", "2025-01-01", null)];
+    expect(homeBaseInferenceJourneysAfterRecordedHistory(rows, history)).toEqual(rows);
+  });
+});
 
 describe("persisted answers across more than one Home Base region", () => {
   const evidenceJourneys = (prefix: string, latitude: number, longitude: number): HomeBaseInferenceJourney[] =>

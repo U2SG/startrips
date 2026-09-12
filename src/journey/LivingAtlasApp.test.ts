@@ -1520,6 +1520,7 @@ describe("ST-060 the Home Base suggestion card is quiet and non-modal", () => {
   it("recomputes from the frozen inference core rather than holding its own thresholds", () => {
     const source = readFileSync(new URL("./LivingAtlasApp.tsx", import.meta.url), "utf8");
     const suggestionSource = readFileSync(new URL("./homeBaseSuggestion.ts", import.meta.url), "utf8");
+    expect(source).toContain("homeBaseInferenceJourneysAfterRecordedHistory(");
     expect(source).toContain("inferHomeBaseCandidateWithDismissals({");
     expect(source).toContain("evaluationDate: homeEffectiveDate");
     expect(suggestionSource).toContain("const baseline = inferHomeBaseCandidate(input)");
