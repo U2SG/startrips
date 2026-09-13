@@ -158,8 +158,10 @@ describe("Home Base presence projection (ST-056)", () => {
     expect(globeSource).toContain("initialCameraAnchor={atlas?.initialCameraAnchor}");
     expect(globeSource).not.toContain("focusPoint={atlas?.focusPoint ?? atlas?.initialCameraAnchor}");
     expect(particleSource).toContain("initialCameraAnchorNow");
-    expect(particleSource).toContain("rotationXForLatitude(initialCameraAnchorNow.lat)");
-    expect(particleSource).toContain("rotationYForLongitude(initialCameraAnchorNow.lon)");
+    expect(particleSource).toContain("const initialCameraRotation = focusSolverOwnsState && initialCameraAnchorNow");
+    expect(particleSource).toContain("solveFocusRotationForViewport(");
+    expect(particleSource).toContain("nearestEquivalentRotation(interactiveRotationX, initialCameraRotation.x)");
+    expect(particleSource).toContain("nearestEquivalentRotation(baseRotationY, initialCameraRotation.y)");
     expect(particleSource).toContain("if (initialCameraAnchorNow && activePointers.size === 0)");
     expect(particleSource).toContain("interactiveRotationX = interpolate(interactiveRotationX, targetRotationX)");
     expect(particleSource).toMatch(/resolveParticleDiveAnchor\(\s*routeFocusFrame,\s*latestFocusPoint\.current,\s*initialCameraAnchorNow,/);

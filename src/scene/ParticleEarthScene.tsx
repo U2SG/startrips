@@ -4835,10 +4835,27 @@ export function ParticleEarthScene({
         && spatialFocusPoint
         && isFocusFlightActive(pointFocusSettling, routeFocusSettling),
       );
+      // The fresh-Atlas Home seed is orientation-only, but it still has to use
+      // the same layout-aware screen target as semantic focus. A raw lat/lon
+      // rotation centers the point on the translated globe itself; on compact
+      // layouts that globe center can sit near/outside the usable viewport and
+      // leave the Home accessibility target permanently hidden. Solving only the
+      // rotation preserves Home's non-semantic ownership while making the seed
+      // visible in the canonical focus viewport.
+      const initialCameraRotation = focusSolverOwnsState && initialCameraAnchorNow
+        ? solveFocusRotationForViewport(
+            initialCameraAnchorNow,
+            rotationXForLatitude(initialCameraAnchorNow.lat),
+            rotationYForLongitude(initialCameraAnchorNow.lon),
+            target.scale * interactiveZoom,
+            target.x,
+            target.y,
+          )
+        : null;
       let targetRotationX = cameraHeldByDetail
         ? interactiveRotationX
-        : focusSolverOwnsState && initialCameraAnchorNow
-          ? rotationXForLatitude(initialCameraAnchorNow.lat)
+        : initialCameraRotation
+          ? nearestEquivalentRotation(interactiveRotationX, initialCameraRotation.x)
           : focusSolverOwnsState && focusTarget
             ? focusTarget.rotationX
             : focusSolverOwnsState && spatialFocusPoint
@@ -4846,8 +4863,8 @@ export function ParticleEarthScene({
               : interactiveRotationX;
       let targetBaseRotationY = cameraHeldByDetail
         ? baseRotationY
-        : focusSolverOwnsState && initialCameraAnchorNow
-          ? rotationYForLongitude(initialCameraAnchorNow.lon)
+        : initialCameraRotation
+          ? nearestEquivalentRotation(baseRotationY, initialCameraRotation.y)
           : focusSolverOwnsState && focusTarget
             ? focusTarget.rotationY
             : focusSolverOwnsState && spatialFocusPoint
