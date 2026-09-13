@@ -19,7 +19,7 @@ import { CountUp } from "../motion/primitives/CountUp";
 import { useMagnet } from "../motion/primitives/Magnet";
 import { ScrambledText } from "../motion/primitives/ScrambledText";
 import { ShinyText } from "../motion/primitives/ShinyText";
-import { morphJourneyCard, runSharedElementMorph } from "../motion/primitives/sharedElement";
+import { cancelJourneyCardTransition, morphJourneyCard, runSharedElementMorph } from "../motion/primitives/sharedElement";
 import { LivingAtlasGlobe, type LivingAtlasGlobeProps } from "../scene/LivingAtlasGlobe";
 import {
   JourneyComposer,
@@ -1985,6 +1985,11 @@ export function LivingAtlasApp({
   ) {
     const journey = journeys.find((candidate) => candidate.id === journeyId) ?? null;
     if (!journey) return;
+    // Playback becomes the presentation owner immediately. A rail -> active
+    // document View Transition is only decoration for the previous selection;
+    // allowing it to outlive this ownership change can leave the live Atlas DOM
+    // render-suppressed while Playback/Story mount and unmount underneath it.
+    cancelJourneyCardTransition();
     let mode = requestedMode;
     let quickRecap: PreparedQuickRecapPlayback | null = null;
     let fallbackMessage = carriedFallbackMessage;

@@ -13,7 +13,7 @@ type ViewTransitionDocument = Document & {
 
 let activeCardTransition: ViewTransitionHandle | null = null;
 
-function skipActiveCardTransition() {
+export function cancelJourneyCardTransition() {
   const transition = activeCardTransition;
   activeCardTransition = null;
   transition?.skipTransition();
@@ -33,7 +33,7 @@ export function morphJourneyCard(
   hasExistingActiveCard: boolean,
   update: () => void,
 ): void {
-  skipActiveCardTransition();
+  cancelJourneyCardTransition();
   const doc = document as ViewTransitionDocument;
   if (
     !doc.startViewTransition
@@ -129,7 +129,7 @@ export function runSharedElementMorph({
 }: SharedElementMorphOptions): void {
   // A rail-to-card snapshot may still be above the document when Story opens.
   // End that snapshot before the media clone takes ownership of the handoff.
-  skipActiveCardTransition();
+  cancelJourneyCardTransition();
   // A close or a newer selection always wins, including non-animated updates.
   // Never discard the user's state update because an older morph is active.
   cancelActiveMorph?.();
