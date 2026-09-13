@@ -4,7 +4,7 @@
 
 Startrips is a private living atlas for turning a real journey into an ordered geographic route, story, and media collection. A Journey can cross cities, span a flight or sailing passage, remain continuously in transit, or stay in one place.
 
-## Current P0
+## Current capabilities
 
 - Email/password accounts with verified email, password reset, revocable sessions, and database-backed rate limiting.
 - One private atlas per Organization, a two-member limit, and server-derived tenant isolation.
@@ -12,6 +12,10 @@ Startrips is a private living atlas for turning a real journey into an ordered g
 - Route input by globe click or manual coordinates; provider-neutral location search can be enabled by a deployment adapter.
 - Private multipart media uploads with bounded concurrency, progress, cancellation, and failed-file-only retry.
 - A chronological timeline, lazy signed-media reads, and a single low-memory Three.js globe with bounded spherical route geometry.
+- Expiring read-only guest share links for one or several Journeys, with scoped Story and Journey Playback viewing plus owner-side revoke controls.
+- Journey Playback with deterministic transport/timing and a Story return contract that preserves the last successfully presented Route Point/media observation.
+- Mobile Viewer mode keeps Story media, immersive viewing, Journey switching, and Playback reachable through the shared compact-layout contract without exposing edit authority to guests.
+- Home Base foundations cover dated periods, deterministic suggestion evidence, quiet Atlas presence, and persisted confirmation/dismissal; richer Home narrative/context work remains separate.
 - Development-only deterministic `qaState` routes for visual regression work; they are not the authenticated product path.
 
 ## Architecture
