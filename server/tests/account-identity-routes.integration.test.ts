@@ -1,8 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { createEmailVerificationToken } from "better-auth/api";
-import { eq } from "drizzle-orm";
+import { eq, like } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { app } from "../app";
+import {
+  ACCOUNT_IDENTITY_REVERIFY_RATE_LIMIT_MAX,
+  ACCOUNT_IDENTITY_REVERIFY_RATE_LIMIT_PREFIX,
+} from "../account-identities/reverification-rate-limit";
 import { serverConfig } from "../config";
 import { accountIdentityAudit } from "../db/app-schema";
 import {
@@ -118,6 +122,47 @@ describe("account identity HTTP boundary", () => {
       reverificationToken: expect.any(String),
       expiresAt: expect.any(String),
     });
+  });
+
+  it("rate-limits password reverification by stable user/session before another password check", async () => {
+    await db.delete(rateLimit).where(like(
+      rateLimit.key,
+      `${ACCOUNT_IDENTITY_REVERIFY_RATE_LIMIT_PREFIX}:%`,
+    ));
+
+    for (let attempt = 0; attempt < ACCOUNT_IDENTITY_REVERIFY_RATE_LIMIT_MAX; attempt += 1) {
+      const refused = await app.request(`${TEST_ORIGIN}/api/account-identities/reverify/password`, {
+        method: "POST",
+        headers: { ...headers(), "x-forwarded-for": "203.0.113.45" },
+        body: JSON.stringify({ password: `wrong-password-${attempt}` }),
+      });
+      expect(refused.status).toBe(403);
+      expect(await refused.json()).toEqual({ error: "IDENTITY_REVERIFY_FAILED" });
+    }
+
+    const throttled = await app.request(`${TEST_ORIGIN}/api/account-identities/reverify/password`, {
+      method: "POST",
+      headers: { ...headers(), "x-forwarded-for": "203.0.113.45" },
+      body: JSON.stringify({ password: "one-more-wrong-password" }),
+    });
+    expect(throttled.status).toBe(429);
+    expect(Number(throttled.headers.get("retry-after"))).toBeGreaterThan(0);
+    expect(await throttled.json()).toEqual({ error: "IDENTITY_REVERIFY_RATE_LIMITED" });
+
+    // Rotating the address does not reopen the oracle: the stable user/session
+    // buckets have already reached the same bound.
+    const rotatedAddress = await app.request(`${TEST_ORIGIN}/api/account-identities/reverify/password`, {
+      method: "POST",
+      headers: { ...headers(), "x-forwarded-for": "198.51.100.99" },
+      body: JSON.stringify({ password: PASSWORD }),
+    });
+    expect(rotatedAddress.status).toBe(429);
+    expect(await rotatedAddress.json()).toEqual({ error: "IDENTITY_REVERIFY_RATE_LIMITED" });
+
+    await db.delete(rateLimit).where(like(
+      rateLimit.key,
+      `${ACCOUNT_IDENTITY_REVERIFY_RATE_LIMIT_PREFIX}:%`,
+    ));
   });
 
   it("keeps native Better Auth identity-management endpoints fail-closed", async () => {

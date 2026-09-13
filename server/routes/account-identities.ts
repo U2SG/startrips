@@ -12,6 +12,8 @@ import {
 } from "../account-identities/account-identity-repository";
 import { validProviderId } from "../account-identities/identity-policy";
 import { verifyProviderIdentityProof } from "../account-identities/provider-proof";
+import { consumePasswordReverificationBudget } from "../account-identities/reverification-rate-limit";
+import { clientAddress } from "../share-rate-limit";
 import { readJsonObject } from "./json-body";
 
 export type AccountIdentityRouteOptions = {
@@ -69,6 +71,15 @@ export function createAccountIdentityRoutes(options: AccountIdentityRouteOptions
     const body = await readJsonObject(() => context.req.json());
     const password = body && stringField(body, "password");
     if (!password) return context.json({ error: "INVALID_IDENTITY_REVERIFY" }, 400);
+    const budget = await consumePasswordReverificationBudget({
+      userId: session.user.id,
+      sessionId: session.session.id,
+      address: clientAddress(context),
+    });
+    if (!budget.allowed) {
+      context.header("Retry-After", String(budget.retryAfterSeconds));
+      return context.json({ error: "IDENTITY_REVERIFY_RATE_LIMITED" }, 429);
+    }
     try {
       await auth.api.verifyPassword({
         body: { password },
