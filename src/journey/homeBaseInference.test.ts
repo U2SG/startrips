@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   HOME_BASE_CLUSTER_RADIUS_KM,
   HOME_BASE_CANDIDATE_MIN_JOURNEYS,
+  HOME_BASE_EVIDENCE_DIGEST_MAX_LENGTH,
   HOME_BASE_CANDIDATE_MIN_SPAN_DAYS,
   HOME_BASE_MIN_END_SUPPORT,
   HOME_BASE_MIN_LEAD_JOURNEYS,
@@ -10,8 +11,13 @@ import {
   HOME_BASE_SOFT_DISMISSAL_MIN_NEW_JOURNEYS,
   HOME_BASE_SUGGESTED_MIN_JOURNEYS,
   HOME_BASE_SUGGESTED_MIN_SPAN_DAYS,
+  applyHomeBaseDismissalToInferenceResult,
+  homeBaseEvidenceDigest,
+  homeBaseEvidenceDigestAnchor,
   inferHomeBaseCandidate,
+  isPersistableHomeBaseEvidenceDigest,
   type HomeBaseInferenceJourney,
+  type HomeBaseInferenceResult,
 } from "./homeBaseInference";
 import { haversineDistanceKm } from "./mediaPlacement";
 
@@ -1149,5 +1155,215 @@ describe("dismissal and evidence digest", () => {
       dismissal: { kind: "rejected", digest: base.evidenceDigest!, dismissedAt: "2026-04-02" },
     });
     expect(result.state).toBe("dismissed");
+  });
+});
+
+
+describe("persistable Home Base evidence digests", () => {
+  const supports = [
+    "00000000-0000-4000-8000-000000000001",
+    "00000000-0000-4000-8000-000000000002",
+    "00000000-0000-4000-8000-000000000003",
+    "00000000-0000-4000-8000-000000000004",
+  ].map((journeyId) => ({ journeyId, supportsStart: true, supportsEnd: true }));
+  const digest = homeBaseEvidenceDigest({
+    anchor: SHENZHEN,
+    supports,
+    evidenceStartedOn: "2026-01-01",
+    evidenceEndedOn: "2026-04-15",
+  });
+
+  it("accepts the bounded canonical digest produced for persisted Journey UUIDs", () => {
+    expect(isPersistableHomeBaseEvidenceDigest(digest)).toBe(true);
+  });
+
+  it("bounds a genuine large-support digest below the persistence ceiling", () => {
+    const manySupports = Array.from({ length: 2400 }, (_value, index) => ({
+      journeyId: `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
+      supportsStart: true,
+      supportsEnd: index % 2 === 0,
+    }));
+    const wideDigest = homeBaseEvidenceDigest({
+      anchor: SHENZHEN,
+      supports: manySupports,
+      evidenceStartedOn: "2020-01-01",
+      evidenceEndedOn: "2026-04-15",
+    });
+    expect(wideDigest.startsWith("hbi-v3:")).toBe(true);
+    expect(wideDigest.length).toBeLessThanOrEqual(HOME_BASE_EVIDENCE_DIGEST_MAX_LENGTH);
+    expect(isPersistableHomeBaseEvidenceDigest(wideDigest)).toBe(true);
+  });
+
+  it("refuses to emit an unpersistable fallback after the compact exact set reaches the ceiling", () => {
+    const manySupports = Array.from({ length: 3000 }, (_value, index) => ({
+      journeyId: `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
+      supportsStart: true,
+      supportsEnd: true,
+    }));
+    const oversized = homeBaseEvidenceDigest({
+      anchor: SHENZHEN,
+      supports: manySupports,
+      evidenceStartedOn: "2010-01-01",
+      evidenceEndedOn: "2026-04-15",
+    });
+    expect(oversized).toBe("");
+    expect(isPersistableHomeBaseEvidenceDigest(oversized)).toBe(false);
+  });
+
+  it("keeps exact two-new-Journeys semantics with compact persisted digests", () => {
+    const support = (index: number) => ({
+      journeyId: "00000000-0000-4000-8000-" + String(index).padStart(12, "0"),
+      supportsStart: true,
+      supportsEnd: true,
+    });
+    const previousSupports = Array.from({ length: 2400 }, (_value, index) => support(index + 1));
+    const previousDigest = homeBaseEvidenceDigest({
+      anchor: SHENZHEN,
+      supports: previousSupports,
+      evidenceStartedOn: "2020-01-01",
+      evidenceEndedOn: "2026-04-15",
+    });
+    expect(previousDigest.startsWith("hbi-v3:")).toBe(true);
+    expect(isPersistableHomeBaseEvidenceDigest(previousDigest)).toBe(true);
+
+    const resultFor = (supports: ReturnType<typeof support>[]): HomeBaseInferenceResult => ({
+      state: "suggested",
+      metroAnchor: SHENZHEN,
+      reasonCodes: [],
+      evidenceDigest: homeBaseEvidenceDigest({
+        anchor: SHENZHEN,
+        supports,
+        evidenceStartedOn: "2020-01-01",
+        evidenceEndedOn: "2026-06-15",
+      }),
+      support: {
+        journeys: supports.length,
+        starts: supports.length,
+        ends: supports.length,
+        runnerUpJourneys: 0,
+        evidenceSpanDays: 1,
+        evidenceStartedOn: "2020-01-01",
+        evidenceEndedOn: "2026-06-15",
+      },
+      proposedPeriodStart: null,
+    });
+    const dismissal = { kind: "soft" as const, digest: previousDigest, dismissedAt: "2026-04-15" };
+    expect(applyHomeBaseDismissalToInferenceResult(
+      resultFor([...previousSupports, support(2401)]),
+      dismissal,
+      "2026-08-01",
+    ).state).toBe("dismissed");
+    expect(applyHomeBaseDismissalToInferenceResult(
+      resultFor([...previousSupports, support(2401), support(2402)]),
+      dismissal,
+      "2026-08-01",
+    ).state).toBe("suggested");
+  });
+
+  it("rejects noncanonical, forged, or oversized digest payloads", () => {
+    expect(isPersistableHomeBaseEvidenceDigest(` ${digest}`)).toBe(false);
+    expect(isPersistableHomeBaseEvidenceDigest(`${digest.slice(0, -8)}deadbeef`)).toBe(false);
+    expect(isPersistableHomeBaseEvidenceDigest(
+      `${digest}${"x".repeat(HOME_BASE_EVIDENCE_DIGEST_MAX_LENGTH)}`,
+    )).toBe(false);
+  });
+});
+
+describe("Home Base evidence digest version compatibility contract", () => {
+  const supportsOf = (count: number, from = 1) => Array.from({ length: count }, (_value, index) => ({
+    journeyId: "00000000-0000-4000-8000-" + String(index + from).padStart(12, "0"),
+    supportsStart: true,
+    supportsEnd: (index + from) % 2 === 0,
+  }));
+  const snapshotOf = (count: number) => ({
+    anchor: SHENZHEN,
+    supports: supportsOf(count),
+    evidenceStartedOn: "2026-01-01",
+    evidenceEndedOn: "2026-04-15",
+  });
+
+  it("emits the canonical hbi-v2 exact form for an ordinary history", () => {
+    const ordinary = homeBaseEvidenceDigest(snapshotOf(6));
+    expect(ordinary.startsWith("hbi-v2:")).toBe(true);
+    expect(ordinary.length).toBeLessThanOrEqual(HOME_BASE_EVIDENCE_DIGEST_MAX_LENGTH);
+  });
+
+  it("falls back to hbi-v3 only once the exact hbi-v2 form leaves the budget", () => {
+    const wide = homeBaseEvidenceDigest(snapshotOf(2400));
+    expect(wide.startsWith("hbi-v3:")).toBe(true);
+    const fields = wide.split(":");
+    expect(Number(fields[1])).toBe(SHENZHEN.latitude);
+    expect(Number(fields[2])).toBe(SHENZHEN.longitude);
+    expect(Number(fields[3])).toBe(2400);
+    expect(fields[4]).toBe("2026-01-01");
+    expect(fields[5]).toBe("2026-04-15");
+  });
+
+  it("accepts both hbi-v2 and hbi-v3 at the reader and the region anchor", () => {
+    const exact = homeBaseEvidenceDigest(snapshotOf(6));
+    const compact = homeBaseEvidenceDigest(snapshotOf(2400));
+    for (const digest of [exact, compact]) {
+      expect(isPersistableHomeBaseEvidenceDigest(digest)).toBe(true);
+      expect(homeBaseEvidenceDigestAnchor(digest)).toEqual(SHENZHEN);
+    }
+  });
+
+  it("preserves exact membership across the compact fallback", () => {
+    const compact = homeBaseEvidenceDigest(snapshotOf(2400));
+    const resultFor = (digest: string): HomeBaseInferenceResult => ({
+      state: "suggested",
+      metroAnchor: SHENZHEN,
+      reasonCodes: [],
+      evidenceDigest: digest,
+      support: {
+        journeys: 2400,
+        starts: 2400,
+        ends: 1200,
+        runnerUpJourneys: 0,
+        evidenceSpanDays: 104,
+        evidenceStartedOn: "2026-01-01",
+        evidenceEndedOn: "2026-04-15",
+      },
+      proposedPeriodStart: null,
+    });
+    const dismissal = { kind: "rejected" as const, digest: compact, dismissedAt: "2026-04-16" };
+    expect(applyHomeBaseDismissalToInferenceResult(
+      resultFor(compact),
+      dismissal,
+      "2026-05-01",
+    ).state).toBe("dismissed");
+    const otherRegion = homeBaseEvidenceDigest({ ...snapshotOf(2400), anchor: TOKYO });
+    expect(applyHomeBaseDismissalToInferenceResult(
+      { ...resultFor(otherRegion), metroAnchor: TOKYO },
+      dismissal,
+      "2026-05-01",
+    ).state).toBe("suggested");
+  });
+
+  it("keeps an existing hbi-v2 answer byte-stable rather than rewriting it as hbi-v3", () => {
+    const stored = homeBaseEvidenceDigest(snapshotOf(6));
+    expect(homeBaseEvidenceDigest(snapshotOf(6))).toBe(stored);
+    expect(stored.startsWith("hbi-v2:")).toBe(true);
+    const result: HomeBaseInferenceResult = {
+      state: "suggested",
+      metroAnchor: SHENZHEN,
+      reasonCodes: [],
+      evidenceDigest: stored,
+      support: {
+        journeys: 6,
+        starts: 6,
+        ends: 3,
+        runnerUpJourneys: 0,
+        evidenceSpanDays: 104,
+        evidenceStartedOn: "2026-01-01",
+        evidenceEndedOn: "2026-04-15",
+      },
+      proposedPeriodStart: null,
+    };
+    expect(applyHomeBaseDismissalToInferenceResult(
+      result,
+      { kind: "rejected", digest: stored, dismissedAt: "2026-04-16" },
+      "2026-05-01",
+    ).state).toBe("dismissed");
   });
 });

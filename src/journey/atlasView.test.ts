@@ -14,6 +14,7 @@ const GUEST_VIEW: AtlasView = {
   capabilities: GUEST_ATLAS_VIEW_CAPABILITIES,
   listJourneys: async () => [],
   listHomeBasePeriods: null,
+  listHomeBaseDismissals: null,
   readMedia: async () => ({ url: "signed", expiresAt: "2026-09-05T00:00:00.000Z" }),
   mutations: null,
 };
@@ -61,11 +62,13 @@ describe("owner and guest atlas views", () => {
     expect(Object.keys(view.mutations ?? {}).sort()).toEqual([
       // #200 phase E: creating, listing and revoking a share are owner calls,
       // so they belong to the same client every other owner write goes through.
+      "confirmHomeBasePeriod",
       "createShare",
       "deleteJourney",
       "deleteMedia",
       "listShares",
       "moveJourneyMedia",
+      "recordHomeBaseDismissal",
       "reorderJourneyMedia",
       "restoreJourney",
       "revokeShare",

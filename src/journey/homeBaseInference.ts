@@ -46,6 +46,12 @@ export type HomeBaseDismissal = {
   dismissedAt: string;
 };
 
+export type HomeBaseEvidenceSupport = {
+  journeyId: string;
+  supportsStart: boolean;
+  supportsEnd: boolean;
+};
+
 type ConfirmedHomeBasePeriod = Pick<
   HomeBasePeriod,
   "startedOn" | "endedOn" | "latitude" | "longitude"
@@ -64,6 +70,8 @@ export type HomeBaseInferenceInput = {
   journeys: readonly HomeBaseInferenceJourney[];
   confirmedPeriod?: ConfirmedHomeBasePeriod | null;
   evaluationDate: string;
+  /** Inclusive lower bound for endpoint evidence; endpoint kinds remain unchanged. */
+  evidenceNotBefore?: string | null;
   dismissal?: HomeBaseDismissal | null;
 };
 
@@ -92,11 +100,7 @@ type EndpointEvidence = {
   date: string;
 };
 
-type JourneySupport = {
-  journeyId: string;
-  supportsStart: boolean;
-  supportsEnd: boolean;
-};
+type JourneySupport = HomeBaseEvidenceSupport;
 
 type EvidenceRegion = {
   anchor: HomeBaseMetroAnchor;
@@ -118,6 +122,34 @@ type DigestSnapshot = {
 };
 
 const DIGEST_PREFIX = "hbi-v2";
+const BOUNDED_DIGEST_PREFIX = "hbi-v3";
+export const HOME_BASE_EVIDENCE_DIGEST_MAX_LENGTH = 64 * 1024;
+const COMPACT_UUID_TOKEN_LENGTH = 22;
+const COMPACT_SUPPORT_TOKEN_LENGTH = COMPACT_UUID_TOKEN_LENGTH + 1;
+const BASE64URL_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+const PERSISTED_JOURNEY_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const homeBaseEvidenceSupportByResult = new WeakMap<
+  HomeBaseInferenceResult,
+  readonly HomeBaseEvidenceSupport[]
+>();
+
+export function homeBaseInferenceEvidenceSupport(
+  result: HomeBaseInferenceResult,
+): readonly HomeBaseEvidenceSupport[] | null {
+  return homeBaseEvidenceSupportByResult.get(result) ?? null;
+}
+
+function rememberHomeBaseEvidenceSupport<T extends HomeBaseInferenceResult>(
+  result: T,
+  supports: readonly JourneySupport[],
+): T {
+  homeBaseEvidenceSupportByResult.set(
+    result,
+    supports.map((support) => ({ ...support })),
+  );
+  return result;
+}
 const DAYS_BEFORE_MONTH = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334] as const;
 
 function isLeapYear(year: number): boolean {
@@ -817,13 +849,128 @@ function roundedCoordinate(value: number): number {
   return Number(value.toFixed(6));
 }
 
-function fnv1a32(value: string): string {
+function fnv1a32Number(value: string): number {
   let hash = 0x811c9dc5;
   for (let index = 0; index < value.length; index += 1) {
     hash ^= value.charCodeAt(index);
     hash = Math.imul(hash, 0x01000193);
   }
-  return (hash >>> 0).toString(16).padStart(8, "0");
+  return hash >>> 0;
+}
+
+function fnv1a32(value: string): string {
+  return fnv1a32Number(value).toString(16).padStart(8, "0");
+}
+
+function compactUuidToken(journeyId: string): string | null {
+  if (!PERSISTED_JOURNEY_ID_PATTERN.test(journeyId)) return null;
+  const hex = journeyId.replaceAll("-", "").toLowerCase();
+  const bytes = Array.from({ length: 16 }, (_, index) => (
+    Number.parseInt(hex.slice(index * 2, index * 2 + 2), 16)
+  ));
+  let token = "";
+  for (let index = 0; index < bytes.length; index += 3) {
+    const remaining = bytes.length - index;
+    const value = (bytes[index]! << 16)
+      | ((bytes[index + 1] ?? 0) << 8)
+      | (bytes[index + 2] ?? 0);
+    token += BASE64URL_ALPHABET[(value >>> 18) & 63];
+    token += BASE64URL_ALPHABET[(value >>> 12) & 63];
+    if (remaining > 1) token += BASE64URL_ALPHABET[(value >>> 6) & 63];
+    if (remaining > 2) token += BASE64URL_ALPHABET[value & 63];
+  }
+  return token;
+}
+
+function uuidFromCompactToken(token: string): string | null {
+  if (token.length !== COMPACT_UUID_TOKEN_LENGTH) return null;
+  const bytes: number[] = [];
+  let buffer = 0;
+  let bufferedBits = 0;
+  for (const character of token) {
+    const value = BASE64URL_ALPHABET.indexOf(character);
+    if (value < 0) return null;
+    buffer = (buffer << 6) | value;
+    bufferedBits += 6;
+    while (bufferedBits >= 8) {
+      bufferedBits -= 8;
+      bytes.push((buffer >>> bufferedBits) & 0xff);
+      buffer &= bufferedBits === 0 ? 0 : (1 << bufferedBits) - 1;
+    }
+  }
+  if (bytes.length !== 16 || bufferedBits !== 4 || buffer !== 0) return null;
+  const hex = bytes.map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  const uuid = [
+    hex.slice(0, 8),
+    hex.slice(8, 12),
+    hex.slice(12, 16),
+    hex.slice(16, 20),
+    hex.slice(20),
+  ].join("-");
+  return PERSISTED_JOURNEY_ID_PATTERN.test(uuid) ? uuid : null;
+}
+
+function compactSupportFlag(support: JourneySupport): string | null {
+  if (support.supportsStart && support.supportsEnd) return "3";
+  if (support.supportsStart) return "1";
+  if (support.supportsEnd) return "2";
+  return null;
+}
+
+function compactSupportToken(supports: readonly JourneySupport[]): string | null {
+  let token = "~";
+  for (const support of supports) {
+    const uuid = compactUuidToken(support.journeyId);
+    const flag = compactSupportFlag(support);
+    if (!uuid || !flag) return null;
+    token += uuid + flag;
+  }
+  return token;
+}
+
+function supportsFromCompactToken(token: string, journeyCount: number): JourneySupport[] | null {
+  if (
+    !token.startsWith("~")
+    || token.length !== 1 + journeyCount * COMPACT_SUPPORT_TOKEN_LENGTH
+  ) return null;
+  const supports: JourneySupport[] = [];
+  const seen = new Set<string>();
+  for (let offset = 1; offset < token.length; offset += COMPACT_SUPPORT_TOKEN_LENGTH) {
+    const journeyId = uuidFromCompactToken(token.slice(offset, offset + COMPACT_UUID_TOKEN_LENGTH));
+    const flag = token[offset + COMPACT_UUID_TOKEN_LENGTH];
+    if (!journeyId || seen.has(journeyId) || (flag !== "1" && flag !== "2" && flag !== "3")) {
+      return null;
+    }
+    seen.add(journeyId);
+    supports.push({
+      journeyId,
+      supportsStart: flag === "1" || flag === "3",
+      supportsEnd: flag === "2" || flag === "3",
+    });
+  }
+  return supports;
+}
+
+function boundedDigestChecksum(fields: readonly string[]): string {
+  return fnv1a32(fields.join(":"));
+}
+
+function persistedExactDigestLength(
+  latitudeToken: string,
+  longitudeToken: string,
+  journeyCount: number,
+  evidenceStartedOn: string,
+  evidenceEndedOn: string,
+): number {
+  const supportTokenLength = journeyCount === 0 ? 0 : journeyCount * 40 - 1;
+  return DIGEST_PREFIX.length
+    + 1 + latitudeToken.length
+    + 1 + longitudeToken.length
+    + 1 + String(journeyCount).length
+    + 1 + evidenceStartedOn.length
+    + 1 + evidenceEndedOn.length
+    + 1 + supportTokenLength
+    + 1 + 8;
 }
 
 /**
@@ -832,25 +979,30 @@ function fnv1a32(value: string): string {
  * dismissal policy needs to compare an older revision to a current one.
  */
 export function homeBaseEvidenceDigest(snapshot: DigestSnapshot): string {
-  const supports = [...snapshot.supports]
-    .map((support) => ({
-      journeyId: support.journeyId,
-      starts: Number(support.supportsStart),
-      ends: Number(support.supportsEnd),
-    }))
+  const supports: JourneySupport[] = [...snapshot.supports]
+    .map((support) => ({ ...support }))
     .sort((left, right) => left.journeyId.localeCompare(right.journeyId));
   const latitude = roundedCoordinate(snapshot.anchor.latitude);
   const longitude = roundedCoordinate(snapshot.anchor.longitude);
   const canonical = JSON.stringify({
     anchor: { latitude, longitude },
-    supports,
+    supports: supports.map((support) => ({
+      journeyId: support.journeyId,
+      starts: Number(support.supportsStart),
+      ends: Number(support.supportsEnd),
+    })),
     evidenceStartedOn: snapshot.evidenceStartedOn,
     evidenceEndedOn: snapshot.evidenceEndedOn,
   });
   const supportToken = supports
-    .map((support) => `${encodeURIComponent(support.journeyId)}=${support.starts}${support.ends}`)
+    .map((support) => (
+      encodeURIComponent(support.journeyId)
+      + "="
+      + Number(support.supportsStart)
+      + Number(support.supportsEnd)
+    ))
     .join(",");
-  return [
+  const exact = [
     DIGEST_PREFIX,
     latitude,
     longitude,
@@ -860,16 +1012,127 @@ export function homeBaseEvidenceDigest(snapshot: DigestSnapshot): string {
     supportToken,
     fnv1a32(canonical),
   ].join(":");
+  if (exact.length <= HOME_BASE_EVIDENCE_DIGEST_MAX_LENGTH) return exact;
+
+  // Persisted UUID support sets use an exact 16-byte UUID encoding plus one
+  // flag character per Journey. This keeps large legitimate histories compact
+  // while preserving exact membership for the 90-day + two-new-Journeys rule.
+  const compactToken = compactSupportToken(supports);
+  if (!compactToken) return "";
+  const boundedFields = [
+    BOUNDED_DIGEST_PREFIX,
+    String(latitude),
+    String(longitude),
+    String(supports.length),
+    snapshot.evidenceStartedOn,
+    snapshot.evidenceEndedOn,
+    compactToken,
+  ];
+  const bounded = [...boundedFields, boundedDigestChecksum(boundedFields)].join(":");
+  // A dismissal digest is part of the actionable suggestion contract. Never
+  // hand the UI a token that the persistence boundary must reject. Extremely
+  // large exact-support sets remain valid inference evidence, but no actionable
+  // suggestion surface is rendered until a bounded exact representation can
+  // carry the membership needed by the frozen two-new-Journeys policy.
+  return bounded.length <= HOME_BASE_EVIDENCE_DIGEST_MAX_LENGTH ? bounded : "";
+}
+
+/**
+ * Validate an evidence digest at the persistence boundary. The inference core
+ * may parse historical/test digests leniently, but the authenticated write
+ * endpoint must only store a bounded digest that this implementation could
+ * have produced from persisted Journey UUIDs. Rebuilding the digest also
+ * verifies the checksum and canonical field encoding without normalising the
+ * byte-exact value that dismissal matching later consumes.
+ */
+export function isPersistableHomeBaseEvidenceDigest(digest: string): boolean {
+  if (!digest || digest.length > HOME_BASE_EVIDENCE_DIGEST_MAX_LENGTH || digest.trim() !== digest) {
+    return false;
+  }
+  const parts = digest.split(":");
+  if (parts.length !== 8 || (parts[0] !== DIGEST_PREFIX && parts[0] !== BOUNDED_DIGEST_PREFIX)) return false;
+  const latitude = Number(parts[1]);
+  const longitude = Number(parts[2]);
+  const journeyCount = Number(parts[3]);
+  const evidenceStartedOn = parts[4];
+  const evidenceEndedOn = parts[5];
+  if (
+    !Number.isFinite(latitude)
+    || latitude < -90
+    || latitude > 90
+    || String(roundedCoordinate(latitude)) !== parts[1]
+    || !Number.isFinite(longitude)
+    || longitude < -180
+    || longitude > 180
+    || String(roundedCoordinate(longitude)) !== parts[2]
+    || !Number.isInteger(journeyCount)
+    || journeyCount < HOME_BASE_SUGGESTED_MIN_JOURNEYS
+    || !isPersistedCalendarDate(evidenceStartedOn)
+    || !isPersistedCalendarDate(evidenceEndedOn)
+    || evidenceStartedOn > evidenceEndedOn
+  ) return false;
+
+  if (parts[0] === BOUNDED_DIGEST_PREFIX) {
+    if (
+      persistedExactDigestLength(parts[1], parts[2], journeyCount, evidenceStartedOn, evidenceEndedOn)
+        <= HOME_BASE_EVIDENCE_DIGEST_MAX_LENGTH
+    ) return false;
+    const supports = supportsFromCompactToken(parts[6], journeyCount);
+    if (!supports) return false;
+    const boundedFields = parts.slice(0, 7);
+    if (parts[7] !== boundedDigestChecksum(boundedFields)) return false;
+    return homeBaseEvidenceDigest({
+      anchor: { latitude, longitude },
+      supports,
+      evidenceStartedOn,
+      evidenceEndedOn,
+    }) === digest;
+  }
+
+  const supports: JourneySupport[] = [];
+  const seen = new Set<string>();
+  if (!parts[6]) return false;
+  for (const encodedSupport of parts[6].split(",")) {
+    const separator = encodedSupport.lastIndexOf("=");
+    if (separator <= 0) return false;
+    const flags = encodedSupport.slice(separator + 1);
+    if (!/^(?:10|01|11)$/.test(flags)) return false;
+    let journeyId: string;
+    try {
+      journeyId = decodeURIComponent(encodedSupport.slice(0, separator));
+    } catch {
+      return false;
+    }
+    if (
+      !PERSISTED_JOURNEY_ID_PATTERN.test(journeyId)
+      || seen.has(journeyId)
+      || encodeURIComponent(journeyId) !== encodedSupport.slice(0, separator)
+    ) return false;
+    seen.add(journeyId);
+    supports.push({
+      journeyId,
+      supportsStart: flags[0] === "1",
+      supportsEnd: flags[1] === "1",
+    });
+  }
+  if (supports.length !== journeyCount) return false;
+  return homeBaseEvidenceDigest({
+    anchor: { latitude, longitude },
+    supports,
+    evidenceStartedOn,
+    evidenceEndedOn,
+  }) === digest;
 }
 
 type ParsedDigest = {
   anchor: HomeBaseMetroAnchor;
-  journeyIds: readonly string[];
+  journeyIds: readonly string[] | null;
+  mayContainJourneyId: (journeyId: string) => boolean;
 };
 
 function parseEvidenceDigest(digest: string): ParsedDigest | null {
   const parts = digest.split(":");
-  if (parts.length !== 8 || parts[0] !== DIGEST_PREFIX) return null;
+  if (parts.length !== 8) return null;
   const latitude = Number(parts[1]);
   const longitude = Number(parts[2]);
   const journeyCount = Number(parts[3]);
@@ -879,6 +1142,20 @@ function parseEvidenceDigest(digest: string): ParsedDigest | null {
     || !Number.isInteger(journeyCount)
     || journeyCount < 0
   ) return null;
+
+  if (parts[0] === BOUNDED_DIGEST_PREFIX) {
+    const boundedFields = parts.slice(0, 7);
+    const supports = supportsFromCompactToken(parts[6], journeyCount);
+    if (!supports || parts[7] !== boundedDigestChecksum(boundedFields)) return null;
+    const journeyIds = supports.map((support) => support.journeyId);
+    const journeyIdSet = new Set(journeyIds);
+    return {
+      anchor: { latitude, longitude },
+      journeyIds,
+      mayContainJourneyId: (journeyId) => journeyIdSet.has(journeyId),
+    };
+  }
+  if (parts[0] !== DIGEST_PREFIX) return null;
 
   const journeyIds: string[] = [];
   const seenJourneyIds = new Set<string>();
@@ -898,12 +1175,28 @@ function parseEvidenceDigest(digest: string): ParsedDigest | null {
     }
   }
   if (journeyIds.length !== journeyCount) return null;
-  return { anchor: { latitude, longitude }, journeyIds };
+  const journeyIdSet = new Set(journeyIds);
+  return {
+    anchor: { latitude, longitude },
+    journeyIds,
+    mayContainJourneyId: (journeyId) => journeyIdSet.has(journeyId),
+  };
 }
+
+/** Canonical region anchor carried by a persistable Home inference digest. */
+export function homeBaseEvidenceDigestAnchor(digest: string): HomeBaseMetroAnchor | null {
+  if (!isPersistableHomeBaseEvidenceDigest(digest)) return null;
+  return parseEvidenceDigest(digest)?.anchor ?? null;
+}
+
+type HomeBaseDismissalEvidence = {
+  anchor: HomeBaseMetroAnchor;
+  journeyIds: readonly string[] | null;
+};
 
 function matchingDismissal(
   dismissal: HomeBaseDismissal | null | undefined,
-  region: EvidenceRegion,
+  evidence: HomeBaseDismissalEvidence,
   digest: string,
   evaluationDate: string,
 ): "soft" | "rejected" | null {
@@ -916,8 +1209,8 @@ function matchingDismissal(
     haversineDistanceKm(
       previous.anchor.latitude,
       previous.anchor.longitude,
-      region.anchor.latitude,
-      region.anchor.longitude,
+      evidence.anchor.latitude,
+      evidence.anchor.longitude,
     ) > HOME_BASE_CLUSTER_RADIUS_KM
   ) return null;
 
@@ -928,13 +1221,51 @@ function matchingDismissal(
   const elapsedDays = dismissedOn === null || evaluatedOn === null
     ? 0
     : evaluatedOn - dismissedOn;
-  const previousJourneyIds = new Set(previous.journeyIds);
-  const newSupportingJourneys = region.supports.filter(
-    (support) => !previousJourneyIds.has(support.journeyId),
+  if (evidence.journeyIds === null) return "soft";
+  const newSupportingJourneys = evidence.journeyIds.filter(
+    (journeyId) => !previous.mayContainJourneyId(journeyId),
   ).length;
   const mayReprompt = elapsedDays >= HOME_BASE_SOFT_DISMISSAL_MIN_DAYS
     && newSupportingJourneys >= HOME_BASE_SOFT_DISMISSAL_MIN_NEW_JOURNEYS;
   return mayReprompt ? null : "soft";
+}
+
+/**
+ * Apply one persisted answer to an already-computed candidate without rebuilding
+ * endpoint regions. The digest carries the candidate region and supporting
+ * Journey ids needed by the frozen dismissal policy, so list-shaped dismissal
+ * history stays linear in the number of answers rather than rerunning the full
+ * clique search for every row.
+ */
+export function applyHomeBaseDismissalToInferenceResult(
+  result: HomeBaseInferenceResult,
+  dismissal: HomeBaseDismissal | null | undefined,
+  evaluationDate: string,
+): HomeBaseInferenceResult {
+  if (result.state !== "suggested" && result.state !== "move_suggested") return result;
+  if (!result.metroAnchor || !result.evidenceDigest) return result;
+  const current = parseEvidenceDigest(result.evidenceDigest);
+  if (!current) return result;
+  const exactCurrentSupport = homeBaseEvidenceSupportByResult.get(result);
+  const dismissalState = matchingDismissal(
+    dismissal,
+    {
+      anchor: result.metroAnchor,
+      journeyIds: exactCurrentSupport?.map((support) => support.journeyId) ?? current.journeyIds,
+    },
+    result.evidenceDigest,
+    evaluationDate,
+  );
+  if (!dismissalState) return result;
+  return {
+    ...result,
+    state: "dismissed",
+    reasonCodes: [
+      ...result.reasonCodes,
+      dismissalState === "rejected" ? "REJECTED_DISMISSAL_ACTIVE" : "SOFT_DISMISSAL_ACTIVE",
+    ],
+    proposedPeriodStart: null,
+  };
 }
 
 function assessRegion(region: EvidenceRegion, runnerUpJourneys: number) {
@@ -1046,6 +1377,7 @@ export function inferHomeBaseCandidate(
     : null;
   const evidence = endpointEvidence(input.journeys).filter((item) => (
     item.date <= input.evaluationDate
+    && (!input.evidenceNotBefore || item.date >= input.evidenceNotBefore)
     && (!activeConfirmedPeriod || item.date > activeConfirmedPeriod.startedOn)
   ));
   const regions = evidenceRegions(evidence);
@@ -1061,29 +1393,12 @@ export function inferHomeBaseCandidate(
     const move = findSustainedMove(regions, activeConfirmedPeriod);
     if (move) {
       const moveAssessment = assessRegion(move.region, move.runnerUpJourneys);
-      const dismissalState = matchingDismissal(
-        input.dismissal,
-        move.region,
-        moveAssessment.digest,
-        input.evaluationDate,
-      );
-      if (dismissalState) {
-        return {
-          state: "dismissed",
-          ...moveAssessment.base,
-          reasonCodes: [
-            ...moveAssessment.reasonCodes,
-            dismissalState === "rejected" ? "REJECTED_DISMISSAL_ACTIVE" : "SOFT_DISMISSAL_ACTIVE",
-          ],
-          proposedPeriodStart: null,
-        };
-      }
-      return {
+      return applyHomeBaseDismissalToInferenceResult(rememberHomeBaseEvidenceSupport({
         state: "move_suggested",
         ...moveAssessment.base,
         reasonCodes: [...moveAssessment.reasonCodes, "DIFFERS_FROM_CONFIRMED_HOME"],
         proposedPeriodStart: move.proposedPeriodStart,
-      };
+      }, move.region.supports), input.dismissal, input.evaluationDate);
     }
 
     if (!leaderAssessment.isCandidate) {
@@ -1129,28 +1444,10 @@ export function inferHomeBaseCandidate(
     };
   }
 
-  const dismissalState = matchingDismissal(
-    input.dismissal,
-    leader,
-    leaderAssessment.digest,
-    input.evaluationDate,
-  );
-  if (dismissalState) {
-    return {
-      state: "dismissed",
-      ...leaderAssessment.base,
-      reasonCodes: [
-        ...leaderAssessment.reasonCodes,
-        dismissalState === "rejected" ? "REJECTED_DISMISSAL_ACTIVE" : "SOFT_DISMISSAL_ACTIVE",
-      ],
-      proposedPeriodStart: null,
-    };
-  }
-
-  return {
+  return applyHomeBaseDismissalToInferenceResult(rememberHomeBaseEvidenceSupport({
     state: "suggested",
     ...leaderAssessment.base,
     reasonCodes: leaderAssessment.reasonCodes,
     proposedPeriodStart: null,
-  };
+  }, leader.supports), input.dismissal, input.evaluationDate);
 }

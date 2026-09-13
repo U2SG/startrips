@@ -1,15 +1,26 @@
 import { Hono } from "hono";
 import { requireAtlasAccess } from "../authorization/atlas-access";
 import {
+  createAuthoritativeHomeBaseSuggestionPeriodForAtlas,
   createHomeBasePeriodForAtlas,
   deleteHomeBasePeriodForAtlas,
   listHomeBasePeriodsForAtlas,
+  listHomeBaseDismissalsForAtlas,
+  recordAuthoritativeHomeBaseDismissalForAtlas,
+  HomeBaseDismissalDigestTooLargeError,
+  HomeBaseDismissalNotCurrentError,
+  HomeBaseSuggestionNotCurrentError,
   updateHomeBasePeriodForAtlas,
   type HomeBasePeriodPatch,
   type HomeBasePeriodValues,
 } from "../repositories/home-base-repository";
 import { isPersistedCalendarDate } from "../../src/journey/calendarDate";
 import { isHomeBaseSource } from "../../src/journey/homeBase";
+import {
+  isPersistableHomeBaseEvidenceDigest,
+  type HomeBaseDismissal,
+} from "../../src/journey/homeBaseInference";
+import type { HomeBaseSuggestionConfirmationProof } from "../../src/journey/homeBaseSuggestion";
 import { readJsonObject } from "./json-body";
 
 /**
@@ -34,6 +45,7 @@ type HomeBaseInput = {
   startedOn?: unknown;
   endedOn?: unknown;
   source?: unknown;
+  suggestionProof?: unknown;
 };
 
 function coordinateValue(value: unknown, minimum: number, maximum: number) {
@@ -49,6 +61,58 @@ function coordinateValue(value: unknown, minimum: number, maximum: number) {
     && coordinate <= maximum
     ? coordinate
     : null;
+}
+
+type HomeBaseSuggestionProofBody = {
+  evidenceDigest?: unknown;
+  evaluationDate?: unknown;
+  expectedState?: unknown;
+  expectedCurrentHome?: unknown;
+};
+
+export function parseHomeBaseSuggestionConfirmationProof(
+  value: unknown,
+  now: Date = new Date(),
+): HomeBaseSuggestionConfirmationProof | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const body = value as HomeBaseSuggestionProofBody;
+  const evidenceDigest = typeof body.evidenceDigest === "string" ? body.evidenceDigest : "";
+  const evaluationDate = typeof body.evaluationDate === "string" ? body.evaluationDate.trim() : "";
+  const expectedState = body.expectedState;
+  const serverDate = now.toISOString().slice(0, 10);
+  if (
+    !isPersistableHomeBaseEvidenceDigest(evidenceDigest)
+    || !isPersistedCalendarDate(evaluationDate)
+    || (expectedState !== "suggested" && expectedState !== "move_suggested")
+  ) return null;
+  const evaluationDay = Date.parse(`${evaluationDate}T00:00:00.000Z`) / 86_400_000;
+  const serverDay = Date.parse(`${serverDate}T00:00:00.000Z`) / 86_400_000;
+  if (Math.abs(evaluationDay - serverDay) > 1) return null;
+
+  if (body.expectedCurrentHome === null) {
+    return { evidenceDigest, evaluationDate, expectedState, expectedCurrentHome: null };
+  }
+  if (!body.expectedCurrentHome || typeof body.expectedCurrentHome !== "object" || Array.isArray(body.expectedCurrentHome)) {
+    return null;
+  }
+  const current = body.expectedCurrentHome as Record<string, unknown>;
+  const id = typeof current.id === "string" ? current.id : "";
+  const latitude = coordinateValue(current.latitude, -90, 90);
+  const longitude = coordinateValue(current.longitude, -180, 180);
+  const startedOn = typeof current.startedOn === "string" ? current.startedOn.trim() : "";
+  if (
+    !UUID_PATTERN.test(id)
+    || latitude === null
+    || longitude === null
+    || !isPersistedCalendarDate(startedOn)
+    || current.endedOn !== null
+  ) return null;
+  return {
+    evidenceDigest,
+    evaluationDate,
+    expectedState,
+    expectedCurrentHome: { id, latitude, longitude, startedOn, endedOn: null },
+  };
 }
 
 /**
@@ -132,12 +196,106 @@ export function parseHomeBasePatch(body: HomeBaseInput): HomeBasePeriodPatch | n
   return Object.keys(patch).length > 0 ? patch : null;
 }
 
+type HomeBaseDismissalInput = {
+  kind?: unknown;
+  evidenceDigest?: unknown;
+  dismissedOn?: unknown;
+};
+
+export type HomeBaseDismissalValues = {
+  kind: HomeBaseDismissal["kind"];
+  digest: string;
+  /** Trusted server date persisted for the 90-day policy clock. */
+  dismissedOn: string;
+  /** Browser calendar date used only to reproduce the digest the member saw. */
+  evaluationDate: string;
+};
+
+/**
+ * #232: the answer body. `evidenceDigest` is kept byte-exact, but only after
+ * proving it is a bounded, canonical digest this implementation could have
+ * produced. That prevents an authenticated caller from turning the private
+ * dismissal history into arbitrary unbounded storage.
+ *
+ * The policy date is server-owned. The browser's calendar date is retained
+ * only long enough to reproduce the inference snapshot it rendered. A real
+ * timezone can differ from UTC by at most one calendar day, so anything
+ * farther away is refused instead of letting client time steer the 90-day
+ * re-prompt clock.
+ */
+export function parseHomeBaseDismissalInput(
+  body: HomeBaseDismissalInput,
+  now: Date = new Date(),
+): HomeBaseDismissalValues | null {
+  const kind = body.kind;
+  const digest = typeof body.evidenceDigest === "string" ? body.evidenceDigest : "";
+  const requestedDismissedOn = typeof body.dismissedOn === "string" ? body.dismissedOn.trim() : "";
+  const dismissedOn = now.toISOString().slice(0, 10);
+  if (
+    (kind !== "soft" && kind !== "rejected")
+    || !isPersistableHomeBaseEvidenceDigest(digest)
+    || !isPersistedCalendarDate(requestedDismissedOn)
+    || !isPersistedCalendarDate(dismissedOn)
+  ) {
+    return null;
+  }
+  const requestedDay = Date.parse(`${requestedDismissedOn}T00:00:00.000Z`) / 86_400_000;
+  const serverDay = Date.parse(`${dismissedOn}T00:00:00.000Z`) / 86_400_000;
+  if (Math.abs(requestedDay - serverDay) > 1) return null;
+  return { kind, digest, dismissedOn, evaluationDate: requestedDismissedOn };
+}
+
 export const homeBaseRoutes = new Hono();
 
 homeBaseRoutes.get("/", async (context) => {
   const { atlas } = await requireAtlasAccess(context.req.raw, "read");
   context.header("Cache-Control", HOME_BASE_CACHE_CONTROL);
   return context.json({ periods: await listHomeBasePeriodsForAtlas(atlas.id) });
+});
+
+/**
+ * The recorded answers, or an empty list when the member has never answered.
+ * Read under `read` because they only say that suggestions were declined;
+ * writing one is a member decision and asks for `create`, the same level
+ * recording a period does.
+ */
+homeBaseRoutes.get("/dismissal", async (context) => {
+  const { atlas } = await requireAtlasAccess(context.req.raw, "read");
+  context.header("Cache-Control", HOME_BASE_CACHE_CONTROL);
+  return context.json({ dismissals: await listHomeBaseDismissalsForAtlas(atlas.id) });
+});
+
+homeBaseRoutes.post("/dismissal", async (context) => {
+  const { atlas } = await requireAtlasAccess(context.req.raw, "create");
+  const body = await readJsonObject(() => context.req.json());
+  const input = body && parseHomeBaseDismissalInput(body);
+  if (!input) {
+    return context.json(
+      { error: "INVALID_HOME_BASE_DISMISSAL", message: "Invalid Home Base dismissal data" },
+      400,
+    );
+  }
+  try {
+    const dismissal = await recordAuthoritativeHomeBaseDismissalForAtlas(
+      atlas.id,
+      { kind: input.kind, digest: input.digest, dismissedOn: input.dismissedOn },
+      input.evaluationDate,
+    );
+    if (!dismissal) return context.json({ error: "ATLAS_NOT_FOUND" }, 404);
+    context.header("Cache-Control", HOME_BASE_CACHE_CONTROL);
+    return context.json({ dismissal }, 201);
+  } catch (error) {
+    if (
+      error instanceof HomeBaseDismissalDigestTooLargeError
+      || error instanceof HomeBaseDismissalNotCurrentError
+    ) {
+      return context.json({
+        error: "INVALID_HOME_BASE_DISMISSAL",
+        message: "Invalid Home Base dismissal data",
+      }, 400);
+    }
+    throw error;
+  }
 });
 
 homeBaseRoutes.post("/", async (context) => {
@@ -150,7 +308,29 @@ homeBaseRoutes.post("/", async (context) => {
       400,
     );
   }
-  const period = await createHomeBasePeriodForAtlas(atlas.id, input);
+  let period;
+  if (input.source === "suggested-confirmed") {
+    const proof = parseHomeBaseSuggestionConfirmationProof(body.suggestionProof);
+    if (!proof) {
+      return context.json(
+        { error: "INVALID_HOME_BASE", message: "Invalid Home Base period data" },
+        400,
+      );
+    }
+    try {
+      period = await createAuthoritativeHomeBaseSuggestionPeriodForAtlas(atlas.id, input, proof);
+    } catch (error) {
+      if (error instanceof HomeBaseSuggestionNotCurrentError) {
+        return context.json({
+          error: "STALE_HOME_BASE_SUGGESTION",
+          message: "Home Base suggestion is no longer current",
+        }, 409);
+      }
+      throw error;
+    }
+  } else {
+    period = await createHomeBasePeriodForAtlas(atlas.id, input);
+  }
   if (!period) return context.json({ error: "ATLAS_NOT_FOUND" }, 404);
   context.header("Cache-Control", HOME_BASE_CACHE_CONTROL);
   return context.json({ period }, 201);

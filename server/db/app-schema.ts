@@ -80,6 +80,48 @@ export const homeBasePeriods = pgTable(
   ],
 );
 
+// #232: the member's answer to a Home Base suggestion, so that answer can
+// survive the session it was given in. Persistence keeps one effective answer
+// per semantic <=25 km Home region while retaining other regions independently.
+// Evidence churn within a region updates that answer instead of filling history.
+//
+// `evidence_digest` stores the accepted canonical inference digest byte-exact.
+// The write path applies a per-digest ceiling and a bounded region history; large
+// legitimate evidence sets use the compact hbi-v3 representation rather than an
+// unbounded list of supporting Journey ids.
+//
+// `kind` separates an ordinary "not now" from an explicit rejection, which the
+// issue asks to respect more strongly. `dismissed_on` is the trusted server
+// calendar date the 90-day re-prompt rule counts from.
+export const homeBaseDismissals = pgTable(
+  "home_base_dismissals",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    atlasId: uuid("atlas_id")
+      .notNull()
+      .references(() => atlases.id, { onDelete: "cascade" }),
+    kind: text("kind").notNull(),
+    evidenceDigest: text("evidence_digest").notNull(),
+    // Fixed-size MD5 hex key keeps the unique B-tree independent of the
+    // bounded variable-length evidence digest while the full digest remains byte-exact.
+    evidenceDigestHash: text("evidence_digest_hash").notNull(),
+    dismissedOn: date("dismissed_on", { mode: "string" }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("home_base_dismissals_atlas_digest_hash_unique").on(table.atlasId, table.evidenceDigestHash),
+    check(
+      "home_base_dismissals_kind_check",
+      sql`${table.kind} in ('soft', 'rejected')`,
+    ),
+  ],
+);
+
 export const journeys = pgTable(
   "journeys",
   {

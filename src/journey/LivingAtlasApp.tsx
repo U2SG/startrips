@@ -33,7 +33,23 @@ import {
 } from "./journeySaveRecovery";
 import { JourneyPlaybackOverlay } from "./JourneyPlaybackOverlay";
 import { resolveHomeNarrativeContext, type HomeNarrativeContext } from "./homeBasePrelude";
-import type { HomeBasePeriod } from "./homeBase";
+import { classifyHomeBasePeriodWrite, type HomeBasePeriod } from "./homeBase";
+import {
+  homeBaseInferenceEvidenceSupport,
+  inferHomeBaseCandidate,
+  type HomeBaseDismissal,
+  type HomeBaseInferenceResult,
+} from "./homeBaseInference";
+import { JourneyApiError } from "./journeyApi";
+import {
+  homeBaseConfirmationDraft,
+  homeBaseConfirmationRequest,
+  homeBaseInferenceEvidenceBoundaryAfterRecordedHistory,
+  homeBaseSuggestionSharesRegion,
+  inferHomeBaseCandidateWithDismissals,
+  resolveHomeBasePlaceLabel,
+  resolveHomeBaseSuggestion,
+} from "./homeBaseSuggestion";
 import { resolveHomeBaseCameraIntent, type HomeBaseCameraIntent } from "./homeBaseCameraPolicy";
 import { resolveHomeBasePresence, type HomeBaseTimelineContext, type ResolvedHomeBasePresence } from "./homeBasePresence";
 import type { GlobeSemanticZoom } from "../scene/semanticZoom";
@@ -167,13 +183,17 @@ export function resolveInitialHomeOwnedFocusPoint(
 export async function loadJourneyRowsWithOptionalHome({
   listJourneys,
   listHomeBasePeriods,
+  listHomeBaseDismissals,
   isCurrent,
   onHomeBasePeriods,
+  onHomeBaseDismissals,
 }: {
   listJourneys: () => Promise<Journey[]>;
   listHomeBasePeriods?: (() => Promise<HomeBasePeriod[]>) | null;
+  listHomeBaseDismissals?: (() => Promise<HomeBaseDismissal[]>) | null;
   isCurrent: () => boolean;
   onHomeBasePeriods: (periods: HomeBasePeriod[]) => void;
+  onHomeBaseDismissals?: (dismissals: HomeBaseDismissal[]) => void;
 }) {
   // Home history is optional private narrative context. Start it beside the
   // Journey read, but never await it before the Atlas can become usable.
@@ -187,9 +207,110 @@ export async function loadJourneyRowsWithOptionalHome({
   } else if (isCurrent()) {
     onHomeBasePeriods([]);
   }
+  // #232: the recorded answer to an earlier suggestion, read the same
+  // non-blocking way. Until it arrives no card is shown, so a slow read can
+  // never produce the nag the issue forbids.
+  if (listHomeBaseDismissals && onHomeBaseDismissals) {
+    const onDismissals = onHomeBaseDismissals;
+    void Promise.resolve()
+      .then(() => listHomeBaseDismissals())
+      .then((dismissals) => {
+        if (isCurrent()) onDismissals(dismissals);
+      })
+      .catch(() => undefined);
+  }
   return listJourneys();
 }
 
+
+/**
+ * #232: whether the quiet suggestion may be computed at all.
+ *
+ * The Home history and the recorded dismissal are both launched beside the
+ * Journey read and neither blocks the Atlas, so they can land after it. Until
+ * each read that exists has actually landed, no card is shown: inferring
+ * against an unread period list would offer a first-time Home Base to a member
+ * who already confirmed one, and inferring against an unread dismissal would
+ * re-ask a question already answered. Both are the nag the issue forbids.
+ */
+export function homeBaseInferenceInputsReady(input: {
+  periodsReader: boolean;
+  periodsRead: boolean;
+  dismissalReader: boolean;
+  dismissalRead: boolean;
+  journeyCount: number;
+}): boolean {
+  if (!input.periodsReader || input.journeyCount === 0) return false;
+  if (!input.periodsRead) return false;
+  return !input.dismissalReader || input.dismissalRead;
+}
+
+/**
+ * #232: fold a just-confirmed period into the history already held locally.
+ *
+ * A confirmation that moves Home is a `move` write, and `classifyHomeBasePeriodWrite`
+ * closes the previous open period at the new period's own `startedOn`. The
+ * local list must mirror that rather than simply appending, because the
+ * suggestion surface reads the open period out of this list: leaving the
+ * previous one open would keep the card computing against the period that was
+ * just replaced, and would leave the confirmed card enabled for a second click
+ * that can only conflict.
+ */
+export function mergeConfirmedHomeBasePeriod(
+  periods: readonly HomeBasePeriod[],
+  confirmed: HomeBasePeriod,
+): HomeBasePeriod[] {
+  const others = periods.filter((period) => period.id !== confirmed.id);
+  const reconciled = confirmed.endedOn === null
+    ? others.map((period) => (period.endedOn === null
+      ? { ...period, endedOn: confirmed.startedOn }
+      : period))
+    : others;
+  return [...reconciled, confirmed];
+}
+
+type HomeBaseConfirmationDraft = NonNullable<ReturnType<typeof homeBaseConfirmationDraft>>;
+
+export function homeBasePeriodMatchesConfirmationDraft(
+  period: HomeBasePeriod,
+  draft: HomeBaseConfirmationDraft,
+): boolean {
+  return period.label === draft.label
+    && period.latitude === draft.latitude
+    && period.longitude === draft.longitude
+    && period.startedOn === draft.startedOn
+    && period.endedOn === draft.endedOn
+    && period.source === draft.source;
+}
+
+export async function reconcileHomeBaseConfirmationAfterFailure(
+  listPeriods: (() => Promise<HomeBasePeriod[]>) | null | undefined,
+  draft: HomeBaseConfirmationDraft,
+): Promise<{ periods: HomeBasePeriod[]; confirmed: boolean } | null> {
+  if (!listPeriods) return null;
+  try {
+    const periods = await listPeriods();
+    return {
+      periods,
+      confirmed: periods.some((period) => homeBasePeriodMatchesConfirmationDraft(period, draft)),
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function homeBaseSuggestionCanBeConfirmed(input: {
+  decision: ReturnType<typeof resolveHomeBaseSuggestion>;
+  result: HomeBaseInferenceResult;
+  periods: readonly HomeBasePeriod[];
+}): boolean {
+  const draft = homeBaseConfirmationDraft(input.decision, input.result);
+  if (!draft) return false;
+  return classifyHomeBasePeriodWrite({
+    existing: input.periods,
+    candidate: draft,
+  }).outcome !== "conflict";
+}
 
 export function capturePlaybackEntryForContext(
   journeyId: string,
@@ -789,7 +910,7 @@ export function LivingAtlasApp({
   // #200 phase D: the product mode. `capabilities` decides which affordances
   // exist; `mutations` is null in shared mode, so there is no client here that
   // could write and the owner-only surfaces below are never constructed.
-  const { capabilities, listJourneys, listHomeBasePeriods, readMedia, mutations } = useAtlasView();
+  const { capabilities, listJourneys, listHomeBasePeriods, listHomeBaseDismissals, readMedia, mutations } = useAtlasView();
   const { canCreateJourney, canDeleteJourney, canEditJourney, canManageAtlas } = capabilities;
   // #200 phase E. Both halves must hold: the capability decides the affordance
   // exists, `mutations` decides a client capable of the call exists. In shared
@@ -800,6 +921,17 @@ export function LivingAtlasApp({
   const journeysRef = useRef(journeys);
   journeysRef.current = journeys;
   const [homeBasePeriods, setHomeBasePeriods] = useState<HomeBasePeriod[]>([]);
+  // The Home history read is non-blocking, so an empty list means "not read
+  // yet" just as often as it means "no Home Base recorded". The suggestion
+  // surface must tell those apart; the presence and camera layers below do not,
+  // because an empty layer and an unread one render identically.
+  const [homeBasePeriodsRead, setHomeBasePeriodsRead] = useState(false);
+  // `null` means "no answer on record"; `undefined` means "not read yet", and
+  // the card stays quiet until it is. A suggestion that flashed before the
+  // recorded dismissal arrived would be exactly the nag the issue forbids.
+  const [homeBaseDismissals, setHomeBaseDismissals] = useState<HomeBaseDismissal[] | undefined>(undefined);
+  const [homeBaseSuggestionPending, setHomeBaseSuggestionPending] = useState(false);
+  const [homeBaseSuggestionEvidenceRefreshPending, setHomeBaseSuggestionEvidenceRefreshPending] = useState(false);
   const [atlasSemanticZoom, setAtlasSemanticZoom] = useState<GlobeSemanticZoom>("planet");
   const [hasManualAtlasCameraInteraction, setHasManualAtlasCameraInteraction] = useState(false);
   const [initialHomeCameraIntent, setInitialHomeCameraIntent] = useState<HomeBaseCameraIntent | null>(null);
@@ -953,7 +1085,30 @@ export function LivingAtlasApp({
     timeCursor.hasExplicitSelection,
     timeCursor.selection?.journeyId ?? null,
   );
-  const homeEffectiveDate = atlasHomeEffectiveDate(new Date());
+  const [homeEffectiveDate, setHomeEffectiveDate] = useState(() => atlasHomeEffectiveDate(new Date()));
+  useEffect(() => {
+    let timeoutId: number | undefined;
+    const refreshAndSchedule = () => {
+      const now = new Date();
+      setHomeEffectiveDate(atlasHomeEffectiveDate(now));
+      const nextDay = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+      timeoutId = window.setTimeout(
+        refreshAndSchedule,
+        Math.max(1_000, nextDay.getTime() - now.getTime() + 250),
+      );
+    };
+    const refreshWhenVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+      refreshAndSchedule();
+    };
+    refreshAndSchedule();
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => {
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+      if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+    };
+  }, []);
   const atlasHomeTimelineContext = useMemo(
     () => resolveAtlasHomeTimelineContext({
       cursor: timeCursor.cursor,
@@ -981,6 +1136,280 @@ export function LivingAtlasApp({
       : [],
     [atlasHomeTimelineContext, atlasSemanticZoom, homeBasePeriods, listHomeBasePeriods],
   );
+  // #232: the quiet suggestion surface.
+  //
+  // The frozen V1 core in `homeBaseInference.ts` decides the state; this shell
+  // only feeds it the Atlas the member already has and renders the answer. The
+  // recompute is a `useMemo` over `journeys`, which is what the owner's
+  // "saving a Journey may trigger a recompute but must not pop a dialog"
+  // decision means in practice: a save refreshes `journeys`, the state is
+  // recomputed, and at most a non-modal card appears beside the timeline.
+  const currentHomeBasePeriod = useMemo(
+    () => homeBasePeriods.find((period) => period.endedOn === null) ?? null,
+    [homeBasePeriods],
+  );
+  const computeHomeBaseInference = useCallback((evaluationDate: string): HomeBaseInferenceResult | null => {
+    if (homeBaseSuggestionEvidenceRefreshPending) return null;
+    if (!homeBaseInferenceInputsReady({
+      periodsReader: Boolean(listHomeBasePeriods),
+      periodsRead: homeBasePeriodsRead,
+      dismissalReader: Boolean(listHomeBaseDismissals),
+      dismissalRead: homeBaseDismissals !== undefined,
+      journeyCount: journeys.length,
+    })) return null;
+    const evidenceNotBefore = homeBaseInferenceEvidenceBoundaryAfterRecordedHistory(homeBasePeriods);
+    return inferHomeBaseCandidateWithDismissals({
+      journeys: journeys.map((journey) => ({
+        id: journey.id,
+        startedOn: journey.startedOn,
+        endedOn: journey.endedOn,
+        routePoints: journey.routePoints,
+      })),
+      confirmedPeriod: currentHomeBasePeriod,
+      evaluationDate,
+      evidenceNotBefore,
+    }, homeBaseDismissals ?? []);
+  }, [
+    currentHomeBasePeriod,
+    homeBaseDismissals,
+    homeBasePeriods,
+    homeBasePeriodsRead,
+    homeBaseSuggestionEvidenceRefreshPending,
+    journeys,
+    listHomeBaseDismissals,
+    listHomeBasePeriods,
+  ]);
+  const homeBaseInference = useMemo(
+    () => computeHomeBaseInference(homeEffectiveDate),
+    [computeHomeBaseInference, homeEffectiveDate],
+  );
+  const homeBaseSuggestion = useMemo(() => {
+    if (!homeBaseInference) return null;
+    const decision = resolveHomeBaseSuggestion({
+      result: homeBaseInference,
+      placeLabel: resolveHomeBasePlaceLabel(
+        journeys,
+        homeBaseInference.metroAnchor,
+        homeBaseInference.evidenceDigest,
+        homeBaseInferenceEvidenceSupport(homeBaseInference),
+      ),
+      confirmedPlaceLabel: currentHomeBasePeriod?.label ?? null,
+      // Story and Playback own the screen while they are open, and Home Base
+      // setup never interrupts either.
+      narrativeSurfaceActive: storyJourneyId !== null || playbackActive,
+    });
+    if (!decision.visible) return decision;
+    // A bounded historical Home can leave no open period while still owning
+    // the evidence dates the inference core sees. Never offer a button whose
+    // resulting period #231 would reject as overlap/already-open.
+    return homeBaseSuggestionCanBeConfirmed({
+      decision,
+      result: homeBaseInference,
+      periods: homeBasePeriods,
+    }) ? decision : null;
+  }, [currentHomeBasePeriod, homeBaseInference, homeBasePeriods, journeys, playbackActive, storyJourneyId]);
+
+  const refreshHomeBasePeriods = useCallback(async () => {
+    if (!listHomeBasePeriods) return;
+    try {
+      setHomeBasePeriods(await listHomeBasePeriods());
+      setHomeBasePeriodsRead(true);
+    } catch {
+      // The confirmation itself already succeeded; a stale history refreshes
+      // on the next load rather than being reported as a failed save.
+    }
+  }, [listHomeBasePeriods]);
+
+  const refreshHomeBaseSuggestionEvidence = useCallback(async () => {
+    const revision = ++loadRevision.current;
+    // Suppress inference before detached private reads can complete. Journeys
+    // intentionally remain rendered so a Home suggestion recovery never blanks
+    // the Atlas while its authoritative Journey refresh is slow or unavailable.
+    setHomeBaseSuggestionEvidenceRefreshPending(true);
+    if (listHomeBasePeriods) {
+      setHomeBasePeriodsRead(false);
+    } else {
+      setHomeBasePeriods([]);
+      setHomeBasePeriodsRead(false);
+    }
+    setHomeBaseDismissals(listHomeBaseDismissals ? undefined : []);
+    try {
+      const journeyRows = await loadJourneyRowsWithOptionalHome({
+        listJourneys,
+        listHomeBasePeriods,
+        listHomeBaseDismissals,
+        isCurrent: () => revision === loadRevision.current,
+        onHomeBasePeriods: (periods) => {
+          setHomeBasePeriods(periods);
+          setHomeBasePeriodsRead(true);
+        },
+        onHomeBaseDismissals: setHomeBaseDismissals,
+      });
+      if (revision !== loadRevision.current) return;
+      setJourneys(sortJourneysChronologically(journeyRows));
+      setHomeBaseSuggestionEvidenceRefreshPending(false);
+    } catch {
+      if (revision === loadRevision.current) {
+        // Invalidate the detached Home reads launched above and remove the stale
+        // Journey evidence the server just rejected. Even if a private read won
+        // the race before this catch, zero Journey rows keeps inference unready.
+        loadRevision.current += 1;
+        setJourneys([]);
+        setHomeBasePeriodsRead(false);
+        setHomeBaseDismissals(listHomeBaseDismissals ? undefined : []);
+      }
+      // Keep the suggestion suppressed when an authoritative refresh cannot
+      // complete; the original structured dismissal error remains visible.
+    }
+  }, [listHomeBaseDismissals, listHomeBasePeriods, listJourneys]);
+
+  const confirmHomeBaseSuggestion = useCallback(async () => {
+    if (!mutations || !homeBaseInference || !homeBaseSuggestion) return;
+    const actionDate = atlasHomeEffectiveDate(new Date());
+    let inferenceForAction = homeBaseInference;
+    let suggestionForAction = homeBaseSuggestion;
+    if (actionDate !== homeEffectiveDate) {
+      const refreshedInference = computeHomeBaseInference(actionDate);
+      setHomeEffectiveDate(actionDate);
+      if (!refreshedInference) return;
+      const refreshedSuggestion = resolveHomeBaseSuggestion({
+        result: refreshedInference,
+        placeLabel: resolveHomeBasePlaceLabel(
+          journeys,
+          refreshedInference.metroAnchor,
+          refreshedInference.evidenceDigest,
+          homeBaseInferenceEvidenceSupport(refreshedInference),
+        ),
+        confirmedPlaceLabel: currentHomeBasePeriod?.label ?? null,
+        narrativeSurfaceActive: storyJourneyId !== null || playbackActive,
+      });
+      if (
+        !refreshedSuggestion.visible
+        || refreshedSuggestion.variant !== homeBaseSuggestion.variant
+        || !homeBaseSuggestionSharesRegion(
+          refreshedSuggestion.metroAnchor,
+          homeBaseSuggestion.metroAnchor,
+        )
+        || !homeBaseSuggestionCanBeConfirmed({
+          decision: refreshedSuggestion,
+          result: refreshedInference,
+          periods: homeBasePeriods,
+        })
+      ) return;
+      inferenceForAction = refreshedInference;
+      suggestionForAction = refreshedSuggestion;
+    }
+    const draft = homeBaseConfirmationRequest(
+      suggestionForAction,
+      inferenceForAction,
+      currentHomeBasePeriod,
+      actionDate,
+    );
+    if (!draft) return;
+    setHomeBaseSuggestionPending(true);
+    try {
+      const confirmed = await mutations.confirmHomeBasePeriod(draft);
+      // The returned period is the authority for the card coming down. The
+      // refresh below is best effort and swallows its own failure, so a card
+      // that waited for it would stay enabled after a successful save and
+      // invite a second, conflicting click.
+      setHomeBasePeriods((periods) => mergeConfirmedHomeBasePeriod(periods, confirmed));
+      setHomeBasePeriodsRead(true);
+      await refreshHomeBasePeriods();
+      showNotice(`已把${draft.label}记为常住地，之后可以随时修改。`);
+    } catch (error) {
+      if (error instanceof JourneyApiError && error.code === "STALE_HOME_BASE_SUGGESTION") {
+        await refreshHomeBaseSuggestionEvidence();
+        showNotice("常住地建议已经更新，请按最新旅程记录再确认。");
+        return;
+      }
+      const reconciliation = await reconcileHomeBaseConfirmationAfterFailure(listHomeBasePeriods, draft);
+      if (reconciliation) {
+        setHomeBasePeriods(reconciliation.periods);
+        setHomeBasePeriodsRead(true);
+        if (!reconciliation.confirmed) {
+          showNotice(error instanceof Error && error.message
+            ? error.message
+            : "常住地暂时无法保存，请稍后再试。");
+          return;
+        }
+        showNotice(`已把${draft.label}记为常住地，之后可以随时修改。`);
+        return;
+      }
+      showNotice(error instanceof Error && error.message
+        ? error.message
+        : "常住地暂时无法保存，请稍后再试。");
+    } finally {
+      setHomeBaseSuggestionPending(false);
+    }
+  }, [computeHomeBaseInference, currentHomeBasePeriod, homeBaseInference, homeBasePeriods, homeBaseSuggestion, homeEffectiveDate, journeys, listHomeBasePeriods, mutations, playbackActive, refreshHomeBasePeriods, refreshHomeBaseSuggestionEvidence, showNotice, storyJourneyId]);
+
+  const dismissHomeBaseSuggestion = useCallback(async (kind: HomeBaseDismissal["kind"]) => {
+    if (!mutations || !homeBaseSuggestion?.evidenceDigest || !homeBaseSuggestion.metroAnchor) return;
+    const actionDate = atlasHomeEffectiveDate(new Date());
+    let evidenceDigest = homeBaseSuggestion.evidenceDigest;
+    if (actionDate !== homeEffectiveDate) {
+      const refreshedInference = computeHomeBaseInference(actionDate);
+      setHomeEffectiveDate(actionDate);
+      const expectedState = homeBaseSuggestion.variant === "move" ? "move_suggested" : "suggested";
+      if (
+        refreshedInference?.state !== expectedState
+        || !refreshedInference.evidenceDigest
+        || !homeBaseSuggestionSharesRegion(
+          refreshedInference.metroAnchor,
+          homeBaseSuggestion.metroAnchor,
+        )
+      ) return;
+      evidenceDigest = refreshedInference.evidenceDigest;
+    }
+    setHomeBaseSuggestionPending(true);
+    try {
+      // The answer is persisted BEFORE the card is taken down. A dismissal that
+      // only lived in component state would come back next session, which is
+      // exactly the nag the issue forbids.
+      const recorded = await mutations.recordHomeBaseDismissal({
+        kind,
+        evidenceDigest,
+        // `actionDate` and `evidenceDigest` now come from the same render-owned
+        // effective day; the server separately owns the persisted policy date.
+        dismissedOn: actionDate,
+      });
+      setHomeBaseDismissals((current) => {
+        const existing = current ?? [];
+        return [...existing.filter((item) => item.digest !== recorded.digest), recorded];
+      });
+      // The server keeps this history bounded and may retire an older answer to
+      // make room for this one. A local append would leave that retired answer
+      // suppressing its own region for the rest of the session, so the
+      // authoritative list is read back; if the read fails the optimistic fold
+      // stands, which at worst delays the retirement until the next load.
+      if (listHomeBaseDismissals) {
+        try {
+          setHomeBaseDismissals(await listHomeBaseDismissals());
+        } catch {
+          // Keep the optimistic fold; the card stays down either way.
+        }
+      }
+    } catch (error) {
+      if (error instanceof JourneyApiError && error.code === "INVALID_HOME_BASE_DISMISSAL") {
+        await refreshHomeBaseSuggestionEvidence();
+      }
+      showNotice(error instanceof Error && error.message
+        ? error.message
+        : "这次选择暂时没有保存成功，请稍后再试。");
+    } finally {
+      setHomeBaseSuggestionPending(false);
+    }
+  }, [
+    computeHomeBaseInference,
+    homeBaseSuggestion,
+    homeEffectiveDate,
+    listHomeBaseDismissals,
+    mutations,
+    refreshHomeBaseSuggestionEvidence,
+    showNotice,
+  ]);
+
   const claimManualAtlasCamera = useCallback(() => {
     atlasHomeCameraFreshRef.current = false;
     setHasManualAtlasCameraInteraction(true);
@@ -1074,17 +1503,37 @@ export function LivingAtlasApp({
 
   const load = useCallback(async (quiet = false, quietErrorNotice?: string) => {
     const revision = ++loadRevision.current;
+    // Every refresh owns fresh private-read readiness. Keep the last rendered
+    // Home history while its replacement is in flight, but never let that
+    // stale snapshot drive a new suggestion. If this view no longer has an
+    // owner reader, clear the private history outright.
+    if (listHomeBasePeriods) {
+      setHomeBasePeriodsRead(false);
+    } else {
+      setHomeBasePeriods([]);
+      setHomeBasePeriodsRead(false);
+    }
+    setHomeBaseDismissals(listHomeBaseDismissals ? undefined : []);
     if (!quiet) setStatus("loading");
     try {
       const journeyRows = await loadJourneyRowsWithOptionalHome({
         listJourneys,
         listHomeBasePeriods,
+        listHomeBaseDismissals,
         isCurrent: () => revision === loadRevision.current,
-        onHomeBasePeriods: setHomeBasePeriods,
+        onHomeBasePeriods: (periods) => {
+          setHomeBasePeriods(periods);
+          setHomeBasePeriodsRead(true);
+        },
+        onHomeBaseDismissals: setHomeBaseDismissals,
       });
       const loaded = sortJourneysChronologically(journeyRows);
       if (revision !== loadRevision.current) return;
       setJourneys(loaded);
+      // A normal authoritative reload may supersede the dedicated suggestion
+      // refresh. Its successful Journey snapshot is equally authoritative and
+      // can release that refresh's suppression gate.
+      setHomeBaseSuggestionEvidenceRefreshPending(false);
       setLoadError("");
       setStatus("ready");
       return loaded;
@@ -1098,7 +1547,7 @@ export function LivingAtlasApp({
       }
       return null;
     }
-  }, [listHomeBasePeriods, listJourneys, showNotice]);
+  }, [listHomeBaseDismissals, listHomeBasePeriods, listJourneys, showNotice]);
 
   useEffect(() => {
     void load();
@@ -1911,6 +2360,55 @@ export function LivingAtlasApp({
           }}
           onCreate={canCreateJourney ? openCreateComposer : undefined}
         />
+      ) : null}
+
+      {/* #232: the quiet Home Base suggestion. Desktop places it beside the
+          Atlas timeline; compact mobile has no timeline view, so the same
+          non-modal answer sits above native planet chrome instead. No overlay,
+          no `role="dialog"`, no focus trap and no `inert`: the Atlas remains
+          usable and the member can simply never answer. Story/Playback
+          suppression still belongs to `resolveHomeBaseSuggestion`. */}
+      {homeBaseSuggestion?.visible && ((!isMobileV2 && view === "timeline") || (isMobileV2 && view === "planet")) ? (
+        <aside
+          className="living-atlas__home-base-suggestion motion-fade-through"
+          data-home-base-suggestion={homeBaseSuggestion.variant}
+          data-home-base-surface={isMobileV2 ? "mobile-atlas" : "timeline"}
+          data-home-base-place-label={homeBaseSuggestion.placeLabel ?? ""}
+          aria-live="polite"
+        >
+          <p className="living-atlas__home-base-suggestion-kicker">常住地</p>
+          <h2>{homeBaseSuggestion.headline}</h2>
+          <p className="living-atlas__home-base-suggestion-evidence">{homeBaseSuggestion.evidenceCopy}</p>
+          <p className="living-atlas__home-base-suggestion-question">{homeBaseSuggestion.question}</p>
+          <div className="living-atlas__home-base-suggestion-actions">
+            {homeBaseSuggestion.primaryAction ? (
+              <button
+                type="button"
+                data-home-base-suggestion-action={homeBaseSuggestion.primaryAction.kind}
+                disabled={homeBaseSuggestionPending}
+                onClick={() => void confirmHomeBaseSuggestion()}
+              >{homeBaseSuggestion.primaryAction.label}</button>
+            ) : null}
+            {homeBaseSuggestion.secondaryAction ? (
+              <button
+                type="button"
+                className="is-quiet"
+                data-home-base-suggestion-action={homeBaseSuggestion.secondaryAction.kind}
+                disabled={homeBaseSuggestionPending}
+                onClick={() => void dismissHomeBaseSuggestion("soft")}
+              >{homeBaseSuggestion.secondaryAction.label}</button>
+            ) : null}
+            {homeBaseSuggestion.rejectAction ? (
+              <button
+                type="button"
+                className="is-quiet"
+                data-home-base-suggestion-action={homeBaseSuggestion.rejectAction.kind}
+                disabled={homeBaseSuggestionPending}
+                onClick={() => void dismissHomeBaseSuggestion("rejected")}
+              >{homeBaseSuggestion.rejectAction.label}</button>
+            ) : null}
+          </div>
+        </aside>
       ) : null}
 
       {view === "planet" && journeys.length === 0 ? (
