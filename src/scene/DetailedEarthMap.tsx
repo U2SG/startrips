@@ -225,6 +225,16 @@ export default function DetailedEarthMap({
     let idleCount = 0;
     let resizeCount = 0;
     mapRef.current = map;
+    // Register the one-shot load observation immediately after construction.
+    // A tiny inline/QA style can become style-loaded before the rest of this
+    // effect has finished wiring calibration/reveal callbacks. Keep the event
+    // bit so the later idempotent settle function can recover that race.
+    let loadEventObserved = false;
+    let settleInitialLoad: (() => void) | null = null;
+    map.on("load", () => {
+      loadEventObserved = true;
+      settleInitialLoad?.();
+    });
     // Configure gesture rates up front, but do not enable handlers while the
     // particle surface owns the Dive. Primary mouse / one-finger touch will
     // still pan and right-button / Ctrl+drag will still rotate once detail owns.
@@ -444,7 +454,8 @@ export default function DetailedEarthMap({
       resizeObserver.observe(host);
     }
 
-    map.on("load", () => {
+    settleInitialLoad = () => {
+      if (removed || initialLoadSettled) return;
       // Raster fallback remains Mercator; vector styles use the globe so a
       // polar focus is not trapped by the flat-map viewport.
       if (useGlobeProjection()) map.setProjection({ type: "globe" });
@@ -452,12 +463,17 @@ export default function DetailedEarthMap({
       // No second focus flight at handoff: the mount frame already IS the focus.
       initialLoadSettled = true;
       host.dataset.mapReady = "true";
-      host.dataset.mapLoadCount = String(Number(host.dataset.mapLoadCount ?? "0") + 1);
+      host.dataset.mapLoadCount = "1";
+      host.dataset.mapLoadSource = loadEventObserved ? "load-event" : "style-loaded-recovery";
       // Calibrate first, then require a post-sync MapLibre render for the
       // current real host geometry before this renderer can become visual-ready.
       calibrateToParticle();
       syncRevealSurface("load");
-    });
+    };
+    // If the fast style finished before the event callback was fully wired,
+    // recover from current MapLibre style truth instead of stranding prewarm.
+    // This is an event-state reconciliation, not polling or a delay.
+    if (loadEventObserved || map.isStyleLoaded()) settleInitialLoad();
 
     calibrateRef.current = () => calibrateToParticle();
     if (calibrationHandleRef) {
