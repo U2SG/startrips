@@ -196,14 +196,14 @@ async function installStageRecorder(page) {
   await page.evaluate(() => {
     const section = document.querySelector(".living-atlas-globe");
     if (!section) throw new Error("living-atlas-globe section is absent");
-    const sample = (stageOverride = null) => {
+    const sample = (stageOverride = null, ownerOverride = null) => {
       const map = document.querySelector(".detailed-earth-map");
       const detailLayer = document.querySelector(".living-atlas-globe__detail-layer");
       const detailStyle = detailLayer instanceof HTMLElement ? getComputedStyle(detailLayer) : null;
       const canvas = document.querySelector(".maplibregl-canvas");
       return {
         stage: stageOverride ?? section.getAttribute("data-earth-dive"),
-        owner: section.getAttribute("data-earth-dive-owner"),
+        owner: ownerOverride ?? section.getAttribute("data-earth-dive-owner"),
         semanticZoom: document.querySelector(".particle-earth-scene")?.getAttribute("data-semantic-zoom") ?? null,
         anchorX: map?.dataset?.handoffAnchorX ? Number(map.dataset.handoffAnchorX) : null,
         anchorY: map?.dataset?.handoffAnchorY ? Number(map.dataset.handoffAnchorY) : null,
@@ -228,39 +228,50 @@ async function installStageRecorder(page) {
         deltaY: event.deltaY,
       });
     }, { capture: true });
-    // A stage change is a DOM write. MutationObserver can batch several writes
-    // into one callback, so reconstruct the exact transition chain from each
-    // record's oldValue rather than sampling only the final DOM state.
-    const recordStagePresentation = (stageOverride = null) => {
-      const next = sample(stageOverride);
+    // Stage and owner are separate DOM writes. MutationObserver can batch both
+    // (and several frames' writes) into one callback, so reconstruct their exact
+    // ordered values from oldValue chains rather than sampling only final DOM.
+    const recordStagePresentation = (stageOverride = null, ownerOverride = null) => {
+      const next = sample(stageOverride, ownerOverride);
       const lastIndex = window.__qaEarthDiveStages.length - 1;
       const last = window.__qaEarthDiveStages[lastIndex];
       if (last && last.stage === next.stage) {
         // A newly-entered blending stage can intentionally start as `holding`
         // until its post-sync render arrives. Preserve one entry per stage but
-        // keep that entry current when presentation state catches up.
+        // keep owner/presentation current as batched DOM writes catch up.
         window.__qaEarthDiveStages[lastIndex] = next;
         return;
       }
       window.__qaEarthDiveStages.push(next);
     };
     const observer = new MutationObserver((records) => {
-      const stageRecords = records.filter((record) => record.attributeName === "data-earth-dive");
-      for (let index = 0; index < stageRecords.length; index += 1) {
-        // MutationObserver callbacks can batch several stage writes into one
-        // microtask. Reading the attribute once would collapse, for example,
-        // detail -> blending -> prewarm -> particle into only the final state.
-        // For one attribute, the next record's oldValue is the current record's
-        // exact new value; only the final record needs the live DOM value.
-        const nextStage = index + 1 < stageRecords.length
-          ? stageRecords[index + 1].oldValue
-          : section.getAttribute("data-earth-dive");
-        if (nextStage) recordStagePresentation(nextStage);
+      let currentStage = window.__qaEarthDiveStages.at(-1)?.stage
+        ?? section.getAttribute("data-earth-dive");
+      let currentOwner = window.__qaEarthDiveStages.at(-1)?.owner
+        ?? section.getAttribute("data-earth-dive-owner");
+      const finalStage = section.getAttribute("data-earth-dive");
+      const finalOwner = section.getAttribute("data-earth-dive-owner");
+      const nextAttributeValue = (index, attributeName, finalValue) => {
+        for (let nextIndex = index + 1; nextIndex < records.length; nextIndex += 1) {
+          if (records[nextIndex].attributeName === attributeName) return records[nextIndex].oldValue;
+        }
+        return finalValue;
+      };
+      for (let index = 0; index < records.length; index += 1) {
+        const record = records[index];
+        if (record.attributeName === "data-earth-dive") {
+          currentStage = nextAttributeValue(index, "data-earth-dive", finalStage);
+        } else if (record.attributeName === "data-earth-dive-owner") {
+          currentOwner = nextAttributeValue(index, "data-earth-dive-owner", finalOwner);
+        } else {
+          continue;
+        }
+        if (currentStage && currentOwner) recordStagePresentation(currentStage, currentOwner);
       }
     });
     observer.observe(section, {
       attributes: true,
-      attributeFilter: ["data-earth-dive"],
+      attributeFilter: ["data-earth-dive", "data-earth-dive-owner"],
       attributeOldValue: true,
     });
 
@@ -277,7 +288,7 @@ async function installStageRecorder(page) {
       revealObserver = null;
       observedDetailLayer = nextDetailLayer instanceof HTMLElement ? nextDetailLayer : null;
       if (!observedDetailLayer) return;
-      revealObserver = new MutationObserver(recordStagePresentation);
+      revealObserver = new MutationObserver(() => recordStagePresentation());
       revealObserver.observe(observedDetailLayer, {
         attributes: true,
         attributeFilter: ["data-earth-dive-spatial-reveal"],
