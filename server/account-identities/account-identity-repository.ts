@@ -181,6 +181,17 @@ function validateAction(
   }
 }
 
+async function markActionConsumed(
+  transaction: Transaction,
+  actionId: string,
+  now: Date,
+) {
+  await transaction
+    .update(accountIdentityActions)
+    .set({ consumedAt: now })
+    .where(eq(accountIdentityActions.id, actionId));
+}
+
 async function consumeAction(
   transaction: Transaction,
   values: {
@@ -195,10 +206,7 @@ async function consumeAction(
 ) {
   const action = await loadAction(transaction, values);
   validateAction(action, values);
-  await transaction
-    .update(accountIdentityActions)
-    .set({ consumedAt: values.now })
-    .where(eq(accountIdentityActions.id, action.id));
+  await markActionConsumed(transaction, action.id, values.now);
   return action;
 }
 
@@ -281,7 +289,7 @@ export async function completeIdentityLink(values: {
   now?: Date;
 }) {
   const now = values.now ?? new Date();
-  return await db.transaction(async (transaction) => {
+  const outcome = await db.transaction(async (transaction) => {
     await lockUser(transaction, values.userId);
     if (values.proof.userId !== values.userId || values.proof.sessionId !== values.sessionId) {
       throw new AccountIdentityError("IDENTITY_ACTION_SESSION_CHANGED");
@@ -333,24 +341,24 @@ export async function completeIdentityLink(values: {
         && existingAccount?.userId === values.userId
         && owned.accountRecordId === existingAccount.id
       ) {
-        return { accountRecordId: existingAccount.id, linked: false, alreadyLinked: true };
+        return { result: { accountRecordId: existingAccount.id, linked: false, alreadyLinked: true } };
       }
       throw new AccountIdentityError("IDENTITY_ACTION_REPLAYED");
     }
     if (owned && owned.userId !== values.userId) {
-      throw new AccountIdentityError("IDENTITY_ALREADY_OWNED");
+      await markActionConsumed(transaction, action.id, now);
+      return { refusal: "IDENTITY_ALREADY_OWNED" as const };
     }
     if (existingAccount && existingAccount.userId !== values.userId) {
-      throw new AccountIdentityError("IDENTITY_ALREADY_OWNED");
+      await markActionConsumed(transaction, action.id, now);
+      return { refusal: "IDENTITY_ALREADY_OWNED" as const };
     }
     if (owned && (!existingAccount || owned.accountRecordId !== existingAccount.id)) {
-      throw new AccountIdentityError("IDENTITY_ACCOUNT_NOT_FOUND");
+      await markActionConsumed(transaction, action.id, now);
+      return { refusal: "IDENTITY_ACCOUNT_NOT_FOUND" as const };
     }
 
-    await transaction
-      .update(accountIdentityActions)
-      .set({ consumedAt: now })
-      .where(eq(accountIdentityActions.id, action.id));
+    await markActionConsumed(transaction, action.id, now);
 
     let accountRecordId = existingAccount?.id;
     let linked = false;
@@ -382,8 +390,10 @@ export async function completeIdentityLink(values: {
       providerId: values.proof.identity.providerId,
       accountRecordId,
     });
-    return { accountRecordId, linked, alreadyLinked: false };
+    return { result: { accountRecordId, linked, alreadyLinked: false } };
   });
+  if ("refusal" in outcome && outcome.refusal) throw new AccountIdentityError(outcome.refusal);
+  return outcome.result;
 }
 
 async function loadUserIdentityState(
@@ -470,7 +480,7 @@ export async function unlinkAccountIdentity(values: {
   now?: Date;
 }) {
   const now = values.now ?? new Date();
-  return await db.transaction(async (transaction) => {
+  const outcome = await db.transaction(async (transaction) => {
     const state = await loadUserIdentityState(transaction, values.userId, true);
     if (!state.user) throw new AccountIdentityError("IDENTITY_ACCOUNT_NOT_FOUND");
     const target = state.accounts.find((account) => account.id === values.accountRecordId);
@@ -488,7 +498,7 @@ export async function unlinkAccountIdentity(values: {
           eq(accountIdentityAudit.accountRecordId, values.accountRecordId),
         ))
         .limit(1);
-      if (prior) return { unlinked: false, alreadyUnlinked: true };
+      if (prior) return { result: { unlinked: false, alreadyUnlinked: true } };
       await consumeAction(transaction, {
         token: values.reverificationToken,
         kind: "reverify",
@@ -496,7 +506,7 @@ export async function unlinkAccountIdentity(values: {
         sessionId: values.sessionId,
         now,
       });
-      throw new AccountIdentityError("IDENTITY_ACCOUNT_NOT_FOUND");
+      return { refusal: "IDENTITY_ACCOUNT_NOT_FOUND" as const };
     }
 
     await consumeAction(transaction, {
@@ -513,7 +523,10 @@ export async function unlinkAccountIdentity(values: {
       state.user.emailVerified,
       values.usableProviderIds,
     )) {
-      throw new AccountIdentityError("IDENTITY_LAST_USABLE_LOGIN");
+      // Refusal is a completed sensitive action attempt. Return it from the
+      // transaction so the single-use grant consumption commits; throw only
+      // after the transaction has durably closed.
+      return { refusal: "IDENTITY_LAST_USABLE_LOGIN" as const };
     }
     await transaction.delete(authAccount).where(and(
       eq(authAccount.id, target.id),
@@ -526,6 +539,8 @@ export async function unlinkAccountIdentity(values: {
       providerId: target.providerId,
       accountRecordId: target.id,
     });
-    return { unlinked: true, alreadyUnlinked: false };
+    return { result: { unlinked: true, alreadyUnlinked: false } };
   });
+  if ("refusal" in outcome && outcome.refusal) throw new AccountIdentityError(outcome.refusal);
+  return outcome.result;
 }

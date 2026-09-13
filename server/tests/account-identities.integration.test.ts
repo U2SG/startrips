@@ -190,6 +190,13 @@ describe("account identity repository", () => {
       proof,
       now: new Date(TEST_NOW.getTime() + 3_000),
     })).rejects.toMatchObject({ code: "IDENTITY_ALREADY_OWNED" });
+    await expect(completeIdentityLink({
+      userId: second.userId,
+      sessionId: second.sessionId,
+      intentToken: intent.token,
+      proof,
+      now: new Date(TEST_NOW.getTime() + 4_000),
+    })).rejects.toMatchObject({ code: "IDENTITY_ACTION_REPLAYED" });
 
     const secondProviderRows = await db.select({ id: authAccount.id })
       .from(authAccount)
@@ -294,12 +301,42 @@ describe("account identity repository", () => {
       usableProviderIds: new Set(["google"]),
       now: new Date(TEST_NOW.getTime() + 21_000),
     })).rejects.toMatchObject({ code: "IDENTITY_LAST_USABLE_LOGIN" });
+    await expect(unlinkAccountIdentity({
+      userId: fixture.userId,
+      sessionId: fixture.sessionId,
+      accountRecordId: credential.id,
+      reverificationToken: grant.token,
+      usableProviderIds: new Set(["google"]),
+      now: new Date(TEST_NOW.getTime() + 22_000),
+    })).rejects.toMatchObject({ code: "IDENTITY_ACTION_REPLAYED" });
 
     const methods = await listAccountIdentityMethods(fixture.userId, new Set(["google"]));
     expect(methods.find((method) => method.id === linked.result.accountRecordId)).toMatchObject({
       verified: false,
       usable: false,
     });
+  });
+
+  it("consumes re-verification when unlink target is missing", async () => {
+    const fixture = await seedUser("missing-unlink");
+    const grant = await reverify(fixture.userId, fixture.sessionId, 20_000);
+    const missingAccountRecordId = randomUUID();
+    await expect(unlinkAccountIdentity({
+      userId: fixture.userId,
+      sessionId: fixture.sessionId,
+      accountRecordId: missingAccountRecordId,
+      reverificationToken: grant.token,
+      usableProviderIds: new Set(),
+      now: new Date(TEST_NOW.getTime() + 21_000),
+    })).rejects.toMatchObject({ code: "IDENTITY_ACCOUNT_NOT_FOUND" });
+    await expect(unlinkAccountIdentity({
+      userId: fixture.userId,
+      sessionId: fixture.sessionId,
+      accountRecordId: missingAccountRecordId,
+      reverificationToken: grant.token,
+      usableProviderIds: new Set(),
+      now: new Date(TEST_NOW.getTime() + 22_000),
+    })).rejects.toMatchObject({ code: "IDENTITY_ACTION_REPLAYED" });
   });
 
   it("serializes concurrent unlinks so two requests cannot remove the last usable method", async () => {
