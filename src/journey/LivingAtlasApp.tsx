@@ -35,16 +35,16 @@ import { JourneyPlaybackOverlay } from "./JourneyPlaybackOverlay";
 import { resolveHomeNarrativeContext, type HomeNarrativeContext } from "./homeBasePrelude";
 import { classifyHomeBasePeriodWrite, type HomeBasePeriod } from "./homeBase";
 import {
-  HOME_BASE_CLUSTER_RADIUS_KM,
   homeBaseInferenceEvidenceSupport,
   inferHomeBaseCandidate,
   type HomeBaseDismissal,
   type HomeBaseInferenceResult,
 } from "./homeBaseInference";
-import { haversineDistanceKm } from "./mediaPlacement";
+import { JourneyApiError } from "./journeyApi";
 import {
   homeBaseConfirmationDraft,
   homeBaseInferenceEvidenceBoundaryAfterRecordedHistory,
+  homeBaseSuggestionSharesRegion,
   inferHomeBaseCandidateWithDismissals,
   resolveHomeBasePlaceLabel,
   resolveHomeBaseSuggestion,
@@ -285,13 +285,14 @@ export function homeBasePeriodMatchesConfirmationDraft(
 export async function reconcileHomeBaseConfirmationAfterFailure(
   listPeriods: (() => Promise<HomeBasePeriod[]>) | null | undefined,
   draft: HomeBaseConfirmationDraft,
-): Promise<HomeBasePeriod[] | null> {
+): Promise<{ periods: HomeBasePeriod[]; confirmed: boolean } | null> {
   if (!listPeriods) return null;
   try {
     const periods = await listPeriods();
-    return periods.some((period) => homeBasePeriodMatchesConfirmationDraft(period, draft))
-      ? periods
-      : null;
+    return {
+      periods,
+      confirmed: periods.some((period) => homeBasePeriodMatchesConfirmationDraft(period, draft)),
+    };
   } catch {
     return null;
   }
@@ -1207,6 +1208,35 @@ export function LivingAtlasApp({
     }
   }, [listHomeBasePeriods]);
 
+  const refreshHomeBaseSuggestionEvidence = useCallback(async () => {
+    const revision = ++loadRevision.current;
+    if (listHomeBasePeriods) {
+      setHomeBasePeriodsRead(false);
+    } else {
+      setHomeBasePeriods([]);
+      setHomeBasePeriodsRead(false);
+    }
+    setHomeBaseDismissals(listHomeBaseDismissals ? undefined : []);
+    try {
+      const journeyRows = await loadJourneyRowsWithOptionalHome({
+        listJourneys,
+        listHomeBasePeriods,
+        listHomeBaseDismissals,
+        isCurrent: () => revision === loadRevision.current,
+        onHomeBasePeriods: (periods) => {
+          setHomeBasePeriods(periods);
+          setHomeBasePeriodsRead(true);
+        },
+        onHomeBaseDismissals: setHomeBaseDismissals,
+      });
+      if (revision !== loadRevision.current) return;
+      setJourneys(sortJourneysChronologically(journeyRows));
+    } catch {
+      // Keep the suggestion suppressed when an authoritative refresh cannot
+      // complete; the original structured dismissal error remains visible.
+    }
+  }, [listHomeBaseDismissals, listHomeBasePeriods, listJourneys]);
+
   const confirmHomeBaseSuggestion = useCallback(async () => {
     if (!mutations || !homeBaseInference || !homeBaseSuggestion) return;
     const draft = homeBaseConfirmationDraft(homeBaseSuggestion, homeBaseInference);
@@ -1223,10 +1253,16 @@ export function LivingAtlasApp({
       await refreshHomeBasePeriods();
       showNotice(`已把${draft.label}记为常住地，之后可以随时修改。`);
     } catch (error) {
-      const reconciled = await reconcileHomeBaseConfirmationAfterFailure(listHomeBasePeriods, draft);
-      if (reconciled) {
-        setHomeBasePeriods(reconciled);
+      const reconciliation = await reconcileHomeBaseConfirmationAfterFailure(listHomeBasePeriods, draft);
+      if (reconciliation) {
+        setHomeBasePeriods(reconciliation.periods);
         setHomeBasePeriodsRead(true);
+        if (!reconciliation.confirmed) {
+          showNotice(error instanceof Error && error.message
+            ? error.message
+            : "常住地暂时无法保存，请稍后再试。");
+          return;
+        }
         showNotice(`已把${draft.label}记为常住地，之后可以随时修改。`);
         return;
       }
@@ -1249,13 +1285,10 @@ export function LivingAtlasApp({
       if (
         refreshedInference?.state !== expectedState
         || !refreshedInference.evidenceDigest
-        || !refreshedInference.metroAnchor
-        || haversineDistanceKm(
-          refreshedInference.metroAnchor.latitude,
-          refreshedInference.metroAnchor.longitude,
-          homeBaseSuggestion.metroAnchor.latitude,
-          homeBaseSuggestion.metroAnchor.longitude,
-        ) > HOME_BASE_CLUSTER_RADIUS_KM
+        || !homeBaseSuggestionSharesRegion(
+          refreshedInference.metroAnchor,
+          homeBaseSuggestion.metroAnchor,
+        )
       ) return;
       evidenceDigest = refreshedInference.evidenceDigest;
     }
@@ -1287,12 +1320,25 @@ export function LivingAtlasApp({
           // Keep the optimistic fold; the card stays down either way.
         }
       }
-    } catch {
-      showNotice("这次选择暂时没有保存成功，请稍后再试。");
+    } catch (error) {
+      if (error instanceof JourneyApiError && error.code === "INVALID_HOME_BASE_DISMISSAL") {
+        await refreshHomeBaseSuggestionEvidence();
+      }
+      showNotice(error instanceof Error && error.message
+        ? error.message
+        : "这次选择暂时没有保存成功，请稍后再试。");
     } finally {
       setHomeBaseSuggestionPending(false);
     }
-  }, [computeHomeBaseInference, homeBaseSuggestion, homeEffectiveDate, listHomeBaseDismissals, mutations, showNotice]);
+  }, [
+    computeHomeBaseInference,
+    homeBaseSuggestion,
+    homeEffectiveDate,
+    listHomeBaseDismissals,
+    mutations,
+    refreshHomeBaseSuggestionEvidence,
+    showNotice,
+  ]);
 
   const claimManualAtlasCamera = useCallback(() => {
     atlasHomeCameraFreshRef.current = false;

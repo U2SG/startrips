@@ -120,6 +120,19 @@ const HIDDEN: HomeBaseSuggestionDecision = {
   proposedPeriodStart: null,
 };
 
+export function homeBaseSuggestionSharesRegion(
+  left: HomeBaseMetroAnchor | null | undefined,
+  right: HomeBaseMetroAnchor | null | undefined,
+): boolean {
+  if (!left || !right) return false;
+  return haversineDistanceKm(
+    left.latitude,
+    left.longitude,
+    right.latitude,
+    right.longitude,
+  ) <= HOME_BASE_CLUSTER_RADIUS_KM;
+}
+
 function hidden(): HomeBaseSuggestionDecision {
   return HIDDEN;
 }

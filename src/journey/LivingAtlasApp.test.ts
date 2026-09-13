@@ -1524,7 +1524,7 @@ describe("ST-060 the Home Base suggestion card is quiet and non-modal", () => {
     const suggestionSource = readFileSync(new URL("./homeBaseSuggestion.ts", import.meta.url), "utf8");
     expect(source).toContain("homeBaseInferenceEvidenceBoundaryAfterRecordedHistory(");
     expect(source).toContain("inferHomeBaseCandidateWithDismissals({");
-    expect(source).toContain("evaluationDate: homeEffectiveDate");
+    expect(source).toContain("computeHomeBaseInference(homeEffectiveDate)");
     expect(suggestionSource).toContain("const baseline = inferHomeBaseCandidate(input)");
     expect(suggestionSource).toContain("applyHomeBaseDismissalToInferenceResult(");
     expect(suggestionSource).not.toContain("inferHomeBaseCandidate({ ...input, dismissal })");
@@ -1667,16 +1667,27 @@ describe("ST-060 ambiguous confirmation reconciliation", () => {
     expect(homeBasePeriodMatchesConfirmationDraft({ ...persisted, source: "manual" }, draft)).toBe(false);
   });
 
-  it("reconciles a lost response only when the authoritative history contains that exact period", async () => {
+  it("always adopts refreshed authoritative history and separately marks an ambiguous write as confirmed", async () => {
     await expect(reconcileHomeBaseConfirmationAfterFailure(async () => [persisted], draft))
-      .resolves.toEqual([persisted]);
+      .resolves.toEqual({ periods: [persisted], confirmed: true });
+    const conflicting = { ...persisted, id: "period-other", startedOn: "2026-01-02" };
     await expect(reconcileHomeBaseConfirmationAfterFailure(
-      async () => [{ ...persisted, startedOn: "2026-01-02" }],
+      async () => [conflicting],
       draft,
-    )).resolves.toBeNull();
+    )).resolves.toEqual({ periods: [conflicting], confirmed: false });
     await expect(reconcileHomeBaseConfirmationAfterFailure(async () => {
       throw new Error("offline");
     }, draft)).resolves.toBeNull();
+  });
+
+  it("adopts a different authoritative period before reporting the confirmation conflict", () => {
+    const source = readFileSync(new URL("./LivingAtlasApp.tsx", import.meta.url), "utf8");
+    const start = source.indexOf("const confirmHomeBaseSuggestion");
+    const end = source.indexOf("const dismissHomeBaseSuggestion", start);
+    const handler = source.slice(start, end);
+    expect(handler).toContain("setHomeBasePeriods(reconciliation.periods)");
+    expect(handler.indexOf("setHomeBasePeriods(reconciliation.periods)"))
+      .toBeLessThan(handler.indexOf("if (!reconciliation.confirmed)"));
   });
 });
 
@@ -1694,10 +1705,12 @@ describe("ST-060 dismissal evaluation day", () => {
     expect(handler).toContain("setHomeEffectiveDate(actionDate)");
     expect(handler).toContain("const refreshedInference = computeHomeBaseInference(actionDate)");
     expect(handler).toContain("evidenceDigest = refreshedInference.evidenceDigest");
-    expect(handler).toContain("HOME_BASE_CLUSTER_RADIUS_KM");
+    expect(handler).toContain("homeBaseSuggestionSharesRegion(");
     expect(handler.indexOf("setHomeEffectiveDate(actionDate)"))
       .toBeLessThan(handler.indexOf("mutations.recordHomeBaseDismissal"));
     expect(handler).toContain("dismissedOn: actionDate");
+    expect(handler).toContain("error instanceof JourneyApiError && error.code === \"INVALID_HOME_BASE_DISMISSAL\"");
+    expect(handler).toContain("await refreshHomeBaseSuggestionEvidence()");
   });
 });
 
