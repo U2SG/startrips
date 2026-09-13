@@ -18,9 +18,11 @@ import {
   capturePlaybackEntryForContext,
   globeFocusState,
   homeBaseInferenceInputsReady,
+  homeBasePeriodMatchesConfirmationDraft,
   homeBaseSuggestionCanBeConfirmed,
   loadJourneyRowsWithOptionalHome,
   mergeConfirmedHomeBasePeriod,
+  reconcileHomeBaseConfirmationAfterFailure,
   nextPlaybackCameraCommand,
   nextPlaybackReleaseFocusRevision,
   nextInitialHomeCameraFocusRevision,
@@ -1644,6 +1646,37 @@ describe("ST-060 a confirmed period closes the one it replaces locally", () => {
     expect(merged.find((period) => period.id === "period-closed")?.endedOn).toBe("2023-06-01");
     expect(merged.filter((period) => period.id === "period-new")).toHaveLength(1);
     expect(merged.find((period) => period.id === "period-new")?.label).toBe("南京");
+  });
+});
+
+describe("ST-060 ambiguous confirmation reconciliation", () => {
+  const draft = {
+    label: "Shenzhen",
+    latitude: 22.5431,
+    longitude: 114.0579,
+    startedOn: "2026-01-01",
+    endedOn: null,
+    source: "suggested-confirmed" as const,
+  };
+  const persisted: HomeBasePeriod = { id: "period-confirmed", ...draft };
+
+  it("recognizes only the exact period the ambiguous confirmation tried to create", () => {
+    expect(homeBasePeriodMatchesConfirmationDraft(persisted, draft)).toBe(true);
+    expect(homeBasePeriodMatchesConfirmationDraft({ ...persisted, label: "Elsewhere" }, draft)).toBe(false);
+    expect(homeBasePeriodMatchesConfirmationDraft({ ...persisted, startedOn: "2026-01-02" }, draft)).toBe(false);
+    expect(homeBasePeriodMatchesConfirmationDraft({ ...persisted, source: "manual" }, draft)).toBe(false);
+  });
+
+  it("reconciles a lost response only when the authoritative history contains that exact period", async () => {
+    await expect(reconcileHomeBaseConfirmationAfterFailure(async () => [persisted], draft))
+      .resolves.toEqual([persisted]);
+    await expect(reconcileHomeBaseConfirmationAfterFailure(
+      async () => [{ ...persisted, startedOn: "2026-01-02" }],
+      draft,
+    )).resolves.toBeNull();
+    await expect(reconcileHomeBaseConfirmationAfterFailure(async () => {
+      throw new Error("offline");
+    }, draft)).resolves.toBeNull();
   });
 });
 

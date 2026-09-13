@@ -266,6 +266,35 @@ export function mergeConfirmedHomeBasePeriod(
   return [...reconciled, confirmed];
 }
 
+type HomeBaseConfirmationDraft = NonNullable<ReturnType<typeof homeBaseConfirmationDraft>>;
+
+export function homeBasePeriodMatchesConfirmationDraft(
+  period: HomeBasePeriod,
+  draft: HomeBaseConfirmationDraft,
+): boolean {
+  return period.label === draft.label
+    && period.latitude === draft.latitude
+    && period.longitude === draft.longitude
+    && period.startedOn === draft.startedOn
+    && period.endedOn === draft.endedOn
+    && period.source === draft.source;
+}
+
+export async function reconcileHomeBaseConfirmationAfterFailure(
+  listPeriods: (() => Promise<HomeBasePeriod[]>) | null | undefined,
+  draft: HomeBaseConfirmationDraft,
+): Promise<HomeBasePeriod[] | null> {
+  if (!listPeriods) return null;
+  try {
+    const periods = await listPeriods();
+    return periods.some((period) => homeBasePeriodMatchesConfirmationDraft(period, draft))
+      ? periods
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 export function homeBaseSuggestionCanBeConfirmed(input: {
   decision: ReturnType<typeof resolveHomeBaseSuggestion>;
   result: HomeBaseInferenceResult;
@@ -1165,13 +1194,20 @@ export function LivingAtlasApp({
       await refreshHomeBasePeriods();
       showNotice(`已把${draft.label}记为常住地，之后可以随时修改。`);
     } catch (error) {
+      const reconciled = await reconcileHomeBaseConfirmationAfterFailure(listHomeBasePeriods, draft);
+      if (reconciled) {
+        setHomeBasePeriods(reconciled);
+        setHomeBasePeriodsRead(true);
+        showNotice(`已把${draft.label}记为常住地，之后可以随时修改。`);
+        return;
+      }
       showNotice(error instanceof Error && error.message
         ? error.message
         : "常住地暂时无法保存，请稍后再试。");
     } finally {
       setHomeBaseSuggestionPending(false);
     }
-  }, [homeBaseInference, homeBaseSuggestion, mutations, refreshHomeBasePeriods, showNotice]);
+  }, [homeBaseInference, homeBaseSuggestion, listHomeBasePeriods, mutations, refreshHomeBasePeriods, showNotice]);
 
   const dismissHomeBaseSuggestion = useCallback(async (kind: HomeBaseDismissal["kind"]) => {
     if (!mutations || !homeBaseSuggestion?.evidenceDigest) return;
