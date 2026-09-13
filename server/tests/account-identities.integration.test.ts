@@ -171,7 +171,12 @@ describe("account identity repository", () => {
       userId: second.userId,
       providerId: "google",
       accountId: providerSubject,
-    })).rejects.toMatchObject({ code: "23505" });
+    })).rejects.toMatchObject({
+      cause: {
+        code: "23505",
+        constraint: "account_provider_subject_unique",
+      },
+    });
   });
 
   it("fails closed when provider+subject is already owned by another stable user", async () => {
