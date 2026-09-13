@@ -73,7 +73,7 @@ function record(name, data, condition) {
   if (!condition) failed = true;
 }
 
-async function installOwnerApi(page) {
+async function installOwnerApi(page, journeyRows = journeys) {
   const session = {
     session: {
       id: "qa-home-session", userId: "qa-user", token: "qa-token",
@@ -103,7 +103,7 @@ async function installOwnerApi(page) {
     body: JSON.stringify({ atlas: { id: "qa-atlas", title: "QA Atlas", dedication: "同行记忆" }, role: "owner" }),
   }));
   await page.route("**/api/journeys", (route) => route.fulfill({
-    status: 200, contentType: "application/json", body: JSON.stringify({ journeys }),
+    status: 200, contentType: "application/json", body: JSON.stringify({ journeys: journeyRows }),
   }));
   await page.route("**/api/home-bases/dismissal", (route) => route.fulfill({
     status: 200, contentType: "application/json", body: JSON.stringify({ dismissals: [] }),
@@ -115,11 +115,11 @@ async function installOwnerApi(page) {
   }));
 }
 
-async function openOwner(viewport) {
+async function openOwner(viewport, { journeyRows = journeys } = {}) {
   const page = await browser.newPage({ viewport });
   const pageErrors = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
-  await installOwnerApi(page);
+  await installOwnerApi(page, journeyRows);
   // This contract starts from the EXISTING projected Home anchor, so the lane
   // must mount the real LivingAtlasGlobe rather than LivingAtlasQaGlobe (which
   // intentionally has no geographic Home projection surface).
@@ -279,7 +279,9 @@ try {
   await page.close();
 
   // Compact mobile uses the same geographic marker; no Home tab/tool is added.
-  const mobile = await openOwner({ width: 390, height: 844 });
+  // Keep the compact context fixture independent of desktop Journey focus/route
+  // ownership already proven above; this fresh Atlas contains Home history only.
+  const mobile = await openOwner({ width: 390, height: 844 }, { journeyRows: [] });
   const mobilePage = mobile.page;
   const mobileMarker = await currentHomeMarker(mobilePage);
   await mobileMarker.click();
