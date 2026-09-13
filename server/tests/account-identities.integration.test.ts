@@ -179,6 +179,76 @@ describe("account identity repository", () => {
     });
   });
 
+  it("reconciles a native provider insert that races explicit link completion", async () => {
+    const linkingUser = await seedUser("native-race-linking");
+    const nativeUser = await seedUser("native-race-owner");
+    const identity = {
+      providerId: "google",
+      subject: `race-subject-${randomUUID()}`,
+      email: linkingUser.email,
+      emailVerified: true,
+    } satisfies VerifiedProviderIdentity;
+    const reverified = await reverify(linkingUser.userId, linkingUser.sessionId);
+    const intent = await createIdentityLinkIntent({
+      userId: linkingUser.userId,
+      sessionId: linkingUser.sessionId,
+      providerId: identity.providerId,
+      reverificationToken: reverified.token,
+      now: new Date(TEST_NOW.getTime() + 1_000),
+    });
+    const proofToken = issueVerifiedProviderIdentityProof(PROOF_SECRET, {
+      actionId: intent.actionId,
+      userId: linkingUser.userId,
+      sessionId: linkingUser.sessionId,
+      identity,
+    }, TEST_NOW.getTime() + 2_000);
+    const proof = verifyProviderIdentityProof(PROOF_SECRET, proofToken, TEST_NOW.getTime() + 3_000)!;
+
+    const native = await pool.connect();
+    const nativeAccountId = `st067-native-race-${randomUUID()}`;
+    try {
+      await native.query("begin");
+      await native.query(
+        `insert into account (id, account_id, provider_id, user_id, updated_at)
+         values ($1, $2, $3, $4, now())`,
+        [nativeAccountId, identity.subject, identity.providerId, nativeUser.userId],
+      );
+
+      const completion = completeIdentityLink({
+        userId: linkingUser.userId,
+        sessionId: linkingUser.sessionId,
+        intentToken: intent.token,
+        proof,
+        now: new Date(TEST_NOW.getTime() + 3_000),
+      });
+      // The explicit linker has read the old snapshot and then blocks on the
+      // database unique index while the native callback still owns its insert.
+      await new Promise((resolve) => setTimeout(resolve, 75));
+      await native.query("commit");
+
+      await expect(completion).rejects.toMatchObject({ code: "IDENTITY_ALREADY_OWNED" });
+      await expect(completeIdentityLink({
+        userId: linkingUser.userId,
+        sessionId: linkingUser.sessionId,
+        intentToken: intent.token,
+        proof,
+        now: new Date(TEST_NOW.getTime() + 4_000),
+      })).rejects.toMatchObject({ code: "IDENTITY_ACTION_REPLAYED" });
+
+      const rows = await db.select({ id: authAccount.id, userId: authAccount.userId })
+        .from(authAccount)
+        .where(eq(authAccount.accountId, identity.subject));
+      expect(rows).toEqual([{ id: nativeAccountId, userId: nativeUser.userId }]);
+      const ownerships = await db.select({ id: accountIdentityOwnerships.id })
+        .from(accountIdentityOwnerships)
+        .where(eq(accountIdentityOwnerships.providerSubject, identity.subject));
+      expect(ownerships).toEqual([]);
+    } finally {
+      try { await native.query("rollback"); } catch {}
+      native.release();
+    }
+  });
+
   it("fails closed when provider+subject is already owned by another stable user", async () => {
     const first = await seedUser("collision-first");
     const second = await seedUser("collision-second");

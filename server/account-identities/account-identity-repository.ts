@@ -365,14 +365,38 @@ export async function completeIdentityLink(values: {
     let accountRecordId = existingAccount?.id;
     let linked = false;
     if (!accountRecordId) {
-      accountRecordId = randomUUID();
-      await transaction.insert(authAccount).values({
-        id: accountRecordId,
-        userId: values.userId,
-        providerId: values.proof.identity.providerId,
-        accountId: values.proof.identity.subject,
-      });
-      linked = true;
+      const proposedAccountRecordId = randomUUID();
+      const [inserted] = await transaction
+        .insert(authAccount)
+        .values({
+          id: proposedAccountRecordId,
+          userId: values.userId,
+          providerId: values.proof.identity.providerId,
+          accountId: values.proof.identity.subject,
+        })
+        // Native Better Auth OAuth callbacks do not take Startrips' advisory
+        // lock. The durable provider+subject unique index is therefore the final
+        // race arbiter: wait for the competing insert, do not abort this
+        // transaction on its conflict, then re-read the committed owner below.
+        .onConflictDoNothing()
+        .returning({ id: authAccount.id });
+      if (inserted) {
+        accountRecordId = inserted.id;
+        linked = true;
+      } else {
+        const [racedAccount] = await transaction
+          .select({ id: authAccount.id, userId: authAccount.userId })
+          .from(authAccount)
+          .where(and(
+            eq(authAccount.providerId, values.proof.identity.providerId),
+            eq(authAccount.accountId, values.proof.identity.subject),
+          ))
+          .limit(1);
+        if (!racedAccount || racedAccount.userId !== values.userId) {
+          return { refusal: "IDENTITY_ALREADY_OWNED" as const };
+        }
+        accountRecordId = racedAccount.id;
+      }
     }
     if (!owned) {
       await transaction.insert(accountIdentityOwnerships).values({
