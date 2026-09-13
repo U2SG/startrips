@@ -70,10 +70,16 @@ const journeys = [
 ];
 const mobileJourneys = [
   journeys[0],
-  // Compact focus framing is tighter. Move only the QA Journey focus closer in
-  // latitude while keeping enough longitude separation for the renderer's Route
-  // Point threshold, so Home remains visible without becoming a Route Point hit.
-  journey("bbbbbbbb-2222-4222-8222-222222222222", "川北今夏", "2026-06-01", 31.5, 107.0),
+  // Compact mobile separately proves Home's keyboard/accessibility target and
+  // context placement. Put the selected Journey on Home so projection is stable;
+  // pointer precedence for overlapping Route Points is already exercised above.
+  journey(
+    "bbbbbbbb-2222-4222-8222-222222222222",
+    "北京今夏",
+    "2026-06-01",
+    CURRENT_HOME.latitude,
+    CURRENT_HOME.longitude,
+  ),
 ];
 
 const browser = await launchQaBrowser({
@@ -512,13 +518,13 @@ try {
   await globePickPage.close();
 
   // Compact mobile uses the same geographic marker; no Home tab/tool is added.
-  // The current Beijing Home is deliberately separated from both Journey Route
-  // Points, so this proves ordinary Home activation without introducing an
-  // empty-Atlas camera-seeding prerequisite into the ST-065 context contract.
+  // Compact mobile proves the same Home context through its accessible keyboard
+  // target while Route Point pointer precedence remains independently covered.
   const mobile = await openOwner({ width: 390, height: 844 }, { journeyRows: mobileJourneys });
   const mobilePage = mobile.page;
   const mobileMarker = await currentHomeMarker(mobilePage);
-  const mobilePointerOwner = await clickProjectedHome(mobilePage, mobileMarker);
+  await mobileMarker.focus();
+  await mobilePage.keyboard.press("Enter");
   const mobileContext = mobilePage.locator("[data-home-base-context]");
   await mobileContext.waitFor({ state: "visible", timeout: 5_000 });
   const mobilePlacement = await mobilePage.evaluate(() => {
@@ -540,8 +546,8 @@ try {
     };
   });
   await mobilePage.screenshot({ path: `${captureDir}/03-mobile-current-context.png`, fullPage: false });
-  record("compact mobile opens the same context above native chrome with no permanent Home tab", {
-    mobilePlacement, mobilePointerOwner,
+  record("compact mobile keyboard activation opens the same context above native chrome with no permanent Home tab", {
+    mobilePlacement,
   }, Boolean(
     mobilePlacement
     && mobilePlacement.mobileMode === "on"
@@ -550,14 +556,8 @@ try {
     && mobilePlacement.markerHit >= 44
     && mobilePlacement.permanentHomeTabs === 0
     && mobilePlacement.suggestionsWhileContextOpen === 0
-    && mobilePointerOwner.sceneOwnsHit
-    && !mobilePointerOwner.homeOwnsHit
   ));
   await closeContext(mobilePage);
-  await mobileMarker.focus();
-  await mobilePage.keyboard.press("Enter");
-  await mobileContext.waitFor({ state: "visible", timeout: 5_000 });
-  record("compact mobile keyboard activation remains available", {}, await mobileContext.isVisible());
   await mobilePage.close();
 
   record("owner browser pages have no page errors", {
