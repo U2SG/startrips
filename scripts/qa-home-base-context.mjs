@@ -58,11 +58,11 @@ function journey(id, title, startedOn, latitude, longitude) {
 
 const journeys = [
   journey("aaaaaaaa-1111-4111-8111-111111111111", "成都旧日", "2023-06-01", 30.5728, 104.0668),
-  // Keep today's active Journey south of Beijing on a nearby meridian.
-  // Nanjing stays beyond the renderer's 0.18-unit Route Point raycast threshold,
-  // while the tall compact viewport still contains the current Home projection.
-  // Beijing is also a rank-0 city, so the city/Home overlap fixture is deterministic.
-  journey("bbbbbbbb-2222-4222-8222-222222222222", "南京今夏", "2026-06-01", 32.06167, 118.77778),
+  // Keep today's active Journey well south of Beijing on almost the same meridian.
+  // The 15-degree separation stays comfortably beyond the renderer's 0.18-unit
+  // Route Point raycast threshold while the tall compact viewport still contains
+  // the current Home projection. Beijing is rank-0, so city/Home overlap is stable.
+  journey("bbbbbbbb-2222-4222-8222-222222222222", "赣南今夏", "2026-06-01", 25.0, 116.4),
 ];
 
 const browser = await launchQaBrowser({
