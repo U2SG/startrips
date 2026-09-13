@@ -581,6 +581,32 @@ describe("GET and POST /api/home-bases/dismissal", () => {
     expect(row.total).toBe(1);
   });
 
+  it("upgrades an exact soft retry to an explicit rejection after a lost response", async () => {
+    const dismissedOn = new Date().toISOString().slice(0, 10);
+    const first = await postDismissal(neighbour.cookie, {
+      kind: "soft",
+      evidenceDigest: DIGEST,
+      dismissedOn,
+    });
+    expect(first.status).toBe(201);
+
+    const stronger = await postDismissal(neighbour.cookie, {
+      kind: "rejected",
+      evidenceDigest: DIGEST,
+      dismissedOn,
+    });
+    expect(stronger.status).toBe(201);
+    expect(await stronger.json()).toMatchObject({
+      dismissal: { kind: "rejected", digest: DIGEST },
+    });
+
+    const rows = await db
+      .select({ kind: homeBaseDismissals.kind, digest: homeBaseDismissals.evidenceDigest })
+      .from(homeBaseDismissals)
+      .where(eq(homeBaseDismissals.atlasId, neighbour.atlasId));
+    expect(rows).toEqual([{ kind: "rejected", digest: DIGEST }]);
+  });
+
   it("refuses a canonical digest that was not inferred from this Atlas", async () => {
     const forged = validDismissalDigest();
     const response = await postDismissal(neighbour.cookie, {
