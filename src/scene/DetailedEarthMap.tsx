@@ -1,4 +1,4 @@
-import { useEffect, useRef, type MutableRefObject } from "react";
+import { useEffect, useLayoutEffect, useRef, type MutableRefObject } from "react";
 import {
   AttributionControl,
   Map as MapLibreMap,
@@ -30,7 +30,13 @@ import {
   shouldReturnToParticleEarth,
   useGlobeProjection,
 } from "./detailedEarthModel";
-import type { DetailReadiness, EarthDiveOwner, EarthDiveStage } from "./earthDive";
+import {
+  resolveDetailedEarthRevealSyncAction,
+  type DetailReadiness,
+  type DetailedEarthSurfaceGeometry,
+  type EarthDiveOwner,
+  type EarthDiveStage,
+} from "./earthDive";
 import type { SemanticZoomSnapshot } from "./semanticZoom";
 
 // #252 section 2: the handoff has to prove "the same place did not move", so
@@ -149,6 +155,7 @@ export default function DetailedEarthMap({
   // through the same instance can ask again.
   const overviewRequestedRef = useRef(false);
   const calibrateRef = useRef<(() => void) | null>(null);
+  const revealSyncRef = useRef<((reason: "load" | "stage" | "resize-observer") => void) | null>(null);
   const languageRef = useRef(language);
   const focusPointRef = useRef(focusPoint);
   const focusRouteRef = useRef(focusRoute);
@@ -209,6 +216,14 @@ export default function DetailedEarthMap({
       fadeDuration: 650,
     });
     let initialLoadSettled = false;
+    let removed = false;
+    let revealRevision = 0;
+    let fullySettled = false;
+    let lastHostGeometry: Pick<DetailedEarthSurfaceGeometry, "hostWidth" | "hostHeight"> | null = null;
+    let resizeObserver: ResizeObserver | null = null;
+    let renderCount = 0;
+    let idleCount = 0;
+    let resizeCount = 0;
     mapRef.current = map;
     // Configure gesture rates up front, but do not enable handlers while the
     // particle surface owns the Dive. Primary mouse / one-finger touch will
@@ -320,6 +335,115 @@ export default function DetailedEarthMap({
       publishAnchorFrame(frameOverride);
     };
 
+    const publishSurfaceGeometry = (): DetailedEarthSurfaceGeometry => {
+      const hostRect = host.getBoundingClientRect();
+      const canvasRect = canvas.getBoundingClientRect();
+      const geometry = {
+        hostWidth: hostRect.width,
+        hostHeight: hostRect.height,
+        canvasCssWidth: canvasRect.width,
+        canvasCssHeight: canvasRect.height,
+        drawingBufferWidth: canvas.width,
+        drawingBufferHeight: canvas.height,
+        devicePixelRatio: window.devicePixelRatio || 1,
+      };
+      host.dataset.mapHostRect = [hostRect.left, hostRect.top, hostRect.width, hostRect.height]
+        .map((value) => value.toFixed(2)).join(",");
+      host.dataset.mapCanvasCss = `${canvasRect.width.toFixed(2)}x${canvasRect.height.toFixed(2)}`;
+      host.dataset.mapCanvasBuffer = `${canvas.width}x${canvas.height}`;
+      return geometry;
+    };
+
+    const publishPaintQuadrants = (geometry: DetailedEarthSurfaceGeometry) => {
+      const points = [
+        [geometry.hostWidth * 0.25, geometry.hostHeight * 0.25],
+        [geometry.hostWidth * 0.75, geometry.hostHeight * 0.25],
+        [geometry.hostWidth * 0.25, geometry.hostHeight * 0.75],
+        [geometry.hostWidth * 0.75, geometry.hostHeight * 0.75],
+      ] as const;
+      try {
+        host.dataset.mapPaintQuadrants = points
+          .map((point) => map.queryRenderedFeatures([point[0], point[1]]).length)
+          .join(",");
+      } catch {
+        // Paint sampling is diagnostic evidence, never a second readiness
+        // authority. A style without queryable layers may legitimately report
+        // no feature counts while the render event still proves frame commit.
+        host.dataset.mapPaintQuadrants = "unavailable";
+      }
+    };
+
+    const cameraSignature = () => {
+      const center = map.getCenter();
+      return [center.lng, center.lat, map.getZoom(), map.getBearing(), map.getPitch()]
+        .map((value) => value.toFixed(6)).join(",");
+    };
+
+    const syncRevealSurface = (reason: "load" | "stage" | "resize-observer") => {
+      if (removed || !initialLoadSettled) return;
+      const stage = diveStageRef.current;
+      const geometry = publishSurfaceGeometry();
+      const action = resolveDetailedEarthRevealSyncAction(geometry, lastHostGeometry);
+      lastHostGeometry = { hostWidth: geometry.hostWidth, hostHeight: geometry.hostHeight };
+      const revision = ++revealRevision;
+      host.dataset.mapRevealRevision = String(revision);
+      host.dataset.mapRevealReason = reason;
+      host.dataset.mapRevealSync = action;
+      host.dataset.mapRevealCameraBefore = cameraSignature();
+      delete host.dataset.mapRevealStage;
+      delete host.dataset.mapPostSyncRenderRevision;
+
+      // A load/style event only proves resources and calibration are available.
+      // The reveal gate is the NEXT MapLibre render after current geometry has
+      // been synchronized. Correct geometry still needs triggerRepaint because
+      // #355 reproduced with a full-size canvas that had not visibly painted.
+      map.once("render", () => {
+        if (removed || revision !== revealRevision) return;
+        const committedGeometry = publishSurfaceGeometry();
+        publishPaintQuadrants(committedGeometry);
+        host.dataset.mapPostSyncRenderRevision = String(revision);
+        host.dataset.mapRevealStage = stage;
+        host.dataset.mapRevealCameraAfter = cameraSignature();
+        publishAnchorFrame();
+        publishReadiness(fullySettled ? "fully-settled" : "visual-ready");
+      });
+
+      if (action === "resize") {
+        host.dataset.mapProgrammaticResizeRevision = String(revision);
+        map.resize();
+      }
+      // Resize normally schedules a frame, but the reveal invariant is "a
+      // current post-sync render happened", not "this MapLibre version happens
+      // to repaint after resize". triggerRepaint is the supported invalidation
+      // for both branches and does not alter camera or input ownership.
+      map.triggerRepaint();
+    };
+    revealSyncRef.current = syncRevealSurface;
+
+    map.on("render", () => {
+      renderCount += 1;
+      host.dataset.mapRenderCount = String(renderCount);
+    });
+    map.on("resize", () => {
+      resizeCount += 1;
+      host.dataset.mapResizeCount = String(resizeCount);
+    });
+    map.on("idle", () => {
+      idleCount += 1;
+      fullySettled = true;
+      host.dataset.mapIdleCount = String(idleCount);
+      if (host.dataset.mapPostSyncRenderRevision === host.dataset.mapRevealRevision) {
+        publishReadiness("fully-settled");
+      }
+    });
+
+    if (typeof ResizeObserver !== "undefined") {
+      resizeObserver = new ResizeObserver(() => {
+        if (initialLoadSettled) syncRevealSurface("resize-observer");
+      });
+      resizeObserver.observe(host);
+    }
+
     map.on("load", () => {
       // Raster fallback remains Mercator; vector styles use the globe so a
       // polar focus is not trapped by the flat-map viewport.
@@ -328,15 +452,11 @@ export default function DetailedEarthMap({
       // No second focus flight at handoff: the mount frame already IS the focus.
       initialLoadSettled = true;
       host.dataset.mapReady = "true";
-      // The style is parsed and the handoff frame can be drawn. This is the
-      // blend gate, and it is an event from the renderer rather than a timer.
-      // Calibrate BEFORE reporting the blend gate: the surface the Dive is
-      // allowed to reveal is a surface already standing where the particle
-      // Earth stands.
+      host.dataset.mapLoadCount = String(Number(host.dataset.mapLoadCount ?? "0") + 1);
+      // Calibrate first, then require a post-sync MapLibre render for the
+      // current real host geometry before this renderer can become visual-ready.
       calibrateToParticle();
-      publishReadiness("visual-ready");
-      publishAnchorFrame();
-      map.once("idle", () => publishReadiness("fully-settled"));
+      syncRevealSurface("load");
     });
 
     calibrateRef.current = () => calibrateToParticle();
@@ -367,12 +487,24 @@ export default function DetailedEarthMap({
     });
 
     return () => {
+      removed = true;
+      revealRevision += 1;
+      resizeObserver?.disconnect();
       mapRef.current = null;
       calibrateRef.current = null;
+      revealSyncRef.current = null;
       if (calibrationHandleRef) calibrationHandleRef.current = null;
       map.remove();
     };
   }, []);
+
+  useLayoutEffect(() => {
+    // The prewarmed map may have correct dimensions and still have no committed
+    // frame for the now-visible surface. Synchronize on the reveal edge itself;
+    // the parent keeps the blend hidden until this stage's post-sync render is
+    // published through data-map-reveal-stage.
+    if (diveStage === "blending") revealSyncRef.current?.("stage");
+  }, [diveStage]);
 
   useEffect(() => {
     const map = mapRef.current;

@@ -445,6 +445,21 @@ export function LivingAtlasGlobe({
   ) => {
     const layer = detailLayerRef.current;
     if (!layer) return;
+    const mapHost = layer.querySelector<HTMLElement>(".detailed-earth-map");
+    if (stage === "blending" && mapHost?.dataset.mapRevealStage !== "blending") {
+      // #355: style load and even correct canvas dimensions do not prove that
+      // the hidden/prewarmed MapLibre surface committed a frame for its current
+      // visible geometry. Hold the existing reveal boundary until the map says
+      // the current blending revision rendered after geometry sync/repaint.
+      layer.dataset.earthDiveSpatialReveal = "holding";
+      layer.dataset.earthDiveRevealSync = mapHost?.dataset.mapRevealSync ?? "pending";
+      delete layer.dataset.earthDiveAlignment;
+      delete layer.dataset.earthDiveAnchorDelta;
+      delete layer.dataset.earthDiveScaleError;
+      layer.style.removeProperty("--earth-dive-reveal-progress");
+      return;
+    }
+    delete layer.dataset.earthDiveRevealSync;
     if (reduceMotionRef.current || stage !== "blending") {
       layer.dataset.earthDiveSpatialReveal = "off";
       delete layer.dataset.earthDiveAlignment;

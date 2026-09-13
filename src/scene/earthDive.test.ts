@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   canBlendDetail,
   earthDiveBlendMs,
+  resolveDetailedEarthRevealSyncAction,
   resolveEarthDive,
   EARTH_DIVE_BLEND_ENTER_PROGRESS,
   EARTH_DIVE_BLEND_MS,
@@ -334,6 +335,37 @@ describe("earth dive ownership", () => {
       { level: "macro", readiness: "mounted" },
     ], "prewarm"))).toEqual(["prewarm", "particle"]);
   });
+  describe("detailed Earth reveal synchronization", () => {
+    const geometry = {
+      hostWidth: 1920,
+      hostHeight: 1080,
+      canvasCssWidth: 1920,
+      canvasCssHeight: 1080,
+      drawingBufferWidth: 3840,
+      drawingBufferHeight: 2160,
+      devicePixelRatio: 2,
+    };
+
+    it("repaints matching geometry because correct canvas size is not visible-frame readiness", () => {
+      expect(resolveDetailedEarthRevealSyncAction(geometry, null)).toBe("repaint");
+      expect(resolveDetailedEarthRevealSyncAction(geometry, {
+        hostWidth: 1920,
+        hostHeight: 1080,
+      })).toBe("repaint");
+    });
+
+    it("resizes only for a real host, CSS canvas, or drawing-buffer geometry mismatch", () => {
+      expect(resolveDetailedEarthRevealSyncAction({ ...geometry, hostHeight: 1081 }, {
+        hostWidth: 1920,
+        hostHeight: 1080,
+      })).toBe("resize");
+      expect(resolveDetailedEarthRevealSyncAction({ ...geometry, canvasCssWidth: 1919 }, null))
+        .toBe("resize");
+      expect(resolveDetailedEarthRevealSyncAction({ ...geometry, drawingBufferHeight: 2100 }, null))
+        .toBe("resize");
+    });
+  });
+
   // #253: globe focus mode promises a viewport with exactly ONE piece of
   // persistent chrome. The detail renderer brings MapLibre's own bottom-right
   // navigation and bottom-left attribution controls, which this app does not

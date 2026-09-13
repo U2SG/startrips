@@ -49,11 +49,31 @@ const FINE_WHEEL_DELTA = -10;
 const RETREAT_WHEEL_DELTA = 240;
 const VIEWPORT = { width: 1440, height: 1024 };
 
-const EMPTY_STYLE = {
+const QA_PAINT_STYLE = {
   version: 8,
-  name: "QA empty detailed-earth style",
-  sources: {},
-  layers: [],
+  name: "QA painted detailed-earth style",
+  sources: {
+    "qa-paint": {
+      type: "geojson",
+      data: {
+        type: "FeatureCollection",
+        features: [{
+          type: "Feature",
+          properties: { qa: "paint-surface" },
+          geometry: {
+            type: "Polygon",
+            coordinates: [[[-179, -80], [179, -80], [179, 80], [-179, 80], [-179, -80]]],
+          },
+        }],
+      },
+    },
+  },
+  layers: [{
+    id: "qa-paint-surface",
+    type: "fill",
+    source: "qa-paint",
+    paint: { "fill-color": "#173d43", "fill-opacity": 1 },
+  }],
 };
 const MAP_STYLE_PATTERN = /\/api\/mapstyle\?path=styles(?:%2F|\/)fiord(?:$|&)/i;
 
@@ -160,6 +180,21 @@ async function readDive(page) {
       interactive: host?.getAttribute("data-interactive") ?? null,
       readiness: map?.getAttribute("data-map-readiness") ?? null,
       mapError: map?.getAttribute("data-map-error") ?? null,
+      mapLoadCount: Number(map?.getAttribute("data-map-load-count") ?? 0),
+      mapRenderCount: Number(map?.getAttribute("data-map-render-count") ?? 0),
+      mapIdleCount: Number(map?.getAttribute("data-map-idle-count") ?? 0),
+      mapResizeCount: Number(map?.getAttribute("data-map-resize-count") ?? 0),
+      revealRevision: Number(map?.getAttribute("data-map-reveal-revision") ?? 0),
+      postSyncRenderRevision: Number(map?.getAttribute("data-map-post-sync-render-revision") ?? 0),
+      revealStage: map?.getAttribute("data-map-reveal-stage") ?? null,
+      revealReason: map?.getAttribute("data-map-reveal-reason") ?? null,
+      revealSync: map?.getAttribute("data-map-reveal-sync") ?? null,
+      hostRect: map?.getAttribute("data-map-host-rect") ?? null,
+      canvasCss: map?.getAttribute("data-map-canvas-css") ?? null,
+      canvasBuffer: map?.getAttribute("data-map-canvas-buffer") ?? null,
+      paintQuadrants: map?.getAttribute("data-map-paint-quadrants") ?? null,
+      revealCameraBefore: map?.getAttribute("data-map-reveal-camera-before") ?? null,
+      revealCameraAfter: map?.getAttribute("data-map-reveal-camera-after") ?? null,
       particleZoom: window.__particleEarthDebug?.().zoom ?? null,
       particleRotationX: window.__particleEarthDebug?.().rotationX ?? null,
       particleRotationY: window.__particleEarthDebug?.().rotationY ?? null,
@@ -423,7 +458,7 @@ async function openDivePage(context, { blockStyle, focusShape = "route-point", m
       : route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify(EMPTY_STYLE),
+        body: JSON.stringify(QA_PAINT_STYLE),
       })
   ));
   await page.goto(qaUrl(focusShape, motion), { waitUntil: "domcontentloaded" });
@@ -485,6 +520,7 @@ try {
   const forwardWheelEvents = await wheelEvents(forward.page);
   const detailOwnedWheelCount = forwardWheelEvents.filter((event) => event.owner === "detail" && event.stage === "detail").length;
   const detailReveal = await readSpatialReveal(forward.page);
+  const firstReveal = await readDive(forward.page);
 
   const forwardStages = await stages(forward.page);
 
@@ -527,6 +563,29 @@ try {
   });
 
   const stageLadder = await stages(forward.page);
+
+  // #355 lifecycle regression family: the first map instance was torn down on
+  // reverse. Dive again on the same page and require a fresh single-load map to
+  // reach the same post-sync reveal proof, with no stale callback from instance 1.
+  await forward.page.evaluate(() => window.__qaEarthDiveReset());
+  const reentryPoint = await gesturePoint(forward.page, point);
+  await wheelUntil(
+    forward.page, reentryPoint, APPROACH_WHEEL_DELTA,
+    (state) => state.semanticZoom === "local",
+    "the second dive never returned to local",
+  );
+  await wheelUntil(
+    forward.page, reentryPoint, FINE_WHEEL_DELTA,
+    (state) => state.stage === "blending",
+    "the second dive never reached blending",
+  );
+  await wheelUntilDetailWithStableRetry(
+    forward.page, reentryPoint, FINE_WHEEL_DELTA,
+    "the second dive never committed",
+  );
+  const reentryReveal = await readDive(forward.page);
+  const reentryStages = await stages(forward.page);
+
   // Hard grade the overlap and the exact frame that AUTHORIZED ownership.
   // Once detail owns input, any later wheel legitimately moves MapLibre away
   // from the frozen particle camera and is not a handoff seam.
@@ -580,6 +639,33 @@ try {
       owner: returned.owner,
       earthMode: returned.earthMode,
       semanticZoom: returned.semanticZoom,
+    },
+    reentry: {
+      stages: reentryStages,
+      readiness: reentryReveal.readiness,
+      mapLoadCount: reentryReveal.mapLoadCount,
+      revealRevision: reentryReveal.revealRevision,
+      postSyncRenderRevision: reentryReveal.postSyncRenderRevision,
+      revealStage: reentryReveal.revealStage,
+      paintQuadrants: reentryReveal.paintQuadrants,
+    },
+    firstReveal: {
+      readiness: firstReveal.readiness,
+      mapLoadCount: firstReveal.mapLoadCount,
+      mapRenderCount: firstReveal.mapRenderCount,
+      mapIdleCount: firstReveal.mapIdleCount,
+      mapResizeCount: firstReveal.mapResizeCount,
+      revealRevision: firstReveal.revealRevision,
+      postSyncRenderRevision: firstReveal.postSyncRenderRevision,
+      revealStage: firstReveal.revealStage,
+      revealReason: firstReveal.revealReason,
+      revealSync: firstReveal.revealSync,
+      hostRect: firstReveal.hostRect,
+      canvasCss: firstReveal.canvasCss,
+      canvasBuffer: firstReveal.canvasBuffer,
+      paintQuadrants: firstReveal.paintQuadrants,
+      cameraBefore: firstReveal.revealCameraBefore,
+      cameraAfter: firstReveal.revealCameraAfter,
     },
     handoff: {
       atBlending: blendingFrames,
@@ -655,6 +741,36 @@ try {
   }
   if (detailOwnedWheelCount === 0 && !(mapSelfContinuityError <= LOCAL_SCALE_TOLERANCE)) {
     ladderFailures.push(`the detail frame jumped by ${mapSelfContinuityError} without user input`);
+  }
+  const reentryQuadrants = reentryReveal.paintQuadrants?.split(",").map(Number) ?? [];
+  if (
+    JSON.stringify(reentryStages) !== JSON.stringify(["particle", "prewarm", "blending", "detail"])
+    || reentryReveal.mapLoadCount !== 1
+    || reentryReveal.postSyncRenderRevision !== reentryReveal.revealRevision
+    || reentryReveal.revealStage !== "blending"
+    || reentryQuadrants.length !== 4
+    || reentryQuadrants.some((count) => !(count > 0))
+  ) {
+    ladderFailures.push(`the reverse->dive lifecycle did not produce one fresh fully-painted map: ${JSON.stringify({ stages: reentryStages, reveal: reentryReveal })}`);
+  }
+  const firstRevealQuadrants = firstReveal.paintQuadrants?.split(",").map(Number) ?? [];
+  if (
+    firstReveal.mapLoadCount !== 1
+    || !(firstReveal.mapRenderCount > 0)
+    || firstReveal.revealRevision <= 0
+    || firstReveal.postSyncRenderRevision !== firstReveal.revealRevision
+    || firstReveal.revealStage !== "blending"
+  ) {
+    ladderFailures.push(`the first reveal did not publish a current post-sync render revision: ${JSON.stringify(firstReveal)}`);
+  }
+  if (firstRevealQuadrants.length !== 4 || firstRevealQuadrants.some((count) => !(count > 0))) {
+    ladderFailures.push(`the first reveal did not paint all four deterministic QA quadrants: ${JSON.stringify(firstReveal.paintQuadrants)}`);
+  }
+  if (!firstReveal.hostRect || !firstReveal.canvasCss || !firstReveal.canvasBuffer) {
+    ladderFailures.push(`the first reveal did not expose host/canvas geometry evidence: ${JSON.stringify(firstReveal)}`);
+  }
+  if (firstReveal.revealCameraBefore !== firstReveal.revealCameraAfter) {
+    ladderFailures.push(`programmatic reveal sync changed camera/focus truth: ${JSON.stringify({ before: firstReveal.revealCameraBefore, after: firstReveal.revealCameraAfter })}`);
   }
   if (forward.pageErrors.length > 0) {
     ladderFailures.push("the page raised an error during the dive");
@@ -958,6 +1074,79 @@ try {
   }
   await blocked.page.close();
 
+  // ------------------------------------------------------- 1920 cold reveal
+  // #355 was observed at 1920x1080 specifically. Exercise a fresh map instance
+  // at that geometry instead of resizing the existing page: a successful run
+  // must not need the diagnostic 1080 -> 1081 -> 1080 user workaround.
+  const wideContext = await browser.newContext({
+    viewport: { width: 1920, height: 1080 },
+    deviceScaleFactor: 1,
+  });
+  const wideRun = await openDivePage(wideContext, { blockStyle: false });
+  const widePoint = await gesturePoint(wideRun.page);
+  await wheelUntil(
+    wideRun.page, widePoint, APPROACH_WHEEL_DELTA,
+    (state) => state.semanticZoom === "local",
+    "the 1920x1080 cold reveal never reached local",
+  );
+  await wheelUntil(
+    wideRun.page, widePoint, FINE_WHEEL_DELTA,
+    (state) => state.stage === "blending",
+    "the 1920x1080 cold reveal never reached blending",
+  );
+  await wheelUntilDetailWithStableRetry(
+    wideRun.page, widePoint, FINE_WHEEL_DELTA,
+    "the 1920x1080 cold reveal never committed",
+  );
+  const wideReveal = await readDive(wideRun.page);
+  const wideQuadrants = wideReveal.paintQuadrants?.split(",").map(Number) ?? [];
+  const wideFailures = [];
+  const wideRevisionBeforeResize = wideReveal.revealRevision;
+  await wideRun.page.setViewportSize({ width: 1080, height: 1920 });
+  await wideRun.page.waitForFunction((previousRevision) => {
+    const map = document.querySelector(".detailed-earth-map");
+    const revision = Number(map?.getAttribute("data-map-reveal-revision") ?? 0);
+    const committed = Number(map?.getAttribute("data-map-post-sync-render-revision") ?? 0);
+    return revision > previousRevision && committed === revision;
+  }, wideRevisionBeforeResize, { timeout: 5_000 });
+  const portraitSync = await readDive(wideRun.page);
+  await wideRun.page.setViewportSize({ width: 1920, height: 1080 });
+  await wideRun.page.waitForFunction((previousRevision) => {
+    const map = document.querySelector(".detailed-earth-map");
+    const revision = Number(map?.getAttribute("data-map-reveal-revision") ?? 0);
+    const committed = Number(map?.getAttribute("data-map-post-sync-render-revision") ?? 0);
+    return revision > previousRevision && committed === revision;
+  }, portraitSync.revealRevision, { timeout: 5_000 });
+  const restoredSync = await readDive(wideRun.page);
+  if (
+    wideReveal.mapLoadCount !== 1
+    || wideReveal.postSyncRenderRevision !== wideReveal.revealRevision
+    || wideReveal.revealStage !== "blending"
+  ) {
+    wideFailures.push(`1920x1080 did not commit a current post-sync reveal frame: ${JSON.stringify(wideReveal)}`);
+  }
+  if (wideQuadrants.length !== 4 || wideQuadrants.some((count) => !(count > 0))) {
+    wideFailures.push(`1920x1080 did not paint all four quadrants: ${JSON.stringify(wideReveal.paintQuadrants)}`);
+  }
+  if (wideReveal.revealCameraBefore !== wideReveal.revealCameraAfter) {
+    wideFailures.push(`1920x1080 reveal sync moved the camera: ${JSON.stringify({ before: wideReveal.revealCameraBefore, after: wideReveal.revealCameraAfter })}`);
+  }
+  for (const [label, sample] of [["portrait", portraitSync], ["restored", restoredSync]]) {
+    if (sample.revealSync !== "resize" || sample.postSyncRenderRevision !== sample.revealRevision) {
+      wideFailures.push(`${label} viewport change did not use one current geometry resize/render sync: ${JSON.stringify(sample)}`);
+    }
+    if (sample.revealCameraBefore !== sample.revealCameraAfter) {
+      wideFailures.push(`${label} viewport resize changed camera truth: ${JSON.stringify({ before: sample.revealCameraBefore, after: sample.revealCameraAfter })}`);
+    }
+    if (sample.mapLoadCount !== 1 || sample.mapResizeCount > 8) {
+      wideFailures.push(`${label} viewport change rebuilt the map or entered a resize loop: ${JSON.stringify({ loadCount: sample.mapLoadCount, resizeCount: sample.mapResizeCount })}`);
+    }
+  }
+  if (wideRun.pageErrors.length > 0) wideFailures.push("the 1920x1080 cold reveal raised a page error");
+  result.wideFirstReveal = { cold: wideReveal, portraitSync, restoredSync };
+  await wideRun.page.close();
+  await wideContext.close();
+
   result.failures = [
     ...ladderFailures,
     ...routeFailures,
@@ -965,6 +1154,7 @@ try {
     ...reducedCommandFailures,
     ...reducedFailures,
     ...blockedFailures,
+    ...wideFailures,
   ];
   console.log(JSON.stringify(result, null, 2));
   if (result.failures.length > 0) {
