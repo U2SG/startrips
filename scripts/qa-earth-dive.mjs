@@ -196,13 +196,13 @@ async function installStageRecorder(page) {
   await page.evaluate(() => {
     const section = document.querySelector(".living-atlas-globe");
     if (!section) throw new Error("living-atlas-globe section is absent");
-    const sample = () => {
+    const sample = (stageOverride = null) => {
       const map = document.querySelector(".detailed-earth-map");
       const detailLayer = document.querySelector(".living-atlas-globe__detail-layer");
       const detailStyle = detailLayer instanceof HTMLElement ? getComputedStyle(detailLayer) : null;
       const canvas = document.querySelector(".maplibregl-canvas");
       return {
-        stage: section.getAttribute("data-earth-dive"),
+        stage: stageOverride ?? section.getAttribute("data-earth-dive"),
         owner: section.getAttribute("data-earth-dive-owner"),
         semanticZoom: document.querySelector(".particle-earth-scene")?.getAttribute("data-semantic-zoom") ?? null,
         anchorX: map?.dataset?.handoffAnchorX ? Number(map.dataset.handoffAnchorX) : null,
@@ -228,11 +228,11 @@ async function installStageRecorder(page) {
         deltaY: event.deltaY,
       });
     }, { capture: true });
-    // A stage change is a DOM write, so the observer sees every one of them -
-    // including a pair that happens inside a single animation frame, which a
-    // poll would miss and report as a skipped stage.
-    const recordStagePresentation = () => {
-      const next = sample();
+    // A stage change is a DOM write. MutationObserver can batch several writes
+    // into one callback, so reconstruct the exact transition chain from each
+    // record's oldValue rather than sampling only the final DOM state.
+    const recordStagePresentation = (stageOverride = null) => {
+      const next = sample(stageOverride);
       const lastIndex = window.__qaEarthDiveStages.length - 1;
       const last = window.__qaEarthDiveStages[lastIndex];
       if (last && last.stage === next.stage) {
@@ -244,8 +244,25 @@ async function installStageRecorder(page) {
       }
       window.__qaEarthDiveStages.push(next);
     };
-    const observer = new MutationObserver(recordStagePresentation);
-    observer.observe(section, { attributes: true, attributeFilter: ["data-earth-dive"] });
+    const observer = new MutationObserver((records) => {
+      const stageRecords = records.filter((record) => record.attributeName === "data-earth-dive");
+      for (let index = 0; index < stageRecords.length; index += 1) {
+        // MutationObserver callbacks can batch several stage writes into one
+        // microtask. Reading the attribute once would collapse, for example,
+        // detail -> blending -> prewarm -> particle into only the final state.
+        // For one attribute, the next record's oldValue is the current record's
+        // exact new value; only the final record needs the live DOM value.
+        const nextStage = index + 1 < stageRecords.length
+          ? stageRecords[index + 1].oldValue
+          : section.getAttribute("data-earth-dive");
+        if (nextStage) recordStagePresentation(nextStage);
+      }
+    });
+    observer.observe(section, {
+      attributes: true,
+      attributeFilter: ["data-earth-dive"],
+      attributeOldValue: true,
+    });
 
     // The detail layer is intentionally absent while Particle owns the Dive.
     // Follow its actual mount/remount lifecycle, then observe the reveal
