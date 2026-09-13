@@ -222,7 +222,7 @@ describe("ST-065 Home / Route Point pointer ownership", () => {
     expect(particleSource).toContain('cityVectorLayer.addEventListener("pointercancel", onCityLayerPointerCancel)');
     expect(particleSource).toContain('cityVectorLayer.addEventListener("wheel", onCityLayerWheel, { passive: false })');
     expect(particleSource).toContain("onPointerDown(event);");
-    expect(particleSource).toContain("onPointerUp(event);");
+    expect(particleSource).toContain("onPointerUp(event, cityPickFromEventTarget(event.target));");
     expect(particleSource).toContain("onPointerCancel(event);");
     expect(particleSource).toContain("onWheel(event);");
   });

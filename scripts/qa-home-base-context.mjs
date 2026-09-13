@@ -279,8 +279,13 @@ try {
     duringStory, afterStory,
   }, duringStory === 0 && afterStory === 0);
 
-  // Playback is the same ownership boundary.
-  await clickProjectedHome(page, await currentHomeMarker(page));
+  // Playback is the same ownership boundary. Pointer Home activation was
+  // already proven on an unobscured globe above; the active Journey card is a
+  // legitimate higher visual layer here, so use Home's keyboard target to open
+  // context before Playback takes ownership rather than clicking through UI.
+  const playbackHomeMarker = await currentHomeMarker(page);
+  await playbackHomeMarker.focus();
+  await page.keyboard.press("Enter");
   await context.waitFor({ state: "visible", timeout: 5_000 });
   await page.locator(".living-atlas__active-play").click();
   await page.locator(".living-atlas__playback-mode-menu button", { hasText: "完整播放" }).first().click();
