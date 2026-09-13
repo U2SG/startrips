@@ -35,6 +35,7 @@ import {
   audioAtmosphereGains,
   readAudioAtmosphereEnergy,
 } from "../motion/audioAtmosphere";
+import { motionTokens } from "../motion/tokens";
 import {
   cityLabelFacingThreshold,
   loadCityTiers,
@@ -169,6 +170,79 @@ export const QUALITY_PROFILE = {
 export const MAX_RENDERED_JOURNEYS = 64;
 export const MAX_RENDERED_ROUTE_POINTS = 512;
 export const MAX_RENDERED_ROUTE_LINE_VERTICES = 8192;
+
+export type AttentionParticleLayerId =
+  | "base-particle-surface"
+  | "spatial-lod-refinement"
+  | "archive-signal"
+  | "archive-cluster"
+  | "cyan-cluster"
+  | "particle-shell"
+  | "particle-halo"
+  | "personal-focus-signal";
+
+export type AttentionParticleLayerMeasurement = {
+  id: AttentionParticleLayerId;
+  present: boolean;
+  authoredCssSizePx: number | null;
+  shaderPixelRatio: number | null;
+  resolvedCssOpticalSizePx: number | null;
+  opacity: number;
+  strongGlow: boolean;
+};
+
+function roundAttentionMetric(value: number, digits = 4) {
+  const scale = 10 ** digits;
+  return Math.round(value * scale) / scale;
+}
+
+/**
+ * ST-037 observes the existing #243 CSS-pixel contract without retuning it.
+ * `uPointSize` is authored in CSS px, while the ACTUAL shader uniform
+ * `uPixelRatio` is populated by ParticleEarthMaterial.onBeforeRender. Dividing
+ * the shader-scaled input back by renderer DPR yields the CSS optical contract
+ * that should stay invariant across DPR. If onBeforeRender stops updating the
+ * uniform, this resolved value immediately drifts instead of echoing authored
+ * input and falsely passing QA. The shader's multiplication by `uPixelRatio` is
+ * independently locked by particleEarthMaterial.test.ts.
+ */
+export function resolveAttentionLayerMeasurement({
+  id,
+  present,
+  authoredCssSizePx,
+  shaderPixelRatio,
+  opacity,
+  rendererDpr,
+}: {
+  id: AttentionParticleLayerId;
+  present: boolean;
+  authoredCssSizePx: number | null;
+  shaderPixelRatio: number | null;
+  opacity: number;
+  rendererDpr: number;
+}): AttentionParticleLayerMeasurement {
+  const authored = present && authoredCssSizePx !== null
+    ? roundAttentionMetric(authoredCssSizePx, 3)
+    : null;
+  const shaderRatio = present && shaderPixelRatio !== null
+    ? roundAttentionMetric(shaderPixelRatio, 4)
+    : null;
+  const resolvedOpacity = present ? roundAttentionMetric(opacity) : 0;
+  const resolvedCssOpticalSizePx = authored === null
+    || shaderRatio === null
+    || !(rendererDpr > 0)
+    ? null
+    : roundAttentionMetric((authored * shaderRatio) / rendererDpr, 3);
+  return {
+    id,
+    present,
+    authoredCssSizePx: authored,
+    shaderPixelRatio: shaderRatio,
+    resolvedCssOpticalSizePx,
+    opacity: resolvedOpacity,
+    strongGlow: present && resolvedOpacity >= motionTokens.glow.coreOpacity,
+  };
+}
 
 /**
  * #242 review: the line-vertex pool is shared by every visible route, and it
@@ -3928,6 +4002,39 @@ export function ParticleEarthScene({
     const refinementViewPosition = new Vector3();
     let activeRefinementLayer: ParticleRefinementLayer | null = null;
     let departingRefinementLayer: ParticleRefinementLayer | null = null;
+    let lastAttentionLayerPayload = "";
+    const publishAttentionLayerMeasurements = () => {
+      if (!import.meta.env.DEV) return;
+      const rendererDpr = renderer.getPixelRatio();
+      const measure = (
+        id: AttentionParticleLayerId,
+        material: ReturnType<typeof createParticleEarthMaterial> | null,
+      ) => resolveAttentionLayerMeasurement({
+        id,
+        present: Boolean(material),
+        authoredCssSizePx: material ? Number(material.uniforms.uPointSize.value) : null,
+        shaderPixelRatio: material ? Number(material.uniforms.uPixelRatio.value) : null,
+        opacity: material ? Number(material.uniforms.uOpacity.value) : 0,
+        rendererDpr,
+      });
+      const payload = JSON.stringify({
+        devicePixelRatio: window.devicePixelRatio,
+        rendererPixelRatio: rendererDpr,
+        layers: [
+          measure("base-particle-surface", particleMaterial),
+          measure("spatial-lod-refinement", activeRefinementLayer?.material ?? null),
+          measure("archive-signal", archiveMaterial),
+          measure("archive-cluster", clusterMaterial),
+          measure("cyan-cluster", cyanClusterMaterial),
+          measure("particle-shell", shellMaterial),
+          measure("particle-halo", haloMaterial),
+          measure("personal-focus-signal", personalMaterial),
+        ],
+      });
+      if (payload === lastAttentionLayerPayload) return;
+      lastAttentionLayerPayload = payload;
+      host.dataset.attentionLayers = payload;
+    };
     let requestedRefinementCacheKey: string | null = null;
     let lastRefinementViewSampleAt = Number.NEGATIVE_INFINITY;
     let refinementBuildState = document.hidden ? "paused" : "idle";
@@ -5219,6 +5326,9 @@ export function ParticleEarthScene({
       }
 
       renderer.render(scene, camera);
+      // Publish only AFTER draw so each material's onBeforeRender has written
+      // the actual shader uPixelRatio used for this frame.
+      publishAttentionLayerMeasurements();
       const interactionActive = activePointers.size > 0
         || rotationVelocityX !== 0 || rotationVelocityY !== 0
         || now < wheelInteractionUntil;

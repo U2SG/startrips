@@ -66,6 +66,7 @@ import {
   shouldApplyFocusIntentRevision,
   solveScreenAnchorRotation,
   resolveGlobeFocusIntent,
+  resolveAttentionLayerMeasurement,
   earthDiveDirectManipulationOwnsCamera,
   resolveParticleDiveAnchor,
 } from "./ParticleEarthScene";
@@ -80,6 +81,71 @@ import {
 import { disposeSceneGraph } from "./useThreeScene";
 
 describe("ParticleEarthScene contracts", () => {
+  it("publishes attention-layer optical measurements from the shader DPR uniform", () => {
+    const dpr1 = resolveAttentionLayerMeasurement({
+      id: "personal-focus-signal",
+      present: true,
+      authoredCssSizePx: 58,
+      shaderPixelRatio: 1,
+      opacity: 1,
+      rendererDpr: 1,
+    });
+    const dpr2 = resolveAttentionLayerMeasurement({
+      id: "personal-focus-signal",
+      present: true,
+      authoredCssSizePx: 58,
+      shaderPixelRatio: 2,
+      opacity: 1,
+      rendererDpr: 2,
+    });
+    const staleUniform = resolveAttentionLayerMeasurement({
+      id: "personal-focus-signal",
+      present: true,
+      authoredCssSizePx: 58,
+      shaderPixelRatio: 1,
+      opacity: 1,
+      rendererDpr: 2,
+    });
+    expect(dpr1.resolvedCssOpticalSizePx).toBe(58);
+    expect(dpr2.resolvedCssOpticalSizePx).toBe(58);
+    expect(dpr2.shaderPixelRatio).toBe(2);
+    expect(staleUniform.resolvedCssOpticalSizePx).toBe(29);
+    expect(dpr1.strongGlow).toBe(true);
+    expect(resolveAttentionLayerMeasurement({
+      id: "particle-halo",
+      present: true,
+      authoredCssSizePx: 10,
+      shaderPixelRatio: 2,
+      opacity: 0.35,
+      rendererDpr: 2,
+    }).strongGlow).toBe(false);
+  });
+
+  it("publishes attention measurements after renderer.render so onBeforeRender uniforms are current", () => {
+    const source = readFileSync(new URL("./ParticleEarthScene.tsx", import.meta.url), "utf8");
+    const renderIndex = source.indexOf("renderer.render(scene, camera);");
+    const publishIndex = source.indexOf("publishAttentionLayerMeasurements();", renderIndex);
+    expect(renderIndex).toBeGreaterThan(0);
+    expect(publishIndex).toBeGreaterThan(renderIndex);
+    expect(source).toContain("shaderPixelRatio: material ? Number(material.uniforms.uPixelRatio.value) : null");
+  });
+
+  it("publishes every createParticleEarthMaterial consumer through data-attention-layers", () => {
+    const source = readFileSync(new URL("./ParticleEarthScene.tsx", import.meta.url), "utf8");
+    expect(source).toContain("host.dataset.attentionLayers = payload");
+    for (const id of [
+      "base-particle-surface",
+      "spatial-lod-refinement",
+      "archive-signal",
+      "archive-cluster",
+      "cyan-cluster",
+      "particle-shell",
+      "particle-halo",
+      "personal-focus-signal",
+    ]) {
+      expect(source).toContain(`measure("${id}"`);
+    }
+  });
   it("uses one geographic surface anchor for map semantics", () => {
     // #224 already unified place labels, the focus signal and route geometry
     // behind ROUTE_ANCHOR_RADIUS. #196 is the remaining half: that one anchor
