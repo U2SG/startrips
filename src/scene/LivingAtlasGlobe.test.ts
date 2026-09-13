@@ -77,10 +77,16 @@ describe("Semantic Earth Dive renderer ownership", () => {
     expect(detail).not.toContain("[diveOwner, diveSnapshot, diveStage, focusPoint, focusRoute, particleFrame]");
   });
 
-  it("keeps the resolver mirror on committed Dive presentation state", () => {
+  it("keeps the resolver mirror and release latch on committed Dive presentation state", () => {
     const globe = readFileSync(new URL("./LivingAtlasGlobe.tsx", import.meta.url), "utf8");
     expect(globe).toMatch(/useEffect\(\(\) => \{\s*diveRef\.current = dive;\s*\}, \[dive\]\);/);
     expect(globe).not.toContain("diveRef.current = next;");
+    expect(globe).toContain(
+      'if (previous.stage === "prewarm" || previous.stage === "particle") releaseRequestedRef.current = false;',
+    );
+    expect(globe).not.toContain(
+      'if (next.stage === "prewarm" || next.stage === "particle") releaseRequestedRef.current = false;',
+    );
   });
 });
 

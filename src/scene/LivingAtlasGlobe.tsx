@@ -713,12 +713,14 @@ export function LivingAtlasGlobe({
           delete layer.dataset.earthDiveCommitScaleError;
         }
       }
-      // The release is consumed as soon as ownership is home and the renderer
-      // is back to warming: from there the band alone decides. This happens
-      // before the no-change exit on purpose — a cancel that resolves to the
-      // stage the band already wanted would otherwise latch forever and block
-      // every later dive.
-      if (next.stage === "prewarm" || next.stage === "particle") releaseRequestedRef.current = false;
+      // The release is consumed only after React has committed the renderer
+      // back to prewarm/particle. `next` can reach prewarm while the committed
+      // mirror is still blending; clearing on that speculative step lets a
+      // following rAF re-enter detail and overwrite the pending reverse handoff.
+      // Keep the latch through that commit, then let the band decide from the
+      // next frame onward. This still happens before the no-change exit so a
+      // committed prewarm does not latch every later dive forever.
+      if (previous.stage === "prewarm" || previous.stage === "particle") releaseRequestedRef.current = false;
       if (next.stage === previous.stage && next.owner === previous.owner && next.blendMs === previous.blendMs) return;
       if (next.stage === "particle") {
         if (layer) {
