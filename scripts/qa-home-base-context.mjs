@@ -120,7 +120,10 @@ async function openOwner(viewport) {
   const pageErrors = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
   await installOwnerApi(page);
-  await page.goto(`${origin}/?qaState=atlas-gateway`, { waitUntil: "domcontentloaded" });
+  // This contract starts from the EXISTING projected Home anchor, so the lane
+  // must mount the real LivingAtlasGlobe rather than LivingAtlasQaGlobe (which
+  // intentionally has no geographic Home projection surface).
+  await page.goto(`${origin}/?qaState=atlas-gateway&qaMode=globe-chrome`, { waitUntil: "domcontentloaded" });
   await page.locator(".living-atlas").waitFor({ state: "visible", timeout: 30_000 });
   await page.waitForFunction(
     (periodId) => {
