@@ -860,6 +860,8 @@ describe("suggested confirmation revalidates one authoritative Atlas snapshot", 
       .from(journeys)
       .where(eq(journeys.atlasId, neighbour.atlasId))
       .limit(1);
+    expect(support).toBeTruthy();
+    if (!support) throw new Error("expected seeded Home evidence");
     await db.delete(journeys).where(eq(journeys.id, support.id));
 
     const response = await post(neighbour.cookie, confirmationBody());
