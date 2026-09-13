@@ -85,7 +85,11 @@ export function buildIdentityMethods(
       emailHint: redactIdentityEmail(password ? userEmail : ownership?.providerEmail),
       verified: password ? userEmailVerified : Boolean(ownership?.providerEmailVerified && ownership?.verifiedAt),
       usable,
-      canUnlink: usableCount - (usable ? 1 : 0) >= 1,
+      // ST-067 has one fresh-authorization mechanism today: password
+      // re-verification. Keep that credential identity until a provider-based
+      // re-verification contract exists; otherwise a provider-only account
+      // could still sign in but could never manage identities again.
+      canUnlink: !password && usableCount - (usable ? 1 : 0) >= 1,
     };
   });
 }

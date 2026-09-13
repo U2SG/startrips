@@ -9,6 +9,7 @@ import { account as authAccount, user as authUser } from "../db/auth-schema";
 import { db } from "../db/client";
 import {
   buildIdentityMethods,
+  CREDENTIAL_PROVIDER_ID,
   hasUsableLoginAfterRemoval,
   type AccountIdentityAccount,
   type AccountIdentityMethod,
@@ -28,6 +29,7 @@ export type AccountIdentityErrorCode =
   | "IDENTITY_ALREADY_OWNED"
   | "IDENTITY_ACCOUNT_NOT_FOUND"
   | "IDENTITY_LAST_USABLE_LOGIN"
+  | "IDENTITY_CREDENTIAL_UNLINK_UNAVAILABLE"
   | "IDENTITY_PROVIDER_NOT_CONFIGURED";
 
 export class AccountIdentityError extends Error {
@@ -516,6 +518,14 @@ export async function unlinkAccountIdentity(values: {
       sessionId: values.sessionId,
       now,
     });
+    if (target.providerId === CREDENTIAL_PROVIDER_ID) {
+      // Password re-verification is the only fresh authorization method in
+      // ST-067. Removing it while a social provider remains would create a
+      // provider-only user who can sign in but can never satisfy the next
+      // identity-management re-verification. Provider-based re-verification
+      // belongs to the later provider rollout, so fail closed for now.
+      return { refusal: "IDENTITY_CREDENTIAL_UNLINK_UNAVAILABLE" as const };
+    }
     if (!hasUsableLoginAfterRemoval(
       target.id,
       state.accounts,

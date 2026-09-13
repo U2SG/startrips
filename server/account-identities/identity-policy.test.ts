@@ -55,7 +55,7 @@ describe("account identity policy", () => {
         emailHint: "ow…@example.test",
         verified: true,
         usable: true,
-        canUnlink: true,
+        canUnlink: false,
       },
       {
         id: "google",

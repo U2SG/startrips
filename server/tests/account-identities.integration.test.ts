@@ -156,6 +156,24 @@ describe("account identity repository", () => {
     expect(rows.map((row) => row.providerId).sort()).toEqual(variants.map((entry) => entry.providerId).sort());
   });
 
+  it("enforces provider+subject uniqueness on the Better Auth account table itself", async () => {
+    const first = await seedUser("db-identity-first");
+    const second = await seedUser("db-identity-second");
+    const providerSubject = `shared-subject-${randomUUID()}`;
+    await db.insert(authAccount).values({
+      id: `st067-account-${randomUUID()}`,
+      userId: first.userId,
+      providerId: "google",
+      accountId: providerSubject,
+    });
+    await expect(db.insert(authAccount).values({
+      id: `st067-account-${randomUUID()}`,
+      userId: second.userId,
+      providerId: "google",
+      accountId: providerSubject,
+    })).rejects.toMatchObject({ code: "23505" });
+  });
+
   it("fails closed when provider+subject is already owned by another stable user", async () => {
     const first = await seedUser("collision-first");
     const second = await seedUser("collision-second");
@@ -280,7 +298,7 @@ describe("account identity repository", () => {
     })).rejects.toMatchObject({ code: "IDENTITY_ACTION_SESSION_CHANGED" });
   });
 
-  it("does not count an unverified or unconfigured provider as the fallback login", async () => {
+  it("does not count an unverified or unconfigured provider as a usable fallback", async () => {
     const fixture = await seedUser("usable-guard");
     const linked = await linkIdentity(fixture, {
       providerId: "google",
@@ -288,10 +306,25 @@ describe("account identity repository", () => {
       email: fixture.email,
       emailVerified: false,
     });
+    const methods = await listAccountIdentityMethods(fixture.userId, new Set(["google"]));
+    expect(methods.find((method) => method.id === linked.result.accountRecordId)).toMatchObject({
+      verified: false,
+      usable: false,
+    });
+  });
+
+  it("keeps the credential identity until provider-based reverification exists", async () => {
+    const fixture = await seedUser("credential-reverify-anchor");
+    await linkIdentity(fixture, {
+      providerId: "google",
+      subject: randomUUID(),
+      email: fixture.email,
+      emailVerified: true,
+    });
     const credential = (await db.select({ id: authAccount.id })
       .from(authAccount)
       .where(eq(authAccount.userId, fixture.userId)))
-      .find((row) => row.id !== linked.result.accountRecordId)!;
+      .find((row) => row.id.startsWith("st067-account-"))!;
     const grant = await reverify(fixture.userId, fixture.sessionId, 20_000);
     await expect(unlinkAccountIdentity({
       userId: fixture.userId,
@@ -300,7 +333,7 @@ describe("account identity repository", () => {
       reverificationToken: grant.token,
       usableProviderIds: new Set(["google"]),
       now: new Date(TEST_NOW.getTime() + 21_000),
-    })).rejects.toMatchObject({ code: "IDENTITY_LAST_USABLE_LOGIN" });
+    })).rejects.toMatchObject({ code: "IDENTITY_CREDENTIAL_UNLINK_UNAVAILABLE" });
     await expect(unlinkAccountIdentity({
       userId: fixture.userId,
       sessionId: fixture.sessionId,
@@ -309,12 +342,39 @@ describe("account identity repository", () => {
       usableProviderIds: new Set(["google"]),
       now: new Date(TEST_NOW.getTime() + 22_000),
     })).rejects.toMatchObject({ code: "IDENTITY_ACTION_REPLAYED" });
-
     const methods = await listAccountIdentityMethods(fixture.userId, new Set(["google"]));
-    expect(methods.find((method) => method.id === linked.result.accountRecordId)).toMatchObject({
-      verified: false,
-      usable: false,
+    expect(methods.find((method) => method.id === credential.id)).toMatchObject({
+      type: "password",
+      usable: true,
+      canUnlink: false,
     });
+  });
+
+  it("refuses removal of the last usable provider method", async () => {
+    const fixture = await seedUser("provider-last-usable", false);
+    const linked = await linkIdentity(fixture, {
+      providerId: "google",
+      subject: randomUUID(),
+      email: fixture.email,
+      emailVerified: true,
+    });
+    const grant = await reverify(fixture.userId, fixture.sessionId, 20_000);
+    await expect(unlinkAccountIdentity({
+      userId: fixture.userId,
+      sessionId: fixture.sessionId,
+      accountRecordId: linked.result.accountRecordId,
+      reverificationToken: grant.token,
+      usableProviderIds: new Set(["google"]),
+      now: new Date(TEST_NOW.getTime() + 21_000),
+    })).rejects.toMatchObject({ code: "IDENTITY_LAST_USABLE_LOGIN" });
+    await expect(unlinkAccountIdentity({
+      userId: fixture.userId,
+      sessionId: fixture.sessionId,
+      accountRecordId: linked.result.accountRecordId,
+      reverificationToken: grant.token,
+      usableProviderIds: new Set(["google"]),
+      now: new Date(TEST_NOW.getTime() + 22_000),
+    })).rejects.toMatchObject({ code: "IDENTITY_ACTION_REPLAYED" });
   });
 
   it("consumes re-verification when unlink target is missing", async () => {
