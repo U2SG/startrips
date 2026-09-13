@@ -21,9 +21,9 @@ const CURRENT_HOME = {
 };
 const HISTORICAL_HOME = {
   id: "22222222-bbbb-4222-8222-222222222222",
-  label: "广州",
-  latitude: 23.1291,
-  longitude: 113.2644,
+  label: "成都",
+  latitude: 30.5728,
+  longitude: 104.0668,
   startedOn: "2022-01-01",
   endedOn: "2024-12-31",
   source: "manual",
@@ -57,7 +57,7 @@ function journey(id, title, startedOn, latitude, longitude) {
 }
 
 const journeys = [
-  journey("aaaaaaaa-1111-4111-8111-111111111111", "广州旧日", "2023-06-01", 23.1291, 113.2644),
+  journey("aaaaaaaa-1111-4111-8111-111111111111", "成都旧日", "2023-06-01", 30.5728, 104.0668),
   journey("bbbbbbbb-2222-4222-8222-222222222222", "深圳今夏", "2026-06-01", 35.6762, 139.6503),
 ];
 
@@ -245,7 +245,9 @@ try {
   await page.keyboard.press("Home");
   const historicalMarker = page.locator(`[data-home-base-period-id="${HISTORICAL_HOME.id}"]`);
   await historicalMarker.waitFor({ state: "visible", timeout: 15_000 });
-  // The historical Journey point intentionally shares this Home coordinate.
+  // The historical Journey point intentionally shares this Home coordinate; the
+  // fixture is geographically separated from current Shenzhen so the opening
+  // Home-pointer check is not accidentally owned by this historical Route Point.
   // Pointer activation must keep the existing Route Point owner; keyboard Home
   // activation remains available and clears that subordinate point context.
   await historicalMarker.click();
@@ -268,7 +270,7 @@ try {
   record("rewind exposes and activates the exact historical Home period", { historicalContext }, Boolean(
     historicalContext.periodId === HISTORICAL_HOME.id
     && historicalContext.presence === "period-context"
-    && historicalContext.text.includes("常住地 · 广州")
+    && historicalContext.text.includes("常住地 · 成都")
     && historicalContext.text.includes("2022-01-01–2024-12-31")
     && historicalContext.text.includes("历史生活阶段")
   ));

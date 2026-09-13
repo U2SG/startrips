@@ -924,7 +924,7 @@ export function LivingAtlasGlobe({
         </div>
       ) : null}
 
-      {dive.owner !== "detail" && !cinematicActive ? homeBaseLayer.map((descriptor) => (
+      {dive.owner !== "detail" && !cinematicActive && !onGlobePointPick ? homeBaseLayer.map((descriptor) => (
           <button
             key={descriptor.periodId}
             ref={(element) => bindHomeBaseElement(descriptor.periodId, element)}
