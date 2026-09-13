@@ -85,6 +85,31 @@
   animation: startrips-v12-arrive calc(var(--startrips-v12-motion) * 1.25) var(--motion-ease-out, ease-out) both;
 }
 
+
+.startrips-signature-motion {
+  --startrips-signature-size: 52px;
+  display: inline-block;
+  width: min(calc(var(--startrips-signature-size) * 4.4318), 82vw);
+  height: var(--startrips-signature-size);
+  color: var(--startrips-starlight, #fff8e7);
+  pointer-events: none;
+  vertical-align: middle;
+}
+
+.startrips-signature-motion__svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  color: currentColor;
+  pointer-events: none;
+  user-select: none;
+}
+
+.startrips-signature-motion__svg use {
+  pointer-events: none;
+}
+
 .startrips-brand-loader {
   position: relative;
   display: grid;

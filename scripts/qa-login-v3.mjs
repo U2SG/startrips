@@ -450,29 +450,29 @@ async function verifyBrandLoaderContinuity() {
   try {
     const loader = gateway.page.locator(".living-atlas.is-loading .startrips-brand-loader");
     await loader.waitFor({ state: "visible", timeout: 5_000 });
-    await loader.locator(".startrips-v12-wordmark__art").waitFor({ state: "visible" });
+    await loader.locator(".startrips-signature-motion").waitFor({ state: "visible" });
     await gateway.page.waitForFunction(() => (
       document.querySelector("[data-persistent-earth-host]")?.getAttribute("data-stage") === "atlas"
     ), null, { timeout: 5_000 });
     const loading = await gateway.page.evaluate(() => {
       const host = document.querySelector("[data-persistent-earth-host]");
       const surface = document.querySelector(".living-atlas.is-loading");
-      const wordmark = document.querySelector(".startrips-brand-loader .startrips-v12-wordmark");
-      const art = wordmark?.querySelector(".startrips-v12-wordmark__art");
+      const signature = document.querySelector(".startrips-brand-loader .startrips-signature-motion");
+      const art = signature?.querySelector(".startrips-signature-motion__svg");
+      const bbox = art instanceof SVGGraphicsElement ? art.getBBox() : null;
       window.__qaBrandLoaderHost = host;
       return {
         hostStage: host?.getAttribute("data-stage") ?? null,
         hasPersistentEarth: Boolean(document.querySelector('[data-three-scene="particle-earth"]')),
         backgroundColor: surface ? getComputedStyle(surface).backgroundColor : null,
         backgroundImage: surface ? getComputedStyle(surface).backgroundImage : null,
-        brandVersion: wordmark?.getAttribute("data-brand-version") ?? null,
-        artReady: Boolean(art instanceof HTMLImageElement
-          && art.getAttribute("src") === "/brand/startrips-v12-wordmark.svg"
-          && art.getBoundingClientRect().width > 0
-          && art.getBoundingClientRect().height > 0),
+        brandVersion: signature?.getAttribute("data-brand-version") ?? null,
+        signatureClip: signature?.getAttribute("data-signature-clip") ?? null,
+        signatureStatus: signature?.getAttribute("data-signature-status") ?? null,
+        signatureDriverCount: Number(signature?.getAttribute("data-signature-driver-count") ?? "NaN"),
+        artReady: Boolean(bbox && bbox.width > 100 && bbox.height > 40),
         artAnimation: art ? getComputedStyle(art).animationName : null,
         artOpacity: art ? getComputedStyle(art).opacity : null,
-        artTransform: art ? getComputedStyle(art).transform : null,
         legacyBrandNodes: document.querySelectorAll(
           ".startrips-wordmark__lamb, .startrips-wordmark__star, .startrips-loading-points",
         ).length,
@@ -495,10 +495,12 @@ async function verifyBrandLoaderContinuity() {
         || loading.backgroundColor !== "rgba(0, 0, 0, 0)"
         || loading.backgroundImage !== "none"
         || loading.brandVersion !== "12"
+        || loading.signatureClip !== "loading"
+        || loading.signatureStatus !== "reduced"
+        || loading.signatureDriverCount !== 0
         || !loading.artReady
         || loading.artAnimation !== "none"
         || loading.artOpacity !== "1"
-        || loading.artTransform !== "none"
         || loading.legacyBrandNodes !== 0
         || !settled.sameHost
         || settled.hostStage !== "atlas"

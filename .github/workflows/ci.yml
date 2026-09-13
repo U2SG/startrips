@@ -152,6 +152,8 @@ jobs:
             command: pnpm qa:earth-dive
           - name: attention-hierarchy
             command: pnpm qa:attention-hierarchy
+          - name: brand-signature-motion
+            command: pnpm qa:brand-signature-motion
           - name: mobile-contract
             command: pnpm qa:mobile-contract
           - name: globe-focus-chrome

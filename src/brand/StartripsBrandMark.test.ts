@@ -3,10 +3,12 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import {
+  StartripsBrandLoader,
   StartripsBrandMark,
   StartripsLoadingPoints,
   StartripsWordmark,
 } from "./StartripsBrandMark";
+import { STARTRIPS_V12_MARK_MARKUP } from "./startripsV12Mark";
 
 describe("Startrips v12 brand identity", () => {
   it("uses the approved v12 compact goat-and-star mark", () => {
@@ -55,4 +57,29 @@ describe("Startrips v12 brand identity", () => {
   it("retires the legacy loading-particle signal so v12 keeps one four-point star", () => {
     expect(renderToStaticMarkup(createElement(StartripsLoadingPoints))).toBe("");
   });
+
+  it("uses the semantic loading clip on the existing product loader", () => {
+    const markup = renderToStaticMarkup(createElement(StartripsBrandLoader, { message: "Loading" }));
+    expect(markup).toContain('data-signature-clip="loading"');
+    expect(markup).toContain('/brand/startrips-v12-wordmark.svg#letters');
+    expect(markup).toContain('/brand/startrips-v12-wordmark.svg#leg-fn');
+    expect(markup).not.toContain('startrips-v12-wordmark__art');
+  });
+
+  it("keeps the inline compact geometry in lockstep with the committed v12 mark asset", () => {
+    const asset = readFileSync("public/brand/startrips-v12-mark.svg", "utf8");
+    const pathData = (source: string) => [...source.matchAll(/<path[^>]*\sd="([^"]+)"/g)].map((match) => match[1]);
+    expect(pathData(STARTRIPS_V12_MARK_MARKUP)).toEqual(pathData(asset));
+  });
+
+  it("keeps the animated wordmark goat geometry identical to the compact v12 mark geometry", () => {
+    const markAsset = readFileSync("public/brand/startrips-v12-mark.svg", "utf8");
+    const wordmarkAsset = readFileSync("public/brand/startrips-v12-wordmark.svg", "utf8");
+    const goatSlice = wordmarkAsset.slice(wordmarkAsset.indexOf('<g id="goat">'));
+    const pathData = (source: string) => [...source.matchAll(/<path[^>]*\sd="([^"]+)"/g)].map((match) => match[1]);
+    expect(pathData(goatSlice)).toEqual(pathData(markAsset));
+  });
+
+
+
 });

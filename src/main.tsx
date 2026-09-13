@@ -842,6 +842,14 @@ function JourneyPlaybackPrefetchQaPreview() {
   );
 }
 
+function BrandSignatureMotionQaPreview() {
+  return (
+    <main className="auth-gate auth-gate--brand-loading" data-qa-brand-signature-motion="true">
+      <StartripsBrandLoader message="Loading your private atlas…" />
+    </main>
+  );
+}
+
 const Experience = import.meta.env.DEV && qaState === "journey-composer"
   ? JourneyComposerQaPreview
   : import.meta.env.DEV && qaState === "journey-story"
@@ -860,6 +868,8 @@ const Experience = import.meta.env.DEV && qaState === "journey-composer"
     ? EarthDiveQaPreview
   : import.meta.env.DEV && (qaState === "living-atlas" || qaState === "atlas-gateway")
     ? LivingAtlasQaPreview
+  : import.meta.env.DEV && qaState === "brand-signature-motion"
+    ? BrandSignatureMotionQaPreview
   : import.meta.env.DEV && qaState === "final-acceptance"
     ? LivingAtlasApp
   : import.meta.env.DEV && qaState
