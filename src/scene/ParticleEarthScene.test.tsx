@@ -1518,15 +1518,46 @@ describe("ST-065 renderer interaction arbitration", () => {
 
   it("lets an ineligible sibling Route Point fall through instead of consuming Home arbitration", () => {
     expect(journeyRoutePointTargetEligible(
-      { journeyId: "journey-b", routePointId: "point-b" },
+      { journeyId: "journey-b", routePointId: "point-b", routePointIndex: 0 },
       "journey-a",
       true,
     )).toBe(false);
     expect(journeyRoutePointTargetEligible(
-      { journeyId: "journey-a", routePointId: "point-a" },
+      { journeyId: "journey-a", routePointId: "point-a", routePointIndex: 0 },
       "journey-a",
       true,
     )).toBe(true);
+  });
+
+  it("lets temporally hidden active Route Points fall through to Home", () => {
+    const temporalReveal = {
+      journeys: new Map([["journey-a", 1]]),
+      points: new Map([
+        ["journey-a:0", 1],
+        ["journey-a:1", 0],
+      ]),
+    };
+    expect(journeyRoutePointTargetEligible(
+      { journeyId: "journey-a", routePointId: "visible", routePointIndex: 0 },
+      "journey-a",
+      true,
+      temporalReveal,
+    )).toBe(true);
+    expect(journeyRoutePointTargetEligible(
+      { journeyId: "journey-a", routePointId: "future", routePointIndex: 1 },
+      "journey-a",
+      true,
+      temporalReveal,
+    )).toBe(false);
+    expect(journeyRoutePointTargetEligible(
+      { journeyId: "journey-a", routePointId: "future", routePointIndex: 0 },
+      "journey-a",
+      true,
+      {
+        journeys: new Map([["journey-a", 0]]),
+        points: new Map([["journey-a:0", 1]]),
+      },
+    )).toBe(false);
   });
 
   it("selects the last-painted Home marker when Home periods overlap", () => {

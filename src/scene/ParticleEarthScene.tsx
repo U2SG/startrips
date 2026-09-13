@@ -385,15 +385,33 @@ export function cityPointCoordinates(city: Pick<CityPoint, "latitude" | "longitu
   return city ? { latitude: city.latitude, longitude: city.longitude } : null;
 }
 
+type JourneyPointPointerTarget = {
+  journeyId: string;
+  routePointId?: string;
+  routePointIndex: number;
+};
+
 export function journeyRoutePointTargetEligible(
-  target: { journeyId: string; routePointId?: string } | null | undefined,
+  target: JourneyPointPointerTarget | null | undefined,
   activeJourneyRouteId: string | null | undefined,
   routePointActivationEnabled: boolean,
+  temporalReveal?: {
+    journeys: ReadonlyMap<string, number>;
+    points: ReadonlyMap<string, number>;
+  },
 ) {
   if (!target) return false;
-  return !target.routePointId
-    || !routePointActivationEnabled
-    || target.journeyId === activeJourneyRouteId;
+  if (
+    target.routePointId
+    && routePointActivationEnabled
+    && target.journeyId !== activeJourneyRouteId
+  ) return false;
+  const journeyReveal = temporalReveal?.journeys.get(target.journeyId);
+  if (journeyReveal !== undefined && journeyReveal <= 0) return false;
+  const pointReveal = temporalReveal?.points.get(
+    `${target.journeyId}:${target.routePointIndex}`,
+  );
+  return pointReveal === undefined || pointReveal > 0;
 }
 
 export function selectHomeBasePointerTarget(
@@ -2557,7 +2575,7 @@ export function ParticleEarthScene({
     let journeyConnectorCard: HTMLElement | null = null;
     let journeyConnectorCardRect: JourneyConnectorRect | null = null;
     let journeyConnectorSampledAt = 0;
-    let journeyPointTargets: Array<{ journeyId: string; routePointId?: string }> = [];
+    let journeyPointTargets: JourneyPointPointerTarget[] = [];
     const routeLabelSafeArea = {
       left: 16,
       top: 74,
@@ -2614,7 +2632,7 @@ export function ParticleEarthScene({
           .reduce((total, floor) => total + floor, 0),
       );
       const pointPositions = new Float32Array(pointCount * 3);
-      const pointTargets: Array<{ journeyId: string; routePointId?: string }> = [];
+      const pointTargets: JourneyPointPointerTarget[] = [];
       let pointIndex = 0;
       let routeVertexCount = 0;
       let routeLabelCount = 0;
@@ -2729,7 +2747,11 @@ export function ParticleEarthScene({
             pointPositions,
             pointIndex * 3,
           );
-          pointTargets.push({ journeyId: route.id, routePointId: point.id });
+          pointTargets.push({
+            journeyId: route.id,
+            routePointId: point.id,
+            routePointIndex,
+          });
           pointIndex += 1;
 
           const roleClass = routePointIndex === 0
@@ -3546,7 +3568,7 @@ export function ParticleEarthScene({
       );
       personalRaycaster.setFromCamera(personalPointer, camera);
     };
-    const journeyTargetFromPreparedRay = (): { journeyId: string; routePointId?: string } | null => {
+    const journeyTargetFromPreparedRay = (): JourneyPointPointerTarget | null => {
       camera.updateMatrixWorld();
       globe.updateWorldMatrix(true, false);
       updateGeoProjectionFrame(geoFrame, camera, globe.matrixWorld, targetSize.x, targetSize.y);
@@ -3562,6 +3584,7 @@ export function ParticleEarthScene({
             target,
             latestActiveJourneyRouteId.current,
             Boolean(latestOnJourneyRoutePointActivate.current),
+            latestTemporalReveal.current,
           )) return false;
           routeLocalPoint.fromBufferAttribute(positions, candidate.index);
           return isSphericalPointVisible(routeCameraPosition, routeLocalPoint);
