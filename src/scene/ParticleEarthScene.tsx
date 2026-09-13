@@ -1282,9 +1282,6 @@ export const GLOBE_MODE_CONFIG: Record<
   },
 };
 
-export type RoutePointPointerOwner = { journeyId: string; routePointId: string };
-export type RoutePointPointerResolver = (clientX: number, clientY: number) => RoutePointPointerOwner | null;
-
 interface ParticleEarthSceneProps {
   mode: GlobeMode;
   quality?: keyof typeof QUALITY_PROFILE;
@@ -1301,8 +1298,7 @@ interface ParticleEarthSceneProps {
   activeJourneyRouteId?: string | null;
   onJourneyRouteActivate?: (id: string) => void;
   onJourneyRoutePointActivate?: (journeyId: string, routePointId: string) => void;
-  /** Same renderer-owned Route Point hit-test used by pointer activation. */
-  onRoutePointPointerResolver?: (resolver: RoutePointPointerResolver | null) => void;
+  onHomeBaseActivate?: (periodId: string) => void;
   // #21: per-journey temporal reveal progress (0 = future, 1 = visited).
   // When provided, route groups and points fade in with the time cursor.
   // Points are keyed by `${journeyId}:${pointIndex}` for one-stop-at-a-time
@@ -1689,7 +1685,7 @@ export function ParticleEarthScene({
   activeJourneyRouteId,
   onJourneyRouteActivate,
   onJourneyRoutePointActivate,
-  onRoutePointPointerResolver,
+  onHomeBaseActivate,
   temporalReveal,
   showArchiveSignals = true,
   onReady,
@@ -1723,6 +1719,7 @@ export function ParticleEarthScene({
   const latestActiveJourneyRouteId = useRef(activeJourneyRouteId);
   const latestOnJourneyRouteActivate = useRef(onJourneyRouteActivate);
   const latestOnJourneyRoutePointActivate = useRef(onJourneyRoutePointActivate);
+  const latestOnHomeBaseActivate = useRef(onHomeBaseActivate);
   const latestTemporalReveal = useRef(temporalReveal);
   const latestOnReady = useRef(onReady);
   const latestOnSemanticZoomSnapshot = useRef(onSemanticZoomSnapshot);
@@ -1752,6 +1749,7 @@ export function ParticleEarthScene({
   latestActiveJourneyRouteId.current = activeJourneyRouteId;
   latestOnJourneyRouteActivate.current = onJourneyRouteActivate;
   latestOnJourneyRoutePointActivate.current = onJourneyRoutePointActivate;
+  latestOnHomeBaseActivate.current = onHomeBaseActivate;
   latestTemporalReveal.current = temporalReveal;
   latestOnReady.current = onReady;
   latestOnSemanticZoomSnapshot.current = onSemanticZoomSnapshot;
@@ -3542,12 +3540,19 @@ export function ParticleEarthScene({
         ? null
         : journeyPointTargets[intersection.index] ?? null;
     };
-    const resolveRoutePointPointerOwnerAt: RoutePointPointerResolver = (clientX, clientY) => {
-      preparePersonalPointerRay(clientX, clientY);
-      const target = journeyTargetFromPreparedRay();
-      return target?.routePointId
-        ? { journeyId: target.journeyId, routePointId: target.routePointId }
-        : null;
+    const homeBaseTargetFromPointer = (clientX: number, clientY: number): string | null => {
+      if (!latestOnHomeBaseActivate.current || publishedHomeBasePresenceFrame.length === 0) return null;
+      const descriptors = latestHomeBasePresence.current;
+      for (const frame of publishedHomeBasePresenceFrame) {
+        if (!frame.visible) continue;
+        const descriptor = descriptors.find((candidate) => candidate.periodId === frame.periodId);
+        if (!descriptor) continue;
+        const halfTarget = descriptor.touchTargetPx / 2;
+        if (Math.abs(clientX - frame.x) <= halfTarget && Math.abs(clientY - frame.y) <= halfTarget) {
+          return frame.periodId;
+        }
+      }
+      return null;
     };
     const activatePointerTarget = (event: PointerEvent) => {
       const canPickGlobe = Boolean(latestOnGlobePointPick.current);
@@ -3558,10 +3563,11 @@ export function ParticleEarthScene({
           || latestOnJourneyRoutePointActivate.current
         ),
       );
+      const canActivateHome = Boolean(latestOnHomeBaseActivate.current);
       if (
         !canPickGlobe
-        &&
-        !canActivateJourney
+        && !canActivateJourney
+        && !canActivateHome
         && (
           currentMode !== "focusPoint"
           || !latestCenterFocusPoint.current
@@ -3596,6 +3602,11 @@ export function ParticleEarthScene({
           latestOnJourneyRouteActivate.current?.(target.journeyId);
           return;
         }
+      }
+      const homeBasePeriodId = homeBaseTargetFromPointer(event.clientX, event.clientY);
+      if (homeBasePeriodId) {
+        latestOnHomeBaseActivate.current?.(homeBasePeriodId);
+        return;
       }
       if (personalRaycaster.intersectObject(personalSignal, false).length > 0) {
         latestOnFocusPointActivate.current?.();
@@ -5441,9 +5452,6 @@ export function ParticleEarthScene({
     updateRenderLoopVisibility();
 
     return {
-      resolveRoutePointPointerOwner(clientX: number, clientY: number) {
-        return resolveRoutePointPointerOwnerAt(clientX, clientY);
-      },
       setInitialCameraAnchor(anchor: ParticleEarthSceneProps["initialCameraAnchor"]) {
         latestInitialCameraAnchor.current = anchor;
         wakeRenderLoop();
@@ -5705,15 +5713,6 @@ export function ParticleEarthScene({
     if (!ready) return;
     controllerRef.current?.setHomeBasePresence(homeBasePresence);
   }, [controllerRef, homeBasePresence, ready]);
-
-  useEffect(() => {
-    if (!ready || !onRoutePointPointerResolver) return;
-    const resolver: RoutePointPointerResolver = (clientX, clientY) => (
-      controllerRef.current?.resolveRoutePointPointerOwner(clientX, clientY) ?? null
-    );
-    onRoutePointPointerResolver(resolver);
-    return () => onRoutePointPointerResolver(null);
-  }, [controllerRef, onRoutePointPointerResolver, ready]);
 
   useEffect(() => {
     controllerRef.current?.setQuality(quality);

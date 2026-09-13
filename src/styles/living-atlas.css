@@ -6867,11 +6867,10 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   place-items: center;
   box-sizing: border-box;
   transform: translate(-50%, -50%);
-  /* ST-065: the shipped Home anchor is now the one on-demand context target.
-     The 44px hit area is intentional interaction surface, not a permanent
-     toolbar; opening it never changes camera/focus ownership. */
-  pointer-events: auto;
-  cursor: pointer;
+  /* ST-065: pointer gestures stay owned by the particle renderer underneath.
+     The visible Home button remains the keyboard/accessibility target; pointer
+     activation is resolved by the renderer after globe-pick/Route Point owners. */
+  pointer-events: none;
   padding: 0;
   border: 0;
   border-radius: 50%;

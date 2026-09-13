@@ -166,11 +166,13 @@ describe("Home Base presence projection (ST-056)", () => {
   });
   it("keeps Home presence on the particle owner through prewarm/blend and off the detail owner", () => {
     const source = readFileSync(new URL("./LivingAtlasGlobe.tsx", import.meta.url), "utf8");
-    expect(source).toContain('dive.owner !== "detail" && !cinematicActive && !onGlobePointPick');
+    expect(source).toContain('const homeBaseInteractive = dive.owner !== "detail"');
+    expect(source).toContain('onHomeBaseActivate: homeBaseInteractive ? onHomeBaseActivate : undefined');
   });
   it("yields the Home hit target completely while globe point-picking owns pointer input", () => {
     const source = readFileSync(new URL("./LivingAtlasGlobe.tsx", import.meta.url), "utf8");
-    expect(source).toContain('dive.owner !== "detail" && !cinematicActive && !onGlobePointPick');
+    expect(source).toContain('const homeBaseInteractive = dive.owner !== "detail"');
+    expect(source).toContain('onHomeBaseActivate: homeBaseInteractive ? onHomeBaseActivate : undefined');
   });
 
   it("wakes the persistent particle renderer when async Home presence and its fresh-Atlas camera seed arrive", () => {
@@ -181,29 +183,34 @@ describe("Home Base presence projection (ST-056)", () => {
     expect(source).toContain("controllerRef.current?.setHomeBasePresence(homeBasePresence)");
   });
 
-  it("ST-065 promotes only the visible Home accessibility target into the on-demand context hit area", () => {
+  it("ST-065 keeps the visible Home button as a keyboard target while pointer gestures stay renderer-owned", () => {
     const source = readFileSync(new URL("./LivingAtlasGlobe.tsx", import.meta.url), "utf8");
     const css = readFileSync(new URL("../styles/living-atlas.css", import.meta.url), "utf8");
     const start = css.indexOf(".living-atlas-globe__home-base {");
     const rule = css.slice(start, css.indexOf("}", start));
     expect(start).toBeGreaterThanOrEqual(0);
-    expect(rule).toContain("pointer-events: auto;");
+    expect(rule).toContain("pointer-events: none;");
     expect(source).toContain('type="button"');
     expect(source).toContain("element.tabIndex = visible ? 0 : -1");
-    expect(source).toContain("onHomeBaseActivate?.(descriptor.periodId)");
+    expect(source).toContain("onClick={() => onHomeBaseActivate?.(descriptor.periodId)}");
     expect(source).toContain('aria-controls={activeHomeBaseContextPeriodId === descriptor.periodId ? "home-base-context" : undefined}');
   });
 });
 
 
 describe("ST-065 Home / Route Point pointer ownership", () => {
-  it("delegates overlapping Home pointer arbitration to the renderer's canonical Route Point raycast", () => {
+  it("resolves globe pick, Route Point, then Home through the renderer's one pointer authority", () => {
     const globeSource = readFileSync(new URL("./LivingAtlasGlobe.tsx", import.meta.url), "utf8");
     const particleSource = readFileSync(new URL("./ParticleEarthScene.tsx", import.meta.url), "utf8");
-    expect(globeSource).toContain("routePointPointerResolverRef.current?.(event.clientX, event.clientY)");
-    expect(globeSource).toContain("onRoutePointPointerResolver: handleRoutePointPointerResolver");
+    expect(globeSource).not.toContain("onRoutePointPointerResolver");
     expect(particleSource).toContain("personalRaycaster.params.Points = { threshold: 0.18 }");
-    expect(particleSource).toContain("resolveRoutePointPointerOwner(clientX: number, clientY: number)");
-    expect(particleSource).toContain("return resolveRoutePointPointerOwnerAt(clientX, clientY)");
+    expect(particleSource).toContain("homeBaseTargetFromPointer");
+    expect(particleSource).toContain("latestOnHomeBaseActivate.current?.(homeBasePeriodId)");
+    const pick = particleSource.indexOf("if (canPickGlobe) {");
+    const journey = particleSource.indexOf("if (canActivateJourney) {", pick);
+    const home = particleSource.indexOf("const homeBasePeriodId = homeBaseTargetFromPointer", journey);
+    expect(pick).toBeGreaterThanOrEqual(0);
+    expect(journey).toBeGreaterThan(pick);
+    expect(home).toBeGreaterThan(journey);
   });
 });

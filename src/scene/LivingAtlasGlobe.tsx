@@ -45,7 +45,7 @@ import {
   initialGlobeGestureHintState,
   resolveGlobeGestureHint,
 } from "./globeGestureHint";
-import { GLOBE_MODE_CONFIG, ParticleEarthScene, type RoutePointPointerResolver } from "./ParticleEarthScene";
+import { GLOBE_MODE_CONFIG, ParticleEarthScene } from "./ParticleEarthScene";
 import {
   SEMANTIC_ZOOM_RELEASE_ZOOM,
   type GlobeSemanticZoom,
@@ -217,6 +217,7 @@ type AtlasEarthPresentation = Pick<
   | "temporalReveal"
   | "onJourneyRouteActivate"
   | "onJourneyRoutePointActivate"
+  | "onHomeBaseActivate"
   | "onGlobePointPick"
   | "reduceMotion"
   | "mediaCoverHint"
@@ -231,7 +232,6 @@ type AtlasEarthPresentation = Pick<
   onParticleAnchorFrame?: (frame: ParticleAnchorFrame | null) => void;
   homeBasePresence?: readonly HomeBasePresenceDrawable[];
   onHomeBasePresenceFrame?: (frame: readonly ProjectedHomeBasePresence[]) => void;
-  onRoutePointPointerResolver?: (resolver: RoutePointPointerResolver | null) => void;
   onManualCameraInteraction?: () => void;
   zoomIntent?: { zoom: number; revision: number };
   /** Who owns camera and gesture input on this frame. */
@@ -314,6 +314,7 @@ export function PersistentEarthProvider({ children }: { children: ReactNode }) {
                   temporalReveal={atlas?.temporalReveal}
                   onJourneyRouteActivate={atlas?.onJourneyRouteActivate}
                   onJourneyRoutePointActivate={atlas?.onJourneyRoutePointActivate}
+                  onHomeBaseActivate={atlas?.onHomeBaseActivate}
                   onGlobePointPick={atlas?.onGlobePointPick}
                   onSemanticZoomSnapshot={atlas?.onSemanticZoomSnapshot}
                   onParticleAnchorFrame={atlas?.onParticleAnchorFrame}
@@ -385,10 +386,6 @@ export function LivingAtlasGlobe({
   const homeBaseLayer = useMemo(() => resolveLivingAtlasHomeBaseLayer(homeBasePresence), [homeBasePresence]);
   const homeBaseElementsRef = useRef(new Map<string, HTMLButtonElement>());
   const homeBaseFramesRef = useRef(new Map<string, ProjectedHomeBasePresence>());
-  const routePointPointerResolverRef = useRef<RoutePointPointerResolver | null>(null);
-  const handleRoutePointPointerResolver = useCallback((resolver: RoutePointPointerResolver | null) => {
-    routePointPointerResolverRef.current = resolver;
-  }, []);
   const applyHomeBaseFrame = useCallback((
     element: HTMLButtonElement,
     frame: ProjectedHomeBasePresence | undefined,
@@ -776,12 +773,12 @@ export function LivingAtlasGlobe({
       temporalReveal,
       onJourneyRouteActivate,
       onJourneyRoutePointActivate,
+      onHomeBaseActivate: homeBaseInteractive ? onHomeBaseActivate : undefined,
       onGlobePointPick,
       onSemanticZoomSnapshot: handleSemanticZoomSnapshot,
       onParticleAnchorFrame: handleParticleAnchorFrame,
       homeBasePresence: homeBaseLayer,
       onHomeBasePresenceFrame: handleHomeBasePresenceFrame,
-      onRoutePointPointerResolver: handleRoutePointPointerResolver,
       onManualCameraInteraction,
       zoomIntent: zoomIntent ?? undefined,
       inputOwner: dive.owner,
@@ -804,9 +801,9 @@ export function LivingAtlasGlobe({
     focusRoute,
     initialCameraAnchor,
     handleHomeBasePresenceFrame,
-    handleRoutePointPointerResolver,
     handleParticleAnchorFrame,
     handleSemanticZoomSnapshot,
+    homeBaseInteractive,
     homeBaseLayer,
     journeyRoutes,
     zoomIntent,
@@ -814,6 +811,7 @@ export function LivingAtlasGlobe({
     onManualCameraInteraction,
     onJourneyRouteActivate,
     onJourneyRoutePointActivate,
+    onHomeBaseActivate,
     persistentEarth,
     reduceMotion,
     mediaCoverHint?.opaqueMediaCover,
@@ -832,6 +830,10 @@ export function LivingAtlasGlobe({
   // something real to reveal and nothing has to be revealed on a timer.
   const showDetail = dive.stage !== "particle";
   const detailMode = dive.stage === "detail";
+  const homeBaseInteractive = dive.owner !== "detail"
+    && !cinematicActive
+    && !onGlobePointPick
+    && Boolean(onHomeBaseActivate);
   // #308 review: compact mobile still needs a non-gesture path for external
   // keyboards and switch-control users. Keep the semantic Dive intent mounted
   // independently from the optional detail utility cluster; focus mode and
@@ -877,7 +879,7 @@ export function LivingAtlasGlobe({
         </div>
       ) : null}
 
-      {dive.owner !== "detail" && !cinematicActive && !onGlobePointPick ? homeBaseLayer.map((descriptor) => (
+      {homeBaseInteractive ? homeBaseLayer.map((descriptor) => (
           <button
             key={descriptor.periodId}
             ref={(element) => bindHomeBaseElement(descriptor.periodId, element)}
@@ -890,16 +892,7 @@ export function LivingAtlasGlobe({
             aria-controls={activeHomeBaseContextPeriodId === descriptor.periodId ? "home-base-context" : undefined}
             data-home-base-period-id={descriptor.periodId}
             data-home-base-presence={descriptor.presence}
-            onClick={(event) => {
-              if (event.detail > 0) {
-                const routePointOwner = routePointPointerResolverRef.current?.(event.clientX, event.clientY);
-                if (routePointOwner) {
-                  onJourneyRoutePointActivate(routePointOwner.journeyId, routePointOwner.routePointId);
-                  return;
-                }
-              }
-              onHomeBaseActivate?.(descriptor.periodId);
-            }}
+            onClick={() => onHomeBaseActivate?.(descriptor.periodId)}
             style={{
               minWidth: descriptor.touchTargetPx,
               minHeight: descriptor.touchTargetPx,

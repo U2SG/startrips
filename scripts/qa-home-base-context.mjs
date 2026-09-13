@@ -125,22 +125,75 @@ async function openOwner(viewport, { journeyRows = journeys } = {}) {
   // intentionally has no geographic Home projection surface).
   await page.goto(`${origin}/?qaState=atlas-gateway&qaMode=globe-chrome`, { waitUntil: "domcontentloaded" });
   await page.locator(".living-atlas").waitFor({ state: "visible", timeout: 30_000 });
-  await page.waitForFunction(
-    (periodId) => {
-      const node = document.querySelector(`[data-home-base-period-id="${periodId}"]`);
-      if (!(node instanceof HTMLElement)) return false;
-      const rect = node.getBoundingClientRect();
-      const style = getComputedStyle(node);
-      return !node.hidden && style.display !== "none" && rect.width >= 44 && rect.height >= 44;
-    },
-    CURRENT_HOME.id,
-    { timeout: 30_000 },
-  );
+  try {
+    await page.waitForFunction(
+      (periodId) => {
+        const node = document.querySelector(`[data-home-base-period-id="${periodId}"]`);
+        if (!(node instanceof HTMLElement)) return false;
+        const rect = node.getBoundingClientRect();
+        const style = getComputedStyle(node);
+        return !node.hidden && style.display !== "none" && rect.width >= 44 && rect.height >= 44;
+      },
+      CURRENT_HOME.id,
+      { timeout: 30_000 },
+    );
+  } catch (error) {
+    const diagnostics = await page.evaluate((periodId) => {
+      const marker = document.querySelector(`[data-home-base-period-id="${periodId}"]`);
+      const markerRect = marker instanceof HTMLElement ? marker.getBoundingClientRect() : null;
+      const markerStyle = marker instanceof HTMLElement ? getComputedStyle(marker) : null;
+      const scene = document.querySelector(".particle-earth-scene");
+      const globe = document.querySelector(".living-atlas-globe");
+      const atlas = document.querySelector(".living-atlas");
+      return {
+        mobileV2: atlas?.getAttribute("data-mobile-v2") ?? null,
+        atlasClass: atlas?.getAttribute("class") ?? null,
+        markerCount: document.querySelectorAll("[data-home-base-period-id]").length,
+        marker: marker instanceof HTMLElement ? {
+          hidden: marker.hidden,
+          display: markerStyle?.display ?? null,
+          visibility: markerStyle?.visibility ?? null,
+          rect: markerRect ? { x: markerRect.x, y: markerRect.y, width: markerRect.width, height: markerRect.height } : null,
+          presence: marker.getAttribute("data-home-base-presence"),
+        } : null,
+        earthDive: globe?.getAttribute("data-earth-dive") ?? null,
+        earthDiveOwner: globe?.getAttribute("data-earth-dive-owner") ?? null,
+        sceneReady: scene?.getAttribute("data-scene-ready") ?? null,
+        focusRevision: scene?.getAttribute("data-focus-revision") ?? null,
+        focusTargetLat: scene?.getAttribute("data-focus-target-lat") ?? null,
+        focusTargetLon: scene?.getAttribute("data-focus-target-lon") ?? null,
+        routeFocusLat: scene?.getAttribute("data-route-focus-lat") ?? null,
+        routeFocusLon: scene?.getAttribute("data-route-focus-lon") ?? null,
+      };
+    }, CURRENT_HOME.id);
+    throw new Error(`Home marker did not become actionable: ${JSON.stringify(diagnostics)}; ${error instanceof Error ? error.message : String(error)}`);
+  }
   return { page, pageErrors };
 }
 
 async function currentHomeMarker(page) {
   return page.locator(`[data-home-base-period-id="${CURRENT_HOME.id}"]`);
+}
+
+async function clickProjectedHome(page, marker) {
+  const box = await marker.boundingBox();
+  if (!box) throw new Error("Projected Home marker has no pointer geometry");
+  const x = box.x + box.width / 2;
+  const y = box.y + box.height / 2;
+  const owner = await page.evaluate(({ x, y }) => {
+    const hit = document.elementFromPoint(x, y);
+    return {
+      tag: hit?.tagName ?? null,
+      className: hit instanceof Element ? hit.getAttribute("class") : null,
+      homeOwnsHit: Boolean(hit?.closest?.(".living-atlas-globe__home-base")),
+      sceneOwnsHit: Boolean(hit?.closest?.(".particle-earth-scene") || hit?.matches?.('canvas[data-three-scene="particle-earth"]')),
+    };
+  }, { x, y });
+  if (owner.homeOwnsHit || !owner.sceneOwnsHit) {
+    throw new Error(`Projected Home pointer is not renderer-owned: ${JSON.stringify(owner)}`);
+  }
+  await page.mouse.click(x, y);
+  return owner;
 }
 
 async function closeContext(page) {
@@ -165,7 +218,7 @@ try {
       tabIndex: element.tabIndex,
     };
   });
-  await marker.click();
+  const desktopPointerOwner = await clickProjectedHome(page, marker);
   const context = page.locator("[data-home-base-context]");
   await context.waitFor({ state: "visible", timeout: 5_000 });
   const currentContext = await context.evaluate((element) => ({
@@ -178,11 +231,13 @@ try {
   }));
   await page.screenshot({ path: `${captureDir}/01-desktop-current-context.png`, fullPage: false });
   record("desktop pointer opens exact current Home context without a modal or coordinates", {
-    markerMetrics, currentContext,
+    markerMetrics, currentContext, desktopPointerOwner,
   }, Boolean(
     markerMetrics.width >= 44
     && markerMetrics.height >= 44
     && markerMetrics.tabIndex === 0
+    && desktopPointerOwner.sceneOwnsHit
+    && !desktopPointerOwner.homeOwnsHit
     && markerMetrics.label?.includes("当前常住地")
     && currentContext.periodId === CURRENT_HOME.id
     && currentContext.presence === "current"
@@ -214,7 +269,7 @@ try {
   }, duringStory === 0 && afterStory === 0);
 
   // Playback is the same ownership boundary.
-  await (await currentHomeMarker(page)).click();
+  await clickProjectedHome(page, await currentHomeMarker(page));
   await context.waitFor({ state: "visible", timeout: 5_000 });
   await page.locator(".living-atlas__active-play").click();
   await page.locator(".living-atlas__playback-mode-menu button", { hasText: "完整播放" }).first().click();
@@ -250,7 +305,7 @@ try {
   // Home-pointer check is not accidentally owned by this historical Route Point.
   // Pointer activation must keep the existing Route Point owner; keyboard Home
   // activation remains available and clears that subordinate point context.
-  await historicalMarker.click();
+  await clickProjectedHome(page, historicalMarker);
   const overlappingRoutePointContext = page.locator("[data-route-point-context]");
   await overlappingRoutePointContext.waitFor({ state: "visible", timeout: 5_000 });
   record("overlapping Home pointer preserves Route Point ownership", {
@@ -284,7 +339,7 @@ try {
   const mobile = await openOwner({ width: 390, height: 844 }, { journeyRows: [] });
   const mobilePage = mobile.page;
   const mobileMarker = await currentHomeMarker(mobilePage);
-  await mobileMarker.click();
+  const mobilePointerOwner = await clickProjectedHome(mobilePage, mobileMarker);
   const mobileContext = mobilePage.locator("[data-home-base-context]");
   await mobileContext.waitFor({ state: "visible", timeout: 5_000 });
   const mobilePlacement = await mobilePage.evaluate(() => {
@@ -307,7 +362,7 @@ try {
   });
   await mobilePage.screenshot({ path: `${captureDir}/03-mobile-current-context.png`, fullPage: false });
   record("compact mobile opens the same context above native chrome with no permanent Home tab", {
-    mobilePlacement,
+    mobilePlacement, mobilePointerOwner,
   }, Boolean(
     mobilePlacement
     && mobilePlacement.mobileMode === "on"
@@ -316,6 +371,8 @@ try {
     && mobilePlacement.markerHit >= 44
     && mobilePlacement.permanentHomeTabs === 0
     && mobilePlacement.suggestionsWhileContextOpen === 0
+    && mobilePointerOwner.sceneOwnsHit
+    && !mobilePointerOwner.homeOwnsHit
   ));
   await closeContext(mobilePage);
   await mobileMarker.focus();
