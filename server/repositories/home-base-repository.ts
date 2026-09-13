@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import {
   homeBaseDismissals,
   homeBasePeriods,
@@ -540,6 +540,12 @@ export async function recordAuthoritativeHomeBaseDismissalForAtlas(
       loadHistory(transaction, atlasId),
       loadDismissals(transaction, atlasId),
     ]);
+    const retry = dismissals.find((dismissal) => (
+      dismissal.digest === values.digest
+      && (dismissal.kind === values.kind || dismissal.kind === "rejected")
+    ));
+    if (retry) return retry;
+
     const periods = periodRows.map(asRecord);
     const currentPeriod = periods.find((period) => period.endedOn === null) ?? null;
     const authoritativeInference = inferHomeBaseCandidateWithDismissals({

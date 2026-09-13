@@ -493,6 +493,33 @@ describe("GET and POST /api/home-bases/dismissal", () => {
     expect(await residentRead.json()).toEqual({ dismissals: [] });
   });
 
+  it("accepts an exact retry after the same dismissal already committed", async () => {
+    const dismissedOn = new Date().toISOString().slice(0, 10);
+    const first = await postDismissal(neighbour.cookie, {
+      kind: "soft",
+      evidenceDigest: DIGEST,
+      dismissedOn,
+    });
+    expect(first.status).toBe(201);
+    const firstBody = await first.json() as {
+      dismissal: { kind: string; digest: string; dismissedAt: string };
+    };
+
+    const retry = await postDismissal(neighbour.cookie, {
+      kind: "soft",
+      evidenceDigest: DIGEST,
+      dismissedOn,
+    });
+    expect(retry.status).toBe(201);
+    expect(await retry.json()).toEqual(firstBody);
+
+    const [row] = await db
+      .select({ total: sql<number>`count(*)::int` })
+      .from(homeBaseDismissals)
+      .where(eq(homeBaseDismissals.atlasId, neighbour.atlasId));
+    expect(row.total).toBe(1);
+  });
+
   it("refuses a canonical digest that was not inferred from this Atlas", async () => {
     const forged = validDismissalDigest();
     const response = await postDismissal(neighbour.cookie, {
