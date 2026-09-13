@@ -4941,6 +4941,15 @@ export function ParticleEarthScene({
       // its screen position. The globe's x/y belongs to the layout/mode only.
       globe.position.x = interpolate(globe.position.x, target.x);
       globe.position.y = interpolate(globe.position.y, target.y);
+      const initialCameraAnchorSettling = Boolean(
+        initialCameraAnchorNow
+        && activePointers.size === 0
+        && (
+          Math.abs(getShortestRotationDelta(interactiveRotationX, targetRotationX)) > 0.001
+          || Math.abs(getShortestRotationDelta(baseRotationY, targetBaseRotationY)) > 0.001
+          || Math.abs(interactiveRotationY) > 0.001
+        )
+      );
       if (activePointers.size === 0 && !reduceMotion && !focusSettledThisFrame && !initialCameraAnchorNow) {
         interactiveRotationX = clampGlobeTilt(
           interactiveRotationX + rotationVelocityX * delta,
@@ -5363,7 +5372,7 @@ export function ParticleEarthScene({
         documentVisible: !document.hidden,
         opaqueMediaCover: currentVisibilityHint.opaqueMediaCover,
         coverTransitionActive: currentVisibilityHint.coverTransitionActive,
-        focusFlightActive,
+        focusFlightActive: focusFlightActive || initialCameraAnchorSettling,
         interactionActive,
         earthDiveOverlapActive: Boolean(currentVisibilityHint.earthDiveOverlapActive),
       });
@@ -5434,6 +5443,14 @@ export function ParticleEarthScene({
     return {
       resolveRoutePointPointerOwner(clientX: number, clientY: number) {
         return resolveRoutePointPointerOwnerAt(clientX, clientY);
+      },
+      setInitialCameraAnchor(anchor: ParticleEarthSceneProps["initialCameraAnchor"]) {
+        latestInitialCameraAnchor.current = anchor;
+        wakeRenderLoop();
+      },
+      setHomeBasePresence(presence: readonly HomeBasePresenceDrawable[]) {
+        latestHomeBasePresence.current = presence;
+        wakeRenderLoop();
       },
       setQuality(nextQuality: keyof typeof QUALITY_PROFILE) {
         applyQuality(nextQuality);
@@ -5678,6 +5695,16 @@ export function ParticleEarthScene({
       },
     };
   });
+
+  useEffect(() => {
+    if (!ready) return;
+    controllerRef.current?.setInitialCameraAnchor(initialCameraAnchor);
+  }, [controllerRef, initialCameraAnchor?.lat, initialCameraAnchor?.lon, ready]);
+
+  useEffect(() => {
+    if (!ready) return;
+    controllerRef.current?.setHomeBasePresence(homeBasePresence);
+  }, [controllerRef, homeBasePresence, ready]);
 
   useEffect(() => {
     if (!ready || !onRoutePointPointerResolver) return;

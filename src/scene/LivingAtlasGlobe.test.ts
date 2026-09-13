@@ -173,6 +173,14 @@ describe("Home Base presence projection (ST-056)", () => {
     expect(source).toContain('dive.owner !== "detail" && !cinematicActive && !onGlobePointPick');
   });
 
+  it("wakes the persistent particle renderer when async Home presence and its fresh-Atlas camera seed arrive", () => {
+    const source = readFileSync(new URL("./ParticleEarthScene.tsx", import.meta.url), "utf8");
+    expect(source).toContain('setInitialCameraAnchor(anchor: ParticleEarthSceneProps["initialCameraAnchor"])');
+    expect(source).toContain("setHomeBasePresence(presence: readonly HomeBasePresenceDrawable[])");
+    expect(source).toContain("focusFlightActive: focusFlightActive || initialCameraAnchorSettling");
+    expect(source).toContain("controllerRef.current?.setHomeBasePresence(homeBasePresence)");
+  });
+
   it("ST-065 promotes only the visible Home accessibility target into the on-demand context hit area", () => {
     const source = readFileSync(new URL("./LivingAtlasGlobe.tsx", import.meta.url), "utf8");
     const css = readFileSync(new URL("../styles/living-atlas.css", import.meta.url), "utf8");
