@@ -89,6 +89,10 @@ export function createStartripsSignatureRuntime({
     }
     lastNow = scheduler.now();
     onPose(sampleStartripsSignaturePose(clip, elapsedMs));
+    if (suspended) {
+      publish("suspended", 0);
+      return;
+    }
     publish("running", 1);
     schedule();
   };

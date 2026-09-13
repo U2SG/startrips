@@ -96,4 +96,24 @@ describe("Startrips signature runtime lifecycle", () => {
     runtime.dispose();
   });
 
+  it("does not schedule or accumulate hidden time when suspended before start", () => {
+    const fake = fakeScheduler();
+    const states: Array<{ status: string; elapsedMs: number; cycle: number; driverCount: number }> = [];
+    const runtime = createStartripsSignatureRuntime({
+      clip: "loading", reduced: false, scheduler: fake.scheduler, onPose: vi.fn(), onState: (state) => states.push(state),
+    });
+    runtime.setSuspended(true);
+    runtime.start();
+    expect(fake.pending()).toBe(0);
+    expect(states.at(-1)).toMatchObject({ status: "suspended", elapsedMs: 0, cycle: 0, driverCount: 0 });
+    fake.step(8_000);
+    expect(states.at(-1)?.elapsedMs).toBe(0);
+    runtime.setSuspended(false);
+    expect(fake.pending()).toBe(1);
+    fake.step(100);
+    expect(states.at(-1)).toMatchObject({ status: "running", cycle: 0, driverCount: 1 });
+    expect(states.at(-1)?.elapsedMs).toBeCloseTo(100, 3);
+    runtime.dispose();
+  });
+
 });

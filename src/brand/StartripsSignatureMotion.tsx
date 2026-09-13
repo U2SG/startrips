@@ -88,6 +88,7 @@ export function StartripsSignatureMotion({
     media.addEventListener("change", reduced);
 
     root.dataset.signatureNodeCount = String(root.querySelectorAll("*").length);
+    syncSuspension();
     runtime.start();
 
     return () => {

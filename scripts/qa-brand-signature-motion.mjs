@@ -31,6 +31,27 @@ async function openPage(reducedMotion = "no-preference") {
   return { context, page, motion, pageErrors };
 }
 
+async function openInitiallyHiddenPage() {
+  const context = await browser.newContext({
+    viewport: { width: 1100, height: 760 },
+    reducedMotion: "no-preference",
+  });
+  await context.addInitScript(() => {
+    window.__qaSignatureHidden = true;
+    Object.defineProperty(document, "hidden", {
+      configurable: true,
+      get: () => window.__qaSignatureHidden,
+    });
+  });
+  const page = await context.newPage();
+  const pageErrors = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  await page.goto(qaUrl, { waitUntil: "domcontentloaded", timeout: 60_000 });
+  const motion = page.locator(".startrips-signature-motion");
+  await motion.waitFor({ state: "visible", timeout: 10_000 });
+  return { context, page, motion, pageErrors };
+}
+
 async function readMotion(page) {
   return page.evaluate(() => {
     const root = document.querySelector(".startrips-signature-motion");
@@ -141,6 +162,44 @@ try {
       && Math.abs(offscreenEnd.elapsedMs - offscreenStart.elapsedMs) < 1);
   } finally {
     await continuity.context.close();
+  }
+
+  // A loader mounted while the tab is already hidden must never accumulate
+  // the hidden interval before its first visible frame.
+  const initiallyHidden = await openInitiallyHiddenPage();
+  try {
+    await initiallyHidden.page.waitForFunction(() => (
+      document.querySelector(".startrips-signature-motion")?.getAttribute("data-signature-status") === "suspended"
+    ));
+    const hiddenMount = await readMotion(initiallyHidden.page);
+    await initiallyHidden.page.waitForTimeout(700);
+    const hiddenLater = await readMotion(initiallyHidden.page);
+    await initiallyHidden.page.evaluate(() => {
+      window.__qaSignatureHidden = false;
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await initiallyHidden.page.waitForFunction(() => (
+      document.querySelector(".startrips-signature-motion")?.getAttribute("data-signature-status") === "running"
+    ));
+    await initiallyHidden.page.waitForTimeout(80);
+    const resumed = await readMotion(initiallyHidden.page);
+    record("brand-signature:initial-hidden-mount", {
+      hiddenMount, hiddenLater, resumed, pageErrors: initiallyHidden.pageErrors,
+    }, hiddenMount.status === "suspended"
+      && hiddenMount.driverCount === 0
+      && hiddenMount.cycle === 0
+      && hiddenMount.elapsedMs === 0
+      && hiddenLater.driverCount === 0
+      && hiddenLater.cycle === 0
+      && hiddenLater.elapsedMs === 0
+      && resumed.status === "running"
+      && resumed.driverCount === 1
+      && resumed.cycle === 0
+      && resumed.elapsedMs >= 0
+      && resumed.elapsedMs < 500
+      && initiallyHidden.pageErrors.length === 0);
+  } finally {
+    await initiallyHidden.context.close();
   }
 
   // Pointer interruption settles once and never restarts.
