@@ -13,6 +13,7 @@ import {
   HOME_BASE_SUGGESTED_MIN_SPAN_DAYS,
   applyHomeBaseDismissalToInferenceResult,
   homeBaseEvidenceDigest,
+  homeBaseEvidenceDigestAnchor,
   inferHomeBaseCandidate,
   isPersistableHomeBaseEvidenceDigest,
   type HomeBaseInferenceJourney,
@@ -1265,5 +1266,104 @@ describe("persistable Home Base evidence digests", () => {
     expect(isPersistableHomeBaseEvidenceDigest(
       `${digest}${"x".repeat(HOME_BASE_EVIDENCE_DIGEST_MAX_LENGTH)}`,
     )).toBe(false);
+  });
+});
+
+describe("Home Base evidence digest version compatibility contract", () => {
+  const supportsOf = (count: number, from = 1) => Array.from({ length: count }, (_value, index) => ({
+    journeyId: "00000000-0000-4000-8000-" + String(index + from).padStart(12, "0"),
+    supportsStart: true,
+    supportsEnd: (index + from) % 2 === 0,
+  }));
+  const snapshotOf = (count: number) => ({
+    anchor: SHENZHEN,
+    supports: supportsOf(count),
+    evidenceStartedOn: "2026-01-01",
+    evidenceEndedOn: "2026-04-15",
+  });
+
+  it("emits the canonical hbi-v2 exact form for an ordinary history", () => {
+    const ordinary = homeBaseEvidenceDigest(snapshotOf(6));
+    expect(ordinary.startsWith("hbi-v2:")).toBe(true);
+    expect(ordinary.length).toBeLessThanOrEqual(HOME_BASE_EVIDENCE_DIGEST_MAX_LENGTH);
+  });
+
+  it("falls back to hbi-v3 only once the exact hbi-v2 form leaves the budget", () => {
+    const wide = homeBaseEvidenceDigest(snapshotOf(2400));
+    expect(wide.startsWith("hbi-v3:")).toBe(true);
+    const fields = wide.split(":");
+    expect(Number(fields[1])).toBe(SHENZHEN.latitude);
+    expect(Number(fields[2])).toBe(SHENZHEN.longitude);
+    expect(Number(fields[3])).toBe(2400);
+    expect(fields[4]).toBe("2026-01-01");
+    expect(fields[5]).toBe("2026-04-15");
+  });
+
+  it("accepts both hbi-v2 and hbi-v3 at the reader and the region anchor", () => {
+    const exact = homeBaseEvidenceDigest(snapshotOf(6));
+    const compact = homeBaseEvidenceDigest(snapshotOf(2400));
+    for (const digest of [exact, compact]) {
+      expect(isPersistableHomeBaseEvidenceDigest(digest)).toBe(true);
+      expect(homeBaseEvidenceDigestAnchor(digest)).toEqual(SHENZHEN);
+    }
+  });
+
+  it("preserves exact membership across the compact fallback", () => {
+    const compact = homeBaseEvidenceDigest(snapshotOf(2400));
+    const resultFor = (digest: string): HomeBaseInferenceResult => ({
+      state: "suggested",
+      metroAnchor: SHENZHEN,
+      reasonCodes: [],
+      evidenceDigest: digest,
+      support: {
+        journeys: 2400,
+        starts: 2400,
+        ends: 1200,
+        runnerUpJourneys: 0,
+        evidenceSpanDays: 104,
+        evidenceStartedOn: "2026-01-01",
+        evidenceEndedOn: "2026-04-15",
+      },
+      proposedPeriodStart: null,
+    });
+    const dismissal = { kind: "rejected" as const, digest: compact, dismissedAt: "2026-04-16" };
+    expect(applyHomeBaseDismissalToInferenceResult(
+      resultFor(compact),
+      dismissal,
+      "2026-05-01",
+    ).state).toBe("dismissed");
+    const otherRegion = homeBaseEvidenceDigest({ ...snapshotOf(2400), anchor: TOKYO });
+    expect(applyHomeBaseDismissalToInferenceResult(
+      { ...resultFor(otherRegion), metroAnchor: TOKYO },
+      dismissal,
+      "2026-05-01",
+    ).state).toBe("suggested");
+  });
+
+  it("keeps an existing hbi-v2 answer byte-stable rather than rewriting it as hbi-v3", () => {
+    const stored = homeBaseEvidenceDigest(snapshotOf(6));
+    expect(homeBaseEvidenceDigest(snapshotOf(6))).toBe(stored);
+    expect(stored.startsWith("hbi-v2:")).toBe(true);
+    const result: HomeBaseInferenceResult = {
+      state: "suggested",
+      metroAnchor: SHENZHEN,
+      reasonCodes: [],
+      evidenceDigest: stored,
+      support: {
+        journeys: 6,
+        starts: 6,
+        ends: 3,
+        runnerUpJourneys: 0,
+        evidenceSpanDays: 104,
+        evidenceStartedOn: "2026-01-01",
+        evidenceEndedOn: "2026-04-15",
+      },
+      proposedPeriodStart: null,
+    };
+    expect(applyHomeBaseDismissalToInferenceResult(
+      result,
+      { kind: "rejected", digest: stored, dismissedAt: "2026-04-16" },
+      "2026-05-01",
+    ).state).toBe("dismissed");
   });
 });
