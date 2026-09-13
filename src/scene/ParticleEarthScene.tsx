@@ -2996,23 +2996,10 @@ export function ParticleEarthScene({
         city: null as CityPoint | null,
       };
       entry.element.classList.add("particle-earth-city");
-      entry.element.addEventListener("pointerup", (event) => {
-        event.stopPropagation();
-        const rejectedByGestureCapacity = rejectedPointerIds.delete(event.pointerId);
-        if (shouldSuppressUntrackedPointerActivation(
-          rejectedByGestureCapacity,
-          activePointers.size,
-        )) {
-          return;
-        }
-        const pick = latestOnGlobePointPick.current;
-        if (entry.city && pick) {
-          pick({
-            latitude: entry.city.latitude,
-            longitude: entry.city.longitude,
-          });
-        }
-      });
+      // City text is a painted child of the renderer-owned SVG overlay. Its
+      // pointer lifecycle is delegated from the layer to the SAME handlers as
+      // the canvas below, so Route Point / globe-pick / Home arbitration and
+      // drag/pinch/wheel ownership cannot diverge at a label boundary.
       cityVectorLayer.appendChild(entry.element);
       cityLabelPool.push(entry);
       return entry;
@@ -3752,23 +3739,6 @@ export function ParticleEarthScene({
       dragAngularDisplacement = { x: 0, y: 0, total: 0 };
     };
 
-    const onCityLayerPointerDown = (event: PointerEvent) => {
-      if (
-        !latestDragToRotate.current
-        || (event.pointerType === "mouse" && event.button !== 0)
-      ) {
-        return;
-      }
-      // City labels live in a sibling SVG, so contacts that begin there never
-      // pass through the canvas pointerdown handler. Once another globe contact is
-      // already tracked, remember this sibling-layer contact for its full
-      // lifecycle so it can never turn into a delayed city tap after the tracked
-      // pointer lifts. Zero-pointer city taps remain ordinary activations.
-      if (shouldRememberUntrackedPointerStart(activePointers.size)) {
-        rejectedPointerIds.add(event.pointerId);
-      }
-    };
-
     const onPointerDown = (event: PointerEvent) => {
       if (
         !latestDragToRotate.current
@@ -3995,7 +3965,37 @@ export function ParticleEarthScene({
       pinchAnchorErrorPx = null;
     };
 
+    // City labels are a sibling SVG above the WebGL canvas. Delegate their
+    // complete contact lifecycle into the renderer's existing handlers instead
+    // of giving labels a second activation path. Pointer capture moves an active
+    // gesture onto the canvas; these wrappers are also the fallback when capture
+    // is unavailable, and wheel keeps the same anchored-zoom authority.
+    const onCityLayerPointerDown = (event: PointerEvent) => {
+      event.stopPropagation();
+      onPointerDown(event);
+    };
+    const onCityLayerPointerMove = (event: PointerEvent) => {
+      event.stopPropagation();
+      onPointerMove(event);
+    };
+    const onCityLayerPointerUp = (event: PointerEvent) => {
+      event.stopPropagation();
+      onPointerUp(event);
+    };
+    const onCityLayerPointerCancel = (event: PointerEvent) => {
+      event.stopPropagation();
+      onPointerCancel(event);
+    };
+    const onCityLayerWheel = (event: WheelEvent) => {
+      event.stopPropagation();
+      onWheel(event);
+    };
+
     cityVectorLayer.addEventListener("pointerdown", onCityLayerPointerDown);
+    cityVectorLayer.addEventListener("pointermove", onCityLayerPointerMove);
+    cityVectorLayer.addEventListener("pointerup", onCityLayerPointerUp);
+    cityVectorLayer.addEventListener("pointercancel", onCityLayerPointerCancel);
+    cityVectorLayer.addEventListener("wheel", onCityLayerWheel, { passive: false });
     renderer.domElement.addEventListener("pointerdown", onPointerDown);
     renderer.domElement.addEventListener("pointermove", onPointerMove);
     renderer.domElement.addEventListener("pointerup", onPointerUp);
@@ -5670,6 +5670,10 @@ export function ParticleEarthScene({
         resizeObserver.disconnect();
         window.removeEventListener("resize", resize);
         cityVectorLayer.removeEventListener("pointerdown", onCityLayerPointerDown);
+        cityVectorLayer.removeEventListener("pointermove", onCityLayerPointerMove);
+        cityVectorLayer.removeEventListener("pointerup", onCityLayerPointerUp);
+        cityVectorLayer.removeEventListener("pointercancel", onCityLayerPointerCancel);
+        cityVectorLayer.removeEventListener("wheel", onCityLayerWheel);
         renderer.domElement.removeEventListener("pointerdown", onPointerDown);
         renderer.domElement.removeEventListener("pointermove", onPointerMove);
         renderer.domElement.removeEventListener("pointerup", onPointerUp);

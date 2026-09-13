@@ -213,4 +213,17 @@ describe("ST-065 Home / Route Point pointer ownership", () => {
     expect(journey).toBeGreaterThan(pick);
     expect(home).toBeGreaterThan(journey);
   });
+
+  it("routes city-label contacts through that same renderer pointer authority", () => {
+    const particleSource = readFileSync(new URL("./ParticleEarthScene.tsx", import.meta.url), "utf8");
+    expect(particleSource).not.toContain('entry.element.addEventListener("pointerup"');
+    expect(particleSource).toContain('cityVectorLayer.addEventListener("pointerdown", onCityLayerPointerDown)');
+    expect(particleSource).toContain('cityVectorLayer.addEventListener("pointerup", onCityLayerPointerUp)');
+    expect(particleSource).toContain('cityVectorLayer.addEventListener("pointercancel", onCityLayerPointerCancel)');
+    expect(particleSource).toContain('cityVectorLayer.addEventListener("wheel", onCityLayerWheel, { passive: false })');
+    expect(particleSource).toContain("onPointerDown(event);");
+    expect(particleSource).toContain("onPointerUp(event);");
+    expect(particleSource).toContain("onPointerCancel(event);");
+    expect(particleSource).toContain("onWheel(event);");
+  });
 });

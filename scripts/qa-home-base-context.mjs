@@ -342,9 +342,10 @@ try {
   await page.close();
 
   // Compact mobile uses the same geographic marker; no Home tab/tool is added.
-  // Keep the compact context fixture independent of desktop Journey focus/route
-  // ownership already proven above; this fresh Atlas contains Home history only.
-  const mobile = await openOwner({ width: 390, height: 844 }, { journeyRows: [] });
+  // The current Shenzhen Home is deliberately separated from both Journey Route
+  // Points, so this proves ordinary Home activation without introducing an
+  // empty-Atlas camera-seeding prerequisite into the ST-065 context contract.
+  const mobile = await openOwner({ width: 390, height: 844 });
   const mobilePage = mobile.page;
   const mobileMarker = await currentHomeMarker(mobilePage);
   const mobilePointerOwner = await clickProjectedHome(mobilePage, mobileMarker);
