@@ -74,8 +74,33 @@ function record(name, data, condition) {
 }
 
 async function installOwnerApi(page) {
-  await page.route("**/api/auth/get-session", (route) => route.fulfill({
-    status: 200, contentType: "application/json", body: "null",
+  const session = {
+    session: {
+      id: "qa-home-session", userId: "qa-user", token: "qa-token",
+      expiresAt: "2027-01-01T00:00:00.000Z", createdAt: "2026-09-01T00:00:00.000Z",
+      updatedAt: "2026-09-01T00:00:00.000Z", activeOrganizationId: "qa-org",
+    },
+    user: {
+      id: "qa-user", name: "QA Traveler", email: "qa@example.com", emailVerified: true,
+      createdAt: "2026-09-01T00:00:00.000Z", updatedAt: "2026-09-01T00:00:00.000Z",
+    },
+  };
+  await page.route("**/api/auth/**", (route) => {
+    const pathname = new URL(route.request().url()).pathname;
+    if (pathname.endsWith("/get-session")) {
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(session) });
+    }
+    if (pathname.endsWith("/organization/list")) {
+      return route.fulfill({
+        status: 200, contentType: "application/json",
+        body: JSON.stringify([{ id: "qa-org", name: "QA Atlas", slug: "qa-atlas" }]),
+      });
+    }
+    return route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+  });
+  await page.route("**/api/atlases/current", (route) => route.fulfill({
+    status: 200, contentType: "application/json",
+    body: JSON.stringify({ atlas: { id: "qa-atlas", title: "QA Atlas", dedication: "同行记忆" }, role: "owner" }),
   }));
   await page.route("**/api/journeys", (route) => route.fulfill({
     status: 200, contentType: "application/json", body: JSON.stringify({ journeys }),
@@ -95,7 +120,7 @@ async function openOwner(viewport) {
   const pageErrors = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
   await installOwnerApi(page);
-  await page.goto(`${origin}/?qaState=living-atlas&qaHomeBaseSuggestion=1`, { waitUntil: "domcontentloaded" });
+  await page.goto(`${origin}/?qaState=atlas-gateway`, { waitUntil: "domcontentloaded" });
   await page.locator(".living-atlas").waitFor({ state: "visible", timeout: 30_000 });
   await page.waitForFunction(
     (periodId) => {
