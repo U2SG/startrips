@@ -230,6 +230,7 @@ export default function DetailedEarthMap({
     // effect has finished wiring calibration/reveal callbacks. Keep the event
     // bit so the later idempotent settle function can recover that race.
     let loadEventObserved = false;
+    let renderEventObserved = false;
     let settleInitialLoad: (() => void) | null = null;
     map.on("load", () => {
       loadEventObserved = true;
@@ -432,7 +433,13 @@ export default function DetailedEarthMap({
 
     map.on("render", () => {
       renderCount += 1;
+      renderEventObserved = true;
       host.dataset.mapRenderCount = String(renderCount);
+      // MapLibre can render a valid style frame before its one-shot `load`
+      // event under a hidden/prewarmed surface. Use that renderer event only
+      // to bootstrap initial synchronization; reveal still waits for the NEXT
+      // post-sync render revision below.
+      if (!initialLoadSettled) settleInitialLoad?.();
     });
     map.on("resize", () => {
       resizeCount += 1;
@@ -464,7 +471,11 @@ export default function DetailedEarthMap({
       initialLoadSettled = true;
       host.dataset.mapReady = "true";
       host.dataset.mapLoadCount = "1";
-      host.dataset.mapLoadSource = loadEventObserved ? "load-event" : "style-loaded-recovery";
+      host.dataset.mapLoadSource = loadEventObserved
+        ? "load-event"
+        : renderEventObserved
+          ? "render-bootstrap"
+          : "style-loaded-recovery";
       // Calibrate first, then require a post-sync MapLibre render for the
       // current real host geometry before this renderer can become visual-ready.
       calibrateToParticle();
@@ -473,7 +484,7 @@ export default function DetailedEarthMap({
     // If the fast style finished before the event callback was fully wired,
     // recover from current MapLibre style truth instead of stranding prewarm.
     // This is an event-state reconciliation, not polling or a delay.
-    if (loadEventObserved || map.isStyleLoaded()) settleInitialLoad();
+    if (loadEventObserved || renderEventObserved || map.isStyleLoaded()) settleInitialLoad();
 
     calibrateRef.current = () => calibrateToParticle();
     if (calibrationHandleRef) {
