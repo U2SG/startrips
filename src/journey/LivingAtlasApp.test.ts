@@ -12,6 +12,7 @@ vi.mock("../auth/AuthGateway", () => ({
 import { readFileSync } from "node:fs";
 import {
   atlasCinematicIsolationActive,
+  journeyRailVisibility,
   captureUnknownCreateObservationOwnership,
   closeUnknownCreateWithCurrentAtlasTruth,
   explicitSelectedJourneyIdForHomeCamera,
@@ -1880,5 +1881,13 @@ describe("ST-060 a successful confirmation takes the card down on its own", () =
     const replaced = merged.find((period) => period.id === "period-open");
     expect(replaced?.startedOn).toBe("2025-01-01");
     expect(replaced?.endedOn).toBe(confirmed.startedOn);
+  });
+});
+
+describe("ST-063 Journey Rail visibility release", () => {
+  it("restores the desktop rail when Playback and point-picking release ownership", () => {
+    expect(journeyRailVisibility(true, false)).toBe("hidden");
+    expect(journeyRailVisibility(false, true)).toBe("hidden");
+    expect(journeyRailVisibility(false, false)).toBe("visible");
   });
 });
