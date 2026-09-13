@@ -456,7 +456,7 @@ export default function DetailedEarthMap({
       // event under a hidden/prewarmed surface. Use that renderer event only
       // to bootstrap initial synchronization; reveal still waits for a LATER
       // post-sync render revision.
-      if (!initialLoadSettled) settleInitialLoad?.();
+      if (!initialLoadSettled && map.isStyleLoaded()) settleInitialLoad?.();
 
       const pending = pendingRevealCommit;
       if (
@@ -518,7 +518,7 @@ export default function DetailedEarthMap({
     // If the fast style finished before the event callback was fully wired,
     // recover from current MapLibre style truth instead of stranding prewarm.
     // This is an event-state reconciliation, not polling or a delay.
-    if (loadEventObserved || renderEventObserved || map.isStyleLoaded()) settleInitialLoad();
+    if (loadEventObserved || map.isStyleLoaded()) settleInitialLoad();
 
     calibrateRef.current = () => calibrateToParticle();
     if (calibrationHandleRef) {

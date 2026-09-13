@@ -246,13 +246,30 @@ async function installStageRecorder(page) {
     };
     const observer = new MutationObserver(recordStagePresentation);
     observer.observe(section, { attributes: true, attributeFilter: ["data-earth-dive"] });
-    if (detailLayer instanceof HTMLElement) {
-      const revealObserver = new MutationObserver(recordStagePresentation);
-      revealObserver.observe(detailLayer, {
+
+    // The detail layer is intentionally absent while Particle owns the Dive.
+    // Follow its actual mount/remount lifecycle, then observe the reveal
+    // attribute on that exact current node so `holding` is replaced by the
+    // final fallback/off/spatial presentation for the same stage entry.
+    let observedDetailLayer = null;
+    let revealObserver = null;
+    const attachRevealObserver = () => {
+      const nextDetailLayer = document.querySelector(".living-atlas-globe__detail-layer");
+      if (nextDetailLayer === observedDetailLayer) return;
+      revealObserver?.disconnect();
+      revealObserver = null;
+      observedDetailLayer = nextDetailLayer instanceof HTMLElement ? nextDetailLayer : null;
+      if (!observedDetailLayer) return;
+      revealObserver = new MutationObserver(recordStagePresentation);
+      revealObserver.observe(observedDetailLayer, {
         attributes: true,
         attributeFilter: ["data-earth-dive-spatial-reveal"],
       });
-    }
+      recordStagePresentation();
+    };
+    const detailMountObserver = new MutationObserver(attachRevealObserver);
+    detailMountObserver.observe(section, { childList: true, subtree: true });
+    attachRevealObserver();
     window.__qaEarthDiveReset = () => {
       window.__qaEarthDiveStages = [sample()];
       window.__qaEarthDiveWheelEvents = [];
