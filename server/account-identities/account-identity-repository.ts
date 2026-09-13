@@ -222,9 +222,13 @@ async function lockProviderIdentity(
   // index. Serialize explicit Startrips links on that stable external identity
   // before either the Better Auth row or our ownership row is inspected. The
   // durable unique ownership index remains the database backstop.
+  // PostgreSQL text parameters cannot contain NUL bytes. JSON encodes the
+  // ordered pair injectively (including separators/control characters) while
+  // staying valid UTF-8 text for hashtextextended().
+  const lockKey = JSON.stringify([providerId, providerSubject]);
   await transaction.execute(sql`
     select pg_advisory_xact_lock(
-      hashtextextended(${`${providerId}\u0000${providerSubject}`}, 0)
+      hashtextextended(${lockKey}, 0)
     )
   `);
 }
