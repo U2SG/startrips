@@ -668,10 +668,17 @@ try {
   );
   const mapZoomChange = (detailFrames.detail?.mapZoom ?? Number.NaN)
     - (blendingFrames.detail?.mapZoom ?? Number.NaN);
-  const mapSelfContinuityError = Math.abs(
-    ((detailFrames.detail?.scale ?? Number.NaN) / (blendingFrames.detail?.scale ?? Number.NaN))
-    / 2 ** mapZoomChange - 1,
-  );
+  // Globe projection deliberately makes CSS pixels-per-degree a function of
+  // more than MapLibre's scalar zoom. The particle renderer is still the sole
+  // camera authority for the commit-crossing wheel, so grade continuity against
+  // its measured scale change instead of assuming `2 ** mapZoomChange` is the
+  // projection's exact screen-space scale ratio. Same-frame anchor/scale checks
+  // above still prove both renderers are aligned on each side of the handoff.
+  const particleScaleChange = (detailFrames.particle?.scale ?? Number.NaN)
+    / (blendingFrames.particle?.scale ?? Number.NaN);
+  const detailScaleChange = (detailFrames.detail?.scale ?? Number.NaN)
+    / (blendingFrames.detail?.scale ?? Number.NaN);
+  const authorityScaleContinuityError = Math.abs(detailScaleChange / particleScaleChange - 1);
 
   result.forward = {
     stageLadder,
@@ -746,7 +753,9 @@ try {
       worstLocalScaleError,
       localScaleTolerance: LOCAL_SCALE_TOLERANCE,
       mapZoomChange,
-      mapSelfContinuityError,
+      particleScaleChange,
+      detailScaleChange,
+      authorityScaleContinuityError,
     },
     consoleErrors: forward.consoleErrors,
     pageErrors: forward.pageErrors,
@@ -808,8 +817,8 @@ try {
   if (detailOwnedWheelCount === 0 && !(detailFrames.anchorDeltaPx <= ANCHOR_TOLERANCE_PX)) {
     ladderFailures.push(`detail drifted to ${detailFrames.anchorDeltaPx}px without any detail-owned input`);
   }
-  if (detailOwnedWheelCount === 0 && !(mapSelfContinuityError <= LOCAL_SCALE_TOLERANCE)) {
-    ladderFailures.push(`the detail frame jumped by ${mapSelfContinuityError} without user input`);
+  if (detailOwnedWheelCount === 0 && !(authorityScaleContinuityError <= LOCAL_SCALE_TOLERANCE)) {
+    ladderFailures.push(`the detail frame diverged from particle camera authority by ${authorityScaleContinuityError} across handoff`);
   }
   if (
     JSON.stringify(reentryStages) !== JSON.stringify(["particle", "prewarm", "blending", "detail"])
