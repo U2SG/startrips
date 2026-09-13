@@ -4,6 +4,7 @@ import {
   inferHomeBaseCandidate,
   type HomeBaseDismissal,
   type HomeBaseEvidenceReasonCode,
+  type HomeBaseEvidenceSupport,
   type HomeBaseInferenceInput,
   type HomeBaseInferenceResult,
   type HomeBaseMetroAnchor,
@@ -316,12 +317,20 @@ export function resolveHomeBasePlaceLabel(
   journeys: readonly HomeBasePlaceLabelJourney[],
   anchor: HomeBaseMetroAnchor | null,
   evidenceDigest?: string | null,
+  exactEvidenceSupport?: readonly HomeBaseEvidenceSupport[] | null,
 ): string | null {
   if (!anchor) return null;
-  const evidenceSupport = evidenceDigest === undefined
-    ? undefined
-    : placeLabelEvidenceSupport(evidenceDigest);
-  if (evidenceDigest !== undefined && evidenceSupport === null) return null;
+  const evidenceSupport = exactEvidenceSupport !== undefined
+    ? exactEvidenceSupport === null
+      ? null
+      : new Map<string, HomeBasePlaceLabelEvidenceSupport>(exactEvidenceSupport.map((support) => [
+          support.journeyId,
+          { supportsStart: support.supportsStart, supportsEnd: support.supportsEnd },
+        ]))
+    : evidenceDigest === undefined
+      ? undefined
+      : placeLabelEvidenceSupport(evidenceDigest);
+  if ((evidenceDigest !== undefined || exactEvidenceSupport !== undefined) && evidenceSupport === null) return null;
 
   const counts = new Map<string, number>();
   for (const journey of journeys) {

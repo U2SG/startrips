@@ -11,10 +11,12 @@ import {
   HOME_BASE_SOFT_DISMISSAL_MIN_NEW_JOURNEYS,
   HOME_BASE_SUGGESTED_MIN_JOURNEYS,
   HOME_BASE_SUGGESTED_MIN_SPAN_DAYS,
+  applyHomeBaseDismissalToInferenceResult,
   homeBaseEvidenceDigest,
   inferHomeBaseCandidate,
   isPersistableHomeBaseEvidenceDigest,
   type HomeBaseInferenceJourney,
+  type HomeBaseInferenceResult,
 } from "./homeBaseInference";
 import { haversineDistanceKm } from "./mediaPlacement";
 
@@ -1174,10 +1176,7 @@ describe("persistable Home Base evidence digests", () => {
     expect(isPersistableHomeBaseEvidenceDigest(digest)).toBe(true);
   });
 
-  it("accepts a genuine digest whose supporting Journey set exceeds the former 64 KiB ceiling", () => {
-    // A digest carries roughly forty bytes per supporting Journey, so a member
-    // with a long-lived Home region produced output the persistence guard used
-    // to refuse — which left the real card impossible to dismiss or reject.
+  it("bounds a genuine large-support digest below the persistence ceiling", () => {
     const manySupports = Array.from({ length: 2400 }, (_value, index) => ({
       journeyId: `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
       supportsStart: true,
@@ -1189,8 +1188,59 @@ describe("persistable Home Base evidence digests", () => {
       evidenceStartedOn: "2020-01-01",
       evidenceEndedOn: "2026-04-15",
     });
-    expect(wideDigest.length).toBeGreaterThan(64 * 1024);
+    expect(wideDigest.startsWith("hbi-v3:")).toBe(true);
+    expect(wideDigest.length).toBeLessThanOrEqual(HOME_BASE_EVIDENCE_DIGEST_MAX_LENGTH);
     expect(isPersistableHomeBaseEvidenceDigest(wideDigest)).toBe(true);
+  });
+
+  it("keeps exact two-new-Journeys semantics with compact persisted digests", () => {
+    const support = (index: number) => ({
+      journeyId: "00000000-0000-4000-8000-" + String(index).padStart(12, "0"),
+      supportsStart: true,
+      supportsEnd: true,
+    });
+    const previousSupports = Array.from({ length: 2400 }, (_value, index) => support(index + 1));
+    const previousDigest = homeBaseEvidenceDigest({
+      anchor: SHENZHEN,
+      supports: previousSupports,
+      evidenceStartedOn: "2020-01-01",
+      evidenceEndedOn: "2026-04-15",
+    });
+    expect(previousDigest.startsWith("hbi-v3:")).toBe(true);
+    expect(isPersistableHomeBaseEvidenceDigest(previousDigest)).toBe(true);
+
+    const resultFor = (supports: ReturnType<typeof support>[]): HomeBaseInferenceResult => ({
+      state: "suggested",
+      metroAnchor: SHENZHEN,
+      reasonCodes: [],
+      evidenceDigest: homeBaseEvidenceDigest({
+        anchor: SHENZHEN,
+        supports,
+        evidenceStartedOn: "2020-01-01",
+        evidenceEndedOn: "2026-06-15",
+      }),
+      support: {
+        journeys: supports.length,
+        starts: supports.length,
+        ends: supports.length,
+        runnerUpJourneys: 0,
+        evidenceSpanDays: 1,
+        evidenceStartedOn: "2020-01-01",
+        evidenceEndedOn: "2026-06-15",
+      },
+      proposedPeriodStart: null,
+    });
+    const dismissal = { kind: "soft" as const, digest: previousDigest, dismissedAt: "2026-04-15" };
+    expect(applyHomeBaseDismissalToInferenceResult(
+      resultFor([...previousSupports, support(2401)]),
+      dismissal,
+      "2026-08-01",
+    ).state).toBe("dismissed");
+    expect(applyHomeBaseDismissalToInferenceResult(
+      resultFor([...previousSupports, support(2401), support(2402)]),
+      dismissal,
+      "2026-08-01",
+    ).state).toBe("suggested");
   });
 
   it("rejects noncanonical, forged, or oversized digest payloads", () => {

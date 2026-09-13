@@ -81,19 +81,18 @@ export const homeBasePeriods = pgTable(
 );
 
 // #232: the member's answer to a Home Base suggestion, so that answer can
-// survive the session it was given in. One row per Atlas: the suggestion
-// surface asks about at most one region at a time, so a later answer replaces
-// the same evidence revision rather than accumulating duplicate clicks; answers for
-// other regions/evidence revisions remain available to the inference selector.
+// survive the session it was given in. Persistence keeps one effective answer
+// per semantic <=25 km Home region while retaining other regions independently.
+// Evidence churn within a region updates that answer instead of filling history.
 //
-// `evidence_digest` stores `homeBaseEvidenceDigest()` verbatim. That string is
-// structured, not opaque — the inference core parses the anchor and the
-// supporting Journey ids back out of it to decide whether materially new
-// residence evidence exists — so it is stored unbounded and untrimmed.
+// `evidence_digest` stores the accepted canonical inference digest byte-exact.
+// The write path applies a per-digest ceiling and a bounded region history; large
+// legitimate evidence sets use the compact hbi-v3 representation rather than an
+// unbounded list of supporting Journey ids.
 //
 // `kind` separates an ordinary "not now" from an explicit rejection, which the
-// issue asks to respect more strongly. `dismissed_on` is the calendar date the
-// 90-day re-prompt rule counts from.
+// issue asks to respect more strongly. `dismissed_on` is the trusted server
+// calendar date the 90-day re-prompt rule counts from.
 export const homeBaseDismissals = pgTable(
   "home_base_dismissals",
   {
@@ -104,7 +103,7 @@ export const homeBaseDismissals = pgTable(
     kind: text("kind").notNull(),
     evidenceDigest: text("evidence_digest").notNull(),
     // Fixed-size MD5 hex key keeps the unique B-tree independent of the
-    // unbounded evidence digest while the full digest remains byte-exact.
+    // bounded variable-length evidence digest while the full digest remains byte-exact.
     evidenceDigestHash: text("evidence_digest_hash").notNull(),
     dismissedOn: date("dismissed_on", { mode: "string" }).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true })

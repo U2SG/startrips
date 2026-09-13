@@ -35,6 +35,7 @@ import { JourneyPlaybackOverlay } from "./JourneyPlaybackOverlay";
 import { resolveHomeNarrativeContext, type HomeNarrativeContext } from "./homeBasePrelude";
 import { classifyHomeBasePeriodWrite, type HomeBasePeriod } from "./homeBase";
 import {
+  homeBaseInferenceEvidenceSupport,
   inferHomeBaseCandidate,
   type HomeBaseDismissal,
   type HomeBaseInferenceResult,
@@ -1115,7 +1116,12 @@ export function LivingAtlasApp({
     if (!homeBaseInference) return null;
     const decision = resolveHomeBaseSuggestion({
       result: homeBaseInference,
-      placeLabel: resolveHomeBasePlaceLabel(journeys, homeBaseInference.metroAnchor, homeBaseInference.evidenceDigest),
+      placeLabel: resolveHomeBasePlaceLabel(
+        journeys,
+        homeBaseInference.metroAnchor,
+        homeBaseInference.evidenceDigest,
+        homeBaseInferenceEvidenceSupport(homeBaseInference),
+      ),
       confirmedPlaceLabel: currentHomeBasePeriod?.label ?? null,
       // Story and Playback own the screen while they are open, and Home Base
       // setup never interrupts either.

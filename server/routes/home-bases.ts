@@ -11,12 +11,17 @@ import {
   type HomeBasePeriodPatch,
   type HomeBasePeriodValues,
 } from "../repositories/home-base-repository";
+import { listJourneysForAtlas } from "../repositories/journey-repository";
 import { isPersistedCalendarDate } from "../../src/journey/calendarDate";
 import { isHomeBaseSource } from "../../src/journey/homeBase";
 import {
   isPersistableHomeBaseEvidenceDigest,
   type HomeBaseDismissal,
 } from "../../src/journey/homeBaseInference";
+import {
+  homeBaseInferenceEvidenceBoundaryAfterRecordedHistory,
+  inferHomeBaseCandidateWithDismissals,
+} from "../../src/journey/homeBaseSuggestion";
 import { readJsonObject } from "./json-body";
 
 /**
@@ -210,6 +215,38 @@ homeBaseRoutes.post("/dismissal", async (context) => {
       400,
     );
   }
+  const [journeys, periods, dismissals] = await Promise.all([
+    listJourneysForAtlas(atlas.id),
+    listHomeBasePeriodsForAtlas(atlas.id),
+    listHomeBaseDismissalsForAtlas(atlas.id),
+  ]);
+  const currentPeriod = periods.find((period) => period.endedOn === null) ?? null;
+  const authoritativeInference = inferHomeBaseCandidateWithDismissals({
+    journeys: journeys.map((journey) => ({
+      id: journey.id,
+      startedOn: journey.startedOn,
+      endedOn: journey.endedOn,
+      routePoints: journey.routePoints.map((point) => ({
+        id: point.id,
+        sortOrder: point.sortOrder,
+        latitude: point.latitude,
+        longitude: point.longitude,
+      })),
+    })),
+    confirmedPeriod: currentPeriod,
+    evaluationDate: input.dismissedOn,
+    evidenceNotBefore: homeBaseInferenceEvidenceBoundaryAfterRecordedHistory(periods),
+  }, dismissals);
+  if (
+    (authoritativeInference.state !== "suggested" && authoritativeInference.state !== "move_suggested")
+    || authoritativeInference.evidenceDigest !== input.digest
+  ) {
+    return context.json(
+      { error: "INVALID_HOME_BASE_DISMISSAL", message: "Invalid Home Base dismissal data" },
+      400,
+    );
+  }
+
   try {
     const dismissal = await recordHomeBaseDismissalForAtlas(atlas.id, input);
     if (!dismissal) return context.json({ error: "ATLAS_NOT_FOUND" }, 404);

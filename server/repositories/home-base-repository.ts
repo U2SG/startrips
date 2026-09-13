@@ -10,9 +10,12 @@ import {
   type HomeBaseSource,
 } from "../../src/journey/homeBase";
 import {
+  HOME_BASE_CLUSTER_RADIUS_KM,
   HOME_BASE_EVIDENCE_DIGEST_MAX_LENGTH,
+  homeBaseEvidenceDigestAnchor,
   type HomeBaseDismissal,
 } from "../../src/journey/homeBaseInference";
+import { haversineDistanceKm } from "../../src/journey/mediaPlacement";
 
 /**
  * #231: the write side of the Home Base timeline.
@@ -265,18 +268,34 @@ export async function countHomeBasePeriodsForAtlas(
 /**
  * #232: the member's answers to Home Base suggestions.
  *
- * Answers are preserved per evidence revision rather than collapsed to one row
- * per Atlas. The full digest remains byte-exact because the inference core
- * parses its region anchor and Journey ids from it. Uniqueness uses a fixed-size
- * MD5 key, so the variable-length digest never becomes a B-tree index entry. The
- * Atlas row lock serializes this path; a theoretical hash collision fails closed
+ * Answers are bounded by semantic Home region: evidence churn inside the frozen
+ * 25 km radius updates that region instead of consuming another history slot,
+ * while genuinely different regions remain independent. The accepted digest is
+ * still byte-exact, has its own per-row ceiling, and uses a fixed-size MD5 key so
+ * variable evidence never becomes a B-tree index entry. The Atlas row lock
+ * serializes consolidation/rotation; a theoretical hash collision fails closed
  * instead of overwriting another answer.
  */
 function homeBaseDismissalDigestHash(digest: string): string {
   return createHash("md5").update(digest, "utf8").digest("hex");
 }
 
-export const MAX_HOME_BASE_DISMISSALS_PER_ATLAS = 64;
+export const MAX_HOME_BASE_DISMISSALS_PER_ATLAS = 16;
+/** Hard upper bound for one Atlas' persisted/read dismissal digest payload. */
+export const MAX_HOME_BASE_DISMISSAL_BYTES_PER_ATLAS =
+  MAX_HOME_BASE_DISMISSALS_PER_ATLAS * HOME_BASE_EVIDENCE_DIGEST_MAX_LENGTH;
+
+function homeBaseDismissalRegionDistanceKm(firstDigest: string, secondDigest: string): number | null {
+  const first = homeBaseEvidenceDigestAnchor(firstDigest);
+  const second = homeBaseEvidenceDigestAnchor(secondDigest);
+  if (!first || !second) return null;
+  return haversineDistanceKm(first.latitude, first.longitude, second.latitude, second.longitude);
+}
+
+function sameHomeBaseDismissalRegion(firstDigest: string, secondDigest: string): boolean {
+  const distance = homeBaseDismissalRegionDistanceKm(firstDigest, secondDigest);
+  return distance !== null && distance <= HOME_BASE_CLUSTER_RADIUS_KM;
+}
 
 export class HomeBaseDismissalDigestTooLargeError extends Error {
   constructor() {
@@ -325,19 +344,47 @@ export async function recordHomeBaseDismissalForAtlas(
       ))
       .limit(1);
 
-    if (existing) {
-      if (existing.digest !== values.digest) {
-        throw new Error("HOME_BASE_DISMISSAL_DIGEST_HASH_COLLISION");
-      }
-      const keepRejected = existing.kind === "rejected";
+    if (existing && existing.digest !== values.digest) {
+      throw new Error("HOME_BASE_DISMISSAL_DIGEST_HASH_COLLISION");
+    }
+
+    const regionRows = await transaction
+      .select({
+        id: homeBaseDismissals.id,
+        kind: homeBaseDismissals.kind,
+        digest: homeBaseDismissals.evidenceDigest,
+        dismissedAt: homeBaseDismissals.dismissedOn,
+      })
+      .from(homeBaseDismissals)
+      .where(eq(homeBaseDismissals.atlasId, atlasId));
+    const sameRegionRows = regionRows
+      .map((row) => ({
+        row,
+        distanceKm: homeBaseDismissalRegionDistanceKm(row.digest, values.digest),
+      }))
+      .filter((match): match is { row: typeof regionRows[number]; distanceKm: number } => (
+        match.distanceKm !== null && match.distanceKm <= HOME_BASE_CLUSTER_RADIUS_KM
+      ))
+      .sort((first, second) => first.distanceKm - second.distanceKm);
+    if (sameRegionRows.length > 0) {
+      const rejected = sameRegionRows.find((match) => match.row.kind === "rejected");
+      const target = (rejected ?? sameRegionRows[0]!).row;
+      // Update one closest semantic region only. A new candidate can sit between
+      // two historical anchors that are themselves >25 km apart; deleting every
+      // row that matches the incoming midpoint would incorrectly merge them.
+
+      const keepRejected = target.kind === "rejected";
+      const finalDigest = keepRejected ? target.digest : values.digest;
       const [row] = await transaction
         .update(homeBaseDismissals)
         .set({
           kind: keepRejected ? "rejected" : values.kind,
-          dismissedOn: keepRejected ? existing.dismissedAt : values.dismissedOn,
+          evidenceDigest: finalDigest,
+          evidenceDigestHash: homeBaseDismissalDigestHash(finalDigest),
+          dismissedOn: keepRejected ? target.dismissedAt : values.dismissedOn,
           updatedAt: new Date(),
         })
-        .where(eq(homeBaseDismissals.id, existing.id))
+        .where(eq(homeBaseDismissals.id, target.id))
         .returning({
           kind: homeBaseDismissals.kind,
           digest: homeBaseDismissals.evidenceDigest,

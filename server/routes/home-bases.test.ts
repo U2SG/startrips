@@ -1,10 +1,16 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createEmailVerificationToken } from "better-auth/api";
 import { eq, inArray, sql } from "drizzle-orm";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { app } from "../app";
 import { serverConfig } from "../config";
-import { atlases, homeBaseDismissals, homeBasePeriods } from "../db/app-schema";
+import {
+  atlases,
+  homeBaseDismissals,
+  homeBasePeriods,
+  journeyRoutePoints,
+  journeys,
+} from "../db/app-schema";
 import {
   organization as authOrganizations,
   rateLimit,
@@ -12,7 +18,11 @@ import {
 } from "../db/auth-schema";
 import { hasAtlasPermission } from "../authorization/permissions";
 import { db, pool } from "../db/client";
-import { MAX_HOME_BASE_DISMISSALS_PER_ATLAS } from "../repositories/home-base-repository";
+import {
+  MAX_HOME_BASE_DISMISSAL_BYTES_PER_ATLAS,
+  MAX_HOME_BASE_DISMISSALS_PER_ATLAS,
+  recordHomeBaseDismissalForAtlas,
+} from "../repositories/home-base-repository";
 import { parseHomeBaseDismissalInput, parseHomeBaseInput, parseHomeBasePatch } from "./home-bases";
 import {
   HOME_BASE_EVIDENCE_DIGEST_MAX_LENGTH,
@@ -53,6 +63,35 @@ function validDismissalDigest(
     })),
     evidenceStartedOn,
     evidenceEndedOn,
+  });
+}
+
+async function seedDismissalSuggestion(
+  atlasId: string,
+  latitude = 22.5431,
+  longitude = 114.0579,
+) {
+  const dates = ["2026-01-01", "2026-02-01", "2026-03-01", "2026-04-15"] as const;
+  const created = await db.insert(journeys).values(dates.map((date, index) => ({
+    atlasId,
+    title: `Home evidence ${index + 1}`,
+    startedOn: date,
+    endedOn: date,
+    createdByUserId: "home-base-route-test",
+  }))).returning({ id: journeys.id });
+  await db.insert(journeyRoutePoints).values(created.flatMap((journey) => ([
+    { journeyId: journey.id, sortOrder: 0, latitude, longitude, label: "Home", isStop: true },
+    { journeyId: journey.id, sortOrder: 1, latitude, longitude, label: "Home", isStop: true },
+  ])));
+  return homeBaseEvidenceDigest({
+    anchor: { latitude, longitude },
+    supports: created.map((journey) => ({
+      journeyId: journey.id,
+      supportsStart: true,
+      supportsEnd: true,
+    })),
+    evidenceStartedOn: dates[0],
+    evidenceEndedOn: dates[dates.length - 1],
   });
 }
 
@@ -383,7 +422,7 @@ describe("the Home Base dismissal body", () => {
 });
 
 describe("GET and POST /api/home-bases/dismissal", () => {
-  const DIGEST = validDismissalDigest();
+  let DIGEST = "";
 
   async function postDismissal(cookie: string, body: unknown) {
     return await app.request(`${TEST_ORIGIN}/api/home-bases/dismissal`, {
@@ -393,14 +432,26 @@ describe("GET and POST /api/home-bases/dismissal", () => {
     });
   }
 
-  it("derives the atlas from the session and ignores an atlas or organization id in the body", async () => {
+  beforeEach(async () => {
+    await db.delete(homeBaseDismissals).where(inArray(homeBaseDismissals.atlasId, [
+      resident.atlasId,
+      neighbour.atlasId,
+    ]));
+    await db.delete(journeys).where(inArray(journeys.atlasId, [
+      resident.atlasId,
+      neighbour.atlasId,
+    ]));
+    DIGEST = await seedDismissalSuggestion(neighbour.atlasId);
+  });
+
+  it("derives the atlas from the session, uses server time, and persists only the current authoritative suggestion", async () => {
     const serverDateBefore = new Date().toISOString().slice(0, 10);
-    const response = await postDismissal(resident.cookie, {
+    const response = await postDismissal(neighbour.cookie, {
       kind: "soft",
       evidenceDigest: DIGEST,
       dismissedOn: "2099-12-31",
-      atlasId: neighbour.atlasId,
-      organizationId: neighbour.organizationId,
+      atlasId: resident.atlasId,
+      organizationId: resident.organizationId,
     });
     const serverDateAfter = new Date().toISOString().slice(0, 10);
     expect(response.status).toBe(201);
@@ -409,80 +460,166 @@ describe("GET and POST /api/home-bases/dismissal", () => {
     expect([serverDateBefore, serverDateAfter]).toContain(responseBody.dismissal.dismissedAt);
     expect(responseBody.dismissal.dismissedAt).not.toBe("2099-12-31");
 
-    // The row landed in the session's own atlas, not the one the body named.
     const rows = await db
       .select({ atlasId: homeBaseDismissals.atlasId })
       .from(homeBaseDismissals)
       .where(eq(homeBaseDismissals.evidenceDigest, DIGEST));
-    expect(rows.map((row) => row.atlasId)).toEqual([resident.atlasId]);
+    expect(rows.map((row) => row.atlasId)).toEqual([neighbour.atlasId]);
 
-    // And the named atlas still has no answer on record.
-    const neighbourRead = await app.request(
+    const residentRead = await app.request(
       `${TEST_ORIGIN}/api/home-bases/dismissal`,
-      { headers: authHeaders(neighbour.cookie) },
+      { headers: authHeaders(resident.cookie) },
     );
-    expect(neighbourRead.status).toBe(200);
-    expect(await neighbourRead.json()).toEqual({ dismissals: [] });
+    expect(residentRead.status).toBe(200);
+    expect(await residentRead.json()).toEqual({ dismissals: [] });
   });
 
-  it("preserves answers for different evidence regions instead of replacing the Atlas row", async () => {
-    const second = validDismissalDigest(35.6895, 139.6917, "2026-05-01", "2026-08-01");
-    expect((await postDismissal(resident.cookie, {
+  it("refuses a canonical digest that was not inferred from this Atlas", async () => {
+    const forged = validDismissalDigest();
+    const response = await postDismissal(neighbour.cookie, {
       kind: "rejected",
-      evidenceDigest: DIGEST,
-      dismissedOn: "2026-04-02",
-    })).status).toBe(201);
-    expect((await postDismissal(resident.cookie, {
-      kind: "soft",
-      evidenceDigest: second,
-      dismissedOn: "2026-07-01",
-    })).status).toBe(201);
-
-    const read = await app.request(`${TEST_ORIGIN}/api/home-bases/dismissal`, {
-      headers: authHeaders(resident.cookie),
+      evidenceDigest: forged,
+      dismissedOn: new Date().toISOString().slice(0, 10),
     });
-    const readBody = await read.json() as { dismissals: Array<{ kind: string; digest: string; dismissedAt: string }> };
-    const today = new Date().toISOString().slice(0, 10);
-    expect(readBody.dismissals).toEqual(expect.arrayContaining([
-      { kind: "rejected", digest: DIGEST, dismissedAt: today },
-      { kind: "soft", digest: second, dismissedAt: today },
-    ]));
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: "INVALID_HOME_BASE_DISMISSAL" });
     const [row] = await db
       .select({ total: sql<number>`count(*)::int` })
       .from(homeBaseDismissals)
-      .where(eq(homeBaseDismissals.atlasId, resident.atlasId));
-    expect(row.total).toBe(2);
+      .where(eq(homeBaseDismissals.atlasId, neighbour.atlasId));
+    expect(row.total).toBe(0);
   });
 
-  it("bounds distinct persisted answers without locking out later suggestions", async () => {
-    const protectedRejection = validDismissalDigest(9, 19, "2025-01-01", "2025-04-15");
-    expect((await postDismissal(neighbour.cookie, {
+  it("refuses real evidence that belongs to a different Atlas", async () => {
+    const otherAtlasDigest = await seedDismissalSuggestion(resident.atlasId, 35.6895, 139.6917);
+    const response = await postDismissal(neighbour.cookie, {
       kind: "rejected",
-      evidenceDigest: protectedRejection,
-      dismissedOn: "1900-01-01",
-    })).status).toBe(201);
+      evidenceDigest: otherAtlasDigest,
+      dismissedOn: new Date().toISOString().slice(0, 10),
+    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: "INVALID_HOME_BASE_DISMISSAL" });
+    const [row] = await db
+      .select({ total: sql<number>`count(*)::int` })
+      .from(homeBaseDismissals)
+      .where(eq(homeBaseDismissals.atlasId, neighbour.atlasId));
+    expect(row.total).toBe(0);
+  });
+
+  it("consolidates evidence churn by region without weakening an explicit rejection", async () => {
+    const first = validDismissalDigest(22.5431, 114.0579, "2026-01-01", "2026-04-01");
+    const sameRegionRevision = validDismissalDigest(22.55, 114.06, "2026-02-01", "2026-05-01");
+    const tokyo = validDismissalDigest(35.6895, 139.6917, "2026-05-01", "2026-08-01");
+
+    await recordHomeBaseDismissalForAtlas(neighbour.atlasId, {
+      kind: "rejected",
+      digest: first,
+      dismissedOn: "2026-04-02",
+    });
+    const sameRegion = await recordHomeBaseDismissalForAtlas(neighbour.atlasId, {
+      kind: "soft",
+      digest: sameRegionRevision,
+      dismissedOn: "2026-05-02",
+    });
+    await recordHomeBaseDismissalForAtlas(neighbour.atlasId, {
+      kind: "soft",
+      digest: tokyo,
+      dismissedOn: "2026-08-02",
+    });
+
+    expect(sameRegion).toEqual({
+      kind: "rejected",
+      digest: first,
+      dismissedAt: "2026-04-02",
+    });
+    const rows = await db
+      .select({ kind: homeBaseDismissals.kind, digest: homeBaseDismissals.evidenceDigest })
+      .from(homeBaseDismissals)
+      .where(eq(homeBaseDismissals.atlasId, neighbour.atlasId));
+    expect(rows).toHaveLength(2);
+    expect(rows).toContainEqual({ kind: "rejected", digest: first });
+    expect(rows).toContainEqual({ kind: "soft", digest: tokyo });
+    expect(rows).not.toContainEqual({ kind: "soft", digest: sameRegionRevision });
+  });
+
+  it("fails closed instead of overwriting a different digest on hash collision", async () => {
+    const incoming = validDismissalDigest(35.6895, 139.6917, "2026-01-01", "2026-04-15");
+    const stored = validDismissalDigest(48.8566, 2.3522, "2026-01-01", "2026-04-15");
+    const incomingHash = createHash("md5").update(incoming, "utf8").digest("hex");
+    await db.insert(homeBaseDismissals).values({
+      atlasId: neighbour.atlasId,
+      kind: "soft",
+      evidenceDigest: stored,
+      evidenceDigestHash: incomingHash,
+      dismissedOn: "2026-04-16",
+    });
+
+    await expect(recordHomeBaseDismissalForAtlas(neighbour.atlasId, {
+      kind: "soft",
+      digest: incoming,
+      dismissedOn: "2026-05-16",
+    })).rejects.toThrow("HOME_BASE_DISMISSAL_DIGEST_HASH_COLLISION");
+    const rows = await db
+      .select({ digest: homeBaseDismissals.evidenceDigest })
+      .from(homeBaseDismissals)
+      .where(eq(homeBaseDismissals.atlasId, neighbour.atlasId));
+    expect(rows).toEqual([{ digest: stored }]);
+  });
+
+  it("does not merge two historical regions more than 25 km apart through a midpoint candidate", async () => {
+    const west = validDismissalDigest(0, 0, "2026-01-01", "2026-04-15");
+    const east = validDismissalDigest(0, 0.4, "2026-01-01", "2026-04-15");
+    const midpoint = validDismissalDigest(0, 0.2, "2026-02-01", "2026-05-15");
+    await recordHomeBaseDismissalForAtlas(neighbour.atlasId, {
+      kind: "soft", digest: west, dismissedOn: "2026-04-16",
+    });
+    await recordHomeBaseDismissalForAtlas(neighbour.atlasId, {
+      kind: "soft", digest: east, dismissedOn: "2026-04-16",
+    });
+    await recordHomeBaseDismissalForAtlas(neighbour.atlasId, {
+      kind: "soft", digest: midpoint, dismissedOn: "2026-05-16",
+    });
+
+    const rows = await db
+      .select({ digest: homeBaseDismissals.evidenceDigest })
+      .from(homeBaseDismissals)
+      .where(eq(homeBaseDismissals.atlasId, neighbour.atlasId));
+    expect(rows).toHaveLength(2);
+    const digests = rows.map((row) => row.digest);
+    expect(digests).toContain(midpoint);
+    expect(Number(digests.includes(west)) + Number(digests.includes(east))).toBe(1);
+  });
+
+  it("bounds distinct regions and aggregate digest payload without evicting a rejection while soft rows remain", async () => {
+    expect(MAX_HOME_BASE_DISMISSAL_BYTES_PER_ATLAS)
+      .toBe(MAX_HOME_BASE_DISMISSALS_PER_ATLAS * HOME_BASE_EVIDENCE_DIGEST_MAX_LENGTH);
+
+    const protectedRejection = validDismissalDigest(-70, 19, "2025-01-01", "2025-04-15");
+    await recordHomeBaseDismissalForAtlas(neighbour.atlasId, {
+      kind: "rejected",
+      digest: protectedRejection,
+      dismissedOn: "2025-04-16",
+    });
 
     for (let index = 0; index < MAX_HOME_BASE_DISMISSALS_PER_ATLAS - 1; index += 1) {
-      const response = await postDismissal(neighbour.cookie, {
+      await recordHomeBaseDismissalForAtlas(neighbour.atlasId, {
         kind: "soft",
-        evidenceDigest: validDismissalDigest(
-          10 + index * 0.01,
-          20 + index * 0.01,
+        digest: validDismissalDigest(
+          -60 + index * 2,
+          20,
           "2026-01-01",
           "2026-04-15",
         ),
-        dismissedOn: "1900-01-01",
+        dismissedOn: "2026-04-16",
       });
-      expect(response.status).toBe(201);
     }
 
-    const newestDigest = validDismissalDigest(50, 80, "2026-01-01", "2026-04-15");
-    const newest = await postDismissal(neighbour.cookie, {
+    const newestDigest = validDismissalDigest(70, 80, "2026-01-01", "2026-04-15");
+    await recordHomeBaseDismissalForAtlas(neighbour.atlasId, {
       kind: "soft",
-      evidenceDigest: newestDigest,
-      dismissedOn: "1900-01-01",
+      digest: newestDigest,
+      dismissedOn: "2026-04-17",
     });
-    expect(newest.status).toBe(201);
 
     const rows = await db
       .select({ kind: homeBaseDismissals.kind, digest: homeBaseDismissals.evidenceDigest })
@@ -491,42 +628,43 @@ describe("GET and POST /api/home-bases/dismissal", () => {
     expect(rows).toHaveLength(MAX_HOME_BASE_DISMISSALS_PER_ATLAS);
     expect(rows).toContainEqual({ kind: "rejected", digest: protectedRejection });
     expect(rows).toContainEqual({ kind: "soft", digest: newestDigest });
+    expect(rows.reduce((total, row) => total + row.digest.length, 0))
+      .toBeLessThanOrEqual(MAX_HOME_BASE_DISMISSAL_BYTES_PER_ATLAS);
   });
 
   it("never downgrades an explicit rejection for the same evidence to a later soft dismissal", async () => {
-    expect((await postDismissal(resident.cookie, {
+    const first = await recordHomeBaseDismissalForAtlas(neighbour.atlasId, {
       kind: "rejected",
-      evidenceDigest: DIGEST,
+      digest: DIGEST,
       dismissedOn: "2026-04-02",
-    })).status).toBe(201);
-    const retry = await postDismissal(resident.cookie, {
+    });
+    expect(first).toEqual({ kind: "rejected", digest: DIGEST, dismissedAt: "2026-04-02" });
+    const retry = await recordHomeBaseDismissalForAtlas(neighbour.atlasId, {
       kind: "soft",
-      evidenceDigest: DIGEST,
+      digest: DIGEST,
       dismissedOn: "2026-05-02",
     });
-    expect(retry.status).toBe(201);
-    expect(await retry.json()).toEqual({
-      dismissal: {
-        kind: "rejected",
-        digest: DIGEST,
-        dismissedAt: new Date().toISOString().slice(0, 10),
-      },
-    });
+    expect(retry).toEqual({ kind: "rejected", digest: DIGEST, dismissedAt: "2026-04-02" });
   });
 
   it("refuses an unusable body and a request with no session", async () => {
-    const invalid = await postDismissal(resident.cookie, {
+    const invalid = await postDismissal(neighbour.cookie, {
       kind: "soft",
       evidenceDigest: "not-a-digest",
+      dismissedOn: "2026-04-02",
     });
     expect(invalid.status).toBe(400);
     expect(await invalid.json()).toMatchObject({ error: "INVALID_HOME_BASE_DISMISSAL" });
-    expect((await postDismissal("", { kind: "soft", evidenceDigest: DIGEST, dismissedOn: "2026-04-02" })).status)
-      .toBe(401);
-    const anonymous = await app.request(`${TEST_ORIGIN}/api/home-bases/dismissal`, {
-      headers: authHeaders(),
-    });
-    expect(anonymous.status).toBe(401);
+    expect((await postDismissal("", {
+      kind: "soft",
+      evidenceDigest: DIGEST,
+      dismissedOn: "2026-04-02",
+    })).status).toBe(401);
+    const anonymousRead = await app.request(
+      TEST_ORIGIN + "/api/home-bases/dismissal",
+      { headers: authHeaders() },
+    );
+    expect(anonymousRead.status).toBe(401);
   });
 });
 
