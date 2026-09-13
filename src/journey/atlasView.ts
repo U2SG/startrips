@@ -22,7 +22,7 @@ import {
 import { uploadJourneyMedia } from "./JourneyComposer";
 import type { HomeBasePeriod } from "./homeBase";
 import type { HomeBaseDismissal } from "./homeBaseInference";
-import type { HomeBasePeriodDraft } from "./homeBaseSuggestion";
+import type { HomeBaseConfirmationRequest } from "./homeBaseSuggestion";
 import type {
   CreatedShareGrant,
   Journey,
@@ -158,7 +158,7 @@ export type AtlasMutations = {
    * member writes and both are absent in shared mode, so a guest build has no
    * client capable of the call rather than a hidden button.
    */
-  confirmHomeBasePeriod: (draft: HomeBasePeriodDraft) => Promise<HomeBasePeriod>;
+  confirmHomeBasePeriod: (draft: HomeBaseConfirmationRequest) => Promise<HomeBasePeriod>;
   recordHomeBaseDismissal: (
     input: { kind: HomeBaseDismissal["kind"]; evidenceDigest: string; dismissedOn: string },
   ) => Promise<HomeBaseDismissal>;

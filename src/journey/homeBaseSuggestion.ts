@@ -397,6 +397,25 @@ export type HomeBasePeriodDraft = {
   source: "suggested-confirmed";
 };
 
+export type HomeBaseSuggestionCurrentContext = {
+  id: string;
+  latitude: number;
+  longitude: number;
+  startedOn: string;
+  endedOn: string | null;
+};
+
+export type HomeBaseSuggestionConfirmationProof = {
+  evidenceDigest: string;
+  evaluationDate: string;
+  expectedState: "suggested" | "move_suggested";
+  expectedCurrentHome: HomeBaseSuggestionCurrentContext | null;
+};
+
+export type HomeBaseConfirmationRequest = HomeBasePeriodDraft & {
+  suggestionProof: HomeBaseSuggestionConfirmationProof;
+};
+
 /**
  * The body a confirmation posts to `POST /api/home-bases`.
  *
@@ -424,5 +443,33 @@ export function homeBaseConfirmationDraft(
     startedOn,
     endedOn: null,
     source: "suggested-confirmed",
+  };
+}
+
+export function homeBaseConfirmationRequest(
+  decision: HomeBaseSuggestionDecision,
+  result: HomeBaseInferenceResult,
+  currentHome: HomeBasePeriod | null,
+  evaluationDate: string,
+): HomeBaseConfirmationRequest | null {
+  const draft = homeBaseConfirmationDraft(decision, result);
+  if (!draft || !result.evidenceDigest) return null;
+  const expectedState = decision.variant === "move" ? "move_suggested" : "suggested";
+  if (result.state !== expectedState) return null;
+  if ((expectedState === "move_suggested") !== Boolean(currentHome)) return null;
+  return {
+    ...draft,
+    suggestionProof: {
+      evidenceDigest: result.evidenceDigest,
+      evaluationDate,
+      expectedState,
+      expectedCurrentHome: currentHome ? {
+        id: currentHome.id,
+        latitude: currentHome.latitude,
+        longitude: currentHome.longitude,
+        startedOn: currentHome.startedOn,
+        endedOn: currentHome.endedOn,
+      } : null,
+    },
   };
 }

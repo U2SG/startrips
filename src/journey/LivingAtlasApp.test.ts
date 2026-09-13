@@ -1680,6 +1680,20 @@ describe("ST-060 ambiguous confirmation reconciliation", () => {
     }, draft)).resolves.toBeNull();
   });
 
+  it("sends suggestion proof and refreshes authoritative state when the server rejects stale intent", () => {
+    const source = readFileSync(new URL("./LivingAtlasApp.tsx", import.meta.url), "utf8");
+    const start = source.indexOf("const confirmHomeBaseSuggestion");
+    const end = source.indexOf("const dismissHomeBaseSuggestion", start);
+    const handler = source.slice(start, end);
+    expect(handler).toContain("homeBaseConfirmationRequest(");
+    expect(handler).toContain("currentHomeBasePeriod");
+    expect(handler).toContain("homeEffectiveDate");
+    expect(handler).toContain('error.code === "STALE_HOME_BASE_SUGGESTION"');
+    expect(handler).toContain("await refreshHomeBaseSuggestionEvidence()");
+    expect(handler.indexOf("STALE_HOME_BASE_SUGGESTION"))
+      .toBeLessThan(handler.indexOf("reconcileHomeBaseConfirmationAfterFailure"));
+  });
+
   it("adopts a different authoritative period before reporting the confirmation conflict", () => {
     const source = readFileSync(new URL("./LivingAtlasApp.tsx", import.meta.url), "utf8");
     const start = source.indexOf("const confirmHomeBaseSuggestion");

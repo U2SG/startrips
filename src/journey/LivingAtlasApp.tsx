@@ -43,6 +43,7 @@ import {
 import { JourneyApiError } from "./journeyApi";
 import {
   homeBaseConfirmationDraft,
+  homeBaseConfirmationRequest,
   homeBaseInferenceEvidenceBoundaryAfterRecordedHistory,
   homeBaseSuggestionSharesRegion,
   inferHomeBaseCandidateWithDismissals,
@@ -1264,7 +1265,12 @@ export function LivingAtlasApp({
 
   const confirmHomeBaseSuggestion = useCallback(async () => {
     if (!mutations || !homeBaseInference || !homeBaseSuggestion) return;
-    const draft = homeBaseConfirmationDraft(homeBaseSuggestion, homeBaseInference);
+    const draft = homeBaseConfirmationRequest(
+      homeBaseSuggestion,
+      homeBaseInference,
+      currentHomeBasePeriod,
+      homeEffectiveDate,
+    );
     if (!draft) return;
     setHomeBaseSuggestionPending(true);
     try {
@@ -1278,6 +1284,11 @@ export function LivingAtlasApp({
       await refreshHomeBasePeriods();
       showNotice(`已把${draft.label}记为常住地，之后可以随时修改。`);
     } catch (error) {
+      if (error instanceof JourneyApiError && error.code === "STALE_HOME_BASE_SUGGESTION") {
+        await refreshHomeBaseSuggestionEvidence();
+        showNotice("常住地建议已经更新，请按最新旅程记录再确认。");
+        return;
+      }
       const reconciliation = await reconcileHomeBaseConfirmationAfterFailure(listHomeBasePeriods, draft);
       if (reconciliation) {
         setHomeBasePeriods(reconciliation.periods);
@@ -1297,7 +1308,7 @@ export function LivingAtlasApp({
     } finally {
       setHomeBaseSuggestionPending(false);
     }
-  }, [homeBaseInference, homeBaseSuggestion, listHomeBasePeriods, mutations, refreshHomeBasePeriods, showNotice]);
+  }, [currentHomeBasePeriod, homeBaseInference, homeBaseSuggestion, homeEffectiveDate, listHomeBasePeriods, mutations, refreshHomeBasePeriods, refreshHomeBaseSuggestionEvidence, showNotice]);
 
   const dismissHomeBaseSuggestion = useCallback(async (kind: HomeBaseDismissal["kind"]) => {
     if (!mutations || !homeBaseSuggestion?.evidenceDigest || !homeBaseSuggestion.metroAnchor) return;

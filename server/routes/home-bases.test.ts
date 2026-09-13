@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createEmailVerificationToken } from "better-auth/api";
 import { eq, inArray, sql } from "drizzle-orm";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { app } from "../app";
 import { serverConfig } from "../config";
 import {
@@ -23,7 +23,12 @@ import {
   MAX_HOME_BASE_DISMISSALS_PER_ATLAS,
   recordHomeBaseDismissalForAtlas,
 } from "../repositories/home-base-repository";
-import { parseHomeBaseDismissalInput, parseHomeBaseInput, parseHomeBasePatch } from "./home-bases";
+import {
+  parseHomeBaseDismissalInput,
+  parseHomeBaseInput,
+  parseHomeBasePatch,
+  parseHomeBaseSuggestionConfirmationProof,
+} from "./home-bases";
 import {
   HOME_BASE_EVIDENCE_DIGEST_MAX_LENGTH,
   homeBaseEvidenceDigest,
@@ -247,6 +252,62 @@ describe("home base period input", () => {
     expect(parseHomeBasePatch({ endedOn: null })).toEqual({ endedOn: null });
     expect(parseHomeBasePatch({ label: "  Tokyo  " })).toEqual({ label: "Tokyo" });
     expect(parseHomeBasePatch({ startedOn: "2026-9-1" })).toBeNull();
+  });
+});
+
+describe("suggested Home confirmation proof", () => {
+  it("accepts one canonical current-day proof and keeps the rendered Home context exact", () => {
+    const digest = validDismissalDigest();
+    expect(parseHomeBaseSuggestionConfirmationProof({
+      evidenceDigest: digest,
+      evaluationDate: "2026-04-02",
+      expectedState: "move_suggested",
+      expectedCurrentHome: {
+        id: "00000000-0000-4000-8000-000000000001",
+        latitude: 22.543096,
+        longitude: 114.057865,
+        startedOn: "2022-06-01",
+        endedOn: null,
+      },
+    }, UTC_TEST_NOW)).toEqual({
+      evidenceDigest: digest,
+      evaluationDate: "2026-04-02",
+      expectedState: "move_suggested",
+      expectedCurrentHome: {
+        id: "00000000-0000-4000-8000-000000000001",
+        latitude: 22.543096,
+        longitude: 114.057865,
+        startedOn: "2022-06-01",
+        endedOn: null,
+      },
+    });
+  });
+
+  it("refuses forged evidence, remote policy dates and a non-current expected Home", () => {
+    expect(parseHomeBaseSuggestionConfirmationProof({
+      evidenceDigest: "not-a-digest",
+      evaluationDate: "2026-04-02",
+      expectedState: "suggested",
+      expectedCurrentHome: null,
+    }, UTC_TEST_NOW)).toBeNull();
+    expect(parseHomeBaseSuggestionConfirmationProof({
+      evidenceDigest: validDismissalDigest(),
+      evaluationDate: "2026-04-05",
+      expectedState: "suggested",
+      expectedCurrentHome: null,
+    }, UTC_TEST_NOW)).toBeNull();
+    expect(parseHomeBaseSuggestionConfirmationProof({
+      evidenceDigest: validDismissalDigest(),
+      evaluationDate: "2026-04-02",
+      expectedState: "move_suggested",
+      expectedCurrentHome: {
+        id: "00000000-0000-4000-8000-000000000001",
+        latitude: 22.543096,
+        longitude: 114.057865,
+        startedOn: "2022-06-01",
+        endedOn: "2026-01-01",
+      },
+    }, UTC_TEST_NOW)).toBeNull();
   });
 });
 
@@ -738,6 +799,112 @@ describe("GET and POST /api/home-bases/dismissal", () => {
       { headers: authHeaders() },
     );
     expect(anonymousRead.status).toBe(401);
+  });
+});
+
+describe("suggested confirmation revalidates one authoritative Atlas snapshot", () => {
+  let digest = "";
+  let evaluationDate = "";
+
+  async function clearNeighbourHomeState() {
+    await db.delete(homeBaseDismissals).where(eq(homeBaseDismissals.atlasId, neighbour.atlasId));
+    await db.delete(homeBasePeriods).where(eq(homeBasePeriods.atlasId, neighbour.atlasId));
+    await db.delete(journeys).where(eq(journeys.atlasId, neighbour.atlasId));
+  }
+
+  function confirmationBody() {
+    return {
+      label: "Home",
+      latitude: 22.5431,
+      longitude: 114.0579,
+      startedOn: "2026-01-01",
+      endedOn: null,
+      source: "suggested-confirmed",
+      suggestionProof: {
+        evidenceDigest: digest,
+        evaluationDate,
+        expectedState: "suggested",
+        expectedCurrentHome: null,
+      },
+    };
+  }
+
+  beforeEach(async () => {
+    await clearNeighbourHomeState();
+    evaluationDate = new Date().toISOString().slice(0, 10);
+    digest = await seedDismissalSuggestion(neighbour.atlasId);
+  });
+
+  afterEach(async () => {
+    await clearNeighbourHomeState();
+  });
+
+  it("writes the period only while the same rendered suggestion is still authoritative", async () => {
+    const response = await post(neighbour.cookie, confirmationBody());
+    expect(response.status).toBe(201);
+    expect(await response.json()).toMatchObject({
+      period: {
+        label: "Home",
+        latitude: 22.5431,
+        longitude: 114.0579,
+        startedOn: "2026-01-01",
+        endedOn: null,
+        source: "suggested-confirmed",
+      },
+    });
+  });
+
+  it("rejects the stale confirm when supporting Journey evidence changed after render", async () => {
+    const [support] = await db
+      .select({ id: journeys.id })
+      .from(journeys)
+      .where(eq(journeys.atlasId, neighbour.atlasId))
+      .limit(1);
+    await db.delete(journeys).where(eq(journeys.id, support.id));
+
+    const response = await post(neighbour.cookie, confirmationBody());
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: "STALE_HOME_BASE_SUGGESTION" });
+    const periods = await db
+      .select({ id: homeBasePeriods.id })
+      .from(homeBasePeriods)
+      .where(eq(homeBasePeriods.atlasId, neighbour.atlasId));
+    expect(periods).toEqual([]);
+  });
+
+  it("does not reinterpret a stale initial confirm as a move after Home context changed", async () => {
+    const current = await post(neighbour.cookie, {
+      ...SHENZHEN,
+      label: "Current Home",
+      startedOn: "2020-01-01",
+    });
+    expect(current.status).toBe(201);
+
+    const response = await post(neighbour.cookie, confirmationBody());
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: "STALE_HOME_BASE_SUGGESTION" });
+    const periods = await db
+      .select({ label: homeBasePeriods.label, endedOn: homeBasePeriods.endedOn })
+      .from(homeBasePeriods)
+      .where(eq(homeBasePeriods.atlasId, neighbour.atlasId));
+    expect(periods).toEqual([{ label: "Current Home", endedOn: null }]);
+  });
+
+  it("lets a newer same-region rejection win over the stale confirm", async () => {
+    await recordHomeBaseDismissalForAtlas(neighbour.atlasId, {
+      kind: "rejected",
+      digest,
+      dismissedOn: evaluationDate,
+    });
+
+    const response = await post(neighbour.cookie, confirmationBody());
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: "STALE_HOME_BASE_SUGGESTION" });
+    const periods = await db
+      .select({ id: homeBasePeriods.id })
+      .from(homeBasePeriods)
+      .where(eq(homeBasePeriods.atlasId, neighbour.atlasId));
+    expect(periods).toEqual([]);
   });
 });
 

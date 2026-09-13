@@ -1,6 +1,6 @@
 import type { HomeBasePeriod } from "./homeBase";
 import type { HomeBaseDismissal } from "./homeBaseInference";
-import type { HomeBasePeriodDraft } from "./homeBaseSuggestion";
+import type { HomeBaseConfirmationRequest } from "./homeBaseSuggestion";
 import type {
   CreatedShareGrant,
   Journey,
@@ -97,7 +97,7 @@ export async function recordHomeBaseDismissal(
  * rewriting it, so the previous period keeps its own bounded dates.
  */
 export async function createHomeBasePeriod(
-  input: HomeBasePeriodDraft,
+  input: HomeBaseConfirmationRequest,
   fetcher: Fetcher = fetch,
 ): Promise<HomeBasePeriod> {
   const payload = await requestJson<{ period: HomeBasePeriod }>(

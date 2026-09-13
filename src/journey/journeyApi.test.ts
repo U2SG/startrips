@@ -68,6 +68,12 @@ describe("journeyApi", () => {
       startedOn: "2026-01-04",
       endedOn: null,
       source: "suggested-confirmed",
+      suggestionProof: {
+        evidenceDigest: "hbi-v2:test",
+        evaluationDate: "2026-06-01",
+        expectedState: "suggested",
+        expectedCurrentHome: null,
+      },
     } as const;
     await expect(createHomeBasePeriod(draft, fetcher)).resolves.toEqual(period);
     expect(fetcher).toHaveBeenCalledWith("/api/home-bases", expect.objectContaining({
@@ -90,6 +96,18 @@ describe("journeyApi", () => {
       startedOn: "2026-05-02",
       endedOn: null,
       source: "suggested-confirmed",
+      suggestionProof: {
+        evidenceDigest: "hbi-v2:test-move",
+        evaluationDate: "2026-06-01",
+        expectedState: "move_suggested",
+        expectedCurrentHome: {
+          id: "home-1",
+          latitude: 22.5431,
+          longitude: 114.0579,
+          startedOn: "2020-01-01",
+          endedOn: null,
+        },
+      },
     }, fetcher);
     const [, init] = (fetcher as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[0];
     expect(JSON.parse(String(init.body))).toMatchObject({

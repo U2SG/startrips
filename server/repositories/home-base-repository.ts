@@ -24,6 +24,7 @@ import { haversineDistanceKm } from "../../src/journey/mediaPlacement";
 import {
   homeBaseInferenceEvidenceBoundaryAfterRecordedHistory,
   inferHomeBaseCandidateWithDismissals,
+  type HomeBaseSuggestionConfirmationProof,
 } from "../../src/journey/homeBaseSuggestion";
 
 /**
@@ -141,35 +142,43 @@ async function loadHistory(transaction: Transaction, atlasId: string) {
  * answers as a 404. Throws `HomeBasePeriodConflictError` for an impossible
  * history.
  */
+async function createHomeBasePeriodInTransaction(
+  transaction: Transaction,
+  atlasId: string,
+  values: HomeBasePeriodValues,
+  existing: readonly HomeBasePeriodRecord[],
+): Promise<HomeBasePeriodRecord> {
+  const decision = classifyHomeBasePeriodWrite({
+    existing,
+    candidate: { startedOn: values.startedOn, endedOn: values.endedOn },
+  });
+  if (decision.outcome === "conflict") refuse(decision.code);
+
+  if (decision.outcome === "move") {
+    await transaction
+      .update(homeBasePeriods)
+      .set({ endedOn: decision.closeOn, updatedAt: new Date() })
+      .where(and(
+        eq(homeBasePeriods.id, decision.closePeriodId),
+        eq(homeBasePeriods.atlasId, atlasId),
+      ));
+  }
+
+  const [created] = await transaction
+    .insert(homeBasePeriods)
+    .values({ atlasId, ...values })
+    .returning(RECORD_COLUMNS);
+  return asRecord(created);
+}
+
 export async function createHomeBasePeriodForAtlas(
   atlasId: string,
   values: HomeBasePeriodValues,
 ): Promise<HomeBasePeriodRecord | undefined> {
   return await db.transaction(async (transaction) => {
     if (!await lockActiveAtlas(transaction, atlasId)) return undefined;
-
-    const existing = await loadHistory(transaction, atlasId);
-    const decision = classifyHomeBasePeriodWrite({
-      existing,
-      candidate: { startedOn: values.startedOn, endedOn: values.endedOn },
-    });
-    if (decision.outcome === "conflict") refuse(decision.code);
-
-    if (decision.outcome === "move") {
-      await transaction
-        .update(homeBasePeriods)
-        .set({ endedOn: decision.closeOn, updatedAt: new Date() })
-        .where(and(
-          eq(homeBasePeriods.id, decision.closePeriodId),
-          eq(homeBasePeriods.atlasId, atlasId),
-        ));
-    }
-
-    const [created] = await transaction
-      .insert(homeBasePeriods)
-      .values({ atlasId, ...values })
-      .returning(RECORD_COLUMNS);
-    return asRecord(created);
+    const existing = (await loadHistory(transaction, atlasId)).map(asRecord);
+    return await createHomeBasePeriodInTransaction(transaction, atlasId, values, existing);
   });
 }
 
@@ -400,6 +409,79 @@ async function loadInferenceJourneys(transaction: Transaction, atlasId: string) 
       longitude: point.longitude,
     })),
   }));
+}
+
+export class HomeBaseSuggestionNotCurrentError extends Error {
+  constructor() {
+    super("HOME_BASE_SUGGESTION_NOT_CURRENT");
+    this.name = "HomeBaseSuggestionNotCurrentError";
+  }
+}
+
+function homeBaseCurrentContextMatches(
+  current: HomeBasePeriodRecord | null,
+  expected: HomeBaseSuggestionConfirmationProof["expectedCurrentHome"],
+): boolean {
+  if (!expected) return current === null;
+  return current !== null
+    && current.id === expected.id
+    && current.latitude === expected.latitude
+    && current.longitude === expected.longitude
+    && current.startedOn === expected.startedOn
+    && current.endedOn === expected.endedOn;
+}
+
+export async function createAuthoritativeHomeBaseSuggestionPeriodForAtlas(
+  atlasId: string,
+  values: HomeBasePeriodValues,
+  proof: HomeBaseSuggestionConfirmationProof,
+): Promise<HomeBasePeriodRecord | undefined> {
+  return await db.transaction(async (transaction) => {
+    if (!await lockActiveAtlas(transaction, atlasId)) return undefined;
+    const [journeyHistory, periodRows, dismissals] = await Promise.all([
+      loadInferenceJourneys(transaction, atlasId),
+      loadHistory(transaction, atlasId),
+      loadDismissals(transaction, atlasId),
+    ]);
+    const periods = periodRows.map(asRecord);
+    const currentPeriod = periods.find((period) => period.endedOn === null) ?? null;
+    if (!homeBaseCurrentContextMatches(currentPeriod, proof.expectedCurrentHome)) {
+      throw new HomeBaseSuggestionNotCurrentError();
+    }
+    if ((proof.expectedState === "move_suggested") !== Boolean(currentPeriod)) {
+      throw new HomeBaseSuggestionNotCurrentError();
+    }
+
+    const authoritativeInference = inferHomeBaseCandidateWithDismissals({
+      journeys: journeyHistory,
+      confirmedPeriod: currentPeriod,
+      evaluationDate: proof.evaluationDate,
+      evidenceNotBefore: homeBaseInferenceEvidenceBoundaryAfterRecordedHistory(periods),
+    }, dismissals);
+    if (
+      authoritativeInference.state !== proof.expectedState
+      || authoritativeInference.evidenceDigest !== proof.evidenceDigest
+      || !authoritativeInference.metroAnchor
+      || authoritativeInference.metroAnchor.latitude !== values.latitude
+      || authoritativeInference.metroAnchor.longitude !== values.longitude
+    ) {
+      throw new HomeBaseSuggestionNotCurrentError();
+    }
+
+    const expectedStartedOn = proof.expectedState === "move_suggested"
+      ? authoritativeInference.proposedPeriodStart
+      : authoritativeInference.support.evidenceStartedOn;
+    if (
+      values.source !== "suggested-confirmed"
+      || values.endedOn !== null
+      || !expectedStartedOn
+      || values.startedOn !== expectedStartedOn
+    ) {
+      throw new HomeBaseSuggestionNotCurrentError();
+    }
+
+    return await createHomeBasePeriodInTransaction(transaction, atlasId, values, periods);
+  });
 }
 
 async function recordHomeBaseDismissalInTransaction(

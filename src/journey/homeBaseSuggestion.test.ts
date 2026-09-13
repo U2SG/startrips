@@ -3,6 +3,7 @@ import {
   HOME_BASE_EVIDENCE_REASON_CODES,
   HOME_BASE_EVIDENCE_REASON_COPY,
   homeBaseConfirmationDraft,
+  homeBaseConfirmationRequest,
   homeBaseInferenceEvidenceBoundaryAfterRecordedHistory,
   inferHomeBaseCandidateWithDismissals,
   resolveHomeBasePlaceLabel,
@@ -401,6 +402,71 @@ describe("the period a confirmation writes", () => {
       endedOn: null,
       source: "suggested-confirmed",
     });
+  });
+
+  it("binds confirmation to the exact suggestion evidence, evaluation day and current Home context", () => {
+    const initial = inferenceResult("suggested");
+    const initialDecision = resolveHomeBaseSuggestion({ result: initial, placeLabel: "深圳" });
+    expect(homeBaseConfirmationRequest(initialDecision, initial, null, "2026-09-13"))
+      .toMatchObject({
+        startedOn: "2026-01-04",
+        suggestionProof: {
+          evidenceDigest: initial.evidenceDigest,
+          evaluationDate: "2026-09-13",
+          expectedState: "suggested",
+          expectedCurrentHome: null,
+        },
+      });
+
+    const currentHome = {
+      id: "period-shenzhen",
+      label: "深圳",
+      latitude: ANCHOR.latitude,
+      longitude: ANCHOR.longitude,
+      startedOn: "2022-06-01",
+      endedOn: null,
+      source: "manual" as const,
+    };
+    const move = inferenceResult("move_suggested", {
+      metroAnchor: { latitude: 35.689487, longitude: 139.691711 },
+      proposedPeriodStart: "2026-05-02",
+    });
+    const moveDecision = resolveHomeBaseSuggestion({
+      result: move,
+      placeLabel: "东京",
+      confirmedPlaceLabel: currentHome.label,
+    });
+    expect(homeBaseConfirmationRequest(moveDecision, move, currentHome, "2026-09-13"))
+      .toMatchObject({
+        startedOn: "2026-05-02",
+        suggestionProof: {
+          evidenceDigest: move.evidenceDigest,
+          evaluationDate: "2026-09-13",
+          expectedState: "move_suggested",
+          expectedCurrentHome: {
+            id: currentHome.id,
+            latitude: currentHome.latitude,
+            longitude: currentHome.longitude,
+            startedOn: currentHome.startedOn,
+            endedOn: null,
+          },
+        },
+      });
+  });
+
+  it("refuses a confirmation proof whose visible state and current Home context disagree", () => {
+    const result = inferenceResult("suggested");
+    const decision = resolveHomeBaseSuggestion({ result, placeLabel: "深圳" });
+    const currentHome = {
+      id: "period-shenzhen",
+      label: "深圳",
+      latitude: ANCHOR.latitude,
+      longitude: ANCHOR.longitude,
+      startedOn: "2022-06-01",
+      endedOn: null,
+      source: "manual" as const,
+    };
+    expect(homeBaseConfirmationRequest(decision, result, currentHome, "2026-09-13")).toBeNull();
   });
 
   it("starts a move at the inferred onset so #231 closes the previous period there", () => {
