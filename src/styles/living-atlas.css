@@ -4323,6 +4323,11 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   font: 400 8px/1 ui-sans-serif, system-ui, sans-serif;
   letter-spacing: 0.08em;
   pointer-events: auto;
+  /* City text delegates pointer/pinch/wheel into the renderer. The browser
+     chooses native touch handling from the original SVG hit target, before
+     pointer capture moves the contact onto the canvas, so it must share the
+     canvas touch policy rather than becoming a scroll/pinch escape hatch. */
+  touch-action: none;
   cursor: pointer;
 }
 

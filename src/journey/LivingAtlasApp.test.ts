@@ -18,6 +18,7 @@ import {
   explicitSelectedJourneyIdForHomeCamera,
   capturePlaybackEntryForContext,
   globeFocusState,
+  homeBaseContextActivationAvailable,
   homeBaseInferenceInputsReady,
   homeBasePeriodMatchesConfirmationDraft,
   homeBaseSuggestionCanBeConfirmed,
@@ -1907,9 +1908,19 @@ describe("ST-065 Home Base context ownership", () => {
     expect(source).not.toContain('role="dialog"\n          data-home-base-context');
   });
 
-  it("constructs Home activation only when the owner-private Home reader exists", () => {
-    const source = readFileSync(new URL("./LivingAtlasApp.tsx", import.meta.url), "utf8");
-    expect(source).toContain("onHomeBaseActivate={listHomeBasePeriods ? (periodId) => {");
-    expect(source).toContain("} : undefined}");
+  it("exposes Home activation only while the ordinary Atlas owns the globe", () => {
+    const available = {
+      hasHomeReader: true,
+      view: "planet" as const,
+      storyActive: false,
+      playbackActive: false,
+      globePickActive: false,
+    };
+    expect(homeBaseContextActivationAvailable(available)).toBe(true);
+    expect(homeBaseContextActivationAvailable({ ...available, hasHomeReader: false })).toBe(false);
+    expect(homeBaseContextActivationAvailable({ ...available, view: "timeline" })).toBe(false);
+    expect(homeBaseContextActivationAvailable({ ...available, storyActive: true })).toBe(false);
+    expect(homeBaseContextActivationAvailable({ ...available, playbackActive: true })).toBe(false);
+    expect(homeBaseContextActivationAvailable({ ...available, globePickActive: true })).toBe(false);
   });
 });

@@ -115,6 +115,26 @@ import {
 
 type AtlasView = "planet" | "timeline";
 
+export function homeBaseContextActivationAvailable({
+  hasHomeReader,
+  view,
+  storyActive,
+  playbackActive,
+  globePickActive,
+}: {
+  hasHomeReader: boolean;
+  view: AtlasView;
+  storyActive: boolean;
+  playbackActive: boolean;
+  globePickActive: boolean;
+}) {
+  return hasHomeReader
+    && view === "planet"
+    && !storyActive
+    && !playbackActive
+    && !globePickActive;
+}
+
 type AtlasNotice = { id: number; message: string };
 
 export function atlasHomeEffectiveDate(now: Date) {
@@ -2294,7 +2314,13 @@ export function LivingAtlasApp({
               effectiveDate: homeEffectiveDate,
             } : undefined}
             activeHomeBaseContextPeriodId={homeBaseContext?.periodId ?? null}
-            onHomeBaseActivate={listHomeBasePeriods ? (periodId) => {
+            onHomeBaseActivate={homeBaseContextActivationAvailable({
+              hasHomeReader: Boolean(listHomeBasePeriods),
+              view,
+              storyActive: storyJourneyId !== null,
+              playbackActive,
+              globePickActive,
+            }) ? (periodId) => {
               clearRoutePointContext();
               setHomeBaseContextPeriodId((current) => current === periodId ? null : periodId);
             } : undefined}

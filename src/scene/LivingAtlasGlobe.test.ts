@@ -223,7 +223,15 @@ describe("ST-065 Home / Route Point pointer ownership", () => {
     expect(particleSource).toContain('cityVectorLayer.addEventListener("wheel", onCityLayerWheel, { passive: false })');
     expect(particleSource).toContain("onPointerDown(event);");
     expect(particleSource).toContain("onPointerUp(event, cityPickFromEventTarget(event.target));");
+    expect(particleSource).toContain("cityPointerPicks.set(event.pointerId, cityPick)");
+    expect(particleSource).toContain("explicitGlobePick ?? cityPointerPicks.get(event.pointerId)");
     expect(particleSource).toContain("onPointerCancel(event);");
     expect(particleSource).toContain("onWheel(event);");
+    const css = readFileSync(new URL("../styles/living-atlas.css", import.meta.url), "utf8");
+    const cityStart = css.indexOf(".particle-earth-city {");
+    const cityRule = css.slice(cityStart, css.indexOf("}", cityStart));
+    expect(cityStart).toBeGreaterThanOrEqual(0);
+    expect(cityRule).toContain("pointer-events: auto;");
+    expect(cityRule).toContain("touch-action: none;");
   });
 });

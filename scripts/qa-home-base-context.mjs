@@ -19,6 +19,12 @@ const CURRENT_HOME = {
   endedOn: null,
   source: "manual",
 };
+const CITY_FIXTURE = {
+  cities: [{
+    n: "Beijing", z: "北京", la: 39.9075, lo: 116.39723, p: 18_960_744, r: 0, c: "CN",
+  }],
+};
+
 const HISTORICAL_HOME = {
   id: "22222222-bbbb-4222-8222-222222222222",
   label: "成都",
@@ -78,6 +84,12 @@ function record(name, data, condition) {
 }
 
 async function installOwnerApi(page, journeyRows = journeys) {
+  // Exercise the real city-label projection/arbitration with one deterministic
+  // GeoNames-shaped city at Home. The production dataset/collision budget is
+  // covered elsewhere; this lane owns the interaction boundary itself.
+  await page.route("**/earth/cities.json", (route) => route.fulfill({
+    status: 200, contentType: "application/json", body: JSON.stringify(CITY_FIXTURE),
+  }));
   const session = {
     session: {
       id: "qa-home-session", userId: "qa-user", token: "qa-token",
@@ -215,14 +227,7 @@ async function homeMarkerCenter(marker) {
 }
 
 async function revealHomeCityLabel(page, marker) {
-  const center = await homeMarkerCenter(marker);
-  const beforeZoom = await page.evaluate(() => window.__particleEarthDebug?.().zoom ?? null);
-  await page.mouse.move(center.x, center.y);
-  await page.mouse.wheel(0, -900);
-  await page.waitForFunction((previous) => {
-    const current = window.__particleEarthDebug?.().zoom;
-    return typeof current === "number" && (previous === null || current > previous);
-  }, beforeZoom, { timeout: 5_000 });
+  await homeMarkerCenter(marker);
   await page.waitForFunction(() => [...document.querySelectorAll(".particle-earth-city")].some((node) => (
     node.textContent?.includes("北京") && getComputedStyle(node).display !== "none"
   )), null, { timeout: 5_000 });
@@ -316,12 +321,13 @@ try {
   await page.locator(".living-atlas__active-actions button", { hasText: "打开故事" }).click();
   await page.locator(".journey-story").waitFor({ state: "visible", timeout: 15_000 });
   const duringStory = await page.locator("[data-home-base-context]").count();
+  const homeTargetsDuringStory = await page.locator("[data-home-base-period-id]").count();
   await page.locator(".journey-story__close").click();
   await page.locator(".journey-story").waitFor({ state: "detached", timeout: 10_000 });
   const afterStory = await page.locator("[data-home-base-context]").count();
-  record("Story immediately wins context ownership and Home does not auto-return", {
-    duringStory, afterStory,
-  }, duringStory === 0 && afterStory === 0);
+  record("Story disables Home activation and old Home context does not auto-return", {
+    duringStory, homeTargetsDuringStory, afterStory,
+  }, duringStory === 0 && homeTargetsDuringStory === 0 && afterStory === 0);
 
   // Playback is the same ownership boundary. Pointer Home activation was
   // already proven on an unobscured globe above; the active Journey card is a
@@ -402,14 +408,35 @@ try {
   await arbitrationPage.waitForFunction(() => document.querySelector(".living-atlas")?.getAttribute("data-globe-focus") === "on");
   const arbitrationMarker = await currentHomeMarker(arbitrationPage);
   const cityHomeOverlap = await revealHomeCityLabel(arbitrationPage, arbitrationMarker);
-  record("wheel in Home region stays renderer-owned and exposes overlapping city semantics", { cityHomeOverlap }, Boolean(
+  record("deterministic city label physically overlaps Home and owns the hit", { cityHomeOverlap }, Boolean(
     cityHomeOverlap?.hitCity && cityHomeOverlap.cityLat && cityHomeOverlap.cityLon
   ));
   if (!cityHomeOverlap?.hitCity) {
     throw new Error(`Beijing city label did not overlap Home hit area: ${JSON.stringify(cityHomeOverlap)}`);
   }
 
-  await arbitrationPage.mouse.click(cityHomeOverlap.x, cityHomeOverlap.y);
+  // Wheel after the SVG city glyph is proven to own the hit. That exercises
+  // the delegated renderer wheel path rather than a nearby canvas coordinate.
+  const beforeCityWheelZoom = await arbitrationPage.evaluate(() => window.__particleEarthDebug?.().zoom ?? null);
+  await arbitrationPage.mouse.move(cityHomeOverlap.x, cityHomeOverlap.y);
+  await arbitrationPage.mouse.wheel(0, -240);
+  await arbitrationPage.waitForFunction((previous) => {
+    const current = window.__particleEarthDebug?.().zoom;
+    return typeof current === "number" && previous !== null && current > previous;
+  }, beforeCityWheelZoom, { timeout: 5_000 });
+  const afterCityWheelZoom = await arbitrationPage.evaluate(() => window.__particleEarthDebug?.().zoom ?? null);
+  record("wheel beginning on city/Home overlap stays canonical renderer zoom", {
+    beforeCityWheelZoom, afterCityWheelZoom,
+  }, typeof beforeCityWheelZoom === "number"
+    && typeof afterCityWheelZoom === "number"
+    && afterCityWheelZoom > beforeCityWheelZoom);
+
+  // Zoom legitimately moves the projection, so re-read the physical overlap.
+  const postWheelOverlap = await revealHomeCityLabel(arbitrationPage, arbitrationMarker);
+  if (!postWheelOverlap?.hitCity) {
+    throw new Error(`Beijing city/Home overlap disappeared after renderer-owned wheel: ${JSON.stringify(postWheelOverlap)}`);
+  }
+  await arbitrationPage.mouse.click(postWheelOverlap.x, postWheelOverlap.y);
   const arbitrationContext = arbitrationPage.locator("[data-home-base-context]");
   await arbitrationContext.waitFor({ state: "visible", timeout: 5_000 });
   record("ordinary city-label contact inside Home region resolves to Home after higher renderer owners yield", {
@@ -418,9 +445,9 @@ try {
   await closeContext(arbitrationPage);
 
   const beforeDrag = await arbitrationPage.evaluate(() => window.__particleEarthDebug?.() ?? null);
-  await arbitrationPage.mouse.move(cityHomeOverlap.x, cityHomeOverlap.y);
+  await arbitrationPage.mouse.move(postWheelOverlap.x, postWheelOverlap.y);
   await arbitrationPage.mouse.down();
-  await arbitrationPage.mouse.move(cityHomeOverlap.x + 64, cityHomeOverlap.y + 20, { steps: 5 });
+  await arbitrationPage.mouse.move(postWheelOverlap.x + 64, postWheelOverlap.y + 20, { steps: 5 });
   await arbitrationPage.mouse.up();
   const afterDrag = await arbitrationPage.evaluate(() => window.__particleEarthDebug?.() ?? null);
   record("drag beginning in city/Home overlap remains the canonical globe gesture", {
@@ -460,9 +487,23 @@ try {
   await pickingCity.waitFor({ state: "visible", timeout: 5_000 });
   await pickingCity.click();
   await globePickPage.waitForFunction(() => !document.querySelector(".living-atlas")?.classList.contains("is-globe-picking"), null, { timeout: 5_000 });
-  record("globe coordinate-pick wins over Home at overlapping city contact", {
+  const acceptedCoordinateText = await globePickPage.locator(
+    ".journey-route-draft li:not(.is-empty) .journey-route-draft__main > small",
+  ).first().textContent();
+  const acceptedCoordinates = String(acceptedCoordinateText ?? "")
+    .split(",")
+    .map((value) => Number(value.trim()));
+  const expectedCityCoordinates = [Number(globePickOverlap.cityLat), Number(globePickOverlap.cityLon)];
+  const cityCoordinatePreserved = acceptedCoordinates.length === 2
+    && acceptedCoordinates.every(Number.isFinite)
+    && expectedCityCoordinates.every(Number.isFinite)
+    && Math.abs(acceptedCoordinates[0] - expectedCityCoordinates[0]) <= 0.0001
+    && Math.abs(acceptedCoordinates[1] - expectedCityCoordinates[1]) <= 0.0001;
+  record("globe coordinate-pick wins over Home and preserves the selected city coordinate", {
     homeContextCount: await globePickPage.locator("[data-home-base-context]").count(),
-  }, (await globePickPage.locator("[data-home-base-context]").count()) === 0);
+    acceptedCoordinates,
+    expectedCityCoordinates,
+  }, (await globePickPage.locator("[data-home-base-context]").count()) === 0 && cityCoordinatePreserved);
   await globePickPage.close();
 
   // Compact mobile uses the same geographic marker; no Home tab/tool is added.
