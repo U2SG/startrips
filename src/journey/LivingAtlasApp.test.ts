@@ -1712,12 +1712,27 @@ describe("ST-060 dismissal evaluation day", () => {
     expect(handler).toContain("error instanceof JourneyApiError && error.code === \"INVALID_HOME_BASE_DISMISSAL\"");
     expect(handler).toContain("await refreshHomeBaseSuggestionEvidence()");
 
+    const inferenceStart = source.indexOf("const computeHomeBaseInference");
+    const inferenceEnd = source.indexOf("const homeBaseInference = useMemo", inferenceStart);
+    const inference = source.slice(inferenceStart, inferenceEnd);
+    expect(inference).toContain("if (homeBaseSuggestionEvidenceRefreshPending) return null");
+
     const refreshStart = source.indexOf("const refreshHomeBaseSuggestionEvidence");
     const refreshEnd = source.indexOf("const confirmHomeBaseSuggestion", refreshStart);
     const refresh = source.slice(refreshStart, refreshEnd);
     expect(refresh).toContain("loadRevision.current += 1");
     expect(refresh).toContain("setJourneys([])");
     expect(refresh).toContain("setHomeBasePeriodsRead(false)");
+    expect(refresh).toContain("setHomeBaseSuggestionEvidenceRefreshPending(true)");
+    expect(refresh.indexOf("setHomeBaseSuggestionEvidenceRefreshPending(true)"))
+      .toBeLessThan(refresh.indexOf("loadJourneyRowsWithOptionalHome"));
+    expect(refresh.indexOf("setJourneys(sortJourneysChronologically(journeyRows))"))
+      .toBeLessThan(refresh.indexOf("setHomeBaseSuggestionEvidenceRefreshPending(false)"));
+
+    const loadStart = source.indexOf("const load = useCallback");
+    const loadEnd = source.indexOf("useEffect(() =>", loadStart);
+    const load = source.slice(loadStart, loadEnd);
+    expect(load).toContain("setHomeBaseSuggestionEvidenceRefreshPending(false)");
   });
 });
 

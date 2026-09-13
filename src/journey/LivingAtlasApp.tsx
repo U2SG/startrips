@@ -930,6 +930,7 @@ export function LivingAtlasApp({
   // recorded dismissal arrived would be exactly the nag the issue forbids.
   const [homeBaseDismissals, setHomeBaseDismissals] = useState<HomeBaseDismissal[] | undefined>(undefined);
   const [homeBaseSuggestionPending, setHomeBaseSuggestionPending] = useState(false);
+  const [homeBaseSuggestionEvidenceRefreshPending, setHomeBaseSuggestionEvidenceRefreshPending] = useState(false);
   const [atlasSemanticZoom, setAtlasSemanticZoom] = useState<GlobeSemanticZoom>("planet");
   const [hasManualAtlasCameraInteraction, setHasManualAtlasCameraInteraction] = useState(false);
   const [initialHomeCameraIntent, setInitialHomeCameraIntent] = useState<HomeBaseCameraIntent | null>(null);
@@ -1147,6 +1148,7 @@ export function LivingAtlasApp({
     [homeBasePeriods],
   );
   const computeHomeBaseInference = useCallback((evaluationDate: string): HomeBaseInferenceResult | null => {
+    if (homeBaseSuggestionEvidenceRefreshPending) return null;
     if (!homeBaseInferenceInputsReady({
       periodsReader: Boolean(listHomeBasePeriods),
       periodsRead: homeBasePeriodsRead,
@@ -1166,7 +1168,16 @@ export function LivingAtlasApp({
       evaluationDate,
       evidenceNotBefore,
     }, homeBaseDismissals ?? []);
-  }, [currentHomeBasePeriod, homeBaseDismissals, homeBasePeriods, homeBasePeriodsRead, journeys, listHomeBaseDismissals, listHomeBasePeriods]);
+  }, [
+    currentHomeBasePeriod,
+    homeBaseDismissals,
+    homeBasePeriods,
+    homeBasePeriodsRead,
+    homeBaseSuggestionEvidenceRefreshPending,
+    journeys,
+    listHomeBaseDismissals,
+    listHomeBasePeriods,
+  ]);
   const homeBaseInference = useMemo(
     () => computeHomeBaseInference(homeEffectiveDate),
     [computeHomeBaseInference, homeEffectiveDate],
@@ -1210,6 +1221,10 @@ export function LivingAtlasApp({
 
   const refreshHomeBaseSuggestionEvidence = useCallback(async () => {
     const revision = ++loadRevision.current;
+    // Suppress inference before detached private reads can complete. Journeys
+    // intentionally remain rendered so a Home suggestion recovery never blanks
+    // the Atlas while its authoritative Journey refresh is slow or unavailable.
+    setHomeBaseSuggestionEvidenceRefreshPending(true);
     if (listHomeBasePeriods) {
       setHomeBasePeriodsRead(false);
     } else {
@@ -1231,6 +1246,7 @@ export function LivingAtlasApp({
       });
       if (revision !== loadRevision.current) return;
       setJourneys(sortJourneysChronologically(journeyRows));
+      setHomeBaseSuggestionEvidenceRefreshPending(false);
     } catch {
       if (revision === loadRevision.current) {
         // Invalidate the detached Home reads launched above and remove the stale
@@ -1469,6 +1485,10 @@ export function LivingAtlasApp({
       const loaded = sortJourneysChronologically(journeyRows);
       if (revision !== loadRevision.current) return;
       setJourneys(loaded);
+      // A normal authoritative reload may supersede the dedicated suggestion
+      // refresh. Its successful Journey snapshot is equally authoritative and
+      // can release that refresh's suppression gate.
+      setHomeBaseSuggestionEvidenceRefreshPending(false);
       setLoadError("");
       setStatus("ready");
       return loaded;
