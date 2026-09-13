@@ -1,4 +1,5 @@
 import type { CSSProperties } from "react";
+import { StartripsSignatureMotion } from "./StartripsSignatureMotion";
 import { STARTRIPS_V12_MARK_MARKUP, STARTRIPS_V12_MARK_VIEWBOX } from "./startripsV12Mark";
 
 export type StartripsBrandState = "waiting" | "travel" | "arrived" | "rest";
@@ -143,7 +144,7 @@ export function StartripsJourneyCue({ state = "rest", size = 64, className = "" 
 export function StartripsBrandLoader({ message }: { message: string }) {
   return (
     <div className="startrips-brand-loader" role="status" aria-live="polite" aria-busy="true">
-      <StartripsWordmark size={52} loading />
+      <StartripsSignatureMotion clip="loading" size={52} title="Startrips" />
       <div className="startrips-brand-loader__copy">
         <span>{message}</span>
       </div>
