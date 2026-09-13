@@ -15,7 +15,7 @@ Startrips 是一个私人的“活地图”：把真实旅程保存为有顺序�
 - 可为一段或多段 Journey 创建带有效期的只读分享链接；接收者可查看共享 Atlas、Story 与 Journey Playback，拥有者可撤销链接。
 - Journey Playback 使用确定性的传输/时序合同，并在返回 Story 时保留最后一次成功呈现的 Route Point/媒体观察位置。
 - 移动端 Viewer 模式通过统一的紧凑布局合同保留 Story 媒体、沉浸查看、Journey 切换与 Playback；访客模式不获得编辑权限。
-- Home Base 基础能力已包含带日期的阶段、确定性建议证据、安静的 Atlas 呈现以及持久化确认/忽略；更丰富的 Home 叙事与上下文交互仍属后续范围。
+- Home Base 基础能力已包含带日期的阶段、确定性建议证据、安静的 Atlas 呈现以及持久化确认/忽略；符合条件的历史 Home 也可作为拥有者 Journey Playback 的私有 Prelude/Epilogue，而更丰富的按需 Home 上下文交互仍属后续范围。
 - 开发环境保留确定性的 `qaState` 视觉回归入口，但它不是正常的登录产品路径。
 
 ## 架构
