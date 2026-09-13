@@ -5244,6 +5244,13 @@ export function ParticleEarthScene({
       updateRouteVectorLayer();
 
       if (latestOnHomeBasePresenceFrame.current) {
+        // Home projection must sample the globe transform from THIS frame. Route
+        // vector rendering also updates matrixWorld, but Home cannot depend on
+        // that sibling being visible (compact/empty Atlas can legitimately have
+        // no route vector layer). Without this update, an async Home camera seed
+        // can rotate the live globe while Home reads the previous matrix and stays
+        // hidden behind the stale horizon indefinitely once the loop settles.
+        globe.updateWorldMatrix(true, false);
         updateGeoProjectionFrame(geoFrame, camera, globe.matrixWorld, targetSize.x, targetSize.y);
         if (now - anchorFrameRectSampledAt > 100) {
           anchorFrameRectSampledAt = now;

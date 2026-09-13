@@ -183,6 +183,17 @@ describe("Home Base presence projection (ST-056)", () => {
     expect(source).toContain("controllerRef.current?.setHomeBasePresence(homeBasePresence)");
   });
 
+  it("projects Home from the current globe matrix even when no route vector layer is visible", () => {
+    const source = readFileSync(new URL("./ParticleEarthScene.tsx", import.meta.url), "utf8");
+    const homeProjection = source.slice(
+      source.indexOf("if (latestOnHomeBasePresenceFrame.current)"),
+      source.indexOf("if (latestCenterFocusPoint.current && spatialFocusPoint)"),
+    );
+    expect(homeProjection).toContain("globe.updateWorldMatrix(true, false);");
+    expect(homeProjection.indexOf("globe.updateWorldMatrix(true, false);"))
+      .toBeLessThan(homeProjection.indexOf("updateGeoProjectionFrame("));
+  });
+
   it("ST-065 keeps the visible Home button as a keyboard target while pointer gestures stay renderer-owned", () => {
     const source = readFileSync(new URL("./LivingAtlasGlobe.tsx", import.meta.url), "utf8");
     const css = readFileSync(new URL("../styles/living-atlas.css", import.meta.url), "utf8");
