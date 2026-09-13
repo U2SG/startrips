@@ -1080,7 +1080,30 @@ export function LivingAtlasApp({
     timeCursor.hasExplicitSelection,
     timeCursor.selection?.journeyId ?? null,
   );
-  const homeEffectiveDate = atlasHomeEffectiveDate(new Date());
+  const [homeEffectiveDate, setHomeEffectiveDate] = useState(() => atlasHomeEffectiveDate(new Date()));
+  useEffect(() => {
+    let timeoutId: number | undefined;
+    const refreshAndSchedule = () => {
+      const now = new Date();
+      setHomeEffectiveDate(atlasHomeEffectiveDate(now));
+      const nextDay = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+      timeoutId = window.setTimeout(
+        refreshAndSchedule,
+        Math.max(1_000, nextDay.getTime() - now.getTime() + 250),
+      );
+    };
+    const refreshWhenVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+      refreshAndSchedule();
+    };
+    refreshAndSchedule();
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => {
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+      if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+    };
+  }, []);
   const atlasHomeTimelineContext = useMemo(
     () => resolveAtlasHomeTimelineContext({
       cursor: timeCursor.cursor,
@@ -1211,6 +1234,13 @@ export function LivingAtlasApp({
 
   const dismissHomeBaseSuggestion = useCallback(async (kind: HomeBaseDismissal["kind"]) => {
     if (!mutations || !homeBaseSuggestion?.evidenceDigest) return;
+    const actionDate = atlasHomeEffectiveDate(new Date());
+    if (actionDate !== homeEffectiveDate) {
+      // Refresh the render-owned inference/digest first. Submitting a fresh day
+      // with a digest computed for yesterday would be an internally stale pair.
+      setHomeEffectiveDate(actionDate);
+      return;
+    }
     const evidenceDigest = homeBaseSuggestion.evidenceDigest;
     setHomeBaseSuggestionPending(true);
     try {
@@ -1220,10 +1250,9 @@ export function LivingAtlasApp({
       const recorded = await mutations.recordHomeBaseDismissal({
         kind,
         evidenceDigest,
-        // Do not reuse the date captured by the last React render. A tab can
-        // remain open across local midnight(s); the server safely constrains
-        // this fresh local calendar day against its own UTC policy date.
-        dismissedOn: atlasHomeEffectiveDate(new Date()),
+        // `actionDate` and `evidenceDigest` now come from the same render-owned
+        // effective day; the server separately owns the persisted policy date.
+        dismissedOn: actionDate,
       });
       setHomeBaseDismissals((current) => {
         const existing = current ?? [];
@@ -1246,7 +1275,7 @@ export function LivingAtlasApp({
     } finally {
       setHomeBaseSuggestionPending(false);
     }
-  }, [homeBaseSuggestion, listHomeBaseDismissals, mutations, showNotice]);
+  }, [homeBaseSuggestion, homeEffectiveDate, listHomeBaseDismissals, mutations, showNotice]);
 
   const claimManualAtlasCamera = useCallback(() => {
     atlasHomeCameraFreshRef.current = false;

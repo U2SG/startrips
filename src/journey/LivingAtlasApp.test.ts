@@ -1681,13 +1681,20 @@ describe("ST-060 ambiguous confirmation reconciliation", () => {
 });
 
 describe("ST-060 dismissal evaluation day", () => {
-  it("recomputes the local calendar day at action time instead of reusing the last render", () => {
+  it("refreshes the render-owned inference day before a dismissal can submit", () => {
     const source = readFileSync(new URL("./LivingAtlasApp.tsx", import.meta.url), "utf8");
+    expect(source).toContain("const [homeEffectiveDate, setHomeEffectiveDate] = useState");
+    expect(source).toContain("document.addEventListener(\"visibilitychange\", refreshWhenVisible)");
+
     const start = source.indexOf("const dismissHomeBaseSuggestion");
     const end = source.indexOf("const claimManualAtlasCamera", start);
     const handler = source.slice(start, end);
-    expect(handler).toContain("dismissedOn: atlasHomeEffectiveDate(new Date())");
-    expect(handler).not.toContain("dismissedOn: homeEffectiveDate");
+    expect(handler).toContain("const actionDate = atlasHomeEffectiveDate(new Date())");
+    expect(handler).toContain("if (actionDate !== homeEffectiveDate)");
+    expect(handler).toContain("setHomeEffectiveDate(actionDate)");
+    expect(handler.indexOf("setHomeEffectiveDate(actionDate)"))
+      .toBeLessThan(handler.indexOf("mutations.recordHomeBaseDismissal"));
+    expect(handler).toContain("dismissedOn: actionDate");
   });
 });
 
