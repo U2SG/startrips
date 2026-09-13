@@ -81,33 +81,53 @@ import {
 import { disposeSceneGraph } from "./useThreeScene";
 
 describe("ParticleEarthScene contracts", () => {
-  it("publishes attention-layer optical measurements in CSS pixels independent of renderer DPR", () => {
+  it("publishes attention-layer optical measurements from the shader DPR uniform", () => {
     const dpr1 = resolveAttentionLayerMeasurement({
       id: "personal-focus-signal",
       present: true,
-      cssOpticalSizePx: 58,
+      authoredCssSizePx: 58,
+      shaderPixelRatio: 1,
       opacity: 1,
       rendererDpr: 1,
     });
-    const dpr3DeviceCappedTo2 = resolveAttentionLayerMeasurement({
+    const dpr2 = resolveAttentionLayerMeasurement({
       id: "personal-focus-signal",
       present: true,
-      cssOpticalSizePx: 58,
+      authoredCssSizePx: 58,
+      shaderPixelRatio: 2,
       opacity: 1,
       rendererDpr: 2,
     });
-    expect(dpr1.cssOpticalSizePx).toBe(58);
-    expect(dpr3DeviceCappedTo2.cssOpticalSizePx).toBe(58);
-    expect(dpr1.dprScaledAuthoredSizePx).toBe(58);
-    expect(dpr3DeviceCappedTo2.dprScaledAuthoredSizePx).toBe(116);
+    const staleUniform = resolveAttentionLayerMeasurement({
+      id: "personal-focus-signal",
+      present: true,
+      authoredCssSizePx: 58,
+      shaderPixelRatio: 1,
+      opacity: 1,
+      rendererDpr: 2,
+    });
+    expect(dpr1.resolvedCssOpticalSizePx).toBe(58);
+    expect(dpr2.resolvedCssOpticalSizePx).toBe(58);
+    expect(dpr2.shaderPixelRatio).toBe(2);
+    expect(staleUniform.resolvedCssOpticalSizePx).toBe(29);
     expect(dpr1.strongGlow).toBe(true);
     expect(resolveAttentionLayerMeasurement({
       id: "particle-halo",
       present: true,
-      cssOpticalSizePx: 10,
+      authoredCssSizePx: 10,
+      shaderPixelRatio: 2,
       opacity: 0.35,
       rendererDpr: 2,
     }).strongGlow).toBe(false);
+  });
+
+  it("publishes attention measurements after renderer.render so onBeforeRender uniforms are current", () => {
+    const source = readFileSync(new URL("./ParticleEarthScene.tsx", import.meta.url), "utf8");
+    const renderIndex = source.indexOf("renderer.render(scene, camera);");
+    const publishIndex = source.indexOf("publishAttentionLayerMeasurements();", renderIndex);
+    expect(renderIndex).toBeGreaterThan(0);
+    expect(publishIndex).toBeGreaterThan(renderIndex);
+    expect(source).toContain("shaderPixelRatio: material ? Number(material.uniforms.uPixelRatio.value) : null");
   });
 
   it("publishes every createParticleEarthMaterial consumer through data-attention-layers", () => {

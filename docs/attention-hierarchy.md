@@ -44,7 +44,7 @@ In dev/QA builds, `ParticleEarthScene` publishes `data-attention-layers` on the 
 7. `particle-halo`
 8. `personal-focus-signal`
 
-The measurement is observational. It reads the material's **current `uPointSize` CSS-pixel value** and current `uOpacity`; it also reports the effective renderer DPR and the corresponding DPR-scaled authored input (`CSS size × renderer DPR`). No shader/material/token value is changed by ST-037. Under the fixed camera used below, all remaining shader multipliers are DPR-independent, so the CSS-pixel value is the contract that #243 is required to preserve while DPR-scaled sampling input changes.
+The measurement is observational. It reads the material's authored `uPointSize`, current `uOpacity`, and — **after `renderer.render()` has run** — the actual `uPixelRatio` uniform written by `ParticleEarthMaterial.onBeforeRender`. The reported `resolvedCssOpticalSizePx` is `uPointSize × shader uPixelRatio ÷ renderer DPR`; this is the DPR-normalized shader point-size input, not a copy of the authored value. A stale/missing `onBeforeRender` update therefore changes the measured CSS result and fails the lane. The existing core test in `src/scene/particleEarthMaterial.test.ts` separately locks the vertex shader's `gl_PointSize … * uPixelRatio` multiplication, so the browser lane and shader contract cover both sides of the #243 DPR conversion. No shader/material/token value is changed by ST-037. Under the fixed camera used below, the remaining depth/spark/terrain factors are DPR-independent and therefore cancel when comparing the same scene across DPR.
 
 `strongGlow` uses the existing `motionTokens.glow.coreOpacity` threshold. The QA lane fails when more than one measured layer reports that state in the same capture.
 
@@ -75,7 +75,7 @@ The three DPR captures resolved to the same CSS optical values and opacity value
 | particle halo | `10px / 0.05` | `10px / 0.05` | `10px / 0.05` | no |
 | personal focus signal | `58px / 1` | `58px / 1` | `58px / 1` | **yes — sole owner** |
 
-The reported DPR-scaled authored input follows the **effective renderer DPR**: at device DPR 1 the personal signal reports a DPR-scaled authored input of `58`; at device DPR 2 and device DPR 3 (renderer capped to 2) it reports `116`. The CSS optical size remains `58px` in all captures.
+The actual shader `uPixelRatio` follows the **effective renderer DPR**: `1`, `2`, `2` for device DPR `1`, `2`, `3` in this high-quality fixture. The personal signal therefore resolves back to the same `58px` DPR-normalized CSS optical size in all captures. If a material's `onBeforeRender` stopped writing `uPixelRatio`, the DPR-2/3 resolved CSS size would fall to `29px` and this lane would fail rather than echoing the authored `58px`.
 
 ### Unaffected comparison references
 
@@ -89,7 +89,8 @@ Route SVG strokes and Place/City Labels do not use `createParticleEarthMaterial`
 - drives the same camera to zoom 2.7 and waits for the real refinement layer;
 - reads only `data-attention-layers` plus the unaffected SVG/text references;
 - fails if any expected material consumer is absent;
-- fails if DPR 2/3 CSS optical size differs from DPR 1 by more than `0.01px`;
+- fails if a material's actual shader `uPixelRatio` differs from the effective renderer DPR by more than `0.001`;
+- fails if the DPR-normalized resolved CSS optical size at DPR 2/3 differs from DPR 1 by more than `0.01px`;
 - fails if opacity differs by more than `0.005` across DPR;
 - fails if more than one layer reports `strongGlow` in the captured state.
 

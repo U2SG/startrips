@@ -184,8 +184,9 @@ export type AttentionParticleLayerId =
 export type AttentionParticleLayerMeasurement = {
   id: AttentionParticleLayerId;
   present: boolean;
-  cssOpticalSizePx: number | null;
-  dprScaledAuthoredSizePx: number | null;
+  authoredCssSizePx: number | null;
+  shaderPixelRatio: number | null;
+  resolvedCssOpticalSizePx: number | null;
   opacity: number;
   strongGlow: boolean;
 };
@@ -197,34 +198,47 @@ function roundAttentionMetric(value: number, digits = 4) {
 
 /**
  * ST-037 observes the existing #243 CSS-pixel contract without retuning it.
- * `uPointSize` is authored in CSS px; the shader multiplies by the effective
- * renderer DPR immediately before drawing. Publishing both logical and DPR-scaled authored
- * sizes makes DPR drift measurable without introducing a second visual formula.
+ * `uPointSize` is authored in CSS px, while the ACTUAL shader uniform
+ * `uPixelRatio` is populated by ParticleEarthMaterial.onBeforeRender. Dividing
+ * the shader-scaled input back by renderer DPR yields the CSS optical contract
+ * that should stay invariant across DPR. If onBeforeRender stops updating the
+ * uniform, this resolved value immediately drifts instead of echoing authored
+ * input and falsely passing QA. The shader's multiplication by `uPixelRatio` is
+ * independently locked by particleEarthMaterial.test.ts.
  */
 export function resolveAttentionLayerMeasurement({
   id,
   present,
-  cssOpticalSizePx,
+  authoredCssSizePx,
+  shaderPixelRatio,
   opacity,
   rendererDpr,
 }: {
   id: AttentionParticleLayerId;
   present: boolean;
-  cssOpticalSizePx: number | null;
+  authoredCssSizePx: number | null;
+  shaderPixelRatio: number | null;
   opacity: number;
   rendererDpr: number;
 }): AttentionParticleLayerMeasurement {
-  const logicalSize = present && cssOpticalSizePx !== null
-    ? roundAttentionMetric(cssOpticalSizePx, 3)
+  const authored = present && authoredCssSizePx !== null
+    ? roundAttentionMetric(authoredCssSizePx, 3)
+    : null;
+  const shaderRatio = present && shaderPixelRatio !== null
+    ? roundAttentionMetric(shaderPixelRatio, 4)
     : null;
   const resolvedOpacity = present ? roundAttentionMetric(opacity) : 0;
+  const resolvedCssOpticalSizePx = authored === null
+    || shaderRatio === null
+    || !(rendererDpr > 0)
+    ? null
+    : roundAttentionMetric((authored * shaderRatio) / rendererDpr, 3);
   return {
     id,
     present,
-    cssOpticalSizePx: logicalSize,
-    dprScaledAuthoredSizePx: logicalSize === null
-      ? null
-      : roundAttentionMetric(logicalSize * rendererDpr, 3),
+    authoredCssSizePx: authored,
+    shaderPixelRatio: shaderRatio,
+    resolvedCssOpticalSizePx,
     opacity: resolvedOpacity,
     strongGlow: present && resolvedOpacity >= motionTokens.glow.coreOpacity,
   };
@@ -3998,7 +4012,8 @@ export function ParticleEarthScene({
       ) => resolveAttentionLayerMeasurement({
         id,
         present: Boolean(material),
-        cssOpticalSizePx: material ? Number(material.uniforms.uPointSize.value) : null,
+        authoredCssSizePx: material ? Number(material.uniforms.uPointSize.value) : null,
+        shaderPixelRatio: material ? Number(material.uniforms.uPixelRatio.value) : null,
         opacity: material ? Number(material.uniforms.uOpacity.value) : 0,
         rendererDpr,
       });
@@ -5031,7 +5046,6 @@ export function ParticleEarthScene({
         personalMaterial.uniforms.uPointSize.value,
         currentMode === "particleSphere" ? 46 : 58,
       );
-      publishAttentionLayerMeasurements();
       const routeOpacity = currentMode === "surfaceEarth"
         ? 0
         : currentMode === "focusPoint"
@@ -5312,6 +5326,9 @@ export function ParticleEarthScene({
       }
 
       renderer.render(scene, camera);
+      // Publish only AFTER draw so each material's onBeforeRender has written
+      // the actual shader uPixelRatio used for this frame.
+      publishAttentionLayerMeasurements();
       const interactionActive = activePointers.size > 0
         || rotationVelocityX !== 0 || rotationVelocityY !== 0
         || now < wheelInteractionUntil;

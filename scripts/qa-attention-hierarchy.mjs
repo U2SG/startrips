@@ -8,6 +8,7 @@ const VIEWPORT = { width: 1200, height: 800 };
 const TARGET_ZOOM = 2.7;
 const CSS_SIZE_TOLERANCE_PX = 0.01;
 const OPACITY_TOLERANCE = 0.005;
+const SHADER_DPR_TOLERANCE = 0.001;
 const EXPECTED_LAYER_IDS = [
   "base-particle-surface",
   "spatial-lod-refinement",
@@ -147,6 +148,11 @@ try {
     }, Boolean(capture.attention)
       && JSON.stringify(ids) === JSON.stringify(EXPECTED_LAYER_IDS)
       && capture.attention.layers.every((layer) => layer.present)
+      && capture.attention.layers.every((layer) => (
+        Number.isFinite(layer.shaderPixelRatio)
+        && Math.abs(layer.shaderPixelRatio - capture.attention.rendererPixelRatio) <= SHADER_DPR_TOLERANCE
+        && Number.isFinite(layer.resolvedCssOpticalSizePx)
+      ))
       && strong.length <= 1
       && capture.pageErrors.length === 0);
   }
@@ -157,7 +163,8 @@ try {
     for (const id of EXPECTED_LAYER_IDS) {
       const base = baseline.get(id);
       const next = current.get(id);
-      const sizeDelta = Math.abs((next?.cssOpticalSizePx ?? Number.NaN) - (base?.cssOpticalSizePx ?? Number.NaN));
+      const sizeDelta = Math.abs((next?.resolvedCssOpticalSizePx ?? Number.NaN) - (base?.resolvedCssOpticalSizePx ?? Number.NaN));
+      const shaderDprDelta = Math.abs((next?.shaderPixelRatio ?? Number.NaN) - (capture.attention?.rendererPixelRatio ?? Number.NaN));
       const opacityDelta = Math.abs((next?.opacity ?? Number.NaN) - (base?.opacity ?? Number.NaN));
       record(`attention:dpr-invariant:${id}:${capture.deviceDpr}`, {
         id,
@@ -166,11 +173,15 @@ try {
         measured: next ?? null,
         sizeDelta,
         opacityDelta,
+        shaderDprDelta,
         cssSizeTolerancePx: CSS_SIZE_TOLERANCE_PX,
         opacityTolerance: OPACITY_TOLERANCE,
+    shaderDprTolerance: SHADER_DPR_TOLERANCE,
+        shaderDprTolerance: SHADER_DPR_TOLERANCE,
       }, Boolean(base && next)
         && sizeDelta <= CSS_SIZE_TOLERANCE_PX
-        && opacityDelta <= OPACITY_TOLERANCE);
+        && opacityDelta <= OPACITY_TOLERANCE
+        && shaderDprDelta <= SHADER_DPR_TOLERANCE);
     }
   }
 
