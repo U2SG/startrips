@@ -1711,6 +1711,13 @@ describe("ST-060 dismissal evaluation day", () => {
     expect(handler).toContain("dismissedOn: actionDate");
     expect(handler).toContain("error instanceof JourneyApiError && error.code === \"INVALID_HOME_BASE_DISMISSAL\"");
     expect(handler).toContain("await refreshHomeBaseSuggestionEvidence()");
+
+    const refreshStart = source.indexOf("const refreshHomeBaseSuggestionEvidence");
+    const refreshEnd = source.indexOf("const confirmHomeBaseSuggestion", refreshStart);
+    const refresh = source.slice(refreshStart, refreshEnd);
+    expect(refresh).toContain("loadRevision.current += 1");
+    expect(refresh).toContain("setJourneys([])");
+    expect(refresh).toContain("setHomeBasePeriodsRead(false)");
   });
 });
 

@@ -1232,6 +1232,15 @@ export function LivingAtlasApp({
       if (revision !== loadRevision.current) return;
       setJourneys(sortJourneysChronologically(journeyRows));
     } catch {
+      if (revision === loadRevision.current) {
+        // Invalidate the detached Home reads launched above and remove the stale
+        // Journey evidence the server just rejected. Even if a private read won
+        // the race before this catch, zero Journey rows keeps inference unready.
+        loadRevision.current += 1;
+        setJourneys([]);
+        setHomeBasePeriodsRead(false);
+        setHomeBaseDismissals(listHomeBaseDismissals ? undefined : []);
+      }
       // Keep the suggestion suppressed when an authoritative refresh cannot
       // complete; the original structured dismissal error remains visible.
     }
