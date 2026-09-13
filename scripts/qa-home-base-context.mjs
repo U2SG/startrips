@@ -58,10 +58,11 @@ function journey(id, title, startedOn, latitude, longitude) {
 
 const journeys = [
   journey("aaaaaaaa-1111-4111-8111-111111111111", "成都旧日", "2023-06-01", 30.5728, 104.0668),
-  // Keep today's active Journey on the same visible hemisphere as Shenzhen,
-  // but well outside the renderer's Route Point hit threshold so ordinary Home
-  // pointer ownership is exercised without manufacturing an overlap.
-  journey("bbbbbbbb-2222-4222-8222-222222222222", "上海今夏", "2026-06-01", 31.2304, 121.4737),
+  // Keep today's active Journey north of Shenzhen on almost the same meridian.
+  // Wuhan stays beyond the renderer's 0.18-unit Route Point raycast threshold,
+  // while the tall compact viewport still contains the current Home projection.
+  // This isolates Home ownership instead of grading an intentionally off-screen marker.
+  journey("bbbbbbbb-2222-4222-8222-222222222222", "武汉今夏", "2026-06-01", 30.58333, 114.26667),
 ];
 
 const browser = await launchQaBrowser({
@@ -207,6 +208,49 @@ async function closeContext(page) {
   }
 }
 
+async function homeMarkerCenter(marker) {
+  const box = await marker.boundingBox();
+  if (!box) throw new Error("Projected Home marker has no pointer geometry");
+  return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+}
+
+async function revealHomeCityLabel(page, marker) {
+  const center = await homeMarkerCenter(marker);
+  const beforeZoom = await page.evaluate(() => window.__particleEarthDebug?.().zoom ?? null);
+  await page.mouse.move(center.x, center.y);
+  await page.mouse.wheel(0, -900);
+  await page.waitForFunction((previous) => {
+    const current = window.__particleEarthDebug?.().zoom;
+    return typeof current === "number" && (previous === null || current > previous);
+  }, beforeZoom, { timeout: 5_000 });
+  await page.waitForFunction(() => [...document.querySelectorAll(".particle-earth-city")].some((node) => (
+    node.textContent?.includes("深圳") && getComputedStyle(node).display !== "none"
+  )), null, { timeout: 5_000 });
+  return page.evaluate(() => {
+    const markerNode = document.querySelector('[data-home-base-presence="current"]');
+    const city = [...document.querySelectorAll(".particle-earth-city")].find((node) => (
+      node.textContent?.includes("深圳") && getComputedStyle(node).display !== "none"
+    ));
+    if (!(markerNode instanceof HTMLElement) || !(city instanceof SVGTextElement)) return null;
+    const home = markerNode.getBoundingClientRect();
+    const label = city.getBoundingClientRect();
+    const left = Math.max(home.left, label.left);
+    const right = Math.min(home.right, label.right);
+    const top = Math.max(home.top, label.top);
+    const bottom = Math.min(home.bottom, label.bottom);
+    if (right <= left || bottom <= top) return null;
+    const x = (left + right) / 2;
+    const y = (top + bottom) / 2;
+    const hit = document.elementFromPoint(x, y);
+    return {
+      x, y,
+      hitCity: Boolean(hit?.closest?.(".particle-earth-city")),
+      cityLat: city.getAttribute("data-city-lat"),
+      cityLon: city.getAttribute("data-city-lon"),
+    };
+  });
+}
+
 try {
   // Desktop pointer + keyboard activation and semantic non-ownership.
   const desktop = await openOwner({ width: 1280, height: 860 });
@@ -348,6 +392,78 @@ try {
   await closeContext(page);
   await page.locator(".living-atlas__globe-focus-exit").click();
   await page.close();
+
+  // City text is painted over the same geographic surface. Zoom from the Home
+  // region so the Shenzhen label becomes eligible, then require an actual label
+  // hit inside Home's 44 px target to use the renderer's one arbitration path.
+  const arbitration = await openOwner({ width: 1280, height: 800 });
+  const arbitrationPage = arbitration.page;
+  await arbitrationPage.locator(".living-atlas__globe-focus").click();
+  await arbitrationPage.waitForFunction(() => document.querySelector(".living-atlas")?.getAttribute("data-globe-focus") === "on");
+  const arbitrationMarker = await currentHomeMarker(arbitrationPage);
+  const cityHomeOverlap = await revealHomeCityLabel(arbitrationPage, arbitrationMarker);
+  record("wheel in Home region stays renderer-owned and exposes overlapping city semantics", { cityHomeOverlap }, Boolean(
+    cityHomeOverlap?.hitCity && cityHomeOverlap.cityLat && cityHomeOverlap.cityLon
+  ));
+  if (!cityHomeOverlap?.hitCity) {
+    throw new Error(`Shenzhen city label did not overlap Home hit area: ${JSON.stringify(cityHomeOverlap)}`);
+  }
+
+  await arbitrationPage.mouse.click(cityHomeOverlap.x, cityHomeOverlap.y);
+  const arbitrationContext = arbitrationPage.locator("[data-home-base-context]");
+  await arbitrationContext.waitFor({ state: "visible", timeout: 5_000 });
+  record("ordinary city-label contact inside Home region resolves to Home after higher renderer owners yield", {
+    periodId: await arbitrationContext.getAttribute("data-home-base-period-id"),
+  }, (await arbitrationContext.getAttribute("data-home-base-period-id")) === CURRENT_HOME.id);
+  await closeContext(arbitrationPage);
+
+  const beforeDrag = await arbitrationPage.evaluate(() => window.__particleEarthDebug?.() ?? null);
+  await arbitrationPage.mouse.move(cityHomeOverlap.x, cityHomeOverlap.y);
+  await arbitrationPage.mouse.down();
+  await arbitrationPage.mouse.move(cityHomeOverlap.x + 64, cityHomeOverlap.y + 20, { steps: 5 });
+  await arbitrationPage.mouse.up();
+  const afterDrag = await arbitrationPage.evaluate(() => window.__particleEarthDebug?.() ?? null);
+  record("drag beginning in city/Home overlap remains the canonical globe gesture", {
+    before: beforeDrag ? { rotationX: beforeDrag.rotationX, rotationY: beforeDrag.rotationY } : null,
+    after: afterDrag ? {
+      rotationX: afterDrag.rotationX,
+      rotationY: afterDrag.rotationY,
+      manualFocusOwner: afterDrag.manualFocusOwner,
+      dragAngularDisplacement: afterDrag.dragAngularDisplacement,
+    } : null,
+    homeContextCount: await arbitrationPage.locator("[data-home-base-context]").count(),
+  }, Boolean(
+    afterDrag?.manualFocusOwner
+    && afterDrag.dragAngularDisplacement?.total > 0
+    && (await arbitrationPage.locator("[data-home-base-context]").count()) === 0
+  ));
+  await arbitrationPage.close();
+
+  // Globe coordinate-picking is the highest owner. Recreate the same physical
+  // city/Home overlap, enter the existing composer pick mode, and require that
+  // the city coordinate is accepted without ever opening Home context.
+  const globePick = await openOwner({ width: 1280, height: 800 });
+  const globePickPage = globePick.page;
+  await globePickPage.locator(".living-atlas__globe-focus").click();
+  await globePickPage.waitForFunction(() => document.querySelector(".living-atlas")?.getAttribute("data-globe-focus") === "on");
+  const globePickMarker = await currentHomeMarker(globePickPage);
+  const globePickOverlap = await revealHomeCityLabel(globePickPage, globePickMarker);
+  if (!globePickOverlap?.hitCity) {
+    throw new Error(`Globe-pick city/Home overlap unavailable: ${JSON.stringify(globePickOverlap)}`);
+  }
+  await globePickPage.locator(".living-atlas__globe-focus-exit").click();
+  await globePickPage.getByRole("button", { name: "记录旅程" }).click();
+  await globePickPage.locator(".journey-composer").waitFor({ state: "visible", timeout: 5_000 });
+  await globePickPage.getByRole("button", { name: /直接在地球上取点/ }).click();
+  await globePickPage.waitForFunction(() => document.querySelector(".living-atlas")?.classList.contains("is-globe-picking"));
+  const pickingCity = globePickPage.locator(".particle-earth-city").filter({ hasText: "深圳" }).first();
+  await pickingCity.waitFor({ state: "visible", timeout: 5_000 });
+  await pickingCity.click();
+  await globePickPage.waitForFunction(() => !document.querySelector(".living-atlas")?.classList.contains("is-globe-picking"), null, { timeout: 5_000 });
+  record("globe coordinate-pick wins over Home at overlapping city contact", {
+    homeContextCount: await globePickPage.locator("[data-home-base-context]").count(),
+  }, (await globePickPage.locator("[data-home-base-context]").count()) === 0);
+  await globePickPage.close();
 
   // Compact mobile uses the same geographic marker; no Home tab/tool is added.
   // The current Shenzhen Home is deliberately separated from both Journey Route
