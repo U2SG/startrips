@@ -54,6 +54,7 @@ vi.mock("./routes/uploads", async () => {
 });
 
 import { app } from "./app";
+import { auth } from "./auth";
 
 describe("global API throttling", () => {
   it("does not rate-limit ordinary product requests by client IP", async () => {
@@ -64,5 +65,18 @@ describe("global API throttling", () => {
       expect(response.status).toBe(404);
       expect(response.status).not.toBe(429);
     }
+  });
+
+  it("keeps native Better Auth password verification off the public wildcard", async () => {
+    vi.mocked(auth.handler).mockClear();
+    const response = await app.request("http://localhost/api/auth/verify-password", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ password: "valid-looking-password" }),
+    });
+
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ error: "Not found" });
+    expect(auth.handler).not.toHaveBeenCalled();
   });
 });

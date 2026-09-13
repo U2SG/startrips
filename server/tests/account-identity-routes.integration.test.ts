@@ -149,6 +149,17 @@ describe("account identity HTTP boundary", () => {
     expect(Number(throttled.headers.get("retry-after"))).toBeGreaterThan(0);
     expect(await throttled.json()).toEqual({ error: "IDENTITY_REVERIFY_RATE_LIMITED" });
 
+    // The native Better Auth verifier is not an escape hatch around the
+    // dedicated identity-management budget. It is server-internal only, so a
+    // valid password sent directly to the wildcard auth surface is refused.
+    const nativeVerify = await app.request(`${TEST_ORIGIN}/api/auth/verify-password`, {
+      method: "POST",
+      headers: { ...headers(), "x-forwarded-for": "198.51.100.77" },
+      body: JSON.stringify({ password: PASSWORD }),
+    });
+    expect(nativeVerify.status).toBe(404);
+    expect(await nativeVerify.json()).toEqual({ error: "Not found" });
+
     // Rotating the address does not reopen the oracle: the stable user/session
     // buckets have already reached the same bound.
     const rotatedAddress = await app.request(`${TEST_ORIGIN}/api/account-identities/reverify/password`, {
@@ -184,6 +195,14 @@ describe("account identity HTTP boundary", () => {
       body: JSON.stringify({ provider: "google" }),
     });
     expect(nativeLink.status).toBe(404);
+
+    const nativeVerify = await app.request(`${TEST_ORIGIN}/api/auth/verify-password`, {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify({ password: PASSWORD }),
+    });
+    expect(nativeVerify.status).toBe(404);
+    expect(await nativeVerify.json()).toEqual({ error: "Not found" });
   });
 
   it("fails link intent closed while no provider is configured", async () => {

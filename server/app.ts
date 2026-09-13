@@ -46,6 +46,17 @@ app.get("/api/health", async (context) => {
   return context.json({ status: "ok" });
 });
 
+// #345: password verification is a server-internal primitive for the
+// account-identity reverification flow, not a public Better Auth capability.
+// If the native endpoint were reachable through the wildcard handler, a stolen
+// valid session could probe passwords outside the dedicated stable
+// user/session/address budget enforced by `/api/account-identities/reverify/password`.
+// Keep the internal `auth.api.verifyPassword()` call available while refusing
+// every external HTTP method before the Better Auth wildcard can see it.
+app.all("/api/auth/verify-password", (context) =>
+  context.json({ error: "Not found" }, 404),
+);
+
 app.on(["GET", "POST"], "/api/auth/*", (context) =>
   auth.handler(context.req.raw),
 );
