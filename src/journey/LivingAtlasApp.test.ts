@@ -1899,6 +1899,8 @@ describe("ST-065 Home Base context ownership", () => {
     expect(source).toContain("clearHomeBaseContext();\n    clearRoutePointContext();\n    timeCursor.selectJourney(journeyId)");
     expect(source).toContain("clearHomeBaseContext();\n    const requested = requestRoutePointContextSelection(");
     expect(source).toContain("clearHomeBaseContext();\n    const journey = journeys.find((candidate) => candidate.id === journeyId)");
+    expect(source).toContain("Opening Playback controls is already a newer presentation");
+    expect(source).toContain("clearHomeBaseContext();\n                if (playbackPendingMode?.journeyId === activeJourney.id)");
     expect(source).toContain("[clearHomeBaseContext, timeCursor.cursor, timeCursor.timelineRevision]");
     expect(source).toContain('data-home-base-context');
     expect(source).toContain('homeBaseSuggestion?.visible && !homeBaseContext');

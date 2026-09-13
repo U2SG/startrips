@@ -2526,6 +2526,10 @@ export function LivingAtlasApp({
               aria-expanded={playbackModeMenuJourneyId === activeJourney.id}
               aria-controls={`playback-mode-options-${activeJourney.id}`}
               onClick={() => {
+                // Opening Playback controls is already a newer presentation
+                // intent than Home context; release Home before the mode menu
+                // is exposed so it cannot cover/intercept that control.
+                clearHomeBaseContext();
                 if (playbackPendingMode?.journeyId === activeJourney.id) {
                   startPlayback(
                     activeJourney.id,
