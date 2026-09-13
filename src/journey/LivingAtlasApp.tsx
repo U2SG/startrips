@@ -384,6 +384,20 @@ export function atlasCinematicIsolationActive(
   return playbackActive || globeFocusMode;
 }
 
+/**
+ * The desktop Journey Rail has two explicit owners that make it non-visible.
+ * Keep the release state explicit too: after Playback/point-picking ends the
+ * same render that releases `inert` also writes `visibility: visible`, rather
+ * than relying on an implicit CSS initial-value restoration across responsive
+ * and overlay ownership changes.
+ */
+export function journeyRailVisibility(
+  playbackActive: boolean,
+  globePickActive: boolean,
+): "hidden" | "visible" {
+  return playbackActive || globePickActive ? "hidden" : "visible";
+}
+
 export function playbackEntryNeedsPreparation(
   journey: Journey | null,
   cachedRead: { url: string } | null,
@@ -2315,7 +2329,12 @@ export function LivingAtlasApp({
       )}
 
       {!isMobileV2 && view === "planet" && journeys.length > 0 ? (
-        <nav className="living-atlas__journey-rail motion-staged" aria-label={`全部旅程，共 ${journeys.length} 段`} inert={globeFocusMode || globePickActive || playbackActive || undefined}>
+        <nav
+          className="living-atlas__journey-rail motion-staged"
+          aria-label={`全部旅程，共 ${journeys.length} 段`}
+          inert={globeFocusMode || globePickActive || playbackActive || undefined}
+          style={{ visibility: journeyRailVisibility(playbackActive, globePickActive) }}
+        >
           <div className="living-atlas__journey-rail-heading">
             <span>旅程</span>
             <small><CountUp value={journeys.length} initialValue={journeys.length} format={(value) => String(value).padStart(2, "0")} /> JOURNEYS</small>
