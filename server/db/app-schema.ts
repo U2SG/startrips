@@ -80,6 +80,49 @@ export const homeBasePeriods = pgTable(
   ],
 );
 
+// #232: the member's answer to a Home Base suggestion, so that answer can
+// survive the session it was given in. One row per Atlas: the suggestion
+// surface asks about at most one region at a time, so a later answer replaces
+// the same evidence revision rather than accumulating duplicate clicks; answers for
+// other regions/evidence revisions remain available to the inference selector.
+//
+// `evidence_digest` stores `homeBaseEvidenceDigest()` verbatim. That string is
+// structured, not opaque — the inference core parses the anchor and the
+// supporting Journey ids back out of it to decide whether materially new
+// residence evidence exists — so it is stored unbounded and untrimmed.
+//
+// `kind` separates an ordinary "not now" from an explicit rejection, which the
+// issue asks to respect more strongly. `dismissed_on` is the calendar date the
+// 90-day re-prompt rule counts from.
+export const homeBaseDismissals = pgTable(
+  "home_base_dismissals",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    atlasId: uuid("atlas_id")
+      .notNull()
+      .references(() => atlases.id, { onDelete: "cascade" }),
+    kind: text("kind").notNull(),
+    evidenceDigest: text("evidence_digest").notNull(),
+    // Fixed-size MD5 hex key keeps the unique B-tree independent of the
+    // unbounded evidence digest while the full digest remains byte-exact.
+    evidenceDigestHash: text("evidence_digest_hash").notNull(),
+    dismissedOn: date("dismissed_on", { mode: "string" }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("home_base_dismissals_atlas_digest_hash_unique").on(table.atlasId, table.evidenceDigestHash),
+    check(
+      "home_base_dismissals_kind_check",
+      sql`${table.kind} in ('soft', 'rejected')`,
+    ),
+  ],
+);
+
 export const journeys = pgTable(
   "journeys",
   {

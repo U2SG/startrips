@@ -17,7 +17,10 @@ import {
   explicitSelectedJourneyIdForHomeCamera,
   capturePlaybackEntryForContext,
   globeFocusState,
+  homeBaseInferenceInputsReady,
+  homeBaseSuggestionCanBeConfirmed,
   loadJourneyRowsWithOptionalHome,
+  mergeConfirmedHomeBasePeriod,
   nextPlaybackCameraCommand,
   nextPlaybackReleaseFocusRevision,
   nextInitialHomeCameraFocusRevision,
@@ -44,6 +47,11 @@ import { resolvePlaybackReturn } from "./playbackReturn";
 import { buildJourneyTimeline, resolveJourneyTimelineSelection } from "./globeTimeline";
 import type { HomeBasePeriod } from "./homeBase";
 import { resolveHomeBasePresence } from "./homeBasePresence";
+import { inferHomeBaseCandidate } from "./homeBaseInference";
+import {
+  homeBaseConfirmationDraft,
+  resolveHomeBaseSuggestion,
+} from "./homeBaseSuggestion";
 import type { Journey } from "./types";
 
 // #8 globe focus mode: the root class/data contract drives the layout CSS
@@ -736,6 +744,35 @@ describe("optional Home hydration", () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(onHomeBasePeriods).toHaveBeenCalledWith([]);
+  });
+
+  it("drops detached private Home reads once a newer load owns the view", async () => {
+    let resolvePeriods!: (periods: []) => void;
+    let resolveDismissals!: (dismissals: []) => void;
+    const periodsPending = new Promise<[]>((resolve) => { resolvePeriods = resolve; });
+    const dismissalsPending = new Promise<[]>((resolve) => { resolveDismissals = resolve; });
+    const onHomeBasePeriods = vi.fn();
+    const onHomeBaseDismissals = vi.fn();
+    let current = true;
+
+    const rows = await loadJourneyRowsWithOptionalHome({
+      listJourneys: async () => [playbackJourney],
+      listHomeBasePeriods: () => periodsPending,
+      listHomeBaseDismissals: () => dismissalsPending,
+      isCurrent: () => current,
+      onHomeBasePeriods,
+      onHomeBaseDismissals,
+    });
+
+    expect(rows).toEqual([playbackJourney]);
+    current = false;
+    resolvePeriods([]);
+    resolveDismissals([]);
+    await Promise.all([periodsPending, dismissalsPending]);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(onHomeBasePeriods).not.toHaveBeenCalled();
+    expect(onHomeBaseDismissals).not.toHaveBeenCalled();
   });
 
   it("keeps guest/read-only views free of private Home hydration", async () => {
@@ -1444,5 +1481,285 @@ describe("globe detail-control ownership (#308)", () => {
     expect(rule).toContain("min-width: 44px;");
     expect(rule).toContain("min-height: 44px;");
     expect(rule).not.toMatch(/(^|\s)right:/);
+  });
+});
+
+describe("ST-060 the Home Base suggestion card is quiet and non-modal", () => {
+  it("renders beside the Atlas timeline without an overlay, a dialog role or a focus trap", () => {
+    const source = readFileSync(new URL("./LivingAtlasApp.tsx", import.meta.url), "utf8");
+    const card = source.slice(
+      source.indexOf("living-atlas__home-base-suggestion motion-fade-through"),
+      source.indexOf("{view === \"planet\" && journeys.length === 0"),
+    );
+    expect(card.length).toBeGreaterThan(0);
+    expect(card).not.toContain("role=\"dialog\"");
+    expect(card).not.toContain("aria-modal");
+    expect(card).not.toContain("inert");
+    expect(card).not.toContain("useModalFocus");
+    // The condition is the decision's own, so a second call site cannot forget
+    // the Story/Playback suppression.
+    expect(source).toContain("homeBaseSuggestion?.visible");
+    expect(source).toContain("narrativeSurfaceActive: storyJourneyId !== null || playbackActive");
+  });
+
+  it("keeps the same quiet suggestion reachable in compact mobile Atlas mode", () => {
+    const source = readFileSync(new URL("./LivingAtlasApp.tsx", import.meta.url), "utf8");
+    const css = readFileSync(new URL("../styles/living-atlas.css", import.meta.url), "utf8");
+    expect(source).toContain('(isMobileV2 && view === "planet")');
+    expect(source).toContain('data-home-base-surface={isMobileV2 ? "mobile-atlas" : "timeline"}');
+    const mobileRule = css.slice(
+      css.indexOf('.living-atlas[data-mobile-v2="on"] .living-atlas__home-base-suggestion {'),
+      css.indexOf('.living-atlas[data-mobile-v2="on"] .living-atlas__home-base-suggestion h2'),
+    );
+    expect(mobileRule).toContain("bottom: calc(env(safe-area-inset-bottom) + 142px)");
+    expect(mobileRule).toContain("left: 12px");
+    expect(mobileRule).toContain("right: 12px");
+    expect(mobileRule).not.toContain("position: fixed");
+  });
+
+  it("recomputes from the frozen inference core rather than holding its own thresholds", () => {
+    const source = readFileSync(new URL("./LivingAtlasApp.tsx", import.meta.url), "utf8");
+    const suggestionSource = readFileSync(new URL("./homeBaseSuggestion.ts", import.meta.url), "utf8");
+    expect(source).toContain("homeBaseInferenceEvidenceBoundaryAfterRecordedHistory(");
+    expect(source).toContain("inferHomeBaseCandidateWithDismissals({");
+    expect(source).toContain("evaluationDate: homeEffectiveDate");
+    expect(suggestionSource).toContain("const baseline = inferHomeBaseCandidate(input)");
+    expect(suggestionSource).toContain("applyHomeBaseDismissalToInferenceResult(");
+    expect(suggestionSource).not.toContain("inferHomeBaseCandidate({ ...input, dismissal })");
+    // No threshold literal is re-stated outside the frozen core.
+    expect(source).not.toContain("HOME_BASE_SUGGESTED_MIN_JOURNEYS");
+    expect(source).not.toContain("HOME_BASE_CLUSTER_RADIUS_KM");
+    expect(suggestionSource).not.toContain("HOME_BASE_SUGGESTED_MIN_JOURNEYS");
+  });
+
+  it("persists the answer before taking the card down", () => {
+    const source = readFileSync(new URL("./LivingAtlasApp.tsx", import.meta.url), "utf8");
+    const dismiss = source.slice(source.indexOf("const dismissHomeBaseSuggestion"));
+    expect(dismiss.indexOf("mutations.recordHomeBaseDismissal"))
+      .toBeLessThan(dismiss.indexOf("setHomeBaseDismissals((current)"));
+  });
+});
+
+describe("ST-060 the suggestion waits for every private read it depends on", () => {
+  const ready = {
+    periodsReader: true,
+    periodsRead: true,
+    dismissalReader: true,
+    dismissalRead: true,
+    journeyCount: 3,
+  };
+
+  it("computes nothing until the Home history read has landed", () => {
+    expect(homeBaseInferenceInputsReady(ready)).toBe(true);
+    // An unread history is indistinguishable from an empty one, and an empty
+    // one makes a member who already confirmed a Home Base look like a
+    // first-time candidate.
+    expect(homeBaseInferenceInputsReady({ ...ready, periodsRead: false })).toBe(false);
+  });
+
+  it("computes nothing until the recorded dismissal has landed", () => {
+    expect(homeBaseInferenceInputsReady({ ...ready, dismissalRead: false })).toBe(false);
+    // Shared mode has no dismissal reader at all, so there is nothing to wait
+    // for; the period reader alone decides.
+    expect(homeBaseInferenceInputsReady({
+      ...ready,
+      dismissalReader: false,
+      dismissalRead: false,
+    })).toBe(true);
+  });
+
+  it("computes nothing without a Home history reader or without Journeys", () => {
+    expect(homeBaseInferenceInputsReady({ ...ready, periodsReader: false })).toBe(false);
+    expect(homeBaseInferenceInputsReady({ ...ready, journeyCount: 0 })).toBe(false);
+  });
+});
+
+describe("ST-060 refresh readiness ownership", () => {
+  it("re-arms both private reads before launching a refreshed Atlas load", () => {
+    const source = readFileSync(new URL("./LivingAtlasApp.tsx", import.meta.url), "utf8");
+    const start = source.indexOf("const load = useCallback(async (quiet = false");
+    const block = source.slice(start, start + 1_600);
+    const resetPeriods = block.indexOf("setHomeBasePeriodsRead(false)");
+    const resetDismissal = block.indexOf("setHomeBaseDismissals(listHomeBaseDismissals ? undefined : [])");
+    const launch = block.indexOf("loadJourneyRowsWithOptionalHome({");
+
+    expect(start).toBeGreaterThan(0);
+    expect(resetPeriods).toBeGreaterThan(0);
+    expect(resetDismissal).toBeGreaterThan(0);
+    expect(launch).toBeGreaterThan(resetPeriods);
+    expect(launch).toBeGreaterThan(resetDismissal);
+  });
+});
+
+describe("ST-060 a confirmed period closes the one it replaces locally", () => {
+  const open: HomeBasePeriod = {
+    id: "period-open",
+    startedOn: "2024-01-01",
+    endedOn: null,
+    label: "杭州",
+    latitude: 30.25,
+    longitude: 120.17,
+    source: "manual",
+  };
+  const confirmed: HomeBasePeriod = {
+    id: "period-new",
+    startedOn: "2026-03-01",
+    endedOn: null,
+    label: "上海",
+    latitude: 31.23,
+    longitude: 121.47,
+    source: "suggested-confirmed",
+  };
+
+  it("closes the previous open period on the new period's own start day", () => {
+    const merged = mergeConfirmedHomeBasePeriod([open], confirmed);
+    expect(merged.filter((period) => period.endedOn === null)).toEqual([confirmed]);
+    expect(merged.find((period) => period.id === "period-open")?.endedOn).toBe("2026-03-01");
+  });
+
+  it("keeps the replaced period rather than dropping its dates", () => {
+    const merged = mergeConfirmedHomeBasePeriod([open], confirmed);
+    expect(merged).toHaveLength(2);
+    expect(merged.find((period) => period.id === "period-open")?.startedOn).toBe("2024-01-01");
+  });
+
+  it("leaves already-closed periods untouched and replaces its own row", () => {
+    const closed: HomeBasePeriod = { ...open, id: "period-closed", endedOn: "2023-06-01" };
+    const merged = mergeConfirmedHomeBasePeriod([closed, confirmed], {
+      ...confirmed,
+      label: "南京",
+    });
+    expect(merged.find((period) => period.id === "period-closed")?.endedOn).toBe("2023-06-01");
+    expect(merged.filter((period) => period.id === "period-new")).toHaveLength(1);
+    expect(merged.find((period) => period.id === "period-new")?.label).toBe("南京");
+  });
+});
+
+describe("ST-060 a successful confirmation takes the card down on its own", () => {
+  const SHENZHEN = { latitude: 22.5431, longitude: 114.0579 };
+  const GUANGZHOU = { latitude: 23.1291, longitude: 113.2644 };
+  const EVALUATION_DATE = "2026-06-01";
+
+  function endpointJourney(id: string, startedOn: string, at = SHENZHEN) {
+    return {
+      id,
+      startedOn,
+      endedOn: startedOn,
+      routePoints: [
+        { id: `${id}-start`, sortOrder: 0, latitude: at.latitude, longitude: at.longitude },
+        { id: `${id}-end`, sortOrder: 1, latitude: at.latitude, longitude: at.longitude },
+      ],
+    };
+  }
+
+  const journeys = [
+    endpointJourney("j1", "2026-01-01"),
+    endpointJourney("j2", "2026-02-01"),
+    endpointJourney("j3", "2026-03-01"),
+    endpointJourney("j4", "2026-04-01"),
+  ];
+
+  /**
+   * The shell's own derivation, in one place: the open period out of the list
+   * is what the core is told, and the core's answer is what the surface reads.
+   * The proposition under test is the whole chain, not the list alone — a
+   * merged list that still resolves to a visible card would leave the member
+   * one click away from a duplicate write, which is exactly the review finding.
+   */
+  function cardFor(periods: readonly HomeBasePeriod[]) {
+    const current = periods.find((period) => period.endedOn === null) ?? null;
+    const result = inferHomeBaseCandidate({
+      journeys,
+      confirmedPeriod: current,
+      evaluationDate: EVALUATION_DATE,
+    });
+    return {
+      result,
+      decision: resolveHomeBaseSuggestion({
+        result,
+        placeLabel: "深圳",
+        confirmedPlaceLabel: current?.label ?? null,
+      }),
+    };
+  }
+
+  function periodFromConfirmation(id: string, periods: readonly HomeBasePeriod[]) {
+    const { result, decision } = cardFor(periods);
+    const draft = homeBaseConfirmationDraft(decision, result);
+    expect(draft).not.toBeNull();
+    return { id, ...draft } as HomeBasePeriod;
+  }
+
+  it("never offers a confirmation whose inferred period overlaps bounded Home history", () => {
+    const result = inferHomeBaseCandidate({
+      journeys,
+      confirmedPeriod: null,
+      evaluationDate: EVALUATION_DATE,
+    });
+    const decision = resolveHomeBaseSuggestion({ result, placeLabel: "深圳" });
+    const historical: HomeBasePeriod = {
+      id: "period-history",
+      startedOn: "2025-01-01",
+      endedOn: "2026-05-01",
+      label: "深圳",
+      latitude: SHENZHEN.latitude,
+      longitude: SHENZHEN.longitude,
+      source: "manual",
+    };
+    expect(decision.visible).toBe(true);
+    expect(homeBaseSuggestionCanBeConfirmed({ decision, result, periods: [historical] })).toBe(false);
+  });
+
+  it("still offers a first confirmation when its inferred period starts after bounded history", () => {
+    const result = inferHomeBaseCandidate({
+      journeys,
+      confirmedPeriod: null,
+      evaluationDate: EVALUATION_DATE,
+    });
+    const decision = resolveHomeBaseSuggestion({ result, placeLabel: "深圳" });
+    const historical: HomeBasePeriod = {
+      id: "period-history",
+      startedOn: "2024-01-01",
+      endedOn: "2025-12-31",
+      label: "广州",
+      latitude: GUANGZHOU.latitude,
+      longitude: GUANGZHOU.longitude,
+      source: "manual",
+    };
+    expect(homeBaseSuggestionCanBeConfirmed({ decision, result, periods: [historical] })).toBe(true);
+  });
+
+  it("hides the first-time card once the returned period is merged in", () => {
+    expect(cardFor([]).decision.visible).toBe(true);
+    const confirmed = periodFromConfirmation("period-new", []);
+    // Only the returned period is folded in; the best-effort history refresh
+    // is allowed to fail without the card surviving it.
+    const merged = mergeConfirmedHomeBasePeriod([], confirmed);
+    expect(cardFor(merged).decision.visible).toBe(false);
+    expect(cardFor(merged).decision.primaryAction).toBeNull();
+  });
+
+  it("hides the move card and keeps the period it replaced bounded", () => {
+    const previous: HomeBasePeriod = {
+      id: "period-open",
+      startedOn: "2025-01-01",
+      endedOn: null,
+      label: "广州",
+      latitude: GUANGZHOU.latitude,
+      longitude: GUANGZHOU.longitude,
+      source: "manual",
+    };
+    const before = cardFor([previous]).decision;
+    expect(before.visible).toBe(true);
+    expect(before.variant).toBe("move");
+
+    const confirmed = periodFromConfirmation("period-moved", [previous]);
+    const merged = mergeConfirmedHomeBasePeriod([previous], confirmed);
+    expect(cardFor(merged).decision.visible).toBe(false);
+    // #231 semantics locally: the replaced period survives with its own dates
+    // rather than being overwritten.
+    const replaced = merged.find((period) => period.id === "period-open");
+    expect(replaced?.startedOn).toBe("2025-01-01");
+    expect(replaced?.endedOn).toBe(confirmed.startedOn);
   });
 });

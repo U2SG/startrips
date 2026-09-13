@@ -1,5 +1,6 @@
+import { createHash } from "node:crypto";
 import { and, asc, eq, sql } from "drizzle-orm";
-import { homeBasePeriods } from "../db/app-schema";
+import { homeBaseDismissals, homeBasePeriods } from "../db/app-schema";
 import { db } from "../db/client";
 import { lockActiveAtlas } from "./journey-repository";
 import {
@@ -8,6 +9,10 @@ import {
   type HomeBasePeriodConflictCode,
   type HomeBaseSource,
 } from "../../src/journey/homeBase";
+import {
+  HOME_BASE_EVIDENCE_DIGEST_MAX_LENGTH,
+  type HomeBaseDismissal,
+} from "../../src/journey/homeBaseInference";
 
 /**
  * #231: the write side of the Home Base timeline.
@@ -255,4 +260,134 @@ export async function countHomeBasePeriodsForAtlas(
     .from(homeBasePeriods)
     .where(eq(homeBasePeriods.atlasId, atlasId));
   return rows[0]?.total ?? 0;
+}
+
+/**
+ * #232: the member's answers to Home Base suggestions.
+ *
+ * Answers are preserved per evidence revision rather than collapsed to one row
+ * per Atlas. The full digest remains byte-exact because the inference core
+ * parses its region anchor and Journey ids from it. Uniqueness uses a fixed-size
+ * MD5 key, so the variable-length digest never becomes a B-tree index entry. The
+ * Atlas row lock serializes this path; a theoretical hash collision fails closed
+ * instead of overwriting another answer.
+ */
+function homeBaseDismissalDigestHash(digest: string): string {
+  return createHash("md5").update(digest, "utf8").digest("hex");
+}
+
+export const MAX_HOME_BASE_DISMISSALS_PER_ATLAS = 64;
+
+export class HomeBaseDismissalDigestTooLargeError extends Error {
+  constructor() {
+    super("HOME_BASE_DISMISSAL_DIGEST_TOO_LARGE");
+    this.name = "HomeBaseDismissalDigestTooLargeError";
+  }
+}
+
+export async function listHomeBaseDismissalsForAtlas(
+  atlasId: string,
+): Promise<HomeBaseDismissal[]> {
+  const rows = await db
+    .select({
+      kind: homeBaseDismissals.kind,
+      digest: homeBaseDismissals.evidenceDigest,
+      dismissedAt: homeBaseDismissals.dismissedOn,
+    })
+    .from(homeBaseDismissals)
+    .where(eq(homeBaseDismissals.atlasId, atlasId))
+    .orderBy(asc(homeBaseDismissals.dismissedOn), asc(homeBaseDismissals.evidenceDigest));
+  return rows.map((row) => ({ ...row, kind: row.kind as HomeBaseDismissal["kind"] }));
+}
+
+export async function recordHomeBaseDismissalForAtlas(
+  atlasId: string,
+  values: { kind: HomeBaseDismissal["kind"]; digest: string; dismissedOn: string },
+): Promise<HomeBaseDismissal | undefined> {
+  if (values.digest.length > HOME_BASE_EVIDENCE_DIGEST_MAX_LENGTH) {
+    throw new HomeBaseDismissalDigestTooLargeError();
+  }
+  return await db.transaction(async (transaction) => {
+    if (!await lockActiveAtlas(transaction, atlasId)) return undefined;
+
+    const evidenceDigestHash = homeBaseDismissalDigestHash(values.digest);
+    const [existing] = await transaction
+      .select({
+        id: homeBaseDismissals.id,
+        kind: homeBaseDismissals.kind,
+        digest: homeBaseDismissals.evidenceDigest,
+        dismissedAt: homeBaseDismissals.dismissedOn,
+      })
+      .from(homeBaseDismissals)
+      .where(and(
+        eq(homeBaseDismissals.atlasId, atlasId),
+        eq(homeBaseDismissals.evidenceDigestHash, evidenceDigestHash),
+      ))
+      .limit(1);
+
+    if (existing) {
+      if (existing.digest !== values.digest) {
+        throw new Error("HOME_BASE_DISMISSAL_DIGEST_HASH_COLLISION");
+      }
+      const keepRejected = existing.kind === "rejected";
+      const [row] = await transaction
+        .update(homeBaseDismissals)
+        .set({
+          kind: keepRejected ? "rejected" : values.kind,
+          dismissedOn: keepRejected ? existing.dismissedAt : values.dismissedOn,
+          updatedAt: new Date(),
+        })
+        .where(eq(homeBaseDismissals.id, existing.id))
+        .returning({
+          kind: homeBaseDismissals.kind,
+          digest: homeBaseDismissals.evidenceDigest,
+          dismissedAt: homeBaseDismissals.dismissedOn,
+        });
+      return { ...row, kind: row.kind as HomeBaseDismissal["kind"] };
+    }
+
+    const [countRow] = await transaction
+      .select({ total: sql<number>`count(*)::int` })
+      .from(homeBaseDismissals)
+      .where(eq(homeBaseDismissals.atlasId, atlasId));
+    if ((countRow?.total ?? 0) >= MAX_HOME_BASE_DISMISSALS_PER_ATLAS) {
+      // Keep storage bounded without permanently locking the member out of a
+      // future answer. Prefer the oldest soft dismissal because it is the only
+      // answer kind designed to expire/re-prompt; if an Atlas has accumulated
+      // only explicit rejections, retire the oldest one as a last-resort ring
+      // buffer fallback so a new region can still be answered.
+      const [eviction] = await transaction
+        .select({ id: homeBaseDismissals.id })
+        .from(homeBaseDismissals)
+        .where(eq(homeBaseDismissals.atlasId, atlasId))
+        .orderBy(
+          sql`case when ${homeBaseDismissals.kind} = 'soft' then 0 else 1 end`,
+          asc(homeBaseDismissals.dismissedOn),
+          asc(homeBaseDismissals.updatedAt),
+          asc(homeBaseDismissals.id),
+        )
+        .limit(1);
+      if (eviction) {
+        await transaction
+          .delete(homeBaseDismissals)
+          .where(eq(homeBaseDismissals.id, eviction.id));
+      }
+    }
+
+    const [row] = await transaction
+      .insert(homeBaseDismissals)
+      .values({
+        atlasId,
+        kind: values.kind,
+        evidenceDigest: values.digest,
+        evidenceDigestHash,
+        dismissedOn: values.dismissedOn,
+      })
+      .returning({
+        kind: homeBaseDismissals.kind,
+        digest: homeBaseDismissals.evidenceDigest,
+        dismissedAt: homeBaseDismissals.dismissedOn,
+      });
+    return { ...row, kind: row.kind as HomeBaseDismissal["kind"] };
+  });
 }

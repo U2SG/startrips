@@ -4,12 +4,19 @@ import {
   createHomeBasePeriodForAtlas,
   deleteHomeBasePeriodForAtlas,
   listHomeBasePeriodsForAtlas,
+  listHomeBaseDismissalsForAtlas,
+  recordHomeBaseDismissalForAtlas,
+  HomeBaseDismissalDigestTooLargeError,
   updateHomeBasePeriodForAtlas,
   type HomeBasePeriodPatch,
   type HomeBasePeriodValues,
 } from "../repositories/home-base-repository";
 import { isPersistedCalendarDate } from "../../src/journey/calendarDate";
 import { isHomeBaseSource } from "../../src/journey/homeBase";
+import {
+  isPersistableHomeBaseEvidenceDigest,
+  type HomeBaseDismissal,
+} from "../../src/journey/homeBaseInference";
 import { readJsonObject } from "./json-body";
 
 /**
@@ -132,12 +139,91 @@ export function parseHomeBasePatch(body: HomeBaseInput): HomeBasePeriodPatch | n
   return Object.keys(patch).length > 0 ? patch : null;
 }
 
+type HomeBaseDismissalInput = {
+  kind?: unknown;
+  evidenceDigest?: unknown;
+  dismissedOn?: unknown;
+};
+
+export type HomeBaseDismissalValues = {
+  kind: HomeBaseDismissal["kind"];
+  digest: string;
+  dismissedOn: string;
+};
+
+/**
+ * #232: the answer body. `evidenceDigest` is kept byte-exact, but only after
+ * proving it is a bounded, canonical digest this implementation could have
+ * produced. That prevents an authenticated caller from turning the private
+ * dismissal history into arbitrary unbounded storage.
+ *
+ * The occurrence date is server-owned. The browser still sends `dismissedOn`
+ * for wire compatibility, but it cannot move the 90-day re-prompt clock
+ * forwards or backwards by changing its local clock.
+ */
+export function parseHomeBaseDismissalInput(
+  body: HomeBaseDismissalInput,
+  now: Date = new Date(),
+): HomeBaseDismissalValues | null {
+  const kind = body.kind;
+  const digest = typeof body.evidenceDigest === "string" ? body.evidenceDigest : "";
+  const requestedDismissedOn = typeof body.dismissedOn === "string" ? body.dismissedOn.trim() : "";
+  const dismissedOn = now.toISOString().slice(0, 10);
+  if (
+    (kind !== "soft" && kind !== "rejected")
+    || !isPersistableHomeBaseEvidenceDigest(digest)
+    || !isPersistedCalendarDate(requestedDismissedOn)
+    || !isPersistedCalendarDate(dismissedOn)
+  ) {
+    return null;
+  }
+  return { kind, digest, dismissedOn };
+}
+
 export const homeBaseRoutes = new Hono();
 
 homeBaseRoutes.get("/", async (context) => {
   const { atlas } = await requireAtlasAccess(context.req.raw, "read");
   context.header("Cache-Control", HOME_BASE_CACHE_CONTROL);
   return context.json({ periods: await listHomeBasePeriodsForAtlas(atlas.id) });
+});
+
+/**
+ * The recorded answers, or an empty list when the member has never answered.
+ * Read under `read` because they only say that suggestions were declined;
+ * writing one is a member decision and asks for `create`, the same level
+ * recording a period does.
+ */
+homeBaseRoutes.get("/dismissal", async (context) => {
+  const { atlas } = await requireAtlasAccess(context.req.raw, "read");
+  context.header("Cache-Control", HOME_BASE_CACHE_CONTROL);
+  return context.json({ dismissals: await listHomeBaseDismissalsForAtlas(atlas.id) });
+});
+
+homeBaseRoutes.post("/dismissal", async (context) => {
+  const { atlas } = await requireAtlasAccess(context.req.raw, "create");
+  const body = await readJsonObject(() => context.req.json());
+  const input = body && parseHomeBaseDismissalInput(body);
+  if (!input) {
+    return context.json(
+      { error: "INVALID_HOME_BASE_DISMISSAL", message: "Invalid Home Base dismissal data" },
+      400,
+    );
+  }
+  try {
+    const dismissal = await recordHomeBaseDismissalForAtlas(atlas.id, input);
+    if (!dismissal) return context.json({ error: "ATLAS_NOT_FOUND" }, 404);
+    context.header("Cache-Control", HOME_BASE_CACHE_CONTROL);
+    return context.json({ dismissal }, 201);
+  } catch (error) {
+    if (error instanceof HomeBaseDismissalDigestTooLargeError) {
+      return context.json({
+        error: "INVALID_HOME_BASE_DISMISSAL",
+        message: "Invalid Home Base dismissal data",
+      }, 400);
+    }
+    throw error;
+  }
 });
 
 homeBaseRoutes.post("/", async (context) => {

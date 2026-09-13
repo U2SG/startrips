@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   HOME_BASE_CLUSTER_RADIUS_KM,
   HOME_BASE_CANDIDATE_MIN_JOURNEYS,
+  HOME_BASE_EVIDENCE_DIGEST_MAX_LENGTH,
   HOME_BASE_CANDIDATE_MIN_SPAN_DAYS,
   HOME_BASE_MIN_END_SUPPORT,
   HOME_BASE_MIN_LEAD_JOURNEYS,
@@ -10,7 +11,9 @@ import {
   HOME_BASE_SOFT_DISMISSAL_MIN_NEW_JOURNEYS,
   HOME_BASE_SUGGESTED_MIN_JOURNEYS,
   HOME_BASE_SUGGESTED_MIN_SPAN_DAYS,
+  homeBaseEvidenceDigest,
   inferHomeBaseCandidate,
+  isPersistableHomeBaseEvidenceDigest,
   type HomeBaseInferenceJourney,
 } from "./homeBaseInference";
 import { haversineDistanceKm } from "./mediaPlacement";
@@ -1149,5 +1152,33 @@ describe("dismissal and evidence digest", () => {
       dismissal: { kind: "rejected", digest: base.evidenceDigest!, dismissedAt: "2026-04-02" },
     });
     expect(result.state).toBe("dismissed");
+  });
+});
+
+
+describe("persistable Home Base evidence digests", () => {
+  const supports = [
+    "00000000-0000-4000-8000-000000000001",
+    "00000000-0000-4000-8000-000000000002",
+    "00000000-0000-4000-8000-000000000003",
+    "00000000-0000-4000-8000-000000000004",
+  ].map((journeyId) => ({ journeyId, supportsStart: true, supportsEnd: true }));
+  const digest = homeBaseEvidenceDigest({
+    anchor: SHENZHEN,
+    supports,
+    evidenceStartedOn: "2026-01-01",
+    evidenceEndedOn: "2026-04-15",
+  });
+
+  it("accepts the bounded canonical digest produced for persisted Journey UUIDs", () => {
+    expect(isPersistableHomeBaseEvidenceDigest(digest)).toBe(true);
+  });
+
+  it("rejects noncanonical, forged, or oversized digest payloads", () => {
+    expect(isPersistableHomeBaseEvidenceDigest(` ${digest}`)).toBe(false);
+    expect(isPersistableHomeBaseEvidenceDigest(`${digest.slice(0, -8)}deadbeef`)).toBe(false);
+    expect(isPersistableHomeBaseEvidenceDigest(
+      `${digest}${"x".repeat(HOME_BASE_EVIDENCE_DIGEST_MAX_LENGTH)}`,
+    )).toBe(false);
   });
 });

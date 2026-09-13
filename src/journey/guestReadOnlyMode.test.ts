@@ -16,6 +16,7 @@ const GUEST_VIEW: AtlasView = {
   capabilities: GUEST_ATLAS_VIEW_CAPABILITIES,
   listJourneys: async () => [],
   listHomeBasePeriods: null,
+  listHomeBaseDismissals: null,
   readMedia: async () => ({ url: "signed", expiresAt: "2026-09-05T00:01:30.000Z" }),
   mutations: null,
 };
@@ -240,5 +241,29 @@ describe("ST-056 guest Home privacy contract", () => {
     expect(GUEST_VIEW.listHomeBasePeriods).toBeNull();
     expect(source).toContain("listHomeBasePeriods: null");
     expect(source).not.toContain("homeBasePresence=");
+  });
+});
+
+describe("ST-060 guest Home Base suggestion privacy contract", () => {
+  it("gives a guest no suggestion reader, no dismissal reader and no confirm client", () => {
+    expect(GUEST_VIEW.listHomeBasePeriods).toBeNull();
+    expect(GUEST_VIEW.listHomeBaseDismissals).toBeNull();
+    // `mutations: null` is the whole contract: absence, not a hidden button.
+    // There is no client in a guest tree that could confirm a Home Base or
+    // record a dismissal.
+    expect(GUEST_VIEW.mutations).toBeNull();
+    const source = readFileSync(new URL("SharedAtlasView.tsx", import.meta.url), "utf8");
+    expect(source).toContain("listHomeBaseDismissals: null");
+    expect(source).not.toContain("homeBaseSuggestion");
+    expect(source).not.toContain("inferHomeBaseCandidate");
+  });
+
+  it("keeps every Home Base field out of the guest payload type", () => {
+    // The shared payload is built from `sharedAtlas.ts`; nothing in the guest
+    // path mentions a metro anchor, an evidence digest or a confirmed period.
+    const shared = readFileSync(new URL("sharedAtlas.ts", import.meta.url), "utf8");
+    for (const term of ["homeBase", "metroAnchor", "evidenceDigest", "dismissal"]) {
+      expect(shared).not.toContain(term);
+    }
   });
 });

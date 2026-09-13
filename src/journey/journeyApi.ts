@@ -1,4 +1,6 @@
 import type { HomeBasePeriod } from "./homeBase";
+import type { HomeBaseDismissal } from "./homeBaseInference";
+import type { HomeBasePeriodDraft } from "./homeBaseSuggestion";
 import type {
   CreatedShareGrant,
   Journey,
@@ -59,6 +61,51 @@ export async function listHomeBasePeriods(fetcher: Fetcher = fetch): Promise<Hom
     fetcher,
   );
   return payload.periods;
+}
+
+/**
+ * #232: the member's answer to a Home Base suggestion, and the answer already
+ * on record. Both are Atlas-scoped on the server; nothing here sends an atlas
+ * or organization id.
+ */
+export async function listHomeBaseDismissals(
+  fetcher: Fetcher = fetch,
+): Promise<HomeBaseDismissal[]> {
+  const payload = await requestJson<{ dismissals: HomeBaseDismissal[] }>(
+    "/api/home-bases/dismissal",
+    { cache: "no-store" },
+    fetcher,
+  );
+  return payload.dismissals;
+}
+
+export async function recordHomeBaseDismissal(
+  input: { kind: HomeBaseDismissal["kind"]; evidenceDigest: string; dismissedOn: string },
+  fetcher: Fetcher = fetch,
+): Promise<HomeBaseDismissal> {
+  const payload = await requestJson<{ dismissal: HomeBaseDismissal }>(
+    "/api/home-bases/dismissal",
+    { method: "POST", body: JSON.stringify(input) },
+    fetcher,
+  );
+  return payload.dismissal;
+}
+
+/**
+ * Confirming a suggestion. A move sends the inferred `startedOn`, and #231
+ * closes the open period on that day in the same transaction rather than
+ * rewriting it, so the previous period keeps its own bounded dates.
+ */
+export async function createHomeBasePeriod(
+  input: HomeBasePeriodDraft,
+  fetcher: Fetcher = fetch,
+): Promise<HomeBasePeriod> {
+  const payload = await requestJson<{ period: HomeBasePeriod }>(
+    "/api/home-bases",
+    { method: "POST", body: JSON.stringify(input) },
+    fetcher,
+  );
+  return payload.period;
 }
 
 export async function listJourneys(fetcher: Fetcher = fetch): Promise<Journey[]> {

@@ -185,6 +185,7 @@ export function SharedAtlasView({
     capabilities: GUEST_ATLAS_VIEW_CAPABILITIES,
     listJourneys,
     listHomeBasePeriods: null,
+    listHomeBaseDismissals: null,
     readMedia,
     mutations: null,
   }), [listJourneys, readMedia]);
