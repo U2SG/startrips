@@ -29,6 +29,7 @@ export function createStartripsSignatureRuntime({
   const definition = getStartripsSignatureClip(clip);
   let disposed = false;
   let interrupted = false;
+  let settled = false;
   let suspended = false;
   let reducedMode = reduced;
   let raf = 0;
@@ -47,6 +48,7 @@ export function createStartripsSignatureRuntime({
 
   const settle = (status: "interrupted" | "reduced" | "settled") => {
     if (status === "interrupted") interrupted = true;
+    if (status === "settled") settled = true;
     cancel();
     elapsedMs = definition.durationMs;
     onPose(sampleStartripsSignaturePose(clip, definition.durationMs));
@@ -55,7 +57,7 @@ export function createStartripsSignatureRuntime({
 
   const tick = (now: number) => {
     raf = 0;
-    if (disposed || interrupted || reducedMode) return;
+    if (disposed || interrupted || settled || reducedMode) return;
     if (suspended) {
       publish("suspended", 0);
       return;
@@ -77,12 +79,12 @@ export function createStartripsSignatureRuntime({
   };
 
   function schedule() {
-    if (disposed || interrupted || reducedMode || suspended || raf) return;
+    if (disposed || interrupted || settled || reducedMode || suspended || raf) return;
     raf = scheduler.requestFrame(tick);
   }
 
   const start = () => {
-    if (disposed) return;
+    if (disposed || settled) return;
     if (reducedMode) {
       settle("reduced");
       return;
@@ -100,10 +102,10 @@ export function createStartripsSignatureRuntime({
   return {
     start,
     interrupt() {
-      if (!disposed && !reducedMode) settle("interrupted");
+      if (!disposed && !reducedMode && !settled) settle("interrupted");
     },
     setSuspended(value: boolean) {
-      if (disposed || suspended === value) return;
+      if (disposed || settled || suspended === value) return;
       suspended = value;
       lastNow = scheduler.now();
       if (suspended) {
@@ -114,7 +116,7 @@ export function createStartripsSignatureRuntime({
       }
     },
     setReduced(value: boolean) {
-      if (disposed || reducedMode === value) return;
+      if (disposed || settled || reducedMode === value) return;
       reducedMode = value;
       if (reducedMode) {
         settle("reduced");

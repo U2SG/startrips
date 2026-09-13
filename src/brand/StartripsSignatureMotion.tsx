@@ -5,6 +5,8 @@ import { createStartripsSignatureRuntime } from "./startripsSignatureRuntime";
 const WORDMARK_ASSET = "/brand/startrips-v12-wordmark.svg";
 const VIEWBOX = "0 -125 780 176";
 const LISTENER_COUNT = 4;
+const STAR_CENTER_X = 417.408;
+const STAR_CENTER_Y = -105.264;
 
 function getStartripsSignatureDuration(clip: StartripsSignatureClipName) {
   return getStartripsSignatureClip(clip).durationMs;
@@ -18,12 +20,16 @@ function transform(target: Element | null, value: string) {
   if (target) target.setAttribute("transform", value);
 }
 
+export function starPoseTransform(pose: Pick<StartripsSignaturePose, "starX" | "starY" | "starScale">) {
+  return `translate(${pose.starX.toFixed(3)} ${pose.starY.toFixed(3)}) translate(${STAR_CENTER_X} ${STAR_CENTER_Y}) scale(${pose.starScale.toFixed(4)}) translate(${-STAR_CENTER_X} ${-STAR_CENTER_Y})`;
+}
+
 function applyPose(root: HTMLElement, pose: StartripsSignaturePose) {
   transform(root.querySelector('[data-signature-part="goat-root"]'), `translate(${pose.rootX.toFixed(3)} ${pose.rootY.toFixed(3)})`);
   transform(root.querySelector('[data-signature-part="body"]'), `translate(0 ${pose.bodyY.toFixed(3)})`);
   transform(root.querySelector('[data-signature-part="head"]'), `rotate(${pose.headRotateDeg.toFixed(3)} 682 -88)`);
   transform(root.querySelector('[data-signature-part="eye"]'), `translate(${pose.eyeX.toFixed(3)} ${pose.eyeY.toFixed(3)})`);
-  transform(root.querySelector('[data-signature-part="star"]'), `translate(${pose.starX.toFixed(3)} ${pose.starY.toFixed(3)}) scale(${pose.starScale.toFixed(4)})`);
+  transform(root.querySelector('[data-signature-part="star"]'), starPoseTransform(pose));
   transform(root.querySelector('[data-signature-part="leg-fn"]'), `translate(0 ${pose.legFnY.toFixed(3)}) rotate(${pose.legFnRotateDeg.toFixed(3)} 696 -35)`);
   transform(root.querySelector('[data-signature-part="leg-ff"]'), `translate(0 ${pose.legFfY.toFixed(3)}) rotate(${pose.legFfRotateDeg.toFixed(3)} 702 -35)`);
   transform(root.querySelector('[data-signature-part="leg-hn"]'), `translate(0 ${pose.legHnY.toFixed(3)}) rotate(${pose.legHnRotateDeg.toFixed(3)} 746 -34)`);
