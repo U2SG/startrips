@@ -8,6 +8,7 @@ import { db } from "./db/client";
 import { LocationSearchUnavailableError } from "./location/location-search";
 import { HomeBasePeriodConflictError } from "./repositories/home-base-repository";
 import { requestLog } from "./request-log";
+import { accountIdentityRoutes } from "./routes/account-identities";
 import { atlasRoutes } from "./routes/atlases";
 import {
   everydayFragmentRoutes,
@@ -49,6 +50,7 @@ app.on(["GET", "POST"], "/api/auth/*", (context) =>
   auth.handler(context.req.raw),
 );
 
+app.route("/api/account-identities", accountIdentityRoutes);
 app.route("/api/atlases", atlasRoutes);
 // #231: Home Base periods. A dedicated HTTP surface, but the Atlas is still
 // derived from the session inside the route module, never from the path or

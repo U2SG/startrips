@@ -1,0 +1,159 @@
+import { randomUUID } from "node:crypto";
+import { createEmailVerificationToken } from "better-auth/api";
+import { eq } from "drizzle-orm";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { app } from "../app";
+import { serverConfig } from "../config";
+import { accountIdentityAudit } from "../db/app-schema";
+import {
+  organization as authOrganization,
+  rateLimit,
+  user as authUser,
+} from "../db/auth-schema";
+import { db, pool } from "../db/client";
+
+const TEST_ORIGIN = "http://127.0.0.1:5173";
+const PASSWORD = "test-only-password-345";
+let email = "";
+let userId = "";
+let organizationId = "";
+let cookie = "";
+
+function headers(sessionCookie = cookie, origin = TEST_ORIGIN) {
+  return {
+    "content-type": "application/json",
+    origin,
+    ...(sessionCookie ? { cookie: sessionCookie } : {}),
+  };
+}
+
+beforeAll(async () => {
+  email = `st067-route-${randomUUID()}@example.test`;
+  await db.delete(rateLimit);
+  const signUp = await app.request(`${TEST_ORIGIN}/api/auth/sign-up/email`, {
+    method: "POST",
+    headers: headers(""),
+    body: JSON.stringify({ name: "Identity route", email, password: PASSWORD }),
+  });
+  expect(signUp.status).toBe(200);
+  const verificationToken = await createEmailVerificationToken(serverConfig.authSecret, email);
+  const verify = await app.request(
+    `${TEST_ORIGIN}/api/auth/verify-email?token=${encodeURIComponent(verificationToken)}`,
+    { headers: headers("") },
+  );
+  expect(verify.status).toBe(200);
+  const signIn = await app.request(`${TEST_ORIGIN}/api/auth/sign-in/email`, {
+    method: "POST",
+    headers: headers(""),
+    body: JSON.stringify({ email, password: PASSWORD }),
+  });
+  expect(signIn.status).toBe(200);
+  cookie = signIn.headers
+    .get("set-cookie")
+    ?.match(/(?:__Secure-)?startrips\.session_token=[^;,\s]+/)?.[0] ?? "";
+  expect(cookie).toBeTruthy();
+  const [user] = await db.select({ id: authUser.id }).from(authUser).where(eq(authUser.email, email));
+  userId = user!.id;
+  const organizationResponse = await app.request(`${TEST_ORIGIN}/api/auth/organization/create`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify({ name: "Identity route Atlas", slug: `st067-${randomUUID()}` }),
+  });
+  expect(organizationResponse.status).toBe(200);
+  organizationId = ((await organizationResponse.json()) as { id: string }).id;
+});
+
+afterAll(async () => {
+  if (userId) await db.delete(accountIdentityAudit).where(eq(accountIdentityAudit.userId, userId));
+  if (organizationId) await db.delete(authOrganization).where(eq(authOrganization.id, organizationId));
+  if (email) await db.delete(authUser).where(eq(authUser.email, email));
+  await pool.end();
+});
+
+describe("account identity HTTP boundary", () => {
+  it("lists only redacted method state for the current user", async () => {
+    const response = await app.request(`${TEST_ORIGIN}/api/account-identities`, {
+      headers: headers(),
+    });
+    expect(response.status).toBe(200);
+    const body = await response.json() as {
+      methods: Array<Record<string, unknown>>;
+    };
+    expect(body.methods).toHaveLength(1);
+    expect(body.methods[0]).toMatchObject({
+      type: "password",
+      providerId: "credential",
+      verified: true,
+      usable: true,
+      canUnlink: false,
+    });
+    const encoded = JSON.stringify(body);
+    expect(encoded).not.toContain(PASSWORD);
+    expect(encoded).not.toMatch(/passwordHash|accessToken|refreshToken|idToken/i);
+    expect(body.methods[0]?.emailHint).not.toBe(email);
+  });
+
+  it("requires a matching Origin and the real current password before issuing a re-verification grant", async () => {
+    const wrongOrigin = await app.request(`${TEST_ORIGIN}/api/account-identities/reverify/password`, {
+      method: "POST",
+      headers: headers(cookie, "https://evil.example"),
+      body: JSON.stringify({ password: PASSWORD }),
+    });
+    expect(wrongOrigin.status).toBe(403);
+
+    const wrongPassword = await app.request(`${TEST_ORIGIN}/api/account-identities/reverify/password`, {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify({ password: "definitely-wrong-password" }),
+    });
+    expect(wrongPassword.status).toBe(403);
+
+    const valid = await app.request(`${TEST_ORIGIN}/api/account-identities/reverify/password`, {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify({ password: PASSWORD }),
+    });
+    expect(valid.status).toBe(200);
+    expect(await valid.json()).toMatchObject({
+      reverificationToken: expect.any(String),
+      expiresAt: expect.any(String),
+    });
+  });
+
+  it("keeps native Better Auth identity-management endpoints fail-closed", async () => {
+    const nativeList = await app.request(`${TEST_ORIGIN}/api/auth/list-accounts`, {
+      headers: headers(),
+    });
+    expect(nativeList.status).toBe(404);
+
+    const nativeUnlink = await app.request(`${TEST_ORIGIN}/api/auth/unlink-account`, {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify({ providerId: "credential" }),
+    });
+    expect(nativeUnlink.status).toBe(404);
+
+    const nativeLink = await app.request(`${TEST_ORIGIN}/api/auth/link-social`, {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify({ provider: "google" }),
+    });
+    expect(nativeLink.status).toBe(404);
+  });
+
+  it("fails link intent closed while no provider is configured", async () => {
+    const reverify = await app.request(`${TEST_ORIGIN}/api/account-identities/reverify/password`, {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify({ password: PASSWORD }),
+    });
+    const reverifyBody = await reverify.json() as { reverificationToken: string };
+    const link = await app.request(`${TEST_ORIGIN}/api/account-identities/link-intents`, {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify({ providerId: "google", reverificationToken: reverifyBody.reverificationToken }),
+    });
+    expect(link.status).toBe(403);
+    expect(await link.json()).toEqual({ error: "IDENTITY_PROVIDER_NOT_CONFIGURED" });
+  });
+});
