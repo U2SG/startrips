@@ -7,7 +7,6 @@ import {
   listHomeBaseDismissalsForAtlas,
   recordHomeBaseDismissalForAtlas,
   HomeBaseDismissalDigestTooLargeError,
-  HomeBaseDismissalLimitError,
   updateHomeBasePeriodForAtlas,
   type HomeBasePeriodPatch,
   type HomeBasePeriodValues,
@@ -217,12 +216,6 @@ homeBaseRoutes.post("/dismissal", async (context) => {
     context.header("Cache-Control", HOME_BASE_CACHE_CONTROL);
     return context.json({ dismissal }, 201);
   } catch (error) {
-    if (error instanceof HomeBaseDismissalLimitError) {
-      return context.json({
-        error: "HOME_BASE_DISMISSAL_LIMIT_REACHED",
-        message: "Home Base dismissal history is full",
-      }, 409);
-    }
     if (error instanceof HomeBaseDismissalDigestTooLargeError) {
       return context.json({
         error: "INVALID_HOME_BASE_DISMISSAL",

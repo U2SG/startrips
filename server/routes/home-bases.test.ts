@@ -454,8 +454,15 @@ describe("GET and POST /api/home-bases/dismissal", () => {
     expect(row.total).toBe(2);
   });
 
-  it("bounds distinct persisted answers per Atlas", async () => {
-    for (let index = 0; index < MAX_HOME_BASE_DISMISSALS_PER_ATLAS; index += 1) {
+  it("bounds distinct persisted answers without locking out later suggestions", async () => {
+    const protectedRejection = validDismissalDigest(9, 19, "2025-01-01", "2025-04-15");
+    expect((await postDismissal(neighbour.cookie, {
+      kind: "rejected",
+      evidenceDigest: protectedRejection,
+      dismissedOn: "1900-01-01",
+    })).status).toBe(201);
+
+    for (let index = 0; index < MAX_HOME_BASE_DISMISSALS_PER_ATLAS - 1; index += 1) {
       const response = await postDismissal(neighbour.cookie, {
         kind: "soft",
         evidenceDigest: validDismissalDigest(
@@ -468,13 +475,22 @@ describe("GET and POST /api/home-bases/dismissal", () => {
       });
       expect(response.status).toBe(201);
     }
-    const overflow = await postDismissal(neighbour.cookie, {
+
+    const newestDigest = validDismissalDigest(50, 80, "2026-01-01", "2026-04-15");
+    const newest = await postDismissal(neighbour.cookie, {
       kind: "soft",
-      evidenceDigest: validDismissalDigest(50, 80, "2026-01-01", "2026-04-15"),
+      evidenceDigest: newestDigest,
       dismissedOn: "1900-01-01",
     });
-    expect(overflow.status).toBe(409);
-    expect(await overflow.json()).toMatchObject({ error: "HOME_BASE_DISMISSAL_LIMIT_REACHED" });
+    expect(newest.status).toBe(201);
+
+    const rows = await db
+      .select({ kind: homeBaseDismissals.kind, digest: homeBaseDismissals.evidenceDigest })
+      .from(homeBaseDismissals)
+      .where(eq(homeBaseDismissals.atlasId, neighbour.atlasId));
+    expect(rows).toHaveLength(MAX_HOME_BASE_DISMISSALS_PER_ATLAS);
+    expect(rows).toContainEqual({ kind: "rejected", digest: protectedRejection });
+    expect(rows).toContainEqual({ kind: "soft", digest: newestDigest });
   });
 
   it("never downgrades an explicit rejection for the same evidence to a later soft dismissal", async () => {

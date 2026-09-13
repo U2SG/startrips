@@ -278,13 +278,6 @@ function homeBaseDismissalDigestHash(digest: string): string {
 
 export const MAX_HOME_BASE_DISMISSALS_PER_ATLAS = 64;
 
-export class HomeBaseDismissalLimitError extends Error {
-  constructor() {
-    super("HOME_BASE_DISMISSAL_LIMIT_REACHED");
-    this.name = "HomeBaseDismissalLimitError";
-  }
-}
-
 export class HomeBaseDismissalDigestTooLargeError extends Error {
   constructor() {
     super("HOME_BASE_DISMISSAL_DIGEST_TOO_LARGE");
@@ -358,7 +351,27 @@ export async function recordHomeBaseDismissalForAtlas(
       .from(homeBaseDismissals)
       .where(eq(homeBaseDismissals.atlasId, atlasId));
     if ((countRow?.total ?? 0) >= MAX_HOME_BASE_DISMISSALS_PER_ATLAS) {
-      throw new HomeBaseDismissalLimitError();
+      // Keep storage bounded without permanently locking the member out of a
+      // future answer. Prefer the oldest soft dismissal because it is the only
+      // answer kind designed to expire/re-prompt; if an Atlas has accumulated
+      // only explicit rejections, retire the oldest one as a last-resort ring
+      // buffer fallback so a new region can still be answered.
+      const [eviction] = await transaction
+        .select({ id: homeBaseDismissals.id })
+        .from(homeBaseDismissals)
+        .where(eq(homeBaseDismissals.atlasId, atlasId))
+        .orderBy(
+          sql`case when ${homeBaseDismissals.kind} = 'soft' then 0 else 1 end`,
+          asc(homeBaseDismissals.dismissedOn),
+          asc(homeBaseDismissals.updatedAt),
+          asc(homeBaseDismissals.id),
+        )
+        .limit(1);
+      if (eviction) {
+        await transaction
+          .delete(homeBaseDismissals)
+          .where(eq(homeBaseDismissals.id, eviction.id));
+      }
     }
 
     const [row] = await transaction
