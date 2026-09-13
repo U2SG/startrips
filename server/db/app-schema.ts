@@ -556,6 +556,9 @@ export const accountIdentityAudit = pgTable(
     outcome: text("outcome").notNull(),
     providerId: text("provider_id"),
     accountRecordId: text("account_record_id"),
+    // Opaque local action id only; this is not the bearer token/hash. Successful
+    // sensitive-action receipts bind idempotency to the exact consumed grant.
+    actionId: text("action_id"),
     reason: text("reason"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },

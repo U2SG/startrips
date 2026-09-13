@@ -588,6 +588,33 @@ describe("account identity repository", () => {
       now: new Date(TEST_NOW.getTime() + 22_000),
     });
     expect(retry).toEqual({ unlinked: false, alreadyUnlinked: true });
+
+    const unrelatedGrant = await reverify(fixture.userId, fixture.sessionId, 23_000);
+    await expect(unlinkAccountIdentity({
+      userId: fixture.userId,
+      sessionId: fixture.sessionId,
+      accountRecordId: linked.result.accountRecordId,
+      reverificationToken: unrelatedGrant.token,
+      usableProviderIds: new Set(["google"]),
+      now: new Date(TEST_NOW.getTime() + 24_000),
+    })).rejects.toMatchObject({ code: "IDENTITY_ACCOUNT_NOT_FOUND" });
+    await expect(unlinkAccountIdentity({
+      userId: fixture.userId,
+      sessionId: fixture.sessionId,
+      accountRecordId: linked.result.accountRecordId,
+      reverificationToken: unrelatedGrant.token,
+      usableProviderIds: new Set(["google"]),
+      now: new Date(TEST_NOW.getTime() + 25_000),
+    })).rejects.toMatchObject({ code: "IDENTITY_ACTION_REPLAYED" });
+    await expect(unlinkAccountIdentity({
+      userId: fixture.userId,
+      sessionId: fixture.sessionId,
+      accountRecordId: linked.result.accountRecordId,
+      reverificationToken: "not-a-real-reverification-token",
+      usableProviderIds: new Set(["google"]),
+      now: new Date(TEST_NOW.getTime() + 26_000),
+    })).rejects.toMatchObject({ code: "IDENTITY_ACTION_INVALID" });
+
     const [session] = await db.select({ id: authSession.id })
       .from(authSession)
       .where(eq(authSession.id, fixture.sessionId));

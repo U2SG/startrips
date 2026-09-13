@@ -155,6 +155,13 @@
       "when": 1789310117813,
       "tag": "0021_account_provider_identity_unique",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1789312984299,
+      "tag": "0022_wise_bullseye",
+      "breakpoints": true
     }
   ]
 }

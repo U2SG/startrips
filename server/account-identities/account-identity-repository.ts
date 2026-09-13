@@ -81,6 +81,7 @@ async function audit(
     outcome: "success" | "refused";
     providerId?: string | null;
     accountRecordId?: string | null;
+    actionId?: string | null;
     reason?: string | null;
   },
 ) {
@@ -90,6 +91,7 @@ async function audit(
     outcome: values.outcome,
     providerId: values.providerId ?? null,
     accountRecordId: values.accountRecordId ?? null,
+    actionId: values.actionId ?? null,
     reason: values.reason ?? null,
   });
 }
@@ -526,31 +528,40 @@ export async function unlinkAccountIdentity(values: {
     if (!state.user) throw new AccountIdentityError("IDENTITY_ACCOUNT_NOT_FOUND");
     const target = state.accounts.find((account) => account.id === values.accountRecordId);
     if (!target) {
-      // A lost response may cause the exact unlink request to be retried with
-      // the already-consumed re-verification token. The prior success audit is
-      // the idempotency receipt; do not turn that safe retry into a replay error.
-      const [prior] = await transaction
-        .select({ id: accountIdentityAudit.id })
-        .from(accountIdentityAudit)
-        .where(and(
-          eq(accountIdentityAudit.userId, values.userId),
-          eq(accountIdentityAudit.event, "unlink"),
-          eq(accountIdentityAudit.outcome, "success"),
-          eq(accountIdentityAudit.accountRecordId, values.accountRecordId),
-        ))
-        .limit(1);
-      if (prior) return { result: { unlinked: false, alreadyUnlinked: true } };
-      await consumeAction(transaction, {
+      // A lost response may cause the exact unlink request to be retried after
+      // the target account row is already gone. Idempotency is valid only for
+      // the SAME re-verification grant that authorized that successful unlink;
+      // an unrelated fresh/bogus/consumed grant must not inherit the receipt.
+      const action = await loadAction(transaction, {
         token: values.reverificationToken,
         kind: "reverify",
+      });
+      validateAction(action, {
         userId: values.userId,
         sessionId: values.sessionId,
         now,
+        allowConsumed: true,
       });
+      if (action.consumedAt) {
+        const [prior] = await transaction
+          .select({ id: accountIdentityAudit.id })
+          .from(accountIdentityAudit)
+          .where(and(
+            eq(accountIdentityAudit.userId, values.userId),
+            eq(accountIdentityAudit.event, "unlink"),
+            eq(accountIdentityAudit.outcome, "success"),
+            eq(accountIdentityAudit.accountRecordId, values.accountRecordId),
+            eq(accountIdentityAudit.actionId, action.id),
+          ))
+          .limit(1);
+        if (prior) return { result: { unlinked: false, alreadyUnlinked: true } };
+        throw new AccountIdentityError("IDENTITY_ACTION_REPLAYED");
+      }
+      await markActionConsumed(transaction, action.id, now);
       return { refusal: "IDENTITY_ACCOUNT_NOT_FOUND" as const };
     }
 
-    await consumeAction(transaction, {
+    const reverifyAction = await consumeAction(transaction, {
       token: values.reverificationToken,
       kind: "reverify",
       userId: values.userId,
@@ -587,6 +598,7 @@ export async function unlinkAccountIdentity(values: {
       outcome: "success",
       providerId: target.providerId,
       accountRecordId: target.id,
+      actionId: reverifyAction.id,
     });
     return { result: { unlinked: true, alreadyUnlinked: false } };
   });
