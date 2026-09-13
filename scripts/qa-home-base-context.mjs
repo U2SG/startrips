@@ -58,7 +58,7 @@ function journey(id, title, startedOn, latitude, longitude) {
 
 const journeys = [
   journey("aaaaaaaa-1111-4111-8111-111111111111", "广州旧日", "2023-06-01", 23.1291, 113.2644),
-  journey("bbbbbbbb-2222-4222-8222-222222222222", "深圳今夏", "2026-06-01", 22.6231, 114.1379),
+  journey("bbbbbbbb-2222-4222-8222-222222222222", "深圳今夏", "2026-06-01", 35.6762, 139.6503),
 ];
 
 const browser = await launchQaBrowser({
