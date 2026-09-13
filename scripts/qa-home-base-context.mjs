@@ -220,7 +220,10 @@ try {
   await page.locator(".living-atlas__playback-mode-menu button", { hasText: "完整播放" }).first().click();
   await page.locator(".journey-playback").waitFor({ state: "visible", timeout: 20_000 });
   const duringPlayback = await page.locator("[data-home-base-context]").count();
-  await page.keyboard.press("Escape");
+  // ST-065 only proves Playback ownership. Escape dismissal is a separate
+  // release-candidate regression family (#356), so close through Playback's
+  // explicit product control rather than coupling this lane to that contract.
+  await page.locator('.journey-playback button[aria-label="退出播放"]').click();
   await page.locator(".journey-playback").waitFor({ state: "detached", timeout: 20_000 });
   const returnedStory = page.locator(".journey-story");
   if (await returnedStory.isVisible()) {
