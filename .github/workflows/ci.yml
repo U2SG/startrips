@@ -195,6 +195,15 @@ jobs:
           done
           curl --fail --silent http://127.0.0.1:4173/ > /dev/null || (cat /tmp/startrips-vite.log && exit 1)
           bash -lc "$QA_COMMAND"
+      - name: Upload coastline refinement review
+        if: ${{ always() && matrix.name == 'city-label-anchoring' }}
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: coastline-refinement-${{ github.run_attempt }}
+          path: artifacts/coastline-refinement/
+          if-no-files-found: warn
+          retention-days: 7
+
       - name: Upload Home Base suggestion capture
         if: ${{ always() && matrix.name == 'home-base-suggestion' }}
         uses: actions/upload-artifact@v7.0.1

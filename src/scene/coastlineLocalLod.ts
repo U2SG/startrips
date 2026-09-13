@@ -6,7 +6,13 @@ export const COASTLINE_LOCAL_ACTIVE_CELL_RADIUS = 1;
 export const COASTLINE_LOCAL_CACHE_LIMIT = 12;
 export const COASTLINE_LOCAL_VERTEX_BUDGET = { low: 8_000, high: 12_000 } as const;
 export const COASTLINE_LOCAL_COMBINED_VERTEX_BUDGET = { low: 26_000, high: 48_000 } as const;
-export const COASTLINE_LOCAL_COVERAGE = { west: 110, south: 18, east: 118, north: 26 } as const;
+export const COASTLINE_LOCAL_COVERAGE_REGIONS = [
+  { id: "hk-prd", west: 110, south: 18, east: 118, north: 26 },
+  { id: "japan", west: 132, south: 30, east: 146, north: 46 },
+  { id: "mediterranean", west: 10, south: 34, east: 30, north: 46 },
+  { id: "norway-fjords", west: 4, south: 56, east: 14, north: 70 },
+] as const;
+export const COASTLINE_LOCAL_COVERAGE = { west: 4, south: 18, east: 146, north: 70 } as const;
 
 export type CoastlineLocalQuality = keyof typeof COASTLINE_LOCAL_VERTEX_BUDGET;
 export type CoastlineInspectionSource = "focus" | "free-explore";
@@ -29,6 +35,7 @@ export interface CoastlineLocalManifest {
   source: { name: string; scale: "10m"; license: string; upstream: string };
   gridDegrees: number;
   coverage: { west: number; south: number; east: number; north: number };
+  regions?: Array<{ id: string; west: number; south: number; east: number; north: number }>;
   chunkSegmentLimit: number;
   chunks: CoastlineLocalChunkManifestEntry[];
 }
@@ -119,10 +126,12 @@ export function resolveLocalCoastlineCell(target: { lat: number; lon: number }) 
 
 export function isLocalCoastlineTarget(target: { lat: number; lon: number }) {
   const lon = wrapLongitude(target.lon);
-  return target.lat >= COASTLINE_LOCAL_COVERAGE.south
-    && target.lat < COASTLINE_LOCAL_COVERAGE.north
-    && lon >= COASTLINE_LOCAL_COVERAGE.west
-    && lon < COASTLINE_LOCAL_COVERAGE.east;
+  return COASTLINE_LOCAL_COVERAGE_REGIONS.some((region) => (
+    target.lat >= region.south
+    && target.lat < region.north
+    && lon >= region.west
+    && lon < region.east
+  ));
 }
 
 export function resolveLocalCoastlineChunkIds(
