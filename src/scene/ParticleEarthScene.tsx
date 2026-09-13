@@ -1282,6 +1282,9 @@ export const GLOBE_MODE_CONFIG: Record<
   },
 };
 
+export type RoutePointPointerOwner = { journeyId: string; routePointId: string };
+export type RoutePointPointerResolver = (clientX: number, clientY: number) => RoutePointPointerOwner | null;
+
 interface ParticleEarthSceneProps {
   mode: GlobeMode;
   quality?: keyof typeof QUALITY_PROFILE;
@@ -1298,6 +1301,8 @@ interface ParticleEarthSceneProps {
   activeJourneyRouteId?: string | null;
   onJourneyRouteActivate?: (id: string) => void;
   onJourneyRoutePointActivate?: (journeyId: string, routePointId: string) => void;
+  /** Same renderer-owned Route Point hit-test used by pointer activation. */
+  onRoutePointPointerResolver?: (resolver: RoutePointPointerResolver | null) => void;
   // #21: per-journey temporal reveal progress (0 = future, 1 = visited).
   // When provided, route groups and points fade in with the time cursor.
   // Points are keyed by `${journeyId}:${pointIndex}` for one-stop-at-a-time
@@ -1684,6 +1689,7 @@ export function ParticleEarthScene({
   activeJourneyRouteId,
   onJourneyRouteActivate,
   onJourneyRoutePointActivate,
+  onRoutePointPointerResolver,
   temporalReveal,
   showArchiveSignals = true,
   onReady,
@@ -3510,6 +3516,39 @@ export function ParticleEarthScene({
     const personalRaycaster = new Raycaster();
     personalRaycaster.params.Points = { threshold: 0.18 };
     const personalPointer = new Vector2();
+    const preparePersonalPointerRay = (clientX: number, clientY: number) => {
+      const bounds = renderer.domElement.getBoundingClientRect();
+      personalPointer.set(
+        ((clientX - bounds.left) / bounds.width) * 2 - 1,
+        -((clientY - bounds.top) / bounds.height) * 2 + 1,
+      );
+      personalRaycaster.setFromCamera(personalPointer, camera);
+    };
+    const journeyTargetFromPreparedRay = (): { journeyId: string; routePointId?: string } | null => {
+      camera.updateMatrixWorld();
+      globe.updateWorldMatrix(true, false);
+      updateGeoProjectionFrame(geoFrame, camera, globe.matrixWorld, targetSize.x, targetSize.y);
+      const positions = routePointSignals.geometry.getAttribute("position") as
+        | BufferAttribute
+        | undefined;
+      const intersection = personalRaycaster
+        .intersectObject(routePointSignals, false)
+        .find((candidate) => {
+          if (candidate.index === undefined || !positions) return false;
+          routeLocalPoint.fromBufferAttribute(positions, candidate.index);
+          return isSphericalPointVisible(routeCameraPosition, routeLocalPoint);
+        });
+      return intersection?.index === undefined
+        ? null
+        : journeyPointTargets[intersection.index] ?? null;
+    };
+    const resolveRoutePointPointerOwnerAt: RoutePointPointerResolver = (clientX, clientY) => {
+      preparePersonalPointerRay(clientX, clientY);
+      const target = journeyTargetFromPreparedRay();
+      return target?.routePointId
+        ? { journeyId: target.journeyId, routePointId: target.routePointId }
+        : null;
+    };
     const activatePointerTarget = (event: PointerEvent) => {
       const canPickGlobe = Boolean(latestOnGlobePointPick.current);
       const canActivateJourney = Boolean(
@@ -3531,12 +3570,7 @@ export function ParticleEarthScene({
       ) {
         return;
       }
-      const bounds = renderer.domElement.getBoundingClientRect();
-      personalPointer.set(
-        ((event.clientX - bounds.left) / bounds.width) * 2 - 1,
-        -((event.clientY - bounds.top) / bounds.height) * 2 + 1,
-      );
-      personalRaycaster.setFromCamera(personalPointer, camera);
+      preparePersonalPointerRay(event.clientX, event.clientY);
       if (canPickGlobe) {
         const [intersection] = personalRaycaster.intersectObject(surface, false);
         if (!intersection) return;
@@ -3550,22 +3584,7 @@ export function ParticleEarthScene({
         return;
       }
       if (canActivateJourney) {
-        camera.updateMatrixWorld();
-        globe.updateWorldMatrix(true, false);
-        updateGeoProjectionFrame(geoFrame, camera, globe.matrixWorld, targetSize.x, targetSize.y);
-        const positions = routePointSignals.geometry.getAttribute("position") as
-          | BufferAttribute
-          | undefined;
-        const intersection = personalRaycaster
-          .intersectObject(routePointSignals, false)
-          .find((candidate) => {
-            if (candidate.index === undefined || !positions) return false;
-            routeLocalPoint.fromBufferAttribute(positions, candidate.index);
-            return isSphericalPointVisible(routeCameraPosition, routeLocalPoint);
-          });
-        const target = intersection?.index === undefined
-          ? undefined
-          : journeyPointTargets[intersection.index];
+        const target = journeyTargetFromPreparedRay();
         if (target?.routePointId && latestOnJourneyRoutePointActivate.current) {
           latestOnJourneyRoutePointActivate.current(
             target.journeyId,
@@ -5413,6 +5432,9 @@ export function ParticleEarthScene({
     updateRenderLoopVisibility();
 
     return {
+      resolveRoutePointPointerOwner(clientX: number, clientY: number) {
+        return resolveRoutePointPointerOwnerAt(clientX, clientY);
+      },
       setQuality(nextQuality: keyof typeof QUALITY_PROFILE) {
         applyQuality(nextQuality);
       },
@@ -5656,6 +5678,15 @@ export function ParticleEarthScene({
       },
     };
   });
+
+  useEffect(() => {
+    if (!ready || !onRoutePointPointerResolver) return;
+    const resolver: RoutePointPointerResolver = (clientX, clientY) => (
+      controllerRef.current?.resolveRoutePointPointerOwner(clientX, clientY) ?? null
+    );
+    onRoutePointPointerResolver(resolver);
+    return () => onRoutePointPointerResolver(null);
+  }, [controllerRef, onRoutePointPointerResolver, ready]);
 
   useEffect(() => {
     controllerRef.current?.setQuality(quality);

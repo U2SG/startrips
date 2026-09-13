@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { LivingAtlasGlobe, LivingAtlasGlobeControls, PersistentEarthProvider, resolveLivingAtlasHomeBaseLayer, resolveRoutePointPointerOwner } from "./LivingAtlasGlobe";
+import { LivingAtlasGlobe, LivingAtlasGlobeControls, PersistentEarthProvider, resolveLivingAtlasHomeBaseLayer } from "./LivingAtlasGlobe";
 import { getRouteFocusPhase } from "./ParticleEarthScene";
 import type { HomeBasePeriod } from "../journey/homeBase";
 import { resolveHomeBasePresence } from "../journey/homeBasePresence";
@@ -189,15 +189,13 @@ describe("Home Base presence projection (ST-056)", () => {
 
 
 describe("ST-065 Home / Route Point pointer ownership", () => {
-  it("forwards an overlapping pointer hit to the existing Route Point owner", () => {
-    const candidates = [
-      { journeyId: "journey-a", routePointId: "point-a", left: 90, right: 110, top: 90, bottom: 110, visible: true },
-      { journeyId: "journey-b", routePointId: "point-b", left: 98, right: 104, top: 98, bottom: 104, visible: true },
-    ];
-    expect(resolveRoutePointPointerOwner({ x: 101, y: 101 }, candidates)).toEqual({
-      journeyId: "journey-b", routePointId: "point-b",
-    });
-    expect(resolveRoutePointPointerOwner({ x: 140, y: 140 }, candidates)).toBeNull();
-    expect(resolveRoutePointPointerOwner({ x: 101, y: 101 }, [{ ...candidates[1], visible: false }])).toBeNull();
+  it("delegates overlapping Home pointer arbitration to the renderer's canonical Route Point raycast", () => {
+    const globeSource = readFileSync(new URL("./LivingAtlasGlobe.tsx", import.meta.url), "utf8");
+    const particleSource = readFileSync(new URL("./ParticleEarthScene.tsx", import.meta.url), "utf8");
+    expect(globeSource).toContain("routePointPointerResolverRef.current?.(event.clientX, event.clientY)");
+    expect(globeSource).toContain("onRoutePointPointerResolver: handleRoutePointPointerResolver");
+    expect(particleSource).toContain("personalRaycaster.params.Points = { threshold: 0.18 }");
+    expect(particleSource).toContain("resolveRoutePointPointerOwner(clientX: number, clientY: number)");
+    expect(particleSource).toContain("return resolveRoutePointPointerOwnerAt(clientX, clientY)");
   });
 });

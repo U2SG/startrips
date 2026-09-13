@@ -45,7 +45,7 @@ import {
   initialGlobeGestureHintState,
   resolveGlobeGestureHint,
 } from "./globeGestureHint";
-import { GLOBE_MODE_CONFIG, ParticleEarthScene } from "./ParticleEarthScene";
+import { GLOBE_MODE_CONFIG, ParticleEarthScene, type RoutePointPointerResolver } from "./ParticleEarthScene";
 import {
   SEMANTIC_ZOOM_RELEASE_ZOOM,
   type GlobeSemanticZoom,
@@ -54,61 +54,6 @@ import {
 
 const loadDetailedEarthMap = () => import("./DetailedEarthMap");
 const DetailedEarthMap = lazy(loadDetailedEarthMap);
-
-export type RoutePointPointerCandidate = {
-  journeyId: string;
-  routePointId: string;
-  left: number;
-  right: number;
-  top: number;
-  bottom: number;
-  visible: boolean;
-};
-
-/**
- * ST-065: Home and Route Point can share a projected pixel. Pointer ownership
- * follows the existing Route Point target in that overlap; keyboard activation
- * remains on Home. The candidates are measured from the already-rendered route
- * markers, so this adds no second geographic projection or camera authority.
- */
-export function resolveRoutePointPointerOwner(
-  point: { x: number; y: number },
-  candidates: readonly RoutePointPointerCandidate[],
-): Pick<RoutePointPointerCandidate, "journeyId" | "routePointId"> | null {
-  let best: RoutePointPointerCandidate | null = null;
-  let bestDistance = Number.POSITIVE_INFINITY;
-  for (const candidate of candidates) {
-    if (!candidate.visible) continue;
-    if (point.x < candidate.left || point.x > candidate.right || point.y < candidate.top || point.y > candidate.bottom) continue;
-    const centerX = (candidate.left + candidate.right) / 2;
-    const centerY = (candidate.top + candidate.bottom) / 2;
-    const distance = (point.x - centerX) ** 2 + (point.y - centerY) ** 2;
-    if (distance < bestDistance) {
-      best = candidate;
-      bestDistance = distance;
-    }
-  }
-  return best ? { journeyId: best.journeyId, routePointId: best.routePointId } : null;
-}
-
-function routePointPointerOwnerAt(clientX: number, clientY: number) {
-  if (typeof document === "undefined") return null;
-  const candidates = [...document.querySelectorAll<SVGGraphicsElement>(
-    ".particle-earth-route__point[data-journey-route][data-route-point-id]",
-  )].map((element) => {
-    const rect = element.getBoundingClientRect();
-    const style = getComputedStyle(element);
-    return {
-      journeyId: element.dataset.journeyRoute ?? "",
-      routePointId: element.dataset.routePointId ?? "",
-      left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom,
-      visible: rect.width > 0 && rect.height > 0
-        && style.display !== "none" && style.visibility !== "hidden"
-        && Number.parseFloat(style.opacity || "1") > 0,
-    };
-  }).filter((candidate) => candidate.journeyId && candidate.routePointId);
-  return resolveRoutePointPointerOwner({ x: clientX, y: clientY }, candidates);
-}
 
 function readDetailedEarthScreenFrame(layer: HTMLElement | null): EarthDiveScreenFrame | null {
   const host = layer?.querySelector<HTMLElement>(".detailed-earth-map");
@@ -286,6 +231,7 @@ type AtlasEarthPresentation = Pick<
   onParticleAnchorFrame?: (frame: ParticleAnchorFrame | null) => void;
   homeBasePresence?: readonly HomeBasePresenceDrawable[];
   onHomeBasePresenceFrame?: (frame: readonly ProjectedHomeBasePresence[]) => void;
+  onRoutePointPointerResolver?: (resolver: RoutePointPointerResolver | null) => void;
   onManualCameraInteraction?: () => void;
   zoomIntent?: { zoom: number; revision: number };
   /** Who owns camera and gesture input on this frame. */
@@ -373,6 +319,7 @@ export function PersistentEarthProvider({ children }: { children: ReactNode }) {
                   onParticleAnchorFrame={atlas?.onParticleAnchorFrame}
                   homeBasePresence={atlas?.homeBasePresence ?? []}
                   onHomeBasePresenceFrame={atlas?.onHomeBasePresenceFrame}
+                  onRoutePointPointerResolver={atlas?.onRoutePointPointerResolver}
                   onManualCameraInteraction={atlas?.onManualCameraInteraction}
                   zoomIntent={atlas?.zoomIntent}
                   showArchiveSignals={false}
@@ -438,6 +385,10 @@ export function LivingAtlasGlobe({
   const homeBaseLayer = useMemo(() => resolveLivingAtlasHomeBaseLayer(homeBasePresence), [homeBasePresence]);
   const homeBaseElementsRef = useRef(new Map<string, HTMLButtonElement>());
   const homeBaseFramesRef = useRef(new Map<string, ProjectedHomeBasePresence>());
+  const routePointPointerResolverRef = useRef<RoutePointPointerResolver | null>(null);
+  const handleRoutePointPointerResolver = useCallback((resolver: RoutePointPointerResolver | null) => {
+    routePointPointerResolverRef.current = resolver;
+  }, []);
   const applyHomeBaseFrame = useCallback((
     element: HTMLButtonElement,
     frame: ProjectedHomeBasePresence | undefined,
@@ -830,6 +781,7 @@ export function LivingAtlasGlobe({
       onParticleAnchorFrame: handleParticleAnchorFrame,
       homeBasePresence: homeBaseLayer,
       onHomeBasePresenceFrame: handleHomeBasePresenceFrame,
+      onRoutePointPointerResolver: handleRoutePointPointerResolver,
       onManualCameraInteraction,
       zoomIntent: zoomIntent ?? undefined,
       inputOwner: dive.owner,
@@ -852,6 +804,7 @@ export function LivingAtlasGlobe({
     focusRoute,
     initialCameraAnchor,
     handleHomeBasePresenceFrame,
+    handleRoutePointPointerResolver,
     handleParticleAnchorFrame,
     handleSemanticZoomSnapshot,
     homeBaseLayer,
@@ -939,7 +892,7 @@ export function LivingAtlasGlobe({
             data-home-base-presence={descriptor.presence}
             onClick={(event) => {
               if (event.detail > 0) {
-                const routePointOwner = routePointPointerOwnerAt(event.clientX, event.clientY);
+                const routePointOwner = routePointPointerResolverRef.current?.(event.clientX, event.clientY);
                 if (routePointOwner) {
                   onJourneyRoutePointActivate(routePointOwner.journeyId, routePointOwner.routePointId);
                   return;
