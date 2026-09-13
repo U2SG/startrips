@@ -56,8 +56,8 @@ The recorded fixture is the deterministic Living Atlas route fixture:
 - viewport: `1200 × 800` CSS px
 - fixed target semantic zoom: `2.7`
 - spatial-LOD refinement must report `ready` and `present=true` before sampling
-- device DPR captures: `1`, `2`, `3`
-- high-quality renderer cap resolves renderer DPR to `1`, `2`, `2` respectively
+- requested device DPR captures: `1`, `2`, `3`; the lane requires `window.devicePixelRatio` and the scene-published device DPR to match those requests exactly
+- for this fixed `1200×800` high-quality fixture, the existing render budget must resolve renderer DPR to the documented sequence `1`, `2`, `2` respectively; a renderer-budget regression to a constant DPR is a hard failure
 - QA tolerances: CSS optical size `0.01px`; opacity `0.005`
 
 ### Recorded measurements
@@ -85,7 +85,8 @@ Route SVG strokes and Place/City Labels do not use `createParticleEarthMaterial`
 
 `scripts/qa-attention-hierarchy.mjs` is the executable contract. It:
 
-- creates fresh browser contexts at device DPR 1/2/3 with the same CSS viewport;
+- creates fresh browser contexts at requested device DPR 1/2/3 with the same CSS viewport and fails if the browser's actual DPR differs from the request;
+- requires this fixture's effective renderer DPR sequence to be exactly `1/2/2`;
 - drives the same camera to zoom 2.7 and waits for the real refinement layer;
 - reads only `data-attention-layers` plus the unaffected SVG/text references;
 - fails if any expected material consumer is absent;

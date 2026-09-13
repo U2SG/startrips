@@ -9,6 +9,11 @@ const TARGET_ZOOM = 2.7;
 const CSS_SIZE_TOLERANCE_PX = 0.01;
 const OPACITY_TOLERANCE = 0.005;
 const SHADER_DPR_TOLERANCE = 0.001;
+const EXPECTED_RENDERER_DPR_BY_DEVICE = new Map([
+  [1, 1],
+  [2, 2],
+  [3, 2],
+]);
 const EXPECTED_LAYER_IDS = [
   "base-particle-surface",
   "spatial-lod-refinement",
@@ -139,18 +144,29 @@ try {
     captures.push(capture);
     const ids = (capture.attention?.layers ?? []).map((layer) => layer.id);
     const strong = (capture.attention?.layers ?? []).filter((layer) => layer.strongGlow);
+    const expectedRendererDpr = EXPECTED_RENDERER_DPR_BY_DEVICE.get(dpr);
+    const actualBrowserDpr = capture.devicePixelRatio;
+    const measuredDeviceDpr = capture.attention?.devicePixelRatio ?? null;
+    const rendererDpr = capture.attention?.rendererPixelRatio ?? null;
     record(`attention:dpr-${dpr}`, {
-      deviceDpr: dpr,
-      rendererDpr: capture.attention?.rendererPixelRatio ?? null,
+      requestedDeviceDpr: dpr,
+      actualBrowserDpr,
+      measuredDeviceDpr,
+      expectedRendererDpr,
+      rendererDpr,
       layers: capture.attention?.layers ?? null,
       unaffectedReferences: capture.unaffectedReferences,
       pageErrors: capture.pageErrors,
     }, Boolean(capture.attention)
+      && Number.isFinite(expectedRendererDpr)
+      && Math.abs(actualBrowserDpr - dpr) <= SHADER_DPR_TOLERANCE
+      && Math.abs(measuredDeviceDpr - dpr) <= SHADER_DPR_TOLERANCE
+      && Math.abs(rendererDpr - expectedRendererDpr) <= SHADER_DPR_TOLERANCE
       && JSON.stringify(ids) === JSON.stringify(EXPECTED_LAYER_IDS)
       && capture.attention.layers.every((layer) => layer.present)
       && capture.attention.layers.every((layer) => (
         Number.isFinite(layer.shaderPixelRatio)
-        && Math.abs(layer.shaderPixelRatio - capture.attention.rendererPixelRatio) <= SHADER_DPR_TOLERANCE
+        && Math.abs(layer.shaderPixelRatio - rendererDpr) <= SHADER_DPR_TOLERANCE
         && Number.isFinite(layer.resolvedCssOpticalSizePx)
       ))
       && strong.length <= 1
@@ -176,7 +192,6 @@ try {
         shaderDprDelta,
         cssSizeTolerancePx: CSS_SIZE_TOLERANCE_PX,
         opacityTolerance: OPACITY_TOLERANCE,
-    shaderDprTolerance: SHADER_DPR_TOLERANCE,
         shaderDprTolerance: SHADER_DPR_TOLERANCE,
       }, Boolean(base && next)
         && sizeDelta <= CSS_SIZE_TOLERANCE_PX
@@ -202,8 +217,13 @@ try {
     targetZoom: TARGET_ZOOM,
     cssSizeTolerancePx: CSS_SIZE_TOLERANCE_PX,
     opacityTolerance: OPACITY_TOLERANCE,
+    shaderDprTolerance: SHADER_DPR_TOLERANCE,
+    expectedRendererDprByDevice: Object.fromEntries(EXPECTED_RENDERER_DPR_BY_DEVICE),
     captures: captures.map((capture) => ({
-      deviceDpr: capture.deviceDpr,
+      requestedDeviceDpr: capture.deviceDpr,
+      actualBrowserDpr: capture.devicePixelRatio,
+      measuredDeviceDpr: capture.attention?.devicePixelRatio ?? null,
+      expectedRendererDpr: EXPECTED_RENDERER_DPR_BY_DEVICE.get(capture.deviceDpr) ?? null,
       rendererDpr: capture.attention?.rendererPixelRatio ?? null,
       layers: capture.attention?.layers ?? [],
       unaffectedReferences: capture.unaffectedReferences,
