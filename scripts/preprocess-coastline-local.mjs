@@ -4,7 +4,13 @@ import process from "node:process";
 import { pathToFileURL } from "node:url";
 
 export const LOCAL_COASTLINE_GRID_DEGREES = 2;
-export const LOCAL_COASTLINE_COVERAGE = { west: 110, south: 18, east: 118, north: 26 };
+export const LOCAL_COASTLINE_REGIONS = [
+  { id: "hk-prd", west: 110, south: 18, east: 118, north: 26 },
+  { id: "japan", west: 132, south: 30, east: 146, north: 46 },
+  { id: "mediterranean", west: 10, south: 34, east: 30, north: 46 },
+  { id: "norway-fjords", west: 4, south: 56, east: 14, north: 70 },
+];
+export const LOCAL_COASTLINE_COVERAGE = { west: 4, south: 18, east: 146, north: 70 };
 export const LOCAL_COASTLINE_CHUNK_SEGMENT_LIMIT = 4_000;
 
 function chunkKey(latSouth, lonWest) {
@@ -17,6 +23,19 @@ function rounded(value) {
   return Number(value.toFixed(6));
 }
 
+function pointInLocalRegion(lon, lat) {
+  return LOCAL_COASTLINE_REGIONS.some((region) => (
+    lon >= region.west && lon < region.east
+    && lat >= region.south && lat < region.north
+  ));
+}
+
+function canonicalSegmentKey(lonA, latA, lonB, latB) {
+  const left = `${lonA},${latA}`;
+  const right = `${lonB},${latB}`;
+  return left <= right ? `${left}|${right}` : `${right}|${left}`;
+}
+
 function polygonsForGeometry(geometry) {
   if (!geometry) return [];
   if (geometry.type === "Polygon") return [geometry.coordinates];
@@ -27,7 +46,7 @@ function polygonsForGeometry(geometry) {
 export function buildLocalCoastlineChunks(collection) {
   const chunks = new Map();
   const grid = LOCAL_COASTLINE_GRID_DEGREES;
-  const coverage = LOCAL_COASTLINE_COVERAGE;
+  const seenSegments = new Set();
 
   for (const feature of collection.features ?? []) {
     for (const polygon of polygonsForGeometry(feature.geometry)) {
@@ -37,10 +56,15 @@ export function buildLocalCoastlineChunks(collection) {
           const next = ring[index + 1];
           const lon = (current[0] + next[0]) / 2;
           const lat = (current[1] + next[1]) / 2;
-          if (
-            lon < coverage.west || lon >= coverage.east
-            || lat < coverage.south || lat >= coverage.north
-          ) continue;
+          if (!pointInLocalRegion(lon, lat)) continue;
+
+          const lonA = rounded(current[0]);
+          const latA = rounded(current[1]);
+          const lonB = rounded(next[0]);
+          const latB = rounded(next[1]);
+          const segmentKey = canonicalSegmentKey(lonA, latA, lonB, latB);
+          if (seenSegments.has(segmentKey)) continue;
+          seenSegments.add(segmentKey);
 
           const lonWest = Math.floor(lon / grid) * grid;
           const latSouth = Math.floor(lat / grid) * grid;
@@ -55,10 +79,7 @@ export function buildLocalCoastlineChunks(collection) {
             },
             segments: [],
           };
-          chunk.segments.push(
-            rounded(current[0]), rounded(current[1]),
-            rounded(next[0]), rounded(next[1]),
-          );
+          chunk.segments.push(lonA, latA, lonB, latB);
           chunks.set(id, chunk);
         }
       }
@@ -90,6 +111,7 @@ export async function writeLocalCoastlineChunks(inputPath, outputDir) {
     },
     gridDegrees: LOCAL_COASTLINE_GRID_DEGREES,
     coverage: LOCAL_COASTLINE_COVERAGE,
+    regions: LOCAL_COASTLINE_REGIONS,
     chunkSegmentLimit: LOCAL_COASTLINE_CHUNK_SEGMENT_LIMIT,
     chunks: chunks.map((chunk) => ({
       id: chunk.id,

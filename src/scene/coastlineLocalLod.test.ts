@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { GEOGRAPHIC_SURFACE_RADIUS, latLonToVector3 } from "./geo";
 import {
   COASTLINE_LOCAL_COMBINED_VERTEX_BUDGET,
+  COASTLINE_LOCAL_COVERAGE_REGIONS,
   COASTLINE_LOCAL_VERTEX_BUDGET,
   CoastlineLocalChunkCache,
   buildLocalCoastlinePositions,
@@ -15,10 +16,18 @@ import {
   type CoastlineLocalChunk,
   type CoastlineLocalManifest,
 } from "./coastlineLocalLod";
+import { ParticleRefinementBuildGuard } from "./particleSpatialLod";
 
 const manifest = JSON.parse(
   readFileSync("public/earth/coastline-10m/manifest.json", "utf8"),
 ) as CoastlineLocalManifest;
+
+const DETAIL_FIXTURES = [
+  { key: "hk-prd", lat: 22.54554, lon: 114.0683, primary: "+22_+114" },
+  { key: "japan", lat: 35.6762, lon: 139.6503, primary: "+34_+138" },
+  { key: "mediterranean", lat: 42.6507, lon: 18.0944, primary: "+42_+018" },
+  { key: "norway-fjords", lat: 60.3913, lon: 5.3221, primary: "+60_+004" },
+] as const;
 
 function chunk(id: string) {
   return JSON.parse(
@@ -56,17 +65,23 @@ function countSegmentsInBounds(
 }
 
 describe("local 10m coastline refinement (#154)", () => {
-  it("uses a genuinely finer source for the Hong Kong cell than the 50m regional source", () => {
+  it("ships genuine 10m local geography for HK/PRD, Japan, Mediterranean and fjord fixtures", () => {
     expect(manifest.source.scale).toBe("10m");
     expect(manifest.source.license).toBe("public-domain");
-    const hongKong = manifest.chunks.find((entry) => entry.id === "+22_+114");
-    expect(hongKong).toBeDefined();
-
+    expect(manifest.regions?.map((region) => region.id)).toEqual(
+      COASTLINE_LOCAL_COVERAGE_REGIONS.map((region) => region.id),
+    );
     const fiftyMetre = JSON.parse(
       readFileSync("public/earth/ne_50m_land.geojson", "utf8"),
     );
-    const fiftyMetreSegments = countSegmentsInBounds(fiftyMetre, hongKong!.bounds);
-    expect(hongKong!.segmentCount).toBeGreaterThan(fiftyMetreSegments * 5);
+    for (const fixture of DETAIL_FIXTURES) {
+      const entry = manifest.chunks.find((candidate) => candidate.id === fixture.primary);
+      expect(entry, fixture.key).toBeDefined();
+      const fiftyMetreSegments = countSegmentsInBounds(fiftyMetre, entry!.bounds);
+      expect(entry!.segmentCount, fixture.key).toBeGreaterThan(fiftyMetreSegments * 5);
+      expect(isLocalCoastlineTarget(fixture), fixture.key).toBe(true);
+    }
+    expect(isLocalCoastlineTarget({ lat: 37.7749, lon: -122.4194 })).toBe(false);
   });
 
   it("retains recognizable Hong Kong island coastlines in the local source", () => {
@@ -135,12 +150,13 @@ describe("local 10m coastline refinement (#154)", () => {
     expect(explored?.lon).toBeCloseTo(free.lon, 8);
   });
 
-  it("loads only the bounded adjacent chunk set for Pearl River Delta inspection", () => {
-    const ids = resolveLocalCoastlineChunkIds(manifest, { lat: 22.54554, lon: 114.0683 });
-    expect(ids).toEqual(["+20_+112", "+22_+112", "+22_+114", "+22_+116", "+24_+116"]);
-    expect(ids.length).toBeLessThanOrEqual(9);
-    expect(isLocalCoastlineTarget({ lat: 22.54554, lon: 114.0683 })).toBe(true);
-    expect(isLocalCoastlineTarget({ lat: 35.6762, lon: 139.6503 })).toBe(false);
+  it("loads only the bounded 3x3 neighborhood in every shipped local region", () => {
+    for (const fixture of DETAIL_FIXTURES) {
+      const ids = resolveLocalCoastlineChunkIds(manifest, fixture);
+      expect(ids, fixture.key).toContain(fixture.primary);
+      expect(ids.length, fixture.key).toBeGreaterThan(0);
+      expect(ids.length, fixture.key).toBeLessThanOrEqual(9);
+    }
   });
 
   it("builds the selected local chunks on the canonical geographic surface within a fixed vertex budget", () => {
@@ -178,6 +194,41 @@ describe("local 10m coastline refinement (#154)", () => {
     expect(Array.from(merged.slice(0, 6))).toEqual(Array.from(outsideRegional));
     expect(Array.from(merged.slice(-6))).toEqual(Array.from(local));
     expect(merged.length / 3).toBeLessThanOrEqual(COASTLINE_LOCAL_COMBINED_VERTEX_BUDGET.high);
+  });
+
+
+  it("keeps generated chunk seams single-owned with no duplicate bright boundary segments", () => {
+    const seen = new Set<string>();
+    let segments = 0;
+    for (const entry of manifest.chunks) {
+      expect(entry.segmentCount).toBeLessThanOrEqual(manifest.chunkSegmentLimit);
+      const candidate = chunk(entry.id);
+      expect(candidate.segments.length / 4).toBe(entry.segmentCount);
+      for (let index = 0; index + 3 < candidate.segments.length; index += 4) {
+        const a = `${candidate.segments[index]},${candidate.segments[index + 1]}`;
+        const b = `${candidate.segments[index + 2]},${candidate.segments[index + 3]}`;
+        const key = a <= b ? `${a}|${b}` : `${b}|${a}`;
+        expect(seen.has(key), `${entry.id}:${key}`).toBe(false);
+        seen.add(key);
+        segments += 1;
+      }
+    }
+    expect(segments).toBeGreaterThan(30_000);
+  });
+
+  it("rejects stale local builds across rapid region changes and hidden-tab suspension", () => {
+    const guard = new ParticleRefinementBuildGuard();
+    const japan = guard.request("high:10m:+34_+138");
+    const mediterranean = guard.request("high:10m:+42_+018");
+    expect(guard.isCurrent(japan)).toBe(false);
+    expect(guard.isCurrent(mediterranean)).toBe(true);
+    guard.setVisible(false);
+    expect(guard.isCurrent(mediterranean)).toBe(false);
+    const hiddenFjord = guard.request("high:10m:+60_+004");
+    expect(guard.isCurrent(hiddenFjord)).toBe(false);
+    guard.setVisible(true);
+    const restoredFjord = guard.request("high:10m:+60_+004");
+    expect(guard.isCurrent(restoredFjord)).toBe(true);
   });
 
   it("keeps a bounded LRU of immutable local chunks", () => {

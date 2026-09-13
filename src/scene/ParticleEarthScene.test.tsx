@@ -384,6 +384,17 @@ describe("ParticleEarthScene contracts", () => {
     expect(source).toMatch(/lastTime = performance\.now\(\);\s+lastFrameDeltaMs = 0;/);
   });
 
+  it("keeps local coastline refinement on the existing visibility/cancellation owner (#154)", () => {
+    const source = readFileSync(new URL("./ParticleEarthScene.tsx", import.meta.url), "utf8");
+    expect(source).toContain("const coastlineRefinementBuildGuard = new ParticleRefinementBuildGuard();");
+    expect(source).toContain("coastlineRefinementBuildGuard.setVisible(false);");
+    expect(source).toContain("coastlineRefinementBuildGuard.setVisible(true);");
+    expect(source).toMatch(/requestedCoastlineCacheKey = null;\s+coastlineRefinementState = "paused";/);
+    expect(source).toContain('`${qualityAtRequest}:10m:${localCell.id}`');
+    expect(source).toContain("host.dataset.coastlineLocalChunkCache = String(coastlineLocalChunkCache.size)");
+    expect(source).toContain("host.dataset.coastlineLocalVertices = String(activeCoastlineLocalVertices)");
+  });
+
   it("allows full globe rotation", () => {
     expect(GLOBE_TILT_LIMIT_RADIANS).toBe(Number.POSITIVE_INFINITY);
     expect(clampGlobeTilt(Math.PI * 3)).toBe(Math.PI * 3);

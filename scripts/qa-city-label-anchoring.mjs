@@ -28,6 +28,7 @@
 // - and at 1x that alone buys a real 6% excess, which is more than the defect
 // being looked for. `offAxisAllowance` computes it exactly from published
 // pixel quantities instead of absorbing it into a loose tolerance.
+import { mkdir } from "node:fs/promises";
 import { launchQaBrowser } from "./qa-browser.mjs";
 
 const baseUrl = process.env.QA_BASE_URL ?? "http://127.0.0.1:4173";
@@ -77,6 +78,13 @@ const FIXTURES = [
   { key: "large-us", name: "San Francisco", lat: 37.77493, lon: -122.41942 },
   { key: "island", name: "Singapore", lat: 1.28967, lon: 103.85007 },
   { key: "inland-control", name: "Denver", lat: 39.73915, lon: -104.9847 },
+];
+
+const COASTLINE_DETAIL_FIXTURES = [
+  { key: "hk-prd", lat: 22.54554, lon: 114.0683, primaryChunk: "+22_+114" },
+  { key: "japan", lat: 35.6762, lon: 139.6503, primaryChunk: "+34_+138" },
+  { key: "mediterranean", lat: 42.6507, lon: 18.0944, primaryChunk: "+42_+018" },
+  { key: "norway-fjords", lat: 60.3913, lon: 5.3221, primaryChunk: "+60_+004" },
 ];
 
 // A frame must measure at least one place this close to the view centre, and
@@ -143,6 +151,7 @@ function measure(page) {
       coastlineRefinement: host.dataset.coastlineRefinement ?? "",
       coastlineActiveChunks: (host.dataset.coastlineActiveChunks ?? "").split(",").filter(Boolean),
       coastlineLocalChunkCache: Number(host.dataset.coastlineLocalChunkCache ?? 0),
+      coastlineLocalVertices: Number(host.dataset.coastlineLocalVertices ?? 0),
       coastlineInspection: host.dataset.coastlineInspectionSource
         ? {
           source: host.dataset.coastlineInspectionSource,
@@ -968,6 +977,69 @@ try {
       `hong-kong-localization @${zoom}x: rendered label is ${JSON.stringify(rendered?.name ?? null)}, expected Chinese text 香港`,
     );
     console.log(`[qa-city-label-anchoring] hong-kong-localization zoom=${zoom} rendered=${JSON.stringify(rendered?.name ?? null)}`);
+  }
+
+  // #154 residual: same-centre evidence for every representative local-10m
+  // coverage region. These captures are review artifacts; assertions use the
+  // scene's own bounded-refinement debug contract rather than pixel heuristics.
+  await mkdir("artifacts/coastline-refinement", { recursive: true });
+  for (const fixture of COASTLINE_DETAIL_FIXTURES) {
+    await page.goto(new URL(
+      `/?qaState=journey-routes&qaQuality=high&qaFocusLat=${fixture.lat}&qaFocusLon=${fixture.lon}`,
+      baseUrl,
+    ).toString(), { waitUntil: "domcontentloaded" });
+    await page.locator('[data-scene-ready="true"]').waitFor({ timeout: 30_000 });
+    await page.waitForFunction(() => Boolean(window.__particleEarthDebug?.()));
+    await page.waitForTimeout(350);
+    const opening = await measure(page);
+    const anchor = { x: opening.focus.x, y: opening.focus.y };
+    for (const level of [
+      { key: "regional", zoom: 1.8, local: false },
+      { key: "near", zoom: 2.4, local: true },
+      { key: "max", zoom: 3, local: true },
+    ]) {
+      await setZoom(page, level.zoom, anchor);
+      await page.waitForTimeout(250);
+      const sample = level.local ? await waitForLocalCoastline(page) : await measure(page);
+      if (level.local) {
+        check(
+          sample.coastlineSource === "50m-regional+10m-local-natural-earth",
+          `${fixture.key}/${level.key}: unexpected coastline source ${sample.coastlineSource}`,
+        );
+        check(
+          sample.coastlineActiveChunks.includes(fixture.primaryChunk)
+            && sample.coastlineActiveChunks.length <= 9,
+          `${fixture.key}/${level.key}: unexpected active chunks ${JSON.stringify(sample.coastlineActiveChunks)}`,
+        );
+        check(
+          sample.coastlineLocalChunkCache <= 12,
+          `${fixture.key}/${level.key}: local cache grew to ${sample.coastlineLocalChunkCache}`,
+        );
+        check(
+          sample.coastlineLocalVertices > 0 && sample.coastlineLocalVertices <= 12_000,
+          `${fixture.key}/${level.key}: local vertex budget is ${sample.coastlineLocalVertices}`,
+        );
+        check(
+          Math.abs((sample.coastlineInspection?.lat ?? Number.NaN) - fixture.lat) < 0.5
+            && Math.abs((sample.coastlineInspection?.lon ?? Number.NaN) - fixture.lon) < 0.5,
+          `${fixture.key}/${level.key}: inspected ${JSON.stringify(sample.coastlineInspection)} instead of the canonical fixture`,
+        );
+      }
+      await page.screenshot({
+        path: `artifacts/coastline-refinement/${fixture.key}-${level.key}.png`,
+        fullPage: false,
+      });
+      console.log([
+        `[qa-city-label-anchoring] coastline-detail ${fixture.key}/${level.key}`,
+        `zoom=${sample.zoom.toFixed(3)}`,
+        `source=${sample.coastlineSource}`,
+        `chunks=${sample.coastlineActiveChunks.join(",")}`,
+        `localVertices=${sample.coastlineLocalVertices}`,
+        `totalVertices=${sample.coastlineVertices}`,
+        `cache=${sample.coastlineLocalChunkCache}`,
+        `state=${sample.coastlineRefinement}`,
+      ].join(" "));
+    }
   }
 
   if (pageErrors.length > 0 || consoleErrors.length > 0) {

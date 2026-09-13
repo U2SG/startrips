@@ -1919,6 +1919,7 @@ export function ParticleEarthScene({
         coastlineActiveChunks: string[];
         coastlineRefinement: string;
         coastlineLocalChunkCache: number;
+        coastlineLocalVertices: number;
       };
     };
     debugWindow.__particleEarthDebug = () => ({
@@ -1978,6 +1979,7 @@ export function ParticleEarthScene({
       coastlineActiveChunks: [...activeCoastlineChunkIds],
       coastlineRefinement: coastlineRefinementState,
       coastlineLocalChunkCache: coastlineLocalChunkCache.size,
+      coastlineLocalVertices: activeCoastlineLocalVertices,
     });
 
     scene.add(new AmbientLight(0x69736f, 0.72));
@@ -4051,6 +4053,7 @@ export function ParticleEarthScene({
     let activeCoastlineInspectionTarget: CoastlineInspectionTarget | null = null;
     let activeCoastlineRegionCenter: { lat: number; lon: number } | null = null;
     let activeCoastlineChunkIds: string[] = [];
+    let activeCoastlineLocalVertices = 0;
     let localCoastlineRetryAt = Number.NEGATIVE_INFINITY;
     let coastlineRefinementState = document.hidden ? "paused" : "fallback";
     let lastCoastlineRefinementSampleAt = Number.NEGATIVE_INFINITY;
@@ -4243,6 +4246,7 @@ export function ParticleEarthScene({
         inspectionTarget,
         regionCenter,
         chunkIds,
+        localVertexCount = 0,
       }: {
         cacheKey: string;
         terminalState?: "ready" | "cached";
@@ -4250,6 +4254,7 @@ export function ParticleEarthScene({
         inspectionTarget: CoastlineInspectionTarget;
         regionCenter: { lat: number; lon: number };
         chunkIds: string[];
+        localVertexCount?: number;
       },
     ) => {
       const nextGeometry = new BufferGeometry();
@@ -4265,6 +4270,7 @@ export function ParticleEarthScene({
       activeCoastlineInspectionTarget = inspectionTarget;
       activeCoastlineRegionCenter = regionCenter;
       activeCoastlineChunkIds = [...chunkIds];
+      activeCoastlineLocalVertices = localVertexCount;
       coastlineRefinementState = terminalState;
     };
 
@@ -4398,6 +4404,7 @@ export function ParticleEarthScene({
           inspectionTarget,
           regionCenter: localCell.center,
           chunkIds,
+          localVertexCount: localPositions.length / 3,
         });
       })();
     };
@@ -5122,6 +5129,7 @@ export function ParticleEarthScene({
       host.dataset.coastlineActiveChunks = activeCoastlineChunkIds.join(",");
       host.dataset.coastlineCacheChunks = String(coastlineRefinementCache.size);
       host.dataset.coastlineLocalChunkCache = String(coastlineLocalChunkCache.size);
+      host.dataset.coastlineLocalVertices = String(activeCoastlineLocalVertices);
       host.dataset.coastlineRefinement = coastlineRefinementState;
       if (activeCoastlineInspectionTarget) {
         host.dataset.coastlineInspectionSource = activeCoastlineInspectionTarget.source;

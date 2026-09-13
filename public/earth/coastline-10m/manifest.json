@@ -8,11 +8,41 @@
   },
   "gridDegrees": 2,
   "coverage": {
-    "west": 110,
+    "west": 4,
     "south": 18,
-    "east": 118,
-    "north": 26
+    "east": 146,
+    "north": 70
   },
+  "regions": [
+    {
+      "id": "hk-prd",
+      "west": 110,
+      "south": 18,
+      "east": 118,
+      "north": 26
+    },
+    {
+      "id": "japan",
+      "west": 132,
+      "south": 30,
+      "east": 146,
+      "north": 46
+    },
+    {
+      "id": "mediterranean",
+      "west": 10,
+      "south": 34,
+      "east": 30,
+      "north": 46
+    },
+    {
+      "id": "norway-fjords",
+      "west": 4,
+      "south": 56,
+      "east": 14,
+      "north": 70
+    }
+  ],
   "chunkSegmentLimit": 4000,
   "chunks": [
     {
@@ -91,6 +121,1051 @@
       },
       "path": "+24_+116.json",
       "segmentCount": 59
+    },
+    {
+      "id": "+30_+140",
+      "bounds": {
+        "west": 140,
+        "south": 30,
+        "east": 142,
+        "north": 32
+      },
+      "path": "+30_+140.json",
+      "segmentCount": 14
+    },
+    {
+      "id": "+32_+132",
+      "bounds": {
+        "west": 132,
+        "south": 32,
+        "east": 134,
+        "north": 34
+      },
+      "path": "+32_+132.json",
+      "segmentCount": 665
+    },
+    {
+      "id": "+32_+134",
+      "bounds": {
+        "west": 134,
+        "south": 32,
+        "east": 136,
+        "north": 34
+      },
+      "path": "+32_+134.json",
+      "segmentCount": 157
+    },
+    {
+      "id": "+32_+136",
+      "bounds": {
+        "west": 136,
+        "south": 32,
+        "east": 138,
+        "north": 34
+      },
+      "path": "+32_+136.json",
+      "segmentCount": 25
+    },
+    {
+      "id": "+32_+138",
+      "bounds": {
+        "west": 138,
+        "south": 32,
+        "east": 140,
+        "north": 34
+      },
+      "path": "+32_+138.json",
+      "segmentCount": 39
+    },
+    {
+      "id": "+34_+010",
+      "bounds": {
+        "west": 10,
+        "south": 34,
+        "east": 12,
+        "north": 36
+      },
+      "path": "+34_+010.json",
+      "segmentCount": 154
+    },
+    {
+      "id": "+34_+012",
+      "bounds": {
+        "west": 12,
+        "south": 34,
+        "east": 14,
+        "north": 36
+      },
+      "path": "+34_+012.json",
+      "segmentCount": 27
+    },
+    {
+      "id": "+34_+014",
+      "bounds": {
+        "west": 14,
+        "south": 34,
+        "east": 16,
+        "north": 36
+      },
+      "path": "+34_+014.json",
+      "segmentCount": 37
+    },
+    {
+      "id": "+34_+022",
+      "bounds": {
+        "west": 22,
+        "south": 34,
+        "east": 24,
+        "north": 36
+      },
+      "path": "+34_+022.json",
+      "segmentCount": 118
+    },
+    {
+      "id": "+34_+024",
+      "bounds": {
+        "west": 24,
+        "south": 34,
+        "east": 26,
+        "north": 36
+      },
+      "path": "+34_+024.json",
+      "segmentCount": 277
+    },
+    {
+      "id": "+34_+026",
+      "bounds": {
+        "west": 26,
+        "south": 34,
+        "east": 28,
+        "north": 36
+      },
+      "path": "+34_+026.json",
+      "segmentCount": 197
+    },
+    {
+      "id": "+34_+132",
+      "bounds": {
+        "west": 132,
+        "south": 34,
+        "east": 134,
+        "north": 36
+      },
+      "path": "+34_+132.json",
+      "segmentCount": 715
+    },
+    {
+      "id": "+34_+134",
+      "bounds": {
+        "west": 134,
+        "south": 34,
+        "east": 136,
+        "north": 36
+      },
+      "path": "+34_+134.json",
+      "segmentCount": 621
+    },
+    {
+      "id": "+34_+136",
+      "bounds": {
+        "west": 136,
+        "south": 34,
+        "east": 138,
+        "north": 36
+      },
+      "path": "+34_+136.json",
+      "segmentCount": 322
+    },
+    {
+      "id": "+34_+138",
+      "bounds": {
+        "west": 138,
+        "south": 34,
+        "east": 140,
+        "north": 36
+      },
+      "path": "+34_+138.json",
+      "segmentCount": 350
+    },
+    {
+      "id": "+34_+140",
+      "bounds": {
+        "west": 140,
+        "south": 34,
+        "east": 142,
+        "north": 36
+      },
+      "path": "+34_+140.json",
+      "segmentCount": 60
+    },
+    {
+      "id": "+36_+010",
+      "bounds": {
+        "west": 10,
+        "south": 36,
+        "east": 12,
+        "north": 38
+      },
+      "path": "+36_+010.json",
+      "segmentCount": 156
+    },
+    {
+      "id": "+36_+012",
+      "bounds": {
+        "west": 12,
+        "south": 36,
+        "east": 14,
+        "north": 38
+      },
+      "path": "+36_+012.json",
+      "segmentCount": 117
+    },
+    {
+      "id": "+36_+014",
+      "bounds": {
+        "west": 14,
+        "south": 36,
+        "east": 16,
+        "north": 38
+      },
+      "path": "+36_+014.json",
+      "segmentCount": 153
+    },
+    {
+      "id": "+36_+016",
+      "bounds": {
+        "west": 16,
+        "south": 36,
+        "east": 18,
+        "north": 38
+      },
+      "path": "+36_+016.json",
+      "segmentCount": 7
+    },
+    {
+      "id": "+36_+020",
+      "bounds": {
+        "west": 20,
+        "south": 36,
+        "east": 22,
+        "north": 38
+      },
+      "path": "+36_+020.json",
+      "segmentCount": 188
+    },
+    {
+      "id": "+36_+022",
+      "bounds": {
+        "west": 22,
+        "south": 36,
+        "east": 24,
+        "north": 38
+      },
+      "path": "+36_+022.json",
+      "segmentCount": 754
+    },
+    {
+      "id": "+36_+024",
+      "bounds": {
+        "west": 24,
+        "south": 36,
+        "east": 26,
+        "north": 38
+      },
+      "path": "+36_+024.json",
+      "segmentCount": 778
+    },
+    {
+      "id": "+36_+026",
+      "bounds": {
+        "west": 26,
+        "south": 36,
+        "east": 28,
+        "north": 38
+      },
+      "path": "+36_+026.json",
+      "segmentCount": 1129
+    },
+    {
+      "id": "+36_+028",
+      "bounds": {
+        "west": 28,
+        "south": 36,
+        "east": 30,
+        "north": 38
+      },
+      "path": "+36_+028.json",
+      "segmentCount": 573
+    },
+    {
+      "id": "+36_+132",
+      "bounds": {
+        "west": 132,
+        "south": 36,
+        "east": 134,
+        "north": 38
+      },
+      "path": "+36_+132.json",
+      "segmentCount": 83
+    },
+    {
+      "id": "+36_+134",
+      "bounds": {
+        "west": 134,
+        "south": 36,
+        "east": 136,
+        "north": 38
+      },
+      "path": "+36_+134.json",
+      "segmentCount": 2
+    },
+    {
+      "id": "+36_+136",
+      "bounds": {
+        "west": 136,
+        "south": 36,
+        "east": 138,
+        "north": 38
+      },
+      "path": "+36_+136.json",
+      "segmentCount": 182
+    },
+    {
+      "id": "+36_+138",
+      "bounds": {
+        "west": 138,
+        "south": 36,
+        "east": 140,
+        "north": 38
+      },
+      "path": "+36_+138.json",
+      "segmentCount": 49
+    },
+    {
+      "id": "+36_+140",
+      "bounds": {
+        "west": 140,
+        "south": 36,
+        "east": 142,
+        "north": 38
+      },
+      "path": "+36_+140.json",
+      "segmentCount": 54
+    },
+    {
+      "id": "+38_+012",
+      "bounds": {
+        "west": 12,
+        "south": 38,
+        "east": 14,
+        "north": 40
+      },
+      "path": "+38_+012.json",
+      "segmentCount": 87
+    },
+    {
+      "id": "+38_+014",
+      "bounds": {
+        "west": 14,
+        "south": 38,
+        "east": 16,
+        "north": 40
+      },
+      "path": "+38_+014.json",
+      "segmentCount": 206
+    },
+    {
+      "id": "+38_+016",
+      "bounds": {
+        "west": 16,
+        "south": 38,
+        "east": 18,
+        "north": 40
+      },
+      "path": "+38_+016.json",
+      "segmentCount": 116
+    },
+    {
+      "id": "+38_+018",
+      "bounds": {
+        "west": 18,
+        "south": 38,
+        "east": 20,
+        "north": 40
+      },
+      "path": "+38_+018.json",
+      "segmentCount": 156
+    },
+    {
+      "id": "+38_+020",
+      "bounds": {
+        "west": 20,
+        "south": 38,
+        "east": 22,
+        "north": 40
+      },
+      "path": "+38_+020.json",
+      "segmentCount": 817
+    },
+    {
+      "id": "+38_+022",
+      "bounds": {
+        "west": 22,
+        "south": 38,
+        "east": 24,
+        "north": 40
+      },
+      "path": "+38_+022.json",
+      "segmentCount": 768
+    },
+    {
+      "id": "+38_+024",
+      "bounds": {
+        "west": 24,
+        "south": 38,
+        "east": 26,
+        "north": 40
+      },
+      "path": "+38_+024.json",
+      "segmentCount": 556
+    },
+    {
+      "id": "+38_+026",
+      "bounds": {
+        "west": 26,
+        "south": 38,
+        "east": 28,
+        "north": 40
+      },
+      "path": "+38_+026.json",
+      "segmentCount": 696
+    },
+    {
+      "id": "+38_+138",
+      "bounds": {
+        "west": 138,
+        "south": 38,
+        "east": 140,
+        "north": 40
+      },
+      "path": "+38_+138.json",
+      "segmentCount": 111
+    },
+    {
+      "id": "+38_+140",
+      "bounds": {
+        "west": 140,
+        "south": 38,
+        "east": 142,
+        "north": 40
+      },
+      "path": "+38_+140.json",
+      "segmentCount": 319
+    },
+    {
+      "id": "+38_+142",
+      "bounds": {
+        "west": 142,
+        "south": 38,
+        "east": 144,
+        "north": 40
+      },
+      "path": "+38_+142.json",
+      "segmentCount": 35
+    },
+    {
+      "id": "+40_+010",
+      "bounds": {
+        "west": 10,
+        "south": 40,
+        "east": 12,
+        "north": 42
+      },
+      "path": "+40_+010.json",
+      "segmentCount": 1
+    },
+    {
+      "id": "+40_+012",
+      "bounds": {
+        "west": 12,
+        "south": 40,
+        "east": 14,
+        "north": 42
+      },
+      "path": "+40_+012.json",
+      "segmentCount": 138
+    },
+    {
+      "id": "+40_+014",
+      "bounds": {
+        "west": 14,
+        "south": 40,
+        "east": 16,
+        "north": 42
+      },
+      "path": "+40_+014.json",
+      "segmentCount": 165
+    },
+    {
+      "id": "+40_+016",
+      "bounds": {
+        "west": 16,
+        "south": 40,
+        "east": 18,
+        "north": 42
+      },
+      "path": "+40_+016.json",
+      "segmentCount": 123
+    },
+    {
+      "id": "+40_+018",
+      "bounds": {
+        "west": 18,
+        "south": 40,
+        "east": 20,
+        "north": 42
+      },
+      "path": "+40_+018.json",
+      "segmentCount": 261
+    },
+    {
+      "id": "+40_+022",
+      "bounds": {
+        "west": 22,
+        "south": 40,
+        "east": 24,
+        "north": 42
+      },
+      "path": "+40_+022.json",
+      "segmentCount": 252
+    },
+    {
+      "id": "+40_+024",
+      "bounds": {
+        "west": 24,
+        "south": 40,
+        "east": 26,
+        "north": 42
+      },
+      "path": "+40_+024.json",
+      "segmentCount": 260
+    },
+    {
+      "id": "+40_+026",
+      "bounds": {
+        "west": 26,
+        "south": 40,
+        "east": 28,
+        "north": 42
+      },
+      "path": "+40_+026.json",
+      "segmentCount": 332
+    },
+    {
+      "id": "+40_+028",
+      "bounds": {
+        "west": 28,
+        "south": 40,
+        "east": 30,
+        "north": 42
+      },
+      "path": "+40_+028.json",
+      "segmentCount": 322
+    },
+    {
+      "id": "+40_+138",
+      "bounds": {
+        "west": 138,
+        "south": 40,
+        "east": 140,
+        "north": 42
+      },
+      "path": "+40_+138.json",
+      "segmentCount": 51
+    },
+    {
+      "id": "+40_+140",
+      "bounds": {
+        "west": 140,
+        "south": 40,
+        "east": 142,
+        "north": 42
+      },
+      "path": "+40_+140.json",
+      "segmentCount": 379
+    },
+    {
+      "id": "+40_+142",
+      "bounds": {
+        "west": 142,
+        "south": 40,
+        "east": 144,
+        "north": 42
+      },
+      "path": "+40_+142.json",
+      "segmentCount": 8
+    },
+    {
+      "id": "+42_+010",
+      "bounds": {
+        "west": 10,
+        "south": 42,
+        "east": 12,
+        "north": 44
+      },
+      "path": "+42_+010.json",
+      "segmentCount": 229
+    },
+    {
+      "id": "+42_+012",
+      "bounds": {
+        "west": 12,
+        "south": 42,
+        "east": 14,
+        "north": 44
+      },
+      "path": "+42_+012.json",
+      "segmentCount": 48
+    },
+    {
+      "id": "+42_+014",
+      "bounds": {
+        "west": 14,
+        "south": 42,
+        "east": 16,
+        "north": 44
+      },
+      "path": "+42_+014.json",
+      "segmentCount": 297
+    },
+    {
+      "id": "+42_+016",
+      "bounds": {
+        "west": 16,
+        "south": 42,
+        "east": 18,
+        "north": 44
+      },
+      "path": "+42_+016.json",
+      "segmentCount": 537
+    },
+    {
+      "id": "+42_+018",
+      "bounds": {
+        "west": 18,
+        "south": 42,
+        "east": 20,
+        "north": 44
+      },
+      "path": "+42_+018.json",
+      "segmentCount": 102
+    },
+    {
+      "id": "+42_+026",
+      "bounds": {
+        "west": 26,
+        "south": 42,
+        "east": 28,
+        "north": 44
+      },
+      "path": "+42_+026.json",
+      "segmentCount": 132
+    },
+    {
+      "id": "+42_+028",
+      "bounds": {
+        "west": 28,
+        "south": 42,
+        "east": 30,
+        "north": 44
+      },
+      "path": "+42_+028.json",
+      "segmentCount": 57
+    },
+    {
+      "id": "+42_+132",
+      "bounds": {
+        "west": 132,
+        "south": 42,
+        "east": 134,
+        "north": 44
+      },
+      "path": "+42_+132.json",
+      "segmentCount": 229
+    },
+    {
+      "id": "+42_+134",
+      "bounds": {
+        "west": 134,
+        "south": 42,
+        "east": 136,
+        "north": 44
+      },
+      "path": "+42_+134.json",
+      "segmentCount": 130
+    },
+    {
+      "id": "+42_+138",
+      "bounds": {
+        "west": 138,
+        "south": 42,
+        "east": 140,
+        "north": 44
+      },
+      "path": "+42_+138.json",
+      "segmentCount": 50
+    },
+    {
+      "id": "+42_+140",
+      "bounds": {
+        "west": 140,
+        "south": 42,
+        "east": 142,
+        "north": 44
+      },
+      "path": "+42_+140.json",
+      "segmentCount": 171
+    },
+    {
+      "id": "+42_+142",
+      "bounds": {
+        "west": 142,
+        "south": 42,
+        "east": 144,
+        "north": 44
+      },
+      "path": "+42_+142.json",
+      "segmentCount": 25
+    },
+    {
+      "id": "+42_+144",
+      "bounds": {
+        "west": 144,
+        "south": 42,
+        "east": 146,
+        "north": 44
+      },
+      "path": "+42_+144.json",
+      "segmentCount": 262
+    },
+    {
+      "id": "+44_+010",
+      "bounds": {
+        "west": 10,
+        "south": 44,
+        "east": 12,
+        "north": 46
+      },
+      "path": "+44_+010.json",
+      "segmentCount": 5
+    },
+    {
+      "id": "+44_+012",
+      "bounds": {
+        "west": 12,
+        "south": 44,
+        "east": 14,
+        "north": 46
+      },
+      "path": "+44_+012.json",
+      "segmentCount": 515
+    },
+    {
+      "id": "+44_+014",
+      "bounds": {
+        "west": 14,
+        "south": 44,
+        "east": 16,
+        "north": 46
+      },
+      "path": "+44_+014.json",
+      "segmentCount": 739
+    },
+    {
+      "id": "+44_+028",
+      "bounds": {
+        "west": 28,
+        "south": 44,
+        "east": 30,
+        "north": 46
+      },
+      "path": "+44_+028.json",
+      "segmentCount": 357
+    },
+    {
+      "id": "+44_+134",
+      "bounds": {
+        "west": 134,
+        "south": 44,
+        "east": 136,
+        "north": 46
+      },
+      "path": "+44_+134.json",
+      "segmentCount": 36
+    },
+    {
+      "id": "+44_+136",
+      "bounds": {
+        "west": 136,
+        "south": 44,
+        "east": 138,
+        "north": 46
+      },
+      "path": "+44_+136.json",
+      "segmentCount": 95
+    },
+    {
+      "id": "+44_+140",
+      "bounds": {
+        "west": 140,
+        "south": 44,
+        "east": 142,
+        "north": 46
+      },
+      "path": "+44_+140.json",
+      "segmentCount": 110
+    },
+    {
+      "id": "+44_+142",
+      "bounds": {
+        "west": 142,
+        "south": 44,
+        "east": 144,
+        "north": 46
+      },
+      "path": "+44_+142.json",
+      "segmentCount": 64
+    },
+    {
+      "id": "+44_+144",
+      "bounds": {
+        "west": 144,
+        "south": 44,
+        "east": 146,
+        "north": 46
+      },
+      "path": "+44_+144.json",
+      "segmentCount": 83
+    },
+    {
+      "id": "+56_+006",
+      "bounds": {
+        "west": 6,
+        "south": 56,
+        "east": 8,
+        "north": 58
+      },
+      "path": "+56_+006.json",
+      "segmentCount": 3
+    },
+    {
+      "id": "+56_+008",
+      "bounds": {
+        "west": 8,
+        "south": 56,
+        "east": 10,
+        "north": 58
+      },
+      "path": "+56_+008.json",
+      "segmentCount": 482
+    },
+    {
+      "id": "+56_+010",
+      "bounds": {
+        "west": 10,
+        "south": 56,
+        "east": 12,
+        "north": 58
+      },
+      "path": "+56_+010.json",
+      "segmentCount": 458
+    },
+    {
+      "id": "+56_+012",
+      "bounds": {
+        "west": 12,
+        "south": 56,
+        "east": 14,
+        "north": 58
+      },
+      "path": "+56_+012.json",
+      "segmentCount": 161
+    },
+    {
+      "id": "+58_+004",
+      "bounds": {
+        "west": 4,
+        "south": 58,
+        "east": 6,
+        "north": 60
+      },
+      "path": "+58_+004.json",
+      "segmentCount": 699
+    },
+    {
+      "id": "+58_+006",
+      "bounds": {
+        "west": 6,
+        "south": 58,
+        "east": 8,
+        "north": 60
+      },
+      "path": "+58_+006.json",
+      "segmentCount": 340
+    },
+    {
+      "id": "+58_+008",
+      "bounds": {
+        "west": 8,
+        "south": 58,
+        "east": 10,
+        "north": 60
+      },
+      "path": "+58_+008.json",
+      "segmentCount": 220
+    },
+    {
+      "id": "+58_+010",
+      "bounds": {
+        "west": 10,
+        "south": 58,
+        "east": 12,
+        "north": 60
+      },
+      "path": "+58_+010.json",
+      "segmentCount": 697
+    },
+    {
+      "id": "+60_+004",
+      "bounds": {
+        "west": 4,
+        "south": 60,
+        "east": 6,
+        "north": 62
+      },
+      "path": "+60_+004.json",
+      "segmentCount": 1494
+    },
+    {
+      "id": "+60_+006",
+      "bounds": {
+        "west": 6,
+        "south": 60,
+        "east": 8,
+        "north": 62
+      },
+      "path": "+60_+006.json",
+      "segmentCount": 443
+    },
+    {
+      "id": "+62_+004",
+      "bounds": {
+        "west": 4,
+        "south": 62,
+        "east": 6,
+        "north": 64
+      },
+      "path": "+62_+004.json",
+      "segmentCount": 294
+    },
+    {
+      "id": "+62_+006",
+      "bounds": {
+        "west": 6,
+        "south": 62,
+        "east": 8,
+        "north": 64
+      },
+      "path": "+62_+006.json",
+      "segmentCount": 572
+    },
+    {
+      "id": "+62_+008",
+      "bounds": {
+        "west": 8,
+        "south": 62,
+        "east": 10,
+        "north": 64
+      },
+      "path": "+62_+008.json",
+      "segmentCount": 812
+    },
+    {
+      "id": "+62_+010",
+      "bounds": {
+        "west": 10,
+        "south": 62,
+        "east": 12,
+        "north": 64
+      },
+      "path": "+62_+010.json",
+      "segmentCount": 247
+    },
+    {
+      "id": "+64_+008",
+      "bounds": {
+        "west": 8,
+        "south": 64,
+        "east": 10,
+        "north": 66
+      },
+      "path": "+64_+008.json",
+      "segmentCount": 44
+    },
+    {
+      "id": "+64_+010",
+      "bounds": {
+        "west": 10,
+        "south": 64,
+        "east": 12,
+        "north": 66
+      },
+      "path": "+64_+010.json",
+      "segmentCount": 805
+    },
+    {
+      "id": "+64_+012",
+      "bounds": {
+        "west": 12,
+        "south": 64,
+        "east": 14,
+        "north": 66
+      },
+      "path": "+64_+012.json",
+      "segmentCount": 638
+    },
+    {
+      "id": "+66_+010",
+      "bounds": {
+        "west": 10,
+        "south": 66,
+        "east": 12,
+        "north": 68
+      },
+      "path": "+66_+010.json",
+      "segmentCount": 11
+    },
+    {
+      "id": "+66_+012",
+      "bounds": {
+        "west": 12,
+        "south": 66,
+        "east": 14,
+        "north": 68
+      },
+      "path": "+66_+012.json",
+      "segmentCount": 993
+    },
+    {
+      "id": "+68_+012",
+      "bounds": {
+        "west": 12,
+        "south": 68,
+        "east": 14,
+        "north": 70
+      },
+      "path": "+68_+012.json",
+      "segmentCount": 169
     }
   ]
 }
