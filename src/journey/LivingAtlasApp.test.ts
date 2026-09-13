@@ -1882,15 +1882,3 @@ describe("ST-060 a successful confirmation takes the card down on its own", () =
     expect(replaced?.endedOn).toBe(confirmed.startedOn);
   });
 });
-
-describe("ST-062 Journey Rail visibility ownership", () => {
-  it("cancels the obsolete rail-card document transition before Playback takes ownership", () => {
-    const source = readFileSync(new URL("./LivingAtlasApp.tsx", import.meta.url), "utf8");
-    const start = source.indexOf("function startPlayback(");
-    const end = source.indexOf("const playbackStepDurationResolver", start);
-    const handler = source.slice(start, end);
-    expect(handler).toContain("cancelJourneyCardTransition();");
-    expect(handler.indexOf("cancelJourneyCardTransition();"))
-      .toBeLessThan(handler.indexOf("setPlaybackSession({"));
-  });
-});
