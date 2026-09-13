@@ -1018,7 +1018,7 @@ export function homeBaseEvidenceDigest(snapshot: DigestSnapshot): string {
   // flag character per Journey. This keeps large legitimate histories compact
   // while preserving exact membership for the 90-day + two-new-Journeys rule.
   const compactToken = compactSupportToken(supports);
-  if (!compactToken) return exact;
+  if (!compactToken) return "";
   const boundedFields = [
     BOUNDED_DIGEST_PREFIX,
     String(latitude),
@@ -1029,7 +1029,12 @@ export function homeBaseEvidenceDigest(snapshot: DigestSnapshot): string {
     compactToken,
   ];
   const bounded = [...boundedFields, boundedDigestChecksum(boundedFields)].join(":");
-  return bounded.length <= HOME_BASE_EVIDENCE_DIGEST_MAX_LENGTH ? bounded : exact;
+  // A dismissal digest is part of the actionable suggestion contract. Never
+  // hand the UI a token that the persistence boundary must reject. Extremely
+  // large exact-support sets remain valid inference evidence, but no actionable
+  // suggestion surface is rendered until a bounded exact representation can
+  // carry the membership needed by the frozen two-new-Journeys policy.
+  return bounded.length <= HOME_BASE_EVIDENCE_DIGEST_MAX_LENGTH ? bounded : "";
 }
 
 /**

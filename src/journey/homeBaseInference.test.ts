@@ -1193,6 +1193,22 @@ describe("persistable Home Base evidence digests", () => {
     expect(isPersistableHomeBaseEvidenceDigest(wideDigest)).toBe(true);
   });
 
+  it("refuses to emit an unpersistable fallback after the compact exact set reaches the ceiling", () => {
+    const manySupports = Array.from({ length: 3000 }, (_value, index) => ({
+      journeyId: `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
+      supportsStart: true,
+      supportsEnd: true,
+    }));
+    const oversized = homeBaseEvidenceDigest({
+      anchor: SHENZHEN,
+      supports: manySupports,
+      evidenceStartedOn: "2010-01-01",
+      evidenceEndedOn: "2026-04-15",
+    });
+    expect(oversized).toBe("");
+    expect(isPersistableHomeBaseEvidenceDigest(oversized)).toBe(false);
+  });
+
   it("keeps exact two-new-Journeys semantics with compact persisted digests", () => {
     const support = (index: number) => ({
       journeyId: "00000000-0000-4000-8000-" + String(index).padStart(12, "0"),

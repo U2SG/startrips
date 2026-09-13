@@ -5,23 +5,19 @@ import {
   deleteHomeBasePeriodForAtlas,
   listHomeBasePeriodsForAtlas,
   listHomeBaseDismissalsForAtlas,
-  recordHomeBaseDismissalForAtlas,
+  recordAuthoritativeHomeBaseDismissalForAtlas,
   HomeBaseDismissalDigestTooLargeError,
+  HomeBaseDismissalNotCurrentError,
   updateHomeBasePeriodForAtlas,
   type HomeBasePeriodPatch,
   type HomeBasePeriodValues,
 } from "../repositories/home-base-repository";
-import { listJourneysForAtlas } from "../repositories/journey-repository";
 import { isPersistedCalendarDate } from "../../src/journey/calendarDate";
 import { isHomeBaseSource } from "../../src/journey/homeBase";
 import {
   isPersistableHomeBaseEvidenceDigest,
   type HomeBaseDismissal,
 } from "../../src/journey/homeBaseInference";
-import {
-  homeBaseInferenceEvidenceBoundaryAfterRecordedHistory,
-  inferHomeBaseCandidateWithDismissals,
-} from "../../src/journey/homeBaseSuggestion";
 import { readJsonObject } from "./json-body";
 
 /**
@@ -153,7 +149,10 @@ type HomeBaseDismissalInput = {
 export type HomeBaseDismissalValues = {
   kind: HomeBaseDismissal["kind"];
   digest: string;
+  /** Trusted server date persisted for the 90-day policy clock. */
   dismissedOn: string;
+  /** Browser calendar date used only to reproduce the digest the member saw. */
+  evaluationDate: string;
 };
 
 /**
@@ -162,9 +161,11 @@ export type HomeBaseDismissalValues = {
  * produced. That prevents an authenticated caller from turning the private
  * dismissal history into arbitrary unbounded storage.
  *
- * The occurrence date is server-owned. The browser still sends `dismissedOn`
- * for wire compatibility, but it cannot move the 90-day re-prompt clock
- * forwards or backwards by changing its local clock.
+ * The policy date is server-owned. The browser's calendar date is retained
+ * only long enough to reproduce the inference snapshot it rendered. A real
+ * timezone can differ from UTC by at most one calendar day, so anything
+ * farther away is refused instead of letting client time steer the 90-day
+ * re-prompt clock.
  */
 export function parseHomeBaseDismissalInput(
   body: HomeBaseDismissalInput,
@@ -182,7 +183,10 @@ export function parseHomeBaseDismissalInput(
   ) {
     return null;
   }
-  return { kind, digest, dismissedOn };
+  const requestedDay = Date.parse(`${requestedDismissedOn}T00:00:00.000Z`) / 86_400_000;
+  const serverDay = Date.parse(`${dismissedOn}T00:00:00.000Z`) / 86_400_000;
+  if (Math.abs(requestedDay - serverDay) > 1) return null;
+  return { kind, digest, dismissedOn, evaluationDate: requestedDismissedOn };
 }
 
 export const homeBaseRoutes = new Hono();
@@ -215,45 +219,20 @@ homeBaseRoutes.post("/dismissal", async (context) => {
       400,
     );
   }
-  const [journeys, periods, dismissals] = await Promise.all([
-    listJourneysForAtlas(atlas.id),
-    listHomeBasePeriodsForAtlas(atlas.id),
-    listHomeBaseDismissalsForAtlas(atlas.id),
-  ]);
-  const currentPeriod = periods.find((period) => period.endedOn === null) ?? null;
-  const authoritativeInference = inferHomeBaseCandidateWithDismissals({
-    journeys: journeys.map((journey) => ({
-      id: journey.id,
-      startedOn: journey.startedOn,
-      endedOn: journey.endedOn,
-      routePoints: journey.routePoints.map((point) => ({
-        id: point.id,
-        sortOrder: point.sortOrder,
-        latitude: point.latitude,
-        longitude: point.longitude,
-      })),
-    })),
-    confirmedPeriod: currentPeriod,
-    evaluationDate: input.dismissedOn,
-    evidenceNotBefore: homeBaseInferenceEvidenceBoundaryAfterRecordedHistory(periods),
-  }, dismissals);
-  if (
-    (authoritativeInference.state !== "suggested" && authoritativeInference.state !== "move_suggested")
-    || authoritativeInference.evidenceDigest !== input.digest
-  ) {
-    return context.json(
-      { error: "INVALID_HOME_BASE_DISMISSAL", message: "Invalid Home Base dismissal data" },
-      400,
-    );
-  }
-
   try {
-    const dismissal = await recordHomeBaseDismissalForAtlas(atlas.id, input);
+    const dismissal = await recordAuthoritativeHomeBaseDismissalForAtlas(
+      atlas.id,
+      { kind: input.kind, digest: input.digest, dismissedOn: input.dismissedOn },
+      input.evaluationDate,
+    );
     if (!dismissal) return context.json({ error: "ATLAS_NOT_FOUND" }, 404);
     context.header("Cache-Control", HOME_BASE_CACHE_CONTROL);
     return context.json({ dismissal }, 201);
   } catch (error) {
-    if (error instanceof HomeBaseDismissalDigestTooLargeError) {
+    if (
+      error instanceof HomeBaseDismissalDigestTooLargeError
+      || error instanceof HomeBaseDismissalNotCurrentError
+    ) {
       return context.json({
         error: "INVALID_HOME_BASE_DISMISSAL",
         message: "Invalid Home Base dismissal data",

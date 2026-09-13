@@ -362,17 +362,37 @@ describe("POST /api/home-bases", () => {
 describe("the Home Base dismissal body", () => {
   const DIGEST = validDismissalDigest();
 
-  it("accepts only the two answers the product defines and uses trusted server time", () => {
+  it("accepts only the two answers, keeps a one-day timezone date for evidence, and uses server policy time", () => {
+    expect(parseHomeBaseDismissalInput({
+      kind: "soft",
+      evidenceDigest: DIGEST,
+      dismissedOn: "2026-04-02",
+    }, UTC_TEST_NOW)).toEqual({
+      kind: "soft",
+      digest: DIGEST,
+      dismissedOn: "2026-04-02",
+      evaluationDate: "2026-04-02",
+    });
+    expect(parseHomeBaseDismissalInput({
+      kind: "rejected",
+      evidenceDigest: DIGEST,
+      dismissedOn: "2026-04-03",
+    }, UTC_TEST_NOW)).toEqual({
+      kind: "rejected",
+      digest: DIGEST,
+      dismissedOn: "2026-04-02",
+      evaluationDate: "2026-04-03",
+    });
     expect(parseHomeBaseDismissalInput({
       kind: "soft",
       evidenceDigest: DIGEST,
       dismissedOn: "2099-12-31",
-    }, UTC_TEST_NOW)).toEqual({ kind: "soft", digest: DIGEST, dismissedOn: "2026-04-02" });
+    }, UTC_TEST_NOW)).toBeNull();
     expect(parseHomeBaseDismissalInput({
       kind: "rejected",
       evidenceDigest: DIGEST,
       dismissedOn: "2000-01-01",
-    }, UTC_TEST_NOW)).toEqual({ kind: "rejected", digest: DIGEST, dismissedOn: "2026-04-02" });
+    }, UTC_TEST_NOW)).toBeNull();
     expect(parseHomeBaseDismissalInput({
       kind: "snoozed",
       evidenceDigest: DIGEST,
@@ -444,12 +464,12 @@ describe("GET and POST /api/home-bases/dismissal", () => {
     DIGEST = await seedDismissalSuggestion(neighbour.atlasId);
   });
 
-  it("derives the atlas from the session, uses server time, and persists only the current authoritative suggestion", async () => {
+  it("derives the atlas from the session, uses server policy time, and persists only the current authoritative suggestion", async () => {
     const serverDateBefore = new Date().toISOString().slice(0, 10);
     const response = await postDismissal(neighbour.cookie, {
       kind: "soft",
       evidenceDigest: DIGEST,
-      dismissedOn: "2099-12-31",
+      dismissedOn: serverDateBefore,
       atlasId: resident.atlasId,
       organizationId: resident.organizationId,
     });
@@ -458,7 +478,6 @@ describe("GET and POST /api/home-bases/dismissal", () => {
     const responseBody = await response.json() as { dismissal: { kind: string; digest: string; dismissedAt: string } };
     expect(responseBody.dismissal).toMatchObject({ kind: "soft", digest: DIGEST });
     expect([serverDateBefore, serverDateAfter]).toContain(responseBody.dismissal.dismissedAt);
-    expect(responseBody.dismissal.dismissedAt).not.toBe("2099-12-31");
 
     const rows = await db
       .select({ atlasId: homeBaseDismissals.atlasId })
@@ -495,6 +514,33 @@ describe("GET and POST /api/home-bases/dismissal", () => {
     const response = await postDismissal(neighbour.cookie, {
       kind: "rejected",
       evidenceDigest: otherAtlasDigest,
+      dismissedOn: new Date().toISOString().slice(0, 10),
+    });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: "INVALID_HOME_BASE_DISMISSAL" });
+    const [row] = await db
+      .select({ total: sql<number>`count(*)::int` })
+      .from(homeBaseDismissals)
+      .where(eq(homeBaseDismissals.atlasId, neighbour.atlasId));
+    expect(row.total).toBe(0);
+  });
+
+  it("refuses a once-valid digest after authoritative Atlas evidence changes", async () => {
+    const [newJourney] = await db.insert(journeys).values({
+      atlasId: neighbour.atlasId,
+      title: "New Home evidence",
+      startedOn: "2026-05-15",
+      endedOn: "2026-05-15",
+      createdByUserId: "home-base-route-test",
+    }).returning({ id: journeys.id });
+    await db.insert(journeyRoutePoints).values([
+      { journeyId: newJourney.id, sortOrder: 0, latitude: 22.5431, longitude: 114.0579, label: "Home", isStop: true },
+      { journeyId: newJourney.id, sortOrder: 1, latitude: 22.5431, longitude: 114.0579, label: "Home", isStop: true },
+    ]);
+
+    const response = await postDismissal(neighbour.cookie, {
+      kind: "soft",
+      evidenceDigest: DIGEST,
       dismissedOn: new Date().toISOString().slice(0, 10),
     });
     expect(response.status).toBe(400);

@@ -1,6 +1,11 @@
 import { createHash } from "node:crypto";
-import { and, asc, eq, sql } from "drizzle-orm";
-import { homeBaseDismissals, homeBasePeriods } from "../db/app-schema";
+import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
+import {
+  homeBaseDismissals,
+  homeBasePeriods,
+  journeyRoutePoints,
+  journeys,
+} from "../db/app-schema";
 import { db } from "../db/client";
 import { lockActiveAtlas } from "./journey-repository";
 import {
@@ -16,6 +21,10 @@ import {
   type HomeBaseDismissal,
 } from "../../src/journey/homeBaseInference";
 import { haversineDistanceKm } from "../../src/journey/mediaPlacement";
+import {
+  homeBaseInferenceEvidenceBoundaryAfterRecordedHistory,
+  inferHomeBaseCandidateWithDismissals,
+} from "../../src/journey/homeBaseSuggestion";
 
 /**
  * #231: the write side of the Home Base timeline.
@@ -319,122 +328,232 @@ export async function listHomeBaseDismissalsForAtlas(
   return rows.map((row) => ({ ...row, kind: row.kind as HomeBaseDismissal["kind"] }));
 }
 
-export async function recordHomeBaseDismissalForAtlas(
+type HomeBaseDismissalWriteValues = {
+  kind: HomeBaseDismissal["kind"];
+  digest: string;
+  dismissedOn: string;
+};
+
+export class HomeBaseDismissalNotCurrentError extends Error {
+  constructor() {
+    super("HOME_BASE_DISMISSAL_NOT_CURRENT");
+    this.name = "HomeBaseDismissalNotCurrentError";
+  }
+}
+
+async function loadDismissals(
+  transaction: Transaction,
   atlasId: string,
-  values: { kind: HomeBaseDismissal["kind"]; digest: string; dismissedOn: string },
-): Promise<HomeBaseDismissal | undefined> {
+): Promise<HomeBaseDismissal[]> {
+  const rows = await transaction
+    .select({
+      kind: homeBaseDismissals.kind,
+      digest: homeBaseDismissals.evidenceDigest,
+      dismissedAt: homeBaseDismissals.dismissedOn,
+    })
+    .from(homeBaseDismissals)
+    .where(eq(homeBaseDismissals.atlasId, atlasId))
+    .orderBy(asc(homeBaseDismissals.dismissedOn), asc(homeBaseDismissals.evidenceDigest));
+  return rows.map((row) => ({ ...row, kind: row.kind as HomeBaseDismissal["kind"] }));
+}
+
+async function loadInferenceJourneys(transaction: Transaction, atlasId: string) {
+  const journeyRows = await transaction
+    .select({
+      id: journeys.id,
+      startedOn: journeys.startedOn,
+      endedOn: journeys.endedOn,
+      deletionStartedAt: journeys.deletionStartedAt,
+    })
+    .from(journeys)
+    .where(eq(journeys.atlasId, atlasId))
+    .orderBy(asc(journeys.startedOn), asc(journeys.createdAt), asc(journeys.id))
+    .for("update");
+  const activeJourneyRows = journeyRows.filter((journey) => journey.deletionStartedAt === null);
+  if (activeJourneyRows.length === 0) return [];
+
+  const routeRows = await transaction
+    .select({
+      id: journeyRoutePoints.id,
+      journeyId: journeyRoutePoints.journeyId,
+      sortOrder: journeyRoutePoints.sortOrder,
+      latitude: journeyRoutePoints.latitude,
+      longitude: journeyRoutePoints.longitude,
+    })
+    .from(journeyRoutePoints)
+    .where(inArray(journeyRoutePoints.journeyId, activeJourneyRows.map((journey) => journey.id)))
+    .orderBy(asc(journeyRoutePoints.journeyId), asc(journeyRoutePoints.sortOrder));
+  const routesByJourney = new Map<string, typeof routeRows>();
+  for (const point of routeRows) {
+    const route = routesByJourney.get(point.journeyId);
+    if (route) route.push(point);
+    else routesByJourney.set(point.journeyId, [point]);
+  }
+  return activeJourneyRows.map((journey) => ({
+    id: journey.id,
+    startedOn: journey.startedOn,
+    endedOn: journey.endedOn,
+    routePoints: (routesByJourney.get(journey.id) ?? []).map((point) => ({
+      id: point.id,
+      sortOrder: point.sortOrder,
+      latitude: point.latitude,
+      longitude: point.longitude,
+    })),
+  }));
+}
+
+async function recordHomeBaseDismissalInTransaction(
+  transaction: Transaction,
+  atlasId: string,
+  values: HomeBaseDismissalWriteValues,
+): Promise<HomeBaseDismissal> {
   if (values.digest.length > HOME_BASE_EVIDENCE_DIGEST_MAX_LENGTH) {
     throw new HomeBaseDismissalDigestTooLargeError();
   }
-  return await db.transaction(async (transaction) => {
-    if (!await lockActiveAtlas(transaction, atlasId)) return undefined;
 
-    const evidenceDigestHash = homeBaseDismissalDigestHash(values.digest);
-    const [existing] = await transaction
-      .select({
-        id: homeBaseDismissals.id,
-        kind: homeBaseDismissals.kind,
-        digest: homeBaseDismissals.evidenceDigest,
-        dismissedAt: homeBaseDismissals.dismissedOn,
-      })
-      .from(homeBaseDismissals)
-      .where(and(
-        eq(homeBaseDismissals.atlasId, atlasId),
-        eq(homeBaseDismissals.evidenceDigestHash, evidenceDigestHash),
-      ))
-      .limit(1);
+  const evidenceDigestHash = homeBaseDismissalDigestHash(values.digest);
+  const [existing] = await transaction
+    .select({
+      id: homeBaseDismissals.id,
+      kind: homeBaseDismissals.kind,
+      digest: homeBaseDismissals.evidenceDigest,
+      dismissedAt: homeBaseDismissals.dismissedOn,
+    })
+    .from(homeBaseDismissals)
+    .where(and(
+      eq(homeBaseDismissals.atlasId, atlasId),
+      eq(homeBaseDismissals.evidenceDigestHash, evidenceDigestHash),
+    ))
+    .limit(1);
 
-    if (existing && existing.digest !== values.digest) {
-      throw new Error("HOME_BASE_DISMISSAL_DIGEST_HASH_COLLISION");
-    }
+  if (existing && existing.digest !== values.digest) {
+    throw new Error("HOME_BASE_DISMISSAL_DIGEST_HASH_COLLISION");
+  }
 
-    const regionRows = await transaction
-      .select({
-        id: homeBaseDismissals.id,
-        kind: homeBaseDismissals.kind,
-        digest: homeBaseDismissals.evidenceDigest,
-        dismissedAt: homeBaseDismissals.dismissedOn,
-      })
-      .from(homeBaseDismissals)
-      .where(eq(homeBaseDismissals.atlasId, atlasId));
-    const sameRegionRows = regionRows
-      .map((row) => ({
-        row,
-        distanceKm: homeBaseDismissalRegionDistanceKm(row.digest, values.digest),
-      }))
-      .filter((match): match is { row: typeof regionRows[number]; distanceKm: number } => (
-        match.distanceKm !== null && match.distanceKm <= HOME_BASE_CLUSTER_RADIUS_KM
-      ))
-      .sort((first, second) => first.distanceKm - second.distanceKm);
-    if (sameRegionRows.length > 0) {
-      const rejected = sameRegionRows.find((match) => match.row.kind === "rejected");
-      const target = (rejected ?? sameRegionRows[0]!).row;
-      // Update one closest semantic region only. A new candidate can sit between
-      // two historical anchors that are themselves >25 km apart; deleting every
-      // row that matches the incoming midpoint would incorrectly merge them.
-
-      const keepRejected = target.kind === "rejected";
-      const finalDigest = keepRejected ? target.digest : values.digest;
-      const [row] = await transaction
-        .update(homeBaseDismissals)
-        .set({
-          kind: keepRejected ? "rejected" : values.kind,
-          evidenceDigest: finalDigest,
-          evidenceDigestHash: homeBaseDismissalDigestHash(finalDigest),
-          dismissedOn: keepRejected ? target.dismissedAt : values.dismissedOn,
-          updatedAt: new Date(),
-        })
-        .where(eq(homeBaseDismissals.id, target.id))
-        .returning({
-          kind: homeBaseDismissals.kind,
-          digest: homeBaseDismissals.evidenceDigest,
-          dismissedAt: homeBaseDismissals.dismissedOn,
-        });
-      return { ...row, kind: row.kind as HomeBaseDismissal["kind"] };
-    }
-
-    const [countRow] = await transaction
-      .select({ total: sql<number>`count(*)::int` })
-      .from(homeBaseDismissals)
-      .where(eq(homeBaseDismissals.atlasId, atlasId));
-    if ((countRow?.total ?? 0) >= MAX_HOME_BASE_DISMISSALS_PER_ATLAS) {
-      // Keep storage bounded without permanently locking the member out of a
-      // future answer. Prefer the oldest soft dismissal because it is the only
-      // answer kind designed to expire/re-prompt; if an Atlas has accumulated
-      // only explicit rejections, retire the oldest one as a last-resort ring
-      // buffer fallback so a new region can still be answered.
-      const [eviction] = await transaction
-        .select({ id: homeBaseDismissals.id })
-        .from(homeBaseDismissals)
-        .where(eq(homeBaseDismissals.atlasId, atlasId))
-        .orderBy(
-          sql`case when ${homeBaseDismissals.kind} = 'soft' then 0 else 1 end`,
-          asc(homeBaseDismissals.dismissedOn),
-          asc(homeBaseDismissals.updatedAt),
-          asc(homeBaseDismissals.id),
-        )
-        .limit(1);
-      if (eviction) {
-        await transaction
-          .delete(homeBaseDismissals)
-          .where(eq(homeBaseDismissals.id, eviction.id));
-      }
-    }
-
+  const regionRows = await transaction
+    .select({
+      id: homeBaseDismissals.id,
+      kind: homeBaseDismissals.kind,
+      digest: homeBaseDismissals.evidenceDigest,
+      dismissedAt: homeBaseDismissals.dismissedOn,
+    })
+    .from(homeBaseDismissals)
+    .where(eq(homeBaseDismissals.atlasId, atlasId));
+  const sameRegionRows = regionRows
+    .map((row) => ({
+      row,
+      distanceKm: homeBaseDismissalRegionDistanceKm(row.digest, values.digest),
+    }))
+    .filter((match): match is { row: typeof regionRows[number]; distanceKm: number } => (
+      match.distanceKm !== null && match.distanceKm <= HOME_BASE_CLUSTER_RADIUS_KM
+    ))
+    .sort((first, second) => first.distanceKm - second.distanceKm);
+  if (sameRegionRows.length > 0) {
+    const rejected = sameRegionRows.find((match) => match.row.kind === "rejected");
+    const target = (rejected ?? sameRegionRows[0]!).row;
+    // Update one closest semantic region only. A new candidate can sit between
+    // two historical anchors that are themselves >25 km apart; deleting every
+    // row that matches the incoming midpoint would incorrectly merge them.
+    const keepRejected = target.kind === "rejected";
+    const finalDigest = keepRejected ? target.digest : values.digest;
     const [row] = await transaction
-      .insert(homeBaseDismissals)
-      .values({
-        atlasId,
-        kind: values.kind,
-        evidenceDigest: values.digest,
-        evidenceDigestHash,
-        dismissedOn: values.dismissedOn,
+      .update(homeBaseDismissals)
+      .set({
+        kind: keepRejected ? "rejected" : values.kind,
+        evidenceDigest: finalDigest,
+        evidenceDigestHash: homeBaseDismissalDigestHash(finalDigest),
+        dismissedOn: keepRejected ? target.dismissedAt : values.dismissedOn,
+        updatedAt: new Date(),
       })
+      .where(eq(homeBaseDismissals.id, target.id))
       .returning({
         kind: homeBaseDismissals.kind,
         digest: homeBaseDismissals.evidenceDigest,
         dismissedAt: homeBaseDismissals.dismissedOn,
       });
     return { ...row, kind: row.kind as HomeBaseDismissal["kind"] };
+  }
+
+  const [countRow] = await transaction
+    .select({ total: sql<number>`count(*)::int` })
+    .from(homeBaseDismissals)
+    .where(eq(homeBaseDismissals.atlasId, atlasId));
+  if ((countRow?.total ?? 0) >= MAX_HOME_BASE_DISMISSALS_PER_ATLAS) {
+    const [eviction] = await transaction
+      .select({ id: homeBaseDismissals.id })
+      .from(homeBaseDismissals)
+      .where(eq(homeBaseDismissals.atlasId, atlasId))
+      .orderBy(
+        sql`case when ${homeBaseDismissals.kind} = 'soft' then 0 else 1 end`,
+        asc(homeBaseDismissals.dismissedOn),
+        asc(homeBaseDismissals.updatedAt),
+        asc(homeBaseDismissals.id),
+      )
+      .limit(1);
+    if (eviction) {
+      await transaction.delete(homeBaseDismissals).where(eq(homeBaseDismissals.id, eviction.id));
+    }
+  }
+
+  const [row] = await transaction
+    .insert(homeBaseDismissals)
+    .values({
+      atlasId,
+      kind: values.kind,
+      evidenceDigest: values.digest,
+      evidenceDigestHash,
+      dismissedOn: values.dismissedOn,
+    })
+    .returning({
+      kind: homeBaseDismissals.kind,
+      digest: homeBaseDismissals.evidenceDigest,
+      dismissedAt: homeBaseDismissals.dismissedOn,
+    });
+  return { ...row, kind: row.kind as HomeBaseDismissal["kind"] };
+}
+
+export async function recordHomeBaseDismissalForAtlas(
+  atlasId: string,
+  values: HomeBaseDismissalWriteValues,
+): Promise<HomeBaseDismissal | undefined> {
+  return await db.transaction(async (transaction) => {
+    if (!await lockActiveAtlas(transaction, atlasId)) return undefined;
+    return await recordHomeBaseDismissalInTransaction(transaction, atlasId, values);
+  });
+}
+
+/**
+ * Validate the browser's answer against one locked snapshot of the Atlas and
+ * persist it before releasing that same lock. The Atlas lock serializes normal
+ * Journey/Home-period writes; current Journey rows are also locked so the
+ * soft-delete/restore lifecycle cannot change evidence between proof and write.
+ */
+export async function recordAuthoritativeHomeBaseDismissalForAtlas(
+  atlasId: string,
+  values: HomeBaseDismissalWriteValues,
+  evaluationDate: string,
+): Promise<HomeBaseDismissal | undefined> {
+  return await db.transaction(async (transaction) => {
+    if (!await lockActiveAtlas(transaction, atlasId)) return undefined;
+    const [journeyHistory, periodRows, dismissals] = await Promise.all([
+      loadInferenceJourneys(transaction, atlasId),
+      loadHistory(transaction, atlasId),
+      loadDismissals(transaction, atlasId),
+    ]);
+    const periods = periodRows.map(asRecord);
+    const currentPeriod = periods.find((period) => period.endedOn === null) ?? null;
+    const authoritativeInference = inferHomeBaseCandidateWithDismissals({
+      journeys: journeyHistory,
+      confirmedPeriod: currentPeriod,
+      evaluationDate,
+      evidenceNotBefore: homeBaseInferenceEvidenceBoundaryAfterRecordedHistory(periods),
+    }, dismissals);
+    if (
+      (authoritativeInference.state !== "suggested" && authoritativeInference.state !== "move_suggested")
+      || authoritativeInference.evidenceDigest !== values.digest
+    ) {
+      throw new HomeBaseDismissalNotCurrentError();
+    }
+    return await recordHomeBaseDismissalInTransaction(transaction, atlasId, values);
   });
 }
