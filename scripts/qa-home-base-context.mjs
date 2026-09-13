@@ -64,11 +64,16 @@ function journey(id, title, startedOn, latitude, longitude) {
 
 const journeys = [
   journey("aaaaaaaa-1111-4111-8111-111111111111", "成都旧日", "2023-06-01", 30.5728, 104.0668),
-  // Keep today's active Journey well south of Beijing on almost the same meridian.
-  // The 15-degree separation stays comfortably beyond the renderer's 0.18-unit
-  // Route Point raycast threshold while the tall compact viewport still contains
-  // the current Home projection. Beijing is rank-0, so city/Home overlap is stable.
+  // Keep desktop arbitration comfortably beyond the renderer's 0.18-unit Route
+  // Point threshold while Beijing remains the exact Home/city overlap fixture.
   journey("bbbbbbbb-2222-4222-8222-222222222222", "赣南今夏", "2026-06-01", 25.0, 116.4),
+];
+const mobileJourneys = [
+  journeys[0],
+  // Compact focus framing is tighter. Move only the QA Journey focus closer in
+  // latitude while keeping enough longitude separation for the renderer's Route
+  // Point threshold, so Home remains visible without becoming a Route Point hit.
+  journey("bbbbbbbb-2222-4222-8222-222222222222", "川北今夏", "2026-06-01", 31.5, 107.0),
 ];
 
 const browser = await launchQaBrowser({
@@ -510,7 +515,7 @@ try {
   // The current Beijing Home is deliberately separated from both Journey Route
   // Points, so this proves ordinary Home activation without introducing an
   // empty-Atlas camera-seeding prerequisite into the ST-065 context contract.
-  const mobile = await openOwner({ width: 390, height: 844 });
+  const mobile = await openOwner({ width: 390, height: 844 }, { journeyRows: mobileJourneys });
   const mobilePage = mobile.page;
   const mobileMarker = await currentHomeMarker(mobilePage);
   const mobilePointerOwner = await clickProjectedHome(mobilePage, mobileMarker);
