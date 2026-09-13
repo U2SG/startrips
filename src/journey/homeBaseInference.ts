@@ -120,6 +120,8 @@ type DigestSnapshot = {
 };
 
 const DIGEST_PREFIX = "hbi-v2";
+export const HOME_BASE_EVIDENCE_DIGEST_MAX_LENGTH = 64 * 1024;
+const PERSISTED_JOURNEY_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const DAYS_BEFORE_MONTH = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334] as const;
 
 function isLeapYear(year: number): boolean {
@@ -862,6 +864,74 @@ export function homeBaseEvidenceDigest(snapshot: DigestSnapshot): string {
     supportToken,
     fnv1a32(canonical),
   ].join(":");
+}
+
+/**
+ * Validate an evidence digest at the persistence boundary. The inference core
+ * may parse historical/test digests leniently, but the authenticated write
+ * endpoint must only store a bounded digest that this implementation could
+ * have produced from persisted Journey UUIDs. Rebuilding the digest also
+ * verifies the checksum and canonical field encoding without normalising the
+ * byte-exact value that dismissal matching later consumes.
+ */
+export function isPersistableHomeBaseEvidenceDigest(digest: string): boolean {
+  if (!digest || digest.length > HOME_BASE_EVIDENCE_DIGEST_MAX_LENGTH || digest.trim() !== digest) {
+    return false;
+  }
+  const parts = digest.split(":");
+  if (parts.length !== 8 || parts[0] !== DIGEST_PREFIX) return false;
+  const latitude = Number(parts[1]);
+  const longitude = Number(parts[2]);
+  const journeyCount = Number(parts[3]);
+  const evidenceStartedOn = parts[4];
+  const evidenceEndedOn = parts[5];
+  if (
+    !Number.isFinite(latitude)
+    || latitude < -90
+    || latitude > 90
+    || !Number.isFinite(longitude)
+    || longitude < -180
+    || longitude > 180
+    || !Number.isInteger(journeyCount)
+    || journeyCount < HOME_BASE_SUGGESTED_MIN_JOURNEYS
+    || !isPersistedCalendarDate(evidenceStartedOn)
+    || !isPersistedCalendarDate(evidenceEndedOn)
+    || evidenceStartedOn > evidenceEndedOn
+  ) return false;
+
+  const supports: JourneySupport[] = [];
+  const seen = new Set<string>();
+  if (!parts[6]) return false;
+  for (const encodedSupport of parts[6].split(",")) {
+    const separator = encodedSupport.lastIndexOf("=");
+    if (separator <= 0) return false;
+    const flags = encodedSupport.slice(separator + 1);
+    if (!/^(?:10|01|11)$/.test(flags)) return false;
+    let journeyId: string;
+    try {
+      journeyId = decodeURIComponent(encodedSupport.slice(0, separator));
+    } catch {
+      return false;
+    }
+    if (
+      !PERSISTED_JOURNEY_ID_PATTERN.test(journeyId)
+      || seen.has(journeyId)
+      || encodeURIComponent(journeyId) !== encodedSupport.slice(0, separator)
+    ) return false;
+    seen.add(journeyId);
+    supports.push({
+      journeyId,
+      supportsStart: flags[0] === "1",
+      supportsEnd: flags[1] === "1",
+    });
+  }
+  if (supports.length !== journeyCount) return false;
+  return homeBaseEvidenceDigest({
+    anchor: { latitude, longitude },
+    supports,
+    evidenceStartedOn,
+    evidenceEndedOn,
+  }) === digest;
 }
 
 type ParsedDigest = {

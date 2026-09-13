@@ -6,13 +6,18 @@ import {
   listHomeBasePeriodsForAtlas,
   listHomeBaseDismissalsForAtlas,
   recordHomeBaseDismissalForAtlas,
+  HomeBaseDismissalDigestTooLargeError,
+  HomeBaseDismissalLimitError,
   updateHomeBasePeriodForAtlas,
   type HomeBasePeriodPatch,
   type HomeBasePeriodValues,
 } from "../repositories/home-base-repository";
 import { isPersistedCalendarDate } from "../../src/journey/calendarDate";
 import { isHomeBaseSource } from "../../src/journey/homeBase";
-import type { HomeBaseDismissal } from "../../src/journey/homeBaseInference";
+import {
+  isPersistableHomeBaseEvidenceDigest,
+  type HomeBaseDismissal,
+} from "../../src/journey/homeBaseInference";
 import { readJsonObject } from "./json-body";
 
 /**
@@ -148,24 +153,27 @@ export type HomeBaseDismissalValues = {
 };
 
 /**
- * #232: the answer body. `evidenceDigest` is `homeBaseEvidenceDigest()`
- * verbatim and is neither trimmed nor length-capped here: the inference core
- * parses the region anchor and the supporting Journey ids back out of that
- * string to decide whether materially new residence evidence has appeared, so
- * any normalisation would quietly disarm the 90-day / 2-Journey re-prompt rule.
+ * #232: the answer body. `evidenceDigest` is kept byte-exact, but only after
+ * proving it is a bounded, canonical digest this implementation could have
+ * produced. That prevents an authenticated caller from turning the private
+ * dismissal history into arbitrary unbounded storage.
  *
- * There is deliberately no atlas or organization field. Like every other verb
- * in this module the Atlas comes from `requireAtlasAccess` alone.
+ * The occurrence date is server-owned. The browser still sends `dismissedOn`
+ * for wire compatibility, but it cannot move the 90-day re-prompt clock
+ * forwards or backwards by changing its local clock.
  */
 export function parseHomeBaseDismissalInput(
   body: HomeBaseDismissalInput,
+  now: Date = new Date(),
 ): HomeBaseDismissalValues | null {
   const kind = body.kind;
   const digest = typeof body.evidenceDigest === "string" ? body.evidenceDigest : "";
-  const dismissedOn = typeof body.dismissedOn === "string" ? body.dismissedOn.trim() : "";
+  const requestedDismissedOn = typeof body.dismissedOn === "string" ? body.dismissedOn.trim() : "";
+  const dismissedOn = now.toISOString().slice(0, 10);
   if (
     (kind !== "soft" && kind !== "rejected")
-    || !digest
+    || !isPersistableHomeBaseEvidenceDigest(digest)
+    || !isPersistedCalendarDate(requestedDismissedOn)
     || !isPersistedCalendarDate(dismissedOn)
   ) {
     return null;
@@ -203,10 +211,26 @@ homeBaseRoutes.post("/dismissal", async (context) => {
       400,
     );
   }
-  const dismissal = await recordHomeBaseDismissalForAtlas(atlas.id, input);
-  if (!dismissal) return context.json({ error: "ATLAS_NOT_FOUND" }, 404);
-  context.header("Cache-Control", HOME_BASE_CACHE_CONTROL);
-  return context.json({ dismissal }, 201);
+  try {
+    const dismissal = await recordHomeBaseDismissalForAtlas(atlas.id, input);
+    if (!dismissal) return context.json({ error: "ATLAS_NOT_FOUND" }, 404);
+    context.header("Cache-Control", HOME_BASE_CACHE_CONTROL);
+    return context.json({ dismissal }, 201);
+  } catch (error) {
+    if (error instanceof HomeBaseDismissalLimitError) {
+      return context.json({
+        error: "HOME_BASE_DISMISSAL_LIMIT_REACHED",
+        message: "Home Base dismissal history is full",
+      }, 409);
+    }
+    if (error instanceof HomeBaseDismissalDigestTooLargeError) {
+      return context.json({
+        error: "INVALID_HOME_BASE_DISMISSAL",
+        message: "Invalid Home Base dismissal data",
+      }, 400);
+    }
+    throw error;
+  }
 });
 
 homeBaseRoutes.post("/", async (context) => {

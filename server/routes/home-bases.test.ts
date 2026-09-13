@@ -12,7 +12,12 @@ import {
 } from "../db/auth-schema";
 import { hasAtlasPermission } from "../authorization/permissions";
 import { db, pool } from "../db/client";
+import { MAX_HOME_BASE_DISMISSALS_PER_ATLAS } from "../repositories/home-base-repository";
 import { parseHomeBaseDismissalInput, parseHomeBaseInput, parseHomeBasePatch } from "./home-bases";
+import {
+  HOME_BASE_EVIDENCE_DIGEST_MAX_LENGTH,
+  homeBaseEvidenceDigest,
+} from "../../src/journey/homeBaseInference";
 
 /**
  * #231: the HTTP surface, through the real `app` so the Atlas really is
@@ -32,6 +37,26 @@ const SHENZHEN = {
   longitude: 114.057865,
   startedOn: "2022-06-01",
 };
+
+function validDismissalDigest(
+  latitude = 22.5431,
+  longitude = 114.0579,
+  evidenceStartedOn = "2026-01-01",
+  evidenceEndedOn = "2026-04-01",
+) {
+  return homeBaseEvidenceDigest({
+    anchor: { latitude, longitude },
+    supports: Array.from({ length: 4 }, () => ({
+      journeyId: randomUUID(),
+      supportsStart: true,
+      supportsEnd: true,
+    })),
+    evidenceStartedOn,
+    evidenceEndedOn,
+  });
+}
+
+const UTC_TEST_NOW = new Date("2026-04-02T12:00:00.000Z");
 
 function authHeaders(cookie?: string) {
   return {
@@ -296,54 +321,69 @@ describe("POST /api/home-bases", () => {
 });
 
 describe("the Home Base dismissal body", () => {
-  const DIGEST = "hbv1:22.5431:114.0579:4:2026-01-01:2026-04-01:j1=11,j2=11,j3=11,j4=11:1a2b3c4d";
+  const DIGEST = validDismissalDigest();
 
-  it("accepts only the two answers the product defines", () => {
+  it("accepts only the two answers the product defines and uses trusted server time", () => {
     expect(parseHomeBaseDismissalInput({
       kind: "soft",
       evidenceDigest: DIGEST,
-      dismissedOn: "2026-04-02",
-    })).toEqual({ kind: "soft", digest: DIGEST, dismissedOn: "2026-04-02" });
+      dismissedOn: "2099-12-31",
+    }, UTC_TEST_NOW)).toEqual({ kind: "soft", digest: DIGEST, dismissedOn: "2026-04-02" });
     expect(parseHomeBaseDismissalInput({
       kind: "rejected",
       evidenceDigest: DIGEST,
-      dismissedOn: "2026-04-02",
-    })).toMatchObject({ kind: "rejected" });
+      dismissedOn: "2000-01-01",
+    }, UTC_TEST_NOW)).toEqual({ kind: "rejected", digest: DIGEST, dismissedOn: "2026-04-02" });
     expect(parseHomeBaseDismissalInput({
       kind: "snoozed",
       evidenceDigest: DIGEST,
       dismissedOn: "2026-04-02",
-    })).toBeNull();
-  });
-
-  it("keeps the evidence digest byte-exact instead of trimming or capping it", () => {
-    // The inference core parses the region anchor and the supporting Journey
-    // ids back out of this string. Normalising it here would silently disarm
-    // the 90-day / 2-new-Journey re-prompt rule.
-    const padded = ` ${DIGEST} `;
-    expect(parseHomeBaseDismissalInput({
-      kind: "soft",
-      evidenceDigest: padded,
-      dismissedOn: "2026-04-02",
-    })?.digest).toBe(padded);
-    expect(parseHomeBaseDismissalInput({
-      kind: "soft",
-      evidenceDigest: "",
-      dismissedOn: "2026-04-02",
-    })).toBeNull();
-  });
-
-  it("refuses a dismissal date that is not a fixed-width calendar date", () => {
+    }, UTC_TEST_NOW)).toBeNull();
     expect(parseHomeBaseDismissalInput({
       kind: "soft",
       evidenceDigest: DIGEST,
       dismissedOn: "2026-4-2",
-    })).toBeNull();
+    }, UTC_TEST_NOW)).toBeNull();
+    expect(parseHomeBaseDismissalInput({
+      kind: "soft",
+      evidenceDigest: DIGEST,
+    }, UTC_TEST_NOW)).toBeNull();
+  });
+
+  it("keeps a valid evidence digest byte-exact but rejects noncanonical or oversized input", () => {
+    expect(parseHomeBaseDismissalInput({
+      kind: "soft",
+      evidenceDigest: DIGEST,
+      dismissedOn: "2026-04-02",
+    }, UTC_TEST_NOW)?.digest).toBe(DIGEST);
+    expect(parseHomeBaseDismissalInput({
+      kind: "soft",
+      evidenceDigest: ` ${DIGEST} `,
+      dismissedOn: "2026-04-02",
+    }, UTC_TEST_NOW)).toBeNull();
+    expect(parseHomeBaseDismissalInput({
+      kind: "soft",
+      evidenceDigest: `${DIGEST}${"x".repeat(HOME_BASE_EVIDENCE_DIGEST_MAX_LENGTH)}`,
+      dismissedOn: "2026-04-02",
+    }, UTC_TEST_NOW)).toBeNull();
+  });
+
+  it("rejects malformed or forged evidence digests", () => {
+    expect(parseHomeBaseDismissalInput({
+      kind: "soft",
+      evidenceDigest: "hbi-v2:22.5431:114.0579:4:2026-01-01:2026-04-01:not-a-real-support:deadbeef",
+      dismissedOn: "2026-04-02",
+    }, UTC_TEST_NOW)).toBeNull();
+    expect(parseHomeBaseDismissalInput({
+      kind: "soft",
+      evidenceDigest: `${DIGEST.slice(0, -8)}deadbeef`,
+      dismissedOn: "2026-04-02",
+    }, UTC_TEST_NOW)).toBeNull();
   });
 });
 
 describe("GET and POST /api/home-bases/dismissal", () => {
-  const DIGEST = "hbv1:22.5431:114.0579:4:2026-01-01:2026-04-01:r1=11,r2=11,r3=11,r4=11:deadbeef";
+  const DIGEST = validDismissalDigest();
 
   async function postDismissal(cookie: string, body: unknown) {
     return await app.request(`${TEST_ORIGIN}/api/home-bases/dismissal`, {
@@ -354,17 +394,20 @@ describe("GET and POST /api/home-bases/dismissal", () => {
   }
 
   it("derives the atlas from the session and ignores an atlas or organization id in the body", async () => {
+    const serverDateBefore = new Date().toISOString().slice(0, 10);
     const response = await postDismissal(resident.cookie, {
       kind: "soft",
       evidenceDigest: DIGEST,
-      dismissedOn: "2026-04-02",
+      dismissedOn: "2099-12-31",
       atlasId: neighbour.atlasId,
       organizationId: neighbour.organizationId,
     });
+    const serverDateAfter = new Date().toISOString().slice(0, 10);
     expect(response.status).toBe(201);
-    expect(await response.json()).toEqual({
-      dismissal: { kind: "soft", digest: DIGEST, dismissedAt: "2026-04-02" },
-    });
+    const responseBody = await response.json() as { dismissal: { kind: string; digest: string; dismissedAt: string } };
+    expect(responseBody.dismissal).toMatchObject({ kind: "soft", digest: DIGEST });
+    expect([serverDateBefore, serverDateAfter]).toContain(responseBody.dismissal.dismissedAt);
+    expect(responseBody.dismissal.dismissedAt).not.toBe("2099-12-31");
 
     // The row landed in the session's own atlas, not the one the body named.
     const rows = await db
@@ -383,7 +426,7 @@ describe("GET and POST /api/home-bases/dismissal", () => {
   });
 
   it("preserves answers for different evidence regions instead of replacing the Atlas row", async () => {
-    const second = "hbi-v2:35.6895:139.6917:4:2026-05-01:2026-08-01:t1=11,t2=11,t3=11,t4=11:feedbeef";
+    const second = validDismissalDigest(35.6895, 139.6917, "2026-05-01", "2026-08-01");
     expect((await postDismissal(resident.cookie, {
       kind: "rejected",
       evidenceDigest: DIGEST,
@@ -398,17 +441,40 @@ describe("GET and POST /api/home-bases/dismissal", () => {
     const read = await app.request(`${TEST_ORIGIN}/api/home-bases/dismissal`, {
       headers: authHeaders(resident.cookie),
     });
-    expect(await read.json()).toEqual({
-      dismissals: [
-        { kind: "rejected", digest: DIGEST, dismissedAt: "2026-04-02" },
-        { kind: "soft", digest: second, dismissedAt: "2026-07-01" },
-      ],
-    });
+    const readBody = await read.json() as { dismissals: Array<{ kind: string; digest: string; dismissedAt: string }> };
+    const today = new Date().toISOString().slice(0, 10);
+    expect(readBody.dismissals).toEqual(expect.arrayContaining([
+      { kind: "rejected", digest: DIGEST, dismissedAt: today },
+      { kind: "soft", digest: second, dismissedAt: today },
+    ]));
     const [row] = await db
       .select({ total: sql<number>`count(*)::int` })
       .from(homeBaseDismissals)
       .where(eq(homeBaseDismissals.atlasId, resident.atlasId));
     expect(row.total).toBe(2);
+  });
+
+  it("bounds distinct persisted answers per Atlas", async () => {
+    for (let index = 0; index < MAX_HOME_BASE_DISMISSALS_PER_ATLAS; index += 1) {
+      const response = await postDismissal(neighbour.cookie, {
+        kind: "soft",
+        evidenceDigest: validDismissalDigest(
+          10 + index * 0.01,
+          20 + index * 0.01,
+          "2026-01-01",
+          "2026-04-15",
+        ),
+        dismissedOn: "1900-01-01",
+      });
+      expect(response.status).toBe(201);
+    }
+    const overflow = await postDismissal(neighbour.cookie, {
+      kind: "soft",
+      evidenceDigest: validDismissalDigest(50, 80, "2026-01-01", "2026-04-15"),
+      dismissedOn: "1900-01-01",
+    });
+    expect(overflow.status).toBe(409);
+    expect(await overflow.json()).toMatchObject({ error: "HOME_BASE_DISMISSAL_LIMIT_REACHED" });
   });
 
   it("never downgrades an explicit rejection for the same evidence to a later soft dismissal", async () => {
@@ -424,14 +490,18 @@ describe("GET and POST /api/home-bases/dismissal", () => {
     });
     expect(retry.status).toBe(201);
     expect(await retry.json()).toEqual({
-      dismissal: { kind: "rejected", digest: DIGEST, dismissedAt: "2026-04-02" },
+      dismissal: {
+        kind: "rejected",
+        digest: DIGEST,
+        dismissedAt: new Date().toISOString().slice(0, 10),
+      },
     });
   });
 
   it("refuses an unusable body and a request with no session", async () => {
     const invalid = await postDismissal(resident.cookie, {
       kind: "soft",
-      evidenceDigest: DIGEST,
+      evidenceDigest: "not-a-digest",
     });
     expect(invalid.status).toBe(400);
     expect(await invalid.json()).toMatchObject({ error: "INVALID_HOME_BASE_DISMISSAL" });

@@ -9,7 +9,10 @@ import {
   type HomeBasePeriodConflictCode,
   type HomeBaseSource,
 } from "../../src/journey/homeBase";
-import type { HomeBaseDismissal } from "../../src/journey/homeBaseInference";
+import {
+  HOME_BASE_EVIDENCE_DIGEST_MAX_LENGTH,
+  type HomeBaseDismissal,
+} from "../../src/journey/homeBaseInference";
 
 /**
  * #231: the write side of the Home Base timeline.
@@ -265,12 +268,28 @@ export async function countHomeBasePeriodsForAtlas(
  * Answers are preserved per evidence revision rather than collapsed to one row
  * per Atlas. The full digest remains byte-exact because the inference core
  * parses its region anchor and Journey ids from it. Uniqueness uses a fixed-size
- * MD5 key, so an unbounded digest never becomes a B-tree index entry. The
+ * MD5 key, so the variable-length digest never becomes a B-tree index entry. The
  * Atlas row lock serializes this path; a theoretical hash collision fails closed
  * instead of overwriting another answer.
  */
 function homeBaseDismissalDigestHash(digest: string): string {
   return createHash("md5").update(digest, "utf8").digest("hex");
+}
+
+export const MAX_HOME_BASE_DISMISSALS_PER_ATLAS = 64;
+
+export class HomeBaseDismissalLimitError extends Error {
+  constructor() {
+    super("HOME_BASE_DISMISSAL_LIMIT_REACHED");
+    this.name = "HomeBaseDismissalLimitError";
+  }
+}
+
+export class HomeBaseDismissalDigestTooLargeError extends Error {
+  constructor() {
+    super("HOME_BASE_DISMISSAL_DIGEST_TOO_LARGE");
+    this.name = "HomeBaseDismissalDigestTooLargeError";
+  }
 }
 
 export async function listHomeBaseDismissalsForAtlas(
@@ -292,6 +311,9 @@ export async function recordHomeBaseDismissalForAtlas(
   atlasId: string,
   values: { kind: HomeBaseDismissal["kind"]; digest: string; dismissedOn: string },
 ): Promise<HomeBaseDismissal | undefined> {
+  if (values.digest.length > HOME_BASE_EVIDENCE_DIGEST_MAX_LENGTH) {
+    throw new HomeBaseDismissalDigestTooLargeError();
+  }
   return await db.transaction(async (transaction) => {
     if (!await lockActiveAtlas(transaction, atlasId)) return undefined;
 
@@ -329,6 +351,14 @@ export async function recordHomeBaseDismissalForAtlas(
           dismissedAt: homeBaseDismissals.dismissedOn,
         });
       return { ...row, kind: row.kind as HomeBaseDismissal["kind"] };
+    }
+
+    const [countRow] = await transaction
+      .select({ total: sql<number>`count(*)::int` })
+      .from(homeBaseDismissals)
+      .where(eq(homeBaseDismissals.atlasId, atlasId));
+    if ((countRow?.total ?? 0) >= MAX_HOME_BASE_DISMISSALS_PER_ATLAS) {
+      throw new HomeBaseDismissalLimitError();
     }
 
     const [row] = await transaction
