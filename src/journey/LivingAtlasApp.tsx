@@ -35,11 +35,13 @@ import { JourneyPlaybackOverlay } from "./JourneyPlaybackOverlay";
 import { resolveHomeNarrativeContext, type HomeNarrativeContext } from "./homeBasePrelude";
 import { classifyHomeBasePeriodWrite, type HomeBasePeriod } from "./homeBase";
 import {
+  HOME_BASE_CLUSTER_RADIUS_KM,
   homeBaseInferenceEvidenceSupport,
   inferHomeBaseCandidate,
   type HomeBaseDismissal,
   type HomeBaseInferenceResult,
 } from "./homeBaseInference";
+import { haversineDistanceKm } from "./mediaPlacement";
 import {
   homeBaseConfirmationDraft,
   homeBaseInferenceEvidenceBoundaryAfterRecordedHistory,
@@ -1143,7 +1145,7 @@ export function LivingAtlasApp({
     () => homeBasePeriods.find((period) => period.endedOn === null) ?? null,
     [homeBasePeriods],
   );
-  const homeBaseInference = useMemo<HomeBaseInferenceResult | null>(() => {
+  const computeHomeBaseInference = useCallback((evaluationDate: string): HomeBaseInferenceResult | null => {
     if (!homeBaseInferenceInputsReady({
       periodsReader: Boolean(listHomeBasePeriods),
       periodsRead: homeBasePeriodsRead,
@@ -1160,10 +1162,14 @@ export function LivingAtlasApp({
         routePoints: journey.routePoints,
       })),
       confirmedPeriod: currentHomeBasePeriod,
-      evaluationDate: homeEffectiveDate,
+      evaluationDate,
       evidenceNotBefore,
     }, homeBaseDismissals ?? []);
-  }, [currentHomeBasePeriod, homeBaseDismissals, homeBasePeriods, homeBasePeriodsRead, homeEffectiveDate, journeys, listHomeBaseDismissals, listHomeBasePeriods]);
+  }, [currentHomeBasePeriod, homeBaseDismissals, homeBasePeriods, homeBasePeriodsRead, journeys, listHomeBaseDismissals, listHomeBasePeriods]);
+  const homeBaseInference = useMemo(
+    () => computeHomeBaseInference(homeEffectiveDate),
+    [computeHomeBaseInference, homeEffectiveDate],
+  );
   const homeBaseSuggestion = useMemo(() => {
     if (!homeBaseInference) return null;
     const decision = resolveHomeBaseSuggestion({
@@ -1233,15 +1239,26 @@ export function LivingAtlasApp({
   }, [homeBaseInference, homeBaseSuggestion, listHomeBasePeriods, mutations, refreshHomeBasePeriods, showNotice]);
 
   const dismissHomeBaseSuggestion = useCallback(async (kind: HomeBaseDismissal["kind"]) => {
-    if (!mutations || !homeBaseSuggestion?.evidenceDigest) return;
+    if (!mutations || !homeBaseSuggestion?.evidenceDigest || !homeBaseSuggestion.metroAnchor) return;
     const actionDate = atlasHomeEffectiveDate(new Date());
+    let evidenceDigest = homeBaseSuggestion.evidenceDigest;
     if (actionDate !== homeEffectiveDate) {
-      // Refresh the render-owned inference/digest first. Submitting a fresh day
-      // with a digest computed for yesterday would be an internally stale pair.
+      const refreshedInference = computeHomeBaseInference(actionDate);
       setHomeEffectiveDate(actionDate);
-      return;
+      const expectedState = homeBaseSuggestion.variant === "move" ? "move_suggested" : "suggested";
+      if (
+        refreshedInference?.state !== expectedState
+        || !refreshedInference.evidenceDigest
+        || !refreshedInference.metroAnchor
+        || haversineDistanceKm(
+          refreshedInference.metroAnchor.latitude,
+          refreshedInference.metroAnchor.longitude,
+          homeBaseSuggestion.metroAnchor.latitude,
+          homeBaseSuggestion.metroAnchor.longitude,
+        ) > HOME_BASE_CLUSTER_RADIUS_KM
+      ) return;
+      evidenceDigest = refreshedInference.evidenceDigest;
     }
-    const evidenceDigest = homeBaseSuggestion.evidenceDigest;
     setHomeBaseSuggestionPending(true);
     try {
       // The answer is persisted BEFORE the card is taken down. A dismissal that
@@ -1275,7 +1292,7 @@ export function LivingAtlasApp({
     } finally {
       setHomeBaseSuggestionPending(false);
     }
-  }, [homeBaseSuggestion, homeEffectiveDate, listHomeBaseDismissals, mutations, showNotice]);
+  }, [computeHomeBaseInference, homeBaseSuggestion, homeEffectiveDate, listHomeBaseDismissals, mutations, showNotice]);
 
   const claimManualAtlasCamera = useCallback(() => {
     atlasHomeCameraFreshRef.current = false;

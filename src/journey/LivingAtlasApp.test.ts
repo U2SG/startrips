@@ -1692,6 +1692,9 @@ describe("ST-060 dismissal evaluation day", () => {
     expect(handler).toContain("const actionDate = atlasHomeEffectiveDate(new Date())");
     expect(handler).toContain("if (actionDate !== homeEffectiveDate)");
     expect(handler).toContain("setHomeEffectiveDate(actionDate)");
+    expect(handler).toContain("const refreshedInference = computeHomeBaseInference(actionDate)");
+    expect(handler).toContain("evidenceDigest = refreshedInference.evidenceDigest");
+    expect(handler).toContain("HOME_BASE_CLUSTER_RADIUS_KM");
     expect(handler.indexOf("setHomeEffectiveDate(actionDate)"))
       .toBeLessThan(handler.indexOf("mutations.recordHomeBaseDismissal"));
     expect(handler).toContain("dismissedOn: actionDate");
