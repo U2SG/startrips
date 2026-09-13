@@ -1265,11 +1265,45 @@ export function LivingAtlasApp({
 
   const confirmHomeBaseSuggestion = useCallback(async () => {
     if (!mutations || !homeBaseInference || !homeBaseSuggestion) return;
+    const actionDate = atlasHomeEffectiveDate(new Date());
+    let inferenceForAction = homeBaseInference;
+    let suggestionForAction = homeBaseSuggestion;
+    if (actionDate !== homeEffectiveDate) {
+      const refreshedInference = computeHomeBaseInference(actionDate);
+      setHomeEffectiveDate(actionDate);
+      if (!refreshedInference) return;
+      const refreshedSuggestion = resolveHomeBaseSuggestion({
+        result: refreshedInference,
+        placeLabel: resolveHomeBasePlaceLabel(
+          journeys,
+          refreshedInference.metroAnchor,
+          refreshedInference.evidenceDigest,
+          homeBaseInferenceEvidenceSupport(refreshedInference),
+        ),
+        confirmedPlaceLabel: currentHomeBasePeriod?.label ?? null,
+        narrativeSurfaceActive: storyJourneyId !== null || playbackActive,
+      });
+      if (
+        !refreshedSuggestion.visible
+        || refreshedSuggestion.variant !== homeBaseSuggestion.variant
+        || !homeBaseSuggestionSharesRegion(
+          refreshedSuggestion.metroAnchor,
+          homeBaseSuggestion.metroAnchor,
+        )
+        || !homeBaseSuggestionCanBeConfirmed({
+          decision: refreshedSuggestion,
+          result: refreshedInference,
+          periods: homeBasePeriods,
+        })
+      ) return;
+      inferenceForAction = refreshedInference;
+      suggestionForAction = refreshedSuggestion;
+    }
     const draft = homeBaseConfirmationRequest(
-      homeBaseSuggestion,
-      homeBaseInference,
+      suggestionForAction,
+      inferenceForAction,
       currentHomeBasePeriod,
-      homeEffectiveDate,
+      actionDate,
     );
     if (!draft) return;
     setHomeBaseSuggestionPending(true);
@@ -1308,7 +1342,7 @@ export function LivingAtlasApp({
     } finally {
       setHomeBaseSuggestionPending(false);
     }
-  }, [currentHomeBasePeriod, homeBaseInference, homeBaseSuggestion, homeEffectiveDate, listHomeBasePeriods, mutations, refreshHomeBasePeriods, refreshHomeBaseSuggestionEvidence, showNotice]);
+  }, [computeHomeBaseInference, currentHomeBasePeriod, homeBaseInference, homeBasePeriods, homeBaseSuggestion, homeEffectiveDate, journeys, listHomeBasePeriods, mutations, playbackActive, refreshHomeBasePeriods, refreshHomeBaseSuggestionEvidence, showNotice, storyJourneyId]);
 
   const dismissHomeBaseSuggestion = useCallback(async (kind: HomeBaseDismissal["kind"]) => {
     if (!mutations || !homeBaseSuggestion?.evidenceDigest || !homeBaseSuggestion.metroAnchor) return;

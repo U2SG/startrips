@@ -18,12 +18,14 @@ import {
   HOME_BASE_CLUSTER_RADIUS_KM,
   HOME_BASE_EVIDENCE_DIGEST_MAX_LENGTH,
   homeBaseEvidenceDigestAnchor,
+  homeBaseInferenceEvidenceSupport,
   type HomeBaseDismissal,
 } from "../../src/journey/homeBaseInference";
 import { haversineDistanceKm } from "../../src/journey/mediaPlacement";
 import {
   homeBaseInferenceEvidenceBoundaryAfterRecordedHistory,
   inferHomeBaseCandidateWithDismissals,
+  resolveHomeBasePlaceLabel,
   type HomeBaseSuggestionConfirmationProof,
 } from "../../src/journey/homeBaseSuggestion";
 
@@ -388,6 +390,7 @@ async function loadInferenceJourneys(transaction: Transaction, atlasId: string) 
       sortOrder: journeyRoutePoints.sortOrder,
       latitude: journeyRoutePoints.latitude,
       longitude: journeyRoutePoints.longitude,
+      label: journeyRoutePoints.label,
     })
     .from(journeyRoutePoints)
     .where(inArray(journeyRoutePoints.journeyId, activeJourneyRows.map((journey) => journey.id)))
@@ -407,6 +410,7 @@ async function loadInferenceJourneys(transaction: Transaction, atlasId: string) 
       sortOrder: point.sortOrder,
       latitude: point.latitude,
       longitude: point.longitude,
+      label: point.label,
     })),
   }));
 }
@@ -465,6 +469,15 @@ export async function createAuthoritativeHomeBaseSuggestionPeriodForAtlas(
       || authoritativeInference.metroAnchor.latitude !== values.latitude
       || authoritativeInference.metroAnchor.longitude !== values.longitude
     ) {
+      throw new HomeBaseSuggestionNotCurrentError();
+    }
+    const authoritativeLabel = resolveHomeBasePlaceLabel(
+      journeyHistory,
+      authoritativeInference.metroAnchor,
+      authoritativeInference.evidenceDigest,
+      homeBaseInferenceEvidenceSupport(authoritativeInference),
+    );
+    if (!authoritativeLabel || authoritativeLabel !== values.label) {
       throw new HomeBaseSuggestionNotCurrentError();
     }
 

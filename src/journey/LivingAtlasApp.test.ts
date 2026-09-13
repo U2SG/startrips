@@ -1687,7 +1687,11 @@ describe("ST-060 ambiguous confirmation reconciliation", () => {
     const handler = source.slice(start, end);
     expect(handler).toContain("homeBaseConfirmationRequest(");
     expect(handler).toContain("currentHomeBasePeriod");
-    expect(handler).toContain("homeEffectiveDate");
+    expect(handler).toContain("const actionDate = atlasHomeEffectiveDate(new Date())");
+    expect(handler).toContain("const refreshedInference = computeHomeBaseInference(actionDate)");
+    expect(handler).toContain("homeBaseSuggestionSharesRegion(");
+    expect(handler).toContain("suggestionForAction = refreshedSuggestion");
+    expect(handler).toContain("actionDate,");
     expect(handler).toContain('error.code === "STALE_HOME_BASE_SUGGESTION"');
     expect(handler).toContain("await refreshHomeBaseSuggestionEvidence()");
     expect(handler.indexOf("STALE_HOME_BASE_SUGGESTION"))

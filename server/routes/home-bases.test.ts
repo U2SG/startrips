@@ -874,6 +874,26 @@ describe("suggested confirmation revalidates one authoritative Atlas snapshot", 
     expect(periods).toEqual([]);
   });
 
+  it("rejects a stale confirmation when only the supporting Place Label changed", async () => {
+    const supports = await db
+      .select({ id: journeys.id })
+      .from(journeys)
+      .where(eq(journeys.atlasId, neighbour.atlasId));
+    await db
+      .update(journeyRoutePoints)
+      .set({ label: "Renamed Home" })
+      .where(inArray(journeyRoutePoints.journeyId, supports.map((journey) => journey.id)));
+
+    const response = await post(neighbour.cookie, confirmationBody());
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: "STALE_HOME_BASE_SUGGESTION" });
+    const periods = await db
+      .select({ id: homeBasePeriods.id })
+      .from(homeBasePeriods)
+      .where(eq(homeBasePeriods.atlasId, neighbour.atlasId));
+    expect(periods).toEqual([]);
+  });
+
   it("does not reinterpret a stale initial confirm as a move after Home context changed", async () => {
     const current = await post(neighbour.cookie, {
       ...SHENZHEN,
