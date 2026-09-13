@@ -417,6 +417,14 @@ export function LivingAtlasGlobe({
   const [particleFrame, setParticleFrame] = useState<ParticleAnchorFrame | null>(null);
   const [zoomIntent, setZoomIntent] = useState<{ zoom: number; revision: number } | null>(null);
   const diveRef = useRef<EarthDiveState>(INITIAL_EARTH_DIVE_STATE);
+  // The resolver mirror follows the last COMMITTED presentation state. If the
+  // rAF loop advances this ref before React commits, concurrent batching can
+  // skip a semantic handoff stage in the DOM (notably reverse prewarm). Holding
+  // the mirror here keeps the one-step resolver and rendered lifecycle aligned
+  // without a timer or second transition authority.
+  useEffect(() => {
+    diveRef.current = dive;
+  }, [dive]);
   const detailLayerRef = useRef<HTMLDivElement>(null);
   const detailCalibrationRef = useRef<((
     frame: ParticleAnchorFrame,
@@ -728,7 +736,6 @@ export function LivingAtlasGlobe({
         // sub-pixel threshold before the hidden map can align itself.
         setParticleFrame(particleFrameRef.current);
       }
-      diveRef.current = next;
       syncDetailSpatialReveal(next.stage, snapshotRef.current, particleFrameRef.current);
       setDive(next);
     };

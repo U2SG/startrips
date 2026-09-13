@@ -76,6 +76,12 @@ describe("Semantic Earth Dive renderer ownership", () => {
     expect(detail).toContain("[diveOwner, diveStage, focusPoint, focusRoute]");
     expect(detail).not.toContain("[diveOwner, diveSnapshot, diveStage, focusPoint, focusRoute, particleFrame]");
   });
+
+  it("keeps the resolver mirror on committed Dive presentation state", () => {
+    const globe = readFileSync(new URL("./LivingAtlasGlobe.tsx", import.meta.url), "utf8");
+    expect(globe).toMatch(/useEffect\(\(\) => \{\s*diveRef\.current = dive;\s*\}, \[dive\]\);/);
+    expect(globe).not.toContain("diveRef.current = next;");
+  });
 });
 
 describe("Semantic Earth Dive accessibility fallback (#308)", () => {

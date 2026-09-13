@@ -235,10 +235,11 @@ async function installStageRecorder(page) {
       const next = sample(stageOverride, ownerOverride);
       const lastIndex = window.__qaEarthDiveStages.length - 1;
       const last = window.__qaEarthDiveStages[lastIndex];
-      if (last && last.stage === next.stage) {
+      if (last && last.stage === next.stage && last.owner === next.owner) {
         // A newly-entered blending stage can intentionally start as `holding`
-        // until its post-sync render arrives. Preserve one entry per stage but
-        // keep owner/presentation current as batched DOM writes catch up.
+        // until its post-sync render arrives. Presentation-only mutations keep
+        // that exact stage/owner pair current, but an owner transition is real
+        // evidence and must remain a distinct entry even when the stage is same.
         window.__qaEarthDiveStages[lastIndex] = next;
         return;
       }
@@ -322,7 +323,10 @@ function allQuadrantsPainted(value) {
 }
 
 async function stages(page) {
-  return page.evaluate(() => window.__qaEarthDiveStages.map((entry) => entry.stage));
+  return page.evaluate(() => window.__qaEarthDiveStages.reduce((ladder, entry) => {
+    if (ladder.at(-1) !== entry.stage) ladder.push(entry.stage);
+    return ladder;
+  }, []));
 }
 
 async function stageEntries(page) {
