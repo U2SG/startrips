@@ -1220,7 +1220,10 @@ export function LivingAtlasApp({
       const recorded = await mutations.recordHomeBaseDismissal({
         kind,
         evidenceDigest,
-        dismissedOn: homeEffectiveDate,
+        // Do not reuse the date captured by the last React render. A tab can
+        // remain open across local midnight(s); the server safely constrains
+        // this fresh local calendar day against its own UTC policy date.
+        dismissedOn: atlasHomeEffectiveDate(new Date()),
       });
       setHomeBaseDismissals((current) => {
         const existing = current ?? [];
@@ -1243,7 +1246,7 @@ export function LivingAtlasApp({
     } finally {
       setHomeBaseSuggestionPending(false);
     }
-  }, [homeBaseSuggestion, homeEffectiveDate, listHomeBaseDismissals, mutations, showNotice]);
+  }, [homeBaseSuggestion, listHomeBaseDismissals, mutations, showNotice]);
 
   const claimManualAtlasCamera = useCallback(() => {
     atlasHomeCameraFreshRef.current = false;

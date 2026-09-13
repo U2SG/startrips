@@ -1680,6 +1680,17 @@ describe("ST-060 ambiguous confirmation reconciliation", () => {
   });
 });
 
+describe("ST-060 dismissal evaluation day", () => {
+  it("recomputes the local calendar day at action time instead of reusing the last render", () => {
+    const source = readFileSync(new URL("./LivingAtlasApp.tsx", import.meta.url), "utf8");
+    const start = source.indexOf("const dismissHomeBaseSuggestion");
+    const end = source.indexOf("const claimManualAtlasCamera", start);
+    const handler = source.slice(start, end);
+    expect(handler).toContain("dismissedOn: atlasHomeEffectiveDate(new Date())");
+    expect(handler).not.toContain("dismissedOn: homeEffectiveDate");
+  });
+});
+
 describe("ST-060 a successful confirmation takes the card down on its own", () => {
   const SHENZHEN = { latitude: 22.5431, longitude: 114.0579 };
   const GUANGZHOU = { latitude: 23.1291, longitude: 113.2644 };
