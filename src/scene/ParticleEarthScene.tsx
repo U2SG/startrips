@@ -3541,7 +3541,10 @@ export function ParticleEarthScene({
       }
       return null;
     };
-    const activatePointerTarget = (event: PointerEvent) => {
+    const activatePointerTarget = (
+      event: PointerEvent,
+      explicitGlobePick: { latitude: number; longitude: number } | null = null,
+    ) => {
       const canPickGlobe = Boolean(latestOnGlobePointPick.current);
       const canActivateJourney = Boolean(
         journeyPointTargets.length > 0
@@ -3565,6 +3568,10 @@ export function ParticleEarthScene({
       }
       preparePersonalPointerRay(event.clientX, event.clientY);
       if (canPickGlobe) {
+        if (explicitGlobePick) {
+          latestOnGlobePointPick.current?.(explicitGlobePick);
+          return;
+        }
         const [intersection] = personalRaycaster.intersectObject(surface, false);
         if (!intersection) return;
         const picked = vector3ToLatLon(
@@ -3739,6 +3746,16 @@ export function ParticleEarthScene({
       dragAngularDisplacement = { x: 0, y: 0, total: 0 };
     };
 
+    const cityPointerPicks = new Map<number, { latitude: number; longitude: number }>();
+    const cityPickFromEventTarget = (target: EventTarget | null) => {
+      if (!(target instanceof SVGTextElement) || !target.classList.contains("particle-earth-city")) return null;
+      const latitude = Number(target.dataset.cityLat);
+      const longitude = Number(target.dataset.cityLon);
+      return Number.isFinite(latitude) && Number.isFinite(longitude)
+        ? { latitude, longitude }
+        : null;
+    };
+
     const onPointerDown = (event: PointerEvent) => {
       if (
         !latestDragToRotate.current
@@ -3852,7 +3869,11 @@ export function ParticleEarthScene({
       rotationVelocityY = nextVelocityY * velocityScale;
     };
 
-    const finishPointer = (event: PointerEvent, allowActivation: boolean) => {
+    const finishPointer = (
+      event: PointerEvent,
+      allowActivation: boolean,
+      explicitGlobePick: { latitude: number; longitude: number } | null = null,
+    ) => {
       if (!activePointers.has(event.pointerId)) return;
       const wasGesture = gestureConsumed || dragStarted || activePointers.size > 1;
       activePointers.delete(event.pointerId);
@@ -3888,12 +3909,17 @@ export function ParticleEarthScene({
       }
       lastGlobeInteractionAt = performance.now();
       clearDragState();
-      if (allowActivation && !wasGesture) activatePointerTarget(event);
+      if (allowActivation && !wasGesture) activatePointerTarget(event, explicitGlobePick);
     };
 
-    const onPointerUp = (event: PointerEvent) => {
+    const onPointerUp = (
+      event: PointerEvent,
+      explicitGlobePick: { latitude: number; longitude: number } | null = null,
+    ) => {
+      const cityPick = explicitGlobePick ?? cityPointerPicks.get(event.pointerId) ?? null;
+      cityPointerPicks.delete(event.pointerId);
       if (activePointers.has(event.pointerId)) {
-        finishPointer(event, isPrimaryPointerActivation(event));
+        finishPointer(event, isPrimaryPointerActivation(event), cityPick);
         return;
       }
       const rejectedByGestureCapacity = rejectedPointerIds.delete(event.pointerId);
@@ -3904,17 +3930,20 @@ export function ParticleEarthScene({
           activePointers.size,
         )
       ) {
-        activatePointerTarget(event);
+        activatePointerTarget(event, cityPick);
       }
     };
     const onPointerCancel = (event: PointerEvent) => {
+      cityPointerPicks.delete(event.pointerId);
       if (rejectedPointerIds.delete(event.pointerId)) return;
       finishPointer(event, false);
     };
     const onRejectedPointerLifecycleEnd = (event: PointerEvent) => {
+      cityPointerPicks.delete(event.pointerId);
       rejectedPointerIds.delete(event.pointerId);
     };
     const onLostPointerCapture = (event: PointerEvent) => {
+      cityPointerPicks.delete(event.pointerId);
       rejectedPointerIds.delete(event.pointerId);
       if (!activePointers.has(event.pointerId)) return;
       activePointers.delete(event.pointerId);
@@ -3972,6 +4001,8 @@ export function ParticleEarthScene({
     // is unavailable, and wheel keeps the same anchored-zoom authority.
     const onCityLayerPointerDown = (event: PointerEvent) => {
       event.stopPropagation();
+      const cityPick = cityPickFromEventTarget(event.target);
+      if (cityPick) cityPointerPicks.set(event.pointerId, cityPick);
       onPointerDown(event);
     };
     const onCityLayerPointerMove = (event: PointerEvent) => {
@@ -3980,7 +4011,7 @@ export function ParticleEarthScene({
     };
     const onCityLayerPointerUp = (event: PointerEvent) => {
       event.stopPropagation();
-      onPointerUp(event);
+      onPointerUp(event, cityPickFromEventTarget(event.target));
     };
     const onCityLayerPointerCancel = (event: PointerEvent) => {
       event.stopPropagation();
