@@ -95,7 +95,7 @@ async function openOwner(viewport) {
   const pageErrors = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
   await installOwnerApi(page);
-  await page.goto(`${origin}/?qaState=living-atlas`, { waitUntil: "domcontentloaded" });
+  await page.goto(`${origin}/?qaState=living-atlas&qaHomeBaseSuggestion=1`, { waitUntil: "domcontentloaded" });
   await page.locator(".living-atlas").waitFor({ state: "visible", timeout: 30_000 });
   await page.waitForFunction(
     (periodId) => {
