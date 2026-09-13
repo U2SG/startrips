@@ -1891,3 +1891,22 @@ describe("ST-063 Journey Rail visibility release", () => {
     expect(journeyRailVisibility(false, false)).toBe("visible");
   });
 });
+
+
+describe("ST-065 Home Base context ownership", () => {
+  it("keeps the Home context subordinate to Story, Playback, Route Point and timeline intent", () => {
+    const source = readFileSync(new URL("./LivingAtlasApp.tsx", import.meta.url), "utf8");
+    expect(source).toContain("clearHomeBaseContext();\n    clearRoutePointContext();\n    timeCursor.selectJourney(journeyId)");
+    expect(source).toContain("clearHomeBaseContext();\n    const requested = requestRoutePointContextSelection(");
+    expect(source).toContain("clearHomeBaseContext();\n    const journey = journeys.find((candidate) => candidate.id === journeyId)");
+    expect(source).toContain("[clearHomeBaseContext, timeCursor.cursor, timeCursor.timelineRevision]");
+    expect(source).toContain('data-home-base-context');
+    expect(source).not.toContain('role="dialog"\n          data-home-base-context');
+  });
+
+  it("constructs Home activation only when the owner-private Home reader exists", () => {
+    const source = readFileSync(new URL("./LivingAtlasApp.tsx", import.meta.url), "utf8");
+    expect(source).toContain("onHomeBaseActivate={listHomeBasePeriods ? (periodId) => {");
+    expect(source).toContain("} : undefined}");
+  });
+});

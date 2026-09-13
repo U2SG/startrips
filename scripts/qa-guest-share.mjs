@@ -177,6 +177,11 @@ async function installGuestApi(page, state) {
     contentType: "application/json",
     body: JSON.stringify({ error: "OWNER_ROUTE_REACHED" }),
   }));
+  await page.route("**/api/home-bases**", (route) => route.fulfill({
+    status: 500,
+    contentType: "application/json",
+    body: JSON.stringify({ error: "OWNER_ROUTE_REACHED" }),
+  }));
   await page.route("**/api/auth/**", (route) => route.fulfill({
     status: 500,
     contentType: "application/json",
@@ -269,6 +274,13 @@ try {
     }
     if (surfaces.fileInputs !== 0) {
       failures.push(`${viewport.name}: guest document has ${surfaces.fileInputs} file input(s)`);
+    }
+    const homePrivateSurface = await page.evaluate(() => ({
+      anchors: document.querySelectorAll("[data-home-base-period-id]").length,
+      contexts: document.querySelectorAll("[data-home-base-context]").length,
+    }));
+    if (homePrivateSurface.anchors !== 0 || homePrivateSurface.contexts !== 0) {
+      failures.push(`${viewport.name}: guest document exposes private Home context ${JSON.stringify(homePrivateSurface)}`);
     }
 
     // The granted journeys are there. The compact layouts show one journey at
@@ -546,7 +558,7 @@ try {
       failures.push(`token exposure: ${leakedRequests.length} request URL(s) carried the token`);
     }
     const ownerRequests = requestedUrls.filter((url) =>
-      /\/api\/(journeys|atlases|auth)/.test(url) || url.includes("/api/uploads"));
+      /\/api\/(journeys|atlases|auth|home-bases)/.test(url) || url.includes("/api/uploads"));
     if (ownerRequests.length > 0) {
       failures.push(`owner routes requested by a guest: ${JSON.stringify([...new Set(ownerRequests)].slice(0, 4))}`);
     }

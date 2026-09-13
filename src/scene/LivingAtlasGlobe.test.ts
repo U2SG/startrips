@@ -168,11 +168,16 @@ describe("Home Base presence projection (ST-056)", () => {
     const source = readFileSync(new URL("./LivingAtlasGlobe.tsx", import.meta.url), "utf8");
     expect(source).toContain('dive.owner !== "detail" && !cinematicActive');
   });
-  it("keeps the Home accessibility target transparent to pointer camera gestures", () => {
+  it("ST-065 promotes only the visible Home accessibility target into the on-demand context hit area", () => {
+    const source = readFileSync(new URL("./LivingAtlasGlobe.tsx", import.meta.url), "utf8");
     const css = readFileSync(new URL("../styles/living-atlas.css", import.meta.url), "utf8");
     const start = css.indexOf(".living-atlas-globe__home-base {");
     const rule = css.slice(start, css.indexOf("}", start));
     expect(start).toBeGreaterThanOrEqual(0);
-    expect(rule).toContain("pointer-events: none;");
+    expect(rule).toContain("pointer-events: auto;");
+    expect(source).toContain('type="button"');
+    expect(source).toContain("element.tabIndex = visible ? 0 : -1");
+    expect(source).toContain("onHomeBaseActivate?.(descriptor.periodId)");
+    expect(source).toContain('aria-controls={activeHomeBaseContextPeriodId === descriptor.periodId ? "home-base-context" : undefined}');
   });
 });

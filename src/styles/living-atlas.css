@@ -6867,11 +6867,17 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   place-items: center;
   box-sizing: border-box;
   transform: translate(-50%, -50%);
-  /* Keep the 44px accessibility box keyboard-focusable without creating a
-     dead wheel/drag/touch island over the canvas sibling. */
-  pointer-events: none;
-  cursor: default;
+  /* ST-065: the shipped Home anchor is now the one on-demand context target.
+     The 44px hit area is intentional interaction surface, not a permanent
+     toolbar; opening it never changes camera/focus ownership. */
+  pointer-events: auto;
+  cursor: pointer;
+  padding: 0;
+  border: 0;
   border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  font: inherit;
   outline: none;
 }
 
@@ -6899,6 +6905,85 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   font-size: 11px;
   letter-spacing: 0.08em;
   opacity: var(--home-base-emphasis);
+}
+
+
+/* ST-065: one compact, non-modal Home context surface. It is context-first,
+   contains no coordinates/address semantics, and yields entirely to narrative
+   owners in LivingAtlasApp. */
+.living-atlas__home-base-context {
+  position: absolute;
+  z-index: 73;
+  right: calc(env(safe-area-inset-right) + 24px);
+  bottom: calc(env(safe-area-inset-bottom) + 28px);
+  width: min(320px, calc(100vw - 48px));
+  padding: 16px;
+  border: 1px solid color-mix(in srgb, var(--atlas-cyan) 28%, var(--atlas-line));
+  border-radius: 18px;
+  background: rgba(2, 10, 11, 0.78);
+  box-shadow: 0 22px 64px rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(18px);
+}
+
+.living-atlas__home-base-context > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.living-atlas__home-base-context > header p {
+  margin: 0;
+  color: color-mix(in srgb, var(--atlas-cyan) 72%, var(--atlas-text));
+  font: 500 9px/1.5 ui-monospace, "SFMono-Regular", Consolas, monospace;
+  letter-spacing: 0.12em;
+}
+
+.living-atlas__home-base-context > header h2 {
+  margin: 4px 0 0;
+  color: var(--atlas-text);
+  font-size: 19px;
+  font-weight: 520;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+}
+
+.living-atlas__home-base-context > header button {
+  display: grid;
+  place-items: center;
+  flex: 0 0 44px;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 1px solid var(--atlas-line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--atlas-muted);
+  cursor: pointer;
+}
+
+.living-atlas__home-base-context-facts {
+  display: grid;
+  gap: 3px;
+  margin-top: 13px;
+  color: var(--atlas-muted);
+  font: 500 10px/1.5 ui-monospace, "SFMono-Regular", Consolas, monospace;
+  letter-spacing: 0.06em;
+}
+
+.living-atlas__home-base-context-note {
+  margin: 12px 0 0;
+  color: #c6d2ce;
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.living-atlas[data-mobile-v2="on"] .living-atlas__home-base-context {
+  right: 12px;
+  bottom: calc(env(safe-area-inset-bottom) + 142px);
+  left: 12px;
+  width: auto;
+  border-radius: 16px;
 }
 
 /* #232: the quiet Home Base suggestion beside the Atlas timeline.

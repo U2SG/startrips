@@ -165,6 +165,8 @@ export type LivingAtlasGlobeProps = {
     periods: readonly HomeBasePeriod[];
     effectiveDate: string;
   };
+  activeHomeBaseContextPeriodId?: string | null;
+  onHomeBaseActivate?: (periodId: string) => void;
   onSemanticZoomChange?: (level: GlobeSemanticZoom) => void;
   onManualCameraInteraction?: () => void;
   onJourneyRouteActivate: (journeyId: string) => void;
@@ -355,6 +357,8 @@ export function LivingAtlasGlobe({
   activeJourneyRouteId,
   temporalReveal,
   homeBasePresence,
+  activeHomeBaseContextPeriodId,
+  onHomeBaseActivate,
   onSemanticZoomChange,
   onManualCameraInteraction,
   onJourneyRouteActivate,
@@ -377,10 +381,10 @@ export function LivingAtlasGlobe({
   const gestureHintVisible = globeGestureHintVisible(gestureHint);
   const modeNoteVisible = globeModeNoteVisible(gestureHint, { globeFocusMode, compactMobileLayout });
   const homeBaseLayer = useMemo(() => resolveLivingAtlasHomeBaseLayer(homeBasePresence), [homeBasePresence]);
-  const homeBaseElementsRef = useRef(new Map<string, HTMLDivElement>());
+  const homeBaseElementsRef = useRef(new Map<string, HTMLButtonElement>());
   const homeBaseFramesRef = useRef(new Map<string, ProjectedHomeBasePresence>());
   const applyHomeBaseFrame = useCallback((
-    element: HTMLDivElement,
+    element: HTMLButtonElement,
     frame: ProjectedHomeBasePresence | undefined,
   ) => {
     const visible = Boolean(frame?.visible);
@@ -391,7 +395,7 @@ export function LivingAtlasGlobe({
     element.style.left = `${frame.x}px`;
     element.style.top = `${frame.y}px`;
   }, []);
-  const bindHomeBaseElement = useCallback((periodId: string, element: HTMLDivElement | null) => {
+  const bindHomeBaseElement = useCallback((periodId: string, element: HTMLButtonElement | null) => {
     if (!element) {
       homeBaseElementsRef.current.delete(periodId);
       return;
@@ -866,15 +870,19 @@ export function LivingAtlasGlobe({
       ) : null}
 
       {dive.owner !== "detail" && !cinematicActive ? homeBaseLayer.map((descriptor) => (
-          <div
+          <button
             key={descriptor.periodId}
             ref={(element) => bindHomeBaseElement(descriptor.periodId, element)}
+            type="button"
             className="living-atlas-globe__home-base"
-            role="img"
             tabIndex={-1}
             hidden
             aria-label={descriptor.accessibleName}
+            aria-expanded={activeHomeBaseContextPeriodId === descriptor.periodId}
+            aria-controls={activeHomeBaseContextPeriodId === descriptor.periodId ? "home-base-context" : undefined}
+            data-home-base-period-id={descriptor.periodId}
             data-home-base-presence={descriptor.presence}
+            onClick={() => onHomeBaseActivate?.(descriptor.periodId)}
             style={{
               minWidth: descriptor.touchTargetPx,
               minHeight: descriptor.touchTargetPx,
@@ -885,7 +893,7 @@ export function LivingAtlasGlobe({
             {descriptor.label ? (
               <span className="living-atlas-globe__home-base-label" aria-hidden="true">{descriptor.label}</span>
             ) : null}
-          </div>
+          </button>
         )) : null}
 
       {showControls || showDiveIntent ? (

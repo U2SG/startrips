@@ -166,6 +166,8 @@ jobs:
             command: pnpm qa:guest-share
           - name: home-base-suggestion
             command: pnpm qa:home-base-suggestion
+          - name: home-base-context
+            command: pnpm qa:home-base-context
           - name: owner-share
             command: pnpm qa:owner-share
     steps:
@@ -212,6 +214,14 @@ jobs:
         with:
           name: home-base-suggestion-${{ github.run_attempt }}
           path: artifacts/home-base-suggestion/
+          if-no-files-found: warn
+
+      - name: Upload Home Base context capture
+        if: ${{ always() && matrix.name == 'home-base-context' }}
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: home-base-context-${{ github.run_attempt }}
+          path: artifacts/home-base-context/
           if-no-files-found: warn
 
       - name: Upload media motion review
