@@ -320,7 +320,6 @@ export function PersistentEarthProvider({ children }: { children: ReactNode }) {
                   onParticleAnchorFrame={atlas?.onParticleAnchorFrame}
                   homeBasePresence={atlas?.homeBasePresence ?? []}
                   onHomeBasePresenceFrame={atlas?.onHomeBasePresenceFrame}
-                  onRoutePointPointerResolver={atlas?.onRoutePointPointerResolver}
                   onManualCameraInteraction={atlas?.onManualCameraInteraction}
                   zoomIntent={atlas?.zoomIntent}
                   showArchiveSignals={false}
@@ -760,6 +759,11 @@ export function LivingAtlasGlobe({
     };
   }, [gestureHint.session, gestureHintVisible]);
 
+  const homeBaseInteractive = dive.owner !== "detail"
+    && !cinematicActive
+    && !onGlobePointPick
+    && Boolean(onHomeBaseActivate);
+
   useEffect(() => {
     persistentEarth.setAtlasPresentation({
       focusPoint,
@@ -830,10 +834,6 @@ export function LivingAtlasGlobe({
   // something real to reveal and nothing has to be revealed on a timer.
   const showDetail = dive.stage !== "particle";
   const detailMode = dive.stage === "detail";
-  const homeBaseInteractive = dive.owner !== "detail"
-    && !cinematicActive
-    && !onGlobePointPick
-    && Boolean(onHomeBaseActivate);
   // #308 review: compact mobile still needs a non-gesture path for external
   // keyboards and switch-control users. Keep the semantic Dive intent mounted
   // independently from the optional detail utility cluster; focus mode and
