@@ -68,19 +68,12 @@ const journeys = [
   // Point threshold while Beijing remains the exact Home/city overlap fixture.
   journey("bbbbbbbb-2222-4222-8222-222222222222", "赣南今夏", "2026-06-01", 25.0, 116.4),
 ];
-const mobileJourneys = [
-  journeys[0],
-  // Compact mobile separately proves Home's keyboard/accessibility target and
-  // context placement. Put the selected Journey on Home so projection is stable;
-  // pointer precedence for overlapping Route Points is already exercised above.
-  journey(
-    "bbbbbbbb-2222-4222-8222-222222222222",
-    "北京今夏",
-    "2026-06-01",
-    CURRENT_HOME.latitude,
-    CURRENT_HOME.longitude,
-  ),
-];
+// Compact mobile owns a separate accessibility/context-placement fixture. Keep
+// it free of Journey focus so the shipped fresh-Atlas Home camera seed is the
+// only spatial owner; Route Point/city pointer precedence is already exercised
+// above on the real overlap fixture. This proves the Home target itself rather
+// than coupling keyboard reachability to an unrelated Journey focus flight.
+const mobileJourneys = [];
 
 const browser = await launchQaBrowser({
   headless: true,
