@@ -120,18 +120,21 @@ export function homeBaseContextActivationAvailable({
   view,
   storyActive,
   playbackActive,
+  playbackMenuActive,
   globePickActive,
 }: {
   hasHomeReader: boolean;
   view: AtlasView;
   storyActive: boolean;
   playbackActive: boolean;
+  playbackMenuActive: boolean;
   globePickActive: boolean;
 }) {
   return hasHomeReader
     && view === "planet"
     && !storyActive
     && !playbackActive
+    && !playbackMenuActive
     && !globePickActive;
 }
 
@@ -1510,6 +1513,7 @@ export function LivingAtlasApp({
       view !== "planet"
       || storyJourneyId !== null
       || playbackActive
+      || playbackModeMenuJourneyId !== null
       || routePointContextSelection.intent !== null
       || globePickActive
     ) {
@@ -1519,6 +1523,7 @@ export function LivingAtlasApp({
     clearHomeBaseContext,
     globePickActive,
     playbackActive,
+    playbackModeMenuJourneyId,
     routePointContextSelection.intent,
     storyJourneyId,
     view,
@@ -2319,6 +2324,7 @@ export function LivingAtlasApp({
               view,
               storyActive: storyJourneyId !== null,
               playbackActive,
+              playbackMenuActive: playbackModeMenuJourneyId !== null,
               globePickActive,
             }) ? (periodId) => {
               clearRoutePointContext();

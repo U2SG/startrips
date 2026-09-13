@@ -380,6 +380,43 @@ export const GLOBE_RENDER_ORDER = {
 // former +/-35 degree clamp and turn it completely over.
 export const GLOBE_TILT_LIMIT_RADIANS = Number.POSITIVE_INFINITY;
 export const GLOBE_SURFACE_RADIUS = GEOGRAPHIC_SURFACE_RADIUS;
+
+export function cityPointCoordinates(city: Pick<CityPoint, "latitude" | "longitude"> | null) {
+  return city ? { latitude: city.latitude, longitude: city.longitude } : null;
+}
+
+export function journeyRoutePointTargetEligible(
+  target: { journeyId: string; routePointId?: string } | null | undefined,
+  activeJourneyRouteId: string | null | undefined,
+  routePointActivationEnabled: boolean,
+) {
+  if (!target) return false;
+  return !target.routePointId
+    || !routePointActivationEnabled
+    || target.journeyId === activeJourneyRouteId;
+}
+
+export function selectHomeBasePointerTarget(
+  frames: readonly ProjectedHomeBasePresence[],
+  descriptors: readonly Pick<HomeBasePresenceDrawable, "periodId" | "touchTargetPx">[],
+  clientX: number,
+  clientY: number,
+): string | null {
+  // Home markers paint in descriptor order, so reverse traversal matches the
+  // visual stack: current/period-context markers painted last win over older
+  // historical traces at the same geographic anchor.
+  for (let index = frames.length - 1; index >= 0; index -= 1) {
+    const frame = frames[index];
+    if (!frame?.visible) continue;
+    const descriptor = descriptors.find((candidate) => candidate.periodId === frame.periodId);
+    if (!descriptor) continue;
+    const halfTarget = descriptor.touchTargetPx / 2;
+    if (Math.abs(clientX - frame.x) <= halfTarget && Math.abs(clientY - frame.y) <= halfTarget) {
+      return frame.periodId;
+    }
+  }
+  return null;
+}
 // #252: the latitude step the local geographic scale is measured over. Small
 // enough that the projection is locally linear across it, large enough that the
 // difference is far above the 0.01px the anchor is published at.
@@ -3520,6 +3557,12 @@ export function ParticleEarthScene({
         .intersectObject(routePointSignals, false)
         .find((candidate) => {
           if (candidate.index === undefined || !positions) return false;
+          const target = journeyPointTargets[candidate.index] ?? null;
+          if (!journeyRoutePointTargetEligible(
+            target,
+            latestActiveJourneyRouteId.current,
+            Boolean(latestOnJourneyRoutePointActivate.current),
+          )) return false;
           routeLocalPoint.fromBufferAttribute(positions, candidate.index);
           return isSphericalPointVisible(routeCameraPosition, routeLocalPoint);
         });
@@ -3529,17 +3572,12 @@ export function ParticleEarthScene({
     };
     const homeBaseTargetFromPointer = (clientX: number, clientY: number): string | null => {
       if (!latestOnHomeBaseActivate.current || publishedHomeBasePresenceFrame.length === 0) return null;
-      const descriptors = latestHomeBasePresence.current;
-      for (const frame of publishedHomeBasePresenceFrame) {
-        if (!frame.visible) continue;
-        const descriptor = descriptors.find((candidate) => candidate.periodId === frame.periodId);
-        if (!descriptor) continue;
-        const halfTarget = descriptor.touchTargetPx / 2;
-        if (Math.abs(clientX - frame.x) <= halfTarget && Math.abs(clientY - frame.y) <= halfTarget) {
-          return frame.periodId;
-        }
-      }
-      return null;
+      return selectHomeBasePointerTarget(
+        publishedHomeBasePresenceFrame,
+        latestHomeBasePresence.current,
+        clientX,
+        clientY,
+      );
     };
     const activatePointerTarget = (
       event: PointerEvent,
@@ -3749,11 +3787,8 @@ export function ParticleEarthScene({
     const cityPointerPicks = new Map<number, { latitude: number; longitude: number }>();
     const cityPickFromEventTarget = (target: EventTarget | null) => {
       if (!(target instanceof SVGTextElement) || !target.classList.contains("particle-earth-city")) return null;
-      const latitude = Number(target.dataset.cityLat);
-      const longitude = Number(target.dataset.cityLon);
-      return Number.isFinite(latitude) && Number.isFinite(longitude)
-        ? { latitude, longitude }
-        : null;
+      const entry = cityLabelPool.find((candidate) => candidate.element === target) ?? null;
+      return cityPointCoordinates(entry?.city ?? null);
     };
 
     const onPointerDown = (event: PointerEvent) => {

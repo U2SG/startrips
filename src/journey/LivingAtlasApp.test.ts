@@ -1914,6 +1914,7 @@ describe("ST-065 Home Base context ownership", () => {
       view: "planet" as const,
       storyActive: false,
       playbackActive: false,
+      playbackMenuActive: false,
       globePickActive: false,
     };
     expect(homeBaseContextActivationAvailable(available)).toBe(true);
@@ -1921,6 +1922,7 @@ describe("ST-065 Home Base context ownership", () => {
     expect(homeBaseContextActivationAvailable({ ...available, view: "timeline" })).toBe(false);
     expect(homeBaseContextActivationAvailable({ ...available, storyActive: true })).toBe(false);
     expect(homeBaseContextActivationAvailable({ ...available, playbackActive: true })).toBe(false);
+    expect(homeBaseContextActivationAvailable({ ...available, playbackMenuActive: true })).toBe(false);
     expect(homeBaseContextActivationAvailable({ ...available, globePickActive: true })).toBe(false);
   });
 });
