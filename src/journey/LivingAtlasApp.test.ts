@@ -1901,6 +1901,7 @@ describe("ST-065 Home Base context ownership", () => {
     expect(source).toContain("clearHomeBaseContext();\n    const journey = journeys.find((candidate) => candidate.id === journeyId)");
     expect(source).toContain("[clearHomeBaseContext, timeCursor.cursor, timeCursor.timelineRevision]");
     expect(source).toContain('data-home-base-context');
+    expect(source).toContain('homeBaseSuggestion?.visible && !homeBaseContext');
     expect(source).not.toContain('role="dialog"\n          data-home-base-context');
   });
 

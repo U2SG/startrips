@@ -2431,7 +2431,7 @@ export function LivingAtlasApp({
           no `role="dialog"`, no focus trap and no `inert`: the Atlas remains
           usable and the member can simply never answer. Story/Playback
           suppression still belongs to `resolveHomeBaseSuggestion`. */}
-      {homeBaseSuggestion?.visible && ((!isMobileV2 && view === "timeline") || (isMobileV2 && view === "planet")) ? (
+      {homeBaseSuggestion?.visible && !homeBaseContext && ((!isMobileV2 && view === "timeline") || (isMobileV2 && view === "planet")) ? (
         <aside
           className="living-atlas__home-base-suggestion motion-fade-through"
           data-home-base-suggestion={homeBaseSuggestion.variant}

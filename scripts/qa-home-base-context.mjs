@@ -281,6 +281,7 @@ try {
       markerHit: Math.min(markerRect.width, markerRect.height),
       permanentHomeTabs: [...document.querySelectorAll("button")]
         .filter((button) => /Home Base|常住地/.test(button.textContent ?? "") && !button.matches(".living-atlas-globe__home-base")).length,
+      suggestionsWhileContextOpen: document.querySelectorAll(".living-atlas__home-base-suggestion").length,
     };
   });
   await mobilePage.screenshot({ path: `${captureDir}/03-mobile-current-context.png`, fullPage: false });
@@ -293,6 +294,7 @@ try {
     && mobilePlacement.aboveChrome
     && mobilePlacement.markerHit >= 44
     && mobilePlacement.permanentHomeTabs === 0
+    && mobilePlacement.suggestionsWhileContextOpen === 0
   ));
   await closeContext(mobilePage);
   await mobileMarker.focus();
