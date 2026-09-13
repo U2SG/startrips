@@ -31,6 +31,7 @@ import {
   useGlobeProjection,
 } from "./detailedEarthModel";
 import {
+  canCommitDetailedEarthReveal,
   resolveDetailedEarthRevealSyncAction,
   type DetailReadiness,
   type DetailedEarthSurfaceGeometry,
@@ -224,6 +225,11 @@ export default function DetailedEarthMap({
     let renderCount = 0;
     let idleCount = 0;
     let resizeCount = 0;
+    let pendingRevealCommit: {
+      revision: number;
+      stage: EarthDiveStage;
+      afterRenderCount: number;
+    } | null = null;
     mapRef.current = map;
     // Register the one-shot load observation immediately after construction.
     // A tiny inline/QA style can become style-loaded before the rest of this
@@ -367,19 +373,37 @@ export default function DetailedEarthMap({
 
     const publishPaintQuadrants = (geometry: DetailedEarthSurfaceGeometry) => {
       const points = [
-        [geometry.hostWidth * 0.25, geometry.hostHeight * 0.25],
-        [geometry.hostWidth * 0.75, geometry.hostHeight * 0.25],
-        [geometry.hostWidth * 0.25, geometry.hostHeight * 0.75],
-        [geometry.hostWidth * 0.75, geometry.hostHeight * 0.75],
+        [geometry.canvasCssWidth * 0.25, geometry.canvasCssHeight * 0.25],
+        [geometry.canvasCssWidth * 0.75, geometry.canvasCssHeight * 0.25],
+        [geometry.canvasCssWidth * 0.25, geometry.canvasCssHeight * 0.75],
+        [geometry.canvasCssWidth * 0.75, geometry.canvasCssHeight * 0.75],
       ] as const;
       try {
-        host.dataset.mapPaintQuadrants = points
-          .map((point) => map.queryRenderedFeatures([point[0], point[1]]).length)
-          .join(",");
+        // Read the framebuffer during MapLibre's own `render` event. Unlike a
+        // feature query, these four samples prove that the current drawing
+        // buffer actually contains visible pixels in every viewport quadrant.
+        // This is diagnostic evidence only; readiness is still the renderer's
+        // post-sync render revision below.
+        const gl = canvas.getContext("webgl2") ?? canvas.getContext("webgl");
+        if (!gl || geometry.canvasCssWidth <= 0 || geometry.canvasCssHeight <= 0) {
+          host.dataset.mapPaintQuadrants = "unavailable";
+          return;
+        }
+        const pixel = new Uint8Array(4);
+        host.dataset.mapPaintQuadrants = points.map(([cssX, cssY]) => {
+          const x = Math.max(0, Math.min(
+            canvas.width - 1,
+            Math.floor((cssX / geometry.canvasCssWidth) * canvas.width),
+          ));
+          const yFromTop = Math.max(0, Math.min(
+            canvas.height - 1,
+            Math.floor((cssY / geometry.canvasCssHeight) * canvas.height),
+          ));
+          const y = canvas.height - 1 - yFromTop;
+          gl.readPixels(x, y, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
+          return Array.from(pixel).join(":");
+        }).join(",");
       } catch {
-        // Paint sampling is diagnostic evidence, never a second readiness
-        // authority. A style without queryable layers may legitimately report
-        // no feature counts while the render event still proves frame commit.
         host.dataset.mapPaintQuadrants = "unavailable";
       }
     };
@@ -404,20 +428,13 @@ export default function DetailedEarthMap({
       delete host.dataset.mapRevealStage;
       delete host.dataset.mapPostSyncRenderRevision;
 
-      // A load/style event only proves resources and calibration are available.
-      // The reveal gate is the NEXT MapLibre render after current geometry has
-      // been synchronized. Correct geometry still needs triggerRepaint because
-      // #355 reproduced with a full-size canvas that had not visibly painted.
-      map.once("render", () => {
-        if (removed || revision !== revealRevision) return;
-        const committedGeometry = publishSurfaceGeometry();
-        publishPaintQuadrants(committedGeometry);
-        host.dataset.mapPostSyncRenderRevision = String(revision);
-        host.dataset.mapRevealStage = stage;
-        host.dataset.mapRevealCameraAfter = cameraSignature();
-        publishAnchorFrame();
-        publishReadiness(fullySettled ? "fully-settled" : "visual-ready");
-      });
+      // A load/style/render bootstrap only proves resources and calibration are
+      // available. The reveal gate is a LATER MapLibre render after current
+      // geometry has been synchronized. Record the current render counter so a
+      // listener installed from inside a `render` callback can never consume
+      // that same pre-sync frame (the P1 caught on 80449f9). Newer revisions
+      // simply replace this pending commit, so stale callbacks cannot publish.
+      pendingRevealCommit = { revision, stage, afterRenderCount: renderCount };
 
       if (action === "resize") {
         host.dataset.mapProgrammaticResizeRevision = String(revision);
@@ -437,9 +454,26 @@ export default function DetailedEarthMap({
       host.dataset.mapRenderCount = String(renderCount);
       // MapLibre can render a valid style frame before its one-shot `load`
       // event under a hidden/prewarmed surface. Use that renderer event only
-      // to bootstrap initial synchronization; reveal still waits for the NEXT
-      // post-sync render revision below.
+      // to bootstrap initial synchronization; reveal still waits for a LATER
+      // post-sync render revision.
       if (!initialLoadSettled) settleInitialLoad?.();
+
+      const pending = pendingRevealCommit;
+      if (
+        pending
+        && !removed
+        && pending.revision === revealRevision
+        && canCommitDetailedEarthReveal(renderCount, pending.afterRenderCount)
+      ) {
+        pendingRevealCommit = null;
+        const committedGeometry = publishSurfaceGeometry();
+        publishPaintQuadrants(committedGeometry);
+        host.dataset.mapPostSyncRenderRevision = String(pending.revision);
+        host.dataset.mapRevealStage = pending.stage;
+        host.dataset.mapRevealCameraAfter = cameraSignature();
+        publishAnchorFrame();
+        publishReadiness(fullySettled ? "fully-settled" : "visual-ready");
+      }
     });
     map.on("resize", () => {
       resizeCount += 1;

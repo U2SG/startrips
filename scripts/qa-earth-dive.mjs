@@ -52,27 +52,15 @@ const VIEWPORT = { width: 1440, height: 1024 };
 const QA_PAINT_STYLE = {
   version: 8,
   name: "QA painted detailed-earth style",
-  sources: {
-    "qa-paint": {
-      type: "geojson",
-      data: {
-        type: "FeatureCollection",
-        features: [{
-          type: "Feature",
-          properties: { qa: "paint-surface" },
-          geometry: {
-            type: "Polygon",
-            coordinates: [[[-179, -80], [179, -80], [179, 80], [-179, 80], [-179, -80]]],
-          },
-        }],
-      },
-    },
-  },
+  sources: {},
+  // A background layer paints every framebuffer quadrant synchronously and has
+  // no source/tile readiness of its own. The runtime evidence reads actual RGBA
+  // pixels from MapLibre's drawing buffer, so this fixture grades full-surface
+  // paint rather than whether an arbitrary GeoJSON feature happened to load.
   layers: [{
     id: "qa-paint-surface",
-    type: "fill",
-    source: "qa-paint",
-    paint: { "fill-color": "#173d43", "fill-opacity": 1 },
+    type: "background",
+    paint: { "background-color": "#173d43", "background-opacity": 1 },
   }],
 };
 const MAP_STYLE_PATTERN = /\/api\/mapstyle\?path=styles(?:%2F|\/)fiord(?:$|&)/i;
@@ -181,6 +169,7 @@ async function readDive(page) {
       readiness: map?.getAttribute("data-map-readiness") ?? null,
       mapError: map?.getAttribute("data-map-error") ?? null,
       mapLoadCount: Number(map?.getAttribute("data-map-load-count") ?? 0),
+      mapLoadSource: map?.getAttribute("data-map-load-source") ?? null,
       mapRenderCount: Number(map?.getAttribute("data-map-render-count") ?? 0),
       mapIdleCount: Number(map?.getAttribute("data-map-idle-count") ?? 0),
       mapResizeCount: Number(map?.getAttribute("data-map-resize-count") ?? 0),
@@ -242,18 +231,49 @@ async function installStageRecorder(page) {
     // A stage change is a DOM write, so the observer sees every one of them -
     // including a pair that happens inside a single animation frame, which a
     // poll would miss and report as a skipped stage.
-    const observer = new MutationObserver(() => {
+    const recordStagePresentation = () => {
       const next = sample();
-      const last = window.__qaEarthDiveStages.at(-1);
-      if (last && last.stage === next.stage) return;
+      const lastIndex = window.__qaEarthDiveStages.length - 1;
+      const last = window.__qaEarthDiveStages[lastIndex];
+      if (last && last.stage === next.stage) {
+        // A newly-entered blending stage can intentionally start as `holding`
+        // until its post-sync render arrives. Preserve one entry per stage but
+        // keep that entry current when presentation state catches up.
+        window.__qaEarthDiveStages[lastIndex] = next;
+        return;
+      }
       window.__qaEarthDiveStages.push(next);
-    });
+    };
+    const observer = new MutationObserver(recordStagePresentation);
     observer.observe(section, { attributes: true, attributeFilter: ["data-earth-dive"] });
+    if (detailLayer instanceof HTMLElement) {
+      const revealObserver = new MutationObserver(recordStagePresentation);
+      revealObserver.observe(detailLayer, {
+        attributes: true,
+        attributeFilter: ["data-earth-dive-spatial-reveal"],
+      });
+    }
     window.__qaEarthDiveReset = () => {
       window.__qaEarthDiveStages = [sample()];
       window.__qaEarthDiveWheelEvents = [];
     };
   });
+}
+
+
+function paintedQuadrants(value) {
+  if (typeof value !== "string" || !value) return [];
+  return value.split(",").map((sample) => sample.split(":").map(Number));
+}
+
+function allQuadrantsPainted(value) {
+  const samples = paintedQuadrants(value);
+  return samples.length === 4 && samples.every((rgba) => (
+    rgba.length === 4
+    && rgba.every(Number.isFinite)
+    && rgba[3] > 0
+    && (rgba[0] + rgba[1] + rgba[2]) > 0
+  ));
 }
 
 async function stages(page) {
@@ -742,18 +762,15 @@ try {
   if (detailOwnedWheelCount === 0 && !(mapSelfContinuityError <= LOCAL_SCALE_TOLERANCE)) {
     ladderFailures.push(`the detail frame jumped by ${mapSelfContinuityError} without user input`);
   }
-  const reentryQuadrants = reentryReveal.paintQuadrants?.split(",").map(Number) ?? [];
   if (
     JSON.stringify(reentryStages) !== JSON.stringify(["particle", "prewarm", "blending", "detail"])
     || reentryReveal.mapLoadCount !== 1
     || reentryReveal.postSyncRenderRevision !== reentryReveal.revealRevision
     || reentryReveal.revealStage !== "blending"
-    || reentryQuadrants.length !== 4
-    || reentryQuadrants.some((count) => !(count > 0))
+    || !allQuadrantsPainted(reentryReveal.paintQuadrants)
   ) {
     ladderFailures.push(`the reverse->dive lifecycle did not produce one fresh fully-painted map: ${JSON.stringify({ stages: reentryStages, reveal: reentryReveal })}`);
   }
-  const firstRevealQuadrants = firstReveal.paintQuadrants?.split(",").map(Number) ?? [];
   if (
     firstReveal.mapLoadCount !== 1
     || !(firstReveal.mapRenderCount > 0)
@@ -763,7 +780,7 @@ try {
   ) {
     ladderFailures.push(`the first reveal did not publish a current post-sync render revision: ${JSON.stringify(firstReveal)}`);
   }
-  if (firstRevealQuadrants.length !== 4 || firstRevealQuadrants.some((count) => !(count > 0))) {
+  if (!allQuadrantsPainted(firstReveal.paintQuadrants)) {
     ladderFailures.push(`the first reveal did not paint all four deterministic QA quadrants: ${JSON.stringify(firstReveal.paintQuadrants)}`);
   }
   if (!firstReveal.hostRect || !firstReveal.canvasCss || !firstReveal.canvasBuffer) {
@@ -944,7 +961,11 @@ try {
     (state) => state.stage === "blending",
     "the reduced-motion dive never reached blending",
   );
-  await reducedRun.page.waitForTimeout(180);
+  await reducedRun.page.waitForFunction(() => {
+    const map = document.querySelector(".detailed-earth-map");
+    return map?.getAttribute("data-map-reveal-stage") === "blending"
+      && map.getAttribute("data-map-post-sync-render-revision") === map.getAttribute("data-map-reveal-revision");
+  }, null, { timeout: 5_000 });
   const reducedReveal = await readSpatialReveal(reducedRun.page);
   result.reducedMotion = { reveal: reducedReveal, pageErrors: reducedRun.pageErrors };
   const reducedFailures = [];
@@ -1099,7 +1120,6 @@ try {
     "the 1920x1080 cold reveal never committed",
   );
   const wideReveal = await readDive(wideRun.page);
-  const wideQuadrants = wideReveal.paintQuadrants?.split(",").map(Number) ?? [];
   const wideFailures = [];
   const wideRevisionBeforeResize = wideReveal.revealRevision;
   await wideRun.page.setViewportSize({ width: 1080, height: 1920 });
@@ -1125,7 +1145,7 @@ try {
   ) {
     wideFailures.push(`1920x1080 did not commit a current post-sync reveal frame: ${JSON.stringify(wideReveal)}`);
   }
-  if (wideQuadrants.length !== 4 || wideQuadrants.some((count) => !(count > 0))) {
+  if (!allQuadrantsPainted(wideReveal.paintQuadrants)) {
     wideFailures.push(`1920x1080 did not paint all four quadrants: ${JSON.stringify(wideReveal.paintQuadrants)}`);
   }
   if (wideReveal.revealCameraBefore !== wideReveal.revealCameraAfter) {

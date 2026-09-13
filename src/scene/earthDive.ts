@@ -40,6 +40,11 @@ export type DetailedEarthSurfaceGeometry = {
 
 export type DetailedEarthRevealSyncAction = "resize" | "repaint";
 
+/** A reveal synchronized during render N can only be proven by render N+1+. */
+export function canCommitDetailedEarthReveal(renderCount: number, synchronizedAfterRenderCount: number) {
+  return renderCount > synchronizedAfterRenderCount;
+}
+
 const REVEAL_GEOMETRY_EPSILON_PX = 0.5;
 const REVEAL_BUFFER_EPSILON_PX = 2;
 

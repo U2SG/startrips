@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   canBlendDetail,
+  canCommitDetailedEarthReveal,
   earthDiveBlendMs,
   resolveDetailedEarthRevealSyncAction,
   resolveEarthDive,
@@ -336,6 +337,11 @@ describe("earth dive ownership", () => {
     ], "prewarm"))).toEqual(["prewarm", "particle"]);
   });
   describe("detailed Earth reveal synchronization", () => {
+    it("never commits the same render that requested reveal synchronization", () => {
+      expect(canCommitDetailedEarthReveal(7, 7)).toBe(false);
+      expect(canCommitDetailedEarthReveal(8, 7)).toBe(true);
+    });
+
     const geometry = {
       hostWidth: 1920,
       hostHeight: 1080,
