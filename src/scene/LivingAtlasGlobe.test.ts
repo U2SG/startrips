@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { LivingAtlasGlobe, LivingAtlasGlobeControls, PersistentEarthProvider, resolveLivingAtlasHomeBaseLayer } from "./LivingAtlasGlobe";
+import { LivingAtlasGlobe, LivingAtlasGlobeControls, PersistentEarthProvider, resolveLivingAtlasHomeBaseLayer, resolveRoutePointPointerOwner } from "./LivingAtlasGlobe";
 import { getRouteFocusPhase } from "./ParticleEarthScene";
 import type { HomeBasePeriod } from "../journey/homeBase";
 import { resolveHomeBasePresence } from "../journey/homeBasePresence";
@@ -179,5 +179,20 @@ describe("Home Base presence projection (ST-056)", () => {
     expect(source).toContain("element.tabIndex = visible ? 0 : -1");
     expect(source).toContain("onHomeBaseActivate?.(descriptor.periodId)");
     expect(source).toContain('aria-controls={activeHomeBaseContextPeriodId === descriptor.periodId ? "home-base-context" : undefined}');
+  });
+});
+
+
+describe("ST-065 Home / Route Point pointer ownership", () => {
+  it("forwards an overlapping pointer hit to the existing Route Point owner", () => {
+    const candidates = [
+      { journeyId: "journey-a", routePointId: "point-a", left: 90, right: 110, top: 90, bottom: 110, visible: true },
+      { journeyId: "journey-b", routePointId: "point-b", left: 98, right: 104, top: 98, bottom: 104, visible: true },
+    ];
+    expect(resolveRoutePointPointerOwner({ x: 101, y: 101 }, candidates)).toEqual({
+      journeyId: "journey-b", routePointId: "point-b",
+    });
+    expect(resolveRoutePointPointerOwner({ x: 140, y: 140 }, candidates)).toBeNull();
+    expect(resolveRoutePointPointerOwner({ x: 101, y: 101 }, [{ ...candidates[1], visible: false }])).toBeNull();
   });
 });

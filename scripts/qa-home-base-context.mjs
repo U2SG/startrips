@@ -58,7 +58,7 @@ function journey(id, title, startedOn, latitude, longitude) {
 
 const journeys = [
   journey("aaaaaaaa-1111-4111-8111-111111111111", "广州旧日", "2023-06-01", 23.1291, 113.2644),
-  journey("bbbbbbbb-2222-4222-8222-222222222222", "深圳今夏", "2026-06-01", 22.5431, 114.0579),
+  journey("bbbbbbbb-2222-4222-8222-222222222222", "深圳今夏", "2026-06-01", 22.6231, 114.1379),
 ];
 
 const browser = await launchQaBrowser({
@@ -245,6 +245,17 @@ try {
   await page.keyboard.press("Home");
   const historicalMarker = page.locator(`[data-home-base-period-id="${HISTORICAL_HOME.id}"]`);
   await historicalMarker.waitFor({ state: "visible", timeout: 15_000 });
+  // The historical Journey point intentionally shares this Home coordinate.
+  // Pointer activation must keep the existing Route Point owner; keyboard Home
+  // activation remains available and clears that subordinate point context.
+  await historicalMarker.click();
+  const overlappingRoutePointContext = page.locator("[data-route-point-context]");
+  await overlappingRoutePointContext.waitFor({ state: "visible", timeout: 5_000 });
+  record("overlapping Home pointer preserves Route Point ownership", {
+    routePointId: await overlappingRoutePointContext.getAttribute("data-route-point-id"),
+    homeContextCount: await page.locator("[data-home-base-context]").count(),
+  }, (await overlappingRoutePointContext.getAttribute("data-route-point-id")) === `${journeys[0].id}-point`
+    && (await page.locator("[data-home-base-context]").count()) === 0);
   await historicalMarker.focus();
   await page.keyboard.press("Enter");
   await context.waitFor({ state: "visible", timeout: 5_000 });
