@@ -303,6 +303,49 @@ describe("account identity repository", () => {
     })).rejects.toMatchObject({ code: "IDENTITY_ACTION_SESSION_CHANGED" });
   });
 
+  it("refreshes existing provider ownership from a fresh proof for the same subject", async () => {
+    const fixture = await seedUser("ownership-refresh");
+    const identity = {
+      providerId: "google",
+      subject: `subject-${randomUUID()}`,
+      email: null,
+      emailVerified: false,
+    } satisfies VerifiedProviderIdentity;
+    const initial = await linkIdentity(fixture, identity);
+    expect((await listAccountIdentityMethods(fixture.userId, new Set(["google"])))
+      .find((method) => method.id === initial.result.accountRecordId)).toMatchObject({
+      verified: false,
+      usable: false,
+    });
+
+    const verifiedEmail = `verified-${randomUUID()}@example.test`;
+    const refreshed = await linkIdentity(fixture, {
+      ...identity,
+      email: verifiedEmail,
+      emailVerified: true,
+    }, 20_000);
+    expect(refreshed.result.accountRecordId).toBe(initial.result.accountRecordId);
+
+    const [ownership] = await db.select({
+      providerEmail: accountIdentityOwnerships.providerEmail,
+      providerEmailVerified: accountIdentityOwnerships.providerEmailVerified,
+      verifiedAt: accountIdentityOwnerships.verifiedAt,
+    }).from(accountIdentityOwnerships).where(eq(
+      accountIdentityOwnerships.accountRecordId,
+      initial.result.accountRecordId,
+    ));
+    expect(ownership).toMatchObject({
+      providerEmail: verifiedEmail,
+      providerEmailVerified: true,
+    });
+    expect(ownership!.verifiedAt.getTime()).toBe(TEST_NOW.getTime() + 23_000);
+    expect((await listAccountIdentityMethods(fixture.userId, new Set(["google"])))
+      .find((method) => method.id === initial.result.accountRecordId)).toMatchObject({
+      verified: true,
+      usable: true,
+    });
+  });
+
   it("does not count an unverified or unconfigured provider as a usable fallback", async () => {
     const fixture = await seedUser("usable-guard");
     const linked = await linkIdentity(fixture, {

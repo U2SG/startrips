@@ -384,6 +384,21 @@ export async function completeIdentityLink(values: {
         providerEmailVerified: values.proof.identity.emailVerified,
         verifiedAt: now,
       });
+    } else {
+      // The external provider subject is already the stable identity key, so a
+      // fresh provider authorization for that same subject is authoritative
+      // for its current email/verification metadata. Refresh it fail-closed:
+      // an unverified/missing email makes the method unusable until a later
+      // verified proof upgrades it again, while no email value is ever used to
+      // decide account ownership.
+      await transaction
+        .update(accountIdentityOwnerships)
+        .set({
+          providerEmail: values.proof.identity.email,
+          providerEmailVerified: values.proof.identity.emailVerified,
+          verifiedAt: now,
+        })
+        .where(eq(accountIdentityOwnerships.id, owned.id));
     }
     await audit(transaction, {
       userId: values.userId,
