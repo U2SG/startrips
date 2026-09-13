@@ -1174,6 +1174,25 @@ describe("persistable Home Base evidence digests", () => {
     expect(isPersistableHomeBaseEvidenceDigest(digest)).toBe(true);
   });
 
+  it("accepts a genuine digest whose supporting Journey set exceeds the former 64 KiB ceiling", () => {
+    // A digest carries roughly forty bytes per supporting Journey, so a member
+    // with a long-lived Home region produced output the persistence guard used
+    // to refuse — which left the real card impossible to dismiss or reject.
+    const manySupports = Array.from({ length: 2400 }, (_value, index) => ({
+      journeyId: `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
+      supportsStart: true,
+      supportsEnd: index % 2 === 0,
+    }));
+    const wideDigest = homeBaseEvidenceDigest({
+      anchor: SHENZHEN,
+      supports: manySupports,
+      evidenceStartedOn: "2020-01-01",
+      evidenceEndedOn: "2026-04-15",
+    });
+    expect(wideDigest.length).toBeGreaterThan(64 * 1024);
+    expect(isPersistableHomeBaseEvidenceDigest(wideDigest)).toBe(true);
+  });
+
   it("rejects noncanonical, forged, or oversized digest payloads", () => {
     expect(isPersistableHomeBaseEvidenceDigest(` ${digest}`)).toBe(false);
     expect(isPersistableHomeBaseEvidenceDigest(`${digest.slice(0, -8)}deadbeef`)).toBe(false);

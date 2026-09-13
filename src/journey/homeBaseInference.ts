@@ -120,7 +120,17 @@ type DigestSnapshot = {
 };
 
 const DIGEST_PREFIX = "hbi-v2";
-export const HOME_BASE_EVIDENCE_DIGEST_MAX_LENGTH = 64 * 1024;
+/**
+ * A pre-parse ceiling, not a policy bound. A genuine digest carries one token
+ * per supporting Journey, so any fixed small ceiling eventually rejects the
+ * core's own output and leaves the member unable to answer their card at all.
+ * This is therefore set to the API body limit: nothing larger can reach the
+ * write endpoint anyway, so the ceiling can never be what refuses a digest the
+ * request actually carried. Authenticity is proved by rebuilding the digest in
+ * `isPersistableHomeBaseEvidenceDigest`, and durable growth is bounded by the
+ * per-Atlas answer cap and its rotation, not by this number.
+ */
+export const HOME_BASE_EVIDENCE_DIGEST_MAX_LENGTH = 512 * 1024;
 const PERSISTED_JOURNEY_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const DAYS_BEFORE_MONTH = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334] as const;
 

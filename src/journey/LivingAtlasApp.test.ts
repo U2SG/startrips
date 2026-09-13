@@ -1538,6 +1538,18 @@ describe("ST-060 the Home Base suggestion card is quiet and non-modal", () => {
     expect(dismiss.indexOf("mutations.recordHomeBaseDismissal"))
       .toBeLessThan(dismiss.indexOf("setHomeBaseDismissals((current)"));
   });
+
+  it("reconciles against the bounded answer history the server returns", () => {
+    // The server retires an older answer when the Atlas is at its cap, so a
+    // local append alone would keep a retired answer suppressing its own
+    // region for the rest of the session.
+    const source = readFileSync(new URL("./LivingAtlasApp.tsx", import.meta.url), "utf8");
+    const dismiss = source.slice(source.indexOf("const dismissHomeBaseSuggestion"));
+    const handler = dismiss.slice(0, dismiss.indexOf("const claimManualAtlasCamera"));
+    expect(handler).toContain("setHomeBaseDismissals(await listHomeBaseDismissals())");
+    expect(handler.indexOf("setHomeBaseDismissals((current)"))
+      .toBeLessThan(handler.indexOf("setHomeBaseDismissals(await listHomeBaseDismissals())"));
+  });
 });
 
 describe("ST-060 the suggestion waits for every private read it depends on", () => {

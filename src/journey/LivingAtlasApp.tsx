@@ -1184,12 +1184,24 @@ export function LivingAtlasApp({
         const existing = current ?? [];
         return [...existing.filter((item) => item.digest !== recorded.digest), recorded];
       });
+      // The server keeps this history bounded and may retire an older answer to
+      // make room for this one. A local append would leave that retired answer
+      // suppressing its own region for the rest of the session, so the
+      // authoritative list is read back; if the read fails the optimistic fold
+      // stands, which at worst delays the retirement until the next load.
+      if (listHomeBaseDismissals) {
+        try {
+          setHomeBaseDismissals(await listHomeBaseDismissals());
+        } catch {
+          // Keep the optimistic fold; the card stays down either way.
+        }
+      }
     } catch {
       showNotice("这次选择暂时没有保存成功，请稍后再试。");
     } finally {
       setHomeBaseSuggestionPending(false);
     }
-  }, [homeBaseSuggestion, homeEffectiveDate, mutations, showNotice]);
+  }, [homeBaseSuggestion, homeEffectiveDate, listHomeBaseDismissals, mutations, showNotice]);
 
   const claimManualAtlasCamera = useCallback(() => {
     atlasHomeCameraFreshRef.current = false;
