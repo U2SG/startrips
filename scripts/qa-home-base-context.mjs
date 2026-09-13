@@ -218,6 +218,12 @@ try {
       tabIndex: element.tabIndex,
     };
   });
+  // Pointer ownership is measured on the unobscured geographic surface. The
+  // ordinary desktop active card legitimately sits above part of the globe;
+  // globe-focus removes that competing UI without changing the projected Home
+  // anchor or inventing a second interaction path.
+  await page.locator(".living-atlas__globe-focus").click();
+  await page.waitForFunction(() => document.querySelector(".living-atlas")?.getAttribute("data-globe-focus") === "on");
   const desktopPointerOwner = await clickProjectedHome(page, marker);
   const context = page.locator("[data-home-base-context]");
   await context.waitFor({ state: "visible", timeout: 5_000 });
@@ -249,6 +255,8 @@ try {
   ));
 
   await closeContext(page);
+  await page.locator(".living-atlas__globe-focus-exit").click();
+  await page.waitForFunction(() => document.querySelector(".living-atlas")?.getAttribute("data-globe-focus") === "off");
   await marker.focus();
   await page.keyboard.press("Enter");
   await context.waitFor({ state: "visible", timeout: 5_000 });
