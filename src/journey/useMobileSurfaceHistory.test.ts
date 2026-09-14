@@ -36,10 +36,11 @@ describe("mobile surface history replacement", () => {
     });
   });
 
-  it("defers a reopened surface while an owned reconciliation is scheduled or moving", () => {
+  it("writes through scheduled cleanup but defers once owned history traversal is moving", () => {
     expect(shouldDeferMobileSurfaceHistoryWrite(false, false)).toBe(false);
-    expect(shouldDeferMobileSurfaceHistoryWrite(true, false)).toBe(true);
+    expect(shouldDeferMobileSurfaceHistoryWrite(true, false)).toBe(false);
     expect(shouldDeferMobileSurfaceHistoryWrite(false, true)).toBe(true);
+    expect(shouldDeferMobileSurfaceHistoryWrite(true, true)).toBe(true);
   });
 
   it("keeps immediate Back ownership while only the reopened surface token write is deferred", () => {

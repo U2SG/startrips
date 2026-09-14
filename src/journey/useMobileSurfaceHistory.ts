@@ -32,7 +32,8 @@ export function shouldDeferMobileSurfaceHistoryWrite(
   scheduled: boolean,
   movePending: boolean,
 ) {
-  return scheduled || movePending;
+  void scheduled;
+  return movePending;
 }
 
 export function shouldIgnoreDeferredMobileSurfacePopState(
@@ -236,10 +237,11 @@ export function useMobileSurfaceHistory(
 
     window.addEventListener("popstate", onPopState);
 
-    // A replacement close may already have started an owned history traversal.
-    // Writing the next surface token into the entry being left makes the
-    // eventual popstate look like a Back against the freshly reopened surface.
-    // Defer only that token write: the visible surface already owns Back above.
+    // If stale-owner cleanup is only scheduled, write immediately: the new
+    // owner can replace that stale suffix before the reconcile microtask runs,
+    // so no browser traversal is needed for a same-commit surface replacement.
+    // Once history.go() is actually in flight, however, this document entry is
+    // being left; defer the token write until that owned traversal settles.
     cancelDeferredRegistration = runWhenHistorySettled(writeEntry);
 
     return () => {
