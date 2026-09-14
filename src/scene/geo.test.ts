@@ -956,6 +956,30 @@ describe("route arc geometry", () => {
     for (const leg of legs) expectRouteLegSamplingWithinTolerance(leg, maxSegmentAngle);
   });
 
+  it("short-circuits impossible rendered-floor searches at the 512-point route cap (#352 review)", () => {
+    const motif = [
+      { lat: 0, lon: 0 },
+      { lat: 0.000001, lon: 179.999999 },
+      { lat: 30, lon: 20 },
+    ];
+    const points = Array.from({ length: 171 }, () => motif).flat().slice(0, 512);
+    const arc = { arcHeightRatio: 0.22, arcSaturationAngle: Math.PI / 3 };
+    const maxSegmentAngle = Math.PI / 96;
+    const plans = planRouteArcLegs(points, maxSegmentAngle, 8192, arc);
+    const repeated = planRouteArcLegs(points, maxSegmentAngle, 8192, arc);
+
+    expect(points).toHaveLength(512);
+    expect(plans).toHaveLength(511);
+    expect(plans.reduce((sum, plan) => sum + plan.segmentCount, 0))
+      .toBeLessThanOrEqual(4096);
+    expect(plans.every((plan) => plan.segmentCount >= 1)).toBe(true);
+    // This near-antipodal route cannot fit the complete rendered floor vector.
+    // Floor discovery may stop once that is proven, but the returned #242
+    // best-effort allocation must remain deterministic and preserve every leg.
+    expect(repeated.map((plan) => plan.segmentCount))
+      .toEqual(plans.map((plan) => plan.segmentCount));
+  });
+
   it("does not treat an endpoint-only spline sample as a compliant budget floor (#352 review)", () => {
     const motif = [
       { lat: 0, lon: 0 },

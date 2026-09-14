@@ -891,42 +891,68 @@ export function planRouteArcLegs(
   // those floors. If the floors themselves do not fit, preserve the existing
   // best-effort budget degradation rather than breaching the hard ceiling.
   const scaledSegmentCounts = plans.map((plan) => plan.segmentCount);
-  const renderedMinimumCounts = plans.map((plan, index) => (
-    routeSplineMinimumCompliantSegmentCount(
-      plan,
+  // Floor discovery itself can be expensive on near-antipodal spans. The caller
+  // only needs the complete floor vector when it can fit the hard route budget,
+  // so stop searching as soon as the accumulated rendered floors make that
+  // impossible. This keeps the supported 512-point cap from paying an O(n)
+  // sequence of logarithmic spline searches for an allocation that will be
+  // discarded as best-effort anyway.
+  const renderedMinimumCounts: number[] = [];
+  let renderedMinimumTotal = 0;
+  let renderedFloorsFit = true;
+  for (let index = 0; index < plans.length; index += 1) {
+    const count = routeSplineMinimumCompliantSegmentCount(
+      plans[index],
       maxSegmentAngle,
       requestedSegmentCounts[index],
-    )
-  ));
-  const minimumCompliantCounts = renderedMinimumCounts.map((count, index) => {
-    if (count === null) return null;
-    if (!collapsedLegIndexes.has(index)) return count;
-    const preCollapseCount = routeSplineMinimumCompliantSegmentCount(
-      densityValidationShapes[index],
-      maxSegmentAngle,
-      preCollapseSegmentCounts[index],
     );
-    if (preCollapseCount === null) return null;
-    return Math.max(count, preCollapseCount);
-  });
+    if (count === null) {
+      renderedFloorsFit = false;
+      break;
+    }
+    renderedMinimumCounts.push(count);
+    renderedMinimumTotal += count;
+    if (renderedMinimumTotal > availableSegments) {
+      renderedFloorsFit = false;
+      break;
+    }
+  }
 
-  const chooseCompliantFloors = (): number[] | null => {
-    if (minimumCompliantCounts.every((count): count is number => count !== null)) {
-      const minimumTotal = minimumCompliantCounts.reduce((sum, count) => sum + count, 0);
-      if (minimumTotal <= availableSegments) return minimumCompliantCounts;
-    }
+  let selectedMinimumCounts: number[] | null = null;
+  if (renderedFloorsFit && renderedMinimumCounts.length === plans.length) {
+    const historicalMinimumCounts = [...renderedMinimumCounts];
+    let historicalMinimumTotal = renderedMinimumTotal;
+    let historicalFloorsFit = true;
+
     // A collapsed span can legitimately need fewer samples than the old shape.
-    // If preserving those historical floors would exceed the hard #242 budget,
-    // fall back to the floors proven against the shape we actually render.
-    // Keeping the scaled best-effort allocation here can under-sample a route
-    // even when every rendered-shape floor fits inside the existing budget.
-    if (renderedMinimumCounts.every((count): count is number => count !== null)) {
-      const renderedMinimumTotal = renderedMinimumCounts.reduce((sum, count) => sum + count, 0);
-      if (renderedMinimumTotal <= availableSegments) return renderedMinimumCounts;
+    // Preserve the old-shape floor when the complete historical allocation fits,
+    // but stop those searches as soon as it cannot. At that point the already
+    // proven rendered-shape floors are the exact fallback selected by the prior
+    // behavior, so no remaining historical search can change the result.
+    for (let index = 0; index < plans.length; index += 1) {
+      if (!collapsedLegIndexes.has(index)) continue;
+      const preCollapseCount = routeSplineMinimumCompliantSegmentCount(
+        densityValidationShapes[index],
+        maxSegmentAngle,
+        preCollapseSegmentCounts[index],
+      );
+      if (preCollapseCount === null) {
+        historicalFloorsFit = false;
+        break;
+      }
+      const combinedCount = Math.max(renderedMinimumCounts[index], preCollapseCount);
+      historicalMinimumTotal += combinedCount - historicalMinimumCounts[index];
+      historicalMinimumCounts[index] = combinedCount;
+      if (historicalMinimumTotal > availableSegments) {
+        historicalFloorsFit = false;
+        break;
+      }
     }
-    return null;
-  };
-  const selectedMinimumCounts = chooseCompliantFloors();
+
+    selectedMinimumCounts = historicalFloorsFit
+      ? historicalMinimumCounts
+      : renderedMinimumCounts;
+  }
 
   if (selectedMinimumCounts) {
     const rebalanced = scaledSegmentCounts.map((count, index) => (
