@@ -910,45 +910,60 @@ export function planRouteArcLegs(
     return Math.max(count, preCollapseCount);
   });
 
-  if (minimumCompliantCounts.every((count): count is number => count !== null)) {
-    const minimumTotal = minimumCompliantCounts.reduce((sum, count) => sum + count, 0);
-    if (minimumTotal <= availableSegments) {
-      const rebalanced = scaledSegmentCounts.map((count, index) => (
-        Math.max(count, minimumCompliantCounts[index])
-      ));
-      let rebalancedTotal = rebalanced.reduce((sum, count) => sum + count, 0);
+  const chooseCompliantFloors = (): number[] | null => {
+    if (minimumCompliantCounts.every((count): count is number => count !== null)) {
+      const minimumTotal = minimumCompliantCounts.reduce((sum, count) => sum + count, 0);
+      if (minimumTotal <= availableSegments) return minimumCompliantCounts;
+    }
+    // A collapsed span can legitimately need fewer samples than the old shape.
+    // If preserving those historical floors would exceed the hard #242 budget,
+    // fall back to the floors proven against the shape we actually render.
+    // Keeping the scaled best-effort allocation here can under-sample a route
+    // even when every rendered-shape floor fits inside the existing budget.
+    if (renderedMinimumCounts.every((count): count is number => count !== null)) {
+      const renderedMinimumTotal = renderedMinimumCounts.reduce((sum, count) => sum + count, 0);
+      if (renderedMinimumTotal <= availableSegments) return renderedMinimumCounts;
+    }
+    return null;
+  };
+  const selectedMinimumCounts = chooseCompliantFloors();
 
-      while (rebalancedTotal > availableSegments) {
-        let donorIndex = -1;
-        let donorSurplus = 0;
-        for (let index = 0; index < rebalanced.length; index += 1) {
-          const surplus = rebalanced[index] - minimumCompliantCounts[index];
-          if (surplus > donorSurplus) {
-            donorIndex = index;
-            donorSurplus = surplus;
-          }
+  if (selectedMinimumCounts) {
+    const rebalanced = scaledSegmentCounts.map((count, index) => (
+      Math.max(count, selectedMinimumCounts[index])
+    ));
+    let rebalancedTotal = rebalanced.reduce((sum, count) => sum + count, 0);
+
+    while (rebalancedTotal > availableSegments) {
+      let donorIndex = -1;
+      let donorSurplus = 0;
+      for (let index = 0; index < rebalanced.length; index += 1) {
+        const surplus = rebalanced[index] - selectedMinimumCounts[index];
+        if (surplus > donorSurplus) {
+          donorIndex = index;
+          donorSurplus = surplus;
         }
-        if (donorIndex < 0) break;
-        const transfer = Math.min(
-          donorSurplus,
-          rebalancedTotal - availableSegments,
-        );
-        rebalanced[donorIndex] -= transfer;
-        rebalancedTotal -= transfer;
       }
+      if (donorIndex < 0) break;
+      const transfer = Math.min(
+        donorSurplus,
+        rebalancedTotal - availableSegments,
+      );
+      rebalanced[donorIndex] -= transfer;
+      rebalancedTotal -= transfer;
+    }
 
-      const rebalancedIsCompliant = rebalanced.every((count, index) => (
-        routeSplineSamplingWithinTolerance(
-          sampleBoundedSplineDirections(plans[index], count),
-          maxSegmentAngle,
-        )
-      ));
-      const selectedCounts = rebalancedIsCompliant
-        ? rebalanced
-        : minimumCompliantCounts;
-      for (let index = 0; index < plans.length; index += 1) {
-        plans[index].segmentCount = selectedCounts[index];
-      }
+    const rebalancedIsCompliant = rebalanced.every((count, index) => (
+      routeSplineSamplingWithinTolerance(
+        sampleBoundedSplineDirections(plans[index], count),
+        maxSegmentAngle,
+      )
+    ));
+    const selectedCounts = rebalancedIsCompliant
+      ? rebalanced
+      : selectedMinimumCounts;
+    for (let index = 0; index < plans.length; index += 1) {
+      plans[index].segmentCount = selectedCounts[index];
     }
   }
 

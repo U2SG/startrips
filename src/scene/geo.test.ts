@@ -930,6 +930,32 @@ describe("route arc geometry", () => {
     }
   });
 
+  it("falls back to rendered spline floors when historical collapse floors exceed the budget (#352 review)", () => {
+    const motif = [
+      { lat: 44.296206, lon: -88.568000 },
+      { lat: 17.235804, lon: -74.729180 },
+      { lat: 67.624071, lon: -78.464036 },
+      { lat: -71.839474, lon: 125.978889 },
+      { lat: 66.739922, lon: -46.680545 },
+    ];
+    const points = Array.from({ length: 13 }, () => motif).flat().slice(0, 61);
+    const arc = { arcHeightRatio: 0.22, arcSaturationAngle: Math.PI / 3 };
+    const maxSegmentAngle = Math.PI / 96;
+    const plans = planRouteArcLegs(points, maxSegmentAngle, 8192, arc);
+    const legs = buildRouteArcLegSamples(points, maxSegmentAngle, 8192, arc);
+
+    expect(points).toHaveLength(61);
+    expect(plans).toHaveLength(60);
+    expect(legs).toHaveLength(60);
+    expect(plans.reduce((sum, plan) => sum + plan.segmentCount, 0))
+      .toBeLessThanOrEqual(4096);
+    // The pre-collapse compliant floors for this exact fixture total more than
+    // the route budget, while the collapsed shapes have a compliant allocation
+    // that fits. Falling back to the scaled best-effort counts under-samples
+    // recurring legs, so validate the geometry that is actually rendered.
+    for (const leg of legs) expectRouteLegSamplingWithinTolerance(leg, maxSegmentAngle);
+  });
+
   it("does not treat an endpoint-only spline sample as a compliant budget floor (#352 review)", () => {
     const motif = [
       { lat: 0, lon: 0 },
