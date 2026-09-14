@@ -649,6 +649,32 @@ describe("route arc geometry", () => {
       .toBeLessThanOrEqual(4096);
   });
 
+  it("revalidates sampling after one-sided shared-handle collapse (#352 review)", () => {
+    const points = [
+      { lat: 42.073943, lon: -75.399927 },
+      { lat: -71.687941, lon: 133.301644 },
+      { lat: 80.817352, lon: -130.625115 },
+      { lat: 77.055523, lon: -81.412687 },
+      { lat: -3.513580, lon: -64.819346 },
+    ];
+    const arc = { arcHeightRatio: 0.22, arcSaturationAngle: Math.PI / 3 };
+    const maxSegmentAngle = Math.PI / 96;
+    const plans = planRouteArcLegs(points, maxSegmentAngle, 8192, arc);
+    const legs = buildRouteArcLegSamples(points, maxSegmentAngle, 8192, arc);
+
+    expect(plans).toHaveLength(4);
+    expect(legs).toHaveLength(4);
+    expect(plans[2].startHandleAngle === 0 || plans[2].endHandleAngle === 0).toBe(true);
+    // The pre-collapse plan used 68 samples here, but after only one endpoint
+    // slope collapses the remaining Hermite curvature moves inward and needs
+    // a denser witness. Revalidate the rendered span instead of inheriting the
+    // old count simply because the route still fits the global budget.
+    expect(plans[2].segmentCount).toBeGreaterThan(68);
+    expect(plans.reduce((sum, plan) => sum + plan.segmentCount, 0))
+      .toBeLessThanOrEqual(4096);
+    for (const leg of legs) expectRouteLegSamplingWithinTolerance(leg, maxSegmentAngle);
+  });
+
   it("caps spherical spline deviation and collapses near-U-turn handles instead of looping (#352)", () => {
     const points = [
       { lat: 0, lon: 0 },

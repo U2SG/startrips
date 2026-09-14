@@ -775,6 +775,7 @@ export function planRouteArcLegs(
     endHandleAngle: plan.endHandleAngle,
     angle: plan.angle,
   }));
+  const preCollapseSegmentCounts = plans.map((plan) => plan.segmentCount);
 
   // A bounded cross-track slope can rotate an active endpoint away from the
   // route-wide shared tangent. Detect that before #242 budget scaling: a reduced
@@ -807,10 +808,27 @@ export function planRouteArcLegs(
       anchorsToCollapse.add(index + 1);
     }
   }
+  const collapsedLegIndexes = new Set<number>();
   for (const anchorIndex of anchorsToCollapse) {
     plans[anchorIndex - 1].endHandleAngle = 0;
     plans[anchorIndex].startHandleAngle = 0;
+    collapsedLegIndexes.add(anchorIndex - 1);
+    collapsedLegIndexes.add(anchorIndex);
   }
+
+  // Handle collapse changes the rendered Hermite span. Keep the pre-collapse
+  // request as a lower bound, but revalidate every mutated span before the
+  // early return or budget scaling: removing one endpoint slope can move the
+  // remaining curvature inward and require MORE samples than the old shape.
+  for (const index of collapsedLegIndexes) {
+    plans[index].segmentCount = routeSplineInteriorSegmentCount(
+      plans[index],
+      preCollapseSegmentCounts[index],
+      maxSegmentAngle,
+      availableSegments,
+    );
+  }
+  requested = plans.reduce((sum, plan) => sum + plan.segmentCount, 0);
 
   if (requested <= availableSegments) return plans;
 
@@ -840,13 +858,24 @@ export function planRouteArcLegs(
   // those floors. If the floors themselves do not fit, preserve the existing
   // best-effort budget degradation rather than breaching the hard ceiling.
   const scaledSegmentCounts = plans.map((plan) => plan.segmentCount);
-  const minimumCompliantCounts = densityValidationShapes.map((shape, index) => (
+  const renderedMinimumCounts = plans.map((plan, index) => (
     routeSplineMinimumCompliantSegmentCount(
-      shape,
+      plan,
       maxSegmentAngle,
       requestedSegmentCounts[index],
     )
   ));
+  const minimumCompliantCounts = renderedMinimumCounts.map((count, index) => {
+    if (count === null) return null;
+    if (!collapsedLegIndexes.has(index)) return count;
+    const preCollapseCount = routeSplineMinimumCompliantSegmentCount(
+      densityValidationShapes[index],
+      maxSegmentAngle,
+      preCollapseSegmentCounts[index],
+    );
+    if (preCollapseCount === null) return null;
+    return Math.max(count, preCollapseCount);
+  });
 
   if (minimumCompliantCounts.every((count): count is number => count !== null)) {
     const minimumTotal = minimumCompliantCounts.reduce((sum, count) => sum + count, 0);
@@ -877,7 +906,7 @@ export function planRouteArcLegs(
 
       const rebalancedIsCompliant = rebalanced.every((count, index) => (
         routeSplineSamplingWithinTolerance(
-          sampleBoundedSplineDirections(densityValidationShapes[index], count),
+          sampleBoundedSplineDirections(plans[index], count),
           maxSegmentAngle,
         )
       ));
