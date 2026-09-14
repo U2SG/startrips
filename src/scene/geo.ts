@@ -562,6 +562,47 @@ function routeSplineInteriorSegmentCount(
 }
 
 /**
+ * Find the smallest uniformly sampled count that satisfies the spline's
+ * angular-step and heading-change policy without walking every intermediate
+ * count. The bounded span gets an exponential bracket and then a binary
+ * refinement, keeping dense-route planning O(n log n) instead of quadratic.
+ */
+function routeSplineMinimumCompliantSegmentCount(
+  shape: RouteSplineLegShape,
+  maxSegmentAngle: number,
+  maxSegments: number,
+) {
+  const limit = Math.max(1, maxSegments);
+  const cache = new Map<number, boolean>();
+  const withinTolerance = (count: number) => {
+    const cached = cache.get(count);
+    if (cached !== undefined) return cached;
+    const result = routeSplineSamplingWithinTolerance(
+      sampleBoundedSplineDirections(shape, count),
+      maxSegmentAngle,
+    );
+    cache.set(count, result);
+    return result;
+  };
+
+  if (withinTolerance(1)) return 1;
+  let failed = 1;
+  let passing = Math.min(limit, 2);
+  while (passing < limit && !withinTolerance(passing)) {
+    failed = passing;
+    passing = Math.min(limit, passing * 2);
+  }
+  if (!withinTolerance(passing)) return null;
+
+  while (failed + 1 < passing) {
+    const midpoint = Math.floor((failed + passing) / 2);
+    if (withinTolerance(midpoint)) passing = midpoint;
+    else failed = midpoint;
+  }
+  return passing;
+}
+
+/**
  * #242: ONE decision about the geometry of a route, shared by the whole-route
  * stroke and the per-leg rewind paths.
  *
@@ -686,52 +727,48 @@ export function planRouteArcLegs(
   }
 
   // #352 review: proportional #242 scaling can invalidate the spline sampling
-  // policy that chose the pre-budget counts. Revalidate every scaled leg and
-  // raise only the legs that actually need more samples. If those raises cross
-  // the hard budget, transfer segments from still-compliant donor legs one at a
-  // time. This preserves the old best-effort budget degradation only when no
-  // fully compliant reallocation fits inside the same hard ceiling.
+  // policy that chose the pre-budget counts. Compute each leg's compliant floor
+  // with logarithmic refinement, then rebalance the scaled allocation above
+  // those floors. If the floors themselves do not fit, preserve the existing
+  // best-effort budget degradation rather than breaching the hard ceiling.
   const scaledSegmentCounts = plans.map((plan) => plan.segmentCount);
-  const compliantSegmentCounts = plans.map((plan, index) => {
-    const maximum = requestedSegmentCounts[index];
-    for (let count = plan.segmentCount; count <= maximum; count += 1) {
-      if (routeSplineSamplingWithinTolerance(
-        sampleBoundedSplineDirections(plan, count),
-        maxSegmentAngle,
-      )) return count;
-    }
-    return null;
-  });
+  const minimumCompliantCounts = plans.map((plan, index) => (
+    routeSplineMinimumCompliantSegmentCount(
+      plan,
+      maxSegmentAngle,
+      requestedSegmentCounts[index],
+    )
+  ));
 
-  if (compliantSegmentCounts.every((count): count is number => count !== null)) {
-    const rebalanced = [...compliantSegmentCounts];
-    let rebalancedTotal = rebalanced.reduce((sum, count) => sum + count, 0);
+  if (minimumCompliantCounts.every((count): count is number => count !== null)) {
+    const minimumTotal = minimumCompliantCounts.reduce((sum, count) => sum + count, 0);
+    if (minimumTotal <= availableSegments) {
+      const rebalanced = scaledSegmentCounts.map((count, index) => (
+        Math.max(count, minimumCompliantCounts[index])
+      ));
+      let rebalancedTotal = rebalanced.reduce((sum, count) => sum + count, 0);
 
-    while (rebalancedTotal > availableSegments) {
-      let donorIndex = -1;
-      for (let index = 0; index < plans.length; index += 1) {
-        const candidateCount = rebalanced[index] - 1;
-        if (candidateCount < 1) continue;
-        if (!routeSplineSamplingWithinTolerance(
-          sampleBoundedSplineDirections(plans[index], candidateCount),
-          maxSegmentAngle,
-        )) continue;
-        if (donorIndex < 0 || rebalanced[index] > rebalanced[donorIndex]) {
-          donorIndex = index;
+      while (rebalancedTotal > availableSegments) {
+        let donorIndex = -1;
+        let donorSurplus = 0;
+        for (let index = 0; index < rebalanced.length; index += 1) {
+          const surplus = rebalanced[index] - minimumCompliantCounts[index];
+          if (surplus > donorSurplus) {
+            donorIndex = index;
+            donorSurplus = surplus;
+          }
         }
+        if (donorIndex < 0) break;
+        const transfer = Math.min(
+          donorSurplus,
+          rebalancedTotal - availableSegments,
+        );
+        rebalanced[donorIndex] -= transfer;
+        rebalancedTotal -= transfer;
       }
-      if (donorIndex < 0) break;
-      rebalanced[donorIndex] -= 1;
-      rebalancedTotal -= 1;
-    }
 
-    if (rebalancedTotal <= availableSegments) {
       for (let index = 0; index < plans.length; index += 1) {
         plans[index].segmentCount = rebalanced[index];
-      }
-    } else {
-      for (let index = 0; index < plans.length; index += 1) {
-        plans[index].segmentCount = scaledSegmentCounts[index];
       }
     }
   }
