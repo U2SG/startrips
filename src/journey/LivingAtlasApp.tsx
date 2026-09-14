@@ -1066,6 +1066,15 @@ export function LivingAtlasApp({
    * selection whose entries mean "asset" cannot also mean "Journey".
    */
   const [shareTarget, setShareTarget] = useState<{ lockedJourneyId: string | null } | null>(null);
+  const shareCloseBlockedRef = useRef(false);
+  const setShareMutationPending = useCallback((pending: boolean) => {
+    shareCloseBlockedRef.current = pending;
+  }, []);
+  const requestShareClose = useCallback(() => {
+    if (shareCloseBlockedRef.current) return false;
+    setShareTarget(null);
+    return true;
+  }, []);
   const shareRestoreAtlasTriggerRef = useRef(false);
   const shareWasOpenRef = useRef(false);
   useEffect(() => {
@@ -1073,6 +1082,7 @@ export function LivingAtlasApp({
       shareWasOpenRef.current = true;
       return;
     }
+    shareCloseBlockedRef.current = false;
     if (!shareWasOpenRef.current) return;
     shareWasOpenRef.current = false;
     if (!shareRestoreAtlasTriggerRef.current) return;
@@ -1102,7 +1112,7 @@ export function LivingAtlasApp({
   useMobileSurfaceHistory(
     isMobileV2 && shareTarget !== null,
     "journey-share",
-    () => setShareTarget(null),
+    requestShareClose,
   );
   const mobileSheetActive = isMobileV2 && mobileSheetJourneyId !== null;
   const mobileSheetStoryActive = storyJourneyId !== null;
@@ -3039,7 +3049,8 @@ export function LivingAtlasApp({
           journeys={journeyRail}
           lockedJourneyId={shareTarget.lockedJourneyId}
           mutations={shareClient}
-          onClose={() => setShareTarget(null)}
+          onClose={requestShareClose}
+          onMutationPendingChange={setShareMutationPending}
         />
       ) : null}
 

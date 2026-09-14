@@ -42,6 +42,18 @@ export function nextMobileSurfaceHistoryWrite(
   return { mode: "push", stack: [...stack, token] };
 }
 
+export function countStaleMobileSurfaceHistorySuffix(
+  stack: readonly string[],
+  active: ReadonlySet<string>,
+) {
+  let count = 0;
+  for (let index = stack.length - 1; index >= 0; index -= 1) {
+    if (active.has(stack[index])) break;
+    count += 1;
+  }
+  return count;
+}
+
 function scheduleHistoryReconcile() {
   if (typeof window === "undefined" || reconcileScheduled || historyMovePending) return;
   reconcileScheduled = true;
@@ -50,11 +62,7 @@ function scheduleHistoryReconcile() {
     if (historyMovePending) return;
 
     const stack = readStack(window.history.state);
-    let staleTopCount = 0;
-    for (let index = stack.length - 1; index >= 0; index -= 1) {
-      if (activeTokens.has(stack[index])) break;
-      staleTopCount += 1;
-    }
+    const staleTopCount = countStaleMobileSurfaceHistorySuffix(stack, activeTokens);
     if (staleTopCount === 0) return;
 
     // Every token in the contiguous stale suffix represents one same-document
@@ -82,6 +90,11 @@ if (typeof window !== "undefined") {
   }
   window.addEventListener("popstate", () => {
     historyMovePending = false;
+    // A replacement can require more than one owned history hop: closing the
+    // replacement first lands on an older Story/sheet state, which is already
+    // stale in React. Re-run reconciliation after each owned navigation until
+    // the top token is live (or no Startrips token remains).
+    scheduleHistoryReconcile();
   });
 }
 

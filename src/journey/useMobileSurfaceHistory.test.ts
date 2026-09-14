@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { nextMobileSurfaceHistoryWrite } from "./useMobileSurfaceHistory";
+import {
+  countStaleMobileSurfaceHistorySuffix,
+  nextMobileSurfaceHistoryWrite,
+} from "./useMobileSurfaceHistory";
 
 describe("mobile surface history replacement", () => {
   it("replaces the stale Story token instead of burying a ghost Story under Share", () => {
@@ -29,5 +32,16 @@ describe("mobile surface history replacement", () => {
       mode: "push",
       stack: ["journey-story:1", "story-media-surface:2"],
     });
+  });
+
+  it("keeps collapsing a stale predecessor suffix after a replacement closes", () => {
+    expect(countStaleMobileSurfaceHistorySuffix(
+      ["journey-sheet:1", "journey-story:2"],
+      new Set(),
+    )).toBe(2);
+    expect(countStaleMobileSurfaceHistorySuffix(
+      ["journey-sheet:1", "journey-story:2"],
+      new Set(["journey-sheet:1"]),
+    )).toBe(1);
   });
 });

@@ -118,6 +118,7 @@ async function installOwnerApi(page, state) {
     if (request.method() === "POST") {
       const body = JSON.parse(request.postData() ?? "{}");
       requests.push({ kind: "create", body });
+      if (state.createGate) await state.createGate;
       const id = `share-${state.shares.length + 1}`;
       state.shares.unshift({
         id,
@@ -367,7 +368,7 @@ try {
         },
       });
     });
-    const state = { shares: [], requests: [] };
+    const state = { shares: [], requests: [], createGate: null };
     await installOwnerApi(page, state);
     await page.goto(`${origin}/?qaState=living-atlas`, { waitUntil: "domcontentloaded" });
     await page.locator(".living-atlas").waitFor({ timeout: 20_000 });
@@ -603,7 +604,7 @@ try {
       deviceScaleFactor: 1,
     });
     const page = await context.newPage();
-    const state = { shares: [], requests: [] };
+    const state = { shares: [], requests: [], createGate: null };
     await installOwnerApi(page, state);
     await page.goto(`${origin}/?qaState=living-atlas`, { waitUntil: "domcontentloaded" });
     await page.locator(".living-atlas").waitFor({ timeout: 20_000 });
@@ -653,6 +654,45 @@ try {
       !replaced.story && replaced.share && replaced.modalCount === 1,
       { ...replaced, replacementCapture });
     check(`${viewport.name}/share-inerts-background`, replaced.atlasInert, replaced);
+
+    // A share mutation owns the surface until its server result is known. A
+    // hardware/browser Back during create must restore the same Share history
+    // layer instead of unmounting the one place that can receive the token.
+    let releaseCreate;
+    state.createGate = new Promise((resolve) => { releaseCreate = resolve; });
+    await page.getByRole("button", { name: "创建分享链接" }).click();
+    await page.getByRole("button", { name: "正在创建…" }).waitFor({ state: "visible", timeout: 10_000 });
+    await page.evaluate(() => window.history.back());
+    await page.waitForTimeout(100);
+    const pendingBack = await surfaceState(page);
+    check(`${viewport.name}/back-does-not-dismiss-pending-share-create`,
+      pendingBack.share && !pendingBack.story && pendingBack.modalCount === 1,
+      pendingBack);
+    releaseCreate();
+    state.createGate = null;
+    await page.locator('[data-share-link="true"]').waitFor({ state: "visible", timeout: 10_000 });
+
+    // Escape is a non-history-button close path. It must still reconcile the
+    // stale Story/sheet predecessor rather than leaving ghost Back entries.
+    await page.keyboard.press("Escape");
+    await page.locator(".journey-share__dialog").waitFor({ state: "detached", timeout: 10_000 });
+    await page.waitForFunction(() => {
+      const state = window.history.state;
+      const stack = state && typeof state === "object"
+        ? state.__startripsMobileSurfaceStack
+        : null;
+      return !Array.isArray(stack) || stack.length === 0;
+    });
+    check(`${viewport.name}/escape-after-replacement-clears-ghost-history`,
+      !(await surfaceState(page)).share,
+      await surfaceState(page));
+
+    // Recreate the Story -> Share replacement for the explicit Browser Back
+    // ordering and orientation assertions below.
+    await openCollapsedMobileStory(page);
+    await shareFromCollapsedMobileStory(page);
+    await page.locator(".journey-share__dialog").waitFor({ state: "visible", timeout: 10_000 });
+    await page.locator(".journey-story").waitFor({ state: "detached", timeout: 10_000 });
 
     // Orientation/breakpoint transitions cannot resurrect Story or create a
     // second modal owner while Share remains current.
