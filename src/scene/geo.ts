@@ -765,14 +765,14 @@ export function planRouteArcLegs(
   let requested = plans.reduce((sum, plan) => sum + plan.segmentCount, 0);
 
   // A bounded cross-track slope can rotate an active endpoint away from the
-  // route-wide shared tangent. Detect that before deciding whether #242 budget
-  // scaling is needed: remainingVertices can make even a two-leg route enter
-  // the budget branch. Smoothing is decorative, so if either side of an
-  // interior anchor cannot express the shared tangent inside the existing
-  // handle/deviation bounds, collapse that shared handle on BOTH adjacent legs
-  // and retain the exact Route Point corner. Recompute the requested sampling
-  // for the collapsed shape before deciding whether budget rebalancing is still
-  // necessary; the collapse itself must not be hidden behind that decision.
+  // route-wide shared tangent. Detect that before #242 budget scaling: a reduced
+  // remainingVertices allocation can make even a two-leg route enter the budget
+  // branch. Smoothing is decorative, so if either side of an interior anchor
+  // cannot express the shared tangent inside the existing handle/deviation
+  // bounds, collapse that shared handle on BOTH adjacent legs and retain the
+  // exact Route Point corner. Keep the pre-collapse requested density as the
+  // budget-allocation input so this fallback does not weaken the already-proven
+  // post-budget spline-density floors on dense routes.
   const anchorsToCollapse = new Set<number>();
   for (let index = 0; index < plans.length; index += 1) {
     const plan = plans[index];
@@ -795,37 +795,9 @@ export function planRouteArcLegs(
       anchorsToCollapse.add(index + 1);
     }
   }
-  if (anchorsToCollapse.size > 0) {
-    for (const anchorIndex of anchorsToCollapse) {
-      plans[anchorIndex - 1].endHandleAngle = 0;
-      plans[anchorIndex].startHandleAngle = 0;
-    }
-    for (const plan of plans) {
-      const baseSegmentCount = Math.max(
-        routeArcSegmentCount(
-          plan.angle,
-          plan.heightRatio,
-          maxSegmentAngle,
-          liftRequested,
-        ),
-        routeSplineSegmentCount(
-          plan.start,
-          plan.end,
-          plan.startTangent,
-          plan.endTangent,
-          plan.startHandleAngle,
-          plan.endHandleAngle,
-          plan.angle,
-        ),
-      );
-      plan.segmentCount = routeSplineInteriorSegmentCount(
-        plan,
-        baseSegmentCount,
-        maxSegmentAngle,
-        availableSegments,
-      );
-    }
-    requested = plans.reduce((sum, plan) => sum + plan.segmentCount, 0);
+  for (const anchorIndex of anchorsToCollapse) {
+    plans[anchorIndex - 1].endHandleAngle = 0;
+    plans[anchorIndex].startHandleAngle = 0;
   }
 
   if (requested <= availableSegments) return plans;
