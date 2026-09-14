@@ -604,7 +604,10 @@ export default function DetailedEarthMap({
       publishAnchorFrame();
     });
     map.on("moveend", () => {
-      focusFlightActiveRef.current = false;
+      // `map.resize()` can emit moveend while an explicit flyTo/fitBounds is
+      // still easing. Only retire focus-flight ownership when MapLibre itself
+      // says that ease has actually completed or been interrupted.
+      if (!map.isEasing()) focusFlightActiveRef.current = false;
     });
 
     map.on("click", (event) => {
