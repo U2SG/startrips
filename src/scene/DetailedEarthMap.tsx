@@ -123,17 +123,18 @@ function applyDetailedEarthFocus(
       duration,
       essential: true,
     });
-    return;
+    return true;
   }
   const target = routeFrame?.center
     ?? (focusPoint ? [focusPoint.lon, focusPoint.lat] as [number, number] : null);
-  if (!target) return;
+  if (!target) return false;
   map.flyTo({
     center: target,
     zoom: Math.max(map.getZoom(), DETAILED_EARTH_INITIAL_ZOOM),
     duration,
     essential: true,
   });
+  return true;
 }
 
 export default function DetailedEarthMap({
@@ -171,6 +172,7 @@ export default function DetailedEarthMap({
   const particleFrameRef = useRef(particleFrame);
   const focusRevisionRef = useRef(focusRevision);
   const cameraIntentRevisionRef = useRef(0);
+  const focusFlightActiveRef = useRef(false);
   if (focusRevisionRef.current !== focusRevision) {
     focusRevisionRef.current = focusRevision;
     cameraIntentRevisionRef.current += 1;
@@ -589,7 +591,17 @@ export default function DetailedEarthMap({
     if (calibrationHandleRef) {
       calibrationHandleRef.current = (frame, mode = "sync") => calibrateToParticle(frame, mode);
     }
-    map.on("move", () => publishAnchorFrame());
+    map.on("move", () => {
+      // A multi-frame flyTo/fitBounds belongs to one explicit focus intent,
+      // but every animation frame is still newer than a reveal sync armed on
+      // an earlier intermediate camera. Advance the local ordering token so
+      // readiness re-arms instead of restoring over the active flight.
+      if (focusFlightActiveRef.current) cameraIntentRevisionRef.current += 1;
+      publishAnchorFrame();
+    });
+    map.on("moveend", () => {
+      focusFlightActiveRef.current = false;
+    });
 
     map.on("click", (event) => {
       if (!onPickRef.current) return;
@@ -620,6 +632,7 @@ export default function DetailedEarthMap({
       calibrateRef.current = null;
       revealSyncRef.current = null;
       if (calibrationHandleRef) calibrationHandleRef.current = null;
+      focusFlightActiveRef.current = false;
       map.remove();
     };
   }, []);
@@ -646,12 +659,15 @@ export default function DetailedEarthMap({
     // Once detail owns the camera, later *real* focus changes may use the map's
     // normal fly/fit choreography. The ownership commit itself is calibrated,
     // not re-focused.
-    applyDetailedEarthFocus(
+    focusFlightActiveRef.current = true;
+    cameraIntentRevisionRef.current += 1;
+    const focusFlightStarted = applyDetailedEarthFocus(
       map,
       focusPoint,
       focusRoute,
       getDetailedEarthFocusDuration(focusFlightProfile),
     );
+    if (!focusFlightStarted) focusFlightActiveRef.current = false;
   }, [focusFlightProfile, focusPoint, focusRevision, focusRoute]);
 
   // Per-frame particle following goes through `calibrationHandleRef` in the
