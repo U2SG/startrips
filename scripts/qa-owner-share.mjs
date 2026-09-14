@@ -689,8 +689,8 @@ try {
       rapidReopen);
     let releaseDeferredCreate;
     state.createGate = new Promise((resolve) => { releaseDeferredCreate = resolve; });
-    await page.getByRole("button", { name: "鍒涘缓鍒嗕韩閾炬帴" }).click();
-    await page.getByRole("button", { name: "姝ｅ湪鍒涘缓鈥?" }).waitFor({ state: "visible", timeout: 10_000 });
+    await page.getByRole("button", { name: "创建分享链接" }).click();
+    await page.getByRole("button", { name: "正在创建…" }).waitFor({ state: "visible", timeout: 10_000 });
     await page.evaluate(() => window.history.back());
     await page.waitForTimeout(100);
     const deferredPendingBack = await surfaceState(page);
