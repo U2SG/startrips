@@ -45,6 +45,44 @@ export function canCommitDetailedEarthReveal(renderCount: number, synchronizedAf
   return renderCount > synchronizedAfterRenderCount;
 }
 
+export type DetailedEarthRevealCameraSnapshot = {
+  longitude: number;
+  latitude: number;
+  zoom: number;
+  bearing: number;
+  pitch: number;
+};
+
+export type DetailedEarthRevealCameraCommit = "publish" | "restore" | "stale";
+
+function sameRevealCamera(
+  before: DetailedEarthRevealCameraSnapshot,
+  after: DetailedEarthRevealCameraSnapshot,
+) {
+  return before.longitude === after.longitude
+    && before.latitude === after.latitude
+    && before.zoom === after.zoom
+    && before.bearing === after.bearing
+    && before.pitch === after.pitch;
+}
+
+/**
+ * Reveal synchronization owns renderer readiness, never geographic camera intent.
+ * If MapLibre perturbs its camera while synchronizing the hidden surface, the
+ * caller must restore the camera that was current when synchronization began and
+ * wait for a later render before publishing readiness. A callback armed against
+ * an older focus intent is stale and may publish nothing.
+ */
+export function resolveDetailedEarthRevealCameraCommit(
+  synchronizedIntentRevision: number,
+  currentIntentRevision: number,
+  before: DetailedEarthRevealCameraSnapshot,
+  after: DetailedEarthRevealCameraSnapshot,
+): DetailedEarthRevealCameraCommit {
+  if (synchronizedIntentRevision !== currentIntentRevision) return "stale";
+  return sameRevealCamera(before, after) ? "publish" : "restore";
+}
+
 const REVEAL_GEOMETRY_EPSILON_PX = 0.5;
 const REVEAL_BUFFER_EPSILON_PX = 2;
 

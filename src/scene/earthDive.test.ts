@@ -4,6 +4,7 @@ import {
   canBlendDetail,
   canCommitDetailedEarthReveal,
   earthDiveBlendMs,
+  resolveDetailedEarthRevealCameraCommit,
   resolveDetailedEarthRevealSyncAction,
   resolveEarthDive,
   EARTH_DIVE_BLEND_ENTER_PROGRESS,
@@ -340,6 +341,37 @@ describe("earth dive ownership", () => {
     it("never commits the same render that requested reveal synchronization", () => {
       expect(canCommitDetailedEarthReveal(7, 7)).toBe(false);
       expect(canCommitDetailedEarthReveal(8, 7)).toBe(true);
+    });
+
+    it("restores renderer-only camera drift when no newer camera intent exists", () => {
+      const before = {
+        longitude: 92.672166,
+        latitude: 30.659780,
+        zoom: 6.403193,
+        bearing: 0,
+        pitch: 0,
+      };
+      expect(resolveDetailedEarthRevealCameraCommit(12, 12, before, {
+        ...before,
+        longitude: 92.604594,
+        latitude: 30.642967,
+        zoom: 6.403542,
+      })).toBe("restore");
+      expect(resolveDetailedEarthRevealCameraCommit(12, 12, before, before)).toBe("publish");
+    });
+
+    it("rejects a stale reveal callback after a newer camera intent revision", () => {
+      const before = {
+        longitude: 104,
+        latitude: 34,
+        zoom: 6.4,
+        bearing: 0,
+        pitch: 0,
+      };
+      expect(resolveDetailedEarthRevealCameraCommit(12, 13, before, {
+        ...before,
+        longitude: 110,
+      })).toBe("stale");
     });
 
     const geometry = {

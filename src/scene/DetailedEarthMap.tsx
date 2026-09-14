@@ -32,8 +32,10 @@ import {
 } from "./detailedEarthModel";
 import {
   canCommitDetailedEarthReveal,
+  resolveDetailedEarthRevealCameraCommit,
   resolveDetailedEarthRevealSyncAction,
   type DetailReadiness,
+  type DetailedEarthRevealCameraSnapshot,
   type DetailedEarthSurfaceGeometry,
   type EarthDiveOwner,
   type EarthDiveStage,
@@ -167,10 +169,12 @@ export default function DetailedEarthMap({
   const diveOwnerRef = useRef(diveOwner);
   const diveSnapshotRef = useRef(diveSnapshot);
   const particleFrameRef = useRef(particleFrame);
+  const focusRevisionRef = useRef(focusRevision);
   diveStageRef.current = diveStage;
   diveOwnerRef.current = diveOwner;
   diveSnapshotRef.current = diveSnapshot;
   particleFrameRef.current = particleFrame;
+  focusRevisionRef.current = focusRevision;
   languageRef.current = language;
   focusPointRef.current = focusPoint;
   focusRouteRef.current = focusRoute;
@@ -229,6 +233,8 @@ export default function DetailedEarthMap({
       revision: number;
       stage: EarthDiveStage;
       afterRenderCount: number;
+      intentRevision: number;
+      cameraBefore: DetailedEarthRevealCameraSnapshot;
     } | null = null;
     mapRef.current = map;
     // Register the one-shot load observation immediately after construction.
@@ -408,10 +414,32 @@ export default function DetailedEarthMap({
       }
     };
 
-    const cameraSignature = () => {
+    const cameraSnapshot = (): DetailedEarthRevealCameraSnapshot => {
       const center = map.getCenter();
-      return [center.lng, center.lat, map.getZoom(), map.getBearing(), map.getPitch()]
-        .map((value) => value.toFixed(6)).join(",");
+      return {
+        longitude: center.lng,
+        latitude: center.lat,
+        zoom: map.getZoom(),
+        bearing: map.getBearing(),
+        pitch: map.getPitch(),
+      };
+    };
+
+    const cameraSignature = (camera = cameraSnapshot()) => [
+      camera.longitude,
+      camera.latitude,
+      camera.zoom,
+      camera.bearing,
+      camera.pitch,
+    ].map((value) => value.toFixed(6)).join(",");
+
+    const restoreRevealCamera = (camera: DetailedEarthRevealCameraSnapshot) => {
+      map.jumpTo({
+        center: [camera.longitude, camera.latitude],
+        zoom: camera.zoom,
+        bearing: camera.bearing,
+        pitch: camera.pitch,
+      });
     };
 
     const syncRevealSurface = (reason: "load" | "stage" | "resize-observer") => {
@@ -424,7 +452,8 @@ export default function DetailedEarthMap({
       host.dataset.mapRevealRevision = String(revision);
       host.dataset.mapRevealReason = reason;
       host.dataset.mapRevealSync = action;
-      host.dataset.mapRevealCameraBefore = cameraSignature();
+      const cameraBefore = cameraSnapshot();
+      host.dataset.mapRevealCameraBefore = cameraSignature(cameraBefore);
       delete host.dataset.mapRevealStage;
       delete host.dataset.mapPostSyncRenderRevision;
 
@@ -434,7 +463,13 @@ export default function DetailedEarthMap({
       // listener installed from inside a `render` callback can never consume
       // that same pre-sync frame (the P1 caught on 80449f9). Newer revisions
       // simply replace this pending commit, so stale callbacks cannot publish.
-      pendingRevealCommit = { revision, stage, afterRenderCount: renderCount };
+      pendingRevealCommit = {
+        revision,
+        stage,
+        afterRenderCount: renderCount,
+        intentRevision: focusRevisionRef.current,
+        cameraBefore,
+      };
 
       if (action === "resize") {
         host.dataset.mapProgrammaticResizeRevision = String(revision);
@@ -465,12 +500,29 @@ export default function DetailedEarthMap({
         && pending.revision === revealRevision
         && canCommitDetailedEarthReveal(renderCount, pending.afterRenderCount)
       ) {
+        const cameraAfter = cameraSnapshot();
+        const cameraCommit = resolveDetailedEarthRevealCameraCommit(
+          pending.intentRevision,
+          focusRevisionRef.current,
+          pending.cameraBefore,
+          cameraAfter,
+        );
+        if (cameraCommit === "stale") {
+          pendingRevealCommit = null;
+          return;
+        }
+        if (cameraCommit === "restore") {
+          restoreRevealCamera(pending.cameraBefore);
+          pendingRevealCommit = { ...pending, afterRenderCount: renderCount };
+          map.triggerRepaint();
+          return;
+        }
         pendingRevealCommit = null;
         const committedGeometry = publishSurfaceGeometry();
         publishPaintQuadrants(committedGeometry);
         host.dataset.mapPostSyncRenderRevision = String(pending.revision);
         host.dataset.mapRevealStage = pending.stage;
-        host.dataset.mapRevealCameraAfter = cameraSignature();
+        host.dataset.mapRevealCameraAfter = cameraSignature(cameraAfter);
         publishAnchorFrame();
         publishReadiness(fullySettled ? "fully-settled" : "visual-ready");
       }
