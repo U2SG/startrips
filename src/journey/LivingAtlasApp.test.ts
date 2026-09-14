@@ -12,6 +12,7 @@ vi.mock("../auth/AuthGateway", () => ({
 import { readFileSync } from "node:fs";
 import {
   atlasCinematicIsolationActive,
+  synchronizeJourneyRailVisibility,
   journeyRailVisibility,
   captureUnknownCreateObservationOwnership,
   closeUnknownCreateWithCurrentAtlasTruth,
@@ -1891,6 +1892,12 @@ describe("ST-063 Journey Rail visibility release", () => {
     expect(journeyRailVisibility(false, true)).toBe("hidden");
     expect(journeyRailVisibility(false, false)).toBe("visible");
   });
+  it("releases a stale hidden rail after Playback returns through Story close", () => {
+    const rail = { style: { visibility: "hidden" } };
+    synchronizeJourneyRailVisibility(rail, false, false);
+    expect(rail.style.visibility).toBe("visible");
+  });
+
 });
 
 
