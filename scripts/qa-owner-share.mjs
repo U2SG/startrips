@@ -266,6 +266,23 @@ async function surfaceState(page) {
   });
 }
 
+async function waitForMobileSurfaceHistorySettled(page) {
+  await page.waitForFunction(() => {
+    const state = window.history.state;
+    const stack = state && typeof state === "object"
+      ? state.__startripsMobileSurfaceStack
+      : null;
+    return !Array.isArray(stack) || stack.length === 0;
+  });
+}
+
+async function historyBackAndWaitForPopState(page) {
+  await page.evaluate(() => new Promise((resolve) => {
+    window.addEventListener("popstate", () => resolve(), { once: true });
+    window.history.back();
+  }));
+}
+
 async function captureSurface(page, viewportName, label) {
   await mkdir(surfaceArtifactDir, { recursive: true });
   const path = `${surfaceArtifactDir}/${viewportName}-${label}.png`;
@@ -528,7 +545,8 @@ try {
     );
 
     await clickLabel(page, "关闭分享");
-    await page.waitForTimeout(200);
+    await page.locator(".journey-share__dialog").waitFor({ state: "detached", timeout: 10_000 });
+    await waitForMobileSurfaceHistorySettled(page);
 
     // --- Entry path A: exactly one Journey. --------------------------------
     // Reached from the surface each viewport actually offers: the mobile sheet
@@ -659,8 +677,7 @@ try {
     state.createGate = new Promise((resolve) => { releaseCreate = resolve; });
     await page.getByRole("button", { name: "创建分享链接" }).click();
     await page.getByRole("button", { name: "正在创建…" }).waitFor({ state: "visible", timeout: 10_000 });
-    await page.evaluate(() => window.history.back());
-    await page.waitForTimeout(100);
+    await historyBackAndWaitForPopState(page);
     const pendingBack = await surfaceState(page);
     check(`${viewport.name}/back-does-not-dismiss-pending-share-create`,
       pendingBack.share && !pendingBack.story && pendingBack.modalCount === 1,
@@ -695,8 +712,7 @@ try {
     state.createGate = new Promise((resolve) => { releaseDeferredCreate = resolve; });
     await page.getByRole("button", { name: "创建分享链接" }).click();
     await page.getByRole("button", { name: "正在创建…" }).waitFor({ state: "visible", timeout: 10_000 });
-    await page.evaluate(() => window.history.back());
-    await page.waitForTimeout(100);
+    await historyBackAndWaitForPopState(page);
     const deferredPendingBack = await surfaceState(page);
     check(`${viewport.name}/rapid-reopen-pending-create-retains-back-ownership`,
       deferredPendingBack.share && !deferredPendingBack.story && deferredPendingBack.modalCount === 1,
