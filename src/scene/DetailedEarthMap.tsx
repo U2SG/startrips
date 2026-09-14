@@ -32,8 +32,10 @@ import {
 } from "./detailedEarthModel";
 import {
   canCommitDetailedEarthReveal,
+  resolveDetailedEarthRevealCameraCommit,
   resolveDetailedEarthRevealSyncAction,
   type DetailReadiness,
+  type DetailedEarthRevealCameraSnapshot,
   type DetailedEarthSurfaceGeometry,
   type EarthDiveOwner,
   type EarthDiveStage,
@@ -121,17 +123,18 @@ function applyDetailedEarthFocus(
       duration,
       essential: true,
     });
-    return;
+    return true;
   }
   const target = routeFrame?.center
     ?? (focusPoint ? [focusPoint.lon, focusPoint.lat] as [number, number] : null);
-  if (!target) return;
+  if (!target) return false;
   map.flyTo({
     center: target,
     zoom: Math.max(map.getZoom(), DETAILED_EARTH_INITIAL_ZOOM),
     duration,
     essential: true,
   });
+  return true;
 }
 
 export default function DetailedEarthMap({
@@ -167,6 +170,13 @@ export default function DetailedEarthMap({
   const diveOwnerRef = useRef(diveOwner);
   const diveSnapshotRef = useRef(diveSnapshot);
   const particleFrameRef = useRef(particleFrame);
+  const focusRevisionRef = useRef(focusRevision);
+  const cameraIntentRevisionRef = useRef(0);
+  const focusFlightActiveRef = useRef(false);
+  if (focusRevisionRef.current !== focusRevision) {
+    focusRevisionRef.current = focusRevision;
+    cameraIntentRevisionRef.current += 1;
+  }
   diveStageRef.current = diveStage;
   diveOwnerRef.current = diveOwner;
   diveSnapshotRef.current = diveSnapshot;
@@ -229,6 +239,9 @@ export default function DetailedEarthMap({
       revision: number;
       stage: EarthDiveStage;
       afterRenderCount: number;
+      intentRevision: number;
+      cameraBefore: DetailedEarthRevealCameraSnapshot;
+      reason: "load" | "stage" | "resize-observer";
     } | null = null;
     mapRef.current = map;
     // Register the one-shot load observation immediately after construction.
@@ -307,6 +320,9 @@ export default function DetailedEarthMap({
       const particle = frameOverride ?? particleFrameRef.current;
       const frame = handoffFrame(frameOverride);
       if (!particle || !frame) return;
+      // Particle-owned calibration is an authorized camera intent. A reveal
+      // synchronization armed before this frame may not restore over it.
+      cameraIntentRevisionRef.current += 1;
       // A NEW particle frame reseeds the geographic center. A retry of the SAME
       // stable frame must preserve the center correction already accumulated by
       // previous passes, otherwise every Dive rAF would erase its own progress.
@@ -408,10 +424,32 @@ export default function DetailedEarthMap({
       }
     };
 
-    const cameraSignature = () => {
+    const cameraSnapshot = (): DetailedEarthRevealCameraSnapshot => {
       const center = map.getCenter();
-      return [center.lng, center.lat, map.getZoom(), map.getBearing(), map.getPitch()]
-        .map((value) => value.toFixed(6)).join(",");
+      return {
+        longitude: center.lng,
+        latitude: center.lat,
+        zoom: map.getZoom(),
+        bearing: map.getBearing(),
+        pitch: map.getPitch(),
+      };
+    };
+
+    const cameraSignature = (camera = cameraSnapshot()) => [
+      camera.longitude,
+      camera.latitude,
+      camera.zoom,
+      camera.bearing,
+      camera.pitch,
+    ].map((value) => value.toFixed(6)).join(",");
+
+    const restoreRevealCamera = (camera: DetailedEarthRevealCameraSnapshot) => {
+      map.jumpTo({
+        center: [camera.longitude, camera.latitude],
+        zoom: camera.zoom,
+        bearing: camera.bearing,
+        pitch: camera.pitch,
+      });
     };
 
     const syncRevealSurface = (reason: "load" | "stage" | "resize-observer") => {
@@ -424,7 +462,8 @@ export default function DetailedEarthMap({
       host.dataset.mapRevealRevision = String(revision);
       host.dataset.mapRevealReason = reason;
       host.dataset.mapRevealSync = action;
-      host.dataset.mapRevealCameraBefore = cameraSignature();
+      const cameraBefore = cameraSnapshot();
+      host.dataset.mapRevealCameraBefore = cameraSignature(cameraBefore);
       delete host.dataset.mapRevealStage;
       delete host.dataset.mapPostSyncRenderRevision;
 
@@ -434,7 +473,14 @@ export default function DetailedEarthMap({
       // listener installed from inside a `render` callback can never consume
       // that same pre-sync frame (the P1 caught on 80449f9). Newer revisions
       // simply replace this pending commit, so stale callbacks cannot publish.
-      pendingRevealCommit = { revision, stage, afterRenderCount: renderCount };
+      pendingRevealCommit = {
+        revision,
+        stage,
+        afterRenderCount: renderCount,
+        intentRevision: cameraIntentRevisionRef.current,
+        cameraBefore,
+        reason,
+      };
 
       if (action === "resize") {
         host.dataset.mapProgrammaticResizeRevision = String(revision);
@@ -465,12 +511,33 @@ export default function DetailedEarthMap({
         && pending.revision === revealRevision
         && canCommitDetailedEarthReveal(renderCount, pending.afterRenderCount)
       ) {
+        const cameraAfter = cameraSnapshot();
+        const cameraCommit = resolveDetailedEarthRevealCameraCommit(
+          pending.intentRevision,
+          cameraIntentRevisionRef.current,
+          pending.cameraBefore,
+          cameraAfter,
+        );
+        if (cameraCommit === "stale") {
+          pendingRevealCommit = null;
+          // A newer particle/focus camera intent won while synchronization was
+          // in flight. Re-arm readiness from that newest camera rather than
+          // restoring stale geography or stranding the blend.
+          syncRevealSurface(pending.reason);
+          return;
+        }
+        if (cameraCommit === "restore") {
+          restoreRevealCamera(pending.cameraBefore);
+          pendingRevealCommit = { ...pending, afterRenderCount: renderCount };
+          map.triggerRepaint();
+          return;
+        }
         pendingRevealCommit = null;
         const committedGeometry = publishSurfaceGeometry();
         publishPaintQuadrants(committedGeometry);
         host.dataset.mapPostSyncRenderRevision = String(pending.revision);
         host.dataset.mapRevealStage = pending.stage;
-        host.dataset.mapRevealCameraAfter = cameraSignature();
+        host.dataset.mapRevealCameraAfter = cameraSignature(cameraAfter);
         publishAnchorFrame();
         publishReadiness(fullySettled ? "fully-settled" : "visual-ready");
       }
@@ -524,7 +591,24 @@ export default function DetailedEarthMap({
     if (calibrationHandleRef) {
       calibrationHandleRef.current = (frame, mode = "sync") => calibrateToParticle(frame, mode);
     }
-    map.on("move", () => publishAnchorFrame());
+    map.on("move", (event) => {
+      // A multi-frame flyTo/fitBounds belongs to one explicit focus intent,
+      // but every animation frame is still newer than a reveal sync armed on
+      // an earlier intermediate camera. Detail-owned gestures are explicit
+      // camera intent too; MapLibre exposes their originating DOM event while
+      // renderer-only resize/repaint drift has no originalEvent.
+      if (
+        focusFlightActiveRef.current
+        || (diveOwnerRef.current === "detail" && Boolean(event.originalEvent))
+      ) cameraIntentRevisionRef.current += 1;
+      publishAnchorFrame();
+    });
+    map.on("moveend", () => {
+      // `map.resize()` can emit moveend while an explicit flyTo/fitBounds is
+      // still easing. Only retire focus-flight ownership when MapLibre itself
+      // says that ease has actually completed or been interrupted.
+      if (!map.isMoving()) focusFlightActiveRef.current = false;
+    });
 
     map.on("click", (event) => {
       if (!onPickRef.current) return;
@@ -555,6 +639,7 @@ export default function DetailedEarthMap({
       calibrateRef.current = null;
       revealSyncRef.current = null;
       if (calibrationHandleRef) calibrationHandleRef.current = null;
+      focusFlightActiveRef.current = false;
       map.remove();
     };
   }, []);
@@ -581,12 +666,18 @@ export default function DetailedEarthMap({
     // Once detail owns the camera, later *real* focus changes may use the map's
     // normal fly/fit choreography. The ownership commit itself is calibrated,
     // not re-focused.
-    applyDetailedEarthFocus(
+    // Starting a replacement flyTo/fitBounds synchronously ends the previous
+    // MapLibre flight before arming the replacement. Clear the old ownership
+    // first so that previous flight's moveend cannot retire the new flight.
+    focusFlightActiveRef.current = false;
+    cameraIntentRevisionRef.current += 1;
+    const focusFlightStarted = applyDetailedEarthFocus(
       map,
       focusPoint,
       focusRoute,
       getDetailedEarthFocusDuration(focusFlightProfile),
     );
+    focusFlightActiveRef.current = focusFlightStarted;
   }, [focusFlightProfile, focusPoint, focusRevision, focusRoute]);
 
   // Per-frame particle following goes through `calibrationHandleRef` in the

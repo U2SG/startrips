@@ -744,12 +744,25 @@ export function LivingAtlasGlobe({
         // sub-pixel threshold before the hidden map can align itself.
         setParticleFrame(particleFrameRef.current);
       }
-      syncDetailSpatialReveal(next.stage, snapshotRef.current, particleFrameRef.current);
+      // Do not clear the blending presentation speculatively before React has
+      // committed detail ownership. In particular, the keyboard fallback must
+      // remain a real full-frame blend through the ownership edge; cleanup to
+      // `off` happens from the committed-detail effect below.
+      if (next.stage !== "detail") {
+        syncDetailSpatialReveal(next.stage, snapshotRef.current, particleFrameRef.current);
+      }
       setDive(next);
     };
     frame = window.requestAnimationFrame(tick);
     return () => window.cancelAnimationFrame(frame);
   }, [reduceMotion, syncDetailSpatialReveal]);
+
+  useEffect(() => {
+    if (dive.stage !== "detail") return;
+    // Final reveal cleanup belongs to the committed detail state, not to the
+    // speculative resolver step that precedes the React ownership commit.
+    syncDetailSpatialReveal("detail", snapshotRef.current, particleFrameRef.current);
+  }, [dive.stage, syncDetailSpatialReveal]);
 
   // #253: entering focus mode arms the hint, leaving retires it and bumps the
   // ordering token so this visit's dwell timer cannot speak for the next one.
