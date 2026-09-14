@@ -628,6 +628,35 @@ describe("route arc geometry", () => {
     for (const leg of legs) expectRouteLegSamplingWithinTolerance(leg, maxSegmentAngle);
   });
 
+  it("collapses both sides when only one shared handle can advance (#352 review)", () => {
+    const points = [
+      { lat: -68.638812, lon: 166.718631 },
+      { lat: -53.916316, lon: 172.773924 },
+      { lat: -44.524344, lon: -45.909612 },
+    ];
+    const arc = { arcHeightRatio: 0.22, arcSaturationAngle: Math.PI / 3 };
+    const maxSegmentAngle = Math.PI / 96;
+    const plans = planRouteArcLegs(points, maxSegmentAngle, 8192, arc);
+    const legs = buildRouteArcLegSamples(points, maxSegmentAngle, 8192, arc);
+
+    expect(plans).toHaveLength(2);
+    expect(legs).toHaveLength(2);
+    expect(plans[0].endTangent.distanceTo(plans[1].startTangent)).toBeLessThan(1e-12);
+    // On the regression fixture the incoming leg cannot advance along the
+    // requested shared tangent while the outgoing leg can. A one-sided active
+    // handle would therefore draw a false smoothed join. Treat that pair as
+    // unrepresentable and fall back to the two geodesic legs at the exact
+    // canonical anchor.
+    expect(plans[0].endHandleAngle).toBe(0);
+    expect(plans[1].startHandleAngle).toBe(0);
+
+    const anchor = latLonToVector3(points[1].lat, points[1].lon, 1).normalize();
+    expect(sampleAt(legs[0], routeArcVertexCount(legs[0]) - 1, 1, 0).normalize()
+      .distanceTo(anchor)).toBeLessThan(1e-6);
+    expect(sampleAt(legs[1], 0, 1, 0).normalize().distanceTo(anchor)).toBeLessThan(1e-6);
+    for (const leg of legs) expectRouteLegSamplingWithinTolerance(leg, maxSegmentAngle);
+  });
+
   it("collapses the same unrepresentable join before full-budget dense-route scaling (#352 review)", () => {
     const points = [
       { lat: 20.195286, lon: -111.169866 },

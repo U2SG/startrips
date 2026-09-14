@@ -828,6 +828,19 @@ export function planRouteArcLegs(
       anchorsToCollapse.add(index + 1);
     }
   }
+
+  // Shared tangency is also unrepresentable when one adjacent leg already had
+  // to drop its handle because the requested tangent cannot advance along that
+  // leg while the other side still retains an active handle. Leaving an
+  // active/zero pair would make the two sampled directions disagree at the
+  // Route Point while pretending the join is still smoothed. Collapse both
+  // sides to the intentional geodesic corner instead.
+  for (let anchorIndex = 1; anchorIndex < plans.length; anchorIndex += 1) {
+    const incomingActive = plans[anchorIndex - 1].endHandleAngle > 0;
+    const outgoingActive = plans[anchorIndex].startHandleAngle > 0;
+    if (incomingActive !== outgoingActive) anchorsToCollapse.add(anchorIndex);
+  }
+
   const collapsedLegIndexes = new Set<number>();
   for (const anchorIndex of anchorsToCollapse) {
     plans[anchorIndex - 1].endHandleAngle = 0;
