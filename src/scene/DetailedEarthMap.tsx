@@ -1,4 +1,4 @@
-import { useEffect, useRef, type MutableRefObject } from "react";
+import { useEffect, useLayoutEffect, useRef, type MutableRefObject } from "react";
 import {
   AttributionControl,
   Map as MapLibreMap,
@@ -30,7 +30,14 @@ import {
   shouldReturnToParticleEarth,
   useGlobeProjection,
 } from "./detailedEarthModel";
-import type { DetailReadiness, EarthDiveOwner, EarthDiveStage } from "./earthDive";
+import {
+  canCommitDetailedEarthReveal,
+  resolveDetailedEarthRevealSyncAction,
+  type DetailReadiness,
+  type DetailedEarthSurfaceGeometry,
+  type EarthDiveOwner,
+  type EarthDiveStage,
+} from "./earthDive";
 import type { SemanticZoomSnapshot } from "./semanticZoom";
 
 // #252 section 2: the handoff has to prove "the same place did not move", so
@@ -149,6 +156,7 @@ export default function DetailedEarthMap({
   // through the same instance can ask again.
   const overviewRequestedRef = useRef(false);
   const calibrateRef = useRef<(() => void) | null>(null);
+  const revealSyncRef = useRef<((reason: "load" | "stage" | "resize-observer") => void) | null>(null);
   const languageRef = useRef(language);
   const focusPointRef = useRef(focusPoint);
   const focusRouteRef = useRef(focusRoute);
@@ -209,7 +217,31 @@ export default function DetailedEarthMap({
       fadeDuration: 650,
     });
     let initialLoadSettled = false;
+    let removed = false;
+    let revealRevision = 0;
+    let fullySettled = false;
+    let lastHostGeometry: Pick<DetailedEarthSurfaceGeometry, "hostWidth" | "hostHeight"> | null = null;
+    let resizeObserver: ResizeObserver | null = null;
+    let renderCount = 0;
+    let idleCount = 0;
+    let resizeCount = 0;
+    let pendingRevealCommit: {
+      revision: number;
+      stage: EarthDiveStage;
+      afterRenderCount: number;
+    } | null = null;
     mapRef.current = map;
+    // Register the one-shot load observation immediately after construction.
+    // A tiny inline/QA style can become style-loaded before the rest of this
+    // effect has finished wiring calibration/reveal callbacks. Keep the event
+    // bit so the later idempotent settle function can recover that race.
+    let loadEventObserved = false;
+    let renderEventObserved = false;
+    let settleInitialLoad: (() => void) | null = null;
+    map.on("load", () => {
+      loadEventObserved = true;
+      settleInitialLoad?.();
+    });
     // Configure gesture rates up front, but do not enable handlers while the
     // particle surface owns the Dive. Primary mouse / one-finger touch will
     // still pan and right-button / Ctrl+drag will still rotate once detail owns.
@@ -320,7 +352,151 @@ export default function DetailedEarthMap({
       publishAnchorFrame(frameOverride);
     };
 
-    map.on("load", () => {
+    const publishSurfaceGeometry = (): DetailedEarthSurfaceGeometry => {
+      const hostRect = host.getBoundingClientRect();
+      const canvasRect = canvas.getBoundingClientRect();
+      const geometry = {
+        hostWidth: hostRect.width,
+        hostHeight: hostRect.height,
+        canvasCssWidth: canvasRect.width,
+        canvasCssHeight: canvasRect.height,
+        drawingBufferWidth: canvas.width,
+        drawingBufferHeight: canvas.height,
+        devicePixelRatio: window.devicePixelRatio || 1,
+      };
+      host.dataset.mapHostRect = [hostRect.left, hostRect.top, hostRect.width, hostRect.height]
+        .map((value) => value.toFixed(2)).join(",");
+      host.dataset.mapCanvasCss = `${canvasRect.width.toFixed(2)}x${canvasRect.height.toFixed(2)}`;
+      host.dataset.mapCanvasBuffer = `${canvas.width}x${canvas.height}`;
+      return geometry;
+    };
+
+    const publishPaintQuadrants = (geometry: DetailedEarthSurfaceGeometry) => {
+      const points = [
+        [geometry.canvasCssWidth * 0.25, geometry.canvasCssHeight * 0.25],
+        [geometry.canvasCssWidth * 0.75, geometry.canvasCssHeight * 0.25],
+        [geometry.canvasCssWidth * 0.25, geometry.canvasCssHeight * 0.75],
+        [geometry.canvasCssWidth * 0.75, geometry.canvasCssHeight * 0.75],
+      ] as const;
+      try {
+        // Read the framebuffer during MapLibre's own `render` event. Unlike a
+        // feature query, these four samples prove that the current drawing
+        // buffer actually contains visible pixels in every viewport quadrant.
+        // This is diagnostic evidence only; readiness is still the renderer's
+        // post-sync render revision below.
+        const gl = canvas.getContext("webgl2") ?? canvas.getContext("webgl");
+        if (!gl || geometry.canvasCssWidth <= 0 || geometry.canvasCssHeight <= 0) {
+          host.dataset.mapPaintQuadrants = "unavailable";
+          return;
+        }
+        const pixel = new Uint8Array(4);
+        host.dataset.mapPaintQuadrants = points.map(([cssX, cssY]) => {
+          const x = Math.max(0, Math.min(
+            canvas.width - 1,
+            Math.floor((cssX / geometry.canvasCssWidth) * canvas.width),
+          ));
+          const yFromTop = Math.max(0, Math.min(
+            canvas.height - 1,
+            Math.floor((cssY / geometry.canvasCssHeight) * canvas.height),
+          ));
+          const y = canvas.height - 1 - yFromTop;
+          gl.readPixels(x, y, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
+          return Array.from(pixel).join(":");
+        }).join(",");
+      } catch {
+        host.dataset.mapPaintQuadrants = "unavailable";
+      }
+    };
+
+    const cameraSignature = () => {
+      const center = map.getCenter();
+      return [center.lng, center.lat, map.getZoom(), map.getBearing(), map.getPitch()]
+        .map((value) => value.toFixed(6)).join(",");
+    };
+
+    const syncRevealSurface = (reason: "load" | "stage" | "resize-observer") => {
+      if (removed || !initialLoadSettled) return;
+      const stage = diveStageRef.current;
+      const geometry = publishSurfaceGeometry();
+      const action = resolveDetailedEarthRevealSyncAction(geometry, lastHostGeometry);
+      lastHostGeometry = { hostWidth: geometry.hostWidth, hostHeight: geometry.hostHeight };
+      const revision = ++revealRevision;
+      host.dataset.mapRevealRevision = String(revision);
+      host.dataset.mapRevealReason = reason;
+      host.dataset.mapRevealSync = action;
+      host.dataset.mapRevealCameraBefore = cameraSignature();
+      delete host.dataset.mapRevealStage;
+      delete host.dataset.mapPostSyncRenderRevision;
+
+      // A load/style/render bootstrap only proves resources and calibration are
+      // available. The reveal gate is a LATER MapLibre render after current
+      // geometry has been synchronized. Record the current render counter so a
+      // listener installed from inside a `render` callback can never consume
+      // that same pre-sync frame (the P1 caught on 80449f9). Newer revisions
+      // simply replace this pending commit, so stale callbacks cannot publish.
+      pendingRevealCommit = { revision, stage, afterRenderCount: renderCount };
+
+      if (action === "resize") {
+        host.dataset.mapProgrammaticResizeRevision = String(revision);
+        map.resize();
+      }
+      // Resize normally schedules a frame, but the reveal invariant is "a
+      // current post-sync render happened", not "this MapLibre version happens
+      // to repaint after resize". triggerRepaint is the supported invalidation
+      // for both branches and does not alter camera or input ownership.
+      map.triggerRepaint();
+    };
+    revealSyncRef.current = syncRevealSurface;
+
+    map.on("render", () => {
+      renderCount += 1;
+      renderEventObserved = true;
+      host.dataset.mapRenderCount = String(renderCount);
+      // MapLibre can render a valid style frame before its one-shot `load`
+      // event under a hidden/prewarmed surface. Use that renderer event only
+      // to bootstrap initial synchronization; reveal still waits for a LATER
+      // post-sync render revision.
+      if (!initialLoadSettled && map.isStyleLoaded()) settleInitialLoad?.();
+
+      const pending = pendingRevealCommit;
+      if (
+        pending
+        && !removed
+        && pending.revision === revealRevision
+        && canCommitDetailedEarthReveal(renderCount, pending.afterRenderCount)
+      ) {
+        pendingRevealCommit = null;
+        const committedGeometry = publishSurfaceGeometry();
+        publishPaintQuadrants(committedGeometry);
+        host.dataset.mapPostSyncRenderRevision = String(pending.revision);
+        host.dataset.mapRevealStage = pending.stage;
+        host.dataset.mapRevealCameraAfter = cameraSignature();
+        publishAnchorFrame();
+        publishReadiness(fullySettled ? "fully-settled" : "visual-ready");
+      }
+    });
+    map.on("resize", () => {
+      resizeCount += 1;
+      host.dataset.mapResizeCount = String(resizeCount);
+    });
+    map.on("idle", () => {
+      idleCount += 1;
+      fullySettled = true;
+      host.dataset.mapIdleCount = String(idleCount);
+      if (host.dataset.mapPostSyncRenderRevision === host.dataset.mapRevealRevision) {
+        publishReadiness("fully-settled");
+      }
+    });
+
+    if (typeof ResizeObserver !== "undefined") {
+      resizeObserver = new ResizeObserver(() => {
+        if (initialLoadSettled) syncRevealSurface("resize-observer");
+      });
+      resizeObserver.observe(host);
+    }
+
+    settleInitialLoad = () => {
+      if (removed || initialLoadSettled) return;
       // Raster fallback remains Mercator; vector styles use the globe so a
       // polar focus is not trapped by the flat-map viewport.
       if (useGlobeProjection()) map.setProjection({ type: "globe" });
@@ -328,16 +504,21 @@ export default function DetailedEarthMap({
       // No second focus flight at handoff: the mount frame already IS the focus.
       initialLoadSettled = true;
       host.dataset.mapReady = "true";
-      // The style is parsed and the handoff frame can be drawn. This is the
-      // blend gate, and it is an event from the renderer rather than a timer.
-      // Calibrate BEFORE reporting the blend gate: the surface the Dive is
-      // allowed to reveal is a surface already standing where the particle
-      // Earth stands.
+      host.dataset.mapLoadCount = "1";
+      host.dataset.mapLoadSource = loadEventObserved
+        ? "load-event"
+        : renderEventObserved
+          ? "render-bootstrap"
+          : "style-loaded-recovery";
+      // Calibrate first, then require a post-sync MapLibre render for the
+      // current real host geometry before this renderer can become visual-ready.
       calibrateToParticle();
-      publishReadiness("visual-ready");
-      publishAnchorFrame();
-      map.once("idle", () => publishReadiness("fully-settled"));
-    });
+      syncRevealSurface("load");
+    };
+    // If the fast style finished before the event callback was fully wired,
+    // recover from current MapLibre style truth instead of stranding prewarm.
+    // This is an event-state reconciliation, not polling or a delay.
+    if (loadEventObserved || map.isStyleLoaded()) settleInitialLoad();
 
     calibrateRef.current = () => calibrateToParticle();
     if (calibrationHandleRef) {
@@ -367,12 +548,24 @@ export default function DetailedEarthMap({
     });
 
     return () => {
+      removed = true;
+      revealRevision += 1;
+      resizeObserver?.disconnect();
       mapRef.current = null;
       calibrateRef.current = null;
+      revealSyncRef.current = null;
       if (calibrationHandleRef) calibrationHandleRef.current = null;
       map.remove();
     };
   }, []);
+
+  useLayoutEffect(() => {
+    // The prewarmed map may have correct dimensions and still have no committed
+    // frame for the now-visible surface. Synchronize on the reveal edge itself;
+    // the parent keeps the blend hidden until this stage's post-sync render is
+    // published through data-map-reveal-stage.
+    if (diveStage === "blending") revealSyncRef.current?.("stage");
+  }, [diveStage]);
 
   useEffect(() => {
     const map = mapRef.current;

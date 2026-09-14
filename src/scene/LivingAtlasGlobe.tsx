@@ -423,6 +423,14 @@ export function LivingAtlasGlobe({
   const [particleFrame, setParticleFrame] = useState<ParticleAnchorFrame | null>(null);
   const [zoomIntent, setZoomIntent] = useState<{ zoom: number; revision: number } | null>(null);
   const diveRef = useRef<EarthDiveState>(INITIAL_EARTH_DIVE_STATE);
+  // The resolver mirror follows the last COMMITTED presentation state. If the
+  // rAF loop advances this ref before React commits, concurrent batching can
+  // skip a semantic handoff stage in the DOM (notably reverse prewarm). Holding
+  // the mirror here keeps the one-step resolver and rendered lifecycle aligned
+  // without a timer or second transition authority.
+  useEffect(() => {
+    diveRef.current = dive;
+  }, [dive]);
   const detailLayerRef = useRef<HTMLDivElement>(null);
   const detailCalibrationRef = useRef<((
     frame: ParticleAnchorFrame,
@@ -451,6 +459,21 @@ export function LivingAtlasGlobe({
   ) => {
     const layer = detailLayerRef.current;
     if (!layer) return;
+    const mapHost = layer.querySelector<HTMLElement>(".detailed-earth-map");
+    if (stage === "blending" && mapHost?.dataset.mapRevealStage !== "blending") {
+      // #355: style load and even correct canvas dimensions do not prove that
+      // the hidden/prewarmed MapLibre surface committed a frame for its current
+      // visible geometry. Hold the existing reveal boundary until the map says
+      // the current blending revision rendered after geometry sync/repaint.
+      layer.dataset.earthDiveSpatialReveal = "holding";
+      layer.dataset.earthDiveRevealSync = mapHost?.dataset.mapRevealSync ?? "pending";
+      delete layer.dataset.earthDiveAlignment;
+      delete layer.dataset.earthDiveAnchorDelta;
+      delete layer.dataset.earthDiveScaleError;
+      layer.style.removeProperty("--earth-dive-reveal-progress");
+      return;
+    }
+    delete layer.dataset.earthDiveRevealSync;
     if (reduceMotionRef.current || stage !== "blending") {
       layer.dataset.earthDiveSpatialReveal = "off";
       delete layer.dataset.earthDiveAlignment;
@@ -696,12 +719,14 @@ export function LivingAtlasGlobe({
           delete layer.dataset.earthDiveCommitScaleError;
         }
       }
-      // The release is consumed as soon as ownership is home and the renderer
-      // is back to warming: from there the band alone decides. This happens
-      // before the no-change exit on purpose — a cancel that resolves to the
-      // stage the band already wanted would otherwise latch forever and block
-      // every later dive.
-      if (next.stage === "prewarm" || next.stage === "particle") releaseRequestedRef.current = false;
+      // The release is consumed only after React has committed the renderer
+      // back to prewarm/particle. `next` can reach prewarm while the committed
+      // mirror is still blending; clearing on that speculative step lets a
+      // following rAF re-enter detail and overwrite the pending reverse handoff.
+      // Keep the latch through that commit, then let the band decide from the
+      // next frame onward. This still happens before the no-change exit so a
+      // committed prewarm does not latch every later dive forever.
+      if (previous.stage === "prewarm" || previous.stage === "particle") releaseRequestedRef.current = false;
       if (next.stage === previous.stage && next.owner === previous.owner && next.blendMs === previous.blendMs) return;
       if (next.stage === "particle") {
         if (layer) {
@@ -719,7 +744,6 @@ export function LivingAtlasGlobe({
         // sub-pixel threshold before the hidden map can align itself.
         setParticleFrame(particleFrameRef.current);
       }
-      diveRef.current = next;
       syncDetailSpatialReveal(next.stage, snapshotRef.current, particleFrameRef.current);
       setDive(next);
     };

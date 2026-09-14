@@ -28,6 +28,49 @@ export type EarthDiveOwner = "particle" | "detail";
  */
 export type DetailReadiness = "unavailable" | "mounted" | "visual-ready" | "fully-settled";
 
+export type DetailedEarthSurfaceGeometry = {
+  hostWidth: number;
+  hostHeight: number;
+  canvasCssWidth: number;
+  canvasCssHeight: number;
+  drawingBufferWidth: number;
+  drawingBufferHeight: number;
+  devicePixelRatio: number;
+};
+
+export type DetailedEarthRevealSyncAction = "resize" | "repaint";
+
+/** A reveal synchronized during render N can only be proven by render N+1+. */
+export function canCommitDetailedEarthReveal(renderCount: number, synchronizedAfterRenderCount: number) {
+  return renderCount > synchronizedAfterRenderCount;
+}
+
+const REVEAL_GEOMETRY_EPSILON_PX = 0.5;
+const REVEAL_BUFFER_EPSILON_PX = 2;
+
+/**
+ * Decide how the existing MapLibre instance must be synchronized before a
+ * hidden/prewarmed surface is allowed to become visible. Matching geometry is
+ * not proof that a visible frame was committed, so it deliberately requests a
+ * repaint; resize is reserved for a real host/canvas/buffer geometry change.
+ */
+export function resolveDetailedEarthRevealSyncAction(
+  geometry: DetailedEarthSurfaceGeometry,
+  previousHost: Pick<DetailedEarthSurfaceGeometry, "hostWidth" | "hostHeight"> | null,
+): DetailedEarthRevealSyncAction {
+  const expectedBufferWidth = Math.round(geometry.hostWidth * geometry.devicePixelRatio);
+  const expectedBufferHeight = Math.round(geometry.hostHeight * geometry.devicePixelRatio);
+  const hostChanged = Boolean(previousHost && (
+    Math.abs(previousHost.hostWidth - geometry.hostWidth) > REVEAL_GEOMETRY_EPSILON_PX
+    || Math.abs(previousHost.hostHeight - geometry.hostHeight) > REVEAL_GEOMETRY_EPSILON_PX
+  ));
+  const cssMismatch = Math.abs(geometry.canvasCssWidth - geometry.hostWidth) > REVEAL_GEOMETRY_EPSILON_PX
+    || Math.abs(geometry.canvasCssHeight - geometry.hostHeight) > REVEAL_GEOMETRY_EPSILON_PX;
+  const bufferMismatch = Math.abs(geometry.drawingBufferWidth - expectedBufferWidth) > REVEAL_BUFFER_EPSILON_PX
+    || Math.abs(geometry.drawingBufferHeight - expectedBufferHeight) > REVEAL_BUFFER_EPSILON_PX;
+  return hostChanged || cssMismatch || bufferMismatch ? "resize" : "repaint";
+}
+
 const STAGE_ORDER: EarthDiveStage[] = ["particle", "prewarm", "blending", "detail"];
 const READINESS_ORDER: DetailReadiness[] = [
   "unavailable",

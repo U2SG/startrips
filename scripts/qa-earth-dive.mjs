@@ -49,11 +49,19 @@ const FINE_WHEEL_DELTA = -10;
 const RETREAT_WHEEL_DELTA = 240;
 const VIEWPORT = { width: 1440, height: 1024 };
 
-const EMPTY_STYLE = {
+const QA_PAINT_STYLE = {
   version: 8,
-  name: "QA empty detailed-earth style",
+  name: "QA painted detailed-earth style",
   sources: {},
-  layers: [],
+  // A background layer paints every framebuffer quadrant synchronously and has
+  // no source/tile readiness of its own. The runtime evidence reads actual RGBA
+  // pixels from MapLibre's drawing buffer, so this fixture grades full-surface
+  // paint rather than whether an arbitrary GeoJSON feature happened to load.
+  layers: [{
+    id: "qa-paint-surface",
+    type: "background",
+    paint: { "background-color": "#173d43", "background-opacity": 1 },
+  }],
 };
 const MAP_STYLE_PATTERN = /\/api\/mapstyle\?path=styles(?:%2F|\/)fiord(?:$|&)/i;
 
@@ -160,6 +168,22 @@ async function readDive(page) {
       interactive: host?.getAttribute("data-interactive") ?? null,
       readiness: map?.getAttribute("data-map-readiness") ?? null,
       mapError: map?.getAttribute("data-map-error") ?? null,
+      mapLoadCount: Number(map?.getAttribute("data-map-load-count") ?? 0),
+      mapLoadSource: map?.getAttribute("data-map-load-source") ?? null,
+      mapRenderCount: Number(map?.getAttribute("data-map-render-count") ?? 0),
+      mapIdleCount: Number(map?.getAttribute("data-map-idle-count") ?? 0),
+      mapResizeCount: Number(map?.getAttribute("data-map-resize-count") ?? 0),
+      revealRevision: Number(map?.getAttribute("data-map-reveal-revision") ?? 0),
+      postSyncRenderRevision: Number(map?.getAttribute("data-map-post-sync-render-revision") ?? 0),
+      revealStage: map?.getAttribute("data-map-reveal-stage") ?? null,
+      revealReason: map?.getAttribute("data-map-reveal-reason") ?? null,
+      revealSync: map?.getAttribute("data-map-reveal-sync") ?? null,
+      hostRect: map?.getAttribute("data-map-host-rect") ?? null,
+      canvasCss: map?.getAttribute("data-map-canvas-css") ?? null,
+      canvasBuffer: map?.getAttribute("data-map-canvas-buffer") ?? null,
+      paintQuadrants: map?.getAttribute("data-map-paint-quadrants") ?? null,
+      revealCameraBefore: map?.getAttribute("data-map-reveal-camera-before") ?? null,
+      revealCameraAfter: map?.getAttribute("data-map-reveal-camera-after") ?? null,
       particleZoom: window.__particleEarthDebug?.().zoom ?? null,
       particleRotationX: window.__particleEarthDebug?.().rotationX ?? null,
       particleRotationY: window.__particleEarthDebug?.().rotationY ?? null,
@@ -172,14 +196,14 @@ async function installStageRecorder(page) {
   await page.evaluate(() => {
     const section = document.querySelector(".living-atlas-globe");
     if (!section) throw new Error("living-atlas-globe section is absent");
-    const sample = () => {
+    const sample = (stageOverride = null, ownerOverride = null) => {
       const map = document.querySelector(".detailed-earth-map");
       const detailLayer = document.querySelector(".living-atlas-globe__detail-layer");
       const detailStyle = detailLayer instanceof HTMLElement ? getComputedStyle(detailLayer) : null;
       const canvas = document.querySelector(".maplibregl-canvas");
       return {
-        stage: section.getAttribute("data-earth-dive"),
-        owner: section.getAttribute("data-earth-dive-owner"),
+        stage: stageOverride ?? section.getAttribute("data-earth-dive"),
+        owner: ownerOverride ?? section.getAttribute("data-earth-dive-owner"),
         semanticZoom: document.querySelector(".particle-earth-scene")?.getAttribute("data-semantic-zoom") ?? null,
         anchorX: map?.dataset?.handoffAnchorX ? Number(map.dataset.handoffAnchorX) : null,
         anchorY: map?.dataset?.handoffAnchorY ? Number(map.dataset.handoffAnchorY) : null,
@@ -204,16 +228,77 @@ async function installStageRecorder(page) {
         deltaY: event.deltaY,
       });
     }, { capture: true });
-    // A stage change is a DOM write, so the observer sees every one of them -
-    // including a pair that happens inside a single animation frame, which a
-    // poll would miss and report as a skipped stage.
-    const observer = new MutationObserver(() => {
-      const next = sample();
-      const last = window.__qaEarthDiveStages.at(-1);
-      if (last && last.stage === next.stage) return;
+    // Stage and owner are separate DOM writes. MutationObserver can batch both
+    // (and several frames' writes) into one callback, so reconstruct their exact
+    // ordered values from oldValue chains rather than sampling only final DOM.
+    const recordStagePresentation = (stageOverride = null, ownerOverride = null) => {
+      const next = sample(stageOverride, ownerOverride);
+      const lastIndex = window.__qaEarthDiveStages.length - 1;
+      const last = window.__qaEarthDiveStages[lastIndex];
+      if (last && last.stage === next.stage && last.owner === next.owner) {
+        // A newly-entered blending stage can intentionally start as `holding`
+        // until its post-sync render arrives. Presentation-only mutations keep
+        // that exact stage/owner pair current, but an owner transition is real
+        // evidence and must remain a distinct entry even when the stage is same.
+        window.__qaEarthDiveStages[lastIndex] = next;
+        return;
+      }
       window.__qaEarthDiveStages.push(next);
+    };
+    const observer = new MutationObserver((records) => {
+      let currentStage = window.__qaEarthDiveStages.at(-1)?.stage
+        ?? section.getAttribute("data-earth-dive");
+      let currentOwner = window.__qaEarthDiveStages.at(-1)?.owner
+        ?? section.getAttribute("data-earth-dive-owner");
+      const finalStage = section.getAttribute("data-earth-dive");
+      const finalOwner = section.getAttribute("data-earth-dive-owner");
+      const nextAttributeValue = (index, attributeName, finalValue) => {
+        for (let nextIndex = index + 1; nextIndex < records.length; nextIndex += 1) {
+          if (records[nextIndex].attributeName === attributeName) return records[nextIndex].oldValue;
+        }
+        return finalValue;
+      };
+      for (let index = 0; index < records.length; index += 1) {
+        const record = records[index];
+        if (record.attributeName === "data-earth-dive") {
+          currentStage = nextAttributeValue(index, "data-earth-dive", finalStage);
+        } else if (record.attributeName === "data-earth-dive-owner") {
+          currentOwner = nextAttributeValue(index, "data-earth-dive-owner", finalOwner);
+        } else {
+          continue;
+        }
+        if (currentStage && currentOwner) recordStagePresentation(currentStage, currentOwner);
+      }
     });
-    observer.observe(section, { attributes: true, attributeFilter: ["data-earth-dive"] });
+    observer.observe(section, {
+      attributes: true,
+      attributeFilter: ["data-earth-dive", "data-earth-dive-owner"],
+      attributeOldValue: true,
+    });
+
+    // The detail layer is intentionally absent while Particle owns the Dive.
+    // Follow its actual mount/remount lifecycle, then observe the reveal
+    // attribute on that exact current node so `holding` is replaced by the
+    // final fallback/off/spatial presentation for the same stage entry.
+    let observedDetailLayer = null;
+    let revealObserver = null;
+    const attachRevealObserver = () => {
+      const nextDetailLayer = document.querySelector(".living-atlas-globe__detail-layer");
+      if (nextDetailLayer === observedDetailLayer) return;
+      revealObserver?.disconnect();
+      revealObserver = null;
+      observedDetailLayer = nextDetailLayer instanceof HTMLElement ? nextDetailLayer : null;
+      if (!observedDetailLayer) return;
+      revealObserver = new MutationObserver(() => recordStagePresentation());
+      revealObserver.observe(observedDetailLayer, {
+        attributes: true,
+        attributeFilter: ["data-earth-dive-spatial-reveal"],
+      });
+      recordStagePresentation();
+    };
+    const detailMountObserver = new MutationObserver(attachRevealObserver);
+    detailMountObserver.observe(section, { childList: true, subtree: true });
+    attachRevealObserver();
     window.__qaEarthDiveReset = () => {
       window.__qaEarthDiveStages = [sample()];
       window.__qaEarthDiveWheelEvents = [];
@@ -221,8 +306,27 @@ async function installStageRecorder(page) {
   });
 }
 
+
+function paintedQuadrants(value) {
+  if (typeof value !== "string" || !value) return [];
+  return value.split(",").map((sample) => sample.split(":").map(Number));
+}
+
+function allQuadrantsPainted(value) {
+  const samples = paintedQuadrants(value);
+  return samples.length === 4 && samples.every((rgba) => (
+    rgba.length === 4
+    && rgba.every(Number.isFinite)
+    && rgba[3] > 0
+    && (rgba[0] + rgba[1] + rgba[2]) > 0
+  ));
+}
+
 async function stages(page) {
-  return page.evaluate(() => window.__qaEarthDiveStages.map((entry) => entry.stage));
+  return page.evaluate(() => window.__qaEarthDiveStages.reduce((ladder, entry) => {
+    if (ladder.at(-1) !== entry.stage) ladder.push(entry.stage);
+    return ladder;
+  }, []));
 }
 
 async function stageEntries(page) {
@@ -423,7 +527,7 @@ async function openDivePage(context, { blockStyle, focusShape = "route-point", m
       : route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify(EMPTY_STYLE),
+        body: JSON.stringify(QA_PAINT_STYLE),
       })
   ));
   await page.goto(qaUrl(focusShape, motion), { waitUntil: "domcontentloaded" });
@@ -485,6 +589,7 @@ try {
   const forwardWheelEvents = await wheelEvents(forward.page);
   const detailOwnedWheelCount = forwardWheelEvents.filter((event) => event.owner === "detail" && event.stage === "detail").length;
   const detailReveal = await readSpatialReveal(forward.page);
+  const firstReveal = await readDive(forward.page);
 
   const forwardStages = await stages(forward.page);
 
@@ -527,6 +632,29 @@ try {
   });
 
   const stageLadder = await stages(forward.page);
+
+  // #355 lifecycle regression family: the first map instance was torn down on
+  // reverse. Dive again on the same page and require a fresh single-load map to
+  // reach the same post-sync reveal proof, with no stale callback from instance 1.
+  await forward.page.evaluate(() => window.__qaEarthDiveReset());
+  const reentryPoint = await gesturePoint(forward.page, point);
+  await wheelUntil(
+    forward.page, reentryPoint, APPROACH_WHEEL_DELTA,
+    (state) => state.semanticZoom === "local",
+    "the second dive never returned to local",
+  );
+  await wheelUntil(
+    forward.page, reentryPoint, FINE_WHEEL_DELTA,
+    (state) => state.stage === "blending",
+    "the second dive never reached blending",
+  );
+  await wheelUntilDetailWithStableRetry(
+    forward.page, reentryPoint, FINE_WHEEL_DELTA,
+    "the second dive never committed",
+  );
+  const reentryReveal = await readDive(forward.page);
+  const reentryStages = await stages(forward.page);
+
   // Hard grade the overlap and the exact frame that AUTHORIZED ownership.
   // Once detail owns input, any later wheel legitimately moves MapLibre away
   // from the frozen particle camera and is not a handoff seam.
@@ -540,10 +668,17 @@ try {
   );
   const mapZoomChange = (detailFrames.detail?.mapZoom ?? Number.NaN)
     - (blendingFrames.detail?.mapZoom ?? Number.NaN);
-  const mapSelfContinuityError = Math.abs(
-    ((detailFrames.detail?.scale ?? Number.NaN) / (blendingFrames.detail?.scale ?? Number.NaN))
-    / 2 ** mapZoomChange - 1,
-  );
+  // Globe projection deliberately makes CSS pixels-per-degree a function of
+  // more than MapLibre's scalar zoom. The particle renderer is still the sole
+  // camera authority for the commit-crossing wheel, so grade continuity against
+  // its measured scale change instead of assuming `2 ** mapZoomChange` is the
+  // projection's exact screen-space scale ratio. Same-frame anchor/scale checks
+  // above still prove both renderers are aligned on each side of the handoff.
+  const particleScaleChange = (detailFrames.particle?.scale ?? Number.NaN)
+    / (blendingFrames.particle?.scale ?? Number.NaN);
+  const detailScaleChange = (detailFrames.detail?.scale ?? Number.NaN)
+    / (blendingFrames.detail?.scale ?? Number.NaN);
+  const authorityScaleContinuityError = Math.abs(detailScaleChange / particleScaleChange - 1);
 
   result.forward = {
     stageLadder,
@@ -581,6 +716,33 @@ try {
       earthMode: returned.earthMode,
       semanticZoom: returned.semanticZoom,
     },
+    reentry: {
+      stages: reentryStages,
+      readiness: reentryReveal.readiness,
+      mapLoadCount: reentryReveal.mapLoadCount,
+      revealRevision: reentryReveal.revealRevision,
+      postSyncRenderRevision: reentryReveal.postSyncRenderRevision,
+      revealStage: reentryReveal.revealStage,
+      paintQuadrants: reentryReveal.paintQuadrants,
+    },
+    firstReveal: {
+      readiness: firstReveal.readiness,
+      mapLoadCount: firstReveal.mapLoadCount,
+      mapRenderCount: firstReveal.mapRenderCount,
+      mapIdleCount: firstReveal.mapIdleCount,
+      mapResizeCount: firstReveal.mapResizeCount,
+      revealRevision: firstReveal.revealRevision,
+      postSyncRenderRevision: firstReveal.postSyncRenderRevision,
+      revealStage: firstReveal.revealStage,
+      revealReason: firstReveal.revealReason,
+      revealSync: firstReveal.revealSync,
+      hostRect: firstReveal.hostRect,
+      canvasCss: firstReveal.canvasCss,
+      canvasBuffer: firstReveal.canvasBuffer,
+      paintQuadrants: firstReveal.paintQuadrants,
+      cameraBefore: firstReveal.revealCameraBefore,
+      cameraAfter: firstReveal.revealCameraAfter,
+    },
     handoff: {
       atBlending: blendingFrames,
       commitAlignment,
@@ -591,7 +753,9 @@ try {
       worstLocalScaleError,
       localScaleTolerance: LOCAL_SCALE_TOLERANCE,
       mapZoomChange,
-      mapSelfContinuityError,
+      particleScaleChange,
+      detailScaleChange,
+      authorityScaleContinuityError,
     },
     consoleErrors: forward.consoleErrors,
     pageErrors: forward.pageErrors,
@@ -653,8 +817,35 @@ try {
   if (detailOwnedWheelCount === 0 && !(detailFrames.anchorDeltaPx <= ANCHOR_TOLERANCE_PX)) {
     ladderFailures.push(`detail drifted to ${detailFrames.anchorDeltaPx}px without any detail-owned input`);
   }
-  if (detailOwnedWheelCount === 0 && !(mapSelfContinuityError <= LOCAL_SCALE_TOLERANCE)) {
-    ladderFailures.push(`the detail frame jumped by ${mapSelfContinuityError} without user input`);
+  if (detailOwnedWheelCount === 0 && !(authorityScaleContinuityError <= LOCAL_SCALE_TOLERANCE)) {
+    ladderFailures.push(`the detail frame diverged from particle camera authority by ${authorityScaleContinuityError} across handoff`);
+  }
+  if (
+    JSON.stringify(reentryStages) !== JSON.stringify(["particle", "prewarm", "blending", "detail"])
+    || reentryReveal.mapLoadCount !== 1
+    || reentryReveal.postSyncRenderRevision !== reentryReveal.revealRevision
+    || reentryReveal.revealStage !== "blending"
+    || !allQuadrantsPainted(reentryReveal.paintQuadrants)
+  ) {
+    ladderFailures.push(`the reverse->dive lifecycle did not produce one fresh fully-painted map: ${JSON.stringify({ stages: reentryStages, reveal: reentryReveal })}`);
+  }
+  if (
+    firstReveal.mapLoadCount !== 1
+    || !(firstReveal.mapRenderCount > 0)
+    || firstReveal.revealRevision <= 0
+    || firstReveal.postSyncRenderRevision !== firstReveal.revealRevision
+    || firstReveal.revealStage !== "blending"
+  ) {
+    ladderFailures.push(`the first reveal did not publish a current post-sync render revision: ${JSON.stringify(firstReveal)}`);
+  }
+  if (!allQuadrantsPainted(firstReveal.paintQuadrants)) {
+    ladderFailures.push(`the first reveal did not paint all four deterministic QA quadrants: ${JSON.stringify(firstReveal.paintQuadrants)}`);
+  }
+  if (!firstReveal.hostRect || !firstReveal.canvasCss || !firstReveal.canvasBuffer) {
+    ladderFailures.push(`the first reveal did not expose host/canvas geometry evidence: ${JSON.stringify(firstReveal)}`);
+  }
+  if (firstReveal.revealCameraBefore !== firstReveal.revealCameraAfter) {
+    ladderFailures.push(`programmatic reveal sync changed camera/focus truth: ${JSON.stringify({ before: firstReveal.revealCameraBefore, after: firstReveal.revealCameraAfter })}`);
   }
   if (forward.pageErrors.length > 0) {
     ladderFailures.push("the page raised an error during the dive");
@@ -828,7 +1019,11 @@ try {
     (state) => state.stage === "blending",
     "the reduced-motion dive never reached blending",
   );
-  await reducedRun.page.waitForTimeout(180);
+  await reducedRun.page.waitForFunction(() => {
+    const map = document.querySelector(".detailed-earth-map");
+    return map?.getAttribute("data-map-reveal-stage") === "blending"
+      && map.getAttribute("data-map-post-sync-render-revision") === map.getAttribute("data-map-reveal-revision");
+  }, null, { timeout: 5_000 });
   const reducedReveal = await readSpatialReveal(reducedRun.page);
   result.reducedMotion = { reveal: reducedReveal, pageErrors: reducedRun.pageErrors };
   const reducedFailures = [];
@@ -958,6 +1153,78 @@ try {
   }
   await blocked.page.close();
 
+  // ------------------------------------------------------- 1920 cold reveal
+  // #355 was observed at 1920x1080 specifically. Exercise a fresh map instance
+  // at that geometry instead of resizing the existing page: a successful run
+  // must not need the diagnostic 1080 -> 1081 -> 1080 user workaround.
+  const wideContext = await browser.newContext({
+    viewport: { width: 1920, height: 1080 },
+    deviceScaleFactor: 1,
+  });
+  const wideRun = await openDivePage(wideContext, { blockStyle: false });
+  const widePoint = await gesturePoint(wideRun.page);
+  await wheelUntil(
+    wideRun.page, widePoint, APPROACH_WHEEL_DELTA,
+    (state) => state.semanticZoom === "local",
+    "the 1920x1080 cold reveal never reached local",
+  );
+  await wheelUntil(
+    wideRun.page, widePoint, FINE_WHEEL_DELTA,
+    (state) => state.stage === "blending",
+    "the 1920x1080 cold reveal never reached blending",
+  );
+  await wheelUntilDetailWithStableRetry(
+    wideRun.page, widePoint, FINE_WHEEL_DELTA,
+    "the 1920x1080 cold reveal never committed",
+  );
+  const wideReveal = await readDive(wideRun.page);
+  const wideFailures = [];
+  const wideRevisionBeforeResize = wideReveal.revealRevision;
+  await wideRun.page.setViewportSize({ width: 1080, height: 1920 });
+  await wideRun.page.waitForFunction((previousRevision) => {
+    const map = document.querySelector(".detailed-earth-map");
+    const revision = Number(map?.getAttribute("data-map-reveal-revision") ?? 0);
+    const committed = Number(map?.getAttribute("data-map-post-sync-render-revision") ?? 0);
+    return revision > previousRevision && committed === revision;
+  }, wideRevisionBeforeResize, { timeout: 5_000 });
+  const portraitSync = await readDive(wideRun.page);
+  await wideRun.page.setViewportSize({ width: 1920, height: 1080 });
+  await wideRun.page.waitForFunction((previousRevision) => {
+    const map = document.querySelector(".detailed-earth-map");
+    const revision = Number(map?.getAttribute("data-map-reveal-revision") ?? 0);
+    const committed = Number(map?.getAttribute("data-map-post-sync-render-revision") ?? 0);
+    return revision > previousRevision && committed === revision;
+  }, portraitSync.revealRevision, { timeout: 5_000 });
+  const restoredSync = await readDive(wideRun.page);
+  if (
+    wideReveal.mapLoadCount !== 1
+    || wideReveal.postSyncRenderRevision !== wideReveal.revealRevision
+    || wideReveal.revealStage !== "blending"
+  ) {
+    wideFailures.push(`1920x1080 did not commit a current post-sync reveal frame: ${JSON.stringify(wideReveal)}`);
+  }
+  if (!allQuadrantsPainted(wideReveal.paintQuadrants)) {
+    wideFailures.push(`1920x1080 did not paint all four quadrants: ${JSON.stringify(wideReveal.paintQuadrants)}`);
+  }
+  if (wideReveal.revealCameraBefore !== wideReveal.revealCameraAfter) {
+    wideFailures.push(`1920x1080 reveal sync moved the camera: ${JSON.stringify({ before: wideReveal.revealCameraBefore, after: wideReveal.revealCameraAfter })}`);
+  }
+  for (const [label, sample] of [["portrait", portraitSync], ["restored", restoredSync]]) {
+    if (sample.revealSync !== "resize" || sample.postSyncRenderRevision !== sample.revealRevision) {
+      wideFailures.push(`${label} viewport change did not use one current geometry resize/render sync: ${JSON.stringify(sample)}`);
+    }
+    if (sample.revealCameraBefore !== sample.revealCameraAfter) {
+      wideFailures.push(`${label} viewport resize changed camera truth: ${JSON.stringify({ before: sample.revealCameraBefore, after: sample.revealCameraAfter })}`);
+    }
+    if (sample.mapLoadCount !== 1 || sample.mapResizeCount > 8) {
+      wideFailures.push(`${label} viewport change rebuilt the map or entered a resize loop: ${JSON.stringify({ loadCount: sample.mapLoadCount, resizeCount: sample.mapResizeCount })}`);
+    }
+  }
+  if (wideRun.pageErrors.length > 0) wideFailures.push("the 1920x1080 cold reveal raised a page error");
+  result.wideFirstReveal = { cold: wideReveal, portraitSync, restoredSync };
+  await wideRun.page.close();
+  await wideContext.close();
+
   result.failures = [
     ...ladderFailures,
     ...routeFailures,
@@ -965,6 +1232,7 @@ try {
     ...reducedCommandFailures,
     ...reducedFailures,
     ...blockedFailures,
+    ...wideFailures,
   ];
   console.log(JSON.stringify(result, null, 2));
   if (result.failures.length > 0) {
