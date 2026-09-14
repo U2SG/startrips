@@ -601,6 +601,29 @@ describe("route arc geometry", () => {
     });
   });
 
+  it("keeps asymmetric near-reversal spline progress inside each leg without backward hooks (#352 review)", () => {
+    const points = [
+      { lat: -75.534343, lon: 30.884792 },
+      { lat: -74.438199, lon: -129.350272 },
+      { lat: 68.163208, lon: 30.198264 },
+    ];
+    const arc = { arcHeightRatio: 0.22, arcSaturationAngle: Math.PI / 3 };
+    const plans = planRouteArcLegs(points, Math.PI / 96, 8192, arc);
+    const legs = buildRouteArcLegSamples(points, Math.PI / 96, 8192, arc);
+
+    expect(legs).toHaveLength(2);
+    plans.forEach((plan, index) => {
+      let previousProgress = -1e-8;
+      for (let vertex = 0; vertex < routeArcVertexCount(legs[index]); vertex += 1) {
+        const direction = sampleAt(legs[index], vertex, 1, 0).normalize();
+        const progress = plan.start.angleTo(direction);
+        expect(progress).toBeLessThanOrEqual(plan.angle + 1e-6);
+        expect(progress + 1e-6).toBeGreaterThanOrEqual(previousProgress);
+        previousProgress = progress;
+      }
+    });
+  });
+
   it("keeps route-wide and per-leg spline samples byte-identical and deterministic (#352)", () => {
     const points = [
       { lat: 34.0522, lon: -118.2437 },

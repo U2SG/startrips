@@ -184,6 +184,45 @@ function tangentControlPoint(anchor: Vector3, tangent: Vector3, angle: number) {
     .normalize();
 }
 
+/**
+ * Keep sampled spline travel monotonic inside the current leg without changing
+ * its authored bearing unless the raw cubic would run ahead or step backward.
+ * Reparameterizing on the start->raw great circle preserves tangent intent;
+ * the nominal progress envelope prevents an early sample from reaching beyond
+ * the Route Point endpoint and then curling back to the anchor.
+ */
+function clampSplineRadialProgress(
+  start: Vector3,
+  end: Vector3,
+  raw: Vector3,
+  previousAngle: number,
+  maxAngle: number,
+  legAngle: number,
+) {
+  const rawAngle = angularDistance(start, raw);
+  const boundedAngle = Math.min(
+    legAngle,
+    Math.max(previousAngle, Math.min(maxAngle, rawAngle)),
+  );
+  if (Math.abs(boundedAngle - rawAngle) < 1e-12) {
+    return { direction: raw, angle: rawAngle };
+  }
+  if (rawAngle < 1e-12) {
+    return {
+      direction: slerpUnitVectors(
+        start,
+        end,
+        legAngle > 0 ? boundedAngle / legAngle : 0,
+      ),
+      angle: boundedAngle,
+    };
+  }
+  return {
+    direction: slerpUnitVectors(start, raw, boundedAngle / rawAngle),
+    angle: boundedAngle,
+  };
+}
+
 function sampleSphericalSpline(
   start: Vector3,
   end: Vector3,
@@ -558,19 +597,12 @@ function appendLegSamples(
     heightRatio,
     segmentCount,
   } = plan;
+  let previous = start.clone();
+  let previousAngle = 0;
   for (let step = 1; step <= segmentCount; step += 1) {
     const previousProgress = (step - 1) / segmentCount;
     const currentProgress = step / segmentCount;
-    const previous = sampleSphericalSpline(
-      start,
-      end,
-      startTangent,
-      endTangent,
-      startHandleAngle,
-      endHandleAngle,
-      previousProgress,
-    );
-    const current = sampleSphericalSpline(
+    const rawCurrent = sampleSphericalSpline(
       start,
       end,
       startTangent,
@@ -579,11 +611,25 @@ function appendLegSamples(
       endHandleAngle,
       currentProgress,
     );
+    const bounded = step === segmentCount
+      ? { direction: end.clone(), angle: plan.angle }
+      : clampSplineRadialProgress(
+        start,
+        end,
+        rawCurrent,
+        previousAngle,
+        plan.angle * currentProgress,
+        plan.angle,
+      );
+    const current = bounded.direction;
+
     into.directions.push(...previous.toArray(), ...current.toArray());
     into.lifts.push(
       liftAt(previousProgress, heightRatio, ROUTE_ARC_EXPONENT),
       liftAt(currentProgress, heightRatio, ROUTE_ARC_EXPONENT),
     );
+    previous = current;
+    previousAngle = bounded.angle;
   }
 }
 
