@@ -607,7 +607,25 @@ try {
     check(`${viewport.name}/single-entry-reachable`, await singleShareTrigger.isVisible());
     await singleShareTrigger.click();
 
-    await page.locator(".journey-share__dialog").waitFor({ timeout: 10_000 });
+    try {
+      await page.locator(".journey-share__dialog").waitFor({ timeout: 10_000 });
+    } catch (error) {
+      const diagnostic = await page.evaluate(() => ({
+        innerWidth: window.innerWidth,
+        innerHeight: window.innerHeight,
+        mobileV2: document.querySelector(".living-atlas")?.getAttribute("data-mobile-v2") ?? null,
+        sheet: Boolean(document.querySelector(".mobile-v2__sheet")),
+        story: Boolean(document.querySelector(".journey-story")),
+        share: Boolean(document.querySelector(".journey-share__dialog")),
+        historyStack: window.history.state?.__startripsMobileSurfaceStack ?? null,
+        activeElement: document.activeElement instanceof HTMLElement
+          ? `${document.activeElement.tagName}:${document.activeElement.getAttribute("aria-label") ?? document.activeElement.textContent ?? ""}`.slice(0, 180)
+          : null,
+      }));
+      throw new Error(`${viewport.name}/single-share-dialog did not remain visible: ${JSON.stringify(diagnostic)}`, {
+        cause: error,
+      });
+    }
     const single = await page.evaluate(() => ({
       heading: document.querySelector("#journey-share-title")?.textContent ?? "",
       selectionOffered: Boolean(document.querySelector(".journey-share__selection")),
