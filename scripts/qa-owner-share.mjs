@@ -676,6 +676,20 @@ try {
     // stale Story/sheet predecessor rather than leaving ghost Back entries.
     await page.keyboard.press("Escape");
     await page.locator(".journey-share__dialog").waitFor({ state: "detached", timeout: 10_000 });
+
+    // Reopen immediately while the cleanup-owned history traversal may still
+    // be in flight. The new Share must wait for that traversal to settle rather
+    // than writing its token into the entry that is being left and then closing
+    // itself on the resulting popstate.
+    await page.locator('[data-atlas-share-trigger="true"]').click();
+    await page.locator(".journey-share__dialog").waitFor({ state: "visible", timeout: 10_000 });
+    await page.waitForTimeout(180);
+    const rapidReopen = await surfaceState(page);
+    check(`${viewport.name}/rapid-reopen-survives-history-reconcile`,
+      rapidReopen.share && !rapidReopen.story && rapidReopen.modalCount === 1,
+      rapidReopen);
+    await page.keyboard.press("Escape");
+    await page.locator(".journey-share__dialog").waitFor({ state: "detached", timeout: 10_000 });
     await page.waitForFunction(() => {
       const state = window.history.state;
       const stack = state && typeof state === "object"

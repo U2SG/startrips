@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   countStaleMobileSurfaceHistorySuffix,
   nextMobileSurfaceHistoryWrite,
+  shouldDeferMobileSurfaceHistoryWrite,
 } from "./useMobileSurfaceHistory";
 
 describe("mobile surface history replacement", () => {
@@ -32,6 +33,12 @@ describe("mobile surface history replacement", () => {
       mode: "push",
       stack: ["journey-story:1", "story-media-surface:2"],
     });
+  });
+
+  it("defers a reopened surface while an owned reconciliation is scheduled or moving", () => {
+    expect(shouldDeferMobileSurfaceHistoryWrite(false, false)).toBe(false);
+    expect(shouldDeferMobileSurfaceHistoryWrite(true, false)).toBe(true);
+    expect(shouldDeferMobileSurfaceHistoryWrite(false, true)).toBe(true);
   });
 
   it("keeps collapsing a stale predecessor suffix after a replacement closes", () => {
