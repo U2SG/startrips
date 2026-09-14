@@ -585,23 +585,39 @@ function routeSplineMinimumCompliantSegmentCount(
     return result;
   };
 
-  // A one-segment sample contains only the endpoints, so it cannot observe
-  // any interior heading change from a curved spline. Treating that aliased
-  // sample as a compliant floor breaks the monotonic search premise and can
-  // let budget rebalancing donate away density a curved leg still needs.
+  // A duplicate Route Point is truthfully represented by its unavoidable
+  // one-segment degenerate leg. Do not let that special case invalidate the
+  // route-wide rebalance for the non-degenerate legs around it.
+  if (!(shape.angle > 1e-12)) return 1;
+
+  // Coarse uniform samples can alias the spline's interior curvature: one
+  // candidate count may pass while its immediate neighbours fail. A compliant
+  // floor therefore has to remain compliant across a small consecutive window
+  // rather than being inferred from one lucky sample grid. The requested
+  // pre-budget count remains the hard upper bound and is verified directly.
   if (limit < 2) return null;
-  let failed = 2;
-  if (withinTolerance(failed)) return failed;
-  let passing = Math.min(limit, 4);
-  while (passing < limit && !withinTolerance(passing)) {
+  const stableWithinTolerance = (count: number) => {
+    const last = Math.min(limit, count + 2);
+    for (let candidate = count; candidate <= last; candidate += 1) {
+      if (!withinTolerance(candidate)) return false;
+    }
+    return true;
+  };
+
+  let failed = 1;
+  let passing = Math.min(limit, 2);
+  if (stableWithinTolerance(passing)) return passing;
+  failed = passing;
+  passing = Math.min(limit, 4);
+  while (passing < limit && !stableWithinTolerance(passing)) {
     failed = passing;
     passing = Math.min(limit, passing * 2);
   }
-  if (!withinTolerance(passing)) return null;
+  if (!stableWithinTolerance(passing)) return null;
 
   while (failed + 1 < passing) {
     const midpoint = Math.floor((failed + passing) / 2);
-    if (withinTolerance(midpoint)) passing = midpoint;
+    if (stableWithinTolerance(midpoint)) passing = midpoint;
     else failed = midpoint;
   }
   return passing;
@@ -772,8 +788,17 @@ export function planRouteArcLegs(
         rebalancedTotal -= transfer;
       }
 
+      const rebalancedIsCompliant = rebalanced.every((count, index) => (
+        routeSplineSamplingWithinTolerance(
+          sampleBoundedSplineDirections(plans[index], count),
+          maxSegmentAngle,
+        )
+      ));
+      const selectedCounts = rebalancedIsCompliant
+        ? rebalanced
+        : minimumCompliantCounts;
       for (let index = 0; index < plans.length; index += 1) {
-        plans[index].segmentCount = rebalanced[index];
+        plans[index].segmentCount = selectedCounts[index];
       }
     }
   }

@@ -54,6 +54,36 @@ function maxRadius(samples: RouteArcSamples, radius = 1, liftScale = 1) {
   return largest;
 }
 
+function expectRouteLegSamplingWithinTolerance(
+  leg: RouteArcSamples,
+  maxSegmentAngle: number,
+) {
+  const directions: Vector3[] = [sampleAt(leg, 0, 1, 0).normalize()];
+  for (let vertex = 1; vertex < routeArcVertexCount(leg); vertex += 2) {
+    directions.push(sampleAt(leg, vertex, 1, 0).normalize());
+  }
+  for (let index = 1; index < directions.length; index += 1) {
+    expect(directions[index - 1].angleTo(directions[index]))
+      .toBeLessThanOrEqual(maxSegmentAngle + 1e-6);
+  }
+  for (let index = 1; index < directions.length - 1; index += 1) {
+    const anchor = directions[index];
+    const incoming = directions[index - 1]
+      .clone()
+      .addScaledVector(anchor, -anchor.dot(directions[index - 1]))
+      .normalize()
+      .multiplyScalar(-1);
+    const outgoing = directions[index + 1]
+      .clone()
+      .addScaledVector(anchor, -anchor.dot(directions[index + 1]))
+      .normalize();
+    if (incoming.lengthSq() > 0 && outgoing.lengthSq() > 0) {
+      expect(incoming.angleTo(outgoing))
+        .toBeLessThanOrEqual(ROUTE_SPLINE_JOIN_TOLERANCE + 1e-6);
+    }
+  }
+}
+
 describe("latLonToVector3", () => {
   it("maps the equator and poles to a unit sphere", () => {
     expect(latLonToVector3(0, 0, 1).toArray()).toEqual([1, 0, 0]);
@@ -767,6 +797,54 @@ describe("route arc geometry", () => {
         }
       }
     }
+  });
+
+  it("keeps density rebalancing active when a dense route contains a duplicate Route Point (#352 review)", () => {
+    const motif = [
+      { lat: 0, lon: 0 },
+      { lat: 0, lon: 1 },
+      { lat: 30, lon: 50 },
+      { lat: -20, lon: 100 },
+      { lat: 25, lon: 145 },
+      { lat: -35, lon: -170 },
+      { lat: 10, lon: -100 },
+    ];
+    const points = Array.from({ length: 9 }, () => motif).flat().slice(0, 60);
+    points[points.length - 1] = { ...points[points.length - 2] };
+    const arc = { arcHeightRatio: 0.22, arcSaturationAngle: Math.PI / 3 };
+    const maxSegmentAngle = Math.PI / 96;
+    const plans = planRouteArcLegs(points, maxSegmentAngle, 8192, arc);
+    const legs = buildRouteArcLegSamples(points, maxSegmentAngle, 8192, arc);
+
+    expect(plans).toHaveLength(59);
+    expect(legs).toHaveLength(59);
+    expect(plans[plans.length - 1].angle).toBeLessThanOrEqual(1e-12);
+    expect(plans[plans.length - 1].segmentCount).toBe(1);
+    expect(plans[0].segmentCount).toBeGreaterThan(78);
+    expect(plans.reduce((sum, plan) => sum + plan.segmentCount, 0))
+      .toBeLessThanOrEqual(4096);
+    for (const leg of legs) expectRouteLegSamplingWithinTolerance(leg, maxSegmentAngle);
+  });
+
+  it("does not infer compliance from an aliased two-segment spline probe (#352 review)", () => {
+    const motif = [
+      { lat: 72.825361, lon: 176.895686 },
+      { lat: 70.572676, lon: -178.701490 },
+      { lat: -76.187329, lon: -11.914533 },
+    ];
+    const points = Array.from({ length: 20 }, () => motif).flat();
+    const arc = { arcHeightRatio: 0.22, arcSaturationAngle: Math.PI / 3 };
+    const maxSegmentAngle = Math.PI / 96;
+    const plans = planRouteArcLegs(points, maxSegmentAngle, 8192, arc);
+    const legs = buildRouteArcLegSamples(points, maxSegmentAngle, 8192, arc);
+
+    expect(points).toHaveLength(60);
+    expect(plans).toHaveLength(59);
+    expect(legs).toHaveLength(59);
+    expect(plans[0].segmentCount).toBeGreaterThanOrEqual(6);
+    expect(plans.reduce((sum, plan) => sum + plan.segmentCount, 0))
+      .toBeLessThanOrEqual(4096);
+    for (const leg of legs) expectRouteLegSamplingWithinTolerance(leg, maxSegmentAngle);
   });
 
   it("keeps route-wide and per-leg spline samples byte-identical and deterministic (#352)", () => {
