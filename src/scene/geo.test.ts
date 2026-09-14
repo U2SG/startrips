@@ -755,6 +755,39 @@ describe("route arc geometry", () => {
       .distanceTo(end)).toBeLessThan(1e-6);
   });
 
+  it("preserves the endpoint-defined plane for extremely near-antipodal legs (#352 review)", () => {
+    const points = [
+      { lat: 0, lon: 0 },
+      { lat: 0.00000001, lon: 180 },
+    ];
+    const arc = { arcHeightRatio: 0.22, arcSaturationAngle: Math.PI / 3 };
+    const maxSegmentAngle = Math.PI / 96;
+    const plans = planRouteArcLegs(points, maxSegmentAngle, 8192, arc);
+    const legs = buildRouteArcLegSamples(points, maxSegmentAngle, 8192, arc);
+
+    expect(plans).toHaveLength(1);
+    expect(legs).toHaveLength(1);
+    expect(plans[0].segmentCount).toBeLessThan(4096);
+    expectRouteLegSamplingWithinTolerance(legs[0], maxSegmentAngle);
+
+    const start = latLonToVector3(points[0].lat, points[0].lon, 1).normalize();
+    const end = latLonToVector3(points[1].lat, points[1].lon, 1).normalize();
+    const planeNormal = start.clone().cross(end).normalize();
+    const midpoint = sampleAt(
+      legs[0],
+      Math.floor((routeArcVertexCount(legs[0]) - 1) / 2),
+      1,
+      0,
+    ).normalize();
+
+    // This pair has a tiny but real endpoint-defined great-circle plane. The
+    // arbitrary exact-antipode fallback would put the midpoint about 90° off
+    // that plane even though the endpoint itself is only 1e-8° away.
+    expect(Math.abs(midpoint.dot(planeNormal))).toBeLessThan(1e-6);
+    expect(sampleAt(legs[0], routeArcVertexCount(legs[0]) - 1, 1, 0).normalize()
+      .distanceTo(end)).toBeLessThan(1e-6);
+  });
+
   it("allocates enough interior samples for long near-antipodal spline curvature (#352 review)", () => {
     const points = [
       { lat: -62.542382, lon: 175.620270 },
