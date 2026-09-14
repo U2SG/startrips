@@ -605,8 +605,8 @@ describe("route arc geometry", () => {
     ];
     const arc = { arcHeightRatio: 0.22, arcSaturationAngle: Math.PI / 3 };
     const maxSegmentAngle = Math.PI / 96;
-    const plans = planRouteArcLegs(points, maxSegmentAngle, 8192, arc);
-    const legs = buildRouteArcLegSamples(points, maxSegmentAngle, 8192, arc);
+    const plans = planRouteArcLegs(points, maxSegmentAngle, 512, arc);
+    const legs = buildRouteArcLegSamples(points, maxSegmentAngle, 512, arc);
 
     expect(plans).toHaveLength(2);
     expect(legs).toHaveLength(2);
@@ -619,13 +619,34 @@ describe("route arc geometry", () => {
     expect(plans[0].endHandleAngle).toBe(0);
     expect(plans[1].startHandleAngle).toBe(0);
     expect(plans.reduce((sum, plan) => sum + plan.segmentCount, 0))
-      .toBeLessThan(2048);
+      .toBeLessThanOrEqual(256);
 
     const anchor = latLonToVector3(points[1].lat, points[1].lon, 1).normalize();
     expect(sampleAt(legs[0], routeArcVertexCount(legs[0]) - 1, 1, 0).normalize()
       .distanceTo(anchor)).toBeLessThan(1e-6);
     expect(sampleAt(legs[1], 0, 1, 0).normalize().distanceTo(anchor)).toBeLessThan(1e-6);
     for (const leg of legs) expectRouteLegSamplingWithinTolerance(leg, maxSegmentAngle);
+  });
+
+  it("collapses the same unrepresentable join before full-budget dense-route scaling (#352 review)", () => {
+    const points = [
+      { lat: 20.195286, lon: -111.169866 },
+      { lat: 8.079654, lon: 10.260959 },
+      { lat: 42.583351, lon: -178.541672 },
+      ...Array.from({ length: 61 }, (_, index) => ({
+        lat: index % 2 === 0 ? 24 + (index % 7) : -24 - (index % 7),
+        lon: index % 2 === 0 ? -5 : 175,
+      })),
+    ];
+    const arc = { arcHeightRatio: 0.22, arcSaturationAngle: Math.PI / 3 };
+    const plans = planRouteArcLegs(points, Math.PI / 96, 8192, arc);
+
+    expect(plans).toHaveLength(points.length - 1);
+    expect(plans[0].endTangent.distanceTo(plans[1].startTangent)).toBeLessThan(1e-12);
+    expect(plans[0].endHandleAngle).toBe(0);
+    expect(plans[1].startHandleAngle).toBe(0);
+    expect(plans.reduce((sum, plan) => sum + plan.segmentCount, 0))
+      .toBeLessThanOrEqual(4096);
   });
 
   it("caps spherical spline deviation and collapses near-U-turn handles instead of looping (#352)", () => {
