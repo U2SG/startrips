@@ -717,6 +717,58 @@ describe("route arc geometry", () => {
     }
   });
 
+  it("does not treat an endpoint-only spline sample as a compliant budget floor (#352 review)", () => {
+    const motif = [
+      { lat: 0, lon: 0 },
+      { lat: 0, lon: 1 },
+      { lat: 30, lon: 50 },
+      { lat: -20, lon: 100 },
+      { lat: 25, lon: 145 },
+      { lat: -35, lon: -170 },
+      { lat: 10, lon: -100 },
+    ];
+    const points = Array.from({ length: 9 }, () => motif).flat().slice(0, 60);
+    const arc = { arcHeightRatio: 0.22, arcSaturationAngle: Math.PI / 3 };
+    const maxSegmentAngle = Math.PI / 96;
+    const plans = planRouteArcLegs(points, maxSegmentAngle, 8192, arc);
+    const legs = buildRouteArcLegSamples(points, maxSegmentAngle, 8192, arc);
+
+    expect(points).toHaveLength(60);
+    expect(plans).toHaveLength(59);
+    expect(legs).toHaveLength(59);
+    expect(plans.reduce((sum, plan) => sum + plan.segmentCount, 0))
+      .toBeLessThanOrEqual(4096);
+    expect((plans[0].angle * 180) / Math.PI).toBeCloseTo(1, 6);
+    expect(plans[0].segmentCount).toBeGreaterThan(76);
+
+    for (const leg of legs) {
+      const directions: Vector3[] = [sampleAt(leg, 0, 1, 0).normalize()];
+      for (let vertex = 1; vertex < routeArcVertexCount(leg); vertex += 2) {
+        directions.push(sampleAt(leg, vertex, 1, 0).normalize());
+      }
+      for (let index = 1; index < directions.length; index += 1) {
+        expect(directions[index - 1].angleTo(directions[index]))
+          .toBeLessThanOrEqual(maxSegmentAngle + 1e-6);
+      }
+      for (let index = 1; index < directions.length - 1; index += 1) {
+        const anchor = directions[index];
+        const incoming = directions[index - 1]
+          .clone()
+          .addScaledVector(anchor, -anchor.dot(directions[index - 1]))
+          .normalize()
+          .multiplyScalar(-1);
+        const outgoing = directions[index + 1]
+          .clone()
+          .addScaledVector(anchor, -anchor.dot(directions[index + 1]))
+          .normalize();
+        if (incoming.lengthSq() > 0 && outgoing.lengthSq() > 0) {
+          expect(incoming.angleTo(outgoing))
+            .toBeLessThanOrEqual(ROUTE_SPLINE_JOIN_TOLERANCE + 1e-6);
+        }
+      }
+    }
+  });
+
   it("keeps route-wide and per-leg spline samples byte-identical and deterministic (#352)", () => {
     const points = [
       { lat: 34.0522, lon: -118.2437 },

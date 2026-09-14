@@ -585,9 +585,14 @@ function routeSplineMinimumCompliantSegmentCount(
     return result;
   };
 
-  if (withinTolerance(1)) return 1;
-  let failed = 1;
-  let passing = Math.min(limit, 2);
+  // A one-segment sample contains only the endpoints, so it cannot observe
+  // any interior heading change from a curved spline. Treating that aliased
+  // sample as a compliant floor breaks the monotonic search premise and can
+  // let budget rebalancing donate away density a curved leg still needs.
+  if (limit < 2) return null;
+  let failed = 2;
+  if (withinTolerance(failed)) return failed;
+  let passing = Math.min(limit, 4);
   while (passing < limit && !withinTolerance(passing)) {
     failed = passing;
     passing = Math.min(limit, passing * 2);
