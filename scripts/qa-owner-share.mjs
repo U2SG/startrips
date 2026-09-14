@@ -560,35 +560,32 @@ try {
       await page.locator(".journey-story [data-share-journey-trigger]").waitFor({ timeout: 10_000 });
     }
 
-    const singleTrigger = await page.evaluate(() => {
-      const trigger = document.querySelector("[data-share-journey-trigger]");
-      if (!(trigger instanceof HTMLElement)) return false;
-      trigger.click();
-      return true;
-    });
-    check(`${viewport.name}/single-entry-reachable`, singleTrigger === true);
+    const singleShareTrigger = viewport.compact
+      ? page.locator('.mobile-v2__sheet [data-share-journey-trigger="true"]')
+      : page.locator('.journey-story [data-share-journey-trigger="true"]');
+    await singleShareTrigger.waitFor({ state: "visible", timeout: 10_000 });
+    check(`${viewport.name}/single-entry-reachable`, await singleShareTrigger.isVisible());
+    await singleShareTrigger.click();
 
-    if (singleTrigger) {
-      await page.locator(".journey-share__dialog").waitFor({ timeout: 10_000 });
-      const single = await page.evaluate(() => ({
-        heading: document.querySelector("#journey-share-title")?.textContent ?? "",
-        selectionOffered: Boolean(document.querySelector(".journey-share__selection")),
-      }));
-      // Locked to one Journey: no selection list, and the title names it.
-      check(
-        `${viewport.name}/single-share-is-locked-to-one-journey`,
-        single.selectionOffered === false && single.heading.includes("分享「"),
-        single,
-      );
-      await clickText(page, "创建分享链接");
-      await page.locator("[data-share-link]").waitFor({ timeout: 10_000 });
-      const singleRequest = state.requests.filter((entry) => entry.kind === "create").at(-1);
-      check(
-        `${viewport.name}/single-share-requests-exactly-one-journey`,
-        singleRequest?.body.journeyIds.length === 1,
-        singleRequest?.body.journeyIds,
-      );
-    }
+    await page.locator(".journey-share__dialog").waitFor({ timeout: 10_000 });
+    const single = await page.evaluate(() => ({
+      heading: document.querySelector("#journey-share-title")?.textContent ?? "",
+      selectionOffered: Boolean(document.querySelector(".journey-share__selection")),
+    }));
+    // Locked to one Journey: no selection list, and the title names it.
+    check(
+      `${viewport.name}/single-share-is-locked-to-one-journey`,
+      single.selectionOffered === false && single.heading.includes("分享「"),
+      single,
+    );
+    await clickText(page, "创建分享链接");
+    await page.locator("[data-share-link]").waitFor({ timeout: 10_000 });
+    const singleRequest = state.requests.filter((entry) => entry.kind === "create").at(-1);
+    check(
+      `${viewport.name}/single-share-requests-exactly-one-journey`,
+      singleRequest?.body.journeyIds.length === 1,
+      singleRequest?.body.journeyIds,
+    );
 
     await context.close();
   }
