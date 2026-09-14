@@ -283,6 +283,30 @@ async function historyBackAndWaitForPopState(page) {
   }));
 }
 
+async function closeShareAndWaitForHistoryReconcile(page, mobileHistory) {
+  if (!mobileHistory) {
+    await clickLabel(page, "关闭分享");
+    await page.locator(".journey-share__dialog").waitFor({ state: "detached", timeout: 10_000 });
+    return;
+  }
+
+  const closed = await page.evaluate(() => {
+    const button = [...document.querySelectorAll("button")]
+      .find((element) => (element.getAttribute("aria-label") ?? "").trim() === "关闭分享");
+    if (!(button instanceof HTMLButtonElement)) return false;
+    window.__qaOwnerShareClosePopStateSeen = false;
+    window.addEventListener("popstate", () => {
+      window.__qaOwnerShareClosePopStateSeen = true;
+    }, { once: true });
+    button.click();
+    return true;
+  });
+  if (!closed) throw new Error("owner-share QA could not find the exact close control");
+  await page.locator(".journey-share__dialog").waitFor({ state: "detached", timeout: 10_000 });
+  await page.waitForFunction(() => window.__qaOwnerShareClosePopStateSeen === true, undefined, { timeout: 10_000 });
+  await waitForMobileSurfaceHistorySettled(page);
+}
+
 async function captureSurface(page, viewportName, label) {
   await mkdir(surfaceArtifactDir, { recursive: true });
   const path = `${surfaceArtifactDir}/${viewportName}-${label}.png`;
@@ -544,9 +568,7 @@ try {
       state.requests.map((entry) => entry.kind),
     );
 
-    await clickLabel(page, "关闭分享");
-    await page.locator(".journey-share__dialog").waitFor({ state: "detached", timeout: 10_000 });
-    await waitForMobileSurfaceHistorySettled(page);
+    await closeShareAndWaitForHistoryReconcile(page, viewport.compact);
 
     // --- Entry path A: exactly one Journey. --------------------------------
     // Reached from the surface each viewport actually offers: the mobile sheet
