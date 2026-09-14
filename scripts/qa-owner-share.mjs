@@ -687,6 +687,13 @@ try {
     check(`${viewport.name}/rapid-reopen-survives-history-reconcile`,
       rapidReopen.share && !rapidReopen.story && rapidReopen.modalCount === 1,
       rapidReopen);
+    const rapidReopenJourney = page.getByRole("checkbox", {
+      name: /^海风经过深圳湾\s*2026-08-20$/,
+    });
+    await rapidReopenJourney.check();
+    check(`${viewport.name}/rapid-reopen-explicitly-selects-fixture-journey`,
+      await rapidReopenJourney.isChecked(),
+      { journeyTitle: "海风经过深圳湾", startedOn: "2026-08-20" });
     let releaseDeferredCreate;
     state.createGate = new Promise((resolve) => { releaseDeferredCreate = resolve; });
     await page.getByRole("button", { name: "创建分享链接" }).click();
