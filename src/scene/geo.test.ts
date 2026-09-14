@@ -597,7 +597,7 @@ describe("route arc geometry", () => {
     expect(sampledJoinAngle(2)).toBeLessThan(Math.PI / 60);
   });
 
-  it("preserves the shared tangent when endpoint slope bounds engage (#352 review)", () => {
+  it("collapses an unrepresentable shared tangent before it can consume the route budget (#352 review)", () => {
     const points = [
       { lat: 20.195286, lon: -111.169866 },
       { lat: 8.079654, lon: 10.260959 },
@@ -610,37 +610,21 @@ describe("route arc geometry", () => {
 
     expect(plans).toHaveLength(2);
     expect(legs).toHaveLength(2);
-    expect(plans[0].endHandleAngle).toBeGreaterThan(0);
-    expect(plans[1].startHandleAngle).toBeGreaterThan(0);
     expect(plans[0].endTangent.distanceTo(plans[1].startTangent)).toBeLessThan(1e-12);
+    // The requested shared tangent is too far from both long geodesics to fit
+    // the existing handle/deviation bounds without concentrating essentially
+    // the entire #242 budget at this one anchor. Decorative smoothing yields
+    // symmetrically instead of leaving two active handles that draw different
+    // tangents or slowing Hermite progress almost to a stop.
+    expect(plans[0].endHandleAngle).toBe(0);
+    expect(plans[1].startHandleAngle).toBe(0);
+    expect(plans.reduce((sum, plan) => sum + plan.segmentCount, 0))
+      .toBeLessThan(2048);
 
-    const incomingLeg = legs[0];
-    const outgoingLeg = legs[1];
-    const anchor = sampleAt(
-      incomingLeg,
-      routeArcVertexCount(incomingLeg) - 1,
-      1,
-      0,
-    ).normalize();
-    const previous = sampleAt(
-      incomingLeg,
-      routeArcVertexCount(incomingLeg) - 2,
-      1,
-      0,
-    ).normalize();
-    const next = sampleAt(outgoingLeg, 1, 1, 0).normalize();
-    const incoming = previous
-      .clone()
-      .addScaledVector(anchor, -anchor.dot(previous))
-      .normalize()
-      .multiplyScalar(-1);
-    const outgoing = next
-      .clone()
-      .addScaledVector(anchor, -anchor.dot(next))
-      .normalize();
-
-    expect(incoming.angleTo(outgoing))
-      .toBeLessThanOrEqual(ROUTE_SPLINE_JOIN_TOLERANCE + 1e-6);
+    const anchor = latLonToVector3(points[1].lat, points[1].lon, 1).normalize();
+    expect(sampleAt(legs[0], routeArcVertexCount(legs[0]) - 1, 1, 0).normalize()
+      .distanceTo(anchor)).toBeLessThan(1e-6);
+    expect(sampleAt(legs[1], 0, 1, 0).normalize().distanceTo(anchor)).toBeLessThan(1e-6);
     for (const leg of legs) expectRouteLegSamplingWithinTolerance(leg, maxSegmentAngle);
   });
 

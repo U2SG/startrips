@@ -197,37 +197,72 @@ function routeLegSplineFrame(start: Vector3, end: Vector3) {
   };
 }
 
-type RouteSplineEndpointSlopes = {
-  progressSlope: number;
-  crossTrackSlope: number;
-};
-
-function splineEndpointSlopes(
+function splineDesiredCrossTrackSlope(
   tangent: Vector3,
   travel: Vector3,
   normal: Vector3,
   handleAngle: number,
   legAngle: number,
-): RouteSplineEndpointSlopes {
-  const geodesic = { progressSlope: 1, crossTrackSlope: 0 };
-  if (!(handleAngle > 0) || tangent.lengthSq() < 1e-18) return geodesic;
+) {
+  if (!(handleAngle > 0) || tangent.lengthSq() < 1e-18) return 0;
   const along = tangent.dot(travel);
-  if (!(along > 1e-9)) return geodesic;
+  if (!(along > 1e-9)) return 0;
+  return legAngle * tangent.dot(normal) / along;
+}
 
-  const desiredCrossTrackSlope = legAngle * tangent.dot(normal) / along;
-  const maxCrossTrackSlope = 3 * handleAngle;
-  if (Math.abs(desiredCrossTrackSlope) <= maxCrossTrackSlope) {
-    return { progressSlope: 1, crossTrackSlope: desiredCrossTrackSlope };
+type RouteSplineCrossTrackSlopes = {
+  start: number;
+  end: number;
+  startPreservesTangent: boolean;
+  endPreservesTangent: boolean;
+};
+
+function boundedSplineCrossTrackSlopes(
+  startTangent: Vector3,
+  endTangent: Vector3,
+  frame: ReturnType<typeof routeLegSplineFrame>,
+  startHandleAngle: number,
+  endHandleAngle: number,
+  legAngle: number,
+): RouteSplineCrossTrackSlopes {
+  const desiredStart = splineDesiredCrossTrackSlope(
+    startTangent,
+    frame.startTravel,
+    frame.normal,
+    startHandleAngle,
+    legAngle,
+  );
+  const desiredEnd = splineDesiredCrossTrackSlope(
+    endTangent,
+    frame.endTravel,
+    frame.normal,
+    endHandleAngle,
+    legAngle,
+  );
+  let start = Math.max(
+    -3 * startHandleAngle,
+    Math.min(3 * startHandleAngle, desiredStart),
+  );
+  let end = Math.max(
+    -3 * endHandleAngle,
+    Math.min(3 * endHandleAngle, desiredEnd),
+  );
+
+  // Both Hermite basis functions peak at 4/27 in magnitude. Scale endpoint
+  // slopes together so the entire span stays inside the existing 2° truth
+  // boundary without a per-sample hard clamp that could introduce a kink.
+  const conservativeDeviation = (4 / 27) * (Math.abs(start) + Math.abs(end));
+  if (conservativeDeviation > MAX_ROUTE_SPLINE_DEVIATION) {
+    const scale = MAX_ROUTE_SPLINE_DEVIATION / conservativeDeviation;
+    start *= scale;
+    end *= scale;
   }
 
-  // Bound the endpoint handle magnitude without rotating its direction. The
-  // rendered endpoint derivative is legAngle * progressSlope along the
-  // geodesic plus crossTrackSlope across it, so scaling both components by the
-  // same factor retains the shared Route Point tangent on both adjacent legs.
-  const scale = maxCrossTrackSlope / Math.abs(desiredCrossTrackSlope);
   return {
-    progressSlope: scale,
-    crossTrackSlope: desiredCrossTrackSlope * scale,
+    start,
+    end,
+    startPreservesTangent: Math.abs(start - desiredStart) <= 1e-12,
+    endPreservesTangent: Math.abs(end - desiredEnd) <= 1e-12,
   };
 }
 
@@ -254,46 +289,20 @@ function sampleSphericalSpline(
   const legAngle = angularDistance(start, end);
   if (!(legAngle > 1e-12)) return start.clone();
   const frame = routeLegSplineFrame(start, end);
-  const startSlopes = splineEndpointSlopes(
+  const slopes = boundedSplineCrossTrackSlopes(
     startTangent,
-    frame.startTravel,
-    frame.normal,
-    startHandleAngle,
-    legAngle,
-  );
-  const endSlopes = splineEndpointSlopes(
     endTangent,
-    frame.endTravel,
-    frame.normal,
+    frame,
+    startHandleAngle,
     endHandleAngle,
     legAngle,
   );
 
-  // Both Hermite cross-track basis functions peak at 4/27 in magnitude. If
-  // the pair would exceed the existing 2° truth boundary, scale each endpoint
-  // derivative as a whole: along-track progress and cross-track offset move
-  // together, so the shared tangent direction survives deviation bounding.
-  const conservativeDeviation = (4 / 27)
-    * (Math.abs(startSlopes.crossTrackSlope) + Math.abs(endSlopes.crossTrackSlope));
-  if (conservativeDeviation > MAX_ROUTE_SPLINE_DEVIATION) {
-    const scale = MAX_ROUTE_SPLINE_DEVIATION / conservativeDeviation;
-    startSlopes.progressSlope *= scale;
-    startSlopes.crossTrackSlope *= scale;
-    endSlopes.progressSlope *= scale;
-    endSlopes.crossTrackSlope *= scale;
-  }
-
   const t2 = progress * progress;
   const t3 = t2 * progress;
-  const h10 = t3 - 2 * t2 + progress;
-  const h01 = -2 * t3 + 3 * t2;
-  const h11 = t3 - t2;
-  const geodesicProgress = Math.max(0, Math.min(1,
-    h10 * startSlopes.progressSlope + h01 + h11 * endSlopes.progressSlope,
-  ));
-  const crossTrackAngle = h10 * startSlopes.crossTrackSlope
-    + h11 * endSlopes.crossTrackSlope;
-  const geodesic = slerpUnitVectors(start, end, geodesicProgress);
+  const crossTrackAngle = (t3 - 2 * t2 + progress) * slopes.start
+    + (t3 - t2) * slopes.end;
+  const geodesic = slerpUnitVectors(start, end, progress);
   return geodesic
     .multiplyScalar(Math.cos(crossTrackAngle))
     .addScaledVector(frame.normal, Math.sin(crossTrackAngle))
@@ -754,7 +763,74 @@ export function planRouteArcLegs(
   }
 
   let requested = plans.reduce((sum, plan) => sum + plan.segmentCount, 0);
-  if (requested <= availableSegments) return plans;
+
+  if (requested <= availableSegments) {
+    // A bounded cross-track slope can rotate an active endpoint away from the
+    // route-wide shared tangent. When the route otherwise fits its #242 budget,
+    // do not preserve that mismatch by slowing along-track Hermite progress to
+    // an almost-stationary endpoint (which can consume the entire budget just
+    // to approximate one sharp corner). Smoothing is decorative: if either
+    // side of an interior anchor cannot express the shared tangent inside the
+    // existing handle/deviation bounds, collapse that shared handle on BOTH
+    // adjacent legs and keep the exact Route Point corner instead. Moderate
+    // representable turns retain the shared tangent unchanged.
+    const anchorsToCollapse = new Set<number>();
+    for (let index = 0; index < plans.length; index += 1) {
+      const plan = plans[index];
+      const slopes = boundedSplineCrossTrackSlopes(
+        plan.startTangent,
+        plan.endTangent,
+        routeLegSplineFrame(plan.start, plan.end),
+        plan.startHandleAngle,
+        plan.endHandleAngle,
+        plan.angle,
+      );
+      if (index > 0
+        && plan.startHandleAngle > 0
+        && !slopes.startPreservesTangent) {
+        anchorsToCollapse.add(index);
+      }
+      if (index < plans.length - 1
+        && plan.endHandleAngle > 0
+        && !slopes.endPreservesTangent) {
+        anchorsToCollapse.add(index + 1);
+      }
+    }
+
+    if (anchorsToCollapse.size > 0) {
+      for (const anchorIndex of anchorsToCollapse) {
+        plans[anchorIndex - 1].endHandleAngle = 0;
+        plans[anchorIndex].startHandleAngle = 0;
+      }
+      for (const plan of plans) {
+        const baseSegmentCount = Math.max(
+          routeArcSegmentCount(
+            plan.angle,
+            plan.heightRatio,
+            maxSegmentAngle,
+            liftRequested,
+          ),
+          routeSplineSegmentCount(
+            plan.start,
+            plan.end,
+            plan.startTangent,
+            plan.endTangent,
+            plan.startHandleAngle,
+            plan.endHandleAngle,
+            plan.angle,
+          ),
+        );
+        plan.segmentCount = routeSplineInteriorSegmentCount(
+          plan,
+          baseSegmentCount,
+          maxSegmentAngle,
+          availableSegments,
+        );
+      }
+      requested = plans.reduce((sum, plan) => sum + plan.segmentCount, 0);
+    }
+    if (requested <= availableSegments) return plans;
+  }
 
   // Not enough budget for the curve every leg asked for. Scale proportionally,
   // never below one segment, then shave the widest remaining allocations until
