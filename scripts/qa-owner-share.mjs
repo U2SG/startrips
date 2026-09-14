@@ -744,7 +744,7 @@ try {
     const rapidReopenJourney = page.getByRole("checkbox", {
       name: /^海风经过深圳湾\s*2026-08-20$/,
     });
-    await rapidReopenJourney.check();
+    await page.locator(".journey-share__selection label").filter({ has: rapidReopenJourney }).click();
     check(`${viewport.name}/rapid-reopen-explicitly-selects-fixture-journey`,
       await rapidReopenJourney.isChecked(),
       { journeyTitle: "海风经过深圳湾", startedOn: "2026-08-20" });
