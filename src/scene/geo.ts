@@ -763,6 +763,18 @@ export function planRouteArcLegs(
   }
 
   let requested = plans.reduce((sum, plan) => sum + plan.segmentCount, 0);
+  // Budget rebalancing keeps the pre-collapse spline as its density witness.
+  // Collapsing presentation handles may simplify the rendered shape, but it
+  // must never weaken the already-reviewed post-budget sampling floor.
+  const densityValidationShapes: RouteSplineLegShape[] = plans.map((plan) => ({
+    start: plan.start,
+    end: plan.end,
+    startTangent: plan.startTangent,
+    endTangent: plan.endTangent,
+    startHandleAngle: plan.startHandleAngle,
+    endHandleAngle: plan.endHandleAngle,
+    angle: plan.angle,
+  }));
 
   // A bounded cross-track slope can rotate an active endpoint away from the
   // route-wide shared tangent. Detect that before #242 budget scaling: a reduced
@@ -828,9 +840,9 @@ export function planRouteArcLegs(
   // those floors. If the floors themselves do not fit, preserve the existing
   // best-effort budget degradation rather than breaching the hard ceiling.
   const scaledSegmentCounts = plans.map((plan) => plan.segmentCount);
-  const minimumCompliantCounts = plans.map((plan, index) => (
+  const minimumCompliantCounts = densityValidationShapes.map((shape, index) => (
     routeSplineMinimumCompliantSegmentCount(
-      plan,
+      shape,
       maxSegmentAngle,
       requestedSegmentCounts[index],
     )
@@ -865,7 +877,7 @@ export function planRouteArcLegs(
 
       const rebalancedIsCompliant = rebalanced.every((count, index) => (
         routeSplineSamplingWithinTolerance(
-          sampleBoundedSplineDirections(plans[index], count),
+          sampleBoundedSplineDirections(densityValidationShapes[index], count),
           maxSegmentAngle,
         )
       ));
