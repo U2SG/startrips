@@ -158,21 +158,93 @@ describe("Home Base presence projection (ST-056)", () => {
     expect(globeSource).toContain("initialCameraAnchor={atlas?.initialCameraAnchor}");
     expect(globeSource).not.toContain("focusPoint={atlas?.focusPoint ?? atlas?.initialCameraAnchor}");
     expect(particleSource).toContain("initialCameraAnchorNow");
-    expect(particleSource).toContain("rotationXForLatitude(initialCameraAnchorNow.lat)");
-    expect(particleSource).toContain("rotationYForLongitude(initialCameraAnchorNow.lon)");
+    expect(particleSource).toContain("const initialCameraRotation = focusSolverOwnsState && initialCameraAnchorNow");
+    expect(particleSource).toContain("solveFocusRotationForViewport(");
+    expect(particleSource).toContain("nearestEquivalentRotation(interactiveRotationX, initialCameraRotation.x)");
+    expect(particleSource).toContain("nearestEquivalentRotation(baseRotationY, initialCameraRotation.y)");
     expect(particleSource).toContain("if (initialCameraAnchorNow && activePointers.size === 0)");
     expect(particleSource).toContain("interactiveRotationX = interpolate(interactiveRotationX, targetRotationX)");
     expect(particleSource).toMatch(/resolveParticleDiveAnchor\(\s*routeFocusFrame,\s*latestFocusPoint\.current,\s*initialCameraAnchorNow,/);
   });
   it("keeps Home presence on the particle owner through prewarm/blend and off the detail owner", () => {
     const source = readFileSync(new URL("./LivingAtlasGlobe.tsx", import.meta.url), "utf8");
-    expect(source).toContain('dive.owner !== "detail" && !cinematicActive');
+    expect(source).toContain('const homeBaseInteractive = dive.owner !== "detail"');
+    expect(source).toContain('onHomeBaseActivate: homeBaseInteractive ? onHomeBaseActivate : undefined');
   });
-  it("keeps the Home accessibility target transparent to pointer camera gestures", () => {
+  it("yields the Home hit target completely while globe point-picking owns pointer input", () => {
+    const source = readFileSync(new URL("./LivingAtlasGlobe.tsx", import.meta.url), "utf8");
+    expect(source).toContain('const homeBaseInteractive = dive.owner !== "detail"');
+    expect(source).toContain('onHomeBaseActivate: homeBaseInteractive ? onHomeBaseActivate : undefined');
+  });
+
+  it("wakes the persistent particle renderer when async Home presence and its fresh-Atlas camera seed arrive", () => {
+    const source = readFileSync(new URL("./ParticleEarthScene.tsx", import.meta.url), "utf8");
+    expect(source).toContain('setInitialCameraAnchor(anchor: ParticleEarthSceneProps["initialCameraAnchor"])');
+    expect(source).toContain("setHomeBasePresence(presence: readonly HomeBasePresenceDrawable[])");
+    expect(source).toContain("focusFlightActive: focusFlightActive || initialCameraAnchorSettling");
+    expect(source).toContain("controllerRef.current?.setHomeBasePresence(homeBasePresence)");
+  });
+
+  it("projects Home from the current globe matrix even when no route vector layer is visible", () => {
+    const source = readFileSync(new URL("./ParticleEarthScene.tsx", import.meta.url), "utf8");
+    const homeProjection = source.slice(
+      source.indexOf("if (latestOnHomeBasePresenceFrame.current)"),
+      source.indexOf("if (latestCenterFocusPoint.current && spatialFocusPoint)"),
+    );
+    expect(homeProjection).toContain("globe.updateWorldMatrix(true, false);");
+    expect(homeProjection.indexOf("globe.updateWorldMatrix(true, false);"))
+      .toBeLessThan(homeProjection.indexOf("updateGeoProjectionFrame("));
+  });
+
+  it("ST-065 keeps the visible Home button as a keyboard target while pointer gestures stay renderer-owned", () => {
+    const source = readFileSync(new URL("./LivingAtlasGlobe.tsx", import.meta.url), "utf8");
     const css = readFileSync(new URL("../styles/living-atlas.css", import.meta.url), "utf8");
     const start = css.indexOf(".living-atlas-globe__home-base {");
     const rule = css.slice(start, css.indexOf("}", start));
     expect(start).toBeGreaterThanOrEqual(0);
     expect(rule).toContain("pointer-events: none;");
+    expect(source).toContain('type="button"');
+    expect(source).toContain("element.tabIndex = visible ? 0 : -1");
+    expect(source).toContain("onClick={() => onHomeBaseActivate?.(descriptor.periodId)}");
+    expect(source).toContain('aria-controls={activeHomeBaseContextPeriodId === descriptor.periodId ? "home-base-context" : undefined}');
+  });
+});
+
+
+describe("ST-065 Home / Route Point pointer ownership", () => {
+  it("resolves globe pick, Route Point, then Home through the renderer's one pointer authority", () => {
+    const globeSource = readFileSync(new URL("./LivingAtlasGlobe.tsx", import.meta.url), "utf8");
+    const particleSource = readFileSync(new URL("./ParticleEarthScene.tsx", import.meta.url), "utf8");
+    expect(globeSource).not.toContain("onRoutePointPointerResolver");
+    expect(particleSource).toContain("personalRaycaster.params.Points = { threshold: 0.18 }");
+    expect(particleSource).toContain("homeBaseTargetFromPointer");
+    expect(particleSource).toContain("latestOnHomeBaseActivate.current?.(homeBasePeriodId)");
+    const pick = particleSource.indexOf("if (canPickGlobe) {");
+    const journey = particleSource.indexOf("if (canActivateJourney) {", pick);
+    const home = particleSource.indexOf("const homeBasePeriodId = homeBaseTargetFromPointer", journey);
+    expect(pick).toBeGreaterThanOrEqual(0);
+    expect(journey).toBeGreaterThan(pick);
+    expect(home).toBeGreaterThan(journey);
+  });
+
+  it("routes city-label contacts through that same renderer pointer authority", () => {
+    const particleSource = readFileSync(new URL("./ParticleEarthScene.tsx", import.meta.url), "utf8");
+    expect(particleSource).not.toContain('entry.element.addEventListener("pointerup"');
+    expect(particleSource).toContain('cityVectorLayer.addEventListener("pointerdown", onCityLayerPointerDown)');
+    expect(particleSource).toContain('cityVectorLayer.addEventListener("pointerup", onCityLayerPointerUp)');
+    expect(particleSource).toContain('cityVectorLayer.addEventListener("pointercancel", onCityLayerPointerCancel)');
+    expect(particleSource).toContain('cityVectorLayer.addEventListener("wheel", onCityLayerWheel, { passive: false })');
+    expect(particleSource).toContain("onPointerDown(event);");
+    expect(particleSource).toContain("onPointerUp(event, cityPickFromEventTarget(event.target));");
+    expect(particleSource).toContain("cityPointerPicks.set(event.pointerId, cityPick)");
+    expect(particleSource).toContain("explicitGlobePick ?? cityPointerPicks.get(event.pointerId)");
+    expect(particleSource).toContain("onPointerCancel(event);");
+    expect(particleSource).toContain("onWheel(event);");
+    const css = readFileSync(new URL("../styles/living-atlas.css", import.meta.url), "utf8");
+    const cityStart = css.indexOf(".particle-earth-city {");
+    const cityRule = css.slice(cityStart, css.indexOf("}", cityStart));
+    expect(cityStart).toBeGreaterThanOrEqual(0);
+    expect(cityRule).toContain("pointer-events: auto;");
+    expect(cityRule).toContain("touch-action: none;");
   });
 });

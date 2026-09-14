@@ -51,6 +51,7 @@ import {
   resolveHomeBaseSuggestion,
 } from "./homeBaseSuggestion";
 import { resolveHomeBaseCameraIntent, type HomeBaseCameraIntent } from "./homeBaseCameraPolicy";
+import { resolveHomeBaseContext } from "./homeBaseContext";
 import { resolveHomeBasePresence, type HomeBaseTimelineContext, type ResolvedHomeBasePresence } from "./homeBasePresence";
 import type { GlobeSemanticZoom } from "../scene/semanticZoom";
 import {
@@ -113,6 +114,29 @@ import {
 } from "./placeMediaHandoff";
 
 type AtlasView = "planet" | "timeline";
+
+export function homeBaseContextActivationAvailable({
+  hasHomeReader,
+  view,
+  storyActive,
+  playbackActive,
+  playbackMenuActive,
+  globePickActive,
+}: {
+  hasHomeReader: boolean;
+  view: AtlasView;
+  storyActive: boolean;
+  playbackActive: boolean;
+  playbackMenuActive: boolean;
+  globePickActive: boolean;
+}) {
+  return hasHomeReader
+    && view === "planet"
+    && !storyActive
+    && !playbackActive
+    && !playbackMenuActive
+    && !globePickActive;
+}
 
 type AtlasNotice = { id: number; message: string };
 
@@ -946,6 +970,7 @@ export function LivingAtlasApp({
   const [homeBaseDismissals, setHomeBaseDismissals] = useState<HomeBaseDismissal[] | undefined>(undefined);
   const [homeBaseSuggestionPending, setHomeBaseSuggestionPending] = useState(false);
   const [homeBaseSuggestionEvidenceRefreshPending, setHomeBaseSuggestionEvidenceRefreshPending] = useState(false);
+  const [homeBaseContextPeriodId, setHomeBaseContextPeriodId] = useState<string | null>(null);
   const [atlasSemanticZoom, setAtlasSemanticZoom] = useState<GlobeSemanticZoom>("planet");
   const [hasManualAtlasCameraInteraction, setHasManualAtlasCameraInteraction] = useState(false);
   const [initialHomeCameraIntent, setInitialHomeCameraIntent] = useState<HomeBaseCameraIntent | null>(null);
@@ -971,6 +996,7 @@ export function LivingAtlasApp({
     routePointContextSelectionRef.current = next;
     setRoutePointContextSelection(next);
   }, []);
+  const clearHomeBaseContext = useCallback(() => setHomeBaseContextPeriodId(null), []);
   const storyObservationRef = useRef<StoryLogicalObservation | null>(null);
   const playbackReturnIntentRevisionRef = useRef(0);
   const playbackEntryRef = useRef<PlaybackEntry | null>(null);
@@ -1150,6 +1176,20 @@ export function LivingAtlasApp({
       : [],
     [atlasHomeTimelineContext, atlasSemanticZoom, homeBasePeriods, listHomeBasePeriods],
   );
+  const homeBaseContext = useMemo(
+    () => resolveHomeBaseContext({
+      periodId: homeBaseContextPeriodId,
+      periods: homeBasePeriods,
+      presence: ordinaryAtlasHomePresence,
+    }),
+    [homeBaseContextPeriodId, homeBasePeriods, ordinaryAtlasHomePresence],
+  );
+  useEffect(() => {
+    if (homeBaseContextPeriodId !== null && homeBaseContext === null) clearHomeBaseContext();
+  }, [clearHomeBaseContext, homeBaseContext, homeBaseContextPeriodId]);
+  useEffect(() => {
+    clearHomeBaseContext();
+  }, [clearHomeBaseContext, timeCursor.cursor, timeCursor.timelineRevision]);
   // #232: the quiet suggestion surface.
   //
   // The frozen V1 core in `homeBaseInference.ts` decides the state; this shell
@@ -1468,6 +1508,26 @@ export function LivingAtlasApp({
   useEffect(() => {
     if (view !== "planet" && routePointContextSelection.intent) clearRoutePointContext();
   }, [clearRoutePointContext, routePointContextSelection.intent, view]);
+  useEffect(() => {
+    if (
+      view !== "planet"
+      || storyJourneyId !== null
+      || playbackActive
+      || playbackModeMenuJourneyId !== null
+      || routePointContextSelection.intent !== null
+      || globePickActive
+    ) {
+      clearHomeBaseContext();
+    }
+  }, [
+    clearHomeBaseContext,
+    globePickActive,
+    playbackActive,
+    playbackModeMenuJourneyId,
+    routePointContextSelection.intent,
+    storyJourneyId,
+    view,
+  ]);
 
   const cinematicIsolation = atlasCinematicIsolationActive(playbackActive, globeFocusMode);
   useEffect(() => {
@@ -1721,6 +1781,7 @@ export function LivingAtlasApp({
 
   function selectMobileJourney(journeyId: string) {
     claimPlaybackReturnIntent();
+    clearHomeBaseContext();
     clearRoutePointContext();
     timeCursor.selectJourney(journeyId);
     setView("planet");
@@ -1810,6 +1871,7 @@ export function LivingAtlasApp({
 
   function selectJourney(journeyId: string, source?: HTMLElement | null) {
     claimPlaybackReturnIntent();
+    clearHomeBaseContext();
     clearRoutePointContext();
     morphJourneyCard(source ?? null, activeJourneyId !== null, () => {
       timeCursor.selectJourney(journeyId);
@@ -1819,6 +1881,7 @@ export function LivingAtlasApp({
   }
 
   function revealRoutePointContext(journeyId: string, routePointId: string) {
+    clearHomeBaseContext();
     const requested = requestRoutePointContextSelection(
       routePointContextSelectionRef.current,
       journeyId,
@@ -1997,6 +2060,7 @@ export function LivingAtlasApp({
     requestedMode: "full" | "quick-recap" = "full",
     carriedFallbackMessage: string | null = null,
   ) {
+    clearHomeBaseContext();
     const journey = journeys.find((candidate) => candidate.id === journeyId) ?? null;
     if (!journey) return;
     let mode = requestedMode;
@@ -2254,6 +2318,18 @@ export function LivingAtlasApp({
               periods: homeBasePeriods,
               effectiveDate: homeEffectiveDate,
             } : undefined}
+            activeHomeBaseContextPeriodId={homeBaseContext?.periodId ?? null}
+            onHomeBaseActivate={homeBaseContextActivationAvailable({
+              hasHomeReader: Boolean(listHomeBasePeriods),
+              view,
+              storyActive: storyJourneyId !== null,
+              playbackActive,
+              playbackMenuActive: playbackModeMenuJourneyId !== null,
+              globePickActive,
+            }) ? (periodId) => {
+              clearRoutePointContext();
+              setHomeBaseContextPeriodId((current) => current === periodId ? null : periodId);
+            } : undefined}
             onSemanticZoomChange={setAtlasSemanticZoom}
             onManualCameraInteraction={claimManualAtlasCamera}
             showControls={showsGlobeDetailControls(isMobileV2, globeFocusMode)}
@@ -2387,7 +2463,7 @@ export function LivingAtlasApp({
           no `role="dialog"`, no focus trap and no `inert`: the Atlas remains
           usable and the member can simply never answer. Story/Playback
           suppression still belongs to `resolveHomeBaseSuggestion`. */}
-      {homeBaseSuggestion?.visible && ((!isMobileV2 && view === "timeline") || (isMobileV2 && view === "planet")) ? (
+      {homeBaseSuggestion?.visible && !homeBaseContext && ((!isMobileV2 && view === "timeline") || (isMobileV2 && view === "planet")) ? (
         <aside
           className="living-atlas__home-base-suggestion motion-fade-through"
           data-home-base-suggestion={homeBaseSuggestion.variant}
@@ -2482,6 +2558,10 @@ export function LivingAtlasApp({
               aria-expanded={playbackModeMenuJourneyId === activeJourney.id}
               aria-controls={`playback-mode-options-${activeJourney.id}`}
               onClick={() => {
+                // Opening Playback controls is already a newer presentation
+                // intent than Home context; release Home before the mode menu
+                // is exposed so it cannot cover/intercept that control.
+                clearHomeBaseContext();
                 if (playbackPendingMode?.journeyId === activeJourney.id) {
                   startPlayback(
                     activeJourney.id,
@@ -2745,6 +2825,34 @@ export function LivingAtlasApp({
           {undoJourney ? <button className="living-atlas__notice-undo" type="button" onClick={() => void undoRemovedJourney()}>撤销删除</button> : null}
           <button type="button" onClick={() => { clearNotice(); setUndoJourney(null); }} aria-label="关闭提示"><IconX size={17} stroke={1.4} aria-hidden="true" /></button>
         </div>
+      ) : null}
+
+      {view === "planet" && homeBaseContext && !storyJourneyId && !playbackActive && !routePointContextSelection.context ? (
+        <aside
+          id="home-base-context"
+          className="living-atlas__home-base-context motion-fade-through"
+          data-home-base-context
+          data-home-base-period-id={homeBaseContext.periodId}
+          data-home-base-presence={homeBaseContext.presence}
+          aria-live="polite"
+        >
+          <header>
+            <div>
+              <p>HOME BASE · {homeBaseContext.presence === "current" ? "CURRENT" : "HISTORY"}</p>
+              <h2>{homeBaseContext.heading}</h2>
+            </div>
+            <button type="button" onClick={clearHomeBaseContext} aria-label="关闭常住地信息">
+              <IconX size={16} stroke={1.35} aria-hidden="true" />
+            </button>
+          </header>
+          <div className="living-atlas__home-base-context-facts">
+            <span>{homeBaseContext.periodLabel}</span>
+            <span>{homeBaseContext.statusLabel}</span>
+          </div>
+          <p className="living-atlas__home-base-context-note">
+            这是你确认过的常住地阶段。它提供生活背景，不改变当前旅程、路线点或播放焦点。
+          </p>
+        </aside>
       ) : null}
 
       {view === "planet" && routePointContextSelection.context && routePointContextSelection.intent && !storyJourneyId && !playbackActive ? (() => {

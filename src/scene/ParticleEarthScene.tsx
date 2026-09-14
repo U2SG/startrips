@@ -380,6 +380,61 @@ export const GLOBE_RENDER_ORDER = {
 // former +/-35 degree clamp and turn it completely over.
 export const GLOBE_TILT_LIMIT_RADIANS = Number.POSITIVE_INFINITY;
 export const GLOBE_SURFACE_RADIUS = GEOGRAPHIC_SURFACE_RADIUS;
+
+export function cityPointCoordinates(city: Pick<CityPoint, "latitude" | "longitude"> | null) {
+  return city ? { latitude: city.latitude, longitude: city.longitude } : null;
+}
+
+type JourneyPointPointerTarget = {
+  journeyId: string;
+  routePointId?: string;
+  routePointIndex: number;
+};
+
+export function journeyRoutePointTargetEligible(
+  target: JourneyPointPointerTarget | null | undefined,
+  activeJourneyRouteId: string | null | undefined,
+  routePointActivationEnabled: boolean,
+  temporalReveal?: {
+    journeys: ReadonlyMap<string, number>;
+    points: ReadonlyMap<string, number>;
+  },
+) {
+  if (!target) return false;
+  if (
+    target.routePointId
+    && routePointActivationEnabled
+    && target.journeyId !== activeJourneyRouteId
+  ) return false;
+  const journeyReveal = temporalReveal?.journeys.get(target.journeyId);
+  if (journeyReveal !== undefined && journeyReveal <= 0) return false;
+  const pointReveal = temporalReveal?.points.get(
+    `${target.journeyId}:${target.routePointIndex}`,
+  );
+  return pointReveal === undefined || pointReveal > 0;
+}
+
+export function selectHomeBasePointerTarget(
+  frames: readonly ProjectedHomeBasePresence[],
+  descriptors: readonly Pick<HomeBasePresenceDrawable, "periodId" | "touchTargetPx">[],
+  clientX: number,
+  clientY: number,
+): string | null {
+  // Home markers paint in descriptor order, so reverse traversal matches the
+  // visual stack: current/period-context markers painted last win over older
+  // historical traces at the same geographic anchor.
+  for (let index = frames.length - 1; index >= 0; index -= 1) {
+    const frame = frames[index];
+    if (!frame?.visible) continue;
+    const descriptor = descriptors.find((candidate) => candidate.periodId === frame.periodId);
+    if (!descriptor) continue;
+    const halfTarget = descriptor.touchTargetPx / 2;
+    if (Math.abs(clientX - frame.x) <= halfTarget && Math.abs(clientY - frame.y) <= halfTarget) {
+      return frame.periodId;
+    }
+  }
+  return null;
+}
 // #252: the latitude step the local geographic scale is measured over. Small
 // enough that the projection is locally linear across it, large enough that the
 // difference is far above the 0.01px the anchor is published at.
@@ -1298,6 +1353,7 @@ interface ParticleEarthSceneProps {
   activeJourneyRouteId?: string | null;
   onJourneyRouteActivate?: (id: string) => void;
   onJourneyRoutePointActivate?: (journeyId: string, routePointId: string) => void;
+  onHomeBaseActivate?: (periodId: string) => void;
   // #21: per-journey temporal reveal progress (0 = future, 1 = visited).
   // When provided, route groups and points fade in with the time cursor.
   // Points are keyed by `${journeyId}:${pointIndex}` for one-stop-at-a-time
@@ -1684,6 +1740,7 @@ export function ParticleEarthScene({
   activeJourneyRouteId,
   onJourneyRouteActivate,
   onJourneyRoutePointActivate,
+  onHomeBaseActivate,
   temporalReveal,
   showArchiveSignals = true,
   onReady,
@@ -1717,6 +1774,7 @@ export function ParticleEarthScene({
   const latestActiveJourneyRouteId = useRef(activeJourneyRouteId);
   const latestOnJourneyRouteActivate = useRef(onJourneyRouteActivate);
   const latestOnJourneyRoutePointActivate = useRef(onJourneyRoutePointActivate);
+  const latestOnHomeBaseActivate = useRef(onHomeBaseActivate);
   const latestTemporalReveal = useRef(temporalReveal);
   const latestOnReady = useRef(onReady);
   const latestOnSemanticZoomSnapshot = useRef(onSemanticZoomSnapshot);
@@ -1746,6 +1804,7 @@ export function ParticleEarthScene({
   latestActiveJourneyRouteId.current = activeJourneyRouteId;
   latestOnJourneyRouteActivate.current = onJourneyRouteActivate;
   latestOnJourneyRoutePointActivate.current = onJourneyRoutePointActivate;
+  latestOnHomeBaseActivate.current = onHomeBaseActivate;
   latestTemporalReveal.current = temporalReveal;
   latestOnReady.current = onReady;
   latestOnSemanticZoomSnapshot.current = onSemanticZoomSnapshot;
@@ -2516,7 +2575,7 @@ export function ParticleEarthScene({
     let journeyConnectorCard: HTMLElement | null = null;
     let journeyConnectorCardRect: JourneyConnectorRect | null = null;
     let journeyConnectorSampledAt = 0;
-    let journeyPointTargets: Array<{ journeyId: string; routePointId?: string }> = [];
+    let journeyPointTargets: JourneyPointPointerTarget[] = [];
     const routeLabelSafeArea = {
       left: 16,
       top: 74,
@@ -2573,7 +2632,7 @@ export function ParticleEarthScene({
           .reduce((total, floor) => total + floor, 0),
       );
       const pointPositions = new Float32Array(pointCount * 3);
-      const pointTargets: Array<{ journeyId: string; routePointId?: string }> = [];
+      const pointTargets: JourneyPointPointerTarget[] = [];
       let pointIndex = 0;
       let routeVertexCount = 0;
       let routeLabelCount = 0;
@@ -2688,7 +2747,11 @@ export function ParticleEarthScene({
             pointPositions,
             pointIndex * 3,
           );
-          pointTargets.push({ journeyId: route.id, routePointId: point.id });
+          pointTargets.push({
+            journeyId: route.id,
+            routePointId: point.id,
+            routePointIndex,
+          });
           pointIndex += 1;
 
           const roleClass = routePointIndex === 0
@@ -2992,23 +3055,10 @@ export function ParticleEarthScene({
         city: null as CityPoint | null,
       };
       entry.element.classList.add("particle-earth-city");
-      entry.element.addEventListener("pointerup", (event) => {
-        event.stopPropagation();
-        const rejectedByGestureCapacity = rejectedPointerIds.delete(event.pointerId);
-        if (shouldSuppressUntrackedPointerActivation(
-          rejectedByGestureCapacity,
-          activePointers.size,
-        )) {
-          return;
-        }
-        const pick = latestOnGlobePointPick.current;
-        if (entry.city && pick) {
-          pick({
-            latitude: entry.city.latitude,
-            longitude: entry.city.longitude,
-          });
-        }
-      });
+      // City text is a painted child of the renderer-owned SVG overlay. Its
+      // pointer lifecycle is delegated from the layer to the SAME handlers as
+      // the canvas below, so Route Point / globe-pick / Home arbitration and
+      // drag/pinch/wheel ownership cannot diverge at a label boundary.
       cityVectorLayer.appendChild(entry.element);
       cityLabelPool.push(entry);
       return entry;
@@ -3510,7 +3560,52 @@ export function ParticleEarthScene({
     const personalRaycaster = new Raycaster();
     personalRaycaster.params.Points = { threshold: 0.18 };
     const personalPointer = new Vector2();
-    const activatePointerTarget = (event: PointerEvent) => {
+    const preparePersonalPointerRay = (clientX: number, clientY: number) => {
+      const bounds = renderer.domElement.getBoundingClientRect();
+      personalPointer.set(
+        ((clientX - bounds.left) / bounds.width) * 2 - 1,
+        -((clientY - bounds.top) / bounds.height) * 2 + 1,
+      );
+      personalRaycaster.setFromCamera(personalPointer, camera);
+    };
+    const journeyTargetFromPreparedRay = (): JourneyPointPointerTarget | null => {
+      camera.updateMatrixWorld();
+      globe.updateWorldMatrix(true, false);
+      updateGeoProjectionFrame(geoFrame, camera, globe.matrixWorld, targetSize.x, targetSize.y);
+      const positions = routePointSignals.geometry.getAttribute("position") as
+        | BufferAttribute
+        | undefined;
+      const intersection = personalRaycaster
+        .intersectObject(routePointSignals, false)
+        .find((candidate) => {
+          if (candidate.index === undefined || !positions) return false;
+          const target = journeyPointTargets[candidate.index] ?? null;
+          if (!journeyRoutePointTargetEligible(
+            target,
+            latestActiveJourneyRouteId.current,
+            Boolean(latestOnJourneyRoutePointActivate.current),
+            latestTemporalReveal.current,
+          )) return false;
+          routeLocalPoint.fromBufferAttribute(positions, candidate.index);
+          return isSphericalPointVisible(routeCameraPosition, routeLocalPoint);
+        });
+      return intersection?.index === undefined
+        ? null
+        : journeyPointTargets[intersection.index] ?? null;
+    };
+    const homeBaseTargetFromPointer = (clientX: number, clientY: number): string | null => {
+      if (!latestOnHomeBaseActivate.current || publishedHomeBasePresenceFrame.length === 0) return null;
+      return selectHomeBasePointerTarget(
+        publishedHomeBasePresenceFrame,
+        latestHomeBasePresence.current,
+        clientX,
+        clientY,
+      );
+    };
+    const activatePointerTarget = (
+      event: PointerEvent,
+      explicitGlobePick: { latitude: number; longitude: number } | null = null,
+    ) => {
       const canPickGlobe = Boolean(latestOnGlobePointPick.current);
       const canActivateJourney = Boolean(
         journeyPointTargets.length > 0
@@ -3519,10 +3614,11 @@ export function ParticleEarthScene({
           || latestOnJourneyRoutePointActivate.current
         ),
       );
+      const canActivateHome = Boolean(latestOnHomeBaseActivate.current);
       if (
         !canPickGlobe
-        &&
-        !canActivateJourney
+        && !canActivateJourney
+        && !canActivateHome
         && (
           currentMode !== "focusPoint"
           || !latestCenterFocusPoint.current
@@ -3531,13 +3627,12 @@ export function ParticleEarthScene({
       ) {
         return;
       }
-      const bounds = renderer.domElement.getBoundingClientRect();
-      personalPointer.set(
-        ((event.clientX - bounds.left) / bounds.width) * 2 - 1,
-        -((event.clientY - bounds.top) / bounds.height) * 2 + 1,
-      );
-      personalRaycaster.setFromCamera(personalPointer, camera);
+      preparePersonalPointerRay(event.clientX, event.clientY);
       if (canPickGlobe) {
+        if (explicitGlobePick) {
+          latestOnGlobePointPick.current?.(explicitGlobePick);
+          return;
+        }
         const [intersection] = personalRaycaster.intersectObject(surface, false);
         if (!intersection) return;
         const picked = vector3ToLatLon(
@@ -3550,22 +3645,7 @@ export function ParticleEarthScene({
         return;
       }
       if (canActivateJourney) {
-        camera.updateMatrixWorld();
-        globe.updateWorldMatrix(true, false);
-        updateGeoProjectionFrame(geoFrame, camera, globe.matrixWorld, targetSize.x, targetSize.y);
-        const positions = routePointSignals.geometry.getAttribute("position") as
-          | BufferAttribute
-          | undefined;
-        const intersection = personalRaycaster
-          .intersectObject(routePointSignals, false)
-          .find((candidate) => {
-            if (candidate.index === undefined || !positions) return false;
-            routeLocalPoint.fromBufferAttribute(positions, candidate.index);
-            return isSphericalPointVisible(routeCameraPosition, routeLocalPoint);
-          });
-        const target = intersection?.index === undefined
-          ? undefined
-          : journeyPointTargets[intersection.index];
+        const target = journeyTargetFromPreparedRay();
         if (target?.routePointId && latestOnJourneyRoutePointActivate.current) {
           latestOnJourneyRoutePointActivate.current(
             target.journeyId,
@@ -3577,6 +3657,11 @@ export function ParticleEarthScene({
           latestOnJourneyRouteActivate.current?.(target.journeyId);
           return;
         }
+      }
+      const homeBasePeriodId = homeBaseTargetFromPointer(event.clientX, event.clientY);
+      if (homeBasePeriodId) {
+        latestOnHomeBaseActivate.current?.(homeBasePeriodId);
+        return;
       }
       if (personalRaycaster.intersectObject(personalSignal, false).length > 0) {
         latestOnFocusPointActivate.current?.();
@@ -3722,21 +3807,11 @@ export function ParticleEarthScene({
       dragAngularDisplacement = { x: 0, y: 0, total: 0 };
     };
 
-    const onCityLayerPointerDown = (event: PointerEvent) => {
-      if (
-        !latestDragToRotate.current
-        || (event.pointerType === "mouse" && event.button !== 0)
-      ) {
-        return;
-      }
-      // City labels live in a sibling SVG, so contacts that begin there never
-      // pass through the canvas pointerdown handler. Once another globe contact is
-      // already tracked, remember this sibling-layer contact for its full
-      // lifecycle so it can never turn into a delayed city tap after the tracked
-      // pointer lifts. Zero-pointer city taps remain ordinary activations.
-      if (shouldRememberUntrackedPointerStart(activePointers.size)) {
-        rejectedPointerIds.add(event.pointerId);
-      }
+    const cityPointerPicks = new Map<number, { latitude: number; longitude: number }>();
+    const cityPickFromEventTarget = (target: EventTarget | null) => {
+      if (!(target instanceof SVGTextElement) || !target.classList.contains("particle-earth-city")) return null;
+      const entry = cityLabelPool.find((candidate) => candidate.element === target) ?? null;
+      return cityPointCoordinates(entry?.city ?? null);
     };
 
     const onPointerDown = (event: PointerEvent) => {
@@ -3852,7 +3927,11 @@ export function ParticleEarthScene({
       rotationVelocityY = nextVelocityY * velocityScale;
     };
 
-    const finishPointer = (event: PointerEvent, allowActivation: boolean) => {
+    const finishPointer = (
+      event: PointerEvent,
+      allowActivation: boolean,
+      explicitGlobePick: { latitude: number; longitude: number } | null = null,
+    ) => {
       if (!activePointers.has(event.pointerId)) return;
       const wasGesture = gestureConsumed || dragStarted || activePointers.size > 1;
       activePointers.delete(event.pointerId);
@@ -3888,12 +3967,17 @@ export function ParticleEarthScene({
       }
       lastGlobeInteractionAt = performance.now();
       clearDragState();
-      if (allowActivation && !wasGesture) activatePointerTarget(event);
+      if (allowActivation && !wasGesture) activatePointerTarget(event, explicitGlobePick);
     };
 
-    const onPointerUp = (event: PointerEvent) => {
+    const onPointerUp = (
+      event: PointerEvent,
+      explicitGlobePick: { latitude: number; longitude: number } | null = null,
+    ) => {
+      const cityPick = explicitGlobePick ?? cityPointerPicks.get(event.pointerId) ?? null;
+      cityPointerPicks.delete(event.pointerId);
       if (activePointers.has(event.pointerId)) {
-        finishPointer(event, isPrimaryPointerActivation(event));
+        finishPointer(event, isPrimaryPointerActivation(event), cityPick);
         return;
       }
       const rejectedByGestureCapacity = rejectedPointerIds.delete(event.pointerId);
@@ -3904,17 +3988,20 @@ export function ParticleEarthScene({
           activePointers.size,
         )
       ) {
-        activatePointerTarget(event);
+        activatePointerTarget(event, cityPick);
       }
     };
     const onPointerCancel = (event: PointerEvent) => {
+      cityPointerPicks.delete(event.pointerId);
       if (rejectedPointerIds.delete(event.pointerId)) return;
       finishPointer(event, false);
     };
     const onRejectedPointerLifecycleEnd = (event: PointerEvent) => {
+      cityPointerPicks.delete(event.pointerId);
       rejectedPointerIds.delete(event.pointerId);
     };
     const onLostPointerCapture = (event: PointerEvent) => {
+      cityPointerPicks.delete(event.pointerId);
       rejectedPointerIds.delete(event.pointerId);
       if (!activePointers.has(event.pointerId)) return;
       activePointers.delete(event.pointerId);
@@ -3965,7 +4052,39 @@ export function ParticleEarthScene({
       pinchAnchorErrorPx = null;
     };
 
+    // City labels are a sibling SVG above the WebGL canvas. Delegate their
+    // complete contact lifecycle into the renderer's existing handlers instead
+    // of giving labels a second activation path. Pointer capture moves an active
+    // gesture onto the canvas; these wrappers are also the fallback when capture
+    // is unavailable, and wheel keeps the same anchored-zoom authority.
+    const onCityLayerPointerDown = (event: PointerEvent) => {
+      event.stopPropagation();
+      const cityPick = cityPickFromEventTarget(event.target);
+      if (cityPick) cityPointerPicks.set(event.pointerId, cityPick);
+      onPointerDown(event);
+    };
+    const onCityLayerPointerMove = (event: PointerEvent) => {
+      event.stopPropagation();
+      onPointerMove(event);
+    };
+    const onCityLayerPointerUp = (event: PointerEvent) => {
+      event.stopPropagation();
+      onPointerUp(event, cityPickFromEventTarget(event.target));
+    };
+    const onCityLayerPointerCancel = (event: PointerEvent) => {
+      event.stopPropagation();
+      onPointerCancel(event);
+    };
+    const onCityLayerWheel = (event: WheelEvent) => {
+      event.stopPropagation();
+      onWheel(event);
+    };
+
     cityVectorLayer.addEventListener("pointerdown", onCityLayerPointerDown);
+    cityVectorLayer.addEventListener("pointermove", onCityLayerPointerMove);
+    cityVectorLayer.addEventListener("pointerup", onCityLayerPointerUp);
+    cityVectorLayer.addEventListener("pointercancel", onCityLayerPointerCancel);
+    cityVectorLayer.addEventListener("wheel", onCityLayerWheel, { passive: false });
     renderer.domElement.addEventListener("pointerdown", onPointerDown);
     renderer.domElement.addEventListener("pointermove", onPointerMove);
     renderer.domElement.addEventListener("pointerup", onPointerUp);
@@ -4774,10 +4893,27 @@ export function ParticleEarthScene({
         && spatialFocusPoint
         && isFocusFlightActive(pointFocusSettling, routeFocusSettling),
       );
+      // The fresh-Atlas Home seed is orientation-only, but it still has to use
+      // the same layout-aware screen target as semantic focus. A raw lat/lon
+      // rotation centers the point on the translated globe itself; on compact
+      // layouts that globe center can sit near/outside the usable viewport and
+      // leave the Home accessibility target permanently hidden. Solving only the
+      // rotation preserves Home's non-semantic ownership while making the seed
+      // visible in the canonical focus viewport.
+      const initialCameraRotation = focusSolverOwnsState && initialCameraAnchorNow
+        ? solveFocusRotationForViewport(
+            initialCameraAnchorNow,
+            rotationXForLatitude(initialCameraAnchorNow.lat),
+            rotationYForLongitude(initialCameraAnchorNow.lon),
+            target.scale * interactiveZoom,
+            target.x,
+            target.y,
+          )
+        : null;
       let targetRotationX = cameraHeldByDetail
         ? interactiveRotationX
-        : focusSolverOwnsState && initialCameraAnchorNow
-          ? rotationXForLatitude(initialCameraAnchorNow.lat)
+        : initialCameraRotation
+          ? nearestEquivalentRotation(interactiveRotationX, initialCameraRotation.x)
           : focusSolverOwnsState && focusTarget
             ? focusTarget.rotationX
             : focusSolverOwnsState && spatialFocusPoint
@@ -4785,8 +4921,8 @@ export function ParticleEarthScene({
               : interactiveRotationX;
       let targetBaseRotationY = cameraHeldByDetail
         ? baseRotationY
-        : focusSolverOwnsState && initialCameraAnchorNow
-          ? rotationYForLongitude(initialCameraAnchorNow.lon)
+        : initialCameraRotation
+          ? nearestEquivalentRotation(baseRotationY, initialCameraRotation.y)
           : focusSolverOwnsState && focusTarget
             ? focusTarget.rotationY
             : focusSolverOwnsState && spatialFocusPoint
@@ -4922,6 +5058,15 @@ export function ParticleEarthScene({
       // its screen position. The globe's x/y belongs to the layout/mode only.
       globe.position.x = interpolate(globe.position.x, target.x);
       globe.position.y = interpolate(globe.position.y, target.y);
+      const initialCameraAnchorSettling = Boolean(
+        initialCameraAnchorNow
+        && activePointers.size === 0
+        && (
+          Math.abs(getShortestRotationDelta(interactiveRotationX, targetRotationX)) > 0.001
+          || Math.abs(getShortestRotationDelta(baseRotationY, targetBaseRotationY)) > 0.001
+          || Math.abs(interactiveRotationY) > 0.001
+        )
+      );
       if (activePointers.size === 0 && !reduceMotion && !focusSettledThisFrame && !initialCameraAnchorNow) {
         interactiveRotationX = clampGlobeTilt(
           interactiveRotationX + rotationVelocityX * delta,
@@ -5174,6 +5319,13 @@ export function ParticleEarthScene({
       updateRouteVectorLayer();
 
       if (latestOnHomeBasePresenceFrame.current) {
+        // Home projection must sample the globe transform from THIS frame. Route
+        // vector rendering also updates matrixWorld, but Home cannot depend on
+        // that sibling being visible (compact/empty Atlas can legitimately have
+        // no route vector layer). Without this update, an async Home camera seed
+        // can rotate the live globe while Home reads the previous matrix and stays
+        // hidden behind the stale horizon indefinitely once the loop settles.
+        globe.updateWorldMatrix(true, false);
         updateGeoProjectionFrame(geoFrame, camera, globe.matrixWorld, targetSize.x, targetSize.y);
         if (now - anchorFrameRectSampledAt > 100) {
           anchorFrameRectSampledAt = now;
@@ -5344,7 +5496,7 @@ export function ParticleEarthScene({
         documentVisible: !document.hidden,
         opaqueMediaCover: currentVisibilityHint.opaqueMediaCover,
         coverTransitionActive: currentVisibilityHint.coverTransitionActive,
-        focusFlightActive,
+        focusFlightActive: focusFlightActive || initialCameraAnchorSettling,
         interactionActive,
         earthDiveOverlapActive: Boolean(currentVisibilityHint.earthDiveOverlapActive),
       });
@@ -5413,6 +5565,14 @@ export function ParticleEarthScene({
     updateRenderLoopVisibility();
 
     return {
+      setInitialCameraAnchor(anchor: ParticleEarthSceneProps["initialCameraAnchor"]) {
+        latestInitialCameraAnchor.current = anchor;
+        wakeRenderLoop();
+      },
+      setHomeBasePresence(presence: readonly HomeBasePresenceDrawable[]) {
+        latestHomeBasePresence.current = presence;
+        wakeRenderLoop();
+      },
       setQuality(nextQuality: keyof typeof QUALITY_PROFILE) {
         applyQuality(nextQuality);
       },
@@ -5623,6 +5783,10 @@ export function ParticleEarthScene({
         resizeObserver.disconnect();
         window.removeEventListener("resize", resize);
         cityVectorLayer.removeEventListener("pointerdown", onCityLayerPointerDown);
+        cityVectorLayer.removeEventListener("pointermove", onCityLayerPointerMove);
+        cityVectorLayer.removeEventListener("pointerup", onCityLayerPointerUp);
+        cityVectorLayer.removeEventListener("pointercancel", onCityLayerPointerCancel);
+        cityVectorLayer.removeEventListener("wheel", onCityLayerWheel);
         renderer.domElement.removeEventListener("pointerdown", onPointerDown);
         renderer.domElement.removeEventListener("pointermove", onPointerMove);
         renderer.domElement.removeEventListener("pointerup", onPointerUp);
@@ -5656,6 +5820,16 @@ export function ParticleEarthScene({
       },
     };
   });
+
+  useEffect(() => {
+    if (!ready) return;
+    controllerRef.current?.setInitialCameraAnchor(initialCameraAnchor);
+  }, [controllerRef, initialCameraAnchor?.lat, initialCameraAnchor?.lon, ready]);
+
+  useEffect(() => {
+    if (!ready) return;
+    controllerRef.current?.setHomeBasePresence(homeBasePresence);
+  }, [controllerRef, homeBasePresence, ready]);
 
   useEffect(() => {
     controllerRef.current?.setQuality(quality);

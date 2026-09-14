@@ -69,6 +69,9 @@ import {
   resolveAttentionLayerMeasurement,
   earthDiveDirectManipulationOwnsCamera,
   resolveParticleDiveAnchor,
+  cityPointCoordinates,
+  journeyRoutePointTargetEligible,
+  selectHomeBasePointerTarget,
 } from "./ParticleEarthScene";
 import {
   buildRouteArcLegSamples,
@@ -1500,5 +1503,77 @@ describe("#242 route curve fidelity", () => {
         )).toBeLessThan(globeWidthPx / 10);
       }
     }
+  });
+});
+
+
+describe("ST-065 renderer interaction arbitration", () => {
+  it("preserves full-precision city coordinates for delegated globe pick", () => {
+    const coordinates = cityPointCoordinates({
+      latitude: 35.689487123,
+      longitude: 139.691706789,
+    });
+    expect(coordinates).toEqual({ latitude: 35.689487123, longitude: 139.691706789 });
+  });
+
+  it("lets an ineligible sibling Route Point fall through instead of consuming Home arbitration", () => {
+    expect(journeyRoutePointTargetEligible(
+      { journeyId: "journey-b", routePointId: "point-b", routePointIndex: 0 },
+      "journey-a",
+      true,
+    )).toBe(false);
+    expect(journeyRoutePointTargetEligible(
+      { journeyId: "journey-a", routePointId: "point-a", routePointIndex: 0 },
+      "journey-a",
+      true,
+    )).toBe(true);
+  });
+
+  it("lets temporally hidden active Route Points fall through to Home", () => {
+    const temporalReveal = {
+      journeys: new Map([["journey-a", 1]]),
+      points: new Map([
+        ["journey-a:0", 1],
+        ["journey-a:1", 0],
+      ]),
+    };
+    expect(journeyRoutePointTargetEligible(
+      { journeyId: "journey-a", routePointId: "visible", routePointIndex: 0 },
+      "journey-a",
+      true,
+      temporalReveal,
+    )).toBe(true);
+    expect(journeyRoutePointTargetEligible(
+      { journeyId: "journey-a", routePointId: "future", routePointIndex: 1 },
+      "journey-a",
+      true,
+      temporalReveal,
+    )).toBe(false);
+    expect(journeyRoutePointTargetEligible(
+      { journeyId: "journey-a", routePointId: "future", routePointIndex: 0 },
+      "journey-a",
+      true,
+      {
+        journeys: new Map([["journey-a", 0]]),
+        points: new Map([["journey-a:0", 1]]),
+      },
+    )).toBe(false);
+  });
+
+  it("selects the last-painted Home marker when Home periods overlap", () => {
+    const frames = [
+      { periodId: "historical", x: 100, y: 100, visible: true },
+      { periodId: "current", x: 100, y: 100, visible: true },
+    ];
+    const descriptors = [
+      { periodId: "historical", touchTargetPx: 44 },
+      { periodId: "current", touchTargetPx: 44 },
+    ];
+    expect(selectHomeBasePointerTarget(frames, descriptors, 100, 100)).toBe("current");
+  });
+
+  it("keeps interactive city labels under the renderer touch-action policy", () => {
+    const css = readFileSync(new URL("../styles/living-atlas.css", import.meta.url), "utf8");
+    expect(css).toMatch(/\.particle-earth-city\s*\{[\s\S]*?touch-action:\s*none;/);
   });
 });

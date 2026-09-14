@@ -18,6 +18,7 @@ import {
   explicitSelectedJourneyIdForHomeCamera,
   capturePlaybackEntryForContext,
   globeFocusState,
+  homeBaseContextActivationAvailable,
   homeBaseInferenceInputsReady,
   homeBasePeriodMatchesConfirmationDraft,
   homeBaseSuggestionCanBeConfirmed,
@@ -1889,5 +1890,39 @@ describe("ST-063 Journey Rail visibility release", () => {
     expect(journeyRailVisibility(true, false)).toBe("hidden");
     expect(journeyRailVisibility(false, true)).toBe("hidden");
     expect(journeyRailVisibility(false, false)).toBe("visible");
+  });
+});
+
+
+describe("ST-065 Home Base context ownership", () => {
+  it("keeps the Home context subordinate to Story, Playback, Route Point and timeline intent", () => {
+    const source = readFileSync(new URL("./LivingAtlasApp.tsx", import.meta.url), "utf8");
+    expect(source).toContain("clearHomeBaseContext();\n    clearRoutePointContext();\n    timeCursor.selectJourney(journeyId)");
+    expect(source).toContain("clearHomeBaseContext();\n    const requested = requestRoutePointContextSelection(");
+    expect(source).toContain("clearHomeBaseContext();\n    const journey = journeys.find((candidate) => candidate.id === journeyId)");
+    expect(source).toContain("Opening Playback controls is already a newer presentation");
+    expect(source).toContain("clearHomeBaseContext();\n                if (playbackPendingMode?.journeyId === activeJourney.id)");
+    expect(source).toContain("[clearHomeBaseContext, timeCursor.cursor, timeCursor.timelineRevision]");
+    expect(source).toContain('data-home-base-context');
+    expect(source).toContain('homeBaseSuggestion?.visible && !homeBaseContext');
+    expect(source).not.toContain('role="dialog"\n          data-home-base-context');
+  });
+
+  it("exposes Home activation only while the ordinary Atlas owns the globe", () => {
+    const available = {
+      hasHomeReader: true,
+      view: "planet" as const,
+      storyActive: false,
+      playbackActive: false,
+      playbackMenuActive: false,
+      globePickActive: false,
+    };
+    expect(homeBaseContextActivationAvailable(available)).toBe(true);
+    expect(homeBaseContextActivationAvailable({ ...available, hasHomeReader: false })).toBe(false);
+    expect(homeBaseContextActivationAvailable({ ...available, view: "timeline" })).toBe(false);
+    expect(homeBaseContextActivationAvailable({ ...available, storyActive: true })).toBe(false);
+    expect(homeBaseContextActivationAvailable({ ...available, playbackActive: true })).toBe(false);
+    expect(homeBaseContextActivationAvailable({ ...available, playbackMenuActive: true })).toBe(false);
+    expect(homeBaseContextActivationAvailable({ ...available, globePickActive: true })).toBe(false);
   });
 });
