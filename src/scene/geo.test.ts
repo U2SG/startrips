@@ -13,8 +13,12 @@ import {
   getSphericalRouteFocus,
   latLonToVector3,
   MAX_ROUTE_ARC_LIFT_PER_CHORD,
+  MAX_ROUTE_SPLINE_DEVIATION,
+  MAX_ROUTE_SPLINE_HANDLE_ANGLE,
+  MAX_ROUTE_SPLINE_HANDLE_RATIO,
   maxRepresentableArcLift,
   MIN_LIFTED_ROUTE_ARC_SEGMENTS,
+  planRouteArcLegs,
   rotationXForLatitude,
   rotationYForLongitude,
   ROUTE_ANCHOR_RADIUS,
@@ -481,6 +485,148 @@ describe("route arc geometry", () => {
       expect(affordable).toBeGreaterThanOrEqual(previous);
       previous = affordable;
     }
+  });
+
+  it("derives one length-weighted tangent in each interior Route Point tangent plane (#352)", () => {
+    const points = [
+      { lat: 32.7157, lon: -117.1611 },
+      { lat: 34.0522, lon: -118.2437 },
+      { lat: 36.1699, lon: -115.1398 },
+    ];
+    const plans = planRouteArcLegs(points, Math.PI / 180, 8192, {});
+    expect(plans).toHaveLength(2);
+
+    const previous = latLonToVector3(points[0].lat, points[0].lon, 1).normalize();
+    const anchor = latLonToVector3(points[1].lat, points[1].lon, 1).normalize();
+    const next = latLonToVector3(points[2].lat, points[2].lon, 1).normalize();
+    const towardPrevious = previous.clone().addScaledVector(anchor, -anchor.dot(previous)).normalize();
+    const incoming = towardPrevious.multiplyScalar(-1);
+    const outgoing = next.clone().addScaledVector(anchor, -anchor.dot(next)).normalize();
+    const previousAngle = Math.acos(Math.min(1, Math.max(-1, previous.dot(anchor))));
+    const nextAngle = Math.acos(Math.min(1, Math.max(-1, anchor.dot(next))));
+    const expected = incoming
+      .clone()
+      .multiplyScalar(previousAngle)
+      .addScaledVector(outgoing, nextAngle)
+      .normalize();
+
+    expect(plans[0].endTangent.distanceTo(plans[1].startTangent)).toBeLessThan(1e-12);
+    expect(Math.abs(anchor.dot(plans[0].endTangent))).toBeLessThan(1e-12);
+    expect(plans[0].endTangent.angleTo(expected)).toBeLessThan(1e-8);
+    expect(plans[0].endHandleAngle).toBeLessThanOrEqual(
+      Math.min(MAX_ROUTE_SPLINE_HANDLE_ANGLE, plans[0].angle * MAX_ROUTE_SPLINE_HANDLE_RATIO),
+    );
+    expect(plans[1].startHandleAngle).toBeLessThanOrEqual(
+      Math.min(MAX_ROUTE_SPLINE_HANDLE_ANGLE, plans[1].angle * MAX_ROUTE_SPLINE_HANDLE_RATIO),
+    );
+  });
+
+  it("removes the independent-leg hard kink in the southwest-US regression fixture (#352)", () => {
+    const points = [
+      { lat: 32.7157, lon: -117.1611 }, // San Diego
+      { lat: 33.8303, lon: -116.5453 }, // Palm Springs
+      { lat: 36.1699, lon: -115.1398 }, // Las Vegas
+      { lat: 36.1069, lon: -112.1129 }, // Grand Canyon
+    ];
+    const legs = buildRouteArcLegSamples(points, Math.PI / 360, 8192, {
+      arcHeightRatio: 0.22,
+      arcSaturationAngle: Math.PI / 3,
+    });
+
+    const travelTangent = (from: Vector3, at: Vector3, forward: boolean) => {
+      const delta = forward ? from.clone().sub(at) : at.clone().sub(from);
+      return delta.addScaledVector(at, -at.dot(delta)).normalize();
+    };
+    const oldIndependentJoinAngle = (index: number) => {
+      const previous = latLonToVector3(points[index - 1].lat, points[index - 1].lon, 1).normalize();
+      const anchor = latLonToVector3(points[index].lat, points[index].lon, 1).normalize();
+      const next = latLonToVector3(points[index + 1].lat, points[index + 1].lon, 1).normalize();
+      const incoming = previous.clone().addScaledVector(anchor, -anchor.dot(previous)).normalize().multiplyScalar(-1);
+      const outgoing = next.clone().addScaledVector(anchor, -anchor.dot(next)).normalize();
+      return incoming.angleTo(outgoing);
+    };
+    const sampledJoinAngle = (index: number) => {
+      const incomingLeg = legs[index - 1];
+      const outgoingLeg = legs[index];
+      const anchor = sampleAt(incomingLeg, routeArcVertexCount(incomingLeg) - 1, 1, 0).normalize();
+      const previous = sampleAt(incomingLeg, routeArcVertexCount(incomingLeg) - 2, 1, 0).normalize();
+      const next = sampleAt(outgoingLeg, 1, 1, 0).normalize();
+      const incoming = travelTangent(previous, anchor, false);
+      const outgoing = travelTangent(next, anchor, true);
+      return incoming.angleTo(outgoing);
+    };
+
+    // The old per-leg great-circle construction has a visibly hard change of
+    // direction at at least one interior anchor in this sparse route.
+    expect(Math.max(oldIndependentJoinAngle(1), oldIndependentJoinAngle(2)))
+      .toBeGreaterThan(0.2);
+    // The new route-wide tangent is shared on both sides. With half-degree
+    // sampling, the finite-difference reading stays within three degrees.
+    expect(sampledJoinAngle(1)).toBeLessThan(Math.PI / 60);
+    expect(sampledJoinAngle(2)).toBeLessThan(Math.PI / 60);
+  });
+
+  it("caps spherical spline deviation and collapses near-U-turn handles instead of looping (#352)", () => {
+    const points = [
+      { lat: 0, lon: 0 },
+      { lat: 0, lon: 40 },
+      { lat: 0.5, lon: 1 },
+    ];
+    const arc = { arcHeightRatio: 0.22, arcSaturationAngle: Math.PI / 3 };
+    const plans = planRouteArcLegs(points, Math.PI / 180, 8192, arc);
+    const legs = buildRouteArcLegSamples(points, Math.PI / 180, 8192, arc);
+
+    expect(plans[0].endHandleAngle).toBeLessThan(0.02);
+    expect(plans[1].startHandleAngle).toBeLessThan(0.02);
+
+    plans.forEach((plan, index) => {
+      const leg = legs[index];
+      const normal = plan.start.clone().cross(plan.end);
+      if (normal.lengthSq() > 1e-18) normal.normalize();
+      let previousAlong = -1;
+      for (let vertex = 0; vertex < routeArcVertexCount(leg); vertex += 1) {
+        const direction = sampleAt(leg, vertex, 1, 0).normalize();
+        if (normal.lengthSq() > 0) {
+          const crossTrack = Math.asin(Math.min(1, Math.abs(direction.dot(normal))));
+          expect(crossTrack).toBeLessThanOrEqual(MAX_ROUTE_SPLINE_DEVIATION + 1e-6);
+        }
+        const along = plan.start.angleTo(direction);
+        expect(along).toBeLessThanOrEqual(plan.angle + 1e-5);
+        expect(along + 1e-5).toBeGreaterThanOrEqual(previousAlong);
+        previousAlong = along;
+      }
+      expect(Math.max(...leg.lifts)).toBeLessThanOrEqual(
+        maxRepresentableArcLift(plan.angle, plan.segmentCount) + 1e-7,
+      );
+    });
+  });
+
+  it("keeps route-wide and per-leg spline samples byte-identical and deterministic (#352)", () => {
+    const points = [
+      { lat: 34.0522, lon: -118.2437 },
+      { lat: 35.3733, lon: -119.0187 },
+      { lat: 36.7378, lon: -119.7871 },
+      { lat: 36.1699, lon: -115.1398 },
+    ];
+    const arc = { arcHeightRatio: 0.22, arcSaturationAngle: Math.PI / 3 };
+    const first = buildRouteArcSamples(points, Math.PI / 96, 8192, arc);
+    const second = buildRouteArcSamples(points, Math.PI / 96, 8192, arc);
+    const legs = buildRouteArcLegSamples(points, Math.PI / 96, 8192, arc);
+    const legDirections = legs.flatMap((leg) => [...leg.directions]);
+    const legLifts = legs.flatMap((leg) => [...leg.lifts]);
+
+    expect([...first.directions]).toEqual([...second.directions]);
+    expect([...first.lifts]).toEqual([...second.lifts]);
+    expect([...first.directions]).toEqual(legDirections);
+    expect([...first.lifts]).toEqual(legLifts);
+
+    legs.forEach((leg, index) => {
+      const start = latLonToVector3(points[index].lat, points[index].lon, 1).normalize();
+      const end = latLonToVector3(points[index + 1].lat, points[index + 1].lon, 1).normalize();
+      expect(sampleAt(leg, 0, 1, 0).normalize().distanceTo(start)).toBeLessThan(1e-6);
+      expect(sampleAt(leg, routeArcVertexCount(leg) - 1, 1, 0).normalize().distanceTo(end))
+        .toBeLessThan(1e-6);
+    });
   });
 
   it("builds one sample set per leg for stop-by-stop reveal (#21 review)", () => {

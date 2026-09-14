@@ -61,6 +61,168 @@ function slerpUnitVectors(start: Vector3, end: Vector3, progress: number) {
     .normalize();
 }
 
+/** #352: each spherical spline handle is a bounded fraction of its leg. */
+export const MAX_ROUTE_SPLINE_HANDLE_RATIO = 0.5;
+
+/** #352: no spline handle may rotate farther than fifteen degrees from its anchor. */
+export const MAX_ROUTE_SPLINE_HANDLE_ANGLE = Math.PI / 12;
+
+/** #352: presentation smoothing never strays more than two degrees from the leg geodesic. */
+export const MAX_ROUTE_SPLINE_DEVIATION = Math.PI / 90;
+
+/** #352: sample densely enough that a polyline join follows the shared tangent within ~1 degree. */
+export const ROUTE_SPLINE_JOIN_TOLERANCE = Math.PI / 180;
+
+function angularDistance(start: Vector3, end: Vector3) {
+  return Math.acos(Math.min(1, Math.max(-1, start.dot(end))));
+}
+
+/** Unit direction from an anchor toward a neighbour, projected into its tangent plane. */
+function tangentToward(anchor: Vector3, neighbour: Vector3) {
+  const tangent = neighbour.clone().addScaledVector(anchor, -anchor.dot(neighbour));
+  if (tangent.lengthSq() < 1e-18) return new Vector3();
+  return tangent.normalize();
+}
+
+type RouteSplineAnchor = {
+  direction: Vector3;
+  tangent: Vector3;
+  turnScale: number;
+};
+
+/**
+ * #352: derive one forward-travel tangent per Route Point. Interior tangents
+ * live in the anchor's tangent plane and weight each neighbouring direction by
+ * that leg's angular length, so a tiny side leg cannot throw a long leg
+ * sideways. Near a U-turn the handle scale tends to zero instead of drawing a
+ * decorative loop.
+ */
+function buildRouteSplineAnchors(directions: readonly Vector3[]) {
+  return directions.map((direction, index): RouteSplineAnchor => {
+    if (directions.length < 2) {
+      return { direction, tangent: new Vector3(), turnScale: 0 };
+    }
+    if (index === 0) {
+      return {
+        direction,
+        tangent: tangentToward(direction, directions[1]),
+        turnScale: 1,
+      };
+    }
+    if (index === directions.length - 1) {
+      return {
+        direction,
+        tangent: tangentToward(direction, directions[index - 1]).multiplyScalar(-1),
+        turnScale: 1,
+      };
+    }
+
+    const previous = directions[index - 1];
+    const next = directions[index + 1];
+    const incoming = tangentToward(direction, previous).multiplyScalar(-1);
+    const outgoing = tangentToward(direction, next);
+    const previousAngle = angularDistance(previous, direction);
+    const nextAngle = angularDistance(direction, next);
+    const turnDot = Math.min(1, Math.max(-1, incoming.dot(outgoing)));
+    const turnScale = Math.sqrt(Math.max(0, (1 + turnDot) / 2));
+    const tangent = incoming
+      .clone()
+      .multiplyScalar(previousAngle)
+      .addScaledVector(outgoing, nextAngle);
+
+    if (tangent.lengthSq() < 1e-18) {
+      tangent.copy(outgoing.lengthSq() > 0 ? outgoing : incoming);
+    }
+    if (tangent.lengthSq() > 0) tangent.normalize();
+    return { direction, tangent, turnScale };
+  });
+}
+
+function splineHandleAngle(legAngle: number, turnScale: number) {
+  return Math.min(
+    MAX_ROUTE_SPLINE_HANDLE_ANGLE,
+    legAngle * MAX_ROUTE_SPLINE_HANDLE_RATIO,
+  ) * turnScale;
+}
+
+function routeSplineSegmentCount(
+  start: Vector3,
+  end: Vector3,
+  startTangent: Vector3,
+  endTangent: Vector3,
+  startHandleAngle: number,
+  endHandleAngle: number,
+  legAngle: number,
+) {
+  const geodesicStart = tangentToward(start, end);
+  const geodesicEnd = tangentToward(end, start).multiplyScalar(-1);
+  const fullHandle = Math.min(
+    MAX_ROUTE_SPLINE_HANDLE_ANGLE,
+    legAngle * MAX_ROUTE_SPLINE_HANDLE_RATIO,
+  );
+  const startScale = fullHandle > 0 ? startHandleAngle / fullHandle : 0;
+  const endScale = fullHandle > 0 ? endHandleAngle / fullHandle : 0;
+  const startDeflection = geodesicStart.lengthSq() > 0 && startTangent.lengthSq() > 0
+    ? geodesicStart.angleTo(startTangent) * startScale
+    : 0;
+  const endDeflection = geodesicEnd.lengthSq() > 0 && endTangent.lengthSq() > 0
+    ? geodesicEnd.angleTo(endTangent) * endScale
+    : 0;
+  const count = Math.ceil(
+    Math.max(startDeflection, endDeflection) / ROUTE_SPLINE_JOIN_TOLERANCE,
+  );
+  if (count <= 1) return 1;
+  return count % 2 === 0 ? count : count + 1;
+}
+
+function tangentControlPoint(anchor: Vector3, tangent: Vector3, angle: number) {
+  if (!(angle > 0) || tangent.lengthSq() < 1e-18) return anchor.clone();
+  return anchor
+    .clone()
+    .multiplyScalar(Math.cos(angle))
+    .addScaledVector(tangent, Math.sin(angle))
+    .normalize();
+}
+
+function sampleSphericalSpline(
+  start: Vector3,
+  end: Vector3,
+  startTangent: Vector3,
+  endTangent: Vector3,
+  startHandleAngle: number,
+  endHandleAngle: number,
+  progress: number,
+) {
+  if (progress <= 0) return start.clone();
+  if (progress >= 1) return end.clone();
+
+  const first = tangentControlPoint(start, startTangent, startHandleAngle);
+  const second = tangentControlPoint(
+    end,
+    endTangent.clone().multiplyScalar(-1),
+    endHandleAngle,
+  );
+  const inverse = 1 - progress;
+  const raw = start
+    .clone()
+    .multiplyScalar(inverse * inverse * inverse)
+    .addScaledVector(first, 3 * inverse * inverse * progress)
+    .addScaledVector(second, 3 * inverse * progress * progress)
+    .addScaledVector(end, progress * progress * progress)
+    .normalize();
+
+  // Keep the visual relationship curve close to geographic truth. Clamping in
+  // angular space is deterministic and leaves exact endpoint anchors intact.
+  const geodesic = slerpUnitVectors(start, end, progress);
+  const deviation = angularDistance(geodesic, raw);
+  if (deviation <= MAX_ROUTE_SPLINE_DEVIATION || deviation < 1e-12) return raw;
+  return slerpUnitVectors(
+    geodesic,
+    raw,
+    MAX_ROUTE_SPLINE_DEVIATION / deviation,
+  );
+}
+
 /**
  * #15 route arc options. A route is a great circle with an altitude hump:
  * long legs lift off the surface with a natural spatial curve, short legs
@@ -250,6 +412,12 @@ export function routeArcVertexCount(samples: RouteArcSamples) {
 export type RouteArcLegPlan = {
   start: Vector3;
   end: Vector3;
+  /** Shared forward-travel tangents at the two canonical Route Point anchors. */
+  startTangent: Vector3;
+  endTangent: Vector3;
+  /** Bounded spherical handle angles; near U-turns shrink toward zero. */
+  startHandleAngle: number;
+  endHandleAngle: number;
   /** Angular length of the leg in radians; sizes both the count and the lift. */
   angle: number;
   heightRatio: number;
@@ -287,6 +455,12 @@ export function planRouteArcLegs(
   const liftRequested = (arc.arcHeightRatio ?? 0) > 0;
   const availableSegments = Math.floor(maxVertices / 2);
   const plans: RouteArcLegPlan[] = [];
+  const directions = points.map((point) => latLonToVector3(
+    point.lat,
+    point.lon,
+    1,
+  ).normalize());
+  const splineAnchors = buildRouteSplineAnchors(directions);
 
   // #242 review: maxVertices is a hard ceiling, and one straight segment per
   // leg is the least a route can be drawn as while still passing through every
@@ -299,24 +473,39 @@ export function planRouteArcLegs(
   if (points.length - 1 > availableSegments) return [];
 
   for (let index = 1; index < points.length; index += 1) {
-    const start = latLonToVector3(
-      points[index - 1].lat,
-      points[index - 1].lon,
-      1,
-    ).normalize();
-    const end = latLonToVector3(points[index].lat, points[index].lon, 1).normalize();
-    const angle = Math.acos(Math.min(1, Math.max(-1, start.dot(end))));
+    const startAnchor = splineAnchors[index - 1];
+    const endAnchor = splineAnchors[index];
+    const start = startAnchor.direction;
+    const end = endAnchor.direction;
+    const angle = angularDistance(start, end);
     const heightRatio = arcHeightRatioFor(angle, arc);
+    const startHandleAngle = splineHandleAngle(angle, startAnchor.turnScale);
+    const endHandleAngle = splineHandleAngle(angle, endAnchor.turnScale);
     plans.push({
       start,
       end,
+      startTangent: startAnchor.tangent.clone(),
+      endTangent: endAnchor.tangent.clone(),
+      startHandleAngle,
+      endHandleAngle,
       angle,
       heightRatio,
-      segmentCount: routeArcSegmentCount(
-        angle,
-        heightRatio,
-        maxSegmentAngle,
-        liftRequested,
+      segmentCount: Math.max(
+        routeArcSegmentCount(
+          angle,
+          heightRatio,
+          maxSegmentAngle,
+          liftRequested,
+        ),
+        routeSplineSegmentCount(
+          start,
+          end,
+          startAnchor.tangent,
+          endAnchor.tangent,
+          startHandleAngle,
+          endHandleAngle,
+          angle,
+        ),
       ),
     });
   }
@@ -359,12 +548,37 @@ function appendLegSamples(
   plan: RouteArcLegPlan,
   into: { directions: number[]; lifts: number[] },
 ) {
-  const { start, end, heightRatio, segmentCount } = plan;
+  const {
+    start,
+    end,
+    startTangent,
+    endTangent,
+    startHandleAngle,
+    endHandleAngle,
+    heightRatio,
+    segmentCount,
+  } = plan;
   for (let step = 1; step <= segmentCount; step += 1) {
     const previousProgress = (step - 1) / segmentCount;
     const currentProgress = step / segmentCount;
-    const previous = slerpUnitVectors(start, end, previousProgress);
-    const current = slerpUnitVectors(start, end, currentProgress);
+    const previous = sampleSphericalSpline(
+      start,
+      end,
+      startTangent,
+      endTangent,
+      startHandleAngle,
+      endHandleAngle,
+      previousProgress,
+    );
+    const current = sampleSphericalSpline(
+      start,
+      end,
+      startTangent,
+      endTangent,
+      startHandleAngle,
+      endHandleAngle,
+      currentProgress,
+    );
     into.directions.push(...previous.toArray(), ...current.toArray());
     into.lifts.push(
       liftAt(previousProgress, heightRatio, ROUTE_ARC_EXPONENT),
