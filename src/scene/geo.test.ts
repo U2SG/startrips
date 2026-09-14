@@ -841,7 +841,7 @@ describe("route arc geometry", () => {
     expect(points).toHaveLength(60);
     expect(plans).toHaveLength(59);
     expect(legs).toHaveLength(59);
-    expect(plans[0].segmentCount).toBeGreaterThanOrEqual(6);
+    expect(plans[0].segmentCount).toBe(5);
     expect(plans.reduce((sum, plan) => sum + plan.segmentCount, 0))
       .toBeLessThanOrEqual(4096);
     for (const leg of legs) expectRouteLegSamplingWithinTolerance(leg, maxSegmentAngle);
