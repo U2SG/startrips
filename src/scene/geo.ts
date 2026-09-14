@@ -669,6 +669,7 @@ export function planRouteArcLegs(
   // never below one segment, then shave the widest remaining allocations until
   // the total fits. The guard above already established that there are no more
   // legs than segments, so flooring at one segment cannot breach the ceiling.
+  const requestedSegmentCounts = plans.map((plan) => plan.segmentCount);
   const scale = availableSegments / requested;
   for (const plan of plans) {
     plan.segmentCount = Math.max(1, Math.floor(plan.segmentCount * scale));
@@ -683,6 +684,58 @@ export function planRouteArcLegs(
     widest.segmentCount -= 1;
     requested -= 1;
   }
+
+  // #352 review: proportional #242 scaling can invalidate the spline sampling
+  // policy that chose the pre-budget counts. Revalidate every scaled leg and
+  // raise only the legs that actually need more samples. If those raises cross
+  // the hard budget, transfer segments from still-compliant donor legs one at a
+  // time. This preserves the old best-effort budget degradation only when no
+  // fully compliant reallocation fits inside the same hard ceiling.
+  const scaledSegmentCounts = plans.map((plan) => plan.segmentCount);
+  const compliantSegmentCounts = plans.map((plan, index) => {
+    const maximum = requestedSegmentCounts[index];
+    for (let count = plan.segmentCount; count <= maximum; count += 1) {
+      if (routeSplineSamplingWithinTolerance(
+        sampleBoundedSplineDirections(plan, count),
+        maxSegmentAngle,
+      )) return count;
+    }
+    return null;
+  });
+
+  if (compliantSegmentCounts.every((count): count is number => count !== null)) {
+    const rebalanced = [...compliantSegmentCounts];
+    let rebalancedTotal = rebalanced.reduce((sum, count) => sum + count, 0);
+
+    while (rebalancedTotal > availableSegments) {
+      let donorIndex = -1;
+      for (let index = 0; index < plans.length; index += 1) {
+        const candidateCount = rebalanced[index] - 1;
+        if (candidateCount < 1) continue;
+        if (!routeSplineSamplingWithinTolerance(
+          sampleBoundedSplineDirections(plans[index], candidateCount),
+          maxSegmentAngle,
+        )) continue;
+        if (donorIndex < 0 || rebalanced[index] > rebalanced[donorIndex]) {
+          donorIndex = index;
+        }
+      }
+      if (donorIndex < 0) break;
+      rebalanced[donorIndex] -= 1;
+      rebalancedTotal -= 1;
+    }
+
+    if (rebalancedTotal <= availableSegments) {
+      for (let index = 0; index < plans.length; index += 1) {
+        plans[index].segmentCount = rebalanced[index];
+      }
+    } else {
+      for (let index = 0; index < plans.length; index += 1) {
+        plans[index].segmentCount = scaledSegmentCounts[index];
+      }
+    }
+  }
+
   // #242 review: a leg keeps only the hump the segments it was granted can
   // draw faithfully. The four-segment floor is not the test - a 20 degree leg
   // that asked for 70 segments and got 10 would clear that floor while drawing
