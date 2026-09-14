@@ -14,6 +14,7 @@ import {
   type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
+import { account as authAccount, session as authSession, user as authUser } from "./auth-schema";
 
 export const atlases = pgTable(
   "atlases",
@@ -468,5 +469,108 @@ export const mediaPreviewWrites = pgTable(
   (table) => [
     uniqueIndex("media_preview_writes_storage_key_unique").on(table.storageKey),
     index("media_preview_writes_expires_idx").on(table.expiresAt),
+  ],
+);
+
+// #345: provider identities are credentials of one stable Better Auth user, not
+// additional Startrips Accounts. Better Auth owns the raw `account` rows; this
+// table records the provider proof that made a non-credential row eligible for
+// Startrips identity operations. The unique provider+subject pair is the durable
+// collision boundary. A failed concurrent link therefore rolls back before two
+// Startrips users can claim the same external identity.
+export const accountIdentityOwnerships = pgTable(
+  "account_identity_ownerships",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => authUser.id, { onDelete: "cascade" }),
+    accountRecordId: text("account_record_id")
+      .notNull()
+      .references(() => authAccount.id, { onDelete: "cascade" }),
+    providerId: text("provider_id").notNull(),
+    providerSubject: text("provider_subject").notNull(),
+    providerEmail: text("provider_email"),
+    providerEmailVerified: boolean("provider_email_verified").notNull().default(false),
+    verifiedAt: timestamp("verified_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("account_identity_ownership_provider_subject_unique").on(
+      table.providerId,
+      table.providerSubject,
+    ),
+    uniqueIndex("account_identity_ownership_account_unique").on(table.accountRecordId),
+    index("account_identity_ownership_user_idx").on(table.userId),
+  ],
+);
+
+// #345: one-time sensitive-action grants. The browser receives only the random
+// token; persistence stores its SHA-256. Every grant is bound to one stable
+// user AND one Better Auth session, so opening another session or switching
+// accounts cannot carry the proof across. Reverification grants are consumed
+// when a link intent is created or an unlink is attempted; link grants are then
+// consumed by the provider-proof completion step.
+export const accountIdentityActions = pgTable(
+  "account_identity_actions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => authUser.id, { onDelete: "cascade" }),
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => authSession.id, { onDelete: "cascade" }),
+    kind: text("kind").notNull(),
+    providerId: text("provider_id"),
+    secretHash: text("secret_hash").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("account_identity_actions_secret_hash_unique").on(table.secretHash),
+    index("account_identity_actions_user_idx").on(table.userId, table.createdAt),
+    index("account_identity_actions_expires_idx").on(table.expiresAt),
+    check(
+      "account_identity_actions_kind_check",
+      sql`${table.kind} in ('reverify', 'link')`,
+    ),
+    check(
+      "account_identity_actions_provider_shape_check",
+      sql`(${table.kind} = 'reverify' and ${table.providerId} is null)
+        or (${table.kind} = 'link' and ${table.providerId} is not null)`,
+    ),
+  ],
+);
+
+// Secret-free audit evidence for #345. Provider subjects, email values, tokens,
+// passwords and OAuth credentials never enter this table; an account record id
+// is an opaque local identifier and deliberately survives an unlink as text.
+export const accountIdentityAudit = pgTable(
+  "account_identity_audit",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: text("user_id").notNull(),
+    event: text("event").notNull(),
+    outcome: text("outcome").notNull(),
+    providerId: text("provider_id"),
+    accountRecordId: text("account_record_id"),
+    // Opaque local action id only; this is not the bearer token/hash. Successful
+    // sensitive-action receipts bind idempotency to the exact consumed grant.
+    actionId: text("action_id"),
+    reason: text("reason"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("account_identity_audit_user_created_idx").on(table.userId, table.createdAt),
+    check(
+      "account_identity_audit_event_check",
+      sql`${table.event} in ('reverify', 'link-intent', 'link', 'unlink')`,
+    ),
+    check(
+      "account_identity_audit_outcome_check",
+      sql`${table.outcome} in ('success', 'refused')`,
+    ),
   ],
 );

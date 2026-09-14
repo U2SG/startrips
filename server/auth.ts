@@ -11,6 +11,20 @@ import {
 
 const emailSender = createEmailSender(serverConfig);
 
+export const STARTRIPS_ACCOUNT_LINKING_POLICY = {
+  enabled: false,
+  disableImplicitLinking: true,
+  allowDifferentEmails: false,
+  allowUnlinkingAll: false,
+  updateUserInfoOnLink: false,
+} as const;
+
+export const STARTRIPS_DISABLED_IDENTITY_PATHS = [
+  "/link-social",
+  "/unlink-account",
+  "/list-accounts",
+] as const;
+
 export const auth = betterAuth({
   appName: "Startrips",
   baseURL: serverConfig.appOrigin,
@@ -28,6 +42,17 @@ export const auth = betterAuth({
     expiresIn: 60 * 60 * 24 * 7,
     updateAge: 60 * 60 * 24,
   },
+  // #345: account rows are login identities of one stable Startrips user.
+  // Better Auth 1.6.23 can otherwise expose implicit email-based linking and
+  // native unlink/list endpoints that know nothing about Startrips' stronger
+  // re-verification and last-actually-usable-method contract. Keep those native
+  // management paths fail-closed; provider integrations use the bounded
+  // `/api/account-identities` service instead. Existing linked-provider sign-in
+  // remains a normal sign-in path because it does not create a new link.
+  account: {
+    accountLinking: STARTRIPS_ACCOUNT_LINKING_POLICY,
+  },
+  disabledPaths: [...STARTRIPS_DISABLED_IDENTITY_PATHS],
   rateLimit: {
     enabled: true,
     storage: "database",

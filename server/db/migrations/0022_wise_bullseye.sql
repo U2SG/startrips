@@ -1,0 +1,1 @@
+ALTER TABLE "account_identity_audit" ADD COLUMN "action_id" text;
