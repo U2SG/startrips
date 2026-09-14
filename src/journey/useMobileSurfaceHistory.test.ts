@@ -3,6 +3,7 @@ import {
   countStaleMobileSurfaceHistorySuffix,
   nextMobileSurfaceHistoryWrite,
   shouldDeferMobileSurfaceHistoryWrite,
+  shouldIgnoreDeferredMobileSurfacePopState,
 } from "./useMobileSurfaceHistory";
 
 describe("mobile surface history replacement", () => {
@@ -39,6 +40,12 @@ describe("mobile surface history replacement", () => {
     expect(shouldDeferMobileSurfaceHistoryWrite(false, false)).toBe(false);
     expect(shouldDeferMobileSurfaceHistoryWrite(true, false)).toBe(true);
     expect(shouldDeferMobileSurfaceHistoryWrite(false, true)).toBe(true);
+  });
+
+  it("keeps immediate Back ownership while only the reopened surface token write is deferred", () => {
+    expect(shouldIgnoreDeferredMobileSurfacePopState(false, true)).toBe(true);
+    expect(shouldIgnoreDeferredMobileSurfacePopState(false, false)).toBe(false);
+    expect(shouldIgnoreDeferredMobileSurfacePopState(true, true)).toBe(false);
   });
 
   it("keeps collapsing a stale predecessor suffix after a replacement closes", () => {

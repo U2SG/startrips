@@ -678,16 +678,28 @@ try {
     await page.locator(".journey-share__dialog").waitFor({ state: "detached", timeout: 10_000 });
 
     // Reopen immediately while the cleanup-owned history traversal may still
-    // be in flight. The new Share must wait for that traversal to settle rather
-    // than writing its token into the entry that is being left and then closing
-    // itself on the resulting popstate.
+    // be in flight. The token write must wait for that traversal, but Back
+    // ownership must exist immediately: if a create becomes pending in this
+    // window, Browser Back cannot consume underlying navigation.
     await page.locator('[data-atlas-share-trigger="true"]').click();
     await page.locator(".journey-share__dialog").waitFor({ state: "visible", timeout: 10_000 });
-    await page.waitForTimeout(180);
     const rapidReopen = await surfaceState(page);
     check(`${viewport.name}/rapid-reopen-survives-history-reconcile`,
       rapidReopen.share && !rapidReopen.story && rapidReopen.modalCount === 1,
       rapidReopen);
+    let releaseDeferredCreate;
+    state.createGate = new Promise((resolve) => { releaseDeferredCreate = resolve; });
+    await page.getByRole("button", { name: "鍒涘缓鍒嗕韩閾炬帴" }).click();
+    await page.getByRole("button", { name: "姝ｅ湪鍒涘缓鈥?" }).waitFor({ state: "visible", timeout: 10_000 });
+    await page.evaluate(() => window.history.back());
+    await page.waitForTimeout(100);
+    const deferredPendingBack = await surfaceState(page);
+    check(`${viewport.name}/rapid-reopen-pending-create-retains-back-ownership`,
+      deferredPendingBack.share && !deferredPendingBack.story && deferredPendingBack.modalCount === 1,
+      deferredPendingBack);
+    releaseDeferredCreate();
+    state.createGate = null;
+    await page.locator('[data-share-link="true"]').waitFor({ state: "visible", timeout: 10_000 });
     await page.keyboard.press("Escape");
     await page.locator(".journey-share__dialog").waitFor({ state: "detached", timeout: 10_000 });
     await page.waitForFunction(() => {

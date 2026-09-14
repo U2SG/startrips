@@ -27,12 +27,20 @@ const activeTokens = new Set<string>();
 let reconcileScheduled = false;
 let historyMovePending = false;
 const historySettledListeners = new Set<() => void>();
+const ownedReconcilePopStates = new WeakSet<PopStateEvent>();
 
 export function shouldDeferMobileSurfaceHistoryWrite(
   scheduled: boolean,
   movePending: boolean,
 ) {
   return scheduled || movePending;
+}
+
+export function shouldIgnoreDeferredMobileSurfacePopState(
+  entryWritten: boolean,
+  ownedReconcilePopState: boolean,
+) {
+  return !entryWritten && ownedReconcilePopState;
 }
 
 function notifyHistorySettled() {
@@ -117,7 +125,8 @@ if (typeof window !== "undefined") {
       [SESSION_KEY]: documentSession,
     }, "");
   }
-  window.addEventListener("popstate", () => {
+  window.addEventListener("popstate", (event) => {
+    if (historyMovePending) ownedReconcilePopStates.add(event);
     historyMovePending = false;
     // A replacement can require more than one owned history hop: closing the
     // replacement first lands on an older Story/sheet state, which is already
@@ -149,10 +158,13 @@ export function useMobileSurfaceHistory(
     if (!active || typeof window === "undefined") return;
 
     let disposed = false;
-    let releaseRegisteredEntry: (() => void) | null = null;
-    const registerEntry = () => {
-      if (disposed) return;
-      const token = `${surface}:${++surfaceSequence}`;
+    let entryWritten = false;
+    const token = `${surface}:${++surfaceSequence}`;
+    entryActiveRef.current = true;
+    let cancelDeferredRegistration: () => void = () => undefined;
+
+    const writeEntry = () => {
+      if (disposed || !entryActiveRef.current || entryWritten) return;
       const baseState = asHistoryState(window.history.state);
       const stack = readStack(baseState);
       const write = nextMobileSurfaceHistoryWrite(stack, activeTokens, token);
@@ -165,57 +177,73 @@ export function useMobileSurfaceHistory(
       if (write.mode === "replace") window.history.replaceState(nextState, "");
       else window.history.pushState(nextState, "");
       tokenRef.current = token;
-      entryActiveRef.current = true;
-
-      const onPopState = (event: PopStateEvent) => {
-        if (!entryActiveRef.current) return;
-        if (readStack(event.state).includes(token)) return;
-        const closed = onHistoryCloseRef.current();
-        if (closed === false) {
-          // The surface is temporarily non-dismissible (for example while a
-          // mutation is pending). Restore the same owned history layer so a Back
-          // press cannot consume navigation state while leaving the UI mounted.
-          const baseState = asHistoryState(window.history.state);
-          const stack = readStack(baseState);
-          window.history.pushState({
-            ...baseState,
-            [STACK_KEY]: [...stack, token],
-            [SESSION_KEY]: documentSession,
-          }, "");
-          return;
-        }
-        entryActiveRef.current = false;
-        tokenRef.current = null;
-        activeTokens.delete(token);
-        // A top-level replacement can leave the outgoing surface's older
-        // pushState entry immediately underneath the incoming one. After Back
-        // closes the incoming owner, collapse only that now-stale Startrips
-        // suffix so the same action settles on the pre-surface history state
-        // instead of consuming a later Back on an invisible ghost token.
-        scheduleHistoryReconcile();
-      };
-
-      window.addEventListener("popstate", onPopState);
-      releaseRegisteredEntry = () => {
-        window.removeEventListener("popstate", onPopState);
-        const ownedToken = tokenRef.current;
-        if (!ownedToken) return;
-        tokenRef.current = null;
-        entryActiveRef.current = false;
-        activeTokens.delete(ownedToken);
-        scheduleHistoryReconcile();
-      };
+      entryWritten = true;
     };
+
+    const restoreOwnedEntry = () => {
+      cancelDeferredRegistration();
+      const baseState = asHistoryState(window.history.state);
+      const stack = readStack(baseState).filter((entry) => entry !== token);
+      activeTokens.add(token);
+      window.history.pushState({
+        ...baseState,
+        [STACK_KEY]: [...stack, token],
+        [SESSION_KEY]: documentSession,
+      }, "");
+      tokenRef.current = token;
+      entryWritten = true;
+    };
+
+    // Back ownership begins as soon as the surface is visible, even when an
+    // older replacement is still reconciling and this surface's history write
+    // must wait. Otherwise a mutation can become non-dismissible during that
+    // gap and Browser Back can consume underlying navigation without reaching
+    // the surface owner.
+    const onPopState = (event: PopStateEvent) => {
+      if (!entryActiveRef.current) return;
+      if (entryWritten && readStack(event.state).includes(token)) return;
+      if (shouldIgnoreDeferredMobileSurfacePopState(
+        entryWritten,
+        ownedReconcilePopStates.has(event),
+      )) return;
+
+      const closed = onHistoryCloseRef.current();
+      if (closed === false) {
+        // The visible surface owns Back even before its deferred token write.
+        // Recreate one owned layer on the landed entry so the attempted Back
+        // cannot escape beneath a still-running create/revoke mutation.
+        restoreOwnedEntry();
+        return;
+      }
+
+      entryActiveRef.current = false;
+      tokenRef.current = null;
+      if (entryWritten) activeTokens.delete(token);
+      // A top-level replacement can leave the outgoing surface's older
+      // pushState entry immediately underneath the incoming one. After Back
+      // closes the incoming owner, collapse only that now-stale Startrips
+      // suffix so the same action settles on the pre-surface history state
+      // instead of consuming a later Back on an invisible ghost token.
+      scheduleHistoryReconcile();
+    };
+
+    window.addEventListener("popstate", onPopState);
 
     // A replacement close may already have started an owned history traversal.
     // Writing the next surface token into the entry being left makes the
     // eventual popstate look like a Back against the freshly reopened surface.
-    // Register only after the reconciliation chain has reached its stable entry.
-    const cancelDeferredRegistration = runWhenHistorySettled(registerEntry);
+    // Defer only that token write: the visible surface already owns Back above.
+    cancelDeferredRegistration = runWhenHistorySettled(writeEntry);
+
     return () => {
       disposed = true;
       cancelDeferredRegistration();
-      releaseRegisteredEntry?.();
+      window.removeEventListener("popstate", onPopState);
+      entryActiveRef.current = false;
+      tokenRef.current = null;
+      if (!entryWritten) return;
+      activeTokens.delete(token);
+      scheduleHistoryReconcile();
     };
   }, [active, surface]);
 }
