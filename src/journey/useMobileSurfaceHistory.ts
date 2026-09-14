@@ -27,6 +27,21 @@ const activeTokens = new Set<string>();
 let reconcileScheduled = false;
 let historyMovePending = false;
 
+export function nextMobileSurfaceHistoryWrite(
+  stack: readonly string[],
+  active: ReadonlySet<string>,
+  token: string,
+): { mode: "push" | "replace"; stack: string[] } {
+  let staleSuffixStart = stack.length;
+  while (staleSuffixStart > 0 && !active.has(stack[staleSuffixStart - 1])) {
+    staleSuffixStart -= 1;
+  }
+  if (staleSuffixStart < stack.length) {
+    return { mode: "replace", stack: [...stack.slice(0, staleSuffixStart), token] };
+  }
+  return { mode: "push", stack: [...stack, token] };
+}
+
 function scheduleHistoryReconcile() {
   if (typeof window === "undefined" || reconcileScheduled || historyMovePending) return;
   reconcileScheduled = true;
@@ -94,12 +109,15 @@ export function useMobileSurfaceHistory(
     const token = `${surface}:${++surfaceSequence}`;
     const baseState = asHistoryState(window.history.state);
     const stack = readStack(baseState);
+    const write = nextMobileSurfaceHistoryWrite(stack, activeTokens, token);
     activeTokens.add(token);
-    window.history.pushState({
+    const nextState = {
       ...baseState,
-      [STACK_KEY]: [...stack, token],
+      [STACK_KEY]: write.stack,
       [SESSION_KEY]: documentSession,
-    }, "");
+    };
+    if (write.mode === "replace") window.history.replaceState(nextState, "");
+    else window.history.pushState(nextState, "");
     tokenRef.current = token;
     entryActiveRef.current = true;
 
@@ -123,6 +141,12 @@ export function useMobileSurfaceHistory(
       entryActiveRef.current = false;
       tokenRef.current = null;
       activeTokens.delete(token);
+      // A top-level replacement can leave the outgoing surface's older
+      // pushState entry immediately underneath the incoming one. After Back
+      // closes the incoming owner, collapse only that now-stale Startrips
+      // suffix so the same action settles on the pre-surface history state
+      // instead of consuming a later Back on an invisible ghost token.
+      scheduleHistoryReconcile();
     };
 
     window.addEventListener("popstate", onPopState);

@@ -224,6 +224,15 @@ jobs:
           path: artifacts/home-base-context/
           if-no-files-found: warn
 
+      - name: Upload owner share surface captures
+        if: ${{ always() && matrix.name == 'owner-share' }}
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: owner-share-surfaces-${{ github.run_attempt }}
+          path: artifacts/owner-share-surfaces/
+          if-no-files-found: warn
+          retention-days: 7
+
       - name: Upload media motion review
         if: ${{ always() && matrix.name == 'login-media' }}
         uses: actions/upload-artifact@v7.0.1

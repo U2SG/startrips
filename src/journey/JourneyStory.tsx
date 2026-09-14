@@ -1547,10 +1547,10 @@ export function JourneyStory({
   }, [focusVisibleControlOnOpen, resolvePlaybackReturnInitialFocus, storyModal]);
 
   // A collapsed mobile Story is intentionally not a modal, so useModalFocus
-  // does not own Escape there. Manage still needs the same keyboard exit
-  // contract as Browser Back once transient child sheets are gone.
+  // does not own Escape there. Give it the same top-layer-first close order as
+  // Browser Back: transient children first, Manage second, Story last.
   useEffect(() => {
-    if (!mobileLayout || !mobileManageMode || storyModal) return;
+    if (!mobileLayout || storyModal) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return;
       if (mutationPending) return;
@@ -1574,7 +1574,11 @@ export function JourneyStory({
       // Fullscreen owns Escape on its window-level handler.
       if (fullscreen) return;
       event.preventDefault();
-      exitMobileManageMode();
+      if (mobileManageMode) {
+        exitMobileManageMode();
+        return;
+      }
+      requestClose();
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);

@@ -15,6 +15,7 @@
 // did not choose, which is exactly what makes "the owner sees the SERVER's
 // expiry" falsifiable here. The server half of the same contract is covered by
 // `server/routes/shares.test.ts` from phase A.
+import { mkdir } from "node:fs/promises";
 import { launchQaBrowser } from "./qa-browser.mjs";
 
 const origin = process.env.QA_ORIGIN ?? "http://127.0.0.1:4173";
@@ -46,6 +47,13 @@ const VIEWPORTS = [
   { name: "portrait-phone", width: 390, height: 844, compact: true },
   { name: "phone-landscape", width: 932, height: 430, compact: true },
 ];
+
+const SURFACE_VIEWPORTS = [320, 360, 390, 430].map((width) => ({
+  name: `surface-${width}`,
+  width,
+  height: 844,
+}));
+const surfaceArtifactDir = "artifacts/owner-share-surfaces";
 
 const journeys = [
   makeJourney(0, "2026-08-20", "海风经过深圳湾", "#77c8c2", "深圳湾"),
@@ -206,6 +214,62 @@ async function clickText(page, text) {
   }, text);
   if (!clicked) throw new Error(`no button matching ${text}`);
   await page.waitForTimeout(180);
+}
+
+async function openCollapsedMobileStory(page) {
+  const chip = page.locator(".mobile-v2__journey-chip, [data-mobile-sheet-trigger]").first();
+  await chip.click();
+  const open = page.getByRole("button", { name: /打开故事/ }).first();
+  await open.click();
+  const story = page.locator(".journey-story");
+  await story.waitFor({ state: "visible", timeout: 10_000 });
+  await page.waitForFunction(() => (
+    document.querySelector(".journey-story")?.getAttribute("data-mobile-presentation") === "in-context"
+  ));
+}
+
+async function shareFromCollapsedMobileStory(page, repeatIntent = false) {
+  const atlasTrigger = page.locator('[data-atlas-share-trigger="true"]');
+  const disabled = await atlasTrigger.isDisabled();
+  await page.getByRole("button", { name: "管理旅程", exact: true }).first().click();
+  await page.waitForFunction(() => (
+    document.querySelector(".journey-story")?.getAttribute("data-mobile-mode") === "manage"
+  ));
+  const storyShare = page.locator('.journey-story [data-share-journey-trigger="true"]');
+  await storyShare.waitFor({ state: "visible", timeout: 10_000 });
+  if (repeatIntent) {
+    await storyShare.evaluate((button) => {
+      button.click();
+      button.click();
+    });
+  } else {
+    await storyShare.click();
+  }
+  return disabled;
+}
+
+async function surfaceState(page) {
+  return page.evaluate(() => {
+    const story = document.querySelector(".journey-story");
+    const share = document.querySelector(".journey-share__dialog");
+    const modals = [...document.querySelectorAll('[aria-modal="true"]')]
+      .filter((node) => node instanceof HTMLElement && getComputedStyle(node).display !== "none");
+    const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    return {
+      story: Boolean(story),
+      share: Boolean(share),
+      modalCount: modals.length,
+      activeAtlasShareTrigger: active?.dataset.atlasShareTrigger === "true",
+      atlasInert: Boolean(document.querySelector(".living-atlas [inert], .living-atlas[inert]")),
+    };
+  });
+}
+
+async function captureSurface(page, viewportName, label) {
+  await mkdir(surfaceArtifactDir, { recursive: true });
+  const path = `${surfaceArtifactDir}/${viewportName}-${label}.png`;
+  await page.screenshot({ path, fullPage: false });
+  return path;
 }
 
 /**
@@ -524,6 +588,102 @@ try {
         singleRequest?.body.journeyIds,
       );
     }
+
+    await context.close();
+  }
+
+  // #356: mobile Story and Share are one top-level presentation slot. Keep
+  // this focused matrix small: the full share behavior above already covers
+  // creation/revoke, while these four widths pin replacement/history/focus.
+  for (const viewport of SURFACE_VIEWPORTS) {
+    const context = await browser.newContext({
+      viewport: { width: viewport.width, height: viewport.height },
+      hasTouch: true,
+      isMobile: true,
+      deviceScaleFactor: 1,
+    });
+    const page = await context.newPage();
+    const state = { shares: [], requests: [] };
+    await installOwnerApi(page, state);
+    await page.goto(`${origin}/?qaState=living-atlas`, { waitUntil: "domcontentloaded" });
+    await page.locator(".living-atlas").waitFor({ timeout: 20_000 });
+    await page.waitForFunction(
+      () => document.body.textContent?.includes("海风经过深圳湾"),
+      undefined,
+      { timeout: 20_000 },
+    );
+
+    // Collapsed Story receives external-keyboard Escape exactly once.
+    await openCollapsedMobileStory(page);
+    const beforeEscape = await surfaceState(page);
+    check(`${viewport.name}/story-alone-before-escape`,
+      beforeEscape.story && !beforeEscape.share && beforeEscape.modalCount <= 1,
+      beforeEscape);
+    await page.keyboard.press("Escape");
+    await page.locator(".journey-story").waitFor({ state: "detached", timeout: 10_000 });
+    const afterEscape = await surfaceState(page);
+    check(`${viewport.name}/escape-closes-collapsed-story`, !afterEscape.story && !afterEscape.share, afterEscape);
+
+    // Story -> Esc -> Share leaves only Share and one modal focus owner. The
+    // Journey-detail share trigger is the legal foreground trigger while the
+    // underlying sheet remains after Story closes.
+    await page.locator('.mobile-v2__sheet [data-share-journey-trigger="true"]').click();
+    await page.locator(".journey-share__dialog").waitFor({ state: "visible", timeout: 10_000 });
+    const afterEscapeShare = await surfaceState(page);
+    check(`${viewport.name}/story-escape-then-share-is-exclusive`,
+      !afterEscapeShare.story && afterEscapeShare.share && afterEscapeShare.modalCount === 1,
+      afterEscapeShare);
+    await page.keyboard.press("Escape");
+    await page.locator(".journey-share__dialog").waitFor({ state: "detached", timeout: 10_000 });
+
+    // Story -> Share is replacement, not coexistence. While Story owns the
+    // compact surface, Atlas multi-share is disabled so it cannot open under
+    // Story; Story's own share intent goes through the same replacement helper.
+    // Two same-turn Story share intents still converge on one final Share.
+    await openCollapsedMobileStory(page);
+    const atlasShareDisabled = await shareFromCollapsedMobileStory(page, true);
+    check(`${viewport.name}/atlas-multi-share-disabled-while-story-owns-surface`,
+      atlasShareDisabled,
+      { atlasShareDisabled });
+    await page.locator(".journey-share__dialog").waitFor({ state: "visible", timeout: 10_000 });
+    await page.locator(".journey-story").waitFor({ state: "detached", timeout: 10_000 });
+    const replaced = await surfaceState(page);
+    const replacementCapture = await captureSurface(page, viewport.name, "story-to-share");
+    check(`${viewport.name}/story-to-share-replaces-top-level-owner`,
+      !replaced.story && replaced.share && replaced.modalCount === 1,
+      { ...replaced, replacementCapture });
+    check(`${viewport.name}/share-inerts-background`, replaced.atlasInert, replaced);
+
+    // Orientation/breakpoint transitions cannot resurrect Story or create a
+    // second modal owner while Share remains current.
+    await page.setViewportSize({ width: 844, height: viewport.width });
+    await page.waitForTimeout(100);
+    const landscape = await surfaceState(page);
+    check(`${viewport.name}/orientation-keeps-one-share-owner`,
+      !landscape.story && landscape.share && landscape.modalCount === 1,
+      landscape);
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.waitForTimeout(100);
+
+    // Same-document Back closes Share and must not reveal the replaced Story
+    // token. Focus may return only to the still-connected Atlas trigger.
+    await page.evaluate(() => window.history.back());
+    await page.locator(".journey-share__dialog").waitFor({ state: "detached", timeout: 10_000 });
+    await page.waitForFunction(() => {
+      const state = window.history.state;
+      const stack = state && typeof state === "object"
+        ? state.__startripsMobileSurfaceStack
+        : null;
+      return !Array.isArray(stack) || stack.length === 0;
+    });
+    const afterBack = await surfaceState(page);
+    const backCapture = await captureSurface(page, viewport.name, "after-back");
+    check(`${viewport.name}/back-closes-share-without-ghost-story`,
+      !afterBack.story && !afterBack.share && afterBack.modalCount === 0,
+      { ...afterBack, backCapture });
+    check(`${viewport.name}/share-close-restores-legal-atlas-focus`,
+      afterBack.activeAtlasShareTrigger,
+      afterBack);
 
     await context.close();
   }

@@ -1066,6 +1066,24 @@ export function LivingAtlasApp({
    * selection whose entries mean "asset" cannot also mean "Journey".
    */
   const [shareTarget, setShareTarget] = useState<{ lockedJourneyId: string | null } | null>(null);
+  const shareRestoreAtlasTriggerRef = useRef(false);
+  const shareWasOpenRef = useRef(false);
+  useEffect(() => {
+    if (shareTarget) {
+      shareWasOpenRef.current = true;
+      return;
+    }
+    if (!shareWasOpenRef.current) return;
+    shareWasOpenRef.current = false;
+    if (!shareRestoreAtlasTriggerRef.current) return;
+    shareRestoreAtlasTriggerRef.current = false;
+    const target = document.querySelector<HTMLElement>(
+      '[data-atlas-share-trigger="true"]:not([disabled])',
+    );
+    if (target?.isConnected && !target.closest("[inert]")) {
+      target.focus({ preventScroll: true });
+    }
+  }, [shareTarget]);
   useMobileSurfaceHistory(
     isMobileV2 && mobileSheetJourneyId !== null,
     "journey-sheet",
@@ -1080,6 +1098,11 @@ export function LivingAtlasApp({
     isMobileV2 && storyJourneyId !== null,
     "journey-story",
     () => closeJourneyStory(null),
+  );
+  useMobileSurfaceHistory(
+    isMobileV2 && shareTarget !== null,
+    "journey-share",
+    () => setShareTarget(null),
   );
   const mobileSheetActive = isMobileV2 && mobileSheetJourneyId !== null;
   const mobileSheetStoryActive = storyJourneyId !== null;
@@ -1970,7 +1993,17 @@ export function LivingAtlasApp({
     });
   }
 
-  function closeJourneyStory(source: HTMLElement | null) {
+  function openShareSurface(lockedJourneyId: string | null) {
+    shareRestoreAtlasTriggerRef.current = true;
+    setMobileSheetJourneyId(null);
+    if (storyJourneyId !== null) {
+      closeJourneyStory(null, () => setShareTarget({ lockedJourneyId }));
+      return;
+    }
+    setShareTarget({ lockedJourneyId });
+  }
+
+  function closeJourneyStory(source: HTMLElement | null, afterClose?: () => void) {
     const journeyId = storyJourneyId;
     const observation = storyObservationRef.current;
     const currentJourney = journeyId
@@ -2010,6 +2043,7 @@ export function LivingAtlasApp({
         setStoryInitialAssetId(null);
         setStoryInitialSnapState("in-context");
         setStoryFocusVisibleControlOnOpen(false);
+        afterClose?.();
         if (observationTarget && journeyId && returnRoutePointId) {
           revealRoutePointContext(journeyId, returnRoutePointId);
         }
@@ -2370,7 +2404,7 @@ export function LivingAtlasApp({
             {canManageAtlas ? <MobileAccountActionSlot /> : null}
             {canCreateJourney ? <button type="button" onClick={openCreateComposer} aria-label="记录新旅程"><IconPlus size={18} stroke={1.4} aria-hidden="true" /></button> : null}
             {shareClient && journeys.length > 0 ? (
-              <button type="button" onClick={() => setShareTarget({ lockedJourneyId: null })} aria-label="分享多段旅程"><IconShare size={18} stroke={1.4} aria-hidden="true" /></button>
+              <button type="button" data-atlas-share-trigger="true" disabled={storyJourneyId !== null} onClick={() => openShareSurface(null)} aria-label="分享多段旅程"><IconShare size={18} stroke={1.4} aria-hidden="true" /></button>
             ) : null}
             {journeys.length > 0 ? (
               <button type="button" onClick={() => setMobilePickerOpen(true)} aria-label="打开全部旅程"><IconTimeline size={18} stroke={1.4} aria-hidden="true" /></button>
@@ -2385,7 +2419,7 @@ export function LivingAtlasApp({
             <button type="button" className={view === "timeline" ? "is-active" : ""} aria-current={view === "timeline" ? "page" : undefined} onClick={() => setView("timeline")}><IconTimeline size={16} stroke={1.35} aria-hidden="true" />时间线</button>
             {canCreateJourney ? <button ref={createMagnet.ref} onMouseMove={createMagnet.onMouseMove} onMouseLeave={createMagnet.onMouseLeave} type="button" className="living-atlas__create" onClick={openCreateComposer}><IconPlus size={17} stroke={1.4} aria-hidden="true" />记录旅程</button> : null}
             {shareClient && journeys.length > 0 ? (
-              <button type="button" className="living-atlas__share" onClick={() => setShareTarget({ lockedJourneyId: null })}><IconShare size={16} stroke={1.35} aria-hidden="true" />分享多段旅程</button>
+              <button type="button" className="living-atlas__share" data-atlas-share-trigger="true" onClick={() => openShareSurface(null)}><IconShare size={16} stroke={1.35} aria-hidden="true" />分享多段旅程</button>
             ) : null}
             <button
               ref={globeFocusTriggerRef}
@@ -2769,10 +2803,7 @@ export function LivingAtlasApp({
                 <button
                   type="button"
                   data-share-journey-trigger="true"
-                  onClick={() => {
-                    setMobileSheetJourneyId(null);
-                    setShareTarget({ lockedJourneyId: mobileSheetJourney.id });
-                  }}
+                  onClick={() => openShareSurface(mobileSheetJourney.id)}
                 ><IconShare size={16} stroke={1.35} aria-hidden="true" />分享旅程</button>
               ) : null}
             </div>
@@ -2994,10 +3025,7 @@ export function LivingAtlasApp({
             : undefined}
           onDelete={canDeleteJourney && mutations ? removeJourney : undefined}
           onShare={shareClient
-            ? (id) => {
-              closeJourneyStory(null);
-              setShareTarget({ lockedJourneyId: id });
-            }
+            ? (id) => openShareSurface(id)
             : undefined}
           onMediaAdded={async (id) => {
             const loaded = await load(true);
