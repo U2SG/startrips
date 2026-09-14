@@ -27,7 +27,6 @@ const activeTokens = new Set<string>();
 let reconcileScheduled = false;
 let historyMovePending = false;
 const historySettledListeners = new Set<() => void>();
-const ownedReconcilePopStates = new WeakSet<PopStateEvent>();
 
 export function shouldDeferMobileSurfaceHistoryWrite(
   scheduled: boolean,
@@ -38,9 +37,9 @@ export function shouldDeferMobileSurfaceHistoryWrite(
 
 export function shouldIgnoreDeferredMobileSurfacePopState(
   entryWritten: boolean,
-  ownedReconcilePopState: boolean,
+  ownedReconcileInFlight: boolean,
 ) {
-  return !entryWritten && ownedReconcilePopState;
+  return !entryWritten && ownedReconcileInFlight;
 }
 
 function notifyHistorySettled() {
@@ -125,13 +124,21 @@ if (typeof window !== "undefined") {
       [SESSION_KEY]: documentSession,
     }, "");
   }
-  window.addEventListener("popstate", (event) => {
-    if (historyMovePending) ownedReconcilePopStates.add(event);
-    historyMovePending = false;
-    // A replacement can require more than one owned history hop: closing the
-    // replacement first lands on an older Story/sheet state, which is already
-    // stale in React. Re-run reconciliation after each owned navigation until
-    // the top token is live (or no Startrips token remains).
+  window.addEventListener("popstate", () => {
+    if (historyMovePending) {
+      // Keep the owned traversal marker set for this entire popstate dispatch.
+      // A replacement surface can already be visible while its token write is
+      // deferred; clearing synchronously lets its listener mistake this owned
+      // landing for user Back and dismiss the new owner. The microtask runs
+      // after every listener on this event, independent of listener order.
+      queueMicrotask(() => {
+        historyMovePending = false;
+        scheduleHistoryReconcile();
+      });
+      return;
+    }
+    // User Back is not shielded by the reconciliation marker. Surface listeners
+    // get to close or restore their owner before stale-suffix cleanup runs.
     scheduleHistoryReconcile();
   });
 }
@@ -204,7 +211,7 @@ export function useMobileSurfaceHistory(
       if (entryWritten && readStack(event.state).includes(token)) return;
       if (shouldIgnoreDeferredMobileSurfacePopState(
         entryWritten,
-        ownedReconcilePopStates.has(event),
+        historyMovePending,
       )) return;
 
       const closed = onHistoryCloseRef.current();
