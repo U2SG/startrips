@@ -659,7 +659,10 @@ export default function DetailedEarthMap({
     // Once detail owns the camera, later *real* focus changes may use the map's
     // normal fly/fit choreography. The ownership commit itself is calibrated,
     // not re-focused.
-    focusFlightActiveRef.current = true;
+    // Starting a replacement flyTo/fitBounds synchronously ends the previous
+    // MapLibre flight before arming the replacement. Clear the old ownership
+    // first so that previous flight's moveend cannot retire the new flight.
+    focusFlightActiveRef.current = false;
     cameraIntentRevisionRef.current += 1;
     const focusFlightStarted = applyDetailedEarthFocus(
       map,
@@ -667,7 +670,7 @@ export default function DetailedEarthMap({
       focusRoute,
       getDetailedEarthFocusDuration(focusFlightProfile),
     );
-    if (!focusFlightStarted) focusFlightActiveRef.current = false;
+    focusFlightActiveRef.current = focusFlightStarted;
   }, [focusFlightProfile, focusPoint, focusRevision, focusRoute]);
 
   // Per-frame particle following goes through `calibrationHandleRef` in the
