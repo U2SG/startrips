@@ -788,6 +788,27 @@ describe("route arc geometry", () => {
       .distanceTo(end)).toBeLessThan(1e-6);
   });
 
+  it("keeps exact antipodes on a stable fallback plane despite projection roundoff (#352 review)", () => {
+    const points = [
+      { lat: 32.334299644602794, lon: 18.504816385062583 },
+      { lat: -32.334299644602794, lon: -161.49518361493742 },
+    ];
+    const arc = { arcHeightRatio: 0.22, arcSaturationAngle: Math.PI / 3 };
+    const maxSegmentAngle = Math.PI / 96;
+    const plans = planRouteArcLegs(points, maxSegmentAngle, 8192, arc);
+    const legs = buildRouteArcLegSamples(points, maxSegmentAngle, 8192, arc);
+
+    expect(plans).toHaveLength(1);
+    expect(legs).toHaveLength(1);
+    // Roundoff from an exact antipode must not be amplified into a bogus tiny
+    // endpoint tangent that burns the whole route budget and still snaps.
+    expect(plans[0].segmentCount).toBeLessThan(4096);
+    expectRouteLegSamplingWithinTolerance(legs[0], maxSegmentAngle);
+    const end = latLonToVector3(points[1].lat, points[1].lon, 1).normalize();
+    expect(sampleAt(legs[0], routeArcVertexCount(legs[0]) - 1, 1, 0).normalize()
+      .distanceTo(end)).toBeLessThan(1e-6);
+  });
+
   it("allocates enough interior samples for long near-antipodal spline curvature (#352 review)", () => {
     const points = [
       { lat: -62.542382, lon: 175.620270 },

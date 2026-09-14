@@ -46,7 +46,8 @@ function slerpUnitVectors(start: Vector3, end: Vector3, progress: number) {
     // the tangent toward the ACTUAL endpoint so the last interior sample cannot
     // ride an arbitrary antipodal meridian and then snap sideways at t = 1.
     const towardEnd = end.clone().addScaledVector(start, -dot);
-    if (towardEnd.lengthSq() > 0) {
+    const antipodalRoundoff = Number.EPSILON * 32;
+    if (towardEnd.lengthSq() > antipodalRoundoff * antipodalRoundoff) {
       const angle = Math.acos(dot);
       towardEnd.normalize();
       return start
@@ -56,8 +57,9 @@ function slerpUnitVectors(start: Vector3, end: Vector3, progress: number) {
         .normalize();
     }
 
-    // Only a genuinely zero endpoint-defined tangent is exactly antipodal.
-    // Do not threshold tiny but representable near-antipodal planes away.
+    // Exact antipodes can retain a few ulps of projection noise after the
+    // latitude/longitude conversion. Reject only that roundoff-sized residue;
+    // tiny but representable near-antipodal endpoint planes remain authoritative.
     // Exactly antipodal endpoints do not select a unique great circle. Any
     // orthogonal plane is truthful because all of them land on -start at π.
     const reference = Math.abs(start.y) < 0.9
