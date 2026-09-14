@@ -14,8 +14,8 @@ Startrips is a private living atlas for turning a real journey into an ordered g
 - A chronological timeline, lazy signed-media reads, and a single low-memory Three.js globe with bounded spherical route geometry.
 - Expiring read-only guest share links for one or several Journeys, with scoped Story and Journey Playback viewing plus owner-side revoke controls.
 - Journey Playback with deterministic transport/timing and a Story return contract that preserves the last successfully presented Route Point/media observation.
-- Mobile Viewer mode keeps Story media, immersive viewing, Journey switching, and Playback reachable through the shared compact-layout contract without exposing edit authority to guests.
-- Home Base foundations cover dated periods, deterministic suggestion evidence, quiet Atlas presence, and persisted confirmation/dismissal; eligible historical Home can also frame owner Journey Playback as a private Prelude/Epilogue, while richer on-demand Home context interaction remains separate.
+- Mobile Viewer mode keeps Story media, immersive viewing, Journey switching, and Playback reachable through the shared compact-layout contract without exposing edit authority to guests. Mobile Story and Share now use one top-level surface owner, so Escape/Back, pending share mutations, rapid reopen, and Story→Share replacement cannot leave stacked or ghost surfaces.
+- Home Base foundations cover dated periods, deterministic suggestion evidence, quiet Atlas presence, persisted confirmation/dismissal, and owner-private on-demand period context opened from the visible Home anchor; eligible historical Home can also frame owner Journey Playback as a private Prelude/Epilogue.
 - Development-only deterministic `qaState` routes for visual regression work; they are not the authenticated product path.
 
 ## Architecture
