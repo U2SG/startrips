@@ -197,18 +197,38 @@ function routeLegSplineFrame(start: Vector3, end: Vector3) {
   };
 }
 
-function splineCrossTrackSlope(
+type RouteSplineEndpointSlopes = {
+  progressSlope: number;
+  crossTrackSlope: number;
+};
+
+function splineEndpointSlopes(
   tangent: Vector3,
   travel: Vector3,
   normal: Vector3,
   handleAngle: number,
   legAngle: number,
-) {
-  if (!(handleAngle > 0) || tangent.lengthSq() < 1e-18) return 0;
+): RouteSplineEndpointSlopes {
+  const geodesic = { progressSlope: 1, crossTrackSlope: 0 };
+  if (!(handleAngle > 0) || tangent.lengthSq() < 1e-18) return geodesic;
   const along = tangent.dot(travel);
-  if (!(along > 1e-9)) return 0;
-  const desired = legAngle * tangent.dot(normal) / along;
-  return Math.max(-3 * handleAngle, Math.min(3 * handleAngle, desired));
+  if (!(along > 1e-9)) return geodesic;
+
+  const desiredCrossTrackSlope = legAngle * tangent.dot(normal) / along;
+  const maxCrossTrackSlope = 3 * handleAngle;
+  if (Math.abs(desiredCrossTrackSlope) <= maxCrossTrackSlope) {
+    return { progressSlope: 1, crossTrackSlope: desiredCrossTrackSlope };
+  }
+
+  // Bound the endpoint handle magnitude without rotating its direction. The
+  // rendered endpoint derivative is legAngle * progressSlope along the
+  // geodesic plus crossTrackSlope across it, so scaling both components by the
+  // same factor retains the shared Route Point tangent on both adjacent legs.
+  const scale = maxCrossTrackSlope / Math.abs(desiredCrossTrackSlope);
+  return {
+    progressSlope: scale,
+    crossTrackSlope: desiredCrossTrackSlope * scale,
+  };
 }
 
 /**
@@ -234,14 +254,14 @@ function sampleSphericalSpline(
   const legAngle = angularDistance(start, end);
   if (!(legAngle > 1e-12)) return start.clone();
   const frame = routeLegSplineFrame(start, end);
-  let startSlope = splineCrossTrackSlope(
+  const startSlopes = splineEndpointSlopes(
     startTangent,
     frame.startTravel,
     frame.normal,
     startHandleAngle,
     legAngle,
   );
-  let endSlope = splineCrossTrackSlope(
+  const endSlopes = splineEndpointSlopes(
     endTangent,
     frame.endTravel,
     frame.normal,
@@ -249,22 +269,31 @@ function sampleSphericalSpline(
     legAngle,
   );
 
-  // Both Hermite basis functions peak at 4/27 in magnitude. Scale endpoint
-  // slopes together so the entire span stays inside the existing 2° truth
-  // boundary without a per-sample hard clamp that could introduce a kink.
+  // Both Hermite cross-track basis functions peak at 4/27 in magnitude. If
+  // the pair would exceed the existing 2° truth boundary, scale each endpoint
+  // derivative as a whole: along-track progress and cross-track offset move
+  // together, so the shared tangent direction survives deviation bounding.
   const conservativeDeviation = (4 / 27)
-    * (Math.abs(startSlope) + Math.abs(endSlope));
+    * (Math.abs(startSlopes.crossTrackSlope) + Math.abs(endSlopes.crossTrackSlope));
   if (conservativeDeviation > MAX_ROUTE_SPLINE_DEVIATION) {
     const scale = MAX_ROUTE_SPLINE_DEVIATION / conservativeDeviation;
-    startSlope *= scale;
-    endSlope *= scale;
+    startSlopes.progressSlope *= scale;
+    startSlopes.crossTrackSlope *= scale;
+    endSlopes.progressSlope *= scale;
+    endSlopes.crossTrackSlope *= scale;
   }
 
   const t2 = progress * progress;
   const t3 = t2 * progress;
-  const crossTrackAngle = (t3 - 2 * t2 + progress) * startSlope
-    + (t3 - t2) * endSlope;
-  const geodesic = slerpUnitVectors(start, end, progress);
+  const h10 = t3 - 2 * t2 + progress;
+  const h01 = -2 * t3 + 3 * t2;
+  const h11 = t3 - t2;
+  const geodesicProgress = Math.max(0, Math.min(1,
+    h10 * startSlopes.progressSlope + h01 + h11 * endSlopes.progressSlope,
+  ));
+  const crossTrackAngle = h10 * startSlopes.crossTrackSlope
+    + h11 * endSlopes.crossTrackSlope;
+  const geodesic = slerpUnitVectors(start, end, geodesicProgress);
   return geodesic
     .multiplyScalar(Math.cos(crossTrackAngle))
     .addScaledVector(frame.normal, Math.sin(crossTrackAngle))

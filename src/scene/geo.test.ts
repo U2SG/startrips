@@ -597,6 +597,53 @@ describe("route arc geometry", () => {
     expect(sampledJoinAngle(2)).toBeLessThan(Math.PI / 60);
   });
 
+  it("preserves the shared tangent when endpoint slope bounds engage (#352 review)", () => {
+    const points = [
+      { lat: 20.195286, lon: -111.169866 },
+      { lat: 8.079654, lon: 10.260959 },
+      { lat: 42.583351, lon: -178.541672 },
+    ];
+    const arc = { arcHeightRatio: 0.22, arcSaturationAngle: Math.PI / 3 };
+    const maxSegmentAngle = Math.PI / 96;
+    const plans = planRouteArcLegs(points, maxSegmentAngle, 8192, arc);
+    const legs = buildRouteArcLegSamples(points, maxSegmentAngle, 8192, arc);
+
+    expect(plans).toHaveLength(2);
+    expect(legs).toHaveLength(2);
+    expect(plans[0].endHandleAngle).toBeGreaterThan(0);
+    expect(plans[1].startHandleAngle).toBeGreaterThan(0);
+    expect(plans[0].endTangent.distanceTo(plans[1].startTangent)).toBeLessThan(1e-12);
+
+    const incomingLeg = legs[0];
+    const outgoingLeg = legs[1];
+    const anchor = sampleAt(
+      incomingLeg,
+      routeArcVertexCount(incomingLeg) - 1,
+      1,
+      0,
+    ).normalize();
+    const previous = sampleAt(
+      incomingLeg,
+      routeArcVertexCount(incomingLeg) - 2,
+      1,
+      0,
+    ).normalize();
+    const next = sampleAt(outgoingLeg, 1, 1, 0).normalize();
+    const incoming = previous
+      .clone()
+      .addScaledVector(anchor, -anchor.dot(previous))
+      .normalize()
+      .multiplyScalar(-1);
+    const outgoing = next
+      .clone()
+      .addScaledVector(anchor, -anchor.dot(next))
+      .normalize();
+
+    expect(incoming.angleTo(outgoing))
+      .toBeLessThanOrEqual(ROUTE_SPLINE_JOIN_TOLERANCE + 1e-6);
+    for (const leg of legs) expectRouteLegSamplingWithinTolerance(leg, maxSegmentAngle);
+  });
+
   it("caps spherical spline deviation and collapses near-U-turn handles instead of looping (#352)", () => {
     const points = [
       { lat: 0, lon: 0 },
