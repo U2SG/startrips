@@ -45,7 +45,8 @@ export type JourneyShareDialogProps = {
   journeys: readonly Journey[];
   lockedJourneyId: string | null;
   mutations: Pick<AtlasMutations, "createShare" | "listShares" | "revokeShare">;
-  onClose: () => void;
+  onClose: () => boolean | void;
+  onMutationPendingChange?: (pending: boolean) => void;
   /** Injected by the tests; the browser passes nothing. */
   now?: () => Date;
   origin?: string;
@@ -64,10 +65,10 @@ export function JourneyShareDialog({
   lockedJourneyId,
   mutations,
   onClose,
+  onMutationPendingChange,
   now = () => new Date(),
   origin,
 }: JourneyShareDialogProps) {
-  const dialogRef = useModalFocus<HTMLElement>(onClose);
   const [selected, setSelected] = useState<string[]>(
     lockedJourneyId ? [lockedJourneyId] : [],
   );
@@ -81,6 +82,14 @@ export function JourneyShareDialog({
   const [copied, setCopied] = useState(false);
   const [revokingId, setRevokingId] = useState<string | null>(null);
   const [listTick, setListTick] = useState(0);
+  const closeBlocked = pending || revokingId !== null;
+  const requestClose = useCallback(() => {
+    if (closeBlocked) return false;
+    return onClose();
+  }, [closeBlocked, onClose]);
+  const dialogRef = useModalFocus<HTMLElement>(() => {
+    requestClose();
+  });
   // `now` is a clock the caller may pass as an inline arrow, so its identity
   // changes every render. Reading it through a ref keeps it out of the effect
   // dependency lists below, where it would re-arm the expiry timer on every
@@ -137,7 +146,7 @@ export function JourneyShareDialog({
   const maxCustom = toDateTimeLocalValue(maxCustomExpiry(now()));
 
   async function createLink() {
-    if (pending) return;
+    if (pending || revokingId) return;
     if (selectionMessage) {
       setMessage(selectionMessage);
       return;
@@ -147,6 +156,7 @@ export function JourneyShareDialog({
       setMessage(shareExpiryMessage(expiry.reason));
       return;
     }
+    onMutationPendingChange?.(true);
     setPending(true);
     setMessage("");
     try {
@@ -167,6 +177,7 @@ export function JourneyShareDialog({
         : "创建分享链接失败，请重试。");
     } finally {
       setPending(false);
+      onMutationPendingChange?.(false);
     }
   }
 
@@ -194,7 +205,8 @@ export function JourneyShareDialog({
   }
 
   async function revoke(shareId: string) {
-    if (revokingId) return;
+    if (revokingId || pending) return;
+    onMutationPendingChange?.(true);
     setRevokingId(shareId);
     setMessage("");
     try {
@@ -205,6 +217,7 @@ export function JourneyShareDialog({
       setMessage("撤销失败，请重试。");
     } finally {
       setRevokingId(null);
+      onMutationPendingChange?.(false);
     }
   }
 
@@ -220,7 +233,8 @@ export function JourneyShareDialog({
         type="button"
         tabIndex={-1}
         aria-label="关闭分享"
-        onClick={onClose}
+        disabled={closeBlocked}
+        onClick={() => { requestClose(); }}
       />
       <section
         ref={dialogRef}
@@ -237,7 +251,7 @@ export function JourneyShareDialog({
               {lockedJourney ? `分享「${lockedJourney.title}」` : "分享多段旅程"}
             </h2>
           </div>
-          <button type="button" onClick={onClose} aria-label="关闭分享">
+          <button type="button" disabled={closeBlocked} onClick={() => { requestClose(); }} aria-label="关闭分享">
             <IconX size={19} stroke={1.4} aria-hidden="true" />
           </button>
         </header>
@@ -305,7 +319,7 @@ export function JourneyShareDialog({
             <button
               className="journey-share__create"
               type="button"
-              disabled={pending || selected.length === 0}
+              disabled={closeBlocked || selected.length === 0}
               onClick={() => void createLink()}
             >
               {pending ? <StartripsJourneyCue state="waiting" size={28} /> : <IconLink size={17} stroke={1.35} aria-hidden="true" />}
@@ -370,7 +384,7 @@ export function JourneyShareDialog({
                 <button
                   type="button"
                   className="is-destructive"
-                  disabled={revokingId !== null}
+                  disabled={closeBlocked}
                   onClick={() => void revoke(row.id)}
                 >{revokingId === row.id ? "正在撤销…" : "撤销链接"}</button>
               </li>
