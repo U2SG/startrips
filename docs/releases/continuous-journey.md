@@ -44,6 +44,6 @@ The statuses above mean repository acceptance only:
 
 ## Release boundary
 
-This candidate does **not** establish deployment truth. There is no claim here that `2e77a414ddd0647e5b4a0cf268345be3efca5dd6` is tagged, deployed to production, or validated on a production environment. The owner must still sign this exact candidate SHA **Go** or **No-go** and state whether this record remains a 候选验收 report only or proceeds to a tagged release and deployment.
+This candidate does **not** establish deployment truth. There is no claim here that `2e77a414ddd0647e5b4a0cf268345be3efca5dd6` is tagged, deployed to production, or validated on a production environment. The owner recorded **OWNER DECISION — GO** for exactly this candidate SHA `2e77a414ddd0647e5b4a0cf268345be3efca5dd6` in [issue comment 5663312227](https://github.com/U2SG/startrips/issues/249#issuecomment-5663312227) at `2026-09-14T11:37:56Z`, so the owner Go/No-go gate for this exact candidate SHA is closed. That GO clears candidate acceptance only: it does **not** authorize merge-ready, merge, tag, release or deployment, and this record therefore remains a 候选验收 report. If the candidate SHA changes, the new candidate does not inherit this GO and needs its own owner decision.
 
 The next-stage issues #331–#351 remain planning/reference items and do not automatically become gates for this candidate. Any future candidate that promotes one of those slices must repeat the exact-SHA evidence process rather than inheriting this report.
