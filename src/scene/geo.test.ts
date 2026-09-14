@@ -733,6 +733,28 @@ describe("route arc geometry", () => {
     });
   });
 
+  it("keeps near-antipodal geodesic samples continuous to the real endpoint (#352 review)", () => {
+    const points = [
+      { lat: 0, lon: 0 },
+      { lat: 0.04, lon: 179.96 },
+    ];
+    const arc = { arcHeightRatio: 0.22, arcSaturationAngle: Math.PI / 3 };
+    const maxSegmentAngle = Math.PI / 96;
+    const plans = planRouteArcLegs(points, maxSegmentAngle, 8192, arc);
+    const legs = buildRouteArcLegSamples(points, maxSegmentAngle, 8192, arc);
+
+    expect(plans).toHaveLength(1);
+    expect(legs).toHaveLength(1);
+    // A near-antipodal pair still defines a unique great-circle plane. The
+    // sampler must follow that plane continuously instead of burning the whole
+    // 4096-segment budget and snapping to the endpoint on the final sample.
+    expect(plans[0].segmentCount).toBeLessThan(4096);
+    expectRouteLegSamplingWithinTolerance(legs[0], maxSegmentAngle);
+    const end = latLonToVector3(points[1].lat, points[1].lon, 1).normalize();
+    expect(sampleAt(legs[0], routeArcVertexCount(legs[0]) - 1, 1, 0).normalize()
+      .distanceTo(end)).toBeLessThan(1e-6);
+  });
+
   it("allocates enough interior samples for long near-antipodal spline curvature (#352 review)", () => {
     const points = [
       { lat: -62.542382, lon: 175.620270 },

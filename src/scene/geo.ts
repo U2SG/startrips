@@ -42,6 +42,22 @@ function slerpUnitVectors(start: Vector3, end: Vector3, progress: number) {
     return start.clone().lerp(end, progress).normalize();
   }
   if (dot < -0.999999) {
+    // Near-antipodal endpoints still define a real great-circle plane. Follow
+    // the tangent toward the ACTUAL endpoint so the last interior sample cannot
+    // ride an arbitrary antipodal meridian and then snap sideways at t = 1.
+    const towardEnd = end.clone().addScaledVector(start, -dot);
+    if (towardEnd.lengthSq() > 1e-18) {
+      const angle = Math.acos(dot);
+      towardEnd.normalize();
+      return start
+        .clone()
+        .multiplyScalar(Math.cos(angle * progress))
+        .addScaledVector(towardEnd, Math.sin(angle * progress))
+        .normalize();
+    }
+
+    // Exactly antipodal endpoints do not select a unique great circle. Any
+    // orthogonal plane is truthful because all of them land on -start at π.
     const reference = Math.abs(start.y) < 0.9
       ? new Vector3(0, 1, 0)
       : new Vector3(1, 0, 0);
