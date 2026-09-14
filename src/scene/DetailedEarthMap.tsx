@@ -591,12 +591,16 @@ export default function DetailedEarthMap({
     if (calibrationHandleRef) {
       calibrationHandleRef.current = (frame, mode = "sync") => calibrateToParticle(frame, mode);
     }
-    map.on("move", () => {
+    map.on("move", (event) => {
       // A multi-frame flyTo/fitBounds belongs to one explicit focus intent,
       // but every animation frame is still newer than a reveal sync armed on
-      // an earlier intermediate camera. Advance the local ordering token so
-      // readiness re-arms instead of restoring over the active flight.
-      if (focusFlightActiveRef.current) cameraIntentRevisionRef.current += 1;
+      // an earlier intermediate camera. Detail-owned gestures are explicit
+      // camera intent too; MapLibre exposes their originating DOM event while
+      // renderer-only resize/repaint drift has no originalEvent.
+      if (
+        focusFlightActiveRef.current
+        || (diveOwnerRef.current === "detail" && Boolean(event.originalEvent))
+      ) cameraIntentRevisionRef.current += 1;
       publishAnchorFrame();
     });
     map.on("moveend", () => {
