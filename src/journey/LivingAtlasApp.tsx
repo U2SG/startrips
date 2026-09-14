@@ -1,4 +1,4 @@
-import { type ComponentType, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type ComponentType, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   IconArrowNarrowLeft,
   IconArrowRight,
@@ -421,6 +421,15 @@ export function journeyRailVisibility(
 ): "hidden" | "visible" {
   return playbackActive || globePickActive ? "hidden" : "visible";
 }
+export function synchronizeJourneyRailVisibility(
+  rail: { style: { visibility: string } } | null,
+  playbackActive: boolean,
+  globePickActive: boolean,
+): void {
+  if (!rail) return;
+  rail.style.visibility = journeyRailVisibility(playbackActive, globePickActive);
+}
+
 
 export function playbackEntryNeedsPreparation(
   journey: Journey | null,
@@ -1055,8 +1064,17 @@ export function LivingAtlasApp({
   // focus survive through the class switch).
   const [globeFocusMode, setGlobeFocusMode] = useState(false);
   const isMobileV2 = useCompactMobileLayout();
+  const journeyRailRef = useRef<HTMLElement | null>(null);
+  useLayoutEffect(() => {
+    synchronizeJourneyRailVisibility(journeyRailRef.current, playbackActive, globePickActive);
+  }, [globePickActive, isMobileV2, playbackActive, storyJourneyId]);
   const [mobileSheetJourneyId, setMobileSheetJourneyId] = useState<string | null>(null);
   const [mobilePickerOpen, setMobilePickerOpen] = useState(false);
+  // #325 regression: Story/playback return and compact-layout remounts can leave the
+  // rail DOM style stale even after React ownership state is released. Reassert the
+  // visibility invariant in the same layout commit as those lifecycle boundaries;
+  // this is product state repair, not a QA wait/retry.
+
   /**
    * The open share surface, and which Journey it is locked to.
    *
@@ -2450,6 +2468,7 @@ export function LivingAtlasApp({
 
       {!isMobileV2 && view === "planet" && journeys.length > 0 ? (
         <nav
+          ref={journeyRailRef}
           className="living-atlas__journey-rail motion-staged"
           aria-label={`全部旅程，共 ${journeys.length} 段`}
           inert={globeFocusMode || globePickActive || playbackActive || undefined}
