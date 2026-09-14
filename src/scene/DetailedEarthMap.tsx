@@ -170,11 +170,15 @@ export default function DetailedEarthMap({
   const diveSnapshotRef = useRef(diveSnapshot);
   const particleFrameRef = useRef(particleFrame);
   const focusRevisionRef = useRef(focusRevision);
+  const cameraIntentRevisionRef = useRef(0);
+  if (focusRevisionRef.current !== focusRevision) {
+    focusRevisionRef.current = focusRevision;
+    cameraIntentRevisionRef.current += 1;
+  }
   diveStageRef.current = diveStage;
   diveOwnerRef.current = diveOwner;
   diveSnapshotRef.current = diveSnapshot;
   particleFrameRef.current = particleFrame;
-  focusRevisionRef.current = focusRevision;
   languageRef.current = language;
   focusPointRef.current = focusPoint;
   focusRouteRef.current = focusRoute;
@@ -235,6 +239,7 @@ export default function DetailedEarthMap({
       afterRenderCount: number;
       intentRevision: number;
       cameraBefore: DetailedEarthRevealCameraSnapshot;
+      reason: "load" | "stage" | "resize-observer";
     } | null = null;
     mapRef.current = map;
     // Register the one-shot load observation immediately after construction.
@@ -313,6 +318,9 @@ export default function DetailedEarthMap({
       const particle = frameOverride ?? particleFrameRef.current;
       const frame = handoffFrame(frameOverride);
       if (!particle || !frame) return;
+      // Particle-owned calibration is an authorized camera intent. A reveal
+      // synchronization armed before this frame may not restore over it.
+      cameraIntentRevisionRef.current += 1;
       // A NEW particle frame reseeds the geographic center. A retry of the SAME
       // stable frame must preserve the center correction already accumulated by
       // previous passes, otherwise every Dive rAF would erase its own progress.
@@ -467,8 +475,9 @@ export default function DetailedEarthMap({
         revision,
         stage,
         afterRenderCount: renderCount,
-        intentRevision: focusRevisionRef.current,
+        intentRevision: cameraIntentRevisionRef.current,
         cameraBefore,
+        reason,
       };
 
       if (action === "resize") {
@@ -503,12 +512,16 @@ export default function DetailedEarthMap({
         const cameraAfter = cameraSnapshot();
         const cameraCommit = resolveDetailedEarthRevealCameraCommit(
           pending.intentRevision,
-          focusRevisionRef.current,
+          cameraIntentRevisionRef.current,
           pending.cameraBefore,
           cameraAfter,
         );
         if (cameraCommit === "stale") {
           pendingRevealCommit = null;
+          // A newer particle/focus camera intent won while synchronization was
+          // in flight. Re-arm readiness from that newest camera rather than
+          // restoring stale geography or stranding the blend.
+          syncRevealSurface(pending.reason);
           return;
         }
         if (cameraCommit === "restore") {
