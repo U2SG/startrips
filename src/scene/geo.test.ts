@@ -22,6 +22,7 @@ import {
   rotationXForLatitude,
   rotationYForLongitude,
   ROUTE_ANCHOR_RADIUS,
+  ROUTE_SPLINE_JOIN_TOLERANCE,
   routeArcVertexCount,
   routeFocusZoomForAngularRadius,
   routePointAnchor,
@@ -622,6 +623,45 @@ describe("route arc geometry", () => {
         previousProgress = progress;
       }
     });
+  });
+
+  it("allocates enough interior samples for long near-antipodal spline curvature (#352 review)", () => {
+    const points = [
+      { lat: -62.542382, lon: 175.620270 },
+      { lat: -86.715906, lon: 132.043252 },
+      { lat: 84.425311, lon: -90.503350 },
+    ];
+    const arc = { arcHeightRatio: 0.22, arcSaturationAngle: Math.PI / 3 };
+    const maxSegmentAngle = Math.PI / 96;
+    const legs = buildRouteArcLegSamples(points, maxSegmentAngle, 8192, arc);
+
+    expect(legs).toHaveLength(2);
+    for (const leg of legs) {
+      const directions: Vector3[] = [sampleAt(leg, 0, 1, 0).normalize()];
+      for (let vertex = 1; vertex < routeArcVertexCount(leg); vertex += 2) {
+        directions.push(sampleAt(leg, vertex, 1, 0).normalize());
+      }
+      for (let index = 1; index < directions.length; index += 1) {
+        expect(directions[index - 1].angleTo(directions[index]))
+          .toBeLessThanOrEqual(maxSegmentAngle + 1e-6);
+      }
+      for (let index = 1; index < directions.length - 1; index += 1) {
+        const anchor = directions[index];
+        const incoming = directions[index - 1]
+          .clone()
+          .addScaledVector(anchor, -anchor.dot(directions[index - 1]))
+          .normalize()
+          .multiplyScalar(-1);
+        const outgoing = directions[index + 1]
+          .clone()
+          .addScaledVector(anchor, -anchor.dot(directions[index + 1]))
+          .normalize();
+        if (incoming.lengthSq() > 0 && outgoing.lengthSq() > 0) {
+          expect(incoming.angleTo(outgoing))
+            .toBeLessThanOrEqual(ROUTE_SPLINE_JOIN_TOLERANCE + 1e-6);
+        }
+      }
+    }
   });
 
   it("keeps route-wide and per-leg spline samples byte-identical and deterministic (#352)", () => {
