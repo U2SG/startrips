@@ -162,6 +162,13 @@
       "when": 1789312984299,
       "tag": "0022_wise_bullseye",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1789452751094,
+      "tag": "0023_gifted_fixer",
+      "breakpoints": true
     }
   ]
 }

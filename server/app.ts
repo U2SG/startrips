@@ -4,12 +4,17 @@ import { sql } from "drizzle-orm";
 import { auth } from "./auth";
 import { AtlasAccessError } from "./authorization/atlas-access";
 import { ShareAccessError } from "./authorization/share-access";
+import { CoverRevealWorkerAccessError } from "./cover-reveal/worker-credential";
 import { db } from "./db/client";
 import { LocationSearchUnavailableError } from "./location/location-search";
 import { HomeBasePeriodConflictError } from "./repositories/home-base-repository";
 import { requestLog } from "./request-log";
 import { accountIdentityRoutes } from "./routes/account-identities";
 import { atlasRoutes } from "./routes/atlases";
+import {
+  coverRevealRoutes,
+  coverRevealWorkerRoutes,
+} from "./routes/cover-reveal";
 import {
   everydayFragmentRoutes,
   EverydayFragmentInvalidError,
@@ -63,6 +68,10 @@ app.on(["GET", "POST"], "/api/auth/*", (context) =>
 
 app.route("/api/account-identities", accountIdentityRoutes);
 app.route("/api/atlases", atlasRoutes);
+// #368: the owner's enqueue verb and the machine worker's protocol, mounted
+// apart so no route can serve both an Atlas member and a worker credential.
+app.route("/api/cover-reveal", coverRevealRoutes);
+app.route("/api/cover-reveal-worker", coverRevealWorkerRoutes);
 // #231: Home Base periods. A dedicated HTTP surface, but the Atlas is still
 // derived from the session inside the route module, never from the path or
 // the body.
@@ -87,6 +96,16 @@ app.notFound((context) =>
 
 app.onError((error, context) => {
   if (error instanceof AtlasAccessError) {
+    return context.json(
+      { error: error.code, message: error.message },
+      error.status,
+    );
+  }
+  // #368: a worker request that authorizes nothing. One code and one fixed
+  // message for every cause, so a probe cannot tell an unset credential from a
+  // wrong one, and so nothing about the presented credential reaches the log
+  // line below.
+  if (error instanceof CoverRevealWorkerAccessError) {
     return context.json(
       { error: error.code, message: error.message },
       error.status,
