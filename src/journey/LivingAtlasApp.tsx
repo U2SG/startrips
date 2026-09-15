@@ -423,11 +423,12 @@ export function journeyRailVisibility(
 }
 export function synchronizeJourneyRailVisibility(
   rail: { style: { visibility: string } } | null,
-  playbackActive: boolean,
-  globePickActive: boolean,
 ): void {
   if (!rail) return;
-  rail.style.visibility = journeyRailVisibility(playbackActive, globePickActive);
+  // Visibility is owned by the Atlas lifecycle classes in CSS. Clear any stale
+  // inline value left by an older render so the current root state is the sole
+  // authority and a released Playback/point-pick cannot remain hidden.
+  rail.style.visibility = "";
 }
 
 
@@ -1066,14 +1067,15 @@ export function LivingAtlasApp({
   const isMobileV2 = useCompactMobileLayout();
   const journeyRailRef = useRef<HTMLElement | null>(null);
   useLayoutEffect(() => {
-    synchronizeJourneyRailVisibility(journeyRailRef.current, playbackActive, globePickActive);
-  }, [globePickActive, isMobileV2, playbackActive, storyJourneyId]);
+    synchronizeJourneyRailVisibility(journeyRailRef.current);
+  });
   const [mobileSheetJourneyId, setMobileSheetJourneyId] = useState<string | null>(null);
   const [mobilePickerOpen, setMobilePickerOpen] = useState(false);
-  // #325 regression: Story/playback return and compact-layout remounts can leave the
-  // rail DOM style stale even after React ownership state is released. Reassert the
-  // visibility invariant in the same layout commit as those lifecycle boundaries;
-  // this is product state repair, not a QA wait/retry.
+  // #325 recurrence: Story/playback return and compact-layout remounts can leave a
+  // historical inline `visibility:hidden` behind even after Atlas ownership releases.
+  // CSS owns hidden/visible from the current root lifecycle classes; every layout
+  // commit clears stale inline ownership before paint. This is product state repair,
+  // not a QA wait/retry.
 
   /**
    * The open share surface, and which Journey it is locked to.
@@ -2472,7 +2474,6 @@ export function LivingAtlasApp({
           className="living-atlas__journey-rail motion-staged"
           aria-label={`全部旅程，共 ${journeys.length} 段`}
           inert={globeFocusMode || globePickActive || playbackActive || undefined}
-          style={{ visibility: journeyRailVisibility(playbackActive, globePickActive) }}
         >
           <div className="living-atlas__journey-rail-heading">
             <span>旅程</span>
