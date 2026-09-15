@@ -18,7 +18,9 @@ Do not add `merge-ready` before the final CI/review pass. The controller verifie
 
 ## Pull request communication policy
 
-**GitHub comments are an exception channel, not a progress log.** The normal source of truth is the PR diff/body, GitHub checks, the authoritative ONE `feature_list.json`, and the per-PR ledger. Do not duplicate those state machines into Conversation comments.
+**GitHub comments are an exception channel, not a progress log.** The normal source of truth is the PR diff/body, GitHub checks, the authoritative ONE control plane, and the per-PR ledger. Do not duplicate those state machines into Conversation comments.
+
+ONE is external to the repository. On the managed Startrips workspace its authoritative file is `D:/startrips/loop-workspace/feature_list.json`; selector/process details are documented in [`docs/agent-pr-communication.md`](docs/agent-pr-communication.md). Do not create a repository copy or a second backlog/lock/selector. Contributors without access to that managed workspace should rely on PR/CI/review evidence and must not invent ONE state.
 
 For a normal implementation PR:
 
