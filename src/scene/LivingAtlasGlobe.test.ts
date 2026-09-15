@@ -111,7 +111,7 @@ describe("Semantic Earth Dive renderer ownership", () => {
     )?.[0] ?? "";
     expect(semanticHandler).not.toContain("policyEntryArmedRef.current = true");
     expect(globe).toContain('if (earthExperiencePolicyRef.current === "default") policyEntryArmedRef.current = true;');
-    expect(globe).toContain("focusRevisionRef.current !== policyFocusRevisionRef.current");
+    expect(globe).toContain("nextFocusRevision !== policyFocusRevisionRef.current");
     expect(globe).toMatch(/policyEntryArmedRef\.current = true;\s+if \(diveRef\.current\.stage !== "particle"\)/);
   });
 });
