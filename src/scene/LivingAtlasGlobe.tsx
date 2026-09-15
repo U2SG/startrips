@@ -5,6 +5,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useReducer,
   useRef,
@@ -475,25 +476,6 @@ export function LivingAtlasGlobe({
   const pendingPolicyHandbackRef = useRef(false);
   const pendingPolicyHandbackCenterRef = useRef<{ lat: number; lon: number } | null>(null);
   const latestDetailObservationRef = useRef<{ lat: number; lon: number } | null>(null);
-  if (earthExperiencePolicyRef.current !== earthExperiencePolicy) {
-    earthExperiencePolicyRef.current = earthExperiencePolicy;
-    // A hard policy edge invalidates every old Dive request. Returning to
-    // default is intentionally NOT a request to re-enter; a later zoom/focus
-    // command must prove fresh intent before the existing local snapshot can
-    // authorize detail again.
-    policyEntryArmedRef.current = false;
-    policyFocusRevisionRef.current = focusRevision ?? 0;
-    const detailOwnedBeforePolicy = earthExperiencePolicy === "particle-only"
-      && diveRef.current.owner === "detail";
-    pendingPolicyHandbackRef.current = detailOwnedBeforePolicy;
-    pendingPolicyHandbackCenterRef.current = detailOwnedBeforePolicy
-      ? latestDetailObservationRef.current
-      : null;
-    commandRequestedRef.current = false;
-    releaseRequestedRef.current = false;
-    readinessRef.current = "unavailable";
-    detailCalibrationRef.current = null;
-  }
   // #253: the Dive resolves on a rAF loop, so the mode's own suspension has to
   // reach it as a ref like every other per-frame input rather than as an
   // effect dependency that would restart the loop.
@@ -501,14 +483,44 @@ export function LivingAtlasGlobe({
   suspendedRef.current = globeFocusMode;
   const focusRevisionRef = useRef(focusRevision ?? 0);
   const handoffRevisionRef = useRef(focusRevision ?? 0);
-  focusRevisionRef.current = focusRevision ?? 0;
-  if (
-    earthExperiencePolicy === "default"
-    && focusRevisionRef.current !== policyFocusRevisionRef.current
-  ) {
-    policyEntryArmedRef.current = true;
-    policyFocusRevisionRef.current = focusRevisionRef.current;
-  }
+
+  // Policy/focus refs are live inputs to the persistent rAF resolver, so they
+  // must mirror COMMITTED React state. Mutating them during render lets an
+  // abandoned concurrent render alter the already-running camera/resource
+  // lifecycle. Apply the hard edge in layout commit, before the next paint/rAF,
+  // and only arm detail again from a focus revision that actually committed.
+  useLayoutEffect(() => {
+    const nextFocusRevision = focusRevision ?? 0;
+    focusRevisionRef.current = nextFocusRevision;
+    const previousPolicy = earthExperiencePolicyRef.current;
+    if (previousPolicy !== earthExperiencePolicy) {
+      earthExperiencePolicyRef.current = earthExperiencePolicy;
+      // A hard policy edge invalidates every old Dive request. Returning to
+      // default is intentionally NOT a request to re-enter; a later zoom/focus
+      // command must prove fresh intent before the existing local snapshot can
+      // authorize detail again.
+      policyEntryArmedRef.current = false;
+      policyFocusRevisionRef.current = nextFocusRevision;
+      const detailOwnedBeforePolicy = earthExperiencePolicy === "particle-only"
+        && diveRef.current.owner === "detail";
+      pendingPolicyHandbackRef.current = detailOwnedBeforePolicy;
+      pendingPolicyHandbackCenterRef.current = detailOwnedBeforePolicy
+        ? latestDetailObservationRef.current
+        : null;
+      commandRequestedRef.current = false;
+      releaseRequestedRef.current = false;
+      readinessRef.current = "unavailable";
+      detailCalibrationRef.current = null;
+      return;
+    }
+    if (
+      earthExperiencePolicy === "default"
+      && nextFocusRevision !== policyFocusRevisionRef.current
+    ) {
+      policyEntryArmedRef.current = true;
+      policyFocusRevisionRef.current = nextFocusRevision;
+    }
+  }, [earthExperiencePolicy, focusRevision]);
 
   const syncDetailSpatialReveal = useCallback((
     stage = diveRef.current.stage,
