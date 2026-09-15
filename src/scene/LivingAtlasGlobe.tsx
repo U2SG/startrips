@@ -622,12 +622,7 @@ export function LivingAtlasGlobe({
   const handleSemanticZoomSnapshot = useCallback((snapshot: SemanticZoomSnapshot) => {
     snapshotRef.current = snapshot;
     const policy = earthExperiencePolicyRef.current;
-    if (policy === "default") {
-      // After particle-only is lifted, the stale local snapshot is deliberately
-      // insufficient. A newly published semantic-zoom observation is the proof
-      // that a fresh legal camera/zoom intent occurred after the policy edge.
-      policyEntryArmedRef.current = true;
-    } else {
+    if (policy === "particle-only") {
       setParticleOnlyZoomedIn(snapshot.level === "local");
     }
     syncDetailSpatialReveal(diveRef.current.stage, snapshot, particleFrameRef.current);

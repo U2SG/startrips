@@ -103,6 +103,17 @@ describe("Semantic Earth Dive renderer ownership", () => {
     expect(detail).toContain("__detailedEarthMapRemovalCount");
     expect(detail).toContain("onCameraObservationRef.current?.(");
   });
+
+  it("requires a post-policy intent instead of rearming from a stale semantic snapshot", () => {
+    const globe = readFileSync(new URL("./LivingAtlasGlobe.tsx", import.meta.url), "utf8");
+    const semanticHandler = globe.match(
+      /const handleSemanticZoomSnapshot = useCallback\(\(snapshot: SemanticZoomSnapshot\) => \{[\s\S]*?\}, \[onSemanticZoomChange, syncDetailSpatialReveal\]\);/,
+    )?.[0] ?? "";
+    expect(semanticHandler).not.toContain("policyEntryArmedRef.current = true");
+    expect(globe).toContain('if (earthExperiencePolicyRef.current === "default") policyEntryArmedRef.current = true;');
+    expect(globe).toContain("focusRevisionRef.current !== policyFocusRevisionRef.current");
+    expect(globe).toMatch(/policyEntryArmedRef\.current = true;\s+if \(diveRef\.current\.stage !== "particle"\)/);
+  });
 });
 
 describe("Semantic Earth Dive accessibility fallback (#308)", () => {
