@@ -1123,7 +1123,12 @@ try {
     (state) => state.stage === "blending",
     "the dive never reached blending with a focused Journey",
   );
-  await routeRun.page.waitForTimeout(500);
+  await routeRun.page.waitForFunction(() => {
+    const globe = document.querySelector(".living-atlas-globe");
+    const layer = document.querySelector(".living-atlas-globe__detail-layer");
+    return globe?.getAttribute("data-earth-dive") === "blending"
+      && layer?.getAttribute("data-earth-dive-spatial-reveal") === "on";
+  }, null, { timeout: 5_000 });
   const routeBlendingFrames = await readFrames(routeRun.page);
   const routeBlendingReveal = await readSpatialReveal(routeRun.page);
   const routeCommitted = await wheelUntilDetailWithStableRetry(
