@@ -13,11 +13,16 @@ import {
   getSphericalRouteFocus,
   latLonToVector3,
   MAX_ROUTE_ARC_LIFT_PER_CHORD,
+  MAX_ROUTE_SPLINE_DEVIATION,
+  MAX_ROUTE_SPLINE_HANDLE_ANGLE,
+  MAX_ROUTE_SPLINE_HANDLE_RATIO,
   maxRepresentableArcLift,
   MIN_LIFTED_ROUTE_ARC_SEGMENTS,
+  planRouteArcLegs,
   rotationXForLatitude,
   rotationYForLongitude,
   ROUTE_ANCHOR_RADIUS,
+  ROUTE_SPLINE_JOIN_TOLERANCE,
   routeArcVertexCount,
   routeFocusZoomForAngularRadius,
   routePointAnchor,
@@ -47,6 +52,36 @@ function maxRadius(samples: RouteArcSamples, radius = 1, liftScale = 1) {
     largest = Math.max(largest, sampleAt(samples, vertex, radius, liftScale).length());
   }
   return largest;
+}
+
+function expectRouteLegSamplingWithinTolerance(
+  leg: RouteArcSamples,
+  maxSegmentAngle: number,
+) {
+  const directions: Vector3[] = [sampleAt(leg, 0, 1, 0).normalize()];
+  for (let vertex = 1; vertex < routeArcVertexCount(leg); vertex += 2) {
+    directions.push(sampleAt(leg, vertex, 1, 0).normalize());
+  }
+  for (let index = 1; index < directions.length; index += 1) {
+    expect(directions[index - 1].angleTo(directions[index]))
+      .toBeLessThanOrEqual(maxSegmentAngle + 1e-6);
+  }
+  for (let index = 1; index < directions.length - 1; index += 1) {
+    const anchor = directions[index];
+    const incoming = directions[index - 1]
+      .clone()
+      .addScaledVector(anchor, -anchor.dot(directions[index - 1]))
+      .normalize()
+      .multiplyScalar(-1);
+    const outgoing = directions[index + 1]
+      .clone()
+      .addScaledVector(anchor, -anchor.dot(directions[index + 1]))
+      .normalize();
+    if (incoming.lengthSq() > 0 && outgoing.lengthSq() > 0) {
+      expect(incoming.angleTo(outgoing))
+        .toBeLessThanOrEqual(ROUTE_SPLINE_JOIN_TOLERANCE + 1e-6);
+    }
+  }
 }
 
 describe("latLonToVector3", () => {
@@ -481,6 +516,625 @@ describe("route arc geometry", () => {
       expect(affordable).toBeGreaterThanOrEqual(previous);
       previous = affordable;
     }
+  });
+
+  it("derives one length-weighted tangent in each interior Route Point tangent plane (#352)", () => {
+    const points = [
+      { lat: 32.7157, lon: -117.1611 },
+      { lat: 34.0522, lon: -118.2437 },
+      { lat: 36.1699, lon: -115.1398 },
+    ];
+    const plans = planRouteArcLegs(points, Math.PI / 180, 8192, {});
+    expect(plans).toHaveLength(2);
+
+    const previous = latLonToVector3(points[0].lat, points[0].lon, 1).normalize();
+    const anchor = latLonToVector3(points[1].lat, points[1].lon, 1).normalize();
+    const next = latLonToVector3(points[2].lat, points[2].lon, 1).normalize();
+    const towardPrevious = previous.clone().addScaledVector(anchor, -anchor.dot(previous)).normalize();
+    const incoming = towardPrevious.multiplyScalar(-1);
+    const outgoing = next.clone().addScaledVector(anchor, -anchor.dot(next)).normalize();
+    const previousAngle = Math.acos(Math.min(1, Math.max(-1, previous.dot(anchor))));
+    const nextAngle = Math.acos(Math.min(1, Math.max(-1, anchor.dot(next))));
+    const expected = incoming
+      .clone()
+      .multiplyScalar(previousAngle)
+      .addScaledVector(outgoing, nextAngle)
+      .normalize();
+
+    expect(plans[0].endTangent.distanceTo(plans[1].startTangent)).toBeLessThan(1e-12);
+    expect(Math.abs(anchor.dot(plans[0].endTangent))).toBeLessThan(1e-12);
+    expect(plans[0].endTangent.angleTo(expected)).toBeLessThan(1e-8);
+    expect(plans[0].endHandleAngle).toBeLessThanOrEqual(
+      Math.min(MAX_ROUTE_SPLINE_HANDLE_ANGLE, plans[0].angle * MAX_ROUTE_SPLINE_HANDLE_RATIO),
+    );
+    expect(plans[1].startHandleAngle).toBeLessThanOrEqual(
+      Math.min(MAX_ROUTE_SPLINE_HANDLE_ANGLE, plans[1].angle * MAX_ROUTE_SPLINE_HANDLE_RATIO),
+    );
+  });
+
+  it("removes the independent-leg hard kink in the southwest-US regression fixture (#352)", () => {
+    const points = [
+      { lat: 32.7157, lon: -117.1611 }, // San Diego
+      { lat: 33.8303, lon: -116.5453 }, // Palm Springs
+      { lat: 36.1699, lon: -115.1398 }, // Las Vegas
+      { lat: 36.1069, lon: -112.1129 }, // Grand Canyon
+    ];
+    const legs = buildRouteArcLegSamples(points, Math.PI / 360, 8192, {
+      arcHeightRatio: 0.22,
+      arcSaturationAngle: Math.PI / 3,
+    });
+
+    const travelTangent = (from: Vector3, at: Vector3, forward: boolean) => {
+      const delta = forward ? from.clone().sub(at) : at.clone().sub(from);
+      return delta.addScaledVector(at, -at.dot(delta)).normalize();
+    };
+    const oldIndependentJoinAngle = (index: number) => {
+      const previous = latLonToVector3(points[index - 1].lat, points[index - 1].lon, 1).normalize();
+      const anchor = latLonToVector3(points[index].lat, points[index].lon, 1).normalize();
+      const next = latLonToVector3(points[index + 1].lat, points[index + 1].lon, 1).normalize();
+      const incoming = previous.clone().addScaledVector(anchor, -anchor.dot(previous)).normalize().multiplyScalar(-1);
+      const outgoing = next.clone().addScaledVector(anchor, -anchor.dot(next)).normalize();
+      return incoming.angleTo(outgoing);
+    };
+    const sampledJoinAngle = (index: number) => {
+      const incomingLeg = legs[index - 1];
+      const outgoingLeg = legs[index];
+      const anchor = sampleAt(incomingLeg, routeArcVertexCount(incomingLeg) - 1, 1, 0).normalize();
+      const previous = sampleAt(incomingLeg, routeArcVertexCount(incomingLeg) - 2, 1, 0).normalize();
+      const next = sampleAt(outgoingLeg, 1, 1, 0).normalize();
+      const incoming = travelTangent(previous, anchor, false);
+      const outgoing = travelTangent(next, anchor, true);
+      return incoming.angleTo(outgoing);
+    };
+
+    // The old per-leg great-circle construction has a visibly hard change of
+    // direction at at least one interior anchor in this sparse route.
+    expect(Math.max(oldIndependentJoinAngle(1), oldIndependentJoinAngle(2)))
+      .toBeGreaterThan(0.2);
+    // The new route-wide tangent is shared on both sides. With half-degree
+    // sampling, the finite-difference reading stays within three degrees.
+    expect(sampledJoinAngle(1)).toBeLessThan(Math.PI / 60);
+    expect(sampledJoinAngle(2)).toBeLessThan(Math.PI / 60);
+  });
+
+  it("collapses an unrepresentable shared tangent before it can consume the route budget (#352 review)", () => {
+    const points = [
+      { lat: 20.195286, lon: -111.169866 },
+      { lat: 8.079654, lon: 10.260959 },
+      { lat: 42.583351, lon: -178.541672 },
+    ];
+    const arc = { arcHeightRatio: 0.22, arcSaturationAngle: Math.PI / 3 };
+    const maxSegmentAngle = Math.PI / 96;
+    const plans = planRouteArcLegs(points, maxSegmentAngle, 512, arc);
+    const legs = buildRouteArcLegSamples(points, maxSegmentAngle, 512, arc);
+
+    expect(plans).toHaveLength(2);
+    expect(legs).toHaveLength(2);
+    expect(plans[0].endTangent.distanceTo(plans[1].startTangent)).toBeLessThan(1e-12);
+    // The requested shared tangent is too far from both long geodesics to fit
+    // the existing handle/deviation bounds without concentrating essentially
+    // the entire #242 budget at this one anchor. Decorative smoothing yields
+    // symmetrically instead of leaving two active handles that draw different
+    // tangents or slowing Hermite progress almost to a stop.
+    expect(plans[0].endHandleAngle).toBe(0);
+    expect(plans[1].startHandleAngle).toBe(0);
+    expect(plans.reduce((sum, plan) => sum + plan.segmentCount, 0))
+      .toBeLessThanOrEqual(256);
+
+    const anchor = latLonToVector3(points[1].lat, points[1].lon, 1).normalize();
+    expect(sampleAt(legs[0], routeArcVertexCount(legs[0]) - 1, 1, 0).normalize()
+      .distanceTo(anchor)).toBeLessThan(1e-6);
+    expect(sampleAt(legs[1], 0, 1, 0).normalize().distanceTo(anchor)).toBeLessThan(1e-6);
+    for (const leg of legs) expectRouteLegSamplingWithinTolerance(leg, maxSegmentAngle);
+  });
+
+  it("collapses both sides when only one shared handle can advance (#352 review)", () => {
+    const points = [
+      { lat: -68.638812, lon: 166.718631 },
+      { lat: -53.916316, lon: 172.773924 },
+      { lat: -44.524344, lon: -45.909612 },
+    ];
+    const arc = { arcHeightRatio: 0.22, arcSaturationAngle: Math.PI / 3 };
+    const maxSegmentAngle = Math.PI / 96;
+    const plans = planRouteArcLegs(points, maxSegmentAngle, 8192, arc);
+    const legs = buildRouteArcLegSamples(points, maxSegmentAngle, 8192, arc);
+
+    expect(plans).toHaveLength(2);
+    expect(legs).toHaveLength(2);
+    expect(plans[0].endTangent.distanceTo(plans[1].startTangent)).toBeLessThan(1e-12);
+    // On the regression fixture the incoming leg cannot advance along the
+    // requested shared tangent while the outgoing leg can. A one-sided active
+    // handle would therefore draw a false smoothed join. Treat that pair as
+    // unrepresentable and fall back to the two geodesic legs at the exact
+    // canonical anchor.
+    expect(plans[0].endHandleAngle).toBe(0);
+    expect(plans[1].startHandleAngle).toBe(0);
+
+    const anchor = latLonToVector3(points[1].lat, points[1].lon, 1).normalize();
+    expect(sampleAt(legs[0], routeArcVertexCount(legs[0]) - 1, 1, 0).normalize()
+      .distanceTo(anchor)).toBeLessThan(1e-6);
+    expect(sampleAt(legs[1], 0, 1, 0).normalize().distanceTo(anchor)).toBeLessThan(1e-6);
+    for (const leg of legs) expectRouteLegSamplingWithinTolerance(leg, maxSegmentAngle);
+  });
+
+  it("collapses near-perpendicular active shared tangents instead of treating zero slope as preserved (#352 review)", () => {
+    const points = [
+      { lat: -2.864788976227074, lon: 0 },
+      { lat: 0, lon: 0 },
+      { lat: -2.8612057544957006, lon: -4.966092947444857 },
+    ];
+    const arc = { arcHeightRatio: 0.22, arcSaturationAngle: Math.PI / 3 };
+    const maxSegmentAngle = Math.PI / 96;
+    const plans = planRouteArcLegs(points, maxSegmentAngle, 8192, arc);
+    const legs = buildRouteArcLegSamples(points, maxSegmentAngle, 8192, arc);
+
+    expect(plans).toHaveLength(2);
+    expect(legs).toHaveLength(2);
+    expect(plans[0].endTangent.distanceTo(plans[1].startTangent)).toBeLessThan(1e-12);
+    // The shared tangent is effectively perpendicular to one leg's forward
+    // travel (the along component is ~1e-10). That active tangent cannot be
+    // represented by a stable Hermite cross-track slope. Treat it as an
+    // explicit unrepresentable join and collapse both sides rather than
+    // silently substituting slope=0 and claiming the tangent was preserved.
+    expect(plans[0].endHandleAngle).toBe(0);
+    expect(plans[1].startHandleAngle).toBe(0);
+
+    const anchor = latLonToVector3(points[1].lat, points[1].lon, 1).normalize();
+    expect(sampleAt(legs[0], routeArcVertexCount(legs[0]) - 1, 1, 0).normalize()
+      .distanceTo(anchor)).toBeLessThan(1e-6);
+    expect(sampleAt(legs[1], 0, 1, 0).normalize().distanceTo(anchor)).toBeLessThan(1e-6);
+    for (const leg of legs) expectRouteLegSamplingWithinTolerance(leg, maxSegmentAngle);
+  });
+
+  it("collapses the same unrepresentable join before full-budget dense-route scaling (#352 review)", () => {
+    const points = [
+      { lat: 20.195286, lon: -111.169866 },
+      { lat: 8.079654, lon: 10.260959 },
+      { lat: 42.583351, lon: -178.541672 },
+      ...Array.from({ length: 61 }, (_, index) => ({
+        lat: index % 2 === 0 ? 24 + (index % 7) : -24 - (index % 7),
+        lon: index % 2 === 0 ? -5 : 175,
+      })),
+    ];
+    const arc = { arcHeightRatio: 0.22, arcSaturationAngle: Math.PI / 3 };
+    const plans = planRouteArcLegs(points, Math.PI / 96, 8192, arc);
+
+    expect(plans).toHaveLength(points.length - 1);
+    expect(plans[0].endTangent.distanceTo(plans[1].startTangent)).toBeLessThan(1e-12);
+    expect(plans[0].endHandleAngle).toBe(0);
+    expect(plans[1].startHandleAngle).toBe(0);
+    expect(plans.reduce((sum, plan) => sum + plan.segmentCount, 0))
+      .toBeLessThanOrEqual(4096);
+  });
+
+  it("revalidates sampling after one-sided shared-handle collapse (#352 review)", () => {
+    const points = [
+      { lat: 42.073943, lon: -75.399927 },
+      { lat: -71.687941, lon: 133.301644 },
+      { lat: 80.817352, lon: -130.625115 },
+      { lat: 77.055523, lon: -81.412687 },
+      { lat: -3.513580, lon: -64.819346 },
+    ];
+    const arc = { arcHeightRatio: 0.22, arcSaturationAngle: Math.PI / 3 };
+    const maxSegmentAngle = Math.PI / 96;
+    const plans = planRouteArcLegs(points, maxSegmentAngle, 8192, arc);
+    const legs = buildRouteArcLegSamples(points, maxSegmentAngle, 8192, arc);
+
+    expect(plans).toHaveLength(4);
+    expect(legs).toHaveLength(4);
+    expect(plans[2].startHandleAngle === 0 || plans[2].endHandleAngle === 0).toBe(true);
+    // The pre-collapse plan used 68 samples here, but after only one endpoint
+    // slope collapses the remaining Hermite curvature moves inward and needs
+    // a denser witness. Revalidate the rendered span instead of inheriting the
+    // old count simply because the route still fits the global budget.
+    expect(plans[2].segmentCount).toBeGreaterThan(68);
+    expect(plans.reduce((sum, plan) => sum + plan.segmentCount, 0))
+      .toBeLessThanOrEqual(4096);
+    for (const leg of legs) expectRouteLegSamplingWithinTolerance(leg, maxSegmentAngle);
+  });
+
+  it("caps spherical spline deviation and collapses near-U-turn handles instead of looping (#352)", () => {
+    const points = [
+      { lat: 0, lon: 0 },
+      { lat: 0, lon: 40 },
+      { lat: 0.5, lon: 1 },
+    ];
+    const arc = { arcHeightRatio: 0.22, arcSaturationAngle: Math.PI / 3 };
+    const plans = planRouteArcLegs(points, Math.PI / 180, 8192, arc);
+    const legs = buildRouteArcLegSamples(points, Math.PI / 180, 8192, arc);
+
+    expect(plans[0].endHandleAngle).toBeLessThan(0.02);
+    expect(plans[1].startHandleAngle).toBeLessThan(0.02);
+
+    plans.forEach((plan, index) => {
+      const leg = legs[index];
+      const normal = plan.start.clone().cross(plan.end);
+      if (normal.lengthSq() > 1e-18) normal.normalize();
+      let previousAlong = -1;
+      for (let vertex = 0; vertex < routeArcVertexCount(leg); vertex += 1) {
+        const direction = sampleAt(leg, vertex, 1, 0).normalize();
+        if (normal.lengthSq() > 0) {
+          const crossTrack = Math.asin(Math.min(1, Math.abs(direction.dot(normal))));
+          expect(crossTrack).toBeLessThanOrEqual(MAX_ROUTE_SPLINE_DEVIATION + 1e-6);
+        }
+        const along = plan.start.angleTo(direction);
+        expect(along).toBeLessThanOrEqual(plan.angle + 1e-5);
+        expect(along + 1e-5).toBeGreaterThanOrEqual(previousAlong);
+        previousAlong = along;
+      }
+      expect(Math.max(...leg.lifts)).toBeLessThanOrEqual(
+        maxRepresentableArcLift(plan.angle, plan.segmentCount) + 1e-7,
+      );
+    });
+  });
+
+  it("keeps asymmetric near-reversal spline progress inside each leg without backward hooks (#352 review)", () => {
+    const points = [
+      { lat: -75.534343, lon: 30.884792 },
+      { lat: -74.438199, lon: -129.350272 },
+      { lat: 68.163208, lon: 30.198264 },
+    ];
+    const arc = { arcHeightRatio: 0.22, arcSaturationAngle: Math.PI / 3 };
+    const plans = planRouteArcLegs(points, Math.PI / 96, 8192, arc);
+    const legs = buildRouteArcLegSamples(points, Math.PI / 96, 8192, arc);
+
+    expect(legs).toHaveLength(2);
+    plans.forEach((plan, index) => {
+      let previousProgress = -1e-8;
+      for (let vertex = 0; vertex < routeArcVertexCount(legs[index]); vertex += 1) {
+        const direction = sampleAt(legs[index], vertex, 1, 0).normalize();
+        const progress = plan.start.angleTo(direction);
+        expect(progress).toBeLessThanOrEqual(plan.angle + 1e-6);
+        expect(progress + 1e-6).toBeGreaterThanOrEqual(previousProgress);
+        previousProgress = progress;
+      }
+    });
+  });
+
+  it("keeps near-antipodal geodesic samples continuous to the real endpoint (#352 review)", () => {
+    const points = [
+      { lat: 0, lon: 0 },
+      { lat: 0.04, lon: 179.96 },
+    ];
+    const arc = { arcHeightRatio: 0.22, arcSaturationAngle: Math.PI / 3 };
+    const maxSegmentAngle = Math.PI / 96;
+    const plans = planRouteArcLegs(points, maxSegmentAngle, 8192, arc);
+    const legs = buildRouteArcLegSamples(points, maxSegmentAngle, 8192, arc);
+
+    expect(plans).toHaveLength(1);
+    expect(legs).toHaveLength(1);
+    // A near-antipodal pair still defines a unique great-circle plane. The
+    // sampler must follow that plane continuously instead of burning the whole
+    // 4096-segment budget and snapping to the endpoint on the final sample.
+    expect(plans[0].segmentCount).toBeLessThan(4096);
+    expectRouteLegSamplingWithinTolerance(legs[0], maxSegmentAngle);
+    const end = latLonToVector3(points[1].lat, points[1].lon, 1).normalize();
+    expect(sampleAt(legs[0], routeArcVertexCount(legs[0]) - 1, 1, 0).normalize()
+      .distanceTo(end)).toBeLessThan(1e-6);
+  });
+
+  it("preserves the endpoint-defined plane for extremely near-antipodal legs (#352 review)", () => {
+    const points = [
+      { lat: 0, lon: 0 },
+      { lat: 0.00000001, lon: 180 },
+    ];
+    const arc = { arcHeightRatio: 0.22, arcSaturationAngle: Math.PI / 3 };
+    const maxSegmentAngle = Math.PI / 96;
+    const plans = planRouteArcLegs(points, maxSegmentAngle, 8192, arc);
+    const legs = buildRouteArcLegSamples(points, maxSegmentAngle, 8192, arc);
+
+    expect(plans).toHaveLength(1);
+    expect(legs).toHaveLength(1);
+    expect(plans[0].segmentCount).toBeLessThan(4096);
+    expectRouteLegSamplingWithinTolerance(legs[0], maxSegmentAngle);
+
+    const start = latLonToVector3(points[0].lat, points[0].lon, 1).normalize();
+    const end = latLonToVector3(points[1].lat, points[1].lon, 1).normalize();
+    const planeNormal = start.clone().cross(end).normalize();
+    const midpoint = sampleAt(
+      legs[0],
+      Math.floor((routeArcVertexCount(legs[0]) - 1) / 2),
+      1,
+      0,
+    ).normalize();
+
+    // This pair has a tiny but real endpoint-defined great-circle plane. The
+    // arbitrary exact-antipode fallback would put the midpoint about 90° off
+    // that plane even though the endpoint itself is only 1e-8° away.
+    expect(Math.abs(midpoint.dot(planeNormal))).toBeLessThan(1e-6);
+    expect(sampleAt(legs[0], routeArcVertexCount(legs[0]) - 1, 1, 0).normalize()
+      .distanceTo(end)).toBeLessThan(1e-6);
+  });
+
+  it("keeps exact antipodes on a stable fallback plane despite projection roundoff (#352 review)", () => {
+    const points = [
+      { lat: 32.334299644602794, lon: 18.504816385062583 },
+      { lat: -32.334299644602794, lon: -161.49518361493742 },
+    ];
+    const arc = { arcHeightRatio: 0.22, arcSaturationAngle: Math.PI / 3 };
+    const maxSegmentAngle = Math.PI / 96;
+    const plans = planRouteArcLegs(points, maxSegmentAngle, 8192, arc);
+    const legs = buildRouteArcLegSamples(points, maxSegmentAngle, 8192, arc);
+
+    expect(plans).toHaveLength(1);
+    expect(legs).toHaveLength(1);
+    // Roundoff from an exact antipode must not be amplified into a bogus tiny
+    // endpoint tangent that burns the whole route budget and still snaps.
+    expect(plans[0].segmentCount).toBeLessThan(4096);
+    expectRouteLegSamplingWithinTolerance(legs[0], maxSegmentAngle);
+    const end = latLonToVector3(points[1].lat, points[1].lon, 1).normalize();
+    expect(sampleAt(legs[0], routeArcVertexCount(legs[0]) - 1, 1, 0).normalize()
+      .distanceTo(end)).toBeLessThan(1e-6);
+  });
+
+  it("allocates enough interior samples for long near-antipodal spline curvature (#352 review)", () => {
+    const points = [
+      { lat: -62.542382, lon: 175.620270 },
+      { lat: -86.715906, lon: 132.043252 },
+      { lat: 84.425311, lon: -90.503350 },
+    ];
+    const arc = { arcHeightRatio: 0.22, arcSaturationAngle: Math.PI / 3 };
+    const maxSegmentAngle = Math.PI / 96;
+    const legs = buildRouteArcLegSamples(points, maxSegmentAngle, 8192, arc);
+
+    expect(legs).toHaveLength(2);
+    for (const leg of legs) {
+      const directions: Vector3[] = [sampleAt(leg, 0, 1, 0).normalize()];
+      for (let vertex = 1; vertex < routeArcVertexCount(leg); vertex += 2) {
+        directions.push(sampleAt(leg, vertex, 1, 0).normalize());
+      }
+      for (let index = 1; index < directions.length; index += 1) {
+        expect(directions[index - 1].angleTo(directions[index]))
+          .toBeLessThanOrEqual(maxSegmentAngle + 1e-6);
+      }
+      for (let index = 1; index < directions.length - 1; index += 1) {
+        const anchor = directions[index];
+        const incoming = directions[index - 1]
+          .clone()
+          .addScaledVector(anchor, -anchor.dot(directions[index - 1]))
+          .normalize()
+          .multiplyScalar(-1);
+        const outgoing = directions[index + 1]
+          .clone()
+          .addScaledVector(anchor, -anchor.dot(directions[index + 1]))
+          .normalize();
+        if (incoming.lengthSq() > 0 && outgoing.lengthSq() > 0) {
+          expect(incoming.angleTo(outgoing))
+            .toBeLessThanOrEqual(ROUTE_SPLINE_JOIN_TOLERANCE + 1e-6);
+        }
+      }
+    }
+  });
+
+  it("rebalances post-budget spline density without violating the hard route budget (#352 review)", () => {
+    const motif = [
+      { lat: -49.800555, lon: -130.299050 },
+      { lat: -86.335613, lon: -158.363781 },
+      { lat: -72.167089, lon: 163.880242 },
+    ];
+    const points = Array.from({ length: 20 }, () => motif).flat();
+    const arc = { arcHeightRatio: 0.22, arcSaturationAngle: Math.PI / 3 };
+    const maxSegmentAngle = Math.PI / 96;
+    const plans = planRouteArcLegs(points, maxSegmentAngle, 8192, arc);
+    const legs = buildRouteArcLegSamples(points, maxSegmentAngle, 8192, arc);
+
+    expect(points).toHaveLength(60);
+    expect(plans).toHaveLength(59);
+    expect(legs).toHaveLength(59);
+    expect(plans.reduce((sum, plan) => sum + plan.segmentCount, 0))
+      .toBeLessThanOrEqual(4096);
+
+    const fifteenDegreeLegs = plans.filter((plan) => (
+      Math.abs((plan.angle * 180) / Math.PI - 15.0979446616) < 1e-6
+    ));
+    expect(fifteenDegreeLegs.length).toBeGreaterThan(0);
+    expect(Math.min(...fifteenDegreeLegs.map((plan) => plan.segmentCount)))
+      .toBeGreaterThanOrEqual(52);
+
+    for (const leg of legs) {
+      const directions: Vector3[] = [sampleAt(leg, 0, 1, 0).normalize()];
+      for (let vertex = 1; vertex < routeArcVertexCount(leg); vertex += 2) {
+        directions.push(sampleAt(leg, vertex, 1, 0).normalize());
+      }
+      for (let index = 1; index < directions.length; index += 1) {
+        expect(directions[index - 1].angleTo(directions[index]))
+          .toBeLessThanOrEqual(maxSegmentAngle + 1e-6);
+      }
+      for (let index = 1; index < directions.length - 1; index += 1) {
+        const anchor = directions[index];
+        const incoming = directions[index - 1]
+          .clone()
+          .addScaledVector(anchor, -anchor.dot(directions[index - 1]))
+          .normalize()
+          .multiplyScalar(-1);
+        const outgoing = directions[index + 1]
+          .clone()
+          .addScaledVector(anchor, -anchor.dot(directions[index + 1]))
+          .normalize();
+        if (incoming.lengthSq() > 0 && outgoing.lengthSq() > 0) {
+          expect(incoming.angleTo(outgoing))
+            .toBeLessThanOrEqual(ROUTE_SPLINE_JOIN_TOLERANCE + 1e-6);
+        }
+      }
+    }
+  });
+
+  it("falls back to rendered spline floors when historical collapse floors exceed the budget (#352 review)", () => {
+    const motif = [
+      { lat: 44.296206, lon: -88.568000 },
+      { lat: 17.235804, lon: -74.729180 },
+      { lat: 67.624071, lon: -78.464036 },
+      { lat: -71.839474, lon: 125.978889 },
+      { lat: 66.739922, lon: -46.680545 },
+    ];
+    const points = Array.from({ length: 13 }, () => motif).flat().slice(0, 61);
+    const arc = { arcHeightRatio: 0.22, arcSaturationAngle: Math.PI / 3 };
+    const maxSegmentAngle = Math.PI / 96;
+    const plans = planRouteArcLegs(points, maxSegmentAngle, 8192, arc);
+    const legs = buildRouteArcLegSamples(points, maxSegmentAngle, 8192, arc);
+
+    expect(points).toHaveLength(61);
+    expect(plans).toHaveLength(60);
+    expect(legs).toHaveLength(60);
+    expect(plans.reduce((sum, plan) => sum + plan.segmentCount, 0))
+      .toBeLessThanOrEqual(4096);
+    // The pre-collapse compliant floors for this exact fixture total more than
+    // the route budget, while the collapsed shapes have a compliant allocation
+    // that fits. Falling back to the scaled best-effort counts under-samples
+    // recurring legs, so validate the geometry that is actually rendered.
+    for (const leg of legs) expectRouteLegSamplingWithinTolerance(leg, maxSegmentAngle);
+  });
+
+  it("short-circuits impossible rendered-floor searches at the 512-point route cap (#352 review)", () => {
+    const motif = [
+      { lat: 0, lon: 0 },
+      { lat: 0.000001, lon: 179.999999 },
+      { lat: 30, lon: 20 },
+    ];
+    const points = Array.from({ length: 171 }, () => motif).flat().slice(0, 512);
+    const arc = { arcHeightRatio: 0.22, arcSaturationAngle: Math.PI / 3 };
+    const maxSegmentAngle = Math.PI / 96;
+    const plans = planRouteArcLegs(points, maxSegmentAngle, 8192, arc);
+    const repeated = planRouteArcLegs(points, maxSegmentAngle, 8192, arc);
+
+    expect(points).toHaveLength(512);
+    expect(plans).toHaveLength(511);
+    expect(plans.reduce((sum, plan) => sum + plan.segmentCount, 0))
+      .toBeLessThanOrEqual(4096);
+    expect(plans.every((plan) => plan.segmentCount >= 1)).toBe(true);
+    // This near-antipodal route cannot fit the complete rendered floor vector.
+    // Floor discovery may stop once that is proven, but the returned #242
+    // best-effort allocation must remain deterministic and preserve every leg.
+    expect(repeated.map((plan) => plan.segmentCount))
+      .toEqual(plans.map((plan) => plan.segmentCount));
+  });
+
+  it("does not treat an endpoint-only spline sample as a compliant budget floor (#352 review)", () => {
+    const motif = [
+      { lat: 0, lon: 0 },
+      { lat: 0, lon: 1 },
+      { lat: 30, lon: 50 },
+      { lat: -20, lon: 100 },
+      { lat: 25, lon: 145 },
+      { lat: -35, lon: -170 },
+      { lat: 10, lon: -100 },
+    ];
+    const points = Array.from({ length: 9 }, () => motif).flat().slice(0, 60);
+    const arc = { arcHeightRatio: 0.22, arcSaturationAngle: Math.PI / 3 };
+    const maxSegmentAngle = Math.PI / 96;
+    const plans = planRouteArcLegs(points, maxSegmentAngle, 8192, arc);
+    const legs = buildRouteArcLegSamples(points, maxSegmentAngle, 8192, arc);
+
+    expect(points).toHaveLength(60);
+    expect(plans).toHaveLength(59);
+    expect(legs).toHaveLength(59);
+    expect(plans.reduce((sum, plan) => sum + plan.segmentCount, 0))
+      .toBeLessThanOrEqual(4096);
+    expect((plans[0].angle * 180) / Math.PI).toBeCloseTo(1, 6);
+    expect(plans[0].segmentCount).toBeGreaterThan(76);
+
+    for (const leg of legs) {
+      const directions: Vector3[] = [sampleAt(leg, 0, 1, 0).normalize()];
+      for (let vertex = 1; vertex < routeArcVertexCount(leg); vertex += 2) {
+        directions.push(sampleAt(leg, vertex, 1, 0).normalize());
+      }
+      for (let index = 1; index < directions.length; index += 1) {
+        expect(directions[index - 1].angleTo(directions[index]))
+          .toBeLessThanOrEqual(maxSegmentAngle + 1e-6);
+      }
+      for (let index = 1; index < directions.length - 1; index += 1) {
+        const anchor = directions[index];
+        const incoming = directions[index - 1]
+          .clone()
+          .addScaledVector(anchor, -anchor.dot(directions[index - 1]))
+          .normalize()
+          .multiplyScalar(-1);
+        const outgoing = directions[index + 1]
+          .clone()
+          .addScaledVector(anchor, -anchor.dot(directions[index + 1]))
+          .normalize();
+        if (incoming.lengthSq() > 0 && outgoing.lengthSq() > 0) {
+          expect(incoming.angleTo(outgoing))
+            .toBeLessThanOrEqual(ROUTE_SPLINE_JOIN_TOLERANCE + 1e-6);
+        }
+      }
+    }
+  });
+
+  it("keeps density rebalancing active when a dense route contains a duplicate Route Point (#352 review)", () => {
+    const motif = [
+      { lat: 0, lon: 0 },
+      { lat: 0, lon: 1 },
+      { lat: 30, lon: 50 },
+      { lat: -20, lon: 100 },
+      { lat: 25, lon: 145 },
+      { lat: -35, lon: -170 },
+      { lat: 10, lon: -100 },
+    ];
+    const points = Array.from({ length: 9 }, () => motif).flat().slice(0, 60);
+    points[points.length - 1] = { ...points[points.length - 2] };
+    const arc = { arcHeightRatio: 0.22, arcSaturationAngle: Math.PI / 3 };
+    const maxSegmentAngle = Math.PI / 96;
+    const plans = planRouteArcLegs(points, maxSegmentAngle, 8192, arc);
+    const legs = buildRouteArcLegSamples(points, maxSegmentAngle, 8192, arc);
+
+    expect(plans).toHaveLength(59);
+    expect(legs).toHaveLength(59);
+    expect(plans[plans.length - 1].angle).toBeLessThanOrEqual(1e-12);
+    expect(plans[plans.length - 1].segmentCount).toBe(1);
+    expect(plans[0].segmentCount).toBeGreaterThan(78);
+    expect(plans.reduce((sum, plan) => sum + plan.segmentCount, 0))
+      .toBeLessThanOrEqual(4096);
+    for (const leg of legs) expectRouteLegSamplingWithinTolerance(leg, maxSegmentAngle);
+  });
+
+  it("does not infer compliance from an aliased two-segment spline probe (#352 review)", () => {
+    const motif = [
+      { lat: 72.825361, lon: 176.895686 },
+      { lat: 70.572676, lon: -178.701490 },
+      { lat: -76.187329, lon: -11.914533 },
+    ];
+    const points = Array.from({ length: 20 }, () => motif).flat();
+    const arc = { arcHeightRatio: 0.22, arcSaturationAngle: Math.PI / 3 };
+    const maxSegmentAngle = Math.PI / 96;
+    const plans = planRouteArcLegs(points, maxSegmentAngle, 8192, arc);
+    const legs = buildRouteArcLegSamples(points, maxSegmentAngle, 8192, arc);
+
+    expect(points).toHaveLength(60);
+    expect(plans).toHaveLength(59);
+    expect(legs).toHaveLength(59);
+    expect(plans[0].segmentCount).toBe(5);
+    expect(plans.reduce((sum, plan) => sum + plan.segmentCount, 0))
+      .toBeLessThanOrEqual(4096);
+    for (const leg of legs) expectRouteLegSamplingWithinTolerance(leg, maxSegmentAngle);
+  });
+
+  it("keeps route-wide and per-leg spline samples byte-identical and deterministic (#352)", () => {
+    const points = [
+      { lat: 34.0522, lon: -118.2437 },
+      { lat: 35.3733, lon: -119.0187 },
+      { lat: 36.7378, lon: -119.7871 },
+      { lat: 36.1699, lon: -115.1398 },
+    ];
+    const arc = { arcHeightRatio: 0.22, arcSaturationAngle: Math.PI / 3 };
+    const first = buildRouteArcSamples(points, Math.PI / 96, 8192, arc);
+    const second = buildRouteArcSamples(points, Math.PI / 96, 8192, arc);
+    const legs = buildRouteArcLegSamples(points, Math.PI / 96, 8192, arc);
+    const legDirections = legs.flatMap((leg) => [...leg.directions]);
+    const legLifts = legs.flatMap((leg) => [...leg.lifts]);
+
+    expect([...first.directions]).toEqual([...second.directions]);
+    expect([...first.lifts]).toEqual([...second.lifts]);
+    expect([...first.directions]).toEqual(legDirections);
+    expect([...first.lifts]).toEqual(legLifts);
+
+    legs.forEach((leg, index) => {
+      const start = latLonToVector3(points[index].lat, points[index].lon, 1).normalize();
+      const end = latLonToVector3(points[index + 1].lat, points[index + 1].lon, 1).normalize();
+      expect(sampleAt(leg, 0, 1, 0).normalize().distanceTo(start)).toBeLessThan(1e-6);
+      expect(sampleAt(leg, routeArcVertexCount(leg) - 1, 1, 0).normalize().distanceTo(end))
+        .toBeLessThan(1e-6);
+    });
   });
 
   it("builds one sample set per leg for stop-by-stop reveal (#21 review)", () => {
