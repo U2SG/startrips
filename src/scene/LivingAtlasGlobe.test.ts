@@ -195,12 +195,12 @@ describe("Home Base presence projection (ST-056)", () => {
   });
   it("keeps Home presence on the particle owner through prewarm/blend and off the detail owner", () => {
     const source = readFileSync(new URL("./LivingAtlasGlobe.tsx", import.meta.url), "utf8");
-    expect(source).toContain('const homeBaseInteractive = dive.owner !== "detail"');
+    expect(source).toContain('const homeBaseInteractive = effectiveDive.owner !== "detail"');
     expect(source).toContain('onHomeBaseActivate: homeBaseInteractive ? onHomeBaseActivate : undefined');
   });
   it("yields the Home hit target completely while globe point-picking owns pointer input", () => {
     const source = readFileSync(new URL("./LivingAtlasGlobe.tsx", import.meta.url), "utf8");
-    expect(source).toContain('const homeBaseInteractive = dive.owner !== "detail"');
+    expect(source).toContain('const homeBaseInteractive = effectiveDive.owner !== "detail"');
     expect(source).toContain('onHomeBaseActivate: homeBaseInteractive ? onHomeBaseActivate : undefined');
   });
 
