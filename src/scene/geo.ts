@@ -217,17 +217,26 @@ function routeLegSplineFrame(start: Vector3, end: Vector3) {
   };
 }
 
+type RouteSplineDesiredCrossTrackSlope = {
+  slope: number;
+  representable: boolean;
+};
+
 function splineDesiredCrossTrackSlope(
   tangent: Vector3,
   travel: Vector3,
   normal: Vector3,
   handleAngle: number,
   legAngle: number,
-) {
-  if (!(handleAngle > 0) || tangent.lengthSq() < 1e-18) return 0;
+): RouteSplineDesiredCrossTrackSlope {
+  if (!(handleAngle > 0)) return { slope: 0, representable: true };
+  if (tangent.lengthSq() < 1e-18) return { slope: 0, representable: false };
   const along = tangent.dot(travel);
-  if (!(along > 1e-9)) return 0;
-  return legAngle * tangent.dot(normal) / along;
+  if (!(along > 1e-9)) return { slope: 0, representable: false };
+  return {
+    slope: legAngle * tangent.dot(normal) / along,
+    representable: true,
+  };
 }
 
 type RouteSplineCrossTrackSlopes = {
@@ -261,11 +270,11 @@ function boundedSplineCrossTrackSlopes(
   );
   let start = Math.max(
     -3 * startHandleAngle,
-    Math.min(3 * startHandleAngle, desiredStart),
+    Math.min(3 * startHandleAngle, desiredStart.slope),
   );
   let end = Math.max(
     -3 * endHandleAngle,
-    Math.min(3 * endHandleAngle, desiredEnd),
+    Math.min(3 * endHandleAngle, desiredEnd.slope),
   );
 
   // Both Hermite basis functions peak at 4/27 in magnitude. Scale endpoint
@@ -281,8 +290,10 @@ function boundedSplineCrossTrackSlopes(
   return {
     start,
     end,
-    startPreservesTangent: Math.abs(start - desiredStart) <= 1e-12,
-    endPreservesTangent: Math.abs(end - desiredEnd) <= 1e-12,
+    startPreservesTangent: desiredStart.representable
+      && Math.abs(start - desiredStart.slope) <= 1e-12,
+    endPreservesTangent: desiredEnd.representable
+      && Math.abs(end - desiredEnd.slope) <= 1e-12,
   };
 }
 

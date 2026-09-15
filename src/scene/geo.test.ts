@@ -657,6 +657,35 @@ describe("route arc geometry", () => {
     for (const leg of legs) expectRouteLegSamplingWithinTolerance(leg, maxSegmentAngle);
   });
 
+  it("collapses near-perpendicular active shared tangents instead of treating zero slope as preserved (#352 review)", () => {
+    const points = [
+      { lat: -2.864788976227074, lon: 0 },
+      { lat: 0, lon: 0 },
+      { lat: -2.8612057544957006, lon: -4.966092947444857 },
+    ];
+    const arc = { arcHeightRatio: 0.22, arcSaturationAngle: Math.PI / 3 };
+    const maxSegmentAngle = Math.PI / 96;
+    const plans = planRouteArcLegs(points, maxSegmentAngle, 8192, arc);
+    const legs = buildRouteArcLegSamples(points, maxSegmentAngle, 8192, arc);
+
+    expect(plans).toHaveLength(2);
+    expect(legs).toHaveLength(2);
+    expect(plans[0].endTangent.distanceTo(plans[1].startTangent)).toBeLessThan(1e-12);
+    // The shared tangent is effectively perpendicular to one leg's forward
+    // travel (the along component is ~1e-10). That active tangent cannot be
+    // represented by a stable Hermite cross-track slope. Treat it as an
+    // explicit unrepresentable join and collapse both sides rather than
+    // silently substituting slope=0 and claiming the tangent was preserved.
+    expect(plans[0].endHandleAngle).toBe(0);
+    expect(plans[1].startHandleAngle).toBe(0);
+
+    const anchor = latLonToVector3(points[1].lat, points[1].lon, 1).normalize();
+    expect(sampleAt(legs[0], routeArcVertexCount(legs[0]) - 1, 1, 0).normalize()
+      .distanceTo(anchor)).toBeLessThan(1e-6);
+    expect(sampleAt(legs[1], 0, 1, 0).normalize().distanceTo(anchor)).toBeLessThan(1e-6);
+    for (const leg of legs) expectRouteLegSamplingWithinTolerance(leg, maxSegmentAngle);
+  });
+
   it("collapses the same unrepresentable join before full-budget dense-route scaling (#352 review)", () => {
     const points = [
       { lat: 20.195286, lon: -111.169866 },
