@@ -16,6 +16,25 @@ The readiness workflow uses latest-event-wins supersession without cancelling ol
 
 Do not add `merge-ready` before the final CI/review pass. The controller verifies that `ci / verify` succeeded for the current head and scans every page of review conversations before it overwrites the `merge-readiness` status to **success**. If sign-off is attempted too early, the status is rejected and the label is removed.
 
+## Pull request communication policy
+
+**GitHub comments are an exception channel, not a progress log.** The normal source of truth is the PR diff/body, GitHub checks, the authoritative ONE control plane, and the per-PR ledger. Do not duplicate those state machines into Conversation comments.
+
+ONE is external to the repository. On the managed Startrips workspace its authoritative file is `D:/startrips/loop-workspace/feature_list.json`; selector/process details are documented in [`docs/agent-pr-communication.md`](docs/agent-pr-communication.md). Do not create a repository copy or a second backlog/lock/selector. Contributors without access to that managed workspace should rely on PR/CI/review evidence and must not invent ONE state.
+
+For a normal implementation PR:
+
+1. Use at most one concise fresh review request per CODE Source and one compact final `HANDOFF_REVIEW` top-level comment.
+2. Add another top-level comment only when a human decision is required, a blocker cannot be represented by CI/ONE/review state, or a safety/security/data-loss/migration concern needs explicit visibility.
+3. Do **not** post progress narration for CI starting/finishing, rebase status, mergeability, expected ledger/verify red, targeted reruns, or routine “fixed in SHA” updates. Let checks, commits, review threads, and ONE carry that evidence.
+4. Do **not** reply to every review finding. If the finding is valid, fix it on the same owner lane and resolve the conversation once exact-head evidence shows the finding is gone. Reply only when disagreeing with the finding, clarifying ambiguous product intent, or recording a constraint that cannot be inferred from the diff.
+5. Keep `@codex review` requests minimal: identify the exact CODE Source SHA and request review of the current head. Do not restate the PR scope, prior findings, CI history, or feature narrative already present elsewhere.
+6. Known intermittent same-SHA reruns do not need a Conversation comment unless the rerun changes the acceptance rule or requires owner authorization. Record the accepted evidence in the ledger/HANDOFF instead.
+7. Maintainers are zero-comment by default: verify evidence, resolve demonstrably outdated conversations when policy requires, apply `merge-ready` last, wait for the post-sign controller, and merge. Comment only when refusing the gate or requesting a human decision.
+8. Keep `HANDOFF_REVIEW` compact and machine-readable: CODE Source SHA, final SHA, exact final CI run, review-clear evidence, ledger-only relation, and ONE `ready_for_eval` state. Do not re-explain the feature.
+
+Existing comments remain part of the audit trail; this policy applies prospectively. The goal is to keep PR Conversation focused on decisions and exceptions while progress and verification stay in systems that already model them.
+
 ## Stacked pull requests
 
 Stacked PRs may target their parent feature branch while the stack is under development. The readiness check deliberately defers enforcement while the base is not `main`.
