@@ -94,7 +94,7 @@
 .startrips-not-found section { align-self: center; max-width: 440px; }
 .startrips-not-found__code { margin: 0; font: 400 clamp(64px, 16vw, 104px)/1.1 var(--archive-serif); }
 .startrips-not-found h1 { margin: 16px 0; font: 400 clamp(24px, 5vw, 32px)/1.4 var(--archive-serif); }
-.startrips-not-found section > p:not(.startrips-not-found__code) { color: var(--startrips-muted); font-size: 14px; line-height: 1.8; }
+.startrips-not-found section > p:not(.startrips-not-found__code):not(.startrips-recovery-surface__code) { color: var(--startrips-muted); font-size: 14px; line-height: 1.8; }
 .startrips-not-found a {
   display: inline-flex;
   align-items: center;
