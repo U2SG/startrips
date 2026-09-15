@@ -599,7 +599,11 @@ try {
   );
   const coldFar = await readDive(coldPolicy.page);
   await activateButton(coldPolicy.page, coldPolicy.page.locator("[data-qa-earth-motion-toggle]"));
-  await coldPolicy.page.waitForTimeout(100);
+  await coldPolicy.page.waitForFunction(
+    (beforeBlendMs) => document.querySelector("[data-earth-dive]")?.style.getPropertyValue("--earth-dive-blend-ms") !== beforeBlendMs,
+    coldBefore.blendMs,
+    { timeout: 5_000 },
+  );
   const coldReducedMotion = await readDive(coldPolicy.page);
   await activateButton(coldPolicy.page, coldPolicy.page.locator('[data-qa-earth-quality="low"]'));
   await coldPolicy.page.waitForFunction(() => document.querySelector(".particle-earth-scene")?.getAttribute("data-quality") === "low");
