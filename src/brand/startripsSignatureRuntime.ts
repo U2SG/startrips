@@ -102,7 +102,7 @@ export function createStartripsSignatureRuntime({
   return {
     start,
     interrupt() {
-      if (!disposed && !reducedMode && !settled && !interrupted) settle("interrupted");
+      if (!disposed && !settled && !interrupted) settle("interrupted");
     },
     setSuspended(value: boolean) {
       if (disposed || settled || interrupted || suspended === value) return;
