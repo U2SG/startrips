@@ -154,6 +154,8 @@ jobs:
             command: pnpm qa:attention-hierarchy
           - name: brand-signature-motion
             command: pnpm qa:brand-signature-motion
+          - name: recovery-surfaces
+            command: pnpm qa:recovery-surfaces
           - name: mobile-contract
             command: pnpm qa:mobile-contract
           - name: globe-focus-chrome

@@ -84,7 +84,7 @@ export function createStartripsSignatureRuntime({
   }
 
   const start = () => {
-    if (disposed || settled) return;
+    if (disposed || settled || interrupted) return;
     if (reducedMode) {
       settle("reduced");
       return;
@@ -102,10 +102,10 @@ export function createStartripsSignatureRuntime({
   return {
     start,
     interrupt() {
-      if (!disposed && !reducedMode && !settled) settle("interrupted");
+      if (!disposed && !reducedMode && !settled && !interrupted) settle("interrupted");
     },
     setSuspended(value: boolean) {
-      if (disposed || settled || suspended === value) return;
+      if (disposed || settled || interrupted || suspended === value) return;
       suspended = value;
       lastNow = scheduler.now();
       if (suspended) {
@@ -116,7 +116,7 @@ export function createStartripsSignatureRuntime({
       }
     },
     setReduced(value: boolean) {
-      if (disposed || settled || reducedMode === value) return;
+      if (disposed || settled || interrupted || reducedMode === value) return;
       reducedMode = value;
       if (reducedMode) {
         settle("reduced");

@@ -3,6 +3,8 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { AuthGateway } from "./auth/AuthGateway";
 import { StartripsNotFound } from "./brand/StartripsNotFound";
+import { StartripsRecoverySurface } from "./brand/StartripsRecoverySurface";
+import type { StartripsRecoveryKind } from "./brand/startripsRecoverySurface";
 import { StartripsBrandLoader } from "./brand/StartripsBrandMark";
 import { LivingAtlasApp } from "./journey/LivingAtlasApp";
 import { useCompactMobileLayout } from "./journey/mobileLayout";
@@ -850,6 +852,32 @@ function BrandSignatureMotionQaPreview() {
   );
 }
 
+function RecoverySurfaceQaPreview() {
+  const params = new URLSearchParams(window.location.search);
+  const requested = params.get("qaMode");
+  const kind: StartripsRecoveryKind = requested === "not-found" || requested === "error" ? requested : "empty";
+  const [intent, setIntent] = useState("idle");
+  const markIntent = (name: string) => setIntent(name);
+  const rootClassName = kind === "not-found"
+    ? "startrips-not-found"
+    : `living-atlas${kind === "error" ? " is-error" : " is-mobile-v2"}`;
+  return (
+    <main
+      className={`${rootClassName} recovery-surface-qa recovery-surface-qa--${kind}`}
+      data-qa-recovery-surface={kind}
+      data-qa-recovery-intent={intent}
+    >
+      <StartripsRecoverySurface
+        kind={kind}
+        className={kind === "empty" ? "living-atlas__empty" : undefined}
+        detail={kind === "error" ? "QA recoverable service error" : undefined}
+        onPrimaryAction={() => markIntent(kind === "error" ? "retry" : kind === "empty" ? "create" : "home")}
+        onSecondaryAction={kind === "not-found" ? () => markIntent("back") : undefined}
+      />
+    </main>
+  );
+}
+
 const Experience = import.meta.env.DEV && qaState === "journey-composer"
   ? JourneyComposerQaPreview
   : import.meta.env.DEV && qaState === "journey-story"
@@ -870,6 +898,8 @@ const Experience = import.meta.env.DEV && qaState === "journey-composer"
     ? LivingAtlasQaPreview
   : import.meta.env.DEV && qaState === "brand-signature-motion"
     ? BrandSignatureMotionQaPreview
+  : import.meta.env.DEV && qaState === "recovery-surfaces"
+    ? RecoverySurfaceQaPreview
   : import.meta.env.DEV && qaState === "final-acceptance"
     ? LivingAtlasApp
   : import.meta.env.DEV && qaState
