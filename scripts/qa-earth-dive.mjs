@@ -433,6 +433,11 @@ function cssDurationMs(value) {
   return Number.NaN;
 }
 
+async function activateButton(page, locator) {
+  await locator.focus();
+  await page.keyboard.press("Enter");
+}
+
 /**
  * What each renderer is publishing right now, plus the error between them.
  * Both anchors are viewport CSS pixels and both scales are viewport CSS pixels
@@ -579,22 +584,22 @@ try {
   await coldPolicy.page.waitForTimeout(800);
   const coldBefore = await readDive(coldPolicy.page);
   const coldIntent = coldPolicy.page.locator('[data-earth-dive-intent="true"]');
-  await coldIntent.click();
+  await activateButton(coldPolicy.page, coldIntent);
   await coldPolicy.page.waitForTimeout(250);
   const coldNear = await readDive(coldPolicy.page);
-  await coldIntent.click();
+  await activateButton(coldPolicy.page, coldIntent);
   await coldPolicy.page.waitForTimeout(250);
   const coldFar = await readDive(coldPolicy.page);
-  await coldPolicy.page.locator("[data-qa-earth-motion-toggle]").click();
+  await activateButton(coldPolicy.page, coldPolicy.page.locator("[data-qa-earth-motion-toggle]"));
   await coldPolicy.page.waitForTimeout(100);
   const coldReducedMotion = await readDive(coldPolicy.page);
-  await coldPolicy.page.locator('[data-qa-earth-quality="low"]').click();
+  await activateButton(coldPolicy.page, coldPolicy.page.locator('[data-qa-earth-quality="low"]'));
   await coldPolicy.page.waitForFunction(() => document.querySelector(".particle-earth-scene")?.getAttribute("data-quality") === "low");
   const coldLowQuality = await readDive(coldPolicy.page);
-  await coldPolicy.page.locator('[data-qa-earth-quality="high"]').click();
+  await activateButton(coldPolicy.page, coldPolicy.page.locator('[data-qa-earth-quality="high"]'));
   await coldPolicy.page.waitForFunction(() => document.querySelector(".particle-earth-scene")?.getAttribute("data-quality") === "high");
   const coldHighQuality = await readDive(coldPolicy.page);
-  await coldPolicy.page.locator("[data-qa-earth-dive-refocus]").click();
+  await activateButton(coldPolicy.page, coldPolicy.page.locator("[data-qa-earth-dive-refocus]"));
   await coldPolicy.page.waitForTimeout(250);
   const coldRefocus = await readDive(coldPolicy.page);
   const coldDetailRequests = coldPolicy.requests.filter((url) => (
@@ -683,7 +688,7 @@ try {
       );
     }
     const before = await readDive(transition.page);
-    await transition.page.locator('[data-qa-earth-policy="particle-only"]').click();
+    await activateButton(transition.page, transition.page.locator('[data-qa-earth-policy="particle-only"]'));
     await transition.page.waitForFunction(() => {
       const globe = document.querySelector(".living-atlas-globe");
       return globe?.getAttribute("data-earth-policy") === "particle-only"
@@ -834,7 +839,7 @@ try {
   await forward.page.mouse.up();
   await forward.page.waitForTimeout(250);
   const policyBeforeDisable = await readDive(forward.page);
-  await forward.page.locator('[data-qa-earth-policy="particle-only"]').click();
+  await activateButton(forward.page, forward.page.locator('[data-qa-earth-policy="particle-only"]'));
   await forward.page.waitForFunction(() => {
     const globe = document.querySelector(".living-atlas-globe");
     return globe?.getAttribute("data-earth-policy") === "particle-only"
@@ -845,10 +850,10 @@ try {
   }, null, { timeout: 5_000 });
   await forward.page.waitForTimeout(100);
   const policyDisabled = await readDive(forward.page);
-  await forward.page.locator('[data-qa-earth-policy="default"]').click();
+  await activateButton(forward.page, forward.page.locator('[data-qa-earth-policy="default"]'));
   await forward.page.waitForTimeout(600);
   const policyDefaultHeld = await readDive(forward.page);
-  await forward.page.locator("[data-qa-earth-dive-refocus]").click();
+  await activateButton(forward.page, forward.page.locator("[data-qa-earth-dive-refocus]"));
   await forward.page.waitForFunction(() => (
     document.querySelector(".living-atlas-globe")?.getAttribute("data-earth-dive") !== "particle"
   ), null, { timeout: 5_000 });
