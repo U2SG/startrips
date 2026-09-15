@@ -2,7 +2,15 @@
 
 Startrips agents use **low-communication, high-evidence** pull request workflows.
 
-GitHub Conversation is an exception channel, not a progress log. Routine progress belongs in commits, CI/checks, the authoritative ONE `feature_list.json`, and the per-PR ledger.
+GitHub Conversation is an exception channel, not a progress log. Routine progress belongs in commits, CI/checks, the authoritative ONE control plane, and the per-PR ledger.
+
+## ONE control-plane location
+
+ONE is external to the Git repository. On the managed Startrips development host/workspace, the authoritative state file is:
+
+`D:/startrips/loop-workspace/feature_list.json`
+
+The selector is `D:/startrips/loop-workspace/run-loop.sh`; process rules live beside it in `CLAUDE.md` / `README.md`. Agents that have access to that managed workspace must read the existing ONE file rather than creating a repository copy or a second backlog/lock/selector. Contributors without access to the managed control plane should rely on PR/CI/review evidence and must not fabricate or infer ONE state; an owner/Orchestrator provides the required `ready_for_eval` handoff when applicable.
 
 ## Default comment budget
 
