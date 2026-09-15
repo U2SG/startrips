@@ -154,7 +154,7 @@
   margin: 0;
   font: 400 clamp(64px, 16vw, 104px)/1.1 var(--archive-serif);
 }
-.startrips-recovery-surface h1 {
+.startrips-recovery-surface :is(h1, h2) {
   margin: 10px 0 12px;
   font: 400 clamp(28px, 4vw, 42px)/1.18 var(--archive-serif);
   letter-spacing: -0.025em;
@@ -226,7 +226,7 @@
 .living-atlas__empty.startrips-recovery-surface .startrips-recovery-surface__motion {
   margin-bottom: 12px;
 }
-.living-atlas__empty.startrips-recovery-surface h1 {
+.living-atlas__empty.startrips-recovery-surface :is(h1, h2) {
   margin: 6px 0 10px;
   font-size: clamp(32px, 3.8vw, 48px);
   line-height: 1.2;
@@ -248,7 +248,7 @@
   .living-atlas.is-mobile-v2 .living-atlas__empty.startrips-recovery-surface .startrips-signature-motion {
     --startrips-signature-size: 52px !important;
   }
-  .living-atlas.is-mobile-v2 .living-atlas__empty.startrips-recovery-surface h1 {
+  .living-atlas.is-mobile-v2 .living-atlas__empty.startrips-recovery-surface :is(h1, h2) {
     margin: 2px 0 8px;
     font-size: 30px;
   }

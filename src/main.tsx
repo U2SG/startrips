@@ -870,6 +870,7 @@ function RecoverySurfaceQaPreview() {
       <StartripsRecoverySurface
         kind={kind}
         className={kind === "empty" ? "living-atlas__empty" : undefined}
+        headingLevel={kind === "empty" ? 2 : 1}
         detail={kind === "error" ? "QA recoverable service error" : undefined}
         onPrimaryAction={() => markIntent(kind === "error" ? "retry" : kind === "empty" ? "create" : "home")}
         onSecondaryAction={kind === "not-found" ? () => markIntent("back") : undefined}

@@ -52,15 +52,18 @@ export function StartripsRecoverySurface({
   onSecondaryAction,
   detail,
   className = "",
+  headingLevel = 1,
 }: {
   kind: StartripsRecoveryKind;
   onPrimaryAction?: () => void;
   onSecondaryAction?: () => void;
   detail?: string | null;
   className?: string;
+  headingLevel?: 1 | 2;
 }) {
   const descriptor = getStartripsRecoveryDescriptor(kind);
   const primaryLabel = getStartripsRecoveryCopy(descriptor.copyKeys.primaryAction);
+  const Heading = headingLevel === 2 ? "h2" : "h1";
   const secondaryLabel = descriptor.copyKeys.secondaryAction
     ? getStartripsRecoveryCopy(descriptor.copyKeys.secondaryAction)
     : null;
@@ -75,7 +78,7 @@ export function StartripsRecoverySurface({
       </div>
       <p className="startrips-recovery-surface__eyebrow">{getStartripsRecoveryCopy(descriptor.copyKeys.eyebrow)}</p>
       {descriptor.code ? <p className="startrips-recovery-surface__code">{descriptor.code}</p> : null}
-      <h1>{getStartripsRecoveryCopy(descriptor.copyKeys.title)}</h1>
+      <Heading>{getStartripsRecoveryCopy(descriptor.copyKeys.title)}</Heading>
       <p className="startrips-recovery-surface__body">{getStartripsRecoveryCopy(descriptor.copyKeys.body)}</p>
       {detail ? <p className="startrips-recovery-surface__detail" role={kind === "error" ? "alert" : undefined}>{detail}</p> : null}
       <div className="startrips-recovery-surface__actions">

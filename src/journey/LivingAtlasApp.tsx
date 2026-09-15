@@ -2579,6 +2579,7 @@ export function LivingAtlasApp({
         <StartripsRecoverySurface
           kind="empty"
           className="living-atlas__empty"
+          headingLevel={2}
           onPrimaryAction={canCreateJourney ? openCreateComposer : undefined}
         />
       ) : null}
