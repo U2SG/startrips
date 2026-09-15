@@ -4,12 +4,14 @@ import { serverConfig } from "./config";
 import { pool } from "./db/client";
 import { startMapStyleCacheSweeper } from "./routes/mapstyle";
 import { startUploadReconciler } from "./routes/uploads";
+import { startCoverRevealReconciler } from "./services/cover-reveal";
 import { startJourneyDeletionReconciler } from "./services/delete-journey";
 import { startPreviewReconciler } from "./services/media-preview";
 
 startUploadReconciler();
 startJourneyDeletionReconciler();
 startPreviewReconciler();
+startCoverRevealReconciler();
 startMapStyleCacheSweeper();
 
 const server = serve(

@@ -91,6 +91,46 @@ export function loadServerConfig(
   const mediaPreviewUploadExpiresInSeconds = Number(
     environment.MEDIA_PREVIEW_UPLOAD_EXPIRES_IN_SECONDS ?? 120,
   );
+  // #368: the cover-reveal worker, which is off unless a deployment names a
+  // credential. There is no development fallback and no production
+  // requirement: an absent value means this deployment runs no worker, so the
+  // worker routes refuse everything and the rest of the API is unaffected. A
+  // fallback would be worse than either, because a shared default credential
+  // is the same as no credential at all.
+  const coverRevealWorkerToken =
+    environment.COVER_REVEAL_WORKER_TOKEN?.trim() || null;
+  // How long one claim owns a job. Long enough for a local generation pass,
+  // short enough that a worker that died mid-job does not park the Journey's
+  // derivative until someone notices. An expired lease is reclaimable, so this
+  // is the cost of a crash rather than a deadline the worker must meet.
+  const coverRevealLeaseSeconds = Number(
+    environment.COVER_REVEAL_LEASE_SECONDS ?? 10 * 60,
+  );
+  // The source read and the output write are each presigned for their own
+  // short window, both inside the lease. They are separate knobs because they
+  // buy different things: a read has to survive a slow download of one
+  // original, a write has to survive a slow upload of a generated still.
+  const coverRevealSourceReadExpiresInSeconds = Number(
+    environment.COVER_REVEAL_SOURCE_READ_EXPIRES_IN_SECONDS ?? 5 * 60,
+  );
+  const coverRevealUploadExpiresInSeconds = Number(
+    environment.COVER_REVEAL_UPLOAD_EXPIRES_IN_SECONDS ?? 10 * 60,
+  );
+  // The two ceilings a completion is measured against, enforced against the
+  // object that actually landed exactly as #260's are. A derivative is a
+  // full-bleed opening frame rather than a thumbnail, so both are larger than
+  // the preview budget and both still bound what one job can cost.
+  const coverRevealMaxBytes = Number(
+    environment.COVER_REVEAL_MAX_BYTES ?? 4 * 1024 * 1024,
+  );
+  const coverRevealMaxEdgePixels = Number(
+    environment.COVER_REVEAL_MAX_EDGE_PIXELS ?? 2048,
+  );
+  // Bounded retries: a job that has failed this many times stops being
+  // claimable instead of cycling a broken source through every worker pass.
+  const coverRevealMaxAttempts = Number(
+    environment.COVER_REVEAL_MAX_ATTEMPTS ?? 3,
+  );
   // #200 phase F: the guest prefix is the only public, unauthenticated surface
   // Startrips exposes, so it carries its own budgets rather than the blanket
   // `/api/*` bucket #217 removed. One window, three ceilings; see
@@ -237,6 +277,56 @@ export function loadServerConfig(
       throw new Error(`${name} must be between ${floor} and ${ceiling}`);
     }
   }
+  // #368: an under-strength worker credential is refused at startup rather
+  // than accepted and hashed. The credential is a bearer secret with no
+  // second factor and no rate limit of its own, so its entropy is the whole
+  // defence, and a deployment that sets a short one has made a mistake it
+  // should hear about before the process serves a request.
+  if (
+    coverRevealWorkerToken
+    && coverRevealWorkerToken.length < 32
+  ) {
+    throw new Error(
+      "COVER_REVEAL_WORKER_TOKEN must contain at least 32 characters",
+    );
+  }
+  for (
+    const [name, value, floor, ceiling] of [
+      ["COVER_REVEAL_LEASE_SECONDS", coverRevealLeaseSeconds, 60, 60 * 60],
+      [
+        "COVER_REVEAL_SOURCE_READ_EXPIRES_IN_SECONDS",
+        coverRevealSourceReadExpiresInSeconds,
+        30,
+        15 * 60,
+      ],
+      [
+        "COVER_REVEAL_UPLOAD_EXPIRES_IN_SECONDS",
+        coverRevealUploadExpiresInSeconds,
+        60,
+        60 * 60,
+      ],
+      ["COVER_REVEAL_MAX_BYTES", coverRevealMaxBytes, 64 * 1024, 16 * 1024 * 1024],
+      ["COVER_REVEAL_MAX_EDGE_PIXELS", coverRevealMaxEdgePixels, 256, 4096],
+      ["COVER_REVEAL_MAX_ATTEMPTS", coverRevealMaxAttempts, 1, 10],
+    ] as const
+  ) {
+    if (!Number.isInteger(value) || value < floor || value > ceiling) {
+      throw new Error(`${name} must be between ${floor} and ${ceiling}`);
+    }
+  }
+  // A capability that outlives the claim it belongs to would let a worker keep
+  // reading a source, or keep writing an output, after another worker owns the
+  // job. Both windows therefore have to close no later than the lease.
+  if (
+    coverRevealSourceReadExpiresInSeconds > coverRevealLeaseSeconds
+    || coverRevealUploadExpiresInSeconds > coverRevealLeaseSeconds
+  ) {
+    throw new Error(
+      "COVER_REVEAL_SOURCE_READ_EXPIRES_IN_SECONDS and "
+      + "COVER_REVEAL_UPLOAD_EXPIRES_IN_SECONDS must not exceed "
+      + "COVER_REVEAL_LEASE_SECONDS",
+    );
+  }
   if (storageDriver === "s3" || s3ConfigurationPresent) {
     const missing = [
       ["S3_BACKEND_ID", s3BackendId],
@@ -331,6 +421,13 @@ export function loadServerConfig(
     mediaPreviewMaxEdgePixels,
     mediaPreviewMaxBytes,
     mediaPreviewUploadExpiresInSeconds,
+    coverRevealWorkerToken,
+    coverRevealLeaseSeconds,
+    coverRevealSourceReadExpiresInSeconds,
+    coverRevealUploadExpiresInSeconds,
+    coverRevealMaxBytes,
+    coverRevealMaxEdgePixels,
+    coverRevealMaxAttempts,
     shareRateLimitWindowSeconds,
     shareDataRateLimit,
     shareMediaRateLimit,

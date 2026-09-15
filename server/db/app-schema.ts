@@ -574,3 +574,165 @@ export const accountIdentityAudit = pgTable(
     ),
   ],
 );
+
+// #368 (Slice 1 of #367): one cover-reveal derivative job.
+//
+// Deliberately NOT a set of columns on `media_assets`. A derivative is a
+// second, private artistic image produced from a Journey's canonical cover by
+// a worker this deployment does not contain, and #368's whole point is that
+// producing one must never be able to touch the original. Keeping it in its
+// own table means the canonical row has no column a worker path writes at all,
+// so "the original is unchanged" is a property of the schema rather than of
+// every code path that could have written to it.
+//
+// The pinned source is `source_media_asset_id` PLUS `source_content_hash`, and
+// the hash is the one #311 verified from the durable stored bytes — never a
+// client declaration. Pinning the id alone would not be enough: the effective
+// cover of a Journey is a resolution over `cover_media_asset_id` and media
+// order, and the bytes under an id are themselves only trusted because #311
+// measured them. Completion re-resolves both and refuses when either moved, so
+// a derivative generated from one cover can never be attached to another.
+//
+// `source_media_asset_id` carries no foreign key on purpose, exactly like
+// `media_preview_writes.media_asset_id`: a reference would `set null` or
+// cascade at the moment the pinned identity is destroyed, which is precisely
+// when the job most needs to still be able to say what it was pinned to in
+// order to refuse a late completion. `journey_id` does cascade, because a
+// hard-deleted Journey must leave no job behind; the object that job may have
+// written is owned instead by `cover_reveal_writes` below.
+//
+// No column here ever holds a signed read URL, a signed upload URL, a raw
+// lease token or a storage credential. `output_storage_key` is object
+// identity, `lease_token_hash` is a SHA-256, and that is the entire secret
+// surface.
+export const coverRevealDerivatives = pgTable(
+  "cover_reveal_derivatives",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    journeyId: uuid("journey_id")
+      .notNull()
+      .references(() => journeys.id, { onDelete: "cascade" }),
+    sourceMediaAssetId: uuid("source_media_asset_id").notNull(),
+    // #311's verified stored-byte identity of the pinned source, never a
+    // client-asserted hash. Eligibility refuses a source that has none.
+    sourceContentHash: text("source_content_hash").notNull(),
+    // What is to be generated, and by which contract. No prompt text and no
+    // executable blob: a kind plus a version, so a worker built against an
+    // older contract is recognisable rather than silently accepted.
+    generationKind: text("generation_kind").notNull(),
+    generationVersion: integer("generation_version").notNull(),
+    // The RevealFlow preset this derivative belongs to, and the deterministic
+    // seed the worker must use, so the same job reproduces the same output.
+    presetId: text("preset_id").notNull(),
+    seed: text("seed").notNull(),
+    // The generated object, once a claim has named one. The driver is recorded
+    // beside the key because a deployment may be reconfigured, and a key means
+    // nothing without the backend that holds it.
+    outputStorageDriver: text("output_storage_driver"),
+    outputStorageKey: text("output_storage_key"),
+    outputMimeType: text("output_mime_type"),
+    outputBytes: integer("output_bytes"),
+    outputWidth: integer("output_width"),
+    outputHeight: integer("output_height"),
+    state: text("state").notNull().default("queued"),
+    // SHA-256 of the lease token handed to the claimant. The raw token exists
+    // only in the claim response and in the claimant's memory, so a database
+    // reader cannot commit as the claimant.
+    leaseTokenHash: text("lease_token_hash"),
+    leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+    attempts: integer("attempts").notNull().default(0),
+    // A short server-side reason code, never a worker-supplied message: a free
+    // error string is the easiest place for a signed URL to end up in a
+    // database.
+    lastErrorCode: text("last_error_code"),
+    supersededAt: timestamp("superseded_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    // Nullable unique: many jobs have written nothing, and no two jobs can
+    // ever claim one generated object.
+    uniqueIndex("cover_reveal_derivatives_output_key_unique").on(
+      table.outputStorageKey,
+    ),
+    uniqueIndex("cover_reveal_derivatives_lease_hash_unique").on(
+      table.leaseTokenHash,
+    ),
+    // The claim's index: it scans claimable states oldest first.
+    index("cover_reveal_derivatives_state_created_idx").on(
+      table.state,
+      table.createdAt,
+    ),
+    index("cover_reveal_derivatives_journey_idx").on(table.journeyId),
+    check(
+      "cover_reveal_derivatives_state_check",
+      sql`${table.state} in ('queued', 'leased', 'ready', 'failed', 'superseded')`,
+    ),
+    // A lease is a token hash and an expiry together or neither, so "leased"
+    // can never mean an unbounded hold.
+    //
+    // The pair deliberately SURVIVES the states after `leased`. It stops being
+    // an authorization the moment the state leaves `leased` — every write
+    // guards on `state = 'leased'` as well as on the hash — and becomes the
+    // record of which claim settled the job. That is what makes a repeated
+    // `complete` or `fail` from the same claimant converge instead of looking
+    // like a stranger, while a reclaim, which overwrites the hash, still makes
+    // the previous claimant unrecognisable.
+    check(
+      "cover_reveal_derivatives_lease_shape_check",
+      sql`(${table.leaseTokenHash} is null) = (${table.leaseExpiresAt} is null)`,
+    ),
+    // Fail closed in the database as well as in the service: a row cannot say
+    // "ready" without the complete description of the object that makes it
+    // servable, so a later presentation path may trust `ready` alone.
+    check(
+      "cover_reveal_derivatives_ready_shape_check",
+      sql`${table.state} <> 'ready'
+        or (${table.outputStorageDriver} is not null
+          and ${table.outputStorageKey} is not null
+          and ${table.outputMimeType} is not null
+          and ${table.outputBytes} is not null
+          and ${table.outputWidth} is not null
+          and ${table.outputHeight} is not null)`,
+    ),
+    check(
+      "cover_reveal_derivatives_attempts_check",
+      sql`${table.attempts} >= 0`,
+    ),
+  ],
+);
+
+// #368: the record of one issued derivative write, outside every cascade.
+//
+// The same problem `media_preview_writes` exists for, with one more way to
+// arrive at it. A derivative object is written by a presigned PUT authorised
+// when the claim is issued, so it can land at any moment inside that window —
+// including after the Journey was deleted and cascaded the job row away, and
+// including after a reclaim issued a newer key and the job stopped referencing
+// the older one.
+//
+// So this table carries no foreign key at all. `derivative_id` is a plain
+// identifier kept for diagnosis, and `reconcileCoverRevealNamespace` in
+// `server/services/cover-reveal.ts` decides by asking whether any derivative
+// still references the key, never by joining.
+export const coverRevealWrites = pgTable(
+  "cover_reveal_writes",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    derivativeId: uuid("derivative_id").notNull(),
+    storageDriver: text("storage_driver").notNull(),
+    storageKey: text("storage_key").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("cover_reveal_writes_storage_key_unique").on(table.storageKey),
+    index("cover_reveal_writes_expires_idx").on(table.expiresAt),
+  ],
+);

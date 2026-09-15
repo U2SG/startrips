@@ -203,3 +203,67 @@ describe("media read URL configuration", () => {
     }
   });
 });
+
+// #368: the cover-reveal worker is off unless a deployment names a credential.
+describe("cover-reveal worker configuration", () => {
+  it("leaves the worker unconfigured, and production unaffected, by default", () => {
+    const config = loadServerConfig(productionEnvironment);
+    expect(config.coverRevealWorkerToken).toBeNull();
+    expect(config.coverRevealLeaseSeconds).toBe(600);
+    expect(config.coverRevealSourceReadExpiresInSeconds).toBe(300);
+    expect(config.coverRevealUploadExpiresInSeconds).toBe(600);
+    expect(config.coverRevealMaxBytes).toBe(4 * 1024 * 1024);
+    expect(config.coverRevealMaxEdgePixels).toBe(2048);
+    expect(config.coverRevealMaxAttempts).toBe(3);
+  });
+
+  it("refuses an under-strength worker credential at startup", () => {
+    expect(() => loadServerConfig({
+      ...productionEnvironment,
+      COVER_REVEAL_WORKER_TOKEN: "x".repeat(31),
+    })).toThrow("COVER_REVEAL_WORKER_TOKEN must contain at least 32 characters");
+    expect(loadServerConfig({
+      ...productionEnvironment,
+      COVER_REVEAL_WORKER_TOKEN: "x".repeat(32),
+    }).coverRevealWorkerToken).toBe("x".repeat(32));
+  });
+
+  it("keeps every worker budget inside its band", () => {
+    for (
+      const [name, value, message] of [
+        ["COVER_REVEAL_LEASE_SECONDS", "30", "between 60 and 3600"],
+        ["COVER_REVEAL_LEASE_SECONDS", "7200", "between 60 and 3600"],
+        [
+          "COVER_REVEAL_SOURCE_READ_EXPIRES_IN_SECONDS",
+          "10",
+          "between 30 and 900",
+        ],
+        ["COVER_REVEAL_UPLOAD_EXPIRES_IN_SECONDS", "30", "between 60 and 3600"],
+        ["COVER_REVEAL_MAX_BYTES", "1024", "between 65536 and 16777216"],
+        ["COVER_REVEAL_MAX_EDGE_PIXELS", "8192", "between 256 and 4096"],
+        ["COVER_REVEAL_MAX_ATTEMPTS", "0", "between 1 and 10"],
+        ["COVER_REVEAL_MAX_ATTEMPTS", "2.5", "between 1 and 10"],
+      ] as const
+    ) {
+      expect(() => loadServerConfig({ ...productionEnvironment, [name]: value }))
+        .toThrow(`${name} must be ${message}`);
+    }
+  });
+
+  // A capability that outlives the claim it belongs to would let a worker keep
+  // reading a source, or keep writing an output, after another worker owns the
+  // job.
+  it("refuses a capability window longer than the lease it sits inside", () => {
+    expect(() => loadServerConfig({
+      ...productionEnvironment,
+      COVER_REVEAL_LEASE_SECONDS: "60",
+      COVER_REVEAL_UPLOAD_EXPIRES_IN_SECONDS: "600",
+    })).toThrow("must not exceed COVER_REVEAL_LEASE_SECONDS");
+    expect(() => loadServerConfig({
+      ...productionEnvironment,
+      COVER_REVEAL_LEASE_SECONDS: "120",
+      COVER_REVEAL_SOURCE_READ_EXPIRES_IN_SECONDS: "300",
+      COVER_REVEAL_UPLOAD_EXPIRES_IN_SECONDS: "120",
+    })).toThrow("must not exceed COVER_REVEAL_LEASE_SECONDS");
+  });
+});
