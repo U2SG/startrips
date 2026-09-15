@@ -483,11 +483,11 @@ export function LivingAtlasGlobe({
     // authorize detail again.
     policyEntryArmedRef.current = false;
     policyFocusRevisionRef.current = focusRevision ?? 0;
-    pendingPolicyHandbackRef.current = earthExperiencePolicy === "particle-only";
-    pendingPolicyHandbackCenterRef.current = earthExperiencePolicy === "particle-only"
-      ? diveRef.current.owner === "detail"
-        ? latestDetailObservationRef.current
-        : particleFrameRef.current?.anchor ?? null
+    const detailOwnedBeforePolicy = earthExperiencePolicy === "particle-only"
+      && diveRef.current.owner === "detail";
+    pendingPolicyHandbackRef.current = detailOwnedBeforePolicy;
+    pendingPolicyHandbackCenterRef.current = detailOwnedBeforePolicy
+      ? latestDetailObservationRef.current
       : null;
     commandRequestedRef.current = false;
     releaseRequestedRef.current = false;
@@ -681,15 +681,18 @@ export function LivingAtlasGlobe({
   }, []);
 
   useEffect(() => {
-    if (earthExperiencePolicy !== "particle-only" || !pendingPolicyHandbackRef.current) return;
+    if (earthExperiencePolicy !== "particle-only") return;
+    const shouldHandBackDetailCamera = pendingPolicyHandbackRef.current;
     pendingPolicyHandbackRef.current = false;
     const center = pendingPolicyHandbackCenterRef.current ?? undefined;
     pendingPolicyHandbackCenterRef.current = null;
-    setZoomIntent((previous) => ({
-      zoom: snapshotRef.current.zoom,
-      revision: (previous?.revision ?? 0) + 1,
-      center,
-    }));
+    if (shouldHandBackDetailCamera) {
+      setZoomIntent((previous) => ({
+        zoom: snapshotRef.current.zoom,
+        revision: (previous?.revision ?? 0) + 1,
+        center,
+      }));
+    }
     setParticleOnlyZoomedIn(snapshotRef.current.level === "local");
     setDive({ ...INITIAL_EARTH_DIVE_STATE, blendMs: diveRef.current.blendMs });
     readinessRef.current = "unavailable";

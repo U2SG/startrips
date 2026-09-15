@@ -710,6 +710,9 @@ try {
     if (after.mapDomCount !== 0 || after.mapCanvasCount !== 0 || after.mapRemovalCount !== before.mapConstructionCount) {
       intermediatePolicyFailures.push(`${targetStage}: detail lifetime survived hard policy: ${JSON.stringify({ before, after })}`);
     }
+    if (after.cameraHandbackLat !== null || after.cameraHandbackLon !== null) {
+      intermediatePolicyFailures.push(`${targetStage}: particle-owned policy transition incorrectly emitted a geographic handback: ${JSON.stringify(after)}`);
+    }
     if (transition.pageErrors.length > 0) {
       intermediatePolicyFailures.push(`${targetStage}: page raised an error during hard-policy teardown`);
     }
