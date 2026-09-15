@@ -180,7 +180,8 @@
 }
 .startrips-recovery-surface__action,
 .startrips-not-found .startrips-recovery-surface__action,
-.living-atlas .startrips-recovery-surface__action {
+.living-atlas .startrips-recovery-surface__action,
+.living-atlas.is-error .startrips-recovery-surface__action {
   min-height: 48px;
   min-width: 44px;
   display: inline-flex;
