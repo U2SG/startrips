@@ -18,6 +18,13 @@ import type { SemanticZoomSnapshot } from "./semanticZoom";
  */
 export type EarthDiveStage = "particle" | "prewarm" | "blending" | "detail";
 
+/**
+ * Orthogonal renderer-availability policy. `particle-only` is a hard product
+ * policy, not a temporary composition state: it forbids detail ownership and
+ * resources before zoom, readiness or commands are considered.
+ */
+export type EarthExperiencePolicy = "default" | "particle-only";
+
 /** Who is authoritative for camera and gesture input on this frame. */
 export type EarthDiveOwner = "particle" | "detail";
 
@@ -141,6 +148,14 @@ export function earthDiveBlendMs(reduceMotion: boolean) {
 }
 
 export type EarthDiveInput = {
+  /** Hard renderer-availability policy, evaluated before every other input. */
+  policy?: EarthExperiencePolicy;
+  /**
+   * Fresh-intent latch used only after leaving particle-only. `false` means the
+   * previous detail request is superseded and the Dive must remain particle
+   * until a new legal zoom intent is observed.
+   */
+  entryAllowed?: boolean;
   /** The zoom authority's own reading: which band, and how deep inside it. */
   snapshot: SemanticZoomSnapshot;
   /** How far the detail renderer has come. */
@@ -284,6 +299,18 @@ export function resolveEarthDive(
   previous: EarthDiveState,
   input: EarthDiveInput,
 ): EarthDiveState {
+  // #331: hard renderer policy is not a staged suspension. The moment it is
+  // effective, detail resources and ownership are illegal, so the state snaps
+  // to the particle owner before zoom, readiness, commands or release logic can
+  // participate. `suspended` below deliberately keeps its older staged reverse.
+  if (input.policy === "particle-only" || input.entryAllowed === false) {
+    return {
+      stage: "particle",
+      owner: "particle",
+      blendMs: earthDiveBlendMs(Boolean(input.reduceMotion)),
+    };
+  }
+
   const target = stageIndex(targetStage(previous.stage, input));
   const current = stageIndex(previous.stage);
   const stage = target === current

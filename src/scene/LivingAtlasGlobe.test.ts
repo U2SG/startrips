@@ -88,6 +88,21 @@ describe("Semantic Earth Dive renderer ownership", () => {
       'if (next.stage === "prewarm" || next.stage === "particle") releaseRequestedRef.current = false;',
     );
   });
+
+  it("checks hard renderer policy before preload, mount and ownership", () => {
+    const globe = readFileSync(new URL("./LivingAtlasGlobe.tsx", import.meta.url), "utf8");
+    const detail = readFileSync(new URL("./DetailedEarthMap.tsx", import.meta.url), "utf8");
+    expect(globe).toContain('if (earthExperiencePolicy !== "default") return;');
+    expect(globe).toContain(
+      'const showDetail = earthExperiencePolicy === "default" && effectiveDive.stage !== "particle";',
+    );
+    expect(globe).toContain("policy: earthExperiencePolicyRef.current");
+    expect(globe).toContain("entryAllowed: policyEntryArmedRef.current");
+    expect(globe).toContain("onCameraObservation={handleDetailCameraObservation}");
+    expect(detail).toContain("__detailedEarthMapConstructionCount");
+    expect(detail).toContain("__detailedEarthMapRemovalCount");
+    expect(detail).toContain("onCameraObservationRef.current?.(");
+  });
 });
 
 describe("Semantic Earth Dive accessibility fallback (#308)", () => {
