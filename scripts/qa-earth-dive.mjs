@@ -585,10 +585,18 @@ try {
   const coldBefore = await readDive(coldPolicy.page);
   const coldIntent = coldPolicy.page.locator('[data-earth-dive-intent="true"]');
   await activateButton(coldPolicy.page, coldIntent);
-  await coldPolicy.page.waitForTimeout(250);
+  await coldPolicy.page.waitForFunction(
+    (beforeZoom) => (window.__particleEarthDebug?.().zoom ?? beforeZoom) > beforeZoom + 0.01,
+    coldBefore.particleZoom,
+    { timeout: 5_000 },
+  );
   const coldNear = await readDive(coldPolicy.page);
   await activateButton(coldPolicy.page, coldIntent);
-  await coldPolicy.page.waitForTimeout(250);
+  await coldPolicy.page.waitForFunction(
+    (nearZoom) => (window.__particleEarthDebug?.().zoom ?? nearZoom) < nearZoom - 0.01,
+    coldNear.particleZoom,
+    { timeout: 5_000 },
+  );
   const coldFar = await readDive(coldPolicy.page);
   await activateButton(coldPolicy.page, coldPolicy.page.locator("[data-qa-earth-motion-toggle]"));
   await coldPolicy.page.waitForTimeout(100);
