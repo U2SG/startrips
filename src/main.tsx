@@ -349,6 +349,10 @@ function EarthDiveQaPreview() {
   const persistentEarth = usePersistentEarth();
   const qaParams = new URLSearchParams(window.location.search);
   const [focusRevision, setFocusRevision] = useState(0);
+  const [earthExperiencePolicy, setEarthExperiencePolicy] = useState<"default" | "particle-only">(
+    qaParams.get("qaPolicy") === "particle-only" ? "particle-only" : "default",
+  );
+  const [qaReduceMotion, setQaReduceMotion] = useState(qaParams.get("qaMotion") !== "animate");
   useEffect(() => {
     persistentEarth.setStage("atlas");
     return () => persistentEarth.setStage("idle");
@@ -379,7 +383,8 @@ function EarthDiveQaPreview() {
           activeJourneyRouteId={focusRoute.id}
           onJourneyRouteActivate={() => undefined}
           onJourneyRoutePointActivate={() => undefined}
-          reduceMotion={qaParams.get("qaMotion") !== "animate"}
+          earthExperiencePolicy={earthExperiencePolicy}
+          reduceMotion={qaReduceMotion}
         />
       </div>
       <output
@@ -395,6 +400,36 @@ function EarthDiveQaPreview() {
         onClick={() => setFocusRevision((revision) => revision + 1)}
         style={{ position: "absolute", zIndex: 60, bottom: 14, left: 14 }}
       >QA 重新对焦</button>
+      <button
+        type="button"
+        data-qa-earth-policy="particle-only"
+        onClick={() => setEarthExperiencePolicy("particle-only")}
+        style={{ position: "absolute", zIndex: 60, bottom: 14, left: 140 }}
+      >QA 粒子地球</button>
+      <button
+        type="button"
+        data-qa-earth-policy="default"
+        onClick={() => setEarthExperiencePolicy("default")}
+        style={{ position: "absolute", zIndex: 60, bottom: 14, left: 250 }}
+      >QA 默认地球</button>
+      <button
+        type="button"
+        data-qa-earth-motion-toggle
+        onClick={() => setQaReduceMotion((current) => !current)}
+        style={{ position: "absolute", zIndex: 60, bottom: 14, left: 360 }}
+      >QA 动效切换</button>
+      <button
+        type="button"
+        data-qa-earth-quality="low"
+        onClick={() => persistentEarth.setStage("handoff")}
+        style={{ position: "absolute", zIndex: 60, bottom: 14, left: 470 }}
+      >QA 低质量</button>
+      <button
+        type="button"
+        data-qa-earth-quality="high"
+        onClick={() => persistentEarth.setStage("atlas")}
+        style={{ position: "absolute", zIndex: 60, bottom: 14, left: 570 }}
+      >QA 高质量</button>
     </main>
   );
 }

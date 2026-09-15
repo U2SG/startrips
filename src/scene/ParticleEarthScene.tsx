@@ -1390,7 +1390,12 @@ interface ParticleEarthSceneProps {
    * says the band reopens, so the two surfaces do not disagree about where the
    * user is. The revision is what makes it an event rather than a value.
    */
-  zoomIntent?: { zoom: number; revision: number };
+  zoomIntent?: {
+    zoom: number;
+    revision: number;
+    /** Optional geographic center used when another renderer hands the camera back. */
+    center?: { lat: number; lon: number };
+  };
   onGlobePointPick?: (point: { latitude: number; longitude: number }) => void;
   dragToRotate?: boolean;
   wheelToZoom?: boolean;
@@ -5222,7 +5227,55 @@ export function ParticleEarthScene({
       if (zoomIntentNow && zoomIntentNow.revision !== appliedZoomIntentRevision) {
         appliedZoomIntentRevision = zoomIntentNow.revision;
         claimManualInteraction(false);
-        applyAnchoredZoom(zoomIntentNow.zoom, null, interactionAnchorScreen);
+        if (zoomIntentNow.center) {
+          sampleFocusViewport(true);
+          const nextZoom = clampGlobeZoom(zoomIntentNow.zoom);
+          const nextScale = GLOBE_MODE_CONFIG[currentMode].scale * nextZoom;
+          const solved = solveFocusRotationForViewport(
+            zoomIntentNow.center,
+            interactiveRotationX,
+            baseRotationY + interactiveRotationY,
+            nextScale,
+            globe.position.x,
+            globe.position.y,
+            sampledFocusCenter,
+          );
+          if (solved.converged) {
+            interactiveRotationX = clampGlobeTilt(solved.x);
+            interactiveRotationY = nearestEquivalentRotation(
+              baseRotationY + interactiveRotationY,
+              solved.y,
+            ) - baseRotationY;
+            interactiveZoom = nextZoom;
+            rotationVelocityX = 0;
+            rotationVelocityY = 0;
+            globe.scale.setScalar(nextScale);
+            globe.rotation.x = interactiveRotationX;
+            globe.rotation.y = baseRotationY + interactiveRotationY;
+            routeProjectionRevision += 1;
+            if (import.meta.env.DEV) {
+              const projected = projectFocusPointForRotation(
+                zoomIntentNow.center,
+                globe.rotation.x,
+                globe.rotation.y,
+                globe.scale.x,
+                globe.position.x,
+                globe.position.y,
+                focusProjectionScreen,
+              );
+              host.dataset.cameraHandbackLat = String(zoomIntentNow.center.lat);
+              host.dataset.cameraHandbackLon = String(zoomIntentNow.center.lon);
+              host.dataset.cameraHandbackErrorPx = Math.hypot(
+                projected.x - sampledFocusCenter.x,
+                projected.y - sampledFocusCenter.y,
+              ).toFixed(3);
+            }
+          } else {
+            applyAnchoredZoom(zoomIntentNow.zoom, null, interactionAnchorScreen);
+          }
+        } else {
+          applyAnchoredZoom(zoomIntentNow.zoom, null, interactionAnchorScreen);
+        }
       }
       semanticZoomState = resolveGlobeSemanticZoomForFrame({
         zoom: interactiveZoom,

@@ -17,6 +17,7 @@ import {
   type EarthDiveInput,
   type EarthDiveStage,
   type EarthDiveState,
+  type EarthExperiencePolicy,
 } from "./earthDive";
 import {
   GLOBE_SEMANTIC_ZOOM_CEILING,
@@ -27,6 +28,8 @@ import {
 } from "./semanticZoom";
 
 type Frame = {
+  policy?: EarthExperiencePolicy;
+  entryAllowed?: boolean;
   level?: GlobeSemanticZoom;
   localProgress?: number;
   readiness?: DetailReadiness;
@@ -47,6 +50,8 @@ function snapshot(level: GlobeSemanticZoom, localProgress: number): SemanticZoom
 
 function input(frame: Frame = {}): EarthDiveInput {
   return {
+    policy: frame.policy,
+    entryAllowed: frame.entryAllowed,
     snapshot: snapshot(frame.level ?? "planet", frame.localProgress ?? 0),
     readiness: frame.readiness ?? "unavailable",
     handoffRevision: frame.handoffRevision ?? 1,
@@ -119,6 +124,39 @@ describe("earth dive resolver", () => {
       handoffRevision: 1,
       focusRevision: 1,
     }).stage).toBe("detail");
+  });
+
+  it("hard-disables detail ownership before zoom, readiness and command inputs", () => {
+    const deepReady = input({
+      policy: "particle-only",
+      level: "local",
+      localProgress: 1,
+      readiness: "fully-settled",
+      commandRequested: true,
+      blendPresented: true,
+    });
+    for (const stage of ["particle", "prewarm", "blending", "detail"] satisfies EarthDiveStage[]) {
+      expect(resolveEarthDive(state(stage), deepReady)).toEqual({
+        stage: "particle",
+        owner: "particle",
+        blendMs: EARTH_DIVE_BLEND_MS,
+      });
+    }
+  });
+
+  it("keeps the Dive particle after policy release until a fresh entry intent is armed", () => {
+    const deepReady = {
+      level: "local" as const,
+      localProgress: 1,
+      readiness: "fully-settled" as const,
+      blendPresented: true,
+    };
+    expect(resolveEarthDive(state("detail"), input({ ...deepReady, entryAllowed: false })))
+      .toMatchObject({ stage: "particle", owner: "particle" });
+    expect(resolveEarthDive(state("particle"), input({ ...deepReady, entryAllowed: false })))
+      .toMatchObject({ stage: "particle", owner: "particle" });
+    expect(resolveEarthDive(state("particle"), input({ ...deepReady, entryAllowed: true })))
+      .toMatchObject({ stage: "prewarm", owner: "particle" });
   });
 
   it("progresses particle -> prewarm -> blending -> detail in order, skipping no stage", () => {

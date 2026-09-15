@@ -31,8 +31,8 @@ const baseUrl = process.env.QA_BASE_URL ?? "http://127.0.0.1:4173";
 // mounts - the thing #252 says must not move - not an arbitrary coordinate.
 // The fixture publishes which one it focused, and the lane checks that the
 // place both renderers are holding is that Route Point's own position.
-const qaUrl = (focus, motion = "animate") => new URL(
-  `/?qaState=earth-dive&qaMotion=${motion}${focus === "route" ? "&qaFocus=route" : ""}`,
+const qaUrl = (focus, motion = "animate", policy = "default") => new URL(
+  `/?qaState=earth-dive&qaMotion=${motion}${focus === "route" ? "&qaFocus=route" : ""}${policy === "particle-only" ? "&qaPolicy=particle-only" : ""}`,
   baseUrl,
 ).toString();
 
@@ -162,9 +162,21 @@ async function readDive(page) {
       stage: section?.getAttribute("data-earth-dive") ?? null,
       owner: section?.getAttribute("data-earth-dive-owner") ?? null,
       earthMode: section?.getAttribute("data-earth-mode") ?? null,
+      earthPolicy: section?.getAttribute("data-earth-policy") ?? null,
       semanticZoom: scene?.getAttribute("data-semantic-zoom") ?? null,
+      quality: scene?.dataset?.quality ?? null,
+      mapConstructionCount: window.__detailedEarthMapConstructionCount ?? 0,
+      mapRemovalCount: window.__detailedEarthMapRemovalCount ?? 0,
+      mapDomCount: document.querySelectorAll(".detailed-earth-map").length,
+      mapCanvasCount: document.querySelectorAll(".maplibregl-canvas").length,
+      cameraHandbackLat: scene?.dataset?.cameraHandbackLat ? Number(scene.dataset.cameraHandbackLat) : null,
+      cameraHandbackLon: scene?.dataset?.cameraHandbackLon ? Number(scene.dataset.cameraHandbackLon) : null,
+      cameraHandbackErrorPx: scene?.dataset?.cameraHandbackErrorPx ? Number(scene.dataset.cameraHandbackErrorPx) : null,
+      diveIntentLabel: document.querySelector('[data-earth-dive-intent="true"]')?.getAttribute("aria-label") ?? null,
+      blendMs: section instanceof HTMLElement ? section.style.getPropertyValue("--earth-dive-blend-ms") : null,
       localProgress: scene?.dataset?.localProgress ?? null,
       mapZoom: map?.dataset?.handoffZoom ? Number(map.dataset.handoffZoom) : null,
+      mapCameraObservation: map?.dataset?.mapCameraObservation ?? null,
       interactive: host?.getAttribute("data-interactive") ?? null,
       readiness: map?.getAttribute("data-map-readiness") ?? null,
       mapError: map?.getAttribute("data-map-error") ?? null,
@@ -421,6 +433,11 @@ function cssDurationMs(value) {
   return Number.NaN;
 }
 
+async function activateButton(page, locator) {
+  await locator.focus();
+  await page.keyboard.press("Enter");
+}
+
 /**
  * What each renderer is publishing right now, plus the error between them.
  * Both anchors are viewport CSS pixels and both scales are viewport CSS pixels
@@ -505,10 +522,19 @@ async function readCommitAlignment(page) {
     };
   });
 }
-async function openDivePage(context, { blockStyle, focusShape = "route-point", motion = "animate" }) {
+async function openDivePage(context, {
+  blockStyle,
+  focusShape = "route-point",
+  motion = "animate",
+  policy = "default",
+}) {
   const page = await context.newPage();
   const consoleErrors = [];
   const pageErrors = [];
+  const requests = [];
+  const workers = [];
+  page.on("request", (request) => requests.push(request.url()));
+  page.on("worker", (worker) => workers.push(worker.url()));
   page.on("console", (message) => {
     if (message.type() === "error") consoleErrors.push(message.text());
   });
@@ -530,12 +556,12 @@ async function openDivePage(context, { blockStyle, focusShape = "route-point", m
         body: JSON.stringify(QA_PAINT_STYLE),
       })
   ));
-  await page.goto(qaUrl(focusShape, motion), { waitUntil: "domcontentloaded" });
+  await page.goto(qaUrl(focusShape, motion, policy), { waitUntil: "domcontentloaded" });
   await page.locator('[data-scene-ready="true"]').waitFor({ timeout: 25_000 });
   await page.waitForFunction(() => Boolean(window.__particleEarthDebug?.()), null, { timeout: 25_000 });
   await page.waitForTimeout(300);
   await installStageRecorder(page);
-  return { page, consoleErrors, pageErrors };
+  return { page, consoleErrors, pageErrors, requests, workers };
 }
 
 const context = await browser.newContext({
@@ -546,6 +572,167 @@ const context = await browser.newContext({
 const result = { baseUrl, viewport: VIEWPORT };
 
 try {
+  // ---------------------------------------------------- particle-only cold start
+  // #331: hard policy must win before the legacy 350ms detail preload as well
+  // as before stage/mount ownership. Wait beyond that timer, then drive the
+  // accessible spatial command twice to prove it still changes particle zoom
+  // without turning into a hidden renderer switch.
+  const coldPolicy = await openDivePage(context, {
+    blockStyle: false,
+    policy: "particle-only",
+  });
+  await coldPolicy.page.waitForTimeout(800);
+  const coldBefore = await readDive(coldPolicy.page);
+  const coldIntent = coldPolicy.page.locator('[data-earth-dive-intent="true"]');
+  await activateButton(coldPolicy.page, coldIntent);
+  await coldPolicy.page.waitForFunction(
+    (beforeZoom) => (window.__particleEarthDebug?.().zoom ?? beforeZoom) > beforeZoom + 0.01,
+    coldBefore.particleZoom,
+    { timeout: 5_000 },
+  );
+  const coldNear = await readDive(coldPolicy.page);
+  await activateButton(coldPolicy.page, coldIntent);
+  await coldPolicy.page.waitForFunction(
+    (nearZoom) => (window.__particleEarthDebug?.().zoom ?? nearZoom) < nearZoom - 0.01,
+    coldNear.particleZoom,
+    { timeout: 5_000 },
+  );
+  const coldFar = await readDive(coldPolicy.page);
+  await activateButton(coldPolicy.page, coldPolicy.page.locator("[data-qa-earth-motion-toggle]"));
+  await coldPolicy.page.waitForFunction(
+    (beforeBlendMs) => document.querySelector("[data-earth-dive]")?.style.getPropertyValue("--earth-dive-blend-ms") !== beforeBlendMs,
+    coldBefore.blendMs,
+    { timeout: 5_000 },
+  );
+  const coldReducedMotion = await readDive(coldPolicy.page);
+  await activateButton(coldPolicy.page, coldPolicy.page.locator('[data-qa-earth-quality="low"]'));
+  await coldPolicy.page.waitForFunction(() => document.querySelector(".particle-earth-scene")?.getAttribute("data-quality") === "low");
+  const coldLowQuality = await readDive(coldPolicy.page);
+  await activateButton(coldPolicy.page, coldPolicy.page.locator('[data-qa-earth-quality="high"]'));
+  await coldPolicy.page.waitForFunction(() => document.querySelector(".particle-earth-scene")?.getAttribute("data-quality") === "high");
+  const coldHighQuality = await readDive(coldPolicy.page);
+  await activateButton(coldPolicy.page, coldPolicy.page.locator("[data-qa-earth-dive-refocus]"));
+  await coldPolicy.page.waitForTimeout(250);
+  const coldRefocus = await readDive(coldPolicy.page);
+  const coldDetailRequests = coldPolicy.requests.filter((url) => (
+    /DetailedEarthMap|maplibre-gl|\/api\/mapstyle|\/tiles?\/|glyph|sprite/i.test(url)
+  ));
+  const coldFailures = [];
+  for (const [label, sample] of [
+    ["before", coldBefore],
+    ["near", coldNear],
+    ["far", coldFar],
+    ["reduced-motion", coldReducedMotion],
+    ["low-quality", coldLowQuality],
+    ["high-quality", coldHighQuality],
+    ["programmatic-refocus", coldRefocus],
+  ]) {
+    if (sample.earthPolicy !== "particle-only" || sample.stage !== "particle" || sample.owner !== "particle") {
+      coldFailures.push(`${label}: particle-only did not remain particle-owned: ${JSON.stringify(sample)}`);
+    }
+    if (sample.mapConstructionCount !== 0 || sample.mapDomCount !== 0 || sample.mapCanvasCount !== 0) {
+      coldFailures.push(`${label}: particle-only created or mounted detail resources: ${JSON.stringify(sample)}`);
+    }
+  }
+  if (coldDetailRequests.length > 0) {
+    coldFailures.push(`particle-only loaded detail/module/map network resources: ${JSON.stringify(coldDetailRequests)}`);
+  }
+  if (coldPolicy.workers.length > 0) {
+    coldFailures.push(`particle-only created worker(s): ${JSON.stringify(coldPolicy.workers)}`);
+  }
+  if (!(coldNear.particleZoom > coldBefore.particleZoom)) {
+    coldFailures.push(`particle-only accessible approach had no zoom effect: ${JSON.stringify({ before: coldBefore.particleZoom, near: coldNear.particleZoom })}`);
+  }
+  if (!(coldFar.particleZoom < coldNear.particleZoom)) {
+    coldFailures.push(`particle-only accessible retreat had no zoom effect: ${JSON.stringify({ near: coldNear.particleZoom, far: coldFar.particleZoom })}`);
+  }
+  if (coldBefore.blendMs === coldReducedMotion.blendMs) {
+    coldFailures.push(`live Reduced Motion change did not update the Dive presentation token: ${JSON.stringify({ before: coldBefore.blendMs, after: coldReducedMotion.blendMs })}`);
+  }
+  if (coldLowQuality.quality !== "low" || coldHighQuality.quality !== "high") {
+    coldFailures.push(`particle-only did not survive low/high quality transitions: ${JSON.stringify({ low: coldLowQuality.quality, high: coldHighQuality.quality })}`);
+  }
+  if (coldPolicy.pageErrors.length > 0) coldFailures.push("particle-only cold start raised a page error");
+  result.particleOnlyCold = {
+    before: coldBefore,
+    near: coldNear,
+    far: coldFar,
+    reducedMotion: coldReducedMotion,
+    lowQuality: coldLowQuality,
+    highQuality: coldHighQuality,
+    programmaticRefocus: coldRefocus,
+    detailRequests: coldDetailRequests,
+    workers: coldPolicy.workers,
+  };
+  await coldPolicy.page.close();
+
+  // ------------------------------------------- hard policy from active stages
+  // Particle is covered above and committed detail below. Exercise the two
+  // mounted-but-particle-owned stages separately so a stale readiness/render
+  // callback cannot keep resources alive after hard policy wins.
+  const intermediatePolicyTransitions = [];
+  const intermediatePolicyFailures = [];
+  for (const targetStage of ["prewarm", "blending"]) {
+    const transition = await openDivePage(context, { blockStyle: false });
+    const transitionPoint = await gesturePoint(transition.page);
+    if (targetStage === "prewarm") {
+      await wheelUntil(
+        transition.page,
+        transitionPoint,
+        APPROACH_WHEEL_DELTA,
+        (state) => state.stage === "prewarm",
+        "prewarm policy fixture never mounted detail",
+      );
+    } else {
+      await wheelUntil(
+        transition.page,
+        transitionPoint,
+        APPROACH_WHEEL_DELTA,
+        (state) => state.semanticZoom === "local",
+        "blending policy fixture never reached local",
+      );
+      await wheelUntil(
+        transition.page,
+        transitionPoint,
+        FINE_WHEEL_DELTA,
+        (state) => state.stage === "blending",
+        "blending policy fixture never reached blending",
+      );
+    }
+    const before = await readDive(transition.page);
+    await activateButton(transition.page, transition.page.locator('[data-qa-earth-policy="particle-only"]'));
+    await transition.page.waitForFunction(() => {
+      const globe = document.querySelector(".living-atlas-globe");
+      return globe?.getAttribute("data-earth-policy") === "particle-only"
+        && globe.getAttribute("data-earth-dive") === "particle"
+        && globe.getAttribute("data-earth-dive-owner") === "particle"
+        && !document.querySelector(".detailed-earth-map")
+        && !document.querySelector(".maplibregl-canvas");
+    }, null, { timeout: 5_000 });
+    // Give any load/render/readiness callback that was already queued time to
+    // arrive. Hard policy must stay terminal for detail resources regardless.
+    await transition.page.waitForTimeout(500);
+    const after = await readDive(transition.page);
+    if (before.stage !== targetStage) {
+      intermediatePolicyFailures.push(`${targetStage}: fixture entered ${before.stage}`);
+    }
+    if (after.stage !== "particle" || after.owner !== "particle" || after.earthPolicy !== "particle-only") {
+      intermediatePolicyFailures.push(`${targetStage}: hard policy did not own the terminal state: ${JSON.stringify(after)}`);
+    }
+    if (after.mapDomCount !== 0 || after.mapCanvasCount !== 0 || after.mapRemovalCount !== before.mapConstructionCount) {
+      intermediatePolicyFailures.push(`${targetStage}: detail lifetime survived hard policy: ${JSON.stringify({ before, after })}`);
+    }
+    if (after.cameraHandbackLat !== null || after.cameraHandbackLon !== null) {
+      intermediatePolicyFailures.push(`${targetStage}: particle-owned policy transition incorrectly emitted a geographic handback: ${JSON.stringify(after)}`);
+    }
+    if (transition.pageErrors.length > 0) {
+      intermediatePolicyFailures.push(`${targetStage}: page raised an error during hard-policy teardown`);
+    }
+    intermediatePolicyTransitions.push({ targetStage, before, after });
+    await transition.page.close();
+  }
+  result.particleOnlyIntermediateStages = intermediatePolicyTransitions;
+
   // ---------------------------------------------------------------- round A
   // Wheel alone, in both directions, with a detail surface that can load.
   const forward = await openDivePage(context, { blockStyle: false });
@@ -654,6 +841,70 @@ try {
   );
   const reentryReveal = await readDive(forward.page);
   const reentryStages = await stages(forward.page);
+
+  // #331 active-stage hard policy: move the detail camera so the handback has
+  // observable geographic truth, then disable detail while it owns input. The
+  // map subtree must disappear immediately, its instance must be removed, and
+  // the particle camera must receive that latest observation. Restoring default
+  // alone is not a new Dive request; only a fresh focus/zoom intent may re-arm.
+  const policyDetailPoint = await gesturePoint(forward.page, reentryPoint);
+  await forward.page.mouse.move(policyDetailPoint.x, policyDetailPoint.y);
+  await forward.page.mouse.down();
+  await forward.page.mouse.move(policyDetailPoint.x + 90, policyDetailPoint.y + 35, { steps: 6 });
+  await forward.page.mouse.up();
+  await forward.page.waitForTimeout(250);
+  const policyBeforeDisable = await readDive(forward.page);
+  await activateButton(forward.page, forward.page.locator('[data-qa-earth-policy="particle-only"]'));
+  await forward.page.waitForFunction(() => {
+    const globe = document.querySelector(".living-atlas-globe");
+    return globe?.getAttribute("data-earth-policy") === "particle-only"
+      && globe.getAttribute("data-earth-dive") === "particle"
+      && globe.getAttribute("data-earth-dive-owner") === "particle"
+      && !document.querySelector(".detailed-earth-map")
+      && !document.querySelector(".maplibregl-canvas");
+  }, null, { timeout: 5_000 });
+  await forward.page.waitForTimeout(100);
+  const policyDisabled = await readDive(forward.page);
+  await activateButton(forward.page, forward.page.locator('[data-qa-earth-policy="default"]'));
+  await forward.page.waitForTimeout(600);
+  const policyDefaultHeld = await readDive(forward.page);
+  await activateButton(forward.page, forward.page.locator("[data-qa-earth-dive-refocus]"));
+  await forward.page.waitForFunction(() => (
+    document.querySelector(".living-atlas-globe")?.getAttribute("data-earth-dive") !== "particle"
+  ), null, { timeout: 5_000 });
+  const policyFreshIntent = await readDive(forward.page);
+  const policyTransitionFailures = [];
+  const observed = policyBeforeDisable.mapCameraObservation?.split(",").map(Number) ?? [];
+  if (policyDisabled.mapRemovalCount !== policyBeforeDisable.mapConstructionCount) {
+    policyTransitionFailures.push(`hard policy did not release every constructed map: ${JSON.stringify({ before: policyBeforeDisable, after: policyDisabled })}`);
+  }
+  if (policyDisabled.mapDomCount !== 0 || policyDisabled.mapCanvasCount !== 0) {
+    policyTransitionFailures.push(`hard policy left detail DOM mounted: ${JSON.stringify(policyDisabled)}`);
+  }
+  if (observed.length === 2 && observed.every(Number.isFinite)) {
+    const [lon, lat] = observed;
+    if (Math.abs((policyDisabled.cameraHandbackLat ?? Number.NaN) - lat) > 0.0001
+      || Math.abs((policyDisabled.cameraHandbackLon ?? Number.NaN) - lon) > 0.0001) {
+      policyTransitionFailures.push(`particle handback did not preserve the latest detail observation: ${JSON.stringify({ observed, disabled: policyDisabled })}`);
+    }
+  } else {
+    policyTransitionFailures.push(`detail owner did not publish a geographic observation before policy switch: ${policyBeforeDisable.mapCameraObservation}`);
+  }
+  if (!(policyDisabled.cameraHandbackErrorPx <= ANCHOR_TOLERANCE_PX)) {
+    policyTransitionFailures.push(`particle camera handback missed the observed center by ${policyDisabled.cameraHandbackErrorPx}px`);
+  }
+  if (policyDefaultHeld.stage !== "particle" || policyDefaultHeld.mapDomCount !== 0) {
+    policyTransitionFailures.push(`restoring default replayed stale Dive intent: ${JSON.stringify(policyDefaultHeld)}`);
+  }
+  if (policyFreshIntent.stage === "particle") {
+    policyTransitionFailures.push(`fresh focus intent did not re-arm default Dive: ${JSON.stringify(policyFreshIntent)}`);
+  }
+  result.particleOnlyTransition = {
+    beforeDisable: policyBeforeDisable,
+    disabled: policyDisabled,
+    defaultHeld: policyDefaultHeld,
+    freshIntent: policyFreshIntent,
+  };
 
   // Hard grade the overlap and the exact frame that AUTHORIZED ownership.
   // Once detail owns input, any later wheel legitimately moves MapLibre away
@@ -872,7 +1123,12 @@ try {
     (state) => state.stage === "blending",
     "the dive never reached blending with a focused Journey",
   );
-  await routeRun.page.waitForTimeout(500);
+  await routeRun.page.waitForFunction(() => {
+    const globe = document.querySelector(".living-atlas-globe");
+    const layer = document.querySelector(".living-atlas-globe__detail-layer");
+    return globe?.getAttribute("data-earth-dive") === "blending"
+      && layer?.getAttribute("data-earth-dive-spatial-reveal") === "on";
+  }, null, { timeout: 5_000 });
   const routeBlendingFrames = await readFrames(routeRun.page);
   const routeBlendingReveal = await readSpatialReveal(routeRun.page);
   const routeCommitted = await wheelUntilDetailWithStableRetry(
@@ -1226,6 +1482,9 @@ try {
   await wideContext.close();
 
   result.failures = [
+    ...coldFailures,
+    ...intermediatePolicyFailures,
+    ...policyTransitionFailures,
     ...ladderFailures,
     ...routeFailures,
     ...commandFailures,

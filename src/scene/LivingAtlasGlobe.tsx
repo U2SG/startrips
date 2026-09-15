@@ -5,6 +5,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useReducer,
   useRef,
@@ -31,6 +32,7 @@ import {
   type EarthDiveOwner,
   type EarthDiveStage,
   type EarthDiveState,
+  type EarthExperiencePolicy,
 } from "./earthDive";
 import {
   particleAnchorFrameMatchesSemanticZoom,
@@ -47,6 +49,7 @@ import {
 } from "./globeGestureHint";
 import { GLOBE_MODE_CONFIG, ParticleEarthScene } from "./ParticleEarthScene";
 import {
+  GLOBE_SEMANTIC_ZOOM_CEILING,
   SEMANTIC_ZOOM_RELEASE_ZOOM,
   type GlobeSemanticZoom,
   type SemanticZoomSnapshot,
@@ -73,6 +76,7 @@ type LivingAtlasGlobeControlsProps = {
   onPickRequest?: () => void;
   showDiveIntent?: boolean;
   showDetailControls?: boolean;
+  diveIntentLabel?: string;
   inert?: boolean;
 };
 
@@ -84,10 +88,12 @@ export function LivingAtlasGlobeControls({
   onPickRequest,
   showDiveIntent = true,
   showDetailControls = true,
+  diveIntentLabel: requestedDiveIntentLabel,
   inert = false,
 }: LivingAtlasGlobeControlsProps) {
   const detailMode = diveStage === "detail";
-  const diveIntentLabel = diveStage === "particle" ? "靠近查看更多细节" : "返回远景";
+  const diveIntentLabel = requestedDiveIntentLabel
+    ?? (diveStage === "particle" ? "靠近查看更多细节" : "返回远景");
   return (
     <div
       className="living-atlas-globe__controls"
@@ -174,6 +180,8 @@ export type LivingAtlasGlobeProps = {
   onGlobePointPick?: (point: { latitude: number; longitude: number }) => void;
   onPickRequest?: () => void;
   showControls?: boolean;
+  /** #331: hard renderer-availability policy; product UI/persistence is out of scope. */
+  earthExperiencePolicy?: EarthExperiencePolicy;
   /**
    * #253: globe focus mode owns the whole viewport. It arms the transient
    * zoom/drag guidance once per visit, and it SUSPENDS the Semantic Earth Dive
@@ -233,7 +241,12 @@ type AtlasEarthPresentation = Pick<
   homeBasePresence?: readonly HomeBasePresenceDrawable[];
   onHomeBasePresenceFrame?: (frame: readonly ProjectedHomeBasePresence[]) => void;
   onManualCameraInteraction?: () => void;
-  zoomIntent?: { zoom: number; revision: number };
+  zoomIntent?: {
+    zoom: number;
+    revision: number;
+    /** Optional geographic center for a renderer-to-particle ownership handback. */
+    center?: { lat: number; lon: number };
+  };
   /** Who owns camera and gesture input on this frame. */
   inputOwner?: EarthDiveOwner;
   earthDiveOverlapActive?: boolean;
@@ -368,11 +381,20 @@ export function LivingAtlasGlobe({
   onGlobePointPick,
   onPickRequest,
   showControls = true,
+  earthExperiencePolicy = "default",
   globeFocusMode = false,
   reduceMotion,
   cinematicActive = false,
   mediaCoverHint,
 }: LivingAtlasGlobeProps) {
+  if (import.meta.env.DEV && typeof window !== "undefined") {
+    const debugWindow = window as Window & {
+      __detailedEarthMapConstructionCount?: number;
+      __detailedEarthMapRemovalCount?: number;
+    };
+    debugWindow.__detailedEarthMapConstructionCount ??= 0;
+    debugWindow.__detailedEarthMapRemovalCount ??= 0;
+  }
   const persistentEarth = usePersistentEarth();
   const compactMobileLayout = useCompactMobileLayout();
   const [detailLanguage, setDetailLanguage] = useState<DetailedEarthLanguage>("zh");
@@ -421,7 +443,12 @@ export function LivingAtlasGlobe({
   // solves its own camera to this, so it only has to reach React while a map
   // exists and only when it has moved enough to change that solution.
   const [particleFrame, setParticleFrame] = useState<ParticleAnchorFrame | null>(null);
-  const [zoomIntent, setZoomIntent] = useState<{ zoom: number; revision: number } | null>(null);
+  const [particleOnlyZoomedIn, setParticleOnlyZoomedIn] = useState(false);
+  const [zoomIntent, setZoomIntent] = useState<{
+    zoom: number;
+    revision: number;
+    center?: { lat: number; lon: number };
+  } | null>(null);
   const diveRef = useRef<EarthDiveState>(INITIAL_EARTH_DIVE_STATE);
   // The resolver mirror follows the last COMMITTED presentation state. If the
   // rAF loop advances this ref before React commits, concurrent batching can
@@ -442,15 +469,58 @@ export function LivingAtlasGlobe({
   const reduceMotionRef = useRef(Boolean(reduceMotion));
   reduceMotionRef.current = Boolean(reduceMotion);
   const commandRequestedRef = useRef(false);
+  const releaseRequestedRef = useRef(false);
+  const earthExperiencePolicyRef = useRef<EarthExperiencePolicy>(earthExperiencePolicy);
+  const policyEntryArmedRef = useRef(earthExperiencePolicy === "default");
+  const policyFocusRevisionRef = useRef(focusRevision ?? 0);
+  const pendingPolicyHandbackRef = useRef(false);
+  const pendingPolicyHandbackCenterRef = useRef<{ lat: number; lon: number } | null>(null);
+  const latestDetailObservationRef = useRef<{ lat: number; lon: number } | null>(null);
   // #253: the Dive resolves on a rAF loop, so the mode's own suspension has to
   // reach it as a ref like every other per-frame input rather than as an
   // effect dependency that would restart the loop.
   const suspendedRef = useRef(globeFocusMode);
   suspendedRef.current = globeFocusMode;
-  const releaseRequestedRef = useRef(false);
   const focusRevisionRef = useRef(focusRevision ?? 0);
   const handoffRevisionRef = useRef(focusRevision ?? 0);
-  focusRevisionRef.current = focusRevision ?? 0;
+
+  // Policy/focus refs are live inputs to the persistent rAF resolver, so they
+  // must mirror COMMITTED React state. Mutating them during render lets an
+  // abandoned concurrent render alter the already-running camera/resource
+  // lifecycle. Apply the hard edge in layout commit, before the next paint/rAF,
+  // and only arm detail again from a focus revision that actually committed.
+  useLayoutEffect(() => {
+    const nextFocusRevision = focusRevision ?? 0;
+    focusRevisionRef.current = nextFocusRevision;
+    const previousPolicy = earthExperiencePolicyRef.current;
+    if (previousPolicy !== earthExperiencePolicy) {
+      earthExperiencePolicyRef.current = earthExperiencePolicy;
+      // A hard policy edge invalidates every old Dive request. Returning to
+      // default is intentionally NOT a request to re-enter; a later zoom/focus
+      // command must prove fresh intent before the existing local snapshot can
+      // authorize detail again.
+      policyEntryArmedRef.current = false;
+      policyFocusRevisionRef.current = nextFocusRevision;
+      const detailOwnedBeforePolicy = earthExperiencePolicy === "particle-only"
+        && diveRef.current.owner === "detail";
+      pendingPolicyHandbackRef.current = detailOwnedBeforePolicy;
+      pendingPolicyHandbackCenterRef.current = detailOwnedBeforePolicy
+        ? latestDetailObservationRef.current
+        : null;
+      commandRequestedRef.current = false;
+      releaseRequestedRef.current = false;
+      readinessRef.current = "unavailable";
+      detailCalibrationRef.current = null;
+      return;
+    }
+    if (
+      earthExperiencePolicy === "default"
+      && nextFocusRevision !== policyFocusRevisionRef.current
+    ) {
+      policyEntryArmedRef.current = true;
+      policyFocusRevisionRef.current = nextFocusRevision;
+    }
+  }, [earthExperiencePolicy, focusRevision]);
 
   const syncDetailSpatialReveal = useCallback((
     stage = diveRef.current.stage,
@@ -563,9 +633,13 @@ export function LivingAtlasGlobe({
   // presentation, which is itself an effect dependency.
   const handleSemanticZoomSnapshot = useCallback((snapshot: SemanticZoomSnapshot) => {
     snapshotRef.current = snapshot;
+    const policy = earthExperiencePolicyRef.current;
+    if (policy === "particle-only") {
+      setParticleOnlyZoomedIn(snapshot.level === "local");
+    }
     syncDetailSpatialReveal(diveRef.current.stage, snapshot, particleFrameRef.current);
     onSemanticZoomChange?.(snapshot.level);
-    if (diveRef.current.stage === "particle") return;
+    if (policy === "particle-only" || diveRef.current.stage === "particle") return;
     setHandoffSnapshot((previous) => (
       previous
         && previous.level === snapshot.level
@@ -595,9 +669,45 @@ export function LivingAtlasGlobe({
     }
   }, [applyHomeBaseFrame]);
 
+  const handleManualCameraInteraction = useCallback(() => {
+    if (earthExperiencePolicyRef.current === "default") policyEntryArmedRef.current = true;
+    onManualCameraInteraction?.();
+  }, [onManualCameraInteraction]);
+
   const handleDetailReadiness = useCallback((readiness: DetailReadiness) => {
+    if (earthExperiencePolicyRef.current === "particle-only") return;
     readinessRef.current = readiness;
   }, []);
+
+  const handleDetailCameraObservation = useCallback((point: { latitude: number; longitude: number }) => {
+    if (
+      earthExperiencePolicyRef.current !== "default"
+      || diveRef.current.owner !== "detail"
+    ) return;
+    latestDetailObservationRef.current = { lat: point.latitude, lon: point.longitude };
+  }, []);
+
+  useEffect(() => {
+    if (earthExperiencePolicy !== "particle-only") return;
+    const shouldHandBackDetailCamera = pendingPolicyHandbackRef.current;
+    pendingPolicyHandbackRef.current = false;
+    const center = pendingPolicyHandbackCenterRef.current ?? undefined;
+    pendingPolicyHandbackCenterRef.current = null;
+    if (shouldHandBackDetailCamera) {
+      setZoomIntent((previous) => ({
+        zoom: snapshotRef.current.zoom,
+        revision: (previous?.revision ?? 0) + 1,
+        center,
+      }));
+    }
+    setParticleOnlyZoomedIn(snapshotRef.current.level === "local");
+    setDive({ ...INITIAL_EARTH_DIVE_STATE, blendMs: diveRef.current.blendMs });
+    readinessRef.current = "unavailable";
+    commandRequestedRef.current = false;
+    releaseRequestedRef.current = false;
+    setHandoffSnapshot(null);
+    setParticleFrame(null);
+  }, [earthExperiencePolicy]);
 
   // Handing the camera home: ownership ends and the zoom authority is set back
   // to where the band reopens, so the particle globe and the map cannot
@@ -624,13 +734,22 @@ export function LivingAtlasGlobe({
   // Invoked while a Dive is pending or owned by detail, it releases back to
   // the overview path; the readiness/failure semantics remain owned by #252.
   const requestDive = useCallback(() => {
+    if (earthExperiencePolicyRef.current === "particle-only") {
+      setZoomIntent((previous) => ({
+        zoom: particleOnlyZoomedIn ? SEMANTIC_ZOOM_RELEASE_ZOOM : GLOBE_SEMANTIC_ZOOM_CEILING,
+        revision: (previous?.revision ?? 0) + 1,
+      }));
+      setParticleOnlyZoomedIn((current) => !current);
+      return;
+    }
+    policyEntryArmedRef.current = true;
     if (diveRef.current.stage !== "particle") {
       releaseDive();
       return;
     }
     releaseRequestedRef.current = false;
     commandRequestedRef.current = true;
-  }, [releaseDive]);
+  }, [particleOnlyZoomedIn, releaseDive]);
 
   useEffect(() => {
     let frame = 0;
@@ -647,7 +766,7 @@ export function LivingAtlasGlobe({
       // transfer until the surface is actually on screen. That is measured
       // from the layer itself rather than timed: no clock reaches the resolver.
       const layer = detailLayerRef.current;
-      if (previous.stage === "blending") {
+      if (previous.stage === "blending" && earthExperiencePolicyRef.current === "default") {
         // Bounded to the overlap window: this rAF already exists for the Dive.
         // It keeps the reveal and the commit gate on the same latest published
         // camera frames without adding another observer or clock.
@@ -672,7 +791,8 @@ export function LivingAtlasGlobe({
         )
         : null;
       if (
-        previous.stage === "blending"
+        earthExperiencePolicyRef.current === "default"
+        && previous.stage === "blending"
         && snapshotRef.current.level === "local"
         && revealMode !== "fallback"
         && readinessRef.current === "fully-settled"
@@ -697,6 +817,7 @@ export function LivingAtlasGlobe({
         || (particleFrameMatchesZoom && Boolean(alignment?.aligned));
       const blendPresented = spatialRevealPresented && alignmentPresented;
       const next = resolveEarthDive(previous, {
+        policy: earthExperiencePolicyRef.current,
         snapshot: snapshotRef.current,
         readiness: readinessRef.current,
         handoffRevision: handoffRevisionRef.current,
@@ -705,6 +826,7 @@ export function LivingAtlasGlobe({
         releaseRequested: releaseRequestedRef.current,
         blendPresented,
         suspended: suspendedRef.current,
+        entryAllowed: policyEntryArmedRef.current,
         reduceMotion: Boolean(reduceMotion),
       });
       if (layer && previous.owner !== "detail" && next.owner === "detail") {
@@ -796,7 +918,10 @@ export function LivingAtlasGlobe({
     };
   }, [gestureHint.session, gestureHintVisible]);
 
-  const homeBaseInteractive = dive.owner !== "detail"
+  const effectiveDive: EarthDiveState = earthExperiencePolicy === "particle-only"
+    ? { ...INITIAL_EARTH_DIVE_STATE, blendMs: dive.blendMs }
+    : dive;
+  const homeBaseInteractive = effectiveDive.owner !== "detail"
     && !cinematicActive
     && !onGlobePointPick
     && Boolean(onHomeBaseActivate);
@@ -820,10 +945,10 @@ export function LivingAtlasGlobe({
       onParticleAnchorFrame: handleParticleAnchorFrame,
       homeBasePresence: homeBaseLayer,
       onHomeBasePresenceFrame: handleHomeBasePresenceFrame,
-      onManualCameraInteraction,
+      onManualCameraInteraction: handleManualCameraInteraction,
       zoomIntent: zoomIntent ?? undefined,
-      inputOwner: dive.owner,
-      earthDiveOverlapActive: dive.stage === "prewarm" || dive.stage === "blending",
+      inputOwner: effectiveDive.owner,
+      earthDiveOverlapActive: effectiveDive.stage === "prewarm" || effectiveDive.stage === "blending",
       mediaCoverHint: {
         opaqueMediaCover: Boolean(mediaCoverHint?.opaqueMediaCover),
         coverTransitionActive: Boolean(mediaCoverHint?.coverTransitionActive),
@@ -833,6 +958,7 @@ export function LivingAtlasGlobe({
   }, [
     activeJourneyRouteId,
     cinematicActive,
+    earthExperiencePolicy,
     dive.owner,
     dive.stage,
     focusColor,
@@ -849,7 +975,7 @@ export function LivingAtlasGlobe({
     journeyRoutes,
     zoomIntent,
     onGlobePointPick,
-    onManualCameraInteraction,
+    handleManualCameraInteraction,
     onJourneyRouteActivate,
     onJourneyRoutePointActivate,
     onHomeBaseActivate,
@@ -863,14 +989,17 @@ export function LivingAtlasGlobe({
   useEffect(() => () => persistentEarth.setAtlasPresentation(null), [persistentEarth]);
 
   useEffect(() => {
+    if (earthExperiencePolicy !== "default") return;
     const preloadTimer = window.setTimeout(() => void loadDetailedEarthMap(), 350);
     return () => window.clearTimeout(preloadTimer);
-  }, []);
+  }, [earthExperiencePolicy]);
 
   // The detail renderer is mounted from `prewarm` on, hidden, so the blend has
-  // something real to reveal and nothing has to be revealed on a timer.
-  const showDetail = dive.stage !== "particle";
-  const detailMode = dive.stage === "detail";
+  // something real to reveal and nothing has to be revealed on a timer. A hard
+  // particle-only policy is checked before mount so no hidden MapLibre lifetime
+  // exists for CSS to conceal.
+  const showDetail = earthExperiencePolicy === "default" && effectiveDive.stage !== "particle";
+  const detailMode = effectiveDive.stage === "detail";
   // #308 review: compact mobile still needs a non-gesture path for external
   // keyboards and switch-control users. Keep the semantic Dive intent mounted
   // independently from the optional detail utility cluster; focus mode and
@@ -881,9 +1010,10 @@ export function LivingAtlasGlobe({
     <section
       className={`living-atlas-globe${detailMode ? " is-detail" : " is-overview"}${cinematicActive ? " is-cinematic" : ""}`}
       data-earth-mode={detailMode ? "detail" : "particle"}
-      data-earth-dive={dive.stage}
-      data-earth-dive-owner={dive.owner}
-      style={{ "--earth-dive-blend-ms": `${dive.blendMs}ms` } as CSSProperties}
+      data-earth-policy={earthExperiencePolicy}
+      data-earth-dive={effectiveDive.stage}
+      data-earth-dive-owner={effectiveDive.owner}
+      style={{ "--earth-dive-blend-ms": `${effectiveDive.blendMs}ms` } as CSSProperties}
       data-ambience="on"
       aria-label={detailMode ? "高精度地球地图" : "粒子艺术地球"}
     >
@@ -898,8 +1028,8 @@ export function LivingAtlasGlobe({
         <div ref={bindDetailLayer} className="living-atlas-globe__layer living-atlas-globe__detail-layer">
           <Suspense fallback={null}>
             <DetailedEarthMap
-              diveStage={dive.stage}
-              diveOwner={dive.owner}
+              diveStage={effectiveDive.stage}
+              diveOwner={effectiveDive.owner}
               diveSnapshot={handoffSnapshot ?? snapshotRef.current}
               particleFrame={particleFrame}
               focusPoint={focusPoint}
@@ -909,6 +1039,7 @@ export function LivingAtlasGlobe({
               language={detailLanguage}
               onGlobePointPick={detailMode ? onGlobePointPick : undefined}
               onOverviewRequest={releaseDive}
+              onCameraObservation={handleDetailCameraObservation}
               onReadinessChange={handleDetailReadiness}
               calibrationHandleRef={detailCalibrationRef}
             />
@@ -945,13 +1076,16 @@ export function LivingAtlasGlobe({
 
       {showControls || showDiveIntent ? (
         <LivingAtlasGlobeControls
-          diveStage={dive.stage}
+          diveStage={effectiveDive.stage}
           detailLanguage={detailLanguage}
           onDiveIntent={requestDive}
           onDetailLanguageChange={setDetailLanguage}
           onPickRequest={onPickRequest}
           showDiveIntent={showDiveIntent}
           showDetailControls={showControls}
+          diveIntentLabel={earthExperiencePolicy === "particle-only"
+            ? particleOnlyZoomedIn ? "退远查看全局" : "靠近查看局部"
+            : undefined}
           inert={cinematicActive}
         />
       ) : null}
@@ -962,7 +1096,7 @@ export function LivingAtlasGlobe({
           uncluttered and relies on its native pinch gesture. */}
       {modeNoteVisible ? (
         <div className="living-atlas-globe__mode-note" aria-hidden="true">
-          {dive.stage === "prewarm" || dive.stage === "blending"
+          {effectiveDive.stage === "prewarm" || effectiveDive.stage === "blending"
             ? "VECTOR MAP PREPARING"
             : detailMode
               ? "DRAG TO EXPLORE / ZOOM OUT TO RETURN"

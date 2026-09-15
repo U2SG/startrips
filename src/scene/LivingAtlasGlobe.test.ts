@@ -88,6 +88,32 @@ describe("Semantic Earth Dive renderer ownership", () => {
       'if (next.stage === "prewarm" || next.stage === "particle") releaseRequestedRef.current = false;',
     );
   });
+
+  it("checks hard renderer policy before preload, mount and ownership", () => {
+    const globe = readFileSync(new URL("./LivingAtlasGlobe.tsx", import.meta.url), "utf8");
+    const detail = readFileSync(new URL("./DetailedEarthMap.tsx", import.meta.url), "utf8");
+    expect(globe).toContain('if (earthExperiencePolicy !== "default") return;');
+    expect(globe).toContain(
+      'const showDetail = earthExperiencePolicy === "default" && effectiveDive.stage !== "particle";',
+    );
+    expect(globe).toContain("policy: earthExperiencePolicyRef.current");
+    expect(globe).toContain("entryAllowed: policyEntryArmedRef.current");
+    expect(globe).toContain("onCameraObservation={handleDetailCameraObservation}");
+    expect(detail).toContain("__detailedEarthMapConstructionCount");
+    expect(detail).toContain("__detailedEarthMapRemovalCount");
+    expect(detail).toContain("onCameraObservationRef.current?.(");
+  });
+
+  it("requires a post-policy intent instead of rearming from a stale semantic snapshot", () => {
+    const globe = readFileSync(new URL("./LivingAtlasGlobe.tsx", import.meta.url), "utf8");
+    const semanticHandler = globe.match(
+      /const handleSemanticZoomSnapshot = useCallback\(\(snapshot: SemanticZoomSnapshot\) => \{[\s\S]*?\}, \[onSemanticZoomChange, syncDetailSpatialReveal\]\);/,
+    )?.[0] ?? "";
+    expect(semanticHandler).not.toContain("policyEntryArmedRef.current = true");
+    expect(globe).toContain('if (earthExperiencePolicyRef.current === "default") policyEntryArmedRef.current = true;');
+    expect(globe).toContain("nextFocusRevision !== policyFocusRevisionRef.current");
+    expect(globe).toMatch(/policyEntryArmedRef\.current = true;\s+if \(diveRef\.current\.stage !== "particle"\)/);
+  });
 });
 
 describe("Semantic Earth Dive accessibility fallback (#308)", () => {
@@ -180,12 +206,12 @@ describe("Home Base presence projection (ST-056)", () => {
   });
   it("keeps Home presence on the particle owner through prewarm/blend and off the detail owner", () => {
     const source = readFileSync(new URL("./LivingAtlasGlobe.tsx", import.meta.url), "utf8");
-    expect(source).toContain('const homeBaseInteractive = dive.owner !== "detail"');
+    expect(source).toContain('const homeBaseInteractive = effectiveDive.owner !== "detail"');
     expect(source).toContain('onHomeBaseActivate: homeBaseInteractive ? onHomeBaseActivate : undefined');
   });
   it("yields the Home hit target completely while globe point-picking owns pointer input", () => {
     const source = readFileSync(new URL("./LivingAtlasGlobe.tsx", import.meta.url), "utf8");
-    expect(source).toContain('const homeBaseInteractive = dive.owner !== "detail"');
+    expect(source).toContain('const homeBaseInteractive = effectiveDive.owner !== "detail"');
     expect(source).toContain('onHomeBaseActivate: homeBaseInteractive ? onHomeBaseActivate : undefined');
   });
 

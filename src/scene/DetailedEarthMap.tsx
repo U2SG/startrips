@@ -82,6 +82,8 @@ type DetailedEarthMapProps = {
   language: DetailedEarthLanguage;
   onGlobePointPick?: (point: { latitude: number; longitude: number }) => void;
   onOverviewRequest?: () => void;
+  /** Latest detail-owned geographic observation for a renderer-to-particle handback. */
+  onCameraObservation?: (point: { latitude: number; longitude: number }) => void;
   /**
    * How far this renderer has come. #252 section 3 separates renderer readiness
    * from tile settlement: `visual-ready` means the style is parsed and the
@@ -149,6 +151,7 @@ export default function DetailedEarthMap({
   language,
   onGlobePointPick,
   onOverviewRequest,
+  onCameraObservation,
   onReadinessChange,
   calibrationHandleRef,
 }: DetailedEarthMapProps) {
@@ -165,6 +168,7 @@ export default function DetailedEarthMap({
   const focusRouteRef = useRef(focusRoute);
   const onPickRef = useRef(onGlobePointPick);
   const onOverviewRequestRef = useRef(onOverviewRequest);
+  const onCameraObservationRef = useRef(onCameraObservation);
   const onReadinessChangeRef = useRef(onReadinessChange);
   const diveStageRef = useRef(diveStage);
   const diveOwnerRef = useRef(diveOwner);
@@ -186,6 +190,7 @@ export default function DetailedEarthMap({
   focusRouteRef.current = focusRoute;
   onPickRef.current = onGlobePointPick;
   onOverviewRequestRef.current = onOverviewRequest;
+  onCameraObservationRef.current = onCameraObservation;
   onReadinessChangeRef.current = onReadinessChange;
 
   const handoffFrame = (frameOverride?: ParticleAnchorFrame | null) => getEarthDiveHandoffFrame({
@@ -204,6 +209,10 @@ export default function DetailedEarthMap({
     // to the same focus, and that second flight is exactly the jump #252 is
     // about.
     const mountFrame = handoffFrame();
+    if (import.meta.env.DEV && typeof window !== "undefined") {
+      const debugWindow = window as Window & { __detailedEarthMapConstructionCount?: number };
+      debugWindow.__detailedEarthMapConstructionCount = (debugWindow.__detailedEarthMapConstructionCount ?? 0) + 1;
+    }
     const map = new MapLibreMap({
       container: host,
       style: getDetailedEarthStyle(),
@@ -269,6 +278,15 @@ export default function DetailedEarthMap({
     const publishReadiness = (readiness: DetailReadiness) => {
       host.dataset.mapReadiness = readiness;
       onReadinessChangeRef.current?.(readiness);
+    };
+    const publishCameraObservation = () => {
+      if (diveOwnerRef.current !== "detail") return;
+      const center = map.getCenter();
+      host.dataset.mapCameraObservation = `${center.lng},${center.lat}`;
+      onCameraObservationRef.current?.({
+        latitude: center.lat,
+        longitude: center.lng,
+      });
     };
     // The renderer exists but has drawn nothing yet.
     publishReadiness("mounted");
@@ -602,6 +620,7 @@ export default function DetailedEarthMap({
         || (diveOwnerRef.current === "detail" && Boolean(event.originalEvent))
       ) cameraIntentRevisionRef.current += 1;
       publishAnchorFrame();
+      publishCameraObservation();
     });
     map.on("moveend", () => {
       // `map.resize()` can emit moveend while an explicit flyTo/fitBounds is
@@ -641,6 +660,10 @@ export default function DetailedEarthMap({
       if (calibrationHandleRef) calibrationHandleRef.current = null;
       focusFlightActiveRef.current = false;
       map.remove();
+      if (import.meta.env.DEV && typeof window !== "undefined") {
+        const debugWindow = window as Window & { __detailedEarthMapRemovalCount?: number };
+        debugWindow.__detailedEarthMapRemovalCount = (debugWindow.__detailedEarthMapRemovalCount ?? 0) + 1;
+      }
     };
   }, []);
 
@@ -703,6 +726,13 @@ export default function DetailedEarthMap({
       // already-aligned map. Only cancel any leftover MapLibre continuation
       // before user handlers wake.
       map.stop();
+      const center = map.getCenter();
+      const host = hostRef.current;
+      if (host) host.dataset.mapCameraObservation = `${center.lng},${center.lat}`;
+      onCameraObservationRef.current?.({
+        latitude: center.lat,
+        longitude: center.lng,
+      });
     }
     const canvas = map.getCanvas();
     if (owns) {

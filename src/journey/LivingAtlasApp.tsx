@@ -952,9 +952,11 @@ export async function closeUnknownCreateWithCurrentAtlasTruth({
 export function LivingAtlasApp({
   lightweightGlobe = false,
   GlobeComponent = LivingAtlasGlobe,
+  earthExperiencePolicy = "default",
 }: {
   lightweightGlobe?: boolean;
   GlobeComponent?: ComponentType<LivingAtlasGlobeProps>;
+  earthExperiencePolicy?: NonNullable<LivingAtlasGlobeProps["earthExperiencePolicy"]>;
 } = {}) {
   // #200 phase D: the product mode. `capabilities` decides which affordances
   // exist; `mutations` is null in shared mode, so there is no client here that
@@ -2402,6 +2404,7 @@ export function LivingAtlasApp({
             onSemanticZoomChange={setAtlasSemanticZoom}
             onManualCameraInteraction={claimManualAtlasCamera}
             showControls={showsGlobeDetailControls(isMobileV2, globeFocusMode)}
+            earthExperiencePolicy={earthExperiencePolicy}
             globeFocusMode={globeFocusMode}
             onJourneyRouteActivate={(id) => {
               if (id === "draft-route-preview") return;
