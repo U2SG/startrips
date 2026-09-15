@@ -416,12 +416,15 @@ describe("#368 cover-reveal worker protocol", () => {
         // anonymous caller.
         expect([401, 404]).toContain(response.status);
       }
-      // The guest capability path resolves a share token, and this is not one.
+      // The guest capability path resolves a share token, and this is not
+      // one. 429 is accepted alongside 404 only because the guest prefix
+      // carries its own unknown-token budget; the assertion's point is that
+      // this credential never authorizes a guest read.
       const guest = await app.request(
         `${TEST_ORIGIN}/api/shared/journeys`,
         { headers: workerHeaders() },
       );
-      expect(guest.status).toBe(404);
+      expect([404, 429]).toContain(guest.status);
     });
 
     it("refuses the worker routes when the deployment configures none", async () => {
@@ -996,6 +999,8 @@ describe("#368 cover-reveal worker protocol", () => {
     it("refuses an object over the byte ceiling", async () => {
       const settings = { ...SETTINGS, maxBytes: 1_024 };
       const context = await queuedAndClaimed(recordingStorage(), settings);
+      const leased = await readJob(context.claim.job.id);
+      const outputKey = leased.outputStorageKey as string;
       const completed = await uploadAndComplete(context, settings);
       expect(completed).toMatchObject({
         ok: false,
@@ -1003,7 +1008,9 @@ describe("#368 cover-reveal worker protocol", () => {
       });
       const row = await readJob(context.claim.job.id);
       expect(row.state).not.toBe("ready");
-      expect(context.backend.deleted).toContain(row.outputStorageKey ?? "");
+      // Settled, so the attempt's object is both dropped and unreferenced.
+      expect(context.backend.deleted).toContain(outputKey);
+      expect(row.outputStorageKey).toBeNull();
     });
 
     it("refuses an object over the pixel ceiling", async () => {
