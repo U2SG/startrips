@@ -1,6 +1,6 @@
 import { STARTRIPS_V12_AUTHORED_TIMELINE, type StartripsV12Part } from "./startripsV12MotionSource";
 
-export type StartripsSignatureClipName = "full" | "loading";
+export type StartripsSignatureClipName = "full" | "loading" | "recovery";
 
 export type StartripsSignatureClipEvent = {
   id: string;
@@ -72,9 +72,33 @@ const LOADING_CLIP: StartripsSignatureClip = {
   ],
 };
 
+
+/**
+ * Recovery is a warm, one-shot remap of the same approved v12 events. It is
+ * deliberately not a uniform speed-up: the notice breathes, the four support
+ * contacts stay staggered, then the mark settles and never loops.
+ */
+const RECOVERY_CLIP: StartripsSignatureClip = {
+  name: "recovery",
+  durationMs: 4_200,
+  loop: false,
+  events: [
+    event("notice-star", 0, 920),
+    event("notice-head", 0, 920),
+    event("notice-eye", 0, 920),
+    event("front-near-climb", 980, 1_720),
+    event("front-far-climb", 1_190, 1_930),
+    event("hind-near-transfer", 1_940, 2_850),
+    event("hind-far-transfer", 2_180, 3_080),
+    event("fore-near-home", 3_260, 3_790),
+    event("hind-far-home", 3_520, 4_080),
+  ],
+};
+
 export const STARTRIPS_SIGNATURE_CLIPS: Readonly<Record<StartripsSignatureClipName, StartripsSignatureClip>> = {
   full: FULL_CLIP,
   loading: LOADING_CLIP,
+  recovery: RECOVERY_CLIP,
 };
 
 export function getStartripsSignatureClip(name: StartripsSignatureClipName) {
@@ -164,7 +188,7 @@ export function sampleStartripsSignaturePose(name: StartripsSignatureClipName, e
   );
   const support = Math.max(frontNear, frontFar, hindNear, hindFar);
 
-  if (name === "loading") {
+  if (name !== "full") {
     const approach = 1 - smoothstep(noticeEvent.clipStartMs, foreHome.clipStartMs, t);
     const starPulseStart = noticeEvent.clipEndMs * 0.68;
     return {

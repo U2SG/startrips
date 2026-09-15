@@ -74,4 +74,17 @@ describe("Startrips v12 semantic clips", () => {
     expect(starts["hind-near-transfer"]).toBeLessThan(starts["hind-far-transfer"]);
   });
 
+  it("derives a bounded non-looping recovery clip from the canonical v12 events", () => {
+    const recovery = getStartripsSignatureClip("recovery");
+    expect(recovery.durationMs).toBeGreaterThanOrEqual(3_000);
+    expect(recovery.durationMs).toBeLessThanOrEqual(5_000);
+    expect(recovery.loop).toBe(false);
+    expect(isUniformTimelineScale(recovery)).toBe(false);
+    expect(recovery.events.every((entry) => STARTRIPS_V12_AUTHORED_TIMELINE.events.some((source) => source.id === entry.id))).toBe(true);
+    expect(recovery.events.at(-1)?.kind).toBe("settle");
+    expect(sampleStartripsSignaturePose("recovery", recovery.durationMs)).toMatchObject({
+      rootX: 0, rootY: 0, bodyY: 0, headRotateDeg: 0, starScale: 1,
+    });
+  });
+
 });

@@ -94,7 +94,7 @@
 .startrips-not-found section { align-self: center; max-width: 440px; }
 .startrips-not-found__code { margin: 0; font: 400 clamp(64px, 16vw, 104px)/1.1 var(--archive-serif); }
 .startrips-not-found h1 { margin: 16px 0; font: 400 clamp(24px, 5vw, 32px)/1.4 var(--archive-serif); }
-.startrips-not-found section > p:not(.startrips-not-found__code) { color: var(--startrips-muted); font-size: 14px; line-height: 1.8; }
+.startrips-not-found section > p:not(.startrips-not-found__code):not(.startrips-recovery-surface__code) { color: var(--startrips-muted); font-size: 14px; line-height: 1.8; }
 .startrips-not-found a {
   display: inline-flex;
   align-items: center;
@@ -129,4 +129,152 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .auth-primary { transition: none; }
+}
+
+/* #359 — one bounded v12 recovery language for app-level recovery surfaces. */
+.startrips-recovery-surface {
+  display: grid;
+  justify-items: start;
+  gap: 0;
+  color: var(--startrips-starlight);
+}
+.startrips-recovery-surface__motion {
+  min-height: 64px;
+  display: flex;
+  align-items: center;
+  margin-bottom: 16px;
+}
+.startrips-recovery-surface__eyebrow {
+  margin: 0 0 12px;
+  color: var(--startrips-muted);
+  font: 500 9px/1 ui-monospace, "SFMono-Regular", Consolas, monospace;
+  letter-spacing: 0.18em;
+}
+.startrips-recovery-surface__code {
+  margin: 0;
+  font: 400 clamp(64px, 16vw, 104px)/1.1 var(--archive-serif);
+}
+.startrips-recovery-surface :is(h1, h2) {
+  margin: 10px 0 12px;
+  font: 400 clamp(28px, 4vw, 42px)/1.18 var(--archive-serif);
+  letter-spacing: -0.025em;
+}
+.startrips-recovery-surface__body,
+.startrips-recovery-surface__detail {
+  max-width: 38ch;
+  margin: 0;
+  color: var(--startrips-muted);
+  font-size: 13px;
+  line-height: 1.8;
+}
+.startrips-recovery-surface__detail {
+  margin-top: 8px;
+  color: #c79c82;
+}
+.startrips-recovery-surface__actions {
+  min-height: 48px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 22px;
+}
+.startrips-recovery-surface__action,
+.startrips-not-found .startrips-recovery-surface__action,
+.living-atlas .startrips-recovery-surface__action,
+.living-atlas.is-error .startrips-recovery-surface__action {
+  min-height: 48px;
+  min-width: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin: 0;
+  padding: 0 18px;
+  border: 1px solid rgba(237, 247, 243, 0.28);
+  border-radius: 12px;
+  background: var(--startrips-starlight);
+  color: var(--startrips-space);
+  cursor: pointer;
+  font: 500 12px/1 var(--archive-sans);
+  letter-spacing: 0.04em;
+  text-decoration: none;
+}
+.startrips-recovery-surface__action.is-secondary,
+.startrips-not-found .startrips-recovery-surface__action.is-secondary,
+.living-atlas .startrips-recovery-surface__action.is-secondary {
+  background: transparent;
+  color: var(--startrips-starlight);
+}
+.startrips-recovery-surface__action:focus-visible {
+  outline: 2px solid var(--startrips-aurora);
+  outline-offset: 4px;
+}
+.startrips-not-found > .startrips-recovery-surface {
+  align-self: center;
+  justify-items: center;
+  max-width: 520px;
+  text-align: center;
+}
+.startrips-not-found > .startrips-recovery-surface .startrips-recovery-surface__body {
+  max-width: 42ch;
+}
+.living-atlas.is-error > .startrips-recovery-surface {
+  width: min(520px, calc(100vw - 40px));
+  padding: 32px;
+  border: 1px solid var(--atlas-line);
+  background: var(--atlas-panel-solid);
+}
+.living-atlas__empty.startrips-recovery-surface .startrips-recovery-surface__motion {
+  margin-bottom: 12px;
+}
+.living-atlas__empty.startrips-recovery-surface :is(h1, h2) {
+  margin: 6px 0 10px;
+  font-size: clamp(32px, 3.8vw, 48px);
+  line-height: 1.2;
+}
+.living-atlas__empty.startrips-recovery-surface .startrips-recovery-surface__body {
+  max-width: 370px;
+}
+.living-atlas__empty.startrips-recovery-surface .startrips-recovery-surface__actions {
+  pointer-events: auto;
+}
+@media (max-width: 760px), (max-width: 960px) and (max-height: 480px) and (any-pointer: coarse) {
+  .living-atlas.is-mobile-v2 .living-atlas__empty.startrips-recovery-surface {
+    pointer-events: none;
+  }
+  .living-atlas.is-mobile-v2 .living-atlas__empty.startrips-recovery-surface .startrips-recovery-surface__motion {
+    min-height: 52px;
+    margin-bottom: 10px;
+  }
+  .living-atlas.is-mobile-v2 .living-atlas__empty.startrips-recovery-surface .startrips-signature-motion {
+    --startrips-signature-size: 52px !important;
+  }
+  .living-atlas.is-mobile-v2 .living-atlas__empty.startrips-recovery-surface :is(h1, h2) {
+    margin: 2px 0 8px;
+    font-size: 30px;
+  }
+  .living-atlas.is-mobile-v2 .living-atlas__empty.startrips-recovery-surface .startrips-recovery-surface__body {
+    max-width: 280px;
+    font-size: 11px;
+    line-height: 1.65;
+  }
+  .startrips-recovery-surface__actions {
+    width: 100%;
+    justify-content: center;
+  }
+  .startrips-recovery-surface__action {
+    min-height: 48px;
+  }
+}
+.startrips-not-found .startrips-recovery-surface > .startrips-recovery-surface__eyebrow,
+.living-atlas__empty.startrips-recovery-surface > .startrips-recovery-surface__eyebrow {
+  margin: 0 0 12px;
+  color: var(--startrips-muted);
+  font: 500 9px/1 ui-monospace, "SFMono-Regular", Consolas, monospace;
+  letter-spacing: 0.18em;
+}
+.startrips-not-found .startrips-recovery-surface > .startrips-recovery-surface__body {
+  color: var(--startrips-muted);
+  font-size: 13px;
+  line-height: 1.8;
 }

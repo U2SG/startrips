@@ -14,7 +14,8 @@ import {
 } from "@tabler/icons-react";
 import { MobileAccountActionSlot, useAtlasCinematicIsolation } from "../auth/AuthGateway";
 import { useAtlasView, type AtlasMediaRead } from "./atlasView";
-import { StartripsBrandLoader, StartripsJourneyCue, StartripsWordmark } from "../brand/StartripsBrandMark";
+import { StartripsBrandLoader, StartripsWordmark } from "../brand/StartripsBrandMark";
+import { StartripsRecoverySurface } from "../brand/StartripsRecoverySurface";
 import { CountUp } from "../motion/primitives/CountUp";
 import { useMagnet } from "../motion/primitives/Magnet";
 import { ScrambledText } from "../motion/primitives/ScrambledText";
@@ -2330,7 +2331,11 @@ export function LivingAtlasApp({
   if (status === "error") {
     return (
       <main className="living-atlas is-error">
-        <section><StartripsJourneyCue state="rest" size={80} /><p>PRIVATE ATLAS</p><h1>暂时无法读取旅程</h1><p role="alert">{loadError}</p><button type="button" onClick={() => void load()}>重试</button></section>
+        <StartripsRecoverySurface
+          kind="error"
+          detail={loadError}
+          onPrimaryAction={() => void load()}
+        />
       </main>
     );
   }
@@ -2571,13 +2576,12 @@ export function LivingAtlasApp({
       ) : null}
 
       {view === "planet" && journeys.length === 0 ? (
-        <section className="living-atlas__empty">
-          <p>NO JOURNEYS YET</p>
-          <StartripsJourneyCue state="rest" size={88} />
-          <h2>第一颗星，从这里亮起</h2>
-          <p>一段远行，或只在一个地方停留。记下第一段旅程，让走过的路留在地球上。</p>
-          {canCreateJourney ? <button type="button" onClick={openCreateComposer}><IconPlus size={17} stroke={1.4} aria-hidden="true" />记录第一段旅程</button> : null}
-        </section>
+        <StartripsRecoverySurface
+          kind="empty"
+          className="living-atlas__empty"
+          headingLevel={2}
+          onPrimaryAction={canCreateJourney ? openCreateComposer : undefined}
+        />
       ) : null}
 
       {!isMobileV2 && view === "planet" && activeJourney ? (

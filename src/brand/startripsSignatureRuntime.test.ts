@@ -136,4 +136,49 @@ describe("Startrips signature runtime lifecycle", () => {
     runtime.dispose();
   });
 
+  it("keeps recovery interruption terminal across stale frames and visibility or motion changes", () => {
+    const fake = fakeScheduler();
+    const states: Array<{ status: string; elapsedMs: number; driverCount: number }> = [];
+    const runtime = createStartripsSignatureRuntime({
+      clip: "recovery", reduced: false, scheduler: fake.scheduler, onPose: vi.fn(), onState: (state) => states.push(state),
+    });
+    runtime.start();
+    fake.step(600);
+    const stale = fake.firstCallback();
+    runtime.interrupt();
+    const interrupted = states.at(-1);
+    expect(interrupted).toMatchObject({ status: "interrupted", driverCount: 0 });
+    expect(fake.pending()).toBe(0);
+    stale?.(1_200);
+    runtime.setSuspended(true);
+    runtime.setSuspended(false);
+    runtime.setReduced(true);
+    runtime.setReduced(false);
+    runtime.start();
+    expect(fake.pending()).toBe(0);
+    expect(states.at(-1)).toEqual(interrupted);
+    runtime.dispose();
+  });
+
+  it("keeps recovery interruption terminal when reduced motion was active first", () => {
+    const fake = fakeScheduler();
+    const states: Array<{ status: string; elapsedMs: number; driverCount: number }> = [];
+    const runtime = createStartripsSignatureRuntime({
+      clip: "recovery", reduced: true, scheduler: fake.scheduler, onPose: vi.fn(), onState: (state) => states.push(state),
+    });
+    runtime.start();
+    expect(states.at(-1)).toMatchObject({ status: "reduced", driverCount: 0 });
+    expect(fake.pending()).toBe(0);
+
+    runtime.interrupt();
+    const interrupted = states.at(-1);
+    expect(interrupted).toMatchObject({ status: "interrupted", driverCount: 0 });
+
+    runtime.setReduced(false);
+    runtime.start();
+    expect(fake.pending()).toBe(0);
+    expect(states.at(-1)).toEqual(interrupted);
+    runtime.dispose();
+  });
+
 });
