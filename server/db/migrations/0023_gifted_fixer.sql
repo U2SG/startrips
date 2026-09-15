@@ -45,6 +45,7 @@ CREATE TABLE "cover_reveal_writes" (
 ALTER TABLE "cover_reveal_derivatives" ADD CONSTRAINT "cover_reveal_derivatives_journey_id_journeys_id_fk" FOREIGN KEY ("journey_id") REFERENCES "public"."journeys"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 CREATE UNIQUE INDEX "cover_reveal_derivatives_output_key_unique" ON "cover_reveal_derivatives" USING btree ("output_storage_key");--> statement-breakpoint
 CREATE UNIQUE INDEX "cover_reveal_derivatives_lease_hash_unique" ON "cover_reveal_derivatives" USING btree ("lease_token_hash");--> statement-breakpoint
+CREATE UNIQUE INDEX "cover_reveal_derivatives_live_identity_unique" ON "cover_reveal_derivatives" USING btree ("journey_id","source_media_asset_id","source_content_hash","generation_kind","generation_version") WHERE "cover_reveal_derivatives"."state" in ('queued', 'leased', 'ready');--> statement-breakpoint
 CREATE INDEX "cover_reveal_derivatives_state_created_idx" ON "cover_reveal_derivatives" USING btree ("state","created_at");--> statement-breakpoint
 CREATE INDEX "cover_reveal_derivatives_journey_idx" ON "cover_reveal_derivatives" USING btree ("journey_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "cover_reveal_writes_storage_key_unique" ON "cover_reveal_writes" USING btree ("storage_key");--> statement-breakpoint

@@ -481,6 +481,28 @@ describe("#368 cover-reveal worker protocol", () => {
       });
     });
 
+    /**
+     * The read-then-insert above is an optimisation; the live-identity partial
+     * unique index is the guarantee. Two owners asking together must not leave
+     * two claimable jobs for one cover.
+     */
+    it("leaves one job when two enqueues race for the same cover", async () => {
+      const { journeyId } = await createJourneyWithCover();
+      const [left, right] = await Promise.all([
+        enqueueCoverRevealDerivative(journeyId, identity.atlasId),
+        enqueueCoverRevealDerivative(journeyId, identity.atlasId),
+      ]);
+      expect(left.ok).toBe(true);
+      expect(right.ok).toBe(true);
+      if (!left.ok || !right.ok) throw new Error("unreachable");
+      expect(right.job.id).toBe(left.job.id);
+      const rows = await db
+        .select()
+        .from(coverRevealDerivatives)
+        .where(eq(coverRevealDerivatives.journeyId, journeyId));
+      expect(rows).toHaveLength(1);
+    });
+
     it("refuses a Journey the caller's Atlas does not own", async () => {
       const other = await createAuthenticatedAtlas("coverrevealother");
       const journey = await createJourneyForAtlas(other.atlasId, other.userId, {
@@ -600,6 +622,56 @@ describe("#368 cover-reveal worker protocol", () => {
       expect(row.state).toBe("failed");
       expect(row.lastErrorCode).toBe("WORKER_GENERATION_FAILED");
     });
+
+    /**
+     * Both sweeps skip a key a derivative still references, so a settled
+     * attempt that kept its output key would pin whatever the worker PUT —
+     * before or after it reported the failure — in the bucket forever.
+     */
+    it("unreferences and drops the object of a settled attempt", async () => {
+      const backend = recordingStorage();
+      const { journeyId } = await createJourneyWithCover();
+      await enqueueCoverRevealDerivative(
+        journeyId,
+        identity.atlasId,
+        backend.dependencies,
+      );
+      const claimed = await claimCoverRevealJob(
+        { ...SETTINGS, maxAttempts: 1 },
+        new Date(),
+        backend.dependencies,
+      );
+      expect(claimed.ok).toBe(true);
+      if (!claimed.ok) throw new Error("unreachable");
+      await signCoverRevealOutputUpload(
+        claimed.job.id,
+        claimed.leaseToken,
+        SETTINGS,
+        backend.dependencies,
+      );
+      const withKey = await readJob(claimed.job.id);
+      const outputKey = withKey.outputStorageKey as string;
+      expect(backend.objects.has(outputKey)).toBe(true);
+
+      await failCoverRevealJob(
+        claimed.job.id,
+        claimed.leaseToken,
+        "WORKER_UPLOAD_FAILED",
+        { ...SETTINGS, maxAttempts: 1 },
+        backend.dependencies,
+      );
+      const settled = await readJob(claimed.job.id);
+      expect(settled.state).toBe("failed");
+      expect(settled.outputStorageKey).toBeNull();
+      expect(settled.outputStorageDriver).toBeNull();
+      expect(backend.deleted).toContain(outputKey);
+      // And the sweep can now see it, because nothing references the key.
+      const swept = await reconcileCoverRevealNamespace(
+        undefined,
+        backend.dependencies,
+      );
+      expect(swept.examined).toBe(0);
+    });
   });
 
   describe("bounded capabilities", () => {
@@ -629,6 +701,66 @@ describe("#368 cover-reveal worker protocol", () => {
         error: "COVER_REVEAL_NOT_CLAIMED",
       });
       expect(backend.signedReads).toHaveLength(1);
+    });
+
+    it("clamps a capability to what is left of the lease", async () => {
+      const backend = recordingStorage();
+      const { journeyId } = await createJourneyWithCover();
+      await enqueueCoverRevealDerivative(
+        journeyId,
+        identity.atlasId,
+        backend.dependencies,
+      );
+      // Claimed so that roughly a minute of the lease remains.
+      const claim = await claimCoverRevealJob(
+        SETTINGS,
+        new Date(Date.now() - (SETTINGS.leaseSeconds - 60) * 1_000),
+        backend.dependencies,
+      );
+      expect(claim.ok).toBe(true);
+      if (!claim.ok) throw new Error("unreachable");
+      const read = await signCoverRevealSourceRead(
+        claim.job.id,
+        claim.leaseToken,
+        SETTINGS,
+        backend.dependencies,
+      );
+      expect(read).toMatchObject({ ok: true });
+      const issued = backend.signedReads[0].expiresInSeconds;
+      expect(issued).toBeLessThan(SETTINGS.sourceReadExpiresInSeconds);
+      expect(issued).toBeLessThanOrEqual(60);
+      expect(issued).toBeGreaterThan(0);
+    });
+
+    it("mints nothing once the lease has already closed", async () => {
+      const backend = recordingStorage();
+      const { journeyId } = await createJourneyWithCover();
+      await enqueueCoverRevealDerivative(
+        journeyId,
+        identity.atlasId,
+        backend.dependencies,
+      );
+      const claim = await claimCoverRevealJob(
+        SETTINGS,
+        new Date(Date.now() - (SETTINGS.leaseSeconds + 60) * 1_000),
+        backend.dependencies,
+      );
+      expect(claim.ok).toBe(true);
+      if (!claim.ok) throw new Error("unreachable");
+      expect(await signCoverRevealSourceRead(
+        claim.job.id,
+        claim.leaseToken,
+        SETTINGS,
+        backend.dependencies,
+      )).toMatchObject({ ok: false, error: "COVER_REVEAL_NOT_LEASED" });
+      expect(await signCoverRevealOutputUpload(
+        claim.job.id,
+        claim.leaseToken,
+        SETTINGS,
+        backend.dependencies,
+      )).toMatchObject({ ok: false, error: "COVER_REVEAL_NOT_LEASED" });
+      expect(backend.signedReads).toHaveLength(0);
+      expect(backend.signedUploads).toHaveLength(0);
     });
 
     it("signs an upload only for the claimed job's own object", async () => {

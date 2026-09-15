@@ -1,5 +1,5 @@
 {
-  "id": "22a37715-ba76-4d8f-95f0-2fcc8a513c63",
+  "id": "278a831b-976a-4d42-a0b6-23a2a19104f9",
   "prevId": "81ff970e-5097-47c2-b683-1cc1192c7eec",
   "version": "7",
   "dialect": "postgresql",
@@ -1356,6 +1356,46 @@
             }
           ],
           "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "cover_reveal_derivatives_live_identity_unique": {
+          "name": "cover_reveal_derivatives_live_identity_unique",
+          "columns": [
+            {
+              "expression": "journey_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "source_media_asset_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "source_content_hash",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "generation_kind",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "generation_version",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"cover_reveal_derivatives\".\"state\" in ('queued', 'leased', 'ready')",
           "concurrently": false,
           "method": "btree",
           "with": {}

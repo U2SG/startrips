@@ -175,10 +175,25 @@ All worker requests carry `Authorization: Bearer <credential>` and, except for
 
 Idempotent by pinned identity: a Journey whose cover has not moved already has
 the job it needs, and the same job is returned. A job pinned to a source that
-is no longer the cover is superseded in the same call.
+is no longer the cover is superseded in the same call. The guarantee is a
+partial unique index over `(journey_id, source_media_asset_id,
+source_content_hash, generation_kind, generation_version)` restricted to the
+live states, so two concurrent enqueues leave one job rather than two — the
+read-before-insert is only an optimisation.
+
+The guarantee is the database's, not the read's. A partial unique index over
+`(journey_id, source_media_asset_id, source_content_hash, generation_kind,
+generation_version)` restricted to the live states `queued | leased | ready`
+means two owner requests arriving together cannot both insert: the loser
+conflicts, writes nothing, and reads the winner back, so a client may call this
+route as often as it likes. The predicate is the live set on purpose — a
+`failed` or `superseded` job is history and never blocks a fresh attempt on the
+same cover.
 
 `404 JOURNEY_UNAVAILABLE`; `409 NO_COVER` / `SOURCE_UNSUPPORTED` /
-`SOURCE_IDENTITY_UNVERIFIED`.
+`SOURCE_IDENTITY_UNVERIFIED`; `409 JOURNEY_UNAVAILABLE` in the narrow case
+where the winner left the live set between the conflict and the read back,
+which only a cover change can do — the client asks again.
 
 ### `POST /api/cover-reveal-worker/claim`
 
@@ -199,7 +214,9 @@ appears in this response and nowhere else, ever.
 `200` → `{ "source": { "url", "expiresAt", "mimeType", "bytes" } }`
 
 A presigned read of exactly the pinned source object, for
-`COVER_REVEAL_SOURCE_READ_EXPIRES_IN_SECONDS`. The key is read from the pinned
+`COVER_REVEAL_SOURCE_READ_EXPIRES_IN_SECONDS` **clamped to what is left of the
+lease**, so a capability can never outlive the claim it belongs to and an
+already-expired claimant mints nothing at all. The key is read from the pinned
 row, not from the request, and the pinned stored-byte identity must still
 match, so a worker cannot be handed a read of an object the job was not pinned
 to. `404 COVER_REVEAL_NOT_CLAIMED`; `409 COVER_REVEAL_NOT_LEASED` /
@@ -210,7 +227,8 @@ to. `404 COVER_REVEAL_NOT_CLAIMED`; `409 COVER_REVEAL_NOT_LEASED` /
 `200` → `{ "upload": { "url", "headers", "expiresAt", "mimeType", "maxBytes",
 "maxEdgePixels" } }`
 
-A presigned single-object PUT to exactly the key this claim owns. **There is no
+A presigned single-object PUT to exactly the key this claim owns, for
+`COVER_REVEAL_UPLOAD_EXPIRES_IN_SECONDS` clamped to the remaining lease. **There is no
 storage key on this request**, so an arbitrary key cannot be requested. The
 write is recorded in `cover_reveal_writes` before it is signed, so the object
 has an owner no cascade can take away. The worker then PUTs its JPEG to `url`
@@ -226,7 +244,12 @@ Before publishing, the server validates, in order:
 2. the Journey's effective cover **re-resolves** to the pinned asset id *and*
    the pinned verified content hash — a pointer comparison would miss a
    reordering, and `server/routes/uploads.ts` nulls the pointer on media
-   move/undo;
+   move/undo. This check is made twice: once early, to avoid a pointless
+   storage read, and then again **inside the transaction that writes `ready`**,
+   holding a `FOR UPDATE` lock on the Journey row and on its media rows in the
+   repository's lock order. Without the second check the cover could move
+   between the validation and the write, because nothing about a Journey or
+   media mutation conflicts with the derivative row;
 3. the expected output object exists;
 4. its byte size is within `COVER_REVEAL_MAX_BYTES`;
 5. its bytes decode as the issued JPEG and its encoded pixel size is within
@@ -239,6 +262,12 @@ Failures: `404 COVER_REVEAL_NOT_CLAIMED`; `409 COVER_REVEAL_NOT_LEASED`,
 `COVER_REVEAL_OUTPUT_TOO_LARGE`, `COVER_REVEAL_OUTPUT_PIXELS_TOO_LARGE`,
 `COVER_REVEAL_OUTPUT_UNREADABLE` (object dropped, attempt settled).
 
+The one residual the row locks cannot exclude is an INSERT of a brand-new
+asset, which no lock on existing rows can prevent. A new asset can only win the
+`sort_order` fallback, never displace an explicit pointer, and the invalidation
+pass supersedes the job on its next run — so the outcome is a derivative that
+is retired, never one attached to the wrong cover.
+
 A successful completion writes only `cover_reveal_derivatives`. The Journey's
 `cover_media_asset_id`, its `revision`, and every `media_assets` row —
 identity, stored bytes and `sort_order` — are untouched.
@@ -250,6 +279,11 @@ Body `{ "leaseToken", "reason" }` where `reason` is one of
 `WORKER_CANCELLED`; anything else is recorded as `WORKER_UNSPECIFIED`. The job
 returns to `queued` while the retry budget lasts, and becomes `failed` once it
 does not.
+
+Settling an attempt — by `fail` or by a rejected output — also clears the
+output key, so the object that attempt may have written stops being referenced
+and the sweeps below can retire it. A retry mints a fresh key at its next
+claim, so nothing needs the old one.
 
 ### Idempotency
 

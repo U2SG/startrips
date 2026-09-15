@@ -662,6 +662,24 @@ export const coverRevealDerivatives = pgTable(
     uniqueIndex("cover_reveal_derivatives_lease_hash_unique").on(
       table.leaseTokenHash,
     ),
+    // One live job per pinned identity and generation contract, enforced by
+    // the database rather than by a read-then-insert.
+    //
+    // Enqueue is idempotent by identity, and two owner requests arriving
+    // together would both see no live row and both insert, leaving two
+    // claimable jobs for one cover. A partial unique index makes the second
+    // insert conflict instead, and the caller reads the winner back. The
+    // predicate is the live set on purpose: a `failed` or `superseded` job is
+    // history and must never block a fresh attempt on the same cover.
+    uniqueIndex("cover_reveal_derivatives_live_identity_unique")
+      .on(
+        table.journeyId,
+        table.sourceMediaAssetId,
+        table.sourceContentHash,
+        table.generationKind,
+        table.generationVersion,
+      )
+      .where(sql`${table.state} in ('queued', 'leased', 'ready')`),
     // The claim's index: it scans claimable states oldest first.
     index("cover_reveal_derivatives_state_created_idx").on(
       table.state,

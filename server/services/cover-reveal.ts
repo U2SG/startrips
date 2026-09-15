@@ -206,8 +206,47 @@ async function discardDerivativeObject(
  * and nothing else may. A worker never reaches this function at all — its
  * routes take a job id, and the job already names its Journey.
  */
-async function loadJourneyState(journeyId: string, atlasId: string | null) {
-  const [journey] = await db
+type Transaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/**
+ * Take the canonical state under row locks, in the repository's lock order.
+ *
+ * The Journey row first, then its media rows, which is the order every other
+ * write path here acquires them in (`lockActiveAtlas` -> Journey -> the rows
+ * below it), so this cannot deadlock against one. Locking BOTH is the point: a
+ * cover change writes `journeys`, but a reorder or a replacement writes only
+ * `media_assets`, and the effective cover moves with either.
+ *
+ * The residual is an INSERT of a brand-new asset, which no row lock can
+ * exclude. A new asset can only win the fallback, never displace an explicit
+ * pointer, and the invalidation pass supersedes the job on its next run — so
+ * the outcome is a derivative that is retired rather than one attached to the
+ * wrong cover.
+ */
+async function lockJourneyState(transaction: Transaction, journeyId: string) {
+  const locked = await transaction.execute<{ id: string }>(sql`
+    select ${journeys.id} as id
+    from ${journeys}
+    where ${journeys.id} = ${journeyId}
+    for update
+  `);
+  if (locked.rows.length === 0) return null;
+  await transaction.execute(sql`
+    select ${mediaAssets.id} as id
+    from ${mediaAssets}
+    where ${mediaAssets.journeyId} = ${journeyId}
+    order by ${mediaAssets.id}
+    for update
+  `);
+  return loadJourneyState(journeyId, null, transaction);
+}
+
+async function loadJourneyState(
+  journeyId: string,
+  atlasId: string | null,
+  reader: Transaction | typeof db = db,
+) {
+  const [journey] = await reader
     .select({
       id: journeys.id,
       atlasId: journeys.atlasId,
@@ -223,7 +262,7 @@ async function loadJourneyState(journeyId: string, atlasId: string | null) {
     .limit(1);
   if (!journey) return null;
 
-  const media: CoverRevealCandidateAsset[] = await db
+  const media: CoverRevealCandidateAsset[] = await reader
     .select({
       id: mediaAssets.id,
       journeyId: mediaAssets.journeyId,
@@ -306,8 +345,33 @@ export async function enqueueCoverRevealDerivative(
       seed: `${eligibility.contentHash.slice(0, 32)}`,
       state: "queued",
     })
+    // The read above is an optimisation, not the guarantee. Two owner requests
+    // arriving together both see no live row, so the live-identity partial
+    // unique index is what actually makes enqueue idempotent: the loser
+    // conflicts, inserts nothing, and reads the winner back.
+    .onConflictDoNothing()
     .returning();
-  return { ok: true, job: jobView(created) };
+  if (created) return { ok: true, job: jobView(created) };
+
+  const [won] = await db
+    .select()
+    .from(coverRevealDerivatives)
+    .where(and(
+      eq(coverRevealDerivatives.journeyId, journeyId),
+      eq(coverRevealDerivatives.sourceMediaAssetId, eligibility.source.id),
+      eq(coverRevealDerivatives.sourceContentHash, eligibility.contentHash),
+      eq(coverRevealDerivatives.generationKind, COVER_REVEAL_GENERATION_KIND),
+      eq(
+        coverRevealDerivatives.generationVersion,
+        COVER_REVEAL_GENERATION_VERSION,
+      ),
+      inArray(coverRevealDerivatives.state, ["queued", "leased", "ready"]),
+    ))
+    .limit(1);
+  // The winner settled the job out of the live set between the conflict and
+  // this read, which only a cover change can do; the caller asks again.
+  if (!won) return { ok: false, error: "JOURNEY_UNAVAILABLE", status: 409 };
+  return { ok: true, job: jobView(won) };
 }
 
 /**
@@ -455,6 +519,28 @@ async function findLeasedJob(jobId: string, leaseToken: string) {
 }
 
 /**
+ * How long a capability issued right now may live.
+ *
+ * The configured window, clamped to what is left of the lease. Without the
+ * clamp a request made a second before expiry would hand out a five-minute
+ * read that outlives the claim, so a worker whose job was reclaimed a moment
+ * later would still be reading the source — and an already-expired claimant
+ * could keep minting fresh capabilities until somebody reclaimed. An expired
+ * lease therefore mints nothing at all.
+ */
+function capabilitySeconds(
+  leaseExpiresAt: Date | null,
+  configuredSeconds: number,
+  now: Date,
+) {
+  if (!leaseExpiresAt) return 0;
+  const remaining = Math.floor(
+    (leaseExpiresAt.valueOf() - now.valueOf()) / 1_000,
+  );
+  return Math.min(configuredSeconds, Math.max(remaining, 0));
+}
+
+/**
  * A short-lived read of exactly the pinned source, and of nothing else.
  *
  * The key is never a parameter: it is read from the `media_assets` row the job
@@ -474,7 +560,12 @@ export async function signCoverRevealSourceRead(
 > {
   const job = await findLeasedJob(jobId, leaseToken);
   if (!job) return { ok: false, error: "COVER_REVEAL_NOT_CLAIMED", status: 404 };
-  if (job.state !== "leased") {
+  const expiresInSeconds = capabilitySeconds(
+    job.leaseExpiresAt,
+    settings.sourceReadExpiresInSeconds,
+    new Date(),
+  );
+  if (job.state !== "leased" || expiresInSeconds <= 0) {
     return { ok: false, error: "COVER_REVEAL_NOT_LEASED", status: 409 };
   }
 
@@ -493,10 +584,7 @@ export async function signCoverRevealSourceRead(
 
   const signed = await dependencies
     .storageForBackend(source.storageDriver)
-    .createPrivateReadUrl({
-      key: source.storageKey,
-      expiresInSeconds: settings.sourceReadExpiresInSeconds,
-    });
+    .createPrivateReadUrl({ key: source.storageKey, expiresInSeconds });
   return {
     ok: true,
     url: signed.url,
@@ -535,16 +623,20 @@ export async function signCoverRevealOutputUpload(
 > {
   const job = await findLeasedJob(jobId, leaseToken);
   if (!job) return { ok: false, error: "COVER_REVEAL_NOT_CLAIMED", status: 404 };
-  if (job.state !== "leased" || !job.outputStorageKey) {
+  const now = new Date();
+  const expiresInSeconds = capabilitySeconds(
+    job.leaseExpiresAt,
+    settings.uploadExpiresInSeconds,
+    now,
+  );
+  if (job.state !== "leased" || !job.outputStorageKey || expiresInSeconds <= 0) {
     return { ok: false, error: "COVER_REVEAL_NOT_LEASED", status: 409 };
   }
 
   const storage = dependencies.storageForBackend(
     job.outputStorageDriver ?? dependencies.configuredStorage().driver,
   );
-  const expiresAt = new Date(
-    Date.now() + settings.uploadExpiresInSeconds * 1_000,
-  );
+  const expiresAt = new Date(now.getTime() + expiresInSeconds * 1_000);
   await db
     .insert(coverRevealWrites)
     .values({
@@ -560,7 +652,7 @@ export async function signCoverRevealOutputUpload(
   const signed = await storage.signObjectUpload({
     key: job.outputStorageKey,
     mimeType: COVER_REVEAL_OUTPUT_MIME_TYPE,
-    expiresInSeconds: settings.uploadExpiresInSeconds,
+    expiresInSeconds,
   });
   return {
     ok: true,
@@ -592,6 +684,17 @@ async function settleAttemptFailure(
     .set({
       state: job.attempts >= settings.maxAttempts ? "failed" : "queued",
       lastErrorCode: code,
+      // The attempt's object stops being referenced here, and that is what
+      // retires it. Both sweeps skip a key a derivative still points at, so a
+      // terminal `failed` row that kept its key would pin whatever the worker
+      // PUT — before or after it reported the failure — in the bucket forever.
+      // A retry mints a fresh key at its next claim, so nothing needs this one.
+      outputStorageDriver: null,
+      outputStorageKey: null,
+      outputMimeType: null,
+      outputBytes: null,
+      outputWidth: null,
+      outputHeight: null,
       updatedAt: new Date(),
     })
     .where(and(
@@ -703,29 +806,78 @@ export async function completeCoverRevealJob(
     return reject("COVER_REVEAL_OUTPUT_PIXELS_TOO_LARGE");
   }
 
-  const [published] = await db
-    .update(coverRevealDerivatives)
-    .set({
-      state: "ready",
-      outputMimeType: COVER_REVEAL_OUTPUT_MIME_TYPE,
-      outputBytes: inspected.bytes,
-      outputWidth: pixels.width,
-      outputHeight: pixels.height,
-      lastErrorCode: null,
-      updatedAt: new Date(),
-    })
-    .where(and(
-      eq(coverRevealDerivatives.id, job.id),
-      eq(coverRevealDerivatives.leaseTokenHash, job.leaseTokenHash as string),
-      eq(coverRevealDerivatives.state, "leased"),
-    ))
-    .returning();
+  /**
+   * The publication itself, with the cover re-checked INSIDE the transaction
+   * that writes `ready`.
+   *
+   * The check above this line is an early exit that saves a pointless storage
+   * read; it cannot be the guarantee, because the owner may change or reorder
+   * the cover between it and the write, and nothing about a Journey or media
+   * mutation conflicts with the derivative row. Re-resolving under the same
+   * row locks the mutation would have to take closes that window, so the state
+   * a completion publishes is the state the Journey is in when it commits.
+   */
+  const outcome = await db.transaction(async (transaction) => {
+    const current = await lockJourneyState(transaction, job.journeyId);
+    const revalidated = current
+      ? evaluateCoverRevealEligibility(current)
+      : null;
+    if (
+      !revalidated
+      || !revalidated.ok
+      || revalidated.source.id !== job.sourceMediaAssetId
+      || revalidated.contentHash !== job.sourceContentHash
+    ) {
+      await transaction
+        .update(coverRevealDerivatives)
+        .set({
+          state: "superseded",
+          supersededAt: new Date(),
+          outputStorageKey: null,
+          outputStorageDriver: null,
+          outputMimeType: null,
+          outputBytes: null,
+          outputWidth: null,
+          outputHeight: null,
+          updatedAt: new Date(),
+        })
+        .where(eq(coverRevealDerivatives.id, job.id));
+      return "superseded" as const;
+    }
+    const [row] = await transaction
+      .update(coverRevealDerivatives)
+      .set({
+        state: "ready",
+        outputMimeType: COVER_REVEAL_OUTPUT_MIME_TYPE,
+        outputBytes: inspected.bytes,
+        outputWidth: pixels.width,
+        outputHeight: pixels.height,
+        lastErrorCode: null,
+        updatedAt: new Date(),
+      })
+      .where(and(
+        eq(coverRevealDerivatives.id, job.id),
+        eq(coverRevealDerivatives.leaseTokenHash, job.leaseTokenHash as string),
+        eq(coverRevealDerivatives.state, "leased"),
+      ))
+      .returning();
+    return row ?? null;
+  });
+
+  if (outcome === "superseded") {
+    await discardDerivativeObject(
+      job.outputStorageDriver,
+      job.outputStorageKey,
+      dependencies,
+    );
+    return { ok: false, error: "COVER_REVEAL_SOURCE_CHANGED", status: 409 };
+  }
   // Somebody reclaimed between the measurement and the write; the object this
   // call measured belongs to the previous generation, not to the current one.
-  if (!published) {
+  if (!outcome) {
     return { ok: false, error: "COVER_REVEAL_NOT_LEASED", status: 409 };
   }
-  return { ok: true, job: jobView(published) };
+  return { ok: true, job: jobView(outcome) };
 }
 
 /**
@@ -741,6 +893,7 @@ export async function failCoverRevealJob(
   leaseToken: string,
   reasonCode: string,
   settings: CoverRevealSettings,
+  dependencies: CoverRevealDependencies = defaultDependencies,
 ): Promise<{ ok: true; job: CoverRevealJobView } | CoverRevealFailure> {
   const job = await findLeasedJob(jobId, leaseToken);
   if (!job) return { ok: false, error: "COVER_REVEAL_NOT_CLAIMED", status: 404 };
@@ -755,6 +908,13 @@ export async function failCoverRevealJob(
   if (!settled) {
     return { ok: false, error: "COVER_REVEAL_NOT_LEASED", status: 409 };
   }
+  // Prompt best-effort removal of whatever the abandoned attempt may have
+  // written; the namespace sweep is the guarantee behind it.
+  await discardDerivativeObject(
+    job.outputStorageDriver,
+    job.outputStorageKey,
+    dependencies,
+  );
   return { ok: true, job: jobView(settled) };
 }
 
