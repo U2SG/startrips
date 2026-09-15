@@ -1892,10 +1892,18 @@ describe("ST-063 Journey Rail visibility release", () => {
     expect(journeyRailVisibility(false, true)).toBe("hidden");
     expect(journeyRailVisibility(false, false)).toBe("visible");
   });
-  it("releases a stale hidden rail after Playback returns through Story close", () => {
+  it("clears stale inline visibility so current Atlas lifecycle classes own the rail", () => {
     const rail = { style: { visibility: "hidden" } };
-    synchronizeJourneyRailVisibility(rail, false, false);
-    expect(rail.style.visibility).toBe("visible");
+    synchronizeJourneyRailVisibility(rail);
+    expect(rail.style.visibility).toBe("");
+
+    const source = readFileSync(new URL("./LivingAtlasApp.tsx", import.meta.url), "utf8");
+    const styles = readFileSync(new URL("../styles/living-atlas.css", import.meta.url), "utf8");
+    expect(source).not.toContain("style={{ visibility: journeyRailVisibility");
+    expect(styles).toContain(".living-atlas__journey-rail {\n  position: absolute;\n  /* #325");
+    expect(styles).toContain("visibility: visible;");
+    expect(styles).toContain(".living-atlas.is-playback .living-atlas__journey-rail");
+    expect(styles).toContain(".living-atlas.is-globe-picking .living-atlas__journey-rail");
   });
 
 });

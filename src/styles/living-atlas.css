@@ -559,6 +559,9 @@
 
 .living-atlas__journey-rail {
   position: absolute;
+  /* #325: released Atlas state is explicitly visible; Playback and globe-pick
+     lifecycle classes below are the only owners allowed to hide the rail. */
+  visibility: visible;
   z-index: 18;
   top: clamp(152px, 17vh, 184px);
   left: clamp(24px, 3vw, 48px);
