@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import { StartripsBrandLoader, StartripsJourneyCue, StartripsWordmark } from "../brand/StartripsBrandMark";
-import { usePersistentEarth } from "../scene/LivingAtlasGlobe";
+import { usePersistentEarth, type LivingAtlasGlobeProps } from "../scene/LivingAtlasGlobe";
 import {
   AtlasViewProvider,
   GUEST_ATLAS_VIEW_CAPABILITIES,
@@ -100,9 +100,11 @@ const LOADING_STATE: SharedAtlasState = {
 export function SharedAtlasView({
   createClient = createSharedAtlasClient,
   readToken = shareToken,
+  GlobeComponent,
 }: {
   createClient?: (token: string) => SharedAtlasClient;
   readToken?: () => string | null;
+  GlobeComponent?: ComponentType<LivingAtlasGlobeProps>;
 } = {}) {
   usePrivateDocumentHeaders();
   const persistentEarth = usePersistentEarth();
@@ -281,7 +283,7 @@ export function SharedAtlasView({
 
   return (
     <AtlasViewProvider value={atlasView}>
-      <LivingAtlasApp />
+      <LivingAtlasApp GlobeComponent={GlobeComponent} />
     </AtlasViewProvider>
   );
 }

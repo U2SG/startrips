@@ -627,10 +627,9 @@ try {
     { waitUntil: "domcontentloaded" },
   );
   await guestPage.locator(".living-atlas").waitFor({ state: "visible", timeout: 20_000 });
-  // SharedAtlasView intentionally mounts the production globe rather than the
-  // owner-only deterministic QA preview. The real globe publishes this hidden
-  // Route Point activation seam under qaRoutePointContext=1, so guest scope is
-  // exercised through the actual shared viewer without inventing owner reads.
+  // SharedAtlasView still owns the real guest capability/data path; main.tsx
+  // injects the production-globe QA wrapper only under qaRoutePointContext=1
+  // so this activation seam exercises the actual shared viewer without owner reads.
   const guestTrigger = guestPage.locator(`[data-qa-globe-route-point-activate="${same02Id}"]`);
   await guestTrigger.waitFor({ state: "attached", timeout: 20_000 });
   await guestTrigger.evaluate((button) => button.click());
