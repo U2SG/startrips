@@ -205,6 +205,7 @@ try {
           return {
             draftId: item.getAttribute("data-existing-route-point-draft-id"),
             text: item.textContent?.trim() ?? "",
+            ariaLabel: button?.getAttribute("aria-label") ?? null,
             buttonWidth: rect?.width ?? 0,
             buttonHeight: rect?.height ?? 0,
           };
@@ -215,6 +216,8 @@ try {
           && localMatches[0].draftId !== localMatches[1].draftId
           && localMatches[0].text.includes("02")
           && localMatches[1].text.includes("07")
+          && localMatches[0].ariaLabel === "定位 02 · Las Vegas"
+          && localMatches[1].ariaLabel === "定位 07 · Las Vegas"
           && localMatches.every((item) => item.text.includes("22.543096, 114.057865")));
 
         const draft02 = localMatches[0].draftId;
@@ -335,7 +338,7 @@ try {
           && addState.latitude === "22.543096"
           && addState.longitude === "114.057865"
           && addState.query === ""
-          && providerAddTarget.ariaLabel === "添加 Las Vegas"
+          && providerAddTarget.ariaLabel === "添加 Las Vegas · Same label and coordinates, new provider result · QA"
           && providerAddTarget.width >= 44
           && providerAddTarget.height >= 44
           && persistenceRequests.length === 0);

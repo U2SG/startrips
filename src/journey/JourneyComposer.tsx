@@ -1530,7 +1530,7 @@ export function JourneyComposer({
                           <li key={point.draftId} data-existing-route-point-draft-id={point.draftId}>
                             <button
                               type="button"
-                              aria-label={`定位 ${displayLabel}`}
+                              aria-label={`定位 ${String(routeIndex + 1).padStart(2, "0")} · ${displayLabel}`}
                               onClick={() => locateExistingRoutePoint(point.draftId)}
                             >
                               <span className="journey-location-result-copy">
@@ -1555,7 +1555,11 @@ export function JourneyComposer({
                     <ul className="journey-location-results">
                       {searchResults.map((result) => (
                         <li key={result.id} data-location-result-id={result.id}>
-                          <button type="button" aria-label={`添加 ${result.label}`} onClick={() => addSearchResult(result)}>
+                          <button
+                            type="button"
+                            aria-label={`添加 ${result.label}${[result.context, result.countryCode].filter(Boolean).length ? ` · ${[result.context, result.countryCode].filter(Boolean).join(" · ")}` : ""}`}
+                            onClick={() => addSearchResult(result)}
+                          >
                             <span className="journey-location-result-copy">
                               <strong>{result.label}</strong>
                               {[result.labelLocal, result.labelEnglish]
