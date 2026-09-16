@@ -281,7 +281,7 @@ button {
   }
 
   .particle-earth-route__travel-leader,
-  .particle-earth-route__point--destination {
+  .particle-earth-route__point {
     animation: none !important;
     transition: none !important;
   }

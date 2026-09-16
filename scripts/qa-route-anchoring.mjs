@@ -428,10 +428,23 @@ async function runRouteOpticsCase({ dpr, viewport, reducedMotion = false, mobile
     await waitForRenderedFrame(opticsPage);
     const browse3 = await measureRouteOptics(opticsPage, routeId);
     await opticsPage.locator('[data-qa-route-optics-stage="playing"]').click();
-    await opticsPage.waitForFunction((identifier) => document.querySelector(`[data-journey-route="${identifier}"]`)?.getAttribute("data-attention-role") === "narrative-current", routeId);
+    await opticsPage.waitForFunction((identifier) => {
+      const group = document.querySelector(`[data-journey-route="${identifier}"]`);
+      const future = group?.querySelector('[data-route-point-id="qa-p-18"]');
+      const core = group?.querySelector(".particle-earth-route__core");
+      return group?.getAttribute("data-attention-role") === "narrative-current"
+        && future?.getAttribute("data-temporal-reveal") === "0.000"
+        && Number.parseFloat(getComputedStyle(future).opacity) === 0
+        && Number.parseFloat(getComputedStyle(core).strokeWidth) >= 1.19;
+    }, routeId);
     await waitForRenderedFrame(opticsPage);
     const playing = await measureRouteOptics(opticsPage, routeId);
     await opticsPage.locator('[data-qa-route-optics-stage="rewound"]').click();
+    await opticsPage.waitForFunction((identifier) => {
+      const group = document.querySelector(`[data-journey-route="${identifier}"]`);
+      return group?.querySelector('[data-route-point-id="qa-p-16"]')?.getAttribute("data-attention-role") === "narrative-current"
+        && group?.querySelector('[data-route-point-id="qa-p-17"]')?.getAttribute("data-temporal-reveal") === "0.000";
+    }, routeId);
     await waitForRenderedFrame(opticsPage);
     const rewound = await measureRouteOptics(opticsPage, routeId);
     return { dpr, viewport, reducedMotion, mobile, browse1, browse3, playing, rewound };
