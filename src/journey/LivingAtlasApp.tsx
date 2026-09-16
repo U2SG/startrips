@@ -101,6 +101,12 @@ import {
   type RoutePointContextIntent,
 } from "./routePointContext";
 import {
+  beginCrossPointReading,
+  resolveCrossPointReading,
+  resolveReadableCrossPointTarget,
+  type CrossPointReadingIntent,
+} from "./crossPointReading";
+import {
   journeyCover,
   journeySoundtrack,
   journeyVisualMedia,
@@ -1011,6 +1017,12 @@ export function LivingAtlasApp({
     routePointContextSelectionRef.current = next;
     setRoutePointContextSelection(next);
   }, []);
+  const [crossPointReadingIntent, setCrossPointReadingIntent] = useState<CrossPointReadingIntent | null>(null);
+  const crossPointReadingRevisionRef = useRef(0);
+  const closeCrossPointReading = useCallback(() => {
+    setCrossPointReadingIntent(null);
+    return true;
+  }, []);
   const clearHomeBaseContext = useCallback(() => setHomeBaseContextPeriodId(null), []);
   const storyObservationRef = useRef<StoryLogicalObservation | null>(null);
   const playbackReturnIntentRevisionRef = useRef(0);
@@ -1185,6 +1197,27 @@ export function LivingAtlasApp({
   const activeJourneyId = unknownCreateSemanticOwnership.activeJourneyId;
   const activeJourneyIdRef = useRef(activeJourneyId);
   activeJourneyIdRef.current = activeJourneyId;
+  const crossPointReading = resolveCrossPointReading(
+    crossPointReadingIntent,
+    activeJourneyId,
+    routePointContextSelection.context,
+    journeys,
+  );
+  const crossPointReadingDialogRef = useModalFocus<HTMLElement>(
+    closeCrossPointReading,
+    crossPointReading !== null,
+    false,
+    (root) => root.querySelector<HTMLElement>("[data-cross-point-reading-close]"),
+  );
+  useMobileSurfaceHistory(
+    crossPointReading !== null,
+    "cross-point-reading",
+    closeCrossPointReading,
+  );
+  useEffect(() => {
+    if (!crossPointReadingIntent || crossPointReading) return;
+    setCrossPointReadingIntent(null);
+  }, [crossPointReading, crossPointReadingIntent]);
   const selectedJourneyIdForHomeCamera = explicitSelectedJourneyIdForHomeCamera(
     timeCursor.hasExplicitSelection,
     timeCursor.selection?.journeyId ?? null,
@@ -1988,6 +2021,26 @@ export function LivingAtlasApp({
     );
     routePointContextSelectionRef.current = resolved;
     setRoutePointContextSelection(resolved);
+  }
+
+  function openCrossPointReading(targetRoutePointId: string) {
+    const source = routePointContextSelectionRef.current.context;
+    if (!source || source.journeyId !== activeJourneyIdRef.current) return;
+    const journey = journeysRef.current.find((candidate) => candidate.id === source.journeyId) ?? null;
+    if (!journey || !resolveReadableCrossPointTarget(journey, source, targetRoutePointId)) return;
+    crossPointReadingRevisionRef.current += 1;
+    setCrossPointReadingIntent(beginCrossPointReading(
+      crossPointReadingRevisionRef.current,
+      source,
+      targetRoutePointId,
+    ));
+  }
+
+  function escalateCrossPointReadingToStory() {
+    if (!crossPointReading) return;
+    const { journeyId, targetRoutePointId } = crossPointReading.intent;
+    setCrossPointReadingIntent(null);
+    openJourneyStory(journeyId, targetRoutePointId);
   }
 
   // The media shell is one presentation owner whether the user enters from a
@@ -2992,6 +3045,12 @@ export function LivingAtlasApp({
             )
             ? context.nextRoutePoint
             : undefined;
+        const previousReadingTarget = visiblePreviousRoutePoint
+          ? resolveReadableCrossPointTarget(contextJourney, context, visiblePreviousRoutePoint.routePointId)
+          : null;
+        const nextReadingTarget = visibleNextRoutePoint
+          ? resolveReadableCrossPointTarget(contextJourney, context, visibleNextRoutePoint.routePointId)
+          : null;
         return (
           <aside
             className="living-atlas__route-point-context motion-fade-through"
@@ -3045,6 +3104,32 @@ export function LivingAtlasApp({
                 </div>
               </>
             ) : null}
+            {previousReadingTarget || nextReadingTarget ? (
+              <nav className="living-atlas__route-point-context-reading-links" aria-label="阅读相邻路线点记录">
+                {previousReadingTarget ? (
+                  <button
+                    type="button"
+                    data-cross-point-reading-open={previousReadingTarget.routePointId}
+                    data-cross-point-reading-direction="previous"
+                    onClick={() => openCrossPointReading(previousReadingTarget.routePointId)}
+                  >
+                    <span>读上一段</span>
+                    <strong>{previousReadingTarget.routePointLabel}</strong>
+                  </button>
+                ) : null}
+                {nextReadingTarget ? (
+                  <button
+                    type="button"
+                    data-cross-point-reading-open={nextReadingTarget.routePointId}
+                    data-cross-point-reading-direction="next"
+                    onClick={() => openCrossPointReading(nextReadingTarget.routePointId)}
+                  >
+                    <span>读下一段</span>
+                    <strong>{nextReadingTarget.routePointLabel}</strong>
+                  </button>
+                ) : null}
+              </nav>
+            ) : null}
             <div className="living-atlas__route-point-context-facts">
               <span>{context.resolvedDate ? context.resolvedDate.slice(0, 10) : "日期未记录"}</span>
               <span>{context.visualMediaCount > 0 ? `${context.visualMediaCount} 项影像` : "仅文字记录"}</span>
@@ -3069,6 +3154,66 @@ export function LivingAtlasApp({
           </aside>
         );
       })() : null}
+
+      {crossPointReading ? (
+        <div
+          className="living-atlas__cross-point-reading-layer"
+          data-cross-point-reading-layer
+          data-reading-revision={crossPointReading.intent.revision}
+        >
+          <button
+            type="button"
+            tabIndex={-1}
+            className="living-atlas__cross-point-reading-backdrop"
+            aria-label={`返回 ${crossPointReading.source.routePointLabel}`}
+            onClick={closeCrossPointReading}
+          />
+          <section
+            ref={crossPointReadingDialogRef}
+            tabIndex={-1}
+            className="living-atlas__cross-point-reading"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="cross-point-reading-title"
+            data-cross-point-reading
+            data-cross-point-reading-journey-id={crossPointReading.intent.journeyId}
+            data-cross-point-reading-source={crossPointReading.intent.sourceRoutePointId}
+            data-cross-point-reading-target={crossPointReading.intent.targetRoutePointId}
+            data-cross-point-reading-media-count={crossPointReading.target.visualMediaCount}
+          >
+            <header>
+              <div>
+                <p>TRANSIENT READING · ROUTE POINT {String(crossPointReading.target.routePointIndex + 1).padStart(2, "0")}</p>
+                <h2 id="cross-point-reading-title">{crossPointReading.target.routePointLabel}</h2>
+                <span>{crossPointReading.target.journeyTitle}</span>
+              </div>
+              <button
+                type="button"
+                data-cross-point-reading-close
+                onClick={closeCrossPointReading}
+                aria-label={`返回 ${crossPointReading.source.routePointLabel}`}
+              >
+                <IconX size={16} stroke={1.35} aria-hidden="true" />
+              </button>
+            </header>
+            <p className="living-atlas__cross-point-reading-provenance">
+              从 {crossPointReading.source.routePointLabel} 临时阅读 · 未改变当前观察
+            </p>
+            <blockquote>{crossPointReading.target.note}</blockquote>
+            <footer>
+              <span>关闭后返回 · {crossPointReading.source.routePointLabel}</span>
+              <button
+                type="button"
+                data-cross-point-reading-escalate
+                onClick={escalateCrossPointReadingToStory}
+              >
+                打开这一站
+                <IconArrowRight size={16} stroke={1.35} aria-hidden="true" />
+              </button>
+            </footer>
+          </section>
+        </div>
+      ) : null}
 
       {/* Desktop keeps an explicit focus-mode exit for keyboard discovery.
           Mobile V2 never renders this control: its globe is already the base

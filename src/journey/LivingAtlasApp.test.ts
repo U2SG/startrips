@@ -1116,6 +1116,17 @@ describe("Route Point context integration (#291)", () => {
     expect(switcher).not.toContain('setPlaybackSession');
   });
 
+  it("keeps cross-point note reading source-bound until explicit Story escalation", () => {
+    expect(appSource).toContain('data-cross-point-reading-source={crossPointReading.intent.sourceRoutePointId}');
+    expect(appSource).toContain('data-cross-point-reading-target={crossPointReading.intent.targetRoutePointId}');
+    expect(appSource).toContain('resolveReadableCrossPointTarget(contextJourney, context');
+    expect(appSource).toContain('"cross-point-reading"');
+    expect(appSource).toContain('onClick={closeCrossPointReading}');
+    expect(appSource).toContain('onClick={escalateCrossPointReadingToStory}');
+    expect(appSource).toContain('openJourneyStory(journeyId, targetRoutePointId)');
+    expect(appSource).toContain('从 {crossPointReading.source.routePointLabel} 临时阅读 · 未改变当前观察');
+  });
+
   it("keeps same-coordinate switch targets touch-safe without turning the context into a toolbar", () => {
     const css = readFileSync(new URL("../styles/living-atlas.css", import.meta.url), "utf8");
     const start = css.indexOf(".living-atlas__route-point-context-switcher button {");
