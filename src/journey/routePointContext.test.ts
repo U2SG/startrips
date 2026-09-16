@@ -5,6 +5,8 @@ import {
   buildRoutePointContext,
   emptyRoutePointContextSelection,
   requestRoutePointContextSelection,
+  routePointContextTemporallyVisible,
+  temporallyVisibleRoutePointContextRefs,
   resolveRoutePointContextSelection,
 } from "./routePointContext";
 
@@ -181,6 +183,160 @@ describe("buildRoutePointContext", () => {
     const context = buildRoutePointContext(guestJourney, "shared-point");
     expect(context?.visualMediaCount).toBe(1);
     expect(context?.representativeAssetId).toBe("shared-photo");
+  });
+
+  it("keeps exact same-coordinate records distinct and derives route-order neighbours per selected record", () => {
+    const routePoints = [
+      point("point-01", { sortOrder: 0, label: "起点", latitude: 22.2801, longitude: 114.1501 }),
+      point("point-02", { sortOrder: 1, label: "码头 · 早上" }),
+      point("point-03", { sortOrder: 2, label: "第三站", latitude: 22.286, longitude: 114.158 }),
+      point("point-04", { sortOrder: 3, label: "第四站", latitude: 22.287, longitude: 114.159 }),
+      point("point-05", { sortOrder: 4, label: "第五站", latitude: 22.288, longitude: 114.16 }),
+      point("point-06", { sortOrder: 5, label: "第六站", latitude: 22.289, longitude: 114.161 }),
+      point("point-07", { sortOrder: 6, label: "码头 · 夜里", isStop: false }),
+      point("point-08", { sortOrder: 7, label: "终点", latitude: 22.2905, longitude: 114.1625 }),
+    ];
+    const trip = journey(routePoints, []);
+
+    const second = buildRoutePointContext(trip, "point-02");
+    const seventh = buildRoutePointContext(trip, "point-07");
+
+    expect(second?.sameCoordinateRoutePoints.map((entry) => entry.routePointId)).toEqual([
+      "point-02",
+      "point-07",
+    ]);
+    expect(second?.previousRoutePoint?.routePointId).toBe("point-01");
+    expect(second?.nextRoutePoint?.routePointId).toBe("point-03");
+    expect(seventh?.previousRoutePoint?.routePointId).toBe("point-06");
+    expect(seventh?.nextRoutePoint?.routePointId).toBe("point-08");
+    expect(seventh?.sameCoordinateRoutePoints[1]).toMatchObject({
+      routePointId: "point-07",
+      routePointIndex: 6,
+      isStop: false,
+    });
+  });
+
+  it("keeps temporally hidden co-located records out of direct context switching", () => {
+    const trip = journey([
+      point("point-02", { sortOrder: 1, label: "morning" }),
+      point("point-07", { sortOrder: 6, label: "night", isStop: false }),
+    ], []);
+    const context = buildRoutePointContext(trip, "point-02");
+    const temporalReveal = {
+      journeys: new Map([[trip.id, 1]]),
+      points: new Map([
+        [`${trip.id}:0`, 1],
+        [`${trip.id}:1`, 0],
+      ]),
+    };
+
+    expect(routePointContextTemporallyVisible(trip.id, 0, temporalReveal)).toBe(true);
+    expect(routePointContextTemporallyVisible(trip.id, 1, temporalReveal)).toBe(false);
+    expect(routePointContextTemporallyVisible(trip.id, 0, {
+      journeys: new Map([[trip.id, 0]]),
+      points: new Map([[`${trip.id}:0`, 1]]),
+    })).toBe(false);
+    expect(temporallyVisibleRoutePointContextRefs(
+      trip.id,
+      context?.sameCoordinateRoutePoints ?? [],
+      temporalReveal,
+    ).map((entry) => entry.routePointId)).toEqual(["point-02"]);
+    expect(temporallyVisibleRoutePointContextRefs(
+      trip.id,
+      context?.sameCoordinateRoutePoints ?? [],
+      undefined,
+    ).map((entry) => entry.routePointId)).toEqual(["point-02", "point-07"]);
+  });
+
+  it("uses exact canonical coordinates only, never labels or proximity", () => {
+    const target = point("target", { label: "同名" });
+    const sameLabelDifferentCoordinate = point("same-label", {
+      sortOrder: 1,
+      label: "同名",
+      latitude: 22.2855001,
+    });
+    const exactCoordinateDifferentLabel = point("exact-coordinate", {
+      sortOrder: 2,
+      label: "另一条记录",
+      isStop: false,
+    });
+    const context = buildRoutePointContext(
+      journey([target, sameLabelDifferentCoordinate, exactCoordinateDifferentLabel], []),
+      target.id,
+    );
+
+    expect(context?.sameCoordinateRoutePoints.map((entry) => entry.routePointId)).toEqual([
+      "target",
+      "exact-coordinate",
+    ]);
+  });
+
+  it("recomputes same-coordinate grouping and neighbours from the current Route order after reorder/delete", () => {
+    const a = point("A", { label: "A", latitude: 22.28, longitude: 114.15 });
+    const b = point("B", { label: "B" });
+    const c = point("C", { label: "C", latitude: 22.29, longitude: 114.16 });
+    const d = point("D", { label: "D", isStop: false });
+
+    const reordered = journey([a, d, c, b], []);
+    const afterReorder = buildRoutePointContext(reordered, "B");
+    expect(afterReorder?.routePointIndex).toBe(3);
+    expect(afterReorder?.previousRoutePoint?.routePointId).toBe("C");
+    expect(afterReorder?.nextRoutePoint).toBeNull();
+    expect(afterReorder?.sameCoordinateRoutePoints.map((entry) => [entry.routePointId, entry.routePointIndex])).toEqual([
+      ["D", 1],
+      ["B", 3],
+    ]);
+
+    const afterDelete = buildRoutePointContext(journey([a, c, b], []), "B");
+    expect(afterDelete?.sameCoordinateRoutePoints.map((entry) => entry.routePointId)).toEqual(["B"]);
+    expect(afterDelete?.previousRoutePoint?.routePointId).toBe("C");
+  });
+
+  it("keeps unnamed passthrough Route Points valid even when the Journey has no Stops", () => {
+    const first = point("pass-1", { label: "", isStop: false });
+    const second = point("pass-2", { label: "", isStop: false, sortOrder: 1 });
+    const context = buildRoutePointContext(journey([first, second], []), second.id);
+
+    expect(context).toMatchObject({
+      routePointId: "pass-2",
+      routePointLabel: "途径点 2",
+      previousRoutePoint: { routePointId: "pass-1", routePointLabel: "途径点 1", isStop: false },
+      nextRoutePoint: null,
+    });
+    expect(context?.sameCoordinateRoutePoints).toHaveLength(2);
+    expect(context?.sameCoordinateRoutePoints.every((entry) => entry.isStop === false)).toBe(true);
+  });
+
+  it("groups only records present in the already-authorized guest Journey projection", () => {
+    const shared: SharedJourney = {
+      id: journeyId,
+      title: "共享同坐标路线点",
+      startedOn: "2026-04-06",
+      endedOn: null,
+      note: "",
+      lightColor: "#77c8c2",
+      lightEffect: null,
+      coverMediaAssetId: null,
+      revision: 1,
+      previousJourneyId: null,
+      nextJourneyId: null,
+      routePoints: [
+        {
+          id: "shared-02", latitude: 22.2855, longitude: 114.1577, label: "早上", isStop: true, occurredAt: null, note: null,
+        },
+        {
+          id: "shared-07", latitude: 22.2855, longitude: 114.1577, label: "夜里", isStop: false, occurredAt: null, note: null,
+        },
+      ],
+      media: [],
+    };
+
+    const context = buildRoutePointContext(sharedJourneyToJourney(shared), "shared-02");
+    expect(context?.sameCoordinateRoutePoints.map((entry) => entry.routePointId)).toEqual([
+      "shared-02",
+      "shared-07",
+    ]);
+    expect(context?.sameCoordinateRoutePoints).toHaveLength(2);
   });
 });
 

@@ -126,6 +126,115 @@ const siblingJourney = {
   media: [],
 };
 
+const sameCoordinateJourneyId = "qa-same-coordinate-journey";
+const same02Id = "qa-same-coordinate-02";
+const same07Id = "qa-same-coordinate-07";
+const SAME_LATITUDE = 22.2855;
+const SAME_LONGITUDE = 114.1577;
+
+function sameCoordinatePoint(id, sortOrder, latitude, longitude, label, note = null) {
+  return {
+    id,
+    journeyId: sameCoordinateJourneyId,
+    sortOrder,
+    latitude,
+    longitude,
+    label,
+    isStop: false,
+    occurredAt: `2026-04-06T${String(8 + sortOrder).padStart(2, "0")}:00:00.000Z`,
+    note,
+    createdAt: `2026-04-06T${String(8 + sortOrder).padStart(2, "0")}:00:00.000Z`,
+  };
+}
+
+const sameCoordinateRoutePoints = [
+  sameCoordinatePoint("qa-same-coordinate-01", 0, 22.2801, 114.1501, "入口"),
+  sameCoordinatePoint(same02Id, 1, SAME_LATITUDE, SAME_LONGITUDE, "码头 · 清晨", "清晨从这里经过。"),
+  sameCoordinatePoint("qa-same-coordinate-03", 2, 22.2862, 114.1584, "码头 · 清晨"),
+  sameCoordinatePoint("qa-same-coordinate-04", 3, 22.2872, 114.1594, "第四段"),
+  sameCoordinatePoint("qa-same-coordinate-05", 4, 22.2882, 114.1604, "第五段"),
+  sameCoordinatePoint("qa-same-coordinate-06", 5, 22.2892, 114.1614, "第六段"),
+  sameCoordinatePoint(same07Id, 6, SAME_LATITUDE, SAME_LONGITUDE, "码头 · 夜里", "夜里又从这里经过。"),
+  sameCoordinatePoint("qa-same-coordinate-08", 7, 22.2902, 114.1624, "出口"),
+];
+
+const sameCoordinateJourney = {
+  id: sameCoordinateJourneyId,
+  atlasId: "qa-atlas",
+  title: "同一坐标的两段路线点上下文",
+  startedOn: "2026-04-06",
+  endedOn: null,
+  note: "",
+  lightColor: "#77c8c2",
+  lightEffect: null,
+  coverMediaAssetId: null,
+  revision: 1,
+  createdByUserId: "qa-user",
+  createdAt: "2026-04-06T00:00:00.000Z",
+  updatedAt: "2026-04-06T00:00:00.000Z",
+  routePoints: sameCoordinateRoutePoints,
+  media: [],
+};
+
+const sameCoordinateSuccessorJourneyId = "qa-same-coordinate-successor";
+const sameCoordinateSuccessorJourney = {
+  ...sameCoordinateJourney,
+  id: sameCoordinateSuccessorJourneyId,
+  title: "Later Journey owner",
+  startedOn: "2026-04-07",
+  revision: 1,
+  routePoints: [{
+    ...sameCoordinateRoutePoints[0],
+    id: "qa-same-coordinate-successor-point",
+    journeyId: sameCoordinateSuccessorJourneyId,
+    sortOrder: 0,
+    latitude: 22.31,
+    longitude: 114.22,
+    label: "Later owner point",
+    occurredAt: "2026-04-07T09:00:00.000Z",
+    note: null,
+    createdAt: "2026-04-07T09:00:00.000Z",
+  }],
+  media: [],
+};
+
+const reorderedSameCoordinateJourney = {
+  ...sameCoordinateJourney,
+  revision: 2,
+  routePoints: [
+    sameCoordinateRoutePoints[0],
+    sameCoordinateRoutePoints[6],
+    sameCoordinateRoutePoints[2],
+    sameCoordinateRoutePoints[3],
+    sameCoordinateRoutePoints[4],
+    sameCoordinateRoutePoints[5],
+    sameCoordinateRoutePoints[1],
+    sameCoordinateRoutePoints[7],
+  ].map((point, index) => ({ ...point, sortOrder: index })),
+};
+
+const sameCoordinateGuestToken = "qaGuestShareToken0000000000000000000000000A";
+const sharedSameCoordinateJourney = {
+  id: sameCoordinateJourneyId,
+  title: "共享的同坐标路线点",
+  startedOn: "2026-04-06",
+  endedOn: null,
+  note: "",
+  lightColor: "#77c8c2",
+  lightEffect: null,
+  coverMediaAssetId: null,
+  revision: 1,
+  previousJourneyId: null,
+  nextJourneyId: null,
+  routePoints: [
+    { id: "qa-shared-prev", latitude: 22.2801, longitude: 114.1501, label: "共享入口", isStop: false, occurredAt: null, note: null },
+    { id: same02Id, latitude: SAME_LATITUDE, longitude: SAME_LONGITUDE, label: "共享 · 清晨", isStop: false, occurredAt: null, note: "只分享清晨记录。" },
+    { id: same07Id, latitude: SAME_LATITUDE, longitude: SAME_LONGITUDE, label: "共享 · 夜里", isStop: false, occurredAt: null, note: "只分享夜里记录。" },
+    { id: "qa-shared-next", latitude: 22.2902, longitude: 114.1624, label: "共享出口", isStop: false, occurredAt: null, note: null },
+  ],
+  media: [],
+};
+
 const browser = await launchQaBrowser({
   args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"],
 });
@@ -138,7 +247,7 @@ function record(name, data, condition) {
   if (entry.failed) failed = true;
 }
 
-async function stubAtlasApi(page) {
+async function stubAtlasApi(page, journeysPayload = [siblingJourney, journey]) {
   await page.route("**/api/auth/get-session", (route) => route.fulfill({
     status: 200,
     contentType: "application/json",
@@ -147,7 +256,7 @@ async function stubAtlasApi(page) {
   await page.route("**/api/journeys", (route) => route.fulfill({
     status: 200,
     contentType: "application/json",
-    body: JSON.stringify({ journeys: [siblingJourney, journey] }),
+    body: JSON.stringify({ journeys: journeysPayload }),
   }));
   for (const [assetId, color, delay] of [
     [photoAssetId, "%23254a48", 120],
@@ -172,6 +281,8 @@ async function openFocusAtlas({
   viewport = { width: 1280, height: 720 },
   compact = false,
   reduceMotion = false,
+  journeysPayload = [siblingJourney, journey],
+  initialPointId = photoPointId,
 } = {}) {
   const page = await browser.newPage({
     viewport,
@@ -181,7 +292,7 @@ async function openFocusAtlas({
   });
   const pageErrors = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
-  await stubAtlasApi(page);
+  await stubAtlasApi(page, journeysPayload);
   // #291 grades the Atlas route-point activation/context contract, not scene
   // startup throughput. The earlier real-scene version timed out before ready in
   // CI, so this dedicated flag keeps the existing deterministic QA globe while
@@ -193,7 +304,7 @@ async function openFocusAtlas({
     { waitUntil: "domcontentloaded" },
   );
   await page.locator("[data-qa-route-point-context-focus]").waitFor({ state: "attached", timeout: 20_000 });
-  await page.locator(`[data-qa-route-point-context-activate="${photoPointId}"]`).waitFor({ state: "attached", timeout: 5_000 });
+  await page.locator(`[data-qa-route-point-context-activate="${initialPointId}"]`).waitFor({ state: "attached", timeout: 5_000 });
   if (!compact) {
     await page.locator(".living-atlas__active").waitFor({ state: "visible", timeout: 5_000 });
     await page.locator(".living-atlas__globe-focus").click();
@@ -214,12 +325,16 @@ async function sceneFocusSnapshot(page) {
   }));
 }
 
-async function activateRoutePoint(page, pointIndex) {
-  const pointId = journey.routePoints[pointIndex]?.id;
-  if (!pointId) throw new Error(`route point ${pointIndex} is unavailable`);
+async function activateRoutePointId(page, pointId) {
   const trigger = page.locator(`[data-qa-route-point-context-activate="${pointId}"]`);
   await trigger.waitFor({ state: "attached", timeout: 5_000 });
   await trigger.evaluate((button) => button.click());
+}
+
+async function activateRoutePoint(page, pointIndex) {
+  const pointId = journey.routePoints[pointIndex]?.id;
+  if (!pointId) throw new Error(`route point ${pointIndex} is unavailable`);
+  await activateRoutePointId(page, pointId);
 }
 
 try {
@@ -374,6 +489,295 @@ try {
   ));
   record("cross-point page errors", { pageErrors: crossRun.pageErrors }, crossRun.pageErrors.length === 0);
   await crossPage.close();
+
+  // #377 / ST-081: two distinct Route Point records may share one exact
+  // canonical coordinate inside the CURRENT authorized Journey. Switching the
+  // content owner must preserve Atlas/camera ownership and the route-order
+  // context of the selected record; repeated coordinates are not a new visit.
+  const sameRun = await openFocusAtlas({
+    journeysPayload: [sameCoordinateJourney],
+    initialPointId: same02Id,
+  });
+  const samePage = sameRun.page;
+  const sameFocusBefore = await sceneFocusSnapshot(samePage);
+  await samePage.evaluate(() => {
+    window.__st081AtlasRoot = document.querySelector(".living-atlas");
+  });
+  await activateRoutePointId(samePage, same02Id);
+  const sameContext = samePage.locator("[data-route-point-context]");
+  await sameContext.waitFor({ state: "visible", timeout: 5_000 });
+  const initialSameState = await sameContext.evaluate((node) => ({
+    routePointId: node.getAttribute("data-route-point-id"),
+    text: node.textContent ?? "",
+    switchIds: [...node.querySelectorAll("[data-route-point-context-switch]")].map((button) => ({
+      id: button.getAttribute("data-route-point-context-switch"),
+      pressed: button.getAttribute("aria-pressed"),
+      text: button.textContent ?? "",
+      height: button.getBoundingClientRect().height,
+    })),
+    order: node.querySelector("[data-route-point-context-order]")?.textContent ?? "",
+  }));
+  const marker02 = samePage.locator(`.particle-earth-route__point[data-journey-route="${sameCoordinateJourneyId}"][data-route-point-id="${same02Id}"]`);
+  const marker07 = samePage.locator(`.particle-earth-route__point[data-journey-route="${sameCoordinateJourneyId}"][data-route-point-id="${same07Id}"]`);
+  const [marker02Rect, marker07Rect] = await Promise.all([marker02.boundingBox(), marker07.boundingBox()]);
+  record("same-coordinate entry keeps record 02 selected and exposes only exact-coordinate peers", { initialSameState },
+    initialSameState.routePointId === same02Id
+    && initialSameState.switchIds.length === 2
+    && initialSameState.switchIds.map((entry) => entry.id).join(",") === `${same02Id},${same07Id}`
+    && initialSameState.switchIds[0]?.pressed === "true"
+    && initialSameState.switchIds[1]?.pressed === "false"
+    && initialSameState.switchIds.every((entry) => entry.height >= 44)
+    && initialSameState.text.includes("码头 · 清晨")
+    && initialSameState.text.includes("清晨从这里经过。")
+    && initialSameState.order.includes("上一段 · 入口")
+    && initialSameState.order.includes("下一段 · 码头 · 清晨")
+    && !initialSameState.switchIds.some((entry) => entry.text.includes("停靠点")));
+  record("records 02 and 07 share the original geographic anchor", { marker02Rect, marker07Rect }, Boolean(
+    marker02Rect && marker07Rect
+    && Math.abs((marker02Rect.x + marker02Rect.width / 2) - (marker07Rect.x + marker07Rect.width / 2)) < 0.5
+    && Math.abs((marker02Rect.y + marker02Rect.height / 2) - (marker07Rect.y + marker07Rect.height / 2)) < 0.5
+  ));
+
+  await samePage.locator(`[data-route-point-context-switch="${same07Id}"]`).click();
+  await samePage.waitForFunction((id) => document.querySelector("[data-route-point-context]")?.getAttribute("data-route-point-id") === id, same07Id);
+  const seventhState = await sameContext.evaluate((node) => ({
+    routePointId: node.getAttribute("data-route-point-id"),
+    text: node.textContent ?? "",
+    pressed: node.querySelector('[data-route-point-context-switch][aria-pressed="true"]')?.getAttribute("data-route-point-context-switch") ?? null,
+    order: node.querySelector("[data-route-point-context-order]")?.textContent ?? "",
+  }));
+  const sameFocusAt07 = await sceneFocusSnapshot(samePage);
+  const sameAtlasPreservedAt07 = await samePage.evaluate(() => window.__st081AtlasRoot === document.querySelector(".living-atlas"));
+  record("02 -> 07 switches Route Point context without remounting Atlas or moving camera", {
+    sameFocusBefore, sameFocusAt07, seventhState, sameAtlasPreservedAt07,
+  },
+    seventhState.routePointId === same07Id
+    && seventhState.pressed === same07Id
+    && seventhState.text.includes("码头 · 夜里")
+    && seventhState.text.includes("夜里又从这里经过。")
+    && seventhState.order.includes("上一段 · 第六段")
+    && seventhState.order.includes("下一段 · 出口")
+    && sameAtlasPreservedAt07
+    && JSON.stringify(sameFocusBefore) === JSON.stringify(sameFocusAt07));
+
+  await samePage.locator(`[data-route-point-context-switch="${same02Id}"]`).click();
+  await samePage.waitForFunction((id) => document.querySelector("[data-route-point-context]")?.getAttribute("data-route-point-id") === id, same02Id);
+  const sameFocusBack02 = await sceneFocusSnapshot(samePage);
+  const sameAtlasPreservedBack02 = await samePage.evaluate(() => window.__st081AtlasRoot === document.querySelector(".living-atlas"));
+  record("rapid 02 -> 07 -> 02 returns content ownership only", { sameFocusBefore, sameFocusBack02, sameAtlasPreservedBack02 },
+    sameAtlasPreservedBack02 && JSON.stringify(sameFocusBefore) === JSON.stringify(sameFocusBack02));
+  const timeTrack = samePage.locator(".globe-time-scrubber__track");
+  await timeTrack.focus();
+  // Approach the partial-reveal state from the present so the already-open
+  // record 02 never crosses through a future state before we grade the switcher.
+  await timeTrack.press("End");
+  for (let step = 0; step < 3; step += 1) await timeTrack.press("PageDown");
+  await samePage.waitForFunction(() => document.querySelector(".globe-time-scrubber__track")?.getAttribute("aria-valuenow") === "70");
+  const rewindVisibleState = await samePage.evaluate((futureId) => ({
+    contextId: document.querySelector("[data-route-point-context]")?.getAttribute("data-route-point-id") ?? null,
+    switcherCount: document.querySelectorAll("[data-route-point-context-switcher]").length,
+    futureSwitchCount: document.querySelectorAll(`[data-route-point-context-switch="${futureId}"]`).length,
+    cursor: document.querySelector(".globe-time-scrubber__track")?.getAttribute("aria-valuenow"),
+  }), same07Id);
+  record("rewind hides future same-coordinate switch targets without changing current record", { rewindVisibleState },
+    rewindVisibleState.contextId === same02Id
+    && rewindVisibleState.switcherCount === 0
+    && rewindVisibleState.futureSwitchCount === 0
+    && rewindVisibleState.cursor === "70");
+
+  await timeTrack.press("End");
+  for (let step = 0; step < 5; step += 1) await timeTrack.press("ArrowLeft");
+  await samePage.waitForFunction(() => document.querySelector(".globe-time-scrubber__track")?.getAttribute("aria-valuenow") === "95");
+  await samePage.locator(`[data-route-point-context-switch="${same07Id}"]`).click();
+  await samePage.waitForFunction((id) => document.querySelector("[data-route-point-context]")?.getAttribute("data-route-point-id") === id, same07Id);
+  const futureNeighbourState = await samePage.evaluate((futureLabel) => {
+    const order = document.querySelector("[data-route-point-context-order]");
+    const labels = order ? [...order.querySelectorAll("span")].map((span) => span.textContent ?? "") : [];
+    return {
+      contextId: document.querySelector("[data-route-point-context]")?.getAttribute("data-route-point-id") ?? null,
+      cursor: document.querySelector(".globe-time-scrubber__track")?.getAttribute("aria-valuenow"),
+      orderLabels: labels,
+      futureLabelLeaked: labels.some((label) => label.includes(futureLabel)),
+    };
+  }, sameCoordinateRoutePoints[7].label);
+  record("rewind hides a future route-order neighbour label from selected same-coordinate context", { futureNeighbourState },
+    futureNeighbourState.contextId === same07Id
+    && futureNeighbourState.cursor === "95"
+    && futureNeighbourState.orderLabels.length === 1
+    && !futureNeighbourState.futureLabelLeaked);
+
+  await timeTrack.press("Home");
+  await samePage.waitForFunction(() => document.querySelector("[data-route-point-context]") === null);
+  const rewindBeforeCurrent = await samePage.evaluate(() => ({
+    contextCount: document.querySelectorAll("[data-route-point-context]").length,
+    cursor: document.querySelector(".globe-time-scrubber__track")?.getAttribute("aria-valuenow"),
+  }));
+  record("rewind releases a context once its selected Route Point becomes future", { rewindBeforeCurrent },
+    rewindBeforeCurrent.contextCount === 0 && rewindBeforeCurrent.cursor === "0");
+
+  record("same-coordinate page errors", { pageErrors: sameRun.pageErrors }, sameRun.pageErrors.length === 0);
+  await samePage.close();
+
+  const ownerRun = await openFocusAtlas({
+    journeysPayload: [sameCoordinateJourney, sameCoordinateSuccessorJourney],
+    initialPointId: same02Id,
+  });
+  const ownerPage = ownerRun.page;
+  const ownerTrack = ownerPage.locator(".globe-time-scrubber__track");
+  await ownerTrack.focus();
+  await ownerTrack.press("Home");
+  for (let step = 0; step < 7; step += 1) await ownerTrack.press("PageUp");
+  await ownerPage.waitForFunction(() => document.querySelector(".globe-time-scrubber__track")?.getAttribute("aria-valuenow") === "70");
+  await ownerPage.waitForFunction((journeyId) => document.querySelector("[data-qa-route-point-context-focus]")?.getAttribute("data-active-route") === journeyId, sameCoordinateJourneyId);
+  await activateRoutePointId(ownerPage, same02Id);
+  await ownerPage.locator(`[data-route-point-context][data-route-point-id="${same02Id}"]`).waitFor({ state: "visible", timeout: 5_000 });
+  const ownerBeforeAdvance = await sceneFocusSnapshot(ownerPage);
+  await ownerPage.evaluate((successorJourneyId) => {
+    window.__st081OwnerLeak = false;
+    const observer = new MutationObserver(() => {
+      const activeRoute = document.querySelector("[data-qa-route-point-context-focus]")?.getAttribute("data-active-route");
+      if (activeRoute === successorJourneyId && document.querySelector("[data-route-point-context]")) {
+        window.__st081OwnerLeak = true;
+      }
+    });
+    observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["data-active-route"] });
+    window.__st081OwnerObserver = observer;
+  }, sameCoordinateSuccessorJourneyId);
+  await ownerTrack.press("End");
+  await ownerPage.waitForFunction((journeyId) => document.querySelector("[data-qa-route-point-context-focus]")?.getAttribute("data-active-route") === journeyId, sameCoordinateSuccessorJourneyId);
+  await ownerPage.waitForFunction(() => document.querySelector("[data-route-point-context]") === null);
+  const ownerAfterAdvance = await sceneFocusSnapshot(ownerPage);
+  const ownerTransitionState = await ownerPage.evaluate(() => {
+    const staleOwnerRendered = window.__st081OwnerLeak === true;
+    window.__st081OwnerObserver?.disconnect();
+    delete window.__st081OwnerObserver;
+    delete window.__st081OwnerLeak;
+    return { staleOwnerRendered };
+  });
+  record("time cursor Journey-owner advance releases stale same-coordinate context", {
+    ownerBeforeAdvance,
+    ownerAfterAdvance,
+    ownerTransitionState,
+    contextCount: await ownerPage.locator("[data-route-point-context]").count(),
+  }, ownerBeforeAdvance.activeRoute === sameCoordinateJourneyId
+    && ownerAfterAdvance.activeRoute === sameCoordinateSuccessorJourneyId
+    && ownerTransitionState.staleOwnerRendered === false
+    && await ownerPage.locator("[data-route-point-context]").count() === 0);
+  record("same-coordinate owner-change page errors", { pageErrors: ownerRun.pageErrors }, ownerRun.pageErrors.length === 0);
+  await ownerPage.close();
+
+  const reorderedRun = await openFocusAtlas({
+    journeysPayload: [reorderedSameCoordinateJourney],
+    initialPointId: same07Id,
+  });
+  const reorderedPage = reorderedRun.page;
+  await activateRoutePointId(reorderedPage, same07Id);
+  const reorderedContext = reorderedPage.locator("[data-route-point-context]");
+  await reorderedContext.waitFor({ state: "visible", timeout: 5_000 });
+  const reorderedState = await reorderedContext.evaluate((node) => ({
+    text: node.textContent ?? "",
+    switches: [...node.querySelectorAll("[data-route-point-context-switch]")].map((button) => button.getAttribute("data-route-point-context-switch")),
+    order: node.querySelector("[data-route-point-context-order]")?.textContent ?? "",
+  }));
+  record("reordered payload recomputes same-coordinate record order and neighbours", { reorderedState },
+    reorderedState.text.includes("ROUTE POINT · 02/08")
+    && reorderedState.switches.join(",") === `${same07Id},${same02Id}`
+    && reorderedState.order.includes("上一段 · 入口")
+    && reorderedState.order.includes("下一段 · 码头 · 清晨"));
+  record("reordered same-coordinate page errors", { pageErrors: reorderedRun.pageErrors }, reorderedRun.pageErrors.length === 0);
+  await reorderedPage.close();
+
+  const sameReducedRun = await openFocusAtlas({
+    journeysPayload: [sameCoordinateJourney],
+    initialPointId: same02Id,
+    reduceMotion: true,
+  });
+  const sameReducedPage = sameReducedRun.page;
+  const sameReducedFocusBefore = await sceneFocusSnapshot(sameReducedPage);
+  await activateRoutePointId(sameReducedPage, same02Id);
+  await sameReducedPage.locator("[data-route-point-context]").waitFor({ state: "visible", timeout: 5_000 });
+  await sameReducedPage.locator(`[data-route-point-context-switch="${same07Id}"]`).click();
+  await sameReducedPage.waitForFunction((id) => document.querySelector("[data-route-point-context]")?.getAttribute("data-route-point-id") === id, same07Id);
+  const sameReducedState = await sameReducedPage.evaluate(() => ({
+    reduced: matchMedia("(prefers-reduced-motion: reduce)").matches,
+    clones: document.querySelectorAll("[data-shared-element-clone]").length,
+  }));
+  const sameReducedFocusAfter = await sceneFocusSnapshot(sameReducedPage);
+  record("reduced motion switches same-coordinate content without spatial ownership", {
+    sameReducedState, sameReducedFocusBefore, sameReducedFocusAfter,
+  }, sameReducedState.reduced
+    && sameReducedState.clones === 0
+    && JSON.stringify(sameReducedFocusBefore) === JSON.stringify(sameReducedFocusAfter));
+  record("same-coordinate reduced-motion page errors", { pageErrors: sameReducedRun.pageErrors }, sameReducedRun.pageErrors.length === 0);
+  await sameReducedPage.close();
+
+  const guestPage = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+  const guestPageErrors = [];
+  let guestOwnerRouteHits = 0;
+  guestPage.on("pageerror", (error) => guestPageErrors.push(error.message));
+  await guestPage.route("**/api/shared/journeys", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    headers: { "cache-control": "private, no-store" },
+    body: JSON.stringify({
+      share: { expiresAt: "2036-10-10T10:30:00.000Z", journeyCount: 1 },
+      journeys: [sharedSameCoordinateJourney],
+    }),
+  }));
+  await guestPage.route("**/api/shared/assets/*/read-url", (route) => route.fulfill({
+    status: 404,
+    contentType: "application/json",
+    body: JSON.stringify({ error: "MEDIA_UNAVAILABLE", message: "Media unavailable" }),
+  }));
+  await guestPage.route("**/api/journeys**", (route) => {
+    guestOwnerRouteHits += 1;
+    return route.fulfill({
+      status: 500,
+      contentType: "application/json",
+      body: JSON.stringify({ error: "OWNER_ROUTE_REACHED" }),
+    });
+  });
+  await guestPage.route("**/api/home-bases**", (route) => {
+    guestOwnerRouteHits += 1;
+    return route.fulfill({ status: 500, contentType: "application/json", body: "{}" });
+  });
+  await guestPage.goto(
+    `${origin}/share?qaMode=globe-chrome&qaLite=1&qaRoutePointContext=1&qaSpatialHandoff=1#${sameCoordinateGuestToken}`,
+    { waitUntil: "domcontentloaded" },
+  );
+  await guestPage.locator(".living-atlas").waitFor({ state: "visible", timeout: 20_000 });
+  // SharedAtlasView still owns the real guest capability/data path; main.tsx
+  // injects the production-globe QA wrapper only under qaRoutePointContext=1
+  // so this activation seam exercises the actual shared viewer without owner reads.
+  const guestTrigger = guestPage.locator(`[data-qa-globe-route-point-activate="${same02Id}"]`);
+  await guestTrigger.waitFor({ state: "attached", timeout: 20_000 });
+  await guestTrigger.evaluate((button) => button.click());
+  const guestContext = guestPage.locator("[data-route-point-context]");
+  await guestContext.waitFor({ state: "visible", timeout: 5_000 });
+  const guestInitial = await guestContext.evaluate((node) => ({
+    routePointId: node.getAttribute("data-route-point-id"),
+    switchIds: [...node.querySelectorAll("[data-route-point-context-switch]")].map((button) => button.getAttribute("data-route-point-context-switch")),
+    text: node.textContent ?? "",
+  }));
+  await guestPage.locator(`[data-route-point-context-switch="${same07Id}"]`).click();
+  await guestPage.waitForFunction((id) => document.querySelector("[data-route-point-context]")?.getAttribute("data-route-point-id") === id, same07Id);
+  const guestAfterSwitch = await guestContext.evaluate((node) => ({
+    routePointId: node.getAttribute("data-route-point-id"),
+    text: node.textContent ?? "",
+    switchCount: node.querySelectorAll("[data-route-point-context-switch]").length,
+  }));
+  record("guest same-coordinate grouping is computed only from the authorized shared Journey", {
+    guestInitial, guestAfterSwitch, guestOwnerRouteHits,
+  },
+    guestInitial.routePointId === same02Id
+    && guestInitial.switchIds.join(",") === `${same02Id},${same07Id}`
+    && guestInitial.text.includes("只分享清晨记录。")
+    && guestAfterSwitch.routePointId === same07Id
+    && guestAfterSwitch.switchCount === 2
+    && guestAfterSwitch.text.includes("只分享夜里记录。")
+    && guestOwnerRouteHits === 0);
+  record("guest same-coordinate page errors", { pageErrors: guestPageErrors }, guestPageErrors.length === 0);
+  await guestPage.close();
 
   const textRun = await openFocusAtlas();
   const textPage = textRun.page;

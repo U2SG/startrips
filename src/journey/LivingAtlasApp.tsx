@@ -95,6 +95,8 @@ import {
   emptyRoutePointContextSelection,
   requestRoutePointContextSelection,
   resolveRoutePointContextSelection,
+  routePointContextTemporallyVisible,
+  temporallyVisibleRoutePointContextRefs,
   type RoutePointContext,
   type RoutePointContextIntent,
 } from "./routePointContext";
@@ -1167,6 +1169,12 @@ export function LivingAtlasApp({
   // #21: the rewind cursor over the whole journey timeline. Only active while
   // the user is in globe focus mode; entering playback pauses rewind.
   const timeCursor = useGlobeTimeCursor(journeys);
+  const routePointContextTemporalReveal = isMobileV2 || globeFocusMode
+    ? {
+        journeys: timeCursor.reveal.journeyProgress,
+        points: timeCursor.reveal.pointProgress,
+      }
+    : undefined;
   const unknownCreateSemanticOwnership = resolveUnknownCreateObservationOwnership({
     journeys,
     timelineSelection: timeCursor.selection,
@@ -1562,6 +1570,30 @@ export function LivingAtlasApp({
     setRoutePointContextSelection(refreshed);
   }, [clearRoutePointContext, journeys, routePointContextSelection.intent]);
   useEffect(() => {
+    const context = routePointContextSelection.context;
+    if (!context || context.journeyId === activeJourneyId) return;
+    clearRoutePointContext();
+  }, [
+    activeJourneyId,
+    clearRoutePointContext,
+    routePointContextSelection.context?.journeyId,
+  ]);
+  useEffect(() => {
+    const context = routePointContextSelection.context;
+    if (!context || !routePointContextTemporalReveal) return;
+    if (routePointContextTemporallyVisible(
+      context.journeyId,
+      context.routePointIndex,
+      routePointContextTemporalReveal,
+    )) return;
+    clearRoutePointContext();
+  }, [
+    clearRoutePointContext,
+    routePointContextSelection.context?.journeyId,
+    routePointContextSelection.context?.routePointIndex,
+    routePointContextTemporalReveal,
+  ]);
+  useEffect(() => {
     if (view !== "planet" && routePointContextSelection.intent) clearRoutePointContext();
   }, [clearRoutePointContext, routePointContextSelection.intent, view]);
   useEffect(() => {
@@ -1937,6 +1969,10 @@ export function LivingAtlasApp({
   }
 
   function revealRoutePointContext(journeyId: string, routePointId: string) {
+    if (journeyId !== activeJourneyIdRef.current) {
+      clearRoutePointContext();
+      return;
+    }
     clearHomeBaseContext();
     const requested = requestRoutePointContextSelection(
       routePointContextSelectionRef.current,
@@ -2927,7 +2963,35 @@ export function LivingAtlasApp({
         const context = routePointContextSelection.context;
         const intent = routePointContextSelection.intent;
         const contextJourney = journeys.find((candidate) => candidate.id === context.journeyId) ?? null;
-        if (!contextJourney) return null;
+        if (!contextJourney || context.journeyId !== activeJourneyId) return null;
+        if (!routePointContextTemporallyVisible(
+          context.journeyId,
+          context.routePointIndex,
+          routePointContextTemporalReveal,
+        )) return null;
+        const visibleSameCoordinateRoutePoints = temporallyVisibleRoutePointContextRefs(
+          context.journeyId,
+          context.sameCoordinateRoutePoints,
+          routePointContextTemporalReveal,
+        );
+        const visiblePreviousRoutePoint = context.previousRoutePoint === null
+          ? null
+          : routePointContextTemporallyVisible(
+              context.journeyId,
+              context.previousRoutePoint.routePointIndex,
+              routePointContextTemporalReveal,
+            )
+            ? context.previousRoutePoint
+            : undefined;
+        const visibleNextRoutePoint = context.nextRoutePoint === null
+          ? null
+          : routePointContextTemporallyVisible(
+              context.journeyId,
+              context.nextRoutePoint.routePointIndex,
+              routePointContextTemporalReveal,
+            )
+            ? context.nextRoutePoint
+            : undefined;
         return (
           <aside
             className="living-atlas__route-point-context motion-fade-through"
@@ -2943,6 +3007,44 @@ export function LivingAtlasApp({
               <h2>{context.routePointLabel}</h2>
               <span>{context.journeyTitle}</span>
             </header>
+            {visibleSameCoordinateRoutePoints.length > 1 ? (
+              <>
+                <section
+                  className="living-atlas__route-point-context-switcher"
+                  data-route-point-context-switcher
+                  aria-label="同一坐标的路线点记录"
+                >
+                  <p>同一坐标 · {visibleSameCoordinateRoutePoints.length} 条路线点记录</p>
+                  <div role="group" aria-label="切换路线点记录">
+                    {visibleSameCoordinateRoutePoints.map((record) => (
+                      <button
+                        key={record.routePointId}
+                        type="button"
+                        data-route-point-context-switch={record.routePointId}
+                        aria-pressed={record.routePointId === context.routePointId}
+                        onClick={() => revealRoutePointContext(context.journeyId, record.routePointId)}
+                      >
+                        <span>{String(record.routePointIndex + 1).padStart(2, "0")}</span>
+                        <strong>{record.routePointLabel}</strong>
+                        <small>{record.isStop ? "停靠点" : "途径点"}</small>
+                      </button>
+                    ))}
+                  </div>
+                </section>
+                <div className="living-atlas__route-point-context-order" data-route-point-context-order>
+                  {visiblePreviousRoutePoint !== undefined ? (
+                    <span>{visiblePreviousRoutePoint
+                      ? `上一段 · ${visiblePreviousRoutePoint.routePointLabel}`
+                      : "路线起点"}</span>
+                  ) : null}
+                  {visibleNextRoutePoint !== undefined ? (
+                    <span>{visibleNextRoutePoint
+                      ? `下一段 · ${visibleNextRoutePoint.routePointLabel}`
+                      : "路线终点"}</span>
+                  ) : null}
+                </div>
+              </>
+            ) : null}
             <div className="living-atlas__route-point-context-facts">
               <span>{context.resolvedDate ? context.resolvedDate.slice(0, 10) : "日期未记录"}</span>
               <span>{context.visualMediaCount > 0 ? `${context.visualMediaCount} 项影像` : "仅文字记录"}</span>
@@ -2950,6 +3052,7 @@ export function LivingAtlasApp({
             </div>
             {context.notePresent && context.note ? <blockquote>{context.note}</blockquote> : null}
             <RoutePointContextRepresentative
+              key={`${context.routePointId}:${context.representativeAssetId ?? "none"}`}
               journey={contextJourney}
               context={context}
               intent={intent}

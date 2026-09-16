@@ -999,6 +999,14 @@ describe("Route Point context integration (#291)", () => {
     expect(handler).not.toContain("cameraCommand");
   });
 
+  it("remounts representative media when Route Point record identity changes", () => {
+    const start = appSource.indexOf("<RoutePointContextRepresentative");
+    const representative = appSource.slice(start, start + 420);
+
+    expect(start).toBeGreaterThan(0);
+    expect(representative).toContain('key={`${context.routePointId}:${context.representativeAssetId ?? "none"}`}');
+  });
+
   it("keeps representative-media readiness inside context ownership", () => {
     const start = appSource.indexOf("function RoutePointContextRepresentative");
     const end = appSource.indexOf("export function playbackFocusPointForCameraTarget", start);
@@ -1060,14 +1068,63 @@ describe("Route Point context integration (#291)", () => {
   it("drops context outside planet view and refreshes retained context from the latest Journey", () => {
     const refreshStart = appSource.indexOf("const intent = routePointContextSelection.intent;");
     const refreshBlock = appSource.slice(refreshStart, refreshStart + 900);
+    const viewCleanupStart = appSource.indexOf('if (view !== "planet" && routePointContextSelection.intent)');
+    const viewCleanupBlock = appSource.slice(viewCleanupStart, viewCleanupStart + 220);
     const renderStart = appSource.indexOf('{view === "planet" && routePointContextSelection.context');
 
     expect(refreshStart).toBeGreaterThan(0);
     expect(refreshBlock).toContain("buildRoutePointContext(journey, intent.routePointId)");
     expect(refreshBlock).toContain("resolveRoutePointContextSelection(");
-    expect(refreshBlock).toContain('view !== "planet"');
-    expect(refreshBlock).toContain("clearRoutePointContext()");
+    expect(viewCleanupStart).toBeGreaterThan(0);
+    expect(viewCleanupBlock).toContain("clearRoutePointContext()");
     expect(renderStart).toBeGreaterThan(0);
+  });
+
+  it("releases Route Point context when semantic Journey ownership changes", () => {
+    const revealStart = appSource.indexOf("function revealRoutePointContext(journeyId: string, routePointId: string)");
+    const revealBlock = appSource.slice(revealStart, revealStart + 520);
+    const ownerEffectStart = appSource.indexOf("if (!context || context.journeyId === activeJourneyId) return;");
+    const ownerEffectBlock = appSource.slice(ownerEffectStart, ownerEffectStart + 320);
+
+    expect(revealStart).toBeGreaterThan(0);
+    expect(revealBlock).toContain("journeyId !== activeJourneyIdRef.current");
+    expect(revealBlock).toContain("clearRoutePointContext()");
+    expect(ownerEffectStart).toBeGreaterThan(0);
+    expect(ownerEffectBlock).toContain("clearRoutePointContext()");
+    expect(appSource).toContain("if (!contextJourney || context.journeyId !== activeJourneyId) return null;");
+  });
+
+  it("switches co-located Route Point record identity without claiming camera or Playback ownership", () => {
+    const start = appSource.indexOf('data-route-point-context-switch={record.routePointId}');
+    const switcher = appSource.slice(start - 500, start + 1800);
+
+    expect(start).toBeGreaterThan(0);
+    expect(switcher).toContain('aria-pressed={record.routePointId === context.routePointId}');
+    expect(switcher).toContain('revealRoutePointContext(context.journeyId, record.routePointId)');
+    expect(switcher).toContain("visibleSameCoordinateRoutePoints.map");
+    expect(appSource).toContain("temporallyVisibleRoutePointContextRefs(");
+    expect(appSource).toContain("routePointContextTemporallyVisible(");
+    expect(appSource).toContain("routePointContextTemporalReveal");
+    expect(appSource).toContain("journeys: timeCursor.reveal.journeyProgress");
+    expect(appSource).toContain("points: timeCursor.reveal.pointProgress");
+    expect(switcher).toContain('data-route-point-context-order');
+    expect(switcher).toContain('visiblePreviousRoutePoint.routePointLabel');
+    expect(switcher).toContain('visibleNextRoutePoint.routePointLabel');
+    expect(switcher).not.toContain('timeCursor.selectPoint');
+    expect(switcher).not.toContain('cameraCommand');
+    expect(switcher).not.toContain('startPlayback');
+    expect(switcher).not.toContain('setPlaybackSession');
+  });
+
+  it("keeps same-coordinate switch targets touch-safe without turning the context into a toolbar", () => {
+    const css = readFileSync(new URL("../styles/living-atlas.css", import.meta.url), "utf8");
+    const start = css.indexOf(".living-atlas__route-point-context-switcher button {");
+    const rule = css.slice(start, css.indexOf("}", start));
+
+    expect(start).toBeGreaterThan(0);
+    expect(rule).toContain("min-height: 44px;");
+    expect(appSource).toContain('role="group" aria-label="切换路线点记录"');
+    expect(appSource).not.toContain('data-route-point-context-switcher role="toolbar"');
   });
 
   it("keeps long context notes reachable within the clipped Atlas viewport", () => {

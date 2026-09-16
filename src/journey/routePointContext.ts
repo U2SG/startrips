@@ -4,6 +4,13 @@ import type { Journey } from "./types";
 export const ROUTE_POINT_LOCATION_PRECISION = "route-point" as const;
 export type RoutePointLocationPrecision = typeof ROUTE_POINT_LOCATION_PRECISION;
 
+export type RoutePointContextRouteRef = {
+  routePointId: string;
+  routePointLabel: string;
+  routePointIndex: number;
+  isStop: boolean;
+};
+
 export type RoutePointContext = {
   journeyId: string;
   journeyTitle: string;
@@ -11,6 +18,9 @@ export type RoutePointContext = {
   routePointLabel: string;
   routePointIndex: number;
   routePointCount: number;
+  previousRoutePoint: RoutePointContextRouteRef | null;
+  nextRoutePoint: RoutePointContextRouteRef | null;
+  sameCoordinateRoutePoints: RoutePointContextRouteRef[];
   resolvedDate: string | null;
   notePresent: boolean;
   note: string | null;
@@ -39,6 +49,20 @@ export function emptyRoutePointContextSelection(): RoutePointContextSelection {
   return { revision: 0, intent: null, context: null };
 }
 
+function routePointRouteRef(
+  journey: Journey,
+  routePointIndex: number,
+): RoutePointContextRouteRef | null {
+  const point = journey.routePoints[routePointIndex];
+  if (!point) return null;
+  return {
+    routePointId: point.id,
+    routePointLabel: point.label.trim() || `途径点 ${routePointIndex + 1}`,
+    routePointIndex,
+    isStop: point.isStop,
+  };
+}
+
 export function buildRoutePointContext(
   journey: Journey,
   routePointId: string,
@@ -53,6 +77,14 @@ export function buildRoutePointContext(
   const resolvedDate = point.occurredAt && Number.isFinite(Date.parse(point.occurredAt))
     ? point.occurredAt
     : null;
+  // #377/ST-081 owner-approved V1: this is record navigation inside the
+  // already-authorized Journey, not Place/visit inference. Only exact canonical
+  // coordinate equality joins records; labels and proximity never participate.
+  const sameCoordinateRoutePoints = journey.routePoints.flatMap((candidate, index) => {
+    if (candidate.latitude !== point.latitude || candidate.longitude !== point.longitude) return [];
+    const ref = routePointRouteRef(journey, index);
+    return ref ? [ref] : [];
+  });
 
   return {
     journeyId: journey.id,
@@ -61,6 +93,9 @@ export function buildRoutePointContext(
     routePointLabel: point.label.trim() || `途径点 ${routePointIndex + 1}`,
     routePointIndex,
     routePointCount: journey.routePoints.length,
+    previousRoutePoint: routePointRouteRef(journey, routePointIndex - 1),
+    nextRoutePoint: routePointRouteRef(journey, routePointIndex + 1),
+    sameCoordinateRoutePoints,
     resolvedDate,
     notePresent: note !== null,
     note,
@@ -72,6 +107,35 @@ export function buildRoutePointContext(
       precision: ROUTE_POINT_LOCATION_PRECISION,
     },
   };
+}
+
+export type RoutePointContextTemporalReveal = {
+  journeys: ReadonlyMap<string, number>;
+  points: ReadonlyMap<string, number>;
+};
+
+export function routePointContextTemporallyVisible(
+  journeyId: string,
+  routePointIndex: number,
+  temporalReveal?: RoutePointContextTemporalReveal,
+) {
+  if (!temporalReveal) return true;
+  const journeyProgress = temporalReveal.journeys.get(journeyId);
+  if (journeyProgress !== undefined && journeyProgress <= 0) return false;
+  const pointProgress = temporalReveal.points.get(`${journeyId}:${routePointIndex}`);
+  return pointProgress === undefined || pointProgress > 0;
+}
+
+export function temporallyVisibleRoutePointContextRefs(
+  journeyId: string,
+  refs: readonly RoutePointContextRouteRef[],
+  temporalReveal?: RoutePointContextTemporalReveal,
+) {
+  return refs.filter((ref) => routePointContextTemporallyVisible(
+    journeyId,
+    ref.routePointIndex,
+    temporalReveal,
+  ));
 }
 
 export function requestRoutePointContextSelection(

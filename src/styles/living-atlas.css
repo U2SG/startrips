@@ -4681,6 +4681,92 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   letter-spacing: -0.025em;
 }
 
+.living-atlas__route-point-context-switcher {
+  display: grid;
+  gap: 7px;
+  margin-top: 14px;
+}
+
+.living-atlas__route-point-context-switcher > p {
+  margin: 0;
+  color: var(--atlas-muted);
+  font: 500 9px/1.4 ui-monospace, "SFMono-Regular", Consolas, monospace;
+  letter-spacing: 0.08em;
+}
+
+.living-atlas__route-point-context-switcher > div {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+
+.living-atlas__route-point-context-switcher > div::-webkit-scrollbar {
+  display: none;
+}
+
+.living-atlas__route-point-context-switcher button {
+  min-width: 112px;
+  min-height: 44px;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-areas:
+    "index label"
+    "index kind";
+  column-gap: 8px;
+  align-items: center;
+  padding: 7px 10px;
+  border: 1px solid rgba(118, 198, 188, 0.12);
+  border-radius: 11px;
+  background: rgba(118, 227, 211, 0.025);
+  color: var(--atlas-text);
+  cursor: pointer;
+  text-align: left;
+}
+
+.living-atlas__route-point-context-switcher button[aria-pressed="true"] {
+  border-color: color-mix(in srgb, var(--journey-color, var(--atlas-cyan)) 32%, transparent);
+  background: color-mix(in srgb, var(--journey-color, var(--atlas-cyan)) 9%, transparent);
+}
+
+.living-atlas__route-point-context-switcher button > span {
+  grid-area: index;
+  color: color-mix(in srgb, var(--journey-color, var(--atlas-cyan)) 72%, var(--atlas-text));
+  font: 600 10px/1 ui-monospace, "SFMono-Regular", Consolas, monospace;
+}
+
+.living-atlas__route-point-context-switcher button > strong {
+  grid-area: label;
+  overflow: hidden;
+  font-size: 10.5px;
+  font-weight: 560;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.living-atlas__route-point-context-switcher button > small {
+  grid-area: kind;
+  color: var(--atlas-muted);
+  font-size: 8.5px;
+  line-height: 1.15;
+}
+
+.living-atlas__route-point-context-order {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 10px;
+  color: var(--atlas-muted);
+  font-size: 9.5px;
+  line-height: 1.4;
+}
+
+.living-atlas__route-point-context-order span:last-child {
+  text-align: right;
+}
+
 .living-atlas__route-point-context-facts {
   display: grid;
   gap: 3px;

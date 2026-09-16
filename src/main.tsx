@@ -303,19 +303,26 @@ function LivingAtlasQaGlobe({
           aria-hidden="true"
           style={{ position: "fixed", left: 90, top: 90, width: 620, height: 360, pointerEvents: "none", zIndex: 2 }}
         >
-          {journeyRoutes.flatMap((route, routeIndex) => route.points.flatMap((point, pointIndex) => (
-            point.id ? (
+          {journeyRoutes.flatMap((route, routeIndex) => route.points.flatMap((point, pointIndex) => {
+            if (!point.id) return [];
+            // Keep the deterministic spatial seam honest for ST-081: distinct
+            // Route Point records at the exact same canonical coordinates share
+            // one geographic marker anchor while retaining distinct record IDs.
+            const firstCoordinateIndex = route.points.findIndex((candidate) => (
+              candidate.lat === point.lat && candidate.lon === point.lon
+            ));
+            return [
               <circle
                 key={`spatial:${route.id}:${point.id}`}
                 className="particle-earth-route__point"
                 data-journey-route={route.id}
                 data-route-point-id={point.id}
-                cx={150 + pointIndex * 115 + routeIndex * 12}
+                cx={150 + (firstCoordinateIndex >= 0 ? firstCoordinateIndex : pointIndex) * 115 + routeIndex * 12}
                 cy={150 + routeIndex * 54}
                 r={7}
-              />
-            ) : []
-          )))}
+              />,
+            ];
+          }))}
         </svg>
       ) : null}
       <output
@@ -1010,7 +1017,14 @@ createRoot(document.getElementById("root")!).render(
           <ExperienceDemo />
         </Suspense>
       ) : !shared && !knownAppPath ? <StartripsNotFound /> : shared ? (
-        <SharedAtlasView />
+        <SharedAtlasView
+          GlobeComponent={
+            import.meta.env.DEV
+            && new URLSearchParams(window.location.search).get("qaRoutePointContext") === "1"
+              ? LivingAtlasGlobeChromeQa
+              : undefined
+          }
+        />
       ) : (
         <AuthGateway>
           <Experience />
