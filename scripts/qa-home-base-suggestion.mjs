@@ -324,6 +324,15 @@ try {
     await page.mouse.move(exitBox.x + exitBox.width / 2, exitBox.y + exitBox.height / 2);
   }
   await page.locator(".journey-playback:not(.is-controls-hidden)").waitFor({ state: "visible", timeout: 20_000 });
+  // Review P2: dropping `is-controls-hidden` only STARTS a 260ms opacity
+  // transition from zero, so the class alone would let a fully transparent
+  // button be reported visible. Wait for the control's own settled opacity —
+  // an observable end state (1, and immediate under reduced motion), not a
+  // timer.
+  await page.waitForFunction(() => {
+    const button = document.querySelector(".journey-playback button[aria-label=\"退出播放\"]");
+    return Boolean(button) && getComputedStyle(button).opacity === "1";
+  }, null, { timeout: 20_000 });
   const exitControl = await page.evaluate(() => {
     const button = document.querySelector(".journey-playback button[aria-label=\"退出播放\"]");
     if (!button) return null;
@@ -344,6 +353,7 @@ try {
     && exitControl.rendered
     && exitControl.enabled
     && exitControl.pointerEvents !== "none"
+    && exitControl.opacity === "1"
     && exitControl.controlsHidden === false
     && exitControl.receivesPointerEvents
   ));
