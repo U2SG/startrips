@@ -141,7 +141,7 @@ function sameCoordinatePoint(id, sortOrder, latitude, longitude, label, note = n
     longitude,
     label,
     isStop: false,
-    occurredAt: null,
+    occurredAt: `2026-04-06T${String(8 + sortOrder).padStart(2, "0")}:00:00.000Z`,
     note,
     createdAt: `2026-04-06T${String(8 + sortOrder).padStart(2, "0")}:00:00.000Z`,
   };
@@ -544,6 +544,33 @@ try {
   const sameAtlasPreservedBack02 = await samePage.evaluate(() => window.__st081AtlasRoot === document.querySelector(".living-atlas"));
   record("rapid 02 -> 07 -> 02 returns content ownership only", { sameFocusBefore, sameFocusBack02, sameAtlasPreservedBack02 },
     sameAtlasPreservedBack02 && JSON.stringify(sameFocusBefore) === JSON.stringify(sameFocusBack02));
+  const timeTrack = samePage.locator(".globe-time-scrubber__track");
+  await timeTrack.focus();
+  await timeTrack.press("Home");
+  await timeTrack.press("PageUp");
+  await timeTrack.press("PageUp");
+  await samePage.waitForFunction(() => document.querySelector(".globe-time-scrubber__track")?.getAttribute("aria-valuenow") === "20");
+  const rewindVisibleState = await samePage.evaluate((futureId) => ({
+    contextId: document.querySelector("[data-route-point-context]")?.getAttribute("data-route-point-id") ?? null,
+    switcherCount: document.querySelectorAll("[data-route-point-context-switcher]").length,
+    futureSwitchCount: document.querySelectorAll(`[data-route-point-context-switch="${futureId}"]`).length,
+    cursor: document.querySelector(".globe-time-scrubber__track")?.getAttribute("aria-valuenow"),
+  }), same07Id);
+  record("rewind hides future same-coordinate switch targets without changing current record", { rewindVisibleState },
+    rewindVisibleState.contextId === same02Id
+    && rewindVisibleState.switcherCount === 0
+    && rewindVisibleState.futureSwitchCount === 0
+    && rewindVisibleState.cursor === "20");
+
+  await timeTrack.press("Home");
+  await samePage.waitForFunction(() => document.querySelector("[data-route-point-context]") === null);
+  const rewindBeforeCurrent = await samePage.evaluate(() => ({
+    contextCount: document.querySelectorAll("[data-route-point-context]").length,
+    cursor: document.querySelector(".globe-time-scrubber__track")?.getAttribute("aria-valuenow"),
+  }));
+  record("rewind releases a context once its selected Route Point becomes future", { rewindBeforeCurrent },
+    rewindBeforeCurrent.contextCount === 0 && rewindBeforeCurrent.cursor === "0");
+
   record("same-coordinate page errors", { pageErrors: sameRun.pageErrors }, sameRun.pageErrors.length === 0);
   await samePage.close();
 

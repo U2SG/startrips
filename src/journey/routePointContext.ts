@@ -109,6 +109,28 @@ export function buildRoutePointContext(
   };
 }
 
+export function routePointContextTemporallyVisible(
+  journeyId: string,
+  routePointIndex: number,
+  pointProgress?: ReadonlyMap<string, number>,
+) {
+  if (!pointProgress) return true;
+  const progress = pointProgress.get(`${journeyId}:${routePointIndex}`);
+  return progress === undefined || progress > 0;
+}
+
+export function temporallyVisibleRoutePointContextRefs(
+  journeyId: string,
+  refs: readonly RoutePointContextRouteRef[],
+  pointProgress?: ReadonlyMap<string, number>,
+) {
+  return refs.filter((ref) => routePointContextTemporallyVisible(
+    journeyId,
+    ref.routePointIndex,
+    pointProgress,
+  ));
+}
+
 export function requestRoutePointContextSelection(
   current: RoutePointContextSelection,
   journeyId: string,

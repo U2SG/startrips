@@ -1085,6 +1085,10 @@ describe("Route Point context integration (#291)", () => {
     expect(start).toBeGreaterThan(0);
     expect(switcher).toContain('aria-pressed={record.routePointId === context.routePointId}');
     expect(switcher).toContain('revealRoutePointContext(context.journeyId, record.routePointId)');
+    expect(switcher).toContain("visibleSameCoordinateRoutePoints.map");
+    expect(appSource).toContain("temporallyVisibleRoutePointContextRefs(");
+    expect(appSource).toContain("routePointContextTemporallyVisible(");
+    expect(appSource).toContain("routePointContextTemporalProgress");
     expect(switcher).toContain('data-route-point-context-order');
     expect(switcher).toContain('context.previousRoutePoint.routePointLabel');
     expect(switcher).toContain('context.nextRoutePoint.routePointLabel');

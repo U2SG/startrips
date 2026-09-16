@@ -5,6 +5,8 @@ import {
   buildRoutePointContext,
   emptyRoutePointContextSelection,
   requestRoutePointContextSelection,
+  routePointContextTemporallyVisible,
+  temporallyVisibleRoutePointContextRefs,
   resolveRoutePointContextSelection,
 } from "./routePointContext";
 
@@ -212,6 +214,31 @@ describe("buildRoutePointContext", () => {
       routePointIndex: 6,
       isStop: false,
     });
+  });
+
+  it("keeps temporally hidden co-located records out of direct context switching", () => {
+    const trip = journey([
+      point("point-02", { sortOrder: 1, label: "morning" }),
+      point("point-07", { sortOrder: 6, label: "night", isStop: false }),
+    ], []);
+    const context = buildRoutePointContext(trip, "point-02");
+    const pointProgress = new Map([
+      [`${trip.id}:0`, 1],
+      [`${trip.id}:1`, 0],
+    ]);
+
+    expect(routePointContextTemporallyVisible(trip.id, 0, pointProgress)).toBe(true);
+    expect(routePointContextTemporallyVisible(trip.id, 1, pointProgress)).toBe(false);
+    expect(temporallyVisibleRoutePointContextRefs(
+      trip.id,
+      context?.sameCoordinateRoutePoints ?? [],
+      pointProgress,
+    ).map((entry) => entry.routePointId)).toEqual(["point-02"]);
+    expect(temporallyVisibleRoutePointContextRefs(
+      trip.id,
+      context?.sameCoordinateRoutePoints ?? [],
+      undefined,
+    ).map((entry) => entry.routePointId)).toEqual(["point-02", "point-07"]);
   });
 
   it("uses exact canonical coordinates only, never labels or proximity", () => {
