@@ -4,6 +4,28 @@ export type RouteDraftPoint = RoutePointInput & {
   draftId: string;
 };
 
+export type RouteDraftSearchMatch = {
+  point: RouteDraftPoint;
+  routeIndex: number;
+};
+
+function normalizeRouteDraftSearchText(value: string) {
+  return value.trim().normalize("NFKC").toLocaleLowerCase();
+}
+
+export function matchRouteDraftPoints(
+  points: readonly RouteDraftPoint[],
+  query: string,
+): RouteDraftSearchMatch[] {
+  const needle = normalizeRouteDraftSearchText(query);
+  if (needle.length < 2) return [];
+
+  return points.flatMap((point, routeIndex) => (
+    normalizeRouteDraftSearchText(point.label).includes(needle)
+      ? [{ point, routeIndex }]
+      : []
+  ));
+}
 export function appendRoutePoint(
   points: readonly RouteDraftPoint[],
   point: RouteDraftPoint,

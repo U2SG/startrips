@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   appendRoutePoint,
+  matchRouteDraftPoints,
   moveRoutePoint,
   removeRoutePoint,
   routeDraftToInput,
@@ -103,6 +104,35 @@ describe("route draft operations", () => {
     expect(new Set(moved.map((point) => point.draftId)).size).toBe(64);
   });
 
+  it("matches existing draft Route Points textually in current route order without merging identity", () => {
+    const points: RouteDraftPoint[] = [
+      { ...beijing, draftId: "record-01", label: "Las Vegas", latitude: 36.1699, longitude: -115.1398, note: "first" },
+      { ...ulanBator, draftId: "record-02", label: "LAS VEGAS", latitude: 35.99, longitude: -115.2, note: "second" },
+      { ...beijing, draftId: "record-03", label: "Las Vegas North", latitude: 36.3, longitude: -115.12, note: "third" },
+      { ...ulanBator, draftId: "record-04", label: "Reno", latitude: 39.5296, longitude: -119.8138 },
+    ];
+
+    const matches = matchRouteDraftPoints(points, "  las vegas  ");
+    expect(matches.map(({ point, routeIndex }) => ({ draftId: point.draftId, routeIndex }))).toEqual([
+      { draftId: "record-01", routeIndex: 0 },
+      { draftId: "record-02", routeIndex: 1 },
+      { draftId: "record-03", routeIndex: 2 },
+    ]);
+    expect(matches[0].point.note).toBe("first");
+    expect(matches[1].point.latitude).toBe(35.99);
+
+    const reordered = moveRoutePoint(points, "record-02", -1);
+    expect(matchRouteDraftPoints(reordered, "Las Vegas").map(({ point }) => point.draftId)).toEqual([
+      "record-02",
+      "record-01",
+      "record-03",
+    ]);
+    expect(matchRouteDraftPoints(removeRoutePoint(reordered, "record-01"), "Las Vegas").map(({ point }) => point.draftId)).toEqual([
+      "record-02",
+      "record-03",
+    ]);
+    expect(matchRouteDraftPoints(points, "l")).toEqual([]);
+  });
   it("reorders a 12-record draft by draftId without merging duplicate labels or coordinates", () => {
     const points: RouteDraftPoint[] = Array.from({ length: 12 }, (_, index) => ({
       draftId: `record-${String(index + 1).padStart(2, "0")}`,

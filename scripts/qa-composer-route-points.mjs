@@ -6,6 +6,20 @@ const results = [];
 let failed = false;
 let fatalError = null;
 
+function locationSearchPayload({ id, label, context = "QA provider", latitude = 22.543096, longitude = 114.057865 }) {
+  return JSON.stringify({
+    results: [{
+      id,
+      label,
+      labelEnglish: label,
+      context,
+      countryCode: "QA",
+      latitude,
+      longitude,
+    }],
+    attribution: { label: "QA locations", url: "https://example.test/locations" },
+  });
+}
 function record(name, data, condition) {
   const row = { name, ...data, failed: !condition };
   results.push(row);
@@ -106,6 +120,229 @@ try {
         && run.pageErrors.length === 0);
 
       if (viewport.label === "390") {
+        let releaseVegasSearch = null;
+        let markVegasSearchStarted = null;
+        const vegasSearchStarted = new Promise((resolve) => { markVegasSearchStarted = resolve; });
+        let releaseInterruptedSearch = null;
+        let markInterruptedSearchStarted = null;
+        const interruptedSearchStarted = new Promise((resolve) => { markInterruptedSearchStarted = resolve; });
+        let markInterruptedSearchFulfilled = null;
+        const interruptedSearchFulfilled = new Promise((resolve) => { markInterruptedSearchFulfilled = resolve; });
+
+        await run.page.route("**/api/locations/search?*", async (route) => {
+          const query = new URL(route.request().url()).searchParams.get("q") ?? "";
+          if (query === "Las Vegas") {
+            await route.fulfill({
+              status: 503,
+              contentType: "application/json",
+              body: JSON.stringify({ error: "LOCATION_SEARCH_UNAVAILABLE", message: "Location search unavailable" }),
+            });
+            return;
+          }
+          if (query === "Vegas") {
+            markVegasSearchStarted?.();
+            await new Promise((resolve) => { releaseVegasSearch = resolve; });
+            await route.fulfill({
+              status: 200,
+              contentType: "application/json",
+              body: locationSearchPayload({ id: "delayed-provider", label: "Delayed Provider" }),
+            });
+            return;
+          }
+          if (query === "old query") {
+            markInterruptedSearchStarted?.();
+            await new Promise((resolve) => { releaseInterruptedSearch = resolve; });
+            await route.fulfill({
+              status: 200,
+              contentType: "application/json",
+              body: locationSearchPayload({ id: "stale-provider", label: "Stale Provider" }),
+            });
+            markInterruptedSearchFulfilled?.();
+            return;
+          }
+          if (query === "fresh query") {
+            await route.fulfill({
+              status: 200,
+              contentType: "application/json",
+              body: locationSearchPayload({ id: "fresh-provider", label: "Fresh Provider" }),
+            });
+            return;
+          }
+          if (query === "Provider Add") {
+            await route.fulfill({
+              status: 200,
+              contentType: "application/json",
+              body: locationSearchPayload({ id: "provider-add", label: "Las Vegas", context: "Same label and coordinates, new provider result" }),
+            });
+            return;
+          }
+          await route.fulfill({
+            status: 200,
+            contentType: "application/json",
+            body: JSON.stringify({ results: [], attribution: null }),
+          });
+        });
+
+        const persistenceRequests = [];
+        run.page.on("request", (request) => {
+          const url = new URL(request.url());
+          if (url.pathname.startsWith("/api/journeys") && request.method() !== "GET") {
+            persistenceRequests.push({ method: request.method(), pathname: url.pathname });
+          }
+        });
+        const initialSearchRowCount = await run.page.locator(".journey-route-draft > li:not(.is-empty)").count();
+        const searchInput = run.page.getByPlaceholder("建筑、景点、街道、街区或城市");
+        const searchSubmit = run.page.locator(".journey-location-search > button");
+        const existingGroup = run.page.locator("[data-qa-composer-existing-results]");
+        const externalGroup = run.page.locator("[data-qa-composer-external-results]");
+
+        await searchInput.fill("Las Vegas");
+        await existingGroup.waitFor({ state: "visible" });
+        await run.page.waitForFunction(() => document.querySelectorAll("[data-qa-composer-existing-results] li").length === 2);
+        const localMatches = await existingGroup.locator("li").evaluateAll((items) => items.map((item) => {
+          const button = item.querySelector("button");
+          const rect = button?.getBoundingClientRect();
+          return {
+            draftId: item.getAttribute("data-existing-route-point-draft-id"),
+            text: item.textContent?.trim() ?? "",
+            ariaLabel: button?.getAttribute("aria-label") ?? null,
+            buttonWidth: rect?.width ?? 0,
+            buttonHeight: rect?.height ?? 0,
+          };
+        }));
+        record("composer-route-points:local-search-separate-records", { localMatches },
+          localMatches.length === 2
+          && localMatches.every((item) => item.draftId && item.buttonWidth >= 44 && item.buttonHeight >= 44)
+          && localMatches[0].draftId !== localMatches[1].draftId
+          && localMatches[0].text.includes("02")
+          && localMatches[1].text.includes("07")
+          && localMatches[0].ariaLabel === "定位 02 · Las Vegas"
+          && localMatches[1].ariaLabel === "定位 07 · Las Vegas"
+          && localMatches.every((item) => item.text.includes("22.543096, 114.057865")));
+
+        const draft02 = localMatches[0].draftId;
+        const draft07 = localMatches[1].draftId;
+        const locate02 = existingGroup.locator(`li[data-existing-route-point-draft-id="${draft02}"] button`);
+        await locate02.focus();
+        await run.page.keyboard.press("Enter");
+        await run.page.waitForFunction((draftId) => {
+          const row = document.querySelector(`[data-route-point-draft-id="${draftId}"]`);
+          return row?.getAttribute("data-route-point-expanded") === "true"
+            && document.activeElement?.closest("[data-route-point-draft-id]")?.getAttribute("data-route-point-draft-id") === draftId;
+        }, draft02);
+        const row02 = run.page.locator(`[data-route-point-draft-id="${draft02}"]`);
+        const locate02State = {
+          note: await row02.locator("textarea").inputValue(),
+          isStop: await row02.locator('.journey-checkbox input[type="checkbox"]').isChecked(),
+          media: await row02.locator(".journey-route-draft__media-association small").textContent(),
+        };
+        record("composer-route-points:locate-record-02", { draft02, locate02State },
+          locate02State.note === "Record 02 local search note."
+          && locate02State.isStop === false
+          && locate02State.media?.includes("seed-1.png")
+          && await run.page.locator(".journey-route-draft > li:not(.is-empty)").count() === initialSearchRowCount
+          && persistenceRequests.length === 0);
+
+        await existingGroup.locator(`li[data-existing-route-point-draft-id="${draft07}"] button`).click();
+        await run.page.waitForFunction((draftId) => document.querySelector(`[data-route-point-draft-id="${draftId}"]`)?.getAttribute("data-route-point-expanded") === "true", draft07);
+        const row07 = run.page.locator(`[data-route-point-draft-id="${draft07}"]`);
+        const locate07State = {
+          note: await row07.locator("textarea").inputValue(),
+          isStop: await row07.locator('.journey-checkbox input[type="checkbox"]').isChecked(),
+          media: await row07.locator(".journey-route-draft__media-association small").textContent(),
+        };
+        record("composer-route-points:locate-record-07", { draft07, locate07State },
+          locate07State.note === "Record 07 local search note."
+          && locate07State.isStop === true
+          && locate07State.media?.includes("seed-2.png")
+          && await run.page.locator(".journey-route-draft > li:not(.is-empty)").count() === initialSearchRowCount
+          && persistenceRequests.length === 0);
+
+        await searchSubmit.click();
+        await run.page.waitForFunction(() => !document.querySelector(".journey-location-search > button")?.disabled);
+        const localAfterProviderFailure = await existingGroup.locator("li").count();
+        const providerFailureMessage = await run.page.locator(".journey-composer__message").textContent();
+        record("composer-route-points:no-provider-keeps-local-search", { localAfterProviderFailure, providerFailureMessage },
+          localAfterProviderFailure === 2
+          && Boolean(providerFailureMessage?.trim())
+          && await externalGroup.count() === 0);
+
+        await searchInput.fill("Vegas");
+        await run.page.waitForFunction(() => document.querySelectorAll("[data-qa-composer-existing-results] li").length === 2);
+        await searchSubmit.click();
+        await vegasSearchStarted;
+        await existingGroup.locator(`li[data-existing-route-point-draft-id="${draft07}"] button`).click();
+        await row07.getByRole("button", { name: "更多操作 Las Vegas" }).click();
+        await row07.locator(".journey-route-draft__menu").getByRole("menuitem", { name: "删除地点" }).click();
+        await run.page.waitForFunction((draftId) => !document.querySelector(`[data-route-point-draft-id="${draftId}"]`), draft07);
+        await run.page.waitForFunction((draftId) => !document.querySelector(`[data-existing-route-point-draft-id="${draftId}"]`), draft07);
+        releaseVegasSearch?.();
+        await run.page.waitForFunction(() => !document.querySelector(".journey-location-search > button")?.disabled);
+        const afterDeleteDuringSearch = {
+          existingIds: await existingGroup.locator("li").evaluateAll((items) => items.map((item) => item.getAttribute("data-existing-route-point-draft-id"))),
+          deletedRowCount: await run.page.locator(`[data-route-point-draft-id="${draft07}"]`).count(),
+          providerResultCount: await run.page.locator('[data-location-result-id="delayed-provider"]').count(),
+        };
+        record("composer-route-points:delete-during-search-does-not-resurrect", { draft07, afterDeleteDuringSearch },
+          afterDeleteDuringSearch.existingIds.length === 1
+          && !afterDeleteDuringSearch.existingIds.includes(draft07)
+          && afterDeleteDuringSearch.deletedRowCount === 0
+          && afterDeleteDuringSearch.providerResultCount === 1);
+
+        await searchInput.fill("old query");
+        await searchSubmit.click();
+        await interruptedSearchStarted;
+        await searchInput.fill("fresh query");
+        await searchSubmit.click();
+        await run.page.locator('[data-location-result-id="fresh-provider"]').waitFor({ state: "visible" });
+        releaseInterruptedSearch?.();
+        await interruptedSearchFulfilled;
+        await run.page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+        const interruptedState = {
+          fresh: await run.page.locator('[data-location-result-id="fresh-provider"]').count(),
+          stale: await run.page.locator('[data-location-result-id="stale-provider"]').count(),
+          query: await searchInput.inputValue(),
+        };
+        record("composer-route-points:interrupted-search-keeps-newest-result", { interruptedState },
+          interruptedState.fresh === 1
+          && interruptedState.stale === 0
+          && interruptedState.query === "fresh query");
+
+        await searchInput.fill("Provider Add");
+        await searchSubmit.click();
+        const providerAdd = run.page.locator('[data-location-result-id="provider-add"] button');
+        await providerAdd.waitFor({ state: "visible" });
+        const beforeAddDraftIds = await run.page.locator(".journey-route-draft > li:not(.is-empty)").evaluateAll((rows) => rows.map((row) => row.getAttribute("data-route-point-draft-id")));
+        const providerAddTarget = await providerAdd.evaluate((button) => {
+          const rect = button.getBoundingClientRect();
+          return { width: rect.width, height: rect.height, ariaLabel: button.getAttribute("aria-label") };
+        });
+        await providerAdd.click();
+        await run.page.waitForFunction((count) => document.querySelectorAll(".journey-route-draft > li:not(.is-empty)").length === count + 1, beforeAddDraftIds.length);
+        const appended = run.page.locator(".journey-route-draft > li:not(.is-empty)").last();
+        const addState = {
+          beforeCount: beforeAddDraftIds.length,
+          afterCount: await run.page.locator(".journey-route-draft > li:not(.is-empty)").count(),
+          draftId: await appended.getAttribute("data-route-point-draft-id"),
+          label: await appended.locator(".journey-route-draft__summary strong").textContent(),
+          latitude: await appended.getAttribute("data-route-point-latitude"),
+          longitude: await appended.getAttribute("data-route-point-longitude"),
+          query: await searchInput.inputValue(),
+          providerAddTarget,
+        };
+        record("composer-route-points:explicit-provider-add-appends-fresh-record", { addState },
+          addState.afterCount === addState.beforeCount + 1
+          && Boolean(addState.draftId)
+          && !beforeAddDraftIds.includes(addState.draftId)
+          && addState.label?.trim() === "Las Vegas"
+          && addState.latitude === "22.543096"
+          && addState.longitude === "114.057865"
+          && addState.query === ""
+          && providerAddTarget.ariaLabel === "添加 Las Vegas · Same label and coordinates, new provider result · QA"
+          && providerAddTarget.width >= 44
+          && providerAddTarget.height >= 44
+          && persistenceRequests.length === 0);
+
         const record03 = run.rows.filter({ hasText: "Record 03" }).first();
         const record03Summary = record03.locator(".journey-route-draft__summary");
         const record03DraftId = await record03.getAttribute("data-route-point-draft-id");
