@@ -3042,10 +3042,35 @@
   font-size: 10px;
 }
 
+.journey-location-result-group {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.journey-location-result-group__heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 2px;
+}
+
+.journey-location-result-group__heading strong {
+  color: rgba(216, 234, 228, 0.82);
+  font-size: 10px;
+  font-weight: 520;
+}
+
+.journey-location-result-group__heading small {
+  color: var(--atlas-faint);
+  font-size: 8px;
+}
+
 .journey-location-results {
   display: grid;
   gap: 6px;
-  margin: 10px 0 0;
+  margin: 0;
   padding: 0;
   list-style: none;
 }
@@ -3054,7 +3079,9 @@
   width: 100%;
   min-height: 48px;
   display: grid;
-  gap: 4px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
   padding: 9px 11px;
   border: 1px solid var(--atlas-line);
   background: #071111;
@@ -3062,6 +3089,23 @@
   cursor: pointer;
 }
 
+.journey-location-result-copy {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.journey-location-result-action {
+  min-width: 44px;
+  min-height: 44px;
+  display: grid;
+  place-items: center;
+  padding: 0 8px;
+  border-left: 1px solid rgba(151, 197, 186, 0.14);
+  color: var(--atlas-cyan) !important;
+  font-size: 9px !important;
+  letter-spacing: 0.04em;
+}
 .journey-location-results strong {
   font-size: 11px;
   font-weight: 500;

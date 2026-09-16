@@ -568,15 +568,29 @@ const composerRoutePointsQaJourney: Journey = {
     longitude: index === 1 || index === 6 ? 114.057865 : 113.8 + index * 0.08,
     label: index === 0 || index === 11
       ? "Shared label"
-      : index === 2
-        ? "Record 03"
-        : `Record ${String(index + 1).padStart(2, "0")}`,
+      : index === 1 || index === 6
+        ? "Las Vegas"
+        : index === 2
+          ? "Record 03"
+          : `Record ${String(index + 1).padStart(2, "0")}`,
     isStop: index % 3 === 0,
-    note: index === 2 ? "Record 03 keeps its note while moving." : null,
+    note: index === 1
+      ? "Record 02 local search note."
+      : index === 6
+        ? "Record 07 local search note."
+        : index === 2
+          ? "Record 03 keeps its note while moving."
+          : null,
   })),
   media: storyQaJourney.media.map((media, index) => ({
     ...media,
-    routePointId: index === 0 ? "00000000-0000-4000-8000-000000000022" : null,
+    routePointId: index === 0
+      ? "00000000-0000-4000-8000-000000000022"
+      : index === 1
+        ? "00000000-0000-4000-8000-000000000021"
+        : index === 2
+          ? "00000000-0000-4000-8000-000000000026"
+          : null,
   })),
 };
 

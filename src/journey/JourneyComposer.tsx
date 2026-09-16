@@ -46,6 +46,7 @@ import {
 } from "./journeyModel";
 import {
   appendRoutePoint,
+  matchRouteDraftPoints,
   moveRoutePoint,
   removeRoutePoint,
   routeDraftToInput,
@@ -475,11 +476,16 @@ export function JourneyComposer({
   // an accept callback alive in an event queue, so gate it by a monotonically
   // increasing revision instead of trusting the caller to forget it in time.
   const globePickRequestRevisionRef = useRef(0);
+  const searchRevisionRef = useRef(0);
   const reverseGeocodeRevisionRef = useRef(0);
   const activeReverseGeocodeDraftIdRef = useRef<string | null>(null);
   const composerMountedRef = useRef(true);
   const routePointsRef = useRef(routePoints);
   routePointsRef.current = routePoints;
+  const existingSearchMatches = useMemo(
+    () => matchRouteDraftPoints(routePoints, searchQuery),
+    [routePoints, searchQuery],
+  );
   const dialogRef = useModalFocus<HTMLElement>(() => {
     if (mobileMediaDeleteIndex !== null) {
       setMobileMediaDeleteIndex(null);
@@ -584,9 +590,17 @@ export function JourneyComposer({
     composerMountedRef.current = true;
     return () => {
       composerMountedRef.current = false;
+      searchRevisionRef.current += 1;
       reverseGeocodeRevisionRef.current += 1;
     };
   }, []);
+
+  useEffect(() => {
+    searchRevisionRef.current += 1;
+    setSearchResults([]);
+    setSearchAttribution(null);
+    setSearchPending(false);
+  }, [journey?.id]);
 
   useEffect(() => {
     onRoutePreviewChange?.(routePoints.length === 0 ? null : {
@@ -691,29 +705,59 @@ export function JourneyComposer({
     setPointIsStop(false);
   }
 
+  function changeSearchQuery(value: string) {
+    searchRevisionRef.current += 1;
+    setSearchQuery(value);
+    setSearchResults([]);
+    setSearchAttribution(null);
+    setSearchPending(false);
+  }
+
   async function runSearch(event: FormEvent) {
     event.preventDefault();
     const query = searchQuery.trim();
     if (query.length < 2) {
+      searchRevisionRef.current += 1;
+      setSearchResults([]);
+      setSearchAttribution(null);
+      setSearchPending(false);
       setMessage("至少输入两个字符再搜索。");
       return;
     }
+
+    const revision = ++searchRevisionRef.current;
     setSearchPending(true);
     setMessage("");
     try {
       const response = await searchLocations(query);
+      if (!composerMountedRef.current || searchRevisionRef.current !== revision) return;
       setSearchResults(response.results);
       setSearchAttribution(response.attribution);
     } catch (error) {
+      if (!composerMountedRef.current || searchRevisionRef.current !== revision) return;
       setSearchResults([]);
       setSearchAttribution(null);
       setMessage(journeyLocationSearchErrorMessage(error));
     } finally {
-      setSearchPending(false);
+      if (composerMountedRef.current && searchRevisionRef.current === revision) {
+        setSearchPending(false);
+      }
     }
   }
 
-  function chooseSearchResult(result: LocationSearchResult) {
+  function locateExistingRoutePoint(routePointDraftId: string) {
+    if (!routePointsRef.current.some((point) => point.draftId === routePointDraftId)) return;
+    setRoutePointMenuDraftId(null);
+    pendingRoutePointFocusDraftIdRef.current = routePointDraftId;
+    pendingRoutePointScrollDraftIdRef.current = routePointDraftId;
+    setExpandedRoutePointDraftId(routePointDraftId);
+    routePointTriggerRefs.current.get(routePointDraftId)?.focus({ preventScroll: true });
+    routePointRowRefs.current.get(routePointDraftId)?.scrollIntoView({ block: "nearest" });
+    setMessage("");
+  }
+
+  function addSearchResult(result: LocationSearchResult) {
+    searchRevisionRef.current += 1;
     addPoint(toDraftPoint(
       result.latitude,
       result.longitude,
@@ -721,9 +765,10 @@ export function JourneyComposer({
       true,
     ));
     setSearchResults([]);
+    setSearchAttribution(null);
+    setSearchPending(false);
     setSearchQuery("");
   }
-
   function requestGlobePoint() {
     if (!onGlobePickRequest) return;
     const requestRevision = ++globePickRequestRevisionRef.current;
@@ -802,6 +847,7 @@ export function JourneyComposer({
     preservedUnknownCreateAttempt: UnknownJourneyCreateAttempt | null,
   ) {
     globePickRequestRevisionRef.current += 1;
+    searchRevisionRef.current += 1;
     reverseGeocodeRevisionRef.current += 1;
     activeReverseGeocodeDraftIdRef.current = null;
     if (globePicking) onGlobePickCancel?.();
@@ -1457,22 +1503,67 @@ export function JourneyComposer({
               <div className="journey-composer__route-tools">
                 <form onSubmit={runSearch} className="journey-location-search">
                   <label>
-                    <span>搜索地点、建筑或城市</span>
-                    <input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} maxLength={120} placeholder="建筑、景点、街道、街区或城市" />
+                    <span>搜索本旅程或外部地点</span>
+                    <input
+                      value={searchQuery}
+                      onChange={(event) => changeSearchQuery(event.target.value)}
+                      maxLength={120}
+                      placeholder="建筑、景点、街道、街区或城市"
+                    />
                   </label>
-                  <button type="submit" disabled={searchPending}><IconSearch size={16} stroke={1.4} aria-hidden="true" />{searchPending ? "搜索中…" : "搜索"}</button>
+                  <button type="submit" disabled={searchPending}>
+                    <IconSearch size={16} stroke={1.4} aria-hidden="true" />
+                    {searchPending ? "外部搜索中…" : "搜索外部地点"}
+                  </button>
                 </form>
+                {existingSearchMatches.length > 0 ? (
+                  <section className="journey-location-result-group" data-qa-composer-existing-results aria-label="本旅程已有地点">
+                    <div className="journey-location-result-group__heading">
+                      <strong>本旅程已有地点</strong>
+                      <small>定位，不会新增</small>
+                    </div>
+                    <ul className="journey-location-results">
+                      {existingSearchMatches.map(({ point, routeIndex }) => {
+                        const displayLabel = point.label.trim() || `途径点 ${routeIndex + 1}`;
+                        const mediaAssociation = routePointMediaAssociation(point);
+                        return (
+                          <li key={point.draftId} data-existing-route-point-draft-id={point.draftId}>
+                            <button
+                              type="button"
+                              aria-label={`定位 ${displayLabel}`}
+                              onClick={() => locateExistingRoutePoint(point.draftId)}
+                            >
+                              <span className="journey-location-result-copy">
+                                <strong>{displayLabel}</strong>
+                                <small>{String(routeIndex + 1).padStart(2, "0")} · {point.isStop ? "停靠" : "途径"} · {point.latitude.toFixed(6)}, {point.longitude.toFixed(6)}</small>
+                                <span>{point.note?.trim() || mediaAssociation.label}</span>
+                              </span>
+                              <span className="journey-location-result-action">定位</span>
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </section>
+                ) : null}
                 {searchResults.length > 0 ? (
-                  <>
+                  <section className="journey-location-result-group" data-qa-composer-external-results aria-label="外部地点">
+                    <div className="journey-location-result-group__heading">
+                      <strong>外部地点</strong>
+                      <small>添加为新的 Route Point</small>
+                    </div>
                     <ul className="journey-location-results">
                       {searchResults.map((result) => (
-                        <li key={result.id}>
-                          <button type="button" onClick={() => chooseSearchResult(result)}>
-                            <strong>{result.label}</strong>
-                            {[result.labelLocal, result.labelEnglish]
-                              .filter((label, index, labels) => Boolean(label) && label !== result.label && labels.indexOf(label) === index)
-                              .map((label) => <small key={label}>{label}</small>)}
-                            <span>{[result.context, result.countryCode].filter(Boolean).join(" · ")}</span>
+                        <li key={result.id} data-location-result-id={result.id}>
+                          <button type="button" aria-label={`添加 ${result.label}`} onClick={() => addSearchResult(result)}>
+                            <span className="journey-location-result-copy">
+                              <strong>{result.label}</strong>
+                              {[result.labelLocal, result.labelEnglish]
+                                .filter((label, index, labels) => Boolean(label) && label !== result.label && labels.indexOf(label) === index)
+                                .map((label) => <small key={label}>{label}</small>)}
+                              <span>{[result.context, result.countryCode].filter(Boolean).join(" · ")}</span>
+                            </span>
+                            <span className="journey-location-result-action">添加</span>
                           </button>
                         </li>
                       ))}
@@ -1482,7 +1573,7 @@ export function JourneyComposer({
                         地点数据 {searchAttribution.label}
                       </a>
                     ) : null}
-                  </>
+                  </section>
                 ) : null}
                 {onGlobePickRequest ? <button ref={globePickTriggerRef} className="journey-globe-pick-button" type="button" onClick={requestGlobePoint}><IconMapPin size={17} stroke={1.35} aria-hidden="true" /><span><strong>直接在地球上取点</strong><small>适合在路上、海上或没有准确名称的位置</small></span></button> : null}
                 {reverseAttribution ? (
