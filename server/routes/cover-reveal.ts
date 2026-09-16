@@ -7,6 +7,7 @@ import {
   completeCoverRevealJob,
   enqueueCoverRevealDerivative,
   failCoverRevealJob,
+  readCoverRevealDisplay,
   signCoverRevealOutputUpload,
   signCoverRevealSourceRead,
   type CoverRevealSettings,
@@ -106,6 +107,54 @@ coverRevealRoutes.post("/journeys/:id", async (context) => {
   const result = await enqueueCoverRevealDerivative(journeyId, atlas.id);
   if (!result.ok) return context.json({ error: result.error }, result.status);
   return context.json({ derivative: result.job });
+});
+
+/**
+ * #386: the browser's read of what it may display for one Journey.
+ *
+ * Mounted on the OWNER router, with `requireAtlasAccess` and nothing else, so
+ * the authority is an ordinary Atlas member session — the same one that reads
+ * the Journey it is about to paint. A worker credential and a share grant are
+ * both bearer tokens, and this server has no bearer-to-session path at all
+ * (`server/auth.ts` loads the `organization` plugin only), so either presented
+ * here resolves no session and is answered exactly as presenting nothing is:
+ * `AUTH_REQUIRED`. It is not that this route inspects and rejects them; it is
+ * that neither is a thing the owner authority can be spoken in.
+ *
+ * `read` rather than `update`, because this changes nothing — unlike the POST
+ * above it, which queues work. The id is shape-checked with the same pattern
+ * for the same reason: a malformed id must answer as an unknown Journey does.
+ */
+coverRevealRoutes.get("/journeys/:id", async (context) => {
+  const { atlas } = await requireAtlasAccess(context.req.raw, "read");
+  // A signed capability and the cover identity it is pinned to are as
+  // per-member as the worker responses are, and both go stale the moment the
+  // cover moves. Neither may sit in a shared cache.
+  context.header("cache-control", COVER_REVEAL_CACHE_CONTROL);
+  const journeyId = context.req.param("id");
+  if (!UUID_PATTERN.test(journeyId)) {
+    return context.json({ error: "JOURNEY_UNAVAILABLE" }, 404);
+  }
+  const result = await readCoverRevealDisplay(
+    journeyId,
+    atlas.id,
+    // Bounded by the policy that already governs an owner's read of their own
+    // private media. A derivative is neither more nor less sensitive than the
+    // photograph it was made from, and a second knob would be a second thing
+    // to get wrong.
+    serverConfig.mediaReadUrlExpiresInSeconds,
+  );
+  if (!result.ok) return context.json({ error: result.error }, result.status);
+  if (!result.derivative) {
+    return context.json({ derivative: null, reason: result.reason });
+  }
+  return context.json({
+    derivative: result.derivative,
+    display: {
+      url: result.display.url,
+      expiresAt: result.display.expiresAt.toISOString(),
+    },
+  });
 });
 
 coverRevealWorkerRoutes.use("*", async (context, next) => {
