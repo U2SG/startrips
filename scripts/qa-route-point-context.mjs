@@ -960,7 +960,8 @@ try {
     text: node.textContent ?? "",
     mediaCueCount: node.querySelectorAll("[data-route-point-context-media]").length,
     controlsCount: document.querySelectorAll(".living-atlas-globe__controls").length,
-    permanentToolbarCount: document.querySelectorAll(".living-atlas__route-point-context nav, .living-atlas__route-point-context [role=toolbar]").length,
+    readingNavigationCount: node.querySelectorAll(".living-atlas__route-point-context-reading-links").length,
+    permanentToolbarCount: node.querySelectorAll("[role=toolbar]").length,
   }));
   const textFocusAfter = await sceneFocusSnapshot(textPage);
   record("text-only Route Point stays truthful", { textState },
@@ -971,6 +972,8 @@ try {
     && !textState.text.includes("正在载入")
     && textState.mediaCueCount === 0
     && textState.controlsCount === 0
+    && textState.readingNavigationCount === 1
+    && textState.text.includes("读上一段")
     && textState.permanentToolbarCount === 0);
   record("text-only reveal keeps camera focus owner", { textFocusBefore, textFocusAfter },
     JSON.stringify(textFocusBefore) === JSON.stringify(textFocusAfter));
