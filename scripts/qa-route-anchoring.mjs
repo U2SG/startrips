@@ -557,6 +557,11 @@ try {
     const browseStop = byId(browse1, "qa-p-17");
     const narrative = byId(playing, "qa-p-17");
     const future = byId(playing, "qa-p-18");
+    // The selected future point above was already exempt from the ordinary
+    // browse-emphasis rule, so it cannot prove the time cursor outranks that
+    // rule. qa-p-19 is future during playing and neither selected nor
+    // narrative-current, i.e. the one point the ordinary rule actually paints.
+    const futureOrdinary = byId(playing, "qa-p-19");
     const rewoundCurrent = byId(rewound, "qa-p-16");
     console.log("[qa-route-anchoring] route-optics", JSON.stringify(sample));
     if (!near(browse1.coreWidth, 1.15) || !near(browse3.coreWidth, 1.15)) failures.push(`DPR ${sample.dpr}: selected core changed with zoom (${browse1.coreWidth} -> ${browse3.coreWidth})`);
@@ -570,6 +575,7 @@ try {
     if (!narrative || narrative.semanticRole !== "stop" || narrative.fill !== browseStop?.fill) failures.push(`DPR ${sample.dpr}: narrative attention overwrote the Stop ring fill`);
     if (!narrative?.filter.includes("drop-shadow")) failures.push(`DPR ${sample.dpr}: narrative-current shadow was replaced by active-route brightness`);
     if (!future || future.temporalVisible !== "false" || future.temporalReveal !== "0.000" || future.opacity !== 0) failures.push(`DPR ${sample.dpr}: future selected Route Point remained visible`);
+    if (!futureOrdinary || futureOrdinary.attentionRole !== "ordinary" || futureOrdinary.temporalVisible !== "false" || futureOrdinary.temporalReveal !== "0.000" || futureOrdinary.opacity !== 0) failures.push(`DPR ${sample.dpr}: future ordinary Route Point remained visible`);
     if (!near(playing.coreWidth, 1.2) || !near(playing.glowWidth, 3)) failures.push(`DPR ${sample.dpr}: narrative optical weight is outside the bounded target`);
     if (playing.narrativeRouteIds.join(",") !== routeId || rewound.narrativeRouteIds.join(",") !== routeId) failures.push(`DPR ${sample.dpr}: overlapping temporal ranges created more than one narrative-current Journey`);
     if (!rewoundCurrent || rewoundCurrent.attentionRole !== "narrative-current") failures.push(`DPR ${sample.dpr}: rewind did not move narrative-current to the last visible point`);
