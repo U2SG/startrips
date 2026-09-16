@@ -999,6 +999,14 @@ describe("Route Point context integration (#291)", () => {
     expect(handler).not.toContain("cameraCommand");
   });
 
+  it("remounts representative media when Route Point record identity changes", () => {
+    const start = appSource.indexOf("<RoutePointContextRepresentative");
+    const representative = appSource.slice(start, start + 420);
+
+    expect(start).toBeGreaterThan(0);
+    expect(representative).toContain('key={`${context.routePointId}:${context.representativeAssetId ?? "none"}`}');
+  });
+
   it("keeps representative-media readiness inside context ownership", () => {
     const start = appSource.indexOf("function RoutePointContextRepresentative");
     const end = appSource.indexOf("export function playbackFocusPointForCameraTarget", start);

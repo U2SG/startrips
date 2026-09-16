@@ -2984,6 +2984,7 @@ export function LivingAtlasApp({
             </div>
             {context.notePresent && context.note ? <blockquote>{context.note}</blockquote> : null}
             <RoutePointContextRepresentative
+              key={`${context.routePointId}:${context.representativeAssetId ?? "none"}`}
               journey={contextJourney}
               context={context}
               intent={intent}
