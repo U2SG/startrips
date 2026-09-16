@@ -396,7 +396,7 @@ async function measureRouteOptics(page, routeIdentifier) {
       devicePixelRatio: window.devicePixelRatio,
       compact: document.querySelector(".particle-earth-scene")?.getAttribute("data-mobile-v2") ?? null,
       routeAttentionRole: group.getAttribute("data-attention-role"),
-      narrativeRouteIds: [...document.querySelectorAll('[data-journey-route][data-attention-role="narrative-current"]')]
+      narrativeRouteIds: [...document.querySelectorAll('.particle-earth-route[data-journey-route][data-attention-role="narrative-current"]')]
         .map((node) => node.getAttribute("data-journey-route")),
       coreWidth: readWidth(".particle-earth-route__core"),
       glowWidth: readWidth(".particle-earth-route__glow"),
