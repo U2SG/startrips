@@ -1091,6 +1091,7 @@ describe("Route Point context integration (#291)", () => {
     expect(revealBlock).toContain("clearRoutePointContext()");
     expect(ownerEffectStart).toBeGreaterThan(0);
     expect(ownerEffectBlock).toContain("clearRoutePointContext()");
+    expect(appSource).toContain("if (!contextJourney || context.journeyId !== activeJourneyId) return null;");
   });
 
   it("switches co-located Route Point record identity without claiming camera or Playback ownership", () => {

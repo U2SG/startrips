@@ -2963,7 +2963,7 @@ export function LivingAtlasApp({
         const context = routePointContextSelection.context;
         const intent = routePointContextSelection.intent;
         const contextJourney = journeys.find((candidate) => candidate.id === context.journeyId) ?? null;
-        if (!contextJourney) return null;
+        if (!contextJourney || context.journeyId !== activeJourneyId) return null;
         if (!routePointContextTemporallyVisible(
           context.journeyId,
           context.routePointIndex,

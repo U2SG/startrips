@@ -632,16 +632,36 @@ try {
   await activateRoutePointId(ownerPage, same02Id);
   await ownerPage.locator(`[data-route-point-context][data-route-point-id="${same02Id}"]`).waitFor({ state: "visible", timeout: 5_000 });
   const ownerBeforeAdvance = await sceneFocusSnapshot(ownerPage);
+  await ownerPage.evaluate((successorJourneyId) => {
+    window.__st081OwnerLeak = false;
+    const observer = new MutationObserver(() => {
+      const activeRoute = document.querySelector("[data-qa-route-point-context-focus]")?.getAttribute("data-active-route");
+      if (activeRoute === successorJourneyId && document.querySelector("[data-route-point-context]")) {
+        window.__st081OwnerLeak = true;
+      }
+    });
+    observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["data-active-route"] });
+    window.__st081OwnerObserver = observer;
+  }, sameCoordinateSuccessorJourneyId);
   await ownerTrack.press("End");
   await ownerPage.waitForFunction((journeyId) => document.querySelector("[data-qa-route-point-context-focus]")?.getAttribute("data-active-route") === journeyId, sameCoordinateSuccessorJourneyId);
   await ownerPage.waitForFunction(() => document.querySelector("[data-route-point-context]") === null);
   const ownerAfterAdvance = await sceneFocusSnapshot(ownerPage);
+  const ownerTransitionState = await ownerPage.evaluate(() => {
+    const staleOwnerRendered = window.__st081OwnerLeak === true;
+    window.__st081OwnerObserver?.disconnect();
+    delete window.__st081OwnerObserver;
+    delete window.__st081OwnerLeak;
+    return { staleOwnerRendered };
+  });
   record("time cursor Journey-owner advance releases stale same-coordinate context", {
     ownerBeforeAdvance,
     ownerAfterAdvance,
+    ownerTransitionState,
     contextCount: await ownerPage.locator("[data-route-point-context]").count(),
   }, ownerBeforeAdvance.activeRoute === sameCoordinateJourneyId
     && ownerAfterAdvance.activeRoute === sameCoordinateSuccessorJourneyId
+    && ownerTransitionState.staleOwnerRendered === false
     && await ownerPage.locator("[data-route-point-context]").count() === 0);
   record("same-coordinate owner-change page errors", { pageErrors: ownerRun.pageErrors }, ownerRun.pageErrors.length === 0);
   await ownerPage.close();
