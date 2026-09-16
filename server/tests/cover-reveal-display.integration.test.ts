@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createEmailVerificationToken } from "better-auth/api";
 import { eq, inArray } from "drizzle-orm";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { app } from "../app";
 import { serverConfig } from "../config";
 import {
@@ -434,6 +434,49 @@ describe("#386 cover-reveal display read", () => {
       expect(serialized).not.toContain("storage.test/put/");
       expect(serialized).not.toContain("attempts");
       expect(serialized).not.toContain("lastErrorCode");
+    });
+
+    /**
+     * The other half of #386's no-secrets requirement: the console.
+     *
+     * The read is designed to have nothing to leak — it writes no log line at
+     * all — so this is a guard against a future diagnostic being added with a
+     * key, a URL or a hash in it, which is exactly how #368's `last_error_code`
+     * allowlist came to exist. Spied the way `server/request-log.test.ts`
+     * spies.
+     */
+    it("writes no key, URL, hash or token to the console", async () => {
+      const { journeyId, backend, row, asset } = await publishedDerivative();
+      const spies = {
+        log: vi.spyOn(console, "log").mockImplementation(() => {}),
+        info: vi.spyOn(console, "info").mockImplementation(() => {}),
+        warn: vi.spyOn(console, "warn").mockImplementation(() => {}),
+        error: vi.spyOn(console, "error").mockImplementation(() => {}),
+      };
+      try {
+        const result = await read(journeyId, backend);
+        if (!result.ok || !result.derivative) {
+          throw new Error("expected display");
+        }
+        const written = Object.values(spies)
+          .flatMap((spy) => spy.mock.calls)
+          .map((call) => call.map(String).join(" "))
+          .join("\n");
+        expect(written).toBe("");
+        for (
+          const secret of [
+            row.outputStorageKey!,
+            row.leaseTokenHash!,
+            asset.storageKey,
+            WORKER_TOKEN,
+            result.display.url,
+          ]
+        ) {
+          expect(written).not.toContain(secret);
+        }
+      } finally {
+        for (const spy of Object.values(spies)) spy.mockRestore();
+      }
     });
   });
 
