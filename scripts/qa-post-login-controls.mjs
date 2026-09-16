@@ -1143,7 +1143,7 @@ async function verifyComposerGlobeRoundTrip() {
       const labelValue = await lastRoutePoint.locator(".journey-route-draft__summary strong").textContent();
       const latitude = await lastRoutePoint.getAttribute("data-route-point-latitude");
       const longitude = await lastRoutePoint.getAttribute("data-route-point-longitude");
-      const coordinateText = `${latitude}, ${longitude}`;
+      const coordinateText = `${Number(latitude).toFixed(6)}, ${Number(longitude).toFixed(6)}`;
       const successFailed = !roundTrip.picking.appPickActive
         || roundTrip.picking.composerVisibility !== "hidden"
         || roundTrip.picking.bodyOverflow !== "hidden"
@@ -1277,7 +1277,7 @@ async function verifyComposerGlobeRoundTrip() {
       await page.getByText(expectedMessage).waitFor({ state: "visible" });
       const lastRoutePoint = routeItems().last();
       await lastRoutePoint.locator(".journey-route-draft__summary").click();
-      const lastInput = lastRoutePoint.locator('.journey-route-draft__expanded input[type="text"]');
+      const lastInput = lastRoutePoint.locator('.journey-route-draft__expanded input:not([type="checkbox"])');
       const beforeManual = await lastInput.inputValue();
       const manualLabel = `手动地点-${mode}`;
       await lastInput.fill(manualLabel);

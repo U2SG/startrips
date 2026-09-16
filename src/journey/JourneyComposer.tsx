@@ -728,6 +728,7 @@ export function JourneyComposer({
     if (!onGlobePickRequest) return;
     const requestRevision = ++globePickRequestRevisionRef.current;
     reverseGeocodeRevisionRef.current += 1;
+    setRoutePointMenuDraftId(null);
     setGlobePicking(true);
     setReverseAttribution(null);
     setMessage("请在地球上点击一个位置。");
