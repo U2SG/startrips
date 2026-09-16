@@ -1571,6 +1571,15 @@ export function LivingAtlasApp({
   }, [clearRoutePointContext, journeys, routePointContextSelection.intent]);
   useEffect(() => {
     const context = routePointContextSelection.context;
+    if (!context || context.journeyId === activeJourneyId) return;
+    clearRoutePointContext();
+  }, [
+    activeJourneyId,
+    clearRoutePointContext,
+    routePointContextSelection.context?.journeyId,
+  ]);
+  useEffect(() => {
+    const context = routePointContextSelection.context;
     if (!context || !routePointContextTemporalReveal) return;
     if (routePointContextTemporallyVisible(
       context.journeyId,
@@ -1960,6 +1969,10 @@ export function LivingAtlasApp({
   }
 
   function revealRoutePointContext(journeyId: string, routePointId: string) {
+    if (journeyId !== activeJourneyIdRef.current) {
+      clearRoutePointContext();
+      return;
+    }
     clearHomeBaseContext();
     const requested = requestRoutePointContextSelection(
       routePointContextSelectionRef.current,

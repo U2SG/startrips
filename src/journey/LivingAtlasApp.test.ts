@@ -1080,6 +1080,19 @@ describe("Route Point context integration (#291)", () => {
     expect(renderStart).toBeGreaterThan(0);
   });
 
+  it("releases Route Point context when semantic Journey ownership changes", () => {
+    const revealStart = appSource.indexOf("function revealRoutePointContext(journeyId: string, routePointId: string)");
+    const revealBlock = appSource.slice(revealStart, revealStart + 520);
+    const ownerEffectStart = appSource.indexOf("if (!context || context.journeyId === activeJourneyId) return;");
+    const ownerEffectBlock = appSource.slice(ownerEffectStart, ownerEffectStart + 320);
+
+    expect(revealStart).toBeGreaterThan(0);
+    expect(revealBlock).toContain("journeyId !== activeJourneyIdRef.current");
+    expect(revealBlock).toContain("clearRoutePointContext()");
+    expect(ownerEffectStart).toBeGreaterThan(0);
+    expect(ownerEffectBlock).toContain("clearRoutePointContext()");
+  });
+
   it("switches co-located Route Point record identity without claiming camera or Playback ownership", () => {
     const start = appSource.indexOf('data-route-point-context-switch={record.routePointId}');
     const switcher = appSource.slice(start - 500, start + 1800);

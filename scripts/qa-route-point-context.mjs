@@ -176,6 +176,28 @@ const sameCoordinateJourney = {
   media: [],
 };
 
+const sameCoordinateSuccessorJourneyId = "qa-same-coordinate-successor";
+const sameCoordinateSuccessorJourney = {
+  ...sameCoordinateJourney,
+  id: sameCoordinateSuccessorJourneyId,
+  title: "Later Journey owner",
+  startedOn: "2026-04-07",
+  revision: 1,
+  routePoints: [{
+    ...sameCoordinateRoutePoints[0],
+    id: "qa-same-coordinate-successor-point",
+    journeyId: sameCoordinateSuccessorJourneyId,
+    sortOrder: 0,
+    latitude: 22.31,
+    longitude: 114.22,
+    label: "Later owner point",
+    occurredAt: "2026-04-07T09:00:00.000Z",
+    note: null,
+    createdAt: "2026-04-07T09:00:00.000Z",
+  }],
+  media: [],
+};
+
 const reorderedSameCoordinateJourney = {
   ...sameCoordinateJourney,
   revision: 2,
@@ -595,6 +617,34 @@ try {
 
   record("same-coordinate page errors", { pageErrors: sameRun.pageErrors }, sameRun.pageErrors.length === 0);
   await samePage.close();
+
+  const ownerRun = await openFocusAtlas({
+    journeysPayload: [sameCoordinateJourney, sameCoordinateSuccessorJourney],
+    initialPointId: same02Id,
+  });
+  const ownerPage = ownerRun.page;
+  const ownerTrack = ownerPage.locator(".globe-time-scrubber__track");
+  await ownerTrack.focus();
+  await ownerTrack.press("Home");
+  for (let step = 0; step < 7; step += 1) await ownerTrack.press("PageUp");
+  await ownerPage.waitForFunction(() => document.querySelector(".globe-time-scrubber__track")?.getAttribute("aria-valuenow") === "70");
+  await ownerPage.waitForFunction((journeyId) => document.querySelector("[data-qa-route-point-context-focus]")?.getAttribute("data-active-route") === journeyId, sameCoordinateJourneyId);
+  await activateRoutePointId(ownerPage, same02Id);
+  await ownerPage.locator(`[data-route-point-context][data-route-point-id="${same02Id}"]`).waitFor({ state: "visible", timeout: 5_000 });
+  const ownerBeforeAdvance = await sceneFocusSnapshot(ownerPage);
+  await ownerTrack.press("End");
+  await ownerPage.waitForFunction((journeyId) => document.querySelector("[data-qa-route-point-context-focus]")?.getAttribute("data-active-route") === journeyId, sameCoordinateSuccessorJourneyId);
+  await ownerPage.waitForFunction(() => document.querySelector("[data-route-point-context]") === null);
+  const ownerAfterAdvance = await sceneFocusSnapshot(ownerPage);
+  record("time cursor Journey-owner advance releases stale same-coordinate context", {
+    ownerBeforeAdvance,
+    ownerAfterAdvance,
+    contextCount: await ownerPage.locator("[data-route-point-context]").count(),
+  }, ownerBeforeAdvance.activeRoute === sameCoordinateJourneyId
+    && ownerAfterAdvance.activeRoute === sameCoordinateSuccessorJourneyId
+    && await ownerPage.locator("[data-route-point-context]").count() === 0);
+  record("same-coordinate owner-change page errors", { pageErrors: ownerRun.pageErrors }, ownerRun.pageErrors.length === 0);
+  await ownerPage.close();
 
   const reorderedRun = await openFocusAtlas({
     journeysPayload: [reorderedSameCoordinateJourney],
