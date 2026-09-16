@@ -1827,6 +1827,21 @@ export function LivingAtlasApp({
   const mobileJourney = focusPresentation.journey;
   const mobilePoint = focusPresentation.point;
   const focusPoint = focusPresentation.focusPoint;
+  const selectedJourneyRoutePoint = routePointContextSelection.context
+    ? {
+        journeyId: routePointContextSelection.context.journeyId,
+        routePointId: routePointContextSelection.context.routePointId,
+        pointIndex: routePointContextSelection.context.routePointIndex,
+      }
+    : timeCursor.hasExplicitSelection && timeCursor.selection?.pointIndex !== null
+      && timeCursor.selection?.pointIndex !== undefined
+      ? {
+          journeyId: timeCursor.selection.journeyId,
+          routePointId: journeys.find((journey) => journey.id === timeCursor.selection?.journeyId)
+            ?.routePoints[timeCursor.selection.pointIndex]?.id ?? null,
+          pointIndex: timeCursor.selection.pointIndex,
+        }
+      : null;
   const focusRoute = focusPresentation.point
     ? null
     : routes.find((route) => route.id === focusPresentation.activeRouteId) ?? null;
@@ -2468,6 +2483,7 @@ export function LivingAtlasApp({
             focusColor={focusPresentation.journey?.lightColor}
             journeyRoutes={routes}
             activeJourneyRouteId={draftRoute?.id ?? (initialHomeCameraAnchor ? null : activeJourneyId)}
+            selectedJourneyRoutePoint={draftRoute ? null : selectedJourneyRoutePoint}
             mediaCoverHint={{
               opaqueMediaCover: storyGlobeCover.opaqueMediaCover || playbackGlobeCover.opaqueMediaCover,
               coverTransitionActive: storyGlobeCover.coverTransitionActive || playbackGlobeCover.coverTransitionActive,

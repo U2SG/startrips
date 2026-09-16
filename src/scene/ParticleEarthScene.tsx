@@ -65,6 +65,12 @@ import {
   vector3ToLatLon,
 } from "./geo";
 import {
+  resolveRouteAttentionRole,
+  resolveRoutePointPresentation,
+  routePointMarkerRadiusPx,
+  type RoutePointSelection,
+} from "./routePresentation";
+import {
   resolveRouteArcLift,
   routeArcPixelsPerWorldUnit,
   ROUTE_ARC_HEIGHT_RATIO,
@@ -454,8 +460,6 @@ const GLOBE_WHEEL_ZOOM_SPEED = 0.0012;
 const JOURNEY_ROUTE_LINE_REFERENCE_SCALE = 1.15;
 const JOURNEY_ROUTE_LINE_SCALE_MIN = 0.72;
 const JOURNEY_ROUTE_LINE_SCALE_MAX = 2.4;
-const JOURNEY_ROUTE_MARKER_SIZE_PX = 15;
-const JOURNEY_ROUTE_MARKER_SCALE = JOURNEY_ROUTE_MARKER_SIZE_PX / (3.4 * 2);
 
 export function collectJourneyDimDirections(
   routes: readonly JourneyRoute[],
@@ -700,16 +704,6 @@ export function solveScreenAnchorRotation(
     errorPx,
     converged: Number.isFinite(errorPx) && errorPx <= tolerancePx,
   };
-}
-
-export function getJourneyRouteLineScale(globeScale: number) {
-  return Math.max(
-    JOURNEY_ROUTE_LINE_SCALE_MIN,
-    Math.min(
-      JOURNEY_ROUTE_LINE_SCALE_MAX,
-      globeScale / JOURNEY_ROUTE_LINE_REFERENCE_SCALE,
-    ),
-  );
 }
 
 export function getGlobeIdleRotationDelta(
@@ -1192,38 +1186,6 @@ function routeLabelCharacterWidth(character: string) {
   return /^[\x20-\x7e]$/.test(character) ? 6.5 : 11.5;
 }
 
-function buildRoutePointStarPoints(
-  centerX: number,
-  centerY: number,
-  outerRadius = 2.8,
-  innerRadius = 1.18,
-) {
-  return Array.from({ length: 10 }, (_, index) => {
-    const angle = -Math.PI / 2 + index * (Math.PI / 5);
-    const radius = index % 2 === 0 ? outerRadius : innerRadius;
-    return `${(centerX + Math.cos(angle) * radius).toFixed(2)},${(centerY + Math.sin(angle) * radius).toFixed(2)}`;
-  }).join(" ");
-}
-
-function buildRoutePointFlagPath(
-  centerX: number,
-  centerY: number,
-  scale = 1,
-) {
-  const point = (x: number, y: number) =>
-    `${(centerX + x * scale).toFixed(2)} ${(centerY + y * scale).toFixed(2)}`;
-  return [
-    `M ${point(-0.55, 3.35)}`,
-    `L ${point(0.45, 3.35)}`,
-    `L ${point(0.45, -2.75)}`,
-    `C ${point(1.55, -3.35)} ${point(2.65, -3.05)} ${point(3.45, -2.2)}`,
-    `C ${point(2.65, -1.25)} ${point(1.55, -0.75)} ${point(0.45, -1.25)}`,
-    `L ${point(0.45, 3.35)}`,
-    `L ${point(-0.55, 3.35)}`,
-    "Z",
-  ].join(" ");
-}
-
 /** Approximate rendered width of a city label (8px font, letter-spacing). */
 function estimateCityLabelWidth(label: string) {
   let width = 0;
@@ -1351,6 +1313,7 @@ interface ParticleEarthSceneProps {
   onFocusPointActivate?: () => void;
   journeyRoutes?: readonly JourneyRoute[];
   activeJourneyRouteId?: string | null;
+  selectedJourneyRoutePoint?: RoutePointSelection;
   onJourneyRouteActivate?: (id: string) => void;
   onJourneyRoutePointActivate?: (journeyId: string, routePointId: string) => void;
   onHomeBaseActivate?: (periodId: string) => void;
@@ -1743,6 +1706,7 @@ export function ParticleEarthScene({
   onFocusPointActivate,
   journeyRoutes = [],
   activeJourneyRouteId,
+  selectedJourneyRoutePoint,
   onJourneyRouteActivate,
   onJourneyRoutePointActivate,
   onHomeBaseActivate,
@@ -1777,6 +1741,7 @@ export function ParticleEarthScene({
   const latestOnFocusPointActivate = useRef(onFocusPointActivate);
   const latestJourneyRoutes = useRef(journeyRoutes);
   const latestActiveJourneyRouteId = useRef(activeJourneyRouteId);
+  const latestSelectedJourneyRoutePoint = useRef(selectedJourneyRoutePoint);
   const latestOnJourneyRouteActivate = useRef(onJourneyRouteActivate);
   const latestOnJourneyRoutePointActivate = useRef(onJourneyRoutePointActivate);
   const latestOnHomeBaseActivate = useRef(onHomeBaseActivate);
@@ -1807,6 +1772,7 @@ export function ParticleEarthScene({
   latestOnFocusPointActivate.current = onFocusPointActivate;
   latestJourneyRoutes.current = journeyRoutes;
   latestActiveJourneyRouteId.current = activeJourneyRouteId;
+  latestSelectedJourneyRoutePoint.current = selectedJourneyRoutePoint;
   latestOnJourneyRouteActivate.current = onJourneyRouteActivate;
   latestOnJourneyRoutePointActivate.current = onJourneyRoutePointActivate;
   latestOnHomeBaseActivate.current = onHomeBaseActivate;
@@ -2537,8 +2503,10 @@ export function ParticleEarthScene({
       leaderPath: SVGPathElement;
       fadeGradient: SVGLinearGradientElement;
       points: Array<{
-        element: SVGCircleElement | SVGPathElement | SVGPolygonElement;
+        element: SVGCircleElement;
         position: Vector3;
+        routePointId?: string;
+        isStop: boolean;
         label?: RouteVectorLabel;
         // #21: the route point's index inside its journey, for per-point
         // temporal reveal ("one stop lights up at a time").
@@ -2546,6 +2514,31 @@ export function ParticleEarthScene({
       }>;
     };
     let routeVectorEntries: RouteVectorEntry[] = [];
+    const syncRoutePresentations = () => {
+      for (const entry of routeVectorEntries) {
+        const routeAttention = resolveRouteAttentionRole({
+          routeId: entry.routeId,
+          selectedRouteId: latestActiveJourneyRouteId.current,
+          temporalReveal: latestTemporalReveal.current,
+        });
+        entry.group.dataset.attentionRole = routeAttention;
+        for (const point of entry.points) {
+          const presentation = resolveRoutePointPresentation({
+            routeId: entry.routeId,
+            routePointId: point.routePointId,
+            pointIndex: point.routePointIndex,
+            pointCount: entry.points.length,
+            isStop: point.isStop,
+            selection: latestSelectedJourneyRoutePoint.current,
+            temporalReveal: latestTemporalReveal.current,
+          });
+          point.element.dataset.semanticRole = presentation.semanticRole;
+          point.element.dataset.attentionRole = presentation.attentionRole;
+          point.element.dataset.temporalVisible = presentation.temporalVisible ? "true" : "false";
+          point.element.setAttribute("r", String(routePointMarkerRadiusPx(presentation)));
+        }
+      }
+    };
     let routeVectorOpacity = 0;
     const sceneToken = Math.random().toString(36).slice(2, 8);
     // #237: ONE projection frame for every geographic layer. Place Labels,
@@ -2759,51 +2752,40 @@ export function ParticleEarthScene({
           });
           pointIndex += 1;
 
-          const roleClass = routePointIndex === 0
+          const positionClass = routePointIndex === 0
             ? "particle-earth-route__point--origin"
             : routePointIndex === route.points.length - 1
               ? "particle-earth-route__point--destination"
-              : point.isStop
-                ? "particle-earth-route__point--stop"
-                : "particle-earth-route__point--transit";
-          const isOriginPoint = roleClass === "particle-earth-route__point--origin";
-          const isDestinationPoint = roleClass === "particle-earth-route__point--destination";
-          const isWaypoint = !isOriginPoint && !isDestinationPoint;
+              : "particle-earth-route__point--middle";
           const element = document.createElementNS(
             "http://www.w3.org/2000/svg",
-            isDestinationPoint ? "polygon" : isWaypoint ? "path" : "circle",
-          ) as SVGCircleElement | SVGPathElement | SVGPolygonElement;
+            "circle",
+          );
           element.classList.add(
             "particle-earth-route__point",
-            roleClass,
+            positionClass,
+            point.isStop
+              ? "particle-earth-route__point--stop"
+              : "particle-earth-route__point--transit",
           );
-          // The rendered marker is the spatial source of truth for media
-          // handoff geometry. Identity-only data attributes let the React
-          // presentation re-measure the live marker at intent time without
-          // publishing per-frame coordinates or creating another camera owner.
+          // Visible Route Point optics are SVG/CSS-pixel beads. Pointer hit
+          // testing remains the independent Three.js point layer below; this
+          // marker never grows its geographic anchor or hit geometry.
           element.dataset.journeyRoute = route.id;
           if (point.id) element.dataset.routePointId = point.id;
-          if (isDestinationPoint) {
-            element.setAttribute(
-              "points",
-              buildRoutePointStarPoints(
-                0,
-                0,
-                3.6 * JOURNEY_ROUTE_MARKER_SCALE,
-                1.52 * JOURNEY_ROUTE_MARKER_SCALE,
-              ),
-            );
-          } else if (isWaypoint) {
-            element.setAttribute(
-              "d",
-              buildRoutePointFlagPath(0, 0, JOURNEY_ROUTE_MARKER_SCALE),
-            );
-          } else {
-            element.setAttribute(
-              "r",
-              String(3.4 * JOURNEY_ROUTE_MARKER_SCALE),
-            );
-          }
+          const presentation = resolveRoutePointPresentation({
+            routeId: route.id,
+            routePointId: point.id,
+            pointIndex: routePointIndex,
+            pointCount: route.points.length,
+            isStop: point.isStop,
+            selection: latestSelectedJourneyRoutePoint.current,
+            temporalReveal: latestTemporalReveal.current,
+          });
+          element.dataset.semanticRole = presentation.semanticRole;
+          element.dataset.attentionRole = presentation.attentionRole;
+          element.dataset.temporalVisible = presentation.temporalVisible ? "true" : "false";
+          element.setAttribute("r", String(routePointMarkerRadiusPx(presentation)));
           group.appendChild(element);
           let label: RouteVectorLabel | undefined;
           if (routeLabelIndexSet.has(routePointIndex) && point.label?.trim()) {
@@ -2839,7 +2821,14 @@ export function ParticleEarthScene({
             };
             routeLabelCount += 1;
           }
-          vectorPoints.push({ element, position, label, routePointIndex });
+          vectorPoints.push({
+            element,
+            position,
+            routePointId: point.id,
+            isStop: point.isStop,
+            label,
+            routePointIndex,
+          });
         });
         group.append(...routeLabelElements);
 
@@ -2930,6 +2919,7 @@ export function ParticleEarthScene({
       // last and therefore stays above the route presentation.
       routeVectorLayer.appendChild(journeyConnectorPath);
       updateRouteLabelSafeArea();
+      syncRoutePresentations();
     };
 
 
@@ -3194,7 +3184,6 @@ export function ParticleEarthScene({
       const labelBoxes: ProjectedRouteLabelBox[] = [];
       const labelLimit = resolveRouteLabelLimit(currentCompactMobileLayout);
       let visibleLabelCount = 0;
-      const routeLineScale = getJourneyRouteLineScale(globe.scale.x);
 
       const arcWorld = {
         radius: ROUTE_ANCHOR_RADIUS,
@@ -3203,7 +3192,6 @@ export function ParticleEarthScene({
       let routeEndpointMaxErrorPx = 0;
 
       routeVectorEntries.forEach((entry) => {
-        entry.group.style.setProperty("--journey-route-scale", routeLineScale.toFixed(3));
         const path = buildProjectedRoutePath(
           entry.samples,
           projectRoutePoint,
@@ -3249,29 +3237,8 @@ export function ParticleEarthScene({
             return;
           }
           element.style.removeProperty("display");
-          if (element.tagName === "polygon") {
-            element.setAttribute(
-              "points",
-              buildRoutePointStarPoints(
-                routeProjectedPoint.x,
-                routeProjectedPoint.y,
-                3.6 * JOURNEY_ROUTE_MARKER_SCALE,
-                1.52 * JOURNEY_ROUTE_MARKER_SCALE,
-              ),
-            );
-          } else if (element.tagName === "path") {
-            element.setAttribute(
-              "d",
-              buildRoutePointFlagPath(
-                routeProjectedPoint.x,
-                routeProjectedPoint.y,
-                JOURNEY_ROUTE_MARKER_SCALE,
-              ),
-            );
-          } else {
-            element.setAttribute("cx", routeProjectedPoint.x.toFixed(1));
-            element.setAttribute("cy", routeProjectedPoint.y.toFixed(1));
-          }
+          element.setAttribute("cx", routeProjectedPoint.x.toFixed(1));
+          element.setAttribute("cy", routeProjectedPoint.y.toFixed(1));
           projectedMarkers.set(routePointIndex, {
             x: routeProjectedPoint.x,
             y: routeProjectedPoint.y,
@@ -5764,6 +5731,10 @@ export function ParticleEarthScene({
         syncVisitedImprint(routes);
         applyJourneyRoutes(routes);
       },
+      setSelectedJourneyRoutePoint(selection: RoutePointSelection) {
+        latestSelectedJourneyRoutePoint.current = selection;
+        syncRoutePresentations();
+      },
       // #21: update per-route AND per-point temporal reveal without rebuilding
       // the layer, so the time cursor does not restart route animations.
       // Review P2: points light up one stop at a time (route progress still
@@ -5778,6 +5749,7 @@ export function ParticleEarthScene({
         journeys: ReadonlyMap<string, number>;
         points: ReadonlyMap<string, number>;
       }) {
+        latestTemporalReveal.current = reveal;
         syncParticleDimming(
           latestJourneyRoutes.current,
           latestActiveJourneyRouteId.current,
@@ -5827,6 +5799,7 @@ export function ParticleEarthScene({
             }
           }
         }
+        syncRoutePresentations();
       },
       dispose() {
         disposed = true;
@@ -5916,6 +5889,16 @@ export function ParticleEarthScene({
     controllerRef.current?.setJourneyRoutes(journeyRoutes, activeJourneyRouteId);
   }, [activeJourneyRouteId, controllerRef, journeyRoutes, ready]);
 
+  useEffect(() => {
+    if (!ready) return;
+    controllerRef.current?.setSelectedJourneyRoutePoint(selectedJourneyRoutePoint);
+  }, [
+    controllerRef,
+    ready,
+    selectedJourneyRoutePoint?.journeyId,
+    selectedJourneyRoutePoint?.routePointId,
+    selectedJourneyRoutePoint?.pointIndex,
+  ]);
   useEffect(() => {
     if (!ready) return;
     // Review P2: also called with `undefined` so leaving focus mode resets

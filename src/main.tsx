@@ -126,19 +126,21 @@ const globeQaRoutes: JourneyRoute[] = [
 ];
 
 function JourneyRoutesQaPreview() {
+  const qaParams = new URLSearchParams(window.location.search);
+  const routeOpticsQa = qaParams.get("qaRouteOptics") === "1";
   // #194: the preview is a second owner of the scene, so it supplies the same
   // compact flag the product owner does - otherwise the QA lane that measures
   // the contract would always see the desktop default.
   const compactMobileLayout = useCompactMobileLayout();
-  const [activeRouteId, setActiveRouteId] = useState<string | null>(null);
+  const [activeRouteId, setActiveRouteId] = useState<string | null>(routeOpticsQa ? "qa-route-southwest" : null);
   const [focusRevision, setFocusRevision] = useState(0);
+  const [routeOpticsStage, setRouteOpticsStage] = useState<"browse" | "playing" | "rewound">("browse");
   // #196: a place label claims a geographic point, and clicking it must focus
   // that point. The preview owns the pick the product owns so the QA lane can
   // measure the claim against where the globe actually lands.
   const [pickedPoint, setPickedPoint] = useState<{ lat: number; lon: number } | null>(null);
   const [qaVisibilityHint, setQaVisibilityHint] = useState({ opaqueMediaCover: false, coverTransitionActive: false });
   const activeRoute = globeQaRoutes.find((route) => route.id === activeRouteId) ?? null;
-  const qaParams = new URLSearchParams(window.location.search);
   const requestedLatRaw = qaParams.get("qaFocusLat");
   const requestedLonRaw = qaParams.get("qaFocusLon");
   const requestedLat = requestedLatRaw === null ? Number.NaN : Number(requestedLatRaw);
@@ -154,9 +156,27 @@ function JourneyRoutesQaPreview() {
   const imprintQa = qaParams.get("qaImprint") === "1";
   const imprintStage = qaParams.get("qaImprintStage") ?? "now";
   const qaTemporalReveal = useMemo(() => {
-    if (!imprintQa) return undefined;
+    if (!imprintQa && !routeOpticsQa) return undefined;
     const journeys = new Map<string, number>();
     const points = new Map<string, number>();
+    if (routeOpticsQa) {
+      globeQaRoutes.forEach((route) => {
+        const isTarget = route.id === "qa-route-southwest";
+        const progress = !isTarget ? 0 : routeOpticsStage === "browse" ? 1 : routeOpticsStage === "playing" ? 0.55 : 0.22;
+        journeys.set(route.id, progress);
+        route.points.forEach((_point, pointIndex) => {
+          const pointProgress = !isTarget
+            ? 0
+            : routeOpticsStage === "browse"
+              ? 1
+              : routeOpticsStage === "playing"
+                ? (pointIndex < 2 ? 1 : pointIndex === 2 ? 0.5 : 0)
+                : (pointIndex === 0 ? 1 : pointIndex === 1 ? 0.35 : 0);
+          points.set(`${route.id}:${pointIndex}`, pointProgress);
+        });
+      });
+      return { journeys, points };
+    }
     globeQaRoutes.forEach((route, routeIndex) => {
       const progress = imprintStage === "first"
         ? (routeIndex === 0 ? 1 : 0)
@@ -169,7 +189,7 @@ function JourneyRoutesQaPreview() {
       });
     });
     return { journeys, points };
-  }, [imprintQa, imprintStage]);
+  }, [imprintQa, imprintStage, routeOpticsQa, routeOpticsStage]);
   return (
     <main className="living-atlas">
       <div className="living-atlas__globe">
@@ -179,6 +199,11 @@ function JourneyRoutesQaPreview() {
           journeyRoutes={globeQaRoutes}
           temporalReveal={qaTemporalReveal}
           activeJourneyRouteId={activeRouteId}
+          selectedJourneyRoutePoint={routeOpticsQa ? {
+            journeyId: "qa-route-southwest",
+            routePointId: "qa-p-18",
+            pointIndex: 3,
+          } : null}
           focusRoute={activeRoute}
           focusRevision={focusRevision}
           onJourneyRouteActivate={(routeId) => {
@@ -210,6 +235,13 @@ function JourneyRoutesQaPreview() {
           gap: 6,
         }}
       >
+        {routeOpticsQa ? (
+          <>
+            <button type="button" data-qa-route-optics-stage="browse" onClick={() => setRouteOpticsStage("browse")}>optics browse</button>
+            <button type="button" data-qa-route-optics-stage="playing" onClick={() => setRouteOpticsStage("playing")}>optics playing</button>
+            <button type="button" data-qa-route-optics-stage="rewound" onClick={() => setRouteOpticsStage("rewound")}>optics rewound</button>
+          </>
+        ) : null}
         {renderBudgetQa ? (
           <>
             <button type="button" data-qa-render-visibility="partial" onClick={() => setQaVisibilityHint({ opaqueMediaCover: false, coverTransitionActive: false })}>partial</button>

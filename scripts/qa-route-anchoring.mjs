@@ -369,6 +369,77 @@ async function measureFocusSignal(page, routeIdentifier, pointIndex) {
   }, [routeIdentifier, pointIndex]);
 }
 
+async function measureRouteOptics(page, routeIdentifier) {
+  return page.evaluate((identifier) => {
+    const group = document.querySelector(`[data-journey-route="${identifier}"]`);
+    if (!group) return { error: "route group not rendered" };
+    const readWidth = (selector) => {
+      const node = group.querySelector(selector);
+      return node ? Number.parseFloat(getComputedStyle(node).strokeWidth) : Number.NaN;
+    };
+    const points = [...group.querySelectorAll(".particle-earth-route__point")].map((node) => ({
+      id: node.getAttribute("data-route-point-id"),
+      semanticRole: node.getAttribute("data-semantic-role"),
+      attentionRole: node.getAttribute("data-attention-role"),
+      temporalVisible: node.getAttribute("data-temporal-visible"),
+      temporalReveal: node.getAttribute("data-temporal-reveal"),
+      radius: Number(node.getAttribute("r")),
+      opacity: Number.parseFloat(getComputedStyle(node).opacity),
+      anchorX: Number(node.getAttribute("data-anchor-x")),
+      anchorY: Number(node.getAttribute("data-anchor-y")),
+    }));
+    return {
+      devicePixelRatio: window.devicePixelRatio,
+      compact: document.querySelector(".particle-earth-scene")?.getAttribute("data-mobile-v2") ?? null,
+      routeAttentionRole: group.getAttribute("data-attention-role"),
+      coreWidth: readWidth(".particle-earth-route__core"),
+      glowWidth: readWidth(".particle-earth-route__glow"),
+      leaderOpacity: Number.parseFloat(getComputedStyle(group.querySelector(".particle-earth-route__travel-leader")).opacity),
+      points,
+    };
+  }, routeIdentifier);
+}
+
+function near(value, expected, tolerance = 0.06) {
+  return Number.isFinite(value) && Math.abs(value - expected) <= tolerance;
+}
+
+async function runRouteOpticsCase({ dpr, viewport, reducedMotion = false, mobile = false }) {
+  const opticsContext = await browser.newContext({
+    viewport,
+    deviceScaleFactor: dpr,
+    reducedMotion: reducedMotion ? "reduce" : "no-preference",
+    isMobile: mobile,
+    hasTouch: mobile,
+  });
+  const opticsPage = await opticsContext.newPage();
+  await opticsPage.route("**/api/auth/get-session", (route) => route.fulfill({ status: 200, contentType: "application/json", body: "null" }));
+  const url = new URL(qaUrl);
+  url.searchParams.set("qaRouteOptics", "1");
+  url.searchParams.set("qaMotion", reducedMotion ? "reduce" : "animate");
+  try {
+    await opticsPage.goto(url.toString(), { waitUntil: "domcontentloaded" });
+    await opticsPage.locator('[data-scene-ready="true"]').waitFor({ timeout: 30_000 });
+    await opticsPage.waitForFunction((identifier) => document.querySelectorAll(`[data-journey-route="${identifier}"] .particle-earth-route__point`).length >= 6, routeId);
+    await setZoom(opticsPage, 1);
+    await waitForRenderedFrame(opticsPage);
+    const browse1 = await measureRouteOptics(opticsPage, routeId);
+    await setZoom(opticsPage, 3);
+    await waitForRenderedFrame(opticsPage);
+    const browse3 = await measureRouteOptics(opticsPage, routeId);
+    await opticsPage.locator('[data-qa-route-optics-stage="playing"]').click();
+    await opticsPage.waitForFunction((identifier) => document.querySelector(`[data-journey-route="${identifier}"]`)?.getAttribute("data-attention-role") === "narrative-current", routeId);
+    await waitForRenderedFrame(opticsPage);
+    const playing = await measureRouteOptics(opticsPage, routeId);
+    await opticsPage.locator('[data-qa-route-optics-stage="rewound"]').click();
+    await waitForRenderedFrame(opticsPage);
+    const rewound = await measureRouteOptics(opticsPage, routeId);
+    return { dpr, viewport, reducedMotion, mobile, browse1, browse3, playing, rewound };
+  } finally {
+    await opticsContext.close();
+  }
+}
+
 const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
 const page = await context.newPage();
 const consoleErrors = [];
@@ -450,6 +521,36 @@ try {
   if (failures.length > 0) {
     throw new Error(`[qa-route-anchoring] ${failures.join("; ")}`);
   }
+
+  // #373/ST-077: optical grammar is CSS-pixel bounded across zoom/DPR, while
+  // semantic Stop/passthrough and selected/narrative-current remain independent.
+  const opticsCases = [
+    await runRouteOpticsCase({ dpr: 1, viewport: { width: 1280, height: 800 } }),
+    await runRouteOpticsCase({ dpr: 2, viewport: { width: 1280, height: 800 }, reducedMotion: true }),
+    await runRouteOpticsCase({ dpr: 3, viewport: { width: 844, height: 390 }, mobile: true }),
+  ];
+  for (const sample of opticsCases) {
+    const { browse1, browse3, playing, rewound } = sample;
+    const byId = (state, id) => state.points.find((point) => point.id === id);
+    const sameA = byId(browse1, "qa-p-15");
+    const sameB = byId(browse1, "qa-p-20");
+    const selected = byId(browse1, "qa-p-18");
+    const narrative = byId(playing, "qa-p-17");
+    const future = byId(playing, "qa-p-18");
+    const rewoundCurrent = byId(rewound, "qa-p-16");
+    console.log("[qa-route-anchoring] route-optics", JSON.stringify(sample));
+    if (!near(browse1.coreWidth, 1.15) || !near(browse3.coreWidth, 1.15)) failures.push(`DPR ${sample.dpr}: selected core changed with zoom (${browse1.coreWidth} -> ${browse3.coreWidth})`);
+    if (!near(browse1.glowWidth, 2.8) || !near(browse3.glowWidth, 2.8)) failures.push(`DPR ${sample.dpr}: selected halo changed with zoom (${browse1.glowWidth} -> ${browse3.glowWidth})`);
+    if (browse1.devicePixelRatio !== sample.dpr) failures.push(`DPR ${sample.dpr}: browser reported ${browse1.devicePixelRatio}`);
+    if (!selected || selected.attentionRole !== "selected" || selected.semanticRole !== "passthrough" || !near(selected.radius, 3, 0.02)) failures.push(`DPR ${sample.dpr}: browse-selected passthrough role/radius is wrong`);
+    if (!sameA || !sameB || Math.hypot(sameA.anchorX - sameB.anchorX, sameA.anchorY - sameB.anchorY) > 0.05) failures.push(`DPR ${sample.dpr}: same-coordinate records no longer share one anchor`);
+    if (!narrative || narrative.attentionRole !== "narrative-current" || !near(narrative.radius, 3.2, 0.02)) failures.push(`DPR ${sample.dpr}: narrative-current role did not outrank browse selection`);
+    if (!future || future.temporalVisible !== "false" || future.temporalReveal !== "0.000" || future.opacity !== 0) failures.push(`DPR ${sample.dpr}: future selected Route Point remained visible`);
+    if (!near(playing.coreWidth, 1.2) || !near(playing.glowWidth, 3)) failures.push(`DPR ${sample.dpr}: narrative optical weight is outside the bounded target`);
+    if (!rewoundCurrent || rewoundCurrent.attentionRole !== "narrative-current") failures.push(`DPR ${sample.dpr}: rewind did not move narrative-current to the last visible point`);
+    if (sample.reducedMotion && playing.leaderOpacity !== 0) failures.push(`DPR ${sample.dpr}: reduced motion left the travelling leader visible`);
+  }
+  if (failures.length > 0) throw new Error(`[qa-route-anchoring] ${failures.join("; ")}`);
 
   // #219: same page (the console and pageerror listeners keep accumulating),
   // new framing - the focus point now sits on a Route Point of the fixture.

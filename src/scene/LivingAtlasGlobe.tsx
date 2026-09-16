@@ -162,6 +162,11 @@ export type LivingAtlasGlobeProps = {
   focusColor?: string;
   journeyRoutes: readonly JourneyRoute[];
   activeJourneyRouteId?: string | null;
+  selectedJourneyRoutePoint?: {
+    journeyId: string;
+    routePointId?: string | null;
+    pointIndex?: number | null;
+  } | null;
   temporalReveal?: {
     journeys: ReadonlyMap<string, number>;
     points: ReadonlyMap<string, number>;
@@ -222,6 +227,7 @@ type AtlasEarthPresentation = Pick<
   | "focusColor"
   | "journeyRoutes"
   | "activeJourneyRouteId"
+  | "selectedJourneyRoutePoint"
   | "temporalReveal"
   | "onJourneyRouteActivate"
   | "onJourneyRoutePointActivate"
@@ -324,6 +330,7 @@ export function PersistentEarthProvider({ children }: { children: ReactNode }) {
                   centerFocusPoint={Boolean(atlas)}
                   journeyRoutes={atlas?.journeyRoutes ?? []}
                   activeJourneyRouteId={atlas?.activeJourneyRouteId}
+                  selectedJourneyRoutePoint={atlas?.selectedJourneyRoutePoint}
                   temporalReveal={atlas?.temporalReveal}
                   onJourneyRouteActivate={atlas?.onJourneyRouteActivate}
                   onJourneyRoutePointActivate={atlas?.onJourneyRoutePointActivate}
@@ -370,6 +377,7 @@ export function LivingAtlasGlobe({
   focusColor,
   journeyRoutes,
   activeJourneyRouteId,
+  selectedJourneyRoutePoint,
   temporalReveal,
   homeBasePresence,
   activeHomeBaseContextPeriodId,
@@ -936,6 +944,7 @@ export function LivingAtlasGlobe({
       focusColor,
       journeyRoutes,
       activeJourneyRouteId,
+      selectedJourneyRoutePoint,
       temporalReveal,
       onJourneyRouteActivate,
       onJourneyRoutePointActivate,
@@ -957,6 +966,9 @@ export function LivingAtlasGlobe({
     });
   }, [
     activeJourneyRouteId,
+    selectedJourneyRoutePoint?.journeyId,
+    selectedJourneyRoutePoint?.routePointId,
+    selectedJourneyRoutePoint?.pointIndex,
     cinematicActive,
     earthExperiencePolicy,
     dive.owner,

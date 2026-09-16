@@ -4523,23 +4523,6 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
     background 180ms ease;
 }
 
-/* Solid origin and destination markers inherit each route's color. */
-.particle-earth-route__point--origin {
-  fill: currentColor;
-  stroke: rgba(245, 255, 251, 1);
-  stroke-width: 2;
-}
-
-.particle-earth-route.is-muted .particle-earth-route__point--origin {
-  fill: currentColor;
-}
-
-.particle-earth-route__point--destination {
-  fill: currentColor;
-  stroke: rgba(245, 255, 251, 1);
-  stroke-width: 2;
-}
-
 @media (prefers-reduced-motion: reduce) {
   .motion-staged > *,
   .particle-earth-route__point,
