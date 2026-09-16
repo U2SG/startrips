@@ -166,7 +166,7 @@ button {
   stroke-width: 1.2px;
 }
 
-.particle-earth-route.is-active .particle-earth-route__point {
+.particle-earth-route.is-active .particle-earth-route__point:not([data-attention-role="selected"]):not([data-attention-role="narrative-current"]) {
   opacity: 0.86;
   stroke-opacity: 0.96;
 }
@@ -183,12 +183,10 @@ button {
 
 /* Audio energy composes with point attention instead of replacing it. */
 .particle-earth-route.is-active .particle-earth-route__point[data-attention-role="selected"] {
-  opacity: 1;
   filter: brightness(calc(1 + var(--audio-route-energy, 0))) drop-shadow(0 0 2px currentColor);
 }
 
 .particle-earth-route.is-active .particle-earth-route__point[data-attention-role="narrative-current"] {
-  opacity: 1;
   filter: brightness(calc(1 + var(--audio-route-energy, 0))) drop-shadow(0 0 3px currentColor);
 }
 
