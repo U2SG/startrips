@@ -1003,9 +1003,6 @@ const Experience = import.meta.env.DEV && qaState === "journey-composer"
  * an owner atlas, an owner capability provider, or an account surface.
  */
 const shared = isSharedAtlasPathname(window.location.pathname);
-const sharedRoutePointContextQa = import.meta.env.DEV
-  && shared
-  && new URLSearchParams(window.location.search).get("qaRoutePointContext") === "1";
 const knownAppPath = ["/", "/reset-password", "/accept-invitation"].includes(window.location.pathname);
 const localDemo = import.meta.env.DEV
   && window.location.pathname === "/"
@@ -1020,7 +1017,14 @@ createRoot(document.getElementById("root")!).render(
           <ExperienceDemo />
         </Suspense>
       ) : !shared && !knownAppPath ? <StartripsNotFound /> : shared ? (
-        <SharedAtlasView GlobeComponent={sharedRoutePointContextQa ? LivingAtlasGlobeChromeQa : undefined} />
+        <SharedAtlasView
+          GlobeComponent={
+            import.meta.env.DEV
+            && new URLSearchParams(window.location.search).get("qaRoutePointContext") === "1"
+              ? LivingAtlasGlobeChromeQa
+              : undefined
+          }
+        />
       ) : (
         <AuthGateway>
           <Experience />
