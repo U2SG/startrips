@@ -2943,6 +2943,40 @@ export function LivingAtlasApp({
               <h2>{context.routePointLabel}</h2>
               <span>{context.journeyTitle}</span>
             </header>
+            {context.sameCoordinateRoutePoints.length > 1 ? (
+              <>
+                <section
+                  className="living-atlas__route-point-context-switcher"
+                  data-route-point-context-switcher
+                  aria-label="同一坐标的路线点记录"
+                >
+                  <p>同一坐标 · {context.sameCoordinateRoutePoints.length} 条路线点记录</p>
+                  <div role="group" aria-label="切换路线点记录">
+                    {context.sameCoordinateRoutePoints.map((record) => (
+                      <button
+                        key={record.routePointId}
+                        type="button"
+                        data-route-point-context-switch={record.routePointId}
+                        aria-pressed={record.routePointId === context.routePointId}
+                        onClick={() => revealRoutePointContext(context.journeyId, record.routePointId)}
+                      >
+                        <span>{String(record.routePointIndex + 1).padStart(2, "0")}</span>
+                        <strong>{record.routePointLabel}</strong>
+                        <small>{record.isStop ? "停靠点" : "途径点"}</small>
+                      </button>
+                    ))}
+                  </div>
+                </section>
+                <div className="living-atlas__route-point-context-order" data-route-point-context-order>
+                  <span>{context.previousRoutePoint
+                    ? `上一段 · ${context.previousRoutePoint.routePointLabel}`
+                    : "路线起点"}</span>
+                  <span>{context.nextRoutePoint
+                    ? `下一段 · ${context.nextRoutePoint.routePointLabel}`
+                    : "路线终点"}</span>
+                </div>
+              </>
+            ) : null}
             <div className="living-atlas__route-point-context-facts">
               <span>{context.resolvedDate ? context.resolvedDate.slice(0, 10) : "日期未记录"}</span>
               <span>{context.visualMediaCount > 0 ? `${context.visualMediaCount} 项影像` : "仅文字记录"}</span>

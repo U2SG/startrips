@@ -1070,6 +1070,33 @@ describe("Route Point context integration (#291)", () => {
     expect(renderStart).toBeGreaterThan(0);
   });
 
+  it("switches co-located Route Point record identity without claiming camera or Playback ownership", () => {
+    const start = appSource.indexOf('data-route-point-context-switch={record.routePointId}');
+    const switcher = appSource.slice(start - 500, start + 1800);
+
+    expect(start).toBeGreaterThan(0);
+    expect(switcher).toContain('aria-pressed={record.routePointId === context.routePointId}');
+    expect(switcher).toContain('revealRoutePointContext(context.journeyId, record.routePointId)');
+    expect(switcher).toContain('data-route-point-context-order');
+    expect(switcher).toContain('context.previousRoutePoint.routePointLabel');
+    expect(switcher).toContain('context.nextRoutePoint.routePointLabel');
+    expect(switcher).not.toContain('timeCursor.selectPoint');
+    expect(switcher).not.toContain('cameraCommand');
+    expect(switcher).not.toContain('startPlayback');
+    expect(switcher).not.toContain('setPlaybackSession');
+  });
+
+  it("keeps same-coordinate switch targets touch-safe without turning the context into a toolbar", () => {
+    const css = readFileSync(new URL("../styles/living-atlas.css", import.meta.url), "utf8");
+    const start = css.indexOf(".living-atlas__route-point-context-switcher button {");
+    const rule = css.slice(start, css.indexOf("}", start));
+
+    expect(start).toBeGreaterThan(0);
+    expect(rule).toContain("min-height: 44px;");
+    expect(appSource).toContain('role="group" aria-label="切换路线点记录"');
+    expect(appSource).not.toContain('data-route-point-context-switcher role="toolbar"');
+  });
+
   it("keeps long context notes reachable within the clipped Atlas viewport", () => {
     const css = readFileSync(new URL("../styles/living-atlas.css", import.meta.url), "utf8");
     const start = css.indexOf(".living-atlas__route-point-context {");
