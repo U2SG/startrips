@@ -10,10 +10,11 @@ import {
   persistJourneyDraft,
   reconcileUnknownJourneyCreate,
   resolvePendingMediaUploads,
+  routePointFocusAfterRemoval,
   unknownCreateRecheckMessage,
   uploadJourneyMedia,
 } from "./JourneyComposer";
-import type { RouteDraftPoint } from "./routeDraft";
+import { moveRoutePoint, type RouteDraftPoint } from "./routeDraft";
 import type { Journey, JourneyInput } from "./types";
 
 const input: JourneyInput = {
@@ -224,6 +225,28 @@ describe("persistJourneyDraft", () => {
     ]);
   });
 
+  it("keeps pending media bound to the same draftId when that whole record is reordered", () => {
+    const file = { name: "record-03.jpg", size: 10 } as File;
+    const routePoints = [
+      { draftId: "record-01", latitude: 22.5, longitude: 114.0, label: "A", isStop: true, occurredAt: null },
+      { draftId: "record-02", latitude: 22.543096, longitude: 114.057865, label: "Shared", isStop: false, occurredAt: null },
+      { draftId: "record-03", latitude: 23.1, longitude: 115.1, label: "C", note: "selected", isStop: true, occurredAt: "2026-09-03T08:00:00.000Z" },
+      { draftId: "record-07", latitude: 22.543096, longitude: 114.057865, label: "Shared", isStop: true, occurredAt: null },
+    ] satisfies RouteDraftPoint[];
+    const moved = moveRoutePoint(routePoints, "record-03", -1);
+    const persisted = {
+      ...journey,
+      routePoints: moved.map((point, sortOrder) => ({ id: `persisted-${point.draftId}`, sortOrder })),
+    } as Journey;
+
+    expect(moved[1]).toMatchObject({ draftId: "record-03", note: "selected", isStop: true });
+    expect(resolvePendingMediaUploads([
+      { file, routePointDraftId: "record-03" },
+    ], moved, persisted)).toEqual([
+      { file, routePointId: "persisted-record-03" },
+    ]);
+  });
+
   it("falls media back to the whole journey when its draft point is removed", () => {
     const retainedFile = { name: "retained.jpg", size: 10 } as File;
     const resetFile = { name: "reset.jpg", size: 10 } as File;
@@ -235,6 +258,19 @@ describe("persistJourneyDraft", () => {
       { file: retainedFile, routePointDraftId: "point-a" },
       { file: resetFile, routePointDraftId: null },
     ]);
+  });
+
+  it("chooses a deterministic surviving draftId for focus after delete", () => {
+    const points = [
+      { draftId: "point-a", latitude: 1, longitude: 1, label: "A", isStop: true, occurredAt: null },
+      { draftId: "point-b", latitude: 2, longitude: 2, label: "B", isStop: true, occurredAt: null },
+      { draftId: "point-c", latitude: 3, longitude: 3, label: "C", isStop: true, occurredAt: null },
+    ] satisfies RouteDraftPoint[];
+
+    expect(routePointFocusAfterRemoval(points, "point-b")).toBe("point-c");
+    expect(routePointFocusAfterRemoval(points, "point-c")).toBe("point-b");
+    expect(routePointFocusAfterRemoval([points[0]], "point-a")).toBeNull();
+    expect(routePointFocusAfterRemoval(points, "missing")).toBeNull();
   });
 
   it("preserves an existing journey as an editable draft", () => {

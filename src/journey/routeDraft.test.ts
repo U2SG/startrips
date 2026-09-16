@@ -83,4 +83,57 @@ describe("route draft operations", () => {
     // never drops it.
     expect(routeDraftToInput([withNote])[0].note).toBe("风很大，只记得那一刻特别安静。");
   });
+
+  it("keeps the current 64-point maximum operable without replacing draft identity", () => {
+    const points: RouteDraftPoint[] = Array.from({ length: 64 }, (_, index) => ({
+      draftId: `max-${String(index + 1).padStart(2, "0")}`,
+      latitude: index / 2,
+      longitude: index,
+      label: `Point ${index + 1}`,
+      note: index === 63 ? "tail" : null,
+      isStop: false,
+      occurredAt: null,
+    }));
+    const tail = points[63];
+    const moved = moveRoutePoint(points, tail.draftId, -1);
+
+    expect(moved).toHaveLength(64);
+    expect(moved[62]).toBe(tail);
+    expect(moved[62]).toMatchObject({ draftId: "max-64", note: "tail", isStop: false });
+    expect(new Set(moved.map((point) => point.draftId)).size).toBe(64);
+  });
+
+  it("reorders a 12-record draft by draftId without merging duplicate labels or coordinates", () => {
+    const points: RouteDraftPoint[] = Array.from({ length: 12 }, (_, index) => ({
+      draftId: `record-${String(index + 1).padStart(2, "0")}`,
+      id: `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
+      latitude: index === 1 || index === 6 ? 22.543096 : 22 + index / 10,
+      longitude: index === 1 || index === 6 ? 114.057865 : 114 + index / 10,
+      label: index === 0 || index === 11 ? "Same label" : `Route point ${index + 1}`,
+      note: `note-${index + 1}`,
+      isStop: index % 2 === 0,
+      occurredAt: `2026-09-${String(index + 1).padStart(2, "0")}T08:00:00.000Z`,
+    }));
+    const selected = points[2];
+    const moved = moveRoutePoint(points, selected.draftId, -1);
+
+    expect(moved[1]).toEqual(selected);
+    expect(moved[1]).toBe(selected);
+    expect(moved.map((point) => point.draftId)).toHaveLength(12);
+    expect(new Set(moved.map((point) => point.draftId)).size).toBe(12);
+    expect(moved.filter((point) => point.label === "Same label").map((point) => point.draftId)).toEqual([
+      "record-01",
+      "record-12",
+    ]);
+    expect(moved.filter((point) => point.latitude === 22.543096 && point.longitude === 114.057865).map((point) => point.draftId)).toEqual([
+      "record-02",
+      "record-07",
+    ]);
+    expect(moved[1]).toMatchObject({
+      id: selected.id,
+      note: "note-3",
+      isStop: true,
+      occurredAt: "2026-09-03T08:00:00.000Z",
+    });
+  });
 });

@@ -493,7 +493,12 @@ function LivingAtlasGlobeControlsQaPreview() {
 }
 
 function JourneyComposerQaPreview() {
-  const editMode = new URLSearchParams(window.location.search).get("qaMode") === "edit";
+  const qaMode = new URLSearchParams(window.location.search).get("qaMode");
+  const journey = qaMode === "route-points"
+    ? composerRoutePointsQaJourney
+    : qaMode === "edit"
+      ? storyQaJourney
+      : undefined;
   const [open, setOpen] = useState(true);
   return (
     <main className="living-atlas">
@@ -502,7 +507,7 @@ function JourneyComposerQaPreview() {
       {open ? (
         <JourneyComposer
           open
-          journey={editMode ? storyQaJourney : undefined}
+          journey={journey}
           onClose={() => setOpen(false)}
           onSaved={() => undefined}
           onGlobePickRequest={() => undefined}
@@ -549,6 +554,29 @@ const storyQaJourney: Journey = {
     sortOrder: index,
     uploadedByUserId: "00000000-0000-4000-8000-000000000003",
     createdAt: "2026-08-11T00:00:00.000Z",
+  })),
+};
+
+const composerRoutePointsQaJourney: Journey = {
+  ...storyQaJourney,
+  title: "Composer Route Point QA",
+  routePoints: Array.from({ length: 12 }, (_, index) => ({
+    ...storyQaJourney.routePoints[0],
+    id: `00000000-0000-4000-8000-${String(index + 20).padStart(12, "0")}`,
+    sortOrder: index,
+    latitude: index === 1 || index === 6 ? 22.543096 : 21.9 + index * 0.07,
+    longitude: index === 1 || index === 6 ? 114.057865 : 113.8 + index * 0.08,
+    label: index === 0 || index === 11
+      ? "Shared label"
+      : index === 2
+        ? "Record 03"
+        : `Record ${String(index + 1).padStart(2, "0")}`,
+    isStop: index % 3 === 0,
+    note: index === 2 ? "Record 03 keeps its note while moving." : null,
+  })),
+  media: storyQaJourney.media.map((media, index) => ({
+    ...media,
+    routePointId: index === 0 ? "00000000-0000-4000-8000-000000000022" : null,
   })),
 };
 

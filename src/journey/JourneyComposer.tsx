@@ -219,6 +219,15 @@ export function clearRemovedMediaTarget(
   ));
 }
 
+export function routePointFocusAfterRemoval(
+  routePoints: readonly RouteDraftPoint[],
+  routePointDraftId: string,
+): string | null {
+  const index = routePoints.findIndex((point) => point.draftId === routePointDraftId);
+  if (index < 0) return null;
+  return routePoints[index + 1]?.draftId ?? routePoints[index - 1]?.draftId ?? null;
+}
+
 export class JourneyMediaContinuationError extends Error {
   readonly journey: Journey;
 
@@ -424,6 +433,14 @@ export function JourneyComposer({
   const [mobileMediaMenuIndex, setMobileMediaMenuIndex] = useState<number | null>(null);
   const [mobileMediaAssignmentIndex, setMobileMediaAssignmentIndex] = useState<number | null>(null);
   const [mobileMediaDeleteIndex, setMobileMediaDeleteIndex] = useState<number | null>(null);
+  const [expandedRoutePointDraftId, setExpandedRoutePointDraftId] = useState<string | null>(null);
+  const [routePointMenuDraftId, setRoutePointMenuDraftId] = useState<string | null>(null);
+  const routePointTriggerRefs = useRef(new Map<string, HTMLButtonElement>());
+  const routePointMenuTriggerRefs = useRef(new Map<string, HTMLButtonElement>());
+  const routePointRowRefs = useRef(new Map<string, HTMLLIElement>());
+  const pendingRoutePointFocusDraftIdRef = useRef<string | null>(null);
+  const pendingRoutePointMenuFocusDraftIdRef = useRef<string | null>(null);
+  const pendingRoutePointScrollDraftIdRef = useRef<string | null>(null);
   const [message, setMessage] = useState(() => {
     if (journey || !initialUnknownCreateAttempt) return "";
     const hasPendingMedia = (initialUnknownCreateAttempt.mediaFiles?.length ?? 0) > 0;
@@ -499,6 +516,44 @@ export function JourneyComposer({
     setMobileMediaAssignmentIndex(null);
     setMobileMediaDeleteIndex(null);
   }, [mobileLayout]);
+
+  useEffect(() => {
+    if (expandedRoutePointDraftId && !routePoints.some((point) => point.draftId === expandedRoutePointDraftId)) {
+      setExpandedRoutePointDraftId(null);
+    }
+    if (routePointMenuDraftId && !routePoints.some((point) => point.draftId === routePointMenuDraftId)) {
+      setRoutePointMenuDraftId(null);
+    }
+  }, [expandedRoutePointDraftId, routePointMenuDraftId, routePoints]);
+
+  useEffect(() => {
+    const focusDraftId = pendingRoutePointFocusDraftIdRef.current;
+    if (focusDraftId) {
+      const trigger = routePointTriggerRefs.current.get(focusDraftId);
+      if (trigger) {
+        trigger.focus({ preventScroll: true });
+        pendingRoutePointFocusDraftIdRef.current = null;
+      }
+    }
+
+    const menuFocusDraftId = pendingRoutePointMenuFocusDraftIdRef.current;
+    if (menuFocusDraftId) {
+      const trigger = routePointMenuTriggerRefs.current.get(menuFocusDraftId);
+      if (trigger) {
+        trigger.focus({ preventScroll: true });
+        pendingRoutePointMenuFocusDraftIdRef.current = null;
+      }
+    }
+
+    const scrollDraftId = pendingRoutePointScrollDraftIdRef.current;
+    if (scrollDraftId) {
+      const row = routePointRowRefs.current.get(scrollDraftId);
+      if (row) {
+        row.scrollIntoView({ block: "nearest" });
+        pendingRoutePointScrollDraftIdRef.current = null;
+      }
+    }
+  }, [expandedRoutePointDraftId, routePointMenuDraftId, routePoints]);
 
   const input = useMemo<JourneyInput>(() => ({
     title: title.trim(),
@@ -818,6 +873,59 @@ export function JourneyComposer({
     } else if (removesActiveReverseLookup) {
       setMessage("");
     }
+  }
+
+  function toggleRoutePointExpanded(draftPointId: string) {
+    setRoutePointMenuDraftId(null);
+    setExpandedRoutePointDraftId((current) => {
+      const next = current === draftPointId ? null : draftPointId;
+      if (next) pendingRoutePointScrollDraftIdRef.current = next;
+      return next;
+    });
+  }
+
+  function moveDraftPointRow(draftPointId: string, direction: -1 | 1) {
+    pendingRoutePointFocusDraftIdRef.current = draftPointId;
+    pendingRoutePointScrollDraftIdRef.current = draftPointId;
+    setRoutePointMenuDraftId(null);
+    setRoutePoints((current) => {
+      const next = moveRoutePoint(current, draftPointId, direction);
+      routePointsRef.current = next;
+      return next;
+    });
+  }
+
+  function closeRoutePointMenu(draftPointId: string) {
+    pendingRoutePointMenuFocusDraftIdRef.current = draftPointId;
+    setRoutePointMenuDraftId(null);
+  }
+
+  function removeDraftPointFromMenu(draftPointId: string) {
+    const focusTarget = routePointFocusAfterRemoval(routePointsRef.current, draftPointId);
+    setRoutePointMenuDraftId(null);
+    setExpandedRoutePointDraftId((current) => current === draftPointId ? focusTarget : current);
+    if (focusTarget) {
+      pendingRoutePointFocusDraftIdRef.current = focusTarget;
+      pendingRoutePointScrollDraftIdRef.current = focusTarget;
+    }
+    removeDraftPoint(draftPointId);
+  }
+
+  function routePointMediaAssociation(point: RouteDraftPoint) {
+    const pending = mediaFiles.filter((media) => media.routePointDraftId === point.draftId);
+    const persisted = point.id && journey
+      ? journeyVisualMedia(journey).filter((media) => media.routePointId === point.id)
+      : [];
+    const names = [
+      ...persisted.map((media) => media.fileName),
+      ...pending.map((media) => media.file.name),
+    ];
+    if (names.length === 0) {
+      return { count: 0, label: "暂无媒体归属此地点" };
+    }
+    const preview = names.slice(0, 2).join("、");
+    const remainder = names.length > 2 ? ` 等 ${names.length} 个` : "";
+    return { count: names.length, label: `${preview}${remainder}` };
   }
 
   async function applySavedResult(
@@ -1371,42 +1479,119 @@ export function JourneyComposer({
 
               <ol className="journey-route-draft" aria-label="已添加的地点">
                 {routePoints.length === 0 ? <li className="is-empty"><IconMapPin size={22} stroke={1.15} aria-hidden="true" /><span>还没有地点</span><small>先搜索一个地点，或直接在地球上取点。</small></li> : null}
-                {routePoints.map((point, index) => (
-                  <li key={point.draftId}>
-                    <span className="journey-route-draft__index">{String(index + 1).padStart(2, "0")}</span>
-                    <div className="journey-route-draft__main">
-                      <input
-                        aria-label={`地点 ${index + 1} 名称`}
-                        maxLength={120}
-                        placeholder="地点名称（可精确到建筑或景点）"
-                        value={point.label}
-                        onChange={(event) => setRoutePoints((current) => updateRoutePoint(current, point.draftId, { label: event.target.value }))}
-                      />
-                      <small>{point.latitude.toFixed(6)}, {point.longitude.toFixed(6)}</small>
-                      {/* #10: a short personal note for this route point. */}
-                      <label className="journey-route-draft__note">
-                        <span>这一站想记住什么？<small>可选</small></span>
-                        <textarea
-                          rows={2}
-                          maxLength={500}
-                          value={point.note ?? ""}
-                          placeholder="写下一句当时的心情、发生的小事，或以后看到这里时想起的话…"
-                          onChange={(event) => setRoutePoints((current) => updateRoutePoint(current, point.draftId, { note: event.target.value }))}
-                        />
-                      </label>
-                    </div>
-                    <label className="journey-checkbox"><input type="checkbox" checked={point.isStop} onChange={() => setRoutePoints((current) => toggleRouteStop(current, point.draftId))} />停靠</label>
-                    <div className="journey-route-draft__actions">
-                      {isEditing ? (
-                        <>
-                          <IconActionButton type="button" disabled={index === 0} onClick={() => setRoutePoints((current) => moveRoutePoint(current, point.draftId, -1))} label="向前移动地点" tooltip="上移地点"><IconArrowUp size={15} stroke={1.4} aria-hidden="true" /></IconActionButton>
-                          <IconActionButton type="button" disabled={index === routePoints.length - 1} onClick={() => setRoutePoints((current) => moveRoutePoint(current, point.draftId, 1))} label="向后移动地点" tooltip="下移地点"><IconArrowDown size={15} stroke={1.4} aria-hidden="true" /></IconActionButton>
-                        </>
+                {routePoints.map((point, index) => {
+                  const expanded = expandedRoutePointDraftId === point.draftId;
+                  const menuOpen = routePointMenuDraftId === point.draftId;
+                  const displayLabel = point.label.trim() || `途径点 ${index + 1}`;
+                  const mediaAssociation = routePointMediaAssociation(point);
+                  const editorId = `journey-route-point-${point.draftId}-editor`;
+                  const menuId = `journey-route-point-${point.draftId}-menu`;
+                  return (
+                    <li
+                      key={point.draftId}
+                      ref={(node) => {
+                        if (node) routePointRowRefs.current.set(point.draftId, node);
+                        else routePointRowRefs.current.delete(point.draftId);
+                      }}
+                      className={expanded ? "is-expanded" : undefined}
+                      data-route-point-draft-id={point.draftId}
+                      data-route-point-position={index + 1}
+                      data-route-point-expanded={expanded ? "true" : "false"}
+                    >
+                      <span className="journey-route-draft__index">{String(index + 1).padStart(2, "0")}</span>
+                      <button
+                        type="button"
+                        className="journey-route-draft__summary"
+                        ref={(node) => {
+                          if (node) routePointTriggerRefs.current.set(point.draftId, node);
+                          else routePointTriggerRefs.current.delete(point.draftId);
+                        }}
+                        aria-expanded={expanded}
+                        aria-controls={editorId}
+                        onClick={() => toggleRoutePointExpanded(point.draftId)}
+                      >
+                        <span>
+                          <strong>{displayLabel}</strong>
+                          <small>{point.isStop ? "停靠" : "途径"} · {point.latitude.toFixed(6)}, {point.longitude.toFixed(6)}</small>
+                        </span>
+                        <IconChevronDown className="journey-route-draft__summary-chevron" size={17} stroke={1.35} aria-hidden="true" />
+                      </button>
+                      <div className="journey-route-draft__actions" role="group" aria-label={`${displayLabel} 排序和更多操作`}>
+                        <IconActionButton type="button" disabled={index === 0} onClick={() => moveDraftPointRow(point.draftId, -1)} label={`向前移动 ${displayLabel}`} tooltip="上移地点"><IconArrowUp size={16} stroke={1.4} aria-hidden="true" /></IconActionButton>
+                        <IconActionButton type="button" disabled={index === routePoints.length - 1} onClick={() => moveDraftPointRow(point.draftId, 1)} label={`向后移动 ${displayLabel}`} tooltip="下移地点"><IconArrowDown size={16} stroke={1.4} aria-hidden="true" /></IconActionButton>
+                        <IconActionButton
+                          type="button"
+                          buttonRef={(node) => {
+                            if (node) routePointMenuTriggerRefs.current.set(point.draftId, node);
+                            else routePointMenuTriggerRefs.current.delete(point.draftId);
+                          }}
+                          label={`更多操作 ${displayLabel}`}
+                          tooltip="更多操作"
+                          aria-expanded={menuOpen}
+                          aria-controls={menuId}
+                          onClick={() => setRoutePointMenuDraftId((current) => current === point.draftId ? null : point.draftId)}
+                          onKeyDown={(event) => {
+                            if (event.key !== "Escape" || !menuOpen) return;
+                            event.preventDefault();
+                            closeRoutePointMenu(point.draftId);
+                          }}
+                        >
+                          <IconDots size={18} stroke={1.45} aria-hidden="true" />
+                        </IconActionButton>
+                      </div>
+                      {menuOpen ? (
+                        <div
+                          id={menuId}
+                          className="journey-route-draft__menu"
+                          role="menu"
+                          onKeyDown={(event) => {
+                            if (event.key !== "Escape") return;
+                            event.preventDefault();
+                            closeRoutePointMenu(point.draftId);
+                          }}
+                        >
+                          <button type="button" role="menuitem" className="is-destructive-secondary" onClick={() => removeDraftPointFromMenu(point.draftId)}>
+                            <IconTrash size={16} stroke={1.4} aria-hidden="true" />
+                            删除地点
+                          </button>
+                        </div>
                       ) : null}
-                      <IconActionButton type="button" className="is-destructive-secondary" onClick={() => removeDraftPoint(point.draftId)} label="删除地点" tooltip="删除地点"><IconTrash size={15} stroke={1.4} aria-hidden="true" /></IconActionButton>
-                    </div>
-                  </li>
-                ))}
+                      {expanded ? (
+                        <div id={editorId} className="journey-route-draft__expanded">
+                          <label>
+                            <span>地点名称</span>
+                            <input
+                              aria-label={`${displayLabel} 名称`}
+                              maxLength={120}
+                              placeholder="地点名称（可精确到建筑或景点）"
+                              value={point.label}
+                              onChange={(event) => setRoutePoints((current) => updateRoutePoint(current, point.draftId, { label: event.target.value }))}
+                            />
+                          </label>
+                          <div className="journey-route-draft__coordinates" aria-label={`${displayLabel} 规范坐标`}>
+                            <span>规范坐标</span>
+                            <code>{point.latitude.toFixed(6)}, {point.longitude.toFixed(6)}</code>
+                          </div>
+                          <label className="journey-route-draft__note">
+                            <span>这一站想记住什么？<small>可选</small></span>
+                            <textarea
+                              rows={2}
+                              maxLength={500}
+                              value={point.note ?? ""}
+                              placeholder="写下一句当时的心情、发生的小事，或以后看到这里时想起的话…"
+                              onChange={(event) => setRoutePoints((current) => updateRoutePoint(current, point.draftId, { note: event.target.value }))}
+                            />
+                          </label>
+                          <label className="journey-checkbox"><input type="checkbox" checked={point.isStop} onChange={() => setRoutePoints((current) => toggleRouteStop(current, point.draftId))} />停靠</label>
+                          <div className="journey-route-draft__media-association" data-route-point-media-count={mediaAssociation.count}>
+                            <span>媒体归属</span>
+                            <small>{mediaAssociation.label}</small>
+                          </div>
+                        </div>
+                      ) : null}
+                    </li>
+                  );
+                })}
               </ol>
 
               <details className="journey-precise-location">

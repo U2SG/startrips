@@ -156,6 +156,8 @@ jobs:
             command: pnpm qa:brand-signature-motion
           - name: recovery-surfaces
             command: pnpm qa:recovery-surfaces
+          - name: composer-route-points
+            command: pnpm qa:composer-route-points
           - name: mobile-contract
             command: pnpm qa:mobile-contract
           - name: globe-focus-chrome
@@ -208,6 +210,15 @@ jobs:
           name: coastline-refinement-${{ github.run_attempt }}
           path: artifacts/coastline-refinement/
           if-no-files-found: warn
+          retention-days: 7
+
+      - name: Upload Composer Route Point QA
+        if: ${{ always() && matrix.name == 'composer-route-points' }}
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: composer-route-points-${{ github.run_attempt }}
+          path: artifacts/composer-route-points/
+          if-no-files-found: error
           retention-days: 7
 
       - name: Upload Home Base suggestion capture
