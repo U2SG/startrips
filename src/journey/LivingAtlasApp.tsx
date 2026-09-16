@@ -1169,8 +1169,11 @@ export function LivingAtlasApp({
   // #21: the rewind cursor over the whole journey timeline. Only active while
   // the user is in globe focus mode; entering playback pauses rewind.
   const timeCursor = useGlobeTimeCursor(journeys);
-  const routePointContextTemporalProgress = isMobileV2 || globeFocusMode
-    ? timeCursor.reveal.pointProgress
+  const routePointContextTemporalReveal = isMobileV2 || globeFocusMode
+    ? {
+        journeys: timeCursor.reveal.journeyProgress,
+        points: timeCursor.reveal.pointProgress,
+      }
     : undefined;
   const unknownCreateSemanticOwnership = resolveUnknownCreateObservationOwnership({
     journeys,
@@ -1568,18 +1571,18 @@ export function LivingAtlasApp({
   }, [clearRoutePointContext, journeys, routePointContextSelection.intent]);
   useEffect(() => {
     const context = routePointContextSelection.context;
-    if (!context || !routePointContextTemporalProgress) return;
+    if (!context || !routePointContextTemporalReveal) return;
     if (routePointContextTemporallyVisible(
       context.journeyId,
       context.routePointIndex,
-      routePointContextTemporalProgress,
+      routePointContextTemporalReveal,
     )) return;
     clearRoutePointContext();
   }, [
     clearRoutePointContext,
     routePointContextSelection.context?.journeyId,
     routePointContextSelection.context?.routePointIndex,
-    routePointContextTemporalProgress,
+    routePointContextTemporalReveal,
   ]);
   useEffect(() => {
     if (view !== "planet" && routePointContextSelection.intent) clearRoutePointContext();
@@ -2951,13 +2954,31 @@ export function LivingAtlasApp({
         if (!routePointContextTemporallyVisible(
           context.journeyId,
           context.routePointIndex,
-          routePointContextTemporalProgress,
+          routePointContextTemporalReveal,
         )) return null;
         const visibleSameCoordinateRoutePoints = temporallyVisibleRoutePointContextRefs(
           context.journeyId,
           context.sameCoordinateRoutePoints,
-          routePointContextTemporalProgress,
+          routePointContextTemporalReveal,
         );
+        const visiblePreviousRoutePoint = context.previousRoutePoint === null
+          ? null
+          : routePointContextTemporallyVisible(
+              context.journeyId,
+              context.previousRoutePoint.routePointIndex,
+              routePointContextTemporalReveal,
+            )
+            ? context.previousRoutePoint
+            : undefined;
+        const visibleNextRoutePoint = context.nextRoutePoint === null
+          ? null
+          : routePointContextTemporallyVisible(
+              context.journeyId,
+              context.nextRoutePoint.routePointIndex,
+              routePointContextTemporalReveal,
+            )
+            ? context.nextRoutePoint
+            : undefined;
         return (
           <aside
             className="living-atlas__route-point-context motion-fade-through"
@@ -2998,12 +3019,16 @@ export function LivingAtlasApp({
                   </div>
                 </section>
                 <div className="living-atlas__route-point-context-order" data-route-point-context-order>
-                  <span>{context.previousRoutePoint
-                    ? `上一段 · ${context.previousRoutePoint.routePointLabel}`
-                    : "路线起点"}</span>
-                  <span>{context.nextRoutePoint
-                    ? `下一段 · ${context.nextRoutePoint.routePointLabel}`
-                    : "路线终点"}</span>
+                  {visiblePreviousRoutePoint !== undefined ? (
+                    <span>{visiblePreviousRoutePoint
+                      ? `上一段 · ${visiblePreviousRoutePoint.routePointLabel}`
+                      : "路线起点"}</span>
+                  ) : null}
+                  {visibleNextRoutePoint !== undefined ? (
+                    <span>{visibleNextRoutePoint
+                      ? `下一段 · ${visibleNextRoutePoint.routePointLabel}`
+                      : "路线终点"}</span>
+                  ) : null}
                 </div>
               </>
             ) : null}

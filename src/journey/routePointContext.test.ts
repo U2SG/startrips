@@ -222,17 +222,24 @@ describe("buildRoutePointContext", () => {
       point("point-07", { sortOrder: 6, label: "night", isStop: false }),
     ], []);
     const context = buildRoutePointContext(trip, "point-02");
-    const pointProgress = new Map([
-      [`${trip.id}:0`, 1],
-      [`${trip.id}:1`, 0],
-    ]);
+    const temporalReveal = {
+      journeys: new Map([[trip.id, 1]]),
+      points: new Map([
+        [`${trip.id}:0`, 1],
+        [`${trip.id}:1`, 0],
+      ]),
+    };
 
-    expect(routePointContextTemporallyVisible(trip.id, 0, pointProgress)).toBe(true);
-    expect(routePointContextTemporallyVisible(trip.id, 1, pointProgress)).toBe(false);
+    expect(routePointContextTemporallyVisible(trip.id, 0, temporalReveal)).toBe(true);
+    expect(routePointContextTemporallyVisible(trip.id, 1, temporalReveal)).toBe(false);
+    expect(routePointContextTemporallyVisible(trip.id, 0, {
+      journeys: new Map([[trip.id, 0]]),
+      points: new Map([[`${trip.id}:0`, 1]]),
+    })).toBe(false);
     expect(temporallyVisibleRoutePointContextRefs(
       trip.id,
       context?.sameCoordinateRoutePoints ?? [],
-      pointProgress,
+      temporalReveal,
     ).map((entry) => entry.routePointId)).toEqual(["point-02"]);
     expect(temporallyVisibleRoutePointContextRefs(
       trip.id,

@@ -109,25 +109,32 @@ export function buildRoutePointContext(
   };
 }
 
+export type RoutePointContextTemporalReveal = {
+  journeys: ReadonlyMap<string, number>;
+  points: ReadonlyMap<string, number>;
+};
+
 export function routePointContextTemporallyVisible(
   journeyId: string,
   routePointIndex: number,
-  pointProgress?: ReadonlyMap<string, number>,
+  temporalReveal?: RoutePointContextTemporalReveal,
 ) {
-  if (!pointProgress) return true;
-  const progress = pointProgress.get(`${journeyId}:${routePointIndex}`);
-  return progress === undefined || progress > 0;
+  if (!temporalReveal) return true;
+  const journeyProgress = temporalReveal.journeys.get(journeyId);
+  if (journeyProgress !== undefined && journeyProgress <= 0) return false;
+  const pointProgress = temporalReveal.points.get(`${journeyId}:${routePointIndex}`);
+  return pointProgress === undefined || pointProgress > 0;
 }
 
 export function temporallyVisibleRoutePointContextRefs(
   journeyId: string,
   refs: readonly RoutePointContextRouteRef[],
-  pointProgress?: ReadonlyMap<string, number>,
+  temporalReveal?: RoutePointContextTemporalReveal,
 ) {
   return refs.filter((ref) => routePointContextTemporallyVisible(
     journeyId,
     ref.routePointIndex,
-    pointProgress,
+    temporalReveal,
   ));
 }
 

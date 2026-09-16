@@ -546,8 +546,10 @@ try {
     sameAtlasPreservedBack02 && JSON.stringify(sameFocusBefore) === JSON.stringify(sameFocusBack02));
   const timeTrack = samePage.locator(".globe-time-scrubber__track");
   await timeTrack.focus();
-  await timeTrack.press("Home");
-  for (let step = 0; step < 7; step += 1) await timeTrack.press("PageUp");
+  // Approach the partial-reveal state from the present so the already-open
+  // record 02 never crosses through a future state before we grade the switcher.
+  await timeTrack.press("End");
+  for (let step = 0; step < 3; step += 1) await timeTrack.press("PageDown");
   await samePage.waitForFunction(() => document.querySelector(".globe-time-scrubber__track")?.getAttribute("aria-valuenow") === "70");
   const rewindVisibleState = await samePage.evaluate((futureId) => ({
     contextId: document.querySelector("[data-route-point-context]")?.getAttribute("data-route-point-id") ?? null,
@@ -560,6 +562,27 @@ try {
     && rewindVisibleState.switcherCount === 0
     && rewindVisibleState.futureSwitchCount === 0
     && rewindVisibleState.cursor === "70");
+
+  await timeTrack.press("End");
+  for (let step = 0; step < 5; step += 1) await timeTrack.press("ArrowLeft");
+  await samePage.waitForFunction(() => document.querySelector(".globe-time-scrubber__track")?.getAttribute("aria-valuenow") === "95");
+  await samePage.locator(`[data-route-point-context-switch="${same07Id}"]`).click();
+  await samePage.waitForFunction((id) => document.querySelector("[data-route-point-context]")?.getAttribute("data-route-point-id") === id, same07Id);
+  const futureNeighbourState = await samePage.evaluate((futureLabel) => {
+    const order = document.querySelector("[data-route-point-context-order]");
+    const labels = order ? [...order.querySelectorAll("span")].map((span) => span.textContent ?? "") : [];
+    return {
+      contextId: document.querySelector("[data-route-point-context]")?.getAttribute("data-route-point-id") ?? null,
+      cursor: document.querySelector(".globe-time-scrubber__track")?.getAttribute("aria-valuenow"),
+      orderLabels: labels,
+      futureLabelLeaked: labels.some((label) => label.includes(futureLabel)),
+    };
+  }, sameCoordinateRoutePoints[7].label);
+  record("rewind hides a future route-order neighbour label from selected same-coordinate context", { futureNeighbourState },
+    futureNeighbourState.contextId === same07Id
+    && futureNeighbourState.cursor === "95"
+    && futureNeighbourState.orderLabels.length === 1
+    && !futureNeighbourState.futureLabelLeaked);
 
   await timeTrack.press("Home");
   await samePage.waitForFunction(() => document.querySelector("[data-route-point-context]") === null);

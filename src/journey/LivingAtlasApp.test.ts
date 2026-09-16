@@ -1090,10 +1090,12 @@ describe("Route Point context integration (#291)", () => {
     expect(switcher).toContain("visibleSameCoordinateRoutePoints.map");
     expect(appSource).toContain("temporallyVisibleRoutePointContextRefs(");
     expect(appSource).toContain("routePointContextTemporallyVisible(");
-    expect(appSource).toContain("routePointContextTemporalProgress");
+    expect(appSource).toContain("routePointContextTemporalReveal");
+    expect(appSource).toContain("journeys: timeCursor.reveal.journeyProgress");
+    expect(appSource).toContain("points: timeCursor.reveal.pointProgress");
     expect(switcher).toContain('data-route-point-context-order');
-    expect(switcher).toContain('context.previousRoutePoint.routePointLabel');
-    expect(switcher).toContain('context.nextRoutePoint.routePointLabel');
+    expect(switcher).toContain('visiblePreviousRoutePoint.routePointLabel');
+    expect(switcher).toContain('visibleNextRoutePoint.routePointLabel');
     expect(switcher).not.toContain('timeCursor.selectPoint');
     expect(switcher).not.toContain('cameraCommand');
     expect(switcher).not.toContain('startPlayback');
