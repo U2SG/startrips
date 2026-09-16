@@ -285,7 +285,12 @@ the row to be `ready` and pinned to exactly that asset and that verified
 stored-byte identity. Replacing the cover, reordering media, replacing the
 photograph behind it, deleting the source or the Journey, supersession, or the
 member leaving the Atlas therefore stops new display URLs on the very next
-request, with no invalidation pass in between. What stays open is the ordinary
+request, with no invalidation pass in between. The re-resolution is ordered so
+that the reading of canonical state which *chooses* the row is taken after the
+candidate rows are in hand and immediately before signing, so a cover that moves
+while they are being fetched is caught rather than served; a Journey holding a
+ready row for the old cover beside one for the new is served the new one. What
+stays open is the ordinary
 signed-URL window every private read in the product has: a cover replaced a
 moment *after* a signature is minted leaves that one URL alive for its TTL. It
 is bounded by the owner media-read policy, and it is the owner's own capability

@@ -469,11 +469,22 @@ export async function enqueueCoverRevealDerivative(
  * and media row locks for no gain, since declining to serve the row is already
  * the whole protection. Nothing here takes a lock at all.
  *
+ * Canonical state is read twice on purpose, and the ready rows are fetched
+ * between the two. The first reading decides only whether there is anything
+ * worth looking for and answers an ineligible Journey; the SECOND one, taken
+ * after the rows are in hand and immediately before signing, is what chooses
+ * the row. A cover that moves while those rows are being fetched is therefore
+ * caught rather than served — which a single consistent snapshot of state and
+ * rows together could not do, since such a snapshot would simply agree with
+ * the older reading.
+ *
  * What is left open is the ordinary signed-URL window every private read in
  * the product has: a cover replaced a moment AFTER this signature is minted
  * leaves one already-issued URL alive for its TTL. That is bounded by the
  * owner media-read policy and it is the owner's own capability to the owner's
- * own derivative of the owner's own cover; the next read returns none.
+ * own derivative of the owner's own cover; the next read returns none. It is a
+ * different window from the one above and the only one that remains: no
+ * ordering of reads can close it, because it opens after the last of them.
  */
 export async function readCoverRevealDisplay(
   journeyId: string,
@@ -502,21 +513,50 @@ export async function readCoverRevealDisplay(
     return { ok: true, derivative: null, reason: eligibility.reason };
   }
 
-  const [ready] = await db
+  // Every ready row this Journey has under the approved generation contract,
+  // NOT the one pinned to the reading of the cover taken above. The live
+  // identity index is unique per source, so a Journey whose cover moved and
+  // was re-derived before the reconciler swept can legitimately hold a ready
+  // row for the old cover and one for the new; pinning this query to a cover
+  // reading and taking the first row would make the choice between them depend
+  // on which reading happened to be current. The set is bounded by that same
+  // index, and the current cover picks from it below.
+  const readyRows = await db
     .select()
     .from(coverRevealDerivatives)
     .where(and(
       eq(coverRevealDerivatives.journeyId, journeyId),
-      eq(coverRevealDerivatives.sourceMediaAssetId, eligibility.source.id),
-      eq(coverRevealDerivatives.sourceContentHash, eligibility.contentHash),
       eq(coverRevealDerivatives.generationKind, COVER_REVEAL_GENERATION_KIND),
       eq(
         coverRevealDerivatives.generationVersion,
         COVER_REVEAL_GENERATION_VERSION,
       ),
       eq(coverRevealDerivatives.state, "ready"),
-    ))
-    .limit(1);
+    ));
+
+  // The last word on canonical state is read AFTER the rows and immediately
+  // before the capability is minted, because #386 asks for revalidation per
+  // ISSUANCE and not merely once per request. Re-running the whole
+  // `loadJourneyState` + eligibility pair rather than comparing a remembered
+  // field re-checks Atlas membership, the deletion grace window and the cover
+  // revision together, which is exactly the set a capability must not outlive:
+  // a cover replaced, a source deleted or the Journey put into its deletion
+  // grace window while the rows above were being fetched all land here and
+  // mint nothing.
+  const current = await loadJourneyState(journeyId, atlasId);
+  if (!current) return { ok: false, error: "JOURNEY_UNAVAILABLE", status: 404 };
+  const currentEligibility = evaluateCoverRevealEligibility(current);
+  if (!currentEligibility.ok) {
+    return { ok: true, derivative: null, reason: currentEligibility.reason };
+  }
+
+  // Both halves of the pin are compared, because the asset id alone does not
+  // identify a revision: replacing the photograph behind the same cover asset
+  // keeps the id and moves the verified stored-byte identity.
+  const ready = readyRows.find((row) => (
+    row.sourceMediaAssetId === currentEligibility.source.id
+    && row.sourceContentHash === currentEligibility.contentHash
+  ));
 
   // The output columns are checked rather than assumed. `ready` is written in
   // one statement with all five of them, so a row missing any is not a state

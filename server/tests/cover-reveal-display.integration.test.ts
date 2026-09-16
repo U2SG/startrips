@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createEmailVerificationToken } from "better-auth/api";
-import { eq, inArray } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { app } from "../app";
 import { serverConfig } from "../config";
@@ -620,6 +620,78 @@ describe("#386 cover-reveal display read", () => {
       expect(await read(journeyId, backend))
         .toMatchObject({ derivative: null, reason: "NO_READY_DERIVATIVE" });
       expect(backend.signedReads).toHaveLength(1);
+    });
+
+    /**
+     * The live-identity index is unique per source, so a Journey whose cover
+     * moved and was re-derived before the reconciler swept legitimately holds
+     * a ready row for the old cover AND one for the new. The row served is the
+     * one the CURRENT cover pins, never simply the first ready row on the
+     * Journey: it is the last reading of canonical state that chooses, which
+     * is also why a reading taken before the rows were fetched cannot be the
+     * one that decides.
+     */
+    it("serves the current cover's row when a superseded ready row survives beside it", async () => {
+      const { journeyId, asset, backend, row: stale } = await publishedDerivative();
+
+      const replacement = await addVisualAsset(journeyId, 1);
+      await db
+        .update(journeys)
+        .set({ coverMediaAssetId: replacement.id })
+        .where(eq(journeys.id, journeyId));
+
+      // Derive the new cover through the real protocol, with no reconciler
+      // pass in between, so both rows are `ready` at once.
+      const enqueued = await enqueueCoverRevealDerivative(
+        journeyId,
+        identity.atlasId,
+        backend.dependencies,
+      );
+      expect(enqueued.ok).toBe(true);
+      const claim = await claimCoverRevealJob(
+        SETTINGS,
+        new Date(),
+        backend.dependencies,
+      );
+      expect(claim.ok).toBe(true);
+      if (!claim.ok) throw new Error("unreachable");
+      await signCoverRevealOutputUpload(
+        claim.job.id,
+        claim.leaseToken,
+        SETTINGS,
+        backend.dependencies,
+      );
+      expect(await completeCoverRevealJob(
+        claim.job.id,
+        claim.leaseToken,
+        SETTINGS,
+        backend.dependencies,
+      )).toMatchObject({ ok: true });
+
+      const live = await db
+        .select()
+        .from(coverRevealDerivatives)
+        .where(and(
+          eq(coverRevealDerivatives.journeyId, journeyId),
+          eq(coverRevealDerivatives.state, "ready"),
+        ));
+      expect(live).toHaveLength(2);
+
+      const result = await read(journeyId, backend);
+      if (!result.ok || !result.derivative) throw new Error("expected display");
+      expect(result.derivative.id).toBe(claim.job.id);
+      expect(result.derivative.id).not.toBe(stale.id);
+      expect(result.derivative.sourceMediaAssetId).toBe(replacement.id);
+      expect(result.derivative.sourceMediaAssetId).not.toBe(asset.id);
+      // The capability is minted over the CURRENT row's object, never the
+      // surviving stale one.
+      const [row] = await db
+        .select()
+        .from(coverRevealDerivatives)
+        .where(eq(coverRevealDerivatives.id, claim.job.id));
+      const lastRead = backend.signedReads.at(-1);
+      expect(lastRead?.key).toBe(row.outputStorageKey);
+      expect(lastRead?.key).not.toBe(stale.outputStorageKey);
     });
 
     it("stops issuing display URLs when the pinned source is deleted", async () => {
