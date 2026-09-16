@@ -235,6 +235,33 @@ const sharedSameCoordinateJourney = {
   media: [],
 };
 
+const crossReadingJourneyId = "qa-cross-reading-journey";
+const crossReadingAId = "qa-cross-reading-a";
+const crossReadingBId = "qa-cross-reading-b";
+const crossReadingCId = "qa-cross-reading-c";
+const crossReadingTargetNote = "只是在这里读到第二段文字，不改变刚才的观察位置。";
+const crossReadingJourney = {
+  id: crossReadingJourneyId,
+  atlasId: "qa-atlas",
+  title: "跨路线点临时阅读",
+  startedOn: "2026-05-01",
+  endedOn: "2026-05-03",
+  note: "",
+  lightColor: "#77c8c2",
+  lightEffect: null,
+  coverMediaAssetId: null,
+  revision: 1,
+  createdByUserId: "qa-user",
+  createdAt: "2026-05-01T00:00:00.000Z",
+  updatedAt: "2026-05-03T00:00:00.000Z",
+  routePoints: [
+    { id: crossReadingAId, journeyId: crossReadingJourneyId, sortOrder: 0, latitude: 22.28, longitude: 114.15, label: "来源 A", isStop: true, occurredAt: "2026-05-01T09:00:00.000Z", note: "A 的记录", createdAt: "2026-05-01T09:00:00.000Z" },
+    { id: crossReadingBId, journeyId: crossReadingJourneyId, sortOrder: 1, latitude: 22.29, longitude: 114.16, label: "阅读目标 B", isStop: false, occurredAt: "2026-05-02T09:00:00.000Z", note: crossReadingTargetNote, createdAt: "2026-05-02T09:00:00.000Z" },
+    { id: crossReadingCId, journeyId: crossReadingJourneyId, sortOrder: 2, latitude: 22.30, longitude: 114.17, label: "来源 C", isStop: true, occurredAt: "2026-05-03T09:00:00.000Z", note: "C 的记录", createdAt: "2026-05-03T09:00:00.000Z" },
+  ],
+  media: [],
+};
+
 const browser = await launchQaBrowser({
   args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"],
 });
@@ -711,6 +738,148 @@ try {
   record("same-coordinate reduced-motion page errors", { pageErrors: sameReducedRun.pageErrors }, sameReducedRun.pageErrors.length === 0);
   await sameReducedPage.close();
 
+  // ST-082 / #378: adjacent note reading is transient and source-bound. The
+  // same target can be read from two legitimate sources without rewriting the
+  // committed Route Point context; only explicit Story escalation may commit it.
+  const readingRun = await openFocusAtlas({
+    journeysPayload: [crossReadingJourney],
+    initialPointId: crossReadingAId,
+  });
+  const readingPage = readingRun.page;
+  await activateRoutePointId(readingPage, crossReadingAId);
+  await readingPage.locator(`[data-route-point-context][data-route-point-id="${crossReadingAId}"]`).waitFor({ state: "visible", timeout: 5_000 });
+  await readingPage.locator(`[data-cross-point-reading-open="${crossReadingBId}"]`).click();
+  const readingSurface = readingPage.locator("[data-cross-point-reading]");
+  await readingSurface.waitFor({ state: "visible", timeout: 5_000 });
+  const fromAState = await readingSurface.evaluate((node) => ({
+    source: node.getAttribute("data-cross-point-reading-source"),
+    target: node.getAttribute("data-cross-point-reading-target"),
+    text: node.textContent ?? "",
+    underlyingContext: document.querySelector("[data-route-point-context]")?.getAttribute("data-route-point-id") ?? null,
+    mediaCount: Number(node.getAttribute("data-cross-point-reading-media-count")),
+  }));
+  record("cross-point reading from A keeps provenance and committed source", { fromAState },
+    fromAState.source === crossReadingAId
+    && fromAState.target === crossReadingBId
+    && fromAState.underlyingContext === crossReadingAId
+    && fromAState.text.includes(crossReadingTargetNote)
+    && fromAState.text.includes("跨路线点临时阅读")
+    && fromAState.mediaCount === 0);
+
+  await readingPage.keyboard.press("Escape");
+  await readingPage.waitForFunction(() => document.querySelector("[data-cross-point-reading]") === null);
+  record("Escape closes transient reading back to source A", {},
+    await readingPage.locator(`[data-route-point-context][data-route-point-id="${crossReadingAId}"]`).count() === 1);
+
+  await activateRoutePointId(readingPage, crossReadingCId);
+  await readingPage.locator(`[data-route-point-context][data-route-point-id="${crossReadingCId}"]`).waitFor({ state: "visible", timeout: 5_000 });
+  await readingPage.locator(`[data-cross-point-reading-open="${crossReadingBId}"]`).click();
+  await readingSurface.waitFor({ state: "visible", timeout: 5_000 });
+  const fromCState = await readingSurface.evaluate((node) => ({
+    source: node.getAttribute("data-cross-point-reading-source"),
+    target: node.getAttribute("data-cross-point-reading-target"),
+    underlyingContext: document.querySelector("[data-route-point-context]")?.getAttribute("data-route-point-id") ?? null,
+  }));
+  record("the same note restores a distinct legitimate source C", { fromCState },
+    fromCState.source === crossReadingCId
+    && fromCState.target === crossReadingBId
+    && fromCState.underlyingContext === crossReadingCId);
+  await readingPage.locator("[data-cross-point-reading-close]").click();
+  await readingPage.waitForFunction(() => document.querySelector("[data-cross-point-reading]") === null);
+  record("explicit close returns to source C", {},
+    await readingPage.locator(`[data-route-point-context][data-route-point-id="${crossReadingCId}"]`).count() === 1);
+
+  await readingPage.locator(`[data-cross-point-reading-open="${crossReadingBId}"]`).click();
+  await readingSurface.waitFor({ state: "visible", timeout: 5_000 });
+  await readingPage.evaluate(() => window.history.back());
+  await readingPage.waitForFunction(() => document.querySelector("[data-cross-point-reading]") === null);
+  record("Browser Back closes only transient reading and keeps source C", {},
+    await readingPage.locator(`[data-route-point-context][data-route-point-id="${crossReadingCId}"]`).count() === 1);
+
+  await readingPage.locator(`[data-cross-point-reading-open="${crossReadingBId}"]`).click();
+  await readingSurface.waitFor({ state: "visible", timeout: 5_000 });
+  await readingPage.locator("[data-cross-point-reading-escalate]").click();
+  await readingPage.locator(".journey-story").waitFor({ state: "visible", timeout: 5_000 });
+  await readingPage.locator(`.journey-story button[data-route-point-id="${crossReadingBId}"][aria-pressed="true"]`).waitFor({ state: "attached", timeout: 5_000 });
+  const escalatedStory = await readingPage.locator(".journey-story").evaluate((node) => ({
+    text: node.textContent ?? "",
+    transientReaderCount: document.querySelectorAll("[data-cross-point-reading]").length,
+  }));
+  record("explicit Story escalation owns target B and leaves transient reader", { escalatedStory },
+    escalatedStory.text.includes(crossReadingTargetNote)
+    && escalatedStory.transientReaderCount === 0);
+  await readingPage.locator(".journey-story__close").click();
+  await readingPage.locator(`[data-route-point-context][data-route-point-id="${crossReadingBId}"]`).waitFor({ state: "visible", timeout: 5_000 });
+  record("Story escalation may commit target B under the existing return contract", {},
+    await readingPage.locator(`[data-route-point-context][data-route-point-id="${crossReadingBId}"]`).count() === 1);
+  record("cross-point reading page errors", { pageErrors: readingRun.pageErrors }, readingRun.pageErrors.length === 0);
+  await readingPage.close();
+
+  const readingReducedRun = await openFocusAtlas({
+    journeysPayload: [crossReadingJourney],
+    initialPointId: crossReadingAId,
+    reduceMotion: true,
+  });
+  const readingReducedPage = readingReducedRun.page;
+  await activateRoutePointId(readingReducedPage, crossReadingAId);
+  await readingReducedPage.locator(`[data-cross-point-reading-open="${crossReadingBId}"]`).click();
+  await readingReducedPage.locator("[data-cross-point-reading]").waitFor({ state: "visible", timeout: 5_000 });
+  const reducedReadingState = await readingReducedPage.evaluate(() => ({
+    reduced: matchMedia("(prefers-reduced-motion: reduce)").matches,
+    clones: document.querySelectorAll("[data-shared-element-clone]").length,
+    source: document.querySelector("[data-cross-point-reading]")?.getAttribute("data-cross-point-reading-source") ?? null,
+  }));
+  await readingReducedPage.keyboard.press("Escape");
+  await readingReducedPage.waitForFunction(() => document.querySelector("[data-cross-point-reading]") === null);
+  record("reduced motion keeps transient reading nonspatial and returns to A", { reducedReadingState },
+    reducedReadingState.reduced
+    && reducedReadingState.clones === 0
+    && reducedReadingState.source === crossReadingAId
+    && await readingReducedPage.locator(`[data-route-point-context][data-route-point-id="${crossReadingAId}"]`).count() === 1);
+  record("cross-point reduced-motion page errors", { pageErrors: readingReducedRun.pageErrors }, readingReducedRun.pageErrors.length === 0);
+  await readingReducedPage.close();
+
+  const readingMobileRun = await openFocusAtlas({
+    viewport: { width: 390, height: 844 },
+    compact: true,
+    journeysPayload: [crossReadingJourney],
+    initialPointId: crossReadingAId,
+  });
+  const readingMobilePage = readingMobileRun.page;
+  await activateRoutePointId(readingMobilePage, crossReadingAId);
+  await readingMobilePage.locator(`[data-cross-point-reading-open="${crossReadingBId}"]`).click();
+  const mobileReadingSurface = readingMobilePage.locator("[data-cross-point-reading]");
+  await mobileReadingSurface.waitFor({ state: "visible", timeout: 5_000 });
+  const mobileReadingChromeState = await readingMobilePage.evaluate(() => {
+    const layer = document.querySelector("[data-cross-point-reading-layer]");
+    const header = document.querySelector(".mobile-v2__header");
+    const chrome = document.querySelector(".mobile-v2__chrome");
+    const close = document.querySelector("[data-cross-point-reading-close]");
+    const escalate = document.querySelector("[data-cross-point-reading-escalate]");
+    const hitOwner = (element) => {
+      if (!(element instanceof HTMLElement)) return null;
+      const rect = element.getBoundingClientRect();
+      const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+      return hit instanceof Element ? hit.closest("button") : null;
+    };
+    return {
+      layerZ: layer ? Number(getComputedStyle(layer).zIndex) : null,
+      headerZ: header ? Number(getComputedStyle(header).zIndex) : null,
+      chromeZ: chrome ? Number(getComputedStyle(chrome).zIndex) : null,
+      closeOwnsHit: hitOwner(close) === close,
+      escalateOwnsHit: hitOwner(escalate) === escalate,
+    };
+  });
+  record("mobile transient reader stays above persistent chrome and owns pointer hits", { mobileReadingChromeState },
+    mobileReadingChromeState.layerZ > mobileReadingChromeState.headerZ
+    && mobileReadingChromeState.layerZ > mobileReadingChromeState.chromeZ
+    && mobileReadingChromeState.closeOwnsHit
+    && mobileReadingChromeState.escalateOwnsHit);
+  await readingMobilePage.keyboard.press("Escape");
+  await readingMobilePage.waitForFunction(() => document.querySelector("[data-cross-point-reading]") === null);
+  record("cross-point mobile page errors", { pageErrors: readingMobileRun.pageErrors }, readingMobileRun.pageErrors.length === 0);
+  await readingMobilePage.close();
+
   const guestPage = await browser.newPage({ viewport: { width: 1280, height: 720 } });
   const guestPageErrors = [];
   let guestOwnerRouteHits = 0;
@@ -791,7 +960,9 @@ try {
     text: node.textContent ?? "",
     mediaCueCount: node.querySelectorAll("[data-route-point-context-media]").length,
     controlsCount: document.querySelectorAll(".living-atlas-globe__controls").length,
-    permanentToolbarCount: document.querySelectorAll(".living-atlas__route-point-context nav, .living-atlas__route-point-context [role=toolbar]").length,
+    readingNavigationCount: node.querySelectorAll("nav.living-atlas__route-point-context-reading-links").length,
+    readingNavigationLabel: node.querySelector("nav.living-atlas__route-point-context-reading-links")?.getAttribute("aria-label") ?? null,
+    permanentToolbarCount: node.querySelectorAll("[role=toolbar]").length,
   }));
   const textFocusAfter = await sceneFocusSnapshot(textPage);
   record("text-only Route Point stays truthful", { textState },
@@ -802,6 +973,9 @@ try {
     && !textState.text.includes("正在载入")
     && textState.mediaCueCount === 0
     && textState.controlsCount === 0
+    && textState.readingNavigationCount === 1
+    && textState.readingNavigationLabel === "阅读相邻路线点记录"
+    && textState.text.includes("读上一段")
     && textState.permanentToolbarCount === 0);
   record("text-only reveal keeps camera focus owner", { textFocusBefore, textFocusAfter },
     JSON.stringify(textFocusBefore) === JSON.stringify(textFocusAfter));

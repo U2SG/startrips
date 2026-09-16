@@ -4818,6 +4818,163 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   letter-spacing: 0.04em;
 }
 
+.living-atlas__route-point-context-reading-links {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.living-atlas__route-point-context-reading-links button {
+  min-height: 44px;
+  display: grid;
+  gap: 3px;
+  align-content: center;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--atlas-text);
+  cursor: pointer;
+  text-align: left;
+}
+
+.living-atlas__route-point-context-reading-links button[data-cross-point-reading-direction="next"] {
+  text-align: right;
+}
+
+.living-atlas__route-point-context-reading-links button > span {
+  color: var(--atlas-muted);
+  font-size: 8.5px;
+  letter-spacing: 0.08em;
+}
+
+.living-atlas__route-point-context-reading-links button > strong {
+  overflow: hidden;
+  font-size: 10.5px;
+  font-weight: 560;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.living-atlas__cross-point-reading-layer {
+  position: absolute;
+  z-index: 84;
+  inset: 0;
+  pointer-events: none;
+}
+
+.living-atlas__cross-point-reading-backdrop {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  background: rgba(0, 0, 0, 0.18);
+  pointer-events: auto;
+}
+
+.living-atlas__cross-point-reading {
+  position: absolute;
+  top: 50%;
+  right: calc(env(safe-area-inset-right) + 24px);
+  width: min(360px, calc(100vw - 48px));
+  max-height: min(72svh, 640px);
+  padding: 20px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid rgba(118, 198, 188, 0.22);
+  border-radius: 20px;
+  outline: none;
+  background: rgba(2, 10, 11, 0.9);
+  box-shadow: 0 32px 88px rgba(0, 0, 0, 0.42);
+  backdrop-filter: blur(20px);
+  pointer-events: auto;
+  transform: translateY(-50%);
+}
+
+.living-atlas__cross-point-reading > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.living-atlas__cross-point-reading > header p,
+.living-atlas__cross-point-reading > header span,
+.living-atlas__cross-point-reading-provenance,
+.living-atlas__cross-point-reading > footer > span {
+  margin: 0;
+  color: var(--atlas-muted);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+}
+
+.living-atlas__cross-point-reading > header h2 {
+  margin: 5px 0 4px;
+  color: var(--atlas-text);
+  font-size: 19px;
+  font-weight: 520;
+  line-height: 1.15;
+}
+
+.living-atlas__cross-point-reading > header button {
+  width: 44px;
+  height: 44px;
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.045);
+  color: var(--atlas-text);
+  cursor: pointer;
+}
+
+.living-atlas__cross-point-reading-provenance {
+  margin-top: 18px;
+}
+
+.living-atlas__cross-point-reading > blockquote {
+  margin: 18px 0 0;
+  color: #d3ded9;
+  font-size: 14px;
+  line-height: 1.75;
+}
+
+.living-atlas__cross-point-reading > footer {
+  display: grid;
+  gap: 10px;
+  margin-top: 22px;
+}
+
+.living-atlas__cross-point-reading > footer button {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 14px;
+  border: 1px solid rgba(118, 198, 188, 0.2);
+  border-radius: 999px;
+  background: rgba(118, 227, 211, 0.055);
+  color: var(--atlas-text);
+  cursor: pointer;
+}
+
+.living-atlas[data-mobile-v2="on"] .living-atlas__cross-point-reading-layer {
+  z-index: 200;
+}
+
+.living-atlas[data-mobile-v2="on"] .living-atlas__cross-point-reading {
+  top: auto;
+  right: calc(env(safe-area-inset-right) + 12px);
+  bottom: calc(env(safe-area-inset-bottom) + 12px);
+  left: calc(env(safe-area-inset-left) + 12px);
+  width: auto;
+  max-height: calc(100svh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 24px);
+  border-radius: 22px;
+  transform: none;
+}
+
 .living-atlas[data-mobile-v2="on"] .living-atlas__route-point-context {
   top: auto;
   right: calc(env(safe-area-inset-right) + 12px);
