@@ -66,6 +66,7 @@ describe("owner and guest atlas views", () => {
       "createShare",
       "deleteJourney",
       "deleteMedia",
+      "enqueueCoverReveal",
       "listShares",
       "moveJourneyMedia",
       "recordHomeBaseDismissal",
@@ -93,6 +94,7 @@ describe("owner and guest atlas views", () => {
   it("does not expose Story note editing when journey edits are disabled", () => {
     const view = createOwnerAtlasView({ canEditJourney: false });
     expect(view.mutations?.updateJourneyNotes).toBeUndefined();
+    expect(view.mutations?.enqueueCoverReveal).toBeUndefined();
   });
 
   it("gives a guest view no mutation client at all", () => {

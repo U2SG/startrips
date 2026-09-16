@@ -39,6 +39,7 @@ import { StoryMediaRail } from "./StoryMediaRail";
 import { StoryMediaPages } from "./StoryMediaPages";
 import { StoryMediaOrganizer } from "./StoryMediaOrganizer";
 import { StoryNotesEditor, type StoryNotesSaveState } from "./StoryNotesEditor";
+import { CoverRevealRequest } from "./CoverRevealRequest";
 import { MEDIA_STACK_DURATION, mediaStackClip, mediaStackOpacity, mediaStackNeighbors, mediaStackPull, mediaStackRest, mediaStackReveal } from "./mediaStackMotion";
 import "../styles/starlight-media.css";
 import "../styles/story-experience.css";
@@ -4342,6 +4343,15 @@ export function JourneyStory({
             {/* #10: a selected route point shows its own note near the place
                 name — distinct from system metadata. Journey-scoped view never
                 fabricates a note. */}
+            {mediaEditing && capabilities.canEditJourney && mutations?.enqueueCoverReveal && cover ? (
+              <CoverRevealRequest
+                key={`${journey.id}:${cover.id}:${cover.contentHash ?? ""}`}
+                journeyId={journey.id}
+                cover={cover}
+                enqueue={mutations.enqueueCoverReveal}
+                disabled={mutationPending || deleteState !== "idle"}
+              />
+            ) : null}
             {notesEditing && updateJourneyNotes ? (
               <StoryNotesEditor
                 journeyNote={journeyNoteDraft ?? journey.note ?? ""}

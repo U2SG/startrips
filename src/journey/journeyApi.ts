@@ -117,6 +117,24 @@ export async function listJourneys(fetcher: Fetcher = fetch): Promise<Journey[]>
   return payload.journeys;
 }
 
+export type CoverRevealRequestResult = {
+  id: string;
+  state: string;
+  sourceMediaAssetId: string;
+};
+
+export async function enqueueCoverReveal(
+  journeyId: string,
+  fetcher: Fetcher = fetch,
+): Promise<CoverRevealRequestResult> {
+  const payload = await requestJson<{ derivative: CoverRevealRequestResult }>(
+    `/api/cover-reveal/journeys/${encodeURIComponent(journeyId)}`,
+    { method: "POST" },
+    fetcher,
+  );
+  return payload.derivative;
+}
+
 export async function createJourney(
   input: JourneyInput,
   fetcher: Fetcher = fetch,

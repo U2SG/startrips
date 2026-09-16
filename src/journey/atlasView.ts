@@ -1,6 +1,7 @@
 import { createContext, useContext } from "react";
 import {
   createHomeBasePeriod,
+  enqueueCoverReveal,
   createShare,
   deleteJourney,
   deleteMedia,
@@ -126,6 +127,7 @@ export type UploadJourneyMedia = typeof import("./JourneyComposer")["uploadJourn
  * hid the control and left deletion reachable. Absence must mean absence.
  */
 export type AtlasMutations = {
+  enqueueCoverReveal?: typeof enqueueCoverReveal;
   /** Story-only notes editing, exposed only when the view allows journey edits. */
   updateJourneyNotes?: (journeyId: string, input: JourneyInput) => Promise<Journey>;
   deleteJourney: (journeyId: string) => Promise<void>;
@@ -202,7 +204,10 @@ export function createOwnerAtlasMutations(canEditJourney = true): AtlasMutations
     listShares,
     revokeShare,
   };
-  if (canEditJourney) mutations.updateJourneyNotes = updateJourney;
+  if (canEditJourney) {
+    mutations.updateJourneyNotes = updateJourney;
+    mutations.enqueueCoverReveal = enqueueCoverReveal;
+  }
   return mutations;
 }
 
