@@ -162,16 +162,23 @@ function JourneyRoutesQaPreview() {
     if (routeOpticsQa) {
       globeQaRoutes.forEach((route) => {
         const isTarget = route.id === "qa-route-southwest";
-        const progress = !isTarget ? 0 : routeOpticsStage === "browse" ? 1 : routeOpticsStage === "playing" ? 0.55 : 0.22;
+        const isOverlap = route.id === "qa-route-rhine";
+        const progress = isTarget
+          ? (routeOpticsStage === "browse" ? 1 : routeOpticsStage === "playing" ? 0.55 : 0.22)
+          : isOverlap && routeOpticsStage !== "browse"
+            ? (routeOpticsStage === "playing" ? 0.4 : 0.2)
+            : 0;
         journeys.set(route.id, progress);
         route.points.forEach((_point, pointIndex) => {
-          const pointProgress = !isTarget
-            ? 0
-            : routeOpticsStage === "browse"
+          const pointProgress = isTarget
+            ? routeOpticsStage === "browse"
               ? 1
               : routeOpticsStage === "playing"
                 ? (pointIndex < 2 ? 1 : pointIndex === 2 ? 0.5 : 0)
-                : (pointIndex === 0 ? 1 : pointIndex === 1 ? 0.35 : 0);
+                : (pointIndex === 0 ? 1 : pointIndex === 1 ? 0.35 : 0)
+            : isOverlap && routeOpticsStage !== "browse"
+              ? (pointIndex === 0 ? 1 : pointIndex === 1 ? 0.3 : 0)
+              : 0;
           points.set(`${route.id}:${pointIndex}`, pointProgress);
         });
       });
@@ -203,6 +210,11 @@ function JourneyRoutesQaPreview() {
             journeyId: "qa-route-southwest",
             routePointId: "qa-p-18",
             pointIndex: 3,
+          } : null}
+          narrativeJourneyRoutePoint={routeOpticsQa && routeOpticsStage !== "browse" ? {
+            journeyId: "qa-route-southwest",
+            routePointId: routeOpticsStage === "playing" ? "qa-p-17" : "qa-p-16",
+            pointIndex: routeOpticsStage === "playing" ? 2 : 1,
           } : null}
           focusRoute={activeRoute}
           focusRevision={focusRevision}

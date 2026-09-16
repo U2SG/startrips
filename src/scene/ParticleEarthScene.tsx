@@ -1314,6 +1314,7 @@ interface ParticleEarthSceneProps {
   journeyRoutes?: readonly JourneyRoute[];
   activeJourneyRouteId?: string | null;
   selectedJourneyRoutePoint?: RoutePointSelection;
+  narrativeJourneyRoutePoint?: RoutePointSelection;
   onJourneyRouteActivate?: (id: string) => void;
   onJourneyRoutePointActivate?: (journeyId: string, routePointId: string) => void;
   onHomeBaseActivate?: (periodId: string) => void;
@@ -1707,6 +1708,7 @@ export function ParticleEarthScene({
   journeyRoutes = [],
   activeJourneyRouteId,
   selectedJourneyRoutePoint,
+  narrativeJourneyRoutePoint,
   onJourneyRouteActivate,
   onJourneyRoutePointActivate,
   onHomeBaseActivate,
@@ -1742,6 +1744,7 @@ export function ParticleEarthScene({
   const latestJourneyRoutes = useRef(journeyRoutes);
   const latestActiveJourneyRouteId = useRef(activeJourneyRouteId);
   const latestSelectedJourneyRoutePoint = useRef(selectedJourneyRoutePoint);
+  const latestNarrativeJourneyRoutePoint = useRef(narrativeJourneyRoutePoint);
   const latestOnJourneyRouteActivate = useRef(onJourneyRouteActivate);
   const latestOnJourneyRoutePointActivate = useRef(onJourneyRoutePointActivate);
   const latestOnHomeBaseActivate = useRef(onHomeBaseActivate);
@@ -1773,6 +1776,7 @@ export function ParticleEarthScene({
   latestJourneyRoutes.current = journeyRoutes;
   latestActiveJourneyRouteId.current = activeJourneyRouteId;
   latestSelectedJourneyRoutePoint.current = selectedJourneyRoutePoint;
+  latestNarrativeJourneyRoutePoint.current = narrativeJourneyRoutePoint;
   latestOnJourneyRouteActivate.current = onJourneyRouteActivate;
   latestOnJourneyRoutePointActivate.current = onJourneyRoutePointActivate;
   latestOnHomeBaseActivate.current = onHomeBaseActivate;
@@ -2519,7 +2523,7 @@ export function ParticleEarthScene({
         const routeAttention = resolveRouteAttentionRole({
           routeId: entry.routeId,
           selectedRouteId: latestActiveJourneyRouteId.current,
-          temporalReveal: latestTemporalReveal.current,
+          narrativeRouteId: latestNarrativeJourneyRoutePoint.current?.journeyId,
         });
         entry.group.dataset.attentionRole = routeAttention;
         for (const point of entry.points) {
@@ -2527,9 +2531,9 @@ export function ParticleEarthScene({
             routeId: entry.routeId,
             routePointId: point.routePointId,
             pointIndex: point.routePointIndex,
-            pointCount: entry.points.length,
             isStop: point.isStop,
             selection: latestSelectedJourneyRoutePoint.current,
+            narrativeSelection: latestNarrativeJourneyRoutePoint.current,
             temporalReveal: latestTemporalReveal.current,
           });
           point.element.dataset.semanticRole = presentation.semanticRole;
@@ -2777,9 +2781,9 @@ export function ParticleEarthScene({
             routeId: route.id,
             routePointId: point.id,
             pointIndex: routePointIndex,
-            pointCount: route.points.length,
             isStop: point.isStop,
             selection: latestSelectedJourneyRoutePoint.current,
+            narrativeSelection: latestNarrativeJourneyRoutePoint.current,
             temporalReveal: latestTemporalReveal.current,
           });
           element.dataset.semanticRole = presentation.semanticRole;
@@ -5735,6 +5739,10 @@ export function ParticleEarthScene({
         latestSelectedJourneyRoutePoint.current = selection;
         syncRoutePresentations();
       },
+      setNarrativeJourneyRoutePoint(selection: RoutePointSelection) {
+        latestNarrativeJourneyRoutePoint.current = selection;
+        syncRoutePresentations();
+      },
       // #21: update per-route AND per-point temporal reveal without rebuilding
       // the layer, so the time cursor does not restart route animations.
       // Review P2: points light up one stop at a time (route progress still
@@ -5898,6 +5906,16 @@ export function ParticleEarthScene({
     selectedJourneyRoutePoint?.journeyId,
     selectedJourneyRoutePoint?.routePointId,
     selectedJourneyRoutePoint?.pointIndex,
+  ]);
+  useEffect(() => {
+    if (!ready) return;
+    controllerRef.current?.setNarrativeJourneyRoutePoint(narrativeJourneyRoutePoint);
+  }, [
+    controllerRef,
+    ready,
+    narrativeJourneyRoutePoint?.journeyId,
+    narrativeJourneyRoutePoint?.routePointId,
+    narrativeJourneyRoutePoint?.pointIndex,
   ]);
   useEffect(() => {
     if (!ready) return;

@@ -385,6 +385,10 @@ async function measureRouteOptics(page, routeIdentifier) {
       temporalReveal: node.getAttribute("data-temporal-reveal"),
       radius: Number(node.getAttribute("r")),
       opacity: Number.parseFloat(getComputedStyle(node).opacity),
+      fill: getComputedStyle(node).fill,
+      stroke: getComputedStyle(node).stroke,
+      strokeWidth: Number.parseFloat(getComputedStyle(node).strokeWidth),
+      filter: getComputedStyle(node).filter,
       anchorX: Number(node.getAttribute("data-anchor-x")),
       anchorY: Number(node.getAttribute("data-anchor-y")),
     }));
@@ -392,6 +396,8 @@ async function measureRouteOptics(page, routeIdentifier) {
       devicePixelRatio: window.devicePixelRatio,
       compact: document.querySelector(".particle-earth-scene")?.getAttribute("data-mobile-v2") ?? null,
       routeAttentionRole: group.getAttribute("data-attention-role"),
+      narrativeRouteIds: [...document.querySelectorAll('[data-journey-route][data-attention-role="narrative-current"]')]
+        .map((node) => node.getAttribute("data-journey-route")),
       coreWidth: readWidth(".particle-earth-route__core"),
       glowWidth: readWidth(".particle-earth-route__glow"),
       leaderOpacity: Number.parseFloat(getComputedStyle(group.querySelector(".particle-earth-route__travel-leader")).opacity),
@@ -548,6 +554,7 @@ try {
     const sameA = byId(browse1, "qa-p-15");
     const sameB = byId(browse1, "qa-p-20");
     const selected = byId(browse1, "qa-p-18");
+    const browseStop = byId(browse1, "qa-p-17");
     const narrative = byId(playing, "qa-p-17");
     const future = byId(playing, "qa-p-18");
     const rewoundCurrent = byId(rewound, "qa-p-16");
@@ -556,10 +563,15 @@ try {
     if (!near(browse1.glowWidth, 2.8) || !near(browse3.glowWidth, 2.8)) failures.push(`DPR ${sample.dpr}: selected halo changed with zoom (${browse1.glowWidth} -> ${browse3.glowWidth})`);
     if (browse1.devicePixelRatio !== sample.dpr) failures.push(`DPR ${sample.dpr}: browser reported ${browse1.devicePixelRatio}`);
     if (!selected || selected.attentionRole !== "selected" || selected.semanticRole !== "passthrough" || !near(selected.radius, 3, 0.02)) failures.push(`DPR ${sample.dpr}: browse-selected passthrough role/radius is wrong`);
+    if (!browseStop || browseStop.semanticRole !== "stop" || browseStop.fill === selected?.fill || browseStop.fill === browseStop.stroke || browseStop.strokeWidth < 1.24) failures.push(`DPR ${sample.dpr}: Stop ring paint collapsed into passthrough bead paint`);
+    if (!selected?.filter.includes("drop-shadow")) failures.push(`DPR ${sample.dpr}: selected point attention shadow was replaced by active-route brightness`);
     if (!sameA || !sameB || Math.hypot(sameA.anchorX - sameB.anchorX, sameA.anchorY - sameB.anchorY) > 0.05) failures.push(`DPR ${sample.dpr}: same-coordinate records no longer share one anchor`);
     if (!narrative || narrative.attentionRole !== "narrative-current" || !near(narrative.radius, 3.2, 0.02)) failures.push(`DPR ${sample.dpr}: narrative-current role did not outrank browse selection`);
+    if (!narrative || narrative.semanticRole !== "stop" || narrative.fill !== browseStop?.fill) failures.push(`DPR ${sample.dpr}: narrative attention overwrote the Stop ring fill`);
+    if (!narrative?.filter.includes("drop-shadow")) failures.push(`DPR ${sample.dpr}: narrative-current shadow was replaced by active-route brightness`);
     if (!future || future.temporalVisible !== "false" || future.temporalReveal !== "0.000" || future.opacity !== 0) failures.push(`DPR ${sample.dpr}: future selected Route Point remained visible`);
     if (!near(playing.coreWidth, 1.2) || !near(playing.glowWidth, 3)) failures.push(`DPR ${sample.dpr}: narrative optical weight is outside the bounded target`);
+    if (playing.narrativeRouteIds.join(",") !== routeId || rewound.narrativeRouteIds.join(",") !== routeId) failures.push(`DPR ${sample.dpr}: overlapping temporal ranges created more than one narrative-current Journey`);
     if (!rewoundCurrent || rewoundCurrent.attentionRole !== "narrative-current") failures.push(`DPR ${sample.dpr}: rewind did not move narrative-current to the last visible point`);
     if (sample.reducedMotion && playing.leaderOpacity !== 0) failures.push(`DPR ${sample.dpr}: reduced motion left the travelling leader visible`);
   }

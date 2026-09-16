@@ -40,27 +40,27 @@ export function routePointTemporalProgress(
 }
 
 /**
- * The time cursor is the only narrative-progress authority. A route only has a
- * narrative-current Route Point while the cursor is INSIDE that Journey; a
- * fully visited route has no moving/current marker. The current record is the
- * last Route Point that the existing temporal reveal says has started.
+ * Narrative/current identity is supplied by the existing time-cursor owner.
+ * Presentation never reconstructs it from route order or per-route progress.
  */
-export function narrativeCurrentRoutePointIndex(
-  routeId: string,
-  pointCount: number,
-  reveal: RouteTemporalReveal,
-) {
-  if (!reveal || pointCount <= 0) return null;
-  const journeyProgress = clamp01(reveal.journeys.get(routeId) ?? 0);
-  if (journeyProgress <= 0 || journeyProgress >= 1) return null;
-
-  let current: number | null = null;
-  for (let pointIndex = 0; pointIndex < pointCount; pointIndex += 1) {
-    if (routePointTemporalProgress(routeId, pointIndex, reveal) > 0) current = pointIndex;
-  }
-  return current;
+export function routePointIsNarrativeCurrent({
+  routeId,
+  routePointId,
+  pointIndex,
+  narrativeSelection,
+}: {
+  routeId: string;
+  routePointId?: string;
+  pointIndex: number;
+  narrativeSelection: RoutePointSelection;
+}) {
+  return routePointIsSelected({
+    routeId,
+    routePointId,
+    pointIndex,
+    selection: narrativeSelection,
+  });
 }
-
 export function routePointIsSelected({
   routeId,
   routePointId,
@@ -81,21 +81,26 @@ export function resolveRoutePointPresentation({
   routeId,
   routePointId,
   pointIndex,
-  pointCount,
   isStop,
   selection,
+  narrativeSelection,
   temporalReveal,
 }: {
   routeId: string;
   routePointId?: string;
   pointIndex: number;
-  pointCount: number;
   isStop: boolean;
   selection: RoutePointSelection;
+  narrativeSelection: RoutePointSelection;
   temporalReveal: RouteTemporalReveal;
 }): RoutePointPresentation {
   const temporalProgress = routePointTemporalProgress(routeId, pointIndex, temporalReveal);
-  const narrativeCurrent = narrativeCurrentRoutePointIndex(routeId, pointCount, temporalReveal) === pointIndex;
+  const narrativeCurrent = temporalProgress > 0 && routePointIsNarrativeCurrent({
+    routeId,
+    routePointId,
+    pointIndex,
+    narrativeSelection,
+  });
   const selected = routePointIsSelected({ routeId, routePointId, pointIndex, selection });
   return {
     semanticRole: isStop ? "stop" : "passthrough",
@@ -104,7 +109,6 @@ export function resolveRoutePointPresentation({
     temporalProgress,
   };
 }
-
 export function routePointMarkerRadiusPx(presentation: RoutePointPresentation) {
   if (presentation.attentionRole === "narrative-current") return 3.2;
   if (presentation.attentionRole === "selected") return 3;
@@ -113,13 +117,12 @@ export function routePointMarkerRadiusPx(presentation: RoutePointPresentation) {
 export function resolveRouteAttentionRole({
   routeId,
   selectedRouteId,
-  temporalReveal,
+  narrativeRouteId,
 }: {
   routeId: string;
   selectedRouteId: string | null | undefined;
-  temporalReveal: RouteTemporalReveal;
+  narrativeRouteId: string | null | undefined;
 }): RoutePointAttentionRole {
-  const progress = temporalReveal?.journeys.get(routeId);
-  if (progress !== undefined && progress > 0 && progress < 1) return "narrative-current";
+  if (routeId === narrativeRouteId) return "narrative-current";
   return routeId === selectedRouteId ? "selected" : "ordinary";
 }

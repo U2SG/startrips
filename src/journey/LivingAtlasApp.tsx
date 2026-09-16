@@ -1827,6 +1827,23 @@ export function LivingAtlasApp({
   const mobileJourney = focusPresentation.journey;
   const mobilePoint = focusPresentation.point;
   const focusPoint = focusPresentation.focusPoint;
+  const narrativeJourneyProgress = timeCursor.selection
+    ? timeCursor.reveal.journeyProgress.get(timeCursor.selection.journeyId)
+    : undefined;
+  const narrativeJourneyRoutePoint = (isMobileV2 || globeFocusMode)
+    && timeCursor.selection
+    && narrativeJourneyProgress !== undefined
+    && narrativeJourneyProgress > 0
+    && narrativeJourneyProgress < 1
+    ? {
+        journeyId: timeCursor.selection.journeyId,
+        routePointId: timeCursor.selection.pointIndex !== null
+          ? journeys.find((journey) => journey.id === timeCursor.selection?.journeyId)
+            ?.routePoints[timeCursor.selection.pointIndex]?.id ?? null
+          : null,
+        pointIndex: timeCursor.selection.pointIndex,
+      }
+    : null;
   const selectedJourneyRoutePoint = routePointContextSelection.context
     ? {
         journeyId: routePointContextSelection.context.journeyId,
@@ -2484,6 +2501,7 @@ export function LivingAtlasApp({
             journeyRoutes={routes}
             activeJourneyRouteId={draftRoute?.id ?? (initialHomeCameraAnchor ? null : activeJourneyId)}
             selectedJourneyRoutePoint={draftRoute ? null : selectedJourneyRoutePoint}
+            narrativeJourneyRoutePoint={draftRoute ? null : narrativeJourneyRoutePoint}
             mediaCoverHint={{
               opaqueMediaCover: storyGlobeCover.opaqueMediaCover || playbackGlobeCover.opaqueMediaCover,
               coverTransitionActive: storyGlobeCover.coverTransitionActive || playbackGlobeCover.coverTransitionActive,

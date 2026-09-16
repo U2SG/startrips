@@ -167,6 +167,11 @@ export type LivingAtlasGlobeProps = {
     routePointId?: string | null;
     pointIndex?: number | null;
   } | null;
+  narrativeJourneyRoutePoint?: {
+    journeyId: string;
+    routePointId?: string | null;
+    pointIndex?: number | null;
+  } | null;
   temporalReveal?: {
     journeys: ReadonlyMap<string, number>;
     points: ReadonlyMap<string, number>;
@@ -228,6 +233,7 @@ type AtlasEarthPresentation = Pick<
   | "journeyRoutes"
   | "activeJourneyRouteId"
   | "selectedJourneyRoutePoint"
+  | "narrativeJourneyRoutePoint"
   | "temporalReveal"
   | "onJourneyRouteActivate"
   | "onJourneyRoutePointActivate"
@@ -331,6 +337,7 @@ export function PersistentEarthProvider({ children }: { children: ReactNode }) {
                   journeyRoutes={atlas?.journeyRoutes ?? []}
                   activeJourneyRouteId={atlas?.activeJourneyRouteId}
                   selectedJourneyRoutePoint={atlas?.selectedJourneyRoutePoint}
+                  narrativeJourneyRoutePoint={atlas?.narrativeJourneyRoutePoint}
                   temporalReveal={atlas?.temporalReveal}
                   onJourneyRouteActivate={atlas?.onJourneyRouteActivate}
                   onJourneyRoutePointActivate={atlas?.onJourneyRoutePointActivate}
@@ -378,6 +385,7 @@ export function LivingAtlasGlobe({
   journeyRoutes,
   activeJourneyRouteId,
   selectedJourneyRoutePoint,
+  narrativeJourneyRoutePoint,
   temporalReveal,
   homeBasePresence,
   activeHomeBaseContextPeriodId,
@@ -945,6 +953,7 @@ export function LivingAtlasGlobe({
       journeyRoutes,
       activeJourneyRouteId,
       selectedJourneyRoutePoint,
+      narrativeJourneyRoutePoint,
       temporalReveal,
       onJourneyRouteActivate,
       onJourneyRoutePointActivate,
@@ -969,6 +978,9 @@ export function LivingAtlasGlobe({
     selectedJourneyRoutePoint?.journeyId,
     selectedJourneyRoutePoint?.routePointId,
     selectedJourneyRoutePoint?.pointIndex,
+    narrativeJourneyRoutePoint?.journeyId,
+    narrativeJourneyRoutePoint?.routePointId,
+    narrativeJourneyRoutePoint?.pointIndex,
     cinematicActive,
     earthExperiencePolicy,
     dive.owner,
