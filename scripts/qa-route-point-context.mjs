@@ -960,7 +960,8 @@ try {
     text: node.textContent ?? "",
     mediaCueCount: node.querySelectorAll("[data-route-point-context-media]").length,
     controlsCount: document.querySelectorAll(".living-atlas-globe__controls").length,
-    readingNavigationCount: node.querySelectorAll(".living-atlas__route-point-context-reading-links").length,
+    readingNavigationCount: node.querySelectorAll("nav.living-atlas__route-point-context-reading-links").length,
+    readingNavigationLabel: node.querySelector("nav.living-atlas__route-point-context-reading-links")?.getAttribute("aria-label") ?? null,
     permanentToolbarCount: node.querySelectorAll("[role=toolbar]").length,
   }));
   const textFocusAfter = await sceneFocusSnapshot(textPage);
@@ -973,6 +974,7 @@ try {
     && textState.mediaCueCount === 0
     && textState.controlsCount === 0
     && textState.readingNavigationCount === 1
+    && textState.readingNavigationLabel === "阅读相邻路线点记录"
     && textState.text.includes("读上一段")
     && textState.permanentToolbarCount === 0);
   record("text-only reveal keeps camera focus owner", { textFocusBefore, textFocusAfter },
