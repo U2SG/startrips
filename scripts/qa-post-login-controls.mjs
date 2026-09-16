@@ -1139,8 +1139,11 @@ async function verifyComposerGlobeRoundTrip() {
       const roundTrip = await completePick();
       await page.getByText("已根据坐标识别为「QA PICKED PLACE」，可继续修改。").waitFor({ state: "visible" });
       const routeCountAfter = await routeItems().count();
-      const labelValue = await routeItems().last().locator('input[aria-label^="地点 "]').inputValue();
-      const coordinateText = await routeItems().last().locator(".journey-route-draft__main > small").textContent();
+      const lastRoutePoint = routeItems().last();
+      const labelValue = await lastRoutePoint.locator(".journey-route-draft__summary strong").textContent();
+      const latitude = await lastRoutePoint.getAttribute("data-route-point-latitude");
+      const longitude = await lastRoutePoint.getAttribute("data-route-point-longitude");
+      const coordinateText = `${latitude}, ${longitude}`;
       const successFailed = !roundTrip.picking.appPickActive
         || roundTrip.picking.composerVisibility !== "hidden"
         || roundTrip.picking.bodyOverflow !== "hidden"
@@ -1272,7 +1275,9 @@ async function verifyComposerGlobeRoundTrip() {
         ? "已从地球添加地点，未识别到对应名称；可手动补充。"
         : "已从地球添加地点；坐标识别暂不可用，可手动补充名称。";
       await page.getByText(expectedMessage).waitFor({ state: "visible" });
-      const lastInput = routeItems().last().locator('input[aria-label^="地点 "]');
+      const lastRoutePoint = routeItems().last();
+      await lastRoutePoint.locator(".journey-route-draft__summary").click();
+      const lastInput = lastRoutePoint.locator('.journey-route-draft__expanded input[type="text"]');
       const beforeManual = await lastInput.inputValue();
       const manualLabel = `手动地点-${mode}`;
       await lastInput.fill(manualLabel);
@@ -1310,7 +1315,9 @@ async function verifyComposerGlobeRoundTrip() {
       response.url().includes("/api/locations/reverse?")
       && response.url().includes("latitude=37.76942")
     ));
-    await routeItems().last().getByRole("button", { name: "删除地点" }).click();
+    const pendingDeleteRow = routeItems().last();
+    await pendingDeleteRow.getByRole("button", { name: /更多操作/ }).click();
+    await pendingDeleteRow.getByRole("menuitem", { name: "删除地点" }).click();
     await page.waitForFunction(() => document.querySelectorAll(".journey-route-draft > li:not(.is-empty)").length === 0);
     await page.locator(".journey-composer__message").waitFor({ state: "detached" });
     releaseFirstReverse.resolve();

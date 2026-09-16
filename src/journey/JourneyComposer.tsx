@@ -527,6 +527,20 @@ export function JourneyComposer({
   }, [expandedRoutePointDraftId, routePointMenuDraftId, routePoints]);
 
   useEffect(() => {
+    if (!routePointMenuDraftId) return;
+    const openDraftId = routePointMenuDraftId;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      pendingRoutePointMenuFocusDraftIdRef.current = openDraftId;
+      setRoutePointMenuDraftId(null);
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [routePointMenuDraftId]);
+
+  useEffect(() => {
     const focusDraftId = pendingRoutePointFocusDraftIdRef.current;
     if (focusDraftId) {
       const trigger = routePointTriggerRefs.current.get(focusDraftId);
@@ -1496,6 +1510,8 @@ export function JourneyComposer({
                       className={expanded ? "is-expanded" : undefined}
                       data-route-point-draft-id={point.draftId}
                       data-route-point-position={index + 1}
+                      data-route-point-latitude={point.latitude}
+                      data-route-point-longitude={point.longitude}
                       data-route-point-expanded={expanded ? "true" : "false"}
                     >
                       <span className="journey-route-draft__index">{String(index + 1).padStart(2, "0")}</span>

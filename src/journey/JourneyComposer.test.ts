@@ -312,7 +312,9 @@ describe("persistJourneyDraft", () => {
     }));
     expect(markup).toContain('value="Southbound light"');
     expect(markup).toContain('value="2026-04-16"');
-    expect(markup).toContain('value="Shenzhen"');
+    expect(markup).toContain('data-route-point-draft-id="saved-route-point-1"');
+    expect(markup).toContain('data-route-point-expanded="false"');
+    expect(markup).toContain(">Shenzhen</strong>");
     expect(markup).toContain("1 个已有媒体");
     expect(markup).toContain("保存修改");
   });

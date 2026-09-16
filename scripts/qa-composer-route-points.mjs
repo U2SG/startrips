@@ -4,6 +4,7 @@ import { launchQaBrowser } from "./qa-browser.mjs";
 const baseUrl = process.env.QA_BASE_URL ?? "http://127.0.0.1:4173";
 const results = [];
 let failed = false;
+let fatalError = null;
 
 function record(name, data, condition) {
   const row = { name, ...data, failed: !condition };
@@ -113,7 +114,7 @@ try {
         await expanded.waitFor({ state: "visible" });
         const expandedState = {
           expandedCount: await run.page.locator('.journey-route-draft > li[data-route-point-expanded="true"]').count(),
-          name: await expanded.locator("input").inputValue(),
+          name: await expanded.locator('input[type="text"]').inputValue(),
           note: await expanded.locator("textarea").inputValue(),
           hasStop: await expanded.locator('.journey-checkbox input[type="checkbox"]').count() === 1,
           hasCoordinates: await expanded.locator(".journey-route-draft__coordinates code").count() === 1,
@@ -160,9 +161,11 @@ try {
           label: document.activeElement?.getAttribute("aria-label") ?? null,
           draftId: document.activeElement?.closest("[data-route-point-draft-id]")?.getAttribute("data-route-point-draft-id") ?? null,
         }));
-        record("composer-route-points:keyboard-more-close-focus", { focusAfterMenuClose },
+        const composerStillOpen = await run.page.locator(".journey-composer").isVisible();
+        record("composer-route-points:keyboard-more-close-focus", { focusAfterMenuClose, composerStillOpen },
           focusAfterMenuClose.label === "更多操作 Record 03"
-          && focusAfterMenuClose.draftId === record03DraftId);
+          && focusAfterMenuClose.draftId === record03DraftId
+          && composerStillOpen);
 
         const record04 = run.rows.filter({ hasText: "Record 04" }).first();
         await record04.locator(".journey-route-draft__summary").click();
@@ -240,11 +243,15 @@ try {
   } finally {
     await reduced.context.close();
   }
+} catch (error) {
+  fatalError = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  failed = true;
+  console.error(fatalError);
 } finally {
   await browser.close();
 }
 
-const artifact = { summary: "composer-route-points", failed, results };
+const artifact = { summary: "composer-route-points", failed, fatalError, results };
 await mkdir("artifacts/composer-route-points", { recursive: true });
 await writeFile("artifacts/composer-route-points/results.json", `${JSON.stringify(artifact, null, 2)}\n`, "utf8");
 console.log(JSON.stringify(artifact, null, 2));

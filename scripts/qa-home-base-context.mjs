@@ -491,12 +491,11 @@ try {
   await pickingCity.waitFor({ state: "visible", timeout: 5_000 });
   await pickingCity.click();
   await globePickPage.waitForFunction(() => !document.querySelector(".living-atlas")?.classList.contains("is-globe-picking"), null, { timeout: 5_000 });
-  const acceptedCoordinateText = await globePickPage.locator(
-    ".journey-route-draft li:not(.is-empty) .journey-route-draft__main > small",
-  ).first().textContent();
-  const acceptedCoordinates = String(acceptedCoordinateText ?? "")
-    .split(",")
-    .map((value) => Number(value.trim()));
+  const acceptedRoutePoint = globePickPage.locator(".journey-route-draft li:not(.is-empty)").first();
+  const acceptedCoordinates = [
+    Number(await acceptedRoutePoint.getAttribute("data-route-point-latitude")),
+    Number(await acceptedRoutePoint.getAttribute("data-route-point-longitude")),
+  ];
   const expectedCityCoordinates = [Number(globePickOverlap.cityLat), Number(globePickOverlap.cityLon)];
   const cityCoordinatePreserved = acceptedCoordinates.length === 2
     && acceptedCoordinates.every(Number.isFinite)
