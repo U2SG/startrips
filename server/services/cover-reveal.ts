@@ -515,9 +515,11 @@ export async function readCoverRevealDisplay(
 
   // Every ready row this Journey has under the approved generation contract,
   // NOT the one pinned to the reading of the cover taken above. The live
-  // identity index is unique per source, so a Journey whose cover moved and
-  // was re-derived before the reconciler swept can legitimately hold a ready
-  // row for the old cover and one for the new; pinning this query to a cover
+  // identity index is unique per source rather than per Journey, so a Journey
+  // can hold a ready row for the old cover beside one for the new: two owner
+  // enqueues arriving together across a cover change both clear
+  // `supersedeStaleDerivatives` before either inserts, and their inserts carry
+  // different identities, so neither conflicts. Pinning this query to a cover
   // reading and taking the first row would make the choice between them depend
   // on which reading happened to be current. The set is bounded by that same
   // index, and the current cover picks from it below.

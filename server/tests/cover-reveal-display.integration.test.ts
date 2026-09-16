@@ -623,13 +623,15 @@ describe("#386 cover-reveal display read", () => {
     });
 
     /**
-     * The live-identity index is unique per source, so a Journey whose cover
-     * moved and was re-derived before the reconciler swept legitimately holds
-     * a ready row for the old cover AND one for the new. The row served is the
-     * one the CURRENT cover pins, never simply the first ready row on the
-     * Journey: it is the last reading of canonical state that chooses, which
-     * is also why a reading taken before the rows were fetched cannot be the
-     * one that decides.
+     * The live-identity index is unique per source, not per Journey, so two
+     * `ready` rows for one Journey are a state the database permits: two owner
+     * enqueues arriving together across a cover change both pass
+     * `supersedeStaleDerivatives` before either inserts, and each insert
+     * carries a different identity, so neither conflicts and both can be
+     * published. The row served is the one the CURRENT cover pins, never
+     * simply the first ready row on the Journey: it is the last reading of
+     * canonical state that chooses, which is also why a reading taken before
+     * the rows were fetched cannot be the one that decides.
      */
     it("serves the current cover's row when a superseded ready row survives beside it", async () => {
       const { journeyId, asset, backend, row: stale } = await publishedDerivative();
@@ -640,8 +642,8 @@ describe("#386 cover-reveal display read", () => {
         .set({ coverMediaAssetId: replacement.id })
         .where(eq(journeys.id, journeyId));
 
-      // Derive the new cover through the real protocol, with no reconciler
-      // pass in between, so both rows are `ready` at once.
+      // Derive the new cover through the real protocol, so the row that wins
+      // is a genuine published derivative rather than a hand-written one.
       const enqueued = await enqueueCoverRevealDerivative(
         journeyId,
         identity.atlasId,
@@ -667,6 +669,26 @@ describe("#386 cover-reveal display read", () => {
         SETTINGS,
         backend.dependencies,
       )).toMatchObject({ ok: true });
+
+      // That second enqueue was sequential, so it superseded the old row on
+      // its way in — the ordinary path, and precisely the step the racing pair
+      // above does NOT take. Put the row back the way it was published so this
+      // asserts against the raced state rather than the one the supersede scan
+      // already closed. Only the lifecycle and the object description move;
+      // the row's identity, its pin and its object are the published ones.
+      await db
+        .update(coverRevealDerivatives)
+        .set({
+          state: "ready",
+          supersededAt: null,
+          outputStorageDriver: stale.outputStorageDriver,
+          outputStorageKey: stale.outputStorageKey,
+          outputMimeType: stale.outputMimeType,
+          outputBytes: stale.outputBytes,
+          outputWidth: stale.outputWidth,
+          outputHeight: stale.outputHeight,
+        })
+        .where(eq(coverRevealDerivatives.id, stale.id));
 
       const live = await db
         .select()
