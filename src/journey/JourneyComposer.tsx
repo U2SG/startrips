@@ -1513,7 +1513,7 @@ export function JourneyComposer({
                   </label>
                   <button type="submit" disabled={searchPending}>
                     <IconSearch size={16} stroke={1.4} aria-hidden="true" />
-                    {searchPending ? "外部搜索中…" : "搜索外部地点"}
+                    {searchPending ? "搜索中…" : "搜索"}
                   </button>
                 </form>
                 {existingSearchMatches.length > 0 ? (
