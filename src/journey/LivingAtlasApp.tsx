@@ -2039,6 +2039,11 @@ export function LivingAtlasApp({
   function escalateCrossPointReadingToStory() {
     if (!crossPointReading) return;
     const { journeyId, targetRoutePointId } = crossPointReading.intent;
+    // Escalation is the explicit boundary where transient reading may become the
+    // committed Route Point observation. Commit the logical context before Story
+    // opens so note-only targets return to this record even when there is no
+    // representative media element for a shared-element return morph.
+    revealRoutePointContext(journeyId, targetRoutePointId);
     setCrossPointReadingIntent(null);
     openJourneyStory(journeyId, targetRoutePointId);
   }

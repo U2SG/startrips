@@ -1123,8 +1123,24 @@ describe("Route Point context integration (#291)", () => {
     expect(appSource).toContain('"cross-point-reading"');
     expect(appSource).toContain('onClick={closeCrossPointReading}');
     expect(appSource).toContain('onClick={escalateCrossPointReadingToStory}');
+    expect(appSource).toContain('revealRoutePointContext(journeyId, targetRoutePointId)');
     expect(appSource).toContain('openJourneyStory(journeyId, targetRoutePointId)');
     expect(appSource).toContain('从 {crossPointReading.source.routePointLabel} 临时阅读 · 未改变当前观察');
+  });
+
+  it("keeps the mobile cross-point reader above persistent mobile chrome", () => {
+    const css = readFileSync(new URL("../styles/living-atlas.css", import.meta.url), "utf8");
+    const readerStart = css.indexOf('.living-atlas[data-mobile-v2="on"] .living-atlas__cross-point-reading-layer {');
+    const readerRule = css.slice(readerStart, css.indexOf("}", readerStart));
+    const headerStart = css.indexOf(".mobile-v2__header {");
+    const headerRule = css.slice(headerStart, css.indexOf("}", headerStart));
+    const chromeStart = css.indexOf(".mobile-v2__chrome {");
+    const chromeRule = css.slice(chromeStart, css.indexOf("}", chromeStart));
+
+    expect(readerStart).toBeGreaterThan(0);
+    expect(readerRule).toContain("z-index: 200;");
+    expect(headerRule).toContain("z-index: 92;");
+    expect(chromeRule).toContain("z-index: 90;");
   });
 
   it("keeps same-coordinate switch targets touch-safe without turning the context into a toolbar", () => {

@@ -839,6 +839,47 @@ try {
   record("cross-point reduced-motion page errors", { pageErrors: readingReducedRun.pageErrors }, readingReducedRun.pageErrors.length === 0);
   await readingReducedPage.close();
 
+  const readingMobileRun = await openFocusAtlas({
+    viewport: { width: 390, height: 844 },
+    compact: true,
+    journeysPayload: [crossReadingJourney],
+    initialPointId: crossReadingAId,
+  });
+  const readingMobilePage = readingMobileRun.page;
+  await activateRoutePointId(readingMobilePage, crossReadingAId);
+  await readingMobilePage.locator(`[data-cross-point-reading-open="${crossReadingBId}"]`).click();
+  const mobileReadingSurface = readingMobilePage.locator("[data-cross-point-reading]");
+  await mobileReadingSurface.waitFor({ state: "visible", timeout: 5_000 });
+  const mobileReadingChromeState = await readingMobilePage.evaluate(() => {
+    const layer = document.querySelector("[data-cross-point-reading-layer]");
+    const header = document.querySelector(".mobile-v2__header");
+    const chrome = document.querySelector(".mobile-v2__chrome");
+    const close = document.querySelector("[data-cross-point-reading-close]");
+    const escalate = document.querySelector("[data-cross-point-reading-escalate]");
+    const hitOwner = (element) => {
+      if (!(element instanceof HTMLElement)) return null;
+      const rect = element.getBoundingClientRect();
+      const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+      return hit instanceof Element ? hit.closest("button") : null;
+    };
+    return {
+      layerZ: layer ? Number(getComputedStyle(layer).zIndex) : null,
+      headerZ: header ? Number(getComputedStyle(header).zIndex) : null,
+      chromeZ: chrome ? Number(getComputedStyle(chrome).zIndex) : null,
+      closeOwnsHit: hitOwner(close) === close,
+      escalateOwnsHit: hitOwner(escalate) === escalate,
+    };
+  });
+  record("mobile transient reader stays above persistent chrome and owns pointer hits", { mobileReadingChromeState },
+    mobileReadingChromeState.layerZ > mobileReadingChromeState.headerZ
+    && mobileReadingChromeState.layerZ > mobileReadingChromeState.chromeZ
+    && mobileReadingChromeState.closeOwnsHit
+    && mobileReadingChromeState.escalateOwnsHit);
+  await readingMobilePage.keyboard.press("Escape");
+  await readingMobilePage.waitForFunction(() => document.querySelector("[data-cross-point-reading]") === null);
+  record("cross-point mobile page errors", { pageErrors: readingMobileRun.pageErrors }, readingMobileRun.pageErrors.length === 0);
+  await readingMobilePage.close();
+
   const guestPage = await browser.newPage({ viewport: { width: 1280, height: 720 } });
   const guestPageErrors = [];
   let guestOwnerRouteHits = 0;

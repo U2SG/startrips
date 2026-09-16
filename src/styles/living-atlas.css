@@ -4960,6 +4960,10 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   cursor: pointer;
 }
 
+.living-atlas[data-mobile-v2="on"] .living-atlas__cross-point-reading-layer {
+  z-index: 200;
+}
+
 .living-atlas[data-mobile-v2="on"] .living-atlas__cross-point-reading {
   top: auto;
   right: calc(env(safe-area-inset-right) + 12px);
