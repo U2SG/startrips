@@ -547,9 +547,8 @@ try {
   const timeTrack = samePage.locator(".globe-time-scrubber__track");
   await timeTrack.focus();
   await timeTrack.press("Home");
-  await timeTrack.press("PageUp");
-  await timeTrack.press("PageUp");
-  await samePage.waitForFunction(() => document.querySelector(".globe-time-scrubber__track")?.getAttribute("aria-valuenow") === "20");
+  for (let step = 0; step < 7; step += 1) await timeTrack.press("PageUp");
+  await samePage.waitForFunction(() => document.querySelector(".globe-time-scrubber__track")?.getAttribute("aria-valuenow") === "70");
   const rewindVisibleState = await samePage.evaluate((futureId) => ({
     contextId: document.querySelector("[data-route-point-context]")?.getAttribute("data-route-point-id") ?? null,
     switcherCount: document.querySelectorAll("[data-route-point-context-switcher]").length,
@@ -560,7 +559,7 @@ try {
     rewindVisibleState.contextId === same02Id
     && rewindVisibleState.switcherCount === 0
     && rewindVisibleState.futureSwitchCount === 0
-    && rewindVisibleState.cursor === "20");
+    && rewindVisibleState.cursor === "70");
 
   await timeTrack.press("Home");
   await samePage.waitForFunction(() => document.querySelector("[data-route-point-context]") === null);

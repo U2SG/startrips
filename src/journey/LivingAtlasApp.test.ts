@@ -1068,13 +1068,15 @@ describe("Route Point context integration (#291)", () => {
   it("drops context outside planet view and refreshes retained context from the latest Journey", () => {
     const refreshStart = appSource.indexOf("const intent = routePointContextSelection.intent;");
     const refreshBlock = appSource.slice(refreshStart, refreshStart + 900);
+    const viewCleanupStart = appSource.indexOf('if (view !== "planet" && routePointContextSelection.intent)');
+    const viewCleanupBlock = appSource.slice(viewCleanupStart, viewCleanupStart + 220);
     const renderStart = appSource.indexOf('{view === "planet" && routePointContextSelection.context');
 
     expect(refreshStart).toBeGreaterThan(0);
     expect(refreshBlock).toContain("buildRoutePointContext(journey, intent.routePointId)");
     expect(refreshBlock).toContain("resolveRoutePointContextSelection(");
-    expect(refreshBlock).toContain('view !== "planet"');
-    expect(refreshBlock).toContain("clearRoutePointContext()");
+    expect(viewCleanupStart).toBeGreaterThan(0);
+    expect(viewCleanupBlock).toContain("clearRoutePointContext()");
     expect(renderStart).toBeGreaterThan(0);
   });
 
