@@ -92,7 +92,10 @@ transient_count=0
 for value in "$MAX_RESUMES" "$MERGE_WAIT_S" "$TRANSIENT_WAIT_S" "$MAX_TRANSIENT_RETRIES"; do
   [[ "$value" =~ ^[0-9]+$ ]] || { echo "Invalid supervisor budget" >&2; exit 64; }
 done
-stopped() { [[ -f "$ROOT/AGENT_STOP" || -f "$ROOT/SUPERVISOR_STOP" || -f "$ROOT/CANCEL_SCHEDULED_RESTART" ]]; }
+stopped() {
+  [[ -f "$ROOT/AGENT_STOP" ]] && return 0
+  [[ "$STARTRIPS_LANE" != "backend" ]] || [[ -f "$ROOT/SUPERVISOR_STOP" || -f "$ROOT/CANCEL_SCHEDULED_RESTART" ]]
+}
 while :; do
   stopped && { echo "[supervisor] owner STOP preserved; no child launched"; exit 0; }
   TS="$(date +%Y%m%dT%H%M%S)"; TS="$(printf '%s' "$TS" | tr -d '\r')"

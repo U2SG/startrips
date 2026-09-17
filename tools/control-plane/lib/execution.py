@@ -15,8 +15,12 @@ from github_evidence import EvidenceUnknown
 STOPS = ('AGENT_STOP', 'SUPERVISOR_STOP', 'CANCEL_SCHEDULED_RESTART')
 
 
-def stopped(root):
-    return [name for name in STOPS if (Path(root) / name).exists()]
+def stopped(root, lane=None):
+    # AGENT_STOP is the product-owner/global boundary. The other two markers
+    # control only the dedicated LOCAL Backend supervisor/restart lifecycle and
+    # must never strand the independent Experience lane.
+    names = STOPS if lane in {None, 'backend'} else STOPS[:1]
+    return [name for name in names if (Path(root) / name).exists()]
 
 
 def snapshot():
@@ -86,6 +90,14 @@ def published():
         if sep and pid.isdigit() and stamp:
             result[int(pid)] = stamp
     return result
+
+
+def command_token(command):
+    """Return a bounded direct-carrier invocation token from observable argv."""
+    if not isinstance(command, str):
+        return None
+    match = re.search(r'--carrier-token=([a-z0-9._:-]{8,128})(?=$|[\s";])', command, re.I)
+    return match.group(1) if match else None
 
 
 def command_lane(command):
@@ -191,6 +203,9 @@ def competitors(rows, root, self_pid, lane=None, feature=None, worktree=None):
         is_loop = bool(re.search(r'(?:^|[\s"/])(?:run-loop|loop-supervisor)[.]sh(?:[\s"\x00]|$)', command))
         is_child = 'startrips_execution_owner=' in command
         if not is_loop and not is_child:
+            continue
+        own_token = os.environ.get('STARTRIPS_CARRIER_TOKEN') or None
+        if is_loop and own_token and command_token(raw_command) == own_token:
             continue
         explicit_root = any(re.search(re.escape(alias.rstrip('/')) + r'(?=[/;\s"\x00]|$)', command)
                             for alias in aliases)
@@ -329,15 +344,15 @@ def main():
     parser.add_argument('--worktree')
     args = parser.parse_args()
     try:
+        report_lane = args.lane or os.environ.get('STARTRIPS_LANE') or None
         if args.action == 'identity':
             print(identity(args.pids)); return 0
         if args.action == 'permission': result = permission_probe(args.root)
         elif args.action == 'resume': result = manual_resume(args.root)
         elif args.action.startswith('outage-'): result = outage_window(args.root, args.action.split('-', 1)[1])
         else:
-            lane = args.lane or os.environ.get('STARTRIPS_LANE') or None
-            result = ensure_idle(args.root, lane=lane, feature=args.feature, worktree=args.worktree)
-        result['stop_markers'] = stopped(args.root)
+            result = ensure_idle(args.root, lane=report_lane, feature=args.feature, worktree=args.worktree)
+        result['stop_markers'] = stopped(args.root, lane=report_lane)
         print(json.dumps(result)); return 0
     except (StoreConflict, EvidenceUnknown, OSError, ValueError, subprocess.TimeoutExpired) as exc:
         print('EXECUTION_UNKNOWN: ' + str(exc), file=sys.stderr); return 6

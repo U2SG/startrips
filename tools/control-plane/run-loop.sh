@@ -25,17 +25,35 @@ case "$STARTRIPS_LANE" in
   *) echo "LANE_REQUIRED: explicitly set backend or experience in the executing shell" >&2; exit 64 ;;
 esac
 CARRIER_LANE=""
-if [[ "${1:-}" == --carrier-lane=* ]]; then
-  CARRIER_LANE="${1#--carrier-lane=}"
+CARRIER_TOKEN=""
+while [[ "${1:-}" == --carrier-* ]]; do
+  case "$1" in
+    --carrier-lane=*) CARRIER_LANE="${1#--carrier-lane=}" ;;
+    --carrier-token=*) CARRIER_TOKEN="${1#--carrier-token=}" ;;
+    *) echo "UNKNOWN_CARRIER_ARGUMENT: $1" >&2; exit 64 ;;
+  esac
   shift
-  [[ "$CARRIER_LANE" == "$STARTRIPS_LANE" ]] || {
-    echo "CARRIER_LANE_MISMATCH: $CARRIER_LANE != $STARTRIPS_LANE" >&2; exit 64;
-  }
-fi
-# A real execution re-execs once with an observable lane marker. Read-only
-# selector/plan probes stay short-lived and never become execution carriers.
+done
+[[ -z "$CARRIER_LANE" || "$CARRIER_LANE" == "$STARTRIPS_LANE" ]] || {
+  echo "CARRIER_LANE_MISMATCH: $CARRIER_LANE != $STARTRIPS_LANE" >&2; exit 64;
+}
+[[ -z "$CARRIER_TOKEN" || "$CARRIER_TOKEN" =~ ^[A-Za-z0-9._:-]{8,128}$ ]] || {
+  echo "INVALID_CARRIER_TOKEN" >&2; exit 64;
+}
+# A real execution re-execs once with provider-visible lane metadata. Direct
+# Experience execution also carries a one-use invocation token because MSYS can
+# sever Windows ancestry even for the script currently running. The provider
+# may exempt only that exact token; same-lane peers remain competitors.
 if [[ -z "$CARRIER_LANE" && -z "${1:-}" ]]; then
-  exec "$0" "--carrier-lane=$STARTRIPS_LANE"
+  token="direct-$(date +%s)-$$-$RANDOM"
+  exec "$0" "--carrier-lane=$STARTRIPS_LANE" "--carrier-token=$token"
+fi
+if [[ -n "$CARRIER_LANE" && -z "$CARRIER_TOKEN" && -z "${STARTRIPS_OWN_PIDS:-}" && -z "${1:-}" ]]; then
+  token="direct-$(date +%s)-$$-$RANDOM"
+  exec "$0" "--carrier-lane=$CARRIER_LANE" "--carrier-token=$token"
+fi
+if [[ -n "$CARRIER_TOKEN" ]]; then
+  export STARTRIPS_CARRIER_TOKEN="$CARRIER_TOKEN"
 fi
 export PYTHONIOENCODING=utf-8
 export PYTHONUTF8=1
@@ -303,11 +321,15 @@ transient_stop() {
 # loop's definitions instead of its own fallbacks.
 # shellcheck source=lib/intake.sh
 cd "$ROOT"
-for guard in AGENT_STOP SUPERVISOR_STOP CANCEL_SCHEDULED_RESTART; do
-  [[ ! -f "$ROOT/$guard" ]] || { echo "Owner STOP preserved; no execution"; exit 0; }
+# AGENT_STOP is global. SUPERVISOR_STOP and CANCEL_SCHEDULED_RESTART belong to
+# the dedicated LOCAL Backend supervisor lifecycle and must not strand Experience.
+STOP_GUARDS=(AGENT_STOP)
+[[ "$STARTRIPS_LANE" != "backend" ]] || STOP_GUARDS+=(SUPERVISOR_STOP CANCEL_SCHEDULED_RESTART)
+for guard in "${STOP_GUARDS[@]}"; do
+  [[ ! -f "$ROOT/$guard" ]] || { echo "Owner STOP preserved for lane=$STARTRIPS_LANE; no execution"; exit 0; }
 done
 python3 -B "$ROOT/lib/execution.py" check "$ROOT" --lane "$STARTRIPS_LANE" || exit 6
-python3 -B "$ROOT/lib/execution.py" permission "$ROOT" || exit 6
+python3 -B "$ROOT/lib/execution.py" permission "$ROOT" --lane "$STARTRIPS_LANE" || exit 6
 source "$ROOT/lib/intake.sh"
 mkdir -p "$ROOT/.agent-artifacts/evaluations"
 

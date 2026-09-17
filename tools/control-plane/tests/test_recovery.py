@@ -70,6 +70,18 @@ class ProcessClassificationCases(unittest.TestCase):
         conflict = execution.competitors(rows, self.root, 3, lane='experience')[0]
         self.assertEqual(10, conflict['pid']); self.assertEqual('unknown', conflict['lane'])
 
+    def test_matching_direct_carrier_token_exempts_only_that_loop(self):
+        rows = self.base + [process(10, command='bash ' + str(self.root / 'run-loop.sh')
+                                    + ' --carrier-lane=experience --carrier-token=experience-token-1')]
+        with mock.patch.dict(os.environ, {'STARTRIPS_CARRIER_TOKEN': 'experience-token-1'}):
+            self.assertEqual([], execution.competitors(rows, self.root, 3, lane='experience'))
+
+    def test_different_carrier_token_does_not_exempt_peer(self):
+        rows = self.base + [process(10, command='bash ' + str(self.root / 'run-loop.sh')
+                                    + ' --carrier-lane=experience --carrier-token=experience-token-2')]
+        with mock.patch.dict(os.environ, {'STARTRIPS_CARRIER_TOKEN': 'experience-token-1'}):
+            self.assertEqual(10, execution.competitors(rows, self.root, 3, lane='experience')[0]['pid'])
+
     def test_orphan_worker_marker_blocks_new_carrier(self):
         rows = self.base + [process(10, name='node.exe', command='node worker STARTRIPS_EXECUTION_OWNER=' + str(self.root) + ';feature=ST-001;')]
         self.assertEqual('worker', execution.competitors(rows, self.root, 3)[0]['kind'])
@@ -425,6 +437,16 @@ class SupervisorBranchCases(ChainCase):
 
 
 class StopAndPermissionCases(fixture.SyntheticOne):
+    def test_backend_supervisor_stop_does_not_stop_experience(self):
+        (self.root / 'SUPERVISOR_STOP').write_text('backend owner stop')
+        self.assertEqual([], execution.stopped(self.root, lane='experience'))
+        self.assertEqual(['SUPERVISOR_STOP'], execution.stopped(self.root, lane='backend'))
+
+    def test_global_agent_stop_stops_both_lanes(self):
+        (self.root / 'AGENT_STOP').write_text('global owner stop')
+        self.assertEqual(['AGENT_STOP'], execution.stopped(self.root, lane='experience'))
+        self.assertIn('AGENT_STOP', execution.stopped(self.root, lane='backend'))
+
     def test_inherit_probe_really_writes_and_removes_only_its_file(self):
         before = self.path.read_bytes()
         result = execution.permission_probe(self.root)
@@ -516,6 +538,19 @@ class RealCarrierCases(fixture.WiringTests):
                    fixture.feature('ST-002', phase='P0-process'))
         result = self.invoke('export STARTRIPS_LANE=backend; bash run-loop.sh --next')
         self.assertEqual(0, result.returncode, result.stderr); self.assertEqual('', result.stdout.strip())
+
+    @unittest.skipUnless(os.name == 'nt', 'direct Experience carrier regression is Windows/MSYS-specific')
+    def test_backend_supervisor_stop_does_not_block_one_shot_experience(self):
+        source = Path(__file__).resolve().parents[1]
+        shutil.copy2(source / 'launch-experience.sh', self.root / 'launch-experience.sh')
+        (self.root / 'SUPERVISOR_STOP').write_text('backend owner stop')
+        before = self.path.read_bytes()
+        result = self.invoke('export MAX_ITERATIONS=0; bash launch-experience.sh')
+        self.assertEqual(3, result.returncode, result.stdout + result.stderr)
+        self.assertIn('"lane": "experience"', result.stdout)
+        self.assertIn('"stop_markers": []', result.stdout)
+        self.assertNotIn('EXECUTION_UNKNOWN', result.stdout + result.stderr)
+        self.assertEqual(before, self.path.read_bytes())
 
 
 class RealWorktreeCases(fixture.SyntheticOne):

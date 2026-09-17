@@ -45,6 +45,11 @@ Automation prompts carry roles and this entry point, never current PRs or SHAs.
   owner registry. ONE writes and intake state transitions remain globally serialized
   through `feature_store.py` transactions, so cross-lane execution does not weaken
   storage safety.
+- STOP scope follows the same boundary. `AGENT_STOP` is the explicit global owner
+  stop and blocks every lane. `SUPERVISOR_STOP` and `CANCEL_SCHEDULED_RESTART`
+  belong only to the dedicated LOCAL Backend supervisor/restart lifecycle; Experience
+  must preserve those files but must not treat them as its own stop condition. Never
+  clear a Backend stop merely to run Experience.
 - On transient transport/permission/runtime failure, leave product and ownership
   state unchanged, keep the existing scheduled observer enabled, and retry only
   bounded authorized idempotent probes. Do not disable an automation or require
@@ -114,10 +119,14 @@ historical file in an artifacts folder. Source and final evidence stay distinct.
 
 Run `python -B lib/policy_audit.py .` before local startup. New recurring prompts
 contain only role/authority/entrypoint, never a current PR/SHA/next-action snapshot.
-The existing local-user startup entry is `start-local-worker.ps1 -Mode Check`
-(read-only) or `-Mode Resume` (explicitly clears the user's two STOP markers and
-starts the existing launcher). Scheduled, outage and boundary restarters never
-clear a user-owned STOP; failed recovery keeps scheduled observation enabled.
+The existing LOCAL Backend startup entry is `start-local-worker.ps1 -Mode Check`
+(read-only) or `-Mode Resume` (explicitly clears the user's two Backend STOP markers
+and starts the existing Backend launcher). Experience has no resident supervisor:
+its scheduled worker starts exactly one bounded execution through `launch-experience.sh`,
+which publishes lane/token identity and directly execs the shared run-loop. Do not
+wrap a real Experience run in `bash -c "... run-loop.sh"`; that wrapper is not an
+execution carrier. Scheduled, outage and boundary restarters never clear a user-owned
+STOP; failed recovery keeps scheduled observation enabled.
 
 
 This workspace runs Startrips as an evidence-gated, one-feature-per-loop workflow.
