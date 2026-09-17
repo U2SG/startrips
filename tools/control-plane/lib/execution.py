@@ -21,7 +21,7 @@ def stopped(root):
 
 def snapshot():
     if os.name == 'nt':
-        command = '$ErrorActionPreference="Stop"; @(Get-CimInstance Win32_Process -ErrorAction Stop | Select-Object ProcessId,ParentProcessId,Name,CommandLine) | ConvertTo-Json -Compress'
+        command = '$ErrorActionPreference="Stop"; [Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false); @(Get-CimInstance Win32_Process -ErrorAction Stop | Select-Object ProcessId,ParentProcessId,Name,CommandLine) | ConvertTo-Json -Compress'
         result = subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', command],
                                 capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=25)
         if result.returncode or not result.stdout.strip():
@@ -60,9 +60,13 @@ def competitors(rows, root, self_pid):
         ancestors.add(pid)
         pid = by_pid.get(pid, {}).get('ppid', 0)
     canonical = str(Path(root).resolve()).replace('\\', '/').lower()
-    aliases = {canonical}
-    if re.match(r'^[a-z]:/', canonical):
-        aliases.add('/' + canonical[0] + canonical[2:])
+    # Preserve the spelling handed to the process as well as its real path:
+    # native Windows argv can retain an 8.3 spelling that resolve() expands.
+    original = str(Path(root).absolute()).replace('\\', '/').lower()
+    aliases = {canonical, original}
+    for spelling in tuple(aliases):
+        if re.match(r'^[a-z]:/', spelling):
+            aliases.add('/' + spelling[0] + spelling[2:])
     found = []
     for row in rows:
         if row['pid'] in ancestors:
@@ -75,10 +79,17 @@ def competitors(rows, root, self_pid):
         is_child = 'startrips_execution_owner=' in command
         if not is_loop and not is_child:
             continue
-        explicit_root = any(alias in command for alias in aliases)
+        explicit_root = any(re.search(re.escape(alias.rstrip('/')) + r'(?=[/;\s"\x00]|$)', command)
+                            for alias in aliases)
         if is_child and not explicit_root:
             continue
-        if not explicit_root and re.search(r'(?:[a-z]:/|/home/|/tmp/|/d/)', command):
+        # Inspect the SCRIPT argument, not whether the executable has an absolute
+        # path. Windows commonly launches an absolute bash.exe with ./run-loop.sh.
+        # Its cwd is then unknown, never evidence that the old execution ended.
+        script = re.search(r'(?:^|\s)(?:"([^"]*(?:run-loop|loop-supervisor)[.]sh)"|([^\s"\']*(?:run-loop|loop-supervisor)[.]sh))(?=\s|$)', command)
+        argument = next((part for part in script.groups() if part), '') if script else ''
+        absolute_script = bool(re.match(r'^(?:[a-z]:/|/)', argument))
+        if not explicit_root and absolute_script:
             continue
         found.append({'pid': row['pid'], 'ppid': row['ppid'],
                       'kind': 'worker' if is_child else 'loop',

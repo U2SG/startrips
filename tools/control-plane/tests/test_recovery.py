@@ -44,6 +44,20 @@ class ProcessClassificationCases(unittest.TestCase):
         rows = self.base + [process(10, name='python.exe', command='python inspector mentions run-loop.sh')]
         self.assertEqual([], execution.competitors(rows, self.root, 3))
 
+    def test_absolute_windows_executable_does_not_prove_relative_script_cwd(self):
+        rows = self.base + [process(10, name='bash.exe', command='"C:/Program Files/Git/bin/bash.exe" ./run-loop.sh')]
+        self.assertEqual('unknown-cwd', execution.competitors(rows, self.root, 3)[0]['state'])
+
+    def test_common_workspace_prefix_is_not_the_same_workspace(self):
+        other = str(self.root) + '-other'
+        rows = self.base + [process(10, command='bash "' + other + '/run-loop.sh"')]
+        self.assertEqual([], execution.competitors(rows, self.root, 3))
+
+    def test_quoted_workspace_path_with_spaces_remains_observable(self):
+        root = self.root / 'workspace with spaces'
+        rows = self.base + [process(10, command='bash "' + str(root / 'run-loop.sh') + '"')]
+        self.assertEqual('active', execution.competitors(rows, root, 3)[0]['state'])
+
     def test_other_absolute_workspace_is_not_this_owner(self):
         other = self.root.parent / 'other-workspace'
         rows = self.base + [process(10, command='bash ' + str(other / 'run-loop.sh'))]
