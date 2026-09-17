@@ -110,6 +110,16 @@ try {
   await page.locator("[data-playback-preview-trigger]").click();
   await page.locator(".journey-playback").waitFor({ state: "visible" });
   await page.locator(".journey-playback__intro h2").filter({ hasText: "Unsaved preview title" }).waitFor({ state: "visible" });
+  // The overlay becomes visible in the same commit that suspends the Composer,
+  // but the browser applies the backdrop rule on the following style pass.
+  // Wait for that pass to land before measuring, so the assertions below read
+  // the settled suspension state instead of racing the class application. The
+  // assertions themselves are unchanged.
+  await page.waitForFunction(() => {
+    const backdrop = document.querySelector(".journey-composer-backdrop");
+    return Boolean(backdrop?.classList.contains("is-playback-previewing"))
+      && getComputedStyle(backdrop).visibility === "hidden";
+  });
   const activePreview = await page.evaluate(() => {
     const composer = document.querySelector(".journey-composer");
     const backdrop = document.querySelector(".journey-composer-backdrop");
@@ -163,6 +173,10 @@ try {
       expanded: target?.getAttribute("data-route-point-expanded"),
       scrollTop: route?.scrollTop ?? -1,
       focusMatches: document.activeElement === target?.querySelector("textarea"),
+      // The Composer's focus trap owns return focus, so record which target it
+      // was handed: a failure separates "no target offered" from "target
+      // offered and rejected".
+      returnFocusKind: document.querySelector(".journey-composer")?.getAttribute("data-playback-preview-return-focus") ?? null,
       composerVisibility: getComputedStyle(document.querySelector(".journey-composer")).visibility,
       activeElement: document.activeElement
         ? `${document.activeElement.tagName.toLowerCase()}.${document.activeElement.className}`
@@ -178,6 +192,7 @@ try {
     || returned.position !== "4"
     || returned.expanded !== "true"
     || !returned.focusMatches
+    || returned.returnFocusKind !== "editor"
     || returned.composerVisibility !== "visible"
     || Math.abs(returned.scrollTop - before.scrollTop) > 2
   ) fail("Composer return context changed after Playback Preview", { before, returned });

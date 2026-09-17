@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -330,6 +331,8 @@ type JourneyComposerProps = {
   playbackPreviewPreparing?: boolean;
 };
 
+type PlaybackPreviewReturnFocusKind = "editor" | "route-point" | "none";
+
 function draftId() {
   return globalThis.crypto?.randomUUID?.()
     ?? `route-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -455,6 +458,8 @@ export function JourneyComposer({
   const playbackPreviewRevisionRef = useRef(0);
   const playbackPreviewWasActiveRef = useRef(false);
   const lastEditorFocusRef = useRef<HTMLElement | null>(null);
+  const playbackPreviewReturnFocusKindRef = useRef<PlaybackPreviewReturnFocusKind | null>(null);
+  const [playbackPreviewReturnFocusKind, setPlaybackPreviewReturnFocusKind] = useState<PlaybackPreviewReturnFocusKind | null>(null);
   const playbackPreviewReturnContextRef = useRef<{
     selectedDraftId: string | null;
     expandedDraftId: string | null;
@@ -509,6 +514,36 @@ export function JourneyComposer({
     () => matchRouteDraftPoints(routePoints, searchQuery),
     [routePoints, searchQuery],
   );
+  /**
+   * #245 established that a modal focus trap owns initial focus for its whole
+   * activation: a restore written in a later passive effect races the trap's own
+   * `resolveModalInitialFocusTarget` instead of replacing it. Releasing the
+   * Playback Preview suspension re-activates this trap, so the preserved return
+   * target is handed to the trap as its initial focus rather than re-applied
+   * afterwards. `resolveModalInitialFocusTarget` already rejects an inert,
+   * zero-rect or hidden candidate and falls back to the dialog root.
+   */
+  const resolvePlaybackPreviewReturnFocus = useCallback((root: HTMLElement) => {
+    const context = playbackPreviewReturnContextRef.current;
+    if (!context) {
+      playbackPreviewReturnFocusKindRef.current = null;
+      return null;
+    }
+    if (context.focusTarget?.isConnected && root.contains(context.focusTarget)) {
+      playbackPreviewReturnFocusKindRef.current = "editor";
+      return context.focusTarget;
+    }
+    const candidate = context.selectedDraftId
+      ? routePointTriggerRefs.current.get(context.selectedDraftId) ?? null
+      : null;
+    // A Route Point deleted or replaced while the preview ran must not be
+    // revived through a stale trigger ref, so survival is read from the live
+    // dialog subtree rather than from the captured selection alone.
+    const trigger = candidate?.isConnected && root.contains(candidate) ? candidate : null;
+    playbackPreviewReturnFocusKindRef.current = trigger ? "route-point" : "none";
+    return trigger;
+  }, []);
+
   const dialogRef = useModalFocus<HTMLElement>(() => {
     if (mobileMediaDeleteIndex !== null) {
       setMobileMediaDeleteIndex(null);
@@ -523,7 +558,7 @@ export function JourneyComposer({
       return;
     }
     if (!saving) closeComposer();
-  }, true, globePicking || playbackPreviewActive);
+  }, true, globePicking || playbackPreviewActive, resolvePlaybackPreviewReturnFocus);
   const mobileMediaSheetRef = useNestedModalFocus<HTMLElement>(
     mobileLayout && (
       mobileMediaMenuIndex !== null
@@ -641,27 +676,14 @@ export function JourneyComposer({
     const context = playbackPreviewReturnContextRef.current;
     playbackPreviewReturnContextRef.current = null;
     if (!context) return;
-    const selectedSurvives = context.selectedDraftId
-      ? routePoints.some((point) => point.draftId === context.selectedDraftId)
-      : false;
     const expandedSurvives = context.expandedDraftId
       ? routePoints.some((point) => point.draftId === context.expandedDraftId)
       : false;
     setExpandedRoutePointDraftId(expandedSurvives ? context.expandedDraftId : null);
+    setPlaybackPreviewReturnFocusKind(playbackPreviewReturnFocusKindRef.current);
     window.requestAnimationFrame(() => {
       if (narrativeScrollRef.current) narrativeScrollRef.current.scrollTop = context.narrativeScrollTop;
       if (routeScrollRef.current) routeScrollRef.current.scrollTop = context.routeScrollTop;
-      if (
-        context.focusTarget?.isConnected
-        && !context.focusTarget.closest("[inert]")
-        && context.focusTarget.getClientRects().length > 0
-      ) {
-        context.focusTarget.focus({ preventScroll: true });
-        return;
-      }
-      if (selectedSurvives && context.selectedDraftId) {
-        routePointTriggerRefs.current.get(context.selectedDraftId)?.focus({ preventScroll: true });
-      }
     });
   }, [playbackPreviewActive, routePoints]);
 
@@ -1280,6 +1302,7 @@ export function JourneyComposer({
         className="journey-composer motion-staged"
         data-mobile-layout={mobileLayout ? "true" : undefined}
         data-playback-preview-active={playbackPreviewActive ? "true" : undefined}
+        data-playback-preview-return-focus={playbackPreviewReturnFocusKind ?? undefined}
         inert={globePicking || playbackPreviewActive || undefined}
         role="dialog"
         aria-hidden={playbackPreviewActive || undefined}
