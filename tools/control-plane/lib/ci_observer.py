@@ -90,31 +90,48 @@ def latest_ci(repo, sha, *, missing_ledger=False, event='pull_request', branch=N
 
 
 def normalize_failure(job, text):
-    lines = [re.sub(r'^\d{4}-\d\d-\d\dT\S+\s*', '', l).strip() for l in text.splitlines()]
-    errors = [l for l in lines if re.search(r'assertionerror|assertion failed|(?:^|\s)error:|\bFAIL\b|✗', l, re.I)]
-    assertion = errors[0] if errors else 'unclassified-job-failure'
-    assertion = re.sub(r'\b[0-9a-f]{7,40}\b', '<sha>', assertion)
-    assertion = re.sub(r'https?://\S+', '<url>', assertion)[:300]
+    clean = re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', text)
+    lines = [re.sub(r'^\d{4}-\d\d-\d\dT\S+\s*', '', line).strip() for line in clean.splitlines()]
+    # Match runtime diagnostics, not workflow command echoes such as curl --fail
+    # or JavaScript source excerpts containing throw new Error(...).
+    runtime = re.compile(r'^(?:[\w.]+(?:Error|Exception)|Error|Exception)(?:\s+\[[^\]]+\])?:', re.I)
+    errors = [line for line in lines if runtime.search(line)]
+    if not errors:
+        errors = [line for line in lines if re.match(r'^(?:FAIL(?:\s|:)|Assertion failed(?:\s|:)|✗\s)', line, re.I)]
+    if not errors:
+        errors = [line for line in lines if re.match(r'^(?:##\[error\]|The runner has lost communication|Failed to resolve action download info|Failed to download action|Service Unavailable)', line, re.I)]
+    primary = errors[0] if errors else 'unclassified-job-failure'
+    context = '\n'.join(errors)
+    assertion = re.sub(r'\b[0-9a-f]{7,40}\b', '<sha>', primary)
+    assertion = re.sub(r'https?://\S+', '<url>', assertion)
     assertion = re.sub(r'(?i)(bearer\s+)[^\s]+', r'\1<redacted>', assertion)
     assertion = re.sub(r'(?i)((?:token|secret|api[_-]?key|password)[\s:=]+)[^\s,;]+', r'\1<redacted>', assertion)
+    # Measurements vary between occurrences of one assertion; viewport and DPR
+    # remain explicit dimensions, never inferred from zoom or incidental numbers.
+    assertion = re.sub(r'(?<![\w])\d+(?:\.\d+)?(?![\w])', '<number>', assertion)[:600]
     def field(pattern, default='unknown'):
-        match = re.search(pattern, text, re.I)
+        match = re.search(pattern, context, re.I)
         return match.group(1)[:120] if match else default
+    explicit_fixture = field(r'(?:fixtureId|fixture)["\s:=]+([\w.-]+)')
+    failed_fixtures = re.findall(r'(?:\]\s+|;\s*)([\w.-]+)\s+@[\d.]+x\s*:', context)
+    if explicit_fixture.lower() in {'unknown', 'not', 'none', 'null', 'true', 'false', 'rendered'}:
+        explicit_fixture = '|'.join(dict.fromkeys(failed_fixtures))[:120] or 'unknown'
     stage = next((s['name'] for s in job.get('steps', []) if s.get('conclusion') == 'failure'), 'unknown')
     dims = {'lane': job['name'], 'assertion': assertion,
-            'fixture': field(r'(?:fixture|fixtureId)["\s:=]+([\w.-]+)'),
-            'viewport': field(r'(?:viewport["\s:=]+)?(\d{3,4}\s*[x×]\s*\d{3,4})'),
+            'fixture': explicit_fixture,
+            'viewport': field(r'viewport["\s:=]+(\d{3,4}\s*[x×]\s*\d{3,4})'),
             'dpr': field(r'(?:DPR|devicePixelRatio)["\s:=]+([1-9](?:\.\d+)?)'), 'stage': stage}
     fingerprint = hashlib.sha256(json.dumps(dims, sort_keys=True).encode()).hexdigest()
     lower = text.lower()
-    infrastructure = any(needle in lower for needle in INFRA) and not re.search(r'assertionerror|assertion failed', lower)
+    diagnostic = primary.lower()
+    infrastructure = any(needle in diagnostic for needle in INFRA) and not re.search(r'assertionerror|assertion failed|\[qa[-_]', diagnostic)
     if re.search(r'journey.?rail|rail.*hidden', lower):
         family = 'journey-rail-visibility'
     elif 'city-label' in job['name'] or re.search(r'hong kong|inland.control', lower):
         family = 'city-label-anchoring'
     else:
         family = fingerprint[:16]
-    return {'fingerprint': fingerprint, **dims, 'family': family, 'infrastructure': infrastructure}
+    return {'parser_version': 2, 'fingerprint': fingerprint, **dims, 'family': family, 'infrastructure': infrastructure}
 
 
 def write_json(path, data):
@@ -144,7 +161,7 @@ def observe_failures(root, repo, ci):
         record = normalize_failure(job, result.stdout)
         record.update(repo=repo, run_id=run['id'], attempt=job.get('run_attempt', run['run_attempt']), job_id=job['id'],
                       sha=run['head_sha'], job_url=job.get('html_url'), observed_at=datetime.datetime.now(datetime.timezone.utc).isoformat())
-        path = history / ('failure-%s-%s-%s.json' % (run['id'], record['attempt'], job['id']))
+        path = history / ('failure-%s-%s-%s-v2.json' % (run['id'], record['attempt'], job['id']))
         with _storage_mutex(root / 'feature_list.json'):
             old = []
             if history.exists():

@@ -96,6 +96,35 @@ class FingerprintCases(fixture.SyntheticOne):
         self.assertTrue(set(ci.DIMENSIONS) <= set(value))
         self.assertEqual(('city', '1280x720', '3'), (value['fixture'], value['viewport'], value['dpr']))
 
+    def test_workflow_curl_fail_echo_is_not_a_runtime_assertion(self):
+        text = ('2026-09-17T01:00:00Z \x1b[36;1mif curl --fail --silent http://localhost; then\x1b[0m\n'
+                '2026-09-17T01:00:01Z throw new Error(failures.join("; "));\n'
+                '2026-09-17T01:00:02Z Error: [qa-city-label-anchoring] hong-kong-localization @3x: rendered label is null\n')
+        value = ci.normalize_failure(self.failed(), text)
+        self.assertTrue(value['assertion'].startswith('Error: [qa-city-label-anchoring]'))
+        self.assertNotIn('curl', value['assertion']); self.assertNotIn('throw', value['assertion'])
+        self.assertEqual('hong-kong-localization', value['fixture'])
+
+    def test_status_fixture_not_rendered_is_not_failed_fixture_identity(self):
+        text = ('[qa-city-label-anchoring] dense-coastline fixture=not rendered\n'
+                'Error: [qa-city-label-anchoring] inland-control @1.00x: missing; hong-kong-localization @3x: null\n')
+        self.assertEqual('inland-control|hong-kong-localization', ci.normalize_failure(self.failed(), text)['fixture'])
+
+    def test_incidental_zoom_or_artifact_size_does_not_invent_viewport_dpr(self):
+        text = ('image artifact 1920x1080 DPR=2\n'
+                'Error: [qa-city-label-anchoring] hong-kong-localization @3x: null\n')
+        value = ci.normalize_failure(self.failed(), text)
+        self.assertEqual(('unknown', 'unknown'), (value['viewport'], value['dpr']))
+
+    def test_varying_measurement_does_not_split_the_same_failure(self):
+        a = ci.normalize_failure(self.failed(), 'Error: [qa-city-label-anchoring] inland-control @1.00x: reached 0.821 of required 0.851')
+        b = ci.normalize_failure(self.failed(), 'Error: [qa-city-label-anchoring] inland-control @1.00x: reached 0.812 of required 0.851')
+        self.assertEqual(a['fingerprint'], b['fingerprint'])
+
+    def test_earlier_infrastructure_warning_cannot_reclassify_product_failure(self):
+        text = 'Warning: Service Unavailable, recovered\nError: [qa-city-label-anchoring] hong-kong-localization @3x: null'
+        self.assertFalse(ci.normalize_failure(self.failed(), text)['infrastructure'])
+
     def test_same_observation_does_not_count_twice(self):
         self.record(); result = self.record()
         self.assertEqual(1, result['family_occurrences']); self.assertFalse(result['root_cause_required'])
