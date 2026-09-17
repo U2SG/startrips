@@ -76,7 +76,7 @@ class ProcessClassificationCases(unittest.TestCase):
         self.assertEqual(shared.replace('\\', '/').lower(), conflict['worktree'])
 
     def test_scoped_cross_lane_loop_blocks_same_owner_before_worker(self):
-        shared = str((self.root / 'owner tree with spaces').resolve())
+        shared = str((self.root / 'owner;tree with spaces').resolve())
         command = ('bash "' + str(self.root / 'run-loop.sh') + '" --carrier-lane=backend '
                    '--carrier-token=backend-token-1 --carrier-feature=ST-080 '
                    '"--carrier-worktree=' + shared + '"')
