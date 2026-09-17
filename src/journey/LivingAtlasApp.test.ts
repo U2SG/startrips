@@ -1388,8 +1388,8 @@ describe("playbackHoldReason (#197)", () => {
 describe("Quiet Core route presentation", () => {
   it("keeps explicit browse selection out of narrative-current projection", () => {
     const source = readFileSync(new URL("./LivingAtlasApp.tsx", import.meta.url), "utf8");
-    const start = source.indexOf("const narrativeJourneyRoutePoint =");
-    const block = source.slice(start, start + 700);
+    const start = source.indexOf("const narrativeSemanticSelection =");
+    const block = source.slice(start, start + 900);
 
     expect(start).toBeGreaterThanOrEqual(0);
     expect(block).toContain("const narrativeSemanticSelection = unknownCreateSemanticOwnership.selection");
