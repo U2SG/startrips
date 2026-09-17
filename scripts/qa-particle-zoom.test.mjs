@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setParticleZoom } from "./qa-particle-zoom.mjs";
 
-function fixture({ initial = 1.4, flightZoom = 1.7, accepts = true, scale = 1, connected = true, width = 1280, frameDrift = 0 } = {}) {
+function fixture({ initial = 1.4, flightZoom = 1.7, accepts = true, scale = 1, connected = true, width = 1280, frameDrift = 0, focus = null } = {}) {
   let zoom = initial;
   const events = [];
   vi.stubGlobal("window", { __particleEarthDebug: () => ({ zoom, semanticLod: "planet" }) });
@@ -16,6 +16,7 @@ function fixture({ initial = 1.4, flightZoom = 1.7, accepts = true, scale = 1, c
   });
   const node = {
     isConnected: connected,
+    closest: () => focus ? { dataset: focus } : null,
     getBoundingClientRect: () => ({ x: 10, y: 20, width, height: 800 }),
     dispatchEvent(event) {
       events.push(event);
@@ -76,6 +77,38 @@ describe("atomic particle QA zoom fixture input", () => {
   });
   it.each([{ connected: false }, { width: 0 }])("refuses unavailable canvas %o", async (options) => {
     const { page, events } = fixture(options); await expect(setParticleZoom(page, 1)).rejects.toThrow(/connected bounds/);
+    expect(events).toHaveLength(0);
+  });
+});
+
+const hongKongFocus = { personalPointX: "83", personalPointY: "145", focusPointLat: "22.27832", focusPointLon: "114.17469" };
+const hongKongAnchor = { kind: "focus", lat: 22.27832, lon: 114.17469 };
+
+describe("named-place zoom fixture anchoring", () => {
+  it("keeps the same off-centre geographic focus at both 2x and 3x", async () => {
+    const { page, events } = fixture({ focus: hongKongFocus });
+    await setParticleZoom(page, 2, hongKongAnchor);
+    await setParticleZoom(page, 3, hongKongAnchor);
+    expect(events).toHaveLength(2);
+    for (const event of events) expect(event).toMatchObject({ clientX: 93, clientY: 165 });
+    expect(page.evaluate).not.toHaveBeenCalled();
+  });
+  it("uses the latest published focus rather than a caller-side old point", async () => {
+    const focus = { ...hongKongFocus };
+    const { page, events } = fixture({ focus });
+    focus.personalPointX = "120";
+    await setParticleZoom(page, 3, hongKongAnchor);
+    expect(events[0].clientX).toBe(130);
+  });
+  it.each([null, {}, { ...hongKongFocus, personalPointX: "" }, { ...hongKongFocus, personalPointY: "NaN" },
+    { ...hongKongFocus, focusPointLat: "39.7" }])("never falls back to centre for absent or wrong focus %o", async (focus) => {
+    const { page, events } = fixture({ focus });
+    await expect(setParticleZoom(page, 3, hongKongAnchor)).rejects.toThrow(/missing or belongs/);
+    expect(events).toHaveLength(0);
+  });
+  it("rejects an off-screen focus instead of counting missing text as localization", async () => {
+    const { page, events } = fixture({ focus: { ...hongKongFocus, personalPointX: "1500" } });
+    await expect(setParticleZoom(page, 3, hongKongAnchor)).rejects.toThrow(/outside the canvas/);
     expect(events).toHaveLength(0);
   });
 });

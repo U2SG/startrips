@@ -951,8 +951,11 @@ try {
   await page.waitForFunction(() => Number(
     document.querySelector(".particle-earth-scene")?.dataset.journeyCityLabelCount ?? 0,
   ) > 0, null, { timeout: 30_000 });
+  await waitForFocusToSettle(page);
   for (const zoom of [2, 3]) {
-    await setZoom(page, zoom);
+    // Keep the named-place fixture in frame after manual zoom ownership starts.
+    // A missing or different focus must fail, never fall back to screen centre.
+    await setZoom(page, zoom, { kind: "focus", ...hongKong });
     await page.waitForTimeout(300);
     const localized = await measure(page);
     const rendered = findExactCityLabel(localized, hongKong);

@@ -18,7 +18,27 @@ export async function setParticleZoom(page, targetZoom, anchor = null) {
       if (!node.isConnected || bounds.width <= 0 || bounds.height <= 0) {
         throw new Error("Particle Earth canvas has no connected bounds");
       }
-      const point = anchor ?? { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
+      let point = anchor;
+      if (anchor?.kind === "focus") {
+        // A named-place fixture must keep zooming on that PLACE, not the canvas
+        // centre after the first wheel has claimed manual camera ownership.
+        // Read geographic identity and its projected point in this same callback.
+        const data = node.closest(".particle-earth-scene")?.dataset;
+        const values = [data?.personalPointX, data?.personalPointY, data?.focusPointLat, data?.focusPointLon];
+        if (values.some((value) => value == null || value.trim() === "" || !Number.isFinite(Number(value)))
+            || !Number.isFinite(anchor.lat) || !Number.isFinite(anchor.lon)
+            || Math.abs(Number(values[2]) - anchor.lat) > 0.001
+            || Math.abs(Number(values[3]) - anchor.lon) > 0.001) {
+          throw new Error("Particle QA focus anchor is missing or belongs to another place");
+        }
+        // The scene publishes personalPoint in canvas-local CSS coordinates.
+        point = { x: bounds.x + Number(values[0]), y: bounds.y + Number(values[1]) };
+        if (point.x < bounds.x || point.x > bounds.x + bounds.width
+            || point.y < bounds.y || point.y > bounds.y + bounds.height) {
+          throw new Error("Particle QA focus anchor is outside the canvas");
+        }
+      }
+      point ??= { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
       if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) {
         throw new Error("Particle QA zoom anchor must be finite");
       }
