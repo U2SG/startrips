@@ -88,31 +88,6 @@ def published():
     return result
 
 
-def elsewhere(row, by_pid, aliases):
-    """Whether a readable ancestor proves this process belongs to another tree.
-
-    Some processes never expose a command line to the provider -- another user's
-    session, a protected process -- and treating every one of them as a possible
-    carrier of THIS workspace makes the guard unusable on any machine that also
-    runs an editor or an agent. Their parentage is still readable, and a parent
-    that is plainly somebody else's answers the question. Nothing is relaxed when
-    the answer is absent: an orphan, or ancestors equally unreadable, stay UNKNOWN.
-    """
-    seen, pid = set(), row['ppid']
-    while pid and pid not in seen:
-        seen.add(pid)
-        parent = by_pid.get(pid)
-        if parent is None:
-            return False
-        command = parent.get('command')
-        if isinstance(command, str) and command.strip():
-            text = command.replace('\\', '/').lower()
-            return ('startrips_execution_owner=' not in text
-                    and not any(alias.rstrip('/') in text for alias in aliases))
-        pid = parent['ppid']
-    return False
-
-
 def competitors(rows, root, self_pid):
     by_pid = {r['pid']: r for r in rows}
     if self_pid not in by_pid:
@@ -140,12 +115,10 @@ def competitors(rows, root, self_pid):
             continue
         raw_command = row.get('command')
         if not isinstance(raw_command, str) or not raw_command.strip():
-            # An unreadable command line is only OUR unknown while this process
-            # could still belong to this workspace. A readable ancestor that
-            # plainly belongs elsewhere settles that without weakening anything:
-            # a broken chain, or ancestors we cannot read either, stay UNKNOWN.
-            if elsewhere(row, by_pid, aliases):
-                continue
+            # A parent command without this workspace is not evidence about its
+            # child's cwd or task. Generic shells/editors can launch our workers,
+            # and even an explicitly foreign parent can change its child's cwd.
+            # Without this carrier's own readable identity, remain UNKNOWN.
             found.append({'pid': row['pid'], 'ppid': row['ppid'],
                           'kind': 'unknown-carrier', 'state': 'unknown-command'})
             continue

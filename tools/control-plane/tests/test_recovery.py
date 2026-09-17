@@ -107,12 +107,42 @@ class ProcessClassificationCases(unittest.TestCase):
         with mock.patch.dict(os.environ, {'STARTRIPS_OWN_PIDS': '10@sup-start-1'}):
             self.assertEqual('unknown-command', execution.competitors(rows, self.root, 3)[0]['state'])
 
-    def test_unreadable_process_under_a_foreign_parent_is_not_our_unknown(self):
-        # Another session's child never exposes a command line here. Its readable
-        # parent settles that it is not ours, so it must not block this workspace.
-        rows = self.base + [process(30, name='node.exe', command='node --stdio editor-server'),
+    def test_unreadable_child_under_a_generic_parent_stays_unknown(self):
+        for name, command in [('powershell.exe', 'powershell.exe -NoProfile'),
+                              ('node.exe', 'node --stdio editor-server'),
+                              ('bash.exe', 'bash ./run-loop.sh')]:
+            with self.subTest(parent=command):
+                rows = self.base + [process(30, name=name, command=command),
+                                    process(31, 30, 'node.exe', None)]
+                states = {row['pid']: row['state']
+                          for row in execution.competitors(rows, self.root, 3)}
+                self.assertEqual('unknown-command', states[31])
+
+    def test_generic_intermediary_cannot_hide_a_workspace_ancestor(self):
+        rows = self.base + [
+            process(30, name='bash.exe', command='bash ' + str(self.root / 'run-loop.sh')),
+            process(31, 30, 'powershell.exe', 'powershell.exe -NoProfile'),
+            process(32, 31, 'node.exe', None)]
+        states = {row['pid']: row['state']
+                  for row in execution.competitors(rows, self.root, 3)}
+        self.assertEqual('unknown-command', states[32])
+
+    def test_even_a_foreign_parent_cannot_prove_an_unreadable_child_is_foreign(self):
+        other = self.root.parent / 'other-workspace'
+        rows = self.base + [process(30, name='bash.exe', command='bash ' + str(other / 'run-loop.sh')),
                             process(31, 30, 'node.exe', None)]
-        self.assertEqual([], execution.competitors(rows, self.root, 3))
+        states = {row['pid']: row['state']
+                  for row in execution.competitors(rows, self.root, 3)}
+        self.assertEqual('unknown-command', states[31])
+
+    def test_generic_parent_cannot_make_idle_or_resume_succeed(self):
+        rows = self.base + [process(30, name='powershell.exe', command='powershell.exe -NoProfile'),
+                            process(31, 30, 'node.exe', None)]
+        with mock.patch.object(execution, 'snapshot', return_value=rows) as provider, \
+                mock.patch.object(execution.os, 'getpid', return_value=3):
+            with self.assertRaisesRegex(execution.EvidenceUnknown, 'unknown-command'):
+                execution.ensure_idle(self.root)
+        self.assertEqual(2, provider.call_count)
 
     def test_unreadable_orphan_is_still_unknown(self):
         # No readable ancestor, so nothing proves it is somebody else's.
