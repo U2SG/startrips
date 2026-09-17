@@ -45,7 +45,6 @@ import {
   clampGlobeTilt,
   journeyConnectorAnchor,
   createRetryableParticleResourceLoader,
-  getJourneyRouteLineScale,
   getJourneyRouteVisualState,
   getGlobeIdleAlignmentRotation,
   getGlobeIdleRotationDelta,
@@ -727,12 +726,6 @@ describe("ParticleEarthScene contracts", () => {
         point.z,
       )).toBe(expected);
     }
-  });
-
-  it("scales route lines with globe zoom while keeping a readable floor and ceiling", () => {
-    expect(getJourneyRouteLineScale(0.72)).toBe(0.72);
-    expect(getJourneyRouteLineScale(1.15)).toBe(1);
-    expect(getJourneyRouteLineScale(1.15 * 3)).toBe(2.4);
   });
 
   it("keeps every journey neutral until one route is selected", () => {

@@ -1386,7 +1386,19 @@ describe("playbackHoldReason (#197)", () => {
 });
 
 describe("Quiet Core route presentation", () => {
-  it("uses one normalized temporal leader and leg draw without perpetual route loops", () => {
+  it("keeps explicit browse selection out of narrative-current projection", () => {
+    const source = readFileSync(new URL("./LivingAtlasApp.tsx", import.meta.url), "utf8");
+    const start = source.indexOf("const narrativeSemanticSelection =");
+    const block = source.slice(start, start + 900);
+
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(block).toContain("const narrativeSemanticSelection = unknownCreateSemanticOwnership.selection");
+    expect(block).toContain("&& !timeCursor.hasExplicitSelection");
+    expect(block).toContain("&& narrativeSemanticSelection");
+    expect(block).not.toContain("&& timeCursor.selection");
+  });
+
+  it("keeps temporal reveal as the only directional route motion authority", () => {
     const css = readFileSync(new URL("../app.css", import.meta.url), "utf8");
     const atlasCss = readFileSync(new URL("../styles/living-atlas.css", import.meta.url), "utf8");
     const scene = readFileSync(new URL("../scene/ParticleEarthScene.tsx", import.meta.url), "utf8");
@@ -1400,81 +1412,57 @@ describe("Quiet Core route presentation", () => {
     expect(css).toContain(
       "stroke-dashoffset: calc(1 - var(--journey-leg-temporal-progress, 0));",
     );
+    expect(css).toContain("Browse selection changes optical emphasis only");
+    expect(css).not.toContain("motionRouteDraw");
+    expect(css).not.toContain("motionRouteLeader");
+    expect(css).not.toContain("motionRouteArrival");
     expect(scene).toContain('leaderPath.setAttribute("pathLength", "1")');
     expect(scene).toContain('path.setAttribute("pathLength", "1")');
-    expect(scene).not.toContain("particle-earth-route__strand-a");
-    expect(scene).not.toContain("particle-earth-route__point-ring");
+    expect(scene).not.toContain("buildRoutePointFlagPath");
+    expect(scene).not.toContain("buildRoutePointStarPoints");
     expect(`${css}\n${atlasCss}`).not.toContain("motionStrandA");
     expect(`${css}\n${atlasCss}`).not.toContain("motionStrandB");
     expect(`${css}\n${atlasCss}`).not.toContain("motionJourneyPointTwinkle");
-    expect(`${css}\n${atlasCss}`).not.toContain("motionClusterPulse");
   });
 
-  it("sequences destination arrival after the shared route travel duration", () => {
+  it("bounds route optical weight in CSS pixels instead of multiplying by globe zoom", () => {
     const css = readFileSync(new URL("../app.css", import.meta.url), "utf8");
-    const authority = css.indexOf(
-      "--journey-route-travel-duration: var(--motion-journey, 980ms);",
-    );
-    const drawRule = css.indexOf(
-      "animation: motionRouteDraw var(--journey-route-travel-duration)",
-      authority,
-    );
-    const leaderRule = css.indexOf(
-      "animation: motionRouteLeader var(--journey-route-travel-duration) linear 1 both;",
-      drawRule,
-    );
-    const arrivalRule = css.indexOf(
-      "animation: motionRouteArrival var(--journey-route-arrival-duration) var(--motion-ease-out, ease) var(--journey-route-travel-duration) 1 both;",
-      leaderRule,
-    );
+    const scene = readFileSync(new URL("../scene/ParticleEarthScene.tsx", import.meta.url), "utf8");
 
-    expect(authority).toBeGreaterThanOrEqual(0);
-    expect(drawRule).toBeGreaterThan(authority);
-    expect(leaderRule).toBeGreaterThan(drawRule);
-    expect(arrivalRule).toBeGreaterThan(leaderRule);
-    expect(css).not.toContain(
-      "animation: motionRouteArrival var(--motion-content, 560ms) var(--motion-ease-out, ease) 1 both;",
-    );
+    expect(css).toContain("stroke-width: 0.9px;");
+    expect(css).toContain("stroke-width: 1.15px;");
+    expect(css).toContain("stroke-width: 2.4px;");
+    expect(css).toContain("stroke-width: 2.8px;");
+    expect(css).toContain("stroke-width: 3px;");
+    expect(css).not.toContain("--journey-route-scale");
+    expect(scene).not.toContain("getJourneyRouteLineScale");
+    expect(scene).not.toContain('style.setProperty("--journey-route-scale"');
   });
 
-  it("lets camera focus own attention before the one-shot route draw and leader", () => {
+  it("renders Route Points as bead/ring circles with semantics separate from attention", () => {
     const css = readFileSync(new URL("../app.css", import.meta.url), "utf8");
-    const drawRule = css.indexOf(
-      ".particle-earth-route.is-style-quiet-core.is-active:not([data-temporal-reveal]) .particle-earth-route__core,",
-    );
-    const leaderRule = css.indexOf(
-      ".particle-earth-route.is-style-quiet-core.is-active:not([data-temporal-reveal]) .particle-earth-route__travel-leader",
-      drawRule,
-    );
-    const flyingRule = css.indexOf(
-      '.particle-earth-scene[data-route-focus-phase="flying"]',
-      leaderRule,
-    );
-    expect(drawRule).toBeGreaterThanOrEqual(0);
-    expect(leaderRule).toBeGreaterThan(drawRule);
-    expect(flyingRule).toBeGreaterThan(leaderRule);
-    expect(css.slice(leaderRule, flyingRule)).toContain(
-      "animation: motionRouteLeader var(--journey-route-travel-duration) linear 1 both;",
-    );
-    const flyingBlock = css.slice(flyingRule, css.indexOf("@keyframes motionRouteDraw", flyingRule));
-    expect(flyingBlock).toContain("animation: none;");
-    expect(flyingBlock).toContain("stroke-dashoffset: 1;");
-    expect(flyingBlock).toContain("opacity: 0;");
+    const scene = readFileSync(new URL("../scene/ParticleEarthScene.tsx", import.meta.url), "utf8");
+
+    expect(scene).toContain('"circle",');
+    expect(scene).toContain("point.isStop");
+    expect(scene).toContain("resolveRoutePointPresentation");
+    expect(scene).toContain("routePointMarkerRadiusPx");
+    expect(css).toContain('.particle-earth-route__point[data-semantic-role="passthrough"]');
+    expect(css).toContain('.particle-earth-route__point[data-semantic-role="stop"]');
+    expect(css).toContain('.particle-earth-route__point[data-attention-role="selected"]');
+    expect(css).toContain('.particle-earth-route__point[data-attention-role="narrative-current"]');
   });
 
   it("keeps reduced motion semantically complete without a travelling packet", () => {
     const css = readFileSync(new URL("../app.css", import.meta.url), "utf8");
-    const leaderKeyframes = css.indexOf("@keyframes motionRouteLeader");
-    const reducedMotion = css.indexOf("@media (prefers-reduced-motion: reduce)", leaderKeyframes);
-    expect(leaderKeyframes).toBeGreaterThanOrEqual(0);
-    expect(reducedMotion).toBeGreaterThan(leaderKeyframes);
+    const reducedMotion = css.indexOf("@media (prefers-reduced-motion: reduce)");
+    expect(reducedMotion).toBeGreaterThanOrEqual(0);
     const reducedBlock = css.slice(reducedMotion, reducedMotion + 900);
-    expect(reducedBlock).toContain("stroke-dashoffset: 0;");
     expect(reducedBlock).toContain(".particle-earth-route__travel-leader");
     expect(reducedBlock).toContain("opacity: 0 !important;");
+    expect(reducedBlock).toContain("transition: none !important;");
   });
 });
-
 describe("Mobile V2 particle-earth pointer ownership", () => {
   it("lets empty-state visuals pass gestures through while keeping the CTA interactive", () => {
     const css = readFileSync(new URL("../styles/living-atlas.css", import.meta.url), "utf8");

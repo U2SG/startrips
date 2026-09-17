@@ -1827,6 +1827,40 @@ export function LivingAtlasApp({
   const mobileJourney = focusPresentation.journey;
   const mobilePoint = focusPresentation.point;
   const focusPoint = focusPresentation.focusPoint;
+  const narrativeSemanticSelection = unknownCreateSemanticOwnership.selection;
+  const narrativeJourneyProgress = narrativeSemanticSelection
+    ? timeCursor.reveal.journeyProgress.get(narrativeSemanticSelection.journeyId)
+    : undefined;
+  const narrativeJourneyRoutePoint = (isMobileV2 || globeFocusMode)
+    && !timeCursor.hasExplicitSelection
+    && narrativeSemanticSelection
+    && narrativeJourneyProgress !== undefined
+    && narrativeJourneyProgress > 0
+    && narrativeJourneyProgress < 1
+    ? {
+        journeyId: narrativeSemanticSelection.journeyId,
+        routePointId: narrativeSemanticSelection.pointIndex !== null
+          ? journeys.find((journey) => journey.id === narrativeSemanticSelection.journeyId)
+            ?.routePoints[narrativeSemanticSelection.pointIndex]?.id ?? null
+          : null,
+        pointIndex: narrativeSemanticSelection.pointIndex,
+      }
+    : null;
+  const selectedJourneyRoutePoint = routePointContextSelection.context
+    ? {
+        journeyId: routePointContextSelection.context.journeyId,
+        routePointId: routePointContextSelection.context.routePointId,
+        pointIndex: routePointContextSelection.context.routePointIndex,
+      }
+    : timeCursor.hasExplicitSelection && timeCursor.selection?.pointIndex !== null
+      && timeCursor.selection?.pointIndex !== undefined
+      ? {
+          journeyId: timeCursor.selection.journeyId,
+          routePointId: journeys.find((journey) => journey.id === timeCursor.selection?.journeyId)
+            ?.routePoints[timeCursor.selection.pointIndex]?.id ?? null,
+          pointIndex: timeCursor.selection.pointIndex,
+        }
+      : null;
   const focusRoute = focusPresentation.point
     ? null
     : routes.find((route) => route.id === focusPresentation.activeRouteId) ?? null;
@@ -2468,6 +2502,8 @@ export function LivingAtlasApp({
             focusColor={focusPresentation.journey?.lightColor}
             journeyRoutes={routes}
             activeJourneyRouteId={draftRoute?.id ?? (initialHomeCameraAnchor ? null : activeJourneyId)}
+            selectedJourneyRoutePoint={draftRoute ? null : selectedJourneyRoutePoint}
+            narrativeJourneyRoutePoint={draftRoute ? null : narrativeJourneyRoutePoint}
             mediaCoverHint={{
               opaqueMediaCover: storyGlobeCover.opaqueMediaCover || playbackGlobeCover.opaqueMediaCover,
               coverTransitionActive: storyGlobeCover.coverTransitionActive || playbackGlobeCover.coverTransitionActive,

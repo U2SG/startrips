@@ -67,11 +67,6 @@ button {
 }
 
 .particle-earth-route {
-  --journey-route-scale: 1;
-  /* One route timing authority: draw and leader share travel duration;
-     arrival is sequenced from that exact duration instead of starting beside it. */
-  --journey-route-travel-duration: var(--motion-journey, 980ms);
-  --journey-route-arrival-duration: var(--motion-content, 560ms);
 }
 
 /* The active journey card is tied to its real projected location. The path is
@@ -96,17 +91,17 @@ button {
    animated strand layers competing with labels, particles, and media. */
 .particle-earth-route__glow {
   opacity: 0.025;
-  stroke-width: calc(3.6px * var(--journey-route-scale, 1));
+  stroke-width: 2.4px;
 }
 
 .particle-earth-route__core {
   opacity: 0.55;
-  stroke-width: calc(1.25px * var(--journey-route-scale, 1));
+  stroke-width: 0.9px;
 }
 
 .particle-earth-route__travel-leader {
   stroke: rgba(245, 255, 251, 0.98);
-  stroke-width: calc(1.7px * var(--journey-route-scale, 1));
+  stroke-width: 1.15px;
   stroke-dasharray: 0.035 0.965;
   stroke-dashoffset: 0;
   opacity: 0;
@@ -116,35 +111,69 @@ button {
 
 .particle-earth-route__point {
   fill: currentColor;
-  stroke: rgba(245, 255, 251, 0.98);
-  stroke-width: 1.8;
-  stroke-linecap: round;
-  stroke-linejoin: round;
+  stroke: rgba(245, 255, 251, 0.9);
+  stroke-width: 0.85px;
   paint-order: stroke fill;
   vector-effect: non-scaling-stroke;
-  transform-box: fill-box;
-  transform-origin: center;
-  opacity: 0.72;
-  filter: drop-shadow(0 0 1px currentColor);
+  opacity: 0.64;
+  filter: none;
 }
 
-.particle-earth-route__point--transit { opacity: 0.58; }
-.particle-earth-route__point--stop { opacity: 0.78; stroke-width: 2; }
+/* Route Point semantics stay orthogonal to attention. Passthrough is a quiet
+   bead; Stop is a ring. Selection/narrative attention below never changes the
+   geographic anchor or the independent Three.js hit target. */
+.particle-earth-route__point[data-semantic-role="passthrough"] {
+  fill: currentColor;
+}
 
+.particle-earth-route__point[data-semantic-role="stop"] {
+  fill: rgba(4, 12, 12, 0.88);
+  stroke: currentColor;
+  stroke-width: 1.25px;
+  opacity: 0.88;
+}
+
+.particle-earth-route__point[data-attention-role="selected"] {
+  opacity: 1;
+  stroke: rgba(245, 255, 251, 1);
+  stroke-width: 1.4px;
+  filter: drop-shadow(0 0 2px currentColor);
+}
+
+.particle-earth-route__point[data-attention-role="narrative-current"] {
+  opacity: 1;
+  stroke: rgba(245, 255, 251, 1);
+  stroke-width: 1.6px;
+  filter: drop-shadow(0 0 3px currentColor);
+}
 .particle-earth-route.is-active .particle-earth-route__glow {
   opacity: 0.085;
-  stroke-width: calc(4.8px * var(--journey-route-scale, 1));
+  stroke-width: 2.8px;
 }
 
 .particle-earth-route.is-active .particle-earth-route__core {
   opacity: 0.98;
-  stroke-width: calc(1.6px * var(--journey-route-scale, 1));
+  stroke-width: 1.15px;
 }
 
-.particle-earth-route.is-active .particle-earth-route__point {
-  opacity: 1;
-  stroke: rgba(245, 255, 251, 1);
-  stroke-width: 2;
+.particle-earth-route[data-attention-role="narrative-current"] .particle-earth-route__glow {
+  opacity: 0.1;
+  stroke-width: 3px;
+}
+
+.particle-earth-route[data-attention-role="narrative-current"] .particle-earth-route__core,
+.particle-earth-route[data-attention-role="narrative-current"] .particle-earth-route__leg {
+  stroke-width: 1.2px;
+}
+
+.particle-earth-route.is-active .particle-earth-route__point:not([data-attention-role="selected"]):not([data-attention-role="narrative-current"]) {
+  stroke-opacity: 0.96;
+}
+
+/* Browse emphasis may not outrank the time cursor: once a Route Point carries
+   a temporal reveal, opacity belongs to the temporal authority alone. */
+.particle-earth-route.is-active .particle-earth-route__point:not([data-attention-role="selected"]):not([data-attention-role="narrative-current"]):not([data-temporal-reveal]) {
+  opacity: 0.86;
 }
 
 /* #20 soundtrack energy stays a restrained brightness modulation. It may
@@ -155,6 +184,15 @@ button {
 .particle-earth-route.is-active .particle-earth-route__leg,
 .particle-earth-route.is-active .particle-earth-route__point {
   filter: brightness(calc(1 + var(--audio-route-energy, 0)));
+}
+
+/* Audio energy composes with point attention instead of replacing it. */
+.particle-earth-route.is-active .particle-earth-route__point[data-attention-role="selected"] {
+  filter: brightness(calc(1 + var(--audio-route-energy, 0))) drop-shadow(0 0 2px currentColor);
+}
+
+.particle-earth-route.is-active .particle-earth-route__point[data-attention-role="narrative-current"] {
+  filter: brightness(calc(1 + var(--audio-route-energy, 0))) drop-shadow(0 0 3px currentColor);
 }
 
 .particle-earth-route.is-muted .particle-earth-route__glow { opacity: 0.012; }
@@ -198,7 +236,7 @@ button {
   stroke: currentColor;
   stroke-linecap: round;
   stroke-linejoin: round;
-  stroke-width: calc(1.55px * var(--journey-route-scale, 1));
+  stroke-width: 1px;
   stroke-dasharray: 1;
   stroke-dashoffset: 1;
   opacity: 0;
@@ -232,66 +270,22 @@ button {
   opacity: 0;
 }
 
-/* Selection choreography: camera owns attention first. Once route focus settles,
-   the same normalized core/halo draws once and a single leader traverses it.
-   No strand/twinkle/pulse loops remain afterward. */
-.particle-earth-route.is-style-quiet-core.is-active:not([data-temporal-reveal]) .particle-earth-route__core,
-.particle-earth-route.is-style-quiet-core.is-active:not([data-temporal-reveal]) .particle-earth-route__glow {
-  stroke-dasharray: 1;
-  stroke-dashoffset: 1;
-  animation: motionRouteDraw var(--journey-route-travel-duration) var(--motion-ease-in-out-spatial, cubic-bezier(0.65, 0, 0.35, 1)) forwards;
-}
-
-.particle-earth-route.is-style-quiet-core.is-active:not([data-temporal-reveal]) .particle-earth-route__travel-leader {
-  animation: motionRouteLeader var(--journey-route-travel-duration) linear 1 both;
-}
-
-.particle-earth-route.is-style-quiet-core.is-active:not([data-temporal-reveal]) .particle-earth-route__point--destination {
-  animation: motionRouteArrival var(--journey-route-arrival-duration) var(--motion-ease-out, ease) var(--journey-route-travel-duration) 1 both;
-}
-
-.particle-earth-scene[data-route-focus-phase="flying"]
-  .particle-earth-route.is-style-quiet-core.is-active:not([data-temporal-reveal]) .particle-earth-route__core,
+/* Browse selection changes optical emphasis only. Directional route draw,
+   leader movement and arrival are reserved for the temporal reveal authority. */
 .particle-earth-scene[data-route-focus-phase="flying"]
   .particle-earth-route.is-style-quiet-core.is-active:not([data-temporal-reveal]) .particle-earth-route__glow {
-  animation: none;
-  stroke-dasharray: 1;
-  stroke-dashoffset: 1;
+  opacity: 0.025;
 }
 
 .particle-earth-scene[data-route-focus-phase="flying"]
-  .particle-earth-route.is-style-quiet-core.is-active:not([data-temporal-reveal]) .particle-earth-route__travel-leader {
-  animation: none;
-  opacity: 0;
+  .particle-earth-route.is-style-quiet-core.is-active:not([data-temporal-reveal]) .particle-earth-route__core {
+  opacity: 0.38;
 }
 
 .particle-earth-scene[data-route-focus-phase="flying"]
   .particle-earth-route.is-style-quiet-core.is-active:not([data-temporal-reveal]) .particle-earth-route__point {
   opacity: 0.34;
 }
-
-.particle-earth-scene[data-route-focus-phase="flying"]
-  .particle-earth-route.is-style-quiet-core.is-active:not([data-temporal-reveal]) .particle-earth-route__point--destination {
-  animation: none;
-}
-
-@keyframes motionRouteDraw {
-  to { stroke-dashoffset: 0; }
-}
-
-@keyframes motionRouteLeader {
-  0% { opacity: 0; stroke-dashoffset: 0; }
-  10% { opacity: 0.92; }
-  88% { opacity: 0.92; }
-  100% { opacity: 0; stroke-dashoffset: -0.965; }
-}
-
-@keyframes motionRouteArrival {
-  0%, 18% { transform: scale(1); filter: drop-shadow(0 0 1px currentColor); }
-  48% { transform: scale(1.22); filter: drop-shadow(0 0 5px currentColor); }
-  100% { transform: scale(1); filter: drop-shadow(0 0 1px currentColor); }
-}
-
 @media (prefers-reduced-motion: reduce) {
   .particle-earth-route.is-style-quiet-core.is-active .particle-earth-route__core,
   .particle-earth-route.is-style-quiet-core.is-active .particle-earth-route__glow {
@@ -300,7 +294,7 @@ button {
   }
 
   .particle-earth-route__travel-leader,
-  .particle-earth-route__point--destination {
+  .particle-earth-route__point {
     animation: none !important;
     transition: none !important;
   }
