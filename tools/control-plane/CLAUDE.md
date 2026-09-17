@@ -551,3 +551,9 @@ Intake amend results carry their pre-model row token through application; user
 changes during the model round invalidate the entire old result, including
 unchanged/moot snapshot bookkeeping. Handoff capture and final revalidation bind
 Source, final head and exact CI run/attempt to one independent-review decision.
+
+Urgent discovery is not bulk replenishment: when legitimate registered work exists,
+intake only considers unqueued P0/P1-titled candidates within the existing per-round
+budget. It does not preempt a live owner or bypass dependencies/gates. A failed API,
+missing response or invalid candidate document returns UNKNOWN, never an empty
+queue verdict; that error propagates through the supervisor and wake hook.

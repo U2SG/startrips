@@ -117,12 +117,16 @@ intake_field() {
 # (ST-001..ST-005) or null — so membership is decided on trailing digits.
 intake_candidates() {
   intake_init_dirs
-  local issues="$INTAKE_DIR/open-issues.json"
-  gh issue list --repo "$INTAKE_GH_REPO" --state open --limit 100 \
-    --json number,title,labels,createdAt,author 2>/dev/null | tr -d '\r' > "$issues" || return 0
-  [[ -s "$issues" ]] || return 0
+  local issues="$INTAKE_DIR/open-issues-${BASHPID}.json" response
+  if ! response="$(gh issue list --repo "$INTAKE_GH_REPO" --state open --limit 100 \
+      --json number,title,labels,createdAt,author)"; then
+    echo "[intake] candidate evidence UNKNOWN; discovery failed" >&2
+    return 6
+  fi
+  [[ -n "$response" ]] || { echo "[intake] candidate response missing" >&2; return 6; }
+  printf '%s' "$response" | tr -d '\r' > "$issues"
 python3 - "$INTAKE_FEATURES" "$INTAKE_SKIPPED" "$issues" <<'PY'
-import json, re, sys
+import json, os, re, sys
 feat_p, skip_p, iss_p = sys.argv[1:4]
 from pathlib import Path
 sys.path.insert(0, str(Path(feat_p).parent / 'lib'))
@@ -157,6 +161,8 @@ def severity(it):
 
 out = []
 for it in sorted(issues, key=lambda x: (severity(x), x.get('createdAt') or '', x['number'])):
+    if os.environ.get('INTAKE_URGENT_ONLY') == '1' and severity(it) > 1:
+        continue
     n = int(it['number'])
     if n in queued or n in skipped:
         continue
@@ -489,13 +495,14 @@ intake_new_issues() {
   # a spent budget into iteration 2..N. The reconcile pass that follows in the
   # same iteration shares what is left of this fresh budget.
   INTAKE_BUDGET=""
-  local n count=0
+  local n count=0 discovered
   local -a cands=()
-  command -v gh >/dev/null 2>&1 || { echo "[intake] gh not available; skipping intake"; return 0; }
+  command -v gh >/dev/null 2>&1 || { echo "[intake] gh not available; evidence UNKNOWN" >&2; return 6; }
   intake_init_dirs
   # Read the candidate list into an array first: a triage session started inside
   # a loop that reads from a process substitution would share that descriptor.
-  mapfile -t cands < <(intake_candidates)
+  discovered="$(intake_candidates)" || return 6
+  mapfile -t cands <<< "$discovered"
   for n in "${cands[@]}"; do
     n="$(printf %s "$n" | tr -d '\r')"
     [[ -n "$n" ]] || continue

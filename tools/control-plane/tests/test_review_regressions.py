@@ -186,3 +186,35 @@ class ActualLoopReplayCases(fixture.WiringTests):
         self.assertEqual(['called']*3,(self.root/'.agent-artifacts/model-calls.log').read_text().splitlines())
         self.assertFalse((self.root/'AGENT_STOP').exists())
         self.assertEqual('in_progress',fixture.store.load_document(self.path)['features'][0]['status'])
+
+
+class IntakeDiscoveryCases(fixture.WiringTests):
+    def test_failed_github_discovery_propagates_transient_not_no_work(self):
+        before=self.path.read_bytes()
+        command='set -euo pipefail; ROOT="$PWD"; source lib/intake.sh; gh() { return 1; }; intake_new_issues'
+        result=self.invoke(command)
+        self.assertEqual(6,result.returncode,result.stdout+result.stderr)
+        self.assertIn('UNKNOWN',result.stderr); self.assertNotIn('no new open issues',result.stdout)
+        self.assertEqual(before,self.path.read_bytes())
+
+    def test_empty_response_is_not_an_empty_issue_list(self):
+        result=self.invoke('set -euo pipefail; ROOT="$PWD"; source lib/intake.sh; gh() { return 0; }; intake_new_issues')
+        self.assertEqual(6,result.returncode,result.stdout+result.stderr)
+        self.assertNotIn('no new open issues',result.stdout)
+
+    def test_invalid_json_is_not_an_empty_issue_list(self):
+        result=self.invoke('set -euo pipefail; ROOT="$PWD"; source lib/intake.sh; gh() { echo malformed; }; intake_new_issues')
+        self.assertEqual(6,result.returncode,result.stdout+result.stderr)
+        self.assertNotIn('no new open issues',result.stdout)
+
+    def test_urgent_mode_sees_p0_p1_without_bulk_intake(self):
+        import shlex
+        issues=[{'number':50,'title':'ordinary feature','labels':[],'createdAt':'2020-01-01'},
+                {'number':51,'title':'[P1] regression','labels':[],'createdAt':'2026-01-01'},
+                {'number':52,'title':'[P0] outage','labels':[],'createdAt':'2026-01-02'},
+                {'number':53,'title':'[P0] excluded','labels':[{'name':'no-loop'}],'createdAt':'2026-01-03'}]
+        payload=shlex.quote(json.dumps(issues))
+        command='set -euo pipefail; ROOT="$PWD"; source lib/intake.sh; gh() { printf "%s" '+payload+'; }; INTAKE_URGENT_ONLY=1 intake_candidates'
+        before=self.path.read_bytes();result=self.invoke(command)
+        self.assertEqual(0,result.returncode,result.stdout+result.stderr)
+        self.assertEqual(['52','51'],result.stdout.strip().splitlines());self.assertEqual(before,self.path.read_bytes())

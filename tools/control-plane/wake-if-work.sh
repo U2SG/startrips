@@ -81,7 +81,10 @@ fi
 # labelled with rules.intake.skip_label.
 # shellcheck source=lib/intake.sh
 source "$ROOT/lib/intake.sh"
-CANDS="$(intake_candidates 2>/dev/null | tr -d '\r' | tr '\n' ' ')"
+if ! CANDS="$(intake_candidates | tr -d '\r' | tr '\n' ' ')"; then
+  say "intake candidates UNKNOWN; do not convert a failed discovery into idle"
+  exit 6
+fi
 CANDS="${CANDS% }"
 [[ -z "$CANDS" ]] || wake "intake candidate issue(s): $CANDS"
 

@@ -323,9 +323,11 @@ for ((i=1; i<=MAX_ITERATIONS; i++)); do
   # to reach the loop.
   echo "=== Issue intake (iteration $i) ==="
   if [[ -z "$(next_feature | tr -d '\r')" && -z "$(ready_to_merge_prs)" ]]; then
-    intake_new_issues
+    intake_new_issues || exit 6
   else
-    echo "Registered work exists; no bulk intake this iteration"
+    # No bulk replenishment while registered work exists; urgent P0/P1 discovery
+    # still runs so pending work cannot hide a newly reported production regression.
+    INTAKE_URGENT_ONLY=1 intake_new_issues || exit 6
   fi
 
   # Issues that ALREADY map to a feature are reconciled after the new-issue
