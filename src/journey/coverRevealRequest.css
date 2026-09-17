@@ -1,0 +1,36 @@
+.cover-reveal-request {
+  display: grid;
+  gap: 8px;
+  padding: 16px 0;
+  border-top: 1px solid var(--atlas-line);
+}
+
+.cover-reveal-request button {
+  justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 16px;
+  border: 1px solid var(--atlas-line);
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.cover-reveal-request button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.cover-reveal-request p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.cover-reveal-request p:empty {
+  display: none;
+}

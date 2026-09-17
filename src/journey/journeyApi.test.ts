@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createHomeBasePeriod,
   createJourney,
+  enqueueCoverReveal,
   deleteJourney,
   deleteMedia,
   listHomeBasePeriods,
@@ -35,6 +36,25 @@ const input = {
 };
 
 describe("journeyApi", () => {
+  it("enqueues the canonical cover with the member session and no worker credential or source override", async () => {
+    const derivative = { id: "job-1", state: "queued", sourceMediaAssetId: "cover-1" };
+    const fetcher = vi.fn(async () => Response.json({ derivative })) as unknown as typeof fetch;
+    await expect(enqueueCoverReveal("journey-1", fetcher)).resolves.toEqual(derivative);
+    expect(fetcher).toHaveBeenCalledExactlyOnceWith("/api/cover-reveal/journeys/journey-1", {
+      credentials: "include", method: "POST", headers: undefined,
+    });
+  });
+
+  it("preserves an unverified source rejection without retrying the write", async () => {
+    const fetcher = vi.fn(async () => Response.json(
+      { error: "SOURCE_IDENTITY_UNVERIFIED" }, { status: 409 },
+    )) as unknown as typeof fetch;
+    await expect(enqueueCoverReveal("journey-1", fetcher)).rejects.toMatchObject({
+      status: 409, code: "SOURCE_IDENTITY_UNVERIFIED",
+    });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
   it("uses the credentialed tenant-scoped memory endpoint", async () => {
     const fetcher = vi.fn(async () => Response.json({ journeys: [] })) as unknown as typeof fetch;
     await expect(listJourneys(fetcher)).resolves.toEqual([]);
