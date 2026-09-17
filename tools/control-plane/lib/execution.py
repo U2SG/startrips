@@ -95,10 +95,16 @@ def published():
 
 
 def command_token(command):
-    """Return a bounded direct-carrier invocation token from observable argv."""
+    """Return a bounded invocation token from Windows/MSYS observable argv."""
     if not isinstance(command, str):
         return None
-    match = re.search(r'--carrier-token=([a-z0-9._:-]{8,128})(?=$|[\s";])', command, re.I)
+    # MSYS/Win32 CommandLine reconstruction may render an argv item as either
+    # `--carrier-token=value` or `--carrier-token value`, with optional quotes.
+    # The unique token is invocation identity: every same-token run-loop carrier
+    # is our own exec chain, while a separate launch necessarily has another token.
+    match = re.search(
+        r'(?:^|[\s"\'])--carrier-token(?:=|\s+)["\']?([a-z0-9._:-]{8,128})(?=$|[\s"\';])',
+        command, re.I)
     return match.group(1) if match else None
 
 

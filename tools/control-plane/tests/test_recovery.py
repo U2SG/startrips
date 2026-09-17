@@ -182,6 +182,20 @@ class ProcessClassificationCases(unittest.TestCase):
         with mock.patch.dict(os.environ, {'STARTRIPS_CARRIER_TOKEN': 'experience-token-1'}):
             self.assertEqual([], execution.competitors(rows, self.root, 3, lane='experience'))
 
+    def test_windows_reconstructed_token_forms_are_same_invocation(self):
+        token = 'experience-token-1234'
+        self.assertEqual(token, execution.command_token(
+            'bash run-loop.sh --carrier-lane=experience --carrier-token=' + token))
+        self.assertEqual(token, execution.command_token(
+            'bash run-loop.sh --carrier-lane=experience --carrier-token "' + token + '"'))
+        rows = self.base + [
+            process(10, command='bash ' + str(self.root / 'run-loop.sh')
+                    + ' --carrier-lane=experience --carrier-token ' + token),
+            process(11, command='bash ' + str(self.root / 'run-loop.sh')
+                    + ' --carrier-lane=experience --carrier-token=' + token)]
+        with mock.patch.dict(os.environ, {'STARTRIPS_CARRIER_TOKEN': token}):
+            self.assertEqual([], execution.competitors(rows, self.root, 3, lane='experience'))
+
     def test_different_carrier_token_does_not_exempt_peer(self):
         rows = self.base + [process(10, command='bash ' + str(self.root / 'run-loop.sh')
                                     + ' --carrier-lane=experience --carrier-token=experience-token-2')]
@@ -669,7 +683,14 @@ class RealCarrierCases(fixture.WiringTests):
         shutil.copy2(source / 'launch-experience.sh', self.root / 'launch-experience.sh')
         (self.root / 'SUPERVISOR_STOP').write_text('backend owner stop')
         before = self.path.read_bytes()
-        result = self.invoke('export MAX_ITERATIONS=0; bash launch-experience.sh')
+        env = dict(os.environ, MAX_ITERATIONS='0', PYTHONIOENCODING='utf-8', PYTHONUTF8='1',
+                   PYTHONDONTWRITEBYTECODE='1')
+        env.pop('STARTRIPS_LANE', None); env.pop('STARTRIPS_CARRIER_TOKEN', None)
+        # Execute the real entrypoint directly. A bash -c wrapper changes the MSYS
+        # process topology and previously hid the same-invocation self-block.
+        result = subprocess.run([self.bash, str(self.root / 'launch-experience.sh')],
+                                cwd=self.root, env=env, capture_output=True, text=True,
+                                encoding='utf-8', timeout=90)
         self.assertEqual(3, result.returncode, result.stdout + result.stderr)
         self.assertIn('"lane": "experience"', result.stdout)
         self.assertIn('"stop_markers": []', result.stdout)
