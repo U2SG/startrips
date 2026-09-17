@@ -46,11 +46,11 @@ done
 # may exempt only that exact token; same-lane peers remain competitors.
 if [[ -z "$CARRIER_LANE" && -z "${1:-}" ]]; then
   token="direct-$(date +%s)-$$-$RANDOM"
-  exec "$0" "--carrier-lane=$STARTRIPS_LANE" "--carrier-token=$token"
+  exec "$ROOT/run-loop.sh" "--carrier-lane=$STARTRIPS_LANE" "--carrier-token=$token"
 fi
 if [[ -n "$CARRIER_LANE" && -z "$CARRIER_TOKEN" && -z "${STARTRIPS_OWN_PIDS:-}" && -z "${1:-}" ]]; then
   token="direct-$(date +%s)-$$-$RANDOM"
-  exec "$0" "--carrier-lane=$CARRIER_LANE" "--carrier-token=$token"
+  exec "$ROOT/run-loop.sh" "--carrier-lane=$CARRIER_LANE" "--carrier-token=$token"
 fi
 if [[ -n "$CARRIER_TOKEN" ]]; then
   export STARTRIPS_CARRIER_TOKEN="$CARRIER_TOKEN"

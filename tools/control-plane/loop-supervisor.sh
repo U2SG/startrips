@@ -40,7 +40,7 @@ if [[ "${1:-}" == --carrier-lane=* ]]; then
     echo "[supervisor] carrier lane mismatch" >&2; exit 64;
   }
 else
-  exec "$0" "--carrier-lane=$STARTRIPS_LANE"
+  exec "$ROOT/loop-supervisor.sh" "--carrier-lane=$STARTRIPS_LANE"
 fi
 # MSYS emulates fork/exec by spawning fresh Windows processes, so the
 # ParentProcessId recorded for run-loop routinely names an already-exited stub:
