@@ -32,3 +32,18 @@ export async function acknowledgedDiveWheel(page, point, deltaY) {
     requestAnimationFrame(() => requestAnimationFrame(resolve));
   }));
 }
+
+// This callback is serialized into the browser by Playwright. A renderer's
+// post-sync metadata arrives before React publishes the reveal presentation.
+// Waiting for a published result does not require it to be correct: both on/off
+// return true so the caller still rejects a wrong reduced-motion mask.
+export function hasPublishedDiveReveal() {
+  const map = document.querySelector(".detailed-earth-map");
+  const layer = document.querySelector(".living-atlas-globe__detail-layer");
+  const mode = layer?.getAttribute("data-earth-dive-spatial-reveal");
+  const revision = Number(map?.getAttribute("data-map-reveal-revision"));
+  return map?.getAttribute("data-map-reveal-stage") === "blending"
+    && revision > 0
+    && Number(map.getAttribute("data-map-post-sync-render-revision")) === revision
+    && mode != null && mode !== "holding";
+}

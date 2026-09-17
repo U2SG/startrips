@@ -25,7 +25,7 @@
 // particle Earth were visibly a different scale at the ownership edge, which is
 // exactly the mistake this lane exists to make impossible.
 import { launchQaBrowser } from "./qa-browser.mjs";
-import { acknowledgedDiveWheel, nextDiveFixtureInput } from "./qa-earth-dive-input.mjs";
+import { acknowledgedDiveWheel, hasPublishedDiveReveal, nextDiveFixtureInput } from "./qa-earth-dive-input.mjs";
 
 const baseUrl = process.env.QA_BASE_URL ?? "http://127.0.0.1:4173";
 // The anchor this lane measures is a Route Point of a Journey the fixture
@@ -1291,11 +1291,7 @@ try {
     "the reduced-motion dive never reached blending",
     90, true,
   );
-  await reducedRun.page.waitForFunction(() => {
-    const map = document.querySelector(".detailed-earth-map");
-    return map?.getAttribute("data-map-reveal-stage") === "blending"
-      && map.getAttribute("data-map-post-sync-render-revision") === map.getAttribute("data-map-reveal-revision");
-  }, null, { timeout: 5_000 });
+  await reducedRun.page.waitForFunction(hasPublishedDiveReveal, null, { timeout: 5_000 });
   const reducedReveal = await readSpatialReveal(reducedRun.page);
   result.reducedMotion = { reveal: reducedReveal, pageErrors: reducedRun.pageErrors };
   const reducedFailures = [];

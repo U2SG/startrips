@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { acknowledgedDiveWheel, DIVE_FIXTURE_PARK_PROGRESS, nextDiveFixtureInput } from "./qa-earth-dive-input.mjs";
+import { acknowledgedDiveWheel, hasPublishedDiveReveal, DIVE_FIXTURE_PARK_PROGRESS, nextDiveFixtureInput } from "./qa-earth-dive-input.mjs";
 import { EARTH_DIVE_BLEND_ENTER_PROGRESS, EARTH_DIVE_DETAIL_ENTER_PROGRESS } from "../src/scene/earthDive.ts";
 import { LOCAL_BAND_ENTRY_ZOOM, GLOBE_SEMANTIC_ZOOM_CEILING, localBandProgress } from "../src/scene/semanticZoom.ts";
 
@@ -45,4 +45,23 @@ describe("native Earth Dive fixture input", () => {
     await expect(acknowledgedDiveWheel(page,{x:1,y:1},-10)).rejects.toThrow(/recorder/);
     expect(page.mouse.wheel).not.toHaveBeenCalled();
   });
+});
+
+describe("reveal publication is separate from renderer metadata", () => {
+  function publish(mode, revision = "3", rendered = "3", stage = "blending") {
+    vi.stubGlobal("document", { querySelector: selector => selector === ".detailed-earth-map"
+      ? { getAttribute: name => ({"data-map-reveal-stage":stage,"data-map-reveal-revision":revision,"data-map-post-sync-render-revision":rendered})[name] }
+      : { getAttribute: () => mode } });
+  }
+  it("does not sample transient holding after matching map metadata", () => {
+    publish("holding"); expect(hasPublishedDiveReveal()).toBe(false);
+    publish("off"); expect(hasPublishedDiveReveal()).toBe(true);
+  });
+  it("does not hide an incorrect published mask by waiting only for off", () => {
+    publish("on"); expect(hasPublishedDiveReveal()).toBe(true);
+  });
+  it.each([["off","3","2","blending"],["off","0","0","blending"],["off","3","3","prewarm"],[null,"3","3","blending"]])(
+    "rejects missing/stale publication %s %s %s %s", (mode,revision,rendered,stage) => {
+      publish(mode,revision,rendered,stage); expect(hasPublishedDiveReveal()).toBe(false);
+    });
 });
