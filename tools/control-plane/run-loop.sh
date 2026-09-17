@@ -26,10 +26,14 @@ case "$STARTRIPS_LANE" in
 esac
 CARRIER_LANE=""
 CARRIER_TOKEN=""
+CARRIER_FEATURE=""
+CARRIER_WORKTREE=""
 while [[ "${1:-}" == --carrier-* ]]; do
   case "$1" in
     --carrier-lane=*) CARRIER_LANE="${1#--carrier-lane=}" ;;
     --carrier-token=*) CARRIER_TOKEN="${1#--carrier-token=}" ;;
+    --carrier-feature=*) CARRIER_FEATURE="${1#--carrier-feature=}" ;;
+    --carrier-worktree=*) CARRIER_WORKTREE="${1#--carrier-worktree=}" ;;
     *) echo "UNKNOWN_CARRIER_ARGUMENT: $1" >&2; exit 64 ;;
   esac
   shift
@@ -40,6 +44,15 @@ done
 [[ -z "$CARRIER_TOKEN" || "$CARRIER_TOKEN" =~ ^[A-Za-z0-9._:-]{8,128}$ ]] || {
   echo "INVALID_CARRIER_TOKEN" >&2; exit 64;
 }
+[[ -z "$CARRIER_FEATURE" || "$CARRIER_FEATURE" =~ ^ST-[0-9]{3,}$ ]] || {
+  echo "INVALID_CARRIER_FEATURE" >&2; exit 64;
+}
+if [[ -n "$CARRIER_FEATURE" || -n "$CARRIER_WORKTREE" ]]; then
+  [[ -n "$CARRIER_FEATURE" && -n "$CARRIER_WORKTREE" ]] || {
+    echo "INCOMPLETE_CARRIER_SCOPE" >&2; exit 64;
+  }
+  REPO="$CARRIER_WORKTREE"
+fi
 # A real execution re-execs once with provider-visible lane metadata. Direct
 # Experience execution also carries a one-use invocation token because MSYS can
 # sever Windows ancestry even for the script currently running. The provider
@@ -328,7 +341,11 @@ STOP_GUARDS=(AGENT_STOP)
 for guard in "${STOP_GUARDS[@]}"; do
   [[ ! -f "$ROOT/$guard" ]] || { echo "Owner STOP preserved for lane=$STARTRIPS_LANE; no execution"; exit 0; }
 done
-python3 -B "$ROOT/lib/execution.py" check "$ROOT" --lane "$STARTRIPS_LANE" || exit 6
+EXECUTION_SCOPE=(--lane "$STARTRIPS_LANE")
+if [[ -n "$CARRIER_FEATURE" ]]; then
+  EXECUTION_SCOPE+=(--feature "$CARRIER_FEATURE" --worktree "$CARRIER_WORKTREE")
+fi
+python3 -B "$ROOT/lib/execution.py" check "$ROOT" "${EXECUTION_SCOPE[@]}" || exit 6
 python3 -B "$ROOT/lib/execution.py" permission "$ROOT" --lane "$STARTRIPS_LANE" || exit 6
 source "$ROOT/lib/intake.sh"
 mkdir -p "$ROOT/.agent-artifacts/evaluations"
@@ -349,8 +366,9 @@ for ((i=1; i<=MAX_ITERATIONS; i++)); do
     exit 6
   fi
 
-  echo "=== Reconciling merge state (iteration $i) ==="
-  reconcile_merge_state
+  if [[ -z "$CARRIER_FEATURE" ]]; then
+    echo "=== Reconciling merge state (iteration $i) ==="
+    reconcile_merge_state
 
   # New open issues become queue entries BEFORE the selection below, so a P0/P1
   # regression triaged in this iteration is the one this iteration builds. Plain
@@ -389,6 +407,12 @@ for ((i=1; i<=MAX_ITERATIONS; i++)); do
     exit 0
   fi
 
+  else
+    # The first pass already reconciled/intook/selected this exact owner. Scoped
+    # re-exec must not repeat those stateful steps; it only re-reads live action.
+    FEATURE="$CARRIER_FEATURE"
+  fi
+
   PLAN="$(python3 -B "$ROOT/lib/action_plan.py" "$ROOT/feature_list.json" "$FEATURE" --repo "$GH_REPO" --record-failures)" || exit 6
   ACTION="$(printf '%s' "$PLAN" | python3 -c 'import json,sys; print(json.load(sys.stdin)["action"])' | tr -d '\r')"
   echo "=== $FEATURE evidence-derived next=$ACTION ==="
@@ -417,6 +441,16 @@ for ((i=1; i<=MAX_ITERATIONS; i++)); do
 
   # Prove selected owner/branch/cwd before using this execution carrier.
   REPO="$(python3 "$ROOT/lib/runtime_preflight.py" "$ROOT" "$REPO" "$STARTRIPS_LANE" "$FEATURE" --repo "$GH_REPO" --worktree-only --prepare | tr -d '\r')"
+  if [[ -z "$CARRIER_FEATURE" ]]; then
+    # Publish the exact logical-owner scope on this carrier before any SEAL/CI/
+    # model work. No registry is created: provider-visible argv is the evidence.
+    token="${CARRIER_TOKEN:-scope-$(date +%s)-$$-$RANDOM}"
+    exec "$ROOT/run-loop.sh" "--carrier-lane=$STARTRIPS_LANE" "--carrier-token=$token" \
+      "--carrier-feature=$FEATURE" "--carrier-worktree=$REPO"
+  fi
+  [[ "$FEATURE" == "$CARRIER_FEATURE" && "$REPO" == "$CARRIER_WORKTREE" ]] || {
+    echo "CARRIER_SCOPE_DRIFT" >&2; exit 6;
+  }
   # Cross-lane execution is allowed, but never for the same feature/worktree.
   # Re-check after owner resolution so an incorrectly routed carrier cannot
   # bypass the logical-owner boundary merely by publishing a different lane.

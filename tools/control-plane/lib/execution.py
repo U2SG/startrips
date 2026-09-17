@@ -143,8 +143,11 @@ def command_scope(command):
     """Return exact feature/worktree markers when a model carrier publishes them."""
     if not isinstance(command, str) or not command.strip():
         return None, None
-    feature_match = re.search(r'(?:^|[;\s"])feature=(ST-\d{3,})(?=$|[;\s"])', command, re.I)
-    worktree_match = re.search(r'(?:^|[;\s"])worktree=([^;"]+?)(?=;|$)', command, re.I)
+    feature_match = re.search(r'(?:^|[;\s"])(?:--carrier-)?feature=(ST-\d{3,})(?=$|[;\s"])', command, re.I)
+    # Semicolon-delimited worker markers may contain spaces; carrier worktree is
+    # deliberately the final argv item, so its quoted/unquoted value can run to
+    # the closing quote/end without treating path whitespace as a separator.
+    worktree_match = re.search(r'(?:^|[;\s"])(?:--carrier-)?worktree=([^;"]+?)(?=;|"(?:\s|$)|$)', command, re.I)
     feature = feature_match.group(1).upper() if feature_match else None
     worktree = worktree_match.group(1).strip().rstrip('.') if worktree_match else None
     if worktree:

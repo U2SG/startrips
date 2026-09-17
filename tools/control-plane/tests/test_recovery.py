@@ -75,6 +75,27 @@ class ProcessClassificationCases(unittest.TestCase):
                                          feature='ST-080', worktree=shared)[0]
         self.assertEqual(shared.replace('\\', '/').lower(), conflict['worktree'])
 
+    def test_scoped_cross_lane_loop_blocks_same_owner_before_worker(self):
+        shared = str((self.root / 'owner tree with spaces').resolve())
+        command = ('bash "' + str(self.root / 'run-loop.sh') + '" --carrier-lane=backend '
+                   '--carrier-token=backend-token-1 --carrier-feature=ST-080 '
+                   '"--carrier-worktree=' + shared + '"')
+        rows = self.base + [process(10, command=command)]
+        conflict = execution.competitors(rows, self.root, 3, lane='experience',
+                                         feature='ST-080', worktree=shared)[0]
+        self.assertEqual(('backend', 'ST-080'), (conflict['lane'], conflict['feature']))
+        self.assertEqual(shared.replace('\\', '/').lower(), conflict['worktree'])
+
+    def test_scoped_cross_lane_loop_allows_different_owner(self):
+        backend = str((self.root / 'backend-owner').resolve())
+        experience = str((self.root / 'experience-owner').resolve())
+        command = ('bash "' + str(self.root / 'run-loop.sh') + '" --carrier-lane=backend '
+                   '--carrier-token=backend-token-1 --carrier-feature=ST-087 '
+                   '"--carrier-worktree=' + backend + '"')
+        rows = self.base + [process(10, command=command)]
+        self.assertEqual([], execution.competitors(rows, self.root, 3, lane='experience',
+                                                   feature='ST-080', worktree=experience))
+
     def test_unknown_lane_in_same_workspace_stays_fail_closed(self):
         rows = self.base + [process(10, command='bash ' + str(self.root / 'run-loop.sh'))]
         conflict = execution.competitors(rows, self.root, 3, lane='experience')[0]
