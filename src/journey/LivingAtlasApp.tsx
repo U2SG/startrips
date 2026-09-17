@@ -2576,7 +2576,7 @@ export function LivingAtlasApp({
                 ? Math.max(focusRevision, playbackReleaseFocusRevision) + initialHomeCameraRevision
                 : Math.max(focusRevision, playbackReleaseFocusRevision))}
             focusFlightProfile={playbackCameraTarget?.kind === "point" ? playbackCameraTarget.choreography : undefined}
-            focusColor={focusPresentation.journey?.lightColor}
+            focusColor={draftPlaybackOwnsSession ? playbackSourceJourney?.lightColor : focusPresentation.journey?.lightColor}
             journeyRoutes={routes}
             activeJourneyRouteId={draftRoute?.id ?? (initialHomeCameraAnchor ? null : activeJourneyId)}
             selectedJourneyRoutePoint={draftRoute ? null : selectedJourneyRoutePoint}

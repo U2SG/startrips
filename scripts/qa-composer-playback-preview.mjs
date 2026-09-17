@@ -73,6 +73,7 @@ try {
 
   await page.locator(".journey-title-field input").fill("Unsaved preview title");
   await page.locator(".journey-story-fields textarea").fill("Unsaved Journey note for Playback Preview");
+  await page.locator('.journey-light-color-list button[aria-label$="#8ca8df"]').click();
 
   const targetRow = page.locator('[data-route-point-draft-id="saved-qa-preview-point-2"]');
   await targetRow.locator(".journey-route-draft__summary").click();
@@ -119,6 +120,7 @@ try {
       previewClass: backdrop?.classList.contains("is-playback-previewing") ?? false,
       overlayMode: overlay?.getAttribute("data-playback-mode"),
       status: document.querySelector(".journey-playback__status")?.textContent?.trim() ?? "",
+      focusColor: document.querySelector("[data-qa-app-route-preview]")?.getAttribute("data-focus-color") ?? "",
     };
   });
   if (
@@ -126,6 +128,7 @@ try {
     || activePreview.composerInert !== true
     || !activePreview.previewClass
     || activePreview.overlayMode !== "full"
+    || activePreview.focusColor.toLowerCase() !== "#8ca8df"
     || !activePreview.status.includes("1 个本地未上传媒体未包含")
     || journeyMutationCount !== 0
     || uploadMutationCount !== 0
