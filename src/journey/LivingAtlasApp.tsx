@@ -2327,9 +2327,9 @@ export function LivingAtlasApp({
     carriedFallbackMessage: string | null = null,
   ) {
     clearHomeBaseContext();
-    setDraftPlaybackPreview(null);
     const journey = journeys.find((candidate) => candidate.id === journeyId) ?? null;
     if (!journey) return;
+    setDraftPlaybackPreview(null);
     let mode = requestedMode;
     let quickRecap: PreparedQuickRecapPlayback | null = null;
     let fallbackMessage = carriedFallbackMessage;
