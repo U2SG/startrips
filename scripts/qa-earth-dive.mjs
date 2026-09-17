@@ -25,6 +25,7 @@
 // particle Earth were visibly a different scale at the ownership edge, which is
 // exactly the mistake this lane exists to make impossible.
 import { launchQaBrowser } from "./qa-browser.mjs";
+import { acknowledgedDiveWheel, hasPublishedDiveReveal, nextDiveFixtureInput } from "./qa-earth-dive-input.mjs";
 
 const baseUrl = process.env.QA_BASE_URL ?? "http://127.0.0.1:4173";
 // The anchor this lane measures is a Route Point of a Journey the fixture
@@ -120,9 +121,8 @@ async function gesturePoint(page, fallback = null) {
   throw new Error("no point on the globe reaches a surface that steers");
 }
 
-async function wheelAt(page, point, deltaY) {
-  await page.mouse.move(point.x, point.y);
-  await page.mouse.wheel(0, deltaY);
+function wheelAt(page, point, deltaY) {
+  return acknowledgedDiveWheel(page, point, deltaY);
 }
 
 /** The Route Point the fixture focused, straight from its own published marker. */
@@ -349,7 +349,7 @@ async function stageEntries(page) {
 async function wheelEvents(page) {
   return page.evaluate(() => window.__qaEarthDiveWheelEvents ?? []);
 }
-async function wheelUntil(page, point, deltaY, predicate, label, maxSteps = 90) {
+async function wheelUntil(page, point, deltaY, predicate, label, maxSteps = 90, parkBlending = false) {
   let target = point;
   for (let step = 0; step <= maxSteps; step += 1) {
     const state = await readDive(page);
@@ -358,9 +358,21 @@ async function wheelUntil(page, point, deltaY, predicate, label, maxSteps = 90) 
     // published stage and the recorder saw it even when a poll did not.
     if (predicate(state, await stages(page))) return state;
     if (step === maxSteps) break;
+    const input = nextDiveFixtureInput(state, deltaY, FINE_WHEEL_DELTA, parkBlending);
+    if (input.kind === "wait-blending") {
+      // Readiness is not a request to keep zooming. Hold inside the blend band;
+      // an unready map still fails the existing five-second presentation bound.
+      await page.waitForFunction(() => {
+        const globe = document.querySelector(".living-atlas-globe");
+        return globe?.getAttribute("data-earth-dive") === "blending"
+          && globe.getAttribute("data-earth-dive-owner") === "particle";
+      }, null, { timeout: 5_000 });
+      const presented = await readDive(page);
+      if (!predicate(presented, await stages(page))) throw new Error(`${label}: unstable blend presentation`);
+      return presented;
+    }
     target = await gesturePoint(page, target);
-    await wheelAt(page, target, deltaY);
-    await page.waitForTimeout(100);
+    await wheelAt(page, target, input.deltaY);
   }
   throw new Error(`${label} never happened: ${JSON.stringify({
     state: await readDive(page),
@@ -395,7 +407,6 @@ async function wheelUntilDetailWithStableRetry(page, point, deltaY, label, maxSt
     if (step === maxSteps) break;
     target = await gesturePoint(page, target);
     await wheelAt(page, target, deltaY);
-    await page.waitForTimeout(100);
   }
   throw new Error(`${label} never happened: ${JSON.stringify({
     state: await readDive(page),
@@ -697,6 +708,7 @@ try {
         FINE_WHEEL_DELTA,
         (state) => state.stage === "blending",
         "blending policy fixture never reached blending",
+    90, true,
       );
     }
     const before = await readDive(transition.page);
@@ -754,6 +766,7 @@ try {
     FINE_WHEEL_DELTA,
     (state) => state.stage === "blending",
     "the dive never reached blending on wheel zoom alone",
+    90, true,
   );
   const blendingHit = await hitTarget(forward.page, point);
 
@@ -834,6 +847,7 @@ try {
     forward.page, reentryPoint, FINE_WHEEL_DELTA,
     (state) => state.stage === "blending",
     "the second dive never reached blending",
+    90, true,
   );
   await wheelUntilDetailWithStableRetry(
     forward.page, reentryPoint, FINE_WHEEL_DELTA,
@@ -1122,6 +1136,7 @@ try {
     FINE_WHEEL_DELTA,
     (state) => state.stage === "blending",
     "the dive never reached blending with a focused Journey",
+    90, true,
   );
   await routeRun.page.waitForFunction(() => {
     const globe = document.querySelector(".living-atlas-globe");
@@ -1274,12 +1289,9 @@ try {
     reducedRun.page, reducedPoint, FINE_WHEEL_DELTA,
     (state) => state.stage === "blending",
     "the reduced-motion dive never reached blending",
+    90, true,
   );
-  await reducedRun.page.waitForFunction(() => {
-    const map = document.querySelector(".detailed-earth-map");
-    return map?.getAttribute("data-map-reveal-stage") === "blending"
-      && map.getAttribute("data-map-post-sync-render-revision") === map.getAttribute("data-map-reveal-revision");
-  }, null, { timeout: 5_000 });
+  await reducedRun.page.waitForFunction(hasPublishedDiveReveal, null, { timeout: 5_000 });
   const reducedReveal = await readSpatialReveal(reducedRun.page);
   result.reducedMotion = { reveal: reducedReveal, pageErrors: reducedRun.pageErrors };
   const reducedFailures = [];
@@ -1428,6 +1440,7 @@ try {
     wideRun.page, widePoint, FINE_WHEEL_DELTA,
     (state) => state.stage === "blending",
     "the 1920x1080 cold reveal never reached blending",
+    90, true,
   );
   await wheelUntilDetailWithStableRetry(
     wideRun.page, widePoint, FINE_WHEEL_DELTA,

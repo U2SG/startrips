@@ -2,6 +2,7 @@
 // This lane records existing values only. It never retunes particle size,
 // opacity, motion tokens or shader behavior.
 import { launchQaBrowser } from "./qa-browser.mjs";
+import { setParticleZoom } from "./qa-particle-zoom.mjs";
 
 const baseUrl = process.env.QA_BASE_URL ?? "http://127.0.0.1:4173";
 const VIEWPORT = { width: 1200, height: 800 };
@@ -52,25 +53,8 @@ async function debug(page) {
   return page.evaluate(() => window.__particleEarthDebug?.() ?? null);
 }
 
-async function setZoom(page, targetZoom) {
-  const before = await debug(page);
-  if (!before) throw new Error("Particle Earth debug state is unavailable");
-  if (Math.abs(before.zoom - targetZoom) > 0.02) {
-    const canvas = page.locator('canvas[data-three-scene="particle-earth"]');
-    const bounds = await canvas.boundingBox();
-    if (!bounds) throw new Error("Particle Earth canvas has no bounds");
-    await canvas.evaluate((node, init) => node.dispatchEvent(new WheelEvent("wheel", init)), {
-      bubbles: true,
-      cancelable: true,
-      clientX: bounds.x + bounds.width / 2,
-      clientY: bounds.y + bounds.height / 2,
-      deltaY: -Math.log(targetZoom / before.zoom) / 0.0012,
-    });
-  }
-  await page.waitForFunction((zoom) => {
-    const state = window.__particleEarthDebug?.();
-    return Boolean(state && Math.abs(state.zoom - zoom) <= 0.03);
-  }, targetZoom, { timeout: 10_000 });
+function setZoom(page, targetZoom) {
+  return setParticleZoom(page, targetZoom);
 }
 
 async function captureAtDpr(deviceDpr) {

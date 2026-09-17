@@ -1,4 +1,5 @@
 import { launchQaBrowser } from "./qa-browser.mjs";
+import { setParticleZoom } from "./qa-particle-zoom.mjs";
 
 const baseUrl = process.env.QA_BASE_URL ?? "http://127.0.0.1:4173";
 const focus = { lat: 22.3193, lon: 114.1694 }; // Hong Kong / Shenzhen regional view.
@@ -15,29 +16,8 @@ async function debug(page) {
   return page.evaluate(() => window.__particleEarthDebug?.() ?? null);
 }
 
-async function setZoom(page, targetZoom) {
-  const before = await debug(page);
-  if (!before) throw new Error("Particle Earth debug state is unavailable");
-  if (Math.abs(before.zoom - targetZoom) <= 0.02) return before;
-  const canvas = page.locator('canvas[data-three-scene="particle-earth"]');
-  const bounds = await canvas.boundingBox();
-  if (!bounds) throw new Error("Particle Earth canvas has no bounds");
-  const clientX = bounds.x + bounds.width / 2;
-  const clientY = bounds.y + bounds.height / 2;
-  const deltaY = -Math.log(targetZoom / before.zoom) / 0.0012;
-  await canvas.evaluate((node, init) => node.dispatchEvent(new WheelEvent("wheel", init)), {
-    bubbles: true,
-    cancelable: true,
-    clientX,
-    clientY,
-    deltaY,
-  });
-  await page.waitForTimeout(120);
-  const after = await debug(page);
-  if (!after || Math.abs(after.zoom - targetZoom) > 0.03) {
-    throw new Error(`Unable to set particle LOD zoom: ${JSON.stringify({ targetZoom, before, after })}`);
-  }
-  return after;
+function setZoom(page, targetZoom) {
+  return setParticleZoom(page, targetZoom);
 }
 
 async function waitForRefinement(page, minimumCount) {
