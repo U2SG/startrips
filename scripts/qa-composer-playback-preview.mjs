@@ -144,7 +144,14 @@ try {
   await page.getByRole("button", { name: "退出播放" }).click();
   await page.locator(".journey-playback").waitFor({ state: "detached" });
   await page.locator(".journey-composer").waitFor({ state: "visible" });
-  await page.waitForFunction(() => document.activeElement?.matches('[data-route-point-draft-id="saved-qa-preview-point-2"] textarea') ?? false);
+  // The explicit `focusMatches` assertion below is the contract. Bound the wait
+  // rather than dying inside it, so a missed restore reports which element
+  // actually holds focus instead of an anonymous 30s timeout.
+  await page.waitForFunction(
+    () => document.activeElement?.matches('[data-route-point-draft-id="saved-qa-preview-point-2"] textarea') ?? false,
+    undefined,
+    { timeout: 10_000 },
+  ).catch(() => {});
   const returned = await page.evaluate(() => {
     const route = document.querySelector(".journey-composer__route");
     const target = document.querySelector('[data-route-point-draft-id="saved-qa-preview-point-2"]');
@@ -157,6 +164,11 @@ try {
       scrollTop: route?.scrollTop ?? -1,
       focusMatches: document.activeElement === target?.querySelector("textarea"),
       composerVisibility: getComputedStyle(document.querySelector(".journey-composer")).visibility,
+      activeElement: document.activeElement
+        ? `${document.activeElement.tagName.toLowerCase()}.${document.activeElement.className}`
+          + `[${document.activeElement.closest("[data-route-point-draft-id]")?.getAttribute("data-route-point-draft-id") ?? "-"}]`
+        : null,
+      targetTextareaPresent: Boolean(target?.querySelector("textarea")),
     };
   });
   if (
