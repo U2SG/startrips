@@ -10,6 +10,7 @@ import { LocationSearchUnavailableError } from "./location/location-search";
 import { HomeBasePeriodConflictError } from "./repositories/home-base-repository";
 import { requestLog } from "./request-log";
 import { accountIdentityRoutes } from "./routes/account-identities";
+import { accountPreferenceRoutes } from "./routes/account-preferences";
 import { atlasRoutes } from "./routes/atlases";
 import {
   coverRevealRoutes,
@@ -67,6 +68,11 @@ app.on(["GET", "POST"], "/api/auth/*", (context) =>
 );
 
 app.route("/api/account-identities", accountIdentityRoutes);
+// #387: the account-scoped Earth experience preference. The only route
+// module here that derives nothing from an Atlas: the stable user behind the
+// session owns the value, so there is no atlasId in the path and none is read
+// from the body.
+app.route("/api/account-preferences", accountPreferenceRoutes);
 app.route("/api/atlases", atlasRoutes);
 // #368: the owner's enqueue verb and the machine worker's protocol, mounted
 // apart so no route can serve both an Atlas member and a worker credential.

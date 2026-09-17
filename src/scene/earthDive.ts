@@ -1,3 +1,4 @@
+import type { EarthExperiencePreference } from "../journey/earthExperiencePreference";
 import type { SemanticZoomSnapshot } from "./semanticZoom";
 
 /**
@@ -23,7 +24,7 @@ export type EarthDiveStage = "particle" | "prewarm" | "blending" | "detail";
  * policy, not a temporary composition state: it forbids detail ownership and
  * resources before zoom, readiness or commands are considered.
  */
-export type EarthExperiencePolicy = "default" | "particle-only";
+export type EarthExperiencePolicy = EarthExperiencePreference;
 
 /** Who is authoritative for camera and gesture input on this frame. */
 export type EarthDiveOwner = "particle" | "detail";

@@ -754,3 +754,53 @@ export const coverRevealWrites = pgTable(
     index("cover_reveal_writes_expires_idx").on(table.expiresAt),
   ],
 );
+
+// #387: one person's Earth experience preference, keyed by the stable Better
+// Auth user rather than by an Atlas.
+//
+// Deliberately NOT a column on `atlases` and not on any Journey row. An Atlas
+// is shared by its members; a renderer choice is personal, so storing it on
+// Atlas-owned data would let one member decide what another member's machine
+// loads, and would make the value travel through a guest share payload.
+//
+// `user_id` is the primary key, so one person has at most one row and a
+// repeated write converges on it instead of appending history. There is no
+// separate id column for the same reason: there is nothing to reference.
+//
+// Absence of a row is not a missing value, it IS `default`. Nothing lazily
+// inserts on read, so a person who never opened the setting has no row and
+// still reads the documented default.
+//
+// `revision` counts value TRANSITIONS, not requests: a write that stores the
+// value already stored leaves both `revision` and `updated_at` alone, so a
+// client can compare the two and tell "my write landed and changed nothing"
+// from "someone else's write moved this since I read it".
+export const accountExperiencePreferences = pgTable(
+  "account_experience_preferences",
+  {
+    userId: text("user_id")
+      .primaryKey()
+      .references(() => authUser.id, { onDelete: "cascade" }),
+    earthExperience: text("earth_experience").notNull(),
+    revision: integer("revision").notNull().default(1),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    // The accepted values, enforced at the database layer as well as by
+    // `isEarthExperiencePreference`, so no future write path can persist a
+    // third value the renderer has never heard of.
+    check(
+      "account_experience_preferences_earth_experience_check",
+      sql`${table.earthExperience} in ('default', 'particle-only')`,
+    ),
+    check(
+      "account_experience_preferences_revision_check",
+      sql`${table.revision} >= 1`,
+    ),
+  ],
+);
