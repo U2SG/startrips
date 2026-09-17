@@ -72,7 +72,8 @@ def competitors(rows, root, self_pid):
         if row['pid'] in ancestors:
             continue
         name = row['name'].lower()
-        if not any(name.startswith(prefix) for prefix in ('bash', 'sh', 'claude', 'codex', 'node')):
+        basename = name[:-4] if name.endswith('.exe') else name
+        if basename not in {'bash', 'sh', 'claude', 'codex', 'node', 'nodejs'}:
             continue
         raw_command = row.get('command')
         if not isinstance(raw_command, str) or not raw_command.strip():

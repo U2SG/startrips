@@ -88,6 +88,18 @@ class UnreadableCarrierCases(unittest.TestCase):
                     result = execution.competitors(rows, Path.cwd(), 1)
                     self.assertEqual('unknown-command', result[0]['state'])
 
+    def test_windows_shell_ui_processes_are_not_worker_interpreters(self):
+        for name in ['ShellExperienceHost.exe', 'ShellHost.exe', 'shutter.exe', 'node-helper.exe']:
+            rows = [{'pid':1,'ppid':0,'name':'python','command':'caller'},
+                    {'pid':2,'ppid':0,'name':name,'command':None}]
+            self.assertEqual([], execution.competitors(rows,Path.cwd(),1))
+
+    def test_exact_shell_interpreter_still_requires_readable_command(self):
+        for name in ['sh.exe', 'sh', 'bash.EXE', 'nodejs']:
+            rows = [{'pid':1,'ppid':0,'name':'python','command':'caller'},
+                    {'pid':2,'ppid':0,'name':name,'command':None}]
+            self.assertEqual('unknown-command', execution.competitors(rows,Path.cwd(),1)[0]['state'])
+
     def test_unreadable_ancestor_is_not_a_competing_owner(self):
         rows = [{'pid':1,'ppid':2,'name':'python','command':'caller'},
                 {'pid':2,'ppid':0,'name':'bash.exe','command':None}]
