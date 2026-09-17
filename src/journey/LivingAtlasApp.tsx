@@ -1827,22 +1827,23 @@ export function LivingAtlasApp({
   const mobileJourney = focusPresentation.journey;
   const mobilePoint = focusPresentation.point;
   const focusPoint = focusPresentation.focusPoint;
-  const narrativeJourneyProgress = timeCursor.selection
-    ? timeCursor.reveal.journeyProgress.get(timeCursor.selection.journeyId)
+  const narrativeSemanticSelection = unknownCreateSemanticOwnership.selection;
+  const narrativeJourneyProgress = narrativeSemanticSelection
+    ? timeCursor.reveal.journeyProgress.get(narrativeSemanticSelection.journeyId)
     : undefined;
   const narrativeJourneyRoutePoint = (isMobileV2 || globeFocusMode)
     && !timeCursor.hasExplicitSelection
-    && timeCursor.selection
+    && narrativeSemanticSelection
     && narrativeJourneyProgress !== undefined
     && narrativeJourneyProgress > 0
     && narrativeJourneyProgress < 1
     ? {
-        journeyId: timeCursor.selection.journeyId,
-        routePointId: timeCursor.selection.pointIndex !== null
-          ? journeys.find((journey) => journey.id === timeCursor.selection?.journeyId)
-            ?.routePoints[timeCursor.selection.pointIndex]?.id ?? null
+        journeyId: narrativeSemanticSelection.journeyId,
+        routePointId: narrativeSemanticSelection.pointIndex !== null
+          ? journeys.find((journey) => journey.id === narrativeSemanticSelection.journeyId)
+            ?.routePoints[narrativeSemanticSelection.pointIndex]?.id ?? null
           : null,
-        pointIndex: timeCursor.selection.pointIndex,
+        pointIndex: narrativeSemanticSelection.pointIndex,
       }
     : null;
   const selectedJourneyRoutePoint = routePointContextSelection.context

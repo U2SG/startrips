@@ -1392,8 +1392,10 @@ describe("Quiet Core route presentation", () => {
     const block = source.slice(start, start + 700);
 
     expect(start).toBeGreaterThanOrEqual(0);
+    expect(block).toContain("const narrativeSemanticSelection = unknownCreateSemanticOwnership.selection");
     expect(block).toContain("&& !timeCursor.hasExplicitSelection");
-    expect(block).toContain("&& timeCursor.selection");
+    expect(block).toContain("&& narrativeSemanticSelection");
+    expect(block).not.toContain("&& timeCursor.selection");
   });
 
   it("keeps temporal reveal as the only directional route motion authority", () => {
