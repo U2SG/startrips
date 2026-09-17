@@ -548,6 +548,8 @@ class WiringTests(SyntheticOne):
         loop = (ROOT / 'run-loop.sh').read_text(encoding='utf-8')
         self.assertIn('"--carrier-feature=$FEATURE" "--carrier-worktree64=$OWNER_WORKTREE64"', loop)
         self.assertIn('CARRIER_SCOPE_DRIFT', loop)
+        self.assertIn('SCOPED_SELECTED="$(FEATURE_ALLOW="$CARRIER_FEATURE" next_feature', loop)
+        self.assertIn('CARRIER_LANE_OR_GATE_DRIFT', loop)
         self.assertIn('FEATURE="$CARRIER_FEATURE"', loop)
         self.assertIn('worktree64=$OWNER_WORKTREE64', loop)
 

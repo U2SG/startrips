@@ -413,7 +413,13 @@ for ((i=1; i<=MAX_ITERATIONS; i++)); do
 
   else
     # The first pass already reconciled/intook/selected this exact owner. Scoped
-    # re-exec must not repeat those stateful steps; it only re-reads live action.
+    # re-exec must not repeat those stateful steps, but routing/gates may have
+    # changed meanwhile. Reuse the ONE selector with an exact allowlist so lane,
+    # dependencies, status and human gate are all revalidated before planning.
+    SCOPED_SELECTED="$(FEATURE_ALLOW="$CARRIER_FEATURE" next_feature | tr -d '\r')"
+    [[ "$SCOPED_SELECTED" == "$CARRIER_FEATURE" ]] || {
+      echo "CARRIER_LANE_OR_GATE_DRIFT" >&2; exit 6;
+    }
     FEATURE="$CARRIER_FEATURE"
   fi
 
