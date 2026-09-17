@@ -11,6 +11,7 @@ from unittest import mock
 import test_control_plane as fixture
 import execution
 import runtime_preflight as runtime
+import seal_owner as seal_owner
 import boundary_restart
 
 
@@ -64,6 +65,15 @@ class ProcessClassificationCases(unittest.TestCase):
         conflict = execution.competitors(rows, self.root, 3, lane='experience',
                                          feature='ST-080', worktree=shared)[0]
         self.assertEqual(10, conflict['pid']); self.assertEqual('backend', conflict['lane'])
+
+    def test_worktree_marker_preserves_spaces_for_scope_collision(self):
+        shared = str((self.root / 'owner tree with spaces').resolve())
+        rows = self.base + [process(10, name='node.exe',
+                                    command='node worker STARTRIPS_EXECUTION_OWNER=' + str(self.root)
+                                    + ';lane=backend;feature=ST-001;worktree=' + shared + '; Evidence JSON')]
+        conflict = execution.competitors(rows, self.root, 3, lane='experience',
+                                         feature='ST-080', worktree=shared)[0]
+        self.assertEqual(shared.replace('\\', '/').lower(), conflict['worktree'])
 
     def test_unknown_lane_in_same_workspace_stays_fail_closed(self):
         rows = self.base + [process(10, command='bash ' + str(self.root / 'run-loop.sh'))]
@@ -601,8 +611,23 @@ class RealWorktreeCases(fixture.SyntheticOne):
     def test_new_worktree_not_created_by_read_only_probe(self):
         before = self.git('worktree', 'list', '--porcelain')
         with self.assertRaises(fixture.store.StoreConflict):
-            runtime.prepare_unmapped(self.root, self.repo, fixture.feature('ST-002', issue=2), 'synthetic/project', False)
+            runtime.prepare_unmapped(self.root, self.repo, fixture.feature('ST-002', issue=2), 'synthetic/project', False, 'backend')
         self.assertEqual(before, self.git('worktree', 'list', '--porcelain'))
+
+    def test_new_owner_prepare_guard_is_lane_scoped(self):
+        row = fixture.feature('ST-002', issue=2)
+        with mock.patch.object(runtime, 'ensure_idle', side_effect=RuntimeError('guard')) as guard:
+            with self.assertRaisesRegex(RuntimeError, 'guard'):
+                runtime.prepare_unmapped(self.root, self.repo, row, 'synthetic/project', True, 'experience')
+        guard.assert_called_once_with(self.root, lane='experience', feature='ST-002')
+
+    def test_seal_guard_is_lane_and_owner_scoped(self):
+        with mock.patch.dict(os.environ, {'STARTRIPS_ROLE': 'experience'}), \
+                mock.patch.object(seal_owner, 'ensure_idle', side_effect=RuntimeError('guard')) as guard:
+            with self.assertRaisesRegex(RuntimeError, 'guard'):
+                seal_owner.seal(self.root, self.repo, 'ST-001', 'synthetic/project')
+        guard.assert_called_once_with(self.root.resolve(), lane='experience', feature='ST-001',
+                                      worktree=self.repo.resolve())
 
     def test_wrong_target_lane_is_refused(self):
         old = Path.cwd()

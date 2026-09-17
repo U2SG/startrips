@@ -144,9 +144,9 @@ def command_scope(command):
     if not isinstance(command, str) or not command.strip():
         return None, None
     feature_match = re.search(r'(?:^|[;\s"])feature=(ST-\d{3,})(?=$|[;\s"])', command, re.I)
-    worktree_match = re.search(r'(?:^|[;\s"])worktree=([^;\s"]+)(?=$|[;\s"])', command, re.I)
+    worktree_match = re.search(r'(?:^|[;\s"])worktree=([^;"]+?)(?=;|$)', command, re.I)
     feature = feature_match.group(1).upper() if feature_match else None
-    worktree = worktree_match.group(1).rstrip('.') if worktree_match else None
+    worktree = worktree_match.group(1).strip().rstrip('.') if worktree_match else None
     if worktree:
         worktree = worktree.replace('\\', '/').rstrip('/').lower()
     return feature, worktree

@@ -34,7 +34,7 @@ def recovery_action(owner, requested_owner, old_execution, same_worktree, same_b
     return 'WAIT_EXECUTION_EVIDENCE'
 
 
-def prepare_unmapped(root, repository, row, repo, prepare):
+def prepare_unmapped(root, repository, row, repo, prepare, lane):
     fid = row['id']; compact = fid.lower().replace('-', '')
     inventory = git(repository, 'worktree', 'list', '--porcelain')
     candidates = []
@@ -56,8 +56,8 @@ def prepare_unmapped(root, repository, row, repo, prepare):
         raise StoreConflict('In-flight owner carrier missing; reconcile, never create a competitor')
     if not prepare:
         raise StoreConflict('NEW_OWNER_WORKTREE_REQUIRED: use authorized worker prepare, not the old checkout')
-    if stopped(root): raise StoreConflict('Owner STOP prevents new worktree preparation')
-    ensure_idle(root)
+    if stopped(root, lane=lane): raise StoreConflict('Owner STOP prevents new worktree preparation')
+    ensure_idle(root, lane=lane, feature=fid)
     issue = re.search(r'(\d+)\s*$', str(row.get('issue')))
     if not issue:
         raise StoreConflict('New owner requires its actual issue identity')
@@ -134,7 +134,7 @@ def preflight(root, worktree, lane, fid, repo, prepare=False):
             if result.returncode:
                 raise StoreConflict('Owner heads diverge or ancestry unknown; preserve work for reconciliation')
     else:
-        worktree = prepare_unmapped(root, worktree, row, repo, prepare)
+        worktree = prepare_unmapped(root, worktree, row, repo, prepare, lane)
         branch = git(worktree, 'branch', '--show-current')
         if not branch:
             raise StoreConflict('Existing owner is detached; preserve it')
@@ -161,7 +161,7 @@ def main():
     parser.add_argument('--local-action', action='store_true')
     args = parser.parse_args()
     try:
-        if args.prepare: ensure_idle(args.root)
+        if args.prepare: ensure_idle(args.root, lane=args.lane, feature=args.feature)
         result = preflight(args.root, args.worktree, args.lane, args.feature, args.repo, args.prepare)
         if args.local_action:
             row = target(load_document(Path(args.root) / 'feature_list.json'), args.feature)
