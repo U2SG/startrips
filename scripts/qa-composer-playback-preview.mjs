@@ -67,7 +67,7 @@ try {
   await page.locator(".living-atlas__active-hit-area").waitFor({ state: "visible" });
   await page.locator(".living-atlas__active-hit-area").click();
   await page.locator(".journey-story").waitFor({ state: "visible" });
-  await page.getByRole("button", { name: "管理旅程" }).click();
+  await page.locator(".journey-story").getByRole("button", { name: "编辑故事", exact: true }).click();
   await page.getByRole("button", { name: "编辑旅程" }).click();
   await page.locator(".journey-composer").waitFor({ state: "visible" });
 
