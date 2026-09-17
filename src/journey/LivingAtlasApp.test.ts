@@ -1386,6 +1386,16 @@ describe("playbackHoldReason (#197)", () => {
 });
 
 describe("Quiet Core route presentation", () => {
+  it("keeps explicit browse selection out of narrative-current projection", () => {
+    const source = readFileSync(new URL("./LivingAtlasApp.tsx", import.meta.url), "utf8");
+    const start = source.indexOf("const narrativeJourneyRoutePoint =");
+    const block = source.slice(start, start + 700);
+
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(block).toContain("&& !timeCursor.hasExplicitSelection");
+    expect(block).toContain("&& timeCursor.selection");
+  });
+
   it("keeps temporal reveal as the only directional route motion authority", () => {
     const css = readFileSync(new URL("../app.css", import.meta.url), "utf8");
     const atlasCss = readFileSync(new URL("../styles/living-atlas.css", import.meta.url), "utf8");

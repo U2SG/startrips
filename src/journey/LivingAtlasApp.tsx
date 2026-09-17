@@ -1831,6 +1831,7 @@ export function LivingAtlasApp({
     ? timeCursor.reveal.journeyProgress.get(timeCursor.selection.journeyId)
     : undefined;
   const narrativeJourneyRoutePoint = (isMobileV2 || globeFocusMode)
+    && !timeCursor.hasExplicitSelection
     && timeCursor.selection
     && narrativeJourneyProgress !== undefined
     && narrativeJourneyProgress > 0

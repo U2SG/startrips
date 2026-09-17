@@ -568,12 +568,13 @@ try {
     if (!near(browse1.glowWidth, 2.8) || !near(browse3.glowWidth, 2.8)) failures.push(`DPR ${sample.dpr}: selected halo changed with zoom (${browse1.glowWidth} -> ${browse3.glowWidth})`);
     if (browse1.devicePixelRatio !== sample.dpr) failures.push(`DPR ${sample.dpr}: browser reported ${browse1.devicePixelRatio}`);
     if (!selected || selected.attentionRole !== "selected" || selected.semanticRole !== "passthrough" || !near(selected.radius, 3, 0.02)) failures.push(`DPR ${sample.dpr}: browse-selected passthrough role/radius is wrong`);
+    if (browse1.routeAttentionRole !== "selected" || browse1.narrativeRouteIds.length !== 0) failures.push(`DPR ${sample.dpr}: browse selection was incorrectly projected as narrative-current`);
     if (!browseStop || browseStop.semanticRole !== "stop" || browseStop.fill === selected?.fill || browseStop.fill === browseStop.stroke || browseStop.strokeWidth < 1.24) failures.push(`DPR ${sample.dpr}: Stop ring paint collapsed into passthrough bead paint`);
-    if (!selected?.filter.includes("drop-shadow")) failures.push(`DPR ${sample.dpr}: selected point attention shadow was replaced by active-route brightness`);
+    if (!selected?.filter.includes("brightness") || !selected.filter.includes("drop-shadow")) failures.push(`DPR ${sample.dpr}: selected point filter did not compose active-route brightness with attention shadow`);
     if (!sameA || !sameB || Math.hypot(sameA.anchorX - sameB.anchorX, sameA.anchorY - sameB.anchorY) > 0.05) failures.push(`DPR ${sample.dpr}: same-coordinate records no longer share one anchor`);
     if (!narrative || narrative.attentionRole !== "narrative-current" || !near(narrative.radius, 3.2, 0.02)) failures.push(`DPR ${sample.dpr}: narrative-current role did not outrank browse selection`);
     if (!narrative || narrative.semanticRole !== "stop" || narrative.fill !== browseStop?.fill) failures.push(`DPR ${sample.dpr}: narrative attention overwrote the Stop ring fill`);
-    if (!narrative?.filter.includes("drop-shadow")) failures.push(`DPR ${sample.dpr}: narrative-current shadow was replaced by active-route brightness`);
+    if (!narrative?.filter.includes("brightness") || !narrative.filter.includes("drop-shadow")) failures.push(`DPR ${sample.dpr}: narrative-current filter did not compose active-route brightness with attention shadow`);
     if (!future || future.temporalVisible !== "false" || future.temporalReveal !== "0.000" || future.opacity !== 0) failures.push(`DPR ${sample.dpr}: future selected Route Point remained visible`);
     if (!futureOrdinary || futureOrdinary.attentionRole !== "ordinary" || futureOrdinary.temporalVisible !== "false" || futureOrdinary.temporalReveal !== "0.000" || futureOrdinary.opacity !== 0) failures.push(`DPR ${sample.dpr}: future ordinary Route Point remained visible`);
     if (!near(playing.coreWidth, 1.2) || !near(playing.glowWidth, 3)) failures.push(`DPR ${sample.dpr}: narrative optical weight is outside the bounded target`);
