@@ -1,0 +1,47 @@
+name: control-plane
+
+on:
+  push:
+    paths:
+      - 'tools/control-plane/**'
+      - '.github/workflows/control-plane.yml'
+  pull_request:
+    paths:
+      - 'tools/control-plane/**'
+      - '.github/workflows/control-plane.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: control-plane-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  synthetic-regressions:
+    name: control-plane / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify native Python and shell
+        shell: bash
+        run: |
+          python --version
+          python -c "import sys; assert sys.version_info >= (3, 10)"
+          bash -n tools/control-plane/run-loop.sh
+          bash -n tools/control-plane/lib/intake.sh
+      - name: Test synthetic ONE, evidence and runtime boundaries
+        shell: bash
+        run: python -B -m unittest discover -s tools/control-plane/tests -p 'test_*.py' -v
