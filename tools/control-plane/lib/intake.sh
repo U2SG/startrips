@@ -436,7 +436,7 @@ intake_issue() {
 
   intake_triage "$num"
   [[ -s "$INTAKE_LAST_LOG" ]] || { intake_record_decision "issue=$num triage-log-empty"; return 1; }
-  INTAKE_ISSUE_UPDATED_AT="$upd" INTAKE_ISSUE_COMMENTS="$cnt" intake_apply "$num" "$INTAKE_LAST_LOG"
+  INTAKE_ISSUE_UPDATED_AT="$upd" INTAKE_ISSUE_COMMENTS="$cnt" intake_apply "$num" "$INTAKE_LAST_LOG" || { intake_record_decision "issue=$num transaction-deferred; no stale result consumed"; return 6; }
   [[ -f "$INTAKE_LAST_RESULT" ]] || { intake_record_decision "issue=$num result-missing"; return 1; }
 
   decision="$(intake_field "$INTAKE_LAST_RESULT" decision)"
@@ -958,7 +958,7 @@ intake_amend() {
     return 0
   }
   INTAKE_ISSUE_UPDATED_AT="$upd" INTAKE_ISSUE_COMMENTS="$cnt" \
-    intake_apply_amend "$num" "$fid" "$INTAKE_LAST_LOG"
+    intake_apply_amend "$num" "$fid" "$INTAKE_LAST_LOG" || { intake_record_decision "issue=$num amend-transaction-deferred"; return 6; }
   [[ -f "$INTAKE_LAST_RESULT" ]] || {
     intake_record_decision "issue=$num feature=$fid amend-result-missing"
     return 0
@@ -1051,7 +1051,7 @@ intake_followup() {
     INTAKE_NOTES_PREFIX="follow-up of $fid (issue reopened)" \
     INTAKE_NO_SKIP_FILE=1 \
     INTAKE_ISSUE_UPDATED_AT="$upd" INTAKE_ISSUE_COMMENTS="$cnt" \
-    intake_apply "$num" "$INTAKE_LAST_LOG"
+    intake_apply "$num" "$INTAKE_LAST_LOG" || { intake_record_decision "issue=$num followup-transaction-deferred"; return 6; }
   [[ -f "$INTAKE_LAST_RESULT" ]] || {
     intake_record_decision "issue=$num feature=$fid followup-result-missing"
     return 0

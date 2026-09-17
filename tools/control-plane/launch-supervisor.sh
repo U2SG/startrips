@@ -13,6 +13,10 @@ case "${STARTRIPS_LANE:-backend}" in
 esac
 export PATH="/usr/bin:$PATH"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+for guard in AGENT_STOP SUPERVISOR_STOP CANCEL_SCHEDULED_RESTART; do
+  [[ ! -f "$ROOT/$guard" ]] || { echo "Owner STOP present; use explicit local Resume when authorized"; exit 0; }
+done
+python3 -B "$ROOT/lib/execution.py" check "$ROOT" || exit 6
 LOGDIR="${LOOP_LOG_DIR:-/d/startrips/loop-logs}"
 mkdir -p "$LOGDIR"
 TS="$(date +%Y%m%dT%H%M%S)"; TS="$(printf '%s' "$TS" | tr -d '\r')"

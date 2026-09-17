@@ -59,19 +59,9 @@ done
 #
 # Unreadable is treated as running: staying down for one tick costs an hour,
 # stacking a second writer costs a feature.
-PWSH='/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe'
-if [[ ! -x "$PWSH" ]]; then
-  say "cannot see Windows processes ($PWSH missing); staying down."
-  exit 0
-fi
-RUNNING="$("$PWSH" -NoProfile -Command "(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object { \$_.ProcessId -ne \$PID -and \$_.CommandLine -match 'loop-supervisor\.sh|run-loop\.sh' } | Measure-Object).Count" 2>/dev/null | tr -d ' \r\n')"
-if [[ ! "$RUNNING" =~ ^[0-9]+$ ]]; then
-  say "process check returned '${RUNNING:-<empty>}'; staying down."
-  exit 0
-fi
-if (( RUNNING > 0 )); then
-  say "a supervisor or run-loop is already running ($RUNNING process(es)); nothing to decide."
-  exit 0
+if ! python3 -B "$ROOT/lib/execution.py" check "$ROOT" >/dev/null 2>&1; then
+  say "another execution or unavailable provider; no duplicate launch, observation retained"
+  exit 6
 fi
 
 if ! NEXT="$("$ROOT/run-loop.sh" --next 2>/dev/null | tr -d '\r')"; then

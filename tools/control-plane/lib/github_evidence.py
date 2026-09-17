@@ -123,6 +123,12 @@ def source_relation(repo: str, number: int) -> dict:
             sources = re.findall(r'^- \*\*Source head:\*\* `([0-9a-f]{40})`[ \t]*$', text, re.M)
             if len(sources) != 1 or sources[0] != parents[0]['sha']:
                 raise EvidenceUnknown('Ledger Source must bind the immediate code parent exactly once')
+            parent_commit = api(prefix + 'commits/' + sources[0])
+            parent_files = parent_commit.get('files')
+            if not isinstance(parent_files, list) or not parent_files:
+                raise EvidenceUnknown('CODE parent file evidence unavailable')
+            if all(item.get('filename') == ledger_path for item in parent_files):
+                raise EvidenceUnknown('Duplicate ledger seal is not a CODE Source')
             relation = {'source_sha': sources[0], 'final_sha': head, 'sealed': True}
         if api(prefix + 'pulls/' + str(number))['head']['sha'] != head:
             raise EvidenceUnknown('Head changed during Source/final inspection')

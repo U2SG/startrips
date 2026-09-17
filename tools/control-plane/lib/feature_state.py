@@ -142,6 +142,8 @@ def reconcile(path, repo, base):
 
 def next_action(row):
     status = row.get('status')
+    if row.get('human_gate') or status in TERMINAL:
+        return 'OBSERVE'
     if status == 'ready_for_eval':
         return 'EVALUATE'
     if status == 'ready_to_merge':

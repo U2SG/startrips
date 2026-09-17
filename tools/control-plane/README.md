@@ -37,8 +37,9 @@ reassembly eats a `bash -c "... > log 2>&1"` redirection and the supervisor exit
 
 ```bash
 cd /d/startrips/loop-workspace
-rm -f AGENT_STOP SUPERVISOR_STOP     # required before a resume, or the next boundary exits immediately
-./launch-supervisor.sh               # detached; log under D:/startrips/loop-logs/
+# PowerShell: .\start-local-worker.ps1 -Mode Check
+# Explicit user Resume: .\start-local-worker.ps1 -Mode Resume
+# Scheduled launchers never remove human STOP markers.
 ```
 
 Foreground, one bounded run:
@@ -162,3 +163,17 @@ product repository under `tools/control-plane/`. It contains no ONE, owner regis
 progress history or dispatch queue. Runtime activation uses exact expected-input
 hashes and a safe iteration boundary, never a forced process kill. Preserve any
 user STOP and only remove a temporary stop marker whose exact content is yours.
+
+## Local Worker startup after a harness upgrade
+
+From PowerShell in this directory, run `./start-local-worker.ps1 -Mode Check`.
+This checks the provider, canonical protocol and target-shell Backend selector but
+preserves all STOP markers and starts no worker. Only the local user's explicit
+`./start-local-worker.ps1 -Mode Resume` clears AGENT_STOP/SUPERVISOR_STOP, never a
+CANCEL_SCHEDULED_RESTART marker, and invokes the existing LOCAL Backend launcher.
+
+Read `run-loop.sh --plan` for live evidence-derived next action. The offline
+`--next-action` hint is not an instruction to implement. Source-review evidence is
+produced by Hourly Review according to CLAUDE.md, not by an owner acknowledging a
+comment. All code/behavior regressions execute in GitHub CI; local startup checks
+are static and non-destructive provider/evidence probes.

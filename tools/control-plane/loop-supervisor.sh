@@ -34,15 +34,20 @@ TRANSIENT_WAIT_S="${TRANSIENT_WAIT_S:-600}"
 MAX_TRANSIENT_RETRIES="${MAX_TRANSIENT_RETRIES:-72}"   # ~12 h of 10-min retries
 
 n=0
-t=0
+transient_count=0
+for value in "$MAX_RESUMES" "$MERGE_WAIT_S" "$TRANSIENT_WAIT_S" "$MAX_TRANSIENT_RETRIES"; do
+  [[ "$value" =~ ^[0-9]+$ ]] || { echo "Invalid supervisor budget" >&2; exit 64; }
+done
+stopped() { [[ -f "$ROOT/AGENT_STOP" || -f "$ROOT/SUPERVISOR_STOP" || -f "$ROOT/CANCEL_SCHEDULED_RESTART" ]]; }
 while :; do
+  stopped && { echo "[supervisor] owner STOP preserved; no child launched"; exit 0; }
   TS="$(date +%Y%m%dT%H%M%S)"; TS="$(printf '%s' "$TS" | tr -d '\r')"
   RUNLOG="$LOGDIR/run-$TS.log"
   echo "[supervisor] $(date '+%F %T') launching run-loop (resume #$n) -> $RUNLOG"
   MAX_ITERATIONS="${MAX_ITERATIONS:-20}" "$ROOT/run-loop.sh" >"$RUNLOG" 2>&1
   rc=$?
   echo "[supervisor] $(date '+%F %T') run-loop exited rc=$rc"
-  [[ "$rc" == "6" ]] || t=0
+  [[ "$rc" == "6" ]] || transient_count=0
   case "$rc" in
     0)
       echo "[supervisor] clean finish (queue done or AGENT_STOP); stopping."
@@ -55,18 +60,18 @@ while :; do
         exit 5
       fi
       # e.g. "resets 1:10pm (Asia/Singapore)" / "resets 6pm" / "resets 12:20am"
-      t="$(grep -m1 -ioE 'resets +[0-9]{1,2}(:[0-9]{2})?(am|pm)' "$RUNLOG" | sed -E 's/^[Rr]esets +//' | tr -d '\r')"
+      quota_reset="$(grep -m1 -ioE 'resets +[0-9]{1,2}(:[0-9]{2})?(am|pm)' "$RUNLOG" | sed -E 's/^[Rr]esets +//' | tr -d '\r')"
       now=$(date +%s)
-      if [[ -n "$t" ]] && target="$(date -d "$t" +%s 2>/dev/null)" && [[ -n "$target" ]]; then
-        (( target <= now )) && target="$(date -d "tomorrow $t" +%s)"
+      if [[ -n "$quota_reset" ]] && target="$(date -d "$quota_reset" +%s 2>/dev/null)" && [[ -n "$target" ]]; then
+        (( target <= now )) && target="$(date -d "tomorrow $quota_reset" +%s)"
       else
         target=$((now + 1800))   # could not parse: retry in 30 min
       fi
       target=$((target + BUFFER_S))
-      echo "[supervisor] quota exhausted; sleeping until $(date -d "@$target" '+%F %T') (parsed reset: '${t:-unparsed}')"
+      echo "[supervisor] quota exhausted; sleeping until $(date -d "@$target" '+%F %T') (parsed reset: '${quota_reset:-unparsed}')"
       while (( $(date +%s) < target )); do
-        [[ ! -f "$ROOT/SUPERVISOR_STOP" ]] || { echo "[supervisor] SUPERVISOR_STOP present; stopping."; exit 0; }
-        sleep 60
+        ! stopped || { echo "[supervisor] SUPERVISOR_STOP present; stopping."; exit 0; }
+        sleep 10
       done
       ;;
     3)
@@ -86,16 +91,16 @@ while :; do
       # its state was left untouched. Bounded by TIME, not by MAX_RESUMES: a
       # 5.5 h outage on 2026-09-06 burned all 20 resumes at 10 min apart and
       # stopped the loop for a day. The counter resets on any non-6 exit.
-      t=$((t+1))
-      if (( t > MAX_TRANSIENT_RETRIES )); then
+      transient_count=$((transient_count+1))
+      if (( transient_count > MAX_TRANSIENT_RETRIES )); then
         echo "[supervisor] platform failure persisted through $MAX_TRANSIENT_RETRIES retries; stopping."
         exit 6
       fi
       target=$(( $(date +%s) + TRANSIENT_WAIT_S ))
-      echo "[supervisor] platform failure (retry $t/$MAX_TRANSIENT_RETRIES); retrying at $(date -d "@$target" '+%F %T')"
+      echo "[supervisor] platform failure (retry $transient_count/$MAX_TRANSIENT_RETRIES); retrying at $(date -d "@$target" '+%F %T')"
       while (( $(date +%s) < target )); do
-        [[ ! -f "$ROOT/SUPERVISOR_STOP" ]] || { echo "[supervisor] SUPERVISOR_STOP present; stopping."; exit 0; }
-        sleep 60
+        ! stopped || { echo "[supervisor] SUPERVISOR_STOP present; stopping."; exit 0; }
+        sleep 10
       done
       ;;
     7)
@@ -104,8 +109,8 @@ while :; do
       target=$(( $(date +%s) + MERGE_WAIT_S ))
       echo "[supervisor] waiting on a human merge-ready sign-off; re-reconciling at $(date -d "@$target" '+%F %T')"
       while (( $(date +%s) < target )); do
-        [[ ! -f "$ROOT/SUPERVISOR_STOP" ]] || { echo "[supervisor] SUPERVISOR_STOP present; stopping."; exit 0; }
-        sleep 60
+        ! stopped || { echo "[supervisor] SUPERVISOR_STOP present; stopping."; exit 0; }
+        sleep 10
       done
       ;;
     *)

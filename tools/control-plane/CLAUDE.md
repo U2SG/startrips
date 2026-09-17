@@ -56,6 +56,62 @@ Automation prompts carry roles and this entry point, never current PRs or SHAs.
   root-cause work, never timeout inflation or weakened assertions.
 
 
+## Source review receipt
+
+The executable next-action reader is `run-loop.sh --plan`, after setting the lane
+inside the target bash. `--next` is the only selector; `--next-action` is only an
+offline status hint. No new status, owner registry, queue or feature lease is used.
+
+Hourly Review independently inspects every changed file on the exact CODE Source,
+including draft PRs that are awaiting Source review. After its own inspection it
+records `.agent-artifacts/evaluations/<ST>-<SOURCE>-source-review.json` through:
+
+```text
+STARTRIPS_ROLE=hourly-review python -B lib/action_plan.py feature_list.json <ST> --record-review <result.json>
+```
+
+The result is an evidence document, not a claim: `feature`, `pr`, `source_sha`,
+`verdict` (CLEAR or CHANGES_REQUESTED), `findings`, `reviewed_paths`, `evidence`.
+CLEAR requires no findings, the full changed-file set and actual review evidence.
+The helper verifies live Source and adds `reviewer_role` and `completed_at`.
+Builder/Experience/Backend must never manufacture this receipt. Absence of an
+external comment, a requested review, or zero unresolved threads is not approval.
+A valid one-commit ledger final preserves its reviewed CODE Source. Local activation
+of harness code is not sign/merge approval. Unmapped PRs retain their existing owner;
+Hourly Review records its normal independent PR review without inventing an ST.
+
+The owner consumes live plans: IMPLEMENT, REPAIR_REVIEW, REPAIR_CONFLICT, REPAIR_CI,
+REPAIR_CI_FAMILY, WAIT_SOURCE_CI, WAIT_SOURCE_REVIEW, SEAL, WAIT_FINAL_CI,
+HANDOFF_REVIEW, WAIT_REVIEW, WAIT_MAIN_CI, RECONCILE or OBSERVE. Waits preserve
+attempts/ownership. Owner creates only the one permitted ledger on SEAL; the
+validated handoff transaction records ready_for_eval once per exact final.
+Hourly Review owns subsequent evaluation, sign, merge and exact-main proof.
+
+LOCAL Backend restart observes the actual process provider and git worktree list.
+An old CLI execution must have ended before a fresh session resumes the same
+owner/worktree/branch, including dirty or unpushed work. Existing execution or
+unreadable provider means no duplicate launch. External Codexless sessions are
+checked with their actual `agent_show` receipt before continuation; do not infer
+termination from a readOnly request or a disconnected chat. Session approvals and
+permissions remain with the original execution provider, never a broader fallback.
+
+`lib/ci_observer.py` records failure evidence by lane, assertion, fixture,
+viewport/DPR and stage, keyed by run/attempt/job. Repeated families require root
+cause and sibling-assumption review through an existing issue, not timeout/retry
+inflation. Only established infrastructure signatures permit one exact-owner,
+exact-SHA targeted job rerun; an uncertain POST is never replayed. A rerun passing
+is evidence for that attempt, not proof that a recurring failure is harmless.
+Capture CI with `init.sh ci`; validate only currently listed evidence, not every
+historical file in an artifacts folder. Source and final evidence stay distinct.
+
+Run `python -B lib/policy_audit.py .` before local startup. New recurring prompts
+contain only role/authority/entrypoint, never a current PR/SHA/next-action snapshot.
+The existing local-user startup entry is `start-local-worker.ps1 -Mode Check`
+(read-only) or `-Mode Resume` (explicitly clears the user's two STOP markers and
+starts the existing launcher). Scheduled, outage and boundary restarters never
+clear a user-owned STOP; failed recovery keeps scheduled observation enabled.
+
+
 This workspace runs Startrips as an evidence-gated, one-feature-per-loop workflow.
 The goal is not maximum code output. The goal is durable progress without product drift.
 
@@ -433,8 +489,8 @@ The builder may change only mutable fields: `status` (`pending` -> `in_progress`
 `ready_for_eval`, or `blocked`), `attempts`, `evidence`, `pr_links`, `notes`, timestamps, and
 `issue_snapshot_at` / `issue_snapshot_comments` once it has read the issue's new comments.
 
-The builder MUST NOT set `passes=true`. Only `run-loop.sh`, after a fresh-context evaluator returns
-PASS, sets `passes=true` and `status=ready_to_merge`; only the merge-state reconcile promotes
+The builder MUST NOT set `passes=true`. Independent Hourly Review owns evaluation and
+`ready_to_merge`; only the exact-main merge-state reconcile promotes
 `ready_to_merge` to `passed`. The same reconcile also promotes a feature the builder still owns
 (`pending`, `in_progress`, `needs_work`, `ready_for_eval`) to `passed` only after exact merge/main-push-CI proof for its
 `pr_links` PR: the owner may merge ahead of the evaluator, and delivered work must never
@@ -448,7 +504,7 @@ Never delete a failing feature or weaken its acceptance criteria to make it pass
 ## End every builder loop
 
 1. Leave `startrips/` runnable and reviewable.
-2. Set the active feature to `ready_for_eval` or `blocked`.
+2. Preserve `in_progress` for a submitted Source awaiting CI/review; use the evidence-derived SEAL/HANDOFF steps. Only validated final handoff becomes `ready_for_eval`.
 3. Append to `claude-progress.md`: feature ID; factual changes; commands actually run and their
    results; evidence paths; PR/commit links; unresolved risks; the exact next action.
 4. Commit the workspace state (feature file + progress log) with a descriptive message including

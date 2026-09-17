@@ -266,6 +266,8 @@ class EvidenceTests(unittest.TestCase):
                 reads += 1
                 return {'head': {'sha': C if drift and reads > 1 else B}}
             if '/commits/' in endpoint:
+                if endpoint.endswith('/' + A):
+                    return {'parents': [{'sha': C}], 'files': [{'filename': 'src/code.ts', 'status': 'modified'}]}
                 files = [{'filename': 'docs/pr-history/1.md', 'status': 'added'}]
                 if mixed:
                     files.append({'filename': 'src/code.ts', 'status': 'modified'})

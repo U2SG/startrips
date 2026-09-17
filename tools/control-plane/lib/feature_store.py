@@ -35,11 +35,14 @@ class Document(dict):
 
 def load_document(path: str | Path) -> Document:
     path = Path(path).resolve()
-    raw = path.read_bytes()
-    _spans(raw.decode('utf-8'))
-    doc = Document(path, raw)
-    _rows(doc)
-    return doc
+    try:
+        raw = path.read_bytes()
+        _spans(raw.decode('utf-8'))
+        doc = Document(path, raw)
+        _rows(doc)
+        return doc
+    except (UnicodeError, ValueError, IndexError, TypeError, KeyError) as exc:
+        raise StoreConflict('ONE is unreadable/incomplete; no clean state may be inferred') from exc
 
 
 def _rows(doc: dict) -> dict[str, dict]:
