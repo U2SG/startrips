@@ -126,7 +126,7 @@ if [[ -n "${STARTRIPS_FAKE_STAMP:-}" ]]; then
 fi
 python3 -B "$ROOT/lib/execution.py" check "$ROOT" >"$ROOT/check.json" 2>"$ROOT/check.err"
 echo $? >"$ROOT/check.rc"
-for _ in $(seq 1 900); do
+for _ in $(seq 1 600); do
   [[ -f "$ROOT/release" ]] && break
   sleep 0.1
 done
@@ -179,7 +179,7 @@ class StartupChainCases(unittest.TestCase):
         (self.root / 'release').touch()
         if self.launched:
             try:
-                self.launched.communicate(timeout=120)
+                self.launched.communicate(timeout=90)
             except (subprocess.TimeoutExpired, ValueError):
                 self.launched.kill()
             for stream in (self.launched.stdout, self.launched.stderr):
@@ -202,7 +202,7 @@ class StartupChainCases(unittest.TestCase):
         # The launcher process itself is not the liveness signal: MSYS implements
         # exec by handing the supervisor to a fresh Windows process, so this handle
         # can be gone while the chain it started is running. Wait for the chain.
-        deadline = time.monotonic() + 240
+        deadline = time.monotonic() + 60
         while time.monotonic() < deadline:
             if (self.root / 'check.rc').exists():
                 return int((self.root / 'check.rc').read_text().strip())
@@ -229,8 +229,10 @@ class StartupChainCases(unittest.TestCase):
         self.launch()
         mine = self.published()
         second = subprocess.run([self.bash, str(self.root / 'launch-supervisor.sh')], cwd=self.root,
-                                env=self.environment(), capture_output=True, text=True, timeout=240)
-        self.assertEqual(6, second.returncode, second.stdout + second.stderr)
+                                env=self.environment(), capture_output=True, text=True, timeout=120)
+        self.assertEqual(6, second.returncode,
+                         'published=%s rc=%s out=%s err=%s' % (sorted(mine), second.returncode,
+                                                               second.stdout, second.stderr))
         self.assertTrue(mine & reported_pids(second.stderr),
                         'the refusal must name our live supervisor: ' + second.stderr)
 
