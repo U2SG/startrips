@@ -290,11 +290,15 @@ def manual_resume(root):
     if os.environ.get('STARTRIPS_EXPLICIT_RESUME') != '1':
         raise StoreConflict('Clearing human STOP requires explicit local Resume')
     root = Path(root).resolve()
-    # AGENT_STOP is global: never clear it while any lane is still executing.
-    ensure_idle(root)
     if (root / STOPS[2]).exists():
         raise StoreConflict('CANCEL_SCHEDULED_RESTART remains authoritative')
     before = {name: (root / name).read_bytes() for name in STOPS[:2] if (root / name).exists()}
+    # Clearing AGENT_STOP changes the global owner boundary, so that case must
+    # prove every lane idle. Stopless / Backend-only Resume stays lane-scoped.
+    if 'AGENT_STOP' in before:
+        ensure_idle(root)
+    else:
+        ensure_idle(root, lane='backend')
     with _storage_mutex(root / 'feature_list.json'):
         if (root / STOPS[2]).exists():
             raise StoreConflict('Cancellation arrived before Resume')

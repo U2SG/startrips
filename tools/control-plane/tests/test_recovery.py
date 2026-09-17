@@ -526,6 +526,14 @@ class StopAndPermissionCases(fixture.SyntheticOne):
         self.assertEqual({'AGENT_STOP', 'SUPERVISOR_STOP'}, set(result['cleared']))
         self.assertFalse(result['worker_started']); self.assertEqual(before, self.path.read_bytes())
 
+    def test_backend_only_resume_uses_backend_lane_guard(self):
+        (self.root / 'SUPERVISOR_STOP').write_text('backend stop')
+        with mock.patch.dict(os.environ, {'STARTRIPS_EXPLICIT_RESUME': '1'}), \
+                mock.patch.object(execution, 'ensure_idle') as provider:
+            result = execution.manual_resume(self.root)
+        provider.assert_called_once_with(self.root.resolve(), lane='backend')
+        self.assertEqual(['SUPERVISOR_STOP'], result['cleared'])
+
     def test_global_stop_is_not_cleared_while_any_lane_is_active(self):
         path = self.root / 'AGENT_STOP'; path.write_bytes(b'startrips-network-maintenance-window\n')
         with mock.patch.object(execution, 'ensure_idle', side_effect=execution.EvidenceUnknown('experience active')) as provider:
