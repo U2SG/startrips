@@ -153,12 +153,19 @@ def reported_pids(text):
     return set()
 
 
+@unittest.skipUnless(os.name == 'nt', 'the severed-ancestry regression is specific to MSYS on Windows')
 class StartupChainCases(unittest.TestCase):
     """launch-supervisor -> loop-supervisor -> run-loop -> execution check, for real.
 
+    Windows only, and deliberately so: the ancestry break these guard against is
+    MSYS emulating fork/exec with fresh processes. Running the same chain on the
+    Linux runner instead exercises the procfs provider, which raises for any
+    process it may not read -- an unrelated, pre-existing question that must not
+    decide whether this regression passes.
+
     Assertions are about our own chain specifically, never about an empty report:
-    an unrelated process whose command line is momentarily unreadable is a separate
-    question, and must not decide whether this regression passes.
+    an unrelated process whose command line is momentarily unreadable is likewise
+    a separate question.
     """
 
     def setUp(self):
