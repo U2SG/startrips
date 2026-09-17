@@ -546,7 +546,7 @@ class WiringTests(SyntheticOne):
 
     def test_real_carrier_publishes_exact_owner_scope_before_work(self):
         loop = (ROOT / 'run-loop.sh').read_text(encoding='utf-8')
-        self.assertIn('"--carrier-feature=$FEATURE" "--carrier-worktree=$REPO"', loop)
+        self.assertIn('"--carrier-feature=$FEATURE" "--carrier-worktree64=$OWNER_WORKTREE64"', loop)
         self.assertIn('CARRIER_SCOPE_DRIFT', loop)
         self.assertIn('FEATURE="$CARRIER_FEATURE"', loop)
         self.assertIn('worktree64=$OWNER_WORKTREE64', loop)

@@ -146,18 +146,15 @@ def command_scope(command):
     if not isinstance(command, str) or not command.strip():
         return None, None
     feature_match = re.search(r'(?:^|[;\s"])(?:--carrier-)?feature=(ST-\d{3,})(?=$|[;\s"])', command, re.I)
-    # Carrier worktree is deliberately the final argv item, so its value can run
-    # to the closing quote/end and preserve both spaces and semicolons. Model
-    # workers publish a base64url marker so an orphan keeps the exact same scope.
-    carrier_worktree_match = re.search(
-        r'(?:^|[\s"])--carrier-worktree=([^"]+?)(?="(?:\s|$)|$)', command, re.I)
+    # Exact worktree scope is always base64url, for both run-loop carriers and
+    # model workers. Legacy raw worktree markers are recognized only as incomplete
+    # scope by competitors() and therefore fail closed across lanes.
     encoded_worktree_match = re.search(
-        r'(?:^|[;\s"])worktree64=([A-Za-z0-9_-]+)(?=;|[\s"]|$)', command, re.I)
-    if re.search(r'(?:^|[;\s"])worktree64=', command, re.I) and not encoded_worktree_match:
+        r'(?:^|[;\s"])(?:--carrier-)?worktree64=([A-Za-z0-9_-]+)(?=;|[\s"]|$)', command, re.I)
+    if re.search(r'(?:^|[;\s"])(?:--carrier-)?worktree64=', command, re.I) and not encoded_worktree_match:
         raise EvidenceUnknown('Malformed encoded owner worktree marker')
-    worker_worktree_match = re.search(
-        r'(?:^|[;\s"])worktree=([^;"]+?)(?=;|$)', command, re.I)
     feature = feature_match.group(1).upper() if feature_match else None
+    worktree = None
     if encoded_worktree_match:
         token = encoded_worktree_match.group(1)
         try:
@@ -165,9 +162,6 @@ def command_scope(command):
                                         altchars=b'-_', validate=True).decode('utf-8')
         except (binascii.Error, UnicodeDecodeError, ValueError) as exc:
             raise EvidenceUnknown('Malformed encoded owner worktree marker') from exc
-    else:
-        worktree_match = carrier_worktree_match or worker_worktree_match
-        worktree = worktree_match.group(1) if worktree_match else None
     return feature, worktree_key(worktree)
 
 
@@ -254,13 +248,18 @@ def competitors(rows, root, self_pid, lane=None, feature=None, worktree=None):
             continue
         carrier_lane = command_lane(raw_command) or inherited_lane
         carrier_feature, carrier_worktree = command_scope(raw_command)
+        scope_marker = bool(re.search(
+            r'(?:^|[;\s"])(?:--carrier-)?(?:feature|worktree|worktree64)=', raw_command, re.I))
+        scope_complete = carrier_feature is not None and carrier_worktree is not None
         same_scope = bool((wanted_feature and carrier_feature == wanted_feature)
                           or (wanted_worktree and carrier_worktree == wanted_worktree))
-        if lane and carrier_lane and carrier_lane != lane and not same_scope:
+        cross_lane = bool(lane and carrier_lane and carrier_lane != lane)
+        if cross_lane and not same_scope and (not scope_marker or scope_complete):
             continue
         found.append({'pid': row['pid'], 'ppid': row['ppid'],
                       'kind': 'worker' if is_child else 'loop',
-                      'state': 'active' if explicit_root else 'unknown-cwd',
+                      'state': ('unknown-scope' if cross_lane and scope_marker and not scope_complete
+                                else ('active' if explicit_root else 'unknown-cwd')),
                       'lane': carrier_lane or 'unknown',
                       'feature': carrier_feature, 'worktree': carrier_worktree})
     return found

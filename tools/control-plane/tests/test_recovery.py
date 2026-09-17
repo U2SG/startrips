@@ -95,32 +95,35 @@ class ProcessClassificationCases(unittest.TestCase):
             execution.command_scope('STARTRIPS_EXECUTION_OWNER=' + str(self.root)
                                     + ';lane=backend;feature=ST-001;worktree64=%%%bad;')
 
-    def test_worktree_marker_preserves_spaces_for_scope_collision(self):
+    def test_legacy_raw_worktree_scope_fails_closed_cross_lane(self):
         shared = str((self.root / 'owner tree with spaces').resolve())
         rows = self.base + [process(10, name='node.exe',
                                     command='node worker STARTRIPS_EXECUTION_OWNER=' + str(self.root)
                                     + ';lane=backend;feature=ST-001;worktree=' + shared + '; Evidence JSON')]
         conflict = execution.competitors(rows, self.root, 3, lane='experience',
                                          feature='ST-080', worktree=shared)[0]
-        self.assertEqual(shared.replace('\\', '/').lower(), conflict['worktree'])
+        self.assertEqual('unknown-scope', conflict['state'])
+        self.assertIsNone(conflict['worktree'])
 
     def test_scoped_cross_lane_loop_blocks_same_owner_before_worker(self):
         shared = str((self.root / 'owner;tree with spaces').resolve())
+        token = base64.urlsafe_b64encode(shared.encode('utf-8')).decode('ascii').rstrip('=')
         command = ('bash "' + str(self.root / 'run-loop.sh') + '" --carrier-lane=backend '
                    '--carrier-token=backend-token-1 --carrier-feature=ST-080 '
-                   '"--carrier-worktree=' + shared + '"')
+                   '--carrier-worktree64=' + token + ' ')
         rows = self.base + [process(10, command=command)]
         conflict = execution.competitors(rows, self.root, 3, lane='experience',
                                          feature='ST-080', worktree=shared)[0]
         self.assertEqual(('backend', 'ST-080'), (conflict['lane'], conflict['feature']))
-        self.assertEqual(shared.replace('\\', '/').lower(), conflict['worktree'])
+        self.assertEqual(execution.worktree_key(shared), conflict['worktree'])
 
     def test_scoped_cross_lane_loop_allows_different_owner(self):
         backend = str((self.root / 'backend-owner').resolve())
         experience = str((self.root / 'experience-owner').resolve())
+        token = base64.urlsafe_b64encode(backend.encode('utf-8')).decode('ascii').rstrip('=')
         command = ('bash "' + str(self.root / 'run-loop.sh') + '" --carrier-lane=backend '
                    '--carrier-token=backend-token-1 --carrier-feature=ST-087 '
-                   '"--carrier-worktree=' + backend + '"')
+                   '--carrier-worktree64=' + token + ' ')
         rows = self.base + [process(10, command=command)]
         self.assertEqual([], execution.competitors(rows, self.root, 3, lane='experience',
                                                    feature='ST-080', worktree=experience))
