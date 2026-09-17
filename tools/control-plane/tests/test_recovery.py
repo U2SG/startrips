@@ -4,6 +4,7 @@ import json
 import shutil
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -13,8 +14,8 @@ import runtime_preflight as runtime
 import boundary_restart
 
 
-def process(pid, ppid=0, name='bash', command=''):
-    return {'pid': pid, 'ppid': ppid, 'name': name, 'command': command}
+def process(pid, ppid=0, name='bash', command='', started=''):
+    return {'pid': pid, 'ppid': ppid, 'name': name, 'command': command, 'started': started}
 
 
 class ProcessClassificationCases(unittest.TestCase):
@@ -63,33 +64,185 @@ class ProcessClassificationCases(unittest.TestCase):
         rows = self.base + [process(10, command='bash ' + str(other / 'run-loop.sh'))]
         self.assertEqual([], execution.competitors(rows, self.root, 3))
 
-    def severed(self):
+    def severed(self, supervisor_started='sup-start-1'):
         """run-loop whose recorded parent is an MSYS stub that already exited."""
         return [process(1, name='python'), process(2, 999, 'bash', str(self.root / 'run-loop.sh')),
                 process(3, 2, 'python'),
-                process(20, 19, 'bash', 'bash ' + str(self.root / 'loop-supervisor.sh'))]
+                process(20, 19, 'bash', 'bash ' + str(self.root / 'loop-supervisor.sh'),
+                        started=supervisor_started)]
 
     def test_severed_msys_ancestry_reports_our_own_supervisor(self):
         # The failure this guards: ancestry stops at the exited stub, so the
         # supervisor that launched this very check reads as a second execution.
         self.assertEqual(20, execution.competitors(self.severed(), self.root, 3)[0]['pid'])
 
-    def test_published_supervisor_pid_is_not_a_competitor(self):
-        with mock.patch.dict(os.environ, {'STARTRIPS_OWN_PIDS': '20'}):
+    def test_published_identity_is_not_a_competitor(self):
+        with mock.patch.dict(os.environ, {'STARTRIPS_OWN_PIDS': '20@sup-start-1'}):
             self.assertEqual([], execution.competitors(self.severed(), self.root, 3))
 
-    def test_fork_stub_of_a_published_pid_is_not_a_competitor(self):
-        # A stub briefly carries its child's command line while MSYS completes the
-        # fork; being a direct child of the published supervisor, it is never a
-        # second execution.
-        rows = self.severed() + [process(21, 20, 'bash', 'bash ' + str(self.root / 'run-loop.sh'))]
-        with mock.patch.dict(os.environ, {'STARTRIPS_OWN_PIDS': '20'}):
-            self.assertEqual([], execution.competitors(rows, self.root, 3))
+    def test_reused_pid_does_not_inherit_the_published_exemption(self):
+        # Windows reuses process ids. The number published at launch may belong to
+        # an unrelated execution later, and only the start stamp can tell.
+        rows = self.severed(supervisor_started='different-start-2')
+        with mock.patch.dict(os.environ, {'STARTRIPS_OWN_PIDS': '20@sup-start-1'}):
+            self.assertEqual(20, execution.competitors(rows, self.root, 3)[0]['pid'])
+
+    def test_bare_pid_without_a_stamp_exempts_nothing(self):
+        with mock.patch.dict(os.environ, {'STARTRIPS_OWN_PIDS': '20,not-a-pid'}):
+            self.assertEqual(20, execution.competitors(self.severed(), self.root, 3)[0]['pid'])
+
+    def test_child_of_a_published_identity_is_still_reported(self):
+        # A published supervisor never vouches for what runs under it: a racing or
+        # manual start that lands beneath it is a real second execution.
+        rows = self.severed() + [process(21, 20, 'bash', 'bash ' + str(self.root / 'run-loop.sh'),
+                                         started='child-start-3')]
+        with mock.patch.dict(os.environ, {'STARTRIPS_OWN_PIDS': '20@sup-start-1'}):
+            self.assertEqual([21], [row['pid'] for row in execution.competitors(rows, self.root, 3)])
+
+    def test_publication_never_short_circuits_an_unreadable_command(self):
+        # The UNKNOWN #400 established outranks publication: an exemption is only
+        # ever reached once the command line has been read, so a carrier we cannot
+        # read stays UNKNOWN even when its number and stamp were published.
+        rows = self.base + [process(10, 20, 'bash', None, started='sup-start-1')]
+        with mock.patch.dict(os.environ, {'STARTRIPS_OWN_PIDS': '10@sup-start-1'}):
+            self.assertEqual('unknown-command', execution.competitors(rows, self.root, 3)[0]['state'])
 
     def test_published_pids_never_hide_an_unrelated_execution(self):
-        rows = self.base + [process(10, command='bash ' + str(self.root / 'run-loop.sh'))]
-        with mock.patch.dict(os.environ, {'STARTRIPS_OWN_PIDS': '20,not-a-pid'}):
+        rows = self.base + [process(10, command='bash ' + str(self.root / 'run-loop.sh'),
+                                    started='other-start')]
+        with mock.patch.dict(os.environ, {'STARTRIPS_OWN_PIDS': '20@sup-start-1'}):
             self.assertEqual(10, execution.competitors(rows, self.root, 3)[0]['pid'])
+
+
+STAND_IN_RUN_LOOP = """#!/usr/bin/env bash
+# Stand-in for the model-driven run-loop. The launcher, the supervisor, process
+# creation, identity publication and the execution check are all real here; only
+# the GitHub and model work is absent.
+set -uo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+printf '%s' "${STARTRIPS_OWN_PIDS:-}" >"$ROOT/own.txt"
+if [[ -n "${STARTRIPS_FAKE_STAMP:-}" ]]; then
+  export STARTRIPS_OWN_PIDS="${STARTRIPS_OWN_PIDS%%@*}@${STARTRIPS_FAKE_STAMP}"
+fi
+python3 -B "$ROOT/lib/execution.py" check "$ROOT" >"$ROOT/check.json" 2>"$ROOT/check.err"
+echo $? >"$ROOT/check.rc"
+for _ in $(seq 1 900); do
+  [[ -f "$ROOT/release" ]] && break
+  sleep 0.1
+done
+exit 0
+"""
+
+
+def git_bash():
+    if os.name == 'nt':
+        for candidate in [Path(os.environ.get('ProgramFiles', 'C:/Program Files')) / 'Git/bin/bash.exe',
+                          Path('C:/Program Files/Git/usr/bin/bash.exe')]:
+            if candidate.exists():
+                return str(candidate)
+    return shutil.which('bash')
+
+
+def reported_pids(text):
+    """Pids named by a guard result, whether it passed or raised."""
+    payload = text.partition('must finish: ')[2].strip()
+    if payload:
+        return {row['pid'] for row in json.loads(payload)}
+    if text.strip().startswith('{'):
+        return {row['pid'] for row in json.loads(text)['competing_executions']}
+    return set()
+
+
+class StartupChainCases(unittest.TestCase):
+    """launch-supervisor -> loop-supervisor -> run-loop -> execution check, for real.
+
+    Assertions are about our own chain specifically, never about an empty report:
+    an unrelated process whose command line is momentarily unreadable is a separate
+    question, and must not decide whether this regression passes.
+    """
+
+    def setUp(self):
+        self.bash = git_bash()
+        if not self.bash:
+            self.fail('GitHub CI must supply bash, not skip startup regressions')
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name).resolve()
+        source = Path(__file__).resolve().parents[1]
+        for name in ['launch-supervisor.sh', 'loop-supervisor.sh']:
+            shutil.copy2(source / name, self.root / name)
+        shutil.copytree(source / 'lib', self.root / 'lib', ignore=shutil.ignore_patterns('__pycache__'))
+        (self.root / 'run-loop.sh').write_text(STAND_IN_RUN_LOOP, encoding='utf-8', newline='\n')
+        (self.root / 'logs').mkdir()
+        self.launched = None
+
+    def tearDown(self):
+        (self.root / 'release').touch()
+        if self.launched:
+            try:
+                self.launched.communicate(timeout=120)
+            except (subprocess.TimeoutExpired, ValueError):
+                self.launched.kill()
+            for stream in (self.launched.stdout, self.launched.stderr):
+                if stream and not stream.closed:
+                    stream.close()
+        self.temp.cleanup()
+
+    def environment(self, **extra):
+        env = dict(os.environ, LOOP_LOG_DIR=str(self.root / 'logs'), PYTHONDONTWRITEBYTECODE='1',
+                   PYTHONIOENCODING='utf-8', PYTHONUTF8='1')
+        env.pop('STARTRIPS_OWN_PIDS', None)
+        env.pop('STARTRIPS_LANE', None)
+        env.update(extra)
+        return env
+
+    def launch(self, **extra):
+        self.launched = subprocess.Popen([self.bash, str(self.root / 'launch-supervisor.sh')],
+                                         cwd=self.root, env=self.environment(**extra),
+                                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        # The launcher process itself is not the liveness signal: MSYS implements
+        # exec by handing the supervisor to a fresh Windows process, so this handle
+        # can be gone while the chain it started is running. Wait for the chain.
+        deadline = time.monotonic() + 240
+        while time.monotonic() < deadline:
+            if (self.root / 'check.rc').exists():
+                return int((self.root / 'check.rc').read_text().strip())
+            time.sleep(0.2)
+        self.fail('the real startup chain never reached the execution check: '
+                  + ' | '.join(self.launched.communicate(timeout=30)))
+
+    def published(self):
+        raw = (self.root / 'own.txt').read_text(encoding='utf-8').strip()
+        self.assertTrue(raw, 'the supervisor published no identity at all')
+        return {int(entry.split('@')[0]) for entry in raw.split(',')}
+
+    def guard_output(self):
+        error = (self.root / 'check.err').read_text(encoding='utf-8')
+        return error if error.strip() else (self.root / 'check.json').read_text(encoding='utf-8')
+
+    def test_own_supervisor_never_blocks_its_own_run_loop(self):
+        self.launch()
+        mine = self.published()
+        self.assertEqual(set(), mine & reported_pids(self.guard_output()),
+                         'the chain reported its own supervisor: ' + self.guard_output())
+
+    def test_a_second_launch_is_refused_while_our_supervisor_lives(self):
+        self.launch()
+        mine = self.published()
+        second = subprocess.run([self.bash, str(self.root / 'launch-supervisor.sh')], cwd=self.root,
+                                env=self.environment(), capture_output=True, text=True, timeout=240)
+        self.assertEqual(6, second.returncode, second.stdout + second.stderr)
+        self.assertTrue(mine & reported_pids(second.stderr),
+                        'the refusal must name our live supervisor: ' + second.stderr)
+
+    def test_unproven_identity_leaves_the_chain_unknown(self):
+        # The same live chain, with a published stamp that no longer matches the
+        # supervisor: exactly what a reused pid looks like later. The number alone
+        # must not excuse it.
+        self.assertEqual(6, self.launch(STARTRIPS_FAKE_STAMP='not-the-observed-start'))
+        output = self.guard_output()
+        self.assertIn('EXECUTION_UNKNOWN', output)
+        self.assertTrue(self.published() & reported_pids(output),
+                        'an unverifiable identity must not be exempted: ' + output)
 
 
 class StopAndPermissionCases(fixture.SyntheticOne):

@@ -20,3 +20,7 @@ coverage/
 
 # GeoNames build cache (cities15000 + alternateNamesV2 source dumps)
 /.cache-geonames/
+
+# Python bytecode from the control-plane tooling and its tests
+__pycache__/
+*.pyc

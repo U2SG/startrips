@@ -2,7 +2,6 @@
 from __future__ import annotations
 import base64
 import copy
-import importlib.util
 import json
 import multiprocessing
 import os
@@ -52,6 +51,11 @@ def concurrent_write(path, fid, gate, loaded, result):
         result.put(('ok', fid))
     except Exception as exc:
         result.put(('error', str(exc)))
+
+
+def report_module_file(queue):
+    import test_control_plane as module
+    queue.put(module.__file__)
 
 
 def crash_with_mutex(path, ready):
@@ -441,12 +445,30 @@ class RecoveryTests(unittest.TestCase):
 
 
 class ImportResolutionTests(unittest.TestCase):
-    def test_this_module_wins_over_a_shadowing_copy_on_sys_path(self):
-        # A spawned child re-imports this module by name off the inherited
-        # sys.path; if lib/ still holds an older copy it answers instead and the
-        # multiprocessing cases above fail on a missing helper.
-        spec = importlib.util.find_spec('test_control_plane')
-        self.assertEqual(Path(__file__).resolve(), Path(spec.origin).resolve())
+    def test_this_directory_precedes_lib_on_sys_path(self):
+        # The regression itself: lib/ used to come first, so a stale copy left there
+        # answered the by-name import the spawned cases above depend on.
+        self.assertLess(sys.path.index(str(Path(__file__).resolve().parent)),
+                        sys.path.index(str(ROOT / 'lib')))
+
+    def test_spawned_child_resolves_this_module_over_a_shadowing_copy(self):
+        # And the mechanism, in a real spawned interpreter: it inherits sys.path and
+        # re-imports this module BY NAME to unpickle the target. find_spec() cannot
+        # show this -- for an already imported name it answers from sys.modules
+        # instead of searching -- so plant a shadowing copy where lib/ sits and look.
+        with tempfile.TemporaryDirectory() as temp:
+            (Path(temp) / 'test_control_plane.py').write_text('SHADOW = True\n', encoding='utf-8')
+            own = str(Path(__file__).resolve().parent)
+            path = [own, temp] + [entry for entry in sys.path if entry != own]
+            context = multiprocessing.get_context('spawn')
+            queue = context.Queue()
+            with mock.patch.object(sys, 'path', path):
+                worker = context.Process(target=report_module_file, args=(queue,))
+                worker.start()
+            try:
+                self.assertEqual(Path(__file__).resolve(), Path(queue.get(timeout=60)).resolve())
+            finally:
+                worker.join(30)
 
 
 class WiringTests(SyntheticOne):
