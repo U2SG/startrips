@@ -2,6 +2,7 @@
 from __future__ import annotations
 import base64
 import copy
+import importlib.util
 import json
 import multiprocessing
 import os
@@ -15,6 +16,10 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'lib'))
+# A spawned child re-imports this module by name to unpickle the helpers below,
+# and it inherits this sys.path. Keep our own directory ahead of lib/ so a stale
+# same-named module left there cannot answer that import instead.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import feature_store as store
 import github_evidence as gh
 import feature_state as state
@@ -433,6 +438,15 @@ class RecoveryTests(unittest.TestCase):
     def test_different_worktree_or_owner_is_conflict(self):
         self.assertEqual('OWNERSHIP_CONFLICT', runtime.recovery_action('owner', 'someone', 'ended', True, True))
         self.assertEqual('OWNERSHIP_CONFLICT', runtime.recovery_action('owner', 'owner', 'ended', False, True))
+
+
+class ImportResolutionTests(unittest.TestCase):
+    def test_this_module_wins_over_a_shadowing_copy_on_sys_path(self):
+        # A spawned child re-imports this module by name off the inherited
+        # sys.path; if lib/ still holds an older copy it answers instead and the
+        # multiprocessing cases above fail on a missing helper.
+        spec = importlib.util.find_spec('test_control_plane')
+        self.assertEqual(Path(__file__).resolve(), Path(spec.origin).resolve())
 
 
 class WiringTests(SyntheticOne):

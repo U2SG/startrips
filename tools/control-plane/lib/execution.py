@@ -51,6 +51,18 @@ def snapshot():
     return rows
 
 
+def own_pids():
+    """Windows pids the launcher chain published for itself.
+
+    MSYS emulates fork/exec with fresh Windows processes, so a child's recorded
+    ParentProcessId can name an already-exited stub. Ancestry alone then never
+    reaches the supervisor that launched this check, and it reads as a second
+    execution. The launcher chain publishes its real Windows pids instead.
+    """
+    return {int(part) for part in os.environ.get('STARTRIPS_OWN_PIDS', '').split(',')
+            if part.strip().isdigit()}
+
+
 def competitors(rows, root, self_pid):
     by_pid = {r['pid']: r for r in rows}
     if self_pid not in by_pid:
@@ -64,12 +76,15 @@ def competitors(rows, root, self_pid):
     # native Windows argv can retain an 8.3 spelling that resolve() expands.
     original = str(Path(root).absolute()).replace('\\', '/').lower()
     aliases = {canonical, original}
+    # A published pid is this execution's own supervisor, and a direct child of
+    # one is the fork stub MSYS leaves behind carrying the child's command line.
+    published = own_pids()
     for spelling in tuple(aliases):
         if re.match(r'^[a-z]:/', spelling):
             aliases.add('/' + spelling[0] + spelling[2:])
     found = []
     for row in rows:
-        if row['pid'] in ancestors:
+        if row['pid'] in ancestors or row['pid'] in published or row['ppid'] in published:
             continue
         name = row['name'].lower()
         basename = name[:-4] if name.endswith('.exe') else name

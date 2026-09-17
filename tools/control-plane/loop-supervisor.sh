@@ -25,6 +25,22 @@ set -uo pipefail
 # so date/grep/sed behave identically to an interactive shell.
 export PATH="/usr/bin:$PATH"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# MSYS emulates fork/exec by spawning fresh Windows processes, so the
+# ParentProcessId recorded for run-loop often names an already-exited stub: the
+# execution guard cannot reach this supervisor by walking ppids and reports it
+# as a competing instance, failing every iteration with rc=6. Publish the real
+# Windows pids of this supervisor and its launcher instead. Empty off MSYS,
+# where the recorded ancestry is already complete.
+own_winpids() {
+  local pid winpid out=""
+  for pid in $$ ${PPID:-}; do
+    [[ -n "$pid" ]] || continue
+    winpid="$(cat "/proc/$pid/winpid" 2>/dev/null)" || continue
+    [[ -n "$winpid" ]] && out="${out:+$out,}$winpid"
+  done
+  printf '%s' "$out"
+}
+export STARTRIPS_OWN_PIDS="$(own_winpids)"
 LOGDIR="${LOOP_LOG_DIR:-/d/startrips/loop-logs}"
 mkdir -p "$LOGDIR"
 MAX_RESUMES="${MAX_RESUMES:-20}"

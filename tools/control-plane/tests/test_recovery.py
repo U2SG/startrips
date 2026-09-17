@@ -63,6 +63,34 @@ class ProcessClassificationCases(unittest.TestCase):
         rows = self.base + [process(10, command='bash ' + str(other / 'run-loop.sh'))]
         self.assertEqual([], execution.competitors(rows, self.root, 3))
 
+    def severed(self):
+        """run-loop whose recorded parent is an MSYS stub that already exited."""
+        return [process(1, name='python'), process(2, 999, 'bash', str(self.root / 'run-loop.sh')),
+                process(3, 2, 'python'),
+                process(20, 19, 'bash', 'bash ' + str(self.root / 'loop-supervisor.sh'))]
+
+    def test_severed_msys_ancestry_reports_our_own_supervisor(self):
+        # The failure this guards: ancestry stops at the exited stub, so the
+        # supervisor that launched this very check reads as a second execution.
+        self.assertEqual(20, execution.competitors(self.severed(), self.root, 3)[0]['pid'])
+
+    def test_published_supervisor_pid_is_not_a_competitor(self):
+        with mock.patch.dict(os.environ, {'STARTRIPS_OWN_PIDS': '20'}):
+            self.assertEqual([], execution.competitors(self.severed(), self.root, 3))
+
+    def test_fork_stub_of_a_published_pid_is_not_a_competitor(self):
+        # A stub briefly carries its child's command line while MSYS completes the
+        # fork; being a direct child of the published supervisor, it is never a
+        # second execution.
+        rows = self.severed() + [process(21, 20, 'bash', 'bash ' + str(self.root / 'run-loop.sh'))]
+        with mock.patch.dict(os.environ, {'STARTRIPS_OWN_PIDS': '20'}):
+            self.assertEqual([], execution.competitors(rows, self.root, 3))
+
+    def test_published_pids_never_hide_an_unrelated_execution(self):
+        rows = self.base + [process(10, command='bash ' + str(self.root / 'run-loop.sh'))]
+        with mock.patch.dict(os.environ, {'STARTRIPS_OWN_PIDS': '20,not-a-pid'}):
+            self.assertEqual(10, execution.competitors(rows, self.root, 3)[0]['pid'])
+
 
 class StopAndPermissionCases(fixture.SyntheticOne):
     def test_inherit_probe_really_writes_and_removes_only_its_file(self):

@@ -42,6 +42,8 @@ jobs:
           python -c "import sys; assert sys.version_info >= (3, 10)"
           bash -n tools/control-plane/run-loop.sh
           bash -n tools/control-plane/lib/intake.sh
+          bash -n tools/control-plane/loop-supervisor.sh
+          bash -n tools/control-plane/launch-supervisor.sh
       - name: Test synthetic ONE, evidence and runtime boundaries
         shell: bash
         run: python -B -m unittest discover -s tools/control-plane/tests -p 'test_*.py' -v
