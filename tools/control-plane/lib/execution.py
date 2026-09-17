@@ -1,6 +1,8 @@
 """Observe real execution carriers. No owner registry, leases or extra lock files."""
 from __future__ import annotations
 import argparse
+import base64
+import binascii
 import datetime
 import json
 import os
@@ -145,15 +147,28 @@ def command_scope(command):
         return None, None
     feature_match = re.search(r'(?:^|[;\s"])(?:--carrier-)?feature=(ST-\d{3,})(?=$|[;\s"])', command, re.I)
     # Carrier worktree is deliberately the final argv item, so its value can run
-    # to the closing quote/end and preserve both spaces and semicolons. The model
-    # worker marker remains the older semicolon-delimited format.
+    # to the closing quote/end and preserve both spaces and semicolons. Model
+    # workers publish a base64url marker so an orphan keeps the exact same scope.
     carrier_worktree_match = re.search(
         r'(?:^|[\s"])--carrier-worktree=([^"]+?)(?="(?:\s|$)|$)', command, re.I)
+    encoded_worktree_match = re.search(
+        r'(?:^|[;\s"])worktree64=([A-Za-z0-9_-]+)(?=;|[\s"]|$)', command, re.I)
+    if re.search(r'(?:^|[;\s"])worktree64=', command, re.I) and not encoded_worktree_match:
+        raise EvidenceUnknown('Malformed encoded owner worktree marker')
     worker_worktree_match = re.search(
         r'(?:^|[;\s"])worktree=([^;"]+?)(?=;|$)', command, re.I)
-    worktree_match = carrier_worktree_match or worker_worktree_match
     feature = feature_match.group(1).upper() if feature_match else None
-    worktree = worktree_match.group(1).strip().rstrip('.') if worktree_match else None
+    if encoded_worktree_match:
+        token = encoded_worktree_match.group(1)
+        try:
+            worktree = base64.b64decode(token + '=' * (-len(token) % 4),
+                                        altchars=b'-_', validate=True).decode('utf-8')
+        except (binascii.Error, UnicodeDecodeError, ValueError) as exc:
+            raise EvidenceUnknown('Malformed encoded owner worktree marker') from exc
+    else:
+        worktree_match = carrier_worktree_match or worker_worktree_match
+        worktree = worktree_match.group(1) if worktree_match else None
+    worktree = worktree.strip().rstrip('.') if worktree else None
     if worktree:
         worktree = worktree.replace('\\', '/').rstrip('/').lower()
     return feature, worktree

@@ -1,6 +1,7 @@
 """Real process-provider and same-owner recovery regressions. GitHub CI only."""
 import os
 import json
+import base64
 import shutil
 import subprocess
 import tempfile
@@ -65,6 +66,21 @@ class ProcessClassificationCases(unittest.TestCase):
         conflict = execution.competitors(rows, self.root, 3, lane='experience',
                                          feature='ST-080', worktree=shared)[0]
         self.assertEqual(10, conflict['pid']); self.assertEqual('backend', conflict['lane'])
+
+    def test_orphan_worker_encoded_scope_preserves_semicolon_worktree(self):
+        shared = str((self.root / 'owner;tree with spaces').resolve())
+        token = base64.urlsafe_b64encode(shared.encode('utf-8')).decode('ascii').rstrip('=')
+        rows = self.base + [process(10, name='node.exe',
+                                    command='node worker STARTRIPS_EXECUTION_OWNER=' + str(self.root)
+                                    + ';lane=backend;feature=ST-001;worktree64=' + token + '; Evidence JSON')]
+        conflict = execution.competitors(rows, self.root, 3, lane='experience',
+                                         feature='ST-080', worktree=shared)[0]
+        self.assertEqual(shared.replace('\\', '/').lower(), conflict['worktree'])
+
+    def test_malformed_encoded_worker_scope_fails_closed(self):
+        with self.assertRaisesRegex(execution.EvidenceUnknown, 'Malformed encoded owner worktree'):
+            execution.command_scope('STARTRIPS_EXECUTION_OWNER=' + str(self.root)
+                                    + ';lane=backend;feature=ST-001;worktree64=%%%bad;')
 
     def test_worktree_marker_preserves_spaces_for_scope_collision(self):
         shared = str((self.root / 'owner tree with spaces').resolve())
