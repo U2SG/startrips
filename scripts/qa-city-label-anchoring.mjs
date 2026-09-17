@@ -30,6 +30,7 @@
 // pixel quantities instead of absorbing it into a loose tolerance.
 import { mkdir } from "node:fs/promises";
 import { launchQaBrowser } from "./qa-browser.mjs";
+import { setParticleZoom } from "./qa-particle-zoom.mjs";
 
 const baseUrl = process.env.QA_BASE_URL ?? "http://127.0.0.1:4173";
 
@@ -309,25 +310,8 @@ function canvasOf(page) {
  * the window centre magnifies whatever offset the framing already had and
  * pushes an off-centre place off the screen entirely.
  */
-async function setZoom(page, targetZoom, anchor = null) {
-  const before = await debug(page);
-  if (!before) throw new Error("Particle Earth debug state is unavailable");
-  if (Math.abs(before.zoom - targetZoom) > 0.02) {
-    const point = anchor ?? { x: VIEWPORT.width / 2, y: VIEWPORT.height / 2 };
-    await canvasOf(page).evaluate((node, init) => node.dispatchEvent(new WheelEvent("wheel", init)), {
-      bubbles: true,
-      cancelable: true,
-      clientX: point.x,
-      clientY: point.y,
-      deltaY: -Math.log(targetZoom / before.zoom) / 0.0012,
-    });
-    await page.waitForTimeout(160);
-  }
-  const after = await debug(page);
-  if (!after || Math.abs(after.zoom - targetZoom) > 0.03) {
-    throw new Error(`Unable to set city QA zoom: ${JSON.stringify({ targetZoom, after })}`);
-  }
-  return after;
+function setZoom(page, targetZoom, anchor = null) {
+  return setParticleZoom(page, targetZoom, anchor);
 }
 
 /** Pointer capture on a synthetic pointer breaks the gesture, so it is stubbed. */

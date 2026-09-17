@@ -3,6 +3,7 @@
 // decorative arc attenuates and stays inside its screen ceiling instead of
 // growing with magnification. Screenshots prove nothing here; numbers do.
 import { launchQaBrowser } from "./qa-browser.mjs";
+import { setParticleZoom } from "./qa-particle-zoom.mjs";
 
 const baseUrl = process.env.QA_BASE_URL ?? "http://127.0.0.1:4173";
 // The reported US Southwest reproduction, framed on its own centre.
@@ -57,27 +58,8 @@ function debug(page) {
   return page.evaluate(() => window.__particleEarthDebug?.() ?? null);
 }
 
-async function setZoom(page, targetZoom) {
-  const before = await debug(page);
-  if (!before) throw new Error("Particle Earth debug state is unavailable");
-  if (Math.abs(before.zoom - targetZoom) > 0.02) {
-    const canvas = page.locator('canvas[data-three-scene="particle-earth"]');
-    const bounds = await canvas.boundingBox();
-    if (!bounds) throw new Error("Particle Earth canvas has no bounds");
-    await canvas.evaluate((node, init) => node.dispatchEvent(new WheelEvent("wheel", init)), {
-      bubbles: true,
-      cancelable: true,
-      clientX: bounds.x + bounds.width / 2,
-      clientY: bounds.y + bounds.height / 2,
-      deltaY: -Math.log(targetZoom / before.zoom) / 0.0012,
-    });
-    await page.waitForTimeout(160);
-  }
-  const after = await debug(page);
-  if (!after || Math.abs(after.zoom - targetZoom) > 0.03) {
-    throw new Error(`Unable to set route QA zoom: ${JSON.stringify({ targetZoom, after })}`);
-  }
-  return after;
+function setZoom(page, targetZoom) {
+  return setParticleZoom(page, targetZoom);
 }
 
 /**
