@@ -107,6 +107,31 @@ class ProcessClassificationCases(unittest.TestCase):
         with mock.patch.dict(os.environ, {'STARTRIPS_OWN_PIDS': '10@sup-start-1'}):
             self.assertEqual('unknown-command', execution.competitors(rows, self.root, 3)[0]['state'])
 
+    def test_unreadable_process_under_a_foreign_parent_is_not_our_unknown(self):
+        # Another session's child never exposes a command line here. Its readable
+        # parent settles that it is not ours, so it must not block this workspace.
+        rows = self.base + [process(30, name='node.exe', command='node --stdio editor-server'),
+                            process(31, 30, 'node.exe', None)]
+        self.assertEqual([], execution.competitors(rows, self.root, 3))
+
+    def test_unreadable_orphan_is_still_unknown(self):
+        # No readable ancestor, so nothing proves it is somebody else's.
+        rows = self.base + [process(31, 999, 'node.exe', None)]
+        self.assertEqual('unknown-command', execution.competitors(rows, self.root, 3)[0]['state'])
+
+    def test_unreadable_process_under_our_own_workspace_stays_unknown(self):
+        rows = self.base + [process(30, name='bash.exe', command='bash ' + str(self.root / 'run-loop.sh')),
+                            process(31, 30, 'node.exe', None)]
+        states = {row['pid']: row['state'] for row in execution.competitors(rows, self.root, 3)}
+        self.assertEqual('unknown-command', states[31])
+
+    def test_unreadable_process_under_a_worker_marker_stays_unknown(self):
+        rows = self.base + [process(30, name='node.exe',
+                                    command='node worker STARTRIPS_EXECUTION_OWNER=' + str(self.root) + ';'),
+                            process(31, 30, 'node.exe', None)]
+        states = {row['pid']: row['state'] for row in execution.competitors(rows, self.root, 3)}
+        self.assertEqual('unknown-command', states[31])
+
     def test_published_pids_never_hide_an_unrelated_execution(self):
         rows = self.base + [process(10, command='bash ' + str(self.root / 'run-loop.sh'),
                                     started='other-start')]
@@ -114,24 +139,42 @@ class ProcessClassificationCases(unittest.TestCase):
             self.assertEqual(10, execution.competitors(rows, self.root, 3)[0]['pid'])
 
 
-STAND_IN_RUN_LOOP = """#!/usr/bin/env bash
-# Stand-in for the model-driven run-loop. The launcher, the supervisor, process
-# creation, identity publication and the execution check are all real here; only
-# the GitHub and model work is absent.
+# The only stand-in on the normal path: `gh`. Every reconcile and intake call
+# already degrades to a no-op on an empty answer, and `api rate_limit` is the
+# transport probe at the top of each iteration.
+STUB_GH = """#!/usr/bin/env bash
+printf '[]'
+exit 0
+"""
+
+# Used only where the subject is the supervisor's own branching, never to stand
+# in for a normal start: that one runs the real run-loop.sh below.
+PROBE_RUN_LOOP = """#!/usr/bin/env bash
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 printf '%s' "${STARTRIPS_OWN_PIDS:-}" >"$ROOT/own.txt"
-if [[ -n "${STARTRIPS_FAKE_STAMP:-}" ]]; then
-  export STARTRIPS_OWN_PIDS="${STARTRIPS_OWN_PIDS%%@*}@${STARTRIPS_FAKE_STAMP}"
+if [[ -n "${PROBE_FAKE_STAMP:-}" ]]; then
+  export STARTRIPS_OWN_PIDS="${STARTRIPS_OWN_PIDS%%@*}@${PROBE_FAKE_STAMP}"
 fi
 python3 -B "$ROOT/lib/execution.py" check "$ROOT" >"$ROOT/check.json" 2>"$ROOT/check.err"
-echo $? >"$ROOT/check.rc"
-for _ in $(seq 1 600); do
+rc=$?
+echo "$rc" >"$ROOT/check.rc"
+cat "$ROOT/check.err"
+exit "$rc"
+"""
+
+# The same probe, held open until released, so a second launcher meets a live
+# chain instead of racing one that already finished.
+HOLDING_PROBE = PROBE_RUN_LOOP.replace('exit "$rc"', """for _ in $(seq 1 900); do
   [[ -f "$ROOT/release" ]] && break
   sleep 0.1
 done
-exit 0
-"""
+exit "$rc\"""")
+
+PASSED_ONLY = {'rules': {'terminal_statuses': ['passed', 'blocked']},
+               'features': [{'id': 'ST-001', 'status': 'passed', 'passes': True, 'attempts': 0,
+                             'priority': 1, 'phase': 'P1-globe', 'dependencies': [], 'human_gate': None,
+                             'evidence': [], 'pr_links': [], 'notes': 'done'}]}
 
 
 def git_bash():
@@ -154,19 +197,17 @@ def reported_pids(text):
 
 
 @unittest.skipUnless(os.name == 'nt', 'the severed-ancestry regression is specific to MSYS on Windows')
-class StartupChainCases(unittest.TestCase):
-    """launch-supervisor -> loop-supervisor -> run-loop -> execution check, for real.
+class ChainCase(unittest.TestCase):
+    """Real launcher, supervisor and guard processes in an isolated workspace.
 
     Windows only, and deliberately so: the ancestry break these guard against is
-    MSYS emulating fork/exec with fresh processes. Running the same chain on the
-    Linux runner instead exercises the procfs provider, which raises for any
-    process it may not read -- an unrelated, pre-existing question that must not
-    decide whether this regression passes.
-
-    Assertions are about our own chain specifically, never about an empty report:
-    an unrelated process whose command line is momentarily unreadable is likewise
-    a separate question.
+    MSYS emulating fork/exec with fresh processes. The same chain on Linux would
+    instead exercise the procfs provider, which raises for any process it may not
+    read -- an unrelated, pre-existing limitation that must not decide whether
+    this regression passes.
     """
+
+    run_loop = None   # None means the real, distributed run-loop.sh
 
     def setUp(self):
         self.bash = git_bash()
@@ -175,10 +216,18 @@ class StartupChainCases(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name).resolve()
         source = Path(__file__).resolve().parents[1]
-        for name in ['launch-supervisor.sh', 'loop-supervisor.sh']:
+        names = ['launch-supervisor.sh', 'loop-supervisor.sh']
+        if self.run_loop is None:
+            names.append('run-loop.sh')
+        for name in names:
             shutil.copy2(source / name, self.root / name)
+        if self.run_loop is not None:
+            (self.root / 'run-loop.sh').write_text(self.run_loop, encoding='utf-8', newline='\n')
         shutil.copytree(source / 'lib', self.root / 'lib', ignore=shutil.ignore_patterns('__pycache__'))
-        (self.root / 'run-loop.sh').write_text(STAND_IN_RUN_LOOP, encoding='utf-8', newline='\n')
+        (self.root / 'feature_list.json').write_text(json.dumps(PASSED_ONLY, indent=2) + '\n', encoding='utf-8')
+        (self.root / 'stub').mkdir()
+        (self.root / 'stub' / 'gh').write_text(STUB_GH, encoding='utf-8', newline='\n')
+        (self.root / 'stub' / 'gh').chmod(0o755)
         (self.root / 'logs').mkdir()
         self.launched = None
 
@@ -192,66 +241,117 @@ class StartupChainCases(unittest.TestCase):
             for stream in (self.launched.stdout, self.launched.stderr):
                 if stream and not stream.closed:
                     stream.close()
+        # A chain of this workspace that outlives its case would be a competing
+        # execution for the next one, and deleting the directory first would strand
+        # it waiting on a release file that can no longer appear.
+        deadline = time.monotonic() + 60
+        alias = str(self.root).replace('\\', '/').lower()
+        while time.monotonic() < deadline:
+            if not [row for row in execution.snapshot()
+                    if isinstance(row.get('command'), str)
+                    and alias in row['command'].replace('\\', '/').lower()]:
+                break
+            time.sleep(0.5)
         self.temp.cleanup()
 
     def environment(self, **extra):
-        env = dict(os.environ, LOOP_LOG_DIR=str(self.root / 'logs'), PYTHONDONTWRITEBYTECODE='1',
-                   PYTHONIOENCODING='utf-8', PYTHONUTF8='1')
+        env = dict(os.environ, LOOP_LOG_DIR=str(self.root / 'logs'), MAX_ITERATIONS='1',
+                   PATH=str(self.root / 'stub') + os.pathsep + os.environ['PATH'],
+                   PYTHONDONTWRITEBYTECODE='1', PYTHONIOENCODING='utf-8', PYTHONUTF8='1')
         env.pop('STARTRIPS_OWN_PIDS', None)
         env.pop('STARTRIPS_LANE', None)
         env.update(extra)
         return env
 
-    def launch(self, **extra):
-        self.launched = subprocess.Popen([self.bash, str(self.root / 'launch-supervisor.sh')],
-                                         cwd=self.root, env=self.environment(**extra),
+    def run_chain(self, timeout=180, **extra):
+        result = subprocess.run([self.bash, str(self.root / 'launch-supervisor.sh')], cwd=self.root,
+                                env=self.environment(**extra), capture_output=True, text=True, timeout=timeout)
+        return result
+
+    def start_chain(self, **extra):
+        """Start a chain and return once its guard has provably run."""
+        self.launched = subprocess.Popen([self.bash, str(self.root / 'launch-supervisor.sh')], cwd=self.root,
+                                         env=self.environment(**extra),
                                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        # The launcher process itself is not the liveness signal: MSYS implements
-        # exec by handing the supervisor to a fresh Windows process, so this handle
-        # can be gone while the chain it started is running. Wait for the chain.
-        deadline = time.monotonic() + 60
+        # The launcher handle is not the liveness signal: MSYS implements exec by
+        # handing the supervisor to a fresh Windows process. Wait for the chain.
+        deadline = time.monotonic() + 120
         while time.monotonic() < deadline:
             if (self.root / 'check.rc').exists():
-                return int((self.root / 'check.rc').read_text().strip())
+                return
             time.sleep(0.2)
-        self.fail('the real startup chain never reached the execution check: '
+        self.fail('the chain never reached its guard: '
                   + ' | '.join(self.launched.communicate(timeout=30)))
 
+    def supervisor_log(self):
+        return '\n'.join(path.read_text(encoding='utf-8')
+                         for path in sorted((self.root / 'logs').glob('supervisor-*.log')))
+
+    def run_log(self):
+        return '\n'.join(path.read_text(encoding='utf-8')
+                         for path in sorted((self.root / 'logs').glob('run-*.log')))
+
+
+class RealStartupChainCases(ChainCase):
+    """launch-supervisor -> loop-supervisor -> the distributed run-loop.sh -> guard."""
+
+    def test_the_real_run_loop_starts_and_reaches_its_selection_point(self):
+        result = self.run_chain()
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        log = self.run_log()
+        # Success is not "nothing named us": the guard has to pass and the real
+        # run-loop has to get past it, through reconcile and intake, to the point
+        # where it judges the queue.
+        self.assertIn('"competing_executions": []', log)
+        self.assertIn('"actual_write_read_delete": "success"', log)
+        self.assertIn('Reconciling merge state (iteration 1)', log)
+        self.assertIn('No eligible unfinished feature remains', log)
+        self.assertIn('run-loop exited rc=0', self.supervisor_log())
+
+
+class LiveChainRefusalCases(ChainCase):
+    """A second launcher meeting a live chain. The probe only keeps it alive."""
+
+    run_loop = HOLDING_PROBE
+
+    def test_a_second_launch_is_refused_while_our_chain_lives(self):
+        self.start_chain()
+        second = self.run_chain()
+        self.assertEqual(6, second.returncode, second.stdout + second.stderr)
+        published = {int(entry.split('@')[0])
+                     for entry in (self.root / 'own.txt').read_text(encoding='utf-8').strip().split(',')}
+        self.assertTrue(published & reported_pids(second.stderr),
+                        'the refusal must name our live chain: ' + second.stderr)
+
+
+class SupervisorBranchCases(ChainCase):
+    """The supervisor's own reaction to a guard verdict, so run-loop is a probe."""
+
+    run_loop = PROBE_RUN_LOOP
+
     def published(self):
-        raw = (self.root / 'own.txt').read_text(encoding='utf-8').strip()
-        self.assertTrue(raw, 'the supervisor published no identity at all')
-        return {int(entry.split('@')[0]) for entry in raw.split(',')}
+        return {int(entry.split('@')[0])
+                for entry in (self.root / 'own.txt').read_text(encoding='utf-8').strip().split(',')}
 
-    def guard_output(self):
-        error = (self.root / 'check.err').read_text(encoding='utf-8')
-        return error if error.strip() else (self.root / 'check.json').read_text(encoding='utf-8')
-
-    def test_own_supervisor_never_blocks_its_own_run_loop(self):
-        self.launch()
-        mine = self.published()
-        self.assertEqual(set(), mine & reported_pids(self.guard_output()),
-                         'the chain reported its own supervisor: ' + self.guard_output())
-
-    def test_a_second_launch_is_refused_while_our_supervisor_lives(self):
-        self.launch()
-        mine = self.published()
-        second = subprocess.run([self.bash, str(self.root / 'launch-supervisor.sh')], cwd=self.root,
-                                env=self.environment(), capture_output=True, text=True, timeout=120)
-        self.assertEqual(6, second.returncode,
-                         'published=%s rc=%s out=%s err=%s' % (sorted(mine), second.returncode,
-                                                               second.stdout, second.stderr))
-        self.assertTrue(mine & reported_pids(second.stderr),
-                        'the refusal must name our live supervisor: ' + second.stderr)
-
-    def test_unproven_identity_leaves_the_chain_unknown(self):
-        # The same live chain, with a published stamp that no longer matches the
-        # supervisor: exactly what a reused pid looks like later. The number alone
-        # must not excuse it.
-        self.assertEqual(6, self.launch(STARTRIPS_FAKE_STAMP='not-the-observed-start'))
-        output = self.guard_output()
+    def test_an_unprovable_identity_leaves_the_chain_unknown(self):
+        # A published number whose stamp no longer matches the supervisor is
+        # exactly what a reused pid looks like later. It must not be exempted.
+        self.run_chain(PROBE_FAKE_STAMP='not-the-observed-start')
+        self.assertEqual('6', (self.root / 'check.rc').read_text().strip())
+        output = (self.root / 'check.err').read_text(encoding='utf-8')
         self.assertIn('EXECUTION_UNKNOWN', output)
         self.assertTrue(self.published() & reported_pids(output),
                         'an unverifiable identity must not be exempted: ' + output)
+
+    def test_a_self_block_stops_at_once_instead_of_retrying(self):
+        # The original incident, reproduced through the supervisor: the guard names
+        # the supervisor that launched this run-loop, and the old code spent twelve
+        # hours of transient budget on a verdict that could never change.
+        result = self.run_chain(PROBE_FAKE_STAMP='not-the-observed-start')
+        log = self.supervisor_log()
+        self.assertIn('stopping for a human', log)
+        self.assertNotIn('platform failure (retry', log)
+        self.assertEqual(8, result.returncode, log)
 
 
 class StopAndPermissionCases(fixture.SyntheticOne):
