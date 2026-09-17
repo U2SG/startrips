@@ -7,6 +7,7 @@ import { serverConfig } from "../config";
 import { accountExperiencePreferences, atlases } from "../db/app-schema";
 import {
   organization as authOrganizations,
+  rateLimit,
   user as authUsers,
 } from "../db/auth-schema";
 import { db, pool } from "../db/client";
@@ -42,8 +43,16 @@ function authHeaders(cookie?: string) {
   };
 }
 
-/** One verified account with its own Atlas, the way the product creates one. */
+/**
+ * One verified account with its own Atlas, the way the product creates one.
+ *
+ * Better Auth rate-limits sign-up and sign-in per address independently of
+ * anything this feature does, and ownership questions need more than one
+ * account, so the budget is cleared the way
+ * `account-identity-routes.integration.test.ts` clears it.
+ */
 async function createAccount(label: string) {
+  await db.delete(rateLimit);
   const email = `st087-${label}-${randomUUID()}@example.test`;
   createdUserEmails.push(email);
   const signUp = await app.request(`${TEST_ORIGIN}/api/auth/sign-up/email`, {
@@ -87,6 +96,7 @@ async function createAccount(label: string) {
 }
 
 async function signIn(email: string) {
+  await db.delete(rateLimit);
   const response = await app.request(`${TEST_ORIGIN}/api/auth/sign-in/email`, {
     method: "POST",
     headers: authHeaders(),
