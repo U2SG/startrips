@@ -4315,6 +4315,18 @@
   padding: 12px clamp(22px, 3vw, 42px);
 }
 
+.journey-composer__footer-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.journey-composer-backdrop.is-playback-previewing {
+  visibility: hidden;
+  pointer-events: none;
+}
+
 .journey-composer__summary {
   display: grid;
   gap: 4px;
@@ -6323,6 +6335,11 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
 
   .journey-composer__summary {
     display: none;
+  }
+
+  .journey-composer__footer-actions {
+    flex: 1;
+    min-width: 0;
   }
 
   .journey-composer__footer button {

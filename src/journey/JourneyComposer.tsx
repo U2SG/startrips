@@ -14,6 +14,7 @@ import {
   IconChevronDown,
   IconDots,
   IconMapPin,
+  IconPlayerPlay,
   IconPlus,
   IconSearch,
   IconTrash,
@@ -55,6 +56,10 @@ import {
   updateRoutePoint,
   type RouteDraftPoint,
 } from "./routeDraft";
+import {
+  buildDraftPlaybackPreviewSnapshot,
+  type DraftPlaybackPreviewSnapshot,
+} from "./draftPlaybackPreview";
 import type {
   Journey,
   JourneyInput,
@@ -320,6 +325,9 @@ type JourneyComposerProps = {
   onGlobePickRequest?: (accept: (point: GlobePointPick) => void) => void;
   onGlobePickCancel?: () => void;
   onRoutePreviewChange?: (route: JourneyRoute | null) => void;
+  onPlaybackPreview?: (snapshot: DraftPlaybackPreviewSnapshot) => void;
+  playbackPreviewActive?: boolean;
+  playbackPreviewPreparing?: boolean;
 };
 
 function draftId() {
@@ -387,6 +395,9 @@ export function JourneyComposer({
   onGlobePickRequest,
   onGlobePickCancel,
   onRoutePreviewChange,
+  onPlaybackPreview,
+  playbackPreviewActive = false,
+  playbackPreviewPreparing = false,
 }: JourneyComposerProps) {
   const recoveryInput = !journey ? initialUnknownCreateAttempt?.input : undefined;
   const recoveryRoutePoints = !journey ? initialUnknownCreateAttempt?.routePoints : undefined;
@@ -439,6 +450,18 @@ export function JourneyComposer({
   const routePointTriggerRefs = useRef(new Map<string, HTMLButtonElement>());
   const routePointMenuTriggerRefs = useRef(new Map<string, HTMLButtonElement>());
   const routePointRowRefs = useRef(new Map<string, HTMLLIElement>());
+  const narrativeScrollRef = useRef<HTMLElement>(null);
+  const routeScrollRef = useRef<HTMLElement>(null);
+  const playbackPreviewRevisionRef = useRef(0);
+  const playbackPreviewWasActiveRef = useRef(false);
+  const lastEditorFocusRef = useRef<HTMLElement | null>(null);
+  const playbackPreviewReturnContextRef = useRef<{
+    selectedDraftId: string | null;
+    expandedDraftId: string | null;
+    focusTarget: HTMLElement | null;
+    narrativeScrollTop: number;
+    routeScrollTop: number;
+  } | null>(null);
   const pendingRoutePointFocusDraftIdRef = useRef<string | null>(null);
   const pendingRoutePointMenuFocusDraftIdRef = useRef<string | null>(null);
   const pendingRoutePointScrollDraftIdRef = useRef<string | null>(null);
@@ -500,7 +523,7 @@ export function JourneyComposer({
       return;
     }
     if (!saving) closeComposer();
-  }, true, globePicking);
+  }, true, globePicking || playbackPreviewActive);
   const mobileMediaSheetRef = useNestedModalFocus<HTMLElement>(
     mobileLayout && (
       mobileMediaMenuIndex !== null
@@ -585,6 +608,62 @@ export function JourneyComposer({
     revision: journey?.revision,
     routePoints: routeDraftToInput(routePoints),
   }), [endedOn, journey?.revision, lightColor, lightEffect, note, routePoints, startedOn, title]);
+
+  function requestPlaybackPreview() {
+    if (!onPlaybackPreview || saving || routePoints.length === 0 || playbackPreviewActive) return;
+    const activeElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const focusTarget = lastEditorFocusRef.current?.isConnected ? lastEditorFocusRef.current : activeElement;
+    const selectedDraftId = focusTarget
+      ?.closest<HTMLElement>("[data-route-point-draft-id]")
+      ?.dataset.routePointDraftId
+      ?? expandedRoutePointDraftId;
+    playbackPreviewReturnContextRef.current = {
+      selectedDraftId,
+      expandedDraftId: expandedRoutePointDraftId,
+      focusTarget,
+      narrativeScrollTop: narrativeScrollRef.current?.scrollTop ?? 0,
+      routeScrollTop: routeScrollRef.current?.scrollTop ?? 0,
+    };
+    playbackPreviewRevisionRef.current += 1;
+    onPlaybackPreview(buildDraftPlaybackPreviewSnapshot({
+      sourceJourney: journey ?? null,
+      input,
+      routePoints,
+      snapshotRevision: playbackPreviewRevisionRef.current,
+      excludedPendingMediaCount: mediaFiles.length,
+    }));
+  }
+
+  useEffect(() => {
+    const wasActive = playbackPreviewWasActiveRef.current;
+    playbackPreviewWasActiveRef.current = playbackPreviewActive;
+    if (!wasActive || playbackPreviewActive) return;
+    const context = playbackPreviewReturnContextRef.current;
+    playbackPreviewReturnContextRef.current = null;
+    if (!context) return;
+    const selectedSurvives = context.selectedDraftId
+      ? routePoints.some((point) => point.draftId === context.selectedDraftId)
+      : false;
+    const expandedSurvives = context.expandedDraftId
+      ? routePoints.some((point) => point.draftId === context.expandedDraftId)
+      : false;
+    setExpandedRoutePointDraftId(expandedSurvives ? context.expandedDraftId : null);
+    window.requestAnimationFrame(() => {
+      if (narrativeScrollRef.current) narrativeScrollRef.current.scrollTop = context.narrativeScrollTop;
+      if (routeScrollRef.current) routeScrollRef.current.scrollTop = context.routeScrollTop;
+      if (
+        context.focusTarget?.isConnected
+        && !context.focusTarget.closest("[inert]")
+        && context.focusTarget.getClientRects().length > 0
+      ) {
+        context.focusTarget.focus({ preventScroll: true });
+        return;
+      }
+      if (selectedSurvives && context.selectedDraftId) {
+        routePointTriggerRefs.current.get(context.selectedDraftId)?.focus({ preventScroll: true });
+      }
+    });
+  }, [playbackPreviewActive, routePoints]);
 
   useEffect(() => {
     composerMountedRef.current = true;
@@ -1187,7 +1266,7 @@ export function JourneyComposer({
   const mobileDeleteMedia = mobileMediaDeleteIndex === null ? null : mediaFiles[mobileMediaDeleteIndex] ?? null;
 
   return (
-    <div className={`journey-composer-backdrop${globePicking ? " is-globe-picking" : ""}`} role="presentation">
+    <div className={`journey-composer-backdrop${globePicking ? " is-globe-picking" : ""}${playbackPreviewActive ? " is-playback-previewing" : ""}`} role="presentation">
       {globePicking ? (
         <aside className="journey-globe-pick-hint" role="status">
           <IconMapPin size={18} stroke={1.4} aria-hidden="true" />
@@ -1200,9 +1279,11 @@ export function JourneyComposer({
         tabIndex={-1}
         className="journey-composer motion-staged"
         data-mobile-layout={mobileLayout ? "true" : undefined}
-        inert={globePicking || undefined}
+        data-playback-preview-active={playbackPreviewActive ? "true" : undefined}
+        inert={globePicking || playbackPreviewActive || undefined}
         role="dialog"
-        aria-modal="true"
+        aria-hidden={playbackPreviewActive || undefined}
+        aria-modal={playbackPreviewActive ? undefined : true}
         aria-labelledby="journey-composer-title"
       >
         <header className="journey-composer__header">
@@ -1219,8 +1300,11 @@ export function JourneyComposer({
             className="journey-composer__editor"
             aria-disabled={editorLocked}
             inert={editorLocked}
+            onFocusCapture={(event) => {
+              if (event.target instanceof HTMLElement) lastEditorFocusRef.current = event.target;
+            }}
           >
-            <section className="journey-composer__narrative" aria-labelledby="journey-story-heading">
+            <section ref={narrativeScrollRef} className="journey-composer__narrative" aria-labelledby="journey-story-heading">
               <div className="journey-composer__section-heading">
                 <p>01 · MEMORY</p>
                 <h3>照片与影像</h3>
@@ -1493,7 +1577,7 @@ export function JourneyComposer({
               </div>
             </section>
 
-            <section className="journey-composer__route" aria-labelledby="journey-route-heading">
+            <section ref={routeScrollRef} className="journey-composer__route" aria-labelledby="journey-route-heading">
               <div className="journey-composer__section-heading">
                 <p>03 · TRACE</p>
                 <h3 id="journey-route-heading">在地图上留下它</h3>
@@ -1750,7 +1834,21 @@ export function JourneyComposer({
                 ? `${existingVisualMediaCount} 个已有媒体`
                 : "媒体可以稍后补充"}</span>
           </div>
-          {savedResult ? <button type="button" onClick={closeComposer}><IconCheck size={18} stroke={1.4} aria-hidden="true" />完成</button> : <button type="button" onClick={save} disabled={saving || unknownCreateAttempt?.mode === "ambiguous" || unknownCreateAttempt?.mode === "confirmation-required"}>{saving ? <StartripsJourneyCue state="waiting" size={32} /> : <IconCheck size={18} stroke={1.4} aria-hidden="true" />}{saving ? "正在保存…" : unknownCreateAttempt?.mode === "ambiguous" || unknownCreateAttempt?.mode === "confirmation-required" ? "请关闭后核对 Atlas" : unknownCreateAttempt ? "重新确认保存结果" : isEditing ? "保存修改" : "保存到星球"}</button>}
+          <div className="journey-composer__footer-actions">
+            {onPlaybackPreview && !savedResult ? (
+              <button
+                type="button"
+                className="journey-composer__preview-playback"
+                onClick={requestPlaybackPreview}
+                disabled={saving || routePoints.length === 0 || playbackPreviewActive || playbackPreviewPreparing}
+                data-playback-preview-trigger
+              >
+                <IconPlayerPlay size={18} stroke={1.4} aria-hidden="true" />
+                {playbackPreviewPreparing ? "正在准备预览…" : "预览播放"}
+              </button>
+            ) : null}
+            {savedResult ? <button type="button" onClick={closeComposer}><IconCheck size={18} stroke={1.4} aria-hidden="true" />完成</button> : <button type="button" onClick={save} disabled={saving || unknownCreateAttempt?.mode === "ambiguous" || unknownCreateAttempt?.mode === "confirmation-required"}>{saving ? <StartripsJourneyCue state="waiting" size={32} /> : <IconCheck size={18} stroke={1.4} aria-hidden="true" />}{saving ? "正在保存…" : unknownCreateAttempt?.mode === "ambiguous" || unknownCreateAttempt?.mode === "confirmation-required" ? "请关闭后核对 Atlas" : unknownCreateAttempt ? "重新确认保存结果" : isEditing ? "保存修改" : "保存到星球"}</button>}
+          </div>
         </footer>
       </section>
     </div>
