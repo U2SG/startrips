@@ -188,14 +188,16 @@ def rerun_eligibility(run, failures):
     return True, 'one-established-infrastructure-retry'
 
 
-def rerun_once(root, repo, ci, records, *, number=None, feature=None):
+def rerun_once(root, repo, ci, records, *, number=None, feature=None, lane=None):
     allowed, reason = rerun_eligibility(ci['run'], records)
     if not allowed: return {'requested': False, 'reason': reason}
     run = ci['run']; root = Path(root)
     from feature_store import load_document
     from feature_state import target
     from execution import stopped
-    if stopped(root): return {'requested': False, 'reason': 'owner-stop'}
+    if lane not in {'backend', 'experience'}:
+        raise StoreConflict('Targeted rerun requires exact execution lane')
+    if stopped(root, lane=lane): return {'requested': False, 'reason': 'owner-stop'}
     if not number or not feature: raise StoreConflict('Targeted rerun requires exact owner feature/PR')
     row = target(load_document(root / 'feature_list.json'), feature)
     if row.get('human_gate') or row.get('pr_links') != ['https://github.com/' + repo + '/pull/' + str(number)]:
@@ -251,9 +253,11 @@ def main():
         records = observe_failures(args.root, args.repo, ci)
         result = {'state': ci['state'], 'run': ci['run']['id'] if ci['run'] else None, 'failures': records}
         if args.rerun:
-            if os.environ.get('STARTRIPS_ROLE') not in {'local-backend', 'experience'}:
+            role = os.environ.get('STARTRIPS_ROLE')
+            if role not in {'local-backend', 'experience'}:
                 raise StoreConflict('Only an executing owner may request its bounded CI retry')
-            result['rerun'] = rerun_once(args.root, args.repo, ci, records, number=args.pr, feature=args.feature) if ci['run'] else {'requested': False}
+            lane = 'backend' if role == 'local-backend' else 'experience'
+            result['rerun'] = rerun_once(args.root, args.repo, ci, records, number=args.pr, feature=args.feature, lane=lane) if ci['run'] else {'requested': False}
         print(json.dumps(result)); return 0
     except (StoreConflict, EvidenceUnknown, OSError, ValueError, KeyError, subprocess.TimeoutExpired) as exc:
         print('CI_UNKNOWN: ' + str(exc), file=sys.stderr); return 6

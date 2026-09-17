@@ -539,6 +539,11 @@ class WiringTests(SyntheticOne):
         for forbidden in ['Disable-ScheduledTask', 'schtasks /change', 'is_enabled=false', 'is_enabled=False']:
             self.assertNotIn(forbidden, text)
 
+    def test_backend_wake_and_restart_guards_are_lane_scoped(self):
+        for name in ['wake-if-work.sh', 'scheduled-restart.sh']:
+            text = (ROOT / name).read_text(encoding='utf-8')
+            self.assertIn('execution.py\" check \"$ROOT\" --lane backend', text, name)
+
 
 if __name__ == '__main__':
     multiprocessing.freeze_support()

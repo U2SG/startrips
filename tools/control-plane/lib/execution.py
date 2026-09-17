@@ -287,7 +287,8 @@ def manual_resume(root):
     if os.environ.get('STARTRIPS_EXPLICIT_RESUME') != '1':
         raise StoreConflict('Clearing human STOP requires explicit local Resume')
     root = Path(root).resolve()
-    ensure_idle(root, lane='backend')
+    # AGENT_STOP is global: never clear it while any lane is still executing.
+    ensure_idle(root)
     if (root / STOPS[2]).exists():
         raise StoreConflict('CANCEL_SCHEDULED_RESTART remains authoritative')
     before = {name: (root / name).read_bytes() for name in STOPS[:2] if (root / name).exists()}
@@ -327,6 +328,8 @@ def outage_window(root, mode):
         legacy = b'placed by the 04:00-05:00 outage window'
         if raw not in {tag, legacy + b'\n', legacy + b'\r\n'}:
             return {'launch_allowed': False, 'reason': 'other-owner-stop-preserved'}
+        # This removes the global stop, so every lane must have ended first.
+        ensure_idle(root)
         clear_owned_stop(root, 'AGENT_STOP', raw)
     if stopped(root): return {'launch_allowed': False, 'reason': 'concurrent-stop-preserved'}
     ensure_idle(root, lane='backend')

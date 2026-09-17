@@ -14,5 +14,5 @@ done
 for guard in AGENT_STOP SUPERVISOR_STOP CANCEL_SCHEDULED_RESTART; do
   [[ ! -f "$ROOT/$guard" ]] || exit 0
 done
-python3 -B "$ROOT/lib/execution.py" check "$ROOT" || exit 6
+python3 -B "$ROOT/lib/execution.py" check "$ROOT" --lane backend || exit 6
 exec /usr/bin/bash "$ROOT/launch-supervisor.sh"

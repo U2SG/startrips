@@ -59,7 +59,7 @@ done
 #
 # Unreadable is treated as running: staying down for one tick costs an hour,
 # stacking a second writer costs a feature.
-if ! python3 -B "$ROOT/lib/execution.py" check "$ROOT" >/dev/null 2>&1; then
+if ! python3 -B "$ROOT/lib/execution.py" check "$ROOT" --lane backend >/dev/null 2>&1; then
   say "another execution or unavailable provider; no duplicate launch, observation retained"
   exit 6
 fi

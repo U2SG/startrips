@@ -498,10 +498,20 @@ class StopAndPermissionCases(fixture.SyntheticOne):
     def test_explicit_resume_clears_only_two_requested_stops(self):
         for name in ['AGENT_STOP', 'SUPERVISOR_STOP']: (self.root / name).write_text('human stop')
         before = self.path.read_bytes()
-        with mock.patch.dict(os.environ, {'STARTRIPS_EXPLICIT_RESUME': '1'}), mock.patch.object(execution, 'ensure_idle'):
+        with mock.patch.dict(os.environ, {'STARTRIPS_EXPLICIT_RESUME': '1'}), \
+                mock.patch.object(execution, 'ensure_idle') as provider:
             result = execution.manual_resume(self.root)
+        provider.assert_called_once_with(self.root.resolve())
         self.assertEqual({'AGENT_STOP', 'SUPERVISOR_STOP'}, set(result['cleared']))
         self.assertFalse(result['worker_started']); self.assertEqual(before, self.path.read_bytes())
+
+    def test_global_stop_is_not_cleared_while_any_lane_is_active(self):
+        path = self.root / 'AGENT_STOP'; path.write_bytes(b'startrips-network-maintenance-window\n')
+        with mock.patch.object(execution, 'ensure_idle', side_effect=execution.EvidenceUnknown('experience active')) as provider:
+            with self.assertRaisesRegex(execution.EvidenceUnknown, 'experience active'):
+                execution.outage_window(self.root, 'resume')
+        provider.assert_called_once_with(self.root.resolve())
+        self.assertTrue(path.exists())
 
     def test_boundary_restart_never_overrides_existing_stop(self):
         (self.root / 'SUPERVISOR_STOP').write_text('stop')
