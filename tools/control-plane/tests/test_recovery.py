@@ -135,6 +135,47 @@ class ProcessClassificationCases(unittest.TestCase):
         conflict = execution.competitors(rows, self.root, 3, lane='experience')[0]
         self.assertEqual(10, conflict['pid']); self.assertEqual('unknown', conflict['lane'])
 
+    def test_execution_invariant_matrix(self):
+        backend_tree = str((self.root / 'backend;owner tree').resolve())
+        exp_tree = str((self.root / 'experience-owner').resolve())
+        backend64 = base64.urlsafe_b64encode(backend_tree.encode()).decode().rstrip('=')
+        exp64 = base64.urlsafe_b64encode(exp_tree.encode()).decode().rstrip('=')
+        loop = lambda pid, lane, fid, token: process(
+            pid, command=('bash ' + str(self.root / 'run-loop.sh') +
+                          f' --carrier-lane={lane} --carrier-token=token-{pid:04d} '
+                          f'--carrier-feature={fid} --carrier-worktree64={token} '))
+
+        # Different lane + different owner is the intended parallel case.
+        rows = self.base + [loop(10, 'backend', 'ST-087', backend64)]
+        self.assertEqual([], execution.competitors(rows, self.root, 3, lane='experience',
+                                                   feature='ST-080', worktree64=exp64))
+        # Same lane always excludes a duplicate, even for a different owner.
+        self.assertEqual(10, execution.competitors(rows, self.root, 3, lane='backend',
+                                                   feature='ST-999', worktree64=exp64)[0]['pid'])
+        # Cross-lane same feature or same worktree still excludes a competitor.
+        same_feature = self.base + [loop(11, 'backend', 'ST-080', backend64)]
+        self.assertEqual(11, execution.competitors(same_feature, self.root, 3, lane='experience',
+                                                   feature='ST-080', worktree64=exp64)[0]['pid'])
+        same_tree = self.base + [loop(12, 'backend', 'ST-087', exp64)]
+        self.assertEqual(12, execution.competitors(same_tree, self.root, 3, lane='experience',
+                                                   feature='ST-080', worktree64=exp64)[0]['pid'])
+        # A pre-selection foreign-lane loop has no logical owner yet and may coexist.
+        preselect = self.base + [process(13, command='bash ' + str(self.root / 'run-loop.sh')
+                                         + ' --carrier-lane=backend --carrier-token=token-0013')]
+        self.assertEqual([], execution.competitors(preselect, self.root, 3, lane='experience'))
+        # Once a carrier claims scope, incomplete/legacy scope is fail-closed.
+        legacy = self.base + [process(14, name='node.exe',
+                                      command='node STARTRIPS_EXECUTION_OWNER=' + str(self.root)
+                                      + ';lane=backend;feature=ST-087;worktree=' + backend_tree + ';')]
+        self.assertEqual('unknown-scope', execution.competitors(
+            legacy, self.root, 3, lane='experience', feature='ST-080', worktree64=exp64)[0]['state'])
+        # Unreadable carrier scope is never excused merely because ancestry proves another lane.
+        unreadable = self.base + [process(20, command='bash ' + str(self.root / 'run-loop.sh')
+                                          + ' --carrier-lane=backend'),
+                                  process(21, 20, 'node.exe', None)]
+        conflicts = execution.competitors(unreadable, self.root, 3, lane='experience')
+        self.assertEqual('unknown-command', next(x for x in conflicts if x['pid'] == 21)['state'])
+
     def test_matching_direct_carrier_token_exempts_only_that_loop(self):
         rows = self.base + [process(10, command='bash ' + str(self.root / 'run-loop.sh')
                                     + ' --carrier-lane=experience --carrier-token=experience-token-1')]

@@ -179,11 +179,24 @@ def normalize_worktree(path):
     return worktree_key(Path(path).resolve())
 
 
-def competitors(rows, root, self_pid, lane=None, feature=None, worktree=None):
+def decode_worktree64(token):
+    if not token or not re.fullmatch(r'[A-Za-z0-9_-]+', token):
+        raise EvidenceUnknown('Malformed encoded owner worktree marker')
+    try:
+        value = base64.b64decode(token + '=' * (-len(token) % 4),
+                                 altchars=b'-_', validate=True).decode('utf-8')
+    except (binascii.Error, UnicodeDecodeError, ValueError) as exc:
+        raise EvidenceUnknown('Malformed encoded owner worktree marker') from exc
+    return worktree_key(value)
+
+
+def competitors(rows, root, self_pid, lane=None, feature=None, worktree=None, worktree64=None):
     if lane not in {None, 'backend', 'experience'}:
         raise ValueError('Execution lane must be backend, experience or omitted')
+    if worktree is not None and worktree64 is not None:
+        raise ValueError('Specify owner worktree once')
     wanted_feature = feature.upper() if isinstance(feature, str) and feature else None
-    wanted_worktree = normalize_worktree(worktree)
+    wanted_worktree = decode_worktree64(worktree64) if worktree64 is not None else normalize_worktree(worktree)
     by_pid = {r['pid']: r for r in rows}
     if self_pid not in by_pid:
         raise EvidenceUnknown('Caller absent from process snapshot; ancestry unproven')
@@ -211,11 +224,9 @@ def competitors(rows, root, self_pid, lane=None, feature=None, worktree=None):
         raw_command = row.get('command')
         inherited_lane = lineage_lane(row, by_pid)
         if not isinstance(raw_command, str) or not raw_command.strip():
-            # If readable ancestry proves a different lane, this carrier cannot
-            # compete with the requested lane. Same-lane or unclassified
-            # unreadable carriers remain UNKNOWN and therefore fail closed.
-            if lane and inherited_lane and inherited_lane != lane:
-                continue
+            # Lane ancestry alone never proves owner scope. A transiently empty
+            # command is sampled once more by ensure_idle(); a genuinely unreadable
+            # carrier remains fail-closed even when its ancestor lane is known.
             found.append({'pid': row['pid'], 'ppid': row['ppid'],
                           'kind': 'unknown-carrier', 'state': 'unknown-command',
                           'lane': inherited_lane or 'unknown'})
@@ -265,18 +276,21 @@ def competitors(rows, root, self_pid, lane=None, feature=None, worktree=None):
     return found
 
 
-def ensure_idle(root, lane=None, feature=None, worktree=None):
-    rows = competitors(snapshot(), root, os.getpid(), lane=lane, feature=feature, worktree=worktree)
+def ensure_idle(root, lane=None, feature=None, worktree=None, worktree64=None):
+    rows = competitors(snapshot(), root, os.getpid(), lane=lane, feature=feature,
+                       worktree=worktree, worktree64=worktree64)
     if any(row['kind'] == 'unknown-carrier' for row in rows):
         # A process created while the provider was enumerating has no command line
         # yet, and any machine that runs node or bash produces those constantly.
         # That is a sampling race, not an unreadable carrier, so look once more
         # before calling it unknown. A genuinely unreadable process stays unreadable.
-        rows = competitors(snapshot(), root, os.getpid(), lane=lane, feature=feature, worktree=worktree)
+        rows = competitors(snapshot(), root, os.getpid(), lane=lane, feature=feature,
+                           worktree=worktree, worktree64=worktree64)
     if rows:
         raise EvidenceUnknown('Existing/unknown execution must finish: ' + json.dumps(rows))
+    observed_worktree = decode_worktree64(worktree64) if worktree64 is not None else normalize_worktree(worktree)
     return {'provider': 'windows-cim' if os.name == 'nt' else 'procfs',
-            'lane': lane or 'global', 'feature': feature, 'worktree': normalize_worktree(worktree),
+            'lane': lane or 'global', 'feature': feature, 'worktree': observed_worktree,
             'competing_executions': [], 'old_execution': 'ended',
             'observed_at': datetime.datetime.now(datetime.timezone.utc).isoformat()}
 
@@ -375,6 +389,7 @@ def main():
     parser.add_argument('--lane', choices=['backend', 'experience'])
     parser.add_argument('--feature')
     parser.add_argument('--worktree')
+    parser.add_argument('--worktree64')
     args = parser.parse_args()
     try:
         report_lane = args.lane or os.environ.get('STARTRIPS_LANE') or None
@@ -384,7 +399,8 @@ def main():
         elif args.action == 'resume': result = manual_resume(args.root)
         elif args.action.startswith('outage-'): result = outage_window(args.root, args.action.split('-', 1)[1])
         else:
-            result = ensure_idle(args.root, lane=report_lane, feature=args.feature, worktree=args.worktree)
+            result = ensure_idle(args.root, lane=report_lane, feature=args.feature,
+                                 worktree=args.worktree, worktree64=args.worktree64)
         result['stop_markers'] = stopped(args.root, lane=report_lane)
         print(json.dumps(result)); return 0
     except (StoreConflict, EvidenceUnknown, OSError, ValueError, subprocess.TimeoutExpired) as exc:

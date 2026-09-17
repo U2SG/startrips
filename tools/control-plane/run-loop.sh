@@ -28,7 +28,6 @@ CARRIER_LANE=""
 CARRIER_TOKEN=""
 CARRIER_FEATURE=""
 CARRIER_WORKTREE64=""
-CARRIER_WORKTREE=""
 while [[ "${1:-}" == --carrier-* ]]; do
   case "$1" in
     --carrier-lane=*) CARRIER_LANE="${1#--carrier-lane=}" ;;
@@ -52,10 +51,9 @@ if [[ -n "$CARRIER_FEATURE" || -n "$CARRIER_WORKTREE64" ]]; then
   [[ -n "$CARRIER_FEATURE" && -n "$CARRIER_WORKTREE64" ]] || {
     echo "INCOMPLETE_CARRIER_SCOPE" >&2; exit 64;
   }
-  if ! CARRIER_WORKTREE="$(python3 -c 'import base64,sys; s=sys.argv[1]; print(base64.b64decode(s+"="*(-len(s)%4),altchars=b"-_",validate=True).decode("utf-8"))' "$CARRIER_WORKTREE64")"; then
-    echo "INVALID_CARRIER_WORKTREE" >&2; exit 64
-  fi
-  REPO="$CARRIER_WORKTREE"
+  [[ "$CARRIER_WORKTREE64" =~ ^[A-Za-z0-9_-]+$ ]] || {
+    echo "INVALID_CARRIER_WORKTREE" >&2; exit 64;
+  }
 fi
 # A real execution re-execs once with provider-visible lane metadata. Direct
 # Experience execution also carries a one-use invocation token because MSYS can
@@ -347,7 +345,7 @@ for guard in "${STOP_GUARDS[@]}"; do
 done
 EXECUTION_SCOPE=(--lane "$STARTRIPS_LANE")
 if [[ -n "$CARRIER_FEATURE" ]]; then
-  EXECUTION_SCOPE+=(--feature "$CARRIER_FEATURE" --worktree "$CARRIER_WORKTREE")
+  EXECUTION_SCOPE+=(--feature "$CARRIER_FEATURE" --worktree64 "$CARRIER_WORKTREE64")
 fi
 python3 -B "$ROOT/lib/execution.py" check "$ROOT" "${EXECUTION_SCOPE[@]}" || exit 6
 python3 -B "$ROOT/lib/execution.py" permission "$ROOT" --lane "$STARTRIPS_LANE" || exit 6
