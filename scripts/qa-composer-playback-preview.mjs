@@ -121,6 +121,13 @@ try {
       overlayMode: overlay?.getAttribute("data-playback-mode"),
       status: document.querySelector(".journey-playback__status")?.textContent?.trim() ?? "",
       focusColor: document.querySelector("[data-qa-app-route-preview]")?.getAttribute("data-focus-color") ?? "",
+      // The backdrop owns the `visibility` declaration; the Composer only
+      // inherits it. Report both, plus the containment relation, so a failure
+      // says whether the rule missed or the wrong element was measured.
+      backdropVisibility: backdrop ? getComputedStyle(backdrop).visibility : null,
+      composerCount: document.querySelectorAll(".journey-composer").length,
+      composerParent: composer?.parentElement?.className ?? null,
+      composerInBackdrop: backdrop?.contains(composer) ?? null,
     };
   });
   if (
