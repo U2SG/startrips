@@ -11,6 +11,9 @@
 #   exit 7  -> nothing eligible, but features are `ready_to_merge` and waiting on
 #              a human `merge-ready` sign-off. Not a finished queue: sleep and
 #              re-reconcile, so the merge is picked up without a relaunch.
+#   exit 8  -> the execution guard reported one of this supervisor's own published
+#              identities: a deterministic self-block, not a transient failure.
+#              Stop at once instead of spending the exit-6 budget on it.
 #   other   -> a real problem (broken baseline, invalid verdict, no-change
 #              stall): stop and leave the log for a human.
 #
@@ -25,6 +28,43 @@ set -uo pipefail
 # so date/grep/sed behave identically to an interactive shell.
 export PATH="/usr/bin:$PATH"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# MSYS emulates fork/exec by spawning fresh Windows processes, so the
+# ParentProcessId recorded for run-loop routinely names an already-exited stub:
+# the execution guard cannot reach this supervisor by walking ppids and reports
+# it as a competing instance, failing every iteration with rc=6. Publish what
+# this supervisor and its launcher ARE -- pid bound to start stamp -- because a
+# bare number is reused and would later excuse an unrelated process. Refuse to
+# run unobserved rather than start without a verifiable identity.
+native_pids() {
+  local pid out=""
+  for pid in $$ ${PPID:-}; do
+    [[ -n "$pid" ]] || continue
+    if [[ -r "/proc/$pid/winpid" ]]; then
+      out="$out $(cat "/proc/$pid/winpid")"
+    else
+      out="$out $pid"
+    fi
+  done
+  printf '%s' "$out"
+}
+# shellcheck disable=SC2046  # the helper prints a deliberate pid word list
+if ! STARTRIPS_OWN_PIDS="$(python3 -B "$ROOT/lib/execution.py" identity "$ROOT" $(native_pids))"; then
+  echo "[supervisor] own execution identity is not observable; refusing to start" >&2
+  exit 64
+fi
+export STARTRIPS_OWN_PIDS
+# A guard failure naming one of those identities is this supervisor blocking its
+# own run-loop. That is deterministic, so the transient budget below would only
+# hide it for twelve hours, which is exactly what happened on 2026-09-17.
+self_blocked() {
+  local log="$1" entry pid
+  grep -q EXECUTION_UNKNOWN "$log" 2>/dev/null || return 1
+  for entry in ${STARTRIPS_OWN_PIDS//,/ }; do
+    pid="${entry%@*}"
+    [[ -n "$pid" ]] && grep -q "\"pid\": $pid," "$log" && return 0
+  done
+  return 1
+}
 LOGDIR="${LOOP_LOG_DIR:-/d/startrips/loop-logs}"
 mkdir -p "$LOGDIR"
 MAX_RESUMES="${MAX_RESUMES:-20}"
@@ -91,6 +131,10 @@ while :; do
       # its state was left untouched. Bounded by TIME, not by MAX_RESUMES: a
       # 5.5 h outage on 2026-09-06 burned all 20 resumes at 10 min apart and
       # stopped the loop for a day. The counter resets on any non-6 exit.
+      if self_blocked "$RUNLOG"; then
+        echo "[supervisor] the execution guard reported this supervisor itself; stopping for a human. Log: $RUNLOG"
+        exit 8
+      fi
       transient_count=$((transient_count+1))
       if (( transient_count > MAX_TRANSIENT_RETRIES )); then
         echo "[supervisor] platform failure persisted through $MAX_TRANSIENT_RETRIES retries; stopping."

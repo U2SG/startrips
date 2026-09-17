@@ -21,7 +21,12 @@ def stopped(root):
 
 def snapshot():
     if os.name == 'nt':
-        command = '$ErrorActionPreference="Stop"; [Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false); @(Get-CimInstance Win32_Process -ErrorAction Stop | Select-Object ProcessId,ParentProcessId,Name,CommandLine) | ConvertTo-Json -Compress'
+        # CreationDate is what separates a live process from a later one that merely
+        # reuses its number: Windows documents ProcessId and ParentProcessId as
+        # reusable, so neither is an identity on its own.
+        command = ('$ErrorActionPreference="Stop"; [Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false); '
+                   '@(Get-CimInstance Win32_Process -ErrorAction Stop | Select-Object ProcessId,ParentProcessId,Name,CommandLine,'
+                   "@{n='Started';e={if ($_.CreationDate) { $_.CreationDate.ToString('o') } else { '' }}}) | ConvertTo-Json -Compress")
         result = subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', command],
                                 capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=25)
         if result.returncode or not result.stdout.strip():
@@ -30,7 +35,7 @@ def snapshot():
         if isinstance(rows, dict):
             rows = [rows]
         return [{'pid': r['ProcessId'], 'ppid': r['ParentProcessId'], 'name': r['Name'],
-                 'command': r.get('CommandLine')} for r in rows]
+                 'command': r.get('CommandLine'), 'started': r.get('Started') or ''} for r in rows]
     proc = Path('/proc')
     if not proc.exists():
         raise EvidenceUnknown('No supported process observation provider')
@@ -40,15 +45,47 @@ def snapshot():
             continue
         try:
             status = (directory / 'status').read_text()
+            # Field 22 of stat, past the parenthesised comm, is the kernel start time.
+            started = (directory / 'stat').read_text().rpartition(')')[2].split()[19]
             command = (directory / 'cmdline').read_bytes().replace(b'\0', b' ').decode('utf-8', 'replace')
             ppid = int(re.search(r'^PPid:\s+(\d+)', status, re.M).group(1))
             name = re.search(r'^Name:\s+(.+)', status, re.M).group(1)
-            rows.append({'pid': int(directory.name), 'ppid': ppid, 'name': name, 'command': command})
+            rows.append({'pid': int(directory.name), 'ppid': ppid, 'name': name, 'command': command,
+                         'started': started})
         except (FileNotFoundError, ProcessLookupError):
             continue
-        except (PermissionError, AttributeError) as exc:
+        except (PermissionError, AttributeError, IndexError) as exc:
             raise EvidenceUnknown('Process identity cannot be inspected') from exc
     return rows
+
+
+def identity(pids):
+    """Bind each pid to the start stamp observed for it right now.
+
+    MSYS emulates fork/exec with fresh Windows processes, so a child's recorded
+    ParentProcessId routinely names an already-exited stub: ancestry alone never
+    reaches the supervisor that launched a check, which then reads as a second
+    execution. The launcher chain therefore publishes what it is, not merely what
+    it is numbered, because a pid is reused and proves nothing on its own.
+
+    The caller's own identity is required; ancestors are best effort, because a
+    supervisor launched from outside MSYS reports its parent as pid 1.
+    """
+    observed = {row['pid']: row.get('started') or '' for row in snapshot()}
+    known = [(pid, observed[pid]) for pid in dict.fromkeys(pids) if observed.get(pid)]
+    if not pids or not known or known[0][0] != pids[0]:
+        raise EvidenceUnknown('Own execution identity not observable for ' + json.dumps(pids[:1]))
+    return ','.join(str(pid) + '@' + stamp for pid, stamp in known)
+
+
+def published():
+    """Parse STARTRIPS_OWN_PIDS into {pid: start stamp}. A bare pid never counts."""
+    result = {}
+    for part in os.environ.get('STARTRIPS_OWN_PIDS', '').split(','):
+        pid, sep, stamp = part.strip().partition('@')
+        if sep and pid.isdigit() and stamp:
+            result[int(pid)] = stamp
+    return result
 
 
 def competitors(rows, root, self_pid):
@@ -64,6 +101,7 @@ def competitors(rows, root, self_pid):
     # native Windows argv can retain an 8.3 spelling that resolve() expands.
     original = str(Path(root).absolute()).replace('\\', '/').lower()
     aliases = {canonical, original}
+    mine = published()
     for spelling in tuple(aliases):
         if re.match(r'^[a-z]:/', spelling):
             aliases.add('/' + spelling[0] + spelling[2:])
@@ -77,6 +115,10 @@ def competitors(rows, root, self_pid):
             continue
         raw_command = row.get('command')
         if not isinstance(raw_command, str) or not raw_command.strip():
+            # A parent command without this workspace is not evidence about its
+            # child's cwd or task. Generic shells/editors can launch our workers,
+            # and even an explicitly foreign parent can change its child's cwd.
+            # Without this carrier's own readable identity, remain UNKNOWN.
             found.append({'pid': row['pid'], 'ppid': row['ppid'],
                           'kind': 'unknown-carrier', 'state': 'unknown-command'})
             continue
@@ -97,6 +139,12 @@ def competitors(rows, root, self_pid):
         absolute_script = bool(re.match(r'^(?:[a-z]:/|/)', argument))
         if not explicit_root and absolute_script:
             continue
+        # Only here, with the command line, the workspace and the carrier kind all
+        # read, may a published identity excuse this row. A reused number cannot:
+        # the start stamp must still match. An unreadable command line never
+        # reaches this point, so UNKNOWN stays UNKNOWN.
+        if row.get('started') and mine.get(row['pid']) == row.get('started'):
+            continue
         found.append({'pid': row['pid'], 'ppid': row['ppid'],
                       'kind': 'worker' if is_child else 'loop',
                       'state': 'active' if explicit_root else 'unknown-cwd'})
@@ -105,6 +153,12 @@ def competitors(rows, root, self_pid):
 
 def ensure_idle(root):
     rows = competitors(snapshot(), root, os.getpid())
+    if any(row['kind'] == 'unknown-carrier' for row in rows):
+        # A process created while the provider was enumerating has no command line
+        # yet, and any machine that runs node or bash produces those constantly.
+        # That is a sampling race, not an unreadable carrier, so look once more
+        # before calling it unknown. A genuinely unreadable process stays unreadable.
+        rows = competitors(snapshot(), root, os.getpid())
     if rows:
         raise EvidenceUnknown('Existing/unknown execution must finish: ' + json.dumps(rows))
     return {'provider': 'windows-cim' if os.name == 'nt' else 'procfs',
@@ -192,10 +246,14 @@ def outage_window(root, mode):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('action', choices=['check', 'permission', 'resume', 'outage-pause', 'outage-resume'])
+    parser.add_argument('action', choices=['check', 'permission', 'resume', 'outage-pause',
+                                           'outage-resume', 'identity'])
     parser.add_argument('root', type=Path)
+    parser.add_argument('pids', nargs='*', type=int)
     args = parser.parse_args()
     try:
+        if args.action == 'identity':
+            print(identity(args.pids)); return 0
         if args.action == 'permission': result = permission_probe(args.root)
         elif args.action == 'resume': result = manual_resume(args.root)
         elif args.action.startswith('outage-'): result = outage_window(args.root, args.action.split('-', 1)[1])
