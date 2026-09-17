@@ -77,6 +77,19 @@ class ProcessClassificationCases(unittest.TestCase):
                                          feature='ST-080', worktree=shared)[0]
         self.assertEqual(shared.replace('\\', '/').lower(), conflict['worktree'])
 
+    def test_encoded_worker_scope_preserves_trailing_path_characters(self):
+        shared = str(self.root / 'owner. ')
+        token = base64.urlsafe_b64encode(shared.encode('utf-8')).decode('ascii').rstrip('=')
+        feature, observed = execution.command_scope(
+            'STARTRIPS_EXECUTION_OWNER=' + str(self.root)
+            + ';lane=backend;feature=ST-001;worktree64=' + token + '; Evidence JSON')
+        self.assertEqual('ST-001', feature)
+        self.assertEqual(execution.worktree_key(shared), observed)
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX owner paths are case-sensitive')
+    def test_posix_worktree_scope_preserves_case(self):
+        self.assertNotEqual(execution.worktree_key('/tmp/Owner'), execution.worktree_key('/tmp/owner'))
+
     def test_malformed_encoded_worker_scope_fails_closed(self):
         with self.assertRaisesRegex(execution.EvidenceUnknown, 'Malformed encoded owner worktree'):
             execution.command_scope('STARTRIPS_EXECUTION_OWNER=' + str(self.root)

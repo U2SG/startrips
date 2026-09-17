@@ -168,16 +168,21 @@ def command_scope(command):
     else:
         worktree_match = carrier_worktree_match or worker_worktree_match
         worktree = worktree_match.group(1) if worktree_match else None
-    worktree = worktree.strip().rstrip('.') if worktree else None
-    if worktree:
-        worktree = worktree.replace('\\', '/').rstrip('/').lower()
-    return feature, worktree
+    return feature, worktree_key(worktree)
+
+
+def worktree_key(path):
+    """Comparable worktree identity without changing legal path characters."""
+    if path is None:
+        return None
+    value = str(path).replace('\\', '/')
+    return value.casefold() if os.name == 'nt' else value
 
 
 def normalize_worktree(path):
     if not path:
         return None
-    return str(Path(path).resolve()).replace('\\', '/').rstrip('/').lower()
+    return worktree_key(Path(path).resolve())
 
 
 def competitors(rows, root, self_pid, lane=None, feature=None, worktree=None):
