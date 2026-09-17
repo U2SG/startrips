@@ -4,6 +4,14 @@ Slice 1 of #367, specified by #368. This is the whole server-side contract an
 external local worker needs in order to produce a private artistic derivative
 of a Journey's canonical cover — and nothing more.
 
+#386 adds the other end of the same contract: how the ordinary authenticated
+browser discovers a derivative it may display and obtains a short-lived read of
+it. It lives here rather than in a sibling document because the two halves are
+one state machine seen from two authorities, and the whole point is that those
+authorities never meet — see *Browser display authority is not worker
+processing authority* below, and
+`GET /api/cover-reveal/journeys/:journeyId`.
+
 **Out of scope, by construction.** No RevealFlow renderer, no Journey opening
 UX, no local AI worker client, no `ink-wash-poster` execution on the server, no
 guest or share publication of a derivative. Those belong to ST-073 and the
@@ -38,9 +46,34 @@ mid-iteration does nothing: its lease expires and the job is reclaimable.
 
 | Principal | How it is resolved | What it may do |
 | --- | --- | --- |
-| Atlas owner | Better Auth session → `session.session.activeOrganizationId` → `requireAtlasAccess` | enqueue a derivative for a Journey of its own Atlas |
+| Atlas owner | Better Auth session → `session.session.activeOrganizationId` → `requireAtlasAccess` | enqueue a derivative for a Journey of its own Atlas, and read what may be displayed for it |
 | Cover-reveal worker | `Authorization: Bearer <COVER_REVEAL_WORKER_TOKEN>` | the five `/api/cover-reveal-worker/*` routes, and nothing else |
 | Claimant | `leaseToken` in the request body | act on the one job it holds the lease for |
+
+### Browser display authority is not worker processing authority
+
+#386 adds the ordinary browser's read to the owner router, and the two
+authorities stay disjoint in both directions:
+
+| | Browser display authority | Worker processing authority |
+| --- | --- | --- |
+| Credential | a Better Auth session cookie | `COVER_REVEAL_WORKER_TOKEN` |
+| Names | a Journey of its own Atlas | a job id plus the lease token it was handed |
+| Object it reaches | the published derivative, read-only | the pinned **source**, read; the job's own output key, write |
+| Sees | `ready` metadata for the current cover revision | `seed`, `attempts`, `lastErrorCode`, the output key |
+| Lifetime | the owner media-read TTL | bounded by the remaining lease |
+
+Neither principal can be spoken in the other's terms. The worker credential and
+a guest share token are both bearer tokens, and this server has **no**
+bearer-to-session path — `server/auth.ts` loads the `organization` plugin only
+— so either presented on the browser route resolves no session and answers
+exactly as presenting nothing does: `401 AUTH_REQUIRED`. Conversely a session
+authorizes nothing on `/api/cover-reveal-worker/*`, which reads only the
+configured credential.
+
+Neither side ever names a storage key. A worker is handed a read of the source
+its job pinned; a browser is handed a read of the object that job published;
+both keys are chosen by the server from a row.
 
 The worker credential is **not** a session and is never converted into one. It
 is one env value (`COVER_REVEAL_WORKER_TOKEN`), so revocation and rotation are
@@ -194,6 +227,79 @@ same cover.
 `SOURCE_IDENTITY_UNVERIFIED`; `409 JOURNEY_UNAVAILABLE` in the narrow case
 where the winner left the live set between the conflict and the read back,
 which only a cover change can do — the client asks again.
+
+### `GET /api/cover-reveal/journeys/:journeyId` — owner
+
+The ordinary browser's read (#386), the Backend prerequisite #379 wires the
+Journey cover and Story opening against. Read-only: it never enqueues, never
+supersedes and takes no lock. Responses are `private, no-store`.
+
+`200`, a derivative that may be displayed right now →
+
+```json
+{ "derivative": { "id": "…", "journeyId": "…",
+  "generationKind": "ink-wash-poster", "generationVersion": 1,
+  "presetId": "reveal-flow-ink-wash-v1",
+  "sourceMediaAssetId": "…", "sourceContentHash": "…",
+  "mimeType": "image/jpeg", "width": 1536, "height": 1024 },
+  "display": { "url": "https://…", "expiresAt": "2026-09-16T07:00:00.000Z" } }
+```
+
+That field set is the whole contract, and it is narrower than the enqueue
+response on purpose. `sourceMediaAssetId` plus `sourceContentHash` are how a
+client proves the derivative belongs to the cover it is about to paint over;
+`generationKind` / `generationVersion` / `presetId` select the approved
+deterministic renderer; `mimeType` / `width` / `height` let it lay the image out
+before it loads. There is no `seed`, no `attempts`, no `lastErrorCode`, no
+storage key, no lease hash, no source read URL and no upload target — those are
+processing state. There is no `state` either: this shape exists only for a
+`ready` row.
+
+`200`, nothing to display →
+
+```json
+{ "derivative": null, "reason": "NO_READY_DERIVATIVE" }
+```
+
+`reason` is `NO_READY_DERIVATIVE`, or one of the eligibility reasons `NO_COVER`
+/ `SOURCE_UNSUPPORTED` / `SOURCE_IDENTITY_UNVERIFIED` / `JOURNEY_UNAVAILABLE`
+when the cover itself cannot be a source or the Journey is inside its deletion
+grace window. All of them mean one thing to a client: **display the canonical
+original**. It is a `200` rather than the `409` the enqueue verb gives the same
+state because the two ask different questions — an enqueue refusing to start
+work is a decided outcome, while this read's entire contract is "display this or
+fall back", and the fallback is not an error. `queued`, `leased`, `failed`,
+`superseded` and a derivative pinned to a cover that has moved are one reason
+rather than five: the difference between them is queue state, and a client that
+branched on it would be reimplementing the retry policy the server owns.
+
+`404 JOURNEY_UNAVAILABLE` for an unknown id, a malformed id and a Journey of
+another Atlas alike, so the route cannot be used to discover that a Journey —
+let alone a derivative — exists. `503 STORAGE_UNAVAILABLE` where the deployment
+has no object storage: a derivative that cannot be served is not reported as
+displayable.
+
+**An old metadata payload is never authorization.** Every call re-resolves the
+Journey, re-runs `evaluateCoverRevealEligibility` over live rows and requires
+the row to be `ready` and pinned to exactly that asset and that verified
+stored-byte identity. Replacing the cover, reordering media, replacing the
+photograph behind it, deleting the source or the Journey, supersession, or the
+member leaving the Atlas therefore stops new display URLs on the very next
+request, with no invalidation pass in between. The re-resolution is ordered so
+that the reading of canonical state which *chooses* the row is taken after the
+candidate rows are in hand and immediately before signing, so a cover that moves
+while they are being fetched is caught rather than served; a Journey holding a
+ready row for the old cover beside one for the new is served the new one. What
+stays open is the ordinary
+signed-URL window every private read in the product has: a cover replaced a
+moment *after* a signature is minted leaves that one URL alive for its TTL. It
+is bounded by the owner media-read policy, and it is the owner's own capability
+to their own derivative of their own cover.
+
+The display TTL is `MEDIA_READ_URL_EXPIRES_IN_SECONDS`, the policy that already
+governs an owner's read of their own private media. A derivative is neither
+more nor less sensitive than the photograph it was made from, so there is no
+separate knob.
 
 ### `POST /api/cover-reveal-worker/claim`
 

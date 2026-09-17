@@ -171,6 +171,71 @@ function jobView(job: ClaimedRow): CoverRevealJobView {
 }
 
 /**
+ * #386 (the Backend read slice of #367): what the ordinary authenticated
+ * browser is told about a derivative it may display.
+ *
+ * Deliberately NOT `CoverRevealJobView`. That view is the PROCESSING view: it
+ * carries `seed`, `attempts` and `lastErrorCode`, which describe how the
+ * object was produced and how the queue has been behaving — worker internals a
+ * display client has no use for and #386 forbids on this surface. What is left
+ * here is exactly what a client needs to prove the derivative belongs to the
+ * cover it is about to paint over (`sourceMediaAssetId` plus the verified
+ * stored-byte identity), to pick the approved deterministic renderer
+ * (`generationKind` / `generationVersion` / `presetId`), and to lay the image
+ * out before it loads (`mimeType`, `width`, `height`).
+ *
+ * There is no storage key, no lease hash, no signed source URL and no upload
+ * target, and there is no `state` either: this type exists only for a `ready`
+ * row, so a lifecycle field could only ever say `ready` and would invite a
+ * client to branch on a value that is not a promise about the future.
+ */
+export type CoverRevealDisplayView = {
+  id: string;
+  journeyId: string;
+  generationKind: string;
+  generationVersion: number;
+  presetId: string;
+  sourceMediaAssetId: string;
+  sourceContentHash: string;
+  mimeType: string;
+  width: number;
+  height: number;
+};
+
+/** The short-lived capability for exactly one published derivative object. */
+export type CoverRevealDisplayRead = {
+  url: string;
+  expiresAt: Date;
+};
+
+/**
+ * Why an authorized Journey has nothing to display right now.
+ *
+ * Every value is a plain fact about canonical Journey state that the owner can
+ * already see for themselves, so naming it leaks nothing: the eligibility
+ * reasons say the cover itself cannot be a source, and `NO_READY_DERIVATIVE`
+ * covers every lifecycle that is not `ready` for the current cover revision —
+ * `queued`, `leased`, `failed`, `superseded`, a derivative pinned to a cover
+ * that has moved, and simply never having asked. They are one reason rather
+ * than five because the difference between them is queue state, and a client
+ * that branched on it would be reimplementing the retry policy this server
+ * owns. All of them mean the same thing to the client: paint the canonical
+ * original.
+ */
+export type CoverRevealNotDisplayableReason =
+  | CoverRevealIneligibleReason
+  | "NO_READY_DERIVATIVE";
+
+export type CoverRevealDisplayResult =
+  | {
+    ok: true;
+    derivative: CoverRevealDisplayView;
+    display: CoverRevealDisplayRead;
+  }
+  | { ok: true; derivative: null; reason: CoverRevealNotDisplayableReason }
+  | CoverRevealFailure;
+
+/**
  * Drop a generated object once no job references it any more. Best-effort at
  * the call sites that already hold a correct row, exactly like
  * `discardPreviewObject`: a storage hiccup costs an unreferenced object rather
@@ -372,6 +437,173 @@ export async function enqueueCoverRevealDerivative(
   // this read, which only a cover change can do; the caller asks again.
   if (!won) return { ok: false, error: "JOURNEY_UNAVAILABLE", status: 409 };
   return { ok: true, job: jobView(won) };
+}
+
+/**
+ * #386: what the ordinary authenticated browser may display for one Journey,
+ * decided here and never asserted by the client.
+ *
+ * The counterpart of `enqueueCoverRevealDerivative` on the same owner surface,
+ * and the mirror image of the worker's `signCoverRevealSourceRead`: a worker
+ * names a job it holds a lease for and is handed a read of the SOURCE; a
+ * browser names a Journey it owns and is handed a read of the OUTPUT. Neither
+ * principal can reach the other's object, because neither names a key — the
+ * Journey identity is the only thing this takes from the caller, and the Atlas
+ * beside it came from `requireAtlasAccess`.
+ *
+ * "Displayable" is re-derived in full on every call rather than looked up by
+ * id, which is what makes an old metadata payload worthless as authority. The
+ * current cover is resolved from live rows by the same
+ * `evaluateCoverRevealEligibility` completion re-runs, and the derivative has
+ * to be pinned to exactly that asset AND that verified stored-byte identity,
+ * so replacing the cover, reordering media, replacing the photograph behind it
+ * or entering the Journey's deletion grace window stops new display URLs on
+ * the very next request, with no invalidation pass in between and no field a
+ * client could have cached to change the answer.
+ *
+ * The read writes nothing. It does not enqueue the derivative it just found
+ * missing — #386 is explicit that this read has no side effect, and the owner
+ * already has a verb for that — and it does not supersede the stale `ready`
+ * row it declines to serve, which is `reconcileCoverRevealDerivatives`' job:
+ * turning a GET into a write would race the completion transaction's Journey
+ * and media row locks for no gain, since declining to serve the row is already
+ * the whole protection. Nothing here takes a lock at all.
+ *
+ * Canonical state is read twice on purpose, and the ready rows are fetched
+ * between the two. The first reading decides only whether there is anything
+ * worth looking for and answers an ineligible Journey; the SECOND one, taken
+ * after the rows are in hand and immediately before signing, is what chooses
+ * the row. A cover that moves while those rows are being fetched is therefore
+ * caught rather than served — which a single consistent snapshot of state and
+ * rows together could not do, since such a snapshot would simply agree with
+ * the older reading.
+ *
+ * What is left open is the ordinary signed-URL window every private read in
+ * the product has: a cover replaced a moment AFTER this signature is minted
+ * leaves one already-issued URL alive for its TTL. That is bounded by the
+ * owner media-read policy and it is the owner's own capability to the owner's
+ * own derivative of the owner's own cover; the next read returns none. It is a
+ * different window from the one above and the only one that remains: no
+ * ordering of reads can close it, because it opens after the last of them.
+ */
+export async function readCoverRevealDisplay(
+  journeyId: string,
+  atlasId: string,
+  displayReadExpiresInSeconds: number,
+  dependencies: CoverRevealDependencies = defaultDependencies,
+): Promise<CoverRevealDisplayResult> {
+  // The Atlas is part of the lookup rather than checked afterwards, exactly as
+  // `findLeasedJob` folds the lease into its predicate: a Journey of another
+  // Atlas and a Journey that does not exist are one answer, so this cannot be
+  // used to discover that some other member has a Journey — let alone that it
+  // has a derivative.
+  const journey = await loadJourneyState(journeyId, atlasId);
+  if (!journey) return { ok: false, error: "JOURNEY_UNAVAILABLE", status: 404 };
+
+  const eligibility = evaluateCoverRevealEligibility(journey);
+  // A Journey inside its deletion grace window, without a cover, or with a
+  // cover nothing can derive from answers 200 with no derivative rather than
+  // the 409 the enqueue verb gives the same state. The two are asking
+  // different questions: the enqueue is refusing to start work, which is a
+  // decided outcome the caller has to see, while this is a read whose whole
+  // contract is "display this or fall back to the canonical original" — and
+  // the fallback IS the canonical original, so there is nothing to report as
+  // an error.
+  if (!eligibility.ok) {
+    return { ok: true, derivative: null, reason: eligibility.reason };
+  }
+
+  // Every ready row this Journey has under the approved generation contract,
+  // NOT the one pinned to the reading of the cover taken above. The live
+  // identity index is unique per source rather than per Journey, so a Journey
+  // can hold a ready row for the old cover beside one for the new: two owner
+  // enqueues arriving together across a cover change both clear
+  // `supersedeStaleDerivatives` before either inserts, and their inserts carry
+  // different identities, so neither conflicts. Pinning this query to a cover
+  // reading and taking the first row would make the choice between them depend
+  // on which reading happened to be current. The set is bounded by that same
+  // index, and the current cover picks from it below.
+  const readyRows = await db
+    .select()
+    .from(coverRevealDerivatives)
+    .where(and(
+      eq(coverRevealDerivatives.journeyId, journeyId),
+      eq(coverRevealDerivatives.generationKind, COVER_REVEAL_GENERATION_KIND),
+      eq(
+        coverRevealDerivatives.generationVersion,
+        COVER_REVEAL_GENERATION_VERSION,
+      ),
+      eq(coverRevealDerivatives.state, "ready"),
+    ));
+
+  // The last word on canonical state is read AFTER the rows and immediately
+  // before the capability is minted, because #386 asks for revalidation per
+  // ISSUANCE and not merely once per request. Re-running the whole
+  // `loadJourneyState` + eligibility pair rather than comparing a remembered
+  // field re-checks Atlas membership, the deletion grace window and the cover
+  // revision together, which is exactly the set a capability must not outlive:
+  // a cover replaced, a source deleted or the Journey put into its deletion
+  // grace window while the rows above were being fetched all land here and
+  // mint nothing.
+  const current = await loadJourneyState(journeyId, atlasId);
+  if (!current) return { ok: false, error: "JOURNEY_UNAVAILABLE", status: 404 };
+  const currentEligibility = evaluateCoverRevealEligibility(current);
+  if (!currentEligibility.ok) {
+    return { ok: true, derivative: null, reason: currentEligibility.reason };
+  }
+
+  // Both halves of the pin are compared, because the asset id alone does not
+  // identify a revision: replacing the photograph behind the same cover asset
+  // keeps the id and moves the verified stored-byte identity.
+  const ready = readyRows.find((row) => (
+    row.sourceMediaAssetId === currentEligibility.source.id
+    && row.sourceContentHash === currentEligibility.contentHash
+  ));
+
+  // The output columns are checked rather than assumed. `ready` is written in
+  // one statement with all five of them, so a row missing any is not a state
+  // this code produces — but the columns are nullable because every other
+  // lifecycle clears them, and a display capability is the last place to
+  // resolve that with a non-null assertion.
+  if (
+    !ready
+    || !ready.outputStorageDriver
+    || !ready.outputStorageKey
+    || !ready.outputMimeType
+    || ready.outputWidth === null
+    || ready.outputHeight === null
+  ) {
+    return { ok: true, derivative: null, reason: "NO_READY_DERIVATIVE" };
+  }
+
+  // The normal private-object signing path, on the backend the derivative was
+  // actually written to — the same call `signPrivateMediaRead` makes for an
+  // original, over one key this function chose. A deployment with no storage
+  // throws `StorageUnavailableError` here and answers 503, because a
+  // derivative it cannot serve must not be reported as displayable.
+  const signed = await dependencies
+    .storageForBackend(ready.outputStorageDriver)
+    .createPrivateReadUrl({
+      key: ready.outputStorageKey,
+      expiresInSeconds: displayReadExpiresInSeconds,
+    });
+
+  return {
+    ok: true,
+    derivative: {
+      id: ready.id,
+      journeyId: ready.journeyId,
+      generationKind: ready.generationKind,
+      generationVersion: ready.generationVersion,
+      presetId: ready.presetId,
+      sourceMediaAssetId: ready.sourceMediaAssetId,
+      sourceContentHash: ready.sourceContentHash,
+      mimeType: ready.outputMimeType,
+      width: ready.outputWidth,
+      height: ready.outputHeight,
+    },
+    display: { url: signed.url, expiresAt: signed.expiresAt },
+  };
 }
 
 /**
