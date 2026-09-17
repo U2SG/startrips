@@ -88,7 +88,69 @@ def published():
     return result
 
 
-def competitors(rows, root, self_pid):
+def command_lane(command):
+    """Return an explicitly observable execution lane, or None.
+
+    Lane is execution-carrier metadata, not a feature owner registry. New loops
+    publish `--carrier-lane=<lane>` on their command line; model workers already
+    carry `lane=<lane>` inside STARTRIPS_EXECUTION_OWNER evidence. The dedicated
+    local launcher is Backend by contract, which lets an already-running legacy
+    supervisor be classified during a rolling control-plane upgrade.
+    """
+    if not isinstance(command, str) or not command.strip():
+        return None
+    text = command.replace('\\', '/').lower()
+    for pattern in (
+            r'--carrier-lane(?:=|\s+)(backend|experience)(?=$|[\s";])',
+            r'(?:^|[;\s"])lane=(backend|experience)(?=$|[;\s"])',
+            r'(?:^|[;\s"])startrips_lane=(backend|experience)(?=$|[;\s"])'):
+        match = re.search(pattern, text)
+        if match:
+            return match.group(1)
+    if re.search(r'(?:^|[\s"/])launch-supervisor[.]sh(?:[\s"\x00]|$)', text):
+        return 'backend'
+    return None
+
+
+def lineage_lane(row, by_pid):
+    """Best-effort lane inherited from a readable carrier ancestor."""
+    seen, pid = set(), row.get('ppid', 0)
+    while pid and pid not in seen:
+        seen.add(pid)
+        parent = by_pid.get(pid)
+        if parent is None:
+            return None
+        lane = command_lane(parent.get('command'))
+        if lane:
+            return lane
+        pid = parent.get('ppid', 0)
+    return None
+
+
+def command_scope(command):
+    """Return exact feature/worktree markers when a model carrier publishes them."""
+    if not isinstance(command, str) or not command.strip():
+        return None, None
+    feature_match = re.search(r'(?:^|[;\s"])feature=(ST-\d{3,})(?=$|[;\s"])', command, re.I)
+    worktree_match = re.search(r'(?:^|[;\s"])worktree=([^;\s"]+)(?=$|[;\s"])', command, re.I)
+    feature = feature_match.group(1).upper() if feature_match else None
+    worktree = worktree_match.group(1).rstrip('.') if worktree_match else None
+    if worktree:
+        worktree = worktree.replace('\\', '/').rstrip('/').lower()
+    return feature, worktree
+
+
+def normalize_worktree(path):
+    if not path:
+        return None
+    return str(Path(path).resolve()).replace('\\', '/').rstrip('/').lower()
+
+
+def competitors(rows, root, self_pid, lane=None, feature=None, worktree=None):
+    if lane not in {None, 'backend', 'experience'}:
+        raise ValueError('Execution lane must be backend, experience or omitted')
+    wanted_feature = feature.upper() if isinstance(feature, str) and feature else None
+    wanted_worktree = normalize_worktree(worktree)
     by_pid = {r['pid']: r for r in rows}
     if self_pid not in by_pid:
         raise EvidenceUnknown('Caller absent from process snapshot; ancestry unproven')
@@ -114,13 +176,16 @@ def competitors(rows, root, self_pid):
         if basename not in {'bash', 'sh', 'claude', 'codex', 'node', 'nodejs'}:
             continue
         raw_command = row.get('command')
+        inherited_lane = lineage_lane(row, by_pid)
         if not isinstance(raw_command, str) or not raw_command.strip():
-            # A parent command without this workspace is not evidence about its
-            # child's cwd or task. Generic shells/editors can launch our workers,
-            # and even an explicitly foreign parent can change its child's cwd.
-            # Without this carrier's own readable identity, remain UNKNOWN.
+            # If readable ancestry proves a different lane, this carrier cannot
+            # compete with the requested lane. Same-lane or unclassified
+            # unreadable carriers remain UNKNOWN and therefore fail closed.
+            if lane and inherited_lane and inherited_lane != lane:
+                continue
             found.append({'pid': row['pid'], 'ppid': row['ppid'],
-                          'kind': 'unknown-carrier', 'state': 'unknown-command'})
+                          'kind': 'unknown-carrier', 'state': 'unknown-command',
+                          'lane': inherited_lane or 'unknown'})
             continue
         command = raw_command.replace('\\', '/').lower()
         is_loop = bool(re.search(r'(?:^|[\s"/])(?:run-loop|loop-supervisor)[.]sh(?:[\s"\x00]|$)', command))
@@ -145,23 +210,32 @@ def competitors(rows, root, self_pid):
         # reaches this point, so UNKNOWN stays UNKNOWN.
         if row.get('started') and mine.get(row['pid']) == row.get('started'):
             continue
+        carrier_lane = command_lane(raw_command) or inherited_lane
+        carrier_feature, carrier_worktree = command_scope(raw_command)
+        same_scope = bool((wanted_feature and carrier_feature == wanted_feature)
+                          or (wanted_worktree and carrier_worktree == wanted_worktree))
+        if lane and carrier_lane and carrier_lane != lane and not same_scope:
+            continue
         found.append({'pid': row['pid'], 'ppid': row['ppid'],
                       'kind': 'worker' if is_child else 'loop',
-                      'state': 'active' if explicit_root else 'unknown-cwd'})
+                      'state': 'active' if explicit_root else 'unknown-cwd',
+                      'lane': carrier_lane or 'unknown',
+                      'feature': carrier_feature, 'worktree': carrier_worktree})
     return found
 
 
-def ensure_idle(root):
-    rows = competitors(snapshot(), root, os.getpid())
+def ensure_idle(root, lane=None, feature=None, worktree=None):
+    rows = competitors(snapshot(), root, os.getpid(), lane=lane, feature=feature, worktree=worktree)
     if any(row['kind'] == 'unknown-carrier' for row in rows):
         # A process created while the provider was enumerating has no command line
         # yet, and any machine that runs node or bash produces those constantly.
         # That is a sampling race, not an unreadable carrier, so look once more
         # before calling it unknown. A genuinely unreadable process stays unreadable.
-        rows = competitors(snapshot(), root, os.getpid())
+        rows = competitors(snapshot(), root, os.getpid(), lane=lane, feature=feature, worktree=worktree)
     if rows:
         raise EvidenceUnknown('Existing/unknown execution must finish: ' + json.dumps(rows))
     return {'provider': 'windows-cim' if os.name == 'nt' else 'procfs',
+            'lane': lane or 'global', 'feature': feature, 'worktree': normalize_worktree(worktree),
             'competing_executions': [], 'old_execution': 'ended',
             'observed_at': datetime.datetime.now(datetime.timezone.utc).isoformat()}
 
@@ -198,7 +272,7 @@ def manual_resume(root):
     if os.environ.get('STARTRIPS_EXPLICIT_RESUME') != '1':
         raise StoreConflict('Clearing human STOP requires explicit local Resume')
     root = Path(root).resolve()
-    ensure_idle(root)
+    ensure_idle(root, lane='backend')
     if (root / STOPS[2]).exists():
         raise StoreConflict('CANCEL_SCHEDULED_RESTART remains authoritative')
     before = {name: (root / name).read_bytes() for name in STOPS[:2] if (root / name).exists()}
@@ -240,8 +314,8 @@ def outage_window(root, mode):
             return {'launch_allowed': False, 'reason': 'other-owner-stop-preserved'}
         clear_owned_stop(root, 'AGENT_STOP', raw)
     if stopped(root): return {'launch_allowed': False, 'reason': 'concurrent-stop-preserved'}
-    ensure_idle(root)
-    return {'launch_allowed': True, 'reason': 'own-boundary-ended-no-competing-execution'}
+    ensure_idle(root, lane='backend')
+    return {'launch_allowed': True, 'reason': 'own-boundary-ended-no-competing-backend-execution'}
 
 
 def main():
@@ -250,6 +324,9 @@ def main():
                                            'outage-resume', 'identity'])
     parser.add_argument('root', type=Path)
     parser.add_argument('pids', nargs='*', type=int)
+    parser.add_argument('--lane', choices=['backend', 'experience'])
+    parser.add_argument('--feature')
+    parser.add_argument('--worktree')
     args = parser.parse_args()
     try:
         if args.action == 'identity':
@@ -257,7 +334,9 @@ def main():
         if args.action == 'permission': result = permission_probe(args.root)
         elif args.action == 'resume': result = manual_resume(args.root)
         elif args.action.startswith('outage-'): result = outage_window(args.root, args.action.split('-', 1)[1])
-        else: result = ensure_idle(args.root)
+        else:
+            lane = args.lane or os.environ.get('STARTRIPS_LANE') or None
+            result = ensure_idle(args.root, lane=lane, feature=args.feature, worktree=args.worktree)
         result['stop_markers'] = stopped(args.root)
         print(json.dumps(result)); return 0
     except (StoreConflict, EvidenceUnknown, OSError, ValueError, subprocess.TimeoutExpired) as exc:

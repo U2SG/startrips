@@ -28,6 +28,20 @@ set -uo pipefail
 # so date/grep/sed behave identically to an interactive shell.
 export PATH="/usr/bin:$PATH"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+STARTRIPS_LANE="${STARTRIPS_LANE:-}"
+case "$STARTRIPS_LANE" in
+  backend|experience) export STARTRIPS_LANE ;;
+  *) echo "[supervisor] explicit execution lane required" >&2; exit 64 ;;
+esac
+if [[ "${1:-}" == --carrier-lane=* ]]; then
+  CARRIER_LANE="${1#--carrier-lane=}"
+  shift
+  [[ "$CARRIER_LANE" == "$STARTRIPS_LANE" ]] || {
+    echo "[supervisor] carrier lane mismatch" >&2; exit 64;
+  }
+else
+  exec "$0" "--carrier-lane=$STARTRIPS_LANE"
+fi
 # MSYS emulates fork/exec by spawning fresh Windows processes, so the
 # ParentProcessId recorded for run-loop routinely names an already-exited stub:
 # the execution guard cannot reach this supervisor by walking ppids and reports
@@ -84,7 +98,7 @@ while :; do
   TS="$(date +%Y%m%dT%H%M%S)"; TS="$(printf '%s' "$TS" | tr -d '\r')"
   RUNLOG="$LOGDIR/run-$TS.log"
   echo "[supervisor] $(date '+%F %T') launching run-loop (resume #$n) -> $RUNLOG"
-  MAX_ITERATIONS="${MAX_ITERATIONS:-20}" "$ROOT/run-loop.sh" >"$RUNLOG" 2>&1
+  MAX_ITERATIONS="${MAX_ITERATIONS:-20}" "$ROOT/run-loop.sh" "--carrier-lane=$STARTRIPS_LANE" >"$RUNLOG" 2>&1
   rc=$?
   echo "[supervisor] $(date '+%F %T') run-loop exited rc=$rc"
   [[ "$rc" == "6" ]] || transient_count=0

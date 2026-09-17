@@ -37,6 +37,14 @@ Automation prompts carry roles and this entry point, never current PRs or SHAs.
   proving an old execution ended; preserve that owner's dirty work. Never borrow
   someone else's dirty tree, create a competing owner or widen permissions.
   Distinguish requested readOnly access from an actual denied inherit operation.
+- Execution-carrier exclusion is lane-scoped, not workspace-global. A provably
+  Backend carrier and a provably Experience carrier may run concurrently. Same-lane
+  carriers still exclude duplicates; an unknown lane, unreadable carrier whose lane
+  cannot be proven, or mismatched owner/worktree remains fail-closed. Carrier lane
+  is observable process metadata (`--carrier-lane` / worker marker), never a second
+  owner registry. ONE writes and intake state transitions remain globally serialized
+  through `feature_store.py` transactions, so cross-lane execution does not weaken
+  storage safety.
 - On transient transport/permission/runtime failure, leave product and ownership
   state unchanged, keep the existing scheduled observer enabled, and retry only
   bounded authorized idempotent probes. Do not disable an automation or require

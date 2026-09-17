@@ -30,6 +30,46 @@ class ProcessClassificationCases(unittest.TestCase):
         rows = self.base + [process(10, command='bash ' + str(self.root / 'run-loop.sh'))]
         self.assertEqual(10, execution.competitors(rows, self.root, 3)[0]['pid'])
 
+    def test_backend_loop_does_not_block_experience_lane(self):
+        rows = self.base + [process(10, command='bash ' + str(self.root / 'run-loop.sh')
+                                    + ' --carrier-lane=backend')]
+        self.assertEqual([], execution.competitors(rows, self.root, 3, lane='experience'))
+
+    def test_same_lane_loop_still_blocks_duplicate(self):
+        rows = self.base + [process(10, command='bash ' + str(self.root / 'run-loop.sh')
+                                    + ' --carrier-lane=backend')]
+        conflict = execution.competitors(rows, self.root, 3, lane='backend')[0]
+        self.assertEqual(10, conflict['pid']); self.assertEqual('backend', conflict['lane'])
+
+    def test_worker_marker_in_other_lane_does_not_block(self):
+        rows = self.base + [process(10, name='node.exe',
+                                    command='node worker STARTRIPS_EXECUTION_OWNER=' + str(self.root)
+                                    + ';lane=backend;feature=ST-001;worktree=C:/owners/backend;')]
+        self.assertEqual([], execution.competitors(rows, self.root, 3, lane='experience',
+                                                   feature='ST-080', worktree='C:/owners/experience'))
+
+    def test_same_feature_blocks_even_when_lane_differs(self):
+        rows = self.base + [process(10, name='node.exe',
+                                    command='node worker STARTRIPS_EXECUTION_OWNER=' + str(self.root)
+                                    + ';lane=backend;feature=ST-080;worktree=C:/owners/backend;')]
+        conflict = execution.competitors(rows, self.root, 3, lane='experience',
+                                         feature='ST-080', worktree='C:/owners/experience')[0]
+        self.assertEqual(10, conflict['pid']); self.assertEqual('ST-080', conflict['feature'])
+
+    def test_same_worktree_blocks_even_when_lane_differs(self):
+        shared = str((self.root / 'owner-tree').resolve())
+        rows = self.base + [process(10, name='node.exe',
+                                    command='node worker STARTRIPS_EXECUTION_OWNER=' + str(self.root)
+                                    + ';lane=backend;feature=ST-001;worktree=' + shared + ';')]
+        conflict = execution.competitors(rows, self.root, 3, lane='experience',
+                                         feature='ST-080', worktree=shared)[0]
+        self.assertEqual(10, conflict['pid']); self.assertEqual('backend', conflict['lane'])
+
+    def test_unknown_lane_in_same_workspace_stays_fail_closed(self):
+        rows = self.base + [process(10, command='bash ' + str(self.root / 'run-loop.sh'))]
+        conflict = execution.competitors(rows, self.root, 3, lane='experience')[0]
+        self.assertEqual(10, conflict['pid']); self.assertEqual('unknown', conflict['lane'])
+
     def test_orphan_worker_marker_blocks_new_carrier(self):
         rows = self.base + [process(10, name='node.exe', command='node worker STARTRIPS_EXECUTION_OWNER=' + str(self.root) + ';feature=ST-001;')]
         self.assertEqual('worker', execution.competitors(rows, self.root, 3)[0]['kind'])
