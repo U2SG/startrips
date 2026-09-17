@@ -43,10 +43,12 @@ class ProcessClassificationCases(unittest.TestCase):
         conflict = execution.competitors(rows, self.root, 3, lane='backend')[0]
         self.assertEqual(10, conflict['pid']); self.assertEqual('backend', conflict['lane'])
 
-    def test_worker_marker_in_other_lane_does_not_block(self):
+    def test_encoded_worker_marker_in_other_lane_does_not_block(self):
+        backend = 'C:/owners/backend'
+        token = base64.urlsafe_b64encode(backend.encode('utf-8')).decode('ascii').rstrip('=')
         rows = self.base + [process(10, name='node.exe',
                                     command='node worker STARTRIPS_EXECUTION_OWNER=' + str(self.root)
-                                    + ';lane=backend;feature=ST-001;worktree=C:/owners/backend;')]
+                                    + ';lane=backend;feature=ST-001;worktree64=' + token + ';')]
         self.assertEqual([], execution.competitors(rows, self.root, 3, lane='experience',
                                                    feature='ST-080', worktree='C:/owners/experience'))
 
