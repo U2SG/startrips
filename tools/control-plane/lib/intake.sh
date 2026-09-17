@@ -713,7 +713,7 @@ intake_touch_feature() {
     return 0
   fi
 python3 - "$INTAKE_FEATURES" "$fid" "$upd" "$cnt" "$note" "$reopen" "$INTAKE_ROOT/lib" <<'PY'
-import copy, datetime, json, sys
+import copy, datetime, json, os, sys
 feat_p, fid, upd, cnt, note, reopen, libdir = sys.argv[1:8]
 sys.path.insert(0, libdir)
 from feature_store import load_document, commit_document
@@ -725,6 +725,10 @@ stamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
 for f in d['features']:
     if f['id'] != fid:
         continue
+    expected_token = os.environ.get('INTAKE_EXPECTED_ROW', '')
+    if expected_token:
+        from intake_guard import require_amend_snapshot
+        require_amend_snapshot(f, expected_token, upd, cnt)
     if f.get('status') in {'in_progress', 'needs_work', 'ready_for_eval'}:
         print('SKIP=builder-owns-issue-window')
         raise SystemExit(0)
@@ -798,6 +802,13 @@ except InvalidOutput as exc:
     emit(decision='invalid', reason=exc.reason, issue=num, id=fid)
     raise SystemExit(0)
 
+# The same immutable row was shown to the model before it ran. Re-loading a
+# newer row here does not authorize applying an older model result to it.
+d = load_document(feat_p)
+from intake_guard import require_amend_snapshot
+from feature_state import target as feature_target
+require_amend_snapshot(feature_target(d, fid), os.environ.get('INTAKE_EXPECTED_ROW'), upd, cnt)
+
 if obj.get('unchanged') is True:
     emit(decision='unchanged', issue=num, id=fid,
          reason=str(obj.get('reason') or 'not material').strip())
@@ -816,7 +827,6 @@ if not isinstance(amend, dict):
          issue=num, id=fid)
     raise SystemExit(0)
 
-d = load_document(feat_p)
 before = copy.deepcopy(d['features'])
 ids = {f['id'] for f in d['features']}
 by_id = {f['id']: f for f in d['features']}
@@ -929,35 +939,38 @@ PY
 # Dump the feature an amend session has to reason about. Read-only input, so it
 # goes to the artifacts directory instead of being pasted into the prompt.
 intake_dump_feature() {
-  local fid="$1" out="$INTAKE_DIR/feature-$fid.json"
-python3 - "$INTAKE_FEATURES" "$fid" "$out" <<'PY'
-import json, sys
-feat_p, fid, out = sys.argv[1:4]
-d = json.load(open(feat_p, encoding='utf-8'))
-for f in d['features']:
-    if f['id'] == fid:
-        json.dump(f, open(out, 'w', encoding='utf-8'), ensure_ascii=False, indent=2)
-        break
-else:
-    raise SystemExit('feature not found: ' + fid)
+python3 - "$INTAKE_FEATURES" "$1" "$INTAKE_DIR" "$INTAKE_ROOT/lib" <<'PY'
+import json, os, sys, tempfile
+from pathlib import Path
+feat_p, fid, directory, libdir = sys.argv[1:5]
+sys.path.insert(0, libdir)
+from feature_store import load_document
+from feature_state import target, row_token
+row = target(load_document(feat_p), fid)
+fd, out = tempfile.mkstemp(prefix='feature-' + fid + '-', suffix='.json', dir=directory)
+with os.fdopen(fd, 'w', encoding='utf-8') as stream:
+    json.dump(row, stream, ensure_ascii=False, indent=2)
+# Path and token originate from the SAME snapshot, before model execution.
+print(out + '\t' + row_token(row))
 PY
-  printf '%s' "$out"
 }
 
 intake_amend() {
-  local num="$1" fid="$2" upd="$3" cnt="$4" dump prompt decision reason changed
+  local num="$1" fid="$2" upd="$3" cnt="$4" dump prompt decision reason changed snapshot expected_row
   intake_budget_take || {
     intake_record_decision "issue=$num feature=$fid amend deferred: per-iteration session budget spent"
     return 0
   }
-  dump="$(intake_dump_feature "$fid")"
+  snapshot="$(intake_dump_feature "$fid" | tr -d '\r')" || return 6
+  IFS=$'\t' read -r dump expected_row <<< "$snapshot"
+  [[ -n "$dump" && -n "$expected_row" ]] || return 6
   prompt="Amend mode for the Startrips loop queue. Feature $fid is still pending and was created by intake from issue #$num in $INTAKE_GH_REPO, which has moved since it was triaged. Read your agent instructions (the Amend mode section), the current feature object at $dump, and the whole issue: gh issue view $num --repo $INTAKE_GH_REPO --comments. Decide whether the change is material to the queued work, then return one JSON object: {\"unchanged\": true, \"reason\": \"...\"} when it is not, {\"skip\": true, \"reason\": \"...\"} when the issue is now moot, or {\"amend\": {\"rationale\": \"...\", plus only the fields that must change: description, dependencies, acceptance, human_gate, placement}}. Keep every acceptance item a checkable fact and never widen the scope beyond what the issue asks. You are read-only: never comment on, create, close or edit anything on GitHub, and never write files. Your final message must be exactly one JSON object between the markers <<<INTAKE and INTAKE>>> with nothing after the closing marker."
   intake_triage "$num" "$prompt" "amend-$fid"
   [[ -s "$INTAKE_LAST_LOG" ]] || {
     intake_record_decision "issue=$num feature=$fid amend-log-empty"
     return 0
   }
-  INTAKE_ISSUE_UPDATED_AT="$upd" INTAKE_ISSUE_COMMENTS="$cnt" \
+  INTAKE_EXPECTED_ROW="$expected_row" INTAKE_ISSUE_UPDATED_AT="$upd" INTAKE_ISSUE_COMMENTS="$cnt" \
     intake_apply_amend "$num" "$fid" "$INTAKE_LAST_LOG" || { intake_record_decision "issue=$num amend-transaction-deferred"; return 6; }
   [[ -f "$INTAKE_LAST_RESULT" ]] || {
     intake_record_decision "issue=$num feature=$fid amend-result-missing"
@@ -970,18 +983,18 @@ intake_amend() {
     amend)
       intake_record_decision "issue=$num feature=$fid decision=amend changed=$changed reason=$reason"
       intake_comment_issue "$num" "The Startrips loop amended its queued entry $fid after this update: $reason (changed: $changed). The entry is still pending; nothing has been implemented yet."
-      intake_resnapshot "$fid" "$num"
+      # No prose comment was posted; preserve the actually consumed issue window.
       [[ "$INTAKE_DRY_RUN" == "1" ]] || printf '\n### %s - intake amended %s from #%s\n- Changed: %s\n- Rationale: %s\n' \
         "$(intake_now)" "$fid" "$num" "$changed" "$reason" >> "$INTAKE_PROGRESS"
       ;;
     unchanged)
       # The snapshot still advances, otherwise a label edit re-triages forever.
       intake_record_decision "issue=$num feature=$fid decision=unchanged reason=$reason"
-      intake_touch_feature "$fid" "$upd" "$cnt"
+      INTAKE_EXPECTED_ROW="$expected_row" intake_touch_feature "$fid" "$upd" "$cnt"
       ;;
     moot)
       intake_record_decision "issue=$num feature=$fid decision=moot reason=$reason"
-      intake_touch_feature "$fid" "$upd" "$cnt" \
+      INTAKE_EXPECTED_ROW="$expected_row" intake_touch_feature "$fid" "$upd" "$cnt" \
         "intake amend session reported the issue as moot: $reason (queue entry left in place for the owner)"
       intake_owner_attention "$fid" "$num" \
         "The amend session reports the issue is now moot: $reason The queue entry was left pending; cancelling it is the owner's call."

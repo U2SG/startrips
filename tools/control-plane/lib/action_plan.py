@@ -155,6 +155,15 @@ def handoff(path, fid, repo):
     captured = capture(path.parent, owner['worktree'], fid, observed['pr'], repo)
     if captured['exit'] != 0 or captured['kind'] != 'final':
         raise StoreConflict('Final CI capture did not pass')
+    identity_fields = {'head': 'final_sha', 'source_sha': 'source_sha',
+                       'ci_run': 'ci_run', 'ci_attempt': 'ci_attempt'}
+    if any(captured.get(left) != observed.get(right) for left, right in identity_fields.items()):
+        raise StoreConflict('Captured handoff evidence changed identity; discard the mixed snapshot')
+    confirmed = plan(path, fid, repo)
+    keys = ('pr', 'source_sha', 'final_sha', 'ci_run', 'ci_attempt', 'row_token')
+    if confirmed.get('action') != 'HANDOFF_REVIEW' or any(confirmed.get(k) != observed.get(k) for k in keys):
+        raise StoreConflict('Handoff gate changed after capture; re-read Source review and CI')
+
     relative = '.agent-artifacts/evaluations/' + fid + '-' + observed['final_sha'] + '-handoff.json'
     output = path.parent / relative
     if not output.exists():

@@ -30,6 +30,8 @@ def capture(root, worktree, fid, number, repo):
     if pr['head']['sha'] != head or pr['head']['ref'] != branch:
         raise StoreConflict('Local/remote evidence identities differ')
     relation = source_relation(repo, number)
+    if relation['final_sha'] != head:
+        raise StoreConflict('Source/final identity changed during evidence capture')
     missing = not relation['sealed'] and ledger_pending_final(repo, number, head)
     ci = latest_ci(repo, head, missing_ledger=missing)
     kind = 'final' if relation['sealed'] else 'source'
@@ -38,6 +40,10 @@ def capture(root, worktree, fid, number, repo):
     run = ci['run']
     if git(worktree, 'rev-parse', 'HEAD') != head or git(worktree, 'status', '--porcelain'):
         raise StoreConflict('Source changed during evidence capture')
+    confirmed = api('repos/' + repo + '/pulls/' + str(number))
+    if (confirmed['head']['sha'] != head or confirmed['head']['ref'] != branch
+            or confirmed.get('state') != pr.get('state') or confirmed.get('merged') != pr.get('merged')):
+        raise StoreConflict('Remote owner identity changed during evidence capture')
     jobs = [{'id': j['id'], 'name': j['name'], 'status': j['status'], 'conclusion': j['conclusion']}
             for j in sorted(ci['jobs'], key=lambda j: j['name'])]
     code = 0 if green else 1
@@ -52,7 +58,7 @@ def capture(root, worktree, fid, number, repo):
         if path.read_text(encoding='utf-8') != text: raise StoreConflict('Existing evidence identity has different contents')
     else:
         with path.open('x', encoding='utf-8', newline='\n') as stream: stream.write(text)
-    return {'path': str(path.relative_to(root)).replace('\\', '/'), 'exit': code, 'kind': kind, 'head': head}
+    return {'path': str(path.relative_to(root)).replace('\\', '/'), 'exit': code, 'kind': kind, 'head': head, 'source_sha': relation['source_sha'], 'ci_run': run['id'], 'ci_attempt': run['run_attempt']}
 
 
 def check_log(text, source, final, branch):

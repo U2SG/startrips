@@ -537,3 +537,17 @@ A feature is done only when: every acceptance criterion is implemented and evide
 on the submitted head; the ledger is present and valid; all review threads are resolved and effective reviews are clear; the
 fresh-context evaluator returns PASS; and the maintainer's `merge-ready` sign-off has merged the PR,
 whose exact merge is contained in a verified exact-green main push before reconciliation records `passed`.
+
+### Bounded no-progress execution
+
+`lib/progress_budget.py` records model-execution evidence under the existing
+`.agent-artifacts/evaluations/` directory. After `MAX_NO_CHANGE` successful model
+turns with identical content/evidence input and no progress, the loop returns
+`WAIT_PROGRESS` without starting another model. Existing scheduled observation
+continues. A real Source/content, current CI attempt, review or action change
+unlocks a fresh budget; restarting the supervisor or rewriting prose does not.
+This is not feature status, ownership, a dispatch queue or a second lock.
+Intake amend results carry their pre-model row token through application; user
+changes during the model round invalidate the entire old result, including
+unchanged/moot snapshot bookkeeping. Handoff capture and final revalidation bind
+Source, final head and exact CI run/attempt to one independent-review decision.

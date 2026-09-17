@@ -30,7 +30,7 @@ def snapshot():
         if isinstance(rows, dict):
             rows = [rows]
         return [{'pid': r['ProcessId'], 'ppid': r['ParentProcessId'], 'name': r['Name'],
-                 'command': r.get('CommandLine') or ''} for r in rows]
+                 'command': r.get('CommandLine')} for r in rows]
     proc = Path('/proc')
     if not proc.exists():
         raise EvidenceUnknown('No supported process observation provider')
@@ -74,7 +74,12 @@ def competitors(rows, root, self_pid):
         name = row['name'].lower()
         if not any(name.startswith(prefix) for prefix in ('bash', 'sh', 'claude', 'codex', 'node')):
             continue
-        command = row['command'].replace('\\', '/').lower()
+        raw_command = row.get('command')
+        if not isinstance(raw_command, str) or not raw_command.strip():
+            found.append({'pid': row['pid'], 'ppid': row['ppid'],
+                          'kind': 'unknown-carrier', 'state': 'unknown-command'})
+            continue
+        command = raw_command.replace('\\', '/').lower()
         is_loop = bool(re.search(r'(?:^|[\s"/])(?:run-loop|loop-supervisor)[.]sh(?:[\s"\x00]|$)', command))
         is_child = 'startrips_execution_owner=' in command
         if not is_loop and not is_child:
