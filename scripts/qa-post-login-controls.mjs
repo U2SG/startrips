@@ -1831,7 +1831,11 @@ async function verifyFinalAcceptanceMobileFlow() {
     const consoleErrors = [];
     const pageErrors = [];
     const failedRequests = [];
-    // #325: the 430 px iteration intermittently finds the desktop Journey rail
+    // #325: the desktop section of every iteration measures at 768x1024 (the
+    // resize below), so the viewport label only names which context raced --
+    // the recorded rail/target boxes are byte-identical across 320/360/390/430
+    // and the failure is not width-dependent. One iteration intermittently
+    // finds the desktop Journey rail
     // button unmeasurable (`visible:false`, the hit landing on the globe
     // canvas), and probing the target element alone cannot tell a rail that was
     // unmounted mid-reload from one measured mid-animation or inert. The rail is
@@ -1865,6 +1869,63 @@ async function verifyFinalAcceptanceMobileFlow() {
         const railButtons = [...document.querySelectorAll(".living-atlas__journey-rail li button")];
         const matching = railButtons.filter((button) => normalize(button.textContent).includes(wanted));
         const atlas = document.querySelector(".living-atlas");
+        // #325 third recurrence: the recorded snapshots are mutually exclusive
+        // with every declarative owner. `.living-atlas__journey-rail` itself
+        // declares `visibility: visible`, and the only rules that can override
+        // it (`.living-atlas.is-playback` / `.is-globe-picking`) also declare
+        // `opacity: 0` and pair with `inert` on the same node -- yet the failing
+        // snapshots report opacity 1, no atlas lifecycle class and no inert.
+        // Read the three remaining sources of authority in this same
+        // evaluation: the rail's own inline declaration, the tree it actually
+        // belongs to, and the cascade rules that really match it.
+        const railInlineStyle = rail?.getAttribute("style") ?? null;
+        const ancestorChain = [];
+        for (let node = rail?.parentElement; node && ancestorChain.length < 8; node = node.parentElement) {
+          const nodeStyle = getComputedStyle(node);
+          ancestorChain.push({
+            tag: node.tagName,
+            class: node.getAttribute("class"),
+            visibility: nodeStyle.visibility,
+            opacity: nodeStyle.opacity,
+            display: nodeStyle.display,
+            contentVisibility: nodeStyle.contentVisibility ?? null,
+            inlineStyle: node.getAttribute("style"),
+          });
+        }
+        // Every rule that declares `visibility` and matches the rail, with the
+        // media condition it sits under, so a cascade winner is named rather
+        // than inferred.
+        const matchedVisibilityRules = [];
+        const collectVisibilityRules = (rules, mediaText, mediaMatches, depth) => {
+          if (!rail || depth > 4) return;
+          for (const rule of rules) {
+            if (rule.media) {
+              collectVisibilityRules(
+                rule.cssRules ?? [],
+                rule.media.mediaText,
+                mediaMatches && window.matchMedia(rule.media.mediaText).matches,
+                depth + 1,
+              );
+              continue;
+            }
+            if (!rule.selectorText || !rule.style) continue;
+            const declared = rule.style.getPropertyValue("visibility");
+            if (!declared) continue;
+            let selectorMatches = false;
+            try { selectorMatches = rail.matches(rule.selectorText); } catch { continue; }
+            if (!selectorMatches) continue;
+            matchedVisibilityRules.push({
+              selector: rule.selectorText,
+              visibility: declared,
+              opacity: rule.style.getPropertyValue("opacity") || null,
+              media: mediaText,
+              mediaMatches,
+            });
+          }
+        };
+        for (const sheet of document.styleSheets) {
+          try { collectVisibilityRules(sheet.cssRules ?? [], null, true, 0); } catch { /* opaque sheet */ }
+        }
         return {
           visible: rect.width > 0
             && rect.height > 0
@@ -1888,6 +1949,12 @@ async function verifyFinalAcceptanceMobileFlow() {
             atlasClass: atlas?.getAttribute("class") ?? null,
             atlasMobileV2: atlas?.getAttribute("data-mobile-v2") ?? null,
             targetBox: boxOf(element),
+            railInlineStyle,
+            atlasCount: document.querySelectorAll(".living-atlas").length,
+            railInMeasuredAtlas: atlas && rail ? atlas.contains(rail) : null,
+            railConnected: rail ? rail.isConnected : null,
+            ancestorChain,
+            matchedVisibilityRules,
           },
         };
       }, targetTitle);
