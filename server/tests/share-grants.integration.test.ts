@@ -14,6 +14,7 @@ import {
   atlases,
   journeyRoutePoints,
   journeys,
+  mediaAssetEvidence,
   mediaAssets,
   shareGrantJourneys,
   shareGrants,
@@ -740,6 +741,16 @@ describe("guest journey read", () => {
       })
       .returning({ id: mediaAssets.id });
     sharedMediaId = asset.id;
+    await db.insert(mediaAssetEvidence).values({
+      mediaAssetId: sharedMediaId,
+      spatialSource: "exif",
+      spatialGranularity: "coordinate",
+      latitude: 47.620501,
+      longitude: -122.349277,
+      accuracyMeters: 12.5,
+      captureTimeSource: "unknown",
+      timezoneState: "unknown",
+    });
   });
 
   it("answers a single-journey grant with exactly that journey", async () => {
@@ -803,6 +814,11 @@ describe("guest journey read", () => {
     // Nor the private plumbing of the journey it does share.
     expect(body).not.toContain(SHARED_STORAGE_KEY);
     expect(body).not.toContain("phase-b-content-hash");
+    // #388: owner-only media evidence is not joined into guest/share payloads.
+    expect(body).not.toContain("47.620501");
+    expect(body).not.toContain("-122.349277");
+    expect(body).not.toContain("12.5");
+    expect(body).not.toContain("accuracyMeters");
     expect(body).not.toContain(identity.atlasId);
     expect(body).not.toContain(identity.userId);
     expect(body).not.toContain("storageKey");
