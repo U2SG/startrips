@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import { loadServerConfig } from "../config";
 import {
+  createEmailSender,
   deliverEmailWithRetry,
   sendInBackground,
   type EmailSender,
@@ -52,5 +54,23 @@ describe("sendInBackground", () => {
       "smtp down",
     );
     errorSpy.mockRestore();
+  });
+});
+
+describe("sensitive development email", () => {
+  it("does not print bearer-capability bodies", async () => {
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const sender = createEmailSender(loadServerConfig({}));
+    const secret = "email-change-secret-token-should-not-log";
+    await sender.send({
+      to: "member@example.test",
+      subject: "Sensitive",
+      text: secret,
+      sensitive: true,
+    });
+    const logged = JSON.stringify(infoSpy.mock.calls);
+    expect(logged).not.toContain(secret);
+    expect(logged).toContain("body omitted: sensitive");
+    infoSpy.mockRestore();
   });
 });

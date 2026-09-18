@@ -9,6 +9,7 @@ import { db } from "./db/client";
 import { LocationSearchUnavailableError } from "./location/location-search";
 import { HomeBasePeriodConflictError } from "./repositories/home-base-repository";
 import { requestLog } from "./request-log";
+import { accountEmailChangeRoutes } from "./routes/account-email-change";
 import { accountIdentityRoutes } from "./routes/account-identities";
 import { accountPreferenceRoutes } from "./routes/account-preferences";
 import { atlasRoutes } from "./routes/atlases";
@@ -68,6 +69,7 @@ app.on(["GET", "POST"], "/api/auth/*", (context) =>
   auth.handler(context.req.raw),
 );
 
+app.route("/api/account-identities/email-change", accountEmailChangeRoutes);
 app.route("/api/account-identities", accountIdentityRoutes);
 // #387: the account-scoped Earth experience preference. The only route
 // module here that derives nothing from an Atlas: the stable user behind the

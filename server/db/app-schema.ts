@@ -591,6 +591,82 @@ export const mediaPreviewWrites = pgTable(
   ],
 );
 
+// #389: verified primary-email replacement lives in a durable transaction of its
+// own. The stable Better Auth user id remains the account authority while both
+// address-control proofs are pending. Raw proof tokens never enter persistence.
+export const accountEmailChanges = pgTable(
+  "account_email_changes",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => authUser.id, { onDelete: "cascade" }),
+    initiatingSessionId: text("initiating_session_id").notNull(),
+    currentEmail: text("current_email").notNull(),
+    proposedEmail: text("proposed_email").notNull(),
+    reverificationActionId: uuid("reverification_action_id").notNull(),
+    oldProofHash: text("old_proof_hash").notNull(),
+    newProofHash: text("new_proof_hash").notNull(),
+    oldConfirmedAt: timestamp("old_confirmed_at", { withTimezone: true }),
+    newVerifiedAt: timestamp("new_verified_at", { withTimezone: true }),
+    status: text("status").notNull().default("pending"),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    closedAt: timestamp("closed_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("account_email_changes_old_proof_unique").on(table.oldProofHash),
+    uniqueIndex("account_email_changes_new_proof_unique").on(table.newProofHash),
+    uniqueIndex("account_email_changes_pending_user_unique")
+      .on(table.userId)
+      .where(sql`${table.status} = 'pending'`),
+    uniqueIndex("account_email_changes_pending_email_unique")
+      .on(table.proposedEmail)
+      .where(sql`${table.status} = 'pending'`),
+    index("account_email_changes_user_created_idx").on(table.userId, table.createdAt),
+    index("account_email_changes_expires_idx").on(table.expiresAt),
+    check(
+      "account_email_changes_status_check",
+      sql`${table.status} in ('pending', 'completed', 'cancelled', 'replaced', 'expired', 'conflicted')`,
+    ),
+    check(
+      "account_email_changes_closed_shape_check",
+      sql`(${table.status} = 'pending' and ${table.closedAt} is null)
+        or (${table.status} <> 'pending' and ${table.closedAt} is not null)`,
+    ),
+  ],
+);
+
+// #389 audit deliberately excludes email values and proof material. A transaction
+// id plus action id is enough to correlate lifecycle evidence without turning
+// audit storage into another source of account-address or bearer-token secrets.
+export const accountEmailChangeAudit = pgTable(
+  "account_email_change_audit",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: text("user_id").notNull(),
+    changeId: uuid("change_id"),
+    actionId: uuid("action_id"),
+    event: text("event").notNull(),
+    outcome: text("outcome").notNull(),
+    reason: text("reason"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("account_email_change_audit_user_created_idx").on(table.userId, table.createdAt),
+    index("account_email_change_audit_change_idx").on(table.changeId),
+    check(
+      "account_email_change_audit_event_check",
+      sql`${table.event} in ('start', 'old-confirm', 'new-verify', 'complete', 'cancel', 'replace', 'expire')`,
+    ),
+    check(
+      "account_email_change_audit_outcome_check",
+      sql`${table.outcome} in ('success', 'refused')`,
+    ),
+  ],
+);
+
 // #345: provider identities are credentials of one stable Better Auth user, not
 // additional Startrips Accounts. Better Auth owns the raw `account` rows; this
 // table records the provider proof that made a non-credential row eligible for

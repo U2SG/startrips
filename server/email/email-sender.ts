@@ -5,6 +5,9 @@ export type EmailMessage = {
   to: string;
   subject: string;
   text: string;
+  // Verification / recovery links are bearer capabilities. Development mail
+  // sinks must not echo those bodies into logs.
+  sensitive?: boolean;
 };
 
 export type EmailSender = {
@@ -27,7 +30,11 @@ export function createEmailSender(config: ServerConfig): EmailSender {
           throw new Error("SMTP is unavailable");
         }
         console.info(`[development email] ${message.to}: ${message.subject}`);
-        console.info(message.text);
+        if (message.sensitive) {
+          console.info("[development email body omitted: sensitive]");
+        } else {
+          console.info(message.text);
+        }
       },
     };
   }
@@ -35,9 +42,10 @@ export function createEmailSender(config: ServerConfig): EmailSender {
   const transport = nodemailer.createTransport(config.smtpUrl);
   return {
     async send(message) {
+      const { sensitive: _sensitive, ...mail } = message;
       await transport.sendMail({
         from: config.mailFrom ?? undefined,
-        ...message,
+        ...mail,
       });
     },
   };

@@ -23,6 +23,10 @@ export const STARTRIPS_DISABLED_IDENTITY_PATHS = [
   "/link-social",
   "/unlink-account",
   "/list-accounts",
+  // #389 owns primary-email replacement. Better Auth's native endpoint does
+  // not consume the ST-067 dedicated recent-proof grant or our two-stage
+  // old/new address transaction, so it must not be an alternate write path.
+  "/change-email",
 ] as const;
 
 export const auth = betterAuth({
