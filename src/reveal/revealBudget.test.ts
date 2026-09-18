@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { REVEAL_RENDER_BUDGET, resolveRevealBudget } from "./revealBudget";
+import {
+  REVEAL_RENDER_BUDGET,
+  RENDERER_MAX_PIXELS,
+  rendererDrawingBufferPixels,
+  resolveRevealBudget,
+} from "./revealBudget";
 import { resolveRenderBudget } from "../scene/renderBudget";
 import { QUALITY_PROFILE } from "../scene/ParticleEarthScene";
 
@@ -58,6 +63,46 @@ describe("resolveRevealBudget", () => {
     // The vendored renderer defaults to 2048 and uploads two source images at
     // once; the reveal stage passes this smaller bound instead.
     expect(REVEAL_RENDER_BUDGET.maxTextureSize).toBeLessThanOrEqual(1_024);
+  });
+
+  it("keeps the renderer's own rounded drawing buffer inside the advertised cap", () => {
+    // The renderer rounds where `resolveRenderBudget` floors, so the cap it is
+    // handed has to leave room for that. 1440x900 is the case where rounding
+    // the raw cap overshoots (1265x791 = 1,000,615 pixels).
+    for (let width = 320; width <= 3_840; width += 37) {
+      for (const height of [Math.round(width * 0.5625), Math.round(width * 1.8), 900]) {
+        for (const deviceDpr of [1, 2, 3]) {
+          const pixels = rendererDrawingBufferPixels(width, height, deviceDpr);
+          expect(
+            pixels,
+            `${width}x${height} @${deviceDpr}`,
+          ).toBeLessThanOrEqual(REVEAL_RENDER_BUDGET.maxDrawingBufferPixels);
+        }
+      }
+    }
+    expect(rendererDrawingBufferPixels(1_440, 900, 2))
+      .toBeLessThanOrEqual(REVEAL_RENDER_BUDGET.maxDrawingBufferPixels);
+    expect(RENDERER_MAX_PIXELS).toBeLessThan(REVEAL_RENDER_BUDGET.maxDrawingBufferPixels);
+  });
+
+  it("keeps the renderer's rounded buffer inside the globe's budget too", () => {
+    for (const viewport of VIEWPORTS) {
+      const pixels = rendererDrawingBufferPixels(
+        viewport.viewportWidth,
+        viewport.viewportHeight,
+        viewport.deviceDpr,
+      );
+      for (const quality of ["low", "high"] as const) {
+        const globe = resolveRenderBudget({
+          viewportWidth: viewport.viewportWidth,
+          viewportHeight: viewport.viewportHeight,
+          deviceDpr: viewport.deviceDpr,
+          qualityProfile: QUALITY_PROFILE[quality],
+        });
+        expect(pixels, `${viewport.label} vs globe ${quality}`)
+          .toBeLessThanOrEqual(globe.drawingBufferPixels);
+      }
+    }
   });
 
   it("reuses the globe's resolver instead of a second DPR arithmetic", () => {

@@ -8,7 +8,7 @@ import {
   type CoverRevealState,
   type RevealPresetId,
 } from "./coverRevealFlow";
-import { REVEAL_RENDER_BUDGET, resolveRevealBudget } from "./revealBudget";
+import { REVEAL_RENDER_BUDGET, RENDERER_MAX_PIXELS, resolveRevealBudget } from "./revealBudget";
 import { RevealFlow } from "./vendor/index.js";
 
 /** The surface currently showing the cover: the reveal canvas, or a plain image. */
@@ -122,7 +122,7 @@ export function CoverRevealStage({
         // The caps, not the resolved values: the renderer re-applies exactly
         // this arithmetic whenever its container is resized.
         maxDpr: REVEAL_RENDER_BUDGET.maxDpr,
-        maxPixels: REVEAL_RENDER_BUDGET.maxDrawingBufferPixels,
+        maxPixels: RENDERER_MAX_PIXELS,
         maxTextureSize: budget.maxTextureSize,
       });
     } catch {
@@ -135,7 +135,19 @@ export function CoverRevealStage({
     flowRef.current = flow;
     publish(requested, flow.canvas);
 
+    /** Release the renderer and its context. Safe to call more than once. */
+    const release = () => {
+      if (flow.disposed) return;
+      const context = flow.canvas.getContext("webgl2");
+      flow.dispose();
+      context?.getExtension("WEBGL_lose_context")?.loseContext();
+      if (flowRef.current === flow) flowRef.current = null;
+    };
+
     const dispatch = (event: Parameters<typeof coverRevealReducer>[1]) => {
+      // A load failure has nothing left to paint, so the renderer goes away
+      // before the state that mounts the original-cover image is published.
+      if (event.type === "failed") release();
       publish(coverRevealReducer(stateRef.current, event), flow.canvas);
     };
     const onImages = () => dispatch({ type: "images-loaded", revision });
@@ -152,6 +164,22 @@ export function CoverRevealStage({
     flow.addEventListener("progress", onProgress);
     flow.addEventListener("complete", onComplete);
     flow.addEventListener("error", onError);
+
+    // The renderer pauses itself when the tab is hidden but never restarts, so
+    // without this the reveal would sit forever on a half-dissolved generated
+    // image - exactly the state the canonical cover is supposed to replace.
+    const onVisibility = () => {
+      if (document.hidden || flow.disposed) return;
+      if (stateRef.current.phase !== "revealing" || flow.playing) return;
+      void flow.resume().catch(() => {
+        // If playback cannot be restarted, end honestly on the cover rather
+        // than leaving the generated image on screen.
+        if (flow.disposed) return;
+        flow.seek(1);
+        dispatch({ type: "complete", revision });
+      });
+    };
+    document.addEventListener("visibilitychange", onVisibility);
 
     let cancelled = false;
     void (async () => {
@@ -171,11 +199,8 @@ export function CoverRevealStage({
       flow.removeEventListener("progress", onProgress);
       flow.removeEventListener("complete", onComplete);
       flow.removeEventListener("error", onError);
-      // Hold the context before disposal so the GPU resource can be released
-      // explicitly rather than left to collection.
-      const gl = flow.canvas.getContext("webgl2");
-      flow.dispose();
-      gl?.getExtension("WEBGL_lose_context")?.loseContext();
+      document.removeEventListener("visibilitychange", onVisibility);
+      release();
       flowRef.current = null;
     };
   }, [pair, preset, revision, forceReducedMotion, forceNoWebgl2, publish]);
@@ -193,7 +218,12 @@ export function CoverRevealStage({
     );
   }, [publish, revision]);
 
-  const showsImage = state.phase === "settled" && !flowRef.current;
+  // Derived from the lifecycle, not from a ref: these are exactly the settle
+  // reasons that have no painted canvas to show the cover on.
+  const showsImage = state.phase === "settled"
+    && (state.settleReason === "reduced-motion"
+      || state.settleReason === "no-webgl2"
+      || state.settleReason === "load-failed");
 
   return (
     <div
@@ -203,6 +233,7 @@ export function CoverRevealStage({
       data-cover-reveal-degraded={state.degraded ? "true" : "false"}
       data-cover-reveal-settle-reason={state.settleReason ?? ""}
       data-cover-reveal-budget-pixels={budgetPixels ?? ""}
+      data-cover-reveal-max-pixels={REVEAL_RENDER_BUDGET.maxDrawingBufferPixels}
       style={{ width: "100%", height: "100%" }}
       onPointerDown={interrupt}
       onKeyDown={(event) => {

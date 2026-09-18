@@ -70,17 +70,19 @@ try {
     }, state.backend === "webgl2" && state.degraded === false
       && state.settleReason === "completed" && state.frameCount > 1);
     const canvasBudget = await page.evaluate(() => {
-      const container = document.querySelector("[data-cover-reveal-budget-pixels]");
+      const container = document.querySelector("[data-cover-reveal-max-pixels]");
       const canvas = container?.querySelector("canvas");
       return {
-        declared: Number(container?.getAttribute("data-cover-reveal-budget-pixels")),
+        cap: Number(container?.getAttribute("data-cover-reveal-max-pixels")),
+        resolved: Number(container?.getAttribute("data-cover-reveal-budget-pixels")),
         width: canvas?.width ?? 0,
         height: canvas?.height ?? 0,
       };
     });
     record("reveal:canvas-stays-inside-the-declared-budget", { canvasBudget },
-      canvasBudget.width > 0 && canvasBudget.height > 0
-      && canvasBudget.width * canvasBudget.height <= canvasBudget.declared);
+      canvasBudget.width > 0 && canvasBudget.height > 0 && canvasBudget.cap > 0
+      && canvasBudget.width * canvasBudget.height <= canvasBudget.cap
+      && canvasBudget.resolved <= canvasBudget.cap);
     record("reveal:no-page-errors", { errors: run.errors }, run.errors.length === 0);
     await run.context.close();
   }
@@ -193,6 +195,70 @@ try {
     }, state.phase === "settled" && state.settleReason === "no-webgl2"
       && state.degraded === true && state.frameCount === 0
       && state.lastFrame?.image === "original-cover" && run.errors.length === 0);
+    await run.context.close();
+  }
+  // 6. A failed generated asset hands the viewer the real cover, not an
+  //    unpainted canvas.
+  {
+    const run = await openPreview({ mode: "load-failure" });
+    const { page } = run;
+    await page.waitForFunction(() => window.__coverRevealDebug().phase === "settled");
+    await page.waitForFunction(() => window.__coverRevealDebug().lastFrame !== null);
+    const state = await debugState(page);
+    const surfaces = await page.evaluate(() => ({
+      coverImage: Boolean(document.querySelector('[data-cover-reveal-image="original-cover"]')),
+      canvases: document.querySelectorAll("[data-cover-reveal-phase] canvas").length,
+    }));
+    await page.screenshot({ path: `${artifactDir}/load-failure.png` });
+    record("load-failure:shows-the-original-cover-not-an-unpainted-canvas", {
+      state: {
+        phase: state.phase,
+        settleReason: state.settleReason,
+        degraded: state.degraded,
+        lastFrame: state.lastFrame,
+      },
+      surfaces,
+    }, state.phase === "settled" && state.settleReason === "load-failed"
+      && state.degraded === true && state.lastFrame?.image === "original-cover"
+      && surfaces.coverImage === true && surfaces.canvases === 0);
+    await run.context.close();
+  }
+
+  // 7. Hiding and re-showing the tab must not strand the reveal on a partially
+  //    dissolved generated image.
+  {
+    const run = await openPreview();
+    const { page } = run;
+    await page.waitForFunction(() => window.__coverRevealDebug().phase === "revealing");
+    await page.waitForFunction(() => window.__coverRevealDebug().progress > 0.05);
+    await page.evaluate(() => {
+      Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await page.waitForTimeout(500);
+    const hidden = await debugState(page);
+    await page.evaluate(() => {
+      Object.defineProperty(document, "hidden", { configurable: true, get: () => false });
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await page.waitForFunction(
+      () => window.__coverRevealDebug().phase === "settled",
+      undefined,
+      { timeout: 30_000 },
+    );
+    const resumed = await debugState(page);
+    record("visibility:reveal-resumes-and-settles-on-the-original-cover", {
+      hidden: { phase: hidden.phase, progress: hidden.progress, frames: hidden.frames },
+      resumed: {
+        phase: resumed.phase,
+        settleReason: resumed.settleReason,
+        progress: resumed.progress,
+        lastFrame: resumed.lastFrame,
+      },
+      errors: run.errors,
+    }, hidden.phase === "revealing" && hidden.progress < 1
+      && resumed.phase === "settled" && resumed.progress === 1
+      && resumed.lastFrame?.image === "original-cover" && run.errors.length === 0);
     await run.context.close();
   }
 } finally {

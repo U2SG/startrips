@@ -94,14 +94,20 @@ declare global {
 }
 
 export function CoverRevealQaPreview() {
+  instrumentAnimationFrames();
   const params = new URLSearchParams(window.location.search);
   const mode = params.get("qaMode");
   const preset = (params.get("qaPreset") ?? "ink-bloom") as RevealPresetId;
 
   const pair = useMemo(() => ({
-    generatedFirst: solidImage(GENERATED_FIRST_COLOR),
+    // `load-failure` points the generated asset at a path that cannot decode,
+    // leaving the canonical cover valid - the case where the reveal must hand
+    // the viewer the real cover instead of an unpainted canvas.
+    generatedFirst: mode === "load-failure"
+      ? "/__cover-reveal-qa-missing.png"
+      : solidImage(GENERATED_FIRST_COLOR),
     originalCover: solidImage(ORIGINAL_COVER_COLOR),
-  }), []);
+  }), [mode]);
 
   const [mounted, setMounted] = useState(true);
   const debugRef = useRef<DebugState>({
@@ -205,27 +211,39 @@ export function CoverRevealQaPreview() {
 
 /**
  * Counts animation-frame callbacks that were requested and have neither run nor
- * been cancelled. Installed once, at module scope, before anything schedules a
- * frame, so a leaked reveal loop keeps this number above zero after teardown.
+ * been cancelled, so a leaked reveal loop keeps this number above zero after
+ * teardown.
+ *
+ * Installed from the component rather than at module scope on purpose. This
+ * module is imported statically by `src/main.tsx`, so a module-scope patch would
+ * wrap every animation frame the persistent globe and the rest of the product
+ * schedule - and a top-level side effect would also keep the whole reveal
+ * subtree in the production bundle instead of letting `import.meta.env.DEV`
+ * eliminate it.
  */
 let outstandingAnimationFrames = 0;
+let instrumented = false;
+const liveHandles = new Set<number>();
 const pendingAnimationFrames = () => outstandingAnimationFrames;
 
-const nativeRequestAnimationFrame = window.requestAnimationFrame.bind(window);
-const nativeCancelAnimationFrame = window.cancelAnimationFrame.bind(window);
-const liveHandles = new Set<number>();
+function instrumentAnimationFrames() {
+  if (instrumented) return;
+  instrumented = true;
+  const nativeRequestAnimationFrame = window.requestAnimationFrame.bind(window);
+  const nativeCancelAnimationFrame = window.cancelAnimationFrame.bind(window);
 
-window.requestAnimationFrame = (callback: FrameRequestCallback) => {
-  const handle = nativeRequestAnimationFrame((time) => {
+  window.requestAnimationFrame = (callback: FrameRequestCallback) => {
+    const handle = nativeRequestAnimationFrame((time) => {
+      if (liveHandles.delete(handle)) outstandingAnimationFrames -= 1;
+      callback(time);
+    });
+    liveHandles.add(handle);
+    outstandingAnimationFrames += 1;
+    return handle;
+  };
+
+  window.cancelAnimationFrame = (handle: number) => {
     if (liveHandles.delete(handle)) outstandingAnimationFrames -= 1;
-    callback(time);
-  });
-  liveHandles.add(handle);
-  outstandingAnimationFrames += 1;
-  return handle;
-};
-
-window.cancelAnimationFrame = (handle: number) => {
-  if (liveHandles.delete(handle)) outstandingAnimationFrames -= 1;
-  nativeCancelAnimationFrame(handle);
-};
+    nativeCancelAnimationFrame(handle);
+  };
+}
