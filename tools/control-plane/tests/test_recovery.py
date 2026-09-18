@@ -213,12 +213,13 @@ class ProcessClassificationCases(unittest.TestCase):
                                       + ';lane=backend;feature=ST-087;worktree=' + backend_tree + ';')]
         self.assertEqual('unknown-scope', execution.competitors(
             legacy, self.root, 3, lane='experience', feature='ST-080', worktree64=exp64)[0]['state'])
-        # Unreadable carrier scope is never excused merely because ancestry proves another lane.
+        # A carrier whose ancestry proves Backend is independent from Experience,
+        # even if the child CommandLine is temporarily unreadable.
         unreadable = self.base + [process(20, command='bash ' + str(self.root / 'run-loop.sh')
                                           + ' --carrier-lane=backend'),
                                   process(21, 20, 'node.exe', None)]
-        conflicts = execution.competitors(unreadable, self.root, 3, lane='experience')
-        self.assertEqual('unknown-command', next(x for x in conflicts if x['pid'] == 21)['state'])
+        self.assertEqual([], execution.competitors(
+            unreadable, self.root, 3, lane='experience'))
 
     def test_matching_direct_carrier_token_exempts_only_that_loop(self):
         rows = self.base + [process(10, command='bash ' + str(self.root / 'run-loop.sh')
@@ -245,6 +246,68 @@ class ProcessClassificationCases(unittest.TestCase):
                                     + ' --carrier-lane=experience --carrier-token=experience-token-2')]
         with mock.patch.dict(os.environ, {'STARTRIPS_CARRIER_TOKEN': 'experience-token-1'}):
             self.assertEqual(10, execution.competitors(rows, self.root, 3, lane='experience')[0]['pid'])
+
+    def test_same_token_descendants_reuse_scoped_experience_owner(self):
+        token = 'experience-token-1234'
+        worktree = str((self.root / 'owner tree').resolve())
+        worktree64 = base64.urlsafe_b64encode(worktree.encode()).decode().rstrip('=')
+        rows = self.base + [
+            process(10, command='bash ' + str(self.root / 'run-loop.sh')
+                    + ' --carrier-lane=experience --carrier-token=' + token
+                    + ' --carrier-feature=ST-073 --carrier-worktree64=' + worktree64),
+            process(11, 10, 'bash.exe', 'bash ' + str(self.root / 'run-loop.sh')
+                    + ' --carrier-lane=experience --carrier-token=' + token),
+            process(12, 11, 'bash.exe', None),
+        ]
+        occupancy = execution.lane_occupancy(rows, self.root, 3, 'experience')
+        self.assertEqual(1, occupancy['occupied_slots'])
+        self.assertEqual(['ST-073'], occupancy['features'])
+        self.assertEqual(0, occupancy['claim_count'])
+
+    def test_unreadable_descendant_reuses_unscoped_claim_token(self):
+        token = 'experience-token-1234'
+        rows = self.base + [
+            process(10, command='bash ' + str(self.root / 'run-loop.sh')
+                    + ' --carrier-lane=experience --carrier-token=' + token),
+            process(11, 10, 'bash.exe', None),
+        ]
+        occupancy = execution.lane_occupancy(rows, self.root, 3, 'experience')
+        self.assertEqual(1, occupancy['occupied_slots'])
+        self.assertEqual(1, occupancy['claim_count'])
+
+    def test_readonly_probe_and_unreadable_child_do_not_consume_slot(self):
+        rows = self.base + [
+            process(10, command='bash ' + str(self.root / 'run-loop.sh') + ' --plan'),
+            process(11, 10, 'bash.exe', None),
+        ]
+        occupancy = execution.lane_occupancy(rows, self.root, 3, 'experience')
+        self.assertEqual(0, occupancy['occupied_slots'])
+        self.assertEqual(0, occupancy['claim_count'])
+
+    def test_caller_recovers_exact_token_from_parent_argv(self):
+        token = 'experience-self-token-1234'
+        rows = [
+            process(1, name='python'),
+            process(2, 1, 'bash', 'bash ' + str(self.root / 'run-loop.sh')
+                    + ' --carrier-lane=experience --carrier-token=' + token),
+            process(3, 2, 'python', 'python execution.py check'),
+            process(10, 1, 'bash', 'bash ' + str(self.root / 'run-loop.sh')
+                    + ' --carrier-lane=experience --carrier-token=' + token),
+        ]
+        with mock.patch.dict(os.environ, {'STARTRIPS_CARRIER_TOKEN': ''}):
+            self.assertEqual([], execution.competitors(
+                rows, self.root, 3, lane='experience'))
+
+    def test_occupied_reobserves_process_birth_race(self):
+        first = self.base + [process(10, 1, 'bash.exe', None)]
+        token = 'experience-token-1234'
+        second = self.base + [process(
+            10, command='bash ' + str(self.root / 'run-loop.sh')
+            + ' --carrier-lane=experience --carrier-token=' + token)]
+        with mock.patch.object(execution, 'snapshot', side_effect=[first, second]),                 mock.patch.object(execution.os, 'getpid', return_value=3),                 mock.patch.object(execution.time, 'sleep'):
+            occupancy = execution.observed_lane_occupancy(self.root, 'experience')
+        self.assertEqual(1, occupancy['occupied_slots'])
+        self.assertEqual(1, occupancy['claim_count'])
 
     def test_same_token_cluster_exempts_unreadable_chain_but_not_sibling_launch(self):
         token = 'experience-token-1234'
