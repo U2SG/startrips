@@ -21,6 +21,7 @@ import {
 import { SharedAtlasView } from "./journey/SharedAtlasView";
 import { isSharedAtlasPathname } from "./journey/sharedAtlas";
 import type { Journey, JourneyRoute } from "./journey/types";
+import { CoverRevealQaPreview } from "./reveal/CoverRevealQaPreview";
 import { ParticleEarthScene } from "./scene/ParticleEarthScene";
 import {
   LivingAtlasGlobe,
@@ -1031,6 +1032,10 @@ const Experience = import.meta.env.DEV && qaState === "journey-composer"
     ? BrandSignatureMotionQaPreview
   : import.meta.env.DEV && qaState === "recovery-surfaces"
     ? RecoverySurfaceQaPreview
+  // #367 slice 3: the vendored cover reveal renderer has no product surface
+  // yet, so its only mount is this deterministic dev-only preview.
+  : import.meta.env.DEV && qaState === "cover-reveal"
+    ? CoverRevealQaPreview
   : import.meta.env.DEV && qaState === "final-acceptance"
     ? LivingAtlasApp
   : import.meta.env.DEV && qaState
