@@ -21,7 +21,6 @@ import {
 import { SharedAtlasView } from "./journey/SharedAtlasView";
 import { isSharedAtlasPathname } from "./journey/sharedAtlas";
 import type { Journey, JourneyRoute } from "./journey/types";
-import { CoverRevealQaPreview } from "./reveal/CoverRevealQaPreview";
 import { ParticleEarthScene } from "./scene/ParticleEarthScene";
 import {
   LivingAtlasGlobe,
@@ -1010,6 +1009,8 @@ function RecoverySurfaceQaPreview() {
   );
 }
 
+const coverRevealPreview = import.meta.env.DEV && qaState === "cover-reveal";
+
 const Experience = import.meta.env.DEV && qaState === "journey-composer"
   ? JourneyComposerQaPreview
   : import.meta.env.DEV && qaState === "journey-story"
@@ -1033,9 +1034,12 @@ const Experience = import.meta.env.DEV && qaState === "journey-composer"
   : import.meta.env.DEV && qaState === "recovery-surfaces"
     ? RecoverySurfaceQaPreview
   // #367 slice 3: the vendored cover reveal renderer has no product surface
-  // yet, so its only mount is this deterministic dev-only preview.
-  : import.meta.env.DEV && qaState === "cover-reveal"
-    ? CoverRevealQaPreview
+  // yet, so its only mount is this deterministic dev-only preview. It is lazy
+  // like `ExperienceDemo` rather than statically imported, so neither the
+  // product bundle nor the twenty other browser-QA lanes' page loads carry the
+  // renderer and its vendored sources.
+  : coverRevealPreview
+    ? lazy(async () => ({ default: (await import("./reveal/CoverRevealQaPreview")).CoverRevealQaPreview }))
   : import.meta.env.DEV && qaState === "final-acceptance"
     ? LivingAtlasApp
   : import.meta.env.DEV && qaState
@@ -1078,7 +1082,13 @@ createRoot(document.getElementById("root")!).render(
         />
       ) : (
         <AuthGateway>
-          <Experience />
+          {coverRevealPreview ? (
+            <Suspense fallback={<main className="auth-gate auth-gate--brand-loading"><StartripsBrandLoader message="Loading your private atlas…" /></main>}>
+              <Experience />
+            </Suspense>
+          ) : (
+            <Experience />
+          )}
         </AuthGateway>
       )}
     </PersistentEarthProvider>
