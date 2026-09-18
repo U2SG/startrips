@@ -52,6 +52,7 @@ export type CoverRevealEvent =
   | { type: "complete"; revision: number }
   | { type: "interrupt"; revision: number }
   | { type: "failed"; revision: number; reason: string }
+  | { type: "renderer-failed"; revision: number; reason: string }
   | { type: "release" };
 
 /** Why the reveal resolved straight to the cover instead of animating. */
@@ -60,6 +61,7 @@ export type CoverRevealSettleReason =
   | "no-webgl2"
   | "interrupted"
   | "load-failed"
+  | "renderer-failed"
   | "completed";
 
 export type CoverRevealState = {
@@ -190,6 +192,17 @@ export function coverRevealReducer(
     case "failed": {
       if (!owns(state, event.revision) || state.phase === "idle") return state;
       return settle(state, "load-failed", { degraded: true, error: event.reason });
+    }
+    case "renderer-failed": {
+      // The renderer went away while it still owned the screen - it could not be
+      // constructed at all, or its graphics context was lost mid-reveal. Either
+      // way the viewer gets the canonical cover instead of an unpainted canvas
+      // or a half-dissolved generated image.
+      if (!owns(state, event.revision)) return state;
+      // A loss arriving after the lifecycle already settled changes nothing:
+      // that reveal really did finish, and it is not retroactively degraded.
+      if (state.phase !== "preparing" && state.phase !== "revealing") return state;
+      return settle(state, "renderer-failed", { degraded: true, error: event.reason });
     }
     case "release":
       return { ...initialCoverRevealState, revision: state.revision };

@@ -1,10 +1,12 @@
 // #367 slice 3 - the vendored cover reveal renderer, driven in a real browser.
 //
-// Four things this lane exists to prove, and nothing else: the first painted
-// frame is the supplied generated image, the final frame is the canonical
-// original cover, a viewer interruption ends the reveal at the cover
-// immediately, and teardown leaves no animation-frame loop, WebGL context or
-// listener behind.
+// What this lane exists to prove, and nothing else: the first painted frame is
+// the supplied generated image, the final frame is the canonical original
+// cover, a viewer interruption ends the reveal at the cover immediately,
+// teardown leaves no animation-frame loop, WebGL context or listener behind,
+// and every honest degradation - reduced motion, no WebGL2, a failed generated
+// asset, a hidden tab, a lost graphics context and a renderer that cannot be
+// constructed - still ends on the canonical original cover.
 import { mkdirSync, writeFileSync } from "node:fs";
 import { launchQaBrowser } from "./qa-browser.mjs";
 
@@ -275,6 +277,116 @@ try {
       && resumed.phase === "settled" && resumed.progress === 1
       && resumed.frames > stillHidden.frames
       && resumed.lastFrame?.image === "original-cover" && run.errors.length === 0);
+    await run.context.close();
+  }
+
+  // 8. A lost graphics context settles on the canonical cover, and a later
+  //    restoration must not resurrect the reveal the viewer already left.
+  {
+    const run = await openPreview();
+    const { page } = run;
+    await page.waitForFunction(() => window.__coverRevealDebug().phase === "revealing");
+    await page.waitForFunction(() => window.__coverRevealDebug().progress > 0.05);
+    const before = await debugState(page);
+    const lost = await page.evaluate(() => {
+      const canvas = document.querySelector("[data-cover-reveal-phase] canvas");
+      const extension = canvas?.getContext("webgl2")?.getExtension("WEBGL_lose_context");
+      if (!canvas || !extension) return false;
+      // Kept for the restoration poke below: settling detaches this canvas.
+      window.__coverRevealQaCanvas = canvas;
+      extension.loseContext();
+      return true;
+    });
+    await page.waitForFunction(
+      () => window.__coverRevealDebug().phase === "settled",
+      undefined,
+      { timeout: 15_000 },
+    );
+    await page.waitForFunction(
+      () => window.__coverRevealDebug().lastFrame?.image === "original-cover",
+      undefined,
+      { timeout: 15_000 },
+    );
+    const settled = await debugState(page);
+    const surfaces = await page.evaluate(() => ({
+      coverImage: Boolean(document.querySelector('[data-cover-reveal-image="original-cover"]')),
+      canvases: document.querySelectorAll("[data-cover-reveal-phase] canvas").length,
+    }));
+    await page.screenshot({ path: `${artifactDir}/context-loss.png` });
+    record("context-loss:settles-on-the-original-cover", {
+      lost,
+      before: { phase: before.phase, progress: before.progress },
+      settled: {
+        phase: settled.phase,
+        settleReason: settled.settleReason,
+        degraded: settled.degraded,
+        progress: settled.progress,
+        lastFrame: settled.lastFrame,
+      },
+      surfaces,
+    }, lost === true && before.phase === "revealing" && before.progress < 1
+      && settled.phase === "settled" && settled.settleReason === "renderer-failed"
+      && settled.degraded === true && settled.lastFrame?.image === "original-cover"
+      && surfaces.coverImage === true && surfaces.canvases === 0);
+
+    // The renderer was released, so the browser restoring the context has
+    // nothing left to repaint: no new frames, no reattached canvas, no loop.
+    const framesAtLoss = settled.frames;
+    await page.evaluate(() => {
+      window.__coverRevealQaCanvas?.dispatchEvent(new Event("webglcontextrestored"));
+    });
+    await page.waitForTimeout(700);
+    const restored = await debugState(page);
+    const afterRestore = await page.evaluate(
+      () => document.querySelectorAll("[data-cover-reveal-phase] canvas").length,
+    );
+    record("context-loss:restoration-does-not-resurrect-the-reveal", {
+      framesAtLoss,
+      restored: {
+        phase: restored.phase,
+        settleReason: restored.settleReason,
+        frames: restored.frames,
+        pendingAnimationFrames: restored.pendingAnimationFrames,
+        lastFrame: restored.lastFrame,
+      },
+      canvasesAfterRestore: afterRestore,
+      errors: run.errors,
+    }, restored.phase === "settled" && restored.settleReason === "renderer-failed"
+      && restored.lastFrame?.image === "original-cover"
+      && restored.pendingAnimationFrames === 0 && afterRestore === 0
+      && run.errors.length === 0);
+    await run.context.close();
+  }
+
+  // 9. A renderer that cannot be constructed at all - the WebGL2 probe passed,
+  //    the renderer still refused - hands the viewer the canonical cover.
+  {
+    const run = await openPreview({ mode: "construct-failure" });
+    const { page } = run;
+    await page.waitForFunction(() => window.__coverRevealDebug().phase === "settled");
+    await page.waitForFunction(() => window.__coverRevealDebug().lastFrame !== null);
+    const state = await debugState(page);
+    const surfaces = await page.evaluate(() => ({
+      coverImage: Boolean(document.querySelector('[data-cover-reveal-image="original-cover"]')),
+      canvases: document.querySelectorAll("[data-cover-reveal-phase] canvas").length,
+    }));
+    await page.screenshot({ path: `${artifactDir}/construct-failure.png` });
+    record("construct-failure:settles-on-the-original-cover", {
+      state: {
+        phase: state.phase,
+        settleReason: state.settleReason,
+        degraded: state.degraded,
+        backend: state.backend,
+        frameCount: state.frameCount,
+        lastFrame: state.lastFrame,
+      },
+      surfaces,
+      errors: run.errors,
+    }, state.phase === "settled" && state.settleReason === "renderer-failed"
+      && state.degraded === true && state.backend === "webgl2"
+      && state.frameCount === 0 && state.lastFrame?.image === "original-cover"
+      && surfaces.coverImage === true && surfaces.canvases === 0
+      && run.errors.length === 0);
     await run.context.close();
   }
 } finally {

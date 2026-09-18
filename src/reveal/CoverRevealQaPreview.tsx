@@ -102,7 +102,13 @@ export function CoverRevealQaPreview() {
   instrumentAnimationFrames();
   const params = new URLSearchParams(window.location.search);
   const mode = params.get("qaMode");
-  const preset = (params.get("qaPreset") ?? "ink-bloom") as RevealPresetId;
+  // `construct-failure` hands the stage a preset the vendored renderer rejects
+  // in the first statement of its constructor, before any canvas exists. That is
+  // the deterministic stand-in for a renderer that cannot be built at all even
+  // though the WebGL2 probe succeeded.
+  const preset = (mode === "construct-failure"
+    ? "not-a-supported-preset"
+    : params.get("qaPreset") ?? "ink-bloom") as RevealPresetId;
 
   const pair = useMemo(() => ({
     // `load-failure` points the generated asset at a path that cannot decode,
@@ -223,12 +229,11 @@ export function CoverRevealQaPreview() {
  * been cancelled, so a leaked reveal loop keeps this number above zero after
  * teardown.
  *
- * Installed from the component rather than at module scope on purpose. This
- * module is imported statically by `src/main.tsx`, so a module-scope patch would
- * wrap every animation frame the persistent globe and the rest of the product
- * schedule - and a top-level side effect would also keep the whole reveal
- * subtree in the production bundle instead of letting `import.meta.env.DEV`
- * eliminate it.
+ * Installed from the component rather than at module scope on purpose. A
+ * module-scope patch would run as soon as this module were evaluated and wrap
+ * every animation frame the persistent globe and the rest of the product
+ * schedule; keeping it inside the component means only the lazily loaded
+ * `?qaState=cover-reveal` preview ever instruments anything.
  */
 let outstandingAnimationFrames = 0;
 let instrumented = false;

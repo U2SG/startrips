@@ -158,6 +158,7 @@ describe("coverRevealFlow stale intent", () => {
       { type: "complete", revision: 1 },
       { type: "interrupt", revision: 1 },
       { type: "failed", revision: 1, reason: "stale" },
+      { type: "renderer-failed", revision: 1, reason: "stale" },
       { type: "request", request: request({ revision: 1 }) },
     ];
     for (const event of staleEvents) {
@@ -201,12 +202,67 @@ describe("coverRevealFlow without WebGL2", () => {
   });
 });
 
+describe("coverRevealFlow when the renderer itself fails", () => {
+  it("settles on the original cover when the renderer cannot be constructed", () => {
+    // The WebGL2 probe succeeded, so the lifecycle is already preparing when the
+    // real renderer refuses to be built. It must not sit there with no image.
+    const preparing = runCoverReveal([reveal()]);
+    expect(preparing.phase).toBe("preparing");
+    expect(preparing.displayedImage).toBeNull();
+
+    const settled = coverRevealReducer(preparing, {
+      type: "renderer-failed",
+      revision: 1,
+      reason: "Unknown flow: not-a-supported-preset",
+    });
+    expect(settled.phase).toBe("settled");
+    expect(settled.settleReason).toBe("renderer-failed");
+    expect(settled.degraded).toBe(true);
+    expect(settled.frameCount).toBe(0);
+    expect(settled.displayedImage).toBe(PAIR.originalCover);
+    expect(settled.error).toBe("Unknown flow: not-a-supported-preset");
+  });
+
+  it("settles on the original cover when the graphics context is lost mid-reveal", () => {
+    const settled = runCoverReveal([
+      reveal(),
+      { type: "images-loaded", revision: 1 },
+      { type: "frame", revision: 1, progress: 0.35 },
+      { type: "renderer-failed", revision: 1, reason: "context lost" },
+    ]);
+    expect(settled.phase).toBe("settled");
+    expect(settled.settleReason).toBe("renderer-failed");
+    expect(settled.degraded).toBe(true);
+    expect(settled.progress).toBe(1);
+    // Not the half-dissolved generated image the loss froze on screen.
+    expect(settled.displayedImage).toBe(PAIR.originalCover);
+  });
+
+  it("does not retroactively degrade a reveal that already completed", () => {
+    const completed = runCoverReveal([
+      reveal(),
+      { type: "images-loaded", revision: 1 },
+      { type: "frame", revision: 1, progress: 0.9 },
+      { type: "complete", revision: 1 },
+    ]);
+    const afterLoss = coverRevealReducer(completed, {
+      type: "renderer-failed",
+      revision: 1,
+      reason: "context lost after the reveal finished",
+    });
+    expect(afterLoss).toBe(completed);
+    expect(afterLoss.settleReason).toBe("completed");
+    expect(afterLoss.degraded).toBe(false);
+  });
+});
+
 describe("coverRevealFlow invariants", () => {
   it("never leaves a settled lifecycle on anything but the original cover", () => {
     const terminals: CoverRevealEvent[] = [
       { type: "complete", revision: 1 },
       { type: "interrupt", revision: 1 },
       { type: "failed", revision: 1, reason: "any" },
+      { type: "renderer-failed", revision: 1, reason: "any" },
     ];
     const starts: CoverRevealEvent[][] = [
       [reveal()],

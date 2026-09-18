@@ -125,9 +125,17 @@ export function CoverRevealStage({
         maxPixels: RENDERER_MAX_PIXELS,
         maxTextureSize: budget.maxTextureSize,
       });
-    } catch {
+    } catch (error) {
+      // The WebGL2 probe can succeed and the real renderer still fail to be
+      // built - a rejected option, a compile error, a context allocation the
+      // driver refuses. A second `request` event would be ignored here (the
+      // lifecycle already owns this revision), so this settles explicitly.
       publish(
-        coverRevealReducer(requested, { type: "request", request: { ...request, backend: "unavailable" } }),
+        coverRevealReducer(requested, {
+          type: "renderer-failed",
+          revision,
+          reason: (error as Error).message,
+        }),
         imageRef.current,
       );
       return undefined;
@@ -145,9 +153,10 @@ export function CoverRevealStage({
     };
 
     const dispatch = (event: Parameters<typeof coverRevealReducer>[1]) => {
-      // A load failure has nothing left to paint, so the renderer goes away
-      // before the state that mounts the original-cover image is published.
-      if (event.type === "failed") release();
+      // A load failure and a lost renderer both have nothing left to paint, so
+      // the renderer goes away before the state that mounts the original-cover
+      // image is published.
+      if (event.type === "failed" || event.type === "renderer-failed") release();
       // A released renderer's canvas is detached and unpainted, so it is not a
       // surface any caller should be handed.
       publish(coverRevealReducer(stateRef.current, event), flow.disposed ? null : flow.canvas);
@@ -162,7 +171,16 @@ export function CoverRevealStage({
       const detail = (event as CustomEvent<{ message: string }>).detail;
       dispatch({ type: "failed", revision, reason: detail.message });
     };
+    // The vendored renderer pauses on `webglcontextlost` and, on restoration,
+    // repaints without restarting playback - so an unhandled context loss would
+    // strand the viewer on a partial reveal frame forever. #367 settles renderer
+    // failure and context loss on the original cover instead.
+    const onWarning = (event: Event) => {
+      const detail = (event as CustomEvent<{ message: string }>).detail;
+      dispatch({ type: "renderer-failed", revision, reason: detail.message });
+    };
     flow.addEventListener("images", onImages);
+    flow.addEventListener("warning", onWarning);
     flow.addEventListener("progress", onProgress);
     flow.addEventListener("complete", onComplete);
     flow.addEventListener("error", onError);
@@ -198,6 +216,7 @@ export function CoverRevealStage({
     return () => {
       cancelled = true;
       flow.removeEventListener("images", onImages);
+      flow.removeEventListener("warning", onWarning);
       flow.removeEventListener("progress", onProgress);
       flow.removeEventListener("complete", onComplete);
       flow.removeEventListener("error", onError);
@@ -225,7 +244,8 @@ export function CoverRevealStage({
   const showsImage = state.phase === "settled"
     && (state.settleReason === "reduced-motion"
       || state.settleReason === "no-webgl2"
-      || state.settleReason === "load-failed");
+      || state.settleReason === "load-failed"
+      || state.settleReason === "renderer-failed");
 
   return (
     <div
