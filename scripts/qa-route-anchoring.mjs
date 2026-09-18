@@ -133,6 +133,27 @@ function waitForRenderedFrame(page) {
 }
 
 /**
+ * Route paths and Route Point markers are published by the scene projection
+ * frame, not by wall-clock delay. Wait for the same visible endpoint evidence
+ * the assertion will measure so a slow CI frame cannot be sampled between the
+ * zoom state update and marker projection. A real projection failure still
+ * times out instead of being accepted.
+ */
+function waitForRouteEndpoints(page, routeIdentifier) {
+  return page.waitForFunction((identifier) => {
+    const group = document.querySelector(`[data-journey-route="${identifier}"]`);
+    if (!group) return false;
+    const visibleMarkers = [...group.querySelectorAll(".particle-earth-route__point")]
+      .filter((element) => (
+        element.style.display !== "none"
+        && Number.isFinite(Number(element.dataset.anchorX))
+        && Number.isFinite(Number(element.dataset.anchorY))
+      ));
+    return visibleMarkers.length >= 4;
+  }, routeIdentifier, { timeout: 5_000 });
+}
+
+/**
  * #242: grade the INTERIOR of every drawn leg, which is where the sawtooth
  * lives. Endpoint anchoring (#193) and geographic motion (#196) say nothing
  * about the shape between two Route Points.
@@ -469,7 +490,7 @@ try {
   const samples = [];
   for (const zoom of [1, 2, 3]) {
     const state = await setZoom(page, zoom);
-    await page.waitForTimeout(220);
+    await waitForRouteEndpoints(page, routeId);
     const measured = await measureRoute(page, routeId);
     if (measured.error) throw new Error(measured.error);
     samples.push({ requestedZoom: zoom, zoom: state.zoom, ...measured });
