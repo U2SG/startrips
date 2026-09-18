@@ -441,7 +441,7 @@ class ProcessClassificationCases(unittest.TestCase):
                 mock.patch.object(execution.os, 'getpid', return_value=3):
             with self.assertRaisesRegex(execution.EvidenceUnknown, 'unknown-command'):
                 execution.ensure_idle(self.root)
-        self.assertEqual(2, provider.call_count)
+        self.assertEqual(3, provider.call_count)
 
     def test_unreadable_orphan_is_still_unknown(self):
         # No readable ancestor, so nothing proves it is somebody else's.
