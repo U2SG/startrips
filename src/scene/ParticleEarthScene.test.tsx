@@ -31,6 +31,7 @@ import {
   MAX_RENDERED_ROUTE_LABELS,
   MAX_RENDERED_ROUTE_LINE_VERTICES,
   MAX_RENDERED_ROUTE_POINTS,
+  MAX_ROUTE_LABEL_CANDIDATES,
   resolveRouteLabelLimit,
   resolveRouteLabelSafeArea,
   resolveRouteVertexShare,
@@ -919,6 +920,21 @@ describe("ParticleEarthScene contracts", () => {
       { isStop: true, label: "" },
     ])).toEqual([]);
     expect(MAX_RENDERED_ROUTE_LABELS).toBe(6);
+  });
+
+  it("prepares a wider bounded label pool than it renders (#374)", () => {
+    // Attention moves without rebuilding the route layer, so every stop of a
+    // normal Journey must already own a label element while the rendered budget
+    // stays at `resolveRouteLabelLimit(...)`.
+    const stops = Array.from({ length: 10 }, (_, index) => ({
+      isStop: true,
+      label: `Stop ${index}`,
+    }));
+    expect(selectRouteLabelPointIndexes(stops, MAX_ROUTE_LABEL_CANDIDATES))
+      .toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    expect(MAX_ROUTE_LABEL_CANDIDATES).toBeGreaterThan(MAX_RENDERED_ROUTE_LABELS);
+    expect(resolveRouteLabelLimit(false)).toBe(MAX_RENDERED_ROUTE_LABELS);
+    expect(resolveRouteLabelLimit(true)).toBe(MAX_RENDERED_MOBILE_ROUTE_LABELS);
   });
 
   it("disposes geometry, material, and mapped textures", () => {

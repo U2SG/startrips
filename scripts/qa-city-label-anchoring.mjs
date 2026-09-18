@@ -595,6 +595,199 @@ function checkNoOverlap(sample, where) {
   check(overlaps === 0, `${where}: ${overlaps} rendered place labels overlap, #79 collision handling regressed`);
 }
 
+// ---------------------------------------------------------------------------
+// #374 label arbitration lane.
+// ---------------------------------------------------------------------------
+
+/** The fixture route's first Route Point, i.e. the city the label repeats. */
+const LABEL_ARBITRATION_FOCUS = { lat: 34.0522, lon: -118.2437 };
+/** Its antipode, which puts the whole fixture route behind the horizon. */
+const LABEL_ARBITRATION_ANTIPODE = { lat: -34.0522, lon: 61.7563 };
+/** Mirrors PLACE_LABEL_VICINITY_PX in src/scene/labelArbitration.ts. */
+const LABEL_VICINITY_PX = 44;
+
+const LABEL_ARBITRATION_POSTURES = [
+  {
+    key: "desktop",
+    viewport: VIEWPORT,
+    deviceScaleFactor: 1,
+    compact: false,
+    // Reduced motion is the fixture default; the arbitration must not depend on
+    // whether the scene is animating.
+    motion: "reduced",
+    stages: ["browse", "current", "rewound"],
+  },
+  {
+    key: "desktop-animated-3x",
+    viewport: VIEWPORT,
+    deviceScaleFactor: 3,
+    compact: false,
+    motion: "animate",
+    stages: ["browse"],
+  },
+  {
+    key: "compact",
+    viewport: { width: 390, height: 844 },
+    deviceScaleFactor: 2,
+    compact: true,
+    motion: "reduced",
+    stages: ["browse"],
+  },
+];
+
+async function openLabelArbitration(page, posture, stage, focus = LABEL_ARBITRATION_FOCUS) {
+  const url = new URL(
+    `/?qaState=journey-routes&qaLabelArbitration=1&qaQuality=high`
+      + `&qaFocusLat=${focus.lat}&qaFocusLon=${focus.lon}`
+      + (posture.motion === "animate" ? "&qaMotion=animate" : ""),
+    baseUrl,
+  ).toString();
+  await page.goto(url, { waitUntil: "domcontentloaded" });
+  await page.locator('[data-scene-ready="true"]').waitFor({ timeout: 30_000 });
+  await page.waitForFunction(() => Boolean(window.__particleEarthDebug?.()));
+  // City data is fetched, so the first frames legitimately have no labels.
+  await page.waitForFunction(() => Number(
+    document.querySelector(".particle-earth-scene")?.dataset.journeyCityLabelCount ?? 0,
+  ) > 0, null, { timeout: 30_000 });
+  if (stage !== "browse") {
+    await page.locator(`[data-qa-label-stage="${stage}"]`).click();
+  }
+  await waitForFocusToSettle(page);
+  await page.waitForTimeout(400);
+}
+
+/**
+ * The rendered Route Point labels, the rendered Place Labels and the Route
+ * Point records behind them, each with the projected anchor it claims.
+ */
+function measureLabelArbitration(page) {
+  return page.evaluate(() => {
+    const host = document.querySelector(".particle-earth-scene");
+    if (!host) return { error: "scene host is unavailable" };
+    const normalize = (value) => value
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .replace(/[^\p{Letter}\p{Number}]+/gu, "");
+    const group = document.querySelector(
+      '.particle-earth-route[data-journey-route="qa-route-label-arbitration"]',
+    );
+    if (!group) return { error: "the label arbitration fixture route is not rendered" };
+    const markers = [...group.querySelectorAll(".particle-earth-route__point")].map((element) => ({
+      routePointId: element.dataset.routePointId ?? "",
+      pointIndex: Number(element.dataset.routePointIndex),
+      attentionRole: element.dataset.attentionRole ?? "",
+      temporalVisible: element.dataset.temporalVisible === "true",
+      hidden: element.style.display === "none",
+      anchor: { x: Number(element.dataset.anchorX), y: Number(element.dataset.anchorY) },
+    }));
+    const routeLabels = [...group.querySelectorAll(".particle-earth-route__label")]
+      .filter((element) => element.style.display !== "none")
+      .map((element) => {
+        const pointIndex = Number(element.dataset.routePointIndex);
+        const marker = markers.find((candidate) => candidate.pointIndex === pointIndex) ?? null;
+        const text = element.querySelector("text");
+        const label = element.getAttribute("data-route-label") ?? "";
+        return {
+          pointIndex,
+          label,
+          identity: normalize(label),
+          marker,
+          text: { x: Number(text?.getAttribute("x")), y: Number(text?.getAttribute("y")) },
+        };
+      });
+    const cityLabels = [...document.querySelectorAll(".particle-earth-city")]
+      .filter((element) => element.style.display !== "none")
+      .map((element) => ({
+        name: element.textContent ?? "",
+        identity: normalize(element.textContent ?? ""),
+        lat: Number(element.dataset.cityLat),
+        lon: Number(element.dataset.cityLon),
+        anchor: { x: Number(element.dataset.anchorX), y: Number(element.dataset.anchorY) },
+        text: { x: Number(element.getAttribute("x")), y: Number(element.getAttribute("y")) },
+      }));
+    return {
+      markers,
+      routeLabels,
+      cityLabels,
+      cityLabelCount: Number(host.dataset.journeyCityLabelCount ?? 0),
+      redundantCount: Number(host.dataset.journeyCityLabelRedundantCount ?? 0),
+      visibleRouteLabelCount: Number(host.dataset.journeyRouteVisibleLabelCount ?? 0),
+      devicePixelRatio: window.devicePixelRatio,
+      viewport: { width: host.clientWidth, height: host.clientHeight },
+    };
+  });
+}
+
+/** The invariants that hold in every posture and every stage. */
+function checkLabelArbitrationFrame(sample, where) {
+  // Record identity survives arbitration: five distinct Route Point ids, and the
+  // same-coordinate pair still shares one anchor rather than being jittered.
+  const ids = new Set(sample.markers.map((marker) => marker.routePointId));
+  check(
+    ids.size === sample.markers.length && sample.markers.length === 5,
+    `${where}: ${sample.markers.length} Route Point records carry ${ids.size} distinct ids`,
+  );
+  const first = sample.markers.find((marker) => marker.pointIndex === 0);
+  const twin = sample.markers.find((marker) => marker.pointIndex === 1);
+  if (first && twin && !first.hidden && !twin.hidden) {
+    check(
+      first.anchor.x === twin.anchor.x && first.anchor.y === twin.anchor.y,
+      `${where}: the same-coordinate records were separated to ${JSON.stringify([first.anchor, twin.anchor])}`,
+    );
+  }
+  // A drawn label always belongs to a Route Point that is itself on screen, and
+  // the typography offset never becomes the anchor.
+  for (const label of sample.routeLabels) {
+    check(
+      Boolean(label.marker) && !label.marker.hidden,
+      `${where}: label "${label.label}" is drawn without a visible Route Point`,
+    );
+    check(
+      Boolean(label.marker) && label.marker.temporalVisible,
+      `${where}: label "${label.label}" is drawn for a Route Point the Rewind has not revealed`,
+    );
+    if (label.marker) {
+      // The readability offset is a screen-space constant applied AFTER
+      // projection: bounded, and never a second anchor of its own.
+      check(
+        Math.hypot(label.text.x - label.marker.anchor.x, label.text.y - label.marker.anchor.y) <= 80,
+        `${where}: label "${label.label}" sits ${Math.hypot(label.text.x - label.marker.anchor.x, label.text.y - label.marker.anchor.y).toFixed(1)}px from its Route Point anchor`,
+      );
+      check(
+        label.marker.anchor.x >= 0 && label.marker.anchor.x <= sample.viewport.width
+          && label.marker.anchor.y >= 0 && label.marker.anchor.y <= sample.viewport.height,
+        `${where}: label "${label.label}" escaped the viewport at ${JSON.stringify(label.marker.anchor)}`,
+      );
+    }
+  }
+  // The suppression is vicinity AND identity: no rendered Place Label may repeat
+  // a rendered Route Point label in the same vicinity...
+  for (const city of sample.cityLabels) {
+    const repeat = sample.routeLabels.find((label) => (
+      label.marker
+      && label.identity.length > 0
+      && label.identity === city.identity
+      && Math.hypot(city.anchor.x - label.marker.anchor.x, city.anchor.y - label.marker.anchor.y)
+        <= LABEL_VICINITY_PX
+    ));
+    check(
+      !repeat,
+      `${where}: Place Label "${city.name}" repeats the Route Point label "${repeat?.label}" ${repeat ? Math.hypot(city.anchor.x - repeat.marker.anchor.x, city.anchor.y - repeat.marker.anchor.y).toFixed(1) : ""}px away`,
+    );
+  }
+  // ...and nothing else: the city dataset keeps rendering, and a Place Label
+  // that merely shares a name with a distant Route Point label survives.
+  check(
+    sample.cityLabels.length > 0,
+    `${where}: no Place Label is rendered at all, suppression is too wide`,
+  );
+  check(
+    sample.redundantCount <= 4,
+    `${where}: ${sample.redundantCount} Place Labels were suppressed as repetitions, which is name-level deduplication rather than a vicinity collision`,
+  );
+}
+
 try {
   for (const fixture of FIXTURES) {
     const url = new URL(
@@ -1026,6 +1219,123 @@ try {
         `cache=${sample.coastlineLocalChunkCache}`,
         `state=${sample.coastlineRefinement}`,
       ].join(" "));
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // #374: Route Point labels and Place Labels arbitrate through ONE policy.
+  //
+  // The fixture route is synthetic topology, not an itinerary: two records at
+  // the SAME coordinates, two records that share a label at DIFFERENT
+  // coordinates, and a label that repeats a real Place Label. Nothing here may
+  // remove a city from the dataset, merge two records or move an anchor.
+  // -------------------------------------------------------------------------
+  for (const posture of LABEL_ARBITRATION_POSTURES) {
+    const labelContext = await browser.newContext({
+      viewport: posture.viewport,
+      deviceScaleFactor: posture.deviceScaleFactor,
+      isMobile: posture.compact,
+      hasTouch: posture.compact,
+    });
+    const labelPage = await labelContext.newPage();
+    labelPage.on("console", (message) => {
+      if (message.type() === "error") consoleErrors.push(message.text());
+    });
+    labelPage.on("pageerror", (error) => pageErrors.push(error.message));
+    await labelPage.route("**/api/auth/get-session", (route) => route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: "null",
+    }));
+    try {
+      for (const stage of posture.stages) {
+        await openLabelArbitration(labelPage, posture, stage);
+        const sample = await measureLabelArbitration(labelPage);
+        const where = `${posture.key}/${stage}`;
+        if (sample.error) {
+          check(false, `${where}: ${sample.error}`);
+          continue;
+        }
+        checkLabelArbitrationFrame(sample, where);
+
+        // Determinism: identical input, identical arbitration. A second read of
+        // a still globe that picked a different set would be the flicker the
+        // policy has to prevent.
+        const repeat = await measureLabelArbitration(labelPage);
+        check(
+          !repeat.error
+            && JSON.stringify(repeat.routeLabels.map((label) => label.pointIndex))
+              === JSON.stringify(sample.routeLabels.map((label) => label.pointIndex)),
+          `${where}: the same still frame arbitrated a different label set (${JSON.stringify(sample.routeLabels.map((label) => label.pointIndex))} then ${JSON.stringify(repeat.routeLabels?.map((label) => label.pointIndex))})`,
+        );
+
+        const visible = new Set(sample.routeLabels.map((label) => label.pointIndex));
+        if (posture.compact) {
+          // Stricter mobile density: only the attended record and the route's
+          // own endpoints, never an intermediate.
+          check(
+            sample.routeLabels.length <= 3,
+            `${where}: ${sample.routeLabels.length} route labels exceed the compact budget`,
+          );
+          check(
+            !visible.has(2) && !visible.has(3),
+            `${where}: intermediate labels ${JSON.stringify([...visible])} survived the compact posture`,
+          );
+        } else if (stage === "browse") {
+          // The chosen record wins the shared anchor; its twin keeps its own
+          // record identity without stacking a second name on one place.
+          check(
+            visible.has(1) && !visible.has(0),
+            `${where}: the same-coordinate pair rendered ${JSON.stringify([...visible])} instead of only the chosen record`,
+          );
+          // Same label, different coordinates: both stay.
+          check(
+            visible.has(4),
+            `${where}: the distant Route Point sharing the label "Los Angeles" lost its own label`,
+          );
+        } else if (stage === "current") {
+          check(
+            visible.has(2),
+            `${where}: the narrative current Route Point has no label (${JSON.stringify([...visible])})`,
+          );
+        } else if (stage === "rewound") {
+          check(
+            !visible.has(3) && !visible.has(4),
+            `${where}: a label was revealed ahead of the Rewind (${JSON.stringify([...visible])})`,
+          );
+        }
+        console.log([
+          `[qa-city-label-anchoring] label-arbitration ${where}`,
+          `routeLabels=${JSON.stringify(sample.routeLabels.map((label) => label.pointIndex))}`,
+          `cityLabels=${sample.cityLabelCount}`,
+          `redundant=${sample.redundantCount}`,
+          `dpr=${sample.devicePixelRatio}`,
+        ].join(" "));
+      }
+
+      // Horizon: the fixture route is behind the globe, so it has no label at
+      // all, while Place Labels on the facing hemisphere keep rendering.
+      await openLabelArbitration(labelPage, posture, "browse", LABEL_ARBITRATION_ANTIPODE);
+      const horizon = await measureLabelArbitration(labelPage);
+      if (horizon.error) {
+        check(false, `${posture.key}/horizon: ${horizon.error}`);
+      } else {
+        check(
+          horizon.routeLabels.length === 0,
+          `${posture.key}/horizon: ${horizon.routeLabels.length} route labels are drawn for a route behind the horizon`,
+        );
+        check(
+          horizon.cityLabelCount > 0,
+          `${posture.key}/horizon: the facing hemisphere rendered no Place Label`,
+        );
+        checkLabelArbitrationFrame(horizon, `${posture.key}/horizon`);
+      }
+      await labelPage.screenshot({
+        path: `artifacts/label-arbitration/${posture.key}.png`,
+        fullPage: false,
+      });
+    } finally {
+      await labelContext.close();
     }
   }
 

@@ -68,8 +68,19 @@ import {
   resolveRouteAttentionRole,
   resolveRoutePointPresentation,
   routePointMarkerRadiusPx,
+  type RoutePointPresentation,
   type RoutePointSelection,
 } from "./routePresentation";
+import {
+  arbitrateRouteLabels,
+  isCoincidentLabelAnchor,
+  isPlaceLabelRedundant,
+  normalizeLabelIdentity,
+  routeLabelPositionRole,
+  type PlacedRouteLabel,
+  type RouteLabelCandidate,
+  type RouteLabelPositionRole,
+} from "./labelArbitration";
 import {
   resolveRouteArcLift,
   routeArcPixelsPerWorldUnit,
@@ -288,6 +299,13 @@ export function resolveRouteVertexShare(
 }
 
 export const MAX_RENDERED_ROUTE_LABELS = 6;
+/**
+ * #374: label elements prepared for the chosen Journey. Attention moves without
+ * rebuilding this layer, so the pool is wider than the rendered budget while
+ * staying bounded; the per-frame arbitration still renders at most
+ * `resolveRouteLabelLimit(...)` of them.
+ */
+export const MAX_ROUTE_LABEL_CANDIDATES = 24;
 export const MAX_RENDERED_MOBILE_ROUTE_LABELS = 3;
 export const CITY_LABEL_BUDGET = 72;
 export const MAX_RENDERED_COASTLINE_VERTICES = 20_000;
@@ -2486,7 +2504,9 @@ export function ParticleEarthScene({
       leader: SVGPathElement;
       text: SVGTextElement;
       width: number;
-      priority: number;
+      positionRole: RouteLabelPositionRole;
+      /** Normalized Route Point label identity, for Place Label arbitration. */
+      identity: string;
       pointIndex: number;
     };
     type RouteVectorEntry = {
@@ -2512,12 +2532,46 @@ export function ParticleEarthScene({
         routePointId?: string;
         isStop: boolean;
         label?: RouteVectorLabel;
+        /** The Route Point's own label text, kept so a label element can be
+         *  created later when attention moves to a point the build-time
+         *  candidate set did not cover. */
+        labelText?: string;
+        /** #374: the presentation roles this frame's label arbitration reads.
+         *  Produced once by `resolveRoutePointPresentation`, never re-derived. */
+        presentation: RoutePointPresentation;
         // #21: the route point's index inside its journey, for per-point
         // temporal reveal ("one stop lights up at a time").
         routePointIndex: number;
       }>;
     };
     let routeVectorEntries: RouteVectorEntry[] = [];
+    const createRouteVectorLabel = (
+      labelText: string,
+      pointIndex: number,
+      positionRole: RouteLabelPositionRole,
+    ): RouteVectorLabel => {
+      const labelElement = document.createElementNS("http://www.w3.org/2000/svg", "g");
+      labelElement.classList.add("particle-earth-route__label");
+      const leader = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      leader.classList.add("particle-earth-route__leader");
+      const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      const displayLabel = formatRouteLabel(labelText);
+      text.textContent = displayLabel;
+      labelElement.setAttribute("data-route-label", displayLabel);
+      labelElement.dataset.routePointIndex = String(pointIndex);
+      labelElement.append(leader, text);
+      return {
+        element: labelElement,
+        leader,
+        text,
+        width: estimateRouteLabelWidth(displayLabel),
+        positionRole,
+        // The Route Point's own text, not the truncated display form: an
+        // ellipsis must not change which place a label claims.
+        identity: normalizeLabelIdentity(labelText),
+        pointIndex,
+      };
+    };
     const syncRoutePresentations = () => {
       for (const entry of routeVectorEntries) {
         const routeAttention = resolveRouteAttentionRole({
@@ -2536,12 +2590,35 @@ export function ParticleEarthScene({
             narrativeSelection: latestNarrativeJourneyRoutePoint.current,
             temporalReveal: latestTemporalReveal.current,
           });
+          point.presentation = presentation;
           point.element.dataset.semanticRole = presentation.semanticRole;
           point.element.dataset.attentionRole = presentation.attentionRole;
           point.element.dataset.temporalVisible = presentation.temporalVisible ? "true" : "false";
           point.element.setAttribute("r", String(routePointMarkerRadiusPx(presentation)));
+          // #374: attention can land on a Route Point the build-time candidate
+          // pool did not cover. Prepare its label element then - lazily and
+          // still bounded - rather than rebuilding the whole route layer.
+          if (
+            !point.label
+            && point.labelText
+            && presentation.attentionRole !== "ordinary"
+            && entry.points.filter((candidate) => candidate.label).length
+              < MAX_ROUTE_LABEL_CANDIDATES
+          ) {
+            point.label = createRouteVectorLabel(
+              point.labelText,
+              point.routePointIndex,
+              routeLabelPositionRole(point.routePointIndex, entry.points.length),
+            );
+            point.label.element.style.display = "none";
+            entry.group.appendChild(point.label.element);
+          }
         }
       }
+      // Label visibility is now a function of attention and temporal state, so
+      // a selection change has to re-run the projection pass even when the
+      // camera has not moved.
+      routeProjectionRevision += 1;
     };
     let routeVectorOpacity = 0;
     const sceneToken = Math.random().toString(36).slice(2, 8);
@@ -2734,8 +2811,13 @@ export function ParticleEarthScene({
         corePath.setAttribute("stroke", route.color);
         group.append(glowPath, corePath, leaderPath);
         const vectorPoints: RouteVectorEntry["points"] = [];
+        // #374: which labels are DRAWN is decided per frame from attention and
+        // available space, so the build only prepares a bounded candidate pool.
+        // It is wider than the rendered budget - a Route Point that becomes the
+        // chosen record or the narrative current point must already own a label
+        // element, because selection does not rebuild this layer.
         const routeLabelIndexes = route.id === latestActiveJourneyRouteId.current
-          ? selectRouteLabelPointIndexes(route.points)
+          ? selectRouteLabelPointIndexes(route.points, MAX_ROUTE_LABEL_CANDIDATES)
           : [];
         const routeLabelIndexSet = new Set(routeLabelIndexes);
         const routeLabelElements: SVGGElement[] = [];
@@ -2791,38 +2873,15 @@ export function ParticleEarthScene({
           element.dataset.temporalVisible = presentation.temporalVisible ? "true" : "false";
           element.setAttribute("r", String(routePointMarkerRadiusPx(presentation)));
           group.appendChild(element);
+          const labelText = point.label?.trim() ? point.label : undefined;
           let label: RouteVectorLabel | undefined;
-          if (routeLabelIndexSet.has(routePointIndex) && point.label?.trim()) {
-            const labelElement = document.createElementNS(
-              "http://www.w3.org/2000/svg",
-              "g",
+          if (routeLabelIndexSet.has(routePointIndex) && labelText) {
+            label = createRouteVectorLabel(
+              labelText,
+              routePointIndex,
+              routeLabelPositionRole(routePointIndex, route.points.length),
             );
-            labelElement.classList.add("particle-earth-route__label");
-            const leader = document.createElementNS(
-              "http://www.w3.org/2000/svg",
-              "path",
-            );
-            leader.classList.add("particle-earth-route__leader");
-            const text = document.createElementNS(
-              "http://www.w3.org/2000/svg",
-              "text",
-            );
-            const displayLabel = formatRouteLabel(point.label);
-            text.textContent = displayLabel;
-            labelElement.setAttribute("data-route-label", displayLabel);
-            labelElement.append(leader, text);
-            routeLabelElements.push(labelElement);
-            label = {
-              element: labelElement,
-              leader,
-              text,
-              width: estimateRouteLabelWidth(displayLabel),
-              priority: routePointIndex === routeLabelIndexes[0]
-                || routePointIndex === routeLabelIndexes.at(-1)
-                ? 2
-                : 1,
-              pointIndex: routePointIndex,
-            };
+            routeLabelElements.push(label.element);
             routeLabelCount += 1;
           }
           vectorPoints.push({
@@ -2831,6 +2890,8 @@ export function ParticleEarthScene({
             routePointId: point.id,
             isStop: point.isStop,
             label,
+            labelText,
+            presentation,
             routePointIndex,
           });
         });
@@ -3186,6 +3247,10 @@ export function ParticleEarthScene({
       updateGeoProjectionFrame(geoFrame, camera, globe.matrixWorld, targetSize.x, targetSize.y);
 
       const labelBoxes: ProjectedRouteLabelBox[] = [];
+      // #374: the Route Point labels that actually claimed screen space this
+      // frame, with the projected anchor each one claims. Place Label
+      // arbitration below reads this instead of guessing from glyph boxes.
+      const placedRouteLabels: PlacedRouteLabel[] = [];
       const labelLimit = resolveRouteLabelLimit(currentCompactMobileLayout);
       let visibleLabelCount = 0;
 
@@ -3224,12 +3289,13 @@ export function ParticleEarthScene({
           if (legPath.end) projectedLegEnds.push([leg.toPointIndex, legPath.end]);
         }
         const projectedMarkers = new Map<number, ProjectedRoutePoint>();
-        const labelCandidates: Array<{
+        const labelCandidates = new Map<number, {
           label: RouteVectorLabel;
           x: number;
           y: number;
-        }> = [];
-        entry.points.forEach(({ element, position, label, routePointIndex }) => {
+        }>();
+        const arbitrationCandidates: RouteLabelCandidate[] = [];
+        entry.points.forEach(({ element, position, label, presentation, routePointIndex }) => {
           if (!projectRoutePoint(
             position.x,
             position.y,
@@ -3253,10 +3319,18 @@ export function ParticleEarthScene({
           element.dataset.anchorY = routeProjectedPoint.y.toFixed(2);
           element.dataset.routePointIndex = String(routePointIndex);
           if (label) {
-            labelCandidates.push({
+            // #374: the label reads the SAME projected anchor as its marker.
+            // The screen-space typography offset is applied below, after the
+            // arbitration, and never travels back into a coordinate.
+            labelCandidates.set(routePointIndex, {
               label,
               x: routeProjectedPoint.x,
               y: routeProjectedPoint.y,
+            });
+            arbitrationCandidates.push({
+              pointIndex: routePointIndex,
+              positionRole: label.positionRole,
+              presentation,
             });
           }
         });
@@ -3274,11 +3348,15 @@ export function ParticleEarthScene({
           );
         }
 
-        labelCandidates
-          .sort((left, right) => (
-            right.label.priority - left.label.priority
-            || left.label.pointIndex - right.label.pointIndex
-          ))
+        // #374: every prepared label starts hidden, so a point that lost its
+        // turn this frame cannot keep a stale placement on screen.
+        for (const { label } of labelCandidates.values()) {
+          label.element.style.display = "none";
+        }
+        arbitrateRouteLabels(arbitrationCandidates, {
+          compactMobileLayout: currentCompactMobileLayout,
+        })
+          .map((pointIndex) => labelCandidates.get(pointIndex)!)
           .forEach(({ label, x, y }) => {
             if (
               visibleLabelCount >= labelLimit
@@ -3287,7 +3365,13 @@ export function ParticleEarthScene({
               || y < 0
               || y > targetSize.y
             ) {
-              label.element.style.display = "none";
+              return;
+            }
+            // Route Points recorded at the same coordinates share one anchor.
+            // They remain separate records with their own identity; only the
+            // higher-priority label is drawn, instead of stacking two names on
+            // one place or nudging an anchor apart.
+            if (placedRouteLabels.some((placed) => isCoincidentLabelAnchor(placed.anchor, { x, y }))) {
               return;
             }
             const preferredHorizontal = x + label.width + 38 <= routeLabelSafeArea.right
@@ -3328,10 +3412,7 @@ export function ParticleEarthScene({
               placement = { box, horizontal, vertical, textX, textY };
               break;
             }
-            if (!placement) {
-              label.element.style.display = "none";
-              return;
-            }
+            if (!placement) return;
 
             const elbowX = x + placement.horizontal * 10;
             const elbowY = y + placement.vertical * 10;
@@ -3351,6 +3432,7 @@ export function ParticleEarthScene({
             );
             label.element.style.removeProperty("display");
             labelBoxes.push(placement.box);
+            placedRouteLabels.push({ identity: label.identity, anchor: { x, y } });
             visibleLabelCount += 1;
           });
 
@@ -3468,6 +3550,7 @@ export function ParticleEarthScene({
         const cityLabelLocale = "zh-CN";
         const cityBoxes: ProjectedRouteLabelBox[] = [];
         let visibleCityCount = 0;
+        let redundantCityLabelCount = 0;
         for (let index = 0; index < cities.length; index += 1) {
           if (visibleCityCount >= CITY_LABEL_BUDGET) break;
           const city = cities[index];
@@ -3498,8 +3581,19 @@ export function ParticleEarthScene({
             right: textX + estimateCityLabelWidth(displayName),
             bottom: textY + 2,
           };
+          // #374: a Place Label can miss every box and still repeat the Route
+          // Point label a few pixels away. Suppress only that repetition -
+          // equivalent name AND the same vicinity on screen. The city stays in
+          // the dataset and returns as soon as the route label moves away.
+          const redundantWithRouteLabel = isPlaceLabelRedundant({
+            names: [city.name, city.localizedName, displayName],
+            anchor: { x: routeProjectedPoint.x, y: routeProjectedPoint.y },
+            placedRouteLabels,
+          });
+          if (redundantWithRouteLabel) redundantCityLabelCount += 1;
           if (
-            cityBoxes.some((candidate) => routeLabelBoxesOverlap(candidate, box, 4))
+            redundantWithRouteLabel
+            || cityBoxes.some((candidate) => routeLabelBoxesOverlap(candidate, box, 4))
             || labelBoxes.some((candidate) => routeLabelBoxesOverlap(candidate, box, 4))
           ) {
             entry.element.style.display = "none";
@@ -3528,6 +3622,11 @@ export function ParticleEarthScene({
           cityLabelPool[index].city = null;
         }
         host.dataset.journeyCityLabelCount = String(visibleCityCount);
+        // #374 QA read-back: how many Place Labels this frame dropped as a
+        // repetition of a drawn Route Point label. It reads 0 whenever no route
+        // label names a nearby city, so a regression that starts deduplicating
+        // by name alone is visible without inspecting glyphs.
+        host.dataset.journeyCityLabelRedundantCount = String(redundantCityLabelCount);
       }
 
       updateJourneyConnector();
