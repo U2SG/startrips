@@ -722,17 +722,25 @@ export async function verifyAccountEmailChangeNewAddress(values: {
 export async function cancelAccountEmailChange(values: {
   userId: string;
   sessionId: string;
+  changeId?: string;
   now?: Date;
 }) {
   const now = values.now ?? new Date();
   const outcome = await db.transaction(async (transaction) => {
+    const filter = values.changeId
+      ? and(
+        eq(accountEmailChanges.id, values.changeId),
+        eq(accountEmailChanges.userId, values.userId),
+        eq(accountEmailChanges.status, "pending"),
+      )
+      : and(
+        eq(accountEmailChanges.userId, values.userId),
+        eq(accountEmailChanges.status, "pending"),
+      );
     const [change] = await transaction
       .select()
       .from(accountEmailChanges)
-      .where(and(
-        eq(accountEmailChanges.userId, values.userId),
-        eq(accountEmailChanges.status, "pending"),
-      ))
+      .where(filter)
       .orderBy(desc(accountEmailChanges.createdAt))
       .for("update")
       .limit(1);

@@ -148,6 +148,7 @@ export function createAccountEmailChangeRoutes(
         await cancelAccountEmailChange({
           userId: session.user.id,
           sessionId: session.session.id,
+          changeId: result.change.id,
         });
         return context.json({ error: "EMAIL_CHANGE_DELIVERY_FAILED" }, 503);
       }

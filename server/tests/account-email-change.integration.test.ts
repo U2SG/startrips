@@ -322,6 +322,27 @@ describe("account email-change transaction", () => {
       now: new Date(TEST_NOW.getTime() + 33_000),
     });
 
+    // Delivery compensation for the older request must target that exact row.
+    // Once a newer start replaced it, the compensation is a no-op and cannot
+    // cancel the newer transaction that already delivered its own proofs.
+    const obsoleteCompensation = await cancelAccountEmailChange({
+      userId: fixture.userId,
+      sessionId: fixture.sessionIds[0]!,
+      changeId: first.change.id,
+      now: new Date(TEST_NOW.getTime() + 33_500),
+    });
+    expect(obsoleteCompensation).toBeNull();
+    expect(await db.select({
+      id: accountEmailChanges.id,
+      status: accountEmailChanges.status,
+    }).from(accountEmailChanges).where(eq(
+      accountEmailChanges.id,
+      second.change.id,
+    ))).toEqual([{
+      id: second.change.id,
+      status: "pending",
+    }]);
+
     await expect(confirmAccountEmailChangeOldAddress({
       userId: fixture.userId,
       sessionId: fixture.sessionIds[0]!,
