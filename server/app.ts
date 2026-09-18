@@ -24,6 +24,7 @@ import { homeBaseRoutes } from "./routes/home-bases";
 import { journeyRoutes } from "./routes/journeys";
 import { locationRoutes } from "./routes/locations";
 import { mapStyleRoutes } from "./routes/mapstyle";
+import { mediaEvidenceRoutes } from "./routes/media-evidence";
 import { shareRoutes, sharedRoutes } from "./routes/shares";
 import { uploadRoutes } from "./routes/uploads";
 import { StorageUnavailableError } from "./storage/multipart-storage";
@@ -89,6 +90,9 @@ app.route("/api/everyday-fragments", everydayFragmentRoutes);
 app.route("/api/journeys", journeyRoutes);
 app.route("/api/locations", locationRoutes);
 app.route("/api/mapstyle", mapStyleRoutes);
+// #388: owner-only durable spatial/time evidence for one existing media asset.
+// Guest/share paths stay separate and never mount this mutation/read surface.
+app.route("/api/media-evidence", mediaEvidenceRoutes);
 // #200: owner-authorized share management, and the guest capability path kept
 // deliberately separate so no route can serve both an Atlas member and a
 // bearer token.

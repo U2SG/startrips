@@ -336,6 +336,120 @@ export const mediaAssets = pgTable(
   ],
 );
 
+// #388: one durable evidence row per media asset. The asset remains owned by
+// its Journey or Everyday Fragment in media_assets; this row never owns or
+// reclassifies it. Recorded evidence is immutable-by-meaning input from a
+// normalizer, while display correction/hide is a separate member decision.
+// The effective display value is derived by the service instead of stored a
+// third time where it could drift from those two truths.
+export const mediaAssetEvidence = pgTable(
+  "media_asset_evidence",
+  {
+    mediaAssetId: uuid("media_asset_id")
+      .primaryKey()
+      .references(() => mediaAssets.id, { onDelete: "cascade" }),
+    spatialSource: text("spatial_source").notNull().default("unknown"),
+    spatialGranularity: text("spatial_granularity").notNull().default("unknown"),
+    latitude: doublePrecision("latitude"),
+    longitude: doublePrecision("longitude"),
+    accuracyMeters: doublePrecision("accuracy_meters"),
+    spatialLabel: text("spatial_label"),
+    captureTimeSource: text("capture_time_source").notNull().default("unknown"),
+    timezoneState: text("timezone_state").notNull().default("unknown"),
+    capturedLocal: text("captured_local"),
+    capturedAtUtc: timestamp("captured_at_utc", { withTimezone: true }),
+    capturedOffsetMinutes: integer("captured_offset_minutes"),
+    displayHidden: boolean("display_hidden").notNull().default(false),
+    correctionGranularity: text("correction_granularity"),
+    correctionLatitude: doublePrecision("correction_latitude"),
+    correctionLongitude: doublePrecision("correction_longitude"),
+    correctionLabel: text("correction_label"),
+    revision: integer("revision").notNull().default(1),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    check(
+      "media_asset_evidence_spatial_source_check",
+      sql`${table.spatialSource} in ('exif', 'container-metadata', 'imported', 'unknown')`,
+    ),
+    check(
+      "media_asset_evidence_spatial_shape_check",
+      sql`(
+        (${table.spatialGranularity} = 'coordinate'
+          and ${table.spatialSource} <> 'unknown'
+          and ${table.latitude} between -90 and 90
+          and ${table.longitude} between -180 and 180
+          and ${table.spatialLabel} is null
+          and (${table.accuracyMeters} is null
+            or ${table.accuracyMeters} between 0 and 1000000))
+        or
+        (${table.spatialGranularity} = 'city'
+          and ${table.spatialSource} <> 'unknown'
+          and ${table.latitude} is null and ${table.longitude} is null
+          and ${table.accuracyMeters} is null and ${table.spatialLabel} is not null)
+        or
+        (${table.spatialGranularity} = 'unknown'
+          and ${table.spatialSource} = 'unknown'
+          and ${table.latitude} is null and ${table.longitude} is null
+          and ${table.accuracyMeters} is null and ${table.spatialLabel} is null)
+      )`,
+    ),
+    check(
+      "media_asset_evidence_capture_source_check",
+      sql`${table.captureTimeSource} in ('exif-original', 'exif-digitized', 'gps', 'container-metadata', 'imported', 'unknown')`,
+    ),
+    check(
+      "media_asset_evidence_capture_shape_check",
+      sql`(
+        (${table.timezoneState} = 'offset-known'
+          and ${table.captureTimeSource} <> 'unknown'
+          and ${table.capturedLocal} is not null
+          and ${table.capturedAtUtc} is not null
+          and ${table.capturedOffsetMinutes} between -840 and 840)
+        or
+        (${table.timezoneState} = 'local-only'
+          and ${table.captureTimeSource} <> 'unknown'
+          and ${table.capturedLocal} is not null
+          and ${table.capturedAtUtc} is null
+          and ${table.capturedOffsetMinutes} is null)
+        or
+        (${table.timezoneState} = 'unknown'
+          and ${table.captureTimeSource} = 'unknown'
+          and ${table.capturedLocal} is null
+          and ${table.capturedAtUtc} is null
+          and ${table.capturedOffsetMinutes} is null)
+      )`,
+    ),
+    check(
+      "media_asset_evidence_correction_shape_check",
+      sql`(
+        (${table.correctionGranularity} is null
+          and ${table.correctionLatitude} is null
+          and ${table.correctionLongitude} is null
+          and ${table.correctionLabel} is null)
+        or
+        (${table.correctionGranularity} = 'coordinate'
+          and ${table.correctionLatitude} between -90 and 90
+          and ${table.correctionLongitude} between -180 and 180)
+        or
+        (${table.correctionGranularity} = 'city'
+          and ${table.correctionLatitude} is null
+          and ${table.correctionLongitude} is null
+          and ${table.correctionLabel} is not null)
+      )`,
+    ),
+    check(
+      "media_asset_evidence_revision_check",
+      sql`${table.revision} >= 1`,
+    ),
+  ],
+);
+
 // #200: an expiring read-only capability over an explicit Journey set. The
 // raw bearer token is never stored; only its SHA-256 hash, which is what the
 // guest request is resolved by. Atlas deletion cascades the grants away, so a
