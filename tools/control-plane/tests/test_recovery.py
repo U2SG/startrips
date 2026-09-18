@@ -43,6 +43,50 @@ class ProcessClassificationCases(unittest.TestCase):
         conflict = execution.competitors(rows, self.root, 3, lane='backend')[0]
         self.assertEqual(10, conflict['pid']); self.assertEqual('backend', conflict['lane'])
 
+    def experience_loop(self, pid, feature, worktree):
+        token = base64.urlsafe_b64encode(str(worktree).encode('utf-8')).decode('ascii').rstrip('=')
+        return process(pid, command=(
+            'bash ' + str(self.root / 'run-loop.sh')
+            + f' --carrier-lane=experience --carrier-token=experience-token-{pid:04d}'
+            + f' --carrier-feature={feature} --carrier-worktree64={token}'))
+
+    def test_one_scoped_experience_owner_leaves_second_slot_available(self):
+        first = str((self.root / 'experience-one').resolve())
+        second = str((self.root / 'experience-two').resolve())
+        rows = self.base + [self.experience_loop(10, 'ST-080', first)]
+        self.assertEqual([], execution.competitors(rows, self.root, 3, lane='experience',
+                                                   feature='ST-081', worktree=second))
+        occupancy = execution.lane_occupancy(rows, self.root, 3, 'experience')
+        self.assertEqual((1, 1, ['ST-080']),
+                         (occupancy['occupied_slots'], occupancy['available_slots'], occupancy['features']))
+
+    def test_two_scoped_experience_owners_fill_lane_capacity(self):
+        first = str((self.root / 'experience-one').resolve())
+        second = str((self.root / 'experience-two').resolve())
+        third = str((self.root / 'experience-three').resolve())
+        rows = self.base + [
+            self.experience_loop(10, 'ST-080', first),
+            self.experience_loop(11, 'ST-081', second),
+        ]
+        conflicts = execution.competitors(rows, self.root, 3, lane='experience',
+                                          feature='ST-082', worktree=third)
+        self.assertEqual({10, 11}, {row['pid'] for row in conflicts})
+        occupancy = execution.lane_occupancy(rows, self.root, 3, 'experience')
+        self.assertEqual((2, 0), (occupancy['occupied_slots'], occupancy['available_slots']))
+
+    def test_same_experience_scope_still_blocks_duplicate_owner(self):
+        first = str((self.root / 'experience-one').resolve())
+        rows = self.base + [self.experience_loop(10, 'ST-080', first)]
+        conflict = execution.competitors(rows, self.root, 3, lane='experience',
+                                         feature='ST-080', worktree=first)[0]
+        self.assertEqual((10, 'ST-080'), (conflict['pid'], conflict['feature']))
+
+    def test_experience_claim_transition_is_serialized(self):
+        rows = self.base + [process(10, command='bash ' + str(self.root / 'run-loop.sh')
+                                    + ' --carrier-lane=experience --carrier-token=experience-claim-0010')]
+        conflict = execution.competitors(rows, self.root, 3, lane='experience')[0]
+        self.assertEqual(10, conflict['pid'])
+
     def test_encoded_worker_marker_in_other_lane_does_not_block(self):
         backend = 'C:/owners/backend'
         token = base64.urlsafe_b64encode(backend.encode('utf-8')).decode('ascii').rstrip('=')

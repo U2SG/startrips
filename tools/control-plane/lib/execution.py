@@ -15,6 +15,7 @@ from feature_store import StoreConflict, _storage_mutex
 from github_evidence import EvidenceUnknown
 
 STOPS = ('AGENT_STOP', 'SUPERVISOR_STOP', 'CANCEL_SCHEDULED_RESTART')
+LANE_CAPACITY = {'backend': 1, 'experience': 2}
 
 
 def stopped(root, lane=None):
@@ -229,13 +230,8 @@ def decode_worktree64(token):
     return worktree_key(value)
 
 
-def competitors(rows, root, self_pid, lane=None, feature=None, worktree=None, worktree64=None):
-    if lane not in {None, 'backend', 'experience'}:
-        raise ValueError('Execution lane must be backend, experience or omitted')
-    if worktree is not None and worktree64 is not None:
-        raise ValueError('Specify owner worktree once')
-    wanted_feature = feature.upper() if isinstance(feature, str) and feature else None
-    wanted_worktree = decode_worktree64(worktree64) if worktree64 is not None else normalize_worktree(worktree)
+def _observed_executions(rows, root, self_pid):
+    """Return provider-visible execution carriers after exact self exclusion."""
     by_pid = {r['pid']: r for r in rows}
     if self_pid not in by_pid:
         raise EvidenceUnknown('Caller absent from process snapshot; ancestry unproven')
@@ -244,8 +240,6 @@ def competitors(rows, root, self_pid, lane=None, feature=None, worktree=None, wo
         ancestors.add(pid)
         pid = by_pid.get(pid, {}).get('ppid', 0)
     canonical = str(Path(root).resolve()).replace('\\', '/').lower()
-    # Preserve the spelling handed to the process as well as its real path:
-    # native Windows argv can retain an 8.3 spelling that resolve() expands.
     original = str(Path(root).absolute()).replace('\\', '/').lower()
     aliases = {canonical, original}
     mine = published()
@@ -254,7 +248,8 @@ def competitors(rows, root, self_pid, lane=None, feature=None, worktree=None, wo
     for spelling in tuple(aliases):
         if re.match(r'^[a-z]:/', spelling):
             aliases.add('/' + spelling[0] + spelling[2:])
-    found = []
+
+    observed = []
     for row in rows:
         if row['pid'] in ancestors:
             continue
@@ -262,23 +257,21 @@ def competitors(rows, root, self_pid, lane=None, feature=None, worktree=None, wo
         basename = name[:-4] if name.endswith('.exe') else name
         if basename not in {'bash', 'sh', 'claude', 'codex', 'node', 'nodejs'}:
             continue
-        # Strong self identity must be evaluated BEFORE CommandLine readability.
-        # PID alone is reusable; PID+CreationDate is exact. The token cluster is
-        # separately anchored by a readable same-token carrier in this snapshot.
         if row.get('started') and mine.get(row['pid']) == row.get('started'):
             continue
         if row['pid'] in own_cluster:
             continue
+
         raw_command = row.get('command')
         inherited_lane = lineage_lane(row, by_pid)
         if not isinstance(raw_command, str) or not raw_command.strip():
-            # Lane ancestry alone never proves owner scope. A transiently empty
-            # command is sampled once more by ensure_idle(); a genuinely unreadable
-            # carrier remains fail-closed even when its ancestor lane is known.
-            found.append({'pid': row['pid'], 'ppid': row['ppid'],
-                          'kind': 'unknown-carrier', 'state': 'unknown-command',
-                          'lane': inherited_lane or 'unknown'})
+            observed.append({'pid': row['pid'], 'ppid': row['ppid'],
+                             'kind': 'unknown-carrier', 'state': 'unknown-command',
+                             'lane': inherited_lane or 'unknown', 'feature': None,
+                             'worktree': None, 'token': None,
+                             'scope_marker': False, 'scope_complete': False})
             continue
+
         command = raw_command.replace('\\', '/').lower()
         is_loop = bool(re.search(r'(?:^|[\s"/])(?:run-loop|loop-supervisor)[.]sh(?:[\s"\x00]|$)', command))
         is_child = 'startrips_execution_owner=' in command
@@ -288,31 +281,127 @@ def competitors(rows, root, self_pid, lane=None, feature=None, worktree=None, wo
                             for alias in aliases)
         if is_child and not explicit_root:
             continue
-        # Inspect the SCRIPT argument, not whether the executable has an absolute
-        # path. Windows commonly launches an absolute bash.exe with ./run-loop.sh.
-        # Its cwd is then unknown, never evidence that the old execution ended.
         script = re.search(r'(?:^|\s)(?:"([^"]*(?:run-loop|loop-supervisor)[.]sh)"|([^\s"\']*(?:run-loop|loop-supervisor)[.]sh))(?=\s|$)', command)
         argument = next((part for part in script.groups() if part), '') if script else ''
         absolute_script = bool(re.match(r'^(?:[a-z]:/|/)', argument))
         if not explicit_root and absolute_script:
             continue
+
         carrier_lane = command_lane(raw_command) or inherited_lane
         carrier_feature, carrier_worktree = command_scope(raw_command)
         scope_marker = bool(re.search(
             r'(?:^|[;\s"])(?:--carrier-)?(?:feature|worktree|worktree64)=', raw_command, re.I))
         scope_complete = carrier_feature is not None and carrier_worktree is not None
-        same_scope = bool((wanted_feature and carrier_feature == wanted_feature)
-                          or (wanted_worktree and carrier_worktree == wanted_worktree))
-        cross_lane = bool(lane and carrier_lane and carrier_lane != lane)
-        if cross_lane and not same_scope and (not scope_marker or scope_complete):
+        observed.append({
+            'pid': row['pid'], 'ppid': row['ppid'],
+            'kind': 'worker' if is_child else 'loop',
+            'state': 'active' if explicit_root else 'unknown-cwd',
+            'lane': carrier_lane or 'unknown',
+            'feature': carrier_feature, 'worktree': carrier_worktree,
+            'token': command_token(raw_command),
+            'scope_marker': scope_marker, 'scope_complete': scope_complete,
+        })
+    return observed
+
+
+def _public_record(record, *, state=None):
+    return {
+        'pid': record['pid'], 'ppid': record['ppid'], 'kind': record['kind'],
+        'state': state or record['state'], 'lane': record['lane'],
+        'feature': record.get('feature'), 'worktree': record.get('worktree'),
+    }
+
+
+def lane_occupancy(rows, root, self_pid, lane):
+    """Return distinct live owner scopes for one lane without creating a registry."""
+    if lane not in LANE_CAPACITY:
+        raise ValueError('Execution lane must be backend or experience')
+    scoped, claims, unknown = {}, {}, []
+    for record in _observed_executions(rows, root, self_pid):
+        if record['state'] == 'unknown-command' or record['lane'] == 'unknown':
+            unknown.append(_public_record(record))
             continue
-        found.append({'pid': row['pid'], 'ppid': row['ppid'],
-                      'kind': 'worker' if is_child else 'loop',
-                      'state': ('unknown-scope' if cross_lane and scope_marker and not scope_complete
-                                else ('active' if explicit_root else 'unknown-cwd')),
-                      'lane': carrier_lane or 'unknown',
-                      'feature': carrier_feature, 'worktree': carrier_worktree})
-    return found
+        if record['lane'] != lane:
+            continue
+        if record['scope_complete']:
+            key = (record['feature'], record['worktree'])
+            scoped.setdefault(key, record)
+        elif record['token']:
+            claims.setdefault(record['token'], record)
+        else:
+            unknown.append(_public_record(record, state='unknown-scope'))
+    if unknown:
+        raise EvidenceUnknown('Execution occupancy is unknown: ' + json.dumps(unknown))
+    scoped_tokens = {record['token'] for record in scoped.values() if record.get('token')}
+    claims = {token: record for token, record in claims.items() if token not in scoped_tokens}
+    used = len(scoped) + len(claims)
+    return {
+        'lane': lane,
+        'capacity': LANE_CAPACITY[lane],
+        'occupied_slots': used,
+        'available_slots': max(0, LANE_CAPACITY[lane] - used),
+        'features': sorted({feature for feature, _ in scoped}),
+        'worktrees': sorted({worktree for _, worktree in scoped}),
+        'claim_count': len(claims),
+    }
+
+
+def competitors(rows, root, self_pid, lane=None, feature=None, worktree=None, worktree64=None):
+    if lane not in {None, 'backend', 'experience'}:
+        raise ValueError('Execution lane must be backend, experience or omitted')
+    if worktree is not None and worktree64 is not None:
+        raise ValueError('Specify owner worktree once')
+    wanted_feature = feature.upper() if isinstance(feature, str) and feature else None
+    wanted_worktree = decode_worktree64(worktree64) if worktree64 is not None else normalize_worktree(worktree)
+    conflicts, same_lane_scoped, same_lane_claims = [], {}, {}
+
+    for record in _observed_executions(rows, root, self_pid):
+        if record['state'] == 'unknown-command':
+            conflicts.append(_public_record(record))
+            continue
+        carrier_lane = record['lane']
+        if lane is None or carrier_lane == 'unknown':
+            conflicts.append(_public_record(record))
+            continue
+        same_scope = bool((wanted_feature and record.get('feature') == wanted_feature)
+                          or (wanted_worktree and record.get('worktree') == wanted_worktree))
+        if carrier_lane != lane:
+            if same_scope:
+                conflicts.append(_public_record(record))
+            elif record['scope_marker'] and not record['scope_complete']:
+                conflicts.append(_public_record(record, state='unknown-scope'))
+            continue
+
+        if lane == 'backend':
+            conflicts.append(_public_record(record))
+            continue
+
+        # Experience has two logical owner slots. Distinct fully-scoped owners can
+        # coexist; a same-scope owner is always a duplicate. Unscoped claims are
+        # serialized so two selectors can never race for the same next feature.
+        if same_scope:
+            conflicts.append(_public_record(record))
+        elif record['scope_complete']:
+            same_lane_scoped.setdefault((record['feature'], record['worktree']), record)
+        elif record['token']:
+            same_lane_claims.setdefault(record['token'], record)
+        else:
+            conflicts.append(_public_record(record, state='unknown-scope'))
+
+    if lane == 'experience':
+        scoped_tokens = {record['token'] for record in same_lane_scoped.values() if record.get('token')}
+        same_lane_claims = {
+            token: record for token, record in same_lane_claims.items()
+            if token not in scoped_tokens
+        }
+        # Only one selector/claim transition runs at once. Once scoped, up to two
+        # different Experience owners may execute concurrently.
+        conflicts.extend(_public_record(record) for record in same_lane_claims.values())
+        if len(same_lane_scoped) >= LANE_CAPACITY['experience']:
+            conflicts.extend(_public_record(record) for record in same_lane_scoped.values())
+
+    return conflicts
+
 
 
 def ensure_idle(root, lane=None, feature=None, worktree=None, worktree64=None):
@@ -421,7 +510,7 @@ def outage_window(root, mode):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('action', choices=['check', 'permission', 'resume', 'outage-pause',
+    parser.add_argument('action', choices=['check', 'occupied', 'permission', 'resume', 'outage-pause',
                                            'outage-resume', 'identity'])
     parser.add_argument('root', type=Path)
     parser.add_argument('pids', nargs='*', type=int)
@@ -435,6 +524,10 @@ def main():
         if args.action == 'identity':
             print(identity(args.pids)); return 0
         if args.action == 'permission': result = permission_probe(args.root)
+        elif args.action == 'occupied':
+            if report_lane not in LANE_CAPACITY:
+                raise ValueError('occupied requires an explicit execution lane')
+            result = lane_occupancy(snapshot(), args.root, os.getpid(), report_lane)
         elif args.action == 'resume': result = manual_resume(args.root)
         elif args.action.startswith('outage-'): result = outage_window(args.root, args.action.split('-', 1)[1])
         else:
