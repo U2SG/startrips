@@ -30,7 +30,10 @@ const journey = {
     longitude: index === 1 || index === 5 ? 114.057865 : 113.8 + index * 0.11,
     label: `Preview point ${index + 1}`,
     isStop: index % 2 === 0,
-    occurredAt: `2026-09-${String(10 + Math.min(index, 2)).padStart(2, "0")}T0${index}:00:00.000Z`,
+    // Points 3 and 4 intentionally share a timestamp so the QA's explicit
+    // one-step reorder remains a valid Journey and the later failed-save check
+    // reaches the server instead of being short-circuited by chronology validation.
+    occurredAt: `2026-09-${String(10 + Math.min(index, 2)).padStart(2, "0")}T0${index === 3 ? 2 : index}:00:00.000Z`,
     note: index === 2 ? "Persisted point note" : null,
     createdAt: "2026-09-10T00:00:00.000Z",
   })),
