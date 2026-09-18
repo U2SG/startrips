@@ -134,13 +134,36 @@ function waitForRenderedFrame(page) {
 
 /**
  * Route paths and Route Point markers are published by the scene projection
- * frame, not by wall-clock delay. Wait for the same visible endpoint evidence
- * the assertion will measure so a slow CI frame cannot be sampled between the
- * zoom state update and marker projection. A real projection failure still
- * times out instead of being accepted.
+ * frame, not by wall-clock delay. A visible-marker count alone can still read
+ * the PREVIOUS zoom's anchors, so every real zoom change must publish a new
+ * finite endpoint signature before measurement. A genuine projection failure
+ * still times out instead of being accepted.
  */
-function waitForRouteEndpoints(page, routeIdentifier) {
-  return page.waitForFunction((identifier) => {
+function routeEndpointProjection(page, routeIdentifier) {
+  return page.evaluate((identifier) => {
+    const group = document.querySelector(`[data-journey-route="${identifier}"]`);
+    if (!group) return null;
+    const visibleMarkers = [...group.querySelectorAll(".particle-earth-route__point")]
+      .filter((element) => (
+        element.style.display !== "none"
+        && Number.isFinite(Number(element.dataset.anchorX))
+        && Number.isFinite(Number(element.dataset.anchorY))
+      ))
+      .sort((left, right) => Number(left.dataset.routePointIndex) - Number(right.dataset.routePointIndex));
+    if (visibleMarkers.length < 4) return null;
+    return visibleMarkers.map((element) => [
+      element.dataset.routePointIndex,
+      element.dataset.anchorX,
+      element.dataset.anchorY,
+    ].join(":"))
+      .join("|");
+  }, routeIdentifier);
+}
+
+function waitForRouteEndpoints(page, routeIdentifier, expectedZoom, previousProjection = null) {
+  return page.waitForFunction(({ identifier, expectedZoom, previousProjection }) => {
+    const state = window.__particleEarthDebug?.();
+    if (!state || Math.abs(state.zoom - expectedZoom) > 0.03) return false;
     const group = document.querySelector(`[data-journey-route="${identifier}"]`);
     if (!group) return false;
     const visibleMarkers = [...group.querySelectorAll(".particle-earth-route__point")]
@@ -148,9 +171,17 @@ function waitForRouteEndpoints(page, routeIdentifier) {
         element.style.display !== "none"
         && Number.isFinite(Number(element.dataset.anchorX))
         && Number.isFinite(Number(element.dataset.anchorY))
-      ));
-    return visibleMarkers.length >= 4;
-  }, routeIdentifier, { timeout: 5_000 });
+      ))
+      .sort((left, right) => Number(left.dataset.routePointIndex) - Number(right.dataset.routePointIndex));
+    if (visibleMarkers.length < 4) return false;
+    const projection = visibleMarkers.map((element) => [
+      element.dataset.routePointIndex,
+      element.dataset.anchorX,
+      element.dataset.anchorY,
+    ].join(":"))
+      .join("|");
+    return previousProjection === null || projection !== previousProjection;
+  }, { identifier: routeIdentifier, expectedZoom, previousProjection }, { timeout: 5_000 });
 }
 
 /**
@@ -488,9 +519,19 @@ try {
   await page.waitForTimeout(400);
 
   const samples = [];
+  let previousProjection = await routeEndpointProjection(page, routeId);
   for (const zoom of [1, 2, 3]) {
+    const before = await debug(page);
     const state = await setZoom(page, zoom);
-    await waitForRouteEndpoints(page, routeId);
+    const changedZoom = before && Number.isFinite(before.zoom)
+      && Math.abs(before.zoom - state.zoom) > 0.03;
+    await waitForRouteEndpoints(
+      page,
+      routeId,
+      state.zoom,
+      changedZoom ? previousProjection : null,
+    );
+    previousProjection = await routeEndpointProjection(page, routeId);
     const measured = await measureRoute(page, routeId);
     if (measured.error) throw new Error(measured.error);
     samples.push({ requestedZoom: zoom, zoom: state.zoom, ...measured });
