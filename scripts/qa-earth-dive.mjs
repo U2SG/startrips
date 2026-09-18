@@ -770,10 +770,11 @@ try {
   );
   const blendingHit = await hitTarget(forward.page, point);
 
-  // Park just short of the commit edge, quiescent, then cross it with one
-  // small step so the handoff is measured across as little deliberate zoom as
-  // possible.
-  await forward.page.waitForTimeout(500);
+  // Park just short of the commit edge, then wait for the same readiness-driven
+  // reveal publication contract used by the reduced-motion round below. A fixed
+  // sleep races MapLibre load/post-sync render and can legally sample `holding`
+  // even though the same run subsequently commits to detail.
+  await forward.page.waitForFunction(hasPublishedDiveReveal, null, { timeout: 5_000 });
   const beforeCommit = await readDive(forward.page);
   const blendingFrames = await readFrames(forward.page);
   const blendingReveal = await readSpatialReveal(forward.page);
