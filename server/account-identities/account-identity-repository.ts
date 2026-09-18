@@ -214,6 +214,25 @@ async function consumeAction(
   return action;
 }
 
+// Server-internal consumer for later sensitive account operations. Keeping this
+// on the ST-067 primitive means every caller shares the same hash, expiry,
+// replay, stable-user and initiating-session checks while still consuming the
+// grant inside the caller's own database transaction.
+export async function consumePasswordReverificationAction(
+  transaction: Transaction,
+  values: {
+    token: string;
+    userId: string;
+    sessionId: string;
+    now: Date;
+  },
+) {
+  return await consumeAction(transaction, {
+    ...values,
+    kind: "reverify",
+  });
+}
+
 async function lockUser(transaction: Transaction, userId: string) {
   const [user] = await transaction
     .select({ id: authUser.id })

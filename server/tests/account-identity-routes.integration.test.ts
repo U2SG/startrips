@@ -8,7 +8,10 @@ import {
   ACCOUNT_IDENTITY_REVERIFY_RATE_LIMIT_PREFIX,
 } from "../account-identities/reverification-rate-limit";
 import { serverConfig } from "../config";
-import { accountIdentityAudit } from "../db/app-schema";
+import {
+  accountEmailChangeAudit,
+  accountIdentityAudit,
+} from "../db/app-schema";
 import {
   organization as authOrganization,
   rateLimit,
@@ -68,7 +71,10 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  if (userId) await db.delete(accountIdentityAudit).where(eq(accountIdentityAudit.userId, userId));
+  if (userId) {
+    await db.delete(accountEmailChangeAudit).where(eq(accountEmailChangeAudit.userId, userId));
+    await db.delete(accountIdentityAudit).where(eq(accountIdentityAudit.userId, userId));
+  }
   if (organizationId) await db.delete(authOrganization).where(eq(authOrganization.id, organizationId));
   if (email) await db.delete(authUser).where(eq(authUser.email, email));
   await pool.end();
@@ -203,6 +209,70 @@ describe("account identity HTTP boundary", () => {
     });
     expect(nativeVerify.status).toBe(404);
     expect(await nativeVerify.json()).toEqual({ error: "Not found" });
+
+    const nativeChangeEmail = await app.request(`${TEST_ORIGIN}/api/auth/change-email`, {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify({ newEmail: `native-bypass-${randomUUID()}@example.test` }),
+    });
+    expect(nativeChangeEmail.status).toBe(404);
+  });
+
+  it("starts the bounded email-change transaction without exposing proof tokens", async () => {
+    const reverify = await app.request(`${TEST_ORIGIN}/api/account-identities/reverify/password`, {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify({ password: PASSWORD }),
+    });
+    expect(reverify.status).toBe(200);
+    const grant = await reverify.json() as { reverificationToken: string };
+
+    const proposedEmail = `st089-next-${randomUUID()}@example.test`;
+    const start = await app.request(`${TEST_ORIGIN}/api/account-identities/email-change`, {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify({
+        newEmail: proposedEmail,
+        reverificationToken: grant.reverificationToken,
+      }),
+    });
+    expect(start.status).toBe(201);
+    const body = await start.json() as { change: Record<string, unknown> };
+    expect(body.change).toMatchObject({
+      currentEmail: email,
+      proposedEmail,
+      status: "pending",
+    });
+    const encoded = JSON.stringify(body);
+    expect(encoded).not.toMatch(/oldProof|newProof|token/i);
+
+    const status = await app.request(`${TEST_ORIGIN}/api/account-identities/email-change`, {
+      headers: headers(),
+    });
+    expect(status.status).toBe(200);
+    expect(await status.json()).toMatchObject({
+      change: { proposedEmail, status: "pending" },
+    });
+  });
+
+  it("refuses an old-address-unavailable shortcut before consuming another proof", async () => {
+    const reverify = await app.request(`${TEST_ORIGIN}/api/account-identities/reverify/password`, {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify({ password: PASSWORD }),
+    });
+    const grant = await reverify.json() as { reverificationToken: string };
+    const refused = await app.request(`${TEST_ORIGIN}/api/account-identities/email-change`, {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify({
+        newEmail: `st089-recovery-${randomUUID()}@example.test`,
+        reverificationToken: grant.reverificationToken,
+        oldAddressAvailable: false,
+      }),
+    });
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toEqual({ error: "EMAIL_CHANGE_RECOVERY_REQUIRED" });
   });
 
   it("fails link intent closed while no provider is configured", async () => {
