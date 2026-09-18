@@ -1969,13 +1969,19 @@ describe("ST-091 Journey Rail released-state ownership (#325)", () => {
   const railRules = [...styles.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/([^{}]+)\{([^{}]*)\}/g)]
     .map(([, selector, body]) => ({ selector: selector.trim(), body }))
     .filter(({ selector }) => selector.split(",").some((part) => {
-      const subject = part.trim().split(/[\s>+~]+/).pop() ?? "";
+      // Attribute selectors carry their own `~=`, so mask them before the
+      // combinator split that isolates the selector's subject compound.
+      const subject = part.replace(/\[[^\]]*\]/g, "").trim().split(/[\s>+~]+/).pop() ?? "";
       return subject.includes(".living-atlas__journey-rail");
     }));
 
-  const declaration = (body: string, property: string) => (
-    body.match(new RegExp(`(?:^|;)\s*${property}\s*:\s*([^;]+)`))?.[1].trim() ?? null
-  );
+  const declaration = (body: string, property: string): string | null => {
+    for (const entry of body.split(";")) {
+      const [name, ...value] = entry.split(":");
+      if (name.trim() === property) return value.join(":").trim();
+    }
+    return null;
+  };
 
   it("leaves the rail exactly one visibility owner, the released one", () => {
     // The failing sequence is Atlas -> Playback -> Story -> Atlas. Every
@@ -1993,9 +1999,9 @@ describe("ST-091 Journey Rail released-state ownership (#325)", () => {
   });
 
   it("keeps Playback and point-picking isolation on inert, opacity and pointer-events", () => {
-    for (const owner of ["is-playback", "is-globe-picking"]) {
+    for (const owner of ["playback", "globe-pick"]) {
       const rule = railRules.find(({ selector }) => (
-        selector.includes(`.living-atlas.${owner} .living-atlas__journey-rail`)
+        selector.includes(`.living-atlas__journey-rail[data-rail-isolation~="${owner}"]`)
       ));
       expect(rule, `${owner} must still isolate the rail`).toBeDefined();
       expect(declaration(rule?.body ?? "", "opacity")).toBe("0");

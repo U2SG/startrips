@@ -4589,14 +4589,16 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
    Globe Focus owner below already uses on the same node - `inert` plus opacity
    and pointer-events - and deliberately do NOT take ownership of `visibility`.
    Every recorded recurrence of this family read the released state back as
-   `opacity: 1` with `visibility: hidden` on the same rail, from this one block:
-   the isolating owner is gone, yet the property the released Atlas cannot
-   restore for itself stayed behind and left the rail laid out but unmeasurable.
-   The rail therefore keeps exactly one `visibility` declaration in the product,
-   the released `visible` in its own rule, so no lifecycle state can retain a
-   hidden rail after the transition ends. Visual isolation is unchanged. */
-.living-atlas.is-playback .living-atlas__journey-rail,
-.living-atlas.is-globe-picking .living-atlas__journey-rail {
+   `opacity: 1` with `visibility: hidden` on the same rail, out of one shared
+   block: the isolating owner was gone, yet the one property the released Atlas
+   cannot restore for itself stayed behind and left the rail laid out but
+   unmeasurable. The rail therefore keeps exactly one `visibility` declaration
+   in the product, the released `visible` in its own rule.
+   The isolation is also keyed on the rail's own `data-rail-isolation` marker
+   rather than on an ancestor class, so entering and leaving isolation changes
+   an attribute of the element whose style it decides. */
+.living-atlas__journey-rail[data-rail-isolation~="playback"],
+.living-atlas__journey-rail[data-rail-isolation~="globe-pick"] {
   opacity: 0;
   pointer-events: none;
 }
