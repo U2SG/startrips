@@ -160,6 +160,8 @@ jobs:
             command: pnpm qa:recovery-surfaces
           - name: composer-route-points
             command: pnpm qa:composer-route-points
+          - name: composer-playback-preview
+            command: pnpm qa:composer-playback-preview
           - name: mobile-contract
             command: pnpm qa:mobile-contract
           - name: globe-focus-chrome

@@ -29,6 +29,11 @@ import {
   type UnknownJourneyCreateAttempt,
 } from "./JourneyComposer";
 import {
+  draftPlaybackPreviewOwnerKey,
+  draftPlaybackPreviewStillOwnsComposer,
+  type DraftPlaybackPreviewSnapshot,
+} from "./draftPlaybackPreview";
+import {
   resolveJourneyArrivalHandoff,
   type JourneySaveCallbackScope,
 } from "./journeySaveRecovery";
@@ -1054,12 +1059,20 @@ export function LivingAtlasApp({
   // clicks again (now with a cached URL) to actually start, keeping play()
   // inside a real user gesture.
   const [playbackPreparingId, setPlaybackPreparingId] = useState<string | null>(null);
+  const [draftPlaybackPreview, setDraftPlaybackPreview] = useState<DraftPlaybackPreviewSnapshot | null>(null);
+  const draftPlaybackPreviewOwnerId = draftPlaybackPreview
+    ? draftPlaybackPreviewOwnerKey(draftPlaybackPreview.sourceJourneyId)
+    : null;
+  const draftPlaybackOwnsSession = draftPlaybackPreviewOwnerId !== null
+    && playbackSession.journeyId === draftPlaybackPreviewOwnerId;
   const playbackOwnership = resolvePlaybackOwnership(journeys, playbackSession.journeyId, status === "ready");
-  const playbackSourceJourney = playbackOwnership.journey;
+  const playbackSourceJourney = draftPlaybackOwnsSession
+    ? draftPlaybackPreview!.journey
+    : playbackOwnership.journey;
   const playbackJourney = playbackQuickRecap?.journey.id === playbackSession.journeyId
     ? playbackQuickRecap.journey
     : playbackSourceJourney;
-  const playbackActive = playbackOwnership.active;
+  const playbackActive = playbackOwnership.active || draftPlaybackOwnsSession;
   const [composerOpen, setComposerOpen] = useState(false);
   const [pendingUnknownCreateAttempt, setPendingUnknownCreateAttempt] = useState<UnknownJourneyCreateAttempt | null>(null);
   const [unknownCreateObservationOwnership, setUnknownCreateObservationOwnership] = useState<UnknownCreateObservationOwnership | null>(null);
@@ -1812,13 +1825,14 @@ export function LivingAtlasApp({
   }, [playbackOverBudgetChoiceIsCurrent]);
 
   const journeyRail = useMemo(() => [...journeys].reverse(), [journeys]);
+  const effectiveDraftRoute = draftPlaybackOwnsSession ? draftPlaybackPreview!.route : draftRoute;
   const routes = useMemo(() => {
     const savedRoutes = toJourneyRoutes(journeys);
-    if (!draftRoute) return savedRoutes;
-    return savedRoutes.some((route) => route.id === draftRoute.id)
-      ? savedRoutes.map((route) => route.id === draftRoute.id ? draftRoute : route)
-      : [...savedRoutes, draftRoute];
-  }, [draftRoute, journeys]);
+    if (!effectiveDraftRoute) return savedRoutes;
+    return savedRoutes.some((route) => route.id === effectiveDraftRoute.id)
+      ? savedRoutes.map((route) => route.id === effectiveDraftRoute.id ? effectiveDraftRoute : route)
+      : [...savedRoutes, effectiveDraftRoute];
+  }, [effectiveDraftRoute, journeys]);
   const focusPresentation = resolveMobilePlaybackPresentation(
     journeys,
     unknownCreateSemanticOwnership.selection,
@@ -1871,7 +1885,7 @@ export function LivingAtlasApp({
     : null;
   const focusRevision = focusPresentation.focusRevision + (timeCursor.selectionRevision + timeCursor.timelineRevision) * 100_000;
   useEffect(() => {
-    if (!playbackOwnership.releaseStaleState) return;
+    if (!playbackOwnership.releaseStaleState || draftPlaybackOwnsSession) return;
     setPlaybackReleaseFocusRevision((current) => nextPlaybackReleaseFocusRevision(
       current,
       playbackSession.cameraCommand?.revision ?? 0,
@@ -1881,7 +1895,30 @@ export function LivingAtlasApp({
     setPlaybackQuickRecap(null);
     setPlaybackPendingMode(null);
     setPlaybackFallbackMessage(null);
-  }, [focusRevision, playbackOwnership.releaseStaleState, playbackSession.cameraCommand?.revision]);
+  }, [draftPlaybackOwnsSession, focusRevision, playbackOwnership.releaseStaleState, playbackSession.cameraCommand?.revision]);
+  useEffect(() => {
+    if (!draftPlaybackPreview) return;
+    if (draftPlaybackPreviewStillOwnsComposer(draftPlaybackPreview, composerOpen, editingJourneyId)) return;
+    if (draftPlaybackOwnsSession) {
+      setPlaybackReleaseFocusRevision((current) => nextPlaybackReleaseFocusRevision(
+        current,
+        playbackSession.cameraCommand?.revision ?? 0,
+        focusRevision,
+      ));
+      setPlaybackSession({ journeyId: null, soundtrackRead: null, cameraCommand: null });
+      setPlaybackQuickRecap(null);
+      setPlaybackPendingMode(null);
+      setPlaybackFallbackMessage(null);
+    }
+    setDraftPlaybackPreview(null);
+  }, [
+    composerOpen,
+    draftPlaybackOwnsSession,
+    draftPlaybackPreview,
+    editingJourneyId,
+    focusRevision,
+    playbackSession.cameraCommand?.revision,
+  ]);
   useEffect(() => {
     if (!playbackPendingMode || !activeJourneyId) return;
     if (activeJourneyId === playbackPendingMode.journeyId) return;
@@ -2250,6 +2287,40 @@ export function LivingAtlasApp({
   // otherwise the first click only prefetches and the button switches to
   // 正在准备配乐… — the user clicks again once it is ready, and THAT click
   // starts playback with a cached URL. No silent first soundtrack.
+  // Draft Playback Preview follows the same soundtrack user-activation rule as
+  // persisted Playback, but it never saves or uploads to make a preview source.
+  // Pending local Files stay in the Composer and are represented only by the
+  // snapshot's excluded count; persisted media can keep using ordinary reads.
+  function startDraftPlaybackPreview(snapshot: DraftPlaybackPreviewSnapshot) {
+    const ownerId = draftPlaybackPreviewOwnerKey(snapshot.sourceJourneyId);
+    const cachedRead = cachedSoundtrackRead(snapshot.journey);
+    if (playbackEntryNeedsPreparation(snapshot.journey, cachedRead)) {
+      setPlaybackPreparingId(ownerId);
+      void prefetchSoundtrackRead(snapshot.journey, readMedia)
+        .catch(() => null)
+        .finally(() => setPlaybackPreparingId((current) => current === ownerId ? null : current));
+      return;
+    }
+
+    claimPlaybackReturnIntent();
+    playbackEntryRef.current = null;
+    clearHomeBaseContext();
+    clearRoutePointContext();
+    setDraftPlaybackPreview(snapshot);
+    setPlaybackQuickRecap(null);
+    setPlaybackFallbackMessage(null);
+    setPlaybackPendingMode(null);
+    setPlaybackOverBudgetChoice(null);
+    setPlaybackModeMenuJourneyId(null);
+    atlasHomeCameraFreshRef.current = false;
+    setInitialHomeCameraIntent(null);
+    setPlaybackSession({
+      journeyId: ownerId,
+      soundtrackRead: cachedRead,
+      cameraCommand: null,
+    });
+  }
+
   function startPlayback(
     journeyId: string,
     requestedMode: "full" | "quick-recap" = "full",
@@ -2258,6 +2329,7 @@ export function LivingAtlasApp({
     clearHomeBaseContext();
     const journey = journeys.find((candidate) => candidate.id === journeyId) ?? null;
     if (!journey) return;
+    setDraftPlaybackPreview(null);
     let mode = requestedMode;
     let quickRecap: PreparedQuickRecapPlayback | null = null;
     let fallbackMessage = carriedFallbackMessage;
@@ -2391,6 +2463,7 @@ export function LivingAtlasApp({
     reason: PlaybackReturnReason;
     position: PlaybackLogicalPosition | null;
   }) {
+    const closingDraftPreview = draftPlaybackOwnsSession;
     const entry = playbackEntryRef.current;
     playbackEntryRef.current = null;
     setPlaybackReleaseFocusRevision((current) => nextPlaybackReleaseFocusRevision(
@@ -2402,6 +2475,10 @@ export function LivingAtlasApp({
     setPlaybackQuickRecap(null);
     setPlaybackPendingMode(null);
     setPlaybackFallbackMessage(null);
+    if (closingDraftPreview) {
+      setDraftPlaybackPreview(null);
+      return;
+    }
     if (!entry) return;
 
     const resolution = resolvePlaybackReturn({
@@ -2499,7 +2576,7 @@ export function LivingAtlasApp({
                 ? Math.max(focusRevision, playbackReleaseFocusRevision) + initialHomeCameraRevision
                 : Math.max(focusRevision, playbackReleaseFocusRevision))}
             focusFlightProfile={playbackCameraTarget?.kind === "point" ? playbackCameraTarget.choreography : undefined}
-            focusColor={focusPresentation.journey?.lightColor}
+            focusColor={draftPlaybackOwnsSession ? playbackSourceJourney?.lightColor : focusPresentation.journey?.lightColor}
             journeyRoutes={routes}
             activeJourneyRouteId={draftRoute?.id ?? (initialHomeCameraAnchor ? null : activeJourneyId)}
             selectedJourneyRoutePoint={draftRoute ? null : selectedJourneyRoutePoint}
@@ -3322,6 +3399,9 @@ export function LivingAtlasApp({
           onGlobePickRequest={startGlobePick}
           onGlobePickCancel={cancelGlobePick}
           onRoutePreviewChange={setDraftRoute}
+          onPlaybackPreview={startDraftPlaybackPreview}
+          playbackPreviewActive={draftPlaybackOwnsSession}
+          playbackPreviewPreparing={playbackPreparingId === draftPlaybackPreviewOwnerKey(editingJourneyId)}
         />
       ) : null}
 
@@ -3393,7 +3473,11 @@ export function LivingAtlasApp({
           playbackMode={playbackQuickRecap ? "quick-recap" : "full"}
           quickRecapPlan={playbackQuickRecap?.plan ?? null}
           quickRecapSourceJourney={playbackQuickRecap ? playbackSourceJourney : null}
-          statusMessage={playbackFallbackMessage}
+          statusMessage={draftPlaybackOwnsSession
+            ? draftPlaybackPreview!.excludedPendingMediaCount > 0
+              ? `草稿预览 · ${draftPlaybackPreview!.excludedPendingMediaCount} 个本地未上传媒体未包含`
+              : "草稿预览 · 尚未保存"
+            : playbackFallbackMessage}
           reduceMotion={reduceMotion}
         />
       ) : null}

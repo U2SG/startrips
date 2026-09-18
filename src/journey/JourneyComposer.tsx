@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -14,6 +15,7 @@ import {
   IconChevronDown,
   IconDots,
   IconMapPin,
+  IconPlayerPlay,
   IconPlus,
   IconSearch,
   IconTrash,
@@ -55,6 +57,10 @@ import {
   updateRoutePoint,
   type RouteDraftPoint,
 } from "./routeDraft";
+import {
+  buildDraftPlaybackPreviewSnapshot,
+  type DraftPlaybackPreviewSnapshot,
+} from "./draftPlaybackPreview";
 import type {
   Journey,
   JourneyInput,
@@ -68,7 +74,7 @@ import {
   LIGHT_EFFECTS,
   type LightEffectId,
 } from "./lightEffects";
-import { useModalFocus, useNestedModalFocus } from "./useModalFocus";
+import { resolveModalInitialFocusTarget, useModalFocus, useNestedModalFocus } from "./useModalFocus";
 import { useCompactMobileLayout } from "./mobileLayout";
 
 type UploadProgress = {
@@ -320,7 +326,29 @@ type JourneyComposerProps = {
   onGlobePickRequest?: (accept: (point: GlobePointPick) => void) => void;
   onGlobePickCancel?: () => void;
   onRoutePreviewChange?: (route: JourneyRoute | null) => void;
+  onPlaybackPreview?: (snapshot: DraftPlaybackPreviewSnapshot) => void;
+  playbackPreviewActive?: boolean;
+  playbackPreviewPreparing?: boolean;
 };
+
+type PlaybackPreviewReturnFocusKind = "editor" | "route-point" | "none";
+
+/**
+ * Why the dialog does or does not hold focus once the Playback Preview
+ * suspension is released. `trap` is the contract: the trap's own activation
+ * focus landed. `repaired` means it landed only after the layer settled, and
+ * `blocked` names the element that still refuses focus, so a failure says
+ * whether focus was rejected or taken away again rather than reporting an
+ * anonymous `body`.
+ */
+function describeReturnFocusOutcome(root: HTMLElement | null) {
+  if (!root) return "detached";
+  if (root.contains(document.activeElement)) return "trap";
+  const inertOwner = root.closest<HTMLElement>("[inert]");
+  if (inertOwner) return `blocked:inert:${inertOwner.className || inertOwner.tagName.toLowerCase()}`;
+  if (getComputedStyle(root).visibility === "hidden") return "blocked:hidden";
+  return "outside";
+}
 
 function draftId() {
   return globalThis.crypto?.randomUUID?.()
@@ -387,6 +415,9 @@ export function JourneyComposer({
   onGlobePickRequest,
   onGlobePickCancel,
   onRoutePreviewChange,
+  onPlaybackPreview,
+  playbackPreviewActive = false,
+  playbackPreviewPreparing = false,
 }: JourneyComposerProps) {
   const recoveryInput = !journey ? initialUnknownCreateAttempt?.input : undefined;
   const recoveryRoutePoints = !journey ? initialUnknownCreateAttempt?.routePoints : undefined;
@@ -439,6 +470,21 @@ export function JourneyComposer({
   const routePointTriggerRefs = useRef(new Map<string, HTMLButtonElement>());
   const routePointMenuTriggerRefs = useRef(new Map<string, HTMLButtonElement>());
   const routePointRowRefs = useRef(new Map<string, HTMLLIElement>());
+  const narrativeScrollRef = useRef<HTMLElement>(null);
+  const routeScrollRef = useRef<HTMLElement>(null);
+  const playbackPreviewRevisionRef = useRef(0);
+  const playbackPreviewWasActiveRef = useRef(false);
+  const lastEditorFocusRef = useRef<HTMLElement | null>(null);
+  const playbackPreviewReturnFocusKindRef = useRef<PlaybackPreviewReturnFocusKind | null>(null);
+  const [playbackPreviewReturnFocusKind, setPlaybackPreviewReturnFocusKind] = useState<PlaybackPreviewReturnFocusKind | null>(null);
+  const [playbackPreviewReturnFocusOutcome, setPlaybackPreviewReturnFocusOutcome] = useState<string | null>(null);
+  const playbackPreviewReturnContextRef = useRef<{
+    selectedDraftId: string | null;
+    expandedDraftId: string | null;
+    focusTarget: HTMLElement | null;
+    narrativeScrollTop: number;
+    routeScrollTop: number;
+  } | null>(null);
   const pendingRoutePointFocusDraftIdRef = useRef<string | null>(null);
   const pendingRoutePointMenuFocusDraftIdRef = useRef<string | null>(null);
   const pendingRoutePointScrollDraftIdRef = useRef<string | null>(null);
@@ -486,6 +532,36 @@ export function JourneyComposer({
     () => matchRouteDraftPoints(routePoints, searchQuery),
     [routePoints, searchQuery],
   );
+  /**
+   * #245 established that a modal focus trap owns initial focus for its whole
+   * activation: a restore written in a later passive effect races the trap's own
+   * `resolveModalInitialFocusTarget` instead of replacing it. Releasing the
+   * Playback Preview suspension re-activates this trap, so the preserved return
+   * target is handed to the trap as its initial focus rather than re-applied
+   * afterwards. `resolveModalInitialFocusTarget` already rejects an inert,
+   * zero-rect or hidden candidate and falls back to the dialog root.
+   */
+  const resolvePlaybackPreviewReturnFocus = useCallback((root: HTMLElement) => {
+    const context = playbackPreviewReturnContextRef.current;
+    if (!context) {
+      playbackPreviewReturnFocusKindRef.current = null;
+      return null;
+    }
+    if (context.focusTarget?.isConnected && root.contains(context.focusTarget)) {
+      playbackPreviewReturnFocusKindRef.current = "editor";
+      return context.focusTarget;
+    }
+    const candidate = context.selectedDraftId
+      ? routePointTriggerRefs.current.get(context.selectedDraftId) ?? null
+      : null;
+    // A Route Point deleted or replaced while the preview ran must not be
+    // revived through a stale trigger ref, so survival is read from the live
+    // dialog subtree rather than from the captured selection alone.
+    const trigger = candidate?.isConnected && root.contains(candidate) ? candidate : null;
+    playbackPreviewReturnFocusKindRef.current = trigger ? "route-point" : "none";
+    return trigger;
+  }, []);
+
   const dialogRef = useModalFocus<HTMLElement>(() => {
     if (mobileMediaDeleteIndex !== null) {
       setMobileMediaDeleteIndex(null);
@@ -500,7 +576,7 @@ export function JourneyComposer({
       return;
     }
     if (!saving) closeComposer();
-  }, true, globePicking);
+  }, true, globePicking || playbackPreviewActive, resolvePlaybackPreviewReturnFocus);
   const mobileMediaSheetRef = useNestedModalFocus<HTMLElement>(
     mobileLayout && (
       mobileMediaMenuIndex !== null
@@ -585,6 +661,75 @@ export function JourneyComposer({
     revision: journey?.revision,
     routePoints: routeDraftToInput(routePoints),
   }), [endedOn, journey?.revision, lightColor, lightEffect, note, routePoints, startedOn, title]);
+
+  function requestPlaybackPreview() {
+    if (!onPlaybackPreview || saving || routePoints.length === 0 || playbackPreviewActive) return;
+    setPlaybackPreviewReturnFocusOutcome(null);
+    const activeElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const focusTarget = lastEditorFocusRef.current?.isConnected ? lastEditorFocusRef.current : activeElement;
+    const selectedDraftId = focusTarget
+      ?.closest<HTMLElement>("[data-route-point-draft-id]")
+      ?.dataset.routePointDraftId
+      ?? expandedRoutePointDraftId;
+    playbackPreviewReturnContextRef.current = {
+      selectedDraftId,
+      expandedDraftId: expandedRoutePointDraftId,
+      focusTarget,
+      narrativeScrollTop: narrativeScrollRef.current?.scrollTop ?? 0,
+      routeScrollTop: routeScrollRef.current?.scrollTop ?? 0,
+    };
+    playbackPreviewRevisionRef.current += 1;
+    onPlaybackPreview(buildDraftPlaybackPreviewSnapshot({
+      sourceJourney: journey ?? null,
+      input,
+      routePoints,
+      snapshotRevision: playbackPreviewRevisionRef.current,
+      excludedPendingMediaCount: mediaFiles.length,
+    }));
+  }
+
+  useEffect(() => {
+    const wasActive = playbackPreviewWasActiveRef.current;
+    playbackPreviewWasActiveRef.current = playbackPreviewActive;
+    if (!wasActive || playbackPreviewActive) return;
+    const context = playbackPreviewReturnContextRef.current;
+    if (!context) return;
+    const expandedSurvives = context.expandedDraftId
+      ? routePoints.some((point) => point.draftId === context.expandedDraftId)
+      : false;
+    setExpandedRoutePointDraftId(expandedSurvives ? context.expandedDraftId : null);
+    setPlaybackPreviewReturnFocusKind(playbackPreviewReturnFocusKindRef.current);
+    // The trap owns the restore, but Chromium rejects focus while the suspended
+    // Composer still inherits `visibility: hidden` from the Playback Preview
+    // backdrop. Wait on that actual lifecycle condition instead of guessing a
+    // timeout, then restore the exact resolved target once it is focusable.
+    const immediate = describeReturnFocusOutcome(dialogRef.current);
+    setPlaybackPreviewReturnFocusOutcome(immediate);
+    const restoreWhenVisible = () => {
+      if (playbackPreviewReturnContextRef.current !== context) return;
+      const root = dialogRef.current;
+      if (!root) {
+        playbackPreviewReturnContextRef.current = null;
+        return;
+      }
+      if (getComputedStyle(root).visibility === "hidden" || root.closest("[inert]")) {
+        window.requestAnimationFrame(restoreWhenVisible);
+        return;
+      }
+      if (narrativeScrollRef.current) narrativeScrollRef.current.scrollTop = context.narrativeScrollTop;
+      if (routeScrollRef.current) routeScrollRef.current.scrollTop = context.routeScrollTop;
+      const returnTarget = resolveModalInitialFocusTarget(root, resolvePlaybackPreviewReturnFocus);
+      const needsRepair = document.activeElement !== returnTarget;
+      if (needsRepair) returnTarget.focus({ preventScroll: true });
+      setPlaybackPreviewReturnFocusOutcome(
+        document.activeElement === returnTarget
+          ? (needsRepair ? `repaired:${immediate}` : "trap")
+          : describeReturnFocusOutcome(root),
+      );
+      playbackPreviewReturnContextRef.current = null;
+    };
+    window.requestAnimationFrame(restoreWhenVisible);
+  }, [playbackPreviewActive, resolvePlaybackPreviewReturnFocus, routePoints]);
 
   useEffect(() => {
     composerMountedRef.current = true;
@@ -1187,7 +1332,7 @@ export function JourneyComposer({
   const mobileDeleteMedia = mobileMediaDeleteIndex === null ? null : mediaFiles[mobileMediaDeleteIndex] ?? null;
 
   return (
-    <div className={`journey-composer-backdrop${globePicking ? " is-globe-picking" : ""}`} role="presentation">
+    <div className={`journey-composer-backdrop${globePicking ? " is-globe-picking" : ""}${playbackPreviewActive ? " is-playback-previewing" : ""}`} role="presentation">
       {globePicking ? (
         <aside className="journey-globe-pick-hint" role="status">
           <IconMapPin size={18} stroke={1.4} aria-hidden="true" />
@@ -1200,9 +1345,13 @@ export function JourneyComposer({
         tabIndex={-1}
         className="journey-composer motion-staged"
         data-mobile-layout={mobileLayout ? "true" : undefined}
-        inert={globePicking || undefined}
+        data-playback-preview-active={playbackPreviewActive ? "true" : undefined}
+        data-playback-preview-return-focus={playbackPreviewReturnFocusKind ?? undefined}
+        data-playback-preview-return-focus-outcome={playbackPreviewReturnFocusOutcome ?? undefined}
+        inert={globePicking || playbackPreviewActive || undefined}
         role="dialog"
-        aria-modal="true"
+        aria-hidden={playbackPreviewActive || undefined}
+        aria-modal={playbackPreviewActive ? undefined : true}
         aria-labelledby="journey-composer-title"
       >
         <header className="journey-composer__header">
@@ -1219,8 +1368,11 @@ export function JourneyComposer({
             className="journey-composer__editor"
             aria-disabled={editorLocked}
             inert={editorLocked}
+            onFocusCapture={(event) => {
+              if (event.target instanceof HTMLElement) lastEditorFocusRef.current = event.target;
+            }}
           >
-            <section className="journey-composer__narrative" aria-labelledby="journey-story-heading">
+            <section ref={narrativeScrollRef} className="journey-composer__narrative" aria-labelledby="journey-story-heading">
               <div className="journey-composer__section-heading">
                 <p>01 · MEMORY</p>
                 <h3>照片与影像</h3>
@@ -1493,7 +1645,7 @@ export function JourneyComposer({
               </div>
             </section>
 
-            <section className="journey-composer__route" aria-labelledby="journey-route-heading">
+            <section ref={routeScrollRef} className="journey-composer__route" aria-labelledby="journey-route-heading">
               <div className="journey-composer__section-heading">
                 <p>03 · TRACE</p>
                 <h3 id="journey-route-heading">在地图上留下它</h3>
@@ -1750,7 +1902,21 @@ export function JourneyComposer({
                 ? `${existingVisualMediaCount} 个已有媒体`
                 : "媒体可以稍后补充"}</span>
           </div>
-          {savedResult ? <button type="button" onClick={closeComposer}><IconCheck size={18} stroke={1.4} aria-hidden="true" />完成</button> : <button type="button" onClick={save} disabled={saving || unknownCreateAttempt?.mode === "ambiguous" || unknownCreateAttempt?.mode === "confirmation-required"}>{saving ? <StartripsJourneyCue state="waiting" size={32} /> : <IconCheck size={18} stroke={1.4} aria-hidden="true" />}{saving ? "正在保存…" : unknownCreateAttempt?.mode === "ambiguous" || unknownCreateAttempt?.mode === "confirmation-required" ? "请关闭后核对 Atlas" : unknownCreateAttempt ? "重新确认保存结果" : isEditing ? "保存修改" : "保存到星球"}</button>}
+          <div className="journey-composer__footer-actions">
+            {onPlaybackPreview && !savedResult ? (
+              <button
+                type="button"
+                className="journey-composer__preview-playback"
+                onClick={requestPlaybackPreview}
+                disabled={saving || routePoints.length === 0 || playbackPreviewActive || playbackPreviewPreparing}
+                data-playback-preview-trigger
+              >
+                <IconPlayerPlay size={18} stroke={1.4} aria-hidden="true" />
+                {playbackPreviewPreparing ? "正在准备预览…" : "预览播放"}
+              </button>
+            ) : null}
+            {savedResult ? <button type="button" onClick={closeComposer}><IconCheck size={18} stroke={1.4} aria-hidden="true" />完成</button> : <button type="button" onClick={save} disabled={saving || unknownCreateAttempt?.mode === "ambiguous" || unknownCreateAttempt?.mode === "confirmation-required"}>{saving ? <StartripsJourneyCue state="waiting" size={32} /> : <IconCheck size={18} stroke={1.4} aria-hidden="true" />}{saving ? "正在保存…" : unknownCreateAttempt?.mode === "ambiguous" || unknownCreateAttempt?.mode === "confirmation-required" ? "请关闭后核对 Atlas" : unknownCreateAttempt ? "重新确认保存结果" : isEditing ? "保存修改" : "保存到星球"}</button>}
+          </div>
         </footer>
       </section>
     </div>

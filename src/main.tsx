@@ -308,6 +308,7 @@ function LivingAtlasQaGlobe({
   focusPoint,
   focusRoute,
   focusRevision,
+  focusColor,
 }: LivingAtlasGlobeProps) {
   const [pickIndex, setPickIndex] = useState(0);
   const draftRoute = journeyRoutes.find((route) => route.id === "draft-route-preview") ?? null;
@@ -372,6 +373,7 @@ function LivingAtlasQaGlobe({
       <output
         data-qa-app-route-preview
         data-route-points={JSON.stringify(draftRoute?.points ?? [])}
+        data-focus-color={focusColor ?? ""}
         style={{ position: "fixed", width: 1, height: 1, overflow: "hidden", opacity: 0 }}
       >{draftRoute?.points.length ?? 0}</output>
       {routePointContextQa ? (

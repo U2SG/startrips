@@ -31,6 +31,7 @@
     "qa:brand-signature-motion": "node scripts/qa-brand-signature-motion.mjs",
     "qa:recovery-surfaces": "node scripts/qa-recovery-surfaces.mjs",
     "qa:composer-route-points": "node scripts/qa-composer-route-points.mjs",
+    "qa:composer-playback-preview": "node scripts/qa-composer-playback-preview.mjs",
     "qa:city-label-anchoring": "node scripts/qa-city-label-anchoring.mjs",
     "qa:guest-share": "node scripts/qa-guest-share.mjs",
     "qa:home-base-suggestion": "node scripts/qa-home-base-suggestion.mjs",
