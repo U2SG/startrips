@@ -235,8 +235,12 @@ try {
       Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
       document.dispatchEvent(new Event("visibilitychange"));
     });
-    await page.waitForTimeout(500);
+    await page.waitForTimeout(400);
     const hidden = await debugState(page);
+    // Sampled twice across the hidden window: without this a reveal that simply
+    // kept running would satisfy the resume assertion below.
+    await page.waitForTimeout(400);
+    const stillHidden = await debugState(page);
     await page.evaluate(() => {
       Object.defineProperty(document, "hidden", { configurable: true, get: () => false });
       document.dispatchEvent(new Event("visibilitychange"));
@@ -247,6 +251,17 @@ try {
       { timeout: 30_000 },
     );
     const resumed = await debugState(page);
+    record("visibility:hidden-tab-actually-stops-the-reveal", {
+      hidden: { phase: hidden.phase, progress: hidden.progress, frames: hidden.frames },
+      stillHidden: {
+        phase: stillHidden.phase,
+        progress: stillHidden.progress,
+        frames: stillHidden.frames,
+        pendingAnimationFrames: stillHidden.pendingAnimationFrames,
+      },
+    }, hidden.phase === "revealing" && hidden.progress > 0 && hidden.progress < 1
+      && stillHidden.progress === hidden.progress && stillHidden.frames === hidden.frames
+      && stillHidden.pendingAnimationFrames === 0);
     record("visibility:reveal-resumes-and-settles-on-the-original-cover", {
       hidden: { phase: hidden.phase, progress: hidden.progress, frames: hidden.frames },
       resumed: {
@@ -256,8 +271,9 @@ try {
         lastFrame: resumed.lastFrame,
       },
       errors: run.errors,
-    }, hidden.phase === "revealing" && hidden.progress < 1
+    }, stillHidden.phase === "revealing" && stillHidden.progress < 1
       && resumed.phase === "settled" && resumed.progress === 1
+      && resumed.frames > stillHidden.frames
       && resumed.lastFrame?.image === "original-cover" && run.errors.length === 0);
     await run.context.close();
   }
