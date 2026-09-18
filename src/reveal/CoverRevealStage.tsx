@@ -155,8 +155,13 @@ export function CoverRevealStage({
     const dispatch = (event: Parameters<typeof coverRevealReducer>[1]) => {
       // A load failure and a lost renderer both have nothing left to paint, so
       // the renderer goes away before the state that mounts the original-cover
-      // image is published.
-      if (event.type === "failed" || event.type === "renderer-failed") release();
+      // image is published. Only while the renderer still owns the screen,
+      // though: the same guard the lifecycle applies. Disposing after a reveal
+      // has settled would detach the canvas still showing the finished cover
+      // without publishing anything to replace it.
+      const owning = stateRef.current.phase === "preparing"
+        || stateRef.current.phase === "revealing";
+      if (owning && (event.type === "failed" || event.type === "renderer-failed")) release();
       // A released renderer's canvas is detached and unpainted, so it is not a
       // surface any caller should be handed.
       publish(coverRevealReducer(stateRef.current, event), flow.disposed ? null : flow.canvas);

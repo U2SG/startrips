@@ -389,6 +389,51 @@ try {
       && run.errors.length === 0);
     await run.context.close();
   }
+  // 10. A context loss arriving after the reveal already finished must leave the
+  //     settled cover on screen - not detach the canvas that is showing it.
+  {
+    const run = await openPreview();
+    const { page } = run;
+    await page.waitForFunction(
+      () => window.__coverRevealDebug().phase === "settled",
+      undefined,
+      { timeout: 30_000 },
+    );
+    const settled = await debugState(page);
+    const lost = await page.evaluate(() => {
+      const canvas = document.querySelector("[data-cover-reveal-phase] canvas");
+      const extension = canvas?.getContext("webgl2")?.getExtension("WEBGL_lose_context");
+      if (!extension) return false;
+      extension.loseContext();
+      return true;
+    });
+    await page.waitForTimeout(700);
+    const after = await debugState(page);
+    const surfaces = await page.evaluate(() => ({
+      coverImage: Boolean(document.querySelector('[data-cover-reveal-image="original-cover"]')),
+      canvases: document.querySelectorAll("[data-cover-reveal-phase] canvas").length,
+    }));
+    await page.screenshot({ path: `${artifactDir}/context-loss-after-settled.png` });
+    record("context-loss-after-settled:keeps-the-cover-on-screen", {
+      lost,
+      settled: { phase: settled.phase, settleReason: settled.settleReason },
+      after: {
+        phase: after.phase,
+        settleReason: after.settleReason,
+        degraded: after.degraded,
+        lastFrame: after.lastFrame,
+      },
+      surfaces,
+      errors: run.errors,
+    }, lost === true && settled.settleReason === "completed"
+      // The finished reveal is not retroactively degraded ...
+      && after.phase === "settled" && after.settleReason === "completed"
+      && after.degraded === false
+      // ... and a surface showing the canonical cover is still mounted.
+      && (surfaces.canvases === 1 || surfaces.coverImage === true)
+      && run.errors.length === 0);
+    await run.context.close();
+  }
 } finally {
   await browser.close();
   writeFileSync(`${artifactDir}/results.json`, `${JSON.stringify(results, null, 2)}\n`);
