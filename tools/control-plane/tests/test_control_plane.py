@@ -539,6 +539,22 @@ class WiringTests(SyntheticOne):
         for forbidden in ['Disable-ScheduledTask', 'schtasks /change', 'is_enabled=false', 'is_enabled=False']:
             self.assertNotIn(forbidden, text)
 
+    def test_backend_wake_and_restart_guards_are_lane_scoped(self):
+        for name in ['wake-if-work.sh', 'scheduled-restart.sh']:
+            text = (ROOT / name).read_text(encoding='utf-8')
+            self.assertIn('execution.py\" check \"$ROOT\" --lane backend', text, name)
+
+    def test_real_carrier_publishes_exact_owner_scope_before_work(self):
+        loop = (ROOT / 'run-loop.sh').read_text(encoding='utf-8')
+        self.assertIn('"--carrier-feature=$FEATURE" "--carrier-worktree64=$OWNER_WORKTREE64"', loop)
+        self.assertIn('--worktree64 "$CARRIER_WORKTREE64"', loop)
+        self.assertNotIn('CARRIER_WORKTREE="$(python3', loop)
+        self.assertIn('CARRIER_SCOPE_DRIFT', loop)
+        self.assertIn('SCOPED_SELECTED="$(FEATURE_ALLOW="$CARRIER_FEATURE" next_feature', loop)
+        self.assertIn('CARRIER_LANE_OR_GATE_DRIFT', loop)
+        self.assertIn('FEATURE="$CARRIER_FEATURE"', loop)
+        self.assertIn('worktree64=$OWNER_WORKTREE64', loop)
+
 
 if __name__ == '__main__':
     multiprocessing.freeze_support()

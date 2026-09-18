@@ -8,7 +8,7 @@ $bash = [IO.Path]::GetFullPath((Join-Path $gitDir '..\usr\bin\bash.exe'))
 if (-not (Test-Path $bash)) { throw 'Git bash is unavailable; no worker was started.' }
 Push-Location $root
 try {
-  & python -B -X utf8 (Join-Path $root 'lib/execution.py') check $root
+  & python -B -X utf8 (Join-Path $root 'lib/execution.py') check $root --lane backend
   if ($LASTEXITCODE -ne 0) { throw 'Existing or unknown execution; no duplicate worker.' }
   & python -B -X utf8 (Join-Path $root 'lib/policy_audit.py') $root
   if ($LASTEXITCODE -ne 0) { throw 'Control-plane contract audit failed.' }

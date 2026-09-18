@@ -172,8 +172,9 @@ class RetryCases(fixture.SyntheticOne):
         self.records = [{'job_id': 7, 'infrastructure': True, 'root_cause_required': False}]
         self.ci = {'run': run()}
 
-    def request(self):
-        return ci.rerun_once(self.root, 'synthetic/project', self.ci, self.records, number=1, feature='ST-001')
+    def request(self, lane='backend'):
+        return ci.rerun_once(self.root, 'synthetic/project', self.ci, self.records,
+                             number=1, feature='ST-001', lane=lane)
 
     def api(self, endpoint):
         if '/pulls/' in endpoint: return {'state': 'open', 'merged': False, 'head': {'sha': fixture.A}}
@@ -215,6 +216,12 @@ class RetryCases(fixture.SyntheticOne):
         with mock.patch.object(ci, 'api') as api:
             self.assertFalse(self.request()['requested']); api.assert_not_called()
         self.assertEqual('user stop', (self.root / 'AGENT_STOP').read_text())
+
+    def test_backend_lifecycle_stop_does_not_block_experience_rerun(self):
+        (self.root / 'SUPERVISOR_STOP').write_text('backend stop')
+        with mock.patch.object(ci, 'api', side_effect=self.api), \
+                mock.patch.object(ci.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, '', '')):
+            self.assertTrue(self.request(lane='experience')['requested'])
 
     def test_wrong_owner_mapping_prevents_post(self):
         self.write(fixture.feature(pr_links=['https://github.com/synthetic/project/pull/2']))

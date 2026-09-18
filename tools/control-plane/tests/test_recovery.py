@@ -1,6 +1,7 @@
 """Real process-provider and same-owner recovery regressions. GitHub CI only."""
 import os
 import json
+import base64
 import shutil
 import subprocess
 import tempfile
@@ -11,6 +12,7 @@ from unittest import mock
 import test_control_plane as fixture
 import execution
 import runtime_preflight as runtime
+import seal_owner as seal_owner
 import boundary_restart
 
 
@@ -29,6 +31,190 @@ class ProcessClassificationCases(unittest.TestCase):
     def test_other_actual_loop_blocks_duplicate(self):
         rows = self.base + [process(10, command='bash ' + str(self.root / 'run-loop.sh'))]
         self.assertEqual(10, execution.competitors(rows, self.root, 3)[0]['pid'])
+
+    def test_backend_loop_does_not_block_experience_lane(self):
+        rows = self.base + [process(10, command='bash ' + str(self.root / 'run-loop.sh')
+                                    + ' --carrier-lane=backend')]
+        self.assertEqual([], execution.competitors(rows, self.root, 3, lane='experience'))
+
+    def test_same_lane_loop_still_blocks_duplicate(self):
+        rows = self.base + [process(10, command='bash ' + str(self.root / 'run-loop.sh')
+                                    + ' --carrier-lane=backend')]
+        conflict = execution.competitors(rows, self.root, 3, lane='backend')[0]
+        self.assertEqual(10, conflict['pid']); self.assertEqual('backend', conflict['lane'])
+
+    def test_encoded_worker_marker_in_other_lane_does_not_block(self):
+        backend = 'C:/owners/backend'
+        token = base64.urlsafe_b64encode(backend.encode('utf-8')).decode('ascii').rstrip('=')
+        rows = self.base + [process(10, name='node.exe',
+                                    command='node worker STARTRIPS_EXECUTION_OWNER=' + str(self.root)
+                                    + ';lane=backend;feature=ST-001;worktree64=' + token + ';')]
+        self.assertEqual([], execution.competitors(rows, self.root, 3, lane='experience',
+                                                   feature='ST-080', worktree='C:/owners/experience'))
+
+    def test_same_feature_blocks_even_when_lane_differs(self):
+        rows = self.base + [process(10, name='node.exe',
+                                    command='node worker STARTRIPS_EXECUTION_OWNER=' + str(self.root)
+                                    + ';lane=backend;feature=ST-080;worktree=C:/owners/backend;')]
+        conflict = execution.competitors(rows, self.root, 3, lane='experience',
+                                         feature='ST-080', worktree='C:/owners/experience')[0]
+        self.assertEqual(10, conflict['pid']); self.assertEqual('ST-080', conflict['feature'])
+
+    def test_same_worktree_blocks_even_when_lane_differs(self):
+        shared = str((self.root / 'owner-tree').resolve())
+        rows = self.base + [process(10, name='node.exe',
+                                    command='node worker STARTRIPS_EXECUTION_OWNER=' + str(self.root)
+                                    + ';lane=backend;feature=ST-001;worktree=' + shared + ';')]
+        conflict = execution.competitors(rows, self.root, 3, lane='experience',
+                                         feature='ST-080', worktree=shared)[0]
+        self.assertEqual(10, conflict['pid']); self.assertEqual('backend', conflict['lane'])
+
+    def test_orphan_worker_encoded_scope_preserves_semicolon_worktree(self):
+        shared = str((self.root / 'owner;tree with spaces').resolve())
+        token = base64.urlsafe_b64encode(shared.encode('utf-8')).decode('ascii').rstrip('=')
+        rows = self.base + [process(10, name='node.exe',
+                                    command='node worker STARTRIPS_EXECUTION_OWNER=' + str(self.root)
+                                    + ';lane=backend;feature=ST-001;worktree64=' + token + '; Evidence JSON')]
+        conflict = execution.competitors(rows, self.root, 3, lane='experience',
+                                         feature='ST-080', worktree=shared)[0]
+        self.assertEqual(shared.replace('\\', '/').lower(), conflict['worktree'])
+
+    def test_encoded_worker_scope_preserves_trailing_path_characters(self):
+        shared = str(self.root / 'owner. ')
+        token = base64.urlsafe_b64encode(shared.encode('utf-8')).decode('ascii').rstrip('=')
+        feature, observed = execution.command_scope(
+            'STARTRIPS_EXECUTION_OWNER=' + str(self.root)
+            + ';lane=backend;feature=ST-001;worktree64=' + token + '; Evidence JSON')
+        self.assertEqual('ST-001', feature)
+        self.assertEqual(execution.worktree_key(shared), observed)
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX owner paths are case-sensitive')
+    def test_posix_worktree_scope_preserves_case(self):
+        self.assertNotEqual(execution.worktree_key('/tmp/Owner'), execution.worktree_key('/tmp/owner'))
+
+    def test_malformed_encoded_worker_scope_fails_closed(self):
+        with self.assertRaisesRegex(execution.EvidenceUnknown, 'Malformed encoded owner worktree'):
+            execution.command_scope('STARTRIPS_EXECUTION_OWNER=' + str(self.root)
+                                    + ';lane=backend;feature=ST-001;worktree64=%%%bad;')
+
+    def test_legacy_raw_worktree_scope_fails_closed_cross_lane(self):
+        shared = str((self.root / 'owner tree with spaces').resolve())
+        rows = self.base + [process(10, name='node.exe',
+                                    command='node worker STARTRIPS_EXECUTION_OWNER=' + str(self.root)
+                                    + ';lane=backend;feature=ST-001;worktree=' + shared + '; Evidence JSON')]
+        conflict = execution.competitors(rows, self.root, 3, lane='experience',
+                                         feature='ST-080', worktree=shared)[0]
+        self.assertEqual('unknown-scope', conflict['state'])
+        self.assertIsNone(conflict['worktree'])
+
+    def test_scoped_cross_lane_loop_blocks_same_owner_before_worker(self):
+        shared = str((self.root / 'owner;tree with spaces').resolve())
+        token = base64.urlsafe_b64encode(shared.encode('utf-8')).decode('ascii').rstrip('=')
+        command = ('bash "' + str(self.root / 'run-loop.sh') + '" --carrier-lane=backend '
+                   '--carrier-token=backend-token-1 --carrier-feature=ST-080 '
+                   '--carrier-worktree64=' + token + ' ')
+        rows = self.base + [process(10, command=command)]
+        conflict = execution.competitors(rows, self.root, 3, lane='experience',
+                                         feature='ST-080', worktree=shared)[0]
+        self.assertEqual(('backend', 'ST-080'), (conflict['lane'], conflict['feature']))
+        self.assertEqual(execution.worktree_key(shared), conflict['worktree'])
+
+    def test_scoped_cross_lane_loop_allows_different_owner(self):
+        backend = str((self.root / 'backend-owner').resolve())
+        experience = str((self.root / 'experience-owner').resolve())
+        token = base64.urlsafe_b64encode(backend.encode('utf-8')).decode('ascii').rstrip('=')
+        command = ('bash "' + str(self.root / 'run-loop.sh') + '" --carrier-lane=backend '
+                   '--carrier-token=backend-token-1 --carrier-feature=ST-087 '
+                   '--carrier-worktree64=' + token + ' ')
+        rows = self.base + [process(10, command=command)]
+        self.assertEqual([], execution.competitors(rows, self.root, 3, lane='experience',
+                                                   feature='ST-080', worktree=experience))
+
+    def test_unknown_lane_in_same_workspace_stays_fail_closed(self):
+        rows = self.base + [process(10, command='bash ' + str(self.root / 'run-loop.sh'))]
+        conflict = execution.competitors(rows, self.root, 3, lane='experience')[0]
+        self.assertEqual(10, conflict['pid']); self.assertEqual('unknown', conflict['lane'])
+
+    def test_execution_invariant_matrix(self):
+        backend_tree = str((self.root / 'backend;owner tree').resolve())
+        exp_tree = str((self.root / 'experience-owner').resolve())
+        backend64 = base64.urlsafe_b64encode(backend_tree.encode()).decode().rstrip('=')
+        exp64 = base64.urlsafe_b64encode(exp_tree.encode()).decode().rstrip('=')
+        loop = lambda pid, lane, fid, token: process(
+            pid, command=('bash ' + str(self.root / 'run-loop.sh') +
+                          f' --carrier-lane={lane} --carrier-token=token-{pid:04d} '
+                          f'--carrier-feature={fid} --carrier-worktree64={token} '))
+
+        # Different lane + different owner is the intended parallel case.
+        rows = self.base + [loop(10, 'backend', 'ST-087', backend64)]
+        self.assertEqual([], execution.competitors(rows, self.root, 3, lane='experience',
+                                                   feature='ST-080', worktree64=exp64))
+        # Same lane always excludes a duplicate, even for a different owner.
+        self.assertEqual(10, execution.competitors(rows, self.root, 3, lane='backend',
+                                                   feature='ST-999', worktree64=exp64)[0]['pid'])
+        # Cross-lane same feature or same worktree still excludes a competitor.
+        same_feature = self.base + [loop(11, 'backend', 'ST-080', backend64)]
+        self.assertEqual(11, execution.competitors(same_feature, self.root, 3, lane='experience',
+                                                   feature='ST-080', worktree64=exp64)[0]['pid'])
+        same_tree = self.base + [loop(12, 'backend', 'ST-087', exp64)]
+        self.assertEqual(12, execution.competitors(same_tree, self.root, 3, lane='experience',
+                                                   feature='ST-080', worktree64=exp64)[0]['pid'])
+        # A pre-selection foreign-lane loop has no logical owner yet and may coexist.
+        preselect = self.base + [process(13, command='bash ' + str(self.root / 'run-loop.sh')
+                                         + ' --carrier-lane=backend --carrier-token=token-0013')]
+        self.assertEqual([], execution.competitors(preselect, self.root, 3, lane='experience'))
+        # Once a carrier claims scope, incomplete/legacy scope is fail-closed.
+        legacy = self.base + [process(14, name='node.exe',
+                                      command='node STARTRIPS_EXECUTION_OWNER=' + str(self.root)
+                                      + ';lane=backend;feature=ST-087;worktree=' + backend_tree + ';')]
+        self.assertEqual('unknown-scope', execution.competitors(
+            legacy, self.root, 3, lane='experience', feature='ST-080', worktree64=exp64)[0]['state'])
+        # Unreadable carrier scope is never excused merely because ancestry proves another lane.
+        unreadable = self.base + [process(20, command='bash ' + str(self.root / 'run-loop.sh')
+                                          + ' --carrier-lane=backend'),
+                                  process(21, 20, 'node.exe', None)]
+        conflicts = execution.competitors(unreadable, self.root, 3, lane='experience')
+        self.assertEqual('unknown-command', next(x for x in conflicts if x['pid'] == 21)['state'])
+
+    def test_matching_direct_carrier_token_exempts_only_that_loop(self):
+        rows = self.base + [process(10, command='bash ' + str(self.root / 'run-loop.sh')
+                                    + ' --carrier-lane=experience --carrier-token=experience-token-1')]
+        with mock.patch.dict(os.environ, {'STARTRIPS_CARRIER_TOKEN': 'experience-token-1'}):
+            self.assertEqual([], execution.competitors(rows, self.root, 3, lane='experience'))
+
+    def test_windows_reconstructed_token_forms_are_same_invocation(self):
+        token = 'experience-token-1234'
+        self.assertEqual(token, execution.command_token(
+            'bash run-loop.sh --carrier-lane=experience --carrier-token=' + token))
+        self.assertEqual(token, execution.command_token(
+            'bash run-loop.sh --carrier-lane=experience --carrier-token "' + token + '"'))
+        rows = self.base + [
+            process(10, command='bash ' + str(self.root / 'run-loop.sh')
+                    + ' --carrier-lane=experience --carrier-token ' + token),
+            process(11, command='bash ' + str(self.root / 'run-loop.sh')
+                    + ' --carrier-lane=experience --carrier-token=' + token)]
+        with mock.patch.dict(os.environ, {'STARTRIPS_CARRIER_TOKEN': token}):
+            self.assertEqual([], execution.competitors(rows, self.root, 3, lane='experience'))
+
+    def test_different_carrier_token_does_not_exempt_peer(self):
+        rows = self.base + [process(10, command='bash ' + str(self.root / 'run-loop.sh')
+                                    + ' --carrier-lane=experience --carrier-token=experience-token-2')]
+        with mock.patch.dict(os.environ, {'STARTRIPS_CARRIER_TOKEN': 'experience-token-1'}):
+            self.assertEqual(10, execution.competitors(rows, self.root, 3, lane='experience')[0]['pid'])
+
+    def test_same_token_cluster_exempts_unreadable_chain_but_not_sibling_launch(self):
+        token = 'experience-token-1234'
+        rows = self.base + [
+            process(20, 1, 'bash.exe', None, started='msys-parent'),
+            process(21, 20, 'bash.exe', 'bash ' + str(self.root / 'run-loop.sh')
+                    + ' --carrier-lane=experience --carrier-token=' + token, started='seed'),
+            process(22, 21, 'bash.exe', None, started='msys-child'),
+            process(30, 20, 'bash.exe', 'bash ' + str(self.root / 'run-loop.sh')
+                    + ' --carrier-lane=experience --carrier-token=foreign-token-5678',
+                    started='foreign')]
+        with mock.patch.dict(os.environ, {'STARTRIPS_CARRIER_TOKEN': token}):
+            conflicts = execution.competitors(rows, self.root, 3, lane='experience')
+        self.assertEqual([30], [row['pid'] for row in conflicts])
 
     def test_orphan_worker_marker_blocks_new_carrier(self):
         rows = self.base + [process(10, name='node.exe', command='node worker STARTRIPS_EXECUTION_OWNER=' + str(self.root) + ';feature=ST-001;')]
@@ -99,13 +285,19 @@ class ProcessClassificationCases(unittest.TestCase):
         with mock.patch.dict(os.environ, {'STARTRIPS_OWN_PIDS': '20@sup-start-1'}):
             self.assertEqual([21], [row['pid'] for row in execution.competitors(rows, self.root, 3)])
 
-    def test_publication_never_short_circuits_an_unreadable_command(self):
-        # The UNKNOWN #400 established outranks publication: an exemption is only
-        # ever reached once the command line has been read, so a carrier we cannot
-        # read stays UNKNOWN even when its number and stamp were published.
-        rows = self.base + [process(10, 20, 'bash', None, started='sup-start-1')]
-        with mock.patch.dict(os.environ, {'STARTRIPS_OWN_PIDS': '10@sup-start-1'}):
-            self.assertEqual('unknown-command', execution.competitors(rows, self.root, 3)[0]['state'])
+    def test_published_start_identity_exempts_unreadable_self(self):
+        # CommandLine can be unreadable in the real MSYS chain. A PID alone is
+        # unsafe, but the exact PID+CreationDate published by this invocation is
+        # sufficient self identity and must be checked before UNKNOWN.
+        rows = self.base + [process(10, 20, 'bash', None, started='self-start-1')]
+        with mock.patch.dict(os.environ, {'STARTRIPS_OWN_PIDS': '10@self-start-1'}):
+            self.assertEqual([], execution.competitors(rows, self.root, 3))
+
+    def test_unreadable_reused_pid_does_not_inherit_self_identity(self):
+        rows = self.base + [process(10, 20, 'bash', None, started='different-start-2')]
+        with mock.patch.dict(os.environ, {'STARTRIPS_OWN_PIDS': '10@self-start-1'}):
+            conflict = execution.competitors(rows, self.root, 3)[0]
+        self.assertEqual((10, 'unknown-command'), (conflict['pid'], conflict['state']))
 
     def test_unreadable_child_under_a_generic_parent_stays_unknown(self):
         for name, command in [('powershell.exe', 'powershell.exe -NoProfile'),
@@ -385,6 +577,16 @@ class SupervisorBranchCases(ChainCase):
 
 
 class StopAndPermissionCases(fixture.SyntheticOne):
+    def test_backend_supervisor_stop_does_not_stop_experience(self):
+        (self.root / 'SUPERVISOR_STOP').write_text('backend owner stop')
+        self.assertEqual([], execution.stopped(self.root, lane='experience'))
+        self.assertEqual(['SUPERVISOR_STOP'], execution.stopped(self.root, lane='backend'))
+
+    def test_global_agent_stop_stops_both_lanes(self):
+        (self.root / 'AGENT_STOP').write_text('global owner stop')
+        self.assertEqual(['AGENT_STOP'], execution.stopped(self.root, lane='experience'))
+        self.assertIn('AGENT_STOP', execution.stopped(self.root, lane='backend'))
+
     def test_inherit_probe_really_writes_and_removes_only_its_file(self):
         before = self.path.read_bytes()
         result = execution.permission_probe(self.root)
@@ -426,10 +628,28 @@ class StopAndPermissionCases(fixture.SyntheticOne):
     def test_explicit_resume_clears_only_two_requested_stops(self):
         for name in ['AGENT_STOP', 'SUPERVISOR_STOP']: (self.root / name).write_text('human stop')
         before = self.path.read_bytes()
-        with mock.patch.dict(os.environ, {'STARTRIPS_EXPLICIT_RESUME': '1'}), mock.patch.object(execution, 'ensure_idle'):
+        with mock.patch.dict(os.environ, {'STARTRIPS_EXPLICIT_RESUME': '1'}), \
+                mock.patch.object(execution, 'ensure_idle') as provider:
             result = execution.manual_resume(self.root)
+        provider.assert_called_once_with(self.root.resolve())
         self.assertEqual({'AGENT_STOP', 'SUPERVISOR_STOP'}, set(result['cleared']))
         self.assertFalse(result['worker_started']); self.assertEqual(before, self.path.read_bytes())
+
+    def test_backend_only_resume_uses_backend_lane_guard(self):
+        (self.root / 'SUPERVISOR_STOP').write_text('backend stop')
+        with mock.patch.dict(os.environ, {'STARTRIPS_EXPLICIT_RESUME': '1'}), \
+                mock.patch.object(execution, 'ensure_idle') as provider:
+            result = execution.manual_resume(self.root)
+        provider.assert_called_once_with(self.root.resolve(), lane='backend')
+        self.assertEqual(['SUPERVISOR_STOP'], result['cleared'])
+
+    def test_global_stop_is_not_cleared_while_any_lane_is_active(self):
+        path = self.root / 'AGENT_STOP'; path.write_bytes(b'startrips-network-maintenance-window\n')
+        with mock.patch.object(execution, 'ensure_idle', side_effect=execution.EvidenceUnknown('experience active')) as provider:
+            with self.assertRaisesRegex(execution.EvidenceUnknown, 'experience active'):
+                execution.outage_window(self.root, 'resume')
+        provider.assert_called_once_with(self.root.resolve())
+        self.assertTrue(path.exists())
 
     def test_boundary_restart_never_overrides_existing_stop(self):
         (self.root / 'SUPERVISOR_STOP').write_text('stop')
@@ -476,6 +696,26 @@ class RealCarrierCases(fixture.WiringTests):
                    fixture.feature('ST-002', phase='P0-process'))
         result = self.invoke('export STARTRIPS_LANE=backend; bash run-loop.sh --next')
         self.assertEqual(0, result.returncode, result.stderr); self.assertEqual('', result.stdout.strip())
+
+    @unittest.skipUnless(os.name == 'nt', 'direct Experience carrier regression is Windows/MSYS-specific')
+    def test_backend_supervisor_stop_does_not_block_one_shot_experience(self):
+        source = Path(__file__).resolve().parents[1]
+        shutil.copy2(source / 'launch-experience.sh', self.root / 'launch-experience.sh')
+        (self.root / 'SUPERVISOR_STOP').write_text('backend owner stop')
+        before = self.path.read_bytes()
+        env = dict(os.environ, MAX_ITERATIONS='0', PYTHONIOENCODING='utf-8', PYTHONUTF8='1',
+                   PYTHONDONTWRITEBYTECODE='1')
+        env.pop('STARTRIPS_LANE', None); env.pop('STARTRIPS_CARRIER_TOKEN', None)
+        # Execute the real entrypoint directly. A bash -c wrapper changes the MSYS
+        # process topology and previously hid the same-invocation self-block.
+        result = subprocess.run([self.bash, str(self.root / 'launch-experience.sh')],
+                                cwd=self.root, env=env, capture_output=True, text=True,
+                                encoding='utf-8', timeout=90)
+        self.assertEqual(3, result.returncode, result.stdout + result.stderr)
+        self.assertIn('"lane": "experience"', result.stdout)
+        self.assertIn('"stop_markers": []', result.stdout)
+        self.assertNotIn('EXECUTION_UNKNOWN', result.stdout + result.stderr)
+        self.assertEqual(before, self.path.read_bytes())
 
 
 class RealWorktreeCases(fixture.SyntheticOne):
@@ -526,8 +766,23 @@ class RealWorktreeCases(fixture.SyntheticOne):
     def test_new_worktree_not_created_by_read_only_probe(self):
         before = self.git('worktree', 'list', '--porcelain')
         with self.assertRaises(fixture.store.StoreConflict):
-            runtime.prepare_unmapped(self.root, self.repo, fixture.feature('ST-002', issue=2), 'synthetic/project', False)
+            runtime.prepare_unmapped(self.root, self.repo, fixture.feature('ST-002', issue=2), 'synthetic/project', False, 'backend')
         self.assertEqual(before, self.git('worktree', 'list', '--porcelain'))
+
+    def test_new_owner_prepare_guard_is_lane_scoped(self):
+        row = fixture.feature('ST-002', issue=2)
+        with mock.patch.object(runtime, 'ensure_idle', side_effect=RuntimeError('guard')) as guard:
+            with self.assertRaisesRegex(RuntimeError, 'guard'):
+                runtime.prepare_unmapped(self.root, self.repo, row, 'synthetic/project', True, 'experience')
+        guard.assert_called_once_with(self.root, lane='experience', feature='ST-002')
+
+    def test_seal_guard_is_lane_and_owner_scoped(self):
+        with mock.patch.dict(os.environ, {'STARTRIPS_ROLE': 'experience'}), \
+                mock.patch.object(seal_owner, 'ensure_idle', side_effect=RuntimeError('guard')) as guard:
+            with self.assertRaisesRegex(RuntimeError, 'guard'):
+                seal_owner.seal(self.root, self.repo, 'ST-001', 'synthetic/project')
+        guard.assert_called_once_with(self.root.resolve(), lane='experience', feature='ST-001',
+                                      worktree=self.repo.resolve())
 
     def test_wrong_target_lane_is_refused(self):
         old = Path.cwd()

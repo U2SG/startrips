@@ -55,12 +55,14 @@ def validate_node(worktree, number, final=False):
 
 
 def seal(root, worktree, fid, repo):
-    if os.environ.get('STARTRIPS_ROLE') not in {'local-backend', 'experience'}:
+    role = os.environ.get('STARTRIPS_ROLE')
+    if role not in {'local-backend', 'experience'}:
         raise StoreConflict('Only the executing owner may seal; no Maintainer authority granted')
+    lane = 'backend' if role == 'local-backend' else 'experience'
     root, worktree = Path(root).resolve(), Path(worktree).resolve()
     if not worktree.is_relative_to(root): raise StoreConflict('Owner worktree outside workspace')
-    if stopped(root): raise StoreConflict('Owner STOP preserves the current seal state')
-    ensure_idle(root)
+    if stopped(root, lane=lane): raise StoreConflict('Owner STOP preserves the current seal state')
+    ensure_idle(root, lane=lane, feature=fid, worktree=worktree)
     observed = plan(root / 'feature_list.json', fid, repo)
     if observed['action'] != 'SEAL':
         return {'changed': False, 'action': observed['action']}
@@ -115,7 +117,7 @@ def seal(root, worktree, fid, repo):
             finally:
                 if os.path.exists(temporary): os.unlink(temporary)
         validate_node(worktree, number)
-        if stopped(root): raise StoreConflict('STOP arrived; preserve the pending ledger for same-owner recovery')
+        if stopped(root, lane=lane): raise StoreConflict('STOP arrived; preserve the pending ledger for same-owner recovery')
         git(worktree, 'add', '--', relative)
         git(worktree, 'commit', '-m', 'Record reviewed delivery evidence')
     elif not candidate_is_final(worktree, source, relative):
@@ -125,7 +127,7 @@ def seal(root, worktree, fid, repo):
     if git(worktree, 'status', '--porcelain'):
         raise StoreConflict('Owner changed during seal; do not push unrelated work')
     validate_node(worktree, number, final=True)
-    if stopped(root): raise StoreConflict('STOP arrived; existing final commit is retained without push')
+    if stopped(root, lane=lane): raise StoreConflict('STOP arrived; existing final commit is retained without push')
     final = git(worktree, 'rev-parse', 'HEAD')
     current = api('repos/' + repo + '/pulls/' + str(number))
     if current['head']['sha'] not in {source, final} or current.get('merged') or current.get('state') != 'open':

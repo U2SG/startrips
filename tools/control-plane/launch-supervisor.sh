@@ -18,11 +18,11 @@ for guard in AGENT_STOP SUPERVISOR_STOP CANCEL_SCHEDULED_RESTART; do
 done
 # A fresh launch owns no supervisor yet; never inherit a stale allowlist.
 unset STARTRIPS_OWN_PIDS
-python3 -B "$ROOT/lib/execution.py" check "$ROOT" || exit 6
+python3 -B "$ROOT/lib/execution.py" check "$ROOT" --lane backend || exit 6
 LOGDIR="${LOOP_LOG_DIR:-/d/startrips/loop-logs}"
 mkdir -p "$LOGDIR"
 TS="$(date +%Y%m%dT%H%M%S)"; TS="$(printf '%s' "$TS" | tr -d '\r')"
 LOG="$LOGDIR/supervisor-$TS.log"
 cd "$ROOT" || exit 1
 echo "[launch] $(date '+%F %T') starting supervisor, log=$LOG" >"$LOG"
-exec /usr/bin/bash "$ROOT/loop-supervisor.sh" >>"$LOG" 2>&1
+exec /usr/bin/bash "$ROOT/loop-supervisor.sh" --carrier-lane=backend >>"$LOG" 2>&1
