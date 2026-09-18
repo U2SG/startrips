@@ -514,6 +514,34 @@ class WiringTests(SyntheticOne):
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual('ST-002', result.stdout.strip())
 
+    def write_occupied_probe(self, *, features, available_slots):
+        (self.root / 'lib' / 'execution.py').write_text(
+            'import json\nprint(json.dumps(' + repr({
+                'lane': 'experience', 'capacity': 2,
+                'occupied_slots': 2 - available_slots,
+                'available_slots': available_slots,
+                'features': features, 'worktrees': [], 'claim_count': 0,
+            }) + '))\n',
+            encoding='utf-8', newline='\n')
+
+    def test_experience_selector_skips_provider_occupied_owner(self):
+        self.write(
+            feature('ST-001', phase='P1-globe', status='in_progress',
+                    pr_links=['https://github.com/synthetic/project/pull/1']),
+            feature('ST-002', phase='P1-globe', priority=2),
+        )
+        self.write_occupied_probe(features=['ST-001'], available_slots=1)
+        result = self.invoke('export STARTRIPS_LANE=experience; bash run-loop.sh --next')
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual('ST-002', result.stdout.strip())
+
+    def test_experience_selector_returns_no_third_owner_when_two_slots_full(self):
+        self.write(feature('ST-003', phase='P1-globe', priority=3))
+        self.write_occupied_probe(features=['ST-001', 'ST-002'], available_slots=0)
+        result = self.invoke('export STARTRIPS_LANE=experience; bash run-loop.sh --next')
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual('', result.stdout.strip())
+
     def test_next_action_does_not_start_builder_or_create_artifacts(self):
         self.write(feature(status='ready_for_eval'))
         before = self.path.read_bytes()

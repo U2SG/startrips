@@ -117,11 +117,18 @@ claude_run() {
 #     dependent branched off main before its parent merged would be cut from a
 #     baseline that lacks the parent's code.
 next_feature() {
-python3 - "$ROOT/feature_list.json" "$STARTRIPS_LANE" "$FEATURE_ALLOW" <<'PY'
+local occupied_json='{}'
+if [[ "$STARTRIPS_LANE" == "experience" ]]; then
+  occupied_json="$(python3 -B "$ROOT/lib/execution.py" occupied "$ROOT" --lane experience)" || return 6
+fi
+python3 - "$ROOT/feature_list.json" "$STARTRIPS_LANE" "$FEATURE_ALLOW" "$occupied_json" "${CARRIER_FEATURE:-}" <<'PY'
 import json, re, sys
 
-p, lane, allow_raw = sys.argv[1], sys.argv[2], (sys.argv[3] if len(sys.argv) > 3 else '')
+p, lane, allow_raw, occupied_raw, carrier_feature = sys.argv[1:6]
 allow = set(allow_raw.split())
+occupied = json.loads(occupied_raw or '{}')
+occupied_features = set(occupied.get('features') or [])
+experience_full = lane == 'experience' and not carrier_feature and occupied.get('available_slots', 1) <= 0
 d = json.load(open(p, encoding='utf-8'))
 
 # Lane classification, derived and never written back to the matrix.
@@ -185,6 +192,10 @@ active_backend = {f['id'] for f in d['features'] if feature_lane(f) == 'backend'
 
 def eligible(f):
     if lane == 'backend' and active_backend and f['id'] not in active_backend:
+        return False
+    if lane == 'experience' and experience_full:
+        return False
+    if lane == 'experience' and f['id'] in occupied_features:
         return False
     if f.get('passes') or f.get('status') in {'passed', 'ready_to_merge', 'blocked', 'cancelled_by_product_decision'}:
         return False
