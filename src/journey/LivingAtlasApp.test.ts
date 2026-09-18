@@ -2012,6 +2012,51 @@ describe("ST-091 Journey Rail released-state ownership (#325)", () => {
     expect(source).not.toContain("style={{ visibility:");
   });
 
+  it("outranks the Atlas pass-through owner that hands every child pointer input", () => {
+    // The Atlas gives `pointer-events: auto` to each of its direct children,
+    // so an isolation rule keyed only on the rail's own marker is (0,2,0) and
+    // silently loses that one property to the (0,3,0) pass-through rule while
+    // still winning `opacity`. That combination is worse than no isolation at
+    // all: the rail reads invisible and stays hit-testable. Require the
+    // isolation to outrank the pass-through owner on the cascade, by
+    // specificity and then by source order, exactly as CSS resolves it.
+    const cleaned = styles.replace(/\/\*[\s\S]*?\*\//g, "");
+    // (classes + attributes + pseudo-classes), which is the only specificity
+    // component any of these selectors uses - none carries an id or an element.
+    const specificity = (selector: string): number => (
+      selector.replace(/:not\(([^)]*)\)/g, " $1 ").match(/\.[\w-]+|\[[^\]]*\]|:[\w-]+/g) ?? []
+    ).length;
+    const ruleAt = (needle: string) => {
+      const index = cleaned.indexOf(needle);
+      const open = cleaned.indexOf("{", index);
+      const selector = cleaned.slice(cleaned.lastIndexOf("}", index) + 1, open);
+      return { index, selector, body: cleaned.slice(open + 1, cleaned.indexOf("}", open)) };
+    };
+
+    const passThrough = ruleAt(".living-atlas > :not(.living-atlas__globe):not(.living-atlas__globe-focus-exit)");
+    expect(passThrough.index).toBeGreaterThan(-1);
+    expect(declaration(passThrough.body, "pointer-events")).toBe("auto");
+    const passThroughWeight = Math.max(
+      ...passThrough.selector.split(",").map((part) => specificity(part)),
+    );
+
+    for (const owner of ["playback", "globe-pick"]) {
+      const needle = `.living-atlas__journey-rail[data-rail-isolation~="${owner}"]`;
+      const isolation = ruleAt(needle);
+      const part = isolation.selector
+        .split(",")
+        .find((candidate) => candidate.includes(needle)) ?? "";
+      expect(declaration(isolation.body, "pointer-events"), owner).toBe("none");
+      expect(specificity(part), `${owner} isolation must outrank the pass-through owner`)
+        .toBeGreaterThanOrEqual(passThroughWeight);
+      if (specificity(part) === passThroughWeight) {
+        // A tie is resolved by source order, so the isolation must come later.
+        expect(isolation.index, `${owner} isolation must follow the pass-through owner`)
+          .toBeGreaterThan(passThrough.index);
+      }
+    }
+  });
+
   it("releases every isolation owner across the recorded transition sequence", () => {
     const sequence = [
       { label: "atlas", state: [false, false, false] as const, owners: [] as string[] },
