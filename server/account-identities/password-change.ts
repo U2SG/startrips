@@ -2,6 +2,7 @@ import { and, eq, ne } from "drizzle-orm";
 import { auth } from "../auth";
 import { accountIdentityAudit } from "../db/app-schema";
 import {
+  account as authAccount,
   session as authSession,
   user as authUser,
   verification as authVerification,
@@ -12,6 +13,7 @@ import {
   claimPasswordReverificationAction,
   recordIdentityRefusal,
 } from "./account-identity-repository";
+import { CREDENTIAL_PROVIDER_ID } from "./identity-policy";
 
 export type AccountPasswordChangeErrorCode =
   | "PASSWORD_CHANGE_INVALID"
@@ -97,6 +99,100 @@ function reverificationRefusal(code: string): AccountPasswordChangeErrorCode {
 }
 
 /**
+ * Does the credential this account signs in with already accept this password?
+ *
+ * Only ever used to decide whether an interrupted operation already committed
+ * its write. It reads the stored hash through Better Auth's own verifier and
+ * never reveals it.
+ */
+async function storedPasswordAccepts(
+  userId: string,
+  password: string,
+): Promise<boolean> {
+  const [credential] = await db
+    .select({ password: authAccount.password })
+    .from(authAccount)
+    .where(and(
+      eq(authAccount.userId, userId),
+      eq(authAccount.providerId, CREDENTIAL_PROVIDER_ID),
+    ))
+    .limit(1);
+  if (!credential?.password) return false;
+  const context = await auth.$context;
+  return await context.password.verify({
+    hash: credential.password,
+    password,
+  });
+}
+
+/**
+ * Revoke every session of this user except the calling one and invalidate every
+ * outstanding Better Auth capability keyed to the user id. Idempotent, so a
+ * retry that finishes an interrupted change may run it again.
+ */
+async function revokeOtherAccess(values: {
+  userId: string;
+  sessionId: string;
+}): Promise<number> {
+  return await db.transaction(async (transaction) => {
+    const revoked = await transaction
+      .delete(authSession)
+      .where(and(
+        eq(authSession.userId, values.userId),
+        ne(authSession.id, values.sessionId),
+      ))
+      .returning({ id: authSession.id });
+    await transaction
+      .delete(authVerification)
+      .where(eq(authVerification.value, values.userId));
+    return revoked.length;
+  });
+}
+
+/**
+ * Record the completed change against the grant that authorized it. One grant
+ * authorizes one change, so the receipt is written at most once even when the
+ * original call and a recovery retry overlap; the stable user row is the
+ * serialization point, as everywhere else in this module.
+ */
+async function recordChangeReceipt(userId: string, actionId: string) {
+  await db.transaction(async (transaction) => {
+    await transaction
+      .select({ id: authUser.id })
+      .from(authUser)
+      .where(eq(authUser.id, userId))
+      .for("update")
+      .limit(1);
+    const [existing] = await transaction
+      .select({ id: accountIdentityAudit.id })
+      .from(accountIdentityAudit)
+      .where(and(
+        eq(accountIdentityAudit.userId, userId),
+        eq(accountIdentityAudit.event, "password-change"),
+        eq(accountIdentityAudit.outcome, "success"),
+        eq(accountIdentityAudit.actionId, actionId),
+      ))
+      .limit(1);
+    if (existing) return;
+    await transaction.insert(accountIdentityAudit).values({
+      userId,
+      event: "password-change",
+      outcome: "success",
+      actionId,
+    });
+  });
+}
+
+async function finishChange(
+  values: { userId: string; sessionId: string },
+  actionId: string,
+): Promise<number> {
+  const revoked = await revokeOtherAccess(values);
+  await recordChangeReceipt(values.userId, actionId);
+  return revoked;
+}
+
+/**
  * Replace the password of the one stable Startrips Account behind this session.
  *
  * The write itself is Better Auth 1.6.23's own `/change-password` handler,
@@ -115,6 +211,20 @@ function reverificationRefusal(code: string): AccountPasswordChangeErrorCode {
  * - invalidation of outstanding capabilities issued against this user id, so a
  *   password-reset link mailed before the change cannot overwrite the new
  *   credential afterwards.
+ *
+ * Better Auth owns the credential write in its own transaction, so the write
+ * and this revocation cannot share one. The order therefore makes every
+ * interruption fail SAFE rather than fail open: revocation runs FIRST, so a
+ * process that dies mid-operation can only have revoked access the owner still
+ * holds the password for — never left a stale session or a live reset link
+ * beside a rotated credential. A refused write consequently still costs the
+ * other sessions, which is the conservative side of that trade and is only
+ * reachable by a caller who proved the current password minutes ago.
+ *
+ * The consumed grant is the durable marker for the rest: a retry of the same
+ * request that finds the new password already stored finishes the operation and
+ * records the receipt instead of refusing, so an interrupted round is
+ * recoverable without a second credential rotation.
  *
  * Nothing about the passwords, the hash or the grant value is returned, logged
  * or recorded; the audit row carries only the opaque action id.
@@ -157,7 +267,11 @@ export async function changeAccountPassword(values: {
     }
 
     if (!claimed.alreadyConsumed) {
-      return { actionId: claimed.actionId, alreadyChanged: false };
+      return {
+        actionId: claimed.actionId,
+        alreadyConsumed: false,
+        hasReceipt: false,
+      };
     }
 
     // A lost response must not force the owner to guess. The receipt is bound
@@ -173,15 +287,35 @@ export async function changeAccountPassword(values: {
         eq(accountIdentityAudit.actionId, claimed.actionId),
       ))
       .limit(1);
-    if (!receipt) {
-      throw new AccountPasswordChangeError("PASSWORD_CHANGE_REVERIFY_REPLAYED");
-    }
-    return { actionId: claimed.actionId, alreadyChanged: true };
+    return {
+      actionId: claimed.actionId,
+      alreadyConsumed: true,
+      hasReceipt: Boolean(receipt),
+    };
   });
 
-  if (claim.alreadyChanged) {
-    return { changed: false, alreadyChanged: true, revokedOtherSessions: 0 };
+  if (claim.alreadyConsumed) {
+    if (claim.hasReceipt) {
+      return { changed: false, alreadyChanged: true, revokedOtherSessions: 0 };
+    }
+    // The grant is spent but nothing recorded a completed change. Either the
+    // attempt it authorized was refused, or it committed the credential and
+    // died before the revocation/receipt landed. The stored credential settles
+    // which: if it already accepts the password this retry is asking for, the
+    // operation is finishable rather than replayable.
+    if (!await storedPasswordAccepts(values.userId, values.newPassword)) {
+      throw new AccountPasswordChangeError("PASSWORD_CHANGE_REVERIFY_REPLAYED");
+    }
+    return {
+      changed: false,
+      alreadyChanged: true,
+      revokedOtherSessions: await finishChange(values, claim.actionId),
+    };
   }
+
+  // Fail-safe ordering: revoke before the credential write, never after. See the
+  // doc comment — an interruption here can only over-revoke.
+  const revokedOtherSessions = await revokeOtherAccess(values);
 
   try {
     await auth.api.changePassword({
@@ -203,25 +337,6 @@ export async function changeAccountPassword(values: {
     throw new AccountPasswordChangeError(refusal);
   }
 
-  const revokedOtherSessions = await db.transaction(async (transaction) => {
-    const revoked = await transaction
-      .delete(authSession)
-      .where(and(
-        eq(authSession.userId, values.userId),
-        ne(authSession.id, values.sessionId),
-      ))
-      .returning({ id: authSession.id });
-    await transaction
-      .delete(authVerification)
-      .where(eq(authVerification.value, values.userId));
-    await transaction.insert(accountIdentityAudit).values({
-      userId: values.userId,
-      event: "password-change",
-      outcome: "success",
-      actionId: claim.actionId,
-    });
-    return revoked.length;
-  });
-
+  await recordChangeReceipt(values.userId, claim.actionId);
   return { changed: true, alreadyChanged: false, revokedOtherSessions };
 }

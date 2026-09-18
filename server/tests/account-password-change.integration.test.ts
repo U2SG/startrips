@@ -248,7 +248,7 @@ describe("authenticated account password change", () => {
   });
 
   it("refuses a wrong current password and spends that grant", async () => {
-    const fixture = await seedUser("wrong-current");
+    const fixture = await seedUser("wrong-current", { sessionCount: 2 });
     const before = await storedPasswordHash(fixture.userId);
     const grant = await createPasswordReverificationGrant(
       fixture.userId,
@@ -262,6 +262,12 @@ describe("authenticated account password change", () => {
       code: "PASSWORD_CHANGE_CURRENT_PASSWORD_INVALID",
     });
     expect(await storedPasswordHash(fixture.userId)).toBe(before);
+    // Revocation runs before the credential write so an interruption can only
+    // over-revoke. A refused write therefore still costs the other sessions,
+    // which is the deliberate conservative side of that trade.
+    expect(await db.select({ id: authSession.id }).from(authSession)
+      .where(eq(authSession.userId, fixture.userId)))
+      .toEqual([{ id: fixture.sessions[0]!.id }]);
 
     // The refused attempt consumed the single-use grant, so guessing cannot be
     // retried behind one re-verification.
@@ -349,6 +355,52 @@ describe("authenticated account password change", () => {
       sessionIndex: 0,
     })).rejects.toMatchObject({ code: "PASSWORD_CHANGE_SESSION_CHANGED" });
     expect(await storedPasswordHash(fixture.userId)).toBe(before);
+  });
+
+  it("finishes an interrupted change instead of refusing its retry", async () => {
+    const fixture = await seedUser("interrupted", { sessionCount: 2 });
+    const grant = await createPasswordReverificationGrant(
+      fixture.userId,
+      fixture.sessions[0]!.id,
+    );
+    await change(fixture, { reverificationToken: grant.token });
+    const hash = await storedPasswordHash(fixture.userId);
+
+    // Reproduce the state a crash between Better Auth's credential write and
+    // the receipt leaves behind: the grant is spent, the new password is
+    // stored, nothing recorded the completion, and a session that should have
+    // been revoked is live again.
+    await db.delete(accountIdentityAudit).where(and(
+      eq(accountIdentityAudit.userId, fixture.userId),
+      eq(accountIdentityAudit.event, "password-change"),
+      eq(accountIdentityAudit.outcome, "success"),
+    ));
+    await db.insert(authSession).values({
+      id: fixture.sessions[1]!.id,
+      token: "st092-token-" + randomUUID(),
+      userId: fixture.userId,
+      expiresAt: new Date(Date.now() + 86_400_000),
+    });
+
+    const recovered = await change(fixture, {
+      reverificationToken: grant.token,
+    });
+    expect(recovered).toEqual({
+      changed: false,
+      alreadyChanged: true,
+      revokedOtherSessions: 1,
+    });
+    expect(await storedPasswordHash(fixture.userId)).toBe(hash);
+    expect(await db.select({ id: authSession.id }).from(authSession)
+      .where(eq(authSession.userId, fixture.userId)))
+      .toEqual([{ id: fixture.sessions[0]!.id }]);
+    expect(await db.select({ id: accountIdentityAudit.id })
+      .from(accountIdentityAudit)
+      .where(and(
+        eq(accountIdentityAudit.userId, fixture.userId),
+        eq(accountIdentityAudit.event, "password-change"),
+        eq(accountIdentityAudit.outcome, "success"),
+      ))).toHaveLength(1);
   });
 
   it("rotates the credential once when the same grant is submitted concurrently", async () => {
