@@ -357,7 +357,7 @@ describe("authenticated account password change", () => {
     expect(await storedPasswordHash(fixture.userId)).toBe(before);
   });
 
-  it("finishes an interrupted change instead of refusing its retry", async () => {
+  it("refuses the retry of an interrupted change instead of rotating again", async () => {
     const fixture = await seedUser("interrupted", { sessionCount: 2 });
     const grant = await createPasswordReverificationGrant(
       fixture.userId,
@@ -367,40 +367,31 @@ describe("authenticated account password change", () => {
     const hash = await storedPasswordHash(fixture.userId);
 
     // Reproduce the state a crash between Better Auth's credential write and
-    // the receipt leaves behind: the grant is spent, the new password is
-    // stored, nothing recorded the completion, and a session that should have
-    // been revoked is live again.
+    // the receipt leaves behind: the grant is spent and the new password is
+    // stored, but nothing recorded the completion. Revocation ran before the
+    // write, so that state has nothing dangling left to finish.
     await db.delete(accountIdentityAudit).where(and(
       eq(accountIdentityAudit.userId, fixture.userId),
       eq(accountIdentityAudit.event, "password-change"),
       eq(accountIdentityAudit.outcome, "success"),
     ));
-    await db.insert(authSession).values({
-      id: fixture.sessions[1]!.id,
-      token: "st092-token-" + randomUUID(),
-      userId: fixture.userId,
-      expiresAt: new Date(Date.now() + 86_400_000),
-    });
 
-    const recovered = await change(fixture, {
-      reverificationToken: grant.token,
-    });
-    expect(recovered).toEqual({
-      changed: false,
-      alreadyChanged: true,
-      revokedOtherSessions: 1,
-    });
+    await expect(change(fixture, { reverificationToken: grant.token }))
+      .rejects.toMatchObject({ code: "PASSWORD_CHANGE_REVERIFY_REPLAYED" });
+    // The refusal costs the owner nothing: the rotation that did happen stands,
+    // it is not repeated, and signing in confirms it.
     expect(await storedPasswordHash(fixture.userId)).toBe(hash);
-    expect(await db.select({ id: authSession.id }).from(authSession)
-      .where(eq(authSession.userId, fixture.userId)))
-      .toEqual([{ id: fixture.sessions[0]!.id }]);
     expect(await db.select({ id: accountIdentityAudit.id })
       .from(accountIdentityAudit)
       .where(and(
         eq(accountIdentityAudit.userId, fixture.userId),
         eq(accountIdentityAudit.event, "password-change"),
         eq(accountIdentityAudit.outcome, "success"),
-      ))).toHaveLength(1);
+      ))).toHaveLength(0);
+    const signedIn = await auth.api.signInEmail({
+      body: { email: fixture.email, password: NEXT_PASSWORD },
+    });
+    expect(signedIn.user.id).toBe(fixture.userId);
   });
 
   it("refuses a spent grant retried with a different new password", async () => {
@@ -436,6 +427,52 @@ describe("authenticated account password change", () => {
         eq(accountIdentityAudit.outcome, "success"),
       ))).toHaveLength(0);
     // The old password still signs in, which is the invariant the false
+    // receipt would have contradicted.
+    const signedIn = await auth.api.signInEmail({
+      body: { email: fixture.email, password: CURRENT_PASSWORD },
+    });
+    expect(signedIn.user.id).toBe(fixture.userId);
+  });
+
+  it("refuses a spent grant whose refusal never reached the audit", async () => {
+    const fixture = await seedUser("refusal-lost", { sessionCount: 2 });
+    const before = await storedPasswordHash(fixture.userId);
+    const grant = await createPasswordReverificationGrant(
+      fixture.userId,
+      fixture.sessions[0]!.id,
+    );
+
+    await expect(change(fixture, {
+      reverificationToken: grant.token,
+      currentPassword: CURRENT_PASSWORD + "-wrong",
+    })).rejects.toMatchObject({
+      code: "PASSWORD_CHANGE_CURRENT_PASSWORD_INVALID",
+    });
+
+    // Reproduce the narrower interruption: Better Auth refused, but the process
+    // died before that refusal was durable. The grant is spent and carries no
+    // record at all, which is exactly the state an interrupted SUCCESS leaves —
+    // so a retry that changes its body must not be able to tell the service it
+    // succeeded.
+    await db.delete(accountIdentityAudit).where(and(
+      eq(accountIdentityAudit.userId, fixture.userId),
+      eq(accountIdentityAudit.event, "password-change"),
+      eq(accountIdentityAudit.outcome, "refused"),
+    ));
+
+    await expect(change(fixture, {
+      reverificationToken: grant.token,
+      newPassword: CURRENT_PASSWORD,
+    })).rejects.toMatchObject({ code: "PASSWORD_CHANGE_REVERIFY_REPLAYED" });
+    expect(await storedPasswordHash(fixture.userId)).toBe(before);
+    expect(await db.select({ id: accountIdentityAudit.id })
+      .from(accountIdentityAudit)
+      .where(and(
+        eq(accountIdentityAudit.userId, fixture.userId),
+        eq(accountIdentityAudit.event, "password-change"),
+        eq(accountIdentityAudit.outcome, "success"),
+      ))).toHaveLength(0);
+    // The old password still signs in, which is the invariant a manufactured
     // receipt would have contradicted.
     const signedIn = await auth.api.signInEmail({
       body: { email: fixture.email, password: CURRENT_PASSWORD },
