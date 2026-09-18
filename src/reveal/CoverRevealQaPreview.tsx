@@ -180,8 +180,12 @@ export function CoverRevealQaPreview() {
   }, []);
 
   window.__coverRevealDebug = () => {
-    if (!mounted) sampleSettledImage();
-    else if (debugRef.current.phase === "settled" && !canvasRef.current) sampleSettledImage();
+    // Sample the image surface whenever there is no live canvas left to read:
+    // after teardown, and after any settle that released the renderer - a
+    // failed generated asset leaves a stale, already-removed canvas reference.
+    if (!mounted || (debugRef.current.phase === "settled" && !canvasRef.current?.isConnected)) {
+      sampleSettledImage();
+    }
     const canvas = canvasRef.current;
     return {
       ...debugRef.current,

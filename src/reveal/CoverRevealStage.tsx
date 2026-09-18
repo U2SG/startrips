@@ -148,7 +148,9 @@ export function CoverRevealStage({
       // A load failure has nothing left to paint, so the renderer goes away
       // before the state that mounts the original-cover image is published.
       if (event.type === "failed") release();
-      publish(coverRevealReducer(stateRef.current, event), flow.canvas);
+      // A released renderer's canvas is detached and unpainted, so it is not a
+      // surface any caller should be handed.
+      publish(coverRevealReducer(stateRef.current, event), flow.disposed ? null : flow.canvas);
     };
     const onImages = () => dispatch({ type: "images-loaded", revision });
     const onProgress = (event: Event) => {
