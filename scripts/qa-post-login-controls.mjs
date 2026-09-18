@@ -1923,9 +1923,35 @@ async function verifyFinalAcceptanceMobileFlow() {
             });
           }
         };
-        for (const sheet of document.styleSheets) {
+        for (const sheet of [...document.styleSheets, ...(document.adoptedStyleSheets ?? [])]) {
           try { collectVisibilityRules(sheet.cssRules ?? [], null, true, 0); } catch { /* opaque sheet */ }
         }
+        // #325 fourth recurrence: the cascade read above now excludes every
+        // declarative owner, so the remaining authorities are the ones that
+        // never appear in a matched rule -- an animation effect on the rail
+        // (a CSS animation, a CSS transition whose `transition-delay` parks the
+        // pre-change value, or a WAAPI animation) -- and the possibility that
+        // the rail measured here is not the rail that owns the target button.
+        // Read both in this same evaluation.
+        const timingOf = (animation) => {
+          try { return animation.effect?.getTiming?.() ?? null; } catch { return null; }
+        };
+        const summarizeAnimation = (animation) => ({
+          kind: animation.constructor?.name ?? null,
+          name: animation.animationName ?? animation.transitionProperty ?? null,
+          playState: animation.playState,
+          currentTime: animation.currentTime,
+          fill: timingOf(animation)?.fill ?? null,
+          delay: timingOf(animation)?.delay ?? null,
+          pseudoElement: animation.effect?.pseudoElement ?? null,
+          targetClass: animation.effect?.target?.getAttribute?.("class") ?? null,
+        });
+        const railAnimations = rail?.getAnimations
+          ? rail.getAnimations({ subtree: false }).map(summarizeAnimation)
+          : null;
+        const documentAnimations = document.getAnimations
+          ? document.getAnimations().slice(0, 12).map(summarizeAnimation)
+          : null;
         return {
           visible: rect.width > 0
             && rect.height > 0
@@ -1955,6 +1981,21 @@ async function verifyFinalAcceptanceMobileFlow() {
             railConnected: rail ? rail.isConnected : null,
             ancestorChain,
             matchedVisibilityRules,
+            railClass: rail?.getAttribute("class") ?? null,
+            railCount: document.querySelectorAll(".living-atlas__journey-rail").length,
+            railOwnsTarget: rail ? rail.contains(element) : null,
+            railCheckVisibility: rail?.checkVisibility
+              ? rail.checkVisibility({ contentVisibilityAuto: true, opacityProperty: true, visibilityProperty: true })
+              : null,
+            railAnimationName: railStyle?.animationName ?? null,
+            railAnimationPlayState: railStyle?.animationPlayState ?? null,
+            railAnimationFillMode: railStyle?.animationFillMode ?? null,
+            railTransitionProperty: railStyle?.transitionProperty ?? null,
+            railTransitionDuration: railStyle?.transitionDuration ?? null,
+            railTransitionDelay: railStyle?.transitionDelay ?? null,
+            railContentVisibility: railStyle?.contentVisibility ?? null,
+            railAnimations,
+            documentAnimations,
           },
         };
       }, targetTitle);
