@@ -287,8 +287,26 @@ describe("authenticated account password change", () => {
     expect(await storedPasswordHash(fixture.userId)).toBe(before);
   });
 
-  it("refuses a session that is no longer authoritative", async () => {
-    const fixture = await seedUser("stale");
+  it("refuses a session that has expired but is still stored", async () => {
+    const fixture = await seedUser("expired");
+    const before = await storedPasswordHash(fixture.userId);
+    const grant = await createPasswordReverificationGrant(
+      fixture.userId,
+      fixture.sessions[0]!.id,
+    );
+    // The row survives, so the grant survives with it; only Better Auth's
+    // authoritative session check can refuse this one.
+    await db.update(authSession)
+      .set({ expiresAt: new Date(Date.now() - 60_000) })
+      .where(eq(authSession.id, fixture.sessions[0]!.id));
+
+    await expect(change(fixture, { reverificationToken: grant.token }))
+      .rejects.toMatchObject({ code: "PASSWORD_CHANGE_SESSION_EXPIRED" });
+    expect(await storedPasswordHash(fixture.userId)).toBe(before);
+  });
+
+  it("refuses a revoked session, whose grants are gone with it", async () => {
+    const fixture = await seedUser("revoked");
     const before = await storedPasswordHash(fixture.userId);
     const grant = await createPasswordReverificationGrant(
       fixture.userId,
@@ -297,8 +315,12 @@ describe("authenticated account password change", () => {
     await db.delete(authSession)
       .where(eq(authSession.id, fixture.sessions[0]!.id));
 
+    // A grant is a child of the session that proved the password, so revoking
+    // that session cascades it away. The refusal is therefore about an
+    // unusable grant rather than about the session, and either way no
+    // credential is touched.
     await expect(change(fixture, { reverificationToken: grant.token }))
-      .rejects.toMatchObject({ code: "PASSWORD_CHANGE_SESSION_EXPIRED" });
+      .rejects.toMatchObject({ code: "PASSWORD_CHANGE_REVERIFY_INVALID" });
     expect(await storedPasswordHash(fixture.userId)).toBe(before);
   });
 
