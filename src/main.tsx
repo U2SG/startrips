@@ -125,14 +125,45 @@ const globeQaRoutes: JourneyRoute[] = [
   },
 ];
 
+/**
+ * #374 fixture: SYNTHETIC label-competition topology, not an itinerary. It
+ * carries the three shapes the collision policy has to separate - a Route Point
+ * whose label repeats a real Place Label, two records at the SAME coordinates,
+ * and two records that share a label at DIFFERENT coordinates - plus a
+ * pass-through point and an intermediate Stop for density.
+ */
+const labelArbitrationQaRoute: JourneyRoute = {
+  id: "qa-route-label-arbitration",
+  color: "#f4ce73",
+  points: [
+    { id: "qa-label-1", lat: 34.0522, lon: -118.2437, isStop: true, label: "Los Angeles" },
+    { id: "qa-label-2", lat: 34.0522, lon: -118.2437, isStop: true, label: "Los Angeles" },
+    { id: "qa-label-3", lat: 34.4208, lon: -117.3089, isStop: false, label: "Transit sample" },
+    { id: "qa-label-4", lat: 34.8697, lon: -116.9797, isStop: true, label: "Sample Stop" },
+    { id: "qa-label-5", lat: 35.3733, lon: -116.0553, isStop: true, label: "Los Angeles" },
+    // Antipodal to the focus, i.e. always behind the globe's limb: a Route
+    // Point that is not visible must not contribute a label.
+    { id: "qa-label-6", lat: -28.0522, lon: 61.7563, isStop: true, label: "Horizon sample" },
+  ],
+};
+
 function JourneyRoutesQaPreview() {
   const qaParams = new URLSearchParams(window.location.search);
   const routeOpticsQa = qaParams.get("qaRouteOptics") === "1";
+  const labelArbitrationQa = qaParams.get("qaLabelArbitration") === "1";
+  const previewRoutes = labelArbitrationQa
+    ? [...globeQaRoutes, labelArbitrationQaRoute]
+    : globeQaRoutes;
+  const [labelArbitrationStage, setLabelArbitrationStage] = useState<"browse" | "current" | "rewound">("browse");
   // #194: the preview is a second owner of the scene, so it supplies the same
   // compact flag the product owner does - otherwise the QA lane that measures
   // the contract would always see the desktop default.
   const compactMobileLayout = useCompactMobileLayout();
-  const [activeRouteId, setActiveRouteId] = useState<string | null>(routeOpticsQa ? "qa-route-southwest" : null);
+  const [activeRouteId, setActiveRouteId] = useState<string | null>(
+    labelArbitrationQa
+      ? labelArbitrationQaRoute.id
+      : routeOpticsQa ? "qa-route-southwest" : null,
+  );
   const [focusRevision, setFocusRevision] = useState(0);
   const [routeOpticsStage, setRouteOpticsStage] = useState<"browse" | "playing" | "rewound">("browse");
   // #196: a place label claims a geographic point, and clicking it must focus
@@ -140,7 +171,7 @@ function JourneyRoutesQaPreview() {
   // measure the claim against where the globe actually lands.
   const [pickedPoint, setPickedPoint] = useState<{ lat: number; lon: number } | null>(null);
   const [qaVisibilityHint, setQaVisibilityHint] = useState({ opaqueMediaCover: false, coverTransitionActive: false });
-  const activeRoute = globeQaRoutes.find((route) => route.id === activeRouteId) ?? null;
+  const activeRoute = previewRoutes.find((route) => route.id === activeRouteId) ?? null;
   const requestedLatRaw = qaParams.get("qaFocusLat");
   const requestedLonRaw = qaParams.get("qaFocusLon");
   const requestedLat = requestedLatRaw === null ? Number.NaN : Number(requestedLatRaw);
@@ -156,9 +187,23 @@ function JourneyRoutesQaPreview() {
   const imprintQa = qaParams.get("qaImprint") === "1";
   const imprintStage = qaParams.get("qaImprintStage") ?? "now";
   const qaTemporalReveal = useMemo(() => {
-    if (!imprintQa && !routeOpticsQa) return undefined;
+    if (!imprintQa && !routeOpticsQa && !labelArbitrationQa) return undefined;
     const journeys = new Map<string, number>();
     const points = new Map<string, number>();
+    if (labelArbitrationQa) {
+      // #374: Rewind is its own input. Browsing and the current narrative point
+      // leave the whole route visible; the rewound stage stops before the last
+      // two records, whose labels must therefore stay unrevealed.
+      const rewound = labelArbitrationStage === "rewound";
+      journeys.set(labelArbitrationQaRoute.id, rewound ? 0.4 : 1);
+      labelArbitrationQaRoute.points.forEach((_point, pointIndex) => {
+        points.set(
+          `${labelArbitrationQaRoute.id}:${pointIndex}`,
+          rewound && pointIndex >= 3 ? 0 : 1,
+        );
+      });
+      return { journeys, points };
+    }
     if (routeOpticsQa) {
       globeQaRoutes.forEach((route) => {
         const isTarget = route.id === "qa-route-southwest";
@@ -196,22 +241,36 @@ function JourneyRoutesQaPreview() {
       });
     });
     return { journeys, points };
-  }, [imprintQa, imprintStage, routeOpticsQa, routeOpticsStage]);
+  }, [imprintQa, imprintStage, labelArbitrationQa, labelArbitrationStage, routeOpticsQa, routeOpticsStage]);
   return (
     <main className="living-atlas">
       <div className="living-atlas__globe">
         <ParticleEarthScene
           mode="focusPoint"
           quality={qaQuality}
-          journeyRoutes={globeQaRoutes}
+          journeyRoutes={previewRoutes}
           temporalReveal={qaTemporalReveal}
           activeJourneyRouteId={activeRouteId}
-          selectedJourneyRoutePoint={routeOpticsQa ? {
+          selectedJourneyRoutePoint={labelArbitrationQa ? {
+            // The chosen record is the SECOND of the two same-coordinate
+            // records, so the arbitration has to prefer it over its twin.
+            journeyId: labelArbitrationQaRoute.id,
+            routePointId: "qa-label-2",
+            pointIndex: 1,
+          } : routeOpticsQa ? {
             journeyId: "qa-route-southwest",
             routePointId: "qa-p-18",
             pointIndex: 3,
           } : null}
-          narrativeJourneyRoutePoint={routeOpticsQa && routeOpticsStage !== "browse" ? {
+          narrativeJourneyRoutePoint={labelArbitrationQa ? (
+            labelArbitrationStage === "current"
+              ? {
+                journeyId: labelArbitrationQaRoute.id,
+                routePointId: "qa-label-3",
+                pointIndex: 2,
+              }
+              : null
+          ) : routeOpticsQa && routeOpticsStage !== "browse" ? {
             journeyId: "qa-route-southwest",
             routePointId: routeOpticsStage === "playing" ? "qa-p-17" : "qa-p-16",
             pointIndex: routeOpticsStage === "playing" ? 2 : 1,
@@ -254,6 +313,13 @@ function JourneyRoutesQaPreview() {
             <button type="button" data-qa-route-optics-stage="rewound" onClick={() => setRouteOpticsStage("rewound")}>optics rewound</button>
           </>
         ) : null}
+        {labelArbitrationQa ? (
+          <>
+            <button type="button" data-qa-label-stage="browse" onClick={() => setLabelArbitrationStage("browse")}>label browse</button>
+            <button type="button" data-qa-label-stage="current" onClick={() => setLabelArbitrationStage("current")}>label current</button>
+            <button type="button" data-qa-label-stage="rewound" onClick={() => setLabelArbitrationStage("rewound")}>label rewound</button>
+          </>
+        ) : null}
         {renderBudgetQa ? (
           <>
             <button type="button" data-qa-render-visibility="partial" onClick={() => setQaVisibilityHint({ opaqueMediaCover: false, coverTransitionActive: false })}>partial</button>
@@ -264,7 +330,7 @@ function JourneyRoutesQaPreview() {
             <button type="button" data-qa-render-quality="high" onClick={() => setQaQuality("high")}>high quality</button>
           </>
         ) : null}
-        {globeQaRoutes.map((route) => (
+        {previewRoutes.map((route) => (
           <button
             key={route.id}
             type="button"
