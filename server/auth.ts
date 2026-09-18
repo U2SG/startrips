@@ -27,6 +27,13 @@ export const STARTRIPS_DISABLED_IDENTITY_PATHS = [
   // not consume the ST-067 dedicated recent-proof grant or our two-stage
   // old/new address transaction, so it must not be an alternate write path.
   "/change-email",
+  // #410 owns password replacement for the same reason: the native endpoint
+  // accepts any authoritative session and therefore bypasses the ST-067
+  // recent-proof grant, its single-use replay receipt and the deterministic
+  // session rule. `disabledPaths` filters the HTTP router only, so
+  // `/api/account-identities/password` still drives the pinned Better Auth
+  // 1.6.23 change-password path through `auth.api.changePassword()`.
+  "/change-password",
 ] as const;
 
 export const auth = betterAuth({
