@@ -108,6 +108,13 @@ export async function recordIdentityRefusal(values: {
   event: AccountIdentityAuditEvent;
   providerId?: string | null;
   accountRecordId?: string | null;
+  /**
+   * The consumed grant this refusal belongs to, when the refusal happened after
+   * a single-use action was already spent. It makes that grant's one authorized
+   * attempt terminal, so a later retry of the same grant cannot be mistaken for
+   * an interrupted operation. Opaque local id only, never the bearer token.
+   */
+  actionId?: string | null;
   reason: AccountIdentityErrorCode | string;
 }) {
   await db.insert(accountIdentityAudit).values({
@@ -116,6 +123,7 @@ export async function recordIdentityRefusal(values: {
     outcome: "refused",
     providerId: values.providerId ?? null,
     accountRecordId: values.accountRecordId ?? null,
+    actionId: values.actionId ?? null,
     reason: values.reason,
   });
 }

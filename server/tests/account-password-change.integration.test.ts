@@ -403,6 +403,46 @@ describe("authenticated account password change", () => {
       ))).toHaveLength(1);
   });
 
+  it("refuses a spent grant retried with a different new password", async () => {
+    const fixture = await seedUser("refused-then-rebodied", { sessionCount: 2 });
+    const before = await storedPasswordHash(fixture.userId);
+    const grant = await createPasswordReverificationGrant(
+      fixture.userId,
+      fixture.sessions[0]!.id,
+    );
+
+    await expect(change(fixture, {
+      reverificationToken: grant.token,
+      currentPassword: CURRENT_PASSWORD + "-wrong",
+    })).rejects.toMatchObject({
+      code: "PASSWORD_CHANGE_CURRENT_PASSWORD_INVALID",
+    });
+
+    // The refused attempt is recorded against that exact grant, so retrying it
+    // with a changed body cannot be read as an interrupted operation. Naming
+    // the STILL-CURRENT password as the new one is the case that would
+    // otherwise satisfy a credential probe and manufacture a success receipt
+    // for a rotation that never happened.
+    await expect(change(fixture, {
+      reverificationToken: grant.token,
+      newPassword: CURRENT_PASSWORD,
+    })).rejects.toMatchObject({ code: "PASSWORD_CHANGE_REVERIFY_REPLAYED" });
+    expect(await storedPasswordHash(fixture.userId)).toBe(before);
+    expect(await db.select({ id: accountIdentityAudit.id })
+      .from(accountIdentityAudit)
+      .where(and(
+        eq(accountIdentityAudit.userId, fixture.userId),
+        eq(accountIdentityAudit.event, "password-change"),
+        eq(accountIdentityAudit.outcome, "success"),
+      ))).toHaveLength(0);
+    // The old password still signs in, which is the invariant the false
+    // receipt would have contradicted.
+    const signedIn = await auth.api.signInEmail({
+      body: { email: fixture.email, password: CURRENT_PASSWORD },
+    });
+    expect(signedIn.user.id).toBe(fixture.userId);
+  });
+
   it("rotates the credential once when the same grant is submitted concurrently", async () => {
     const fixture = await seedUser("concurrent", { sessionCount: 2 });
     const grant = await createPasswordReverificationGrant(

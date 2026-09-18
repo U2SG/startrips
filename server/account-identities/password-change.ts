@@ -221,10 +221,16 @@ async function finishChange(
  * other sessions, which is the conservative side of that trade and is only
  * reachable by a caller who proved the current password minutes ago.
  *
- * The consumed grant is the durable marker for the rest: a retry of the same
- * request that finds the new password already stored finishes the operation and
- * records the receipt instead of refusing, so an interrupted round is
- * recoverable without a second credential rotation.
+ * The consumed grant is the durable marker for the rest, and BOTH outcomes are
+ * recorded against it. A success receipt answers a retry of the same request
+ * with the completed change; a recorded refusal makes that grant terminal, so
+ * the retry is a replay refusal. Only when the grant carries neither is the
+ * outcome genuinely unknown — the attempt may have committed the credential and
+ * died before the revocation and the receipt landed — and only then does the
+ * stored credential decide, which finishes the operation without a second
+ * rotation. Deciding a KNOWN refusal that way would be unsound: the probe asks
+ * whether the credential accepts the retry's own new password, so a retry
+ * naming the still-current password would read as an already-completed change.
  *
  * Nothing about the passwords, the hash or the grant value is returned, logged
  * or recorded; the audit row carries only the opaque action id.
@@ -271,26 +277,26 @@ export async function changeAccountPassword(values: {
         actionId: claimed.actionId,
         alreadyConsumed: false,
         hasReceipt: false,
+        hasRefusal: false,
       };
     }
 
-    // A lost response must not force the owner to guess. The receipt is bound
-    // to the exact consumed grant, so only a retry of THAT request reports the
-    // completed change; any other grant reuse stays a replay refusal.
-    const [receipt] = await transaction
-      .select({ id: accountIdentityAudit.id })
+    // A lost response must not force the owner to guess. Both records are bound
+    // to the exact consumed grant, so only a retry of THAT request learns its
+    // outcome; any other grant reuse stays a replay refusal.
+    const outcomes = await transaction
+      .select({ outcome: accountIdentityAudit.outcome })
       .from(accountIdentityAudit)
       .where(and(
         eq(accountIdentityAudit.userId, values.userId),
         eq(accountIdentityAudit.event, "password-change"),
-        eq(accountIdentityAudit.outcome, "success"),
         eq(accountIdentityAudit.actionId, claimed.actionId),
-      ))
-      .limit(1);
+      ));
     return {
       actionId: claimed.actionId,
       alreadyConsumed: true,
-      hasReceipt: Boolean(receipt),
+      hasReceipt: outcomes.some((row) => row.outcome === "success"),
+      hasRefusal: outcomes.some((row) => row.outcome === "refused"),
     };
   });
 
@@ -298,11 +304,22 @@ export async function changeAccountPassword(values: {
     if (claim.hasReceipt) {
       return { changed: false, alreadyChanged: true, revokedOtherSessions: 0 };
     }
-    // The grant is spent but nothing recorded a completed change. Either the
-    // attempt it authorized was refused, or it committed the credential and
-    // died before the revocation/receipt landed. The stored credential settles
-    // which: if it already accepts the password this retry is asking for, the
-    // operation is finishable rather than replayable.
+    // A refusal recorded against this exact grant makes its one authorized
+    // attempt terminal: the credential was not touched, and this grant may
+    // never authorize another attempt. Fail closed BEFORE the credential is
+    // consulted at all. Probing it here would answer a question about the
+    // retry's OWN request rather than about the operation that was authorized:
+    // a retry naming the still-current password as its new one would find the
+    // stored credential accepting it and manufacture a success receipt for a
+    // rotation that never happened.
+    if (claim.hasRefusal) {
+      throw new AccountPasswordChangeError("PASSWORD_CHANGE_REVERIFY_REPLAYED");
+    }
+    // Nothing at all was recorded against the grant, so the outcome of the
+    // attempt it authorized is genuinely unknown: it may have committed the
+    // credential and died before the revocation/receipt landed. Only here does
+    // the stored credential settle it — if it already accepts the password this
+    // retry is asking for, the operation is finishable rather than replayable.
     if (!await storedPasswordAccepts(values.userId, values.newPassword)) {
       throw new AccountPasswordChangeError("PASSWORD_CHANGE_REVERIFY_REPLAYED");
     }
@@ -332,6 +349,7 @@ export async function changeAccountPassword(values: {
     await recordIdentityRefusal({
       userId: values.userId,
       event: "password-change",
+      actionId: claim.actionId,
       reason: refusal,
     });
     throw new AccountPasswordChangeError(refusal);
