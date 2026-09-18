@@ -382,6 +382,8 @@ export const mediaAssetEvidence = pgTable(
       sql`(
         (${table.spatialGranularity} = 'coordinate'
           and ${table.spatialSource} <> 'unknown'
+          and ${table.latitude} is not null
+          and ${table.longitude} is not null
           and ${table.latitude} between -90 and 90
           and ${table.longitude} between -180 and 180
           and ${table.spatialLabel} is null
@@ -410,6 +412,7 @@ export const mediaAssetEvidence = pgTable(
           and ${table.captureTimeSource} <> 'unknown'
           and ${table.capturedLocal} is not null
           and ${table.capturedAtUtc} is not null
+          and ${table.capturedOffsetMinutes} is not null
           and ${table.capturedOffsetMinutes} between -840 and 840)
         or
         (${table.timezoneState} = 'local-only'
@@ -434,6 +437,8 @@ export const mediaAssetEvidence = pgTable(
           and ${table.correctionLabel} is null)
         or
         (${table.correctionGranularity} = 'coordinate'
+          and ${table.correctionLatitude} is not null
+          and ${table.correctionLongitude} is not null
           and ${table.correctionLatitude} between -90 and 90
           and ${table.correctionLongitude} between -180 and 180)
         or

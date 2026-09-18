@@ -7,6 +7,7 @@ import { serverConfig } from "../config";
 import {
   atlases,
   everydayFragments,
+  journeys,
   mediaAssetEvidence,
   mediaAssets,
 } from "../db/app-schema";
@@ -17,6 +18,7 @@ import {
 } from "../db/auth-schema";
 import { db, pool } from "../db/client";
 import { createJourneyForAtlas } from "../repositories/journey-repository";
+import { writeRecordedMediaEvidenceForAtlas } from "../repositories/media-evidence-repository";
 
 const TEST_ORIGIN = "http://127.0.0.1:5173";
 const atlasIds: string[] = [];
@@ -348,6 +350,114 @@ describe("media evidence owner API", () => {
     );
     expect(foreignWrite.status).toBe(404);
     expect((await evidenceRequest(identity.cookie, "not-a-uuid")).status).toBe(404);
+  });
+
+  it("rejects evidence access once a Journey enters its deletion grace period", async () => {
+    const deletingJourney = await createJourneyForAtlas(identity.atlasId, identity.userId, {
+      ...baseJourney,
+      title: "Deleting evidence journey",
+    });
+    if (!deletingJourney) throw new Error("Deleting Journey fixture was not created");
+    const [asset] = await db.insert(mediaAssets).values({
+      journeyId: deletingJourney.id,
+      routePointId: deletingJourney.routePoints[0].id,
+      storageDriver: "disabled",
+      storageKey: `evidence/${randomUUID()}/deleting.jpg`,
+      fileName: "deleting.jpg",
+      mimeType: "image/jpeg",
+      bytes: 256,
+      uploadedByUserId: identity.userId,
+    }).returning({ id: mediaAssets.id });
+
+    await db.update(journeys)
+      .set({ deletionStartedAt: new Date() })
+      .where(eq(journeys.id, deletingJourney.id));
+    try {
+      expect((await evidenceRequest(identity.cookie, asset.id)).status).toBe(404);
+      const write = await evidenceRequest(identity.cookie, asset.id, "/recorded", {
+        method: "PUT",
+        body: JSON.stringify(RECORDED_BODY),
+      });
+      expect(write.status).toBe(404);
+    } finally {
+      await db.update(journeys)
+        .set({ deletionStartedAt: null })
+        .where(eq(journeys.id, deletingJourney.id));
+    }
+  });
+
+  it("refuses repository writes after Atlas deletion starts", async () => {
+    const [deletingAtlas] = await db.insert(atlases).values({
+      organizationId: `deleting-media-evidence-${randomUUID()}`,
+      title: "Deleting Atlas",
+    }).returning({ id: atlases.id });
+    atlasIds.push(deletingAtlas.id);
+    const journey = await createJourneyForAtlas(
+      deletingAtlas.id,
+      "deleting-user",
+      { ...baseJourney, title: "Atlas deletion race fixture" },
+    );
+    if (!journey) throw new Error("Atlas deletion Journey fixture was not created");
+    const [asset] = await db.insert(mediaAssets).values({
+      journeyId: journey.id,
+      routePointId: journey.routePoints[0].id,
+      storageDriver: "disabled",
+      storageKey: `evidence/${randomUUID()}/atlas-deleting.jpg`,
+      fileName: "atlas-deleting.jpg",
+      mimeType: "image/jpeg",
+      bytes: 384,
+      uploadedByUserId: "deleting-user",
+    }).returning({ id: mediaAssets.id });
+
+    await db.update(atlases)
+      .set({ deletionStartedAt: new Date() })
+      .where(eq(atlases.id, deletingAtlas.id));
+    const result = await writeRecordedMediaEvidenceForAtlas(
+      deletingAtlas.id,
+      asset.id,
+      {
+        expectedRevision: 0,
+        recorded: {
+          spatial: { ...RECORDED_BODY.spatial },
+          captureTime: {
+            source: "exif-original",
+            timezone: "offset-known",
+            local: "2026-09-18T08:30:00",
+            instant: new Date("2026-09-18T00:30:00.000Z"),
+            offsetMinutes: 480,
+          },
+        },
+      },
+    );
+    expect(result).toEqual({ outcome: "asset-missing" });
+    expect(await db.select().from(mediaAssetEvidence)
+      .where(eq(mediaAssetEvidence.mediaAssetId, asset.id))).toHaveLength(0);
+  });
+
+  it("enforces non-null database fields for conditional coordinate and offset shapes", async () => {
+    await expect(db.insert(mediaAssetEvidence).values({
+      mediaAssetId: foreignAssetId,
+      spatialSource: "exif",
+      spatialGranularity: "coordinate",
+      latitude: null,
+      longitude: -122.349277,
+    })).rejects.toThrow();
+
+    await expect(db.insert(mediaAssetEvidence).values({
+      mediaAssetId: foreignAssetId,
+      captureTimeSource: "exif-original",
+      timezoneState: "offset-known",
+      capturedLocal: "2026-09-18T08:30:00",
+      capturedAtUtc: new Date("2026-09-18T00:30:00.000Z"),
+      capturedOffsetMinutes: null,
+    })).rejects.toThrow();
+
+    await expect(db.insert(mediaAssetEvidence).values({
+      mediaAssetId: foreignAssetId,
+      correctionGranularity: "coordinate",
+      correctionLatitude: null,
+      correctionLongitude: -122.349277,
+    })).rejects.toThrow();
   });
 
   it("keeps one evidence row with the asset through Route Point moves and Everyday Fragment reclassification", async () => {

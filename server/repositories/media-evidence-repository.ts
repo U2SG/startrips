@@ -6,6 +6,7 @@ import {
   mediaAssets,
 } from "../db/app-schema";
 import { db } from "../db/client";
+import { lockActiveAtlas } from "./journey-repository";
 import {
   UNKNOWN_MEDIA_RECORDED_EVIDENCE,
   effectiveMediaSpatialEvidence,
@@ -134,7 +135,8 @@ async function assetBelongsToAtlas(
       on ${everydayFragments.id} = ${mediaAssets.everydayFragmentId}
     where ${mediaAssets.id} = ${assetId}
       and (
-        ${journeys.atlasId} = ${atlasId}
+        (${journeys.atlasId} = ${atlasId}
+          and ${journeys.deletionStartedAt} is null)
         or ${everydayFragments.atlasId} = ${atlasId}
       )
     ${lock ? sql`for update of ${mediaAssets}` : sql``}
@@ -199,6 +201,9 @@ export async function writeRecordedMediaEvidenceForAtlas(
   write: MediaRecordedEvidenceWrite,
 ): Promise<MediaEvidenceWriteResult> {
   return db.transaction(async (transaction) => {
+    if (!await lockActiveAtlas(transaction, atlasId)) {
+      return { outcome: "asset-missing" } as const;
+    }
     if (!await assetBelongsToAtlas(transaction, atlasId, assetId, true)) {
       return { outcome: "asset-missing" } as const;
     }
@@ -240,6 +245,9 @@ export async function writeMediaDisplayStateForAtlas(
   write: MediaDisplayStateWrite,
 ): Promise<MediaEvidenceWriteResult> {
   return db.transaction(async (transaction) => {
+    if (!await lockActiveAtlas(transaction, atlasId)) {
+      return { outcome: "asset-missing" } as const;
+    }
     if (!await assetBelongsToAtlas(transaction, atlasId, assetId, true)) {
       return { outcome: "asset-missing" } as const;
     }

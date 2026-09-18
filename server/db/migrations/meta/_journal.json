@@ -183,6 +183,13 @@
       "when": 1789714815346,
       "tag": "0025_plain_big_bertha",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1789718635618,
+      "tag": "0026_cooing_maddog",
+      "breakpoints": true
     }
   ]
 }
