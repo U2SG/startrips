@@ -2595,25 +2595,42 @@ export function ParticleEarthScene({
           point.element.dataset.attentionRole = presentation.attentionRole;
           point.element.dataset.temporalVisible = presentation.temporalVisible ? "true" : "false";
           point.element.setAttribute("r", String(routePointMarkerRadiusPx(presentation)));
-          // #374: attention can land on a Route Point the build-time candidate
-          // pool did not cover. Prepare its label element then - lazily and
-          // still bounded - rather than rebuilding the whole route layer.
-          if (
-            !point.label
-            && point.labelText
-            && entry.routeId === latestActiveJourneyRouteId.current
-            && presentation.attentionRole !== "ordinary"
-            && entry.points.filter((candidate) => candidate.label).length
-              < MAX_ROUTE_LABEL_CANDIDATES
-          ) {
-            point.label = createRouteVectorLabel(
-              point.labelText,
-              point.routePointIndex,
-              routeLabelPositionRole(point.routePointIndex, entry.points.length),
+        }
+        // #374: attention can land on a Route Point the build-time candidate
+        // pool did not cover, and selection does not rebuild this layer. Prepare
+        // the attended point's label here instead - after every presentation in
+        // this route is current, so the pool decision reads no stale role.
+        if (entry.routeId !== latestActiveJourneyRouteId.current) continue;
+        for (const point of entry.points) {
+          if (point.label || !point.labelText) continue;
+          if (point.presentation.attentionRole === "ordinary") continue;
+          const prepared = entry.points.filter((candidate) => candidate.label);
+          if (prepared.length >= MAX_ROUTE_LABEL_CANDIDATES) {
+            // A route with more labeled Stops than the pool holds fills it with
+            // ordinary candidates at build time. Attention outranks them, so the
+            // last ordinary slot is recycled rather than leaving the chosen
+            // record or the narrative current point without a label.
+            const victim = prepared.reduce<RouteVectorEntry["points"][number] | null>(
+              (worst, candidate) => (
+                candidate.presentation.attentionRole !== "ordinary"
+                  ? worst
+                  : !worst || candidate.routePointIndex > worst.routePointIndex
+                    ? candidate
+                    : worst
+              ),
+              null,
             );
-            point.label.element.style.display = "none";
-            entry.group.appendChild(point.label.element);
+            if (!victim?.label) continue;
+            victim.label.element.remove();
+            victim.label = undefined;
           }
+          point.label = createRouteVectorLabel(
+            point.labelText,
+            point.routePointIndex,
+            routeLabelPositionRole(point.routePointIndex, entry.points.length),
+          );
+          point.label.element.style.display = "none";
+          entry.group.appendChild(point.label.element);
         }
       }
       // Label visibility is now a function of attention and temporal state, so
