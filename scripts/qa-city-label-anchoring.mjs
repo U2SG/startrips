@@ -601,8 +601,8 @@ function checkNoOverlap(sample, where) {
 
 /** The fixture route's first Route Point, i.e. the city the label repeats. */
 const LABEL_ARBITRATION_FOCUS = { lat: 34.0522, lon: -118.2437 };
-/** Its antipode, which puts the whole fixture route behind the horizon. */
-const LABEL_ARBITRATION_ANTIPODE = { lat: -34.0522, lon: 61.7563 };
+/** The fixture's Route Point on the far side of the globe. */
+const HORIZON_POINT_INDEX = 5;
 /** Mirrors PLACE_LABEL_VICINITY_PX in src/scene/labelArbitration.ts. */
 const LABEL_VICINITY_PX = 44;
 
@@ -635,6 +635,23 @@ const LABEL_ARBITRATION_POSTURES = [
   },
 ];
 
+/**
+ * Place Labels stream in, so a frame read too early has a smaller candidate set
+ * than the next one. Settle on an unchanged rendered count before measuring.
+ */
+async function waitForPlaceLabelsToSettle(page) {
+  let previous = -1;
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const count = await page.evaluate(() => Number(
+      document.querySelector(".particle-earth-scene")?.dataset.journeyCityLabelCount ?? 0,
+    ));
+    if (count > 0 && count === previous) return count;
+    previous = count;
+    await page.waitForTimeout(250);
+  }
+  return previous;
+}
+
 async function openLabelArbitration(page, posture, stage, focus = LABEL_ARBITRATION_FOCUS) {
   const url = new URL(
     `/?qaState=journey-routes&qaLabelArbitration=1&qaQuality=high`
@@ -653,7 +670,7 @@ async function openLabelArbitration(page, posture, stage, focus = LABEL_ARBITRAT
     await page.locator(`[data-qa-label-stage="${stage}"]`).click();
   }
   await waitForFocusToSettle(page);
-  await page.waitForTimeout(400);
+  await waitForPlaceLabelsToSettle(page);
 }
 
 /**
@@ -725,8 +742,21 @@ function checkLabelArbitrationFrame(sample, where) {
   // same-coordinate pair still shares one anchor rather than being jittered.
   const ids = new Set(sample.markers.map((marker) => marker.routePointId));
   check(
-    ids.size === sample.markers.length && sample.markers.length === 5,
+    ids.size === sample.markers.length && sample.markers.length === 6,
     `${where}: ${sample.markers.length} Route Point records carry ${ids.size} distinct ids`,
+  );
+  // Horizon: the Route Point on the far side of the globe is not drawn, so it
+  // contributes no label even though it is the route's destination.
+  const horizonPoint = sample.markers.find((marker) => (
+    marker.routePointId === "qa-label-6"
+  ));
+  check(
+    Boolean(horizonPoint) && horizonPoint.hidden,
+    `${where}: the Route Point behind the globe's limb is still drawn`,
+  );
+  check(
+    !sample.routeLabels.some((label) => label.pointIndex === HORIZON_POINT_INDEX),
+    `${where}: a label was drawn for the Route Point behind the globe's limb`,
   );
   const first = sample.markers.find((marker) => marker.pointIndex === 0);
   const twin = sample.markers.find((marker) => marker.pointIndex === 1);
@@ -1258,16 +1288,18 @@ try {
         }
         checkLabelArbitrationFrame(sample, where);
 
-        // Determinism: identical input, identical arbitration. A second read of
-        // a still globe that picked a different set would be the flicker the
-        // policy has to prevent.
-        const repeat = await measureLabelArbitration(labelPage);
-        check(
-          !repeat.error
-            && JSON.stringify(repeat.routeLabels.map((label) => label.pointIndex))
-              === JSON.stringify(sample.routeLabels.map((label) => label.pointIndex)),
-          `${where}: the same still frame arbitrated a different label set (${JSON.stringify(sample.routeLabels.map((label) => label.pointIndex))} then ${JSON.stringify(repeat.routeLabels?.map((label) => label.pointIndex))})`,
-        );
+        // Determinism: identical input, identical arbitration. Only meaningful
+        // on a still globe, so it is scoped to the reduced-motion postures -
+        // an animating scene legitimately reads two different frames.
+        if (posture.motion === "reduced") {
+          const repeat = await measureLabelArbitration(labelPage);
+          check(
+            !repeat.error
+              && JSON.stringify(repeat.routeLabels.map((label) => label.pointIndex))
+                === JSON.stringify(sample.routeLabels.map((label) => label.pointIndex)),
+            `${where}: the same still frame arbitrated a different label set (${JSON.stringify(sample.routeLabels.map((label) => label.pointIndex))} then ${JSON.stringify(repeat.routeLabels?.map((label) => label.pointIndex))})`,
+          );
+        }
 
         const visible = new Set(sample.routeLabels.map((label) => label.pointIndex));
         if (posture.compact) {
@@ -1293,6 +1325,13 @@ try {
             visible.has(4),
             `${where}: the distant Route Point sharing the label "Los Angeles" lost its own label`,
           );
+          // Acceptance 2, positively: the fixture centres a Route Point whose
+          // label repeats a real Place Label, so the suppression must actually
+          // fire and leave one clear priority route label.
+          check(
+            sample.redundantCount >= 1,
+            `${where}: no Place Label was suppressed as a repetition, so this frame proves nothing about acceptance 2 (${sample.cityLabelCount} Place Labels rendered)`,
+          );
         } else if (stage === "current") {
           check(
             visible.has(2),
@@ -1313,23 +1352,6 @@ try {
         ].join(" "));
       }
 
-      // Horizon: the fixture route is behind the globe, so it has no label at
-      // all, while Place Labels on the facing hemisphere keep rendering.
-      await openLabelArbitration(labelPage, posture, "browse", LABEL_ARBITRATION_ANTIPODE);
-      const horizon = await measureLabelArbitration(labelPage);
-      if (horizon.error) {
-        check(false, `${posture.key}/horizon: ${horizon.error}`);
-      } else {
-        check(
-          horizon.routeLabels.length === 0,
-          `${posture.key}/horizon: ${horizon.routeLabels.length} route labels are drawn for a route behind the horizon`,
-        );
-        check(
-          horizon.cityLabelCount > 0,
-          `${posture.key}/horizon: the facing hemisphere rendered no Place Label`,
-        );
-        checkLabelArbitrationFrame(horizon, `${posture.key}/horizon`);
-      }
       await labelPage.screenshot({
         path: `artifacts/label-arbitration/${posture.key}.png`,
         fullPage: false,

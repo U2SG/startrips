@@ -2601,6 +2601,7 @@ export function ParticleEarthScene({
           if (
             !point.label
             && point.labelText
+            && entry.routeId === latestActiveJourneyRouteId.current
             && presentation.attentionRole !== "ordinary"
             && entry.points.filter((candidate) => candidate.label).length
               < MAX_ROUTE_LABEL_CANDIDATES

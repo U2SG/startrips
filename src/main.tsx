@@ -141,6 +141,9 @@ const labelArbitrationQaRoute: JourneyRoute = {
     { id: "qa-label-3", lat: 34.4208, lon: -117.3089, isStop: false, label: "Transit sample" },
     { id: "qa-label-4", lat: 34.8697, lon: -116.9797, isStop: true, label: "Sample Stop" },
     { id: "qa-label-5", lat: 35.3733, lon: -116.0553, isStop: true, label: "Los Angeles" },
+    // Antipodal to the focus, i.e. always behind the globe's limb: a Route
+    // Point that is not visible must not contribute a label.
+    { id: "qa-label-6", lat: -28.0522, lon: 61.7563, isStop: true, label: "Horizon sample" },
   ],
 };
 
