@@ -30,6 +30,7 @@ type Sample = { r: number; g: number; b: number } | null;
 
 function sampleSurface(surface: CoverRevealSurface): Sample {
   if (!surface) return null;
+  if (surface instanceof HTMLImageElement && !surface.complete) return null;
   const width = surface instanceof HTMLCanvasElement ? surface.width : surface.naturalWidth;
   const height = surface instanceof HTMLCanvasElement ? surface.height : surface.naturalHeight;
   if (!width || !height) return null;
@@ -43,7 +44,11 @@ function sampleSurface(surface: CoverRevealSurface): Sample {
     // is only readable inside the task that painted it, which is why every
     // caller of this helper runs synchronously from a lifecycle publish.
     context.drawImage(surface, Math.floor(width / 2), Math.floor(height / 2), 1, 1, 0, 0, 1, 1);
-    const [r, g, b] = context.getImageData(0, 0, 1, 1).data;
+    const [r, g, b, a] = context.getImageData(0, 0, 1, 1).data;
+    // An image element can report its dimensions before its pixels are ready,
+    // and drawing it then leaves the probe fully transparent. That is "not yet",
+    // not "black", so the caller retries rather than recording a false frame.
+    if (a === 0) return null;
     return { r, g, b };
   } catch {
     return null;
