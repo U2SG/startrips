@@ -2602,20 +2602,35 @@ async function verifyFinalAcceptanceMobileFlow() {
       }
       await page.locator('.journey-playback[data-playback-mode="full"]').waitFor({ state: "visible", timeout: 8_000 });
       await page.locator(".journey-playback__soundtrack").waitFor({ state: "attached", timeout: 5_000 });
-      await page.waitForFunction(() => [
-        ".account-dock",
-        ".living-atlas__header",
-        ".living-atlas__journey-rail",
-        ".living-atlas__active",
-        ".living-atlas-globe__controls",
-      ].every((selector) => {
-        const element = document.querySelector(selector);
-        if (!(element instanceof HTMLElement)) return false;
-        const style = getComputedStyle(element);
-        return style.visibility === "hidden"
-          && Number.parseFloat(style.opacity) === 0
-          && style.pointerEvents === "none";
-      }), null, { timeout: 5_000 });
+      await page.waitForFunction(() => {
+        const chromeIsolated = [
+          ".account-dock",
+          ".living-atlas__header",
+          ".living-atlas__active",
+          ".living-atlas-globe__controls",
+        ].every((selector) => {
+          const element = document.querySelector(selector);
+          if (!(element instanceof HTMLElement)) return false;
+          const style = getComputedStyle(element);
+          return style.visibility === "hidden"
+            && Number.parseFloat(style.opacity) === 0
+            && style.pointerEvents === "none";
+        });
+        // #325: Playback isolates the Journey Rail with `inert` plus opacity and
+        // pointer-events, and deliberately does not own its `visibility`, so the
+        // released Atlas never has to be handed that property back. Require the
+        // rail's own isolation marker and `inert` here rather than the property
+        // the product no longer uses. This is strictly more than the old check
+        // asserted about the rail, not less.
+        const rail = document.querySelector(".living-atlas__journey-rail");
+        if (!(rail instanceof HTMLElement)) return false;
+        const railStyle = getComputedStyle(rail);
+        return chromeIsolated
+          && rail.inert
+          && (rail.dataset.railIsolation ?? "").split(" ").includes("playback")
+          && Number.parseFloat(railStyle.opacity) === 0
+          && railStyle.pointerEvents === "none";
+      }, null, { timeout: 5_000 });
       const cinematic = await page.evaluate(() => {
         const atlas = document.querySelector(".living-atlas");
         const auth = document.querySelector(".auth-continuity");
@@ -2642,7 +2657,12 @@ async function verifyFinalAcceptanceMobileFlow() {
           headerInert: header instanceof HTMLElement ? header.inert : null,
           headerHidden: hidden(header),
           railInert: rail instanceof HTMLElement ? rail.inert : null,
-          railHidden: hidden(rail),
+          railIsolation: rail instanceof HTMLElement ? rail.dataset.railIsolation ?? null : null,
+          railIsolated: rail instanceof HTMLElement
+            && rail.inert
+            && (rail.dataset.railIsolation ?? "").split(" ").includes("playback")
+            && Number.parseFloat(getComputedStyle(rail).opacity) === 0
+            && getComputedStyle(rail).pointerEvents === "none",
           activeInert: active instanceof HTMLElement ? active.inert : null,
           activeHidden: hidden(active),
           controlsHidden: hidden(controls),
@@ -2662,7 +2682,7 @@ async function verifyFinalAcceptanceMobileFlow() {
         || cinematic.headerInert !== true
         || !cinematic.headerHidden
         || cinematic.railInert !== true
-        || !cinematic.railHidden
+        || !cinematic.railIsolated
         || cinematic.activeInert !== true
         || !cinematic.activeHidden
         || !cinematic.controlsHidden

@@ -433,6 +433,10 @@ export function atlasCinematicIsolationActive(
  * lifecycle rule's `visibility: hidden` stayed behind on the very same node, so
  * an owner the release cannot reliably hand back is the state path itself, not
  * a symptom of one.
+ *
+ * `isolatedBy` names Globe Focus too, because the rail is `inert` there as well,
+ * but the marker's CSS rule covers only Playback and point-picking: Globe Focus
+ * keeps its own rule, which fades the whole layer on a transition.
  */
 export function journeyRailIsolation(
   playbackActive: boolean,
