@@ -77,6 +77,7 @@ import {
   isPlaceLabelRedundant,
   normalizeLabelIdentity,
   routeLabelPositionRole,
+  selectEvictableRouteLabel,
   type PlacedRouteLabel,
   type RouteLabelCandidate,
   type RouteLabelPositionRole,
@@ -2610,16 +2611,13 @@ export function ParticleEarthScene({
             // ordinary candidates at build time. Attention outranks them, so the
             // last ordinary slot is recycled rather than leaving the chosen
             // record or the narrative current point without a label.
-            const victim = prepared.reduce<RouteVectorEntry["points"][number] | null>(
-              (worst, candidate) => (
-                candidate.presentation.attentionRole !== "ordinary"
-                  ? worst
-                  : !worst || candidate.routePointIndex > worst.routePointIndex
-                    ? candidate
-                    : worst
-              ),
-              null,
-            );
+            const evictedIndex = selectEvictableRouteLabel(prepared.map((candidate) => ({
+              pointIndex: candidate.routePointIndex,
+              attentionRole: candidate.presentation.attentionRole,
+            })));
+            const victim = prepared.find((candidate) => (
+              candidate.routePointIndex === evictedIndex
+            ));
             if (!victim?.label) continue;
             victim.label.element.remove();
             victim.label = undefined;
@@ -2995,6 +2993,9 @@ export function ParticleEarthScene({
       host.dataset.journeyRouteCount = String(visibleRoutes.length);
       host.dataset.journeyRoutePointCount = String(pointCount);
       host.dataset.journeyRouteVectorVertices = String(routeVertexCount);
+      // #374: the labels PREPARED for the chosen Journey, i.e. the bounded
+      // candidate pool. The labels actually drawn this frame are published by
+      // the projection pass as `journeyRouteVisibleLabelCount`.
       host.dataset.journeyRouteLabelCount = String(routeLabelCount);
       host.dataset.journeyRouteOverflow = String(routes.length - visibleRoutes.length);
       host.dataset.routeStyle = "quiet-core";

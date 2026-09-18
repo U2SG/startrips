@@ -1,4 +1,4 @@
-import type { RoutePointPresentation } from "./routePresentation";
+import type { RoutePointAttentionRole, RoutePointPresentation } from "./routePresentation";
 
 /**
  * #374: one attention-aware collision policy for the two label families that
@@ -80,6 +80,24 @@ export function arbitrateRouteLabels(
     .filter((candidate) => isRouteLabelEligible(candidate, options))
     .sort(compareRouteLabelCandidates)
     .map((candidate) => candidate.pointIndex);
+}
+
+/**
+ * A Journey may carry more labeled Stops than the label pool holds, and the
+ * pool is filled before anything is chosen. When attention then lands outside
+ * it, an ordinary slot is recycled rather than leaving the chosen record or the
+ * narrative current point unlabeled: the last ordinary candidate gives way,
+ * deterministically, and an attended candidate is never evicted.
+ */
+export function selectEvictableRouteLabel(
+  prepared: readonly { pointIndex: number; attentionRole: RoutePointAttentionRole }[],
+): number | null {
+  let evictable: number | null = null;
+  for (const candidate of prepared) {
+    if (candidate.attentionRole !== "ordinary") continue;
+    if (evictable === null || candidate.pointIndex > evictable) evictable = candidate.pointIndex;
+  }
+  return evictable;
 }
 
 export type LabelAnchor = { x: number; y: number };

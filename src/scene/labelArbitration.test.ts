@@ -9,6 +9,7 @@ import {
   PLACE_LABEL_VICINITY_PX,
   routeLabelAttentionPriority,
   routeLabelPositionRole,
+  selectEvictableRouteLabel,
   type RouteLabelCandidate,
   type RouteLabelPositionRole,
 } from "./labelArbitration";
@@ -138,6 +139,35 @@ describe("route label arbitration (#374)", () => {
       .toEqual([0, 5]);
     // Same name, different projected anchors: both keep their own turn.
     expect(isCoincidentLabelAnchor({ x: 220, y: 140 }, { x: 640, y: 410 })).toBe(false);
+  });
+
+  it("recycles the last ordinary label slot for an attended point, never an attended one", () => {
+    // A Journey with more labeled Stops than the pool holds: every slot is
+    // filled with ordinary candidates before anything is chosen.
+    const ordinaryPool = [0, 1, 2, 3, 4].map((pointIndex) => ({
+      pointIndex,
+      attentionRole: "ordinary" as const,
+    }));
+    expect(selectEvictableRouteLabel(ordinaryPool)).toBe(4);
+
+    // The chosen record and the narrative current point keep their slots; the
+    // highest-index ordinary one gives way.
+    expect(selectEvictableRouteLabel([
+      { pointIndex: 0, attentionRole: "ordinary" },
+      { pointIndex: 7, attentionRole: "selected" },
+      { pointIndex: 3, attentionRole: "ordinary" },
+      { pointIndex: 9, attentionRole: "narrative-current" },
+    ])).toBe(3);
+
+    // Deterministic: input order never changes the victim.
+    expect(selectEvictableRouteLabel([...ordinaryPool].reverse())).toBe(4);
+
+    // Nothing to recycle rather than evicting an attended label.
+    expect(selectEvictableRouteLabel([
+      { pointIndex: 2, attentionRole: "selected" },
+      { pointIndex: 6, attentionRole: "narrative-current" },
+    ])).toBeNull();
+    expect(selectEvictableRouteLabel([])).toBeNull();
   });
 
   it("treats only a shared projected anchor as coincident", () => {
