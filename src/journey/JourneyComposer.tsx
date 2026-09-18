@@ -74,7 +74,7 @@ import {
   LIGHT_EFFECTS,
   type LightEffectId,
 } from "./lightEffects";
-import { useModalFocus, useNestedModalFocus } from "./useModalFocus";
+import { resolveModalInitialFocusTarget, useModalFocus, useNestedModalFocus } from "./useModalFocus";
 import { useCompactMobileLayout } from "./mobileLayout";
 
 type UploadProgress = {
@@ -333,6 +333,23 @@ type JourneyComposerProps = {
 
 type PlaybackPreviewReturnFocusKind = "editor" | "route-point" | "none";
 
+/**
+ * Why the dialog does or does not hold focus once the Playback Preview
+ * suspension is released. `trap` is the contract: the trap's own activation
+ * focus landed. `repaired` means it landed only after the layer settled, and
+ * `blocked` names the element that still refuses focus, so a failure says
+ * whether focus was rejected or taken away again rather than reporting an
+ * anonymous `body`.
+ */
+function describeReturnFocusOutcome(root: HTMLElement | null) {
+  if (!root) return "detached";
+  if (root.contains(document.activeElement)) return "trap";
+  const inertOwner = root.closest<HTMLElement>("[inert]");
+  if (inertOwner) return `blocked:inert:${inertOwner.className || inertOwner.tagName.toLowerCase()}`;
+  if (getComputedStyle(root).visibility === "hidden") return "blocked:hidden";
+  return "outside";
+}
+
 function draftId() {
   return globalThis.crypto?.randomUUID?.()
     ?? `route-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -460,6 +477,7 @@ export function JourneyComposer({
   const lastEditorFocusRef = useRef<HTMLElement | null>(null);
   const playbackPreviewReturnFocusKindRef = useRef<PlaybackPreviewReturnFocusKind | null>(null);
   const [playbackPreviewReturnFocusKind, setPlaybackPreviewReturnFocusKind] = useState<PlaybackPreviewReturnFocusKind | null>(null);
+  const [playbackPreviewReturnFocusOutcome, setPlaybackPreviewReturnFocusOutcome] = useState<string | null>(null);
   const playbackPreviewReturnContextRef = useRef<{
     selectedDraftId: string | null;
     expandedDraftId: string | null;
@@ -646,6 +664,7 @@ export function JourneyComposer({
 
   function requestPlaybackPreview() {
     if (!onPlaybackPreview || saving || routePoints.length === 0 || playbackPreviewActive) return;
+    setPlaybackPreviewReturnFocusOutcome(null);
     const activeElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const focusTarget = lastEditorFocusRef.current?.isConnected ? lastEditorFocusRef.current : activeElement;
     const selectedDraftId = focusTarget
@@ -674,18 +693,37 @@ export function JourneyComposer({
     playbackPreviewWasActiveRef.current = playbackPreviewActive;
     if (!wasActive || playbackPreviewActive) return;
     const context = playbackPreviewReturnContextRef.current;
-    playbackPreviewReturnContextRef.current = null;
     if (!context) return;
     const expandedSurvives = context.expandedDraftId
       ? routePoints.some((point) => point.draftId === context.expandedDraftId)
       : false;
     setExpandedRoutePointDraftId(expandedSurvives ? context.expandedDraftId : null);
     setPlaybackPreviewReturnFocusKind(playbackPreviewReturnFocusKindRef.current);
+    // The trap owns the restore, but the Composer is the surface a suspension
+    // released, so it also verifies the result instead of assuming it: if the
+    // dialog does not hold focus once the layer has settled, re-apply the same
+    // resolved target one frame later and record what actually happened.
+    const immediate = describeReturnFocusOutcome(dialogRef.current);
+    setPlaybackPreviewReturnFocusOutcome(immediate);
     window.requestAnimationFrame(() => {
       if (narrativeScrollRef.current) narrativeScrollRef.current.scrollTop = context.narrativeScrollTop;
       if (routeScrollRef.current) routeScrollRef.current.scrollTop = context.routeScrollTop;
+      const root = dialogRef.current;
+      if (!root) {
+        playbackPreviewReturnContextRef.current = null;
+        return;
+      }
+      const returnTarget = resolveModalInitialFocusTarget(root, resolvePlaybackPreviewReturnFocus);
+      const needsRepair = document.activeElement !== returnTarget;
+      if (needsRepair) returnTarget.focus({ preventScroll: true });
+      setPlaybackPreviewReturnFocusOutcome(
+        document.activeElement === returnTarget
+          ? (needsRepair ? `repaired:${immediate}` : "trap")
+          : describeReturnFocusOutcome(root),
+      );
+      playbackPreviewReturnContextRef.current = null;
     });
-  }, [playbackPreviewActive, routePoints]);
+  }, [playbackPreviewActive, resolvePlaybackPreviewReturnFocus, routePoints]);
 
   useEffect(() => {
     composerMountedRef.current = true;
@@ -1303,6 +1341,7 @@ export function JourneyComposer({
         data-mobile-layout={mobileLayout ? "true" : undefined}
         data-playback-preview-active={playbackPreviewActive ? "true" : undefined}
         data-playback-preview-return-focus={playbackPreviewReturnFocusKind ?? undefined}
+        data-playback-preview-return-focus-outcome={playbackPreviewReturnFocusOutcome ?? undefined}
         inert={globePicking || playbackPreviewActive || undefined}
         role="dialog"
         aria-hidden={playbackPreviewActive || undefined}

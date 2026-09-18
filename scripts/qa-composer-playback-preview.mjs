@@ -177,6 +177,7 @@ try {
       // was handed: a failure separates "no target offered" from "target
       // offered and rejected".
       returnFocusKind: document.querySelector(".journey-composer")?.getAttribute("data-playback-preview-return-focus") ?? null,
+      returnFocusOutcome: document.querySelector(".journey-composer")?.getAttribute("data-playback-preview-return-focus-outcome") ?? null,
       composerVisibility: getComputedStyle(document.querySelector(".journey-composer")).visibility,
       activeElement: document.activeElement
         ? `${document.activeElement.tagName.toLowerCase()}.${document.activeElement.className}`
