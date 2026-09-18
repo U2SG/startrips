@@ -147,6 +147,39 @@ def lineage_lane(row, by_pid):
     return None
 
 
+def invocation_cluster(rows, own_token):
+    """Provider-visible pids proven to belong to this exact tokenized invocation.
+
+    MSYS may represent one exec as several Windows processes. Some intermediate
+    carriers can have an unreadable CommandLine even while an adjacent carrier
+    still exposes our unique token. Seed only from that exact token, then include
+    its direct ancestry and descendants; never walk sideways through a shared
+    ancestor, so a separate launch remains outside the cluster.
+    """
+    if not own_token:
+        return set()
+    by_pid = {row['pid']: row for row in rows}
+    seeds = {row['pid'] for row in rows if command_token(row.get('command')) == own_token}
+    if not seeds:
+        return set()
+    ancestors = set()
+    for seed in tuple(seeds):
+        seen, pid = set(), by_pid.get(seed, {}).get('ppid', 0)
+        while pid and pid not in seen:
+            seen.add(pid); ancestors.add(pid)
+            pid = by_pid.get(pid, {}).get('ppid', 0)
+    # Descend only from token-bearing seeds/descendants, never from their
+    # ancestors: two independent launches may share a terminal/parent shell.
+    descendants = set(seeds)
+    changed = True
+    while changed:
+        changed = False
+        for row in rows:
+            if row['pid'] not in descendants and row.get('ppid', 0) in descendants:
+                descendants.add(row['pid']); changed = True
+    return seeds | ancestors | descendants
+
+
 def command_scope(command):
     """Return exact feature/worktree markers when a model carrier publishes them."""
     if not isinstance(command, str) or not command.strip():
@@ -216,6 +249,8 @@ def competitors(rows, root, self_pid, lane=None, feature=None, worktree=None, wo
     original = str(Path(root).absolute()).replace('\\', '/').lower()
     aliases = {canonical, original}
     mine = published()
+    own_token = os.environ.get('STARTRIPS_CARRIER_TOKEN') or None
+    own_cluster = invocation_cluster(rows, own_token)
     for spelling in tuple(aliases):
         if re.match(r'^[a-z]:/', spelling):
             aliases.add('/' + spelling[0] + spelling[2:])
@@ -226,6 +261,13 @@ def competitors(rows, root, self_pid, lane=None, feature=None, worktree=None, wo
         name = row['name'].lower()
         basename = name[:-4] if name.endswith('.exe') else name
         if basename not in {'bash', 'sh', 'claude', 'codex', 'node', 'nodejs'}:
+            continue
+        # Strong self identity must be evaluated BEFORE CommandLine readability.
+        # PID alone is reusable; PID+CreationDate is exact. The token cluster is
+        # separately anchored by a readable same-token carrier in this snapshot.
+        if row.get('started') and mine.get(row['pid']) == row.get('started'):
+            continue
+        if row['pid'] in own_cluster:
             continue
         raw_command = row.get('command')
         inherited_lane = lineage_lane(row, by_pid)
@@ -242,9 +284,6 @@ def competitors(rows, root, self_pid, lane=None, feature=None, worktree=None, wo
         is_child = 'startrips_execution_owner=' in command
         if not is_loop and not is_child:
             continue
-        own_token = os.environ.get('STARTRIPS_CARRIER_TOKEN') or None
-        if is_loop and own_token and command_token(raw_command) == own_token:
-            continue
         explicit_root = any(re.search(re.escape(alias.rstrip('/')) + r'(?=[/;\s"\x00]|$)', command)
                             for alias in aliases)
         if is_child and not explicit_root:
@@ -256,12 +295,6 @@ def competitors(rows, root, self_pid, lane=None, feature=None, worktree=None, wo
         argument = next((part for part in script.groups() if part), '') if script else ''
         absolute_script = bool(re.match(r'^(?:[a-z]:/|/)', argument))
         if not explicit_root and absolute_script:
-            continue
-        # Only here, with the command line, the workspace and the carrier kind all
-        # read, may a published identity excuse this row. A reused number cannot:
-        # the start stamp must still match. An unreadable command line never
-        # reaches this point, so UNKNOWN stays UNKNOWN.
-        if row.get('started') and mine.get(row['pid']) == row.get('started'):
             continue
         carrier_lane = command_lane(raw_command) or inherited_lane
         carrier_feature, carrier_worktree = command_scope(raw_command)

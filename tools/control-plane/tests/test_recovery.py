@@ -202,6 +202,20 @@ class ProcessClassificationCases(unittest.TestCase):
         with mock.patch.dict(os.environ, {'STARTRIPS_CARRIER_TOKEN': 'experience-token-1'}):
             self.assertEqual(10, execution.competitors(rows, self.root, 3, lane='experience')[0]['pid'])
 
+    def test_same_token_cluster_exempts_unreadable_chain_but_not_sibling_launch(self):
+        token = 'experience-token-1234'
+        rows = self.base + [
+            process(20, 1, 'bash.exe', None, started='msys-parent'),
+            process(21, 20, 'bash.exe', 'bash ' + str(self.root / 'run-loop.sh')
+                    + ' --carrier-lane=experience --carrier-token=' + token, started='seed'),
+            process(22, 21, 'bash.exe', None, started='msys-child'),
+            process(30, 20, 'bash.exe', 'bash ' + str(self.root / 'run-loop.sh')
+                    + ' --carrier-lane=experience --carrier-token=foreign-token-5678',
+                    started='foreign')]
+        with mock.patch.dict(os.environ, {'STARTRIPS_CARRIER_TOKEN': token}):
+            conflicts = execution.competitors(rows, self.root, 3, lane='experience')
+        self.assertEqual([30], [row['pid'] for row in conflicts])
+
     def test_orphan_worker_marker_blocks_new_carrier(self):
         rows = self.base + [process(10, name='node.exe', command='node worker STARTRIPS_EXECUTION_OWNER=' + str(self.root) + ';feature=ST-001;')]
         self.assertEqual('worker', execution.competitors(rows, self.root, 3)[0]['kind'])
@@ -271,13 +285,19 @@ class ProcessClassificationCases(unittest.TestCase):
         with mock.patch.dict(os.environ, {'STARTRIPS_OWN_PIDS': '20@sup-start-1'}):
             self.assertEqual([21], [row['pid'] for row in execution.competitors(rows, self.root, 3)])
 
-    def test_publication_never_short_circuits_an_unreadable_command(self):
-        # The UNKNOWN #400 established outranks publication: an exemption is only
-        # ever reached once the command line has been read, so a carrier we cannot
-        # read stays UNKNOWN even when its number and stamp were published.
-        rows = self.base + [process(10, 20, 'bash', None, started='sup-start-1')]
-        with mock.patch.dict(os.environ, {'STARTRIPS_OWN_PIDS': '10@sup-start-1'}):
-            self.assertEqual('unknown-command', execution.competitors(rows, self.root, 3)[0]['state'])
+    def test_published_start_identity_exempts_unreadable_self(self):
+        # CommandLine can be unreadable in the real MSYS chain. A PID alone is
+        # unsafe, but the exact PID+CreationDate published by this invocation is
+        # sufficient self identity and must be checked before UNKNOWN.
+        rows = self.base + [process(10, 20, 'bash', None, started='self-start-1')]
+        with mock.patch.dict(os.environ, {'STARTRIPS_OWN_PIDS': '10@self-start-1'}):
+            self.assertEqual([], execution.competitors(rows, self.root, 3))
+
+    def test_unreadable_reused_pid_does_not_inherit_self_identity(self):
+        rows = self.base + [process(10, 20, 'bash', None, started='different-start-2')]
+        with mock.patch.dict(os.environ, {'STARTRIPS_OWN_PIDS': '10@self-start-1'}):
+            conflict = execution.competitors(rows, self.root, 3)[0]
+        self.assertEqual((10, 'unknown-command'), (conflict['pid'], conflict['state']))
 
     def test_unreadable_child_under_a_generic_parent_stays_unknown(self):
         for name, command in [('powershell.exe', 'powershell.exe -NoProfile'),
