@@ -1325,13 +1325,6 @@ try {
             visible.has(4),
             `${where}: the distant Route Point sharing the label "Los Angeles" lost its own label`,
           );
-          // Acceptance 2, positively: the fixture centres a Route Point whose
-          // label repeats a real Place Label, so the suppression must actually
-          // fire and leave one clear priority route label.
-          check(
-            sample.redundantCount >= 1,
-            `${where}: no Place Label was suppressed as a repetition, so this frame proves nothing about acceptance 2 (${sample.cityLabelCount} Place Labels rendered)`,
-          );
         } else if (stage === "current") {
           check(
             visible.has(2),
@@ -1352,6 +1345,37 @@ try {
         ].join(" "));
       }
 
+      // Acceptance 2, positively. The containment tier that makes Los Angeles a
+      // Place Label candidate at all opens at regional zoom, so the repetition
+      // this policy exists to resolve is reproduced there rather than hoped for
+      // at the fixture's opening zoom.
+      if (!posture.compact) {
+        await openLabelArbitration(labelPage, posture, "browse");
+        await setZoom(labelPage, 2.2);
+        await waitForFocusToSettle(labelPage);
+        await waitForPlaceLabelsToSettle(labelPage);
+        const zoomed = await measureLabelArbitration(labelPage);
+        const where = `${posture.key}/zoomed`;
+        if (zoomed.error) {
+          check(false, `${where}: ${zoomed.error}`);
+        } else {
+          checkLabelArbitrationFrame(zoomed, where);
+          check(
+            zoomed.routeLabels.some((label) => label.pointIndex === 1),
+            `${where}: the chosen Los Angeles Route Point has no label (${JSON.stringify(zoomed.routeLabels.map((label) => label.pointIndex))})`,
+          );
+          check(
+            zoomed.redundantCount >= 1,
+            `${where}: no Place Label was suppressed as a repetition, so this frame proves nothing about acceptance 2 (${zoomed.cityLabelCount} Place Labels rendered)`,
+          );
+          console.log([
+            `[qa-city-label-anchoring] label-arbitration ${where}`,
+            `routeLabels=${JSON.stringify(zoomed.routeLabels.map((label) => label.pointIndex))}`,
+            `cityLabels=${zoomed.cityLabelCount}`,
+            `redundant=${zoomed.redundantCount}`,
+          ].join(" "));
+        }
+      }
       await labelPage.screenshot({
         path: `artifacts/label-arbitration/${posture.key}.png`,
         fullPage: false,
