@@ -699,20 +699,25 @@ export function JourneyComposer({
       : false;
     setExpandedRoutePointDraftId(expandedSurvives ? context.expandedDraftId : null);
     setPlaybackPreviewReturnFocusKind(playbackPreviewReturnFocusKindRef.current);
-    // The trap owns the restore, but the Composer is the surface a suspension
-    // released, so it also verifies the result instead of assuming it: if the
-    // dialog does not hold focus once the layer has settled, re-apply the same
-    // resolved target one frame later and record what actually happened.
+    // The trap owns the restore, but Chromium rejects focus while the suspended
+    // Composer still inherits `visibility: hidden` from the Playback Preview
+    // backdrop. Wait on that actual lifecycle condition instead of guessing a
+    // timeout, then restore the exact resolved target once it is focusable.
     const immediate = describeReturnFocusOutcome(dialogRef.current);
     setPlaybackPreviewReturnFocusOutcome(immediate);
-    window.requestAnimationFrame(() => {
-      if (narrativeScrollRef.current) narrativeScrollRef.current.scrollTop = context.narrativeScrollTop;
-      if (routeScrollRef.current) routeScrollRef.current.scrollTop = context.routeScrollTop;
+    const restoreWhenVisible = () => {
+      if (playbackPreviewReturnContextRef.current !== context) return;
       const root = dialogRef.current;
       if (!root) {
         playbackPreviewReturnContextRef.current = null;
         return;
       }
+      if (getComputedStyle(root).visibility === "hidden" || root.closest("[inert]")) {
+        window.requestAnimationFrame(restoreWhenVisible);
+        return;
+      }
+      if (narrativeScrollRef.current) narrativeScrollRef.current.scrollTop = context.narrativeScrollTop;
+      if (routeScrollRef.current) routeScrollRef.current.scrollTop = context.routeScrollTop;
       const returnTarget = resolveModalInitialFocusTarget(root, resolvePlaybackPreviewReturnFocus);
       const needsRepair = document.activeElement !== returnTarget;
       if (needsRepair) returnTarget.focus({ preventScroll: true });
@@ -722,7 +727,8 @@ export function JourneyComposer({
           : describeReturnFocusOutcome(root),
       );
       playbackPreviewReturnContextRef.current = null;
-    });
+    };
+    window.requestAnimationFrame(restoreWhenVisible);
   }, [playbackPreviewActive, resolvePlaybackPreviewReturnFocus, routePoints]);
 
   useEffect(() => {
