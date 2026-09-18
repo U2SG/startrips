@@ -13,7 +13,7 @@ import { readFileSync } from "node:fs";
 import {
   atlasCinematicIsolationActive,
   synchronizeJourneyRailVisibility,
-  journeyRailVisibility,
+  journeyRailIsolation,
   captureUnknownCreateObservationOwnership,
   closeUnknownCreateWithCurrentAtlasTruth,
   explicitSelectedJourneyIdForHomeCamera,
@@ -1958,26 +1958,74 @@ describe("ST-060 a successful confirmation takes the card down on its own", () =
   });
 });
 
-describe("ST-063 Journey Rail visibility release", () => {
-  it("restores the desktop rail when Playback and point-picking release ownership", () => {
-    expect(journeyRailVisibility(true, false)).toBe("hidden");
-    expect(journeyRailVisibility(false, true)).toBe("hidden");
-    expect(journeyRailVisibility(false, false)).toBe("visible");
+describe("ST-091 Journey Rail released-state ownership (#325)", () => {
+  const styles = readFileSync(new URL("../styles/living-atlas.css", import.meta.url), "utf8");
+  const source = readFileSync(new URL("./LivingAtlasApp.tsx", import.meta.url), "utf8");
+
+  // Every leaf rule block in the stylesheet whose selector SUBJECT is the
+  // Journey Rail, i.e. the declarations an Atlas lifecycle state can apply to
+  // the rail itself. At-rule bodies are walked too, so a rule parked inside a
+  // media query counts exactly like a top-level one.
+  const railRules = [...styles.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+    .map(([, selector, body]) => ({ selector: selector.trim(), body }))
+    .filter(({ selector }) => selector.split(",").some((part) => {
+      const subject = part.trim().split(/[\s>+~]+/).pop() ?? "";
+      return subject.includes(".living-atlas__journey-rail");
+    }));
+
+  const declaration = (body: string, property: string) => (
+    body.match(new RegExp(`(?:^|;)\s*${property}\s*:\s*([^;]+)`))?.[1].trim() ?? null
+  );
+
+  it("leaves the rail exactly one visibility owner, the released one", () => {
+    // The failing sequence is Atlas -> Playback -> Story -> Atlas. Every
+    // recorded recurrence read the rail back with the isolating owner gone
+    // (opacity 1, no lifecycle class, not inert) and visibility:hidden
+    // retained, so a lifecycle rule that owns `visibility` is a state the
+    // release cannot be relied on to hand back. There must be no such rule.
+    const visibilityOwners = railRules
+      .map(({ selector, body }) => ({ selector, value: declaration(body, "visibility") }))
+      .filter(({ value }) => value !== null);
+
+    expect(visibilityOwners).toHaveLength(1);
+    expect(visibilityOwners[0]?.value).toBe("visible");
+    expect(visibilityOwners[0]?.selector).toBe(".living-atlas__journey-rail");
   });
-  it("clears stale inline visibility so current Atlas lifecycle classes own the rail", () => {
+
+  it("keeps Playback and point-picking isolation on inert, opacity and pointer-events", () => {
+    for (const owner of ["is-playback", "is-globe-picking"]) {
+      const rule = railRules.find(({ selector }) => (
+        selector.includes(`.living-atlas.${owner} .living-atlas__journey-rail`)
+      ));
+      expect(rule, `${owner} must still isolate the rail`).toBeDefined();
+      expect(declaration(rule?.body ?? "", "opacity")).toBe("0");
+      expect(declaration(rule?.body ?? "", "pointer-events")).toBe("none");
+      expect(declaration(rule?.body ?? "", "visibility")).toBeNull();
+    }
+    expect(source).toContain("inert={railIsolation.inert}");
+    expect(source).not.toContain("style={{ visibility:");
+  });
+
+  it("releases every isolation owner across the recorded transition sequence", () => {
+    const sequence = [
+      { label: "atlas", state: [false, false, false] as const, owners: [] as string[] },
+      { label: "playback", state: [true, false, false] as const, owners: ["playback"] },
+      { label: "point-pick", state: [false, true, false] as const, owners: ["globe-pick"] },
+      { label: "globe-focus", state: [false, false, true] as const, owners: ["globe-focus"] },
+      { label: "released", state: [false, false, false] as const, owners: [] as string[] },
+    ];
+    for (const { label, state, owners } of sequence) {
+      const isolation = journeyRailIsolation(state[0], state[1], state[2]);
+      expect(isolation.isolatedBy, label).toEqual(owners);
+      expect(isolation.inert, label).toBe(owners.length > 0 ? true : undefined);
+    }
+  });
+
+  it("clears an inline visibility so no second owner can outrank the released rule", () => {
     const rail = { style: { visibility: "hidden" } };
     synchronizeJourneyRailVisibility(rail);
     expect(rail.style.visibility).toBe("");
-
-    const source = readFileSync(new URL("./LivingAtlasApp.tsx", import.meta.url), "utf8");
-    const styles = readFileSync(new URL("../styles/living-atlas.css", import.meta.url), "utf8");
-    expect(source).not.toContain("style={{ visibility: journeyRailVisibility");
-    expect(styles).toContain(".living-atlas__journey-rail {\n  position: absolute;\n  /* #325");
-    expect(styles).toContain("visibility: visible;");
-    expect(styles).toContain(".living-atlas.is-playback .living-atlas__journey-rail");
-    expect(styles).toContain(".living-atlas.is-globe-picking .living-atlas__journey-rail");
   });
-
 });
 
 

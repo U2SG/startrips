@@ -559,8 +559,9 @@
 
 .living-atlas__journey-rail {
   position: absolute;
-  /* #325: released Atlas state is explicitly visible; Playback and globe-pick
-     lifecycle classes below are the only owners allowed to hide the rail. */
+  /* #325: this is the rail's ONLY `visibility` declaration in the product. No
+     Atlas lifecycle state overrides it; Playback and point-picking isolate the
+     rail with `inert`, opacity and pointer-events instead. */
   visibility: visible;
   z-index: 18;
   top: clamp(152px, 17vh, 184px);
@@ -4414,7 +4415,6 @@
    but utility controls are temporarily removed so the pick hint owns the
    interaction band without competing with map/account actions. */
 .living-atlas.is-globe-picking .living-atlas__header,
-.living-atlas.is-globe-picking .living-atlas__journey-rail,
 .living-atlas.is-globe-picking .living-atlas__active,
 .living-atlas.is-globe-picking .living-atlas__notice,
 .living-atlas.is-globe-picking .living-atlas__empty,
@@ -4574,7 +4574,6 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
 /* Playback owns the atlas chrome while the persistent globe remains visible.
    `inert` enforces keyboard ownership; these rules enforce visual isolation. */
 .living-atlas.is-playback .living-atlas__header,
-.living-atlas.is-playback .living-atlas__journey-rail,
 .living-atlas.is-playback .living-atlas__active,
 .living-atlas.is-playback .journey-timeline,
 .living-atlas.is-playback .living-atlas__notice,
@@ -4582,6 +4581,22 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
 .living-atlas.is-playback .living-atlas__globe-focus-exit,
 .living-atlas.is-playback .globe-time-scrubber {
   visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* #325: Playback and point-picking isolate the Journey Rail with the trio the
+   Globe Focus owner below already uses on the same node - `inert` plus opacity
+   and pointer-events - and deliberately do NOT take ownership of `visibility`.
+   Every recorded recurrence of this family read the released state back as
+   `opacity: 1` with `visibility: hidden` on the same rail, from this one block:
+   the isolating owner is gone, yet the property the released Atlas cannot
+   restore for itself stayed behind and left the rail laid out but unmeasurable.
+   The rail therefore keeps exactly one `visibility` declaration in the product,
+   the released `visible` in its own rule, so no lifecycle state can retain a
+   hidden rail after the transition ends. Visual isolation is unchanged. */
+.living-atlas.is-playback .living-atlas__journey-rail,
+.living-atlas.is-globe-picking .living-atlas__journey-rail {
   opacity: 0;
   pointer-events: none;
 }
