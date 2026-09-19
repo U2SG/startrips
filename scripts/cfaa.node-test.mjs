@@ -71,6 +71,16 @@ test("evidence paths must exist and be tracked", () => {
   assert.throws(() => validateRegistry(registry), /does not exist/);
 });
 
+test("evidence directories are rejected even when Git pathspecs match tracked descendants", () => {
+  const registry = sampleRegistry();
+  registry.invariants[0].evidence = [{
+    kind: "unit",
+    label: "directory is not proof",
+    path: "scripts",
+  }];
+  assert.throws(() => validateRegistry(registry), /not an exact tracked file/);
+});
+
 test("malformed evidence kinds are rejected", () => {
   const registry = sampleRegistry();
   registry.invariants[0].evidence = [{ kind: "screenshot", label: "not a supported evidence kind" }];
@@ -120,6 +130,16 @@ test("shared route changes suggest all share invariants", () => {
   assert.ok(ids.has("CFAA-SHARE-001"));
   assert.ok(ids.has("CFAA-SHARE-002"));
   assert.ok(ids.has("CFAA-SHARE-003"));
+});
+
+test("guest share view changes suggest read-only and expiry invariants", () => {
+  const registry = loadRegistry();
+  for (const changedPath of ["src/journey/SharedAtlasView.tsx", "src/journey/sharedAtlas.ts"]) {
+    const impact = resolveImpact(registry, [changedPath]);
+    const ids = new Set(impact.impacted.map((entry) => entry.id));
+    assert.ok(ids.has("CFAA-SHARE-002"));
+    assert.ok(ids.has("CFAA-SHARE-003"));
+  }
 });
 
 test("password route changes suggest the replay invariant", () => {
