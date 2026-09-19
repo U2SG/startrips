@@ -162,9 +162,9 @@ export function globToRegExp(glob) {
         index += 1;
         if (normalized[index + 1] === "/") {
           index += 1;
-          source += "(?:.*/)?";
+          source += "(?:[\\s\\S]*/)?";
         } else {
-          source += ".*";
+          source += "[\\s\\S]*";
         }
       } else {
         source += "[^/]*";
