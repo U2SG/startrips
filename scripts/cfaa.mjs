@@ -269,21 +269,20 @@ function compact(values, empty = "none") {
 }
 
 function escapeMarkdownTableCell(value) {
-  return String(value)
-    .replace(/&/g, "&amp;")
-    .replace(/\\/g, "&#92;")
-    .replace(/`/g, "&#96;")
-    .replace(/!/g, "&#33;")
-    .replace(/\[/g, "&#91;")
-    .replace(/\]/g, "&#93;")
-    .replace(/\(/g, "&#40;")
-    .replace(/\)/g, "&#41;")
-    .replace(/\*/g, "&#42;")
-    .replace(/_/g, "&#95;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/\|/g, "&#124;")
-    .replace(/\r\n|\r|\n/g, "<br>");
+  let rendered = "";
+  for (const char of String(value)) {
+    if (char === "\r") continue;
+    if (char === "\n") {
+      rendered += "<br>";
+      continue;
+    }
+    if (/^[\p{L}\p{N} /.:+-]$/u.test(char)) {
+      rendered += char;
+      continue;
+    }
+    rendered += "&#" + char.codePointAt(0) + ";";
+  }
+  return rendered;
 }
 
 export function renderImpactMarkdown(registry, impact, declarations) {
