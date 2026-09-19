@@ -9,6 +9,8 @@ import {
   COMPOSER_TASK_ENTRY_ATTRIBUTE,
   composerAvailableHeight,
   composerCapabilitiesForTask,
+  composerHeightPosture,
+  COMPOSER_CONSTRAINED_HEIGHT,
   composerTask,
   type ComposerCapabilityId,
 } from "./composerMobileTasks";
@@ -173,5 +175,20 @@ describe("#375 composer task list", () => {
     const ids = COMPOSER_MOBILE_TASKS.map((task) => task.id);
     expect(new Set(ids).size).toBe(ids.length);
     expect(COMPOSER_SECONDARY_TASKS).toEqual(ids.slice(1));
+  });
+});
+
+describe("#375 composer posture", () => {
+  it("keeps the normal posture when there is room for the chrome", () => {
+    expect(composerHeightPosture(null)).toBeNull();
+    expect(composerHeightPosture(844)).toBeNull();
+    expect(composerHeightPosture(COMPOSER_CONSTRAINED_HEIGHT + 1)).toBeNull();
+  });
+
+  it("collapses the decorative header when the keyboard leaves too little room", () => {
+    // A phone in landscape with the keyboard open: a 98px header plus a 78px
+    // action bar would leave no room for the field being typed in.
+    expect(composerHeightPosture(198)).toBe("constrained");
+    expect(composerHeightPosture(COMPOSER_CONSTRAINED_HEIGHT)).toBe("constrained");
   });
 });

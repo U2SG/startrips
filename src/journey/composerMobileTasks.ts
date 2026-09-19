@@ -20,6 +20,15 @@
 export const COMPOSER_TASK_ATTRIBUTE = "data-composer-task";
 export const COMPOSER_TASK_ENTRY_ATTRIBUTE = "data-composer-task-entry";
 export const COMPOSER_SCROLL_OWNER_ATTRIBUTE = "data-composer-scroll-owner";
+export const COMPOSER_POSTURE_ATTRIBUTE = "data-composer-posture";
+
+/**
+ * Below this height the Composer's own chrome - a 98px editorial header and a
+ * 78px action bar - leaves too little room for the field a person is typing in.
+ * A phone in landscape with the keyboard open lands here, so the header's
+ * decorative lines collapse and the field stays on screen.
+ */
+export const COMPOSER_CONSTRAINED_HEIGHT = 420;
 
 export type ComposerMobileTaskId =
   | "primary"
@@ -306,4 +315,14 @@ export function composerAvailableHeight(
   if (available <= 0) return null;
   if (available >= Math.round(layoutHeight)) return null;
   return available;
+}
+
+/**
+ * How the Composer should carry its own chrome at a given available height.
+ * `null` means the normal posture; the decorative header lines are only worth
+ * their space when there is space.
+ */
+export function composerHeightPosture(availableHeight: number | null) {
+  if (availableHeight === null || !Number.isFinite(availableHeight)) return null;
+  return availableHeight <= COMPOSER_CONSTRAINED_HEIGHT ? "constrained" : null;
 }

@@ -80,7 +80,9 @@ import { useCompactMobileLayout } from "./mobileLayout";
 import { useMobileSurfaceHistory } from "./useMobileSurfaceHistory";
 import {
   composerAvailableHeight,
+  composerHeightPosture,
   composerTask,
+  COMPOSER_POSTURE_ATTRIBUTE,
   COMPOSER_MOBILE_TASKS,
   type ComposerMobileTaskId,
 } from "./composerMobileTasks";
@@ -679,6 +681,9 @@ export function JourneyComposer({
         root.style.height = `${height}px`;
         root.style.maxHeight = `${height}px`;
       }
+      const posture = composerHeightPosture(height);
+      if (posture) root.setAttribute(COMPOSER_POSTURE_ATTRIBUTE, posture);
+      else root.removeAttribute(COMPOSER_POSTURE_ATTRIBUTE);
       if (!keepFocusVisible) return;
       const active = document.activeElement;
       if (active instanceof HTMLElement && root.contains(active)) {
@@ -695,6 +700,7 @@ export function JourneyComposer({
       visual.removeEventListener("scroll", onScroll);
       dialogRef.current?.style.removeProperty("height");
       dialogRef.current?.style.removeProperty("max-height");
+      dialogRef.current?.removeAttribute(COMPOSER_POSTURE_ATTRIBUTE);
     };
   }, [mobileLayout, dialogRef]);
 

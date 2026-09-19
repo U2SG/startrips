@@ -7719,3 +7719,44 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   opacity: 0;
   cursor: pointer;
 }
+
+/*
+ * #375: a phone in landscape with the keyboard open leaves the Composer under
+ * 420px. The editorial header lines and the roomy action bar are worth their
+ * space only when there is space; the field being typed in is not.
+ */
+.journey-composer[data-composer-posture="constrained"] .journey-composer__header {
+  min-height: 0;
+  padding: 8px 18px;
+}
+
+.journey-composer[data-composer-posture="constrained"] .journey-composer__header p,
+.journey-composer[data-composer-posture="constrained"] .journey-composer__header div > span {
+  display: none;
+}
+
+.journey-composer[data-composer-posture="constrained"] .journey-composer__header h2 {
+  margin-top: 0;
+  font-size: 16px;
+}
+
+.journey-composer[data-composer-posture="constrained"] .journey-composer__footer {
+  min-height: 0;
+  padding: 6px 18px calc(6px + env(safe-area-inset-bottom));
+}
+
+.journey-composer[data-composer-posture="constrained"] .journey-composer__summary {
+  display: none;
+}
+
+.journey-composer[data-composer-posture="constrained"] .journey-composer__footer-actions {
+  flex: 1;
+}
+
+.journey-composer[data-composer-posture="constrained"] .journey-composer__footer button {
+  min-height: 44px;
+}
+
+.journey-composer[data-composer-posture="constrained"] .journey-composer__task {
+  padding: 12px 18px 16px;
+}
