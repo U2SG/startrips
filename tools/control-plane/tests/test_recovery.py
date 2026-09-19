@@ -268,10 +268,12 @@ class ProcessClassificationCases(unittest.TestCase):
         token = 'experience-token-1234'
         worktree = str((self.root / 'owner tree').resolve())
         worktree64 = base64.urlsafe_b64encode(worktree.encode()).decode().rstrip('=')
-        worker_scope = str(self.root) + ';lane=experience;feature=ST-073;worktree=' + worktree + ';'
+        worker_scope = (str(self.root) + ';lane=experience;feature=ST-073;worktree64='
+                        + worktree64 + ';')
         rows = self.base + [
             # CIM may enumerate the model worker first. It proves the owner scope,
-            # but carries no run-loop token itself.
+            # but carries no run-loop token itself. Use the same encoded worktree
+            # marker as the real carrier so spaces cannot make the fixture unknown.
             process(10, 1, 'node.exe',
                     'node worker STARTRIPS_EXECUTION_OWNER=' + worker_scope),
             # The scoped run-loop for that same owner carries the token.
