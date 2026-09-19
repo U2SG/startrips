@@ -300,7 +300,9 @@
         "server/repositories/shared*",
         "server/tests/share*",
         "scripts/qa-guest-share.mjs",
-        "server/routes/shares.ts"
+        "server/routes/shares.ts",
+        "src/journey/SharedAtlasView.tsx",
+        "src/journey/sharedAtlas.ts"
       ],
       "coverage": "covered",
       "evidence": [
@@ -328,7 +330,9 @@
         "server/tests/share*",
         "src/journey/mediaReadRefresh*",
         "scripts/qa-guest-share.mjs",
-        "server/routes/shares.ts"
+        "server/routes/shares.ts",
+        "src/journey/SharedAtlasView.tsx",
+        "src/journey/sharedAtlas.ts"
       ],
       "coverage": "covered",
       "evidence": [
