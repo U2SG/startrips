@@ -664,6 +664,7 @@ async function verifyMobileStoryInertOwnership() {
 async function openComposerTask(page, task) {
   const entry = page.locator(`[data-composer-task-entry="${task}"]`);
   if (await page.locator(`[data-composer-task="${task}"]`).count()) return;
+  await leaveComposerTask(page);
   if (!(await entry.count())) {
     const more = page.locator(".journey-composer__task-more");
     if (!(await more.count())) return; // desktop renders the same capabilities inline

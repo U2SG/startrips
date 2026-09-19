@@ -479,7 +479,7 @@ export function JourneyComposer({
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const activeMobileTask: ComposerMobileTaskId = mobileLayout ? mobileTask : "primary";
   const taskHeadingRef = useRef<HTMLHeadingElement>(null);
-  const taskEntryRefs = useRef(new Map<ComposerMobileTaskId, HTMLButtonElement>());
+  const taskEntryRefs = useRef(new Map<ComposerMobileTaskId | "more", HTMLButtonElement>());
   const taskReturnFocusRef = useRef<ComposerMobileTaskId | null>(null);
   const [mobileMediaMenuIndex, setMobileMediaMenuIndex] = useState<number | null>(null);
   const [mobileMediaAssignmentIndex, setMobileMediaAssignmentIndex] = useState<number | null>(null);
@@ -647,7 +647,10 @@ export function JourneyComposer({
     const returning = taskReturnFocusRef.current;
     taskReturnFocusRef.current = null;
     if (!returning) return;
-    taskEntryRefs.current.get(returning)?.focus({ preventScroll: true });
+    // A More-path entry is unmounted with its menu, so the control the person
+    // actually came through - and the one still on screen - is More itself.
+    const target = composerTask(returning).behindMore ? "more" : returning;
+    taskEntryRefs.current.get(target)?.focus({ preventScroll: true });
   }, [mobileLayout, mobileTask]);
 
   /**
@@ -2070,6 +2073,11 @@ export function JourneyComposer({
                     <button
                       type="button"
                       className="journey-composer__task-more"
+                      data-composer-task-entry="more"
+                      ref={(node) => {
+                        if (node) taskEntryRefs.current.set("more", node);
+                        else taskEntryRefs.current.delete("more");
+                      }}
                       aria-expanded={moreMenuOpen}
                       aria-controls="journey-composer-more-menu"
                       onClick={() => setMoreMenuOpen((current) => !current)}

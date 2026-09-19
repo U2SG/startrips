@@ -185,15 +185,18 @@ try {
 
         await page.locator("[data-composer-task-back]").click();
         await page.locator('[data-composer-task="primary"]').waitFor({ state: "visible" });
-        const returned = await page.evaluate((taskId) => ({
+        // A More-path entry is unmounted with its menu, so its return control is
+        // the More button the person opened the menu with.
+        const expectedEntry = task.behindMore ? "more" : task.id;
+        const returned = await page.evaluate((expected) => ({
           activeEntry: document.activeElement?.getAttribute("data-composer-task-entry") ?? null,
           menuOpen: Boolean(document.querySelector("#journey-composer-more-menu")),
-          expected: taskId,
-        }), task.id);
-        // Acceptance 4: return is explicit, not inferred - the control that was
-        // used to leave the primary surface is the control focus comes back to.
+          expected,
+        }), expectedEntry);
+        // Acceptance 4: return is explicit, not inferred - focus comes back to a
+        // control that is really on screen, and the menu does not linger open.
         record(`composer-mobile-ia:${viewport.label}:${task.id}:return`, { returned },
-          returned.activeEntry === task.id);
+          returned.activeEntry === expectedEntry && !returned.menuOpen);
       }
 
       // Acceptance 1 / owner decision: media belongs to a Route Point.
