@@ -24,6 +24,26 @@ const validStart = {
 };
 
 
+// #428: a recorded media-evidence document in the shape the existing
+// `parseRecordedEvidenceWrite` normalizer accepts.
+const RECORDED_EVIDENCE = {
+  spatial: {
+    source: "exif",
+    granularity: "coordinate",
+    latitude: 22.543096,
+    longitude: 114.057865,
+    accuracyMeters: 12,
+    label: null,
+  },
+  captureTime: {
+    source: "exif-original",
+    timezone: "offset-known",
+    local: "2026-09-01T18:30:00",
+    instant: "2026-09-01T10:30:00.000Z",
+    offsetMinutes: 480,
+  },
+};
+
 describe("moveUndoOrdersFitLimit", () => {
   it("accepts the exact undo-safe boundary and rejects an oversized same-Journey order", () => {
     const boundary = Array.from({ length: MAX_MOVE_UNDO_ORDER }, (_, index) => String(index));
@@ -170,6 +190,91 @@ describe("parseStartUpload", () => {
     expect(parseStartUpload({ ...validStart, contentHash: "a".repeat(65) }))
       .toBeNull();
     expect(parseStartUpload({ ...validStart, contentHash: 42 })).toBeNull();
+  });
+
+  it("accepts an optional recorded-evidence document and normalizes it", () => {
+    const parsed = parseStartUpload({
+      ...validStart,
+      recordedEvidence: RECORDED_EVIDENCE,
+    });
+    expect(parsed?.recordedEvidence).toEqual({
+      spatial: {
+        source: "exif",
+        granularity: "coordinate",
+        latitude: 22.543096,
+        longitude: 114.057865,
+        accuracyMeters: 12,
+        label: null,
+      },
+      captureTime: {
+        source: "exif-original",
+        timezone: "offset-known",
+        local: "2026-09-01T18:30:00",
+        instant: new Date("2026-09-01T10:30:00.000Z"),
+        offsetMinutes: 480,
+      },
+    });
+  });
+
+  it("leaves every other upload field identical when evidence is absent", () => {
+    const withEvidence = parseStartUpload({
+      ...validStart,
+      recordedEvidence: RECORDED_EVIDENCE,
+    });
+    const without = parseStartUpload(validStart);
+    expect(without?.recordedEvidence).toBeNull();
+    expect({ ...without, recordedEvidence: null })
+      .toEqual({ ...withEvidence, recordedEvidence: null });
+  });
+
+  it("rejects a malformed recorded-evidence document", () => {
+    // Each case is refused by the one evidence normalizer the server already
+    // owns, so a start request carrying it never reaches storage.
+    expect(parseStartUpload({ ...validStart, recordedEvidence: "exif" }))
+      .toBeNull();
+    expect(parseStartUpload({ ...validStart, recordedEvidence: {} })).toBeNull();
+    expect(parseStartUpload({
+      ...validStart,
+      recordedEvidence: {
+        ...RECORDED_EVIDENCE,
+        spatial: { ...RECORDED_EVIDENCE.spatial, latitude: 91 },
+      },
+    })).toBeNull();
+    expect(parseStartUpload({
+      ...validStart,
+      recordedEvidence: {
+        ...RECORDED_EVIDENCE,
+        // A coordinate claimed with no provenance at all.
+        spatial: { ...RECORDED_EVIDENCE.spatial, source: "unknown" },
+      },
+    })).toBeNull();
+    expect(parseStartUpload({
+      ...validStart,
+      recordedEvidence: {
+        ...RECORDED_EVIDENCE,
+        // An instant that contradicts the local wall clock and its offset.
+        captureTime: {
+          ...RECORDED_EVIDENCE.captureTime,
+          instant: "2026-09-01T09:30:00.000Z",
+        },
+      },
+    })).toBeNull();
+  });
+
+  it("never lets an evidence document supply upload authority", () => {
+    // The evidence body is metadata about the bytes. Journey and Route Point
+    // stay exactly what the upload fields named, whatever the document says.
+    const parsed = parseStartUpload({
+      ...validStart,
+      recordedEvidence: {
+        ...RECORDED_EVIDENCE,
+        journeyId: "00000000-0000-4000-8000-0000000000ff",
+        routePointId: ROUTE_POINT_ID,
+        expectedRevision: 9,
+      },
+    });
+    expect(parsed?.journeyId).toBe(JOURNEY_ID);
+    expect(parsed?.routePointId).toBeNull();
   });
 });
 
