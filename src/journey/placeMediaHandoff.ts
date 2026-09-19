@@ -79,3 +79,47 @@ export function resolvePlaceMediaReturnRoutePointId(input: {
   if (!candidate || !input.currentRoutePointIds.includes(candidate)) return null;
   return candidate;
 }
+
+export type PlaceMediaMarkerCandidate<T> = {
+  element: T;
+  /** The marker has fully settled: painted, opaque and inside the viewport. */
+  settled: boolean;
+  rect: PlaceMediaRect;
+};
+
+/**
+ * Pick the geographic anchor for one handoff aperture. A settled marker is
+ * always preferred, but a marker that is merely mid-transition at the click
+ * instant is still the same projected Route Point, so it anchors the aperture
+ * rather than cancelling it. Viewport containment is NOT decided here:
+ * resolvePlaceMediaObservationRect owns that predicate, so a relaxed anchor
+ * never widens the published geometry contract. A degenerate rect carries no
+ * usable geography and is refused.
+ */
+export function selectPlaceMediaMarkerAnchor<T>(
+  candidates: readonly PlaceMediaMarkerCandidate<T>[],
+): T | null {
+  const usable = candidates.filter((candidate) => finiteRect(candidate.rect));
+  return usable.find((candidate) => candidate.settled)?.element ?? usable[0]?.element ?? null;
+}
+
+export type PlaceMediaRepresentativeCandidate<T> = {
+  element: T;
+  assetId: string;
+  /** The element already has a resolved source to paint from. */
+  painted: boolean;
+};
+
+/**
+ * Pick the representative visual for one asset. A painted element is preferred
+ * because it can also supply the aperture's fill, but an element for the same
+ * asset whose decode has not landed yet still carries the correct identity and
+ * layout box, so it opens the aperture unpainted instead of suppressing it.
+ */
+export function selectPlaceMediaRepresentative<T>(
+  candidates: readonly PlaceMediaRepresentativeCandidate<T>[],
+  assetId: string,
+): T | null {
+  const matching = candidates.filter((candidate) => candidate.assetId === assetId);
+  return matching.find((candidate) => candidate.painted)?.element ?? matching[0]?.element ?? null;
+}

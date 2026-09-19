@@ -124,6 +124,8 @@ import "../styles/living-atlas-polish.css";
 import type { Journey, JourneyRoute, MediaPreviewRead } from "./types";
 import {
   resolvePlaceMediaObservationRect,
+  selectPlaceMediaMarkerAnchor,
+  selectPlaceMediaRepresentative,
   resolvePlaceMediaReturnRoutePointId,
 } from "./placeMediaHandoff";
 
@@ -791,9 +793,38 @@ function liveRoutePointMarker(journeyId: string, routePointId: string) {
 
 function routePointRepresentativeVisual(assetId: string) {
   if (typeof document === "undefined") return null;
-  return [...document.querySelectorAll<HTMLImageElement>("[data-route-point-context-representative]")]
-    .find((element) => element.dataset.routePointContextRepresentative === assetId
-      && Boolean(element.currentSrc || element.src)) ?? null;
+  return selectPlaceMediaRepresentative(
+    [...document.querySelectorAll<HTMLImageElement>("[data-route-point-context-representative]")]
+      .map((element) => ({
+        element,
+        assetId: element.dataset.routePointContextRepresentative ?? "",
+        painted: Boolean(element.currentSrc || element.src),
+      })),
+    assetId,
+  );
+}
+
+/**
+ * The geographic anchor for one aperture. liveRoutePointMarker stays the strict
+ * "this marker is really on screen right now" predicate that return intent uses;
+ * this one accepts the same projected marker while it is still ramping in, so a
+ * click landing mid-transition does not silently suppress the handoff. Viewport
+ * containment stays with resolvePlaceMediaObservationRect, whose refusal
+ * predicate is the exact negation of liveRoutePointMarker's own.
+ */
+function projectedRoutePointMarker(journeyId: string, routePointId: string) {
+  if (typeof document === "undefined") return null;
+  const settled = liveRoutePointMarker(journeyId, routePointId);
+  return selectPlaceMediaMarkerAnchor(
+    [...document.querySelectorAll<SVGElement>(".particle-earth-route__point")]
+      .filter((element) => element.dataset.journeyRoute === journeyId
+        && element.dataset.routePointId === routePointId)
+      .map((element) => ({
+        element,
+        settled: element === settled,
+        rect: element.getBoundingClientRect(),
+      })),
+  );
 }
 
 function placeMediaSourceDimensions(element: HTMLElement) {
@@ -825,8 +856,9 @@ function createPlaceMediaObservationElement({
   compact: boolean;
   paintSource: boolean;
 }) {
-  const marker = liveRoutePointMarker(journeyId, routePointId);
-  if (!marker || typeof document === "undefined") return null;
+  if (typeof document === "undefined") return null;
+  const marker = projectedRoutePointMarker(journeyId, routePointId);
+  if (!marker) return null;
   const markerRect = marker.getBoundingClientRect();
   const frame = resolvePlaceMediaObservationRect(
     { left: markerRect.left, top: markerRect.top, width: markerRect.width, height: markerRect.height },
