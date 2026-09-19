@@ -27,6 +27,10 @@ const ORIGINAL_COLOR = { r: 36, g: 92, b: 176 };
 
 const DERIVATIVE_URL = "https://qa-storage.invalid/cover-reveal/derivative.png?sig=qa-display";
 const ORIGINAL_URL = "https://qa-storage.invalid/media/original.png?sig=qa-original";
+// The same canonical original photograph, re-signed. The Atlas refreshes a
+// signed read on its own timer, so the url under a mounted opening changes
+// without the viewer doing anything at all.
+const ORIGINAL_URL_RESIGNED = "https://qa-storage.invalid/media/original.png?sig=qa-original-2";
 
 const COVER_ASSET_ID = "qa-asset-cover";
 const COVER_HASH = "sha256:qa-cover-bytes";
@@ -184,14 +188,21 @@ async function installAtlasApi(page, state) {
     contentType: "application/json",
     body: JSON.stringify({ journeys: [state.journey] }),
   }));
-  await page.route("**/api/uploads/assets/*/read-url", (route) => route.fulfill({
-    status: 200,
-    contentType: "application/json",
-    body: JSON.stringify({
-      url: ORIGINAL_URL,
-      expiresAt: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
-    }),
-  }));
+  await page.route("**/api/uploads/assets/*/read-url", (route) => {
+    state.originalReads += 1;
+    // An already-expired answer puts the client's own refresh timer on its one
+    // second floor - the #200 case of a grant with seconds left - so the
+    // canonical cover is genuinely re-signed inside one reveal.
+    const expiring = state.expireOriginalRead === true;
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        url: expiring && state.originalReads > 1 ? ORIGINAL_URL_RESIGNED : ORIGINAL_URL,
+        expiresAt: new Date(Date.now() + (expiring ? -10_000 : 10 * 60 * 1000)).toISOString(),
+      }),
+    });
+  });
   await page.route("**/api/cover-reveal/**", async (route) => {
     const request = route.request();
     state.calls.push({
@@ -323,6 +334,7 @@ async function openCase(viewport, {
   derivative,
   reducedMotion = false,
   gated = false,
+  expireOriginalRead = false,
   journey = journeyFixture(),
 } = {}) {
   const context = await browser.newContext({
@@ -341,6 +353,8 @@ async function openCase(viewport, {
     journey,
     calls: [],
     gate: null,
+    originalReads: 0,
+    expireOriginalRead,
     derivative: derivative ?? (() => ({ status: 200, body: derivativePayload() })),
   };
   if (gated) {
@@ -609,6 +623,57 @@ try {
     check("story-entry/opening-yields-to-story", duringStory.stage === false, duringStory);
     check("story-entry/no-renderer-behind-story", duringStory.canvasesInCover === 0, duringStory);
     check("story-entry/no-page-errors", run.pageErrors.length === 0, run.pageErrors);
+    await run.context.close();
+  }
+
+  // 9. The canonical original is re-signed WHILE the opening is on screen. The
+  //    reveal runs with the pair it opened with: a re-signed read of the same
+  //    photograph is not a new cover revision and must not restart it.
+  {
+    const viewport = VIEWPORTS[0];
+    const run = await openCase(viewport, { expireOriginalRead: true });
+    const { page } = run;
+    await page.waitForFunction(
+      () => document.querySelector(".living-atlas__active-media-reveal")
+        ?.getAttribute("data-cover-reveal-phase") === "revealing",
+      undefined,
+      { timeout: 20_000 },
+    );
+    // Sampled through the whole reveal, because a restart is only visible as the
+    // derivative coming BACK after the cover had begun to take over.
+    const samples = [];
+    for (let attempt = 0; attempt < 24; attempt += 1) {
+      const stage = await page.evaluate(() => document.querySelector(
+        ".living-atlas__active-media-reveal",
+      )?.getAttribute("data-cover-reveal-phase") ?? null);
+      if (stage === null) break;
+      samples.push(classify(await compositedColor(page, REVEAL_PROBE)));
+    }
+    const leftTheDerivative = samples.findIndex((sample) => sample !== "derivative");
+    check(
+      "resigned-original/the-original-read-actually-refreshed",
+      run.state.originalReads > 1,
+      run.state.originalReads,
+    );
+    check(
+      "resigned-original/the-reveal-never-restarts",
+      leftTheDerivative >= 0 && !samples.slice(leftTheDerivative).includes("derivative"),
+      samples,
+    );
+    await page.waitForFunction(
+      () => document.querySelector(".living-atlas__active-media-reveal") === null,
+      undefined,
+      { timeout: 40_000 },
+    );
+    const settled = await coverState(page);
+    check("resigned-original/settles-on-the-canonical-original", settled.stage === false, settled);
+    check(
+      "resigned-original/the-fresh-signed-read-is-the-final-image",
+      settled.originalSrc === ORIGINAL_URL_RESIGNED,
+      settled,
+    );
+    check("resigned-original/no-renderer-survives", settled.canvases === 0, settled);
+    check("resigned-original/no-page-errors", run.pageErrors.length === 0, run.pageErrors);
     await run.context.close();
   }
 } catch (error) {

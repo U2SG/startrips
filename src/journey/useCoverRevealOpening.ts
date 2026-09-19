@@ -93,6 +93,16 @@ export function useCoverRevealOpening({
       dismiss();
       return undefined;
     }
+    // An opening belongs to the exact cover revision it was granted for. When
+    // the pin moves while one is mounted — the cover replaced, or the surface
+    // now showing another Journey — the old derivative has to leave the screen
+    // HERE, synchronously, before anything is asked for the new revision.
+    // `JourneyCardMedia` recombines whatever opening it is handed with the
+    // original cover it currently holds, so a survivor would reveal last
+    // revision's generated pixels into this revision's canonical cover.
+    // Clearing rather than `dismiss()`: no intent is being expressed, and the
+    // read this effect is about to start must not supersede itself.
+    setOpening((current) => (current !== null && current.identity !== coverPin ? null : current));
     // Reduced Motion resolves to the canonical original with no reveal, so
     // there is nothing to ask for. Not minting a display capability nobody
     // will look at is the whole reason the check is here and not only in

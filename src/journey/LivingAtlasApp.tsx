@@ -23,6 +23,11 @@ import { ScrambledText } from "../motion/primitives/ScrambledText";
 import { ShinyText } from "../motion/primitives/ShinyText";
 import { morphJourneyCard, runSharedElementMorph } from "../motion/primitives/sharedElement";
 import { CoverRevealStage } from "../reveal/CoverRevealStage";
+import {
+  holdCoverRevealOpeningPair,
+  type HeldCoverRevealPair,
+} from "./coverRevealOpening";
+import type { CoverRevealImagePair } from "../reveal/coverRevealFlow";
 import { LivingAtlasGlobe, type LivingAtlasGlobeProps } from "../scene/LivingAtlasGlobe";
 import {
   JourneyComposer,
@@ -679,12 +684,17 @@ function JourneyCardMedia({
   // and the original's own path above is untouched — a derivative that never
   // arrives, arrives late or cannot be shown costs the viewer nothing.
   const originalUrl = read.status === "ready" ? read.url : null;
-  const openingPair = useMemo(
-    () => (opening && originalUrl
-      ? { generatedFirst: opening.generatedUrl, originalCover: originalUrl }
-      : null),
-    [opening, originalUrl],
-  );
+  // The pair is held for the life of one opening rather than recomputed from
+  // the current reads. The canonical original re-signs itself on a timer whose
+  // floor is one second, and `CoverRevealStage` rebuilds its renderer for a new
+  // pair, so recomputing would restart the reveal mid-flight against an image
+  // it never opened with.
+  const heldOpeningPair = useRef<HeldCoverRevealPair | null>(null);
+  const openingPair = ((): CoverRevealImagePair | null => {
+    const held = holdCoverRevealOpeningPair(heldOpeningPair.current, opening, originalUrl);
+    heldOpeningPair.current = held;
+    return held?.pair ?? null;
+  })();
 
   if (!asset) return null;
   return (

@@ -20,7 +20,7 @@
  *   cover was never withheld waiting for it.
  */
 
-import type { RevealPresetId } from "../reveal/coverRevealFlow";
+import type { CoverRevealImagePair, RevealPresetId } from "../reveal/coverRevealFlow";
 import type { JourneyMediaAsset } from "./types";
 
 /** The five presets the vendored renderer actually implements. */
@@ -165,5 +165,39 @@ export function planCoverRevealOpening(
     identity,
     preset: derivative.presetId as RevealPresetId,
     generatedUrl: display.url,
+  };
+}
+
+/** The two images one opening runs with, held for exactly that opening. */
+export type HeldCoverRevealPair = {
+  identity: string;
+  pair: CoverRevealImagePair;
+};
+
+/**
+ * The image pair for the opening currently on screen, frozen for its lifetime.
+ *
+ * The canonical original cover re-signs itself on its own timer, and that timer
+ * is floored at one second — a share grant with seconds left (#200) reaches the
+ * floor — so the original's url can change several times inside one reveal.
+ * `CoverRevealStage` rebuilds its renderer whenever the pair it was given
+ * changes, so recomputing the pair from the current url would restart the
+ * reveal from the first frame against a half it never opened with. The url held
+ * here was valid when the reveal loaded it into a texture, which is the only
+ * moment either image is read.
+ *
+ * A new opening identity always takes a fresh pair: that is a different cover
+ * revision, not a re-signed read of the same one.
+ */
+export function holdCoverRevealOpeningPair(
+  held: HeldCoverRevealPair | null,
+  opening: { identity: string; generatedUrl: string } | null,
+  originalUrl: string | null,
+): HeldCoverRevealPair | null {
+  if (!opening || !originalUrl) return null;
+  if (held && held.identity === opening.identity) return held;
+  return {
+    identity: opening.identity,
+    pair: { generatedFirst: opening.generatedUrl, originalCover: originalUrl },
   };
 }

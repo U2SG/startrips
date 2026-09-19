@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   coverRevealOpeningIdentity,
+  holdCoverRevealOpeningPair,
   planCoverRevealOpening,
   type CoverRevealDisplayPayload,
   type CoverRevealOpeningInput,
@@ -192,5 +193,38 @@ describe("planCoverRevealOpening", () => {
   it("goes directly to the canonical original cover under Reduced Motion", () => {
     expect(planCoverRevealOpening(input({ reducedMotion: true })))
       .toEqual({ kind: "none", reason: "reduced-motion" });
+  });
+});
+
+describe("holdCoverRevealOpeningPair", () => {
+  const opening = { identity: "journey-1 asset-cover sha256-cover-bytes", generatedUrl: "https://cdn/derivative?sig=1" };
+
+  it("keeps the exact pair an opening started with when the original is re-signed", () => {
+    // The original cover's signed read refreshes on its own timer, floored at
+    // one second, so this happens several times inside one reveal.
+    const first = holdCoverRevealOpeningPair(null, opening, "https://cdn/original?sig=1");
+    const refreshed = holdCoverRevealOpeningPair(first, opening, "https://cdn/original?sig=2");
+    expect(refreshed).toBe(first);
+    expect(refreshed?.pair.originalCover).toBe("https://cdn/original?sig=1");
+  });
+
+  it("takes a fresh pair for a different cover revision", () => {
+    const first = holdCoverRevealOpeningPair(null, opening, "https://cdn/original?sig=1");
+    const replaced = holdCoverRevealOpeningPair(
+      first,
+      { identity: "journey-1 asset-cover sha256-replacement-bytes", generatedUrl: "https://cdn/derivative?sig=2" },
+      "https://cdn/original-replacement?sig=1",
+    );
+    expect(replaced?.pair).toEqual({
+      generatedFirst: "https://cdn/derivative?sig=2",
+      originalCover: "https://cdn/original-replacement?sig=1",
+    });
+  });
+
+  it("holds nothing while either half of the pair is missing", () => {
+    expect(holdCoverRevealOpeningPair(null, null, "https://cdn/original?sig=1")).toBeNull();
+    expect(holdCoverRevealOpeningPair(null, opening, null)).toBeNull();
+    const first = holdCoverRevealOpeningPair(null, opening, "https://cdn/original?sig=1");
+    expect(holdCoverRevealOpeningPair(first, null, "https://cdn/original?sig=1")).toBeNull();
   });
 });
