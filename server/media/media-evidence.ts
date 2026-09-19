@@ -322,6 +322,46 @@ export function parseRecordedEvidenceWrite(
   };
 }
 
+/**
+ * #428: the reader for a recorded-evidence document that arrives with no asset
+ * to guard — an upload's optional evidence on the wire, and the very same
+ * document read back from the upload row at finalization.
+ *
+ * Both go through `parseRecordedEvidenceWrite`, so the upload pipeline adds no
+ * second evidence model or parser. `expectedRevision` is supplied by the server
+ * as 0 and never read from the caller: the media asset does not exist yet, so
+ * there is no revision for anyone to guard, and only `spatial` and
+ * `captureTime` are taken from the document.
+ */
+export function parseRecordedEvidenceDocument(
+  value: unknown,
+): MediaRecordedEvidence | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const write = parseRecordedEvidenceWrite({
+    expectedRevision: 0,
+    spatial: record.spatial,
+    captureTime: record.captureTime,
+  });
+  return write?.recorded ?? null;
+}
+
+/**
+ * The stored form of an already-normalized document. `instant` becomes an
+ * ISO-8601 instant so a JSON round-trip through the upload row returns exactly
+ * what `parseRecordedEvidenceDocument` accepts, leaving the normalized document
+ * that finalization attaches identical to the one the upload was accepted with.
+ */
+export function serializeRecordedEvidence(recorded: MediaRecordedEvidence) {
+  return {
+    spatial: { ...recorded.spatial },
+    captureTime: {
+      ...recorded.captureTime,
+      instant: recorded.captureTime.instant?.toISOString() ?? null,
+    },
+  };
+}
+
 export function parseDisplayStateWrite(
   body: Record<string, unknown> | null,
 ): MediaDisplayStateWrite | null {

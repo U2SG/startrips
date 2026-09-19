@@ -5,6 +5,7 @@ import {
   doublePrecision,
   index,
   integer,
+  jsonb,
   pgTable,
   primaryKey,
   text,
@@ -527,6 +528,12 @@ export const mediaUploads = pgTable(
     mimeType: text("mime_type").notNull(),
     bytes: integer("bytes").notNull(),
     contentHash: text("content_hash"),
+    // #428: the optional recorded media evidence the accepted upload carried,
+    // already normalized by `parseRecordedEvidenceWrite`, held here only until
+    // the media asset it belongs to exists. Nullable because evidence is
+    // optional and every historical and in-flight row predates it; the
+    // durable owner of evidence stays `media_asset_evidence`, keyed by asset.
+    recordedEvidence: jsonb("recorded_evidence"),
     partSize: integer("part_size").notNull(),
     partCount: integer("part_count").notNull(),
     status: text("status").notNull().default("initiated"),
