@@ -14,6 +14,7 @@ import {
   unknownCreateRecheckMessage,
   uploadJourneyMedia,
 } from "./JourneyComposer";
+import { COMPACT_MOBILE_MEDIA_QUERY } from "./mobileLayout";
 import { moveRoutePoint, type RouteDraftPoint } from "./routeDraft";
 import type { Journey, JourneyInput } from "./types";
 
@@ -64,6 +65,55 @@ describe("persistJourneyDraft", () => {
     expect(markup).toContain("03 · TRACE");
     expect(markup).toContain('<details class="journey-precise-location">');
     expect(markup).toContain("保存到星球");
+  });
+
+  it("renders the #375 mobile-primary task surface under the compact query", () => {
+    // `useCompactMobileLayout` seeds from `matchMedia` in its state initializer,
+    // so a stub is enough to render the real compact surface here; no DOM
+    // environment is introduced for one test.
+    const previous = globalThis.matchMedia;
+    globalThis.matchMedia = ((query: string) => ({
+      matches: query === COMPACT_MOBILE_MEDIA_QUERY,
+      media: query,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+    })) as unknown as typeof globalThis.matchMedia;
+    try {
+      const markup = renderToStaticMarkup(createElement(JourneyComposer, {
+        open: true,
+        journey: undefined,
+        onClose: () => undefined,
+        onSaved: () => undefined,
+        onGlobePickRequest: () => undefined,
+      }));
+
+      // Primary: title, add/search, the Route Point list and the sticky save.
+      expect(markup).toContain('data-composer-task="primary"');
+      expect(markup).toContain('data-composer-scroll-owner="editor"');
+      expect(markup).toContain("journey-title-field");
+      expect(markup).toContain("journey-location-search");
+      expect(markup).toContain("journey-route-draft");
+      expect(markup).toContain("保存到星球");
+
+      // Secondary and More capabilities are entered, never shown inline.
+      expect(markup).toContain('data-composer-task-entry="journey-info"');
+      expect(markup).toContain('data-composer-task-entry="media"');
+      expect(markup).toContain("journey-composer__task-more");
+      expect(markup).not.toContain('type="date"');
+      expect(markup).not.toContain("journey-light-colors");
+      expect(markup).not.toContain("journey-precise-location");
+      expect(markup).not.toContain("journey-media-picker");
+
+      // The archive-style section numbering is desktop chrome: numbering a
+      // sequence the person no longer sees is worse than not numbering it.
+      expect(markup).not.toContain("01 · MEMORY");
+      expect(markup).not.toContain("02 · JOURNEY");
+      expect(markup).not.toContain("03 · TRACE");
+      expect(markup).toContain("在地图上留下它");
+    } finally {
+      if (previous) globalThis.matchMedia = previous;
+      else delete (globalThis as { matchMedia?: unknown }).matchMedia;
+    }
   });
 
   it("creates first, uploads files sequentially with two part workers, and reports progress", async () => {
