@@ -10,6 +10,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from feature_store import StoreConflict, _storage_mutex
 from github_evidence import EvidenceUnknown
@@ -148,6 +149,90 @@ def lineage_lane(row, by_pid):
     return None
 
 
+def command_is_readonly_probe(command):
+    """Read-only run-loop queries are observers, never execution carriers."""
+    if not isinstance(command, str) or not command.strip():
+        return False
+    text = command.replace('\\', '/').lower()
+    if not re.search(r'(?:^|[\s"/])run-loop[.]sh(?:[\s"\x00]|$)', text):
+        return False
+    return bool(re.search(
+        r'(?:^|[\s"])--(?:next|next-action|plan|work-prs|ready-prs|pr-review)(?=$|[\s"])',
+        text))
+
+
+def lineage_is_readonly_probe(row, by_pid):
+    """True only when the nearest execution-relevant ancestor is a read-only probe.
+
+    This lets a just-born MSYS child inherit the observer/non-carrier identity of
+    --next/--plan without walking through a real carrier token or scoped owner.
+    """
+    seen, pid = set(), row.get('ppid', 0)
+    while pid and pid not in seen:
+        seen.add(pid)
+        parent = by_pid.get(pid)
+        if parent is None:
+            return False
+        raw = parent.get('command')
+        if command_is_readonly_probe(raw):
+            return True
+        if command_token(raw):
+            return False
+        if isinstance(raw, str) and raw.strip():
+            feature, worktree = command_scope(raw)
+            if feature and worktree:
+                return False
+        pid = parent.get('ppid', 0)
+    return False
+
+
+def lineage_token(row, by_pid):
+    """Return the nearest observable carrier token in this ancestry, if any."""
+    seen, pid = set(), row.get('ppid', 0)
+    while pid and pid not in seen:
+        seen.add(pid)
+        parent = by_pid.get(pid)
+        if parent is None:
+            return None
+        token = command_token(parent.get('command'))
+        if token:
+            return token
+        pid = parent.get('ppid', 0)
+    return None
+
+
+def lineage_scope(row, by_pid, current_token=None):
+    """Inherit a complete owner scope only inside one proven invocation chain.
+
+    MSYS can momentarily expose a descendant with no CommandLine, or reconstruct a
+    same-token run-loop argv without the later feature/worktree arguments. A complete
+    ancestor scope is still authoritative only while no different carrier token is
+    crossed. A different token is a new claim and must remain visible/fail-closed.
+    """
+    seen, pid, expected_token = set(), row.get('ppid', 0), current_token
+    while pid and pid not in seen:
+        seen.add(pid)
+        parent = by_pid.get(pid)
+        if parent is None:
+            return None, None, None
+        raw = parent.get('command')
+        parent_token = command_token(raw)
+        if parent_token:
+            if expected_token and parent_token != expected_token:
+                return None, None, None
+            expected_token = expected_token or parent_token
+        if isinstance(raw, str) and raw.strip():
+            feature, worktree = command_scope(raw)
+            scope_marker = bool(re.search(
+                r'(?:^|[;\s"])(?:--carrier-)?(?:feature|worktree|worktree64)=', raw, re.I))
+            if scope_marker and not (feature and worktree):
+                return None, None, None
+            if feature and worktree:
+                return feature, worktree, expected_token or parent_token
+        pid = parent.get('ppid', 0)
+    return None, None, None
+
+
 def invocation_cluster(rows, own_token):
     """Provider-visible pids proven to belong to this exact tokenized invocation.
 
@@ -243,7 +328,10 @@ def _observed_executions(rows, root, self_pid):
     original = str(Path(root).absolute()).replace('\\', '/').lower()
     aliases = {canonical, original}
     mine = published()
-    own_token = os.environ.get('STARTRIPS_CARRIER_TOKEN') or None
+    # MSYS may lose exported environment on one native subprocess carrier even
+    # though the parent run-loop argv still carries the exact invocation token.
+    # Recover only from the caller's own ancestry; never infer from a peer.
+    own_token = os.environ.get('STARTRIPS_CARRIER_TOKEN') or lineage_token(by_pid[self_pid], by_pid)
     own_cluster = invocation_cluster(rows, own_token)
     for spelling in tuple(aliases):
         if re.match(r'^[a-z]:/', spelling):
@@ -265,16 +353,36 @@ def _observed_executions(rows, root, self_pid):
         raw_command = row.get('command')
         inherited_lane = lineage_lane(row, by_pid)
         if not isinstance(raw_command, str) or not raw_command.strip():
-            observed.append({'pid': row['pid'], 'ppid': row['ppid'],
-                             'kind': 'unknown-carrier', 'state': 'unknown-command',
-                             'lane': inherited_lane or 'unknown', 'feature': None,
-                             'worktree': None, 'token': None,
-                             'scope_marker': False, 'scope_complete': False})
+            if lineage_is_readonly_probe(row, by_pid):
+                continue
+            inherited_feature, inherited_worktree, inherited_token = lineage_scope(row, by_pid)
+            if inherited_feature and inherited_worktree:
+                observed.append({'pid': row['pid'], 'ppid': row['ppid'],
+                                 'kind': 'unknown-carrier', 'state': 'inherited-scope',
+                                 'lane': inherited_lane or 'unknown', 'feature': inherited_feature,
+                                 'worktree': inherited_worktree, 'token': inherited_token,
+                                 'scope_marker': True, 'scope_complete': True})
+            else:
+                inherited_token = lineage_token(row, by_pid)
+                if inherited_token and inherited_lane:
+                    observed.append({'pid': row['pid'], 'ppid': row['ppid'],
+                                     'kind': 'unknown-carrier', 'state': 'inherited-claim',
+                                     'lane': inherited_lane, 'feature': None,
+                                     'worktree': None, 'token': inherited_token,
+                                     'scope_marker': False, 'scope_complete': False})
+                else:
+                    observed.append({'pid': row['pid'], 'ppid': row['ppid'],
+                                     'kind': 'unknown-carrier', 'state': 'unknown-command',
+                                     'lane': inherited_lane or 'unknown', 'feature': None,
+                                     'worktree': None, 'token': None,
+                                     'scope_marker': False, 'scope_complete': False})
             continue
 
         command = raw_command.replace('\\', '/').lower()
         is_loop = bool(re.search(r'(?:^|[\s"/])(?:run-loop|loop-supervisor)[.]sh(?:[\s"\x00]|$)', command))
         is_child = 'startrips_execution_owner=' in command
+        if is_loop and command_is_readonly_probe(raw_command):
+            continue
         if not is_loop and not is_child:
             continue
         explicit_root = any(re.search(re.escape(alias.rstrip('/')) + r'(?=[/;\s"\x00]|$)', command)
@@ -288,17 +396,25 @@ def _observed_executions(rows, root, self_pid):
             continue
 
         carrier_lane = command_lane(raw_command) or inherited_lane
+        carrier_token = command_token(raw_command)
         carrier_feature, carrier_worktree = command_scope(raw_command)
         scope_marker = bool(re.search(
             r'(?:^|[;\s"])(?:--carrier-)?(?:feature|worktree|worktree64)=', raw_command, re.I))
         scope_complete = carrier_feature is not None and carrier_worktree is not None
+        if not scope_marker and not scope_complete:
+            inherited_feature, inherited_worktree, inherited_token = lineage_scope(
+                row, by_pid, current_token=carrier_token)
+            if inherited_feature and inherited_worktree:
+                carrier_feature, carrier_worktree = inherited_feature, inherited_worktree
+                carrier_token = carrier_token or inherited_token
+                scope_complete = True
         observed.append({
             'pid': row['pid'], 'ppid': row['ppid'],
             'kind': 'worker' if is_child else 'loop',
             'state': 'active' if explicit_root else 'unknown-cwd',
             'lane': carrier_lane or 'unknown',
             'feature': carrier_feature, 'worktree': carrier_worktree,
-            'token': command_token(raw_command),
+            'token': carrier_token,
             'scope_marker': scope_marker, 'scope_complete': scope_complete,
         })
     return observed
@@ -316,23 +432,28 @@ def lane_occupancy(rows, root, self_pid, lane):
     """Return distinct live owner scopes for one lane without creating a registry."""
     if lane not in LANE_CAPACITY:
         raise ValueError('Execution lane must be backend or experience')
-    scoped, claims, unknown = {}, {}, []
+    scoped, claims, unknown, scoped_tokens = {}, {}, [], set()
     for record in _observed_executions(rows, root, self_pid):
-        if record['state'] == 'unknown-command' or record['lane'] == 'unknown':
-            unknown.append(_public_record(record))
+        carrier_lane = record['lane']
+        # A carrier whose lineage proves a different lane is not part of this
+        # lane's capacity, even when its own CommandLine is temporarily unreadable.
+        # Unknown lane or unreadable state inside the requested lane stays fail-closed.
+        if carrier_lane not in {lane, 'unknown'}:
             continue
-        if record['lane'] != lane:
+        if record['state'] == 'unknown-command' or carrier_lane == 'unknown':
+            unknown.append(_public_record(record))
             continue
         if record['scope_complete']:
             key = (record['feature'], record['worktree'])
             scoped.setdefault(key, record)
+            if record.get('token'):
+                scoped_tokens.add(record['token'])
         elif record['token']:
             claims.setdefault(record['token'], record)
         else:
             unknown.append(_public_record(record, state='unknown-scope'))
     if unknown:
         raise EvidenceUnknown('Execution occupancy is unknown: ' + json.dumps(unknown))
-    scoped_tokens = {record['token'] for record in scoped.values() if record.get('token')}
     claims = {token: record for token, record in claims.items() if token not in scoped_tokens}
     used = len(scoped) + len(claims)
     return {
@@ -346,6 +467,24 @@ def lane_occupancy(rows, root, self_pid, lane):
     }
 
 
+def observed_lane_occupancy(root, lane):
+    """Bounded provider stabilization for process-birth CommandLine races.
+
+    Windows CIM can enumerate a newly-created bash/node process before its
+    CommandLine is populated. Give that provider-only observation at most 100 ms
+    to become classifiable. Persistent uncertainty still raises/fails closed.
+    """
+    last = None
+    for attempt in range(3):
+        try:
+            return lane_occupancy(snapshot(), root, os.getpid(), lane)
+        except EvidenceUnknown as exc:
+            last = exc
+            if attempt < 2:
+                time.sleep(0.05)
+    raise last
+
+
 def competitors(rows, root, self_pid, lane=None, feature=None, worktree=None, worktree64=None):
     if lane not in {None, 'backend', 'experience'}:
         raise ValueError('Execution lane must be backend, experience or omitted')
@@ -353,13 +492,17 @@ def competitors(rows, root, self_pid, lane=None, feature=None, worktree=None, wo
         raise ValueError('Specify owner worktree once')
     wanted_feature = feature.upper() if isinstance(feature, str) and feature else None
     wanted_worktree = decode_worktree64(worktree64) if worktree64 is not None else normalize_worktree(worktree)
-    conflicts, same_lane_scoped, same_lane_claims = [], {}, {}
+    conflicts, same_lane_scoped, same_lane_claims, same_lane_scoped_tokens = [], {}, {}, set()
 
     for record in _observed_executions(rows, root, self_pid):
+        carrier_lane = record['lane']
         if record['state'] == 'unknown-command':
+            # An unreadable carrier in a proven different lane is independent.
+            # Same-lane or lane-unknown evidence remains fail-closed.
+            if lane is not None and carrier_lane not in {lane, 'unknown'}:
+                continue
             conflicts.append(_public_record(record))
             continue
-        carrier_lane = record['lane']
         if lane is None or carrier_lane == 'unknown':
             conflicts.append(_public_record(record))
             continue
@@ -383,16 +526,17 @@ def competitors(rows, root, self_pid, lane=None, feature=None, worktree=None, wo
             conflicts.append(_public_record(record))
         elif record['scope_complete']:
             same_lane_scoped.setdefault((record['feature'], record['worktree']), record)
+            if record.get('token'):
+                same_lane_scoped_tokens.add(record['token'])
         elif record['token']:
             same_lane_claims.setdefault(record['token'], record)
         else:
             conflicts.append(_public_record(record, state='unknown-scope'))
 
     if lane == 'experience':
-        scoped_tokens = {record['token'] for record in same_lane_scoped.values() if record.get('token')}
         same_lane_claims = {
             token: record for token, record in same_lane_claims.items()
-            if token not in scoped_tokens
+            if token not in same_lane_scoped_tokens
         }
         # Only one selector/claim transition runs at once. Once scoped, up to two
         # different Experience owners may execute concurrently.
@@ -405,15 +549,16 @@ def competitors(rows, root, self_pid, lane=None, feature=None, worktree=None, wo
 
 
 def ensure_idle(root, lane=None, feature=None, worktree=None, worktree64=None):
-    rows = competitors(snapshot(), root, os.getpid(), lane=lane, feature=feature,
-                       worktree=worktree, worktree64=worktree64)
-    if any(row['kind'] == 'unknown-carrier' for row in rows):
-        # A process created while the provider was enumerating has no command line
-        # yet, and any machine that runs node or bash produces those constantly.
-        # That is a sampling race, not an unreadable carrier, so look once more
-        # before calling it unknown. A genuinely unreadable process stays unreadable.
+    rows = []
+    for attempt in range(3):
         rows = competitors(snapshot(), root, os.getpid(), lane=lane, feature=feature,
                            worktree=worktree, worktree64=worktree64)
+        if not any(row['kind'] == 'unknown-carrier' for row in rows):
+            break
+        # A just-created process can lack CommandLine for a few milliseconds.
+        # Re-observe only the provider; never retry owner work or weaken a real claim.
+        if attempt < 2:
+            time.sleep(0.05)
     if rows:
         raise EvidenceUnknown('Existing/unknown execution must finish: ' + json.dumps(rows))
     observed_worktree = decode_worktree64(worktree64) if worktree64 is not None else normalize_worktree(worktree)
@@ -527,7 +672,7 @@ def main():
         elif args.action == 'occupied':
             if report_lane not in LANE_CAPACITY:
                 raise ValueError('occupied requires an explicit execution lane')
-            result = lane_occupancy(snapshot(), args.root, os.getpid(), report_lane)
+            result = observed_lane_occupancy(args.root, report_lane)
         elif args.action == 'resume': result = manual_resume(args.root)
         elif args.action.startswith('outage-'): result = outage_window(args.root, args.action.split('-', 1)[1])
         else:

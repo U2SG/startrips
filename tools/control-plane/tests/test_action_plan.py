@@ -19,8 +19,9 @@ class ActionCases(unittest.TestCase):
         self.review = {'unresolved': 0, 'changes_requested': 0}
         self.ci = {'state': 'failure', 'source_green': True, 'final_green': False}
 
-    def action(self, clear=False):
-        return plan.derive(self.row, self.pr, self.relation, self.review, self.ci, clear)
+    def action(self, clear=False, source_verdict=None):
+        verdict = source_verdict or ('CLEAR' if clear else 'MISSING')
+        return plan.derive(self.row, self.pr, self.relation, self.review, self.ci, verdict)
 
     def test_empty_review_is_not_approval(self):
         self.assertEqual('WAIT_SOURCE_REVIEW', self.action())
@@ -66,6 +67,12 @@ class ActionCases(unittest.TestCase):
         self.review['changes_requested'] = 1
         self.assertEqual('REPAIR_REVIEW', self.action(True))
 
+    def test_independent_changes_requested_receipt_routes_back_to_owner(self):
+        self.assertEqual(
+            'REPAIR_REVIEW',
+            self.action(source_verdict='CHANGES_REQUESTED'),
+        )
+
     def test_old_base_alone_is_not_rebase(self):
         self.pr['base'] = {'sha': fixture.C}
         self.assertEqual('SEAL', self.action(True))
@@ -109,29 +116,46 @@ class ReceiptCases(fixture.SyntheticOne):
         path.parent.mkdir(parents=True, exist_ok=True); path.write_text(json.dumps(data), encoding='utf-8')
         return data
 
-    def test_missing_receipt_is_not_clear(self):
-        self.assertFalse(plan.source_review(self.root, 'ST-001', 1, fixture.A))
+    def test_missing_receipt_waits(self):
+        self.assertEqual('MISSING', plan.source_review(self.root, 'ST-001', 1, fixture.A))
 
     def test_exact_receipt_is_clear(self):
-        self.receipt(); self.assertTrue(plan.source_review(self.root, 'ST-001', 1, fixture.A))
+        self.receipt(); self.assertEqual('CLEAR', plan.source_review(self.root, 'ST-001', 1, fixture.A))
 
     def test_new_source_invalidates_old_review(self):
-        self.receipt(); self.assertFalse(plan.source_review(self.root, 'ST-001', 1, fixture.B))
+        self.receipt(); self.assertEqual('MISSING', plan.source_review(self.root, 'ST-001', 1, fixture.B))
 
     def test_builder_cannot_claim_independent_role(self):
         self.receipt(reviewer_role='local-backend')
-        self.assertFalse(plan.source_review(self.root, 'ST-001', 1, fixture.A))
+        with self.assertRaises(gh.EvidenceUnknown):
+            plan.source_review(self.root, 'ST-001', 1, fixture.A)
 
     def test_findings_block_clear(self):
         self.receipt(findings=['unresolved'])
-        self.assertFalse(plan.source_review(self.root, 'ST-001', 1, fixture.A))
+        with self.assertRaises(gh.EvidenceUnknown):
+            plan.source_review(self.root, 'ST-001', 1, fixture.A)
 
     def test_empty_reviewed_file_set_is_not_acceptance(self):
         self.receipt(reviewed_paths=[])
-        self.assertFalse(plan.source_review(self.root, 'ST-001', 1, fixture.A))
+        with self.assertRaises(gh.EvidenceUnknown):
+            plan.source_review(self.root, 'ST-001', 1, fixture.A)
 
     def test_wrong_pr_receipt_rejected(self):
-        self.receipt(pr=2); self.assertFalse(plan.source_review(self.root, 'ST-001', 1, fixture.A))
+        self.receipt(pr=2)
+        with self.assertRaises(gh.EvidenceUnknown):
+            plan.source_review(self.root, 'ST-001', 1, fixture.A)
+
+    def test_changes_requested_receipt_is_actionable(self):
+        self.receipt(verdict='CHANGES_REQUESTED', findings=['repair the Source'])
+        self.assertEqual(
+            'CHANGES_REQUESTED',
+            plan.source_review(self.root, 'ST-001', 1, fixture.A),
+        )
+
+    def test_changes_requested_receipt_requires_findings(self):
+        self.receipt(verdict='CHANGES_REQUESTED', findings=[])
+        with self.assertRaises(gh.EvidenceUnknown):
+            plan.source_review(self.root, 'ST-001', 1, fixture.A)
 
     def test_owner_cannot_write_maintainer_receipt(self):
         with mock.patch.dict('os.environ', {'STARTRIPS_ROLE': 'local-backend'}):

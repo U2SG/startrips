@@ -23,13 +23,24 @@ def receipt_path(root, fid, sha):
 def source_review(root, fid, pr, sha):
     path = receipt_path(root, fid, sha)
     if not path.exists():
-        return False
+        return 'MISSING'
     data = json.loads(path.read_bytes())
-    return (data.get('feature') == fid and data.get('pr') == pr and data.get('source_sha') == sha
-            and data.get('reviewer_role') == 'hourly-review' and data.get('verdict') == 'CLEAR'
-            and data.get('findings') == [] and bool(data.get('completed_at'))
-            and isinstance(data.get('reviewed_paths'), list) and bool(data['reviewed_paths'])
-            and isinstance(data.get('evidence'), list) and bool(data['evidence']))
+    if (data.get('feature') != fid or data.get('pr') != pr or data.get('source_sha') != sha
+            or data.get('reviewer_role') != 'hourly-review' or not data.get('completed_at')
+            or not isinstance(data.get('reviewed_paths'), list) or not data['reviewed_paths']
+            or not isinstance(data.get('evidence'), list) or not data['evidence']
+            or not isinstance(data.get('findings'), list)):
+        raise EvidenceUnknown('Source review receipt identity/evidence invalid')
+    verdict = data.get('verdict')
+    if verdict == 'CLEAR':
+        if data['findings']:
+            raise EvidenceUnknown('CLEAR Source review carries findings')
+        return 'CLEAR'
+    if verdict == 'CHANGES_REQUESTED':
+        if not data['findings']:
+            raise EvidenceUnknown('CHANGES_REQUESTED Source review has no findings')
+        return 'CHANGES_REQUESTED'
+    raise EvidenceUnknown('Unknown Source review verdict')
 
 
 def has_ledger(repo, number, sha):
@@ -62,7 +73,7 @@ def ledger_pending_final(repo, number, source):
     return relation.get('status') == 'ahead'
 
 
-def derive(row, pr=None, relation=None, review=None, ci=None, source_clear=False, merge_clear=False):
+def derive(row, pr=None, relation=None, review=None, ci=None, source_verdict='MISSING', merge_clear=False):
     if row.get('status') in TERMINAL or row.get('human_gate'):
         return 'OBSERVE'
     if not row.get('pr_links'):
@@ -79,13 +90,15 @@ def derive(row, pr=None, relation=None, review=None, ci=None, source_clear=False
         return 'REPAIR_REVIEW'
     if pr.get('mergeable') is False:
         return 'REPAIR_CONFLICT'
+    if source_verdict == 'CHANGES_REQUESTED':
+        return 'REPAIR_REVIEW'
     if ci['state'] == 'unknown':
         return 'WAIT_EVIDENCE'
     if ci['state'] in {'pending', 'missing'}:
         return 'WAIT_FINAL_CI' if relation['sealed'] else 'WAIT_SOURCE_CI'
     if not (ci['final_green'] if relation['sealed'] else ci['source_green']):
         return 'REPAIR_CI'
-    if not source_clear:
+    if source_verdict != 'CLEAR':
         return 'WAIT_SOURCE_REVIEW'
     if not relation['sealed']:
         return 'SEAL'
@@ -123,9 +136,10 @@ def plan(path, fid, repo, *, record_failures=False):
         raise EvidenceUnknown('Head moved across evidence reads')
     missing = not relation['sealed'] and ledger_pending_final(repo, number, relation['source_sha'])
     ci = latest_ci(repo, relation['final_sha'], missing_ledger=missing)
-    clear = source_review(root, fid, number, relation['source_sha'])
-    result.update(action=derive(row, pr, relation, review, ci, clear), pr=number, **relation,
-                  source_review_clear=clear, ci_state=ci['state'], source_green=ci['source_green'],
+    source_verdict = source_review(root, fid, number, relation['source_sha'])
+    result.update(action=derive(row, pr, relation, review, ci, source_verdict), pr=number, **relation,
+                  source_review_clear=(source_verdict == 'CLEAR'), source_review_verdict=source_verdict,
+                  ci_state=ci['state'], source_green=ci['source_green'],
                   final_green=ci['final_green'], ci_run=ci['run']['id'] if ci['run'] else None,
                   ci_attempt=ci['run']['run_attempt'] if ci['run'] else None,
                   review=review, source_review_receipt=str(receipt_path(root, fid, relation['source_sha'])))
@@ -200,6 +214,8 @@ def record_source_review(path, fid, repo, review_file):
         raise StoreConflict('Review evidence/findings missing')
     if data['verdict'] == 'CLEAR' and data['findings']:
         raise StoreConflict('CLEAR cannot carry unresolved findings')
+    if data['verdict'] == 'CHANGES_REQUESTED' and not data['findings']:
+        raise StoreConflict('CHANGES_REQUESTED must carry actionable findings')
     if source_relation(repo, number)['source_sha'] != sha:
         raise EvidenceUnknown('Source changed while recording independent review')
     data.update(reviewer_role='hourly-review', completed_at=datetime.datetime.now(datetime.timezone.utc).isoformat())
