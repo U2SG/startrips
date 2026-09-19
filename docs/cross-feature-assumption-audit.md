@@ -51,6 +51,8 @@ question is the shortest way to decide whether the dimension really moved.
 | 7 | Rendering layers / occlusion / visual hierarchy | elevated route, coastline level of detail, labels, relief, particle refinement, shared-element media compositor | z and radius mismatch, clipping horizon, opacity stacking, double brightness, layer transition ownership, one-frame gaps, stale incoming and base layers | Do two representations of the same semantic object still share one visual anchor and one owner? |
 | 8 | Quality / performance tier | low and high quality tiers, mobile GPU budget, spatial chunking, heavier media analysis | semantic differences between tiers, cache size, vertex and particle limits, main-thread work, decode concurrency, fallback behaviour | Did performance degradation accidentally become semantic degradation? |
 | 9 | Authorization identity and lifetime | guest share grants alongside member sessions, read-only capability, expiry and revocation, presigned media reads | atlas derivation, route and media read paths, navigation and timeline reachability, playback prefetch, request logging and telemetry, already-open pages after revocation | Can a narrower identity reach a surface that was written assuming the owning member? |
+| 10 | Request replay / recovery identity | retry after an unknown network result, single-use grants, idempotent mutation receipts, concurrent replay | request identity, durable receipts, grant consumption, mutable state probes, refusal records, body changes between retries | Can a retry report success without durable evidence bound to the original intended operation? |
+| 11 | Resource tenancy / lifecycle | a second renderer, GPU context, cache or scheduler begins sharing a budget that was previously single-owner | allocation ceilings, aggregate resource cost, pause/resume, context loss, teardown, hidden-tab lifecycle, production bundle ownership | Did a new owner make a previously single-tenant budget or lifecycle shared? |
 
 ## Invariant library
 
@@ -103,6 +105,24 @@ established it. An invariant outlives the pull request that discovered it; a scr
     #193/#196). Every consumer of a path — stroke, glow, rewind, playback — reads the same
     evaluator, and when a budget cannot carry the decoration the decoration is reduced rather than
     the path being truncated.
+15. **Stable user identity owns product data** — mutable email and login methods may change during
+    an Account lifetime, but Journey, Atlas, membership and preference ownership remain anchored to
+    stable user identity rather than mutable credential attributes (#389, #407).
+16. **Isolation has one effective interaction owner** — a lifecycle isolation state has one
+    effective owner for visibility, hit testing and accessibility. Selector/cascade changes cannot
+    leave an invisible surface interactive or split ownership across competing rules (#325, #409).
+17. **Retry success requires original-operation evidence** — after an unknown result, a retry may
+    report success only from durable evidence bound to the original intended operation. Mutable
+    current state or a retry's changed request body cannot prove what the previous request did
+    (#346, #410, #412).
+18. **Rendering budgets are multi-tenant once renderers coexist** — after a second renderer or GPU
+    context exists, a per-renderer budget is only a tenant budget. Aggregate drawing-buffer/context
+    lifetime, pause/resume and deterministic teardown must account for concurrent owners
+    (#247, #367, #413).
+
+Stable machine-readable IDs, path hints and evidence pointers for these invariants live in
+`docs/cfaa/invariants.json`. The prose here remains the semantic authority; the registry is the
+executable index used to tell reviewers which assumptions deserve another look.
 
 ### Automated QA coverage
 
@@ -125,6 +145,10 @@ already exercises its subsystem rather than building one large end-to-end suite.
 | 12. Closer means more confidence | `src/scene/semanticZoom.test.ts` for tier monotonicity and `src/scene/cityLabels.test.ts` for label completeness and stability |
 | 13. Single Projection Space | **covered for the layers that exist today** — `src/scene/projection.test.ts` asserts that one latitude/longitude yields byte-identical screen coordinates through the Place Label / Route Point path, the Journey connector path and the focus solver's candidate-placement path, and that the candidate model matrix is the matrix `Object3D` composes. `src/scene/geo.test.ts` and `src/scene/coastlineSpatialLod.test.ts` assert every coastline vertex, global and regional, lands on `GEOGRAPHIC_SURFACE_RADIUS`; `src/scene/ParticleEarthScene.test.tsx` asserts the coastline's depth policy, that its clip-space bias moves z and nothing else, that the module retains exactly one direct `.project(camera)` (the drag interaction centre, which is not a geographic anchor), and that the decorative shells named out of scope keep their radii. The `browser-qa / city-label-anchoring` lane measures a drawn coastline vertex against the projected geographic silhouette at 1x, 2x and max zoom and compares its per-step screen motion during a continuous Pearl River Delta drag against a place label in the same vicinity. The GPU SDF/billboard symbol layer (#237 Phase D) is deferred by the issue and unmeasured |
 | 14. Faithful Path | **covered for route geometry** — `src/scene/geo.test.ts` asserts that a lifted leg is never drawn as fewer than four straight segments across 1.86, 1.90, 2, 3 and 5 degrees, that the count only grows with the leg and that crossing the old one-segment threshold changes it by at most one segment; that peak lift over endpoint chord length is non-increasing as a leg shortens and at most 0.25 at 1.90 degrees, against the retired sqrt policy's 1.181; and that every stored Route Point survives sampling, including under a budget too small for the curve every leg asked for. `src/scene/ParticleEarthScene.test.tsx` asserts that the whole-route samples and the per-leg rewind samples are vertex-for-vertex identical, that a projected path stays within 1 CSS pixel of a high-resolution reference sampling of the same lifted curve at two lift strengths and for a dense route inside the vertex budget, and that no visible fragment is joined across an occluded span. The `browser-qa / route-anchoring` lane rotates a synthetic short-leg chain from globe centre out to the limb at 1x, 2x and 3x and grades every intermediate frame for per-leg bulge relative to that leg's own projected length and for bridged fragments. Journey Playback reveal reads the same per-leg samples, so it inherits the geometry rather than asserting it separately |
+| 15. Stable user identity owns product data | **covered for current identity mutations** — ST-089 / PR #407 proves primary-email rebinding preserves the stable user/Atlas ownership graph, while existing account-identity integration coverage checks credential changes against the same stable user identity |
+| 16. Isolation has one effective interaction owner | **covered for the Journey Rail family** — `src/journey/LivingAtlasApp.test.ts` pins the rail's cascade ownership and `browser-qa / final-acceptance` exercises playback isolation with visibility, pointer-events and accessibility evidence from #409 |
+| 17. Retry success requires original-operation evidence | **covered for authenticated password change** — `server/tests/account-password-change.integration.test.ts` covers consumed grants, lost outcomes, concurrent replay and a second request that changes the proposed new password; #412 fails closed unless a durable success receipt exists |
+| 18. Rendering budgets are multi-tenant once renderers coexist | **partial** — `browser-qa / globe-render-budget` covers the persistent globe budget; #413 adds the bounded reveal-renderer/context lifecycle evidence and remains the active delivery for the second tenant until merged |
 
 Known gaps, and the ones that have since been closed. A row above that reads **partial** is
 listed here for the part it does not cover, because a coverage claim a reviewer cannot rely on
