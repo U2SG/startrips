@@ -49,6 +49,12 @@ test("duplicate invariant IDs are rejected", () => {
   assert.throws(() => validateRegistry(registry), /duplicate invariant id/);
 });
 
+test("invariant IDs with surrounding whitespace are rejected", () => {
+  const registry = sampleRegistry();
+  registry.invariants[0].id = " CFAA-TEST-001 ";
+  assert.throws(() => validateRegistry(registry), /canonical without surrounding whitespace/);
+});
+
 test("unknown dimensions are rejected", () => {
   const registry = sampleRegistry();
   registry.invariants[0].dimensions = ["missing"];
