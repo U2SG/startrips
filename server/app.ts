@@ -23,6 +23,7 @@ import {
   EverydayFragmentInvalidError,
 } from "./routes/everyday-fragments";
 import { homeBaseRoutes } from "./routes/home-bases";
+import { journeyRecordedTrackRoutes } from "./routes/journey-recorded-tracks";
 import { journeyRoutes } from "./routes/journeys";
 import { locationRoutes } from "./routes/locations";
 import { mapStyleRoutes } from "./routes/mapstyle";
@@ -95,6 +96,10 @@ app.route("/api/home-bases", homeBaseRoutes);
 // session inside the route module, never from the path or the body.
 app.route("/api/everyday-fragments", everydayFragmentRoutes);
 app.route("/api/journeys", journeyRoutes);
+// #419: owner-only recorded-track evidence for one Journey. Read-only here —
+// the gated first input format stays with #341 — and never part of a guest
+// share payload, because these samples are precise.
+app.route("/api/journey-recorded-tracks", journeyRecordedTrackRoutes);
 app.route("/api/locations", locationRoutes);
 app.route("/api/mapstyle", mapStyleRoutes);
 // #388: owner-only durable spatial/time evidence for one existing media asset.
