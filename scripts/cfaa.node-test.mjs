@@ -80,6 +80,23 @@ test("executable evidence requires an exact path while policy evidence may be pa
   assert.doesNotThrow(() => validateRegistry(registry));
 });
 
+test("non-canonical executable evidence paths are rejected", () => {
+  const registry = sampleRegistry();
+  registry.invariants[0].evidence = [{
+    kind: "unit",
+    label: "real test with whitespace",
+    path: " scripts/cfaa.node-test.mjs ",
+  }];
+  assert.throws(() => validateRegistry(registry), /path must be canonical/);
+
+  registry.invariants[0].evidence = [{
+    kind: "unit",
+    label: "real test with backslashes",
+    path: "scripts\\cfaa.node-test.mjs",
+  }];
+  assert.throws(() => validateRegistry(registry), /path must be canonical/);
+});
+
 test("evidence directories are rejected even when Git pathspecs match tracked descendants", () => {
   const registry = sampleRegistry();
   registry.invariants[0].evidence = [{
@@ -155,6 +172,17 @@ test("guest share view changes suggest read-only and expiry invariants", () => {
     const ids = new Set(impact.impacted.map((entry) => entry.id));
     assert.ok(ids.has("CFAA-SHARE-002"));
     assert.ok(ids.has("CFAA-SHARE-003"));
+  }
+});
+
+test("email-change boundaries suggest the stable identity invariant", () => {
+  const registry = loadRegistry();
+  for (const changedPath of [
+    "server/routes/account-email-change.ts",
+    "server/tests/account-email-change.integration.test.ts",
+  ]) {
+    const impact = resolveImpact(registry, [changedPath]);
+    assert.ok(impact.impacted.some((entry) => entry.id === "CFAA-ID-001"));
   }
 });
 
