@@ -260,7 +260,10 @@ try {
           get: () => reduced,
         });
         window.visualViewport.dispatchEvent(new Event("resize"));
-        return new Promise((resolve) => requestAnimationFrame(() => {
+        // Two frames, not one: inside the first callback Chromium still reports
+        // the pre-change used height, so a single frame measures the old layout
+        // and blames the product for the measurement.
+        return new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => {
           const composerRect = composer.getBoundingClientRect();
           const inputRect = input?.getBoundingClientRect();
           const save = [...document.querySelectorAll(".journey-composer__footer-actions button")].pop();
@@ -288,39 +291,8 @@ try {
             inputAboveKeyboard: Boolean(inputRect) && inputRect.top >= -0.5 && inputRect.bottom <= reduced + 0.5,
             saveAboveKeyboard: Boolean(saveRect) && saveRect.bottom <= reduced + 0.5 && saveRect.height >= 44,
           });
-        }));
+        })));
       });
-      // A direct, unambiguous probe of whether this dialog honours an explicit
-      // height at all, so a miss above is attributed to the right cause rather
-      // than inferred from the stylesheet.
-      const heightProbe = await page.evaluate(() => new Promise((resolve) => {
-        const composer = document.querySelector(".journey-composer");
-        const target = 300;
-        const before = getComputedStyle(composer).height;
-        composer.style.height = `${target}px`;
-        const immediate = getComputedStyle(composer).height;
-        requestAnimationFrame(() => requestAnimationFrame(() => {
-          const parent = composer.parentElement;
-          const settled = getComputedStyle(composer).height;
-          composer.style.removeProperty("height");
-          resolve({
-            target,
-            before,
-            immediate,
-            settled,
-            inline: composer.style.height,
-            sameElement: composer === document.querySelector(".journey-composer"),
-            connected: composer.isConnected,
-            parentClass: parent?.className ?? null,
-            parentDisplay: parent ? getComputedStyle(parent).display : null,
-            parentHeight: parent ? getComputedStyle(parent).height : null,
-            parentAlign: parent ? getComputedStyle(parent).alignItems : null,
-          });
-        }));
-      }));
-      record(`composer-mobile-ia:${viewport.label}:honours-explicit-height`, { heightProbe },
-        heightProbe.settled === `${heightProbe.target}px`);
-
       // Put the visual viewport back so the checks after this one measure the
       // normal surface rather than a simulated open keyboard.
       await page.evaluate(() => {
