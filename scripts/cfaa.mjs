@@ -103,7 +103,19 @@ export function validateRegistry(registry) {
       }
       nonEmptyString(evidence.label, id + ".evidence[" + index + "].label");
       if (evidence.path !== undefined) {
-        repoRelative(evidence.path, id + ".evidence[" + index + "].path");
+        const evidencePath = repoRelative(evidence.path, id + ".evidence[" + index + "].path");
+        const absolute = path.join(ROOT, evidencePath);
+        if (!fs.existsSync(absolute)) {
+          fail(id + ".evidence[" + index + "].path does not exist: " + evidencePath);
+        }
+        try {
+          execFileSync("git", ["ls-files", "--error-unmatch", "--", evidencePath], {
+            cwd: ROOT,
+            stdio: ["ignore", "ignore", "pipe"],
+          });
+        } catch {
+          fail(id + ".evidence[" + index + "].path is not tracked: " + evidencePath);
+        }
       }
     });
   }
