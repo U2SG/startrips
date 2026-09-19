@@ -259,7 +259,7 @@ test("impact markdown neutralizes Markdown link, image, and code syntax in filen
   const impact = resolveImpact(registry, [dangerous]);
   const comparison = compareDeclarations(registry, impact, []);
   const markdown = renderImpactMarkdown(registry, impact, comparison);
-  assert.match(markdown, /&#33;&#91;status&#93;&#40;https:&#47;example\.invalid&#47;pixel\.png&#41;-&#96;code&#96;\.ts/);
+  assert.match(markdown, /&#33;&#91;status&#93;&#40;https:\/example\.invalid\/pixel\.png&#41;-&#96;code&#96;\.ts/);
   assert.doesNotMatch(markdown, /!\[status\]\(/);
   assert.doesNotMatch(markdown, /`code`/);
 });
