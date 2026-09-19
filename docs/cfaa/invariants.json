@@ -1,198 +1,596 @@
 {
   "version": 1,
   "dimensions": {
-    "scale-projection": {"label":"Scale / zoom / projection","canonicalQuestion":"Does a world-space constant become visually wrong when magnified?"},
-    "layout-posture": {"label":"Layout mode / posture / safe area","canonicalQuestion":"Can two subsystems classify the same viewport differently?"},
-    "time-tempo": {"label":"Time / tempo / duration","canonicalQuestion":"Did a fixed timeout or window assume the old consumption rate?"},
-    "media-topology": {"label":"Media type / content topology / cardinality","canonicalQuestion":"Does a broader model feed a narrower production projection?"},
-    "focus-ownership-async": {"label":"Focus / ownership / async revision","canonicalQuestion":"Can an older owner or result commit after a newer intent already won?"},
-    "semantic-reveal": {"label":"Semantic reveal / data coverage","canonicalQuestion":"Did revealing more data expose an old coverage hole?"},
-    "rendering-layers": {"label":"Rendering layers / occlusion / visual hierarchy","canonicalQuestion":"Do two representations of the same semantic object still share one anchor and owner?"},
-    "quality-performance": {"label":"Quality / performance tier","canonicalQuestion":"Did performance degradation accidentally become semantic degradation?"},
-    "authorization-identity-lifetime": {"label":"Authorization identity and lifetime","canonicalQuestion":"Can a changed or narrower identity reach state written for a different authority or lifetime?"},
-    "request-replay-recovery": {"label":"Request replay / recovery identity","canonicalQuestion":"Can a retry report success without durable evidence bound to the original intended operation?"},
-    "resource-tenancy": {"label":"Resource tenancy / lifecycle","canonicalQuestion":"Did a new owner make a previously single-tenant budget or lifecycle shared?"}
+    "scale-projection": {
+      "label": "Scale / zoom / projection",
+      "canonicalQuestion": "Does a world-space constant become visually wrong when magnified?"
+    },
+    "layout-posture": {
+      "label": "Layout mode / posture / safe area",
+      "canonicalQuestion": "Can two subsystems classify the same viewport differently?"
+    },
+    "time-tempo": {
+      "label": "Time / tempo / duration",
+      "canonicalQuestion": "Did a fixed timeout or window assume the old consumption rate?"
+    },
+    "media-topology": {
+      "label": "Media type / content topology / cardinality",
+      "canonicalQuestion": "Does a broader model feed a narrower production projection?"
+    },
+    "focus-ownership-async": {
+      "label": "Focus / ownership / async revision",
+      "canonicalQuestion": "Can an older owner or result commit after a newer intent already won?"
+    },
+    "semantic-reveal": {
+      "label": "Semantic reveal / data coverage",
+      "canonicalQuestion": "Did revealing more data expose an old coverage hole?"
+    },
+    "rendering-layers": {
+      "label": "Rendering layers / occlusion / visual hierarchy",
+      "canonicalQuestion": "Do two representations of the same semantic object still share one anchor and owner?"
+    },
+    "quality-performance": {
+      "label": "Quality / performance tier",
+      "canonicalQuestion": "Did performance degradation accidentally become semantic degradation?"
+    },
+    "authorization-identity-lifetime": {
+      "label": "Authorization identity and lifetime",
+      "canonicalQuestion": "Can a changed or narrower identity reach state written for a different authority or lifetime?"
+    },
+    "request-replay-recovery": {
+      "label": "Request replay / recovery identity",
+      "canonicalQuestion": "Can a retry report success without durable evidence bound to the original intended operation?"
+    },
+    "resource-tenancy": {
+      "label": "Resource tenancy / lifecycle",
+      "canonicalQuestion": "Did a new owner make a previously single-tenant budget or lifecycle shared?"
+    }
   },
   "invariants": [
     {
-      "id":"CFAA-LAYOUT-001",
-      "title":"One product mode per viewport",
-      "statement":"One viewport resolves to exactly one product interaction mode; child subsystems do not independently re-derive phone or desktop from their own raw width thresholds.",
-      "dimensions":["layout-posture"],
-      "issues":["#58","#194"],
-      "pathGlobs":["src/journey/**","src/scene/**","src/styles/**","scripts/qa-mobile-contract.mjs","scripts/qa-media-controls.mjs"],
-      "coverage":"partial",
-      "evidence":[{"kind":"browser-qa","label":"mobile-contract","path":"scripts/qa-mobile-contract.mjs"}]
+      "id": "CFAA-LAYOUT-001",
+      "title": "One product mode per viewport",
+      "statement": "One viewport resolves to exactly one product interaction mode; child subsystems do not independently re-derive phone or desktop from their own raw width thresholds.",
+      "dimensions": [
+        "layout-posture"
+      ],
+      "issues": [
+        "#58",
+        "#194"
+      ],
+      "pathGlobs": [
+        "src/journey/**",
+        "src/scene/**",
+        "src/styles/**",
+        "scripts/qa-mobile-contract.mjs",
+        "scripts/qa-media-controls.mjs"
+      ],
+      "coverage": "partial",
+      "evidence": [
+        {
+          "kind": "browser-qa",
+          "label": "mobile-contract",
+          "path": "scripts/qa-mobile-contract.mjs"
+        }
+      ]
     },
     {
-      "id":"CFAA-GEO-001",
-      "title":"One geographic anchor across layers",
-      "statement":"A Route Point, marker, place label and route geometry share one geographic anchor at every supported zoom.",
-      "dimensions":["scale-projection","rendering-layers"],
-      "issues":["#193","#196"],
-      "pathGlobs":["src/scene/**","scripts/qa-route-anchoring.mjs","scripts/qa-city-label-anchoring.mjs"],
-      "coverage":"partial",
-      "evidence":[{"kind":"browser-qa","label":"route-anchoring","path":"scripts/qa-route-anchoring.mjs"}]
+      "id": "CFAA-GEO-001",
+      "title": "One geographic anchor across layers",
+      "statement": "A Route Point, marker, place label and route geometry share one geographic anchor at every supported zoom.",
+      "dimensions": [
+        "scale-projection",
+        "rendering-layers"
+      ],
+      "issues": [
+        "#193",
+        "#196"
+      ],
+      "pathGlobs": [
+        "src/scene/**",
+        "scripts/qa-route-anchoring.mjs",
+        "scripts/qa-city-label-anchoring.mjs"
+      ],
+      "coverage": "partial",
+      "evidence": [
+        {
+          "kind": "browser-qa",
+          "label": "route-anchoring",
+          "path": "scripts/qa-route-anchoring.mjs"
+        }
+      ]
     },
     {
-      "id":"CFAA-TIME-001",
-      "title":"One tempo, one consumption rate",
-      "statement":"One narrative tempo drives camera, arrival, media dwell and prefetch distance so all consumers describe the same rate.",
-      "dimensions":["time-tempo"],
-      "issues":["#197","#205","#206","#207","#208","#209","#210","#211","#212","#213"],
-      "pathGlobs":["src/journey/*Timing*","src/journey/*timing*","src/journey/*Playback*","src/journey/*playback*","src/journey/*Prefetch*","src/journey/*prefetch*","scripts/qa-playback-prefetch.mjs","scripts/qa-media-controls.mjs"],
-      "coverage":"covered",
-      "evidence":[{"kind":"unit","label":"narrative timing","path":"src/journey/narrativeTiming.test.ts"},{"kind":"browser-qa","label":"playback-prefetch","path":"scripts/qa-playback-prefetch.mjs"}]
+      "id": "CFAA-TIME-001",
+      "title": "One tempo, one consumption rate",
+      "statement": "One narrative tempo drives camera, arrival, media dwell and prefetch distance so all consumers describe the same rate.",
+      "dimensions": [
+        "time-tempo"
+      ],
+      "issues": [
+        "#197",
+        "#205",
+        "#206",
+        "#207",
+        "#208",
+        "#209",
+        "#210",
+        "#211",
+        "#212",
+        "#213"
+      ],
+      "pathGlobs": [
+        "src/journey/*Timing*",
+        "src/journey/*timing*",
+        "src/journey/*Playback*",
+        "src/journey/*playback*",
+        "src/journey/*Prefetch*",
+        "src/journey/*prefetch*",
+        "scripts/qa-playback-prefetch.mjs",
+        "scripts/qa-media-controls.mjs"
+      ],
+      "coverage": "covered",
+      "evidence": [
+        {
+          "kind": "unit",
+          "label": "narrative timing",
+          "path": "src/journey/narrativeTiming.test.ts"
+        },
+        {
+          "kind": "browser-qa",
+          "label": "playback-prefetch",
+          "path": "scripts/qa-playback-prefetch.mjs"
+        }
+      ]
     },
     {
-      "id":"CFAA-TOPO-001",
-      "title":"Meaningful Route Points survive projections",
-      "statement":"A Route Point the domain considers meaningful remains represented in every mode projection unless that mode explicitly permits omission.",
-      "dimensions":["media-topology","semantic-reveal"],
-      "issues":["#187","#195"],
-      "pathGlobs":["src/journey/*AutoEdit*","src/journey/*autoEdit*","src/journey/*Recap*","src/journey/*recap*","src/journey/*Playback*","src/journey/*playback*","scripts/qa-final*"],
-      "coverage":"covered",
-      "evidence":[{"kind":"unit","label":"AutoEdit plan","path":"src/journey/autoEditPlan.test.ts"},{"kind":"unit","label":"Quick Recap handoff","path":"src/journey/quickRecapPlayback.test.ts"}]
+      "id": "CFAA-TOPO-001",
+      "title": "Meaningful Route Points survive projections",
+      "statement": "A Route Point the domain considers meaningful remains represented in every mode projection unless that mode explicitly permits omission.",
+      "dimensions": [
+        "media-topology",
+        "semantic-reveal"
+      ],
+      "issues": [
+        "#187",
+        "#195"
+      ],
+      "pathGlobs": [
+        "src/journey/*AutoEdit*",
+        "src/journey/*autoEdit*",
+        "src/journey/*Recap*",
+        "src/journey/*recap*",
+        "src/journey/*Playback*",
+        "src/journey/*playback*",
+        "scripts/qa-final*"
+      ],
+      "coverage": "covered",
+      "evidence": [
+        {
+          "kind": "unit",
+          "label": "AutoEdit plan",
+          "path": "src/journey/autoEditPlan.test.ts"
+        },
+        {
+          "kind": "unit",
+          "label": "Quick Recap handoff",
+          "path": "src/journey/quickRecapPlayback.test.ts"
+        }
+      ]
     },
     {
-      "id":"CFAA-OWN-001",
-      "title":"Newer intent wins",
-      "statement":"A newer focus, selection, seek or async scope wins; stale callbacks and settle results cannot reassert themselves afterward.",
-      "dimensions":["focus-ownership-async"],
-      "issues":["#113","#144"],
-      "pathGlobs":["src/journey/**","src/scene/**","server/**","scripts/qa-post-login-controls.mjs"],
-      "coverage":"partial",
-      "evidence":[{"kind":"policy","label":"standing ownership invariant"}]
+      "id": "CFAA-OWN-001",
+      "title": "Newer intent wins",
+      "statement": "A newer focus, selection, seek or async scope wins; stale callbacks and settle results cannot reassert themselves afterward.",
+      "dimensions": [
+        "focus-ownership-async"
+      ],
+      "issues": [
+        "#113",
+        "#144"
+      ],
+      "pathGlobs": [
+        "src/journey/**",
+        "src/scene/**",
+        "server/**",
+        "scripts/qa-post-login-controls.mjs"
+      ],
+      "coverage": "partial",
+      "evidence": [
+        {
+          "kind": "policy",
+          "label": "standing ownership invariant"
+        }
+      ]
     },
     {
-      "id":"CFAA-UX-001",
-      "title":"Low chrome removes redundancy, not capability",
-      "statement":"Reduced chrome may remove redundant controls but cannot remove the only discoverable path to a capability.",
-      "dimensions":["layout-posture"],
-      "issues":["#199"],
-      "pathGlobs":["src/journey/**","src/styles/**","scripts/qa-media-controls.mjs","scripts/qa-mobile-contract.mjs"],
-      "coverage":"covered",
-      "evidence":[{"kind":"browser-qa","label":"login-media","path":"scripts/qa-media-controls.mjs"}]
+      "id": "CFAA-UX-001",
+      "title": "Low chrome removes redundancy, not capability",
+      "statement": "Reduced chrome may remove redundant controls but cannot remove the only discoverable path to a capability.",
+      "dimensions": [
+        "layout-posture"
+      ],
+      "issues": [
+        "#199"
+      ],
+      "pathGlobs": [
+        "src/journey/**",
+        "src/styles/**",
+        "scripts/qa-media-controls.mjs",
+        "scripts/qa-mobile-contract.mjs"
+      ],
+      "coverage": "covered",
+      "evidence": [
+        {
+          "kind": "browser-qa",
+          "label": "login-media",
+          "path": "scripts/qa-media-controls.mjs"
+        }
+      ]
     },
     {
-      "id":"CFAA-AUTH-001",
-      "title":"Credentials never travel in URL path or query",
-      "statement":"Bearer, share and recovery credentials live in authorization headers or URL fragments, never request paths/query strings or request logs.",
-      "dimensions":["authorization-identity-lifetime"],
-      "issues":["#201"],
-      "pathGlobs":["server/**","src/auth/**","src/**/*share*","scripts/**/*share*"],
-      "coverage":"partial",
-      "evidence":[{"kind":"unit","label":"request log redaction","path":"server/request-log.test.ts"}]
+      "id": "CFAA-AUTH-001",
+      "title": "Credentials never travel in URL path or query",
+      "statement": "Bearer, share and recovery credentials live in authorization headers or URL fragments, never request paths/query strings or request logs.",
+      "dimensions": [
+        "authorization-identity-lifetime"
+      ],
+      "issues": [
+        "#201"
+      ],
+      "pathGlobs": [
+        "server/**",
+        "src/auth/**",
+        "src/**/*share*",
+        "scripts/**/*share*"
+      ],
+      "coverage": "partial",
+      "evidence": [
+        {
+          "kind": "unit",
+          "label": "request log redaction",
+          "path": "server/request-log.test.ts"
+        }
+      ]
     },
     {
-      "id":"CFAA-SHARE-001",
-      "title":"Share scope closure",
-      "statement":"Navigation, timeline, globe, Story and Playback under a share grant cannot leave the granted Journey set.",
-      "dimensions":["authorization-identity-lifetime"],
-      "issues":["#200"],
-      "pathGlobs":["server/authorization/share*","server/repositories/shared*","server/tests/share*","src/journey/**","scripts/qa-guest-share.mjs"],
-      "coverage":"covered",
-      "evidence":[{"kind":"integration","label":"share grants","path":"server/tests/share-grants.integration.test.ts"},{"kind":"browser-qa","label":"guest-share","path":"scripts/qa-guest-share.mjs"}]
+      "id": "CFAA-SHARE-001",
+      "title": "Share scope closure",
+      "statement": "Navigation, timeline, globe, Story and Playback under a share grant cannot leave the granted Journey set.",
+      "dimensions": [
+        "authorization-identity-lifetime"
+      ],
+      "issues": [
+        "#200"
+      ],
+      "pathGlobs": [
+        "server/authorization/share*",
+        "server/repositories/shared*",
+        "server/tests/share*",
+        "src/journey/**",
+        "scripts/qa-guest-share.mjs"
+      ],
+      "coverage": "covered",
+      "evidence": [
+        {
+          "kind": "integration",
+          "label": "share grants",
+          "path": "server/tests/share-grants.integration.test.ts"
+        },
+        {
+          "kind": "browser-qa",
+          "label": "guest-share",
+          "path": "scripts/qa-guest-share.mjs"
+        }
+      ]
     },
     {
-      "id":"CFAA-SHARE-002",
-      "title":"Read-only stays read-only",
-      "statement":"A read-only capability never acquires mutation authority on a downstream surface it can reach.",
-      "dimensions":["authorization-identity-lifetime"],
-      "issues":["#200"],
-      "pathGlobs":["server/authorization/**","server/repositories/shared*","server/tests/share*","scripts/qa-guest-share.mjs"],
-      "coverage":"covered",
-      "evidence":[{"kind":"integration","label":"share grants","path":"server/tests/share-grants.integration.test.ts"}]
+      "id": "CFAA-SHARE-002",
+      "title": "Read-only stays read-only",
+      "statement": "A read-only capability never acquires mutation authority on a downstream surface it can reach.",
+      "dimensions": [
+        "authorization-identity-lifetime"
+      ],
+      "issues": [
+        "#200"
+      ],
+      "pathGlobs": [
+        "server/authorization/**",
+        "server/repositories/shared*",
+        "server/tests/share*",
+        "scripts/qa-guest-share.mjs"
+      ],
+      "coverage": "covered",
+      "evidence": [
+        {
+          "kind": "integration",
+          "label": "share grants",
+          "path": "server/tests/share-grants.integration.test.ts"
+        }
+      ]
     },
     {
-      "id":"CFAA-SHARE-003",
-      "title":"Expiry and revocation propagate",
-      "statement":"Expiry and revocation propagate to downstream reads, already-open surfaces and bounded presigned capabilities.",
-      "dimensions":["authorization-identity-lifetime","time-tempo"],
-      "issues":["#200"],
-      "pathGlobs":["server/authorization/share*","server/repositories/shared*","server/tests/share*","src/journey/mediaReadRefresh*","scripts/qa-guest-share.mjs"],
-      "coverage":"covered",
-      "evidence":[{"kind":"integration","label":"share grants","path":"server/tests/share-grants.integration.test.ts"},{"kind":"unit","label":"media read refresh","path":"src/journey/mediaReadRefresh.test.ts"}]
+      "id": "CFAA-SHARE-003",
+      "title": "Expiry and revocation propagate",
+      "statement": "Expiry and revocation propagate to downstream reads, already-open surfaces and bounded presigned capabilities.",
+      "dimensions": [
+        "authorization-identity-lifetime",
+        "time-tempo"
+      ],
+      "issues": [
+        "#200"
+      ],
+      "pathGlobs": [
+        "server/authorization/share*",
+        "server/repositories/shared*",
+        "server/tests/share*",
+        "src/journey/mediaReadRefresh*",
+        "scripts/qa-guest-share.mjs"
+      ],
+      "coverage": "covered",
+      "evidence": [
+        {
+          "kind": "integration",
+          "label": "share grants",
+          "path": "server/tests/share-grants.integration.test.ts"
+        },
+        {
+          "kind": "unit",
+          "label": "media read refresh",
+          "path": "src/journey/mediaReadRefresh.test.ts"
+        }
+      ]
     },
     {
-      "id":"CFAA-RATE-001",
-      "title":"Public capabilities carry their own budget",
-      "statement":"Abuse protection belongs to the public or costly endpoint that needs it and is charged to the subject that holds the capability.",
-      "dimensions":["authorization-identity-lifetime","quality-performance"],
-      "issues":["#200","#217"],
-      "pathGlobs":["server/**/*rate*","server/**/*share*","server/tests/share*"],
-      "coverage":"covered",
-      "evidence":[{"kind":"server","label":"share rate limits","path":"server/share-rate-limit.test.ts"}]
+      "id": "CFAA-RATE-001",
+      "title": "Public capabilities carry their own budget",
+      "statement": "Abuse protection belongs to the public or costly endpoint that needs it and is charged to the subject that holds the capability.",
+      "dimensions": [
+        "authorization-identity-lifetime",
+        "quality-performance"
+      ],
+      "issues": [
+        "#200",
+        "#217"
+      ],
+      "pathGlobs": [
+        "server/**/*rate*",
+        "server/**/*share*",
+        "server/tests/share*"
+      ],
+      "coverage": "covered",
+      "evidence": [
+        {
+          "kind": "server",
+          "label": "share rate limits",
+          "path": "server/share-rate-limit.test.ts"
+        }
+      ]
     },
     {
-      "id":"CFAA-GEO-002",
-      "title":"Closer means more confidence",
-      "statement":"Moving closer yields more geographic confidence, never larger decorative error or lower language/data confidence.",
-      "dimensions":["scale-projection","semantic-reveal"],
-      "issues":["#16","#79"],
-      "pathGlobs":["src/scene/semanticZoom*","src/scene/cityLabels*","src/scene/coastline*","scripts/qa-city-label-anchoring.mjs"],
-      "coverage":"covered",
-      "evidence":[{"kind":"unit","label":"semantic zoom","path":"src/scene/semanticZoom.test.ts"},{"kind":"unit","label":"city labels","path":"src/scene/cityLabels.test.ts"}]
+      "id": "CFAA-GEO-002",
+      "title": "Closer means more confidence",
+      "statement": "Moving closer yields more geographic confidence, never larger decorative error or lower language/data confidence.",
+      "dimensions": [
+        "scale-projection",
+        "semantic-reveal"
+      ],
+      "issues": [
+        "#16",
+        "#79"
+      ],
+      "pathGlobs": [
+        "src/scene/semanticZoom*",
+        "src/scene/cityLabels*",
+        "src/scene/coastline*",
+        "scripts/qa-city-label-anchoring.mjs"
+      ],
+      "coverage": "covered",
+      "evidence": [
+        {
+          "kind": "unit",
+          "label": "semantic zoom",
+          "path": "src/scene/semanticZoom.test.ts"
+        },
+        {
+          "kind": "unit",
+          "label": "city labels",
+          "path": "src/scene/cityLabels.test.ts"
+        }
+      ]
     },
     {
-      "id":"CFAA-GEO-003",
-      "title":"Single Projection Space",
-      "statement":"One geographic point has one world position; every representing layer derives its screen anchor from the same projection frame.",
-      "dimensions":["scale-projection","rendering-layers"],
-      "issues":["#193","#196","#237"],
-      "pathGlobs":["src/scene/**","scripts/qa-route-anchoring.mjs","scripts/qa-city-label-anchoring.mjs"],
-      "coverage":"covered",
-      "evidence":[{"kind":"unit","label":"projection","path":"src/scene/projection.test.ts"},{"kind":"browser-qa","label":"city-label-anchoring","path":"scripts/qa-city-label-anchoring.mjs"}]
+      "id": "CFAA-GEO-003",
+      "title": "Single Projection Space",
+      "statement": "One geographic point has one world position; every representing layer derives its screen anchor from the same projection frame.",
+      "dimensions": [
+        "scale-projection",
+        "rendering-layers"
+      ],
+      "issues": [
+        "#193",
+        "#196",
+        "#237"
+      ],
+      "pathGlobs": [
+        "src/scene/**",
+        "scripts/qa-route-anchoring.mjs",
+        "scripts/qa-city-label-anchoring.mjs"
+      ],
+      "coverage": "covered",
+      "evidence": [
+        {
+          "kind": "unit",
+          "label": "projection",
+          "path": "src/scene/projection.test.ts"
+        },
+        {
+          "kind": "browser-qa",
+          "label": "city-label-anchoring",
+          "path": "scripts/qa-city-label-anchoring.mjs"
+        }
+      ]
     },
     {
-      "id":"CFAA-GEO-004",
-      "title":"Faithful Path",
-      "statement":"The whole visible route curve satisfies bounded screen-space approximation error; decoration is reduced before path truth is truncated.",
-      "dimensions":["scale-projection","rendering-layers","quality-performance"],
-      "issues":["#193","#196","#242"],
-      "pathGlobs":["src/scene/geo*","src/scene/*Route*","src/scene/*route*","scripts/qa-route-anchoring.mjs"],
-      "coverage":"covered",
-      "evidence":[{"kind":"unit","label":"route geometry","path":"src/scene/geo.test.ts"},{"kind":"browser-qa","label":"route-anchoring","path":"scripts/qa-route-anchoring.mjs"}]
+      "id": "CFAA-GEO-004",
+      "title": "Faithful Path",
+      "statement": "The whole visible route curve satisfies bounded screen-space approximation error; decoration is reduced before path truth is truncated.",
+      "dimensions": [
+        "scale-projection",
+        "rendering-layers",
+        "quality-performance"
+      ],
+      "issues": [
+        "#193",
+        "#196",
+        "#242"
+      ],
+      "pathGlobs": [
+        "src/scene/geo*",
+        "src/scene/*Route*",
+        "src/scene/*route*",
+        "scripts/qa-route-anchoring.mjs"
+      ],
+      "coverage": "covered",
+      "evidence": [
+        {
+          "kind": "unit",
+          "label": "route geometry",
+          "path": "src/scene/geo.test.ts"
+        },
+        {
+          "kind": "browser-qa",
+          "label": "route-anchoring",
+          "path": "scripts/qa-route-anchoring.mjs"
+        }
+      ]
     },
     {
-      "id":"CFAA-ID-001",
-      "title":"Stable user identity owns product data",
-      "statement":"Email and login methods may change during an Account lifetime; product ownership remains anchored to stable user identity rather than mutable credential attributes.",
-      "dimensions":["authorization-identity-lifetime"],
-      "issues":["#389","#407"],
-      "pathGlobs":["server/account-identities/**","server/auth*","server/authorization/**","server/repositories/**","server/db/**","src/auth/**"],
-      "coverage":"covered",
-      "evidence":[{"kind":"integration","label":"email-change lifecycle from ST-089 / PR #407"}]
+      "id": "CFAA-ID-001",
+      "title": "Stable user identity owns product data",
+      "statement": "Email and login methods may change during an Account lifetime; product ownership remains anchored to stable user identity rather than mutable credential attributes.",
+      "dimensions": [
+        "authorization-identity-lifetime"
+      ],
+      "issues": [
+        "#389",
+        "#407"
+      ],
+      "pathGlobs": [
+        "server/account-identities/**",
+        "server/auth*",
+        "server/authorization/**",
+        "server/repositories/**",
+        "server/db/**",
+        "src/auth/**"
+      ],
+      "coverage": "covered",
+      "evidence": [
+        {
+          "kind": "integration",
+          "label": "email-change lifecycle from ST-089 / PR #407"
+        }
+      ]
     },
     {
-      "id":"CFAA-UI-OWN-001",
-      "title":"Isolation has one effective interaction owner",
-      "statement":"A lifecycle isolation state has one effective owner for visibility, hit testing and accessibility; cascade changes cannot leave an invisible surface interactive.",
-      "dimensions":["layout-posture","focus-ownership-async"],
-      "issues":["#325","#409"],
-      "pathGlobs":["src/styles/**","src/journey/LivingAtlasApp*","scripts/qa-post-login-controls.mjs","scripts/qa-globe-focus-chrome.mjs"],
-      "coverage":"covered",
-      "evidence":[{"kind":"unit","label":"Journey Rail cascade invariants","path":"src/journey/LivingAtlasApp.test.ts"},{"kind":"browser-qa","label":"final-acceptance","path":"scripts/qa-post-login-controls.mjs"}]
+      "id": "CFAA-UI-OWN-001",
+      "title": "Isolation has one effective interaction owner",
+      "statement": "A lifecycle isolation state has one effective owner for visibility, hit testing and accessibility; cascade changes cannot leave an invisible surface interactive.",
+      "dimensions": [
+        "layout-posture",
+        "focus-ownership-async"
+      ],
+      "issues": [
+        "#325",
+        "#409"
+      ],
+      "pathGlobs": [
+        "src/styles/**",
+        "src/journey/LivingAtlasApp*",
+        "scripts/qa-post-login-controls.mjs",
+        "scripts/qa-globe-focus-chrome.mjs"
+      ],
+      "coverage": "covered",
+      "evidence": [
+        {
+          "kind": "unit",
+          "label": "Journey Rail cascade invariants",
+          "path": "src/journey/LivingAtlasApp.test.ts"
+        },
+        {
+          "kind": "browser-qa",
+          "label": "final-acceptance",
+          "path": "scripts/qa-post-login-controls.mjs"
+        }
+      ]
     },
     {
-      "id":"CFAA-REPLAY-001",
-      "title":"Retry success requires original-operation evidence",
-      "statement":"A retry may report success only from durable evidence bound to the original intended operation, never by probing mutable state against the retry's possibly changed request body.",
-      "dimensions":["request-replay-recovery","authorization-identity-lifetime"],
-      "issues":["#346","#410","#412"],
-      "pathGlobs":["server/account-identities/**","server/auth*","server/db/**","server/tests/account-password-change.integration.test.ts"],
-      "coverage":"covered",
-      "evidence":[{"kind":"integration","label":"password-change replay and unknown-outcome coverage","path":"server/tests/account-password-change.integration.test.ts"}]
+      "id": "CFAA-REPLAY-001",
+      "title": "Retry success requires original-operation evidence",
+      "statement": "A retry may report success only from durable evidence bound to the original intended operation, never by probing mutable state against the retry's possibly changed request body.",
+      "dimensions": [
+        "request-replay-recovery",
+        "authorization-identity-lifetime"
+      ],
+      "issues": [
+        "#346",
+        "#410",
+        "#412"
+      ],
+      "pathGlobs": [
+        "server/account-identities/**",
+        "server/auth*",
+        "server/db/**",
+        "server/tests/account-password-change.integration.test.ts"
+      ],
+      "coverage": "covered",
+      "evidence": [
+        {
+          "kind": "integration",
+          "label": "password-change replay and unknown-outcome coverage",
+          "path": "server/tests/account-password-change.integration.test.ts"
+        }
+      ]
     },
     {
-      "id":"CFAA-RENDER-001",
-      "title":"Rendering budgets are multi-tenant",
-      "statement":"Once multiple renderers or GPU contexts can coexist, each budget is a tenant budget and total drawing-buffer/context lifetime must account for concurrent owners and deterministic teardown.",
-      "dimensions":["resource-tenancy","quality-performance","rendering-layers"],
-      "issues":["#247","#367","#413"],
-      "pathGlobs":["src/scene/renderBudget*","src/scene/ParticleEarthScene*","src/reveal/**","scripts/qa-globe-render-budget.mjs","scripts/qa-cover-reveal.mjs"],
-      "coverage":"partial",
-      "evidence":[{"kind":"browser-qa","label":"globe-render-budget","path":"scripts/qa-globe-render-budget.mjs"},{"kind":"policy","label":"cover reveal evidence remains owned by #413 until merged"}]
+      "id": "CFAA-RENDER-001",
+      "title": "Rendering budgets are multi-tenant",
+      "statement": "Once multiple renderers or GPU contexts can coexist, each budget is a tenant budget and total drawing-buffer/context lifetime must account for concurrent owners and deterministic teardown.",
+      "dimensions": [
+        "resource-tenancy",
+        "quality-performance",
+        "rendering-layers"
+      ],
+      "issues": [
+        "#247",
+        "#367",
+        "#413"
+      ],
+      "pathGlobs": [
+        "src/scene/renderBudget*",
+        "src/scene/ParticleEarthScene*",
+        "src/reveal/**",
+        "scripts/qa-globe-render-budget.mjs",
+        "scripts/qa-cover-reveal.mjs"
+      ],
+      "coverage": "partial",
+      "evidence": [
+        {
+          "kind": "browser-qa",
+          "label": "globe-render-budget",
+          "path": "scripts/qa-globe-render-budget.mjs"
+        },
+        {
+          "kind": "unit",
+          "label": "cover reveal render budget",
+          "path": "src/reveal/revealBudget.test.ts"
+        },
+        {
+          "kind": "browser-qa",
+          "label": "cover-reveal",
+          "path": "scripts/qa-cover-reveal.mjs"
+        }
+      ]
     }
   ]
 }
