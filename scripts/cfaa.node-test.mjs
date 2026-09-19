@@ -61,6 +61,16 @@ test("unknown dimensions are rejected", () => {
   assert.throws(() => validateRegistry(registry), /unknown dimension/);
 });
 
+test("evidence paths must exist and be tracked", () => {
+  const registry = sampleRegistry();
+  registry.invariants[0].evidence = [{
+    kind: "unit",
+    label: "missing proof",
+    path: "scripts/this-evidence-does-not-exist.mjs",
+  }];
+  assert.throws(() => validateRegistry(registry), /does not exist/);
+});
+
 test("malformed evidence kinds are rejected", () => {
   const registry = sampleRegistry();
   registry.invariants[0].evidence = [{ kind: "screenshot", label: "not a supported evidence kind" }];
@@ -101,6 +111,15 @@ test("impact resolution is deterministic and records matching paths", () => {
     "server/account-owner.ts",
     "src/owner/a/b.ts",
   ]);
+});
+
+test("shared route changes suggest all share invariants", () => {
+  const registry = loadRegistry();
+  const impact = resolveImpact(registry, ["server/routes/shares.ts"]);
+  const ids = new Set(impact.impacted.map((entry) => entry.id));
+  assert.ok(ids.has("CFAA-SHARE-001"));
+  assert.ok(ids.has("CFAA-SHARE-002"));
+  assert.ok(ids.has("CFAA-SHARE-003"));
 });
 
 test("password route changes suggest the replay invariant", () => {
