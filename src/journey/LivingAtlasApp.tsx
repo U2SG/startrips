@@ -2023,6 +2023,9 @@ export function LivingAtlasApp({
     // owner-only, so a guest tree never even asks for a display capability.
     // Everything after it is a surface that is already a newer intent.
     enabled: capabilities.canManageMedia
+      // Globe focus only hides this cover's opacity, so an opening there would
+      // be spent on something nobody can see.
+      && !globeFocusMode
       && storyJourneyId === null
       && !playbackActive
       && !composerOpen

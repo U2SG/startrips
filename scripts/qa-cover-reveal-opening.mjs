@@ -199,6 +199,10 @@ async function installAtlasApi(page, state) {
       method: request.method(),
       headers: request.headers(),
     });
+    // Holding the answer open is how the PENDING window becomes observable:
+    // the guard against an opening starting behind a viewer who has already
+    // moved on lives in that window, not in the mounted opening.
+    if (state.gate) await state.gate;
     const answer = state.derivative();
     if (answer.status !== 200) {
       await route.fulfill({
@@ -315,7 +319,12 @@ async function openCoverSurface(page, viewport) {
   await showCoverSurface(page, viewport);
 }
 
-async function openCase(viewport, { derivative, reducedMotion = false, journey = journeyFixture() } = {}) {
+async function openCase(viewport, {
+  derivative,
+  reducedMotion = false,
+  gated = false,
+  journey = journeyFixture(),
+} = {}) {
   const context = await browser.newContext({
     viewport: { width: viewport.width, height: viewport.height },
     deviceScaleFactor: 2,
@@ -331,8 +340,12 @@ async function openCase(viewport, { derivative, reducedMotion = false, journey =
   const state = {
     journey,
     calls: [],
+    gate: null,
     derivative: derivative ?? (() => ({ status: 200, body: derivativePayload() })),
   };
+  if (gated) {
+    state.gate = new Promise((resolve) => { state.openGate = resolve; });
+  }
   await installAtlasApi(page, state);
   await openCoverSurface(page, viewport);
   return { context, page, state, pageErrors, imageRequests };
@@ -549,7 +562,33 @@ try {
     }
   }
 
-  // 7. Entering Story is a newer intent, and the opening yields the surface to
+  // 7. An intent DURING the pending read. The answer must not start a reveal
+  //    behind a viewer who has already moved on, and must not allocate a
+  //    graphics context for one.
+  {
+    const viewport = VIEWPORTS[0];
+    const run = await openCase(viewport, { gated: true });
+    const { page } = run;
+    await page.waitForFunction(() => document.querySelector(".living-atlas__active-media") !== null,
+      undefined, { timeout: 20_000 });
+    await page.mouse.move(viewport.width / 2, viewport.height / 2);
+    await page.mouse.wheel(0, 40);
+    await page.keyboard.press("Shift");
+    run.state.openGate();
+    await page.waitForTimeout(2500);
+    const afterAnswer = await coverState(page);
+    check("pending-read/intent-supersedes-an-answer-in-flight", afterAnswer.stage === false, afterAnswer);
+    check("pending-read/no-graphics-context-is-allocated", afterAnswer.canvases === 0, afterAnswer);
+    check(
+      "pending-read/canonical-original-is-on-screen",
+      afterAnswer.originalSrc === ORIGINAL_URL && classify(await compositedColor(page)) === "original-cover",
+      afterAnswer,
+    );
+    check("pending-read/no-page-errors", run.pageErrors.length === 0, run.pageErrors);
+    await run.context.close();
+  }
+
+  // 8. Entering Story is a newer intent, and the opening yields the surface to
   //    it rather than playing on over a narrative the viewer asked for.
   {
     const viewport = VIEWPORTS[0];

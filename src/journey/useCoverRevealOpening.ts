@@ -57,12 +57,25 @@ export function useCoverRevealOpening({
   readDisplay?: ReadDisplay;
 }): CoverRevealOpeningControls {
   const [opening, setOpening] = useState<CoverRevealOpening | null>(null);
+  // True from the moment the display read leaves until it resolves. The
+  // pending window needs the same intent guard the mounted opening has: an
+  // answer that arrives after the viewer has moved on must not start a reveal
+  // behind them, and must not allocate a graphics context for it.
+  const [awaitingRead, setAwaitingRead] = useState(false);
   // Session-scoped on purpose: "once per cover revision" is a rule about one
   // visit, and persisting it would invent a storage contract #379 never asked
   // for. A reload is a new visit and may open again.
   const played = useRef<Set<string>>(new Set());
+  /**
+   * Monotonic count of viewer intents, so a read in flight can tell whether
+   * the viewer it was started for is still the current one. A ref rather than
+   * state: an intent during the pending window must be observable by the
+   * already-running request without re-rendering anything.
+   */
+  const intent = useRef(0);
 
   const dismiss = useCallback(() => {
+    intent.current += 1;
     setOpening((current) => (current === null ? current : null));
   }, []);
 
@@ -88,6 +101,8 @@ export function useCoverRevealOpening({
     if (played.current.has(coverPin)) return undefined;
 
     let cancelled = false;
+    const startedFor = intent.current;
+    setAwaitingRead(true);
     void (async () => {
       let payload: CoverRevealDisplayPayload | null = null;
       try {
@@ -96,6 +111,8 @@ export function useCoverRevealOpening({
         // A failed, unauthorised or offline read is not something the viewer
         // is told about: the cover they came for is already there.
         return;
+      } finally {
+        if (!cancelled) setAwaitingRead(false);
       }
       if (cancelled) return;
       const decision = planCoverRevealOpening({
@@ -105,9 +122,11 @@ export function useCoverRevealOpening({
         played: played.current,
         reducedMotion,
         // Re-read at apply time rather than trusted from the moment the
-        // request left: a Journey the viewer has since left, or a cover they
-        // have since replaced, must not be claimed by an answer in flight.
-        supersededByIntent: !enabled,
+        // request left: a Journey the viewer has since left, a cover they have
+        // since replaced, or any input they gave while this was in flight must
+        // not be claimed by an answer arriving behind them. The opportunity is
+        // NOT spent in that case — nothing ever appeared for them to interrupt.
+        supersededByIntent: !enabled || intent.current !== startedFor,
       });
       if (decision.kind !== "open") return;
       // The opportunity is spent the moment it is taken, not when it finishes.
@@ -123,6 +142,7 @@ export function useCoverRevealOpening({
 
     return () => {
       cancelled = true;
+      setAwaitingRead(false);
     };
     // `cover` and `readDisplay` are intentionally absent from the dependency
     // list: the pin already identifies the cover exactly, and a
@@ -131,10 +151,15 @@ export function useCoverRevealOpening({
 
   // Any newer intent takes the surface immediately — a click anywhere, a
   // swipe, a key, a wheel. Capture phase, so the opening yields before the
-  // control under the pointer runs, and one listener set that exists only
-  // while an opening is on screen.
+  // control under the pointer runs.
+  //
+  // Installed while the read is still PENDING as well as while an opening is
+  // mounted. Watching only the mounted opening would leave the whole in-flight
+  // window unguarded: a viewer who starts dragging the globe, or enters
+  // globe-focus mode where this cover is merely opacity-hidden, would have a
+  // reveal start behind them when the answer landed.
   useEffect(() => {
-    if (opening === null) return undefined;
+    if (opening === null && !awaitingRead) return undefined;
     // Passive as well as capturing: yielding the surface never cancels the
     // gesture it is yielding to, and a blocking touch/wheel listener on the
     // document would make every scroll wait on this.
@@ -147,7 +172,7 @@ export function useCoverRevealOpening({
         document.removeEventListener(type, dismiss, { capture: true });
       }
     };
-  }, [dismiss, opening]);
+  }, [awaitingRead, dismiss, opening]);
 
   return { opening, dismiss };
 }
