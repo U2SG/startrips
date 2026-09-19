@@ -244,6 +244,41 @@ describe("ST-056 guest Home privacy contract", () => {
   });
 });
 
+describe("ST-083 guest cover opening privacy contract", () => {
+  it("gives a guest no derivative read and no reveal renderer", () => {
+    // A guest mounts `LivingAtlasApp` through `SharedAtlasView`, so absence
+    // from the guest bundle is not available as the contract here. What is
+    // available is that the owner-only V1 opening is gated on a capability a
+    // guest does not have, so a guest tree never asks for a display
+    // capability over a private derivative at all.
+    expect(GUEST_ATLAS_VIEW_CAPABILITIES.canManageMedia).toBe(false);
+    expect(OWNER_ATLAS_VIEW_CAPABILITIES.canManageMedia).toBe(true);
+    const app = readFileSync(new URL("LivingAtlasApp.tsx", import.meta.url), "utf8");
+    expect(app).toContain("enabled: capabilities.canManageMedia");
+
+    // And the read itself is an ordinary session call: no bearer token, no
+    // worker credential, no worker source-read URL anywhere in the client.
+    // Comments are stripped first. The prose in these files EXPLAINS that a
+    // worker credential and a worker source-read URL never reach the browser,
+    // so grading the raw text would grade the explanation rather than the code.
+    const withoutComments = (name: string) => readFileSync(new URL(name, import.meta.url), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/(^|[^:])\/\/.*$/gm, "$1");
+    const client = withoutComments("useCoverRevealOpening.ts");
+    const api = withoutComments("journeyApi.ts");
+    for (const source of [client, api]) {
+      expect(source).not.toMatch(/Authorization|Bearer|leaseToken|workerToken/i);
+      expect(source).not.toContain("source-read");
+      expect(source).not.toContain("/claim");
+    }
+
+    // The guest surface itself names none of it.
+    const shared = readFileSync(new URL("SharedAtlasView.tsx", import.meta.url), "utf8");
+    expect(shared).not.toContain("useCoverRevealOpening");
+    expect(shared).not.toContain("readCoverRevealDisplay");
+  });
+});
+
 describe("ST-060 guest Home Base suggestion privacy contract", () => {
   it("gives a guest no suggestion reader, no dismissal reader and no confirm client", () => {
     expect(GUEST_VIEW.listHomeBasePeriods).toBeNull();

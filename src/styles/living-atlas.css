@@ -784,6 +784,14 @@
   object-position: center;
 }
 
+/* #379: the cover opening sits over the canonical original cover and before
+   the figure's gradient and caption in paint order, so nothing about the
+   settled card changes once the reveal has handed the surface back. */
+.living-atlas__active-media-reveal {
+  position: absolute;
+  inset: 0;
+}
+
 .living-atlas__active-media::after {
   content: "";
   position: absolute;

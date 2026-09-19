@@ -192,6 +192,8 @@ jobs:
             command: pnpm qa:owner-share
           - name: cover-reveal
             command: pnpm qa:cover-reveal
+          - name: cover-reveal-opening
+            command: pnpm qa:cover-reveal-opening
     steps:
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
@@ -236,6 +238,15 @@ jobs:
         with:
           name: cover-reveal-${{ github.run_attempt }}
           path: artifacts/cover-reveal/
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload cover reveal opening QA
+        if: ${{ always() && matrix.name == 'cover-reveal-opening' }}
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: cover-reveal-opening-${{ github.run_attempt }}
+          path: artifacts/cover-reveal-opening/
           if-no-files-found: error
           retention-days: 7
 
