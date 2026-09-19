@@ -280,8 +280,10 @@ class ProcessClassificationCases(unittest.TestCase):
             process(11, 1, 'bash.exe', 'bash ' + str(self.root / 'run-loop.sh')
                     + ' --carrier-lane=experience --carrier-token=' + token
                     + ' --carrier-feature=ST-073 --carrier-worktree64=' + worktree64),
-            # A reconstructed same-token child has lost the scope arguments.
-            process(12, 11, 'bash.exe', 'bash ' + str(self.root / 'run-loop.sh')
+            # A severed same-token carrier has lost the scope arguments and
+            # cannot recover them through lineage. This is the claim that must
+            # collapse into the scoped owner's unioned token evidence.
+            process(12, 1, 'bash.exe', 'bash ' + str(self.root / 'run-loop.sh')
                     + ' --carrier-lane=experience --carrier-token=' + token),
         ]
 
