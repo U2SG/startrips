@@ -490,7 +490,9 @@
         "server/authorization/**",
         "server/repositories/**",
         "server/db/**",
-        "src/auth/**"
+        "src/auth/**",
+        "server/routes/account-email-change.ts",
+        "server/tests/account-email-change.integration.test.ts"
       ],
       "coverage": "covered",
       "evidence": [
