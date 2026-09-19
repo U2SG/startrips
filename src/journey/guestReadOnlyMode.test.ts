@@ -258,8 +258,14 @@ describe("ST-083 guest cover opening privacy contract", () => {
 
     // And the read itself is an ordinary session call: no bearer token, no
     // worker credential, no worker source-read URL anywhere in the client.
-    const client = readFileSync(new URL("useCoverRevealOpening.ts", import.meta.url), "utf8");
-    const api = readFileSync(new URL("journeyApi.ts", import.meta.url), "utf8");
+    // Comments are stripped first. The prose in these files EXPLAINS that a
+    // worker credential and a worker source-read URL never reach the browser,
+    // so grading the raw text would grade the explanation rather than the code.
+    const withoutComments = (name: string) => readFileSync(new URL(name, import.meta.url), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/(^|[^:])\/\/.*$/gm, "$1");
+    const client = withoutComments("useCoverRevealOpening.ts");
+    const api = withoutComments("journeyApi.ts");
     for (const source of [client, api]) {
       expect(source).not.toMatch(/Authorization|Bearer|leaseToken|workerToken/i);
       expect(source).not.toContain("source-read");

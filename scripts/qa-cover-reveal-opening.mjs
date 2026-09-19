@@ -243,21 +243,37 @@ async function coverState(page) {
  * from a later task, so the frame is captured by the browser's own compositor
  * and then decoded in the page. What is graded is what a person would see.
  */
-async function compositedColor(page) {
+async function compositedColor(page, at = { x: 0.5, y: 0.5 }) {
   const figure = page.locator(".living-atlas__active-media");
   const shot = await figure.screenshot({ type: "png" });
-  return page.evaluate(async (base64) => {
+  return page.evaluate(async ({ base64, at: point }) => {
     const bitmap = await createImageBitmap(await (await fetch(`data:image/png;base64,${base64}`)).blob());
     const canvas = document.createElement("canvas");
     canvas.width = 1;
     canvas.height = 1;
     const context = canvas.getContext("2d", { willReadFrequently: true });
-    context.drawImage(bitmap, Math.floor(bitmap.width / 2), Math.floor(bitmap.height / 2), 1, 1, 0, 0, 1, 1);
+    context.drawImage(
+      bitmap,
+      Math.floor(bitmap.width * point.x),
+      Math.floor(bitmap.height * point.y),
+      1, 1, 0, 0, 1, 1,
+    );
     bitmap.close();
     const [r, g, b] = context.getImageData(0, 0, 1, 1).data;
     return { r, g, b };
-  }, shot.toString("base64"));
+  }, { base64: shot.toString("base64"), at });
 }
+
+/**
+ * Where to probe a reveal that is still running.
+ *
+ * Every preset's mask grows from its origin, which is the centre of the stage
+ * for `ink-bloom`, so the centre is the FIRST pixel to become the cover and
+ * therefore the worst possible probe for "what did this open with". The corner
+ * is the last region to convert. It is also above the figure's own bottom
+ * gradient, which starts at 46% height.
+ */
+const REVEAL_PROBE = { x: 0.1, y: 0.12 };
 
 function classify(sample) {
   const distance = (color) => Math.abs(sample.r - color.r)
@@ -341,8 +357,20 @@ try {
         undefined,
         { timeout: 20_000 },
       );
-      const revealing = classify(await compositedColor(page));
-      check(`${label}/first-frame-is-the-derivative`, revealing === "derivative", revealing);
+      const opened = [];
+      for (let attempt = 0; attempt < 6; attempt += 1) {
+        const stillRevealing = await page.evaluate(() => document.querySelector(
+          ".living-atlas__active-media-reveal",
+        )?.getAttribute("data-cover-reveal-phase") === "revealing");
+        if (!stillRevealing) break;
+        opened.push(classify(await compositedColor(page, REVEAL_PROBE)));
+      }
+      check(`${label}/first-frame-is-the-derivative`, opened[0] === "derivative", opened);
+      check(
+        `${label}/the-reveal-actually-transitions`,
+        opened.includes("derivative") && opened.at(-1) !== "derivative",
+        opened,
+      );
       check(
         `${label}/derivative-was-actually-fetched`,
         run.imageRequests.includes(DERIVATIVE_URL),
@@ -421,8 +449,21 @@ try {
       // Story taking the surface. Entering Story is case 7.
       await page.mouse.move(viewport.width / 2, viewport.height / 2);
       await page.mouse.wheel(0, 40);
+      // Bounded rather than zero-frame: the yield is a React commit, and the
+      // shortest preset still runs for 3.4s, so one second separates "yielded
+      // at once" from "played on to the end" without grading a paint deadline.
+      let yielded = true;
+      try {
+        await page.waitForFunction(
+          () => document.querySelector(".living-atlas__active-media-reveal") === null,
+          undefined,
+          { timeout: 1000 },
+        );
+      } catch {
+        yielded = false;
+      }
       const interrupted = await coverState(page);
-      check(`${label}/intent-ends-the-opening-immediately`, interrupted.stage === false, interrupted);
+      check(`${label}/intent-ends-the-opening-immediately`, yielded && interrupted.stage === false, interrupted);
       const interruptedColor = classify(await compositedColor(page));
       check(
         `${label}/interruption-lands-on-the-canonical-original`,
