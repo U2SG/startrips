@@ -128,6 +128,23 @@ test("NUL-delimited Git paths preserve Unicode without C-quoting", () => {
   assert.equal(pathMatchesGlob(paths[1], "src/scene/**"), true);
 });
 
+test("raw Git paths preserve surrounding and whitespace-only filenames", () => {
+  const registry = sampleRegistry();
+  registry.invariants[0].pathGlobs = ["src/owner/**"];
+
+  const leading = " src/owner/file.ts";
+  const trailing = "src/owner/file.ts ";
+  const whitespaceOnly = "   ";
+
+  assert.deepEqual(resolveImpact(registry, [leading]).changedPaths, [leading]);
+  assert.deepEqual(resolveImpact(registry, [trailing]).changedPaths, [trailing]);
+  assert.deepEqual(resolveImpact(registry, [whitespaceOnly]).changedPaths, [whitespaceOnly]);
+
+  assert.equal(resolveImpact(registry, [leading]).impacted.length, 0);
+  assert.equal(resolveImpact(registry, [trailing]).impacted.length, 1);
+  assert.equal(resolveImpact(registry, [whitespaceOnly]).impacted.length, 0);
+});
+
 test("literal backslashes in Git paths are preserved", () => {
   const registry = loadRegistry();
   const path = "src/journey/foo\\Playback.ts";
