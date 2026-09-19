@@ -317,6 +317,15 @@ class ProcessClassificationCases(unittest.TestCase):
         self.assertEqual(0, occupancy['occupied_slots'])
         self.assertEqual(0, occupancy['claim_count'])
 
+    def test_wrapped_readonly_probe_with_shell_separator_does_not_consume_slot(self):
+        rows = self.base + [
+            process(10, command='bash -lc "export STARTRIPS_LANE=experience; ' + str(self.root / 'run-loop.sh') + ' --plan; echo done"'),
+            process(11, 10, 'bash.exe', None),
+        ]
+        occupancy = execution.lane_occupancy(rows, self.root, 3, 'experience')
+        self.assertEqual(0, occupancy['occupied_slots'])
+        self.assertEqual(0, occupancy['claim_count'])
+
     def test_caller_recovers_exact_token_from_parent_argv(self):
         token = 'experience-self-token-1234'
         rows = [
@@ -836,6 +845,13 @@ class RealCarrierCases(fixture.WiringTests):
                    fixture.feature('ST-002', phase='P0-process'))
         result = self.invoke('export STARTRIPS_LANE=backend; bash run-loop.sh --next')
         self.assertEqual(0, result.returncode, result.stderr); self.assertEqual('', result.stdout.strip())
+
+    @unittest.skipUnless(os.name == 'nt', 'Experience probe self-exclusion is Windows/MSYS-specific')
+    def test_experience_readonly_selector_does_not_count_its_own_probe_as_a_claim(self):
+        self.write(fixture.feature('ST-001', phase='P1-mobile'))
+        result = self.invoke('export STARTRIPS_LANE=experience; bash run-loop.sh --next')
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual('ST-001', result.stdout.strip())
 
     @unittest.skipUnless(os.name == 'nt', 'direct Experience carrier regression is Windows/MSYS-specific')
     def test_backend_supervisor_stop_does_not_block_one_shot_experience(self):
