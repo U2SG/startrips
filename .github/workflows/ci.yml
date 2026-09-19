@@ -174,6 +174,8 @@ jobs:
             command: pnpm qa:composer-route-points
           - name: composer-playback-preview
             command: pnpm qa:composer-playback-preview
+          - name: composer-mobile-ia
+            command: pnpm qa:composer-mobile-ia
           - name: mobile-contract
             command: pnpm qa:mobile-contract
           - name: globe-focus-chrome
@@ -256,6 +258,15 @@ jobs:
         with:
           name: composer-route-points-${{ github.run_attempt }}
           path: artifacts/composer-route-points/
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload Composer mobile IA QA
+        if: ${{ always() && matrix.name == 'composer-mobile-ia' }}
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: composer-mobile-ia-${{ github.run_attempt }}
+          path: artifacts/composer-mobile-ia/
           if-no-files-found: error
           retention-days: 7
 

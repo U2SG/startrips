@@ -657,11 +657,37 @@ async function verifyMobileStoryInertOwnership() {
   }
 }
 
+// #375: on compact mobile the Composer is one task at a time, so media
+// organisation and the precise-location controls are reached through their
+// approved entry instead of sitting on the primary surface. The assertions
+// below are unchanged; only the navigation to them is.
+async function openComposerTask(page, task) {
+  const entry = page.locator(`[data-composer-task-entry="${task}"]`);
+  if (await page.locator(`[data-composer-task="${task}"]`).count()) return;
+  await leaveComposerTask(page);
+  if (!(await entry.count())) {
+    const more = page.locator(".journey-composer__task-more");
+    if (!(await more.count())) return; // desktop renders the same capabilities inline
+    await more.click();
+  }
+  await entry.click();
+  await page.locator(`[data-composer-task="${task}"]`).waitFor({ state: "visible" });
+}
+
+async function leaveComposerTask(page) {
+  const back = page.locator("[data-composer-task-back]");
+  if (await back.count()) {
+    await back.click();
+    await page.locator('[data-composer-task="primary"]').waitFor({ state: "visible" });
+  }
+}
+
 async function verifyComposerMediaActions() {
   console.error("[qa-post-login] composer media actions");
   const page = await browser.newPage({ viewport: { width: 390, height: 844 }, reducedMotion: "reduce" });
   try {
     await page.goto(`${origin}/?qaState=journey-composer&qaMode=edit`, { waitUntil: "domcontentloaded" });
+    await openComposerTask(page, "media");
     const fileInput = page.locator(".journey-media-picker input[type=file]");
     await fileInput.setInputFiles([
       { name: "very-long-summer-memory-one.jpg", mimeType: "image/jpeg", buffer: Buffer.from("a") },
@@ -676,6 +702,7 @@ async function verifyComposerMediaActions() {
     ]) {
       await page.setViewportSize({ width, height });
       if (mobile) {
+        await openComposerTask(page, "media");
         const mobileMetrics = await page.evaluate(() => ({
           cards: document.querySelectorAll(".journey-media-mobile-card").length,
           manageButtons: document.querySelectorAll(".journey-media-mobile-card__menu").length,
@@ -718,6 +745,7 @@ async function verifyComposerMediaActions() {
     }
 
     await page.setViewportSize({ width: 390, height: 844 });
+    await openComposerTask(page, "media");
     const firstManageTrigger = page.locator(".journey-media-mobile-card__menu").first();
     const assertNestedSheetFocus = async (openSheet, selector, label) => {
       await openSheet();
@@ -805,6 +833,7 @@ async function verifyComposerMediaActions() {
       ["mobile", 390, 844],
     ]) {
       await page.setViewportSize({ width, height });
+      await openComposerTask(page, "location");
       const trigger = page.getByRole("button", { name: /直接在地球上取点/ });
       await trigger.click();
       const cancel = page.locator(".journey-globe-pick-hint button");
@@ -893,6 +922,7 @@ async function verifyComposerMediaActions() {
         restored,
         failed: pickFailed,
       });
+      await leaveComposerTask(page);
     }
 
     // Review P2 regression: normal modal close must restore the opener only
@@ -1061,11 +1091,15 @@ async function verifyComposerGlobeRoundTrip() {
     await page.locator("[data-qa-app-route-preview]").waitFor({ state: "attached" });
   };
   const completePick = async () => {
+    // #375: the Route Point list and the globe pick now live on different
+    // Composer surfaces on compact mobile, so the list is read on the primary
+    // surface and the pick is entered from Location details.
+    const scrollBefore = await page.locator(".journey-composer__editor").evaluate((element) => element.scrollTop);
+    const countBefore = await routeItems().count();
+    await openComposerTask(page, "location");
     const trigger = page.getByRole("button", { name: /直接在地球上取点/ });
     await trigger.scrollIntoViewIfNeeded();
     await settleRender();
-    const scrollBefore = await page.locator(".journey-composer__editor").evaluate((element) => element.scrollTop);
-    const countBefore = await routeItems().count();
     await trigger.click();
     await page.locator(".journey-globe-pick-hint").waitFor({ state: "visible" });
     // This waits on the actual LivingAtlasApp handoff: startGlobePick flips
@@ -1106,6 +1140,17 @@ async function verifyComposerGlobeRoundTrip() {
         && getComputedStyle(composer).visibility === "visible"
         && (document.activeElement?.classList.contains("journey-globe-pick-button") ?? false);
     });
+    // ST-043's focus restore returns to the pick trigger, which lives in the
+    // task the pick was started from, so this is read before leaving it.
+    const returned = await page.evaluate(() => ({
+      appPickActive: document.querySelector(".living-atlas")?.classList.contains("is-globe-picking") ?? false,
+      bodyOverflow: document.body.style.overflow,
+      composerVisibility: getComputedStyle(document.querySelector(".journey-composer")).visibility,
+      activeIsTrigger: document.activeElement?.classList.contains("journey-globe-pick-button") ?? false,
+      overflowX: Math.max(0, document.documentElement.scrollWidth - innerWidth),
+      overflowY: Math.max(0, document.documentElement.scrollHeight - innerHeight),
+    }));
+    await leaveComposerTask(page);
     await page.waitForFunction((expected) => (
       document.querySelectorAll(".journey-route-draft > li:not(.is-empty)").length === expected
     ), countBefore + 1);
@@ -1117,14 +1162,6 @@ async function verifyComposerGlobeRoundTrip() {
     const scrollAfter = await page.locator(".journey-composer__editor").evaluate((element) => element.scrollTop);
     const preview = await readPreview();
     const lastPoint = preview.at(-1) ?? null;
-    const returned = await page.evaluate(() => ({
-      appPickActive: document.querySelector(".living-atlas")?.classList.contains("is-globe-picking") ?? false,
-      bodyOverflow: document.body.style.overflow,
-      composerVisibility: getComputedStyle(document.querySelector(".journey-composer")).visibility,
-      activeIsTrigger: document.activeElement?.classList.contains("journey-globe-pick-button") ?? false,
-      overflowX: Math.max(0, document.documentElement.scrollWidth - innerWidth),
-      overflowY: Math.max(0, document.documentElement.scrollHeight - innerHeight),
-    }));
     return { countBefore, scrollBefore, scrollAfter, picking, preview, lastPoint, returned };
   };
 
@@ -1277,7 +1314,9 @@ async function verifyComposerGlobeRoundTrip() {
       await page.getByText(expectedMessage).waitFor({ state: "visible" });
       const lastRoutePoint = routeItems().last();
       await lastRoutePoint.locator(".journey-route-draft__summary").click();
-      const lastInput = lastRoutePoint.locator('.journey-route-draft__expanded input:not([type="checkbox"])');
+      // #375 added a contextual media upload to the expanded record, so the name
+      // field is addressed explicitly rather than as "the only input".
+      const lastInput = lastRoutePoint.locator('.journey-route-draft__expanded input:not([type="checkbox"]):not([type="file"])');
       const beforeManual = await lastInput.inputValue();
       const manualLabel = `手动地点-${mode}`;
       await lastInput.fill(manualLabel);
@@ -2922,7 +2961,11 @@ async function verifyFinalAcceptanceMobileFlow() {
       }
       console.error(`[qa-post-login] final:${viewportLabel}:composer-ready`);
       await page.getByLabel("旅程标题").fill(`FINAL CREATED ${viewportLabel}`);
+      // #375: the date is contextual on compact mobile - it is reached through
+      // Journey info and the flow returns to the primary surface afterwards.
+      await openComposerTask(page, "journey-info");
       await page.getByLabel("开始日期").fill("2026-08-27");
+      await leaveComposerTask(page);
       const locationSearch = page.getByPlaceholder("建筑、景点、街道、街区或城市");
       await locationSearch.fill("final qa");
       await activateControl(
@@ -2939,6 +2982,8 @@ async function verifyFinalAcceptanceMobileFlow() {
       ));
       console.error(`[qa-post-login] final:${viewportLabel}:search-result-added`);
 
+      // #375: the globe pick is entered from Location details on compact mobile.
+      await openComposerTask(page, "location");
       const globePick = page.getByRole("button", { name: /直接在地球上取点/ });
       await activateControl(globePick, "globe pick control");
       await page.waitForFunction(() => (
@@ -3005,20 +3050,30 @@ async function verifyFinalAcceptanceMobileFlow() {
         throw new Error(`Final acceptance globe canvas is not pickable: ${JSON.stringify(canvasPick)}`);
       }
       console.error(`[qa-post-login] final:${viewportLabel}:globe-pick-hit`);
+      // The pick returns to the Location task it was started from; the Route
+      // Point list it added to lives on the primary surface, so the flow goes
+      // back there before reading it.
       await page.waitForFunction(() => (
         !document.querySelector(".living-atlas")?.classList.contains("is-globe-picking")
-        && document.querySelectorAll(".journey-route-draft > li:not(.is-empty)").length === 2
+      ), null, { timeout: 8_000 });
+      await leaveComposerTask(page);
+      await page.waitForFunction(() => (
+        document.querySelectorAll(".journey-route-draft > li:not(.is-empty)").length === 2
       ), null, { timeout: 8_000 });
       await page.getByText("已根据坐标识别为「FINAL QA GLOBE PICK」，可继续修改。").waitFor({
         state: "visible",
         timeout: 5_000,
       });
       console.error(`[qa-post-login] final:${viewportLabel}:reverse-geocode-ready`);
+      // #375: whole-journey media is organised in the media task on compact
+      // mobile; the save action stays reachable from every task.
+      await openComposerTask(page, "media");
       await page.locator(".journey-media-picker input[type=file]").setInputFiles({
         name: `final-${viewportLabel}.png`,
         mimeType: "image/png",
         buffer: Buffer.from(`final-acceptance-${viewportLabel}`),
       });
+      await leaveComposerTask(page);
       console.error(`[qa-post-login] final:${viewportLabel}:upload-started`);
       await activateControl(
         page.getByRole("button", { name: "保存到星球" }),

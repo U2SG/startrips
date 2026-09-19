@@ -7563,3 +7563,208 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
   min-width: 0;
   padding-inline: 12px;
 }
+
+/*
+ * #375: the compact-mobile Journey Composer is one task at a time. Every rule
+ * below keys off the `data-mobile-layout` marker the Composer already publishes
+ * from the shared compact-mobile query, so this layout states no breakpoint of
+ * its own and cannot drift from `src/journey/mobileLayout.ts`.
+ */
+/* The single scroll owner of the active task. */
+.journey-composer[data-mobile-layout="true"] .journey-composer__editor {
+  height: 100%;
+  display: block;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scroll-padding: 64px 0 24px;
+}
+
+.journey-composer[data-mobile-layout="true"] .journey-composer__task {
+  min-width: 0;
+  display: block;
+  overflow: visible;
+  padding: 22px 18px 32px;
+}
+
+.journey-composer[data-mobile-layout="true"] .journey-composer__task-header {
+  position: sticky;
+  z-index: 3;
+  top: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  margin: -22px -18px 20px;
+  padding: 8px 18px;
+  border-bottom: 1px solid var(--atlas-line);
+  background: rgba(1, 7, 8, 0.96);
+  backdrop-filter: blur(14px);
+}
+
+.journey-composer[data-mobile-layout="true"] .journey-composer__task-header h3 {
+  margin: 0;
+  color: #cfe2dc;
+  font-family: var(--archive-serif);
+  font-size: 17px;
+  font-weight: 400;
+}
+
+.journey-composer[data-mobile-layout="true"] .journey-composer__task-back {
+  min-width: 44px;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 10px 0 6px;
+  border: 1px solid var(--atlas-line);
+  background: rgba(2, 13, 13, 0.72);
+  color: #93aaa4;
+  font-size: 11px;
+}
+
+.journey-composer[data-mobile-layout="true"] .journey-composer__task-entries {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 16px 0 26px;
+}
+
+.journey-composer[data-mobile-layout="true"] .journey-composer__task-entries > button {
+  min-height: 56px;
+  display: grid;
+  align-content: center;
+  gap: 3px;
+  padding: 8px 12px;
+  border: 1px solid var(--atlas-line);
+  background: rgba(2, 13, 13, 0.72);
+  color: #cfe2dc;
+  font-size: 12px;
+  text-align: left;
+}
+
+.journey-composer[data-mobile-layout="true"] .journey-composer__task-entries > button small {
+  overflow: hidden;
+  color: #5f756f;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.journey-composer[data-mobile-layout="true"] .journey-composer__task-more {
+  grid-column: 1 / -1;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.journey-composer[data-mobile-layout="true"] .journey-composer__more-menu {
+  position: absolute;
+  z-index: 4;
+  top: calc(100% + 6px);
+  right: 0;
+  left: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--atlas-line);
+  background: rgba(1, 9, 10, 0.98);
+  box-shadow: 0 18px 46px rgba(0, 0, 0, 0.55);
+}
+
+.journey-composer[data-mobile-layout="true"] .journey-composer__more-menu button {
+  min-height: 52px;
+  display: grid;
+  align-content: center;
+  gap: 3px;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  background: rgba(2, 13, 13, 0.72);
+  color: #cfe2dc;
+  font-size: 12px;
+  text-align: left;
+}
+
+.journey-composer[data-mobile-layout="true"] .journey-composer__more-menu button small {
+  overflow: hidden;
+  color: #5f756f;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The precise-location panel is the task itself, so it opens with it. */
+.journey-composer[data-mobile-layout="true"] .journey-precise-location > summary {
+  display: none;
+}
+
+.journey-composer[data-mobile-layout="true"] .journey-composer__footer {
+  padding-bottom: calc(12px + env(safe-area-inset-bottom));
+}
+
+/* #375: media belongs to the Route Point it was taken at. */
+.journey-route-draft__media-upload {
+  position: relative;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 0 12px;
+  border: 1px dashed rgba(122, 244, 237, 0.24);
+  color: #93aaa4;
+  font-size: 11px;
+}
+
+.journey-route-draft__media-upload input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+/*
+ * #375: a phone in landscape with the keyboard open leaves the Composer under
+ * 420px. The editorial header lines and the roomy action bar are worth their
+ * space only when there is space; the field being typed in is not.
+ */
+.journey-composer[data-composer-posture="constrained"] .journey-composer__header {
+  min-height: 0;
+  padding: 8px 18px;
+}
+
+.journey-composer[data-composer-posture="constrained"] .journey-composer__header p,
+.journey-composer[data-composer-posture="constrained"] .journey-composer__header div > span {
+  display: none;
+}
+
+.journey-composer[data-composer-posture="constrained"] .journey-composer__header h2 {
+  margin-top: 0;
+  font-size: 16px;
+}
+
+.journey-composer[data-composer-posture="constrained"] .journey-composer__footer {
+  min-height: 0;
+  padding: 6px 18px calc(6px + env(safe-area-inset-bottom));
+}
+
+.journey-composer[data-composer-posture="constrained"] .journey-composer__summary {
+  display: none;
+}
+
+.journey-composer[data-composer-posture="constrained"] .journey-composer__footer-actions {
+  flex: 1;
+}
+
+.journey-composer[data-composer-posture="constrained"] .journey-composer__footer button {
+  min-height: 44px;
+}
+
+.journey-composer[data-composer-posture="constrained"] .journey-composer__task {
+  padding: 12px 18px 16px;
+}
