@@ -80,6 +80,33 @@ describe("Story shared-element ownership", () => {
   });
 });
 
+describe("mobile media delete focus ownership (#427)", () => {
+  it("restores focus from the committed Story instance instead of a timed global query", () => {
+    const source = readFileSync(new URL("./JourneyStory.tsx", import.meta.url), "utf8");
+    const closeStart = source.indexOf("function closeMobileMediaDelete()");
+    const closeEnd = source.indexOf("function closeJourneyDelete()", closeStart);
+    const closeSource = source.slice(closeStart, closeEnd);
+
+    expect(closeStart).toBeGreaterThan(0);
+    expect(closeSource).toContain(
+      "restoreMobileMediaDeleteFocusRef.current = mobileLayout && mobileManageMode",
+    );
+    expect(closeSource).not.toContain("requestAnimationFrame");
+    expect(closeSource).not.toContain("document.querySelector");
+
+    const restoreStart = source.indexOf(
+      "if (!restoreMobileMediaDeleteFocusRef.current) return;",
+    );
+    const restoreEnd = source.indexOf("useEffect(() => {", restoreStart);
+    const restoreSource = source.slice(restoreStart, restoreEnd);
+
+    expect(restoreStart).toBeGreaterThan(0);
+    expect(restoreSource).toContain('if (mediaDeleteState !== "idle") return;');
+    expect(restoreSource).toContain("const target = mobileManageViewerTriggerRef.current;");
+    expect(restoreSource).toContain("target.focus({ preventScroll: true });");
+  });
+});
+
 describe("finalizeMediaDragCommit (#65)", () => {
   it("commits the new semantic owner before removing the visible drag layers", () => {
     const events: string[] = [];
