@@ -77,13 +77,16 @@ journeyRecordedTrackRoutes.delete("/:journeyId", async (context) => {
   }
   const body = await readJsonObject(() => context.req.json());
   const operationKey = body?.operationKey;
-  // The same predicate `normalizeRecordedTrackWrite` applies to a stored key,
-  // so a key this route refuses could never have been written either.
+  // The predicate `normalizeRecordedTrackWrite` applies to a stored key, plus
+  // a zero byte. PostgreSQL refuses a NUL inside a `text` value, so a key
+  // carrying one would leave as a 500 from the global handler instead of this
+  // route's own refusal — and no stored key can contain one anyway.
   if (
     typeof operationKey !== "string"
     || operationKey.trim() !== operationKey
     || operationKey.length === 0
     || operationKey.length > MAX_OPERATION_KEY_LENGTH
+    || operationKey.includes("\u0000")
   ) {
     return context.json({ error: "INVALID_OPERATION_KEY" }, 400);
   }

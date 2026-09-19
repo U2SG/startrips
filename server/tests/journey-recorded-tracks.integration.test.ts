@@ -901,6 +901,10 @@ describe("recorded-track withdrawal over HTTP", () => {
       JSON.stringify({ operationKey: " withdraw-a" }),
       JSON.stringify({ operationKey: 42 }),
       JSON.stringify({ operationKey: "x".repeat(MAX_OPERATION_KEY_LENGTH + 1) }),
+      // A zero byte is valid JSON but not a value PostgreSQL will hold in a
+      // `text` column, so it has to be refused here rather than by the driver.
+      JSON.stringify({ operationKey: "withdraw\u0000a" }),
+      JSON.stringify({ operationKey: "\u0000" }),
       // An atlas or organization in the body buys nothing: authority is only
       // ever the session's, and the operation key is still missing.
       JSON.stringify({ atlasId: owner.atlasId, organizationId: owner.atlasId }),
