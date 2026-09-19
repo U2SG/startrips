@@ -583,12 +583,10 @@ export function JourneyComposer({
   }, []);
 
   const dialogRef = useModalFocus<HTMLElement>(() => {
+    // Innermost layer first: a media sheet is nested inside the media task, so
+    // Escape must close the sheet before it leaves the task that holds it.
     if (moreMenuOpen) {
       setMoreMenuOpen(false);
-      return;
-    }
-    if (mobileLayout && mobileTask !== "primary") {
-      exitMobileTask();
       return;
     }
     if (mobileMediaDeleteIndex !== null) {
@@ -601,6 +599,10 @@ export function JourneyComposer({
     }
     if (mobileMediaMenuIndex !== null) {
       setMobileMediaMenuIndex(null);
+      return;
+    }
+    if (mobileLayout && mobileTask !== "primary") {
+      exitMobileTask();
       return;
     }
     if (!saving) closeComposer();

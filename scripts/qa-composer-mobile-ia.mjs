@@ -245,21 +245,28 @@ try {
         && sticky.overflowX === 0);
 
       // Acceptance 3: a reduced available height keeps the focused input and the
-      // save action reachable. This is the same mechanism a soft keyboard drives.
+      // save action reachable. A soft keyboard shrinks only the visual viewport,
+      // which Chromium will not emulate, so the visual viewport is overridden
+      // and its own resize event dispatched: the product's real effect then does
+      // the measuring, exactly as it would on a device.
       const keyboard = await page.evaluate(() => {
         const composer = document.querySelector(".journey-composer");
         const input = document.querySelector(".journey-title-field input");
         input?.focus();
         const reduced = Math.round(innerHeight * 0.55);
-        composer.style.setProperty("--composer-available-height", `${reduced}px`);
+        Object.defineProperty(window.visualViewport, "height", {
+          configurable: true,
+          get: () => reduced,
+        });
+        window.visualViewport.dispatchEvent(new Event("resize"));
         return new Promise((resolve) => requestAnimationFrame(() => {
           const composerRect = composer.getBoundingClientRect();
-          input?.scrollIntoView({ block: "nearest" });
           const inputRect = input?.getBoundingClientRect();
           const save = [...document.querySelectorAll(".journey-composer__footer-actions button")].pop();
           const saveRect = save?.getBoundingClientRect();
           resolve({
             reduced,
+            published: composer.style.getPropertyValue("--composer-available-height"),
             composerHeight: Math.round(composerRect.height),
             focusKept: document.activeElement === input,
             inputVisible: Boolean(inputRect)
@@ -270,7 +277,8 @@ try {
         }));
       });
       record(`composer-mobile-ia:${viewport.label}:available-height`, { keyboard },
-        keyboard.composerHeight <= keyboard.reduced + 1
+        keyboard.published === `${keyboard.reduced}px`
+        && keyboard.composerHeight <= keyboard.reduced + 1
         && keyboard.focusKept
         && keyboard.inputVisible
         && keyboard.saveVisible);

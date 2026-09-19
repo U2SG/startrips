@@ -74,6 +74,7 @@ describe("#375 composer mobile capability map", () => {
     // dense settings form the owner ruled out.
     expect(composerCapabilitiesForTask("primary").sort()).toEqual([
       "close-composer",
+      "journey-title",
       "place-search",
       "playback-preview",
       "record-lookup",

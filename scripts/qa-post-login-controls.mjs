@@ -2952,7 +2952,13 @@ async function verifyFinalAcceptanceMobileFlow() {
       }
       console.error(`[qa-post-login] final:${viewportLabel}:composer-ready`);
       await page.getByLabel("旅程标题").fill(`FINAL CREATED ${viewportLabel}`);
+      // #375: the date is contextual on compact mobile - it is reached through
+      // Journey info and the flow returns to the primary surface afterwards.
+      await openComposerTask(page, "journey-info");
       await page.getByLabel("开始日期").fill("2026-08-27");
+      await leaveComposerTask(page);
+      // The globe pick is entered from Location details on compact mobile.
+      await openComposerTask(page, "location");
       const locationSearch = page.getByPlaceholder("建筑、景点、街道、街区或城市");
       await locationSearch.fill("final qa");
       await activateControl(

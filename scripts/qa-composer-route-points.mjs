@@ -351,7 +351,9 @@ try {
         await expanded.waitFor({ state: "visible" });
         const expandedState = {
           expandedCount: await run.page.locator('.journey-route-draft > li[data-route-point-expanded="true"]').count(),
-          name: await expanded.locator('input:not([type="checkbox"])').inputValue(),
+          // #375 added a contextual media upload to the expanded record, so the
+          // name field is addressed explicitly rather than as "the only input".
+          name: await expanded.locator('input:not([type="checkbox"]):not([type="file"])').inputValue(),
           note: await expanded.locator("textarea").inputValue(),
           hasStop: await expanded.locator('.journey-checkbox input[type="checkbox"]').count() === 1,
           hasCoordinates: await expanded.locator(".journey-route-draft__coordinates code").count() === 1,
