@@ -108,13 +108,19 @@ export function validateRegistry(registry) {
         if (!fs.existsSync(absolute)) {
           fail(id + ".evidence[" + index + "].path does not exist: " + evidencePath);
         }
+        let tracked;
         try {
-          execFileSync("git", ["ls-files", "--error-unmatch", "--", evidencePath], {
+          tracked = execFileSync("git", ["ls-files", "-z", "--", evidencePath], {
             cwd: ROOT,
-            stdio: ["ignore", "ignore", "pipe"],
+            encoding: "utf8",
+            stdio: ["ignore", "pipe", "pipe"],
           });
         } catch {
           fail(id + ".evidence[" + index + "].path is not tracked: " + evidencePath);
+        }
+        const exactTracked = tracked.split("\0").filter(Boolean);
+        if (exactTracked.length !== 1 || exactTracked[0] !== evidencePath || !fs.statSync(absolute).isFile()) {
+          fail(id + ".evidence[" + index + "].path is not an exact tracked file: " + evidencePath);
         }
       }
     });
