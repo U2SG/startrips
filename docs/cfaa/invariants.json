@@ -302,7 +302,8 @@
         "scripts/qa-guest-share.mjs",
         "server/routes/shares.ts",
         "src/journey/SharedAtlasView.tsx",
-        "src/journey/sharedAtlas.ts"
+        "src/journey/sharedAtlas.ts",
+        "src/journey/atlasView.ts"
       ],
       "coverage": "covered",
       "evidence": [
@@ -495,7 +496,8 @@
       "evidence": [
         {
           "kind": "integration",
-          "label": "email-change lifecycle from ST-089 / PR #407"
+          "label": "email-change lifecycle from ST-089 / PR #407",
+          "path": "server/tests/account-email-change.integration.test.ts"
         }
       ]
     },
