@@ -21,6 +21,18 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+      - name: Test CFAA tooling
+        run: node --test scripts/cfaa.node-test.mjs
+      - name: Validate CFAA invariant registry
+        run: node scripts/cfaa.mjs validate
+      - name: Project CFAA impact for current PR
+        if: github.event_name == 'pull_request'
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          node scripts/cfaa.mjs impact --base "$PR_BASE_SHA" --head "$PR_HEAD_SHA" --event "$GITHUB_EVENT_PATH" --output "$RUNNER_TEMP/cfaa-impact.md"
+          cat "$RUNNER_TEMP/cfaa-impact.md" >> "$GITHUB_STEP_SUMMARY"
       - name: Test ledger tooling
         run: node --test scripts/pr-history.node-test.mjs
       - name: Validate sharded ledgers
