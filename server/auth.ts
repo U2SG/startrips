@@ -93,11 +93,17 @@ export const auth = betterAuth({
     minPasswordLength: 10,
     maxPasswordLength: 128,
     revokeSessionsOnPasswordReset: true,
+    // #425: the reset URL carries the live single-use reset token, so the body
+    // is a bearer capability exactly like the email-change links in
+    // `routes/account-email-change.ts`. Without this flag the development mail
+    // sink prints `text` to the application log, which writes a usable token to
+    // disk — the same class `request-log.ts` removes from request paths.
     async sendResetPassword({ user, url }) {
       sendInBackground(emailSender, {
         to: user.email,
         subject: "重置你的 Startrips 密码",
         text: `请打开以下链接重置密码：${url}`,
+        sensitive: true,
       });
     },
   },
