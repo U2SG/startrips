@@ -28,6 +28,14 @@ function repoRelative(value, label) {
   return text;
 }
 
+function gitRelative(value, label) {
+  const text = nonEmptyString(value, label);
+  if (text.startsWith("/") || text.split("/").includes("..")) {
+    fail(label + " must stay repo-relative");
+  }
+  return text;
+}
+
 export function validateRegistry(registry) {
   if (!registry || typeof registry !== "object" || Array.isArray(registry)) {
     fail("registry must be an object");
@@ -173,13 +181,13 @@ export function globToRegExp(glob) {
 }
 
 export function pathMatchesGlob(filePath, glob) {
-  const normalized = repoRelative(filePath, "file path");
-  return globToRegExp(glob).test(normalized);
+  const raw = gitRelative(filePath, "file path");
+  return globToRegExp(glob).test(raw);
 }
 
 export function resolveImpact(registry, changedPaths) {
   validateRegistry(registry);
-  const paths = [...new Set(changedPaths.map((value, index) => repoRelative(value, "changedPaths[" + index + "]")))].sort();
+  const paths = [...new Set(changedPaths.map((value, index) => gitRelative(value, "changedPaths[" + index + "]")))].sort();
   const impacted = [];
 
   for (const invariant of registry.invariants) {
@@ -258,6 +266,15 @@ function compact(values, empty = "none") {
   return values.length > 0 ? values.join(", ") : empty;
 }
 
+function escapeMarkdownTableCell(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\|/g, "&#124;")
+    .replace(/\r\n|\r|\n/g, "<br>");
+}
+
 export function renderImpactMarkdown(registry, impact, declarations) {
   const lines = [
     "# CFAA impact projection",
@@ -275,7 +292,7 @@ export function renderImpactMarkdown(registry, impact, declarations) {
   } else {
     lines.push("| Invariant | Coverage | Dimensions | Matched paths |", "| --- | --- | --- | --- |");
     for (const entry of impact.impacted) {
-      const shown = entry.matchedPaths.slice(0, 4).join("<br>");
+      const shown = entry.matchedPaths.slice(0, 4).map(escapeMarkdownTableCell).join("<br>");
       const suffix = entry.matchedPaths.length > 4 ? "<br>+" + (entry.matchedPaths.length - 4) + " more" : "";
       lines.push("| " + entry.id + " — " + entry.title + " | " + entry.coverage + " | " + entry.dimensions.join(", ") + " | " + shown + suffix + " |");
     }
