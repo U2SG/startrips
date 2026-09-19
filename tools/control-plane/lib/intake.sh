@@ -109,6 +109,30 @@ intake_field() {
     "$1" "$2" | tr -d '\r'
 }
 
+# Read-only duplicate suppression for the expensive model turn. This is process
+# evidence only: it creates no queue/owner claim/lock and never authorizes a write.
+intake_triage_peer_active() {
+  local num="$1"
+  if command -v powershell.exe >/dev/null 2>&1; then
+    powershell.exe -NoProfile -NonInteractive -Command "\$n='$num'; \$rows=Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object { \$_.Name -ieq 'claude.exe' -and \$_.CommandLine -match '--agent startrips-triage' -and \$_.CommandLine -match ('issue #' + [regex]::Escape(\$n) + '(?:\D|$)') }; if (\$rows) { exit 0 } else { exit 1 }" >/dev/null 2>&1
+    return $?
+  fi
+  python3 - "$num" <<'PY'
+import os, re, subprocess, sys
+num = sys.argv[1]
+try:
+    text = subprocess.run(['ps', '-eo', 'pid=,args='], capture_output=True, text=True, timeout=5, check=True).stdout
+except Exception:
+    raise SystemExit(1)
+needle = re.compile(r'issue #' + re.escape(num) + r'(?:\D|$)')
+for line in text.splitlines():
+    pid, _, args = line.strip().partition(" ")
+    if pid.isdigit() and int(pid) != os.getpid() and "--agent startrips-triage" in args and needle.search(args):
+        raise SystemExit(0)
+raise SystemExit(1)
+PY
+}
+
 # Open issues that no feature already references and that intake has not already
 # skipped, [P0]/[P1]-titled first then oldest first, capped by rules.intake.max_per_iteration. Issues
 # carrying rules.intake.skip_label are never candidates.
@@ -452,6 +476,10 @@ intake_issue() {
     echo "=== Intake: $INTAKE_GH_REPO#$num ==="
   fi
 
+  if intake_triage_peer_active "$num"; then
+    intake_record_decision "issue=$num triage-active; deferred to existing invocation"
+    return 0
+  fi
   intake_triage "$num"
   [[ -s "$INTAKE_LAST_LOG" ]] || { intake_record_decision "issue=$num triage-log-empty"; return 1; }
   INTAKE_ISSUE_UPDATED_AT="$upd" INTAKE_ISSUE_COMMENTS="$cnt" intake_apply "$num" "$INTAKE_LAST_LOG" || { intake_record_decision "issue=$num transaction-deferred; no stale result consumed"; return 6; }
