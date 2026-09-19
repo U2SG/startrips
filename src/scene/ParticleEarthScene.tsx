@@ -3218,11 +3218,19 @@ export function ParticleEarthScene({
     // outside the scene wait for "the layout that reflects the state I just
     // observed" instead of for a duration.
     let placeLabelLayoutRevision = 0;
+    // Every exit of the layout pass states what it decided and in which frame,
+    // so "layout is current for this frame" is readable without inferring it
+    // from elapsed time: a completed pass, a skip because the projection did
+    // not move, or a layer that is not drawn at all.
+    const publishPlaceLabelLayout = (state: "laid-out" | "settled" | "inactive") => {
+      host.dataset.placeLabelLayout = state;
+      host.dataset.placeLabelLayoutFrame = String(sceneFrameRevision);
+    };
     const updateRouteVectorLayer = () => {
       if (routeVectorOpacity <= 0.01) {
         // The layer is not drawn, so no Place Label layout runs this frame and
         // a reader waiting for one would wait forever. Say so instead.
-        host.dataset.placeLabelLayout = "inactive";
+        publishPlaceLabelLayout("inactive");
         return;
       }
       sampleJourneyConnectorCard(false);
@@ -3271,6 +3279,12 @@ export function ParticleEarthScene({
         !projectionChanged
         && renderedRouteProjectionRevision === routeProjectionRevision
       ) {
+        // #432: skipping the pass is the SETTLED state, not a missing one -
+        // the placement already on screen is the placement this projection
+        // produces. A reader waiting for layout has to be able to tell that
+        // apart from a pass that has not happened yet, so it is published
+        // rather than left to a timeout to guess.
+        publishPlaceLabelLayout("settled");
         return;
       }
       lastRouteProjectionState.set(projectionState);
@@ -3665,9 +3679,8 @@ export function ParticleEarthScene({
       // Advances whether or not this Atlas has city tier data, so a reader
       // waiting on label layout is never deadlocked by an empty label layer.
       placeLabelLayoutRevision += 1;
-      host.dataset.placeLabelLayout = "laid-out";
       host.dataset.placeLabelLayoutRevision = String(placeLabelLayoutRevision);
-      host.dataset.placeLabelLayoutFrame = String(sceneFrameRevision);
+      publishPlaceLabelLayout("laid-out");
 
       updateJourneyConnector();
     };

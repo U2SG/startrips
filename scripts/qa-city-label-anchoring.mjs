@@ -465,11 +465,13 @@ async function waitForLocalCoastline(page, expectedSource = "50m-regional+10m-lo
       unmet = `no frame has been rendered past scene frame ${coastline.frameRevision} since the coastline load became terminal`;
       continue;
     }
-    // A frame in which the Place Label layer is not drawn runs no layout pass,
-    // so requiring one would wait for something that cannot happen. The state
-    // is published rather than inferred, and reported either way.
-    if (settled.labelLayout === "laid-out" && !(settled.labelLayoutFrame > coastline.frameRevision)) {
-      unmet = `the place label layout pass has not run since scene frame ${coastline.frameRevision} (last pass at frame ${settled.labelLayoutFrame})`;
+    // The layout layer stamps every decision it makes - a completed pass, a
+    // skip because the projection did not move, or a layer that is not drawn -
+    // with the frame it made it in. Requiring a decision newer than the
+    // coastline load means the placement on screen has been evaluated against
+    // this load, without asserting that a pass must re-run on a settled scene.
+    if (!(settled.labelLayoutFrame > coastline.frameRevision)) {
+      unmet = `place label layout has not been evaluated since scene frame ${coastline.frameRevision} (last ${JSON.stringify(settled.labelLayout)} at frame ${settled.labelLayoutFrame})`;
       continue;
     }
     return measure(page);
