@@ -2957,8 +2957,6 @@ async function verifyFinalAcceptanceMobileFlow() {
       await openComposerTask(page, "journey-info");
       await page.getByLabel("开始日期").fill("2026-08-27");
       await leaveComposerTask(page);
-      // The globe pick is entered from Location details on compact mobile.
-      await openComposerTask(page, "location");
       const locationSearch = page.getByPlaceholder("建筑、景点、街道、街区或城市");
       await locationSearch.fill("final qa");
       await activateControl(
@@ -2975,6 +2973,8 @@ async function verifyFinalAcceptanceMobileFlow() {
       ));
       console.error(`[qa-post-login] final:${viewportLabel}:search-result-added`);
 
+      // #375: the globe pick is entered from Location details on compact mobile.
+      await openComposerTask(page, "location");
       const globePick = page.getByRole("button", { name: /直接在地球上取点/ });
       await activateControl(globePick, "globe pick control");
       await page.waitForFunction(() => (
@@ -3041,9 +3041,15 @@ async function verifyFinalAcceptanceMobileFlow() {
         throw new Error(`Final acceptance globe canvas is not pickable: ${JSON.stringify(canvasPick)}`);
       }
       console.error(`[qa-post-login] final:${viewportLabel}:globe-pick-hit`);
+      // The pick returns to the Location task it was started from; the Route
+      // Point list it added to lives on the primary surface, so the flow goes
+      // back there before reading it.
       await page.waitForFunction(() => (
         !document.querySelector(".living-atlas")?.classList.contains("is-globe-picking")
-        && document.querySelectorAll(".journey-route-draft > li:not(.is-empty)").length === 2
+      ), null, { timeout: 8_000 });
+      await leaveComposerTask(page);
+      await page.waitForFunction(() => (
+        document.querySelectorAll(".journey-route-draft > li:not(.is-empty)").length === 2
       ), null, { timeout: 8_000 });
       await page.getByText("已根据坐标识别为「FINAL QA GLOBE PICK」，可继续修改。").waitFor({
         state: "visible",
