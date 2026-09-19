@@ -19,6 +19,7 @@ import {
 } from "../db/auth-schema";
 import { db, pool } from "../db/client";
 import {
+  MAX_OPERATION_KEY_LENGTH,
   MAX_RECORDED_TRACK_SAMPLES,
   MAX_RECORDED_TRACK_SAMPLES_PER_SEGMENT,
   MAX_RECORDED_TRACK_SEGMENTS,
@@ -710,5 +711,243 @@ describe("recorded-track isolation from route points and media", () => {
       .from(journeyRecordedTrackSamples)
       .where(inArray(journeyRecordedTrackSamples.segmentId, segmentIds));
     expect(remainingSamples).toHaveLength(0);
+  });
+});
+
+describe("recorded-track withdrawal over HTTP", () => {
+  let journeyId = "";
+  let assetId = "";
+  const keys = ["withdraw-a", "withdraw-b", "withdraw-c"] as const;
+
+  async function deleteRequest(
+    cookie: string | undefined,
+    target: string,
+    body: string,
+  ) {
+    return app.request(`${TEST_ORIGIN}/api/journey-recorded-tracks/${target}`, {
+      method: "DELETE",
+      headers: authHeaders(cookie),
+      body,
+    });
+  }
+
+  async function listedKeys(cookie: string) {
+    const response = await app.request(
+      `${TEST_ORIGIN}/api/journey-recorded-tracks/${journeyId}`,
+      { headers: authHeaders(cookie) },
+    );
+    expect(response.status).toBe(200);
+    const payload = await response.json() as {
+      recordedTracks: Array<{ operationKey: string }>;
+    };
+    return payload.recordedTracks.map((track) => track.operationKey);
+  }
+
+  // A Journey of its own: the sibling-order assertion below would otherwise
+  // depend on every operation the earlier tests in this file happened to
+  // leave under the shared fixture.
+  beforeAll(async () => {
+    const journey = await createJourneyForAtlas(owner.atlasId, owner.userId, {
+      ...baseJourney,
+      title: "Withdrawal journey",
+    });
+    if (!journey) throw new Error("Journey fixture was not created");
+    journeyId = journey.id;
+    const [asset] = await db.insert(mediaAssets).values({
+      journeyId,
+      routePointId: journey.routePoints[0].id,
+      storageDriver: "disabled",
+      storageKey: `recorded-track/${randomUUID()}/withdrawal.jpg`,
+      fileName: "withdrawal.jpg",
+      mimeType: "image/jpeg",
+      bytes: 1024,
+      contentHash: "c".repeat(64),
+      contentHashVerified: true,
+      uploadedByUserId: owner.userId,
+    }).returning({ id: mediaAssets.id });
+    assetId = asset.id;
+    for (const operationKey of keys) {
+      const written = await writeRecordedTrackForAtlas(
+        owner.atlasId,
+        journeyId,
+        normalized({ ...TWO_SEGMENT_BODY, operationKey }),
+      );
+      expect(written.outcome).toBe("ok");
+    }
+    expect(await listedKeys(owner.cookie)).toEqual([...keys]);
+  });
+
+  it("withdraws one operation and leaves siblings, route and media intact", async () => {
+    const routePointsBefore = await db
+      .select()
+      .from(journeyRoutePoints)
+      .where(eq(journeyRoutePoints.journeyId, journeyId))
+      .orderBy(asc(journeyRoutePoints.sortOrder));
+    const mediaBefore = await db
+      .select()
+      .from(mediaAssets)
+      .where(eq(mediaAssets.id, assetId));
+
+    const response = await deleteRequest(
+      owner.cookie,
+      journeyId,
+      JSON.stringify({ operationKey: "withdraw-b" }),
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ deleted: true });
+    expect(response.headers.get("cache-control")).toBe(
+      "private, no-store, max-age=0",
+    );
+
+    // Only the requested operation went, and the survivors kept their order.
+    expect(await listedKeys(owner.cookie)).toEqual(["withdraw-a", "withdraw-c"]);
+    const stored = await readStoredRows(journeyId);
+    expect(stored.samples.every((sample) => stored.segments.some(
+      (segment) => segment.id === sample.segmentId,
+    ))).toBe(true);
+
+    const routePointsAfter = await db
+      .select()
+      .from(journeyRoutePoints)
+      .where(eq(journeyRoutePoints.journeyId, journeyId))
+      .orderBy(asc(journeyRoutePoints.sortOrder));
+    const mediaAfter = await db
+      .select()
+      .from(mediaAssets)
+      .where(eq(mediaAssets.id, assetId));
+    expect(routePointsAfter).toEqual(routePointsBefore);
+    expect(mediaAfter).toEqual(mediaBefore);
+  });
+
+  it("answers one indistinguishable 404 for every withdrawal it refuses", async () => {
+    const before = await readStoredRows(journeyId);
+
+    // A repeat of the withdrawal that already happened.
+    const repeated = await deleteRequest(
+      owner.cookie,
+      journeyId,
+      JSON.stringify({ operationKey: "withdraw-b" }),
+    );
+    // A key this owner never stored anywhere.
+    const unknown = await deleteRequest(
+      owner.cookie,
+      journeyId,
+      JSON.stringify({ operationKey: `unknown-${randomUUID()}` }),
+    );
+    // A key that exists, but only under the stranger's Journey.
+    const strangerKey = `stranger-only-${randomUUID()}`;
+    const planted = await writeRecordedTrackForAtlas(
+      stranger.atlasId,
+      strangerJourneyId,
+      normalized({ ...TWO_SEGMENT_BODY, operationKey: strangerKey }),
+    );
+    expect(planted.outcome).toBe("ok");
+    const foreignKey = await deleteRequest(
+      owner.cookie,
+      journeyId,
+      JSON.stringify({ operationKey: strangerKey }),
+    );
+    // The stranger reaching into the owner's Journey with a real owner key.
+    const crossAtlas = await deleteRequest(
+      stranger.cookie,
+      journeyId,
+      JSON.stringify({ operationKey: "withdraw-a" }),
+    );
+    // A Journey that does not exist at all, and something that is not a
+    // Journey id in the first place.
+    const missingJourney = await deleteRequest(
+      owner.cookie,
+      randomUUID(),
+      JSON.stringify({ operationKey: "withdraw-a" }),
+    );
+    const unusableJourney = await deleteRequest(
+      owner.cookie,
+      "not-a-journey-id",
+      JSON.stringify({ operationKey: "withdraw-a" }),
+    );
+
+    const responses = [
+      repeated,
+      unknown,
+      foreignKey,
+      crossAtlas,
+      missingJourney,
+      unusableJourney,
+    ];
+    const bodies = await Promise.all(responses.map((one) => one.text()));
+    for (const one of responses) expect(one.status).toBe(404);
+    // Raw text rather than a parsed object: the refusals have to be
+    // byte-identical, or the answer says which of the six situations held.
+    for (const body of bodies) expect(body).toBe(bodies[0]);
+    expect(JSON.parse(bodies[0])).toEqual({ error: "RECORDED_TRACK_NOT_FOUND" });
+
+    expect(await readStoredRows(journeyId)).toEqual(before);
+    const strangerRows = await readStoredRows(strangerJourneyId);
+    expect(strangerRows.segments.some(
+      (segment) => segment.operationKey === strangerKey,
+    )).toBe(true);
+  });
+
+  it("refuses an unusable body with one code and deletes nothing", async () => {
+    const before = await readStoredRows(journeyId);
+    const unusable = [
+      "{",
+      "null",
+      '"withdraw-a"',
+      '["withdraw-a"]',
+      "{}",
+      JSON.stringify({ operationKey: "" }),
+      JSON.stringify({ operationKey: "   " }),
+      JSON.stringify({ operationKey: " withdraw-a" }),
+      JSON.stringify({ operationKey: 42 }),
+      JSON.stringify({ operationKey: "x".repeat(MAX_OPERATION_KEY_LENGTH + 1) }),
+      // An atlas or organization in the body buys nothing: authority is only
+      // ever the session's, and the operation key is still missing.
+      JSON.stringify({ atlasId: owner.atlasId, organizationId: owner.atlasId }),
+    ];
+    for (const body of unusable) {
+      const response = await deleteRequest(owner.cookie, journeyId, body);
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ error: "INVALID_OPERATION_KEY" });
+    }
+    expect(await readStoredRows(journeyId)).toEqual(before);
+  });
+
+  it("requires a session", async () => {
+    const before = await readStoredRows(journeyId);
+    const response = await deleteRequest(
+      undefined,
+      journeyId,
+      JSON.stringify({ operationKey: "withdraw-a" }),
+    );
+    expect(response.status).toBe(401);
+    expect(await readStoredRows(journeyId)).toEqual(before);
+  });
+
+  it("refuses a withdrawal from a Journey inside its deletion grace window", async () => {
+    const doomed = await createJourneyForAtlas(owner.atlasId, owner.userId, {
+      ...baseJourney,
+      title: "Withdrawal grace journey",
+    });
+    if (!doomed) throw new Error("Journey fixture was not created");
+    const written = await writeRecordedTrackForAtlas(
+      owner.atlasId,
+      doomed.id,
+      normalized({ ...TWO_SEGMENT_BODY, operationKey: "grace-window" }),
+    );
+    expect(written.outcome).toBe("ok");
+    expect(await markJourneyForDeletionForAtlas(doomed.id, owner.atlasId))
+      .toBeTruthy();
+
+    const response = await deleteRequest(
+      owner.cookie,
+      doomed.id,
+      JSON.stringify({ operationKey: "grace-window" }),
+    );
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ error: "RECORDED_TRACK_NOT_FOUND" });
+    // A Journey awaiting restore keeps its evidence, exactly as the Journey
+    // itself survives the grace window.
+    expect((await readStoredRows(doomed.id)).segments).toHaveLength(2);
   });
 });
