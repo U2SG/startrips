@@ -1075,6 +1075,7 @@ export function JourneyStory({
   const mobileManageViewerTriggerRef = useRef<HTMLButtonElement>(null);
   const mobileManageFocusFrameRef = useRef<number | null>(null);
   const restoreMobileManageViewerFocusRef = useRef(false);
+  const restoreMobileMediaDeleteFocusRef = useRef(false);
   const [mobileMediaMenuOpen, setMobileMediaMenuOpen] = useState(false);
   const mobileMoveSelectToggleRef = useRef<HTMLButtonElement>(null);
   const restoreMobileMoveSelectFocusRef = useRef(false);
@@ -1372,17 +1373,9 @@ export function JourneyStory({
 
   function closeMobileMediaDelete() {
     if (mediaDeleteState === "pending") return false;
+    restoreMobileMediaDeleteFocusRef.current = mobileLayout && mobileManageMode;
     setMediaDeleteState("idle");
     setMediaDeleteMessage("");
-    if (typeof window !== "undefined") {
-      window.requestAnimationFrame(() => {
-        window.requestAnimationFrame(() => {
-          document
-            .querySelector<HTMLButtonElement>(".journey-story__mobile-media-menu-trigger")
-            ?.focus({ preventScroll: true });
-        });
-      });
-    }
     return true;
   }
 
@@ -1759,6 +1752,20 @@ export function JourneyStory({
   useEffect(() => {
     if (mediaDeleteState === "confirming") mediaDeleteCancelRef.current?.focus();
   }, [mediaDeleteState]);
+
+  useLayoutEffect(() => {
+    if (!restoreMobileMediaDeleteFocusRef.current) return;
+    if (!mobileLayout || !mobileManageMode) {
+      restoreMobileMediaDeleteFocusRef.current = false;
+      return;
+    }
+    if (mediaDeleteState !== "idle") return;
+
+    const target = mobileManageViewerTriggerRef.current;
+    if (!target) return;
+    restoreMobileMediaDeleteFocusRef.current = false;
+    target.focus({ preventScroll: true });
+  }, [mediaDeleteState, mobileLayout, mobileManageMode]);
 
   useEffect(() => {
     if (overview) return;
