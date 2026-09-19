@@ -381,6 +381,19 @@ def _observed_executions(rows, root, self_pid):
         command = raw_command.replace('\\', '/').lower()
         is_loop = bool(re.search(r'(?:^|[\s"/])(?:run-loop|loop-supervisor)[.]sh(?:[\s"\x00]|$)', command))
         is_child = 'startrips_execution_owner=' in command
+        # The dedicated LOCAL Backend supervisor is a resident scheduler, not a
+        # productive execution carrier. When it is idle it has lane metadata but
+        # intentionally no feature/worktree/token scope. Count only its actual
+        # run-loop/model child when one exists; otherwise an external occupancy
+        # probe would fail closed forever on the supervisor itself.
+        is_resident_backend_supervisor = bool(
+            re.search(r'(?:^|[\s"/])loop-supervisor[.]sh(?:[\s"\x00]|$)', command)
+            and command_lane(raw_command) == 'backend'
+            and command_token(raw_command) is None
+            and not re.search(r'(?:^|[;\s"])(?:--carrier-)?(?:feature|worktree|worktree64)=', raw_command, re.I)
+        )
+        if is_resident_backend_supervisor:
+            continue
         if is_loop and command_is_readonly_probe(raw_command):
             continue
         if not is_loop and not is_child:
