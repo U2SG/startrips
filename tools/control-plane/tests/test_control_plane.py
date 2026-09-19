@@ -564,6 +564,8 @@ class WiringTests(SyntheticOne):
         self.assertIn('triage-${BASHPID}.log', intake)
         self.assertIn('triage_rc=${PIPESTATUS[0]}', intake)
         self.assertNotIn('| tee "$INTAKE_LAST_LOG" || true', intake)
+        self.assertIn('intake_triage_peer_active()', intake)
+        self.assertIn('triage-active; deferred to existing invocation', intake)
         triage_agent = (ROOT / '.claude/agents/startrips-triage.md').read_text(encoding='utf-8')
         self.assertIn('do **not** dump the whole raw file into model context', triage_agent)
         self.assertNotIn('The **whole** of `feature_list.json`', triage_agent)
