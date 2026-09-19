@@ -725,11 +725,15 @@ try {
         && document.querySelector(".detailed-earth-map") !== null
     ), null, { timeout: 15_000 }).then(() => true, () => false);
     const before = await readDive(transition.page);
-    // A pre-switch snapshot with nothing constructed cannot evidence the
-    // particle-only teardown contract, so it is an explicit failure rather
-    // than a silent pass.
-    if (before.mapConstructionCount < 1) {
-      intermediatePolicyFailures.push(`${targetStage}: no detail map was constructed before the policy switch, so its teardown assertion is vacuous: ${JSON.stringify({ detailConstructionObserved, before })}`);
+    // The teardown contract is about a LIVE resource, so the cumulative
+    // construction counter alone is not enough: a renderer that was built and
+    // then unmounted again while the stage stayed `prewarm`/`blending` leaves
+    // that counter at one while the wait expires and the DOM is already empty,
+    // and every later assertion then passes on nothing. Require the wait to
+    // have actually observed the construction AND the detail surface to still
+    // be mounted at the moment of the switch.
+    if (!detailConstructionObserved || before.mapConstructionCount < 1 || before.mapDomCount < 1) {
+      intermediatePolicyFailures.push(`${targetStage}: no live detail map was mounted before the policy switch, so its teardown assertion is vacuous: ${JSON.stringify({ detailConstructionObserved, before })}`);
     }
     await activateButton(transition.page, transition.page.locator('[data-qa-earth-policy="particle-only"]'));
     await transition.page.waitForFunction(() => {
