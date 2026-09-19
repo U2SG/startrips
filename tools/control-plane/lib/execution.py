@@ -432,7 +432,7 @@ def lane_occupancy(rows, root, self_pid, lane):
     """Return distinct live owner scopes for one lane without creating a registry."""
     if lane not in LANE_CAPACITY:
         raise ValueError('Execution lane must be backend or experience')
-    scoped, claims, unknown = {}, {}, []
+    scoped, claims, unknown, scoped_tokens = {}, {}, [], set()
     for record in _observed_executions(rows, root, self_pid):
         carrier_lane = record['lane']
         # A carrier whose lineage proves a different lane is not part of this
@@ -446,13 +446,14 @@ def lane_occupancy(rows, root, self_pid, lane):
         if record['scope_complete']:
             key = (record['feature'], record['worktree'])
             scoped.setdefault(key, record)
+            if record.get('token'):
+                scoped_tokens.add(record['token'])
         elif record['token']:
             claims.setdefault(record['token'], record)
         else:
             unknown.append(_public_record(record, state='unknown-scope'))
     if unknown:
         raise EvidenceUnknown('Execution occupancy is unknown: ' + json.dumps(unknown))
-    scoped_tokens = {record['token'] for record in scoped.values() if record.get('token')}
     claims = {token: record for token, record in claims.items() if token not in scoped_tokens}
     used = len(scoped) + len(claims)
     return {
@@ -491,7 +492,7 @@ def competitors(rows, root, self_pid, lane=None, feature=None, worktree=None, wo
         raise ValueError('Specify owner worktree once')
     wanted_feature = feature.upper() if isinstance(feature, str) and feature else None
     wanted_worktree = decode_worktree64(worktree64) if worktree64 is not None else normalize_worktree(worktree)
-    conflicts, same_lane_scoped, same_lane_claims = [], {}, {}
+    conflicts, same_lane_scoped, same_lane_claims, same_lane_scoped_tokens = [], {}, {}, set()
 
     for record in _observed_executions(rows, root, self_pid):
         carrier_lane = record['lane']
@@ -525,16 +526,17 @@ def competitors(rows, root, self_pid, lane=None, feature=None, worktree=None, wo
             conflicts.append(_public_record(record))
         elif record['scope_complete']:
             same_lane_scoped.setdefault((record['feature'], record['worktree']), record)
+            if record.get('token'):
+                same_lane_scoped_tokens.add(record['token'])
         elif record['token']:
             same_lane_claims.setdefault(record['token'], record)
         else:
             conflicts.append(_public_record(record, state='unknown-scope'))
 
     if lane == 'experience':
-        scoped_tokens = {record['token'] for record in same_lane_scoped.values() if record.get('token')}
         same_lane_claims = {
             token: record for token, record in same_lane_claims.items()
-            if token not in scoped_tokens
+            if token not in same_lane_scoped_tokens
         }
         # Only one selector/claim transition runs at once. Once scoped, up to two
         # different Experience owners may execute concurrently.
