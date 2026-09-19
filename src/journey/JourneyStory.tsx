@@ -1379,6 +1379,15 @@ export function JourneyStory({
     return true;
   }
 
+  const resolveMobileMediaSheetRestoreFocus = useCallback((
+    previousFocus: HTMLElement | null,
+  ) => {
+    if (!restoreMobileMediaDeleteFocusRef.current) return undefined;
+    restoreMobileMediaDeleteFocusRef.current = false;
+    if (!mobileLayout || !mobileManageMode) return null;
+    return mobileManageViewerTriggerRef.current ?? previousFocus;
+  }, [mobileLayout, mobileManageMode]);
+
   function closeJourneyDelete() {
     if (deleteState === "pending") return false;
     restoreJourneyDeleteFocusRef.current = mobileLayout;
@@ -1590,6 +1599,7 @@ export function JourneyStory({
   const mobileMediaSheetRef = useNestedModalFocus<HTMLElement>(
     mobileLayout && (mobileMediaMenuOpen || mediaDeleteState !== "idle"),
     mobileMediaMenuOpen ? "manage" : mediaDeleteState !== "idle" ? "delete" : null,
+    resolveMobileMediaSheetRestoreFocus,
   );
 
   useLayoutEffect(() => {
@@ -1752,20 +1762,6 @@ export function JourneyStory({
   useEffect(() => {
     if (mediaDeleteState === "confirming") mediaDeleteCancelRef.current?.focus();
   }, [mediaDeleteState]);
-
-  useLayoutEffect(() => {
-    if (!restoreMobileMediaDeleteFocusRef.current) return;
-    if (!mobileLayout || !mobileManageMode) {
-      restoreMobileMediaDeleteFocusRef.current = false;
-      return;
-    }
-    if (mediaDeleteState !== "idle") return;
-
-    const target = mobileManageViewerTriggerRef.current;
-    if (!target) return;
-    restoreMobileMediaDeleteFocusRef.current = false;
-    target.focus({ preventScroll: true });
-  }, [mediaDeleteState, mobileLayout, mobileManageMode]);
 
   useEffect(() => {
     if (overview) return;
