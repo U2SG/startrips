@@ -195,6 +195,33 @@ function displayValues(display: MediaDisplayState) {
   };
 }
 
+/**
+ * #428: attach the evidence an accepted upload carried to the media asset the
+ * upload has just created, inside the caller's finalization transaction.
+ *
+ * Deliberately narrower than `writeRecordedMediaEvidenceForAtlas`: the asset
+ * was created moments ago in this same transaction, so there is no revision to
+ * guard and no atlas to re-derive — authority was already established by the
+ * upload's own session-derived Atlas boundary. `onConflictDoNothing` makes a
+ * replayed finalization (the lost-response path re-finalizing an upload whose
+ * asset already exists) leave the stored row and its revision untouched rather
+ * than racing a second insert.
+ */
+export async function attachRecordedEvidenceToNewAsset(
+  transaction: Transaction,
+  assetId: string,
+  recorded: MediaRecordedEvidence,
+) {
+  await transaction
+    .insert(mediaAssetEvidence)
+    .values({
+      mediaAssetId: assetId,
+      ...recordedValues(recorded),
+      revision: 1,
+    })
+    .onConflictDoNothing({ target: mediaAssetEvidence.mediaAssetId });
+}
+
 export async function writeRecordedMediaEvidenceForAtlas(
   atlasId: string,
   assetId: string,

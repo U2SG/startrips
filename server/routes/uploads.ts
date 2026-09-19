@@ -22,6 +22,12 @@ import {
   type PreviewSourceValues,
 } from "../services/media-preview";
 import { getJourneyForAtlas } from "../repositories/journey-repository";
+import { attachRecordedEvidenceToNewAsset } from "../repositories/media-evidence-repository";
+import {
+  parseRecordedEvidenceDocument,
+  serializeRecordedEvidence,
+  type MediaRecordedEvidence,
+} from "../media/media-evidence";
 import {
   getMultipartStorage,
   hasConfiguredStorageBackends,
@@ -88,6 +94,7 @@ type StartUploadInput = {
   mimeType?: unknown;
   bytes?: unknown;
   contentHash?: unknown;
+  recordedEvidence?: unknown;
 };
 
 export function parseStartUpload(body: StartUploadInput) {
@@ -106,6 +113,15 @@ export function parseStartUpload(body: StartUploadInput) {
     : typeof body.contentHash === "string" && /^[0-9a-f]{64}$/i.test(body.contentHash)
       ? body.contentHash.toLowerCase()
       : "invalid";
+
+  // #428: the optional recorded evidence this upload carries, normalized by
+  // the one evidence parser the server already owns. It is metadata about the
+  // bytes and never a source of authority: the Atlas, Journey and Route Point
+  // this upload may touch are still decided entirely by the fields above.
+  const recordedEvidence = body.recordedEvidence === undefined
+    || body.recordedEvidence === null
+    ? null
+    : (parseRecordedEvidenceDocument(body.recordedEvidence) ?? "invalid");
 
   const isSoundtrack = ALLOWED_AUDIO_MIME_TYPES.has(mimeType);
   const maxBytes = isSoundtrack ? MAX_AUDIO_UPLOAD_BYTES : MAX_UPLOAD_BYTES;
@@ -127,12 +143,22 @@ export function parseStartUpload(body: StartUploadInput) {
     bytes > maxBytes ||
     partCount < 1 ||
     partCount > MAX_PARTS ||
-    contentHash === "invalid"
+    contentHash === "invalid" ||
+    recordedEvidence === "invalid"
   ) {
     return null;
   }
 
-  return { journeyId, routePointId, fileName, mimeType, bytes, partCount, contentHash };
+  return {
+    journeyId,
+    routePointId,
+    fileName,
+    mimeType,
+    bytes,
+    partCount,
+    contentHash,
+    recordedEvidence,
+  };
 }
 
 export function parseParts(value: unknown, expectedCount: number): MultipartPart[] | null {
@@ -469,6 +495,20 @@ export async function finalizeUpload(
   if (!/^[0-9a-f]{64}$/.test(verifiedContentHash)) {
     throw new Error("Verified content identity must be a lowercase SHA-256");
   }
+  // The evidence the accepted upload carried, read back through the same
+  // parser that accepted it. Every finalization path — the direct completion,
+  // the lost-response `completion_unknown` recovery and stale reconciliation —
+  // reaches this one function with the upload row, so none of them can finalize
+  // the bytes while dropping the document. A stored document that no longer
+  // parses is unreachable for rows this code wrote; it throws rather than
+  // silently degrading to an asset with no evidence at all.
+  let recordedEvidence: MediaRecordedEvidence | null = null;
+  if (upload.recordedEvidence !== null && upload.recordedEvidence !== undefined) {
+    recordedEvidence = parseRecordedEvidenceDocument(upload.recordedEvidence);
+    if (!recordedEvidence) {
+      throw new Error("Stored upload evidence is not a recorded evidence document");
+    }
+  }
   const result = await db.transaction(async (transaction) => {
     const lockedAtlas = await transaction.execute<{ id: string }>(sql`
       select ${atlases.id} as id
@@ -591,6 +631,23 @@ export async function finalizeUpload(
       ) {
         throw new Error("Completed media asset could not be reconciled");
       }
+    }
+    // #428: evidence belongs to the asset, so it is attached exactly when this
+    // upload is the one that created the asset — inside this same transaction,
+    // so a rollback commits neither the asset nor its evidence.
+    //
+    // A deduplicated completion deliberately writes nothing: the asset it
+    // answers with already existed and already owns whatever evidence its own
+    // upload carried, and "leave it unchanged" includes not promoting an asset
+    // that has no evidence row to revision 1 from another upload's document.
+    // Correcting or supplying evidence for an existing asset is what the
+    // owner-only `/api/media-evidence` route is for.
+    if (!deduplicated && recordedEvidence) {
+      await attachRecordedEvidenceToNewAsset(
+        transaction,
+        asset.id,
+        recordedEvidence,
+      );
     }
     await transaction
       .update(mediaUploads)
@@ -879,6 +936,9 @@ uploadRoutes.post("/start", async (context) => {
           mimeType: input.mimeType,
           bytes: input.bytes,
           contentHash: input.contentHash,
+          recordedEvidence: input.recordedEvidence
+            ? serializeRecordedEvidence(input.recordedEvidence)
+            : null,
           partSize: PART_SIZE,
           partCount: input.partCount,
           createdByUserId: session.user.id,
