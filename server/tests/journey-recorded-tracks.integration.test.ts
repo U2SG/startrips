@@ -332,6 +332,10 @@ describe("recorded-track normalization", () => {
     expect(rejection(withTime("2026-09-01T24:00:00Z"))).toBe("INVALID_SAMPLE_TIME");
     expect(rejection(withTime("2026-09-01T12:60:00Z"))).toBe("INVALID_SAMPLE_TIME");
     expect(rejection(withTime("2026-13-01T00:00:00Z"))).toBe("INVALID_SAMPLE_TIME");
+    // Finer than a millisecond: Date would keep only three digits and two
+    // readings a microsecond apart would fingerprint as the same replay.
+    expect(rejection(withTime("2026-09-01T12:00:00.123456Z")))
+      .toBe("INVALID_SAMPLE_TIME");
     // An offset no calendar has.
     expect(rejection(withTime("2026-09-01T12:00:00+99:00"))).toBe("INVALID_SAMPLE_TIME");
 

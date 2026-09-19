@@ -108,9 +108,15 @@ function isFiniteNumber(value: unknown): value is number {
  * into March 2 and reads an offset-less `2026-09-01T12:00:00` in whatever
  * timezone the server happens to run in, so an identical replay would conflict
  * after an environment change. Both are rejections here, not corrections.
+ *
+ * Precision below a millisecond is refused for the same reason: `Date` keeps
+ * three fractional digits, so a finer reading would be stored truncated, and
+ * two samples differing only below the millisecond would fingerprint alike and
+ * be taken for a replay of each other. A producer that records finer has to
+ * round deliberately rather than have this module do it silently.
  */
 const ISO_INSTANT =
-  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:\d{2})$/;
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/;
 
 function parseSampleInstant(value: string): Date | null {
   const match = ISO_INSTANT.exec(value);
