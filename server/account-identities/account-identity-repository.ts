@@ -37,7 +37,8 @@ export type AccountIdentityAuditEvent =
   | "link-intent"
   | "link"
   | "unlink"
-  | "password-change";
+  | "password-change"
+  | "password-enroll";
 
 export class AccountIdentityError extends Error {
   constructor(readonly code: AccountIdentityErrorCode) {

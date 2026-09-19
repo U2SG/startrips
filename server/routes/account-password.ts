@@ -4,6 +4,11 @@ import {
   changeAccountPassword,
   type AccountPasswordChangeErrorCode,
 } from "../account-identities/password-change";
+import {
+  AccountPasswordEnrollmentError,
+  enrollAccountPassword,
+  type AccountPasswordEnrollmentErrorCode,
+} from "../account-identities/password-enrollment";
 import { auth } from "../auth";
 import { serverConfig } from "../config";
 import { readJsonObject } from "./json-body";
@@ -33,6 +38,31 @@ function refusalStatus(
     case "PASSWORD_CHANGE_REVERIFY_EXPIRED":
     case "PASSWORD_CHANGE_SESSION_CHANGED":
     case "PASSWORD_CHANGE_SESSION_EXPIRED":
+      return 403;
+    default:
+      return 409;
+  }
+}
+
+function enrollmentRefusalStatus(
+  code: AccountPasswordEnrollmentErrorCode,
+): 400 | 403 | 404 | 409 {
+  switch (code) {
+    case "PASSWORD_ENROLL_INVALID":
+    case "PASSWORD_ENROLL_PASSWORD_TOO_SHORT":
+    case "PASSWORD_ENROLL_PASSWORD_TOO_LONG":
+    case "PASSWORD_ENROLL_REVERIFY_INVALID":
+      return 400;
+    case "PASSWORD_ENROLL_ACCOUNT_NOT_FOUND":
+      return 404;
+    // A spent grant is an authorization failure rather than a state conflict:
+    // the caller has to prove recent control again before this write is
+    // available, which is what 403 tells them.
+    case "PASSWORD_ENROLL_REVERIFY_EXPIRED":
+    case "PASSWORD_ENROLL_REVERIFY_REPLAYED":
+    case "PASSWORD_ENROLL_SESSION_CHANGED":
+    case "PASSWORD_ENROLL_SESSION_EXPIRED":
+    case "PASSWORD_ENROLL_RECOVERY_REQUIRED":
       return 403;
     default:
       return 409;
@@ -74,6 +104,43 @@ export function createAccountPasswordRoutes() {
     } catch (error) {
       if (!(error instanceof AccountPasswordChangeError)) throw error;
       return context.json({ error: error.code }, refusalStatus(error.code));
+    }
+  });
+
+  // #445: first-password enrollment for a user who holds no usable credential.
+  // Separate from the replacement write above because the two have different
+  // authorization inputs and different refusals; a user who already has a
+  // password is sent back to that route rather than mutating it here.
+  routes.post("/enrollment", async (context) => {
+    if (!sameOrigin(context.req.raw)) {
+      return context.json({ error: "PASSWORD_ENROLL_ORIGIN_REQUIRED" }, 403);
+    }
+    const session = await auth.api.getSession({
+      headers: context.req.raw.headers,
+    });
+    if (!session) return context.json({ error: "UNAUTHORIZED" }, 401);
+    const body = await readJsonObject(() => context.req.json());
+    const newPassword = body && stringField(body, "newPassword");
+    const reverificationToken = body && stringField(body, "reverificationToken");
+    if (!newPassword || !reverificationToken) {
+      return context.json({ error: "PASSWORD_ENROLL_INVALID" }, 400);
+    }
+
+    try {
+      const result = await enrollAccountPassword({
+        userId: session.user.id,
+        sessionId: session.session.id,
+        newPassword,
+        reverificationToken,
+        headers: context.req.raw.headers,
+      });
+      return context.json({ status: true, ...result });
+    } catch (error) {
+      if (!(error instanceof AccountPasswordEnrollmentError)) throw error;
+      return context.json(
+        { error: error.code },
+        enrollmentRefusalStatus(error.code),
+      );
     }
   });
 
