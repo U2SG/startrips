@@ -80,6 +80,34 @@ describe("Story shared-element ownership", () => {
   });
 });
 
+describe("mobile media delete focus ownership (#427)", () => {
+  it("hands final focus restoration to the nested trap cleanup for the current Story owner", () => {
+    const source = readFileSync(new URL("./JourneyStory.tsx", import.meta.url), "utf8");
+    const closeStart = source.indexOf("function closeMobileMediaDelete()");
+    const closeEnd = source.indexOf("function closeJourneyDelete()", closeStart);
+    const closeSource = source.slice(closeStart, closeEnd);
+
+    expect(closeStart).toBeGreaterThan(0);
+    expect(closeSource).toContain(
+      "restoreMobileMediaDeleteFocusRef.current = mobileLayout && mobileManageMode",
+    );
+    expect(closeSource).not.toContain("requestAnimationFrame");
+    expect(closeSource).not.toContain("document.querySelector");
+
+    const resolverStart = source.indexOf("const resolveMobileMediaSheetRestoreFocus");
+    const resolverEnd = source.indexOf("function closeJourneyDelete()", resolverStart);
+    const resolverSource = source.slice(resolverStart, resolverEnd);
+    expect(resolverStart).toBeGreaterThan(0);
+    expect(resolverSource).toContain("restoreMobileMediaDeleteFocusRef.current = false");
+    expect(resolverSource).toContain("return mobileManageViewerTriggerRef.current ?? previousFocus");
+
+    const trapStart = source.indexOf("const mobileMediaSheetRef = useNestedModalFocus");
+    const trapEnd = source.indexOf(");", trapStart);
+    const trapSource = source.slice(trapStart, trapEnd + 2);
+    expect(trapSource).toContain("resolveMobileMediaSheetRestoreFocus");
+  });
+});
+
 describe("finalizeMediaDragCommit (#65)", () => {
   it("commits the new semantic owner before removing the visible drag layers", () => {
     const events: string[] = [];
