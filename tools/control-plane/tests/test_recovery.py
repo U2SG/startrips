@@ -264,6 +264,35 @@ class ProcessClassificationCases(unittest.TestCase):
         self.assertEqual(['ST-073'], occupancy['features'])
         self.assertEqual(0, occupancy['claim_count'])
 
+    def test_scoped_worker_before_tokened_loop_deduplicates_same_claim(self):
+        token = 'experience-token-1234'
+        worktree = str((self.root / 'owner tree').resolve())
+        worktree64 = base64.urlsafe_b64encode(worktree.encode()).decode().rstrip('=')
+        worker_scope = str(self.root) + ';lane=experience;feature=ST-073;worktree=' + worktree + ';'
+        rows = self.base + [
+            # CIM may enumerate the model worker first. It proves the owner scope,
+            # but carries no run-loop token itself.
+            process(10, 1, 'node.exe',
+                    'node worker STARTRIPS_EXECUTION_OWNER=' + worker_scope),
+            # The scoped run-loop for that same owner carries the token.
+            process(11, 1, 'bash.exe', 'bash ' + str(self.root / 'run-loop.sh')
+                    + ' --carrier-lane=experience --carrier-token=' + token
+                    + ' --carrier-feature=ST-073 --carrier-worktree64=' + worktree64),
+            # A reconstructed same-token child has lost the scope arguments.
+            process(12, 11, 'bash.exe', 'bash ' + str(self.root / 'run-loop.sh')
+                    + ' --carrier-lane=experience --carrier-token=' + token),
+        ]
+
+        occupancy = execution.lane_occupancy(rows, self.root, 3, 'experience')
+        self.assertEqual(1, occupancy['occupied_slots'])
+        self.assertEqual(['ST-073'], occupancy['features'])
+        self.assertEqual(0, occupancy['claim_count'])
+
+        # One real Experience owner leaves the second slot usable; the same-token
+        # reconstructed child must not be returned as a competing claim.
+        self.assertEqual([], execution.competitors(
+            rows, self.root, 3, lane='experience', feature='ST-091'))
+
     def test_unreadable_descendant_reuses_unscoped_claim_token(self):
         token = 'experience-token-1234'
         rows = self.base + [
