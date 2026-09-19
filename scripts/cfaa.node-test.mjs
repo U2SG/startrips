@@ -7,6 +7,7 @@ import {
   globToRegExp,
   loadRegistry,
   pathMatchesGlob,
+  parseNulPaths,
   renderImpactMarkdown,
   resolveImpact,
   validateRegistry,
@@ -66,6 +67,13 @@ test("glob matching distinguishes recursive and single-segment wildcards", () =>
   assert.equal(pathMatchesGlob("src/owner/a/b.ts", "src/owner/*"), false);
   assert.equal(pathMatchesGlob("server/account-owner.ts", "server/*-owner.ts"), true);
   assert.equal(globToRegExp("src/**/share*").test("src/journey/deep/shareThing.ts"), true);
+});
+
+test("NUL-delimited Git paths preserve Unicode without C-quoting", () => {
+  const paths = parseNulPaths(Buffer.from("src/journey/旅行.ts\0src/scene/地球.ts\0", "utf8"));
+  assert.deepEqual(paths, ["src/journey/旅行.ts", "src/scene/地球.ts"]);
+  assert.equal(pathMatchesGlob(paths[0], "src/journey/**"), true);
+  assert.equal(pathMatchesGlob(paths[1], "src/scene/**"), true);
 });
 
 test("impact resolution is deterministic and records matching paths", () => {
