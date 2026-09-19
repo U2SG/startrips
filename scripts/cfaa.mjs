@@ -230,9 +230,35 @@ export function compareDeclarations(registry, impact, declaredIds) {
   };
 }
 
+function decodeGitPathBytes(bytes) {
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    let rendered = "";
+    for (const byte of bytes) {
+      if (byte >= 0x20 && byte <= 0x7e && byte !== 0x25) {
+        rendered += String.fromCharCode(byte);
+      } else {
+        rendered += "%" + byte.toString(16).toUpperCase().padStart(2, "0");
+      }
+    }
+    return rendered;
+  }
+}
+
 export function parseNulPaths(output) {
-  const text = Buffer.isBuffer(output) ? output.toString("utf8") : String(output);
-  return text.split("\0").filter(Boolean);
+  if (!Buffer.isBuffer(output)) {
+    return String(output).split("\0").filter((value) => value.length > 0);
+  }
+
+  const paths = [];
+  let start = 0;
+  for (let index = 0; index <= output.length; index += 1) {
+    if (index < output.length && output[index] !== 0) continue;
+    if (index > start) paths.push(decodeGitPathBytes(output.subarray(start, index)));
+    start = index + 1;
+  }
+  return paths;
 }
 
 function gitChangedPaths(base, head, root = ROOT) {
