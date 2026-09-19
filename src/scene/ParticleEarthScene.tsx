@@ -3209,6 +3209,11 @@ export function ParticleEarthScene({
       }
     };
 
+    // #432: Place Label anchors are written inside this pass, one pass per
+    // rendered frame. Publishing how many passes have completed lets a reader
+    // outside the scene wait for "the layout that reflects the state I just
+    // observed" instead of for a duration.
+    let placeLabelLayoutRevision = 0;
     const updateRouteVectorLayer = () => {
       if (routeVectorOpacity <= 0.01) return;
       sampleJourneyConnectorCard(false);
@@ -3647,6 +3652,11 @@ export function ParticleEarthScene({
         // by name alone is visible without inspecting glyphs.
         host.dataset.journeyCityLabelRedundantCount = String(redundantCityLabelCount);
       }
+
+      // Advances whether or not this Atlas has city tier data, so a reader
+      // waiting on label layout is never deadlocked by an empty label layer.
+      placeLabelLayoutRevision += 1;
+      host.dataset.placeLabelLayoutRevision = String(placeLabelLayoutRevision);
 
       updateJourneyConnector();
     };
@@ -4269,6 +4279,11 @@ export function ParticleEarthScene({
     let activeCoastlineLocalVertices = 0;
     let localCoastlineRetryAt = Number.NEGATIVE_INFINITY;
     let coastlineRefinementState = document.hidden ? "paused" : "fallback";
+    // #432: a terminal refinement state alone cannot say WHICH load it belongs
+    // to, so a reader can be satisfied by the previous region's finished load
+    // while the current one is still in flight. This counts applied near
+    // coastline geometries, so readiness is stated against a load identity.
+    let coastlineRefinementRevision = 0;
     let lastCoastlineRefinementSampleAt = Number.NEGATIVE_INFINITY;
 
     const removeParticleDimmingMaterial = (
@@ -4485,6 +4500,7 @@ export function ParticleEarthScene({
       activeCoastlineChunkIds = [...chunkIds];
       activeCoastlineLocalVertices = localVertexCount;
       coastlineRefinementState = terminalState;
+      coastlineRefinementRevision += 1;
     };
 
     const readLocalCoastlineChunk = async (
@@ -5418,6 +5434,13 @@ export function ParticleEarthScene({
       host.dataset.coastlineLocalChunkCache = String(coastlineLocalChunkCache.size);
       host.dataset.coastlineLocalVertices = String(activeCoastlineLocalVertices);
       host.dataset.coastlineRefinement = coastlineRefinementState;
+      // #432: the readiness a reader outside the scene needs is not "some load
+      // finished" but "the load for the region being asked about finished and
+      // nothing newer is in flight". The scene owns both facts, so it publishes
+      // them rather than leaving a wall clock to guess.
+      host.dataset.coastlineRefinementRevision = String(coastlineRefinementRevision);
+      host.dataset.coastlineRegionKey = activeCoastlineRegionKey ?? "";
+      host.dataset.coastlinePendingRegionKey = requestedCoastlineCacheKey ?? "";
       if (activeCoastlineInspectionTarget) {
         host.dataset.coastlineInspectionSource = activeCoastlineInspectionTarget.source;
         host.dataset.coastlineInspectionLat = activeCoastlineInspectionTarget.lat.toFixed(5);
