@@ -692,7 +692,7 @@ try {
         transitionPoint,
         APPROACH_WHEEL_DELTA,
         (state) => state.stage === "prewarm",
-        "prewarm policy fixture never mounted detail",
+        "prewarm policy fixture never reached prewarm",
       );
     } else {
       await wheelUntil(
@@ -711,7 +711,26 @@ try {
     90, true,
       );
     }
+    // The stage attribute is not the resource. It flips as soon as the band
+    // says so, before the lazily-loaded detail renderer has constructed
+    // anything, so an iteration gated on the stage alone can tear down a
+    // detail map that does not exist and pass vacuously. Wait for the
+    // construction itself, WITHOUT further wheel input so the stage under
+    // test is held (`regional` keeps prewarm even at readiness `mounted` --
+    // src/scene/earthDive.test.ts:172). The budget covers the 350 ms preload
+    // timer, the lazy chunk fetch and one MapLibre construction under
+    // SwiftShader, so it is longer than this file's 5 s interaction waits.
+    const detailConstructionObserved = await transition.page.waitForFunction(() => (
+      (window.__detailedEarthMapConstructionCount ?? 0) >= 1
+        && document.querySelector(".detailed-earth-map") !== null
+    ), null, { timeout: 15_000 }).then(() => true, () => false);
     const before = await readDive(transition.page);
+    // A pre-switch snapshot with nothing constructed cannot evidence the
+    // particle-only teardown contract, so it is an explicit failure rather
+    // than a silent pass.
+    if (before.mapConstructionCount < 1) {
+      intermediatePolicyFailures.push(`${targetStage}: no detail map was constructed before the policy switch, so its teardown assertion is vacuous: ${JSON.stringify({ detailConstructionObserved, before })}`);
+    }
     await activateButton(transition.page, transition.page.locator('[data-qa-earth-policy="particle-only"]'));
     await transition.page.waitForFunction(() => {
       const globe = document.querySelector(".living-atlas-globe");
