@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createEmailVerificationToken } from "better-auth/api";
 import { eq, inArray } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -200,8 +200,12 @@ async function startedUpload(options: {
   return upload as UploadRecord;
 }
 
+// `finalizeUpload` only accepts a lowercase SHA-256, so the seed is digested
+// rather than repeated: a distinct seed stays a distinct identity, a repeated
+// seed stays the same identity for the deduplication and replay cases, and no
+// seed can produce a value the verifier rejects.
 function contentHash(seed: string) {
-  return seed.repeat(64).slice(0, 64);
+  return createHash("sha256").update(seed).digest("hex");
 }
 
 async function evidenceRowFor(assetId: string) {
