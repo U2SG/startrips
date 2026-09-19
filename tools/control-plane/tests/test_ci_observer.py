@@ -125,6 +125,25 @@ class FingerprintCases(fixture.SyntheticOne):
         text = 'Warning: Service Unavailable, recovered\nError: [qa-city-label-anchoring] hong-kong-localization @3x: null'
         self.assertFalse(ci.normalize_failure(self.failed(), text)['infrastructure'])
 
+    def test_stale_family_text_cannot_reclassify_current_primary_failure(self):
+        failed = job('browser-qa / login-media', 9, 'failure', steps=[{'name': 'Run browser QA', 'conclusion': 'failure'}])
+        text = ('[qa-journey-rail] stale historical output: rail hidden\n'
+                'Error: Keyboard sort did not select seed-4')
+        value = ci.normalize_failure(failed, text)
+        self.assertNotEqual('journey-rail-visibility', value['family'])
+        self.assertEqual(value['fingerprint'][:16], value['family'])
+
+    def test_old_parser_history_does_not_inflate_new_family_occurrences(self):
+        history = self.root / '.agent-artifacts/ci-failures'
+        history.mkdir(parents=True, exist_ok=True)
+        (history / 'failure-old-v2.json').write_text(json.dumps({
+            'parser_version': 2, 'repo': 'synthetic/project', 'family': 'city-label-anchoring',
+            'run_id': 99, 'attempt': 1, 'job_id': 99,
+        }), encoding='utf-8')
+        result = self.record()
+        self.assertEqual(ci.PARSER_VERSION, result['parser_version'])
+        self.assertEqual(1, result['family_occurrences'])
+
     def test_same_observation_does_not_count_twice(self):
         self.record(); result = self.record()
         self.assertEqual(1, result['family_occurrences']); self.assertFalse(result['root_cause_required'])

@@ -15,6 +15,7 @@ from feature_store import _storage_mutex, StoreConflict
 from github_evidence import api, _repo, EvidenceUnknown
 
 DIMENSIONS = ('lane', 'assertion', 'fixture', 'viewport', 'dpr', 'stage')
+PARSER_VERSION = 3
 INFRA = ('failed to resolve action download info', 'service unavailable',
          'failed to download action', 'the runner has lost communication')
 
@@ -122,16 +123,19 @@ def normalize_failure(job, text):
             'viewport': field(r'viewport["\s:=]+(\d{3,4}\s*[x×]\s*\d{3,4})'),
             'dpr': field(r'(?:DPR|devicePixelRatio)["\s:=]+([1-9](?:\.\d+)?)'), 'stage': stage}
     fingerprint = hashlib.sha256(json.dumps(dims, sort_keys=True).encode()).hexdigest()
-    lower = text.lower()
     diagnostic = primary.lower()
+    lane = job['name'].lower()
     infrastructure = any(needle in diagnostic for needle in INFRA) and not re.search(r'assertionerror|assertion failed|\[qa[-_]', diagnostic)
-    if re.search(r'journey.?rail|rail.*hidden', lower):
+    # Family routing is derived only from the current primary assertion and the
+    # exact failing lane. Never let stale text elsewhere in a long browser log
+    # relabel an unrelated current failure.
+    if re.search(r'journey.?rail|rail.*hidden', diagnostic):
         family = 'journey-rail-visibility'
-    elif 'city-label' in job['name'] or re.search(r'hong kong|inland.control', lower):
+    elif 'city-label' in lane or re.search(r'hong kong|inland.control', diagnostic):
         family = 'city-label-anchoring'
     else:
         family = fingerprint[:16]
-    return {'parser_version': 2, 'fingerprint': fingerprint, **dims, 'family': family, 'infrastructure': infrastructure}
+    return {'parser_version': PARSER_VERSION, 'fingerprint': fingerprint, **dims, 'family': family, 'infrastructure': infrastructure}
 
 
 def write_json(path, data):
@@ -161,13 +165,14 @@ def observe_failures(root, repo, ci):
         record = normalize_failure(job, result.stdout)
         record.update(repo=repo, run_id=run['id'], attempt=job.get('run_attempt', run['run_attempt']), job_id=job['id'],
                       sha=run['head_sha'], job_url=job.get('html_url'), observed_at=datetime.datetime.now(datetime.timezone.utc).isoformat())
-        path = history / ('failure-%s-%s-%s-v2.json' % (run['id'], record['attempt'], job['id']))
+        path = history / ('failure-%s-%s-%s-v%s.json' % (run['id'], record['attempt'], job['id'], PARSER_VERSION))
         with _storage_mutex(root / 'feature_list.json'):
             old = []
             if history.exists():
                 for item in history.glob('failure-*.json'):
                     data = json.loads(item.read_bytes())
-                    if data['repo'] == repo and data['family'] == record['family']:
+                    if (data.get('parser_version') == record['parser_version']
+                            and data['repo'] == repo and data['family'] == record['family']):
                         old.append(data)
             identities = {(r['run_id'], r['attempt'], r['job_id']) for r in old}
             identities.add((record['run_id'], record['attempt'], record['job_id']))
