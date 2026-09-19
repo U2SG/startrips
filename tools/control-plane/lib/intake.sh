@@ -638,17 +638,55 @@ PY
 
 # JSONL, one line per mapped issue. Prints the path it wrote.
 intake_fetch_issue_states() {
-  local out="$INTAKE_DIR/mapped-issues.jsonl" n line
-  local -a nums=()
-  mapfile -t nums < <(intake_mapped_issue_numbers)
-  : > "$out"
-  for n in "${nums[@]}"; do
-    n="$(printf '%s' "$n" | tr -d '\r')"
-    [[ -n "$n" ]] || continue
-    line="$(intake_issue_state "$n" || true)"
-    [[ -n "$line" ]] || continue
-    printf '%s\n' "$line" >> "$out"
-  done
+  local out="$INTAKE_DIR/mapped-issues-${BASHPID}.jsonl"
+  local raw="$INTAKE_DIR/all-issues-${BASHPID}.jsonl"
+  # One paginated REST snapshot replaces one gh issue view process per mapped
+  # issue. The REST issue object already carries comment count, updated_at and
+  # labels, so this preserves the same comparison semantics without holding a
+  # pre-scope lane claim across dozens of sequential network round-trips.
+  if ! gh api --paginate "repos/$INTAKE_GH_REPO/issues?state=all&per_page=100" \
+      --jq '.[] | select(.pull_request == null) | {number,state,updated_at,comments,labels:[.labels[].name]} | @json' \
+      > "$raw"; then
+    echo "[intake] mapped issue state evidence UNKNOWN; batch fetch failed" >&2
+    return 6
+  fi
+python3 - "$INTAKE_FEATURES" "$raw" "$out" "$INTAKE_ROOT/lib" <<'PY'
+import json, sys
+feat_p, raw_p, out_p, libdir = sys.argv[1:5]
+sys.path.insert(0, libdir)
+from feature_store import load_document
+from intake_json import issue_number
+doc = load_document(feat_p)
+mapped = []
+for feature in doc["features"]:
+    number = issue_number(feature.get("issue"))
+    if number is not None and number not in mapped:
+        mapped.append(number)
+states = {}
+for line in open(raw_p, encoding="utf-8"):
+    line = line.strip()
+    if not line:
+        continue
+    item = json.loads(line)
+    number = int(item["number"])
+    states[number] = {
+        "number": number,
+        "state": str(item.get("state") or "").upper(),
+        "updatedAt": item.get("updated_at") or "",
+        "comments": int(item.get("comments") or 0),
+        "labels": list(item.get("labels") or []),
+    }
+missing = [number for number in mapped if number not in states]
+if missing:
+    print("[intake] mapped issue state evidence incomplete: " + ",".join(map(str, missing)), file=sys.stderr)
+    raise SystemExit(6)
+with open(out_p, "w", encoding="utf-8", newline="\n") as stream:
+    for number in mapped:
+        stream.write(json.dumps(states[number], ensure_ascii=False, separators=(",", ":")) + "\n")
+PY
+  local rc=$?
+  rm -f "$raw"
+  [[ "$rc" == "0" ]] || return "$rc"
   printf '%s' "$out"
 }
 
