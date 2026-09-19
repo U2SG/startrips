@@ -773,6 +773,16 @@ try {
     );
     const readsBeforeReplacement = run.state.originalReads;
     const callsBeforeReplacement = run.state.calls.length;
+    // Marks the exact DOM node the cover figure is mounted on, from the page
+    // rather than from product code. If the surface were torn down and rebuilt
+    // across this flow, its canonical read would restart for that reason alone
+    // and every assertion below would hold whether or not the read is keyed by
+    // the cover revision - i.e. the case would grade nothing. The marker
+    // surviving is what makes "a fresh read was issued BECAUSE the revision
+    // moved" the only reading left.
+    await page.evaluate(() => {
+      document.querySelector(".living-atlas__active-media").dataset.qaMountMark = "cover-revision";
+    });
 
     await page.locator(".living-atlas__active-hit-area").click();
     await page.locator(".journey-story").waitFor({ timeout: 20_000 });
@@ -786,6 +796,14 @@ try {
     await page.locator(".journey-composer").waitFor({ state: "detached", timeout: 20_000 });
     await page.locator(".living-atlas__active-media").waitFor({ timeout: 20_000 });
 
+    const stillTheSameMount = await page.evaluate(() => document.querySelector(
+      ".living-atlas__active-media",
+    )?.dataset.qaMountMark ?? null);
+    check(
+      "cover-revision-change/the-cover-surface-was-never-remounted",
+      stillTheSameMount === "cover-revision",
+      stillTheSameMount,
+    );
     check(
       "cover-revision-change/a-fresh-canonical-read-is-issued-for-the-new-revision",
       run.state.originalReads > readsBeforeReplacement
