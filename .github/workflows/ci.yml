@@ -190,6 +190,8 @@ jobs:
             command: pnpm qa:home-base-context
           - name: owner-share
             command: pnpm qa:owner-share
+          - name: cover-reveal
+            command: pnpm qa:cover-reveal
     steps:
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
@@ -226,6 +228,15 @@ jobs:
           name: coastline-refinement-${{ github.run_attempt }}
           path: artifacts/coastline-refinement/
           if-no-files-found: warn
+          retention-days: 7
+
+      - name: Upload cover reveal QA
+        if: ${{ always() && matrix.name == 'cover-reveal' }}
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: cover-reveal-${{ github.run_attempt }}
+          path: artifacts/cover-reveal/
+          if-no-files-found: error
           retention-days: 7
 
       - name: Upload Composer Route Point QA
