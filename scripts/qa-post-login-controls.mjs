@@ -1831,7 +1831,11 @@ async function verifyFinalAcceptanceMobileFlow() {
     const consoleErrors = [];
     const pageErrors = [];
     const failedRequests = [];
-    // #325: the 430 px iteration intermittently finds the desktop Journey rail
+    // #325: the desktop section of every iteration measures at 768x1024 (the
+    // resize below), so the viewport label only names which context raced --
+    // the recorded rail/target boxes are byte-identical across 320/360/390/430
+    // and the failure is not width-dependent. One iteration intermittently
+    // finds the desktop Journey rail
     // button unmeasurable (`visible:false`, the hit landing on the globe
     // canvas), and probing the target element alone cannot tell a rail that was
     // unmounted mid-reload from one measured mid-animation or inert. The rail is
@@ -1865,6 +1869,89 @@ async function verifyFinalAcceptanceMobileFlow() {
         const railButtons = [...document.querySelectorAll(".living-atlas__journey-rail li button")];
         const matching = railButtons.filter((button) => normalize(button.textContent).includes(wanted));
         const atlas = document.querySelector(".living-atlas");
+        // #325 third recurrence: the recorded snapshots are mutually exclusive
+        // with every declarative owner. `.living-atlas__journey-rail` itself
+        // declares `visibility: visible`, and the only rules that can override
+        // it (`.living-atlas.is-playback` / `.is-globe-picking`) also declare
+        // `opacity: 0` and pair with `inert` on the same node -- yet the failing
+        // snapshots report opacity 1, no atlas lifecycle class and no inert.
+        // Read the three remaining sources of authority in this same
+        // evaluation: the rail's own inline declaration, the tree it actually
+        // belongs to, and the cascade rules that really match it.
+        const railInlineStyle = rail?.getAttribute("style") ?? null;
+        const ancestorChain = [];
+        for (let node = rail?.parentElement; node && ancestorChain.length < 8; node = node.parentElement) {
+          const nodeStyle = getComputedStyle(node);
+          ancestorChain.push({
+            tag: node.tagName,
+            class: node.getAttribute("class"),
+            visibility: nodeStyle.visibility,
+            opacity: nodeStyle.opacity,
+            display: nodeStyle.display,
+            contentVisibility: nodeStyle.contentVisibility ?? null,
+            inlineStyle: node.getAttribute("style"),
+          });
+        }
+        // Every rule that declares `visibility` and matches the rail, with the
+        // media condition it sits under, so a cascade winner is named rather
+        // than inferred.
+        const matchedVisibilityRules = [];
+        const collectVisibilityRules = (rules, mediaText, mediaMatches, depth) => {
+          if (!rail || depth > 4) return;
+          for (const rule of rules) {
+            if (rule.media) {
+              collectVisibilityRules(
+                rule.cssRules ?? [],
+                rule.media.mediaText,
+                mediaMatches && window.matchMedia(rule.media.mediaText).matches,
+                depth + 1,
+              );
+              continue;
+            }
+            if (!rule.selectorText || !rule.style) continue;
+            const declared = rule.style.getPropertyValue("visibility");
+            if (!declared) continue;
+            let selectorMatches = false;
+            try { selectorMatches = rail.matches(rule.selectorText); } catch { continue; }
+            if (!selectorMatches) continue;
+            matchedVisibilityRules.push({
+              selector: rule.selectorText,
+              visibility: declared,
+              opacity: rule.style.getPropertyValue("opacity") || null,
+              media: mediaText,
+              mediaMatches,
+            });
+          }
+        };
+        for (const sheet of [...document.styleSheets, ...(document.adoptedStyleSheets ?? [])]) {
+          try { collectVisibilityRules(sheet.cssRules ?? [], null, true, 0); } catch { /* opaque sheet */ }
+        }
+        // #325 fourth recurrence: the cascade read above now excludes every
+        // declarative owner, so the remaining authorities are the ones that
+        // never appear in a matched rule -- an animation effect on the rail
+        // (a CSS animation, a CSS transition whose `transition-delay` parks the
+        // pre-change value, or a WAAPI animation) -- and the possibility that
+        // the rail measured here is not the rail that owns the target button.
+        // Read both in this same evaluation.
+        const timingOf = (animation) => {
+          try { return animation.effect?.getTiming?.() ?? null; } catch { return null; }
+        };
+        const summarizeAnimation = (animation) => ({
+          kind: animation.constructor?.name ?? null,
+          name: animation.animationName ?? animation.transitionProperty ?? null,
+          playState: animation.playState,
+          currentTime: animation.currentTime,
+          fill: timingOf(animation)?.fill ?? null,
+          delay: timingOf(animation)?.delay ?? null,
+          pseudoElement: animation.effect?.pseudoElement ?? null,
+          targetClass: animation.effect?.target?.getAttribute?.("class") ?? null,
+        });
+        const railAnimations = rail?.getAnimations
+          ? rail.getAnimations({ subtree: false }).map(summarizeAnimation)
+          : null;
+        const documentAnimations = document.getAnimations
+          ? document.getAnimations().slice(0, 12).map(summarizeAnimation)
+          : null;
         return {
           visible: rect.width > 0
             && rect.height > 0
@@ -1888,6 +1975,27 @@ async function verifyFinalAcceptanceMobileFlow() {
             atlasClass: atlas?.getAttribute("class") ?? null,
             atlasMobileV2: atlas?.getAttribute("data-mobile-v2") ?? null,
             targetBox: boxOf(element),
+            railInlineStyle,
+            atlasCount: document.querySelectorAll(".living-atlas").length,
+            railInMeasuredAtlas: atlas && rail ? atlas.contains(rail) : null,
+            railConnected: rail ? rail.isConnected : null,
+            ancestorChain,
+            matchedVisibilityRules,
+            railClass: rail?.getAttribute("class") ?? null,
+            railCount: document.querySelectorAll(".living-atlas__journey-rail").length,
+            railOwnsTarget: rail ? rail.contains(element) : null,
+            railCheckVisibility: rail?.checkVisibility
+              ? rail.checkVisibility({ contentVisibilityAuto: true, opacityProperty: true, visibilityProperty: true })
+              : null,
+            railAnimationName: railStyle?.animationName ?? null,
+            railAnimationPlayState: railStyle?.animationPlayState ?? null,
+            railAnimationFillMode: railStyle?.animationFillMode ?? null,
+            railTransitionProperty: railStyle?.transitionProperty ?? null,
+            railTransitionDuration: railStyle?.transitionDuration ?? null,
+            railTransitionDelay: railStyle?.transitionDelay ?? null,
+            railContentVisibility: railStyle?.contentVisibility ?? null,
+            railAnimations,
+            documentAnimations,
           },
         };
       }, targetTitle);
@@ -2494,20 +2602,96 @@ async function verifyFinalAcceptanceMobileFlow() {
       }
       await page.locator('.journey-playback[data-playback-mode="full"]').waitFor({ state: "visible", timeout: 8_000 });
       await page.locator(".journey-playback__soundtrack").waitFor({ state: "attached", timeout: 5_000 });
-      await page.waitForFunction(() => [
-        ".account-dock",
-        ".living-atlas__header",
-        ".living-atlas__journey-rail",
-        ".living-atlas__active",
-        ".living-atlas-globe__controls",
-      ].every((selector) => {
-        const element = document.querySelector(selector);
-        if (!(element instanceof HTMLElement)) return false;
-        const style = getComputedStyle(element);
-        return style.visibility === "hidden"
-          && Number.parseFloat(style.opacity) === 0
-          && style.pointerEvents === "none";
-      }), null, { timeout: 5_000 });
+      try {
+        await page.waitForFunction(() => {
+          const chromeIsolated = [
+            ".account-dock",
+            ".living-atlas__header",
+            ".living-atlas__active",
+            ".living-atlas-globe__controls",
+          ].every((selector) => {
+            const element = document.querySelector(selector);
+            if (!(element instanceof HTMLElement)) return false;
+            const style = getComputedStyle(element);
+            return style.visibility === "hidden"
+              && Number.parseFloat(style.opacity) === 0
+              && style.pointerEvents === "none";
+          });
+          // #325: Playback isolates the Journey Rail with `inert` plus opacity and
+          // pointer-events, and deliberately does not own its `visibility`, so the
+          // released Atlas never has to be handed that property back. The rail is
+          // therefore required to read `visible` here - the product's claim is that
+          // no lifecycle state ever takes that property over - on top of the
+          // isolation marker, `inert`, opacity and pointer-events. That is a strict
+          // superset of what the old rail clause asserted, not a replacement.
+          const rail = document.querySelector(".living-atlas__journey-rail");
+          if (!(rail instanceof HTMLElement)) return false;
+          const railStyle = getComputedStyle(rail);
+          return chromeIsolated
+            && rail.inert
+            && (rail.dataset.railIsolation ?? "").split(" ").includes("playback")
+            && Number.parseFloat(railStyle.opacity) === 0
+            && railStyle.pointerEvents === "none"
+            && railStyle.visibility === "visible";
+        }, null, { timeout: 5_000 });
+      } catch (error) {
+        // #325: the predicate above is a conjunction over the Atlas root state, the
+        // chrome isolation and five rail properties, and a bare timeout names none
+        // of them. Report the observed state once, then rethrow the original
+        // failure unchanged. This adds no retry, no polling and no extra waiting
+        // time: it runs after the same 5s budget has already expired.
+        const isolationState = await page.evaluate(() => {
+          const rail = document.querySelector(".living-atlas__journey-rail");
+          const railStyle = rail instanceof HTMLElement ? getComputedStyle(rail) : null;
+          const ruleSelectors = [];
+          for (const sheet of Array.from(document.styleSheets)) {
+            let rules;
+            try {
+              rules = Array.from(sheet.cssRules ?? []);
+            } catch {
+              ruleSelectors.push("<cross-origin sheet>");
+              continue;
+            }
+            for (const rule of rules) {
+              const selector = rule.selectorText;
+              if (typeof selector === "string" && selector.includes("data-rail-isolation")) {
+                ruleSelectors.push(`${selector} { ${rule.style?.cssText ?? ""} }`);
+              }
+            }
+          }
+          return {
+            atlasClass: document.querySelector(".living-atlas")?.className ?? null,
+            playbackMode: document.querySelector(".journey-playback")?.getAttribute("data-playback-mode") ?? null,
+            railPresent: rail instanceof HTMLElement,
+            railInert: rail instanceof HTMLElement ? rail.inert : null,
+            railIsolationAttribute: rail instanceof HTMLElement ? rail.getAttribute("data-rail-isolation") : null,
+            railOpacity: railStyle?.opacity ?? null,
+            railPointerEvents: railStyle?.pointerEvents ?? null,
+            railVisibility: railStyle?.visibility ?? null,
+            railInlineStyle: rail instanceof HTMLElement ? rail.getAttribute("style") : null,
+            chrome: [
+              ".account-dock",
+              ".living-atlas__header",
+              ".living-atlas__active",
+              ".living-atlas-globe__controls",
+            ].map((selector) => {
+              const element = document.querySelector(selector);
+              if (!(element instanceof HTMLElement)) return { selector, present: false };
+              const style = getComputedStyle(element);
+              return {
+                selector,
+                present: true,
+                visibility: style.visibility,
+                opacity: style.opacity,
+                pointerEvents: style.pointerEvents,
+              };
+            }),
+            isolationRules: ruleSelectors,
+          };
+        });
+        console.error(`[qa-post-login] final:${viewportLabel}:playback-isolation-state ${JSON.stringify(isolationState)}`);
+        throw error;
+      }
       const cinematic = await page.evaluate(() => {
         const atlas = document.querySelector(".living-atlas");
         const auth = document.querySelector(".auth-continuity");
@@ -2534,7 +2718,13 @@ async function verifyFinalAcceptanceMobileFlow() {
           headerInert: header instanceof HTMLElement ? header.inert : null,
           headerHidden: hidden(header),
           railInert: rail instanceof HTMLElement ? rail.inert : null,
-          railHidden: hidden(rail),
+          railIsolation: rail instanceof HTMLElement ? rail.dataset.railIsolation ?? null : null,
+          railIsolated: rail instanceof HTMLElement
+            && rail.inert
+            && (rail.dataset.railIsolation ?? "").split(" ").includes("playback")
+            && Number.parseFloat(getComputedStyle(rail).opacity) === 0
+            && getComputedStyle(rail).pointerEvents === "none"
+            && getComputedStyle(rail).visibility === "visible",
           activeInert: active instanceof HTMLElement ? active.inert : null,
           activeHidden: hidden(active),
           controlsHidden: hidden(controls),
@@ -2554,7 +2744,7 @@ async function verifyFinalAcceptanceMobileFlow() {
         || cinematic.headerInert !== true
         || !cinematic.headerHidden
         || cinematic.railInert !== true
-        || !cinematic.railHidden
+        || !cinematic.railIsolated
         || cinematic.activeInert !== true
         || !cinematic.activeHidden
         || !cinematic.controlsHidden

@@ -423,25 +423,39 @@ export function atlasCinematicIsolationActive(
 }
 
 /**
- * The desktop Journey Rail has two explicit owners that make it non-visible.
- * Keep the release state explicit too: after Playback/point-picking ends the
- * same render that releases `inert` also writes `visibility: visible`, rather
- * than relying on an implicit CSS initial-value restoration across responsive
- * and overlay ownership changes.
+ * #325: the desktop Journey Rail's isolation while Playback or point-picking
+ * owns the stage. `inert` removes it from focus, the a11y tree and hit-testing,
+ * and the matching CSS rule removes it visually with opacity and
+ * pointer-events. Nothing here describes a rail `visibility`, because the rail
+ * has a single `visibility` declaration in the whole product - the released
+ * `visible` in its own rule - and no Atlas state may take that over. The
+ * recorded recurrences all read the rail back released on opacity while the
+ * lifecycle rule's `visibility: hidden` stayed behind on the very same node, so
+ * an owner the release cannot reliably hand back is the state path itself, not
+ * a symptom of one.
+ *
+ * `isolatedBy` names Globe Focus too, because the rail is `inert` there as well,
+ * but the marker's CSS rule covers only Playback and point-picking: Globe Focus
+ * keeps its own rule, which fades the whole layer on a transition.
  */
-export function journeyRailVisibility(
+export function journeyRailIsolation(
   playbackActive: boolean,
   globePickActive: boolean,
-): "hidden" | "visible" {
-  return playbackActive || globePickActive ? "hidden" : "visible";
+  globeFocusMode: boolean,
+): { inert: true | undefined; isolatedBy: readonly string[] } {
+  const isolatedBy = [
+    playbackActive ? "playback" : null,
+    globePickActive ? "globe-pick" : null,
+    globeFocusMode ? "globe-focus" : null,
+  ].filter((owner): owner is string => owner !== null);
+  return { inert: isolatedBy.length > 0 || undefined, isolatedBy };
 }
 export function synchronizeJourneyRailVisibility(
   rail: { style: { visibility: string } } | null,
 ): void {
   if (!rail) return;
-  // Visibility is owned by the Atlas lifecycle classes in CSS. Clear any stale
-  // inline value left by an older render so the current root state is the sole
-  // authority and a released Playback/point-pick cannot remain hidden.
+  // The rail's one declared `visibility` owner is its own released rule. Clear
+  // any inline value, whoever wrote it, so no second owner can outrank it.
   rail.style.visibility = "";
 }
 
@@ -1101,11 +1115,11 @@ export function LivingAtlasApp({
   });
   const [mobileSheetJourneyId, setMobileSheetJourneyId] = useState<string | null>(null);
   const [mobilePickerOpen, setMobilePickerOpen] = useState(false);
-  // #325 recurrence: Story/playback return and compact-layout remounts can leave a
-  // historical inline `visibility:hidden` behind even after Atlas ownership releases.
-  // CSS owns hidden/visible from the current root lifecycle classes; every layout
-  // commit clears stale inline ownership before paint. This is product state repair,
-  // not a QA wait/retry.
+  // #325: the rail is released by removing the Atlas lifecycle class, and the
+  // released state must not depend on restoring a property that isolation took
+  // over. Isolation therefore never touches `visibility`, and every layout commit
+  // clears any inline value before paint. This is product state repair, not a QA
+  // wait/retry.
 
   /**
    * The open share surface, and which Journey it is locked to.
@@ -2547,6 +2561,8 @@ export function LivingAtlasApp({
     );
   }
 
+  const railIsolation = journeyRailIsolation(playbackActive, globePickActive, globeFocusMode);
+
   return (
     <main
       className={`living-atlas${isMobileV2 ? " is-mobile-v2" : ""}${arrivalJourneyId ? " has-arrival" : ""}${globePickActive ? " is-globe-picking" : ""}${playbackActive ? " is-playback" : ""}${globeFocusState(globeFocusMode).className}`}
@@ -2688,7 +2704,8 @@ export function LivingAtlasApp({
           ref={journeyRailRef}
           className="living-atlas__journey-rail motion-staged"
           aria-label={`全部旅程，共 ${journeys.length} 段`}
-          inert={globeFocusMode || globePickActive || playbackActive || undefined}
+          inert={railIsolation.inert}
+          data-rail-isolation={railIsolation.isolatedBy.join(" ") || undefined}
         >
           <div className="living-atlas__journey-rail-heading">
             <span>旅程</span>

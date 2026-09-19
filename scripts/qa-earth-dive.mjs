@@ -731,7 +731,14 @@ try {
     if (after.stage !== "particle" || after.owner !== "particle" || after.earthPolicy !== "particle-only") {
       intermediatePolicyFailures.push(`${targetStage}: hard policy did not own the terminal state: ${JSON.stringify(after)}`);
     }
-    if (after.mapDomCount !== 0 || after.mapCanvasCount !== 0 || after.mapRemovalCount !== before.mapConstructionCount) {
+    // Both counters come from the SAME post-policy snapshot on purpose. The
+    // stage attribute flips before a construction is observable, so a detail
+    // map can be constructed between the `before` read and the policy switch;
+    // comparing a post-switch removal count against a pre-switch construction
+    // count then reds a run in which every construction was in fact removed.
+    // Reading both after the switch is strictly stronger: a construction that
+    // outlives hard policy fails here even when it raced the `before` read.
+    if (after.mapDomCount !== 0 || after.mapCanvasCount !== 0 || after.mapRemovalCount !== after.mapConstructionCount) {
       intermediatePolicyFailures.push(`${targetStage}: detail lifetime survived hard policy: ${JSON.stringify({ before, after })}`);
     }
     if (after.cameraHandbackLat !== null || after.cameraHandbackLon !== null) {
