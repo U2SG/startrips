@@ -103,6 +103,12 @@ test("impact resolution is deterministic and records matching paths", () => {
   ]);
 });
 
+test("password route changes suggest the replay invariant", () => {
+  const registry = loadRegistry();
+  const impact = resolveImpact(registry, ["server/routes/account-password.ts"]);
+  assert.ok(impact.impacted.some((entry) => entry.id === "CFAA-REPLAY-001"));
+});
+
 test("declared IDs are deduplicated and compared with suggestions", () => {
   const registry = sampleRegistry();
   const impact = resolveImpact(registry, ["src/owner/a.ts"]);
