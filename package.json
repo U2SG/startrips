@@ -50,6 +50,7 @@
     "qa:final-acceptance": "node scripts/qa-post-login-controls.mjs --final-acceptance",
     "qa:login-v3": "node scripts/qa-login-v3.mjs",
     "qa:mobile-contract": "node scripts/qa-mobile-contract.mjs",
+    "qa:cover-reveal": "node scripts/qa-cover-reveal.mjs",
     "build:city": "node scripts/build-city-data.mjs",
     "cfaa:validate": "node scripts/cfaa.mjs validate",
     "cfaa:impact": "node scripts/cfaa.mjs impact"
