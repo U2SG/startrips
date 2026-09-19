@@ -157,7 +157,7 @@ def command_is_readonly_probe(command):
     if not re.search(r'(?:^|[\s"/])run-loop[.]sh(?:[\s"\x00]|$)', text):
         return False
     return bool(re.search(
-        r'(?:^|[\s"])--(?:next|next-action|plan|work-prs|ready-prs|pr-review)(?=$|[\s"])',
+        r'(?:^|[\s"])--(?:next|next-action|plan|work-prs|ready-prs|pr-review)(?=$|[;\s"])',
         text))
 
 

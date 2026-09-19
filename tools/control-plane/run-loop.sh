@@ -55,6 +55,19 @@ if [[ -n "$CARRIER_FEATURE" || -n "$CARRIER_WORKTREE64" ]]; then
     echo "INVALID_CARRIER_WORKTREE" >&2; exit 64;
   }
 fi
+# Read-only selector/action probes also need an invocation token on Windows/MSYS.
+# Without one, the probe's own transient bash layers can lose `--plan`/`--next`
+# from their provider-visible argv and look like an unscoped Experience peer.
+# Tokenizing the exact probe invocation lets execution.py exclude only its own
+# process cluster while preserving any genuinely separate same-lane claim.
+READONLY_PROBE=""
+case "${1:-}" in
+  --next|--next-action|--plan|--work-prs|--ready-prs|--pr-review) READONLY_PROBE=1 ;;
+esac
+if [[ -z "$CARRIER_LANE" && -n "$READONLY_PROBE" ]]; then
+  token="probe-$(date +%s)-$$-$RANDOM"
+  exec "$ROOT/run-loop.sh" "--carrier-lane=$STARTRIPS_LANE" "--carrier-token=$token" "$@"
+fi
 # A real execution re-execs once with provider-visible lane metadata. Direct
 # Experience execution also carries a one-use invocation token because MSYS can
 # sever Windows ancestry even for the script currently running. The provider
