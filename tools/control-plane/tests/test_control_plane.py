@@ -558,7 +558,7 @@ class WiringTests(SyntheticOne):
         self.assertNotIn('open(p,\'w\'', loop)
         self.assertNotIn("open(feat_p, 'w'", intake)
         self.assertIn('commit_document(feat_p', intake)
-        self.assertIn('--strict-mcp-config --agent startrips-triage', intake)
+        self.assertIn('--setting-sources project --strict-mcp-config --agent startrips-triage', intake)
         self.assertIn('--model sonnet', intake)
         self.assertNotIn('--model opus', intake)
         self.assertIn('triage-${BASHPID}.log', intake)
