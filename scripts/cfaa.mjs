@@ -195,21 +195,27 @@ export function compareDeclarations(registry, impact, declaredIds) {
   };
 }
 
+export function parseNulPaths(output) {
+  const text = Buffer.isBuffer(output) ? output.toString("utf8") : String(output);
+  return text.split("\0").filter(Boolean);
+}
+
 function gitChangedPaths(base, head, root = ROOT) {
   nonEmptyString(base, "base");
   nonEmptyString(head, "head");
   let output;
   try {
-    output = execFileSync("git", ["diff", "--no-renames", "--name-only", base + "..." + head], {
+    output = execFileSync("git", ["diff", "--no-renames", "--name-only", "-z", base + "..." + head], {
       cwd: root,
-      encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
     });
   } catch (error) {
-    const stderr = error && typeof error === "object" && "stderr" in error ? String(error.stderr).trim() : "";
+    const stderr = error && typeof error === "object" && "stderr" in error
+      ? (Buffer.isBuffer(error.stderr) ? error.stderr.toString("utf8") : String(error.stderr)).trim()
+      : "";
     fail("cannot diff " + base + "..." + head + (stderr ? ": " + stderr : ""));
   }
-  return output.split(/\r?\n/).filter(Boolean);
+  return parseNulPaths(output);
 }
 
 function readPullRequestBody(eventPath) {
