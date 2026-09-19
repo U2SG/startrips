@@ -660,8 +660,12 @@ try {
       leftTheDerivative >= 0 && !samples.slice(leftTheDerivative).includes("derivative"),
       samples,
     );
+    // This case keeps re-signing on a one second cycle, so the canonical image
+    // is briefly absent while each refresh is in flight. Wait for the stage to
+    // be gone AND a fresh read to be on screen before grading the final state.
     await page.waitForFunction(
-      () => document.querySelector(".living-atlas__active-media-reveal") === null,
+      () => document.querySelector(".living-atlas__active-media-reveal") === null
+        && document.querySelector(".living-atlas__active-media img") !== null,
       undefined,
       { timeout: 40_000 },
     );

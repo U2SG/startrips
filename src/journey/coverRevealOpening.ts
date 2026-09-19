@@ -188,14 +188,21 @@ export type HeldCoverRevealPair = {
  *
  * A new opening identity always takes a fresh pair: that is a different cover
  * revision, not a re-signed read of the same one.
+ *
+ * The original url is required to BEGIN an opening and not to continue one.
+ * Every refresh puts that read back through `loading`, so a pair recomputed
+ * from the current url would unmount the stage for each gap and remount it
+ * into a restart — which is exactly how a refresh inside a reveal was found to
+ * break it. Once both images are loaded, a reveal needs neither url again.
  */
 export function holdCoverRevealOpeningPair(
   held: HeldCoverRevealPair | null,
   opening: { identity: string; generatedUrl: string } | null,
   originalUrl: string | null,
 ): HeldCoverRevealPair | null {
-  if (!opening || !originalUrl) return null;
+  if (!opening) return null;
   if (held && held.identity === opening.identity) return held;
+  if (!originalUrl) return null;
   return {
     identity: opening.identity,
     pair: { generatedFirst: opening.generatedUrl, originalCover: originalUrl },

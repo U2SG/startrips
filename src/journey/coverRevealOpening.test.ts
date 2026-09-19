@@ -221,7 +221,14 @@ describe("holdCoverRevealOpeningPair", () => {
     });
   });
 
-  it("holds nothing while either half of the pair is missing", () => {
+  it("keeps the running pair across the loading gap of a refresh", () => {
+    // Every refresh of the original read passes through `loading`, so the url
+    // is briefly absent under a reveal that has already loaded both images.
+    const first = holdCoverRevealOpeningPair(null, opening, "https://cdn/original?sig=1");
+    expect(holdCoverRevealOpeningPair(first, opening, null)).toBe(first);
+  });
+
+  it("holds nothing before an opening has both of its images", () => {
     expect(holdCoverRevealOpeningPair(null, null, "https://cdn/original?sig=1")).toBeNull();
     expect(holdCoverRevealOpeningPair(null, opening, null)).toBeNull();
     const first = holdCoverRevealOpeningPair(null, opening, "https://cdn/original?sig=1");
