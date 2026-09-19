@@ -275,6 +275,17 @@ test("impact markdown neutralizes Markdown link, image, and code syntax in filen
   assert.doesNotMatch(markdown, /`code`/);
 });
 
+test("impact markdown preserves bare carriage returns as literal evidence", () => {
+  const registry = sampleRegistry();
+  registry.invariants[0].pathGlobs = ["src/owner/**"];
+  const changedPath = "src/owner/a\rb.ts";
+  const impact = resolveImpact(registry, [changedPath]);
+  const comparison = compareDeclarations(registry, impact, []);
+  const markdown = renderImpactMarkdown(registry, impact, comparison);
+  assert.match(markdown, /src\/owner\/a&#13;b\.ts/);
+  assert.doesNotMatch(markdown, /src\/owner\/ab\.ts/);
+});
+
 test("impact markdown neutralizes strikethrough and other punctuation syntax", () => {
   const registry = sampleRegistry();
   registry.invariants[0].pathGlobs = ["src/owner/**"];
