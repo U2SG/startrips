@@ -259,7 +259,7 @@ test("impact markdown escapes table metacharacters in Git filenames", () => {
   const impact = resolveImpact(registry, ["src/owner/a|b<test>\nfile.ts"]);
   const comparison = compareDeclarations(registry, impact, []);
   const markdown = renderImpactMarkdown(registry, impact, comparison);
-  assert.match(markdown, /a&#124;b&lt;test&gt;<br>file\.ts/);
+  assert.match(markdown, /a&#124;b&#60;test&#62;<br>file\.ts/);
   assert.doesNotMatch(markdown, /a\|b<test>/);
 });
 
