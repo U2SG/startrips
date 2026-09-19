@@ -107,6 +107,9 @@ export function validateRegistry(registry) {
       }
       if (evidence.path !== undefined) {
         const evidencePath = repoRelative(evidence.path, id + ".evidence[" + index + "].path");
+        if (evidence.path !== evidencePath) {
+          fail(id + ".evidence[" + index + "].path must be canonical without surrounding whitespace or backslashes");
+        }
         const absolute = path.join(ROOT, evidencePath);
         if (!fs.existsSync(absolute)) {
           fail(id + ".evidence[" + index + "].path does not exist: " + evidencePath);
