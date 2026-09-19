@@ -999,3 +999,108 @@ export const accountExperiencePreferences = pgTable(
     ),
   ],
 );
+
+// #419: recorded-track evidence for one Journey — the ordered positions some
+// recording produced, stored beside the Journey's Route Points and never as
+// them. There is deliberately no foreign key to `journey_route_points` in
+// either direction: authoring, reordering or deleting a Route Point must not
+// be able to reach a stored sample, and no sample can ever be read back as a
+// Route Point.
+//
+// The rows are evidence, not verified fact. `source` records how the samples
+// were produced and `provenance` records who says so; neither claims the
+// journey happened that way. A break between two segments is a break in the
+// recording, never a travelled line to be drawn across.
+//
+// `operation_key` is the idempotency identity of one write. It is unique
+// per Journey and per segment position, so replaying a write lands on the
+// same rows, and the key cannot deduplicate across Journeys, Atlases or
+// members — a key someone else chose says nothing here.
+export const journeyRecordedTrackSegments = pgTable(
+  "journey_recorded_track_segments",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    journeyId: uuid("journey_id")
+      .notNull()
+      .references(() => journeys.id, { onDelete: "cascade" }),
+    operationKey: text("operation_key").notNull(),
+    // SHA-256 over the canonical normalized payload. It is what separates a
+    // replay of the same write from a different write reusing the key.
+    payloadFingerprint: text("payload_fingerprint").notNull(),
+    segmentOrder: integer("segment_order").notNull(),
+    source: text("source").notNull(),
+    provenance: text("provenance").notNull().default(""),
+    sampleCount: integer("sample_count").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("journey_recorded_track_segments_operation_unique").on(
+      table.journeyId,
+      table.operationKey,
+      table.segmentOrder,
+    ),
+    index("journey_recorded_track_segments_journey_order_idx").on(
+      table.journeyId,
+      table.segmentOrder,
+    ),
+    check(
+      "journey_recorded_track_segments_source_check",
+      sql`${table.source} in ('device-recording', 'imported-file', 'unknown')`,
+    ),
+    check(
+      "journey_recorded_track_segments_order_check",
+      sql`${table.segmentOrder} >= 0 and ${table.segmentOrder} < 64`,
+    ),
+    check(
+      "journey_recorded_track_segments_sample_count_check",
+      sql`${table.sampleCount} between 1 and 5000`,
+    ),
+  ],
+);
+
+// One recorded position inside a segment. `recorded_at` and `accuracy_meters`
+// are nullable because a recording that reported neither is still evidence;
+// they are never filled in with a guess. Ordering is explicit rather than
+// derived from the timestamp, so a recording whose clock stepped backwards is
+// stored as it arrived instead of being silently re-sorted.
+export const journeyRecordedTrackSamples = pgTable(
+  "journey_recorded_track_samples",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    segmentId: uuid("segment_id")
+      .notNull()
+      .references(() => journeyRecordedTrackSegments.id, {
+        onDelete: "cascade",
+      }),
+    sampleOrder: integer("sample_order").notNull(),
+    latitude: doublePrecision("latitude").notNull(),
+    longitude: doublePrecision("longitude").notNull(),
+    recordedAt: timestamp("recorded_at", { withTimezone: true }),
+    accuracyMeters: doublePrecision("accuracy_meters"),
+  },
+  (table) => [
+    uniqueIndex("journey_recorded_track_samples_segment_order_unique").on(
+      table.segmentId,
+      table.sampleOrder,
+    ),
+    // A non-finite coordinate fails these bounds in PostgreSQL as well as in
+    // `normalizeRecordedTrackWrite`: 'NaN'::float8 compares above every finite
+    // value, so it is outside the range rather than inside it.
+    check(
+      "journey_recorded_track_samples_coordinate_check",
+      sql`${table.latitude} between -90 and 90
+        and ${table.longitude} between -180 and 180`,
+    ),
+    check(
+      "journey_recorded_track_samples_accuracy_check",
+      sql`${table.accuracyMeters} is null
+        or ${table.accuracyMeters} between 0 and 1000000`,
+    ),
+    check(
+      "journey_recorded_track_samples_order_check",
+      sql`${table.sampleOrder} >= 0`,
+    ),
+  ],
+);
