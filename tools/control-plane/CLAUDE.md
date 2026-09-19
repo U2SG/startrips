@@ -216,11 +216,13 @@ otherwise oldest first, at most `rules.intake.max_per_iteration` (3) per iterati
 `no-loop` (`rules.intake.skip_label`) is never a candidate — that label is how a human keeps an issue
 out of the queue permanently without arguing with the harness.
 
-**Triage.** One headless `startrips-triage` session per candidate. That agent is read-only: it
-reads this manual, `startrips/CLAUDE.md`, `startrips/CONTEXT.md`, the whole `feature_list.json`
-and `gh issue view <n> --comments`, verifies the claimed gap against the real code, and returns one
-JSON object between `<<<INTAKE` and `INTAKE>>>`. It never comments, never creates anything and
-never writes a file; the loop applies the decision and posts the single issue comment.
+**Triage.** One headless `startrips-triage` session per candidate. That agent is read-only. It
+reads this manual, `startrips/CLAUDE.md`, `startrips/CONTEXT.md`, the issue in full and a compact
+direct projection of the authoritative `feature_list.json` (identity/placement/gate fields only),
+then expands only the proposed anchor/dependency/sibling rows it actually needs. Never dump the
+whole raw ONE into model context; the projection is ephemeral evidence, not a second backlog. It
+verifies the claimed gap against the real code and returns one JSON object between `<<<INTAKE` and
+`INTAKE>>>`. It never comments, creates or writes; the parent applies the decision.
 
 **Placement.** The triage output carries a `placement` block — an existing feature as `anchor`,
 `before` or `after`, and a rationale. Placement follows the problem area and the code the feature
