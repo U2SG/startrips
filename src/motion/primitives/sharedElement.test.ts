@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { runSharedElementMorph, runSharedElementTransition } from "./sharedElement";
+import {
+  runSharedElementMorph,
+  runSharedElementTransition,
+  scrollInvalidatesSharedElementMorph,
+} from "./sharedElement";
 
 // `runSharedElementTransition` falls back to a plain update when the View
 // Transitions API is unavailable (or reduced motion is on). These tests pin
@@ -43,5 +47,40 @@ describe("runSharedElementMorph (#18)", () => {
     });
     expect(update).toHaveBeenCalledTimes(1);
     expect(onCleanup).toHaveBeenCalledTimes(1);
+  });
+});
+
+// #429: the compact Route Point context panel owns its own overflow, so a
+// scroll inside it is routinely still queued when its entry is clicked. That
+// scroll reaches the morph's capture-phase listener but cannot move either end
+// of the handoff, so it must not cancel the morph and remove the published
+// observation aperture.
+describe("scrollInvalidatesSharedElementMorph (#429)", () => {
+  const source = { id: "source" } as unknown as Node;
+  const target = { id: "target" } as unknown as Node;
+  const containerOf = (...held: Node[]) => ({ contains: (node: Node | null) => held.includes(node as Node) });
+
+  it("invalidates on a document scroll", () => {
+    expect(scrollInvalidatesSharedElementMorph(null, true, source, target)).toBe(true);
+  });
+
+  it("invalidates when the scrolled container holds the source", () => {
+    expect(scrollInvalidatesSharedElementMorph(containerOf(source), false, source, null)).toBe(true);
+  });
+
+  it("invalidates when the scrolled container holds the resolved target", () => {
+    expect(scrollInvalidatesSharedElementMorph(containerOf(target), false, source, target)).toBe(true);
+  });
+
+  it("ignores an unrelated subtree scroll", () => {
+    expect(scrollInvalidatesSharedElementMorph(containerOf(), false, source, target)).toBe(false);
+  });
+
+  it("ignores a subtree that only holds a target the morph has not resolved yet", () => {
+    expect(scrollInvalidatesSharedElementMorph(containerOf(target), false, source, null)).toBe(false);
+  });
+
+  it("ignores a scroll whose target is not an element", () => {
+    expect(scrollInvalidatesSharedElementMorph(null, false, source, target)).toBe(false);
   });
 });

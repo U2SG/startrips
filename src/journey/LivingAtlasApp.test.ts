@@ -1031,14 +1031,24 @@ describe("Route Point context integration (#291)", () => {
     const helperStart = appSource.indexOf("function createPlaceMediaObservationElement");
     const helperEnd = appSource.indexOf("export function playbackFocusPointForCameraTarget", helperStart);
     const helper = appSource.slice(helperStart, helperEnd);
+    const anchorStart = appSource.indexOf("function projectedRoutePointMarker");
+    const anchor = appSource.slice(anchorStart, appSource.indexOf("function placeMediaSourceDimensions", anchorStart));
     const openStart = appSource.indexOf("function openJourneyStory(journeyId: string, routePointId: string | null)");
     const closeStart = appSource.indexOf("function closeJourneyStory", openStart);
     const open = appSource.slice(openStart, closeStart);
     const close = appSource.slice(closeStart, appSource.indexOf("const homeNarrativeContextForJourney", closeStart));
 
     expect(helperStart).toBeGreaterThan(0);
-    expect(helper).toContain("liveRoutePointMarker(journeyId, routePointId)");
+    expect(helper).toContain("projectedRoutePointMarker(journeyId, routePointId)");
     expect(helper).toContain("marker.getBoundingClientRect()");
+    // The anchor is still the live projected marker: projectedRoutePointMarker
+    // prefers liveRoutePointMarker's settled result and otherwise measures the
+    // same marker element's current geometry. No stored coordinate is read.
+    expect(anchorStart).toBeGreaterThan(0);
+    expect(anchor).toContain("liveRoutePointMarker(journeyId, routePointId)");
+    expect(anchor).toContain("selectPlaceMediaMarkerAnchor(");
+    expect(anchor).toContain("element.getBoundingClientRect()");
+    expect(anchor).toContain('.particle-earth-route__point');
     expect(helper).toContain("resolvePlaceMediaObservationRect(");
     expect(open).toContain("routePointRepresentativeVisual(sharedAssetId)");
     expect(open).toContain("setStoryInitialAssetId(routePointId ? sharedAssetId : null)");
