@@ -43,6 +43,29 @@ class ProcessClassificationCases(unittest.TestCase):
         conflict = execution.competitors(rows, self.root, 3, lane='backend')[0]
         self.assertEqual(10, conflict['pid']); self.assertEqual('backend', conflict['lane'])
 
+    def test_idle_resident_backend_supervisor_does_not_consume_backend_slot(self):
+        rows = self.base + [process(10, command='bash ' + str(self.root / 'loop-supervisor.sh')
+                                    + ' --carrier-lane=backend')]
+        occupancy = execution.lane_occupancy(rows, self.root, 3, 'backend')
+        self.assertEqual((0, 1, 0, []),
+                         (occupancy['occupied_slots'], occupancy['available_slots'],
+                          occupancy['claim_count'], occupancy['features']))
+
+    def test_resident_backend_supervisor_counts_scoped_child_not_itself(self):
+        worktree = str((self.root / 'backend-owner').resolve())
+        token = base64.urlsafe_b64encode(worktree.encode('utf-8')).decode('ascii').rstrip('=')
+        rows = self.base + [
+            process(10, command='bash ' + str(self.root / 'loop-supervisor.sh')
+                    + ' --carrier-lane=backend'),
+            process(11, 10, command='bash ' + str(self.root / 'run-loop.sh')
+                    + ' --carrier-lane=backend --carrier-token=backend-token-0011'
+                    + ' --carrier-feature=ST-100 --carrier-worktree64=' + token),
+        ]
+        occupancy = execution.lane_occupancy(rows, self.root, 3, 'backend')
+        self.assertEqual((1, 0, 0, ['ST-100']),
+                         (occupancy['occupied_slots'], occupancy['available_slots'],
+                          occupancy['claim_count'], occupancy['features']))
+
     def experience_loop(self, pid, feature, worktree):
         token = base64.urlsafe_b64encode(str(worktree).encode('utf-8')).decode('ascii').rstrip('=')
         return process(pid, command=(
