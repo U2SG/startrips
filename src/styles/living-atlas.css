@@ -7562,11 +7562,6 @@ body:has(.journey-composer-backdrop.is-globe-picking) .mobile-v2__account-trigge
  * from the shared compact-mobile query, so this layout states no breakpoint of
  * its own and cannot drift from `src/journey/mobileLayout.ts`.
  */
-.journey-composer[data-mobile-layout="true"] {
-  height: var(--composer-available-height, min(860px, 100%));
-  max-height: var(--composer-available-height, 100%);
-}
-
 /* The single scroll owner of the active task. */
 .journey-composer[data-mobile-layout="true"] .journey-composer__editor {
   height: 100%;

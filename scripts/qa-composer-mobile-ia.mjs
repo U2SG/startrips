@@ -267,7 +267,8 @@ try {
           const saveRect = save?.getBoundingClientRect();
           resolve({
             reduced,
-            published: composer.style.getPropertyValue("--composer-available-height"),
+            published: composer.style.height,
+            computed: getComputedStyle(composer).height,
             composerHeight: Math.round(composerRect.height),
             focusKept: document.activeElement === input,
             inputVisible: Boolean(inputRect)

@@ -669,8 +669,16 @@ export function JourneyComposer({
       const root = dialogRef.current;
       if (!root) return;
       const height = composerAvailableHeight(globalThis.innerHeight, visual.height, visual.offsetTop);
-      if (height === null) root.style.removeProperty("--composer-available-height");
-      else root.style.setProperty("--composer-available-height", `${height}px`);
+      // Written inline rather than through a custom property: the compact
+      // stylesheet already sizes this dialog to the layout viewport, and the
+      // measured keyboard height has to beat that unconditionally.
+      if (height === null) {
+        root.style.removeProperty("height");
+        root.style.removeProperty("max-height");
+      } else {
+        root.style.height = `${height}px`;
+        root.style.maxHeight = `${height}px`;
+      }
       if (!keepFocusVisible) return;
       const active = document.activeElement;
       if (active instanceof HTMLElement && root.contains(active)) {
@@ -685,7 +693,8 @@ export function JourneyComposer({
     return () => {
       visual.removeEventListener("resize", onResize);
       visual.removeEventListener("scroll", onScroll);
-      dialogRef.current?.style.removeProperty("--composer-available-height");
+      dialogRef.current?.style.removeProperty("height");
+      dialogRef.current?.style.removeProperty("max-height");
     };
   }, [mobileLayout, dialogRef]);
 
