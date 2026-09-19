@@ -657,11 +657,36 @@ async function verifyMobileStoryInertOwnership() {
   }
 }
 
+// #375: on compact mobile the Composer is one task at a time, so media
+// organisation and the precise-location controls are reached through their
+// approved entry instead of sitting on the primary surface. The assertions
+// below are unchanged; only the navigation to them is.
+async function openComposerTask(page, task) {
+  const entry = page.locator(`[data-composer-task-entry="${task}"]`);
+  if (await page.locator(`[data-composer-task="${task}"]`).count()) return;
+  if (!(await entry.count())) {
+    const more = page.locator(".journey-composer__task-more");
+    if (!(await more.count())) return; // desktop renders the same capabilities inline
+    await more.click();
+  }
+  await entry.click();
+  await page.locator(`[data-composer-task="${task}"]`).waitFor({ state: "visible" });
+}
+
+async function leaveComposerTask(page) {
+  const back = page.locator("[data-composer-task-back]");
+  if (await back.count()) {
+    await back.click();
+    await page.locator('[data-composer-task="primary"]').waitFor({ state: "visible" });
+  }
+}
+
 async function verifyComposerMediaActions() {
   console.error("[qa-post-login] composer media actions");
   const page = await browser.newPage({ viewport: { width: 390, height: 844 }, reducedMotion: "reduce" });
   try {
     await page.goto(`${origin}/?qaState=journey-composer&qaMode=edit`, { waitUntil: "domcontentloaded" });
+    await openComposerTask(page, "media");
     const fileInput = page.locator(".journey-media-picker input[type=file]");
     await fileInput.setInputFiles([
       { name: "very-long-summer-memory-one.jpg", mimeType: "image/jpeg", buffer: Buffer.from("a") },
@@ -676,6 +701,7 @@ async function verifyComposerMediaActions() {
     ]) {
       await page.setViewportSize({ width, height });
       if (mobile) {
+        await openComposerTask(page, "media");
         const mobileMetrics = await page.evaluate(() => ({
           cards: document.querySelectorAll(".journey-media-mobile-card").length,
           manageButtons: document.querySelectorAll(".journey-media-mobile-card__menu").length,
@@ -718,6 +744,7 @@ async function verifyComposerMediaActions() {
     }
 
     await page.setViewportSize({ width: 390, height: 844 });
+    await openComposerTask(page, "media");
     const firstManageTrigger = page.locator(".journey-media-mobile-card__menu").first();
     const assertNestedSheetFocus = async (openSheet, selector, label) => {
       await openSheet();
@@ -805,6 +832,7 @@ async function verifyComposerMediaActions() {
       ["mobile", 390, 844],
     ]) {
       await page.setViewportSize({ width, height });
+      await openComposerTask(page, "location");
       const trigger = page.getByRole("button", { name: /直接在地球上取点/ });
       await trigger.click();
       const cancel = page.locator(".journey-globe-pick-hint button");
@@ -893,6 +921,7 @@ async function verifyComposerMediaActions() {
         restored,
         failed: pickFailed,
       });
+      await leaveComposerTask(page);
     }
 
     // Review P2 regression: normal modal close must restore the opener only

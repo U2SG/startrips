@@ -13,6 +13,7 @@ import {
   IconArrowUp,
   IconCheck,
   IconChevronDown,
+  IconChevronLeft,
   IconDots,
   IconMapPin,
   IconPlayerPlay,
@@ -76,6 +77,16 @@ import {
 } from "./lightEffects";
 import { resolveModalInitialFocusTarget, useModalFocus, useNestedModalFocus } from "./useModalFocus";
 import { useCompactMobileLayout } from "./mobileLayout";
+import { useMobileSurfaceHistory } from "./useMobileSurfaceHistory";
+import {
+  composerAvailableHeight,
+  composerTask,
+  COMPOSER_MOBILE_TASKS,
+  type ComposerMobileTaskId,
+} from "./composerMobileTasks";
+
+/** The upload allowlist the server enforces; every picker states the same one. */
+const MEDIA_FILE_ACCEPT = "image/avif,image/jpeg,image/png,image/webp,video/mp4,video/quicktime,video/webm";
 
 type UploadProgress = {
   fileName: string;
@@ -462,6 +473,14 @@ export function JourneyComposer({
       : (initialUnknownCreateAttempt?.mediaFiles ?? []).map((media) => ({ ...media })),
   );
   const mobileLayout = useCompactMobileLayout();
+  // #375: which Composer task the compact-mobile surface is showing. Desktop
+  // renders the same information architecture inline and stays on "primary".
+  const [mobileTask, setMobileTask] = useState<ComposerMobileTaskId>("primary");
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
+  const activeMobileTask: ComposerMobileTaskId = mobileLayout ? mobileTask : "primary";
+  const taskHeadingRef = useRef<HTMLHeadingElement>(null);
+  const taskEntryRefs = useRef(new Map<ComposerMobileTaskId, HTMLButtonElement>());
+  const taskReturnFocusRef = useRef<ComposerMobileTaskId | null>(null);
   const [mobileMediaMenuIndex, setMobileMediaMenuIndex] = useState<number | null>(null);
   const [mobileMediaAssignmentIndex, setMobileMediaAssignmentIndex] = useState<number | null>(null);
   const [mobileMediaDeleteIndex, setMobileMediaDeleteIndex] = useState<number | null>(null);
@@ -484,6 +503,7 @@ export function JourneyComposer({
     focusTarget: HTMLElement | null;
     narrativeScrollTop: number;
     routeScrollTop: number;
+    mobileTask: ComposerMobileTaskId;
   } | null>(null);
   const pendingRoutePointFocusDraftIdRef = useRef<string | null>(null);
   const pendingRoutePointMenuFocusDraftIdRef = useRef<string | null>(null);
@@ -563,6 +583,14 @@ export function JourneyComposer({
   }, []);
 
   const dialogRef = useModalFocus<HTMLElement>(() => {
+    if (moreMenuOpen) {
+      setMoreMenuOpen(false);
+      return;
+    }
+    if (mobileLayout && mobileTask !== "primary") {
+      exitMobileTask();
+      return;
+    }
     if (mobileMediaDeleteIndex !== null) {
       setMobileMediaDeleteIndex(null);
       return;
@@ -597,7 +625,70 @@ export function JourneyComposer({
     setMobileMediaMenuIndex(null);
     setMobileMediaAssignmentIndex(null);
     setMobileMediaDeleteIndex(null);
+    // Desktop shows the whole architecture inline, so a task left open on a
+    // rotated phone must not survive as a state nobody can see or leave.
+    setMobileTask("primary");
+    setMoreMenuOpen(false);
+    taskReturnFocusRef.current = null;
   }, [mobileLayout]);
+
+  /**
+   * #375: entering a task moves focus to its heading, and leaving it restores
+   * focus to the control that opened it. The task panels are views inside the
+   * Composer dialog, not nested modals, so this deliberately adds no second
+   * focus trap on top of the one `useModalFocus` already owns.
+   */
+  useEffect(() => {
+    if (!mobileLayout) return;
+    if (mobileTask !== "primary") {
+      taskHeadingRef.current?.focus({ preventScroll: true });
+      return;
+    }
+    const returning = taskReturnFocusRef.current;
+    taskReturnFocusRef.current = null;
+    if (!returning) return;
+    taskEntryRefs.current.get(returning)?.focus({ preventScroll: true });
+  }, [mobileLayout, mobileTask]);
+
+  /**
+   * #375: a soft keyboard shrinks the visual viewport and leaves the layout
+   * viewport alone, so a dialog sized to the layout viewport hides its own
+   * sticky save behind the keyboard. Publish the measured available height and
+   * keep the focused field in view when it changes.
+   */
+  useEffect(() => {
+    if (!mobileLayout) return;
+    const visual = globalThis.visualViewport;
+    if (!visual) return;
+    const apply = (keepFocusVisible: boolean) => {
+      const root = dialogRef.current;
+      if (!root) return;
+      const height = composerAvailableHeight(globalThis.innerHeight, visual.height, visual.offsetTop);
+      if (height === null) root.style.removeProperty("--composer-available-height");
+      else root.style.setProperty("--composer-available-height", `${height}px`);
+      if (!keepFocusVisible) return;
+      const active = document.activeElement;
+      if (active instanceof HTMLElement && root.contains(active)) {
+        active.scrollIntoView({ block: "nearest" });
+      }
+    };
+    const onResize = () => apply(true);
+    const onScroll = () => apply(false);
+    apply(false);
+    visual.addEventListener("resize", onResize);
+    visual.addEventListener("scroll", onScroll);
+    return () => {
+      visual.removeEventListener("resize", onResize);
+      visual.removeEventListener("scroll", onScroll);
+      dialogRef.current?.style.removeProperty("--composer-available-height");
+    };
+  }, [mobileLayout, dialogRef]);
+
+  useMobileSurfaceHistory(
+    mobileLayout && mobileTask !== "primary",
+    "composer-task",
+    () => exitMobileTask(),
+  );
 
   useEffect(() => {
     if (expandedRoutePointDraftId && !routePoints.some((point) => point.draftId === expandedRoutePointDraftId)) {
@@ -677,6 +768,7 @@ export function JourneyComposer({
       focusTarget,
       narrativeScrollTop: narrativeScrollRef.current?.scrollTop ?? 0,
       routeScrollTop: routeScrollRef.current?.scrollTop ?? 0,
+      mobileTask,
     };
     playbackPreviewRevisionRef.current += 1;
     onPlaybackPreview(buildDraftPlaybackPreviewSnapshot({
@@ -698,6 +790,9 @@ export function JourneyComposer({
       ? routePoints.some((point) => point.draftId === context.expandedDraftId)
       : false;
     setExpandedRoutePointDraftId(expandedSurvives ? context.expandedDraftId : null);
+    // The preview suspends the Composer rather than replacing it, so it returns
+    // to the same task the person left, not to the primary surface.
+    setMobileTask(context.mobileTask);
     setPlaybackPreviewReturnFocusKind(playbackPreviewReturnFocusKindRef.current);
     // The trap owns the restore, but Chromium rejects focus while the suspended
     // Composer still inherits `visibility: hidden` from the Playback Preview
@@ -1004,11 +1099,44 @@ export function JourneyComposer({
     closeComposerWithUnknownCreateAttempt(unknownCreateAttempt);
   }
 
-  function selectFiles(event: ChangeEvent<HTMLInputElement>) {
+  function enterMobileTask(task: ComposerMobileTaskId) {
+    setMoreMenuOpen(false);
+    if (task === "primary") {
+      exitMobileTask();
+      return;
+    }
+    setMobileTask(task);
+  }
+
+  function exitMobileTask() {
+    setMoreMenuOpen(false);
+    setMobileTask((current) => {
+      if (current === "primary") return current;
+      taskReturnFocusRef.current = current;
+      return "primary";
+    });
+  }
+
+  /** What a task entry says it holds, so nothing is entered blind. */
+  function composerTaskSummary(task: ComposerMobileTaskId) {
+    if (task === "journey-info") {
+      return note.trim() ? `${startedOn || "未设置日期"} · 已写下故事` : startedOn || "未设置日期";
+    }
+    if (task === "media") {
+      if (mediaFiles.length > 0) return `${mediaFiles.length} 个待上传`;
+      return existingVisualMediaCount ? `${existingVisualMediaCount} 个已有媒体` : "还没有媒体";
+    }
+    if (task === "appearance") {
+      return activeLightEffect?.label ?? "单色";
+    }
+    return "经纬度与地球取点";
+  }
+
+  function selectFiles(event: ChangeEvent<HTMLInputElement>, routePointDraftId: string | null = null) {
     const selected = [...(event.currentTarget.files ?? [])];
     const next = [
       ...mediaFiles,
-      ...selected.map((file) => ({ file, routePointDraftId: null })),
+      ...selected.map((file) => ({ file, routePointDraftId })),
     ];
     const validation = validateJourneyFiles(next.map((media) => media.file));
     if (!validation.accepted) {
@@ -1331,59 +1459,21 @@ export function JourneyComposer({
   const mobileAssignmentMedia = mobileMediaAssignmentIndex === null ? null : mediaFiles[mobileMediaAssignmentIndex] ?? null;
   const mobileDeleteMedia = mobileMediaDeleteIndex === null ? null : mediaFiles[mobileMediaDeleteIndex] ?? null;
 
-  return (
-    <div className={`journey-composer-backdrop${globePicking ? " is-globe-picking" : ""}${playbackPreviewActive ? " is-playback-previewing" : ""}`} role="presentation">
-      {globePicking ? (
-        <aside className="journey-globe-pick-hint" role="status">
-          <IconMapPin size={18} stroke={1.4} aria-hidden="true" />
-          <div><strong>在地球上选择路线点</strong><span>点击球面；路线会按添加顺序连接。</span></div>
-          <button ref={globePickCancelRef} type="button" onClick={cancelGlobePoint}><IconX size={18} stroke={1.4} aria-hidden="true" /><span>取消</span></button>
-        </aside>
-      ) : null}
-      <section
-        ref={dialogRef}
-        tabIndex={-1}
-        className="journey-composer motion-staged"
-        data-mobile-layout={mobileLayout ? "true" : undefined}
-        data-playback-preview-active={playbackPreviewActive ? "true" : undefined}
-        data-playback-preview-return-focus={playbackPreviewReturnFocusKind ?? undefined}
-        data-playback-preview-return-focus-outcome={playbackPreviewReturnFocusOutcome ?? undefined}
-        inert={globePicking || playbackPreviewActive || undefined}
-        role="dialog"
-        aria-hidden={playbackPreviewActive || undefined}
-        aria-modal={playbackPreviewActive ? undefined : true}
-        aria-labelledby="journey-composer-title"
-      >
-        <header className="journey-composer__header">
-          <div>
-            <p>PRIVATE ATLAS · {isEditing ? "EDIT JOURNEY" : "NEW JOURNEY"}</p>
-            <h2 id="journey-composer-title">{isEditing ? "重新整理这段旅程" : "把一段旅程，收进你的星球"}</h2>
-            <span>{isEditing ? "调整故事、日期和路线；已有媒体会原样保留。" : "一次停留、跨城路径，或一直在路上。"}</span>
-          </div>
-          <button type="button" onClick={closeComposer} disabled={saving} aria-label={isEditing ? "关闭旅程编辑器" : "关闭创建器"}><IconX size={20} stroke={1.35} aria-hidden="true" /></button>
-        </header>
 
-        <div className="journey-composer__body">
-          <div
-            className="journey-composer__editor"
-            aria-disabled={editorLocked}
-            inert={editorLocked}
-            onFocusCapture={(event) => {
-              if (event.target instanceof HTMLElement) lastEditorFocusRef.current = event.target;
-            }}
-          >
-            <section ref={narrativeScrollRef} className="journey-composer__narrative" aria-labelledby="journey-story-heading">
+  const mediaHeadingFragment = (
               <div className="journey-composer__section-heading">
                 <p>01 · MEMORY</p>
                 <h3>照片与影像</h3>
                 <span>可选，旅程会先保存，媒体按文件分块上传。</span>
               </div>
+  );
+  const mediaFieldsFragment = (
               <div className="journey-media-fields">
                 <label className="journey-media-picker">
                   <IconUpload size={26} stroke={1.2} aria-hidden="true" />
                   <span>添加照片或视频</span>
                   <strong>{existingVisualMediaCount ? `${existingVisualMediaCount} 个已有媒体 · 可继续添加` : "支持照片与视频，可持续添加"}</strong>
-                  <input type="file" accept="image/avif,image/jpeg,image/png,image/webp,video/mp4,video/quicktime,video/webm" multiple onChange={selectFiles} />
+                  <input type="file" accept={MEDIA_FILE_ACCEPT} multiple onChange={(event) => selectFiles(event)} />
                 </label>
                 {!mobileLayout ? (
                   <ul>
@@ -1572,18 +1662,27 @@ export function JourneyComposer({
                   <p>{mobileLayout ? "点按归属标签可调整；其他操作收在媒体管理中。" : "每个文件都可以归到整段旅程，或一个具体途径点。"}</p>
                 ) : null}
               </div>
-
+  );
+  const journeyHeadingFragment = (
               <div className="journey-composer__section-heading journey-composer__story-heading">
-                <p>02 · JOURNEY</p>
+                {mobileLayout ? null : <p>02 · JOURNEY</p>}
                 <h3 id="journey-story-heading">这段旅程</h3>
               </div>
-              <div className="journey-story-fields">
+  );
+  const journeyTitleFragment = (
                 <label className="journey-title-field"><span>旅程标题</span><input required maxLength={80} value={title} onChange={(event) => setTitle(event.target.value)} placeholder="穿过北方的夜车" /></label>
+  );
+  const journeyMetaFragment = (
+    <>
                 <div className="journey-story-fields__dates">
                   <label><span>开始日期</span><input type="date" required value={startedOn} onChange={(event) => setStartedOn(event.target.value)} /></label>
                   <label><span>结束日期 <small>可选</small></span><input type="date" min={startedOn} value={endedOn} onChange={(event) => setEndedOn(event.target.value)} /></label>
                 </div>
                 <label><span>旅程故事 <small>可选</small></span><textarea rows={5} maxLength={2000} value={note} onChange={(event) => setNote(event.target.value)} placeholder="记下沿途发生了什么，也可以留白。" /></label>
+    </>
+  );
+  const appearanceFragment = (
+    <>
                 <fieldset className="journey-light-colors">
                   <legend>这段旅程的光 · 单色基调</legend>
                   <div className="journey-light-color-list">
@@ -1642,17 +1741,17 @@ export function JourneyComposer({
                     ))}
                   </div>
                 </fieldset>
-              </div>
-            </section>
-
-            <section ref={routeScrollRef} className="journey-composer__route" aria-labelledby="journey-route-heading">
+    </>
+  );
+  const routeHeadingFragment = (
               <div className="journey-composer__section-heading">
-                <p>03 · TRACE</p>
+                {mobileLayout ? null : <p>03 · TRACE</p>}
                 <h3 id="journey-route-heading">在地图上留下它</h3>
-                <span>一个地点就是一次停留；继续添加会自然连成路径。</span>
+                {mobileLayout ? null : <span>一个地点就是一次停留；继续添加会自然连成路径。</span>}
               </div>
-
-              <div className="journey-composer__route-tools">
+  );
+  const routeSearchFragment = (
+    <>
                 <form onSubmit={runSearch} className="journey-location-search">
                   <label>
                     <span>搜索本旅程或外部地点</span>
@@ -1731,14 +1830,23 @@ export function JourneyComposer({
                     ) : null}
                   </section>
                 ) : null}
+    </>
+  );
+  const globePickFragment = (
+    <>
                 {onGlobePickRequest ? <button ref={globePickTriggerRef} className="journey-globe-pick-button" type="button" onClick={requestGlobePoint}><IconMapPin size={17} stroke={1.35} aria-hidden="true" /><span><strong>直接在地球上取点</strong><small>适合在路上、海上或没有准确名称的位置</small></span></button> : null}
+    </>
+  );
+  const reverseAttributionFragment = (
+    <>
                 {reverseAttribution ? (
                   <a className="journey-location-attribution" href={reverseAttribution.url} target="_blank" rel="noreferrer">
                     地点数据 {reverseAttribution.label}
                   </a>
                 ) : null}
-              </div>
-
+    </>
+  );
+  const routeListFragment = (
               <ol className="journey-route-draft" aria-label="已添加的地点">
                 {routePoints.length === 0 ? <li className="is-empty"><IconMapPin size={22} stroke={1.15} aria-hidden="true" /><span>还没有地点</span><small>先搜索一个地点，或直接在地球上取点。</small></li> : null}
                 {routePoints.map((point, index) => {
@@ -1851,14 +1959,28 @@ export function JourneyComposer({
                             <span>媒体归属</span>
                             <small>{mediaAssociation.label}</small>
                           </div>
+                          {mobileLayout ? (
+                            <label className="journey-route-draft__media-upload">
+                              <IconUpload size={17} stroke={1.35} aria-hidden="true" />
+                              <span>为这一站添加照片或视频</span>
+                              <input
+                                type="file"
+                                aria-label={`为 ${displayLabel} 添加照片或视频`}
+                                accept={MEDIA_FILE_ACCEPT}
+                                multiple
+                                onChange={(event) => selectFiles(event, point.draftId)}
+                              />
+                            </label>
+                          ) : null}
                         </div>
                       ) : null}
                     </li>
                   );
                 })}
               </ol>
-
-              <details className="journey-precise-location">
+  );
+  const preciseLocationFragment = (
+              <details className="journey-precise-location" open={mobileLayout || undefined}>
                 <summary><span><IconMapPin size={17} stroke={1.35} aria-hidden="true" />精确位置</span><small>手动输入经纬度</small><IconChevronDown className="journey-precise-location__chevron" size={17} stroke={1.35} aria-hidden="true" /></summary>
                 <div className="journey-coordinate-fields">
                   <label className="journey-coordinate-fields__label"><span>地点名称</span><input maxLength={120} value={pointLabel} onChange={(event) => setPointLabel(event.target.value)} placeholder="可精确到建筑、景点或沿途位置" /></label>
@@ -1868,7 +1990,181 @@ export function JourneyComposer({
                   <button type="button" onClick={addManualPoint}><IconPlus size={16} stroke={1.4} aria-hidden="true" />添加精确位置</button>
                 </div>
               </details>
-            </section>
+  );
+  return (
+    <div className={`journey-composer-backdrop${globePicking ? " is-globe-picking" : ""}${playbackPreviewActive ? " is-playback-previewing" : ""}`} role="presentation">
+      {globePicking ? (
+        <aside className="journey-globe-pick-hint" role="status">
+          <IconMapPin size={18} stroke={1.4} aria-hidden="true" />
+          <div><strong>在地球上选择路线点</strong><span>点击球面；路线会按添加顺序连接。</span></div>
+          <button ref={globePickCancelRef} type="button" onClick={cancelGlobePoint}><IconX size={18} stroke={1.4} aria-hidden="true" /><span>取消</span></button>
+        </aside>
+      ) : null}
+      <section
+        ref={dialogRef}
+        tabIndex={-1}
+        className="journey-composer motion-staged"
+        data-mobile-layout={mobileLayout ? "true" : undefined}
+        data-playback-preview-active={playbackPreviewActive ? "true" : undefined}
+        data-playback-preview-return-focus={playbackPreviewReturnFocusKind ?? undefined}
+        data-playback-preview-return-focus-outcome={playbackPreviewReturnFocusOutcome ?? undefined}
+        inert={globePicking || playbackPreviewActive || undefined}
+        role="dialog"
+        aria-hidden={playbackPreviewActive || undefined}
+        aria-modal={playbackPreviewActive ? undefined : true}
+        aria-labelledby="journey-composer-title"
+      >
+        <header className="journey-composer__header">
+          <div>
+            <p>PRIVATE ATLAS · {isEditing ? "EDIT JOURNEY" : "NEW JOURNEY"}</p>
+            <h2 id="journey-composer-title">{isEditing ? "重新整理这段旅程" : "把一段旅程，收进你的星球"}</h2>
+            <span>{isEditing ? "调整故事、日期和路线；已有媒体会原样保留。" : "一次停留、跨城路径，或一直在路上。"}</span>
+          </div>
+          <button type="button" onClick={closeComposer} disabled={saving} aria-label={isEditing ? "关闭旅程编辑器" : "关闭创建器"}><IconX size={20} stroke={1.35} aria-hidden="true" /></button>
+        </header>
+
+        <div className="journey-composer__body">
+          <div
+            className="journey-composer__editor"
+            data-composer-scroll-owner={mobileLayout ? "editor" : undefined}
+            aria-disabled={editorLocked}
+            inert={editorLocked}
+            onFocusCapture={(event) => {
+              if (event.target instanceof HTMLElement) lastEditorFocusRef.current = event.target;
+            }}
+          >
+            {mobileLayout ? (
+              /*
+               * #375: on compact mobile the Composer is one task at a time. The
+               * primary task carries the Journey title, the Route Point list,
+               * add/search and the sticky save; everything else is entered from
+               * here and returns here. `composerMobileTasks.ts` is the map, and
+               * its test is what keeps a capability from being merely hidden.
+               */
+              activeMobileTask === "primary" ? (
+                <section
+                  className="journey-composer__task"
+                  data-composer-task="primary"
+                  aria-labelledby="journey-story-heading"
+                >
+                  {journeyHeadingFragment}
+                  <div className="journey-story-fields">
+                    {journeyTitleFragment}
+                  </div>
+                  <nav className="journey-composer__task-entries" aria-label="旅程编辑任务">
+                    {COMPOSER_MOBILE_TASKS.filter((task) => task.id !== "primary" && !task.behindMore).map((task) => (
+                      <button
+                        key={task.id}
+                        type="button"
+                        data-composer-task-entry={task.id}
+                        ref={(node) => {
+                          if (node) taskEntryRefs.current.set(task.id, node);
+                          else taskEntryRefs.current.delete(task.id);
+                        }}
+                        onClick={() => enterMobileTask(task.id)}
+                      >
+                        <span>{task.entryLabel}</span>
+                        <small>{composerTaskSummary(task.id)}</small>
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      className="journey-composer__task-more"
+                      aria-expanded={moreMenuOpen}
+                      aria-controls="journey-composer-more-menu"
+                      onClick={() => setMoreMenuOpen((current) => !current)}
+                    >
+                      <IconDots size={18} stroke={1.45} aria-hidden="true" />
+                      <span>更多</span>
+                    </button>
+                    {moreMenuOpen ? (
+                      <div id="journey-composer-more-menu" className="journey-composer__more-menu" role="menu">
+                        {COMPOSER_MOBILE_TASKS.filter((task) => task.behindMore).map((task) => (
+                          <button
+                            key={task.id}
+                            type="button"
+                            role="menuitem"
+                            data-composer-task-entry={task.id}
+                            ref={(node) => {
+                              if (node) taskEntryRefs.current.set(task.id, node);
+                              else taskEntryRefs.current.delete(task.id);
+                            }}
+                            onClick={() => enterMobileTask(task.id)}
+                          >
+                            <span>{task.entryLabel}</span>
+                            <small>{composerTaskSummary(task.id)}</small>
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                  </nav>
+                  {routeHeadingFragment}
+                  <div className="journey-composer__route-tools">
+                    {routeSearchFragment}
+                    {reverseAttributionFragment}
+                  </div>
+                  {routeListFragment}
+                </section>
+              ) : (
+                <section
+                  className="journey-composer__task"
+                  data-composer-task={activeMobileTask}
+                  aria-labelledby={`journey-composer-task-${activeMobileTask}`}
+                >
+                  <div className="journey-composer__task-header">
+                    <button
+                      type="button"
+                      className="journey-composer__task-back"
+                      data-composer-task-back={activeMobileTask}
+                      onClick={exitMobileTask}
+                    >
+                      <IconChevronLeft size={18} stroke={1.4} aria-hidden="true" />
+                      <span>{composerTask("primary").entryLabel}</span>
+                    </button>
+                    <h3 id={`journey-composer-task-${activeMobileTask}`} ref={taskHeadingRef} tabIndex={-1}>
+                      {composerTask(activeMobileTask).heading}
+                    </h3>
+                  </div>
+                  {activeMobileTask === "journey-info" ? (
+                    <div className="journey-story-fields">{journeyMetaFragment}</div>
+                  ) : null}
+                  {activeMobileTask === "media" ? mediaFieldsFragment : null}
+                  {activeMobileTask === "appearance" ? (
+                    <div className="journey-story-fields">{appearanceFragment}</div>
+                  ) : null}
+                  {activeMobileTask === "location" ? (
+                    <div className="journey-composer__route-tools">
+                      {globePickFragment}
+                      {preciseLocationFragment}
+                    </div>
+                  ) : null}
+                </section>
+              )
+            ) : (
+              <>
+                <section ref={narrativeScrollRef} className="journey-composer__narrative" aria-labelledby="journey-story-heading">
+                  {mediaHeadingFragment}
+                  {mediaFieldsFragment}
+                  {journeyHeadingFragment}
+                  <div className="journey-story-fields">
+                    {journeyTitleFragment}
+                    {journeyMetaFragment}
+                    {appearanceFragment}
+                  </div>
+                </section>
+
+                <section ref={routeScrollRef} className="journey-composer__route" aria-labelledby="journey-route-heading">
+                  {routeHeadingFragment}
+                  <div className="journey-composer__route-tools">
+                    {routeSearchFragment}
+                    {globePickFragment}
+                    {reverseAttributionFragment}
+                  </div>
+                  {routeListFragment}
+                  {preciseLocationFragment}
+                </section>
+              </>
+            )}
           </div>
         </div>
 
