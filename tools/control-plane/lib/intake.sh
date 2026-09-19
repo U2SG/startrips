@@ -217,7 +217,7 @@ intake_triage() {
   set +e
   (
     cd "$INTAKE_ROOT" || exit 1
-    claude_run --strict-mcp-config --agent startrips-triage --dangerously-skip-permissions --model opus \
+    claude_run --strict-mcp-config --agent startrips-triage --dangerously-skip-permissions --model sonnet \
       --output-format text \
       -p "$prompt" \
       2>&1
