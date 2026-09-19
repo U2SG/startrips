@@ -492,7 +492,10 @@
         "server/db/**",
         "src/auth/**",
         "server/routes/account-email-change.ts",
-        "server/tests/account-email-change.integration.test.ts"
+        "server/tests/account-email-change.integration.test.ts",
+        "server/routes/account-identities.ts",
+        "server/tests/account-identities.integration.test.ts",
+        "server/tests/account-identity-routes.integration.test.ts"
       ],
       "coverage": "covered",
       "evidence": [
