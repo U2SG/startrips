@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { createEmailVerificationToken } from "better-auth/api";
 import { eq, inArray } from "drizzle-orm";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { app } from "../app";
 import { serverConfig } from "../config";
 import {
   atlases,
+  everydayFragments,
   mediaAssetEvidence,
   mediaAssets,
   mediaUploads,
@@ -339,7 +340,15 @@ describe("finalization attaches the evidence the upload carried", () => {
       /could not be reconciled/,
     );
 
-    expect(await evidenceRowFor(blocking.id)).toBeUndefined();
+    // Nothing the aborted transaction wrote survives it: the asset it tried to
+    // create is absent, the storage key still names only the blocking asset,
+    // and the upload was not marked completed. The evidence insert is the
+    // second-to-last statement of that same transaction and no statement after
+    // it can fail, so there is no reachable state where the asset commits
+    // without it.
+    const byKey = await db.select({ id: mediaAssets.id }).from(mediaAssets)
+      .where(eq(mediaAssets.storageKey, storageKey));
+    expect(byKey).toEqual([{ id: blocking.id }]);
     const [reread] = await db.select().from(mediaUploads)
       .where(eq(mediaUploads.id, upload.id));
     expect(reread.status).toBe("initiated");
@@ -363,6 +372,47 @@ describe("finalization attaches the evidence the upload carried", () => {
     const assets = await db.select({ id: mediaAssets.id }).from(mediaAssets)
       .where(eq(mediaAssets.storageKey, upload.storageKey));
     expect(assets).toHaveLength(0);
+  });
+
+  it("writes no coordinate into any log line along the whole path", async () => {
+    // `server/request-log.ts` logs the matched route PATTERN, status and
+    // duration and never a body or a raw path, so the evidence document cannot
+    // reach it; this holds every console channel to that, across a refused
+    // start, an accepted start and a finalization.
+    const spies = (["log", "info", "warn", "error", "debug"] as const).map(
+      (channel) => vi.spyOn(console, channel).mockImplementation(() => {}),
+    );
+    try {
+      for (const evidence of [
+        { ...TOKYO_EVIDENCE, spatial: { ...TOKYO_EVIDENCE.spatial, latitude: 991.5 } },
+        TOKYO_EVIDENCE,
+      ]) {
+        await app.request(`${TEST_ORIGIN}/api/uploads/start`, {
+          method: "POST",
+          headers: authHeaders(identity.cookie),
+          body: JSON.stringify({
+            journeyId,
+            fileName: "still.jpg",
+            mimeType: "image/jpeg",
+            bytes: 2048,
+            recordedEvidence: evidence,
+          }),
+        });
+      }
+      const upload = await startedUpload({ recordedEvidence: TOKYO_EVIDENCE });
+      await finalizeUpload(upload, contentHash("d"));
+
+      const logged = spies
+        .flatMap((spy) => spy.mock.calls)
+        .flat()
+        .map((argument) => String(argument))
+        .join(" ");
+      for (const coordinate of ["35.689487", "139.691711", "991.5"]) {
+        expect(logged).not.toContain(coordinate);
+      }
+    } finally {
+      for (const spy of spies) spy.mockRestore();
+    }
   });
 
   it("leaves an upload without evidence exactly as it is today", async () => {
@@ -590,6 +640,24 @@ describe("the evidence stays asset-owned and owner-only", () => {
       .where(eq(mediaAssets.id, asset.id));
     expect(moved.journeyId).toBe(secondJourneyId);
     expect(moved.routePointId).toBeNull();
+    expect(await evidenceRowFor(asset.id)).toEqual(before);
+
+    // Reclassified from Journey-owned to Everyday Fragment-owned: the evidence
+    // is keyed by the asset, so changing who owns the asset cannot touch it.
+    const [fragment] = await db.insert(everydayFragments).values({
+      atlasId: identity.atlasId,
+      occurredOn: "2026-09-03",
+      latitude: 1.3521,
+      longitude: 103.8198,
+      placeLabel: "Singapore",
+      createdByUserId: identity.userId,
+    }).returning({ id: everydayFragments.id });
+    await db.update(mediaAssets).set({
+      journeyId: null,
+      routePointId: null,
+      everydayFragmentId: fragment.id,
+    }).where(eq(mediaAssets.id, asset.id));
+
     expect(await evidenceRowFor(asset.id)).toEqual(before);
   });
 
