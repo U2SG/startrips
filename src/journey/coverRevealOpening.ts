@@ -182,9 +182,10 @@ export type HeldCoverRevealPair = {
  * floor — so the original's url can change several times inside one reveal.
  * `CoverRevealStage` rebuilds its renderer whenever the pair it was given
  * changes, so recomputing the pair from the current url would restart the
- * reveal from the first frame against a half it never opened with. The url held
- * here was valid when the reveal loaded it into a texture, which is the only
- * moment either image is read.
+ * reveal from the first frame against a half it never opened with. A held url
+ * only has to outlive the one reveal it opened: `CoverRevealStage` reads it to
+ * load its textures and to render the original-cover image it settles and
+ * degrades onto, and the pair is released as soon as that opening ends.
  *
  * A new opening identity always takes a fresh pair: that is a different cover
  * revision, not a re-signed read of the same one.
