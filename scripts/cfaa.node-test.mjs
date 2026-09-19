@@ -186,6 +186,18 @@ test("email-change boundaries suggest the stable identity invariant", () => {
   }
 });
 
+test("account identity boundaries suggest the stable identity invariant", () => {
+  const registry = loadRegistry();
+  for (const changedPath of [
+    "server/routes/account-identities.ts",
+    "server/tests/account-identities.integration.test.ts",
+    "server/tests/account-identity-routes.integration.test.ts",
+  ]) {
+    const impact = resolveImpact(registry, [changedPath]);
+    assert.ok(impact.impacted.some((entry) => entry.id === "CFAA-ID-001"));
+  }
+});
+
 test("password route changes suggest the replay invariant", () => {
   const registry = loadRegistry();
   const impact = resolveImpact(registry, ["server/routes/account-password.ts"]);
