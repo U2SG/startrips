@@ -81,7 +81,7 @@ describe("Story shared-element ownership", () => {
 });
 
 describe("mobile media delete focus ownership (#427)", () => {
-  it("restores focus from the committed Story instance instead of a timed global query", () => {
+  it("hands final focus restoration to the nested trap cleanup for the current Story owner", () => {
     const source = readFileSync(new URL("./JourneyStory.tsx", import.meta.url), "utf8");
     const closeStart = source.indexOf("function closeMobileMediaDelete()");
     const closeEnd = source.indexOf("function closeJourneyDelete()", closeStart);
@@ -94,16 +94,17 @@ describe("mobile media delete focus ownership (#427)", () => {
     expect(closeSource).not.toContain("requestAnimationFrame");
     expect(closeSource).not.toContain("document.querySelector");
 
-    const restoreStart = source.indexOf(
-      "if (!restoreMobileMediaDeleteFocusRef.current) return;",
-    );
-    const restoreEnd = source.indexOf("useEffect(() => {", restoreStart);
-    const restoreSource = source.slice(restoreStart, restoreEnd);
+    const resolverStart = source.indexOf("const resolveMobileMediaSheetRestoreFocus");
+    const resolverEnd = source.indexOf("function closeJourneyDelete()", resolverStart);
+    const resolverSource = source.slice(resolverStart, resolverEnd);
+    expect(resolverStart).toBeGreaterThan(0);
+    expect(resolverSource).toContain("restoreMobileMediaDeleteFocusRef.current = false");
+    expect(resolverSource).toContain("return mobileManageViewerTriggerRef.current ?? previousFocus");
 
-    expect(restoreStart).toBeGreaterThan(0);
-    expect(restoreSource).toContain('if (mediaDeleteState !== "idle") return;');
-    expect(restoreSource).toContain("const target = mobileManageViewerTriggerRef.current;");
-    expect(restoreSource).toContain("target.focus({ preventScroll: true });");
+    const trapStart = source.indexOf("const mobileMediaSheetRef = useNestedModalFocus");
+    const trapEnd = source.indexOf(");", trapStart);
+    const trapSource = source.slice(trapStart, trapEnd + 2);
+    expect(trapSource).toContain("resolveMobileMediaSheetRestoreFocus");
   });
 });
 
