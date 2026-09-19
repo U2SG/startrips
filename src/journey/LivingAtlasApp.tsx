@@ -677,7 +677,16 @@ function JourneyCardMedia({
       cancelled = true;
       window.clearTimeout(refreshTimer);
     };
-  }, [asset?.id]);
+    // #379: keyed by the exact cover REVISION, not only by the asset id. The
+    // asset id alone does not name the bytes — replacing the photograph behind
+    // the same cover asset keeps the id and moves the verified stored-byte
+    // identity — and the opening below composes this read's url with a
+    // derivative generated from one exact revision. Refreshing only on the id
+    // would let a new revision's reveal settle onto the previous revision's
+    // canonical bytes, which is precisely what #379 forbids. Re-running also
+    // puts the read back through `loading`, so `originalUrl` is null until the
+    // new revision's own signed read has arrived.
+  }, [asset?.id, asset?.contentHash, asset?.contentHashVerified]);
 
   // #379: the opening is an overlay on a cover that is ALREADY on screen. It
   // needs both the canonical original read and the derivative's display read,

@@ -4,6 +4,7 @@ import { readCoverRevealDisplay } from "./journeyApi";
 import { journeyCover } from "./journeyModel";
 import {
   coverRevealOpeningIdentity,
+  mountedCoverRevealOpening,
   planCoverRevealOpening,
   type CoverRevealDisplayPayload,
 } from "./coverRevealOpening";
@@ -159,6 +160,14 @@ export function useCoverRevealOpening({
     // caller-supplied reader is fixed for the life of the mount.
   }, [coverPin, dismiss, enabled, journeyId, reducedMotion]);
 
+  // What may actually be on screen NOW. The effect above releases a superseded
+  // opening from state, but it runs after the commit, so on its own it would
+  // still let one frame paint last revision's derivative against this
+  // revision's cover. The pin and the enabled surface are both known during
+  // render, so the rejection is decided here and the effect is left as the
+  // housekeeping that follows it.
+  const mounted = mountedCoverRevealOpening(opening, coverPin, enabled);
+
   // Any newer intent takes the surface immediately — a click anywhere, a
   // swipe, a key, a wheel. Capture phase, so the opening yields before the
   // control under the pointer runs.
@@ -169,7 +178,7 @@ export function useCoverRevealOpening({
   // globe-focus mode where this cover is merely opacity-hidden, would have a
   // reveal start behind them when the answer landed.
   useEffect(() => {
-    if (opening === null && !awaitingRead) return undefined;
+    if (mounted === null && !awaitingRead) return undefined;
     // Passive as well as capturing: yielding the surface never cancels the
     // gesture it is yielding to, and a blocking touch/wheel listener on the
     // document would make every scroll wait on this.
@@ -182,7 +191,7 @@ export function useCoverRevealOpening({
         document.removeEventListener(type, dismiss, { capture: true });
       }
     };
-  }, [awaitingRead, dismiss, opening]);
+  }, [awaitingRead, dismiss, mounted]);
 
-  return { opening, dismiss };
+  return { opening: mounted, dismiss };
 }

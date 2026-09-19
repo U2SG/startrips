@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   coverRevealOpeningIdentity,
   holdCoverRevealOpeningPair,
+  mountedCoverRevealOpening,
   planCoverRevealOpening,
   type CoverRevealDisplayPayload,
   type CoverRevealOpeningInput,
@@ -233,5 +234,38 @@ describe("holdCoverRevealOpeningPair", () => {
     expect(holdCoverRevealOpeningPair(null, opening, null)).toBeNull();
     const first = holdCoverRevealOpeningPair(null, opening, "https://cdn/original?sig=1");
     expect(holdCoverRevealOpeningPair(first, null, "https://cdn/original?sig=1")).toBeNull();
+  });
+});
+
+describe("mountedCoverRevealOpening", () => {
+  const pin = coverRevealOpeningIdentity(JOURNEY_ID, "asset-cover", COVER_HASH);
+  const opening = { identity: pin, generatedUrl: "https://cdn/derivative?sig=1" };
+
+  it("shows the opening granted for the cover revision on screen", () => {
+    expect(mountedCoverRevealOpening(opening, pin, true)).toBe(opening);
+  });
+
+  it("rejects an opening whose revision has already been replaced", () => {
+    // The same cover asset with replacement bytes is a NEW revision, and this
+    // is the render that first sees it. Waiting for an effect to release the
+    // old opening would paint last revision's derivative over it once.
+    const replaced = coverRevealOpeningIdentity(JOURNEY_ID, "asset-cover", "sha256-replacement-bytes");
+    expect(mountedCoverRevealOpening(opening, replaced, true)).toBeNull();
+  });
+
+  it("rejects an opening when the cover surface now shows another Journey", () => {
+    const other = coverRevealOpeningIdentity("journey-2", "asset-cover", COVER_HASH);
+    expect(mountedCoverRevealOpening(opening, other, true)).toBeNull();
+  });
+
+  it("rejects an opening the moment another surface owns the viewer", () => {
+    // Story, Playback, the composer or a dialog: the surface is handed over in
+    // the same commit rather than one paint later.
+    expect(mountedCoverRevealOpening(opening, pin, false)).toBeNull();
+  });
+
+  it("shows nothing when the cover can no longer be pinned at all", () => {
+    expect(mountedCoverRevealOpening(opening, null, true)).toBeNull();
+    expect(mountedCoverRevealOpening(null, pin, true)).toBeNull();
   });
 });

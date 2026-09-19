@@ -209,3 +209,27 @@ export function holdCoverRevealOpeningPair(
     pair: { generatedFirst: opening.generatedUrl, originalCover: originalUrl },
   };
 }
+
+/**
+ * The opening that is allowed on screen for THIS render.
+ *
+ * Clearing a superseded opening from state is housekeeping that happens after
+ * the commit, so it cannot be what keeps last revision's derivative off the
+ * screen: between the render that moved the cover pin and the effect that
+ * clears the state, one frame would still paint the old opening against the new
+ * cover. #379 forbids exactly that — old cover data must never attach to a new
+ * revision — so the rejection is decided here, during render, and the effect
+ * only releases the state afterwards.
+ *
+ * `enabled` is part of the same answer: Story, Playback or any other surface
+ * taking the viewer ends the opening in the same commit that hands the surface
+ * over, rather than one paint later.
+ */
+export function mountedCoverRevealOpening<T extends { identity: string }>(
+  opening: T | null,
+  coverPin: string | null,
+  enabled: boolean,
+): T | null {
+  if (opening === null || !enabled || coverPin === null) return null;
+  return opening.identity === coverPin ? opening : null;
+}
