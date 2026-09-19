@@ -383,15 +383,113 @@ function horizonRadians(sample) {
   return Math.acos(Math.min(1, worldRadius / distance));
 }
 
-/** Wait until the focus flight has stopped moving the focus signal. */
-async function waitForLocalCoastline(page, expectedSource = "50m-regional+10m-local-natural-earth") {
-  await page.waitForFunction((source) => {
+/**
+ * #432: the readiness components the scene publishes, read as one snapshot so a
+ * failed wait can say which one is unmet instead of reporting one
+ * undifferentiated timeout.
+ */
+function readCoastlineReadiness(page) {
+  return page.evaluate(() => {
     const host = document.querySelector(".particle-earth-scene");
-    return host?.dataset.coastlineSource === source
-      && ["ready", "cached"].includes(host?.dataset.coastlineRefinement ?? "");
-  }, expectedSource, { timeout: 5_000 });
-  return measure(page);
+    return {
+      present: Boolean(host),
+      coastlineSource: host?.dataset.coastlineSource ?? null,
+      coastlineRefinement: host?.dataset.coastlineRefinement ?? null,
+      regionKey: host?.dataset.coastlineRegionKey ?? null,
+      pendingRegionKey: host?.dataset.coastlinePendingRegionKey ?? null,
+      refinementRevision: Number(host?.dataset.coastlineRefinementRevision ?? Number.NaN),
+      frameRevision: Number(host?.dataset.sceneFrameRevision ?? Number.NaN),
+      labelLayout: host?.dataset.placeLabelLayout ?? null,
+      labelLayoutFrame: Number(host?.dataset.placeLabelLayoutFrame ?? Number.NaN),
+    };
+  });
 }
+
+/** Which readiness component a snapshot is still missing, or null when ready. */
+function unmetReadinessComponent(state) {
+  if (!state.present) return "scene host (.particle-earth-scene) is not mounted";
+  if (state.coastlineSource !== state.expectedSource) {
+    return `coastlineSource assignment is ${JSON.stringify(state.coastlineSource)}, not ${JSON.stringify(state.expectedSource)}`;
+  }
+  if (!["ready", "cached"].includes(state.coastlineRefinement ?? "")) {
+    return `coastlineRefinement state is ${JSON.stringify(state.coastlineRefinement)}, not a terminal ready/cached state`;
+  }
+  if (state.pendingRegionKey) {
+    return `a newer local refinement for region ${JSON.stringify(state.pendingRegionKey)} is still in flight, so the terminal state belongs to the previous load ${JSON.stringify(state.regionKey)}`;
+  }
+  return null;
+}
+
+/**
+ * Wait until the LOCAL coastline the view is asking for is actually the one the
+ * renderer has applied, and until a Place Label layout pass has run against it.
+ *
+ * #432: the previous form was a single page.waitForFunction with a five second
+ * bound, so "the composite source appeared inside the window" WAS the success
+ * condition - a wall clock standing in for a semantic one, and one opaque
+ * timeout when it did not. The completion condition here is renderer-owned:
+ * the published source and refinement state, no newer load in flight
+ * (coastlinePendingRegionKey empty), the applied-load revision stable across
+ * the observation, and placeLabelLayoutRevision advanced past the value seen
+ * when that load became terminal. The bound below is only a deadlock guard.
+ */
+const COASTLINE_READINESS_DEADLOCK_MS = 5_000;
+
+async function waitForLocalCoastline(page, expectedSource = "50m-regional+10m-local-natural-earth") {
+  const deadline = Date.now() + COASTLINE_READINESS_DEADLOCK_MS;
+  let last = { ...(await readCoastlineReadiness(page)), expectedSource };
+  let unmet = unmetReadinessComponent(last) ?? "place label layout has not run a pass against the applied coastline load";
+  while (Date.now() < deadline) {
+    const coastline = { ...(await readCoastlineReadiness(page)), expectedSource };
+    last = coastline;
+    const coastlineUnmet = unmetReadinessComponent(coastline);
+    if (coastlineUnmet) {
+      unmet = coastlineUnmet;
+      await page.waitForTimeout(50);
+      continue;
+    }
+    // The coastline the view asked for is applied. A rendered Place Label
+    // layout pass has to run AFTER that before anything downstream measures
+    // labels against it, otherwise the first sample describes the previous one.
+    await waitForRenderedFrame(page);
+    const settled = { ...(await readCoastlineReadiness(page)), expectedSource };
+    last = settled;
+    const settledUnmet = unmetReadinessComponent(settled);
+    if (settledUnmet || settled.refinementRevision !== coastline.refinementRevision) {
+      // A newer load landed while waiting for the frame; the observation is
+      // stale by construction, so start again rather than accept it.
+      unmet = settledUnmet ?? `a newer coastline load landed (revision ${coastline.refinementRevision} -> ${settled.refinementRevision}) while waiting for a label layout pass`;
+      continue;
+    }
+    if (!(settled.frameRevision > coastline.frameRevision)) {
+      unmet = `no frame has been rendered past scene frame ${coastline.frameRevision} since the coastline load became terminal`;
+      continue;
+    }
+    // The layout layer stamps every decision it makes - a completed pass, a
+    // skip because the projection did not move, or a layer that is not drawn -
+    // with the frame it made it in. Requiring a decision newer than the
+    // coastline load means the placement on screen has been evaluated against
+    // this load, without asserting that a pass must re-run on a settled scene.
+    if (!(settled.labelLayoutFrame > coastline.frameRevision)) {
+      unmet = `place label layout has not been evaluated since scene frame ${coastline.frameRevision} (last ${JSON.stringify(settled.labelLayout)} at frame ${settled.labelLayoutFrame})`;
+      continue;
+    }
+    return measure(page);
+  }
+  throw new Error(
+    `[qa-city-label-anchoring] local coastline readiness unmet after ${COASTLINE_READINESS_DEADLOCK_MS}ms: ${unmet}`
+    + ` (last observed coastlineSource=${JSON.stringify(last.coastlineSource)}`
+    + ` coastlineRefinement=${JSON.stringify(last.coastlineRefinement)}`
+    + ` regionKey=${JSON.stringify(last.regionKey)}`
+    + ` pendingRegionKey=${JSON.stringify(last.pendingRegionKey)}`
+    + ` refinementRevision=${last.refinementRevision}`
+    + ` sceneFrameRevision=${last.frameRevision}`
+    + ` placeLabelLayout=${JSON.stringify(last.labelLayout)}`
+    + ` placeLabelLayoutFrame=${last.labelLayoutFrame})`,
+  );
+}
+
+/** Wait until the focus flight has stopped moving the focus signal. */
 
 async function waitForFocusToSettle(page) {
   let previous = null;

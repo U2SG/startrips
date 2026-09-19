@@ -1826,6 +1826,10 @@ export function ParticleEarthScene({
     let currentRenderState: GlobeRenderState = "rendering";
     let resolvedRenderBudget: ResolvedRenderBudget = { effectiveDpr: 1, drawingBufferPixels: 1, drawingBufferWidth: 1, drawingBufferHeight: 1 };
     let lastFrameDeltaMs = 0;
+    // #432: how many frames this scene has rendered. A reader outside the
+    // scene needs "a frame happened after the state I observed"; the pass
+    // counters below say what that frame did, not that one occurred.
+    let sceneFrameRevision = 0;
     let qualityBuildRevision = 0;
     const targetSize = new Vector2();
     const scene = new Scene();
@@ -3209,8 +3213,26 @@ export function ParticleEarthScene({
       }
     };
 
+    // #432: Place Label anchors are written inside this pass, one pass per
+    // rendered frame. Publishing how many passes have completed lets a reader
+    // outside the scene wait for "the layout that reflects the state I just
+    // observed" instead of for a duration.
+    let placeLabelLayoutRevision = 0;
+    // Every exit of the layout pass states what it decided and in which frame,
+    // so "layout is current for this frame" is readable without inferring it
+    // from elapsed time: a completed pass, a skip because the projection did
+    // not move, or a layer that is not drawn at all.
+    const publishPlaceLabelLayout = (state: "laid-out" | "settled" | "inactive") => {
+      host.dataset.placeLabelLayout = state;
+      host.dataset.placeLabelLayoutFrame = String(sceneFrameRevision);
+    };
     const updateRouteVectorLayer = () => {
-      if (routeVectorOpacity <= 0.01) return;
+      if (routeVectorOpacity <= 0.01) {
+        // The layer is not drawn, so no Place Label layout runs this frame and
+        // a reader waiting for one would wait forever. Say so instead.
+        publishPlaceLabelLayout("inactive");
+        return;
+      }
       sampleJourneyConnectorCard(false);
       const cardRect = journeyConnectorCardRect;
       const projectionState = [
@@ -3257,6 +3279,12 @@ export function ParticleEarthScene({
         !projectionChanged
         && renderedRouteProjectionRevision === routeProjectionRevision
       ) {
+        // #432: skipping the pass is the SETTLED state, not a missing one -
+        // the placement already on screen is the placement this projection
+        // produces. A reader waiting for layout has to be able to tell that
+        // apart from a pass that has not happened yet, so it is published
+        // rather than left to a timeout to guess.
+        publishPlaceLabelLayout("settled");
         return;
       }
       lastRouteProjectionState.set(projectionState);
@@ -3647,6 +3675,12 @@ export function ParticleEarthScene({
         // by name alone is visible without inspecting glyphs.
         host.dataset.journeyCityLabelRedundantCount = String(redundantCityLabelCount);
       }
+
+      // Advances whether or not this Atlas has city tier data, so a reader
+      // waiting on label layout is never deadlocked by an empty label layer.
+      placeLabelLayoutRevision += 1;
+      host.dataset.placeLabelLayoutRevision = String(placeLabelLayoutRevision);
+      publishPlaceLabelLayout("laid-out");
 
       updateJourneyConnector();
     };
@@ -4269,6 +4303,11 @@ export function ParticleEarthScene({
     let activeCoastlineLocalVertices = 0;
     let localCoastlineRetryAt = Number.NEGATIVE_INFINITY;
     let coastlineRefinementState = document.hidden ? "paused" : "fallback";
+    // #432: a terminal refinement state alone cannot say WHICH load it belongs
+    // to, so a reader can be satisfied by the previous region's finished load
+    // while the current one is still in flight. This counts applied near
+    // coastline geometries, so readiness is stated against a load identity.
+    let coastlineRefinementRevision = 0;
     let lastCoastlineRefinementSampleAt = Number.NEGATIVE_INFINITY;
 
     const removeParticleDimmingMaterial = (
@@ -4485,6 +4524,7 @@ export function ParticleEarthScene({
       activeCoastlineChunkIds = [...chunkIds];
       activeCoastlineLocalVertices = localVertexCount;
       coastlineRefinementState = terminalState;
+      coastlineRefinementRevision += 1;
     };
 
     const readLocalCoastlineChunk = async (
@@ -4952,6 +4992,7 @@ export function ParticleEarthScene({
     const render = (now: number) => {
       animationFrame = 0;
       if (disposed) return;
+      sceneFrameRevision += 1;
       const elapsedDelta = Math.min(0.25, Math.max(0, (now - lastTime) / 1000));
       const delta = Math.min(0.05, elapsedDelta);
       lastFrameDeltaMs = delta * 1_000;
@@ -5418,6 +5459,14 @@ export function ParticleEarthScene({
       host.dataset.coastlineLocalChunkCache = String(coastlineLocalChunkCache.size);
       host.dataset.coastlineLocalVertices = String(activeCoastlineLocalVertices);
       host.dataset.coastlineRefinement = coastlineRefinementState;
+      // #432: the readiness a reader outside the scene needs is not "some load
+      // finished" but "the load for the region being asked about finished and
+      // nothing newer is in flight". The scene owns both facts, so it publishes
+      // them rather than leaving a wall clock to guess.
+      host.dataset.sceneFrameRevision = String(sceneFrameRevision);
+      host.dataset.coastlineRefinementRevision = String(coastlineRefinementRevision);
+      host.dataset.coastlineRegionKey = activeCoastlineRegionKey ?? "";
+      host.dataset.coastlinePendingRegionKey = requestedCoastlineCacheKey ?? "";
       if (activeCoastlineInspectionTarget) {
         host.dataset.coastlineInspectionSource = activeCoastlineInspectionTarget.source;
         host.dataset.coastlineInspectionLat = activeCoastlineInspectionTarget.lat.toFixed(5);
