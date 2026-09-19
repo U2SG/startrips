@@ -1091,11 +1091,15 @@ async function verifyComposerGlobeRoundTrip() {
     await page.locator("[data-qa-app-route-preview]").waitFor({ state: "attached" });
   };
   const completePick = async () => {
+    // #375: the Route Point list and the globe pick now live on different
+    // Composer surfaces on compact mobile, so the list is read on the primary
+    // surface and the pick is entered from Location details.
+    const scrollBefore = await page.locator(".journey-composer__editor").evaluate((element) => element.scrollTop);
+    const countBefore = await routeItems().count();
+    await openComposerTask(page, "location");
     const trigger = page.getByRole("button", { name: /直接在地球上取点/ });
     await trigger.scrollIntoViewIfNeeded();
     await settleRender();
-    const scrollBefore = await page.locator(".journey-composer__editor").evaluate((element) => element.scrollTop);
-    const countBefore = await routeItems().count();
     await trigger.click();
     await page.locator(".journey-globe-pick-hint").waitFor({ state: "visible" });
     // This waits on the actual LivingAtlasApp handoff: startGlobePick flips
@@ -1136,6 +1140,17 @@ async function verifyComposerGlobeRoundTrip() {
         && getComputedStyle(composer).visibility === "visible"
         && (document.activeElement?.classList.contains("journey-globe-pick-button") ?? false);
     });
+    // ST-043's focus restore returns to the pick trigger, which lives in the
+    // task the pick was started from, so this is read before leaving it.
+    const returned = await page.evaluate(() => ({
+      appPickActive: document.querySelector(".living-atlas")?.classList.contains("is-globe-picking") ?? false,
+      bodyOverflow: document.body.style.overflow,
+      composerVisibility: getComputedStyle(document.querySelector(".journey-composer")).visibility,
+      activeIsTrigger: document.activeElement?.classList.contains("journey-globe-pick-button") ?? false,
+      overflowX: Math.max(0, document.documentElement.scrollWidth - innerWidth),
+      overflowY: Math.max(0, document.documentElement.scrollHeight - innerHeight),
+    }));
+    await leaveComposerTask(page);
     await page.waitForFunction((expected) => (
       document.querySelectorAll(".journey-route-draft > li:not(.is-empty)").length === expected
     ), countBefore + 1);
@@ -1147,14 +1162,6 @@ async function verifyComposerGlobeRoundTrip() {
     const scrollAfter = await page.locator(".journey-composer__editor").evaluate((element) => element.scrollTop);
     const preview = await readPreview();
     const lastPoint = preview.at(-1) ?? null;
-    const returned = await page.evaluate(() => ({
-      appPickActive: document.querySelector(".living-atlas")?.classList.contains("is-globe-picking") ?? false,
-      bodyOverflow: document.body.style.overflow,
-      composerVisibility: getComputedStyle(document.querySelector(".journey-composer")).visibility,
-      activeIsTrigger: document.activeElement?.classList.contains("journey-globe-pick-button") ?? false,
-      overflowX: Math.max(0, document.documentElement.scrollWidth - innerWidth),
-      overflowY: Math.max(0, document.documentElement.scrollHeight - innerHeight),
-    }));
     return { countBefore, scrollBefore, scrollAfter, picking, preview, lastPoint, returned };
   };
 
@@ -3056,11 +3063,15 @@ async function verifyFinalAcceptanceMobileFlow() {
         timeout: 5_000,
       });
       console.error(`[qa-post-login] final:${viewportLabel}:reverse-geocode-ready`);
+      // #375: whole-journey media is organised in the media task on compact
+      // mobile; the save action stays reachable from every task.
+      await openComposerTask(page, "media");
       await page.locator(".journey-media-picker input[type=file]").setInputFiles({
         name: `final-${viewportLabel}.png`,
         mimeType: "image/png",
         buffer: Buffer.from(`final-acceptance-${viewportLabel}`),
       });
+      await leaveComposerTask(page);
       console.error(`[qa-post-login] final:${viewportLabel}:upload-started`);
       await activateControl(
         page.getByRole("button", { name: "保存到星球" }),

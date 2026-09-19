@@ -87,7 +87,7 @@ const PRIMARY_ABSENT = {
   "media-upload": ".journey-media-picker",
 };
 
-async function openComposer(browser, { width, height }) {
+async function openComposer(browser, { width, height }, qaMode = "edit") {
   const context = await browser.newContext({
     viewport: { width, height },
     reducedMotion: "reduce",
@@ -95,7 +95,8 @@ async function openComposer(browser, { width, height }) {
   const page = await context.newPage();
   const pageErrors = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
-  await page.goto(new URL("/?qaState=journey-composer&qaMode=edit", baseUrl).toString(), {
+  const path = qaMode ? `/?qaState=journey-composer&qaMode=${qaMode}` : "/?qaState=journey-composer";
+  await page.goto(new URL(path, baseUrl).toString(), {
     waitUntil: "domcontentloaded",
     timeout: 60_000,
   });
@@ -276,6 +277,12 @@ try {
           });
         }));
       });
+      // Put the visual viewport back so the checks after this one measure the
+      // normal surface rather than a simulated open keyboard.
+      await page.evaluate(() => {
+        delete window.visualViewport.height;
+        window.visualViewport.dispatchEvent(new Event("resize"));
+      });
       record(`composer-mobile-ia:${viewport.label}:available-height`, { keyboard },
         keyboard.published === `${keyboard.reduced}px`
         && keyboard.composerHeight <= keyboard.reduced + 1
@@ -283,11 +290,88 @@ try {
         && keyboard.inputVisible
         && keyboard.saveVisible);
 
+      // Acceptance 2: one selected draftId and one authoritative draft. Task
+      // switching may change what is rendered; it may not change which record
+      // is selected, nor which record a pending file belongs to.
+      if (viewport.label === "390") {
+        const expandedBefore = await page.evaluate(() => {
+          const row = document.querySelector('[data-route-point-expanded="true"]');
+          return row?.getAttribute("data-route-point-draft-id") ?? null;
+        });
+        await page.locator('[data-composer-task-entry="media"]').click();
+        await page.locator('[data-composer-task="media"]').waitFor({ state: "visible" });
+        await page.locator("[data-composer-task-back]").click();
+        await page.locator('[data-composer-task="primary"]').waitFor({ state: "visible" });
+        const expandedAfter = await page.evaluate(() => {
+          const rows = [...document.querySelectorAll('[data-route-point-expanded="true"]')];
+          return {
+            draftIds: rows.map((row) => row.getAttribute("data-route-point-draft-id")),
+            rowCount: document.querySelectorAll(".journey-route-draft > li:not(.is-empty)").length,
+          };
+        });
+        record(`composer-mobile-ia:390:selection-survives-task-switch`, { expandedBefore, expandedAfter },
+          Boolean(expandedBefore)
+          && expandedAfter.draftIds.length === 1
+          && expandedAfter.draftIds[0] === expandedBefore);
+
+        // The contextual upload writes the record's draftId onto the pending
+        // file; the media task must still show that ownership after a return.
+        await page.locator('.journey-route-draft__media-upload input[type="file"]').setInputFiles({
+          name: "route-point-owned.png",
+          mimeType: "image/png",
+          buffer: Buffer.from("qa"),
+        });
+        const readAssignment = () => page.evaluate(() => {
+          const card = document.querySelector(".journey-media-mobile-card__assignment span");
+          return card?.textContent?.trim() ?? null;
+        });
+        await page.locator('[data-composer-task-entry="media"]').click();
+        await page.locator('[data-composer-task="media"]').waitFor({ state: "visible" });
+        const assignedFirst = await readAssignment();
+        await page.locator("[data-composer-task-back]").click();
+        await page.locator('[data-composer-task="primary"]').waitFor({ state: "visible" });
+        await page.locator('[data-composer-task-entry="media"]').click();
+        await page.locator('[data-composer-task="media"]').waitFor({ state: "visible" });
+        const assignedAgain = await readAssignment();
+        await page.locator("[data-composer-task-back]").click();
+        await page.locator('[data-composer-task="primary"]').waitFor({ state: "visible" });
+        record("composer-mobile-ia:390:pending-media-ownership-survives", { assignedFirst, assignedAgain },
+          Boolean(assignedFirst)
+          && assignedFirst !== "整段旅程"
+          && assignedFirst === assignedAgain);
+      }
+
       record(`composer-mobile-ia:${viewport.label}:no-page-errors`, { pageErrors: run.pageErrors },
         run.pageErrors.length === 0);
     } finally {
       await run.context.close();
     }
+  }
+
+  const empty = await openComposer(browser, { width: 390, height: 844 }, "");
+  try {
+    const state = await empty.page.evaluate(() => ({
+      activeTask: document.querySelector("[data-composer-task]")?.getAttribute("data-composer-task") ?? null,
+      emptyRows: document.querySelectorAll(".journey-route-draft > li.is-empty").length,
+      rows: document.querySelectorAll(".journey-route-draft > li:not(.is-empty)").length,
+      title: document.querySelectorAll(".journey-title-field input").length,
+      search: document.querySelectorAll(".journey-location-search input").length,
+      entries: document.querySelectorAll("[data-composer-task-entry]").length,
+      save: document.querySelectorAll(".journey-composer__footer-actions button").length,
+    }));
+    record("composer-mobile-ia:390:empty-route", { state, pageErrors: empty.pageErrors },
+      state.activeTask === "primary"
+      && state.rows === 0
+      && state.emptyRows === 1
+      && state.title === 1
+      && state.search === 1
+      // journey-info, media and the More control; the two More entries are
+      // behind it and are covered by the entry/return checks above.
+      && state.entries === 3
+      && state.save >= 1
+      && empty.pageErrors.length === 0);
+  } finally {
+    await empty.context.close();
   }
 
   // Desktop shares the architecture but keeps its inline layout: the task
