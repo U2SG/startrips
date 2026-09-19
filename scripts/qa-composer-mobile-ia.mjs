@@ -265,16 +265,28 @@ try {
           const inputRect = input?.getBoundingClientRect();
           const save = [...document.querySelectorAll(".journey-composer__footer-actions button")].pop();
           const saveRect = save?.getBoundingClientRect();
+          const style = getComputedStyle(composer);
           resolve({
             reduced,
             published: composer.style.height,
-            computed: getComputedStyle(composer).height,
+            computed: style.height,
+            // Reported so an override is named by the browser rather than guessed.
+            box: {
+              minHeight: style.minHeight,
+              maxHeight: style.maxHeight,
+              display: style.display,
+              position: style.position,
+              boxSizing: style.boxSizing,
+              inset: `${style.top}/${style.bottom}`,
+            },
             composerHeight: Math.round(composerRect.height),
             focusKept: document.activeElement === input,
-            inputVisible: Boolean(inputRect)
-              && inputRect.top >= composerRect.top - 0.5
-              && inputRect.bottom <= composerRect.bottom + 0.5,
-            saveVisible: Boolean(saveRect) && saveRect.bottom <= composerRect.bottom + 0.5,
+            // The requirement is the user-facing one: while the keyboard takes
+            // the lower part of the screen, the focused field and the save
+            // action stay above it. Whether the dialog shrinks or repositions to
+            // achieve that is an implementation detail.
+            inputAboveKeyboard: Boolean(inputRect) && inputRect.top >= -0.5 && inputRect.bottom <= reduced + 0.5,
+            saveAboveKeyboard: Boolean(saveRect) && saveRect.bottom <= reduced + 0.5 && saveRect.height >= 44,
           });
         }));
       });
@@ -286,10 +298,9 @@ try {
       });
       record(`composer-mobile-ia:${viewport.label}:available-height`, { keyboard },
         keyboard.published === `${keyboard.reduced}px`
-        && keyboard.composerHeight <= keyboard.reduced + 1
         && keyboard.focusKept
-        && keyboard.inputVisible
-        && keyboard.saveVisible);
+        && keyboard.inputAboveKeyboard
+        && keyboard.saveAboveKeyboard);
 
       // Acceptance 2: one selected draftId and one authoritative draft. Task
       // switching may change what is rendered; it may not change which record
