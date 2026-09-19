@@ -586,7 +586,9 @@
         "src/scene/ParticleEarthScene*",
         "src/reveal/**",
         "scripts/qa-globe-render-budget.mjs",
-        "scripts/qa-cover-reveal.mjs"
+        "scripts/qa-cover-reveal.mjs",
+        "src/scene/LivingAtlasGlobe.tsx",
+        "src/scene/DetailedEarthMap.tsx"
       ],
       "coverage": "partial",
       "evidence": [
