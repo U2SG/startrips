@@ -224,6 +224,17 @@ test("account identity boundaries suggest the stable identity invariant", () => 
   }
 });
 
+test("renderer coexistence owners suggest the rendering-tenancy invariant", () => {
+  const registry = loadRegistry();
+  for (const changedPath of [
+    "src/scene/LivingAtlasGlobe.tsx",
+    "src/scene/DetailedEarthMap.tsx",
+  ]) {
+    const impact = resolveImpact(registry, [changedPath]);
+    assert.ok(impact.impacted.some((entry) => entry.id === "CFAA-RENDER-001"));
+  }
+});
+
 test("password route changes suggest the replay invariant", () => {
   const registry = loadRegistry();
   const impact = resolveImpact(registry, ["server/routes/account-password.ts"]);
@@ -262,6 +273,17 @@ test("impact markdown neutralizes Markdown link, image, and code syntax in filen
   assert.match(markdown, /&#33;&#91;status&#93;&#40;https:\/example\.invalid\/pixel\.png&#41;-&#96;code&#96;\.ts/);
   assert.doesNotMatch(markdown, /!\[status\]\(/);
   assert.doesNotMatch(markdown, /`code`/);
+});
+
+test("impact markdown neutralizes strikethrough and other punctuation syntax", () => {
+  const registry = sampleRegistry();
+  registry.invariants[0].pathGlobs = ["src/owner/**"];
+  const dangerous = "src/owner/~~retired~~_[x].ts";
+  const impact = resolveImpact(registry, [dangerous]);
+  const comparison = compareDeclarations(registry, impact, []);
+  const markdown = renderImpactMarkdown(registry, impact, comparison);
+  assert.match(markdown, /&#126;&#126;retired&#126;&#126;&#95;&#91;x&#93;\.ts/);
+  assert.doesNotMatch(markdown, /~~retired~~/);
 });
 
 test("an empty path projection is explicitly not approval", () => {
