@@ -24,6 +24,12 @@ const artifactDir = "artifacts/cover-reveal-opening";
 // an image-diff judgement. Distinct enough that a blend is neither.
 const DERIVATIVE_COLOR = { r: 214, g: 74, b: 42 };
 const ORIGINAL_COLOR = { r: 36, g: 92, b: 176 };
+// A THIRD colour, for the canonical original of the NEXT cover revision. The
+// re-signed case below deliberately serves the same bytes under a new url, so
+// without a distinct colour "the final image is the current revision's cover"
+// would be indistinguishable from "the final image is the previous revision's
+// cover", and the revision case would grade nothing.
+const REPLACED_ORIGINAL_COLOR = { r: 46, g: 158, b: 82 };
 
 const DERIVATIVE_URL = "https://qa-storage.invalid/cover-reveal/derivative.png?sig=qa-display";
 const ORIGINAL_URL = "https://qa-storage.invalid/media/original.png?sig=qa-original";
@@ -31,9 +37,14 @@ const ORIGINAL_URL = "https://qa-storage.invalid/media/original.png?sig=qa-origi
 // signed read on its own timer, so the url under a mounted opening changes
 // without the viewer doing anything at all.
 const ORIGINAL_URL_RESIGNED = "https://qa-storage.invalid/media/original.png?sig=qa-original-2";
+// The replacement cover bytes behind the SAME cover asset id, and the
+// derivative the server generated from them.
+const REPLACED_ORIGINAL_URL = "https://qa-storage.invalid/media/original-replaced.png?sig=qa-original-v2";
+const REPLACED_DERIVATIVE_URL = "https://qa-storage.invalid/cover-reveal/derivative-replaced.png?sig=qa-display-v2";
 
 const COVER_ASSET_ID = "qa-asset-cover";
 const COVER_HASH = "sha256:qa-cover-bytes";
+const REPLACED_COVER_HASH = "sha256:qa-replacement-bytes";
 const JOURNEY_ID = "qa-journey-opening";
 
 /** A 1x1 PNG of one colour, scaled by the browser. Small enough to inline here. */
@@ -89,6 +100,7 @@ function solidPng({ r, g, b }) {
 
 const DERIVATIVE_PNG = solidPng(DERIVATIVE_COLOR);
 const ORIGINAL_PNG = solidPng(ORIGINAL_COLOR);
+const REPLACED_ORIGINAL_PNG = solidPng(REPLACED_ORIGINAL_COLOR);
 
 const results = [];
 const failures = [];
@@ -98,11 +110,15 @@ function check(name, ok, detail) {
   if (!ok) failures.push(`${name}: ${JSON.stringify(detail ?? null)}`);
 }
 
-function journeyFixture({ coverAssetId = COVER_ASSET_ID, contentHash = COVER_HASH } = {}) {
+function journeyFixture({
+  coverAssetId = COVER_ASSET_ID,
+  contentHash = COVER_HASH,
+  title = "水墨开场回归旅程",
+} = {}) {
   return {
     id: JOURNEY_ID,
     atlasId: "qa-atlas",
-    title: "水墨开场回归旅程",
+    title,
     startedOn: "2026-05-04",
     endedOn: null,
     note: "这段旅程用于验证封面开场。",
@@ -146,7 +162,7 @@ function journeyFixture({ coverAssetId = COVER_ASSET_ID, contentHash = COVER_HAS
   };
 }
 
-function derivativePayload(overrides = {}) {
+function derivativePayload(overrides = {}, displayUrl = DERIVATIVE_URL) {
   return {
     derivative: {
       id: "qa-derivative-1",
@@ -162,10 +178,20 @@ function derivativePayload(overrides = {}) {
       ...overrides,
     },
     display: {
-      url: DERIVATIVE_URL,
+      url: displayUrl,
       expiresAt: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
     },
   };
+}
+
+/** The derivative the server pinned to whichever cover revision is current. */
+function currentDerivativePayload(state) {
+  return state.coverHash === REPLACED_COVER_HASH
+    ? derivativePayload(
+      { id: "qa-derivative-2", sourceContentHash: REPLACED_COVER_HASH },
+      REPLACED_DERIVATIVE_URL,
+    )
+    : derivativePayload();
 }
 
 /**
@@ -177,19 +203,59 @@ function derivativePayload(overrides = {}) {
  * falsifiable if what the browser sent is recorded.
  */
 async function installAtlasApi(page, state) {
-  await page.route("**/qa-storage.invalid/**", (route) => route.fulfill({
-    status: 200,
-    contentType: "image/png",
-    headers: { "access-control-allow-origin": "*", "cache-control": "no-store" },
-    body: route.request().url().includes("derivative") ? DERIVATIVE_PNG : ORIGINAL_PNG,
-  }));
+  await page.route("**/qa-storage.invalid/**", (route) => {
+    const url = route.request().url();
+    const body = url.includes("derivative")
+      ? DERIVATIVE_PNG
+      : url.includes("original-replaced") ? REPLACED_ORIGINAL_PNG : ORIGINAL_PNG;
+    return route.fulfill({
+      status: 200,
+      contentType: "image/png",
+      headers: { "access-control-allow-origin": "*", "cache-control": "no-store" },
+      body,
+    });
+  });
   await page.route("**/api/journeys", (route) => route.fulfill({
     status: 200,
     contentType: "application/json",
     body: JSON.stringify({ journeys: [state.journey] }),
   }));
+  // The owner edits the Journey, and the server answers with a cover whose
+  // stored bytes have moved behind the SAME asset id. That is a new cover
+  // revision, and everything downstream - the pin, the derivative and the
+  // canonical original read - has to move with it.
+  await page.route(`**/api/journeys/${JOURNEY_ID}`, async (route) => {
+    if (route.request().method() === "GET") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ journey: state.journey }),
+      });
+      return;
+    }
+    state.coverHash = REPLACED_COVER_HASH;
+    state.journey = journeyFixture({
+      contentHash: REPLACED_COVER_HASH,
+      title: JSON.parse(route.request().postData() ?? "{}").title ?? state.journey.title,
+    });
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ journey: state.journey }),
+    });
+  });
   await page.route("**/api/uploads/assets/*/read-url", (route) => {
     state.originalReads += 1;
+    if (state.coverHash === REPLACED_COVER_HASH) {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          url: REPLACED_ORIGINAL_URL,
+          expiresAt: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+        }),
+      });
+    }
     // An already-expired answer puts the client's own refresh timer on its one
     // second floor - the #200 case of a grant with seconds left - so the
     // canonical cover is genuinely re-signed inside one reveal.
@@ -295,6 +361,7 @@ function classify(sample) {
     + Math.abs(sample.g - color.g) + Math.abs(sample.b - color.b);
   if (distance(DERIVATIVE_COLOR) <= 40) return "derivative";
   if (distance(ORIGINAL_COLOR) <= 40) return "original-cover";
+  if (distance(REPLACED_ORIGINAL_COLOR) <= 40) return "replaced-original-cover";
   return "blend";
 }
 
@@ -355,7 +422,8 @@ async function openCase(viewport, {
     gate: null,
     originalReads: 0,
     expireOriginalRead,
-    derivative: derivative ?? (() => ({ status: 200, body: derivativePayload() })),
+    coverHash: journey.media[0]?.contentHash ?? COVER_HASH,
+    derivative: derivative ?? (() => ({ status: 200, body: currentDerivativePayload(state) })),
   };
   if (gated) {
     state.gate = new Promise((resolve) => { state.openGate = resolve; });
@@ -678,6 +746,106 @@ try {
     );
     check("resigned-original/no-renderer-survives", settled.canvases === 0, settled);
     check("resigned-original/no-page-errors", run.pageErrors.length === 0, run.pageErrors);
+    await run.context.close();
+  }
+
+  // 10. The CURRENT cover revision changes under a mounted opening, with the
+  //     cover asset id unchanged. #379 is explicit that old cover data cannot
+  //     attach to a new revision, and the same asset id carrying replacement
+  //     bytes is exactly the case where that is easy to get wrong: the opening
+  //     identity moves while a read keyed only by the asset id would not.
+  //
+  //     Driven at the real product surface. The owner opens the Journey, edits
+  //     it, and saves; the Atlas refreshes and the server reports a cover whose
+  //     stored bytes have moved. Entering Story is itself a newer intent, so the
+  //     first revision's opening is already gone before the edit - what is
+  //     graded here is the SECOND revision's opening and the pixels it settles
+  //     onto, not the handoff, which is case 4 and case 8.
+  {
+    const viewport = VIEWPORTS[0];
+    const run = await openCase(viewport);
+    const { page } = run;
+    await page.waitForFunction(
+      () => document.querySelector(".living-atlas__active-media-reveal")
+        ?.getAttribute("data-cover-reveal-phase") === "revealing",
+      undefined,
+      { timeout: 20_000 },
+    );
+    const readsBeforeReplacement = run.state.originalReads;
+    const callsBeforeReplacement = run.state.calls.length;
+
+    await page.locator(".living-atlas__active-hit-area").click();
+    await page.locator(".journey-story").waitFor({ timeout: 20_000 });
+    await page.locator(".journey-story").getByRole("button", { name: "编辑故事", exact: true }).click();
+    await page.getByRole("button", { name: "编辑旅程" }).click();
+    await page.locator(".journey-composer").waitFor({ timeout: 20_000 });
+    await page.locator(".journey-title-field input").fill("换过封面的旅程");
+    await page.getByRole("button", { name: "保存修改" }).click();
+    // The save has no media, so the composer closes itself and hands the
+    // viewer back to the cover surface - now on the next cover revision.
+    await page.locator(".journey-composer").waitFor({ state: "detached", timeout: 20_000 });
+    await page.locator(".living-atlas__active-media").waitFor({ timeout: 20_000 });
+
+    check(
+      "cover-revision-change/a-fresh-canonical-read-is-issued-for-the-new-revision",
+      run.state.originalReads > readsBeforeReplacement
+        && run.imageRequests.includes(REPLACED_ORIGINAL_URL),
+      { before: readsBeforeReplacement, after: run.state.originalReads },
+    );
+
+    // The new revision buys its own opening: a different identity, so the
+    // once-per-revision ledger does not suppress it.
+    await page.waitForFunction(
+      () => document.querySelector(".living-atlas__active-media-reveal")
+        ?.getAttribute("data-cover-reveal-phase") === "revealing",
+      undefined,
+      { timeout: 20_000 },
+    );
+    check(
+      "cover-revision-change/the-new-revision-asks-for-its-own-derivative",
+      run.state.calls.length > callsBeforeReplacement
+        && run.imageRequests.includes(REPLACED_DERIVATIVE_URL),
+      { before: callsBeforeReplacement, after: run.state.calls.length },
+    );
+    // Sampled across the whole second opening: the previous revision's cover
+    // bytes must not appear in it at any point, which is what a canonical read
+    // still pinned to the old revision would put on screen.
+    const samples = [];
+    for (let attempt = 0; attempt < 24; attempt += 1) {
+      const stage = await page.evaluate(() => document.querySelector(
+        ".living-atlas__active-media-reveal",
+      )?.getAttribute("data-cover-reveal-phase") ?? null);
+      if (stage === null) break;
+      samples.push(classify(await compositedColor(page, REVEAL_PROBE)));
+    }
+    check("cover-revision-change/the-new-opening-starts-on-its-own-derivative",
+      samples[0] === "derivative", samples);
+    check(
+      "cover-revision-change/the-previous-cover-bytes-never-appear",
+      !samples.includes("original-cover"),
+      samples,
+    );
+
+    await page.waitForFunction(
+      () => document.querySelector(".living-atlas__active-media-reveal") === null
+        && document.querySelector(".living-atlas__active-media img") !== null,
+      undefined,
+      { timeout: 40_000 },
+    );
+    const settled = await coverState(page);
+    const settledColor = classify(await compositedColor(page));
+    check(
+      "cover-revision-change/settles-on-the-new-canonical-original",
+      settledColor === "replaced-original-cover",
+      settledColor,
+    );
+    check(
+      "cover-revision-change/the-final-image-is-the-new-revisions-read",
+      settled.originalSrc === REPLACED_ORIGINAL_URL,
+      settled,
+    );
+    check("cover-revision-change/no-renderer-survives", settled.canvases === 0, settled);
+    check("cover-revision-change/no-page-errors", run.pageErrors.length === 0, run.pageErrors);
     await run.context.close();
   }
 } catch (error) {
