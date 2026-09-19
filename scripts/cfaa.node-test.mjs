@@ -128,6 +128,15 @@ test("NUL-delimited Git paths preserve Unicode without C-quoting", () => {
   assert.equal(pathMatchesGlob(paths[1], "src/scene/**"), true);
 });
 
+test("literal backslashes in Git paths are preserved", () => {
+  const registry = loadRegistry();
+  const path = "src/journey/foo\\Playback.ts";
+  const impact = resolveImpact(registry, [path]);
+  const ids = new Set(impact.impacted.map((entry) => entry.id));
+  assert.ok(ids.has("CFAA-TIME-001"));
+  assert.deepEqual(impact.changedPaths, [path]);
+});
+
 test("impact resolution is deterministic and records matching paths", () => {
   const registry = sampleRegistry();
   const impact = resolveImpact(registry, [
@@ -214,6 +223,16 @@ test("declared IDs are deduplicated and compared with suggestions", () => {
   assert.deepEqual(comparison.declared, ["CFAA-TEST-001", "CFAA-UNKNOWN-999"]);
   assert.deepEqual(comparison.suggestedButUndeclared, []);
   assert.deepEqual(comparison.unknownDeclared, ["CFAA-UNKNOWN-999"]);
+});
+
+test("impact markdown escapes table metacharacters in Git filenames", () => {
+  const registry = sampleRegistry();
+  registry.invariants[0].pathGlobs = ["src/owner/**"];
+  const impact = resolveImpact(registry, ["src/owner/a|b<test>\nfile.ts"]);
+  const comparison = compareDeclarations(registry, impact, []);
+  const markdown = renderImpactMarkdown(registry, impact, comparison);
+  assert.match(markdown, /a&#124;b&lt;test&gt;<br>file\.ts/);
+  assert.doesNotMatch(markdown, /a\|b<test>/);
 });
 
 test("an empty path projection is explicitly not approval", () => {
