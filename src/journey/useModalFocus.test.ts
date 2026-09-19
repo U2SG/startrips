@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { claimInertOwnership, isModalFocusCandidate, modalSurfaceFor, resolveModalInitialFocusTarget } from "./useModalFocus";
+import { claimInertOwnership, isModalFocusCandidate, modalSurfaceFor, resolveModalInitialFocusTarget, resolveNestedModalRestoreTarget } from "./useModalFocus";
 
 function candidate({ inert = false, rendered = true } = {}) {
   return {
@@ -39,6 +39,20 @@ describe("resolveModalInitialFocusTarget", () => {
     const root = { contains: vi.fn(() => true) } as unknown as HTMLElement;
 
     expect(resolveModalInitialFocusTarget(root, () => hidden)).toBe(root);
+  });
+});
+
+describe("resolveNestedModalRestoreTarget", () => {
+  it("uses the nested trap's explicit current-owner target instead of stale previous focus", () => {
+    const previous = {} as HTMLElement;
+    const currentOwner = {} as HTMLElement;
+    expect(resolveNestedModalRestoreTarget(previous, () => currentOwner)).toBe(currentOwner);
+  });
+
+  it("falls back only when the resolver yields undefined and honors an explicit null", () => {
+    const previous = {} as HTMLElement;
+    expect(resolveNestedModalRestoreTarget(previous, () => undefined)).toBe(previous);
+    expect(resolveNestedModalRestoreTarget(previous, () => null)).toBeNull();
   });
 });
 
