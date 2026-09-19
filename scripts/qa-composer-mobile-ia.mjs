@@ -290,6 +290,37 @@ try {
           });
         }));
       });
+      // A direct, unambiguous probe of whether this dialog honours an explicit
+      // height at all, so a miss above is attributed to the right cause rather
+      // than inferred from the stylesheet.
+      const heightProbe = await page.evaluate(() => new Promise((resolve) => {
+        const composer = document.querySelector(".journey-composer");
+        const target = 300;
+        const before = getComputedStyle(composer).height;
+        composer.style.height = `${target}px`;
+        const immediate = getComputedStyle(composer).height;
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          const parent = composer.parentElement;
+          const settled = getComputedStyle(composer).height;
+          composer.style.removeProperty("height");
+          resolve({
+            target,
+            before,
+            immediate,
+            settled,
+            inline: composer.style.height,
+            sameElement: composer === document.querySelector(".journey-composer"),
+            connected: composer.isConnected,
+            parentClass: parent?.className ?? null,
+            parentDisplay: parent ? getComputedStyle(parent).display : null,
+            parentHeight: parent ? getComputedStyle(parent).height : null,
+            parentAlign: parent ? getComputedStyle(parent).alignItems : null,
+          });
+        }));
+      }));
+      record(`composer-mobile-ia:${viewport.label}:honours-explicit-height`, { heightProbe },
+        heightProbe.settled === `${heightProbe.target}px`);
+
       // Put the visual viewport back so the checks after this one measure the
       // normal surface rather than a simulated open keyboard.
       await page.evaluate(() => {
