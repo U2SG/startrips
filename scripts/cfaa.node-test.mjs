@@ -252,6 +252,18 @@ test("impact markdown escapes table metacharacters in Git filenames", () => {
   assert.doesNotMatch(markdown, /a\|b<test>/);
 });
 
+test("impact markdown neutralizes Markdown link, image, and code syntax in filenames", () => {
+  const registry = sampleRegistry();
+  registry.invariants[0].pathGlobs = ["src/owner/**"];
+  const dangerous = "src/owner/![status](https:/example.invalid/pixel.png)-`code`.ts";
+  const impact = resolveImpact(registry, [dangerous]);
+  const comparison = compareDeclarations(registry, impact, []);
+  const markdown = renderImpactMarkdown(registry, impact, comparison);
+  assert.match(markdown, /&#33;&#91;status&#93;&#40;https:&#47;example\.invalid&#47;pixel\.png&#41;-&#96;code&#96;\.ts/);
+  assert.doesNotMatch(markdown, /!\[status\]\(/);
+  assert.doesNotMatch(markdown, /`code`/);
+});
+
 test("an empty path projection is explicitly not approval", () => {
   const registry = sampleRegistry();
   const impact = resolveImpact(registry, ["docs/unrelated.md"]);
