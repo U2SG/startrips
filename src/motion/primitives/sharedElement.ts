@@ -118,6 +118,29 @@ let cancelActiveMorph: (() => void) | null = null;
  * would also lift that whole card above the Story's blurred backdrop. Keep
  * View Transitions for morphJourneyCard, and use an element-only handoff here.
  */
+type MorphScrollContainer = { contains: (node: Node | null) => boolean };
+
+/**
+ * #429: a scroll only invalidates a live morph when it can actually move the
+ * geometry being interpolated - the document scroller, or a scroll container
+ * that holds the source or the already-resolved target. A scroll inside an
+ * unrelated subtree cannot. The Route Point context panel owns its own
+ * `overflow-y` and, in the compact layout where its content exceeds the
+ * panel's max height, a scroll event is routinely still queued when its entry
+ * is clicked; that scroll would otherwise reach the capture-phase listener and
+ * destroy the observation aperture the same click just published.
+ */
+export function scrollInvalidatesSharedElementMorph(
+  scrolled: MorphScrollContainer | null,
+  documentScroller: boolean,
+  source: Node,
+  target: Node | null,
+): boolean {
+  if (documentScroller) return true;
+  if (!scrolled) return false;
+  return scrolled.contains(source) || (target !== null && scrolled.contains(target));
+}
+
 export function runSharedElementMorph({
   source,
   resolveTarget,
@@ -214,12 +237,21 @@ export function runSharedElementMorph({
     window.removeEventListener("resize", cleanup);
     window.removeEventListener("orientationchange", cleanup);
     window.removeEventListener("blur", cleanup);
-    document.removeEventListener("scroll", cleanup, true);
+    document.removeEventListener("scroll", onScroll, true);
     document.removeEventListener("visibilitychange", onVisibilityChange);
     if (cancelActiveMorph === cleanup) cancelActiveMorph = null;
     cleanupExternal();
   };
   const onVisibilityChange = () => { if (document.hidden) cleanup(); };
+  const onScroll = (event: Event) => {
+    const scrolled = event.target;
+    if (scrollInvalidatesSharedElementMorph(
+      scrolled instanceof Element ? scrolled : null,
+      scrolled === document || scrolled === document.scrollingElement,
+      source,
+      target,
+    )) cleanup();
+  };
   const advance = () => {
     if (settled) return;
     if (isTargetCurrent && !isTargetCurrent()) {
@@ -266,7 +298,7 @@ export function runSharedElementMorph({
   window.addEventListener("resize", cleanup);
   window.addEventListener("orientationchange", cleanup);
   window.addEventListener("blur", cleanup);
-  document.addEventListener("scroll", cleanup, true);
+  document.addEventListener("scroll", onScroll, true);
   document.addEventListener("visibilitychange", onVisibilityChange);
   stopMotionPreference = onMotionPreferenceChange((reduced) => { if (reduced) cleanup(); });
   // A stalled signed read/decode must reveal the Story's normal loading UI.
