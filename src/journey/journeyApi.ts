@@ -1,3 +1,4 @@
+import type { CoverRevealDisplayPayload } from "./coverRevealOpening";
 import type { HomeBasePeriod } from "./homeBase";
 import type { HomeBaseDismissal } from "./homeBaseInference";
 import type { HomeBaseConfirmationRequest } from "./homeBaseSuggestion";
@@ -133,6 +134,27 @@ export async function enqueueCoverReveal(
     fetcher,
   );
   return payload.derivative;
+}
+
+/**
+ * #386: the ordinary authenticated read of what this Journey may display.
+ *
+ * `credentials: "include"` and nothing else — the same session cookie that
+ * read the Journey. A worker credential is not a thing this client holds, and
+ * a worker source-read URL is not a thing this client can ask for.
+ *
+ * `no-store` because the answer carries a short-lived signed capability pinned
+ * to one cover revision, and a cached one outlives both.
+ */
+export async function readCoverRevealDisplay(
+  journeyId: string,
+  fetcher: Fetcher = fetch,
+): Promise<CoverRevealDisplayPayload> {
+  return requestJson<CoverRevealDisplayPayload>(
+    `/api/cover-reveal/journeys/${encodeURIComponent(journeyId)}`,
+    { cache: "no-store" },
+    fetcher,
+  );
 }
 
 export async function createJourney(

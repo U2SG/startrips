@@ -22,6 +22,17 @@ export type CoverRevealStageProps = {
    * Everything the previous revision had in flight stops counting immediately.
    */
   revision: number;
+  /**
+   * How both images sit in the stage box, passed straight through to the
+   * vendored renderer's own option.
+   *
+   * `contain` stays the default so nothing that mounted this before changes.
+   * A product surface whose settled cover is painted by CSS `object-fit:
+   * cover` must pass `cover`, or the reveal would letterbox the same
+   * photograph the original-cover image beneath it crops — and the handoff at
+   * `settled` would be a visible jump rather than the same pixels.
+   */
+  fit?: "contain" | "cover";
   /** Overrides the media query. Only the dev preview passes this. */
   forceReducedMotion?: boolean;
   /** Pretend WebGL2 is missing, to exercise the honest fallback. */
@@ -61,6 +72,7 @@ export function CoverRevealStage({
   pair,
   preset = "ink-bloom",
   revision,
+  fit = "contain",
   forceReducedMotion,
   forceNoWebgl2,
   onStateChange,
@@ -115,6 +127,7 @@ export function CoverRevealStage({
       flow = new RevealFlow({
         container,
         preset,
+        fit,
         // We own the degraded decision, so never let the renderer silently
         // substitute its Canvas2D cross-fade for a reveal.
         fallback: false,
@@ -229,7 +242,7 @@ export function CoverRevealStage({
       release();
       flowRef.current = null;
     };
-  }, [pair, preset, revision, forceReducedMotion, forceNoWebgl2, publish]);
+  }, [pair, preset, revision, fit, forceReducedMotion, forceNoWebgl2, publish]);
 
   /** A viewer interruption ends the reveal at the canonical cover, at once. */
   const interrupt = useCallback(() => {
@@ -274,7 +287,7 @@ export function CoverRevealStage({
           src={pair.originalCover}
           alt=""
           data-cover-reveal-image="original-cover"
-          style={{ display: "block", width: "100%", height: "100%", objectFit: "contain" }}
+          style={{ display: "block", width: "100%", height: "100%", objectFit: fit }}
         />
       ) : null}
     </div>
