@@ -102,6 +102,9 @@ export function validateRegistry(registry) {
         fail(id + ".evidence[" + index + "]: unknown kind " + String(evidence.kind));
       }
       nonEmptyString(evidence.label, id + ".evidence[" + index + "].label");
+      if (evidence.kind !== "policy" && evidence.path === undefined) {
+        fail(id + ".evidence[" + index + "] executable evidence requires a path");
+      }
       if (evidence.path !== undefined) {
         const evidencePath = repoRelative(evidence.path, id + ".evidence[" + index + "].path");
         const absolute = path.join(ROOT, evidencePath);
