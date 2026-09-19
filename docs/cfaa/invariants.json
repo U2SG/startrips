@@ -268,7 +268,8 @@
         "server/repositories/shared*",
         "server/tests/share*",
         "src/journey/**",
-        "scripts/qa-guest-share.mjs"
+        "scripts/qa-guest-share.mjs",
+        "server/routes/shares.ts"
       ],
       "coverage": "covered",
       "evidence": [
@@ -298,7 +299,8 @@
         "server/authorization/**",
         "server/repositories/shared*",
         "server/tests/share*",
-        "scripts/qa-guest-share.mjs"
+        "scripts/qa-guest-share.mjs",
+        "server/routes/shares.ts"
       ],
       "coverage": "covered",
       "evidence": [
@@ -325,7 +327,8 @@
         "server/repositories/shared*",
         "server/tests/share*",
         "src/journey/mediaReadRefresh*",
-        "scripts/qa-guest-share.mjs"
+        "scripts/qa-guest-share.mjs",
+        "server/routes/shares.ts"
       ],
       "coverage": "covered",
       "evidence": [
