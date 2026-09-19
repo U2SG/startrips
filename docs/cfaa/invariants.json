@@ -541,7 +541,8 @@
         "server/account-identities/**",
         "server/auth*",
         "server/db/**",
-        "server/tests/account-password-change.integration.test.ts"
+        "server/tests/account-password-change.integration.test.ts",
+        "server/routes/account-password.ts"
       ],
       "coverage": "covered",
       "evidence": [
