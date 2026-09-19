@@ -33,6 +33,12 @@ Automation prompts carry roles and this entry point, never current PRs or SHAs.
   reviews/signs/merges; Orchestrator never does. A merged PR becomes `passed`
   only with its exact merge identity contained in a freshly verified exact-green
   main push. Pending/failed/unknown integration CI never unlocks dependencies.
+- New logical-owner creation is different from integration reconciliation. A new
+  owner/worktree must branch from the exact current GitHub `main` identity after
+  fetching and verifying `origin/main`, but current-main push CI does NOT need to
+  be green merely to start unrelated work. Exact-main green remains mandatory for
+  terminal `passed` / dependency unlock only; a red current main is evidence to
+  preserve and route, not a global development freeze.
 - A logical owner outlives one session. Resume the same owner/worktree/branch after
   proving an old execution ended; preserve that owner's dirty work. Never borrow
   someone else's dirty tree, create a competing owner or widen permissions.
