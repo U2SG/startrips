@@ -121,6 +121,23 @@ test("glob matching distinguishes recursive and single-segment wildcards", () =>
   assert.equal(globToRegExp("src/**/share*").test("src/journey/deep/shareThing.ts"), true);
 });
 
+test("NUL-delimited Git paths preserve distinct invalid UTF-8 bytes reversibly", () => {
+  const prefix = Buffer.from("src/owner/a", "ascii");
+  const suffix = Buffer.from("b.ts\0", "ascii");
+  const input = Buffer.concat([
+    prefix, Buffer.from([0x80]), suffix,
+    prefix, Buffer.from([0x81]), suffix,
+  ]);
+  const paths = parseNulPaths(input);
+  assert.deepEqual(paths, ["src/owner/a%80b.ts", "src/owner/a%81b.ts"]);
+
+  const registry = sampleRegistry();
+  registry.invariants[0].pathGlobs = ["src/owner/**"];
+  const impact = resolveImpact(registry, paths);
+  assert.equal(impact.impacted.length, 1);
+  assert.deepEqual(impact.impacted[0].matchedPaths, paths);
+});
+
 test("NUL-delimited Git paths preserve Unicode without C-quoting", () => {
   const paths = parseNulPaths(Buffer.from("src/journey/旅行.ts\0src/scene/地球.ts\0", "utf8"));
   assert.deepEqual(paths, ["src/journey/旅行.ts", "src/scene/地球.ts"]);
