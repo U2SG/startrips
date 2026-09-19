@@ -398,7 +398,9 @@ function readCoastlineReadiness(page) {
       regionKey: host?.dataset.coastlineRegionKey ?? null,
       pendingRegionKey: host?.dataset.coastlinePendingRegionKey ?? null,
       refinementRevision: Number(host?.dataset.coastlineRefinementRevision ?? Number.NaN),
-      labelLayoutRevision: Number(host?.dataset.placeLabelLayoutRevision ?? Number.NaN),
+      frameRevision: Number(host?.dataset.sceneFrameRevision ?? Number.NaN),
+      labelLayout: host?.dataset.placeLabelLayout ?? null,
+      labelLayoutFrame: Number(host?.dataset.placeLabelLayoutFrame ?? Number.NaN),
     };
   });
 }
@@ -459,8 +461,15 @@ async function waitForLocalCoastline(page, expectedSource = "50m-regional+10m-lo
       unmet = settledUnmet ?? `a newer coastline load landed (revision ${coastline.refinementRevision} -> ${settled.refinementRevision}) while waiting for a label layout pass`;
       continue;
     }
-    if (!(settled.labelLayoutRevision > coastline.labelLayoutRevision)) {
-      unmet = `place label layout revision has not advanced past ${coastline.labelLayoutRevision} since the coastline load became terminal`;
+    if (!(settled.frameRevision > coastline.frameRevision)) {
+      unmet = `no frame has been rendered past scene frame ${coastline.frameRevision} since the coastline load became terminal`;
+      continue;
+    }
+    // A frame in which the Place Label layer is not drawn runs no layout pass,
+    // so requiring one would wait for something that cannot happen. The state
+    // is published rather than inferred, and reported either way.
+    if (settled.labelLayout === "laid-out" && !(settled.labelLayoutFrame > coastline.frameRevision)) {
+      unmet = `the place label layout pass has not run since scene frame ${coastline.frameRevision} (last pass at frame ${settled.labelLayoutFrame})`;
       continue;
     }
     return measure(page);
@@ -472,7 +481,9 @@ async function waitForLocalCoastline(page, expectedSource = "50m-regional+10m-lo
     + ` regionKey=${JSON.stringify(last.regionKey)}`
     + ` pendingRegionKey=${JSON.stringify(last.pendingRegionKey)}`
     + ` refinementRevision=${last.refinementRevision}`
-    + ` placeLabelLayoutRevision=${last.labelLayoutRevision})`,
+    + ` sceneFrameRevision=${last.frameRevision}`
+    + ` placeLabelLayout=${JSON.stringify(last.labelLayout)}`
+    + ` placeLabelLayoutFrame=${last.labelLayoutFrame})`,
   );
 }
 

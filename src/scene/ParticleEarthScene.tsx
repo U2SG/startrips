@@ -1826,6 +1826,10 @@ export function ParticleEarthScene({
     let currentRenderState: GlobeRenderState = "rendering";
     let resolvedRenderBudget: ResolvedRenderBudget = { effectiveDpr: 1, drawingBufferPixels: 1, drawingBufferWidth: 1, drawingBufferHeight: 1 };
     let lastFrameDeltaMs = 0;
+    // #432: how many frames this scene has rendered. A reader outside the
+    // scene needs "a frame happened after the state I observed"; the pass
+    // counters below say what that frame did, not that one occurred.
+    let sceneFrameRevision = 0;
     let qualityBuildRevision = 0;
     const targetSize = new Vector2();
     const scene = new Scene();
@@ -3215,7 +3219,12 @@ export function ParticleEarthScene({
     // observed" instead of for a duration.
     let placeLabelLayoutRevision = 0;
     const updateRouteVectorLayer = () => {
-      if (routeVectorOpacity <= 0.01) return;
+      if (routeVectorOpacity <= 0.01) {
+        // The layer is not drawn, so no Place Label layout runs this frame and
+        // a reader waiting for one would wait forever. Say so instead.
+        host.dataset.placeLabelLayout = "inactive";
+        return;
+      }
       sampleJourneyConnectorCard(false);
       const cardRect = journeyConnectorCardRect;
       const projectionState = [
@@ -3656,7 +3665,9 @@ export function ParticleEarthScene({
       // Advances whether or not this Atlas has city tier data, so a reader
       // waiting on label layout is never deadlocked by an empty label layer.
       placeLabelLayoutRevision += 1;
+      host.dataset.placeLabelLayout = "laid-out";
       host.dataset.placeLabelLayoutRevision = String(placeLabelLayoutRevision);
+      host.dataset.placeLabelLayoutFrame = String(sceneFrameRevision);
 
       updateJourneyConnector();
     };
@@ -4968,6 +4979,7 @@ export function ParticleEarthScene({
     const render = (now: number) => {
       animationFrame = 0;
       if (disposed) return;
+      sceneFrameRevision += 1;
       const elapsedDelta = Math.min(0.25, Math.max(0, (now - lastTime) / 1000));
       const delta = Math.min(0.05, elapsedDelta);
       lastFrameDeltaMs = delta * 1_000;
@@ -5438,6 +5450,7 @@ export function ParticleEarthScene({
       // finished" but "the load for the region being asked about finished and
       // nothing newer is in flight". The scene owns both facts, so it publishes
       // them rather than leaving a wall clock to guess.
+      host.dataset.sceneFrameRevision = String(sceneFrameRevision);
       host.dataset.coastlineRefinementRevision = String(coastlineRefinementRevision);
       host.dataset.coastlineRegionKey = activeCoastlineRegionKey ?? "";
       host.dataset.coastlinePendingRegionKey = requestedCoastlineCacheKey ?? "";
