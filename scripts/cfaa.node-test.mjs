@@ -71,6 +71,15 @@ test("evidence paths must exist and be tracked", () => {
   assert.throws(() => validateRegistry(registry), /does not exist/);
 });
 
+test("executable evidence requires an exact path while policy evidence may be pathless", () => {
+  const registry = sampleRegistry();
+  registry.invariants[0].evidence = [{ kind: "integration", label: "imaginary proof" }];
+  assert.throws(() => validateRegistry(registry), /executable evidence requires a path/);
+
+  registry.invariants[0].evidence = [{ kind: "policy", label: "semantic reviewer authority" }];
+  assert.doesNotThrow(() => validateRegistry(registry));
+});
+
 test("evidence directories are rejected even when Git pathspecs match tracked descendants", () => {
   const registry = sampleRegistry();
   registry.invariants[0].evidence = [{
@@ -130,6 +139,13 @@ test("shared route changes suggest all share invariants", () => {
   assert.ok(ids.has("CFAA-SHARE-001"));
   assert.ok(ids.has("CFAA-SHARE-002"));
   assert.ok(ids.has("CFAA-SHARE-003"));
+});
+
+test("guest authority contract changes suggest the read-only invariant", () => {
+  const registry = loadRegistry();
+  const impact = resolveImpact(registry, ["src/journey/atlasView.ts"]);
+  const ids = new Set(impact.impacted.map((entry) => entry.id));
+  assert.ok(ids.has("CFAA-SHARE-002"));
 });
 
 test("guest share view changes suggest read-only and expiry invariants", () => {
