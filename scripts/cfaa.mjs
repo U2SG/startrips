@@ -61,6 +61,7 @@ export function validateRegistry(registry) {
       fail("each invariant must be an object");
     }
     const id = nonEmptyString(invariant.id, "invariant.id");
+    if (invariant.id !== id) fail("invariant.id must be canonical without surrounding whitespace");
     if (!ID_PATTERN.test(id)) fail(id + ": invalid invariant id");
     if (invariantIds.has(id)) fail(id + ": duplicate invariant id");
     invariantIds.add(id);
