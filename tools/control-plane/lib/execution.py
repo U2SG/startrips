@@ -382,18 +382,15 @@ def _observed_executions(rows, root, self_pid):
         is_loop = bool(re.search(r'(?:^|[\s"/])(?:run-loop|loop-supervisor)[.]sh(?:[\s"\x00]|$)', command))
         is_child = 'startrips_execution_owner=' in command
         # The dedicated LOCAL Backend supervisor is a resident scheduler, not a
-        # productive execution carrier. When it is idle it has lane metadata but
-        # intentionally no feature/worktree/token scope. Count only its actual
-        # run-loop/model child when one exists; otherwise an external occupancy
-        # probe would fail closed forever on the supervisor itself.
+        # productive owner. Keep it observable so duplicate-launch/self-block
+        # guards still see the live supervisor; lane_occupancy alone discounts
+        # it and counts the scoped run-loop/model child when one exists.
         is_resident_backend_supervisor = bool(
             re.search(r'(?:^|[\s"/])loop-supervisor[.]sh(?:[\s"\x00]|$)', command)
             and command_lane(raw_command) == 'backend'
             and command_token(raw_command) is None
             and not re.search(r'(?:^|[;\s"])(?:--carrier-)?(?:feature|worktree|worktree64)=', raw_command, re.I)
         )
-        if is_resident_backend_supervisor:
-            continue
         if is_loop and command_is_readonly_probe(raw_command):
             continue
         if not is_loop and not is_child:
@@ -429,6 +426,7 @@ def _observed_executions(rows, root, self_pid):
             'feature': carrier_feature, 'worktree': carrier_worktree,
             'token': carrier_token,
             'scope_marker': scope_marker, 'scope_complete': scope_complete,
+            'resident_scheduler': is_resident_backend_supervisor,
         })
     return observed
 
@@ -452,6 +450,8 @@ def lane_occupancy(rows, root, self_pid, lane):
         # lane's capacity, even when its own CommandLine is temporarily unreadable.
         # Unknown lane or unreadable state inside the requested lane stays fail-closed.
         if carrier_lane not in {lane, 'unknown'}:
+            continue
+        if lane == 'backend' and record.get('resident_scheduler'):
             continue
         if record['state'] == 'unknown-command' or carrier_lane == 'unknown':
             unknown.append(_public_record(record))
