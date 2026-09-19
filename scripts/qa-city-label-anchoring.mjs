@@ -957,9 +957,14 @@ try {
       await beginDrag(page, origin);
       for (let step = 1; step <= steps; step += 1) {
         await dragTo(page, { x: origin.x + stepPx * step, y: origin.y });
-        // #237 measures motion BETWEEN consecutive samples, so this fixture
-        // waits for the frame its pointermove produced instead of racing it.
-        if (measuresCoastline) await waitForRenderedFrame(page);
+        // The scene projects label anchors inside requestAnimationFrame, so
+        // reading straight after a pointermove returns the PREVIOUS frame.
+        // Every fixture waits for the frame its own pointermove produced;
+        // gating this on the coastline fixture made the other three sample a
+        // stale mixture of rotations, so the frames that carry a label out to
+        // the limb were silently never measured and the outward-coverage
+        // reading varied run to run on an identical bundle.
+        await waitForRenderedFrame(page);
         const sample = await measure(page);
         checkFrame(sample, `${label} drag step ${step}`);
         record(sample);
