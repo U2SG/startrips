@@ -30,6 +30,19 @@ export function modalSurfaceFor(root: HTMLElement, atlas: Element | null) {
 
 export type ModalInitialFocusResolver<T extends HTMLElement> = (root: T) => HTMLElement | null;
 
+export type NestedModalRestoreFocusResolver = (
+  previousFocus: HTMLElement | null,
+) => HTMLElement | null | undefined;
+
+export function resolveNestedModalRestoreTarget(
+  previousFocus: HTMLElement | null,
+  resolver?: NestedModalRestoreFocusResolver,
+) {
+  if (!resolver) return previousFocus;
+  const resolved = resolver(previousFocus);
+  return resolved === undefined ? previousFocus : resolved;
+}
+
 export function resolveModalInitialFocusTarget<T extends HTMLElement>(
   root: T,
   resolver?: ModalInitialFocusResolver<T>,
@@ -111,8 +124,11 @@ export function claimInertOwnership(targets: Iterable<HTMLElement>) {
 export function useNestedModalFocus<T extends HTMLElement>(
   active: boolean,
   layerKey: string | number | null = null,
+  restoreFocus?: NestedModalRestoreFocusResolver,
 ) {
   const rootRef = useRef<T>(null);
+  const restoreFocusRef = useRef(restoreFocus);
+  restoreFocusRef.current = restoreFocus;
 
   useEffect(() => {
     if (!active) return;
@@ -160,8 +176,12 @@ export function useNestedModalFocus<T extends HTMLElement>(
 
     return () => {
       document.removeEventListener("keydown", onKeyDown, true);
-      if (previousFocus?.isConnected && !previousFocus.closest("[inert]")) {
-        previousFocus.focus({ preventScroll: true });
+      const restoreTarget = resolveNestedModalRestoreTarget(
+        previousFocus,
+        restoreFocusRef.current,
+      );
+      if (restoreTarget?.isConnected && !restoreTarget.closest("[inert]")) {
+        restoreTarget.focus({ preventScroll: true });
       }
     };
   }, [active, layerKey]);
