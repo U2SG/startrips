@@ -271,7 +271,10 @@ function compact(values, empty = "none") {
 function escapeMarkdownTableCell(value) {
   let rendered = "";
   for (const char of String(value)) {
-    if (char === "\r") continue;
+    if (char === "\r") {
+      rendered += "&#13;";
+      continue;
+    }
     if (char === "\n") {
       rendered += "<br>";
       continue;
