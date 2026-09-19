@@ -32,6 +32,13 @@ export type AccountIdentityErrorCode =
   | "IDENTITY_CREDENTIAL_UNLINK_UNAVAILABLE"
   | "IDENTITY_PROVIDER_NOT_CONFIGURED";
 
+export type AccountIdentityAuditEvent =
+  | "reverify"
+  | "link-intent"
+  | "link"
+  | "unlink"
+  | "password-change";
+
 export class AccountIdentityError extends Error {
   constructor(readonly code: AccountIdentityErrorCode) {
     super(code);
@@ -77,7 +84,7 @@ async function audit(
   transaction: Transaction,
   values: {
     userId: string;
-    event: "reverify" | "link-intent" | "link" | "unlink";
+    event: AccountIdentityAuditEvent;
     outcome: "success" | "refused";
     providerId?: string | null;
     accountRecordId?: string | null;
@@ -98,9 +105,16 @@ async function audit(
 
 export async function recordIdentityRefusal(values: {
   userId: string;
-  event: "reverify" | "link-intent" | "link" | "unlink";
+  event: AccountIdentityAuditEvent;
   providerId?: string | null;
   accountRecordId?: string | null;
+  /**
+   * The consumed grant this refusal belongs to, when the refusal happened after
+   * a single-use action was already spent. It makes that grant's one authorized
+   * attempt terminal, so a later retry of the same grant cannot be mistaken for
+   * an interrupted operation. Opaque local id only, never the bearer token.
+   */
+  actionId?: string | null;
   reason: AccountIdentityErrorCode | string;
 }) {
   await db.insert(accountIdentityAudit).values({
@@ -109,6 +123,7 @@ export async function recordIdentityRefusal(values: {
     outcome: "refused",
     providerId: values.providerId ?? null,
     accountRecordId: values.accountRecordId ?? null,
+    actionId: values.actionId ?? null,
     reason: values.reason,
   });
 }
@@ -231,6 +246,31 @@ export async function consumePasswordReverificationAction(
     ...values,
     kind: "reverify",
   });
+}
+
+// The same primitive for a caller that must survive a lost response. Consuming
+// and reporting an already-consumed grant are one locked read here, so the
+// caller can distinguish "this exact grant already did the work" from a replay
+// with somebody else's grant without duplicating the hash/expiry/session rules.
+// Reporting `alreadyConsumed` is not a receipt: the caller still has to find
+// its own success record for that action id before it may answer success.
+export async function claimPasswordReverificationAction(
+  transaction: Transaction,
+  values: {
+    token: string;
+    userId: string;
+    sessionId: string;
+    now: Date;
+  },
+): Promise<{ actionId: string; alreadyConsumed: boolean }> {
+  const action = await loadAction(transaction, {
+    token: values.token,
+    kind: "reverify",
+  });
+  validateAction(action, { ...values, allowConsumed: true });
+  if (action.consumedAt) return { actionId: action.id, alreadyConsumed: true };
+  await markActionConsumed(transaction, action.id, values.now);
+  return { actionId: action.id, alreadyConsumed: false };
 }
 
 async function lockUser(transaction: Transaction, userId: string) {

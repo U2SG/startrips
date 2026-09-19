@@ -28,6 +28,7 @@ describe("Better Auth account identity safety configuration", () => {
       "/unlink-account",
       "/list-accounts",
       "/change-email",
+      "/change-password",
     ]);
   });
 });
