@@ -29,11 +29,13 @@ function repoRelative(value, label) {
 }
 
 function gitRelative(value, label) {
-  const text = nonEmptyString(value, label);
-  if (text.startsWith("/") || text.split("/").includes("..")) {
+  if (typeof value !== "string" || value.length === 0) {
+    fail(label + " must be a non-empty Git path");
+  }
+  if (value.startsWith("/") || value.split("/").includes("..")) {
     fail(label + " must stay repo-relative");
   }
-  return text;
+  return value;
 }
 
 export function validateRegistry(registry) {
