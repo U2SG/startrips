@@ -207,20 +207,32 @@ intake_triage() {
   local num="$1" prompt="${2:-}" slug="${3:-}"
   local ro="You are read-only — never comment on, create, close or edit anything on GitHub, and never write files. Your final message must be exactly one JSON object between the markers <<<INTAKE and INTAKE>>> with nothing after the closing marker."
   [[ -n "$prompt" ]] || prompt="Triage issue #$num in $INTAKE_GH_REPO for the Startrips loop queue. Follow your agent instructions exactly: verify the claimed gap against the real code in startrips/ before believing the title, then decide skip versus a queued feature and choose the phase and anchor with the placement rules. $ro"
-  INTAKE_LAST_LOG="$INTAKE_DIR/issue-$num${slug:+-$slug}.log"
+  INTAKE_LAST_LOG="$INTAKE_DIR/issue-$num${slug:+-$slug}-triage-${BASHPID}.log"
   : > "$INTAKE_LAST_LOG"
+  local triage_rc=0
+  # Triage needs only the custom agent built-ins (Read/Grep/Glob/Bash). Loading
+  # user/global MCP servers here adds unrelated startup processes and has caused
+  # successful provider sessions to terminate with an empty output log. Keep this
+  # narrow, and preserve the real Claude exit code instead of hiding it behind tee.
+  set +e
   (
     cd "$INTAKE_ROOT" || exit 1
-    claude_run --agent startrips-triage --dangerously-skip-permissions --model opus \
+    claude_run --strict-mcp-config --agent startrips-triage --dangerously-skip-permissions --model opus \
       --output-format text \
       -p "$prompt" \
       2>&1
-  ) | tee "$INTAKE_LAST_LOG" || true
+  ) | tee "$INTAKE_LAST_LOG"
+  triage_rc=${PIPESTATUS[0]}
+  set -e
   quota_stop "$INTAKE_LAST_LOG" "triage"
   # An API failure leaves no marker block; without this it would be recorded
   # as `triage output invalid` and the issue skipped until a human clears it
   # (#244 and #245 on 2026-09-06). Exit 6 like the builder does instead.
   transient_stop "$INTAKE_LAST_LOG" "triage"
+  if [[ "$triage_rc" != "0" ]]; then
+    echo "[intake] triage process failed rc=$triage_rc for issue #$num; state unchanged" >&2
+    return 6
+  fi
 }
 
 # Parse, validate and apply in a single pass, because the placement rules can
