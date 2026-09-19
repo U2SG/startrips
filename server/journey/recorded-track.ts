@@ -102,6 +102,48 @@ function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
 
+/**
+ * A sample time is only readable when it names one unambiguous instant.
+ * `new Date` is too permissive for evidence: it rewrites `2026-02-30T00:00:00Z`
+ * into March 2 and reads an offset-less `2026-09-01T12:00:00` in whatever
+ * timezone the server happens to run in, so an identical replay would conflict
+ * after an environment change. Both are rejections here, not corrections.
+ */
+const ISO_INSTANT =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:\d{2})$/;
+
+function parseSampleInstant(value: string): Date | null {
+  const match = ISO_INSTANT.exec(value);
+  if (!match) return null;
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = match[6] === undefined ? 0 : Number(match[6]);
+
+  // The written wall-clock fields are checked literally. The offset shifts the
+  // instant but never makes February 30 or 24:00 a real reading.
+  if (month < 1 || month > 12) return null;
+  if (day < 1 || day > daysInMonth(year, month)) return null;
+  if (hour > 23 || minute > 59 || second > 59) return null;
+
+  const parsed = new Date(value);
+  // Backstop for what the field checks cannot see, such as an out-of-range
+  // offset like `+99:00`.
+  if (Number.isNaN(parsed.valueOf())) return null;
+  return parsed;
+}
+
+function daysInMonth(year: number, month: number) {
+  if (month === 2) {
+    const leap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+    return leap ? 29 : 28;
+  }
+  return month === 4 || month === 6 || month === 9 || month === 11 ? 30 : 31;
+}
+
 function parseSample(value: unknown): RecordedTrackSampleWrite | RecordedTrackRejection {
   if (!isRecord(value)) return "INVALID_SAMPLE";
 
@@ -118,8 +160,8 @@ function parseSample(value: unknown): RecordedTrackSampleWrite | RecordedTrackRe
   let recordedAt: Date | null = null;
   if (rawRecordedAt !== null) {
     if (typeof rawRecordedAt !== "string") return "INVALID_SAMPLE_TIME";
-    const parsed = new Date(rawRecordedAt);
-    if (Number.isNaN(parsed.valueOf())) return "INVALID_SAMPLE_TIME";
+    const parsed = parseSampleInstant(rawRecordedAt);
+    if (parsed === null) return "INVALID_SAMPLE_TIME";
     recordedAt = parsed;
   }
 

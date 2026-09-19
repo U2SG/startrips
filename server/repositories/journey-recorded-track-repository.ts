@@ -157,6 +157,17 @@ async function readOperation(
   };
 }
 
+/**
+ * PostgreSQL binds at most 65,535 parameters per statement, and every sample
+ * row binds six columns. A write at `MAX_RECORDED_TRACK_SAMPLES` would need
+ * 120,000 of them, so evidence the normalizer explicitly accepts would fail at
+ * persistence. The samples are written in chunks instead, inside the same
+ * transaction and in `sampleOrder`. The bound is stated here rather than
+ * derived from the per-segment limit, so raising that limit cannot silently
+ * reintroduce the ceiling.
+ */
+const SAMPLE_INSERT_CHUNK_SIZE = 2_000;
+
 async function insertOperation(
   transaction: Transaction,
   journeyId: string,
@@ -191,7 +202,15 @@ async function insertOperation(
       accuracyMeters: sample.accuracyMeters,
     }));
   });
-  await transaction.insert(journeyRecordedTrackSamples).values(sampleValues);
+  for (
+    let offset = 0;
+    offset < sampleValues.length;
+    offset += SAMPLE_INSERT_CHUNK_SIZE
+  ) {
+    await transaction
+      .insert(journeyRecordedTrackSamples)
+      .values(sampleValues.slice(offset, offset + SAMPLE_INSERT_CHUNK_SIZE));
+  }
 }
 
 function isUniqueViolation(error: unknown) {

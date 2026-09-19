@@ -19,6 +19,7 @@ import {
 } from "../db/auth-schema";
 import { db, pool } from "../db/client";
 import {
+  MAX_RECORDED_TRACK_SAMPLES,
   MAX_RECORDED_TRACK_SAMPLES_PER_SEGMENT,
   MAX_RECORDED_TRACK_SEGMENTS,
   normalizeRecordedTrackWrite,
@@ -316,6 +317,31 @@ describe("recorded-track normalization", () => {
     })).toBe("INVALID_ACCURACY");
   });
 
+  it("refuses a sample time that Date would silently rewrite", () => {
+    const withTime = (recordedAt: unknown) => ({
+      ...TWO_SEGMENT_BODY,
+      segments: [{ samples: [{ latitude: 1, longitude: 2, recordedAt }] }],
+    });
+    // A calendar date that does not exist; `new Date` rolls it into March.
+    expect(rejection(withTime("2026-02-30T00:00:00Z"))).toBe("INVALID_SAMPLE_TIME");
+    expect(rejection(withTime("2026-02-29T00:00:00Z"))).toBe("INVALID_SAMPLE_TIME");
+    // No offset: the instant would depend on the server's timezone.
+    expect(rejection(withTime("2026-09-01T12:00:00"))).toBe("INVALID_SAMPLE_TIME");
+    expect(rejection(withTime("2026-09-01"))).toBe("INVALID_SAMPLE_TIME");
+    // Wall-clock fields out of range that `new Date` would carry forward.
+    expect(rejection(withTime("2026-09-01T24:00:00Z"))).toBe("INVALID_SAMPLE_TIME");
+    expect(rejection(withTime("2026-09-01T12:60:00Z"))).toBe("INVALID_SAMPLE_TIME");
+    expect(rejection(withTime("2026-13-01T00:00:00Z"))).toBe("INVALID_SAMPLE_TIME");
+    // An offset no calendar has.
+    expect(rejection(withTime("2026-09-01T12:00:00+99:00"))).toBe("INVALID_SAMPLE_TIME");
+
+    const accepted = normalizeRecordedTrackWrite(withTime("2024-02-29T23:59:59+02:00"));
+    expect(accepted.ok).toBe(true);
+    if (!accepted.ok) throw new Error("expected an accepted sample time");
+    expect(accepted.write.segments[0].samples[0].recordedAt?.toISOString())
+      .toBe("2024-02-29T21:59:59.000Z");
+  });
+
   it("refuses an empty segment rather than closing the gap", () => {
     expect(rejection({ ...TWO_SEGMENT_BODY, segments: [] }))
       .toBe("INVALID_SEGMENTS");
@@ -376,6 +402,39 @@ describe("recorded-track persistence", () => {
     expect(result.operation.segments[1].sampleCount).toBe(1);
     expect(result.operation.source).toBe("device-recording");
     expect(result.operation.provenance).toBe("test recorder");
+  });
+
+  it("persists a write at the accepted sample ceiling", async () => {
+    // The normalizer accepts MAX_RECORDED_TRACK_SAMPLES, so persistence has to
+    // store them: one statement per sample row would bind six parameters each
+    // and exceed PostgreSQL's 65,535-parameter limit.
+    const segmentCount =
+      MAX_RECORDED_TRACK_SAMPLES / MAX_RECORDED_TRACK_SAMPLES_PER_SEGMENT;
+    const result = await writeRecordedTrackForAtlas(
+      owner.atlasId,
+      ownerJourneyId,
+      normalized({
+        ...TWO_SEGMENT_BODY,
+        operationKey: "ceiling-key",
+        segments: Array.from({ length: segmentCount }, () => ({
+          samples: manySamples(MAX_RECORDED_TRACK_SAMPLES_PER_SEGMENT),
+        })),
+      }),
+    );
+    expect(result.outcome).toBe("ok");
+    if (result.outcome !== "ok") return;
+    expect(result.operation.segments).toHaveLength(segmentCount);
+    const stored = result.operation.segments.reduce(
+      (total, segment) => total + segment.samples.length,
+      0,
+    );
+    expect(stored).toBe(MAX_RECORDED_TRACK_SAMPLES);
+    // Order survives the chunk boundaries, which fall inside every segment.
+    for (const segment of result.operation.segments) {
+      expect(segment.samples[0].sampleOrder).toBe(0);
+      expect(segment.samples[segment.samples.length - 1].sampleOrder)
+        .toBe(MAX_RECORDED_TRACK_SAMPLES_PER_SEGMENT - 1);
+    }
   });
 
   it("replays the same operation identity and rejects a conflicting payload", async () => {
