@@ -1032,8 +1032,7 @@ describe("Route Point context integration (#291)", () => {
     const helperEnd = appSource.indexOf("export function playbackFocusPointForCameraTarget", helperStart);
     const helper = appSource.slice(helperStart, helperEnd);
     const anchorStart = appSource.indexOf("function projectedRoutePointMarker");
-    const anchor = appSource.slice(anchorStart, appSource.indexOf("
-}", anchorStart));
+    const anchor = appSource.slice(anchorStart, appSource.indexOf("function placeMediaSourceDimensions", anchorStart));
     const openStart = appSource.indexOf("function openJourneyStory(journeyId: string, routePointId: string | null)");
     const closeStart = appSource.indexOf("function closeJourneyStory", openStart);
     const open = appSource.slice(openStart, closeStart);
