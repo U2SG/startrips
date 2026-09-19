@@ -655,10 +655,21 @@ export async function finalizeUpload(
     // later correction or withdrawal through `/api/media-evidence` cannot leave
     // a divergent copy of the original coordinates and capture time behind, and
     // a deduplicated completion — which deliberately attaches nothing — does not
-    // retain a document describing an asset it does not own. Only the terminal
-    // transition clears it; `reconcileStaleUploads` and the `completion_unknown`
-    // recovery both act on rows that are not yet `completed`, so they still
-    // finalize with the same normalized document.
+    // retain a document describing an asset it does not own. Only this terminal
+    // transition clears it, so an aborted or retried attempt still carries the
+    // document: `reconcileStaleUploads` claims only `initiated`, `finalizing`,
+    // `completion_unknown` and `reconciling`, and the lost-response recovery
+    // this route runs for `finalizing` / `completion_unknown` reaches the same
+    // rows, so both still finalize with exactly the normalized document the
+    // accepted upload carried.
+    //
+    // One path does re-enter finalization on an already `completed` row: the
+    // `/:id/complete` replay whose asset has since been deleted, which nulls
+    // `mediaAssetId` and recreates the asset from the stored object. That
+    // recreated asset deliberately gets no evidence row. Deleting the asset
+    // cascaded its evidence away, and this column is a transport copy rather
+    // than a second durable record, so resurrecting the original coordinates
+    // and capture time would reinstate evidence the owner already removed.
     await transaction
       .update(mediaUploads)
       .set({

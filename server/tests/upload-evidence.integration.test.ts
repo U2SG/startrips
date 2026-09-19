@@ -622,6 +622,26 @@ describe("the completed upload stops holding the transient copy", () => {
     expect(completed.recordedEvidence).toBeNull();
     expect(await evidenceRowFor(asset.id)).toEqual(before);
   });
+
+  it("does not resurrect the document when a completed upload is finalized again after its asset is gone", async () => {
+    const upload = await startedUpload({ recordedEvidence: TOKYO_EVIDENCE });
+    const asset = await finalizeUpload(upload, contentHash("g"));
+    expect(await evidenceRowFor(asset.id)).toBeDefined();
+
+    // Deleting the asset cascades its evidence away and nulls the upload's
+    // `mediaAssetId`, which is the one state where `/:id/complete` re-enters
+    // finalization on an already completed row. The recreated asset must not
+    // reinstate the coordinates and capture time the owner already removed.
+    await db.delete(mediaAssets).where(eq(mediaAssets.id, asset.id));
+    const [reread] = await db.select().from(mediaUploads)
+      .where(eq(mediaUploads.id, upload.id));
+    expect(reread.status).toBe("completed");
+    expect(reread.mediaAssetId).toBeNull();
+
+    const recreated = await finalizeUpload(reread as UploadRecord, contentHash("g"));
+    expect(recreated.id).not.toBe(asset.id);
+    expect(await evidenceRowFor(recreated.id)).toBeUndefined();
+  });
 });
 
 describe("the evidence stays asset-owned and owner-only", () => {
