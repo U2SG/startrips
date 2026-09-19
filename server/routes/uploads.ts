@@ -649,12 +649,23 @@ export async function finalizeUpload(
         recordedEvidence,
       );
     }
+    // #428: the upload column holds the document only until the asset that owns
+    // it exists, so the completing transaction is where it stops being needed.
+    // Clearing it here keeps `media_asset_evidence` the single durable owner: a
+    // later correction or withdrawal through `/api/media-evidence` cannot leave
+    // a divergent copy of the original coordinates and capture time behind, and
+    // a deduplicated completion — which deliberately attaches nothing — does not
+    // retain a document describing an asset it does not own. Only the terminal
+    // transition clears it; `reconcileStaleUploads` and the `completion_unknown`
+    // recovery both act on rows that are not yet `completed`, so they still
+    // finalize with the same normalized document.
     await transaction
       .update(mediaUploads)
       .set({
         status: "completed",
         mediaAssetId: asset.id,
         completionAttemptId: null,
+        recordedEvidence: null,
         updatedAt: new Date(),
       })
       .where(eq(mediaUploads.id, upload.id));

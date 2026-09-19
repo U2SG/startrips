@@ -353,6 +353,9 @@ describe("finalization attaches the evidence the upload carried", () => {
       .where(eq(mediaUploads.id, upload.id));
     expect(reread.status).toBe("initiated");
     expect(reread.mediaAssetId).toBeNull();
+    // The transient copy is cleared only by the completing transition, so an
+    // aborted attempt still carries the document the next attempt finalizes with.
+    expect(reread.recordedEvidence).not.toBeNull();
   });
 
   it("refuses to finalize the bytes when it cannot read the stored document", async () => {
@@ -580,6 +583,44 @@ describe("dedupe, replay and recovery", () => {
       capturedOffsetMinutes: 540,
       revision: 1,
     });
+  });
+});
+
+describe("the completed upload stops holding the transient copy", () => {
+  it("clears the upload column once the asset that owns the evidence exists", async () => {
+    const upload = await startedUpload({ recordedEvidence: TOKYO_EVIDENCE });
+    const asset = await finalizeUpload(upload, contentHash("e"));
+
+    const [completed] = await db.select().from(mediaUploads)
+      .where(eq(mediaUploads.id, upload.id));
+    expect(completed.status).toBe("completed");
+    expect(completed.recordedEvidence).toBeNull();
+    // The durable owner keeps it, so nothing was lost by clearing the copy.
+    expect(await evidenceRowFor(asset.id)).toMatchObject({
+      latitude: 35.689487,
+      longitude: 139.691711,
+      revision: 1,
+    });
+  });
+
+  it("clears the copy a deduplicated completion never attached anywhere", async () => {
+    const hash = contentHash("f");
+    const first = await startedUpload({ recordedEvidence: TOKYO_EVIDENCE });
+    const asset = await finalizeUpload(first, hash);
+    const before = await evidenceRowFor(asset.id);
+
+    // This upload's Oslo document is deliberately never attached: the asset it
+    // deduplicates onto already owns its own evidence. Retaining the document
+    // on the upload row would leave coordinates describing no asset it owns.
+    const second = await startedUpload({ recordedEvidence: OSLO_EVIDENCE });
+    const deduplicated = await finalizeUpload(second, hash);
+    expect(deduplicated.id).toBe(asset.id);
+
+    const [completed] = await db.select().from(mediaUploads)
+      .where(eq(mediaUploads.id, second.id));
+    expect(completed.status).toBe("completed");
+    expect(completed.recordedEvidence).toBeNull();
+    expect(await evidenceRowFor(asset.id)).toEqual(before);
   });
 });
 
