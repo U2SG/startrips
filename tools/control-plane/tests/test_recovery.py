@@ -876,6 +876,34 @@ class RealWorktreeCases(fixture.SyntheticOne):
             runtime.prepare_unmapped(self.root, self.repo, fixture.feature('ST-002', issue=2), 'synthetic/project', False, 'backend')
         self.assertEqual(before, self.git('worktree', 'list', '--porcelain'))
 
+    def test_new_owner_prepare_does_not_require_main_ci_green(self):
+        row = fixture.feature('ST-002', issue=2)
+        self.write(row)
+        main = 'a' * 40
+        inventory = f'worktree {self.repo}\nHEAD {main}\nbranch refs/heads/main\n'
+
+        def git_result(_repository, *args):
+            if args == ('worktree', 'list', '--porcelain'):
+                return inventory
+            if args == ('rev-parse', 'origin/main'):
+                return main
+            self.fail('unexpected git probe: ' + repr(args))
+
+        completed = mock.Mock(returncode=0)
+        with mock.patch.object(runtime, 'git', side_effect=git_result), \
+                mock.patch.object(runtime, 'stopped', return_value=[]), \
+                mock.patch.object(runtime, 'ensure_idle'), \
+                mock.patch.object(runtime, 'api', return_value={'object': {'sha': main}}) as api, \
+                mock.patch.object(runtime.subprocess, 'run', return_value=completed) as run:
+            owner = runtime.prepare_unmapped(self.root, self.repo, row,
+                                             'synthetic/project', True, 'experience')
+
+        api.assert_called_once_with('repos/synthetic/project/git/ref/heads/main')
+        self.assertEqual(self.root / 'worker-worktrees', owner.parent)
+        self.assertTrue(owner.name.startswith('st002-'))
+        self.assertEqual('in_progress', fixture.store.load_document(self.path)['features'][0]['status'])
+        self.assertEqual(2, run.call_count)
+
     def test_new_owner_prepare_guard_is_lane_scoped(self):
         row = fixture.feature('ST-002', issue=2)
         with mock.patch.object(runtime, 'ensure_idle', side_effect=RuntimeError('guard')) as guard:

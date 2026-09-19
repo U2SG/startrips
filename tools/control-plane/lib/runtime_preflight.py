@@ -10,7 +10,6 @@ from pathlib import Path
 from feature_store import load_document, commit_document, StoreConflict
 from feature_state import target, next_action, note
 from execution import ensure_idle, stopped
-from github_evidence import exact_main_run
 import datetime
 from github_evidence import api, EvidenceUnknown
 
@@ -61,11 +60,14 @@ def prepare_unmapped(root, repository, row, repo, prepare, lane):
     issue = re.search(r'(\d+)\s*$', str(row.get('issue')))
     if not issue:
         raise StoreConflict('New owner requires its actual issue identity')
+    # A new logical owner must branch from the exact current GitHub main, but
+    # owner creation is not an integration verdict. A red/pending main push CI
+    # therefore does not starve unrelated development lanes; exact-main green
+    # remains mandatory only for terminal passed/dependency unlock reconciliation.
     main = api('repos/' + repo + '/git/ref/heads/main')['object']['sha']
-    exact_main_run(repo, main)
     fetched = subprocess.run(['git', '-C', str(repository), 'fetch', 'origin', 'main'], capture_output=True, timeout=30)
     if fetched.returncode or git(repository, 'rev-parse', 'origin/main') != main:
-        raise EvidenceUnknown('Exact-green main changed/unavailable before owner creation')
+        raise EvidenceUnknown('Exact current main changed/unavailable before owner creation')
     suffix = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d')
     branch = 'feat/issue' + issue.group(1) + '-' + compact + '-' + suffix
     worktree = root / 'worker-worktrees' / (compact + '-' + suffix)
@@ -80,7 +82,7 @@ def prepare_unmapped(root, repository, row, repo, prepare, lane):
     if created.returncode:
         raise StoreConflict('Owner branch/worktree creation conflicted; preserve existing git state')
     latest['status'] = 'in_progress'
-    note(latest, 'Existing selector authorized owner carrier ' + str(worktree) + ' branch ' + branch + ' from exact-green main ' + main)
+    note(latest, 'Existing selector authorized owner carrier ' + str(worktree) + ' branch ' + branch + ' from exact current main ' + main)
     commit_document(root / 'feature_list.json', document, allowed={fid: {'status', 'notes'}})
     return worktree
 
