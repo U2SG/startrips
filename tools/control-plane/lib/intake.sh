@@ -480,7 +480,7 @@ intake_issue() {
     intake_record_decision "issue=$num triage-active; deferred to existing invocation"
     return 0
   fi
-  intake_triage "$num"
+  intake_triage "$num" || return $?
   [[ -s "$INTAKE_LAST_LOG" ]] || { intake_record_decision "issue=$num triage-log-empty"; return 1; }
   INTAKE_ISSUE_UPDATED_AT="$upd" INTAKE_ISSUE_COMMENTS="$cnt" intake_apply "$num" "$INTAKE_LAST_LOG" || { intake_record_decision "issue=$num transaction-deferred; no stale result consumed"; return 6; }
   [[ -f "$INTAKE_LAST_RESULT" ]] || { intake_record_decision "issue=$num result-missing"; return 1; }
@@ -1057,7 +1057,7 @@ intake_amend() {
   IFS=$'\t' read -r dump expected_row <<< "$snapshot"
   [[ -n "$dump" && -n "$expected_row" ]] || return 6
   prompt="Amend mode for the Startrips loop queue. Feature $fid is still pending and was created by intake from issue #$num in $INTAKE_GH_REPO, which has moved since it was triaged. Read your agent instructions (the Amend mode section), the current feature object at $dump, and the whole issue: gh issue view $num --repo $INTAKE_GH_REPO --comments. Decide whether the change is material to the queued work, then return one JSON object: {\"unchanged\": true, \"reason\": \"...\"} when it is not, {\"skip\": true, \"reason\": \"...\"} when the issue is now moot, or {\"amend\": {\"rationale\": \"...\", plus only the fields that must change: description, dependencies, acceptance, human_gate, placement}}. Keep every acceptance item a checkable fact and never widen the scope beyond what the issue asks. You are read-only: never comment on, create, close or edit anything on GitHub, and never write files. Your final message must be exactly one JSON object between the markers <<<INTAKE and INTAKE>>> with nothing after the closing marker."
-  intake_triage "$num" "$prompt" "amend-$fid"
+  intake_triage "$num" "$prompt" "amend-$fid" || return $?
   [[ -s "$INTAKE_LAST_LOG" ]] || {
     intake_record_decision "issue=$num feature=$fid amend-log-empty"
     return 0
@@ -1147,7 +1147,7 @@ intake_followup() {
     return 0
   }
   prompt="Follow-up mode for the Startrips loop queue. Issue #$num in $INTAKE_GH_REPO is open again, or moved again while open, after feature $fid shipped for it and merged. Read your agent instructions, then read the whole issue: gh issue view $num --repo $INTAKE_GH_REPO --comments, and check what $fid actually landed on main (git -C startrips log and the merged PR). Triage ONLY the residual gap that is still open, exactly as you would a new issue: either a skip with a reason, or a full feature whose acceptance covers just that residual gap. The loop places it after $fid and adds $fid as a dependency, so you do not need to set the placement yourself. You are read-only: never comment on, create, close or edit anything on GitHub, and never write files. Your final message must be exactly one JSON object between the markers <<<INTAKE and INTAKE>>> with nothing after the closing marker."
-  intake_triage "$num" "$prompt" "followup-$fid"
+  intake_triage "$num" "$prompt" "followup-$fid" || return $?
   [[ -s "$INTAKE_LAST_LOG" ]] || {
     intake_record_decision "issue=$num feature=$fid followup-log-empty"
     return 0
