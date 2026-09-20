@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  coverRevealFrameImage,
   coverRevealReducer,
   initialCoverRevealState,
   planCoverReveal,
@@ -257,6 +258,15 @@ export function CoverRevealStage({
     );
   }, [publish, revision]);
 
+  // The renderer's own report of which image its latest composited frame
+  // showed, so an observer grades the opening on what was rendered rather than
+  // on whatever a screenshot raced against the animation happens to catch.
+  // Empty while nothing has been composited at all — a degraded or
+  // reduced-motion request never paints a reveal frame, and must not claim it.
+  const composited = state.openingFrameProgress === null
+    ? ""
+    : coverRevealFrameImage(state.progress);
+
   // Derived from the lifecycle, not from a ref: these are exactly the settle
   // reasons that have no painted canvas to show the cover on.
   const showsImage = state.phase === "settled"
@@ -272,6 +282,7 @@ export function CoverRevealStage({
       data-cover-reveal-phase={state.phase}
       data-cover-reveal-degraded={state.degraded ? "true" : "false"}
       data-cover-reveal-settle-reason={state.settleReason ?? ""}
+      data-cover-reveal-composited={composited}
       data-cover-reveal-budget-pixels={budgetPixels ?? ""}
       data-cover-reveal-max-pixels={REVEAL_RENDER_BUDGET.maxDrawingBufferPixels}
       style={{ width: "100%", height: "100%" }}

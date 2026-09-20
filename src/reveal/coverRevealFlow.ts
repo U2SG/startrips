@@ -23,6 +23,22 @@ export type RevealPresetId =
 
 export type CoverRevealPhase = "idle" | "preparing" | "revealing" | "settled";
 
+/** Which of the two images a composited reveal frame actually showed. */
+export type CoverRevealFrameImage = "generated-first" | "blend" | "original-cover";
+
+/**
+ * The image identity of a frame the renderer composited at `progress`.
+ *
+ * The mask starts closed and ends open, so progress 0 is entirely the generated
+ * opening asset and progress 1 is entirely the canonical original cover;
+ * everything between is a mask blend of the two and is neither.
+ */
+export function coverRevealFrameImage(progress: number): CoverRevealFrameImage {
+  if (progress <= 0) return "generated-first";
+  if (progress >= 1) return "original-cover";
+  return "blend";
+}
+
 /** The backend the stage actually obtained, not the one it wanted. */
 export type CoverRevealBackend = "webgl2" | "unavailable";
 
@@ -79,6 +95,15 @@ export type CoverRevealState = {
   /** Reveal frames actually accepted. A degraded or reduced-motion reveal has none. */
   frameCount: number;
   progress: number;
+  /**
+   * The progress the renderer had already composited when it reported its
+   * images were ready, or `null` while nothing has been composited at all.
+   *
+   * The renderer paints at progress 0 and only then announces its images, so
+   * this is the identity of the frame the opening actually began on — owned by
+   * the renderer, not inferred from when an observer got round to looking.
+   */
+  openingFrameProgress: number | null;
   error: string | null;
 };
 
@@ -94,6 +119,7 @@ export const initialCoverRevealState: CoverRevealState = {
   settleReason: null,
   frameCount: 0,
   progress: 0,
+  openingFrameProgress: null,
   error: null,
 };
 
@@ -172,7 +198,12 @@ export function coverRevealReducer(
     }
     case "images-loaded": {
       if (!owns(state, event.revision) || state.phase !== "preparing") return state;
-      return { ...state, phase: "revealing", displayedImage: state.pair?.generatedFirst ?? null };
+      return {
+        ...state,
+        phase: "revealing",
+        displayedImage: state.pair?.generatedFirst ?? null,
+        openingFrameProgress: 0,
+      };
     }
     case "frame": {
       if (!owns(state, event.revision) || state.phase !== "revealing") return state;

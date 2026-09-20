@@ -298,6 +298,43 @@ async function installAtlasApi(page, state) {
   });
 }
 
+/**
+ * Record, in the page, every image identity the renderer reports it composited.
+ *
+ * `data-cover-reveal-composited` is written by `CoverRevealStage` from the
+ * renderer's own frame reports, so the sequence this collects is the opening's
+ * real frame identity. Collecting it inside the page is what makes the verdict
+ * independent of when a screenshot round-trip comes back: a sample raced
+ * against the animation can miss the opening entirely, a mutation record
+ * cannot. The array also outlives the stage, which the product unmounts as
+ * soon as the opening settles.
+ */
+async function recordCompositedFrames(page) {
+  await page.addInitScript(() => {
+    const composited = [];
+    window.__qaCompositedFrames = composited;
+    const note = (node) => {
+      if (!(node instanceof Element)) return;
+      const identity = node.getAttribute("data-cover-reveal-composited");
+      // Empty means the renderer has composited nothing yet, and a repeat is
+      // the same identity across many frames.
+      if (!identity || composited[composited.length - 1] === identity) return;
+      composited.push(identity);
+    };
+    new MutationObserver((records) => {
+      for (const record of records) {
+        if (record.type === "attributes") note(record.target);
+        else record.addedNodes.forEach(note);
+      }
+    }).observe(document, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ["data-cover-reveal-composited"],
+    });
+  });
+}
+
 /** Everything about the cover surface, read straight from the DOM. */
 async function coverState(page) {
   return page.evaluate(() => {
@@ -410,6 +447,7 @@ async function openCase(viewport, {
     ...(reducedMotion ? { reducedMotion: "reduce" } : {}),
   });
   const page = await context.newPage();
+  await recordCompositedFrames(page);
   const pageErrors = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
   const imageRequests = [];
@@ -452,20 +490,27 @@ try {
         undefined,
         { timeout: 20_000 },
       );
+      // Each sampled colour is bracketed by the renderer's own report of what
+      // it was compositing, so a sample the reveal moved through can be told
+      // apart from one taken wholly inside a single frame identity.
       const opened = [];
+      const samples = [];
       for (let attempt = 0; attempt < 6; attempt += 1) {
-        const stillRevealing = await page.evaluate(() => document.querySelector(
+        const before = await page.evaluate(() => {
+          const stage = document.querySelector(".living-atlas__active-media-reveal");
+          return {
+            revealing: stage?.getAttribute("data-cover-reveal-phase") === "revealing",
+            composited: stage?.getAttribute("data-cover-reveal-composited") ?? "",
+          };
+        });
+        if (!before.revealing) break;
+        const color = classify(await compositedColor(page, REVEAL_PROBE));
+        const after = await page.evaluate(() => document.querySelector(
           ".living-atlas__active-media-reveal",
-        )?.getAttribute("data-cover-reveal-phase") === "revealing");
-        if (!stillRevealing) break;
-        opened.push(classify(await compositedColor(page, REVEAL_PROBE)));
+        )?.getAttribute("data-cover-reveal-composited") ?? "");
+        opened.push(color);
+        samples.push({ composited: before.composited === after ? before.composited : "moved", color });
       }
-      check(`${label}/first-frame-is-the-derivative`, opened[0] === "derivative", opened);
-      check(
-        `${label}/the-reveal-actually-transitions`,
-        opened.includes("derivative") && opened.at(-1) !== "derivative",
-        opened,
-      );
       check(
         `${label}/derivative-was-actually-fetched`,
         run.imageRequests.includes(DERIVATIVE_URL),
@@ -476,6 +521,35 @@ try {
         () => document.querySelector(".living-atlas__active-media-reveal") === null,
         undefined,
         { timeout: 40_000 },
+      );
+
+      // Graded here, once the opening is provably over, on what the renderer
+      // reported it composited rather than on what a screenshot happened to
+      // catch: `opened` above is a race by construction, because a slow runner
+      // can finish the whole reveal before its first sample returns and then
+      // grade the settled cover as the opening frame (#454). The sampled
+      // colours stay attached, so which cover identity was actually on screen
+      // is still reported.
+      const composited = await page.evaluate(() => window.__qaCompositedFrames ?? []);
+      // The rendered pixels stay in the first-frame verdict: a sample the
+      // renderer spent entirely on a frame that has not reached the canonical
+      // cover must still LOOK like the opening image at a probe the mask
+      // crosses last, so a swapped or skipped draw is caught. A sample whose
+      // window the reveal moved through grades nothing, because grading it is
+      // exactly the defect.
+      const gradable = samples.filter((sample) => sample.composited !== "moved"
+        && sample.composited !== ""
+        && sample.composited !== "original-cover");
+      check(
+        `${label}/first-frame-is-the-derivative`,
+        composited[0] === "generated-first"
+          && (gradable.length === 0 || gradable.some((sample) => sample.color === "derivative")),
+        { composited, opened, samples },
+      );
+      check(
+        `${label}/the-reveal-actually-transitions`,
+        composited.includes("generated-first") && composited.at(-1) !== "generated-first",
+        { composited, opened, samples },
       );
       const settled = await coverState(page);
       const settledColor = classify(await compositedColor(page));
