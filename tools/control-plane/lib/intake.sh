@@ -114,7 +114,7 @@ intake_field() {
 intake_triage_peer_active() {
   local num="$1"
   if command -v powershell.exe >/dev/null 2>&1; then
-    powershell.exe -NoProfile -NonInteractive -Command "\$n='$num'; \$rows=Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object { \$_.Name -ieq 'claude.exe' -and \$_.CommandLine -match '--agent startrips-triage' -and \$_.CommandLine -match ('issue #' + [regex]::Escape(\$n) + '(?:\D|$)') }; if (\$rows) { exit 0 } else { exit 1 }" >/dev/null 2>&1
+    powershell.exe -NoProfile -NonInteractive -Command "\$n='$num'; try { \$rows=Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object { \$_.Name -ieq 'claude.exe' -and \$_.CommandLine -match '--agent startrips-triage' -and \$_.CommandLine -match ('issue #' + [regex]::Escape(\$n) + '(?:\D|$)') }; if (\$rows) { exit 0 } else { exit 1 } } catch { exit 6 }" >/dev/null 2>&1
     return $?
   fi
   python3 - "$num" <<'PY'
@@ -123,7 +123,7 @@ num = sys.argv[1]
 try:
     text = subprocess.run(['ps', '-eo', 'pid=,args='], capture_output=True, text=True, timeout=5, check=True).stdout
 except Exception:
-    raise SystemExit(1)
+    raise SystemExit(6)
 needle = re.compile(r'issue #' + re.escape(num) + r'(?:\D|$)')
 for line in text.splitlines():
     pid, _, args = line.strip().partition(" ")
@@ -481,9 +481,17 @@ intake_issue() {
     echo "=== Intake: $INTAKE_GH_REPO#$num ==="
   fi
 
+  local peer_rc=0
   if intake_triage_peer_active "$num"; then
     intake_record_decision "issue=$num triage-active; deferred to existing invocation"
     return 0
+  else
+    peer_rc=$?
+    if [[ "$peer_rc" != "1" ]]; then
+      echo "[intake] triage peer evidence UNKNOWN rc=$peer_rc for issue #$num; no triage launched" >&2
+      intake_record_decision "issue=$num triage-peer-unknown rc=$peer_rc; no invocation launched"
+      return 6
+    fi
   fi
   intake_triage "$num" || return $?
   [[ -s "$INTAKE_LAST_LOG" ]] || { intake_record_decision "issue=$num triage-log-empty"; return 1; }
@@ -554,7 +562,13 @@ intake_new_issues() {
     # New issues spend the shared per-iteration budget FIRST: CLAUDE.md promises
     # that a P0/P1 regression triaged this iteration is the one it builds.
     intake_budget_take || { echo "[intake] session budget spent; #$n waits for the next iteration"; break; }
-    intake_issue "$n" || echo "[intake] issue #$n could not be triaged; left for the next iteration"
+    local issue_rc=0
+    intake_issue "$n" || issue_rc=$?
+    if [[ "$issue_rc" == "6" ]]; then
+      echo "[intake] issue #$n evidence UNKNOWN; propagating transient failure" >&2
+      return 6
+    fi
+    [[ "$issue_rc" == "0" ]] || echo "[intake] issue #$n could not be triaged; left for the next iteration"
     count=$((count + 1))
   done
   [[ "$count" -gt 0 ]] || echo "[intake] no new open issues to triage"
