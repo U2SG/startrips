@@ -355,31 +355,41 @@ async function coverState(page) {
 }
 
 /**
- * The colour actually composited over the cover, via a real screenshot.
+ * The colours actually composited over the cover, via a real screenshot.
  *
  * A WebGL drawing buffer without `preserveDrawingBuffer` cannot be read back
  * from a later task, so the frame is captured by the browser's own compositor
  * and then decoded in the page. What is graded is what a person would see.
+ * Every requested point is read from ONE capture, so two probes of the same
+ * call describe the same frame and can be compared to each other.
  */
-async function compositedColor(page, at = { x: 0.5, y: 0.5 }) {
+async function compositedColors(page, points) {
   const figure = page.locator(".living-atlas__active-media");
   const shot = await figure.screenshot({ type: "png" });
-  return page.evaluate(async ({ base64, at: point }) => {
+  return page.evaluate(async ({ base64, at }) => {
     const bitmap = await createImageBitmap(await (await fetch(`data:image/png;base64,${base64}`)).blob());
     const canvas = document.createElement("canvas");
     canvas.width = 1;
     canvas.height = 1;
     const context = canvas.getContext("2d", { willReadFrequently: true });
-    context.drawImage(
-      bitmap,
-      Math.floor(bitmap.width * point.x),
-      Math.floor(bitmap.height * point.y),
-      1, 1, 0, 0, 1, 1,
-    );
+    const read = (point) => {
+      context.drawImage(
+        bitmap,
+        Math.floor(bitmap.width * point.x),
+        Math.floor(bitmap.height * point.y),
+        1, 1, 0, 0, 1, 1,
+      );
+      const [r, g, b] = context.getImageData(0, 0, 1, 1).data;
+      return { r, g, b };
+    };
+    const colors = at.map(read);
     bitmap.close();
-    const [r, g, b] = context.getImageData(0, 0, 1, 1).data;
-    return { r, g, b };
-  }, { base64: shot.toString("base64"), at });
+    return colors;
+  }, { base64: shot.toString("base64"), at: points });
+}
+
+async function compositedColor(page, at = { x: 0.5, y: 0.5 }) {
+  return (await compositedColors(page, [at]))[0];
 }
 
 /**
@@ -392,6 +402,17 @@ async function compositedColor(page, at = { x: 0.5, y: 0.5 }) {
  * gradient, which starts at 46% height.
  */
 const REVEAL_PROBE = { x: 0.1, y: 0.12 };
+
+/**
+ * The mask's own origin, which is the FIRST region to convert.
+ *
+ * Read from the SAME screenshot as `REVEAL_PROBE`, it turns "which image opened
+ * this" into a spatial question no timing can race: within one frame the origin
+ * can never still hold the opening asset once the corner has already become the
+ * canonical cover. A renderer that draws the two images the wrong way round
+ * produces exactly that impossible pair.
+ */
+const MASK_ORIGIN_PROBE = { x: 0.5, y: 0.5 };
 
 function classify(sample) {
   const distance = (color) => Math.abs(sample.r - color.r)
@@ -504,12 +525,18 @@ try {
           };
         });
         if (!before.revealing) break;
-        const color = classify(await compositedColor(page, REVEAL_PROBE));
+        const [corner, origin] = (await compositedColors(
+          page, [REVEAL_PROBE, MASK_ORIGIN_PROBE],
+        )).map(classify);
         const after = await page.evaluate(() => document.querySelector(
           ".living-atlas__active-media-reveal",
         )?.getAttribute("data-cover-reveal-composited") ?? "");
-        opened.push(color);
-        samples.push({ composited: before.composited === after ? before.composited : "moved", color });
+        opened.push(corner);
+        samples.push({
+          composited: before.composited === after ? before.composited : "moved",
+          color: corner,
+          origin,
+        });
       }
       check(
         `${label}/derivative-was-actually-fetched`,
@@ -550,11 +577,21 @@ try {
       const converted = stable.findIndex((sample) => sample.color === "original-cover");
       const reopened = converted !== -1
         && stable.slice(converted + 1).some((sample) => sample.color === "derivative");
+      // The pixel arm that no timing can race, and the one that keeps this from
+      // passing vacuously when every screenshot lands after the probe converted:
+      // the mask reaches its origin before it reaches the corner, so ONE frame
+      // holding the canonical cover at the corner while the origin still holds
+      // the opening asset is geometrically impossible for a correct reveal, and
+      // is precisely what a renderer drawing the two images the wrong way round
+      // puts on screen.
+      const inverted = samples.some((sample) => sample.color === "original-cover"
+        && sample.origin === "derivative");
       check(
         `${label}/first-frame-is-the-derivative`,
         composited[0] === "generated-first"
           && openingFrames.every((sample) => sample.color === "derivative")
-          && !reopened,
+          && !reopened
+          && !inverted,
         { composited, opened, samples },
       );
       check(
