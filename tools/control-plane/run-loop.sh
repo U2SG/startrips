@@ -512,7 +512,7 @@ for ((i=1; i<=MAX_ITERATIONS; i++)); do
   if [[ "$ACTION" == "REPAIR_CI_FAMILY" ]]; then
     FAMILY_OWNER="$(printf '%s' "$PLAN" | python3 -c 'import json,sys; data=json.load(sys.stdin); print((data.get("failure_family_owner") or {}).get("feature",""))' | tr -d '\r')" || exit 6
     if [[ -n "$FAMILY_OWNER" && "$FAMILY_OWNER" != "$FEATURE" ]]; then
-      echo "CI family is canonically owned by $FAMILY_OWNER; preserving $FEATURE failure evidence and yielding"
+      echo "Recurring CI family is canonically owned by $FAMILY_OWNER; preserving $FEATURE failure evidence and yielding"
       if yield_waiting_feature "$FEATURE"; then continue; fi
       exit 7
     fi
