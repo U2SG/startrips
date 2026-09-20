@@ -95,12 +95,17 @@ describe("mobile media delete focus ownership (#427)", () => {
     expect(closeSource).not.toContain("document.querySelector");
 
     const trapStart = source.indexOf("const mobileMediaSheetRef = useNestedModalFocus");
-    const restoreStart = source.indexOf(
-      "if (!restoreMobileMediaDeleteFocusRef.current) return;",
+    const manageFocusStart = source.indexOf(
+      "const focusTarget = mobileManageMode",
       trapStart,
     );
+    const restoreStart = source.indexOf(
+      "if (!restoreMobileMediaDeleteFocusRef.current) return;",
+      manageFocusStart,
+    );
     expect(trapStart).toBeGreaterThan(0);
-    expect(restoreStart).toBeGreaterThan(trapStart);
+    expect(manageFocusStart).toBeGreaterThan(trapStart);
+    expect(restoreStart).toBeGreaterThan(manageFocusStart);
 
     const restoreSource = source.slice(restoreStart, restoreStart + 800);
     expect(restoreSource).toContain('if (mediaDeleteState !== "idle") return;');
