@@ -15,7 +15,23 @@ import { useMobileSurfaceHistory } from "../journey/useMobileSurfaceHistory";
 import { useModalFocus } from "../journey/useModalFocus";
 import { usePersistentEarth } from "../scene/LivingAtlasGlobe";
 import { AtlasViewProvider, createOwnerAtlasView } from "../journey/atlasView";
-import { previousAccountSurface, shouldActivateAccountSheetFocus, shouldRenderStandaloneAccountDock, type AccountSurface } from "./accountSurface";
+import {
+  accountSurfaceEyebrow,
+  accountSurfaceTitle,
+  isAccountFormSurface,
+  previousAccountSurface,
+  shouldActivateAccountSheetFocus,
+  shouldRenderStandaloneAccountDock,
+  type AccountSurface,
+} from "./accountSurface";
+import {
+  AccountPasswordRefusal,
+  accountPasswordRefusalText,
+  loadAccountIdentityMethods,
+  resolveAccountPasswordState,
+  submitAccountPasswordChange,
+  type AccountPasswordState,
+} from "./accountPassword";
 import {
   EarthExperienceMenuEntry,
   earthExperienceEntryBusy,
@@ -361,6 +377,103 @@ function InvitationGate({ invitationId, onAccepted }: { invitationId: string; on
   );
 }
 
+/**
+ * #346: the account-surface password panel.
+ *
+ * Every field is uncontrolled on purpose. A controlled input would put the
+ * password itself in React state, where it outlives the submit and lands in
+ * any component state snapshot; here the value exists only inside the submit
+ * handler and the form is reset as soon as the server answers. The grant never
+ * reaches this component at all — `submitAccountPasswordChange` claims and
+ * spends it inside one call.
+ *
+ * The credential-less branch renders the verified-address path rather than an
+ * enrollment form: `POST .../password/enrollment` needs a recent-control proof
+ * and password re-verification, the only mechanism #345 shipped, is exactly
+ * what an Account without a password cannot produce. Offering a form that
+ * could not be submitted would be the untruthful-degradation failure.
+ */
+function AccountPasswordPanel({ state, email, className }: {
+  state: AccountPasswordState | null;
+  email: string;
+  className?: string;
+}) {
+  const [pending, setPending] = useState(false);
+  const [message, setMessage] = useState("");
+  const [tone, setTone] = useState<"error" | "success">("error");
+
+  async function sendRecoveryLink() {
+    setPending(true);
+    setMessage("");
+    const result = await authClient.requestPasswordReset({
+      email,
+      redirectTo: `${window.location.origin}/reset-password`,
+    });
+    setPending(false);
+    setTone(result.error ? "error" : "success");
+    setMessage(result.error?.message || "设置链接已经发送到账户邮箱。");
+  }
+
+  async function submitChange(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const fields = new FormData(form);
+    setPending(true);
+    setMessage("");
+    try {
+      const result = await submitAccountPasswordChange({
+        currentPassword: String(fields.get("currentPassword") ?? ""),
+        newPassword: String(fields.get("newPassword") ?? ""),
+      }, { refreshSession: () => authClient.getSession() });
+      form.reset();
+      setTone("success");
+      setMessage(result.revokedOtherSessions > 0
+        ? `密码已更新，其他 ${result.revokedOtherSessions} 处登录已退出。`
+        : "密码已更新，当前登录继续有效。");
+    } catch (error) {
+      setTone("error");
+      setMessage(error instanceof AccountPasswordRefusal
+        ? accountPasswordRefusalText(error.code)
+        : "操作未完成，请稍后再试。");
+    } finally {
+      setPending(false);
+    }
+  }
+
+  const notice = message
+    ? <p className="auth-message" role={tone === "error" ? "alert" : "status"}>{message}</p>
+    : null;
+
+  if (!state) return <p className="auth-message" role="status">正在读取账户登录方式…</p>;
+
+  if (state.kind !== "change") {
+    return (
+      <div className={className}>
+        <p className="auth-copy">
+          {state.kind === "enroll"
+            ? "这个账户还没有登录密码。我们会把设置链接发送到已验证的账户邮箱。"
+            : state.reason === "email-missing"
+              ? "这个账户还没有可用于恢复的邮箱，请先补充并验证邮箱，然后再设置密码。"
+              : "账户邮箱尚未验证，请先完成邮箱验证，然后再设置密码。"}
+        </p>
+        {state.kind === "enroll"
+          ? <button type="button" disabled={pending} onClick={() => void sendRecoveryLink()}>{pending ? "发送中…" : "发送设置链接"}</button>
+          : null}
+        {notice}
+      </div>
+    );
+  }
+
+  return (
+    <form className={className} onSubmit={submitChange}>
+      <label><span>当前密码</span><input required name="currentPassword" type="password" autoComplete="current-password" maxLength={128} /></label>
+      <label><span>新密码</span><input required name="newPassword" type="password" autoComplete="new-password" minLength={10} maxLength={128} /></label>
+      <button type="submit" disabled={pending}>{pending ? "更新中…" : "更新密码"}</button>
+      {notice}
+    </form>
+  );
+}
+
 function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cinematicActive = false }: {
   children: ReactNode;
   activeOrganizationId?: string;
@@ -382,6 +495,12 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cine
   const [editDedication, setEditDedication] = useState("");
   const [dockOpen, setDockOpen] = useState(false);
   const [accountSurface, setAccountSurface] = useState<AccountSurface>(null);
+  // #346: which password write this Account is eligible for, as the server
+  // answers it. Null until the identity list has been read; nothing about the
+  // password itself is ever held here.
+  const [passwordState, setPasswordState] = useState<AccountPasswordState | null>(null);
+  const [passwordEmail, setPasswordEmail] = useState("");
+  const [passwordOpen, setPasswordOpen] = useState(false);
   const [mobileAccountHost, setMobileAccountHost] = useState<HTMLElement | null>(null);
   const isMobileV2 = useCompactMobileLayout();
   // #332: the account menu is where a person changes the Earth experience.
@@ -410,7 +529,7 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cine
     [ownerRole],
   );
   const accountSheetOpen = isMobileV2 && accountSurface !== null;
-  const accountFormOpen = accountSurface === "invite" || accountSurface === "edit";
+  const accountFormOpen = isAccountFormSurface(accountSurface);
   const accountSheetFocusActive = shouldActivateAccountSheetFocus(accountSheetOpen, gate.kind === "ready");
   const accountSheetRef = useModalFocus<HTMLElement>(
     () => setAccountSurface((surface) => previousAccountSurface(surface)),
@@ -607,6 +726,37 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cine
   }
 
   const isOwner = gate.role.split(",").includes("owner");
+  // #346: the entry point reads the authoritative identity list before it
+  // decides what to render, so a credential-less Account is never shown a
+  // "current password" field and a credential-holding one is never offered
+  // first-password enrollment. A read that fails says so instead of guessing.
+  const openAccountPassword = async () => {
+    setInviteOpen(false);
+    setEditAtlasOpen(false);
+    setPasswordState(null);
+    setPasswordOpen(true);
+    setMessage("正在读取账户登录方式…");
+    try {
+      const [methods, session] = await Promise.all([
+        loadAccountIdentityMethods(),
+        authClient.getSession(),
+      ]);
+      const user = session.data?.user;
+      const resolved = resolveAccountPasswordState(methods, {
+        email: user?.email ?? null,
+        emailVerified: Boolean(user?.emailVerified),
+      });
+      setPasswordEmail(user?.email ?? "");
+      setPasswordState(resolved);
+      setMessage("");
+      if (isMobileV2) setAccountSurface(resolved.kind === "change" ? "password-change" : "password-enroll");
+    } catch (error) {
+      setPasswordOpen(false);
+      setMessage(error instanceof AccountPasswordRefusal
+        ? accountPasswordRefusalText(error.code)
+        : "无法读取账户登录方式，请稍后再试。");
+    }
+  };
   const openMobileEdit = () => {
     setEditTitle(gate.atlas.title);
     setEditDedication(gate.atlas.dedication);
@@ -655,6 +805,7 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cine
             <div className="account-dock__actions">
               {isOwner ? <button type="button" onClick={() => { setEditAtlasOpen(false); setInviteOpen((value) => !value); }}>邀请另一位</button> : null}
               <button type="button" onClick={() => { setInviteOpen(false); setEditTitle(gate.atlas.title); setEditDedication(gate.atlas.dedication); setEditAtlasOpen((value) => !value); setMessage(""); }}>编辑图谱</button>
+              <button type="button" onClick={() => { if (passwordOpen) { setPasswordOpen(false); setMessage(""); return; } void openAccountPassword(); }}>账户密码</button>
               <EarthExperienceMenuEntry
                 surface="dock"
                 policy={earthExperience.policy}
@@ -676,6 +827,7 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cine
                 <button type="submit" disabled={pending}>{pending ? "保存中…" : "保存"}</button>
               </form>
             ) : null}
+            {passwordOpen ? <AccountPasswordPanel state={passwordState} email={passwordEmail} /> : null}
           </div>
         </aside>
       ) : null}
@@ -694,6 +846,7 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cine
                 <div className="account-sheet__actions">
                   {isOwner ? <button type="button" onClick={() => { setMessage(""); setAccountSurface("invite"); }}><span>邀请另一位</span><small>发送私人图谱邀请</small></button> : null}
                   <button type="button" onClick={openMobileEdit}><span>编辑图谱</span><small>修改名称与题词</small></button>
+                  <button type="button" onClick={() => void openAccountPassword()}><span>账户密码</span><small>修改或设置登录密码</small></button>
                   <EarthExperienceMenuEntry
                     surface="sheet"
                     policy={earthExperience.policy}
@@ -707,7 +860,7 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cine
               <>
                 <header className="account-sheet__drill-header">
                   <button type="button" onClick={() => setAccountSurface("menu")} aria-label="返回账户菜单">‹</button>
-                  <div><p>{accountSurface === "invite" ? "INVITATION" : "ATLAS DETAILS"}</p><h2 id="account-sheet-title">{accountSurface === "invite" ? "邀请另一位" : "编辑图谱"}</h2></div>
+                  <div><p>{accountSurfaceEyebrow(accountSurface)}</p><h2 id="account-sheet-title">{accountSurfaceTitle(accountSurface)}</h2></div>
                 </header>
                 {message ? <p className="account-sheet__message" role="alert">{message}</p> : null}
                 {accountSurface === "invite" ? (
@@ -715,12 +868,14 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cine
                     <label><span>对方邮箱</span><input required type="email" inputMode="email" autoComplete="email" value={inviteEmail} onChange={(event) => setInviteEmail(event.target.value)} /></label>
                     <button type="submit" disabled={pending}>{pending ? "发送中…" : "发送邀请"}</button>
                   </form>
-                ) : (
+                ) : accountSurface === "edit" ? (
                   <form className="account-sheet__form" onSubmit={saveAtlas}>
                     <label><span>图谱名称</span><input required maxLength={80} value={editTitle} onChange={(event) => setEditTitle(event.target.value)} /></label>
                     <label><span>题词（可选）</span><textarea rows={3} maxLength={240} value={editDedication} onChange={(event) => setEditDedication(event.target.value)} /></label>
                     <button type="submit" disabled={pending}>{pending ? "保存中…" : "保存"}</button>
                   </form>
+                ) : (
+                  <AccountPasswordPanel state={passwordState} email={passwordEmail} className="account-sheet__form" />
                 )}
               </>
             )}
