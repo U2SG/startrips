@@ -93,29 +93,31 @@ describe("mobile media delete focus ownership (#427)", () => {
     expect(closeSource).not.toContain("document.querySelector");
 
     const trapStart = source.indexOf("const mobileMediaSheetRef = useNestedModalFocus");
-    const transitionStart = source.indexOf(
-      "const previousMediaDeleteState = previousMediaDeleteStateRef.current",
-      trapStart,
-    );
     const manageFocusStart = source.indexOf(
       "const focusTarget = mobileManageMode",
-      transitionStart,
+      trapStart,
+    );
+    const transitionStart = source.indexOf(
+      "const previousMediaDeleteState = previousMediaDeleteStateRef.current",
+      manageFocusStart,
     );
     const restoreStart = source.indexOf(
       "if (!restoreMobileMediaDeleteFocusRef.current) return;",
-      manageFocusStart,
+      transitionStart,
     );
     const restoreEnd = source.indexOf(
       "useEffect(() => {",
       restoreStart + 1,
     );
     expect(trapStart).toBeGreaterThan(0);
-    expect(transitionStart).toBeGreaterThan(trapStart);
-    expect(manageFocusStart).toBeGreaterThan(transitionStart);
-    expect(restoreStart).toBeGreaterThan(manageFocusStart);
+    expect(manageFocusStart).toBeGreaterThan(trapStart);
+    expect(transitionStart).toBeGreaterThan(manageFocusStart);
+    expect(restoreStart).toBeGreaterThan(transitionStart);
     expect(restoreEnd).toBeGreaterThan(restoreStart);
 
-    const transitionSource = source.slice(transitionStart - 120, manageFocusStart);
+    const transitionEffectStart = source.lastIndexOf("useLayoutEffect(() =>", transitionStart);
+    expect(transitionEffectStart).toBeGreaterThan(manageFocusStart);
+    const transitionSource = source.slice(transitionEffectStart, restoreStart);
     expect(transitionSource).toContain("useLayoutEffect(() =>");
     expect(transitionSource).toContain('previousMediaDeleteState !== "idle"');
     expect(transitionSource).toContain('mediaDeleteState === "idle"');
