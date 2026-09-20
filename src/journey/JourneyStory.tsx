@@ -1384,6 +1384,10 @@ export function JourneyStory({
           stageInterrupted: Boolean(stage?.querySelector('[data-media-incoming="true"], [role="alert"]')),
         });
       },
+      // The canvas clone owns only video presentation. Keep the committed live
+      // video underneath it hit-testable so fullscreen native controls become
+      // authoritative immediately while exactly one playback transport remains.
+      keepTargetInteractive: source?.tagName === "VIDEO",
     });
   }
 

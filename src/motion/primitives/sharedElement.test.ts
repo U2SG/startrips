@@ -61,8 +61,15 @@ describe("runSharedElementMorph (#18)", () => {
     expect(presentFullscreen).toContain("runSharedElementMorph({");
     expect(presentFullscreen).toContain("isTargetCurrent: () =>");
     expect(presentFullscreen).toContain("storyFullscreenTargetIsCurrent({");
+    expect(presentFullscreen).toContain('keepTargetInteractive: source?.tagName === "VIDEO"');
     expect(presentFullscreen).not.toMatch(/if \(mobileLayout\)[\s\S]{0,160}setFullscreen/);
     expect(presentFullscreen).not.toContain("source instanceof HTMLVideoElement");
+  });
+
+  it("keeps an opted-in live destination interactive under the visual clone (#459)", () => {
+    const primitive = readFileSync(new URL("./sharedElement.ts", import.meta.url), "utf8");
+    expect(primitive).toContain("keepTargetInteractive = false");
+    expect(primitive).toContain('if (!keepTargetInteractive) target.style.visibility = "hidden";');
   });
 
   it("cancels the Story fullscreen morph when newer media or overlay intent wins (#459)", () => {
