@@ -608,9 +608,18 @@ describe("first password enrollment", () => {
     expect(credentials).toHaveLength(1);
     expect(await passwordMatches(credentials[0]!.password!, FIRST_PASSWORD))
       .toBe(true);
-    const successes = (await auditRows(fixture.userId))
-      .filter((row) => row.outcome === "success");
-    expect(successes).toHaveLength(1);
+    const audit = await auditRows(fixture.userId);
+    expect(audit.filter((row) => row.outcome === "success")).toHaveLength(1);
+    // The grant stays consumed, so a further retry lands on the same branch.
+    // It must stay terminal rather than appending a refusal row per attempt.
+    await expectRefusal(
+      enroll(fixture, {
+        newPassword: OTHER_PASSWORD,
+        reverificationToken: loser.token,
+      }),
+      "PASSWORD_ENROLL_ALREADY_SET",
+    );
+    expect(await auditRows(fixture.userId)).toHaveLength(audit.length);
   });
 
   it("refuses rather than duplicating when a credential row already occupies the identity", async () => {
@@ -736,7 +745,13 @@ describe("first password enrollment route", () => {
     const body = await response.text();
 
     const [credential] = await credentialAccounts(fixture.userId);
-    const audit = await auditRows(fixture.userId);
+    // Every row this flow writes, not just the receipt: the intent row is a
+    // second event and has to clear the same bar.
+    const audit = [
+      ...await auditRows(fixture.userId),
+      ...await intentRows(fixture.userId),
+    ];
+    expect(audit).toHaveLength(2);
     const secrets = [FIRST_PASSWORD, grant.token, credential!.password!];
     const written = [
       body,

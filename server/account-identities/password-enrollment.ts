@@ -386,6 +386,30 @@ export async function enrollAccountPassword(values: {
       if (
         receipts.some((receipt) => receipt.accountRecordId === credential.id)
       ) {
+        // Terminal for this grant, and written under the same lock and the same
+        // existence guard the receipt uses: the grant stays consumed, so every
+        // further retry lands here, and an unguarded insert would append a row
+        // per retry against the one-row-per-consumed-grant invariant.
+        const [refused] = await transaction
+          .select({ id: accountIdentityAudit.id })
+          .from(accountIdentityAudit)
+          .where(and(
+            eq(accountIdentityAudit.userId, values.userId),
+            eq(accountIdentityAudit.event, "password-enroll"),
+            eq(accountIdentityAudit.outcome, "refused"),
+            eq(accountIdentityAudit.actionId, claimed.actionId),
+          ))
+          .limit(1);
+        if (!refused) {
+          await transaction.insert(accountIdentityAudit).values({
+            userId: values.userId,
+            event: "password-enroll",
+            outcome: "refused",
+            actionId: claimed.actionId,
+            accountRecordId: credential.id,
+            reason: "PASSWORD_ENROLL_ALREADY_SET",
+          });
+        }
         return {
           actionId: claimed.actionId,
           alreadyConsumed: true,
@@ -444,13 +468,8 @@ export async function enrollAccountPassword(values: {
 
   if (claim.alreadyConsumed) {
     if (claim.alreadyEnrolled) return { enrolled: false, alreadyEnrolled: true };
+    // The refusal row was written under the claim lock, guarded; see there.
     if (claim.lostRace) {
-      await recordIdentityRefusal({
-        userId: values.userId,
-        event: "password-enroll",
-        actionId: claim.actionId,
-        reason: "PASSWORD_ENROLL_ALREADY_SET",
-      });
       throw new AccountPasswordEnrollmentError("PASSWORD_ENROLL_ALREADY_SET");
     }
     throw new AccountPasswordEnrollmentError("PASSWORD_ENROLL_REVERIFY_REPLAYED");
