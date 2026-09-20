@@ -15,7 +15,7 @@ from feature_store import _storage_mutex, StoreConflict
 from github_evidence import api, _repo, EvidenceUnknown
 
 DIMENSIONS = ('lane', 'assertion', 'fixture', 'viewport', 'dpr', 'stage')
-PARSER_VERSION = 4
+PARSER_VERSION = 5
 INFRA = ('failed to resolve action download info', 'service unavailable',
          'failed to download action', 'the runner has lost communication')
 
@@ -104,6 +104,14 @@ def normalize_failure(job, text):
     runtime = re.compile(r'^(?:[\w.]+(?:Error|Exception)|Error|Exception)(?:\s+\[[^\]]+\])?:', re.I)
     playwright_timeout = re.compile(r'^(?:locator|page|frame|elementhandle)\.[\w.]+:\s*Timeout\b', re.I)
     errors = [line for line in lines if runtime.search(line) or playwright_timeout.search(line)]
+    # Startrips browser harnesses publish the exact failed case as
+    # `[qa-<suite>] FAIL <case> ...`. Prefer that semantic assertion to the
+    # generic GitHub Actions footer (`Process completed with exit code 1`).
+    # Keep runtime/Playwright diagnostics ahead of it when those exist because
+    # they identify the lower-level actionable cause.
+    qa_fail = re.compile(r'^\[qa-([\w.-]+)\]\s+FAIL\s+(.+)$', re.I)
+    if not errors:
+        errors = [line for line in lines if qa_fail.match(line)]
     if not errors:
         errors = [line for line in lines if re.match(r'^(?:FAIL(?:\s|:)|Assertion failed(?:\s|:)|✗\s)', line, re.I)]
     if not errors:
@@ -132,6 +140,11 @@ def normalize_failure(job, text):
     failed_fixtures = re.findall(r'(?:\]\s+|;\s*)([\w.-]+)\s+@[\d.]+x\s*:', context)
     if explicit_fixture.lower() in {'unknown', 'not', 'none', 'null', 'true', 'false', 'rendered'}:
         explicit_fixture = '|'.join(dict.fromkeys(failed_fixtures))[:120] or 'unknown'
+    qa_match = qa_fail.match(primary)
+    if qa_match and explicit_fixture == 'unknown':
+        case_scope = qa_match.group(2).split(':', 1)[0].strip()
+        suite = qa_match.group(1).strip()
+        explicit_fixture = (suite + (':' + case_scope if case_scope else ''))[:120]
     stage = next((s['name'] for s in job.get('steps', []) if s.get('conclusion') == 'failure'), 'unknown')
     dims = {'lane': job['name'], 'assertion': assertion,
             'fixture': explicit_fixture,

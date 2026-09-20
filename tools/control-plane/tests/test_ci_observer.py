@@ -123,6 +123,18 @@ class FingerprintCases(fixture.SyntheticOne):
         self.assertIn('waiting for locator', value['assertion'])
         self.assertNotIn('Process completed with exit code', value['assertion'])
 
+    def test_explicit_qa_fail_beats_generic_actions_footer(self):
+        failed = job('browser-qa / playback-continuity', 9, 'failure', steps=[{'name': 'Run browser QA', 'conclusion': 'failure'}])
+        text = ('[qa-playback-continuity] ok compact-mobile:media-beat-occupies-the-stage {}\n'
+                '[qa-playback-continuity] FAIL compact-mobile:long-note-preserves-media-row '
+                '{"captionClientHeight":1346,"mediaHeight":855.203125}\n'
+                'ELIFECYCLE Command failed with exit code 1.\n'
+                '##[error]Process completed with exit code 1.\n')
+        value = ci.normalize_failure(failed, text)
+        self.assertTrue(value['assertion'].startswith('[qa-playback-continuity] FAIL compact-mobile:long-note-preserves-media-row'))
+        self.assertEqual('playback-continuity:compact-mobile', value['fixture'])
+        self.assertNotIn('Process completed with exit code', value['assertion'])
+
     def test_playwright_timeout_duration_does_not_split_locator_family(self):
         failed = job('browser-qa / playback-continuity', 9, 'failure', steps=[{'name': 'Run browser QA', 'conclusion': 'failure'}])
         a = ci.normalize_failure(failed, "locator.evaluate: Timeout 30000ms exceeded.\n- waiting for locator('#next')")
