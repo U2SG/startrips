@@ -245,12 +245,12 @@ for (const viewport of VIEWPORTS) {
       // Its caption must become the bounded scroll owner rather than collapsing
       // the fixed-height chapter media row.
       for (let rewind = 0; rewind < STEPS.length; rewind += 1) {
-        await clickTransport(run.page, "奻珨跺梒誹");
+        await clickTransport(run.page, "上一个章节");
       }
       for (let step = 0; step < EXPECTED_MEANINGFUL.length; step += 1) {
         const landed = await currentStep(run.page);
         if (landed.step === longNoteStep) break;
-        await clickTransport(run.page, "狟珨跺梒誹");
+        await clickTransport(run.page, "下一个章节");
       }
       const longNoteLayout = await run.page.evaluate(() => {
         const caption = document.querySelector(".journey-playback__stop");
@@ -272,7 +272,7 @@ for (const viewport of VIEWPORTS) {
       });
       // Restore the same end-of-walk state used by the backward-navigation check.
       for (let advance = 0; advance < EXPECTED_MEANINGFUL.length; advance += 1) {
-        await clickTransport(run.page, "狟珨跺梒誹");
+        await clickTransport(run.page, "下一个章节");
       }
     }
     // The walk clamps at the last meaningful beat, so the visited set is the
