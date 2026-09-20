@@ -237,6 +237,34 @@ async function auditRows(userId: string) {
     ));
 }
 
+async function intentRows(userId: string) {
+  return await db
+    .select()
+    .from(accountIdentityAudit)
+    .where(and(
+      eq(accountIdentityAudit.userId, userId),
+      eq(accountIdentityAudit.event, "password-enroll-intent"),
+    ));
+}
+
+/**
+ * Drop ONLY the success receipt, leaving the grant consumed, the credential
+ * linked and the intent row standing. That is exactly the durable state a
+ * process death between Better Auth's credential write and
+ * `recordEnrollmentReceipt` leaves behind.
+ */
+async function loseSuccessReceipt(userId: string) {
+  const dropped = await db
+    .delete(accountIdentityAudit)
+    .where(and(
+      eq(accountIdentityAudit.userId, userId),
+      eq(accountIdentityAudit.event, "password-enroll"),
+      eq(accountIdentityAudit.outcome, "success"),
+    ))
+    .returning({ id: accountIdentityAudit.id });
+  return dropped.length;
+}
+
 /** Observes whether the Better Auth write was reached at all. */
 function watchSetPassword() {
   return vi.spyOn(auth.api, "setPassword");
@@ -484,6 +512,105 @@ describe("first password enrollment", () => {
       .toEqual(["refused", "success"]);
     expect(audit.find((row) => row.outcome === "refused")?.reason)
       .toBe("PASSWORD_ENROLL_ALREADY_SET");
+  });
+
+  it("reconciles a credential whose success receipt was lost mid-enrollment", async () => {
+    // #445 requires an unknown result to be reconcilable by re-reading the
+    // authoritative account methods rather than stranding the owner. The grant
+    // is spent and the credential is linked; only the receipt is missing.
+    const fixture = await seedUser("reconcile");
+    const grant = await grantFor(fixture);
+
+    expect(await enroll(fixture, { reverificationToken: grant.token }))
+      .toEqual({ enrolled: true, alreadyEnrolled: false });
+    const [credential] = await db
+      .select({ id: authAccount.id })
+      .from(authAccount)
+      .where(and(
+        eq(authAccount.userId, fixture.userId),
+        eq(authAccount.providerId, "credential"),
+      ));
+
+    expect(await loseSuccessReceipt(fixture.userId)).toBe(1);
+    expect(await auditRows(fixture.userId)).toHaveLength(0);
+    // The intent is what makes the surviving credential attributable; without
+    // it this retry would have to stay a replay refusal.
+    expect(await intentRows(fixture.userId)).toHaveLength(1);
+
+    const setPassword = watchSetPassword();
+    expect(await enroll(fixture, {
+      newPassword: OTHER_PASSWORD,
+      reverificationToken: grant.token,
+    })).toEqual({ enrolled: false, alreadyEnrolled: true });
+    expect(setPassword).not.toHaveBeenCalled();
+
+    // The reconciliation restored the receipt and named the credential it
+    // belongs to; it did not touch the enrolled password.
+    const audit = await auditRows(fixture.userId);
+    expect(audit).toHaveLength(1);
+    expect(audit[0]!.outcome).toBe("success");
+    expect(audit[0]!.accountRecordId).toBe(credential!.id);
+    const credentials = await credentialAccounts(fixture.userId);
+    expect(credentials).toHaveLength(1);
+    expect(await passwordMatches(credentials[0]!.password!, FIRST_PASSWORD))
+      .toBe(true);
+    expect(await passwordMatches(credentials[0]!.password!, OTHER_PASSWORD))
+      .toBe(false);
+  });
+
+  it("never reconciles a grant onto a credential another grant enrolled", async () => {
+    // The losing side of a race, interrupted before it could record its own
+    // refusal: its intent row survives, but the only credential on the account
+    // is the winner's. Existence alone must not read as this grant's success.
+    const fixture = await seedUser("foreign-credential");
+    const [winner, loser] = await Promise.all([
+      grantFor(fixture),
+      grantFor(fixture),
+    ]);
+
+    expect(await enroll(fixture, { reverificationToken: winner.token }))
+      .toEqual({ enrolled: true, alreadyEnrolled: false });
+    await expectRefusal(
+      enroll(fixture, {
+        newPassword: OTHER_PASSWORD,
+        reverificationToken: loser.token,
+      }),
+      "PASSWORD_ENROLL_ALREADY_SET",
+    );
+
+    const [refusal] = await db
+      .select({ actionId: accountIdentityAudit.actionId })
+      .from(accountIdentityAudit)
+      .where(and(
+        eq(accountIdentityAudit.userId, fixture.userId),
+        eq(accountIdentityAudit.event, "password-enroll"),
+        eq(accountIdentityAudit.outcome, "refused"),
+      ));
+    await db.insert(accountIdentityAudit).values({
+      userId: fixture.userId,
+      event: "password-enroll-intent",
+      outcome: "success",
+      actionId: refusal!.actionId,
+    });
+
+    const setPassword = watchSetPassword();
+    await expectRefusal(
+      enroll(fixture, {
+        newPassword: OTHER_PASSWORD,
+        reverificationToken: loser.token,
+      }),
+      "PASSWORD_ENROLL_ALREADY_SET",
+    );
+    expect(setPassword).not.toHaveBeenCalled();
+
+    // Still the winner's password, and the winner keeps the only receipt.
+    const credentials = await credentialAccounts(fixture.userId);
+    expect(credentials).toHaveLength(1);
+    expect(await passwordMatches(credentials[0]!.password!, FIRST_PASSWORD))
+      .toBe(true);
+    const successes = (await auditRows(fixture.userId))
+      .filter((row) => row.outcome === "success");
+    expect(successes).toHaveLength(1);
   });
 
   it("refuses rather than duplicating when a credential row already occupies the identity", async () => {

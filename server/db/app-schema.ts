@@ -768,7 +768,7 @@ export const accountIdentityAudit = pgTable(
     index("account_identity_audit_user_created_idx").on(table.userId, table.createdAt),
     check(
       "account_identity_audit_event_check",
-      sql`${table.event} in ('reverify', 'link-intent', 'link', 'unlink', 'password-change', 'password-enroll')`,
+      sql`${table.event} in ('reverify', 'link-intent', 'link', 'unlink', 'password-change', 'password-enroll', 'password-enroll-intent')`,
     ),
     check(
       "account_identity_audit_outcome_check",
