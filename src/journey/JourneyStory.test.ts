@@ -129,9 +129,13 @@ describe("mobile media delete focus ownership (#427)", () => {
     expect(restoreSource).toContain("target.getClientRects().length > 0");
     expect(restoreSource).toContain("window.requestAnimationFrame(focusCurrentOwner)");
     expect(restoreSource).toContain("document.activeElement !== target");
-    expect(restoreSource).toContain("restoreMobileMediaDeleteFocusRef.current = false");
-    expect(restoreSource.indexOf("restoreMobileMediaDeleteFocusRef.current = false"))
-      .toBeGreaterThan(restoreSource.indexOf("document.activeElement !== target"));
+    const activeOwnerCheck = restoreSource.indexOf("if (document.activeElement !== target)");
+    const successfulClear = restoreSource.indexOf(
+      "restoreMobileMediaDeleteFocusRef.current = false",
+      activeOwnerCheck,
+    );
+    expect(activeOwnerCheck).toBeGreaterThan(0);
+    expect(successfulClear).toBeGreaterThan(activeOwnerCheck);
   });
 });
 
