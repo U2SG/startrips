@@ -110,16 +110,6 @@ class ProcessClassificationCases(unittest.TestCase):
         conflict = execution.competitors(rows, self.root, 3, lane='experience')[0]
         self.assertEqual(10, conflict['pid'])
 
-    def test_tokenized_experience_entrypoint_is_provider_visible_claim(self):
-        rows = self.base + [process(
-            10, command='bash ' + str(self.root / 'launch-experience.sh')
-            + ' --carrier-token=experience-claim-0010')]
-        occupancy = execution.lane_occupancy(rows, self.root, 3, 'experience')
-        self.assertEqual((1, 1, 1),
-                         (occupancy['occupied_slots'], occupancy['available_slots'],
-                          occupancy['claim_count']))
-        self.assertEqual('experience', execution.command_lane(rows[-1]['command']))
-
     def test_encoded_worker_marker_in_other_lane_does_not_block(self):
         backend = 'C:/owners/backend'
         token = base64.urlsafe_b64encode(backend.encode('utf-8')).decode('ascii').rstrip('=')

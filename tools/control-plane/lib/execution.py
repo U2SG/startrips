@@ -110,6 +110,26 @@ def command_token(command):
     return match.group(1) if match else None
 
 
+def published_invocation_token(rows, mine):
+    """Recover this invocation token only from exact published pid/start identities.
+
+    MSYS can sever both native ancestry and one subprocess environment projection.
+    The launcher/run-loop already publishes exact pid+CreationDate identities for
+    this invocation. A token observed on one of those exact identities is therefore
+    self evidence, not a peer inference. Multiple tokens fail closed.
+    """
+    tokens = {
+        token
+        for row in rows
+        if mine.get(row.get('pid')) == row.get('started')
+        for token in [command_token(row.get('command'))]
+        if token
+    }
+    if len(tokens) > 1:
+        raise EvidenceUnknown('Published execution identities disagree on carrier token')
+    return next(iter(tokens), None)
+
+
 def command_lane(command):
     """Return an explicitly observable execution lane, or None.
 
@@ -129,8 +149,6 @@ def command_lane(command):
         match = re.search(pattern, text)
         if match:
             return match.group(1)
-    if re.search(r'(?:^|[\s"/])launch-experience[.]sh(?:[\s"\x00]|$)', text):
-        return 'experience'
     if re.search(r'(?:^|[\s"/])launch-supervisor[.]sh(?:[\s"\x00]|$)', text):
         return 'backend'
     return None
@@ -333,7 +351,9 @@ def _observed_executions(rows, root, self_pid):
     # MSYS may lose exported environment on one native subprocess carrier even
     # though the parent run-loop argv still carries the exact invocation token.
     # Recover only from the caller's own ancestry; never infer from a peer.
-    own_token = os.environ.get('STARTRIPS_CARRIER_TOKEN') or lineage_token(by_pid[self_pid], by_pid)
+    own_token = (os.environ.get('STARTRIPS_CARRIER_TOKEN')
+                 or lineage_token(by_pid[self_pid], by_pid)
+                 or published_invocation_token(rows, mine))
     own_cluster = invocation_cluster(rows, own_token)
     for spelling in tuple(aliases):
         if re.match(r'^[a-z]:/', spelling):
@@ -381,7 +401,7 @@ def _observed_executions(rows, root, self_pid):
             continue
 
         command = raw_command.replace('\\', '/').lower()
-        is_loop = bool(re.search(r'(?:^|[\s"/])(?:run-loop|loop-supervisor|launch-experience)[.]sh(?:[\s"\x00]|$)', command))
+        is_loop = bool(re.search(r'(?:^|[\s"/])(?:run-loop|loop-supervisor)[.]sh(?:[\s"\x00]|$)', command))
         is_child = 'startrips_execution_owner=' in command
         # The dedicated LOCAL Backend supervisor is a resident scheduler, not a
         # productive owner. Keep it observable so duplicate-launch/self-block
@@ -445,7 +465,7 @@ def lane_occupancy(rows, root, self_pid, lane):
     """Return distinct live owner scopes for one lane without creating a registry."""
     if lane not in LANE_CAPACITY:
         raise ValueError('Execution lane must be backend or experience')
-    scoped, claims, unknown, scoped_tokens = {}, {}, [], set()
+    scoped, claims, unknown = {}, {}, []
     for record in _observed_executions(rows, root, self_pid):
         carrier_lane = record['lane']
         # A carrier whose lineage proves a different lane is not part of this
@@ -461,14 +481,13 @@ def lane_occupancy(rows, root, self_pid, lane):
         if record['scope_complete']:
             key = (record['feature'], record['worktree'])
             scoped.setdefault(key, record)
-            if record.get('token'):
-                scoped_tokens.add(record['token'])
         elif record['token']:
             claims.setdefault(record['token'], record)
         else:
             unknown.append(_public_record(record, state='unknown-scope'))
     if unknown:
         raise EvidenceUnknown('Execution occupancy is unknown: ' + json.dumps(unknown))
+    scoped_tokens = {record['token'] for record in scoped.values() if record.get('token')}
     claims = {token: record for token, record in claims.items() if token not in scoped_tokens}
     used = len(scoped) + len(claims)
     return {
@@ -507,7 +526,7 @@ def competitors(rows, root, self_pid, lane=None, feature=None, worktree=None, wo
         raise ValueError('Specify owner worktree once')
     wanted_feature = feature.upper() if isinstance(feature, str) and feature else None
     wanted_worktree = decode_worktree64(worktree64) if worktree64 is not None else normalize_worktree(worktree)
-    conflicts, same_lane_scoped, same_lane_claims, same_lane_scoped_tokens = [], {}, {}, set()
+    conflicts, same_lane_scoped, same_lane_claims = [], {}, {}
 
     for record in _observed_executions(rows, root, self_pid):
         carrier_lane = record['lane']
@@ -541,17 +560,16 @@ def competitors(rows, root, self_pid, lane=None, feature=None, worktree=None, wo
             conflicts.append(_public_record(record))
         elif record['scope_complete']:
             same_lane_scoped.setdefault((record['feature'], record['worktree']), record)
-            if record.get('token'):
-                same_lane_scoped_tokens.add(record['token'])
         elif record['token']:
             same_lane_claims.setdefault(record['token'], record)
         else:
             conflicts.append(_public_record(record, state='unknown-scope'))
 
     if lane == 'experience':
+        scoped_tokens = {record['token'] for record in same_lane_scoped.values() if record.get('token')}
         same_lane_claims = {
             token: record for token, record in same_lane_claims.items()
-            if token not in same_lane_scoped_tokens
+            if token not in scoped_tokens
         }
         # Only one selector/claim transition runs at once. Once scoped, up to two
         # different Experience owners may execute concurrently.

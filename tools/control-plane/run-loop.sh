@@ -134,11 +134,12 @@ local occupied_json='{}'
 if [[ "$STARTRIPS_LANE" == "experience" ]]; then
   occupied_json="$(python3 -B "$ROOT/lib/execution.py" occupied "$ROOT" --lane experience)" || return 6
 fi
-python3 - "$ROOT/feature_list.json" "$STARTRIPS_LANE" "$FEATURE_ALLOW" "$occupied_json" "${CARRIER_FEATURE:-}" <<'PY'
+python3 - "$ROOT/feature_list.json" "$STARTRIPS_LANE" "$FEATURE_ALLOW" "$occupied_json" "${CARRIER_FEATURE:-}" "${FEATURE_SKIP:-}" <<'PY'
 import json, re, sys
 
-p, lane, allow_raw, occupied_raw, carrier_feature = sys.argv[1:6]
+p, lane, allow_raw, occupied_raw, carrier_feature, skip_raw = sys.argv[1:7]
 allow = set(allow_raw.split())
+skip = set(skip_raw.split())
 occupied = json.loads(occupied_raw or '{}')
 occupied_features = set(occupied.get('features') or [])
 experience_full = lane == 'experience' and not carrier_feature and occupied.get('available_slots', 1) <= 0
@@ -201,9 +202,11 @@ def feature_lane(f):
     return 'backend'
 
 merged = {f['id'] for f in d['features'] if f.get('status') == 'passed'}
-active_backend = {f['id'] for f in d['features'] if feature_lane(f) == 'backend' and f.get('status') in {'in_progress','needs_work','ready_for_eval','ready_to_merge'}}
+active_backend = {f['id'] for f in d['features'] if feature_lane(f) == 'backend' and f.get('status') in {'in_progress','needs_work','ready_for_eval'} and f['id'] not in skip}
 
 def eligible(f):
+    if f['id'] in skip:
+        return False
     if lane == 'backend' and active_backend and f['id'] not in active_backend:
         return False
     if lane == 'experience' and experience_full:
@@ -234,13 +237,25 @@ if ordered:
 PY
 }
 
+# Preserve selector failures across command substitution and pipefail. A provider
+# or ONE read failure is UNKNOWN, never equivalent to "no eligible feature".
+read_next_feature() {
+  local value rc=0
+  value="$(next_feature | tr -d '\r')" || rc=$?
+  if [[ "$rc" != "0" ]]; then
+    echo "SELECTOR_UNKNOWN: next_feature rc=$rc lane=$STARTRIPS_LANE" >&2
+    return "$rc"
+  fi
+  printf '%s' "$value"
+}
+
 # Read-only selector query for wake-if-work.sh: print the id this lane would
 # select next, or nothing at all. No API call, no Claude session, no state
 # write - so the hook can ask "is there work?" for free, and the answer comes
 # from the ONE selector the loop itself uses rather than a copy that can drift.
 if [[ "${1:-}" == "--next" ]]; then
-  next_feature
-  exit 0
+  read_next_feature
+  exit $?
 fi
 
 # MERGE POLICY. This repo's `merge-readiness` check is an explicit human
@@ -309,7 +324,7 @@ fi
 
 # Same selected feature, then action. This is not a second selector or queue.
 if [[ "${1:-}" == "--next-action" ]]; then
-  selected="$(next_feature | tr -d '\r')"
+  selected="$(read_next_feature)" || exit 6
   [[ -n "$selected" ]] || { echo OBSERVE; exit 0; }
   python3 "$ROOT/lib/feature_state.py" action "$ROOT/feature_list.json" "$selected"
   exit $?
@@ -317,7 +332,7 @@ fi
 
 # Read-only evidence-derived view; unlike --next-action's offline status hint.
 if [[ "${1:-}" == "--plan" ]]; then
-  selected="$(next_feature | tr -d '\r')"
+  selected="$(read_next_feature)" || exit 6
   [[ -n "$selected" ]] || { echo '{"action":"OBSERVE"}'; exit 0; }
   python3 -B "$ROOT/lib/action_plan.py" "$ROOT/feature_list.json" "$selected" --repo "$GH_REPO"
   exit $?
@@ -395,6 +410,21 @@ python3 -B "$ROOT/lib/execution.py" permission "$ROOT" --lane "$STARTRIPS_LANE" 
 source "$ROOT/lib/intake.sh"
 mkdir -p "$ROOT/.agent-artifacts/evaluations"
 
+# A logical owner waiting on external evidence keeps its worktree/branch but does
+# not consume the lane's development carrier. In an unscoped run, remember that
+# wait only for this run-loop invocation and let the canonical selector consider
+# another eligible feature. This is execution state, not a second owner registry.
+yield_waiting_feature() {
+  local fid="$1"
+  [[ -z "$CARRIER_FEATURE" ]] || return 1
+  case " ${FEATURE_SKIP:-} " in
+    *" $fid "*) ;;
+    *) FEATURE_SKIP="${FEATURE_SKIP:+$FEATURE_SKIP }$fid"; export FEATURE_SKIP ;;
+  esac
+  echo "Yielding non-productive owner $fid for this run; continuing selector"
+  return 0
+}
+
 for ((i=1; i<=MAX_ITERATIONS; i++)); do
   [[ ! -f "$ROOT/AGENT_STOP" ]] || { echo "AGENT_STOP present; exiting"; exit 0; }
 
@@ -420,7 +450,8 @@ for ((i=1; i<=MAX_ITERATIONS; i++)); do
   # statement, never a subshell: a quota hit inside triage exits 5 and that has
   # to reach the loop.
   echo "=== Issue intake (iteration $i) ==="
-  if [[ -z "$(next_feature | tr -d '\r')" && -z "$(ready_to_merge_prs)" ]]; then
+  PRE_INTAKE_FEATURE="$(read_next_feature)" || exit 6
+  if [[ -z "$PRE_INTAKE_FEATURE" && -z "$(ready_to_merge_prs)" ]]; then
     intake_new_issues || exit 6
   else
     # No bulk replenishment while registered work exists; urgent P0/P1 discovery
@@ -435,8 +466,15 @@ for ((i=1; i<=MAX_ITERATIONS; i++)); do
   echo "=== Issue update reconcile (iteration $i) ==="
   intake_reconcile_issues
 
-  FEATURE="$(next_feature | tr -d '\r')"
+  FEATURE="$(read_next_feature)" || exit 6
   if [[ -z "$FEATURE" ]]; then
+    # A wait-state owner was intentionally yielded above. If no other productive
+    # feature remains, preserve the owner and let the supervisor observe again
+    # later rather than declaring the queue finished.
+    if [[ -n "${FEATURE_SKIP:-}" ]]; then
+      echo "No productive feature remains; preserved waiting owner(s): $FEATURE_SKIP"
+      exit 7
+    fi
     # "Nothing eligible" has two very different meanings and the supervisor acts
     # on them differently. If anything is `ready_to_merge`, the queue is not
     # finished — it is blocked on a human applying `merge-ready`, and every
@@ -457,7 +495,7 @@ for ((i=1; i<=MAX_ITERATIONS; i++)); do
     # re-exec must not repeat those stateful steps, but routing/gates may have
     # changed meanwhile. Reuse the ONE selector with an exact allowlist so lane,
     # dependencies, status and human gate are all revalidated before planning.
-    SCOPED_SELECTED="$(FEATURE_ALLOW="$CARRIER_FEATURE" next_feature | tr -d '\r')"
+    SCOPED_SELECTED="$(FEATURE_ALLOW="$CARRIER_FEATURE" read_next_feature)" || exit 6
     [[ "$SCOPED_SELECTED" == "$CARRIER_FEATURE" ]] || {
       echo "CARRIER_LANE_OR_GATE_DRIFT" >&2; exit 6;
     }
@@ -484,8 +522,11 @@ for ((i=1; i<=MAX_ITERATIONS; i++)); do
     RECONCILE) reconcile_merge_state; continue ;;
     HANDOFF_REVIEW)
       python3 -B "$ROOT/lib/action_plan.py" "$ROOT/feature_list.json" "$FEATURE" --repo "$GH_REPO" --handoff || exit 6
+      if yield_waiting_feature "$FEATURE"; then continue; fi
       exit 7 ;;
-    WAIT_*|OBSERVE|OWNERSHIP_RECONCILE) exit 7 ;;
+    WAIT_*|OBSERVE|OWNERSHIP_RECONCILE)
+      if yield_waiting_feature "$FEATURE"; then continue; fi
+      exit 7 ;;
     IMPLEMENT|RESUME_OWNER|SEAL|REPAIR_REVIEW|REPAIR_CI|REPAIR_CI_FAMILY|REPAIR_CONFLICT) unset EVAL_ONLY ;;
     *) echo "Unknown action; no write/dispatch" >&2; exit 6 ;;
   esac

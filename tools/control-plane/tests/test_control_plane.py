@@ -597,17 +597,17 @@ class WiringTests(SyntheticOne):
         self.assertIn('--worktree64 "$CARRIER_WORKTREE64"', loop)
         self.assertNotIn('CARRIER_WORKTREE="$(python3', loop)
         self.assertIn('CARRIER_SCOPE_DRIFT', loop)
-        self.assertIn('SCOPED_SELECTED="$(FEATURE_ALLOW="$CARRIER_FEATURE" next_feature', loop)
+        self.assertIn('SCOPED_SELECTED="$(FEATURE_ALLOW="$CARRIER_FEATURE" read_next_feature)', loop)
         self.assertIn('CARRIER_LANE_OR_GATE_DRIFT', loop)
         self.assertIn('FEATURE="$CARRIER_FEATURE"', loop)
         self.assertIn('worktree64=$OWNER_WORKTREE64', loop)
-
-    def test_experience_entrypoint_reuses_one_provider_visible_token(self):
-        launch = (ROOT / 'launch-experience.sh').read_text(encoding='utf-8')
-        self.assertEqual(1, launch.count('token="experience-$(date +%s)-$$-$RANDOM"'))
-        self.assertIn('exec "$ROOT/launch-experience.sh" "--carrier-token=$token"', launch)
-        self.assertIn('export STARTRIPS_CARRIER_TOKEN="$CARRIER_TOKEN"', launch)
-        self.assertIn('exec "$ROOT/run-loop.sh" --carrier-lane=experience "--carrier-token=$CARRIER_TOKEN"', launch)
+        self.assertIn('read_next_feature()', loop)
+        self.assertIn('SELECTOR_UNKNOWN: next_feature rc=', loop)
+        self.assertIn('PRE_INTAKE_FEATURE="$(read_next_feature)" || exit 6', loop)
+        self.assertIn('FEATURE="$(read_next_feature)" || exit 6', loop)
+        self.assertIn('SCOPED_SELECTED="$(FEATURE_ALLOW="$CARRIER_FEATURE" read_next_feature)" || exit 6', loop)
+        self.assertIn('yield_waiting_feature()', loop)
+        self.assertIn('FEATURE_SKIP', loop)
 
 
 if __name__ == '__main__':
