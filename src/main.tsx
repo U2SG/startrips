@@ -1,4 +1,4 @@
-import { StrictMode, Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
+import { StrictMode, Suspense, lazy, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { AuthGateway } from "./auth/AuthGateway";
@@ -20,6 +20,11 @@ import {
 } from "./journey/quickRecapPlayback";
 import { SharedAtlasView } from "./journey/SharedAtlasView";
 import { isSharedAtlasPathname } from "./journey/sharedAtlas";
+import {
+  EarthExperiencePreferenceProvider,
+  useEarthExperiencePreference,
+} from "./journey/EarthExperienceProvider";
+import { authClient } from "./auth/auth-client";
 import type { Journey, JourneyRoute } from "./journey/types";
 import { ParticleEarthScene } from "./scene/ParticleEarthScene";
 import {
@@ -1110,7 +1115,41 @@ const Experience = import.meta.env.DEV && qaState === "journey-composer"
     ? LivingAtlasApp
   : import.meta.env.DEV && qaState
     ? App
-    : LivingAtlasApp;
+    : OwnerLivingAtlasApp;
+
+/**
+ * #332: the stored Earth experience preference, bound to the real session.
+ *
+ * Mounted around `AuthGateway` rather than inside it, so the one read is keyed
+ * by the stable user and not by the Atlas: `WorkspaceGate` remounts whenever
+ * the active organization changes, and switching Atlas must not re-read or
+ * reset a personal preference. `/share#<token>` is mounted outside this
+ * provider entirely, so a guest tree has no reader and issues no request.
+ */
+function SessionEarthExperienceProvider({ children }: { children: ReactNode }) {
+  const session = authClient.useSession();
+  return (
+    <EarthExperiencePreferenceProvider
+      accountKey={session.data?.user.id ?? null}
+      sessionResolved={!session.isPending}
+    >
+      {children}
+    </EarthExperiencePreferenceProvider>
+  );
+}
+
+/**
+ * #332: the product Atlas, reading the person's stored Earth experience.
+ *
+ * This is the only place the saved preference becomes the `#331` policy. It is
+ * a wrapper rather than a prop threaded from the render root because the value
+ * is resolved inside the provider mounted around `AuthGateway`, one tree above
+ * the gate that decides whether an Atlas renders at all.
+ */
+function OwnerLivingAtlasApp() {
+  const { policy } = useEarthExperiencePreference();
+  return <LivingAtlasApp earthExperiencePolicy={policy} />;
+}
 
 /**
  * #200 phase D: `/share#<token>` is a read-only product mode, not a state of
@@ -1147,15 +1186,17 @@ createRoot(document.getElementById("root")!).render(
           }
         />
       ) : (
-        <AuthGateway>
-          {coverRevealPreview ? (
-            <Suspense fallback={<main className="auth-gate auth-gate--brand-loading"><StartripsBrandLoader message="Loading your private atlas…" /></main>}>
+        <SessionEarthExperienceProvider>
+          <AuthGateway>
+            {coverRevealPreview ? (
+              <Suspense fallback={<main className="auth-gate auth-gate--brand-loading"><StartripsBrandLoader message="Loading your private atlas…" /></main>}>
+                <Experience />
+              </Suspense>
+            ) : (
               <Experience />
-            </Suspense>
-          ) : (
-            <Experience />
-          )}
-        </AuthGateway>
+            )}
+          </AuthGateway>
+        </SessionEarthExperienceProvider>
       )}
     </PersistentEarthProvider>
   </StrictMode>,

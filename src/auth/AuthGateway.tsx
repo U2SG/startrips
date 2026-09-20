@@ -16,6 +16,12 @@ import { useModalFocus } from "../journey/useModalFocus";
 import { usePersistentEarth } from "../scene/LivingAtlasGlobe";
 import { AtlasViewProvider, createOwnerAtlasView } from "../journey/atlasView";
 import { previousAccountSurface, shouldActivateAccountSheetFocus, shouldRenderStandaloneAccountDock, type AccountSurface } from "./accountSurface";
+import {
+  EarthExperienceMenuEntry,
+  earthExperienceEntryBusy,
+  nextEarthExperience,
+  useEarthExperiencePreference,
+} from "../journey/EarthExperienceProvider";
 import { authClient } from "./auth-client";
 
 type OrganizationSummary = {
@@ -378,6 +384,21 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cine
   const [accountSurface, setAccountSurface] = useState<AccountSurface>(null);
   const [mobileAccountHost, setMobileAccountHost] = useState<HTMLElement | null>(null);
   const isMobileV2 = useCompactMobileLayout();
+  // #332: the account menu is where a person changes the Earth experience.
+  // The value itself is held above this gate, so switching Atlas - which
+  // remounts this component - neither re-reads nor resets a personal choice.
+  const earthExperience = useEarthExperiencePreference();
+  const toggleEarthExperience = async () => {
+    const next = nextEarthExperience(earthExperience.policy);
+    setMessage("");
+    const persisted = await earthExperience.setPreference(next);
+    // A write that did not land says so. Nothing here claims persistence the
+    // server never confirmed, and the effective policy stays on the last value
+    // that actually reached storage.
+    setMessage(persisted
+      ? `地球呈现已保存为${next === "particle-only" ? "仅粒子" : "默认"}。`
+      : "地球呈现未能保存，选择未生效。");
+  };
   // #200 phase D: the owner product mode. Built here rather than at module
   // scope so that entering shared mode — where this component never renders —
   // constructs no owner mutation client at all.
@@ -634,6 +655,12 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cine
             <div className="account-dock__actions">
               {isOwner ? <button type="button" onClick={() => { setEditAtlasOpen(false); setInviteOpen((value) => !value); }}>邀请另一位</button> : null}
               <button type="button" onClick={() => { setInviteOpen(false); setEditTitle(gate.atlas.title); setEditDedication(gate.atlas.dedication); setEditAtlasOpen((value) => !value); setMessage(""); }}>编辑图谱</button>
+              <EarthExperienceMenuEntry
+                surface="dock"
+                policy={earthExperience.policy}
+                busy={earthExperienceEntryBusy(earthExperience)}
+                onToggle={() => void toggleEarthExperience()}
+              />
               <button type="button" onClick={() => void authClient.signOut().then(() => window.location.assign("/"))}>退出</button>
             </div>
             {inviteOpen ? (
@@ -667,6 +694,12 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cine
                 <div className="account-sheet__actions">
                   {isOwner ? <button type="button" onClick={() => { setMessage(""); setAccountSurface("invite"); }}><span>邀请另一位</span><small>发送私人图谱邀请</small></button> : null}
                   <button type="button" onClick={openMobileEdit}><span>编辑图谱</span><small>修改名称与题词</small></button>
+                  <EarthExperienceMenuEntry
+                    surface="sheet"
+                    policy={earthExperience.policy}
+                    busy={earthExperienceEntryBusy(earthExperience)}
+                    onToggle={() => void toggleEarthExperience()}
+                  />
                   <button type="button" onClick={() => void authClient.signOut().then(() => window.location.assign("/"))}><span>退出</span><small>退出当前账户</small></button>
                 </div>
               </>
