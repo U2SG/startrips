@@ -359,10 +359,10 @@ reconcile_merge_state() {
     --repo "$GH_REPO" --base "$BASE_BRANCH"
 }
 
-# An exhausted Claude quota is not a feature failure: the subprocess prints
-# "You've hit your session limit · resets 1:10pm (Asia/Singapore)" and produces
-# no work. Stop with a distinct code and the reset time instead of counting it
-# against the feature or letting `set -e` report a generic failure.
+# LOCAL Backend Claude quota is not a feature failure. Experience never reaches
+# this provider: it is dispatched to external Codexless execution after owner
+# preparation, so Backend session/weekly limits cannot block Experience.
+
 quota_stop() {
   local log="$1" who="$2" line
   line="$(grep -m1 -iE "hit your (weekly|session|usage) limit" "$log" 2>/dev/null || true)"
@@ -445,26 +445,25 @@ for ((i=1; i<=MAX_ITERATIONS; i++)); do
     echo "=== Reconciling merge state (iteration $i) ==="
     reconcile_merge_state
 
-  # New open issues become queue entries BEFORE the selection below, so a P0/P1
-  # regression triaged in this iteration is the one this iteration builds. Plain
-  # statement, never a subshell: a quota hit inside triage exits 5 and that has
-  # to reach the loop.
-  echo "=== Issue intake (iteration $i) ==="
-  PRE_INTAKE_FEATURE="$(read_next_feature)" || exit 6
-  if [[ -z "$PRE_INTAKE_FEATURE" && -z "$(ready_to_merge_prs)" ]]; then
-    intake_new_issues || exit 6
+  if [[ "$STARTRIPS_LANE" == "experience" ]]; then
+    # Experience is executed by the scheduled Codexless provider, not by the
+    # LOCAL Backend Claude CLI. Model-based intake/amend would silently consume
+    # the Backend account/session quota before Experience reaches its owner.
+    # Development Orchestrator owns product auto-feed and issue re-triage.
+    echo "=== Issue intake (iteration $i) ==="
+    echo "[intake] Experience provider is external Codexless; model intake/re-triage delegated to Orchestrator"
   else
-    # No bulk replenishment while registered work exists; urgent P0/P1 discovery
-    # still runs so pending work cannot hide a newly reported production regression.
-    INTAKE_URGENT_ONLY=1 intake_new_issues || exit 6
+    # New open issues become queue entries BEFORE the selection below.
+    echo "=== Issue intake (iteration $i) ==="
+    PRE_INTAKE_FEATURE="$(read_next_feature)" || exit 6
+    if [[ -z "$PRE_INTAKE_FEATURE" && -z "$(ready_to_merge_prs)" ]]; then
+      intake_new_issues || exit 6
+    else
+      INTAKE_URGENT_ONLY=1 intake_new_issues || exit 6
+    fi
+    echo "=== Issue update reconcile (iteration $i) ==="
+    intake_reconcile_issues
   fi
-
-  # Issues that ALREADY map to a feature are reconciled after the new-issue
-  # pass, so the shared per-iteration session budget goes to a fresh P0/P1
-  # regression first. A backfill, a curated note and plain snapshot bookkeeping
-  # cost no session at all; only an amend or a reopen follow-up does.
-  echo "=== Issue update reconcile (iteration $i) ==="
-  intake_reconcile_issues
 
   FEATURE="$(read_next_feature)" || exit 6
   if [[ -z "$FEATURE" ]]; then
@@ -573,6 +572,18 @@ for ((i=1; i<=MAX_ITERATIONS; i++)); do
       exit 7
     fi
   fi
+  if [[ "$STARTRIPS_LANE" == "experience" ]]; then
+    ROW_TOKEN="$(printf '%s' "$PLAN" | python3 -c 'import json,sys; print(json.load(sys.stdin)["row_token"])' | tr -d '\r')" || exit 6
+    DISPATCH="$(python3 -B "$ROOT/lib/external_execution.py" prepare "$ROOT" "$FEATURE" "$REPO" "$ACTION" "$ROW_TOKEN")" || exit 6
+    printf 'EXPERIENCE_EXTERNAL_DISPATCH=%s\n' "$DISPATCH"
+    echo "Experience owner prepared for external Codexless execution; LOCAL Claude was not invoked"
+    exit 0
+  fi
+  [[ "$STARTRIPS_LANE" == "backend" ]] || {
+    echo "LOCAL_MODEL_PROVIDER_FORBIDDEN_FOR_LANE=$STARTRIPS_LANE" >&2
+    exit 64
+  }
+
   BEFORE="$(python3 -B "$ROOT/lib/feature_state.py" fingerprint "$ROOT/feature_list.json" "$FEATURE" --repo-path "$REPO")" || exit 6
   # Persistent execution evidence survives this shell and supervisor restarts.
   # Exhaustion pauses model replay only; the next scheduled run still observes
