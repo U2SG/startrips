@@ -1177,9 +1177,46 @@ try {
     // exposing or traversing a stale media-menu history entry.
     await story.page.evaluate(() => window.history.back());
     await deleteSheet.waitFor({ state: "detached" });
-    await story.page.waitForFunction(() => (
-      document.activeElement?.classList.contains("journey-story__mobile-media-menu-trigger") ?? false
-    ));
+    try {
+      await story.page.waitForFunction(() => (
+        document.activeElement?.classList.contains("journey-story__mobile-media-menu-trigger") ?? false
+      ));
+    } catch (error) {
+      const diagnostics = await story.page.evaluate(() => {
+        const active = document.activeElement;
+        const storyRoot = document.querySelector(".journey-story");
+        const triggers = [...document.querySelectorAll(".journey-story__mobile-media-menu-trigger")]
+          .map((node) => {
+            const element = node;
+            const style = getComputedStyle(element);
+            return {
+              ariaLabel: element.getAttribute("aria-label"),
+              ariaHidden: element.getAttribute("aria-hidden"),
+              tabIndex: element.getAttribute("tabindex"),
+              disabled: element.hasAttribute("disabled"),
+              visibility: style.visibility,
+              display: style.display,
+              connected: element.isConnected,
+            };
+          });
+        return {
+          activeTag: active?.tagName ?? null,
+          activeClass: active?.getAttribute?.("class") ?? null,
+          activeAriaLabel: active?.getAttribute?.("aria-label") ?? null,
+          activeText: active?.textContent?.trim().slice(0, 160) ?? null,
+          storyMode: storyRoot?.getAttribute("data-mobile-mode") ?? null,
+          storyPresentation: storyRoot?.getAttribute("data-mobile-presentation") ?? null,
+          deleteSheetCount: document.querySelectorAll(".journey-story__mobile-media-sheet.is-confirming").length,
+          mediaSheetCount: document.querySelectorAll(".journey-story__mobile-media-sheet").length,
+          triggerCount: triggers.length,
+          triggers,
+          historyState: window.history.state,
+        };
+      });
+      throw new Error(
+        `Mobile media-delete focus did not restore after Back: ${JSON.stringify(diagnostics)}; ${error}`,
+      );
+    }
     const deleteFocusRestored = await manageTriggerButton.evaluate((button) => document.activeElement === button);
     const replacementMenuStayedClosed = await mobileSheet.count() === 0;
     const replacementStayedInManage = await storyRoot.getAttribute("data-mobile-mode") === "manage";
