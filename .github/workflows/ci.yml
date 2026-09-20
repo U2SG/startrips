@@ -4,10 +4,11 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 
 permissions:
   contents: read
@@ -21,6 +22,12 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+      - name: Verify a manual recovery run targets the exact main HEAD
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/verify-main-sha.mjs
+      - name: Test exact-main recovery guard
+        run: node --test scripts/verify-main-sha.node-test.mjs
       - name: Test CFAA tooling
         run: node --test scripts/cfaa.node-test.mjs
       - name: Validate CFAA invariant registry
