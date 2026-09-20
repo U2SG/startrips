@@ -204,12 +204,20 @@ export function writeEarthExperiencePreference(
  * refuse the answer, and report whether the value is now DURABLE — is
  * exercisable with a stub `fetch` and no browser. The boolean is the server's
  * answer, never an optimistic one: `false` means the choice did not persist.
+ *
+ * @param stillOwned read at COMPLETION time, not at call time. A `200` proves
+ *   the departed account's row is durable, which is not the same claim as "the
+ *   setting you are looking at was saved": if the session named somebody else
+ *   while the PUT was in flight, `applyEarthExperienceWrite` drops the answer
+ *   as foreign, and reporting success would tell the new account its Earth
+ *   setting was stored when deliberately nothing was.
  */
 export async function saveEarthExperiencePreference(
   value: EarthExperiencePreference,
   accountKey: string | null,
   applyState: (update: (state: EarthExperienceState) => EarthExperienceState) => void,
   fetchImpl: typeof fetch = fetch,
+  stillOwned: () => boolean = () => true,
 ): Promise<boolean> {
   // Signed out there is no account to store a choice against, so nothing is
   // sent and nothing is claimed.
@@ -217,5 +225,5 @@ export async function saveEarthExperiencePreference(
   applyState(markEarthExperienceSaving);
   const result = await writeEarthExperiencePreference(value, undefined, fetchImpl);
   applyState((current) => applyEarthExperienceWrite(current, accountKey, result));
-  return result.ok;
+  return result.ok && stillOwned();
 }

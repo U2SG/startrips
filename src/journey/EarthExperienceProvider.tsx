@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { EarthExperiencePreference } from "./earthExperiencePreference";
 import {
   applyEarthExperienceRead,
@@ -66,6 +66,25 @@ export function EarthExperiencePreferenceProvider({ accountKey, sessionResolved,
 }) {
   const [state, setState] = useState<EarthExperienceState>(INITIAL_EARTH_EXPERIENCE_STATE);
 
+  /**
+   * The account edge is applied during RENDER, not only in the effect below.
+   * An effect runs after paint, so deriving the policy from `state` alone would
+   * let account B's first committed frame render account A's value whenever the
+   * tree survives the swap — two accounts sharing an active organization keep
+   * `WorkspaceGate` mounted, and A's `default` would mount detailed-Earth
+   * resources before B's `particle-only` has even been read.
+   *
+   * While the session itself is unresolved the account is held rather than read
+   * as "signed out": a momentarily pending session must not resolve a known
+   * particle-only person to the absence value and load a detailed Earth.
+   */
+  const owned = earthExperienceStateForAccount(state, sessionResolved ? accountKey : state.accountKey);
+
+  // Read at write-completion time so a response that outlived its account is
+  // not reported as this account's saved setting.
+  const ownerRef = useRef(accountKey);
+  ownerRef.current = accountKey;
+
   useEffect(() => {
     // Until the session resolves there is no account to read for, and the
     // initial pending state is already the safe one.
@@ -89,18 +108,24 @@ export function EarthExperiencePreferenceProvider({ accountKey, sessionResolved,
     // The whole write sequence lives in the state module, so what one
     // activation of the menu entry does is graded there rather than only in a
     // browser. This component contributes the setter and the account identity.
-    (value: EarthExperiencePreference) => saveEarthExperiencePreference(value, accountKey, setState),
+    (value: EarthExperiencePreference) => saveEarthExperiencePreference(
+      value,
+      accountKey,
+      setState,
+      undefined,
+      () => ownerRef.current === accountKey,
+    ),
     [accountKey],
   );
 
   const access = useMemo<EarthExperienceAccess>(() => ({
-    policy: effectiveEarthExperiencePolicy(state),
-    known: state.known,
-    status: state.status,
-    save: state.save,
+    policy: effectiveEarthExperiencePolicy(owned),
+    known: owned.known,
+    status: owned.status,
+    save: owned.save,
     storable: accountKey !== null,
     setPreference,
-  }), [accountKey, setPreference, state]);
+  }), [accountKey, owned, setPreference]);
 
   return (
     <EarthExperienceContext.Provider value={access}>

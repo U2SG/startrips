@@ -169,6 +169,28 @@ describe("Earth experience account-menu entry", () => {
     expect(sent).toEqual([]);
   });
 
+  it("refuses to call a write saved once the session has named another account", async () => {
+    // The PUT proves the DEPARTED account's row is durable. That is not the
+    // same claim as "the setting you are looking at was saved", so the menu
+    // must not report success to the account that replaced it.
+    let state = stored("default", 1, "user-a");
+    const sent: Sent[] = [];
+    let owner = "user-a";
+    const persisted = await saveEarthExperiencePreference(
+      "particle-only",
+      "user-a",
+      (update) => { state = update(state); },
+      stubFetch(sent, () => {
+        owner = "user-b";
+        return record("particle-only", 2);
+      }),
+      () => owner === "user-a",
+    );
+
+    expect(sent).toHaveLength(1);
+    expect(persisted).toBe(false);
+  });
+
   it("chooses the other of the two values", () => {
     expect(nextEarthExperience("default")).toBe("particle-only");
     expect(nextEarthExperience("particle-only")).toBe("default");
@@ -213,6 +235,26 @@ describe("Earth experience hydration wiring", () => {
     // The product path is the wrapper, not the bare Atlas that would keep the
     // hardcoded default.
     expect(main).toContain("    : OwnerLivingAtlasApp;");
+  });
+
+  it("applies the account edge during render, not after paint", () => {
+    // An effect runs after the frame is committed, so an account swap that
+    // keeps the tree mounted - two accounts sharing an active organization -
+    // would otherwise render account A's policy for account B once. The
+    // rendered access is normalized against the current account instead.
+    expect(provider).toContain(
+      "const owned = earthExperienceStateForAccount(state, sessionResolved ? accountKey : state.accountKey);",
+    );
+    expect(provider).toContain("policy: effectiveEarthExperiencePolicy(owned),");
+    expect(provider).not.toContain("policy: effectiveEarthExperiencePolicy(state),");
+    // A momentarily pending session holds the account rather than reading it as
+    // signed out, so a known particle-only person is never resolved to the
+    // absence value and handed a detailed Earth.
+    const swapped = earthExperienceStateForAccount(stored("default", 3, "user-a"), "user-b");
+    expect(swapped.known).toBeNull();
+    expect(effectiveEarthExperiencePolicy(swapped)).toBe("particle-only");
+    const held = earthExperienceStateForAccount(stored("particle-only", 3, "user-a"), "user-a");
+    expect(effectiveEarthExperiencePolicy(held)).toBe("particle-only");
   });
 
   it("mounts the provider around the gateway, above the per-Atlas workspace", () => {
