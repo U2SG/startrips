@@ -1379,15 +1379,6 @@ export function JourneyStory({
     return true;
   }
 
-  const resolveMobileMediaSheetRestoreFocus = useCallback((
-    previousFocus: HTMLElement | null,
-  ) => {
-    if (!restoreMobileMediaDeleteFocusRef.current) return undefined;
-    restoreMobileMediaDeleteFocusRef.current = false;
-    if (!mobileLayout || !mobileManageMode) return null;
-    return mobileManageViewerTriggerRef.current ?? previousFocus;
-  }, [mobileLayout, mobileManageMode]);
-
   function closeJourneyDelete() {
     if (deleteState === "pending") return false;
     restoreJourneyDeleteFocusRef.current = mobileLayout;
@@ -1599,8 +1590,20 @@ export function JourneyStory({
   const mobileMediaSheetRef = useNestedModalFocus<HTMLElement>(
     mobileLayout && (mobileMediaMenuOpen || mediaDeleteState !== "idle"),
     mobileMediaMenuOpen ? "manage" : mediaDeleteState !== "idle" ? "delete" : null,
-    resolveMobileMediaSheetRestoreFocus,
   );
+
+  // Run after the nested trap's passive cleanup. The trap may first restore
+  // its captured previousFocus; this current Story owner then takes final
+  // focus deterministically after the delete surface is gone.
+  useEffect(() => {
+    if (!restoreMobileMediaDeleteFocusRef.current) return;
+    if (mediaDeleteState !== "idle") return;
+
+    restoreMobileMediaDeleteFocusRef.current = false;
+    if (!mobileLayout || !mobileManageMode) return;
+    const target = mobileManageViewerTriggerRef.current ?? mobileManageDoneRef.current;
+    target?.focus({ preventScroll: true });
+  }, [mediaDeleteState, mobileLayout, mobileManageMode]);
 
   useLayoutEffect(() => {
     const authority = placementAnalysisAuthorityRef.current;
@@ -3293,7 +3296,9 @@ export function JourneyStory({
       return;
     }
     if (onMediaDelete) {
-      // The parent owns the state change in previews.
+      // The parent owns the state change in previews. The Story still owns
+      // focus handoff while Manage remains active.
+      restoreMobileMediaDeleteFocusRef.current = mobileLayout && mobileManageMode;
       setMediaDeleteState("idle");
       return;
     }
@@ -3313,6 +3318,7 @@ export function JourneyStory({
         message: "媒体已删除，但当前列表刷新失败。重新打开这段旅程即可，不需要重复操作。",
       });
     }
+    restoreMobileMediaDeleteFocusRef.current = mobileLayout && mobileManageMode;
     setMediaDeleteState("idle");
     setMediaDeleteMessage("");
   }
