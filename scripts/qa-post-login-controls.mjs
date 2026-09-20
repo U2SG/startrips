@@ -682,6 +682,42 @@ async function leaveComposerTask(page) {
   }
 }
 
+// #448: `useCompactMobileLayout()` resolves the compact-mobile media query
+// through a matchMedia change listener, so `.journey-composer[data-mobile-layout]`
+// -- and with it the desktop media action groups, which render from the same
+// boolean -- only describe a new viewport once React has committed. Reading the
+// DOM straight after `setViewportSize` can therefore measure the previous
+// layout. Wait on that layout-owned attribute rather than on elapsed time, and
+// return the transition so the sample records which direction it exercised.
+async function switchComposerViewport(page, { width, height, compact }) {
+  const from = page.viewportSize() ?? { width: 0, height: 0 };
+  const fromCompact = await page.evaluate(() => (
+    document.querySelector(".journey-composer")?.getAttribute("data-mobile-layout") === "true"
+  ));
+  await page.setViewportSize({ width, height });
+  await page.waitForFunction((expected) => {
+    const composer = document.querySelector(".journey-composer");
+    if (!composer) return false;
+    return (composer.getAttribute("data-mobile-layout") === "true") === expected;
+  }, compact, { timeout: 8_000 });
+  return {
+    from: `${from.width}x${from.height}`,
+    to: `${width}x${height}`,
+    fromCompact,
+    toCompact: compact,
+    crossedLayout: fromCompact !== compact,
+  };
+}
+
+function readComposerMobileMetrics(page) {
+  return page.evaluate(() => ({
+    cards: document.querySelectorAll(".journey-media-mobile-card").length,
+    manageButtons: document.querySelectorAll(".journey-media-mobile-card__menu").length,
+    assignmentButtons: document.querySelectorAll(".journey-media-mobile-card__assignment").length,
+    desktopActionGroups: document.querySelectorAll(".journey-media-fields__actions").length,
+  }));
+}
+
 async function verifyComposerMediaActions() {
   console.error("[qa-post-login] composer media actions");
   const page = await browser.newPage({ viewport: { width: 390, height: 844 }, reducedMotion: "reduce" });
@@ -700,16 +736,12 @@ async function verifyComposerMediaActions() {
       ["tablet", 768, 1024, false],
       ["desktop", 1280, 800, false],
     ]) {
-      await page.setViewportSize({ width, height });
+      const transition = await switchComposerViewport(page, { width, height, compact: mobile });
       if (mobile) {
         await openComposerTask(page, "media");
-        const mobileMetrics = await page.evaluate(() => ({
-          cards: document.querySelectorAll(".journey-media-mobile-card").length,
-          manageButtons: document.querySelectorAll(".journey-media-mobile-card__menu").length,
-          assignmentButtons: document.querySelectorAll(".journey-media-mobile-card__assignment").length,
-          desktopActionGroups: document.querySelectorAll(".journey-media-fields__actions").length,
-        }));
+        const mobileMetrics = await readComposerMobileMetrics(page);
         record(`composer-${label}-media-actions`, await scanButtons(page, ".journey-composer", ".journey-composer__editor"), {
+          transition,
           mobileMetrics,
           failed: mobileMetrics.cards !== 2
             || mobileMetrics.manageButtons !== 2
@@ -739,13 +771,27 @@ async function verifyComposerMediaActions() {
         return group.some((button) => !button.ariaLabel || !button.tooltip || button.visibleText !== "");
       });
       record(`composer-${label}-media-actions`, await scanButtons(page, ".journey-composer", ".journey-composer__editor"), {
+        transition,
         actionMetrics,
-        failed: invalidActions,
+        failed: invalidActions || (label === "tablet" && !transition.crossedLayout),
       });
     }
 
-    await page.setViewportSize({ width: 390, height: 844 });
+    // #448: the loop ends at desktop, so returning to 390x844 is the
+    // tablet/desktop -> mobile half of the coverage. Record it as its own
+    // sample, so both directions of the transition are distinguishable.
+    const returnTransition = await switchComposerViewport(page, { width: 390, height: 844, compact: true });
     await openComposerTask(page, "media");
+    const returnMetrics = await readComposerMobileMetrics(page);
+    record("composer-desktop-to-mobile-media-actions", await scanButtons(page, ".journey-composer", ".journey-composer__editor"), {
+      transition: returnTransition,
+      mobileMetrics: returnMetrics,
+      failed: !returnTransition.crossedLayout
+        || returnMetrics.cards !== 2
+        || returnMetrics.manageButtons !== 2
+        || returnMetrics.assignmentButtons !== 2
+        || returnMetrics.desktopActionGroups !== 0,
+    });
     const firstManageTrigger = page.locator(".journey-media-mobile-card__menu").first();
     const assertNestedSheetFocus = async (openSheet, selector, label) => {
       await openSheet();
