@@ -1373,7 +1373,7 @@ export function JourneyStory({
 
   function closeMobileMediaDelete() {
     if (mediaDeleteState === "pending") return false;
-    restoreMobileMediaDeleteFocusRef.current = mobileLayout && mobileManageMode;
+    restoreMobileMediaDeleteFocusRef.current = true;
     setMediaDeleteState("idle");
     setMediaDeleteMessage("");
     return true;
@@ -1601,6 +1601,15 @@ export function JourneyStory({
 
     restoreMobileMediaDeleteFocusRef.current = false;
     if (!mobileLayout || !mobileManageMode) return;
+
+    // Manage entry can still have a two-frame focus handoff queued. Cancel it
+    // before restoring the media trigger so no stale owner can steal focus
+    // after this committed delete-surface transition.
+    if (mobileManageFocusFrameRef.current !== null) {
+      window.cancelAnimationFrame(mobileManageFocusFrameRef.current);
+      mobileManageFocusFrameRef.current = null;
+    }
+
     const target = mobileManageViewerTriggerRef.current ?? mobileManageDoneRef.current;
     target?.focus({ preventScroll: true });
   }, [mediaDeleteState, mobileLayout, mobileManageMode]);
@@ -3298,7 +3307,7 @@ export function JourneyStory({
     if (onMediaDelete) {
       // The parent owns the state change in previews. The Story still owns
       // focus handoff while Manage remains active.
-      restoreMobileMediaDeleteFocusRef.current = mobileLayout && mobileManageMode;
+      restoreMobileMediaDeleteFocusRef.current = true;
       setMediaDeleteState("idle");
       return;
     }
@@ -3318,7 +3327,7 @@ export function JourneyStory({
         message: "媒体已删除，但当前列表刷新失败。重新打开这段旅程即可，不需要重复操作。",
       });
     }
-    restoreMobileMediaDeleteFocusRef.current = mobileLayout && mobileManageMode;
+    restoreMobileMediaDeleteFocusRef.current = true;
     setMediaDeleteState("idle");
     setMediaDeleteMessage("");
   }
