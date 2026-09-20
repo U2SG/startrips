@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  coverRevealFrameImage,
   coverRevealReducer,
   initialCoverRevealState,
   planCoverReveal,
@@ -64,6 +65,37 @@ describe("coverRevealFlow lifecycle", () => {
       expect(settled.displayedImage).toBe(PAIR.originalCover);
       expect(settled.displayedImage).not.toBe(PAIR.generatedFirst);
     }
+  });
+
+  it("reports the opening frame identity the renderer composited, and keeps it", () => {
+    // The renderer paints at progress 0 and announces its images afterwards,
+    // so entering `revealing` is the report that a frame showing the generated
+    // opening asset has already been composited.
+    const revealing = runCoverReveal([reveal(), { type: "images-loaded", revision: 1 }]);
+    expect(revealing.openingFrameProgress).toBe(0);
+    expect(coverRevealFrameImage(revealing.openingFrameProgress ?? 1)).toBe("generated-first");
+
+    // Later frames move the composited identity on without rewriting which
+    // frame the opening began at - the whole point of #454 is that this stays
+    // gradable after the reveal is over.
+    const settled = runCoverReveal([
+      reveal(),
+      { type: "images-loaded", revision: 1 },
+      { type: "frame", revision: 1, progress: 0.4 },
+      { type: "complete", revision: 1 },
+    ]);
+    expect(settled.openingFrameProgress).toBe(0);
+    expect(coverRevealFrameImage(settled.progress)).toBe("original-cover");
+
+    // A reveal that never ran composited nothing and must not claim a frame.
+    const immediate = runCoverReveal([reveal({ backend: "unavailable" })]);
+    expect(immediate.openingFrameProgress).toBeNull();
+  });
+
+  it("classifies a composited frame by what the mask actually shows", () => {
+    expect(coverRevealFrameImage(0)).toBe("generated-first");
+    expect(coverRevealFrameImage(0.5)).toBe("blend");
+    expect(coverRevealFrameImage(1)).toBe("original-cover");
   });
 
   it("ends a user interruption immediately at the original cover", () => {
