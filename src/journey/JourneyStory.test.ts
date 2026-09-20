@@ -81,7 +81,7 @@ describe("Story shared-element ownership", () => {
 });
 
 describe("mobile media delete focus ownership (#427)", () => {
-  it("hands final focus restoration to the nested trap cleanup for the current Story owner", () => {
+  it("restores current Story focus after nested trap cleanup for cancel, Back, and success", () => {
     const source = readFileSync(new URL("./JourneyStory.tsx", import.meta.url), "utf8");
     const closeStart = source.indexOf("function closeMobileMediaDelete()");
     const closeEnd = source.indexOf("function closeJourneyDelete()", closeStart);
@@ -94,17 +94,27 @@ describe("mobile media delete focus ownership (#427)", () => {
     expect(closeSource).not.toContain("requestAnimationFrame");
     expect(closeSource).not.toContain("document.querySelector");
 
-    const resolverStart = source.indexOf("const resolveMobileMediaSheetRestoreFocus");
-    const resolverEnd = source.indexOf("function closeJourneyDelete()", resolverStart);
-    const resolverSource = source.slice(resolverStart, resolverEnd);
-    expect(resolverStart).toBeGreaterThan(0);
-    expect(resolverSource).toContain("restoreMobileMediaDeleteFocusRef.current = false");
-    expect(resolverSource).toContain("return mobileManageViewerTriggerRef.current ?? previousFocus");
-
     const trapStart = source.indexOf("const mobileMediaSheetRef = useNestedModalFocus");
-    const trapEnd = source.indexOf(");", trapStart);
-    const trapSource = source.slice(trapStart, trapEnd + 2);
-    expect(trapSource).toContain("resolveMobileMediaSheetRestoreFocus");
+    const restoreStart = source.indexOf(
+      "if (!restoreMobileMediaDeleteFocusRef.current) return;",
+      trapStart,
+    );
+    expect(trapStart).toBeGreaterThan(0);
+    expect(restoreStart).toBeGreaterThan(trapStart);
+
+    const restoreSource = source.slice(restoreStart, restoreStart + 800);
+    expect(restoreSource).toContain('if (mediaDeleteState !== "idle") return;');
+    expect(restoreSource).toContain(
+      "mobileManageViewerTriggerRef.current ?? mobileManageDoneRef.current",
+    );
+    expect(restoreSource).toContain("target?.focus({ preventScroll: true });");
+
+    const confirmStart = source.indexOf("async function confirmMediaDelete()");
+    const confirmEnd = source.indexOf("function selectMediaScope", confirmStart);
+    const confirmSource = source.slice(confirmStart, confirmEnd);
+    expect(confirmSource.match(
+      /restoreMobileMediaDeleteFocusRef\.current = mobileLayout && mobileManageMode/g,
+    )?.length).toBe(2);
   });
 });
 
