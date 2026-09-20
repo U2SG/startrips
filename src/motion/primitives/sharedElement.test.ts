@@ -1,4 +1,6 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
+import { storyFullscreenTargetIsCurrent } from "../../journey/JourneyStory";
 import {
   runSharedElementMorph,
   runSharedElementTransition,
@@ -47,6 +49,36 @@ describe("runSharedElementMorph (#18)", () => {
     });
     expect(update).toHaveBeenCalledTimes(1);
     expect(onCleanup).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps Story mobile/video fullscreen on the guarded shared-element path (#459)", () => {
+    const source = readFileSync(new URL("../../journey/JourneyStory.tsx", import.meta.url), "utf8");
+    const start = source.indexOf("function presentFullscreen(nextFullscreen: boolean)");
+    const end = source.indexOf("\n  function ", start + 1);
+    const presentFullscreen = source.slice(start, end);
+
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(presentFullscreen).toContain("runSharedElementMorph({");
+    expect(presentFullscreen).toContain("isTargetCurrent: () =>");
+    expect(presentFullscreen).toContain("storyFullscreenTargetIsCurrent({");
+    expect(presentFullscreen).not.toMatch(/if \(mobileLayout\)[\s\S]{0,160}setFullscreen/);
+    expect(presentFullscreen).not.toContain("source instanceof HTMLVideoElement");
+  });
+
+  it("cancels the Story fullscreen morph when newer media or overlay intent wins (#459)", () => {
+    const current = {
+      mediaId: "asset-a",
+      nextFullscreen: true,
+      overlayHidden: false,
+      stagePresent: true,
+      currentPageId: "asset-a",
+      stageInterrupted: false,
+    };
+    expect(storyFullscreenTargetIsCurrent(current)).toBe(true);
+    expect(storyFullscreenTargetIsCurrent({ ...current, currentPageId: "asset-b" })).toBe(false);
+    expect(storyFullscreenTargetIsCurrent({ ...current, overlayHidden: true })).toBe(false);
+    expect(storyFullscreenTargetIsCurrent({ ...current, stageInterrupted: true })).toBe(false);
+    expect(storyFullscreenTargetIsCurrent({ ...current, stagePresent: false })).toBe(false);
   });
 });
 
