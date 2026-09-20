@@ -104,6 +104,9 @@ describe("mobile media delete focus ownership (#427)", () => {
 
     const restoreSource = source.slice(restoreStart, restoreStart + 800);
     expect(restoreSource).toContain('if (mediaDeleteState !== "idle") return;');
+    expect(restoreSource).toContain("if (!mobileManageMode) return;");
+    expect(restoreSource.indexOf("restoreMobileMediaDeleteFocusRef.current = false"))
+      .toBeGreaterThan(restoreSource.indexOf("if (!mobileManageMode) return;"));
     expect(restoreSource).toContain(
       "window.cancelAnimationFrame(mobileManageFocusFrameRef.current)",
     );
@@ -116,7 +119,7 @@ describe("mobile media delete focus ownership (#427)", () => {
     const confirmEnd = source.indexOf("function selectMediaScope", confirmStart);
     const confirmSource = source.slice(confirmStart, confirmEnd);
     expect(confirmSource.match(
-      /restoreMobileMediaDeleteFocusRef\\.current = true/g,
+      /restoreMobileMediaDeleteFocusRef\.current = true/g,
     )?.length).toBe(2);
   });
 });
