@@ -264,28 +264,14 @@
 /* #456: one Route Point is one chapter. The arrival caption and the chapter's
    media share this container across the arrival -> media seam, so entering a
    memory reflows one surface instead of swapping two full-screen ones. */
-.journey-playback__chapter {
-  width: 100%;
-  height: 100%;
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  align-content: center;
-  justify-items: center;
-  gap: 18px;
-  text-align: center;
-}
-
-/* No media region at all: the place itself carries the memory. */
-.journey-playback__chapter--empty {
-  grid-template-rows: auto;
-}
-
+/* `display: contents` on purpose. The chapter is a semantic grouping, not a
+   new box: its caption and its media region stay direct items of
+   `.journey-playback__stage`, so the media stage keeps exactly the sizing
+   context it had before the chapter existed. A real box here would give the
+   stage a second, collapsible height source. */
+.journey-playback__chapter,
 .journey-playback__chapter-media {
-  width: 100%;
-  min-height: 0;
-  height: 100%;
-  display: grid;
-  place-items: center;
+  display: contents;
 }
 
 /* The arrival beat's opening still: the same asset the media beat is about to

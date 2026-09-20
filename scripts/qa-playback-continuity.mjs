@@ -217,12 +217,26 @@ for (const viewport of VIEWPORTS) {
 
     const forward = [start.step];
     const forwardDensity = [start.density];
+    // A media beat that is in the DOM but occupies no space is the blank
+    // surface in its worst form: every readiness attribute says settled while
+    // the viewer sees nothing. Measure the box, do not trust the markup.
+    const collapsedMediaBeats = [];
     for (let click = 0; click < EXPECTED_MEANINGFUL.length; click += 1) {
       await clickTransport(run.page, "下一个章节");
       const landed = await currentStep(run.page);
       forward.push(landed.step);
       forwardDensity.push(landed.density);
+      if (STEPS[landed.step]?.kind === "media") {
+        const box = await run.page.locator(".journey-playback__media").first().boundingBox();
+        if (!box || box.width <= 0 || box.height <= 0) {
+          collapsedMediaBeats.push({ step: describeStep(landed.step), box });
+        }
+      }
     }
+    record(`${viewport.label}:media-beat-occupies-the-stage`, {
+      collapsed: collapsedMediaBeats,
+      failed: collapsedMediaBeats.length > 0,
+    });
     // The walk clamps at the last meaningful beat, so the visited set is the
     // meaningful set and nothing else.
     const visitedForward = [...new Set(forward)];
