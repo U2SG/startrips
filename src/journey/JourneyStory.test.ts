@@ -98,18 +98,26 @@ describe("mobile media delete focus ownership (#427)", () => {
       "const focusTarget = mobileManageMode",
       trapStart,
     );
-    const restoreStart = source.indexOf(
+    const transitionStart = source.indexOf(
       "const previousMediaDeleteState = previousMediaDeleteStateRef.current",
+      trapStart,
+    );
+    const restoreStart = source.indexOf(
+      "if (!restoreMobileMediaDeleteFocusRef.current) return;",
       manageFocusStart,
     );
     expect(trapStart).toBeGreaterThan(0);
-    expect(manageFocusStart).toBeGreaterThan(trapStart);
+    expect(transitionStart).toBeGreaterThan(trapStart);
+    expect(manageFocusStart).toBeGreaterThan(transitionStart);
     expect(restoreStart).toBeGreaterThan(manageFocusStart);
 
-    const restoreSource = source.slice(restoreStart, restoreStart + 2200);
-    expect(restoreSource).toContain('previousMediaDeleteState !== "idle"');
-    expect(restoreSource).toContain('mediaDeleteState === "idle"');
-    expect(restoreSource).toContain("(mobileManageMode || desktopEditing)");
+    const transitionSource = source.slice(transitionStart - 80, transitionStart + 900);
+    expect(transitionSource).toContain("useLayoutEffect(() =>");
+    expect(transitionSource).toContain('previousMediaDeleteState !== "idle"');
+    expect(transitionSource).toContain('mediaDeleteState === "idle"');
+    expect(transitionSource).toContain("(mobileManageMode || desktopEditing)");
+
+    const restoreSource = source.slice(restoreStart, restoreStart + 1500);
     expect(restoreSource).toContain("if (!mobileManageMode)");
     expect(restoreSource).toContain(
       "window.cancelAnimationFrame(mobileManageFocusFrameRef.current)",
