@@ -81,16 +81,15 @@ describe("Story shared-element ownership", () => {
 });
 
 describe("mobile media delete focus ownership (#427)", () => {
-  it("restores current Story focus after nested trap cleanup for cancel, Back, and success", () => {
+  it("derives restore ownership from the committed delete-state transition", () => {
     const source = readFileSync(new URL("./JourneyStory.tsx", import.meta.url), "utf8");
     const closeStart = source.indexOf("function closeMobileMediaDelete()");
     const closeEnd = source.indexOf("function closeJourneyDelete()", closeStart);
     const closeSource = source.slice(closeStart, closeEnd);
 
     expect(closeStart).toBeGreaterThan(0);
-    expect(closeSource).toContain(
-      "restoreMobileMediaDeleteFocusRef.current = true",
-    );
+    expect(closeSource).toContain('setMediaDeleteState("idle")');
+    expect(closeSource).not.toContain("restoreMobileMediaDeleteFocusRef.current = true");
     expect(closeSource).not.toContain("requestAnimationFrame");
     expect(closeSource).not.toContain("document.querySelector");
 
@@ -100,22 +99,18 @@ describe("mobile media delete focus ownership (#427)", () => {
       trapStart,
     );
     const restoreStart = source.indexOf(
-      "if (!restoreMobileMediaDeleteFocusRef.current) return;",
+      "const previousMediaDeleteState = previousMediaDeleteStateRef.current",
       manageFocusStart,
     );
     expect(trapStart).toBeGreaterThan(0);
     expect(manageFocusStart).toBeGreaterThan(trapStart);
     expect(restoreStart).toBeGreaterThan(manageFocusStart);
 
-    const restoreSource = source.slice(restoreStart, restoreStart + 800);
-    expect(restoreSource).toContain('if (mediaDeleteState !== "idle") return;');
-    expect(restoreSource).toContain("if (!mobileManageMode) return;");
-    const manageGuard = restoreSource.indexOf("if (!mobileManageMode) return;");
-    expect(manageGuard).toBeGreaterThan(0);
-    expect(restoreSource.indexOf(
-      "restoreMobileMediaDeleteFocusRef.current = false",
-      manageGuard,
-    )).toBeGreaterThan(manageGuard);
+    const restoreSource = source.slice(restoreStart, restoreStart + 2200);
+    expect(restoreSource).toContain('previousMediaDeleteState !== "idle"');
+    expect(restoreSource).toContain('mediaDeleteState === "idle"');
+    expect(restoreSource).toContain("(mobileManageMode || desktopEditing)");
+    expect(restoreSource).toContain("if (!mobileManageMode)");
     expect(restoreSource).toContain(
       "window.cancelAnimationFrame(mobileManageFocusFrameRef.current)",
     );
@@ -127,9 +122,10 @@ describe("mobile media delete focus ownership (#427)", () => {
     const confirmStart = source.indexOf("async function confirmMediaDelete()");
     const confirmEnd = source.indexOf("function selectMediaScope", confirmStart);
     const confirmSource = source.slice(confirmStart, confirmEnd);
-    expect(confirmSource.match(
-      /restoreMobileMediaDeleteFocusRef\.current = true/g,
-    )?.length).toBe(2);
+    expect(confirmSource.match(/setMediaDeleteState\("idle"\)/g)?.length).toBe(2);
+    expect(confirmSource).not.toContain(
+      "restoreMobileMediaDeleteFocusRef.current = true",
+    );
   });
 });
 
