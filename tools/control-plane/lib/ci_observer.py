@@ -47,8 +47,14 @@ def classify(run, jobs, missing_ledger=False):
     effective = effective_jobs(jobs)
     names = {j['name'] for j in effective}
     required = {'ledger', 'core', 'verify'}
-    if not required <= names:
-        raise EvidenceUnknown('Required ci jobs absent: ' + ','.join(sorted(required - names)))
+    missing = required - names
+    if missing:
+        # GitHub does not instantiate deferred `needs` jobs (notably verify) until
+        # their prerequisites finish. A still-running workflow with a missing
+        # required job is pending evidence, not an UNKNOWN gate.
+        if run.get('status') != 'completed':
+            return {'state': 'pending', 'source_green': False, 'final_green': False, 'failures': []}
+        raise EvidenceUnknown('Required ci jobs absent: ' + ','.join(sorted(missing)))
     if any(j.get('status') != 'completed' for j in effective) or run.get('status') != 'completed':
         return {'state': 'pending', 'source_green': False, 'final_green': False, 'failures': []}
     if run.get('conclusion') not in {'success', 'failure'}:

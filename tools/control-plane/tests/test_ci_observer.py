@@ -54,6 +54,13 @@ class ClassificationCases(unittest.TestCase):
         result = ci.classify(run(conclusion='cancelled'), complete_jobs(), True)
         self.assertEqual('unknown', result['state']); self.assertFalse(result['source_green'])
 
+    def test_pending_run_can_omit_deferred_verify(self):
+        jobs = [job('ledger', 1, 'failure'), job('core', 2),
+                job('browser-qa / fixture', 4, None, status='in_progress')]
+        result = ci.classify(run(status='in_progress', conclusion=None), jobs, missing_ledger=True)
+        self.assertEqual('pending', result['state'])
+        self.assertFalse(result['source_green']); self.assertFalse(result['final_green'])
+
     def test_missing_required_job_is_unknown(self):
         with self.assertRaises(ci.EvidenceUnknown): ci.classify(run(), [job('core')])
 
