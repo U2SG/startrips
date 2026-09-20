@@ -36,8 +36,8 @@ test("a dispatch on the live main HEAD passes and names the SHA and the reason",
   });
   assert.equal(result.checked, true);
   assert.equal(result.matches, true);
-  assert.match(result.summary, new RegExp(MAIN_HEAD));
-  assert.match(result.summary, new RegExp(RECOVERY_REASON));
+  assert.ok(result.summary.includes(MAIN_HEAD));
+  assert.ok(result.summary.includes(RECOVERY_REASON));
 });
 
 test("a dispatch on any other SHA is rejected and names both SHAs", () => {
@@ -48,8 +48,8 @@ test("a dispatch on any other SHA is rejected and names both SHAs", () => {
   });
   assert.equal(result.checked, true);
   assert.equal(result.matches, false);
-  assert.match(result.summary, new RegExp(OLDER_SHA));
-  assert.match(result.summary, new RegExp(MAIN_HEAD));
+  assert.ok(result.summary.includes(OLDER_SHA));
+  assert.ok(result.summary.includes(MAIN_HEAD));
 });
 
 test("SHA comparison ignores case and surrounding whitespace", () => {
@@ -133,8 +133,8 @@ test("the job summary line is appended, and a missing summary path is tolerated"
   });
   assert.equal(appendSummary(summary, summaryPath), true);
   const written = fs.readFileSync(summaryPath, "utf8");
-  assert.match(written, /^existing\n/);
-  assert.match(written, new RegExp(MAIN_HEAD + " \(reason: " + RECOVERY_REASON + "\)\."));
+  assert.ok(written.startsWith("existing\n"));
+  assert.ok(written.includes("Validated main SHA " + MAIN_HEAD + " (reason: " + RECOVERY_REASON + ").\n"));
   assert.equal(appendSummary(summary, ""), false);
   fs.rmSync(dir, { recursive: true, force: true });
 });
