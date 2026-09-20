@@ -172,6 +172,12 @@ try {
   } finally {
     await page.close();
   }
+} catch (error) {
+  // The accumulated checks are this lane's only diagnostic record; a thrown
+  // step must not take them down with it (#439). Print first, then rethrow so
+  // the original failure and the non-zero exit are unchanged.
+  console.log(JSON.stringify(checks, null, 2));
+  throw error;
 } finally {
   await browser.close();
 }
