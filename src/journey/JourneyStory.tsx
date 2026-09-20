@@ -992,6 +992,7 @@ export function JourneyStory({
   const [deleteState, setDeleteState] = useState<"idle" | "confirming" | "pending">("idle");
   const [deleteMessage, setDeleteMessage] = useState("");
   const [mediaDeleteState, setMediaDeleteState] = useState<"idle" | "confirming" | "pending">("idle");
+  const previousMediaDeleteStateRef = useRef(mediaDeleteState);
   const [mediaDeleteMessage, setMediaDeleteMessage] = useState("");
   const [orderPending, setOrderPending] = useState(false);
   const [orderMessage, setOrderMessage] = useState("");
@@ -1074,7 +1075,9 @@ export function JourneyStory({
   const mobileManageDoneRef = useRef<HTMLButtonElement>(null);
   const mobileManageViewerTriggerRef = useRef<HTMLButtonElement>(null);
   const mobileManageFocusFrameRef = useRef<number | null>(null);
+  const mediaDeleteFocusFrameRef = useRef<number | null>(null);
   const restoreMobileManageViewerFocusRef = useRef(false);
+  const restoreMobileMediaDeleteFocusRef = useRef(false);
   const [mobileMediaMenuOpen, setMobileMediaMenuOpen] = useState(false);
   const mobileMoveSelectToggleRef = useRef<HTMLButtonElement>(null);
   const restoreMobileMoveSelectFocusRef = useRef(false);
@@ -1374,15 +1377,6 @@ export function JourneyStory({
     if (mediaDeleteState === "pending") return false;
     setMediaDeleteState("idle");
     setMediaDeleteMessage("");
-    if (typeof window !== "undefined") {
-      window.requestAnimationFrame(() => {
-        window.requestAnimationFrame(() => {
-          document
-            .querySelector<HTMLButtonElement>(".journey-story__mobile-media-menu-trigger")
-            ?.focus({ preventScroll: true });
-        });
-      });
-    }
     return true;
   }
 
@@ -1741,6 +1735,159 @@ export function JourneyStory({
       }
     };
   }, [mobileLayout, mobileManageMode]);
+
+  useLayoutEffect(() => {
+    const previousMediaDeleteState = previousMediaDeleteStateRef.current;
+    previousMediaDeleteStateRef.current = mediaDeleteState;
+    if (typeof window !== "undefined") {
+      (window as Window & { __startripsMediaDeleteFocusDebug?: Record<string, unknown> })
+        .__startripsMediaDeleteFocusDebug = {
+          phase: "transition",
+          previousMediaDeleteState,
+          mediaDeleteState,
+          mobileLayout,
+          mobileManageMode,
+          desktopEditing,
+          intentBefore: restoreMobileMediaDeleteFocusRef.current,
+        };
+    }
+
+    // Capture this semantic transition before paint. Browser QA can observe
+    // the confirmation sheet and press Back before passive effects flush, so
+    // previous-state ownership cannot live in the later focus effect.
+    if (
+      previousMediaDeleteState !== "idle"
+      && mediaDeleteState === "idle"
+      && mobileLayout
+      && (mobileManageMode || desktopEditing)
+    ) {
+      restoreMobileMediaDeleteFocusRef.current = true;
+    }
+    if (typeof window !== "undefined") {
+      const debugWindow = window as Window & {
+        __startripsMediaDeleteFocusDebug?: Record<string, unknown>;
+      };
+      debugWindow.__startripsMediaDeleteFocusDebug = {
+        ...debugWindow.__startripsMediaDeleteFocusDebug,
+        intentAfter: restoreMobileMediaDeleteFocusRef.current,
+      };
+    }
+  }, [desktopEditing, mediaDeleteState, mobileLayout, mobileManageMode]);
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const debugWindow = window as Window & {
+        __startripsMediaDeleteFocusDebug?: Record<string, unknown>;
+      };
+      debugWindow.__startripsMediaDeleteFocusDebug = {
+        ...debugWindow.__startripsMediaDeleteFocusDebug,
+        restoreEffectEntered: true,
+        restoreIntent: restoreMobileMediaDeleteFocusRef.current,
+        restoreState: mediaDeleteState,
+        restoreMobileLayout: mobileLayout,
+        restoreMobileManageMode: mobileManageMode,
+        restoreDesktopEditing: desktopEditing,
+      };
+    }
+    if (!restoreMobileMediaDeleteFocusRef.current) return;
+    if (mediaDeleteState !== "idle") return;
+
+    if (!mobileLayout) {
+      restoreMobileMediaDeleteFocusRef.current = false;
+      return;
+    }
+    // A responsive desktop -> mobile transition can commit compact layout
+    // before the follow-up effect establishes Manage ownership. desktopEditing
+    // proves that Manage is still the intended compact owner, so keep the
+    // restore intent alive for that next commit. A deliberate Manage exit sets
+    // desktopEditing=false and must not leak this intent into a future entry.
+    if (!mobileManageMode) {
+      if (!desktopEditing) restoreMobileMediaDeleteFocusRef.current = false;
+      return;
+    }
+
+    // This effect is deliberately declared after the normal Manage focus
+    // effect. If Manage ownership was established in the same commit, its
+    // two-frame handoff has already been scheduled and can be cancelled here.
+    // Keep restore intent alive until the current media trigger is both visible
+    // and actually owns document.activeElement.
+    if (mobileManageFocusFrameRef.current !== null) {
+      window.cancelAnimationFrame(mobileManageFocusFrameRef.current);
+      mobileManageFocusFrameRef.current = null;
+    }
+
+    const debugWindow = typeof window !== "undefined"
+      ? window as Window & { __startripsMediaDeleteFocusDebug?: Record<string, unknown> }
+      : null;
+
+    const focusCurrentOwner = () => {
+      // Stop if this Story no longer owns the compact Manage surface.
+      if (!restoreMobileMediaDeleteFocusRef.current) {
+        mediaDeleteFocusFrameRef.current = null;
+        return;
+      }
+
+      const target = mobileManageViewerTriggerRef.current ?? mobileManageDoneRef.current;
+      const style = target ? getComputedStyle(target) : null;
+      const targetReady = Boolean(
+        target
+        && target.isConnected
+        && !target.closest("[inert]")
+        && style?.visibility !== "hidden"
+        && style?.display !== "none"
+        && target.getClientRects().length > 0
+      );
+
+      if (debugWindow) {
+        debugWindow.__startripsMediaDeleteFocusDebug = {
+          ...debugWindow.__startripsMediaDeleteFocusDebug,
+          targetExists: Boolean(target),
+          targetConnected: target?.isConnected ?? false,
+          targetInert: Boolean(target?.closest("[inert]")),
+          targetVisibility: style?.visibility ?? null,
+          targetDisplay: style?.display ?? null,
+          targetRectCount: target?.getClientRects().length ?? 0,
+          activeBeforeFocus: document.activeElement?.getAttribute?.("aria-label")
+            ?? document.activeElement?.tagName
+            ?? null,
+        };
+      }
+
+      if (!targetReady || !target) {
+        mediaDeleteFocusFrameRef.current = window.requestAnimationFrame(focusCurrentOwner);
+        return;
+      }
+
+      target.focus({ preventScroll: true });
+      if (document.activeElement !== target) {
+        mediaDeleteFocusFrameRef.current = window.requestAnimationFrame(focusCurrentOwner);
+        return;
+      }
+
+      restoreMobileMediaDeleteFocusRef.current = false;
+      mediaDeleteFocusFrameRef.current = null;
+      if (debugWindow) {
+        debugWindow.__startripsMediaDeleteFocusDebug = {
+          ...debugWindow.__startripsMediaDeleteFocusDebug,
+          activeAfterFocus: target.getAttribute("aria-label") ?? target.tagName,
+          focusRestored: true,
+        };
+      }
+    };
+
+    if (mediaDeleteFocusFrameRef.current !== null) {
+      window.cancelAnimationFrame(mediaDeleteFocusFrameRef.current);
+      mediaDeleteFocusFrameRef.current = null;
+    }
+    focusCurrentOwner();
+
+    return () => {
+      if (mediaDeleteFocusFrameRef.current !== null) {
+        window.cancelAnimationFrame(mediaDeleteFocusFrameRef.current);
+        mediaDeleteFocusFrameRef.current = null;
+      }
+    };
+  }, [desktopEditing, mediaDeleteState, mobileLayout, mobileManageMode]);
 
   useEffect(() => {
     if (
@@ -3290,7 +3437,8 @@ export function JourneyStory({
       return;
     }
     if (onMediaDelete) {
-      // The parent owns the state change in previews.
+      // The parent owns the state change in previews. Focus restoration is
+      // derived from the committed non-idle -> idle transition below.
       setMediaDeleteState("idle");
       return;
     }
