@@ -129,6 +129,8 @@ def command_lane(command):
         match = re.search(pattern, text)
         if match:
             return match.group(1)
+    if re.search(r'(?:^|[\s"/])launch-experience[.]sh(?:[\s"\x00]|$)', text):
+        return 'experience'
     if re.search(r'(?:^|[\s"/])launch-supervisor[.]sh(?:[\s"\x00]|$)', text):
         return 'backend'
     return None
@@ -379,7 +381,7 @@ def _observed_executions(rows, root, self_pid):
             continue
 
         command = raw_command.replace('\\', '/').lower()
-        is_loop = bool(re.search(r'(?:^|[\s"/])(?:run-loop|loop-supervisor)[.]sh(?:[\s"\x00]|$)', command))
+        is_loop = bool(re.search(r'(?:^|[\s"/])(?:run-loop|loop-supervisor|launch-experience)[.]sh(?:[\s"\x00]|$)', command))
         is_child = 'startrips_execution_owner=' in command
         # The dedicated LOCAL Backend supervisor is a resident scheduler, not a
         # productive owner. Keep it observable so duplicate-launch/self-block
