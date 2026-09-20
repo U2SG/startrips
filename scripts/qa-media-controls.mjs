@@ -1225,6 +1225,7 @@ try {
           triggers,
           historyState: window.history.state,
           focusEvents: window.__startripsMediaDeleteFocusEvents ?? [],
+          focusDebug: window.__startripsMediaDeleteFocusDebug ?? null,
         };
       });
       throw new Error(
