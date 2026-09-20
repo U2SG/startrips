@@ -992,6 +992,7 @@ export function JourneyStory({
   const [deleteState, setDeleteState] = useState<"idle" | "confirming" | "pending">("idle");
   const [deleteMessage, setDeleteMessage] = useState("");
   const [mediaDeleteState, setMediaDeleteState] = useState<"idle" | "confirming" | "pending">("idle");
+  const previousMediaDeleteStateRef = useRef(mediaDeleteState);
   const [mediaDeleteMessage, setMediaDeleteMessage] = useState("");
   const [orderPending, setOrderPending] = useState(false);
   const [orderMessage, setOrderMessage] = useState("");
@@ -1373,7 +1374,6 @@ export function JourneyStory({
 
   function closeMobileMediaDelete() {
     if (mediaDeleteState === "pending") return false;
-    restoreMobileMediaDeleteFocusRef.current = true;
     setMediaDeleteState("idle");
     setMediaDeleteMessage("");
     return true;
@@ -1736,6 +1736,22 @@ export function JourneyStory({
   }, [mobileLayout, mobileManageMode]);
 
   useEffect(() => {
+    const previousMediaDeleteState = previousMediaDeleteStateRef.current;
+    previousMediaDeleteStateRef.current = mediaDeleteState;
+
+    // Closing/canceling/successfully deleting are all the same semantic
+    // transition: a media-delete surface that owned focus became idle. Derive
+    // the restore intent from that transition instead of relying on whichever
+    // event or async continuation happened to call setMediaDeleteState().
+    if (
+      previousMediaDeleteState !== "idle"
+      && mediaDeleteState === "idle"
+      && mobileLayout
+      && (mobileManageMode || desktopEditing)
+    ) {
+      restoreMobileMediaDeleteFocusRef.current = true;
+    }
+
     if (!restoreMobileMediaDeleteFocusRef.current) return;
     if (mediaDeleteState !== "idle") return;
 
@@ -1743,11 +1759,15 @@ export function JourneyStory({
       restoreMobileMediaDeleteFocusRef.current = false;
       return;
     }
-    // A responsive desktop -> mobile transition can commit layout before the
-    // follow-up effect establishes Manage ownership. Keep the intent alive
-    // until that owner exists instead of consuming it in the intermediate
-    // compact-viewer commit.
-    if (!mobileManageMode) return;
+    // A responsive desktop -> mobile transition can commit compact layout
+    // before the follow-up effect establishes Manage ownership. desktopEditing
+    // proves that Manage is still the intended compact owner, so keep the
+    // restore intent alive for that next commit. A deliberate Manage exit sets
+    // desktopEditing=false and must not leak this intent into a future entry.
+    if (!mobileManageMode) {
+      if (!desktopEditing) restoreMobileMediaDeleteFocusRef.current = false;
+      return;
+    }
 
     // This effect is deliberately declared after the normal Manage focus
     // effect. If Manage ownership was established in the same commit, its
@@ -1761,7 +1781,7 @@ export function JourneyStory({
 
     const target = mobileManageViewerTriggerRef.current ?? mobileManageDoneRef.current;
     target?.focus({ preventScroll: true });
-  }, [mediaDeleteState, mobileLayout, mobileManageMode]);
+  }, [desktopEditing, mediaDeleteState, mobileLayout, mobileManageMode]);
 
   useEffect(() => {
     if (
@@ -3333,7 +3353,6 @@ export function JourneyStory({
         message: "媒体已删除，但当前列表刷新失败。重新打开这段旅程即可，不需要重复操作。",
       });
     }
-    restoreMobileMediaDeleteFocusRef.current = true;
     setMediaDeleteState("idle");
     setMediaDeleteMessage("");
   }
