@@ -3331,9 +3331,8 @@ export function JourneyStory({
       return;
     }
     if (onMediaDelete) {
-      // The parent owns the state change in previews. The Story still owns
-      // focus handoff while Manage remains active.
-      restoreMobileMediaDeleteFocusRef.current = true;
+      // The parent owns the state change in previews. Focus restoration is
+      // derived from the committed non-idle -> idle transition below.
       setMediaDeleteState("idle");
       return;
     }
