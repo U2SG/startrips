@@ -117,35 +117,51 @@ class FailureFamilyOwnerCases(fixture.SyntheticOne):
         return {'root_cause_required': True, 'fingerprint': fingerprint,
                 'family': fingerprint[:16]}
 
-    def test_unique_active_mapped_issue_with_exact_token_owns_family(self):
+    def issue_api(self, endpoint):
+        return {'title': '', 'body': ''}
+
+    def test_unique_other_active_mapped_issue_with_exact_token_owns_family(self):
         self.write(
             fixture.feature('ST-001', status='in_progress', issue=445),
             fixture.feature('ST-002', status='in_progress', issue=427),
         )
         token = self.record()['fingerprint'][:16]
-        with mock.patch.object(action_plan, 'api', return_value={'title': 'root cause', 'body': ''}), \
-             mock.patch.object(action_plan, 'pages', return_value=[{'body': 'parser family ' + token}]):
+        def comments(endpoint):
+            return [{'body': 'parser family ' + token}] if '/issues/427/comments' in endpoint else []
+        with mock.patch.object(action_plan, 'api', side_effect=self.issue_api), \
+             mock.patch.object(action_plan, 'pages', side_effect=comments):
             owner = action_plan.failure_family_owner(
                 self.path, 'ST-001', fixture.REPO, [self.record()])
         self.assertEqual({'feature': 'ST-002', 'issue': 427, 'matched_tokens': [token]}, owner)
 
-    def test_terminal_or_human_gated_rows_do_not_own_family(self):
+    def test_unique_current_owner_keeps_repair_on_current_feature(self):
+        self.write(
+            fixture.feature('ST-001', status='in_progress', issue=445),
+            fixture.feature('ST-002', status='in_progress', issue=427),
+        )
+        token = self.record()['fingerprint'][:16]
+        def comments(endpoint):
+            return [{'body': token}] if '/issues/445/comments' in endpoint else []
+        with mock.patch.object(action_plan, 'api', side_effect=self.issue_api), \
+             mock.patch.object(action_plan, 'pages', side_effect=comments):
+            self.assertIsNone(action_plan.failure_family_owner(
+                self.path, 'ST-001', fixture.REPO, [self.record()]))
+
+    def test_terminal_or_human_gated_rows_do_not_become_external_owner(self):
         self.write(
             fixture.feature('ST-001', status='in_progress', issue=445),
             fixture.feature('ST-002', status='passed', issue=427),
             fixture.feature('ST-003', status='pending', issue=428, human_gate='decision'),
         )
-        with mock.patch.object(action_plan, 'api') as api, mock.patch.object(action_plan, 'pages') as pages:
+        with mock.patch.object(action_plan, 'api', side_effect=self.issue_api), \
+             mock.patch.object(action_plan, 'pages', return_value=[]):
             self.assertIsNone(action_plan.failure_family_owner(
                 self.path, 'ST-001', fixture.REPO, [self.record()]))
-        api.assert_not_called()
-        pages.assert_not_called()
 
-    def test_multiple_exact_mapped_owners_are_unknown_not_arbitrarily_ranked(self):
+    def test_current_and_other_exact_owner_is_ambiguous_and_fails_closed(self):
         self.write(
             fixture.feature('ST-001', status='in_progress', issue=445),
             fixture.feature('ST-002', status='in_progress', issue=427),
-            fixture.feature('ST-003', status='pending', issue=449),
         )
         token = self.record()['fingerprint'][:16]
         with mock.patch.object(action_plan, 'api', return_value={'title': '', 'body': token}), \

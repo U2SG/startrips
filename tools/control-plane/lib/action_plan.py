@@ -135,7 +135,7 @@ def failure_family_owner(path, fid, repo, records):
     active_states = {'pending', 'in_progress', 'needs_work', 'ready_for_eval', 'ready_to_merge'}
     matches = []
     for candidate in load_document(path)['features']:
-        if candidate.get('id') == fid or candidate.get('status') not in active_states or candidate.get('human_gate'):
+        if candidate.get('status') not in active_states or candidate.get('human_gate'):
             continue
         number = mapped_issue(candidate.get('issue'))
         if not number:
@@ -154,7 +154,9 @@ def failure_family_owner(path, fid, repo, records):
 
     if len(matches) > 1:
         raise EvidenceUnknown('Ambiguous failure-family ownership: ' + ','.join(sorted(m['feature'] for m in matches)))
-    return matches[0] if matches else None
+    if not matches or matches[0]['feature'] == fid:
+        return None
+    return matches[0]
 
 def plan(path, fid, repo, *, record_failures=False):
     path = Path(path); root = path.parent
