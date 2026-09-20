@@ -580,12 +580,18 @@ try {
       // The pixel arm that no timing can race, and the one that keeps this from
       // passing vacuously when every screenshot lands after the probe converted:
       // the mask reaches its origin before it reaches the corner, so ONE frame
-      // holding the canonical cover at the corner while the origin still holds
-      // the opening asset is geometrically impossible for a correct reveal, and
-      // is precisely what a renderer drawing the two images the wrong way round
-      // puts on screen.
+      // whose corner has already become the canonical cover while its origin has
+      // NOT is geometrically impossible for a correct reveal, and is precisely
+      // what a renderer drawing the two images the wrong way round puts on
+      // screen. Graded as "the origin is not the cover" rather than "the origin
+      // is the derivative", because an inverted draw converts its origin THROUGH
+      // the feathered edge and a sample caught in that band classifies as
+      // neither image. A correct reveal cannot trip it: once the corner has
+      // converted the edge is long past the origin, so the origin is a settled
+      // cover pixel, which is the same colour `settles-on-the-canonical-original`
+      // reads at this very point.
       const inverted = samples.some((sample) => sample.color === "original-cover"
-        && sample.origin === "derivative");
+        && sample.origin !== "original-cover");
       check(
         `${label}/first-frame-is-the-derivative`,
         composited[0] === "generated-first"
