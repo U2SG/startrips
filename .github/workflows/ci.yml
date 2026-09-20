@@ -163,6 +163,8 @@ jobs:
             command: pnpm qa:post-login-controls
           - name: playback-prefetch
             command: pnpm qa:playback-prefetch
+          - name: playback-continuity
+            command: pnpm qa:playback-continuity
           - name: final-acceptance
             command: pnpm qa:final-acceptance
           - name: route-anchoring
