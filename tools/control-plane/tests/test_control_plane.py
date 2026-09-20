@@ -613,6 +613,8 @@ class WiringTests(SyntheticOne):
         self.assertIn('SCOPED_SELECTED="$(FEATURE_ALLOW="$CARRIER_FEATURE" read_next_feature)" || exit 6', loop)
         self.assertIn('yield_waiting_feature()', loop)
         self.assertIn('FEATURE_SKIP', loop)
+        self.assertIn('failure_family_owner', loop)
+        self.assertIn('Recurring CI family is canonically owned by $FAMILY_OWNER', loop)
 
 
 if __name__ == '__main__':

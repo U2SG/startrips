@@ -107,6 +107,55 @@ def derive(row, pr=None, relation=None, review=None, ci=None, source_verdict='MI
     return 'HANDOFF_REVIEW'
 
 
+
+def failure_family_owner(path, fid, repo, records):
+    """Return the unique nonterminal ONE feature whose mapped issue proves ownership.
+
+    Ownership is evidence-derived, never inferred from lane/name similarity. Only
+    an exact CI fingerprint (full or 16-char prefix) present in that feature's
+    GitHub issue body/comments proves the mapping. Ambiguity is UNKNOWN.
+    """
+    tokens = set()
+    for record in records:
+        if not record.get('root_cause_required'):
+            continue
+        fingerprint = record.get('fingerprint')
+        family = record.get('family')
+        if isinstance(fingerprint, str) and re.fullmatch(r'[0-9a-f]{64}', fingerprint):
+            tokens.update({fingerprint, fingerprint[:16]})
+        if isinstance(family, str) and re.fullmatch(r'[0-9a-f]{16,64}', family):
+            tokens.add(family)
+    if not tokens:
+        return None
+
+    def mapped_issue(value):
+        match = re.search(r'(\d+)\s*$', str(value or ''))
+        return int(match.group(1)) if match else None
+
+    active_states = {'pending', 'in_progress', 'needs_work', 'ready_for_eval', 'ready_to_merge'}
+    matches = []
+    for candidate in load_document(path)['features']:
+        if candidate.get('id') == fid or candidate.get('status') not in active_states or candidate.get('human_gate'):
+            continue
+        number = mapped_issue(candidate.get('issue'))
+        if not number:
+            continue
+        issue = api('repos/' + repo + '/issues/' + str(number))
+        comments = pages('repos/' + repo + '/issues/' + str(number) + '/comments')
+        if not isinstance(issue, dict) or not isinstance(comments, list):
+            raise EvidenceUnknown('Failure-family owner issue evidence incomplete')
+        text = '\n'.join(
+            [str(issue.get('title') or ''), str(issue.get('body') or '')]
+            + [str(comment.get('body') or '') for comment in comments]
+        ).lower()
+        hit = sorted(token for token in tokens if token.lower() in text)
+        if hit:
+            matches.append({'feature': candidate['id'], 'issue': number, 'matched_tokens': hit})
+
+    if len(matches) > 1:
+        raise EvidenceUnknown('Ambiguous failure-family ownership: ' + ','.join(sorted(m['feature'] for m in matches)))
+    return matches[0] if matches else None
+
 def plan(path, fid, repo, *, record_failures=False):
     path = Path(path); root = path.parent
     row = target(load_document(path), fid)
@@ -146,7 +195,11 @@ def plan(path, fid, repo, *, record_failures=False):
     if result['action'] == 'REPAIR_CI' and record_failures:
         records = observe_failures(root, repo, ci)
         result['failure_evidence'] = records
-        if any(r['root_cause_required'] for r in records): result['action'] = 'REPAIR_CI_FAMILY'
+        if any(r['root_cause_required'] for r in records):
+            result['action'] = 'REPAIR_CI_FAMILY'
+            owner = failure_family_owner(path, fid, repo, records)
+            if owner:
+                result['failure_family_owner'] = owner
     final = api(prefix)
     if final['head']['sha'] != pr['head']['sha'] or final['state'] != pr['state'] or final.get('merged') != pr.get('merged'):
         raise EvidenceUnknown('PR lifecycle changed during planning')

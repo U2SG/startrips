@@ -505,9 +505,17 @@ for ((i=1; i<=MAX_ITERATIONS; i++)); do
   PLAN="$(python3 -B "$ROOT/lib/action_plan.py" "$ROOT/feature_list.json" "$FEATURE" --repo "$GH_REPO" --record-failures)" || exit 6
   ACTION="$(printf '%s' "$PLAN" | python3 -c 'import json,sys; print(json.load(sys.stdin)["action"])' | tr -d '\r')"
   echo "=== $FEATURE evidence-derived next=$ACTION ==="
-  if [[ "${EVAL_ONLY:-0}" == "1" ]]; then
+  if [[ "\${EVAL_ONLY:-0}" == "1" ]]; then
     echo "EVAL_ONLY observes $ACTION; it cannot launch a code-writing builder"
     exit 7
+  fi
+  if [[ "$ACTION" == "REPAIR_CI_FAMILY" ]]; then
+    FAMILY_OWNER="$(printf '%s' "$PLAN" | python3 -c 'import json,sys; data=json.load(sys.stdin); print((data.get("failure_family_owner") or {}).get("feature",""))' | tr -d '\r')" || exit 6
+    if [[ -n "$FAMILY_OWNER" && "$FAMILY_OWNER" != "$FEATURE" ]]; then
+      echo "Recurring CI family is canonically owned by $FAMILY_OWNER; preserving $FEATURE failure evidence and yielding"
+      if yield_waiting_feature "$FEATURE"; then continue; fi
+      exit 7
+    fi
   fi
   # A dead session may have left newer local code than the remote Source.
   # Resume that same proven owner rather than waiting on old remote evidence.
