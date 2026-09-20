@@ -112,6 +112,23 @@ class FingerprintCases(fixture.SyntheticOne):
         self.assertNotIn('curl', value['assertion']); self.assertNotIn('throw', value['assertion'])
         self.assertEqual('hong-kong-localization', value['fixture'])
 
+    def test_playwright_locator_timeout_beats_generic_job_footer(self):
+        failed = job('browser-qa / playback-continuity', 9, 'failure', steps=[{'name': 'Run browser QA', 'conclusion': 'failure'}])
+        text = ("locator.evaluate: Timeout 30000ms exceeded.\n"
+                "Call log:\n"
+                "  - waiting for locator('.journey-playback__controls button[aria-label=\"next\"]')\n"
+                "##[error]Process completed with exit code 1.\n")
+        value = ci.normalize_failure(failed, text)
+        self.assertTrue(value['assertion'].startswith('locator.evaluate: Timeout <duration> exceeded.'))
+        self.assertIn('waiting for locator', value['assertion'])
+        self.assertNotIn('Process completed with exit code', value['assertion'])
+
+    def test_playwright_timeout_duration_does_not_split_locator_family(self):
+        failed = job('browser-qa / playback-continuity', 9, 'failure', steps=[{'name': 'Run browser QA', 'conclusion': 'failure'}])
+        a = ci.normalize_failure(failed, "locator.evaluate: Timeout 30000ms exceeded.\n- waiting for locator('#next')")
+        b = ci.normalize_failure(failed, "locator.evaluate: Timeout 45000ms exceeded.\n- waiting for locator('#next')")
+        self.assertEqual(a['fingerprint'], b['fingerprint'])
+
     def test_status_fixture_not_rendered_is_not_failed_fixture_identity(self):
         text = ('[qa-city-label-anchoring] dense-coastline fixture=not rendered\n'
                 'Error: [qa-city-label-anchoring] inland-control @1.00x: missing; hong-kong-localization @3x: null\n')

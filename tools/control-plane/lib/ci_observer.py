@@ -15,7 +15,7 @@ from feature_store import _storage_mutex, StoreConflict
 from github_evidence import api, _repo, EvidenceUnknown
 
 DIMENSIONS = ('lane', 'assertion', 'fixture', 'viewport', 'dpr', 'stage')
-PARSER_VERSION = 3
+PARSER_VERSION = 4
 INFRA = ('failed to resolve action download info', 'service unavailable',
          'failed to download action', 'the runner has lost communication')
 
@@ -102,17 +102,26 @@ def normalize_failure(job, text):
     # Match runtime diagnostics, not workflow command echoes such as curl --fail
     # or JavaScript source excerpts containing throw new Error(...).
     runtime = re.compile(r'^(?:[\w.]+(?:Error|Exception)|Error|Exception)(?:\s+\[[^\]]+\])?:', re.I)
-    errors = [line for line in lines if runtime.search(line)]
+    playwright_timeout = re.compile(r'^(?:locator|page|frame|elementhandle)\.[\w.]+:\s*Timeout\b', re.I)
+    errors = [line for line in lines if runtime.search(line) or playwright_timeout.search(line)]
     if not errors:
         errors = [line for line in lines if re.match(r'^(?:FAIL(?:\s|:)|Assertion failed(?:\s|:)|✗\s)', line, re.I)]
     if not errors:
         errors = [line for line in lines if re.match(r'^(?:##\[error\]|The runner has lost communication|Failed to resolve action download info|Failed to download action|Service Unavailable)', line, re.I)]
     primary = errors[0] if errors else 'unclassified-job-failure'
-    context = '\n'.join(errors)
+    # Playwright reports the actionable selector on the next `waiting for` line.
+    # Fold it into the primary assertion so two distinct locator timeouts in the
+    # same browser lane do not collapse into one generic timeout/exit-code family.
+    if playwright_timeout.search(primary):
+        wait_line = next((line for line in lines if re.match(r'^-\s+waiting for\s+', line, re.I)), '')
+        if wait_line:
+            primary = f'{primary} {wait_line}'
+    context = '\n'.join([primary, *errors[1:]]) if errors else primary
     assertion = re.sub(r'\b[0-9a-f]{7,40}\b', '<sha>', primary)
     assertion = re.sub(r'https?://\S+', '<url>', assertion)
     assertion = re.sub(r'(?i)(bearer\s+)[^\s]+', r'\1<redacted>', assertion)
     assertion = re.sub(r'(?i)((?:token|secret|api[_-]?key|password)[\s:=]+)[^\s,;]+', r'\1<redacted>', assertion)
+    assertion = re.sub(r'(?i)\b\d+(?:\.\d+)?\s*(?:ms|sec(?:onds?)?|s)\b', '<duration>', assertion)
     # Measurements vary between occurrences of one assertion; viewport and DPR
     # remain explicit dimensions, never inferred from zoom or incidental numbers.
     assertion = re.sub(r'(?<![\w])\d+(?:\.\d+)?(?![\w])', '<number>', assertion)[:600]
