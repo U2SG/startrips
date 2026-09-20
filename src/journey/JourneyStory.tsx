@@ -296,6 +296,35 @@ export function mobileStoryExpandedForLayout(mobileLayout: boolean, expanded: bo
   return mobileLayout ? expanded : false;
 }
 
+export type StoryFullscreenMorphIntent = {
+  mediaId: string | undefined;
+  nextFullscreen: boolean;
+  /** `hidden` of the fullscreen overlay, or undefined when it is unmounted. */
+  overlayHidden: boolean | undefined;
+  stagePresent: boolean;
+  currentPageId: string | undefined;
+  /** An incoming page or a stage alert means the destination is still moving. */
+  stageInterrupted: boolean;
+};
+
+/**
+ * #459: the Story <-> fullscreen handoff is still the user's intent only while
+ * the overlay has settled onto the requested side and the destination stage is
+ * presenting exactly the media the morph started from. A swipe, close, rapid
+ * re-open, Route Point change or Journey change commits a different current
+ * page, which invalidates the pending morph. Kept pure so the compact-mobile
+ * and video paths that no longer bypass the morph can be asserted directly.
+ */
+export function storyFullscreenTargetIsCurrent(intent: StoryFullscreenMorphIntent) {
+  return Boolean(
+    intent.mediaId
+    && intent.stagePresent
+    && intent.overlayHidden === !intent.nextFullscreen
+    && intent.currentPageId === intent.mediaId
+    && !intent.stageInterrupted,
+  );
+}
+
 export type StoryGlobeCoverState = { opaqueMediaCover: boolean; coverTransitionActive: boolean };
 
 export function storyGlobeCoverState({
@@ -1322,22 +1351,20 @@ export function JourneyStory({
   }
 
   function presentFullscreen(nextFullscreen: boolean) {
-    if (mobileLayout) {
-      setFullscreen(nextFullscreen);
-      return;
-    }
-    cancelPendingMediaDragSettle();
+    // #459: the compact layout and video sources used to skip the handoff
+    // entirely. They now resolve through the same primitive; only the inline
+    // drag settle stays desktop-scoped, because on compact mobile the
+    // fullscreen swipe in handleFullscreenPointerUp owns the same drag refs
+    // and a close must not drop the navigation commit it just started.
+    if (!mobileLayout) cancelPendingMediaDragSettle();
     const inlineStage = () => dialogRef.current?.querySelector<HTMLElement>(".journey-story__media") ?? null;
     const sourceRoot = nextFullscreen ? inlineStage() : fullscreenRef.current;
     const source = sourceRoot?.querySelector<HTMLElement>("[data-shared-media-id]") ?? null;
-    // Keep a playing video's first frame and audio on the live transport;
-    // animating a frozen canvas over it would mask half a second of playback.
-    if (source instanceof HTMLVideoElement) {
-      setFullscreen(nextFullscreen);
-      return;
-    }
     const mediaId = source?.dataset.sharedMediaId;
     const targetRoot = () => nextFullscreen ? fullscreenRef.current : inlineStage();
+    // A video hands off as snapshotSource's canvas frame: the live <video> of
+    // the stage the effects consider active stays the only playback/audio
+    // transport, the clone never plays anything.
     runSharedElementMorph({
       source,
       name: `story-fullscreen-${mediaId ?? "media"}`,
@@ -1348,10 +1375,19 @@ export function JourneyStory({
         : null,
       isTargetCurrent: () => {
         const stage = targetRoot();
-        return Boolean(mediaId && stage && fullscreenRef.current?.hidden === !nextFullscreen
-          && stage.querySelector<HTMLElement>('[data-media-page="current"]')?.dataset.mediaPageId === mediaId
-          && !stage.querySelector('[data-media-incoming="true"], [role="alert"]'));
+        return storyFullscreenTargetIsCurrent({
+          mediaId,
+          nextFullscreen,
+          overlayHidden: fullscreenRef.current?.hidden,
+          stagePresent: stage !== null,
+          currentPageId: stage?.querySelector<HTMLElement>('[data-media-page="current"]')?.dataset.mediaPageId,
+          stageInterrupted: Boolean(stage?.querySelector('[data-media-incoming="true"], [role="alert"]')),
+        });
       },
+      // The canvas clone owns only video presentation. Keep the committed live
+      // video underneath it hit-testable so fullscreen native controls become
+      // authoritative immediately while exactly one playback transport remains.
+      keepTargetInteractive: source?.tagName === "VIDEO",
     });
   }
 
