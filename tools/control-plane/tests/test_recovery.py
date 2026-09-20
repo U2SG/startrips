@@ -863,11 +863,12 @@ class RealCarrierCases(fixture.WiringTests):
         self.assertIn('STOP', result.stdout); self.assertEqual(before, self.path.read_bytes())
         self.assertFalse((self.root / '.agent-artifacts').exists())
 
-    def test_existing_backend_owner_reserves_slot_during_review(self):
+    def test_backend_review_wait_does_not_block_next_executable_feature(self):
         self.write(fixture.feature('ST-001', status='ready_to_merge', phase='P0-process', passes=True),
                    fixture.feature('ST-002', phase='P0-process'))
         result = self.invoke('export STARTRIPS_LANE=backend; bash run-loop.sh --next')
-        self.assertEqual(0, result.returncode, result.stderr); self.assertEqual('', result.stdout.strip())
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual('ST-002', result.stdout.strip())
 
     @unittest.skipUnless(os.name == 'nt', 'Experience probe self-exclusion is Windows/MSYS-specific')
     def test_experience_readonly_selector_does_not_count_its_own_probe_as_a_claim(self):
