@@ -640,6 +640,13 @@ PY
 intake_fetch_issue_states() {
   local out="$INTAKE_DIR/mapped-issues-${BASHPID}.jsonl"
   local raw="$INTAKE_DIR/all-issues-${BASHPID}.jsonl"
+  local -a mapped=()
+  mapfile -t mapped < <(intake_mapped_issue_numbers)
+  if [[ "${#mapped[@]}" == "0" ]]; then
+    : > "$out"
+    printf '%s' "$out"
+    return 0
+  fi
   # One paginated REST snapshot replaces one gh issue view process per mapped
   # issue. The REST issue object already carries comment count, updated_at and
   # labels, so this preserves the same comparison semantics without holding a
