@@ -1,0 +1,2 @@
+ALTER TABLE "account_identity_audit" DROP CONSTRAINT "account_identity_audit_event_check";--> statement-breakpoint
+ALTER TABLE "account_identity_audit" ADD CONSTRAINT "account_identity_audit_event_check" CHECK ("account_identity_audit"."event" in ('reverify', 'link-intent', 'link', 'unlink', 'password-change', 'password-enroll', 'password-enroll-intent'));
