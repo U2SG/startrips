@@ -89,7 +89,7 @@ describe("mobile media delete focus ownership (#427)", () => {
 
     expect(closeStart).toBeGreaterThan(0);
     expect(closeSource).toContain(
-      "restoreMobileMediaDeleteFocusRef.current = mobileLayout && mobileManageMode",
+      "restoreMobileMediaDeleteFocusRef.current = true",
     );
     expect(closeSource).not.toContain("requestAnimationFrame");
     expect(closeSource).not.toContain("document.querySelector");
@@ -105,6 +105,9 @@ describe("mobile media delete focus ownership (#427)", () => {
     const restoreSource = source.slice(restoreStart, restoreStart + 800);
     expect(restoreSource).toContain('if (mediaDeleteState !== "idle") return;');
     expect(restoreSource).toContain(
+      "window.cancelAnimationFrame(mobileManageFocusFrameRef.current)",
+    );
+    expect(restoreSource).toContain(
       "mobileManageViewerTriggerRef.current ?? mobileManageDoneRef.current",
     );
     expect(restoreSource).toContain("target?.focus({ preventScroll: true });");
@@ -113,7 +116,7 @@ describe("mobile media delete focus ownership (#427)", () => {
     const confirmEnd = source.indexOf("function selectMediaScope", confirmStart);
     const confirmSource = source.slice(confirmStart, confirmEnd);
     expect(confirmSource.match(
-      /restoreMobileMediaDeleteFocusRef\.current = mobileLayout && mobileManageMode/g,
+      /restoreMobileMediaDeleteFocusRef\\.current = true/g,
     )?.length).toBe(2);
   });
 });
