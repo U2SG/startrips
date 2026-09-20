@@ -615,6 +615,8 @@ class WiringTests(SyntheticOne):
         self.assertIn('FEATURE_SKIP', loop)
         self.assertIn('failure_family_owner', loop)
         self.assertIn('Recurring CI family is canonically owned by $FAMILY_OWNER', loop)
+        self.assertIn('if [[ "${EVAL_ONLY:-0}" == "1" ]]; then', loop)
+        self.assertNotIn('if [[ "\\${EVAL_ONLY:-0}" == "1" ]]; then', loop)
 
 
 if __name__ == '__main__':
