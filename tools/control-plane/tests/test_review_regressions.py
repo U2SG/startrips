@@ -111,6 +111,66 @@ class UnreadableCarrierCases(unittest.TestCase):
         self.assertEqual([], execution.competitors(rows,Path.cwd(),1))
 
 
+class FailureFamilyOwnerCases(fixture.SyntheticOne):
+    def record(self):
+        fingerprint = 'd' * 64
+        return {'root_cause_required': True, 'fingerprint': fingerprint,
+                'family': fingerprint[:16]}
+
+    def issue_api(self, endpoint):
+        return {'title': '', 'body': ''}
+
+    def test_unique_other_active_mapped_issue_with_exact_token_owns_family(self):
+        self.write(
+            fixture.feature('ST-001', status='in_progress', issue=445),
+            fixture.feature('ST-002', status='in_progress', issue=427),
+        )
+        token = self.record()['fingerprint'][:16]
+        def comments(endpoint):
+            return [{'body': 'parser family ' + token}] if '/issues/427/comments' in endpoint else []
+        with mock.patch.object(action_plan, 'api', side_effect=self.issue_api), \
+             mock.patch.object(action_plan, 'pages', side_effect=comments):
+            owner = action_plan.failure_family_owner(
+                self.path, 'ST-001', fixture.REPO, [self.record()])
+        self.assertEqual({'feature': 'ST-002', 'issue': 427, 'matched_tokens': [token]}, owner)
+
+    def test_unique_current_owner_keeps_repair_on_current_feature(self):
+        self.write(
+            fixture.feature('ST-001', status='in_progress', issue=445),
+            fixture.feature('ST-002', status='in_progress', issue=427),
+        )
+        token = self.record()['fingerprint'][:16]
+        def comments(endpoint):
+            return [{'body': token}] if '/issues/445/comments' in endpoint else []
+        with mock.patch.object(action_plan, 'api', side_effect=self.issue_api), \
+             mock.patch.object(action_plan, 'pages', side_effect=comments):
+            self.assertIsNone(action_plan.failure_family_owner(
+                self.path, 'ST-001', fixture.REPO, [self.record()]))
+
+    def test_terminal_or_human_gated_rows_do_not_become_external_owner(self):
+        self.write(
+            fixture.feature('ST-001', status='in_progress', issue=445),
+            fixture.feature('ST-002', status='passed', issue=427),
+            fixture.feature('ST-003', status='pending', issue=428, human_gate='decision'),
+        )
+        with mock.patch.object(action_plan, 'api', side_effect=self.issue_api), \
+             mock.patch.object(action_plan, 'pages', return_value=[]):
+            self.assertIsNone(action_plan.failure_family_owner(
+                self.path, 'ST-001', fixture.REPO, [self.record()]))
+
+    def test_current_and_other_exact_owner_is_ambiguous_and_fails_closed(self):
+        self.write(
+            fixture.feature('ST-001', status='in_progress', issue=445),
+            fixture.feature('ST-002', status='in_progress', issue=427),
+        )
+        token = self.record()['fingerprint'][:16]
+        with mock.patch.object(action_plan, 'api', return_value={'title': '', 'body': token}), \
+             mock.patch.object(action_plan, 'pages', return_value=[]):
+            with self.assertRaises(action_plan.EvidenceUnknown):
+                action_plan.failure_family_owner(
+                    self.path, 'ST-001', fixture.REPO, [self.record()])
+
+
 class HandoffIdentityCases(fixture.SyntheticOne):
     def setUp(self):
         super().setUp()
@@ -218,6 +278,27 @@ class IntakeDiscoveryCases(fixture.WiringTests):
         result=self.invoke('set -euo pipefail; ROOT="$PWD"; source lib/intake.sh; gh() { echo malformed; }; intake_new_issues')
         self.assertEqual(6,result.returncode,result.stdout+result.stderr)
         self.assertNotIn('no new open issues',result.stdout)
+
+    def test_runtime_triage_failure_propagates_from_new_issue_loop(self):
+        command=('set -euo pipefail; ROOT="$PWD"; source lib/intake.sh; '
+                 'gh() { :; }; intake_candidates() { echo 448; }; '
+                 'intake_budget_take() { :; }; intake_issue() { return 6; }; '
+                 'intake_new_issues')
+        result=self.invoke(command)
+        self.assertEqual(6,result.returncode,result.stdout+result.stderr)
+        self.assertIn('evidence UNKNOWN',result.stderr)
+        self.assertNotIn('no new open issues',result.stdout)
+
+    def test_peer_evidence_unknown_never_launches_triage(self):
+        command=('set -euo pipefail; ROOT="$PWD"; source lib/intake.sh; '
+                 'intake_issue_state() { return 1; }; '
+                 'intake_triage_peer_active() { return 6; }; '
+                 'intake_triage() { echo TRIAGE_SHOULD_NOT_RUN; return 0; }; '
+                 'intake_issue 448')
+        result=self.invoke(command)
+        self.assertEqual(6,result.returncode,result.stdout+result.stderr)
+        self.assertIn('peer evidence UNKNOWN',result.stderr)
+        self.assertNotIn('TRIAGE_SHOULD_NOT_RUN',result.stdout+result.stderr)
 
     def test_urgent_mode_sees_p0_p1_without_bulk_intake(self):
         import shlex

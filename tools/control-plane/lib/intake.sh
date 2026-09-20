@@ -109,6 +109,30 @@ intake_field() {
     "$1" "$2" | tr -d '\r'
 }
 
+# Read-only duplicate suppression for the expensive model turn. This is process
+# evidence only: it creates no queue/owner claim/lock and never authorizes a write.
+intake_triage_peer_active() {
+  local num="$1"
+  if command -v powershell.exe >/dev/null 2>&1; then
+    powershell.exe -NoProfile -NonInteractive -Command "\$n='$num'; try { \$rows=Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object { \$_.Name -ieq 'claude.exe' -and \$_.CommandLine -match '--agent startrips-triage' -and \$_.CommandLine -match ('issue #' + [regex]::Escape(\$n) + '(?:\D|$)') }; if (\$rows) { exit 0 } else { exit 1 } } catch { exit 6 }" >/dev/null 2>&1
+    return $?
+  fi
+  python3 - "$num" <<'PY'
+import os, re, subprocess, sys
+num = sys.argv[1]
+try:
+    text = subprocess.run(['ps', '-eo', 'pid=,args='], capture_output=True, text=True, timeout=5, check=True).stdout
+except Exception:
+    raise SystemExit(6)
+needle = re.compile(r'issue #' + re.escape(num) + r'(?:\D|$)')
+for line in text.splitlines():
+    pid, _, args = line.strip().partition(" ")
+    if pid.isdigit() and int(pid) != os.getpid() and "--agent startrips-triage" in args and needle.search(args):
+        raise SystemExit(0)
+raise SystemExit(1)
+PY
+}
+
 # Open issues that no feature already references and that intake has not already
 # skipped, [P0]/[P1]-titled first then oldest first, capped by rules.intake.max_per_iteration. Issues
 # carrying rules.intake.skip_label are never candidates.
@@ -207,20 +231,37 @@ intake_triage() {
   local num="$1" prompt="${2:-}" slug="${3:-}"
   local ro="You are read-only — never comment on, create, close or edit anything on GitHub, and never write files. Your final message must be exactly one JSON object between the markers <<<INTAKE and INTAKE>>> with nothing after the closing marker."
   [[ -n "$prompt" ]] || prompt="Triage issue #$num in $INTAKE_GH_REPO for the Startrips loop queue. Follow your agent instructions exactly: verify the claimed gap against the real code in startrips/ before believing the title, then decide skip versus a queued feature and choose the phase and anchor with the placement rules. $ro"
-  INTAKE_LAST_LOG="$INTAKE_DIR/issue-$num${slug:+-$slug}.log"
+  INTAKE_LAST_LOG="$INTAKE_DIR/issue-$num${slug:+-$slug}-triage-${BASHPID}.log"
   : > "$INTAKE_LAST_LOG"
+  local triage_rc=0
+  # Triage needs only the custom agent built-ins (Read/Grep/Glob/Bash). Loading
+  # user/global MCP servers here adds unrelated startup processes and has caused
+  # successful provider sessions to terminate with an empty output log. Keep this
+  # narrow, and preserve the real Claude exit code instead of hiding it behind tee.
+  set +e
   (
     cd "$INTAKE_ROOT" || exit 1
-    claude_run --agent startrips-triage --dangerously-skip-permissions --model opus \
+    # Write model output from the surviving child directly to the invocation log.
+    # If the outer Codexless/scheduler carrier disappears, MSYS may leave this
+    # sh/claude process alive; a parent-owned tee pipe then loses all evidence.
+    # A direct file descriptor stays valid for the child's lifetime.
+    claude_run --setting-sources project --strict-mcp-config --agent startrips-triage --dangerously-skip-permissions --model sonnet \
       --output-format text \
       -p "$prompt" \
-      2>&1
-  ) | tee "$INTAKE_LAST_LOG" || true
+      >"$INTAKE_LAST_LOG" 2>&1
+  )
+  triage_rc=$?
+  set -e
+  cat "$INTAKE_LAST_LOG"
   quota_stop "$INTAKE_LAST_LOG" "triage"
   # An API failure leaves no marker block; without this it would be recorded
   # as `triage output invalid` and the issue skipped until a human clears it
   # (#244 and #245 on 2026-09-06). Exit 6 like the builder does instead.
   transient_stop "$INTAKE_LAST_LOG" "triage"
+  if [[ "$triage_rc" != "0" ]]; then
+    echo "[intake] triage process failed rc=$triage_rc for issue #$num; state unchanged" >&2
+    return 6
+  fi
 }
 
 # Parse, validate and apply in a single pass, because the placement rules can
@@ -440,7 +481,19 @@ intake_issue() {
     echo "=== Intake: $INTAKE_GH_REPO#$num ==="
   fi
 
-  intake_triage "$num"
+  local peer_rc=0
+  if intake_triage_peer_active "$num"; then
+    intake_record_decision "issue=$num triage-active; deferred to existing invocation"
+    return 0
+  else
+    peer_rc=$?
+    if [[ "$peer_rc" != "1" ]]; then
+      echo "[intake] triage peer evidence UNKNOWN rc=$peer_rc for issue #$num; no triage launched" >&2
+      intake_record_decision "issue=$num triage-peer-unknown rc=$peer_rc; no invocation launched"
+      return 6
+    fi
+  fi
+  intake_triage "$num" || return $?
   [[ -s "$INTAKE_LAST_LOG" ]] || { intake_record_decision "issue=$num triage-log-empty"; return 1; }
   INTAKE_ISSUE_UPDATED_AT="$upd" INTAKE_ISSUE_COMMENTS="$cnt" intake_apply "$num" "$INTAKE_LAST_LOG" || { intake_record_decision "issue=$num transaction-deferred; no stale result consumed"; return 6; }
   [[ -f "$INTAKE_LAST_RESULT" ]] || { intake_record_decision "issue=$num result-missing"; return 1; }
@@ -509,7 +562,13 @@ intake_new_issues() {
     # New issues spend the shared per-iteration budget FIRST: CLAUDE.md promises
     # that a P0/P1 regression triaged this iteration is the one it builds.
     intake_budget_take || { echo "[intake] session budget spent; #$n waits for the next iteration"; break; }
-    intake_issue "$n" || echo "[intake] issue #$n could not be triaged; left for the next iteration"
+    local issue_rc=0
+    intake_issue "$n" || issue_rc=$?
+    if [[ "$issue_rc" == "6" ]]; then
+      echo "[intake] issue #$n evidence UNKNOWN; propagating transient failure" >&2
+      return 6
+    fi
+    [[ "$issue_rc" == "0" ]] || echo "[intake] issue #$n could not be triaged; left for the next iteration"
     count=$((count + 1))
   done
   [[ "$count" -gt 0 ]] || echo "[intake] no new open issues to triage"
@@ -598,17 +657,62 @@ PY
 
 # JSONL, one line per mapped issue. Prints the path it wrote.
 intake_fetch_issue_states() {
-  local out="$INTAKE_DIR/mapped-issues.jsonl" n line
-  local -a nums=()
-  mapfile -t nums < <(intake_mapped_issue_numbers)
-  : > "$out"
-  for n in "${nums[@]}"; do
-    n="$(printf '%s' "$n" | tr -d '\r')"
-    [[ -n "$n" ]] || continue
-    line="$(intake_issue_state "$n" || true)"
-    [[ -n "$line" ]] || continue
-    printf '%s\n' "$line" >> "$out"
-  done
+  local out="$INTAKE_DIR/mapped-issues-${BASHPID}.jsonl"
+  local raw="$INTAKE_DIR/all-issues-${BASHPID}.jsonl"
+  local -a mapped=()
+  mapfile -t mapped < <(intake_mapped_issue_numbers)
+  if [[ "${#mapped[@]}" == "0" ]]; then
+    : > "$out"
+    printf '%s' "$out"
+    return 0
+  fi
+  # One paginated REST snapshot replaces one gh issue view process per mapped
+  # issue. The REST issue object already carries comment count, updated_at and
+  # labels, so this preserves the same comparison semantics without holding a
+  # pre-scope lane claim across dozens of sequential network round-trips.
+  if ! gh api --paginate "repos/$INTAKE_GH_REPO/issues?state=all&per_page=100" \
+      --jq '.[] | select(.pull_request == null) | {number,state,updated_at,comments,labels:[.labels[].name]} | @json' \
+      > "$raw"; then
+    echo "[intake] mapped issue state evidence UNKNOWN; batch fetch failed" >&2
+    return 6
+  fi
+python3 - "$INTAKE_FEATURES" "$raw" "$out" "$INTAKE_ROOT/lib" <<'PY'
+import json, sys
+feat_p, raw_p, out_p, libdir = sys.argv[1:5]
+sys.path.insert(0, libdir)
+from feature_store import load_document
+from intake_json import issue_number
+doc = load_document(feat_p)
+mapped = []
+for feature in doc["features"]:
+    number = issue_number(feature.get("issue"))
+    if number is not None and number not in mapped:
+        mapped.append(number)
+states = {}
+for line in open(raw_p, encoding="utf-8"):
+    line = line.strip()
+    if not line:
+        continue
+    item = json.loads(line)
+    number = int(item["number"])
+    states[number] = {
+        "number": number,
+        "state": str(item.get("state") or "").upper(),
+        "updatedAt": item.get("updated_at") or "",
+        "comments": int(item.get("comments") or 0),
+        "labels": list(item.get("labels") or []),
+    }
+missing = [number for number in mapped if number not in states]
+if missing:
+    print("[intake] mapped issue state evidence incomplete: " + ",".join(map(str, missing)), file=sys.stderr)
+    raise SystemExit(6)
+with open(out_p, "w", encoding="utf-8", newline="\n") as stream:
+    for number in mapped:
+        stream.write(json.dumps(states[number], ensure_ascii=False, separators=(",", ":")) + "\n")
+PY
+  local rc=$?
+  rm -f "$raw"
+  [[ "$rc" == "0" ]] || return "$rc"
   printf '%s' "$out"
 }
 
@@ -972,7 +1076,7 @@ intake_amend() {
   IFS=$'\t' read -r dump expected_row <<< "$snapshot"
   [[ -n "$dump" && -n "$expected_row" ]] || return 6
   prompt="Amend mode for the Startrips loop queue. Feature $fid is still pending and was created by intake from issue #$num in $INTAKE_GH_REPO, which has moved since it was triaged. Read your agent instructions (the Amend mode section), the current feature object at $dump, and the whole issue: gh issue view $num --repo $INTAKE_GH_REPO --comments. Decide whether the change is material to the queued work, then return one JSON object: {\"unchanged\": true, \"reason\": \"...\"} when it is not, {\"skip\": true, \"reason\": \"...\"} when the issue is now moot, or {\"amend\": {\"rationale\": \"...\", plus only the fields that must change: description, dependencies, acceptance, human_gate, placement}}. Keep every acceptance item a checkable fact and never widen the scope beyond what the issue asks. You are read-only: never comment on, create, close or edit anything on GitHub, and never write files. Your final message must be exactly one JSON object between the markers <<<INTAKE and INTAKE>>> with nothing after the closing marker."
-  intake_triage "$num" "$prompt" "amend-$fid"
+  intake_triage "$num" "$prompt" "amend-$fid" || return $?
   [[ -s "$INTAKE_LAST_LOG" ]] || {
     intake_record_decision "issue=$num feature=$fid amend-log-empty"
     return 0
@@ -1062,7 +1166,7 @@ intake_followup() {
     return 0
   }
   prompt="Follow-up mode for the Startrips loop queue. Issue #$num in $INTAKE_GH_REPO is open again, or moved again while open, after feature $fid shipped for it and merged. Read your agent instructions, then read the whole issue: gh issue view $num --repo $INTAKE_GH_REPO --comments, and check what $fid actually landed on main (git -C startrips log and the merged PR). Triage ONLY the residual gap that is still open, exactly as you would a new issue: either a skip with a reason, or a full feature whose acceptance covers just that residual gap. The loop places it after $fid and adds $fid as a dependency, so you do not need to set the placement yourself. You are read-only: never comment on, create, close or edit anything on GitHub, and never write files. Your final message must be exactly one JSON object between the markers <<<INTAKE and INTAKE>>> with nothing after the closing marker."
-  intake_triage "$num" "$prompt" "followup-$fid"
+  intake_triage "$num" "$prompt" "followup-$fid" || return $?
   [[ -s "$INTAKE_LAST_LOG" ]] || {
     intake_record_decision "issue=$num feature=$fid followup-log-empty"
     return 0

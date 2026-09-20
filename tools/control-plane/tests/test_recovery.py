@@ -43,6 +43,29 @@ class ProcessClassificationCases(unittest.TestCase):
         conflict = execution.competitors(rows, self.root, 3, lane='backend')[0]
         self.assertEqual(10, conflict['pid']); self.assertEqual('backend', conflict['lane'])
 
+    def test_idle_resident_backend_supervisor_does_not_consume_backend_slot(self):
+        rows = self.base + [process(10, command='bash ' + str(self.root / 'loop-supervisor.sh')
+                                    + ' --carrier-lane=backend')]
+        occupancy = execution.lane_occupancy(rows, self.root, 3, 'backend')
+        self.assertEqual((0, 1, 0, []),
+                         (occupancy['occupied_slots'], occupancy['available_slots'],
+                          occupancy['claim_count'], occupancy['features']))
+
+    def test_resident_backend_supervisor_counts_scoped_child_not_itself(self):
+        worktree = str((self.root / 'backend-owner').resolve())
+        token = base64.urlsafe_b64encode(worktree.encode('utf-8')).decode('ascii').rstrip('=')
+        rows = self.base + [
+            process(10, command='bash ' + str(self.root / 'loop-supervisor.sh')
+                    + ' --carrier-lane=backend'),
+            process(11, 10, command='bash ' + str(self.root / 'run-loop.sh')
+                    + ' --carrier-lane=backend --carrier-token=backend-token-0011'
+                    + ' --carrier-feature=ST-100 --carrier-worktree64=' + token),
+        ]
+        occupancy = execution.lane_occupancy(rows, self.root, 3, 'backend')
+        self.assertEqual((1, 0, 0, ['ST-100']),
+                         (occupancy['occupied_slots'], occupancy['available_slots'],
+                          occupancy['claim_count'], occupancy['features']))
+
     def experience_loop(self, pid, feature, worktree):
         token = base64.urlsafe_b64encode(str(worktree).encode('utf-8')).decode('ascii').rstrip('=')
         return process(pid, command=(
@@ -311,6 +334,15 @@ class ProcessClassificationCases(unittest.TestCase):
     def test_readonly_probe_and_unreadable_child_do_not_consume_slot(self):
         rows = self.base + [
             process(10, command='bash ' + str(self.root / 'run-loop.sh') + ' --plan'),
+            process(11, 10, 'bash.exe', None),
+        ]
+        occupancy = execution.lane_occupancy(rows, self.root, 3, 'experience')
+        self.assertEqual(0, occupancy['occupied_slots'])
+        self.assertEqual(0, occupancy['claim_count'])
+
+    def test_wrapped_readonly_probe_with_shell_separator_does_not_consume_slot(self):
+        rows = self.base + [
+            process(10, command='bash -lc "export STARTRIPS_LANE=experience; ' + str(self.root / 'run-loop.sh') + ' --plan; echo done"'),
             process(11, 10, 'bash.exe', None),
         ]
         occupancy = execution.lane_occupancy(rows, self.root, 3, 'experience')
@@ -831,11 +863,19 @@ class RealCarrierCases(fixture.WiringTests):
         self.assertIn('STOP', result.stdout); self.assertEqual(before, self.path.read_bytes())
         self.assertFalse((self.root / '.agent-artifacts').exists())
 
-    def test_existing_backend_owner_reserves_slot_during_review(self):
+    def test_backend_review_wait_does_not_block_next_executable_feature(self):
         self.write(fixture.feature('ST-001', status='ready_to_merge', phase='P0-process', passes=True),
                    fixture.feature('ST-002', phase='P0-process'))
         result = self.invoke('export STARTRIPS_LANE=backend; bash run-loop.sh --next')
-        self.assertEqual(0, result.returncode, result.stderr); self.assertEqual('', result.stdout.strip())
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual('ST-002', result.stdout.strip())
+
+    @unittest.skipUnless(os.name == 'nt', 'Experience probe self-exclusion is Windows/MSYS-specific')
+    def test_experience_readonly_selector_does_not_count_its_own_probe_as_a_claim(self):
+        self.write(fixture.feature('ST-001', phase='P1-mobile'))
+        result = self.invoke('export STARTRIPS_LANE=experience; bash run-loop.sh --next')
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual('ST-001', result.stdout.strip())
 
     @unittest.skipUnless(os.name == 'nt', 'direct Experience carrier regression is Windows/MSYS-specific')
     def test_backend_supervisor_stop_does_not_block_one_shot_experience(self):

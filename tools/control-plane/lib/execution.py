@@ -110,6 +110,26 @@ def command_token(command):
     return match.group(1) if match else None
 
 
+def published_invocation_token(rows, mine):
+    """Recover this invocation token only from exact published pid/start identities.
+
+    MSYS can sever both native ancestry and one subprocess environment projection.
+    The launcher/run-loop already publishes exact pid+CreationDate identities for
+    this invocation. A token observed on one of those exact identities is therefore
+    self evidence, not a peer inference. Multiple tokens fail closed.
+    """
+    tokens = {
+        token
+        for row in rows
+        if mine.get(row.get('pid')) == row.get('started')
+        for token in [command_token(row.get('command'))]
+        if token
+    }
+    if len(tokens) > 1:
+        raise EvidenceUnknown('Published execution identities disagree on carrier token')
+    return next(iter(tokens), None)
+
+
 def command_lane(command):
     """Return an explicitly observable execution lane, or None.
 
@@ -157,7 +177,7 @@ def command_is_readonly_probe(command):
     if not re.search(r'(?:^|[\s"/])run-loop[.]sh(?:[\s"\x00]|$)', text):
         return False
     return bool(re.search(
-        r'(?:^|[\s"])--(?:next|next-action|plan|work-prs|ready-prs|pr-review)(?=$|[\s"])',
+        r'(?:^|[\s"])--(?:next|next-action|plan|work-prs|ready-prs|pr-review)(?=$|[;\s"])',
         text))
 
 
@@ -331,7 +351,9 @@ def _observed_executions(rows, root, self_pid):
     # MSYS may lose exported environment on one native subprocess carrier even
     # though the parent run-loop argv still carries the exact invocation token.
     # Recover only from the caller's own ancestry; never infer from a peer.
-    own_token = os.environ.get('STARTRIPS_CARRIER_TOKEN') or lineage_token(by_pid[self_pid], by_pid)
+    own_token = (os.environ.get('STARTRIPS_CARRIER_TOKEN')
+                 or lineage_token(by_pid[self_pid], by_pid)
+                 or published_invocation_token(rows, mine))
     own_cluster = invocation_cluster(rows, own_token)
     for spelling in tuple(aliases):
         if re.match(r'^[a-z]:/', spelling):
@@ -381,6 +403,16 @@ def _observed_executions(rows, root, self_pid):
         command = raw_command.replace('\\', '/').lower()
         is_loop = bool(re.search(r'(?:^|[\s"/])(?:run-loop|loop-supervisor)[.]sh(?:[\s"\x00]|$)', command))
         is_child = 'startrips_execution_owner=' in command
+        # The dedicated LOCAL Backend supervisor is a resident scheduler, not a
+        # productive owner. Keep it observable so duplicate-launch/self-block
+        # guards still see the live supervisor; lane_occupancy alone discounts
+        # it and counts the scoped run-loop/model child when one exists.
+        is_resident_backend_supervisor = bool(
+            re.search(r'(?:^|[\s"/])loop-supervisor[.]sh(?:[\s"\x00]|$)', command)
+            and command_lane(raw_command) == 'backend'
+            and command_token(raw_command) is None
+            and not re.search(r'(?:^|[;\s"])(?:--carrier-)?(?:feature|worktree|worktree64)=', raw_command, re.I)
+        )
         if is_loop and command_is_readonly_probe(raw_command):
             continue
         if not is_loop and not is_child:
@@ -416,6 +448,7 @@ def _observed_executions(rows, root, self_pid):
             'feature': carrier_feature, 'worktree': carrier_worktree,
             'token': carrier_token,
             'scope_marker': scope_marker, 'scope_complete': scope_complete,
+            'resident_scheduler': is_resident_backend_supervisor,
         })
     return observed
 
@@ -439,6 +472,8 @@ def lane_occupancy(rows, root, self_pid, lane):
         # lane's capacity, even when its own CommandLine is temporarily unreadable.
         # Unknown lane or unreadable state inside the requested lane stays fail-closed.
         if carrier_lane not in {lane, 'unknown'}:
+            continue
+        if lane == 'backend' and record.get('resident_scheduler'):
             continue
         if record['state'] == 'unknown-command' or carrier_lane == 'unknown':
             unknown.append(_public_record(record))
