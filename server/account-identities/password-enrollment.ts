@@ -1,7 +1,11 @@
 import { and, eq } from "drizzle-orm";
 import { auth } from "../auth";
 import { accountIdentityAudit } from "../db/app-schema";
-import { account as authAccount, user as authUser } from "../db/auth-schema";
+import {
+  account as authAccount,
+  user as authUser,
+  verification as authVerification,
+} from "../db/auth-schema";
 import { db } from "../db/client";
 import {
   AccountIdentityError,
@@ -107,6 +111,23 @@ function reverificationRefusal(
 }
 
 /**
+ * Invalidate every outstanding Better Auth capability keyed to this user id.
+ *
+ * `request-password-reset` resolves its subject by email alone and never asks
+ * whether that user holds a credential, so a credential-less user can already
+ * have a live `reset-password:*` verification value. Enrollment would otherwise
+ * leave it usable, and its bearer could then overwrite the password the owner
+ * just enrolled and revoke their sessions. This is the same hazard
+ * `changeAccountPassword` clears before replacing a credential, and it is
+ * cleared here for the same reason and in the same fail-safe order: before the
+ * write, so an interruption can only have invalidated links the owner is free
+ * to request again.
+ */
+async function invalidateOutstandingCapabilities(userId: string) {
+  await db.delete(authVerification).where(eq(authVerification.value, userId));
+}
+
+/**
  * Record the completed enrollment against the grant that authorized it. One
  * grant enrolls one credential, so the receipt is written at most once even
  * when the original call and a recovery retry overlap; the stable user row is
@@ -163,7 +184,12 @@ async function recordEnrollmentReceipt(userId: string, actionId: string) {
  *   unverified user is told to verify rather than handed a credential that
  *   cannot be used or recovered. That check runs before any Better Auth call;
  * - the already-enrolled refusal, which keeps a user who still holds a usable
- *   credential on the ST-092 change-password path instead of mutating it here.
+ *   credential on the ST-092 change-password path instead of mutating it here;
+ * - invalidation of outstanding capabilities issued against this user id. A
+ *   password-reset link can already exist for a credential-less user, because
+ *   `request-password-reset` resolves its subject by email alone, and such a
+ *   link mailed before enrollment must not overwrite the enrolled credential
+ *   afterwards.
  *
  * Unlike a password CHANGE this service does NOT revoke the user's other
  * sessions. Enrollment adds a login method; it does not rotate a secret that
@@ -289,6 +315,8 @@ export async function enrollAccountPassword(values: {
     });
     throw new AccountPasswordEnrollmentError(claim.refusal);
   }
+
+  await invalidateOutstandingCapabilities(values.userId);
 
   try {
     await auth.api.setPassword({

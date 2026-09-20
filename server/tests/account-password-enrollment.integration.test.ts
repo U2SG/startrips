@@ -20,6 +20,7 @@ import {
   organization as authOrganization,
   session as authSession,
   user as authUser,
+  verification as authVerification,
 } from "../db/auth-schema";
 import { db, pool } from "../db/client";
 
@@ -268,6 +269,8 @@ afterEach(() => {
 
 afterAll(async () => {
   if (userIds.length > 0) {
+    await db.delete(authVerification)
+      .where(inArray(authVerification.value, userIds));
     await db.delete(accountIdentityAudit)
       .where(inArray(accountIdentityAudit.userId, userIds));
     await db.delete(authUser).where(inArray(authUser.id, userIds));
@@ -285,6 +288,15 @@ describe("first password enrollment", () => {
   it("links one credential to the existing user and leaves that identity intact", async () => {
     const fixture = await seedUser("enrolled", { sessionCount: 2 });
     const grant = await grantFor(fixture);
+    // `request-password-reset` resolves its subject by email alone, so a
+    // credential-less user can already hold a live reset capability. It must
+    // not survive to overwrite the password enrolled here.
+    await db.insert(authVerification).values({
+      id: "st102-reset-" + randomUUID(),
+      identifier: "reset-password:stale-token-" + randomUUID(),
+      value: fixture.userId,
+      expiresAt: new Date(Date.now() + 86_400_000),
+    });
 
     const result = await enroll(fixture, { reverificationToken: grant.token });
     expect(result).toEqual({ enrolled: true, alreadyEnrolled: false });
@@ -310,6 +322,9 @@ describe("first password enrollment", () => {
     expect(await db.select({ id: journeys.id }).from(journeys)
       .where(eq(journeys.atlasId, fixture.atlasId)))
       .toEqual([{ id: fixture.journeyId }]);
+
+    expect(await db.select().from(authVerification)
+      .where(eq(authVerification.value, fixture.userId))).toHaveLength(0);
 
     // Adding a login method is not rotating a secret, so no session is revoked.
     const remaining = await db.select({ id: authSession.id }).from(authSession)
