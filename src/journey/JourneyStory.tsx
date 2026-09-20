@@ -1599,8 +1599,17 @@ export function JourneyStory({
     if (!restoreMobileMediaDeleteFocusRef.current) return;
     if (mediaDeleteState !== "idle") return;
 
+    if (!mobileLayout) {
+      restoreMobileMediaDeleteFocusRef.current = false;
+      return;
+    }
+    // A responsive desktop -> mobile transition can commit layout before the
+    // follow-up effect establishes Manage ownership. Keep the intent alive
+    // until that owner exists instead of consuming it in the intermediate
+    // compact-viewer commit.
+    if (!mobileManageMode) return;
+
     restoreMobileMediaDeleteFocusRef.current = false;
-    if (!mobileLayout || !mobileManageMode) return;
 
     // Manage entry can still have a two-frame focus handoff queued. Cancel it
     // before restoring the media trigger so no stale owner can steal focus
