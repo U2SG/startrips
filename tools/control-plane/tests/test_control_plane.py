@@ -101,6 +101,18 @@ class ExternalExecutionReceiptTests(SyntheticOne):
         self.assertEqual(before, self.path.read_bytes())
         self.assertTrue(external.receipt_path(self.root, 'ST-001').exists())
 
+    def test_running_receipt_requires_provider_identity(self):
+        args = self.owner_args()
+        with mock.patch.object(external, 'branch_of', return_value='feat/issue1-st001'):
+            prepared = external.prepare(args)
+        with self.assertRaises(external.ReceiptError):
+            external.record(SimpleNamespace(
+                root=str(self.root), feature='ST-001', status='running',
+                request_id=prepared['request_id'], agent_ref=None, task_ref=None, turn_id=None))
+        current = external.load_receipt(self.root, 'ST-001')
+        self.assertEqual('prepared', current['status'])
+        self.assertIsNone(current['agent_ref'])
+
     def test_same_agent_followup_advances_task_and_turn_identity(self):
         args = self.owner_args()
         with mock.patch.object(external, 'branch_of', return_value='feat/issue1-st001'):

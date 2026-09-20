@@ -129,6 +129,8 @@ def record(args: argparse.Namespace) -> dict:
         value["task_ref"] = args.task_ref
     if args.turn_id:
         value["turn_id"] = args.turn_id
+    if args.status in {"running", "awaitingApproval"} and not value.get("agent_ref"):
+        raise ReceiptError(f"{args.status} external execution requires a provider agent_ref")
     value["status"] = args.status
     value["observed_at"] = now()
     atomic_write(receipt_path(root, args.feature), value)
