@@ -81,7 +81,7 @@ describe("Story shared-element ownership", () => {
 });
 
 describe("mobile media delete focus ownership (#427)", () => {
-  it("derives restore ownership from the committed delete-state transition", () => {
+  it("waits for the committed current Story trigger to become genuinely focusable", () => {
     const source = readFileSync(new URL("./JourneyStory.tsx", import.meta.url), "utf8");
     const closeStart = source.indexOf("function closeMobileMediaDelete()");
     const closeEnd = source.indexOf("function closeJourneyDelete()", closeStart);
@@ -89,51 +89,47 @@ describe("mobile media delete focus ownership (#427)", () => {
 
     expect(closeStart).toBeGreaterThan(0);
     expect(closeSource).toContain('setMediaDeleteState("idle")');
-    expect(closeSource).not.toContain("restoreMobileMediaDeleteFocusRef.current = true");
     expect(closeSource).not.toContain("requestAnimationFrame");
     expect(closeSource).not.toContain("document.querySelector");
 
     const trapStart = source.indexOf("const mobileMediaSheetRef = useNestedModalFocus");
-    const manageFocusStart = source.indexOf(
-      "const focusTarget = mobileManageMode",
-      trapStart,
-    );
     const transitionStart = source.indexOf(
       "const previousMediaDeleteState = previousMediaDeleteStateRef.current",
       trapStart,
+    );
+    const manageFocusStart = source.indexOf(
+      "const focusTarget = mobileManageMode",
+      transitionStart,
     );
     const restoreStart = source.indexOf(
       "if (!restoreMobileMediaDeleteFocusRef.current) return;",
       manageFocusStart,
     );
+    const restoreEnd = source.indexOf(
+      "useEffect(() => {",
+      restoreStart + 1,
+    );
     expect(trapStart).toBeGreaterThan(0);
     expect(transitionStart).toBeGreaterThan(trapStart);
-    expect(transitionStart).toBeGreaterThan(manageFocusStart);
-    expect(restoreStart).toBeGreaterThan(transitionStart);
+    expect(manageFocusStart).toBeGreaterThan(transitionStart);
+    expect(restoreStart).toBeGreaterThan(manageFocusStart);
+    expect(restoreEnd).toBeGreaterThan(restoreStart);
 
-    const transitionSource = source.slice(transitionStart - 80, transitionStart + 900);
+    const transitionSource = source.slice(transitionStart - 120, manageFocusStart);
     expect(transitionSource).toContain("useLayoutEffect(() =>");
     expect(transitionSource).toContain('previousMediaDeleteState !== "idle"');
     expect(transitionSource).toContain('mediaDeleteState === "idle"');
     expect(transitionSource).toContain("(mobileManageMode || desktopEditing)");
 
-    const restoreSource = source.slice(restoreStart, restoreStart + 1500);
-    expect(restoreSource).toContain("if (!mobileManageMode)");
-    expect(restoreSource).toContain(
-      "window.cancelAnimationFrame(mobileManageFocusFrameRef.current)",
-    );
-    expect(restoreSource).toContain(
-      "mobileManageViewerTriggerRef.current ?? mobileManageDoneRef.current",
-    );
-    expect(restoreSource).toContain("target?.focus({ preventScroll: true });");
-
-    const confirmStart = source.indexOf("async function confirmMediaDelete()");
-    const confirmEnd = source.indexOf("function selectMediaScope", confirmStart);
-    const confirmSource = source.slice(confirmStart, confirmEnd);
-    expect(confirmSource.match(/setMediaDeleteState\("idle"\)/g)?.length).toBe(2);
-    expect(confirmSource).not.toContain(
-      "restoreMobileMediaDeleteFocusRef.current = true",
-    );
+    const restoreSource = source.slice(restoreStart, restoreEnd);
+    expect(restoreSource).toContain('style?.visibility !== "hidden"');
+    expect(restoreSource).toContain('style?.display !== "none"');
+    expect(restoreSource).toContain("target.getClientRects().length > 0");
+    expect(restoreSource).toContain("window.requestAnimationFrame(focusCurrentOwner)");
+    expect(restoreSource).toContain("document.activeElement !== target");
+    expect(restoreSource).toContain("restoreMobileMediaDeleteFocusRef.current = false");
+    expect(restoreSource.indexOf("restoreMobileMediaDeleteFocusRef.current = false"))
+      .toBeGreaterThan(restoreSource.indexOf("document.activeElement !== target"));
   });
 });
 
