@@ -531,19 +531,30 @@ try {
       // colours stay attached, so which cover identity was actually on screen
       // is still reported.
       const composited = await page.evaluate(() => window.__qaCompositedFrames ?? []);
-      // The rendered pixels stay in the first-frame verdict: a sample the
-      // renderer spent entirely on a frame that has not reached the canonical
-      // cover must still LOOK like the opening image at a probe the mask
-      // crosses last, so a swapped or skipped draw is caught. A sample whose
-      // window the reveal moved through grades nothing, because grading it is
-      // exactly the defect.
-      const gradable = samples.filter((sample) => sample.composited !== "moved"
-        && sample.composited !== ""
-        && sample.composited !== "original-cover");
+      // The rendered pixels stay in the first-frame verdict, but each sample is
+      // only held to what its reported identity actually determines. A sample
+      // the renderer spent entirely on `generated-first` composited nothing but
+      // the opening asset, so it must LOOK like it. A `blend` sample cannot be
+      // pinned to a colour at all: `blend` is every progress strictly between 0
+      // and 1, and the mask reaches the probed corner at a progress that
+      // depends on the stage's aspect, so on the narrow portrait stage the
+      // corner is already the canonical cover while progress is still short of
+      // 1 (#454). What a blend sample still proves is DIRECTION: the mask only
+      // ever grows, so once the probe has converted to the canonical cover it
+      // can never show the opening asset again, and a swapped or reversed draw
+      // is caught by that. A sample whose window the reveal moved through
+      // grades nothing, because grading it is exactly the defect.
+      const stable = samples.filter((sample) => sample.composited !== "moved"
+        && sample.composited !== "");
+      const openingFrames = stable.filter((sample) => sample.composited === "generated-first");
+      const converted = stable.findIndex((sample) => sample.color === "original-cover");
+      const reopened = converted !== -1
+        && stable.slice(converted + 1).some((sample) => sample.color === "derivative");
       check(
         `${label}/first-frame-is-the-derivative`,
         composited[0] === "generated-first"
-          && (gradable.length === 0 || gradable.some((sample) => sample.color === "derivative")),
+          && openingFrames.every((sample) => sample.color === "derivative")
+          && !reopened,
         { composited, opened, samples },
       );
       check(
