@@ -1592,37 +1592,6 @@ export function JourneyStory({
     mobileMediaMenuOpen ? "manage" : mediaDeleteState !== "idle" ? "delete" : null,
   );
 
-  // Run after the nested trap's passive cleanup. The trap may first restore
-  // its captured previousFocus; this current Story owner then takes final
-  // focus deterministically after the delete surface is gone.
-  useEffect(() => {
-    if (!restoreMobileMediaDeleteFocusRef.current) return;
-    if (mediaDeleteState !== "idle") return;
-
-    if (!mobileLayout) {
-      restoreMobileMediaDeleteFocusRef.current = false;
-      return;
-    }
-    // A responsive desktop -> mobile transition can commit layout before the
-    // follow-up effect establishes Manage ownership. Keep the intent alive
-    // until that owner exists instead of consuming it in the intermediate
-    // compact-viewer commit.
-    if (!mobileManageMode) return;
-
-    restoreMobileMediaDeleteFocusRef.current = false;
-
-    // Manage entry can still have a two-frame focus handoff queued. Cancel it
-    // before restoring the media trigger so no stale owner can steal focus
-    // after this committed delete-surface transition.
-    if (mobileManageFocusFrameRef.current !== null) {
-      window.cancelAnimationFrame(mobileManageFocusFrameRef.current);
-      mobileManageFocusFrameRef.current = null;
-    }
-
-    const target = mobileManageViewerTriggerRef.current ?? mobileManageDoneRef.current;
-    target?.focus({ preventScroll: true });
-  }, [mediaDeleteState, mobileLayout, mobileManageMode]);
-
   useLayoutEffect(() => {
     const authority = placementAnalysisAuthorityRef.current;
     if (!authority?.syncScope(currentPlacementAnalysisScope)) return;
@@ -1765,6 +1734,34 @@ export function JourneyStory({
       }
     };
   }, [mobileLayout, mobileManageMode]);
+
+  useEffect(() => {
+    if (!restoreMobileMediaDeleteFocusRef.current) return;
+    if (mediaDeleteState !== "idle") return;
+
+    if (!mobileLayout) {
+      restoreMobileMediaDeleteFocusRef.current = false;
+      return;
+    }
+    // A responsive desktop -> mobile transition can commit layout before the
+    // follow-up effect establishes Manage ownership. Keep the intent alive
+    // until that owner exists instead of consuming it in the intermediate
+    // compact-viewer commit.
+    if (!mobileManageMode) return;
+
+    // This effect is deliberately declared after the normal Manage focus
+    // effect. If Manage ownership was established in the same commit, its
+    // two-frame handoff has already been scheduled and can be cancelled here
+    // before the current media trigger becomes the final focus owner.
+    restoreMobileMediaDeleteFocusRef.current = false;
+    if (mobileManageFocusFrameRef.current !== null) {
+      window.cancelAnimationFrame(mobileManageFocusFrameRef.current);
+      mobileManageFocusFrameRef.current = null;
+    }
+
+    const target = mobileManageViewerTriggerRef.current ?? mobileManageDoneRef.current;
+    target?.focus({ preventScroll: true });
+  }, [mediaDeleteState, mobileLayout, mobileManageMode]);
 
   useEffect(() => {
     if (
