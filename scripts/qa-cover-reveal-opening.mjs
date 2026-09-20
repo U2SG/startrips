@@ -335,6 +335,71 @@ async function recordCompositedFrames(page) {
   });
 }
 
+/**
+ * Record the pixel the renderer actually drew in its OPENING frame.
+ *
+ * Every other pixel evidence in this lane is a screenshot, and a screenshot is
+ * late by construction: on a slow runner every one of them can land after the
+ * mask has already converted the probed region, and then a spatial argument
+ * about which image opened the reveal has nothing left to read (#454). This
+ * has no such window. The vendored renderer composites exactly once before it
+ * announces its images -- it uploads both textures, seeks to progress 0, draws,
+ * and only then emits `images` -- so the FIRST draw call ever issued on the
+ * reveal canvas IS the opening frame, and it is read back inside that same
+ * task, from the drawing buffer, before the browser has composited anything.
+ *
+ * What it reads is the drawn texture rather than a reported identity: the
+ * shader returns `uFrom` unmasked at progress 0 (`if(uProgress<=0.)` bypasses
+ * every mask, pigment and displacement operation), so a renderer that bound or
+ * drew the two images the wrong way round puts the canonical cover's colour
+ * here and cannot be talked out of it by timing. The stage centre is the probe
+ * because it is the one point `contain` never letterboxes; the mask geometry
+ * that makes the corner the right probe for a RUNNING reveal does not exist in
+ * a frame that has no mask at all.
+ */
+async function recordOpeningFramePixel(page) {
+  await page.addInitScript(() => {
+    const getContext = HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.getContext = function (type, ...rest) {
+      const context = getContext.call(this, type, ...rest);
+      if (type !== "webgl2" || !context || context.__qaOpeningHooked) return context;
+      // Only the reveal's own canvas is instrumented. The Atlas globe is a
+      // WebGL2 surface too and draws continuously, so wrapping its draw calls
+      // would put a DOM query on a hot path and change the very timing this
+      // lane grades. The reveal canvas is appended to the stage container
+      // before its context is requested, so this is decidable here, once.
+      if (!this.closest?.("[data-cover-reveal-phase]")) return context;
+      context.__qaOpeningHooked = true;
+      const drawArrays = context.drawArrays.bind(context);
+      context.drawArrays = (...args) => {
+        drawArrays(...args);
+        // Write-once: the opening frame is the first one, and nothing later
+        // may overwrite the evidence of what it showed.
+        if (window.__qaOpeningPixel !== undefined) return;
+        try {
+          // Only a frame that went to the screen: an offscreen pass answers a
+          // different question than "what did the viewer open on".
+          if (context.getParameter(context.FRAMEBUFFER_BINDING) !== null) return;
+          const width = context.drawingBufferWidth;
+          const height = context.drawingBufferHeight;
+          if (!width || !height) return;
+          const pixel = new Uint8Array(4);
+          context.readPixels(
+            Math.floor(width / 2), Math.floor(height / 2), 1, 1,
+            context.RGBA, context.UNSIGNED_BYTE, pixel,
+          );
+          window.__qaOpeningPixel = { r: pixel[0], g: pixel[1], b: pixel[2] };
+        } catch (error) {
+          // Never let the probe break the reveal it is observing. An
+          // unreadable opening frame is reported as one, not painted over.
+          window.__qaOpeningPixel = { error: String(error) };
+        }
+      };
+      return context;
+    };
+  });
+}
+
 /** Everything about the cover surface, read straight from the DOM. */
 async function coverState(page) {
   return page.evaluate(() => {
@@ -469,6 +534,7 @@ async function openCase(viewport, {
   });
   const page = await context.newPage();
   await recordCompositedFrames(page);
+  await recordOpeningFramePixel(page);
   const pageErrors = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
   const imageRequests = [];
@@ -558,6 +624,17 @@ try {
       // colours stay attached, so which cover identity was actually on screen
       // is still reported.
       const composited = await page.evaluate(() => window.__qaCompositedFrames ?? []);
+      // The renderer's own opening frame, read off the drawing buffer as it was
+      // drawn. This is the arm that cannot go vacuous: the other two pixel arms
+      // below are both conditioned on a sample that a late screenshot may never
+      // produce, so on their own they would let a renderer that visibly opens
+      // with the canonical cover pass whenever every screenshot landed after the
+      // probe had converted. This one exists for every reveal that ever drew a
+      // frame, and an absent or unreadable reading fails rather than abstains.
+      const openingPixel = await page.evaluate(() => window.__qaOpeningPixel ?? null);
+      const openingImage = openingPixel !== null && openingPixel.error === undefined
+        ? classify(openingPixel)
+        : "unobserved";
       // The rendered pixels stay in the first-frame verdict, but each sample is
       // only held to what its reported identity actually determines. A sample
       // the renderer spent entirely on `generated-first` composited nothing but
@@ -577,13 +654,14 @@ try {
       const converted = stable.findIndex((sample) => sample.color === "original-cover");
       const reopened = converted !== -1
         && stable.slice(converted + 1).some((sample) => sample.color === "derivative");
-      // The pixel arm that no timing can race, and the one that keeps this from
-      // passing vacuously when every screenshot lands after the probe converted:
-      // the mask reaches its origin before it reaches the corner, so ONE frame
-      // whose corner has already become the canonical cover while its origin has
-      // NOT is geometrically impossible for a correct reveal, and is precisely
-      // what a renderer drawing the two images the wrong way round puts on
-      // screen. Graded as "the origin is not the cover" rather than "the origin
+      // The pixel arm that no timing can race, though it can still go quiet:
+      // when every screenshot lands after the probe converted there is no such
+      // frame to find, which is why `openingImage` above carries the verdict's
+      // non-vacuous proof and this arm only adds to it. The mask reaches its
+      // origin before it reaches the corner, so ONE frame whose corner has
+      // already become the canonical cover while its origin has NOT is
+      // geometrically impossible for a correct reveal, and is precisely what a
+      // renderer drawing the two images the wrong way round puts on screen. Graded as "the origin is not the cover" rather than "the origin
       // is the derivative", because an inverted draw converts its origin THROUGH
       // the feathered edge and a sample caught in that band classifies as
       // neither image. A correct reveal cannot trip it: once the corner has
@@ -595,10 +673,11 @@ try {
       check(
         `${label}/first-frame-is-the-derivative`,
         composited[0] === "generated-first"
+          && openingImage === "derivative"
           && openingFrames.every((sample) => sample.color === "derivative")
           && !reopened
           && !inverted,
-        { composited, opened, samples },
+        { composited, opened, samples, openingPixel, openingImage },
       );
       check(
         `${label}/the-reveal-actually-transitions`,
