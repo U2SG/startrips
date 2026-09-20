@@ -114,19 +114,22 @@ def failure_family_owner(path, fid, repo, records):
     Ownership is evidence-derived, never inferred from lane/name similarity. An
     exact non-infrastructure CI fingerprint (full or 16-char prefix) present in an
     active feature's GitHub issue body/comments proves the mapping even on the
-    first observed occurrence. Ambiguity is UNKNOWN.
+    first observed occurrence. The selected feature yields only when every product
+    failure in the exact run maps to the same external owner; mixed or unowned
+    failures stay with the selected feature. Ambiguity is UNKNOWN.
     """
-    tokens = set()
-    for record in records:
-        if record.get('infrastructure'):
-            continue
+    def record_tokens(record):
+        tokens = set()
         fingerprint = record.get('fingerprint')
         family = record.get('family')
         if isinstance(fingerprint, str) and re.fullmatch(r'[0-9a-f]{64}', fingerprint):
             tokens.update({fingerprint, fingerprint[:16]})
         if isinstance(family, str) and re.fullmatch(r'[0-9a-f]{16,64}', family):
             tokens.add(family)
-    if not tokens:
+        return tokens
+
+    product_records = [record for record in records if not record.get('infrastructure')]
+    if not product_records:
         return None
 
     def mapped_issue(value):
@@ -134,7 +137,7 @@ def failure_family_owner(path, fid, repo, records):
         return int(match.group(1)) if match else None
 
     active_states = {'pending', 'in_progress', 'needs_work', 'ready_for_eval', 'ready_to_merge'}
-    matches = []
+    candidates = []
     for candidate in load_document(path)['features']:
         if candidate.get('status') not in active_states or candidate.get('human_gate'):
             continue
@@ -149,15 +152,35 @@ def failure_family_owner(path, fid, repo, records):
             [str(issue.get('title') or ''), str(issue.get('body') or '')]
             + [str(comment.get('body') or '') for comment in comments]
         ).lower()
-        hit = sorted(token for token in tokens if token.lower() in text)
-        if hit:
-            matches.append({'feature': candidate['id'], 'issue': number, 'matched_tokens': hit})
+        candidates.append((candidate['id'], number, text))
 
-    if len(matches) > 1:
-        raise EvidenceUnknown('Ambiguous failure-family ownership: ' + ','.join(sorted(m['feature'] for m in matches)))
-    if not matches or matches[0]['feature'] == fid:
+    routed = []
+    for record in product_records:
+        tokens = record_tokens(record)
+        if not tokens:
+            return None
+        matches = []
+        for feature, number, text in candidates:
+            hit = sorted(token for token in tokens if token.lower() in text)
+            if hit:
+                matches.append({'feature': feature, 'issue': number, 'matched_tokens': hit})
+        if len(matches) > 1:
+            raise EvidenceUnknown(
+                'Ambiguous failure-family ownership: '
+                + ','.join(sorted(match['feature'] for match in matches)))
+        if not matches:
+            return None
+        routed.append(matches[0])
+
+    owners = {match['feature'] for match in routed}
+    if len(owners) != 1 or fid in owners:
         return None
-    return matches[0]
+    owner = routed[0]
+    return {
+        'feature': owner['feature'],
+        'issue': owner['issue'],
+        'matched_tokens': sorted({token for match in routed for token in match['matched_tokens']}),
+    }
 
 def plan(path, fid, repo, *, record_failures=False):
     path = Path(path); root = path.parent

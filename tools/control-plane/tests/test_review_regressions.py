@@ -149,6 +149,37 @@ class FailureFamilyOwnerCases(fixture.SyntheticOne):
                 self.path, 'ST-001', fixture.REPO, [record])
         self.assertEqual({'feature': 'ST-002', 'issue': 454, 'matched_tokens': [token]}, owner)
 
+    def test_mixed_owned_and_unowned_failures_stay_on_current_feature(self):
+        self.write(
+            fixture.feature('ST-001', status='in_progress', issue=445),
+            fixture.feature('ST-002', status='pending', issue=454),
+        )
+        owned = self.record(root_cause_required=False)
+        unowned = dict(owned, fingerprint='e' * 64, family='e' * 16)
+        token = owned['fingerprint'][:16]
+        def comments(endpoint):
+            return [{'body': 'exact CI family ' + token}] if '/issues/454/comments' in endpoint else []
+        with mock.patch.object(action_plan, 'api', side_effect=self.issue_api), mock.patch.object(action_plan, 'pages', side_effect=comments):
+            owner = action_plan.failure_family_owner(
+                self.path, 'ST-001', fixture.REPO, [owned, unowned])
+        self.assertIsNone(owner)
+
+    def test_multiple_failures_all_owned_by_same_external_feature_route_together(self):
+        self.write(
+            fixture.feature('ST-001', status='in_progress', issue=445),
+            fixture.feature('ST-002', status='pending', issue=454),
+        )
+        first = self.record(root_cause_required=False)
+        second = dict(first, fingerprint='e' * 64, family='e' * 16)
+        tokens = [first['fingerprint'][:16], second['fingerprint'][:16]]
+        def comments(endpoint):
+            return [{'body': 'families ' + ' '.join(tokens)}] if '/issues/454/comments' in endpoint else []
+        with mock.patch.object(action_plan, 'api', side_effect=self.issue_api), mock.patch.object(action_plan, 'pages', side_effect=comments):
+            owner = action_plan.failure_family_owner(
+                self.path, 'ST-001', fixture.REPO, [first, second])
+        self.assertEqual(
+            {'feature': 'ST-002', 'issue': 454, 'matched_tokens': tokens}, owner)
+
     def test_plan_routes_first_occurrence_to_explicit_family_owner(self):
         self.write(
             fixture.feature('ST-001', status='in_progress', issue=445,
