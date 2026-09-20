@@ -267,7 +267,9 @@ describe("Earth experience hydration wiring", () => {
     // Switching Atlas remounts WorkspaceGate, so the one read must be keyed by
     // the stable user and the resolved session - never by the organization.
     expect(provider).toContain("}, [accountKey, sessionResolved]);");
-    expect(provider).not.toContain("organization");
+    // The identifier, not the word: the effect must not read an organization id
+    // anywhere, while prose about WorkspaceGate's remount is free to mention one.
+    expect(provider).not.toMatch(/organizationId|activeOrganization/);
   });
 });
 
