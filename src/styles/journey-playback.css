@@ -281,8 +281,16 @@
    there is to show. */
 .journey-playback[data-playback-chapter-density="single"] .journey-playback__stage,
 .journey-playback[data-playback-chapter-density="few"] .journey-playback__stage {
-  grid-template-rows: auto minmax(0, 1fr);
+  /* Keep a real media viewport even when a Route Point note is very long. */
+  grid-template-rows: minmax(0, 36%) minmax(0, 1fr);
   align-content: stretch;
+}
+
+.journey-playback[data-playback-chapter-density="single"] .journey-playback__stop,
+.journey-playback[data-playback-chapter-density="few"] .journey-playback__stop {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 /* The arrival beat's opening still: the same asset the media beat is about to

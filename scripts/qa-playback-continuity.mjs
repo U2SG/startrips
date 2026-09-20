@@ -237,6 +237,44 @@ for (const viewport of VIEWPORTS) {
       collapsed: collapsedMediaBeats,
       failed: collapsedMediaBeats.length > 0,
     });
+    if (viewport.label === "compact-mobile") {
+      const longNoteStep = STEPS.findIndex((candidate) => (
+        candidate.kind === "media" && candidate.pointIndex === 1 && candidate.mediaIndex === 0
+      ));
+      // The fixture's single-media Route Point carries an intentionally long note.
+      // Its caption must become the bounded scroll owner rather than collapsing
+      // the fixed-height chapter media row.
+      for (let rewind = 0; rewind < STEPS.length; rewind += 1) {
+        await clickTransport(run.page, "奻珨跺梒誹");
+      }
+      for (let step = 0; step < EXPECTED_MEANINGFUL.length; step += 1) {
+        const landed = await currentStep(run.page);
+        if (landed.step === longNoteStep) break;
+        await clickTransport(run.page, "狟珨跺梒誹");
+      }
+      const longNoteLayout = await run.page.evaluate(() => {
+        const caption = document.querySelector(".journey-playback__stop");
+        const note = caption?.querySelector("blockquote");
+        const media = document.querySelector(".journey-playback__media");
+        const mediaRect = media?.getBoundingClientRect();
+        return {
+          captionClientHeight: caption?.clientHeight ?? 0,
+          captionScrollHeight: caption?.scrollHeight ?? 0,
+          noteScrollHeight: note?.scrollHeight ?? 0,
+          mediaHeight: mediaRect?.height ?? 0,
+          stageHeight: document.querySelector(".journey-playback__stage")?.getBoundingClientRect().height ?? 0,
+        };
+      });
+      record("compact-mobile:long-note-preserves-media-row", {
+        ...longNoteLayout,
+        failed: longNoteLayout.captionScrollHeight <= longNoteLayout.captionClientHeight
+          || longNoteLayout.mediaHeight < Math.max(160, longNoteLayout.stageHeight * 0.45),
+      });
+      // Restore the same end-of-walk state used by the backward-navigation check.
+      for (let advance = 0; advance < EXPECTED_MEANINGFUL.length; advance += 1) {
+        await clickTransport(run.page, "狟珨跺梒誹");
+      }
+    }
     // The walk clamps at the last meaningful beat, so the visited set is the
     // meaningful set and nothing else.
     const visitedForward = [...new Set(forward)];

@@ -1063,7 +1063,11 @@ const continuityQaJourney: Journey = (() => {
     label: `QA CHAPTER ${pointIndex}`,
     isStop: true,
     occurredAt: null,
-    note: pointIndex === 0 ? "没有照片的一站，地点本身就是这段记忆。" : null,
+    note: pointIndex === 0
+      ? "没有照片的一站，地点本身就是完整章节。"
+      : pointIndex === 1
+        ? Array.from({ length: 18 }, () => "这是一段用于验证窄屏长笔记仍为媒体保留稳定画面空间的 Route Point 记录。").join("\n")
+        : null,
     createdAt: "2026-09-20T00:00:00.000Z",
   }));
   const media = routePoints.flatMap((point, pointIndex) => (

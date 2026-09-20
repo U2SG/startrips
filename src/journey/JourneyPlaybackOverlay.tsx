@@ -186,6 +186,17 @@ export function playbackMediaGate(
   return decodeReadiness?.status === "decoded" ? "ready" : "waiting";
 }
 
+export function playbackChapterOpeningUrl(
+  stepKind: PlaybackStep["kind"] | undefined,
+  asset: Pick<JourneyMediaAsset, "mimeType"> | null,
+  read: MediaRead | null | undefined,
+  decodeReadiness: DecodedReadiness | undefined,
+): string | null {
+  if (stepKind !== "stop" || !asset?.mimeType.startsWith("image/")) return null;
+  if (playbackMediaGate(read, decodeReadiness, true) !== "ready") return null;
+  return read?.status === "ready" ? read.url : null;
+}
+
 /**
  * #19 Journey Playback overlay.
  *
@@ -1208,11 +1219,14 @@ export function JourneyPlaybackOverlay({
   // reserved frame quiet until its own stage owns the runtime.
   const chapterOpeningAsset = chapterMedia[0] ?? null;
   const chapterOpeningRead = chapterOpeningAsset ? mediaReads[chapterOpeningAsset.id] : null;
-  const chapterOpeningUrl = step?.kind === "stop"
-    && chapterOpeningAsset?.mimeType.startsWith("image/")
-    && chapterOpeningRead?.status === "ready"
-    ? chapterOpeningRead.url
-    : null;
+  const chapterOpeningUrl = playbackChapterOpeningUrl(
+    step?.kind,
+    chapterOpeningAsset,
+    chapterOpeningRead,
+    chapterOpeningAsset?.mimeType.startsWith("image/")
+      ? decodeRegistryRef.current.readiness(chapterOpeningAsset.id)
+      : undefined,
+  );
   // Where the beat that is playing starts on the plan: a full remaining budget
   // means nothing of it has been consumed yet.
   const beatStartFraction = playbackProgressFraction(plan, director.stepIndex, 1, 1);
