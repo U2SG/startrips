@@ -1735,14 +1735,13 @@ export function JourneyStory({
     };
   }, [mobileLayout, mobileManageMode]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const previousMediaDeleteState = previousMediaDeleteStateRef.current;
     previousMediaDeleteStateRef.current = mediaDeleteState;
 
-    // Closing/canceling/successfully deleting are all the same semantic
-    // transition: a media-delete surface that owned focus became idle. Derive
-    // the restore intent from that transition instead of relying on whichever
-    // event or async continuation happened to call setMediaDeleteState().
+    // Capture this semantic transition before paint. Browser QA can observe
+    // the confirmation sheet and press Back before passive effects flush, so
+    // previous-state ownership cannot live in the later focus effect.
     if (
       previousMediaDeleteState !== "idle"
       && mediaDeleteState === "idle"
@@ -1751,7 +1750,9 @@ export function JourneyStory({
     ) {
       restoreMobileMediaDeleteFocusRef.current = true;
     }
+  }, [desktopEditing, mediaDeleteState, mobileLayout, mobileManageMode]);
 
+  useEffect(() => {
     if (!restoreMobileMediaDeleteFocusRef.current) return;
     if (mediaDeleteState !== "idle") return;
 
