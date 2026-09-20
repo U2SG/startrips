@@ -265,13 +265,24 @@
    media share this container across the arrival -> media seam, so entering a
    memory reflows one surface instead of swapping two full-screen ones. */
 /* `display: contents` on purpose. The chapter is a semantic grouping, not a
-   new box: its caption and its media region stay direct items of
-   `.journey-playback__stage`, so the media stage keeps exactly the sizing
-   context it had before the chapter existed. A real box here would give the
-   stage a second, collapsible height source. */
+   new box: its caption and its media stay direct items of
+   `.journey-playback__stage`, which is the only element that can hand the
+   media a height. `.playback-media-presentation`'s slots are absolutely
+   positioned, so the presentation contributes no content height of its own and
+   a wrapper box in between would collapse it to zero. */
 .journey-playback__chapter,
 .journey-playback__chapter-media {
   display: contents;
+}
+
+/* A populated chapter is caption + media in the one stage: the caption takes
+   the space it needs and the memory takes the rest. An `empty` chapter keeps
+   the stage's ordinary centred single-item layout, because the place is all
+   there is to show. */
+.journey-playback[data-playback-chapter-density="single"] .journey-playback__stage,
+.journey-playback[data-playback-chapter-density="few"] .journey-playback__stage {
+  grid-template-rows: auto minmax(0, 1fr);
+  align-content: stretch;
 }
 
 /* The arrival beat's opening still: the same asset the media beat is about to
