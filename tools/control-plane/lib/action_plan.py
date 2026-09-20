@@ -111,13 +111,14 @@ def derive(row, pr=None, relation=None, review=None, ci=None, source_verdict='MI
 def failure_family_owner(path, fid, repo, records):
     """Return the unique nonterminal ONE feature whose mapped issue proves ownership.
 
-    Ownership is evidence-derived, never inferred from lane/name similarity. Only
-    an exact CI fingerprint (full or 16-char prefix) present in that feature's
-    GitHub issue body/comments proves the mapping. Ambiguity is UNKNOWN.
+    Ownership is evidence-derived, never inferred from lane/name similarity. An
+    exact non-infrastructure CI fingerprint (full or 16-char prefix) present in an
+    active feature's GitHub issue body/comments proves the mapping even on the
+    first observed occurrence. Ambiguity is UNKNOWN.
     """
     tokens = set()
     for record in records:
-        if not record.get('root_cause_required'):
+        if record.get('infrastructure'):
             continue
         fingerprint = record.get('fingerprint')
         family = record.get('family')
@@ -197,11 +198,12 @@ def plan(path, fid, repo, *, record_failures=False):
     if result['action'] == 'REPAIR_CI' and record_failures:
         records = observe_failures(root, repo, ci)
         result['failure_evidence'] = records
-        if any(r['root_cause_required'] for r in records):
+        owner = failure_family_owner(path, fid, repo, records)
+        if owner:
             result['action'] = 'REPAIR_CI_FAMILY'
-            owner = failure_family_owner(path, fid, repo, records)
-            if owner:
-                result['failure_family_owner'] = owner
+            result['failure_family_owner'] = owner
+        elif any(r['root_cause_required'] for r in records):
+            result['action'] = 'REPAIR_CI_FAMILY'
     final = api(prefix)
     if final['head']['sha'] != pr['head']['sha'] or final['state'] != pr['state'] or final.get('merged') != pr.get('merged'):
         raise EvidenceUnknown('PR lifecycle changed during planning')
