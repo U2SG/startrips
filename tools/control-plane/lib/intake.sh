@@ -241,13 +241,18 @@ intake_triage() {
   set +e
   (
     cd "$INTAKE_ROOT" || exit 1
+    # Write model output from the surviving child directly to the invocation log.
+    # If the outer Codexless/scheduler carrier disappears, MSYS may leave this
+    # sh/claude process alive; a parent-owned tee pipe then loses all evidence.
+    # A direct file descriptor stays valid for the child's lifetime.
     claude_run --setting-sources project --strict-mcp-config --agent startrips-triage --dangerously-skip-permissions --model sonnet \
       --output-format text \
       -p "$prompt" \
-      2>&1
-  ) | tee "$INTAKE_LAST_LOG"
-  triage_rc=${PIPESTATUS[0]}
+      >"$INTAKE_LAST_LOG" 2>&1
+  )
+  triage_rc=$?
   set -e
+  cat "$INTAKE_LAST_LOG"
   quota_stop "$INTAKE_LAST_LOG" "triage"
   # An API failure leaves no marker block; without this it would be recorded
   # as `triage output invalid` and the issue skipped until a human clears it
