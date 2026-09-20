@@ -1822,10 +1822,7 @@ export function JourneyStory({
 
     const focusCurrentOwner = () => {
       // Stop if this Story no longer owns the compact Manage surface.
-      if (
-        !restoreMobileMediaDeleteFocusRef.current
-        || previousMediaDeleteStateRef.current !== "idle"
-      ) {
+      if (!restoreMobileMediaDeleteFocusRef.current) {
         mediaDeleteFocusFrameRef.current = null;
         return;
       }
