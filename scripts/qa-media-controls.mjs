@@ -1175,6 +1175,19 @@ try {
     // Menu -> delete is a replacement, not a nested history layer. One Back
     // closes delete directly to Manage; a second Back must leave Manage without
     // exposing or traversing a stale media-menu history entry.
+    await story.page.evaluate(() => {
+      const events = [];
+      const describe = (element) => ({
+        tag: element?.tagName ?? null,
+        className: element?.getAttribute?.("class") ?? null,
+        ariaLabel: element?.getAttribute?.("aria-label") ?? null,
+        text: element?.textContent?.trim().slice(0, 80) ?? null,
+      });
+      window.__startripsMediaDeleteFocusEvents = events;
+      document.addEventListener("focusin", (event) => {
+        events.push({ at: performance.now(), target: describe(event.target) });
+      }, { capture: true });
+    });
     await story.page.evaluate(() => window.history.back());
     await deleteSheet.waitFor({ state: "detached" });
     try {
@@ -1211,6 +1224,7 @@ try {
           triggerCount: triggers.length,
           triggers,
           historyState: window.history.state,
+          focusEvents: window.__startripsMediaDeleteFocusEvents ?? [],
         };
       });
       throw new Error(
