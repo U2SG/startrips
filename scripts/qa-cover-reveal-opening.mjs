@@ -490,13 +490,26 @@ try {
         undefined,
         { timeout: 20_000 },
       );
+      // Each sampled colour is bracketed by the renderer's own report of what
+      // it was compositing, so a sample the reveal moved through can be told
+      // apart from one taken wholly inside a single frame identity.
       const opened = [];
+      const samples = [];
       for (let attempt = 0; attempt < 6; attempt += 1) {
-        const stillRevealing = await page.evaluate(() => document.querySelector(
+        const before = await page.evaluate(() => {
+          const stage = document.querySelector(".living-atlas__active-media-reveal");
+          return {
+            revealing: stage?.getAttribute("data-cover-reveal-phase") === "revealing",
+            composited: stage?.getAttribute("data-cover-reveal-composited") ?? "",
+          };
+        });
+        if (!before.revealing) break;
+        const color = classify(await compositedColor(page, REVEAL_PROBE));
+        const after = await page.evaluate(() => document.querySelector(
           ".living-atlas__active-media-reveal",
-        )?.getAttribute("data-cover-reveal-phase") === "revealing");
-        if (!stillRevealing) break;
-        opened.push(classify(await compositedColor(page, REVEAL_PROBE)));
+        )?.getAttribute("data-cover-reveal-composited") ?? "");
+        opened.push(color);
+        samples.push({ composited: before.composited === after ? before.composited : "moved", color });
       }
       check(
         `${label}/derivative-was-actually-fetched`,
@@ -518,15 +531,25 @@ try {
       // colours stay attached, so which cover identity was actually on screen
       // is still reported.
       const composited = await page.evaluate(() => window.__qaCompositedFrames ?? []);
+      // The rendered pixels stay in the first-frame verdict: a sample the
+      // renderer spent entirely on a frame that has not reached the canonical
+      // cover must still LOOK like the opening image at a probe the mask
+      // crosses last, so a swapped or skipped draw is caught. A sample whose
+      // window the reveal moved through grades nothing, because grading it is
+      // exactly the defect.
+      const gradable = samples.filter((sample) => sample.composited !== "moved"
+        && sample.composited !== ""
+        && sample.composited !== "original-cover");
       check(
         `${label}/first-frame-is-the-derivative`,
-        composited[0] === "generated-first",
-        { composited, opened },
+        composited[0] === "generated-first"
+          && (gradable.length === 0 || gradable.some((sample) => sample.color === "derivative")),
+        { composited, opened, samples },
       );
       check(
         `${label}/the-reveal-actually-transitions`,
         composited.includes("generated-first") && composited.at(-1) !== "generated-first",
-        { composited, opened },
+        { composited, opened, samples },
       );
       const settled = await coverState(page);
       const settledColor = classify(await compositedColor(page));
