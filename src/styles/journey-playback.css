@@ -261,6 +261,64 @@
   white-space: pre-wrap;
 }
 
+/* #456: one Route Point is one chapter. The arrival caption and the chapter's
+   media share this container across the arrival -> media seam, so entering a
+   memory reflows one surface instead of swapping two full-screen ones. */
+/* `display: contents` on purpose. The chapter is a semantic grouping, not a
+   new box: its caption and its media stay direct items of
+   `.journey-playback__stage`, which is the only element that can hand the
+   media a height. `.playback-media-presentation`'s slots are absolutely
+   positioned, so the presentation contributes no content height of its own and
+   a wrapper box in between would collapse it to zero. */
+.journey-playback__chapter,
+.journey-playback__chapter-media {
+  display: contents;
+}
+
+/* A populated chapter is caption + media in the one stage: the caption takes
+   the space it needs and the memory takes the rest. An `empty` chapter keeps
+   the stage's ordinary centred single-item layout, because the place is all
+   there is to show. */
+.journey-playback[data-playback-chapter-density="single"] .journey-playback__stage,
+.journey-playback[data-playback-chapter-density="few"] .journey-playback__stage {
+  /* Keep a real media viewport even when a Route Point note is very long. */
+  grid-template-rows: minmax(0, 36%) minmax(0, 1fr);
+  align-content: stretch;
+}
+
+.journey-playback[data-playback-chapter-density="single"] .journey-playback__stop,
+.journey-playback[data-playback-chapter-density="few"] .journey-playback__stop {
+  min-height: 0;
+  height: 100%;
+  max-height: 100%;
+  align-self: stretch;
+  box-sizing: border-box;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* The arrival beat's opening still: the same asset the media beat is about to
+   own, already decoded, so the seam has no blank frame to enter from. */
+.journey-playback__chapter-opening {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+/* The caption recedes while its own media owns the frame. It never unmounts —
+   that is what keeps a populated chapter reading as one continuous beat. */
+.journey-playback__stop {
+  transition:
+    opacity 320ms var(--motion-ease-in-out-spatial, ease),
+    transform 320ms var(--motion-ease-in-out-spatial, ease);
+}
+
+.journey-playback__stop.is-receded {
+  opacity: 0.72;
+  transform: scale(0.84);
+  transform-origin: center top;
+}
+
 /* Media: the fullscreen stage. */
 .journey-playback__media {
   width: 100%;
@@ -493,6 +551,12 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  /* #456: Reduced Motion changes only the presentation of the seam. The same
+     caption and the same media region mount in the same chapter order. */
+  .journey-playback__stop {
+    transition: none;
+  }
+
   .journey-playback__route-hint span,
   .journey-playback__soundtrack.is-playing .journey-playback__soundtrack-light span {
     animation: none;

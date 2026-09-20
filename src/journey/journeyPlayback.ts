@@ -103,6 +103,40 @@ export type PlaybackStep =
   | { kind: "home-epilogue"; cameraTarget: HomeNarrativeCameraTarget }
   | { kind: "outro"; cameraTarget?: HomeNarrativeCameraTarget };
 
+/**
+ * #456: how much media one Route Point chapter carries.
+ *
+ * Sparse only, on purpose. This slice owns chapter continuity for 0 / 1 / 2-3
+ * media; the dense slices under #126 (4-9 stack/peek, 10+ album rhythm) will
+ * split `few` further, so 4+ deliberately lands in `few` today rather than
+ * introducing a fourth member this slice cannot honour.
+ */
+export type RoutePointChapterDensity = "empty" | "single" | "few";
+
+/**
+ * The density of an already-resolved chapter media list.
+ *
+ * Internal so there is exactly ONE media-order authority: every caller either
+ * holds the list `playbackMediaForPoint` produced (the `stop` step carries it)
+ * or goes through `routePointChapterDensity`, which calls that same resolver.
+ */
+function chapterDensityForMedia(
+  media: readonly JourneyMediaAsset[],
+): RoutePointChapterDensity {
+  if (media.length === 0) return "empty";
+  if (media.length === 1) return "single";
+  return "few";
+}
+
+/** The sparse chapter density of one Route Point, derived only from
+ * `playbackMediaForPoint` — no second media order is introduced. */
+export function routePointChapterDensity(
+  journey: Journey,
+  pointIndex: number,
+): RoutePointChapterDensity {
+  return chapterDensityForMedia(playbackMediaForPoint(journey, pointIndex));
+}
+
 export type PlaybackTravelChoreography = "nearby" | "regional" | "long-haul";
 
 export type PlaybackCameraTarget =
@@ -321,11 +355,25 @@ export function isPlaybackTerminalState(state: PlaybackState): boolean {
   return state.phase.type === "completed";
 }
 
+/**
+ * Whether manual next / previous may land on this beat.
+ *
+ * Travel is internal bookkeeping (#126). From #456 the arrival `stop` of a
+ * populated chapter is too: the place caption and its media are one chapter, so
+ * exposing the arrival as its own destination made the viewer click twice to
+ * reach the memory. The stop beat still plays in the automatic stream, and an
+ * `empty` chapter keeps it as its sole destination — there the place IS the
+ * memory. The density comes from the step's own `media`, which
+ * `buildPlaybackSteps` filled from `playbackMediaForPoint`.
+ */
 export function isMeaningfulPlaybackStep(step: PlaybackStep | undefined): boolean {
-  return Boolean(step && step.kind !== "travel");
+  if (!step) return false;
+  if (step.kind === "travel") return false;
+  if (step.kind === "stop") return chapterDensityForMedia(step.media) === "empty";
+  return true;
 }
 
-/** The indexes of the beats next / back may land on: everything but travel. */
+/** The indexes of the beats next / back may land on. */
 export function meaningfulPlaybackStepIndexes(steps: readonly PlaybackStep[]): number[] {
   return steps.flatMap((step, index) => (isMeaningfulPlaybackStep(step) ? [index] : []));
 }

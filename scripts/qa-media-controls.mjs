@@ -3677,8 +3677,15 @@ try {
   try {
     await playback.page.locator(".journey-playback").waitFor({ state: "visible" });
     const next = playback.page.getByRole("button", { name: "下一个章节" });
-    await next.click();
-    await next.click();
+    // #456: the arrival of a populated chapter is no longer its own manual
+    // destination, so the number of clicks to the video beat is a property of
+    // the fixture's density, not a constant. Advance until the media beat owns
+    // the stage instead of assuming a count that the grammar can move again.
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      if (await playback.page.locator(".playback-media-presentation").count() === 1) break;
+      await next.click();
+      await playback.page.waitForTimeout(80);
+    }
     const playbackPresentation = playback.page.locator(".playback-media-presentation");
     await playbackPresentation.waitFor({ state: "visible", timeout: 5_000 });
     await playback.page.locator('.playback-media-presentation[data-media-presentation="settled"]')

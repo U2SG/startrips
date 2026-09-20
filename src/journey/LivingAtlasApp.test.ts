@@ -47,7 +47,7 @@ import {
   resolveUnknownCreateObservationOwnership,
   showsGlobeDetailControls,
 } from "./LivingAtlasApp";
-import { playbackHoldReason, playbackMediaGate } from "./JourneyPlaybackOverlay";
+import { playbackChapterOpeningUrl, playbackHoldReason, playbackMediaGate } from "./JourneyPlaybackOverlay";
 import { resolvePlaybackReturn } from "./playbackReturn";
 import { buildJourneyTimeline, resolveJourneyTimelineSelection } from "./globeTimeline";
 import type { HomeBasePeriod } from "./homeBase";
@@ -1314,6 +1314,28 @@ describe("playbackMediaGate (PR #24 review)", () => {
     expect(playbackMediaGate(ready, { status: "error", message: "decode failed" }, true))
       .toBe("error");
     expect(playbackMediaGate(ready, { status: "decoded" }, true)).toBe("ready");
+  });
+});
+
+describe("playbackChapterOpeningUrl (#456 review)", () => {
+  const ready = {
+    status: "ready" as const,
+    url: "signed-image",
+    issuedAt: 0,
+    expiresAt: 900_000,
+  };
+  const image = { mimeType: "image/jpeg" };
+
+  it("reveals the opening still only after the first image is decoded", () => {
+    expect(playbackChapterOpeningUrl("stop", image, ready, { status: "pending" })).toBeNull();
+    expect(playbackChapterOpeningUrl("stop", image, ready, { status: "decoded" })).toBe("signed-image");
+  });
+
+  it("renders no opening still after decode failure or outside the arrival beat", () => {
+    expect(playbackChapterOpeningUrl("stop", image, ready, { status: "error", message: "decode failed" }))
+      .toBeNull();
+    expect(playbackChapterOpeningUrl("media", image, ready, { status: "decoded" })).toBeNull();
+    expect(playbackChapterOpeningUrl("stop", { mimeType: "video/mp4" }, ready, undefined)).toBeNull();
   });
 });
 

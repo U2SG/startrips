@@ -11,7 +11,12 @@ import { useCompactMobileLayout } from "./journey/mobileLayout";
 import { JourneyComposer } from "./journey/JourneyComposer";
 import { JourneyStory } from "./journey/JourneyStory";
 import { JourneyPlaybackOverlay } from "./journey/JourneyPlaybackOverlay";
-import { playbackMediaForPoint, type PlaybackStep } from "./journey/journeyPlayback";
+import {
+  playbackCameraTargetKey,
+  playbackMediaForPoint,
+  type PlaybackCameraTarget,
+  type PlaybackStep,
+} from "./journey/journeyPlayback";
 import { PLAYBACK_INITIAL_TEMPO } from "./journey/useJourneyPlaybackDirector";
 import type { PlaybackTempo } from "./journey/journeyPlaybackPlan";
 import {
@@ -1045,6 +1050,83 @@ function JourneyPlaybackPrefetchQaPreview() {
   );
 }
 
+// #456: the sparse-chapter continuity fixture — three consecutive Route Points
+// carrying 0, 1 and 3 Route Point Media, which is exactly the density grammar
+// `routePointChapterDensity` classifies. The lane needs the camera commands the
+// overlay issues, and this preview is the only place that owns them, so it
+// records each one instead of discarding it like the other playback previews.
+const CONTINUITY_QA_MEDIA_COUNTS = [0, 1, 3];
+
+const continuityQaJourneyId = "00000000-0000-4000-8000-000000000456";
+const continuityQaJourney: Journey = (() => {
+  const routePoints = CONTINUITY_QA_MEDIA_COUNTS.map((_unused, pointIndex) => ({
+    id: `st109-point-${pointIndex}`,
+    journeyId: continuityQaJourneyId,
+    sortOrder: pointIndex,
+    latitude: 1.290256 + pointIndex * 2.2,
+    longitude: 103.851471 + pointIndex * 2.6,
+    label: `QA CHAPTER ${pointIndex}`,
+    isStop: true,
+    occurredAt: null,
+    note: pointIndex === 0
+      ? "没有照片的一站，地点本身就是完整章节。"
+      : pointIndex === 1
+        ? Array.from({ length: 18 }, () => "这是一段用于验证窄屏长笔记仍为媒体保留稳定画面空间的 Route Point 记录。").join("\n")
+        : null,
+    createdAt: "2026-09-20T00:00:00.000Z",
+  }));
+  const media = routePoints.flatMap((point, pointIndex) => (
+    Array.from({ length: CONTINUITY_QA_MEDIA_COUNTS[pointIndex] }, (_unused, mediaIndex) => ({
+      id: `st109-p${pointIndex}-m${mediaIndex}`,
+      journeyId: continuityQaJourneyId,
+      routePointId: point.id,
+      storageDriver: "qa",
+      storageKey: `qa/continuity-${pointIndex}-${mediaIndex}`,
+      fileName: `continuity-${pointIndex}-${mediaIndex}.png`,
+      mimeType: "image/png",
+      bytes: 68,
+      sortOrder: pointIndex * 10 + mediaIndex,
+      uploadedByUserId: storyQaJourney.createdByUserId,
+      createdAt: "2026-09-20T00:00:00.000Z",
+    }))
+  ));
+  return {
+    ...storyQaJourney,
+    id: continuityQaJourneyId,
+    title: "QA · PLAYBACK CONTINUITY",
+    note: "",
+    routePoints,
+    media,
+  };
+})();
+
+type ContinuityQaTrace = { cameraTargets: { key: string; at: number }[] };
+
+function JourneyPlaybackContinuityQaPreview() {
+  const params = new URLSearchParams(window.location.search);
+  // Reduced Motion is a run parameter here, not a constant: acceptance 6 is
+  // only observable if the SAME fixture can be played both ways.
+  const reduceMotion = params.get("qaReduceMotion") !== "0";
+  const recordCameraTarget = useCallback((target: PlaybackCameraTarget) => {
+    const store = window as unknown as { __qaPlaybackContinuity?: ContinuityQaTrace };
+    const trace = store.__qaPlaybackContinuity ?? { cameraTargets: [] };
+    store.__qaPlaybackContinuity = trace;
+    trace.cameraTargets.push({ key: playbackCameraTargetKey(target), at: Date.now() });
+  }, []);
+  return (
+    <main className="living-atlas">
+      <div className="living-atlas__globe journey-story-qa__backdrop" aria-hidden="true" />
+      <JourneyPlaybackOverlay
+        journey={continuityQaJourney}
+        onClose={() => undefined}
+        onCameraTargetChange={recordCameraTarget}
+        playbackMode="full"
+        reduceMotion={reduceMotion}
+      />
+    </main>
+  );
+}
+
 function BrandSignatureMotionQaPreview() {
   return (
     <main className="auth-gate auth-gate--brand-loading" data-qa-brand-signature-motion="true">
@@ -1091,7 +1173,11 @@ const Experience = import.meta.env.DEV && qaState === "journey-composer"
     // sibling mode of the playback preview rather than a change to it.
     ? (new URLSearchParams(window.location.search).get("qaMode") === "prefetch"
       ? JourneyPlaybackPrefetchQaPreview
-      : JourneyPlaybackQaPreview)
+      // #456: the sparse 0/1/3-media continuity fixture is a sibling mode too,
+      // so the lanes already grading the default preview keep their fixture.
+      : new URLSearchParams(window.location.search).get("qaMode") === "continuity"
+        ? JourneyPlaybackContinuityQaPreview
+        : JourneyPlaybackQaPreview)
   : import.meta.env.DEV && qaState === "journey-routes"
     ? JourneyRoutesQaPreview
   : import.meta.env.DEV && (qaState === "globe-controls" || qaState === "globe-controls-gateway")
