@@ -1075,6 +1075,7 @@ export function JourneyStory({
   const mobileManageDoneRef = useRef<HTMLButtonElement>(null);
   const mobileManageViewerTriggerRef = useRef<HTMLButtonElement>(null);
   const mobileManageFocusFrameRef = useRef<number | null>(null);
+  const mediaDeleteFocusFrameRef = useRef<number | null>(null);
   const restoreMobileManageViewerFocusRef = useRef(false);
   const restoreMobileMediaDeleteFocusRef = useRef(false);
   const [mobileMediaMenuOpen, setMobileMediaMenuOpen] = useState(false);
@@ -1807,35 +1808,88 @@ export function JourneyStory({
 
     // This effect is deliberately declared after the normal Manage focus
     // effect. If Manage ownership was established in the same commit, its
-    // two-frame handoff has already been scheduled and can be cancelled here
-    // before the current media trigger becomes the final focus owner.
-    restoreMobileMediaDeleteFocusRef.current = false;
+    // two-frame handoff has already been scheduled and can be cancelled here.
+    // Keep restore intent alive until the current media trigger is both visible
+    // and actually owns document.activeElement.
     if (mobileManageFocusFrameRef.current !== null) {
       window.cancelAnimationFrame(mobileManageFocusFrameRef.current);
       mobileManageFocusFrameRef.current = null;
     }
 
-    const target = mobileManageViewerTriggerRef.current ?? mobileManageDoneRef.current;
     const debugWindow = typeof window !== "undefined"
       ? window as Window & { __startripsMediaDeleteFocusDebug?: Record<string, unknown> }
       : null;
-    if (debugWindow) {
-      debugWindow.__startripsMediaDeleteFocusDebug = {
-        ...debugWindow.__startripsMediaDeleteFocusDebug,
-        targetExists: Boolean(target),
-        targetConnected: target?.isConnected ?? false,
-        targetInert: Boolean(target?.closest("[inert]")),
-        targetVisibility: target ? getComputedStyle(target).visibility : null,
-        activeBeforeFocus: document.activeElement?.getAttribute?.("aria-label") ?? document.activeElement?.tagName ?? null,
-      };
+
+    const focusCurrentOwner = () => {
+      // Stop if this Story no longer owns the compact Manage surface.
+      if (
+        !restoreMobileMediaDeleteFocusRef.current
+        || previousMediaDeleteStateRef.current !== "idle"
+      ) {
+        mediaDeleteFocusFrameRef.current = null;
+        return;
+      }
+
+      const target = mobileManageViewerTriggerRef.current ?? mobileManageDoneRef.current;
+      const style = target ? getComputedStyle(target) : null;
+      const targetReady = Boolean(
+        target
+        && target.isConnected
+        && !target.closest("[inert]")
+        && style?.visibility !== "hidden"
+        && style?.display !== "none"
+        && target.getClientRects().length > 0
+      );
+
+      if (debugWindow) {
+        debugWindow.__startripsMediaDeleteFocusDebug = {
+          ...debugWindow.__startripsMediaDeleteFocusDebug,
+          targetExists: Boolean(target),
+          targetConnected: target?.isConnected ?? false,
+          targetInert: Boolean(target?.closest("[inert]")),
+          targetVisibility: style?.visibility ?? null,
+          targetDisplay: style?.display ?? null,
+          targetRectCount: target?.getClientRects().length ?? 0,
+          activeBeforeFocus: document.activeElement?.getAttribute?.("aria-label")
+            ?? document.activeElement?.tagName
+            ?? null,
+        };
+      }
+
+      if (!targetReady || !target) {
+        mediaDeleteFocusFrameRef.current = window.requestAnimationFrame(focusCurrentOwner);
+        return;
+      }
+
+      target.focus({ preventScroll: true });
+      if (document.activeElement !== target) {
+        mediaDeleteFocusFrameRef.current = window.requestAnimationFrame(focusCurrentOwner);
+        return;
+      }
+
+      restoreMobileMediaDeleteFocusRef.current = false;
+      mediaDeleteFocusFrameRef.current = null;
+      if (debugWindow) {
+        debugWindow.__startripsMediaDeleteFocusDebug = {
+          ...debugWindow.__startripsMediaDeleteFocusDebug,
+          activeAfterFocus: target.getAttribute("aria-label") ?? target.tagName,
+          focusRestored: true,
+        };
+      }
+    };
+
+    if (mediaDeleteFocusFrameRef.current !== null) {
+      window.cancelAnimationFrame(mediaDeleteFocusFrameRef.current);
+      mediaDeleteFocusFrameRef.current = null;
     }
-    target?.focus({ preventScroll: true });
-    if (debugWindow) {
-      debugWindow.__startripsMediaDeleteFocusDebug = {
-        ...debugWindow.__startripsMediaDeleteFocusDebug,
-        activeAfterFocus: document.activeElement?.getAttribute?.("aria-label") ?? document.activeElement?.tagName ?? null,
-      };
-    }
+    focusCurrentOwner();
+
+    return () => {
+      if (mediaDeleteFocusFrameRef.current !== null) {
+        window.cancelAnimationFrame(mediaDeleteFocusFrameRef.current);
+        mediaDeleteFocusFrameRef.current = null;
+      }
+    };
   }, [desktopEditing, mediaDeleteState, mobileLayout, mobileManageMode]);
 
   useEffect(() => {
