@@ -108,8 +108,8 @@ describe("mobile media delete focus ownership (#427)", () => {
     );
     expect(trapStart).toBeGreaterThan(0);
     expect(transitionStart).toBeGreaterThan(trapStart);
-    expect(manageFocusStart).toBeGreaterThan(transitionStart);
-    expect(restoreStart).toBeGreaterThan(manageFocusStart);
+    expect(transitionStart).toBeGreaterThan(manageFocusStart);
+    expect(restoreStart).toBeGreaterThan(transitionStart);
 
     const transitionSource = source.slice(transitionStart - 80, transitionStart + 900);
     expect(transitionSource).toContain("useLayoutEffect(() =>");
