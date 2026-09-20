@@ -171,8 +171,14 @@ def observe_failures(root, repo, ci):
             if history.exists():
                 for item in history.glob('failure-*.json'):
                     data = json.loads(item.read_bytes())
-                    if (data.get('parser_version') == record['parser_version']
-                            and data['repo'] == repo and data['family'] == record['family']):
+                    if data.get('repo') != repo:
+                        continue
+                    same_exact_fingerprint = data.get('fingerprint') == record['fingerprint']
+                    same_current_family = (
+                        data.get('parser_version') == record['parser_version']
+                        and data.get('family') == record['family']
+                    )
+                    if same_exact_fingerprint or same_current_family:
                         old.append(data)
             identities = {(r['run_id'], r['attempt'], r['job_id']) for r in old}
             identities.add((record['run_id'], record['attempt'], record['job_id']))

@@ -138,11 +138,26 @@ class FingerprintCases(fixture.SyntheticOne):
         history.mkdir(parents=True, exist_ok=True)
         (history / 'failure-old-v2.json').write_text(json.dumps({
             'parser_version': 2, 'repo': 'synthetic/project', 'family': 'city-label-anchoring',
+            'fingerprint': 'old-family-only-fingerprint',
             'run_id': 99, 'attempt': 1, 'job_id': 99,
         }), encoding='utf-8')
         result = self.record()
         self.assertEqual(ci.PARSER_VERSION, result['parser_version'])
         self.assertEqual(1, result['family_occurrences'])
+
+    def test_exact_fingerprint_survives_parser_version_change(self):
+        history = self.root / '.agent-artifacts/ci-failures'
+        history.mkdir(parents=True, exist_ok=True)
+        current = ci.normalize_failure(self.failed(),
+            'AssertionError: Hong Kong label; fixture=city viewport=1280x720 DPR=3')
+        (history / 'failure-old-v2.json').write_text(json.dumps({
+            'parser_version': 2, 'repo': 'synthetic/project', 'family': 'legacy-family-name',
+            'fingerprint': current['fingerprint'],
+            'run_id': 99, 'attempt': 1, 'job_id': 99,
+        }), encoding='utf-8')
+        result = self.record()
+        self.assertEqual(2, result['family_occurrences'])
+        self.assertTrue(result['root_cause_required'])
 
     def test_same_observation_does_not_count_twice(self):
         self.record(); result = self.record()
