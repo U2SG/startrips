@@ -1469,6 +1469,13 @@ async function verifyAccountDock() {
       }
       await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
     });
+    // #332: the Earth experience hydration read every signed-in mount issues.
+    // Unstubbed it falls through to no API and logs a 500 the console assertions catch.
+    await page.route("**/api/account-preferences/earth-experience", (route) => route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ earthExperience: "default", revision: 0, updatedAt: null }),
+    }));
     await page.route("**/api/atlases/current", (route) => route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -2184,6 +2191,13 @@ async function verifyFinalAcceptanceMobileFlow() {
         }
         await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
       });
+      // #332: the Earth experience hydration read every signed-in mount issues.
+      // Unstubbed it falls through to no API and logs a 500 the console assertions catch.
+      await page.route("**/api/account-preferences/earth-experience", (route) => route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ earthExperience: "default", revision: 0, updatedAt: null }),
+      }));
       await page.route("**/api/atlases/current", (route) => route.fulfill({
         status: 200,
         contentType: "application/json",

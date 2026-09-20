@@ -1,12 +1,12 @@
 # Account Earth experience preference
 
-The durable half of #332. `#331` / `src/scene/earthDive.ts` already owns what
-`particle-only` *means* at runtime; this document describes where the value
-lives, who may read or change it, and what a client can trust about the answer.
+#332. `#331` / `src/scene/earthDive.ts` owns what `particle-only` *means* at
+runtime; this document describes where the value lives, who may read or change
+it, what a client can trust about the answer, and — since #332's client half
+landed — how the browser turns that answer into the policy the Dive reads.
 
-The client account-menu surface, the hydration and cache strategy, and wiring
-the stored value into the Dive are deliberately **not** part of this contract.
-Nothing in the product reads this preference yet.
+The storage and API contract below was built first (#387) and is unchanged. The
+client surface it deferred is now implemented: see *The client half* at the end.
 
 ## What the value is
 
@@ -109,3 +109,37 @@ Journey or Route data, no Home Base history, no Everyday Fragment, no renderer
 availability and no Reduced Motion state. It is covered by
 `server/tests/account-preferences.integration.test.ts`, which snapshots the
 Atlas row and the `GET /api/journeys` payload across two writes.
+
+## The client half
+
+The browser side is `src/journey/earthExperiencePreferenceState.ts` (every rule,
+pure or taking its `fetch` as an argument) and `src/journey/EarthExperienceProvider.tsx`
+(the React session wiring and the account-menu entry). Three decisions are worth
+stating here because they are what the contract above is *for*:
+
+- **The provider is mounted around `AuthGateway`, above the per-Atlas
+  `WorkspaceGate`.** The preference belongs to the person, so the one read is
+  keyed by the stable Better Auth user and the resolved session — never by the
+  organization. Switching Atlas remounts the workspace and re-reads nothing.
+  `src/main.tsx` resolves the value once and threads it through
+  `LivingAtlasApp` into `LivingAtlasGlobe` as the single `earthExperiencePolicy`
+  input, replacing the hardcoded `default` that used to make the stored value
+  unreadable by the product.
+- **Unresolved is not `default`.** While the `GET` is in flight the effective
+  policy is `particle-only`, the particle-interactive-safe state: adopting
+  `default` optimistically would preload and mount a detailed Earth for somebody
+  who chose never to load one, and then retract it. Only a `200` — including the
+  `revision: 0` answer that confirms no stored row — adopts `default`, and a
+  failed read never becomes a value, so it cannot turn a known `particle-only`
+  Earth back into a detailed one.
+- **A guest has no reader.** `/share#<token>` is mounted outside the provider
+  entirely, so that tree issues no `GET` and holds no writer; it uses `default`.
+  This is the client-side companion to the server's 401, not a substitute for it.
+
+Account isolation is enforced at the state level rather than by cancellation
+alone: the moment the session names a different user the previous value, its
+revision and its save state are discarded, and any response still in flight for
+the account the tree has left is dropped on arrival. A write reports whether the
+value is **durable**, never optimistically, so a failed or offline save leaves
+the effective policy on the last value that actually reached storage and says so
+in the account menu.
