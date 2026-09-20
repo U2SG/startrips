@@ -1738,6 +1738,18 @@ export function JourneyStory({
   useLayoutEffect(() => {
     const previousMediaDeleteState = previousMediaDeleteStateRef.current;
     previousMediaDeleteStateRef.current = mediaDeleteState;
+    if (typeof window !== "undefined") {
+      (window as Window & { __startripsMediaDeleteFocusDebug?: Record<string, unknown> })
+        .__startripsMediaDeleteFocusDebug = {
+          phase: "transition",
+          previousMediaDeleteState,
+          mediaDeleteState,
+          mobileLayout,
+          mobileManageMode,
+          desktopEditing,
+          intentBefore: restoreMobileMediaDeleteFocusRef.current,
+        };
+    }
 
     // Capture this semantic transition before paint. Browser QA can observe
     // the confirmation sheet and press Back before passive effects flush, so
@@ -1750,9 +1762,32 @@ export function JourneyStory({
     ) {
       restoreMobileMediaDeleteFocusRef.current = true;
     }
+    if (typeof window !== "undefined") {
+      const debugWindow = window as Window & {
+        __startripsMediaDeleteFocusDebug?: Record<string, unknown>;
+      };
+      debugWindow.__startripsMediaDeleteFocusDebug = {
+        ...debugWindow.__startripsMediaDeleteFocusDebug,
+        intentAfter: restoreMobileMediaDeleteFocusRef.current,
+      };
+    }
   }, [desktopEditing, mediaDeleteState, mobileLayout, mobileManageMode]);
 
   useEffect(() => {
+    if (typeof window !== "undefined") {
+      const debugWindow = window as Window & {
+        __startripsMediaDeleteFocusDebug?: Record<string, unknown>;
+      };
+      debugWindow.__startripsMediaDeleteFocusDebug = {
+        ...debugWindow.__startripsMediaDeleteFocusDebug,
+        restoreEffectEntered: true,
+        restoreIntent: restoreMobileMediaDeleteFocusRef.current,
+        restoreState: mediaDeleteState,
+        restoreMobileLayout: mobileLayout,
+        restoreMobileManageMode: mobileManageMode,
+        restoreDesktopEditing: desktopEditing,
+      };
+    }
     if (!restoreMobileMediaDeleteFocusRef.current) return;
     if (mediaDeleteState !== "idle") return;
 
@@ -1781,7 +1816,26 @@ export function JourneyStory({
     }
 
     const target = mobileManageViewerTriggerRef.current ?? mobileManageDoneRef.current;
+    const debugWindow = typeof window !== "undefined"
+      ? window as Window & { __startripsMediaDeleteFocusDebug?: Record<string, unknown> }
+      : null;
+    if (debugWindow) {
+      debugWindow.__startripsMediaDeleteFocusDebug = {
+        ...debugWindow.__startripsMediaDeleteFocusDebug,
+        targetExists: Boolean(target),
+        targetConnected: target?.isConnected ?? false,
+        targetInert: Boolean(target?.closest("[inert]")),
+        targetVisibility: target ? getComputedStyle(target).visibility : null,
+        activeBeforeFocus: document.activeElement?.getAttribute?.("aria-label") ?? document.activeElement?.tagName ?? null,
+      };
+    }
     target?.focus({ preventScroll: true });
+    if (debugWindow) {
+      debugWindow.__startripsMediaDeleteFocusDebug = {
+        ...debugWindow.__startripsMediaDeleteFocusDebug,
+        activeAfterFocus: document.activeElement?.getAttribute?.("aria-label") ?? document.activeElement?.tagName ?? null,
+      };
+    }
   }, [desktopEditing, mediaDeleteState, mobileLayout, mobileManageMode]);
 
   useEffect(() => {
