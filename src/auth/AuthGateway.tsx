@@ -601,6 +601,10 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cine
     setInviteOpen(false);
     setEditAtlasOpen(false);
     setPasswordState(null);
+    // The surface is cleared with the state it belongs to: a read that fails,
+    // or an Account whose identity list has changed, must not reopen on the
+    // previous read's "link sent".
+    setPasswordSurface(null);
     setPasswordOpen(true);
     setMessage("正在读取账户登录方式…");
     try {

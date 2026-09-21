@@ -110,13 +110,17 @@ describe("mobile account surface", () => {
     expect(entry("邀请另一位")).toContain("setEditAtlasOpen(false)");
     expect(entry("编辑图谱")).toContain("setPasswordOpen(false)");
     expect(entry("编辑图谱")).toContain("setInviteOpen(false)");
-    // The password entry clears the others through its own opener.
-    const opener = auth.slice(
-      auth.indexOf("const openAccountPassword"),
-      auth.indexOf("setMessage(\"正在读取账户登录方式…\")"),
-    );
+    // The password entry clears the others through its own opener, which also
+    // drops the previous read's surface so a stale "link sent" cannot reopen.
+    const openerStart = auth.indexOf("const openAccountPassword");
+    const openerEnd = auth.indexOf("await Promise.all", openerStart);
+    expect(openerStart).toBeGreaterThan(-1);
+    expect(openerEnd).toBeGreaterThan(openerStart);
+    const opener = auth.slice(openerStart, openerEnd);
+    expect(opener.length).toBeLessThan(1200);
     expect(opener).toContain("setInviteOpen(false)");
     expect(opener).toContain("setEditAtlasOpen(false)");
+    expect(opener).toContain("setPasswordSurface(null)");
   });
 
   it("opens the recovery mode for a signed-out person whose link expired", () => {
