@@ -500,6 +500,54 @@ export async function completeIdentityLink(values: {
   return outcome.result;
 }
 
+/**
+ * #349: the ownership row for an account Better Auth created on its own.
+ *
+ * Until now `completeIdentityLink` was the only writer of
+ * `account_identity_ownerships`, so every non-credential account row had one
+ * by construction. A native Google sign-up creates the account row through
+ * Better Auth's adapter instead, and `accountIdentityUsable` would then read
+ * the method the person just signed in with as unusable. This records the
+ * identity Better Auth already verified for exactly that row.
+ *
+ * It never adopts an existing ownership: a duplicate callback or a concurrent
+ * login races on the same provider subject, and both unique indexes make the
+ * loser a no-op rather than a second claim. Returns whether this call wrote.
+ */
+export async function recordProviderSignInOwnership(values: {
+  userId: string;
+  accountRecordId: string;
+  identity: ProviderIdentityProof["identity"];
+  now?: Date;
+}): Promise<boolean> {
+  const now = values.now ?? new Date();
+  return await db.transaction(async (transaction) => {
+    const inserted = await transaction
+      .insert(accountIdentityOwnerships)
+      .values({
+        userId: values.userId,
+        accountRecordId: values.accountRecordId,
+        providerId: values.identity.providerId,
+        providerSubject: values.identity.subject,
+        providerEmail: values.identity.email,
+        providerEmailVerified: values.identity.emailVerified,
+        verifiedAt: now,
+      })
+      .onConflictDoNothing()
+      .returning({ id: accountIdentityOwnerships.id });
+    if (inserted.length === 0) return false;
+    await audit(transaction, {
+      userId: values.userId,
+      event: "link",
+      outcome: "success",
+      providerId: values.identity.providerId,
+      accountRecordId: values.accountRecordId,
+      reason: "provider-sign-in",
+    });
+    return true;
+  });
+}
+
 async function loadUserIdentityState(
   executor: typeof db | Transaction,
   userId: string,

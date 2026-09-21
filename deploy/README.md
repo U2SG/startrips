@@ -147,6 +147,59 @@ Raising a budget weakens abuse resistance. Lowering one below its floor is
 refused at startup, because #200 is explicit that a limit which breaks a normal
 image-heavy Journey during playback prefetch is the worse outcome.
 
+## Google sign-in
+
+Google is off unless this deployment names an OAuth client. `GOOGLE_CLIENT_ID`
+and `GOOGLE_CLIENT_SECRET` are read together: set neither and the provider is
+absent from the API entirely -- no sign-in button, no linkable provider, and
+`/api/account-identities` advertises nothing -- set exactly one and the API
+refuses to start, because a half-configured client is a mistake rather than a
+disabled feature. There is no development fallback and no mock: a deployment
+without credentials degrades by not offering the entry point.
+
+**Approved origins and redirect URIs.** The OAuth client needs `APP_ORIGIN` as
+its authorized JavaScript origin and **two** authorized redirect URIs, because
+sign-in and explicit binding are different flows that return to different
+handlers:
+
+| Flow | Redirect URI |
+| --- | --- |
+| Sign in / sign up | `<APP_ORIGIN>/api/auth/callback/google` |
+| Bind to an existing Account | `<APP_ORIGIN>/api/account-identities/providers/google/callback` |
+
+Register one client per environment rather than sharing one across them, so a
+test origin can never complete a production sign-in:
+
+| Environment | `APP_ORIGIN` |
+| --- | --- |
+| Local development | `http://127.0.0.1:5173` |
+| Test / staging | the staging HTTPS origin, e.g. `https://staging.<your-domain>` |
+| Production | the production HTTPS origin, e.g. `https://<your-domain>` |
+
+`APP_ORIGIN` must be HTTPS outside development; `config.ts` refuses a non-HTTPS
+origin in production. Requested scopes are the adapter's defaults -- `openid`,
+`email`, `profile` -- and nothing widens them. Startrips never requests Drive,
+Photos or any other Google API scope.
+
+**Injecting the secret.** `GOOGLE_CLIENT_SECRET` is a deployment secret on the
+same footing as `BETTER_AUTH_SECRET`: put it in the `.env` file the Compose
+stack reads (or your orchestrator's secret store) and nowhere else. It is read
+only by the API container, never reaches the browser bundle, and must not be
+written into the repository, an issue, a PR, or a CI artifact. Rotating it is a
+value replacement plus an API restart; old sessions survive, because a Startrips
+session is not a Google token.
+
+**Turning it off.** Unset both variables and restart the API. Existing Google
+account rows stay, and anyone who has only that method keeps their Account but
+cannot sign in with it until the provider is configured again -- so give people
+a password first if you intend the removal to be permanent. Nothing is deleted
+by disabling the provider.
+
+**What is not verified by CI.** Every callback family is covered in CI against a
+fake OAuth transport. A real login, bind and re-login against an authorized
+Google test client is an external gate performed with real credentials before
+release; CI passing is not evidence that a real client is connected.
+
 ## Access log redaction
 
 Caddy's access log records `request>uri`, which is the path plus the query

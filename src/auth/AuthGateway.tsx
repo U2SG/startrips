@@ -30,6 +30,20 @@ import {
   type AccountSurface,
 } from "./accountSurface";
 import {
+  AccountIdentityRefusal,
+  accountIdentityRefusalText,
+  beginProviderBind,
+  bindableProviders,
+  finishProviderBind,
+  loadAccountIdentities,
+  loadSignInProviders,
+  readProviderBindReturn,
+  socialSignInErrorText,
+  unlinkProviderIdentity,
+  type AccountIdentityList,
+  type ProviderBindReturn,
+} from "./accountIdentityLink";
+import {
   AccountPasswordRefusal,
   accountPasswordRefusalText,
   loadAccountIdentityMethods,
@@ -173,6 +187,10 @@ function AuthForm({ onAuthenticated, handoff = false, forceReady = false, lightw
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState("");
   const [messageTone, setMessageTone] = useState<"error" | "success">("error");
+  // #349: which providers this deployment configured. An unconfigured one is
+  // absent from the server entirely, so the button simply never renders --
+  // there is no disabled placeholder promising a sign-in that cannot happen.
+  const [signInProviders, setSignInProviders] = useState<string[]>([]);
   const [introSkipped, setIntroSkipped] = useState(false);
   const presentationReady = forceReady || handoff || introSkipped;
 
@@ -181,6 +199,42 @@ function AuthForm({ onAuthenticated, handoff = false, forceReady = false, lightw
     setMode(nextMode);
     setMessage("");
     setMessageTone("error");
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+    void loadSignInProviders()
+      .then((providers) => { if (!cancelled) setSignInProviders(providers); })
+      .catch(() => { if (!cancelled) setSignInProviders([]); });
+    return () => { cancelled = true; };
+  }, []);
+
+  // A refused provider sign-in comes back as a redirect carrying a code, not
+  // as a rejected promise. `account_not_linked` is the one that matters: the
+  // address is already an Account nobody has bound this provider to, and the
+  // person needs to be told the route that works rather than to retry.
+  useEffect(() => {
+    const code = new URLSearchParams(window.location.search).get("error");
+    if (!code) return;
+    window.history.replaceState(window.history.state, "", window.location.pathname);
+    setMessageTone("error");
+    setMessage(socialSignInErrorText(code));
+  }, []);
+
+  async function signInWithProvider(providerId: "google") {
+    setPending(true);
+    setMessage("");
+    const result = await authClient.signIn.social({
+      provider: providerId,
+      callbackURL: "/",
+      errorCallbackURL: "/",
+    });
+    // A successful call navigates away; only a refusal returns here.
+    if (result.error) {
+      setMessageTone("error");
+      setMessage(socialSignInErrorText(result.error.code ?? null) || result.error.message || "登录未完成，请重试。");
+      setPending(false);
+    }
   }
 
   async function submit(event: FormEvent) {
@@ -279,6 +333,14 @@ function AuthForm({ onAuthenticated, handoff = false, forceReady = false, lightw
             {pending ? "请稍候…" : mode === "sign-in" ? "登录" : mode === "sign-up" ? "注册并验证邮箱" : "发送重置链接"}
           </button>
         </form>
+
+        {mode !== "forgot" && signInProviders.includes("google") ? (
+          <div className="auth-providers">
+            <button type="button" disabled={pending} onClick={() => void signInWithProvider("google")}>
+              使用 Google 继续
+            </button>
+          </div>
+        ) : null}
 
         {message ? (
           <p
@@ -420,6 +482,131 @@ function InvitationGate({ invitationId, onAccepted }: { invitationId: string; on
  * instead. Offering a form that could not be submitted would be the
  * untruthful-degradation failure.
  */
+// #349: one place names a provider, so the gate button, the method list and
+// every outcome sentence agree.
+const PROVIDER_LABELS: Record<string, string> = { google: "Google", credential: "邮箱密码" };
+
+function providerLabel(providerId: string): string {
+  return PROVIDER_LABELS[providerId] ?? providerId;
+}
+
+function AccountIdentityPanel({ pendingReturn, onReturnConsumed, className }: {
+  pendingReturn: ProviderBindReturn | null;
+  onReturnConsumed: () => void;
+  className?: string;
+}) {
+  const [list, setList] = useState<AccountIdentityList | null>(null);
+  const [action, setAction] = useState<{ kind: "bind"; providerId: string } | { kind: "unlink"; id: string } | null>(null);
+  const [password, setPassword] = useState("");
+  const [pending, setPending] = useState(false);
+  const [message, setMessage] = useState("");
+  const [tone, setTone] = useState<"error" | "success">("error");
+
+  function refuse(error: unknown) {
+    setTone("error");
+    setMessage(error instanceof AccountIdentityRefusal
+      ? accountIdentityRefusalText(error.code)
+      : "操作未完成，请稍后再试。");
+  }
+
+  async function reload() {
+    try {
+      setList(await loadAccountIdentities());
+    } catch (error) {
+      refuse(error);
+    }
+  }
+
+  useEffect(() => {
+    void reload();
+  }, []);
+
+  // The bind callback handed the browser back with a proof in the fragment.
+  // It is spent once, here, and the caller has already cleared it from the URL.
+  useEffect(() => {
+    if (!pendingReturn) return;
+    onReturnConsumed();
+    setPending(true);
+    void finishProviderBind(pendingReturn)
+      .then(async (outcome) => {
+        setTone("success");
+        setMessage(outcome.alreadyLinked
+          ? `${providerLabel(outcome.providerId)} 已经绑定过了。`
+          : `${providerLabel(outcome.providerId)} 已绑定到这个账户。`);
+        await reload();
+      })
+      .catch(refuse)
+      .finally(() => setPending(false));
+  }, [pendingReturn]);
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!action) return;
+    setPending(true);
+    setMessage("");
+    const secret = password;
+    setPassword("");
+    try {
+      if (action.kind === "bind") {
+        const returnPath = `${window.location.pathname}${window.location.search}` || "/";
+        const authorizationUrl = await beginProviderBind({
+          providerId: action.providerId,
+          password: secret,
+          returnPath,
+        });
+        window.location.assign(authorizationUrl);
+        return;
+      }
+      await unlinkProviderIdentity({ accountRecordId: action.id, password: secret });
+      setAction(null);
+      setTone("success");
+      setMessage("该登录方式已解绑。");
+      await reload();
+    } catch (error) {
+      refuse(error);
+    } finally {
+      setPending(false);
+    }
+  }
+
+  const bindable = list ? bindableProviders(list) : [];
+  return (
+    <div className={className ?? "account-identity-panel"}>
+      {list === null ? <p>正在读取登录方式…</p> : (
+        <ul className="account-identity-panel__methods">
+          {list.methods.map((method) => (
+            <li key={method.id}>
+              <span>{providerLabel(method.providerId)}</span>
+              <small>{method.emailHint ?? "—"}{method.usable ? "" : " · 暂不可用"}</small>
+              {method.canUnlink ? (
+                <button type="button" disabled={pending} onClick={() => { setMessage(""); setAction({ kind: "unlink", id: method.id }); }}>解绑</button>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      )}
+      {bindable.map((providerId) => (
+        <button key={providerId} type="button" disabled={pending} onClick={() => { setMessage(""); setAction({ kind: "bind", providerId }); }}>
+          绑定 {providerLabel(providerId)}
+        </button>
+      ))}
+      {action ? (
+        <form onSubmit={submit}>
+          <label>
+            <span>当前密码</span>
+            <input required type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} />
+          </label>
+          <button className="auth-primary" type="submit" disabled={pending}>
+            {pending ? "请稍候…" : action.kind === "bind" ? "继续绑定" : "确认解绑"}
+          </button>
+          <button type="button" disabled={pending} onClick={() => { setAction(null); setPassword(""); }}>取消</button>
+        </form>
+      ) : null}
+      {message ? <p className={`auth-message is-${tone}`} role={tone === "error" ? "alert" : "status"}>{message}</p> : null}
+    </div>
+  );
+}
+
 function AccountPasswordPanel({ state, surface, onSurface, email, className }: {
   state: AccountPasswordState | null;
   surface: AccountSurface;
@@ -540,6 +727,8 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cine
   // The password flow's own surface, shared by the desktop dock and the mobile
   // sheet so the link flow reports sent / expired / failed in one vocabulary.
   const [passwordSurface, setPasswordSurface] = useState<AccountSurface>(null);
+  const [identityOpen, setIdentityOpen] = useState(false);
+  const [bindReturn, setBindReturn] = useState<ProviderBindReturn | null>(null);
   const [mobileAccountHost, setMobileAccountHost] = useState<HTMLElement | null>(null);
   const isMobileV2 = useCompactMobileLayout();
   // #332: the account menu is where a person changes the Earth experience.
@@ -632,6 +821,25 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cine
         : "无法读取账户登录方式，请稍后再试。");
     }
   };
+
+  // #349: the provider bind hands the browser back with its result in the URL
+  // fragment. Consume it immediately and clear it, for the same reason the
+  // expired-link marker below is consumed: a reload, a shared link or a
+  // back-navigation must not replay the outcome -- and the fragment carries a
+  // live single-use proof, so it must not stay in the address bar either.
+  useEffect(() => {
+    if (gate.kind !== "ready") return;
+    const result = readProviderBindReturn(window.location.hash);
+    if (!result) return;
+    window.history.replaceState(
+      window.history.state,
+      "",
+      `${window.location.pathname}${window.location.search}`,
+    );
+    setIdentityOpen(true);
+    if (isMobileV2) setAccountSurface("identity-links");
+    setBindReturn(result);
+  }, [gate.kind]);
 
   // Someone whose set-password link had already expired is handed back here by
   // the reset page. The marker is consumed from the URL immediately so a
@@ -871,6 +1079,7 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cine
               {isOwner ? <button type="button" onClick={() => { setEditAtlasOpen(false); setPasswordOpen(false); setInviteOpen((value) => !value); }}>邀请另一位</button> : null}
               <button type="button" onClick={() => { setInviteOpen(false); setPasswordOpen(false); setEditTitle(gate.atlas.title); setEditDedication(gate.atlas.dedication); setEditAtlasOpen((value) => !value); setMessage(""); }}>编辑图谱</button>
               <button type="button" onClick={() => { if (passwordOpen) { setPasswordOpen(false); setMessage(""); return; } void openAccountPassword(); }}>账户密码</button>
+              <button type="button" onClick={() => { setInviteOpen(false); setEditAtlasOpen(false); setPasswordOpen(false); setMessage(""); setIdentityOpen((value) => !value); }}>登录方式</button>
               <EarthExperienceMenuEntry
                 surface="dock"
                 policy={earthExperience.policy}
@@ -892,6 +1101,7 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cine
                 <button type="submit" disabled={pending}>{pending ? "保存中…" : "保存"}</button>
               </form>
             ) : null}
+            {identityOpen ? <AccountIdentityPanel pendingReturn={bindReturn} onReturnConsumed={() => setBindReturn(null)} /> : null}
             {passwordOpen ? <AccountPasswordPanel state={passwordState} surface={passwordSurface} onSurface={applyPasswordSurface} email={passwordEmail} /> : null}
           </div>
         </aside>
@@ -912,6 +1122,7 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cine
                   {isOwner ? <button type="button" onClick={() => { setMessage(""); setAccountSurface("invite"); }}><span>邀请另一位</span><small>发送私人图谱邀请</small></button> : null}
                   <button type="button" onClick={openMobileEdit}><span>编辑图谱</span><small>修改名称与题词</small></button>
                   <button type="button" onClick={() => void openAccountPassword()}><span>账户密码</span><small>修改或设置登录密码</small></button>
+                  <button type="button" onClick={() => { setMessage(""); setAccountSurface("identity-links"); }}><span>登录方式</span><small>绑定或解绑第三方登录</small></button>
                   <EarthExperienceMenuEntry
                     surface="sheet"
                     policy={earthExperience.policy}
@@ -928,7 +1139,13 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cine
                   <div><p>{accountSurfaceEyebrow(accountSurface)}</p><h2 id="account-sheet-title">{accountSurfaceTitle(accountSurface)}</h2></div>
                 </header>
                 {message ? <p className="account-sheet__message" role="alert">{message}</p> : null}
-                {accountSurface === "invite" ? (
+                {accountSurface === "identity-links" ? (
+                  <AccountIdentityPanel
+                    className="account-sheet__form"
+                    pendingReturn={bindReturn}
+                    onReturnConsumed={() => setBindReturn(null)}
+                  />
+                ) : accountSurface === "invite" ? (
                   <form className="account-sheet__form" onSubmit={invite}>
                     <label><span>对方邮箱</span><input required type="email" inputMode="email" autoComplete="email" value={inviteEmail} onChange={(event) => setInviteEmail(event.target.value)} /></label>
                     <button type="submit" disabled={pending}>{pending ? "发送中…" : "发送邀请"}</button>

@@ -368,6 +368,73 @@
   color: #d7a87d;
 }
 
+.auth-providers {
+  display: flex;
+  margin-top: 18px;
+}
+
+/* #349: a second way in, not a louder one. It sits below the form at the same
+   weight as the mode switches, because a provider is an alternative to the
+   password field rather than a promotion over it. */
+.auth-providers button {
+  flex: 1 1 auto;
+  min-height: 44px;
+  border: 1px solid rgba(240, 234, 220, 0.2);
+  padding: 10px 14px;
+  color: #d0d8d4;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+}
+
+.auth-providers button:hover:not(:disabled) {
+  border-color: rgba(240, 234, 220, 0.38);
+}
+
+.auth-providers button:focus-visible {
+  outline: 1px solid rgba(232, 200, 122, 0.72);
+  outline-offset: 3px;
+}
+
+.auth-providers button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.account-identity-panel {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid rgba(240, 234, 220, 0.18);
+  background: #0b0f13;
+}
+
+.account-identity-panel__methods {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.account-identity-panel__methods li {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: baseline;
+  gap: 2px 10px;
+}
+
+.account-identity-panel__methods small {
+  grid-column: 1;
+  color: #8f9c97;
+}
+
+.account-identity-panel__methods button {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  min-height: 44px;
+}
+
 .auth-switches {
   display: flex;
   justify-content: space-between;

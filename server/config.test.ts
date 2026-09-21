@@ -267,3 +267,32 @@ describe("cover-reveal worker configuration", () => {
     })).toThrow("must not exceed COVER_REVEAL_LEASE_SECONDS");
   });
 });
+
+describe("Google sign-in configuration", () => {
+  it("leaves the provider absent when no client is configured", () => {
+    const config = loadServerConfig(productionEnvironment);
+    expect(config.googleClientId).toBeNull();
+    expect(config.googleClientSecret).toBeNull();
+  });
+
+  it("refuses a half-configured client at startup", () => {
+    expect(() => loadServerConfig({
+      ...productionEnvironment,
+      GOOGLE_CLIENT_ID: "client.apps.googleusercontent.test",
+    })).toThrow("GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET must be set together");
+    expect(() => loadServerConfig({
+      ...productionEnvironment,
+      GOOGLE_CLIENT_SECRET: "secret",
+    })).toThrow("GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET must be set together");
+  });
+
+  it("accepts both halves together", () => {
+    const config = loadServerConfig({
+      ...productionEnvironment,
+      GOOGLE_CLIENT_ID: "client.apps.googleusercontent.test",
+      GOOGLE_CLIENT_SECRET: "secret",
+    });
+    expect(config.googleClientId).toBe("client.apps.googleusercontent.test");
+    expect(config.googleClientSecret).toBe("secret");
+  });
+});

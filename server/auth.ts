@@ -1,6 +1,12 @@
 import { drizzleAdapter } from "@better-auth/drizzle-adapter";
 import { betterAuth } from "better-auth";
 import { organization } from "better-auth/plugins";
+import { recordProviderSignInOwnership } from "./account-identities/account-identity-repository";
+import {
+  configuredSocialProviderIds,
+  googleSignInOptions,
+  takeVerifiedProviderIdentity,
+} from "./account-identities/social-providers";
 import { serverConfig } from "./config";
 import { db } from "./db/client";
 import * as authSchema from "./db/auth-schema";
@@ -10,6 +16,13 @@ import {
 } from "./email/email-sender";
 
 const emailSender = createEmailSender(serverConfig);
+
+// #349: present only when this deployment names both halves of a Google OAuth
+// client. An incomplete configuration never reaches here -- `config.ts`
+// refuses it at startup -- and an absent one omits the provider entirely
+// rather than mounting a mock, so the sign-in entry simply does not exist.
+const googleOptions = googleSignInOptions(serverConfig);
+const SOCIAL_PROVIDER_IDS = configuredSocialProviderIds(serverConfig);
 
 export const STARTRIPS_ACCOUNT_LINKING_POLICY = {
   enabled: false,
@@ -63,6 +76,40 @@ export const auth = betterAuth({
   account: {
     accountLinking: STARTRIPS_ACCOUNT_LINKING_POLICY,
   },
+  socialProviders: googleOptions ? { google: googleOptions } : {},
+  databaseHooks: {
+    account: {
+      create: {
+        // #349: a native provider sign-up creates the Better Auth account row
+        // without Startrips' ownership row, which every ST-067 usability and
+        // last-usable-login decision reads. Record it from the identity Better
+        // Auth verified during this same callback. A failure here must not
+        // fail the sign-in: the missing row makes the method read as unusable,
+        // which is the fail-closed direction.
+        async after(account) {
+          if (!SOCIAL_PROVIDER_IDS.has(account.providerId)) return;
+          const identity = takeVerifiedProviderIdentity(
+            account.providerId,
+            account.accountId,
+          );
+          if (!identity) return;
+          try {
+            await recordProviderSignInOwnership({
+              userId: account.userId,
+              accountRecordId: account.id,
+              identity,
+            });
+          } catch (error) {
+            console.error("account_identity_ownership_record_failed", {
+              providerId: account.providerId,
+              accountRecordId: account.id,
+              message: error instanceof Error ? error.message : "unknown",
+            });
+          }
+        },
+      },
+    },
+  },
   disabledPaths: [...STARTRIPS_DISABLED_IDENTITY_PATHS],
   rateLimit: {
     enabled: true,
@@ -71,6 +118,10 @@ export const auth = betterAuth({
     max: 100,
     customRules: {
       "/sign-in/email": { window: 60, max: 10 },
+      // #349: one authorization redirect per person per few seconds is
+      // already generous; the callback itself is bounded by the single-use
+      // state Better Auth issues here.
+      "/sign-in/social": { window: 60, max: 10 },
       "/sign-up/email": { window: 60 * 10, max: 5 },
       "/request-password-reset": { window: 60 * 10, max: 3 },
     },

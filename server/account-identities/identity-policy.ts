@@ -31,6 +31,29 @@ export function validProviderId(value: unknown): value is string {
     && /^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?$/.test(value);
 }
 
+/**
+ * #349: where an OAuth return may hand the browser back to.
+ *
+ * The rule is a same-document relative path and nothing else. Comparing a
+ * caller-supplied absolute URL against `appOrigin` invites the whole
+ * `appOrigin.evil.test` / `//evil.test` / backslash-authority family, so no
+ * absolute URL is accepted at all -- the server prefixes its own origin.
+ */
+export function safeReturnPath(value: unknown): string | null {
+  if (typeof value !== "string" || value.length === 0 || value.length > 512) return null;
+  if (value[0] !== "/") return null;
+  // `//host` and `/\host` are both authority-relative: the browser would
+  // leave the origin entirely.
+  if (value[1] === "/" || value[1] === "\\") return null;
+  // A control character can split a Location header or smuggle a second URL
+  // past a naive reader.
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code < 0x20 || code === 0x7f) return null;
+  }
+  return value;
+}
+
 export function redactIdentityEmail(email: string | null | undefined): string | null {
   if (!email) return null;
   const separator = email.lastIndexOf("@");
