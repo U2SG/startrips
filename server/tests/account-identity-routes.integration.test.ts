@@ -329,6 +329,23 @@ describe("account identity HTTP boundary", () => {
     const splitBody = await splitRead.json() as { availableLinkProviders: string[] };
     expect(splitBody.availableLinkProviders).toEqual(["fake-provider"]);
 
+    // A configured id the write path cannot parse is never advertised: its
+    // format gate runs before the configured-provider gate, so advertising it
+    // would offer a control that can only fail.
+    const malformed = new Hono();
+    malformed.route(
+      "/api/account-identities",
+      createAccountIdentityRoutes({
+        linkableProviderIds: new Set(["fake-provider", "Bad_Provider"]),
+      }),
+    );
+    const malformedRead = await malformed.request(`${TEST_ORIGIN}/api/account-identities`, {
+      headers: headers(),
+    });
+    expect(malformedRead.status).toBe(200);
+    const malformedBody = await malformedRead.json() as { availableLinkProviders: string[] };
+    expect(malformedBody.availableLinkProviders).toEqual(["fake-provider"]);
+
     // One shared effective set: the advertised provider is accepted by the
     // write path and the unadvertised one is refused as not configured. That
     // provider gate runs before any proof is consumed, so the negative case
