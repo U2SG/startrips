@@ -23,7 +23,11 @@ import {
   setJourneyCoverForAtlas,
   updateJourneyForAtlas,
 } from "../repositories/journey-repository";
-import { finalizeUpload as finalizeVerifiedUpload } from "../routes/uploads";
+import {
+  finalizeUpload as finalizeVerifiedUpload,
+  MAX_MOVE_UNDO_ORDER,
+  type MediaMoveUndo,
+} from "../routes/uploads";
 import { resolveJourneySaveRecovery } from "../../src/journey/journeySaveRecovery";
 import type { Journey, JourneyInput } from "../../src/journey/types";
 
@@ -728,6 +732,43 @@ describe("media and atlas HTTP endpoints", () => {
     expect(payload.journey.media.map((asset) => asset.id)).toEqual(reordered);
     expect(payload.journey.media.map((asset) => asset.sortOrder)).toEqual([0, 1, 2]);
 
+    const subset = await app.request(`${TEST_ORIGIN}/api/uploads/assets/reorder`, {
+      method: "POST",
+      headers: authHeaders(identity.cookie),
+      body: JSON.stringify({ journeyId: journey.id, assetIds: [assets[1].id, assets[2].id] }),
+    });
+    expect(subset.status).toBe(200);
+    const subsetPayload = await subset.json() as typeof payload;
+    expect(subsetPayload.journey.media.map(({ id, sortOrder }) => ({ id, sortOrder }))).toEqual([
+      { id: assets[1].id, sortOrder: 0 },
+      { id: assets[2].id, sortOrder: 1 },
+      { id: assets[0].id, sortOrder: 1001 },
+    ]);
+    const secondSubset = await app.request(`${TEST_ORIGIN}/api/uploads/assets/reorder`, {
+      method: "POST",
+      headers: authHeaders(identity.cookie),
+      body: JSON.stringify({ journeyId: journey.id, assetIds: [assets[2].id] }),
+    });
+    expect(secondSubset.status).toBe(200);
+    const expectedSubsetOrder = [
+      { id: assets[2].id, sortOrder: 0 },
+      { id: assets[1].id, sortOrder: 1000 },
+      { id: assets[0].id, sortOrder: 2001 },
+    ];
+    const secondSubsetPayload = await secondSubset.json() as typeof payload;
+    expect(secondSubsetPayload.journey.media.map(({ id, sortOrder }) => ({ id, sortOrder })))
+      .toEqual(expectedSubsetOrder);
+
+    const [foreignRow] = await db.insert(mediaAssets).values({
+      journeyId: journeyB,
+      storageDriver: "test",
+      storageKey: `${atlasB}/${journeyB}/${randomUUID()}`,
+      fileName: "foreign.jpg",
+      mimeType: "image/jpeg",
+      bytes: 128,
+      sortOrder: 29,
+      uploadedByUserId: identity.userId,
+    }).returning({ id: mediaAssets.id });
     const foreignAsset = await app.request(
       `${TEST_ORIGIN}/api/uploads/assets/reorder`,
       {
@@ -735,11 +776,21 @@ describe("media and atlas HTTP endpoints", () => {
         headers: authHeaders(identity.cookie),
         body: JSON.stringify({
           journeyId: journey.id,
-          assetIds: [assets[2].id, "00000000-0000-4000-8000-000000000099"],
+          assetIds: [assets[2].id, foreignRow.id],
         }),
       },
     );
     expect(foreignAsset.status).toBe(400);
+    const afterRejectedReorder = await db
+      .select({ id: mediaAssets.id, sortOrder: mediaAssets.sortOrder })
+      .from(mediaAssets)
+      .where(inArray(mediaAssets.id, [...assets.map((asset) => asset.id), foreignRow.id]))
+      .orderBy(mediaAssets.sortOrder);
+    expect(afterRejectedReorder).toEqual([
+      expectedSubsetOrder[0],
+      { id: foreignRow.id, sortOrder: 29 },
+      ...expectedSubsetOrder.slice(1),
+    ]);
 
     const unknownJourney = await app.request(
       `${TEST_ORIGIN}/api/uploads/assets/reorder`,
@@ -756,7 +807,9 @@ describe("media and atlas HTTP endpoints", () => {
 
     // The fake backend rows exist only for this reorder assertion; remove
     // them so the later atlas-deletion test sees no storage references.
-    await db.delete(mediaAssets).where(eq(mediaAssets.journeyId, journey.id));
+    await db.delete(mediaAssets).where(inArray(mediaAssets.id, [
+      ...assets.map((asset) => asset.id), foreignRow.id,
+    ]));
   });
 
   it("moves a batch of media onto a route point through the tenant-scoped endpoint", async () => {
@@ -1216,6 +1269,106 @@ describe("media and atlas HTTP endpoints", () => {
       targetExisting.id,
     ]));
   });
+
+  it("moves and undoes a full batch at the canonical-order limit without changing another tenant", async () => {
+    const source = await createJourneyForAtlas(identity.atlasId, identity.userId, {
+      ...baseJourney,
+      title: "Large move source",
+    });
+    const destination = await createJourneyForAtlas(identity.atlasId, identity.userId, {
+      ...baseJourney,
+      title: "Large move destination",
+    });
+    if (!source || !destination) throw new Error("Large move fixtures were not created");
+    const assets = Array.from({ length: MAX_MOVE_UNDO_ORDER }, (_, index) => ({
+      id: randomUUID(),
+      journeyId: source.id,
+      routePointId: index % 3 === 2 ? null : source.routePoints[index % 3].id,
+      storageDriver: "test",
+      storageKey: `${identity.atlasId}/${source.id}/${randomUUID()}`,
+      fileName: `${index}.jpg`,
+      mimeType: "image/jpeg",
+      bytes: 128,
+      sortOrder: index,
+      uploadedByUserId: identity.userId,
+    }));
+    const [foreign] = await db.insert(mediaAssets).values({
+      journeyId: journeyB,
+      storageDriver: "test",
+      storageKey: `${atlasB}/${journeyB}/${randomUUID()}`,
+      fileName: "foreign-batch.jpg",
+      mimeType: "image/jpeg",
+      bytes: 128,
+      sortOrder: 37,
+      uploadedByUserId: identity.userId,
+    }).returning({ id: mediaAssets.id });
+
+    try {
+      for (let offset = 0; offset < assets.length; offset += 1_000) {
+        await db.insert(mediaAssets).values(assets.slice(offset, offset + 1_000));
+      }
+      await setJourneyCoverForAtlas(source.id, identity.atlasId, assets[0].id);
+      const movedAssets = assets.slice(0, 256);
+      const moveInput = {
+        journeyId: source.id,
+        targetJourneyId: destination.id,
+        assetIds: movedAssets.map((asset) => asset.id).reverse(),
+        routePointId: destination.routePoints[0].id,
+      };
+      const rejected = await app.request(`${TEST_ORIGIN}/api/uploads/assets/move`, {
+        method: "POST",
+        headers: authHeaders(identity.cookie),
+        body: JSON.stringify({ ...moveInput, assetIds: [...moveInput.assetIds.slice(1), foreign.id] }),
+      });
+      expect(rejected.status).toBe(400);
+
+      const moved = await app.request(`${TEST_ORIGIN}/api/uploads/assets/move`, {
+        method: "POST",
+        headers: authHeaders(identity.cookie),
+        body: JSON.stringify(moveInput),
+      });
+      expect(moved.status).toBe(200);
+      const movedPayload = await moved.json() as {
+        sourceJourney: Journey;
+        destinationJourney: Journey;
+        undo: MediaMoveUndo;
+      };
+      expect(movedPayload.sourceJourney.media.map((asset) => asset.id))
+        .toEqual(assets.slice(256).map((asset) => asset.id));
+      expect(movedPayload.sourceJourney.media.map((asset) => asset.sortOrder))
+        .toEqual(assets.slice(256).map((_, index) => index));
+      expect(movedPayload.sourceJourney.coverMediaAssetId).toBeNull();
+      expect(movedPayload.destinationJourney.media.map((asset) => asset.id))
+        .toEqual(movedAssets.map((asset) => asset.id));
+      expect(movedPayload.destinationJourney.media.every((asset, index) =>
+        asset.routePointId === moveInput.routePointId && asset.sortOrder === index,
+      )).toBe(true);
+
+      const undone = await app.request(`${TEST_ORIGIN}/api/uploads/assets/move/undo`, {
+        method: "POST",
+        headers: authHeaders(identity.cookie),
+        body: JSON.stringify(movedPayload.undo),
+      });
+      expect(undone.status).toBe(200);
+      const undonePayload = await undone.json() as {
+        sourceJourney: Journey;
+        destinationJourney: Journey;
+      };
+      expect(undonePayload.sourceJourney.media.map(({ id, routePointId, sortOrder }) => ({ id, routePointId, sortOrder })))
+        .toEqual(assets.map(({ id, routePointId, sortOrder }) => ({ id, routePointId, sortOrder })));
+      expect(undonePayload.sourceJourney.coverMediaAssetId).toBe(assets[0].id);
+      expect(undonePayload.destinationJourney.media).toEqual([]);
+      const [foreignAfter] = await db.select({
+        journeyId: mediaAssets.journeyId,
+        routePointId: mediaAssets.routePointId,
+        sortOrder: mediaAssets.sortOrder,
+      }).from(mediaAssets).where(eq(mediaAssets.id, foreign.id));
+      expect(foreignAfter).toEqual({ journeyId: journeyB, routePointId: null, sortOrder: 37 });
+    } finally {
+      await db.delete(mediaAssets).where(inArray(mediaAssets.journeyId, [source.id, destination.id]));
+      await db.delete(mediaAssets).where(eq(mediaAssets.id, foreign.id));
+    }
+  }, 30_000);
 
   it("degrades truthfully when media storage is disabled", async () => {
     const start = await app.request(`${TEST_ORIGIN}/api/uploads/start`, {

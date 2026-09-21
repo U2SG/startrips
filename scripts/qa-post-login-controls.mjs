@@ -662,12 +662,16 @@ async function verifyMobileStoryInertOwnership() {
 // approved entry instead of sitting on the primary surface. The assertions
 // below are unchanged; only the navigation to them is.
 async function openComposerTask(page, task) {
+  // DOMContentLoaded can precede the async QA entry's first React commit.
+  // Only a mounted Composer can identify the inline desktop layout.
+  const composer = page.locator(".journey-composer");
+  await composer.waitFor({ state: "visible" });
+  if (await composer.getAttribute("data-mobile-layout") !== "true") return;
   const entry = page.locator(`[data-composer-task-entry="${task}"]`);
   if (await page.locator(`[data-composer-task="${task}"]`).count()) return;
   await leaveComposerTask(page);
   if (!(await entry.count())) {
     const more = page.locator(".journey-composer__task-more");
-    if (!(await more.count())) return; // desktop renders the same capabilities inline
     await more.click();
   }
   await entry.click();
@@ -1935,7 +1939,7 @@ async function verifyFinalAcceptanceMobileFlow() {
     // a second evaluate would run a task later and could describe a DOM that had
     // already recovered. `recordRailState` logs that one observation, in the
     // iteration that passes as well as the one that fails.
-    const activateControl = async (locator, label, recordRailState = false) => {
+    const prepareControl = async (locator, label, recordRailState = false) => {
       await locator.evaluate((element) => {
         element.scrollIntoView({ block: "center", inline: "center" });
       });
@@ -2108,6 +2112,9 @@ async function verifyFinalAcceptanceMobileFlow() {
           + ` journey-rail-state ${JSON.stringify(journeyRailState)}`,
         );
       }
+    };
+    const activateControl = async (locator, label, recordRailState = false) => {
+      await prepareControl(locator, label, recordRailState);
       await locator.evaluate((element) => element.click());
     };
     const setInputValue = async (locator, value, label) => {
@@ -2898,11 +2905,9 @@ async function verifyFinalAcceptanceMobileFlow() {
         document.querySelector(".journey-playback")?.getAttribute("data-playback-phase") === "stop"
         && document.querySelector(".journey-playback__stop h3")?.textContent?.trim() === expectedLabel
       ), targetJourney.routePoints.at(-1)?.label ?? "", { timeout: 2_000 });
-      // Leave the range, reveal the ordinary transport chrome, and use the
-      // same Next Chapter control a viewer can click. Unlike the earlier failed
-      // witness this path is not paused: the plan-derived seek owns the current
-      // final Route Point stop, then the public transport advances exactly one
-      // meaningful beat. The destination itself is still asserted as fa-image-2.
+      // Keep this witness playing while preparing the ordinary transport.
+      // Autoplay can leave stop during those browser round trips, so the old
+      // stop observation cannot authorize a later unconditional Next click.
       await progress.blur();
       const playbackPausedAtReturnSeek = await page.locator(".journey-playback").evaluate((playback) => (
         playback.classList.contains("is-paused")
@@ -2914,12 +2919,51 @@ async function verifyFinalAcceptanceMobileFlow() {
       await page.waitForFunction(() => !(
         document.querySelector(".journey-playback")?.classList.contains("is-controls-hidden")
       ), null, { timeout: 2_000 });
-      await activateControl(
+      await prepareControl(
         page.locator('.journey-playback__controls button[aria-label="下一个章节"]'),
         "Playback next chapter from asserted Route Point",
       );
+      const playbackReturnAdvance = await page.evaluate(({ expectedLabel, expectedPointIndex, expectedAssetId }) => {
+        const playback = document.querySelector(".journey-playback");
+        const media = playback?.querySelector(".journey-playback__media");
+        const snapshot = {
+          phase: playback?.getAttribute("data-playback-phase") ?? null,
+          step: playback?.getAttribute("data-playback-step") ?? null,
+          intent: playback?.getAttribute("data-playback-intent") ?? null,
+          chapterPoint: playback?.querySelector("[data-chapter-point]")?.getAttribute("data-chapter-point") ?? null,
+          label: playback?.querySelector(".journey-playback__stop h3")?.textContent?.trim() ?? null,
+          paused: playback?.classList.contains("is-paused") ?? null,
+          controlsHidden: playback?.classList.contains("is-controls-hidden") ?? null,
+          requested: media?.getAttribute("data-requested-asset") ?? null,
+          current: media?.querySelector('[data-media-asset][aria-hidden="false"]')?.getAttribute("data-media-asset") ?? null,
+          presented: media?.getAttribute("data-presented-asset") ?? null,
+        };
+        if (!playback || snapshot.paused || snapshot.controlsHidden
+          || snapshot.chapterPoint !== String(expectedPointIndex)) {
+          throw new Error(`Playback return position changed before transport: ${JSON.stringify(snapshot)}`);
+        }
+        if (snapshot.phase === "media" && snapshot.requested === expectedAssetId) {
+          return { action: "autoplay-reached-target", ...snapshot };
+        }
+        if (snapshot.phase !== "stop" || snapshot.label !== expectedLabel) {
+          throw new Error(`Playback return expected the final stop or target media: ${JSON.stringify(snapshot)}`);
+        }
+        const next = playback.querySelector('.journey-playback__controls button[aria-label="下一个章节"]');
+        if (!(next instanceof HTMLButtonElement) || next.disabled) {
+          throw new Error(`Playback next control disappeared: ${JSON.stringify(snapshot)}`);
+        }
+        // This read and click share one browser task; the autoplay timer cannot
+        // advance to the target media between them and make Next skip it.
+        next.click();
+        return { action: "next-from-final-stop", ...snapshot };
+      }, {
+        expectedLabel: targetJourney.routePoints.at(-1)?.label ?? "",
+        expectedPointIndex: targetJourney.routePoints.length - 1,
+        expectedAssetId: "fa-image-2",
+      });
       await page.waitForFunction(() => (
         document.querySelector(".journey-playback")?.getAttribute("data-playback-phase") === "media"
+        && document.querySelector('.journey-playback__media[data-requested-asset="fa-image-2"]') !== null
       ), null, { timeout: 2_000 });
       const returnedMediaStage = page.locator('.journey-playback__media[data-requested-asset="fa-image-2"]');
       await returnedMediaStage.waitFor({ state: "visible", timeout: 5_000 });
@@ -2978,7 +3022,7 @@ async function verifyFinalAcceptanceMobileFlow() {
       ) {
         throw new Error(`Story Playback return handoff failed: ${JSON.stringify(playbackReturnState)}`);
       }
-      results.push({ name: "story-full-playback-return", ...playbackReturnState, failed: false });
+      results.push({ name: "story-full-playback-return", advance: playbackReturnAdvance, ...playbackReturnState, failed: false });
       await activateControl(returnedStory.locator(".journey-story__close"), "returned Story close control");
       await returnedStory.waitFor({ state: "detached" });
       await page.waitForFunction(() => {
@@ -3205,10 +3249,28 @@ async function verifyFinalAcceptanceMobileFlow() {
       else console.error(`[qa-post-login] final:${viewportLabel}:final-pass`);
     } catch (error) {
       failed = true;
+      const playbackSnapshot = await page.evaluate(() => {
+        const playback = document.querySelector(".journey-playback");
+        const media = playback?.querySelector(".journey-playback__media");
+        return {
+          phase: playback?.getAttribute("data-playback-phase") ?? null,
+          step: playback?.getAttribute("data-playback-step") ?? null,
+          intent: playback?.getAttribute("data-playback-intent") ?? null,
+          chapterPoint: playback?.querySelector("[data-chapter-point]")?.getAttribute("data-chapter-point") ?? null,
+          paused: playback?.classList.contains("is-paused") ?? null,
+          requested: media?.getAttribute("data-requested-asset") ?? null,
+          current: media?.querySelector('[data-media-asset][aria-hidden="false"]')?.getAttribute("data-media-asset") ?? null,
+          presented: media?.getAttribute("data-presented-asset") ?? null,
+          presentation: media?.getAttribute("data-media-presentation") ?? null,
+          hold: playback?.getAttribute("data-playback-hold") ?? null,
+          presentationHold: playback?.getAttribute("data-playback-presentation-hold") ?? null,
+        };
+      }).catch((snapshotError) => ({ error: String(snapshotError) }));
       results.push({
         name: `final-acceptance-mobile-${viewportLabel}`,
         failed: true,
         error: error instanceof Error ? error.stack ?? error.message : String(error),
+        playbackSnapshot,
         consoleErrors,
         pageErrors,
         failedRequests,

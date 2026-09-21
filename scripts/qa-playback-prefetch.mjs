@@ -98,7 +98,7 @@ const MAX_PREFETCH_ASSETS = Number(maxAssetsMatch[1]);
 const OUTSTANDING_ASSET_CEILING = MAX_PREFETCH_ASSETS + 1;
 
 const PREFETCH_FIXTURES = {
-  // Mirrors `prefetchQaJourney` in src/main.tsx, which is where both fixtures
+  // Mirrors `prefetchQaJourney` in src/preview/qaEntry.tsx, which is where both fixtures
   // are declared; this is only the beat table needed to map an asset back to
   // the beat that displays it.
   single: { points: 1, imagesPerPoint: 20 },

@@ -23,6 +23,7 @@ import {
 } from "../services/media-preview";
 import { getJourneyForAtlas } from "../repositories/journey-repository";
 import { attachRecordedEvidenceToNewAsset } from "../repositories/media-evidence-repository";
+import { writeJourneyMediaOrder } from "../repositories/media-order";
 import {
   parseRecordedEvidenceDocument,
   serializeRecordedEvidence,
@@ -1429,16 +1430,13 @@ uploadRoutes.post("/assets/reorder", async (context) => {
       ));
     if (owned.length !== input.assetIds.length) return false;
 
+    // Reorder accepts a subset: omitted assets keep their relative order and
+    // receive the existing offset, even when their order already has gaps.
     await transaction
       .update(mediaAssets)
       .set({ sortOrder: sql`${mediaAssets.sortOrder} + 1000` })
       .where(eq(mediaAssets.journeyId, input.journeyId));
-    for (let index = 0; index < input.assetIds.length; index += 1) {
-      await transaction
-        .update(mediaAssets)
-        .set({ sortOrder: index })
-        .where(eq(mediaAssets.id, input.assetIds[index]));
-    }
+    await writeJourneyMediaOrder(transaction, atlas.id, input.journeyId, input.assetIds);
     return true;
   });
 
@@ -1544,20 +1542,10 @@ uploadRoutes.post("/assets/move", async (context) => {
         ...sourceOrder.filter((id) => !moving.has(id)),
         ...movedInSourceOrder,
       ];
-      await transaction
-        .update(mediaAssets)
-        .set({ sortOrder: sql`${mediaAssets.sortOrder} + 1000` })
-        .where(eq(mediaAssets.journeyId, sourceJourneyId));
-      for (let index = 0; index < nextOrder.length; index += 1) {
-        await transaction
-          .update(mediaAssets)
-          .set({ sortOrder: index })
-          .where(eq(mediaAssets.id, nextOrder[index]));
-      }
-      await transaction
-        .update(mediaAssets)
-        .set({ routePointId: input.routePointId })
-        .where(inArray(mediaAssets.id, input.assetIds));
+      await writeJourneyMediaOrder(transaction, atlas.id, sourceJourneyId, nextOrder, {
+        sourceJourneyId,
+        placements: input.assetIds.map((assetId) => ({ assetId, routePointId: input.routePointId })),
+      });
       return "ok" as const;
     }
 
@@ -1590,33 +1578,11 @@ uploadRoutes.post("/assets/move", async (context) => {
       })),
     };
 
-    await transaction
-      .update(mediaAssets)
-      .set({ sortOrder: sql`${mediaAssets.sortOrder} + 1000` })
-      .where(or(
-        eq(mediaAssets.journeyId, sourceJourneyId),
-        eq(mediaAssets.journeyId, targetJourneyId),
-      ));
-
-    for (let index = 0; index < sourceNextOrder.length; index += 1) {
-      await transaction
-        .update(mediaAssets)
-        .set({ sortOrder: index })
-        .where(eq(mediaAssets.id, sourceNextOrder[index]));
-    }
-    for (let index = 0; index < targetNextOrder.length; index += 1) {
-      const assetId = targetNextOrder[index];
-      await transaction
-        .update(mediaAssets)
-        .set(moving.has(assetId)
-          ? {
-              journeyId: targetJourneyId,
-              routePointId: input.routePointId,
-              sortOrder: index,
-            }
-          : { sortOrder: index })
-        .where(eq(mediaAssets.id, assetId));
-    }
+    await writeJourneyMediaOrder(transaction, atlas.id, sourceJourneyId, sourceNextOrder);
+    await writeJourneyMediaOrder(transaction, atlas.id, targetJourneyId, targetNextOrder, {
+      sourceJourneyId,
+      placements: input.assetIds.map((assetId) => ({ assetId, routePointId: input.routePointId })),
+    });
 
     if (sourceCoverMediaAssetId && moving.has(sourceCoverMediaAssetId)) {
       await transaction
@@ -1743,22 +1709,10 @@ uploadRoutes.post("/assets/move/undo", async (context) => {
         if (routePoints.length !== restoreRoutePointIds.length) return "stale" as const;
       }
 
-      await transaction
-        .update(mediaAssets)
-        .set({ sortOrder: sql`${mediaAssets.sortOrder} + 1000` })
-        .where(eq(mediaAssets.journeyId, sameJourneyInput.journeyId));
-      for (let index = 0; index < sameJourneyInput.assetOrder.length; index += 1) {
-        await transaction
-          .update(mediaAssets)
-          .set({ sortOrder: index })
-          .where(eq(mediaAssets.id, sameJourneyInput.assetOrder[index]));
-      }
-      for (const assignment of sameJourneyInput.assignments) {
-        await transaction
-          .update(mediaAssets)
-          .set({ routePointId: assignment.routePointId })
-          .where(eq(mediaAssets.id, assignment.assetId));
-      }
+      await writeJourneyMediaOrder(
+        transaction, atlas.id, sameJourneyInput.journeyId, sameJourneyInput.assetOrder,
+        { sourceJourneyId: sameJourneyInput.journeyId, placements: sameJourneyInput.assignments },
+      );
       return "ok" as const;
     });
 
@@ -1867,37 +1821,11 @@ uploadRoutes.post("/assets/move/undo", async (context) => {
     }
     const sourceNextOrder = input.sourceOrder;
     const targetNextOrder = currentTargetIds.filter((assetId) => !moving.has(assetId));
-    const placementByAsset = new Map(
-      input.placements.map((placement) => [placement.assetId, placement.routePointId]),
-    );
-
-    await transaction
-      .update(mediaAssets)
-      .set({ sortOrder: sql`${mediaAssets.sortOrder} + 1000` })
-      .where(or(
-        eq(mediaAssets.journeyId, input.sourceJourneyId),
-        eq(mediaAssets.journeyId, input.targetJourneyId),
-      ));
-
-    for (let index = 0; index < targetNextOrder.length; index += 1) {
-      await transaction
-        .update(mediaAssets)
-        .set({ sortOrder: index })
-        .where(eq(mediaAssets.id, targetNextOrder[index]));
-    }
-    for (let index = 0; index < sourceNextOrder.length; index += 1) {
-      const assetId = sourceNextOrder[index];
-      await transaction
-        .update(mediaAssets)
-        .set(moving.has(assetId)
-          ? {
-              journeyId: input.sourceJourneyId,
-              routePointId: placementByAsset.get(assetId) ?? null,
-              sortOrder: index,
-            }
-          : { sortOrder: index })
-        .where(eq(mediaAssets.id, assetId));
-    }
+    await writeJourneyMediaOrder(transaction, atlas.id, input.targetJourneyId, targetNextOrder);
+    await writeJourneyMediaOrder(transaction, atlas.id, input.sourceJourneyId, sourceNextOrder, {
+      sourceJourneyId: input.targetJourneyId,
+      placements: input.placements,
+    });
 
     if (shouldRestoreSourceCover) {
       await transaction

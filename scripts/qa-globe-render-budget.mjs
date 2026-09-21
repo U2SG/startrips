@@ -18,15 +18,134 @@ function record(name, data, condition) {
   if (!condition) failed = true;
 }
 
-async function openFixture({ width, height, dpr }) {
+async function openFixture({ width, height, dpr, routeOptics = false }) {
   const context = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: dpr });
   const page = await context.newPage();
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  await page.goto(`${origin}/?qaState=journey-routes&qaRenderBudget=1&qaQuality=high&qaMotion=animate`, { waitUntil: "domcontentloaded" });
+  await page.goto(`${origin}/?qaState=journey-routes&qaRenderBudget=1&qaQuality=high&qaMotion=animate${routeOptics ? "&qaRouteOptics=1" : ""}`, { waitUntil: "domcontentloaded" });
   await page.waitForFunction(() => Boolean(window.__particleEarthDebug?.()));
   await page.waitForFunction(() => window.__particleEarthDebug?.().drawingBufferPixels > 0);
   return { context, page, errors };
+}
+
+async function checkRouteReuse() {
+  const run = await openFixture({ width: 1280, height: 900, dpr: 1, routeOptics: true });
+  const { page } = run;
+  const southwest = "qa-route-southwest";
+  const rhine = "qa-route-rhine";
+  const geometrySelector = ".particle-earth-route, .particle-earth-route > path, .particle-earth-route > circle";
+  const click = async (selector) => page.locator(selector).evaluate((button) => button.click());
+  const waitForProjection = () => page.waitForFunction(() => (
+    window.__particleEarthDebug?.().journeyRouteProjectionReady === true
+  ));
+  await waitForProjection();
+  const initial = await page.evaluate((selector) => {
+    window.__routeReuseNodes = [...document.querySelectorAll(selector)];
+    return window.__particleEarthDebug();
+  }, geometrySelector);
+  record("routes:initial-build-once", { builds: initial.journeyRouteBuilds }, initial.journeyRouteBuilds === 1);
+
+  const snapshot = () => page.evaluate((selector) => {
+    const debug = window.__particleEarthDebug();
+    const nodes = [...document.querySelectorAll(selector)];
+    const groups = [...document.querySelectorAll(".particle-earth-route")];
+    return {
+      builds: debug.journeyRouteBuilds,
+      buildMs: debug.journeyRouteBuildMs,
+      geometry: debug.journeyRoutePointGeometry,
+      sameNodes: nodes.length === window.__routeReuseNodes.length
+        && nodes.every((node, index) => node === window.__routeReuseNodes[index]),
+      routes: groups.map((group) => ({
+        id: group.dataset.journeyRoute,
+        state: ["is-active", "is-muted", "is-idle"].find((value) => group.classList.contains(value)),
+        labels: [...group.querySelectorAll(".particle-earth-route__label")].map((label) => ({
+          index: Number(label.dataset.routePointIndex),
+          text: label.dataset.routeLabel,
+          visible: label.style.display !== "none",
+        })),
+        temporal: group.dataset.temporalReveal ?? null,
+        points: [...group.querySelectorAll(".particle-earth-route__point")].map((point) => ({
+          id: point.dataset.routePointId,
+          attention: point.dataset.attentionRole,
+          temporalVisible: point.dataset.temporalVisible,
+          temporal: point.dataset.temporalReveal ?? null,
+        })),
+        legs: [...group.querySelectorAll(".particle-earth-route__leg")].map((leg) => leg.dataset.temporalReveal ?? null),
+        stroke: group.querySelector(".particle-earth-route__core")?.getAttribute("stroke"),
+      })),
+    };
+  }, geometrySelector);
+  const unchangedGeometry = (state) => state.sameNodes
+    && state.builds === initial.journeyRouteBuilds
+    && state.buildMs === initial.journeyRouteBuildMs
+    && state.geometry === initial.journeyRoutePointGeometry;
+  const selectedCorrectly = (state, activeId) => state.routes.every((route) => (
+    route.state === (activeId ? (route.id === activeId ? "is-active" : "is-muted") : "is-idle")
+    && (route.id === activeId ? route.labels.length > 0 && route.labels.length <= 24 : route.labels.length === 0)
+  ));
+
+  const before = await snapshot();
+  record("routes:active-stop-and-selected-labels", { before }, unchangedGeometry(before)
+    && selectedCorrectly(before, southwest)
+    && before.routes.find((route) => route.id === southwest).labels.map((label) => label.index).sort().join(",") === "0,1,2,3,4,5");
+  await click(`[data-qa-route="${rhine}"]`);
+  await page.waitForFunction((id) => document.querySelector(`.particle-earth-route[data-journey-route="${id}"]`)?.classList.contains("is-active"), rhine);
+  await waitForProjection();
+  const switched = await snapshot();
+  record("routes:A-to-B-reuses-geometry-and-replaces-label-pool", { switched }, unchangedGeometry(switched)
+    && selectedCorrectly(switched, rhine)
+    && switched.routes.find((route) => route.id === rhine).labels.map((label) => label.index).join(",") === "0,1");
+  await click("[data-qa-route-clear]");
+  await page.waitForFunction(() => document.querySelectorAll(".particle-earth-route.is-active, .particle-earth-route.is-muted").length === 0);
+  await waitForProjection();
+  const cleared = await snapshot();
+  record("routes:B-to-none-reuses-geometry-and-clears-labels", { cleared }, unchangedGeometry(cleared)
+    && selectedCorrectly(cleared, null));
+
+  await click('[data-qa-route-optics-stage="rewound"]');
+  await page.waitForFunction((id) => document.querySelector(`.particle-earth-route[data-journey-route="${id}"]`)?.dataset.temporalReveal === "0.220", southwest);
+  await click(`[data-qa-route="${southwest}"]`);
+  await page.waitForFunction((id) => document.querySelector(`.particle-earth-route[data-journey-route="${id}"]`)?.classList.contains("is-active"), southwest);
+  await waitForProjection();
+  const rewound = await snapshot();
+  const rewoundRoute = rewound.routes.find((route) => route.id === southwest);
+  record("routes:reactivation-keeps-rewind-and-narrative-labels", { rewound }, unchangedGeometry(rewound)
+    && selectedCorrectly(rewound, southwest)
+    && rewoundRoute.temporal === "0.220"
+    && rewoundRoute.points[1].attention === "narrative-current"
+    && rewoundRoute.labels.some((label) => label.index === 1)
+    && rewoundRoute.points.slice(2).every((point) => point.temporalVisible === "false")
+    && rewoundRoute.points.slice(2).every((point) => point.temporal === "0.000")
+    && rewoundRoute.legs.slice(1).every((progress) => progress === "0.000")
+    && rewoundRoute.labels.filter((label) => label.index >= 2).every((label) => !label.visible));
+
+  await click('[data-qa-route-data="updated"]');
+  await page.waitForFunction((builds) => window.__particleEarthDebug?.().journeyRouteBuilds > builds, initial.journeyRouteBuilds);
+  await waitForProjection();
+  const updated = await snapshot();
+  const updatedRoute = updated.routes.find((route) => route.id === southwest);
+  record("routes:same-IDs-with-new-data-rebuild-geometry", { updated }, !updated.sameNodes
+    && updated.builds === initial.journeyRouteBuilds + 1
+    && updated.geometry !== initial.journeyRoutePointGeometry
+    && updatedRoute.stroke === "#e486b4"
+    && updatedRoute.points.map((point) => point.id).join(",") === "qa-p-15,qa-p-17,qa-p-16,qa-p-18,qa-p-19,qa-p-20"
+    && updatedRoute.points.slice(2).every((point) => point.temporal === "0.000")
+    && updatedRoute.legs.slice(1).every((progress) => progress === "0.000")
+    && selectedCorrectly(updated, southwest));
+  await click('[data-qa-route-data="original"]');
+  await page.waitForFunction((builds) => window.__particleEarthDebug?.().journeyRouteBuilds > builds, updated.builds);
+  await waitForProjection();
+  const restored = await snapshot();
+  const restoredRoute = restored.routes.find((route) => route.id === southwest);
+  record("routes:data-restore-rebuilds-and-restores-order", { restored, errors: run.errors }, restored.builds === updated.builds + 1
+    && restored.geometry !== updated.geometry
+    && restoredRoute.stroke === "#f4ce73"
+    && restoredRoute.points.map((point) => point.id).join(",") === "qa-p-15,qa-p-16,qa-p-17,qa-p-18,qa-p-19,qa-p-20"
+    && restoredRoute.points.slice(2).every((point) => point.temporal === "0.000")
+    && restoredRoute.legs.slice(1).every((progress) => progress === "0.000")
+    && run.errors.length === 0);
+  await run.context.close();
 }
 
 async function captureImprintStage(stage) {
@@ -54,6 +173,7 @@ async function captureImprintStage(stage) {
 }
 
 try {
+  await checkRouteReuse();
   for (const fixture of [
     { key: "dpr-1", width: 430, height: 932, dpr: 1 },
     { key: "dpr-2", width: 430, height: 932, dpr: 2 },

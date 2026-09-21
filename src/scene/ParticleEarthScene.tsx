@@ -28,7 +28,6 @@ import {
   Vector3,
   WebGLRenderer,
 } from "three";
-import { archiveRecords } from "../data/archiveRecords";
 import type { GlobeMode } from "../experience/types";
 import { getLightEffectPalette } from "../journey/lightEffects";
 import {
@@ -188,6 +187,7 @@ export const QUALITY_PROFILE = {
 export const MAX_RENDERED_JOURNEYS = 64;
 export const MAX_RENDERED_ROUTE_POINTS = 512;
 export const MAX_RENDERED_ROUTE_LINE_VERTICES = 8192;
+const EMPTY_ARCHIVE_POINTS: Parameters<typeof buildArtworkPointPositions>[0] = [];
 
 export type AttentionParticleLayerId =
   | "base-particle-surface"
@@ -1346,6 +1346,8 @@ interface ParticleEarthSceneProps {
     points: ReadonlyMap<string, number>;
   };
   showArchiveSignals?: boolean;
+  /** Static signal coordinates supplied by the legacy or QA scene owner. */
+  archivePoints?: Parameters<typeof buildArtworkPointPositions>[0];
   onReady?: () => void;
   /**
    * #252: the scene owns the camera, so it is the only place that can report
@@ -1733,6 +1735,7 @@ export function ParticleEarthScene({
   onHomeBaseActivate,
   temporalReveal,
   showArchiveSignals = true,
+  archivePoints = EMPTY_ARCHIVE_POINTS,
   onReady,
   onSemanticZoomSnapshot,
   onParticleAnchorFrame,
@@ -1969,6 +1972,10 @@ export function ParticleEarthScene({
         visitedImprintMaxGain: number;
         visitedImprintTextureUpdates: number;
         visitedImprintAttenuation: number;
+        journeyRouteBuilds: number;
+        journeyRouteBuildMs: number;
+        journeyRoutePointGeometry: string;
+        journeyRouteProjectionReady: boolean;
         coastlineVertices: number;
         coastlineSource: string;
         coastlineInspectionTarget: CoastlineInspectionTarget | null;
@@ -2022,6 +2029,10 @@ export function ParticleEarthScene({
       visitedImprintTextureUpdates,
       visitedImprintAttenuation: visitedImprintMaterials[0]
         ?.uniforms.uVisitedImprintAttenuation.value ?? 1,
+      journeyRouteBuilds,
+      journeyRouteBuildMs,
+      journeyRoutePointGeometry: routePointGeometry.uuid,
+      journeyRouteProjectionReady: renderedRouteProjectionRevision === routeProjectionRevision,
       coastlineVertices: (semanticZoomState.coastlineLod === "far"
         ? coastlineGeometry
         : semanticZoomState.coastlineLod === "mid" ? midCoastlineGeometry : nearCoastlineGeometry)
@@ -2273,7 +2284,7 @@ export function ParticleEarthScene({
     atmosphere.scale.setScalar(1.07);
     globe.add(atmosphere);
 
-    const archiveMaterial = showArchiveSignals
+    const archiveMaterial = showArchiveSignals && archivePoints.length > 0
       ? createParticleEarthMaterial({
           color: 0xd9fffb,
           opacity: 0.9,
@@ -2282,7 +2293,7 @@ export function ParticleEarthScene({
       : null;
     if (archiveMaterial) {
       const archiveGeometry = new BufferGeometry();
-      const archivePositions = buildArtworkPointPositions(archiveRecords, 1.43);
+      const archivePositions = buildArtworkPointPositions(archivePoints, 1.43);
       archiveGeometry.setAttribute("position", new BufferAttribute(archivePositions, 3));
       archiveGeometry.setAttribute("targetPosition", new BufferAttribute(archivePositions.slice(), 3));
       const archiveSignals = new Points(archiveGeometry, archiveMaterial);
@@ -2531,6 +2542,7 @@ export function ParticleEarthScene({
       corePath: SVGPathElement;
       leaderPath: SVGPathElement;
       fadeGradient: SVGLinearGradientElement;
+      labelCandidateIndexes: readonly number[];
       points: Array<{
         element: SVGCircleElement;
         position: Vector3;
@@ -2550,6 +2562,13 @@ export function ParticleEarthScene({
       }>;
     };
     let routeVectorEntries: RouteVectorEntry[] = [];
+    // React has already copied incoming props into latest* refs by the time
+    // the controller runs. Only these renderer-owned snapshots prove what the
+    // current geometry and active presentation have actually applied.
+    let appliedJourneyRoutes: readonly JourneyRoute[] | undefined;
+    let appliedActiveJourneyRouteId: string | null | undefined;
+    let journeyRouteBuilds = 0;
+    let journeyRouteBuildMs = 0;
     const createRouteVectorLabel = (
       labelText: string,
       pointIndex: number,
@@ -2577,6 +2596,32 @@ export function ParticleEarthScene({
         pointIndex,
       };
     };
+    const syncActiveJourneyRoute = () => {
+      for (const entry of routeVectorEntries) {
+        entry.group.classList.remove("is-idle", "is-active", "is-muted");
+        entry.group.classList.add(getJourneyRouteVisualState(
+          entry.routeId,
+          latestActiveJourneyRouteId.current,
+        ));
+        const candidates = new Set(entry.routeId === latestActiveJourneyRouteId.current
+          ? entry.labelCandidateIndexes
+          : []);
+        for (const point of entry.points) {
+          if (!candidates.has(point.routePointIndex)) {
+            point.label?.element.remove();
+            point.label = undefined;
+          } else if (!point.label && point.labelText) {
+            point.label = createRouteVectorLabel(
+              point.labelText,
+              point.routePointIndex,
+              routeLabelPositionRole(point.routePointIndex, entry.points.length),
+            );
+            point.label.element.style.display = "none";
+            entry.group.insertBefore(point.label.element, entry.legs[0]?.path ?? null);
+          }
+        }
+      }
+    };
     const syncRoutePresentations = () => {
       for (const entry of routeVectorEntries) {
         const routeAttention = resolveRouteAttentionRole({
@@ -2601,7 +2646,7 @@ export function ParticleEarthScene({
           point.element.dataset.temporalVisible = presentation.temporalVisible ? "true" : "false";
           point.element.setAttribute("r", String(routePointMarkerRadiusPx(presentation)));
         }
-        // #374: attention can land on a Route Point the build-time candidate
+        // #374: attention can land on a Route Point the ordinary candidate
         // pool did not cover, and selection does not rebuild this layer. Prepare
         // the attended point's label here instead - after every presentation in
         // this route is current, so the pool decision reads no stale role.
@@ -2612,7 +2657,7 @@ export function ParticleEarthScene({
           const prepared = entry.points.filter((candidate) => candidate.label);
           if (prepared.length >= MAX_ROUTE_LABEL_CANDIDATES) {
             // A route with more labeled Stops than the pool holds fills it with
-            // ordinary candidates at build time. Attention outranks them, so the
+            // ordinary candidates on activation. Attention outranks them, so the
             // last ordinary slot is recycled rather than leaving the chosen
             // record or the narrative current point without a label.
             const evictedIndex = selectEvictableRouteLabel(prepared.map((candidate) => ({
@@ -2638,6 +2683,12 @@ export function ParticleEarthScene({
       // Label visibility is now a function of attention and temporal state, so
       // a selection change has to re-run the projection pass even when the
       // camera has not moved.
+      // This is the prepared pool; the projection pass publishes the smaller
+      // set that actually fits on screen as journeyRouteVisibleLabelCount.
+      host.dataset.journeyRouteLabelCount = String(routeVectorEntries.reduce(
+        (count, entry) => count + entry.points.filter((point) => point.label).length,
+        0,
+      ));
       routeProjectionRevision += 1;
     };
     let routeVectorOpacity = 0;
@@ -2712,7 +2763,48 @@ export function ParticleEarthScene({
       }));
     };
 
+    const applyTemporalProgress = (
+      element: SVGElement,
+      property: string,
+      progress: number | undefined,
+    ) => {
+      if (progress === undefined) {
+        element.style.removeProperty(property);
+        delete element.dataset.temporalReveal;
+      } else {
+        element.style.setProperty(property, progress.toFixed(3));
+        element.dataset.temporalReveal = progress.toFixed(3);
+      }
+    };
+    const syncRouteTemporalReveal = () => {
+      const reveal = latestTemporalReveal.current;
+      for (const entry of routeVectorEntries) {
+        applyTemporalProgress(
+          entry.group,
+          "--journey-temporal-progress",
+          reveal?.journeys.get(entry.routeId),
+        );
+        for (const point of entry.points) {
+          applyTemporalProgress(
+            point.element,
+            "--journey-point-temporal-progress",
+            reveal?.points.get(`${entry.routeId}:${point.routePointIndex}`),
+          );
+        }
+        // Each leg reads its destination's reveal without changing the clock.
+        for (const leg of entry.legs) {
+          applyTemporalProgress(
+            leg.path,
+            "--journey-leg-temporal-progress",
+            reveal?.points.get(`${entry.routeId}:${leg.toPointIndex}`),
+          );
+        }
+      }
+      syncRoutePresentations();
+    };
+
     const applyJourneyRoutes = (routes: readonly JourneyRoute[]) => {
+      const buildStartedAt = performance.now();
       const visibleRoutes = selectRenderableJourneyRoutes(routes);
       const pointCount = visibleRoutes.reduce(
         (total, route) => total + route.points.length,
@@ -2734,7 +2826,6 @@ export function ParticleEarthScene({
       const pointTargets: JourneyPointPointerTarget[] = [];
       let pointIndex = 0;
       let routeVertexCount = 0;
-      let routeLabelCount = 0;
 
       routeVectorLayer.replaceChildren();
       routeVectorEntries = [];
@@ -2752,21 +2843,11 @@ export function ParticleEarthScene({
         );
         group.classList.add(
           "particle-earth-route",
-          getJourneyRouteVisualState(route.id, latestActiveJourneyRouteId.current),
           "is-style-quiet-core",
         );
         group.style.color = route.color;
         group.dataset.journeyRoute = route.id;
         group.dataset.lightEffect = route.lightEffect ?? "none";
-        // #21: the time cursor drives a route's presence. 0 = future
-        // (hidden), 0..1 = being revealed, 1 = visited. The CSS fades the
-        // whole trail via --journey-temporal-progress; per-point progress is
-        // applied by setTemporalReveal on the element level.
-        const reveal = latestTemporalReveal.current?.journeys.get(route.id);
-        if (reveal !== undefined) {
-          group.style.setProperty("--journey-temporal-progress", reveal.toFixed(3));
-          group.dataset.temporalReveal = reveal.toFixed(3);
-        }
         const glowPath = document.createElementNS(
           "http://www.w3.org/2000/svg",
           "path",
@@ -2831,16 +2912,6 @@ export function ParticleEarthScene({
         corePath.setAttribute("stroke", route.color);
         group.append(glowPath, corePath, leaderPath);
         const vectorPoints: RouteVectorEntry["points"] = [];
-        // #374: which labels are DRAWN is decided per frame from attention and
-        // available space, so the build only prepares a bounded candidate pool.
-        // It is wider than the rendered budget - a Route Point that becomes the
-        // chosen record or the narrative current point must already own a label
-        // element, because selection does not rebuild this layer.
-        const routeLabelIndexes = route.id === latestActiveJourneyRouteId.current
-          ? selectRouteLabelPointIndexes(route.points, MAX_ROUTE_LABEL_CANDIDATES)
-          : [];
-        const routeLabelIndexSet = new Set(routeLabelIndexes);
-        const routeLabelElements: SVGGElement[] = [];
 
         route.points.forEach((point, routePointIndex) => {
           // #193: the canonical Route Point anchor. The marker, the point
@@ -2894,28 +2965,16 @@ export function ParticleEarthScene({
           element.setAttribute("r", String(routePointMarkerRadiusPx(presentation)));
           group.appendChild(element);
           const labelText = point.label?.trim() ? point.label : undefined;
-          let label: RouteVectorLabel | undefined;
-          if (routeLabelIndexSet.has(routePointIndex) && labelText) {
-            label = createRouteVectorLabel(
-              labelText,
-              routePointIndex,
-              routeLabelPositionRole(routePointIndex, route.points.length),
-            );
-            routeLabelElements.push(label.element);
-            routeLabelCount += 1;
-          }
           vectorPoints.push({
             element,
             position,
             routePointId: point.id,
             isStop: point.isStop,
-            label,
             labelText,
             presentation,
             routePointIndex,
           });
         });
-        group.append(...routeLabelElements);
 
         const remainingVertices = resolveRouteVertexShare(
           routeVertexCount,
@@ -2979,6 +3038,10 @@ export function ParticleEarthScene({
           corePath,
           leaderPath,
           fadeGradient,
+          labelCandidateIndexes: selectRouteLabelPointIndexes(
+            route.points,
+            MAX_ROUTE_LABEL_CANDIDATES,
+          ),
           points: vectorPoints,
         });
       });
@@ -2997,17 +3060,20 @@ export function ParticleEarthScene({
       host.dataset.journeyRouteCount = String(visibleRoutes.length);
       host.dataset.journeyRoutePointCount = String(pointCount);
       host.dataset.journeyRouteVectorVertices = String(routeVertexCount);
-      // #374: the labels PREPARED for the chosen Journey, i.e. the bounded
-      // candidate pool. The labels actually drawn this frame are published by
-      // the projection pass as `journeyRouteVisibleLabelCount`.
-      host.dataset.journeyRouteLabelCount = String(routeLabelCount);
       host.dataset.journeyRouteOverflow = String(routes.length - visibleRoutes.length);
       host.dataset.routeStyle = "quiet-core";
       // Rebuilding the layer clears its children, so the connector is put back
       // last and therefore stays above the route presentation.
       routeVectorLayer.appendChild(journeyConnectorPath);
+      syncActiveJourneyRoute();
       updateRouteLabelSafeArea();
-      syncRoutePresentations();
+      // Data can change while the time cursor stays fixed. New point/leg DOM
+      // must receive the current reveal even when its React effect will not run.
+      syncRouteTemporalReveal();
+      appliedJourneyRoutes = routes;
+      appliedActiveJourneyRouteId = latestActiveJourneyRouteId.current;
+      journeyRouteBuilds += 1;
+      journeyRouteBuildMs += performance.now() - buildStartedAt;
     };
 
 
@@ -5897,10 +5963,20 @@ export function ParticleEarthScene({
         routes: readonly JourneyRoute[],
         activeRouteId: string | null | undefined,
       ) {
+        const routesChanged = appliedJourneyRoutes !== routes;
+        const activeRouteChanged = appliedActiveJourneyRouteId !== activeRouteId;
+        if (!routesChanged && !activeRouteChanged) return;
         latestActiveJourneyRouteId.current = activeRouteId;
         syncParticleDimming(routes, activeRouteId);
-        syncVisitedImprint(routes);
-        applyJourneyRoutes(routes);
+        if (routesChanged) {
+          syncVisitedImprint(routes);
+          applyJourneyRoutes(routes);
+        } else {
+          syncActiveJourneyRoute();
+          updateRouteLabelSafeArea();
+          syncRoutePresentations();
+          appliedActiveJourneyRouteId = activeRouteId;
+        }
       },
       setSelectedJourneyRoutePoint(selection: RoutePointSelection) {
         latestSelectedJourneyRoutePoint.current = selection;
@@ -5931,50 +6007,7 @@ export function ParticleEarthScene({
           reveal,
         );
         syncVisitedImprint(latestJourneyRoutes.current, reveal);
-        for (const entry of routeVectorEntries) {
-          const progress = reveal?.journeys.get(entry.routeId);
-          if (progress === undefined) {
-            entry.group.style.removeProperty("--journey-temporal-progress");
-            delete entry.group.dataset.temporalReveal;
-          } else {
-            entry.group.style.setProperty("--journey-temporal-progress", progress.toFixed(3));
-            entry.group.dataset.temporalReveal = progress.toFixed(3);
-          }
-          for (const point of entry.points) {
-            const pointProgress = reveal?.points.get(
-              `${entry.routeId}:${point.routePointIndex}`,
-            );
-            if (pointProgress === undefined) {
-              point.element.style.removeProperty("--journey-point-temporal-progress");
-              delete point.element.dataset.temporalReveal;
-            } else {
-              point.element.style.setProperty(
-                "--journey-point-temporal-progress",
-                pointProgress.toFixed(3),
-              );
-              point.element.dataset.temporalReveal = pointProgress.toFixed(3);
-            }
-          }
-          // Quiet Core: each leg uses normalized dash progress instead of
-          // fading the entire segment in. The time cursor remains the single
-          // semantic clock; this only changes how that progress is painted.
-          for (const leg of entry.legs) {
-            const legProgress = reveal?.points.get(
-              `${entry.routeId}:${leg.toPointIndex}`,
-            );
-            if (legProgress === undefined) {
-              leg.path.style.removeProperty("--journey-leg-temporal-progress");
-              delete leg.path.dataset.temporalReveal;
-            } else {
-              leg.path.style.setProperty(
-                "--journey-leg-temporal-progress",
-                legProgress.toFixed(3),
-              );
-              leg.path.dataset.temporalReveal = legProgress.toFixed(3);
-            }
-          }
-        }
-        syncRoutePresentations();
+        syncRouteTemporalReveal();
       },
       dispose() {
         disposed = true;
