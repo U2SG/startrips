@@ -125,6 +125,28 @@ class ReceiptGenerationBindingTests(unittest.TestCase):
         with self.assertRaises(external.ReceiptError):
             external.occupancy(SimpleNamespace(root=str(self.root)))
 
+    def test_unknown_status_cannot_be_recorded_or_free_capacity(self):
+        args = self.owner_args()
+        with mock.patch.object(external, 'branch_of', return_value='feat/issue1-st001'):
+            receipt = external.prepare(args)
+        before = external.load_receipt(self.root, 'ST-001')
+        with self.assertRaises(external.ReceiptError):
+            external.record(SimpleNamespace(
+                root=str(self.root), feature='ST-001', status='unknown',
+                request_id=receipt['request_id'], agent_ref=None,
+                task_ref=None, turn_id=None))
+        self.assertEqual(before, external.load_receipt(self.root, 'ST-001'))
+        self.assertEqual(1, external.occupancy(SimpleNamespace(root=str(self.root)))['occupied_slots'])
+
+    def test_unknown_stored_status_makes_occupancy_unknown(self):
+        args = self.owner_args()
+        with mock.patch.object(external, 'branch_of', return_value='feat/issue1-st001'):
+            receipt = external.prepare(args)
+        receipt['status'] = 'provider-new-state'
+        external.atomic_write(external.receipt_path(self.root, 'ST-001'), receipt)
+        with self.assertRaises(external.ReceiptError):
+            external.occupancy(SimpleNamespace(root=str(self.root)))
+
 
 if __name__ == '__main__':
     unittest.main()

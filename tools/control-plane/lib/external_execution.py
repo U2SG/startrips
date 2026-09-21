@@ -20,6 +20,8 @@ import uuid
 SCHEMA_VERSION = 1
 PROVIDER = "codexless"
 ACTIVE_STATUSES = {"prepared", "running", "awaitingApproval"}
+TERMINAL_STATUSES = {"idle", "completed", "failed", "interrupted", "rejected", "lost"}
+KNOWN_STATUSES = ACTIVE_STATUSES | TERMINAL_STATUSES
 
 
 class ReceiptError(RuntimeError):
@@ -64,6 +66,9 @@ def load_receipt(root: Path, feature: str) -> dict:
         raise ReceiptError(f"unsupported receipt for {feature}")
     if value.get("feature") != feature:
         raise ReceiptError(f"receipt feature mismatch for {feature}")
+    status = value.get("status")
+    if status not in KNOWN_STATUSES:
+        raise ReceiptError(f"unknown external execution status for {feature}: {status!r}")
     return value
 
 
@@ -117,6 +122,8 @@ def prepare(args: argparse.Namespace) -> dict:
 
 def record(args: argparse.Namespace) -> dict:
     root = Path(args.root).resolve()
+    if args.status not in KNOWN_STATUSES:
+        raise ReceiptError(f"unknown external execution status: {args.status!r}")
     value = load_receipt(root, args.feature)
     # Every receipt update must name the generation it belongs to. While this
     # comparison was skipped for a missing request id, a delayed generation-1
@@ -213,7 +220,7 @@ def main() -> int:
     p = sub.add_parser("record")
     p.add_argument("root")
     p.add_argument("feature")
-    p.add_argument("status")
+    p.add_argument("status", choices=sorted(KNOWN_STATUSES))
     p.add_argument("--request-id", required=True)
     p.add_argument("--agent-ref")
     p.add_argument("--task-ref")
