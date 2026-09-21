@@ -114,6 +114,43 @@ checked with their actual `agent_show` receipt before continuation; do not infer
 termination from a readOnly request or a disconnected chat. Session approvals and
 permissions remain with the original execution provider, never a broader fallback.
 
+Experience external-provider occupancy is provider-receipt state, not merely local
+process occupancy. `lib/execution.py occupied --lane experience` observes the bounded
+launcher/carrier transition; after `launch-experience.sh` prepares an external owner
+and exits it may report zero local carriers while formal Codex Experience owners are
+still running. The scheduler MUST reconcile `.agent-artifacts/external-execution/`
+receipts with fresh `agent_show`, count each proven `running`/`awaitingApproval` exact
+feature/worktree as one of the two Experience slots, fail closed on unknown provider
+state, and narrow selector probing with those active feature ids so no duplicate owner
+is prepared. ONE remains the only logical owner registry; receipts are execution
+evidence only.
+
+A formal Experience receipt keeps both the provider `agent_ref` and exact `task_ref`.
+`agent_show(agent_ref)` is the primary lifecycle probe. If it returns exact `unknown
+agentRef`, that is not proof the owner ended: query the receipt's exact `task_ref`
+read-only and accept it only when taskRef/requestId plus agentRef/turnId when present
+match the same receipt generation. A matching terminal task card may terminalize the
+receipt; a matching active card keeps the slot occupied. Missing/mismatched/unreadable
+task evidence, including provider schema failure while rendering an active task, stays
+UNKNOWN and fail-closed. Never create a new generation merely because agentRef lookup
+was lost.
+
+Experience pre-scope failures must preserve invocation identity, not only pid/lane.
+`launch-experience.sh` publishes its non-secret `EXPERIENCE_CARRIER_TOKEN`, and
+execution-provider conflict evidence preserves any parsed peer token. Equal exact
+tokens prove same-invocation self evidence; different non-null tokens prove a real
+concurrent peer claim; an absent/unreadable token remains UNKNOWN. This classification
+must not add sleeps/retries, kill carriers, or weaken same-lane exclusion.
+
+Every formal Experience start is authority-gated twice: fresh `project_context` for
+the exact canonical owner worktree MUST be `:workspace` / `workspaceWrite`, and the
+formal `agent_start` task card MUST bind `permissionProfile=:workspace`. A read-only,
+missing, ambiguous, or mismatched formal authority is a #399 / PR #461 provider
+failure: no product implementation, no launch storm, no Desktop Commander fallback,
+and no permission widening. The installed provider contract supports two concurrent
+Codex formal Experience owners; a backend formal-agent concurrency limit of one is a
+provider-capacity regression, not a Startrips one-slot policy.
+
 `lib/ci_observer.py` records failure evidence by lane, assertion, fixture,
 viewport/DPR and stage, keyed by run/attempt/job. Repeated families require root
 cause and sibling-assumption review through an existing issue, not timeout/retry
