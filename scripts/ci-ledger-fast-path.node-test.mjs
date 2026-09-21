@@ -4,8 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
-import { FULL_BROWSER_MATRIX, FAST_BROWSER_MATRIX, classifyLedgerOnlyFinal, classifySourceCi } from "./ci-ledger-fast-path.mjs";
+import { classifyLedgerOnlyFinal, classifySourceCi } from "./ci-ledger-fast-path.mjs";
 
 function git(cwd, ...args) {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
@@ -94,7 +95,12 @@ test("fails closed when final uses more than one commit", () => {
   assert.equal(result.reason, "final-commit-count-2");
 });
 
-test("full browser matrix keeps all 24 logical suites across exactly 8 shards", () => {
+test("workflow keeps all 24 logical browser suites across exactly 8 shards", () => {
+  const workflow = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "..", ".github", "workflows", "ci.yml"), "utf8").replace(/\r\n/g, "\n");
+  const matrixStart = workflow.indexOf("      matrix:\n        include:");
+  const stepsStart = workflow.indexOf("\n    steps:", matrixStart);
+  assert.ok(matrixStart >= 0 && stepsStart > matrixStart);
+  const matrixText = workflow.slice(matrixStart, stepsStart);
   const expectedSuites = new Set([
     "login-media", "post-login", "playback-prefetch", "playback-continuity", "final-acceptance",
     "route-anchoring", "city-label-anchoring", "earth-dive", "attention-hierarchy",
@@ -103,17 +109,14 @@ test("full browser matrix keeps all 24 logical suites across exactly 8 shards", 
     "route-point-context", "globe-render-budget", "guest-share", "home-base-suggestion",
     "home-base-context", "owner-share", "cover-reveal", "cover-reveal-opening",
   ]);
-  assert.equal(FULL_BROWSER_MATRIX.include.length, 8);
-  const actualSuites = new Set();
-  for (const shard of FULL_BROWSER_MATRIX.include) {
-    for (const suite of shard.suites.split("|").filter(Boolean)) actualSuites.add(suite);
+  const shardNames = [...matrixText.matchAll(/^          - name: ([a-z0-9-]+)$/gm)].map((match) => match[1]);
+  assert.equal(shardNames.length, 8);
+  const suites = new Set();
+  for (const match of matrixText.matchAll(/^            suites: "([^"]+)"$/gm)) {
+    for (const suite of match[1].split("|").filter(Boolean)) suites.add(suite);
   }
-  assert.deepEqual(actualSuites, expectedSuites);
-  const qaCommands = FULL_BROWSER_MATRIX.include.flatMap((shard) => shard.commands.match(/pnpm qa:[a-z0-9-]+/g) ?? []);
-  assert.equal(qaCommands.length, 26);
-  assert.deepEqual(FAST_BROWSER_MATRIX, {
-    include: [{ name: "source-reuse", suites: "|source-reuse|", commands: "true" }],
-  });
+  assert.deepEqual(suites, expectedSuites);
+  assert.equal((matrixText.match(/pnpm qa:[a-z0-9-]+/g) ?? []).length, 26);
 });
 
 function jobs({ productFailure = false, wrongLedgerFailure = false } = {}) {

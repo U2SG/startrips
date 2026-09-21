@@ -8,23 +8,6 @@ import { validatePrLedger } from "./pr-history.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-export const FULL_BROWSER_MATRIX = {
-  include: [
-    { name: "earth", suites: "|earth-dive|", commands: "pnpm qa:earth-dive" },
-    { name: "auth-media", suites: "|login-media|composer-playback-preview|", commands: "QA_CAPTURE_MEDIA_MOTION=1 pnpm qa:login-v3 && QA_CAPTURE_MEDIA_MOTION=1 pnpm qa:media-controls && QA_CAPTURE_MEDIA_MOTION=1 pnpm qa:media-reclassification\npnpm qa:composer-playback-preview" },
-    { name: "labels-recovery", suites: "|city-label-anchoring|recovery-surfaces|", commands: "pnpm qa:city-label-anchoring\npnpm qa:recovery-surfaces" },
-    { name: "reveal-share", suites: "|cover-reveal-opening|cover-reveal|owner-share|", commands: "pnpm qa:cover-reveal-opening\npnpm qa:cover-reveal\npnpm qa:owner-share" },
-    { name: "playback-brand", suites: "|playback-prefetch|playback-continuity|final-acceptance|brand-signature-motion|", commands: "pnpm qa:playback-prefetch\npnpm qa:playback-continuity\npnpm qa:final-acceptance\npnpm qa:brand-signature-motion" },
-    { name: "shell-composer", suites: "|post-login|mobile-contract|composer-route-points|composer-mobile-ia|", commands: "pnpm qa:post-login-controls\npnpm qa:mobile-contract\npnpm qa:composer-route-points\npnpm qa:composer-mobile-ia" },
-    { name: "globe-context", suites: "|globe-focus-chrome|globe-render-budget|route-point-context|attention-hierarchy|", commands: "pnpm qa:globe-focus-chrome\npnpm qa:globe-render-budget\npnpm qa:route-point-context\npnpm qa:attention-hierarchy" },
-    { name: "route-home-share", suites: "|route-anchoring|guest-share|home-base-suggestion|home-base-context|", commands: "pnpm qa:route-anchoring\npnpm qa:guest-share\npnpm qa:home-base-suggestion\npnpm qa:home-base-context" },
-  ],
-};
-
-export const FAST_BROWSER_MATRIX = {
-  include: [{ name: "source-reuse", suites: "|source-reuse|", commands: "true" }],
-};
-
 function fail(message) {
   throw new Error(message);
 }
@@ -186,10 +169,13 @@ async function main() {
   output("ledger_only_final", plan.fastPath ? "true" : "false");
   output("source_sha", plan.sourceSha ?? "");
   output("reason", plan.reason.replace(/[\r\n]+/g, " "));
-  output("browser_matrix", JSON.stringify(plan.fastPath ? FAST_BROWSER_MATRIX : FULL_BROWSER_MATRIX));
 
   if (!plan.fastPath) {
     console.log(`full CI: ${plan.reason}`);
+    return;
+  }
+  if (process.env.CLASSIFY_ONLY === "1") {
+    console.log(`ledger-only final classification: Source ${plan.sourceSha}`);
     return;
   }
 
