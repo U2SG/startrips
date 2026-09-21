@@ -11,6 +11,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -23,6 +24,7 @@ import feature_store as store
 import github_evidence as gh
 import feature_state as state
 import runtime_preflight as runtime
+import external_execution as external
 
 A, B, C = 'a' * 40, 'b' * 40, 'c' * 40
 REPO = 'synthetic/project'
@@ -76,6 +78,79 @@ class SyntheticOne(unittest.TestCase):
 
     def write(self, *rows):
         self.path.write_text(json.dumps(document(*rows), ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+
+
+class ExternalExecutionReceiptTests(SyntheticOne):
+    def owner_args(self):
+        worktree = self.root / 'owner'
+        worktree.mkdir()
+        (worktree / '.git').write_text('gitdir: synthetic', encoding='utf-8')
+        return SimpleNamespace(root=str(self.root), feature='ST-001', worktree=str(worktree),
+                               action='IMPLEMENT', row_token='row-token-1')
+
+    def test_prepare_is_evidence_only_and_request_id_is_stable(self):
+        before = self.path.read_bytes()
+        args = self.owner_args()
+        with mock.patch.object(external, 'branch_of', return_value='feat/issue1-st001'):
+            first = external.prepare(args)
+            second = external.prepare(args)
+        self.assertEqual('startrips-experience-st-001-owner', first['owner_key'])
+        self.assertEqual(first['request_id'], second['request_id'])
+        self.assertEqual(1, first['generation'])
+        self.assertEqual('prepared', second['status'])
+        self.assertEqual(before, self.path.read_bytes())
+        self.assertTrue(external.receipt_path(self.root, 'ST-001').exists())
+
+    def test_running_receipt_requires_provider_identity(self):
+        args = self.owner_args()
+        with mock.patch.object(external, 'branch_of', return_value='feat/issue1-st001'):
+            prepared = external.prepare(args)
+        with self.assertRaises(external.ReceiptError):
+            external.record(SimpleNamespace(
+                root=str(self.root), feature='ST-001', status='running',
+                request_id=prepared['request_id'], agent_ref=None, task_ref=None, turn_id=None))
+        current = external.load_receipt(self.root, 'ST-001')
+        self.assertEqual('prepared', current['status'])
+        self.assertIsNone(current['agent_ref'])
+
+    def test_same_agent_followup_advances_task_and_turn_identity(self):
+        args = self.owner_args()
+        with mock.patch.object(external, 'branch_of', return_value='feat/issue1-st001'):
+            prepared = external.prepare(args)
+        external.record(SimpleNamespace(
+            root=str(self.root), feature='ST-001', status='running',
+            request_id=prepared['request_id'], agent_ref='agent-1', task_ref='task-1', turn_id='turn-1'))
+        current = external.record(SimpleNamespace(
+            root=str(self.root), feature='ST-001', status='running',
+            request_id=prepared['request_id'], agent_ref='agent-1', task_ref='task-2', turn_id='turn-2'))
+        self.assertEqual(('agent-1', 'task-2', 'turn-2'),
+                         (current['agent_ref'], current['task_ref'], current['turn_id']))
+
+    def test_provider_identity_cannot_drift_within_generation(self):
+        args = self.owner_args()
+        with mock.patch.object(external, 'branch_of', return_value='feat/issue1-st001'):
+            prepared = external.prepare(args)
+        external.record(SimpleNamespace(
+            root=str(self.root), feature='ST-001', status='running',
+            request_id=prepared['request_id'], agent_ref='agent-1', task_ref='task-1', turn_id='turn-1'))
+        with self.assertRaises(external.ReceiptError):
+            external.record(SimpleNamespace(
+                root=str(self.root), feature='ST-001', status='running',
+                request_id=prepared['request_id'], agent_ref='agent-2', task_ref=None, turn_id=None))
+
+    def test_ended_generation_gets_fresh_idempotency_key(self):
+        args = self.owner_args()
+        with mock.patch.object(external, 'branch_of', return_value='feat/issue1-st001'):
+            first = external.prepare(args)
+            external.record(SimpleNamespace(
+                root=str(self.root), feature='ST-001', status='idle',
+                request_id=first['request_id'], agent_ref='agent-1', task_ref='task-1', turn_id='turn-1'))
+            second = external.prepare(args)
+            repeated = external.prepare(args)
+        self.assertEqual(2, second['generation'])
+        self.assertNotEqual(first['request_id'], second['request_id'])
+        self.assertEqual(second['request_id'], repeated['request_id'])
+        self.assertIsNone(second['agent_ref'])
 
 
 class StoreTests(SyntheticOne):
@@ -524,6 +599,32 @@ class WiringTests(SyntheticOne):
             }) + '))\n',
             encoding='utf-8', newline='\n')
 
+    def write_external_receipt(self, feature_id, *, status='running', agent_ref='agent-test'):
+        worktree = self.root / 'worker-worktrees' / feature_id.lower()
+        worktree.mkdir(parents=True, exist_ok=True)
+        receipt = {
+            'schema_version': 1,
+            'provider': 'codexless',
+            'feature': feature_id,
+            'owner_key': f'startrips-experience-{feature_id.lower()}-owner',
+            'generation': 1,
+            'worktree': str(worktree).replace('\\', '/'),
+            'branch': f'feat/{feature_id.lower()}',
+            'action': 'IMPLEMENT',
+            'row_token': 'row-token',
+            'request_id': f'{feature_id.lower()}-request',
+            'status': status,
+            'agent_ref': agent_ref,
+            'task_ref': None,
+            'turn_id': None,
+            'prepared_at': '2026-09-21T00:00:00+00:00',
+            'observed_at': None,
+        }
+        directory = self.root / '.agent-artifacts' / 'external-execution'
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / f'{feature_id}.json').write_text(
+            json.dumps(receipt), encoding='utf-8', newline='\n')
+
     def test_experience_selector_skips_provider_occupied_owner(self):
         self.write(
             feature('ST-001', phase='P1-globe', status='in_progress',
@@ -535,9 +636,40 @@ class WiringTests(SyntheticOne):
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual('ST-002', result.stdout.strip())
 
+    def test_experience_selector_skips_external_owner_when_local_carrier_is_gone(self):
+        self.write(
+            feature('ST-001', phase='P1-globe', status='in_progress'),
+            feature('ST-002', phase='P1-globe', priority=2),
+        )
+        self.write_occupied_probe(features=[], available_slots=2)
+        self.write_external_receipt('ST-001')
+        result = self.invoke('export STARTRIPS_LANE=experience; bash run-loop.sh --next')
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual('ST-002', result.stdout.strip())
+
+    def test_experience_selector_counts_prepared_external_transition_as_occupied(self):
+        self.write(
+            feature('ST-001', phase='P1-globe', status='in_progress'),
+            feature('ST-002', phase='P1-globe', priority=2),
+        )
+        self.write_occupied_probe(features=[], available_slots=2)
+        self.write_external_receipt('ST-001', status='prepared', agent_ref=None)
+        result = self.invoke('export STARTRIPS_LANE=experience; bash run-loop.sh --next')
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual('ST-002', result.stdout.strip())
+
     def test_experience_selector_returns_no_third_owner_when_two_slots_full(self):
         self.write(feature('ST-003', phase='P1-globe', priority=3))
         self.write_occupied_probe(features=['ST-001', 'ST-002'], available_slots=0)
+        result = self.invoke('export STARTRIPS_LANE=experience; bash run-loop.sh --next')
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual('', result.stdout.strip())
+
+    def test_experience_selector_returns_no_third_owner_when_external_slots_full(self):
+        self.write(feature('ST-003', phase='P1-globe', priority=3))
+        self.write_occupied_probe(features=[], available_slots=2)
+        self.write_external_receipt('ST-001')
+        self.write_external_receipt('ST-002')
         result = self.invoke('export STARTRIPS_LANE=experience; bash run-loop.sh --next')
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual('', result.stdout.strip())
@@ -615,6 +747,10 @@ class WiringTests(SyntheticOne):
         self.assertIn('FEATURE_SKIP', loop)
         self.assertIn('failure_family_owner', loop)
         self.assertIn('Recurring CI family is canonically owned by $FAMILY_OWNER', loop)
+        self.assertIn('EXPERIENCE_EXTERNAL_DISPATCH=', loop)
+        self.assertIn('LOCAL_MODEL_PROVIDER_FORBIDDEN_FOR_LANE=', loop)
+        self.assertIn('Experience provider is external Codexless; model intake/re-triage delegated to Orchestrator', loop)
+        self.assertLess(loop.index('EXPERIENCE_EXTERNAL_DISPATCH='), loop.index('claude_run -p'))
         self.assertIn('if [[ "${EVAL_ONLY:-0}" == "1" ]]; then', loop)
         self.assertNotIn('if [[ "\\${EVAL_ONLY:-0}" == "1" ]]; then', loop)
 
