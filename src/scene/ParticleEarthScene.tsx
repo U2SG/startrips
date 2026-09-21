@@ -28,7 +28,6 @@ import {
   Vector3,
   WebGLRenderer,
 } from "three";
-import { archiveRecords } from "../data/archiveRecords";
 import type { GlobeMode } from "../experience/types";
 import { getLightEffectPalette } from "../journey/lightEffects";
 import {
@@ -188,6 +187,7 @@ export const QUALITY_PROFILE = {
 export const MAX_RENDERED_JOURNEYS = 64;
 export const MAX_RENDERED_ROUTE_POINTS = 512;
 export const MAX_RENDERED_ROUTE_LINE_VERTICES = 8192;
+const EMPTY_ARCHIVE_POINTS: Parameters<typeof buildArtworkPointPositions>[0] = [];
 
 export type AttentionParticleLayerId =
   | "base-particle-surface"
@@ -1346,6 +1346,8 @@ interface ParticleEarthSceneProps {
     points: ReadonlyMap<string, number>;
   };
   showArchiveSignals?: boolean;
+  /** Static signal coordinates supplied by the legacy or QA scene owner. */
+  archivePoints?: Parameters<typeof buildArtworkPointPositions>[0];
   onReady?: () => void;
   /**
    * #252: the scene owns the camera, so it is the only place that can report
@@ -1733,6 +1735,7 @@ export function ParticleEarthScene({
   onHomeBaseActivate,
   temporalReveal,
   showArchiveSignals = true,
+  archivePoints = EMPTY_ARCHIVE_POINTS,
   onReady,
   onSemanticZoomSnapshot,
   onParticleAnchorFrame,
@@ -2281,7 +2284,7 @@ export function ParticleEarthScene({
     atmosphere.scale.setScalar(1.07);
     globe.add(atmosphere);
 
-    const archiveMaterial = showArchiveSignals
+    const archiveMaterial = showArchiveSignals && archivePoints.length > 0
       ? createParticleEarthMaterial({
           color: 0xd9fffb,
           opacity: 0.9,
@@ -2290,7 +2293,7 @@ export function ParticleEarthScene({
       : null;
     if (archiveMaterial) {
       const archiveGeometry = new BufferGeometry();
-      const archivePositions = buildArtworkPointPositions(archiveRecords, 1.43);
+      const archivePositions = buildArtworkPointPositions(archivePoints, 1.43);
       archiveGeometry.setAttribute("position", new BufferAttribute(archivePositions, 3));
       archiveGeometry.setAttribute("targetPosition", new BufferAttribute(archivePositions.slice(), 3));
       const archiveSignals = new Points(archiveGeometry, archiveMaterial);

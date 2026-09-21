@@ -19,7 +19,7 @@ const ENDPOINT_TOLERANCE_PX = 1.5;
 
 // #219 focus-signal framing. A separate page load that frames the focus point
 // on a REAL Route Point of the same fixture - qa-p-17 "Las Vegas", index 2 of
-// qa-route-southwest in src/main.tsx - so the focus signal the journey
+// qa-route-southwest in src/preview/qaEntry.tsx - so the focus signal the journey
 // connector terminates on can be measured against the marker of the very Route
 // Point it represents. The framing above is left alone on purpose.
 const FOCUS_ROUTE_POINT_INDEX = 2;
@@ -30,7 +30,7 @@ const focusQaUrl = new URL(
 ).toString();
 
 // #242 short-leg framing. A synthetic evenly spaced chain of ~0.5 degree legs
-// (qa-route-short-legs in src/main.tsx, generated from one origin and a
+// (qa-route-short-legs in src/preview/qaEntry.tsx, generated from one origin and a
 // constant step - no real itinerary is committed here), framed on its own
 // centre and then rotated out to the limb. Short legs are where the retired
 // sqrt lift policy stood tallest relative to the leg it decorated: about 1.18

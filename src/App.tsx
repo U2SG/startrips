@@ -8,7 +8,7 @@ import { PersonalGalleryRoute } from "./components/PersonalGalleryRoute";
 import { PersonalMomentDetail } from "./components/PersonalMomentDetail";
 import { PointPlacedConfirmation } from "./components/PointPlacedConfirmation";
 import { SignalLog } from "./components/SignalLog";
-import { archiveBrowserRecords } from "./data/archiveRecords";
+import { archiveBrowserRecords, archiveRecords } from "./data/archiveRecords";
 import { EMPTY_UPLOAD_DRAFT, experienceReducer } from "./experience/reducer";
 import { hydrateQaState } from "./experience/qaState";
 import type { PersonalMoment } from "./experience/types";
@@ -185,6 +185,7 @@ export function App() {
           <ParticleEarthScene
             mode={state.globeMode}
             quality="high"
+            archivePoints={archiveRecords}
             focusPoint={state.focusedPoint}
             focusColor={selectedMoment?.lightColor}
             centerFocusPoint={!state.qaState && state.phase === "earthReturn"}
