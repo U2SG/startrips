@@ -211,51 +211,51 @@ jobs:
           - name: earth
             suites: "|earth-dive|"
             commands: |
-              pnpm qa:earth-dive
+              earth-dive::pnpm qa:earth-dive
           - name: auth-media
             suites: "|login-media|composer-playback-preview|"
             commands: |
-              QA_CAPTURE_MEDIA_MOTION=1 pnpm qa:login-v3 && QA_CAPTURE_MEDIA_MOTION=1 pnpm qa:media-controls && QA_CAPTURE_MEDIA_MOTION=1 pnpm qa:media-reclassification
-              pnpm qa:composer-playback-preview
+              login-media::QA_CAPTURE_MEDIA_MOTION=1 pnpm qa:login-v3 && QA_CAPTURE_MEDIA_MOTION=1 pnpm qa:media-controls && QA_CAPTURE_MEDIA_MOTION=1 pnpm qa:media-reclassification
+              composer-playback-preview::pnpm qa:composer-playback-preview
           - name: labels-recovery
             suites: "|city-label-anchoring|recovery-surfaces|"
             commands: |
-              pnpm qa:city-label-anchoring
-              pnpm qa:recovery-surfaces
+              city-label-anchoring::pnpm qa:city-label-anchoring
+              recovery-surfaces::pnpm qa:recovery-surfaces
           - name: reveal-share
             suites: "|cover-reveal-opening|cover-reveal|owner-share|"
             commands: |
-              pnpm qa:cover-reveal-opening
-              pnpm qa:cover-reveal
-              pnpm qa:owner-share
+              cover-reveal-opening::pnpm qa:cover-reveal-opening
+              cover-reveal::pnpm qa:cover-reveal
+              owner-share::pnpm qa:owner-share
           - name: playback-brand
             suites: "|playback-prefetch|playback-continuity|final-acceptance|brand-signature-motion|"
             commands: |
-              pnpm qa:playback-prefetch
-              pnpm qa:playback-continuity
-              pnpm qa:final-acceptance
-              pnpm qa:brand-signature-motion
+              playback-prefetch::pnpm qa:playback-prefetch
+              playback-continuity::pnpm qa:playback-continuity
+              final-acceptance::pnpm qa:final-acceptance
+              brand-signature-motion::pnpm qa:brand-signature-motion
           - name: shell-composer
             suites: "|post-login|mobile-contract|composer-route-points|composer-mobile-ia|"
             commands: |
-              pnpm qa:post-login-controls
-              pnpm qa:mobile-contract
-              pnpm qa:composer-route-points
-              pnpm qa:composer-mobile-ia
+              post-login::pnpm qa:post-login-controls
+              mobile-contract::pnpm qa:mobile-contract
+              composer-route-points::pnpm qa:composer-route-points
+              composer-mobile-ia::pnpm qa:composer-mobile-ia
           - name: globe-context
             suites: "|globe-focus-chrome|globe-render-budget|route-point-context|attention-hierarchy|"
             commands: |
-              pnpm qa:globe-focus-chrome
-              pnpm qa:globe-render-budget
-              pnpm qa:route-point-context
-              pnpm qa:attention-hierarchy
+              globe-focus-chrome::pnpm qa:globe-focus-chrome
+              globe-render-budget::pnpm qa:globe-render-budget
+              route-point-context::pnpm qa:route-point-context
+              attention-hierarchy::pnpm qa:attention-hierarchy
           - name: route-home-share
             suites: "|route-anchoring|guest-share|home-base-suggestion|home-base-context|"
             commands: |
-              pnpm qa:route-anchoring
-              pnpm qa:guest-share
-              pnpm qa:home-base-suggestion
-              pnpm qa:home-base-context
+              route-anchoring::pnpm qa:route-anchoring
+              guest-share::pnpm qa:guest-share
+              home-base-suggestion::pnpm qa:home-base-suggestion
+              home-base-context::pnpm qa:home-base-context
 
     steps:
       - uses: actions/checkout@v7
@@ -287,7 +287,7 @@ jobs:
       - name: Install Chromium
         if: steps.final-plan.outputs.ledger_only_final != 'true'
         run: pnpm exec playwright-core install --with-deps chromium
-      - name: Run browser QA shard
+      - name: Run browser QA
         if: steps.final-plan.outputs.ledger_only_final != 'true'
         env:
           QA_COMMANDS: ${{ matrix.commands }}
@@ -304,11 +304,19 @@ jobs:
           done
           curl --fail --silent http://127.0.0.1:4173/ > /dev/null || (cat /tmp/startrips-vite.log && exit 1)
           status=0
-          while IFS= read -r qa_command; do
-            [[ -n "$qa_command" ]] || continue
-            echo "::group::$qa_command"
+          while IFS= read -r qa_entry; do
+            [[ -n "$qa_entry" ]] || continue
+            qa_suite="${qa_entry%%::*}"
+            qa_command="${qa_entry#*::}"
+            if [[ -z "$qa_suite" || "$qa_suite" == "$qa_entry" || -z "$qa_command" ]]; then
+              echo "::error::Invalid browser QA shard entry: $qa_entry"
+              status=1
+              continue
+            fi
+            echo "STARTRIPS_QA_SUITE=$qa_suite"
+            echo "::group::$qa_suite :: $qa_command"
             if ! bash -lc "$qa_command"; then
-              echo "::error::Browser QA command failed: $qa_command"
+              echo "::error::Browser QA command failed: $qa_suite :: $qa_command"
               status=1
             fi
             echo "::endgroup::"
