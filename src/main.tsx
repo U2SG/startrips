@@ -1104,6 +1104,13 @@ type ContinuityQaTrace = { cameraTargets: { key: string; at: number }[] };
 
 function JourneyPlaybackContinuityQaPreview() {
   const params = new URLSearchParams(window.location.search);
+  const bridgeVideo = params.get("qaMapBridgeVideo") === "1";
+  const journey = useMemo(() => bridgeVideo ? {
+    ...continuityQaJourney,
+    media: continuityQaJourney.media.map((asset) => asset.id === "st109-p1-m0"
+      ? { ...asset, mimeType: "video/webm", fileName: "bridge.webm" } : asset),
+  } : continuityQaJourney, [bridgeVideo]);
+  const [closed, setClosed] = useState(false);
   // Reduced Motion is a run parameter here, not a constant: acceptance 6 is
   // only observable if the SAME fixture can be played both ways.
   const reduceMotion = params.get("qaReduceMotion") !== "0";
@@ -1116,13 +1123,13 @@ function JourneyPlaybackContinuityQaPreview() {
   return (
     <main className="living-atlas">
       <div className="living-atlas__globe journey-story-qa__backdrop" aria-hidden="true" />
-      <JourneyPlaybackOverlay
-        journey={continuityQaJourney}
-        onClose={() => undefined}
+      {closed ? null : <JourneyPlaybackOverlay
+        journey={journey}
+        onClose={() => setClosed(true)}
         onCameraTargetChange={recordCameraTarget}
         playbackMode="full"
         reduceMotion={reduceMotion}
-      />
+      />}
     </main>
   );
 }

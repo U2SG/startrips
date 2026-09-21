@@ -20,6 +20,7 @@ import "../styles/starlight-media.css";
 import { useAtlasView } from "./atlasView";
 import type { HomeNarrativeContext } from "./homeBasePrelude";
 import { PlaybackMediaStage } from "./PlaybackMediaStage";
+import { usePlaybackMapBridge } from "./usePlaybackMapBridge";
 import { mediaReadIsFresh } from "./mediaReadRefresh";
 import {
   createDecodeRegistry,
@@ -289,21 +290,10 @@ export function JourneyPlaybackOverlay({
       committedJourneyIdRef.current = journeyId;
       committedPositionRef.current = null;
     }
-    if (!journey || !director.step || director.step.kind === "media") return;
-    committedPositionRef.current = committedPlaybackPosition(journey, director.step);
   }, [director.step, journey]);
   const handlePresentationPendingChange = useCallback((pending: boolean) => {
     setPresentationPending(pending);
   }, []);
-  const handlePresentationCommit = useCallback((presentedAssetId: string) => {
-    if (!journey) return;
-    committedPositionRef.current = commitPresentedPlaybackPosition(
-      committedPositionRef.current,
-      journey,
-      director.step,
-      presentedAssetId,
-    );
-  }, [director.step, journey]);
   const quickRecapSelectionSummary = useMemo(() => (
     playbackMode === "quick-recap" && quickRecapPlan && quickRecapSourceJourney
       ? buildQuickRecapSelectionSummary(quickRecapPlan, quickRecapSourceJourney)
@@ -999,7 +989,10 @@ export function JourneyPlaybackOverlay({
   // Journey; travel/stop/media point at one route point. The key guard avoids
   // reissuing the same point command across stop -> media chapters.
   const lastCameraTargetKeyRef = useRef<string | null>(null);
-  useEffect(() => {
+  const commitSpatial = useCallback(() => {
+    if (journey && director.step && director.step.kind !== "media") {
+      committedPositionRef.current = committedPlaybackPosition(journey, director.step);
+    }
     const target = playbackCameraTargetForStep(director.step, journey);
     if (!target || !journey) return;
     const targetKey = `${journey.id}:${playbackCameraTargetKey(target)}`;
@@ -1007,6 +1000,15 @@ export function JourneyPlaybackOverlay({
     lastCameraTargetKeyRef.current = targetKey;
     onCameraTargetChange(target);
   }, [director.step, journey, onCameraTargetChange]);
+  const mapBridge = usePlaybackMapBridge({ journey, director, root: overlayRef,
+    reduceMotion: audioReactiveReducedMotion, commitSpatial });
+  const handlePresentationCommit = useCallback((presentedAssetId: string) => {
+    if (!journey || !mapBridge.isCurrent()) return;
+    committedPositionRef.current = commitPresentedPlaybackPosition(
+      committedPositionRef.current, journey, director.step, presentedAssetId,
+    );
+    mapBridge.recordMedia();
+  }, [director.step, journey, mapBridge.isCurrent, mapBridge.recordMedia]);
 
   // Keyboard: arrows step, space pauses, Esc exits.
   useEffect(() => {
@@ -1272,6 +1274,8 @@ export function JourneyPlaybackOverlay({
       // #456: the sparse chapter density of the Route Point on screen, so the
       // continuity lane grades 0 / 1 / 3 media directly instead of counting DOM.
       data-playback-chapter-density={chapterDensity ?? "none"}
+      data-playback-map-bridge={mapBridge.boundary?.direction ?? "none"}
+      data-playback-map-bridge-point={mapBridge.boundary?.pointIndex}
     >
       <audio
         ref={audioRef}
@@ -1355,7 +1359,9 @@ export function JourneyPlaybackOverlay({
             asset={activeMedia}
             url={activeRead?.status === "ready" ? activeRead.url : null}
             preview={activeRead?.status === "ready" ? activeRead.preview : undefined}
-            intent={`${journey.id}:${playbackStepIdentity(journey, step)}:${director.stepIndex}:${activeVideoTrimInMs}:${activeVideoTrimOutMs}`}
+            intent={`${journey.id}:${playbackStepIdentity(journey, step)}:${director.stepIndex}:${director.intentRevision}:${activeVideoTrimInMs}:${activeVideoTrimOutMs}`}
+            mapEntrance={mapBridge.entrance}
+            isIntentCurrent={mapBridge.isCurrent}
             stepIndex={director.stepIndex}
             imageReady={activeMediaGate === "ready"}
             videoPositionReady={!activeVideoTrim || (enteredVideoTrimKeyRef.current === activeVideoTrimKey

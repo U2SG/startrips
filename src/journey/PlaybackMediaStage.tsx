@@ -15,6 +15,7 @@ import { StartripsJourneyCue } from "../brand/StartripsBrandMark";
 import { mediaStackOpacity, mediaStackRest } from "./mediaStackMotion";
 import { springElementTo } from "../motion/springElement";
 import { mediaPreviewLayer } from "./mediaPreviewLayer";
+import type { PlaybackMapBridge } from "./playbackMapBridge";
 import type { JourneyMediaAsset, MediaPreviewRead } from "./types";
 import "../styles/playback-media-presentation.css";
 
@@ -45,6 +46,8 @@ type Props = {
   onPendingChange: (pending: boolean) => void;
   onPresented: (assetId: string) => void;
   onUnavailable: () => void;
+  mapEntrance?: (element: HTMLElement) => PlaybackMapBridge | null;
+  isIntentCurrent?: () => boolean;
 };
 
 // Keep the departing video frame in its physical slot without keeping a second
@@ -181,14 +184,16 @@ export function PlaybackMediaStage(props: Props) {
   // pending, but only a request that owns the visible slot may advance the
   // narrative return commit log.
   useLayoutEffect(() => {
-    if (!presented) return;
+    if (!presented || props.isIntentCurrent?.() === false) return;
     props.onPresented(props.asset.id);
   }, [presented, props.asset.id, props.onPresented]);
 
   useLayoutEffect(() => {
     if (!ready || failed || presented || stage.requested === null) return;
     const requested = stage.requested;
-    const stillCurrent = () => requestKeyRef.current === requestKey;
+    let cancelled = false;
+    const stillCurrent = () => !cancelled && requestKeyRef.current === requestKey
+      && latest.current.isIntentCurrent?.() !== false;
     const commit = () => {
       if (!stillCurrent()) return;
       setStage((current) => {
@@ -203,7 +208,19 @@ export function PlaybackMediaStage(props: Props) {
     const shown = stage.shown;
     const from = shown === null ? null : slots.current[shown];
     const to = slots.current[requested];
-    if (shown === null || props.reduceMotion || !from || !to) {
+    // The first media uses the same presentable-frame gate as every other
+    // media. In particular a video never gains another live transport here.
+    const bridge = shown === null && to ? props.mapEntrance?.(to) : null;
+    if (bridge?.spatial && to) {
+      to.style.transform = bridge.from.transform;
+      to.style.opacity = String(bridge.from.opacity);
+      to.style.zIndex = "4";
+      setMovingKey(requestKey);
+      const motion = springElementTo(to, bridge.to, { owner: props.intent });
+      void motion.finished.then(commit, () => undefined);
+      return () => { cancelled = true; motion.cancel(); };
+    }
+    if (shown === null || props.reduceMotion || props.paused || !from || !to) {
       if (to) {
         to.style.transform = mediaStackRest(0);
         to.style.opacity = "1";
@@ -217,7 +234,7 @@ export function PlaybackMediaStage(props: Props) {
       to.style.zIndex = "4";
       const recovery = springElementTo(to, { transform: mediaStackRest(0), opacity: 1 }, { owner: props.asset.id });
       void recovery.finished.then(commit, () => undefined);
-      return () => recovery.cancel();
+      return () => { cancelled = true; recovery.cancel(); };
     }
     from.style.zIndex = "2";
     to.style.zIndex = "4";
@@ -226,8 +243,8 @@ export function PlaybackMediaStage(props: Props) {
     const incoming = springElementTo(to, { transform: mediaStackRest(0), opacity: 1 },
       { owner: props.asset.id });
     void Promise.all([outgoing.finished, incoming.finished]).then(commit, () => undefined);
-    return () => { outgoing.cancel(); incoming.cancel(); };
-  }, [failed, presented, props.asset.id, props.intent, props.reduceMotion, ready, requestKey, stage.requested, stage.shown]);
+    return () => { cancelled = true; outgoing.cancel(); incoming.cancel(); };
+  }, [failed, presented, props.asset.id, props.intent, props.mapEntrance, props.paused, props.reduceMotion, ready, requestKey, stage.requested, stage.shown]);
 
   const unavailable = () => {
     setFailedKey(requestKey);

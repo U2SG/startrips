@@ -43,6 +43,7 @@
     "qa:media-controls": "node scripts/qa-media-controls.mjs",
     "qa:playback-prefetch": "node scripts/qa-playback-prefetch.mjs",
     "qa:playback-continuity": "node scripts/qa-playback-continuity.mjs",
+    "qa:playback-map-bridge": "node scripts/qa-playback-map-bridge.mjs",
     "qa:keepsake-render": "tsx scripts/qa-keepsake-private-render.ts",
     "qa:media-reclassification": "node scripts/qa-media-reclassification.mjs",
     "qa:post-login-controls": "node scripts/qa-post-login-controls.mjs",

@@ -295,7 +295,8 @@ export function useJourneyPlaybackDirector(
     liveRevision: intentRevisionRef.current,
     blockedThroughRevision: prefetchBlockedThroughRevisionRef.current,
   }), []);
-  const pause = useCallback(() => transition({ type: "pause" }), [transition]);
+  const invalidatePresentation = useCallback(() => advanceNarrativeIntent(() => undefined), [advanceNarrativeIntent]);
+  const pause = useCallback(() => advanceNarrativeIntent(() => transition({ type: "pause" })), [advanceNarrativeIntent, transition]);
   const resume = useCallback(() => transition({ type: "resume" }), [transition]);
   const next = useCallback(() => advanceNarrativeIntent(() => transition({ type: "next" })), [advanceNarrativeIntent, transition]);
   const complete = useCallback(() => transition({ type: "advance" }), [transition]);
@@ -320,7 +321,7 @@ export function useJourneyPlaybackDirector(
     }
     return revision;
   }, [advanceNarrativeIntent]);
-  const exit = useCallback(() => transition({ type: "exit" }), [transition]);
+  const exit = useCallback(() => advanceNarrativeIntent(() => transition({ type: "exit" })), [advanceNarrativeIntent, transition]);
 
   // The single place a step becomes a number of milliseconds: the injected
   // resolver when it answers, the tempo profile otherwise. The timer below and
@@ -475,6 +476,7 @@ export function useJourneyPlaybackDirector(
     setTempo,
     intentRevision,
     getIntentRevision,
+    invalidatePresentation,
     getPrefetchIntentBoundary,
     isPlaying: playbackDirectorIsPlaying(state, step),
     pause,
