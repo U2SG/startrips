@@ -160,7 +160,13 @@ function AuthForm({ onAuthenticated, handoff = false, forceReady = false, lightw
   forceReady?: boolean;
   lightweightScene?: boolean;
 }) {
-  const [mode, setMode] = useState<"sign-in" | "sign-up" | "forgot">("sign-in");
+  // #346: an expired set-password link is often opened in another browser, or
+  // after the session ended. That person lands here rather than in the account
+  // surface, so the same marker opens the mode that can send them a new link
+  // instead of a sign-in form they have no password for.
+  const [mode, setMode] = useState<"sign-in" | "sign-up" | "forgot">(
+    () => accountSurfaceFromLocationSearch(window.location.search) ? "forgot" : "sign-in",
+  );
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -858,8 +864,8 @@ function WorkspaceGate({ children, activeOrganizationId, userName, onReady, cine
             <span className="account-dock__identity"><strong>{gate.atlas.title}</strong> · {userName}</span>
             {message ? <small>{message}</small> : null}
             <div className="account-dock__actions">
-              {isOwner ? <button type="button" onClick={() => { setEditAtlasOpen(false); setInviteOpen((value) => !value); }}>邀请另一位</button> : null}
-              <button type="button" onClick={() => { setInviteOpen(false); setEditTitle(gate.atlas.title); setEditDedication(gate.atlas.dedication); setEditAtlasOpen((value) => !value); setMessage(""); }}>编辑图谱</button>
+              {isOwner ? <button type="button" onClick={() => { setEditAtlasOpen(false); setPasswordOpen(false); setInviteOpen((value) => !value); }}>邀请另一位</button> : null}
+              <button type="button" onClick={() => { setInviteOpen(false); setPasswordOpen(false); setEditTitle(gate.atlas.title); setEditDedication(gate.atlas.dedication); setEditAtlasOpen((value) => !value); setMessage(""); }}>编辑图谱</button>
               <button type="button" onClick={() => { if (passwordOpen) { setPasswordOpen(false); setMessage(""); return; } void openAccountPassword(); }}>账户密码</button>
               <EarthExperienceMenuEntry
                 surface="dock"

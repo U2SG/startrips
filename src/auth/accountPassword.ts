@@ -173,7 +173,16 @@ export async function submitAccountPasswordChange(
     newPassword: values.newPassword,
     reverificationToken,
   });
-  await deps.refreshSession?.();
+  // Re-reading the session is synchronisation AFTER the write, not part of it.
+  // The server has already rotated the credential by this point, so a
+  // transient refresh failure must not be reported as "password unchanged" —
+  // that would send the person back to a form their old password no longer
+  // opens.
+  try {
+    await deps.refreshSession?.();
+  } catch {
+    // The write stands; the shell re-reads the session on its next render.
+  }
   return outcome(payload, "changed", "alreadyChanged");
 }
 

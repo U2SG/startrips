@@ -129,6 +129,19 @@ describe("account password writes", () => {
     expect(calls.map((call) => call.url)).toEqual([IDENTITIES_URL, REVERIFY_URL, CHANGE_URL]);
   });
 
+  it("keeps a completed change reported as completed when the session refresh fails", async () => {
+    const { fetchImpl } = stubFetch({
+      [REVERIFY_URL]: { body: { reverificationToken: "grant-6" } },
+      [CHANGE_URL]: { body: { status: true, changed: true, alreadyChanged: false, revokedOtherSessions: 1 } },
+    });
+    // The credential is already rotated at this point. Reporting a refusal
+    // would send the person back to a form their old password no longer opens.
+    expect(await submitAccountPasswordChange(
+      { currentPassword: "old-password-1", newPassword: "new-password-1" },
+      { fetchImpl, refreshSession: async () => { throw new Error("offline"); } },
+    )).toEqual({ applied: true, alreadyApplied: false, revokedOtherSessions: 1 });
+  });
+
   it("reports the same grant's completed write instead of repeating it", async () => {
     const { fetchImpl } = stubFetch({
       [REVERIFY_URL]: { body: { reverificationToken: "grant-3" } },

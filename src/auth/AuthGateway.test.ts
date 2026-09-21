@@ -96,6 +96,38 @@ describe("mobile account surface", () => {
     expect(auth).toContain("result.revokedOtherSessions > 0");
   });
 
+  it("keeps the desktop dock showing one account panel at a time", () => {
+    const auth = readFileSync("src/auth/AuthGateway.tsx", "utf8");
+    const actions = auth.slice(
+      auth.indexOf('<div className="account-dock__actions">'),
+      auth.indexOf("<EarthExperienceMenuEntry"),
+    );
+    expect(actions).not.toBe("");
+    const entry = (label: string) => actions.split("\n").find((line) => line.includes(label)) ?? "";
+    // Each dock entry closes the other two, so the password panel cannot
+    // render beside the invitation or the Atlas edit form.
+    expect(entry("邀请另一位")).toContain("setPasswordOpen(false)");
+    expect(entry("邀请另一位")).toContain("setEditAtlasOpen(false)");
+    expect(entry("编辑图谱")).toContain("setPasswordOpen(false)");
+    expect(entry("编辑图谱")).toContain("setInviteOpen(false)");
+    // The password entry clears the others through its own opener.
+    const opener = auth.slice(
+      auth.indexOf("const openAccountPassword"),
+      auth.indexOf("setMessage(\"正在读取账户登录方式…\")"),
+    );
+    expect(opener).toContain("setInviteOpen(false)");
+    expect(opener).toContain("setEditAtlasOpen(false)");
+  });
+
+  it("opens the recovery mode for a signed-out person whose link expired", () => {
+    const auth = readFileSync("src/auth/AuthGateway.tsx", "utf8");
+    // An expired link is routinely opened in another browser or after the
+    // session ended, where the account surface never mounts.
+    expect(auth).toContain(
+      'accountSurfaceFromLocationSearch(window.location.search) ? "forgot" : "sign-in"',
+    );
+  });
+
   it("restores pointer events on the mobile account sheet layer", () => {
     const authCss = readFileSync("src/styles/auth-gate.css", "utf8");
     expect(authCss).toMatch(/\.account-sheet-layer\s*\{[^}]*pointer-events:\s*auto;/s);
