@@ -142,6 +142,16 @@ tokens prove same-invocation self evidence; different non-null tokens prove a re
 concurrent peer claim; an absent/unreadable token remains UNKNOWN. This classification
 must not add sleeps/retries, kill carriers, or weaken same-lane exclusion.
 
+The Codexless buffered `command_exec` transport is not a safe synchronous host for a
+real Experience launch: an invocation that remains open for roughly a minute can be
+replayed by the surrounding tool transport, producing a second legitimate carrier
+token that the first invocation must correctly reject as a peer. Start the canonical
+Git Bash `launch-experience.sh` through a short-lived detached host process, capture
+unique stdout/stderr artifacts for that invocation, and poll those artifacts/provider
+state with separate read-only calls. The detached host is transport hygiene only: the
+real entrypoint remains `launch-experience.sh`, no second scheduler/owner/lock exists,
+and a failed/uncertain start is never blindly replayed.
+
 Every formal Experience start is authority-gated twice: fresh `project_context` for
 the exact canonical owner worktree MUST be `:workspace` / `workspaceWrite`, and the
 formal `agent_start` task card MUST bind `permissionProfile=:workspace`. A read-only,
