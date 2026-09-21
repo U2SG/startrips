@@ -192,6 +192,38 @@ const URL_BEARING_GPX = `<?xml version="1.0" encoding="UTF-8"?>
   </trkseg></trk>
 </gpx>`;
 
+/**
+ * Everything in this document that is written like a track point without
+ * being one: a comment, a vendor `<extensions>` block inside the segment, a
+ * CDATA section inside a point, and a `<time>` that belongs to an extension
+ * rather than to the point enclosing it. A reader scanning raw segment text
+ * stores five samples here and reads a time that was never recorded against
+ * that position; a structural reader stores the two the recorder wrote.
+ */
+const PHANTOM_POINT_GPX = `<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="startrips-test">
+  <trk>
+    <trkseg>
+      <!-- <trkpt lat="80.000000" lon="10.000000"/> -->
+      <extensions><vendor:frame xmlns:vendor="urn:startrips-test"><trkpt lat="81.000000" lon="11.000000"/></vendor:frame></extensions>
+      <trkpt lat="22.543096" lon="114.057865"><time>2026-09-01T00:00:00Z</time></trkpt>
+      <trkpt lat="22.540100" lon="114.061200">
+        <extensions><note><![CDATA[<trkpt lat="82.000000" lon="12.000000"/>]]></note><time>2026-09-01T00:09:00Z</time></extensions>
+      </trkpt>
+    </trkseg>
+  </trk>
+</gpx>`;
+
+/**
+ * The two-segment document cut after its first complete `<trkseg>`, so three
+ * points and a closed segment are intact while `<trk>` and `<gpx>` never
+ * close.
+ */
+const TRUNCATED_GPX = TWO_SEGMENT_GPX.slice(
+  0,
+  TWO_SEGMENT_GPX.indexOf("<trkseg></trkseg>"),
+);
+
 function gpxWithPoints(segmentPointCounts: number[]) {
   const segments = segmentPointCounts.map((count) => {
     const points = Array.from(
@@ -382,6 +414,35 @@ describe("recorded-track import reading", () => {
         document: "<gpx version=\"1.1\"><trk><trkseg><trkpt lat=\"north\" lon=\"x\"/></trkseg></trk></gpx>",
       }),
     ).toEqual({ status: 400, error: "MALFORMED_FILE" });
+  });
+
+  it("takes only structural track points, not text shaped like one", () => {
+    const { limits } = RECORDED_TRACK_IMPORT_FORMATS.gpx;
+    const read = readGpxRecordedTrack(PHANTOM_POINT_GPX, limits);
+    expect(read.ok).toBe(true);
+    if (!read.ok) return;
+    // One segment, its own two points, and the extension's <time> left where
+    // it was: a point's time is the point's own child or it is absent.
+    expect(read.segments).toHaveLength(1);
+    expect(read.segments[0].points).toEqual([
+      {
+        latitude: 22.543096,
+        longitude: 114.057865,
+        recordedAt: "2026-09-01T00:00:00Z",
+      },
+      { latitude: 22.5401, longitude: 114.0612, recordedAt: null },
+    ]);
+  });
+
+  it("refuses a truncated document whose first segments are intact", () => {
+    const { limits } = RECORDED_TRACK_IMPORT_FORMATS.gpx;
+    // The cut left a complete three-point segment behind, which is exactly
+    // what must not be accepted as the recording.
+    expect(TRUNCATED_GPX).toContain("</trkseg>");
+    expect(readGpxRecordedTrack(TRUNCATED_GPX, limits)).toEqual({
+      ok: false,
+      reason: "MALFORMED_FILE",
+    });
   });
 
   it("refuses a declared entity or DTD and fetches no URL it reads", async () => {

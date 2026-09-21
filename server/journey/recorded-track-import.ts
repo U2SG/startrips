@@ -54,10 +54,13 @@ export type RecordedTrackImportRejection =
   (typeof RECORDED_TRACK_IMPORT_REJECTIONS)[number];
 
 /**
- * One reader's declared ceilings. They are checked against the uploaded bytes
- * and inside the reader loop, before a document is ever materialized as a
- * write, so a file that cannot be stored is refused by the limit that
- * describes it rather than by a second-tier rejection from the normalizer.
+ * One reader's declared ceilings. `maxBytes` is checked against the uploaded
+ * bytes before anything is read, and the counts are checked as the reader
+ * selects points out of the parsed document, before any of it becomes a
+ * write. So a file that cannot be stored is refused by the limit that
+ * describes it rather than by a second-tier rejection from the normalizer,
+ * and the counts are of points that would actually be stored — text that only
+ * looks like a track point counts towards nothing.
  */
 export type RecordedTrackImportLimits = {
   maxBytes: number;
@@ -115,12 +118,162 @@ const GPX_LIMITS: RecordedTrackImportLimits = {
  */
 const EXTERNAL_RESOLUTION = /<!DOCTYPE|<!ENTITY|<!\[CDATA\[\s*<!/i;
 
-const GPX_ROOT = /<gpx[\s>]/i;
-const TRACK_ELEMENT = /<trk[\s>]/i;
-const WAYPOINT_OR_ROUTE_ELEMENT = /<(?:wpt|rte)[\s>]/i;
-const TRACK_SEGMENT = /<trkseg\b[^>]*>([\s\S]*?)<\/trkseg\s*>/gi;
-const TRACK_POINT_OPEN = /<trkpt\b([^>]*)>/gi;
-const POINT_TIME = /<time\b[^>]*>([^<]*)<\/time\s*>/i;
+/**
+ * The structural reader below is a bounded, iterative XML scanner rather than
+ * a set of patterns run over the raw text. A pattern cannot tell a `<trkpt>`
+ * element from the same characters written inside a comment, a CDATA section
+ * or a vendor `<extensions>` block, and it cannot tell a complete document
+ * from a truncated one whose first segments happen to be intact. Both would
+ * end as stored positions nobody recorded, so the document is parsed and
+ * validated in full first, and only then are the GPX elements selected out of
+ * the structure it produced.
+ *
+ * It is not a general XML implementation. It reads elements, attributes,
+ * text, CDATA, comments and processing instructions; it expands no entity,
+ * resolves nothing, and recurses nowhere — depth lives on an explicit stack,
+ * so a deeply nested document costs memory bounded by the byte ceiling rather
+ * than stack frames.
+ */
+type XmlElement = {
+  /** Exactly as written, prefix included. A close tag must match it. */
+  rawName: string;
+  /** Prefix removed and lower-cased; what element selection compares. */
+  localName: string;
+  /** The raw attribute text of the open tag. */
+  attributes: string;
+  children: XmlElement[];
+  /** This element's own text and CDATA. A child's text is the child's. */
+  text: string;
+};
+
+type XmlParse =
+  | { ok: true; root: XmlElement }
+  | { ok: false; reason: "MALFORMED_FILE" | "UNSAFE_DOCUMENT" };
+
+const MALFORMED: XmlParse = { ok: false, reason: "MALFORMED_FILE" };
+
+const ELEMENT_NAME = /^([^\s/>]+)([\s\S]*)$/;
+
+/**
+ * A namespace prefix is dropped rather than resolved, so `<gpx:trkpt>` reads
+ * as a track point. That is safe here only because selection is structural: a
+ * point is taken from a `trkseg` that is a direct child of a `trk` that is a
+ * direct child of the document root, so a prefixed element anywhere else in
+ * the tree is still not a sample.
+ */
+function toLocalName(rawName: string): string {
+  const colon = rawName.indexOf(":");
+  return (colon === -1 ? rawName : rawName.slice(colon + 1)).toLowerCase();
+}
+
+function parseXmlDocument(text: string): XmlParse {
+  const stack: XmlElement[] = [];
+  let root: XmlElement | null = null;
+  let index = 0;
+
+  while (index < text.length) {
+    const open = text.indexOf("<", index);
+    const chunk = text.slice(index, open === -1 ? text.length : open);
+    if (chunk !== "") {
+      const current = stack[stack.length - 1];
+      if (current) current.text += chunk;
+      // Character data outside the root element is not a document.
+      else if (chunk.trim() !== "") return MALFORMED;
+    }
+    if (open === -1) break;
+    index = open;
+
+    if (text.startsWith("<!--", index)) {
+      const end = text.indexOf("-->", index + 4);
+      if (end === -1) return MALFORMED;
+      index = end + 3;
+      continue;
+    }
+    if (text.startsWith("<![CDATA[", index)) {
+      const end = text.indexOf("]]>", index + 9);
+      if (end === -1) return MALFORMED;
+      const current = stack[stack.length - 1];
+      if (!current) return MALFORMED;
+      current.text += text.slice(index + 9, end);
+      index = end + 3;
+      continue;
+    }
+    if (text.startsWith("<?", index)) {
+      const end = text.indexOf("?>", index + 2);
+      if (end === -1) return MALFORMED;
+      index = end + 2;
+      continue;
+    }
+    // A declaration — a DTD or an entity — asks for something outside the
+    // document, so it is never read as inert markup.
+    if (text.startsWith("<!", index)) {
+      return { ok: false, reason: "UNSAFE_DOCUMENT" };
+    }
+
+    if (text.startsWith("</", index)) {
+      const end = text.indexOf(">", index + 2);
+      if (end === -1) return MALFORMED;
+      const closing = stack.pop();
+      if (!closing || closing.rawName !== text.slice(index + 2, end).trim()) {
+        return MALFORMED;
+      }
+      index = end + 1;
+      continue;
+    }
+
+    // An open tag. The scan is quote-aware so a `>` inside an attribute value
+    // does not end the tag, and a bare `<` inside one is a broken document.
+    let cursor = index + 1;
+    let quote: string | null = null;
+    let end = -1;
+    while (cursor < text.length) {
+      const char = text[cursor];
+      if (quote !== null) {
+        if (char === quote) quote = null;
+      } else if (char === '"' || char === "'") {
+        quote = char;
+      } else if (char === ">") {
+        end = cursor;
+        break;
+      } else if (char === "<") {
+        return MALFORMED;
+      }
+      cursor += 1;
+    }
+    if (end === -1) return MALFORMED;
+
+    const inner = text.slice(index + 1, end);
+    const trimmed = inner.trimEnd();
+    const selfClosing = trimmed.endsWith("/");
+    const parts = ELEMENT_NAME.exec(selfClosing ? trimmed.slice(0, -1) : inner);
+    if (!parts) return MALFORMED;
+
+    const element: XmlElement = {
+      rawName: parts[1],
+      localName: toLocalName(parts[1]),
+      attributes: parts[2],
+      children: [],
+      text: "",
+    };
+    const parent = stack[stack.length - 1];
+    if (parent) parent.children.push(element);
+    // One root element, and nothing beside it.
+    else if (root) return MALFORMED;
+    else root = element;
+    if (!selfClosing) stack.push(element);
+    index = end + 1;
+  }
+
+  // An element left open is a truncated document, whatever was complete
+  // before the cut.
+  if (stack.length > 0) return MALFORMED;
+  if (!root) return MALFORMED;
+  return { ok: true, root };
+}
+
+function childrenNamed(element: XmlElement, localName: string): XmlElement[] {
+  return element.children.filter((child) => child.localName === localName);
+}
 
 function readAttribute(attributes: string, name: string): string | null {
   const pattern = new RegExp(`\\b${name}\\s*=\\s*("([^"]*)"|'([^']*)')`, "i");
@@ -148,6 +301,13 @@ function readCoordinate(value: string | null): number | null {
 /**
  * Read `<trk>/<trkseg>/<trkpt>` and nothing else.
  *
+ * Every element is taken as a direct child of the element that may contain
+ * it: a track under the root, a segment under a track, a point under a
+ * segment, a `<time>` under a point. That is what makes a `<trkpt>` written
+ * inside an `<extensions>` block, a comment or a CDATA section not a sample —
+ * and it keeps such text out of the point ceilings too, which count what
+ * would be stored rather than what the file mentions.
+ *
  * What it deliberately does not take:
  *
  * - `<ele>` and `<hdop>`. Elevation is not part of the stored sample, and
@@ -174,10 +334,17 @@ export function readGpxRecordedTrack(
   if (EXTERNAL_RESOLUTION.test(text)) {
     return { ok: false, reason: "UNSAFE_DOCUMENT" };
   }
-  if (!GPX_ROOT.test(text)) return { ok: false, reason: "MALFORMED_FILE" };
-  if (!TRACK_ELEMENT.test(text)) {
+  const parsed = parseXmlDocument(text);
+  if (!parsed.ok) return { ok: false, reason: parsed.reason };
+
+  const root = parsed.root;
+  if (root.localName !== "gpx") return { ok: false, reason: "MALFORMED_FILE" };
+
+  const tracks = childrenNamed(root, "trk");
+  if (tracks.length === 0) {
     // Ordered so a document carrying both is read as the track document it is.
-    return WAYPOINT_OR_ROUTE_ELEMENT.test(text)
+    return childrenNamed(root, "wpt").length > 0 ||
+        childrenNamed(root, "rte").length > 0
       ? { ok: false, reason: "UNSUPPORTED_FORMAT" }
       // No track, no waypoint, no route: nothing this reader could have taken,
       // which is a broken track document rather than a format still to come.
@@ -186,44 +353,40 @@ export function readGpxRecordedTrack(
 
   const segments: ReadTrackSegment[] = [];
   let totalPoints = 0;
-  TRACK_SEGMENT.lastIndex = 0;
-  let segmentMatch: RegExpExecArray | null;
-  while ((segmentMatch = TRACK_SEGMENT.exec(text)) !== null) {
-    const body = segmentMatch[1];
-    const points: ReadTrackPoint[] = [];
-    TRACK_POINT_OPEN.lastIndex = 0;
-    let pointMatch: RegExpExecArray | null;
-    while ((pointMatch = TRACK_POINT_OPEN.exec(body)) !== null) {
-      const attributes = pointMatch[1];
-      const latitude = readCoordinate(readAttribute(attributes, "lat"));
-      const longitude = readCoordinate(readAttribute(attributes, "lon"));
-      if (latitude === null || longitude === null) {
-        return { ok: false, reason: "MALFORMED_FILE" };
+  for (const track of tracks) {
+    for (const trackSegment of childrenNamed(track, "trkseg")) {
+      const points: ReadTrackPoint[] = [];
+      for (const trackPoint of childrenNamed(trackSegment, "trkpt")) {
+        const latitude = readCoordinate(
+          readAttribute(trackPoint.attributes, "lat"),
+        );
+        const longitude = readCoordinate(
+          readAttribute(trackPoint.attributes, "lon"),
+        );
+        if (latitude === null || longitude === null) {
+          return { ok: false, reason: "MALFORMED_FILE" };
+        }
+
+        const time = childrenNamed(trackPoint, "time")[0];
+        points.push({
+          latitude,
+          longitude,
+          recordedAt: time ? time.text.trim() : null,
+        });
+        if (points.length > limits.maxPointsPerSegment) {
+          return { ok: false, reason: "TOO_MANY_POINTS" };
+        }
+        totalPoints += 1;
+        if (totalPoints > limits.maxPoints) {
+          return { ok: false, reason: "TOO_MANY_POINTS" };
+        }
       }
 
-      let recordedAt: string | null = null;
-      if (!attributes.trimEnd().endsWith("/")) {
-        const closeAt = body.indexOf("</trkpt", TRACK_POINT_OPEN.lastIndex);
-        if (closeAt === -1) return { ok: false, reason: "MALFORMED_FILE" };
-        const inner = body.slice(TRACK_POINT_OPEN.lastIndex, closeAt);
-        const time = POINT_TIME.exec(inner);
-        if (time) recordedAt = time[1].trim();
+      if (points.length === 0) continue;
+      segments.push({ points });
+      if (segments.length > limits.maxSegments) {
+        return { ok: false, reason: "TOO_MANY_SEGMENTS" };
       }
-
-      points.push({ latitude, longitude, recordedAt });
-      if (points.length > limits.maxPointsPerSegment) {
-        return { ok: false, reason: "TOO_MANY_POINTS" };
-      }
-      totalPoints += 1;
-      if (totalPoints > limits.maxPoints) {
-        return { ok: false, reason: "TOO_MANY_POINTS" };
-      }
-    }
-
-    if (points.length === 0) continue;
-    segments.push({ points });
-    if (segments.length > limits.maxSegments) {
-      return { ok: false, reason: "TOO_MANY_SEGMENTS" };
     }
   }
 
