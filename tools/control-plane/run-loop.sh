@@ -454,13 +454,27 @@ for ((i=1; i<=MAX_ITERATIONS; i++)); do
     echo "=== Reconciling merge state (iteration $i) ==="
     reconcile_merge_state
 
-  # Development carriers consume registered ONE work only. New-issue intake,
-  # mapped-issue re-triage/follow-up and product auto-feed are coordinator work:
-  # letting a Backend owner discover/triage issues here can bulk-register client
-  # work before the Orchestrator applies lane/product/hotspot policy. Experience
-  # already needs this boundary because its model provider is external Codexless.
-  echo "=== Issue intake (iteration $i) ==="
-  echo "[intake] Development lane model intake/re-triage delegated to Orchestrator (lane=$STARTRIPS_LANE)"
+  if [[ "$STARTRIPS_LANE" == "experience" ]]; then
+    # Experience is executed by the scheduled Codexless provider, not by the
+    # LOCAL Backend Claude CLI. Model-based intake/amend would silently consume
+    # the Backend account/session quota before Experience reaches its owner.
+    # Development Orchestrator owns product auto-feed and issue re-triage.
+    echo "=== Issue intake (iteration $i) ==="
+    echo "[intake] Experience provider is external Codexless; model intake/re-triage delegated to Orchestrator"
+  else
+    # Backend keeps the installed intake path until Orchestrator has a real
+    # executable intake implementation. This preserves queue replenishment and
+    # mapped-issue amend/gate clearing for the Backend lane.
+    echo "=== Issue intake (iteration $i) ==="
+    PRE_INTAKE_FEATURE="$(read_next_feature)" || exit 6
+    if [[ -z "$PRE_INTAKE_FEATURE" && -z "$(ready_to_merge_prs)" ]]; then
+      intake_new_issues || exit 6
+    else
+      INTAKE_URGENT_ONLY=1 intake_new_issues || exit 6
+    fi
+    echo "=== Issue update reconcile (iteration $i) ==="
+    intake_reconcile_issues
+  fi
 
   FEATURE="$(read_next_feature)" || exit 6
   if [[ -z "$FEATURE" ]]; then
