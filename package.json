@@ -54,6 +54,7 @@
     "qa:cover-reveal-opening": "node scripts/qa-cover-reveal-opening.mjs",
     "qa:mobile-contract": "node scripts/qa-mobile-contract.mjs",
     "qa:cover-reveal": "node scripts/qa-cover-reveal.mjs",
+    "worker:cover-reveal": "node scripts/cover-reveal-worker.mjs",
     "build:city": "node scripts/build-city-data.mjs",
     "cfaa:validate": "node scripts/cfaa.mjs validate",
     "cfaa:impact": "node scripts/cfaa.mjs impact"
