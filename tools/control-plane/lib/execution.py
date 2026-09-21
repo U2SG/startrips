@@ -32,11 +32,17 @@ def snapshot():
         # CreationDate is what separates a live process from a later one that merely
         # reuses its number: Windows documents ProcessId and ParentProcessId as
         # reusable, so neither is an identity on its own.
-        # Ask CIM only for the five fields the provider needs. Fetching the full
-        # Win32_Process schema can stall on unrelated expensive provider fields
-        # even though these identity/argv fields are healthy.
+        # Query only carrier-like executables plus this observer and its direct
+        # parent. Even a property-bounded full Win32_Process enumeration can
+        # stall on Windows hosts with a sick/slow process provider; filtering at
+        # the provider keeps observation bounded without hiding relevant peers.
+        candidate_names = ('bash.exe', 'sh.exe', 'claude.exe', 'codex.exe', 'node.exe', 'nodejs.exe')
+        filter_terms = [f"Name='{name}'" for name in candidate_names]
+        filter_terms.extend(f'ProcessId={pid}' for pid in {os.getpid(), os.getppid()} if pid > 0)
+        process_filter = ' OR '.join(filter_terms)
         command = ('$ErrorActionPreference="Stop"; [Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false); '
-                   '@(Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,Name,CommandLine,CreationDate -ErrorAction Stop | '
+                   f'@(Get-CimInstance Win32_Process -Filter "{process_filter}" '
+                   '-Property ProcessId,ParentProcessId,Name,CommandLine,CreationDate -ErrorAction Stop | '
                    'Select-Object ProcessId,ParentProcessId,Name,CommandLine,'
                    "@{n='Started';e={if ($_.CreationDate) { $_.CreationDate.ToString('o') } else { '' }}}) | ConvertTo-Json -Compress")
         result = subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', command],
@@ -458,10 +464,14 @@ def _observed_executions(rows, root, self_pid):
 
 
 def _public_record(record, *, state=None):
+    # Carrier tokens are non-secret invocation identity already published in
+    # argv. Preserve them in failure evidence so a transient pre-scope row can
+    # be compared with the launcher's exact token after the process disappears.
     return {
         'pid': record['pid'], 'ppid': record['ppid'], 'kind': record['kind'],
         'state': state or record['state'], 'lane': record['lane'],
         'feature': record.get('feature'), 'worktree': record.get('worktree'),
+        'token': record.get('token'),
     }
 
 
