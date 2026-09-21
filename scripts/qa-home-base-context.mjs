@@ -89,7 +89,9 @@ function record(name, data, condition) {
 
 async function installOwnerApi(page, journeyRows = journeys) {
   const fragments = { rows: [], requests: [], rejectReads: null, heldReads: null, rejectNext: null, holdNext: null, release: null };
-  await page.route("**/api/everyday-fragments**", async (route) => {
+  // Match both collection reads/creates and item edits/deletes. A trailing
+  // `fragments**` glob does not cross the slash before an item id.
+  await page.route(/\/api\/everyday-fragments(?:\/[^/?]+)?(?:\?.*)?$/, async (route) => {
     const method = route.request().method();
     const body = method === "POST" || method === "PUT" ? route.request().postDataJSON() : null;
     const id = new URL(route.request().url()).pathname.split("/")[3];
@@ -326,7 +328,12 @@ async function fragmentQa(owner, name) {
   fragments.holdNext = "PUT";
   await form.getByRole("button", { name: "保存日常" }).click();
   await waitForHeld(fragments);
-  record(`${name}: edit pending`, {}, await form.getByRole("button", { name: "保存中…" }).isDisabled());
+  const editRequest = fragments.requests.at(-1);
+  record(`${name}: edit pending on the created fragment`, { editRequest },
+    editRequest.method === "PUT" && editRequest.id === created.id
+    && editRequest.body.occurredOn === created.occurredOn
+    && editRequest.body.latitude === created.latitude && editRequest.body.longitude === created.longitude
+    && await form.getByRole("button", { name: "保存中…" }).isDisabled());
   fragments.release();
   await row.getByText("晚风", { exact: true }).waitFor();
   record(`${name}: edit renders optional place and note`, {}, (await row.innerText()).includes("深圳湾"));
@@ -337,7 +344,10 @@ async function fragmentQa(owner, name) {
   fragments.holdNext = "DELETE";
   await row.getByRole("button", { name: "确认删除", exact: true }).click();
   await waitForHeld(fragments);
-  record(`${name}: delete pending and retry`, {}, await row.getByRole("button", { name: "删除中…" }).isDisabled());
+  const deleteRequest = fragments.requests.at(-1);
+  record(`${name}: delete pending and retry on the created fragment`, { deleteRequest },
+    deleteRequest.method === "DELETE" && deleteRequest.id === created.id
+    && await row.getByRole("button", { name: "删除中…" }).isDisabled());
   fragments.release();
   await row.waitFor({ state: "detached" });
   record(`${name}: delete returns to empty`, {}, await list.getByText("还没有日常，记下某一天、某个地方。", { exact: true }).isVisible());

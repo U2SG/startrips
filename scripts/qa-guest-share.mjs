@@ -183,7 +183,7 @@ async function installGuestApi(page, state) {
     contentType: "application/json",
     body: JSON.stringify({ error: "OWNER_ROUTE_REACHED" }),
   }));
-  await page.route("**/api/everyday-fragments**", (route) => route.fulfill({
+  await page.route(/\/api\/everyday-fragments(?:\/[^/?]+)?(?:\?.*)?$/, (route) => route.fulfill({
     status: 500, contentType: "application/json", body: JSON.stringify({ error: "OWNER_ROUTE_REACHED" }),
   }));
   await page.route("**/api/auth/**", (route) => route.fulfill({
