@@ -90,10 +90,27 @@ describe("mobile account surface", () => {
 
   it("re-reads the live session after a successful password write", () => {
     const auth = readFileSync("src/auth/AuthGateway.tsx", "utf8");
-    expect(auth).toContain("refreshSession: () => authClient.getSession()");
-    // The server revokes other sessions on a change and says how many; the
-    // panel reports that outcome rather than asserting a fixed one.
-    expect(auth).toContain("result.revokedOtherSessions > 0");
+    const panel = auth.slice(
+      auth.indexOf("function AccountPasswordPanel"),
+      auth.indexOf("function WorkspaceGate"),
+    );
+    const success = panel.slice(
+      panel.indexOf("result.revokedOtherSessions > 0"),
+      panel.indexOf("} catch (error)"),
+    );
+    expect(success).not.toBe("");
+    // server/account-identities/password-change.ts deletes every session for
+    // this user EXCEPT the calling one and returns how many it deleted, so the
+    // panel refreshes the surviving session and reports the server's count
+    // both ways instead of claiming a fixed outcome.
+    expect(panel).toContain("refreshSession: () => authClient.getSession()");
+    expect(success).toContain("其他 ${result.revokedOtherSessions} 处登录已退出");
+    expect(success).toContain("当前登录继续有效");
+    // The calling session stays valid: nothing here signs the person out, and
+    // the client never asks the server to revoke — that decision is the
+    // route's, and a replayed grant reports alreadyChanged with zero revoked.
+    expect(panel).not.toContain("signOut");
+    expect(panel).not.toContain("revokeOtherSessions:");
   });
 
   it("keeps the desktop dock showing one account panel at a time", () => {
