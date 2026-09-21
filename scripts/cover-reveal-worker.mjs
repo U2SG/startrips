@@ -222,6 +222,9 @@ function describeError(error) {
  * is not ours to do. The reason is one of the server's four allowlisted codes.
  */
 async function reportFailure(context, jobId, leaseToken, reason) {
+  if (interrupted) {
+    return { delivered: false, leaseLost: false, error: null };
+  }
   let result;
   try {
     result = await callWorkerRoute(
@@ -313,6 +316,18 @@ export function buildGeneratorRequest({ job, output, sourcePath, outputPath }) {
  * another claimant is about to take.
  */
 const activeGenerators = new Set();
+
+/**
+ * Set the moment a signal arrives, and read by `reportFailure`.
+ *
+ * Killing the generator makes `runGenerator` resolve with a failure, and the
+ * cleanup that follows is asynchronous — so without this flag an interrupted
+ * run could still get as far as posting `fail` for a job it is abandoning. The
+ * recovery mechanism this client is specified against is the server's lease
+ * expiry, and "an interrupted run tells the server nothing" has to be true by
+ * construction rather than by winning a race.
+ */
+let interrupted = false;
 
 /**
  * A configured adapter is usually a wrapper script that launches the real model
@@ -746,6 +761,7 @@ export async function main({ env = process.env, write = (line) => process.stdout
   // recovery mechanism this client is specified against is the existing lease
   // expiry, and posting `fail` here would substitute a different one.
   const onSignal = (signal) => {
+    interrupted = true;
     void cleanup().then(() => {
       log("interrupted", { signal });
       process.exit(EXIT_CODES.interrupted);

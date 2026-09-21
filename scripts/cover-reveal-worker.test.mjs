@@ -723,7 +723,7 @@ setInterval(() => {}, 1000);
     }
   });
 
-  it("takes the generator's whole process tree down when it is interrupted", async () => {
+  it("signals the generator's whole process group rather than the wrapper PID", async () => {
     // The adapter is usually a wrapper that launches the real model process, so
     // the client starts it as a process-group leader and signals the group.
     const source = await readFile(CLIENT_PATH, "utf8");
